@@ -1,15 +1,18 @@
 {
-  "Author": "Frantastic",
+  "Author": "FranFkntastic",
   "Name": "MarketMafioso",
-  "Punchline": "Capture and review retainer market data.",
-  "Description": "Captures active retainer sale listings, gathers market board data for those items, and displays the captured results in plugin windows.",
+  "Punchline": "HTTP JSON export of your FFXIV inventories.",
+  "Description": "Scans your character and retainer inventories and sends them as JSON to a configurable HTTP endpoint. Use /mmf to open settings.",
   "InternalName": "MarketMafioso",
   "AssemblyVersion": "1.0.0.0",
-  "DalamudApiLevel": 14,
+  "DalamudApiLevel": 15,
   "ApplicableVersion": "any",
   "Tags": [
+    "inventory",
     "retainer",
-    "utility"
+    "utility",
+    "export",
+    "json"
   ],
   "CategoryTags": [
     "utility"

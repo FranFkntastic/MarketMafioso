@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Text.Json.Serialization;
 
-namespace InventoryReporter2;
+namespace MarketMafioso;
 
 public record InventoryReport
 {

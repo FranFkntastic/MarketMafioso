@@ -2,7 +2,7 @@ using Dalamud.Configuration;
 using System;
 using System.Collections.Generic;
 
-namespace InventoryReporter2;
+namespace MarketMafioso;
 
 [Serializable]
 public class Configuration : IPluginConfiguration

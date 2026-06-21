@@ -8,7 +8,7 @@ using Dalamud.Plugin.Services;
 using FFXIVClientStructs.FFXIV.Client.Game;
 using FFXIVClientStructs.FFXIV.Client.Game.UI;
 
-namespace InventoryReporter2;
+namespace MarketMafioso;
 
 /// <summary>
 /// Hooks the game's retainer inventory addon to snapshot retainer data
@@ -18,10 +18,10 @@ namespace InventoryReporter2;
 public class RetainerCacheManager : IDisposable
 {
     private readonly IAddonLifecycle addonLifecycle;
-    private readonly IPluginLog      log;
-    private readonly Configuration   config;
+    private readonly IPluginLog log;
+    private readonly Configuration config;
     private readonly InventoryScanner scanner;
-    private readonly HttpReporter     reporter;
+    private readonly HttpReporter reporter;
 
     // Both addon names are registered so the handler fires regardless of
     // which layout the game uses (depends on player's bag count / resolution).
@@ -36,25 +36,24 @@ public class RetainerCacheManager : IDisposable
     public event Action? RetainerCached;
 
     public RetainerCacheManager(
-        IAddonLifecycle  addonLifecycle,
-        IPluginLog       log,
-        Configuration    config,
+        IAddonLifecycle addonLifecycle,
+        IPluginLog log,
+        Configuration config,
         InventoryScanner scanner,
-        HttpReporter     reporter)
+        HttpReporter reporter)
     {
         this.addonLifecycle = addonLifecycle;
-        this.log            = log;
-        this.config         = config;
-        this.scanner        = scanner;
-        this.reporter       = reporter;
+        this.log = log;
+        this.config = config;
+        this.scanner = scanner;
+        this.reporter = reporter;
 
-        addonLifecycle.RegisterListener(AddonEvent.PostSetup,   LargeAddon, OnRetainerWindowOpen);
+        addonLifecycle.RegisterListener(AddonEvent.PostSetup, LargeAddon, OnRetainerWindowOpen);
         addonLifecycle.RegisterListener(AddonEvent.PreFinalize, LargeAddon, OnRetainerWindowClose);
-        addonLifecycle.RegisterListener(AddonEvent.PostSetup,   SmallAddon, OnRetainerWindowOpen);
+        addonLifecycle.RegisterListener(AddonEvent.PostSetup, SmallAddon, OnRetainerWindowOpen);
         addonLifecycle.RegisterListener(AddonEvent.PreFinalize, SmallAddon, OnRetainerWindowClose);
     }
 
-    // ── Addon event handlers ──────────────────────────────────────────────────
 
     private unsafe void OnRetainerWindowOpen(AddonEvent type, AddonArgs args)
     {
@@ -66,7 +65,7 @@ public class RetainerCacheManager : IDisposable
             var activeRetainer = rm->GetActiveRetainer();
             if (activeRetainer == null || activeRetainer->RetainerId == 0)
             {
-                log.Warning("[InventoryReporter2] Retainer window opened but no active retainer was found.");
+                log.Warning("[MarketMafioso] Retainer window opened but no active retainer was found.");
                 return;
             }
 
@@ -78,11 +77,11 @@ public class RetainerCacheManager : IDisposable
                                      ?? string.Empty;
             }
 
-            log.Debug($"[InventoryReporter2] Retainer window opened for '{_activeRetainerName}' (id={_activeRetainerId})");
+            log.Debug($"[MarketMafioso] Retainer window opened for '{_activeRetainerName}' (id={_activeRetainerId})");
         }
         catch (Exception ex)
         {
-            log.Error(ex, "[InventoryReporter2] Error in OnRetainerWindowOpen");
+            log.Error(ex, "[MarketMafioso] Error in OnRetainerWindowOpen");
         }
     }
 
@@ -90,7 +89,7 @@ public class RetainerCacheManager : IDisposable
     {
         if (_activeRetainerId == 0)
         {
-            log.Warning("[InventoryReporter2] Retainer window closed but active retainer ID is unknown — skipping cache.");
+            log.Warning("[MarketMafioso] Retainer window closed but active retainer ID is unknown - skipping cache.");
             return;
         }
 
@@ -102,13 +101,13 @@ public class RetainerCacheManager : IDisposable
                 .Select(b => new CachedBag
                 {
                     BagName = b.BagName,
-                    Items   = b.Items
+                    Items = b.Items
                         .Select(i => new CachedItem
                         {
-                            ItemId    = i.ItemId,
-                            ItemName  = i.ItemName,
-                            Quantity  = i.Quantity,
-                            IsHQ      = i.IsHQ,
+                            ItemId = i.ItemId,
+                            ItemName = i.ItemName,
+                            Quantity = i.Quantity,
+                            IsHQ = i.IsHQ,
                             Condition = i.Condition,
                         })
                         .ToList(),
@@ -119,16 +118,16 @@ public class RetainerCacheManager : IDisposable
 
             config.RetainerCache[_activeRetainerId] = new CachedRetainer
             {
-                RetainerId   = _activeRetainerId,
+                RetainerId = _activeRetainerId,
                 RetainerName = _activeRetainerName,
-                LastUpdated  = DateTime.UtcNow,
-                Bags         = cachedBags,
+                LastUpdated = DateTime.UtcNow,
+                Bags = cachedBags,
             };
 
             config.Save();
 
             log.Information(
-                $"[InventoryReporter2] Cached retainer '{_activeRetainerName}' — {totalItems} item(s) across {cachedBags.Count} bag(s).");
+                $"[MarketMafioso] Cached retainer '{_activeRetainerName}' - {totalItems} item(s) across {cachedBags.Count} bag(s).");
 
             RetainerCached?.Invoke();
 
@@ -137,23 +136,22 @@ public class RetainerCacheManager : IDisposable
         }
         catch (Exception ex)
         {
-            log.Error(ex, "[InventoryReporter2] Error caching retainer inventory");
+            log.Error(ex, "[MarketMafioso] Error caching retainer inventory");
         }
         finally
         {
-            _activeRetainerId   = 0;
+            _activeRetainerId = 0;
             _activeRetainerName = string.Empty;
         }
     }
 
 
-    // ── IDisposable ───────────────────────────────────────────────────────────
 
     public void Dispose()
     {
-        addonLifecycle.UnregisterListener(AddonEvent.PostSetup,   LargeAddon, OnRetainerWindowOpen);
+        addonLifecycle.UnregisterListener(AddonEvent.PostSetup, LargeAddon, OnRetainerWindowOpen);
         addonLifecycle.UnregisterListener(AddonEvent.PreFinalize, LargeAddon, OnRetainerWindowClose);
-        addonLifecycle.UnregisterListener(AddonEvent.PostSetup,   SmallAddon, OnRetainerWindowOpen);
+        addonLifecycle.UnregisterListener(AddonEvent.PostSetup, SmallAddon, OnRetainerWindowOpen);
         addonLifecycle.UnregisterListener(AddonEvent.PreFinalize, SmallAddon, OnRetainerWindowClose);
     }
 }

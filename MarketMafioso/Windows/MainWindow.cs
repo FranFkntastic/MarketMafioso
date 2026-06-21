@@ -5,35 +5,33 @@ using Dalamud.Interface.Windowing;
 using Dalamud.Plugin.Services;
 using Dalamud.Bindings.ImGui;
 
-namespace InventoryReporter2.Windows;
+namespace MarketMafioso.Windows;
 
 public class MainWindow : Window, IDisposable
 {
-    private readonly Configuration   config;
-    private readonly HttpReporter     reporter;
+    private readonly Configuration config;
+    private readonly HttpReporter reporter;
     private readonly InventoryScanner scanner;
-    private readonly IPluginLog       log;
+    private readonly IPluginLog log;
 
-    // ── Mutable UI state ──────────────────────────────────────────────────────
-    private string urlBuffer    = string.Empty;
+    private string urlBuffer = string.Empty;
     private string apiKeyBuffer = string.Empty;
-    private bool   showApiKey   = false;
-    private bool   showPreview  = false;
+    private bool showApiKey = false;
+    private bool showPreview = false;
 
-    // ── Theme ─────────────────────────────────────────────────────────────────
-    private static readonly Vector4 ColHeader  = new(0.38f, 0.73f, 1.00f, 1f);
+    private static readonly Vector4 ColHeader = new(0.38f, 0.73f, 1.00f, 1f);
     private static readonly Vector4 ColSuccess = new(0.45f, 0.90f, 0.55f, 1f);
-    private static readonly Vector4 ColError   = new(1.00f, 0.40f, 0.40f, 1f);
-    private static readonly Vector4 ColMuted   = new(0.60f, 0.60f, 0.60f, 1f);
+    private static readonly Vector4 ColError = new(1.00f, 0.40f, 0.40f, 1f);
+    private static readonly Vector4 ColMuted = new(0.60f, 0.60f, 0.60f, 1f);
 
     public MainWindow(Configuration config, HttpReporter reporter, InventoryScanner scanner, IPluginLog log)
-        : base("Inventory Reporter 2##InventoryReporter2MainWindow",
+        : base("MarketMafioso##MarketMafiosoMainWindow",
                ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse)
     {
-        this.config   = config;
+        this.config = config;
         this.reporter = reporter;
-        this.scanner  = scanner;
-        this.log      = log;
+        this.scanner = scanner;
+        this.log = log;
 
         SizeConstraints = new WindowSizeConstraints
         {
@@ -41,7 +39,7 @@ public class MainWindow : Window, IDisposable
             MaximumSize = new Vector2(float.MaxValue, float.MaxValue),
         };
 
-        urlBuffer    = config.ServerUrl;
+        urlBuffer = config.ServerUrl;
         apiKeyBuffer = config.ApiKey;
     }
 
@@ -66,7 +64,6 @@ public class MainWindow : Window, IDisposable
         }
     }
 
-    // ── Sections ──────────────────────────────────────────────────────────────
 
     private void DrawServerSection()
     {
@@ -81,7 +78,7 @@ public class MainWindow : Window, IDisposable
             config.Save();
         }
 
-        ImGui.Text("API Key (optional — sent as X-Api-Key header):");
+        ImGui.Text("API Key (optional - sent as X-Api-Key header):");
         var keyWidth = ImGui.GetContentRegionAvail().X - 70;
         ImGui.SetNextItemWidth(keyWidth);
         var flags = showApiKey ? ImGuiInputTextFlags.None : ImGuiInputTextFlags.Password;
@@ -103,10 +100,10 @@ public class MainWindow : Window, IDisposable
         ImGui.TextColored(ColMuted, "Player inventory (4 bags) is always included.");
         ImGui.Spacing();
 
-        DrawCheckbox("Armoury Chest",              v => config.IncludeArmoury = v, config.IncludeArmoury);
-        DrawCheckbox("Crystal bag",                v => config.IncludeCrystals = v, config.IncludeCrystals);
-        DrawCheckbox("Equipped gear",              v => config.IncludeEquipped = v, config.IncludeEquipped);
-        DrawCheckbox("Saddlebag (if subscribed)",  v => config.IncludeSaddlebag = v, config.IncludeSaddlebag);
+        DrawCheckbox("Armoury Chest", v => config.IncludeArmoury = v, config.IncludeArmoury);
+        DrawCheckbox("Crystal bag", v => config.IncludeCrystals = v, config.IncludeCrystals);
+        DrawCheckbox("Equipped gear", v => config.IncludeEquipped = v, config.IncludeEquipped);
+        DrawCheckbox("Saddlebag (if subscribed)", v => config.IncludeSaddlebag = v, config.IncludeSaddlebag);
         ImGui.Spacing();
         DrawCheckbox("Resolve item names via Lumina", v => config.IncludeItemNames = v, config.IncludeItemNames);
         DrawCheckbox("Include character name & world", v => config.IncludeCharacterInfo = v, config.IncludeCharacterInfo);
@@ -116,7 +113,7 @@ public class MainWindow : Window, IDisposable
     {
         ImGui.TextColored(ColHeader, "Behaviour");
         ImGui.Separator();
-        
+
         DrawCheckbox("Auto-send on retainer window close", v => config.AutoSendOnRetainerClose = v, config.AutoSendOnRetainerClose);
         ImGui.TextColored(ColMuted,
             "  Retainer data is cached each time you close a retainer window.\n" +
@@ -162,7 +159,7 @@ public class MainWindow : Window, IDisposable
             {
                 var total = cached.Bags.Sum(b => b.Items.Count);
                 ImGui.BulletText(
-                    $"{cached.RetainerName}  —  {total} items  (last seen {cached.LastUpdated:HH:mm:ss UTC})");
+                    $"{cached.RetainerName}  -  {total} items  (last seen {cached.LastUpdated:HH:mm:ss UTC})");
             }
 
             ImGui.Spacing();
@@ -198,7 +195,7 @@ public class MainWindow : Window, IDisposable
             var statusOk = reporter.LastStatus.StartsWith("2");
             ImGui.TextColored(
                 statusOk ? ColSuccess : ColError,
-                $"Last sent: {reporter.LastSentAt:HH:mm:ss}  ·  Status: {reporter.LastStatus}");
+                $"Last sent: {reporter.LastSentAt:HH:mm:ss}  -  Status: {reporter.LastStatus}");
         }
         else
         {
@@ -211,7 +208,7 @@ public class MainWindow : Window, IDisposable
         ImGui.TextColored(ColHeader, "JSON Preview (last payload)");
         ImGui.Separator();
 
-        var json = reporter.LastPayload ?? "(No payload yet — press 'Send Report Now' first)";
+        var json = reporter.LastPayload ?? "(No payload yet - press 'Send Report Now' first)";
         ImGui.SetNextItemWidth(-1);
         ImGui.InputTextMultiline(
             "##jsonPreview",
@@ -222,7 +219,6 @@ public class MainWindow : Window, IDisposable
             (ImGui.ImGuiInputTextCallbackDelegate?)null);
     }
 
-    // ── Helpers ───────────────────────────────────────────────────────────────
 
     private void DrawCheckbox(string label, Action<bool> setter, bool currentValue)
     {

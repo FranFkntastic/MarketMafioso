@@ -5,7 +5,7 @@ using Dalamud.Plugin.Services;
 using FFXIVClientStructs.FFXIV.Client.Game;
 using Lumina.Excel.Sheets;
 
-namespace InventoryReporter2;
+namespace MarketMafioso;
 
 public class InventoryScanner
 {
@@ -134,7 +134,7 @@ public class InventoryScanner
         }
         catch (Exception ex)
         {
-            log.Verbose(ex, $"[InventoryReporter2] Could not resolve name for item {itemId}");
+            log.Verbose(ex, $"[MarketMafioso] Could not resolve name for item {itemId}");
             return null;
         }
     }
@@ -146,7 +146,7 @@ public class InventoryScanner
         var inventoryManager = InventoryManager.Instance();
         if (inventoryManager == null)
         {
-            log.Warning("[InventoryReporter2] InventoryManager.Instance() returned null");
+            log.Warning("[MarketMafioso] InventoryManager.Instance() returned null");
             return bags;
         }
 
@@ -205,7 +205,7 @@ public class InventoryScanner
             }
             catch (Exception ex)
             {
-                log.Error(ex, $"[InventoryReporter2] Error scanning container {type}");
+                log.Error(ex, $"[MarketMafioso] Error scanning container {type}");
             }
         }
 

@@ -6,9 +6,9 @@ using Dalamud.IoC;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
 using Dalamud.Interface.Windowing;
-using InventoryReporter2.Windows;
+using MarketMafioso.Windows;
 
-namespace InventoryReporter2;
+namespace MarketMafioso;
 
 public sealed class Plugin : IDalamudPlugin
 {
@@ -24,14 +24,14 @@ public sealed class Plugin : IDalamudPlugin
 
     internal static Plugin Instance { get; private set; } = null!;
 
-    private const string CmdMain = "/invreport";
+    private const string CmdMain = "/mmf";
 
     public Configuration Configuration { get; init; }
 
     private readonly InventoryScanner scanner;
     private readonly HttpReporter reporter;
     private readonly RetainerCacheManager retainerCache;
-    private readonly WindowSystem windowSystem = new("InventoryReporter2");
+    private readonly WindowSystem windowSystem = new("MarketMafioso");
     private readonly MainWindow mainWindow;
 
     private CancellationTokenSource? timerCancellation;
@@ -52,8 +52,8 @@ public sealed class Plugin : IDalamudPlugin
         CommandManager.AddHandler(CmdMain, new CommandInfo(OnCommand)
         {
             HelpMessage =
-                "Open the Inventory Reporter settings window. " +
-                "Use \"/invreport send\" to send a report immediately.",
+                "Open the MarketMafioso settings window. " +
+                "Use \"/mmf send\" to send a report immediately.",
         });
 
         PluginInterface.UiBuilder.Draw += DrawUI;
@@ -62,7 +62,7 @@ public sealed class Plugin : IDalamudPlugin
 
         StartTimer();
 
-        Log.Information("[InventoryReporter2] Plugin loaded. Use /invreport to open settings.");
+        Log.Information("[MarketMafioso] Plugin loaded. Use /mmf to open settings.");
     }
 
     private void OnCommand(string command, string args)
@@ -126,11 +126,11 @@ public sealed class Plugin : IDalamudPlugin
             }
             catch (Exception ex)
             {
-                Log.Error(ex, "[InventoryReporter2] Error in auto-send timer loop");
+                Log.Error(ex, "[MarketMafioso] Error in auto-send timer loop");
             }
         }, token);
 
-        Log.Debug($"[InventoryReporter2] Auto-send timer started (every {Configuration.AutoSendIntervalMinutes} minute(s))");
+        Log.Debug($"[MarketMafioso] Auto-send timer started (every {Configuration.AutoSendIntervalMinutes} minute(s))");
     }
 
     private void StopTimer()
@@ -140,7 +140,7 @@ public sealed class Plugin : IDalamudPlugin
             timerCancellation.Cancel();
             timerCancellation.Dispose();
             timerCancellation = null;
-            Log.Debug("[InventoryReporter2] Auto-send timer stopped");
+            Log.Debug("[MarketMafioso] Auto-send timer stopped");
         }
     }
 }

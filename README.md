@@ -1,22 +1,19 @@
 # MarketMafioso
 
-MarketMafioso is a Dalamud plugin workspace for retainer inventory, active sale listings, and market-board workflow experiments.
+MarketMafioso is a Dalamud plugin workspace for inventory reporting first, with market workflow tools planned on top of that baseline.
 
 This repository is being cleaned up from two older local projects:
 
-- `MarketMafioso`, an old dev plugin for active retainer sale listing capture and market lookup.
+- `MarketMafioso`, an old dev plugin with exploratory market tooling.
 - `InventoryReporter`, a smaller plugin that exports player and retainer inventory snapshots over HTTP.
 
-The current direction is to merge the useful inventory/reporting pieces into MarketMafioso while reworking the older MarketMafioso UI and capture flow instead of preserving it wholesale.
+The active plugin is intentionally InventoryReporter in almost all but name: it scans player inventory, caches retainer inventories when retainer windows close, and can send JSON snapshots to a configurable HTTP endpoint. The older MarketMafioso market-capture experiment is not part of the active plugin baseline.
 
 ## Layout
 
 ```text
 MarketMafioso/            Active Dalamud plugin project
-external/InventoryReporter/  Imported reference source for the merge
 ```
-
-`external/InventoryReporter` is kept as reference material. It is not part of the active solution and should not be treated as a second plugin to ship from this repository.
 
 ## Development
 
@@ -24,6 +21,18 @@ Build the active plugin:
 
 ```powershell
 dotnet build MarketMafioso.sln -c Release -p:UseSharedCompilation=false
+```
+
+Open the settings window in game with:
+
+```text
+/mmf
+```
+
+Send a report immediately with:
+
+```text
+/mmf send
 ```
 
 For local dev-plugin iteration, Debug builds still run `MarketMafioso/tools/Sync-DevPlugin.ps1` and copy output to:

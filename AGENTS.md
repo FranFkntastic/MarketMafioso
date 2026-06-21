@@ -5,32 +5,34 @@ This guide is for agentic coding tools working in this repository.
 ## Repository Scope
 - Primary project: `MarketMafioso/`.
 - Main solution: `MarketMafioso.sln`.
-- Treat `external/InventoryReporter/` as imported reference source for the planned merge, not active shipping code.
 - The old local `Reference/` folder was intentionally left out of this cleaned repository.
 - Default target for commands is the root solution or `MarketMafioso/MarketMafioso.csproj`.
 
 ## Current Product Focus (Authoritative)
-- Build only what is necessary to capture active retainer sale listings, gather market data for those listings, and display that captured data clearly.
-- Prioritize readable market-data presentation before implementing undercut analysis. Hold off on undercut detection work until the captured data is easy to parse in the UI.
-- Plugin control should happen primarily through GUI windows and overlays. The old `/mmf` command system is obsolete and should not be revived unless explicitly requested.
+- MarketMafioso currently starts from InventoryReporter behavior in almost all but name.
+- Build only what is necessary to scan player inventory, cache retainer inventories, and send or preview JSON inventory snapshots.
+- Treat the old active-retainer sale-listing capture and market-board query code as scrapped exploratory work.
+- Plugin control should happen through the settings window and `/mmf` command.
 - Keep scope tight and implementation lean. Prefer the smallest change that solves the immediate requirement.
-- Do not add capture for non-listed retainer inventory (`RetainerPage1..7`) unless explicitly requested.
+- Retainer inventory pages (`RetainerPage1..7`) are in scope as inventory reporting data.
 - Persist only plugin configuration between sessions (user options/settings).
-- Treat market snapshots and any future undercut analysis data as runtime data that is refreshed frequently and kept in memory.
-- Prefer a single capture cycle that gathers required listing + market data together for display and later analysis.
+- Persist cached retainer inventory only through existing configuration until a clearer storage model is designed.
+- Future market/undercut tools should be rebuilt on top of the inventory reporting baseline.
 
 ## Tech Stack
 - C# with `LangVersion` 12.
 - .NET SDK in local environment (build confirmed with .NET 10 SDK + net8 plugin target).
-- Plugin SDK: `Dalamud.NET.Sdk/14.0.1`.
+- Plugin SDK: `Dalamud.NET.Sdk/15.0.0`.
 - Nullable reference types are enabled.
 - Unsafe code is enabled for game/UI interop.
 
 ## Project Layout
-- `MarketMafioso/MarketMafioso.cs`: plugin entry point, DI wiring, and `WindowSystem` registration.
-- `MarketMafioso/Services/`: capture and runtime data services.
-- `MarketMafioso/Windows/`: Dalamud `Window`-based UI (overlay + master window).
-- `MarketMafioso/Models/`: shared model/DTO types (when present).
+- `MarketMafioso/Plugin.cs`: plugin entry point, service wiring, command registration, timer lifecycle, and `WindowSystem` registration.
+- `MarketMafioso/InventoryScanner.cs`: player and retainer inventory scanning.
+- `MarketMafioso/RetainerCacheManager.cs`: retainer window lifecycle hooks and retainer inventory cache updates.
+- `MarketMafioso/HttpReporter.cs`: JSON report creation and HTTP POST behavior.
+- `MarketMafioso/InventoryPayload.cs`: outbound JSON payload contracts.
+- `MarketMafioso/Windows/`: settings, cache status, send action, and JSON preview UI.
 - `MarketMafioso/tools/Sync-DevPlugin.ps1`: debug artifact sync to XIVLauncher dev plugin folder.
 
 ## Build/Lint/Test Commands
@@ -73,8 +75,7 @@ If tests are added later, use these patterns:
 
 ## Recommended Local Workflow
 - Keep edits focused in `MarketMafioso/` unless task scope says otherwise.
-- Use `external/InventoryReporter/` only as source reference while porting functionality into the active plugin.
-- Before implementing, verify the change directly serves listing capture, readable market-data display, or other explicitly requested product work.
+- Before implementing, verify the change directly serves inventory scanning, retainer cache reporting, HTTP export, or other explicitly requested product work.
 - Build after code changes: `dotnet build "MarketMafioso.sln" -c Debug`.
 - Verify formatting: `dotnet format "MarketMafioso.sln" --verify-no-changes`.
 - Run tests when test projects exist or when requested.
@@ -84,7 +85,7 @@ If tests are added later, use these patterns:
 Follow established patterns already present in `MarketMafioso/`.
 
 ### Imports and Namespaces
-- Use file-scoped namespaces (`namespace MarketMafioso.Services;`).
+- Use file-scoped namespaces (`namespace MarketMafioso;` or `namespace MarketMafioso.Windows;`).
 - Keep `using` directives at top of file.
 - Keep import ordering stable with nearby files.
 - Existing files often place framework/project namespaces before `System` namespaces.
@@ -152,7 +153,6 @@ Follow established patterns already present in `MarketMafioso/`.
 
 ## Change Boundaries and Safety
 - Do not edit generated files in `obj/` or artifacts in `bin/`.
-- Do not refactor `external/InventoryReporter/` unless explicitly requested.
 - Keep changes minimal and aligned with current architecture.
 - Preserve compatibility for persisted configuration keys.
 - Avoid speculative abstractions and premature architecture expansion.
@@ -165,7 +165,7 @@ Follow established patterns already present in `MarketMafioso/`.
 
 ## Agent Checklist
 - Confirm target files are inside `MarketMafioso/` unless task says otherwise.
-- Confirm the task directly supports listed-item capture, readable market-data display, or other explicitly requested product work.
+- Confirm the task directly supports inventory reporting, retainer cache reporting, HTTP export, or other explicitly requested product work.
 - Implement changes using existing style and nullability expectations.
 - Build with `dotnet build "MarketMafioso.sln" -c Debug`.
 - Run `dotnet format "MarketMafioso.sln" --verify-no-changes`.

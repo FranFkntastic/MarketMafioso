@@ -7,7 +7,7 @@ using System.Text.Json.Serialization;
 using System.Threading.Tasks;
 using Dalamud.Plugin.Services;
 
-namespace InventoryReporter2;
+namespace MarketMafioso;
 
 public class HttpReporter : IDisposable
 {
@@ -46,7 +46,7 @@ public class HttpReporter : IDisposable
     {
         if (string.IsNullOrWhiteSpace(config.ServerUrl))
         {
-            chatGui.PrintError("[InventoryReporter2] No server URL configured. Use /invreport to set one.");
+            chatGui.PrintError("[MarketMafioso] No server URL configured. Use /mmf to set one.");
             return;
         }
 
@@ -120,22 +120,22 @@ public class HttpReporter : IDisposable
             {
                 var itemCount = playerInventory.Sum(b => b.Items.Count);
                 chatGui.Print(
-                    $"[InventoryReporter2] ✓ Sent {itemCount} player items + {retainers.Count} retainer(s). " +
+                    $"[MarketMafioso] Sent {itemCount} player items + {retainers.Count} retainer(s). " +
                     $"Status: {LastStatus}");
-                log.Information($"[InventoryReporter2] Report sent — {LastStatus}");
+                log.Information($"[MarketMafioso] Report sent - {LastStatus}");
             }
             else
             {
                 var body = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
-                chatGui.PrintError($"[InventoryReporter2] Server error {LastStatus}: {body[..Math.Min(body.Length, 200)]}");
-                log.Warning($"[InventoryReporter2] Server returned {LastStatus}: {body}");
+                chatGui.PrintError($"[MarketMafioso] Server error {LastStatus}: {body[..Math.Min(body.Length, 200)]}");
+                log.Warning($"[MarketMafioso] Server returned {LastStatus}: {body}");
             }
         }
         catch (Exception ex)
         {
             LastStatus = $"Error: {ex.Message}";
-            chatGui.PrintError($"[InventoryReporter2] Failed to send: {ex.Message}");
-            log.Error(ex, "[InventoryReporter2] Error sending report");
+            chatGui.PrintError($"[MarketMafioso] Failed to send: {ex.Message}");
+            log.Error(ex, "[MarketMafioso] Error sending report");
         }
     }
 
