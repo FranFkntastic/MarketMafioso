@@ -49,6 +49,13 @@ For local dev-plugin iteration, Debug builds still run `MarketMafioso/tools/Sync
 
 See `docs/local-backend.md` for local server endpoints and smoke-test commands.
 
+Shared JetBrains IDEA/Rider run configurations live in `.idea/runConfigurations/`:
+
+- `plugin build Debug + sync`
+- `plugin build Release`
+- `server run local :8080`
+- `server smoke test`
+
 ## Cleanup Notes
 
 The old local dev root included generated build folders, Visual Studio state, and large third-party reference checkouts. Those were intentionally left out of this repository. If old reference code is needed during a rewrite, keep it outside the repo or add a small source note instead of vendoring the full checkout.
