@@ -2,7 +2,7 @@
 
 ## Goal
 
-Make MarketMafioso start as InventoryReporter in almost all but name. The active plugin should own player inventory scanning, retainer inventory caching, and optional HTTP JSON export before market-specific tools are rebuilt.
+Make MarketMafioso start from InventoryReporter behavior while positioning the plugin as a broader integrated toolbox. The active plugin should own player inventory scanning, retainer inventory caching, and optional HTTP JSON export before market-specific tools are rebuilt.
 
 ## Current Primary Features
 
@@ -23,7 +23,7 @@ Make MarketMafioso start as InventoryReporter in almost all but name. The active
 
 ## Future MarketMafioso Direction
 
-Rebuild market tooling on top of the inventory reporting baseline once the inventory snapshot model is clean. Market tools should use the inventory/reporting data as their foundation rather than preserving the earlier exploratory capture code.
+MarketMafioso should become a home for small, practical features that are useful but too narrow for standalone plugins. Rebuild market tooling on top of the inventory reporting baseline once the inventory snapshot model is clean. Market tools should use the inventory/reporting data as their foundation rather than preserving the earlier exploratory capture code.
 
 ## Source Boundaries
 

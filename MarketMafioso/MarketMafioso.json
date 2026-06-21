@@ -1,8 +1,8 @@
 {
   "Author": "FranFkntastic",
   "Name": "MarketMafioso",
-  "Punchline": "HTTP JSON export of your FFXIV inventories.",
-  "Description": "Scans your character and retainer inventories and sends them as JSON to a configurable HTTP endpoint. Use /mmf to open settings.",
+  "Punchline": "Small, practical FFXIV improvements under one roof.",
+  "Description": "A small integrated toolbox for practical FFXIV improvements, starting with inventory reporting and retainer cache export. Use /mmf to open settings.",
   "InternalName": "MarketMafioso",
   "AssemblyVersion": "1.0.0.0",
   "DalamudApiLevel": 15,
@@ -11,6 +11,7 @@
     "inventory",
     "retainer",
     "utility",
+    "qol",
     "export",
     "json"
   ],

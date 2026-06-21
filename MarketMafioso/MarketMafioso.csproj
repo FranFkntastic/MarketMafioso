@@ -11,8 +11,8 @@
     <DisableFastUpToDateCheck>true</DisableFastUpToDateCheck>
     <Name>MarketMafioso</Name>
     <Author>FranFkntastic</Author>
-    <Description>Scans player inventory and retainers, sending snapshots to a configurable HTTP endpoint.</Description>
-    <Punchline>HTTP JSON export of your FFXIV inventories.</Punchline>
+    <Description>A small integrated toolbox for practical FFXIV improvements, starting with inventory reporting and retainer cache export.</Description>
+    <Punchline>Small, practical FFXIV improvements under one roof.</Punchline>
     <RepoUrl>https://github.com/FranFkntastic/MarketMafioso</RepoUrl>
   </PropertyGroup>
 

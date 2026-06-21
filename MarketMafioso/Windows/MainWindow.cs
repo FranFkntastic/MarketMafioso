@@ -19,6 +19,9 @@ public class MainWindow : Window, IDisposable
     private bool showApiKey = false;
     private bool showPreview = false;
 
+    private const string ProductSummary = "Small, practical FFXIV improvements under one roof.";
+    private const string InventoryModuleSummary = "Inventory Reporter exports character and retainer inventory snapshots as JSON.";
+
     private static readonly Vector4 ColHeader = new(0.38f, 0.73f, 1.00f, 1f);
     private static readonly Vector4 ColSuccess = new(0.45f, 0.90f, 0.55f, 1f);
     private static readonly Vector4 ColError = new(1.00f, 0.40f, 0.40f, 1f);
@@ -26,7 +29,7 @@ public class MainWindow : Window, IDisposable
 
     public MainWindow(Configuration config, HttpReporter reporter, InventoryScanner scanner, IPluginLog log)
         : base("MarketMafioso##MarketMafiosoMainWindow",
-               ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse)
+               ImGuiWindowFlags.None)
     {
         this.config = config;
         this.reporter = reporter;
@@ -45,17 +48,65 @@ public class MainWindow : Window, IDisposable
 
     public override void Draw()
     {
+        DrawHeader();
+        ImGui.Spacing();
+
+        if (ImGui.BeginTabBar("##MarketMafiosoTabs"))
+        {
+            if (ImGui.BeginTabItem("Overview"))
+            {
+                DrawOverviewTab();
+                ImGui.EndTabItem();
+            }
+
+            if (ImGui.BeginTabItem("Inventory Reporter"))
+            {
+                DrawInventoryReporterTab();
+                ImGui.EndTabItem();
+            }
+
+            if (ImGui.BeginTabItem("Status"))
+            {
+                DrawStatusTab();
+                ImGui.EndTabItem();
+            }
+
+            ImGui.EndTabBar();
+        }
+    }
+
+    private void DrawHeader()
+    {
+        ImGui.TextColored(ColHeader, "MarketMafioso");
+        ImGui.TextWrapped(ProductSummary);
+        ImGui.TextColored(ColMuted, "Current module: Inventory Reporter");
+    }
+
+    private void DrawOverviewTab()
+    {
+        ImGui.Spacing();
+        ImGui.TextColored(ColHeader, "Modules");
+        ImGui.Separator();
+
+        DrawModuleSummary("Inventory Reporter", "Enabled", InventoryModuleSummary);
+        DrawModuleSummary("Market Tools", "Planned", "Future market-board helpers will build on captured inventory and item data.");
+        DrawModuleSummary("General Improvements", "Planned", "Small quality-of-life tools that are useful, but too narrow for their own plugin.");
+    }
+
+    private void DrawInventoryReporterTab()
+    {
+        ImGui.Spacing();
+        ImGui.TextColored(ColHeader, "Inventory Reporter");
+        ImGui.TextWrapped(InventoryModuleSummary);
+        ImGui.Spacing();
+
         DrawServerSection();
         ImGui.Spacing();
         DrawInventoryOptionsSection();
         ImGui.Spacing();
         DrawBehaviourSection();
         ImGui.Spacing();
-        DrawRetainerCacheSection();
-        ImGui.Spacing();
         DrawActionsSection();
-        ImGui.Spacing();
-        DrawStatusSection();
 
         if (showPreview)
         {
@@ -64,10 +115,26 @@ public class MainWindow : Window, IDisposable
         }
     }
 
+    private void DrawStatusTab()
+    {
+        ImGui.Spacing();
+        DrawStatusSection();
+        ImGui.Spacing();
+        DrawRetainerCacheSection();
+    }
+
+    private void DrawModuleSummary(string name, string state, string description)
+    {
+        ImGui.BulletText(name);
+        ImGui.SameLine();
+        ImGui.TextColored(state == "Enabled" ? ColSuccess : ColMuted, $"({state})");
+        ImGui.TextWrapped(description);
+        ImGui.Spacing();
+    }
 
     private void DrawServerSection()
     {
-        ImGui.TextColored(ColHeader, "Server Settings");
+        ImGui.TextColored(ColHeader, "Export Endpoint");
         ImGui.Separator();
 
         ImGui.Text("Server URL:");
@@ -94,7 +161,7 @@ public class MainWindow : Window, IDisposable
 
     private void DrawInventoryOptionsSection()
     {
-        ImGui.TextColored(ColHeader, "What to Include");
+        ImGui.TextColored(ColHeader, "Included Data");
         ImGui.Separator();
 
         ImGui.TextColored(ColMuted, "Player inventory (4 bags) is always included.");
@@ -111,7 +178,7 @@ public class MainWindow : Window, IDisposable
 
     private void DrawBehaviourSection()
     {
-        ImGui.TextColored(ColHeader, "Behaviour");
+        ImGui.TextColored(ColHeader, "Automation");
         ImGui.Separator();
 
         DrawCheckbox("Auto-send on retainer window close", v => config.AutoSendOnRetainerClose = v, config.AutoSendOnRetainerClose);
@@ -173,7 +240,7 @@ public class MainWindow : Window, IDisposable
 
     private void DrawActionsSection()
     {
-        ImGui.TextColored(ColHeader, "Actions");
+        ImGui.TextColored(ColHeader, "Inventory Reporter Actions");
         ImGui.Separator();
 
         var half = (ImGui.GetContentRegionAvail().X - ImGui.GetStyle().ItemSpacing.X) / 2f;
@@ -190,6 +257,9 @@ public class MainWindow : Window, IDisposable
 
     private void DrawStatusSection()
     {
+        ImGui.TextColored(ColHeader, "Module Status");
+        ImGui.Separator();
+
         if (reporter.LastSentAt.HasValue)
         {
             var statusOk = reporter.LastStatus.StartsWith("2");

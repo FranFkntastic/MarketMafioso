@@ -52,8 +52,8 @@ public sealed class Plugin : IDalamudPlugin
         CommandManager.AddHandler(CmdMain, new CommandInfo(OnCommand)
         {
             HelpMessage =
-                "Open the MarketMafioso settings window. " +
-                "Use \"/mmf send\" to send a report immediately.",
+                "Open the MarketMafioso toolbox window. " +
+                "Use \"/mmf send\" to send an inventory report immediately.",
         });
 
         PluginInterface.UiBuilder.Draw += DrawUI;

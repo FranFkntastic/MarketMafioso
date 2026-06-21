@@ -1,13 +1,13 @@
 # MarketMafioso
 
-MarketMafioso is a Dalamud plugin workspace for inventory reporting first, with market workflow tools planned on top of that baseline.
+MarketMafioso is a Dalamud plugin workspace for small, practical FFXIV improvements under one roof.
 
 This repository is being cleaned up from two older local projects:
 
 - `MarketMafioso`, an old dev plugin with exploratory market tooling.
 - `InventoryReporter`, a smaller plugin that exports player and retainer inventory snapshots over HTTP.
 
-The active plugin is intentionally InventoryReporter in almost all but name: it scans player inventory, caches retainer inventories when retainer windows close, and can send JSON snapshots to a configurable HTTP endpoint. The older MarketMafioso market-capture experiment is not part of the active plugin baseline.
+The active plugin starts with InventoryReporter functionality: it scans player inventory, caches retainer inventories when retainer windows close, and can send JSON snapshots to a configurable HTTP endpoint. The UI now treats that as the first enabled module in a broader toolbox rather than the whole product identity. The older MarketMafioso market-capture experiment is not part of the active plugin baseline.
 
 ## Layout
 
