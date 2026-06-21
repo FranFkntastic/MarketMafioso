@@ -4,6 +4,7 @@ This guide is for agentic coding tools working in this repository.
 
 ## Repository Scope
 - Primary project: `MarketMafioso/`.
+- Local backend project: `MarketMafioso.Server/`.
 - Main solution: `MarketMafioso.sln`.
 - The old local `Reference/` folder was intentionally left out of this cleaned repository.
 - Default target for commands is the root solution or `MarketMafioso/MarketMafioso.csproj`.
@@ -34,6 +35,7 @@ This guide is for agentic coding tools working in this repository.
 - `MarketMafioso/InventoryPayload.cs`: outbound JSON payload contracts.
 - `MarketMafioso/Windows/`: settings, cache status, send action, and JSON preview UI.
 - `MarketMafioso/tools/Sync-DevPlugin.ps1`: debug artifact sync to XIVLauncher dev plugin folder.
+- `MarketMafioso.Server/`: local ASP.NET inventory-report receiver and dashboard.
 
 ## Build/Lint/Test Commands
 Run from repository root (`MarketMafioso`).
@@ -45,6 +47,7 @@ Run from repository root (`MarketMafioso`).
 - Debug: `dotnet build "MarketMafioso.sln" -c Debug`
 - Release: `dotnet build "MarketMafioso.sln" -c Release`
 - Single project: `dotnet build "MarketMafioso/MarketMafioso.csproj" -c Debug`
+- Local backend: `dotnet run --project "MarketMafioso.Server" --urls http://localhost:8080`
 Build notes:
 - Debug build runs `Sync-DevPlugin.ps1` via `AfterTargets="Build"`.
 - Output folders: `MarketMafioso/bin/Debug` and `MarketMafioso/bin/Release`.
@@ -153,6 +156,7 @@ Follow established patterns already present in `MarketMafioso/`.
 
 ## Change Boundaries and Safety
 - Do not edit generated files in `obj/` or artifacts in `bin/`.
+- Do not commit local backend data under `MarketMafioso.Server/data/`.
 - Keep changes minimal and aligned with current architecture.
 - Preserve compatibility for persisted configuration keys.
 - Avoid speculative abstractions and premature architecture expansion.

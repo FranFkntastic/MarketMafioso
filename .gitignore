@@ -25,5 +25,8 @@ Thumbs.db
 dist/
 *.nupkg
 
+# Local backend data
+MarketMafioso.Server/data/
+
 # Logs
 *.log

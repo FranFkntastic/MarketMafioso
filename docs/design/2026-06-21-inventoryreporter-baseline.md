@@ -13,6 +13,7 @@ Make MarketMafioso start from InventoryReporter behavior while positioning the p
 - Send reports manually with `/mmf send`.
 - Optionally auto-send on retainer window close or on a timer.
 - Preview the last JSON payload in the settings UI.
+- Test uploads locally against the file-backed `MarketMafioso.Server` receiver.
 
 ## Explicitly Scrapped From The Old MarketMafioso Baseline
 

@@ -5,6 +5,8 @@ VisualStudioVersion = 18.3.11520.95
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MarketMafioso", "MarketMafioso\MarketMafioso.csproj", "{A4B8B8D1-1B1B-4B8B-B1B1-B1B1B1B1B1B1}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MarketMafioso.Server", "MarketMafioso.Server\MarketMafioso.Server.csproj", "{7FB923CE-7F1C-4F71-987F-40CA9A99CB65}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -27,6 +29,18 @@ Global
 		{A4B8B8D1-1B1B-4B8B-B1B1-B1B1B1B1B1B1}.Release|x64.Build.0 = Release|x64
 		{A4B8B8D1-1B1B-4B8B-B1B1-B1B1B1B1B1B1}.Release|x86.ActiveCfg = Release|Any CPU
 		{A4B8B8D1-1B1B-4B8B-B1B1-B1B1B1B1B1B1}.Release|x86.Build.0 = Release|Any CPU
+		{7FB923CE-7F1C-4F71-987F-40CA9A99CB65}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{7FB923CE-7F1C-4F71-987F-40CA9A99CB65}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{7FB923CE-7F1C-4F71-987F-40CA9A99CB65}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{7FB923CE-7F1C-4F71-987F-40CA9A99CB65}.Debug|x64.Build.0 = Debug|Any CPU
+		{7FB923CE-7F1C-4F71-987F-40CA9A99CB65}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{7FB923CE-7F1C-4F71-987F-40CA9A99CB65}.Debug|x86.Build.0 = Debug|Any CPU
+		{7FB923CE-7F1C-4F71-987F-40CA9A99CB65}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{7FB923CE-7F1C-4F71-987F-40CA9A99CB65}.Release|Any CPU.Build.0 = Release|Any CPU
+		{7FB923CE-7F1C-4F71-987F-40CA9A99CB65}.Release|x64.ActiveCfg = Release|Any CPU
+		{7FB923CE-7F1C-4F71-987F-40CA9A99CB65}.Release|x64.Build.0 = Release|Any CPU
+		{7FB923CE-7F1C-4F71-987F-40CA9A99CB65}.Release|x86.ActiveCfg = Release|Any CPU
+		{7FB923CE-7F1C-4F71-987F-40CA9A99CB65}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

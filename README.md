@@ -23,6 +23,12 @@ Build the active plugin:
 dotnet build MarketMafioso.sln -c Release -p:UseSharedCompilation=false
 ```
 
+Run the local inventory-report backend:
+
+```powershell
+dotnet run --project MarketMafioso.Server --urls http://localhost:8080
+```
+
 Open the settings window in game with:
 
 ```text
@@ -40,6 +46,8 @@ For local dev-plugin iteration, Debug builds still run `MarketMafioso/tools/Sync
 ```text
 %APPDATA%\XIVLauncher\devPlugins\MarketMafioso
 ```
+
+See `docs/local-backend.md` for local server endpoints and smoke-test commands.
 
 ## Cleanup Notes
 

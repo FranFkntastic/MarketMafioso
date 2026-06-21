@@ -1,0 +1,40 @@
+{
+  "characterName": "Test Character",
+  "homeWorld": "Gilgamesh",
+  "timestamp": "2026-06-21T12:00:00.0000000Z",
+  "playerInventory": [
+    {
+      "bagName": "Inventory1",
+      "items": [
+        {
+          "itemId": 2,
+          "itemName": "Fire Shard",
+          "quantity": 120,
+          "isHQ": false,
+          "condition": 0
+        }
+      ]
+    }
+  ],
+  "retainers": [
+    {
+      "retainerName": "Sample Retainer",
+      "retainerId": 123456789,
+      "lastUpdated": "2026-06-21T12:00:00.0000000Z",
+      "bags": [
+        {
+          "bagName": "RetainerPage1",
+          "items": [
+            {
+              "itemId": 4,
+              "itemName": "Lightning Shard",
+              "quantity": 99,
+              "isHQ": false,
+              "condition": 0
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
