@@ -53,7 +53,7 @@ Shared JetBrains IDEA/Rider run configurations live in `.idea/runConfigurations/
 
 - `plugin build Debug + sync`
 - `plugin build Release`
-- `server run local :8080`
+- `inventory backend: launch local receiver`
 - `server smoke test`
 
 ## Cleanup Notes
