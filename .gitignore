@@ -1,0 +1,29 @@
+# Reference repositories and imported scratch material
+Reference/
+
+# Build outputs
+bin/
+obj/
+**/bin/
+**/obj/
+
+# IDE/editor state
+.idea/*
+!.idea/
+!.idea/runConfigurations/
+!.idea/runConfigurations/*.xml
+.vscode/
+.vs/
+*.suo
+*.user
+
+# OS noise
+.DS_Store
+Thumbs.db
+
+# Release/package outputs
+dist/
+*.nupkg
+
+# Logs
+*.log

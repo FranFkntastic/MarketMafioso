@@ -1,0 +1,15 @@
+# Build outputs
+bin/
+obj/
+
+# IntelliJ IDEA local workspace state
+.idea/*
+!.idea/
+!.idea/runConfigurations/
+!.idea/runConfigurations/*.xml
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+*.user
+*.suo

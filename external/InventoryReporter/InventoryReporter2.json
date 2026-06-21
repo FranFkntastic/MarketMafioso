@@ -1,0 +1,18 @@
+{
+  "Author": "You",
+  "Name": "Inventory Reporter 2",
+  "InternalName": "InventoryReporter2",
+  "AssemblyVersion": "1.0.0.0",
+  "Description": "Scans your character and retainer inventories and sends them as JSON to a configurable HTTP endpoint. Use /invreport to open settings.",
+  "Punchline": "HTTP JSON export of your FFXIV inventories.",
+  "RepoUrl": "",
+  "ApplicableVersion": "any",
+  "DalamudApiLevel": 15,
+  "Tags": [
+    "inventory",
+    "retainer",
+    "utility",
+    "export",
+    "json"
+  ]
+}
