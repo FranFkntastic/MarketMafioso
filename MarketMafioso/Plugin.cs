@@ -21,6 +21,8 @@ public sealed class Plugin : IDalamudPlugin
     [PluginService] internal static IChatGui ChatGui { get; private set; } = null!;
     [PluginService] internal static IAddonLifecycle AddonLifecycle { get; private set; } = null!;
     [PluginService] internal static IFramework Framework { get; private set; } = null!;
+    [PluginService] internal static IGameGui GameGui { get; private set; } = null!;
+    [PluginService] internal static IObjectTable ObjectTable { get; private set; } = null!;
 
     internal static Plugin Instance { get; private set; } = null!;
 
@@ -31,6 +33,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly InventoryScanner scanner;
     private readonly HttpReporter reporter;
     private readonly RetainerCacheManager retainerCache;
+    private readonly AutoRetainerRefreshService autoRetainerRefresh;
     private readonly WindowSystem windowSystem = new("MarketMafioso");
     private readonly MainWindow mainWindow;
 
@@ -45,7 +48,15 @@ public sealed class Plugin : IDalamudPlugin
         scanner = new InventoryScanner(DataManager, Log);
         reporter = new HttpReporter(Configuration, PlayerState, Log, ChatGui, scanner);
         retainerCache = new RetainerCacheManager(AddonLifecycle, Log, Configuration, scanner, reporter);
-        mainWindow = new MainWindow(Configuration, reporter, scanner, Log);
+        autoRetainerRefresh = new AutoRetainerRefreshService(
+            PluginInterface,
+            Log,
+            GameGui,
+            ObjectTable,
+            DataManager,
+            retainerCache,
+            reporter);
+        mainWindow = new MainWindow(Configuration, reporter, scanner, autoRetainerRefresh, Log);
 
         windowSystem.AddWindow(mainWindow);
 
@@ -92,6 +103,7 @@ public sealed class Plugin : IDalamudPlugin
 
         CommandManager.RemoveHandler(CmdMain);
 
+        autoRetainerRefresh.Dispose();
         retainerCache.Dispose();
         reporter.Dispose();
 
