@@ -24,6 +24,9 @@ Open:
 http://localhost:8080/
 ```
 
+The dashboard is a local control panel for received snapshots. It shows summary counts, links to each snapshot's HTML detail view and raw JSON, and lets you delete individual snapshots.
+It also has a `Delete All` action for clearing the local snapshot store.
+
 Useful JSON endpoints:
 
 ```text
@@ -33,6 +36,8 @@ POST /api/inventory
 GET  /api/reports
 GET  /api/reports/latest
 GET  /api/reports/{id}
+DELETE /api/reports
+DELETE /api/reports/{id}
 ```
 
 Reports are stored as JSON files under `MarketMafioso.Server/data/reports/`. That folder is ignored by git.
