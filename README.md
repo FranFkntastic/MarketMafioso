@@ -2,33 +2,6 @@
 
 MarketMafioso is a Dalamud plugin workspace for small, practical FFXIV improvements under one roof.
 
-This repository is being cleaned up from two older local projects:
-
-- `MarketMafioso`, an old dev plugin with exploratory market tooling.
-- `InventoryReporter`, a smaller plugin that exports player and retainer inventory snapshots over HTTP.
-
-The active plugin starts with InventoryReporter functionality: it scans player inventory, caches retainer inventories when retainer windows close, and can send JSON snapshots to a configurable HTTP endpoint. The UI now treats that as the first enabled module in a broader toolbox rather than the whole product identity. The older MarketMafioso market-capture experiment is not part of the active plugin baseline.
-
-## Layout
-
-```text
-MarketMafioso/            Active Dalamud plugin project
-```
-
-## Development
-
-Build the active plugin:
-
-```powershell
-dotnet build MarketMafioso.sln -c Release -p:UseSharedCompilation=false
-```
-
-Run the local inventory-report backend:
-
-```powershell
-dotnet run --project MarketMafioso.Server --urls http://localhost:8080
-```
-
 Open the settings window in game with:
 
 ```text
@@ -40,22 +13,3 @@ Send a report immediately with:
 ```text
 /mmf send
 ```
-
-For local dev-plugin iteration, Debug builds still run `MarketMafioso/tools/Sync-DevPlugin.ps1` and copy output to:
-
-```text
-%APPDATA%\XIVLauncher\devPlugins\MarketMafioso
-```
-
-See `docs/local-backend.md` for local server endpoints and smoke-test commands.
-
-Shared JetBrains IDEA/Rider run configurations live in `.idea/runConfigurations/`:
-
-- `plugin build Debug + sync`
-- `plugin build Release`
-- `inventory backend: launch local receiver`
-- `server smoke test`
-
-## Cleanup Notes
-
-The old local dev root included generated build folders, Visual Studio state, and large third-party reference checkouts. Those were intentionally left out of this repository. If old reference code is needed during a rewrite, keep it outside the repo or add a small source note instead of vendoring the full checkout.
