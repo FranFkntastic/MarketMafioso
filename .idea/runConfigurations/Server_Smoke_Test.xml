@@ -1,6 +1,6 @@
 <component name="ProjectRunConfigurationManager">
   <configuration default="false" name="server smoke test" type="ShConfigurationType" factoryName="Shell Script">
-    <option name="SCRIPT_TEXT" value="$created = Invoke-RestMethod -Method Post -Uri http://localhost:8080/inventory -ContentType application/json -Body (Get-Content &quot;$PROJECT_DIR$/docs/samples/inventory-report.sample.json&quot; -Raw); $latest = Invoke-RestMethod -Uri http://localhost:8080/api/reports/latest; [pscustomobject]@{ CreatedId = $created.id; LatestId = $latest.id; Character = $latest.report.characterName } | ConvertTo-Json" />
+    <option name="SCRIPT_TEXT" value="$created = Invoke-RestMethod -Method Post -Uri http://localhost:8080/inventory -ContentType application/json -Body (Get-Content &quot;$PROJECT_DIR$/docs/samples/inventory-report.sample.json&quot; -Raw); $dashboard = Invoke-WebRequest -Uri http://localhost:8080/ -UseBasicParsing; $detail = Invoke-WebRequest -Uri &quot;http://localhost:8080/reports/$($created.id)&quot; -UseBasicParsing; $delete = Invoke-WebRequest -Method Delete -Uri &quot;http://localhost:8080/api/reports/$($created.id)&quot; -UseBasicParsing; [pscustomobject]@{ CreatedId = $created.id; DashboardHasControlPanel = $dashboard.Content.Contains('Local control panel'); DetailHasJson = $detail.Content.Contains('&lt;pre&gt;'); DeleteStatus = $delete.StatusCode } | ConvertTo-Json" />
     <option name="INDEPENDENT_SCRIPT_PATH" value="true" />
     <option name="SCRIPT_PATH" value="" />
     <option name="SCRIPT_OPTIONS" value="" />

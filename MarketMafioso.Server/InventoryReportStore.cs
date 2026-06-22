@@ -7,6 +7,8 @@ public sealed class InventoryReportStore
     private readonly string reportDirectory;
     private readonly JsonSerializerOptions jsonOptions;
 
+    public string ReportDirectory => reportDirectory;
+
     public InventoryReportStore(IHostEnvironment environment)
     {
         reportDirectory = Path.Combine(environment.ContentRootPath, "data", "reports");
@@ -67,6 +69,32 @@ public sealed class InventoryReportStore
             stream,
             jsonOptions,
             cancellationToken);
+    }
+
+    public Task<bool> DeleteAsync(string id, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var path = GetReportPath(id);
+        if (!File.Exists(path))
+            return Task.FromResult(false);
+
+        File.Delete(path);
+        return Task.FromResult(true);
+    }
+
+    public Task<int> DeleteAllAsync(CancellationToken cancellationToken)
+    {
+        var deleted = 0;
+        foreach (var path in Directory.EnumerateFiles(reportDirectory, "*.json"))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            File.Delete(path);
+            deleted++;
+        }
+
+        return Task.FromResult(deleted);
     }
 
     private async Task<IReadOnlyList<StoredInventoryReport>> ListReportsAsync(CancellationToken cancellationToken)
