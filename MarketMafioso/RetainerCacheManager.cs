@@ -22,6 +22,7 @@ public class RetainerCacheManager : IDisposable
     private readonly Configuration config;
     private readonly InventoryScanner scanner;
     private readonly HttpReporter reporter;
+    private bool isBatchRefreshActive;
 
     // Both addon names are registered so the handler fires regardless of
     // which layout the game uses (depends on player's bag count / resolution).
@@ -131,7 +132,7 @@ public class RetainerCacheManager : IDisposable
 
             RetainerCached?.Invoke();
 
-            if (config.AutoSendOnRetainerClose)
+            if (config.AutoSendOnRetainerClose && !isBatchRefreshActive)
                 _ = reporter.SendReportAsync();
         }
         catch (Exception ex)
@@ -146,6 +147,17 @@ public class RetainerCacheManager : IDisposable
     }
 
 
+
+
+    public void BeginBatchRefresh()
+    {
+        isBatchRefreshActive = true;
+    }
+
+    public void EndBatchRefresh()
+    {
+        isBatchRefreshActive = false;
+    }
 
     public void Dispose()
     {

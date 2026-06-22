@@ -12,6 +12,7 @@ public class MainWindow : Window, IDisposable
     private readonly Configuration config;
     private readonly HttpReporter reporter;
     private readonly InventoryScanner scanner;
+    private readonly AutoRetainerRefreshService autoRetainerRefresh;
     private readonly IPluginLog log;
 
     private string urlBuffer = string.Empty;
@@ -27,13 +28,19 @@ public class MainWindow : Window, IDisposable
     private static readonly Vector4 ColError = new(1.00f, 0.40f, 0.40f, 1f);
     private static readonly Vector4 ColMuted = new(0.60f, 0.60f, 0.60f, 1f);
 
-    public MainWindow(Configuration config, HttpReporter reporter, InventoryScanner scanner, IPluginLog log)
+    public MainWindow(
+        Configuration config,
+        HttpReporter reporter,
+        InventoryScanner scanner,
+        AutoRetainerRefreshService autoRetainerRefresh,
+        IPluginLog log)
         : base("MarketMafioso##MarketMafiosoMainWindow",
                ImGuiWindowFlags.None)
     {
         this.config = config;
         this.reporter = reporter;
         this.scanner = scanner;
+        this.autoRetainerRefresh = autoRetainerRefresh;
         this.log = log;
 
         SizeConstraints = new WindowSizeConstraints
@@ -243,16 +250,49 @@ public class MainWindow : Window, IDisposable
         ImGui.TextColored(ColHeader, "Inventory Reporter Actions");
         ImGui.Separator();
 
-        var half = (ImGui.GetContentRegionAvail().X - ImGui.GetStyle().ItemSpacing.X) / 2f;
+        var third = (ImGui.GetContentRegionAvail().X - 2 * ImGui.GetStyle().ItemSpacing.X) / 3f;
 
-        if (ImGui.Button("Send Report Now", new Vector2(half, 0)))
+        if (ImGui.Button("Send Report Now", new Vector2(third, 0)))
             _ = reporter.SendReportAsync();
 
         ImGui.SameLine();
 
+        var canRefreshRetainers = autoRetainerRefresh.CanStartRefresh &&
+                                  !autoRetainerRefresh.IsRefreshing &&
+                                  !autoRetainerRefresh.IsStartQueued;
+        if (!canRefreshRetainers)
+            ImGui.BeginDisabled();
+
+        if (ImGui.Button("Refresh Retainer Cache", new Vector2(third, 0)))
+            autoRetainerRefresh.StartFullRefresh();
+
+        if (!canRefreshRetainers)
+            ImGui.EndDisabled();
+
+        ImGui.SameLine();
+
         var previewLabel = showPreview ? "Hide JSON Preview" : "Show JSON Preview";
-        if (ImGui.Button(previewLabel, new Vector2(half, 0)))
+        if (ImGui.Button(previewLabel, new Vector2(third, 0)))
             showPreview = !showPreview;
+
+        ImGui.Spacing();
+        ImGui.TextColored(GetRefreshStatusColor(), autoRetainerRefresh.LastStatus);
+    }
+
+    private Vector4 GetRefreshStatusColor()
+    {
+        if (autoRetainerRefresh.IsRefreshing)
+            return ColHeader;
+
+        if (autoRetainerRefresh.LastStatus.Contains("complete", StringComparison.OrdinalIgnoreCase))
+            return ColSuccess;
+
+        if (autoRetainerRefresh.LastStatus.Contains("failed", StringComparison.OrdinalIgnoreCase) ||
+            autoRetainerRefresh.LastStatus.Contains("unable", StringComparison.OrdinalIgnoreCase) ||
+            autoRetainerRefresh.LastStatus.Contains("timed out", StringComparison.OrdinalIgnoreCase))
+            return ColError;
+
+        return ColMuted;
     }
 
     private void DrawStatusSection()
