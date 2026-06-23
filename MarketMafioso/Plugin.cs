@@ -74,6 +74,7 @@ public sealed class Plugin : IDalamudPlugin
             Log);
 
         windowSystem.AddWindow(mainWindow);
+        windowSystem.AddWindow(mainWindow.ProjectBrowser);
 
         CommandManager.AddHandler(CmdMain, new CommandInfo(OnCommand)
         {
@@ -123,6 +124,7 @@ public sealed class Plugin : IDalamudPlugin
         reporter.Dispose();
 
         windowSystem.RemoveAllWindows();
+        mainWindow.ProjectBrowser.Dispose();
         mainWindow.Dispose();
     }
 
