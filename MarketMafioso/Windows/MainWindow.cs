@@ -18,6 +18,7 @@ public class MainWindow : Window, IDisposable
     private readonly WorkshopProjectCatalog workshopCatalog;
     private readonly VIWIWorkshoppaIpc viwiWorkshoppaIpc;
     private readonly WorkshopRetainerRestockService workshopRetainerRestock;
+    private readonly WorkshopAssemblyRunner workshopAssemblyRunner;
     private readonly IPluginLog log;
 
     private string urlBuffer = string.Empty;
@@ -48,6 +49,7 @@ public class MainWindow : Window, IDisposable
         WorkshopProjectCatalog workshopCatalog,
         VIWIWorkshoppaIpc viwiWorkshoppaIpc,
         WorkshopRetainerRestockService workshopRetainerRestock,
+        WorkshopAssemblyRunner workshopAssemblyRunner,
         IPluginLog log)
         : base("MarketMafioso##MarketMafiosoMainWindow",
                ImGuiWindowFlags.None)
@@ -59,6 +61,7 @@ public class MainWindow : Window, IDisposable
         this.workshopCatalog = workshopCatalog;
         this.viwiWorkshoppaIpc = viwiWorkshoppaIpc;
         this.workshopRetainerRestock = workshopRetainerRestock;
+        this.workshopAssemblyRunner = workshopAssemblyRunner;
         this.log = log;
 
         SizeConstraints = new WindowSizeConstraints
@@ -332,6 +335,7 @@ public class MainWindow : Window, IDisposable
         if (config.WorkshopPrepQueue.Count == 0)
             confirmViwiClear = false;
 
+        var hasPrepQueue = config.WorkshopPrepQueue.Count > 0;
         var canRefreshRetainers = autoRetainerRefresh.CanStartRefresh &&
                                   !autoRetainerRefresh.IsRefreshing &&
                                   !autoRetainerRefresh.IsStartQueued;
@@ -343,7 +347,37 @@ public class MainWindow : Window, IDisposable
             _ = workshopRetainerRestock.StartAsync(GetWorkshopAvailability());
 
         ImGui.SameLine();
-        var hasPrepQueue = config.WorkshopPrepQueue.Count > 0;
+        if (workshopAssemblyRunner.IsRunning)
+        {
+            if (ImGui.Button("Stop Assembly"))
+                workshopAssemblyRunner.Stop();
+        }
+        else if (ImGuiUi.Button("Start Native Assembly", hasPrepQueue))
+        {
+            try
+            {
+                var preflight = WorkshopAssemblyPreflightService.Check(
+                    config.WorkshopPrepQueue,
+                    workshopCatalog.GetProjects(),
+                    scanner.CountPlayerInventory(config));
+                if (!preflight.CanStart || preflight.Plan == null)
+                {
+                    workshopStatus = preflight.Message;
+                }
+                else
+                {
+                    var result = workshopAssemblyRunner.Start(preflight.Plan);
+                    workshopStatus = result.Message;
+                }
+            }
+            catch (Exception ex)
+            {
+                workshopStatus = $"Unable to start workshop assembly. {ex.Message}";
+                log.Warning(ex, "[MarketMafioso] Native workshop assembly preflight failed.");
+            }
+        }
+
+        ImGui.SameLine();
         if (ImGuiUi.Button("Send Queue To VIWI", hasPrepQueue))
             confirmViwiClear = true;
 
@@ -373,6 +407,8 @@ public class MainWindow : Window, IDisposable
         ImGui.Spacing();
         ImGui.TextColored(GetWorkshopStatusColor(), workshopStatus);
         ImGui.TextColored(workshopRetainerRestock.IsRunning ? ColHeader : ColMuted, workshopRetainerRestock.LastStatus);
+        var progress = workshopAssemblyRunner.Progress;
+        ImGui.TextColored(workshopAssemblyRunner.IsRunning ? ColHeader : ColMuted, progress.Message);
     }
 
     private Vector4 GetWorkshopStatusColor()

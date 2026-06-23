@@ -38,6 +38,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly WorkshopProjectCatalog workshopCatalog;
     private readonly VIWIWorkshoppaIpc viwiWorkshoppaIpc;
     private readonly WorkshopRetainerRestockService workshopRetainerRestock;
+    private readonly WorkshopAssemblyRunner workshopAssemblyRunner;
     private readonly WindowSystem windowSystem = new("MarketMafioso");
     private readonly MainWindow mainWindow;
 
@@ -63,6 +64,10 @@ public sealed class Plugin : IDalamudPlugin
         workshopCatalog = new WorkshopProjectCatalog(DataManager, Log);
         viwiWorkshoppaIpc = new VIWIWorkshoppaIpc(new DalamudVIWIWorkshoppaIpcAdapter(PluginInterface, Log));
         workshopRetainerRestock = new WorkshopRetainerRestockService(Log);
+        workshopAssemblyRunner = new WorkshopAssemblyRunner(
+            Framework,
+            Log,
+            new WorkshopAssemblyUiAutomation(GameGui));
         mainWindow = new MainWindow(
             Configuration,
             reporter,
@@ -71,6 +76,7 @@ public sealed class Plugin : IDalamudPlugin
             workshopCatalog,
             viwiWorkshoppaIpc,
             workshopRetainerRestock,
+            workshopAssemblyRunner,
             Log);
 
         windowSystem.AddWindow(mainWindow);
@@ -121,6 +127,7 @@ public sealed class Plugin : IDalamudPlugin
 
         autoRetainerRefresh.Dispose();
         retainerCache.Dispose();
+        workshopAssemblyRunner.Dispose();
         reporter.Dispose();
 
         windowSystem.RemoveAllWindows();
