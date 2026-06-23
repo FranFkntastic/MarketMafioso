@@ -88,11 +88,19 @@ public class HttpReporter : IDisposable
                 })
                 .ToList();
 
+            var generatedAtUtc = DateTime.UtcNow.ToString("o");
             var report = new InventoryReport
             {
+                Metadata = new InventoryReportMetadata
+                {
+                    SchemaVersion = 1,
+                    SourcePlugin = "MarketMafioso",
+                    PluginVersion = typeof(Plugin).Assembly.GetName().Version?.ToString() ?? "Unknown",
+                    GeneratedAtUtc = generatedAtUtc,
+                },
                 CharacterName = charName,
                 HomeWorld = homeWorld,
-                Timestamp = DateTime.UtcNow.ToString("o"),
+                Timestamp = generatedAtUtc,
                 PlayerInventory = playerInventory,
                 Retainers = retainers,
             };

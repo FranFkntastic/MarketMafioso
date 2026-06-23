@@ -22,6 +22,9 @@ public class MainWindow : Window, IDisposable
 
     private const string ProductSummary = "Small, practical FFXIV improvements under one roof.";
     private const string InventoryModuleSummary = "Inventory Reporter exports character and retainer inventory snapshots as JSON.";
+    private const string LocalReceiverUrl = "http://localhost:8080/inventory";
+    private const string DevReceiverUrl = "https://dev.xivcraftarchitect.com/api/marketmafioso/inventory";
+    private const string ProductionReceiverUrl = "https://xivcraftarchitect.com/api/marketmafioso/inventory";
 
     private static readonly Vector4 ColHeader = new(0.38f, 0.73f, 1.00f, 1f);
     private static readonly Vector4 ColSuccess = new(0.45f, 0.90f, 0.55f, 1f);
@@ -152,6 +155,15 @@ public class MainWindow : Window, IDisposable
             config.Save();
         }
 
+        if (ImGui.Button("Local Receiver"))
+            ApplyServerUrlPreset(LocalReceiverUrl);
+        ImGui.SameLine();
+        if (ImGui.Button("Dev VPS"))
+            ApplyServerUrlPreset(DevReceiverUrl);
+        ImGui.SameLine();
+        if (ImGui.Button("Production VPS"))
+            ApplyServerUrlPreset(ProductionReceiverUrl);
+
         ImGui.Text("API Key (optional - sent as X-Api-Key header):");
         var keyWidth = ImGui.GetContentRegionAvail().X - 70;
         ImGui.SetNextItemWidth(keyWidth);
@@ -164,6 +176,13 @@ public class MainWindow : Window, IDisposable
         ImGui.SameLine();
         if (ImGui.Button(showApiKey ? "Hide##k" : "Show##k", new Vector2(60, 0)))
             showApiKey = !showApiKey;
+    }
+
+    private void ApplyServerUrlPreset(string serverUrl)
+    {
+        urlBuffer = serverUrl;
+        config.ServerUrl = serverUrl;
+        config.Save();
     }
 
     private void DrawInventoryOptionsSection()

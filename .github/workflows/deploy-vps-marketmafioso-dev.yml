@@ -1,0 +1,200 @@
+name: Deploy MarketMafioso Dev Receiver to VPS
+
+on:
+  push:
+    branches: [ local-dev ]
+    paths:
+      - 'MarketMafioso.Server/**'
+      - 'MarketMafioso.Server.Tests/**'
+      - '.github/workflows/deploy-vps-marketmafioso-dev.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vps-marketmafioso-dev
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      VPS_HOST: ${{ secrets.VPS_HOST }}
+      VPS_USER: ${{ secrets.VPS_USER }}
+      VPS_SSH_PRIVATE_KEY: ${{ secrets.VPS_SSH_PRIVATE_KEY }}
+      VPS_SSH_PORT: ${{ secrets.VPS_SSH_PORT }}
+      MARKETMAFIOSO_DEV_API_KEY: ${{ secrets.MARKETMAFIOSO_DEV_API_KEY }}
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Publish receiver
+        run: >
+          dotnet publish "MarketMafioso.Server/MarketMafioso.Server.csproj"
+          -c Release
+          -r linux-x64
+          --self-contained true
+          -o dist/marketmafioso-server
+
+      - name: Package receiver files
+        id: package
+        shell: bash
+        run: |
+          release="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${GITHUB_SHA::7}"
+          archive="marketmafioso-dev-$release.tar.gz"
+          tar -czf "$archive" -C dist/marketmafioso-server .
+          echo "release=$release" >> "$GITHUB_OUTPUT"
+          echo "archive=$archive" >> "$GITHUB_OUTPUT"
+
+      - name: Write runtime environment
+        shell: bash
+        run: |
+          test -n "$MARKETMAFIOSO_DEV_API_KEY"
+          cat > marketmafioso-dev.env <<ENV
+          ASPNETCORE_URLS=http://127.0.0.1:5088
+          MarketMafioso__RequireApiKey=true
+          MarketMafioso__ApiKey=$MARKETMAFIOSO_DEV_API_KEY
+          MarketMafioso__BasePath=/api/marketmafioso
+          ENV
+
+      - name: Write remote deploy script
+        shell: bash
+        run: |
+          cat > deploy-marketmafioso-dev-remote.sh <<'REMOTE'
+          set -euo pipefail
+
+          release="$1"
+          archive="/tmp/marketmafioso-dev-$release.tar.gz"
+          env_file="/tmp/marketmafioso-dev.env"
+          service_name="marketmafioso-dev"
+          root="/srv/craftarchitect/services/marketmafioso/dev"
+          data_root="/srv/craftarchitect/data/marketmafioso/dev"
+          release_dir="$root/releases/$release"
+          executable="$release_dir/MarketMafioso.Server"
+
+          sudo mkdir -p "$release_dir" "$data_root"
+          sudo tar -xzf "$archive" -C "$release_dir"
+          sudo chown -R "$USER:$USER" "$release_dir" "$data_root"
+          sudo chmod +x "$executable"
+
+          sudo install -m 600 -o "$USER" -g "$USER" "$env_file" "$root/marketmafioso-dev.env"
+
+          sudo tee "/etc/systemd/system/$service_name.service" > /dev/null <<SERVICE
+          [Unit]
+          Description=MarketMafioso dev receiver
+          After=network.target
+
+          [Service]
+          WorkingDirectory=$data_root
+          ExecStart=$root/current/MarketMafioso.Server
+          EnvironmentFile=$root/marketmafioso-dev.env
+          Restart=always
+          RestartSec=5
+          User=$USER
+
+          [Install]
+          WantedBy=multi-user.target
+          SERVICE
+
+          sudo ln -sfn "$release_dir" "$root/current"
+          sudo systemctl daemon-reload
+          sudo systemctl enable "$service_name"
+          sudo systemctl restart "$service_name"
+          systemctl is-active "$service_name"
+
+          sudo mkdir -p /etc/caddy/conf.d/dev.xivcraftarchitect.com
+          sudo tee /etc/caddy/conf.d/dev.xivcraftarchitect.com/marketmafioso.caddy > /dev/null <<'CADDY'
+          handle /api/marketmafioso/health {
+              reverse_proxy 127.0.0.1:5088
+          }
+
+          handle /api/marketmafioso/inventory {
+              reverse_proxy 127.0.0.1:5088
+          }
+
+          handle /api/marketmafioso/api/* {
+              reverse_proxy 127.0.0.1:5088
+          }
+          CADDY
+
+          if ! sudo grep -Fq 'import /etc/caddy/conf.d/dev.xivcraftarchitect.com/*.caddy' /etc/caddy/Caddyfile; then
+            sudo python3 - <<'PY'
+          from pathlib import Path
+
+          caddyfile = Path("/etc/caddy/Caddyfile")
+          text = caddyfile.read_text()
+          marker = "dev.xivcraftarchitect.com {\n"
+          insert = "\timport /etc/caddy/conf.d/dev.xivcraftarchitect.com/*.caddy\n\n"
+          index = text.find(marker)
+          if index < 0:
+              raise SystemExit("Could not find dev.xivcraftarchitect.com site block")
+          index += len(marker)
+          caddyfile.write_text(text[:index] + insert + text[index:])
+          PY
+          fi
+
+          sudo caddy validate --config /etc/caddy/Caddyfile
+          sudo systemctl reload caddy
+
+          for attempt in {1..30}; do
+            if curl --fail --silent --show-error http://127.0.0.1:5088/health > /dev/null; then
+              break
+            fi
+
+            if [[ "$attempt" == "30" ]]; then
+              journalctl -u "$service_name" --no-pager -n 80
+              exit 1
+            fi
+
+            sleep 1
+          done
+
+          rm -f "$archive" "$env_file" /tmp/deploy-marketmafioso-dev-remote.sh
+
+          sudo find "$root/releases" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' |
+            sort -rn |
+            tail -n +6 |
+            cut -d' ' -f2- |
+            sudo xargs -r rm -rf
+          REMOTE
+
+      - name: Configure SSH
+        shell: bash
+        run: |
+          test -n "$VPS_HOST"
+          test -n "$VPS_USER"
+          test -n "$VPS_SSH_PRIVATE_KEY"
+          test -n "$VPS_SSH_PORT"
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$VPS_SSH_PRIVATE_KEY" > ~/.ssh/craftarchitect_vps
+          chmod 600 ~/.ssh/craftarchitect_vps
+          ssh-keyscan -p "$VPS_SSH_PORT" "$VPS_HOST" >> ~/.ssh/known_hosts
+
+      - name: Upload receiver archive and deploy script
+        run: >
+          scp -P "$VPS_SSH_PORT"
+          -i ~/.ssh/craftarchitect_vps
+          "${{ steps.package.outputs.archive }}"
+          marketmafioso-dev.env
+          deploy-marketmafioso-dev-remote.sh
+          "$VPS_USER@$VPS_HOST:/tmp/"
+
+      - name: Activate receiver release
+        run: >
+          ssh -p "$VPS_SSH_PORT"
+          -i ~/.ssh/craftarchitect_vps
+          "$VPS_USER@$VPS_HOST"
+          "bash /tmp/deploy-marketmafioso-dev-remote.sh '${{ steps.package.outputs.release }}'"
+
+      - name: Verify public receiver route
+        run: >
+          curl --fail --silent --show-error
+          "https://dev.xivcraftarchitect.com/api/marketmafioso/health"
+          > /dev/null

@@ -6,6 +6,9 @@ namespace MarketMafioso;
 
 public record InventoryReport
 {
+    [JsonPropertyName("metadata")]
+    public InventoryReportMetadata Metadata { get; init; } = new();
+
     [JsonPropertyName("characterName")]
     public string? CharacterName { get; init; }
 
@@ -20,6 +23,21 @@ public record InventoryReport
 
     [JsonPropertyName("retainers")]
     public List<RetainerReport> Retainers { get; init; } = new();
+}
+
+public record InventoryReportMetadata
+{
+    [JsonPropertyName("schemaVersion")]
+    public int SchemaVersion { get; init; }
+
+    [JsonPropertyName("sourcePlugin")]
+    public string SourcePlugin { get; init; } = string.Empty;
+
+    [JsonPropertyName("pluginVersion")]
+    public string PluginVersion { get; init; } = string.Empty;
+
+    [JsonPropertyName("generatedAtUtc")]
+    public string GeneratedAtUtc { get; init; } = string.Empty;
 }
 
 public record InventoryBag
