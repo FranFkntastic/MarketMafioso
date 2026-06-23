@@ -55,9 +55,17 @@ public sealed class WorkshopProjectBrowserWindow : Window, IDisposable
         if (ImGui.InputInt("Quantity##workshopProjectBrowserQuantity", ref selection.Quantity))
             selection.Quantity = Math.Max(1, selection.Quantity);
 
-        var filteredProjects = projects
-            .Where(project => ProjectMatchesSearch(project, selection.Search))
-            .ToList();
+        if (ImGui.Checkbox("Favorites only##workshopProjectBrowserFavoritesOnly", ref selection.FavoritesOnly))
+            ClearCheckedProjectsNotInView(projects);
+
+        ImGui.SameLine();
+        ImGui.TextColored(ColMuted, $"{selection.CheckedWorkshopItemIds.Count} checked");
+
+        var filteredProjects = WorkshopProjectBrowserFilter.BuildVisibleProjects(
+            projects,
+            selection.Search,
+            config.FavoriteWorkshopProjectIds,
+            selection.FavoritesOnly);
 
         ImGui.Spacing();
         DrawProjectTable(filteredProjects);
@@ -73,6 +81,8 @@ public sealed class WorkshopProjectBrowserWindow : Window, IDisposable
             return;
         }
 
+        var checkWidth = Math.Max(ImGui.CalcTextSize("Sel").X, ImGui.GetFrameHeight()) + 16;
+        var favoriteWidth = Math.Max(ImGui.CalcTextSize("Fav").X, ImGui.GetFrameHeight()) + 16;
         var projectWidth = CalculateProjectColumnWidth(projects);
         var materialsWidth = Math.Max(ImGui.CalcTextSize("Materials").X, ImGui.CalcTextSize("999").X) + 24;
         var queuedWidth = Math.Max(ImGui.CalcTextSize("Queued").X, ImGui.CalcTextSize("9999").X) + 24;
@@ -82,8 +92,10 @@ public sealed class WorkshopProjectBrowserWindow : Window, IDisposable
                     ImGuiTableFlags.ScrollY |
                     ImGuiTableFlags.SizingFixedFit;
 
-        if (ImGui.BeginTable("WorkshopProjectBrowserTable", 3, flags, new Vector2(0, 250)))
+        if (ImGui.BeginTable("WorkshopProjectBrowserTable", 5, flags, new Vector2(0, 250)))
         {
+            ImGui.TableSetupColumn("Sel", ImGuiTableColumnFlags.WidthFixed, checkWidth);
+            ImGui.TableSetupColumn("Fav", ImGuiTableColumnFlags.WidthFixed, favoriteWidth);
             ImGui.TableSetupColumn("Project", ImGuiTableColumnFlags.WidthFixed, projectWidth);
             ImGui.TableSetupColumn("Materials", ImGuiTableColumnFlags.WidthFixed, materialsWidth);
             ImGui.TableSetupColumn("Queued", ImGuiTableColumnFlags.WidthFixed, queuedWidth);
@@ -92,11 +104,21 @@ public sealed class WorkshopProjectBrowserWindow : Window, IDisposable
             foreach (var project in projects)
             {
                 var isSelected = project.WorkshopItemId == selection.SelectedWorkshopItemId;
+                var isChecked = selection.CheckedWorkshopItemIds.Contains(project.WorkshopItemId);
+                var isFavorite = config.FavoriteWorkshopProjectIds.Contains(project.WorkshopItemId);
                 var queuedQuantity = GetQueuedQuantity(project.WorkshopItemId);
 
                 ImGui.TableNextRow();
                 ImGui.TableNextColumn();
-                if (ImGui.Selectable($"{project.Name}##workshopProjectBrowser{project.WorkshopItemId}", isSelected, ImGuiSelectableFlags.SpanAllColumns))
+                if (ImGui.Checkbox($"##workshopProjectBrowserCheck{project.WorkshopItemId}", ref isChecked))
+                    SetProjectChecked(project.WorkshopItemId, isChecked);
+
+                ImGui.TableNextColumn();
+                if (ImGui.Checkbox($"##workshopProjectBrowserFavorite{project.WorkshopItemId}", ref isFavorite))
+                    SetFavorite(project.WorkshopItemId, isFavorite);
+
+                ImGui.TableNextColumn();
+                if (ImGui.Selectable($"{project.Name}##workshopProjectBrowser{project.WorkshopItemId}", isSelected))
                     selection.SelectedWorkshopItemId = project.WorkshopItemId;
 
                 if (ImGui.IsItemHovered() && ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left))
@@ -125,6 +147,7 @@ public sealed class WorkshopProjectBrowserWindow : Window, IDisposable
         if (project == null)
         {
             ImGui.TextColored(ColMuted, "Select a project to preview materials.");
+            DrawProjectActions(null);
             return;
         }
 
@@ -150,6 +173,40 @@ public sealed class WorkshopProjectBrowserWindow : Window, IDisposable
 
         if (project.Materials.Count > 8)
             ImGui.TextColored(ColMuted, $"{project.Materials.Count - 8} more material(s).");
+
+        DrawProjectActions(project);
+    }
+
+    private void DrawProjectActions(WorkshopProjectDefinition? project)
+    {
+        var hasCheckedProjects = selection.CheckedWorkshopItemIds.Count > 0;
+        if (!hasCheckedProjects)
+            ImGui.BeginDisabled();
+
+        if (ImGui.Button("Add Checked"))
+            AddCheckedProjects();
+
+        ImGui.SameLine();
+        if (ImGui.Button("Add Checked & Close"))
+        {
+            AddCheckedProjects();
+            IsOpen = false;
+        }
+
+        ImGui.SameLine();
+        if (ImGui.Button("Clear Checked"))
+            selection.CheckedWorkshopItemIds.Clear();
+
+        if (!hasCheckedProjects)
+            ImGui.EndDisabled();
+
+        if (project == null)
+        {
+            ImGui.SameLine();
+            if (ImGui.Button("Close"))
+                IsOpen = false;
+            return;
+        }
 
         if (ImGui.Button("Add Selected"))
             addProject(project.WorkshopItemId);
@@ -182,16 +239,46 @@ public sealed class WorkshopProjectBrowserWindow : Window, IDisposable
             .Sum(item => item.Quantity);
     }
 
-    private static bool ProjectMatchesSearch(WorkshopProjectDefinition project, string search)
+    private void SetProjectChecked(uint workshopItemId, bool isChecked)
     {
-        if (string.IsNullOrWhiteSpace(search))
-            return true;
+        if (isChecked)
+            selection.CheckedWorkshopItemIds.Add(workshopItemId);
+        else
+            selection.CheckedWorkshopItemIds.Remove(workshopItemId);
+    }
 
-        var trimmed = search.Trim();
-        return project.Name.Contains(trimmed, StringComparison.OrdinalIgnoreCase) ||
-               project.WorkshopItemId.ToString().Contains(trimmed, StringComparison.OrdinalIgnoreCase) ||
-               project.ResultItemId.ToString().Contains(trimmed, StringComparison.OrdinalIgnoreCase) ||
-               project.Materials.Any(material => material.ItemName.Contains(trimmed, StringComparison.OrdinalIgnoreCase));
+    private void SetFavorite(uint workshopItemId, bool isFavorite)
+    {
+        if (isFavorite)
+        {
+            if (!config.FavoriteWorkshopProjectIds.Contains(workshopItemId))
+                config.FavoriteWorkshopProjectIds.Add(workshopItemId);
+        }
+        else
+        {
+            config.FavoriteWorkshopProjectIds.RemoveAll(x => x == workshopItemId);
+            if (selection.FavoritesOnly)
+                selection.CheckedWorkshopItemIds.Remove(workshopItemId);
+        }
+
+        config.Save();
+    }
+
+    private void AddCheckedProjects()
+    {
+        foreach (var workshopItemId in selection.CheckedWorkshopItemIds.ToList())
+            addProject(workshopItemId);
+    }
+
+    private void ClearCheckedProjectsNotInView(IReadOnlyList<WorkshopProjectDefinition> projects)
+    {
+        if (!selection.FavoritesOnly)
+            return;
+
+        var favorites = new HashSet<uint>(config.FavoriteWorkshopProjectIds);
+        selection.CheckedWorkshopItemIds.RemoveWhere(workshopItemId =>
+            !favorites.Contains(workshopItemId) ||
+            projects.All(project => project.WorkshopItemId != workshopItemId));
     }
 
     public void Dispose()
@@ -204,4 +291,6 @@ public sealed class WorkshopProjectSelectionState
     public uint SelectedWorkshopItemId;
     public string Search = string.Empty;
     public int Quantity = 1;
+    public bool FavoritesOnly;
+    public HashSet<uint> CheckedWorkshopItemIds { get; } = new();
 }

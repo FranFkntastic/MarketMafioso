@@ -27,6 +27,7 @@ public class Configuration : IPluginConfiguration
 
     public Dictionary<ulong, CachedRetainer> RetainerCache { get; set; } = new();
     public List<WorkshopPrepQueueItem> WorkshopPrepQueue { get; set; } = new();
+    public List<uint> FavoriteWorkshopProjectIds { get; set; } = new();
 
     public void Save() => Plugin.PluginInterface.SavePluginConfig(this);
 }
