@@ -4,6 +4,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using Dalamud.Plugin.Services;
 using FFXIVClientStructs.FFXIV.Client.Game;
+using FFXIVClientStructs.FFXIV.Component.GUI;
 
 namespace MarketMafioso.WorkshopPrep;
 
@@ -22,6 +23,10 @@ public enum WorkshopRetainerRestockState
 
 public sealed class WorkshopRetainerRestockService
 {
+    private const string RetainerListAddon = "RetainerList";
+    private const string RetainerInventoryLargeAddon = "InventoryRetainerLarge";
+    private const string RetainerInventorySmallAddon = "InventoryRetainer";
+
     private static readonly InventoryType[] RetainerPages =
     [
         InventoryType.RetainerPage1,
@@ -66,11 +71,17 @@ public sealed class WorkshopRetainerRestockService
         try
         {
             var remaining = shortages.ToDictionary(x => x.ItemId, x => x.Shortage);
+            var plannedStacks = new HashSet<LiveRetainerStack>();
+            var candidates = shortages.SelectMany(x => x.CandidateRetainers)
+                .DistinctBy(x => x.RetainerId)
+                .ToList();
+            if (candidates.Count == 0)
+                throw new InvalidOperationException("No cached retainer candidates are available for the workshop material shortages.");
 
             State = WorkshopRetainerRestockState.WaitingForRetainerList;
             await WaitForRetainerListAsync().ConfigureAwait(false);
 
-            foreach (var candidate in shortages.SelectMany(x => x.CandidateRetainers).DistinctBy(x => x.RetainerId))
+            foreach (var candidate in candidates)
             {
                 State = WorkshopRetainerRestockState.OpeningRetainer;
                 await OpenRetainerAsync(candidate).ConfigureAwait(false);
@@ -79,7 +90,11 @@ public sealed class WorkshopRetainerRestockService
                 await OpenRetainerInventoryAsync().ConfigureAwait(false);
 
                 State = WorkshopRetainerRestockState.WithdrawingItems;
-                await WithdrawFromOpenRetainerAsync(remaining).ConfigureAwait(false);
+                var remainingBefore = remaining.Values.Where(x => x > 0).Sum();
+                await WithdrawFromOpenRetainerAsync(remaining, plannedStacks).ConfigureAwait(false);
+                var remainingAfter = remaining.Values.Where(x => x > 0).Sum();
+                if (remainingAfter >= remainingBefore)
+                    throw new InvalidOperationException($"No matching live retainer stacks were found for candidate {candidate.RetainerName}.");
 
                 State = WorkshopRetainerRestockState.ClosingRetainer;
                 await CloseRetainerAsync().ConfigureAwait(false);
@@ -88,10 +103,11 @@ public sealed class WorkshopRetainerRestockService
                     break;
             }
 
+            if (remaining.Values.Any(x => x > 0))
+                throw new InvalidOperationException($"Workshop material restock still has remaining shortages: {string.Join(", ", remaining.Where(x => x.Value > 0).Select(x => $"{x.Key}:{x.Value}"))}.");
+
             State = WorkshopRetainerRestockState.Complete;
-            lastStatus = remaining.Values.All(x => x <= 0)
-                ? "Workshop material restock planning complete."
-                : $"Workshop material restock planning finished with remaining shortages: {string.Join(", ", remaining.Where(x => x.Value > 0).Select(x => $"{x.Key}:{x.Value}"))}.";
+            lastStatus = "Workshop material restock planning complete.";
         }
         catch (Exception ex)
         {
@@ -136,11 +152,17 @@ public sealed class WorkshopRetainerRestockService
 
     private static async Task WaitForRetainerListAsync()
     {
-        await Plugin.Framework.RunOnTick(() => true).ConfigureAwait(false);
+        var isReady = await Plugin.Framework.RunOnTick(IsRetainerListOrInventoryReady).ConfigureAwait(false);
+        if (!isReady)
+            throw new InvalidOperationException("Open the retainer list or a retainer inventory before starting workshop material restock.");
     }
 
     private static async Task OpenRetainerAsync(RetainerMaterialCandidate candidate)
     {
+        var hasInventory = await Plugin.Framework.RunOnTick(IsRetainerInventoryReady).ConfigureAwait(false);
+        if (!hasInventory)
+            throw new InvalidOperationException($"Open {candidate.RetainerName}'s retainer inventory before starting retrieval. Automated retainer selection is not enabled yet.");
+
         await Plugin.Framework.RunOnTick(() =>
         {
             Plugin.Log.Information($"[MarketMafioso] Selected candidate retainer {candidate.RetainerName} ({candidate.RetainerId}) for workshop material retrieval.");
@@ -149,27 +171,54 @@ public sealed class WorkshopRetainerRestockService
 
     private static async Task OpenRetainerInventoryAsync()
     {
-        await Plugin.Framework.RunOnTick(() => true).ConfigureAwait(false);
+        var isReady = await Plugin.Framework.RunOnTick(IsRetainerInventoryReady).ConfigureAwait(false);
+        if (!isReady)
+            throw new InvalidOperationException("Retainer inventory is not open.");
     }
 
-    private async Task WithdrawFromOpenRetainerAsync(Dictionary<uint, int> remaining)
+    private async Task WithdrawFromOpenRetainerAsync(
+        Dictionary<uint, int> remaining,
+        HashSet<LiveRetainerStack> plannedStacks)
     {
         var itemIds = remaining.Where(x => x.Value > 0).Select(x => x.Key).ToHashSet();
         var liveStacks = await Plugin.Framework.RunOnTick(() => ScanLiveRetainerStacks(itemIds)).ConfigureAwait(false);
         foreach (var stack in liveStacks)
         {
+            if (plannedStacks.Contains(stack))
+                continue;
+
             if (!remaining.TryGetValue(stack.ItemId, out var needed) || needed <= 0)
                 continue;
 
             var taken = Math.Min(needed, stack.Quantity);
             remaining[stack.ItemId] -= taken;
+            plannedStacks.Add(stack);
             log.Information($"[MarketMafioso] Planned retrieval of {taken}x item {stack.ItemId} from {stack.Page}/{stack.SlotIndex}.");
         }
     }
 
     private static async Task CloseRetainerAsync()
     {
-        await Plugin.Framework.RunOnTick(() => true).ConfigureAwait(false);
+        await Plugin.Framework.RunOnTick(() =>
+        {
+            Plugin.Log.Information("[MarketMafioso] Retainer close step reached; actual close is reserved for the retrieval callback slice.");
+        }).ConfigureAwait(false);
+    }
+
+    private static unsafe bool IsRetainerListOrInventoryReady()
+    {
+        return IsAddonReady(RetainerListAddon) || IsRetainerInventoryReady();
+    }
+
+    private static unsafe bool IsRetainerInventoryReady()
+    {
+        return IsAddonReady(RetainerInventoryLargeAddon) || IsAddonReady(RetainerInventorySmallAddon);
+    }
+
+    private static unsafe bool IsAddonReady(string addonName)
+    {
+        var addon = Plugin.GameGui.GetAddonByName<AtkUnitBase>(addonName, 1);
+        return addon != null && addon->IsReady && addon->IsVisible;
     }
 }
 
