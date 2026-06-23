@@ -394,6 +394,43 @@ public sealed class InventoryReportViewEndpointTests
     }
 
     [Fact]
+    public async Task DashboardListing_SkipsUnreadableSnapshotFiles()
+    {
+        string? contentRoot = null;
+        await using var application = CreateHostedApplication(
+            values =>
+            {
+                contentRoot = values.ContentRoot;
+                values.Configuration["MarketMafioso:BasePath"] = "/api/marketmafioso";
+            });
+        using var client = application.CreateClient();
+
+        var reportDirectory = Path.Combine(contentRoot!, "data", "reports");
+        Directory.CreateDirectory(reportDirectory);
+        await File.WriteAllTextAsync(
+            Path.Combine(reportDirectory, "20260623121600439-10aa438b.json"),
+            string.Empty);
+
+        var createResponse = await SendWithKeyAsync(
+            client,
+            HttpMethod.Post,
+            "/api/marketmafioso/inventory",
+            "test-ingest-secret",
+            CreateReport("Corrupt File Character"));
+        createResponse.EnsureSuccessStatusCode();
+
+        var dashboard = await client.GetAsync("/api/marketmafioso/");
+        var latestJson = await client.GetAsync("/api/marketmafioso/reports/latest/json");
+
+        Assert.Equal(HttpStatusCode.OK, dashboard.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, latestJson.StatusCode);
+        Assert.Contains(
+            "Corrupt File Character",
+            await dashboard.Content.ReadAsStringAsync(),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task HostedMode_DashboardDeleteRejectsMissingCsrf()
     {
         await using var application = CreateHostedApplication(

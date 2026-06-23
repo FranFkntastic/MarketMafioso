@@ -46,6 +46,15 @@ public sealed class WorkshopRetainerRestockService
         InventoryType.RetainerPage7,
     ];
 
+    private static readonly InventoryType[] PlayerInventoryPages =
+    [
+        InventoryType.Inventory1,
+        InventoryType.Inventory2,
+        InventoryType.Inventory3,
+        InventoryType.Inventory4,
+        InventoryType.Crystals,
+    ];
+
     private readonly IPluginLog log;
     private bool isRunning;
     private string lastStatus = "Workshop material restock has not run.";
@@ -79,13 +88,13 @@ public sealed class WorkshopRetainerRestockService
         try
         {
             var remaining = shortages.ToDictionary(x => x.ItemId, x => x.Shortage);
-            var plannedStacks = new HashSet<LiveRetainerStack>();
             var candidates = shortages.SelectMany(x => x.CandidateRetainers)
                 .DistinctBy(x => x.RetainerId)
                 .ToList();
             if (candidates.Count == 0)
                 throw new InvalidOperationException("No cached retainer candidates are available for the workshop material shortages.");
 
+            var totalRetrieved = 0;
             State = WorkshopRetainerRestockState.WaitingForRetainerList;
             await WaitForRetainerListAsync().ConfigureAwait(false);
 
@@ -98,11 +107,11 @@ public sealed class WorkshopRetainerRestockService
                 await OpenRetainerInventoryAsync().ConfigureAwait(false);
 
                 State = WorkshopRetainerRestockState.WithdrawingItems;
-                var remainingBefore = remaining.Values.Where(x => x > 0).Sum();
-                await WithdrawFromOpenRetainerAsync(remaining, plannedStacks).ConfigureAwait(false);
-                var remainingAfter = remaining.Values.Where(x => x > 0).Sum();
-                if (remainingAfter >= remainingBefore)
-                    throw new InvalidOperationException($"No matching live retainer stacks were found for candidate {candidate.RetainerName}.");
+                var plannedStacks = new HashSet<LiveRetainerStack>();
+                var retrievedFromCandidate = await WithdrawFromOpenRetainerAsync(remaining, plannedStacks).ConfigureAwait(false);
+                totalRetrieved += retrievedFromCandidate;
+                if (retrievedFromCandidate == 0)
+                    log.Information($"[MarketMafioso] No matching live retainer stacks were found for candidate {candidate.RetainerName}.");
 
                 State = WorkshopRetainerRestockState.ClosingRetainer;
                 await CloseRetainerAsync().ConfigureAwait(false);
@@ -111,11 +120,16 @@ public sealed class WorkshopRetainerRestockService
                     break;
             }
 
-            if (remaining.Values.Any(x => x > 0))
-                throw new InvalidOperationException($"Workshop material restock still has remaining shortages: {string.Join(", ", remaining.Where(x => x.Value > 0).Select(x => $"{x.Key}:{x.Value}"))}.");
+            var summary = BuildCompletionSummary(remaining, totalRetrieved);
+            if (!summary.IsSuccess)
+            {
+                State = WorkshopRetainerRestockState.WithdrawingItems;
+                throw new InvalidOperationException(summary.Message);
+            }
 
             State = WorkshopRetainerRestockState.Complete;
-            lastStatus = "Workshop material restock complete.";
+            lastStatus = summary.Message;
+            log.Information($"[MarketMafioso] {summary.Message}");
         }
         catch (Exception ex)
         {
@@ -213,10 +227,25 @@ public sealed class WorkshopRetainerRestockService
         throw new InvalidOperationException($"Timed out waiting for retainer inventory to open. {uiState}");
     }
 
-    private async Task WithdrawFromOpenRetainerAsync(
+    public static WorkshopRetainerRestockCompletionSummary BuildCompletionSummary(
+        IReadOnlyDictionary<uint, int> remaining,
+        int totalRetrieved)
+    {
+        var remainingText = FormatRemainingShortages(remaining);
+        if (string.IsNullOrEmpty(remainingText))
+            return new(true, false, $"Workshop material restock complete. Retrieved {totalRetrieved} item(s).");
+
+        if (totalRetrieved > 0)
+            return new(true, true, $"Workshop material restock partially complete. Retrieved {totalRetrieved} item(s); remaining shortages: {remainingText}.");
+
+        return new(false, false, $"No matching live retainer stacks were found for the workshop material shortages: {remainingText}.");
+    }
+
+    private async Task<int> WithdrawFromOpenRetainerAsync(
         Dictionary<uint, int> remaining,
         HashSet<LiveRetainerStack> plannedStacks)
     {
+        var retrievedTotal = 0;
         var itemIds = remaining.Where(x => x.Value > 0).Select(x => x.Key).ToHashSet();
         var liveStacks = await Plugin.Framework.RunOnTick(() => ScanLiveRetainerStacks(itemIds)).ConfigureAwait(false);
         foreach (var stack in liveStacks)
@@ -233,9 +262,12 @@ public sealed class WorkshopRetainerRestockService
                 throw new InvalidOperationException(result.Message);
 
             remaining[stack.ItemId] -= result.Retrieved;
+            retrievedTotal += result.Retrieved;
             plannedStacks.Add(stack);
             log.Information($"[MarketMafioso] Retrieved {result.Retrieved}x item {stack.ItemId} from {stack.Page}/{stack.SlotIndex}.");
         }
+
+        return retrievedTotal;
     }
 
     private async Task<RetainerRetrievalResult> RetrieveFromLiveStackAsync(LiveRetainerStack stack, int quantity)
@@ -253,40 +285,48 @@ public sealed class WorkshopRetainerRestockService
             var quantityInput = await WaitForRetrievalQuantityInputAsync(stack.ItemId, pending.Retrieved).ConfigureAwait(false);
             if (!quantityInput.Success)
                 return quantityInput;
+
+            log.Information($"[MarketMafioso] {quantityInput.Message}");
         }
 
-        await Plugin.Framework.DelayTicks(3).ConfigureAwait(false);
-        return await Plugin.Framework.RunOnTick(() => VerifyRetrievalCompleted(stack, pending.Retrieved)).ConfigureAwait(false);
+        log.Information($"[MarketMafioso] {selected.Message}");
+        return await WaitForRetrievalCompletionAsync(stack, pending.Retrieved, pending.PlayerQuantityBefore).ConfigureAwait(false);
     }
 
     private unsafe PendingRetainerRetrieval OpenRetainerStackContextMenu(LiveRetainerStack stack, int quantity)
     {
         if (quantity <= 0)
-            return new(false, 0, false, string.Empty, $"Invalid retrieval quantity {quantity} for item {stack.ItemId}.");
+            return new(false, 0, false, string.Empty, 0, $"Invalid retrieval quantity {quantity} for item {stack.ItemId}.");
 
         var inventoryManager = InventoryManager.Instance();
         if (inventoryManager == null)
-            return new(false, 0, false, string.Empty, "Inventory manager is unavailable.");
+            return new(false, 0, false, string.Empty, 0, "Inventory manager is unavailable.");
 
         var container = inventoryManager->GetInventoryContainer(stack.Page);
         if (container == null || !container->IsLoaded)
-            return new(false, 0, false, string.Empty, $"Retainer inventory page {stack.Page} is not loaded.");
+            return new(false, 0, false, string.Empty, 0, $"Retainer inventory page {stack.Page} is not loaded.");
 
         var slot = container->GetInventorySlot(stack.SlotIndex);
         if (slot == null || slot->ItemId != stack.ItemId || slot->Quantity != stack.Quantity)
-            return new(false, 0, false, string.Empty, $"Expected {stack.Quantity}x item {stack.ItemId} was not found at {stack.Page}/{stack.SlotIndex}.");
+            return new(false, 0, false, string.Empty, 0, $"Expected {stack.Quantity}x item {stack.ItemId} was not found at {stack.Page}/{stack.SlotIndex}.");
 
         var retrieveQuantity = Math.Min(quantity, slot->Quantity);
         var agent = AgentInventoryContext.Instance();
         var retainerAgent = AgentModule.Instance()->GetAgentByInternalId(AgentId.Retainer);
         if (retainerAgent == null)
-            return new(false, 0, false, string.Empty, "Retainer agent is unavailable.");
+            return new(false, 0, false, string.Empty, 0, "Retainer agent is unavailable.");
 
         agent->OpenForItemSlot(stack.Page, stack.SlotIndex, 0, retainerAgent->GetAddonId());
 
         var needsQuantityInput = retrieveQuantity < slot->Quantity;
         var targetText = GetAddonText(needsQuantityInput ? RetrieveQuantityAddonRow : RetrieveFromRetainerAddonRow);
-        return new(true, retrieveQuantity, needsQuantityInput, targetText, $"Opened retainer context menu for item {stack.ItemId}.");
+        var playerQuantityBefore = CountPlayerItem(stack.ItemId);
+        log.Information(
+            $"[MarketMafioso] Opening retainer context menu for item {stack.ItemId}: " +
+            $"retainerSlot={stack.Page}/{stack.SlotIndex}, slotQuantity={slot->Quantity}, requested={quantity}, retrieving={retrieveQuantity}, " +
+            $"playerBefore={playerQuantityBefore}, action=\"{targetText}\", " +
+            $"agentTarget={agent->TargetInventoryId}/{agent->TargetInventorySlotId}, ownerAddon={agent->OwnerAddonId}, retainerAddon={retainerAgent->GetAddonId()}.");
+        return new(true, retrieveQuantity, needsQuantityInput, targetText, playerQuantityBefore, $"Opened retainer context menu for item {stack.ItemId}.");
     }
 
     private static async Task<RetainerUiActionResult> WaitForRetainerContextMenuEntryAsync(uint itemId, string targetText)
@@ -295,6 +335,24 @@ public sealed class WorkshopRetainerRestockService
         for (var attempt = 0; attempt < 30; attempt++)
         {
             lastResult = await Plugin.Framework.RunOnTick(() => SelectRetainerContextMenuEntry(targetText, itemId)).ConfigureAwait(false);
+            if (lastResult.Success)
+                return lastResult;
+
+            await Plugin.Framework.DelayTicks(1).ConfigureAwait(false);
+        }
+
+        return lastResult;
+    }
+
+    private static async Task<RetainerRetrievalResult> WaitForRetrievalCompletionAsync(
+        LiveRetainerStack stack,
+        int retrieved,
+        int playerQuantityBefore)
+    {
+        RetainerRetrievalResult lastResult = new(false, 0, $"Retrieval did not complete for item {stack.ItemId}.");
+        for (var attempt = 0; attempt < 60; attempt++)
+        {
+            lastResult = await Plugin.Framework.RunOnTick(() => VerifyRetrievalCompleted(stack, retrieved, playerQuantityBefore)).ConfigureAwait(false);
             if (lastResult.Success)
                 return lastResult;
 
@@ -329,7 +387,10 @@ public sealed class WorkshopRetainerRestockService
         return new(true, retrieveQuantity, "Retrieve quantity submitted.");
     }
 
-    private unsafe RetainerRetrievalResult VerifyRetrievalCompleted(LiveRetainerStack stack, int retrieved)
+    private static unsafe RetainerRetrievalResult VerifyRetrievalCompleted(
+        LiveRetainerStack stack,
+        int retrieved,
+        int playerQuantityBefore)
     {
         var inventoryManager = InventoryManager.Instance();
         if (inventoryManager == null)
@@ -343,19 +404,20 @@ public sealed class WorkshopRetainerRestockService
         if (slot == null)
             return new(false, 0, $"Retainer inventory slot {stack.Page}/{stack.SlotIndex} is unavailable after retrieval.");
 
+        var playerQuantityAfter = CountPlayerItem(stack.ItemId);
         var expectedRemaining = stack.Quantity - retrieved;
         if (expectedRemaining <= 0)
         {
             if (slot->ItemId != stack.ItemId || slot->Quantity == 0)
-                return new(true, retrieved, "Retrieved full stack.");
+                return new(true, retrieved, $"Retrieved full stack; player item count {playerQuantityBefore}->{playerQuantityAfter}.");
 
-            return new(false, 0, $"Retainer slot {stack.Page}/{stack.SlotIndex} did not change after full-stack retrieval.");
+            return new(false, 0, BuildRetrievalFailureMessage(stack, retrieved, expectedRemaining, slot->ItemId, slot->Quantity, playerQuantityBefore, playerQuantityAfter));
         }
 
         if (slot->ItemId == stack.ItemId && slot->Quantity == expectedRemaining)
-            return new(true, retrieved, "Retrieved partial stack.");
+            return new(true, retrieved, $"Retrieved partial stack; player item count {playerQuantityBefore}->{playerQuantityAfter}.");
 
-        return new(false, 0, $"Retainer slot {stack.Page}/{stack.SlotIndex} did not decrease after retrieval.");
+        return new(false, 0, BuildRetrievalFailureMessage(stack, retrieved, expectedRemaining, slot->ItemId, slot->Quantity, playerQuantityBefore, playerQuantityAfter));
     }
 
     private static unsafe RetainerUiActionResult SelectRetainerFromList(string retainerName)
@@ -549,12 +611,18 @@ public sealed class WorkshopRetainerRestockService
 
         var agent = AgentInventoryContext.Instance();
         var labels = ReadContextMenuLabels(agent);
+        var menuState = DescribeContextMenuState(agent, labels);
         var index = RetainerUiAutomationText.FindContextMenuLabelIndex(labels, targetText);
         if (index is null)
-            return new(false, $"Retainer context menu entry not found for item {itemId}: {targetText}. Available: {string.Join(", ", labels)}.");
+            return new(false, $"Retainer context menu entry not found for item {itemId}: {targetText}. {menuState}");
 
-        FireContextMenuSelect(contextMenu, index.Value);
-        return new(true, $"Selected retainer context menu entry: {targetText}.");
+        var callbackResult = FireContextMenuSelect(contextMenu, index.Value);
+        if (!callbackResult)
+            return new(false, $"Retainer context menu callback returned false for item {itemId}: index={index.Value}, target=\"{targetText}\". {menuState}");
+
+        return new(
+            true,
+            $"Selected retainer context menu entry for item {itemId}: index={index.Value}, target=\"{targetText}\", callbackResult={callbackResult}. {menuState}");
     }
 
     private static unsafe IReadOnlyList<string> ReadContextMenuLabels(AgentInventoryContext* agent)
@@ -571,7 +639,34 @@ public sealed class WorkshopRetainerRestockService
         return labels;
     }
 
-    private static unsafe void FireContextMenuSelect(AtkUnitBase* contextMenu, int index)
+    private static unsafe string DescribeContextMenuState(
+        AgentInventoryContext* agent,
+        IReadOnlyList<string> labels)
+    {
+        var entries = new List<string>();
+        if (agent->ContextCallbackInfos != null)
+        {
+            var count = Math.Min(agent->ContextItemCount, labels.Count);
+            for (var index = 0; index < count; index++)
+            {
+                var info = agent->ContextCallbackInfos + index;
+                entries.Add(
+                    $"[{index}] label=\"{labels[index]}\" labelId={info->LabelId} callbackParam={info->CallbackParam} " +
+                    $"disabled={agent->IsContextItemDisabled(index)} handler={(info->Handler == null ? "null" : "set")}");
+            }
+        }
+
+        var entryText = entries.Count == 0
+            ? string.Join(" | ", labels.Select((label, index) => $"[{index}] label=\"{label}\""))
+            : string.Join(" | ", entries);
+
+        return
+            $"ContextMenuState target={agent->TargetInventoryId}/{agent->TargetInventorySlotId}, flags={agent->TargetInventoryFlags}, " +
+            $"ownerAddon={agent->OwnerAddonId}, start={agent->ContexItemStartIndex}, count={agent->ContextItemCount}, " +
+            $"disabledMask=0x{agent->ContextItemDisabledMask:X}, entries=[{entryText}].";
+    }
+
+    private static unsafe bool FireContextMenuSelect(AtkUnitBase* contextMenu, int index)
     {
         var values = stackalloc AtkValue[5];
         values[0] = new AtkValue { Type = AtkValueType.Int, Int = 0 };
@@ -580,7 +675,7 @@ public sealed class WorkshopRetainerRestockService
         values[3] = new AtkValue { Type = AtkValueType.Int, Int = 0 };
         values[4] = new AtkValue { Type = AtkValueType.Int, Int = 0 };
 
-        contextMenu->FireCallback(5, values, true);
+        return contextMenu->FireCallback(5, values, true);
     }
 
     private static async Task CloseRetainerAsync()
@@ -631,6 +726,58 @@ public sealed class WorkshopRetainerRestockService
         var addon = Plugin.GameGui.GetAddonByName<AtkUnitBase>(addonName, 1);
         return addon != null && addon->IsReady && addon->IsVisible;
     }
+
+    private static unsafe int CountPlayerItem(uint itemId)
+    {
+        var inventoryManager = InventoryManager.Instance();
+        if (inventoryManager == null)
+            return 0;
+
+        var quantity = 0;
+        foreach (var page in PlayerInventoryPages)
+        {
+            var container = inventoryManager->GetInventoryContainer(page);
+            if (container == null || !container->IsLoaded)
+                continue;
+
+            for (var slotIndex = 0; slotIndex < container->Size; slotIndex++)
+            {
+                var slot = container->GetInventorySlot(slotIndex);
+                if (slot == null || slot->ItemId != itemId)
+                    continue;
+
+                quantity += (int)slot->Quantity;
+            }
+        }
+
+        return quantity;
+    }
+
+    private static string BuildRetrievalFailureMessage(
+        LiveRetainerStack stack,
+        int retrieved,
+        int expectedRemaining,
+        uint actualItemId,
+        int actualQuantity,
+        int playerQuantityBefore,
+        int playerQuantityAfter)
+    {
+        return
+            $"Retainer retrieval did not change the expected slot for item {stack.ItemId}: " +
+            $"retainerSlot={stack.Page}/{stack.SlotIndex}, originalRetainerQuantity={stack.Quantity}, requestedRetrieved={retrieved}, " +
+            $"expectedRemaining={Math.Max(expectedRemaining, 0)}, actualSlotItem={actualItemId}, actualSlotQuantity={actualQuantity}, " +
+            $"playerQuantity={playerQuantityBefore}->{playerQuantityAfter}. {DescribeRetainerUiState()}";
+    }
+
+    private static string FormatRemainingShortages(IReadOnlyDictionary<uint, int> remaining)
+    {
+        return string.Join(
+            ", ",
+            remaining
+                .Where(x => x.Value > 0)
+                .OrderBy(x => x.Key)
+                .Select(x => $"{x.Key}:{x.Value}"));
+    }
 }
 
 public sealed record LiveRetainerStack(
@@ -649,8 +796,14 @@ internal sealed record PendingRetainerRetrieval(
     int Retrieved,
     bool NeedsQuantityInput,
     string ContextMenuEntryText,
+    int PlayerQuantityBefore,
     string Message);
 
 internal sealed record RetainerUiActionResult(
     bool Success,
+    string Message);
+
+public sealed record WorkshopRetainerRestockCompletionSummary(
+    bool IsSuccess,
+    bool IsPartial,
     string Message);
