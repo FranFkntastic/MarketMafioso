@@ -339,6 +339,9 @@ public class MainWindow : Window, IDisposable
         ImGui.TextColored(ColHeader, "Actions");
         ImGui.Separator();
 
+        if (config.WorkshopPrepQueue.Count == 0)
+            confirmViwiClear = false;
+
         var canRefreshRetainers = autoRetainerRefresh.CanStartRefresh &&
                                   !autoRetainerRefresh.IsRefreshing &&
                                   !autoRetainerRefresh.IsStartQueued;
@@ -374,12 +377,18 @@ public class MainWindow : Window, IDisposable
         if (confirmViwiClear)
         {
             ImGui.TextColored(ColMuted, "This will clear VIWI Workshoppa's queue and send the MarketMafioso prep queue.");
+            if (config.WorkshopPrepQueue.Count == 0)
+                ImGui.BeginDisabled();
+
             if (ImGui.Button("Confirm VIWI Queue Sync"))
             {
                 var result = viwiWorkshoppaIpc.SendQueue(config.WorkshopPrepQueue, clearExisting: true);
                 workshopStatus = result.Message;
                 confirmViwiClear = false;
             }
+
+            if (config.WorkshopPrepQueue.Count == 0)
+                ImGui.EndDisabled();
 
             ImGui.SameLine();
             if (ImGui.Button("Cancel VIWI Queue Sync"))
