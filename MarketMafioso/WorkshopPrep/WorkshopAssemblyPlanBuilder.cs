@@ -27,6 +27,9 @@ public static class WorkshopAssemblyPlanBuilder
 
             entries.Add(new WorkshopAssemblyQueueEntry(
                 project.WorkshopItemId,
+                project.ResultItemId,
+                project.CategoryId,
+                project.TypeId,
                 project.Name,
                 queueItem.Quantity,
                 project.Materials));

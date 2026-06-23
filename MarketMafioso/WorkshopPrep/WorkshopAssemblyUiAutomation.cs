@@ -1,45 +1,187 @@
+using System;
 using System.Collections.Generic;
+using System.Linq;
+using Dalamud.Game.Addon.Lifecycle;
+using Dalamud.Game.Addon.Lifecycle.AddonArgTypes;
 using Dalamud.Plugin.Services;
+using Dalamud.Utility;
+using FFXIVClientStructs.FFXIV.Client.Game;
 using FFXIVClientStructs.FFXIV.Client.UI;
 using FFXIVClientStructs.FFXIV.Component.GUI;
 
 namespace MarketMafioso.WorkshopPrep;
 
-public sealed class WorkshopAssemblyUiAutomation
+public sealed class WorkshopAssemblyUiAutomation : IDisposable
 {
     private const string SelectStringAddon = "SelectString";
     private const string RequestAddon = "Request";
+    private const string ContextIconMenuAddon = "ContextIconMenu";
     private const string SelectYesNoAddon = "SelectYesno";
     private const string CompanyCraftRecipeNoteBookAddon = "CompanyCraftRecipeNoteBook";
     private const string SubmarinePartsMenuAddon = "SubmarinePartsMenu";
+    private const string AirshipPartsMenuAddon = "AirshipPartsMenu";
 
     private readonly IGameGui gameGui;
+    private readonly IAddonLifecycle addonLifecycle;
+    private readonly IPluginLog log;
+    private uint? pendingContributionItemId;
+    private bool requestItemSelectionStarted;
+    private bool requestConfirmed;
 
-    public WorkshopAssemblyUiAutomation(IGameGui gameGui)
+    public WorkshopAssemblyUiAutomation(
+        IGameGui gameGui,
+        IAddonLifecycle addonLifecycle,
+        IPluginLog log)
     {
         this.gameGui = gameGui;
+        this.addonLifecycle = addonLifecycle;
+        this.log = log;
+
+        addonLifecycle.RegisterListener(AddonEvent.PostSetup, RequestAddon, RequestPostSetup);
+        addonLifecycle.RegisterListener(AddonEvent.PostRefresh, RequestAddon, RequestPostRefresh);
+        addonLifecycle.RegisterListener(AddonEvent.PostReceiveEvent, ContextIconMenuAddon, ContextIconMenuPostReceiveEvent);
     }
 
-    public bool IsFabricationStationUiReady()
+    public unsafe bool IsFabricationStationUiReady()
     {
         return IsAddonReady(CompanyCraftRecipeNoteBookAddon) ||
-               IsAddonReady(SubmarinePartsMenuAddon) ||
+               GetMaterialDeliveryAddon() != null ||
                IsAddonReady(SelectStringAddon);
     }
 
-    public WorkshopAssemblyActionResult TryOpenProject(WorkshopAssemblyQueueEntry entry)
+    public unsafe WorkshopAssemblyActionResult TryOpenProject(WorkshopAssemblyQueueEntry entry)
     {
-        return new(false, $"Workshop project {entry.ProjectName} cannot be opened because the live project-selection callback has not been mapped. {DescribeUiState()}");
+        var activeCraft = ReadCraftState(GetMaterialDeliveryAddon());
+        if (activeCraft?.ResultItem == entry.ResultItemId)
+            return new(true, $"Workshop project {entry.ProjectName} is open.");
+
+        if (TrySelectYesNo(0, text => text.StartsWith("Craft ", StringComparison.Ordinal)))
+            return new(false, $"Confirmed workshop project {entry.ProjectName}.", ActionTaken: true);
+
+        var craftingLog = GetCraftingLogAddon();
+        if (craftingLog != null)
+        {
+            var visibleItems = ReadVisibleCraftingLogItems(craftingLog);
+            if (visibleItems.Any(x => x.WorkshopItemId == entry.WorkshopItemId))
+            {
+                SelectCraft(craftingLog, entry);
+                return new(false, $"Selected workshop project {entry.ProjectName}.", ActionTaken: true);
+            }
+
+            if (entry.CategoryId == 0 || entry.TypeId == 0)
+                return new(false, $"Workshop project {entry.ProjectName} cannot be selected because category/type data is missing. {DescribeUiState()}");
+
+            SelectCraftCategory(craftingLog, entry);
+            return new(false, $"Selected workshop category/type for {entry.ProjectName}.", ActionTaken: true);
+        }
+
+        if (TrySelectString(text => text == "View company crafting log."))
+            return new(false, "Selected company crafting log.", ActionTaken: true);
+
+        return new(false, $"Workshop project {entry.ProjectName} cannot be opened. {DescribeUiState()}");
     }
 
-    public WorkshopAssemblyActionResult TrySubmitNextMaterial(WorkshopAssemblyQueueEntry entry)
+    public unsafe WorkshopAssemblyActionResult TrySubmitNextMaterial(WorkshopAssemblyQueueEntry entry)
     {
-        return new(false, $"Workshop material for {entry.ProjectName} cannot be submitted because the live material-request callback has not been mapped. {DescribeUiState()}");
+        var confirmation = TryConfirmContribution();
+        if (confirmation.Success || confirmation.ActionTaken || confirmation.IsProjectComplete)
+            return confirmation;
+
+        if (requestConfirmed)
+        {
+            requestConfirmed = false;
+            return new(
+                true,
+                $"Workshop material request confirmed for {entry.ProjectName}.",
+                ActiveMaterialItemId: pendingContributionItemId);
+        }
+
+        if (pendingContributionItemId != null)
+        {
+            return new(
+                false,
+                $"Waiting for request item selection for material {pendingContributionItemId}. {DescribeUiState()}");
+        }
+
+        if (TrySelectString(text => text.StartsWith("Collect finished product.", StringComparison.Ordinal)))
+            return new(false, $"Selected finished product collection for {entry.ProjectName}.", ActionTaken: true);
+
+        if (TrySelectString(text => text.StartsWith("Complete the construction of", StringComparison.Ordinal)))
+            return new(false, $"Selected final construction step for {entry.ProjectName}.", ActionTaken: true);
+
+        if (TrySelectString(text => text.StartsWith("Advance to the next phase of production.", StringComparison.Ordinal)))
+            return new(false, $"Advanced workshop project phase for {entry.ProjectName}.", ActionTaken: true);
+
+        if (TrySelectString(text => text.StartsWith("Contribute materials.", StringComparison.Ordinal)))
+            return new(false, $"Selected material contribution for {entry.ProjectName}.", ActionTaken: true);
+
+        var materialDelivery = GetMaterialDeliveryAddon();
+        var craftState = ReadCraftState(materialDelivery);
+        if (craftState == null)
+            return new(false, $"Workshop material request is not actionable for {entry.ProjectName}. {DescribeUiState()}");
+
+        if (craftState.ResultItem != entry.ResultItemId)
+        {
+            return new(
+                false,
+                $"Open workshop project result item {craftState.ResultItem} does not match queued project {entry.ProjectName} ({entry.ResultItemId}).");
+        }
+
+        if (craftState.IsPhaseComplete())
+        {
+            CloseMaterialDelivery(materialDelivery);
+            return new(false, $"Closed completed material phase for {entry.ProjectName}.", ActionTaken: true);
+        }
+
+        var requiredMaterialIds = entry.Materials.Select(x => x.ItemId).ToHashSet();
+        for (var index = 0; index < craftState.Items.Count; index++)
+        {
+            var item = craftState.Items[index];
+            if (item.Finished || item.StepsComplete >= item.StepsTotal || !requiredMaterialIds.Contains(item.ItemId))
+                continue;
+
+            if (!HasItemInSingleSlot(item.ItemId, item.ItemCountPerStep))
+            {
+                return new(
+                    false,
+                    $"Player inventory does not contain {item.ItemCountPerStep}x {item.ItemName} in one slot for workshop contribution.");
+            }
+
+            ContributeMaterial(materialDelivery, index, item);
+            pendingContributionItemId = item.ItemId;
+            requestItemSelectionStarted = false;
+            requestConfirmed = false;
+            return new(
+                false,
+                $"Submitted workshop material request for {item.ItemCountPerStep}x {item.ItemName}.",
+                ActionTaken: true,
+                ActiveMaterialItemId: item.ItemId);
+        }
+
+        return new(false, $"No unfinished queued material was found for {entry.ProjectName}. {DescribeUiState()}");
     }
 
     public WorkshopAssemblyActionResult TryConfirmContribution()
     {
-        return new(false, $"Workshop material contribution cannot be confirmed because the live confirmation callback has not been mapped. {DescribeUiState()}");
+        if (TrySelectYesNo(0, text => text == "You are about to hand over an HQ item. Proceed?"))
+            return new(false, "Confirmed HQ workshop material handoff.", ActionTaken: true);
+
+        if (TrySelectYesNo(0, IsContributeItemsPrompt))
+        {
+            var itemId = pendingContributionItemId;
+            pendingContributionItemId = null;
+            requestItemSelectionStarted = false;
+            return new(true, "Confirmed workshop material contribution.", ActiveMaterialItemId: itemId);
+        }
+
+        if (TrySelectYesNo(0, text => text.StartsWith("Retrieve from the company workshop?", StringComparison.Ordinal)))
+        {
+            pendingContributionItemId = null;
+            requestItemSelectionStarted = false;
+            return new(true, "Retrieved finished workshop project.", IsProjectComplete: true);
+        }
+
+        return new(false, $"Workshop material contribution is not ready to confirm. {DescribeUiState()}");
     }
 
     public unsafe string DescribeUiState()
@@ -48,9 +190,11 @@ public sealed class WorkshopAssemblyUiAutomation
         {
             SelectStringAddon,
             RequestAddon,
+            ContextIconMenuAddon,
             SelectYesNoAddon,
             CompanyCraftRecipeNoteBookAddon,
             SubmarinePartsMenuAddon,
+            AirshipPartsMenuAddon,
         };
 
         var activeAddons = new List<string>();
@@ -68,9 +212,291 @@ public sealed class WorkshopAssemblyUiAutomation
             : $"Workshop UI state: {string.Join(", ", activeAddons)}.";
     }
 
+    public void Dispose()
+    {
+        addonLifecycle.UnregisterListener(AddonEvent.PostReceiveEvent, ContextIconMenuAddon, ContextIconMenuPostReceiveEvent);
+        addonLifecycle.UnregisterListener(AddonEvent.PostRefresh, RequestAddon, RequestPostRefresh);
+        addonLifecycle.UnregisterListener(AddonEvent.PostSetup, RequestAddon, RequestPostSetup);
+    }
+
+    private static bool IsContributeItemsPrompt(string text)
+    {
+        return text.Contains("Contribute", StringComparison.Ordinal) &&
+               text.Contains("items", StringComparison.Ordinal);
+    }
+
+    private unsafe AtkUnitBase* GetCraftingLogAddon()
+    {
+        var addon = gameGui.GetAddonByName<AtkUnitBase>(CompanyCraftRecipeNoteBookAddon, 1);
+        return IsAddonReady(addon) ? addon : null;
+    }
+
+    private unsafe AtkUnitBase* GetMaterialDeliveryAddon()
+    {
+        var addon = gameGui.GetAddonByName<AtkUnitBase>(SubmarinePartsMenuAddon, 1);
+        if (IsAddonReady(addon))
+            return addon;
+
+        addon = gameGui.GetAddonByName<AtkUnitBase>(AirshipPartsMenuAddon, 1);
+        return IsAddonReady(addon) ? addon : null;
+    }
+
     private unsafe bool IsAddonReady(string addonName)
     {
-        var addon = gameGui.GetAddonByName<AtkUnitBase>(addonName, 1);
+        return IsAddonReady(gameGui.GetAddonByName<AtkUnitBase>(addonName, 1));
+    }
+
+    private static unsafe bool IsAddonReady(AtkUnitBase* addon)
+    {
         return addon != null && addon->IsReady && addon->IsVisible;
     }
+
+    private unsafe bool TrySelectString(Predicate<string> predicate)
+    {
+        var addon = gameGui.GetAddonByName<AddonSelectString>(SelectStringAddon, 1);
+        if (addon == null || !IsAddonReady(&addon->AtkUnitBase))
+            return false;
+
+        var popup = addon->PopupMenu.PopupMenu;
+        for (var index = 0; index < popup.EntryCount; index++)
+        {
+            var text = popup.EntryNames[index].ToString();
+            if (string.IsNullOrWhiteSpace(text) || !predicate(text))
+                continue;
+
+            addon->AtkUnitBase.FireCallbackInt(index);
+            log.Verbose($"[MarketMafioso] Selected workshop menu entry {index}: {text}");
+            return true;
+        }
+
+        return false;
+    }
+
+    private unsafe bool TrySelectYesNo(int choice, Predicate<string> predicate)
+    {
+        var addon = gameGui.GetAddonByName<AddonSelectYesno>(SelectYesNoAddon, 1);
+        if (addon == null || !IsAddonReady(&addon->AtkUnitBase))
+            return false;
+
+        var text = addon->PromptText->NodeText.ExtractText()
+            .Replace("\n", string.Empty, StringComparison.Ordinal)
+            .Replace("\r", string.Empty, StringComparison.Ordinal);
+        if (!predicate(text))
+            return false;
+
+        addon->AtkUnitBase.FireCallbackInt(choice);
+        log.Verbose($"[MarketMafioso] Selected workshop confirmation {choice}: {text}");
+        return true;
+    }
+
+    private static unsafe IReadOnlyList<WorkshopCraftingLogItem> ReadVisibleCraftingLogItems(AtkUnitBase* addon)
+    {
+        var atkValues = addon->AtkValues;
+        if (atkValues == null || addon->AtkValuesCount <= 13)
+            return [];
+
+        var shownItemCount = atkValues[13].UInt;
+        var visibleItems = new List<WorkshopCraftingLogItem>();
+        for (var index = 0; index < shownItemCount; index++)
+        {
+            var baseIndex = 14 + 4 * index;
+            if (baseIndex + 3 >= addon->AtkValuesCount)
+                break;
+
+            visibleItems.Add(new WorkshopCraftingLogItem(
+                atkValues[baseIndex].UInt,
+                atkValues[baseIndex + 3].GetValueAsString()));
+        }
+
+        return visibleItems;
+    }
+
+    private static unsafe void SelectCraftCategory(AtkUnitBase* addon, WorkshopAssemblyQueueEntry entry)
+    {
+        var values = stackalloc AtkValue[]
+        {
+            new() { Type = AtkValueType.Int, Int = 2 },
+            new() { Type = 0, Int = 0 },
+            new() { Type = AtkValueType.UInt, UInt = entry.CategoryId },
+            new() { Type = AtkValueType.UInt, UInt = entry.TypeId },
+            new() { Type = AtkValueType.UInt, Int = 0 },
+            new() { Type = AtkValueType.UInt, Int = 0 },
+            new() { Type = AtkValueType.UInt, Int = 0 },
+            new() { Type = 0, Int = 0 },
+        };
+        addon->FireCallback(8, values, true);
+    }
+
+    private static unsafe void SelectCraft(AtkUnitBase* addon, WorkshopAssemblyQueueEntry entry)
+    {
+        var values = stackalloc AtkValue[]
+        {
+            new() { Type = AtkValueType.Int, Int = 1 },
+            new() { Type = 0, Int = 0 },
+            new() { Type = 0, Int = 0 },
+            new() { Type = 0, Int = 0 },
+            new() { Type = AtkValueType.UInt, UInt = entry.WorkshopItemId },
+            new() { Type = 0, Int = 0 },
+            new() { Type = 0, Int = 0 },
+            new() { Type = 0, Int = 0 },
+        };
+        addon->FireCallback(8, values, true);
+    }
+
+    private static unsafe WorkshopCraftState? ReadCraftState(AtkUnitBase* addon)
+    {
+        if (!IsAddonReady(addon) || addon->AtkValues == null || addon->AtkValuesCount != 157)
+            return null;
+
+        var atkValues = addon->AtkValues;
+        var listItemCount = atkValues[11].UInt;
+        var items = Enumerable.Range(0, (int)listItemCount)
+            .Select(index => new WorkshopCraftMaterialState(
+                atkValues[12 + index].UInt,
+                atkValues[36 + index].GetValueAsString(),
+                atkValues[60 + index].UInt,
+                atkValues[108 + index].UInt,
+                atkValues[120 + index].UInt,
+                atkValues[132 + index].UInt > 0))
+            .ToList();
+
+        return new WorkshopCraftState(
+            atkValues[0].UInt,
+            atkValues[6].UInt,
+            atkValues[7].UInt,
+            items);
+    }
+
+    private static unsafe bool HasItemInSingleSlot(uint itemId, uint count)
+    {
+        var inventoryManager = InventoryManager.Instance();
+        if (inventoryManager == null)
+            return false;
+
+        for (var type = InventoryType.Inventory1; type <= InventoryType.Inventory4; type++)
+        {
+            var container = inventoryManager->GetInventoryContainer(type);
+            if (container == null || !container->IsLoaded)
+                continue;
+
+            for (var slotIndex = 0; slotIndex < container->Size; slotIndex++)
+            {
+                var item = container->GetInventorySlot(slotIndex);
+                if (item != null && item->ItemId == itemId && item->Quantity >= count)
+                    return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static unsafe void ContributeMaterial(
+        AtkUnitBase* addon,
+        int materialIndex,
+        WorkshopCraftMaterialState item)
+    {
+        var values = stackalloc AtkValue[]
+        {
+            new() { Type = AtkValueType.Int, Int = 0 },
+            new() { Type = AtkValueType.UInt, UInt = (uint)materialIndex },
+            new() { Type = AtkValueType.UInt, UInt = item.ItemCountPerStep },
+            new() { Type = 0, Int = 0 },
+        };
+        addon->FireCallback(4, values, true);
+    }
+
+    private static unsafe void CloseMaterialDelivery(AtkUnitBase* addon)
+    {
+        if (!IsAddonReady(addon))
+            return;
+
+        var values = stackalloc AtkValue[]
+        {
+            new() { Type = AtkValueType.Int, Int = -1 },
+        };
+        addon->FireCallback(1, values, true);
+    }
+
+    private unsafe void RequestPostSetup(AddonEvent type, AddonArgs args)
+    {
+        if (pendingContributionItemId == null)
+            return;
+
+        var addon = (AddonRequest*)args.Addon.Address;
+        if (addon == null || addon->EntryCount != 1)
+            return;
+
+        requestItemSelectionStarted = true;
+        var values = stackalloc AtkValue[]
+        {
+            new() { Type = AtkValueType.Int, Int = 2 },
+            new() { Type = AtkValueType.UInt, UInt = 0 },
+            new() { Type = AtkValueType.UInt, UInt = 44 },
+            new() { Type = AtkValueType.UInt, UInt = 0 },
+        };
+        addon->AtkUnitBase.FireCallback(4, values, true);
+        log.Verbose($"[MarketMafioso] Opened request item selector for workshop material {pendingContributionItemId}.");
+    }
+
+    private unsafe void ContextIconMenuPostReceiveEvent(AddonEvent type, AddonArgs args)
+    {
+        if (pendingContributionItemId == null || !requestItemSelectionStarted)
+            return;
+
+        var addon = (AddonContextIconMenu*)args.Addon.Address;
+        if (addon == null)
+            return;
+
+        var values = stackalloc AtkValue[]
+        {
+            new() { Type = AtkValueType.Int, Int = 0 },
+            new() { Type = AtkValueType.Int, Int = 0 },
+            new() { Type = AtkValueType.UInt, UInt = 0 },
+            new() { Type = AtkValueType.UInt, UInt = 0 },
+            new() { Type = 0, Int = 0 },
+        };
+        addon->AtkUnitBase.FireCallback(5, values, true);
+        log.Verbose($"[MarketMafioso] Selected request item icon for workshop material {pendingContributionItemId}.");
+    }
+
+    private unsafe void RequestPostRefresh(AddonEvent type, AddonArgs args)
+    {
+        if (pendingContributionItemId == null || !requestItemSelectionStarted)
+            return;
+
+        var addon = (AddonRequest*)args.Addon.Address;
+        if (addon == null || addon->EntryCount != 1)
+            return;
+
+        var values = stackalloc AtkValue[]
+        {
+            new() { Type = AtkValueType.Int, Int = 0 },
+            new() { Type = AtkValueType.UInt, UInt = 0 },
+            new() { Type = AtkValueType.UInt, UInt = 0 },
+            new() { Type = AtkValueType.UInt, UInt = 0 },
+        };
+        addon->AtkUnitBase.FireCallback(4, values, true);
+        addon->AtkUnitBase.Close(false);
+        requestConfirmed = true;
+        log.Verbose($"[MarketMafioso] Confirmed request item window for workshop material {pendingContributionItemId}.");
+    }
 }
+
+internal sealed record WorkshopCraftingLogItem(uint WorkshopItemId, string Name);
+
+internal sealed record WorkshopCraftState(
+    uint ResultItem,
+    uint StepsComplete,
+    uint StepsTotal,
+    IReadOnlyList<WorkshopCraftMaterialState> Items)
+{
+    public bool IsPhaseComplete() => Items.All(x => x.Finished || x.StepsComplete == x.StepsTotal);
+}
+
+internal sealed record WorkshopCraftMaterialState(
+    uint ItemId,
+    string ItemName,
+    uint ItemCountPerStep,
+    uint StepsComplete,
+    uint StepsTotal,
+    bool Finished);

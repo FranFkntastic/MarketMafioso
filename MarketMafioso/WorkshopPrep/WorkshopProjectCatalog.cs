@@ -94,6 +94,8 @@ public sealed class WorkshopProjectCatalog
             sequence.ResultItem.RowId,
             sequence.ResultItem.Value.Name.ToString(),
             sequence.ResultItem.Value.Icon,
-            materials);
+            materials,
+            sequence.CompanyCraftDraftCategory.RowId,
+            sequence.CompanyCraftType.RowId);
     }
 }

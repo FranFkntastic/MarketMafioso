@@ -409,6 +409,8 @@ public class MainWindow : Window, IDisposable
         ImGui.TextColored(workshopRetainerRestock.IsRunning ? ColHeader : ColMuted, workshopRetainerRestock.LastStatus);
         var progress = workshopAssemblyRunner.Progress;
         ImGui.TextColored(workshopAssemblyRunner.IsRunning ? ColHeader : ColMuted, progress.Message);
+        if (progress.TotalProjects > 0)
+            ImGui.TextColored(ColMuted, $"Assembly progress: {progress.CompletedProjects}/{progress.TotalProjects}");
     }
 
     private Vector4 GetWorkshopStatusColor()

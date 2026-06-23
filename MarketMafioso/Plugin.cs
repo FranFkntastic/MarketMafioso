@@ -67,7 +67,7 @@ public sealed class Plugin : IDalamudPlugin
         workshopAssemblyRunner = new WorkshopAssemblyRunner(
             Framework,
             Log,
-            new WorkshopAssemblyUiAutomation(GameGui));
+            new WorkshopAssemblyUiAutomation(GameGui, AddonLifecycle, Log));
         mainWindow = new MainWindow(
             Configuration,
             reporter,

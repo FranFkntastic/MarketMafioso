@@ -21,6 +21,9 @@ public enum WorkshopAssemblyRunnerState
 
 public sealed record WorkshopAssemblyQueueEntry(
     uint WorkshopItemId,
+    uint ResultItemId,
+    uint CategoryId,
+    uint TypeId,
     string ProjectName,
     int Quantity,
     IReadOnlyList<WorkshopMaterialRequirement> Materials);
@@ -41,7 +44,10 @@ public sealed record WorkshopAssemblyProgress(
 
 public sealed record WorkshopAssemblyActionResult(
     bool Success,
-    string Message);
+    string Message,
+    bool ActionTaken = false,
+    bool IsProjectComplete = false,
+    uint? ActiveMaterialItemId = null);
 
 public sealed record WorkshopAssemblyPreflightResult(
     bool CanStart,
