@@ -99,6 +99,7 @@ Recommended units:
   - contains unsafe addon and agent interactions
   - exposes named operations such as "is fabrication station ready", "select project", "submit material", and "confirm material delivery"
   - describes visible UI state for diagnostics
+  - uses `CompanyCraftRecipeNoteBook` for project selection and `SubmarinePartsMenu`/`AirshipPartsMenu` for material delivery diagnostics
 - `WorkshopAssemblyRunner.cs`
   - owns the state machine
   - subscribes to framework ticks while running
@@ -141,6 +142,10 @@ Timing rules:
 - Any future "fast mode" should be explicit and diagnostic-heavy.
 
 The timing class should make the reason for each delay readable. A line like `PostContributionLockout` is acceptable; an unexplained `AddSeconds(1)` is not.
+
+## Implementation Notes
+
+The native runner needs category and type metadata from `CompanyCraftSequence` in addition to the workshop item id. Project selection first opens the company crafting log, selects the category/type, selects the exact visible workshop item id, and confirms the craft dialog. Material delivery then reads the live material list from the workshop material addon and only contributes materials whose item ids appear in the MarketMafioso queue snapshot.
 
 ## Error Handling
 

@@ -13,8 +13,8 @@ This guide is for agentic coding tools working in this repository.
 ## Product Boundaries
 - Current first-class features are Inventory Reporter and Workshop Prep.
 - Inventory Reporter owns player inventory scans, retainer cache scans, JSON preview, and HTTP export.
-- Workshop Prep owns project selection, prep queue state, material requirements, retainer availability, VIWI queue handoff, and retainer material withdrawal.
-- MarketMafioso may prepare and transfer a VIWI Workshoppa queue, but must not operate Workshoppa projects or duplicate Workshoppa execution state.
+- Workshop Prep owns project selection, prep queue state, material requirements, retainer availability, VIWI queue handoff, retainer material withdrawal, and native execution of MarketMafioso-owned prep queues.
+- MarketMafioso may execute its own Workshop Prep queue, but must not mirror VIWI Workshoppa's full module surface or treat Workshoppa state as source of truth.
 - Treat old market-board, sale-listing, and undercut experiments as out of scope unless explicitly requested.
 - Plugin control should stay GUI-first through `/mmf`; add slash commands only when requested.
 - Keep changes lean and aligned with the existing module shape.
@@ -26,7 +26,7 @@ This guide is for agentic coding tools working in this repository.
 - `MarketMafioso/RetainerCacheManager.cs`: retainer window lifecycle hooks and retainer inventory cache updates.
 - `MarketMafioso/HttpReporter.cs`: JSON report creation and HTTP POST behavior.
 - `MarketMafioso/InventoryPayload.cs`: outbound JSON payload contracts.
-- `MarketMafioso/WorkshopPrep/`: workshop project catalog, availability math, VIWI IPC, and retainer restock automation.
+- `MarketMafioso/WorkshopPrep/`: workshop project catalog, availability math, VIWI IPC, retainer restock automation, and native assembly automation.
 - `MarketMafioso/Windows/`: settings, inventory reporter, workshop prep, cache status, send action, and JSON preview UI.
 - `MarketMafioso/tools/Sync-DevPlugin.ps1`: debug artifact sync to XIVLauncher dev plugin folder.
 - `MarketMafioso/tools/Deploy-DevPlugin.ps1`: explicit dev-plugin deployment helper.
