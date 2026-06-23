@@ -146,7 +146,7 @@ jobs:
           systemctl is-active "$service_name"
 
           sudo mkdir -p /etc/caddy/conf.d/dev.xivcraftarchitect.com
-          sudo install -m 600 -o root -g root "$caddy_file" /etc/caddy/conf.d/dev.xivcraftarchitect.com/marketmafioso.caddy
+          sudo install -m 644 -o root -g root "$caddy_file" /etc/caddy/conf.d/dev.xivcraftarchitect.com/marketmafioso.caddy
 
           sudo python3 - <<'PY'
           from pathlib import Path
@@ -164,6 +164,7 @@ jobs:
           PY
 
           sudo caddy validate --config /etc/caddy/Caddyfile
+          sudo -u caddy caddy adapt --config /etc/caddy/Caddyfile > /dev/null
           sudo systemctl reload caddy
 
           for attempt in {1..30}; do

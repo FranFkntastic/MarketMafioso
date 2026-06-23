@@ -126,6 +126,8 @@ dev.xivcraftarchitect.com {
 
 Keep the `/api/marketmafioso` prefix when proxying to the app. The receiver uses `MarketMafioso__BasePath=/api/marketmafioso` to route those requests correctly.
 
+The deployed Caddy fragment is installed as `root:root` with mode `644` so the Caddy service user can import it during reload. Keep the runtime environment file at `600`; that file contains API keys.
+
 ## Data Storage
 
 The receiver stores JSON files under:
