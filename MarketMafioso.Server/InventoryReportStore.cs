@@ -6,11 +6,13 @@ public sealed class InventoryReportStore
 {
     private readonly string reportDirectory;
     private readonly JsonSerializerOptions jsonOptions;
+    private readonly ILogger<InventoryReportStore> log;
 
     public string ReportDirectory => reportDirectory;
 
-    public InventoryReportStore(IHostEnvironment environment)
+    public InventoryReportStore(IHostEnvironment environment, ILogger<InventoryReportStore> log)
     {
+        this.log = log;
         reportDirectory = Path.Combine(environment.ContentRootPath, "data", "reports");
         Directory.CreateDirectory(reportDirectory);
 
@@ -64,11 +66,7 @@ public sealed class InventoryReportStore
         var path = GetReportPath(id);
         if (!File.Exists(path)) return null;
 
-        await using var stream = File.OpenRead(path);
-        return await JsonSerializer.DeserializeAsync<StoredInventoryReport>(
-            stream,
-            jsonOptions,
-            cancellationToken);
+        return await ReadReportAsync(path, cancellationToken);
     }
 
     public Task<bool> DeleteAsync(string id, CancellationToken cancellationToken)
@@ -104,17 +102,35 @@ public sealed class InventoryReportStore
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            await using var stream = File.OpenRead(path);
-            var report = await JsonSerializer.DeserializeAsync<StoredInventoryReport>(
-                stream,
-                jsonOptions,
-                cancellationToken);
+            var report = await ReadReportAsync(path, cancellationToken);
 
             if (report != null)
                 reports.Add(report);
         }
 
         return reports;
+    }
+
+    private async Task<StoredInventoryReport?> ReadReportAsync(string path, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await using var stream = File.OpenRead(path);
+            return await JsonSerializer.DeserializeAsync<StoredInventoryReport>(
+                stream,
+                jsonOptions,
+                cancellationToken);
+        }
+        catch (JsonException ex)
+        {
+            log.LogWarning(ex, "Skipping invalid inventory report file {Path}.", path);
+            return null;
+        }
+        catch (IOException ex)
+        {
+            log.LogWarning(ex, "Skipping unreadable inventory report file {Path}.", path);
+            return null;
+        }
     }
 
     private string GetReportPath(string id)

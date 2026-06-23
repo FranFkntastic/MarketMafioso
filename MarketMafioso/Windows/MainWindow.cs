@@ -1,9 +1,11 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
 using Dalamud.Interface.Windowing;
 using Dalamud.Plugin.Services;
 using Dalamud.Bindings.ImGui;
+using MarketMafioso.WorkshopPrep;
 
 namespace MarketMafioso.Windows;
 
@@ -13,15 +15,25 @@ public class MainWindow : Window, IDisposable
     private readonly HttpReporter reporter;
     private readonly InventoryScanner scanner;
     private readonly AutoRetainerRefreshService autoRetainerRefresh;
+    private readonly WorkshopProjectCatalog workshopCatalog;
+    private readonly VIWIWorkshoppaIpc viwiWorkshoppaIpc;
+    private readonly WorkshopRetainerRestockService workshopRetainerRestock;
     private readonly IPluginLog log;
 
     private string urlBuffer = string.Empty;
     private string apiKeyBuffer = string.Empty;
     private bool showApiKey = false;
     private bool showPreview = false;
+    private readonly WorkshopProjectSelectionState workshopProjectSelection = new();
+    private bool confirmViwiClear = false;
+    private string workshopStatus = "Workshop prep queue is idle.";
 
     private const string ProductSummary = "Small, practical FFXIV improvements under one roof.";
     private const string InventoryModuleSummary = "Inventory Reporter exports character and retainer inventory snapshots as JSON.";
+    private const string WorkshopPrepModuleSummary = "Workshop Prep tracks company workshop projects and their direct material needs.";
+    private const string LocalReceiverUrl = "http://localhost:8080/inventory";
+    private const string DevReceiverUrl = "https://dev.xivcraftarchitect.com/api/marketmafioso/inventory";
+    private const string ProductionReceiverUrl = "https://xivcraftarchitect.com/api/marketmafioso/inventory";
 
     private static readonly Vector4 ColHeader = new(0.38f, 0.73f, 1.00f, 1f);
     private static readonly Vector4 ColSuccess = new(0.45f, 0.90f, 0.55f, 1f);
@@ -33,6 +45,9 @@ public class MainWindow : Window, IDisposable
         HttpReporter reporter,
         InventoryScanner scanner,
         AutoRetainerRefreshService autoRetainerRefresh,
+        WorkshopProjectCatalog workshopCatalog,
+        VIWIWorkshoppaIpc viwiWorkshoppaIpc,
+        WorkshopRetainerRestockService workshopRetainerRestock,
         IPluginLog log)
         : base("MarketMafioso##MarketMafiosoMainWindow",
                ImGuiWindowFlags.None)
@@ -41,6 +56,9 @@ public class MainWindow : Window, IDisposable
         this.reporter = reporter;
         this.scanner = scanner;
         this.autoRetainerRefresh = autoRetainerRefresh;
+        this.workshopCatalog = workshopCatalog;
+        this.viwiWorkshoppaIpc = viwiWorkshoppaIpc;
+        this.workshopRetainerRestock = workshopRetainerRestock;
         this.log = log;
 
         SizeConstraints = new WindowSizeConstraints
@@ -51,7 +69,14 @@ public class MainWindow : Window, IDisposable
 
         urlBuffer = config.ServerUrl;
         apiKeyBuffer = config.ApiKey;
+        ProjectBrowser = new WorkshopProjectBrowserWindow(
+            config,
+            workshopCatalog,
+            workshopProjectSelection,
+            AddWorkshopProject);
     }
+
+    public WorkshopProjectBrowserWindow ProjectBrowser { get; }
 
     public override void Draw()
     {
@@ -72,6 +97,12 @@ public class MainWindow : Window, IDisposable
                 ImGui.EndTabItem();
             }
 
+            if (ImGui.BeginTabItem("Workshop Prep"))
+            {
+                DrawWorkshopPrepTab();
+                ImGui.EndTabItem();
+            }
+
             if (ImGui.BeginTabItem("Status"))
             {
                 DrawStatusTab();
@@ -86,7 +117,7 @@ public class MainWindow : Window, IDisposable
     {
         ImGui.TextColored(ColHeader, "MarketMafioso");
         ImGui.TextWrapped(ProductSummary);
-        ImGui.TextColored(ColMuted, "Current module: Inventory Reporter");
+        ImGui.TextColored(ColMuted, "Current modules: Inventory Reporter, Workshop Prep");
     }
 
     private void DrawOverviewTab()
@@ -96,6 +127,7 @@ public class MainWindow : Window, IDisposable
         ImGui.Separator();
 
         DrawModuleSummary("Inventory Reporter", "Enabled", InventoryModuleSummary);
+        DrawModuleSummary("Workshop Prep", "Enabled", WorkshopPrepModuleSummary);
         DrawModuleSummary("Market Tools", "Planned", "Future market-board helpers will build on captured inventory and item data.");
         DrawModuleSummary("General Improvements", "Planned", "Small quality-of-life tools that are useful, but too narrow for their own plugin.");
     }
@@ -120,6 +152,243 @@ public class MainWindow : Window, IDisposable
             ImGui.Separator();
             DrawJsonPreview();
         }
+    }
+
+    private void DrawWorkshopPrepTab()
+    {
+        ImGui.Spacing();
+        ImGui.TextColored(ColHeader, "Workshop Prep");
+        ImGui.TextWrapped(WorkshopPrepModuleSummary);
+        ImGui.Spacing();
+
+        var projects = workshopCatalog.GetProjects();
+
+        DrawWorkshopPrepQueue(projects);
+        ImGui.Spacing();
+        DrawWorkshopMaterialSummary();
+        ImGui.Spacing();
+        DrawWorkshopPrepActions();
+    }
+
+    private void DrawWorkshopPrepQueue(IReadOnlyList<WorkshopProjectDefinition> projects)
+    {
+        ImGuiUi.SectionHeader("Prep Queue", ColHeader);
+
+        if (projects.Count == 0)
+        {
+            ImGui.TextColored(ColMuted, "No company workshop projects were found.");
+            return;
+        }
+
+        var selectedProject = projects.FirstOrDefault(x => x.WorkshopItemId == workshopProjectSelection.SelectedWorkshopItemId);
+        ImGui.TextColored(ColMuted, selectedProject == null
+            ? "No workshop project selected."
+            : $"Selected: {selectedProject.Name}");
+
+        ImGui.SetNextItemWidth(100);
+        if (ImGui.InputInt("Quantity##workshopQuantity", ref workshopProjectSelection.Quantity))
+        {
+            if (workshopProjectSelection.Quantity < 1)
+                workshopProjectSelection.Quantity = 1;
+        }
+
+        ImGui.SameLine();
+        if (ImGui.Button("Browse Projects..."))
+            ProjectBrowser.IsOpen = true;
+
+        ImGui.SameLine();
+        if (ImGuiUi.Button("Add Selected", selectedProject != null))
+            AddWorkshopProject(workshopProjectSelection.SelectedWorkshopItemId);
+
+        ImGui.Spacing();
+        DrawWorkshopQueueTable(projects);
+    }
+
+    private void AddWorkshopProject(uint workshopItemId)
+    {
+        var existing = config.WorkshopPrepQueue.FirstOrDefault(x => x.WorkshopItemId == workshopItemId);
+        var quantity = Math.Max(1, workshopProjectSelection.Quantity);
+        if (existing != null)
+        {
+            existing.Quantity += quantity;
+        }
+        else
+        {
+            config.WorkshopPrepQueue.Add(new WorkshopPrepQueueItem
+            {
+                WorkshopItemId = workshopItemId,
+                Quantity = quantity,
+            });
+        }
+
+        config.Save();
+        workshopStatus = "Added project to workshop prep queue.";
+    }
+
+    private void DrawWorkshopQueueTable(IReadOnlyList<WorkshopProjectDefinition> projects)
+    {
+        if (config.WorkshopPrepQueue.Count == 0)
+        {
+            ImGui.TextColored(ColMuted, "No workshop projects queued.");
+            return;
+        }
+
+        var projectNames = projects.ToDictionary(x => x.WorkshopItemId, x => x.Name);
+        if (ImGui.BeginTable("WorkshopPrepQueue", 3, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg))
+        {
+            ImGui.TableSetupColumn("Project");
+            ImGui.TableSetupColumn("Qty");
+            ImGui.TableSetupColumn("");
+            ImGui.TableHeadersRow();
+
+            for (var index = 0; index < config.WorkshopPrepQueue.Count; index++)
+            {
+                var item = config.WorkshopPrepQueue[index];
+                ImGui.TableNextRow();
+                ImGui.TableNextColumn();
+                ImGui.TextUnformatted(projectNames.TryGetValue(item.WorkshopItemId, out var name)
+                    ? name
+                    : $"Unknown project {item.WorkshopItemId}");
+
+                ImGui.TableNextColumn();
+                var quantity = item.Quantity;
+                ImGui.SetNextItemWidth(80);
+                if (ImGui.InputInt($"##workshopQueueQty{index}", ref quantity))
+                {
+                    item.Quantity = Math.Max(1, quantity);
+                    config.Save();
+                }
+
+                ImGui.TableNextColumn();
+                if (ImGui.Button($"Remove##workshopQueueRemove{index}"))
+                {
+                    config.WorkshopPrepQueue.RemoveAt(index);
+                    config.Save();
+                    workshopStatus = "Removed project from workshop prep queue.";
+                    index--;
+                }
+            }
+
+            ImGui.EndTable();
+        }
+    }
+
+    private void DrawWorkshopMaterialSummary()
+    {
+        ImGuiUi.SectionHeader("Materials", ColHeader);
+
+        var availability = GetWorkshopAvailability();
+        if (availability.Count == 0)
+        {
+            ImGui.TextColored(ColMuted, "No workshop materials yet. Add projects to the prep queue.");
+            return;
+        }
+
+        if (ImGui.BeginTable("WorkshopPrepMaterials", 6, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg))
+        {
+            ImGui.TableSetupColumn("Item");
+            ImGui.TableSetupColumn("Required");
+            ImGui.TableSetupColumn("Player");
+            ImGui.TableSetupColumn("Retainers");
+            ImGui.TableSetupColumn("Shortage");
+            ImGui.TableSetupColumn("Candidates");
+            ImGui.TableHeadersRow();
+
+            foreach (var item in availability)
+            {
+                ImGui.TableNextRow();
+                ImGui.TableNextColumn();
+                ImGui.TextUnformatted(item.ItemName);
+                ImGui.TableNextColumn();
+                ImGui.TextUnformatted(item.Required.ToString());
+                ImGui.TableNextColumn();
+                ImGui.TextUnformatted(item.PlayerInventory.ToString());
+                ImGui.TableNextColumn();
+                ImGui.TextUnformatted(item.RetainerCache.ToString());
+                ImGui.TableNextColumn();
+                ImGui.TextColored(item.Shortage > 0 ? ColError : ColSuccess, item.Shortage.ToString());
+                ImGui.TableNextColumn();
+                ImGui.TextUnformatted(string.Join(", ", item.CandidateRetainers.Select(x => x.RetainerName)));
+            }
+
+            ImGui.EndTable();
+        }
+    }
+
+    private IReadOnlyList<WorkshopMaterialAvailability> GetWorkshopAvailability()
+    {
+        if (config.WorkshopPrepQueue.Count == 0)
+            return [];
+
+        var requirements = workshopCatalog.BuildRequirements(config.WorkshopPrepQueue);
+        var playerInventory = scanner.CountPlayerInventory(config);
+        return WorkshopMaterialAvailabilityService.BuildAvailability(requirements, playerInventory, config);
+    }
+
+    private void DrawWorkshopPrepActions()
+    {
+        ImGuiUi.SectionHeader("Actions", ColHeader);
+
+        if (config.WorkshopPrepQueue.Count == 0)
+            confirmViwiClear = false;
+
+        var canRefreshRetainers = autoRetainerRefresh.CanStartRefresh &&
+                                  !autoRetainerRefresh.IsRefreshing &&
+                                  !autoRetainerRefresh.IsStartQueued;
+        if (ImGuiUi.Button("Refresh Retainer Cache", canRefreshRetainers))
+            autoRetainerRefresh.StartFullRefresh();
+
+        ImGui.SameLine();
+        if (ImGuiUi.Button("Restock Materials From Retainers", !workshopRetainerRestock.IsRunning))
+            _ = workshopRetainerRestock.StartAsync(GetWorkshopAvailability());
+
+        ImGui.SameLine();
+        var hasPrepQueue = config.WorkshopPrepQueue.Count > 0;
+        if (ImGuiUi.Button("Send Queue To VIWI", hasPrepQueue))
+            confirmViwiClear = true;
+
+        if (confirmViwiClear)
+        {
+            ImGui.TextColored(ColMuted, "This will clear VIWI Workshoppa's queue and send the MarketMafioso prep queue.");
+
+            if (ImGuiUi.Button("Confirm VIWI Queue Sync", hasPrepQueue))
+            {
+                var result = viwiWorkshoppaIpc.SendQueue(config.WorkshopPrepQueue, clearExisting: true);
+                workshopStatus = result.Message;
+                confirmViwiClear = false;
+            }
+
+            ImGui.SameLine();
+            if (ImGui.Button("Cancel VIWI Queue Sync"))
+                confirmViwiClear = false;
+        }
+
+        if (ImGuiUi.Button("Clear Prep Queue", hasPrepQueue))
+        {
+            config.WorkshopPrepQueue.Clear();
+            config.Save();
+            workshopStatus = "Cleared prep queue.";
+        }
+
+        ImGui.Spacing();
+        ImGui.TextColored(GetWorkshopStatusColor(), workshopStatus);
+        ImGui.TextColored(workshopRetainerRestock.IsRunning ? ColHeader : ColMuted, workshopRetainerRestock.LastStatus);
+    }
+
+    private Vector4 GetWorkshopStatusColor()
+    {
+        if (workshopStatus.Contains("unable", StringComparison.OrdinalIgnoreCase) ||
+            workshopStatus.Contains("failed", StringComparison.OrdinalIgnoreCase) ||
+            workshopStatus.Contains("not available", StringComparison.OrdinalIgnoreCase))
+            return ColError;
+
+        if (workshopStatus.Contains("sent", StringComparison.OrdinalIgnoreCase) ||
+            workshopStatus.Contains("added", StringComparison.OrdinalIgnoreCase) ||
+            workshopStatus.Contains("cleared", StringComparison.OrdinalIgnoreCase) ||
+            workshopStatus.Contains("removed", StringComparison.OrdinalIgnoreCase))
+            return ColSuccess;
+
+        return ColMuted;
     }
 
     private void DrawStatusTab()
@@ -152,7 +421,21 @@ public class MainWindow : Window, IDisposable
             config.Save();
         }
 
-        ImGui.Text("API Key (optional - sent as X-Api-Key header):");
+        if (ImGui.Button("Local Receiver"))
+            ApplyServerUrlPreset(LocalReceiverUrl);
+        ImGui.SameLine();
+        if (ImGui.Button("Dev VPS"))
+            ApplyServerUrlPreset(DevReceiverUrl);
+        ImGui.SameLine();
+        ImGui.BeginDisabled();
+        ImGui.Button("Production VPS (future)");
+        ImGui.EndDisabled();
+
+        var endpoint = ReceiverEndpointClassifier.Classify(urlBuffer);
+        var requiresApiKey = endpoint.RequiresApiKey;
+        ImGui.Text(requiresApiKey
+            ? "API Key (required for this endpoint):"
+            : "API Key (optional - sent as X-Api-Key header):");
         var keyWidth = ImGui.GetContentRegionAvail().X - 70;
         ImGui.SetNextItemWidth(keyWidth);
         var flags = showApiKey ? ImGuiInputTextFlags.None : ImGuiInputTextFlags.Password;
@@ -164,6 +447,20 @@ public class MainWindow : Window, IDisposable
         ImGui.SameLine();
         if (ImGui.Button(showApiKey ? "Hide##k" : "Show##k", new Vector2(60, 0)))
             showApiKey = !showApiKey;
+
+        if (endpoint.Kind == ReceiverEndpointKind.Invalid)
+            ImGui.TextColored(ColError, "Enter a valid HTTP or HTTPS receiver URL.");
+        else if (requiresApiKey && string.IsNullOrWhiteSpace(apiKeyBuffer))
+            ImGui.TextColored(ColError, "This endpoint requires an API key before reports can be sent.");
+        else if (endpoint.Kind == ReceiverEndpointKind.CustomRemote)
+            ImGui.TextColored(ColMuted, "Custom remote endpoint. API key is required by default.");
+    }
+
+    private void ApplyServerUrlPreset(string serverUrl)
+    {
+        urlBuffer = serverUrl;
+        config.ServerUrl = serverUrl;
+        config.Save();
     }
 
     private void DrawInventoryOptionsSection()

@@ -12,6 +12,7 @@ using FFXIVClientStructs.FFXIV.Client.Game;
 using FFXIVClientStructs.FFXIV.Client.UI;
 using FFXIVClientStructs.FFXIV.Component.GUI;
 using Lumina.Excel.Sheets;
+using MarketMafioso.WorkshopPrep;
 
 namespace MarketMafioso;
 
@@ -517,7 +518,7 @@ public sealed class AutoRetainerRefreshService : IDisposable
         for (var i = 0; i < popup.EntryCount; i++)
         {
             var entry = popup.EntryNames[i].ToString();
-            if (!IsEntrustOrWithdrawEntry(entry, targetText))
+            if (!RetainerUiAutomationText.IsSelectStringEntryMatch(entry, targetText))
                 continue;
 
             index = i;
@@ -526,32 +527,6 @@ public sealed class AutoRetainerRefreshService : IDisposable
 
         index = -1;
         return false;
-    }
-
-    private static bool IsEntrustOrWithdrawEntry(string entry, string targetText)
-    {
-        var normalizedEntry = NormalizeSelectStringEntry(entry);
-        var normalizedTarget = NormalizeSelectStringEntry(targetText);
-        return normalizedEntry.StartsWith(normalizedTarget, StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static string NormalizeSelectStringEntry(string text)
-    {
-        var builder = new StringBuilder(text.Length);
-        foreach (var character in text)
-        {
-            if (char.IsControl(character) || char.GetUnicodeCategory(character) == System.Globalization.UnicodeCategory.PrivateUse)
-                continue;
-
-            builder.Append(character);
-        }
-
-        var normalized = builder.ToString().Trim();
-        var detailStart = normalized.IndexOf(" (", StringComparison.Ordinal);
-        if (detailStart >= 0)
-            normalized = normalized[..detailStart].TrimEnd();
-
-        return normalized.TrimEnd('.');
     }
 
     private string GetEntrustOrWithdrawText()
