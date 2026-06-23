@@ -4,6 +4,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using Dalamud.Plugin.Services;
 using FFXIVClientStructs.FFXIV.Client.Game;
+using FFXIVClientStructs.FFXIV.Client.UI.Agent;
 using FFXIVClientStructs.FFXIV.Component.GUI;
 
 namespace MarketMafioso.WorkshopPrep;
@@ -190,11 +191,84 @@ public sealed class WorkshopRetainerRestockService
             if (!remaining.TryGetValue(stack.ItemId, out var needed) || needed <= 0)
                 continue;
 
-            var taken = Math.Min(needed, stack.Quantity);
-            remaining[stack.ItemId] -= taken;
+            var quantity = Math.Min(needed, stack.Quantity);
+            var result = await Plugin.Framework.RunOnTick(() => RetrieveFromLiveStack(stack, quantity)).ConfigureAwait(false);
+            if (!result.Success)
+                throw new InvalidOperationException(result.Message);
+
+            remaining[stack.ItemId] -= result.Retrieved;
             plannedStacks.Add(stack);
-            log.Information($"[MarketMafioso] Planned retrieval of {taken}x item {stack.ItemId} from {stack.Page}/{stack.SlotIndex}.");
+            log.Information($"[MarketMafioso] Retrieved {result.Retrieved}x item {stack.ItemId} from {stack.Page}/{stack.SlotIndex}.");
         }
+    }
+
+    private unsafe RetainerRetrievalResult RetrieveFromLiveStack(LiveRetainerStack stack, int quantity)
+    {
+        if (quantity <= 0)
+            return new(false, 0, $"Invalid retrieval quantity {quantity} for item {stack.ItemId}.");
+
+        var inventoryManager = InventoryManager.Instance();
+        if (inventoryManager == null)
+            return new(false, 0, "Inventory manager is unavailable.");
+
+        var container = inventoryManager->GetInventoryContainer(stack.Page);
+        if (container == null || !container->IsLoaded)
+            return new(false, 0, $"Retainer inventory page {stack.Page} is not loaded.");
+
+        var slot = container->GetInventorySlot(stack.SlotIndex);
+        if (slot == null || slot->ItemId != stack.ItemId || slot->Quantity <= 0)
+            return new(false, 0, $"Expected item {stack.ItemId} was not found at {stack.Page}/{stack.SlotIndex}.");
+
+        var retrieveQuantity = Math.Min(quantity, slot->Quantity);
+        var agent = AgentInventoryContext.Instance();
+        var retainerAgent = AgentModule.Instance()->GetAgentByInternalId(AgentId.Retainer);
+        if (retainerAgent == null)
+            return new(false, 0, "Retainer agent is unavailable.");
+
+        agent->OpenForItemSlot(stack.Page, stack.SlotIndex, 0, retainerAgent->GetAddonId());
+
+        if (retrieveQuantity >= slot->Quantity)
+        {
+            var retrieveAll = FindRetainerCallback(agent, 0);
+            if (retrieveAll == null)
+                return new(false, 0, $"Retrieve-all action was not available for item {stack.ItemId}.");
+
+            retrieveAll->Handler->HandleCallback((uint)stack.SlotIndex, stack.Page, agent->TargetInventoryFlags, retrieveAll->CallbackParam);
+            return new(true, retrieveQuantity, "Retrieved full stack.");
+        }
+
+        var retrievePartial = FindRetainerCallback(agent, 3);
+        if (retrievePartial == null)
+            return new(false, 0, $"Retrieve-quantity action was not available for item {stack.ItemId}.");
+
+        retrievePartial->Handler->HandleCallback((uint)stack.SlotIndex, stack.Page, agent->TargetInventoryFlags, retrievePartial->CallbackParam);
+
+        var numeric = Plugin.GameGui.GetAddonByName<AtkUnitBase>("InputNumeric", 1);
+        if (numeric == null || !numeric->IsReady || !numeric->IsVisible)
+            return new(false, 0, $"Numeric quantity popup did not open for item {stack.ItemId}.");
+
+        numeric->FireCallbackInt(retrieveQuantity);
+        return new(true, retrieveQuantity, "Retrieved partial stack.");
+    }
+
+    private static unsafe AgentInventoryContext.ContextCallbackInfo* FindRetainerCallback(
+        AgentInventoryContext* agent,
+        ulong callbackParam)
+    {
+        if (agent->ContextCallbackInfos == null)
+            return null;
+
+        for (var index = 0; index < agent->ContextItemCount; index++)
+        {
+            if (agent->IsContextItemDisabled(index))
+                continue;
+
+            var info = agent->ContextCallbackInfos + index;
+            if (info->Handler != null && info->CallbackParam == callbackParam)
+                return info;
+        }
+
+        return null;
     }
 
     private static async Task CloseRetainerAsync()
@@ -227,3 +301,8 @@ public sealed record LiveRetainerStack(
     int SlotIndex,
     uint ItemId,
     int Quantity);
+
+public sealed record RetainerRetrievalResult(
+    bool Success,
+    int Retrieved,
+    string Message);
