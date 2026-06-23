@@ -192,7 +192,7 @@ public sealed class WorkshopRetainerRestockService
                 continue;
 
             var quantity = Math.Min(needed, stack.Quantity);
-            var result = await Plugin.Framework.RunOnTick(() => RetrieveFromLiveStack(stack, quantity)).ConfigureAwait(false);
+            var result = await RetrieveFromLiveStackAsync(stack, quantity).ConfigureAwait(false);
             if (!result.Success)
                 throw new InvalidOperationException(result.Message);
 
@@ -202,28 +202,46 @@ public sealed class WorkshopRetainerRestockService
         }
     }
 
-    private unsafe RetainerRetrievalResult RetrieveFromLiveStack(LiveRetainerStack stack, int quantity)
+    private async Task<RetainerRetrievalResult> RetrieveFromLiveStackAsync(LiveRetainerStack stack, int quantity)
+    {
+        var pending = await Plugin.Framework.RunOnTick(() => BeginRetrieveFromLiveStack(stack, quantity)).ConfigureAwait(false);
+        if (!pending.Success)
+            return new(false, 0, pending.Message);
+
+        if (pending.NeedsQuantityInput)
+        {
+            await Plugin.Framework.DelayTicks(1).ConfigureAwait(false);
+            var quantityInput = await Plugin.Framework.RunOnTick(() => SubmitRetrievalQuantity(stack.ItemId, pending.Retrieved)).ConfigureAwait(false);
+            if (!quantityInput.Success)
+                return quantityInput;
+        }
+
+        await Plugin.Framework.DelayTicks(3).ConfigureAwait(false);
+        return await Plugin.Framework.RunOnTick(() => VerifyRetrievalCompleted(stack, pending.Retrieved)).ConfigureAwait(false);
+    }
+
+    private unsafe PendingRetainerRetrieval BeginRetrieveFromLiveStack(LiveRetainerStack stack, int quantity)
     {
         if (quantity <= 0)
-            return new(false, 0, $"Invalid retrieval quantity {quantity} for item {stack.ItemId}.");
+            return new(false, 0, false, $"Invalid retrieval quantity {quantity} for item {stack.ItemId}.");
 
         var inventoryManager = InventoryManager.Instance();
         if (inventoryManager == null)
-            return new(false, 0, "Inventory manager is unavailable.");
+            return new(false, 0, false, "Inventory manager is unavailable.");
 
         var container = inventoryManager->GetInventoryContainer(stack.Page);
         if (container == null || !container->IsLoaded)
-            return new(false, 0, $"Retainer inventory page {stack.Page} is not loaded.");
+            return new(false, 0, false, $"Retainer inventory page {stack.Page} is not loaded.");
 
         var slot = container->GetInventorySlot(stack.SlotIndex);
-        if (slot == null || slot->ItemId != stack.ItemId || slot->Quantity <= 0)
-            return new(false, 0, $"Expected item {stack.ItemId} was not found at {stack.Page}/{stack.SlotIndex}.");
+        if (slot == null || slot->ItemId != stack.ItemId || slot->Quantity != stack.Quantity)
+            return new(false, 0, false, $"Expected {stack.Quantity}x item {stack.ItemId} was not found at {stack.Page}/{stack.SlotIndex}.");
 
         var retrieveQuantity = Math.Min(quantity, slot->Quantity);
         var agent = AgentInventoryContext.Instance();
         var retainerAgent = AgentModule.Instance()->GetAgentByInternalId(AgentId.Retainer);
         if (retainerAgent == null)
-            return new(false, 0, "Retainer agent is unavailable.");
+            return new(false, 0, false, "Retainer agent is unavailable.");
 
         agent->OpenForItemSlot(stack.Page, stack.SlotIndex, 0, retainerAgent->GetAddonId());
 
@@ -231,24 +249,57 @@ public sealed class WorkshopRetainerRestockService
         {
             var retrieveAll = FindRetainerCallback(agent, 0);
             if (retrieveAll == null)
-                return new(false, 0, $"Retrieve-all action was not available for item {stack.ItemId}.");
+                return new(false, 0, false, $"Retrieve-all action was not available for item {stack.ItemId}.");
 
             retrieveAll->Handler->HandleCallback((uint)stack.SlotIndex, stack.Page, agent->TargetInventoryFlags, retrieveAll->CallbackParam);
-            return new(true, retrieveQuantity, "Retrieved full stack.");
+            return new(true, retrieveQuantity, false, "Retrieve full-stack callback submitted.");
         }
 
         var retrievePartial = FindRetainerCallback(agent, 3);
         if (retrievePartial == null)
-            return new(false, 0, $"Retrieve-quantity action was not available for item {stack.ItemId}.");
+            return new(false, 0, false, $"Retrieve-quantity action was not available for item {stack.ItemId}.");
 
         retrievePartial->Handler->HandleCallback((uint)stack.SlotIndex, stack.Page, agent->TargetInventoryFlags, retrievePartial->CallbackParam);
+        return new(true, retrieveQuantity, true, "Retrieve quantity callback submitted.");
+    }
 
+    private unsafe RetainerRetrievalResult SubmitRetrievalQuantity(uint itemId, int retrieveQuantity)
+    {
         var numeric = Plugin.GameGui.GetAddonByName<AtkUnitBase>("InputNumeric", 1);
         if (numeric == null || !numeric->IsReady || !numeric->IsVisible)
-            return new(false, 0, $"Numeric quantity popup did not open for item {stack.ItemId}.");
+            return new(false, 0, $"Numeric quantity popup did not open for item {itemId}.");
 
         numeric->FireCallbackInt(retrieveQuantity);
-        return new(true, retrieveQuantity, "Retrieved partial stack.");
+        return new(true, retrieveQuantity, "Retrieve quantity submitted.");
+    }
+
+    private unsafe RetainerRetrievalResult VerifyRetrievalCompleted(LiveRetainerStack stack, int retrieved)
+    {
+        var inventoryManager = InventoryManager.Instance();
+        if (inventoryManager == null)
+            return new(false, 0, "Inventory manager is unavailable after retrieval.");
+
+        var container = inventoryManager->GetInventoryContainer(stack.Page);
+        if (container == null || !container->IsLoaded)
+            return new(false, 0, $"Retainer inventory page {stack.Page} is not loaded after retrieval.");
+
+        var slot = container->GetInventorySlot(stack.SlotIndex);
+        if (slot == null)
+            return new(false, 0, $"Retainer inventory slot {stack.Page}/{stack.SlotIndex} is unavailable after retrieval.");
+
+        var expectedRemaining = stack.Quantity - retrieved;
+        if (expectedRemaining <= 0)
+        {
+            if (slot->ItemId != stack.ItemId || slot->Quantity == 0)
+                return new(true, retrieved, "Retrieved full stack.");
+
+            return new(false, 0, $"Retainer slot {stack.Page}/{stack.SlotIndex} did not change after full-stack retrieval.");
+        }
+
+        if (slot->ItemId == stack.ItemId && slot->Quantity <= expectedRemaining)
+            return new(true, retrieved, "Retrieved partial stack.");
+
+        return new(false, 0, $"Retainer slot {stack.Page}/{stack.SlotIndex} did not decrease after retrieval.");
     }
 
     private static unsafe AgentInventoryContext.ContextCallbackInfo* FindRetainerCallback(
@@ -305,4 +356,10 @@ public sealed record LiveRetainerStack(
 public sealed record RetainerRetrievalResult(
     bool Success,
     int Retrieved,
+    string Message);
+
+internal sealed record PendingRetainerRetrieval(
+    bool Success,
+    int Retrieved,
+    bool NeedsQuantityInput,
     string Message);
