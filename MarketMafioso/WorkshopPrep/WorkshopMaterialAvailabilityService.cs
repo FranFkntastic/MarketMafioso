@@ -20,10 +20,11 @@ public static class WorkshopMaterialAvailabilityService
                 var playerCount = playerInventory.TryGetValue(first.ItemId, out var count) ? count : 0;
                 var shortage = Math.Max(0, required - playerCount);
                 var retainerStock = BuildRetainerStock(first.ItemId, config);
+                var retainerCount = retainerStock.Sum(x => x.Quantity);
+                var totalMissing = Math.Max(0, required - playerCount - retainerCount);
                 var candidates = shortage == 0
                     ? []
                     : retainerStock;
-                var retainerCount = retainerStock.Sum(x => x.Quantity);
 
                 return new WorkshopMaterialAvailability(
                     first.ItemId,
@@ -33,6 +34,7 @@ public static class WorkshopMaterialAvailabilityService
                     playerCount,
                     retainerCount,
                     shortage,
+                    totalMissing,
                     candidates);
             })
             .OrderBy(x => x.ItemName)

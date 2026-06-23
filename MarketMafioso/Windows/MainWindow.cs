@@ -287,13 +287,14 @@ public class MainWindow : Window, IDisposable
             return;
         }
 
-        if (ImGui.BeginTable("WorkshopPrepMaterials", 6, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg))
+        if (ImGui.BeginTable("WorkshopPrepMaterials", 7, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg))
         {
             ImGui.TableSetupColumn("Item");
             ImGui.TableSetupColumn("Required");
             ImGui.TableSetupColumn("Player");
             ImGui.TableSetupColumn("Retainers");
-            ImGui.TableSetupColumn("Shortage");
+            ImGui.TableSetupColumn("Inventory Missing");
+            ImGui.TableSetupColumn("Total Missing");
             ImGui.TableSetupColumn("Candidates");
             ImGui.TableHeadersRow();
 
@@ -310,6 +311,8 @@ public class MainWindow : Window, IDisposable
                 ImGui.TextUnformatted(item.RetainerCache.ToString());
                 ImGui.TableNextColumn();
                 ImGui.TextColored(item.Shortage > 0 ? ColError : ColSuccess, item.Shortage.ToString());
+                ImGui.TableNextColumn();
+                ImGui.TextColored(item.TotalMissing > 0 ? ColError : ColSuccess, item.TotalMissing.ToString());
                 ImGui.TableNextColumn();
                 ImGui.TextUnformatted(string.Join(", ", item.CandidateRetainers.Select(x => x.RetainerName)));
             }

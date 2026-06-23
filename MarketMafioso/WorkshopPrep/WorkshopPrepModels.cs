@@ -32,6 +32,7 @@ public sealed record WorkshopMaterialAvailability(
     int PlayerInventory,
     int RetainerCache,
     int Shortage,
+    int TotalMissing,
     IReadOnlyList<RetainerMaterialCandidate> CandidateRetainers);
 
 public sealed record RetainerMaterialCandidate(
