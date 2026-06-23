@@ -1,4 +1,5 @@
 using Dalamud.Configuration;
+using MarketMafioso.WorkshopPrep;
 using System;
 using System.Collections.Generic;
 
@@ -25,6 +26,7 @@ public class Configuration : IPluginConfiguration
     public int AutoSendIntervalMinutes { get; set; } = 5;
 
     public Dictionary<ulong, CachedRetainer> RetainerCache { get; set; } = new();
+    public List<WorkshopPrepQueueItem> WorkshopPrepQueue { get; set; } = new();
 
     public void Save() => Plugin.PluginInterface.SavePluginConfig(this);
 }
