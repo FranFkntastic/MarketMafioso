@@ -171,7 +171,11 @@ public sealed class WorkshopAssemblyUiAutomation : IDisposable
             var itemId = pendingContributionItemId;
             pendingContributionItemId = null;
             requestItemSelectionStarted = false;
-            return new(true, "Confirmed workshop material contribution.", ActiveMaterialItemId: itemId);
+            return new(
+                true,
+                "Confirmed workshop material contribution.",
+                IsContributionConfirmed: true,
+                ActiveMaterialItemId: itemId);
         }
 
         if (TrySelectYesNo(0, text => text.StartsWith("Retrieve from the company workshop?", StringComparison.Ordinal)))

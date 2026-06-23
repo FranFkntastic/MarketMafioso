@@ -47,6 +47,7 @@ public sealed record WorkshopAssemblyActionResult(
     string Message,
     bool ActionTaken = false,
     bool IsProjectComplete = false,
+    bool IsContributionConfirmed = false,
     uint? ActiveMaterialItemId = null);
 
 public sealed record WorkshopAssemblyPreflightResult(

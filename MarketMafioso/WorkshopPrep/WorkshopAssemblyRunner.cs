@@ -150,6 +150,12 @@ public sealed class WorkshopAssemblyRunner : IDisposable
             return;
         }
 
+        if (result.IsContributionConfirmed)
+        {
+            StartContributionLockout(result);
+            return;
+        }
+
         if (result.Success)
         {
             SetState(WorkshopAssemblyRunnerState.ConfirmingContribution, result.Message);
@@ -169,14 +175,19 @@ public sealed class WorkshopAssemblyRunner : IDisposable
             return;
         }
 
-        if (result.Success)
+        if (result.Success || result.IsContributionConfirmed)
         {
-            continueAt = DateTimeOffset.Now + WorkshopAssemblyTiming.PostContributionLockout;
-            SetState(WorkshopAssemblyRunnerState.WaitingForContributionLockout, result.Message);
+            StartContributionLockout(result);
             return;
         }
 
         HandlePendingActionOrTimeout(WorkshopAssemblyRunnerState.ConfirmingContribution, result);
+    }
+
+    private void StartContributionLockout(WorkshopAssemblyActionResult result)
+    {
+        continueAt = DateTimeOffset.Now + WorkshopAssemblyTiming.PostContributionLockout;
+        SetState(WorkshopAssemblyRunnerState.WaitingForContributionLockout, result.Message);
     }
 
     private void HandlePendingActionOrTimeout(
