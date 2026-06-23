@@ -1,6 +1,3 @@
-using System.Reflection;
-using System.Runtime.CompilerServices;
-using System.Runtime.Loader;
 using MarketMafioso.WorkshopPrep;
 
 namespace MarketMafioso.Tests.WorkshopPrep;
@@ -70,37 +67,47 @@ public sealed class WorkshopMaterialAvailabilityServiceTests
         Assert.Equal(0, item.Shortage);
         Assert.Empty(item.CandidateRetainers);
     }
-}
 
-internal static class DalamudAssemblyResolver
-{
-    [ModuleInitializer]
-    internal static void Register()
+    [Fact]
+    public void BuildAvailability_ReportsRetainerCacheWhenPlayerHasEnough()
     {
-        AssemblyLoadContext.Default.Resolving += ResolveDalamud;
-    }
-
-    private static Assembly? ResolveDalamud(AssemblyLoadContext context, AssemblyName assemblyName)
-    {
-        if (assemblyName.Name != "Dalamud")
+        var requirements = new[]
         {
-            return null;
-        }
-
-        var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-        var assemblyPath = Path.Combine(
-            appData,
-            "XIVLauncher",
-            "addon",
-            "Hooks",
-            "15.0.2.1",
-            "Dalamud.dll");
-
-        if (!File.Exists(assemblyPath))
+            new WorkshopMaterialRequirement(100, "Elm Lumber", 123, 55),
+        };
+        var playerInventory = new Dictionary<uint, int>
         {
-            throw new FileNotFoundException("Test requires the Dalamud 15.0.2.1 assembly from the local XIVLauncher hook cache.", assemblyPath);
-        }
+            [100] = 60,
+        };
+        var config = new Configuration
+        {
+            RetainerCache =
+            {
+                [(ulong)10] = new CachedRetainer
+                {
+                    RetainerId = 10,
+                    RetainerName = "A",
+                    LastUpdated = new DateTime(2026, 6, 23, 12, 0, 0, DateTimeKind.Utc),
+                    Bags =
+                    [
+                        new CachedBag
+                        {
+                            BagName = "RetainerInventory",
+                            Items =
+                            [
+                                new CachedItem { ItemId = 100, ItemName = "Elm Lumber", Quantity = 99 },
+                            ],
+                        },
+                    ],
+                },
+            },
+        };
 
-        return context.LoadFromAssemblyPath(assemblyPath);
+        var result = WorkshopMaterialAvailabilityService.BuildAvailability(requirements, playerInventory, config);
+
+        var item = Assert.Single(result);
+        Assert.Equal(0, item.Shortage);
+        Assert.Equal(99, item.RetainerCache);
+        Assert.Empty(item.CandidateRetainers);
     }
 }

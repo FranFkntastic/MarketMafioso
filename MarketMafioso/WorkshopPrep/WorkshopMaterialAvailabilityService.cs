@@ -19,10 +19,11 @@ public static class WorkshopMaterialAvailabilityService
                 var required = group.Sum(x => x.Quantity);
                 var playerCount = playerInventory.TryGetValue(first.ItemId, out var count) ? count : 0;
                 var shortage = Math.Max(0, required - playerCount);
+                var retainerStock = BuildRetainerStock(first.ItemId, config);
                 var candidates = shortage == 0
                     ? []
-                    : BuildCandidates(first.ItemId, config);
-                var retainerCount = candidates.Sum(x => x.Quantity);
+                    : retainerStock;
+                var retainerCount = retainerStock.Sum(x => x.Quantity);
 
                 return new WorkshopMaterialAvailability(
                     first.ItemId,
@@ -38,7 +39,7 @@ public static class WorkshopMaterialAvailabilityService
             .ToList();
     }
 
-    private static IReadOnlyList<RetainerMaterialCandidate> BuildCandidates(uint itemId, Configuration config)
+    private static IReadOnlyList<RetainerMaterialCandidate> BuildRetainerStock(uint itemId, Configuration config)
     {
         return config.RetainerCache.Values
             .Select(retainer => new
