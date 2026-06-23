@@ -17,6 +17,7 @@ public class MainWindow : Window, IDisposable
     private readonly AutoRetainerRefreshService autoRetainerRefresh;
     private readonly WorkshopProjectCatalog workshopCatalog;
     private readonly VIWIWorkshoppaIpc viwiWorkshoppaIpc;
+    private readonly WorkshopRetainerRestockService workshopRetainerRestock;
     private readonly IPluginLog log;
 
     private string urlBuffer = string.Empty;
@@ -47,6 +48,7 @@ public class MainWindow : Window, IDisposable
         AutoRetainerRefreshService autoRetainerRefresh,
         WorkshopProjectCatalog workshopCatalog,
         VIWIWorkshoppaIpc viwiWorkshoppaIpc,
+        WorkshopRetainerRestockService workshopRetainerRestock,
         IPluginLog log)
         : base("MarketMafioso##MarketMafiosoMainWindow",
                ImGuiWindowFlags.None)
@@ -57,6 +59,7 @@ public class MainWindow : Window, IDisposable
         this.autoRetainerRefresh = autoRetainerRefresh;
         this.workshopCatalog = workshopCatalog;
         this.viwiWorkshoppaIpc = viwiWorkshoppaIpc;
+        this.workshopRetainerRestock = workshopRetainerRestock;
         this.log = log;
 
         SizeConstraints = new WindowSizeConstraints
@@ -349,6 +352,16 @@ public class MainWindow : Window, IDisposable
             ImGui.EndDisabled();
 
         ImGui.SameLine();
+        if (workshopRetainerRestock.IsRunning)
+            ImGui.BeginDisabled();
+
+        if (ImGui.Button("Restock Materials From Retainers"))
+            _ = workshopRetainerRestock.StartAsync(GetWorkshopAvailability());
+
+        if (workshopRetainerRestock.IsRunning)
+            ImGui.EndDisabled();
+
+        ImGui.SameLine();
         if (config.WorkshopPrepQueue.Count == 0)
             ImGui.BeginDisabled();
 
@@ -388,6 +401,7 @@ public class MainWindow : Window, IDisposable
 
         ImGui.Spacing();
         ImGui.TextColored(GetWorkshopStatusColor(), workshopStatus);
+        ImGui.TextColored(workshopRetainerRestock.IsRunning ? ColHeader : ColMuted, workshopRetainerRestock.LastStatus);
     }
 
     private Vector4 GetWorkshopStatusColor()
