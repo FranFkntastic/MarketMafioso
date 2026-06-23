@@ -2,30 +2,23 @@
 
 This guide is for agentic coding tools working in this repository.
 
-## Repository Scope
-- Primary project: `MarketMafioso/`.
-- Local backend project: `MarketMafioso.Server/`.
+## Scope
+- Primary plugin: `MarketMafioso/`.
+- Local receiver: `MarketMafioso.Server/`.
+- Plugin tests: `MarketMafioso.Tests/`.
+- Server tests: `MarketMafioso.Server.Tests/`.
 - Main solution: `MarketMafioso.sln`.
-- The old local `Reference/` folder was intentionally left out of this cleaned repository.
-- Default target for commands is the root solution or `MarketMafioso/MarketMafioso.csproj`.
+- Default command target: the solution, or `MarketMafioso/MarketMafioso.csproj` for plugin-only work.
 
-## Current Product Focus (Authoritative)
-- MarketMafioso currently starts from InventoryReporter behavior in almost all but name.
-- Build only what is necessary to scan player inventory, cache retainer inventories, and send or preview JSON inventory snapshots.
-- Treat the old active-retainer sale-listing capture and market-board query code as scrapped exploratory work.
-- Plugin control should happen through the settings window and `/mmf` command.
-- Keep scope tight and implementation lean. Prefer the smallest change that solves the immediate requirement.
-- Retainer inventory pages (`RetainerPage1..7`) are in scope as inventory reporting data.
-- Persist only plugin configuration between sessions (user options/settings).
-- Persist cached retainer inventory only through existing configuration until a clearer storage model is designed.
-- Future market/undercut tools should be rebuilt on top of the inventory reporting baseline.
-
-## Tech Stack
-- C# with `LangVersion` 12.
-- .NET SDK in local environment (build confirmed with .NET 10 SDK + net8 plugin target).
-- Plugin SDK: `Dalamud.NET.Sdk/15.0.0`.
-- Nullable reference types are enabled.
-- Unsafe code is enabled for game/UI interop.
+## Product Boundaries
+- Current first-class features are Inventory Reporter and Workshop Prep.
+- Inventory Reporter owns player inventory scans, retainer cache scans, JSON preview, and HTTP export.
+- Workshop Prep owns project selection, prep queue state, material requirements, retainer availability, VIWI queue handoff, and retainer material withdrawal.
+- MarketMafioso may prepare and transfer a VIWI Workshoppa queue, but must not operate Workshoppa projects or duplicate Workshoppa execution state.
+- Treat old market-board, sale-listing, and undercut experiments as out of scope unless explicitly requested.
+- Plugin control should stay GUI-first through `/mmf`; add slash commands only when requested.
+- Keep changes lean and aligned with the existing module shape.
+- Persist user configuration and intentional prep queue state. Do not persist transient UI automation progress.
 
 ## Project Layout
 - `MarketMafioso/Plugin.cs`: plugin entry point, service wiring, command registration, timer lifecycle, and `WindowSystem` registration.
@@ -33,9 +26,18 @@ This guide is for agentic coding tools working in this repository.
 - `MarketMafioso/RetainerCacheManager.cs`: retainer window lifecycle hooks and retainer inventory cache updates.
 - `MarketMafioso/HttpReporter.cs`: JSON report creation and HTTP POST behavior.
 - `MarketMafioso/InventoryPayload.cs`: outbound JSON payload contracts.
-- `MarketMafioso/Windows/`: settings, cache status, send action, and JSON preview UI.
+- `MarketMafioso/WorkshopPrep/`: workshop project catalog, availability math, VIWI IPC, and retainer restock automation.
+- `MarketMafioso/Windows/`: settings, inventory reporter, workshop prep, cache status, send action, and JSON preview UI.
 - `MarketMafioso/tools/Sync-DevPlugin.ps1`: debug artifact sync to XIVLauncher dev plugin folder.
+- `MarketMafioso/tools/Deploy-DevPlugin.ps1`: explicit dev-plugin deployment helper.
 - `MarketMafioso.Server/`: local ASP.NET inventory-report receiver and dashboard.
+- `docs/`: maintainer documentation and design notes.
+
+## Tech Stack
+- C# with `LangVersion` 12.
+- Plugin target: `net8.0-windows`.
+- Plugin SDK: `Dalamud.NET.Sdk/15.0.0`.
+- Nullable reference types and unsafe code are enabled in the plugin.
 
 ## Build/Lint/Test Commands
 Run from repository root (`MarketMafioso`).
@@ -63,10 +65,9 @@ Lint notes:
 - When formatter behavior is unclear, match surrounding file style.
 
 ### Tests
-- Current state: no dedicated test project exists in `MarketMafioso.sln`.
-- Solution-level command (safe and future-proof):
-- `dotnet test "MarketMafioso.sln" -v minimal`
-If tests are added later, use these patterns:
+- All tests: `dotnet test "MarketMafioso.sln" -c Debug -v minimal`
+- Plugin tests: `dotnet test "MarketMafioso.Tests/MarketMafioso.Tests.csproj" -c Debug -v minimal`
+- Server tests: `dotnet test "MarketMafioso.Server.Tests/MarketMafioso.Server.Tests.csproj" -c Debug -v minimal`
 - Run all tests in one test project:
 - `dotnet test "path/to/Project.Tests.csproj"`
 - Run a single test method:
@@ -77,12 +78,12 @@ If tests are added later, use these patterns:
 - `dotnet test "path/to/Project.Tests.csproj" --filter "Category=YourCategory"`
 
 ## Recommended Local Workflow
-- Keep edits focused in `MarketMafioso/` unless task scope says otherwise.
-- Before implementing, verify the change directly serves inventory scanning, retainer cache reporting, HTTP export, or other explicitly requested product work.
+- Keep edits focused in the relevant module unless task scope says otherwise.
+- Before implementing, verify the change directly serves inventory reporting, retainer cache reporting, HTTP export, workshop prep, VIWI handoff, retainer restock automation, or other explicitly requested product work.
 - Build after code changes: `dotnet build "MarketMafioso.sln" -c Debug`.
 - Verify formatting: `dotnet format "MarketMafioso.sln" --verify-no-changes`.
-- Run tests when test projects exist or when requested.
-- Validate runtime behavior by reloading plugin through XIVLauncher dev plugins.
+- Run relevant tests after code changes.
+- Validate runtime behavior by reloading the dev plugin when the change affects in-game behavior.
 
 ## Code Style Guidelines
 Follow established patterns already present in `MarketMafioso/`.
@@ -153,6 +154,8 @@ Follow established patterns already present in `MarketMafioso/`.
 - Prefer readable tables for dense data.
 - Keep per-window selection/filter state local.
 - Avoid unnecessary allocations in per-frame hot paths.
+- Use shared helpers such as `ImGuiUi` for repeated UI idioms.
+- Dense browser tables should have sensible default widths and resizable columns.
 
 ## Change Boundaries and Safety
 - Do not edit generated files in `obj/` or artifacts in `bin/`.
@@ -161,17 +164,12 @@ Follow established patterns already present in `MarketMafioso/`.
 - Preserve compatibility for persisted configuration keys.
 - Avoid speculative abstractions and premature architecture expansion.
 
-## Cursor and Copilot Rules
-- No `.cursor/rules/` directory was found.
-- No `.cursorrules` file was found.
-- No `.github/copilot-instructions.md` file was found.
-- If any of these files are added later, treat them as authoritative and merge their guidance here.
-
 ## Agent Checklist
 - Confirm target files are inside `MarketMafioso/` unless task says otherwise.
-- Confirm the task directly supports inventory reporting, retainer cache reporting, HTTP export, or other explicitly requested product work.
+- Confirm the task directly supports current product scope or an explicitly requested expansion.
 - Implement changes using existing style and nullability expectations.
 - Build with `dotnet build "MarketMafioso.sln" -c Debug`.
 - Run `dotnet format "MarketMafioso.sln" --verify-no-changes`.
-- Run `dotnet test` when tests exist.
-- Report validations performed and any limitations (for example, no test project present).
+- Run relevant tests.
+- If plugin behavior changes, confirm the dev plugin artifact was refreshed.
+- Report validations performed and any limitations.

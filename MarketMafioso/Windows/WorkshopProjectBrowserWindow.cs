@@ -180,42 +180,29 @@ public sealed class WorkshopProjectBrowserWindow : Window, IDisposable
     private void DrawProjectActions(WorkshopProjectDefinition? project)
     {
         var hasCheckedProjects = selection.CheckedWorkshopItemIds.Count > 0;
-        if (!hasCheckedProjects)
-            ImGui.BeginDisabled();
-
-        if (ImGui.Button("Add Checked"))
-            AddCheckedProjects();
+        ImGui.Checkbox("Close after add##workshopProjectBrowserCloseAfterAdd", ref selection.CloseAfterAdd);
 
         ImGui.SameLine();
-        if (ImGui.Button("Add Checked & Close"))
+        if (ImGuiUi.Button("Add Checked", hasCheckedProjects))
         {
             AddCheckedProjects();
-            IsOpen = false;
+            if (selection.CloseAfterAdd)
+                IsOpen = false;
         }
 
         ImGui.SameLine();
-        if (ImGui.Button("Clear Checked"))
+        if (ImGuiUi.Button("Clear Checked", hasCheckedProjects))
             selection.CheckedWorkshopItemIds.Clear();
 
-        if (!hasCheckedProjects)
-            ImGui.EndDisabled();
-
-        if (project == null)
-        {
-            ImGui.SameLine();
-            if (ImGui.Button("Close"))
-                IsOpen = false;
-            return;
-        }
-
-        if (ImGui.Button("Add Selected"))
-            addProject(project.WorkshopItemId);
-
         ImGui.SameLine();
-        if (ImGui.Button("Add Selected & Close"))
+        if (ImGuiUi.Button("Add Selected", project != null))
         {
+            if (project == null)
+                throw new InvalidOperationException("Selected workshop project is unavailable.");
+
             addProject(project.WorkshopItemId);
-            IsOpen = false;
+            if (selection.CloseAfterAdd)
+                IsOpen = false;
         }
 
         ImGui.SameLine();
@@ -292,5 +279,6 @@ public sealed class WorkshopProjectSelectionState
     public string Search = string.Empty;
     public int Quantity = 1;
     public bool FavoritesOnly;
+    public bool CloseAfterAdd;
     public HashSet<uint> CheckedWorkshopItemIds { get; } = new();
 }

@@ -172,8 +172,7 @@ public class MainWindow : Window, IDisposable
 
     private void DrawWorkshopPrepQueue(IReadOnlyList<WorkshopProjectDefinition> projects)
     {
-        ImGui.TextColored(ColHeader, "Prep Queue");
-        ImGui.Separator();
+        ImGuiUi.SectionHeader("Prep Queue", ColHeader);
 
         if (projects.Count == 0)
         {
@@ -198,14 +197,8 @@ public class MainWindow : Window, IDisposable
             ProjectBrowser.IsOpen = true;
 
         ImGui.SameLine();
-        if (selectedProject == null)
-            ImGui.BeginDisabled();
-
-        if (ImGui.Button("Add Selected"))
+        if (ImGuiUi.Button("Add Selected", selectedProject != null))
             AddWorkshopProject(workshopProjectSelection.SelectedWorkshopItemId);
-
-        if (selectedProject == null)
-            ImGui.EndDisabled();
 
         ImGui.Spacing();
         DrawWorkshopQueueTable(projects);
@@ -282,8 +275,7 @@ public class MainWindow : Window, IDisposable
 
     private void DrawWorkshopMaterialSummary()
     {
-        ImGui.TextColored(ColHeader, "Materials");
-        ImGui.Separator();
+        ImGuiUi.SectionHeader("Materials", ColHeader);
 
         var availability = GetWorkshopAvailability();
         if (availability.Count == 0)
@@ -335,8 +327,7 @@ public class MainWindow : Window, IDisposable
 
     private void DrawWorkshopPrepActions()
     {
-        ImGui.TextColored(ColHeader, "Actions");
-        ImGui.Separator();
+        ImGuiUi.SectionHeader("Actions", ColHeader);
 
         if (config.WorkshopPrepQueue.Count == 0)
             confirmViwiClear = false;
@@ -344,68 +335,40 @@ public class MainWindow : Window, IDisposable
         var canRefreshRetainers = autoRetainerRefresh.CanStartRefresh &&
                                   !autoRetainerRefresh.IsRefreshing &&
                                   !autoRetainerRefresh.IsStartQueued;
-        if (!canRefreshRetainers)
-            ImGui.BeginDisabled();
-
-        if (ImGui.Button("Refresh Retainer Cache"))
+        if (ImGuiUi.Button("Refresh Retainer Cache", canRefreshRetainers))
             autoRetainerRefresh.StartFullRefresh();
 
-        if (!canRefreshRetainers)
-            ImGui.EndDisabled();
-
         ImGui.SameLine();
-        if (workshopRetainerRestock.IsRunning)
-            ImGui.BeginDisabled();
-
-        if (ImGui.Button("Restock Materials From Retainers"))
+        if (ImGuiUi.Button("Restock Materials From Retainers", !workshopRetainerRestock.IsRunning))
             _ = workshopRetainerRestock.StartAsync(GetWorkshopAvailability());
 
-        if (workshopRetainerRestock.IsRunning)
-            ImGui.EndDisabled();
-
         ImGui.SameLine();
-        if (config.WorkshopPrepQueue.Count == 0)
-            ImGui.BeginDisabled();
-
-        if (ImGui.Button("Send Queue To VIWI"))
+        var hasPrepQueue = config.WorkshopPrepQueue.Count > 0;
+        if (ImGuiUi.Button("Send Queue To VIWI", hasPrepQueue))
             confirmViwiClear = true;
-
-        if (config.WorkshopPrepQueue.Count == 0)
-            ImGui.EndDisabled();
 
         if (confirmViwiClear)
         {
             ImGui.TextColored(ColMuted, "This will clear VIWI Workshoppa's queue and send the MarketMafioso prep queue.");
-            if (config.WorkshopPrepQueue.Count == 0)
-                ImGui.BeginDisabled();
 
-            if (ImGui.Button("Confirm VIWI Queue Sync"))
+            if (ImGuiUi.Button("Confirm VIWI Queue Sync", hasPrepQueue))
             {
                 var result = viwiWorkshoppaIpc.SendQueue(config.WorkshopPrepQueue, clearExisting: true);
                 workshopStatus = result.Message;
                 confirmViwiClear = false;
             }
 
-            if (config.WorkshopPrepQueue.Count == 0)
-                ImGui.EndDisabled();
-
             ImGui.SameLine();
             if (ImGui.Button("Cancel VIWI Queue Sync"))
                 confirmViwiClear = false;
         }
 
-        if (config.WorkshopPrepQueue.Count == 0)
-            ImGui.BeginDisabled();
-
-        if (ImGui.Button("Clear Prep Queue"))
+        if (ImGuiUi.Button("Clear Prep Queue", hasPrepQueue))
         {
             config.WorkshopPrepQueue.Clear();
             config.Save();
             workshopStatus = "Cleared prep queue.";
         }
-
-        if (config.WorkshopPrepQueue.Count == 0)
-            ImGui.EndDisabled();
 
         ImGui.Spacing();
         ImGui.TextColored(GetWorkshopStatusColor(), workshopStatus);

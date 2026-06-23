@@ -11,7 +11,7 @@
     <DisableFastUpToDateCheck>true</DisableFastUpToDateCheck>
     <Name>MarketMafioso</Name>
     <Author>FranFkntastic</Author>
-    <Description>A small integrated toolbox for practical FFXIV improvements, starting with inventory reporting and retainer cache export.</Description>
+    <Description>A small integrated toolbox for practical FFXIV improvements, including inventory reporting, retainer cache export, and workshop prep.</Description>
     <Punchline>Small, practical FFXIV improvements under one roof.</Punchline>
     <RepoUrl>https://github.com/FranFkntastic/MarketMafioso</RepoUrl>
   </PropertyGroup>

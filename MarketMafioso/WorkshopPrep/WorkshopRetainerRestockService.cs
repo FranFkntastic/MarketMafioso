@@ -107,8 +107,7 @@ public sealed class WorkshopRetainerRestockService
                 await OpenRetainerInventoryAsync().ConfigureAwait(false);
 
                 State = WorkshopRetainerRestockState.WithdrawingItems;
-                var plannedStacks = new HashSet<LiveRetainerStack>();
-                var retrievedFromCandidate = await WithdrawFromOpenRetainerAsync(remaining, plannedStacks).ConfigureAwait(false);
+                var retrievedFromCandidate = await WithdrawFromOpenRetainerAsync(remaining).ConfigureAwait(false);
                 totalRetrieved += retrievedFromCandidate;
                 if (retrievedFromCandidate == 0)
                     log.Information($"[MarketMafioso] No matching live retainer stacks were found for candidate {candidate.RetainerName}.");
@@ -241,11 +240,10 @@ public sealed class WorkshopRetainerRestockService
         return new(false, false, $"No matching live retainer stacks were found for the workshop material shortages: {remainingText}.");
     }
 
-    private async Task<int> WithdrawFromOpenRetainerAsync(
-        Dictionary<uint, int> remaining,
-        HashSet<LiveRetainerStack> plannedStacks)
+    private async Task<int> WithdrawFromOpenRetainerAsync(Dictionary<uint, int> remaining)
     {
         var retrievedTotal = 0;
+        var plannedStacks = new HashSet<LiveRetainerStack>();
         var itemIds = remaining.Where(x => x.Value > 0).Select(x => x.Key).ToHashSet();
         var liveStacks = await Plugin.Framework.RunOnTick(() => ScanLiveRetainerStacks(itemIds)).ConfigureAwait(false);
         foreach (var stack in liveStacks)
@@ -321,7 +319,7 @@ public sealed class WorkshopRetainerRestockService
         var needsQuantityInput = retrieveQuantity < slot->Quantity;
         var targetText = GetAddonText(needsQuantityInput ? RetrieveQuantityAddonRow : RetrieveFromRetainerAddonRow);
         var playerQuantityBefore = CountPlayerItem(stack.ItemId);
-        log.Information(
+        log.Verbose(
             $"[MarketMafioso] Opening retainer context menu for item {stack.ItemId}: " +
             $"retainerSlot={stack.Page}/{stack.SlotIndex}, slotQuantity={slot->Quantity}, requested={quantity}, retrieving={retrieveQuantity}, " +
             $"playerBefore={playerQuantityBefore}, action=\"{targetText}\", " +
@@ -622,7 +620,7 @@ public sealed class WorkshopRetainerRestockService
 
         return new(
             true,
-            $"Selected retainer context menu entry for item {itemId}: index={index.Value}, target=\"{targetText}\", callbackResult={callbackResult}. {menuState}");
+            $"Selected retainer context menu entry for item {itemId}: index={index.Value}, target=\"{targetText}\", callbackResult={callbackResult}.");
     }
 
     private static unsafe IReadOnlyList<string> ReadContextMenuLabels(AgentInventoryContext* agent)

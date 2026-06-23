@@ -8,6 +8,8 @@ obj/
 **/obj/
 
 # IDE/editor state
+.agents/
+.codex/
 .idea/*
 !.idea/
 !.idea/runConfigurations/
