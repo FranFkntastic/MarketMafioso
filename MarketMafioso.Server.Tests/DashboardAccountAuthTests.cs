@@ -40,7 +40,19 @@ public sealed class DashboardAccountAuthTests
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 
-    private static WebApplicationFactory<Program> CreateApplication()
+    [Fact]
+    public async Task DashboardRoutes_RequireCredentialsForBasePathWithoutTrailingSlash()
+    {
+        await using var application = CreateApplication(
+            new KeyValuePair<string, string?>("MarketMafioso:BasePath", "/api/marketmafioso"));
+        using var client = application.CreateClient();
+
+        var response = await client.GetAsync("/api/marketmafioso");
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    private static WebApplicationFactory<Program> CreateApplication(params KeyValuePair<string, string?>[] extraConfiguration)
     {
         var contentRoot = Path.Combine(Path.GetTempPath(), "MarketMafioso.Server.Tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(contentRoot);
@@ -51,13 +63,17 @@ public sealed class DashboardAccountAuthTests
                 builder.UseContentRoot(contentRoot);
                 builder.ConfigureAppConfiguration(config =>
                 {
-                    config.AddInMemoryCollection(new Dictionary<string, string?>
+                    var values = new Dictionary<string, string?>
                     {
                         ["MarketMafioso:DatabasePath"] = Path.Combine(contentRoot, "marketmafioso.db"),
                         ["MarketMafioso:RequireDashboardAuth"] = "true",
                         ["MarketMafioso:DashboardBootstrapUsername"] = "admin",
                         ["MarketMafioso:DashboardBootstrapPassword"] = "secret-password",
-                    });
+                    };
+                    foreach (var item in extraConfiguration)
+                        values[item.Key] = item.Value;
+
+                    config.AddInMemoryCollection(values);
                 });
             });
     }
