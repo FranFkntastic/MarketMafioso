@@ -26,7 +26,7 @@ Open:
 http://localhost:8080/
 ```
 
-The dashboard is a local control panel for received snapshots. It shows summary counts, links to each snapshot's HTML detail view and raw JSON, and lets you delete individual snapshots.
+The dashboard is a local control panel for received snapshots. It shows summary counts, links to each snapshot's HTML detail view and retained raw JSON, and lets you delete individual snapshots.
 It also has a `Delete All` action for clearing the local snapshot store.
 Snapshot details include parsed player/retainer inventory tables and metadata when the plugin supplies it.
 
@@ -44,7 +44,9 @@ DELETE /api/reports
 DELETE /api/reports/{id}
 ```
 
-Reports are stored as JSON files under `MarketMafioso.Server/data/reports/`. That folder is ignored by git.
+Reports are stored in SQLite at `MarketMafioso.Server/data/marketmafioso.db` by default. Existing JSON files under `MarketMafioso.Server/data/reports/` are imported on startup and left in place.
+
+The original incoming JSON is retained only for the newest 20 snapshots by default. Older snapshots remain available through parsed dashboard/API views, while raw JSON routes return `410 Gone` once the original JSON has been pruned.
 
 ## API Key
 
@@ -56,6 +58,19 @@ dotnet run --project MarketMafioso.Server --urls http://localhost:8080
 ```
 
 Set the same API key in the plugin UI before sending.
+
+## Dashboard Auth
+
+The local dashboard is unauthenticated by default. To enable app-managed Basic Auth for dashboard pages:
+
+```powershell
+$env:MarketMafioso__RequireDashboardAuth = "true"
+$env:MarketMafioso__DashboardBootstrapUsername = "admin"
+$env:MarketMafioso__DashboardBootstrapPassword = "change-me"
+dotnet run --project MarketMafioso.Server --urls http://localhost:8080
+```
+
+The bootstrap user is created only when no dashboard users exist. Dashboard users are local to this receiver instance.
 
 ## Smoke Test
 

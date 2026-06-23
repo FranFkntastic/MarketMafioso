@@ -3,11 +3,23 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Primitives;
 using MarketMafioso.Server;
+using MarketMafioso.Server.Auth;
+using MarketMafioso.Server.Migration;
+using MarketMafioso.Server.Sqlite;
 
 var builder = WebApplication.CreateBuilder(args);
+builder.Services.AddSingleton<SqliteConnectionFactory>();
+builder.Services.AddSingleton<SqliteSchemaMigrator>();
+builder.Services.AddSingleton<DashboardPasswordHasher>();
+builder.Services.AddSingleton<ReceiverBootstrapper>();
+builder.Services.AddSingleton<IngestKeyAccountResolver>();
 builder.Services.AddSingleton<InventoryReportStore>();
+builder.Services.AddSingleton<JsonSnapshotImporter>();
 
 var app = builder.Build();
+await app.Services.GetRequiredService<SqliteSchemaMigrator>().MigrateAsync(CancellationToken.None);
+await app.Services.GetRequiredService<ReceiverBootstrapper>().BootstrapAsync(CancellationToken.None);
+await app.Services.GetRequiredService<JsonSnapshotImporter>().ImportAsync(CancellationToken.None);
 var ingestApiKey = FirstConfigured(
     app.Configuration["MarketMafioso:IngestApiKey"],
     app.Configuration["MarketMafioso:ApiKey"]);
@@ -45,13 +57,27 @@ app.Use(async (context, next) =>
     await next(context);
 });
 
-app.MapGet("/", async (HttpRequest request, InventoryReportStore store, string? deleted, CancellationToken token) =>
+app.UseMiddleware<DashboardBasicAuthMiddleware>();
+
+app.MapGet("/", async (
+    HttpRequest request,
+    InventoryReportStore store,
+    string? deleted,
+    long? characterId,
+    bool? allCharacters,
+    CancellationToken token) =>
 {
-    var reports = await store.ListSummariesAsync(token);
+    var showAllCharacters = allCharacters == true;
+    var characters = await store.ListCharactersAsync(1, token);
+    var selectedCharacterId = showAllCharacters ? null : characterId ?? characters.FirstOrDefault()?.Id;
+    var reports = await store.ListSummariesAsync(1, selectedCharacterId, token);
     var csrfToken = SetCsrfCookie(request.HttpContext.Response);
     return Results.Content(
         RenderDashboard(
             reports,
+            characters,
+            selectedCharacterId,
+            showAllCharacters,
             StorageDisplayName(store.ReportDirectory, storageLabel, requireApiKey),
             deleted,
             request.PathBase,
@@ -96,14 +122,14 @@ app.MapGet("/api/reports/{id}", async (string id, InventoryReportStore store, Ca
 
 app.MapGet("/reports/latest/json", async (InventoryReportStore store, CancellationToken token) =>
 {
-    var report = await store.GetLatestAsync(token);
-    return report == null ? Results.NotFound() : Results.Ok(report);
+    var report = await store.GetLatestRawJsonAsync(token);
+    return RawJsonResult(report);
 });
 
 app.MapGet("/reports/{id}/json", async (string id, InventoryReportStore store, CancellationToken token) =>
 {
-    var report = await store.GetAsync(id, token);
-    return report == null ? Results.NotFound() : Results.Ok(report);
+    var report = await store.GetRawJsonAsync(id, token);
+    return RawJsonResult(report);
 });
 
 app.MapDelete("/api/reports/{id}", async (string id, InventoryReportStore store, CancellationToken token) =>
@@ -159,8 +185,8 @@ app.Run();
 
 async Task<IResult> SaveInventoryReport(
     HttpRequest request,
-    InventoryReport report,
     InventoryReportStore store,
+    IngestKeyAccountResolver accountResolver,
     CancellationToken token)
 {
     if (requireApiKey &&
@@ -173,12 +199,42 @@ async Task<IResult> SaveInventoryReport(
             previousReadApiKey))
         return InvalidApiKey();
 
+    string rawJson;
+    InventoryReport? report;
+    try
+    {
+        using var reader = new StreamReader(request.Body, Encoding.UTF8);
+        rawJson = await reader.ReadToEndAsync(token);
+        report = JsonSerializer.Deserialize<InventoryReport>(
+            rawJson,
+            new JsonSerializerOptions(JsonSerializerDefaults.Web));
+    }
+    catch (JsonException)
+    {
+        return Results.BadRequest(new { error = "invalid_json" });
+    }
+
+    if (report == null)
+        return Results.BadRequest(new { error = "invalid_json" });
+
     if (report.PlayerInventory.Count == 0 && report.Retainers.Count == 0)
         return Results.BadRequest(new { error = "Report must include at least one player inventory bag or retainer." });
 
     var suppliedApiKey = request.Headers["X-Api-Key"].ToString();
-    var stored = await store.SaveAsync(report, suppliedApiKey, token);
+    var accountId = await accountResolver.ResolveAccountIdAsync(suppliedApiKey, token) ?? 1;
+    var stored = await store.SaveAsync(accountId, report, suppliedApiKey, rawJson, token);
     return Results.Created(AppUrl(request.PathBase, $"/api/reports/{stored.Id}"), stored.Summary);
+}
+
+static IResult RawJsonResult(RawInventoryReportJson? report)
+{
+    if (report == null)
+        return Results.NotFound();
+
+    if (report.RawJson == null)
+        return Results.Json(new { error = "raw_json_pruned" }, statusCode: StatusCodes.Status410Gone);
+
+    return Results.Text(report.RawJson, "application/json; charset=utf-8", Encoding.UTF8);
 }
 
 static ApiKeyPurpose RequiredApiKeyPurpose(HttpRequest request, bool requireApiKey)
@@ -324,6 +380,9 @@ static bool HasValidOrigin(HttpRequest request, string? publicOrigin)
 
 static string RenderDashboard(
     IReadOnlyList<ReportSummary> reports,
+    IReadOnlyList<CharacterSummary> characters,
+    long? selectedCharacterId,
+    bool allCharacters,
     string storageDisplayName,
     string? deleted,
     PathString pathBase,
@@ -355,6 +414,15 @@ static string RenderDashboard(
     var latest = reports.Count == 0
         ? "Never"
         : reports.Max(r => r.ReceivedAt).ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss zzz");
+    var selectedCharacter = selectedCharacterId == null
+        ? null
+        : characters.FirstOrDefault(c => c.Id == selectedCharacterId.Value);
+    var scope = allCharacters
+        ? "All Characters"
+        : selectedCharacter == null
+            ? "Latest Character"
+            : CharacterLabel(selectedCharacter);
+    var characterFilters = RenderCharacterFilters(characters, selectedCharacterId, allCharacters, pathBase);
     var notice = string.IsNullOrWhiteSpace(deleted)
         ? string.Empty
         : $"""<p class="notice">Deleted <code>{Html(deleted)}</code>.</p>""";
@@ -407,9 +475,30 @@ static string RenderDashboard(
                     color: var(--accent-strong);
                 }
                 .toolbar { display: flex; gap: 8px; align-items: center; }
+                .filters {
+                    display: flex;
+                    gap: 8px;
+                    align-items: center;
+                    flex-wrap: wrap;
+                    margin: 14px 0 12px;
+                }
+                .filter {
+                    border: 1px solid var(--border);
+                    border-radius: 5px;
+                    background: var(--panel);
+                    color: var(--text);
+                    padding: 6px 9px;
+                    text-decoration: none;
+                    font-size: 13px;
+                }
+                .filter.active {
+                    border-color: var(--accent);
+                    background: #203028;
+                    color: var(--accent-strong);
+                }
                 .cards {
                     display: grid;
-                    grid-template-columns: repeat(2, minmax(0, 1fr));
+                    grid-template-columns: repeat(3, minmax(0, 1fr));
                     gap: 10px;
                     margin: 16px 0;
                 }
@@ -483,7 +572,7 @@ static string RenderDashboard(
                 }
                 @media (max-width: 900px) {
                     header { display: block; }
-                    .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+                    .cards { grid-template-columns: repeat(1, minmax(0, 1fr)); }
                     table { display: block; overflow-x: auto; }
                 }
             </style>
@@ -505,9 +594,11 @@ static string RenderDashboard(
                     </div>
                 </header>
                 {{notice}}
+                {{characterFilters}}
                 <section class="cards">
                     <div class="card"><div class="label">Snapshots</div><div class="value">{{reports.Count:N0}}</div></div>
                     <div class="card"><div class="label">Latest received</div><div class="value" style="font-size: 15px;">{{Html(latest)}}</div></div>
+                    <div class="card"><div class="label">Scope</div><div class="value" style="font-size: 15px;">{{Html(scope)}}</div></div>
                 </section>
                 <div class="path">Storage: <code>{{Html(storageDisplayName)}}</code></div>
                 {{emptyState}}
@@ -533,6 +624,39 @@ static string RenderDashboard(
         </html>
         """;
 }
+
+static string RenderCharacterFilters(
+    IReadOnlyList<CharacterSummary> characters,
+    long? selectedCharacterId,
+    bool allCharacters,
+    PathString pathBase)
+{
+    if (characters.Count == 0)
+        return string.Empty;
+
+    var latestClass = !allCharacters && selectedCharacterId == characters[0].Id ? "filter active" : "filter";
+    var allClass = allCharacters ? "filter active" : "filter";
+    var links = new StringBuilder();
+    links.AppendLine($"""<a class="{latestClass}" href="{Html(AppUrl(pathBase, "/"))}">Latest Character</a>""");
+    links.AppendLine($"""<a class="{allClass}" href="{Html(AppUrl(pathBase, "/?allCharacters=true"))}">All Characters</a>""");
+
+    foreach (var character in characters)
+    {
+        var activeClass = !allCharacters && selectedCharacterId == character.Id ? "filter active" : "filter";
+        links.AppendLine($"""<a class="{activeClass}" href="{Html(AppUrl(pathBase, $"/?characterId={character.Id}"))}">{Html(CharacterLabel(character))}</a>""");
+    }
+
+    return $$"""
+        <nav class="filters" aria-label="Character filters">
+            {{links}}
+        </nav>
+        """;
+}
+
+static string CharacterLabel(CharacterSummary character) =>
+    string.IsNullOrWhiteSpace(character.HomeWorld)
+        ? character.CharacterName
+        : $"{character.CharacterName} @ {character.HomeWorld}";
 
 static string RenderReportDetails(StoredInventoryReport stored, InventorySnapshotView view, PathString pathBase, string csrfToken)
 {

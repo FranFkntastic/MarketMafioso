@@ -7,7 +7,7 @@ MarketMafioso is a Dalamud plugin for small, practical FFXIV quality-of-life too
 - **Inventory Reporter** exports player and retainer inventory snapshots as JSON.
 - **Retainer cache tools** help refresh and inspect the retainer data used by reports.
 - **Workshop Prep** builds Free Company workshop material prep queues, checks player and retainer stock, withdraws available materials from retainers, can execute the MarketMafioso prep queue natively, and can still send the prepared queue to VIWI Workshoppa.
-- **Hosted or local receiver support** lets inventory reports be sent to a compatible endpoint.
+- **Hosted, local, or self-hosted receiver support** lets inventory reports be sent to a compatible endpoint.
 
 ## Usage
 
@@ -32,6 +32,8 @@ Most interaction happens in the `/mmf` window:
 ## Notes
 
 Retainer inventory is only as fresh as the last cache refresh or retainer window scan. For the best workshop prep results, refresh the retainer cache before planning a restock.
+
+The receiver backend can be run privately or self-hosted from the server package. MarketMafioso does not provide public multi-user inventory hosting; users who want persistent hosted inventory storage should run their own receiver instance.
 
 ## Acknowledgements
 

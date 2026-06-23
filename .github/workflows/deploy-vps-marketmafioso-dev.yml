@@ -62,8 +62,6 @@ jobs:
         run: |
           test -n "$MARKETMAFIOSO_DEV_INGEST_API_KEY"
           test -n "$MARKETMAFIOSO_DEV_BASIC_AUTH_PASSWORD"
-          basic_auth_hash="$(docker run --rm caddy:2 caddy hash-password --plaintext "$MARKETMAFIOSO_DEV_BASIC_AUTH_PASSWORD")"
-          test -n "$basic_auth_hash"
           cat > marketmafioso-dev.env <<ENV
           ASPNETCORE_URLS=http://127.0.0.1:5088
           MarketMafioso__RequireApiKey=true
@@ -74,6 +72,11 @@ jobs:
           MarketMafioso__BasePath=/api/marketmafioso
           MarketMafioso__PublicOrigin=https://dev.xivcraftarchitect.com
           MarketMafioso__StorageLabel=dev receiver storage
+          MarketMafioso__DatabasePath=/srv/craftarchitect/data/marketmafioso/dev/marketmafioso.db
+          MarketMafioso__RawJsonRetentionCount=20
+          MarketMafioso__RequireDashboardAuth=true
+          MarketMafioso__DashboardBootstrapUsername=marketmafioso
+          MarketMafioso__DashboardBootstrapPassword=$MARKETMAFIOSO_DEV_BASIC_AUTH_PASSWORD
           ENV
           chmod 600 marketmafioso-dev.env
           cat > marketmafioso-dev.caddy <<CADDY
@@ -90,9 +93,6 @@ jobs:
           }
 
           handle @marketmafiosoDashboard {
-              basic_auth {
-                  marketmafioso $basic_auth_hash
-              }
               reverse_proxy 127.0.0.1:5088
           }
           CADDY

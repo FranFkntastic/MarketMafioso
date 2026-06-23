@@ -1,6 +1,6 @@
 # Hosted Receiver
 
-MarketMafioso can send inventory snapshots to a hosted ASP.NET receiver instead of requiring the local backend during normal use.
+MarketMafioso can send inventory snapshots to a hosted or self-hosted ASP.NET receiver instead of requiring the local backend during normal use.
 
 ## Environments
 
@@ -13,6 +13,8 @@ Local fallback:      http://localhost:8080/inventory
 ```
 
 Stored snapshots are local to the receiver environment. A snapshot sent to dev is not visible in production, and a production snapshot is not visible in dev unless it is explicitly exported and imported later.
+
+MarketMafioso does not provide public multi-user inventory hosting. Users who want their own backend can run the released server package themselves and manage their own service, domain, TLS, and backups.
 
 ## Plugin Configuration
 
@@ -40,11 +42,16 @@ MarketMafioso__PreviousReadApiKey=<optional-previous-read-secret>
 MarketMafioso__BasePath=/api/marketmafioso
 MarketMafioso__PublicOrigin=https://dev.xivcraftarchitect.com
 MarketMafioso__StorageLabel=dev receiver storage
+MarketMafioso__DatabasePath=/srv/craftarchitect/data/marketmafioso/dev/marketmafioso.db
+MarketMafioso__RawJsonRetentionCount=20
+MarketMafioso__RequireDashboardAuth=true
+MarketMafioso__DashboardBootstrapUsername=marketmafioso
+MarketMafioso__DashboardBootstrapPassword=<dashboard-password>
 ```
 
-`/health` remains public for uptime checks. Inventory ingestion requires the ingest key. `/api/reports...` is optional machine-read API surface: it requires the read key when configured and fails closed when no read key is configured. Browser dashboard routes use Caddy Basic Auth instead.
+`/health` remains public for uptime checks. Inventory ingestion requires the ingest key. `/api/reports...` is optional machine-read API surface: it requires the read key when configured and fails closed when no read key is configured. Browser dashboard routes use app-managed Basic Auth backed by the receiver SQLite database.
 
-The dashboard HTML is protected by Caddy Basic Auth. The dev username is fixed to `marketmafioso`; the password is stored in GitHub Actions as `MARKETMAFIOSO_DEV_BASIC_AUTH_PASSWORD`.
+The dev dashboard username is fixed to `marketmafioso`; the password is stored in GitHub Actions as `MARKETMAFIOSO_DEV_BASIC_AUTH_PASSWORD`. Bootstrap credentials create the first local dashboard admin user only when no dashboard users exist.
 
 ## Dev VPS Deployment
 
@@ -73,7 +80,7 @@ MARKETMAFIOSO_DEV_READ_API_KEY
 MARKETMAFIOSO_DEV_PREVIOUS_READ_API_KEY
 ```
 
-The workflow installs or updates the `marketmafioso-dev` systemd service, stores dev data under `/srv/craftarchitect/data/marketmafioso/dev`, and configures the dev Caddy site for public health, API-key ingest/read routes, and Basic-Auth dashboard routes.
+The workflow installs or updates the `marketmafioso-dev` systemd service, stores dev data under `/srv/craftarchitect/data/marketmafioso/dev`, and configures the dev Caddy site for public health, API-key ingest/read routes, and proxied dashboard routes.
 
 ## First-Time Setup
 
@@ -99,7 +106,7 @@ Paste only the ingest key into the plugin's `API Key` field.
 
 ## Caddy Shape
 
-Use Caddy routing so plugin/API traffic reaches the app with `X-Api-Key`, while dashboard pages require human Basic Auth.
+Use Caddy routing so plugin/API and dashboard traffic reach the app. The app handles dashboard Basic Auth.
 
 ```caddyfile
 dev.xivcraftarchitect.com {
@@ -116,9 +123,6 @@ dev.xivcraftarchitect.com {
     }
 
     handle @marketmafiosoDashboard {
-        basic_auth {
-            marketmafioso <hashed-password>
-        }
         reverse_proxy 127.0.0.1:5088
     }
 }
@@ -130,13 +134,21 @@ The deployed Caddy fragment is installed as `root:root` with mode `644` so the C
 
 ## Data Storage
 
-The receiver stores JSON files under:
+The receiver stores structured inventory data in SQLite:
 
 ```text
-MarketMafioso.Server/data/reports/
+MarketMafioso.Server/data/marketmafioso.db
 ```
 
-For a VPS deployment, point the service working directory or content root at a durable deployment folder and back up that `data/reports` directory if snapshots matter.
+For the dev VPS, the database is:
+
+```text
+/srv/craftarchitect/data/marketmafioso/dev/marketmafioso.db
+```
+
+The original incoming JSON is retained only for the newest `MarketMafioso__RawJsonRetentionCount` snapshots, defaulting to `20`. Older snapshots remain available through structured dashboard and API views, but raw JSON routes return `410 Gone` with `raw_json_pruned`.
+
+On first startup after the SQLite migration, existing JSON files under `data/reports/*.json` are imported into the default local account. The import is idempotent and does not delete source JSON files.
 
 ## Testing
 

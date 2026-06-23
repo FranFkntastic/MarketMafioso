@@ -1,0 +1,193 @@
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.FileProviders;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging.Abstractions;
+using MarketMafioso.Server.Sqlite;
+
+namespace MarketMafioso.Server.Tests;
+
+public sealed class InventoryReportStoreSqliteTests
+{
+    [Fact]
+    public async Task SaveAsync_PersistsStructuredSnapshotForAccount()
+    {
+        var fixture = await StoreFixture.CreateAsync();
+
+        var stored = await fixture.Store.SaveAsync(
+            fixture.AccountId,
+            CreateReport("Structured Character", "Gilgamesh", 42),
+            "provided",
+            """{"characterName":"Structured Character"}""",
+            CancellationToken.None);
+
+        var loaded = await fixture.Store.GetAsync(fixture.AccountId, stored.Id, CancellationToken.None);
+        var summaries = await fixture.Store.ListSummariesAsync(fixture.AccountId, characterId: null, CancellationToken.None);
+
+        Assert.NotNull(loaded);
+        Assert.Equal("Structured Character", loaded.Report.CharacterName);
+        Assert.Equal("Gilgamesh", loaded.Report.HomeWorld);
+        Assert.Single(loaded.Report.PlayerInventory);
+        Assert.Equal((uint)42, loaded.Report.PlayerInventory[0].Items[0].ItemId);
+        Assert.Single(summaries);
+        Assert.Equal(stored.Id, summaries[0].Id);
+    }
+
+    [Fact]
+    public async Task SaveAsync_UpsertsCharacterForAccount()
+    {
+        var fixture = await StoreFixture.CreateAsync();
+
+        await fixture.Store.SaveAsync(
+            fixture.AccountId,
+            CreateReport("Character One", "Cactuar", 2),
+            null,
+            "{}",
+            CancellationToken.None);
+        await fixture.Store.SaveAsync(
+            fixture.AccountId,
+            CreateReport("Character One", "Cactuar", 3),
+            null,
+            "{}",
+            CancellationToken.None);
+
+        Assert.Equal(1, await fixture.CountAsync("characters"));
+    }
+
+    [Fact]
+    public async Task ListSummariesAsync_IsScopedByAccount()
+    {
+        var fixture = await StoreFixture.CreateAsync();
+        var otherAccountId = await fixture.CreateAccountAsync("Other");
+
+        await fixture.Store.SaveAsync(
+            fixture.AccountId,
+            CreateReport("Visible Character", "Leviathan", 2),
+            null,
+            "{}",
+            CancellationToken.None);
+        await fixture.Store.SaveAsync(
+            otherAccountId,
+            CreateReport("Hidden Character", "Leviathan", 3),
+            null,
+            "{}",
+            CancellationToken.None);
+
+        var summaries = await fixture.Store.ListSummariesAsync(fixture.AccountId, characterId: null, CancellationToken.None);
+
+        Assert.Single(summaries);
+        Assert.Equal("Visible Character", summaries[0].CharacterName);
+    }
+
+    private static InventoryReport CreateReport(string characterName, string homeWorld, uint itemId) =>
+        new()
+        {
+            Metadata = new InventoryReportMetadata
+            {
+                SchemaVersion = 1,
+                SourcePlugin = "MarketMafioso",
+                PluginVersion = "1.0.0.0",
+                GeneratedAtUtc = "2026-06-23T12:00:00.0000000Z",
+            },
+            CharacterName = characterName,
+            HomeWorld = homeWorld,
+            Timestamp = "2026-06-23T12:00:00.0000000Z",
+            PlayerInventory =
+            [
+                new InventoryBag
+                {
+                    BagName = "Inventory1",
+                    Items =
+                    [
+                        new ItemSlot
+                        {
+                            ItemId = itemId,
+                            ItemName = $"Item {itemId}",
+                            Quantity = 12,
+                            IsHQ = itemId % 2 == 0,
+                            Condition = 100,
+                        },
+                    ],
+                },
+            ],
+        };
+
+    private sealed class StoreFixture
+    {
+        private readonly SqliteConnectionFactory connectionFactory;
+
+        private StoreFixture(SqliteConnectionFactory connectionFactory)
+        {
+            this.connectionFactory = connectionFactory;
+        }
+
+        public required InventoryReportStore Store { get; init; }
+        public required long AccountId { get; init; }
+
+        public static async Task<StoreFixture> CreateAsync()
+        {
+            var databasePath = CreateDatabasePath();
+            var configuration = new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["MarketMafioso:DatabasePath"] = databasePath,
+                })
+                .Build();
+            var environment = new TestHostEnvironment(Path.GetDirectoryName(databasePath)!);
+            var connectionFactory = new SqliteConnectionFactory(configuration, environment);
+            var migrator = new SqliteSchemaMigrator(connectionFactory, NullLogger<SqliteSchemaMigrator>.Instance);
+            await migrator.MigrateAsync(CancellationToken.None);
+            await using var connection = await connectionFactory.OpenConnectionAsync(CancellationToken.None);
+            await using var command = connection.CreateCommand();
+            command.CommandText = """
+                INSERT INTO accounts (display_name, created_at_utc)
+                VALUES ('Default', $createdAt);
+                SELECT last_insert_rowid();
+                """;
+            command.Parameters.AddWithValue("$createdAt", DateTimeOffset.UtcNow.ToString("O"));
+            var accountId = (long)(await command.ExecuteScalarAsync(CancellationToken.None))!;
+
+            return new StoreFixture(connectionFactory)
+            {
+                Store = new InventoryReportStore(connectionFactory, configuration, NullLogger<InventoryReportStore>.Instance),
+                AccountId = accountId,
+            };
+        }
+
+        public async Task<long> CreateAccountAsync(string displayName)
+        {
+            await using var connection = await connectionFactory.OpenConnectionAsync(CancellationToken.None);
+            await using var command = connection.CreateCommand();
+            command.CommandText = """
+                INSERT INTO accounts (display_name, created_at_utc)
+                VALUES ($displayName, $createdAt);
+                SELECT last_insert_rowid();
+                """;
+            command.Parameters.AddWithValue("$displayName", displayName);
+            command.Parameters.AddWithValue("$createdAt", DateTimeOffset.UtcNow.ToString("O"));
+            return (long)(await command.ExecuteScalarAsync(CancellationToken.None))!;
+        }
+
+        public async Task<int> CountAsync(string tableName)
+        {
+            await using var connection = await connectionFactory.OpenConnectionAsync(CancellationToken.None);
+            await using var command = connection.CreateCommand();
+            command.CommandText = $"SELECT COUNT(*) FROM {tableName}";
+            return checked((int)(long)(await command.ExecuteScalarAsync(CancellationToken.None))!);
+        }
+
+        private static string CreateDatabasePath()
+        {
+            var directory = Path.Combine(Path.GetTempPath(), "MarketMafioso.Server.Tests", Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(directory);
+            return Path.Combine(directory, "marketmafioso.db");
+        }
+    }
+
+    private sealed class TestHostEnvironment(string contentRootPath) : IHostEnvironment
+    {
+        public string EnvironmentName { get; set; } = Environments.Development;
+        public string ApplicationName { get; set; } = "MarketMafioso.Server.Tests";
+        public string ContentRootPath { get; set; } = contentRootPath;
+        public IFileProvider ContentRootFileProvider { get; set; } = new NullFileProvider();
+    }
+}
