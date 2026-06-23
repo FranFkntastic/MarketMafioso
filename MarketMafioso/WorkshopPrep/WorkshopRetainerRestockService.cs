@@ -296,7 +296,7 @@ public sealed class WorkshopRetainerRestockService
             return new(false, 0, $"Retainer slot {stack.Page}/{stack.SlotIndex} did not change after full-stack retrieval.");
         }
 
-        if (slot->ItemId == stack.ItemId && slot->Quantity <= expectedRemaining)
+        if (slot->ItemId == stack.ItemId && slot->Quantity == expectedRemaining)
             return new(true, retrieved, "Retrieved partial stack.");
 
         return new(false, 0, $"Retainer slot {stack.Page}/{stack.SlotIndex} did not decrease after retrieval.");
