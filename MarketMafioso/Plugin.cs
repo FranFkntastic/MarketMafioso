@@ -6,6 +6,7 @@ using Dalamud.IoC;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
 using Dalamud.Interface.Windowing;
+using MarketMafioso.WorkshopPrep;
 using MarketMafioso.Windows;
 
 namespace MarketMafioso;
@@ -34,6 +35,8 @@ public sealed class Plugin : IDalamudPlugin
     private readonly HttpReporter reporter;
     private readonly RetainerCacheManager retainerCache;
     private readonly AutoRetainerRefreshService autoRetainerRefresh;
+    private readonly WorkshopProjectCatalog workshopCatalog;
+    private readonly VIWIWorkshoppaIpc viwiWorkshoppaIpc;
     private readonly WindowSystem windowSystem = new("MarketMafioso");
     private readonly MainWindow mainWindow;
 
@@ -56,7 +59,16 @@ public sealed class Plugin : IDalamudPlugin
             DataManager,
             retainerCache,
             reporter);
-        mainWindow = new MainWindow(Configuration, reporter, scanner, autoRetainerRefresh, Log);
+        workshopCatalog = new WorkshopProjectCatalog(DataManager, Log);
+        viwiWorkshoppaIpc = new VIWIWorkshoppaIpc(new DalamudVIWIWorkshoppaIpcAdapter(PluginInterface, Log));
+        mainWindow = new MainWindow(
+            Configuration,
+            reporter,
+            scanner,
+            autoRetainerRefresh,
+            workshopCatalog,
+            viwiWorkshoppaIpc,
+            Log);
 
         windowSystem.AddWindow(mainWindow);
 

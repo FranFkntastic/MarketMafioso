@@ -4,6 +4,7 @@ using System.Numerics;
 using Dalamud.Interface.Windowing;
 using Dalamud.Plugin.Services;
 using Dalamud.Bindings.ImGui;
+using MarketMafioso.WorkshopPrep;
 
 namespace MarketMafioso.Windows;
 
@@ -13,6 +14,8 @@ public class MainWindow : Window, IDisposable
     private readonly HttpReporter reporter;
     private readonly InventoryScanner scanner;
     private readonly AutoRetainerRefreshService autoRetainerRefresh;
+    private readonly WorkshopProjectCatalog workshopCatalog;
+    private readonly VIWIWorkshoppaIpc viwiWorkshoppaIpc;
     private readonly IPluginLog log;
 
     private string urlBuffer = string.Empty;
@@ -36,6 +39,8 @@ public class MainWindow : Window, IDisposable
         HttpReporter reporter,
         InventoryScanner scanner,
         AutoRetainerRefreshService autoRetainerRefresh,
+        WorkshopProjectCatalog workshopCatalog,
+        VIWIWorkshoppaIpc viwiWorkshoppaIpc,
         IPluginLog log)
         : base("MarketMafioso##MarketMafiosoMainWindow",
                ImGuiWindowFlags.None)
@@ -44,6 +49,8 @@ public class MainWindow : Window, IDisposable
         this.reporter = reporter;
         this.scanner = scanner;
         this.autoRetainerRefresh = autoRetainerRefresh;
+        this.workshopCatalog = workshopCatalog;
+        this.viwiWorkshoppaIpc = viwiWorkshoppaIpc;
         this.log = log;
 
         SizeConstraints = new WindowSizeConstraints
