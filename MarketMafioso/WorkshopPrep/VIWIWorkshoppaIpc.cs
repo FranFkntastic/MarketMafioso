@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Dalamud.Plugin;
+using Dalamud.Plugin.Services;
 
 namespace MarketMafioso.WorkshopPrep;
 
@@ -51,10 +52,12 @@ public sealed class DalamudVIWIWorkshoppaIpcAdapter : IVIWIWorkshoppaIpcAdapter
     private const string AddQueueItemChannel = "VIWI.Workshoppa.AddQueueItem";
 
     private readonly IDalamudPluginInterface pluginInterface;
+    private readonly IPluginLog log;
 
-    public DalamudVIWIWorkshoppaIpcAdapter(IDalamudPluginInterface pluginInterface)
+    public DalamudVIWIWorkshoppaIpcAdapter(IDalamudPluginInterface pluginInterface, IPluginLog log)
     {
         this.pluginInterface = pluginInterface;
+        this.log = log;
     }
 
     public bool IsAvailable => pluginInterface.InstalledPlugins.Any(plugin =>
@@ -67,8 +70,9 @@ public sealed class DalamudVIWIWorkshoppaIpcAdapter : IVIWIWorkshoppaIpcAdapter
         {
             return pluginInterface.GetIpcSubscriber<bool>(ClearQueueChannel).InvokeFunc();
         }
-        catch
+        catch (Exception ex)
         {
+            log.Warning(ex, "[MarketMafioso] VIWI Workshoppa clear queue IPC failed.");
             return false;
         }
     }
@@ -80,8 +84,11 @@ public sealed class DalamudVIWIWorkshoppaIpcAdapter : IVIWIWorkshoppaIpcAdapter
             return pluginInterface.GetIpcSubscriber<uint, int, bool>(AddQueueItemChannel)
                 .InvokeFunc(workshopItemId, quantity);
         }
-        catch
+        catch (Exception ex)
         {
+            log.Warning(
+                ex,
+                $"[MarketMafioso] VIWI Workshoppa add queue item IPC failed for {workshopItemId} x{quantity}.");
             return false;
         }
     }
