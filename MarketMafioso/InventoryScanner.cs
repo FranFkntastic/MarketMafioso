@@ -82,6 +82,14 @@ public class InventoryScanner
         return bags;
     }
 
+    public IReadOnlyDictionary<uint, int> CountPlayerInventory(Configuration config)
+    {
+        return ScanPlayerInventory(config)
+            .SelectMany(bag => bag.Items)
+            .GroupBy(item => item.ItemId)
+            .ToDictionary(group => group.Key, group => group.Sum(item => (int)item.Quantity));
+    }
+
     public List<InventoryBag> ScanCurrentRetainer(Configuration config)
     {
         var bags = ScanContainers(RetainerContainers, config);
