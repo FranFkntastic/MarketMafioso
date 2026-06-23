@@ -1,28 +1,44 @@
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using Microsoft.Extensions.Primitives;
 using MarketMafioso.Server;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddSingleton<InventoryReportStore>();
 
 var app = builder.Build();
-var requiredApiKey = app.Configuration["MarketMafioso:ApiKey"];
+var ingestApiKey = FirstConfigured(
+    app.Configuration["MarketMafioso:IngestApiKey"],
+    app.Configuration["MarketMafioso:ApiKey"]);
+var previousIngestApiKey = app.Configuration["MarketMafioso:PreviousIngestApiKey"];
+var readApiKey = app.Configuration["MarketMafioso:ReadApiKey"];
+var previousReadApiKey = app.Configuration["MarketMafioso:PreviousReadApiKey"];
 var requireApiKey = app.Configuration.GetValue<bool>("MarketMafioso:RequireApiKey") ||
-                    !string.IsNullOrWhiteSpace(requiredApiKey);
+                    !string.IsNullOrWhiteSpace(ingestApiKey);
 var basePath = app.Configuration["MarketMafioso:BasePath"];
+var publicOrigin = app.Configuration["MarketMafioso:PublicOrigin"];
+var storageLabel = app.Configuration["MarketMafioso:StorageLabel"];
 
-if (requireApiKey && string.IsNullOrWhiteSpace(requiredApiKey))
-    throw new InvalidOperationException("MarketMafioso:ApiKey is required when API key authentication is enabled.");
+if (requireApiKey && string.IsNullOrWhiteSpace(ingestApiKey))
+    throw new InvalidOperationException("MarketMafioso:IngestApiKey is required when API key authentication is enabled.");
 
 if (!string.IsNullOrWhiteSpace(basePath))
     app.UsePathBase(basePath);
 
 app.Use(async (context, next) =>
 {
-    if (RequiresApiKey(context.Request, requireApiKey) &&
-        context.Request.Headers["X-Api-Key"].ToString() != requiredApiKey)
+    var purpose = RequiredApiKeyPurpose(context.Request, requireApiKey);
+    if (purpose != ApiKeyPurpose.None &&
+        !HasValidApiKey(
+            context.Request,
+            purpose,
+            ingestApiKey,
+            previousIngestApiKey,
+            readApiKey,
+            previousReadApiKey))
     {
-        context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+        await WriteUnauthorizedAsync(context);
         return;
     }
 
@@ -32,8 +48,14 @@ app.Use(async (context, next) =>
 app.MapGet("/", async (HttpRequest request, InventoryReportStore store, string? deleted, CancellationToken token) =>
 {
     var reports = await store.ListSummariesAsync(token);
+    var csrfToken = SetCsrfCookie(request.HttpContext.Response);
     return Results.Content(
-        RenderDashboard(reports, store.ReportDirectory, deleted, request.PathBase),
+        RenderDashboard(
+            reports,
+            StorageDisplayName(store.ReportDirectory, storageLabel, requireApiKey),
+            deleted,
+            request.PathBase,
+            csrfToken),
         "text/html; charset=utf-8");
 });
 
@@ -72,14 +94,32 @@ app.MapGet("/api/reports/{id}", async (string id, InventoryReportStore store, Ca
     return report == null ? Results.NotFound() : Results.Ok(report);
 });
 
+app.MapGet("/reports/latest/json", async (InventoryReportStore store, CancellationToken token) =>
+{
+    var report = await store.GetLatestAsync(token);
+    return report == null ? Results.NotFound() : Results.Ok(report);
+});
+
+app.MapGet("/reports/{id}/json", async (string id, InventoryReportStore store, CancellationToken token) =>
+{
+    var report = await store.GetAsync(id, token);
+    return report == null ? Results.NotFound() : Results.Ok(report);
+});
+
 app.MapDelete("/api/reports/{id}", async (string id, InventoryReportStore store, CancellationToken token) =>
 {
+    if (requireApiKey)
+        return Results.NotFound();
+
     var deleted = await store.DeleteAsync(id, token);
     return deleted ? Results.NoContent() : Results.NotFound();
 });
 
 app.MapDelete("/api/reports", async (InventoryReportStore store, CancellationToken token) =>
 {
+    if (requireApiKey)
+        return Results.NotFound();
+
     var deleted = await store.DeleteAllAsync(token);
     return Results.Ok(new { deleted });
 });
@@ -87,15 +127,19 @@ app.MapDelete("/api/reports", async (InventoryReportStore store, CancellationTok
 app.MapGet("/reports/{id}", async (HttpRequest request, string id, InventoryReportStore store, CancellationToken token) =>
 {
     var report = await store.GetAsync(id, token);
+    var csrfToken = SetCsrfCookie(request.HttpContext.Response);
     return report == null
         ? Results.NotFound(RenderNotFound(id, request.PathBase))
         : Results.Content(
-            RenderReportDetails(report, InventorySnapshotViewBuilder.Build(report), request.PathBase),
+            RenderReportDetails(report, InventorySnapshotViewBuilder.Build(report), request.PathBase, csrfToken),
             "text/html; charset=utf-8");
 });
 
 app.MapPost("/reports/{id}/delete", async (HttpRequest request, string id, InventoryReportStore store, CancellationToken token) =>
 {
+    if (!await IsValidDashboardPostAsync(request, publicOrigin, token))
+        return Results.BadRequest(new { error = "invalid_csrf" });
+
     var deleted = await store.DeleteAsync(id, token);
     return deleted
         ? Results.Redirect($"{request.PathBase}/?deleted={Uri.EscapeDataString($"snapshot {id}")}")
@@ -104,6 +148,9 @@ app.MapPost("/reports/{id}/delete", async (HttpRequest request, string id, Inven
 
 app.MapPost("/reports/delete-all", async (HttpRequest request, InventoryReportStore store, CancellationToken token) =>
 {
+    if (!await IsValidDashboardPostAsync(request, publicOrigin, token))
+        return Results.BadRequest(new { error = "invalid_csrf" });
+
     var deleted = await store.DeleteAllAsync(token);
     return Results.Redirect($"{request.PathBase}/?deleted={Uri.EscapeDataString($"{deleted:N0} snapshots")}");
 });
@@ -116,35 +163,171 @@ async Task<IResult> SaveInventoryReport(
     InventoryReportStore store,
     CancellationToken token)
 {
-    var suppliedApiKey = request.Headers["X-Api-Key"].ToString();
-    if (requireApiKey && suppliedApiKey != requiredApiKey)
-        return Results.Unauthorized();
+    if (requireApiKey &&
+        !HasValidApiKey(
+            request,
+            ApiKeyPurpose.Ingest,
+            ingestApiKey,
+            previousIngestApiKey,
+            readApiKey,
+            previousReadApiKey))
+        return InvalidApiKey();
 
     if (report.PlayerInventory.Count == 0 && report.Retainers.Count == 0)
         return Results.BadRequest(new { error = "Report must include at least one player inventory bag or retainer." });
 
+    var suppliedApiKey = request.Headers["X-Api-Key"].ToString();
     var stored = await store.SaveAsync(report, suppliedApiKey, token);
-    return Results.Created($"/api/reports/{stored.Id}", stored.Summary);
+    return Results.Created(AppUrl(request.PathBase, $"/api/reports/{stored.Id}"), stored.Summary);
 }
 
-static bool RequiresApiKey(HttpRequest request, bool requireApiKey)
+static ApiKeyPurpose RequiredApiKeyPurpose(HttpRequest request, bool requireApiKey)
 {
     if (!requireApiKey)
+        return ApiKeyPurpose.None;
+
+    if (IsReportsApiRead(request))
+        return ApiKeyPurpose.Read;
+
+    if (IsInventoryPost(request))
+        return ApiKeyPurpose.Ingest;
+
+    return ApiKeyPurpose.None;
+}
+
+static bool IsInventoryPost(HttpRequest request) =>
+    HttpMethods.IsPost(request.Method) &&
+    (request.Path.Equals("/inventory", StringComparison.OrdinalIgnoreCase) ||
+     request.Path.Equals("/api/inventory", StringComparison.OrdinalIgnoreCase));
+
+static bool IsReportsApiRead(HttpRequest request) =>
+    HttpMethods.IsGet(request.Method) &&
+    request.Path.StartsWithSegments("/api/reports");
+
+static bool HasValidApiKey(
+    HttpRequest request,
+    ApiKeyPurpose purpose,
+    string? ingestApiKey,
+    string? previousIngestApiKey,
+    string? readApiKey,
+    string? previousReadApiKey)
+{
+    var supplied = GetSingleApiKeyHeader(request.Headers["X-Api-Key"]);
+    if (string.IsNullOrWhiteSpace(supplied))
         return false;
 
-    if (request.Path.StartsWithSegments("/api/reports"))
+    return purpose switch
+    {
+        ApiKeyPurpose.Ingest =>
+            MatchesConfiguredKey(supplied, ingestApiKey) ||
+            MatchesConfiguredKey(supplied, previousIngestApiKey),
+        ApiKeyPurpose.Read =>
+            MatchesConfiguredKey(supplied, readApiKey) ||
+            (!string.IsNullOrWhiteSpace(readApiKey) && MatchesConfiguredKey(supplied, previousReadApiKey)),
+        _ => false,
+    };
+}
+
+static string? GetSingleApiKeyHeader(StringValues values)
+{
+    if (values.Count != 1)
+        return null;
+
+    return values[0];
+}
+
+static bool MatchesConfiguredKey(string supplied, string? configured)
+{
+    if (string.IsNullOrWhiteSpace(configured))
+        return false;
+
+    var suppliedBytes = Encoding.UTF8.GetBytes(supplied);
+    var configuredBytes = Encoding.UTF8.GetBytes(configured);
+
+    return suppliedBytes.Length == configuredBytes.Length &&
+           CryptographicOperations.FixedTimeEquals(suppliedBytes, configuredBytes);
+}
+
+static Task WriteUnauthorizedAsync(HttpContext context)
+{
+    context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+    context.Response.ContentType = "application/json; charset=utf-8";
+    return context.Response.WriteAsJsonAsync(new { error = "invalid_api_key" });
+}
+
+static IResult InvalidApiKey() => Results.Json(new { error = "invalid_api_key" }, statusCode: StatusCodes.Status401Unauthorized);
+
+static string? FirstConfigured(params string?[] values) =>
+    values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
+
+static string StorageDisplayName(string reportDirectory, string? storageLabel, bool isHosted) =>
+    !string.IsNullOrWhiteSpace(storageLabel)
+        ? storageLabel
+        : isHosted
+            ? "hosted receiver storage"
+            : reportDirectory;
+
+static string SetCsrfCookie(HttpResponse response)
+{
+    var tokenBytes = RandomNumberGenerator.GetBytes(32);
+    var token = Convert.ToBase64String(tokenBytes)
+        .TrimEnd('=')
+        .Replace("+", "-", StringComparison.Ordinal)
+        .Replace("/", "_", StringComparison.Ordinal);
+
+    response.Cookies.Append(
+        "mmf_csrf",
+        token,
+        new CookieOptions
+        {
+            HttpOnly = true,
+            SameSite = SameSiteMode.Strict,
+            IsEssential = true,
+        });
+
+    return token;
+}
+
+static async Task<bool> IsValidDashboardPostAsync(HttpRequest request, string? publicOrigin, CancellationToken token)
+{
+    if (!HasValidOrigin(request, publicOrigin))
+        return false;
+
+    if (!request.HasFormContentType)
+        return false;
+
+    var form = await request.ReadFormAsync(token);
+    var formToken = form["csrf"].ToString();
+    var cookieToken = request.Cookies["mmf_csrf"];
+
+    return MatchesConfiguredKey(formToken, cookieToken);
+}
+
+static bool HasValidOrigin(HttpRequest request, string? publicOrigin)
+{
+    if (string.IsNullOrWhiteSpace(publicOrigin))
         return true;
 
-    return HttpMethods.IsPost(request.Method) &&
-           (request.Path.Equals("/inventory", StringComparison.OrdinalIgnoreCase) ||
-            request.Path.Equals("/api/inventory", StringComparison.OrdinalIgnoreCase));
+    var origin = request.Headers.Origin.ToString();
+    if (!string.IsNullOrWhiteSpace(origin))
+        return string.Equals(origin, publicOrigin, StringComparison.OrdinalIgnoreCase);
+
+    var referer = request.Headers.Referer.ToString();
+    if (!Uri.TryCreate(referer, UriKind.Absolute, out var refererUri))
+        return false;
+
+    return string.Equals(
+        refererUri.GetLeftPart(UriPartial.Authority),
+        publicOrigin,
+        StringComparison.OrdinalIgnoreCase);
 }
 
 static string RenderDashboard(
     IReadOnlyList<ReportSummary> reports,
-    string reportDirectory,
+    string storageDisplayName,
     string? deleted,
-    PathString pathBase)
+    PathString pathBase,
+    string csrfToken)
 {
     var rows = new StringBuilder();
     foreach (var report in reports)
@@ -159,8 +342,9 @@ static string RenderDashboard(
                 <td>{report.RetainerCount:N0} retainers / {report.RetainerItemStacks:N0} stacks</td>
                 <td class="actions">
                     <a class="button" href="{Html(AppUrl(pathBase, $"/reports/{report.Id}"))}">View</a>
-                    <a class="button" href="{Html(AppUrl(pathBase, $"/api/reports/{report.Id}"))}">JSON</a>
+                    <a class="button" href="{Html(AppUrl(pathBase, $"/reports/{report.Id}/json"))}">JSON</a>
                     <form method="post" action="{Html(AppUrl(pathBase, $"/reports/{report.Id}/delete"))}" onsubmit="return confirm('Delete snapshot {Html(report.Id)}?');">
+                        <input type="hidden" name="csrf" value="{Html(csrfToken)}">
                         <button class="danger" type="submit">Delete</button>
                     </form>
                 </td>
@@ -313,8 +497,9 @@ static string RenderDashboard(
                     </div>
                     <div class="toolbar">
                         <a class="button" href="{{Html(AppUrl(pathBase, "/"))}}">Refresh</a>
-                        <a class="button" href="{{Html(AppUrl(pathBase, "/api/reports/latest"))}}">Latest JSON</a>
+                        <a class="button" href="{{Html(AppUrl(pathBase, "/reports/latest/json"))}}">Latest JSON</a>
                         <form method="post" action="{{Html(AppUrl(pathBase, "/reports/delete-all"))}}" onsubmit="return confirm('Delete all stored snapshots?');">
+                            <input type="hidden" name="csrf" value="{{Html(csrfToken)}}">
                             <button class="danger" type="submit">Delete All</button>
                         </form>
                     </div>
@@ -324,7 +509,7 @@ static string RenderDashboard(
                     <div class="card"><div class="label">Snapshots</div><div class="value">{{reports.Count:N0}}</div></div>
                     <div class="card"><div class="label">Latest received</div><div class="value" style="font-size: 15px;">{{Html(latest)}}</div></div>
                 </section>
-                <div class="path">Storage: <code>{{Html(reportDirectory)}}</code></div>
+                <div class="path">Storage: <code>{{Html(storageDisplayName)}}</code></div>
                 {{emptyState}}
                 <h2>Snapshots</h2>
                 <table>
@@ -349,7 +534,7 @@ static string RenderDashboard(
         """;
 }
 
-static string RenderReportDetails(StoredInventoryReport stored, InventorySnapshotView view, PathString pathBase)
+static string RenderReportDetails(StoredInventoryReport stored, InventorySnapshotView view, PathString pathBase, string csrfToken)
 {
     var json = JsonSerializer.Serialize(stored, new JsonSerializerOptions(JsonSerializerDefaults.Web)
     {
@@ -426,9 +611,10 @@ static string RenderReportDetails(StoredInventoryReport stored, InventorySnapsho
                     </div>
                     <div>
                         <a class="button" href="{{Html(AppUrl(pathBase, "/"))}}">Back</a>
-                        <a class="button" href="{{Html(AppUrl(pathBase, $"/api/reports/{stored.Id}"))}}">JSON</a>
-                        <a class="button" href="{{Html(AppUrl(pathBase, $"/api/reports/{stored.Id}/view"))}}">Parsed JSON</a>
+                        <a class="button" href="{{Html(AppUrl(pathBase, $"/reports/{stored.Id}/json"))}}">JSON</a>
+                        <a class="button" href="{{Html(AppUrl(pathBase, $"/reports/{stored.Id}/json"))}}">Parsed JSON</a>
                         <form method="post" action="{{Html(AppUrl(pathBase, $"/reports/{stored.Id}/delete"))}}" onsubmit="return confirm('Delete snapshot {{Html(stored.Id)}}?');">
+                            <input type="hidden" name="csrf" value="{{Html(csrfToken)}}">
                             <button class="danger" type="submit">Delete</button>
                         </form>
                     </div>
@@ -543,3 +729,10 @@ static string Html(string? value) =>
         .Replace("\"", "&quot;", StringComparison.Ordinal);
 
 public partial class Program;
+
+enum ApiKeyPurpose
+{
+    None,
+    Ingest,
+    Read,
+}

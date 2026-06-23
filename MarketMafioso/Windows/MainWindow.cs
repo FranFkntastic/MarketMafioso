@@ -161,10 +161,15 @@ public class MainWindow : Window, IDisposable
         if (ImGui.Button("Dev VPS"))
             ApplyServerUrlPreset(DevReceiverUrl);
         ImGui.SameLine();
-        if (ImGui.Button("Production VPS"))
-            ApplyServerUrlPreset(ProductionReceiverUrl);
+        ImGui.BeginDisabled();
+        ImGui.Button("Production VPS (future)");
+        ImGui.EndDisabled();
 
-        ImGui.Text("API Key (optional - sent as X-Api-Key header):");
+        var endpoint = ReceiverEndpointClassifier.Classify(urlBuffer);
+        var requiresApiKey = endpoint.RequiresApiKey;
+        ImGui.Text(requiresApiKey
+            ? "API Key (required for this endpoint):"
+            : "API Key (optional - sent as X-Api-Key header):");
         var keyWidth = ImGui.GetContentRegionAvail().X - 70;
         ImGui.SetNextItemWidth(keyWidth);
         var flags = showApiKey ? ImGuiInputTextFlags.None : ImGuiInputTextFlags.Password;
@@ -176,6 +181,13 @@ public class MainWindow : Window, IDisposable
         ImGui.SameLine();
         if (ImGui.Button(showApiKey ? "Hide##k" : "Show##k", new Vector2(60, 0)))
             showApiKey = !showApiKey;
+
+        if (endpoint.Kind == ReceiverEndpointKind.Invalid)
+            ImGui.TextColored(ColError, "Enter a valid HTTP or HTTPS receiver URL.");
+        else if (requiresApiKey && string.IsNullOrWhiteSpace(apiKeyBuffer))
+            ImGui.TextColored(ColError, "This endpoint requires an API key before reports can be sent.");
+        else if (endpoint.Kind == ReceiverEndpointKind.CustomRemote)
+            ImGui.TextColored(ColMuted, "Custom remote endpoint. API key is required by default.");
     }
 
     private void ApplyServerUrlPreset(string serverUrl)

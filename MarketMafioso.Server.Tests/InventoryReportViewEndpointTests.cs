@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
@@ -191,7 +192,7 @@ public sealed class InventoryReportViewEndpointTests
         {
             Content = JsonContent.Create(CreateReport("Hosted Character")),
         };
-        request.Headers.Add("X-Api-Key", "test-secret");
+        request.Headers.Add("X-Api-Key", "test-ingest-secret");
 
         var authenticated = await client.SendAsync(request);
 
@@ -199,28 +200,130 @@ public sealed class InventoryReportViewEndpointTests
     }
 
     [Fact]
-    public async Task HostedMode_RequiresApiKeyForReportsApi()
+    public async Task HostedMode_AcceptsPreviousIngestKeyForInventoryPost()
+    {
+        await using var application = CreateHostedApplication(
+            new KeyValuePair<string, string?>("MarketMafioso:PreviousIngestApiKey", "previous-ingest-secret"));
+        using var client = application.CreateClient();
+
+        var response = await SendWithKeyAsync(
+            client,
+            HttpMethod.Post,
+            "/inventory",
+            "previous-ingest-secret",
+            CreateReport("Previous Ingest Character"));
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task HostedMode_RejectsReadKeyForInventoryPost()
+    {
+        await using var application = CreateHostedApplication(
+            new KeyValuePair<string, string?>("MarketMafioso:ReadApiKey", "read-secret"));
+        using var client = application.CreateClient();
+
+        var response = await SendWithKeyAsync(
+            client,
+            HttpMethod.Post,
+            "/inventory",
+            "read-secret",
+            CreateReport("Read Key Character"));
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        var body = await response.Content.ReadAsStringAsync();
+        Assert.Contains("invalid_api_key", body, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task HostedMode_ReadApiFailsClosedWithoutReadKey()
     {
         await using var application = CreateHostedApplication();
         using var client = application.CreateClient();
 
-        using var createRequest = new HttpRequestMessage(HttpMethod.Post, "/inventory")
-        {
-            Content = JsonContent.Create(CreateReport("Reports Character")),
-        };
-        createRequest.Headers.Add("X-Api-Key", "test-secret");
-        var createResponse = await client.SendAsync(createRequest);
+        var createResponse = await SendWithKeyAsync(
+            client,
+            HttpMethod.Post,
+            "/inventory",
+            "test-ingest-secret",
+            CreateReport("Fails Closed Character"));
+        createResponse.EnsureSuccessStatusCode();
+
+        var unauthenticated = await client.GetAsync("/api/reports");
+        Assert.Equal(HttpStatusCode.Unauthorized, unauthenticated.StatusCode);
+
+        var ingestKeyResponse = await SendWithKeyAsync(client, HttpMethod.Get, "/api/reports", "test-ingest-secret");
+        Assert.Equal(HttpStatusCode.Unauthorized, ingestKeyResponse.StatusCode);
+    }
+
+    [Fact]
+    public async Task HostedMode_ReadApiAcceptsReadKeyAndRejectsIngestKey()
+    {
+        await using var application = CreateHostedApplication(
+            new KeyValuePair<string, string?>("MarketMafioso:ReadApiKey", "read-secret"));
+        using var client = application.CreateClient();
+
+        var createResponse = await SendWithKeyAsync(
+            client,
+            HttpMethod.Post,
+            "/inventory",
+            "test-ingest-secret",
+            CreateReport("Reports Character"));
         createResponse.EnsureSuccessStatusCode();
 
         var unauthenticated = await client.GetAsync("/api/reports");
 
         Assert.Equal(HttpStatusCode.Unauthorized, unauthenticated.StatusCode);
 
-        using var listRequest = new HttpRequestMessage(HttpMethod.Get, "/api/reports");
-        listRequest.Headers.Add("X-Api-Key", "test-secret");
-        var authenticated = await client.SendAsync(listRequest);
+        var ingestKeyResponse = await SendWithKeyAsync(client, HttpMethod.Get, "/api/reports", "test-ingest-secret");
+        Assert.Equal(HttpStatusCode.Unauthorized, ingestKeyResponse.StatusCode);
+
+        var authenticated = await SendWithKeyAsync(client, HttpMethod.Get, "/api/reports", "read-secret");
 
         Assert.Equal(HttpStatusCode.OK, authenticated.StatusCode);
+    }
+
+    [Fact]
+    public async Task HostedMode_ReadApiAcceptsPreviousReadKey()
+    {
+        await using var application = CreateHostedApplication(
+            new KeyValuePair<string, string?>("MarketMafioso:ReadApiKey", "read-secret"),
+            new KeyValuePair<string, string?>("MarketMafioso:PreviousReadApiKey", "previous-read-secret"));
+        using var client = application.CreateClient();
+
+        var createResponse = await SendWithKeyAsync(
+            client,
+            HttpMethod.Post,
+            "/inventory",
+            "test-ingest-secret",
+            CreateReport("Previous Read Character"));
+        createResponse.EnsureSuccessStatusCode();
+
+        var response = await SendWithKeyAsync(client, HttpMethod.Get, "/api/reports", "previous-read-secret");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task HostedMode_DisablesApiDeleteRoutesForApiKeys()
+    {
+        await using var application = CreateHostedApplication(
+            new KeyValuePair<string, string?>("MarketMafioso:ReadApiKey", "read-secret"));
+        using var client = application.CreateClient();
+
+        var createResponse = await SendWithKeyAsync(
+            client,
+            HttpMethod.Post,
+            "/inventory",
+            "test-ingest-secret",
+            CreateReport("Delete Character"));
+        createResponse.EnsureSuccessStatusCode();
+
+        var deleteAllWithIngest = await SendWithKeyAsync(client, HttpMethod.Delete, "/api/reports", "test-ingest-secret");
+        var deleteAllWithRead = await SendWithKeyAsync(client, HttpMethod.Delete, "/api/reports", "read-secret");
+
+        Assert.Equal(HttpStatusCode.NotFound, deleteAllWithIngest.StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, deleteAllWithRead.StatusCode);
     }
 
     [Fact]
@@ -234,31 +337,147 @@ public sealed class InventoryReportViewEndpointTests
         {
             Content = JsonContent.Create(CreateReport("Base Path Character")),
         };
-        request.Headers.Add("X-Api-Key", "test-secret");
+        request.Headers.Add("X-Api-Key", "test-ingest-secret");
 
         var response = await client.SendAsync(request);
 
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        Assert.StartsWith("/api/marketmafioso/api/reports/", response.Headers.Location?.ToString(), StringComparison.Ordinal);
 
         var dashboard = await client.GetStringAsync("/api/marketmafioso/");
 
         Assert.Contains("href=\"/api/marketmafioso/reports/", dashboard, StringComparison.Ordinal);
+        Assert.Contains("href=\"/api/marketmafioso/reports/latest/json\"", dashboard, StringComparison.Ordinal);
+        Assert.DoesNotContain("href=\"/api/marketmafioso/api/reports", dashboard, StringComparison.Ordinal);
     }
 
-    private static WebApplicationFactory<Program> CreateHostedApplication(
-        params KeyValuePair<string, string?>[] extraConfiguration)
+    [Fact]
+    public async Task DashboardJsonRoutes_ReturnReportPayloads()
+    {
+        await using var application = new WebApplicationFactory<Program>();
+        using var client = application.CreateClient();
+
+        var createResponse = await client.PostAsJsonAsync("/inventory", CreateReport("Json Route Character"));
+        createResponse.EnsureSuccessStatusCode();
+
+        var createBody = await createResponse.Content.ReadAsStringAsync();
+        using var createJson = JsonDocument.Parse(createBody);
+        var id = createJson.RootElement.GetProperty("id").GetString();
+
+        var byId = await client.GetAsync($"/reports/{id}/json");
+        var latest = await client.GetAsync("/reports/latest/json");
+
+        Assert.Equal(HttpStatusCode.OK, byId.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, latest.StatusCode);
+
+        var byIdBody = await byId.Content.ReadAsStringAsync();
+        Assert.Contains("Json Route Character", byIdBody, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task HostedMode_DashboardHidesFilesystemPath()
+    {
+        string? contentRoot = null;
+        await using var application = CreateHostedApplication(
+            values =>
+            {
+                contentRoot = values.ContentRoot;
+                values.Configuration["MarketMafioso:BasePath"] = "/api/marketmafioso";
+                values.Configuration["MarketMafioso:StorageLabel"] = "dev receiver storage";
+            });
+        using var client = application.CreateClient();
+
+        var dashboard = await client.GetStringAsync("/api/marketmafioso/");
+
+        Assert.Contains("dev receiver storage", dashboard, StringComparison.Ordinal);
+        Assert.DoesNotContain(contentRoot!, dashboard, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task HostedMode_DashboardDeleteRejectsMissingCsrf()
+    {
+        await using var application = CreateHostedApplication(
+            new KeyValuePair<string, string?>("MarketMafioso:PublicOrigin", "https://dev.xivcraftarchitect.com"));
+        using var client = application.CreateClient();
+
+        var createResponse = await SendWithKeyAsync(
+            client,
+            HttpMethod.Post,
+            "/inventory",
+            "test-ingest-secret",
+            CreateReport("Csrf Missing Character"));
+        createResponse.EnsureSuccessStatusCode();
+
+        var id = await ReadCreatedIdAsync(createResponse);
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"/reports/{id}/delete");
+        request.Headers.Add("Origin", "https://dev.xivcraftarchitect.com");
+        request.Content = new FormUrlEncodedContent([]);
+
+        var response = await client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task HostedMode_DashboardDeleteAcceptsValidCsrf()
+    {
+        await using var application = CreateHostedApplication(
+            new KeyValuePair<string, string?>("MarketMafioso:PublicOrigin", "https://dev.xivcraftarchitect.com"));
+        using var client = application.CreateClient();
+
+        var createResponse = await SendWithKeyAsync(
+            client,
+            HttpMethod.Post,
+            "/inventory",
+            "test-ingest-secret",
+            CreateReport("Csrf Valid Character"));
+        createResponse.EnsureSuccessStatusCode();
+
+        var id = await ReadCreatedIdAsync(createResponse);
+        var detail = await client.GetStringAsync($"/reports/{id}");
+        var csrf = Regex.Match(detail, "name=\"csrf\" value=\"(?<token>[^\"]+)\"").Groups["token"].Value;
+        Assert.False(string.IsNullOrWhiteSpace(csrf));
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"/reports/{id}/delete");
+        request.Headers.Add("Origin", "https://dev.xivcraftarchitect.com");
+        request.Content = new FormUrlEncodedContent(
+        [
+            new KeyValuePair<string, string>("csrf", csrf),
+        ]);
+
+        var response = await client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    private sealed class HostedApplicationValues
+    {
+        public required string ContentRoot { get; init; }
+        public required Dictionary<string, string?> Configuration { get; init; }
+    }
+
+    private static WebApplicationFactory<Program> CreateHostedApplication(params KeyValuePair<string, string?>[] extraConfiguration) =>
+        CreateHostedApplication(values =>
+        {
+            foreach (var item in extraConfiguration)
+                values.Configuration[item.Key] = item.Value;
+        });
+
+    private static WebApplicationFactory<Program> CreateHostedApplication(Action<HostedApplicationValues> configure)
     {
         var values = new Dictionary<string, string?>
         {
             ["MarketMafioso:RequireApiKey"] = "true",
-            ["MarketMafioso:ApiKey"] = "test-secret",
+            ["MarketMafioso:IngestApiKey"] = "test-ingest-secret",
         };
-
-        foreach (var item in extraConfiguration)
-            values[item.Key] = item.Value;
 
         var contentRoot = Path.Combine(Path.GetTempPath(), "MarketMafioso.Server.Tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(contentRoot);
+        configure(new HostedApplicationValues
+        {
+            ContentRoot = contentRoot,
+            Configuration = values,
+        });
 
         return new WebApplicationFactory<Program>()
             .WithWebHostBuilder(builder =>
@@ -269,6 +488,21 @@ public sealed class InventoryReportViewEndpointTests
                     config.AddInMemoryCollection(values);
                 });
             });
+    }
+
+    private static Task<HttpResponseMessage> SendWithKeyAsync(
+        HttpClient client,
+        HttpMethod method,
+        string requestUri,
+        string apiKey,
+        InventoryReport? report = null)
+    {
+        var request = new HttpRequestMessage(method, requestUri);
+        request.Headers.Add("X-Api-Key", apiKey);
+        if (report != null)
+            request.Content = JsonContent.Create(report);
+
+        return client.SendAsync(request);
     }
 
     private static InventoryReport CreateReport(string characterName) =>
@@ -296,4 +530,11 @@ public sealed class InventoryReportViewEndpointTests
                 },
             ],
         };
+
+    private static async Task<string> ReadCreatedIdAsync(HttpResponseMessage response)
+    {
+        var body = await response.Content.ReadAsStringAsync();
+        using var json = JsonDocument.Parse(body);
+        return json.RootElement.GetProperty("id").GetString()!;
+    }
 }
