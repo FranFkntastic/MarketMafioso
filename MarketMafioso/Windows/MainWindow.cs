@@ -25,6 +25,7 @@ public class MainWindow : Window, IDisposable
     private bool showApiKey = false;
     private bool showPreview = false;
     private uint selectedWorkshopItemId;
+    private string workshopProjectSearch = string.Empty;
     private int workshopQuantity = 1;
     private bool confirmViwiClear = false;
     private string workshopStatus = "Workshop prep queue is idle.";
@@ -175,23 +176,9 @@ public class MainWindow : Window, IDisposable
             return;
         }
 
-        var selectedProject = projects.FirstOrDefault(x => x.WorkshopItemId == selectedWorkshopItemId);
-        var selectedLabel = selectedProject?.Name ?? "Select workshop project";
+        ImGui.Text("Project Search:");
         ImGui.SetNextItemWidth(-1);
-        if (ImGui.BeginCombo("##workshopProject", selectedLabel))
-        {
-            foreach (var project in projects)
-            {
-                var isSelected = project.WorkshopItemId == selectedWorkshopItemId;
-                if (ImGui.Selectable($"{project.Name}##{project.WorkshopItemId}", isSelected))
-                    selectedWorkshopItemId = project.WorkshopItemId;
-
-                if (isSelected)
-                    ImGui.SetItemDefaultFocus();
-            }
-
-            ImGui.EndCombo();
-        }
+        ImGui.InputText("##workshopProjectSearch", ref workshopProjectSearch, 256);
 
         ImGui.SetNextItemWidth(100);
         if (ImGui.InputInt("Quantity##workshopQuantity", ref workshopQuantity))
@@ -200,22 +187,19 @@ public class MainWindow : Window, IDisposable
                 workshopQuantity = 1;
         }
 
-        if (selectedWorkshopItemId == 0)
-            ImGui.BeginDisabled();
+        var selectedProject = projects.FirstOrDefault(x => x.WorkshopItemId == selectedWorkshopItemId);
+        DrawWorkshopProjectSelector(projects);
 
-        if (ImGui.Button("Add Project"))
-            AddSelectedWorkshopProject();
-
-        if (selectedWorkshopItemId == 0)
-            ImGui.EndDisabled();
+        if (selectedProject != null)
+            DrawWorkshopProjectMaterialPreview(selectedProject);
 
         ImGui.Spacing();
         DrawWorkshopQueueTable(projects);
     }
 
-    private void AddSelectedWorkshopProject()
+    private void AddWorkshopProject(uint workshopItemId)
     {
-        var existing = config.WorkshopPrepQueue.FirstOrDefault(x => x.WorkshopItemId == selectedWorkshopItemId);
+        var existing = config.WorkshopPrepQueue.FirstOrDefault(x => x.WorkshopItemId == workshopItemId);
         if (existing != null)
         {
             existing.Quantity += workshopQuantity;
@@ -224,13 +208,122 @@ public class MainWindow : Window, IDisposable
         {
             config.WorkshopPrepQueue.Add(new WorkshopPrepQueueItem
             {
-                WorkshopItemId = selectedWorkshopItemId,
+                WorkshopItemId = workshopItemId,
                 Quantity = workshopQuantity,
             });
         }
 
         config.Save();
         workshopStatus = "Added project to workshop prep queue.";
+    }
+
+    private void DrawWorkshopProjectSelector(IReadOnlyList<WorkshopProjectDefinition> projects)
+    {
+        var filteredProjects = projects
+            .Where(project => WorkshopProjectMatchesSearch(project, workshopProjectSearch))
+            .Take(80)
+            .ToList();
+
+        if (filteredProjects.Count == 0)
+        {
+            ImGui.TextColored(ColMuted, "No matching workshop projects.");
+            return;
+        }
+
+        if (ImGui.BeginChild("WorkshopProjectSelectorChild", new Vector2(0, 220), true))
+        {
+            if (ImGui.BeginTable("WorkshopProjectSelector", 4, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg))
+            {
+                ImGui.TableSetupColumn("Project");
+                ImGui.TableSetupColumn("Materials");
+                ImGui.TableSetupColumn("Queued");
+                ImGui.TableSetupColumn("");
+                ImGui.TableHeadersRow();
+
+                foreach (var project in filteredProjects)
+                {
+                    var queuedQuantity = GetQueuedWorkshopQuantity(project.WorkshopItemId);
+                    var isSelected = project.WorkshopItemId == selectedWorkshopItemId;
+
+                    ImGui.TableNextRow();
+                    ImGui.TableNextColumn();
+                    if (ImGui.Selectable($"{project.Name}##workshopProject{project.WorkshopItemId}", isSelected, ImGuiSelectableFlags.SpanAllColumns))
+                        selectedWorkshopItemId = project.WorkshopItemId;
+
+                    ImGui.TableNextColumn();
+                    ImGui.TextUnformatted(project.Materials.Count.ToString());
+
+                    ImGui.TableNextColumn();
+                    if (queuedQuantity > 0)
+                        ImGui.TextColored(ColSuccess, queuedQuantity.ToString());
+                    else
+                        ImGui.TextColored(ColMuted, "0");
+
+                    ImGui.TableNextColumn();
+                    if (ImGui.Button($"Add##workshopProjectAdd{project.WorkshopItemId}"))
+                    {
+                        selectedWorkshopItemId = project.WorkshopItemId;
+                        AddWorkshopProject(project.WorkshopItemId);
+                    }
+                }
+
+                ImGui.EndTable();
+            }
+        }
+
+        ImGui.EndChild();
+    }
+
+    private static bool WorkshopProjectMatchesSearch(WorkshopProjectDefinition project, string search)
+    {
+        if (string.IsNullOrWhiteSpace(search))
+            return true;
+
+        var trimmed = search.Trim();
+        return project.Name.Contains(trimmed, StringComparison.OrdinalIgnoreCase) ||
+               project.WorkshopItemId.ToString().Contains(trimmed, StringComparison.OrdinalIgnoreCase) ||
+               project.ResultItemId.ToString().Contains(trimmed, StringComparison.OrdinalIgnoreCase) ||
+               project.Materials.Any(material => material.ItemName.Contains(trimmed, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private int GetQueuedWorkshopQuantity(uint workshopItemId)
+    {
+        return config.WorkshopPrepQueue
+            .Where(item => item.WorkshopItemId == workshopItemId)
+            .Sum(item => item.Quantity);
+    }
+
+    private void DrawWorkshopProjectMaterialPreview(WorkshopProjectDefinition project)
+    {
+        ImGui.Spacing();
+        ImGui.TextColored(ColHeader, $"Selected: {project.Name}");
+
+        if (ImGui.Button("Add Selected Project"))
+            AddWorkshopProject(project.WorkshopItemId);
+
+        if (project.Materials.Count == 0)
+            return;
+
+        if (ImGui.BeginTable("WorkshopSelectedProjectMaterials", 2, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg))
+        {
+            ImGui.TableSetupColumn("Material");
+            ImGui.TableSetupColumn("Qty");
+            ImGui.TableHeadersRow();
+
+            foreach (var material in project.Materials.Take(8))
+            {
+                ImGui.TableNextRow();
+                ImGui.TableNextColumn();
+                ImGui.TextUnformatted(material.ItemName);
+                ImGui.TableNextColumn();
+                ImGui.TextUnformatted(material.Quantity.ToString());
+            }
+
+            ImGui.EndTable();
+        }
+
+        if (project.Materials.Count > 8)
+            ImGui.TextColored(ColMuted, $"{project.Materials.Count - 8} more material(s).");
     }
 
     private void DrawWorkshopQueueTable(IReadOnlyList<WorkshopProjectDefinition> projects)
