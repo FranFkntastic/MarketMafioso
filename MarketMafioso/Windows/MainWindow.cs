@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
 using Dalamud.Interface.Windowing;
@@ -22,9 +23,14 @@ public class MainWindow : Window, IDisposable
     private string apiKeyBuffer = string.Empty;
     private bool showApiKey = false;
     private bool showPreview = false;
+    private uint selectedWorkshopItemId;
+    private int workshopQuantity = 1;
+    private bool confirmViwiClear = false;
+    private string workshopStatus = "Workshop prep queue is idle.";
 
     private const string ProductSummary = "Small, practical FFXIV improvements under one roof.";
     private const string InventoryModuleSummary = "Inventory Reporter exports character and retainer inventory snapshots as JSON.";
+    private const string WorkshopPrepModuleSummary = "Workshop Prep tracks company workshop projects and their direct material needs.";
     private const string LocalReceiverUrl = "http://localhost:8080/inventory";
     private const string DevReceiverUrl = "https://dev.xivcraftarchitect.com/api/marketmafioso/inventory";
     private const string ProductionReceiverUrl = "https://xivcraftarchitect.com/api/marketmafioso/inventory";
@@ -82,6 +88,12 @@ public class MainWindow : Window, IDisposable
                 ImGui.EndTabItem();
             }
 
+            if (ImGui.BeginTabItem("Workshop Prep"))
+            {
+                DrawWorkshopPrepTab();
+                ImGui.EndTabItem();
+            }
+
             if (ImGui.BeginTabItem("Status"))
             {
                 DrawStatusTab();
@@ -96,7 +108,7 @@ public class MainWindow : Window, IDisposable
     {
         ImGui.TextColored(ColHeader, "MarketMafioso");
         ImGui.TextWrapped(ProductSummary);
-        ImGui.TextColored(ColMuted, "Current module: Inventory Reporter");
+        ImGui.TextColored(ColMuted, "Current modules: Inventory Reporter, Workshop Prep");
     }
 
     private void DrawOverviewTab()
@@ -106,6 +118,7 @@ public class MainWindow : Window, IDisposable
         ImGui.Separator();
 
         DrawModuleSummary("Inventory Reporter", "Enabled", InventoryModuleSummary);
+        DrawModuleSummary("Workshop Prep", "Enabled", WorkshopPrepModuleSummary);
         DrawModuleSummary("Market Tools", "Planned", "Future market-board helpers will build on captured inventory and item data.");
         DrawModuleSummary("General Improvements", "Planned", "Small quality-of-life tools that are useful, but too narrow for their own plugin.");
     }
@@ -130,6 +143,267 @@ public class MainWindow : Window, IDisposable
             ImGui.Separator();
             DrawJsonPreview();
         }
+    }
+
+    private void DrawWorkshopPrepTab()
+    {
+        ImGui.Spacing();
+        ImGui.TextColored(ColHeader, "Workshop Prep");
+        ImGui.TextWrapped(WorkshopPrepModuleSummary);
+        ImGui.Spacing();
+
+        var projects = workshopCatalog.GetProjects();
+
+        DrawWorkshopPrepQueue(projects);
+        ImGui.Spacing();
+        DrawWorkshopMaterialSummary();
+        ImGui.Spacing();
+        DrawWorkshopPrepActions();
+    }
+
+    private void DrawWorkshopPrepQueue(IReadOnlyList<WorkshopProjectDefinition> projects)
+    {
+        ImGui.TextColored(ColHeader, "Prep Queue");
+        ImGui.Separator();
+
+        if (projects.Count == 0)
+        {
+            ImGui.TextColored(ColMuted, "No company workshop projects were found.");
+            return;
+        }
+
+        var selectedProject = projects.FirstOrDefault(x => x.WorkshopItemId == selectedWorkshopItemId);
+        var selectedLabel = selectedProject?.Name ?? "Select workshop project";
+        ImGui.SetNextItemWidth(-1);
+        if (ImGui.BeginCombo("##workshopProject", selectedLabel))
+        {
+            foreach (var project in projects)
+            {
+                var isSelected = project.WorkshopItemId == selectedWorkshopItemId;
+                if (ImGui.Selectable($"{project.Name}##{project.WorkshopItemId}", isSelected))
+                    selectedWorkshopItemId = project.WorkshopItemId;
+
+                if (isSelected)
+                    ImGui.SetItemDefaultFocus();
+            }
+
+            ImGui.EndCombo();
+        }
+
+        ImGui.SetNextItemWidth(100);
+        if (ImGui.InputInt("Quantity##workshopQuantity", ref workshopQuantity))
+        {
+            if (workshopQuantity < 1)
+                workshopQuantity = 1;
+        }
+
+        if (selectedWorkshopItemId == 0)
+            ImGui.BeginDisabled();
+
+        if (ImGui.Button("Add Project"))
+            AddSelectedWorkshopProject();
+
+        if (selectedWorkshopItemId == 0)
+            ImGui.EndDisabled();
+
+        ImGui.Spacing();
+        DrawWorkshopQueueTable(projects);
+    }
+
+    private void AddSelectedWorkshopProject()
+    {
+        var existing = config.WorkshopPrepQueue.FirstOrDefault(x => x.WorkshopItemId == selectedWorkshopItemId);
+        if (existing != null)
+        {
+            existing.Quantity += workshopQuantity;
+        }
+        else
+        {
+            config.WorkshopPrepQueue.Add(new WorkshopPrepQueueItem
+            {
+                WorkshopItemId = selectedWorkshopItemId,
+                Quantity = workshopQuantity,
+            });
+        }
+
+        config.Save();
+        workshopStatus = "Added project to workshop prep queue.";
+    }
+
+    private void DrawWorkshopQueueTable(IReadOnlyList<WorkshopProjectDefinition> projects)
+    {
+        if (config.WorkshopPrepQueue.Count == 0)
+        {
+            ImGui.TextColored(ColMuted, "No workshop projects queued.");
+            return;
+        }
+
+        var projectNames = projects.ToDictionary(x => x.WorkshopItemId, x => x.Name);
+        if (ImGui.BeginTable("WorkshopPrepQueue", 3, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg))
+        {
+            ImGui.TableSetupColumn("Project");
+            ImGui.TableSetupColumn("Qty");
+            ImGui.TableSetupColumn("");
+            ImGui.TableHeadersRow();
+
+            for (var index = 0; index < config.WorkshopPrepQueue.Count; index++)
+            {
+                var item = config.WorkshopPrepQueue[index];
+                ImGui.TableNextRow();
+                ImGui.TableNextColumn();
+                ImGui.TextUnformatted(projectNames.TryGetValue(item.WorkshopItemId, out var name)
+                    ? name
+                    : $"Unknown project {item.WorkshopItemId}");
+
+                ImGui.TableNextColumn();
+                var quantity = item.Quantity;
+                ImGui.SetNextItemWidth(80);
+                if (ImGui.InputInt($"##workshopQueueQty{index}", ref quantity))
+                {
+                    item.Quantity = Math.Max(1, quantity);
+                    config.Save();
+                }
+
+                ImGui.TableNextColumn();
+                if (ImGui.Button($"Remove##workshopQueueRemove{index}"))
+                {
+                    config.WorkshopPrepQueue.RemoveAt(index);
+                    config.Save();
+                    workshopStatus = "Removed project from workshop prep queue.";
+                    index--;
+                }
+            }
+
+            ImGui.EndTable();
+        }
+    }
+
+    private void DrawWorkshopMaterialSummary()
+    {
+        ImGui.TextColored(ColHeader, "Materials");
+        ImGui.Separator();
+
+        var availability = GetWorkshopAvailability();
+        if (availability.Count == 0)
+        {
+            ImGui.TextColored(ColMuted, "No workshop materials yet. Add projects to the prep queue.");
+            return;
+        }
+
+        if (ImGui.BeginTable("WorkshopPrepMaterials", 6, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg))
+        {
+            ImGui.TableSetupColumn("Item");
+            ImGui.TableSetupColumn("Required");
+            ImGui.TableSetupColumn("Player");
+            ImGui.TableSetupColumn("Retainers");
+            ImGui.TableSetupColumn("Shortage");
+            ImGui.TableSetupColumn("Candidates");
+            ImGui.TableHeadersRow();
+
+            foreach (var item in availability)
+            {
+                ImGui.TableNextRow();
+                ImGui.TableNextColumn();
+                ImGui.TextUnformatted(item.ItemName);
+                ImGui.TableNextColumn();
+                ImGui.TextUnformatted(item.Required.ToString());
+                ImGui.TableNextColumn();
+                ImGui.TextUnformatted(item.PlayerInventory.ToString());
+                ImGui.TableNextColumn();
+                ImGui.TextUnformatted(item.RetainerCache.ToString());
+                ImGui.TableNextColumn();
+                ImGui.TextColored(item.Shortage > 0 ? ColError : ColSuccess, item.Shortage.ToString());
+                ImGui.TableNextColumn();
+                ImGui.TextUnformatted(string.Join(", ", item.CandidateRetainers.Select(x => x.RetainerName)));
+            }
+
+            ImGui.EndTable();
+        }
+    }
+
+    private IReadOnlyList<WorkshopMaterialAvailability> GetWorkshopAvailability()
+    {
+        if (config.WorkshopPrepQueue.Count == 0)
+            return [];
+
+        var requirements = workshopCatalog.BuildRequirements(config.WorkshopPrepQueue);
+        var playerInventory = scanner.CountPlayerInventory(config);
+        return WorkshopMaterialAvailabilityService.BuildAvailability(requirements, playerInventory, config);
+    }
+
+    private void DrawWorkshopPrepActions()
+    {
+        ImGui.TextColored(ColHeader, "Actions");
+        ImGui.Separator();
+
+        var canRefreshRetainers = autoRetainerRefresh.CanStartRefresh &&
+                                  !autoRetainerRefresh.IsRefreshing &&
+                                  !autoRetainerRefresh.IsStartQueued;
+        if (!canRefreshRetainers)
+            ImGui.BeginDisabled();
+
+        if (ImGui.Button("Refresh Retainer Cache"))
+            autoRetainerRefresh.StartFullRefresh();
+
+        if (!canRefreshRetainers)
+            ImGui.EndDisabled();
+
+        ImGui.SameLine();
+        if (config.WorkshopPrepQueue.Count == 0)
+            ImGui.BeginDisabled();
+
+        if (ImGui.Button("Send Queue To VIWI"))
+            confirmViwiClear = true;
+
+        if (config.WorkshopPrepQueue.Count == 0)
+            ImGui.EndDisabled();
+
+        if (confirmViwiClear)
+        {
+            ImGui.TextColored(ColMuted, "This will clear VIWI Workshoppa's queue and send the MarketMafioso prep queue.");
+            if (ImGui.Button("Confirm VIWI Queue Sync"))
+            {
+                var result = viwiWorkshoppaIpc.SendQueue(config.WorkshopPrepQueue, clearExisting: true);
+                workshopStatus = result.Message;
+                confirmViwiClear = false;
+            }
+
+            ImGui.SameLine();
+            if (ImGui.Button("Cancel VIWI Queue Sync"))
+                confirmViwiClear = false;
+        }
+
+        if (config.WorkshopPrepQueue.Count == 0)
+            ImGui.BeginDisabled();
+
+        if (ImGui.Button("Clear Prep Queue"))
+        {
+            config.WorkshopPrepQueue.Clear();
+            config.Save();
+            workshopStatus = "Cleared prep queue.";
+        }
+
+        if (config.WorkshopPrepQueue.Count == 0)
+            ImGui.EndDisabled();
+
+        ImGui.Spacing();
+        ImGui.TextColored(GetWorkshopStatusColor(), workshopStatus);
+    }
+
+    private Vector4 GetWorkshopStatusColor()
+    {
+        if (workshopStatus.Contains("unable", StringComparison.OrdinalIgnoreCase) ||
+            workshopStatus.Contains("failed", StringComparison.OrdinalIgnoreCase) ||
+            workshopStatus.Contains("not available", StringComparison.OrdinalIgnoreCase))
+            return ColError;
+
+        if (workshopStatus.Contains("sent", StringComparison.OrdinalIgnoreCase) ||
+            workshopStatus.Contains("added", StringComparison.OrdinalIgnoreCase) ||
+            workshopStatus.Contains("cleared", StringComparison.OrdinalIgnoreCase) ||
+            workshopStatus.Contains("removed", StringComparison.OrdinalIgnoreCase))
+            return ColSuccess;
+
+        return ColMuted;
     }
 
     private void DrawStatusTab()
