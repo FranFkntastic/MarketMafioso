@@ -10,8 +10,24 @@ This file records upstream projects that MarketMafioso was derived from, interop
 
 - Repository: https://github.com/Alama1/InventoryReporter
 - Role in MarketMafioso: the inventory scanner, retainer cache, JSON payload, and HTTP reporting baseline began from InventoryReporter code and has since been modified.
-- License status found during review: no explicit license file or project license expression was found in the upstream repository or local clone on 2026-06-23.
-- Compliance note: attribution is preserved here and in the README. Before public source or binary distribution, confirm permission/license terms with the upstream author or replace any remaining derived InventoryReporter code with independently authored code.
+- License status found during review: MIT license confirmed by the InventoryReporter author on Discord on 2026-06-23. At review time, no explicit license file or project license expression was published in the upstream repository or local clone.
+- Compliance note: attribution is preserved here and in the README. The MIT notice below is included for the InventoryReporter-derived portions of MarketMafioso.
+
+MIT License
+
+Copyright (c) Alamai / Alama1 and InventoryReporter contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files
+(the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify,
+merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE
+WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
+ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ## Interoperability
 
