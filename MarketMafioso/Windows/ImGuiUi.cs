@@ -5,6 +5,13 @@ namespace MarketMafioso.Windows;
 
 internal static class ImGuiUi
 {
+    public const ImGuiTableFlags InteractiveTableFlags =
+        ImGuiTableFlags.Borders |
+        ImGuiTableFlags.RowBg |
+        ImGuiTableFlags.Resizable |
+        ImGuiTableFlags.Reorderable |
+        ImGuiTableFlags.Hideable;
+
     public static void SectionHeader(string text, Vector4 color)
     {
         ImGui.TextColored(color, text);

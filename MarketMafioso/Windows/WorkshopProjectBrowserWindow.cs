@@ -75,9 +75,7 @@ public sealed class WorkshopProjectBrowserWindow : Window, IDisposable
         var projectWidth = CalculateProjectColumnWidth(projects);
         var materialsWidth = Math.Max(ImGui.CalcTextSize("Materials").X, ImGui.CalcTextSize("999").X) + 24;
         var queuedWidth = Math.Max(ImGui.CalcTextSize("Queued").X, ImGui.CalcTextSize("9999").X) + 24;
-        var flags = ImGuiTableFlags.Borders |
-                    ImGuiTableFlags.RowBg |
-                    ImGuiTableFlags.Resizable |
+        var flags = ImGuiUi.InteractiveTableFlags |
                     ImGuiTableFlags.ScrollY |
                     ImGuiTableFlags.SizingFixedFit;
 
@@ -127,10 +125,10 @@ public sealed class WorkshopProjectBrowserWindow : Window, IDisposable
 
         ImGui.TextColored(ColHeader, project.Name);
 
-        if (ImGui.BeginTable("WorkshopProjectBrowserMaterials", 2, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg))
+        if (ImGui.BeginTable("WorkshopProjectBrowserMaterials", 2, ImGuiUi.InteractiveTableFlags))
         {
-            ImGui.TableSetupColumn("Material");
-            ImGui.TableSetupColumn("Qty");
+            ImGui.TableSetupColumn("Material", ImGuiTableColumnFlags.WidthStretch);
+            ImGui.TableSetupColumn("Qty", ImGuiTableColumnFlags.WidthFixed, 72);
             ImGui.TableHeadersRow();
 
             foreach (var material in project.Materials.Take(8))

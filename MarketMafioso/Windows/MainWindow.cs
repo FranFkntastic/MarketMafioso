@@ -243,11 +243,11 @@ public class MainWindow : Window, IDisposable
         }
 
         var projectNames = projects.ToDictionary(x => x.WorkshopItemId, x => x.Name);
-        if (ImGui.BeginTable("WorkshopPrepQueue", 3, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg))
+        if (ImGui.BeginTable("WorkshopPrepQueue", 3, ImGuiUi.InteractiveTableFlags))
         {
-            ImGui.TableSetupColumn("Project");
-            ImGui.TableSetupColumn("Qty");
-            ImGui.TableSetupColumn("");
+            ImGui.TableSetupColumn("Project", ImGuiTableColumnFlags.WidthStretch);
+            ImGui.TableSetupColumn("Qty", ImGuiTableColumnFlags.WidthFixed, 96);
+            ImGui.TableSetupColumn("Actions", ImGuiTableColumnFlags.WidthFixed, 104);
             ImGui.TableHeadersRow();
 
             for (var index = 0; index < config.WorkshopPrepQueue.Count; index++)
@@ -293,12 +293,7 @@ public class MainWindow : Window, IDisposable
             return;
         }
 
-        var tableFlags = ImGuiTableFlags.Borders |
-                         ImGuiTableFlags.RowBg |
-                         ImGuiTableFlags.Resizable |
-                         ImGuiTableFlags.Reorderable |
-                         ImGuiTableFlags.Hideable;
-        if (ImGui.BeginTable("WorkshopPrepMaterials", 7, tableFlags))
+        if (ImGui.BeginTable("WorkshopPrepMaterials", 7, ImGuiUi.InteractiveTableFlags))
         {
             ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.WidthStretch);
             ImGui.TableSetupColumn("Required", ImGuiTableColumnFlags.WidthFixed, 80);
