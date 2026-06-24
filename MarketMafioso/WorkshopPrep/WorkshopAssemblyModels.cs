@@ -46,6 +46,7 @@ public sealed record WorkshopAssemblyActionResult(
     bool Success,
     string Message,
     bool ActionTaken = false,
+    bool RequiresWorkshopReopen = false,
     bool IsProjectComplete = false,
     bool IsContributionConfirmed = false,
     uint? ActiveMaterialItemId = null,

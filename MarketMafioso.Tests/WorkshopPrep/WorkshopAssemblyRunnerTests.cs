@@ -142,6 +142,61 @@ public sealed class WorkshopAssemblyRunnerTests
         Assert.Equal(1, automation.ProgressChecks);
     }
 
+    [Fact]
+    public void Ui_reset_action_reacquires_fabrication_station()
+    {
+        var framework = TestFramework.Create();
+        var automation = new FakeWorkshopAssemblyUiAutomation
+        {
+            IsReady = true,
+            OpenProjectResult = new WorkshopAssemblyActionResult(true, "Project opened."),
+            SubmitResult = new WorkshopAssemblyActionResult(
+                false,
+                "Advanced workshop project phase.",
+                ActionTaken: true,
+                RequiresWorkshopReopen: true),
+        };
+        using var runner = new WorkshopAssemblyRunner(
+            framework,
+            TestPluginLog.Create(),
+            automation,
+            CreateTempDirectory());
+
+        runner.Start(BuildPlan());
+        ((TestFramework)(object)framework).RaiseUpdate(framework);
+        ((TestFramework)(object)framework).RaiseUpdate(framework);
+        ((TestFramework)(object)framework).RaiseUpdate(framework);
+
+        Assert.Equal(WorkshopAssemblyRunnerState.WaitingForFabricationStation, runner.Progress.State);
+        Assert.Equal("Advanced workshop project phase.", runner.Progress.Message);
+    }
+
+    [Fact]
+    public void Cutscene_skip_reacquires_fabrication_station()
+    {
+        var framework = TestFramework.Create();
+        var automation = new FakeWorkshopAssemblyUiAutomation
+        {
+            IsReady = true,
+            CutsceneResult = new WorkshopAssemblyActionResult(
+                false,
+                "Selected workshop cutscene skip prompt.",
+                ActionTaken: true,
+                RequiresWorkshopReopen: true),
+        };
+        using var runner = new WorkshopAssemblyRunner(
+            framework,
+            TestPluginLog.Create(),
+            automation,
+            CreateTempDirectory());
+
+        runner.Start(BuildPlan());
+        ((TestFramework)(object)framework).RaiseUpdate(framework);
+
+        Assert.Equal(WorkshopAssemblyRunnerState.WaitingForFabricationStation, runner.Progress.State);
+        Assert.Equal("Selected workshop cutscene skip prompt.", runner.Progress.Message);
+    }
+
     private static WorkshopAssemblyPlan BuildPlan()
     {
         return new WorkshopAssemblyPlan(
@@ -174,10 +229,13 @@ public sealed class WorkshopAssemblyRunnerTests
         public WorkshopAssemblyActionResult SubmitResult { get; set; } = new(false, "Not used.");
         public WorkshopAssemblyActionResult ConfirmResult { get; set; } = new(false, "Not used.");
         public WorkshopAssemblyActionResult ProgressResult { get; set; } = new(false, "Not used.");
+        public WorkshopAssemblyActionResult CutsceneResult { get; set; } = new(false, "No cutscene.");
         public WorkshopAssemblyDiagnostics Diagnostics { get; set; } = WorkshopAssemblyDiagnostics.Disabled;
         public int ProgressChecks { get; private set; }
 
         public bool IsFabricationStationUiReady() => IsReady;
+
+        public WorkshopAssemblyActionResult TrySkipCutscene() => CutsceneResult;
 
         public WorkshopAssemblyActionResult TryOpenFabricationStation()
         {

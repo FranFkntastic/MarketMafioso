@@ -106,6 +106,23 @@ public sealed class WorkshopAssemblyRunner : IDisposable
         if (activePlan == null)
             throw new InvalidOperationException("Workshop assembly plan is unavailable.");
 
+        var cutsceneResult = uiAutomation.TrySkipCutscene();
+        if (cutsceneResult.ActionTaken)
+        {
+            diagnostics.Record(
+                "cutscene-skip",
+                cutsceneResult.Message,
+                new Dictionary<string, string?>
+                {
+                    ["requiresWorkshopReopen"] = cutsceneResult.RequiresWorkshopReopen.ToString(),
+                });
+            if (cutsceneResult.RequiresWorkshopReopen)
+                SetState(WorkshopAssemblyRunnerState.WaitingForFabricationStation, cutsceneResult.Message);
+
+            continueAt = DateTimeOffset.Now + WorkshopAssemblyTiming.UiInteractionDelay;
+            return;
+        }
+
         if (activeEntryIndex >= activePlan.Entries.Count)
         {
             Complete();
@@ -199,6 +216,12 @@ public sealed class WorkshopAssemblyRunner : IDisposable
         if (result.IsContributionConfirmed)
         {
             StartContributionLockout(result);
+            return;
+        }
+
+        if (result.RequiresWorkshopReopen)
+        {
+            SetState(WorkshopAssemblyRunnerState.WaitingForFabricationStation, result.Message);
             return;
         }
 
@@ -364,6 +387,7 @@ public sealed class WorkshopAssemblyRunner : IDisposable
         var details = BuildActiveDetails(entry);
         details["success"] = result.Success.ToString();
         details["actionTaken"] = result.ActionTaken.ToString();
+        details["requiresWorkshopReopen"] = result.RequiresWorkshopReopen.ToString();
         details["isContributionConfirmed"] = result.IsContributionConfirmed.ToString();
         details["isProjectComplete"] = result.IsProjectComplete.ToString();
         details["activeMaterialItemId"] = result.ActiveMaterialItemId?.ToString();

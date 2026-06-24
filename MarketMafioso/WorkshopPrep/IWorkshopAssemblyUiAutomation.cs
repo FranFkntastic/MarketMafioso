@@ -8,6 +8,8 @@ public interface IWorkshopAssemblyUiAutomation : IDisposable
 
     bool IsFabricationStationUiReady();
 
+    WorkshopAssemblyActionResult TrySkipCutscene();
+
     WorkshopAssemblyActionResult TryOpenFabricationStation();
 
     WorkshopAssemblyActionResult TryOpenProject(WorkshopAssemblyQueueEntry entry);

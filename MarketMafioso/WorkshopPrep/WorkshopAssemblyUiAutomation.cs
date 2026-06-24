@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using Dalamud.Game.ClientState.Conditions;
 using Dalamud.Game.ClientState.Objects.Enums;
 using Dalamud.Game.ClientState.Objects.Types;
 using Dalamud.Game.Addon.Lifecycle;
@@ -19,6 +20,7 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
 {
     private const byte MaxFabricationStationDistance = 8;
     private const string SelectStringAddon = "SelectString";
+    private const string CutSceneSelectStringAddon = "CutSceneSelectString";
     private const string RequestAddon = "Request";
     private const string ContextIconMenuAddon = "ContextIconMenu";
     private const string SelectYesNoAddon = "SelectYesno";
@@ -38,6 +40,7 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
     private readonly IPluginLog log;
     private readonly IObjectTable objectTable;
     private readonly ITargetManager targetManager;
+    private readonly ICondition condition;
     private uint? pendingContributionItemId;
     private bool requestItemSelectionStarted;
     private bool requestConfirmed;
@@ -47,13 +50,15 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
         IAddonLifecycle addonLifecycle,
         IPluginLog log,
         IObjectTable objectTable,
-        ITargetManager targetManager)
+        ITargetManager targetManager,
+        ICondition condition)
     {
         this.gameGui = gameGui;
         this.addonLifecycle = addonLifecycle;
         this.log = log;
         this.objectTable = objectTable;
         this.targetManager = targetManager;
+        this.condition = condition;
 
         addonLifecycle.RegisterListener(AddonEvent.PostSetup, RequestAddon, RequestPostSetup);
         addonLifecycle.RegisterListener(AddonEvent.PostRefresh, RequestAddon, RequestPostRefresh);
@@ -69,6 +74,23 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
                       IsAddonReady(SelectStringAddon);
         Diagnostics.Record("ui-ready-check", isReady ? "Fabrication station UI is ready." : "Fabrication station UI is not ready.");
         return isReady;
+    }
+
+    public unsafe WorkshopAssemblyActionResult TrySkipCutscene()
+    {
+        var addon = gameGui.GetAddonByName<AddonCutSceneSelectString>(CutSceneSelectStringAddon, 1);
+        if (addon == null || !IsAddonReady(&addon->AtkUnitBase))
+        {
+            if (IsCutsceneActive())
+                return new(false, "Waiting for workshop cutscene skip prompt.", ActionTaken: true, RequiresWorkshopReopen: true);
+
+            return new(false, "No skippable workshop cutscene prompt is visible.");
+        }
+
+        addon->AtkUnitBase.FireCallbackInt(0);
+        Diagnostics.Record("cutscene-skip", "Selected workshop cutscene skip prompt.");
+        log.Verbose("[MarketMafioso] Selected workshop cutscene skip prompt.");
+        return new(false, "Selected workshop cutscene skip prompt.", ActionTaken: true, RequiresWorkshopReopen: true);
     }
 
     public unsafe WorkshopAssemblyActionResult TryOpenFabricationStation()
@@ -193,13 +215,13 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
         }
 
         if (TrySelectString(text => text.StartsWith("Collect finished product.", StringComparison.Ordinal)))
-            return new(false, $"Selected finished product collection for {entry.ProjectName}.", ActionTaken: true);
+            return new(false, $"Selected finished product collection for {entry.ProjectName}.", ActionTaken: true, RequiresWorkshopReopen: true);
 
         if (TrySelectString(text => text.StartsWith("Complete the construction of", StringComparison.Ordinal)))
-            return new(false, $"Selected final construction step for {entry.ProjectName}.", ActionTaken: true);
+            return new(false, $"Selected final construction step for {entry.ProjectName}.", ActionTaken: true, RequiresWorkshopReopen: true);
 
         if (TrySelectString(text => text.StartsWith("Advance to the next phase of production.", StringComparison.Ordinal)))
-            return new(false, $"Advanced workshop project phase for {entry.ProjectName}.", ActionTaken: true);
+            return new(false, $"Advanced workshop project phase for {entry.ProjectName}.", ActionTaken: true, RequiresWorkshopReopen: true);
 
         if (TrySelectString(IsContributeMaterialsEntry))
             return new(false, $"Selected material contribution for {entry.ProjectName}.", ActionTaken: true);
@@ -346,6 +368,7 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
             RequestAddon,
             ContextIconMenuAddon,
             SelectYesNoAddon,
+            CutSceneSelectStringAddon,
             CompanyCraftRecipeNoteBookAddon,
         }.Concat(MaterialDeliveryAddonNames);
 
@@ -393,6 +416,13 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
                text.StartsWith("Advance to the next phase of production.", StringComparison.Ordinal) ||
                text.StartsWith("Complete the construction of", StringComparison.Ordinal) ||
                text.StartsWith("Collect finished product.", StringComparison.Ordinal);
+    }
+
+    private bool IsCutsceneActive()
+    {
+        return condition[ConditionFlag.OccupiedInCutSceneEvent] ||
+               condition[ConditionFlag.WatchingCutscene] ||
+               condition[ConditionFlag.WatchingCutscene78];
     }
 
     private IGameObject? FindFabricationStation()
