@@ -107,6 +107,7 @@ public class RetainerCacheManager : IDisposable
                         {
                             ItemId = i.ItemId,
                             ItemName = i.ItemName,
+                            ItemType = i.ItemType,
                             Quantity = i.Quantity,
                             IsHQ = i.IsHQ,
                             Condition = i.Condition,
@@ -122,7 +123,21 @@ public class RetainerCacheManager : IDisposable
                 RetainerId = _activeRetainerId,
                 RetainerName = _activeRetainerName,
                 LastUpdated = DateTime.UtcNow,
+                Gil = scanner.ScanCurrentRetainerGil(),
                 Bags = cachedBags,
+                MarketListings = scanner.ScanCurrentRetainerMarketListings(config)
+                    .Select(i => new CachedMarketListing
+                    {
+                        ItemId = i.ItemId,
+                        ItemName = i.ItemName,
+                        ItemType = i.ItemType,
+                        Quantity = i.Quantity,
+                        IsHQ = i.IsHQ,
+                        Condition = i.Condition,
+                        UnitPrice = i.UnitPrice,
+                        ListedAt = i.ListedAt,
+                    })
+                    .ToList(),
             };
 
             config.Save();

@@ -96,12 +96,13 @@ app.MapGet("/inventory", async (
     InventoryReportStore store,
     long? characterId,
     string? search,
+    string? scope,
     CancellationToken token) =>
 {
     var characters = await store.ListCharactersAsync(1, token);
     var selectedCharacterId = characterId ?? characters.FirstOrDefault()?.Id;
     var latest = await store.GetLatestAsync(1, selectedCharacterId, token);
-    var view = InventoryBrowserViewBuilder.Build(latest, search);
+    var view = InventoryBrowserViewBuilder.Build(latest, search, scope);
     return Results.Content(
         RenderInventoryBrowser(view, characters, selectedCharacterId, request.PathBase),
         "text/html; charset=utf-8");
@@ -714,8 +715,10 @@ static string RenderInventoryBrowser(
 {
     var characterOptions = RenderCharacterOptions(characters, selectedCharacterId);
     var rows = view.Items.Count == 0
-        ? """<tr><td colspan="5" class="empty-cell">No matching items in the selected latest snapshot.</td></tr>"""
+        ? """<tr><td colspan="6" class="empty-cell">No matching items in the selected latest snapshot.</td></tr>"""
         : string.Join(Environment.NewLine, view.Items.Select(RenderInventoryBrowserItem));
+    var scopeRows = RenderInventoryScopeList(view, selectedCharacterId, pathBase);
+    var marketListings = RenderInventoryBrowserMarketListings(view);
     var characterTitle = string.IsNullOrWhiteSpace(view.CharacterName)
         ? "No character selected"
         : $"{view.CharacterName} @ {view.HomeWorld ?? "-"}";
@@ -824,10 +827,12 @@ static string RenderInventoryBrowser(
                 .metric { border: 1px solid var(--line); border-radius: 8px; background: var(--panel); padding: 10px 12px; }
                 .metric span { display: block; color: var(--muted); font-size: 12px; margin-bottom: 5px; }
                 .metric strong { font-size: 18px; font-weight: 650; }
-                .table-wrap { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--panel); }
-                table { width: 100%; border-collapse: collapse; table-layout: fixed; }
-                th, td { padding: 8px 10px; border-bottom: 1px solid var(--line-soft); vertical-align: middle; }
+                .table-wrap { border: 1px solid var(--line); border-radius: 8px; overflow: auto; background: var(--panel); }
+                table { width: 100%; border-collapse: separate; border-spacing: 0; table-layout: fixed; }
+                th, td { padding: 8px 10px; border-bottom: 1px solid var(--line-soft); border-right: 1px solid var(--line); vertical-align: middle; }
+                th:last-child, td:last-child { border-right: 0; }
                 th {
+                    padding: 0;
                     height: 34px;
                     color: var(--muted);
                     background: #202832;
@@ -837,6 +842,29 @@ static string RenderInventoryBrowser(
                     text-transform: uppercase;
                     letter-spacing: .03em;
                 }
+                td[data-resize-col] { position: relative; }
+                td[data-resize-col].separator-hover { cursor: col-resize; }
+                td[data-resize-col].separator-hover::after {
+                    content: "";
+                    position: absolute;
+                    top: 0;
+                    right: -1px;
+                    bottom: 0;
+                    width: 3px;
+                    background: var(--accent);
+                    pointer-events: none;
+                }
+                .th-inner {
+                    display: grid;
+                    grid-template-columns: minmax(0, 1fr) 28px 6px;
+                    align-items: stretch;
+                    height: 34px;
+                }
+                .th-label { display: flex; align-items: center; min-width: 0; padding: 0 9px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+                .filter-button { width: 28px; border: 0; border-left: 1px solid var(--line); background: transparent; color: var(--muted); cursor: pointer; }
+                .filter-button:hover { color: var(--accent); background: #2a3541; }
+                .resizer { cursor: col-resize; }
+                .resizer:hover { background: var(--accent); }
                 .icon-column, .icon-cell { display: none; }
                 tr.item-row:nth-child(even) td { background: var(--row-alt); }
                 tr.item-row:nth-child(odd) td { background: var(--row); }
@@ -873,6 +901,15 @@ static string RenderInventoryBrowser(
                 .location { min-width: 0; border: 1px solid var(--line-soft); border-radius: 6px; padding: 8px 9px; background: #141b23; }
                 .location strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
                 .location span { color: var(--muted); font-size: 12px; }
+                .age { color: var(--accent); }
+                .market-panel { margin-top: 12px; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--panel); }
+                .panel-head { display: flex; justify-content: space-between; gap: 12px; padding: 10px 12px; border-bottom: 1px solid var(--line); background: #202832; }
+                .market-list { display: grid; gap: 0; padding: 10px; }
+                .listing { display: grid; grid-template-columns: minmax(220px, 1fr) 120px 100px 110px 130px; gap: 10px; align-items: center; padding: 8px 10px; border-bottom: 1px solid var(--line); background: #131a22; }
+                .listing:last-child { border-bottom: 0; }
+                .listing strong, .listing span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+                .listing span { color: var(--muted); font-size: 12px; }
+                .price { color: var(--accent); text-align: right; font-variant-numeric: tabular-nums; }
                 .empty-cell { color: var(--muted); text-align: center; }
                 .statusbar {
                     display: flex;
@@ -905,8 +942,9 @@ static string RenderInventoryBrowser(
                         <a class="tab" href="{{Html(AppUrl(pathBase, "/diagnostics"))}}">Diagnostics</a>
                     </nav>
                 </header>
-                <form class="toolbar" method="get" action="{{Html(AppUrl(pathBase, "/inventory"))}}">
-                    <input name="search" value="{{Html(view.Search)}}" aria-label="Search by item name or id" placeholder="Search by item name or id">
+                <form id="inventorySearchForm" class="toolbar" method="get" action="{{Html(AppUrl(pathBase, "/inventory"))}}">
+                    <input id="inventorySearch" name="search" value="{{Html(view.Search)}}" aria-label="Search by item name or id" placeholder="Search by item name or id">
+                    <input type="hidden" name="scope" value="{{Html(view.Scope)}}">
                     <select name="characterId" aria-label="Character">{{characterOptions}}</select>
                     <button type="submit">Search</button>
                 </form>
@@ -922,6 +960,7 @@ static string RenderInventoryBrowser(
                             <strong>{{Html(characterTitle)}}</strong>
                             <span>{{view.Items.Count:N0}} matching item rows</span>
                         </div>
+                        {{scopeRows}}
                     </aside>
                     <section class="main">
                         <div class="summary">
@@ -933,19 +972,21 @@ static string RenderInventoryBrowser(
                         <div class="table-wrap">
                             <table>
                                 <colgroup>
-                                    <col class="icon-column" style="width:52px">
-                                    <col>
-                                    <col style="width:110px">
-                                    <col style="width:90px">
-                                    <col style="width:220px">
+                                    <col class="icon-column" style="width:48px">
+                                    <col data-col="item" style="width:34%">
+                                    <col data-col="type" style="width:14%">
+                                    <col data-col="total" style="width:11%">
+                                    <col data-col="hq" style="width:9%">
+                                    <col data-col="where" style="width:32%">
                                 </colgroup>
                                 <thead>
                                     <tr>
-                                        <th class="icon-column">Icon</th>
-                                        <th>Item</th>
-                                        <th class="number">Total</th>
-                                        <th class="number">HQ</th>
-                                        <th>Where</th>
+                                        <th class="icon-column"><div class="th-inner"><span class="th-label">Icon</span><button class="filter-button" type="button" data-filter="icon">v</button><span class="resizer" data-resize="icon"></span></div></th>
+                                        <th><div class="th-inner"><span class="th-label" data-sort="item">Item</span><button class="filter-button" type="button" data-filter="item">v</button><span class="resizer" data-resize="item"></span></div></th>
+                                        <th><div class="th-inner"><span class="th-label" data-sort="type">Type</span><button class="filter-button" type="button" data-filter="type">v</button><span class="resizer" data-resize="type"></span></div></th>
+                                        <th class="number"><div class="th-inner"><span class="th-label" data-sort="total">Total</span><button class="filter-button" type="button" data-filter="total">v</button><span class="resizer" data-resize="total"></span></div></th>
+                                        <th class="number"><div class="th-inner"><span class="th-label" data-sort="hq">HQ</span><button class="filter-button" type="button" data-filter="hq">v</button><span class="resizer" data-resize="hq"></span></div></th>
+                                        <th><div class="th-inner"><span class="th-label" data-sort="where">Where</span><button class="filter-button" type="button" data-filter="where">v</button><span class="resizer" data-resize="where"></span></div></th>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -953,6 +994,13 @@ static string RenderInventoryBrowser(
                                 </tbody>
                             </table>
                         </div>
+                        <section class="market-panel">
+                            <div class="panel-head">
+                                <strong>Retainer Market Listings</strong>
+                                <span>Displayed separately from regular inventory totals</span>
+                            </div>
+                            <div class="market-list">{{marketListings}}</div>
+                        </section>
                     </section>
                 </main>
                 <footer class="statusbar">
@@ -960,6 +1008,72 @@ static string RenderInventoryBrowser(
                     <span>Item icons are reserved for a later server-side metadata cache.</span>
                 </footer>
             </div>
+            <script>
+                const form = document.getElementById('inventorySearchForm');
+                const search = document.getElementById('inventorySearch');
+                let searchTimer;
+                search.addEventListener('input', () => {
+                    window.clearTimeout(searchTimer);
+                    searchTimer = window.setTimeout(() => form.requestSubmit(), 250);
+                });
+
+                const resizeState = { active: false, current: null, neighbor: null, startX: 0, tableWidth: 0, currentStart: 0, neighborStart: 0, direction: 1 };
+                function getColumnPercent(col) { return Number.parseFloat(col.style.width || '0') || 0; }
+                function findResizePair(columnKey) {
+                    const cols = [...document.querySelectorAll('col[data-col]')];
+                    const index = cols.findIndex(col => col.dataset.col === columnKey);
+                    if (index < 0) return null;
+                    if (index < cols.length - 1) return { current: cols[index], neighbor: cols[index + 1], direction: 1 };
+                    if (index > 0) return { current: cols[index], neighbor: cols[index - 1], direction: -1 };
+                    return null;
+                }
+                function beginProportionalResize(columnKey, event) {
+                    const pair = findResizePair(columnKey);
+                    if (!pair) return false;
+                    resizeState.active = true;
+                    resizeState.current = pair.current;
+                    resizeState.neighbor = pair.neighbor;
+                    resizeState.direction = pair.direction;
+                    resizeState.startX = event.clientX;
+                    resizeState.tableWidth = document.querySelector('table').getBoundingClientRect().width;
+                    resizeState.currentStart = getColumnPercent(pair.current);
+                    resizeState.neighborStart = getColumnPercent(pair.neighbor);
+                    document.body.style.cursor = 'col-resize';
+                    event.preventDefault();
+                    event.stopPropagation();
+                    return true;
+                }
+                function isNearRightSeparator(cell, event) {
+                    const rect = cell.getBoundingClientRect();
+                    return rect.right - event.clientX <= 7;
+                }
+                document.querySelectorAll('.resizer').forEach(handle => {
+                    handle.addEventListener('mousedown', event => beginProportionalResize(handle.dataset.resize, event));
+                });
+                document.querySelectorAll('td[data-resize-col]').forEach(cell => {
+                    cell.addEventListener('mousemove', event => cell.classList.toggle('separator-hover', isNearRightSeparator(cell, event)));
+                    cell.addEventListener('mouseleave', () => cell.classList.remove('separator-hover'));
+                    cell.addEventListener('mousedown', event => {
+                        if (isNearRightSeparator(cell, event)) beginProportionalResize(cell.dataset.resizeCol, event);
+                    });
+                });
+                window.addEventListener('mousemove', event => {
+                    if (!resizeState.active) return;
+                    const minPercent = 6;
+                    const deltaPercent = ((event.clientX - resizeState.startX) / resizeState.tableWidth) * 100 * resizeState.direction;
+                    const combined = resizeState.currentStart + resizeState.neighborStart;
+                    const current = Math.min(combined - minPercent, Math.max(minPercent, resizeState.currentStart + deltaPercent));
+                    resizeState.current.style.width = `${current.toFixed(2)}%`;
+                    resizeState.neighbor.style.width = `${(combined - current).toFixed(2)}%`;
+                });
+                window.addEventListener('mouseup', () => {
+                    resizeState.active = false;
+                    resizeState.current = null;
+                    resizeState.neighbor = null;
+                    document.body.style.cursor = '';
+                    document.querySelectorAll('.separator-hover').forEach(cell => cell.classList.remove('separator-hover'));
+                });
+            </script>
         </body>
         </html>
         """;
@@ -980,6 +1094,44 @@ static string RenderCharacterOptions(IReadOnlyList<CharacterSummary> characters,
     return options.ToString();
 }
 
+static string RenderInventoryScopeList(InventoryBrowserView view, long? selectedCharacterId, PathString pathBase)
+{
+    if (view.Scopes.Count == 0)
+        return string.Empty;
+
+    var rows = new StringBuilder();
+    rows.AppendLine("""<div class="section-title" style="margin-top: 18px;">Inventories</div>""");
+    var hasRenderedRetainerSection = false;
+
+    foreach (var scope in view.Scopes)
+    {
+        if (!scope.ScopeKey.Equals("Player Inventory", StringComparison.OrdinalIgnoreCase) &&
+            !hasRenderedRetainerSection)
+        {
+            rows.AppendLine("""<div class="section-title" style="margin-top: 18px;">Retainers</div>""");
+            hasRenderedRetainerSection = true;
+        }
+
+        var activeClass = view.Scope.Equals(scope.ScopeKey, StringComparison.OrdinalIgnoreCase)
+            ? "list-item active"
+            : "list-item";
+        var url = AppUrl(pathBase, $"/inventory?characterId={selectedCharacterId}&scope={Uri.EscapeDataString(scope.ScopeKey)}&search={Uri.EscapeDataString(view.Search)}");
+        var age = FormatAge(scope.LastUpdated);
+        var detail = scope.ScopeKey.Equals("Player Inventory", StringComparison.OrdinalIgnoreCase)
+            ? $"{scope.StackCount:N0} stacks"
+            : $"{scope.StackCount:N0} stacks / {scope.Gil:N0} gil / {scope.MarketListingCount:N0} listings";
+        rows.AppendLine($$"""
+            <a class="{{activeClass}}" href="{{Html(url)}}">
+                <strong>{{Html(scope.DisplayName)}}</strong>
+                <span>{{Html(detail)}}</span>
+                <span class="age">{{Html(age)}}</span>
+            </a>
+            """);
+    }
+
+    return rows.ToString();
+}
+
 static string RenderInventoryBrowserItem(InventoryBrowserItemView item)
 {
     var ownerText = item.OwnerCount == 1 ? "1 owner" : $"{item.OwnerCount:N0} owners";
@@ -987,16 +1139,17 @@ static string RenderInventoryBrowserItem(InventoryBrowserItemView item)
 
     return $$"""
         <tr class="item-row">
-            <td class="icon-cell"></td>
-            <td>
+            <td class="icon-cell" data-resize-col="icon"></td>
+            <td data-resize-col="item">
                 <div class="item-name">
                     <strong>{{Html(item.DisplayName)}}</strong>
                     <span>Item {{item.ItemId}}</span>
                 </div>
             </td>
-            <td class="number">{{item.TotalQuantity:N0}}</td>
-            <td class="number">{{item.HqQuantity:N0}}</td>
-            <td>
+            <td data-resize-col="type">{{Html(string.IsNullOrWhiteSpace(item.ItemType) ? "Unknown" : item.ItemType)}}</td>
+            <td class="number" data-resize-col="total">{{item.TotalQuantity:N0}}</td>
+            <td class="number" data-resize-col="hq">{{item.HqQuantity:N0}}</td>
+            <td data-resize-col="where">
                 <div class="where">
                     <span class="chip">{{Html(ownerText)}}</span>
                     <span class="small-button">View</span>
@@ -1024,6 +1177,54 @@ static string RenderInventoryBrowserLocation(InventoryBrowserLocationView locati
             <strong>{{Html(location.OwnerName)}} / {{Html(location.BagName)}}: {{Html(quantity)}}</strong>
         </div>
         """;
+}
+
+static string RenderInventoryBrowserMarketListings(InventoryBrowserView view)
+{
+    if (view.MarketListings.Count == 0)
+        return """<div class="empty-cell">No market listings for this scope.</div>""";
+
+    return string.Join(Environment.NewLine, view.MarketListings.Select(listing =>
+    {
+        var unitPrice = listing.UnitPrice == null
+            ? "-"
+            : $"{listing.UnitPrice.Value:N0} gil each";
+        var totalPrice = listing.UnitPrice == null
+            ? "-"
+            : $"{checked((long)listing.UnitPrice.Value * listing.Quantity):N0} gil total";
+        var age = FormatAge(listing.ListedAt);
+
+        return $$"""
+            <div class="listing">
+                <strong>{{Html(listing.DisplayName)}}</strong>
+                <span>{{Html(listing.OwnerName)}}</span>
+                <span>{{listing.Quantity:N0}} listed{{(listing.HqQuantity > 0 ? $" / {listing.HqQuantity:N0} HQ" : string.Empty)}}</span>
+                <span>{{Html(string.IsNullOrWhiteSpace(listing.ItemType) ? "Unknown" : listing.ItemType)}} / Item {{listing.ItemId}}</span>
+                <span class="price">{{Html(unitPrice)}}</span>
+                <span>{{Html(totalPrice)}}</span>
+                <span class="age">{{Html(age)}}</span>
+            </div>
+            """;
+    }));
+}
+
+static string FormatAge(string? timestamp)
+{
+    if (string.IsNullOrWhiteSpace(timestamp) ||
+        !DateTimeOffset.TryParse(timestamp, out var parsed))
+    {
+        return "unknown age";
+    }
+
+    var age = DateTimeOffset.UtcNow - parsed.ToUniversalTime();
+    if (age.TotalMinutes < 1)
+        return "just now";
+    if (age.TotalHours < 1)
+        return $"{Math.Max(1, (int)age.TotalMinutes):N0}m old";
+    if (age.TotalDays < 1)
+        return $"{Math.Max(1, (int)age.TotalHours):N0}h old";
+
+    return $"{Math.Max(1, (int)age.TotalDays):N0}d old";
 }
 
 static string RenderDiagnostics(IReadOnlyList<ReportSummary> reports, PathString pathBase)

@@ -38,7 +38,9 @@ public class CachedRetainer
     public ulong RetainerId { get; set; }
     public string RetainerName { get; set; } = string.Empty;
     public DateTime LastUpdated { get; set; }
+    public ulong Gil { get; set; }
     public List<CachedBag> Bags { get; set; } = new();
+    public List<CachedMarketListing> MarketListings { get; set; } = new();
 }
 
 [Serializable]
@@ -53,7 +55,21 @@ public class CachedItem
 {
     public uint ItemId { get; set; }
     public string? ItemName { get; set; }
+    public string? ItemType { get; set; }
     public uint Quantity { get; set; }
     public bool IsHQ { get; set; }
     public float Condition { get; set; }
+}
+
+[Serializable]
+public class CachedMarketListing
+{
+    public uint ItemId { get; set; }
+    public string? ItemName { get; set; }
+    public string? ItemType { get; set; }
+    public uint Quantity { get; set; }
+    public bool IsHQ { get; set; }
+    public float Condition { get; set; }
+    public uint? UnitPrice { get; set; }
+    public string? ListedAt { get; set; }
 }

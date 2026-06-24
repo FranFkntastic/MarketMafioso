@@ -59,8 +59,14 @@ public sealed record RetainerReport
     [JsonPropertyName("lastUpdated")]
     public string LastUpdated { get; init; } = string.Empty;
 
+    [JsonPropertyName("gil")]
+    public ulong Gil { get; init; }
+
     [JsonPropertyName("bags")]
     public List<InventoryBag> Bags { get; init; } = new();
+
+    [JsonPropertyName("marketListings")]
+    public List<RetainerMarketListing> MarketListings { get; init; } = new();
 }
 
 public sealed record ItemSlot
@@ -72,6 +78,10 @@ public sealed record ItemSlot
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? ItemName { get; init; }
 
+    [JsonPropertyName("itemType")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ItemType { get; init; }
+
     [JsonPropertyName("quantity")]
     public uint Quantity { get; init; }
 
@@ -80,6 +90,37 @@ public sealed record ItemSlot
 
     [JsonPropertyName("condition")]
     public float Condition { get; init; }
+}
+
+public sealed record RetainerMarketListing
+{
+    [JsonPropertyName("itemId")]
+    public uint ItemId { get; init; }
+
+    [JsonPropertyName("itemName")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ItemName { get; init; }
+
+    [JsonPropertyName("itemType")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ItemType { get; init; }
+
+    [JsonPropertyName("quantity")]
+    public uint Quantity { get; init; }
+
+    [JsonPropertyName("isHQ")]
+    public bool IsHQ { get; init; }
+
+    [JsonPropertyName("condition")]
+    public float Condition { get; init; }
+
+    [JsonPropertyName("unitPrice")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public uint? UnitPrice { get; init; }
+
+    [JsonPropertyName("listedAt")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ListedAt { get; init; }
 }
 
 public sealed record StoredInventoryReport

@@ -98,7 +98,7 @@ public sealed class InventoryReportStore
             report,
             metadata,
             cancellationToken);
-        await InsertOwnerAsync(connection, transaction, id, "player", "Player Inventory", null, null, 0, report.PlayerInventory, cancellationToken);
+        await InsertOwnerAsync(connection, transaction, id, "player", "Player Inventory", null, null, null, 0, report.PlayerInventory, [], cancellationToken);
 
         for (var i = 0; i < report.Retainers.Count; i++)
         {
@@ -111,8 +111,10 @@ public sealed class InventoryReportStore
                 retainer.RetainerName,
                 retainer.RetainerId,
                 retainer.LastUpdated,
+                retainer.Gil,
                 i + 1,
                 retainer.Bags,
+                retainer.MarketListings,
                 cancellationToken);
         }
 
@@ -254,7 +256,7 @@ public sealed class InventoryReportStore
 
         await using var ownerCommand = connection.CreateCommand();
         ownerCommand.CommandText = """
-            SELECT id, owner_type, owner_name, retainer_id, last_updated
+            SELECT id, owner_type, owner_name, retainer_id, last_updated, gil
             FROM inventory_owners
             WHERE snapshot_id = $snapshotId
             ORDER BY sort_order
@@ -273,12 +275,15 @@ public sealed class InventoryReportStore
             }
 
             var retainerId = ownerReader.IsDBNull(3) ? 0UL : checked((ulong)ownerReader.GetInt64(3));
+            var gil = ownerReader.IsDBNull(5) ? 0UL : checked((ulong)ownerReader.GetInt64(5));
             retainers.Add(new RetainerReport
             {
                 RetainerName = ownerReader.GetString(2),
                 RetainerId = retainerId,
                 LastUpdated = ownerReader.IsDBNull(4) ? string.Empty : ownerReader.GetString(4),
+                Gil = gil,
                 Bags = bags,
+                MarketListings = await ReadMarketListingsAsync(connection, ownerId, cancellationToken),
             });
         }
 
@@ -464,15 +469,17 @@ public sealed class InventoryReportStore
         string ownerName,
         ulong? retainerId,
         string? lastUpdated,
+        ulong? gil,
         int sortOrder,
         IReadOnlyList<InventoryBag> bags,
+        IReadOnlyList<RetainerMarketListing> marketListings,
         CancellationToken cancellationToken)
     {
         await using var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = """
-            INSERT INTO inventory_owners (snapshot_id, owner_type, owner_name, retainer_id, last_updated, sort_order)
-            VALUES ($snapshotId, $ownerType, $ownerName, $retainerId, $lastUpdated, $sortOrder);
+            INSERT INTO inventory_owners (snapshot_id, owner_type, owner_name, retainer_id, last_updated, gil, sort_order)
+            VALUES ($snapshotId, $ownerType, $ownerName, $retainerId, $lastUpdated, $gil, $sortOrder);
             SELECT last_insert_rowid();
             """;
         command.Parameters.AddWithValue("$snapshotId", snapshotId);
@@ -480,11 +487,15 @@ public sealed class InventoryReportStore
         command.Parameters.AddWithValue("$ownerName", ownerName);
         command.Parameters.AddWithValue("$retainerId", retainerId == null ? DBNull.Value : checked((long)retainerId.Value));
         command.Parameters.AddWithValue("$lastUpdated", string.IsNullOrWhiteSpace(lastUpdated) ? DBNull.Value : lastUpdated);
+        command.Parameters.AddWithValue("$gil", gil == null ? DBNull.Value : checked((long)gil.Value));
         command.Parameters.AddWithValue("$sortOrder", sortOrder);
         var ownerId = (long)(await command.ExecuteScalarAsync(cancellationToken))!;
 
         for (var i = 0; i < bags.Count; i++)
             await InsertBagAsync(connection, transaction, ownerId, bags[i], i, cancellationToken);
+
+        for (var i = 0; i < marketListings.Count; i++)
+            await InsertMarketListingAsync(connection, transaction, ownerId, marketListings[i], i, cancellationToken);
     }
 
     private static async Task InsertBagAsync(
@@ -522,15 +533,63 @@ public sealed class InventoryReportStore
         await using var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = """
-            INSERT INTO inventory_items (bag_id, item_id, item_name, quantity, is_hq, condition, sort_order)
-            VALUES ($bagId, $itemId, $itemName, $quantity, $isHq, $condition, $sortOrder);
+            INSERT INTO inventory_items (bag_id, item_id, item_name, item_type, quantity, is_hq, condition, sort_order)
+            VALUES ($bagId, $itemId, $itemName, $itemType, $quantity, $isHq, $condition, $sortOrder);
             """;
         command.Parameters.AddWithValue("$bagId", bagId);
         command.Parameters.AddWithValue("$itemId", checked((long)item.ItemId));
         command.Parameters.AddWithValue("$itemName", (object?)item.ItemName ?? DBNull.Value);
+        command.Parameters.AddWithValue("$itemType", (object?)item.ItemType ?? DBNull.Value);
         command.Parameters.AddWithValue("$quantity", checked((long)item.Quantity));
         command.Parameters.AddWithValue("$isHq", item.IsHQ ? 1 : 0);
         command.Parameters.AddWithValue("$condition", item.Condition);
+        command.Parameters.AddWithValue("$sortOrder", sortOrder);
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static async Task InsertMarketListingAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        long ownerId,
+        RetainerMarketListing listing,
+        int sortOrder,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            INSERT INTO retainer_market_listings (
+                owner_id,
+                item_id,
+                item_name,
+                item_type,
+                quantity,
+                is_hq,
+                condition,
+                unit_price,
+                listed_at,
+                sort_order)
+            VALUES (
+                $ownerId,
+                $itemId,
+                $itemName,
+                $itemType,
+                $quantity,
+                $isHq,
+                $condition,
+                $unitPrice,
+                $listedAt,
+                $sortOrder);
+            """;
+        command.Parameters.AddWithValue("$ownerId", ownerId);
+        command.Parameters.AddWithValue("$itemId", checked((long)listing.ItemId));
+        command.Parameters.AddWithValue("$itemName", (object?)listing.ItemName ?? DBNull.Value);
+        command.Parameters.AddWithValue("$itemType", (object?)listing.ItemType ?? DBNull.Value);
+        command.Parameters.AddWithValue("$quantity", checked((long)listing.Quantity));
+        command.Parameters.AddWithValue("$isHq", listing.IsHQ ? 1 : 0);
+        command.Parameters.AddWithValue("$condition", listing.Condition);
+        command.Parameters.AddWithValue("$unitPrice", listing.UnitPrice == null ? DBNull.Value : checked((long)listing.UnitPrice.Value));
+        command.Parameters.AddWithValue("$listedAt", string.IsNullOrWhiteSpace(listing.ListedAt) ? DBNull.Value : listing.ListedAt);
         command.Parameters.AddWithValue("$sortOrder", sortOrder);
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
@@ -675,7 +734,7 @@ public sealed class InventoryReportStore
         var items = new List<ItemSlot>();
         await using var command = connection.CreateCommand();
         command.CommandText = """
-            SELECT item_id, item_name, quantity, is_hq, condition
+            SELECT item_id, item_name, item_type, quantity, is_hq, condition
             FROM inventory_items
             WHERE bag_id = $bagId
             ORDER BY sort_order
@@ -689,13 +748,48 @@ public sealed class InventoryReportStore
             {
                 ItemId = checked((uint)reader.GetInt64(0)),
                 ItemName = reader.IsDBNull(1) ? null : reader.GetString(1),
-                Quantity = checked((uint)reader.GetInt64(2)),
-                IsHQ = reader.GetInt32(3) == 1,
-                Condition = reader.GetFloat(4),
+                ItemType = reader.IsDBNull(2) ? null : reader.GetString(2),
+                Quantity = checked((uint)reader.GetInt64(3)),
+                IsHQ = reader.GetInt32(4) == 1,
+                Condition = reader.GetFloat(5),
             });
         }
 
         return items;
+    }
+
+    private static async Task<List<RetainerMarketListing>> ReadMarketListingsAsync(
+        SqliteConnection connection,
+        long ownerId,
+        CancellationToken cancellationToken)
+    {
+        var listings = new List<RetainerMarketListing>();
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT item_id, item_name, item_type, quantity, is_hq, condition, unit_price, listed_at
+            FROM retainer_market_listings
+            WHERE owner_id = $ownerId
+            ORDER BY sort_order
+            """;
+        command.Parameters.AddWithValue("$ownerId", ownerId);
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            listings.Add(new RetainerMarketListing
+            {
+                ItemId = checked((uint)reader.GetInt64(0)),
+                ItemName = reader.IsDBNull(1) ? null : reader.GetString(1),
+                ItemType = reader.IsDBNull(2) ? null : reader.GetString(2),
+                Quantity = checked((uint)reader.GetInt64(3)),
+                IsHQ = reader.GetInt32(4) == 1,
+                Condition = reader.GetFloat(5),
+                UnitPrice = reader.IsDBNull(6) ? null : checked((uint)reader.GetInt64(6)),
+                ListedAt = reader.IsDBNull(7) ? null : reader.GetString(7),
+            });
+        }
+
+        return listings;
     }
 
     private static ReportSummary CreateSummary(string id, DateTimeOffset receivedAt, InventoryReport report)
