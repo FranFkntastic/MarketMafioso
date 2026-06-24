@@ -78,6 +78,126 @@ public sealed class InventoryReportStoreSqliteTests
         Assert.Equal("Visible Character", summaries[0].CharacterName);
     }
 
+    [Fact]
+    public async Task SaveAsync_PrunesStructuredSnapshotsPastConfiguredRetentionCount()
+    {
+        var fixture = await StoreFixture.CreateAsync(
+            new KeyValuePair<string, string?>("MarketMafioso:SnapshotRetentionCount", "2"));
+
+        var first = await fixture.Store.SaveAsync(
+            fixture.AccountId,
+            CreateReport("Retained Character", "Leviathan", 2),
+            null,
+            "{}",
+            CancellationToken.None);
+        await Task.Delay(10);
+        var second = await fixture.Store.SaveAsync(
+            fixture.AccountId,
+            CreateReport("Retained Character", "Leviathan", 3),
+            null,
+            "{}",
+            CancellationToken.None);
+        await Task.Delay(10);
+        var third = await fixture.Store.SaveAsync(
+            fixture.AccountId,
+            CreateReport("Retained Character", "Leviathan", 4),
+            null,
+            "{}",
+            CancellationToken.None);
+
+        var summaries = await fixture.Store.ListSummariesAsync(fixture.AccountId, characterId: null, CancellationToken.None);
+
+        Assert.Equal(2, summaries.Count);
+        Assert.DoesNotContain(summaries, x => x.Id == first.Id);
+        Assert.Contains(summaries, x => x.Id == second.Id);
+        Assert.Contains(summaries, x => x.Id == third.Id);
+        Assert.Null(await fixture.Store.GetAsync(fixture.AccountId, first.Id, CancellationToken.None));
+        Assert.Equal(2, await fixture.CountAsync("snapshots"));
+    }
+
+    [Fact]
+    public async Task SaveAsync_RoundTripsRetainerGilMarketListingsAndItemType()
+    {
+        var fixture = await StoreFixture.CreateAsync();
+        var report = CreateReport("Semantic Character", "Siren", 5057) with
+        {
+            Retainers =
+            [
+                new RetainerReport
+                {
+                    RetainerName = "Scrongle",
+                    RetainerId = 99,
+                    LastUpdated = "2026-06-24T12:00:00.0000000Z",
+                    Gil = 1_242_888,
+                    Bags =
+                    [
+                        new InventoryBag
+                        {
+                            BagName = "RetainerInventory",
+                            Items =
+                            [
+                                new ItemSlot
+                                {
+                                    ItemId = 5057,
+                                    ItemName = "Darksteel Nugget",
+                                    ItemType = "Metal",
+                                    Quantity = 20,
+                                    IsHQ = false,
+                                    Condition = 100,
+                                },
+                            ],
+                        },
+                    ],
+                    MarketListings =
+                    [
+                        new RetainerMarketListing
+                        {
+                            ItemId = 5057,
+                            ItemName = "Darksteel Nugget",
+                            ItemType = "Metal",
+                            Quantity = 20,
+                            IsHQ = false,
+                            Condition = 100,
+                            UnitPrice = 1_800,
+                            ListedAt = "2026-06-24T12:00:00.0000000Z",
+                        },
+                        new RetainerMarketListing
+                        {
+                            ItemId = 5057,
+                            ItemName = "Darksteel Nugget",
+                            ItemType = "Metal",
+                            Quantity = 79,
+                            IsHQ = false,
+                            Condition = 100,
+                            UnitPrice = 2_150,
+                            ListedAt = "2026-06-24T12:00:00.0000000Z",
+                        },
+                    ],
+                },
+            ],
+        };
+
+        var stored = await fixture.Store.SaveAsync(
+            fixture.AccountId,
+            report,
+            null,
+            "{}",
+            CancellationToken.None);
+
+        var loaded = await fixture.Store.GetAsync(fixture.AccountId, stored.Id, CancellationToken.None);
+
+        Assert.NotNull(loaded);
+        var retainer = Assert.Single(loaded.Report.Retainers);
+        Assert.Equal((ulong)1_242_888, retainer.Gil);
+        Assert.Equal("Metal", retainer.Bags[0].Items[0].ItemType);
+        Assert.Equal(2, retainer.MarketListings.Count);
+        Assert.Equal((uint)1_800, retainer.MarketListings[0].UnitPrice);
+        Assert.Equal((uint)2_150, retainer.MarketListings[1].UnitPrice);
+        Assert.Equal("Metal", retainer.MarketListings[0].ItemType);
+        Assert.Equal(1, stored.Summary.RetainerItemStacks);
+        Assert.Equal(20, stored.Summary.RetainerItemQuantity);
+    }
+
     private static InventoryReport CreateReport(string characterName, string homeWorld, uint itemId) =>
         new()
         {
@@ -102,6 +222,7 @@ public sealed class InventoryReportStoreSqliteTests
                         {
                             ItemId = itemId,
                             ItemName = $"Item {itemId}",
+                            ItemType = "Test Item Type",
                             Quantity = 12,
                             IsHQ = itemId % 2 == 0,
                             Condition = 100,
@@ -123,14 +244,18 @@ public sealed class InventoryReportStoreSqliteTests
         public required InventoryReportStore Store { get; init; }
         public required long AccountId { get; init; }
 
-        public static async Task<StoreFixture> CreateAsync()
+        public static async Task<StoreFixture> CreateAsync(params KeyValuePair<string, string?>[] extraConfiguration)
         {
             var databasePath = CreateDatabasePath();
+            var values = new Dictionary<string, string?>
+            {
+                ["MarketMafioso:DatabasePath"] = databasePath,
+            };
+            foreach (var item in extraConfiguration)
+                values[item.Key] = item.Value;
+
             var configuration = new ConfigurationBuilder()
-                .AddInMemoryCollection(new Dictionary<string, string?>
-                {
-                    ["MarketMafioso:DatabasePath"] = databasePath,
-                })
+                .AddInMemoryCollection(values)
                 .Build();
             var environment = new TestHostEnvironment(Path.GetDirectoryName(databasePath)!);
             var connectionFactory = new SqliteConnectionFactory(configuration, environment);

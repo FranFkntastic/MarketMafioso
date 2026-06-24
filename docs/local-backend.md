@@ -26,8 +26,9 @@ Open:
 http://localhost:8080/
 ```
 
-The dashboard is a local control panel for received snapshots. It shows summary counts, links to each snapshot's HTML detail view and retained raw JSON, and lets you delete individual snapshots.
-It also has a `Delete All` action for clearing the local snapshot store.
+The dashboard is a local control panel for received snapshots. It shows summary counts, links to each snapshot's HTML detail view, and lets you delete individual snapshots.
+It also links to an Inventory Browser for the latest structured inventory and a Diagnostics view for retained raw JSON payloads.
+It has a `Delete All` action for clearing the local snapshot store.
 Snapshot details include parsed player/retainer inventory tables and metadata when the plugin supplies it.
 
 Useful JSON endpoints:
@@ -46,7 +47,13 @@ DELETE /api/reports/{id}
 
 Reports are stored in SQLite at `MarketMafioso.Server/data/marketmafioso.db` by default. Existing JSON files under `MarketMafioso.Server/data/reports/` are imported on startup and left in place.
 
-The original incoming JSON is retained only for the newest 20 snapshots by default. Older snapshots remain available through parsed dashboard/API views, while raw JSON routes return `410 Gone` once the original JSON has been pruned.
+The original incoming JSON is retained only for the newest 20 snapshots by default. Older snapshots remain available through parsed dashboard/API views until the structured snapshot retention limit is reached, while raw JSON routes return `410 Gone` once the original JSON has been pruned.
+
+Structured snapshots are retained for the newest 500 snapshots by default. Override this with:
+
+```powershell
+$env:MarketMafioso__SnapshotRetentionCount = "500"
+```
 
 ## API Key
 

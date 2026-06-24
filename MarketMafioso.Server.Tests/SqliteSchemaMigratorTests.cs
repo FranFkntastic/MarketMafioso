@@ -30,6 +30,25 @@ public sealed class SqliteSchemaMigratorTests
         Assert.True(await TableExistsAsync(connection, "inventory_owners"));
         Assert.True(await TableExistsAsync(connection, "inventory_bags"));
         Assert.True(await TableExistsAsync(connection, "inventory_items"));
+        Assert.True(await TableExistsAsync(connection, "retainer_market_listings"));
+        Assert.True(await ColumnExistsAsync(connection, "inventory_owners", "gil"));
+        Assert.True(await ColumnExistsAsync(connection, "inventory_items", "item_type"));
+    }
+
+    [Fact]
+    public async Task MigrateAsync_CanRunTwiceWithAddedColumns()
+    {
+        var databasePath = CreateDatabasePath();
+        var factory = CreateFactory(databasePath);
+        var migrator = new SqliteSchemaMigrator(factory, NullLogger<SqliteSchemaMigrator>.Instance);
+
+        await migrator.MigrateAsync(CancellationToken.None);
+        await migrator.MigrateAsync(CancellationToken.None);
+
+        await using var connection = await factory.OpenConnectionAsync(CancellationToken.None);
+        Assert.True(await ColumnExistsAsync(connection, "inventory_owners", "gil"));
+        Assert.True(await ColumnExistsAsync(connection, "inventory_items", "item_type"));
+        Assert.True(await TableExistsAsync(connection, "retainer_market_listings"));
     }
 
     [Fact]
@@ -125,6 +144,20 @@ public sealed class SqliteSchemaMigratorTests
         command.Parameters.AddWithValue("$name", tableName);
         var result = (long)(await command.ExecuteScalarAsync(CancellationToken.None))!;
         return result == 1;
+    }
+
+    private static async Task<bool> ColumnExistsAsync(SqliteConnection connection, string tableName, string columnName)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = $"PRAGMA table_info({tableName})";
+        await using var reader = await command.ExecuteReaderAsync(CancellationToken.None);
+        while (await reader.ReadAsync(CancellationToken.None))
+        {
+            if (reader.GetString(1).Equals(columnName, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        return false;
     }
 
     private static async Task<int> CountAsync(SqliteConnection connection, string tableName)

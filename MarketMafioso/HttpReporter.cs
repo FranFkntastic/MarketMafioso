@@ -86,6 +86,7 @@ public class HttpReporter : IDisposable
                     RetainerName = r.RetainerName,
                     RetainerId = r.RetainerId,
                     LastUpdated = r.LastUpdated.ToString("o"),
+                    Gil = r.Gil,
                     Bags = r.Bags
                         .Select(b => new InventoryBag
                         {
@@ -95,11 +96,25 @@ public class HttpReporter : IDisposable
                                 {
                                     ItemId = i.ItemId,
                                     ItemName = i.ItemName,
+                                    ItemType = i.ItemType,
                                     Quantity = i.Quantity,
                                     IsHQ = i.IsHQ,
                                     Condition = i.Condition,
                                 })
                                 .ToList(),
+                        })
+                        .ToList(),
+                    MarketListings = r.MarketListings
+                        .Select(i => new RetainerMarketListing
+                        {
+                            ItemId = i.ItemId,
+                            ItemName = i.ItemName,
+                            ItemType = i.ItemType,
+                            Quantity = i.Quantity,
+                            IsHQ = i.IsHQ,
+                            Condition = i.Condition,
+                            UnitPrice = i.UnitPrice,
+                            ListedAt = i.ListedAt,
                         })
                         .ToList(),
                 })

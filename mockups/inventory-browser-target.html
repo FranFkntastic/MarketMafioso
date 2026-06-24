@@ -1,0 +1,1490 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>MarketMafioso Inventory Browser Mockup</title>
+    <style>
+        :root {
+            color-scheme: dark;
+            --bg: #0f1216;
+            --top: #131922;
+            --panel: #171d24;
+            --panel-2: #1e2630;
+            --panel-3: #222c37;
+            --row: #121820;
+            --row-alt: #151c24;
+            --row-hover: #1a2430;
+            --line: #303b48;
+            --line-strong: #465565;
+            --text: #e8eef5;
+            --muted: #9ba9b8;
+            --subtle: #728293;
+            --accent: #68b7ff;
+            --good: #7edb98;
+            --warn: #e8c468;
+            --chip: #263342;
+            font-family: "Segoe UI", system-ui, sans-serif;
+        }
+
+        * { box-sizing: border-box; }
+
+        html, body {
+            height: 100%;
+            margin: 0;
+            background: var(--bg);
+            color: var(--text);
+            font-size: 14px;
+            overflow: hidden;
+        }
+
+        button, input, select {
+            font: inherit;
+            color: inherit;
+        }
+
+        .shell {
+            height: 100vh;
+            display: grid;
+            grid-template-rows: 54px 54px minmax(0, 1fr) 30px;
+            background: var(--bg);
+        }
+
+        .topbar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 18px;
+            padding: 0 20px;
+            border-bottom: 1px solid var(--line);
+            background: var(--top);
+        }
+
+        .brand {
+            display: flex;
+            align-items: baseline;
+            gap: 12px;
+            min-width: 0;
+        }
+
+        .brand strong {
+            font-size: 16px;
+            font-weight: 700;
+            letter-spacing: .01em;
+        }
+
+        .brand span {
+            color: var(--muted);
+            white-space: nowrap;
+        }
+
+        .tabs {
+            display: flex;
+            gap: 4px;
+            height: 34px;
+            align-items: center;
+        }
+
+        .tab {
+            display: inline-flex;
+            align-items: center;
+            height: 32px;
+            padding: 0 11px;
+            border: 1px solid transparent;
+            border-radius: 6px;
+            color: var(--muted);
+            text-decoration: none;
+        }
+
+        .tab.active {
+            color: var(--text);
+            background: var(--panel-2);
+            border-color: var(--line);
+        }
+
+        .toolbar {
+            display: grid;
+            grid-template-columns: minmax(220px, 1fr) 220px auto auto;
+            gap: 10px;
+            align-items: center;
+            padding: 10px 20px;
+            border-bottom: 1px solid var(--line);
+            background: var(--panel);
+        }
+
+        .searchbox,
+        select,
+        .command {
+            height: 34px;
+            border: 1px solid var(--line);
+            border-radius: 6px;
+            background: #0e141b;
+        }
+
+        .searchbox {
+            width: 100%;
+            padding: 0 12px;
+            outline: none;
+        }
+
+        .searchbox:focus,
+        select:focus,
+        .command:focus {
+            border-color: var(--accent);
+        }
+
+        select {
+            padding: 0 10px;
+        }
+
+        .command {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 7px;
+            padding: 0 11px;
+            background: var(--panel-2);
+            cursor: pointer;
+        }
+
+        .layout {
+            display: grid;
+            grid-template-columns: 278px minmax(0, 1fr);
+            min-height: 0;
+        }
+
+        .sidebar {
+            min-height: 0;
+            overflow: auto;
+            border-right: 1px solid var(--line);
+            background: #12171d;
+            padding: 12px;
+        }
+
+        .section-title {
+            margin: 10px 0 7px;
+            color: var(--muted);
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: .05em;
+        }
+
+        .scope-item {
+            width: 100%;
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            gap: 6px 8px;
+            align-items: center;
+            padding: 8px 9px;
+            border: 1px solid transparent;
+            border-radius: 6px;
+            background: transparent;
+            text-align: left;
+            cursor: pointer;
+        }
+
+        .scope-item:hover {
+            background: #17202a;
+        }
+
+        .scope-item.active {
+            border-color: #315a7f;
+            background: #182a3b;
+        }
+
+        .scope-main {
+            min-width: 0;
+            display: grid;
+            gap: 2px;
+        }
+
+        .scope-main strong {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            font-size: 13px;
+            font-weight: 650;
+        }
+
+        .scope-main span,
+        .scope-meta {
+            color: var(--muted);
+            font-size: 12px;
+        }
+
+        .scope-meta {
+            text-align: right;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .scope-market {
+            grid-column: 1 / -1;
+            display: flex;
+            gap: 6px;
+            flex-wrap: wrap;
+        }
+
+        .age {
+            color: var(--accent);
+        }
+
+        .main {
+            min-width: 0;
+            min-height: 0;
+            overflow: auto;
+            padding: 14px 18px 18px;
+        }
+
+        .summary {
+            display: grid;
+            grid-template-columns: repeat(5, minmax(130px, 1fr));
+            gap: 10px;
+            margin-bottom: 12px;
+        }
+
+        .metric {
+            min-width: 0;
+            border: 1px solid var(--line);
+            border-radius: 7px;
+            background: var(--panel);
+            padding: 9px 11px;
+        }
+
+        .metric span {
+            display: block;
+            color: var(--muted);
+            font-size: 12px;
+            margin-bottom: 5px;
+        }
+
+        .metric strong {
+            font-size: 18px;
+            font-weight: 700;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .split {
+            display: grid;
+            grid-template-rows: minmax(320px, auto) auto;
+            gap: 12px;
+        }
+
+        .table-wrap {
+            min-width: 0;
+            overflow: auto;
+            border: 1px solid var(--line-strong);
+            border-radius: 7px;
+            background: var(--panel);
+        }
+
+        table {
+            width: 100%;
+            border-collapse: separate;
+            border-spacing: 0;
+            table-layout: fixed;
+        }
+
+        th,
+        td {
+            border-bottom: 1px solid var(--line);
+            border-right: 1px solid var(--line);
+            vertical-align: middle;
+        }
+
+        th:last-child,
+        td:last-child {
+            border-right: 0;
+        }
+
+        th {
+            position: sticky;
+            top: 0;
+            z-index: 2;
+            height: 34px;
+            padding: 0;
+            background: #202934;
+            color: var(--muted);
+            font-size: 12px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: .03em;
+            box-shadow: inset 0 -1px 0 var(--line-strong);
+        }
+
+        td {
+            height: 39px;
+            padding: 0 10px;
+            background: var(--row);
+        }
+
+        td[data-resize-col] {
+            position: relative;
+        }
+
+        td[data-resize-col].separator-hover {
+            cursor: col-resize;
+        }
+
+        td[data-resize-col].separator-hover::after {
+            content: "";
+            position: absolute;
+            top: 0;
+            right: -1px;
+            bottom: 0;
+            width: 3px;
+            background: var(--accent);
+            pointer-events: none;
+            opacity: .8;
+        }
+
+        tr.item-row:nth-child(4n + 1) td {
+            background: var(--row-alt);
+        }
+
+        tr.item-row:hover td {
+            background: var(--row-hover);
+        }
+
+        .th-inner {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) 28px 6px;
+            align-items: stretch;
+            height: 34px;
+        }
+
+        .th-label {
+            min-width: 0;
+            display: flex;
+            align-items: center;
+            padding: 0 9px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            cursor: pointer;
+        }
+
+        .filter-button {
+            width: 28px;
+            height: 34px;
+            border: 0;
+            border-left: 1px solid var(--line-strong);
+            background: transparent;
+            color: var(--muted);
+            cursor: pointer;
+        }
+
+        .filter-button:hover,
+        .filter-button.active {
+            background: #2a3745;
+            color: var(--accent);
+        }
+
+        .resizer {
+            cursor: col-resize;
+            background: transparent;
+        }
+
+        .resizer:hover {
+            background: var(--accent);
+        }
+
+        .icon-column,
+        .icon-cell {
+            display: none;
+        }
+
+        body.show-icons .icon-column,
+        body.show-icons .icon-cell {
+            display: table-cell;
+        }
+
+        .icon-cell .fake-icon {
+            width: 26px;
+            height: 26px;
+            border: 1px solid #4c5b6a;
+            border-radius: 4px;
+            background: linear-gradient(135deg, #3d4652, #1c242e);
+        }
+
+        .item-name {
+            display: flex;
+            align-items: baseline;
+            gap: 8px;
+            min-width: 0;
+        }
+
+        .item-name strong {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            font-weight: 650;
+        }
+
+        .item-name span {
+            color: var(--subtle);
+            font-size: 12px;
+            white-space: nowrap;
+        }
+
+        .number {
+            text-align: right;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .pill {
+            display: inline-flex;
+            align-items: center;
+            min-height: 22px;
+            padding: 2px 8px;
+            border-radius: 999px;
+            background: var(--chip);
+            color: var(--muted);
+            font-size: 12px;
+            white-space: nowrap;
+        }
+
+        .pill.good { color: var(--good); }
+        .pill.warn { color: var(--warn); }
+
+        .where-cell {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+        }
+
+        .row-toggle {
+            height: 25px;
+            min-width: 31px;
+            border: 1px solid var(--line);
+            border-radius: 5px;
+            background: var(--panel-2);
+            cursor: pointer;
+        }
+
+        .detail-row td {
+            height: auto;
+            padding: 0;
+            background: #0f151c !important;
+        }
+
+        .detail-row[hidden] {
+            display: none;
+        }
+
+        .locations {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 8px;
+            padding: 10px;
+        }
+
+        .location {
+            min-width: 0;
+            border: 1px solid var(--line);
+            border-radius: 6px;
+            background: #141b23;
+            padding: 7px 8px;
+        }
+
+        .location strong {
+            display: block;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            font-size: 13px;
+        }
+
+        .location span {
+            color: var(--muted);
+            font-size: 12px;
+        }
+
+        .market-panel {
+            border: 1px solid var(--line-strong);
+            border-radius: 7px;
+            background: var(--panel);
+            overflow: hidden;
+        }
+
+        .panel-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            min-height: 38px;
+            padding: 0 11px;
+            border-bottom: 1px solid var(--line);
+            background: #202934;
+        }
+
+        .panel-head strong {
+            font-size: 13px;
+        }
+
+        .panel-head span {
+            color: var(--muted);
+            font-size: 12px;
+        }
+
+        .market-list {
+            display: grid;
+            gap: 0;
+            padding: 10px;
+        }
+
+        .listing {
+            min-width: 0;
+            display: grid;
+            grid-template-columns: minmax(220px, 1fr) 120px 120px 110px 130px;
+            gap: 10px;
+            align-items: center;
+            border-bottom: 1px solid var(--line);
+            background: #131a22;
+            padding: 8px 10px;
+        }
+
+        .listing:first-child {
+            border-top-left-radius: 6px;
+            border-top-right-radius: 6px;
+        }
+
+        .listing:last-child {
+            border-bottom: 0;
+            border-bottom-left-radius: 6px;
+            border-bottom-right-radius: 6px;
+        }
+
+        .listing strong,
+        .listing span {
+            display: block;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .listing strong { font-weight: 650; }
+
+        .listing span {
+            color: var(--muted);
+            font-size: 12px;
+        }
+
+        .listing .price {
+            color: var(--good);
+            text-align: right;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .filter-popover {
+            position: fixed;
+            z-index: 20;
+            width: 230px;
+            display: none;
+            border: 1px solid var(--line-strong);
+            border-radius: 7px;
+            background: #111820;
+            box-shadow: 0 16px 40px rgba(0, 0, 0, .35);
+            overflow: hidden;
+        }
+
+        .filter-popover.open {
+            display: block;
+        }
+
+        .filter-popover header {
+            padding: 9px 10px;
+            border-bottom: 1px solid var(--line);
+            background: #1d2630;
+            font-size: 12px;
+            font-weight: 700;
+            color: var(--muted);
+            text-transform: uppercase;
+            letter-spacing: .03em;
+        }
+
+        .filter-popover .body {
+            padding: 10px;
+            display: grid;
+            gap: 8px;
+        }
+
+        .filter-popover label {
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            color: var(--text);
+        }
+
+        .filter-popover input[type="text"] {
+            width: 100%;
+            height: 30px;
+            border: 1px solid var(--line);
+            border-radius: 5px;
+            background: #0c1218;
+            padding: 0 8px;
+        }
+
+        .statusbar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 0 20px;
+            border-top: 1px solid var(--line);
+            background: #11161c;
+            color: var(--muted);
+            font-size: 12px;
+        }
+
+        .empty {
+            padding: 18px;
+            color: var(--muted);
+            text-align: center;
+        }
+
+        @media (max-width: 1040px) {
+            .toolbar {
+                grid-template-columns: 1fr 180px auto;
+            }
+
+            .layout {
+                grid-template-columns: 230px minmax(0, 1fr);
+            }
+
+            .summary {
+                grid-template-columns: repeat(2, minmax(130px, 1fr));
+            }
+
+            .locations,
+            .market-list {
+                grid-template-columns: 1fr 1fr;
+            }
+
+            .listing {
+                grid-template-columns: minmax(180px, 1fr) 90px 90px 90px 110px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="shell">
+        <header class="topbar">
+            <div class="brand">
+                <strong>MarketMafioso</strong>
+                <span>Inventory Browser</span>
+            </div>
+            <nav class="tabs" aria-label="Dashboard sections">
+                <a class="tab" href="#">Snapshots</a>
+                <a class="tab active" href="#">Inventory</a>
+                <a class="tab" href="#">Diagnostics</a>
+            </nav>
+        </header>
+
+        <section class="toolbar">
+            <input id="search" class="searchbox" type="search" placeholder="Search item name, id, type, owner, or bag" autocomplete="off">
+            <select id="character">
+                <option>Wei Ning @ Siren</option>
+                <option>Fran Fantasia @ Gilgamesh</option>
+            </select>
+            <button class="command" id="toggleIcons" type="button">Icon Column</button>
+            <button class="command" id="clearFilters" type="button">Clear Filters</button>
+        </section>
+
+        <div class="layout">
+            <aside class="sidebar">
+                <div class="section-title">Snapshot</div>
+                <button class="scope-item active" type="button" data-scope="all">
+                    <span class="scope-main">
+                        <strong>Latest Snapshot</strong>
+                        <span>2026-06-24 08:42:45 -04:00</span>
+                    </span>
+                    <span class="scope-meta age">4m old</span>
+                </button>
+
+                <div class="section-title">Inventory Scope</div>
+                <button class="scope-item active" type="button" data-scope="all">
+                    <span class="scope-main">
+                        <strong>Wei Ning @ Siren</strong>
+                        <span>Player inventory and all retainers</span>
+                    </span>
+                    <span class="scope-meta age">4m old</span>
+                    <span class="scope-market">
+                        <span class="pill">500 kept</span>
+                        <span class="pill">1,624,988 retainer gil</span>
+                    </span>
+                </button>
+                <button class="scope-item" type="button" data-scope="Player Inventory">
+                    <span class="scope-main">
+                        <strong>Player Inventory</strong>
+                        <span>Inventory, crystals, saddlebag, equipment</span>
+                    </span>
+                    <span class="scope-meta age">4m old</span>
+                    <span class="scope-market">
+                        <span class="pill">2,104 stacks</span>
+                        <span class="pill">12,104 gil</span>
+                    </span>
+                </button>
+
+                <div class="section-title">Retainers</div>
+                <button class="scope-item" type="button" data-scope="Scrongle">
+                    <span class="scope-main">
+                        <strong>Scrongle</strong>
+                        <span>241 stacks</span>
+                    </span>
+                    <span class="scope-meta age">7m old</span>
+                    <span class="scope-market">
+                        <span class="pill">1,242,888 gil</span>
+                        <span class="pill">6 listings</span>
+                    </span>
+                </button>
+                <button class="scope-item" type="button" data-scope="Eris-morne">
+                    <span class="scope-main">
+                        <strong>Eris-morne</strong>
+                        <span>198 stacks</span>
+                    </span>
+                    <span class="scope-meta age">18m old</span>
+                    <span class="scope-market">
+                        <span class="pill">382,100 gil</span>
+                        <span class="pill">2 listings</span>
+                    </span>
+                </button>
+                <button class="scope-item" type="button" data-scope="Zhangfei">
+                    <span class="scope-main">
+                        <strong>Zhangfei</strong>
+                        <span>143 stacks</span>
+                    </span>
+                    <span class="scope-meta age">2h old</span>
+                    <span class="scope-market">
+                        <span class="pill">0 gil</span>
+                        <span class="pill">0 listings</span>
+                    </span>
+                </button>
+            </aside>
+
+            <main class="main">
+                <section class="summary">
+                    <div class="metric"><span>Matching Items</span><strong id="metricItems">0</strong></div>
+                    <div class="metric"><span>Total Quantity</span><strong id="metricQuantity">0</strong></div>
+                    <div class="metric"><span>HQ Quantity</span><strong id="metricHq">0</strong></div>
+                    <div class="metric"><span>Owners Matched</span><strong id="metricOwners">0</strong></div>
+                    <div class="metric"><span>Retainer Gil</span><strong id="metricGil">0</strong></div>
+                </section>
+
+                <div class="split">
+                    <section class="table-wrap">
+                        <table id="inventoryTable">
+                            <colgroup>
+                                <col class="icon-column" style="width: 48px;">
+                                <col data-col="item" style="width: 34%;">
+                                <col data-col="type" style="width: 14%;">
+                                <col data-col="total" style="width: 11%;">
+                                <col data-col="hq" style="width: 9%;">
+                                <col data-col="where" style="width: 32%;">
+                            </colgroup>
+                            <thead>
+                                <tr>
+                                    <th class="icon-column">
+                                        <div class="th-inner">
+                                            <span class="th-label">Icon</span>
+                                            <button class="filter-button" type="button" data-filter="icon" aria-label="Icon column options">v</button>
+                                            <span class="resizer" data-resize="icon"></span>
+                                        </div>
+                                    </th>
+                                    <th>
+                                        <div class="th-inner">
+                                            <span class="th-label" data-sort="name">Item</span>
+                                            <button class="filter-button" type="button" data-filter="item" aria-label="Filter Item">v</button>
+                                            <span class="resizer" data-resize="item"></span>
+                                        </div>
+                                    </th>
+                                    <th>
+                                        <div class="th-inner">
+                                            <span class="th-label" data-sort="type">Type</span>
+                                            <button class="filter-button" type="button" data-filter="type" aria-label="Filter Type">v</button>
+                                            <span class="resizer" data-resize="type"></span>
+                                        </div>
+                                    </th>
+                                    <th>
+                                        <div class="th-inner">
+                                            <span class="th-label" data-sort="total">Total</span>
+                                            <button class="filter-button" type="button" data-filter="total" aria-label="Filter Total">v</button>
+                                            <span class="resizer" data-resize="total"></span>
+                                        </div>
+                                    </th>
+                                    <th>
+                                        <div class="th-inner">
+                                            <span class="th-label" data-sort="hq">HQ</span>
+                                            <button class="filter-button" type="button" data-filter="hq" aria-label="Filter HQ">v</button>
+                                            <span class="resizer" data-resize="hq"></span>
+                                        </div>
+                                    </th>
+                                    <th>
+                                        <div class="th-inner">
+                                            <span class="th-label" data-sort="where">Where</span>
+                                            <button class="filter-button" type="button" data-filter="where" aria-label="Filter Where">v</button>
+                                            <span class="resizer" data-resize="where"></span>
+                                        </div>
+                                    </th>
+                                </tr>
+                            </thead>
+                            <tbody id="rows"></tbody>
+                        </table>
+                    </section>
+
+                    <section class="market-panel">
+                        <div class="panel-head">
+                            <strong>Retainer Market Listings</strong>
+                            <span id="marketCaption">Shown separately from regular inventory entries</span>
+                        </div>
+                        <div class="market-list" id="marketList"></div>
+                    </section>
+                </div>
+            </main>
+        </div>
+
+        <footer class="statusbar">
+            <span id="statusText">Ready</span>
+            <span>Gil and market listings are not counted as inventory items.</span>
+        </footer>
+    </div>
+
+    <div class="filter-popover" id="filterPopover">
+        <header id="filterTitle">Filter</header>
+        <div class="body" id="filterBody"></div>
+    </div>
+
+    <script>
+        const owners = {
+            "Player Inventory": { gil: 12104, age: "4m old" },
+            "Scrongle": { gil: 1242888, age: "7m old" },
+            "Eris-morne": { gil: 382100, age: "18m old" },
+            "Zhangfei": { gil: 0, age: "2h old" }
+        };
+
+        const inventory = [
+            {
+                id: 5057,
+                name: "Darksteel Nugget",
+                type: "Metal",
+                total: 327,
+                hq: 12,
+                locations: [
+                    ["Player Inventory", "Inventory2", 12, 12],
+                    ["Scrongle", "RetainerInventory", 99, 0],
+                    ["Zhangfei", "RetainerInventory", 216, 0]
+                ]
+            },
+            {
+                id: 5060,
+                name: "Darksteel Ingot",
+                type: "Metal",
+                total: 41,
+                hq: 0,
+                locations: [
+                    ["Scrongle", "RetainerInventory", 41, 0]
+                ]
+            },
+            {
+                id: 12901,
+                name: "Abalathian Rock Salt",
+                type: "Ingredient",
+                total: 272,
+                hq: 0,
+                locations: [
+                    ["Scrongle", "RetainerInventory", 272, 0]
+                ]
+            },
+            {
+                id: 12632,
+                name: "Abalathian Spring Water",
+                type: "Reagent",
+                total: 165,
+                hq: 0,
+                locations: [
+                    ["Eris-morne", "RetainerInventory", 165, 0]
+                ]
+            },
+            {
+                id: 44052,
+                name: "Acacia Bark",
+                type: "Lumber",
+                total: 214,
+                hq: 0,
+                locations: [
+                    ["Scrongle", "RetainerInventory", 214, 0]
+                ]
+            },
+            {
+                id: 44017,
+                name: "Acacia Log",
+                type: "Lumber",
+                total: 308,
+                hq: 0,
+                locations: [
+                    ["Scrongle", "RetainerInventory", 308, 0]
+                ]
+            },
+            {
+                id: 41056,
+                name: "Abyssal Diamond",
+                type: "Stone",
+                total: 4,
+                hq: 0,
+                locations: [
+                    ["Zhangfei", "RetainerInventory", 4, 0]
+                ]
+            },
+            {
+                id: 2,
+                name: "Fire Shard",
+                type: "Crystal",
+                total: 6120,
+                hq: 0,
+                locations: [
+                    ["Player Inventory", "Crystals", 6120, 0]
+                ]
+            },
+            {
+                id: 7569,
+                name: "Aetheryte Ticket",
+                type: "Miscellany",
+                total: 95,
+                hq: 0,
+                locations: [
+                    ["Eris-morne", "RetainerInventory", 95, 0]
+                ]
+            }
+        ];
+
+        const marketListings = [
+            { listingId: "S-001", owner: "Scrongle", id: 5057, name: "Darksteel Nugget", type: "Metal", quantity: 20, hq: 0, unitPrice: 1800, listedAtAge: "7m old" },
+            { listingId: "S-002", owner: "Scrongle", id: 5057, name: "Darksteel Nugget", type: "Metal", quantity: 79, hq: 0, unitPrice: 2150, listedAtAge: "7m old" },
+            { listingId: "S-003", owner: "Scrongle", id: 44017, name: "Acacia Log", type: "Lumber", quantity: 20, hq: 0, unitPrice: 420, listedAtAge: "7m old" },
+            { listingId: "S-004", owner: "Scrongle", id: 12632, name: "Abalathian Spring Water", type: "Reagent", quantity: 80, hq: 0, unitPrice: 95, listedAtAge: "7m old" },
+            { listingId: "E-001", owner: "Eris-morne", id: 7569, name: "Aetheryte Ticket", type: "Miscellany", quantity: 5, hq: 0, unitPrice: 15500, listedAtAge: "18m old" },
+            { listingId: "E-002", owner: "Eris-morne", id: 7569, name: "Aetheryte Ticket", type: "Miscellany", quantity: 5, hq: 0, unitPrice: 17250, listedAtAge: "18m old" },
+            { listingId: "E-003", owner: "Eris-morne", id: 44052, name: "Acacia Bark", type: "Lumber", quantity: 30, hq: 0, unitPrice: 310, listedAtAge: "18m old" }
+        ];
+
+        const state = {
+            scope: "all",
+            search: "",
+            sort: "name",
+            sortDir: 1,
+            filters: {
+                type: new Set(),
+                where: new Set(),
+                minTotal: "",
+                hasHq: false
+            },
+            expanded: new Set([5057]),
+        };
+
+        const rowsEl = document.getElementById("rows");
+        const searchEl = document.getElementById("search");
+        const popover = document.getElementById("filterPopover");
+        const filterTitle = document.getElementById("filterTitle");
+        const filterBody = document.getElementById("filterBody");
+        const statusText = document.getElementById("statusText");
+
+        function formatNumber(value) {
+            return value.toLocaleString();
+        }
+
+        function ownerCount(item) {
+            return new Set(item.locations.map(location => location[0])).size;
+        }
+
+        function locationText(item) {
+            const count = ownerCount(item);
+            return count === 1 ? "1 owner" : `${formatNumber(count)} owners`;
+        }
+
+        function itemMatchesScope(item) {
+            if (state.scope === "all") {
+                return true;
+            }
+
+            return item.locations.some(location => location[0] === state.scope);
+        }
+
+        function scopedItem(item) {
+            if (state.scope === "all") {
+                return item;
+            }
+
+            const locations = item.locations.filter(location => location[0] === state.scope);
+            const total = locations.reduce((sum, location) => sum + location[2], 0);
+            const hq = locations.reduce((sum, location) => sum + location[3], 0);
+            return { ...item, total, hq, locations };
+        }
+
+        function itemMatchesSearch(item) {
+            if (!state.search) {
+                return true;
+            }
+
+            const text = [
+                item.id,
+                item.name,
+                item.type,
+                ...item.locations.flatMap(location => [location[0], location[1]])
+            ].join(" ").toLowerCase();
+            return text.includes(state.search.toLowerCase());
+        }
+
+        function itemMatchesFilters(item) {
+            if (state.filters.type.size > 0 && !state.filters.type.has(item.type)) {
+                return false;
+            }
+
+            if (state.filters.where.size > 0) {
+                const ownersForItem = new Set(item.locations.map(location => location[0]));
+                if (![...state.filters.where].some(owner => ownersForItem.has(owner))) {
+                    return false;
+                }
+            }
+
+            if (state.filters.minTotal !== "" && item.total < Number(state.filters.minTotal)) {
+                return false;
+            }
+
+            if (state.filters.hasHq && item.hq <= 0) {
+                return false;
+            }
+
+            return true;
+        }
+
+        function currentItems() {
+            return inventory
+                .filter(itemMatchesScope)
+                .map(scopedItem)
+                .filter(itemMatchesSearch)
+                .filter(itemMatchesFilters)
+                .sort((a, b) => {
+                    let result = 0;
+                    if (state.sort === "name") result = a.name.localeCompare(b.name);
+                    if (state.sort === "type") result = a.type.localeCompare(b.type) || a.name.localeCompare(b.name);
+                    if (state.sort === "total") result = a.total - b.total;
+                    if (state.sort === "hq") result = a.hq - b.hq;
+                    if (state.sort === "where") result = locationText(a).localeCompare(locationText(b));
+                    return result * state.sortDir;
+                });
+        }
+
+        function renderRows() {
+            const items = currentItems();
+            rowsEl.innerHTML = "";
+
+            if (items.length === 0) {
+                rowsEl.innerHTML = `<tr><td colspan="6" class="empty">No matching regular inventory items.</td></tr>`;
+            }
+
+            for (const item of items) {
+                const tr = document.createElement("tr");
+                tr.className = "item-row";
+                tr.innerHTML = `
+                    <td class="icon-cell" data-resize-col="icon"><div class="fake-icon"></div></td>
+                    <td data-resize-col="item">
+                        <div class="item-name">
+                            <strong>${escapeHtml(item.name)}</strong>
+                            <span>Item ${item.id}</span>
+                        </div>
+                    </td>
+                    <td data-resize-col="type">${escapeHtml(item.type || "Unknown")}</td>
+                    <td class="number" data-resize-col="total">${formatNumber(item.total)}</td>
+                    <td class="number" data-resize-col="hq">${formatNumber(item.hq)}</td>
+                    <td data-resize-col="where">
+                        <div class="where-cell">
+                            <span class="pill">${locationText(item)}</span>
+                            <button class="row-toggle" type="button" data-item="${item.id}">${state.expanded.has(item.id) ? "Hide" : "View"}</button>
+                        </div>
+                    </td>
+                `;
+                rowsEl.appendChild(tr);
+
+                const detail = document.createElement("tr");
+                detail.className = "detail-row";
+                if (!state.expanded.has(item.id)) {
+                    detail.hidden = true;
+                }
+
+                const locations = item.locations.map(location => {
+                    const hqText = location[3] > 0 ? `, ${formatNumber(location[3])} HQ` : "";
+                    return `
+                        <div class="location">
+                            <strong>${escapeHtml(location[0])}</strong>
+                            <span>${escapeHtml(location[1])}: ${formatNumber(location[2])}${hqText}</span>
+                        </div>
+                    `;
+                }).join("");
+
+                detail.innerHTML = `<td colspan="6"><div class="locations">${locations}</div></td>`;
+                rowsEl.appendChild(detail);
+            }
+
+            document.querySelectorAll(".row-toggle").forEach(button => {
+                button.addEventListener("click", () => {
+                    const id = Number(button.dataset.item);
+                    if (state.expanded.has(id)) {
+                        state.expanded.delete(id);
+                    } else {
+                        state.expanded.add(id);
+                    }
+                    render();
+                });
+            });
+
+            bindBodySeparatorHandles();
+        }
+
+        function renderMetrics(items) {
+            const ownersMatched = new Set(items.flatMap(item => item.locations.map(location => location[0]))).size;
+            const retainerNames = state.scope === "all"
+                ? Object.keys(owners).filter(owner => owner !== "Player Inventory")
+                : [state.scope].filter(owner => owner !== "all" && owner !== "Player Inventory");
+            const retainerGil = retainerNames.reduce((sum, owner) => sum + (owners[owner]?.gil || 0), 0);
+
+            document.getElementById("metricItems").textContent = formatNumber(items.length);
+            document.getElementById("metricQuantity").textContent = formatNumber(items.reduce((sum, item) => sum + item.total, 0));
+            document.getElementById("metricHq").textContent = formatNumber(items.reduce((sum, item) => sum + item.hq, 0));
+            document.getElementById("metricOwners").textContent = formatNumber(ownersMatched);
+            document.getElementById("metricGil").textContent = formatNumber(retainerGil);
+        }
+
+        function renderMarketListings() {
+            const list = document.getElementById("marketList");
+            const caption = document.getElementById("marketCaption");
+            const scoped = state.scope === "all"
+                ? marketListings
+                : marketListings.filter(listing => listing.owner === state.scope);
+
+            caption.textContent = state.scope === "all"
+                ? "All retainer listings, excluded from inventory totals"
+                : `${state.scope} listings, excluded from inventory totals`;
+
+            if (scoped.length === 0) {
+                list.innerHTML = `<div class="empty">No market listings for this scope.</div>`;
+                return;
+            }
+
+            list.innerHTML = scoped.map(listing => `
+                <div class="listing">
+                    <strong>${escapeHtml(listing.name)}</strong>
+                    <span>${escapeHtml(listing.owner)}</span>
+                    <span>${formatNumber(listing.quantity)} listed${listing.hq > 0 ? `, ${formatNumber(listing.hq)} HQ` : ""}</span>
+                    <span>${escapeHtml(listing.type)} / Item ${listing.id}</span>
+                    <span class="price">${formatNumber(listing.unitPrice)} gil each</span>
+                    <span>${escapeHtml(listing.listingId)}</span>
+                    <span>${escapeHtml(listing.listedAtAge)}</span>
+                    <span>Total ${formatNumber(listing.unitPrice * listing.quantity)} gil</span>
+                    <span>Individual listing</span>
+                </div>
+            `).join("");
+        }
+
+        function renderScopeButtons() {
+            document.querySelectorAll(".scope-item[data-scope]").forEach(button => {
+                button.classList.toggle("active", button.dataset.scope === state.scope);
+            });
+        }
+
+        function render() {
+            const items = currentItems();
+            renderScopeButtons();
+            renderRows();
+            renderMetrics(items);
+            renderMarketListings();
+            const age = state.scope === "all" ? "4m old" : owners[state.scope]?.age;
+            statusText.textContent = `${formatNumber(items.length)} rows in ${state.scope === "all" ? "character scope" : state.scope}${age ? ` / snapshot ${age}` : ""}`;
+        }
+
+        function showFilter(button) {
+            const kind = button.dataset.filter;
+            document.querySelectorAll(".filter-button").forEach(x => x.classList.remove("active"));
+            button.classList.add("active");
+            filterTitle.textContent = `${kind} filter`;
+            filterBody.innerHTML = buildFilterBody(kind);
+
+            const rect = button.getBoundingClientRect();
+            popover.style.left = `${Math.min(rect.left, window.innerWidth - 250)}px`;
+            popover.style.top = `${rect.bottom + 4}px`;
+            popover.classList.add("open");
+
+            bindFilterControls(kind);
+        }
+
+        function buildFilterBody(kind) {
+            if (kind === "type") {
+                return [...new Set(inventory.map(item => item.type))].sort().map(type => `
+                    <label><input type="checkbox" data-type="${escapeHtml(type)}" ${state.filters.type.has(type) ? "checked" : ""}> ${escapeHtml(type)}</label>
+                `).join("");
+            }
+
+            if (kind === "where") {
+                return Object.keys(owners).map(owner => `
+                    <label><input type="checkbox" data-owner="${escapeHtml(owner)}" ${state.filters.where.has(owner) ? "checked" : ""}> ${escapeHtml(owner)}</label>
+                `).join("");
+            }
+
+            if (kind === "total") {
+                return `
+                    <label>Minimum total</label>
+                    <input type="text" inputmode="numeric" id="minTotal" value="${escapeHtml(state.filters.minTotal)}" placeholder="Example: 100">
+                `;
+            }
+
+            if (kind === "hq") {
+                return `<label><input type="checkbox" id="hasHq" ${state.filters.hasHq ? "checked" : ""}> Has HQ quantity</label>`;
+            }
+
+            if (kind === "icon") {
+                return `<label><input type="checkbox" id="iconsVisible" ${document.body.classList.contains("show-icons") ? "checked" : ""}> Show icon column</label>`;
+            }
+
+            return `<input type="text" id="filterSearchProxy" value="${escapeHtml(state.search)}" placeholder="Filter item text">`;
+        }
+
+        function bindFilterControls(kind) {
+            if (kind === "type") {
+                filterBody.querySelectorAll("[data-type]").forEach(input => {
+                    input.addEventListener("change", () => {
+                        input.checked ? state.filters.type.add(input.dataset.type) : state.filters.type.delete(input.dataset.type);
+                        render();
+                    });
+                });
+            }
+
+            if (kind === "where") {
+                filterBody.querySelectorAll("[data-owner]").forEach(input => {
+                    input.addEventListener("change", () => {
+                        input.checked ? state.filters.where.add(input.dataset.owner) : state.filters.where.delete(input.dataset.owner);
+                        render();
+                    });
+                });
+            }
+
+            const minTotal = document.getElementById("minTotal");
+            if (minTotal) {
+                minTotal.addEventListener("input", () => {
+                    state.filters.minTotal = minTotal.value.replace(/\D/g, "");
+                    minTotal.value = state.filters.minTotal;
+                    render();
+                });
+            }
+
+            const hasHq = document.getElementById("hasHq");
+            if (hasHq) {
+                hasHq.addEventListener("change", () => {
+                    state.filters.hasHq = hasHq.checked;
+                    render();
+                });
+            }
+
+            const iconsVisible = document.getElementById("iconsVisible");
+            if (iconsVisible) {
+                iconsVisible.addEventListener("change", () => {
+                    document.body.classList.toggle("show-icons", iconsVisible.checked);
+                });
+            }
+
+            const proxy = document.getElementById("filterSearchProxy");
+            if (proxy) {
+                proxy.addEventListener("input", () => {
+                    state.search = proxy.value;
+                    searchEl.value = proxy.value;
+                    render();
+                });
+            }
+        }
+
+        function escapeHtml(value) {
+            return String(value)
+                .replaceAll("&", "&amp;")
+                .replaceAll("<", "&lt;")
+                .replaceAll(">", "&gt;")
+                .replaceAll('"', "&quot;")
+                .replaceAll("'", "&#039;");
+        }
+
+        let searchTimer;
+        searchEl.addEventListener("input", () => {
+            window.clearTimeout(searchTimer);
+            searchTimer = window.setTimeout(() => {
+                state.search = searchEl.value.trim();
+                render();
+            }, 120);
+        });
+
+        document.querySelectorAll(".scope-item[data-scope]").forEach(button => {
+            button.addEventListener("click", () => {
+                state.scope = button.dataset.scope;
+                render();
+            });
+        });
+
+        document.querySelectorAll(".filter-button").forEach(button => {
+            button.addEventListener("click", event => {
+                event.stopPropagation();
+                if (popover.classList.contains("open") && button.classList.contains("active")) {
+                    popover.classList.remove("open");
+                    button.classList.remove("active");
+                    return;
+                }
+                showFilter(button);
+            });
+        });
+
+        document.querySelectorAll(".th-label[data-sort]").forEach(label => {
+            label.addEventListener("click", () => {
+                const sort = label.dataset.sort;
+                if (state.sort === sort) {
+                    state.sortDir *= -1;
+                } else {
+                    state.sort = sort;
+                    state.sortDir = 1;
+                }
+                render();
+            });
+        });
+
+        document.getElementById("toggleIcons").addEventListener("click", () => {
+            document.body.classList.toggle("show-icons");
+        });
+
+        document.getElementById("clearFilters").addEventListener("click", () => {
+            state.search = "";
+            state.filters.type.clear();
+            state.filters.where.clear();
+            state.filters.minTotal = "";
+            state.filters.hasHq = false;
+            searchEl.value = "";
+            popover.classList.remove("open");
+            render();
+        });
+
+        document.addEventListener("click", event => {
+            if (!popover.contains(event.target)) {
+                popover.classList.remove("open");
+                document.querySelectorAll(".filter-button").forEach(x => x.classList.remove("active"));
+            }
+        });
+
+        const resizeState = {
+            active: false,
+            current: null,
+            neighbor: null,
+            startX: 0,
+            tableWidth: 0,
+            currentStart: 0,
+            neighborStart: 0,
+            direction: 1
+        };
+
+        function getColumnPercent(col) {
+            return Number.parseFloat(col.style.width || "0") || 0;
+        }
+
+        function findResizePair(columnKey) {
+            const cols = [...document.querySelectorAll("col[data-col]")];
+            const index = cols.findIndex(col => col.dataset.col === columnKey);
+            if (index < 0) {
+                return null;
+            }
+
+            if (index < cols.length - 1) {
+                return { current: cols[index], neighbor: cols[index + 1], direction: 1 };
+            }
+
+            if (index > 0) {
+                return { current: cols[index], neighbor: cols[index - 1], direction: -1 };
+            }
+
+            return null;
+        }
+
+        function beginProportionalResize(columnKey, event) {
+            const pair = findResizePair(columnKey);
+            if (!pair) {
+                return false;
+            }
+
+            resizeState.active = true;
+            resizeState.current = pair.current;
+            resizeState.neighbor = pair.neighbor;
+            resizeState.direction = pair.direction;
+            resizeState.startX = event.clientX;
+            resizeState.tableWidth = document.getElementById("inventoryTable").getBoundingClientRect().width;
+            resizeState.currentStart = getColumnPercent(pair.current);
+            resizeState.neighborStart = getColumnPercent(pair.neighbor);
+            document.body.style.cursor = "col-resize";
+            event.preventDefault();
+            event.stopPropagation();
+            return true;
+        }
+
+        function isNearRightSeparator(cell, event) {
+            const rect = cell.getBoundingClientRect();
+            return rect.right - event.clientX <= 7;
+        }
+
+        function bindBodySeparatorHandles() {
+            document.querySelectorAll("td[data-resize-col]").forEach(cell => {
+                cell.addEventListener("mousemove", event => {
+                    cell.classList.toggle("separator-hover", isNearRightSeparator(cell, event));
+                });
+
+                cell.addEventListener("mouseleave", () => {
+                    cell.classList.remove("separator-hover");
+                });
+
+                cell.addEventListener("mousedown", event => {
+                    if (!isNearRightSeparator(cell, event)) {
+                        return;
+                    }
+
+                    if (beginProportionalResize(cell.dataset.resizeCol, event)) {
+                        cell.classList.add("separator-hover");
+                    }
+                });
+            });
+        }
+
+        document.querySelectorAll(".resizer").forEach(handle => {
+            handle.addEventListener("mousedown", event => {
+                beginProportionalResize(handle.dataset.resize, event);
+            });
+        });
+
+        window.addEventListener("mousemove", event => {
+            if (!resizeState.active) {
+                return;
+            }
+
+            const minPercent = 6;
+            const deltaPercent = ((event.clientX - resizeState.startX) / resizeState.tableWidth) * 100 * resizeState.direction;
+            const combined = resizeState.currentStart + resizeState.neighborStart;
+            const current = Math.min(
+                combined - minPercent,
+                Math.max(minPercent, resizeState.currentStart + deltaPercent));
+            const neighbor = combined - current;
+
+            resizeState.current.style.width = `${current.toFixed(2)}%`;
+            resizeState.neighbor.style.width = `${neighbor.toFixed(2)}%`;
+        });
+
+        window.addEventListener("mouseup", () => {
+            resizeState.active = false;
+            resizeState.current = null;
+            resizeState.neighbor = null;
+            document.body.style.cursor = "";
+            document.querySelectorAll(".separator-hover").forEach(cell => cell.classList.remove("separator-hover"));
+        });
+
+        render();
+    </script>
+</body>
+</html>

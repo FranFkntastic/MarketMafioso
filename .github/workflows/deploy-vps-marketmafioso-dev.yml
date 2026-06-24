@@ -74,6 +74,7 @@ jobs:
           MarketMafioso__StorageLabel=dev receiver storage
           MarketMafioso__DatabasePath=/srv/craftarchitect/data/marketmafioso/dev/marketmafioso.db
           MarketMafioso__RawJsonRetentionCount=20
+          MarketMafioso__SnapshotRetentionCount=500
           MarketMafioso__RequireDashboardAuth=true
           MarketMafioso__DashboardBootstrapUsername=marketmafioso
           MarketMafioso__DashboardBootstrapPassword=$MARKETMAFIOSO_DEV_BASIC_AUTH_PASSWORD
@@ -89,7 +90,7 @@ jobs:
           }
 
           @marketmafiosoDashboard {
-              path /api/marketmafioso /api/marketmafioso/ /api/marketmafioso/reports*
+              path /api/marketmafioso /api/marketmafioso/ /api/marketmafioso/reports* /api/marketmafioso/diagnostics
           }
 
           handle @marketmafiosoDashboard {
@@ -238,6 +239,20 @@ jobs:
 
           curl --fail --silent --show-error --user "marketmafioso:$MARKETMAFIOSO_DEV_BASIC_AUTH_PASSWORD" \
             "https://dev.xivcraftarchitect.com/api/marketmafioso/" | grep -F "MarketMafioso" > /dev/null
+
+          inventory_status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            "https://dev.xivcraftarchitect.com/api/marketmafioso/inventory")"
+          test "$inventory_status" = "401"
+
+          curl --fail --silent --show-error --user "marketmafioso:$MARKETMAFIOSO_DEV_BASIC_AUTH_PASSWORD" \
+            "https://dev.xivcraftarchitect.com/api/marketmafioso/inventory" | grep -F "Inventory Browser" > /dev/null
+
+          diagnostics_status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            "https://dev.xivcraftarchitect.com/api/marketmafioso/diagnostics")"
+          test "$diagnostics_status" = "401"
+
+          curl --fail --silent --show-error --user "marketmafioso:$MARKETMAFIOSO_DEV_BASIC_AUTH_PASSWORD" \
+            "https://dev.xivcraftarchitect.com/api/marketmafioso/diagnostics" | grep -F "Diagnostics" > /dev/null
 
           ingest_without_key="$(curl --silent --output /dev/null --write-out '%{http_code}' \
             --request POST \
