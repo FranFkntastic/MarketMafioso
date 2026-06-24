@@ -103,8 +103,26 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
     public unsafe WorkshopAssemblyActionResult TryOpenProject(WorkshopAssemblyQueueEntry entry)
     {
         var activeCraft = ReadCraftState(GetMaterialDeliveryAddon());
-        if (activeCraft?.ResultItem == entry.ResultItemId)
-            return new(true, $"Workshop project {entry.ProjectName} is open.");
+        if (activeCraft != null)
+        {
+            Diagnostics.Record(
+                "active-project",
+                activeCraft.ResultItem == entry.ResultItemId
+                    ? "Matched already-open workshop project."
+                    : "Found already-open workshop project for a different result item.",
+                new Dictionary<string, string?>
+                {
+                    ["project"] = entry.ProjectName,
+                    ["expectedResultItemId"] = entry.ResultItemId.ToString(),
+                    ["activeResultItemId"] = activeCraft.ResultItem.ToString(),
+                    ["stepsComplete"] = activeCraft.StepsComplete.ToString(),
+                    ["stepsTotal"] = activeCraft.StepsTotal.ToString(),
+                    ["materialRows"] = activeCraft.Items.Count.ToString(),
+                });
+
+            if (activeCraft.ResultItem == entry.ResultItemId)
+                return new(true, $"Matching workshop project {entry.ProjectName} is already open.");
+        }
 
         if (TrySelectYesNo(0, text => text.StartsWith("Craft ", StringComparison.Ordinal)))
             return new(true, $"Confirmed workshop project {entry.ProjectName}.", ActionTaken: true);
