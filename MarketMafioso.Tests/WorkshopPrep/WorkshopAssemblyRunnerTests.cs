@@ -30,7 +30,7 @@ public sealed class WorkshopAssemblyRunnerTests
     }
 
     [Fact]
-    public void Confirmed_material_submission_starts_post_contribution_lockout()
+    public void Confirmed_material_request_waits_for_contribution_prompt()
     {
         var framework = TestFramework.Create();
         var automation = new FakeWorkshopAssemblyUiAutomation
@@ -40,7 +40,6 @@ public sealed class WorkshopAssemblyRunnerTests
             SubmitResult = new WorkshopAssemblyActionResult(
                 true,
                 "Workshop material request confirmed.",
-                IsContributionConfirmed: true,
                 ActiveMaterialItemId: 5379),
         };
         using var runner = new WorkshopAssemblyRunner(
@@ -54,8 +53,43 @@ public sealed class WorkshopAssemblyRunnerTests
         ((TestFramework)(object)framework).RaiseUpdate(framework);
         ((TestFramework)(object)framework).RaiseUpdate(framework);
 
-        Assert.Equal(WorkshopAssemblyRunnerState.WaitingForContributionLockout, runner.Progress.State);
+        Assert.Equal(WorkshopAssemblyRunnerState.ConfirmingContribution, runner.Progress.State);
         Assert.Equal("Workshop material request confirmed.", runner.Progress.Message);
+        Assert.Equal(5379u, runner.Progress.ActiveMaterialItemId);
+    }
+
+    [Fact]
+    public void Confirmed_contribution_prompt_starts_post_contribution_lockout()
+    {
+        var framework = TestFramework.Create();
+        var automation = new FakeWorkshopAssemblyUiAutomation
+        {
+            IsReady = true,
+            OpenProjectResult = new WorkshopAssemblyActionResult(true, "Project opened."),
+            SubmitResult = new WorkshopAssemblyActionResult(
+                true,
+                "Workshop material request confirmed.",
+                ActiveMaterialItemId: 5379),
+            ConfirmResult = new WorkshopAssemblyActionResult(
+                true,
+                "Confirmed workshop material contribution.",
+                IsContributionConfirmed: true,
+                ActiveMaterialItemId: 5379),
+        };
+        using var runner = new WorkshopAssemblyRunner(
+            framework,
+            TestPluginLog.Create(),
+            automation,
+            CreateTempDirectory());
+
+        runner.Start(BuildPlan());
+        ((TestFramework)(object)framework).RaiseUpdate(framework);
+        ((TestFramework)(object)framework).RaiseUpdate(framework);
+        ((TestFramework)(object)framework).RaiseUpdate(framework);
+        ((TestFramework)(object)framework).RaiseUpdate(framework);
+
+        Assert.Equal(WorkshopAssemblyRunnerState.WaitingForContributionLockout, runner.Progress.State);
+        Assert.Equal("Confirmed workshop material contribution.", runner.Progress.Message);
         Assert.Equal(5379u, runner.Progress.ActiveMaterialItemId);
     }
 
@@ -89,6 +123,7 @@ public sealed class WorkshopAssemblyRunnerTests
         public WorkshopAssemblyActionResult OpenResult { get; set; } = new(false, "No station.");
         public WorkshopAssemblyActionResult OpenProjectResult { get; set; } = new(false, "Not used.");
         public WorkshopAssemblyActionResult SubmitResult { get; set; } = new(false, "Not used.");
+        public WorkshopAssemblyActionResult ConfirmResult { get; set; } = new(false, "Not used.");
         public WorkshopAssemblyDiagnostics Diagnostics { get; set; } = WorkshopAssemblyDiagnostics.Disabled;
 
         public bool IsFabricationStationUiReady() => IsReady;
@@ -103,7 +138,7 @@ public sealed class WorkshopAssemblyRunnerTests
 
         public WorkshopAssemblyActionResult TrySubmitNextMaterial(WorkshopAssemblyQueueEntry entry) => SubmitResult;
 
-        public WorkshopAssemblyActionResult TryConfirmContribution() => new(false, "Not used.");
+        public WorkshopAssemblyActionResult TryConfirmContribution() => ConfirmResult;
 
         public string DescribeUiState() => "Workshop UI state: test.";
 

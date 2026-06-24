@@ -19,4 +19,14 @@ public sealed class WorkshopAssemblyUiAutomationTests
     {
         Assert.Equal(expected, WorkshopAssemblyUiAutomation.IsContributeMaterialsEntry(text));
     }
+
+    [Theory]
+    [InlineData("Contribute 7 darksteel nuggets to the company project?", true)]
+    [InlineData("Contribute 4 treated spruce lumber to the company project?", true)]
+    [InlineData("You are about to hand over an HQ item. Proceed?", false)]
+    [InlineData("Contribute materials. (Quality: 0/100)", false)]
+    public void IsContributeItemsPrompt_matches_workshop_contribution_confirmation(string text, bool expected)
+    {
+        Assert.Equal(expected, WorkshopAssemblyUiAutomation.IsContributeItemsPrompt(text));
+    }
 }

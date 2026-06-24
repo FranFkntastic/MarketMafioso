@@ -182,21 +182,11 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
             return new(
                 true,
                 $"Workshop material request confirmed for {entry.ProjectName}.",
-                IsContributionConfirmed: true,
                 ActiveMaterialItemId: pendingContributionItemId);
         }
 
         if (pendingContributionItemId != null)
         {
-            Diagnostics.Record(
-                "request-wait",
-                "Waiting for request item selection.",
-                new Dictionary<string, string?>
-                {
-                    ["itemId"] = pendingContributionItemId.Value.ToString(),
-                    ["uiState"] = DescribeUiState(),
-                });
-
             return new(
                 false,
                 $"Waiting for request item selection for material {pendingContributionItemId}. {DescribeUiState()}");
@@ -338,10 +328,10 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
         addonLifecycle.UnregisterListener(AddonEvent.PostSetup, RequestAddon, RequestPostSetup);
     }
 
-    private static bool IsContributeItemsPrompt(string text)
+    internal static bool IsContributeItemsPrompt(string text)
     {
-        return text.Contains("Contribute", StringComparison.Ordinal) &&
-               text.Contains("items", StringComparison.Ordinal);
+        return text.StartsWith("Contribute ", StringComparison.Ordinal) &&
+               text.Contains(" to the company project?", StringComparison.Ordinal);
     }
 
     internal static bool IsContributeMaterialsEntry(string text)
