@@ -23,8 +23,15 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
     private const string ContextIconMenuAddon = "ContextIconMenu";
     private const string SelectYesNoAddon = "SelectYesno";
     private const string CompanyCraftRecipeNoteBookAddon = "CompanyCraftRecipeNoteBook";
+    private const string CompanyCraftMaterialAddon = "CompanyCraftMaterial";
     private const string SubmarinePartsMenuAddon = "SubmarinePartsMenu";
     private const string AirshipPartsMenuAddon = "AirshipPartsMenu";
+    internal static readonly IReadOnlyList<string> MaterialDeliveryAddonNames =
+    [
+        CompanyCraftMaterialAddon,
+        SubmarinePartsMenuAddon,
+        AirshipPartsMenuAddon,
+    ];
 
     private readonly IGameGui gameGui;
     private readonly IAddonLifecycle addonLifecycle;
@@ -280,9 +287,7 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
             ContextIconMenuAddon,
             SelectYesNoAddon,
             CompanyCraftRecipeNoteBookAddon,
-            SubmarinePartsMenuAddon,
-            AirshipPartsMenuAddon,
-        };
+        }.Concat(MaterialDeliveryAddonNames);
 
         var activeAddons = new List<string>();
         foreach (var addonName in trackedAddons)
@@ -346,12 +351,14 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
 
     private unsafe AtkUnitBase* GetMaterialDeliveryAddon()
     {
-        var addon = gameGui.GetAddonByName<AtkUnitBase>(SubmarinePartsMenuAddon, 1);
-        if (IsAddonReady(addon))
-            return addon;
+        foreach (var addonName in MaterialDeliveryAddonNames)
+        {
+            var addon = gameGui.GetAddonByName<AtkUnitBase>(addonName, 1);
+            if (IsAddonReady(addon))
+                return addon;
+        }
 
-        addon = gameGui.GetAddonByName<AtkUnitBase>(AirshipPartsMenuAddon, 1);
-        return IsAddonReady(addon) ? addon : null;
+        return null;
     }
 
     private unsafe bool IsAddonReady(string addonName)
