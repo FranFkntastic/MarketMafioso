@@ -23,9 +23,13 @@ function Sync-ManifestAssemblyVersion {
         [string]$ManifestPath
     )
 
-    $assemblyVersion = [System.Reflection.AssemblyName]::GetAssemblyName($AssemblyPath).Version.ToString()
+    $assemblyName = [System.Reflection.AssemblyName]::GetAssemblyName($AssemblyPath)
+    $assemblyVersion = $assemblyName.Version.ToString()
+    $informationalVersion = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($AssemblyPath).ProductVersion
+    $visibleVersion = if ([string]::IsNullOrWhiteSpace($informationalVersion)) { $assemblyVersion } else { $informationalVersion }
+
     $manifest = Get-Content -LiteralPath $ManifestPath -Raw | ConvertFrom-Json
-    $manifest.AssemblyVersion = $assemblyVersion
+    $manifest.AssemblyVersion = $visibleVersion
     $manifest | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $ManifestPath -Encoding utf8
 }
 
