@@ -5,6 +5,7 @@
     <Nullable>enable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <ProduceReferenceAssembly>false</ProduceReferenceAssembly>
+    <GenerateAssemblyInformationalVersionAttribute>false</GenerateAssemblyInformationalVersionAttribute>
     <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <Platforms>x64</Platforms>
@@ -32,5 +33,42 @@
 
   <Target Name="SyncToDevPlugins" AfterTargets="Build" Condition="'$(Configuration)' == 'Debug'">
     <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\tools\Sync-DevPlugin.ps1&quot; -SourceDir &quot;$(TargetDir).&quot; -DestDir &quot;$(AppData)\XIVLauncher\devPlugins\MarketMafioso&quot; -PluginName &quot;$(AssemblyName)&quot;" />
+  </Target>
+
+  <Target Name="GenerateDevBuildInfo" BeforeTargets="CoreCompile">
+    <Exec Command="git branch --show-current" ConsoleToMsBuild="true" StandardOutputImportance="Low">
+      <Output TaskParameter="ConsoleOutput" ItemName="_GitBranchOutput" />
+    </Exec>
+    <Exec Command="git rev-parse --short HEAD" ConsoleToMsBuild="true" StandardOutputImportance="Low">
+      <Output TaskParameter="ConsoleOutput" ItemName="_GitCommitOutput" />
+    </Exec>
+    <Exec Command="git status --porcelain" ConsoleToMsBuild="true" StandardOutputImportance="Low">
+      <Output TaskParameter="ConsoleOutput" ItemName="_GitStatusOutput" />
+    </Exec>
+
+    <PropertyGroup>
+      <GitBranch>@(_GitBranchOutput)</GitBranch>
+      <GitCommit>@(_GitCommitOutput)</GitCommit>
+      <GitBranch Condition="'$(GitBranch)' == ''">unknown</GitBranch>
+      <GitCommit Condition="'$(GitCommit)' == ''">unknown</GitCommit>
+      <GitBranch>$([System.String]::Copy('$(GitBranch)').Replace('/', '-').Replace('\', '-').Replace(' ', '-'))</GitBranch>
+      <GitDirtySuffix Condition="'@(_GitStatusOutput)' != ''">.dirty</GitDirtySuffix>
+      <DevInformationalVersion>$(Version)+$(GitBranch).$(GitCommit)$(GitDirtySuffix)</DevInformationalVersion>
+      <GeneratedBuildInfoPath>$(IntermediateOutputPath)MarketMafioso.BuildInfo.g.cs</GeneratedBuildInfoPath>
+    </PropertyGroup>
+
+    <ItemGroup>
+      <_GeneratedBuildInfoLine Include="using System.Reflection%3B" />
+      <_GeneratedBuildInfoLine Include="[assembly: AssemblyInformationalVersion(&quot;$(DevInformationalVersion)&quot;)]" />
+    </ItemGroup>
+
+    <WriteLinesToFile
+      File="$(GeneratedBuildInfoPath)"
+      Lines="@(_GeneratedBuildInfoLine)"
+      Overwrite="true" />
+
+    <ItemGroup>
+      <Compile Include="$(GeneratedBuildInfoPath)" />
+    </ItemGroup>
   </Target>
 </Project>

@@ -127,7 +127,7 @@ public class HttpReporter : IDisposable
                 {
                     SchemaVersion = 1,
                     SourcePlugin = "MarketMafioso",
-                    PluginVersion = typeof(Plugin).Assembly.GetName().Version?.ToString() ?? "Unknown",
+                    PluginVersion = PluginBuildInfo.DisplayVersion,
                     GeneratedAtUtc = generatedAtUtc,
                 },
                 CharacterName = charName,

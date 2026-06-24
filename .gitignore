@@ -9,7 +9,9 @@ obj/
 
 # IDE/editor state
 .agents/
+.docs/
 .codex/
+mockups/
 .idea/*
 !.idea/
 !.idea/runConfigurations/

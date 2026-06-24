@@ -43,6 +43,22 @@ public sealed class WorkshopAssemblyDiagnosticsTests
     }
 
     [Fact]
+    public void CreateEnabled_writes_assembly_provenance()
+    {
+        var directory = CreateTempDirectory();
+        using var diagnostics = WorkshopAssemblyDiagnostics.CreateEnabled(
+            directory,
+            new DateTimeOffset(2026, 6, 23, 21, 30, 12, TimeSpan.Zero));
+
+        var text = ReadLog(diagnostics.FilePath!);
+
+        Assert.Contains("  assemblyName: MarketMafioso", text);
+        Assert.Contains("  assemblyVersion:", text);
+        Assert.Contains("  informationalVersion:", text);
+        Assert.Contains("  assemblyLocation:", text);
+    }
+
+    [Fact]
     public void Record_summarizes_repeated_events_when_next_event_arrives()
     {
         var directory = CreateTempDirectory();

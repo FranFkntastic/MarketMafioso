@@ -9,6 +9,16 @@ public sealed class WorkshopPrepQueueItem
     public int Quantity { get; set; }
 }
 
+[Serializable]
+public sealed class WorkshopFrozenQueue
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public string Name { get; set; } = string.Empty;
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+    public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
+    public List<WorkshopPrepQueueItem> Items { get; set; } = new();
+}
+
 public sealed record WorkshopProjectDefinition(
     uint WorkshopItemId,
     uint ResultItemId,

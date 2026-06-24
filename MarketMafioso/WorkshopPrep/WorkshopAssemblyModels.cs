@@ -14,9 +14,20 @@ public enum WorkshopAssemblyRunnerState
     WaitingForContributionLockout,
     ConfirmingContribution,
     AdvancingProject,
+    Paused,
     Complete,
     Stopped,
     Failed,
+}
+
+internal enum WorkshopAssemblyPendingConfirmationKind
+{
+    None,
+    ProjectStart,
+    MaterialContribution,
+    PhaseAdvance,
+    FinalConstruction,
+    ProductRetrieval,
 }
 
 public sealed record WorkshopAssemblyQueueEntry(

@@ -197,6 +197,115 @@ public sealed class WorkshopAssemblyRunnerTests
         Assert.Equal("Selected workshop cutscene skip prompt.", runner.Progress.Message);
     }
 
+    [Fact]
+    public void Retrieved_project_invokes_completion_callback()
+    {
+        WorkshopAssemblyQueueEntry? completedEntry = null;
+        var framework = TestFramework.Create();
+        var automation = new FakeWorkshopAssemblyUiAutomation
+        {
+            IsReady = true,
+            OpenProjectResult = new WorkshopAssemblyActionResult(true, "Project opened."),
+            SubmitResult = new WorkshopAssemblyActionResult(
+                true,
+                "Retrieved finished workshop project.",
+                IsProjectComplete: true),
+        };
+        using var runner = new WorkshopAssemblyRunner(
+            framework,
+            TestPluginLog.Create(),
+            automation,
+            CreateTempDirectory(),
+            entry => completedEntry = entry);
+
+        runner.Start(BuildPlan());
+        ((TestFramework)(object)framework).RaiseUpdate(framework);
+        ((TestFramework)(object)framework).RaiseUpdate(framework);
+        ((TestFramework)(object)framework).RaiseUpdate(framework);
+
+        Assert.NotNull(completedEntry);
+        Assert.Equal(531u, completedEntry.WorkshopItemId);
+        Assert.Equal(WorkshopAssemblyRunnerState.Complete, runner.Progress.State);
+    }
+
+    [Fact]
+    public void Pause_preserves_progress_and_stops_updates()
+    {
+        var framework = TestFramework.Create();
+        var automation = new FakeWorkshopAssemblyUiAutomation
+        {
+            IsReady = true,
+            OpenProjectResult = new WorkshopAssemblyActionResult(true, "Project opened."),
+        };
+        using var runner = new WorkshopAssemblyRunner(
+            framework,
+            TestPluginLog.Create(),
+            automation,
+            CreateTempDirectory());
+
+        runner.Start(BuildPlan());
+        ((TestFramework)(object)framework).RaiseUpdate(framework);
+        runner.Pause();
+        ((TestFramework)(object)framework).RaiseUpdate(framework);
+
+        Assert.True(runner.IsPaused);
+        Assert.True(runner.HasActiveRun);
+        Assert.False(runner.IsRunning);
+        Assert.Equal(0, automation.OpenProjectAttempts);
+        Assert.Equal(WorkshopAssemblyRunnerState.Paused, runner.Progress.State);
+        Assert.Equal("Shark-class Bridge", runner.Progress.ActiveProjectName);
+    }
+
+    [Fact]
+    public void Resume_continues_from_paused_state()
+    {
+        var framework = TestFramework.Create();
+        var automation = new FakeWorkshopAssemblyUiAutomation
+        {
+            IsReady = true,
+            OpenProjectResult = new WorkshopAssemblyActionResult(true, "Project opened."),
+        };
+        using var runner = new WorkshopAssemblyRunner(
+            framework,
+            TestPluginLog.Create(),
+            automation,
+            CreateTempDirectory());
+
+        runner.Start(BuildPlan());
+        ((TestFramework)(object)framework).RaiseUpdate(framework);
+        runner.Pause();
+        runner.Resume();
+        ((TestFramework)(object)framework).RaiseUpdate(framework);
+
+        Assert.False(runner.IsPaused);
+        Assert.True(runner.IsRunning);
+        Assert.Equal(1, automation.OpenProjectAttempts);
+        Assert.Equal(WorkshopAssemblyRunnerState.SubmittingMaterial, runner.Progress.State);
+    }
+
+    [Fact]
+    public void Stop_from_paused_state_marks_runner_stopped()
+    {
+        var framework = TestFramework.Create();
+        var automation = new FakeWorkshopAssemblyUiAutomation
+        {
+            IsReady = true,
+        };
+        using var runner = new WorkshopAssemblyRunner(
+            framework,
+            TestPluginLog.Create(),
+            automation,
+            CreateTempDirectory());
+
+        runner.Start(BuildPlan());
+        ((TestFramework)(object)framework).RaiseUpdate(framework);
+        runner.Pause();
+        runner.Stop();
+
+        Assert.False(runner.HasActiveRun);
+        Assert.Equal(WorkshopAssemblyRunnerState.Stopped, runner.Progress.State);
+    }
+
     private static WorkshopAssemblyPlan BuildPlan()
     {
         return new WorkshopAssemblyPlan(
@@ -224,6 +333,7 @@ public sealed class WorkshopAssemblyRunnerTests
     {
         public bool IsReady { get; set; }
         public int OpenAttempts { get; private set; }
+        public int OpenProjectAttempts { get; private set; }
         public WorkshopAssemblyActionResult OpenResult { get; set; } = new(false, "No station.");
         public WorkshopAssemblyActionResult OpenProjectResult { get; set; } = new(false, "Not used.");
         public WorkshopAssemblyActionResult SubmitResult { get; set; } = new(false, "Not used.");
@@ -243,7 +353,11 @@ public sealed class WorkshopAssemblyRunnerTests
             return OpenResult;
         }
 
-        public WorkshopAssemblyActionResult TryOpenProject(WorkshopAssemblyQueueEntry entry) => OpenProjectResult;
+        public WorkshopAssemblyActionResult TryOpenProject(WorkshopAssemblyQueueEntry entry)
+        {
+            OpenProjectAttempts++;
+            return OpenProjectResult;
+        }
 
         public WorkshopAssemblyActionResult TrySubmitNextMaterial(WorkshopAssemblyQueueEntry entry) => SubmitResult;
 

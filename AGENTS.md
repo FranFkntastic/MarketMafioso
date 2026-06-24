@@ -30,7 +30,7 @@ This guide is for agentic coding tools working in this repository.
 - `MarketMafioso/Windows/`: settings, inventory reporter, workshop prep, cache status, send action, and JSON preview UI.
 - `MarketMafioso/tools/Sync-DevPlugin.ps1`: debug artifact sync to XIVLauncher dev plugin folder.
 - `MarketMafioso/tools/Deploy-DevPlugin.ps1`: explicit dev-plugin deployment and active target verifier.
-- `MarketMafioso/dev-plugin.local.json`: gitignored local config for the DLL path Dalamud actually loads.
+- `MarketMafioso/dev-plugin.local.json`: gitignored local config for the dedicated deployed DLL path Dalamud actually loads.
 - `MarketMafioso.Server/`: local ASP.NET inventory-report receiver and dashboard.
 - `docs/`: maintainer documentation and design notes.
 
@@ -53,9 +53,11 @@ Run from repository root (`MarketMafioso`).
 - Local backend: `dotnet run --project "MarketMafioso.Server" --urls http://localhost:8080`
 Build notes:
 - Debug build runs `Sync-DevPlugin.ps1` via `AfterTargets="Build"`.
-- Output folders: `MarketMafioso/bin/Debug` and `MarketMafioso/bin/Release`.
+- Output folders: `MarketMafioso/bin/Debug` and `MarketMafioso/bin/Release`; these are compiler outputs only and should not be configured as long-lived Dalamud watched targets.
 - Debug sync target defaults to `%APPDATA%\XIVLauncher\devPlugins\MarketMafioso`.
-- On this machine, Dalamud is configured to load `MarketMafioso/bin/Release/MarketMafioso.dll` directly. Use `MarketMafioso/tools/Deploy-DevPlugin.ps1` to build and verify the active DLL from `MarketMafioso/dev-plugin.local.json`; appdata sync is not proof that the loaded plugin was refreshed.
+- Active dev-plugin deployment should use a dedicated folder outside every repo/worktree `bin/` directory. Set `TargetDll` in `MarketMafioso/dev-plugin.local.json` to that deployed DLL, not to `MarketMafioso/bin/Debug` or `MarketMafioso/bin/Release`.
+- Use `MarketMafioso/tools/Deploy-DevPlugin.ps1` to build, copy, and verify the active DLL. Appdata debug sync, normal build output, and `bin/Release` timestamps are not proof that the loaded plugin was refreshed.
+- See `docs/dev-plugin-deployment.md` for the current local deployment workflow.
 
 ### Lint / Format
 - Verify format (non-destructive):
@@ -85,7 +87,8 @@ Lint notes:
 - Build after code changes: `dotnet build "MarketMafioso.sln" -c Debug`.
 - Verify formatting: `dotnet format "MarketMafioso.sln" --verify-no-changes`.
 - Run relevant tests after code changes.
-- For plugin behavior changes, run `MarketMafioso/tools/Deploy-DevPlugin.ps1` and verify the reported Dalamud target DLL before asking for an in-game reload.
+- For plugin behavior changes, run `MarketMafioso/tools/Deploy-DevPlugin.ps1` from the intended active worktree, verify the reported source and target hashes match, then reload the plugin in game.
+- Side/client worktrees should build and test normally, but should not deploy to the active Dalamud target unless intentionally configured to own that deployment.
 
 ## Code Style Guidelines
 Follow established patterns already present in `MarketMafioso/`.
@@ -173,5 +176,5 @@ Follow established patterns already present in `MarketMafioso/`.
 - Build with `dotnet build "MarketMafioso.sln" -c Debug`.
 - Run `dotnet format "MarketMafioso.sln" --verify-no-changes`.
 - Run relevant tests.
-- If plugin behavior changes, confirm the configured Dalamud target DLL was refreshed, not only the appdata dev-plugin copy.
+- If plugin behavior changes, confirm `Deploy-DevPlugin.ps1` refreshed the dedicated configured Dalamud target DLL; do not accept appdata sync or `bin/Release` timestamps as proof.
 - Report validations performed and any limitations.

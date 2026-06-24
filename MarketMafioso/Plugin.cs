@@ -71,8 +71,23 @@ public sealed class Plugin : IDalamudPlugin
         workshopAssemblyRunner = new WorkshopAssemblyRunner(
             Framework,
             Log,
-            new WorkshopAssemblyUiAutomation(GameGui, AddonLifecycle, Log, ObjectTable, TargetManager, Condition),
-            Path.Combine(PluginInterface.GetPluginConfigDirectory(), "workshop-assembly-logs"));
+            new WorkshopAssemblyUiAutomation(
+                GameGui,
+                AddonLifecycle,
+                Log,
+                ObjectTable,
+                TargetManager,
+                Condition,
+                new WorkshopExternalAutomationCoordinator(new DalamudPluginDataStore(PluginInterface), Log)),
+            Path.Combine(PluginInterface.GetPluginConfigDirectory(), "workshop-assembly-logs"),
+            entry =>
+            {
+                var result = WorkshopQueueService.DecrementActiveQueue(Configuration, entry.WorkshopItemId);
+                if (!result.Success)
+                    Log.Warning("[MarketMafioso] {Message}", result.Message);
+
+                Configuration.Save();
+            });
         workshopMaterialManifestExport = new WorkshopMaterialManifestExportService(
             new LuminaWorkshopMaterialCraftRecipeResolver(DataManager));
         mainWindow = new MainWindow(
@@ -89,6 +104,7 @@ public sealed class Plugin : IDalamudPlugin
 
         windowSystem.AddWindow(mainWindow);
         windowSystem.AddWindow(mainWindow.ProjectBrowser);
+        windowSystem.AddWindow(mainWindow.FrozenQueueBrowser);
 
         CommandManager.AddHandler(CmdMain, new CommandInfo(OnCommand)
         {

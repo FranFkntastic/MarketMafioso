@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 
 namespace MarketMafioso.WorkshopPrep;
 
@@ -40,6 +41,12 @@ public sealed class WorkshopAssemblyDiagnostics : IDisposable
             new Dictionary<string, string?>
             {
                 ["startedAt"] = startedAt.ToString("O", CultureInfo.InvariantCulture),
+                ["assemblyName"] = PluginAssembly.GetName().Name,
+                ["assemblyVersion"] = PluginAssembly.GetName().Version?.ToString(),
+                ["informationalVersion"] = PluginAssembly
+                    .GetCustomAttribute<AssemblyInformationalVersionAttribute>()
+                    ?.InformationalVersion,
+                ["assemblyLocation"] = PluginAssembly.Location,
             });
     }
 
@@ -48,6 +55,8 @@ public sealed class WorkshopAssemblyDiagnostics : IDisposable
     public bool IsEnabled => writer != null;
 
     public string? FilePath { get; }
+
+    private static Assembly PluginAssembly => typeof(Plugin).Assembly;
 
     public static WorkshopAssemblyDiagnostics CreateEnabled(string directory, DateTimeOffset startedAt)
     {

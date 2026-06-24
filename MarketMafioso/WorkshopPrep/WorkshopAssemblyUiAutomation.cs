@@ -41,7 +41,9 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
     private readonly IObjectTable objectTable;
     private readonly ITargetManager targetManager;
     private readonly ICondition condition;
+    private readonly WorkshopExternalAutomationCoordinator externalAutomationCoordinator;
     private uint? pendingContributionItemId;
+    private WorkshopAssemblyPendingConfirmationKind pendingConfirmationKind;
     private bool requestItemSelectionStarted;
     private bool requestConfirmed;
 
@@ -51,7 +53,8 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
         IPluginLog log,
         IObjectTable objectTable,
         ITargetManager targetManager,
-        ICondition condition)
+        ICondition condition,
+        WorkshopExternalAutomationCoordinator externalAutomationCoordinator)
     {
         this.gameGui = gameGui;
         this.addonLifecycle = addonLifecycle;
@@ -59,6 +62,7 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
         this.objectTable = objectTable;
         this.targetManager = targetManager;
         this.condition = condition;
+        this.externalAutomationCoordinator = externalAutomationCoordinator;
 
         addonLifecycle.RegisterListener(AddonEvent.PostSetup, RequestAddon, RequestPostSetup);
         addonLifecycle.RegisterListener(AddonEvent.PostRefresh, RequestAddon, RequestPostRefresh);
@@ -71,7 +75,8 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
     {
         var isReady = IsAddonReady(CompanyCraftRecipeNoteBookAddon) ||
                       GetMaterialDeliveryAddon() != null ||
-                      IsAddonReady(SelectStringAddon);
+                      IsAddonReady(SelectStringAddon) ||
+                      (pendingConfirmationKind != WorkshopAssemblyPendingConfirmationKind.None && IsAddonReady(SelectYesNoAddon));
         Diagnostics.Record("ui-ready-check", isReady ? "Fabrication station UI is ready." : "Fabrication station UI is not ready.");
         return isReady;
     }
@@ -146,11 +151,16 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
                 return new(true, $"Matching workshop project {entry.ProjectName} is already open.");
         }
 
-        if (TrySelectYesNo(0, text => text.StartsWith("Craft ", StringComparison.Ordinal)))
-            return new(true, $"Confirmed workshop project {entry.ProjectName}.", ActionTaken: true);
+        var confirmation = TryConfirmPendingConfirmation();
+        if (confirmation != null)
+            return confirmation;
 
-        if (TrySelectString(IsContributeMaterialsEntry))
-            return new(true, $"Selected active workshop material contribution for {entry.ProjectName}.", ActionTaken: true);
+        if (pendingConfirmationKind != WorkshopAssemblyPendingConfirmationKind.None)
+            return new(false, $"Waiting for {pendingConfirmationKind} confirmation. {DescribeUiState()}");
+
+        var activeProjectAction = TrySelectActiveProjectAction(entry);
+        if (activeProjectAction != null)
+            return activeProjectAction;
 
         var craftingLog = GetCraftingLogAddon();
         if (craftingLog != null)
@@ -167,6 +177,7 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
                         ["workshopItemId"] = entry.WorkshopItemId.ToString(),
                     });
                 SelectCraft(craftingLog, entry);
+                SetPendingConfirmation(WorkshopAssemblyPendingConfirmationKind.ProjectStart, $"selected workshop project {entry.ProjectName}");
                 return new(false, $"Selected workshop project {entry.ProjectName}.", ActionTaken: true);
             }
 
@@ -192,11 +203,34 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
         return new(false, $"Workshop project {entry.ProjectName} cannot be opened. {DescribeUiState()}");
     }
 
+    private WorkshopAssemblyActionResult? TrySelectActiveProjectAction(WorkshopAssemblyQueueEntry entry)
+    {
+        if (TrySelectString(IsContributeMaterialsEntry))
+            return new(true, $"Selected active workshop material contribution for {entry.ProjectName}.", ActionTaken: true);
+
+        if (TrySelectString(IsAdvancePhaseEntry))
+            return new(false, $"Advanced workshop project phase for {entry.ProjectName}.", ActionTaken: true, RequiresWorkshopReopen: true);
+
+        if (TrySelectString(IsCompleteConstructionEntry))
+            return new(false, $"Selected final construction step for {entry.ProjectName}.", ActionTaken: true, RequiresWorkshopReopen: true);
+
+        if (TrySelectString(IsCollectFinishedProductEntry))
+        {
+            SetPendingConfirmation(WorkshopAssemblyPendingConfirmationKind.ProductRetrieval, $"selected finished product collection for {entry.ProjectName}");
+            return new(true, $"Selected finished product collection for {entry.ProjectName}.", ActionTaken: true);
+        }
+
+        return null;
+    }
+
     public unsafe WorkshopAssemblyActionResult TrySubmitNextMaterial(WorkshopAssemblyQueueEntry entry)
     {
-        var confirmation = TryConfirmContribution();
-        if (confirmation.Success || confirmation.ActionTaken || confirmation.IsProjectComplete)
+        var confirmation = TryConfirmPendingConfirmation();
+        if (confirmation != null)
             return confirmation;
+
+        if (pendingConfirmationKind != WorkshopAssemblyPendingConfirmationKind.None)
+            return new(false, $"Waiting for {pendingConfirmationKind} confirmation. {DescribeUiState()}");
 
         if (requestConfirmed)
         {
@@ -214,13 +248,16 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
                 $"Waiting for request item selection for material {pendingContributionItemId}. {DescribeUiState()}");
         }
 
-        if (TrySelectString(text => text.StartsWith("Collect finished product.", StringComparison.Ordinal)))
-            return new(false, $"Selected finished product collection for {entry.ProjectName}.", ActionTaken: true, RequiresWorkshopReopen: true);
+        if (TrySelectString(IsCollectFinishedProductEntry))
+        {
+            SetPendingConfirmation(WorkshopAssemblyPendingConfirmationKind.ProductRetrieval, $"selected finished product collection for {entry.ProjectName}");
+            return new(false, $"Selected finished product collection for {entry.ProjectName}.", ActionTaken: true);
+        }
 
-        if (TrySelectString(text => text.StartsWith("Complete the construction of", StringComparison.Ordinal)))
+        if (TrySelectString(IsCompleteConstructionEntry))
             return new(false, $"Selected final construction step for {entry.ProjectName}.", ActionTaken: true, RequiresWorkshopReopen: true);
 
-        if (TrySelectString(text => text.StartsWith("Advance to the next phase of production.", StringComparison.Ordinal)))
+        if (TrySelectString(IsAdvancePhaseEntry))
             return new(false, $"Advanced workshop project phase for {entry.ProjectName}.", ActionTaken: true, RequiresWorkshopReopen: true);
 
         if (TrySelectString(IsContributeMaterialsEntry))
@@ -271,10 +308,11 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
                     ["stepsComplete"] = item.StepsComplete.ToString(),
                     ["stepsTotal"] = item.StepsTotal.ToString(),
                 });
-            ContributeMaterial(materialDelivery, index, item);
             pendingContributionItemId = item.ItemId;
             requestItemSelectionStarted = false;
             requestConfirmed = false;
+            externalAutomationCoordinator.SuppressTextAdvance();
+            ContributeMaterial(materialDelivery, index, item);
             return new(
                 false,
                 $"Submitted workshop material request for {item.ItemCountPerStep}x {item.ItemName}.",
@@ -288,29 +326,72 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
 
     public WorkshopAssemblyActionResult TryConfirmContribution()
     {
-        if (TrySelectYesNo(0, IsHighQualityHandoffPrompt))
-            return new(false, "Confirmed HQ workshop material handoff.", ActionTaken: true);
-
-        if (TrySelectYesNo(0, IsContributeItemsPrompt))
-        {
-            var itemId = pendingContributionItemId;
-            pendingContributionItemId = null;
-            requestItemSelectionStarted = false;
-            return new(
-                true,
-                "Confirmed workshop material contribution.",
-                IsContributionConfirmed: true,
-                ActiveMaterialItemId: itemId);
-        }
-
-        if (TrySelectYesNo(0, text => text.StartsWith("Retrieve from the company workshop?", StringComparison.Ordinal)))
-        {
-            pendingContributionItemId = null;
-            requestItemSelectionStarted = false;
-            return new(true, "Retrieved finished workshop project.", IsProjectComplete: true);
-        }
+        var confirmation = TryConfirmPendingConfirmation();
+        if (confirmation != null)
+            return confirmation;
 
         return new(false, $"Workshop material contribution is not ready to confirm. {DescribeUiState()}");
+    }
+
+    private WorkshopAssemblyActionResult? TryConfirmPendingConfirmation()
+    {
+        if (pendingConfirmationKind == WorkshopAssemblyPendingConfirmationKind.None)
+            return null;
+
+        if (!TryGetSelectYesNoPrompt(out var text))
+            return null;
+
+        if (!IsPromptAllowedForPendingConfirmation(pendingConfirmationKind, text))
+        {
+            return new(
+                false,
+                $"Waiting for {pendingConfirmationKind} confirmation, but the visible SelectYesno prompt is not recognized for that action: {text}. {DescribeUiState()}");
+        }
+
+        var kind = pendingConfirmationKind;
+        TrySelectYesNo(0, text);
+
+        switch (kind)
+        {
+            case WorkshopAssemblyPendingConfirmationKind.ProjectStart:
+                ClearPendingConfirmation();
+                return new(true, "Confirmed workshop project.", ActionTaken: true);
+
+            case WorkshopAssemblyPendingConfirmationKind.MaterialContribution when IsHighQualityHandoffPrompt(text):
+                return new(false, "Confirmed HQ workshop material handoff.", ActionTaken: true);
+
+            case WorkshopAssemblyPendingConfirmationKind.MaterialContribution:
+                {
+                    var itemId = pendingContributionItemId;
+                    pendingContributionItemId = null;
+                    requestItemSelectionStarted = false;
+                    requestConfirmed = false;
+                    ClearPendingConfirmation();
+                    return new(
+                        true,
+                        "Confirmed workshop material contribution.",
+                        IsContributionConfirmed: true,
+                        ActiveMaterialItemId: itemId);
+                }
+
+            case WorkshopAssemblyPendingConfirmationKind.PhaseAdvance:
+                ClearPendingConfirmation();
+                return new(false, "Confirmed workshop phase advance.", ActionTaken: true, RequiresWorkshopReopen: true);
+
+            case WorkshopAssemblyPendingConfirmationKind.FinalConstruction:
+                ClearPendingConfirmation();
+                return new(false, "Confirmed workshop final construction.", ActionTaken: true, RequiresWorkshopReopen: true);
+
+            case WorkshopAssemblyPendingConfirmationKind.ProductRetrieval:
+                pendingContributionItemId = null;
+                requestItemSelectionStarted = false;
+                requestConfirmed = false;
+                ClearPendingConfirmation();
+                return new(true, "Retrieved finished workshop project.", IsProjectComplete: true);
+
+            default:
+                return null;
+        }
     }
 
     public unsafe WorkshopAssemblyActionResult TryWaitForContributionProgress(
@@ -386,10 +467,21 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
             ? "Workshop UI state: no tracked addons present."
             : $"Workshop UI state: {string.Join(", ", activeAddons)}.";
 
+        var details = new List<string>();
         var selectStringEntries = DescribeSelectStringEntries();
-        return selectStringEntries == null
+        if (selectStringEntries != null)
+            details.Add($"SelectString entries: {selectStringEntries}");
+
+        var selectYesNoPrompt = DescribeSelectYesNoPrompt();
+        if (selectYesNoPrompt != null)
+            details.Add($"SelectYesno prompt: {selectYesNoPrompt}");
+
+        if (pendingConfirmationKind != WorkshopAssemblyPendingConfirmationKind.None)
+            details.Add($"Pending confirmation: {pendingConfirmationKind}");
+
+        return details.Count == 0
             ? state
-            : $"{state} SelectString entries: {selectStringEntries}.";
+            : $"{state} {string.Join(" ", details.Select(x => $"{x}."))}";
     }
 
     public void Dispose()
@@ -397,6 +489,7 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
         addonLifecycle.UnregisterListener(AddonEvent.PostReceiveEvent, ContextIconMenuAddon, ContextIconMenuPostReceiveEvent);
         addonLifecycle.UnregisterListener(AddonEvent.PostRefresh, RequestAddon, RequestPostRefresh);
         addonLifecycle.UnregisterListener(AddonEvent.PostSetup, RequestAddon, RequestPostSetup);
+        externalAutomationCoordinator.Dispose();
     }
 
     internal static bool IsContributeItemsPrompt(string text)
@@ -411,6 +504,33 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
                text == "Do you really want to trade a high-quality item?";
     }
 
+    internal static bool IsRetrieveFinishedProjectPrompt(string text)
+    {
+        return text == "Retrieve from the company workshop?" ||
+               (text.StartsWith("Retrieve ", StringComparison.Ordinal) &&
+                text.EndsWith(" from the company workshop?", StringComparison.Ordinal));
+    }
+
+    internal static bool IsPromptAllowedForPendingConfirmation(
+        WorkshopAssemblyPendingConfirmationKind kind,
+        string text)
+    {
+        return kind switch
+        {
+            WorkshopAssemblyPendingConfirmationKind.ProjectStart =>
+                text.StartsWith("Craft ", StringComparison.Ordinal),
+            WorkshopAssemblyPendingConfirmationKind.MaterialContribution =>
+                IsHighQualityHandoffPrompt(text) || IsContributeItemsPrompt(text),
+            WorkshopAssemblyPendingConfirmationKind.PhaseAdvance =>
+                text.StartsWith("Advance to the next phase", StringComparison.Ordinal),
+            WorkshopAssemblyPendingConfirmationKind.FinalConstruction =>
+                text.StartsWith("Complete the construction", StringComparison.Ordinal),
+            WorkshopAssemblyPendingConfirmationKind.ProductRetrieval =>
+                IsRetrieveFinishedProjectPrompt(text),
+            _ => false,
+        };
+    }
+
     internal static bool IsContributeMaterialsEntry(string text)
     {
         return text.StartsWith("Contribute materials.", StringComparison.Ordinal);
@@ -419,9 +539,24 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
     internal static bool IsPostContributionMenuEntry(string text)
     {
         return IsContributeMaterialsEntry(text) ||
-               text.StartsWith("Advance to the next phase of production.", StringComparison.Ordinal) ||
-               text.StartsWith("Complete the construction of", StringComparison.Ordinal) ||
-               text.StartsWith("Collect finished product.", StringComparison.Ordinal);
+               IsAdvancePhaseEntry(text) ||
+               IsCompleteConstructionEntry(text) ||
+               IsCollectFinishedProductEntry(text);
+    }
+
+    internal static bool IsAdvancePhaseEntry(string text)
+    {
+        return text.StartsWith("Advance to the next phase of production.", StringComparison.Ordinal);
+    }
+
+    internal static bool IsCompleteConstructionEntry(string text)
+    {
+        return text.StartsWith("Complete the construction of", StringComparison.Ordinal);
+    }
+
+    internal static bool IsCollectFinishedProductEntry(string text)
+    {
+        return text.StartsWith("Collect finished product.", StringComparison.Ordinal);
     }
 
     private bool IsCutsceneActive()
@@ -549,16 +684,29 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
         return entries.Count == 0 ? null : string.Join(" | ", entries);
     }
 
-    private unsafe bool TrySelectYesNo(int choice, Predicate<string> predicate)
+    private unsafe string? DescribeSelectYesNoPrompt()
     {
+        return TryGetSelectYesNoPrompt(out var text) ? text : null;
+    }
+
+    private unsafe bool TryGetSelectYesNoPrompt(out string text)
+    {
+        text = string.Empty;
         var addon = gameGui.GetAddonByName<AddonSelectYesno>(SelectYesNoAddon, 1);
         if (addon == null || !IsAddonReady(&addon->AtkUnitBase))
             return false;
 
-        var text = addon->PromptText->NodeText.ExtractText()
+        text = addon->PromptText->NodeText.ExtractText()
             .Replace("\n", string.Empty, StringComparison.Ordinal)
             .Replace("\r", string.Empty, StringComparison.Ordinal);
-        if (!predicate(text))
+
+        return !string.IsNullOrWhiteSpace(text);
+    }
+
+    private unsafe bool TrySelectYesNo(int choice, string text)
+    {
+        var addon = gameGui.GetAddonByName<AddonSelectYesno>(SelectYesNoAddon, 1);
+        if (addon == null || !IsAddonReady(&addon->AtkUnitBase))
             return false;
 
         addon->AtkUnitBase.FireCallbackInt(choice);
@@ -570,8 +718,26 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
             {
                 ["choice"] = choice.ToString(),
                 ["text"] = text,
+                ["pendingConfirmation"] = pendingConfirmationKind.ToString(),
             });
         return true;
+    }
+
+    private void SetPendingConfirmation(WorkshopAssemblyPendingConfirmationKind kind, string source)
+    {
+        pendingConfirmationKind = kind;
+        Diagnostics.Record(
+            "pending-confirmation",
+            $"Waiting for {kind} confirmation.",
+            new Dictionary<string, string?>
+            {
+                ["source"] = source,
+            });
+    }
+
+    private void ClearPendingConfirmation()
+    {
+        pendingConfirmationKind = WorkshopAssemblyPendingConfirmationKind.None;
     }
 
     private static unsafe IReadOnlyList<WorkshopCraftingLogItem> ReadVisibleCraftingLogItems(AtkUnitBase* addon)
@@ -777,6 +943,10 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
         addon->AtkUnitBase.FireCallback(4, values, true);
         addon->AtkUnitBase.Close(false);
         requestConfirmed = true;
+        SetPendingConfirmation(
+            WorkshopAssemblyPendingConfirmationKind.MaterialContribution,
+            $"confirmed request item window for material {pendingContributionItemId}");
+        externalAutomationCoordinator.RestoreTextAdvance();
         log.Verbose($"[MarketMafioso] Confirmed request item window for workshop material {pendingContributionItemId}.");
         Diagnostics.Record(
             "request-confirmed",

@@ -11,6 +11,7 @@ public sealed class WorkshopAssemblyRunner : IDisposable
     private readonly IPluginLog log;
     private readonly IWorkshopAssemblyUiAutomation uiAutomation;
     private readonly string diagnosticsDirectory;
+    private readonly Action<WorkshopAssemblyQueueEntry> onProjectRetrieved;
     private WorkshopAssemblyPlan? activePlan;
     private WorkshopAssemblyDiagnostics diagnostics = WorkshopAssemblyDiagnostics.Disabled;
     private DateTimeOffset continueAt = DateTimeOffset.MinValue;
@@ -20,30 +21,36 @@ public sealed class WorkshopAssemblyRunner : IDisposable
     private uint? activeMaterialItemId;
     private uint? pendingProgressMaterialItemId;
     private uint? pendingProgressStepsComplete;
+    private WorkshopAssemblyRunnerState stateBeforePause = WorkshopAssemblyRunnerState.Idle;
 
     public WorkshopAssemblyRunner(
         IFramework framework,
         IPluginLog log,
         IWorkshopAssemblyUiAutomation uiAutomation,
-        string diagnosticsDirectory)
+        string diagnosticsDirectory,
+        Action<WorkshopAssemblyQueueEntry>? onProjectRetrieved = null)
     {
         this.framework = framework;
         this.log = log;
         this.uiAutomation = uiAutomation;
         this.diagnosticsDirectory = diagnosticsDirectory;
+        this.onProjectRetrieved = onProjectRetrieved ?? (_ => { });
         Progress = BuildProgress(WorkshopAssemblyRunnerState.Idle, "Workshop assembly has not run.");
     }
 
     public WorkshopAssemblyProgress Progress { get; private set; }
     public string? LastDiagnosticFilePath { get; private set; }
     public bool IsRunning => Progress.State is not WorkshopAssemblyRunnerState.Idle
+        and not WorkshopAssemblyRunnerState.Paused
         and not WorkshopAssemblyRunnerState.Complete
         and not WorkshopAssemblyRunnerState.Stopped
         and not WorkshopAssemblyRunnerState.Failed;
+    public bool IsPaused => Progress.State == WorkshopAssemblyRunnerState.Paused;
+    public bool HasActiveRun => IsRunning || IsPaused;
 
     public WorkshopAssemblyActionResult Start(WorkshopAssemblyPlan plan, bool enableDiagnostics = false)
     {
-        if (IsRunning)
+        if (HasActiveRun)
             return new(false, "Workshop assembly is already running.");
 
         diagnostics.Dispose();
@@ -58,6 +65,7 @@ public sealed class WorkshopAssemblyRunner : IDisposable
         activeMaterialItemId = null;
         pendingProgressMaterialItemId = null;
         pendingProgressStepsComplete = null;
+        stateBeforePause = WorkshopAssemblyRunnerState.Idle;
         continueAt = DateTimeOffset.MinValue;
         SetState(WorkshopAssemblyRunnerState.WaitingForFabricationStation, "Waiting for fabrication station UI.");
         diagnostics.Record(
@@ -74,12 +82,43 @@ public sealed class WorkshopAssemblyRunner : IDisposable
         return new(true, "Native workshop assembly started.");
     }
 
-    public void Stop()
+    public WorkshopAssemblyActionResult Pause()
     {
         if (!IsRunning)
+            return new(false, "Workshop assembly is not running.");
+
+        stateBeforePause = Progress.State;
+        framework.Update -= OnFrameworkUpdate;
+        SetState(WorkshopAssemblyRunnerState.Paused, "Workshop assembly paused.");
+        diagnostics.Record("paused", "Workshop assembly paused by user.");
+        log.Information("[MarketMafioso] Native workshop assembly paused by user.");
+        return new(true, "Workshop assembly paused.");
+    }
+
+    public WorkshopAssemblyActionResult Resume()
+    {
+        if (!IsPaused)
+            return new(false, "Workshop assembly is not paused.");
+
+        var resumeState = stateBeforePause == WorkshopAssemblyRunnerState.Paused ||
+            stateBeforePause == WorkshopAssemblyRunnerState.Idle
+            ? WorkshopAssemblyRunnerState.WaitingForFabricationStation
+            : stateBeforePause;
+        stateBeforePause = WorkshopAssemblyRunnerState.Idle;
+        SetState(resumeState, "Workshop assembly resumed.");
+        diagnostics.Record("resumed", "Workshop assembly resumed by user.");
+        framework.Update += OnFrameworkUpdate;
+        log.Information("[MarketMafioso] Native workshop assembly resumed by user.");
+        return new(true, "Workshop assembly resumed.");
+    }
+
+    public void Stop()
+    {
+        if (!HasActiveRun)
             return;
 
         framework.Update -= OnFrameworkUpdate;
+        stateBeforePause = WorkshopAssemblyRunnerState.Idle;
         SetState(WorkshopAssemblyRunnerState.Stopped, "Workshop assembly stopped by user.");
         diagnostics.Record("stopped", "Workshop assembly stopped by user.");
         CloseDiagnostics();
@@ -319,6 +358,7 @@ public sealed class WorkshopAssemblyRunner : IDisposable
 
     private void CompleteActiveProject(WorkshopAssemblyQueueEntry entry, string message)
     {
+        onProjectRetrieved(entry);
         activeEntryCompletedQuantity++;
         activeMaterialItemId = null;
         if (activeEntryCompletedQuantity >= entry.Quantity)
