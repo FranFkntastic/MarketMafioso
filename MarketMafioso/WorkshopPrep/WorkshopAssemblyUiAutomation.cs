@@ -127,6 +127,9 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
         if (TrySelectYesNo(0, text => text.StartsWith("Craft ", StringComparison.Ordinal)))
             return new(true, $"Confirmed workshop project {entry.ProjectName}.", ActionTaken: true);
 
+        if (TrySelectString(IsContributeMaterialsEntry))
+            return new(true, $"Selected active workshop material contribution for {entry.ProjectName}.", ActionTaken: true);
+
         var craftingLog = GetCraftingLogAddon();
         if (craftingLog != null)
         {
@@ -207,7 +210,7 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
         if (TrySelectString(text => text.StartsWith("Advance to the next phase of production.", StringComparison.Ordinal)))
             return new(false, $"Advanced workshop project phase for {entry.ProjectName}.", ActionTaken: true);
 
-        if (TrySelectString(text => text.StartsWith("Contribute materials.", StringComparison.Ordinal)))
+        if (TrySelectString(IsContributeMaterialsEntry))
             return new(false, $"Selected material contribution for {entry.ProjectName}.", ActionTaken: true);
 
         var materialDelivery = GetMaterialDeliveryAddon();
@@ -338,6 +341,11 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
     {
         return text.Contains("Contribute", StringComparison.Ordinal) &&
                text.Contains("items", StringComparison.Ordinal);
+    }
+
+    internal static bool IsContributeMaterialsEntry(string text)
+    {
+        return text.StartsWith("Contribute materials.", StringComparison.Ordinal);
     }
 
     private IGameObject? FindFabricationStation()

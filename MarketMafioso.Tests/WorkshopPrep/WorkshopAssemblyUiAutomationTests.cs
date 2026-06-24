@@ -9,4 +9,14 @@ public sealed class WorkshopAssemblyUiAutomationTests
     {
         Assert.Contains("CompanyCraftMaterial", WorkshopAssemblyUiAutomation.MaterialDeliveryAddonNames);
     }
+
+    [Theory]
+    [InlineData("Contribute materials.", true)]
+    [InlineData("Contribute materials. ", true)]
+    [InlineData("View company crafting log.", false)]
+    [InlineData("Complete the construction of the Shark-class Bridge.", false)]
+    public void IsContributeMaterialsEntry_only_matches_safe_active_project_open_action(string text, bool expected)
+    {
+        Assert.Equal(expected, WorkshopAssemblyUiAutomation.IsContributeMaterialsEntry(text));
+    }
 }
