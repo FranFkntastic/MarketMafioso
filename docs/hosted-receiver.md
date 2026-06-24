@@ -41,6 +41,7 @@ MarketMafioso__ReadApiKey=<optional-read-secret>
 MarketMafioso__PreviousReadApiKey=<optional-previous-read-secret>
 MarketMafioso__BasePath=/api/marketmafioso
 MarketMafioso__PublicOrigin=https://dev.xivcraftarchitect.com
+MarketMafioso__DisplayTimeZone=America/New_York
 MarketMafioso__StorageLabel=dev receiver storage
 MarketMafioso__DatabasePath=/srv/craftarchitect/data/marketmafioso/dev/marketmafioso.db
 MarketMafioso__RawJsonRetentionCount=20
@@ -148,6 +149,8 @@ For the dev VPS, the database is:
 ```
 
 The structured inventory browser is character-scoped by default and exposes separate scopes for all inventories, player inventory, and each retainer. Item type is stored per item when supplied by the plugin's Lumina metadata resolution.
+
+Dashboard timestamps are displayed in `MarketMafioso__DisplayTimeZone`, defaulting to `America/New_York`.
 
 The original incoming JSON is retained only for the newest `MarketMafioso__RawJsonRetentionCount` snapshots, defaulting to `20`. Older snapshots remain available through structured dashboard and API views until `MarketMafioso__SnapshotRetentionCount`, defaulting to `500`, deletes old structured snapshots. Raw JSON routes return `410 Gone` with `raw_json_pruned` after the original payload has been pruned.
 

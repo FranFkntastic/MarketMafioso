@@ -55,6 +55,12 @@ Structured snapshots are retained for the newest 500 snapshots by default. Overr
 $env:MarketMafioso__SnapshotRetentionCount = "500"
 ```
 
+Dashboard timestamps default to Eastern time. Override the display timezone with an IANA or Windows timezone ID:
+
+```powershell
+$env:MarketMafioso__DisplayTimeZone = "America/New_York"
+```
+
 ## API Key
 
 The local server accepts unauthenticated reports by default. To require the plugin's `X-Api-Key` header locally:

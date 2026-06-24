@@ -81,7 +81,8 @@ app.MapGet("/", async (
             StorageDisplayName(store.ReportDirectory, storageLabel, requireApiKey),
             deleted,
             request.PathBase,
-            csrfToken),
+            csrfToken,
+            ResolveDisplayTimeZone(app.Configuration)),
         "text/html; charset=utf-8");
 });
 
@@ -104,7 +105,7 @@ app.MapGet("/inventory", async (
     var latest = await store.GetLatestAsync(1, selectedCharacterId, token);
     var view = InventoryBrowserViewBuilder.Build(latest, search, scope);
     return Results.Content(
-        RenderInventoryBrowser(view, characters, selectedCharacterId, request.PathBase),
+        RenderInventoryBrowser(view, characters, selectedCharacterId, request.PathBase, ResolveDisplayTimeZone(app.Configuration)),
         "text/html; charset=utf-8");
 });
 
@@ -115,7 +116,7 @@ app.MapGet("/diagnostics", async (
 {
     var reports = await store.ListSummariesAsync(1, characterId: null, token);
     return Results.Content(
-        RenderDiagnostics(reports, request.PathBase),
+        RenderDiagnostics(reports, request.PathBase, ResolveDisplayTimeZone(app.Configuration)),
         "text/html; charset=utf-8");
 });
 
@@ -185,7 +186,7 @@ app.MapGet("/reports/{id}", async (HttpRequest request, string id, InventoryRepo
     return report == null
         ? Results.NotFound(RenderNotFound(id, request.PathBase))
         : Results.Content(
-            RenderReportDetails(report, InventorySnapshotViewBuilder.Build(report), request.PathBase, csrfToken),
+            RenderReportDetails(report, InventorySnapshotViewBuilder.Build(report), request.PathBase, csrfToken, ResolveDisplayTimeZone(app.Configuration)),
             "text/html; charset=utf-8");
 });
 
@@ -426,6 +427,25 @@ static bool HasValidOrigin(HttpRequest request, string? publicOrigin)
         StringComparison.OrdinalIgnoreCase);
 }
 
+static TimeZoneInfo ResolveDisplayTimeZone(IConfiguration configuration)
+{
+    var configured = configuration["MarketMafioso:DisplayTimeZone"];
+    if (!string.IsNullOrWhiteSpace(configured))
+        return TimeZoneInfo.FindSystemTimeZoneById(configured);
+
+    try
+    {
+        return TimeZoneInfo.FindSystemTimeZoneById("America/New_York");
+    }
+    catch (TimeZoneNotFoundException)
+    {
+        return TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
+    }
+}
+
+static string FormatDisplayTime(DateTimeOffset value, TimeZoneInfo displayTimeZone) =>
+    TimeZoneInfo.ConvertTime(value, displayTimeZone).ToString("yyyy-MM-dd HH:mm:ss zzz");
+
 static string RenderDashboard(
     IReadOnlyList<ReportSummary> reports,
     IReadOnlyList<CharacterSummary> characters,
@@ -434,7 +454,8 @@ static string RenderDashboard(
     string storageDisplayName,
     string? deleted,
     PathString pathBase,
-    string csrfToken)
+    string csrfToken,
+    TimeZoneInfo displayTimeZone)
 {
     var rows = new StringBuilder();
     foreach (var report in reports)
@@ -442,7 +463,7 @@ static string RenderDashboard(
         rows.AppendLine($"""
             <tr>
                 <td><a href="{Html(AppUrl(pathBase, $"/reports/{report.Id}"))}">{Html(report.Id)}</a></td>
-                <td>{Html(report.ReceivedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss zzz"))}</td>
+                <td>{Html(FormatDisplayTime(report.ReceivedAt, displayTimeZone))}</td>
                 <td>{Html(report.CharacterName ?? "-")}</td>
                 <td>{Html(report.HomeWorld ?? "-")}</td>
                 <td>{report.PlayerItemStacks:N0} stacks / {report.PlayerItemQuantity:N0} items</td>
@@ -461,7 +482,7 @@ static string RenderDashboard(
 
     var latest = reports.Count == 0
         ? "Never"
-        : reports.Max(r => r.ReceivedAt).ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss zzz");
+        : FormatDisplayTime(reports.Max(r => r.ReceivedAt), displayTimeZone);
     var selectedCharacter = selectedCharacterId == null
         ? null
         : characters.FirstOrDefault(c => c.Id == selectedCharacterId.Value);
@@ -711,7 +732,8 @@ static string RenderInventoryBrowser(
     InventoryBrowserView view,
     IReadOnlyList<CharacterSummary> characters,
     long? selectedCharacterId,
-    PathString pathBase)
+    PathString pathBase,
+    TimeZoneInfo displayTimeZone)
 {
     var characterOptions = RenderCharacterOptions(characters, selectedCharacterId);
     var scopeLinks = RenderInventoryScopeLinks(view, selectedCharacterId, pathBase);
@@ -723,7 +745,7 @@ static string RenderInventoryBrowser(
         : $"{view.CharacterName} @ {view.HomeWorld ?? "-"}";
     var received = view.ReceivedAt == null
         ? "No snapshots yet"
-        : view.ReceivedAt.Value.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss zzz");
+        : FormatDisplayTime(view.ReceivedAt.Value, displayTimeZone);
 
     return $$"""
         <!doctype html>
@@ -830,6 +852,7 @@ static string RenderInventoryBrowser(
                 table { width: 100%; border-collapse: collapse; table-layout: fixed; }
                 th, td { padding: 6px 9px; border-bottom: 1px solid var(--line-soft); vertical-align: middle; }
                 th {
+                    position: relative;
                     height: 32px;
                     color: var(--muted);
                     background: #202832;
@@ -839,6 +862,31 @@ static string RenderInventoryBrowser(
                     text-transform: uppercase;
                     letter-spacing: .03em;
                 }
+                th button {
+                    width: 100%;
+                    height: 100%;
+                    padding: 0;
+                    border: 0;
+                    background: transparent;
+                    color: inherit;
+                    font: inherit;
+                    text-align: inherit;
+                    text-transform: inherit;
+                    letter-spacing: inherit;
+                    cursor: pointer;
+                }
+                th[aria-sort="ascending"] button::after { content: "  ^"; color: var(--accent); }
+                th[aria-sort="descending"] button::after { content: "  v"; color: var(--accent); }
+                .column-resizer {
+                    position: absolute;
+                    top: 0;
+                    right: -3px;
+                    width: 7px;
+                    height: 100%;
+                    cursor: col-resize;
+                    z-index: 2;
+                }
+                .column-resizer:hover { background: rgba(98, 182, 255, .22); }
                 .icon-column, .icon-cell { display: none; }
                 tr.item-row:nth-child(even) td { background: var(--row-alt); }
                 tr.item-row:nth-child(odd) td { background: var(--row); }
@@ -906,7 +954,7 @@ static string RenderInventoryBrowser(
                     </nav>
                 </header>
                 <form class="toolbar" method="get" action="{{Html(AppUrl(pathBase, "/inventory"))}}">
-                    <input name="search" value="{{Html(view.Search)}}" aria-label="Search by item name or id" placeholder="Search by item name or id">
+                    <input id="inventory-search" name="search" value="{{Html(view.Search)}}" aria-label="Search by item name, type, location, or id" placeholder="Search by item name, type, location, or id" autocomplete="off" data-live-search-target="inventory-browser-table">
                     <select name="characterId" aria-label="Character">{{characterOptions}}</select>
                     <button type="submit">Search</button>
                 </form>
@@ -947,13 +995,13 @@ static string RenderInventoryBrowser(
                                 </colgroup>
                                 <thead>
                                     <tr>
-                                        <th class="icon-column">Icon</th>
-                                        <th>Item</th>
-                                        <th class="type-column">Type</th>
-                                        <th class="number">Total</th>
-                                        <th class="number">HQ</th>
-                                        <th>Scope</th>
-                                        <th>Location</th>
+                                        <th class="icon-column">Icon<span class="column-resizer" aria-hidden="true"></span></th>
+                                        <th data-sort-key="item" aria-sort="none"><button type="button">Item</button><span class="column-resizer" aria-hidden="true"></span></th>
+                                        <th class="type-column" data-sort-key="type" aria-sort="none"><button type="button">Type</button><span class="column-resizer" aria-hidden="true"></span></th>
+                                        <th class="number" data-sort-key="total" aria-sort="none"><button type="button">Total</button><span class="column-resizer" aria-hidden="true"></span></th>
+                                        <th class="number" data-sort-key="hq" aria-sort="none"><button type="button">HQ</button><span class="column-resizer" aria-hidden="true"></span></th>
+                                        <th data-sort-key="scope" aria-sort="none"><button type="button">Scope</button><span class="column-resizer" aria-hidden="true"></span></th>
+                                        <th data-sort-key="location" aria-sort="none"><button type="button">Location</button><span class="column-resizer" aria-hidden="true"></span></th>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -964,10 +1012,86 @@ static string RenderInventoryBrowser(
                     </section>
                 </main>
                 <footer class="statusbar">
-                    <span>Structured retention: 500 snapshots by default.</span>
+                    <span><span id="visible-item-count">{{view.Items.Count:N0}}</span> visible item rows.</span>
                     <span>Item icons are reserved for a later server-side metadata cache.</span>
                 </footer>
             </div>
+            <script>
+                function initializeInventoryBrowserTable() {
+                    const input = document.getElementById('inventory-search');
+                    const table = document.querySelector('.inventory-browser-table');
+                    if (!table) return;
+                    if (!input) return;
+
+                    const tbody = table.tBodies[0];
+                    const count = document.getElementById('visible-item-count');
+                    const rows = Array.from(tbody.querySelectorAll('tr.item-row'));
+                    let activeSort = { key: 'item', direction: 'asc' };
+
+                    const compareText = (a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });
+                    const valueFor = (row, key) => row.dataset[key] || '';
+
+                    function applySearch() {
+                        const query = (input?.value || '').trim().toLocaleLowerCase();
+                        let visible = 0;
+                        for (const row of rows) {
+                            const matches = query.length === 0 || (row.dataset.search || '').includes(query);
+                            row.hidden = !matches;
+                            if (matches) visible++;
+                        }
+                        if (count) count.textContent = visible.toLocaleString();
+                    }
+
+                    function applySort(key) {
+                        const direction = activeSort.key === key && activeSort.direction === 'asc' ? 'desc' : 'asc';
+                        activeSort = { key, direction };
+                        const numeric = key === 'total' || key === 'hq';
+                        rows.sort((a, b) => {
+                            const result = numeric
+                                ? Number(valueFor(a, key)) - Number(valueFor(b, key))
+                                : compareText(valueFor(a, key), valueFor(b, key));
+                            return direction === 'asc' ? result : -result;
+                        });
+                        for (const row of rows) tbody.appendChild(row);
+                        for (const header of table.tHead.querySelectorAll('th[data-sort-key]')) {
+                            header.setAttribute('aria-sort', header.dataset.sortKey === key
+                                ? (direction === 'asc' ? 'ascending' : 'descending')
+                                : 'none');
+                        }
+                    }
+
+                    function initializeResizableColumns() {
+                        const cols = Array.from(table.querySelectorAll('colgroup col'));
+                        for (const [index, handle] of Array.from(table.querySelectorAll('.column-resizer')).entries()) {
+                            const column = cols[index];
+                            if (!column) continue;
+                            handle.addEventListener('mousedown', event => {
+                                event.preventDefault();
+                                const startX = event.clientX;
+                                const startWidth = column.getBoundingClientRect().width || 120;
+                                const onMove = moveEvent => {
+                                    const nextWidth = Math.max(54, startWidth + moveEvent.clientX - startX);
+                                    column.style.width = `${nextWidth}px`;
+                                };
+                                const onUp = () => {
+                                    document.removeEventListener('mousemove', onMove);
+                                    document.removeEventListener('mouseup', onUp);
+                                };
+                                document.addEventListener('mousemove', onMove);
+                                document.addEventListener('mouseup', onUp);
+                            });
+                        }
+                    }
+
+                    input.addEventListener('input', applySearch);
+                    for (const header of table.tHead.querySelectorAll('th[data-sort-key]')) {
+                        header.querySelector('button')?.addEventListener('click', () => applySort(header.dataset.sortKey));
+                    }
+                    initializeResizableColumns();
+                    applySearch();
+                }
+                initializeInventoryBrowserTable();
+            </script>
         </body>
         </html>
         """;
@@ -1032,9 +1156,17 @@ static string RenderInventoryBrowserItem(InventoryBrowserItemView item)
 {
     var scopeText = item.OwnerCount == 1 ? item.Locations[0].OwnerName : $"{item.OwnerCount:N0} owners";
     var locationText = string.Join("; ", item.Locations.Select(FormatInventoryBrowserLocation));
+    var itemType = item.ItemType ?? "-";
+    var searchText = string.Join(
+        " ",
+        item.DisplayName,
+        item.ItemId.ToString(),
+        itemType,
+        scopeText,
+        locationText).ToLowerInvariant();
 
     return $$"""
-        <tr class="item-row">
+        <tr class="item-row" data-item="{{Html(item.DisplayName)}}" data-type="{{Html(itemType)}}" data-total="{{item.TotalQuantity}}" data-hq="{{item.HqQuantity}}" data-scope="{{Html(scopeText)}}" data-location="{{Html(locationText)}}" data-search="{{Html(searchText)}}">
             <td class="icon-cell"></td>
             <td>
                 <div class="item-name">
@@ -1042,7 +1174,7 @@ static string RenderInventoryBrowserItem(InventoryBrowserItemView item)
                     <span>Item {{item.ItemId}}</span>
                 </div>
             </td>
-            <td class="item-type">{{Html(item.ItemType ?? "-")}}</td>
+            <td class="item-type">{{Html(itemType)}}</td>
             <td class="number">{{item.TotalQuantity:N0}}</td>
             <td class="number">{{item.HqQuantity:N0}}</td>
             <td class="scope-cell"><strong>{{Html(scopeText)}}</strong></td>
@@ -1059,14 +1191,14 @@ static string FormatInventoryBrowserLocation(InventoryBrowserLocationView locati
     return $"{location.OwnerName} / {location.BagName}: {quantity}";
 }
 
-static string RenderDiagnostics(IReadOnlyList<ReportSummary> reports, PathString pathBase)
+static string RenderDiagnostics(IReadOnlyList<ReportSummary> reports, PathString pathBase, TimeZoneInfo displayTimeZone)
 {
     var rows = reports.Count == 0
         ? """<tr><td colspan="4">No snapshots found.</td></tr>"""
         : string.Join(Environment.NewLine, reports.Take(100).Select(report => $$"""
             <tr>
                 <td>{{Html(report.Id)}}</td>
-                <td>{{Html(report.ReceivedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss zzz"))}}</td>
+                <td>{{Html(FormatDisplayTime(report.ReceivedAt, displayTimeZone))}}</td>
                 <td>{{Html(report.CharacterName ?? "-")}}</td>
                 <td><a href="{{Html(AppUrl(pathBase, $"/reports/{report.Id}/json"))}}">Original payload</a></td>
             </tr>
@@ -1111,7 +1243,12 @@ static string RenderDiagnostics(IReadOnlyList<ReportSummary> reports, PathString
         """;
 }
 
-static string RenderReportDetails(StoredInventoryReport stored, InventorySnapshotView view, PathString pathBase, string csrfToken)
+static string RenderReportDetails(
+    StoredInventoryReport stored,
+    InventorySnapshotView view,
+    PathString pathBase,
+    string csrfToken,
+    TimeZoneInfo displayTimeZone)
 {
     var json = JsonSerializer.Serialize(stored, new JsonSerializerOptions(JsonSerializerDefaults.Web)
     {
@@ -1198,7 +1335,7 @@ static string RenderReportDetails(StoredInventoryReport stored, InventorySnapsho
                 </div>
                 <section class="panel">
                     <dl>
-                        <dt>Received</dt><dd>{{Html(view.ReceivedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss zzz"))}}</dd>
+                        <dt>Received</dt><dd>{{Html(FormatDisplayTime(view.ReceivedAt, displayTimeZone))}}</dd>
                         <dt>Report timestamp</dt><dd>{{Html(view.ReportTimestamp)}}</dd>
                         <dt>Schema</dt><dd>{{view.Metadata.SchemaVersion}}</dd>
                         <dt>Source</dt><dd>{{Html(view.Metadata.SourcePlugin)}} {{Html(view.Metadata.PluginVersion)}}</dd>

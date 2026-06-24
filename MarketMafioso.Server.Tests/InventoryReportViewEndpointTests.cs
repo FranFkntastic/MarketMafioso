@@ -237,7 +237,7 @@ public sealed class InventoryReportViewEndpointTests
         Assert.Contains("2 owners", html, StringComparison.Ordinal);
         Assert.Contains("Player Inventory / Inventory1: 12", html, StringComparison.Ordinal);
         Assert.Contains("Scrongle / Retainer Page 1: 99", html, StringComparison.Ordinal);
-        Assert.Contains("<th class=\"icon-column\">Icon</th>", html, StringComparison.Ordinal);
+        Assert.Contains("<th class=\"icon-column\">Icon", html, StringComparison.Ordinal);
         Assert.DoesNotContain("Raw JSON", html, StringComparison.Ordinal);
     }
 
@@ -324,7 +324,7 @@ public sealed class InventoryReportViewEndpointTests
         var html = await client.GetStringAsync("/inventory?scope=retainer:42");
 
         Assert.Contains("inventory-browser-table", html, StringComparison.Ordinal);
-        Assert.Contains("<th class=\"type-column\">Type</th>", html, StringComparison.Ordinal);
+        Assert.Contains("<th class=\"type-column\" data-sort-key=\"type\"", html, StringComparison.Ordinal);
         Assert.Contains("<td class=\"item-type\">Stone</td>", html, StringComparison.Ordinal);
         Assert.Contains("All Inventories", html, StringComparison.Ordinal);
         Assert.Contains("Player Inventory", html, StringComparison.Ordinal);
@@ -335,6 +335,47 @@ public sealed class InventoryReportViewEndpointTests
         Assert.DoesNotContain("Fire Shard", html, StringComparison.Ordinal);
         Assert.DoesNotContain("Darksteel Ingot", html, StringComparison.Ordinal);
         Assert.DoesNotContain("location-card", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task InventoryBrowser_EmitsSortableResizableColumnsAndLiveSearch()
+    {
+        await using var application = new WebApplicationFactory<Program>();
+        using var client = application.CreateClient();
+
+        var createResponse = await client.PostAsJsonAsync("/inventory", CreateReport("Interactive Browser Character"));
+        createResponse.EnsureSuccessStatusCode();
+
+        var html = await client.GetStringAsync("/inventory");
+
+        Assert.Contains("id=\"inventory-search\"", html, StringComparison.Ordinal);
+        Assert.Contains("data-live-search-target=\"inventory-browser-table\"", html, StringComparison.Ordinal);
+        Assert.Contains("data-sort-key=\"item\"", html, StringComparison.Ordinal);
+        Assert.Contains("data-sort-key=\"total\"", html, StringComparison.Ordinal);
+        Assert.Contains("class=\"column-resizer\"", html, StringComparison.Ordinal);
+        Assert.Contains("function initializeInventoryBrowserTable", html, StringComparison.Ordinal);
+        Assert.Contains("input.addEventListener('input'", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task InventoryBrowser_UsesConfiguredDisplayTimeZone()
+    {
+        await using var application = CreateHostedApplication(
+            new KeyValuePair<string, string?>("MarketMafioso:DisplayTimeZone", "Pacific/Honolulu"));
+        using var client = application.CreateClient();
+
+        var createResponse = await SendWithKeyAsync(
+            client,
+            HttpMethod.Post,
+            "/inventory",
+            "test-ingest-secret",
+            CreateReport("Timezone Character"));
+        createResponse.EnsureSuccessStatusCode();
+
+        var html = await client.GetStringAsync("/inventory");
+
+        Assert.Contains("Latest Snapshot", html, StringComparison.Ordinal);
+        Assert.Contains("-10:00", html, StringComparison.Ordinal);
     }
 
     [Fact]

@@ -71,6 +71,7 @@ jobs:
           MarketMafioso__PreviousReadApiKey=$MARKETMAFIOSO_DEV_PREVIOUS_READ_API_KEY
           MarketMafioso__BasePath=/api/marketmafioso
           MarketMafioso__PublicOrigin=https://dev.xivcraftarchitect.com
+          MarketMafioso__DisplayTimeZone=America/New_York
           MarketMafioso__StorageLabel=dev receiver storage
           MarketMafioso__DatabasePath=/srv/craftarchitect/data/marketmafioso/dev/marketmafioso.db
           MarketMafioso__RawJsonRetentionCount=20
