@@ -25,6 +25,7 @@ public sealed class Plugin : IDalamudPlugin
     [PluginService] internal static IFramework Framework { get; private set; } = null!;
     [PluginService] internal static IGameGui GameGui { get; private set; } = null!;
     [PluginService] internal static IObjectTable ObjectTable { get; private set; } = null!;
+    [PluginService] internal static ITargetManager TargetManager { get; private set; } = null!;
 
     internal static Plugin Instance { get; private set; } = null!;
 
@@ -69,7 +70,7 @@ public sealed class Plugin : IDalamudPlugin
         workshopAssemblyRunner = new WorkshopAssemblyRunner(
             Framework,
             Log,
-            new WorkshopAssemblyUiAutomation(GameGui, AddonLifecycle, Log),
+            new WorkshopAssemblyUiAutomation(GameGui, AddonLifecycle, Log, ObjectTable, TargetManager),
             Path.Combine(PluginInterface.GetPluginConfigDirectory(), "workshop-assembly-logs"));
         workshopMaterialManifestExport = new WorkshopMaterialManifestExportService(
             new LuminaWorkshopMaterialCraftRecipeResolver(DataManager));

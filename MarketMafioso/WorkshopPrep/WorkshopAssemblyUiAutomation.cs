@@ -1,18 +1,23 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using Dalamud.Game.ClientState.Objects.Enums;
+using Dalamud.Game.ClientState.Objects.Types;
 using Dalamud.Game.Addon.Lifecycle;
 using Dalamud.Game.Addon.Lifecycle.AddonArgTypes;
 using Dalamud.Plugin.Services;
 using Dalamud.Utility;
+using FFXIVClientStructs.FFXIV.Client.Game.Control;
 using FFXIVClientStructs.FFXIV.Client.Game;
 using FFXIVClientStructs.FFXIV.Client.UI;
 using FFXIVClientStructs.FFXIV.Component.GUI;
+using ClientGameObject = FFXIVClientStructs.FFXIV.Client.Game.Object.GameObject;
 
 namespace MarketMafioso.WorkshopPrep;
 
-public sealed class WorkshopAssemblyUiAutomation : IDisposable
+public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
 {
+    private const byte MaxFabricationStationDistance = 8;
     private const string SelectStringAddon = "SelectString";
     private const string RequestAddon = "Request";
     private const string ContextIconMenuAddon = "ContextIconMenu";
@@ -24,6 +29,8 @@ public sealed class WorkshopAssemblyUiAutomation : IDisposable
     private readonly IGameGui gameGui;
     private readonly IAddonLifecycle addonLifecycle;
     private readonly IPluginLog log;
+    private readonly IObjectTable objectTable;
+    private readonly ITargetManager targetManager;
     private uint? pendingContributionItemId;
     private bool requestItemSelectionStarted;
     private bool requestConfirmed;
@@ -31,11 +38,15 @@ public sealed class WorkshopAssemblyUiAutomation : IDisposable
     public WorkshopAssemblyUiAutomation(
         IGameGui gameGui,
         IAddonLifecycle addonLifecycle,
-        IPluginLog log)
+        IPluginLog log,
+        IObjectTable objectTable,
+        ITargetManager targetManager)
     {
         this.gameGui = gameGui;
         this.addonLifecycle = addonLifecycle;
         this.log = log;
+        this.objectTable = objectTable;
+        this.targetManager = targetManager;
 
         addonLifecycle.RegisterListener(AddonEvent.PostSetup, RequestAddon, RequestPostSetup);
         addonLifecycle.RegisterListener(AddonEvent.PostRefresh, RequestAddon, RequestPostRefresh);
@@ -51,6 +62,35 @@ public sealed class WorkshopAssemblyUiAutomation : IDisposable
                       IsAddonReady(SelectStringAddon);
         Diagnostics.Record("ui-ready-check", isReady ? "Fabrication station UI is ready." : "Fabrication station UI is not ready.");
         return isReady;
+    }
+
+    public unsafe WorkshopAssemblyActionResult TryOpenFabricationStation()
+    {
+        var station = FindFabricationStation();
+        if (station == null)
+            return new(false, $"Waiting for fabrication station UI. No nearby fabrication station target was found. {DescribeUiState()}");
+
+        var targetSystem = TargetSystem.Instance();
+        if (targetSystem == null)
+            return new(false, $"Waiting for fabrication station UI. Target system is unavailable. {DescribeUiState()}");
+
+        targetManager.Target = station;
+        var result = targetSystem->InteractWithObject((ClientGameObject*)station.Address, true);
+        Diagnostics.Record(
+            "open-station",
+            "Interacted with nearby fabrication station.",
+            new Dictionary<string, string?>
+            {
+                ["name"] = station.Name.TextValue,
+                ["objectKind"] = station.ObjectKind.ToString(),
+                ["gameObjectId"] = station.GameObjectId.ToString("X"),
+                ["baseId"] = station.BaseId.ToString(),
+                ["distanceX"] = station.YalmDistanceX.ToString(),
+                ["distanceZ"] = station.YalmDistanceZ.ToString(),
+                ["result"] = result.ToString(),
+            });
+        log.Verbose($"[MarketMafioso] Interacted with fabrication station {station.Name.TextValue} ({station.GameObjectId:X}).");
+        return new(false, $"Opened nearby fabrication station {station.Name.TextValue}.", ActionTaken: true);
     }
 
     public unsafe WorkshopAssemblyActionResult TryOpenProject(WorkshopAssemblyQueueEntry entry)
@@ -270,6 +310,32 @@ public sealed class WorkshopAssemblyUiAutomation : IDisposable
     {
         return text.Contains("Contribute", StringComparison.Ordinal) &&
                text.Contains("items", StringComparison.Ordinal);
+    }
+
+    private IGameObject? FindFabricationStation()
+    {
+        if (IsFabricationStationObject(targetManager.Target))
+            return targetManager.Target;
+
+        return objectTable
+            .Where(IsFabricationStationObject)
+            .OrderBy(x => x.YalmDistanceX + x.YalmDistanceZ)
+            .FirstOrDefault();
+    }
+
+    private static bool IsFabricationStationObject(IGameObject? gameObject)
+    {
+        if (gameObject == null || !gameObject.IsTargetable)
+            return false;
+
+        if (gameObject.YalmDistanceX > MaxFabricationStationDistance ||
+            gameObject.YalmDistanceZ > MaxFabricationStationDistance)
+            return false;
+
+        if (gameObject.ObjectKind is not (ObjectKind.EventObj or ObjectKind.HousingEventObject or ObjectKind.ReactionEventObject))
+            return false;
+
+        return gameObject.Name.TextValue.Contains("Fabrication Station", StringComparison.OrdinalIgnoreCase);
     }
 
     private unsafe AtkUnitBase* GetCraftingLogAddon()

@@ -9,7 +9,7 @@ public sealed class WorkshopAssemblyRunner : IDisposable
 {
     private readonly IFramework framework;
     private readonly IPluginLog log;
-    private readonly WorkshopAssemblyUiAutomation uiAutomation;
+    private readonly IWorkshopAssemblyUiAutomation uiAutomation;
     private readonly string diagnosticsDirectory;
     private WorkshopAssemblyPlan? activePlan;
     private WorkshopAssemblyDiagnostics diagnostics = WorkshopAssemblyDiagnostics.Disabled;
@@ -22,7 +22,7 @@ public sealed class WorkshopAssemblyRunner : IDisposable
     public WorkshopAssemblyRunner(
         IFramework framework,
         IPluginLog log,
-        WorkshopAssemblyUiAutomation uiAutomation,
+        IWorkshopAssemblyUiAutomation uiAutomation,
         string diagnosticsDirectory)
     {
         this.framework = framework;
@@ -149,9 +149,20 @@ public sealed class WorkshopAssemblyRunner : IDisposable
             return;
         }
 
+        var openResult = uiAutomation.TryOpenFabricationStation();
+        if (openResult.ActionTaken)
+        {
+            continueAt = DateTimeOffset.Now + WorkshopAssemblyTiming.UiInteractionDelay;
+            Progress = BuildProgress(WorkshopAssemblyRunnerState.WaitingForFabricationStation, openResult.Message);
+            return;
+        }
+
+        if (DateTimeOffset.Now - stateStartedAt > WorkshopAssemblyTiming.AddonTimeout)
+            throw new InvalidOperationException(openResult.Message);
+
         Progress = BuildProgress(
             WorkshopAssemblyRunnerState.WaitingForFabricationStation,
-            $"Waiting for fabrication station UI. {uiAutomation.DescribeUiState()}");
+            openResult.Message);
     }
 
     private void TickOpeningProject(WorkshopAssemblyQueueEntry entry)
