@@ -98,6 +98,7 @@ public static class InventorySnapshotViewBuilder
                 DisplayName = string.IsNullOrWhiteSpace(i.ItemName)
                     ? $"Item {i.ItemId}"
                     : i.ItemName,
+                ItemType = i.ItemType,
                 Quantity = i.Quantity,
                 IsHQ = i.IsHQ,
                 Condition = i.Condition,

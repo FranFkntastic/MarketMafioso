@@ -27,7 +27,7 @@ http://localhost:8080/
 ```
 
 The dashboard is a local control panel for received snapshots. It shows summary counts, links to each snapshot's HTML detail view, and lets you delete individual snapshots.
-It also links to an Inventory Browser for the latest structured inventory and a Diagnostics view for retained raw JSON payloads.
+It also links to an Inventory Browser for the latest structured inventory and a Diagnostics view for retained raw JSON payloads. The inventory browser is character-scoped by default, with sub-scopes for all inventories, player inventory, and each retainer. When the plugin sends Lumina item metadata, item type is stored with each item and shown in the structured browser/detail views.
 It has a `Delete All` action for clearing the local snapshot store.
 Snapshot details include parsed player/retainer inventory tables and metadata when the plugin supplies it.
 

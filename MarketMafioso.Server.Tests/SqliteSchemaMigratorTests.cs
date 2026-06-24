@@ -33,6 +33,37 @@ public sealed class SqliteSchemaMigratorTests
     }
 
     [Fact]
+    public async Task MigrateAsync_AddsItemTypeColumnToExistingInventoryItemsTable()
+    {
+        var databasePath = CreateDatabasePath();
+        var factory = CreateFactory(databasePath);
+        await using (var connection = await factory.OpenConnectionAsync(CancellationToken.None))
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText = """
+                CREATE TABLE inventory_items (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    bag_id INTEGER NOT NULL,
+                    item_id INTEGER NOT NULL,
+                    item_name TEXT NULL,
+                    quantity INTEGER NOT NULL,
+                    is_hq INTEGER NOT NULL,
+                    condition REAL NOT NULL,
+                    sort_order INTEGER NOT NULL
+                );
+                """;
+            await command.ExecuteNonQueryAsync(CancellationToken.None);
+        }
+
+        var migrator = new SqliteSchemaMigrator(factory, NullLogger<SqliteSchemaMigrator>.Instance);
+
+        await migrator.MigrateAsync(CancellationToken.None);
+
+        await using (var connection = await factory.OpenConnectionAsync(CancellationToken.None))
+            Assert.True(await ColumnExistsAsync(connection, "inventory_items", "item_type"));
+    }
+
+    [Fact]
     public async Task BootstrapAsync_CreatesDefaultAccountAdminUserAndIngestKey()
     {
         var databasePath = CreateDatabasePath();
@@ -125,6 +156,20 @@ public sealed class SqliteSchemaMigratorTests
         command.Parameters.AddWithValue("$name", tableName);
         var result = (long)(await command.ExecuteScalarAsync(CancellationToken.None))!;
         return result == 1;
+    }
+
+    private static async Task<bool> ColumnExistsAsync(SqliteConnection connection, string tableName, string columnName)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = $"PRAGMA table_info({tableName})";
+        await using var reader = await command.ExecuteReaderAsync(CancellationToken.None);
+        while (await reader.ReadAsync(CancellationToken.None))
+        {
+            if (string.Equals(reader.GetString(1), columnName, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        return false;
     }
 
     private static async Task<int> CountAsync(SqliteConnection connection, string tableName)

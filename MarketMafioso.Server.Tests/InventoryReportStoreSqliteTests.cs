@@ -33,6 +33,44 @@ public sealed class InventoryReportStoreSqliteTests
     }
 
     [Fact]
+    public async Task SaveAsync_PersistsItemType()
+    {
+        var fixture = await StoreFixture.CreateAsync();
+
+        var stored = await fixture.Store.SaveAsync(
+            fixture.AccountId,
+            CreateReport("Typed Character", "Gilgamesh", 42) with
+            {
+                PlayerInventory =
+                [
+                    new InventoryBag
+                    {
+                        BagName = "Inventory1",
+                        Items =
+                        [
+                            new ItemSlot
+                            {
+                                ItemId = 42,
+                                ItemName = "Typed Item",
+                                ItemType = "Stone",
+                                Quantity = 12,
+                                Condition = 100,
+                            },
+                        ],
+                    },
+                ],
+            },
+            null,
+            "{}",
+            CancellationToken.None);
+
+        var loaded = await fixture.Store.GetAsync(fixture.AccountId, stored.Id, CancellationToken.None);
+
+        Assert.NotNull(loaded);
+        Assert.Equal("Stone", loaded.Report.PlayerInventory[0].Items[0].ItemType);
+    }
+
+    [Fact]
     public async Task SaveAsync_UpsertsCharacterForAccount()
     {
         var fixture = await StoreFixture.CreateAsync();

@@ -39,6 +39,7 @@ public sealed class InventoryReportViewEndpointTests
                         {
                             ItemId = 2,
                             ItemName = "Fire Shard",
+                            ItemType = "Crystal",
                             Quantity = 120,
                             IsHQ = false,
                             Condition = 0,
@@ -88,6 +89,7 @@ public sealed class InventoryReportViewEndpointTests
         Assert.Equal("Endpoint Character", view.CharacterName);
         Assert.Equal("Gilgamesh", view.HomeWorld);
         Assert.Equal("Inventory1", view.PlayerInventory.Bags[0].Name);
+        Assert.Equal("Crystal", view.PlayerInventory.Bags[0].Items[0].ItemType);
         Assert.Equal("Endpoint Retainer", view.Retainers[0].Name);
         Assert.Equal(219, view.Totals.Quantity);
     }
@@ -186,6 +188,7 @@ public sealed class InventoryReportViewEndpointTests
                         {
                             ItemId = 5057,
                             ItemName = "Darksteel Nugget",
+                            ItemType = "Stone",
                             Quantity = 12,
                             IsHQ = true,
                             Condition = 100,
@@ -211,6 +214,7 @@ public sealed class InventoryReportViewEndpointTests
                                 {
                                     ItemId = 5057,
                                     ItemName = "Darksteel Nugget",
+                                    ItemType = "Stone",
                                     Quantity = 99,
                                     IsHQ = false,
                                     Condition = 0,
@@ -235,6 +239,102 @@ public sealed class InventoryReportViewEndpointTests
         Assert.Contains("Scrongle / Retainer Page 1: 99", html, StringComparison.Ordinal);
         Assert.Contains("<th class=\"icon-column\">Icon</th>", html, StringComparison.Ordinal);
         Assert.DoesNotContain("Raw JSON", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task InventoryBrowser_RendersDenseTableAndCanFilterToRetainerScope()
+    {
+        await using var application = new WebApplicationFactory<Program>();
+        using var client = application.CreateClient();
+
+        var createResponse = await client.PostAsJsonAsync("/inventory", new InventoryReport
+        {
+            CharacterName = "Scope Character",
+            HomeWorld = "Siren",
+            Timestamp = "2026-06-24T01:00:00.0000000Z",
+            PlayerInventory =
+            [
+                new InventoryBag
+                {
+                    BagName = "Inventory1",
+                    Items =
+                    [
+                        new ItemSlot
+                        {
+                            ItemId = 2,
+                            ItemName = "Fire Shard",
+                            ItemType = "Crystal",
+                            Quantity = 120,
+                        },
+                    ],
+                },
+            ],
+            Retainers =
+            [
+                new RetainerReport
+                {
+                    RetainerName = "Scrongle",
+                    RetainerId = 42,
+                    LastUpdated = "2026-06-24T00:55:00.0000000Z",
+                    Bags =
+                    [
+                        new InventoryBag
+                        {
+                            BagName = "RetainerInventory",
+                            Items =
+                            [
+                                new ItemSlot
+                                {
+                                    ItemId = 5057,
+                                    ItemName = "Darksteel Nugget",
+                                    ItemType = "Stone",
+                                    Quantity = 99,
+                                },
+                            ],
+                        },
+                    ],
+                },
+                new RetainerReport
+                {
+                    RetainerName = "Zhangfei",
+                    RetainerId = 43,
+                    LastUpdated = "2026-06-24T00:55:00.0000000Z",
+                    Bags =
+                    [
+                        new InventoryBag
+                        {
+                            BagName = "RetainerInventory",
+                            Items =
+                            [
+                                new ItemSlot
+                                {
+                                    ItemId = 5060,
+                                    ItemName = "Darksteel Ingot",
+                                    ItemType = "Metal",
+                                    Quantity = 4,
+                                },
+                            ],
+                        },
+                    ],
+                },
+            ],
+        });
+        createResponse.EnsureSuccessStatusCode();
+
+        var html = await client.GetStringAsync("/inventory?scope=retainer:42");
+
+        Assert.Contains("inventory-browser-table", html, StringComparison.Ordinal);
+        Assert.Contains("<th class=\"type-column\">Type</th>", html, StringComparison.Ordinal);
+        Assert.Contains("<td class=\"item-type\">Stone</td>", html, StringComparison.Ordinal);
+        Assert.Contains("All Inventories", html, StringComparison.Ordinal);
+        Assert.Contains("Player Inventory", html, StringComparison.Ordinal);
+        Assert.Contains("Scrongle", html, StringComparison.Ordinal);
+        Assert.Contains("Zhangfei", html, StringComparison.Ordinal);
+        Assert.Contains("Darksteel Nugget", html, StringComparison.Ordinal);
+        Assert.Contains("RetainerInventory", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("Fire Shard", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("Darksteel Ingot", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("location-card", html, StringComparison.Ordinal);
     }
 
     [Fact]

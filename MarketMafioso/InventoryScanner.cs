@@ -147,6 +147,20 @@ public class InventoryScanner
         }
     }
 
+    public string? ResolveItemType(uint itemId)
+    {
+        try
+        {
+            var item = dataManager.GetExcelSheet<Item>()?.GetRowOrDefault(itemId);
+            return item?.ItemUICategory.Value.Name.ToString();
+        }
+        catch (Exception ex)
+        {
+            log.Verbose(ex, $"[MarketMafioso] Could not resolve type for item {itemId}");
+            return null;
+        }
+    }
+
     private unsafe List<InventoryBag> ScanContainers(InventoryType[] types, Configuration config)
     {
         var bags = new List<InventoryBag>();
@@ -189,10 +203,12 @@ public class InventoryScanner
                     else
                     {
                         string? itemName = config.IncludeItemNames ? ResolveItemName(itemId) : null;
+                        string? itemType = config.IncludeItemNames ? ResolveItemType(itemId) : null;
                         itemGroups[itemId] = new ItemSlot
                         {
                             ItemId = itemId,
                             ItemName = itemName,
+                            ItemType = itemType,
                             Quantity = quantity,
                             IsHQ = false,
                             Condition = condition,

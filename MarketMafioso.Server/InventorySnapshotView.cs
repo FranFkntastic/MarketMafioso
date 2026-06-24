@@ -45,6 +45,7 @@ public sealed record InventoryItemView
 {
     public uint ItemId { get; init; }
     public string DisplayName { get; init; } = string.Empty;
+    public string? ItemType { get; init; }
     public uint Quantity { get; init; }
     public bool IsHQ { get; init; }
     public float Condition { get; init; }

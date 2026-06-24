@@ -73,6 +73,10 @@ public record ItemSlot
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? ItemName { get; init; }
 
+    [JsonPropertyName("itemType")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ItemType { get; init; }
+
     [JsonPropertyName("quantity")]
     public uint Quantity { get; init; }
 

@@ -96,12 +96,13 @@ app.MapGet("/inventory", async (
     InventoryReportStore store,
     long? characterId,
     string? search,
+    string? scope,
     CancellationToken token) =>
 {
     var characters = await store.ListCharactersAsync(1, token);
     var selectedCharacterId = characterId ?? characters.FirstOrDefault()?.Id;
     var latest = await store.GetLatestAsync(1, selectedCharacterId, token);
-    var view = InventoryBrowserViewBuilder.Build(latest, search);
+    var view = InventoryBrowserViewBuilder.Build(latest, search, scope);
     return Results.Content(
         RenderInventoryBrowser(view, characters, selectedCharacterId, request.PathBase),
         "text/html; charset=utf-8");
@@ -713,8 +714,9 @@ static string RenderInventoryBrowser(
     PathString pathBase)
 {
     var characterOptions = RenderCharacterOptions(characters, selectedCharacterId);
+    var scopeLinks = RenderInventoryScopeLinks(view, selectedCharacterId, pathBase);
     var rows = view.Items.Count == 0
-        ? """<tr><td colspan="5" class="empty-cell">No matching items in the selected latest snapshot.</td></tr>"""
+        ? """<tr><td colspan="7" class="empty-cell">No matching items in the selected latest snapshot.</td></tr>"""
         : string.Join(Environment.NewLine, view.Items.Select(RenderInventoryBrowserItem));
     var characterTitle = string.IsNullOrWhiteSpace(view.CharacterName)
         ? "No character selected"
@@ -826,9 +828,9 @@ static string RenderInventoryBrowser(
                 .metric strong { font-size: 18px; font-weight: 650; }
                 .table-wrap { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--panel); }
                 table { width: 100%; border-collapse: collapse; table-layout: fixed; }
-                th, td { padding: 8px 10px; border-bottom: 1px solid var(--line-soft); vertical-align: middle; }
+                th, td { padding: 6px 9px; border-bottom: 1px solid var(--line-soft); vertical-align: middle; }
                 th {
-                    height: 34px;
+                    height: 32px;
                     color: var(--muted);
                     background: #202832;
                     text-align: left;
@@ -843,7 +845,10 @@ static string RenderInventoryBrowser(
                 .item-name { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
                 .item-name strong { font-weight: 620; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
                 .item-name span { color: var(--subtle); font-size: 12px; }
+                .item-type { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
                 .number { text-align: right; font-variant-numeric: tabular-nums; }
+                .scope-cell, .location-cell { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+                .scope-cell strong { color: var(--text); font-weight: 600; }
                 .where { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
                 .chip {
                     display: inline-flex;
@@ -868,11 +873,6 @@ static string RenderInventoryBrowser(
                     text-decoration: none;
                     font-size: 12px;
                 }
-                .detail-row td { padding: 0; background: #0f151c; }
-                .locations { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; padding: 10px 12px 12px 10px; }
-                .location { min-width: 0; border: 1px solid var(--line-soft); border-radius: 6px; padding: 8px 9px; background: #141b23; }
-                .location strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
-                .location span { color: var(--muted); font-size: 12px; }
                 .empty-cell { color: var(--muted); text-align: center; }
                 .statusbar {
                     display: flex;
@@ -888,7 +888,7 @@ static string RenderInventoryBrowser(
                     .toolbar { grid-template-columns: 1fr; }
                     .content { grid-template-columns: 1fr; }
                     .sidebar { display: none; }
-                    .summary, .locations { grid-template-columns: 1fr 1fr; }
+                    .summary { grid-template-columns: 1fr 1fr; }
                 }
             </style>
         </head>
@@ -917,11 +917,15 @@ static string RenderInventoryBrowser(
                             <strong>Latest Snapshot</strong>
                             <span>{{Html(received)}}</span>
                         </div>
-                        <div class="section-title" style="margin-top: 18px;">Scope</div>
+                        <div class="section-title" style="margin-top: 18px;">Character</div>
                         <div class="list-item active">
                             <strong>{{Html(characterTitle)}}</strong>
                             <span>{{view.Items.Count:N0}} matching item rows</span>
                         </div>
+                        <div class="section-title" style="margin-top: 18px;">Inventory Scopes</div>
+                        <nav class="scope-list" aria-label="Inventory scopes">
+                            {{scopeLinks}}
+                        </nav>
                     </aside>
                     <section class="main">
                         <div class="summary">
@@ -931,21 +935,25 @@ static string RenderInventoryBrowser(
                             <div class="metric"><span>Owners Matched</span><strong>{{view.OwnerCount:N0}}</strong></div>
                         </div>
                         <div class="table-wrap">
-                            <table>
+                            <table class="inventory-browser-table">
                                 <colgroup>
                                     <col class="icon-column" style="width:52px">
                                     <col>
+                                    <col style="width:150px">
                                     <col style="width:110px">
                                     <col style="width:90px">
-                                    <col style="width:220px">
+                                    <col style="width:180px">
+                                    <col style="width:260px">
                                 </colgroup>
                                 <thead>
                                     <tr>
                                         <th class="icon-column">Icon</th>
                                         <th>Item</th>
+                                        <th class="type-column">Type</th>
                                         <th class="number">Total</th>
                                         <th class="number">HQ</th>
-                                        <th>Where</th>
+                                        <th>Scope</th>
+                                        <th>Location</th>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -980,10 +988,50 @@ static string RenderCharacterOptions(IReadOnlyList<CharacterSummary> characters,
     return options.ToString();
 }
 
+static string RenderInventoryScopeLinks(
+    InventoryBrowserView view,
+    long? selectedCharacterId,
+    PathString pathBase)
+{
+    if (view.Scopes.Count == 0)
+        return string.Empty;
+
+    var links = new StringBuilder();
+    foreach (var scope in view.Scopes)
+    {
+        var activeClass = string.Equals(scope.Value, view.Scope, StringComparison.OrdinalIgnoreCase)
+            ? "list-item active"
+            : "list-item";
+        var url = BuildInventoryBrowserUrl(pathBase, selectedCharacterId, view.Search, scope.Value);
+        links.AppendLine($$"""
+            <a class="{{activeClass}}" href="{{Html(url)}}">
+                <strong>{{Html(scope.DisplayName)}}</strong>
+                <span>{{scope.ItemCount:N0}} items / {{scope.TotalQuantity:N0}} qty</span>
+            </a>
+            """);
+    }
+
+    return links.ToString();
+}
+
+static string BuildInventoryBrowserUrl(PathString pathBase, long? characterId, string search, string scope)
+{
+    var query = new List<string>();
+    if (characterId != null)
+        query.Add($"characterId={characterId.Value}");
+    if (!string.IsNullOrWhiteSpace(search))
+        query.Add($"search={Uri.EscapeDataString(search)}");
+    if (!string.Equals(scope, InventoryBrowserScopeValue.All, StringComparison.OrdinalIgnoreCase))
+        query.Add($"scope={Uri.EscapeDataString(scope)}");
+
+    var suffix = query.Count == 0 ? string.Empty : $"?{string.Join("&", query)}";
+    return AppUrl(pathBase, $"/inventory{suffix}");
+}
+
 static string RenderInventoryBrowserItem(InventoryBrowserItemView item)
 {
-    var ownerText = item.OwnerCount == 1 ? "1 owner" : $"{item.OwnerCount:N0} owners";
-    var locations = string.Join(Environment.NewLine, item.Locations.Select(RenderInventoryBrowserLocation));
+    var scopeText = item.OwnerCount == 1 ? item.Locations[0].OwnerName : $"{item.OwnerCount:N0} owners";
+    var locationText = string.Join("; ", item.Locations.Select(FormatInventoryBrowserLocation));
 
     return $$"""
         <tr class="item-row">
@@ -994,36 +1042,21 @@ static string RenderInventoryBrowserItem(InventoryBrowserItemView item)
                     <span>Item {{item.ItemId}}</span>
                 </div>
             </td>
+            <td class="item-type">{{Html(item.ItemType ?? "-")}}</td>
             <td class="number">{{item.TotalQuantity:N0}}</td>
             <td class="number">{{item.HqQuantity:N0}}</td>
-            <td>
-                <div class="where">
-                    <span class="chip">{{Html(ownerText)}}</span>
-                    <span class="small-button">View</span>
-                </div>
-            </td>
-        </tr>
-        <tr class="detail-row">
-            <td colspan="5">
-                <div class="locations">
-                    {{locations}}
-                </div>
-            </td>
+            <td class="scope-cell"><strong>{{Html(scopeText)}}</strong></td>
+            <td class="location-cell">{{Html(locationText)}}</td>
         </tr>
         """;
 }
 
-static string RenderInventoryBrowserLocation(InventoryBrowserLocationView location)
+static string FormatInventoryBrowserLocation(InventoryBrowserLocationView location)
 {
     var quantity = location.HqQuantity > 0
         ? $"{location.Quantity:N0} ({location.HqQuantity:N0} HQ)"
         : $"{location.Quantity:N0}";
-
-    return $$"""
-        <div class="location">
-            <strong>{{Html(location.OwnerName)}} / {{Html(location.BagName)}}: {{Html(quantity)}}</strong>
-        </div>
-        """;
+    return $"{location.OwnerName} / {location.BagName}: {quantity}";
 }
 
 static string RenderDiagnostics(IReadOnlyList<ReportSummary> reports, PathString pathBase)
@@ -1211,7 +1244,7 @@ static string RenderOwnerSection(InventoryOwnerView owner, string emptyMessage)
 static string RenderBagSection(InventoryBagView bag)
 {
     var rows = bag.Items.Count == 0
-        ? """<tr><td colspan="5">No items in this bag.</td></tr>"""
+        ? """<tr><td colspan="6">No items in this bag.</td></tr>"""
         : string.Join(Environment.NewLine, bag.Items.Select(RenderItemRow));
 
     return $$"""
@@ -1220,6 +1253,7 @@ static string RenderBagSection(InventoryBagView bag)
             <thead>
                 <tr>
                     <th>Item</th>
+                    <th>Type</th>
                     <th class="number">ID</th>
                     <th class="number">Quantity</th>
                     <th>HQ</th>
@@ -1237,6 +1271,7 @@ static string RenderItemRow(InventoryItemView item) =>
     $$"""
         <tr>
             <td>{{Html(item.DisplayName)}}</td>
+            <td>{{Html(item.ItemType ?? "-")}}</td>
             <td class="number">{{item.ItemId}}</td>
             <td class="number">{{item.Quantity:N0}}</td>
             <td>{{(item.IsHQ ? "Yes" : "No")}}</td>

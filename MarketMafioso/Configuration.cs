@@ -53,6 +53,7 @@ public class CachedItem
 {
     public uint ItemId { get; set; }
     public string? ItemName { get; set; }
+    public string? ItemType { get; set; }
     public uint Quantity { get; set; }
     public bool IsHQ { get; set; }
     public float Condition { get; set; }

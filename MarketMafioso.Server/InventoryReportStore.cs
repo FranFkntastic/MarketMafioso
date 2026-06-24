@@ -522,12 +522,13 @@ public sealed class InventoryReportStore
         await using var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = """
-            INSERT INTO inventory_items (bag_id, item_id, item_name, quantity, is_hq, condition, sort_order)
-            VALUES ($bagId, $itemId, $itemName, $quantity, $isHq, $condition, $sortOrder);
+            INSERT INTO inventory_items (bag_id, item_id, item_name, item_type, quantity, is_hq, condition, sort_order)
+            VALUES ($bagId, $itemId, $itemName, $itemType, $quantity, $isHq, $condition, $sortOrder);
             """;
         command.Parameters.AddWithValue("$bagId", bagId);
         command.Parameters.AddWithValue("$itemId", checked((long)item.ItemId));
         command.Parameters.AddWithValue("$itemName", (object?)item.ItemName ?? DBNull.Value);
+        command.Parameters.AddWithValue("$itemType", (object?)item.ItemType ?? DBNull.Value);
         command.Parameters.AddWithValue("$quantity", checked((long)item.Quantity));
         command.Parameters.AddWithValue("$isHq", item.IsHQ ? 1 : 0);
         command.Parameters.AddWithValue("$condition", item.Condition);
@@ -675,7 +676,7 @@ public sealed class InventoryReportStore
         var items = new List<ItemSlot>();
         await using var command = connection.CreateCommand();
         command.CommandText = """
-            SELECT item_id, item_name, quantity, is_hq, condition
+            SELECT item_id, item_name, item_type, quantity, is_hq, condition
             FROM inventory_items
             WHERE bag_id = $bagId
             ORDER BY sort_order
@@ -689,9 +690,10 @@ public sealed class InventoryReportStore
             {
                 ItemId = checked((uint)reader.GetInt64(0)),
                 ItemName = reader.IsDBNull(1) ? null : reader.GetString(1),
-                Quantity = checked((uint)reader.GetInt64(2)),
-                IsHQ = reader.GetInt32(3) == 1,
-                Condition = reader.GetFloat(4),
+                ItemType = reader.IsDBNull(2) ? null : reader.GetString(2),
+                Quantity = checked((uint)reader.GetInt64(3)),
+                IsHQ = reader.GetInt32(4) == 1,
+                Condition = reader.GetFloat(5),
             });
         }
 

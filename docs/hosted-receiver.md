@@ -147,6 +147,8 @@ For the dev VPS, the database is:
 /srv/craftarchitect/data/marketmafioso/dev/marketmafioso.db
 ```
 
+The structured inventory browser is character-scoped by default and exposes separate scopes for all inventories, player inventory, and each retainer. Item type is stored per item when supplied by the plugin's Lumina metadata resolution.
+
 The original incoming JSON is retained only for the newest `MarketMafioso__RawJsonRetentionCount` snapshots, defaulting to `20`. Older snapshots remain available through structured dashboard and API views until `MarketMafioso__SnapshotRetentionCount`, defaulting to `500`, deletes old structured snapshots. Raw JSON routes return `410 Gone` with `raw_json_pruned` after the original payload has been pruned.
 
 On first startup after the SQLite migration, existing JSON files under `data/reports/*.json` are imported into the default local account. The import is idempotent and does not delete source JSON files.

@@ -21,9 +21,52 @@ public sealed class SqliteSchemaMigrator
         command.Transaction = transaction;
         command.CommandText = MigrationSql;
         await command.ExecuteNonQueryAsync(cancellationToken);
+        await EnsureItemTypeColumnAsync(connection, transaction, cancellationToken);
         await transaction.CommitAsync(cancellationToken);
 
         log.LogInformation("SQLite schema is ready at {DatabasePath}.", connectionFactory.DatabasePath);
+    }
+
+    private static async Task EnsureItemTypeColumnAsync(
+        Microsoft.Data.Sqlite.SqliteConnection connection,
+        Microsoft.Data.Sqlite.SqliteTransaction transaction,
+        CancellationToken cancellationToken)
+    {
+        if (await ColumnExistsAsync(connection, transaction, "inventory_items", "item_type", cancellationToken))
+            return;
+
+        await using var alterCommand = connection.CreateCommand();
+        alterCommand.Transaction = transaction;
+        alterCommand.CommandText = "ALTER TABLE inventory_items ADD COLUMN item_type TEXT NULL;";
+        await alterCommand.ExecuteNonQueryAsync(cancellationToken);
+
+        await using var migrationCommand = connection.CreateCommand();
+        migrationCommand.Transaction = transaction;
+        migrationCommand.CommandText = """
+            INSERT OR IGNORE INTO schema_migrations (version, applied_at_utc)
+            VALUES (2, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));
+            """;
+        await migrationCommand.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static async Task<bool> ColumnExistsAsync(
+        Microsoft.Data.Sqlite.SqliteConnection connection,
+        Microsoft.Data.Sqlite.SqliteTransaction transaction,
+        string tableName,
+        string columnName,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = $"PRAGMA table_info({tableName})";
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            if (string.Equals(reader.GetString(1), columnName, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        return false;
     }
 
     private const string MigrationSql = """
@@ -114,6 +157,7 @@ public sealed class SqliteSchemaMigrator
             bag_id INTEGER NOT NULL REFERENCES inventory_bags(id) ON DELETE CASCADE,
             item_id INTEGER NOT NULL,
             item_name TEXT NULL,
+            item_type TEXT NULL,
             quantity INTEGER NOT NULL,
             is_hq INTEGER NOT NULL,
             condition REAL NOT NULL,

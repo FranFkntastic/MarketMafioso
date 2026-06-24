@@ -107,6 +107,7 @@ public class RetainerCacheManager : IDisposable
                         {
                             ItemId = i.ItemId,
                             ItemName = i.ItemName,
+                            ItemType = i.ItemType,
                             Quantity = i.Quantity,
                             IsHQ = i.IsHQ,
                             Condition = i.Condition,
