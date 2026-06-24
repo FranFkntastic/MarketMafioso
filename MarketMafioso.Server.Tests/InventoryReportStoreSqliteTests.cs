@@ -78,6 +78,43 @@ public sealed class InventoryReportStoreSqliteTests
         Assert.Equal("Visible Character", summaries[0].CharacterName);
     }
 
+    [Fact]
+    public async Task SaveAsync_PrunesStructuredSnapshotsPastConfiguredRetentionCount()
+    {
+        var fixture = await StoreFixture.CreateAsync(
+            new KeyValuePair<string, string?>("MarketMafioso:SnapshotRetentionCount", "2"));
+
+        var first = await fixture.Store.SaveAsync(
+            fixture.AccountId,
+            CreateReport("Retained Character", "Leviathan", 2),
+            null,
+            "{}",
+            CancellationToken.None);
+        await Task.Delay(10);
+        var second = await fixture.Store.SaveAsync(
+            fixture.AccountId,
+            CreateReport("Retained Character", "Leviathan", 3),
+            null,
+            "{}",
+            CancellationToken.None);
+        await Task.Delay(10);
+        var third = await fixture.Store.SaveAsync(
+            fixture.AccountId,
+            CreateReport("Retained Character", "Leviathan", 4),
+            null,
+            "{}",
+            CancellationToken.None);
+
+        var summaries = await fixture.Store.ListSummariesAsync(fixture.AccountId, characterId: null, CancellationToken.None);
+
+        Assert.Equal(2, summaries.Count);
+        Assert.DoesNotContain(summaries, x => x.Id == first.Id);
+        Assert.Contains(summaries, x => x.Id == second.Id);
+        Assert.Contains(summaries, x => x.Id == third.Id);
+        Assert.Null(await fixture.Store.GetAsync(fixture.AccountId, first.Id, CancellationToken.None));
+        Assert.Equal(2, await fixture.CountAsync("snapshots"));
+    }
+
     private static InventoryReport CreateReport(string characterName, string homeWorld, uint itemId) =>
         new()
         {
@@ -123,14 +160,18 @@ public sealed class InventoryReportStoreSqliteTests
         public required InventoryReportStore Store { get; init; }
         public required long AccountId { get; init; }
 
-        public static async Task<StoreFixture> CreateAsync()
+        public static async Task<StoreFixture> CreateAsync(params KeyValuePair<string, string?>[] extraConfiguration)
         {
             var databasePath = CreateDatabasePath();
+            var values = new Dictionary<string, string?>
+            {
+                ["MarketMafioso:DatabasePath"] = databasePath,
+            };
+            foreach (var item in extraConfiguration)
+                values[item.Key] = item.Value;
+
             var configuration = new ConfigurationBuilder()
-                .AddInMemoryCollection(new Dictionary<string, string?>
-                {
-                    ["MarketMafioso:DatabasePath"] = databasePath,
-                })
+                .AddInMemoryCollection(values)
                 .Build();
             var environment = new TestHostEnvironment(Path.GetDirectoryName(databasePath)!);
             var connectionFactory = new SqliteConnectionFactory(configuration, environment);

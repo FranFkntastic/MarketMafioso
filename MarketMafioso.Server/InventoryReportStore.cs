@@ -117,6 +117,7 @@ public sealed class InventoryReportStore
         }
 
         await PruneRawJsonAsync(connection, transaction, accountId, cancellationToken);
+        await PruneSnapshotsAsync(connection, transaction, accountId, cancellationToken);
         await transaction.CommitAsync(cancellationToken);
 
         return (await GetAsync(accountId, id, cancellationToken))
@@ -557,6 +558,34 @@ public sealed class InventoryReportStore
                   FROM snapshots
                   WHERE account_id = $accountId
                     AND raw_report_json IS NOT NULL
+                  ORDER BY received_at_utc DESC
+                  LIMIT $retentionCount
+              );
+            """;
+        command.Parameters.AddWithValue("$accountId", accountId);
+        command.Parameters.AddWithValue("$retentionCount", retentionCount);
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private async Task PruneSnapshotsAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        long accountId,
+        CancellationToken cancellationToken)
+    {
+        var retentionCount = configuration.GetValue("MarketMafioso:SnapshotRetentionCount", 500);
+        if (retentionCount < 1)
+            throw new InvalidOperationException("MarketMafioso:SnapshotRetentionCount must be one or greater.");
+
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            DELETE FROM snapshots
+            WHERE account_id = $accountId
+              AND id NOT IN (
+                  SELECT id
+                  FROM snapshots
+                  WHERE account_id = $accountId
                   ORDER BY received_at_utc DESC
                   LIMIT $retentionCount
               );

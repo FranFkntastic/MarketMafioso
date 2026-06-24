@@ -52,6 +52,23 @@ public sealed class DashboardAccountAuthTests
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 
+    [Theory]
+    [InlineData("/inventory")]
+    [InlineData("/diagnostics")]
+    public async Task DashboardToolRoutes_RequireBootstrapUserCredentials(string path)
+    {
+        await using var application = CreateApplication();
+        using var client = application.CreateClient();
+
+        var unauthenticated = await client.GetAsync(path);
+        using var authenticatedRequest = new HttpRequestMessage(HttpMethod.Get, path);
+        authenticatedRequest.Headers.Authorization = CreateBasicAuth("admin", "secret-password");
+        var authenticated = await client.SendAsync(authenticatedRequest);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, unauthenticated.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, authenticated.StatusCode);
+    }
+
     private static WebApplicationFactory<Program> CreateApplication(params KeyValuePair<string, string?>[] extraConfiguration)
     {
         var contentRoot = Path.Combine(Path.GetTempPath(), "MarketMafioso.Server.Tests", Guid.NewGuid().ToString("N"));

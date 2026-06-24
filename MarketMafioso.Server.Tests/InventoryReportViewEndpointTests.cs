@@ -165,6 +165,79 @@ public sealed class InventoryReportViewEndpointTests
     }
 
     [Fact]
+    public async Task InventoryBrowser_RendersLatestSnapshotItemAggregates()
+    {
+        await using var application = new WebApplicationFactory<Program>();
+        using var client = application.CreateClient();
+
+        var createResponse = await client.PostAsJsonAsync("/inventory", new InventoryReport
+        {
+            CharacterName = "Browser Character",
+            HomeWorld = "Gilgamesh",
+            Timestamp = "2026-06-24T01:00:00.0000000Z",
+            PlayerInventory =
+            [
+                new InventoryBag
+                {
+                    BagName = "Inventory1",
+                    Items =
+                    [
+                        new ItemSlot
+                        {
+                            ItemId = 5057,
+                            ItemName = "Darksteel Nugget",
+                            Quantity = 12,
+                            IsHQ = true,
+                            Condition = 100,
+                        },
+                    ],
+                },
+            ],
+            Retainers =
+            [
+                new RetainerReport
+                {
+                    RetainerName = "Scrongle",
+                    RetainerId = 42,
+                    LastUpdated = "2026-06-24T00:55:00.0000000Z",
+                    Bags =
+                    [
+                        new InventoryBag
+                        {
+                            BagName = "Retainer Page 1",
+                            Items =
+                            [
+                                new ItemSlot
+                                {
+                                    ItemId = 5057,
+                                    ItemName = "Darksteel Nugget",
+                                    Quantity = 99,
+                                    IsHQ = false,
+                                    Condition = 0,
+                                },
+                            ],
+                        },
+                    ],
+                },
+            ],
+        });
+        createResponse.EnsureSuccessStatusCode();
+
+        var html = await client.GetStringAsync("/inventory?search=darksteel");
+
+        Assert.Contains("Inventory Browser", html, StringComparison.Ordinal);
+        Assert.Contains("Browser Character @ Gilgamesh", html, StringComparison.Ordinal);
+        Assert.Contains("Darksteel Nugget", html, StringComparison.Ordinal);
+        Assert.Contains("<td class=\"number\">111</td>", html, StringComparison.Ordinal);
+        Assert.Contains("<td class=\"number\">12</td>", html, StringComparison.Ordinal);
+        Assert.Contains("2 owners", html, StringComparison.Ordinal);
+        Assert.Contains("Player Inventory / Inventory1: 12", html, StringComparison.Ordinal);
+        Assert.Contains("Scrongle / Retainer Page 1: 99", html, StringComparison.Ordinal);
+        Assert.Contains("<th class=\"icon-column\">Icon</th>", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("Raw JSON", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task GetReportView_ReturnsNotFoundForMissingSnapshot()
     {
         await using var application = new WebApplicationFactory<Program>();
@@ -347,7 +420,8 @@ public sealed class InventoryReportViewEndpointTests
         var dashboard = await client.GetStringAsync("/api/marketmafioso/");
 
         Assert.Contains("href=\"/api/marketmafioso/reports/", dashboard, StringComparison.Ordinal);
-        Assert.Contains("href=\"/api/marketmafioso/reports/latest/json\"", dashboard, StringComparison.Ordinal);
+        Assert.Contains("href=\"/api/marketmafioso/inventory\"", dashboard, StringComparison.Ordinal);
+        Assert.Contains("href=\"/api/marketmafioso/diagnostics\"", dashboard, StringComparison.Ordinal);
         Assert.DoesNotContain("href=\"/api/marketmafioso/api/reports", dashboard, StringComparison.Ordinal);
     }
 

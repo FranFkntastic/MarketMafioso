@@ -91,6 +91,33 @@ app.MapGet("/health", () => Results.Ok(new
     utc = DateTimeOffset.UtcNow,
 }));
 
+app.MapGet("/inventory", async (
+    HttpRequest request,
+    InventoryReportStore store,
+    long? characterId,
+    string? search,
+    CancellationToken token) =>
+{
+    var characters = await store.ListCharactersAsync(1, token);
+    var selectedCharacterId = characterId ?? characters.FirstOrDefault()?.Id;
+    var latest = await store.GetLatestAsync(1, selectedCharacterId, token);
+    var view = InventoryBrowserViewBuilder.Build(latest, search);
+    return Results.Content(
+        RenderInventoryBrowser(view, characters, selectedCharacterId, request.PathBase),
+        "text/html; charset=utf-8");
+});
+
+app.MapGet("/diagnostics", async (
+    HttpRequest request,
+    InventoryReportStore store,
+    CancellationToken token) =>
+{
+    var reports = await store.ListSummariesAsync(1, characterId: null, token);
+    return Results.Content(
+        RenderDiagnostics(reports, request.PathBase),
+        "text/html; charset=utf-8");
+});
+
 app.MapPost("/inventory", SaveInventoryReport);
 app.MapPost("/api/inventory", SaveInventoryReport);
 
@@ -605,8 +632,9 @@ static string RenderDashboard(
                         <p>Local control panel for received inventory snapshots.</p>
                     </div>
                     <div class="toolbar">
+                        <a class="button" href="{{Html(AppUrl(pathBase, "/inventory"))}}">Inventory</a>
+                        <a class="button" href="{{Html(AppUrl(pathBase, "/diagnostics"))}}">Diagnostics</a>
                         <a class="button" href="{{Html(AppUrl(pathBase, "/"))}}">Refresh</a>
-                        <a class="button" href="{{Html(AppUrl(pathBase, "/reports/latest/json"))}}">Latest JSON</a>
                         <form method="post" action="{{Html(AppUrl(pathBase, "/reports/delete-all"))}}" onsubmit="return confirm('Delete all stored snapshots?');">
                             <input type="hidden" name="csrf" value="{{Html(csrfToken)}}">
                             <button class="danger" type="submit">Delete All</button>
@@ -677,6 +705,378 @@ static string CharacterLabel(CharacterSummary character) =>
     string.IsNullOrWhiteSpace(character.HomeWorld)
         ? character.CharacterName
         : $"{character.CharacterName} @ {character.HomeWorld}";
+
+static string RenderInventoryBrowser(
+    InventoryBrowserView view,
+    IReadOnlyList<CharacterSummary> characters,
+    long? selectedCharacterId,
+    PathString pathBase)
+{
+    var characterOptions = RenderCharacterOptions(characters, selectedCharacterId);
+    var rows = view.Items.Count == 0
+        ? """<tr><td colspan="5" class="empty-cell">No matching items in the selected latest snapshot.</td></tr>"""
+        : string.Join(Environment.NewLine, view.Items.Select(RenderInventoryBrowserItem));
+    var characterTitle = string.IsNullOrWhiteSpace(view.CharacterName)
+        ? "No character selected"
+        : $"{view.CharacterName} @ {view.HomeWorld ?? "-"}";
+    var received = view.ReceivedAt == null
+        ? "No snapshots yet"
+        : view.ReceivedAt.Value.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss zzz");
+
+    return $$"""
+        <!doctype html>
+        <html lang="en">
+        <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <title>MarketMafioso Inventory Browser</title>
+            <style>
+                :root {
+                    color-scheme: dark;
+                    --bg: #101317;
+                    --panel: #171c22;
+                    --panel-2: #1d242c;
+                    --line: #2c3642;
+                    --line-soft: #242c36;
+                    --text: #e7edf3;
+                    --muted: #95a3b3;
+                    --subtle: #687789;
+                    --accent: #62b6ff;
+                    --accent-2: #7ddc9a;
+                    --chip: #25303b;
+                    --row: #141a20;
+                    --row-alt: #11171d;
+                    font-family: "Segoe UI", system-ui, sans-serif;
+                }
+                * { box-sizing: border-box; }
+                body { margin: 0; min-height: 100vh; background: var(--bg); color: var(--text); font-size: 14px; }
+                .shell { min-height: 100vh; display: grid; grid-template-rows: auto auto 1fr auto; }
+                .topbar {
+                    display: flex;
+                    align-items: center;
+                    justify-content: space-between;
+                    gap: 18px;
+                    min-height: 54px;
+                    padding: 0 22px;
+                    border-bottom: 1px solid var(--line);
+                    background: #131820;
+                }
+                .brand { display: flex; align-items: baseline; gap: 12px; min-width: 0; }
+                .brand strong { font-size: 16px; font-weight: 650; }
+                .brand span { color: var(--muted); white-space: nowrap; }
+                .tabs { display: flex; gap: 4px; }
+                .tab {
+                    display: inline-flex;
+                    align-items: center;
+                    height: 34px;
+                    padding: 0 11px;
+                    border: 1px solid transparent;
+                    border-radius: 6px;
+                    color: var(--muted);
+                    text-decoration: none;
+                }
+                .tab.active { color: var(--text); border-color: var(--line); background: var(--panel-2); }
+                .toolbar {
+                    display: grid;
+                    grid-template-columns: minmax(260px, 1fr) auto auto;
+                    gap: 10px;
+                    align-items: center;
+                    padding: 14px 22px;
+                    border-bottom: 1px solid var(--line);
+                    background: var(--panel);
+                }
+                input, select, button {
+                    height: 34px;
+                    border: 1px solid var(--line);
+                    border-radius: 6px;
+                    background: #0f141a;
+                    color: var(--text);
+                    font: inherit;
+                }
+                input { width: 100%; padding: 0 12px; }
+                select { min-width: 220px; padding: 0 10px; }
+                button { padding: 0 12px; background: var(--panel-2); }
+                .content { display: grid; grid-template-columns: 260px minmax(0, 1fr); min-height: 0; }
+                .sidebar { border-right: 1px solid var(--line); background: #12171d; padding: 14px; overflow: auto; }
+                .section-title {
+                    margin: 4px 0 8px;
+                    color: var(--muted);
+                    font-size: 12px;
+                    font-weight: 650;
+                    text-transform: uppercase;
+                    letter-spacing: .04em;
+                }
+                .list-item {
+                    display: grid;
+                    gap: 2px;
+                    padding: 9px 10px;
+                    border: 1px solid transparent;
+                    border-radius: 6px;
+                    background: transparent;
+                    color: var(--text);
+                    text-decoration: none;
+                }
+                .list-item.active { border-color: #315270; background: #182838; }
+                .list-item strong { font-size: 13px; font-weight: 600; }
+                .list-item span { color: var(--muted); font-size: 12px; }
+                .main { min-width: 0; padding: 16px 20px 22px; overflow: auto; }
+                .summary { display: grid; grid-template-columns: repeat(4, minmax(120px, 1fr)); gap: 10px; margin-bottom: 14px; }
+                .metric { border: 1px solid var(--line); border-radius: 8px; background: var(--panel); padding: 10px 12px; }
+                .metric span { display: block; color: var(--muted); font-size: 12px; margin-bottom: 5px; }
+                .metric strong { font-size: 18px; font-weight: 650; }
+                .table-wrap { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--panel); }
+                table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+                th, td { padding: 8px 10px; border-bottom: 1px solid var(--line-soft); vertical-align: middle; }
+                th {
+                    height: 34px;
+                    color: var(--muted);
+                    background: #202832;
+                    text-align: left;
+                    font-size: 12px;
+                    font-weight: 650;
+                    text-transform: uppercase;
+                    letter-spacing: .03em;
+                }
+                .icon-column, .icon-cell { display: none; }
+                tr.item-row:nth-child(even) td { background: var(--row-alt); }
+                tr.item-row:nth-child(odd) td { background: var(--row); }
+                .item-name { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+                .item-name strong { font-weight: 620; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+                .item-name span { color: var(--subtle); font-size: 12px; }
+                .number { text-align: right; font-variant-numeric: tabular-nums; }
+                .where { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+                .chip {
+                    display: inline-flex;
+                    align-items: center;
+                    min-height: 24px;
+                    padding: 2px 8px;
+                    border-radius: 999px;
+                    background: var(--chip);
+                    color: var(--muted);
+                    font-size: 12px;
+                    white-space: nowrap;
+                }
+                .small-button {
+                    display: inline-flex;
+                    align-items: center;
+                    height: 26px;
+                    padding: 0 9px;
+                    border: 1px solid var(--line);
+                    border-radius: 5px;
+                    background: var(--panel-2);
+                    color: var(--text);
+                    text-decoration: none;
+                    font-size: 12px;
+                }
+                .detail-row td { padding: 0; background: #0f151c; }
+                .locations { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; padding: 10px 12px 12px 10px; }
+                .location { min-width: 0; border: 1px solid var(--line-soft); border-radius: 6px; padding: 8px 9px; background: #141b23; }
+                .location strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+                .location span { color: var(--muted); font-size: 12px; }
+                .empty-cell { color: var(--muted); text-align: center; }
+                .statusbar {
+                    display: flex;
+                    justify-content: space-between;
+                    gap: 12px;
+                    padding: 8px 22px;
+                    border-top: 1px solid var(--line);
+                    background: #11161c;
+                    color: var(--muted);
+                    font-size: 12px;
+                }
+                @media (max-width: 980px) {
+                    .toolbar { grid-template-columns: 1fr; }
+                    .content { grid-template-columns: 1fr; }
+                    .sidebar { display: none; }
+                    .summary, .locations { grid-template-columns: 1fr 1fr; }
+                }
+            </style>
+        </head>
+        <body>
+            <div class="shell">
+                <header class="topbar">
+                    <div class="brand">
+                        <strong>MarketMafioso</strong>
+                        <span>Inventory Browser</span>
+                    </div>
+                    <nav class="tabs" aria-label="Dashboard sections">
+                        <a class="tab" href="{{Html(AppUrl(pathBase, "/"))}}">Snapshots</a>
+                        <a class="tab active" href="{{Html(AppUrl(pathBase, "/inventory"))}}">Inventory</a>
+                        <a class="tab" href="{{Html(AppUrl(pathBase, "/diagnostics"))}}">Diagnostics</a>
+                    </nav>
+                </header>
+                <form class="toolbar" method="get" action="{{Html(AppUrl(pathBase, "/inventory"))}}">
+                    <input name="search" value="{{Html(view.Search)}}" aria-label="Search by item name or id" placeholder="Search by item name or id">
+                    <select name="characterId" aria-label="Character">{{characterOptions}}</select>
+                    <button type="submit">Search</button>
+                </form>
+                <main class="content">
+                    <aside class="sidebar">
+                        <div class="section-title">Snapshot</div>
+                        <div class="list-item active">
+                            <strong>Latest Snapshot</strong>
+                            <span>{{Html(received)}}</span>
+                        </div>
+                        <div class="section-title" style="margin-top: 18px;">Scope</div>
+                        <div class="list-item active">
+                            <strong>{{Html(characterTitle)}}</strong>
+                            <span>{{view.Items.Count:N0}} matching item rows</span>
+                        </div>
+                    </aside>
+                    <section class="main">
+                        <div class="summary">
+                            <div class="metric"><span>Matching Items</span><strong>{{view.Items.Count:N0}}</strong></div>
+                            <div class="metric"><span>Total Quantity</span><strong>{{view.TotalQuantity:N0}}</strong></div>
+                            <div class="metric"><span>HQ Quantity</span><strong>{{view.HqQuantity:N0}}</strong></div>
+                            <div class="metric"><span>Owners Matched</span><strong>{{view.OwnerCount:N0}}</strong></div>
+                        </div>
+                        <div class="table-wrap">
+                            <table>
+                                <colgroup>
+                                    <col class="icon-column" style="width:52px">
+                                    <col>
+                                    <col style="width:110px">
+                                    <col style="width:90px">
+                                    <col style="width:220px">
+                                </colgroup>
+                                <thead>
+                                    <tr>
+                                        <th class="icon-column">Icon</th>
+                                        <th>Item</th>
+                                        <th class="number">Total</th>
+                                        <th class="number">HQ</th>
+                                        <th>Where</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {{rows}}
+                                </tbody>
+                            </table>
+                        </div>
+                    </section>
+                </main>
+                <footer class="statusbar">
+                    <span>Structured retention: 500 snapshots by default.</span>
+                    <span>Item icons are reserved for a later server-side metadata cache.</span>
+                </footer>
+            </div>
+        </body>
+        </html>
+        """;
+}
+
+static string RenderCharacterOptions(IReadOnlyList<CharacterSummary> characters, long? selectedCharacterId)
+{
+    if (characters.Count == 0)
+        return """<option value="">No characters</option>""";
+
+    var options = new StringBuilder();
+    foreach (var character in characters)
+    {
+        var selected = selectedCharacterId == character.Id ? " selected" : string.Empty;
+        options.AppendLine($"""<option value="{character.Id}"{selected}>{Html(CharacterLabel(character))}</option>""");
+    }
+
+    return options.ToString();
+}
+
+static string RenderInventoryBrowserItem(InventoryBrowserItemView item)
+{
+    var ownerText = item.OwnerCount == 1 ? "1 owner" : $"{item.OwnerCount:N0} owners";
+    var locations = string.Join(Environment.NewLine, item.Locations.Select(RenderInventoryBrowserLocation));
+
+    return $$"""
+        <tr class="item-row">
+            <td class="icon-cell"></td>
+            <td>
+                <div class="item-name">
+                    <strong>{{Html(item.DisplayName)}}</strong>
+                    <span>Item {{item.ItemId}}</span>
+                </div>
+            </td>
+            <td class="number">{{item.TotalQuantity:N0}}</td>
+            <td class="number">{{item.HqQuantity:N0}}</td>
+            <td>
+                <div class="where">
+                    <span class="chip">{{Html(ownerText)}}</span>
+                    <span class="small-button">View</span>
+                </div>
+            </td>
+        </tr>
+        <tr class="detail-row">
+            <td colspan="5">
+                <div class="locations">
+                    {{locations}}
+                </div>
+            </td>
+        </tr>
+        """;
+}
+
+static string RenderInventoryBrowserLocation(InventoryBrowserLocationView location)
+{
+    var quantity = location.HqQuantity > 0
+        ? $"{location.Quantity:N0} ({location.HqQuantity:N0} HQ)"
+        : $"{location.Quantity:N0}";
+
+    return $$"""
+        <div class="location">
+            <strong>{{Html(location.OwnerName)}} / {{Html(location.BagName)}}: {{Html(quantity)}}</strong>
+        </div>
+        """;
+}
+
+static string RenderDiagnostics(IReadOnlyList<ReportSummary> reports, PathString pathBase)
+{
+    var rows = reports.Count == 0
+        ? """<tr><td colspan="4">No snapshots found.</td></tr>"""
+        : string.Join(Environment.NewLine, reports.Take(100).Select(report => $$"""
+            <tr>
+                <td>{{Html(report.Id)}}</td>
+                <td>{{Html(report.ReceivedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss zzz"))}}</td>
+                <td>{{Html(report.CharacterName ?? "-")}}</td>
+                <td><a href="{{Html(AppUrl(pathBase, $"/reports/{report.Id}/json"))}}">Original payload</a></td>
+            </tr>
+            """));
+
+    return $$"""
+        <!doctype html>
+        <html lang="en">
+        <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <title>MarketMafioso Diagnostics</title>
+            <style>
+                :root { color-scheme: dark; --bg: #111316; --panel: #191d21; --border: #323a41; --text: #eef1f3; --muted: #aeb6bd; --accent: #bde8c8; font-family: "Segoe UI", system-ui, sans-serif; }
+                body { margin: 0; background: var(--bg); color: var(--text); }
+                main { max-width: 1120px; margin: 0 auto; padding: 28px 20px; }
+                h1 { margin: 0 0 6px; font-size: 24px; }
+                p { color: var(--muted); }
+                a { color: var(--accent); }
+                .tabs { display: flex; gap: 8px; margin: 16px 0; }
+                .button { border: 1px solid var(--border); border-radius: 5px; background: #20262b; color: var(--text); padding: 6px 10px; text-decoration: none; }
+                table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--border); }
+                th, td { padding: 10px 12px; border-bottom: 1px solid var(--border); text-align: left; }
+                th { color: var(--accent); }
+            </style>
+        </head>
+        <body>
+            <main>
+                <h1>Diagnostics</h1>
+                <p>Raw payload access and receiver troubleshooting live here instead of in the main inventory browser.</p>
+                <nav class="tabs">
+                    <a class="button" href="{{Html(AppUrl(pathBase, "/"))}}">Snapshots</a>
+                    <a class="button" href="{{Html(AppUrl(pathBase, "/inventory"))}}">Inventory</a>
+                </nav>
+                <table>
+                    <thead><tr><th>Snapshot</th><th>Received</th><th>Character</th><th>Raw Data</th></tr></thead>
+                    <tbody>{{rows}}</tbody>
+                </table>
+            </main>
+        </body>
+        </html>
+        """;
+}
 
 static string RenderReportDetails(StoredInventoryReport stored, InventorySnapshotView view, PathString pathBase, string csrfToken)
 {

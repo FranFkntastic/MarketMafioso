@@ -57,6 +57,8 @@ public sealed class DashboardBasicAuthMiddleware
 
         return request.Path.Equals("/", StringComparison.OrdinalIgnoreCase) ||
                request.Path == PathString.Empty ||
+               request.Path.Equals("/inventory", StringComparison.OrdinalIgnoreCase) ||
+               request.Path.Equals("/diagnostics", StringComparison.OrdinalIgnoreCase) ||
                request.Path.StartsWithSegments("/reports", StringComparison.OrdinalIgnoreCase);
     }
 
