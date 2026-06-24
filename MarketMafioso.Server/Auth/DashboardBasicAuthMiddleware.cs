@@ -51,14 +51,16 @@ public sealed class DashboardBasicAuthMiddleware
 
     private static bool IsDashboardRoute(HttpRequest request)
     {
-        if (!HttpMethods.IsGet(request.Method) &&
-            !HttpMethods.IsPost(request.Method))
-            return false;
+        if (HttpMethods.IsGet(request.Method))
+        {
+            return request.Path.Equals("/", StringComparison.OrdinalIgnoreCase) ||
+                   request.Path == PathString.Empty ||
+                   request.Path.Equals("/inventory", StringComparison.OrdinalIgnoreCase) ||
+                   request.Path.Equals("/diagnostics", StringComparison.OrdinalIgnoreCase) ||
+                   request.Path.StartsWithSegments("/reports", StringComparison.OrdinalIgnoreCase);
+        }
 
-        return request.Path.Equals("/", StringComparison.OrdinalIgnoreCase) ||
-               request.Path == PathString.Empty ||
-               request.Path.Equals("/inventory", StringComparison.OrdinalIgnoreCase) ||
-               request.Path.Equals("/diagnostics", StringComparison.OrdinalIgnoreCase) ||
+        return HttpMethods.IsPost(request.Method) &&
                request.Path.StartsWithSegments("/reports", StringComparison.OrdinalIgnoreCase);
     }
 

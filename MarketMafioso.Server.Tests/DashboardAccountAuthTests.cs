@@ -1,6 +1,8 @@
 using System.Net;
 using System.Net.Http.Headers;
+using System.Net.Http.Json;
 using System.Text;
+using MarketMafioso.Server;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
@@ -67,6 +69,46 @@ public sealed class DashboardAccountAuthTests
 
         Assert.Equal(HttpStatusCode.Unauthorized, unauthenticated.StatusCode);
         Assert.Equal(HttpStatusCode.OK, authenticated.StatusCode);
+    }
+
+    [Fact]
+    public async Task InventoryIngestRoute_UsesApiKeyInsteadOfDashboardBasicAuth()
+    {
+        await using var application = CreateApplication(
+            new KeyValuePair<string, string?>("MarketMafioso:RequireApiKey", "true"),
+            new KeyValuePair<string, string?>("MarketMafioso:IngestApiKey", "ingest-secret"));
+        using var client = application.CreateClient();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/inventory")
+        {
+            Content = JsonContent.Create(new InventoryReport
+            {
+                CharacterName = "Ingest Character",
+                HomeWorld = "Gilgamesh",
+                Timestamp = "2026-06-24T10:45:00.0000000Z",
+                PlayerInventory =
+                [
+                    new InventoryBag
+                    {
+                        BagName = "Inventory1",
+                        Items =
+                        [
+                            new ItemSlot
+                            {
+                                ItemId = 2,
+                                ItemName = "Fire Shard",
+                                Quantity = 1,
+                            },
+                        ],
+                    },
+                ],
+            }),
+        };
+        request.Headers.Add("X-Api-Key", "ingest-secret");
+
+        var response = await client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
     }
 
     private static WebApplicationFactory<Program> CreateApplication(params KeyValuePair<string, string?>[] extraConfiguration)
