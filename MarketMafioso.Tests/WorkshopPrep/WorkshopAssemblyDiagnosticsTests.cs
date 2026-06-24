@@ -36,11 +36,32 @@ public sealed class WorkshopAssemblyDiagnosticsTests
             });
 
         var text = ReadLog(diagnostics.FilePath!);
-        Assert.Contains("event=state", text);
-        Assert.Contains("elapsedMs=", text);
-        Assert.Contains("message=\"Entered SubmittingMaterial.\"", text);
-        Assert.Contains("project=\"Shark-class Pressure Hull\"", text);
-        Assert.Contains("material=\"5378\"", text);
+        Assert.Contains("] state", text);
+        Assert.Contains("  Entered SubmittingMaterial.", text);
+        Assert.Contains("  project: Shark-class Pressure Hull", text);
+        Assert.Contains("  material: 5378", text);
+    }
+
+    [Fact]
+    public void Record_summarizes_repeated_events_when_next_event_arrives()
+    {
+        var directory = CreateTempDirectory();
+        using var diagnostics = WorkshopAssemblyDiagnostics.CreateEnabled(
+            directory,
+            new DateTimeOffset(2026, 6, 23, 21, 30, 12, TimeSpan.Zero));
+
+        diagnostics.Record("ui-ready-check", "Fabrication station UI is not ready.");
+        diagnostics.Record("ui-ready-check", "Fabrication station UI is not ready.");
+        diagnostics.Record("ui-ready-check", "Fabrication station UI is not ready.");
+        diagnostics.Record("state", "Entered OpeningProject.");
+
+        var text = ReadLog(diagnostics.FilePath!);
+        Assert.Contains("] ui-ready-check", text);
+        Assert.Contains("  Fabrication station UI is not ready.", text);
+        Assert.Contains("] repeat", text);
+        Assert.Contains("  Previous event repeated 2 more time(s).", text);
+        Assert.Contains("  event: ui-ready-check", text);
+        Assert.Contains("] state", text);
     }
 
     [Fact]
@@ -67,8 +88,8 @@ public sealed class WorkshopAssemblyDiagnosticsTests
         diagnostics.Complete("Workshop assembly complete.");
 
         var text = ReadLog(diagnostics.FilePath!);
-        Assert.Contains("event=complete", text);
-        Assert.Contains("message=\"Workshop assembly complete.\"", text);
+        Assert.Contains("] complete", text);
+        Assert.Contains("  Workshop assembly complete.", text);
     }
 
     [Fact]
