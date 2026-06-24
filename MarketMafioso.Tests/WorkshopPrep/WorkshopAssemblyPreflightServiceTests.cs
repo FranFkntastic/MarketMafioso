@@ -5,7 +5,7 @@ namespace MarketMafioso.Tests.WorkshopPrep;
 public sealed class WorkshopAssemblyPreflightServiceTests
 {
     [Fact]
-    public void Check_returns_blocked_when_materials_are_missing()
+    public void Check_returns_plan_with_live_progress_message_when_player_inventory_is_short()
     {
         var queue = new[] { new WorkshopPrepQueueItem { WorkshopItemId = 10, Quantity = 1 } };
         var projects = new[] { BuildProject(10, "Project", 100, "Cedar Lumber", 9) };
@@ -13,9 +13,11 @@ public sealed class WorkshopAssemblyPreflightServiceTests
 
         var result = WorkshopAssemblyPreflightService.Check(queue, projects, playerInventory);
 
-        Assert.False(result.CanStart);
-        Assert.Null(result.Plan);
-        Assert.Equal("Missing player materials: Cedar Lumber x5.", result.Message);
+        Assert.True(result.CanStart);
+        Assert.NotNull(result.Plan);
+        Assert.Equal(
+            "Workshop assembly preflight complete. Player inventory is short for some queued materials; live workshop progress will be checked during assembly.",
+            result.Message);
     }
 
     [Fact]

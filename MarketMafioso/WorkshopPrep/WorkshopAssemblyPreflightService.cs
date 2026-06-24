@@ -11,26 +11,15 @@ public static class WorkshopAssemblyPreflightService
         IReadOnlyDictionary<uint, int> playerInventory)
     {
         var plan = WorkshopAssemblyPlanBuilder.Build(queue, projects);
-        var missing = plan.TotalMaterials
-            .Select(material =>
-            {
-                playerInventory.TryGetValue(material.ItemId, out var available);
-                return new
-                {
-                    material.ItemName,
-                    Missing = material.Quantity - available,
-                };
-            })
-            .Where(x => x.Missing > 0)
-            .OrderBy(x => x.ItemName)
-            .ToList();
-
-        if (missing.Count > 0)
+        var missingCount = plan.TotalMaterials.Count(material =>
         {
-            var missingText = string.Join(", ", missing.Select(x => $"{x.ItemName} x{x.Missing}"));
-            return new(false, $"Missing player materials: {missingText}.", null);
-        }
+            playerInventory.TryGetValue(material.ItemId, out var available);
+            return material.Quantity > available;
+        });
 
-        return new(true, "Workshop assembly preflight complete.", plan);
+        var message = missingCount == 0
+            ? "Workshop assembly preflight complete."
+            : "Workshop assembly preflight complete. Player inventory is short for some queued materials; live workshop progress will be checked during assembly.";
+        return new(true, message, plan);
     }
 }
