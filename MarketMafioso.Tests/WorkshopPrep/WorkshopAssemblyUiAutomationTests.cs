@@ -31,6 +31,16 @@ public sealed class WorkshopAssemblyUiAutomationTests
     }
 
     [Theory]
+    [InlineData("You are about to hand over an HQ item. Proceed?", true)]
+    [InlineData("Do you really want to trade a high-quality item?", true)]
+    [InlineData("Contribute 4 darksteel ingots to the company project?", false)]
+    [InlineData("Contribute materials. (Quality: 18/100)", false)]
+    public void IsHighQualityHandoffPrompt_matches_hq_warning_variants(string text, bool expected)
+    {
+        Assert.Equal(expected, WorkshopAssemblyUiAutomation.IsHighQualityHandoffPrompt(text));
+    }
+
+    [Theory]
     [InlineData("Contribute materials. (Quality: 0/100)", true)]
     [InlineData("Advance to the next phase of production.", true)]
     [InlineData("Complete the construction of the Shark-class Bridge.", true)]
