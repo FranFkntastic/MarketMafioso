@@ -16,5 +16,10 @@ public interface IWorkshopAssemblyUiAutomation : IDisposable
 
     WorkshopAssemblyActionResult TryConfirmContribution();
 
+    WorkshopAssemblyActionResult TryWaitForContributionProgress(
+        WorkshopAssemblyQueueEntry entry,
+        uint materialItemId,
+        uint previousStepsComplete);
+
     string DescribeUiState();
 }

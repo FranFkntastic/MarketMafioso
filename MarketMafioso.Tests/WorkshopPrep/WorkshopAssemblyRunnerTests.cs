@@ -93,6 +93,55 @@ public sealed class WorkshopAssemblyRunnerTests
         Assert.Equal(5379u, runner.Progress.ActiveMaterialItemId);
     }
 
+    [Fact]
+    public void Lockout_waits_for_observed_material_progress_before_continuing()
+    {
+        var framework = TestFramework.Create();
+        var automation = new FakeWorkshopAssemblyUiAutomation
+        {
+            IsReady = true,
+            OpenProjectResult = new WorkshopAssemblyActionResult(true, "Project opened."),
+            SubmitResult = new WorkshopAssemblyActionResult(
+                false,
+                "Submitted workshop material request.",
+                ActionTaken: true,
+                ActiveMaterialItemId: 5379,
+                ActiveMaterialStepsComplete: 1),
+            ConfirmResult = new WorkshopAssemblyActionResult(
+                true,
+                "Confirmed workshop material contribution.",
+                IsContributionConfirmed: true,
+                ActiveMaterialItemId: 5379),
+            ProgressResult = new WorkshopAssemblyActionResult(
+                false,
+                "Waiting for workshop material progress.",
+                ActiveMaterialItemId: 5379,
+                ActiveMaterialStepsComplete: 1),
+        };
+        using var runner = new WorkshopAssemblyRunner(
+            framework,
+            TestPluginLog.Create(),
+            automation,
+            CreateTempDirectory());
+
+        runner.Start(BuildPlan());
+        ((TestFramework)(object)framework).RaiseUpdate(framework);
+        ((TestFramework)(object)framework).RaiseUpdate(framework);
+        ((TestFramework)(object)framework).RaiseUpdate(framework);
+        automation.SubmitResult = new WorkshopAssemblyActionResult(
+            true,
+            "Workshop material request confirmed.",
+            ActiveMaterialItemId: 5379);
+        ((TestFramework)(object)framework).RaiseUpdate(framework);
+        ((TestFramework)(object)framework).RaiseUpdate(framework);
+        SetPrivateField(runner, "continueAt", DateTimeOffset.MinValue);
+        ((TestFramework)(object)framework).RaiseUpdate(framework);
+
+        Assert.Equal(WorkshopAssemblyRunnerState.WaitingForContributionLockout, runner.Progress.State);
+        Assert.Equal("Waiting for workshop material progress.", runner.Progress.Message);
+        Assert.Equal(1, automation.ProgressChecks);
+    }
+
     private static WorkshopAssemblyPlan BuildPlan()
     {
         return new WorkshopAssemblyPlan(
@@ -124,7 +173,9 @@ public sealed class WorkshopAssemblyRunnerTests
         public WorkshopAssemblyActionResult OpenProjectResult { get; set; } = new(false, "Not used.");
         public WorkshopAssemblyActionResult SubmitResult { get; set; } = new(false, "Not used.");
         public WorkshopAssemblyActionResult ConfirmResult { get; set; } = new(false, "Not used.");
+        public WorkshopAssemblyActionResult ProgressResult { get; set; } = new(false, "Not used.");
         public WorkshopAssemblyDiagnostics Diagnostics { get; set; } = WorkshopAssemblyDiagnostics.Disabled;
+        public int ProgressChecks { get; private set; }
 
         public bool IsFabricationStationUiReady() => IsReady;
 
@@ -139,6 +190,15 @@ public sealed class WorkshopAssemblyRunnerTests
         public WorkshopAssemblyActionResult TrySubmitNextMaterial(WorkshopAssemblyQueueEntry entry) => SubmitResult;
 
         public WorkshopAssemblyActionResult TryConfirmContribution() => ConfirmResult;
+
+        public WorkshopAssemblyActionResult TryWaitForContributionProgress(
+            WorkshopAssemblyQueueEntry entry,
+            uint materialItemId,
+            uint previousStepsComplete)
+        {
+            ProgressChecks++;
+            return ProgressResult;
+        }
 
         public string DescribeUiState() => "Workshop UI state: test.";
 
@@ -212,5 +272,12 @@ public sealed class WorkshopAssemblyRunnerTests
         }
 
         return returnType.IsValueType ? Activator.CreateInstance(returnType) : null;
+    }
+
+    private static void SetPrivateField<T>(object target, string fieldName, T value)
+    {
+        var field = target.GetType().GetField(fieldName, BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(field);
+        field.SetValue(target, value);
     }
 }

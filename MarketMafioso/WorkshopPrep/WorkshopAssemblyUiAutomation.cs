@@ -257,7 +257,8 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
                 false,
                 $"Submitted workshop material request for {item.ItemCountPerStep}x {item.ItemName}.",
                 ActionTaken: true,
-                ActiveMaterialItemId: item.ItemId);
+                ActiveMaterialItemId: item.ItemId,
+                ActiveMaterialStepsComplete: item.StepsComplete);
         }
 
         return new(false, $"No unfinished queued material was found for {entry.ProjectName}. {DescribeUiState()}");
@@ -288,6 +289,53 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
         }
 
         return new(false, $"Workshop material contribution is not ready to confirm. {DescribeUiState()}");
+    }
+
+    public unsafe WorkshopAssemblyActionResult TryWaitForContributionProgress(
+        WorkshopAssemblyQueueEntry entry,
+        uint materialItemId,
+        uint previousStepsComplete)
+    {
+        var materialDelivery = GetMaterialDeliveryAddon();
+        var craftState = ReadCraftState(materialDelivery);
+        if (craftState == null)
+        {
+            if (HasSelectStringEntry(IsPostContributionMenuEntry))
+            {
+                return new(
+                    true,
+                    $"Observed workshop menu after contributing material {materialItemId}.",
+                    ActiveMaterialItemId: materialItemId,
+                    ActiveMaterialStepsComplete: previousStepsComplete);
+            }
+
+            return new(false, $"Waiting for workshop material progress for {materialItemId}. {DescribeUiState()}");
+        }
+
+        if (craftState.ResultItem != entry.ResultItemId)
+        {
+            return new(
+                false,
+                $"Open workshop project result item {craftState.ResultItem} does not match queued project {entry.ProjectName} ({entry.ResultItemId}).",
+                ActiveMaterialItemId: materialItemId,
+                ActiveMaterialStepsComplete: previousStepsComplete);
+        }
+
+        var material = craftState.Items.FirstOrDefault(x => x.ItemId == materialItemId);
+        if (material == null || material.Finished || material.StepsComplete > previousStepsComplete)
+        {
+            return new(
+                true,
+                $"Observed workshop material progress for {entry.ProjectName}.",
+                ActiveMaterialItemId: materialItemId,
+                ActiveMaterialStepsComplete: material?.StepsComplete);
+        }
+
+        return new(
+            false,
+            $"Waiting for workshop material {material.ItemName} to advance beyond {previousStepsComplete}/{material.StepsTotal}.",
+            ActiveMaterialItemId: material.ItemId,
+            ActiveMaterialStepsComplete: material.StepsComplete);
     }
 
     public unsafe string DescribeUiState()
@@ -337,6 +385,14 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
     internal static bool IsContributeMaterialsEntry(string text)
     {
         return text.StartsWith("Contribute materials.", StringComparison.Ordinal);
+    }
+
+    internal static bool IsPostContributionMenuEntry(string text)
+    {
+        return IsContributeMaterialsEntry(text) ||
+               text.StartsWith("Advance to the next phase of production.", StringComparison.Ordinal) ||
+               text.StartsWith("Complete the construction of", StringComparison.Ordinal) ||
+               text.StartsWith("Collect finished product.", StringComparison.Ordinal);
     }
 
     private IGameObject? FindFabricationStation()
@@ -417,6 +473,23 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
                     ["text"] = text,
                 });
             return true;
+        }
+
+        return false;
+    }
+
+    private unsafe bool HasSelectStringEntry(Predicate<string> predicate)
+    {
+        var addon = gameGui.GetAddonByName<AddonSelectString>(SelectStringAddon, 1);
+        if (addon == null || !IsAddonReady(&addon->AtkUnitBase))
+            return false;
+
+        var popup = addon->PopupMenu.PopupMenu;
+        for (var index = 0; index < popup.EntryCount; index++)
+        {
+            var text = popup.EntryNames[index].ToString();
+            if (!string.IsNullOrWhiteSpace(text) && predicate(text))
+                return true;
         }
 
         return false;

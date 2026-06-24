@@ -48,7 +48,8 @@ public sealed record WorkshopAssemblyActionResult(
     bool ActionTaken = false,
     bool IsProjectComplete = false,
     bool IsContributionConfirmed = false,
-    uint? ActiveMaterialItemId = null);
+    uint? ActiveMaterialItemId = null,
+    uint? ActiveMaterialStepsComplete = null);
 
 public sealed record WorkshopAssemblyPreflightResult(
     bool CanStart,

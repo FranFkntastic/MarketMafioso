@@ -18,6 +18,8 @@ public sealed class WorkshopAssemblyRunner : IDisposable
     private int activeEntryIndex;
     private int activeEntryCompletedQuantity;
     private uint? activeMaterialItemId;
+    private uint? pendingProgressMaterialItemId;
+    private uint? pendingProgressStepsComplete;
 
     public WorkshopAssemblyRunner(
         IFramework framework,
@@ -54,6 +56,8 @@ public sealed class WorkshopAssemblyRunner : IDisposable
         activeEntryIndex = 0;
         activeEntryCompletedQuantity = 0;
         activeMaterialItemId = null;
+        pendingProgressMaterialItemId = null;
+        pendingProgressStepsComplete = null;
         continueAt = DateTimeOffset.MinValue;
         SetState(WorkshopAssemblyRunnerState.WaitingForFabricationStation, "Waiting for fabrication station UI.");
         diagnostics.Record(
@@ -128,11 +132,7 @@ public sealed class WorkshopAssemblyRunner : IDisposable
                 break;
 
             case WorkshopAssemblyRunnerState.WaitingForContributionLockout:
-                diagnostics.Record(
-                    "lockout-end",
-                    "Post-contribution lockout elapsed.",
-                    BuildActiveDetails(entry));
-                SetState(WorkshopAssemblyRunnerState.SubmittingMaterial, $"Continuing material contribution for {entry.ProjectName}.");
+                TickWaitingForContributionLockout(entry);
                 break;
 
             default:
@@ -183,6 +183,12 @@ public sealed class WorkshopAssemblyRunner : IDisposable
     {
         var result = uiAutomation.TrySubmitNextMaterial(entry);
         activeMaterialItemId = result.ActiveMaterialItemId;
+        if (result.ActionTaken && result.ActiveMaterialItemId != null && result.ActiveMaterialStepsComplete != null)
+        {
+            pendingProgressMaterialItemId = result.ActiveMaterialItemId;
+            pendingProgressStepsComplete = result.ActiveMaterialStepsComplete;
+        }
+
         RecordActionResult("submit-material", entry, result);
         if (result.IsProjectComplete)
         {
@@ -237,6 +243,39 @@ public sealed class WorkshopAssemblyRunner : IDisposable
                 ["activeMaterialItemId"] = result.ActiveMaterialItemId?.ToString(),
             });
         SetState(WorkshopAssemblyRunnerState.WaitingForContributionLockout, result.Message);
+    }
+
+    private void TickWaitingForContributionLockout(WorkshopAssemblyQueueEntry entry)
+    {
+        if (pendingProgressMaterialItemId == null || pendingProgressStepsComplete == null)
+        {
+            diagnostics.Record(
+                "lockout-end",
+                "Post-contribution lockout elapsed with no tracked material progress.",
+                BuildActiveDetails(entry));
+            SetState(WorkshopAssemblyRunnerState.SubmittingMaterial, $"Continuing material contribution for {entry.ProjectName}.");
+            return;
+        }
+
+        var result = uiAutomation.TryWaitForContributionProgress(
+            entry,
+            pendingProgressMaterialItemId.Value,
+            pendingProgressStepsComplete.Value);
+        activeMaterialItemId = result.ActiveMaterialItemId;
+        RecordActionResult("lockout-wait", entry, result);
+        if (!result.Success)
+        {
+            HandlePendingActionOrTimeout(WorkshopAssemblyRunnerState.WaitingForContributionLockout, result);
+            return;
+        }
+
+        pendingProgressMaterialItemId = null;
+        pendingProgressStepsComplete = null;
+        diagnostics.Record(
+            "lockout-end",
+            "Post-contribution lockout elapsed and material progress was observed.",
+            BuildActiveDetails(entry));
+        SetState(WorkshopAssemblyRunnerState.SubmittingMaterial, $"Continuing material contribution for {entry.ProjectName}.");
     }
 
     private void HandlePendingActionOrTimeout(
@@ -328,6 +367,7 @@ public sealed class WorkshopAssemblyRunner : IDisposable
         details["isContributionConfirmed"] = result.IsContributionConfirmed.ToString();
         details["isProjectComplete"] = result.IsProjectComplete.ToString();
         details["activeMaterialItemId"] = result.ActiveMaterialItemId?.ToString();
+        details["activeMaterialStepsComplete"] = result.ActiveMaterialStepsComplete?.ToString();
 
         diagnostics.Record(phase, result.Message, details);
     }

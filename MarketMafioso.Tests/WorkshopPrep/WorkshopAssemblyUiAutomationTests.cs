@@ -29,4 +29,15 @@ public sealed class WorkshopAssemblyUiAutomationTests
     {
         Assert.Equal(expected, WorkshopAssemblyUiAutomation.IsContributeItemsPrompt(text));
     }
+
+    [Theory]
+    [InlineData("Contribute materials. (Quality: 0/100)", true)]
+    [InlineData("Advance to the next phase of production.", true)]
+    [InlineData("Complete the construction of the Shark-class Bridge.", true)]
+    [InlineData("Collect finished product.", true)]
+    [InlineData("View company crafting log.", false)]
+    public void IsPostContributionMenuEntry_matches_resume_actions(string text, bool expected)
+    {
+        Assert.Equal(expected, WorkshopAssemblyUiAutomation.IsPostContributionMenuEntry(text));
+    }
 }
