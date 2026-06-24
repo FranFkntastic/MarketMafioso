@@ -107,7 +107,7 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
             return new(true, $"Workshop project {entry.ProjectName} is open.");
 
         if (TrySelectYesNo(0, text => text.StartsWith("Craft ", StringComparison.Ordinal)))
-            return new(false, $"Confirmed workshop project {entry.ProjectName}.", ActionTaken: true);
+            return new(true, $"Confirmed workshop project {entry.ProjectName}.", ActionTaken: true);
 
         var craftingLog = GetCraftingLogAddon();
         if (craftingLog != null)
@@ -299,9 +299,14 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
             activeAddons.Add($"{addonName}({(addon->IsReady ? "ready" : "not ready")}, {(addon->IsVisible ? "visible" : "hidden")})");
         }
 
-        return activeAddons.Count == 0
+        var state = activeAddons.Count == 0
             ? "Workshop UI state: no tracked addons present."
             : $"Workshop UI state: {string.Join(", ", activeAddons)}.";
+
+        var selectStringEntries = DescribeSelectStringEntries();
+        return selectStringEntries == null
+            ? state
+            : $"{state} SelectString entries: {selectStringEntries}.";
     }
 
     public void Dispose()
@@ -398,6 +403,24 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
         }
 
         return false;
+    }
+
+    private unsafe string? DescribeSelectStringEntries()
+    {
+        var addon = gameGui.GetAddonByName<AddonSelectString>(SelectStringAddon, 1);
+        if (addon == null || !IsAddonReady(&addon->AtkUnitBase))
+            return null;
+
+        var popup = addon->PopupMenu.PopupMenu;
+        var entries = new List<string>();
+        for (var index = 0; index < popup.EntryCount; index++)
+        {
+            var text = popup.EntryNames[index].ToString();
+            if (!string.IsNullOrWhiteSpace(text))
+                entries.Add($"{index}:{text}");
+        }
+
+        return entries.Count == 0 ? null : string.Join(" | ", entries);
     }
 
     private unsafe bool TrySelectYesNo(int choice, Predicate<string> predicate)
