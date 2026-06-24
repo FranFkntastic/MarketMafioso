@@ -293,15 +293,20 @@ public class MainWindow : Window, IDisposable
             return;
         }
 
-        if (ImGui.BeginTable("WorkshopPrepMaterials", 7, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg))
+        var tableFlags = ImGuiTableFlags.Borders |
+                         ImGuiTableFlags.RowBg |
+                         ImGuiTableFlags.Resizable |
+                         ImGuiTableFlags.Reorderable |
+                         ImGuiTableFlags.Hideable;
+        if (ImGui.BeginTable("WorkshopPrepMaterials", 7, tableFlags))
         {
-            ImGui.TableSetupColumn("Item");
-            ImGui.TableSetupColumn("Required");
-            ImGui.TableSetupColumn("Player");
-            ImGui.TableSetupColumn("Retainers");
-            ImGui.TableSetupColumn("Inventory Missing");
-            ImGui.TableSetupColumn("Total Missing");
-            ImGui.TableSetupColumn("Candidates");
+            ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.WidthStretch);
+            ImGui.TableSetupColumn("Required", ImGuiTableColumnFlags.WidthFixed, 80);
+            ImGui.TableSetupColumn("Player", ImGuiTableColumnFlags.WidthFixed, 72);
+            ImGui.TableSetupColumn("Retainers", ImGuiTableColumnFlags.WidthFixed, 88);
+            ImGui.TableSetupColumn("Inventory Missing", ImGuiTableColumnFlags.WidthFixed, 128);
+            ImGui.TableSetupColumn("Stock Differential", ImGuiTableColumnFlags.WidthFixed, 128);
+            ImGui.TableSetupColumn("Candidates", ImGuiTableColumnFlags.WidthStretch);
             ImGui.TableHeadersRow();
 
             foreach (var item in availability)
@@ -318,13 +323,20 @@ public class MainWindow : Window, IDisposable
                 ImGui.TableNextColumn();
                 ImGui.TextColored(item.Shortage > 0 ? ColError : ColSuccess, item.Shortage.ToString());
                 ImGui.TableNextColumn();
-                ImGui.TextColored(item.TotalMissing > 0 ? ColError : ColSuccess, item.TotalMissing.ToString());
+                ImGui.TextColored(item.StockDifferential < 0 ? ColError : ColSuccess, FormatSignedQuantity(item.StockDifferential));
                 ImGui.TableNextColumn();
                 ImGui.TextUnformatted(string.Join(", ", item.CandidateRetainers.Select(x => x.RetainerName)));
             }
 
             ImGui.EndTable();
         }
+    }
+
+    private static string FormatSignedQuantity(int value)
+    {
+        return value > 0
+            ? $"+{value}"
+            : value.ToString();
     }
 
     private IReadOnlyList<WorkshopMaterialAvailability> GetWorkshopAvailability()

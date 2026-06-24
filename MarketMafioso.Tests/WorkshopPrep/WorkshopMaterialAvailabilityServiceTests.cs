@@ -47,6 +47,7 @@ public sealed class WorkshopMaterialAvailabilityServiceTests
         Assert.Equal(99, item.RetainerCache);
         Assert.Equal(35, item.Shortage);
         Assert.Equal(0, item.TotalMissing);
+        Assert.Equal(64, item.StockDifferential);
         Assert.Equal(10UL, Assert.Single(item.CandidateRetainers).RetainerId);
     }
 
@@ -90,6 +91,7 @@ public sealed class WorkshopMaterialAvailabilityServiceTests
         var item = Assert.Single(result);
         Assert.Equal(35, item.Shortage);
         Assert.Equal(20, item.TotalMissing);
+        Assert.Equal(-20, item.StockDifferential);
     }
 
     [Fact]
@@ -109,6 +111,7 @@ public sealed class WorkshopMaterialAvailabilityServiceTests
         var item = Assert.Single(result);
         Assert.Equal(0, item.Shortage);
         Assert.Equal(0, item.TotalMissing);
+        Assert.Equal(5, item.StockDifferential);
         Assert.Empty(item.CandidateRetainers);
     }
 
@@ -152,6 +155,7 @@ public sealed class WorkshopMaterialAvailabilityServiceTests
         var item = Assert.Single(result);
         Assert.Equal(0, item.Shortage);
         Assert.Equal(0, item.TotalMissing);
+        Assert.Equal(104, item.StockDifferential);
         Assert.Equal(99, item.RetainerCache);
         Assert.Empty(item.CandidateRetainers);
     }

@@ -33,7 +33,10 @@ public sealed record WorkshopMaterialAvailability(
     int RetainerCache,
     int Shortage,
     int TotalMissing,
-    IReadOnlyList<RetainerMaterialCandidate> CandidateRetainers);
+    IReadOnlyList<RetainerMaterialCandidate> CandidateRetainers)
+{
+    public int StockDifferential => PlayerInventory + RetainerCache - Required;
+}
 
 public sealed record RetainerMaterialCandidate(
     ulong RetainerId,
