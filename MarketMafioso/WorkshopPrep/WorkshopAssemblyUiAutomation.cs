@@ -288,7 +288,7 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
 
     public WorkshopAssemblyActionResult TryConfirmContribution()
     {
-        if (TrySelectYesNo(0, text => text == "You are about to hand over an HQ item. Proceed?"))
+        if (TrySelectYesNo(0, IsHighQualityHandoffPrompt))
             return new(false, "Confirmed HQ workshop material handoff.", ActionTaken: true);
 
         if (TrySelectYesNo(0, IsContributeItemsPrompt))
@@ -403,6 +403,12 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
     {
         return text.StartsWith("Contribute ", StringComparison.Ordinal) &&
                text.Contains(" to the company project?", StringComparison.Ordinal);
+    }
+
+    internal static bool IsHighQualityHandoffPrompt(string text)
+    {
+        return text == "You are about to hand over an HQ item. Proceed?" ||
+               text == "Do you really want to trade a high-quality item?";
     }
 
     internal static bool IsContributeMaterialsEntry(string text)
