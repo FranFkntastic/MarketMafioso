@@ -29,6 +29,36 @@ public sealed class WorkshopAssemblyRunnerTests
         Assert.Equal("Opened nearby fabrication station.", runner.Progress.Message);
     }
 
+    [Fact]
+    public void Confirmed_material_submission_starts_post_contribution_lockout()
+    {
+        var framework = TestFramework.Create();
+        var automation = new FakeWorkshopAssemblyUiAutomation
+        {
+            IsReady = true,
+            OpenProjectResult = new WorkshopAssemblyActionResult(true, "Project opened."),
+            SubmitResult = new WorkshopAssemblyActionResult(
+                true,
+                "Workshop material request confirmed.",
+                IsContributionConfirmed: true,
+                ActiveMaterialItemId: 5379),
+        };
+        using var runner = new WorkshopAssemblyRunner(
+            framework,
+            TestPluginLog.Create(),
+            automation,
+            CreateTempDirectory());
+
+        runner.Start(BuildPlan());
+        ((TestFramework)(object)framework).RaiseUpdate(framework);
+        ((TestFramework)(object)framework).RaiseUpdate(framework);
+        ((TestFramework)(object)framework).RaiseUpdate(framework);
+
+        Assert.Equal(WorkshopAssemblyRunnerState.WaitingForContributionLockout, runner.Progress.State);
+        Assert.Equal("Workshop material request confirmed.", runner.Progress.Message);
+        Assert.Equal(5379u, runner.Progress.ActiveMaterialItemId);
+    }
+
     private static WorkshopAssemblyPlan BuildPlan()
     {
         return new WorkshopAssemblyPlan(
@@ -57,6 +87,8 @@ public sealed class WorkshopAssemblyRunnerTests
         public bool IsReady { get; set; }
         public int OpenAttempts { get; private set; }
         public WorkshopAssemblyActionResult OpenResult { get; set; } = new(false, "No station.");
+        public WorkshopAssemblyActionResult OpenProjectResult { get; set; } = new(false, "Not used.");
+        public WorkshopAssemblyActionResult SubmitResult { get; set; } = new(false, "Not used.");
         public WorkshopAssemblyDiagnostics Diagnostics { get; set; } = WorkshopAssemblyDiagnostics.Disabled;
 
         public bool IsFabricationStationUiReady() => IsReady;
@@ -67,9 +99,9 @@ public sealed class WorkshopAssemblyRunnerTests
             return OpenResult;
         }
 
-        public WorkshopAssemblyActionResult TryOpenProject(WorkshopAssemblyQueueEntry entry) => new(false, "Not used.");
+        public WorkshopAssemblyActionResult TryOpenProject(WorkshopAssemblyQueueEntry entry) => OpenProjectResult;
 
-        public WorkshopAssemblyActionResult TrySubmitNextMaterial(WorkshopAssemblyQueueEntry entry) => new(false, "Not used.");
+        public WorkshopAssemblyActionResult TrySubmitNextMaterial(WorkshopAssemblyQueueEntry entry) => SubmitResult;
 
         public WorkshopAssemblyActionResult TryConfirmContribution() => new(false, "Not used.");
 

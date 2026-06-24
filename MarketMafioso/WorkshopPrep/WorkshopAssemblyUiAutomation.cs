@@ -182,6 +182,7 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
             return new(
                 true,
                 $"Workshop material request confirmed for {entry.ProjectName}.",
+                IsContributionConfirmed: true,
                 ActiveMaterialItemId: pendingContributionItemId);
         }
 
