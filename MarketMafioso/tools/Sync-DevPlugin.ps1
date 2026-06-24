@@ -23,14 +23,34 @@ function Sync-ManifestAssemblyVersion {
         [string]$ManifestPath
     )
 
-    $assemblyName = [System.Reflection.AssemblyName]::GetAssemblyName($AssemblyPath)
-    $assemblyVersion = $assemblyName.Version.ToString()
-    $informationalVersion = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($AssemblyPath).ProductVersion
-    $visibleVersion = if ([string]::IsNullOrWhiteSpace($informationalVersion)) { $assemblyVersion } else { $informationalVersion }
+    $visibleVersion = Get-VisibleManifestVersion -AssemblyPath $AssemblyPath
 
     $manifest = Get-Content -LiteralPath $ManifestPath -Raw | ConvertFrom-Json
     $manifest.AssemblyVersion = $visibleVersion
     $manifest | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $ManifestPath -Encoding utf8
+}
+
+function Get-VisibleManifestVersion {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$AssemblyPath
+    )
+
+    $assemblyVersion = [System.Reflection.AssemblyName]::GetAssemblyName($AssemblyPath).Version
+    $projectDir = Split-Path -Parent $PSScriptRoot
+    $repoRoot = Split-Path -Parent $projectDir
+
+    try {
+        $commitCountText = git -C $repoRoot rev-list --count HEAD
+        $shortHash = git -C $repoRoot rev-parse --short=4 HEAD
+        $commitCount = [int]$commitCountText
+        $revision = [Convert]::ToInt32($shortHash, 16)
+
+        return "$($assemblyVersion.Major).$($assemblyVersion.Minor).$commitCount.$revision"
+    }
+    catch {
+        return $assemblyVersion.ToString()
+    }
 }
 
 function Copy-WithRetry {
