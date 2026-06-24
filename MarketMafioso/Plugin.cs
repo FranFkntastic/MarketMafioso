@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using Dalamud.Game.Command;
@@ -39,6 +40,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly VIWIWorkshoppaIpc viwiWorkshoppaIpc;
     private readonly WorkshopRetainerRestockService workshopRetainerRestock;
     private readonly WorkshopAssemblyRunner workshopAssemblyRunner;
+    private readonly WorkshopMaterialManifestExportService workshopMaterialManifestExport;
     private readonly WindowSystem windowSystem = new("MarketMafioso");
     private readonly MainWindow mainWindow;
 
@@ -67,7 +69,10 @@ public sealed class Plugin : IDalamudPlugin
         workshopAssemblyRunner = new WorkshopAssemblyRunner(
             Framework,
             Log,
-            new WorkshopAssemblyUiAutomation(GameGui, AddonLifecycle, Log));
+            new WorkshopAssemblyUiAutomation(GameGui, AddonLifecycle, Log),
+            Path.Combine(PluginInterface.GetPluginConfigDirectory(), "workshop-assembly-logs"));
+        workshopMaterialManifestExport = new WorkshopMaterialManifestExportService(
+            new LuminaWorkshopMaterialCraftRecipeResolver(DataManager));
         mainWindow = new MainWindow(
             Configuration,
             reporter,
@@ -77,6 +82,7 @@ public sealed class Plugin : IDalamudPlugin
             viwiWorkshoppaIpc,
             workshopRetainerRestock,
             workshopAssemblyRunner,
+            workshopMaterialManifestExport,
             Log);
 
         windowSystem.AddWindow(mainWindow);

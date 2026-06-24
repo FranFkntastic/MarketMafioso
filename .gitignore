@@ -30,5 +30,8 @@ dist/
 # Local backend data
 MarketMafioso.Server/data/
 
+# Local dev-plugin deployment target
+MarketMafioso/dev-plugin.local.json
+
 # Logs
 *.log

@@ -352,6 +352,37 @@ public sealed class InventoryReportViewEndpointTests
     }
 
     [Fact]
+    public async Task HostedMode_CreateResponse_ReturnsDashboardUrlsFromPublicOriginAndBasePath()
+    {
+        await using var application = CreateHostedApplication(
+            new KeyValuePair<string, string?>("MarketMafioso:BasePath", "/api/marketmafioso"),
+            new KeyValuePair<string, string?>("MarketMafioso:PublicOrigin", "https://dev.xivcraftarchitect.com"));
+        using var client = application.CreateClient();
+
+        var createResponse = await SendWithKeyAsync(
+            client,
+            HttpMethod.Post,
+            "/api/marketmafioso/inventory",
+            "test-ingest-secret",
+            CreateReport("Response Link Character"));
+        createResponse.EnsureSuccessStatusCode();
+
+        var createBody = await createResponse.Content.ReadAsStringAsync();
+        using var createJson = JsonDocument.Parse(createBody);
+        var id = createJson.RootElement.GetProperty("id").GetString();
+
+        Assert.Equal(
+            "https://dev.xivcraftarchitect.com/api/marketmafioso/",
+            createJson.RootElement.GetProperty("dashboardUrl").GetString());
+        Assert.Equal(
+            $"https://dev.xivcraftarchitect.com/api/marketmafioso/reports/{id}",
+            createJson.RootElement.GetProperty("reportUrl").GetString());
+        Assert.Equal(
+            $"https://dev.xivcraftarchitect.com/api/marketmafioso/api/reports/{id}",
+            createJson.RootElement.GetProperty("apiReportUrl").GetString());
+    }
+
+    [Fact]
     public async Task DashboardJsonRoutes_ReturnReportPayloads()
     {
         await using var application = new WebApplicationFactory<Program>();

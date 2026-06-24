@@ -27,6 +27,7 @@ public class HttpReporter : IDisposable
     public DateTime? LastSentAt { get; private set; }
     public string LastStatus { get; private set; } = "Never sent";
     public string? LastPayload { get; private set; }
+    public string? LastDashboardUrl { get; private set; }
     public string? LastDashboardReportUrl { get; private set; }
 
     public HttpReporter(
@@ -143,11 +144,14 @@ public class HttpReporter : IDisposable
             if (response.IsSuccessStatusCode)
             {
                 var body = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
-                var reportId = TryReadReportId(body);
-                LastDashboardReportUrl = ReceiverEndpointClassifier.BuildDashboardReportUrl(config.ServerUrl, reportId);
+                var reportResponse = ParseReportResponse(body);
+                LastDashboardUrl = ResolveDashboardUrlForDisplay(reportResponse.DashboardUrl, config.ServerUrl);
+                LastDashboardReportUrl = reportResponse.ResolveReportUrl(config.ServerUrl);
                 var itemCount = playerInventory.Sum(b => b.Items.Count);
                 var dashboardSuffix = string.IsNullOrWhiteSpace(LastDashboardReportUrl)
-                    ? string.Empty
+                    ? string.IsNullOrWhiteSpace(LastDashboardUrl)
+                        ? string.Empty
+                        : $" Dashboard: {LastDashboardUrl}"
                     : $" View: {LastDashboardReportUrl}";
                 chatGui.Print(
                     $"[MarketMafioso] Sent {itemCount} player items + {retainers.Count} retainer(s). " +
@@ -178,18 +182,48 @@ public class HttpReporter : IDisposable
 
     public void Dispose() => httpClient.Dispose();
 
-    private static string? TryReadReportId(string body)
+    public static HttpReportResponse ParseReportResponse(string body)
     {
         try
         {
             using var document = JsonDocument.Parse(body);
-            return document.RootElement.TryGetProperty("id", out var id)
-                ? id.GetString()
-                : null;
+            var root = document.RootElement;
+            return new HttpReportResponse(
+                TryGetString(root, "id"),
+                TryGetString(root, "dashboardUrl"),
+                TryGetString(root, "reportUrl"));
         }
         catch (JsonException)
         {
-            return null;
+            return new HttpReportResponse(null, null, null);
         }
     }
+
+    private static string? TryGetString(JsonElement root, string propertyName)
+    {
+        return root.TryGetProperty(propertyName, out var value) && value.ValueKind == JsonValueKind.String
+            ? value.GetString()
+            : null;
+    }
+
+    public static string? ResolveDashboardUrlForDisplay(string? dashboardUrl, string? serverUrl) =>
+        !string.IsNullOrWhiteSpace(dashboardUrl)
+            ? dashboardUrl
+            : ReceiverEndpointClassifier.BuildDashboardUrl(serverUrl);
+}
+
+public readonly record struct HttpReportResponse(
+    string? ReportId,
+    string? DashboardUrl,
+    string? ReportUrl)
+{
+    public string? ResolveDashboardUrl(string? serverUrl) =>
+        !string.IsNullOrWhiteSpace(DashboardUrl)
+            ? DashboardUrl
+            : ReceiverEndpointClassifier.BuildDashboardUrl(serverUrl);
+
+    public string? ResolveReportUrl(string? serverUrl) =>
+        !string.IsNullOrWhiteSpace(ReportUrl)
+            ? ReportUrl
+            : ReceiverEndpointClassifier.BuildDashboardReportUrl(serverUrl, ReportId);
 }

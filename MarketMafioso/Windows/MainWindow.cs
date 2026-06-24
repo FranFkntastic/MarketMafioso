@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Numerics;
 using Dalamud.Interface.Windowing;
@@ -19,10 +20,13 @@ public class MainWindow : Window, IDisposable
     private readonly VIWIWorkshoppaIpc viwiWorkshoppaIpc;
     private readonly WorkshopRetainerRestockService workshopRetainerRestock;
     private readonly WorkshopAssemblyRunner workshopAssemblyRunner;
+    private readonly WorkshopMaterialManifestExportService workshopMaterialManifestExport;
     private readonly IPluginLog log;
 
     private string urlBuffer = string.Empty;
     private string apiKeyBuffer = string.Empty;
+    private string dashboardUrlBuffer = string.Empty;
+    private string dashboardOpenStatus = "Dashboard link appears after a successful send.";
     private bool showApiKey = false;
     private bool showPreview = false;
     private readonly WorkshopProjectSelectionState workshopProjectSelection = new();
@@ -50,6 +54,7 @@ public class MainWindow : Window, IDisposable
         VIWIWorkshoppaIpc viwiWorkshoppaIpc,
         WorkshopRetainerRestockService workshopRetainerRestock,
         WorkshopAssemblyRunner workshopAssemblyRunner,
+        WorkshopMaterialManifestExportService workshopMaterialManifestExport,
         IPluginLog log)
         : base("MarketMafioso##MarketMafiosoMainWindow",
                ImGuiWindowFlags.None)
@@ -62,6 +67,7 @@ public class MainWindow : Window, IDisposable
         this.viwiWorkshoppaIpc = viwiWorkshoppaIpc;
         this.workshopRetainerRestock = workshopRetainerRestock;
         this.workshopAssemblyRunner = workshopAssemblyRunner;
+        this.workshopMaterialManifestExport = workshopMaterialManifestExport;
         this.log = log;
 
         SizeConstraints = new WindowSizeConstraints
@@ -355,32 +361,16 @@ public class MainWindow : Window, IDisposable
             if (ImGui.Button("Stop Assembly"))
                 workshopAssemblyRunner.Stop();
         }
-        else if (ImGuiUi.Button("Start Native Assembly", hasPrepQueue))
+        else
         {
-            try
-            {
-                var preflight = WorkshopAssemblyPreflightService.Check(
-                    config.WorkshopPrepQueue,
-                    workshopCatalog.GetProjects(),
-                    scanner.CountPlayerInventory(config));
-                if (!preflight.CanStart || preflight.Plan == null)
-                {
-                    workshopStatus = preflight.Message;
-                }
-                else
-                {
-                    var result = workshopAssemblyRunner.Start(preflight.Plan);
-                    workshopStatus = result.Message;
-                }
-            }
-            catch (Exception ex)
-            {
-                workshopStatus = $"Unable to start workshop assembly. {ex.Message}";
-                log.Warning(ex, "[MarketMafioso] Native workshop assembly preflight failed.");
-            }
+            if (ImGuiUi.Button("Start Native Assembly", hasPrepQueue))
+                StartWorkshopAssembly(enableDiagnostics: false);
+
+            ImGui.SameLine();
+            if (ImGuiUi.Button("Start Assembly With Diagnostics", hasPrepQueue))
+                StartWorkshopAssembly(enableDiagnostics: true);
         }
 
-        ImGui.SameLine();
         if (ImGuiUi.Button("Send Queue To VIWI", hasPrepQueue))
             confirmViwiClear = true;
 
@@ -408,12 +398,46 @@ public class MainWindow : Window, IDisposable
         }
 
         ImGui.Spacing();
+        if (ImGuiUi.Button("Copy Artisan Manifest", hasPrepQueue))
+            CopyWorkshopArtisanManifest();
+
+        ImGui.SameLine();
+        if (ImGuiUi.Button("Copy Craft Architect Import", hasPrepQueue))
+            CopyWorkshopCraftArchitectManifest();
+
+        ImGui.Spacing();
         ImGui.TextColored(GetWorkshopStatusColor(), workshopStatus);
         ImGui.TextColored(workshopRetainerRestock.IsRunning ? ColHeader : ColMuted, workshopRetainerRestock.LastStatus);
         var progress = workshopAssemblyRunner.Progress;
         ImGui.TextColored(workshopAssemblyRunner.IsRunning ? ColHeader : ColMuted, progress.Message);
         if (progress.TotalProjects > 0)
             ImGui.TextColored(ColMuted, $"Assembly progress: {progress.CompletedProjects}/{progress.TotalProjects}");
+    }
+
+    private void StartWorkshopAssembly(bool enableDiagnostics)
+    {
+        try
+        {
+            var preflight = WorkshopAssemblyPreflightService.Check(
+                config.WorkshopPrepQueue,
+                workshopCatalog.GetProjects(),
+                scanner.CountPlayerInventory(config));
+            if (!preflight.CanStart || preflight.Plan == null)
+            {
+                workshopStatus = preflight.Message;
+                return;
+            }
+
+            var result = workshopAssemblyRunner.Start(preflight.Plan, enableDiagnostics);
+            workshopStatus = result.Message;
+            if (enableDiagnostics && workshopAssemblyRunner.LastDiagnosticFilePath != null)
+                workshopStatus = $"{workshopStatus} Diagnostics: {workshopAssemblyRunner.LastDiagnosticFilePath}";
+        }
+        catch (Exception ex)
+        {
+            workshopStatus = $"Unable to start workshop assembly. {ex.Message}";
+            log.Warning(ex, "[MarketMafioso] Native workshop assembly preflight failed.");
+        }
     }
 
     private Vector4 GetWorkshopStatusColor()
@@ -423,13 +447,44 @@ public class MainWindow : Window, IDisposable
             workshopStatus.Contains("not available", StringComparison.OrdinalIgnoreCase))
             return ColError;
 
-        if (workshopStatus.Contains("sent", StringComparison.OrdinalIgnoreCase) ||
+        if (workshopStatus.Contains("copied", StringComparison.OrdinalIgnoreCase) ||
+            workshopStatus.Contains("sent", StringComparison.OrdinalIgnoreCase) ||
             workshopStatus.Contains("added", StringComparison.OrdinalIgnoreCase) ||
             workshopStatus.Contains("cleared", StringComparison.OrdinalIgnoreCase) ||
             workshopStatus.Contains("removed", StringComparison.OrdinalIgnoreCase))
             return ColSuccess;
 
         return ColMuted;
+    }
+
+    private void CopyWorkshopArtisanManifest()
+    {
+        CopyWorkshopManifest(workshopMaterialManifestExport.ExportArtisanManifest(
+            config.WorkshopPrepQueue,
+            workshopCatalog.GetProjects(),
+            GetWorkshopAvailability(),
+            WorkshopMaterialManifestQuantityMode.InventoryMissing,
+            DateTime.UtcNow));
+    }
+
+    private void CopyWorkshopCraftArchitectManifest()
+    {
+        CopyWorkshopManifest(WorkshopMaterialManifestExportService.ExportCraftArchitectManifest(
+            config.WorkshopPrepQueue,
+            workshopCatalog.GetProjects(),
+            GetWorkshopAvailability(),
+            WorkshopMaterialManifestQuantityMode.InventoryMissing,
+            DateTime.UtcNow));
+    }
+
+    private void CopyWorkshopManifest(WorkshopMaterialManifestExportResult result)
+    {
+        if (result.Success && !string.IsNullOrWhiteSpace(result.Json))
+            ImGui.SetClipboardText(result.Json);
+
+        workshopStatus = result.Message;
+        if (result.Severity is WorkshopMaterialManifestExportSeverity.Error or WorkshopMaterialManifestExportSeverity.Warning)
+            log.Warning($"[MarketMafioso] {result.Message}");
     }
 
     private void DrawStatusTab()
@@ -495,7 +550,64 @@ public class MainWindow : Window, IDisposable
             ImGui.TextColored(ColError, "This endpoint requires an API key before reports can be sent.");
         else if (endpoint.Kind == ReceiverEndpointKind.CustomRemote)
             ImGui.TextColored(ColMuted, "Custom remote endpoint. API key is required by default.");
+
+        ImGui.Spacing();
+        DrawDashboardOpenSection();
     }
+
+    private void DrawDashboardOpenSection()
+    {
+        var dashboardUrl = HttpReporter.ResolveDashboardUrlForDisplay(reporter.LastDashboardUrl, urlBuffer) ?? string.Empty;
+        if (!string.Equals(dashboardUrlBuffer, dashboardUrl, StringComparison.Ordinal))
+            dashboardUrlBuffer = dashboardUrl;
+
+        ImGui.Text("Dashboard URL:");
+        var buttonWidth = 128f;
+        var inputWidth = Math.Max(120f, ImGui.GetContentRegionAvail().X - buttonWidth - ImGui.GetStyle().ItemSpacing.X);
+        ImGui.SetNextItemWidth(inputWidth);
+        ImGui.InputText("##dashboardUrl", ref dashboardUrlBuffer, 1024, ImGuiInputTextFlags.ReadOnly);
+        ImGui.SameLine();
+        if (ImGuiUi.Button("Open Dashboard", new Vector2(buttonWidth, 0), !string.IsNullOrWhiteSpace(dashboardUrl)))
+            OpenDashboardUrl(dashboardUrl);
+
+        var status = string.IsNullOrWhiteSpace(dashboardUrl)
+            ? dashboardOpenStatus
+            : string.IsNullOrWhiteSpace(reporter.LastDashboardUrl)
+                ? "Dashboard link derived from endpoint."
+                : dashboardOpenStatus;
+        ImGui.TextColored(GetDashboardOpenStatusColor(status), status);
+    }
+
+    private void OpenDashboardUrl(string dashboardUrl)
+    {
+        if (!Uri.TryCreate(dashboardUrl, UriKind.Absolute, out var uri) ||
+            (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+        {
+            dashboardOpenStatus = "Dashboard URL is not a valid HTTP or HTTPS link.";
+            log.Warning($"[MarketMafioso] Refusing to open invalid dashboard URL: {dashboardUrl}");
+            return;
+        }
+
+        try
+        {
+            Process.Start(new ProcessStartInfo(uri.ToString())
+            {
+                UseShellExecute = true,
+            });
+            dashboardOpenStatus = "Opened dashboard in external browser.";
+        }
+        catch (Exception ex)
+        {
+            dashboardOpenStatus = $"Unable to open dashboard. {ex.Message}";
+            log.Error(ex, "[MarketMafioso] Unable to open dashboard URL.");
+        }
+    }
+
+    private static Vector4 GetDashboardOpenStatusColor(string status) =>
+        status.StartsWith("Unable", StringComparison.OrdinalIgnoreCase) ||
+        status.Contains("not a valid", StringComparison.OrdinalIgnoreCase)
+            ? ColError
+            : ColMuted;
 
     private void ApplyServerUrlPreset(string serverUrl)
     {

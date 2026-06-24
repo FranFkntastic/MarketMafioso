@@ -42,11 +42,15 @@ public sealed class WorkshopAssemblyUiAutomation : IDisposable
         addonLifecycle.RegisterListener(AddonEvent.PostReceiveEvent, ContextIconMenuAddon, ContextIconMenuPostReceiveEvent);
     }
 
+    public WorkshopAssemblyDiagnostics Diagnostics { get; set; } = WorkshopAssemblyDiagnostics.Disabled;
+
     public unsafe bool IsFabricationStationUiReady()
     {
-        return IsAddonReady(CompanyCraftRecipeNoteBookAddon) ||
-               GetMaterialDeliveryAddon() != null ||
-               IsAddonReady(SelectStringAddon);
+        var isReady = IsAddonReady(CompanyCraftRecipeNoteBookAddon) ||
+                      GetMaterialDeliveryAddon() != null ||
+                      IsAddonReady(SelectStringAddon);
+        Diagnostics.Record("ui-ready-check", isReady ? "Fabrication station UI is ready." : "Fabrication station UI is not ready.");
+        return isReady;
     }
 
     public unsafe WorkshopAssemblyActionResult TryOpenProject(WorkshopAssemblyQueueEntry entry)
@@ -64,6 +68,14 @@ public sealed class WorkshopAssemblyUiAutomation : IDisposable
             var visibleItems = ReadVisibleCraftingLogItems(craftingLog);
             if (visibleItems.Any(x => x.WorkshopItemId == entry.WorkshopItemId))
             {
+                Diagnostics.Record(
+                    "select-project",
+                    "Selected visible workshop project.",
+                    new Dictionary<string, string?>
+                    {
+                        ["project"] = entry.ProjectName,
+                        ["workshopItemId"] = entry.WorkshopItemId.ToString(),
+                    });
                 SelectCraft(craftingLog, entry);
                 return new(false, $"Selected workshop project {entry.ProjectName}.", ActionTaken: true);
             }
@@ -71,6 +83,15 @@ public sealed class WorkshopAssemblyUiAutomation : IDisposable
             if (entry.CategoryId == 0 || entry.TypeId == 0)
                 return new(false, $"Workshop project {entry.ProjectName} cannot be selected because category/type data is missing. {DescribeUiState()}");
 
+            Diagnostics.Record(
+                "select-category",
+                "Selected workshop category/type.",
+                new Dictionary<string, string?>
+                {
+                    ["project"] = entry.ProjectName,
+                    ["categoryId"] = entry.CategoryId.ToString(),
+                    ["typeId"] = entry.TypeId.ToString(),
+                });
             SelectCraftCategory(craftingLog, entry);
             return new(false, $"Selected workshop category/type for {entry.ProjectName}.", ActionTaken: true);
         }
@@ -98,6 +119,15 @@ public sealed class WorkshopAssemblyUiAutomation : IDisposable
 
         if (pendingContributionItemId != null)
         {
+            Diagnostics.Record(
+                "request-wait",
+                "Waiting for request item selection.",
+                new Dictionary<string, string?>
+                {
+                    ["itemId"] = pendingContributionItemId.Value.ToString(),
+                    ["uiState"] = DescribeUiState(),
+                });
+
             return new(
                 false,
                 $"Waiting for request item selection for material {pendingContributionItemId}. {DescribeUiState()}");
@@ -147,6 +177,19 @@ public sealed class WorkshopAssemblyUiAutomation : IDisposable
                     $"Player inventory does not contain {item.ItemCountPerStep}x {item.ItemName} in one slot for workshop contribution.");
             }
 
+            Diagnostics.Record(
+                "contribute-material",
+                "Submitted workshop material request.",
+                new Dictionary<string, string?>
+                {
+                    ["project"] = entry.ProjectName,
+                    ["itemId"] = item.ItemId.ToString(),
+                    ["itemName"] = item.ItemName,
+                    ["quantity"] = item.ItemCountPerStep.ToString(),
+                    ["materialIndex"] = index.ToString(),
+                    ["stepsComplete"] = item.StepsComplete.ToString(),
+                    ["stepsTotal"] = item.StepsTotal.ToString(),
+                });
             ContributeMaterial(materialDelivery, index, item);
             pendingContributionItemId = item.ItemId;
             requestItemSelectionStarted = false;
@@ -270,6 +313,14 @@ public sealed class WorkshopAssemblyUiAutomation : IDisposable
 
             addon->AtkUnitBase.FireCallbackInt(index);
             log.Verbose($"[MarketMafioso] Selected workshop menu entry {index}: {text}");
+            Diagnostics.Record(
+                "select-string",
+                "Selected workshop menu entry.",
+                new Dictionary<string, string?>
+                {
+                    ["index"] = index.ToString(),
+                    ["text"] = text,
+                });
             return true;
         }
 
@@ -290,6 +341,14 @@ public sealed class WorkshopAssemblyUiAutomation : IDisposable
 
         addon->AtkUnitBase.FireCallbackInt(choice);
         log.Verbose($"[MarketMafioso] Selected workshop confirmation {choice}: {text}");
+        Diagnostics.Record(
+            "select-yesno",
+            "Selected workshop confirmation.",
+            new Dictionary<string, string?>
+            {
+                ["choice"] = choice.ToString(),
+                ["text"] = text,
+            });
         return true;
     }
 
@@ -440,6 +499,13 @@ public sealed class WorkshopAssemblyUiAutomation : IDisposable
         };
         addon->AtkUnitBase.FireCallback(4, values, true);
         log.Verbose($"[MarketMafioso] Opened request item selector for workshop material {pendingContributionItemId}.");
+        Diagnostics.Record(
+            "request-setup",
+            "Opened request item selector.",
+            new Dictionary<string, string?>
+            {
+                ["itemId"] = pendingContributionItemId.Value.ToString(),
+            });
     }
 
     private unsafe void ContextIconMenuPostReceiveEvent(AddonEvent type, AddonArgs args)
@@ -461,6 +527,13 @@ public sealed class WorkshopAssemblyUiAutomation : IDisposable
         };
         addon->AtkUnitBase.FireCallback(5, values, true);
         log.Verbose($"[MarketMafioso] Selected request item icon for workshop material {pendingContributionItemId}.");
+        Diagnostics.Record(
+            "request-icon",
+            "Selected request item icon.",
+            new Dictionary<string, string?>
+            {
+                ["itemId"] = pendingContributionItemId.Value.ToString(),
+            });
     }
 
     private unsafe void RequestPostRefresh(AddonEvent type, AddonArgs args)
@@ -483,6 +556,13 @@ public sealed class WorkshopAssemblyUiAutomation : IDisposable
         addon->AtkUnitBase.Close(false);
         requestConfirmed = true;
         log.Verbose($"[MarketMafioso] Confirmed request item window for workshop material {pendingContributionItemId}.");
+        Diagnostics.Record(
+            "request-confirmed",
+            "Confirmed request item window.",
+            new Dictionary<string, string?>
+            {
+                ["itemId"] = pendingContributionItemId.Value.ToString(),
+            });
     }
 }
 

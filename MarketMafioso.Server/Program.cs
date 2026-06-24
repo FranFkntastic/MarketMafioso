@@ -223,8 +223,28 @@ async Task<IResult> SaveInventoryReport(
     var suppliedApiKey = request.Headers["X-Api-Key"].ToString();
     var accountId = await accountResolver.ResolveAccountIdAsync(suppliedApiKey, token) ?? 1;
     var stored = await store.SaveAsync(accountId, report, suppliedApiKey, rawJson, token);
-    return Results.Created(AppUrl(request.PathBase, $"/api/reports/{stored.Id}"), stored.Summary);
+    return Results.Created(
+        AppUrl(request.PathBase, $"/api/reports/{stored.Id}"),
+        CreateInventoryReportResponse(request, publicOrigin, stored));
 }
+
+static object CreateInventoryReportResponse(HttpRequest request, string? publicOrigin, StoredInventoryReport stored) => new
+{
+    stored.Summary.Id,
+    stored.Summary.ReceivedAt,
+    stored.Summary.CharacterName,
+    stored.Summary.HomeWorld,
+    stored.Summary.ReportTimestamp,
+    stored.Summary.PlayerBagCount,
+    stored.Summary.PlayerItemStacks,
+    stored.Summary.PlayerItemQuantity,
+    stored.Summary.RetainerCount,
+    stored.Summary.RetainerItemStacks,
+    stored.Summary.RetainerItemQuantity,
+    DashboardUrl = PublicAppUrl(request, publicOrigin, "/"),
+    ReportUrl = PublicAppUrl(request, publicOrigin, $"/reports/{stored.Id}"),
+    ApiReportUrl = PublicAppUrl(request, publicOrigin, $"/api/reports/{stored.Id}"),
+};
 
 static IResult RawJsonResult(RawInventoryReportJson? report)
 {
@@ -844,6 +864,35 @@ static string RenderNotFound(string id, PathString pathBase) =>
 
 static string AppUrl(PathString pathBase, string path) =>
     $"{pathBase}{path}";
+
+static string PublicAppUrl(HttpRequest request, string? publicOrigin, string path)
+{
+    var relativeUrl = AppUrl(request.PathBase, path);
+    if (!string.IsNullOrWhiteSpace(publicOrigin))
+        return $"{publicOrigin.TrimEnd('/')}{relativeUrl}";
+
+    var scheme = FirstHeaderValue(request.Headers["X-Forwarded-Proto"]) ?? request.Scheme;
+    var host = FirstHeaderValue(request.Headers["X-Forwarded-Host"]) ?? request.Host.Value;
+    if (string.IsNullOrWhiteSpace(host))
+        throw new InvalidOperationException("Cannot build public dashboard URL without a request host.");
+
+    return $"{scheme}://{host}{relativeUrl}";
+}
+
+static string? FirstHeaderValue(StringValues values)
+{
+    if (values.Count == 0)
+        return null;
+
+    var value = values[0];
+    if (string.IsNullOrWhiteSpace(value))
+        return null;
+
+    var commaIndex = value.IndexOf(',', StringComparison.Ordinal);
+    return commaIndex < 0
+        ? value.Trim()
+        : value[..commaIndex].Trim();
+}
 
 static string Html(string? value) =>
     (value ?? string.Empty)

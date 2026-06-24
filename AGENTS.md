@@ -29,7 +29,8 @@ This guide is for agentic coding tools working in this repository.
 - `MarketMafioso/WorkshopPrep/`: workshop project catalog, availability math, VIWI IPC, retainer restock automation, and native assembly automation.
 - `MarketMafioso/Windows/`: settings, inventory reporter, workshop prep, cache status, send action, and JSON preview UI.
 - `MarketMafioso/tools/Sync-DevPlugin.ps1`: debug artifact sync to XIVLauncher dev plugin folder.
-- `MarketMafioso/tools/Deploy-DevPlugin.ps1`: explicit dev-plugin deployment helper.
+- `MarketMafioso/tools/Deploy-DevPlugin.ps1`: explicit dev-plugin deployment and active target verifier.
+- `MarketMafioso/dev-plugin.local.json`: gitignored local config for the DLL path Dalamud actually loads.
 - `MarketMafioso.Server/`: local ASP.NET inventory-report receiver and dashboard.
 - `docs/`: maintainer documentation and design notes.
 
@@ -54,6 +55,7 @@ Build notes:
 - Debug build runs `Sync-DevPlugin.ps1` via `AfterTargets="Build"`.
 - Output folders: `MarketMafioso/bin/Debug` and `MarketMafioso/bin/Release`.
 - Debug sync target defaults to `%APPDATA%\XIVLauncher\devPlugins\MarketMafioso`.
+- On this machine, Dalamud is configured to load `MarketMafioso/bin/Release/MarketMafioso.dll` directly. Use `MarketMafioso/tools/Deploy-DevPlugin.ps1` to build and verify the active DLL from `MarketMafioso/dev-plugin.local.json`; appdata sync is not proof that the loaded plugin was refreshed.
 
 ### Lint / Format
 - Verify format (non-destructive):
@@ -83,7 +85,7 @@ Lint notes:
 - Build after code changes: `dotnet build "MarketMafioso.sln" -c Debug`.
 - Verify formatting: `dotnet format "MarketMafioso.sln" --verify-no-changes`.
 - Run relevant tests after code changes.
-- Validate runtime behavior by reloading the dev plugin when the change affects in-game behavior.
+- For plugin behavior changes, run `MarketMafioso/tools/Deploy-DevPlugin.ps1` and verify the reported Dalamud target DLL before asking for an in-game reload.
 
 ## Code Style Guidelines
 Follow established patterns already present in `MarketMafioso/`.
@@ -171,5 +173,5 @@ Follow established patterns already present in `MarketMafioso/`.
 - Build with `dotnet build "MarketMafioso.sln" -c Debug`.
 - Run `dotnet format "MarketMafioso.sln" --verify-no-changes`.
 - Run relevant tests.
-- If plugin behavior changes, confirm the dev plugin artifact was refreshed.
+- If plugin behavior changes, confirm the configured Dalamud target DLL was refreshed, not only the appdata dev-plugin copy.
 - Report validations performed and any limitations.
