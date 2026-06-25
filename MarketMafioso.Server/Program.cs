@@ -115,6 +115,24 @@ app.MapGet("/inventory", async (
         "text/html; charset=utf-8");
 });
 
+app.MapGet("/acquisition", async (
+    HttpRequest request,
+    InventoryReportStore store,
+    string? acquisition,
+    long? characterId,
+    CancellationToken token) =>
+{
+    var characters = await store.ListCharactersAsync(1, token);
+    var selectedCharacterId = characterId ?? characters.FirstOrDefault()?.Id;
+    var selectedCharacter = selectedCharacterId == null
+        ? null
+        : characters.FirstOrDefault(c => c.Id == selectedCharacterId.Value);
+    var csrfToken = SetCsrfCookie(request.HttpContext.Response);
+    return Results.Content(
+        RenderAcquisitionDashboard(characters, selectedCharacterId, selectedCharacter, acquisition, request.PathBase, csrfToken),
+        "text/html; charset=utf-8");
+});
+
 app.MapGet("/diagnostics", async (
     HttpRequest request,
     InventoryReportStore store,
@@ -313,7 +331,7 @@ async Task<IResult> CreateAcquisitionRequest(
 
         var created = await store.CreateAsync(acquisitionRequest, token);
         if (isBrowserForm)
-            return Results.Redirect($"{request.PathBase}/?acquisition={Uri.EscapeDataString(created.Request.Id)}");
+            return Results.Redirect($"{request.PathBase}/acquisition?acquisition={Uri.EscapeDataString(created.Request.Id)}");
 
         return created.IsReplay
             ? Results.Ok(created.Request)
@@ -877,6 +895,7 @@ static string RenderDashboard(
                     </div>
                     <div class="toolbar">
                         <a class="button" href="{{Html(AppUrl(pathBase, "/inventory"))}}">Inventory</a>
+                        <a class="button" href="{{Html(AppUrl(pathBase, "/acquisition"))}}">Acquisition</a>
                         <a class="button" href="{{Html(AppUrl(pathBase, "/diagnostics"))}}">Diagnostics</a>
                         <a class="button" href="{{Html(AppUrl(pathBase, "/"))}}">Refresh</a>
                         <form method="post" action="{{Html(AppUrl(pathBase, "/reports/delete-all"))}}" onsubmit="return confirm('Delete all stored snapshots?');">
@@ -938,6 +957,193 @@ static string RenderDashboard(
         </html>
         """;
 }
+
+static string RenderAcquisitionDashboard(
+    IReadOnlyList<CharacterSummary> characters,
+    long? selectedCharacterId,
+    CharacterSummary? selectedCharacter,
+    string? acquisition,
+    PathString pathBase,
+    string csrfToken)
+{
+    var characterOptions = RenderCharacterOptions(characters, selectedCharacterId);
+    var acquisitionNotice = string.IsNullOrWhiteSpace(acquisition)
+        ? string.Empty
+        : $"""<p class="notice">Created request <code>{Html(acquisition)}</code>. Open <code>/mmf</code> in-game, select <code>Market Acquisition</code>, and fetch dashboard requests.</p>""";
+    var targetCharacter = selectedCharacter?.CharacterName ?? string.Empty;
+    var targetWorld = selectedCharacter?.HomeWorld ?? string.Empty;
+
+    return $$"""
+        <!doctype html>
+        <html lang="en">
+        <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <title>MarketMafioso Acquisition</title>
+            <style>
+                :root {
+                    color-scheme: dark;
+                    --bg: #101317;
+                    --panel: #171c22;
+                    --panel-2: #1d242c;
+                    --line: #2c3642;
+                    --text: #e7edf3;
+                    --muted: #95a3b3;
+                    --accent: #62b6ff;
+                    font-family: "Segoe UI", system-ui, sans-serif;
+                }
+                * { box-sizing: border-box; }
+                body { margin: 0; min-height: 100vh; background: var(--bg); color: var(--text); font-size: 14px; }
+                .shell { min-height: 100vh; display: grid; grid-template-rows: auto 1fr; }
+                .topbar {
+                    display: flex;
+                    align-items: center;
+                    justify-content: space-between;
+                    gap: 18px;
+                    min-height: 54px;
+                    padding: 0 22px;
+                    border-bottom: 1px solid var(--line);
+                    background: #131820;
+                }
+                .brand { display: flex; align-items: baseline; gap: 12px; min-width: 0; }
+                .brand strong { font-size: 16px; font-weight: 650; }
+                .brand span { color: var(--muted); white-space: nowrap; }
+                .tabs { display: flex; gap: 4px; }
+                .tab {
+                    display: inline-flex;
+                    align-items: center;
+                    height: 34px;
+                    padding: 0 11px;
+                    border: 1px solid transparent;
+                    border-radius: 6px;
+                    color: var(--muted);
+                    text-decoration: none;
+                }
+                .tab.active { color: var(--text); border-color: var(--line); background: var(--panel-2); }
+                main { width: min(1180px, calc(100vw - 40px)); margin: 0 auto; padding: 22px 0 36px; }
+                h1 { margin: 0 0 8px; font-size: 22px; letter-spacing: 0; }
+                p { color: var(--muted); }
+                code { color: var(--accent); }
+                .notice {
+                    margin: 0 0 14px;
+                    padding: 10px 12px;
+                    border: 1px solid #315270;
+                    border-radius: 6px;
+                    background: #152333;
+                    color: #d8eaff;
+                }
+                .panel {
+                    border: 1px solid var(--line);
+                    border-radius: 8px;
+                    background: var(--panel);
+                    padding: 14px;
+                }
+                .request-form {
+                    display: grid;
+                    gap: 14px;
+                }
+                .form-grid {
+                    display: grid;
+                    grid-template-columns: repeat(4, minmax(0, 1fr));
+                    gap: 10px;
+                }
+                label { display: grid; gap: 5px; color: var(--muted); font-size: 12px; }
+                input, select, button {
+                    height: 34px;
+                    border: 1px solid var(--line);
+                    border-radius: 6px;
+                    background: #0f141a;
+                    color: var(--text);
+                    font: inherit;
+                }
+                input, select { width: 100%; padding: 0 10px; }
+                button {
+                    width: fit-content;
+                    padding: 0 14px;
+                    background: var(--panel-2);
+                    cursor: pointer;
+                }
+                button:hover { border-color: var(--accent); }
+                .toolbar {
+                    display: flex;
+                    align-items: end;
+                    justify-content: space-between;
+                    gap: 14px;
+                    margin-bottom: 14px;
+                }
+                .character-jump { min-width: 260px; }
+                @media (max-width: 980px) {
+                    .topbar, .toolbar { display: block; }
+                    .tabs { margin-top: 10px; flex-wrap: wrap; }
+                    .form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+                    .character-jump { margin-top: 12px; min-width: 0; }
+                }
+            </style>
+        </head>
+        <body>
+            <div class="shell">
+                <header class="topbar">
+                    <div class="brand">
+                        <strong>MarketMafioso</strong>
+                        <span>Market Acquisition</span>
+                    </div>
+                    <nav class="tabs" aria-label="Dashboard sections">
+                        <a class="tab" href="{{Html(AppUrl(pathBase, "/"))}}">Snapshots</a>
+                        <a class="tab" href="{{Html(AppUrl(pathBase, "/inventory"))}}">Inventory</a>
+                        <a class="tab active" href="{{Html(AppUrl(pathBase, "/acquisition"))}}">Acquisition</a>
+                        <a class="tab" href="{{Html(AppUrl(pathBase, "/diagnostics"))}}">Diagnostics</a>
+                    </nav>
+                </header>
+                <main>
+                    <div class="toolbar">
+                        <div>
+                            <h1>Create Dashboard Request</h1>
+                            <p>Stage a request here, then pick it up manually from the in-game Market Acquisition tab.</p>
+                        </div>
+                        <form class="character-jump" method="get" action="{{Html(AppUrl(pathBase, "/acquisition"))}}">
+                            <label>Default character
+                                <select name="characterId" onchange="this.form.submit()">{{characterOptions}}</select>
+                            </label>
+                        </form>
+                    </div>
+                    {{acquisitionNotice}}
+                    <section class="panel">
+                        {{RenderAcquisitionRequestForm(pathBase, csrfToken, targetCharacter, targetWorld)}}
+                    </section>
+                </main>
+            </div>
+        </body>
+        </html>
+        """;
+}
+
+static string RenderAcquisitionRequestForm(
+    PathString pathBase,
+    string csrfToken,
+    string targetCharacter,
+    string targetWorld) =>
+    $$"""
+        <form class="request-form" method="post" action="{{Html(AppUrl(pathBase, "/acquisition/requests"))}}">
+            <input type="hidden" name="csrf" value="{{Html(csrfToken)}}">
+            <input type="hidden" name="schemaVersion" value="1">
+            <input type="hidden" name="idempotencyKey" value="{{Guid.NewGuid():N}}">
+            <div class="form-grid">
+                <label>Character<input name="targetCharacterName" value="{{Html(targetCharacter)}}" autocomplete="off" required></label>
+                <label>World<input name="targetWorld" value="{{Html(targetWorld)}}" autocomplete="off" required></label>
+                <label>Region<input name="region" value="North America" required></label>
+                <label>Item ID<input name="itemId" inputmode="numeric" required></label>
+                <label>Item name<input name="itemName" autocomplete="off"></label>
+                <label>Quantity mode<select name="quantityMode"><option>Exact</option><option>UpTo</option><option>AllBelowThreshold</option></select></label>
+                <label>Quantity<input name="quantity" inputmode="numeric" required></label>
+                <label>HQ policy<select name="hqPolicy"><option>Either</option><option>NQOnly</option><option>HQOnly</option></select></label>
+                <label>Max unit price<input name="maxUnitPrice" inputmode="numeric" required></label>
+                <label>Gil cap<input name="maxTotalGil" inputmode="numeric" required></label>
+                <label>World mode<select name="worldMode"><option>Recommended</option><option>Selected</option><option>CurrentWorldOnly</option><option>AllWorldSweep</option></select></label>
+                <label>Pickup expiry seconds<input name="expiresInSeconds" inputmode="numeric" value="90" required></label>
+            </div>
+            <button type="submit">Create Request</button>
+        </form>
+        """;
 
 static string RenderCharacterFilters(
     IReadOnlyList<CharacterSummary> characters,
@@ -1204,6 +1410,7 @@ static string RenderInventoryBrowser(
                     <nav class="tabs" aria-label="Dashboard sections">
                         <a class="tab" href="{{Html(AppUrl(pathBase, "/"))}}">Snapshots</a>
                         <a class="tab active" href="{{Html(AppUrl(pathBase, "/inventory"))}}">Inventory</a>
+                        <a class="tab" href="{{Html(AppUrl(pathBase, "/acquisition"))}}">Acquisition</a>
                         <a class="tab" href="{{Html(AppUrl(pathBase, "/diagnostics"))}}">Diagnostics</a>
                     </nav>
                 </header>
@@ -1533,6 +1740,7 @@ static string RenderDiagnostics(IReadOnlyList<ReportSummary> reports, PathString
                 <nav class="tabs">
                     <a class="button" href="{{Html(AppUrl(pathBase, "/"))}}">Snapshots</a>
                     <a class="button" href="{{Html(AppUrl(pathBase, "/inventory"))}}">Inventory</a>
+                    <a class="button" href="{{Html(AppUrl(pathBase, "/acquisition"))}}">Acquisition</a>
                 </nav>
                 <table>
                     <thead><tr><th>Snapshot</th><th>Received</th><th>Character</th><th>Raw Data</th></tr></thead>

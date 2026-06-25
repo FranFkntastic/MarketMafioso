@@ -583,7 +583,17 @@ public sealed class MarketAcquisitionRequestEndpointTests
 
         var dashboard = await client.GetStringAsync("/api/marketmafioso/");
         Assert.Contains("Market Acquisition", dashboard, StringComparison.Ordinal);
-        var csrf = Regex.Match(dashboard, "name=\"csrf\" value=\"(?<token>[^\"]+)\"").Groups["token"].Value;
+        Assert.Contains("/api/marketmafioso/acquisition", dashboard, StringComparison.Ordinal);
+
+        var acquisitionPage = await client.GetStringAsync("/api/marketmafioso/acquisition");
+        Assert.Contains("Create Dashboard Request", acquisitionPage, StringComparison.Ordinal);
+        Assert.Contains("name=\"targetCharacterName\"", acquisitionPage, StringComparison.Ordinal);
+        Assert.Contains("name=\"worldMode\"", acquisitionPage, StringComparison.Ordinal);
+        Assert.Contains("/api/marketmafioso/acquisition/requests", acquisitionPage, StringComparison.Ordinal);
+
+        var inventory = await client.GetStringAsync("/api/marketmafioso/inventory");
+        Assert.Contains(">Acquisition</a>", inventory, StringComparison.Ordinal);
+        var csrf = Regex.Match(acquisitionPage, "name=\"csrf\" value=\"(?<token>[^\"]+)\"").Groups["token"].Value;
         Assert.False(string.IsNullOrWhiteSpace(csrf));
 
         var missingCsrf = await client.PostAsync(
@@ -604,6 +614,30 @@ public sealed class MarketAcquisitionRequestEndpointTests
         pending.EnsureSuccessStatusCode();
         using var pendingJson = JsonDocument.Parse(await pending.Content.ReadAsStringAsync());
         Assert.Single(pendingJson.RootElement.GetProperty("requests").EnumerateArray());
+    }
+
+    [Fact]
+    public async Task AcquisitionDashboardCreatesRequestAndRedirectsBackToAcquisitionSurface()
+    {
+        await using var application = CreateHostedApplication(
+            extraConfiguration: new KeyValuePair<string, string?>("MarketMafioso:TrustExternalDashboardAuth", "true"));
+        using var client = application.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false,
+        });
+
+        var acquisitionPage = await client.GetStringAsync("/api/marketmafioso/acquisition");
+        var csrf = Regex.Match(acquisitionPage, "name=\"csrf\" value=\"(?<token>[^\"]+)\"").Groups["token"].Value;
+
+        var created = await client.PostAsync(
+            "/api/marketmafioso/acquisition/requests",
+            new FormUrlEncodedContent(CreateFormFields(csrf, "acquisition-page-create")));
+
+        Assert.Equal(HttpStatusCode.Redirect, created.StatusCode);
+        Assert.StartsWith(
+            "/api/marketmafioso/acquisition?acquisition=",
+            created.Headers.Location?.OriginalString,
+            StringComparison.Ordinal);
     }
 
     [Fact]

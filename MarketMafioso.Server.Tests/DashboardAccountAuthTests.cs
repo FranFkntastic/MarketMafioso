@@ -54,6 +54,7 @@ public sealed class DashboardAccountAuthTests
 
     [Theory]
     [InlineData("/inventory")]
+    [InlineData("/acquisition")]
     [InlineData("/diagnostics")]
     public async Task DashboardToolRoutes_RequireBootstrapUserCredentials(string path)
     {
