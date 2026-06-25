@@ -59,17 +59,37 @@ public sealed class WorkshopAssemblyPlanBuilderTests
         Assert.Equal(11, material.Quantity);
     }
 
+    [Fact]
+    public void Build_carries_estimate_metadata_into_entries()
+    {
+        var queue = new[] { new WorkshopPrepQueueItem { WorkshopItemId = 10, Quantity = 2 } };
+
+        var plan = WorkshopAssemblyPlanBuilder.Build(
+            queue,
+            [BuildProject(10, "Project A", 100, 3, contributionSteps: 11, phaseCount: 3)]);
+
+        var entry = Assert.Single(plan.Entries);
+        Assert.Equal(11, entry.EstimatedContributionSteps);
+        Assert.Equal(3, entry.EstimatedPhaseCount);
+    }
+
     private static WorkshopProjectDefinition BuildProject(
         uint workshopItemId,
         string name,
         uint materialItemId,
-        int materialQuantity)
+        int materialQuantity,
+        int contributionSteps = 1,
+        int phaseCount = 1)
     {
         return new WorkshopProjectDefinition(
             workshopItemId,
             workshopItemId + 1000,
             name,
             0,
-            [new WorkshopMaterialRequirement(materialItemId, "Material", 0, materialQuantity)]);
+            [new WorkshopMaterialRequirement(materialItemId, "Material", 0, materialQuantity)],
+            CategoryId: 0,
+            TypeId: 0,
+            EstimatedContributionSteps: contributionSteps,
+            EstimatedPhaseCount: phaseCount);
     }
 }

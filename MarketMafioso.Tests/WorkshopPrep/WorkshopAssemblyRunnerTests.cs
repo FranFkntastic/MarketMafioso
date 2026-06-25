@@ -317,7 +317,9 @@ public sealed class WorkshopAssemblyRunnerTests
                     19,
                     "Shark-class Bridge",
                     1,
-                    []),
+                    [],
+                    EstimatedContributionSteps: 1,
+                    EstimatedPhaseCount: 1),
             ],
             []);
     }

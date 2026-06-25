@@ -30,7 +30,7 @@ public sealed class WorkshopFrozenQueueBrowserWindow : Window, IDisposable
         Configuration config,
         WorkshopProjectCatalog workshopCatalog,
         WorkshopFrozenQueueBrowserActions actions)
-        : base("Frozen Queue Browser##MarketMafiosoFrozenQueueBrowser", ImGuiWindowFlags.None)
+        : base("Saved Jobs##MarketMafiosoFrozenQueueBrowser", ImGuiWindowFlags.None)
     {
         this.config = config;
         this.workshopCatalog = workshopCatalog;
@@ -38,7 +38,7 @@ public sealed class WorkshopFrozenQueueBrowserWindow : Window, IDisposable
 
         SizeConstraints = new WindowSizeConstraints
         {
-            MinimumSize = new Vector2(560, 500),
+            MinimumSize = new Vector2(900, 560),
             MaximumSize = new Vector2(float.MaxValue, float.MaxValue),
         };
     }
@@ -49,23 +49,32 @@ public sealed class WorkshopFrozenQueueBrowserWindow : Window, IDisposable
 
         var queues = BuildVisibleQueues();
         ImGui.Spacing();
-        DrawQueueTable(queues);
-        ImGui.Spacing();
-        DrawSelectedQueue();
+        DrawBrowserLayout(queues);
         DrawConfirmations();
     }
 
     private void DrawSearchAndCreate()
     {
-        ImGui.Text("Search:");
-        ImGui.SetNextItemWidth(-1);
-        ImGui.InputText("##workshopFrozenQueueSearch", ref search, 256);
+        ImGuiUi.SectionHeaderWithActions(
+            "Workshop Saved Jobs",
+            ColHeader,
+            () =>
+            {
+                if (ImGui.Button("Close"))
+                    IsOpen = false;
+            },
+            70);
 
-        ImGui.SetNextItemWidth(260);
-        ImGui.InputText("New From Current##workshopFrozenQueueNewName", ref newQueueNameInput, 128);
+        var saveWidth = 160f;
+        var nameWidth = Math.Max(220f, (ImGui.GetContentRegionAvail().X - saveWidth) * 0.45f);
+        ImGui.SetNextItemWidth(nameWidth);
+        ImGui.InputText("New saved job name##workshopSavedJobNewName", ref newQueueNameInput, 128);
         ImGui.SameLine();
         if (ImGuiUi.Button("Save Current As New", actions.CanEditQueue && config.WorkshopPrepQueue.Count > 0))
             actions.NewFromCurrent(newQueueNameInput);
+
+        ImGui.SetNextItemWidth(-1);
+        ImGui.InputText("Search##workshopSavedJobSearch", ref search, 256);
     }
 
     private IReadOnlyList<WorkshopFrozenQueue> BuildVisibleQueues()
@@ -80,27 +89,47 @@ public sealed class WorkshopFrozenQueueBrowserWindow : Window, IDisposable
             .ToList();
     }
 
+    private void DrawBrowserLayout(IReadOnlyList<WorkshopFrozenQueue> queues)
+    {
+        var flags = ImGuiTableFlags.Resizable |
+                    ImGuiTableFlags.SizingStretchProp |
+                    ImGuiTableFlags.NoSavedSettings;
+        if (!ImGui.BeginTable("WorkshopSavedJobsBrowserLayout", 2, flags, new Vector2(0, 0)))
+            return;
+
+        ImGui.TableSetupColumn("Saved Jobs", ImGuiTableColumnFlags.WidthStretch, 1.15f);
+        ImGui.TableSetupColumn("Inspector", ImGuiTableColumnFlags.WidthStretch, 0.85f);
+        ImGui.TableNextRow();
+        ImGui.TableNextColumn();
+        DrawQueueTable(queues);
+        ImGui.TableNextColumn();
+        DrawSelectedQueue();
+        ImGui.EndTable();
+    }
+
     private void DrawQueueTable(IReadOnlyList<WorkshopFrozenQueue> queues)
     {
         if (queues.Count == 0)
         {
-            ImGui.TextColored(ColMuted, "No frozen queues match this search.");
+            ImGui.TextColored(ColMuted, "No saved jobs match this search.");
             return;
         }
 
         var nameWidth = CalculateNameColumnWidth(queues);
         var projectWidth = Math.Max(ImGui.CalcTextSize("Projects").X, ImGui.CalcTextSize("9999").X) + 24;
         var stateWidth = Math.Max(ImGui.CalcTextSize("Modified").X, ImGui.CalcTextSize("Not loaded").X) + 28;
+        var etaWidth = Math.Max(ImGui.CalcTextSize("~1h 30m").X, ImGui.CalcTextSize("ETA").X) + 24;
         var updatedWidth = Math.Max(ImGui.CalcTextSize("Updated").X, ImGui.CalcTextSize(DateTime.Now.ToString("g")).X) + 24;
         var flags = ImGuiUi.InteractiveTableFlags |
                     ImGuiTableFlags.ScrollY |
                     ImGuiTableFlags.SizingFixedFit;
 
-        if (ImGui.BeginTable("WorkshopFrozenQueueBrowserTable", 4, flags, new Vector2(0, 220)))
+        if (ImGui.BeginTable("WorkshopFrozenQueueBrowserTable", 5, flags, new Vector2(0, 320)))
         {
-            ImGui.TableSetupColumn("Queue", ImGuiTableColumnFlags.WidthFixed, nameWidth);
+            ImGui.TableSetupColumn("Saved Job", ImGuiTableColumnFlags.WidthFixed, nameWidth);
             ImGui.TableSetupColumn("Projects", ImGuiTableColumnFlags.WidthFixed, projectWidth);
-            ImGui.TableSetupColumn("State", ImGuiTableColumnFlags.WidthFixed, stateWidth);
+            ImGui.TableSetupColumn("Status", ImGuiTableColumnFlags.WidthFixed, stateWidth);
+            ImGui.TableSetupColumn("ETA", ImGuiTableColumnFlags.WidthFixed, etaWidth);
             ImGui.TableSetupColumn("Updated", ImGuiTableColumnFlags.WidthFixed, updatedWidth);
             ImGui.TableHeadersRow();
 
@@ -127,6 +156,12 @@ public sealed class WorkshopFrozenQueueBrowserWindow : Window, IDisposable
                 ImGui.TextColored(GetStateColor(state), FormatState(state));
 
                 ImGui.TableNextColumn();
+                var estimate = TryEstimateQueue(queue);
+                ImGui.TextUnformatted(estimate == null
+                    ? "-"
+                    : WorkshopAssemblyEstimator.FormatDuration(estimate.Duration));
+
+                ImGui.TableNextColumn();
                 ImGui.TextUnformatted(queue.UpdatedAt.ToLocalTime().ToString("g"));
             }
 
@@ -141,7 +176,7 @@ public sealed class WorkshopFrozenQueueBrowserWindow : Window, IDisposable
             : null;
         if (queue == null)
         {
-            ImGui.TextColored(ColMuted, "Select a frozen queue to preview its projects.");
+            ImGui.TextColored(ColMuted, "Select a saved job to preview its projects.");
             DrawQueueActions(null);
             return;
         }
@@ -149,6 +184,19 @@ public sealed class WorkshopFrozenQueueBrowserWindow : Window, IDisposable
         ImGui.TextColored(ColHeader, queue.Name);
         ImGui.SameLine();
         ImGui.TextColored(GetStateColor(WorkshopQueueService.GetFrozenQueueState(config, queue.Id)), FormatState(WorkshopQueueService.GetFrozenQueueState(config, queue.Id)));
+
+        var estimate = TryEstimateQueue(queue);
+        if (estimate != null)
+        {
+            ImGui.TextColored(ColMuted, $"Estimated time: {WorkshopAssemblyEstimator.FormatDuration(estimate.Duration)}");
+            ImGui.TextColored(ColMuted, $"Projects: {estimate.TotalProjects}");
+            ImGui.SameLine();
+            ImGui.TextColored(ColMuted, $"Contribution steps: {estimate.ContributionSteps}");
+        }
+        else
+        {
+            ImGui.TextColored(ColMuted, "Estimated time: unavailable");
+        }
 
         var projectNames = workshopCatalog.GetProjects().ToDictionary(x => x.WorkshopItemId, x => x.Name);
         if (ImGui.BeginTable("WorkshopFrozenQueuePreview", 2, ImGuiUi.InteractiveTableFlags))
@@ -184,13 +232,13 @@ public sealed class WorkshopFrozenQueueBrowserWindow : Window, IDisposable
         }
 
         ImGui.SetNextItemWidth(260);
-        ImGui.InputText("Rename##workshopFrozenQueueBrowserRename", ref renameInput, 128);
+        ImGui.InputText("Name##workshopSavedJobRename", ref renameInput, 128);
         ImGui.SameLine();
         if (ImGuiUi.Button("Rename", actions.CanEditQueue))
             actions.Rename(queue.Id, renameInput);
 
         ImGui.SetNextItemWidth(260);
-        ImGui.InputText("Duplicate As##workshopFrozenQueueBrowserDuplicate", ref duplicateNameInput, 128);
+        ImGui.InputText("Duplicate as##workshopSavedJobDuplicate", ref duplicateNameInput, 128);
         ImGui.SameLine();
         if (ImGuiUi.Button("Duplicate", actions.CanEditQueue))
             actions.Duplicate(queue.Id, duplicateNameInput);
@@ -233,7 +281,7 @@ public sealed class WorkshopFrozenQueueBrowserWindow : Window, IDisposable
     {
         if (pendingLoadQueueId != null)
         {
-            ImGui.TextColored(ColMuted, "Load frozen queue? Unsaved active queue changes will be discarded.");
+            ImGui.TextColored(ColMuted, "Load saved job? Unsaved active queue changes will be discarded.");
             if (ImGuiUi.Button("Confirm Load", actions.CanEditQueue))
             {
                 actions.Load(pendingLoadQueueId.Value);
@@ -247,7 +295,7 @@ public sealed class WorkshopFrozenQueueBrowserWindow : Window, IDisposable
 
         if (pendingDeleteQueueId != null)
         {
-            ImGui.TextColored(ColMuted, "Delete selected frozen queue?");
+            ImGui.TextColored(ColMuted, "Delete selected saved job?");
             if (ImGuiUi.Button("Confirm Delete", actions.CanEditQueue))
             {
                 actions.Delete(pendingDeleteQueueId.Value);
@@ -270,6 +318,19 @@ public sealed class WorkshopFrozenQueueBrowserWindow : Window, IDisposable
             width = Math.Max(width, ImGui.CalcTextSize(queue.Name).X);
 
         return Math.Clamp(width + 28, 220, Math.Max(260, ImGui.GetContentRegionAvail().X - 280));
+    }
+
+    private WorkshopAssemblyEstimate? TryEstimateQueue(WorkshopFrozenQueue queue)
+    {
+        try
+        {
+            var plan = WorkshopAssemblyPlanBuilder.Build(queue.Items, workshopCatalog.GetProjects());
+            return WorkshopAssemblyEstimator.Estimate(plan);
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
+        }
     }
 
     private static string FormatState(WorkshopFrozenQueueState state)

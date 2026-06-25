@@ -32,7 +32,9 @@ public static class WorkshopAssemblyPlanBuilder
                 project.TypeId,
                 project.Name,
                 queueItem.Quantity,
-                project.Materials));
+                project.Materials,
+                project.EstimatedContributionSteps,
+                project.EstimatedPhaseCount));
 
             foreach (var material in project.Materials)
             {

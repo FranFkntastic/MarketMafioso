@@ -127,7 +127,7 @@ Craft Architect could import `materials` as project/root items using `itemId`, `
 Add compact buttons to Workshop Prep actions:
 
 - `Copy Artisan Manifest`
-- `Copy Craft Architect Manifest`
+- `Copy Craft Architect Import`
 
 Keep status text explicit:
 

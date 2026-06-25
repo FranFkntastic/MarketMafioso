@@ -37,7 +37,9 @@ public sealed record WorkshopAssemblyQueueEntry(
     uint TypeId,
     string ProjectName,
     int Quantity,
-    IReadOnlyList<WorkshopMaterialRequirement> Materials);
+    IReadOnlyList<WorkshopMaterialRequirement> Materials,
+    int EstimatedContributionSteps,
+    int EstimatedPhaseCount);
 
 public sealed record WorkshopAssemblyPlan(
     IReadOnlyList<WorkshopAssemblyQueueEntry> Entries,

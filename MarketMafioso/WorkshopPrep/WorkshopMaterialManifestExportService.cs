@@ -33,7 +33,7 @@ public sealed record WorkshopMaterialManifestExportResult(
     bool Success,
     WorkshopMaterialManifestExportSeverity Severity,
     string Message,
-    string Json,
+    string Content,
     int ExportedCount,
     IReadOnlyList<string> SkippedItems);
 

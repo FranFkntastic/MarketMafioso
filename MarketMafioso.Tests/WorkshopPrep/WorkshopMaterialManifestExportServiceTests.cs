@@ -25,7 +25,7 @@ public sealed class WorkshopMaterialManifestExportServiceTests
             288x Cobalt Ingot
             32x Darksteel Ore
             """.ReplaceLineEndings("\n"),
-            result.Json.ReplaceLineEndings("\n"));
+            result.Content.ReplaceLineEndings("\n"));
     }
 
     [Fact]
@@ -40,9 +40,9 @@ public sealed class WorkshopMaterialManifestExportServiceTests
 
         Assert.True(result.Success);
         Assert.Equal(1, result.ExportedCount);
-        Assert.Contains("Items:", result.Json);
-        Assert.Contains("32x Darksteel Ore", result.Json);
-        Assert.DoesNotContain("Cobalt Ingot", result.Json);
+        Assert.Contains("Items:", result.Content);
+        Assert.Contains("32x Darksteel Ore", result.Content);
+        Assert.DoesNotContain("Cobalt Ingot", result.Content);
     }
 
     [Fact]
@@ -66,7 +66,7 @@ public sealed class WorkshopMaterialManifestExportServiceTests
         Assert.Equal(2, result.ExportedCount);
         Assert.Empty(result.SkippedItems);
 
-        using var document = JsonDocument.Parse(result.Json);
+        using var document = JsonDocument.Parse(result.Content);
         var root = document.RootElement;
         Assert.Equal("Workshop Materials - Shark-class Pressure Hull x16 + 1 more - Inventory Missing - 2026-06-23 2115", root.GetProperty("Name").GetString());
 
@@ -121,7 +121,7 @@ public sealed class WorkshopMaterialManifestExportServiceTests
 
         Assert.False(result.Success);
         Assert.Equal(WorkshopMaterialManifestExportSeverity.Info, result.Severity);
-        Assert.Equal(string.Empty, result.Json);
+        Assert.Equal(string.Empty, result.Content);
         Assert.Contains("No missing workshop materials", result.Message);
     }
 

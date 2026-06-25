@@ -33,7 +33,6 @@ public class MainWindow : Window, IDisposable
     private bool confirmViwiClear = false;
     private bool confirmNewWorkshopQueue = false;
     private bool confirmLoadFrozenQueue = false;
-    private bool confirmDeleteFrozenQueue = false;
     private Guid? selectedFrozenQueueId;
     private string frozenQueueNameInput = string.Empty;
     private string workshopStatus = "Workshop prep queue is idle.";
@@ -77,7 +76,7 @@ public class MainWindow : Window, IDisposable
 
         SizeConstraints = new WindowSizeConstraints
         {
-            MinimumSize = new Vector2(480, 520),
+            MinimumSize = new Vector2(980, 560),
             MaximumSize = new Vector2(float.MaxValue, float.MaxValue),
         };
 
@@ -198,7 +197,7 @@ public class MainWindow : Window, IDisposable
 
     private void DrawWorkshopPrepQueue(IReadOnlyList<WorkshopProjectDefinition> projects)
     {
-        ImGuiUi.SectionHeaderWithActions("Prep Queue", ColHeader, DrawWorkshopQueueHeaderActions);
+        ImGuiUi.SectionHeaderWithActions("Prep Queue", ColHeader, DrawWorkshopQueueHeaderActions, 180);
         DrawFrozenQueueToolbar();
         ImGui.Spacing();
 
@@ -208,34 +207,6 @@ public class MainWindow : Window, IDisposable
             return;
         }
 
-        var canEditQueue = !workshopAssemblyRunner.HasActiveRun;
-        var selectedProject = projects.FirstOrDefault(x => x.WorkshopItemId == workshopProjectSelection.SelectedWorkshopItemId);
-        ImGui.TextColored(ColMuted, selectedProject == null
-            ? "No workshop project selected."
-            : $"Selected: {selectedProject.Name}");
-
-        if (!canEditQueue)
-            ImGui.BeginDisabled();
-
-        ImGui.SetNextItemWidth(100);
-        if (ImGui.InputInt("Quantity##workshopQuantity", ref workshopProjectSelection.Quantity))
-        {
-            if (workshopProjectSelection.Quantity < 1)
-                workshopProjectSelection.Quantity = 1;
-        }
-
-        ImGui.SameLine();
-        if (ImGui.Button("Browse Projects..."))
-            ProjectBrowser.IsOpen = true;
-
-        ImGui.SameLine();
-        if (ImGuiUi.Button("Add Selected", selectedProject != null && canEditQueue))
-            AddWorkshopProject(workshopProjectSelection.SelectedWorkshopItemId);
-
-        if (!canEditQueue)
-            ImGui.EndDisabled();
-
-        ImGui.Spacing();
         DrawWorkshopQueueTable(projects);
     }
 
@@ -271,7 +242,7 @@ public class MainWindow : Window, IDisposable
         var hasPrepQueue = config.WorkshopPrepQueue.Count > 0;
         var canEditQueue = !workshopAssemblyRunner.HasActiveRun;
 
-        if (ImGui.Button("Handoff"))
+        if (ImGuiUi.MenuButton("Handoff"))
             ImGui.OpenPopup("WorkshopQueueHandoffMenu");
 
         if (ImGui.BeginPopup("WorkshopQueueHandoffMenu"))
@@ -283,7 +254,7 @@ public class MainWindow : Window, IDisposable
         }
 
         ImGui.SameLine();
-        if (ImGui.Button("Export"))
+        if (ImGuiUi.MenuButton("Export"))
             ImGui.OpenPopup("WorkshopQueueExportMenu");
 
         if (ImGui.BeginPopup("WorkshopQueueExportMenu"))
@@ -308,12 +279,14 @@ public class MainWindow : Window, IDisposable
         var activeFrozenQueueLabel = activeFrozenQueue == null
             ? "Active queue: unsaved"
             : WorkshopQueueService.ActiveQueueMatchesFrozenQueue(config)
-                ? $"Active frozen queue: {activeFrozenQueue.Name}"
-                : $"Active frozen queue: {activeFrozenQueue.Name} (modified)";
+                ? $"Active saved job: {activeFrozenQueue.Name}"
+                : $"Active saved job: {activeFrozenQueue.Name} (modified)";
         ImGui.TextColored(ColMuted, activeFrozenQueueLabel);
 
-        ImGui.SetNextItemWidth(220);
-        ImGui.InputText("Name##workshopFrozenQueueName", ref frozenQueueNameInput, 128);
+        var commandWidth = 720f;
+        var nameWidth = Math.Max(220f, ImGui.GetContentRegionAvail().X - commandWidth);
+        ImGui.SetNextItemWidth(nameWidth);
+        ImGui.InputText("##workshopFrozenQueueName", ref frozenQueueNameInput, 128);
 
         ImGui.SameLine();
         if (ImGuiUi.Button("Save Queue", canEditQueue && config.WorkshopPrepQueue.Count > 0))
@@ -338,19 +311,17 @@ public class MainWindow : Window, IDisposable
         }
 
         ImGui.SameLine();
-        if (ImGuiUi.Button("Clear Queue", canEditQueue && config.WorkshopPrepQueue.Count > 0))
-        {
-            config.WorkshopPrepQueue.Clear();
-            SaveActiveQueueEdit();
-            workshopStatus = "Cleared prep queue.";
-        }
+        if (ImGuiUi.Button("Add Project...", canEditQueue))
+            ProjectBrowser.IsOpen = true;
 
         ImGui.SameLine();
         DrawFrozenQueueLoadCombo(canEditQueue);
 
         ImGui.SameLine();
-        if (ImGui.Button("Browse Frozen Queues"))
+        if (ImGui.Button("Manage Saved Jobs"))
             FrozenQueueBrowser.IsOpen = true;
+
+        ImGui.TextColored(ColMuted, "Handoff contains VIWI and future queue targets. Export contains Artisan JSON and Craft Architect plain-text import manifests.");
 
         DrawFrozenQueueConfirmations(canEditQueue);
     }
@@ -362,8 +333,9 @@ public class MainWindow : Window, IDisposable
             ImGui.BeginDisabled();
 
         var preview = selectedFrozenQueueId is { } id
-            ? config.FrozenWorkshopQueues.FirstOrDefault(x => x.Id == id)?.Name ?? "Load Frozen Queue..."
-            : "Load Frozen Queue...";
+            ? config.FrozenWorkshopQueues.FirstOrDefault(x => x.Id == id)?.Name ?? "Load saved job..."
+            : "Load saved job...";
+        ImGui.SetNextItemWidth(220);
         if (ImGui.BeginCombo("##workshopFrozenQueueLoad", preview))
         {
             foreach (var frozenQueue in config.FrozenWorkshopQueues.OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase))
@@ -398,25 +370,15 @@ public class MainWindow : Window, IDisposable
 
         if (confirmLoadFrozenQueue)
         {
-            ImGui.TextColored(ColMuted, "Load frozen queue? Unsaved active queue changes will be discarded.");
-            if (ImGuiUi.Button("Confirm Load Frozen Queue", canEditQueue && selectedFrozenQueueId != null))
+            ImGui.TextColored(ColMuted, "Load saved job? Unsaved active queue changes will be discarded.");
+            if (ImGuiUi.Button("Confirm Load Saved Job", canEditQueue && selectedFrozenQueueId != null))
                 LoadSelectedFrozenQueue();
 
             ImGui.SameLine();
-            if (ImGui.Button("Cancel Load Frozen Queue"))
+            if (ImGui.Button("Cancel Load Saved Job"))
                 confirmLoadFrozenQueue = false;
         }
 
-        if (confirmDeleteFrozenQueue)
-        {
-            ImGui.TextColored(ColMuted, "Delete selected frozen queue?");
-            if (ImGuiUi.Button("Confirm Delete Frozen Queue", canEditQueue && selectedFrozenQueueId != null))
-                DeleteSelectedFrozenQueue();
-
-            ImGui.SameLine();
-            if (ImGui.Button("Cancel Delete Frozen Queue"))
-                confirmDeleteFrozenQueue = false;
-        }
     }
 
     private void RequestLoadFrozenQueue(Guid queueId)
@@ -438,15 +400,6 @@ public class MainWindow : Window, IDisposable
 
         LoadFrozenQueue(selectedFrozenQueueId.Value);
         confirmLoadFrozenQueue = false;
-    }
-
-    private void DeleteSelectedFrozenQueue()
-    {
-        if (selectedFrozenQueueId == null)
-            return;
-
-        DeleteFrozenQueue(selectedFrozenQueueId.Value);
-        confirmDeleteFrozenQueue = false;
     }
 
     private void LoadFrozenQueue(Guid queueId)
@@ -512,12 +465,6 @@ public class MainWindow : Window, IDisposable
 
     private void DrawWorkshopQueueTable(IReadOnlyList<WorkshopProjectDefinition> projects)
     {
-        if (config.WorkshopPrepQueue.Count == 0)
-        {
-            ImGui.TextColored(ColMuted, "No workshop projects queued.");
-            return;
-        }
-
         var projectNames = projects.ToDictionary(x => x.WorkshopItemId, x => x.Name);
         var canEditQueue = !workshopAssemblyRunner.HasActiveRun;
         if (ImGui.BeginTable("WorkshopPrepQueue", 3, ImGuiUi.InteractiveTableFlags))
@@ -526,6 +473,18 @@ public class MainWindow : Window, IDisposable
             ImGui.TableSetupColumn("Qty", ImGuiTableColumnFlags.WidthFixed, 96);
             ImGui.TableSetupColumn("Actions", ImGuiTableColumnFlags.WidthFixed, 104);
             ImGui.TableHeadersRow();
+
+            if (config.WorkshopPrepQueue.Count == 0)
+            {
+                ImGui.TableNextRow();
+                ImGui.TableNextColumn();
+                ImGui.TextColored(ColMuted, "No workshop projects queued.");
+                ImGui.TableNextColumn();
+                ImGui.TextColored(ColMuted, "-");
+                ImGui.TableNextColumn();
+                if (ImGuiUi.Button("Add##workshopQueueEmptyAdd", canEditQueue))
+                    ProjectBrowser.IsOpen = true;
+            }
 
             for (var index = 0; index < config.WorkshopPrepQueue.Count; index++)
             {
@@ -567,25 +526,38 @@ public class MainWindow : Window, IDisposable
 
     private void DrawWorkshopMaterialSummary()
     {
-        ImGuiUi.SectionHeaderWithActions("Materials", ColHeader, DrawWorkshopMaterialHeaderActions);
+        ImGuiUi.SectionHeaderWithActions("Materials", ColHeader, DrawWorkshopMaterialHeaderActions, 420);
 
         var availability = GetWorkshopAvailability();
-        if (availability.Count == 0)
-        {
-            ImGui.TextColored(ColMuted, "No workshop materials yet. Add projects to the prep queue.");
-            return;
-        }
-
         if (ImGui.BeginTable("WorkshopPrepMaterials", 7, ImGuiUi.InteractiveTableFlags))
         {
             ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.WidthStretch);
             ImGui.TableSetupColumn("Required", ImGuiTableColumnFlags.WidthFixed, 80);
-            ImGui.TableSetupColumn("Player", ImGuiTableColumnFlags.WidthFixed, 72);
-            ImGui.TableSetupColumn("Retainers", ImGuiTableColumnFlags.WidthFixed, 88);
-            ImGui.TableSetupColumn("Inventory Missing", ImGuiTableColumnFlags.WidthFixed, 128);
             ImGui.TableSetupColumn("Stock Differential", ImGuiTableColumnFlags.WidthFixed, 128);
-            ImGui.TableSetupColumn("Candidates", ImGuiTableColumnFlags.WidthStretch);
+            ImGui.TableSetupColumn("Inventory Missing", ImGuiTableColumnFlags.WidthFixed, 128);
+            ImGui.TableSetupColumn("Player", ImGuiTableColumnFlags.WidthFixed, 72);
+            ImGui.TableSetupColumn("Retainers", ImGuiTableColumnFlags.WidthFixed | ImGuiTableColumnFlags.DefaultHide, 88);
+            ImGui.TableSetupColumn("Candidates", ImGuiTableColumnFlags.WidthStretch | ImGuiTableColumnFlags.DefaultHide);
             ImGui.TableHeadersRow();
+
+            if (availability.Count == 0)
+            {
+                ImGui.TableNextRow();
+                ImGui.TableNextColumn();
+                ImGui.TextColored(ColMuted, "No workshop materials yet. Add projects to the prep queue.");
+                ImGui.TableNextColumn();
+                ImGui.TextColored(ColMuted, "-");
+                ImGui.TableNextColumn();
+                ImGui.TextColored(ColMuted, "-");
+                ImGui.TableNextColumn();
+                ImGui.TextColored(ColMuted, "-");
+                ImGui.TableNextColumn();
+                ImGui.TextColored(ColMuted, "-");
+                ImGui.TableNextColumn();
+                ImGui.TextColored(ColMuted, "-");
+                ImGui.TableNextColumn();
+                ImGui.TextColored(ColMuted, "-");
+            }
 
             foreach (var item in availability)
             {
@@ -595,13 +567,13 @@ public class MainWindow : Window, IDisposable
                 ImGui.TableNextColumn();
                 ImGui.TextUnformatted(item.Required.ToString());
                 ImGui.TableNextColumn();
-                ImGui.TextUnformatted(item.PlayerInventory.ToString());
-                ImGui.TableNextColumn();
-                ImGui.TextUnformatted(item.RetainerCache.ToString());
+                ImGui.TextColored(item.StockDifferential < 0 ? ColError : ColSuccess, FormatSignedQuantity(item.StockDifferential));
                 ImGui.TableNextColumn();
                 ImGui.TextColored(item.Shortage > 0 ? ColError : ColSuccess, item.Shortage.ToString());
                 ImGui.TableNextColumn();
-                ImGui.TextColored(item.StockDifferential < 0 ? ColError : ColSuccess, FormatSignedQuantity(item.StockDifferential));
+                ImGui.TextUnformatted(item.PlayerInventory.ToString());
+                ImGui.TableNextColumn();
+                ImGui.TextUnformatted(item.RetainerCache.ToString());
                 ImGui.TableNextColumn();
                 ImGui.TextUnformatted(string.Join(", ", item.CandidateRetainers.Select(x => x.RetainerName)));
             }
@@ -624,7 +596,7 @@ public class MainWindow : Window, IDisposable
             _ = workshopRetainerRestock.StartAsync(GetWorkshopAvailability());
 
         ImGui.SameLine();
-        if (ImGui.Button("Columns"))
+        if (ImGuiUi.MenuButton("Columns"))
             ImGui.OpenPopup("WorkshopMaterialColumnsMenu");
 
         if (ImGui.BeginPopup("WorkshopMaterialColumnsMenu"))
@@ -659,9 +631,33 @@ public class MainWindow : Window, IDisposable
 
     private void DrawWorkshopAssemblyWorkflow()
     {
-        ImGuiUi.SectionHeader("Assembly Workflow", ColHeader);
-
         var hasPrepQueue = config.WorkshopPrepQueue.Count > 0;
+        var actionWidth = workshopAssemblyRunner.HasActiveRun ? 280f : 140f;
+        ImGuiUi.SectionHeaderWithActions(
+            "Assembly Workflow",
+            ColHeader,
+            () => DrawWorkshopAssemblyActions(hasPrepQueue),
+            actionWidth);
+
+        ImGui.TextColored(GetWorkshopStatusColor(), workshopStatus);
+        ImGui.TextColored(workshopRetainerRestock.IsRunning ? ColHeader : ColMuted, workshopRetainerRestock.LastStatus);
+
+        var progress = workshopAssemblyRunner.Progress;
+        ImGui.TextColored(workshopAssemblyRunner.HasActiveRun ? ColHeader : ColMuted, progress.Message);
+        if (progress.TotalProjects > 0)
+        {
+            var completed = Math.Clamp(progress.CompletedProjects, 0, progress.TotalProjects);
+            var fraction = completed / (float)progress.TotalProjects;
+            ImGui.TextColored(ColMuted, $"Assembly progress: {completed}/{progress.TotalProjects}");
+            ImGui.SameLine();
+            ImGui.ProgressBar(fraction, new Vector2(210, 0), string.Empty);
+        }
+
+        DrawWorkshopQueueConfirmations();
+    }
+
+    private void DrawWorkshopAssemblyActions(bool hasPrepQueue)
+    {
         if (workshopAssemblyRunner.IsPaused)
         {
             if (ImGui.Button("Resume"))
@@ -686,25 +682,23 @@ public class MainWindow : Window, IDisposable
                 workshopStatus = "Workshop assembly stopped.";
             }
         }
-        else
+
+        if (workshopAssemblyRunner.HasActiveRun)
+            ImGui.SameLine();
+
+        if (ImGuiUi.MenuButton("Start Options", !workshopAssemblyRunner.HasActiveRun && hasPrepQueue))
+            ImGui.OpenPopup("WorkshopAssemblyStartMenu");
+
+        if (ImGui.BeginPopup("WorkshopAssemblyStartMenu"))
         {
-            if (ImGuiUi.Button("Start Assembly", hasPrepQueue))
+            if (ImGuiUi.MenuItem("Start Assembly", hasPrepQueue))
                 StartWorkshopAssembly(enableDiagnostics: false);
 
-            ImGui.SameLine();
-            if (ImGuiUi.Button("Start With Diagnostics", hasPrepQueue))
+            if (ImGuiUi.MenuItem("Start With Diagnostics", hasPrepQueue))
                 StartWorkshopAssembly(enableDiagnostics: true);
+
+            ImGui.EndPopup();
         }
-
-        ImGui.Spacing();
-        ImGui.TextColored(GetWorkshopStatusColor(), workshopStatus);
-        ImGui.TextColored(workshopRetainerRestock.IsRunning ? ColHeader : ColMuted, workshopRetainerRestock.LastStatus);
-        var progress = workshopAssemblyRunner.Progress;
-        ImGui.TextColored(workshopAssemblyRunner.HasActiveRun ? ColHeader : ColMuted, progress.Message);
-        if (progress.TotalProjects > 0)
-            ImGui.TextColored(ColMuted, $"Assembly progress: {progress.CompletedProjects}/{progress.TotalProjects}");
-
-        DrawWorkshopQueueConfirmations();
     }
 
     private void DrawWorkshopQueueConfirmations()
@@ -797,8 +791,8 @@ public class MainWindow : Window, IDisposable
 
     private void CopyWorkshopManifest(WorkshopMaterialManifestExportResult result)
     {
-        if (result.Success && !string.IsNullOrWhiteSpace(result.Json))
-            ImGui.SetClipboardText(result.Json);
+        if (result.Success && !string.IsNullOrWhiteSpace(result.Content))
+            ImGui.SetClipboardText(result.Content);
 
         workshopStatus = result.Message;
         if (result.Severity is WorkshopMaterialManifestExportSeverity.Error or WorkshopMaterialManifestExportSeverity.Warning)

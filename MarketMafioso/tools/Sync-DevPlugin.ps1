@@ -28,6 +28,7 @@ function Sync-ManifestAssemblyVersion {
     $manifest = Get-Content -LiteralPath $ManifestPath -Raw | ConvertFrom-Json
     $manifest.AssemblyVersion = $visibleVersion
     $manifest | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $ManifestPath -Encoding utf8
+    Write-Host "Visible manifest version: $visibleVersion"
 }
 
 function Get-VisibleManifestVersion {
@@ -42,9 +43,9 @@ function Get-VisibleManifestVersion {
 
     try {
         $commitCountText = git -C $repoRoot rev-list --count HEAD
-        $shortHash = git -C $repoRoot rev-parse --short=4 HEAD
         $commitCount = [int]$commitCountText
-        $revision = [Convert]::ToInt32($shortHash, 16)
+        $assemblyHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $AssemblyPath).Hash
+        $revision = [Convert]::ToInt32($assemblyHash.Substring(0, 4), 16)
 
         return "$($assemblyVersion.Major).$($assemblyVersion.Minor).$commitCount.$revision"
     }

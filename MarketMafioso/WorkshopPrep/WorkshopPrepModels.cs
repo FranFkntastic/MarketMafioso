@@ -26,7 +26,9 @@ public sealed record WorkshopProjectDefinition(
     ushort IconId,
     IReadOnlyList<WorkshopMaterialRequirement> Materials,
     uint CategoryId = 0,
-    uint TypeId = 0);
+    uint TypeId = 0,
+    int EstimatedContributionSteps = 0,
+    int EstimatedPhaseCount = 1);
 
 public sealed record WorkshopMaterialRequirement(
     uint ItemId,
