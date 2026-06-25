@@ -1,6 +1,6 @@
 # Hosted Receiver
 
-MarketMafioso can send inventory snapshots to a hosted ASP.NET receiver instead of requiring the local backend during normal use.
+MarketMafioso can send inventory snapshots to a hosted or self-hosted ASP.NET receiver instead of requiring the local backend during normal use.
 
 ## Environments
 
@@ -14,6 +14,8 @@ Local fallback:      http://localhost:8080/inventory
 
 Stored snapshots are local to the receiver environment. A snapshot sent to dev is not visible in production, and a production snapshot is not visible in dev unless it is explicitly exported and imported later.
 
+MarketMafioso does not provide public multi-user inventory hosting. Users who want their own backend can run the released server package themselves and manage their own service, domain, TLS, and backups.
+
 ## Plugin Configuration
 
 The plugin settings window has endpoint preset buttons:
@@ -26,8 +28,6 @@ The URL remains editable. The plugin does not change existing saved URLs automat
 
 Hosted receivers require an ingest API key. Set the same value in the plugin's `API Key` field and in `MarketMafioso__IngestApiKey` on the server. Do not use the optional read API key in the plugin.
 
-Market Acquisition request pickup uses a separate command pickup key. Set the same value in the plugin's `Command pickup key` field and in `MarketMafioso__CommandPickupApiKey` on the server. Do not reuse the ingest key.
-
 ## Server Configuration
 
 Run the hosted receiver behind Caddy with these environment variables:
@@ -39,16 +39,20 @@ MarketMafioso__IngestApiKey=<secret>
 MarketMafioso__PreviousIngestApiKey=<optional-previous-secret>
 MarketMafioso__ReadApiKey=<optional-read-secret>
 MarketMafioso__PreviousReadApiKey=<optional-previous-read-secret>
-MarketMafioso__CommandPickupApiKey=<secret>
 MarketMafioso__BasePath=/api/marketmafioso
 MarketMafioso__PublicOrigin=https://dev.xivcraftarchitect.com
 MarketMafioso__StorageLabel=dev receiver storage
-MarketMafioso__TrustExternalDashboardAuth=true
+MarketMafioso__DatabasePath=/srv/craftarchitect/data/marketmafioso/dev/marketmafioso.db
+MarketMafioso__RawJsonRetentionCount=20
+MarketMafioso__SnapshotRetentionCount=500
+MarketMafioso__RequireDashboardAuth=true
+MarketMafioso__DashboardBootstrapUsername=marketmafioso
+MarketMafioso__DashboardBootstrapPassword=<dashboard-password>
 ```
 
-`/health` remains public for uptime checks. Inventory ingestion requires the ingest key. `/api/reports...` is optional machine-read API surface: it requires the read key when configured and fails closed when no read key is configured. Market Acquisition pickup and lifecycle routes require the command pickup key. Browser dashboard routes use Caddy Basic Auth instead.
+`/health` remains public for uptime checks. Inventory ingestion requires the ingest key. `/api/reports...` is optional machine-read API surface: it requires the read key when configured and fails closed when no read key is configured. Browser dashboard routes use app-managed Basic Auth backed by the receiver SQLite database.
 
-The dashboard HTML is protected by Caddy Basic Auth. The dev username is fixed to `marketmafioso`; the password is stored in GitHub Actions as `MARKETMAFIOSO_DEV_BASIC_AUTH_PASSWORD`.
+The dev dashboard username is fixed to `marketmafioso`; the password is stored in GitHub Actions as `MARKETMAFIOSO_DEV_BASIC_AUTH_PASSWORD`. Bootstrap credentials create the first local dashboard admin user only when no dashboard users exist.
 
 ## Dev VPS Deployment
 
@@ -56,6 +60,18 @@ The `Deploy MarketMafioso Dev Receiver to VPS` GitHub Actions workflow publishes
 
 ```text
 https://dev.xivcraftarchitect.com/api/marketmafioso/
+```
+
+Use the server-specific helper when you want to force a backend deployment and watch the smoke checks from PowerShell:
+
+```powershell
+.\MarketMafioso\tools\Deploy-ServerDev.ps1
+```
+
+The helper triggers the GitHub Actions workflow for `local-dev`, waits for it to complete, then checks the public health/dashboard routes. If local secret files exist under `%USERPROFILE%\.ssh`, it also smoke-tests authenticated dashboard access and inventory ingestion without printing the secrets. To deploy a non-default ref deliberately, pass `-Ref`:
+
+```powershell
+.\MarketMafioso\tools\Deploy-ServerDev.ps1 -Ref test/inventory-browser-vps
 ```
 
 Required repository secrets:
@@ -66,7 +82,6 @@ VPS_USER
 VPS_SSH_PRIVATE_KEY
 VPS_SSH_PORT
 MARKETMAFIOSO_DEV_INGEST_API_KEY
-MARKETMAFIOSO_DEV_COMMAND_PICKUP_API_KEY
 MARKETMAFIOSO_DEV_BASIC_AUTH_PASSWORD
 ```
 
@@ -78,7 +93,17 @@ MARKETMAFIOSO_DEV_READ_API_KEY
 MARKETMAFIOSO_DEV_PREVIOUS_READ_API_KEY
 ```
 
-The workflow installs or updates the `marketmafioso-dev` systemd service, stores dev data under `/srv/craftarchitect/data/marketmafioso/dev`, and configures the dev Caddy site for public health, API-key ingest/read/acquisition routes, and Basic-Auth dashboard routes.
+The workflow installs or updates the `marketmafioso-dev` systemd service, stores dev data under `/srv/craftarchitect/data/marketmafioso/dev`, and configures the dev Caddy site for public health, API-key ingest/read routes, and proxied dashboard routes.
+
+Server deployment is intentionally separate from plugin deployment. A backend deploy updates the VPS receiver only; it does not copy a DLL into Dalamud. Use `Deploy-PluginDev.ps1` when the in-game plugin needs to change too.
+
+When you just want the tooling to choose based on the files you changed, use the changed-surface router:
+
+```powershell
+.\MarketMafioso\tools\Deploy-ChangedDev.ps1
+```
+
+It classifies committed, staged, unstaged, and untracked paths. Server paths run the server deploy, plugin paths run the plugin deploy, both surfaces run the explicit combined deploy, and docs/tooling-only changes do not deploy. If a path is ambiguous, the router stops and asks you to run the explicit server/plugin/both command.
 
 ## First-Time Setup
 
@@ -95,40 +120,21 @@ gh secret set MARKETMAFIOSO_DEV_INGEST_API_KEY --repo FranFkntastic/MarketMafios
 $bytes = New-Object byte[] 32
 $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
 try { $rng.GetBytes($bytes) } finally { $rng.Dispose() }
-$commandPickupKey = [Convert]::ToBase64String($bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_')
-Set-Content -LiteralPath "$env:USERPROFILE\.ssh\marketmafioso_command_pickup_key.txt" -Value $commandPickupKey -NoNewline
-gh secret set MARKETMAFIOSO_DEV_COMMAND_PICKUP_API_KEY --repo FranFkntastic/MarketMafioso --body $commandPickupKey
-
-$bytes = New-Object byte[] 32
-$rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
-try { $rng.GetBytes($bytes) } finally { $rng.Dispose() }
 $dashboardPassword = [Convert]::ToBase64String($bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_')
 Set-Content -LiteralPath "$env:USERPROFILE\.ssh\marketmafioso_dashboard_password.txt" -Value $dashboardPassword -NoNewline
 gh secret set MARKETMAFIOSO_DEV_BASIC_AUTH_PASSWORD --repo FranFkntastic/MarketMafioso --body $dashboardPassword
 ```
 
-Paste the ingest key into the plugin's `API Key` field. Paste the command pickup key into the Market Acquisition `Command pickup key` field.
+Paste only the ingest key into the plugin's `API Key` field.
 
 ## Caddy Shape
 
-Use Caddy routing so plugin/API traffic reaches the app with `X-Api-Key`, while dashboard pages require human Basic Auth.
+Use Caddy routing so plugin/API and dashboard traffic reach the app. The app handles dashboard Basic Auth.
 
 ```caddyfile
 dev.xivcraftarchitect.com {
-    @marketmafiosoDashboardCreateAcquisition {
-        method POST
-        path /api/marketmafioso/acquisition/requests
-    }
-
-    handle @marketmafiosoDashboardCreateAcquisition {
-        basic_auth {
-            marketmafioso <hashed-password>
-        }
-        reverse_proxy 127.0.0.1:5088
-    }
-
     @marketmafiosoApi {
-        path /api/marketmafioso/health /api/marketmafioso/inventory /api/marketmafioso/api/inventory /api/marketmafioso/api/reports* /api/marketmafioso/acquisition*
+        path /api/marketmafioso/health /api/marketmafioso/inventory /api/marketmafioso/api/inventory /api/marketmafioso/api/reports*
     }
 
     handle @marketmafiosoApi {
@@ -136,13 +142,10 @@ dev.xivcraftarchitect.com {
     }
 
     @marketmafiosoDashboard {
-        path /api/marketmafioso /api/marketmafioso/ /api/marketmafioso/reports*
+        path /api/marketmafioso /api/marketmafioso/ /api/marketmafioso/reports* /api/marketmafioso/diagnostics
     }
 
     handle @marketmafiosoDashboard {
-        basic_auth {
-            marketmafioso <hashed-password>
-        }
         reverse_proxy 127.0.0.1:5088
     }
 }
@@ -154,13 +157,21 @@ The deployed Caddy fragment is installed as `root:root` with mode `644` so the C
 
 ## Data Storage
 
-The receiver stores JSON files under:
+The receiver stores structured inventory data in SQLite:
 
 ```text
-MarketMafioso.Server/data/reports/
+MarketMafioso.Server/data/marketmafioso.db
 ```
 
-For a VPS deployment, point the service working directory or content root at a durable deployment folder and back up that `data/reports` directory if snapshots matter.
+For the dev VPS, the database is:
+
+```text
+/srv/craftarchitect/data/marketmafioso/dev/marketmafioso.db
+```
+
+The original incoming JSON is retained only for the newest `MarketMafioso__RawJsonRetentionCount` snapshots, defaulting to `20`. Older snapshots remain available through structured dashboard and API views until `MarketMafioso__SnapshotRetentionCount`, defaulting to `500`, deletes old structured snapshots. Raw JSON routes return `410 Gone` with `raw_json_pruned` after the original payload has been pruned.
+
+On first startup after the SQLite migration, existing JSON files under `data/reports/*.json` are imported into the default local account. The import is idempotent and does not delete source JSON files.
 
 ## Testing
 

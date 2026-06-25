@@ -9,12 +9,26 @@ public sealed class WorkshopPrepQueueItem
     public int Quantity { get; set; }
 }
 
+[Serializable]
+public sealed class WorkshopFrozenQueue
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public string Name { get; set; } = string.Empty;
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+    public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
+    public List<WorkshopPrepQueueItem> Items { get; set; } = new();
+}
+
 public sealed record WorkshopProjectDefinition(
     uint WorkshopItemId,
     uint ResultItemId,
     string Name,
     ushort IconId,
-    IReadOnlyList<WorkshopMaterialRequirement> Materials);
+    IReadOnlyList<WorkshopMaterialRequirement> Materials,
+    uint CategoryId = 0,
+    uint TypeId = 0,
+    int EstimatedContributionSteps = 0,
+    int EstimatedPhaseCount = 1);
 
 public sealed record WorkshopMaterialRequirement(
     uint ItemId,
@@ -30,7 +44,11 @@ public sealed record WorkshopMaterialAvailability(
     int PlayerInventory,
     int RetainerCache,
     int Shortage,
-    IReadOnlyList<RetainerMaterialCandidate> CandidateRetainers);
+    int TotalMissing,
+    IReadOnlyList<RetainerMaterialCandidate> CandidateRetainers)
+{
+    public int StockDifferential => PlayerInventory + RetainerCache - Required;
+}
 
 public sealed record RetainerMaterialCandidate(
     ulong RetainerId,

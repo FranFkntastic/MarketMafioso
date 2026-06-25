@@ -23,10 +23,35 @@ function Sync-ManifestAssemblyVersion {
         [string]$ManifestPath
     )
 
-    $assemblyVersion = [System.Reflection.AssemblyName]::GetAssemblyName($AssemblyPath).Version.ToString()
+    $visibleVersion = Get-VisibleManifestVersion -AssemblyPath $AssemblyPath
+
     $manifest = Get-Content -LiteralPath $ManifestPath -Raw | ConvertFrom-Json
-    $manifest.AssemblyVersion = $assemblyVersion
+    $manifest.AssemblyVersion = $visibleVersion
     $manifest | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $ManifestPath -Encoding utf8
+    Write-Host "Visible manifest version: $visibleVersion"
+}
+
+function Get-VisibleManifestVersion {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$AssemblyPath
+    )
+
+    $assemblyVersion = [System.Reflection.AssemblyName]::GetAssemblyName($AssemblyPath).Version
+    $projectDir = Split-Path -Parent $PSScriptRoot
+    $repoRoot = Split-Path -Parent $projectDir
+
+    try {
+        $commitCountText = git -C $repoRoot rev-list --count HEAD
+        $commitCount = [int]$commitCountText
+        $assemblyHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $AssemblyPath).Hash
+        $revision = [Convert]::ToInt32($assemblyHash.Substring(0, 4), 16)
+
+        return "$($assemblyVersion.Major).$($assemblyVersion.Minor).$commitCount.$revision"
+    }
+    catch {
+        return $assemblyVersion.ToString()
+    }
 }
 
 function Copy-WithRetry {

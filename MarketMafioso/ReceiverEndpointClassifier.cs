@@ -28,7 +28,7 @@ public static class ReceiverEndpointClassifier
             return new ReceiverEndpointInfo(ReceiverEndpointKind.Invalid, null, null);
 
         if (IsLocalHost(uri.Host))
-            return new ReceiverEndpointInfo(ReceiverEndpointKind.Local, uri, null);
+            return new ReceiverEndpointInfo(ReceiverEndpointKind.Local, uri, DeriveDashboardBaseUrl(uri));
 
         if (uri.Host.Equals("dev.xivcraftarchitect.com", StringComparison.OrdinalIgnoreCase) ||
             uri.Host.Equals("xivcraftarchitect.com", StringComparison.OrdinalIgnoreCase))
@@ -64,6 +64,14 @@ public static class ReceiverEndpointClassifier
         return string.IsNullOrWhiteSpace(dashboardBaseUrl)
             ? null
             : $"{dashboardBaseUrl}/acquisition";
+    }
+
+    public static string? BuildDashboardUrl(string? serverUrl)
+    {
+        var endpoint = Classify(serverUrl);
+        return string.IsNullOrWhiteSpace(endpoint.DashboardBaseUrl)
+            ? null
+            : $"{endpoint.DashboardBaseUrl}/";
     }
 
     private static bool IsLocalHost(string host) =>

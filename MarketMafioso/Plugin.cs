@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using Dalamud.Game.Command;
@@ -24,6 +25,8 @@ public sealed class Plugin : IDalamudPlugin
     [PluginService] internal static IFramework Framework { get; private set; } = null!;
     [PluginService] internal static IGameGui GameGui { get; private set; } = null!;
     [PluginService] internal static IObjectTable ObjectTable { get; private set; } = null!;
+    [PluginService] internal static ITargetManager TargetManager { get; private set; } = null!;
+    [PluginService] internal static ICondition Condition { get; private set; } = null!;
 
     internal static Plugin Instance { get; private set; } = null!;
 
@@ -38,6 +41,8 @@ public sealed class Plugin : IDalamudPlugin
     private readonly WorkshopProjectCatalog workshopCatalog;
     private readonly VIWIWorkshoppaIpc viwiWorkshoppaIpc;
     private readonly WorkshopRetainerRestockService workshopRetainerRestock;
+    private readonly WorkshopAssemblyRunner workshopAssemblyRunner;
+    private readonly WorkshopMaterialManifestExportService workshopMaterialManifestExport;
     private readonly WindowSystem windowSystem = new("MarketMafioso");
     private readonly MainWindow mainWindow;
 
@@ -63,6 +68,28 @@ public sealed class Plugin : IDalamudPlugin
         workshopCatalog = new WorkshopProjectCatalog(DataManager, Log);
         viwiWorkshoppaIpc = new VIWIWorkshoppaIpc(new DalamudVIWIWorkshoppaIpcAdapter(PluginInterface, Log));
         workshopRetainerRestock = new WorkshopRetainerRestockService(Log);
+        workshopAssemblyRunner = new WorkshopAssemblyRunner(
+            Framework,
+            Log,
+            new WorkshopAssemblyUiAutomation(
+                GameGui,
+                AddonLifecycle,
+                Log,
+                ObjectTable,
+                TargetManager,
+                Condition,
+                new WorkshopExternalAutomationCoordinator(new DalamudPluginDataStore(PluginInterface), Log)),
+            Path.Combine(PluginInterface.GetPluginConfigDirectory(), "workshop-assembly-logs"),
+            entry =>
+            {
+                var result = WorkshopQueueService.DecrementActiveQueue(Configuration, entry.WorkshopItemId);
+                if (!result.Success)
+                    Log.Warning("[MarketMafioso] {Message}", result.Message);
+
+                Configuration.Save();
+            });
+        workshopMaterialManifestExport = new WorkshopMaterialManifestExportService(
+            new LuminaWorkshopMaterialCraftRecipeResolver(DataManager));
         mainWindow = new MainWindow(
             Configuration,
             reporter,
@@ -71,11 +98,13 @@ public sealed class Plugin : IDalamudPlugin
             workshopCatalog,
             viwiWorkshoppaIpc,
             workshopRetainerRestock,
-            PlayerState,
+            workshopAssemblyRunner,
+            workshopMaterialManifestExport,
             Log);
 
         windowSystem.AddWindow(mainWindow);
         windowSystem.AddWindow(mainWindow.ProjectBrowser);
+        windowSystem.AddWindow(mainWindow.FrozenQueueBrowser);
 
         CommandManager.AddHandler(CmdMain, new CommandInfo(OnCommand)
         {
@@ -122,6 +151,7 @@ public sealed class Plugin : IDalamudPlugin
 
         autoRetainerRefresh.Dispose();
         retainerCache.Dispose();
+        workshopAssemblyRunner.Dispose();
         reporter.Dispose();
 
         windowSystem.RemoveAllWindows();

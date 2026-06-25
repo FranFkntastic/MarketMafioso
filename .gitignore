@@ -9,7 +9,9 @@ obj/
 
 # IDE/editor state
 .agents/
+.docs/
 .codex/
+mockups/
 .idea/*
 !.idea/
 !.idea/runConfigurations/
@@ -29,6 +31,9 @@ dist/
 
 # Local backend data
 MarketMafioso.Server/data/
+
+# Local dev-plugin deployment target
+MarketMafioso/dev-plugin.local.json
 
 # Logs
 *.log

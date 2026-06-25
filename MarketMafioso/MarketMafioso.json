@@ -2,7 +2,7 @@
   "Author": "FranFkntastic",
   "Name": "MarketMafioso",
   "Punchline": "Small, practical FFXIV improvements under one roof.",
-  "Description": "A small integrated toolbox for practical FFXIV improvements, including inventory reporting, retainer cache export, and workshop prep. Use /mmf to open settings.",
+  "Description": "A small integrated toolbox for practical FFXIV improvements, including inventory reporting, retainer cache export, and workshop logistics. Use /mmf to open settings.",
   "InternalName": "MarketMafioso",
   "AssemblyVersion": "1.0.0.0",
   "DalamudApiLevel": 15,
@@ -20,5 +20,5 @@
   "CategoryTags": [
     "utility"
   ],
-  "Changelog": "Adds Workshop Prep queues, VIWI Workshoppa handoff, retainer material restock automation, hosted inventory receiver hardening, and source attribution notes."
+  "Changelog": "Adds Workshop Logistics queues, Craft Architect plan export, VIWI Workshoppa handoff, retainer material restock automation, hosted inventory receiver hardening, and source attribution notes."
 }

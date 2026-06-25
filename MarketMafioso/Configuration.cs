@@ -29,6 +29,8 @@ public class Configuration : IPluginConfiguration
 
     public Dictionary<ulong, CachedRetainer> RetainerCache { get; set; } = new();
     public List<WorkshopPrepQueueItem> WorkshopPrepQueue { get; set; } = new();
+    public List<WorkshopFrozenQueue> FrozenWorkshopQueues { get; set; } = new();
+    public Guid? ActiveFrozenWorkshopQueueId { get; set; }
     public List<uint> FavoriteWorkshopProjectIds { get; set; } = new();
 
     public void Save() => Plugin.PluginInterface.SavePluginConfig(this);
@@ -40,7 +42,9 @@ public class CachedRetainer
     public ulong RetainerId { get; set; }
     public string RetainerName { get; set; } = string.Empty;
     public DateTime LastUpdated { get; set; }
+    public ulong Gil { get; set; }
     public List<CachedBag> Bags { get; set; } = new();
+    public List<CachedMarketListing> MarketListings { get; set; } = new();
 }
 
 [Serializable]
@@ -55,7 +59,21 @@ public class CachedItem
 {
     public uint ItemId { get; set; }
     public string? ItemName { get; set; }
+    public string? ItemType { get; set; }
     public uint Quantity { get; set; }
     public bool IsHQ { get; set; }
     public float Condition { get; set; }
+}
+
+[Serializable]
+public class CachedMarketListing
+{
+    public uint ItemId { get; set; }
+    public string? ItemName { get; set; }
+    public string? ItemType { get; set; }
+    public uint Quantity { get; set; }
+    public bool IsHQ { get; set; }
+    public float Condition { get; set; }
+    public uint? UnitPrice { get; set; }
+    public string? ListedAt { get; set; }
 }

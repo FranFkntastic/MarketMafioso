@@ -45,8 +45,6 @@ public class InventoryScanner
         InventoryType.RetainerPage5,
         InventoryType.RetainerPage6,
         InventoryType.RetainerPage7,
-        InventoryType.RetainerGil,
-        InventoryType.RetainerMarket,
     ];
 
     public InventoryScanner(IDataManager dataManager, IPluginLog log)
@@ -134,6 +132,29 @@ public class InventoryScanner
         return mergedBags;
     }
 
+    public ulong ScanCurrentRetainerGil()
+    {
+        var quantities = ScanContainerRawQuantities(InventoryType.RetainerGil);
+        return quantities.Aggregate(0UL, (sum, quantity) => sum + quantity);
+    }
+
+    public List<RetainerMarketListing> ScanCurrentRetainerMarketListings(Configuration config)
+    {
+        return ScanContainers([InventoryType.RetainerMarket], config)
+            .SelectMany(bag => bag.Items)
+            .Select(item => new RetainerMarketListing
+            {
+                ItemId = item.ItemId,
+                ItemName = item.ItemName,
+                ItemType = item.ItemType,
+                Quantity = item.Quantity,
+                IsHQ = item.IsHQ,
+                Condition = item.Condition,
+                ListedAt = DateTime.UtcNow.ToString("o"),
+            })
+            .ToList();
+    }
+
     public string? ResolveItemName(uint itemId)
     {
         try
@@ -193,6 +214,7 @@ public class InventoryScanner
                         {
                             ItemId = itemId,
                             ItemName = itemName,
+                            ItemType = null,
                             Quantity = quantity,
                             IsHQ = false,
                             Condition = condition,
@@ -218,5 +240,41 @@ public class InventoryScanner
         }
 
         return bags;
+    }
+
+    private unsafe List<ulong> ScanContainerRawQuantities(InventoryType type)
+    {
+        var quantities = new List<ulong>();
+
+        var inventoryManager = InventoryManager.Instance();
+        if (inventoryManager == null)
+        {
+            log.Warning("[MarketMafioso] InventoryManager.Instance() returned null");
+            return quantities;
+        }
+
+        try
+        {
+            var container = inventoryManager->GetInventoryContainer(type);
+            if (container == null || !container->IsLoaded)
+                return quantities;
+
+            for (var i = 0; i < container->Size; i++)
+            {
+                var slot = container->GetInventorySlot(i);
+                if (slot == null)
+                    continue;
+
+                var quantity = checked((ulong)slot->Quantity);
+                if (quantity > 0)
+                    quantities.Add(quantity);
+            }
+        }
+        catch (Exception ex)
+        {
+            log.Error(ex, $"[MarketMafioso] Error scanning container {type}");
+        }
+
+        return quantities;
     }
 }

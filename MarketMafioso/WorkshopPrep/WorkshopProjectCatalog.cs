@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using Dalamud.Plugin.Services;
@@ -61,16 +62,23 @@ public sealed class WorkshopProjectCatalog
         CompanyCraftSequence sequence,
         IReadOnlyDictionary<uint, Item> supplyItems)
     {
-        var materials = sequence.CompanyCraftPart
+        var processRows = sequence.CompanyCraftPart
             .Where(part => part.RowId != 0)
             .SelectMany(part => part.Value.CompanyCraftProcess)
             .SelectMany(process => Enumerable.Range(0, process.Value.SupplyItem.Count)
                 .Select(index => new
                 {
                     SupplyItemId = process.Value.SupplyItem[index].RowId,
-                    Quantity = process.Value.SetQuantity[index] * process.Value.SetsRequired[index],
+                    SetQuantity = process.Value.SetQuantity[index],
+                    SetsRequired = process.Value.SetsRequired[index],
                 }))
-            .Where(x => x.SupplyItemId > 0 && x.Quantity > 0 && supplyItems.ContainsKey(x.SupplyItemId))
+            .Where(x => x.SupplyItemId > 0 &&
+                        x.SetQuantity > 0 &&
+                        x.SetsRequired > 0 &&
+                        supplyItems.ContainsKey(x.SupplyItemId))
+            .ToList();
+
+        var materials = processRows
             .Select(x =>
             {
                 var item = supplyItems[x.SupplyItemId];
@@ -78,7 +86,7 @@ public sealed class WorkshopProjectCatalog
                     item.RowId,
                     item.Name.ToString(),
                     item.Icon,
-                    x.Quantity);
+                    x.SetQuantity * x.SetsRequired);
             })
             .GroupBy(x => x.ItemId)
             .Select(x =>
@@ -89,11 +97,18 @@ public sealed class WorkshopProjectCatalog
             .OrderBy(x => x.ItemName)
             .ToList();
 
+        var phaseCount = sequence.CompanyCraftPart.Count(part => part.RowId != 0);
+        var contributionSteps = processRows.Sum(x => x.SetsRequired);
+
         return new WorkshopProjectDefinition(
             sequence.RowId,
             sequence.ResultItem.RowId,
             sequence.ResultItem.Value.Name.ToString(),
             sequence.ResultItem.Value.Icon,
-            materials);
+            materials,
+            sequence.CompanyCraftDraftCategory.RowId,
+            sequence.CompanyCraftType.RowId,
+            contributionSteps,
+            Math.Max(1, phaseCount));
     }
 }

@@ -1,0 +1,71 @@
+using System;
+using System.Collections.Generic;
+
+namespace MarketMafioso.WorkshopPrep;
+
+public enum WorkshopAssemblyRunnerState
+{
+    Idle,
+    Preflight,
+    WaitingForFabricationStation,
+    OpeningProject,
+    WaitingForMaterialRequest,
+    SubmittingMaterial,
+    WaitingForContributionLockout,
+    ConfirmingContribution,
+    AdvancingProject,
+    Paused,
+    Complete,
+    Stopped,
+    Failed,
+}
+
+internal enum WorkshopAssemblyPendingConfirmationKind
+{
+    None,
+    ProjectStart,
+    MaterialContribution,
+    PhaseAdvance,
+    FinalConstruction,
+    ProductRetrieval,
+}
+
+public sealed record WorkshopAssemblyQueueEntry(
+    uint WorkshopItemId,
+    uint ResultItemId,
+    uint CategoryId,
+    uint TypeId,
+    string ProjectName,
+    int Quantity,
+    IReadOnlyList<WorkshopMaterialRequirement> Materials,
+    int EstimatedContributionSteps,
+    int EstimatedPhaseCount);
+
+public sealed record WorkshopAssemblyPlan(
+    IReadOnlyList<WorkshopAssemblyQueueEntry> Entries,
+    IReadOnlyList<WorkshopMaterialRequirement> TotalMaterials);
+
+public sealed record WorkshopAssemblyProgress(
+    WorkshopAssemblyRunnerState State,
+    string Message,
+    string? ActiveProjectName,
+    uint? ActiveWorkshopItemId,
+    uint? ActiveMaterialItemId,
+    int CompletedProjects,
+    int TotalProjects,
+    DateTimeOffset UpdatedAt);
+
+public sealed record WorkshopAssemblyActionResult(
+    bool Success,
+    string Message,
+    bool ActionTaken = false,
+    bool RequiresWorkshopReopen = false,
+    bool IsProjectComplete = false,
+    bool IsContributionConfirmed = false,
+    uint? ActiveMaterialItemId = null,
+    uint? ActiveMaterialStepsComplete = null);
+
+public sealed record WorkshopAssemblyPreflightResult(
+    bool CanStart,
+    string Message,
+    WorkshopAssemblyPlan? Plan);

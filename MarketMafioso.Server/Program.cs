@@ -3,12 +3,24 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Primitives;
 using MarketMafioso.Server;
+using MarketMafioso.Server.Auth;
+using MarketMafioso.Server.Migration;
+using MarketMafioso.Server.Sqlite;
 
 var builder = WebApplication.CreateBuilder(args);
+builder.Services.AddSingleton<SqliteConnectionFactory>();
+builder.Services.AddSingleton<SqliteSchemaMigrator>();
+builder.Services.AddSingleton<DashboardPasswordHasher>();
+builder.Services.AddSingleton<ReceiverBootstrapper>();
+builder.Services.AddSingleton<IngestKeyAccountResolver>();
 builder.Services.AddSingleton<InventoryReportStore>();
+builder.Services.AddSingleton<JsonSnapshotImporter>();
 builder.Services.AddSingleton<MarketAcquisitionRequestStore>();
 
 var app = builder.Build();
+await app.Services.GetRequiredService<SqliteSchemaMigrator>().MigrateAsync(CancellationToken.None);
+await app.Services.GetRequiredService<ReceiverBootstrapper>().BootstrapAsync(CancellationToken.None);
+await app.Services.GetRequiredService<JsonSnapshotImporter>().ImportAsync(CancellationToken.None);
 var ingestApiKey = FirstConfigured(
     app.Configuration["MarketMafioso:IngestApiKey"],
     app.Configuration["MarketMafioso:ApiKey"]);
@@ -21,7 +33,6 @@ var requireApiKey = app.Configuration.GetValue<bool>("MarketMafioso:RequireApiKe
 var basePath = app.Configuration["MarketMafioso:BasePath"];
 var publicOrigin = app.Configuration["MarketMafioso:PublicOrigin"];
 var storageLabel = app.Configuration["MarketMafioso:StorageLabel"];
-var trustExternalDashboardAuth = app.Configuration.GetValue<bool>("MarketMafioso:TrustExternalDashboardAuth");
 
 if (requireApiKey && string.IsNullOrWhiteSpace(ingestApiKey))
     throw new InvalidOperationException("MarketMafioso:IngestApiKey is required when API key authentication is enabled.");
@@ -51,18 +62,28 @@ app.Use(async (context, next) =>
     await next(context);
 });
 
+app.UseMiddleware<DashboardBasicAuthMiddleware>();
+
 app.MapGet("/", async (
     HttpRequest request,
     InventoryReportStore store,
     string? deleted,
     string? acquisition,
+    long? characterId,
+    bool? allCharacters,
     CancellationToken token) =>
 {
-    var reports = await store.ListSummariesAsync(token);
+    var showAllCharacters = allCharacters == true;
+    var characters = await store.ListCharactersAsync(1, token);
+    var selectedCharacterId = showAllCharacters ? null : characterId ?? characters.FirstOrDefault()?.Id;
+    var reports = await store.ListSummariesAsync(1, selectedCharacterId, token);
     var csrfToken = SetCsrfCookie(request.HttpContext.Response);
     return Results.Content(
         RenderDashboard(
             reports,
+            characters,
+            selectedCharacterId,
+            showAllCharacters,
             StorageDisplayName(store.ReportDirectory, storageLabel, requireApiKey),
             deleted,
             acquisition,
@@ -76,6 +97,34 @@ app.MapGet("/health", () => Results.Ok(new
     ok = true,
     utc = DateTimeOffset.UtcNow,
 }));
+
+app.MapGet("/inventory", async (
+    HttpRequest request,
+    InventoryReportStore store,
+    long? characterId,
+    string? search,
+    string? scope,
+    CancellationToken token) =>
+{
+    var characters = await store.ListCharactersAsync(1, token);
+    var selectedCharacterId = characterId ?? characters.FirstOrDefault()?.Id;
+    var latest = await store.GetLatestAsync(1, selectedCharacterId, token);
+    var view = InventoryBrowserViewBuilder.Build(latest, search, scope);
+    return Results.Content(
+        RenderInventoryBrowser(view, characters, selectedCharacterId, request.PathBase),
+        "text/html; charset=utf-8");
+});
+
+app.MapGet("/diagnostics", async (
+    HttpRequest request,
+    InventoryReportStore store,
+    CancellationToken token) =>
+{
+    var reports = await store.ListSummariesAsync(1, characterId: null, token);
+    return Results.Content(
+        RenderDiagnostics(reports, request.PathBase),
+        "text/html; charset=utf-8");
+});
 
 app.MapPost("/inventory", SaveInventoryReport);
 app.MapPost("/api/inventory", SaveInventoryReport);
@@ -117,14 +166,14 @@ app.MapGet("/api/reports/{id}", async (string id, InventoryReportStore store, Ca
 
 app.MapGet("/reports/latest/json", async (InventoryReportStore store, CancellationToken token) =>
 {
-    var report = await store.GetLatestAsync(token);
-    return report == null ? Results.NotFound() : Results.Ok(report);
+    var report = await store.GetLatestRawJsonAsync(token);
+    return RawJsonResult(report);
 });
 
 app.MapGet("/reports/{id}/json", async (string id, InventoryReportStore store, CancellationToken token) =>
 {
-    var report = await store.GetAsync(id, token);
-    return report == null ? Results.NotFound() : Results.Ok(report);
+    var report = await store.GetRawJsonAsync(id, token);
+    return RawJsonResult(report);
 });
 
 app.MapDelete("/api/reports/{id}", async (string id, InventoryReportStore store, CancellationToken token) =>
@@ -180,8 +229,8 @@ app.Run();
 
 async Task<IResult> SaveInventoryReport(
     HttpRequest request,
-    InventoryReport report,
     InventoryReportStore store,
+    IngestKeyAccountResolver accountResolver,
     CancellationToken token)
 {
     if (requireApiKey &&
@@ -195,13 +244,52 @@ async Task<IResult> SaveInventoryReport(
             commandPickupApiKey))
         return InvalidApiKey();
 
+    string rawJson;
+    InventoryReport? report;
+    try
+    {
+        using var reader = new StreamReader(request.Body, Encoding.UTF8);
+        rawJson = await reader.ReadToEndAsync(token);
+        report = JsonSerializer.Deserialize<InventoryReport>(
+            rawJson,
+            new JsonSerializerOptions(JsonSerializerDefaults.Web));
+    }
+    catch (JsonException)
+    {
+        return Results.BadRequest(new { error = "invalid_json" });
+    }
+
+    if (report == null)
+        return Results.BadRequest(new { error = "invalid_json" });
+
     if (report.PlayerInventory.Count == 0 && report.Retainers.Count == 0)
         return Results.BadRequest(new { error = "Report must include at least one player inventory bag or retainer." });
 
     var suppliedApiKey = request.Headers["X-Api-Key"].ToString();
-    var stored = await store.SaveAsync(report, suppliedApiKey, token);
-    return Results.Created(AppUrl(request.PathBase, $"/api/reports/{stored.Id}"), stored.Summary);
+    var accountId = await accountResolver.ResolveAccountIdAsync(suppliedApiKey, token) ?? 1;
+    var stored = await store.SaveAsync(accountId, report, suppliedApiKey, rawJson, token);
+    return Results.Created(
+        AppUrl(request.PathBase, $"/api/reports/{stored.Id}"),
+        CreateInventoryReportResponse(request, publicOrigin, stored));
 }
+
+static object CreateInventoryReportResponse(HttpRequest request, string? publicOrigin, StoredInventoryReport stored) => new
+{
+    stored.Summary.Id,
+    stored.Summary.ReceivedAt,
+    stored.Summary.CharacterName,
+    stored.Summary.HomeWorld,
+    stored.Summary.ReportTimestamp,
+    stored.Summary.PlayerBagCount,
+    stored.Summary.PlayerItemStacks,
+    stored.Summary.PlayerItemQuantity,
+    stored.Summary.RetainerCount,
+    stored.Summary.RetainerItemStacks,
+    stored.Summary.RetainerItemQuantity,
+    DashboardUrl = PublicAppUrl(request, publicOrigin, "/"),
+    ReportUrl = PublicAppUrl(request, publicOrigin, $"/reports/{stored.Id}"),
+    ApiReportUrl = PublicAppUrl(request, publicOrigin, $"/api/reports/{stored.Id}"),
+};
 
 async Task<IResult> CreateAcquisitionRequest(
     HttpRequest request,
@@ -211,9 +299,6 @@ async Task<IResult> CreateAcquisitionRequest(
     try
     {
         var isBrowserForm = request.HasFormContentType;
-        if (isBrowserForm && requireApiKey && !trustExternalDashboardAuth)
-            return Results.StatusCode(StatusCodes.Status403Forbidden);
-
         if (isBrowserForm && !await IsValidDashboardPostAsync(request, publicOrigin, token))
             return Results.BadRequest(new { error = "invalid_csrf" });
 
@@ -350,6 +435,17 @@ static async Task<IResult> ApplyAcquisitionLifecycleAsync(
     {
         return Results.Conflict(new { error = ex.Message });
     }
+}
+
+static IResult RawJsonResult(RawInventoryReportJson? report)
+{
+    if (report == null)
+        return Results.NotFound();
+
+    if (report.RawJson == null)
+        return Results.Json(new { error = "raw_json_pruned" }, statusCode: StatusCodes.Status410Gone);
+
+    return Results.Text(report.RawJson, "application/json; charset=utf-8", Encoding.UTF8);
 }
 
 static ApiKeyPurpose RequiredApiKeyPurpose(HttpRequest request, bool requireApiKey)
@@ -553,6 +649,9 @@ static bool HasValidOrigin(HttpRequest request, string? publicOrigin)
 
 static string RenderDashboard(
     IReadOnlyList<ReportSummary> reports,
+    IReadOnlyList<CharacterSummary> characters,
+    long? selectedCharacterId,
+    bool allCharacters,
     string storageDisplayName,
     string? deleted,
     string? acquisition,
@@ -585,6 +684,15 @@ static string RenderDashboard(
     var latest = reports.Count == 0
         ? "Never"
         : reports.Max(r => r.ReceivedAt).ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss zzz");
+    var selectedCharacter = selectedCharacterId == null
+        ? null
+        : characters.FirstOrDefault(c => c.Id == selectedCharacterId.Value);
+    var scope = allCharacters
+        ? "All Characters"
+        : selectedCharacter == null
+            ? "Latest Character"
+            : CharacterLabel(selectedCharacter);
+    var characterFilters = RenderCharacterFilters(characters, selectedCharacterId, allCharacters, pathBase);
     var notice = string.IsNullOrWhiteSpace(deleted)
         ? string.Empty
         : $"""<p class="notice">Deleted <code>{Html(deleted)}</code>.</p>""";
@@ -640,9 +748,30 @@ static string RenderDashboard(
                     color: var(--accent-strong);
                 }
                 .toolbar { display: flex; gap: 8px; align-items: center; }
+                .filters {
+                    display: flex;
+                    gap: 8px;
+                    align-items: center;
+                    flex-wrap: wrap;
+                    margin: 14px 0 12px;
+                }
+                .filter {
+                    border: 1px solid var(--border);
+                    border-radius: 5px;
+                    background: var(--panel);
+                    color: var(--text);
+                    padding: 6px 9px;
+                    text-decoration: none;
+                    font-size: 13px;
+                }
+                .filter.active {
+                    border-color: var(--accent);
+                    background: #203028;
+                    color: var(--accent-strong);
+                }
                 .cards {
                     display: grid;
-                    grid-template-columns: repeat(2, minmax(0, 1fr));
+                    grid-template-columns: repeat(3, minmax(0, 1fr));
                     gap: 10px;
                     margin: 16px 0;
                 }
@@ -733,7 +862,7 @@ static string RenderDashboard(
                 }
                 @media (max-width: 900px) {
                     header { display: block; }
-                    .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+                    .cards { grid-template-columns: repeat(1, minmax(0, 1fr)); }
                     .form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
                     table { display: block; overflow-x: auto; }
                 }
@@ -747,8 +876,9 @@ static string RenderDashboard(
                         <p>Local control panel for received inventory snapshots.</p>
                     </div>
                     <div class="toolbar">
+                        <a class="button" href="{{Html(AppUrl(pathBase, "/inventory"))}}">Inventory</a>
+                        <a class="button" href="{{Html(AppUrl(pathBase, "/diagnostics"))}}">Diagnostics</a>
                         <a class="button" href="{{Html(AppUrl(pathBase, "/"))}}">Refresh</a>
-                        <a class="button" href="{{Html(AppUrl(pathBase, "/reports/latest/json"))}}">Latest JSON</a>
                         <form method="post" action="{{Html(AppUrl(pathBase, "/reports/delete-all"))}}" onsubmit="return confirm('Delete all stored snapshots?');">
                             <input type="hidden" name="csrf" value="{{Html(csrfToken)}}">
                             <button class="danger" type="submit">Delete All</button>
@@ -757,9 +887,11 @@ static string RenderDashboard(
                 </header>
                 {{notice}}
                 {{acquisitionNotice}}
+                {{characterFilters}}
                 <section class="cards">
                     <div class="card"><div class="label">Snapshots</div><div class="value">{{reports.Count:N0}}</div></div>
                     <div class="card"><div class="label">Latest received</div><div class="value" style="font-size: 15px;">{{Html(latest)}}</div></div>
+                    <div class="card"><div class="label">Scope</div><div class="value" style="font-size: 15px;">{{Html(scope)}}</div></div>
                 </section>
                 <div class="path">Storage: <code>{{Html(storageDisplayName)}}</code></div>
                 <h2>Market Acquisition</h2>
@@ -800,6 +932,611 @@ static string RenderDashboard(
                     <tbody>
                         {{rows}}
                     </tbody>
+                </table>
+            </main>
+        </body>
+        </html>
+        """;
+}
+
+static string RenderCharacterFilters(
+    IReadOnlyList<CharacterSummary> characters,
+    long? selectedCharacterId,
+    bool allCharacters,
+    PathString pathBase)
+{
+    if (characters.Count == 0)
+        return string.Empty;
+
+    var latestClass = !allCharacters && selectedCharacterId == characters[0].Id ? "filter active" : "filter";
+    var allClass = allCharacters ? "filter active" : "filter";
+    var links = new StringBuilder();
+    links.AppendLine($"""<a class="{latestClass}" href="{Html(AppUrl(pathBase, "/"))}">Latest Character</a>""");
+    links.AppendLine($"""<a class="{allClass}" href="{Html(AppUrl(pathBase, "/?allCharacters=true"))}">All Characters</a>""");
+
+    foreach (var character in characters)
+    {
+        var activeClass = !allCharacters && selectedCharacterId == character.Id ? "filter active" : "filter";
+        links.AppendLine($"""<a class="{activeClass}" href="{Html(AppUrl(pathBase, $"/?characterId={character.Id}"))}">{Html(CharacterLabel(character))}</a>""");
+    }
+
+    return $$"""
+        <nav class="filters" aria-label="Character filters">
+            {{links}}
+        </nav>
+        """;
+}
+
+static string CharacterLabel(CharacterSummary character) =>
+    string.IsNullOrWhiteSpace(character.HomeWorld)
+        ? character.CharacterName
+        : $"{character.CharacterName} @ {character.HomeWorld}";
+
+static string RenderInventoryBrowser(
+    InventoryBrowserView view,
+    IReadOnlyList<CharacterSummary> characters,
+    long? selectedCharacterId,
+    PathString pathBase)
+{
+    var characterOptions = RenderCharacterOptions(characters, selectedCharacterId);
+    var rows = view.Items.Count == 0
+        ? """<tr><td colspan="6" class="empty-cell">No matching items in the selected latest snapshot.</td></tr>"""
+        : string.Join(Environment.NewLine, view.Items.Select(RenderInventoryBrowserItem));
+    var scopeRows = RenderInventoryScopeList(view, selectedCharacterId, pathBase);
+    var marketListings = RenderInventoryBrowserMarketListings(view);
+    var characterTitle = string.IsNullOrWhiteSpace(view.CharacterName)
+        ? "No character selected"
+        : $"{view.CharacterName} @ {view.HomeWorld ?? "-"}";
+    var received = view.ReceivedAt == null
+        ? "No snapshots yet"
+        : view.ReceivedAt.Value.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss zzz");
+
+    return $$"""
+        <!doctype html>
+        <html lang="en">
+        <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <title>MarketMafioso Inventory Browser</title>
+            <style>
+                :root {
+                    color-scheme: dark;
+                    --bg: #101317;
+                    --panel: #171c22;
+                    --panel-2: #1d242c;
+                    --line: #2c3642;
+                    --line-soft: #242c36;
+                    --text: #e7edf3;
+                    --muted: #95a3b3;
+                    --subtle: #687789;
+                    --accent: #62b6ff;
+                    --accent-2: #7ddc9a;
+                    --chip: #25303b;
+                    --row: #141a20;
+                    --row-alt: #11171d;
+                    font-family: "Segoe UI", system-ui, sans-serif;
+                }
+                * { box-sizing: border-box; }
+                body { margin: 0; min-height: 100vh; background: var(--bg); color: var(--text); font-size: 14px; }
+                .shell { min-height: 100vh; display: grid; grid-template-rows: auto auto 1fr auto; }
+                .topbar {
+                    display: flex;
+                    align-items: center;
+                    justify-content: space-between;
+                    gap: 18px;
+                    min-height: 54px;
+                    padding: 0 22px;
+                    border-bottom: 1px solid var(--line);
+                    background: #131820;
+                }
+                .brand { display: flex; align-items: baseline; gap: 12px; min-width: 0; }
+                .brand strong { font-size: 16px; font-weight: 650; }
+                .brand span { color: var(--muted); white-space: nowrap; }
+                .tabs { display: flex; gap: 4px; }
+                .tab {
+                    display: inline-flex;
+                    align-items: center;
+                    height: 34px;
+                    padding: 0 11px;
+                    border: 1px solid transparent;
+                    border-radius: 6px;
+                    color: var(--muted);
+                    text-decoration: none;
+                }
+                .tab.active { color: var(--text); border-color: var(--line); background: var(--panel-2); }
+                .toolbar {
+                    display: grid;
+                    grid-template-columns: minmax(260px, 1fr) auto auto;
+                    gap: 10px;
+                    align-items: center;
+                    padding: 14px 22px;
+                    border-bottom: 1px solid var(--line);
+                    background: var(--panel);
+                }
+                input, select, button {
+                    height: 34px;
+                    border: 1px solid var(--line);
+                    border-radius: 6px;
+                    background: #0f141a;
+                    color: var(--text);
+                    font: inherit;
+                }
+                input { width: 100%; padding: 0 12px; }
+                select { min-width: 220px; padding: 0 10px; }
+                button { padding: 0 12px; background: var(--panel-2); }
+                .content { display: grid; grid-template-columns: 260px minmax(0, 1fr); min-height: 0; }
+                .sidebar { border-right: 1px solid var(--line); background: #12171d; padding: 14px; overflow: auto; }
+                .section-title {
+                    margin: 4px 0 8px;
+                    color: var(--muted);
+                    font-size: 12px;
+                    font-weight: 650;
+                    text-transform: uppercase;
+                    letter-spacing: .04em;
+                }
+                .list-item {
+                    display: grid;
+                    gap: 2px;
+                    padding: 9px 10px;
+                    border: 1px solid transparent;
+                    border-radius: 6px;
+                    background: transparent;
+                    color: var(--text);
+                    text-decoration: none;
+                }
+                .list-item.active { border-color: #315270; background: #182838; }
+                .list-item strong { font-size: 13px; font-weight: 600; }
+                .list-item span { color: var(--muted); font-size: 12px; }
+                .main { min-width: 0; padding: 16px 20px 22px; overflow: auto; }
+                .summary { display: grid; grid-template-columns: repeat(4, minmax(120px, 1fr)); gap: 10px; margin-bottom: 14px; }
+                .metric { border: 1px solid var(--line); border-radius: 8px; background: var(--panel); padding: 10px 12px; }
+                .metric span { display: block; color: var(--muted); font-size: 12px; margin-bottom: 5px; }
+                .metric strong { font-size: 18px; font-weight: 650; }
+                .table-wrap { border: 1px solid var(--line); border-radius: 8px; overflow: auto; background: var(--panel); }
+                table { width: 100%; border-collapse: separate; border-spacing: 0; table-layout: fixed; }
+                th, td { padding: 8px 10px; border-bottom: 1px solid var(--line-soft); border-right: 1px solid var(--line); vertical-align: middle; }
+                th:last-child, td:last-child { border-right: 0; }
+                th {
+                    padding: 0;
+                    height: 34px;
+                    color: var(--muted);
+                    background: #202832;
+                    text-align: left;
+                    font-size: 12px;
+                    font-weight: 650;
+                    text-transform: uppercase;
+                    letter-spacing: .03em;
+                }
+                td[data-resize-col] { position: relative; }
+                td[data-resize-col].separator-hover { cursor: col-resize; }
+                td[data-resize-col].separator-hover::after {
+                    content: "";
+                    position: absolute;
+                    top: 0;
+                    right: -1px;
+                    bottom: 0;
+                    width: 3px;
+                    background: var(--accent);
+                    pointer-events: none;
+                }
+                .th-inner {
+                    display: grid;
+                    grid-template-columns: minmax(0, 1fr) 28px 6px;
+                    align-items: stretch;
+                    height: 34px;
+                }
+                .th-label { display: flex; align-items: center; min-width: 0; padding: 0 9px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+                .filter-button { width: 28px; border: 0; border-left: 1px solid var(--line); background: transparent; color: var(--muted); cursor: pointer; }
+                .filter-button:hover { color: var(--accent); background: #2a3541; }
+                .resizer { cursor: col-resize; }
+                .resizer:hover { background: var(--accent); }
+                .icon-column, .icon-cell { display: none; }
+                tr.item-row:nth-child(even) td { background: var(--row-alt); }
+                tr.item-row:nth-child(odd) td { background: var(--row); }
+                .item-name { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+                .item-name strong { font-weight: 620; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+                .item-name span { color: var(--subtle); font-size: 12px; }
+                .number { text-align: right; font-variant-numeric: tabular-nums; }
+                .where { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+                .chip {
+                    display: inline-flex;
+                    align-items: center;
+                    min-height: 24px;
+                    padding: 2px 8px;
+                    border-radius: 999px;
+                    background: var(--chip);
+                    color: var(--muted);
+                    font-size: 12px;
+                    white-space: nowrap;
+                }
+                .small-button {
+                    display: inline-flex;
+                    align-items: center;
+                    height: 26px;
+                    padding: 0 9px;
+                    border: 1px solid var(--line);
+                    border-radius: 5px;
+                    background: var(--panel-2);
+                    color: var(--text);
+                    text-decoration: none;
+                    font-size: 12px;
+                }
+                .detail-row td { padding: 0; background: #0f151c; }
+                .locations { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; padding: 10px 12px 12px 10px; }
+                .location { min-width: 0; border: 1px solid var(--line-soft); border-radius: 6px; padding: 8px 9px; background: #141b23; }
+                .location strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+                .location span { color: var(--muted); font-size: 12px; }
+                .age { color: var(--accent); }
+                .market-panel { margin-top: 12px; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--panel); }
+                .panel-head { display: flex; justify-content: space-between; gap: 12px; padding: 10px 12px; border-bottom: 1px solid var(--line); background: #202832; }
+                .market-list { display: grid; gap: 0; padding: 10px; }
+                .listing { display: grid; grid-template-columns: minmax(220px, 1fr) 120px 100px 110px 130px; gap: 10px; align-items: center; padding: 8px 10px; border-bottom: 1px solid var(--line); background: #131a22; }
+                .listing:last-child { border-bottom: 0; }
+                .listing strong, .listing span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+                .listing span { color: var(--muted); font-size: 12px; }
+                .price { color: var(--accent); text-align: right; font-variant-numeric: tabular-nums; }
+                .empty-cell { color: var(--muted); text-align: center; }
+                .statusbar {
+                    display: flex;
+                    justify-content: space-between;
+                    gap: 12px;
+                    padding: 8px 22px;
+                    border-top: 1px solid var(--line);
+                    background: #11161c;
+                    color: var(--muted);
+                    font-size: 12px;
+                }
+                @media (max-width: 980px) {
+                    .toolbar { grid-template-columns: 1fr; }
+                    .content { grid-template-columns: 1fr; }
+                    .sidebar { display: none; }
+                    .summary, .locations { grid-template-columns: 1fr 1fr; }
+                }
+            </style>
+        </head>
+        <body>
+            <div class="shell">
+                <header class="topbar">
+                    <div class="brand">
+                        <strong>MarketMafioso</strong>
+                        <span>Inventory Browser</span>
+                    </div>
+                    <nav class="tabs" aria-label="Dashboard sections">
+                        <a class="tab" href="{{Html(AppUrl(pathBase, "/"))}}">Snapshots</a>
+                        <a class="tab active" href="{{Html(AppUrl(pathBase, "/inventory"))}}">Inventory</a>
+                        <a class="tab" href="{{Html(AppUrl(pathBase, "/diagnostics"))}}">Diagnostics</a>
+                    </nav>
+                </header>
+                <form id="inventorySearchForm" class="toolbar" method="get" action="{{Html(AppUrl(pathBase, "/inventory"))}}">
+                    <input id="inventorySearch" name="search" value="{{Html(view.Search)}}" aria-label="Search by item name or id" placeholder="Search by item name or id">
+                    <input type="hidden" name="scope" value="{{Html(view.Scope)}}">
+                    <select name="characterId" aria-label="Character">{{characterOptions}}</select>
+                    <button type="submit">Search</button>
+                </form>
+                <main class="content">
+                    <aside class="sidebar">
+                        <div class="section-title">Snapshot</div>
+                        <div class="list-item active">
+                            <strong>Latest Snapshot</strong>
+                            <span>{{Html(received)}}</span>
+                        </div>
+                        <div class="section-title" style="margin-top: 18px;">Scope</div>
+                        <div class="list-item active">
+                            <strong>{{Html(characterTitle)}}</strong>
+                            <span>{{view.Items.Count:N0}} matching item rows</span>
+                        </div>
+                        {{scopeRows}}
+                    </aside>
+                    <section class="main">
+                        <div class="summary">
+                            <div class="metric"><span>Matching Items</span><strong>{{view.Items.Count:N0}}</strong></div>
+                            <div class="metric"><span>Total Quantity</span><strong>{{view.TotalQuantity:N0}}</strong></div>
+                            <div class="metric"><span>HQ Quantity</span><strong>{{view.HqQuantity:N0}}</strong></div>
+                            <div class="metric"><span>Owners Matched</span><strong>{{view.OwnerCount:N0}}</strong></div>
+                        </div>
+                        <div class="table-wrap">
+                            <table>
+                                <colgroup>
+                                    <col class="icon-column" style="width:48px">
+                                    <col data-col="item" style="width:34%">
+                                    <col data-col="type" style="width:14%">
+                                    <col data-col="total" style="width:11%">
+                                    <col data-col="hq" style="width:9%">
+                                    <col data-col="where" style="width:32%">
+                                </colgroup>
+                                <thead>
+                                    <tr>
+                                        <th class="icon-column"><div class="th-inner"><span class="th-label">Icon</span><button class="filter-button" type="button" data-filter="icon">v</button><span class="resizer" data-resize="icon"></span></div></th>
+                                        <th><div class="th-inner"><span class="th-label" data-sort="item">Item</span><button class="filter-button" type="button" data-filter="item">v</button><span class="resizer" data-resize="item"></span></div></th>
+                                        <th><div class="th-inner"><span class="th-label" data-sort="type">Type</span><button class="filter-button" type="button" data-filter="type">v</button><span class="resizer" data-resize="type"></span></div></th>
+                                        <th class="number"><div class="th-inner"><span class="th-label" data-sort="total">Total</span><button class="filter-button" type="button" data-filter="total">v</button><span class="resizer" data-resize="total"></span></div></th>
+                                        <th class="number"><div class="th-inner"><span class="th-label" data-sort="hq">HQ</span><button class="filter-button" type="button" data-filter="hq">v</button><span class="resizer" data-resize="hq"></span></div></th>
+                                        <th><div class="th-inner"><span class="th-label" data-sort="where">Where</span><button class="filter-button" type="button" data-filter="where">v</button><span class="resizer" data-resize="where"></span></div></th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {{rows}}
+                                </tbody>
+                            </table>
+                        </div>
+                        <section class="market-panel">
+                            <div class="panel-head">
+                                <strong>Retainer Market Listings</strong>
+                                <span>Displayed separately from regular inventory totals</span>
+                            </div>
+                            <div class="market-list">{{marketListings}}</div>
+                        </section>
+                    </section>
+                </main>
+                <footer class="statusbar">
+                    <span>Structured retention: 500 snapshots by default.</span>
+                    <span>Item icons are reserved for a later server-side metadata cache.</span>
+                </footer>
+            </div>
+            <script>
+                const form = document.getElementById('inventorySearchForm');
+                const search = document.getElementById('inventorySearch');
+                let searchTimer;
+                search.addEventListener('input', () => {
+                    window.clearTimeout(searchTimer);
+                    searchTimer = window.setTimeout(() => form.requestSubmit(), 250);
+                });
+
+                const resizeState = { active: false, current: null, neighbor: null, startX: 0, tableWidth: 0, currentStart: 0, neighborStart: 0, direction: 1 };
+                function getColumnPercent(col) { return Number.parseFloat(col.style.width || '0') || 0; }
+                function findResizePair(columnKey) {
+                    const cols = [...document.querySelectorAll('col[data-col]')];
+                    const index = cols.findIndex(col => col.dataset.col === columnKey);
+                    if (index < 0) return null;
+                    if (index < cols.length - 1) return { current: cols[index], neighbor: cols[index + 1], direction: 1 };
+                    if (index > 0) return { current: cols[index], neighbor: cols[index - 1], direction: -1 };
+                    return null;
+                }
+                function beginProportionalResize(columnKey, event) {
+                    const pair = findResizePair(columnKey);
+                    if (!pair) return false;
+                    resizeState.active = true;
+                    resizeState.current = pair.current;
+                    resizeState.neighbor = pair.neighbor;
+                    resizeState.direction = pair.direction;
+                    resizeState.startX = event.clientX;
+                    resizeState.tableWidth = document.querySelector('table').getBoundingClientRect().width;
+                    resizeState.currentStart = getColumnPercent(pair.current);
+                    resizeState.neighborStart = getColumnPercent(pair.neighbor);
+                    document.body.style.cursor = 'col-resize';
+                    event.preventDefault();
+                    event.stopPropagation();
+                    return true;
+                }
+                function isNearRightSeparator(cell, event) {
+                    const rect = cell.getBoundingClientRect();
+                    return rect.right - event.clientX <= 7;
+                }
+                document.querySelectorAll('.resizer').forEach(handle => {
+                    handle.addEventListener('mousedown', event => beginProportionalResize(handle.dataset.resize, event));
+                });
+                document.querySelectorAll('td[data-resize-col]').forEach(cell => {
+                    cell.addEventListener('mousemove', event => cell.classList.toggle('separator-hover', isNearRightSeparator(cell, event)));
+                    cell.addEventListener('mouseleave', () => cell.classList.remove('separator-hover'));
+                    cell.addEventListener('mousedown', event => {
+                        if (isNearRightSeparator(cell, event)) beginProportionalResize(cell.dataset.resizeCol, event);
+                    });
+                });
+                window.addEventListener('mousemove', event => {
+                    if (!resizeState.active) return;
+                    const minPercent = 6;
+                    const deltaPercent = ((event.clientX - resizeState.startX) / resizeState.tableWidth) * 100 * resizeState.direction;
+                    const combined = resizeState.currentStart + resizeState.neighborStart;
+                    const current = Math.min(combined - minPercent, Math.max(minPercent, resizeState.currentStart + deltaPercent));
+                    resizeState.current.style.width = `${current.toFixed(2)}%`;
+                    resizeState.neighbor.style.width = `${(combined - current).toFixed(2)}%`;
+                });
+                window.addEventListener('mouseup', () => {
+                    resizeState.active = false;
+                    resizeState.current = null;
+                    resizeState.neighbor = null;
+                    document.body.style.cursor = '';
+                    document.querySelectorAll('.separator-hover').forEach(cell => cell.classList.remove('separator-hover'));
+                });
+            </script>
+        </body>
+        </html>
+        """;
+}
+
+static string RenderCharacterOptions(IReadOnlyList<CharacterSummary> characters, long? selectedCharacterId)
+{
+    if (characters.Count == 0)
+        return """<option value="">No characters</option>""";
+
+    var options = new StringBuilder();
+    foreach (var character in characters)
+    {
+        var selected = selectedCharacterId == character.Id ? " selected" : string.Empty;
+        options.AppendLine($"""<option value="{character.Id}"{selected}>{Html(CharacterLabel(character))}</option>""");
+    }
+
+    return options.ToString();
+}
+
+static string RenderInventoryScopeList(InventoryBrowserView view, long? selectedCharacterId, PathString pathBase)
+{
+    if (view.Scopes.Count == 0)
+        return string.Empty;
+
+    var rows = new StringBuilder();
+    rows.AppendLine("""<div class="section-title" style="margin-top: 18px;">Inventories</div>""");
+    var hasRenderedRetainerSection = false;
+
+    foreach (var scope in view.Scopes)
+    {
+        if (!scope.ScopeKey.Equals("Player Inventory", StringComparison.OrdinalIgnoreCase) &&
+            !hasRenderedRetainerSection)
+        {
+            rows.AppendLine("""<div class="section-title" style="margin-top: 18px;">Retainers</div>""");
+            hasRenderedRetainerSection = true;
+        }
+
+        var activeClass = view.Scope.Equals(scope.ScopeKey, StringComparison.OrdinalIgnoreCase)
+            ? "list-item active"
+            : "list-item";
+        var url = AppUrl(pathBase, $"/inventory?characterId={selectedCharacterId}&scope={Uri.EscapeDataString(scope.ScopeKey)}&search={Uri.EscapeDataString(view.Search)}");
+        var age = FormatAge(scope.LastUpdated);
+        var detail = scope.ScopeKey.Equals("Player Inventory", StringComparison.OrdinalIgnoreCase)
+            ? $"{scope.StackCount:N0} stacks"
+            : $"{scope.StackCount:N0} stacks / {scope.Gil:N0} gil / {scope.MarketListingCount:N0} listings";
+        rows.AppendLine($$"""
+            <a class="{{activeClass}}" href="{{Html(url)}}">
+                <strong>{{Html(scope.DisplayName)}}</strong>
+                <span>{{Html(detail)}}</span>
+                <span class="age">{{Html(age)}}</span>
+            </a>
+            """);
+    }
+
+    return rows.ToString();
+}
+
+static string RenderInventoryBrowserItem(InventoryBrowserItemView item)
+{
+    var ownerText = item.OwnerCount == 1 ? "1 owner" : $"{item.OwnerCount:N0} owners";
+    var locations = string.Join(Environment.NewLine, item.Locations.Select(RenderInventoryBrowserLocation));
+
+    return $$"""
+        <tr class="item-row">
+            <td class="icon-cell" data-resize-col="icon"></td>
+            <td data-resize-col="item">
+                <div class="item-name">
+                    <strong>{{Html(item.DisplayName)}}</strong>
+                    <span>Item {{item.ItemId}}</span>
+                </div>
+            </td>
+            <td data-resize-col="type">{{Html(string.IsNullOrWhiteSpace(item.ItemType) ? "Unknown" : item.ItemType)}}</td>
+            <td class="number" data-resize-col="total">{{item.TotalQuantity:N0}}</td>
+            <td class="number" data-resize-col="hq">{{item.HqQuantity:N0}}</td>
+            <td data-resize-col="where">
+                <div class="where">
+                    <span class="chip">{{Html(ownerText)}}</span>
+                    <span class="small-button">View</span>
+                </div>
+            </td>
+        </tr>
+        <tr class="detail-row">
+            <td colspan="5">
+                <div class="locations">
+                    {{locations}}
+                </div>
+            </td>
+        </tr>
+        """;
+}
+
+static string RenderInventoryBrowserLocation(InventoryBrowserLocationView location)
+{
+    var quantity = location.HqQuantity > 0
+        ? $"{location.Quantity:N0} ({location.HqQuantity:N0} HQ)"
+        : $"{location.Quantity:N0}";
+
+    return $$"""
+        <div class="location">
+            <strong>{{Html(location.OwnerName)}} / {{Html(location.BagName)}}: {{Html(quantity)}}</strong>
+        </div>
+        """;
+}
+
+static string RenderInventoryBrowserMarketListings(InventoryBrowserView view)
+{
+    if (view.MarketListings.Count == 0)
+        return """<div class="empty-cell">No market listings for this scope.</div>""";
+
+    return string.Join(Environment.NewLine, view.MarketListings.Select(listing =>
+    {
+        var unitPrice = listing.UnitPrice == null
+            ? "-"
+            : $"{listing.UnitPrice.Value:N0} gil each";
+        var totalPrice = listing.UnitPrice == null
+            ? "-"
+            : $"{checked((long)listing.UnitPrice.Value * listing.Quantity):N0} gil total";
+        var age = FormatAge(listing.ListedAt);
+
+        return $$"""
+            <div class="listing">
+                <strong>{{Html(listing.DisplayName)}}</strong>
+                <span>{{Html(listing.OwnerName)}}</span>
+                <span>{{listing.Quantity:N0}} listed{{(listing.HqQuantity > 0 ? $" / {listing.HqQuantity:N0} HQ" : string.Empty)}}</span>
+                <span>{{Html(string.IsNullOrWhiteSpace(listing.ItemType) ? "Unknown" : listing.ItemType)}} / Item {{listing.ItemId}}</span>
+                <span class="price">{{Html(unitPrice)}}</span>
+                <span>{{Html(totalPrice)}}</span>
+                <span class="age">{{Html(age)}}</span>
+            </div>
+            """;
+    }));
+}
+
+static string FormatAge(string? timestamp)
+{
+    if (string.IsNullOrWhiteSpace(timestamp) ||
+        !DateTimeOffset.TryParse(timestamp, out var parsed))
+    {
+        return "unknown age";
+    }
+
+    var age = DateTimeOffset.UtcNow - parsed.ToUniversalTime();
+    if (age.TotalMinutes < 1)
+        return "just now";
+    if (age.TotalHours < 1)
+        return $"{Math.Max(1, (int)age.TotalMinutes):N0}m old";
+    if (age.TotalDays < 1)
+        return $"{Math.Max(1, (int)age.TotalHours):N0}h old";
+
+    return $"{Math.Max(1, (int)age.TotalDays):N0}d old";
+}
+
+static string RenderDiagnostics(IReadOnlyList<ReportSummary> reports, PathString pathBase)
+{
+    var rows = reports.Count == 0
+        ? """<tr><td colspan="4">No snapshots found.</td></tr>"""
+        : string.Join(Environment.NewLine, reports.Take(100).Select(report => $$"""
+            <tr>
+                <td>{{Html(report.Id)}}</td>
+                <td>{{Html(report.ReceivedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss zzz"))}}</td>
+                <td>{{Html(report.CharacterName ?? "-")}}</td>
+                <td><a href="{{Html(AppUrl(pathBase, $"/reports/{report.Id}/json"))}}">Original payload</a></td>
+            </tr>
+            """));
+
+    return $$"""
+        <!doctype html>
+        <html lang="en">
+        <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <title>MarketMafioso Diagnostics</title>
+            <style>
+                :root { color-scheme: dark; --bg: #111316; --panel: #191d21; --border: #323a41; --text: #eef1f3; --muted: #aeb6bd; --accent: #bde8c8; font-family: "Segoe UI", system-ui, sans-serif; }
+                body { margin: 0; background: var(--bg); color: var(--text); }
+                main { max-width: 1120px; margin: 0 auto; padding: 28px 20px; }
+                h1 { margin: 0 0 6px; font-size: 24px; }
+                p { color: var(--muted); }
+                a { color: var(--accent); }
+                .tabs { display: flex; gap: 8px; margin: 16px 0; }
+                .button { border: 1px solid var(--border); border-radius: 5px; background: #20262b; color: var(--text); padding: 6px 10px; text-decoration: none; }
+                table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--border); }
+                th, td { padding: 10px 12px; border-bottom: 1px solid var(--border); text-align: left; }
+                th { color: var(--accent); }
+            </style>
+        </head>
+        <body>
+            <main>
+                <h1>Diagnostics</h1>
+                <p>Raw payload access and receiver troubleshooting live here instead of in the main inventory browser.</p>
+                <nav class="tabs">
+                    <a class="button" href="{{Html(AppUrl(pathBase, "/"))}}">Snapshots</a>
+                    <a class="button" href="{{Html(AppUrl(pathBase, "/inventory"))}}">Inventory</a>
+                </nav>
+                <table>
+                    <thead><tr><th>Snapshot</th><th>Received</th><th>Character</th><th>Raw Data</th></tr></thead>
+                    <tbody>{{rows}}</tbody>
                 </table>
             </main>
         </body>
@@ -993,6 +1730,35 @@ static string RenderNotFound(string id, PathString pathBase) =>
 
 static string AppUrl(PathString pathBase, string path) =>
     $"{pathBase}{path}";
+
+static string PublicAppUrl(HttpRequest request, string? publicOrigin, string path)
+{
+    var relativeUrl = AppUrl(request.PathBase, path);
+    if (!string.IsNullOrWhiteSpace(publicOrigin))
+        return $"{publicOrigin.TrimEnd('/')}{relativeUrl}";
+
+    var scheme = FirstHeaderValue(request.Headers["X-Forwarded-Proto"]) ?? request.Scheme;
+    var host = FirstHeaderValue(request.Headers["X-Forwarded-Host"]) ?? request.Host.Value;
+    if (string.IsNullOrWhiteSpace(host))
+        throw new InvalidOperationException("Cannot build public dashboard URL without a request host.");
+
+    return $"{scheme}://{host}{relativeUrl}";
+}
+
+static string? FirstHeaderValue(StringValues values)
+{
+    if (values.Count == 0)
+        return null;
+
+    var value = values[0];
+    if (string.IsNullOrWhiteSpace(value))
+        return null;
+
+    var commaIndex = value.IndexOf(',', StringComparison.Ordinal);
+    return commaIndex < 0
+        ? value.Trim()
+        : value[..commaIndex].Trim();
+}
 
 static string Html(string? value) =>
     (value ?? string.Empty)

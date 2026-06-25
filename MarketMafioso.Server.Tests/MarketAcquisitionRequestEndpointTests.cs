@@ -607,7 +607,7 @@ public sealed class MarketAcquisitionRequestEndpointTests
     }
 
     [Fact]
-    public async Task HostedDashboardFormCreateFailsClosedWithoutTrustedExternalDashboardAuth()
+    public async Task HostedDashboardFormCreateUsesAppManagedDashboardAuth()
     {
         await using var application = CreateHostedApplication();
         using var client = application.CreateClient(new WebApplicationFactoryClientOptions
@@ -621,7 +621,7 @@ public sealed class MarketAcquisitionRequestEndpointTests
             "/api/marketmafioso/acquisition/requests",
             new FormUrlEncodedContent(CreateFormFields(csrf, "untrusted-dashboard")));
 
-        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
     }
 
     private static WebApplicationFactory<Program> CreateHostedApplication(

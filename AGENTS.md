@@ -13,8 +13,8 @@ This guide is for agentic coding tools working in this repository.
 ## Product Boundaries
 - Current first-class features are Inventory Reporter and Workshop Prep.
 - Inventory Reporter owns player inventory scans, retainer cache scans, JSON preview, and HTTP export.
-- Workshop Prep owns project selection, prep queue state, material requirements, retainer availability, VIWI queue handoff, and retainer material withdrawal.
-- MarketMafioso may prepare and transfer a VIWI Workshoppa queue, but must not operate Workshoppa projects or duplicate Workshoppa execution state.
+- Workshop Prep owns project selection, prep queue state, material requirements, retainer availability, VIWI queue handoff, retainer material withdrawal, and native execution of MarketMafioso-owned prep queues.
+- MarketMafioso may execute its own Workshop Prep queue, but must not mirror VIWI Workshoppa's full module surface or treat Workshoppa state as source of truth.
 - Treat old market-board, sale-listing, and undercut experiments as out of scope unless explicitly requested.
 - Plugin control should stay GUI-first through `/mmf`; add slash commands only when requested.
 - Keep changes lean and aligned with the existing module shape.
@@ -26,10 +26,11 @@ This guide is for agentic coding tools working in this repository.
 - `MarketMafioso/RetainerCacheManager.cs`: retainer window lifecycle hooks and retainer inventory cache updates.
 - `MarketMafioso/HttpReporter.cs`: JSON report creation and HTTP POST behavior.
 - `MarketMafioso/InventoryPayload.cs`: outbound JSON payload contracts.
-- `MarketMafioso/WorkshopPrep/`: workshop project catalog, availability math, VIWI IPC, and retainer restock automation.
+- `MarketMafioso/WorkshopPrep/`: workshop project catalog, availability math, VIWI IPC, retainer restock automation, and native assembly automation.
 - `MarketMafioso/Windows/`: settings, inventory reporter, workshop prep, cache status, send action, and JSON preview UI.
-- `MarketMafioso/tools/Sync-DevPlugin.ps1`: debug artifact sync to the watched Dalamud dev-plugin folder.
-- `MarketMafioso/tools/Deploy-DevPlugin.ps1`: explicit dev-plugin deployment helper targeting `F:\Everything (HDD)\Misc\Gooseworks (Projects)\FFXIV-Development\_deployed\MarketMafioso` by default.
+- `MarketMafioso/tools/Sync-DevPlugin.ps1`: debug artifact sync to XIVLauncher dev plugin folder.
+- `MarketMafioso/tools/Deploy-DevPlugin.ps1`: explicit dev-plugin deployment and active target verifier.
+- `MarketMafioso/dev-plugin.local.json`: gitignored local config for the dedicated deployed DLL path Dalamud actually loads.
 - `MarketMafioso.Server/`: local ASP.NET inventory-report receiver and dashboard.
 - `docs/`: maintainer documentation and design notes.
 
@@ -52,8 +53,11 @@ Run from repository root (`MarketMafioso`).
 - Local backend: `dotnet run --project "MarketMafioso.Server" --urls http://localhost:8080`
 Build notes:
 - Debug build runs `Sync-DevPlugin.ps1` via `AfterTargets="Build"`.
-- Output folders: `MarketMafioso/bin/Debug` and `MarketMafioso/bin/Release`.
-- Debug sync target defaults to `F:\Everything (HDD)\Misc\Gooseworks (Projects)\FFXIV-Development\_deployed\MarketMafioso`.
+- Output folders: `MarketMafioso/bin/Debug` and `MarketMafioso/bin/Release`; these are compiler outputs only and should not be configured as long-lived Dalamud watched targets.
+- Debug sync target defaults to `%APPDATA%\XIVLauncher\devPlugins\MarketMafioso`.
+- Active dev-plugin deployment should use a dedicated folder outside every repo/worktree `bin/` directory. Set `TargetDll` in `MarketMafioso/dev-plugin.local.json` to that deployed DLL, not to `MarketMafioso/bin/Debug` or `MarketMafioso/bin/Release`.
+- Use `MarketMafioso/tools/Deploy-DevPlugin.ps1` to build, copy, and verify the active DLL. Appdata debug sync, normal build output, and `bin/Release` timestamps are not proof that the loaded plugin was refreshed.
+- See `docs/dev-plugin-deployment.md` for the current local deployment workflow.
 
 ### Lint / Format
 - Verify format (non-destructive):
@@ -83,7 +87,8 @@ Lint notes:
 - Build after code changes: `dotnet build "MarketMafioso.sln" -c Debug`.
 - Verify formatting: `dotnet format "MarketMafioso.sln" --verify-no-changes`.
 - Run relevant tests after code changes.
-- Validate runtime behavior by reloading the dev plugin when the change affects in-game behavior.
+- For plugin behavior changes, run `MarketMafioso/tools/Deploy-DevPlugin.ps1` from the intended active worktree, verify the reported source and target hashes match, then reload the plugin in game.
+- Side/client worktrees should build and test normally, but should not deploy to the active Dalamud target unless intentionally configured to own that deployment.
 
 ## Code Style Guidelines
 Follow established patterns already present in `MarketMafioso/`.
@@ -171,5 +176,5 @@ Follow established patterns already present in `MarketMafioso/`.
 - Build with `dotnet build "MarketMafioso.sln" -c Debug`.
 - Run `dotnet format "MarketMafioso.sln" --verify-no-changes`.
 - Run relevant tests.
-- If plugin behavior changes, confirm the deployed DLL at `F:\Everything (HDD)\Misc\Gooseworks (Projects)\FFXIV-Development\_deployed\MarketMafioso\MarketMafioso.dll` was refreshed.
+- If plugin behavior changes, confirm `Deploy-DevPlugin.ps1` refreshed the dedicated configured Dalamud target DLL; do not accept appdata sync or `bin/Release` timestamps as proof.
 - Report validations performed and any limitations.
