@@ -11,9 +11,9 @@ This is a self-hosted/private receiver, not a public MarketMafioso hosting servi
 - `InventoryReportStore` writes each snapshot as a `StoredInventoryReport` JSON file under `data/reports/`.
 - Dashboard listing and latest lookup enumerate all JSON files and deserialize each one.
 - The server already has a parsed view model through `InventorySnapshotView` and `InventorySnapshotViewBuilder`.
-- Hosted ingest is protected by an ingest API key.
+- Hosted plugin/server traffic is protected by a client API key.
 - Hosted dashboard pages are protected by Caddy Basic Auth.
-- Machine-read report APIs can use a separate read API key.
+- Machine-read report APIs use the same client API key.
 
 ## Product Boundaries
 
@@ -22,9 +22,9 @@ In scope:
 - SQLite-backed snapshot storage.
 - Structured inventory rows for snapshots, owners, bags, and item stacks.
 - Basic receiver-local accounts and dashboard users for this private receiver.
-- Account-scoped ingest keys.
+- Account-scoped client API keys.
 - Character-aware dashboard filtering within an account.
-- Existing ingest-key behavior for plugin uploads.
+- Existing client API key behavior for plugin uploads.
 - Raw original JSON retention for the newest 20 snapshots.
 - One-time import of existing JSON snapshot files.
 - A releasable server package that advanced users can self-host.
@@ -238,8 +238,8 @@ Rules:
 
 - Dashboard routes require an active dashboard user when `RequireDashboardAuth=true`.
 - `/health` remains public.
-- Inventory ingest still uses the ingest API key.
-- `/api/reports...` machine-read routes keep the existing read API key behavior.
+- Inventory ingest uses the client API key.
+- `/api/reports...` machine-read routes use the same client API key.
 - Dashboard users authenticate people and can access linked local accounts.
 - Accounts own snapshots.
 - No self-registration.
@@ -252,7 +252,7 @@ Bootstrap:
 - Create the `Default` account if no accounts exist.
 - Create the first admin user from those bootstrap settings.
 - Link the first admin user to the `Default` account and mark it as the user's default account.
-- Associate the configured ingest key with the `Default` account.
+- Associate the configured client API key with the `Default` account.
 - If users already exist, ignore bootstrap credentials.
 - If dashboard auth is required but no user exists and bootstrap settings are missing, fail startup with a clear error.
 
@@ -283,7 +283,7 @@ The package should be a standard `dotnet publish` output for `MarketMafioso.Serv
 
 - Running locally.
 - Running behind a reverse proxy.
-- Setting the ingest API key.
+- Setting the client API key.
 - Bootstrapping the first dashboard admin user.
 - Backing up the SQLite database.
 - Understanding that the raw original JSON is retained only for the newest configured snapshot count.
@@ -391,7 +391,7 @@ Steps:
 4. Add PBKDF2 password hashing and verification.
 5. Add startup bootstrap behavior for the default account, first admin user, and configured ingest key.
 6. Add middleware that challenges dashboard routes with `WWW-Authenticate: Basic`.
-7. Keep `/health` public, keep account-scoped ingest key auth for inventory posts, and keep read key auth for machine APIs.
+7. Keep `/health` public, keep account-scoped client API key auth for inventory posts and machine APIs.
 8. Remove Caddy `basic_auth` for the receiver dashboard routes in the deploy workflow.
 9. Add deployment secrets for dashboard bootstrap username and password.
 10. Add tests for missing credentials, valid credentials, disabled users, account links, ingest key account resolution, and protected dashboard routes.
@@ -425,7 +425,7 @@ Files:
 Steps:
 
 1. Document database location, backup path, and raw JSON retention.
-2. Document receiver-local accounts, dashboard users, account-scoped ingest keys, and character filtering.
+2. Document receiver-local accounts, dashboard users, account-scoped client API keys, and character filtering.
 3. Document dashboard account bootstrap settings.
 4. Document that the server can be self-hosted from release artifacts.
 5. Document that hosted public multi-user service is out of scope.

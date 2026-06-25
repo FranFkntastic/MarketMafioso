@@ -26,9 +26,6 @@ jobs:
       VPS_SSH_PORT: ${{ secrets.VPS_SSH_PORT }}
       MARKETMAFIOSO_DEV_INGEST_API_KEY: ${{ secrets.MARKETMAFIOSO_DEV_INGEST_API_KEY }}
       MARKETMAFIOSO_DEV_PREVIOUS_INGEST_API_KEY: ${{ secrets.MARKETMAFIOSO_DEV_PREVIOUS_INGEST_API_KEY }}
-      MARKETMAFIOSO_DEV_READ_API_KEY: ${{ secrets.MARKETMAFIOSO_DEV_READ_API_KEY }}
-      MARKETMAFIOSO_DEV_PREVIOUS_READ_API_KEY: ${{ secrets.MARKETMAFIOSO_DEV_PREVIOUS_READ_API_KEY }}
-      MARKETMAFIOSO_DEV_COMMAND_PICKUP_API_KEY: ${{ secrets.MARKETMAFIOSO_DEV_COMMAND_PICKUP_API_KEY }}
       MARKETMAFIOSO_DEV_BASIC_AUTH_PASSWORD: ${{ secrets.MARKETMAFIOSO_DEV_BASIC_AUTH_PASSWORD }}
     steps:
       - name: Checkout source
@@ -62,16 +59,12 @@ jobs:
         shell: bash
         run: |
           test -n "$MARKETMAFIOSO_DEV_INGEST_API_KEY"
-          test -n "$MARKETMAFIOSO_DEV_COMMAND_PICKUP_API_KEY"
           test -n "$MARKETMAFIOSO_DEV_BASIC_AUTH_PASSWORD"
           cat > marketmafioso-dev.env <<ENV
           ASPNETCORE_URLS=http://127.0.0.1:5088
           MarketMafioso__RequireApiKey=true
-          MarketMafioso__IngestApiKey=$MARKETMAFIOSO_DEV_INGEST_API_KEY
-          MarketMafioso__PreviousIngestApiKey=$MARKETMAFIOSO_DEV_PREVIOUS_INGEST_API_KEY
-          MarketMafioso__ReadApiKey=$MARKETMAFIOSO_DEV_READ_API_KEY
-          MarketMafioso__PreviousReadApiKey=$MARKETMAFIOSO_DEV_PREVIOUS_READ_API_KEY
-          MarketMafioso__CommandPickupApiKey=$MARKETMAFIOSO_DEV_COMMAND_PICKUP_API_KEY
+          MarketMafioso__ClientApiKey=$MARKETMAFIOSO_DEV_INGEST_API_KEY
+          MarketMafioso__PreviousClientApiKey=$MARKETMAFIOSO_DEV_PREVIOUS_INGEST_API_KEY
           MarketMafioso__BasePath=/api/marketmafioso
           MarketMafioso__PublicOrigin=https://dev.xivcraftarchitect.com
           MarketMafioso__StorageLabel=dev receiver storage
@@ -274,10 +267,10 @@ jobs:
             "https://dev.xivcraftarchitect.com/api/marketmafioso/acquisition/requests/pending?characterName=Smoke&world=Gilgamesh")"
           test "$acquisition_without_key" = "401"
 
-          acquisition_with_command_key="$(curl --silent --output /dev/null --write-out '%{http_code}' \
-            --header "X-Api-Key: $MARKETMAFIOSO_DEV_COMMAND_PICKUP_API_KEY" \
+          acquisition_with_client_key="$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            --header "X-Api-Key: $MARKETMAFIOSO_DEV_INGEST_API_KEY" \
             "https://dev.xivcraftarchitect.com/api/marketmafioso/acquisition/requests/pending?characterName=Smoke&world=Gilgamesh")"
-          test "$acquisition_with_command_key" = "200"
+          test "$acquisition_with_client_key" = "200"
 
           ingest_without_key="$(curl --silent --output /dev/null --write-out '%{http_code}' \
             --request POST \
@@ -294,19 +287,7 @@ jobs:
             "https://dev.xivcraftarchitect.com/api/marketmafioso/inventory")"
           test "$ingest_with_key" = "201"
 
-          if [[ -n "$MARKETMAFIOSO_DEV_READ_API_KEY" ]]; then
-            read_with_ingest="$(curl --silent --output /dev/null --write-out '%{http_code}' \
-              --header "X-Api-Key: $MARKETMAFIOSO_DEV_INGEST_API_KEY" \
-              "https://dev.xivcraftarchitect.com/api/marketmafioso/api/reports")"
-            test "$read_with_ingest" = "401"
-
-            read_with_read="$(curl --silent --output /dev/null --write-out '%{http_code}' \
-              --header "X-Api-Key: $MARKETMAFIOSO_DEV_READ_API_KEY" \
-              "https://dev.xivcraftarchitect.com/api/marketmafioso/api/reports")"
-            test "$read_with_read" = "200"
-          else
-            read_without_config="$(curl --silent --output /dev/null --write-out '%{http_code}' \
-              --header "X-Api-Key: $MARKETMAFIOSO_DEV_INGEST_API_KEY" \
-              "https://dev.xivcraftarchitect.com/api/marketmafioso/api/reports")"
-            test "$read_without_config" = "401"
-          fi
+          read_with_client_key="$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            --header "X-Api-Key: $MARKETMAFIOSO_DEV_INGEST_API_KEY" \
+            "https://dev.xivcraftarchitect.com/api/marketmafioso/api/reports")"
+          test "$read_with_client_key" = "200"

@@ -21,23 +21,23 @@ var app = builder.Build();
 await app.Services.GetRequiredService<SqliteSchemaMigrator>().MigrateAsync(CancellationToken.None);
 await app.Services.GetRequiredService<ReceiverBootstrapper>().BootstrapAsync(CancellationToken.None);
 await app.Services.GetRequiredService<JsonSnapshotImporter>().ImportAsync(CancellationToken.None);
-var ingestApiKey = FirstConfigured(
+var clientApiKey = FirstConfigured(
+    app.Configuration["MarketMafioso:ClientApiKey"],
+    app.Configuration["MarketMafioso:ApiKey"],
     app.Configuration["MarketMafioso:IngestApiKey"],
-    app.Configuration["MarketMafioso:ApiKey"]);
-var previousIngestApiKey = app.Configuration["MarketMafioso:PreviousIngestApiKey"];
-var readApiKey = app.Configuration["MarketMafioso:ReadApiKey"];
-var previousReadApiKey = app.Configuration["MarketMafioso:PreviousReadApiKey"];
-var commandPickupApiKey = app.Configuration["MarketMafioso:CommandPickupApiKey"];
+    app.Configuration["MarketMafioso:CommandPickupApiKey"]);
+var previousClientApiKey = FirstConfigured(
+    app.Configuration["MarketMafioso:PreviousClientApiKey"],
+    app.Configuration["MarketMafioso:PreviousIngestApiKey"],
+    app.Configuration["MarketMafioso:PreviousReadApiKey"]);
 var requireApiKey = app.Configuration.GetValue<bool>("MarketMafioso:RequireApiKey") ||
-                    !string.IsNullOrWhiteSpace(ingestApiKey);
+                    !string.IsNullOrWhiteSpace(clientApiKey);
 var basePath = app.Configuration["MarketMafioso:BasePath"];
 var publicOrigin = app.Configuration["MarketMafioso:PublicOrigin"];
 var storageLabel = app.Configuration["MarketMafioso:StorageLabel"];
 
-if (requireApiKey && string.IsNullOrWhiteSpace(ingestApiKey))
-    throw new InvalidOperationException("MarketMafioso:IngestApiKey is required when API key authentication is enabled.");
-if (requireApiKey && string.IsNullOrWhiteSpace(commandPickupApiKey))
-    throw new InvalidOperationException("MarketMafioso:CommandPickupApiKey is required when API key authentication is enabled.");
+if (requireApiKey && string.IsNullOrWhiteSpace(clientApiKey))
+    throw new InvalidOperationException("MarketMafioso:ClientApiKey is required when API key authentication is enabled.");
 
 if (!string.IsNullOrWhiteSpace(basePath))
     app.UsePathBase(basePath);
@@ -49,11 +49,8 @@ app.Use(async (context, next) =>
         !HasValidApiKey(
             context.Request,
             purpose,
-            ingestApiKey,
-            previousIngestApiKey,
-            readApiKey,
-            previousReadApiKey,
-            commandPickupApiKey))
+            clientApiKey,
+            previousClientApiKey))
     {
         await WriteUnauthorizedAsync(context);
         return;
@@ -257,11 +254,8 @@ async Task<IResult> SaveInventoryReport(
         !HasValidApiKey(
             request,
             ApiKeyPurpose.Ingest,
-            ingestApiKey,
-            previousIngestApiKey,
-            readApiKey,
-            previousReadApiKey,
-            commandPickupApiKey))
+            clientApiKey,
+            previousClientApiKey))
         return InvalidApiKey();
 
     string rawJson;
@@ -515,11 +509,8 @@ static bool IsAcquisitionPluginRoute(HttpRequest request) =>
 static bool HasValidApiKey(
     HttpRequest request,
     ApiKeyPurpose purpose,
-    string? ingestApiKey,
-    string? previousIngestApiKey,
-    string? readApiKey,
-    string? previousReadApiKey,
-    string? commandPickupApiKey)
+    string? clientApiKey,
+    string? previousClientApiKey)
 {
     var supplied = GetSingleApiKeyHeader(request.Headers["X-Api-Key"]);
     if (string.IsNullOrWhiteSpace(supplied))
@@ -527,14 +518,9 @@ static bool HasValidApiKey(
 
     return purpose switch
     {
-        ApiKeyPurpose.Ingest =>
-            MatchesConfiguredKey(supplied, ingestApiKey) ||
-            MatchesConfiguredKey(supplied, previousIngestApiKey),
-        ApiKeyPurpose.Read =>
-            MatchesConfiguredKey(supplied, readApiKey) ||
-            (!string.IsNullOrWhiteSpace(readApiKey) && MatchesConfiguredKey(supplied, previousReadApiKey)),
-        ApiKeyPurpose.CommandPickup =>
-            MatchesConfiguredKey(supplied, commandPickupApiKey),
+        ApiKeyPurpose.Ingest or ApiKeyPurpose.Read or ApiKeyPurpose.CommandPickup =>
+            MatchesConfiguredKey(supplied, clientApiKey) ||
+            MatchesConfiguredKey(supplied, previousClientApiKey),
         _ => false,
     };
 }
@@ -1406,7 +1392,7 @@ static string RenderAcquisitionDashboard(
                     </section>
                 </main>
                 <footer class="statusbar">
-                    <span>Command pickup uses a separate key from inventory ingest.</span>
+                    <span>Plugin pickup uses the same client API key as inventory ingest.</span>
                     <span>Dashboard creates intent only; the plugin validates live market rows.</span>
                 </footer>
             </div>

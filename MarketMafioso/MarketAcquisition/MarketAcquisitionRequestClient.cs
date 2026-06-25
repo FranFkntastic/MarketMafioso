@@ -20,21 +20,21 @@ public sealed class MarketAcquisitionRequestClient
 
     public async Task<IReadOnlyList<MarketAcquisitionRequestView>> FetchPendingAsync(
         string serverUrl,
-        string commandPickupApiKey,
+        string clientApiKey,
         string characterName,
         string world,
         CancellationToken cancellationToken)
     {
         var acquisitionBaseUrl = ResolveAcquisitionBaseUrl(serverUrl);
-        if (string.IsNullOrWhiteSpace(commandPickupApiKey))
-            throw new InvalidOperationException("Command pickup API key is required.");
+        if (string.IsNullOrWhiteSpace(clientApiKey))
+            throw new InvalidOperationException("Client API key is required.");
 
         var url =
             $"{acquisitionBaseUrl}/requests/pending" +
             $"?characterName={Uri.EscapeDataString(characterName)}" +
             $"&world={Uri.EscapeDataString(world)}";
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
-        request.Headers.Add("X-Api-Key", commandPickupApiKey);
+        request.Headers.Add("X-Api-Key", clientApiKey);
 
         using var response = await httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
@@ -46,7 +46,7 @@ public sealed class MarketAcquisitionRequestClient
 
     public async Task<MarketAcquisitionClaimView> ClaimAsync(
         string serverUrl,
-        string commandPickupApiKey,
+        string clientApiKey,
         string requestId,
         string characterName,
         string world,
@@ -54,8 +54,8 @@ public sealed class MarketAcquisitionRequestClient
         CancellationToken cancellationToken)
     {
         var acquisitionBaseUrl = ResolveAcquisitionBaseUrl(serverUrl);
-        if (string.IsNullOrWhiteSpace(commandPickupApiKey))
-            throw new InvalidOperationException("Command pickup API key is required.");
+        if (string.IsNullOrWhiteSpace(clientApiKey))
+            throw new InvalidOperationException("Client API key is required.");
 
         using var request = new HttpRequestMessage(
             HttpMethod.Post,
@@ -70,7 +70,7 @@ public sealed class MarketAcquisitionRequestClient
                 },
                 options: JsonOptions),
         };
-        request.Headers.Add("X-Api-Key", commandPickupApiKey);
+        request.Headers.Add("X-Api-Key", clientApiKey);
 
         using var response = await httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
@@ -82,14 +82,14 @@ public sealed class MarketAcquisitionRequestClient
 
     public Task<MarketAcquisitionRequestView> AcceptAsync(
         string serverUrl,
-        string commandPickupApiKey,
+        string clientApiKey,
         string requestId,
         string claimToken,
         string idempotencyKey,
         CancellationToken cancellationToken) =>
         PostLifecycleAsync(
             serverUrl,
-            commandPickupApiKey,
+            clientApiKey,
             requestId,
             "accept",
             new MarketAcquisitionClaimTokenRequest
@@ -101,7 +101,7 @@ public sealed class MarketAcquisitionRequestClient
 
     public Task<MarketAcquisitionRequestView> RejectAsync(
         string serverUrl,
-        string commandPickupApiKey,
+        string clientApiKey,
         string requestId,
         string claimToken,
         string idempotencyKey,
@@ -109,7 +109,7 @@ public sealed class MarketAcquisitionRequestClient
         CancellationToken cancellationToken) =>
         PostLifecycleAsync(
             serverUrl,
-            commandPickupApiKey,
+            clientApiKey,
             requestId,
             "reject",
             new MarketAcquisitionLifecycleRequest
@@ -122,7 +122,7 @@ public sealed class MarketAcquisitionRequestClient
 
     public Task<MarketAcquisitionRequestView> ReportProgressAsync(
         string serverUrl,
-        string commandPickupApiKey,
+        string clientApiKey,
         string requestId,
         string claimToken,
         string idempotencyKey,
@@ -131,7 +131,7 @@ public sealed class MarketAcquisitionRequestClient
         CancellationToken cancellationToken) =>
         PostLifecycleAsync(
             serverUrl,
-            commandPickupApiKey,
+            clientApiKey,
             requestId,
             "progress",
             new MarketAcquisitionLifecycleRequest
@@ -145,7 +145,7 @@ public sealed class MarketAcquisitionRequestClient
 
     public Task<MarketAcquisitionRequestView> CompleteAsync(
         string serverUrl,
-        string commandPickupApiKey,
+        string clientApiKey,
         string requestId,
         string claimToken,
         string idempotencyKey,
@@ -153,7 +153,7 @@ public sealed class MarketAcquisitionRequestClient
         CancellationToken cancellationToken) =>
         PostLifecycleAsync(
             serverUrl,
-            commandPickupApiKey,
+            clientApiKey,
             requestId,
             "complete",
             new MarketAcquisitionLifecycleRequest
@@ -166,7 +166,7 @@ public sealed class MarketAcquisitionRequestClient
 
     public Task<MarketAcquisitionRequestView> FailAsync(
         string serverUrl,
-        string commandPickupApiKey,
+        string clientApiKey,
         string requestId,
         string claimToken,
         string idempotencyKey,
@@ -174,7 +174,7 @@ public sealed class MarketAcquisitionRequestClient
         CancellationToken cancellationToken) =>
         PostLifecycleAsync(
             serverUrl,
-            commandPickupApiKey,
+            clientApiKey,
             requestId,
             "fail",
             new MarketAcquisitionLifecycleRequest
@@ -187,15 +187,15 @@ public sealed class MarketAcquisitionRequestClient
 
     private async Task<MarketAcquisitionRequestView> PostLifecycleAsync<TRequest>(
         string serverUrl,
-        string commandPickupApiKey,
+        string clientApiKey,
         string requestId,
         string action,
         TRequest body,
         CancellationToken cancellationToken)
     {
         var acquisitionBaseUrl = ResolveAcquisitionBaseUrl(serverUrl);
-        if (string.IsNullOrWhiteSpace(commandPickupApiKey))
-            throw new InvalidOperationException("Command pickup API key is required.");
+        if (string.IsNullOrWhiteSpace(clientApiKey))
+            throw new InvalidOperationException("Client API key is required.");
 
         using var request = new HttpRequestMessage(
             HttpMethod.Post,
@@ -203,7 +203,7 @@ public sealed class MarketAcquisitionRequestClient
         {
             Content = JsonContent.Create(body, options: JsonOptions),
         };
-        request.Headers.Add("X-Api-Key", commandPickupApiKey);
+        request.Headers.Add("X-Api-Key", clientApiKey);
 
         using var response = await httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
@@ -217,3 +217,4 @@ public sealed class MarketAcquisitionRequestClient
         ReceiverEndpointClassifier.BuildAcquisitionBaseUrl(serverUrl) ??
         throw new InvalidOperationException("The configured receiver URL cannot derive an acquisition endpoint.");
 }
+

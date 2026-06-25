@@ -21,7 +21,7 @@ The safe order is to make the server and plugin speak first, then prove read-onl
 - Recommended-world mode is the default and may consider the configured region. Full regional sweep is a separate explicit mode.
 - Every phase must be useful and testable without assuming later automation exists.
 - Any phase that touches game UI automation must have a read-only proof pass before mutation.
-- Command pickup auth is separate from inventory ingest and dashboard/read auth.
+- Plugin pickup auth uses the same client API key as inventory ingest and machine-read report routes.
 - Logical acquisition routes live under `{basePath}/acquisition/...`; hosted dev resolves that to `/api/marketmafioso/acquisition/...`.
 
 ## Phase 0: Baseline Alignment
@@ -40,7 +40,7 @@ Lock the design, docs, and UI expectations before code work starts.
 
 - Implementation starts from the branch/worktree chosen by the maintainer for the coding pass. Before Phase 1 begins, that target must be written into the task notes and verified with `git status`.
 - If the target branch already has SQLite support, reuse the existing storage/migration pattern. If it does not, Phase 1 introduces SQLite for acquisition request lifecycle data.
-- Use `MarketMafioso:CommandPickupApiKey` from the first implementation. Do not reuse inventory ingest auth for command pickup.
+- Use the plugin-wide `MarketMafioso:ClientApiKey` for command pickup, inventory ingest, and machine-read report routes. Legacy split-key settings are migration aliases only.
 - Acquisition scope is region-wide. Recommended mode filters that region down to worlds with supporting listings; all-world sweep is explicit and visually distinct.
 - Product choices that affect module behavior are not silently converted into defaults. If a later phase exposes a real product fork, pause and ask the maintainer before locking it.
 
@@ -77,12 +77,11 @@ Add a server-side request queue that can store, expire, claim, and audit dashboa
   - First implementation uses SQLite for acquisition requests, progress events, idempotency keys, and audit events.
   - Claims use a transaction that updates only `PendingPickup` rows that are not expired and not already claimed.
   - Request payload, current status, lifecycle timestamps, actor labels, claim metadata, and progress events must survive server restart.
-- Auth split:
-  - Current hosted receiver separates ingest and read keys.
-  - Command pickup gets its own key from day one: `MarketMafioso:CommandPickupApiKey`.
-  - Hosted/API-key mode fails at startup if `MarketMafioso:CommandPickupApiKey` is missing.
-  - Ingest auth cannot create, claim, or mutate acquisition requests.
-  - Dashboard/read auth cannot claim, accept, reject, progress, complete, or fail plugin lifecycle.
+- Auth:
+  - Current hosted receiver uses one client API key for plugin-to-server traffic.
+  - Command pickup uses the same configured key: `MarketMafioso:ClientApiKey`.
+  - Hosted/API-key mode fails at startup if `MarketMafioso:ClientApiKey` is missing.
+  - Dashboard Basic Auth can create browser-originated acquisition requests, but cannot claim, accept, reject, progress, complete, or fail plugin lifecycle.
 - Path/base-path behavior:
   - All new endpoints are logical `/acquisition/...` routes under the existing base path.
   - Hosted dev path must be `/api/marketmafioso/acquisition/...`.
@@ -159,8 +158,8 @@ Add a small dashboard form for creating a market acquisition request, with clear
 - A dashboard request can be created from the browser.
 - The created request appears in pending pickup endpoint until expiry.
 - Request creation fails closed when required fields are missing or invalid.
-- Request creation requires CSRF and dashboard/read auth.
-- Ingest key cannot create requests.
+- Request creation requires CSRF and dashboard auth.
+- Client API key cannot create browser-originated dashboard requests.
 
 ## Phase 3: Plugin Request Pickup UI
 
@@ -171,7 +170,7 @@ Add the in-game pickup tray without any market planning, game UI automation, or 
 ### Current Implementation Status
 
 - `/mmf` has a `Market Acquisition` tab.
-- The tab exposes the derived dashboard URL, `Open Dashboard`, a separate command pickup key field, and a one-shot `Fetch Dashboard Requests` action.
+- The tab exposes a one-shot `Fetch Dashboard Requests` action. Shared server URL, dashboard URL, and client API key settings live in the plugin-wide `Settings` tab.
 - Pickup scope uses the current character name plus the stable home-world identity already used by inventory reports.
 - Matching requests render in a compact table and can be claimed explicitly.
 - A claimed request can be accepted or rejected explicitly, and accepting only records local consent.
@@ -208,7 +207,7 @@ Add the in-game pickup tray without any market planning, game UI automation, or 
   - First pass is one-shot request plus manual retry.
   - Add timed polling only if UX needs it after Phase 3.
 - Configuration:
-  - Add command pickup key configuration separate from ingest key.
+  - Use the plugin-wide client API key from the `Settings` tab.
 - Multiple pending requests:
   - Show matching candidates and let user claim one.
   - Do not automatically claim an arbitrary request.

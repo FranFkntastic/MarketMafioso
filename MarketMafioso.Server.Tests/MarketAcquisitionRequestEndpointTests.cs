@@ -11,7 +11,7 @@ namespace MarketMafioso.Server.Tests;
 public sealed class MarketAcquisitionRequestEndpointTests
 {
     [Fact]
-    public async Task HostedMode_CreatesListsClaimsAndAcceptsAcquisitionRequestWithSeparateKeys()
+    public async Task HostedMode_CreatesListsClaimsAndAcceptsAcquisitionRequestWithClientKey()
     {
         await using var application = CreateHostedApplication();
         using var client = application.CreateClient();
@@ -20,7 +20,7 @@ public sealed class MarketAcquisitionRequestEndpointTests
             client,
             HttpMethod.Post,
             "/api/marketmafioso/acquisition/requests",
-            "read-secret",
+            "client-secret",
             CreateRequest("request-1"));
 
         Assert.Equal(HttpStatusCode.Created, created.StatusCode);
@@ -33,7 +33,7 @@ public sealed class MarketAcquisitionRequestEndpointTests
             client,
             HttpMethod.Get,
             "/api/marketmafioso/acquisition/requests/pending?characterName=Wei%20Ning&world=Gilgamesh",
-            "command-secret");
+            "client-secret");
 
         Assert.Equal(HttpStatusCode.OK, pending.StatusCode);
         using var pendingJson = JsonDocument.Parse(await pending.Content.ReadAsStringAsync());
@@ -45,7 +45,7 @@ public sealed class MarketAcquisitionRequestEndpointTests
             client,
             HttpMethod.Post,
             $"/api/marketmafioso/acquisition/requests/{requestId}/claim",
-            "command-secret",
+            "client-secret",
             new
             {
                 characterName = "Wei Ning",
@@ -63,7 +63,7 @@ public sealed class MarketAcquisitionRequestEndpointTests
             client,
             HttpMethod.Get,
             "/api/marketmafioso/acquisition/requests/pending?characterName=Wei%20Ning&world=Gilgamesh",
-            "command-secret");
+            "client-secret");
 
         Assert.Equal(HttpStatusCode.OK, pendingAfterClaim.StatusCode);
         using var pendingAfterClaimJson = JsonDocument.Parse(await pendingAfterClaim.Content.ReadAsStringAsync());
@@ -73,7 +73,7 @@ public sealed class MarketAcquisitionRequestEndpointTests
             client,
             HttpMethod.Post,
             $"/api/marketmafioso/acquisition/requests/{requestId}/accept",
-            "command-secret",
+            "client-secret",
             new
             {
                 claimToken,
@@ -86,50 +86,46 @@ public sealed class MarketAcquisitionRequestEndpointTests
     }
 
     [Fact]
-    public async Task HostedMode_AcquisitionRoutesRejectWrongKeyPurposes()
+    public async Task HostedMode_AcquisitionRoutesUseSameClientKeyAsInventory()
     {
         await using var application = CreateHostedApplication();
         using var client = application.CreateClient();
 
-        var createWithIngestKey = await SendWithKeyAsync(
+        var createWithClientKey = await SendWithKeyAsync(
             client,
             HttpMethod.Post,
             "/api/marketmafioso/acquisition/requests",
-            "ingest-secret",
-            CreateRequest("wrong-create-key"));
-        Assert.Equal(HttpStatusCode.Unauthorized, createWithIngestKey.StatusCode);
+            "client-secret",
+            CreateRequest("client-create-key"));
+        createWithClientKey.EnsureSuccessStatusCode();
 
-        var createWithReadKey = await SendWithKeyAsync(
-            client,
-            HttpMethod.Post,
-            "/api/marketmafioso/acquisition/requests",
-            "read-secret",
-            CreateRequest("right-create-key"));
-        createWithReadKey.EnsureSuccessStatusCode();
-
-        var pendingWithReadKey = await SendWithKeyAsync(
+        var pendingWithClientKey = await SendWithKeyAsync(
             client,
             HttpMethod.Get,
             "/api/marketmafioso/acquisition/requests/pending?characterName=Wei%20Ning&world=Gilgamesh",
-            "read-secret");
-        Assert.Equal(HttpStatusCode.Unauthorized, pendingWithReadKey.StatusCode);
+            "client-secret");
+        Assert.Equal(HttpStatusCode.OK, pendingWithClientKey.StatusCode);
 
-        var pendingWithIngestKey = await SendWithKeyAsync(
+        var pendingWithWrongKey = await SendWithKeyAsync(
             client,
             HttpMethod.Get,
             "/api/marketmafioso/acquisition/requests/pending?characterName=Wei%20Ning&world=Gilgamesh",
-            "ingest-secret");
-        Assert.Equal(HttpStatusCode.Unauthorized, pendingWithIngestKey.StatusCode);
+            "wrong-secret");
+        Assert.Equal(HttpStatusCode.Unauthorized, pendingWithWrongKey.StatusCode);
     }
 
     [Fact]
-    public async Task HostedMode_RequiresCommandPickupKeyAtStartup()
+    public async Task HostedMode_RequiresClientApiKeyAtStartup()
     {
         await using var application = CreateHostedApplication(
-            extraConfiguration: new KeyValuePair<string, string?>("MarketMafioso:CommandPickupApiKey", string.Empty));
+            extraConfiguration: [
+                new KeyValuePair<string, string?>("MarketMafioso:ClientApiKey", string.Empty),
+                new KeyValuePair<string, string?>("MarketMafioso:ApiKey", string.Empty),
+                new KeyValuePair<string, string?>("MarketMafioso:IngestApiKey", string.Empty),
+            ]);
 
         var ex = Assert.Throws<InvalidOperationException>(() => application.CreateClient());
-        Assert.Contains("MarketMafioso:CommandPickupApiKey", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("MarketMafioso:ClientApiKey", ex.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -142,7 +138,7 @@ public sealed class MarketAcquisitionRequestEndpointTests
             client,
             HttpMethod.Post,
             "/api/marketmafioso/acquisition/requests",
-            "read-secret",
+            "client-secret",
             CreateRequest("claim-scope"));
         created.EnsureSuccessStatusCode();
         using var createdJson = JsonDocument.Parse(await created.Content.ReadAsStringAsync());
@@ -152,7 +148,7 @@ public sealed class MarketAcquisitionRequestEndpointTests
             client,
             HttpMethod.Post,
             $"/api/marketmafioso/acquisition/requests/{requestId}/claim",
-            "command-secret",
+            "client-secret",
             new
             {
                 characterName = "Other Character",
@@ -165,7 +161,7 @@ public sealed class MarketAcquisitionRequestEndpointTests
             client,
             HttpMethod.Post,
             $"/api/marketmafioso/acquisition/requests/{requestId}/claim",
-            "command-secret",
+            "client-secret",
             new
             {
                 characterName = "Wei Ning",
@@ -178,7 +174,7 @@ public sealed class MarketAcquisitionRequestEndpointTests
             client,
             HttpMethod.Post,
             $"/api/marketmafioso/acquisition/requests/{requestId}/accept",
-            "command-secret",
+            "client-secret",
             new
             {
                 claimToken = "not-the-claim-token",
@@ -201,7 +197,7 @@ public sealed class MarketAcquisitionRequestEndpointTests
                 client,
                 HttpMethod.Post,
                 "/api/marketmafioso/acquisition/requests",
-                "read-secret",
+                "client-secret",
                 CreateRequest("persisted-request"));
             created.EnsureSuccessStatusCode();
         }
@@ -213,7 +209,7 @@ public sealed class MarketAcquisitionRequestEndpointTests
                 restartedClient,
                 HttpMethod.Get,
                 "/api/marketmafioso/acquisition/requests/pending?characterName=Wei%20Ning&world=Gilgamesh",
-                "command-secret");
+                "client-secret");
 
             Assert.Equal(HttpStatusCode.OK, pending.StatusCode);
             using var pendingJson = JsonDocument.Parse(await pending.Content.ReadAsStringAsync());
@@ -233,7 +229,7 @@ public sealed class MarketAcquisitionRequestEndpointTests
             client,
             HttpMethod.Post,
             "/api/marketmafioso/acquisition/requests",
-            "read-secret",
+            "client-secret",
             CreateRequest("same-idempotency-key"));
         first.EnsureSuccessStatusCode();
         using var firstJson = JsonDocument.Parse(await first.Content.ReadAsStringAsync());
@@ -243,7 +239,7 @@ public sealed class MarketAcquisitionRequestEndpointTests
             client,
             HttpMethod.Post,
             "/api/marketmafioso/acquisition/requests",
-            "read-secret",
+            "client-secret",
             CreateRequest("same-idempotency-key"));
         Assert.Equal(HttpStatusCode.OK, replay.StatusCode);
         using var replayJson = JsonDocument.Parse(await replay.Content.ReadAsStringAsync());
@@ -253,7 +249,7 @@ public sealed class MarketAcquisitionRequestEndpointTests
             client,
             HttpMethod.Post,
             "/api/marketmafioso/acquisition/requests",
-            "read-secret",
+            "client-secret",
             CreateRequest("same-idempotency-key", itemId: 4, itemName: "Lightning Shard"));
         Assert.Equal(HttpStatusCode.Conflict, conflict.StatusCode);
     }
@@ -268,7 +264,7 @@ public sealed class MarketAcquisitionRequestEndpointTests
             client,
             HttpMethod.Post,
             "/api/plugin/acquisition/requests",
-            "read-secret",
+            "client-secret",
             CreateRequest("wrong-base-path"));
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
@@ -285,7 +281,7 @@ public sealed class MarketAcquisitionRequestEndpointTests
             client,
             HttpMethod.Post,
             $"/api/marketmafioso/acquisition/requests/{requestId}/reject",
-            "command-secret",
+            "client-secret",
             new
             {
                 claimToken,
@@ -301,7 +297,7 @@ public sealed class MarketAcquisitionRequestEndpointTests
             client,
             HttpMethod.Post,
             $"/api/marketmafioso/acquisition/requests/{requestId}/reject",
-            "command-secret",
+            "client-secret",
             new
             {
                 claimToken,
@@ -317,7 +313,7 @@ public sealed class MarketAcquisitionRequestEndpointTests
             client,
             HttpMethod.Post,
             $"/api/marketmafioso/acquisition/requests/{requestId}/reject",
-            "command-secret",
+            "client-secret",
             new
             {
                 claimToken,
@@ -338,7 +334,7 @@ public sealed class MarketAcquisitionRequestEndpointTests
             client,
             HttpMethod.Post,
             $"/api/marketmafioso/acquisition/requests/{requestId}/accept",
-            "command-secret",
+            "client-secret",
             new
             {
                 claimToken,
@@ -350,7 +346,7 @@ public sealed class MarketAcquisitionRequestEndpointTests
             client,
             HttpMethod.Post,
             $"/api/marketmafioso/acquisition/requests/{requestId}/progress",
-            "command-secret",
+            "client-secret",
             new
             {
                 claimToken,
@@ -367,7 +363,7 @@ public sealed class MarketAcquisitionRequestEndpointTests
             client,
             HttpMethod.Post,
             $"/api/marketmafioso/acquisition/requests/{requestId}/complete",
-            "command-secret",
+            "client-secret",
             new
             {
                 claimToken,
@@ -383,7 +379,7 @@ public sealed class MarketAcquisitionRequestEndpointTests
             client,
             HttpMethod.Post,
             $"/api/marketmafioso/acquisition/requests/{requestId}/fail",
-            "command-secret",
+            "client-secret",
             new
             {
                 claimToken,
@@ -405,7 +401,7 @@ public sealed class MarketAcquisitionRequestEndpointTests
             client,
             HttpMethod.Post,
             "/api/marketmafioso/acquisition/requests",
-            "read-secret",
+            "client-secret",
             CreateRequest("expires-fast", expiresInSeconds: 1));
         created.EnsureSuccessStatusCode();
         using var createdJson = JsonDocument.Parse(await created.Content.ReadAsStringAsync());
@@ -417,7 +413,7 @@ public sealed class MarketAcquisitionRequestEndpointTests
             client,
             HttpMethod.Get,
             "/api/marketmafioso/acquisition/requests/pending?characterName=Wei%20Ning&world=Gilgamesh",
-            "command-secret");
+            "client-secret");
         pending.EnsureSuccessStatusCode();
         using var pendingJson = JsonDocument.Parse(await pending.Content.ReadAsStringAsync());
         Assert.Empty(pendingJson.RootElement.GetProperty("requests").EnumerateArray());
@@ -426,7 +422,7 @@ public sealed class MarketAcquisitionRequestEndpointTests
             client,
             HttpMethod.Post,
             $"/api/marketmafioso/acquisition/requests/{requestId}/claim",
-            "command-secret",
+            "client-secret",
             new
             {
                 characterName = "Wei Ning",
@@ -445,7 +441,7 @@ public sealed class MarketAcquisitionRequestEndpointTests
             client,
             HttpMethod.Post,
             "/api/marketmafioso/acquisition/requests",
-            "read-secret",
+            "client-secret",
             CreateRequest("concurrent-claim"));
         created.EnsureSuccessStatusCode();
         using var createdJson = JsonDocument.Parse(await created.Content.ReadAsStringAsync());
@@ -455,7 +451,7 @@ public sealed class MarketAcquisitionRequestEndpointTests
             client,
             HttpMethod.Post,
             $"/api/marketmafioso/acquisition/requests/{requestId}/claim",
-            "command-secret",
+            "client-secret",
             new
             {
                 characterName = "Wei Ning",
@@ -466,7 +462,7 @@ public sealed class MarketAcquisitionRequestEndpointTests
             client,
             HttpMethod.Post,
             $"/api/marketmafioso/acquisition/requests/{requestId}/claim",
-            "command-secret",
+            "client-secret",
             new
             {
                 characterName = "Wei Ning",
@@ -493,7 +489,7 @@ public sealed class MarketAcquisitionRequestEndpointTests
             client,
             HttpMethod.Post,
             $"/api/marketmafioso/acquisition/requests/{requestId}/accept",
-            "command-secret",
+            "client-secret",
             new
             {
                 claimToken,
@@ -515,7 +511,7 @@ public sealed class MarketAcquisitionRequestEndpointTests
             client,
             HttpMethod.Post,
             $"/api/marketmafioso/acquisition/requests/{firstRequestId}/reject",
-            "command-secret",
+            "client-secret",
             new
             {
                 claimToken = firstClaimToken,
@@ -528,7 +524,7 @@ public sealed class MarketAcquisitionRequestEndpointTests
             client,
             HttpMethod.Post,
             $"/api/marketmafioso/acquisition/requests/{secondRequestId}/reject",
-            "command-secret",
+            "client-secret",
             new
             {
                 claimToken = firstClaimToken,
@@ -555,7 +551,7 @@ public sealed class MarketAcquisitionRequestEndpointTests
             client,
             HttpMethod.Post,
             $"/api/marketmafioso/acquisition/requests/{requestId}/accept",
-            "command-secret",
+            "client-secret",
             body);
         accept.EnsureSuccessStatusCode();
 
@@ -563,7 +559,7 @@ public sealed class MarketAcquisitionRequestEndpointTests
             client,
             HttpMethod.Post,
             $"/api/marketmafioso/acquisition/requests/{requestId}/accept",
-            "command-secret",
+            "client-secret",
             body);
 
         Assert.Equal(HttpStatusCode.OK, replay.StatusCode);
@@ -610,7 +606,7 @@ public sealed class MarketAcquisitionRequestEndpointTests
             client,
             HttpMethod.Get,
             "/api/marketmafioso/acquisition/requests/pending?characterName=Wei%20Ning&world=Gilgamesh",
-            "command-secret");
+            "client-secret");
         pending.EnsureSuccessStatusCode();
         using var pendingJson = JsonDocument.Parse(await pending.Content.ReadAsStringAsync());
         Assert.Single(pendingJson.RootElement.GetProperty("requests").EnumerateArray());
@@ -654,7 +650,7 @@ public sealed class MarketAcquisitionRequestEndpointTests
             client,
             HttpMethod.Post,
             $"/api/marketmafioso/acquisition/requests/{accepted.RequestId}/accept",
-            "command-secret",
+            "client-secret",
             new
             {
                 claimToken = accepted.ClaimToken,
@@ -686,7 +682,7 @@ public sealed class MarketAcquisitionRequestEndpointTests
         Assert.Contains("Fire Shard", acquisitionPage, StringComparison.Ordinal);
         Assert.Contains("Accepted", acquisitionPage, StringComparison.Ordinal);
         Assert.Contains("Plugin status", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("Command pickup uses a separate key", acquisitionPage, StringComparison.Ordinal);
+        Assert.Contains("Plugin pickup uses the same client API key", acquisitionPage, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -732,9 +728,7 @@ public sealed class MarketAcquisitionRequestEndpointTests
         var values = new Dictionary<string, string?>
         {
             ["MarketMafioso:RequireApiKey"] = "true",
-            ["MarketMafioso:IngestApiKey"] = "ingest-secret",
-            ["MarketMafioso:ReadApiKey"] = "read-secret",
-            ["MarketMafioso:CommandPickupApiKey"] = "command-secret",
+            ["MarketMafioso:ClientApiKey"] = "client-secret",
             ["MarketMafioso:BasePath"] = "/api/marketmafioso",
         };
         foreach (var item in extraConfiguration)
@@ -800,7 +794,7 @@ public sealed class MarketAcquisitionRequestEndpointTests
             client,
             HttpMethod.Post,
             "/api/marketmafioso/acquisition/requests",
-            "read-secret",
+            "client-secret",
             CreateRequest(idempotencyKey));
         created.EnsureSuccessStatusCode();
         using var createdJson = JsonDocument.Parse(await created.Content.ReadAsStringAsync());
@@ -810,7 +804,7 @@ public sealed class MarketAcquisitionRequestEndpointTests
             client,
             HttpMethod.Post,
             $"/api/marketmafioso/acquisition/requests/{requestId}/claim",
-            "command-secret",
+            "client-secret",
             new
             {
                 characterName = "Wei Ning",
@@ -837,3 +831,4 @@ public sealed class MarketAcquisitionRequestEndpointTests
         return client.SendAsync(request);
     }
 }
+

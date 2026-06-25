@@ -6,7 +6,7 @@ namespace MarketMafioso.Tests.MarketAcquisition;
 public sealed class MarketAcquisitionRequestClientTests
 {
     [Fact]
-    public async Task FetchPendingAsync_DerivesHostedAcquisitionUrlAndAddsCommandKey()
+    public async Task FetchPendingAsync_DerivesHostedAcquisitionUrlAndAddsClientApiKey()
     {
         using var handler = new CapturingHandler("""
             {
@@ -34,7 +34,7 @@ public sealed class MarketAcquisitionRequestClientTests
 
         var requests = await client.FetchPendingAsync(
             "https://dev.xivcraftarchitect.com/api/marketmafioso/inventory",
-            "command-secret",
+            "client-secret",
             "Wei Ning",
             "Gilgamesh",
             CancellationToken.None);
@@ -46,7 +46,7 @@ public sealed class MarketAcquisitionRequestClientTests
             handler.LastRequest?.RequestUri?.OriginalString);
         Assert.NotNull(handler.LastRequest);
         Assert.True(handler.LastRequest.Headers.TryGetValues("X-Api-Key", out var values));
-        Assert.Equal("command-secret", Assert.Single(values));
+        Assert.Equal("client-secret", Assert.Single(values));
     }
 
     [Fact]
@@ -75,7 +75,7 @@ public sealed class MarketAcquisitionRequestClientTests
 
         var claimed = await client.ClaimAsync(
             "https://dev.xivcraftarchitect.com/api/marketmafioso/inventory",
-            "command-secret",
+            "client-secret",
             "request-1",
             "Wei Ning",
             "Gilgamesh",
@@ -119,7 +119,7 @@ public sealed class MarketAcquisitionRequestClientTests
 
         var accepted = await client.AcceptAsync(
             "https://dev.xivcraftarchitect.com/api/marketmafioso/inventory",
-            "command-secret",
+            "client-secret",
             "request-1",
             "claim-token",
             "accept-key",
@@ -155,3 +155,4 @@ public sealed class MarketAcquisitionRequestClientTests
         }
     }
 }
+

@@ -36,9 +36,7 @@ public class MainWindow : Window, IDisposable
     private string apiKeyBuffer = string.Empty;
     private string dashboardUrlBuffer = string.Empty;
     private string dashboardOpenStatus = "Dashboard link appears after a successful send.";
-    private string commandPickupApiKeyBuffer = string.Empty;
     private bool showApiKey = false;
-    private bool showCommandPickupApiKey = false;
     private bool showPreview = false;
     private readonly WorkshopProjectSelectionState workshopProjectSelection = new();
     private IReadOnlyList<MarketAcquisitionRequestView> pendingAcquisitionRequests = [];
@@ -107,9 +105,15 @@ public class MainWindow : Window, IDisposable
             MaximumSize = new Vector2(float.MaxValue, float.MaxValue),
         };
 
+        if (string.IsNullOrWhiteSpace(config.ApiKey) &&
+            !string.IsNullOrWhiteSpace(config.CommandPickupApiKey))
+        {
+            config.ApiKey = config.CommandPickupApiKey;
+            config.Save();
+        }
+
         urlBuffer = config.ServerUrl;
         apiKeyBuffer = config.ApiKey;
-        commandPickupApiKeyBuffer = config.CommandPickupApiKey;
         ProjectBrowser = new WorkshopProjectBrowserWindow(
             config,
             workshopCatalog,
@@ -162,6 +166,12 @@ public class MainWindow : Window, IDisposable
                 ImGui.EndTabItem();
             }
 
+            if (ImGui.BeginTabItem("Settings"))
+            {
+                DrawSettingsTab();
+                ImGui.EndTabItem();
+            }
+
             if (ImGui.BeginTabItem("Status"))
             {
                 DrawStatusTab();
@@ -198,8 +208,6 @@ public class MainWindow : Window, IDisposable
         ImGui.TextWrapped(InventoryModuleSummary);
         ImGui.Spacing();
 
-        DrawServerSection();
-        ImGui.Spacing();
         DrawInventoryOptionsSection();
         ImGui.Spacing();
         DrawBehaviourSection();
@@ -236,8 +244,6 @@ public class MainWindow : Window, IDisposable
         ImGui.TextWrapped(MarketAcquisitionModuleSummary);
         ImGui.Spacing();
 
-        DrawMarketAcquisitionEndpointSection();
-        ImGui.Spacing();
         DrawMarketAcquisitionPickupSection();
         ImGui.Spacing();
         DrawClaimedAcquisitionRequest();
@@ -245,36 +251,6 @@ public class MainWindow : Window, IDisposable
         DrawMarketAcquisitionPlan();
         ImGui.Spacing();
         DrawMarketBoardProbe();
-    }
-
-    private void DrawMarketAcquisitionEndpointSection()
-    {
-        ImGuiUi.SectionHeader("Dashboard Pickup", ColHeader);
-
-        var dashboardUrl = ReceiverEndpointClassifier.BuildDashboardBaseUrl(config.ServerUrl) ?? string.Empty;
-        ImGui.Text("Dashboard URL:");
-        ImGui.SetNextItemWidth(ImGui.GetContentRegionAvail().X - 140);
-        ImGui.InputText("##marketAcquisitionDashboardUrl", ref dashboardUrl, 512, ImGuiInputTextFlags.ReadOnly);
-        ImGui.SameLine();
-        if (ImGuiUi.Button("Open Dashboard", new Vector2(130, 0), !string.IsNullOrWhiteSpace(dashboardUrl)))
-            OpenExternalUrl(dashboardUrl);
-
-        ImGui.Text("Command Pickup Key:");
-        var keyWidth = ImGui.GetContentRegionAvail().X - 70;
-        ImGui.SetNextItemWidth(keyWidth);
-        var flags = showCommandPickupApiKey ? ImGuiInputTextFlags.None : ImGuiInputTextFlags.Password;
-        if (ImGui.InputText("##commandPickupApiKey", ref commandPickupApiKeyBuffer, 256, flags))
-        {
-            config.CommandPickupApiKey = commandPickupApiKeyBuffer;
-            config.Save();
-        }
-
-        ImGui.SameLine();
-        if (ImGui.Button(showCommandPickupApiKey ? "Hide##commandPickupKey" : "Show##commandPickupKey", new Vector2(60, 0)))
-            showCommandPickupApiKey = !showCommandPickupApiKey;
-
-        if (string.IsNullOrWhiteSpace(commandPickupApiKeyBuffer))
-            ImGui.TextColored(ColError, "Command pickup key is required to fetch dashboard requests.");
     }
 
     private void DrawMarketAcquisitionPickupSection()
@@ -287,7 +263,7 @@ public class MainWindow : Window, IDisposable
             ImGui.TextColored(ColError, "Character scope unavailable. Log into a character before fetching requests.");
 
         var canFetch = !acquisitionRequestBusy &&
-                       !string.IsNullOrWhiteSpace(commandPickupApiKeyBuffer) &&
+                       !string.IsNullOrWhiteSpace(apiKeyBuffer) &&
                        TryGetAcquisitionScope(out _, out _);
         if (ImGuiUi.Button("Fetch Dashboard Requests", canFetch))
             _ = FetchDashboardRequestsAsync();
@@ -297,7 +273,11 @@ public class MainWindow : Window, IDisposable
 
         if (pendingAcquisitionRequests.Count == 0)
         {
-            ImGui.TextColored(ColMuted, "No pending dashboard requests are loaded.");
+            ImGui.TextColored(
+                string.IsNullOrWhiteSpace(apiKeyBuffer) ? ColError : ColMuted,
+                string.IsNullOrWhiteSpace(apiKeyBuffer)
+                    ? "Set the client API key in Settings before fetching dashboard requests."
+                    : "No pending dashboard requests are loaded.");
             return;
         }
 
@@ -514,7 +494,7 @@ public class MainWindow : Window, IDisposable
 
             pendingAcquisitionRequests = await acquisitionClient.FetchPendingAsync(
                 config.ServerUrl,
-                config.CommandPickupApiKey,
+                config.ApiKey,
                 characterName,
                 world,
                 token).ConfigureAwait(false);
@@ -534,7 +514,7 @@ public class MainWindow : Window, IDisposable
 
             claimedAcquisitionRequest = await acquisitionClient.ClaimAsync(
                 config.ServerUrl,
-                config.CommandPickupApiKey,
+                config.ApiKey,
                 requestId,
                 characterName,
                 world,
@@ -563,7 +543,7 @@ public class MainWindow : Window, IDisposable
 
             var accepted = await acquisitionClient.AcceptAsync(
                 config.ServerUrl,
-                config.CommandPickupApiKey,
+                config.ApiKey,
                 claimed.Id,
                 claimed.ClaimToken,
                 claimedAcceptIdempotencyKey,
@@ -587,7 +567,7 @@ public class MainWindow : Window, IDisposable
 
             var rejected = await acquisitionClient.RejectAsync(
                 config.ServerUrl,
-                config.CommandPickupApiKey,
+                config.ApiKey,
                 claimed.Id,
                 claimed.ClaimToken,
                 claimedRejectIdempotencyKey,
@@ -1355,6 +1335,16 @@ public class MainWindow : Window, IDisposable
         DrawRetainerCacheSection();
     }
 
+    private void DrawSettingsTab()
+    {
+        ImGui.Spacing();
+        ImGui.TextColored(ColHeader, "Plugin Settings");
+        ImGui.TextWrapped("Shared MarketMafioso client/server settings used by Inventory Reporter and Market Acquisition.");
+        ImGui.Spacing();
+
+        DrawServerSection();
+    }
+
     private void DrawModuleSummary(string name, string state, string description)
     {
         ImGui.BulletText(name);
@@ -1366,7 +1356,7 @@ public class MainWindow : Window, IDisposable
 
     private void DrawServerSection()
     {
-        ImGui.TextColored(ColHeader, "Export Endpoint");
+        ImGui.TextColored(ColHeader, "Server Connection");
         ImGui.Separator();
 
         ImGui.Text("Server URL:");
@@ -1390,8 +1380,8 @@ public class MainWindow : Window, IDisposable
         var endpoint = ReceiverEndpointClassifier.Classify(urlBuffer);
         var requiresApiKey = endpoint.RequiresApiKey;
         ImGui.Text(requiresApiKey
-            ? "API Key (required for this endpoint):"
-            : "API Key (optional - sent as X-Api-Key header):");
+            ? "Client API Key (required for this endpoint):"
+            : "Client API Key (optional - sent as X-Api-Key header):");
         var keyWidth = ImGui.GetContentRegionAvail().X - 70;
         ImGui.SetNextItemWidth(keyWidth);
         var flags = showApiKey ? ImGuiInputTextFlags.None : ImGuiInputTextFlags.Password;
@@ -1407,9 +1397,9 @@ public class MainWindow : Window, IDisposable
         if (endpoint.Kind == ReceiverEndpointKind.Invalid)
             ImGui.TextColored(ColError, "Enter a valid HTTP or HTTPS receiver URL.");
         else if (requiresApiKey && string.IsNullOrWhiteSpace(apiKeyBuffer))
-            ImGui.TextColored(ColError, "This endpoint requires an API key before reports can be sent.");
+            ImGui.TextColored(ColError, "This endpoint requires a client API key before plugin requests can be sent.");
         else if (endpoint.Kind == ReceiverEndpointKind.CustomRemote)
-            ImGui.TextColored(ColMuted, "Custom remote endpoint. API key is required by default.");
+            ImGui.TextColored(ColMuted, "Custom remote endpoint. Client API key is required by default.");
 
         ImGui.Spacing();
         DrawDashboardOpenSection();

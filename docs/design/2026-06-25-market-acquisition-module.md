@@ -344,20 +344,18 @@ Rules:
 
 - All hosted traffic uses HTTPS.
 - Local loopback HTTP is allowed only for local development.
-- Market Acquisition uses three separate capabilities:
-  - Dashboard/read auth may view the dashboard and create browser-originated acquisition requests.
-  - Inventory ingest auth may submit inventory reports only and cannot create, claim, or mutate acquisition requests.
-  - Command pickup auth is used by the plugin for pending, claim, accept, reject, progress, complete, and fail endpoints.
-- Command pickup auth uses a separate configured secret from the inventory ingest key: `MarketMafioso:CommandPickupApiKey`.
-- Hosted/API-key mode fails at startup if `MarketMafioso:CommandPickupApiKey` is missing.
+- Market Acquisition uses two separate capabilities:
+  - Dashboard Basic Auth may view the dashboard and create browser-originated acquisition requests.
+  - Client API key auth is used by the plugin for inventory ingest, machine-read report routes, pending pickup, claim, accept, reject, progress, complete, and fail endpoints.
+- Client API key auth uses the plugin-wide configured secret: `MarketMafioso:ClientApiKey`.
+- Hosted/API-key mode fails at startup if `MarketMafioso:ClientApiKey` is missing.
 - Dashboard session/auth can create requests, but cannot claim or execute them.
 - Endpoint authorization is fixed:
-  - `POST /acquisition/requests` as a non-browser JSON lifecycle endpoint requires dashboard/read auth.
+  - `POST /acquisition/requests` as a non-browser JSON lifecycle endpoint requires dashboard auth.
   - Browser-originated request creation requires dashboard/read auth and CSRF. Hosted deployments must set `MarketMafioso:TrustExternalDashboardAuth=true` only when the dashboard is protected by an external layer such as Caddy Basic Auth.
   - Dashboard pre-claim cancellation requires dashboard/read auth and CSRF, and only works while the request is `PendingPickup`.
-  - `GET /acquisition/requests/pending`, `POST /acquisition/requests/{id}/claim`, and all plugin lifecycle mutation routes require command pickup auth.
-  - Inventory ingest auth is valid only for inventory report submission and is rejected by every acquisition route.
-- Browser-originated mutation routes require the server's CSRF token pattern. API keys and command pickup secrets are not CSRF tokens and must not be embedded in dashboard forms or JavaScript.
+  - `GET /acquisition/requests/pending`, `POST /acquisition/requests/{id}/claim`, and all plugin lifecycle mutation routes require client API key auth.
+- Browser-originated mutation routes require the server's CSRF token pattern. API keys are not CSRF tokens and must not be embedded in dashboard forms or JavaScript.
 - Pickup requests are scoped to account, character, and world.
 - Requests expire quickly, preferably 30-90 seconds for `PendingPickup`.
 - Commands are single-claim and single-use.
@@ -504,7 +502,7 @@ Recommended sections:
 - `Open Dashboard`.
 - `Fetch Dashboard Requests`.
 - Status line: idle, fetching, request found, expired, auth failed, no requests.
-- `Fetch Dashboard Requests` is enabled only when the configured receiver URL can produce a dashboard URL, the acquisition pickup endpoint can be derived, and the command pickup secret is present. Invalid URL, missing secret, and unsupported endpoint must show separate status text.
+- `Fetch Dashboard Requests` is enabled only when the configured receiver URL can produce a dashboard URL, the acquisition pickup endpoint can be derived, and the client API key is present. Invalid URL, missing secret, and unsupported endpoint must show separate status text.
 - If multiple pending requests match the current character/world, show them in a compact table and let the user claim one. Do not automatically claim an arbitrary request unless the server returns exactly one candidate and the user has enabled that behavior later.
 
 ### Pending Request

@@ -26,7 +26,7 @@ The plugin settings window has endpoint preset buttons:
 
 The URL remains editable. The plugin does not change existing saved URLs automatically.
 
-Hosted receivers require an ingest API key. Set the same value in the plugin's `API Key` field and in `MarketMafioso__IngestApiKey` on the server. Do not use the optional read API key in the plugin.
+Hosted receivers require a client API key for plugin-to-server traffic. Set the same value in the plugin-wide `Settings` tab's `Client API Key` field and in `MarketMafioso__ClientApiKey` on the server. This one key is used for inventory ingest, machine-read report routes, and Market Acquisition pickup/lifecycle routes.
 
 ## Server Configuration
 
@@ -35,10 +35,8 @@ Run the hosted receiver behind Caddy with these environment variables:
 ```text
 ASPNETCORE_URLS=http://127.0.0.1:5088
 MarketMafioso__RequireApiKey=true
-MarketMafioso__IngestApiKey=<secret>
-MarketMafioso__PreviousIngestApiKey=<optional-previous-secret>
-MarketMafioso__ReadApiKey=<optional-read-secret>
-MarketMafioso__PreviousReadApiKey=<optional-previous-read-secret>
+MarketMafioso__ClientApiKey=<secret>
+MarketMafioso__PreviousClientApiKey=<optional-previous-secret>
 MarketMafioso__BasePath=/api/marketmafioso
 MarketMafioso__PublicOrigin=https://dev.xivcraftarchitect.com
 MarketMafioso__StorageLabel=dev receiver storage
@@ -50,7 +48,7 @@ MarketMafioso__DashboardBootstrapUsername=marketmafioso
 MarketMafioso__DashboardBootstrapPassword=<dashboard-password>
 ```
 
-`/health` remains public for uptime checks. Inventory ingestion requires the ingest key. `/api/reports...` is optional machine-read API surface: it requires the read key when configured and fails closed when no read key is configured. Browser dashboard routes use app-managed Basic Auth backed by the receiver SQLite database.
+`/health` remains public for uptime checks. Inventory ingestion, `/api/reports...` machine-read routes, and Market Acquisition plugin pickup/lifecycle routes require the client key. Browser dashboard routes use app-managed Basic Auth backed by the receiver SQLite database.
 
 The dev dashboard username is fixed to `marketmafioso`; the password is stored in GitHub Actions as `MARKETMAFIOSO_DEV_BASIC_AUTH_PASSWORD`. Bootstrap credentials create the first local dashboard admin user only when no dashboard users exist.
 
@@ -107,15 +105,15 @@ It classifies committed, staged, unstaged, and untracked paths. Server paths run
 
 ## First-Time Setup
 
-Generate a dev ingest key and dashboard password outside the repo:
+Generate a dev client API key and dashboard password outside the repo:
 
 ```powershell
 $bytes = New-Object byte[] 32
 $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
 try { $rng.GetBytes($bytes) } finally { $rng.Dispose() }
-$ingestKey = [Convert]::ToBase64String($bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_')
-Set-Content -LiteralPath "$env:USERPROFILE\.ssh\marketmafioso_dev_api_key.txt" -Value $ingestKey -NoNewline
-gh secret set MARKETMAFIOSO_DEV_INGEST_API_KEY --repo FranFkntastic/MarketMafioso --body $ingestKey
+$clientKey = [Convert]::ToBase64String($bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+Set-Content -LiteralPath "$env:USERPROFILE\.ssh\marketmafioso_dev_api_key.txt" -Value $clientKey -NoNewline
+gh secret set MARKETMAFIOSO_DEV_INGEST_API_KEY --repo FranFkntastic/MarketMafioso --body $clientKey
 
 $bytes = New-Object byte[] 32
 $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
@@ -125,7 +123,7 @@ Set-Content -LiteralPath "$env:USERPROFILE\.ssh\marketmafioso_dashboard_password
 gh secret set MARKETMAFIOSO_DEV_BASIC_AUTH_PASSWORD --repo FranFkntastic/MarketMafioso --body $dashboardPassword
 ```
 
-Paste only the ingest key into the plugin's `API Key` field.
+Paste only the client API key into the plugin-wide `Settings` tab's `Client API Key` field.
 
 ## Caddy Shape
 

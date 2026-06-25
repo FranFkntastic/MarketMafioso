@@ -46,11 +46,15 @@ public sealed class ReceiverBootstrapper
             }
         }
 
-        var ingestKey = configuration["MarketMafioso:IngestApiKey"];
-        if (!string.IsNullOrWhiteSpace(ingestKey) &&
+        var clientKey = FirstConfigured(
+            configuration["MarketMafioso:ClientApiKey"],
+            configuration["MarketMafioso:ApiKey"],
+            configuration["MarketMafioso:IngestApiKey"],
+            configuration["MarketMafioso:CommandPickupApiKey"]);
+        if (!string.IsNullOrWhiteSpace(clientKey) &&
             await CountAsync(connection, transaction, "ingest_keys", cancellationToken) == 0)
         {
-            await CreateIngestKeyAsync(connection, transaction, accountId, ingestKey, cancellationToken);
+            await CreateIngestKeyAsync(connection, transaction, accountId, clientKey, cancellationToken);
         }
 
         await transaction.CommitAsync(cancellationToken);
@@ -164,4 +168,7 @@ public sealed class ReceiverBootstrapper
         var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(ingestKey));
         return Convert.ToHexString(bytes);
     }
+
+    private static string? FirstConfigured(params string?[] values) =>
+        values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
 }
