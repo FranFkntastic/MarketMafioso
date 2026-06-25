@@ -672,6 +672,17 @@ public sealed class MarketAcquisitionRequestEndpointTests
         Assert.Contains("Stage Request", acquisitionPage, StringComparison.Ordinal);
         Assert.Contains("Request Queue", acquisitionPage, StringComparison.Ordinal);
         Assert.Contains("Filter by item, world, status", acquisitionPage, StringComparison.Ordinal);
+        Assert.Contains("class=\"acquisition-main\"", acquisitionPage, StringComparison.Ordinal);
+        Assert.Contains("class=\"pane request-pane\"", acquisitionPage, StringComparison.Ordinal);
+        Assert.Contains("class=\"pane queue-pane\"", acquisitionPage, StringComparison.Ordinal);
+        Assert.Contains("class=\"section-title\">Item</", acquisitionPage, StringComparison.Ordinal);
+        Assert.Contains("Item name or ID", acquisitionPage, StringComparison.Ordinal);
+        Assert.Contains("Plugin pickup required", acquisitionPage, StringComparison.Ordinal);
+        Assert.Contains("No background polling", acquisitionPage, StringComparison.Ordinal);
+        Assert.Contains("All statuses", acquisitionPage, StringComparison.Ordinal);
+        Assert.Contains("Refresh", acquisitionPage, StringComparison.Ordinal);
+        Assert.Contains("class=\"detail\"", acquisitionPage, StringComparison.Ordinal);
+        Assert.Contains("class=\"statusbar\"", acquisitionPage, StringComparison.Ordinal);
         Assert.Contains("Fire Shard", acquisitionPage, StringComparison.Ordinal);
         Assert.Contains("Accepted", acquisitionPage, StringComparison.Ordinal);
         Assert.Contains("Plugin status", acquisitionPage, StringComparison.Ordinal);

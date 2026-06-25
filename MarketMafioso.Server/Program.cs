@@ -969,7 +969,6 @@ static string RenderAcquisitionDashboard(
     PathString pathBase,
     string csrfToken)
 {
-    var characterOptions = RenderCharacterOptions(characters, selectedCharacterId);
     var acquisitionNotice = string.IsNullOrWhiteSpace(acquisition)
         ? string.Empty
         : $"""<p class="notice">Created request <code>{Html(acquisition)}</code>. Open <code>/mmf</code> in-game, select <code>Market Acquisition</code>, and fetch dashboard requests.</p>""";
@@ -991,6 +990,11 @@ static string RenderAcquisitionDashboard(
         ? "-"
         : FormatAcquisitionExpiry(latestRequest);
     var queueRows = RenderAcquisitionQueueRows(acquisitionRequests);
+    var characterHeader = RenderAcquisitionCharacterHeader(characters, selectedCharacterId, selectedCharacter, pathBase);
+    var activeSummary = $"{activeCount:N0} active / {acquisitionRequests.Count:N0} recent";
+    var selectedRequestName = latestRequest == null
+        ? "None selected"
+        : FormatAcquisitionItem(latestRequest);
 
     return $$"""
         <!doctype html>
@@ -1002,36 +1006,45 @@ static string RenderAcquisitionDashboard(
             <style>
                 :root {
                     color-scheme: dark;
-                    --bg: #0f1419;
-                    --panel: #151b21;
-                    --panel-2: #1c242d;
-                    --panel-3: #111820;
-                    --line: #2b3744;
-                    --line-strong: #3b4a5b;
-                    --text: #e7edf3;
-                    --muted: #92a2b3;
-                    --faint: #657386;
+                    --bg: #101317;
+                    --bar: #131820;
+                    --panel: #171d23;
+                    --panel-2: #1d252d;
+                    --panel-3: #222c36;
+                    --line: #2e3945;
+                    --line-soft: #25303a;
+                    --text: #e9eef4;
+                    --muted: #9aa8b7;
+                    --subtle: #718194;
                     --accent: #62b6ff;
-                    --good: #76d188;
-                    --warn: #f0c36a;
-                    --bad: #ff7d7d;
+                    --chip: #263442;
                     font-family: "Segoe UI", system-ui, sans-serif;
                 }
                 * { box-sizing: border-box; }
                 body { margin: 0; min-height: 100vh; background: var(--bg); color: var(--text); font-size: 14px; }
-                .shell { min-height: 100vh; display: grid; grid-template-rows: auto 1fr; }
+                .sr-only {
+                    position: absolute;
+                    width: 1px;
+                    height: 1px;
+                    padding: 0;
+                    margin: -1px;
+                    overflow: hidden;
+                    clip: rect(0, 0, 0, 0);
+                    white-space: nowrap;
+                    border: 0;
+                }
+                .shell { min-height: 100vh; display: grid; grid-template-rows: 54px 1fr 30px; }
                 .topbar {
                     display: flex;
                     align-items: center;
                     justify-content: space-between;
                     gap: 18px;
-                    min-height: 54px;
                     padding: 0 22px;
                     border-bottom: 1px solid var(--line);
-                    background: #131820;
+                    background: var(--bar);
                 }
                 .brand { display: flex; align-items: baseline; gap: 12px; min-width: 0; }
-                .brand strong { font-size: 16px; font-weight: 650; }
+                .brand strong { font-size: 16px; font-weight: 700; }
                 .brand span { color: var(--muted); white-space: nowrap; }
                 .tabs { display: flex; gap: 4px; }
                 .tab {
@@ -1045,54 +1058,92 @@ static string RenderAcquisitionDashboard(
                     text-decoration: none;
                 }
                 .tab.active { color: var(--text); border-color: var(--line); background: var(--panel-2); }
-                main { width: min(1180px, calc(100vw - 40px)); margin: 0 auto; padding: 22px 0 36px; }
-                h1 { margin: 0 0 8px; font-size: 22px; letter-spacing: 0; }
-                h2 { margin: 0; font-size: 16px; }
-                h3 { margin: 0 0 10px; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
-                p { color: var(--muted); }
+                .acquisition-main {
+                    min-width: 0;
+                    padding: 18px 20px 22px;
+                    display: grid;
+                    grid-template-columns: minmax(420px, 520px) minmax(560px, 1fr);
+                    gap: 16px;
+                }
                 code { color: var(--accent); }
-                .muted { color: var(--muted); }
                 .notice {
-                    margin: 0 0 14px;
+                    grid-column: 1 / -1;
+                    margin: 0;
                     padding: 10px 12px;
                     border: 1px solid #315270;
                     border-radius: 6px;
                     background: #152333;
                     color: #d8eaff;
                 }
-                .dashboard-grid {
-                    display: grid;
-                    grid-template-columns: minmax(0, 1fr) 330px;
-                    gap: 14px;
-                    align-items: start;
-                }
-                .panel {
+                .pane {
+                    min-width: 0;
                     border: 1px solid var(--line);
                     border-radius: 8px;
                     background: var(--panel);
-                    padding: 14px;
+                    overflow: hidden;
                 }
-                .panel-head {
+                .pane-head {
                     display: flex;
-                    align-items: baseline;
+                    align-items: center;
                     justify-content: space-between;
                     gap: 12px;
-                    margin-bottom: 12px;
+                    padding: 11px 13px;
+                    border-bottom: 1px solid var(--line);
+                    background: #1b232c;
                 }
-                .panel-head span { color: var(--muted); font-size: 12px; }
+                .pane-head h1, .pane-head h2 {
+                    margin: 0;
+                    font-size: 15px;
+                    letter-spacing: 0;
+                }
+                .pane-head span {
+                    color: var(--muted);
+                    font-size: 12px;
+                    white-space: nowrap;
+                }
+                .selected-character {
+                    display: flex;
+                    align-items: center;
+                    justify-content: flex-end;
+                    min-width: 0;
+                }
+                .selected-character select {
+                    width: auto;
+                    max-width: 210px;
+                    height: 30px;
+                    color: var(--muted);
+                    border-color: transparent;
+                    background: transparent;
+                    padding-right: 24px;
+                }
+                .pane-body {
+                    padding: 13px;
+                }
+                .section {
+                    padding: 12px;
+                    border: 1px solid var(--line-soft);
+                    border-radius: 7px;
+                    background: #141a20;
+                    margin-bottom: 11px;
+                }
+                .section-title {
+                    margin: 0 0 10px;
+                    color: var(--accent);
+                    font-size: 12px;
+                    font-weight: 700;
+                    text-transform: uppercase;
+                    letter-spacing: .04em;
+                }
                 .request-form {
                     display: grid;
-                    gap: 14px;
+                    gap: 0;
                 }
-                .form-section {
+                .grid {
                     display: grid;
+                    grid-template-columns: repeat(2, minmax(0, 1fr));
                     gap: 10px;
                 }
-                .form-grid {
-                    display: grid;
-                    grid-template-columns: repeat(3, minmax(0, 1fr));
-                    gap: 10px;
-                }
+                .grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
                 label { display: grid; gap: 5px; color: var(--muted); font-size: 12px; }
                 input, select, button {
                     height: 34px;
@@ -1104,83 +1155,74 @@ static string RenderAcquisitionDashboard(
                 }
                 input, select { width: 100%; padding: 0 10px; }
                 button {
-                    width: fit-content;
-                    padding: 0 14px;
+                    padding: 0 12px;
                     background: var(--panel-2);
                     cursor: pointer;
                 }
                 button:hover { border-color: var(--accent); }
-                .primary-action {
-                    min-width: 136px;
-                    border-color: #386083;
-                    background: #193047;
-                    color: #f4faff;
+                button.primary {
+                    border-color: #3e6688;
+                    background: #19334a;
+                    color: #d8ecff;
                     font-weight: 650;
                 }
-                .toolbar {
+                .button-row {
                     display: flex;
-                    align-items: end;
-                    justify-content: space-between;
-                    gap: 14px;
-                    margin-bottom: 14px;
-                }
-                .character-jump { min-width: 260px; }
-                .side-stack {
-                    display: grid;
-                    gap: 14px;
-                }
-                .metric-grid {
-                    display: grid;
-                    grid-template-columns: repeat(2, minmax(0, 1fr));
-                    gap: 10px;
-                }
-                .metric {
-                    min-height: 66px;
-                    border: 1px solid var(--line);
-                    border-radius: 7px;
-                    padding: 10px;
-                    background: var(--panel-3);
-                }
-                .metric span { display: block; color: var(--muted); font-size: 12px; }
-                .metric strong { display: block; margin-top: 6px; font-size: 18px; }
-                .preview-list {
-                    display: grid;
-                    gap: 9px;
-                    margin: 0;
-                }
-                .preview-row {
-                    display: grid;
-                    grid-template-columns: 112px minmax(0, 1fr);
-                    gap: 10px;
-                    align-items: baseline;
-                }
-                .preview-row dt { color: var(--muted); }
-                .preview-row dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
-                .queue-panel {
-                    margin-top: 14px;
-                    padding: 0;
-                    overflow: hidden;
-                }
-                .queue-toolbar {
-                    display: grid;
-                    grid-template-columns: minmax(220px, 1fr) auto auto;
-                    gap: 10px;
                     align-items: center;
-                    padding: 12px;
-                    border-bottom: 1px solid var(--line);
-                    background: var(--panel-3);
+                    justify-content: space-between;
+                    gap: 10px;
+                    margin-top: 12px;
                 }
-                .queue-toolbar input { height: 32px; }
-                .queue-meta { color: var(--muted); font-size: 12px; white-space: nowrap; }
+                .preview {
+                    display: grid;
+                    gap: 8px;
+                    padding: 10px;
+                    border: 1px solid #315270;
+                    border-radius: 7px;
+                    background: #142131;
+                }
+                .preview strong { font-size: 13px; }
+                .preview-line {
+                    color: var(--muted);
+                    line-height: 1.45;
+                }
+                .chips {
+                    display: flex;
+                    flex-wrap: wrap;
+                    gap: 6px;
+                }
+                .chip {
+                    display: inline-flex;
+                    align-items: baseline;
+                    min-height: 24px;
+                    padding: 3px 8px;
+                    border-radius: 999px;
+                    background: var(--chip);
+                    color: var(--muted);
+                    font-size: 12px;
+                    white-space: nowrap;
+                }
+                .chip.good { color: #c8f0d5; background: #1e3a2b; }
+                .chip.warn { color: #ffe4a8; background: #3a3020; }
+                .toolbar {
+                    display: grid;
+                    grid-template-columns: minmax(220px, 1fr) 180px 140px;
+                    gap: 9px;
+                    padding: 12px 13px;
+                    border-bottom: 1px solid var(--line);
+                    background: #141a20;
+                }
+                .table-wrap { overflow: auto; }
                 table {
                     width: 100%;
-                    border-collapse: collapse;
+                    border-collapse: separate;
+                    border-spacing: 0;
                     table-layout: fixed;
                 }
                 th, td {
-                    padding: 10px 11px;
-                    border-bottom: 1px solid #24303b;
-                    border-right: 1px solid #26323e;
+                    padding: 8px 9px;
+                    border-bottom: 1px solid var(--line-soft);
+                    border-right: 1px solid var(--line);
                     vertical-align: middle;
                     overflow: hidden;
                     text-overflow: ellipsis;
@@ -1188,17 +1230,30 @@ static string RenderAcquisitionDashboard(
                 }
                 th:last-child, td:last-child { border-right: 0; }
                 th {
-                    color: #b8c7d8;
-                    background: var(--panel-2);
+                    color: var(--muted);
+                    background: #202832;
                     font-size: 12px;
+                    font-weight: 700;
                     text-align: left;
                     text-transform: uppercase;
-                    letter-spacing: .04em;
+                    letter-spacing: .03em;
                 }
-                tbody tr:nth-child(even) { background: rgba(255, 255, 255, .025); }
-                tbody tr:hover { background: rgba(98, 182, 255, .08); }
-                .item-cell strong { display: block; color: #f5f8fc; }
-                .item-cell span { display: block; margin-top: 2px; color: var(--faint); font-size: 12px; }
+                tr:nth-child(even) td { background: #141a20; }
+                tbody tr:hover td { background: rgba(98, 182, 255, .08); }
+                .item {
+                    display: grid;
+                    gap: 2px;
+                    min-width: 0;
+                }
+                .item strong, .item span {
+                    overflow: hidden;
+                    text-overflow: ellipsis;
+                    white-space: nowrap;
+                }
+                .item span {
+                    color: var(--subtle);
+                    font-size: 12px;
+                }
                 .number { text-align: right; font-variant-numeric: tabular-nums; }
                 .empty-cell {
                     height: 74px;
@@ -1209,30 +1264,66 @@ static string RenderAcquisitionDashboard(
                 .status {
                     display: inline-flex;
                     align-items: center;
-                    height: 22px;
-                    max-width: 100%;
-                    padding: 0 8px;
-                    border: 1px solid var(--line-strong);
+                    gap: 6px;
+                    min-height: 24px;
+                    padding: 2px 8px;
                     border-radius: 999px;
-                    background: #202b36;
-                    color: var(--text);
+                    font-size: 12px;
+                    white-space: nowrap;
+                }
+                .status.pending { background: #2d3540; color: #cbd7e4; }
+                .status.claimed { background: #26384b; color: #b8ddff; }
+                .status.accepted { background: #1e3a2b; color: #c8f0d5; }
+                .status.running { background: #3a3020; color: #ffe4a8; }
+                .status.complete { background: #1e3a2b; color: #c8f0d5; }
+                .status.failed { background: #3d2528; color: #ffd2d6; }
+                .detail {
+                    display: grid;
+                    grid-template-columns: repeat(4, minmax(0, 1fr));
+                    gap: 8px;
+                    padding: 11px;
+                    border-top: 1px solid var(--line);
+                    background: #11171d;
+                }
+                .metric {
+                    min-width: 0;
+                    border: 1px solid var(--line-soft);
+                    border-radius: 6px;
+                    padding: 8px;
+                    background: #151c23;
+                }
+                .metric span {
+                    display: block;
+                    color: var(--muted);
+                    font-size: 11px;
+                    margin-bottom: 4px;
+                }
+                .metric strong {
+                    display: block;
+                    font-size: 13px;
+                    overflow: hidden;
+                    text-overflow: ellipsis;
+                    white-space: nowrap;
+                }
+                .statusbar {
+                    display: flex;
+                    align-items: center;
+                    justify-content: space-between;
+                    gap: 12px;
+                    padding: 0 20px;
+                    border-top: 1px solid var(--line);
+                    background: #11161c;
+                    color: var(--muted);
                     font-size: 12px;
                 }
-                .status-pending { color: #cde8ff; border-color: #315d80; background: #182d40; }
-                .status-running { color: #fff1c7; border-color: #755d28; background: #332914; }
-                .status-good { color: #d5f6dc; border-color: #3b7347; background: #193522; }
-                .status-bad { color: #ffdada; border-color: #7a3a3a; background: #371c1f; }
-                @media (max-width: 980px) {
-                    .topbar, .toolbar { display: block; }
-                    .tabs { margin-top: 10px; flex-wrap: wrap; }
-                    .dashboard-grid { grid-template-columns: 1fr; }
-                    .form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-                    .character-jump { margin-top: 12px; min-width: 0; }
+                @media (max-width: 1120px) {
+                    .acquisition-main { grid-template-columns: 1fr; }
                 }
                 @media (max-width: 720px) {
-                    main { width: min(100vw - 24px, 1180px); }
-                    .form-grid, .metric-grid, .queue-toolbar { grid-template-columns: 1fr; }
-                    th, td { padding: 9px 8px; }
+                    .topbar, .statusbar { display: block; padding-block: 8px; }
+                    .tabs { margin-top: 10px; flex-wrap: wrap; }
+                    .acquisition-main { padding: 12px; }
+                    .grid, .grid.three, .toolbar, .detail { grid-template-columns: 1fr; }
                 }
             </style>
         </head>
@@ -1250,47 +1341,45 @@ static string RenderAcquisitionDashboard(
                         <a class="tab" href="{{Html(AppUrl(pathBase, "/diagnostics"))}}">Diagnostics</a>
                     </nav>
                 </header>
-                <main>
-                    <div class="toolbar">
-                        <div>
-                            <h1>New Purchase Request</h1>
-                            <p>Stage a request here, then pick it up manually from the in-game Market Acquisition tab.</p>
-                        </div>
-                        <form class="character-jump" method="get" action="{{Html(AppUrl(pathBase, "/acquisition"))}}">
-                            <label>Default character
-                                <select name="characterId" onchange="this.form.submit()">{{characterOptions}}</select>
-                            </label>
-                        </form>
-                    </div>
+                <main class="acquisition-main">
                     {{acquisitionNotice}}
-                    <section class="dashboard-grid" aria-label="Market acquisition control surface">
-                        <div>
-                            <section class="panel">
-                                <div class="panel-head">
-                                    <h2>Target Request</h2>
-                                    <span>Create Dashboard Request</span>
-                                </div>
-                                {{RenderAcquisitionRequestForm(pathBase, csrfToken, targetCharacter, targetWorld)}}
-                            </section>
-                            <section class="panel queue-panel">
-                                <div class="panel-head" style="padding: 12px 12px 0">
-                                    <h2>Request Queue</h2>
-                                    <span>recent dashboard requests</span>
-                                </div>
-                                <div class="queue-toolbar">
-                                    <input type="search" placeholder="Filter by item, world, status" aria-label="Filter request queue">
-                                    <span class="queue-meta">{{activeCount:N0}} active</span>
-                                    <span class="queue-meta">{{acquisitionRequests.Count:N0}} recent</span>
-                                </div>
+                    <section class="pane request-pane">
+                        <div class="pane-head">
+                            <h1>New Purchase Request</h1>
+                            <span class="sr-only">Create Dashboard Request</span>
+                            {{characterHeader}}
+                        </div>
+                        <div class="pane-body">
+                            {{RenderAcquisitionRequestForm(pathBase, csrfToken, targetCharacter, targetWorld)}}
+                        </div>
+                    </section>
+
+                    <section class="pane queue-pane">
+                        <div class="pane-head">
+                            <h2>Request Queue</h2>
+                            <span>{{Html(activeSummary)}}</span>
+                        </div>
+                        <div class="toolbar">
+                            <input type="search" placeholder="Filter by item, world, status" aria-label="Filter request queue">
+                            <select aria-label="Request status filter">
+                                <option>All statuses</option>
+                                <option>Pending pickup</option>
+                                <option>Claimed</option>
+                                <option>Accepted</option>
+                                <option>Failed</option>
+                            </select>
+                            <button type="button">Refresh</button>
+                        </div>
+                        <div class="table-wrap">
                                 <table>
                                     <colgroup>
                                         <col style="width: 25%">
-                                        <col style="width: 9%">
                                         <col style="width: 12%">
-                                        <col style="width: 16%">
-                                        <col style="width: 18%">
-                                        <col style="width: 11%">
-                                        <col style="width: 9%">
+                                        <col style="width: 12%">
+                                        <col style="width: 17%">
+                                        <col style="width: 15%">
+                                        <col style="width: 12%">
+                                        <col style="width: 7%">
                                     </colgroup>
                                     <thead>
                                         <tr>
@@ -1307,37 +1396,41 @@ static string RenderAcquisitionDashboard(
                                         {{queueRows}}
                                     </tbody>
                                 </table>
-                            </section>
                         </div>
-                        <aside class="side-stack" aria-label="Acquisition request status">
-                            <section class="panel">
-                                <div class="panel-head">
-                                    <h2>Request Preview</h2>
-                                    <span>before pickup</span>
-                                </div>
-                                <dl class="preview-list">
-                                    <div class="preview-row"><dt>Target</dt><dd>{{Html(targetCharacter)}} @ {{Html(targetWorld)}}</dd></div>
-                                    <div class="preview-row"><dt>Purchase Limits</dt><dd>Quantity and gil cap are enforced by the staged request.</dd></div>
-                                    <div class="preview-row"><dt>Routing</dt><dd>Recommended worlds first; region-wide when requested.</dd></div>
-                                </dl>
-                            </section>
-                            <section class="panel">
-                                <h3>Plugin status</h3>
-                                <div class="metric-grid">
-                                    <div class="metric"><span>Latest</span><strong>{{Html(latestRequestStatus)}}</strong></div>
-                                    <div class="metric"><span>Expires</span><strong>{{Html(latestRequestExpiry)}}</strong></div>
-                                </div>
-                                <dl class="preview-list" style="margin-top: 12px">
-                                    <div class="preview-row"><dt>Request</dt><dd>{{Html(latestRequestLabel)}}</dd></div>
-                                    <div class="preview-row"><dt>Pickup</dt><dd>Command pickup uses a separate key from inventory uploads.</dd></div>
-                                </dl>
-                            </section>
-                        </aside>
+                        <div class="detail">
+                            <div class="metric"><span>Selected request</span><strong>{{Html(selectedRequestName)}}</strong></div>
+                            <div class="metric"><span>Pickup endpoint</span><strong>Ready</strong></div>
+                            <div class="metric"><span>Expires in</span><strong>{{Html(latestRequestExpiry)}}</strong></div>
+                            <div class="metric"><span>Plugin status</span><strong>{{Html(latestRequestStatus)}}</strong></div>
+                        </div>
                     </section>
                 </main>
+                <footer class="statusbar">
+                    <span>Command pickup uses a separate key from inventory ingest.</span>
+                    <span>Dashboard creates intent only; the plugin validates live market rows.</span>
+                </footer>
             </div>
         </body>
         </html>
+        """;
+}
+
+static string RenderAcquisitionCharacterHeader(
+    IReadOnlyList<CharacterSummary> characters,
+    long? selectedCharacterId,
+    CharacterSummary? selectedCharacter,
+    PathString pathBase)
+{
+    var selectedLabel = selectedCharacter == null
+        ? "No character selected"
+        : CharacterLabel(selectedCharacter);
+    if (characters.Count < 2)
+        return $"""<span>{Html(selectedLabel)}</span>""";
+
+    return $$"""
+        <form class="selected-character" method="get" action="{{Html(AppUrl(pathBase, "/acquisition"))}}">
+            <select name="characterId" onchange="this.form.submit()" aria-label="Default character">{{RenderCharacterOptions(characters, selectedCharacterId)}}</select>
+        </form>
         """;
 }
 
@@ -1351,34 +1444,55 @@ static string RenderAcquisitionRequestForm(
             <input type="hidden" name="csrf" value="{{Html(csrfToken)}}">
             <input type="hidden" name="schemaVersion" value="1">
             <input type="hidden" name="idempotencyKey" value="{{Guid.NewGuid():N}}">
-            <div class="form-section">
-                <h3>Target</h3>
-                <div class="form-grid">
+            <div class="section">
+                <p class="section-title">Target</p>
+                <div class="grid three">
                     <label>Character<input name="targetCharacterName" value="{{Html(targetCharacter)}}" autocomplete="off" required></label>
-                    <label>World<input name="targetWorld" value="{{Html(targetWorld)}}" autocomplete="off" required></label>
+                    <label>Home world<input name="targetWorld" value="{{Html(targetWorld)}}" autocomplete="off" required></label>
                     <label>Region<input name="region" value="North America" required></label>
-                    <label>Item ID<input name="itemId" inputmode="numeric" required></label>
-                    <label>Item name<input name="itemName" autocomplete="off"></label>
-                    <label>HQ policy<select name="hqPolicy"><option>Either</option><option>NQOnly</option><option>HQOnly</option></select></label>
                 </div>
             </div>
-            <div class="form-section">
-                <h3>Purchase Limits</h3>
-                <div class="form-grid">
+            <div class="section">
+                <p class="section-title">Item</p>
+                <div class="grid">
+                    <label>Item name or ID<input name="itemName" autocomplete="off"></label>
+                    <label>Item ID<input name="itemId" inputmode="numeric" required></label>
+                    <label>HQ policy<select name="hqPolicy"><option>Either</option><option>NQOnly</option><option>HQOnly</option></select></label>
+                </div>
+                <div class="chips" style="margin-top: 10px;">
+                    <span class="chip">Resolved after staging</span>
+                    <span class="chip">Type from market data</span>
+                    <span class="chip">Stack size checked by plugin</span>
+                </div>
+            </div>
+            <div class="section">
+                <p class="section-title">Purchase Limits</p>
+                <div class="grid">
                     <label>Quantity mode<select name="quantityMode"><option>Exact</option><option>UpTo</option><option>AllBelowThreshold</option></select></label>
                     <label>Quantity<input name="quantity" inputmode="numeric" required></label>
                     <label>Max unit price<input name="maxUnitPrice" inputmode="numeric" required></label>
                     <label>Gil cap<input name="maxTotalGil" inputmode="numeric" required></label>
                 </div>
             </div>
-            <div class="form-section">
-                <h3>Routing</h3>
-                <div class="form-grid">
+            <div class="section">
+                <p class="section-title">Routing</p>
+                <div class="grid">
                     <label>World mode<select name="worldMode"><option>Recommended</option><option>Selected</option><option>CurrentWorldOnly</option><option>AllWorldSweep</option></select></label>
-                    <label>Pickup expiry seconds<input name="expiresInSeconds" inputmode="numeric" value="90" required></label>
+                    <label>Pickup expires<select name="expiresInSeconds"><option value="300">5 minutes</option><option value="900">15 minutes</option><option value="1800">30 minutes</option><option value="90">90 seconds</option></select></label>
                 </div>
             </div>
-            <button class="primary-action" type="submit">Stage Request</button>
+            <div class="preview">
+                <strong>Request Preview</strong>
+                <div class="preview-line">Stage a bounded purchase intent, then pick it up manually from the in-game Market Acquisition tab.</div>
+                <div class="chips">
+                    <span class="chip warn">Plugin pickup required</span>
+                    <span class="chip">No background polling</span>
+                </div>
+            </div>
+            <div class="button-row">
+                <button type="reset">Clear</button>
+                <button class="primary" type="submit">Stage Request</button>
+            </div>
         </form>
         """;
 
@@ -1390,7 +1504,7 @@ static string RenderAcquisitionQueueRows(IReadOnlyList<MarketAcquisitionRequestV
     return string.Join(Environment.NewLine, requests.Select(request =>
         $$"""
         <tr>
-            <td class="item-cell"><strong>{{Html(string.IsNullOrWhiteSpace(request.ItemName) ? $"Item {request.ItemId}" : request.ItemName)}}</strong><span>Item {{request.ItemId}} · {{Html(request.HqPolicy)}}</span></td>
+            <td><div class="item"><strong>{{Html(string.IsNullOrWhiteSpace(request.ItemName) ? $"Item {request.ItemId}" : request.ItemName)}}</strong><span>item {{request.ItemId}} / {{Html(request.HqPolicy)}}</span></div></td>
             <td class="number">{{request.Quantity:N0}}</td>
             <td class="number">{{FormatGil(request.MaxUnitPrice)}}</td>
             <td>{{Html(FormatWorldMode(request.WorldMode))}}</td>
@@ -1420,14 +1534,14 @@ static string FormatAcquisitionStatus(string status) =>
 static string AcquisitionStatusClass(string status) =>
     status switch
     {
-        MarketAcquisitionStatuses.PendingPickup => "status-pending",
-        MarketAcquisitionStatuses.Claimed => "status-pending",
-        MarketAcquisitionStatuses.AcceptedInPlugin => "status-running",
-        MarketAcquisitionStatuses.Running => "status-running",
-        MarketAcquisitionStatuses.Complete => "status-good",
-        MarketAcquisitionStatuses.Failed => "status-bad",
-        MarketAcquisitionStatuses.Rejected => "status-bad",
-        MarketAcquisitionStatuses.Expired => "status-bad",
+        MarketAcquisitionStatuses.PendingPickup => "pending",
+        MarketAcquisitionStatuses.Claimed => "claimed",
+        MarketAcquisitionStatuses.AcceptedInPlugin => "accepted",
+        MarketAcquisitionStatuses.Running => "running",
+        MarketAcquisitionStatuses.Complete => "complete",
+        MarketAcquisitionStatuses.Failed => "failed",
+        MarketAcquisitionStatuses.Rejected => "failed",
+        MarketAcquisitionStatuses.Expired => "failed",
         _ => string.Empty,
     };
 
