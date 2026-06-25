@@ -18,6 +18,7 @@
 
   <PropertyGroup Condition="'$(Configuration)' == 'Debug'">
     <OutputPath>bin\Debug</OutputPath>
+    <DevPluginDeployDir>F:\Everything (HDD)\Misc\Gooseworks (Projects)\FFXIV-Development\_deployed\MarketMafioso</DevPluginDeployDir>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(Configuration)' == 'Release'">
@@ -31,6 +32,6 @@
   </ItemGroup>
 
   <Target Name="SyncToDevPlugins" AfterTargets="Build" Condition="'$(Configuration)' == 'Debug'">
-    <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\tools\Sync-DevPlugin.ps1&quot; -SourceDir &quot;$(TargetDir).&quot; -DestDir &quot;$(AppData)\XIVLauncher\devPlugins\MarketMafioso&quot; -PluginName &quot;$(AssemblyName)&quot;" />
+    <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\tools\Sync-DevPlugin.ps1&quot; -SourceDir &quot;$(TargetDir).&quot; -DestDir &quot;$(DevPluginDeployDir)&quot; -PluginName &quot;$(AssemblyName)&quot;" />
   </Target>
 </Project>

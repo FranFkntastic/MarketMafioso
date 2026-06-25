@@ -1,0 +1,530 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MarketMafioso Plugin Market Acquisition Mockup</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --window: rgba(12, 12, 13, 0.82);
+      --panel: rgba(25, 25, 26, 0.78);
+      --field: rgba(66, 66, 68, 0.78);
+      --button: rgba(82, 82, 84, 0.92);
+      --button-hover: rgba(103, 103, 106, 0.96);
+      --tab: rgba(44, 44, 46, 0.92);
+      --tab-active: rgba(105, 45, 48, 0.95);
+      --line: rgba(255, 255, 255, 0.16);
+      --line-strong: rgba(211, 58, 67, 0.45);
+      --text: #f3f3f3;
+      --muted: #b6b6b6;
+      --dim: #8c8c8c;
+      --header: #66c3ff;
+      --success: #88e28e;
+      --warn: #e0c36a;
+      --error: #ff7575;
+      --font: "Segoe UI", Arial, sans-serif;
+      --mono: "Cascadia Mono", "Consolas", monospace;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      color: var(--text);
+      font-family: var(--font);
+      font-size: 13px;
+      letter-spacing: 0;
+      overflow: hidden;
+      background:
+        radial-gradient(circle at 70% 30%, rgba(211, 174, 91, 0.18), transparent 24%),
+        radial-gradient(circle at 32% 72%, rgba(66, 136, 172, 0.2), transparent 28%),
+        linear-gradient(135deg, #28311f 0%, #20252a 45%, #1b1715 100%);
+    }
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      background:
+        linear-gradient(90deg, transparent 0 22%, rgba(255,255,255,0.05) 22% 22.4%, transparent 22.4%),
+        repeating-linear-gradient(0deg, rgba(255,255,255,0.035) 0 1px, transparent 1px 78px),
+        repeating-linear-gradient(90deg, rgba(255,255,255,0.025) 0 1px, transparent 1px 104px);
+      opacity: 0.45;
+    }
+
+    button,
+    input {
+      font: inherit;
+    }
+
+    .plugin-window {
+      position: absolute;
+      top: 0;
+      left: 6px;
+      width: 766px;
+      min-height: 612px;
+      background: var(--window);
+      border: 1px solid rgba(255,255,255,0.16);
+      box-shadow: 0 14px 32px rgba(0,0,0,0.36);
+    }
+
+    .titlebar {
+      height: 22px;
+      display: grid;
+      grid-template-columns: 94px 116px 1fr 80px;
+      align-items: stretch;
+      background: rgba(9, 11, 14, 0.88);
+      border-bottom: 1px solid rgba(255,255,255,0.1);
+      user-select: none;
+    }
+
+    .title-tab {
+      display: flex;
+      align-items: center;
+      padding: 0 8px;
+      border-right: 1px solid rgba(255,255,255,0.12);
+      color: #d4d4d4;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .title-tab.active {
+      background: rgba(52, 75, 103, 0.95);
+      color: white;
+    }
+
+    .window-tools {
+      display: flex;
+      justify-content: flex-end;
+      align-items: center;
+      gap: 8px;
+      padding-right: 8px;
+      color: #e8e8e8;
+      font-size: 16px;
+    }
+
+    .body {
+      padding: 10px 8px 12px;
+    }
+
+    .product-title {
+      color: var(--header);
+      font-weight: 700;
+      margin-bottom: 6px;
+    }
+
+    .summary {
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+
+    .muted {
+      color: var(--muted);
+    }
+
+    .tabs {
+      display: flex;
+      gap: 3px;
+      border-bottom: 1px solid var(--line-strong);
+      margin: 10px 0 8px;
+    }
+
+    .tab {
+      min-height: 24px;
+      padding: 3px 8px 4px;
+      background: var(--tab);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-bottom: 0;
+      font-weight: 700;
+    }
+
+    .tab.active {
+      background: var(--tab-active);
+    }
+
+    .section-title {
+      margin-top: 11px;
+      color: var(--header);
+      font-weight: 700;
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 4px;
+    }
+
+    .row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 7px;
+    }
+
+    .row.wrap {
+      align-items: flex-start;
+      flex-wrap: wrap;
+    }
+
+    .label {
+      margin-top: 8px;
+      font-weight: 700;
+    }
+
+    .field {
+      height: 25px;
+      background: var(--field);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 4px;
+      display: flex;
+      align-items: center;
+      padding: 0 8px;
+      color: white;
+      min-width: 0;
+    }
+
+    .field.full {
+      width: 100%;
+    }
+
+    .button {
+      height: 25px;
+      min-width: 86px;
+      padding: 0 10px;
+      border: 1px solid rgba(255,255,255,0.12);
+      border-radius: 4px;
+      background: var(--button);
+      color: white;
+      font-weight: 700;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      white-space: nowrap;
+    }
+
+    .button:hover {
+      background: var(--button-hover);
+    }
+
+    .button.primary {
+      background: rgba(71, 96, 122, 0.95);
+    }
+
+    .button.good {
+      background: rgba(54, 104, 61, 0.95);
+    }
+
+    .button.danger {
+      background: rgba(111, 59, 59, 0.95);
+    }
+
+    .button.disabled {
+      opacity: 0.45;
+    }
+
+    .hint {
+      color: var(--muted);
+      line-height: 1.35;
+      margin-top: 5px;
+    }
+
+    .status-line {
+      margin-top: 8px;
+      color: var(--success);
+      font-weight: 700;
+    }
+
+    .warning-line {
+      margin-top: 8px;
+      color: var(--warn);
+      font-weight: 700;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 8px;
+      table-layout: fixed;
+      background: rgba(15, 15, 16, 0.42);
+    }
+
+    th,
+    td {
+      border: 1px solid var(--line);
+      padding: 5px 6px;
+      text-align: left;
+      vertical-align: top;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    th {
+      color: #d6d6d6;
+      background: rgba(45, 45, 48, 0.82);
+      font-weight: 700;
+    }
+
+    .number {
+      font-family: var(--mono);
+      text-align: right;
+    }
+
+    .pill {
+      display: inline-block;
+      padding: 1px 7px 2px;
+      border: 1px solid rgba(255,255,255,0.18);
+      border-radius: 4px;
+      background: rgba(255,255,255,0.08);
+      color: var(--muted);
+      font-weight: 700;
+    }
+
+    .pill.good {
+      color: var(--success);
+      border-color: rgba(136,226,142,0.35);
+      background: rgba(64,120,70,0.22);
+    }
+
+    .pill.warn {
+      color: var(--warn);
+      border-color: rgba(224,195,106,0.35);
+      background: rgba(130,102,42,0.22);
+    }
+
+    .split {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-top: 8px;
+    }
+
+    .mini-panel {
+      border: 1px solid var(--line);
+      background: rgba(18,18,20,0.46);
+      padding: 8px;
+    }
+
+    .kv {
+      display: grid;
+      grid-template-columns: 118px 1fr;
+      gap: 5px 8px;
+    }
+
+    .kv .k {
+      color: var(--muted);
+    }
+
+    .kv .v {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .modal {
+      position: absolute;
+      left: 90px;
+      top: 182px;
+      width: 584px;
+      background: rgba(14,14,16,0.96);
+      border: 1px solid rgba(255,255,255,0.22);
+      box-shadow: 0 12px 36px rgba(0,0,0,0.55);
+      display: none;
+    }
+
+    .modal.visible {
+      display: block;
+    }
+
+    .modal-title {
+      padding: 8px 10px;
+      font-weight: 700;
+      border-bottom: 1px solid var(--line);
+      background: rgba(48,48,52,0.8);
+    }
+
+    .modal-body {
+      padding: 10px;
+    }
+
+    .modal-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      padding: 0 10px 10px;
+    }
+  </style>
+</head>
+<body>
+  <div class="plugin-window">
+    <div class="titlebar">
+      <div class="title-tab">List Editor</div>
+      <div class="title-tab active">MarketMafioso</div>
+      <div></div>
+      <div class="window-tools">= v x</div>
+    </div>
+
+    <div class="body">
+      <div class="product-title">MarketMafioso</div>
+      <div class="summary">Small, practical FFXIV improvements under one roof.</div>
+      <div class="muted">Current modules: Inventory Reporter, Workshop Prep, Market Acquisition</div>
+
+      <div class="tabs">
+        <div class="tab">Overview</div>
+        <div class="tab">Inventory Reporter</div>
+        <div class="tab">Workshop Prep</div>
+        <div class="tab active">Market Acquisition</div>
+        <div class="tab">Status</div>
+      </div>
+
+      <div class="product-title">Market Acquisition</div>
+      <div class="summary">Pick up dashboard requests and approve them locally before any in-game automation starts.</div>
+
+      <div class="section-title">Dashboard Pickup</div>
+      <div class="label">Dashboard URL:</div>
+      <div class="row">
+        <div class="field" style="flex: 1;">https://dev.xivcraftarchitect.com/api/marketmafioso/</div>
+        <div class="button">Open Dashboard</div>
+      </div>
+      <div class="hint">Create the request in the browser dashboard first, then use pickup here. The plugin does not poll in the background.</div>
+      <div class="row">
+        <div class="button primary" id="fetchButton">Fetch Dashboard Requests</div>
+        <span class="muted">One-shot fetch. Use the button again to retry.</span>
+      </div>
+      <div class="status-line">1 request found for Wei Ning @ Siren. Select it to claim and review locally.</div>
+
+      <div class="section-title">Matching Requests</div>
+      <table>
+        <colgroup>
+          <col style="width: 27%;">
+          <col style="width: 14%;">
+          <col style="width: 14%;">
+          <col style="width: 15%;">
+          <col style="width: 16%;">
+          <col style="width: 14%;">
+        </colgroup>
+        <thead>
+          <tr>
+            <th>Item</th>
+            <th>Qty</th>
+            <th>Max Unit</th>
+            <th>Gil Cap</th>
+            <th>Worlds</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Darksteel Nugget</td>
+            <td class="number">Up to 400</td>
+            <td class="number">430g</td>
+            <td class="number">160,000g</td>
+            <td>Recommended</td>
+            <td><div class="button primary" style="height: 22px; min-width: 72px;">Claim</div></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="section-title">Claimed Request</div>
+      <div class="hint">Claim expires in 5 minutes. Accepting only records local consent; it does not prepare, travel, read the market board, or buy anything.</div>
+      <div class="row">
+        <div class="button good" id="acceptButton">Accept Request</div>
+        <div class="button danger">Reject</div>
+        <span class="muted">Purchases still need world-batch confirmation later.</span>
+      </div>
+
+      <div class="section-title">Local Runner</div>
+      <div class="split">
+        <div class="mini-panel">
+          <div class="kv">
+            <div class="k">State</div><div class="v"><span class="pill">Ready To Prepare</span></div>
+            <div class="k">Current world</div><div class="v">Siren</div>
+            <div class="k">Next step</div><div class="v">Prepare dry-run plan</div>
+            <div class="k">Mode</div><div class="v">Manual pickup, local consent</div>
+          </div>
+        </div>
+        <div class="mini-panel">
+          <div class="kv">
+            <div class="k">Plan source</div><div class="v">Universalis refresh</div>
+            <div class="k">World mode</div><div class="v">Recommended worlds</div>
+            <div class="k">Live validation</div><div class="v">Pending market board</div>
+            <div class="k">Last result</div><div class="v">No run yet</div>
+          </div>
+        </div>
+      </div>
+      <div class="row">
+        <div class="button primary">Prepare Plan</div>
+        <div class="button">Read Market Board</div>
+        <div class="button">Dry Run Batch</div>
+        <div class="button disabled">Pause</div>
+        <div class="button disabled">Stop</div>
+      </div>
+
+      <div class="section-title">Planned World Batches</div>
+      <table>
+        <colgroup>
+          <col style="width: 23%;">
+          <col style="width: 16%;">
+          <col style="width: 14%;">
+          <col style="width: 17%;">
+          <col style="width: 30%;">
+        </colgroup>
+        <thead>
+          <tr>
+            <th>World</th>
+            <th>Listings</th>
+            <th>Qty</th>
+            <th>Total</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td colspan="5" class="muted">Accept and prepare the request to build world batches.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="section-title">Diagnostics</div>
+      <div class="hint">Last server response: request claimed. Last validation failure: none. Diagnostic dump: none.</div>
+    </div>
+
+    <div class="modal" id="acceptModal">
+      <div class="modal-title">Accept Dashboard Request</div>
+      <div class="modal-body">
+        <div class="summary">Load this request into the local Market Acquisition runner?</div>
+        <div class="hint">This does not start purchases. The plugin will still validate live market board rows and ask for confirmation before each world batch.</div>
+        <table>
+          <tbody>
+            <tr><th>Character</th><td>Wei Ning @ Siren</td></tr>
+            <tr><th>Item</th><td>Darksteel Nugget</td></tr>
+            <tr><th>Limit</th><td>Up to 400 at 430g each, 160,000g cap</td></tr>
+            <tr><th>Worlds</th><td>Recommended worlds with supporting listings across the configured region, not full regional sweep</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="modal-actions">
+        <div class="button" id="closeModal">Cancel</div>
+        <div class="button good">Accept</div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const acceptButton = document.getElementById("acceptButton");
+    const acceptModal = document.getElementById("acceptModal");
+    const closeModal = document.getElementById("closeModal");
+
+    acceptButton.addEventListener("click", () => {
+      acceptModal.classList.add("visible");
+    });
+
+    closeModal.addEventListener("click", () => {
+      acceptModal.classList.remove("visible");
+    });
+  </script>
+</body>
+</html>

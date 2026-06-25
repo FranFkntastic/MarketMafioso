@@ -28,6 +28,7 @@ jobs:
       MARKETMAFIOSO_DEV_PREVIOUS_INGEST_API_KEY: ${{ secrets.MARKETMAFIOSO_DEV_PREVIOUS_INGEST_API_KEY }}
       MARKETMAFIOSO_DEV_READ_API_KEY: ${{ secrets.MARKETMAFIOSO_DEV_READ_API_KEY }}
       MARKETMAFIOSO_DEV_PREVIOUS_READ_API_KEY: ${{ secrets.MARKETMAFIOSO_DEV_PREVIOUS_READ_API_KEY }}
+      MARKETMAFIOSO_DEV_COMMAND_PICKUP_API_KEY: ${{ secrets.MARKETMAFIOSO_DEV_COMMAND_PICKUP_API_KEY }}
       MARKETMAFIOSO_DEV_BASIC_AUTH_PASSWORD: ${{ secrets.MARKETMAFIOSO_DEV_BASIC_AUTH_PASSWORD }}
     steps:
       - name: Checkout source
@@ -61,6 +62,7 @@ jobs:
         shell: bash
         run: |
           test -n "$MARKETMAFIOSO_DEV_INGEST_API_KEY"
+          test -n "$MARKETMAFIOSO_DEV_COMMAND_PICKUP_API_KEY"
           test -n "$MARKETMAFIOSO_DEV_BASIC_AUTH_PASSWORD"
           basic_auth_hash="$(docker run --rm caddy:2 caddy hash-password --plaintext "$MARKETMAFIOSO_DEV_BASIC_AUTH_PASSWORD")"
           test -n "$basic_auth_hash"
@@ -71,14 +73,28 @@ jobs:
           MarketMafioso__PreviousIngestApiKey=$MARKETMAFIOSO_DEV_PREVIOUS_INGEST_API_KEY
           MarketMafioso__ReadApiKey=$MARKETMAFIOSO_DEV_READ_API_KEY
           MarketMafioso__PreviousReadApiKey=$MARKETMAFIOSO_DEV_PREVIOUS_READ_API_KEY
+          MarketMafioso__CommandPickupApiKey=$MARKETMAFIOSO_DEV_COMMAND_PICKUP_API_KEY
           MarketMafioso__BasePath=/api/marketmafioso
           MarketMafioso__PublicOrigin=https://dev.xivcraftarchitect.com
           MarketMafioso__StorageLabel=dev receiver storage
+          MarketMafioso__TrustExternalDashboardAuth=true
           ENV
           chmod 600 marketmafioso-dev.env
           cat > marketmafioso-dev.caddy <<CADDY
+          @marketmafiosoDashboardCreateAcquisition {
+              method POST
+              path /api/marketmafioso/acquisition/requests
+          }
+
+          handle @marketmafiosoDashboardCreateAcquisition {
+              basic_auth {
+                  marketmafioso $basic_auth_hash
+              }
+              reverse_proxy 127.0.0.1:5088
+          }
+
           @marketmafiosoApi {
-              path /api/marketmafioso/health /api/marketmafioso/inventory /api/marketmafioso/api/inventory /api/marketmafioso/api/reports*
+              path /api/marketmafioso/health /api/marketmafioso/inventory /api/marketmafioso/api/inventory /api/marketmafioso/api/reports* /api/marketmafioso/acquisition*
           }
 
           handle @marketmafiosoApi {
@@ -238,6 +254,8 @@ jobs:
 
           curl --fail --silent --show-error --user "marketmafioso:$MARKETMAFIOSO_DEV_BASIC_AUTH_PASSWORD" \
             "https://dev.xivcraftarchitect.com/api/marketmafioso/" | grep -F "MarketMafioso" > /dev/null
+          curl --fail --silent --show-error --user "marketmafioso:$MARKETMAFIOSO_DEV_BASIC_AUTH_PASSWORD" \
+            "https://dev.xivcraftarchitect.com/api/marketmafioso/" | grep -F "Market Acquisition" > /dev/null
 
           ingest_without_key="$(curl --silent --output /dev/null --write-out '%{http_code}' \
             --request POST \
@@ -253,6 +271,15 @@ jobs:
             --data-binary @docs/samples/inventory-report.sample.json \
             "https://dev.xivcraftarchitect.com/api/marketmafioso/inventory")"
           test "$ingest_with_key" = "201"
+
+          acquisition_without_key="$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            "https://dev.xivcraftarchitect.com/api/marketmafioso/acquisition/requests/pending?characterName=Smoke&world=Gilgamesh")"
+          test "$acquisition_without_key" = "401"
+
+          acquisition_with_command_key="$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            --header "X-Api-Key: $MARKETMAFIOSO_DEV_COMMAND_PICKUP_API_KEY" \
+            "https://dev.xivcraftarchitect.com/api/marketmafioso/acquisition/requests/pending?characterName=Smoke&world=Gilgamesh")"
+          test "$acquisition_with_command_key" = "200"
 
           if [[ -n "$MARKETMAFIOSO_DEV_READ_API_KEY" ]]; then
             read_with_ingest="$(curl --silent --output /dev/null --write-out '%{http_code}' \

@@ -71,6 +71,7 @@ public sealed class Plugin : IDalamudPlugin
             workshopCatalog,
             viwiWorkshoppaIpc,
             workshopRetainerRestock,
+            PlayerState,
             Log);
 
         windowSystem.AddWindow(mainWindow);

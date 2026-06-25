@@ -6,6 +6,7 @@ using MarketMafioso.Server;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddSingleton<InventoryReportStore>();
+builder.Services.AddSingleton<MarketAcquisitionRequestStore>();
 
 var app = builder.Build();
 var ingestApiKey = FirstConfigured(
@@ -14,14 +15,18 @@ var ingestApiKey = FirstConfigured(
 var previousIngestApiKey = app.Configuration["MarketMafioso:PreviousIngestApiKey"];
 var readApiKey = app.Configuration["MarketMafioso:ReadApiKey"];
 var previousReadApiKey = app.Configuration["MarketMafioso:PreviousReadApiKey"];
+var commandPickupApiKey = app.Configuration["MarketMafioso:CommandPickupApiKey"];
 var requireApiKey = app.Configuration.GetValue<bool>("MarketMafioso:RequireApiKey") ||
                     !string.IsNullOrWhiteSpace(ingestApiKey);
 var basePath = app.Configuration["MarketMafioso:BasePath"];
 var publicOrigin = app.Configuration["MarketMafioso:PublicOrigin"];
 var storageLabel = app.Configuration["MarketMafioso:StorageLabel"];
+var trustExternalDashboardAuth = app.Configuration.GetValue<bool>("MarketMafioso:TrustExternalDashboardAuth");
 
 if (requireApiKey && string.IsNullOrWhiteSpace(ingestApiKey))
     throw new InvalidOperationException("MarketMafioso:IngestApiKey is required when API key authentication is enabled.");
+if (requireApiKey && string.IsNullOrWhiteSpace(commandPickupApiKey))
+    throw new InvalidOperationException("MarketMafioso:CommandPickupApiKey is required when API key authentication is enabled.");
 
 if (!string.IsNullOrWhiteSpace(basePath))
     app.UsePathBase(basePath);
@@ -36,7 +41,8 @@ app.Use(async (context, next) =>
             ingestApiKey,
             previousIngestApiKey,
             readApiKey,
-            previousReadApiKey))
+            previousReadApiKey,
+            commandPickupApiKey))
     {
         await WriteUnauthorizedAsync(context);
         return;
@@ -45,7 +51,12 @@ app.Use(async (context, next) =>
     await next(context);
 });
 
-app.MapGet("/", async (HttpRequest request, InventoryReportStore store, string? deleted, CancellationToken token) =>
+app.MapGet("/", async (
+    HttpRequest request,
+    InventoryReportStore store,
+    string? deleted,
+    string? acquisition,
+    CancellationToken token) =>
 {
     var reports = await store.ListSummariesAsync(token);
     var csrfToken = SetCsrfCookie(request.HttpContext.Response);
@@ -54,6 +65,7 @@ app.MapGet("/", async (HttpRequest request, InventoryReportStore store, string? 
             reports,
             StorageDisplayName(store.ReportDirectory, storageLabel, requireApiKey),
             deleted,
+            acquisition,
             request.PathBase,
             csrfToken),
         "text/html; charset=utf-8");
@@ -67,6 +79,15 @@ app.MapGet("/health", () => Results.Ok(new
 
 app.MapPost("/inventory", SaveInventoryReport);
 app.MapPost("/api/inventory", SaveInventoryReport);
+
+app.MapPost("/acquisition/requests", CreateAcquisitionRequest);
+app.MapGet("/acquisition/requests/pending", ListPendingAcquisitionRequests);
+app.MapPost("/acquisition/requests/{id}/claim", ClaimAcquisitionRequest);
+app.MapPost("/acquisition/requests/{id}/accept", AcceptAcquisitionRequest);
+app.MapPost("/acquisition/requests/{id}/reject", RejectAcquisitionRequest);
+app.MapPost("/acquisition/requests/{id}/progress", ReportAcquisitionProgress);
+app.MapPost("/acquisition/requests/{id}/complete", CompleteAcquisitionRequest);
+app.MapPost("/acquisition/requests/{id}/fail", FailAcquisitionRequest);
 
 app.MapGet("/api/reports", async (InventoryReportStore store, CancellationToken token) =>
 {
@@ -170,7 +191,8 @@ async Task<IResult> SaveInventoryReport(
             ingestApiKey,
             previousIngestApiKey,
             readApiKey,
-            previousReadApiKey))
+            previousReadApiKey,
+            commandPickupApiKey))
         return InvalidApiKey();
 
     if (report.PlayerInventory.Count == 0 && report.Retainers.Count == 0)
@@ -181,10 +203,168 @@ async Task<IResult> SaveInventoryReport(
     return Results.Created(AppUrl(request.PathBase, $"/api/reports/{stored.Id}"), stored.Summary);
 }
 
+async Task<IResult> CreateAcquisitionRequest(
+    HttpRequest request,
+    MarketAcquisitionRequestStore store,
+    CancellationToken token)
+{
+    try
+    {
+        var isBrowserForm = request.HasFormContentType;
+        if (isBrowserForm && requireApiKey && !trustExternalDashboardAuth)
+            return Results.StatusCode(StatusCodes.Status403Forbidden);
+
+        if (isBrowserForm && !await IsValidDashboardPostAsync(request, publicOrigin, token))
+            return Results.BadRequest(new { error = "invalid_csrf" });
+
+        var acquisitionRequest = isBrowserForm
+            ? await ReadAcquisitionFormAsync(request, token)
+            : await JsonSerializer.DeserializeAsync<MarketAcquisitionCreateRequest>(
+                request.Body,
+                new JsonSerializerOptions(JsonSerializerDefaults.Web),
+                token);
+        if (acquisitionRequest == null)
+            return Results.BadRequest(new { error = "Request body is required." });
+
+        var created = await store.CreateAsync(acquisitionRequest, token);
+        if (isBrowserForm)
+            return Results.Redirect($"{request.PathBase}/?acquisition={Uri.EscapeDataString(created.Request.Id)}");
+
+        return created.IsReplay
+            ? Results.Ok(created.Request)
+            : Results.Created(AppUrl(request.PathBase, $"/acquisition/requests/{created.Request.Id}"), created.Request);
+    }
+    catch (ArgumentException ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+    catch (MarketAcquisitionIdempotencyConflictException ex)
+    {
+        return Results.Conflict(new { error = ex.Message });
+    }
+}
+
+async Task<IResult> ListPendingAcquisitionRequests(
+    string? characterName,
+    string? world,
+    MarketAcquisitionRequestStore store,
+    CancellationToken token)
+{
+    if (string.IsNullOrWhiteSpace(characterName) || string.IsNullOrWhiteSpace(world))
+        return Results.BadRequest(new { error = "characterName and world are required." });
+
+    var pending = await store.ListPendingAsync(characterName, world, token);
+    return Results.Ok(new MarketAcquisitionPendingResponse { Requests = pending });
+}
+
+async Task<IResult> ClaimAcquisitionRequest(
+    string id,
+    MarketAcquisitionClaimRequest claimRequest,
+    MarketAcquisitionRequestStore store,
+    CancellationToken token)
+{
+    try
+    {
+        var claimed = await store.ClaimAsync(id, claimRequest, token);
+        return claimed == null ? Results.NotFound() : Results.Ok(claimed);
+    }
+    catch (ArgumentException ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+}
+
+async Task<IResult> AcceptAcquisitionRequest(
+    string id,
+    MarketAcquisitionClaimTokenRequest acceptRequest,
+    MarketAcquisitionRequestStore store,
+    CancellationToken token)
+{
+    try
+    {
+        var accepted = await store.AcceptAsync(id, acceptRequest, token);
+        return accepted == null ? Results.NotFound() : Results.Ok(accepted);
+    }
+    catch (UnauthorizedAccessException)
+    {
+        return InvalidApiKey();
+    }
+    catch (MarketAcquisitionInvalidTransitionException ex)
+    {
+        return Results.Conflict(new { error = ex.Message });
+    }
+}
+
+Task<IResult> RejectAcquisitionRequest(
+    string id,
+    MarketAcquisitionLifecycleRequest lifecycleRequest,
+    MarketAcquisitionRequestStore store,
+    CancellationToken token) =>
+    ApplyAcquisitionLifecycleAsync(store.RejectAsync, id, lifecycleRequest, token);
+
+Task<IResult> ReportAcquisitionProgress(
+    string id,
+    MarketAcquisitionLifecycleRequest lifecycleRequest,
+    MarketAcquisitionRequestStore store,
+    CancellationToken token) =>
+    ApplyAcquisitionLifecycleAsync(store.ReportProgressAsync, id, lifecycleRequest, token);
+
+Task<IResult> CompleteAcquisitionRequest(
+    string id,
+    MarketAcquisitionLifecycleRequest lifecycleRequest,
+    MarketAcquisitionRequestStore store,
+    CancellationToken token) =>
+    ApplyAcquisitionLifecycleAsync(store.CompleteAsync, id, lifecycleRequest, token);
+
+Task<IResult> FailAcquisitionRequest(
+    string id,
+    MarketAcquisitionLifecycleRequest lifecycleRequest,
+    MarketAcquisitionRequestStore store,
+    CancellationToken token) =>
+    ApplyAcquisitionLifecycleAsync(store.FailAsync, id, lifecycleRequest, token);
+
+static async Task<IResult> ApplyAcquisitionLifecycleAsync(
+    Func<string, MarketAcquisitionLifecycleRequest, CancellationToken, Task<MarketAcquisitionRequestView?>> apply,
+    string id,
+    MarketAcquisitionLifecycleRequest lifecycleRequest,
+    CancellationToken token)
+{
+    try
+    {
+        var result = await apply(id, lifecycleRequest, token);
+        return result == null ? Results.NotFound() : Results.Ok(result);
+    }
+    catch (UnauthorizedAccessException)
+    {
+        return InvalidApiKey();
+    }
+    catch (ArgumentException ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+    catch (MarketAcquisitionIdempotencyConflictException ex)
+    {
+        return Results.Conflict(new { error = ex.Message });
+    }
+    catch (MarketAcquisitionInvalidTransitionException ex)
+    {
+        return Results.Conflict(new { error = ex.Message });
+    }
+}
+
 static ApiKeyPurpose RequiredApiKeyPurpose(HttpRequest request, bool requireApiKey)
 {
     if (!requireApiKey)
         return ApiKeyPurpose.None;
+
+    if (IsAcquisitionBrowserCreate(request))
+        return ApiKeyPurpose.None;
+
+    if (IsAcquisitionCreate(request))
+        return ApiKeyPurpose.Read;
+
+    if (IsAcquisitionPluginRoute(request))
+        return ApiKeyPurpose.CommandPickup;
 
     if (IsReportsApiRead(request))
         return ApiKeyPurpose.Read;
@@ -204,13 +384,26 @@ static bool IsReportsApiRead(HttpRequest request) =>
     HttpMethods.IsGet(request.Method) &&
     request.Path.StartsWithSegments("/api/reports");
 
+static bool IsAcquisitionCreate(HttpRequest request) =>
+    HttpMethods.IsPost(request.Method) &&
+    request.Path.Equals("/acquisition/requests", StringComparison.OrdinalIgnoreCase);
+
+static bool IsAcquisitionBrowserCreate(HttpRequest request) =>
+    IsAcquisitionCreate(request) &&
+    request.HasFormContentType;
+
+static bool IsAcquisitionPluginRoute(HttpRequest request) =>
+    request.Path.StartsWithSegments("/acquisition/requests") &&
+    !IsAcquisitionCreate(request);
+
 static bool HasValidApiKey(
     HttpRequest request,
     ApiKeyPurpose purpose,
     string? ingestApiKey,
     string? previousIngestApiKey,
     string? readApiKey,
-    string? previousReadApiKey)
+    string? previousReadApiKey,
+    string? commandPickupApiKey)
 {
     var supplied = GetSingleApiKeyHeader(request.Headers["X-Api-Key"]);
     if (string.IsNullOrWhiteSpace(supplied))
@@ -224,6 +417,8 @@ static bool HasValidApiKey(
         ApiKeyPurpose.Read =>
             MatchesConfiguredKey(supplied, readApiKey) ||
             (!string.IsNullOrWhiteSpace(readApiKey) && MatchesConfiguredKey(supplied, previousReadApiKey)),
+        ApiKeyPurpose.CommandPickup =>
+            MatchesConfiguredKey(supplied, commandPickupApiKey),
         _ => false,
     };
 }
@@ -303,6 +498,40 @@ static async Task<bool> IsValidDashboardPostAsync(HttpRequest request, string? p
     return MatchesConfiguredKey(formToken, cookieToken);
 }
 
+static async Task<MarketAcquisitionCreateRequest> ReadAcquisitionFormAsync(
+    HttpRequest request,
+    CancellationToken token)
+{
+    var form = await request.ReadFormAsync(token);
+    return new MarketAcquisitionCreateRequest
+    {
+        SchemaVersion = ParseInt(form["schemaVersion"].ToString(), "schemaVersion"),
+        IdempotencyKey = form["idempotencyKey"].ToString(),
+        TargetCharacterName = form["targetCharacterName"].ToString(),
+        TargetWorld = form["targetWorld"].ToString(),
+        Region = form["region"].ToString(),
+        ItemId = ParseUInt(form["itemId"].ToString(), "itemId"),
+        ItemName = form["itemName"].ToString(),
+        QuantityMode = form["quantityMode"].ToString(),
+        Quantity = ParseUInt(form["quantity"].ToString(), "quantity"),
+        HqPolicy = form["hqPolicy"].ToString(),
+        MaxUnitPrice = ParseUInt(form["maxUnitPrice"].ToString(), "maxUnitPrice"),
+        MaxTotalGil = ParseUInt(form["maxTotalGil"].ToString(), "maxTotalGil"),
+        WorldMode = form["worldMode"].ToString(),
+        ExpiresInSeconds = ParseInt(form["expiresInSeconds"].ToString(), "expiresInSeconds"),
+    };
+}
+
+static int ParseInt(string value, string fieldName) =>
+    int.TryParse(value, out var parsed)
+        ? parsed
+        : throw new ArgumentException($"{fieldName} must be a whole number.");
+
+static uint ParseUInt(string value, string fieldName) =>
+    uint.TryParse(value, out var parsed)
+        ? parsed
+        : throw new ArgumentException($"{fieldName} must be a positive whole number.");
+
 static bool HasValidOrigin(HttpRequest request, string? publicOrigin)
 {
     if (string.IsNullOrWhiteSpace(publicOrigin))
@@ -326,6 +555,7 @@ static string RenderDashboard(
     IReadOnlyList<ReportSummary> reports,
     string storageDisplayName,
     string? deleted,
+    string? acquisition,
     PathString pathBase,
     string csrfToken)
 {
@@ -358,6 +588,9 @@ static string RenderDashboard(
     var notice = string.IsNullOrWhiteSpace(deleted)
         ? string.Empty
         : $"""<p class="notice">Deleted <code>{Html(deleted)}</code>.</p>""";
+    var acquisitionNotice = string.IsNullOrWhiteSpace(acquisition)
+        ? string.Empty
+        : $"""<p class="notice">Created acquisition request <code>{Html(acquisition)}</code>. Open <code>/mmf</code> in-game and fetch dashboard requests.</p>""";
     var emptyState = reports.Count == 0
         ? "<p class=\"empty\">No snapshots yet. Point MarketMafioso at <code>http://localhost:8080/inventory</code> and send one.</p>"
         : string.Empty;
@@ -481,9 +714,27 @@ static string RenderDashboard(
                     border-radius: 6px;
                     color: #cae8cf;
                 }
+                .form-grid {
+                    display: grid;
+                    grid-template-columns: repeat(4, minmax(0, 1fr));
+                    gap: 10px;
+                    margin: 10px 0;
+                }
+                label { display: grid; gap: 4px; color: var(--muted); font-size: 12px; }
+                input, select {
+                    width: 100%;
+                    box-sizing: border-box;
+                    border: 1px solid var(--border);
+                    border-radius: 5px;
+                    background: var(--panel-strong);
+                    color: var(--text);
+                    padding: 7px 8px;
+                    font: inherit;
+                }
                 @media (max-width: 900px) {
                     header { display: block; }
                     .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+                    .form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
                     table { display: block; overflow-x: auto; }
                 }
             </style>
@@ -505,11 +756,33 @@ static string RenderDashboard(
                     </div>
                 </header>
                 {{notice}}
+                {{acquisitionNotice}}
                 <section class="cards">
                     <div class="card"><div class="label">Snapshots</div><div class="value">{{reports.Count:N0}}</div></div>
                     <div class="card"><div class="label">Latest received</div><div class="value" style="font-size: 15px;">{{Html(latest)}}</div></div>
                 </section>
                 <div class="path">Storage: <code>{{Html(storageDisplayName)}}</code></div>
+                <h2>Market Acquisition</h2>
+                <form method="post" action="{{Html(AppUrl(pathBase, "/acquisition/requests"))}}">
+                    <input type="hidden" name="csrf" value="{{Html(csrfToken)}}">
+                    <input type="hidden" name="schemaVersion" value="1">
+                    <input type="hidden" name="idempotencyKey" value="{{Guid.NewGuid():N}}">
+                    <div class="form-grid">
+                        <label>Character<input name="targetCharacterName" autocomplete="off" required></label>
+                        <label>World<input name="targetWorld" autocomplete="off" required></label>
+                        <label>Region<input name="region" value="North America" required></label>
+                        <label>Item ID<input name="itemId" inputmode="numeric" required></label>
+                        <label>Item name<input name="itemName" autocomplete="off"></label>
+                        <label>Quantity mode<select name="quantityMode"><option>Exact</option><option>UpTo</option><option>AllBelowThreshold</option></select></label>
+                        <label>Quantity<input name="quantity" inputmode="numeric" required></label>
+                        <label>HQ policy<select name="hqPolicy"><option>Either</option><option>NQOnly</option><option>HQOnly</option></select></label>
+                        <label>Max unit price<input name="maxUnitPrice" inputmode="numeric" required></label>
+                        <label>Gil cap<input name="maxTotalGil" inputmode="numeric" required></label>
+                        <label>World mode<select name="worldMode"><option>Recommended</option><option>Selected</option><option>CurrentWorldOnly</option><option>AllWorldSweep</option></select></label>
+                        <label>Pickup expiry seconds<input name="expiresInSeconds" inputmode="numeric" value="90" required></label>
+                    </div>
+                    <button type="submit">Create Request</button>
+                </form>
                 {{emptyState}}
                 <h2>Snapshots</h2>
                 <table>
@@ -735,4 +1008,5 @@ enum ApiKeyPurpose
     None,
     Ingest,
     Read,
+    CommandPickup,
 }

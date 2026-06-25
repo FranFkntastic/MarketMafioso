@@ -12,6 +12,8 @@ public class Configuration : IPluginConfiguration
 
     public string ServerUrl { get; set; } = "http://localhost:8080/inventory";
     public string ApiKey { get; set; } = string.Empty;
+    public string CommandPickupApiKey { get; set; } = string.Empty;
+    public string PluginInstanceId { get; set; } = Guid.NewGuid().ToString("N");
 
     public bool IncludeArmoury { get; set; } = false;
     public bool IncludeCrystals { get; set; } = true;

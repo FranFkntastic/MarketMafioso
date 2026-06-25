@@ -45,10 +45,25 @@ public static class ReceiverEndpointClassifier
         if (string.IsNullOrWhiteSpace(reportId))
             return null;
 
-        var endpoint = Classify(serverUrl);
-        return string.IsNullOrWhiteSpace(endpoint.DashboardBaseUrl)
+        var dashboardBaseUrl = BuildDashboardBaseUrl(serverUrl);
+        return string.IsNullOrWhiteSpace(dashboardBaseUrl)
             ? null
-            : $"{endpoint.DashboardBaseUrl}/reports/{Uri.EscapeDataString(reportId)}";
+            : $"{dashboardBaseUrl}/reports/{Uri.EscapeDataString(reportId)}";
+    }
+
+    public static string? BuildDashboardBaseUrl(string? serverUrl)
+    {
+        var endpoint = Classify(serverUrl);
+        return endpoint.DashboardBaseUrl ??
+               (endpoint.Uri == null ? null : DeriveDashboardBaseUrl(endpoint.Uri));
+    }
+
+    public static string? BuildAcquisitionBaseUrl(string? serverUrl)
+    {
+        var dashboardBaseUrl = BuildDashboardBaseUrl(serverUrl);
+        return string.IsNullOrWhiteSpace(dashboardBaseUrl)
+            ? null
+            : $"{dashboardBaseUrl}/acquisition";
     }
 
     private static bool IsLocalHost(string host) =>

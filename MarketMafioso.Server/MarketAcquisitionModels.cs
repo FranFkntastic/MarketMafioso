@@ -1,0 +1,119 @@
+namespace MarketMafioso.Server;
+
+public sealed record MarketAcquisitionCreateRequest
+{
+    public int SchemaVersion { get; init; }
+    public string IdempotencyKey { get; init; } = string.Empty;
+    public string TargetCharacterName { get; init; } = string.Empty;
+    public string TargetWorld { get; init; } = string.Empty;
+    public string Region { get; init; } = string.Empty;
+    public uint ItemId { get; init; }
+    public string? ItemName { get; init; }
+    public string QuantityMode { get; init; } = string.Empty;
+    public uint Quantity { get; init; }
+    public string HqPolicy { get; init; } = string.Empty;
+    public uint MaxUnitPrice { get; init; }
+    public uint MaxTotalGil { get; init; }
+    public string WorldMode { get; init; } = string.Empty;
+    public int ExpiresInSeconds { get; init; } = 90;
+}
+
+public sealed record MarketAcquisitionClaimRequest
+{
+    public string CharacterName { get; init; } = string.Empty;
+    public string World { get; init; } = string.Empty;
+    public string PluginInstanceId { get; init; } = string.Empty;
+}
+
+public sealed record MarketAcquisitionClaimTokenRequest
+{
+    public string ClaimToken { get; init; } = string.Empty;
+    public string IdempotencyKey { get; init; } = string.Empty;
+}
+
+public sealed record MarketAcquisitionLifecycleRequest
+{
+    public string ClaimToken { get; init; } = string.Empty;
+    public string IdempotencyKey { get; init; } = string.Empty;
+    public string? RunnerState { get; init; }
+    public string? Message { get; init; }
+    public string? Reason { get; init; }
+}
+
+public sealed record MarketAcquisitionRequestView
+{
+    public string Id { get; init; } = string.Empty;
+    public string Status { get; init; } = string.Empty;
+    public DateTimeOffset CreatedAtUtc { get; init; }
+    public DateTimeOffset ExpiresAtUtc { get; init; }
+    public DateTimeOffset? ClaimedAtUtc { get; init; }
+    public DateTimeOffset? ClaimExpiresAtUtc { get; init; }
+    public string TargetCharacterName { get; init; } = string.Empty;
+    public string TargetWorld { get; init; } = string.Empty;
+    public string Region { get; init; } = string.Empty;
+    public uint ItemId { get; init; }
+    public string? ItemName { get; init; }
+    public string QuantityMode { get; init; } = string.Empty;
+    public uint Quantity { get; init; }
+    public string HqPolicy { get; init; } = string.Empty;
+    public uint MaxUnitPrice { get; init; }
+    public uint MaxTotalGil { get; init; }
+    public string WorldMode { get; init; } = string.Empty;
+}
+
+public sealed record MarketAcquisitionClaimView
+{
+    public string Id { get; init; } = string.Empty;
+    public string Status { get; init; } = string.Empty;
+    public DateTimeOffset CreatedAtUtc { get; init; }
+    public DateTimeOffset ExpiresAtUtc { get; init; }
+    public DateTimeOffset? ClaimedAtUtc { get; init; }
+    public DateTimeOffset? ClaimExpiresAtUtc { get; init; }
+    public string TargetCharacterName { get; init; } = string.Empty;
+    public string TargetWorld { get; init; } = string.Empty;
+    public string Region { get; init; } = string.Empty;
+    public uint ItemId { get; init; }
+    public string? ItemName { get; init; }
+    public string QuantityMode { get; init; } = string.Empty;
+    public uint Quantity { get; init; }
+    public string HqPolicy { get; init; } = string.Empty;
+    public uint MaxUnitPrice { get; init; }
+    public uint MaxTotalGil { get; init; }
+    public string WorldMode { get; init; } = string.Empty;
+    public string ClaimToken { get; init; } = string.Empty;
+}
+
+public sealed record MarketAcquisitionPendingResponse
+{
+    public IReadOnlyList<MarketAcquisitionRequestView> Requests { get; init; } = [];
+}
+
+public sealed record MarketAcquisitionCreateResult(MarketAcquisitionRequestView Request, bool IsReplay);
+
+public static class MarketAcquisitionStatuses
+{
+    public const string PendingPickup = "PendingPickup";
+    public const string Claimed = "Claimed";
+    public const string AcceptedInPlugin = "AcceptedInPlugin";
+    public const string Running = "Running";
+    public const string Complete = "Complete";
+    public const string Failed = "Failed";
+    public const string Rejected = "Rejected";
+    public const string Expired = "Expired";
+}
+
+public sealed class MarketAcquisitionIdempotencyConflictException : Exception
+{
+    public MarketAcquisitionIdempotencyConflictException()
+        : base("Idempotency key was already used with a different request body.")
+    {
+    }
+}
+
+public sealed class MarketAcquisitionInvalidTransitionException : Exception
+{
+    public MarketAcquisitionInvalidTransitionException(string status, string targetStatus)
+        : base($"Cannot move acquisition request from {status} to {targetStatus}.")
+    {
+    }
+}

@@ -28,8 +28,8 @@ This guide is for agentic coding tools working in this repository.
 - `MarketMafioso/InventoryPayload.cs`: outbound JSON payload contracts.
 - `MarketMafioso/WorkshopPrep/`: workshop project catalog, availability math, VIWI IPC, and retainer restock automation.
 - `MarketMafioso/Windows/`: settings, inventory reporter, workshop prep, cache status, send action, and JSON preview UI.
-- `MarketMafioso/tools/Sync-DevPlugin.ps1`: debug artifact sync to XIVLauncher dev plugin folder.
-- `MarketMafioso/tools/Deploy-DevPlugin.ps1`: explicit dev-plugin deployment helper.
+- `MarketMafioso/tools/Sync-DevPlugin.ps1`: debug artifact sync to the watched Dalamud dev-plugin folder.
+- `MarketMafioso/tools/Deploy-DevPlugin.ps1`: explicit dev-plugin deployment helper targeting `F:\Everything (HDD)\Misc\Gooseworks (Projects)\FFXIV-Development\_deployed\MarketMafioso` by default.
 - `MarketMafioso.Server/`: local ASP.NET inventory-report receiver and dashboard.
 - `docs/`: maintainer documentation and design notes.
 
@@ -53,7 +53,7 @@ Run from repository root (`MarketMafioso`).
 Build notes:
 - Debug build runs `Sync-DevPlugin.ps1` via `AfterTargets="Build"`.
 - Output folders: `MarketMafioso/bin/Debug` and `MarketMafioso/bin/Release`.
-- Debug sync target defaults to `%APPDATA%\XIVLauncher\devPlugins\MarketMafioso`.
+- Debug sync target defaults to `F:\Everything (HDD)\Misc\Gooseworks (Projects)\FFXIV-Development\_deployed\MarketMafioso`.
 
 ### Lint / Format
 - Verify format (non-destructive):
@@ -171,5 +171,5 @@ Follow established patterns already present in `MarketMafioso/`.
 - Build with `dotnet build "MarketMafioso.sln" -c Debug`.
 - Run `dotnet format "MarketMafioso.sln" --verify-no-changes`.
 - Run relevant tests.
-- If plugin behavior changes, confirm the dev plugin artifact was refreshed.
+- If plugin behavior changes, confirm the deployed DLL at `F:\Everything (HDD)\Misc\Gooseworks (Projects)\FFXIV-Development\_deployed\MarketMafioso\MarketMafioso.dll` was refreshed.
 - Report validations performed and any limitations.

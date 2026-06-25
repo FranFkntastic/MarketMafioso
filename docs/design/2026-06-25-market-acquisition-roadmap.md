@@ -1,0 +1,571 @@
+# Market Acquisition Roadmap
+
+## Goal
+
+Build Market Acquisition as a private, self-hosted dashboard-to-plugin workflow where the browser dashboard stages a request, the plugin explicitly picks it up, and the plugin owns all in-game validation and execution.
+
+This roadmap is intentionally investigation-heavy. The feature touches three areas with different risk profiles:
+
+- Server-side request staging and audit.
+- Plugin-side request pickup and local consent.
+- In-game market board reading, travel, and purchase execution.
+
+The safe order is to make the server and plugin speak first, then prove read-only market-board visibility, then add dry-run world batches, and only then consider guarded purchases.
+
+## Roadmap Principles
+
+- Dashboard requests are high-level intent, not remote-control instructions.
+- The plugin never constantly polls in the background.
+- The plugin must explicitly pick up requests from `/mmf`.
+- A dashboard request can suggest promising worlds, but the plugin must validate live market-board rows before purchase.
+- Recommended-world mode is the default and may consider the configured region. Full regional sweep is a separate explicit mode.
+- Every phase must be useful and testable without assuming later automation exists.
+- Any phase that touches game UI automation must have a read-only proof pass before mutation.
+- Command pickup auth is separate from inventory ingest and dashboard/read auth.
+- Logical acquisition routes live under `{basePath}/acquisition/...`; hosted dev resolves that to `/api/marketmafioso/acquisition/...`.
+
+## Phase 0: Baseline Alignment
+
+### Objective
+
+Lock the design, docs, and UI expectations before code work starts.
+
+### Work
+
+- Keep `docs/design/2026-06-25-market-acquisition-module.md` as the product/design source of truth.
+- Keep `mockups/market-acquisition-initial-ui.html` as the plugin-window UI reference.
+- Add this roadmap as the engineering sequence and investigation register.
+
+### Baseline Decisions
+
+- Implementation starts from the branch/worktree chosen by the maintainer for the coding pass. Before Phase 1 begins, that target must be written into the task notes and verified with `git status`.
+- If the target branch already has SQLite support, reuse the existing storage/migration pattern. If it does not, Phase 1 introduces SQLite for acquisition request lifecycle data.
+- Use `MarketMafioso:CommandPickupApiKey` from the first implementation. Do not reuse inventory ingest auth for command pickup.
+- Acquisition scope is region-wide. Recommended mode filters that region down to worlds with supporting listings; all-world sweep is explicit and visually distinct.
+- Product choices that affect module behavior are not silently converted into defaults. If a later phase exposes a real product fork, pause and ask the maintainer before locking it.
+
+### Exit Criteria
+
+- Design doc and roadmap agree on lifecycle names, request fields, and default world-selection behavior.
+- Mockup reflects the current Dalamud/ImGui window style, not a server dashboard.
+
+## Phase 1: Server Request Lifecycle
+
+### Objective
+
+Add a server-side request queue that can store, expire, claim, and audit dashboard-created acquisition requests without involving the game client yet.
+
+### Proposed Files
+
+- Create `MarketMafioso.Server/MarketAcquisitionRequestModels.cs`
+- Create `MarketMafioso.Server/MarketAcquisitionRequestStore.cs`
+- Modify `MarketMafioso.Server/Program.cs`
+- Add tests in `MarketMafioso.Server.Tests/MarketAcquisitionRequestEndpointTests.cs`
+
+### Capability
+
+- Dashboard can create a request.
+- Phase 1 creation is an authenticated JSON lifecycle endpoint; the browser dashboard form and CSRF workflow land in Phase 2.
+- Server can return pending requests for a target character/world.
+- Plugin-style caller can claim one request atomically.
+- Claimed, expired, rejected, completed, and failed requests stop appearing as pending.
+- Server records lifecycle timestamps and actor/source labels.
+
+### Investigation Points
+
+- Storage and atomic claim mechanism:
+  - First implementation uses SQLite for acquisition requests, progress events, idempotency keys, and audit events.
+  - Claims use a transaction that updates only `PendingPickup` rows that are not expired and not already claimed.
+  - Request payload, current status, lifecycle timestamps, actor labels, claim metadata, and progress events must survive server restart.
+- Auth split:
+  - Current hosted receiver separates ingest and read keys.
+  - Command pickup gets its own key from day one: `MarketMafioso:CommandPickupApiKey`.
+  - Hosted/API-key mode fails at startup if `MarketMafioso:CommandPickupApiKey` is missing.
+  - Ingest auth cannot create, claim, or mutate acquisition requests.
+  - Dashboard/read auth cannot claim, accept, reject, progress, complete, or fail plugin lifecycle.
+- Path/base-path behavior:
+  - All new endpoints are logical `/acquisition/...` routes under the existing base path.
+  - Hosted dev path must be `/api/marketmafioso/acquisition/...`.
+  - Tests must fail on accidental `/api/plugin/...` routes.
+- Expiry cleanup:
+  - Expired requests can be marked lazily on reads.
+  - Pending requests expire after the configured pickup window.
+  - Claimed requests get `claimExpiresAtUtc`, default 5 minutes after claim.
+- Claim token:
+  - Successful claim returns a server-generated `claimToken`.
+  - Accept, reject, progress, complete, and fail require the matching claim token.
+- Idempotency:
+  - Dashboard create and plugin state-changing calls require an idempotency key.
+  - Same key plus same body returns original result.
+  - Same key plus different body returns conflict.
+- Retention:
+  - Acquisition retention is separate from inventory raw JSON retention.
+  - Default cleanup: expired unclaimed requests after 24 hours.
+  - Default terminal audit retention: 90 days or 5,000 terminal requests, whichever is hit first, configurable.
+- Status codes:
+  - Define deterministic responses for expired, already claimed, wrong scope, duplicate terminal update, invalid transition, stale claim token, and idempotency conflict.
+
+### Exit Criteria
+
+- Endpoint tests cover create, pending, claim, accept, wrong-character, stale claim token, idempotency replay, idempotency conflict, restart persistence, hosted base path, auth split, and accidental `/api/plugin/...` routes.
+- Remaining Phase 1 lifecycle coverage still needed before calling the whole phase complete: reject, progress, complete, fail, expiry before claim, claim-expiry after claim, already-claimed response shape, invalid transition, duplicate terminal retry, concurrent claims, and retention pruning.
+- Manual smoke can create and claim a request through the hosted base path.
+- No plugin code is required for the phase to pass.
+
+## Phase 2: Dashboard Request Creation Surface
+
+### Objective
+
+Add a small dashboard form for creating a market acquisition request, with clear pickup instructions.
+
+### Proposed Files
+
+- Modify `MarketMafioso.Server/Program.cs`
+- Modify or create server-side HTML rendering helpers near the existing dashboard rendering.
+- Add tests in `MarketMafioso.Server.Tests/MarketAcquisitionDashboardTests.cs`
+
+### Capability
+
+- Dashboard page exposes a `Market Acquisition` request form.
+- User can enter item id/name, quantity mode, quantity, max unit price, gil cap, HQ policy, region, and world mode.
+- Default world mode is `recommended`.
+- `allWorldSweep` is visually and behaviorally distinct.
+- After creation, dashboard shows:
+  - Request summary.
+  - Expiry countdown or expiry timestamp.
+  - Instruction to open `/mmf` and click `Fetch Dashboard Requests`.
+
+### Investigation Points
+
+- Item search:
+  - First pass can accept item id plus optional item name.
+  - Full item search/autocomplete can wait.
+- Dashboard auth:
+  - The first private-server implementation uses the existing dashboard/read auth for request creation.
+  - Browser-originated request creation and pre-claim cancellation require CSRF in addition to dashboard/read auth.
+  - In deployments where dashboard auth is enforced outside the app, set `MarketMafioso:TrustExternalDashboardAuth=true`; otherwise browser form mutations fail closed in hosted/API-key mode.
+  - API-key-only ingest clients cannot create dashboard requests.
+- CSRF:
+  - Existing delete routes use CSRF token patterns.
+  - Reuse or extend that pattern for request creation and pre-claim dashboard cancellation.
+- Ownership:
+  - Account and creator fields come from authenticated dashboard/session context, not trusted JSON.
+- Cancellation:
+  - Dashboard can cancel only `PendingPickup` requests.
+  - After claim, dashboard cancellation is rejected or recorded as advisory only.
+
+### Exit Criteria
+
+- A dashboard request can be created from the browser.
+- The created request appears in pending pickup endpoint until expiry.
+- Request creation fails closed when required fields are missing or invalid.
+- Request creation requires CSRF and dashboard/read auth.
+- Ingest key cannot create requests.
+
+## Phase 3: Plugin Request Pickup UI
+
+### Objective
+
+Add the in-game pickup tray without any market planning, game UI automation, or purchase behavior.
+
+### Current Implementation Status
+
+- `/mmf` has a `Market Acquisition` tab.
+- The tab exposes the derived dashboard URL, `Open Dashboard`, a separate command pickup key field, and a one-shot `Fetch Dashboard Requests` action.
+- Pickup scope uses the current character name plus the stable home-world identity already used by inventory reports.
+- Matching requests render in a compact table and can be claimed explicitly.
+- A claimed request can be accepted or rejected explicitly, and accepting only records local consent.
+- No timed polling, market-board reading, world travel, or purchase behavior exists in this phase.
+
+### Proposed Files
+
+- Create `MarketMafioso/MarketAcquisition/MarketAcquisitionRequestModels.cs`
+- Create `MarketMafioso/MarketAcquisition/MarketAcquisitionRequestClient.cs`
+- Create `MarketMafioso/MarketAcquisition/MarketAcquisitionPickupState.cs`
+- Modify `MarketMafioso/Windows/MainWindow.cs`
+- Add tests in `MarketMafioso.Tests/MarketAcquisition/MarketAcquisitionRequestClientTests.cs`
+
+### Capability
+
+- `/mmf` gains a `Market Acquisition` tab.
+- Tab shows dashboard URL, `Open Dashboard`, and `Fetch Dashboard Requests`.
+- Fetch is one-shot manual fetch plus manual retry.
+- No countdown or `Stop Fetching` button appears in Phase 3.
+- Matching pending request candidates are shown in a compact table.
+- User chooses one request to claim and review.
+- Claimed request is shown in a compact pending-request table with accept/reject.
+- User can accept or reject locally.
+- Accepting does not start purchasing; it moves request into local `Accepted` state only.
+
+### Investigation Points
+
+- Character identity:
+  - Current implementation uses `IPlayerState.CharacterName` and `IPlayerState.HomeWorld`, matching inventory report identity.
+  - Later runner phases may separately track visited/current world for travel and live listing validation, but pickup identity should stay stable.
+- Dashboard URL derivation:
+  - Reuse existing endpoint classification and dashboard URL fallback.
+- HTTP lifecycle:
+  - First pass is one-shot request plus manual retry.
+  - Add timed polling only if UX needs it after Phase 3.
+- Configuration:
+  - Add command pickup key configuration separate from ingest key.
+- Multiple pending requests:
+  - Show matching candidates and let user claim one.
+  - Do not automatically claim an arbitrary request.
+- Claimed but unaccepted:
+  - Local UI state is volatile.
+  - Plugin reports reject/abandoned when possible if window closes, plugin reloads, or character/world changes before acceptance.
+
+### Exit Criteria
+
+- Plugin can fetch matching dashboard request candidates in a test/fake server path.
+- Plugin can claim one selected request and retain the claim token locally.
+- Plugin can reject a request and server records it.
+- Plugin can accept a request and server records it.
+- No constant polling exists.
+
+## Phase 4: Market Planning Dry Run
+
+### Objective
+
+Turn an accepted request into a data-supported world plan, without touching the game UI.
+
+### Current Implementation Status
+
+- Accepted requests can be prepared into a dry-run plan from the `Market Acquisition` tab.
+- The first plan source reads Universalis current listings from `/api/v2/{region}/{itemId}?listings=...`.
+- The parser requires the live listing fields used by the planner: world name/id, listing id, retainer id/name, unit price, quantity, HQ flag, and review timestamp.
+- The planner filters by HQ policy, max unit price, max total gil, and world mode.
+- Recommended mode includes only worlds with listings under the configured threshold; it does not blindly include every world in the region.
+- Selected mode currently fails explicitly before remote planning because the request payload does not yet carry a selected-world list.
+- All-world sweep is allowed but labeled distinctly in the dry-run plan; richer sweep-specific routing waits for later runner phases.
+- Plans preserve individual listing rows because stack quantities and prices can differ.
+- Planning assumes whole-stack purchases. If fulfilling a request requires buying beyond the requested quantity, the batch is marked as an overage.
+- The generated plan is one executable advisory route under the request gil cap, not a sum of every possible good world.
+- Remote listing ids remain advisory until the read-only market-board probe proves live row identity.
+
+### Proposed Files
+
+- Create `MarketMafioso/MarketAcquisition/MarketAcquisitionPlanModels.cs`
+- Create `MarketMafioso/MarketAcquisition/UniversalisMarketAcquisitionPlanSource.cs`
+- Create `MarketMafioso/MarketAcquisition/MarketAcquisitionPlanner.cs`
+- Add tests in `MarketMafioso.Tests/MarketAcquisition/MarketAcquisitionPlannerTests.cs`
+
+### Capability
+
+- Accepted request can be prepared into planned world batches.
+- Default `recommended` mode emits only worlds with supporting listings under threshold.
+- `selected` mode limits to selected worlds.
+- `currentWorldOnly` mode limits to current world.
+- `allWorldSweep` is separate and explicit.
+- Planner respects HQ policy, quantity mode, max unit price, max total gil, and requested quantity.
+
+### Investigation Points
+
+- Universalis API shape:
+  - Confirmed live current-listings shape on 2026-06-25 against `https://universalis.app/api/v2/North-America/2?listings=5`.
+  - Current response includes `pricePerUnit`, `quantity`, `worldName`, `worldID`, `hq`, `listingID`, `retainerID`, `retainerName`, and `lastReviewTime`.
+  - Confirm behavior for DC-level item fetches and world upload times.
+  - Confirm rate limits and chunk sizes for single-item and future multi-item requests.
+- Craft Architect parity:
+  - First pass uses simple threshold filtering with stable sorting by unit price, listing age, and retainer name.
+  - CA-like anti-gouging, mode-price filtering, and route scoring are later planner enhancements after the dashboard-to-plugin workflow is proven.
+- Item identity:
+  - First pass uses the dashboard-provided item name when present and item id as the durable identity.
+  - Lumina id-to-name resolution can improve display later.
+- Remote listing identity:
+  - Remote listing ids are advisory unless a live probe proves exact mapping to current in-game rows for the current patch.
+
+### Exit Criteria
+
+- Planner tests prove recommended mode does not blindly include every world.
+- UI shows compact planned world batches after `Prepare`.
+- No in-game market board interaction exists yet.
+
+## Phase 5: Live Market Board Read-Only Probe
+
+### Objective
+
+Read and reconcile live market board listings from the game without sending any purchase requests.
+
+### Current Implementation Status
+
+- Added live-listing reconciliation models and a strict reconciler.
+- Added a read-only `InfoProxyItemSearch`/`AddonItemSearchResult` probe behind `Read Live Listings` in the `Market Acquisition` tab.
+- Reconciliation requires the prepared plan item id to match the current market-board search item id.
+- Reconciliation requires the current market-board world to match a world batch in the prepared plan.
+- Planned listings match live rows only when listing id, retainer id, unit price, quantity, and HQ flag still match.
+- Missing listings or changed price/quantity/HQ facts block the batch.
+- The probe reads `SearchItemId`, `ListingCount`, `WaitingForListings`, and current `Listings` only.
+- No callback, packet, purchase request, world-travel automation, market-board search automation, or row selection exists yet.
+- Local FFXIVClientStructs XML exposes `AddonItemSearchResult`, `AgentItemSearch`, and `InfoProxyItemSearch.Listings`; exact field interpretation still requires an in-game read-only probe.
+
+### Proposed Files
+
+- Create `MarketMafioso/MarketAcquisition/MarketBoardListingReader.cs`
+- Create `MarketMafioso/MarketAcquisition/MarketBoardLiveListingModels.cs`
+- Create `MarketMafioso/MarketAcquisition/MarketBoardListingReconciler.cs`
+- Add tests in `MarketMafioso.Tests/MarketAcquisition/MarketBoardListingReconcilerTests.cs`
+- Add a diagnostic note under `docs/design/` after the probe.
+
+### Capability
+
+- Plugin can detect whether market board search result UI is open.
+- Plugin can identify current market board item search.
+- Plugin can read visible/live listing data.
+- Plugin can reconcile live listings against the accepted request and planned world batch.
+- Plugin can show read-only validation results.
+
+### Investigation Points
+
+- FFXIVClientStructs:
+  - Local Dalamud dev hooks expose `AgentItemSearch`, `AddonItemSearchResult`, and `InfoProxyItemSearch.Listings`.
+  - Compile-time reflection confirmed `InfoProxyItemSearch` exposes `SearchItemId`, `ListingCount`, `WaitingForListings`, and `Listings`; `MarketBoardListing` exposes listing id, retainer id, item id, unit price, quantity, and HQ flag.
+  - In-game test still needs to confirm those fields are populated as expected for current market-board search results.
+  - Retainer name is not present on `MarketBoardListing`; live matching uses listing id plus retainer id.
+  - Confirm listing count/page behavior.
+  - Confirm how to identify the active item search reliably.
+- Addon state:
+  - Determine whether `AddonItemSearchResult` is enough for visible state and row selection.
+  - Determine how to detect "listings are loading" vs "no listings".
+- Listing identity:
+  - Determine whether live listing id and retainer id are accessible and stable.
+  - Probe must prove exact remote Universalis listing id to live-row matching for the current patch; otherwise remote ids remain advisory hints only.
+  - Document the live row identity tuple and every case where it becomes invalid.
+- Diagnostics:
+  - Decide exact dump fields needed to debug read failures without exposing secrets.
+- Version drift:
+  - Probe output records game version, Dalamud API level, Dalamud.NET.Sdk version, and FFXIVClientStructs version.
+  - If the current patch/version has not been probed, live reading may run in diagnostics-only mode and purchase execution remains unavailable.
+
+### Exit Criteria
+
+- Read-only probe can be run on a low-risk common item.
+- Probe demonstrates current item id, listing count, row identity, HQ flag, unit price, quantity, retainer id, listing id, town/world fields, pagination behavior, and loading/no-listings distinction.
+- Probe produces live listing rows and validation status.
+- No purchase request path is called.
+- Unknown UI state produces a clear diagnostic.
+
+## Phase 6: Guided World-Batch Dry Run
+
+### Objective
+
+Add a local runner that walks through planned world batches with manual/guided travel and world-batch confirmation, still without purchasing.
+
+### Proposed Files
+
+- Create `MarketMafioso/MarketAcquisition/MarketAcquisitionRunner.cs`
+- Create `MarketMafioso/MarketAcquisition/WorldTravel/ManualWorldTravelDriver.cs`
+- Create `MarketMafioso/MarketAcquisition/MarketAcquisitionDiagnostics.cs`
+- Add tests in `MarketMafioso.Tests/MarketAcquisition/MarketAcquisitionRunnerTests.cs`
+
+### Capability
+
+- Runner moves through planned worlds in order.
+- For each world, runner waits until current world matches expected world.
+- Runner waits for market board/listings to be available.
+- Runner reconciles live listings.
+- Runner shows one world-batch confirmation.
+- `Dry Run Batch` records what would be bought and advances.
+
+### Investigation Points
+
+- Current world detection:
+  - Confirm stable source for current world after world travel.
+  - Confirm timing after travel completes.
+- Confirmation surface:
+  - Use inline confirmation for low-risk actions.
+  - Reserve modal popup for high-risk world-batch purchase confirmation.
+  - Ensure confirmation is invalidated if live listings change.
+- Runner persistence:
+  - Decide whether active run state is volatile only.
+  - Recommended: volatile only; dashboard request audit stores progress/results.
+
+### Exit Criteria
+
+- User can dry-run a full multi-world plan manually.
+- Runner can pause, stop, fail, and complete with clear status.
+- Server receives progress/failure/completion reports.
+- Confirmation invalidates if live listing set, current world, current search item, price, quantity, or remaining budget changes before batch action.
+
+## Phase 7: Purchase Mechanism Investigation
+
+### Objective
+
+Prove or reject a safe way to execute a purchase programmatically from a live validated listing.
+
+This is an investigation phase, not a shipping phase.
+
+### Proposed Files
+
+- Create a private/local diagnostic branch or guarded experimental class under `MarketMafioso/MarketAcquisition/Experimental/`.
+- Add a writeup under `docs/design/2026-06-25-market-acquisition-purchase-probe.md`.
+
+### Investigation Points
+
+- Purchase path:
+  - Probe must prove or reject whether `InfoProxyItemSearch.SetLastPurchasedItem(...)` plus `SendPurchaseRequestPacket()` works in current Dalamud.
+  - Probe must document required field population for listing id, retainer id, container index, item id, quantity, unit price, HQ, tax, and town id.
+  - Probe must document whether purchase quantity is fixed by listing stack quantity.
+- Purchase response:
+  - Confirm how success/failure is observed.
+  - Confirm response error ids or visible UI messages.
+  - Confirm how listing disappearance or price changes report.
+- Safety:
+  - Confirm re-reading live listing immediately before purchase is possible.
+  - Confirm no purchase can be sent while wrong item/world/search is active.
+  - Confirm inventory-full and insufficient-gil behavior.
+- Test economics:
+  - Use only low-value items and strict gil caps.
+  - Prefer one purchase from current world only.
+- Failure taxonomy:
+  - Classify each purchase failure as terminal, skip-listing, retryable after manual refresh, or unknown.
+  - Unknown defaults to terminal.
+
+### Exit Criteria
+
+- Written probe result explains whether guarded purchase execution is feasible.
+- If feasible, exact required fields, preconditions, postconditions, success signal, failure signal, and safe stop behavior are documented.
+- If not feasible, roadmap stops at dry-run/guided mode until a safer path exists.
+- No purchase code may be merged behind a runtime flag until this probe passes.
+
+## Phase 8: Guarded Purchase Execution
+
+### Objective
+
+Add live purchases behind strict gates if Phase 7 proves the mechanism.
+
+### Proposed Files
+
+- Create `MarketMafioso/MarketAcquisition/MarketBoardPurchaseExecutor.cs`
+- Create `MarketMafioso/MarketAcquisition/MarketBoardPurchaseResult.cs`
+- Add tests in `MarketMafioso.Tests/MarketAcquisition/MarketBoardPurchaseExecutorTests.cs`
+
+### Capability
+
+- Purchase execution is disabled unless the user explicitly enables it.
+- Plugin confirms once per world batch.
+- Before each purchase send, plugin revalidates item id, world, listing id, retainer id, HQ flag, unit price, quantity, and remaining gil cap.
+- Runner stops on unknown purchase result.
+- Server receives progress and final audit state.
+
+### Investigation Points
+
+- Setting/kill switch:
+  - Guarded purchase execution has its own config flag.
+  - Default false.
+- Retry policy:
+  - Decide which failures are safe to continue.
+  - Recommended first pass: no automatic retries after any purchase error.
+- Audit detail:
+  - Store request id, item id, HQ flag, unit price, quantity, world, retainer/listing identity facts, validation timestamp, action result, and failure classification.
+  - Do not store secrets, auth material, raw plugin config, raw game memory dumps, or unnecessary live game diagnostics.
+
+### Exit Criteria
+
+- One low-value current-world purchase succeeds under cap.
+- Multi-listing single-world batch succeeds after one confirmation.
+- Any mismatch stops the batch.
+- No purchase path exists without local plugin acceptance and world-batch confirmation.
+- Unknown purchase response stops the runner.
+- Execution audit records enough listing identity and validation facts to explain why a purchase was attempted, without storing secrets or raw unstable client dumps by default.
+
+## Phase 9: Travel Automation Spike
+
+### Objective
+
+Investigate whether regional world travel can be automated safely, including both same-data-center world travel and cross-data-center travel within the configured FFXIV region.
+
+### Proposed Files
+
+- Create a probe writeup under `docs/design/2026-06-25-market-acquisition-world-travel-probe.md`.
+- Add code only after the probe establishes stable UI states.
+
+### Investigation Points
+
+- Addon flow:
+  - Identify aetheryte/world travel addon names and menu entries.
+  - Confirm visible preconditions and postconditions for every action.
+- Travel restrictions:
+  - Detect inaccessible, congested, or temporarily unavailable worlds.
+  - Confirm how failures present in UI.
+- State timing:
+  - Determine how to wait through loading and confirm current world after arrival.
+- Version drift:
+  - World travel probe records game version, Dalamud API level, Dalamud.NET.Sdk version, and FFXIVClientStructs version.
+- Scope:
+  - Region-wide acquisition is the target.
+  - Same-data-center and cross-data-center travel may land as separate sub-slices, but both require probe evidence before automation is enabled.
+
+### Exit Criteria
+
+- If safe, add an `AetheryteWorldTravelDriver` plan.
+- If unsafe or unstable, keep manual/guided travel as the supported mode.
+- Automated travel remains blocked until the probe documents visible preconditions, action steps, postconditions, timeout behavior, and all known failure surfaces.
+
+## Phase 10: Craft Architect Plan Integration
+
+### Objective
+
+Replace or augment the simple local planner with Craft Architect's richer market analysis when a clean service boundary exists.
+
+### Proposed Files
+
+- Server side:
+  - Add a CA-compatible planning endpoint or shared planning service.
+- Plugin side:
+  - Add `ServerDashboardAcquisitionPlanSource` support if not already present.
+
+### Investigation Points
+
+- Current CA web app appears to run market analysis client-side with IndexedDB.
+- Later integration must pick one explicit service boundary before coding: MarketMafioso.Server endpoint, CA backend endpoint, or shared library. The first implementation does not depend on this decision.
+- Avoid direct plugin dependency on CA assemblies.
+- Preserve self-hosted DIY package behavior.
+
+### Exit Criteria
+
+- Dashboard-created requests can include ranked world batches from CA-quality planning.
+- Plugin still treats server plan as advisory and revalidates live listings.
+
+## Cross-Cutting Risks
+
+### Security
+
+- Dashboard request creation and plugin pickup must use different capabilities.
+- Commands must expire and be single-use.
+- Never accept arbitrary code or raw UI instructions.
+- Unauthorized or wrong-scope responses must not reveal request existence, character, world, item, or gil cap.
+- Audit records must not contain secrets, auth headers, CSRF tokens, raw plugin config, or unnecessary live game diagnostics.
+
+### Game UI Drift
+
+- Market board and world travel structures can break with FFXIV/Dalamud updates.
+- Keep read-only probes and diagnostics easy to run after updates.
+- After any FFXIV patch or Dalamud struct update, rerun the read-only probe before enabling dry-run reconciliation and rerun the purchase probe before enabling purchase execution.
+
+### Economic Risk
+
+- Max unit price and max total gil are mandatory.
+- Purchase execution remains disabled until explicitly enabled.
+- Start purchase-mechanism testing with low-value current-world tests only; this is a safety smoke test, not the final acquisition scope.
+
+### UX Risk
+
+- The plugin window must stay small and ImGui-native.
+- Dashboard owns rich planning; plugin owns consent and state.
+
+## Recommended Execution Order
+
+1. Phase 1: Server Request Lifecycle.
+2. Phase 2: Dashboard Request Creation Surface.
+3. Phase 3: Plugin Request Pickup UI.
+4. Phase 4: Market Planning Dry Run.
+5. Phase 5: Live Market Board Read-Only Probe.
+6. Phase 6: Guided World-Batch Dry Run.
+7. Phase 7: Purchase Mechanism Investigation.
+8. Phase 8 only if Phase 7 passes.
+9. Phase 9 can run in parallel after Phase 6.
+10. Phase 10 can wait until the core loop is proven.
+
+The first milestone worth deploying to the VPS is Phase 3: dashboard request creation plus plugin pickup. That proves the novel server-to-plugin workflow without touching game automation.

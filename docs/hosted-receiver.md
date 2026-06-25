@@ -26,6 +26,8 @@ The URL remains editable. The plugin does not change existing saved URLs automat
 
 Hosted receivers require an ingest API key. Set the same value in the plugin's `API Key` field and in `MarketMafioso__IngestApiKey` on the server. Do not use the optional read API key in the plugin.
 
+Market Acquisition request pickup uses a separate command pickup key. Set the same value in the plugin's `Command pickup key` field and in `MarketMafioso__CommandPickupApiKey` on the server. Do not reuse the ingest key.
+
 ## Server Configuration
 
 Run the hosted receiver behind Caddy with these environment variables:
@@ -37,12 +39,14 @@ MarketMafioso__IngestApiKey=<secret>
 MarketMafioso__PreviousIngestApiKey=<optional-previous-secret>
 MarketMafioso__ReadApiKey=<optional-read-secret>
 MarketMafioso__PreviousReadApiKey=<optional-previous-read-secret>
+MarketMafioso__CommandPickupApiKey=<secret>
 MarketMafioso__BasePath=/api/marketmafioso
 MarketMafioso__PublicOrigin=https://dev.xivcraftarchitect.com
 MarketMafioso__StorageLabel=dev receiver storage
+MarketMafioso__TrustExternalDashboardAuth=true
 ```
 
-`/health` remains public for uptime checks. Inventory ingestion requires the ingest key. `/api/reports...` is optional machine-read API surface: it requires the read key when configured and fails closed when no read key is configured. Browser dashboard routes use Caddy Basic Auth instead.
+`/health` remains public for uptime checks. Inventory ingestion requires the ingest key. `/api/reports...` is optional machine-read API surface: it requires the read key when configured and fails closed when no read key is configured. Market Acquisition pickup and lifecycle routes require the command pickup key. Browser dashboard routes use Caddy Basic Auth instead.
 
 The dashboard HTML is protected by Caddy Basic Auth. The dev username is fixed to `marketmafioso`; the password is stored in GitHub Actions as `MARKETMAFIOSO_DEV_BASIC_AUTH_PASSWORD`.
 
@@ -62,6 +66,7 @@ VPS_USER
 VPS_SSH_PRIVATE_KEY
 VPS_SSH_PORT
 MARKETMAFIOSO_DEV_INGEST_API_KEY
+MARKETMAFIOSO_DEV_COMMAND_PICKUP_API_KEY
 MARKETMAFIOSO_DEV_BASIC_AUTH_PASSWORD
 ```
 
@@ -73,7 +78,7 @@ MARKETMAFIOSO_DEV_READ_API_KEY
 MARKETMAFIOSO_DEV_PREVIOUS_READ_API_KEY
 ```
 
-The workflow installs or updates the `marketmafioso-dev` systemd service, stores dev data under `/srv/craftarchitect/data/marketmafioso/dev`, and configures the dev Caddy site for public health, API-key ingest/read routes, and Basic-Auth dashboard routes.
+The workflow installs or updates the `marketmafioso-dev` systemd service, stores dev data under `/srv/craftarchitect/data/marketmafioso/dev`, and configures the dev Caddy site for public health, API-key ingest/read/acquisition routes, and Basic-Auth dashboard routes.
 
 ## First-Time Setup
 
@@ -90,12 +95,19 @@ gh secret set MARKETMAFIOSO_DEV_INGEST_API_KEY --repo FranFkntastic/MarketMafios
 $bytes = New-Object byte[] 32
 $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
 try { $rng.GetBytes($bytes) } finally { $rng.Dispose() }
+$commandPickupKey = [Convert]::ToBase64String($bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+Set-Content -LiteralPath "$env:USERPROFILE\.ssh\marketmafioso_command_pickup_key.txt" -Value $commandPickupKey -NoNewline
+gh secret set MARKETMAFIOSO_DEV_COMMAND_PICKUP_API_KEY --repo FranFkntastic/MarketMafioso --body $commandPickupKey
+
+$bytes = New-Object byte[] 32
+$rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+try { $rng.GetBytes($bytes) } finally { $rng.Dispose() }
 $dashboardPassword = [Convert]::ToBase64String($bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_')
 Set-Content -LiteralPath "$env:USERPROFILE\.ssh\marketmafioso_dashboard_password.txt" -Value $dashboardPassword -NoNewline
 gh secret set MARKETMAFIOSO_DEV_BASIC_AUTH_PASSWORD --repo FranFkntastic/MarketMafioso --body $dashboardPassword
 ```
 
-Paste only the ingest key into the plugin's `API Key` field.
+Paste the ingest key into the plugin's `API Key` field. Paste the command pickup key into the Market Acquisition `Command pickup key` field.
 
 ## Caddy Shape
 
@@ -103,8 +115,20 @@ Use Caddy routing so plugin/API traffic reaches the app with `X-Api-Key`, while 
 
 ```caddyfile
 dev.xivcraftarchitect.com {
+    @marketmafiosoDashboardCreateAcquisition {
+        method POST
+        path /api/marketmafioso/acquisition/requests
+    }
+
+    handle @marketmafiosoDashboardCreateAcquisition {
+        basic_auth {
+            marketmafioso <hashed-password>
+        }
+        reverse_proxy 127.0.0.1:5088
+    }
+
     @marketmafiosoApi {
-        path /api/marketmafioso/health /api/marketmafioso/inventory /api/marketmafioso/api/inventory /api/marketmafioso/api/reports*
+        path /api/marketmafioso/health /api/marketmafioso/inventory /api/marketmafioso/api/inventory /api/marketmafioso/api/reports* /api/marketmafioso/acquisition*
     }
 
     handle @marketmafiosoApi {

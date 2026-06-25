@@ -506,6 +506,7 @@ public sealed class InventoryReportViewEndpointTests
         {
             ["MarketMafioso:RequireApiKey"] = "true",
             ["MarketMafioso:IngestApiKey"] = "test-ingest-secret",
+            ["MarketMafioso:CommandPickupApiKey"] = "test-command-secret",
         };
 
         var contentRoot = Path.Combine(Path.GetTempPath(), "MarketMafioso.Server.Tests", Guid.NewGuid().ToString("N"));
