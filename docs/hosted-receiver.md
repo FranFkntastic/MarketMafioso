@@ -43,6 +43,7 @@ MarketMafioso__StorageLabel=dev receiver storage
 MarketMafioso__DatabasePath=/srv/craftarchitect/data/marketmafioso/dev/marketmafioso.db
 MarketMafioso__RawJsonRetentionCount=20
 MarketMafioso__SnapshotRetentionCount=500
+MarketMafioso__XivDataBaseUrl=https://dev.xivcraftarchitect.com/api/xivdata
 MarketMafioso__RequireDashboardAuth=true
 MarketMafioso__DashboardBootstrapUsername=marketmafioso
 MarketMafioso__DashboardBootstrapPassword=<dashboard-password>
@@ -51,6 +52,8 @@ MarketMafioso__DashboardBootstrapPassword=<dashboard-password>
 `/health` remains public for uptime checks. Inventory ingestion, `/api/reports...` machine-read routes, and Market Acquisition plugin pickup/lifecycle routes require the client key. Browser dashboard routes use app-managed Basic Auth backed by the receiver SQLite database.
 
 The dev dashboard username is fixed to `marketmafioso`; the password is stored in GitHub Actions as `MARKETMAFIOSO_DEV_BASIC_AUTH_PASSWORD`. Bootstrap credentials create the first local dashboard admin user only when no dashboard users exist.
+
+`MarketMafioso__XivDataBaseUrl` points the Market Acquisition dashboard at the shared XIV item data gateway used for item-name search and ID resolution. The browser uses this URL directly when building staged purchase requests, while the MarketMafioso receiver still requires a resolved `itemId` before it stores a request.
 
 ## Dev VPS Deployment
 

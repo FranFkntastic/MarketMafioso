@@ -35,6 +35,9 @@ var requireApiKey = app.Configuration.GetValue<bool>("MarketMafioso:RequireApiKe
 var basePath = app.Configuration["MarketMafioso:BasePath"];
 var publicOrigin = app.Configuration["MarketMafioso:PublicOrigin"];
 var storageLabel = app.Configuration["MarketMafioso:StorageLabel"];
+var xivDataBaseUrl = NormalizeXivDataBaseUrl(FirstConfigured(
+    app.Configuration["MarketMafioso:XivDataBaseUrl"],
+    DefaultXivDataBaseUrl(publicOrigin)));
 
 if (requireApiKey && string.IsNullOrWhiteSpace(clientApiKey))
     throw new InvalidOperationException("MarketMafioso:ClientApiKey is required when API key authentication is enabled.");
@@ -128,7 +131,7 @@ app.MapGet("/acquisition", async (
     var acquisitionRequests = await acquisitionStore.ListRecentAsync(50, token);
     var csrfToken = SetCsrfCookie(request.HttpContext.Response);
     return Results.Content(
-        RenderAcquisitionDashboard(characters, selectedCharacterId, selectedCharacter, acquisitionRequests, acquisition, request.PathBase, csrfToken),
+        RenderAcquisitionDashboard(characters, selectedCharacterId, selectedCharacter, acquisitionRequests, acquisition, request.PathBase, csrfToken, xivDataBaseUrl),
         "text/html; charset=utf-8");
 });
 
@@ -605,6 +608,8 @@ static async Task<MarketAcquisitionCreateRequest> ReadAcquisitionFormAsync(
     CancellationToken token)
 {
     var form = await request.ReadFormAsync(token);
+    var itemId = ParseUInt(form["itemId"].ToString(), "itemId");
+    var itemName = form["itemName"].ToString().Trim();
     return new MarketAcquisitionCreateRequest
     {
         SchemaVersion = ParseInt(form["schemaVersion"].ToString(), "schemaVersion"),
@@ -612,8 +617,8 @@ static async Task<MarketAcquisitionCreateRequest> ReadAcquisitionFormAsync(
         TargetCharacterName = form["targetCharacterName"].ToString(),
         TargetWorld = form["targetWorld"].ToString(),
         Region = form["region"].ToString(),
-        ItemId = ParseUInt(form["itemId"].ToString(), "itemId"),
-        ItemName = form["itemName"].ToString(),
+        ItemId = itemId,
+        ItemName = string.IsNullOrWhiteSpace(itemName) ? $"Item {itemId}" : itemName,
         QuantityMode = form["quantityMode"].ToString(),
         Quantity = ParseUInt(form["quantity"].ToString(), "quantity"),
         HqPolicy = form["hqPolicy"].ToString(),
@@ -633,6 +638,19 @@ static uint ParseUInt(string value, string fieldName) =>
     uint.TryParse(value, out var parsed)
         ? parsed
         : throw new ArgumentException($"{fieldName} must be a positive whole number.");
+
+static string NormalizeXivDataBaseUrl(string? value) =>
+    string.IsNullOrWhiteSpace(value)
+        ? string.Empty
+        : value.Trim().TrimEnd('/');
+
+static string DefaultXivDataBaseUrl(string? publicOrigin)
+{
+    var normalizedPublicOrigin = NormalizeXivDataBaseUrl(publicOrigin);
+    return string.IsNullOrWhiteSpace(normalizedPublicOrigin)
+        ? "https://dev.xivcraftarchitect.com/api/xivdata"
+        : $"{normalizedPublicOrigin}/api/xivdata";
+}
 
 static bool HasValidOrigin(HttpRequest request, string? publicOrigin)
 {
@@ -953,7 +971,8 @@ static string RenderAcquisitionDashboard(
     IReadOnlyList<MarketAcquisitionRequestView> acquisitionRequests,
     string? acquisition,
     PathString pathBase,
-    string csrfToken)
+    string csrfToken,
+    string xivDataBaseUrl)
 {
     var acquisitionNotice = string.IsNullOrWhiteSpace(acquisition)
         ? string.Empty
@@ -1129,6 +1148,7 @@ static string RenderAcquisitionDashboard(
                     grid-template-columns: repeat(2, minmax(0, 1fr));
                     gap: 10px;
                 }
+                .grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
                 .grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
                 label { display: grid; gap: 5px; color: var(--muted); font-size: 12px; }
                 input, select, button {
@@ -1140,6 +1160,7 @@ static string RenderAcquisitionDashboard(
                     font: inherit;
                 }
                 input, select { width: 100%; padding: 0 10px; }
+                input[readonly] { color: var(--muted); background: #111820; }
                 button {
                     padding: 0 12px;
                     background: var(--panel-2);
@@ -1151,6 +1172,45 @@ static string RenderAcquisitionDashboard(
                     background: #19334a;
                     color: #d8ecff;
                     font-weight: 650;
+                }
+                .suggestions {
+                    display: grid;
+                    gap: 6px;
+                    min-height: 0;
+                    margin-top: 8px;
+                }
+                .suggestion {
+                    display: grid;
+                    height: auto;
+                    min-height: 42px;
+                    gap: 2px;
+                    padding: 7px 9px;
+                    text-align: left;
+                    align-content: center;
+                }
+                .suggestion strong,
+                .suggestion span {
+                    overflow: hidden;
+                    text-overflow: ellipsis;
+                    white-space: nowrap;
+                }
+                .suggestion span {
+                    color: var(--muted);
+                    font-size: 12px;
+                }
+                .suggestion.muted,
+                .suggestion.error {
+                    min-height: 34px;
+                    padding: 8px 9px;
+                    border: 1px dashed var(--line);
+                    border-radius: 6px;
+                    color: var(--muted);
+                    background: #10161d;
+                }
+                .suggestion.error {
+                    color: #ffd2d6;
+                    border-color: #5a3034;
+                    background: #201417;
                 }
                 .button-row {
                     display: flex;
@@ -1336,7 +1396,7 @@ static string RenderAcquisitionDashboard(
                             {{characterHeader}}
                         </div>
                         <div class="pane-body">
-                            {{RenderAcquisitionRequestForm(pathBase, csrfToken, targetCharacter, targetWorld)}}
+                            {{RenderAcquisitionRequestForm(pathBase, csrfToken, targetCharacter, targetWorld, xivDataBaseUrl)}}
                         </div>
                     </section>
 
@@ -1424,12 +1484,15 @@ static string RenderAcquisitionRequestForm(
     PathString pathBase,
     string csrfToken,
     string targetCharacter,
-    string targetWorld) =>
+    string targetWorld,
+    string xivDataBaseUrl) =>
     $$"""
-        <form class="request-form" method="post" action="{{Html(AppUrl(pathBase, "/acquisition/requests"))}}">
+        <form class="request-form" method="post" action="{{Html(AppUrl(pathBase, "/acquisition/requests"))}}" data-xiv-data-base-url="{{Html(xivDataBaseUrl)}}">
             <input type="hidden" name="csrf" value="{{Html(csrfToken)}}">
             <input type="hidden" name="schemaVersion" value="1">
             <input type="hidden" name="idempotencyKey" value="{{Guid.NewGuid():N}}">
+            <input id="selectedItemId" type="hidden" name="itemId">
+            <input id="selectedItemName" type="hidden" name="itemName">
             <div class="section">
                 <p class="section-title">Target</p>
                 <div class="grid three">
@@ -1440,13 +1503,14 @@ static string RenderAcquisitionRequestForm(
             </div>
             <div class="section">
                 <p class="section-title">Item</p>
-                <div class="grid">
-                    <label>Item name or ID<input name="itemName" autocomplete="off"></label>
-                    <label>Item ID<input name="itemId" inputmode="numeric" required></label>
+                <div class="grid two">
+                    <label>Item search<input id="acquisitionItemSearch" autocomplete="off" placeholder="Search by item name or ID"></label>
+                    <label>Resolved item<input id="resolvedAcquisitionItem" readonly value="No item selected"></label>
                     <label>HQ policy<select name="hqPolicy"><option>Either</option><option>NQOnly</option><option>HQOnly</option></select></label>
                 </div>
+                <div id="acquisitionItemSuggestions" class="suggestions" aria-live="polite"></div>
                 <div class="chips" style="margin-top: 10px;">
-                    <span class="chip">Resolved after staging</span>
+                    <span class="chip">Resolved before queueing</span>
                     <span class="chip">Type from market data</span>
                     <span class="chip">Stack size checked by plugin</span>
                 </div>
@@ -1477,9 +1541,140 @@ static string RenderAcquisitionRequestForm(
             </div>
             <div class="button-row">
                 <button type="reset">Clear</button>
-                <button class="primary" type="submit">Stage Request</button>
+                <button type="button" onclick="addAcquisitionQueueRow()">Add to Queue</button>
+                <button class="primary" type="button" onclick="stageAcquisitionQueue()">Stage Queue</button>
+            </div>
+            <div class="section">
+                <p class="section-title">Queued Items</p>
+                <table>
+                    <thead>
+                        <tr><th>Item</th><th>Qty</th><th>Max Unit</th><th>Gil Cap</th><th></th></tr>
+                    </thead>
+                    <tbody id="acquisitionQueueRows">
+                        <tr><td colspan="5" class="empty-cell">No queued items.</td></tr>
+                    </tbody>
+                </table>
             </div>
         </form>
+        <script>
+        const acquisitionQueue = [];
+        let selectedAcquisitionItem = null;
+        let acquisitionSearchTimer = null;
+
+        document.getElementById('acquisitionItemSearch')?.addEventListener('input', event => {
+            clearTimeout(acquisitionSearchTimer);
+            acquisitionSearchTimer = setTimeout(() => searchAcquisitionItems(event.target.value), 180);
+        });
+
+        document.getElementById('acquisitionItemSuggestions')?.addEventListener('click', event => {
+            const button = event.target.closest('button[data-item-id]');
+            if (!button) return;
+            selectAcquisitionItem(
+                Number(button.dataset.itemId),
+                button.dataset.itemName || '',
+                button.dataset.itemType || '');
+        });
+
+        async function searchAcquisitionItems(query) {
+            const suggestions = document.getElementById('acquisitionItemSuggestions');
+            const form = document.querySelector('.request-form');
+            const baseUrl = form?.dataset.xivDataBaseUrl;
+            if (!suggestions || !baseUrl) return;
+            selectedAcquisitionItem = null;
+            document.getElementById('selectedItemId').value = '';
+            document.getElementById('selectedItemName').value = '';
+            document.getElementById('resolvedAcquisitionItem').value = 'No item selected';
+            const trimmed = (query || '').trim();
+            if (!trimmed || (trimmed.length < 2 && !/^\d+$/.test(trimmed))) {
+                suggestions.innerHTML = '';
+                return;
+            }
+            suggestions.innerHTML = '<div class="suggestion muted">Searching...</div>';
+            try {
+                const endpoint = /^\d+$/.test(trimmed)
+                    ? `${baseUrl}/items/${encodeURIComponent(trimmed)}`
+                    : `${baseUrl}/items/search?q=${encodeURIComponent(trimmed)}&limit=12`;
+                const response = await fetch(endpoint, { headers: { 'Accept': 'application/json' } });
+                if (!response.ok) {
+                    suggestions.innerHTML = '<div class="suggestion error">Item lookup failed.</div>';
+                    return;
+                }
+                const payload = await response.json();
+                const items = payload.items || [payload];
+                suggestions.innerHTML = items.length
+                    ? items.map(item => `<button type="button" class="suggestion" data-item-id="${item.itemId}" data-item-name="${escapeAttribute(item.name)}" data-item-type="${escapeAttribute(item.itemType || '')}"><strong>${escapeHtml(item.name)}</strong><span>Item ${item.itemId}${item.itemType ? ' / ' + escapeHtml(item.itemType) : ''}</span></button>`).join('')
+                    : '<div class="suggestion muted">No matching items.</div>';
+            } catch {
+                suggestions.innerHTML = '<div class="suggestion error">XIV data gateway unavailable.</div>';
+            }
+        }
+
+        function selectAcquisitionItem(itemId, name, itemType) {
+            selectedAcquisitionItem = { itemId, name, itemType };
+            document.getElementById('selectedItemId').value = itemId;
+            document.getElementById('selectedItemName').value = name;
+            document.getElementById('resolvedAcquisitionItem').value = `${name} (${itemId})`;
+            document.getElementById('acquisitionItemSuggestions').innerHTML = '';
+        }
+
+        function addAcquisitionQueueRow() {
+            const form = document.querySelector('.request-form');
+            const data = new FormData(form);
+            if (!selectedAcquisitionItem) {
+                alert('Select a resolved item before queueing.');
+                return;
+            }
+            const row = Object.fromEntries(data.entries());
+            row.itemId = String(selectedAcquisitionItem.itemId);
+            row.itemName = selectedAcquisitionItem.name;
+            row.idempotencyKey = crypto.randomUUID ? crypto.randomUUID().replaceAll('-', '') : `${Date.now()}${Math.random()}`;
+            acquisitionQueue.push(row);
+            renderAcquisitionQueueRows();
+        }
+
+        function renderAcquisitionQueueRows() {
+            const body = document.getElementById('acquisitionQueueRows');
+            if (!body) return;
+            body.innerHTML = acquisitionQueue.length
+                ? acquisitionQueue.map((row, index) => `<tr><td>${escapeHtml(row.itemName)}<br><span>Item ${row.itemId}</span></td><td>${escapeHtml(row.quantity)}</td><td>${escapeHtml(row.maxUnitPrice)}</td><td>${escapeHtml(row.maxTotalGil)}</td><td><button type="button" onclick="removeAcquisitionQueueRow(${index})">Remove</button></td></tr>`).join('')
+                : '<tr><td colspan="5" class="empty-cell">No queued items.</td></tr>';
+        }
+
+        function removeAcquisitionQueueRow(index) {
+            acquisitionQueue.splice(index, 1);
+            renderAcquisitionQueueRows();
+        }
+
+        async function stageAcquisitionQueue() {
+            const form = document.querySelector('.request-form');
+            if (!form || acquisitionQueue.length === 0) {
+                alert('Queue at least one resolved item first.');
+                return;
+            }
+            let staged = 0;
+            for (const row of acquisitionQueue) {
+                const response = await fetch(form.action, {
+                    method: 'POST',
+                    body: new URLSearchParams(row),
+                    redirect: 'manual'
+                });
+                if (response.ok || response.status === 0 || response.status === 302) staged++;
+            }
+            if (staged === acquisitionQueue.length) {
+                window.location.href = '{{Html(AppUrl(pathBase, "/acquisition"))}}';
+            } else {
+                alert(`${staged} of ${acquisitionQueue.length} acquisition rows staged.`);
+            }
+        }
+
+        function escapeHtml(value) {
+            return String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character]));
+        }
+
+        function escapeAttribute(value) {
+            return escapeHtml(value).replace(/`/g, '&#96;');
+        }
+        </script>
         """;
 
 static string RenderAcquisitionQueueRows(IReadOnlyList<MarketAcquisitionRequestView> requests)

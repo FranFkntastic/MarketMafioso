@@ -665,14 +665,23 @@ public sealed class MarketAcquisitionRequestEndpointTests
         Assert.Contains("Purchase Limits", acquisitionPage, StringComparison.Ordinal);
         Assert.Contains("Routing", acquisitionPage, StringComparison.Ordinal);
         Assert.Contains("Request Preview", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("Stage Request", acquisitionPage, StringComparison.Ordinal);
+        Assert.Contains("Add to Queue", acquisitionPage, StringComparison.Ordinal);
+        Assert.Contains("Stage Queue", acquisitionPage, StringComparison.Ordinal);
         Assert.Contains("Request Queue", acquisitionPage, StringComparison.Ordinal);
         Assert.Contains("Filter by item, world, status", acquisitionPage, StringComparison.Ordinal);
         Assert.Contains("class=\"acquisition-main\"", acquisitionPage, StringComparison.Ordinal);
         Assert.Contains("class=\"pane request-pane\"", acquisitionPage, StringComparison.Ordinal);
         Assert.Contains("class=\"pane queue-pane\"", acquisitionPage, StringComparison.Ordinal);
         Assert.Contains("class=\"section-title\">Item</", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("Item name or ID", acquisitionPage, StringComparison.Ordinal);
+        Assert.Contains("id=\"acquisitionItemSearch\"", acquisitionPage, StringComparison.Ordinal);
+        Assert.Contains("id=\"acquisitionItemSuggestions\"", acquisitionPage, StringComparison.Ordinal);
+        Assert.Contains("name=\"itemId\"", acquisitionPage, StringComparison.Ordinal);
+        Assert.Contains("name=\"itemName\"", acquisitionPage, StringComparison.Ordinal);
+        Assert.Contains("id=\"acquisitionQueueRows\"", acquisitionPage, StringComparison.Ordinal);
+        Assert.Contains("searchAcquisitionItems", acquisitionPage, StringComparison.Ordinal);
+        Assert.Contains("addAcquisitionQueueRow", acquisitionPage, StringComparison.Ordinal);
+        Assert.Contains("stageAcquisitionQueue", acquisitionPage, StringComparison.Ordinal);
+        Assert.Contains("data-xiv-data-base-url=\"https://dev.xivcraftarchitect.com/api/xivdata\"", acquisitionPage, StringComparison.Ordinal);
         Assert.Contains("Plugin pickup required", acquisitionPage, StringComparison.Ordinal);
         Assert.Contains("No background polling", acquisitionPage, StringComparison.Ordinal);
         Assert.Contains("All statuses", acquisitionPage, StringComparison.Ordinal);
@@ -683,6 +692,98 @@ public sealed class MarketAcquisitionRequestEndpointTests
         Assert.Contains("Accepted", acquisitionPage, StringComparison.Ordinal);
         Assert.Contains("Plugin status", acquisitionPage, StringComparison.Ordinal);
         Assert.Contains("Plugin pickup uses the same client API key", acquisitionPage, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AcquisitionDashboardUsesConfiguredXivDataBaseUrl()
+    {
+        await using var application = CreateHostedApplication(
+            extraConfiguration:
+            [
+                new KeyValuePair<string, string?>("MarketMafioso:TrustExternalDashboardAuth", "true"),
+                new KeyValuePair<string, string?>("MarketMafioso:XivDataBaseUrl", "https://example.test/xivdata"),
+            ]);
+        using var client = application.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false,
+        });
+
+        var acquisitionPage = await client.GetStringAsync("/api/marketmafioso/acquisition");
+
+        Assert.Contains("data-xiv-data-base-url=\"https://example.test/xivdata\"", acquisitionPage, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AcquisitionDashboardDefaultsXivDataBaseUrlFromPublicOrigin()
+    {
+        await using var application = CreateHostedApplication(
+            extraConfiguration:
+            [
+                new KeyValuePair<string, string?>("MarketMafioso:TrustExternalDashboardAuth", "true"),
+                new KeyValuePair<string, string?>("MarketMafioso:PublicOrigin", "https://staging.example.test/"),
+            ]);
+        using var client = application.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false,
+        });
+
+        var acquisitionPage = await client.GetStringAsync("/api/marketmafioso/acquisition");
+
+        Assert.Contains("data-xiv-data-base-url=\"https://staging.example.test/api/xivdata\"", acquisitionPage, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AcquisitionDashboardRejectsUnresolvedItemName()
+    {
+        await using var application = CreateHostedApplication(
+            extraConfiguration: new KeyValuePair<string, string?>("MarketMafioso:TrustExternalDashboardAuth", "true"));
+        using var client = application.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false,
+        });
+        var acquisitionPage = await client.GetStringAsync("/api/marketmafioso/acquisition");
+        var csrf = Regex.Match(acquisitionPage, "name=\"csrf\" value=\"(?<token>[^\"]+)\"").Groups["token"].Value;
+        var fields = CreateFormFields(csrf, "unresolved-item");
+        fields["itemId"] = string.Empty;
+        fields["itemName"] = "Darksteel Nugget";
+
+        var response = await client.PostAsync(
+            "/api/marketmafioso/acquisition/requests",
+            new FormUrlEncodedContent(fields));
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task AcquisitionDashboardUsesItemIdFallbackNameWhenNameIsBlank()
+    {
+        await using var application = CreateHostedApplication(
+            extraConfiguration: new KeyValuePair<string, string?>("MarketMafioso:TrustExternalDashboardAuth", "true"));
+        using var client = application.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false,
+        });
+        var acquisitionPage = await client.GetStringAsync("/api/marketmafioso/acquisition");
+        var csrf = Regex.Match(acquisitionPage, "name=\"csrf\" value=\"(?<token>[^\"]+)\"").Groups["token"].Value;
+        var fields = CreateFormFields(csrf, "item-id-fallback");
+        fields["itemId"] = "5057";
+        fields["itemName"] = string.Empty;
+
+        var response = await client.PostAsync(
+            "/api/marketmafioso/acquisition/requests",
+            new FormUrlEncodedContent(fields));
+
+        Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
+
+        var pending = await SendWithKeyAsync(
+            client,
+            HttpMethod.Get,
+            "/api/marketmafioso/acquisition/requests/pending?characterName=Wei%20Ning&world=Gilgamesh",
+            "client-secret");
+        pending.EnsureSuccessStatusCode();
+        using var pendingJson = JsonDocument.Parse(await pending.Content.ReadAsStringAsync());
+        var request = Assert.Single(pendingJson.RootElement.GetProperty("requests").EnumerateArray());
+        Assert.Equal("Item 5057", request.GetProperty("itemName").GetString());
     }
 
     [Fact]
