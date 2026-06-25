@@ -47,6 +47,20 @@ Use a short-lived, plugin-initiated pickup flow:
 
 This should feel like pairing a device: the dashboard stages the request, then the plugin deliberately reaches out to collect it.
 
+## Dashboard Item Resolution
+
+The dashboard item field should not require the user to know exact item IDs. Item identity should come from the shared XIV Data Gateway described in `docs/design/2026-06-25-shared-xiv-data-gateway.md`.
+
+The acquisition dashboard should use a Craft Architect-style selector:
+
+- Search by item name.
+- Select an item result with metadata.
+- Resolve the hidden `itemId` from that selection.
+- Allow numeric item ID entry only when it resolves through the same gateway path.
+- Reject unresolved free text before staging a request.
+
+The dashboard should also grow a Plan Builder-like queue. The queue can contain multiple resolved acquisition rows, but the first storage and plugin pickup contract remains one acquisition request per item. `Stage Queue` creates one normal request per queued row.
+
 Request lifecycle:
 
 - `PendingPickup`
