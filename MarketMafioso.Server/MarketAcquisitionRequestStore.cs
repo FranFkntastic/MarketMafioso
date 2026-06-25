@@ -135,6 +135,35 @@ public sealed class MarketAcquisitionRequestStore
         return requests;
     }
 
+    public async Task<IReadOnlyList<MarketAcquisitionRequestView>> ListRecentAsync(
+        int limit,
+        CancellationToken cancellationToken)
+    {
+        if (limit < 1)
+            throw new ArgumentOutOfRangeException(nameof(limit), "Limit must be one or greater.");
+
+        await ExpirePendingAsync(cancellationToken).ConfigureAwait(false);
+        await ExpireClaimedAsync(cancellationToken).ConfigureAwait(false);
+
+        await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT id, status, created_at_utc, expires_at_utc, claimed_at_utc, claim_expires_at_utc, payload_json
+            FROM acquisition_requests
+            ORDER BY created_at_utc DESC
+            LIMIT $limit;
+            """;
+        command.Parameters.AddWithValue("$limit", limit);
+
+        var requests = new List<MarketAcquisitionRequestView>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            requests.Add(ReadView(reader));
+
+        return requests;
+    }
+
     public async Task<MarketAcquisitionClaimView?> ClaimAsync(
         string id,
         MarketAcquisitionClaimRequest request,

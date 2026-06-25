@@ -118,6 +118,7 @@ app.MapGet("/inventory", async (
 app.MapGet("/acquisition", async (
     HttpRequest request,
     InventoryReportStore store,
+    MarketAcquisitionRequestStore acquisitionStore,
     string? acquisition,
     long? characterId,
     CancellationToken token) =>
@@ -127,9 +128,10 @@ app.MapGet("/acquisition", async (
     var selectedCharacter = selectedCharacterId == null
         ? null
         : characters.FirstOrDefault(c => c.Id == selectedCharacterId.Value);
+    var acquisitionRequests = await acquisitionStore.ListRecentAsync(50, token);
     var csrfToken = SetCsrfCookie(request.HttpContext.Response);
     return Results.Content(
-        RenderAcquisitionDashboard(characters, selectedCharacterId, selectedCharacter, acquisition, request.PathBase, csrfToken),
+        RenderAcquisitionDashboard(characters, selectedCharacterId, selectedCharacter, acquisitionRequests, acquisition, request.PathBase, csrfToken),
         "text/html; charset=utf-8");
 });
 
@@ -962,6 +964,7 @@ static string RenderAcquisitionDashboard(
     IReadOnlyList<CharacterSummary> characters,
     long? selectedCharacterId,
     CharacterSummary? selectedCharacter,
+    IReadOnlyList<MarketAcquisitionRequestView> acquisitionRequests,
     string? acquisition,
     PathString pathBase,
     string csrfToken)
@@ -972,6 +975,22 @@ static string RenderAcquisitionDashboard(
         : $"""<p class="notice">Created request <code>{Html(acquisition)}</code>. Open <code>/mmf</code> in-game, select <code>Market Acquisition</code>, and fetch dashboard requests.</p>""";
     var targetCharacter = selectedCharacter?.CharacterName ?? string.Empty;
     var targetWorld = selectedCharacter?.HomeWorld ?? string.Empty;
+    var activeCount = acquisitionRequests.Count(request =>
+        request.Status is MarketAcquisitionStatuses.PendingPickup
+            or MarketAcquisitionStatuses.Claimed
+            or MarketAcquisitionStatuses.AcceptedInPlugin
+            or MarketAcquisitionStatuses.Running);
+    var latestRequest = acquisitionRequests.FirstOrDefault();
+    var latestRequestLabel = latestRequest == null
+        ? "No staged request"
+        : FormatAcquisitionItem(latestRequest);
+    var latestRequestStatus = latestRequest == null
+        ? "Idle"
+        : FormatAcquisitionStatus(latestRequest.Status);
+    var latestRequestExpiry = latestRequest == null
+        ? "-"
+        : FormatAcquisitionExpiry(latestRequest);
+    var queueRows = RenderAcquisitionQueueRows(acquisitionRequests);
 
     return $$"""
         <!doctype html>
@@ -983,13 +1002,19 @@ static string RenderAcquisitionDashboard(
             <style>
                 :root {
                     color-scheme: dark;
-                    --bg: #101317;
-                    --panel: #171c22;
-                    --panel-2: #1d242c;
-                    --line: #2c3642;
+                    --bg: #0f1419;
+                    --panel: #151b21;
+                    --panel-2: #1c242d;
+                    --panel-3: #111820;
+                    --line: #2b3744;
+                    --line-strong: #3b4a5b;
                     --text: #e7edf3;
-                    --muted: #95a3b3;
+                    --muted: #92a2b3;
+                    --faint: #657386;
                     --accent: #62b6ff;
+                    --good: #76d188;
+                    --warn: #f0c36a;
+                    --bad: #ff7d7d;
                     font-family: "Segoe UI", system-ui, sans-serif;
                 }
                 * { box-sizing: border-box; }
@@ -1022,8 +1047,11 @@ static string RenderAcquisitionDashboard(
                 .tab.active { color: var(--text); border-color: var(--line); background: var(--panel-2); }
                 main { width: min(1180px, calc(100vw - 40px)); margin: 0 auto; padding: 22px 0 36px; }
                 h1 { margin: 0 0 8px; font-size: 22px; letter-spacing: 0; }
+                h2 { margin: 0; font-size: 16px; }
+                h3 { margin: 0 0 10px; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
                 p { color: var(--muted); }
                 code { color: var(--accent); }
+                .muted { color: var(--muted); }
                 .notice {
                     margin: 0 0 14px;
                     padding: 10px 12px;
@@ -1032,19 +1060,37 @@ static string RenderAcquisitionDashboard(
                     background: #152333;
                     color: #d8eaff;
                 }
+                .dashboard-grid {
+                    display: grid;
+                    grid-template-columns: minmax(0, 1fr) 330px;
+                    gap: 14px;
+                    align-items: start;
+                }
                 .panel {
                     border: 1px solid var(--line);
                     border-radius: 8px;
                     background: var(--panel);
                     padding: 14px;
                 }
+                .panel-head {
+                    display: flex;
+                    align-items: baseline;
+                    justify-content: space-between;
+                    gap: 12px;
+                    margin-bottom: 12px;
+                }
+                .panel-head span { color: var(--muted); font-size: 12px; }
                 .request-form {
                     display: grid;
                     gap: 14px;
                 }
+                .form-section {
+                    display: grid;
+                    gap: 10px;
+                }
                 .form-grid {
                     display: grid;
-                    grid-template-columns: repeat(4, minmax(0, 1fr));
+                    grid-template-columns: repeat(3, minmax(0, 1fr));
                     gap: 10px;
                 }
                 label { display: grid; gap: 5px; color: var(--muted); font-size: 12px; }
@@ -1064,6 +1110,13 @@ static string RenderAcquisitionDashboard(
                     cursor: pointer;
                 }
                 button:hover { border-color: var(--accent); }
+                .primary-action {
+                    min-width: 136px;
+                    border-color: #386083;
+                    background: #193047;
+                    color: #f4faff;
+                    font-weight: 650;
+                }
                 .toolbar {
                     display: flex;
                     align-items: end;
@@ -1072,11 +1125,114 @@ static string RenderAcquisitionDashboard(
                     margin-bottom: 14px;
                 }
                 .character-jump { min-width: 260px; }
+                .side-stack {
+                    display: grid;
+                    gap: 14px;
+                }
+                .metric-grid {
+                    display: grid;
+                    grid-template-columns: repeat(2, minmax(0, 1fr));
+                    gap: 10px;
+                }
+                .metric {
+                    min-height: 66px;
+                    border: 1px solid var(--line);
+                    border-radius: 7px;
+                    padding: 10px;
+                    background: var(--panel-3);
+                }
+                .metric span { display: block; color: var(--muted); font-size: 12px; }
+                .metric strong { display: block; margin-top: 6px; font-size: 18px; }
+                .preview-list {
+                    display: grid;
+                    gap: 9px;
+                    margin: 0;
+                }
+                .preview-row {
+                    display: grid;
+                    grid-template-columns: 112px minmax(0, 1fr);
+                    gap: 10px;
+                    align-items: baseline;
+                }
+                .preview-row dt { color: var(--muted); }
+                .preview-row dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+                .queue-panel {
+                    margin-top: 14px;
+                    padding: 0;
+                    overflow: hidden;
+                }
+                .queue-toolbar {
+                    display: grid;
+                    grid-template-columns: minmax(220px, 1fr) auto auto;
+                    gap: 10px;
+                    align-items: center;
+                    padding: 12px;
+                    border-bottom: 1px solid var(--line);
+                    background: var(--panel-3);
+                }
+                .queue-toolbar input { height: 32px; }
+                .queue-meta { color: var(--muted); font-size: 12px; white-space: nowrap; }
+                table {
+                    width: 100%;
+                    border-collapse: collapse;
+                    table-layout: fixed;
+                }
+                th, td {
+                    padding: 10px 11px;
+                    border-bottom: 1px solid #24303b;
+                    border-right: 1px solid #26323e;
+                    vertical-align: middle;
+                    overflow: hidden;
+                    text-overflow: ellipsis;
+                    white-space: nowrap;
+                }
+                th:last-child, td:last-child { border-right: 0; }
+                th {
+                    color: #b8c7d8;
+                    background: var(--panel-2);
+                    font-size: 12px;
+                    text-align: left;
+                    text-transform: uppercase;
+                    letter-spacing: .04em;
+                }
+                tbody tr:nth-child(even) { background: rgba(255, 255, 255, .025); }
+                tbody tr:hover { background: rgba(98, 182, 255, .08); }
+                .item-cell strong { display: block; color: #f5f8fc; }
+                .item-cell span { display: block; margin-top: 2px; color: var(--faint); font-size: 12px; }
+                .number { text-align: right; font-variant-numeric: tabular-nums; }
+                .empty-cell {
+                    height: 74px;
+                    color: var(--muted);
+                    text-align: center;
+                    white-space: normal;
+                }
+                .status {
+                    display: inline-flex;
+                    align-items: center;
+                    height: 22px;
+                    max-width: 100%;
+                    padding: 0 8px;
+                    border: 1px solid var(--line-strong);
+                    border-radius: 999px;
+                    background: #202b36;
+                    color: var(--text);
+                    font-size: 12px;
+                }
+                .status-pending { color: #cde8ff; border-color: #315d80; background: #182d40; }
+                .status-running { color: #fff1c7; border-color: #755d28; background: #332914; }
+                .status-good { color: #d5f6dc; border-color: #3b7347; background: #193522; }
+                .status-bad { color: #ffdada; border-color: #7a3a3a; background: #371c1f; }
                 @media (max-width: 980px) {
                     .topbar, .toolbar { display: block; }
                     .tabs { margin-top: 10px; flex-wrap: wrap; }
+                    .dashboard-grid { grid-template-columns: 1fr; }
                     .form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
                     .character-jump { margin-top: 12px; min-width: 0; }
+                }
+                @media (max-width: 720px) {
+                    main { width: min(100vw - 24px, 1180px); }
+                    .form-grid, .metric-grid, .queue-toolbar { grid-template-columns: 1fr; }
+                    th, td { padding: 9px 8px; }
                 }
             </style>
         </head>
@@ -1097,7 +1253,7 @@ static string RenderAcquisitionDashboard(
                 <main>
                     <div class="toolbar">
                         <div>
-                            <h1>Create Dashboard Request</h1>
+                            <h1>New Purchase Request</h1>
                             <p>Stage a request here, then pick it up manually from the in-game Market Acquisition tab.</p>
                         </div>
                         <form class="character-jump" method="get" action="{{Html(AppUrl(pathBase, "/acquisition"))}}">
@@ -1107,8 +1263,76 @@ static string RenderAcquisitionDashboard(
                         </form>
                     </div>
                     {{acquisitionNotice}}
-                    <section class="panel">
-                        {{RenderAcquisitionRequestForm(pathBase, csrfToken, targetCharacter, targetWorld)}}
+                    <section class="dashboard-grid" aria-label="Market acquisition control surface">
+                        <div>
+                            <section class="panel">
+                                <div class="panel-head">
+                                    <h2>Target Request</h2>
+                                    <span>Create Dashboard Request</span>
+                                </div>
+                                {{RenderAcquisitionRequestForm(pathBase, csrfToken, targetCharacter, targetWorld)}}
+                            </section>
+                            <section class="panel queue-panel">
+                                <div class="panel-head" style="padding: 12px 12px 0">
+                                    <h2>Request Queue</h2>
+                                    <span>recent dashboard requests</span>
+                                </div>
+                                <div class="queue-toolbar">
+                                    <input type="search" placeholder="Filter by item, world, status" aria-label="Filter request queue">
+                                    <span class="queue-meta">{{activeCount:N0}} active</span>
+                                    <span class="queue-meta">{{acquisitionRequests.Count:N0}} recent</span>
+                                </div>
+                                <table>
+                                    <colgroup>
+                                        <col style="width: 25%">
+                                        <col style="width: 9%">
+                                        <col style="width: 12%">
+                                        <col style="width: 16%">
+                                        <col style="width: 18%">
+                                        <col style="width: 11%">
+                                        <col style="width: 9%">
+                                    </colgroup>
+                                    <thead>
+                                        <tr>
+                                            <th>Item</th>
+                                            <th class="number">Qty</th>
+                                            <th class="number">Max Unit</th>
+                                            <th>Routing</th>
+                                            <th>Target</th>
+                                            <th>Status</th>
+                                            <th>Age</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {{queueRows}}
+                                    </tbody>
+                                </table>
+                            </section>
+                        </div>
+                        <aside class="side-stack" aria-label="Acquisition request status">
+                            <section class="panel">
+                                <div class="panel-head">
+                                    <h2>Request Preview</h2>
+                                    <span>before pickup</span>
+                                </div>
+                                <dl class="preview-list">
+                                    <div class="preview-row"><dt>Target</dt><dd>{{Html(targetCharacter)}} @ {{Html(targetWorld)}}</dd></div>
+                                    <div class="preview-row"><dt>Purchase Limits</dt><dd>Quantity and gil cap are enforced by the staged request.</dd></div>
+                                    <div class="preview-row"><dt>Routing</dt><dd>Recommended worlds first; region-wide when requested.</dd></div>
+                                </dl>
+                            </section>
+                            <section class="panel">
+                                <h3>Plugin status</h3>
+                                <div class="metric-grid">
+                                    <div class="metric"><span>Latest</span><strong>{{Html(latestRequestStatus)}}</strong></div>
+                                    <div class="metric"><span>Expires</span><strong>{{Html(latestRequestExpiry)}}</strong></div>
+                                </div>
+                                <dl class="preview-list" style="margin-top: 12px">
+                                    <div class="preview-row"><dt>Request</dt><dd>{{Html(latestRequestLabel)}}</dd></div>
+                                    <div class="preview-row"><dt>Pickup</dt><dd>Command pickup uses a separate key from inventory uploads.</dd></div>
+                                </dl>
+                            </section>
+                        </aside>
                     </section>
                 </main>
             </div>
@@ -1127,23 +1351,121 @@ static string RenderAcquisitionRequestForm(
             <input type="hidden" name="csrf" value="{{Html(csrfToken)}}">
             <input type="hidden" name="schemaVersion" value="1">
             <input type="hidden" name="idempotencyKey" value="{{Guid.NewGuid():N}}">
-            <div class="form-grid">
-                <label>Character<input name="targetCharacterName" value="{{Html(targetCharacter)}}" autocomplete="off" required></label>
-                <label>World<input name="targetWorld" value="{{Html(targetWorld)}}" autocomplete="off" required></label>
-                <label>Region<input name="region" value="North America" required></label>
-                <label>Item ID<input name="itemId" inputmode="numeric" required></label>
-                <label>Item name<input name="itemName" autocomplete="off"></label>
-                <label>Quantity mode<select name="quantityMode"><option>Exact</option><option>UpTo</option><option>AllBelowThreshold</option></select></label>
-                <label>Quantity<input name="quantity" inputmode="numeric" required></label>
-                <label>HQ policy<select name="hqPolicy"><option>Either</option><option>NQOnly</option><option>HQOnly</option></select></label>
-                <label>Max unit price<input name="maxUnitPrice" inputmode="numeric" required></label>
-                <label>Gil cap<input name="maxTotalGil" inputmode="numeric" required></label>
-                <label>World mode<select name="worldMode"><option>Recommended</option><option>Selected</option><option>CurrentWorldOnly</option><option>AllWorldSweep</option></select></label>
-                <label>Pickup expiry seconds<input name="expiresInSeconds" inputmode="numeric" value="90" required></label>
+            <div class="form-section">
+                <h3>Target</h3>
+                <div class="form-grid">
+                    <label>Character<input name="targetCharacterName" value="{{Html(targetCharacter)}}" autocomplete="off" required></label>
+                    <label>World<input name="targetWorld" value="{{Html(targetWorld)}}" autocomplete="off" required></label>
+                    <label>Region<input name="region" value="North America" required></label>
+                    <label>Item ID<input name="itemId" inputmode="numeric" required></label>
+                    <label>Item name<input name="itemName" autocomplete="off"></label>
+                    <label>HQ policy<select name="hqPolicy"><option>Either</option><option>NQOnly</option><option>HQOnly</option></select></label>
+                </div>
             </div>
-            <button type="submit">Create Request</button>
+            <div class="form-section">
+                <h3>Purchase Limits</h3>
+                <div class="form-grid">
+                    <label>Quantity mode<select name="quantityMode"><option>Exact</option><option>UpTo</option><option>AllBelowThreshold</option></select></label>
+                    <label>Quantity<input name="quantity" inputmode="numeric" required></label>
+                    <label>Max unit price<input name="maxUnitPrice" inputmode="numeric" required></label>
+                    <label>Gil cap<input name="maxTotalGil" inputmode="numeric" required></label>
+                </div>
+            </div>
+            <div class="form-section">
+                <h3>Routing</h3>
+                <div class="form-grid">
+                    <label>World mode<select name="worldMode"><option>Recommended</option><option>Selected</option><option>CurrentWorldOnly</option><option>AllWorldSweep</option></select></label>
+                    <label>Pickup expiry seconds<input name="expiresInSeconds" inputmode="numeric" value="90" required></label>
+                </div>
+            </div>
+            <button class="primary-action" type="submit">Stage Request</button>
         </form>
         """;
+
+static string RenderAcquisitionQueueRows(IReadOnlyList<MarketAcquisitionRequestView> requests)
+{
+    if (requests.Count == 0)
+        return """<tr><td colspan="7" class="empty-cell">No acquisition requests yet.</td></tr>""";
+
+    return string.Join(Environment.NewLine, requests.Select(request =>
+        $$"""
+        <tr>
+            <td class="item-cell"><strong>{{Html(string.IsNullOrWhiteSpace(request.ItemName) ? $"Item {request.ItemId}" : request.ItemName)}}</strong><span>Item {{request.ItemId}} · {{Html(request.HqPolicy)}}</span></td>
+            <td class="number">{{request.Quantity:N0}}</td>
+            <td class="number">{{FormatGil(request.MaxUnitPrice)}}</td>
+            <td>{{Html(FormatWorldMode(request.WorldMode))}}</td>
+            <td>{{Html(request.TargetCharacterName)}} @ {{Html(request.TargetWorld)}}</td>
+            <td><span class="status {{Html(AcquisitionStatusClass(request.Status))}}">{{Html(FormatAcquisitionStatus(request.Status))}}</span></td>
+            <td>{{Html(FormatAcquisitionAge(request.CreatedAtUtc))}}</td>
+        </tr>
+        """));
+}
+
+static string FormatAcquisitionItem(MarketAcquisitionRequestView request)
+{
+    var name = string.IsNullOrWhiteSpace(request.ItemName)
+        ? $"Item {request.ItemId}"
+        : request.ItemName;
+    return $"{name} ({request.ItemId})";
+}
+
+static string FormatAcquisitionStatus(string status) =>
+    status switch
+    {
+        MarketAcquisitionStatuses.PendingPickup => "Pending",
+        MarketAcquisitionStatuses.AcceptedInPlugin => "Accepted",
+        _ => status,
+    };
+
+static string AcquisitionStatusClass(string status) =>
+    status switch
+    {
+        MarketAcquisitionStatuses.PendingPickup => "status-pending",
+        MarketAcquisitionStatuses.Claimed => "status-pending",
+        MarketAcquisitionStatuses.AcceptedInPlugin => "status-running",
+        MarketAcquisitionStatuses.Running => "status-running",
+        MarketAcquisitionStatuses.Complete => "status-good",
+        MarketAcquisitionStatuses.Failed => "status-bad",
+        MarketAcquisitionStatuses.Rejected => "status-bad",
+        MarketAcquisitionStatuses.Expired => "status-bad",
+        _ => string.Empty,
+    };
+
+static string FormatWorldMode(string worldMode) =>
+    worldMode switch
+    {
+        "AllWorldSweep" => "All-world sweep",
+        "CurrentWorldOnly" => "Current world only",
+        _ => worldMode,
+    };
+
+static string FormatGil(uint gil) => $"{gil:N0}";
+
+static string FormatAcquisitionAge(DateTimeOffset createdAtUtc)
+{
+    var age = DateTimeOffset.UtcNow - createdAtUtc.ToUniversalTime();
+    if (age.TotalSeconds < 60)
+        return "now";
+    if (age.TotalMinutes < 60)
+        return $"{(int)age.TotalMinutes}m";
+    if (age.TotalHours < 24)
+        return $"{(int)age.TotalHours}h";
+
+    return $"{(int)age.TotalDays}d";
+}
+
+static string FormatAcquisitionExpiry(MarketAcquisitionRequestView request)
+{
+    var expiresIn = request.ExpiresAtUtc.ToUniversalTime() - DateTimeOffset.UtcNow;
+    if (expiresIn <= TimeSpan.Zero)
+        return "expired";
+    if (expiresIn.TotalMinutes < 1)
+        return "<1m";
+    if (expiresIn.TotalHours < 1)
+        return $"{Math.Ceiling(expiresIn.TotalMinutes):N0}m";
+
+    return $"{Math.Ceiling(expiresIn.TotalHours):N0}h";
+}
 
 static string RenderCharacterFilters(
     IReadOnlyList<CharacterSummary> characters,

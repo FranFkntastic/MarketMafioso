@@ -641,6 +641,59 @@ public sealed class MarketAcquisitionRequestEndpointTests
     }
 
     [Fact]
+    public async Task AcquisitionDashboardRendersControlSurfaceWithRequestQueue()
+    {
+        await using var application = CreateHostedApplication(
+            extraConfiguration: new KeyValuePair<string, string?>("MarketMafioso:TrustExternalDashboardAuth", "true"));
+        using var client = application.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false,
+        });
+        var accepted = await CreateAndClaimAsync(client, "accepted-dashboard-row");
+        var acceptedResponse = await SendWithKeyAsync(
+            client,
+            HttpMethod.Post,
+            $"/api/marketmafioso/acquisition/requests/{accepted.RequestId}/accept",
+            "command-secret",
+            new
+            {
+                claimToken = accepted.ClaimToken,
+                idempotencyKey = "accepted-dashboard-row-accept",
+            });
+        acceptedResponse.EnsureSuccessStatusCode();
+
+        var acquisitionPage = await client.GetStringAsync("/api/marketmafioso/acquisition");
+
+        Assert.Contains("New Purchase Request", acquisitionPage, StringComparison.Ordinal);
+        Assert.Contains("Target", acquisitionPage, StringComparison.Ordinal);
+        Assert.Contains("Purchase Limits", acquisitionPage, StringComparison.Ordinal);
+        Assert.Contains("Routing", acquisitionPage, StringComparison.Ordinal);
+        Assert.Contains("Request Preview", acquisitionPage, StringComparison.Ordinal);
+        Assert.Contains("Stage Request", acquisitionPage, StringComparison.Ordinal);
+        Assert.Contains("Request Queue", acquisitionPage, StringComparison.Ordinal);
+        Assert.Contains("Filter by item, world, status", acquisitionPage, StringComparison.Ordinal);
+        Assert.Contains("Fire Shard", acquisitionPage, StringComparison.Ordinal);
+        Assert.Contains("Accepted", acquisitionPage, StringComparison.Ordinal);
+        Assert.Contains("Plugin status", acquisitionPage, StringComparison.Ordinal);
+        Assert.Contains("Command pickup uses a separate key", acquisitionPage, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AcquisitionDashboardShowsEmptyQueueState()
+    {
+        await using var application = CreateHostedApplication(
+            extraConfiguration: new KeyValuePair<string, string?>("MarketMafioso:TrustExternalDashboardAuth", "true"));
+        using var client = application.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false,
+        });
+
+        var acquisitionPage = await client.GetStringAsync("/api/marketmafioso/acquisition");
+
+        Assert.Contains("No acquisition requests yet.", acquisitionPage, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task HostedDashboardFormCreateUsesAppManagedDashboardAuth()
     {
         await using var application = CreateHostedApplication();
