@@ -62,6 +62,18 @@ The `Deploy MarketMafioso Dev Receiver to VPS` GitHub Actions workflow publishes
 https://dev.xivcraftarchitect.com/api/marketmafioso/
 ```
 
+Use the server-specific helper when you want to force a backend deployment and watch the smoke checks from PowerShell:
+
+```powershell
+.\MarketMafioso\tools\Deploy-ServerDev.ps1
+```
+
+The helper triggers the GitHub Actions workflow for `local-dev`, waits for it to complete, then checks the public health/dashboard routes. If local secret files exist under `%USERPROFILE%\.ssh`, it also smoke-tests authenticated dashboard access and inventory ingestion without printing the secrets. To deploy a non-default ref deliberately, pass `-Ref`:
+
+```powershell
+.\MarketMafioso\tools\Deploy-ServerDev.ps1 -Ref test/inventory-browser-vps
+```
+
 Required repository secrets:
 
 ```text
@@ -82,6 +94,8 @@ MARKETMAFIOSO_DEV_PREVIOUS_READ_API_KEY
 ```
 
 The workflow installs or updates the `marketmafioso-dev` systemd service, stores dev data under `/srv/craftarchitect/data/marketmafioso/dev`, and configures the dev Caddy site for public health, API-key ingest/read routes, and proxied dashboard routes.
+
+Server deployment is intentionally separate from plugin deployment. A backend deploy updates the VPS receiver only; it does not copy a DLL into Dalamud. Use `Deploy-PluginDev.ps1` when the in-game plugin needs to change too.
 
 ## First-Time Setup
 

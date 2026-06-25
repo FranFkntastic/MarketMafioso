@@ -31,6 +31,22 @@ The script builds the requested configuration, copies the DLL to `TargetDll`, an
 
 After a successful deploy, reload MarketMafioso in game.
 
+For day-to-day use, prefer the client-specific wrapper:
+
+```powershell
+.\MarketMafioso\tools\Deploy-PluginDev.ps1
+```
+
+It delegates to `Deploy-DevPlugin.ps1`, verifies that the deployed manifest version remains parseable by Dalamud, and prints the reload reminder. This wrapper updates only the local plugin DLL; it does not deploy the VPS receiver.
+
+When you intentionally need both sides refreshed, run the explicit combined helper:
+
+```powershell
+.\MarketMafioso\tools\Deploy-DevAll.ps1
+```
+
+`Deploy-DevAll.ps1` runs the server deploy first, waits for the GitHub Actions smoke checks, then deploys the local plugin DLL. Keep using the separate scripts unless you specifically want this full sequence.
+
 ## Worktree Rules
 
 - Normal `dotnet build` output is not deployment.
