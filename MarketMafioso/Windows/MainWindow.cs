@@ -2,10 +2,14 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
+using System.Net.Http;
 using System.Numerics;
+using System.Threading;
+using System.Threading.Tasks;
 using Dalamud.Interface.Windowing;
 using Dalamud.Plugin.Services;
 using Dalamud.Bindings.ImGui;
+using MarketMafioso.MarketAcquisition;
 using MarketMafioso.WorkshopPrep;
 
 namespace MarketMafioso.Windows;
@@ -21,15 +25,32 @@ public class MainWindow : Window, IDisposable
     private readonly WorkshopRetainerRestockService workshopRetainerRestock;
     private readonly WorkshopAssemblyRunner workshopAssemblyRunner;
     private readonly WorkshopMaterialManifestExportService workshopMaterialManifestExport;
+    private readonly IPlayerState playerState;
     private readonly IPluginLog log;
+    private readonly HttpClient acquisitionHttpClient = new();
+    private readonly MarketAcquisitionRequestClient acquisitionClient;
+    private readonly UniversalisMarketAcquisitionPlanSource acquisitionPlanSource;
+    private readonly MarketBoardListingReader marketBoardListingReader;
 
     private string urlBuffer = string.Empty;
     private string apiKeyBuffer = string.Empty;
     private string dashboardUrlBuffer = string.Empty;
     private string dashboardOpenStatus = "Dashboard link appears after a successful send.";
+    private string commandPickupApiKeyBuffer = string.Empty;
     private bool showApiKey = false;
+    private bool showCommandPickupApiKey = false;
     private bool showPreview = false;
     private readonly WorkshopProjectSelectionState workshopProjectSelection = new();
+    private IReadOnlyList<MarketAcquisitionRequestView> pendingAcquisitionRequests = [];
+    private MarketAcquisitionClaimView? claimedAcquisitionRequest;
+    private string? claimedAcceptIdempotencyKey;
+    private string? claimedRejectIdempotencyKey;
+    private MarketAcquisitionPlan? acquisitionPlan;
+    private MarketBoardReadResult? marketBoardReadResult;
+    private MarketBoardListingReconciliation? marketBoardReconciliation;
+    private bool acquisitionRequestBusy = false;
+    private string acquisitionStatus = "No dashboard request has been fetched this session.";
+    private CancellationTokenSource? acquisitionRequestCancellation;
     private bool confirmViwiClear = false;
     private bool confirmNewWorkshopQueue = false;
     private bool confirmLoadFrozenQueue = false;
@@ -40,6 +61,7 @@ public class MainWindow : Window, IDisposable
     private const string ProductSummary = "Small, practical FFXIV improvements under one roof.";
     private const string InventoryModuleSummary = "Inventory Reporter exports character and retainer inventory snapshots as JSON.";
     private const string WorkshopLogisticsModuleSummary = "Workshop Logistics tracks company workshop jobs, materials, retainer restock, handoff, and assembly.";
+    private const string MarketAcquisitionModuleSummary = "Market Acquisition picks up dashboard-created purchase requests for local review.";
     private const string LocalReceiverUrl = "http://localhost:8080/inventory";
     private const string DevReceiverUrl = "https://dev.xivcraftarchitect.com/api/marketmafioso/inventory";
     private const string ProductionReceiverUrl = "https://xivcraftarchitect.com/api/marketmafioso/inventory";
@@ -59,6 +81,7 @@ public class MainWindow : Window, IDisposable
         WorkshopRetainerRestockService workshopRetainerRestock,
         WorkshopAssemblyRunner workshopAssemblyRunner,
         WorkshopMaterialManifestExportService workshopMaterialManifestExport,
+        IPlayerState playerState,
         IPluginLog log)
         : base("MarketMafioso##MarketMafiosoMainWindow",
                ImGuiWindowFlags.None)
@@ -72,7 +95,11 @@ public class MainWindow : Window, IDisposable
         this.workshopRetainerRestock = workshopRetainerRestock;
         this.workshopAssemblyRunner = workshopAssemblyRunner;
         this.workshopMaterialManifestExport = workshopMaterialManifestExport;
+        this.playerState = playerState;
         this.log = log;
+        acquisitionClient = new MarketAcquisitionRequestClient(acquisitionHttpClient);
+        acquisitionPlanSource = new UniversalisMarketAcquisitionPlanSource(acquisitionHttpClient);
+        marketBoardListingReader = new MarketBoardListingReader(Plugin.GameGui);
 
         SizeConstraints = new WindowSizeConstraints
         {
@@ -82,6 +109,7 @@ public class MainWindow : Window, IDisposable
 
         urlBuffer = config.ServerUrl;
         apiKeyBuffer = config.ApiKey;
+        commandPickupApiKeyBuffer = config.CommandPickupApiKey;
         ProjectBrowser = new WorkshopProjectBrowserWindow(
             config,
             workshopCatalog,
@@ -128,6 +156,12 @@ public class MainWindow : Window, IDisposable
                 ImGui.EndTabItem();
             }
 
+            if (ImGui.BeginTabItem("Market Acquisition"))
+            {
+                DrawMarketAcquisitionTab();
+                ImGui.EndTabItem();
+            }
+
             if (ImGui.BeginTabItem("Status"))
             {
                 DrawStatusTab();
@@ -142,7 +176,7 @@ public class MainWindow : Window, IDisposable
     {
         ImGui.TextColored(ColHeader, "MarketMafioso");
         ImGui.TextWrapped(ProductSummary);
-        ImGui.TextColored(ColMuted, "Current modules: Inventory Reporter, Workshop Logistics");
+        ImGui.TextColored(ColMuted, "Current modules: Inventory Reporter, Workshop Logistics, Market Acquisition");
     }
 
     private void DrawOverviewTab()
@@ -153,7 +187,7 @@ public class MainWindow : Window, IDisposable
 
         DrawModuleSummary("Inventory Reporter", "Enabled", InventoryModuleSummary);
         DrawModuleSummary("Workshop Logistics", "Enabled", WorkshopLogisticsModuleSummary);
-        DrawModuleSummary("Market Tools", "Planned", "Future market-board helpers will build on captured inventory and item data.");
+        DrawModuleSummary("Market Acquisition", "Foundation", MarketAcquisitionModuleSummary);
         DrawModuleSummary("General Improvements", "Planned", "Small quality-of-life tools that are useful, but too narrow for their own plugin.");
     }
 
@@ -193,6 +227,520 @@ public class MainWindow : Window, IDisposable
         DrawWorkshopMaterialSummary();
         ImGui.Spacing();
         DrawWorkshopAssemblyWorkflow();
+    }
+
+    private void DrawMarketAcquisitionTab()
+    {
+        ImGui.Spacing();
+        ImGui.TextColored(ColHeader, "Market Acquisition");
+        ImGui.TextWrapped(MarketAcquisitionModuleSummary);
+        ImGui.Spacing();
+
+        DrawMarketAcquisitionEndpointSection();
+        ImGui.Spacing();
+        DrawMarketAcquisitionPickupSection();
+        ImGui.Spacing();
+        DrawClaimedAcquisitionRequest();
+        ImGui.Spacing();
+        DrawMarketAcquisitionPlan();
+        ImGui.Spacing();
+        DrawMarketBoardProbe();
+    }
+
+    private void DrawMarketAcquisitionEndpointSection()
+    {
+        ImGuiUi.SectionHeader("Dashboard Pickup", ColHeader);
+
+        var dashboardUrl = ReceiverEndpointClassifier.BuildDashboardBaseUrl(config.ServerUrl) ?? string.Empty;
+        ImGui.Text("Dashboard URL:");
+        ImGui.SetNextItemWidth(ImGui.GetContentRegionAvail().X - 140);
+        ImGui.InputText("##marketAcquisitionDashboardUrl", ref dashboardUrl, 512, ImGuiInputTextFlags.ReadOnly);
+        ImGui.SameLine();
+        if (ImGuiUi.Button("Open Dashboard", new Vector2(130, 0), !string.IsNullOrWhiteSpace(dashboardUrl)))
+            OpenExternalUrl(dashboardUrl);
+
+        ImGui.Text("Command Pickup Key:");
+        var keyWidth = ImGui.GetContentRegionAvail().X - 70;
+        ImGui.SetNextItemWidth(keyWidth);
+        var flags = showCommandPickupApiKey ? ImGuiInputTextFlags.None : ImGuiInputTextFlags.Password;
+        if (ImGui.InputText("##commandPickupApiKey", ref commandPickupApiKeyBuffer, 256, flags))
+        {
+            config.CommandPickupApiKey = commandPickupApiKeyBuffer;
+            config.Save();
+        }
+
+        ImGui.SameLine();
+        if (ImGui.Button(showCommandPickupApiKey ? "Hide##commandPickupKey" : "Show##commandPickupKey", new Vector2(60, 0)))
+            showCommandPickupApiKey = !showCommandPickupApiKey;
+
+        if (string.IsNullOrWhiteSpace(commandPickupApiKeyBuffer))
+            ImGui.TextColored(ColError, "Command pickup key is required to fetch dashboard requests.");
+    }
+
+    private void DrawMarketAcquisitionPickupSection()
+    {
+        ImGuiUi.SectionHeader("Request Pickup", ColHeader);
+
+        if (TryGetAcquisitionScope(out var characterName, out var world))
+            ImGui.TextColored(ColMuted, $"Character scope: {characterName} @ {world}");
+        else
+            ImGui.TextColored(ColError, "Character scope unavailable. Log into a character before fetching requests.");
+
+        var canFetch = !acquisitionRequestBusy &&
+                       !string.IsNullOrWhiteSpace(commandPickupApiKeyBuffer) &&
+                       TryGetAcquisitionScope(out _, out _);
+        if (ImGuiUi.Button("Fetch Dashboard Requests", canFetch))
+            _ = FetchDashboardRequestsAsync();
+
+        ImGui.SameLine();
+        ImGui.TextColored(GetAcquisitionStatusColor(), acquisitionStatus);
+
+        if (pendingAcquisitionRequests.Count == 0)
+        {
+            ImGui.TextColored(ColMuted, "No pending dashboard requests are loaded.");
+            return;
+        }
+
+        var tableFlags = ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.Resizable;
+        if (ImGui.BeginTable("MarketAcquisitionPendingRequests", 6, tableFlags))
+        {
+            ImGui.TableSetupColumn("Item");
+            ImGui.TableSetupColumn("Qty");
+            ImGui.TableSetupColumn("HQ");
+            ImGui.TableSetupColumn("Max Unit");
+            ImGui.TableSetupColumn("Mode");
+            ImGui.TableSetupColumn("");
+            ImGui.TableHeadersRow();
+
+            foreach (var request in pendingAcquisitionRequests)
+            {
+                ImGui.TableNextRow();
+                ImGui.TableNextColumn();
+                ImGui.TextUnformatted(FormatAcquisitionItem(request));
+                ImGui.TableNextColumn();
+                ImGui.TextUnformatted(request.Quantity.ToString());
+                ImGui.TableNextColumn();
+                ImGui.TextUnformatted(request.HqPolicy);
+                ImGui.TableNextColumn();
+                ImGui.TextUnformatted(FormatGil(request.MaxUnitPrice));
+                ImGui.TableNextColumn();
+                ImGui.TextUnformatted(request.WorldMode);
+                ImGui.TableNextColumn();
+                if (ImGuiUi.Button($"Claim##marketAcquisitionClaim{request.Id}", !acquisitionRequestBusy))
+                    _ = ClaimAcquisitionRequestAsync(request.Id);
+            }
+
+            ImGui.EndTable();
+        }
+    }
+
+    private void DrawClaimedAcquisitionRequest()
+    {
+        ImGuiUi.SectionHeader("Claimed Request", ColHeader);
+
+        if (claimedAcquisitionRequest == null)
+        {
+            ImGui.TextColored(ColMuted, "No request is claimed by this plugin session.");
+            return;
+        }
+
+        if (ImGui.BeginTable("MarketAcquisitionClaimedRequest", 2, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg))
+        {
+            DrawClaimedRequestRow("Status", claimedAcquisitionRequest.Status);
+            DrawClaimedRequestRow("Item", FormatAcquisitionItem(claimedAcquisitionRequest));
+            DrawClaimedRequestRow("Quantity", $"{claimedAcquisitionRequest.QuantityMode} {claimedAcquisitionRequest.Quantity}");
+            DrawClaimedRequestRow("HQ Policy", claimedAcquisitionRequest.HqPolicy);
+            DrawClaimedRequestRow("Max Unit", FormatGil(claimedAcquisitionRequest.MaxUnitPrice));
+            DrawClaimedRequestRow("Gil Cap", FormatGil(claimedAcquisitionRequest.MaxTotalGil));
+            DrawClaimedRequestRow("World Mode", claimedAcquisitionRequest.WorldMode);
+            ImGui.EndTable();
+        }
+
+        var canMutateClaim = !acquisitionRequestBusy &&
+                             string.Equals(claimedAcquisitionRequest.Status, "Claimed", StringComparison.OrdinalIgnoreCase);
+        if (ImGuiUi.Button("Accept Locally", canMutateClaim))
+            _ = AcceptClaimedAcquisitionRequestAsync();
+
+        ImGui.SameLine();
+        if (ImGuiUi.Button("Reject", canMutateClaim))
+            _ = RejectClaimedAcquisitionRequestAsync();
+
+        ImGui.SameLine();
+        var canPrepare = !acquisitionRequestBusy &&
+                         string.Equals(claimedAcquisitionRequest.Status, "AcceptedInPlugin", StringComparison.OrdinalIgnoreCase);
+        if (ImGuiUi.Button("Prepare Plan", canPrepare))
+            _ = PrepareMarketAcquisitionPlanAsync();
+
+        ImGui.TextColored(ColMuted, "Preparing a plan only reads remote market data. Game UI automation and purchases are not implemented.");
+    }
+
+    private void DrawMarketAcquisitionPlan()
+    {
+        ImGuiUi.SectionHeader("Dry-Run Plan", ColHeader);
+
+        if (acquisitionPlan == null)
+        {
+            ImGui.TextColored(ColMuted, "No market plan prepared.");
+            return;
+        }
+
+        ImGui.TextColored(
+            acquisitionPlan.Status == "Ready" ? ColSuccess : ColMuted,
+            $"Status: {acquisitionPlan.Status}  -  Mode: {FormatWorldMode(acquisitionPlan.WorldMode)}  -  Planned {acquisitionPlan.PlannedQuantity:N0}/{acquisitionPlan.RequestedQuantity:N0} item(s), {FormatGil(acquisitionPlan.PlannedGil)}");
+
+        if (acquisitionPlan.WorldBatches.Count == 0)
+            return;
+
+        var tableFlags = ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.Resizable;
+        if (ImGui.BeginTable("MarketAcquisitionPlanBatches", 6, tableFlags))
+        {
+            ImGui.TableSetupColumn("World");
+            ImGui.TableSetupColumn("Qty");
+            ImGui.TableSetupColumn("Gil");
+            ImGui.TableSetupColumn("Unit");
+            ImGui.TableSetupColumn("HQ");
+            ImGui.TableSetupColumn("Listing");
+            ImGui.TableHeadersRow();
+
+            foreach (var batch in acquisitionPlan.WorldBatches)
+            {
+                foreach (var listing in batch.Listings)
+                {
+                    ImGui.TableNextRow();
+                    ImGui.TableNextColumn();
+                    ImGui.TextUnformatted(batch.WorldName);
+                    if (batch.ExceedsRequestedQuantity)
+                    {
+                        ImGui.SameLine();
+                        ImGui.TextColored(ColMuted, "(over)");
+                    }
+
+                    ImGui.TableNextColumn();
+                    ImGui.TextUnformatted(listing.Quantity.ToString("N0"));
+                    ImGui.TableNextColumn();
+                    ImGui.TextUnformatted(FormatGil(listing.TotalGil));
+                    ImGui.TableNextColumn();
+                    ImGui.TextUnformatted(FormatGil(listing.UnitPrice));
+                    ImGui.TableNextColumn();
+                    ImGui.TextUnformatted(listing.IsHq ? "HQ" : "NQ");
+                    ImGui.TableNextColumn();
+                    ImGui.TextUnformatted($"{listing.RetainerName} / {listing.ListingId}");
+                }
+            }
+
+            ImGui.EndTable();
+        }
+    }
+
+    private void DrawMarketBoardProbe()
+    {
+        ImGuiUi.SectionHeader("Live Market Board Probe", ColHeader);
+
+        ImGui.TextColored(ColMuted, "Open market board search results for a planned item/world, then run the read-only probe.");
+
+        var canProbe = !acquisitionRequestBusy &&
+                       acquisitionPlan is { Status: "Ready" } &&
+                       acquisitionPlan.WorldBatches.Count > 0;
+        if (ImGuiUi.Button("Read Live Listings", canProbe))
+            _ = ProbeLiveMarketBoardAsync();
+
+        if (marketBoardReadResult == null)
+        {
+            ImGui.TextColored(ColMuted, "No live market board probe has run.");
+            return;
+        }
+
+        ImGui.TextColored(
+            marketBoardReadResult.Status == "Ready" ? ColSuccess : ColMuted,
+            $"Read status: {marketBoardReadResult.Status}  -  {marketBoardReadResult.Message}");
+
+        if (marketBoardReconciliation != null)
+        {
+            ImGui.TextColored(
+                marketBoardReconciliation.Status == "Ready" ? ColSuccess : ColError,
+                $"Reconciliation: {marketBoardReconciliation.Status}");
+
+            var tableFlags = ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.Resizable;
+            if (ImGui.BeginTable("MarketBoardProbeReconciliation", 6, tableFlags))
+            {
+                ImGui.TableSetupColumn("Status");
+                ImGui.TableSetupColumn("Retainer");
+                ImGui.TableSetupColumn("Qty");
+                ImGui.TableSetupColumn("Unit");
+                ImGui.TableSetupColumn("HQ");
+                ImGui.TableSetupColumn("Message");
+                ImGui.TableHeadersRow();
+
+                foreach (var row in marketBoardReconciliation.Listings)
+                {
+                    var listing = row.LiveListing;
+                    ImGui.TableNextRow();
+                    ImGui.TableNextColumn();
+                    ImGui.TextColored(row.Status == "Matched" ? ColSuccess : ColError, row.Status);
+                    ImGui.TableNextColumn();
+                    ImGui.TextUnformatted(string.IsNullOrWhiteSpace(listing?.RetainerName)
+                        ? row.PlannedListing.RetainerName
+                        : listing.RetainerName);
+                    ImGui.TableNextColumn();
+                    ImGui.TextUnformatted((listing?.Quantity ?? row.PlannedListing.Quantity).ToString("N0"));
+                    ImGui.TableNextColumn();
+                    ImGui.TextUnformatted(FormatGil(listing?.UnitPrice ?? row.PlannedListing.UnitPrice));
+                    ImGui.TableNextColumn();
+                    ImGui.TextUnformatted((listing?.IsHq ?? row.PlannedListing.IsHq) ? "HQ" : "NQ");
+                    ImGui.TableNextColumn();
+                    ImGui.TextWrapped(row.Message);
+                }
+
+                ImGui.EndTable();
+            }
+        }
+    }
+
+    private static void DrawClaimedRequestRow(string label, string value)
+    {
+        ImGui.TableNextRow();
+        ImGui.TableNextColumn();
+        ImGui.TextColored(ColMuted, label);
+        ImGui.TableNextColumn();
+        ImGui.TextUnformatted(value);
+    }
+
+    private async Task FetchDashboardRequestsAsync()
+    {
+        await RunAcquisitionRequestAsync(async token =>
+        {
+            if (!TryGetAcquisitionScope(out var characterName, out var world))
+                throw new InvalidOperationException("Character scope is unavailable.");
+
+            pendingAcquisitionRequests = await acquisitionClient.FetchPendingAsync(
+                config.ServerUrl,
+                config.CommandPickupApiKey,
+                characterName,
+                world,
+                token).ConfigureAwait(false);
+
+            acquisitionStatus = pendingAcquisitionRequests.Count == 0
+                ? "No matching dashboard requests."
+                : $"Loaded {pendingAcquisitionRequests.Count} dashboard request(s).";
+        }).ConfigureAwait(false);
+    }
+
+    private async Task ClaimAcquisitionRequestAsync(string requestId)
+    {
+        await RunAcquisitionRequestAsync(async token =>
+        {
+            if (!TryGetAcquisitionScope(out var characterName, out var world))
+                throw new InvalidOperationException("Character scope is unavailable.");
+
+            claimedAcquisitionRequest = await acquisitionClient.ClaimAsync(
+                config.ServerUrl,
+                config.CommandPickupApiKey,
+                requestId,
+                characterName,
+                world,
+                config.PluginInstanceId,
+                token).ConfigureAwait(false);
+
+            claimedAcceptIdempotencyKey = Guid.NewGuid().ToString("N");
+            claimedRejectIdempotencyKey = Guid.NewGuid().ToString("N");
+            acquisitionPlan = null;
+            marketBoardReadResult = null;
+            marketBoardReconciliation = null;
+            pendingAcquisitionRequests = pendingAcquisitionRequests
+                .Where(request => !string.Equals(request.Id, requestId, StringComparison.Ordinal))
+                .ToList();
+            acquisitionStatus = "Dashboard request claimed. Review it before accepting.";
+        }).ConfigureAwait(false);
+    }
+
+    private async Task AcceptClaimedAcquisitionRequestAsync()
+    {
+        await RunAcquisitionRequestAsync(async token =>
+        {
+            var claimed = claimedAcquisitionRequest ??
+                          throw new InvalidOperationException("No dashboard request is claimed.");
+            claimedAcceptIdempotencyKey ??= Guid.NewGuid().ToString("N");
+
+            var accepted = await acquisitionClient.AcceptAsync(
+                config.ServerUrl,
+                config.CommandPickupApiKey,
+                claimed.Id,
+                claimed.ClaimToken,
+                claimedAcceptIdempotencyKey,
+                token).ConfigureAwait(false);
+
+            claimedAcquisitionRequest = claimed with { Status = accepted.Status };
+            acquisitionPlan = null;
+            marketBoardReadResult = null;
+            marketBoardReconciliation = null;
+            acquisitionStatus = "Request accepted locally. Prepare a dry-run plan when ready.";
+        }).ConfigureAwait(false);
+    }
+
+    private async Task RejectClaimedAcquisitionRequestAsync()
+    {
+        await RunAcquisitionRequestAsync(async token =>
+        {
+            var claimed = claimedAcquisitionRequest ??
+                          throw new InvalidOperationException("No dashboard request is claimed.");
+            claimedRejectIdempotencyKey ??= Guid.NewGuid().ToString("N");
+
+            var rejected = await acquisitionClient.RejectAsync(
+                config.ServerUrl,
+                config.CommandPickupApiKey,
+                claimed.Id,
+                claimed.ClaimToken,
+                claimedRejectIdempotencyKey,
+                "Rejected in the MarketMafioso plugin.",
+                token).ConfigureAwait(false);
+
+            claimedAcquisitionRequest = claimed with { Status = rejected.Status };
+            acquisitionPlan = null;
+            marketBoardReadResult = null;
+            marketBoardReconciliation = null;
+            acquisitionStatus = "Request rejected.";
+        }).ConfigureAwait(false);
+    }
+
+    private async Task PrepareMarketAcquisitionPlanAsync()
+    {
+        await RunAcquisitionRequestAsync(async token =>
+        {
+            var claimed = claimedAcquisitionRequest ??
+                          throw new InvalidOperationException("No dashboard request is accepted.");
+            if (string.Equals(claimed.WorldMode, "Selected", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Selected world mode cannot be planned until selected worlds are carried in the dashboard request payload.");
+
+            var listings = await acquisitionPlanSource.FetchListingsAsync(
+                claimed.Region,
+                claimed.ItemId,
+                100,
+                token).ConfigureAwait(false);
+            acquisitionPlan = MarketAcquisitionPlanner.BuildPlan(claimed, listings, DateTimeOffset.UtcNow);
+            marketBoardReadResult = null;
+            marketBoardReconciliation = null;
+            acquisitionStatus = acquisitionPlan.Status == "Ready"
+                ? $"Prepared {acquisitionPlan.WorldBatches.Count} world batch(es)."
+                : "No supported listings found under the configured thresholds.";
+        }).ConfigureAwait(false);
+    }
+
+    private Task ProbeLiveMarketBoardAsync()
+    {
+        return RunAcquisitionRequestAsync(_ =>
+        {
+            var plan = acquisitionPlan ??
+                       throw new InvalidOperationException("Prepare a dry-run plan before probing live market board listings.");
+            var currentWorld = GetCurrentWorldName();
+            marketBoardReconciliation = null;
+            marketBoardReadResult = marketBoardListingReader.ReadCurrentListings(currentWorld);
+
+            marketBoardReconciliation = marketBoardReadResult.Status == "Ready"
+                ? MarketBoardListingReconciler.Reconcile(
+                    plan,
+                    currentWorld,
+                    marketBoardReadResult.ItemId,
+                    marketBoardReadResult.Listings)
+                : null;
+            acquisitionStatus = marketBoardReconciliation == null
+                ? marketBoardReadResult.Message
+                : $"Live listing reconciliation {marketBoardReconciliation.Status}.";
+
+            return Task.CompletedTask;
+        });
+    }
+
+    private async Task RunAcquisitionRequestAsync(Func<CancellationToken, Task> action)
+    {
+        if (acquisitionRequestBusy)
+            return;
+
+        acquisitionRequestBusy = true;
+        acquisitionRequestCancellation?.Dispose();
+        acquisitionRequestCancellation = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+
+        try
+        {
+            await action(acquisitionRequestCancellation.Token).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            acquisitionStatus = $"Request failed: {ex.Message}";
+            log.Warning(ex, "[MarketMafioso] Market acquisition request action failed.");
+        }
+        finally
+        {
+            acquisitionRequestCancellation?.Dispose();
+            acquisitionRequestCancellation = null;
+            acquisitionRequestBusy = false;
+        }
+    }
+
+    private bool TryGetAcquisitionScope(out string characterName, out string world)
+    {
+        characterName = playerState.CharacterName ?? string.Empty;
+        world = playerState.HomeWorld.IsValid ? playerState.HomeWorld.Value.Name.ToString() : string.Empty;
+        return !string.IsNullOrWhiteSpace(characterName) && !string.IsNullOrWhiteSpace(world);
+    }
+
+    private string GetCurrentWorldName()
+    {
+        if (!playerState.CurrentWorld.IsValid)
+            throw new InvalidOperationException("Current world is unavailable.");
+
+        return playerState.CurrentWorld.Value.Name.ToString();
+    }
+
+    private static string FormatAcquisitionItem(MarketAcquisitionRequestView request)
+    {
+        var name = string.IsNullOrWhiteSpace(request.ItemName)
+            ? $"Item {request.ItemId}"
+            : request.ItemName;
+        return $"{name} ({request.ItemId})";
+    }
+
+    private static string FormatGil(uint gil) => $"{gil:N0} gil";
+
+    private static string FormatWorldMode(string worldMode) =>
+        worldMode switch
+        {
+            "AllWorldSweep" => "All-world sweep",
+            "CurrentWorldOnly" => "Current world only",
+            _ => worldMode,
+        };
+
+    private Vector4 GetAcquisitionStatusColor()
+    {
+        if (acquisitionRequestBusy)
+            return ColHeader;
+
+        if (acquisitionStatus.Contains("failed", StringComparison.OrdinalIgnoreCase) ||
+            acquisitionStatus.Contains("required", StringComparison.OrdinalIgnoreCase) ||
+            acquisitionStatus.Contains("unavailable", StringComparison.OrdinalIgnoreCase))
+            return ColError;
+
+        if (acquisitionStatus.Contains("Loaded", StringComparison.OrdinalIgnoreCase) ||
+            acquisitionStatus.Contains("claimed", StringComparison.OrdinalIgnoreCase) ||
+            acquisitionStatus.Contains("accepted", StringComparison.OrdinalIgnoreCase))
+            return ColSuccess;
+
+        return ColMuted;
+    }
+
+    private void OpenExternalUrl(string url)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo(url)
+            {
+                UseShellExecute = true,
+            });
+        }
+        catch (Exception ex)
+        {
+            acquisitionStatus = $"Unable to open dashboard: {ex.Message}";
+            log.Warning(ex, "[MarketMafioso] Unable to open market acquisition dashboard.");
+        }
     }
 
     private void DrawWorkshopPrepQueue(IReadOnlyList<WorkshopProjectDefinition> projects)
@@ -1104,5 +1652,9 @@ public class MainWindow : Window, IDisposable
         }
     }
 
-    public void Dispose() { }
+    public void Dispose()
+    {
+        acquisitionRequestCancellation?.Dispose();
+        acquisitionHttpClient.Dispose();
+    }
 }

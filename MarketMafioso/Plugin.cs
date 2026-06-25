@@ -100,6 +100,7 @@ public sealed class Plugin : IDalamudPlugin
             workshopRetainerRestock,
             workshopAssemblyRunner,
             workshopMaterialManifestExport,
+            PlayerState,
             Log);
 
         windowSystem.AddWindow(mainWindow);

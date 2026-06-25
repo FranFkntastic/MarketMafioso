@@ -13,7 +13,7 @@ public sealed class InventoryReportViewEndpointTests
     [Fact]
     public async Task GetReportView_ReturnsParsedInventorySnapshot()
     {
-        await using var application = new WebApplicationFactory<Program>();
+        await using var application = CreateApplication();
         using var client = application.CreateClient();
 
         var createResponse = await client.PostAsJsonAsync("/inventory", new InventoryReport
@@ -95,7 +95,7 @@ public sealed class InventoryReportViewEndpointTests
     [Fact]
     public async Task GetReportDetails_RendersGroupedInventoryViewer()
     {
-        await using var application = new WebApplicationFactory<Program>();
+        await using var application = CreateApplication();
         using var client = application.CreateClient();
 
         var createResponse = await client.PostAsJsonAsync("/inventory", new InventoryReport
@@ -167,7 +167,7 @@ public sealed class InventoryReportViewEndpointTests
     [Fact]
     public async Task InventoryBrowser_RendersLatestSnapshotItemAggregates()
     {
-        await using var application = new WebApplicationFactory<Program>();
+        await using var application = CreateApplication();
         using var client = application.CreateClient();
 
         var createResponse = await client.PostAsJsonAsync("/inventory", new InventoryReport
@@ -240,7 +240,7 @@ public sealed class InventoryReportViewEndpointTests
     [Fact]
     public async Task InventoryBrowser_RendersScopesListingsTypesAndResizableSeparators()
     {
-        await using var application = new WebApplicationFactory<Program>();
+        await using var application = CreateApplication();
         using var client = application.CreateClient();
 
         var createResponse = await client.PostAsJsonAsync("/inventory", new InventoryReport
@@ -343,7 +343,7 @@ public sealed class InventoryReportViewEndpointTests
     [Fact]
     public async Task GetReportView_ReturnsNotFoundForMissingSnapshot()
     {
-        await using var application = new WebApplicationFactory<Program>();
+        await using var application = CreateApplication();
         using var client = application.CreateClient();
 
         var response = await client.GetAsync("/api/reports/missing/view");
@@ -562,7 +562,7 @@ public sealed class InventoryReportViewEndpointTests
     [Fact]
     public async Task DashboardJsonRoutes_ReturnReportPayloads()
     {
-        await using var application = new WebApplicationFactory<Program>();
+        await using var application = CreateApplication();
         using var client = application.CreateClient();
 
         var createResponse = await client.PostAsJsonAsync("/inventory", CreateReport("Json Route Character"));
@@ -707,6 +707,25 @@ public sealed class InventoryReportViewEndpointTests
             foreach (var item in extraConfiguration)
                 values.Configuration[item.Key] = item.Value;
         });
+
+    private static WebApplicationFactory<Program> CreateApplication()
+    {
+        var contentRoot = Path.Combine(Path.GetTempPath(), "MarketMafioso.Server.Tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(contentRoot);
+
+        return new WebApplicationFactory<Program>()
+            .WithWebHostBuilder(builder =>
+            {
+                builder.UseContentRoot(contentRoot);
+                builder.ConfigureAppConfiguration(config =>
+                {
+                    config.AddInMemoryCollection(new Dictionary<string, string?>
+                    {
+                        ["MarketMafioso:DatabasePath"] = Path.Combine(contentRoot, "marketmafioso.db"),
+                    });
+                });
+            });
+    }
 
     private static WebApplicationFactory<Program> CreateHostedApplication(Action<HostedApplicationValues> configure)
     {
