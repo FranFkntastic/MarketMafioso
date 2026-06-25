@@ -623,7 +623,7 @@ static async Task<MarketAcquisitionCreateRequest> ReadAcquisitionFormAsync(
         Quantity = ParseUInt(form["quantity"].ToString(), "quantity"),
         HqPolicy = form["hqPolicy"].ToString(),
         MaxUnitPrice = ParseUInt(form["maxUnitPrice"].ToString(), "maxUnitPrice"),
-        MaxTotalGil = ParseUInt(form["maxTotalGil"].ToString(), "maxTotalGil"),
+        MaxTotalGil = ParseOptionalUInt(form["maxTotalGil"].ToString(), "maxTotalGil"),
         WorldMode = form["worldMode"].ToString(),
         ExpiresInSeconds = ParseInt(form["expiresInSeconds"].ToString(), "expiresInSeconds"),
     };
@@ -638,6 +638,11 @@ static uint ParseUInt(string value, string fieldName) =>
     uint.TryParse(value, out var parsed)
         ? parsed
         : throw new ArgumentException($"{fieldName} must be a positive whole number.");
+
+static uint ParseOptionalUInt(string value, string fieldName) =>
+    string.IsNullOrWhiteSpace(value)
+        ? 0
+        : ParseUInt(value, fieldName);
 
 static string NormalizeXivDataBaseUrl(string? value) =>
     string.IsNullOrWhiteSpace(value)
@@ -934,7 +939,7 @@ static string RenderDashboard(
                         <label>Quantity<input name="quantity" inputmode="numeric" required></label>
                         <label>HQ policy<select name="hqPolicy"><option>Either</option><option>NQOnly</option><option>HQOnly</option></select></label>
                         <label>Max unit price<input name="maxUnitPrice" inputmode="numeric" required></label>
-                        <label>Gil cap<input name="maxTotalGil" inputmode="numeric" required></label>
+                        <label>Gil cap (optional)<input name="maxTotalGil" inputmode="numeric"></label>
                         <label>World mode<select name="worldMode"><option>Recommended</option><option>Selected</option><option>CurrentWorldOnly</option><option>AllWorldSweep</option></select></label>
                         <label>Pickup expiry seconds<input name="expiresInSeconds" inputmode="numeric" value="90" required></label>
                     </div>
@@ -1543,7 +1548,7 @@ static string RenderAcquisitionRequestForm(
                     <label>Quantity mode<select name="quantityMode"><option>Exact</option><option>UpTo</option><option>AllBelowThreshold</option></select></label>
                     <label>Quantity<input name="quantity" inputmode="numeric" required></label>
                     <label>Max unit price<input name="maxUnitPrice" inputmode="numeric" required></label>
-                    <label>Gil cap<input name="maxTotalGil" inputmode="numeric" required></label>
+                    <label>Gil cap (optional)<input name="maxTotalGil" inputmode="numeric"></label>
                 </div>
             </div>
             <div class="section">
@@ -1664,7 +1669,7 @@ static string RenderAcquisitionRequestForm(
         function validateAcquisitionQueueRow(row) {
             if (!isPositiveWholeNumber(row.quantity)) return 'Quantity must be a positive whole number.';
             if (!isPositiveWholeNumber(row.maxUnitPrice)) return 'Max unit price must be a positive whole number.';
-            if (!isPositiveWholeNumber(row.maxTotalGil)) return 'Gil cap is required and must be a positive whole number.';
+            if (String(row.maxTotalGil ?? '').trim() && !isWholeNumber(row.maxTotalGil)) return 'Gil cap must be blank, zero, or a positive whole number.';
             if (!row.quantityMode) return 'Quantity mode is required.';
             if (!row.hqPolicy) return 'HQ policy is required.';
             if (!row.worldMode) return 'World mode is required.';
@@ -1675,12 +1680,21 @@ static string RenderAcquisitionRequestForm(
             return /^[1-9]\d*$/.test(String(value ?? '').trim());
         }
 
+        function isWholeNumber(value) {
+            return /^\d+$/.test(String(value ?? '').trim());
+        }
+
         function renderAcquisitionQueueRows() {
             const body = document.getElementById('acquisitionQueueRows');
             if (!body) return;
             body.innerHTML = acquisitionQueue.length
-                ? acquisitionQueue.map((row, index) => `<tr><td>${escapeHtml(row.itemName)}<br><span>Item ${row.itemId}</span></td><td>${escapeHtml(row.quantity)}</td><td>${escapeHtml(row.maxUnitPrice)}</td><td>${escapeHtml(row.maxTotalGil)}</td><td><button type="button" onclick="removeAcquisitionQueueRow(${index})">Remove</button></td></tr>`).join('')
+                ? acquisitionQueue.map((row, index) => `<tr><td>${escapeHtml(row.itemName)}<br><span>Item ${row.itemId}</span></td><td>${escapeHtml(row.quantity)}</td><td>${escapeHtml(row.maxUnitPrice)}</td><td>${formatOptionalGilCap(row.maxTotalGil)}</td><td><button type="button" onclick="removeAcquisitionQueueRow(${index})">Remove</button></td></tr>`).join('')
                 : '<tr><td colspan="5" class="empty-cell">No queued items.</td></tr>';
+        }
+
+        function formatOptionalGilCap(value) {
+            const trimmed = String(value ?? '').trim();
+            return trimmed && trimmed !== '0' ? escapeHtml(trimmed) : 'No cap';
         }
 
         function removeAcquisitionQueueRow(index) {

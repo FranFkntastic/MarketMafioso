@@ -100,13 +100,14 @@ public static class MarketAcquisitionPlanner
         var batches = new List<MarketAcquisitionWorldBatch>();
         uint plannedQuantity = 0;
         uint plannedGil = 0;
+        var hasGilCap = request.MaxTotalGil > 0;
 
         foreach (var batch in candidates)
         {
             if (plannedQuantity >= request.Quantity)
                 break;
 
-            if (plannedGil + batch.PlannedGil > request.MaxTotalGil)
+            if (hasGilCap && plannedGil + batch.PlannedGil > request.MaxTotalGil)
                 continue;
 
             batches.Add(batch);
@@ -125,13 +126,14 @@ public static class MarketAcquisitionPlanner
         var plannedListings = new List<MarketAcquisitionPlannedListing>();
         uint plannedQuantity = 0;
         uint plannedGil = 0;
+        var hasGilCap = request.MaxTotalGil > 0;
 
         foreach (var listing in listings)
         {
             if (plannedQuantity >= request.Quantity)
                 break;
 
-            if (plannedGil + listing.TotalGil > request.MaxTotalGil)
+            if (hasGilCap && plannedGil + listing.TotalGil > request.MaxTotalGil)
                 continue;
 
             plannedListings.Add(new MarketAcquisitionPlannedListing

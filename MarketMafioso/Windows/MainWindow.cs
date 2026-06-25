@@ -331,7 +331,7 @@ public class MainWindow : Window, IDisposable
             DrawClaimedRequestRow("Quantity", $"{claimedAcquisitionRequest.QuantityMode} {claimedAcquisitionRequest.Quantity}");
             DrawClaimedRequestRow("HQ Policy", claimedAcquisitionRequest.HqPolicy);
             DrawClaimedRequestRow("Max Unit", FormatGil(claimedAcquisitionRequest.MaxUnitPrice));
-            DrawClaimedRequestRow("Gil Cap", FormatGil(claimedAcquisitionRequest.MaxTotalGil));
+            DrawClaimedRequestRow("Gil Cap", FormatGilCap(claimedAcquisitionRequest.MaxTotalGil));
             DrawClaimedRequestRow("World Mode", claimedAcquisitionRequest.WorldMode);
             ImGui.EndTable();
         }
@@ -680,6 +680,8 @@ public class MainWindow : Window, IDisposable
     }
 
     private static string FormatGil(uint gil) => $"{gil:N0} gil";
+
+    private static string FormatGilCap(uint gil) => gil == 0 ? "No cap" : FormatGil(gil);
 
     private static string FormatWorldMode(string worldMode) =>
         worldMode switch

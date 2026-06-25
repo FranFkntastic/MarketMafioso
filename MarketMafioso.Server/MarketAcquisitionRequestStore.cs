@@ -658,8 +658,6 @@ public sealed class MarketAcquisitionRequestStore
             throw new ArgumentException("Quantity is required.", nameof(request));
         if (request.MaxUnitPrice == 0)
             throw new ArgumentException("Max unit price is required.", nameof(request));
-        if (request.MaxTotalGil == 0)
-            throw new ArgumentException("Max total gil is required.", nameof(request));
         if (string.IsNullOrWhiteSpace(request.QuantityMode) ||
             string.IsNullOrWhiteSpace(request.HqPolicy) ||
             string.IsNullOrWhiteSpace(request.WorldMode))

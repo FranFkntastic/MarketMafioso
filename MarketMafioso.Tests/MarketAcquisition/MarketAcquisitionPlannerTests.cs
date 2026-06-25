@@ -54,6 +54,28 @@ public sealed class MarketAcquisitionPlannerTests
     }
 
     [Fact]
+    public void BuildPlan_TreatsZeroGilCapAsNoTotalCap()
+    {
+        var request = CreateRequest(quantity: 10, maxUnitPrice: 100, maxTotalGil: 0);
+        var listings = new[]
+        {
+            CreateListing("Gilgamesh", quantity: 4, unitPrice: 90, listingId: "first"),
+            CreateListing("Gilgamesh", quantity: 4, unitPrice: 95, listingId: "second"),
+            CreateListing("Gilgamesh", quantity: 4, unitPrice: 100, listingId: "third"),
+        };
+
+        var plan = MarketMafioso.MarketAcquisition.MarketAcquisitionPlanner.BuildPlan(
+            request,
+            listings,
+            DateTimeOffset.UnixEpoch);
+
+        var batch = Assert.Single(plan.WorldBatches);
+        Assert.Equal(12u, batch.PlannedQuantity);
+        Assert.Equal(1_140u, batch.PlannedGil);
+        Assert.Equal(["first", "second", "third"], batch.Listings.Select(x => x.ListingId).ToArray());
+    }
+
+    [Fact]
     public void BuildPlan_CurrentWorldOnlyIgnoresOtherWorlds()
     {
         var request = CreateRequest(quantity: 10, worldMode: "CurrentWorldOnly", targetWorld: "Gilgamesh");
