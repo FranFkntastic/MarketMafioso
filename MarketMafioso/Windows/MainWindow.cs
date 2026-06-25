@@ -39,7 +39,7 @@ public class MainWindow : Window, IDisposable
 
     private const string ProductSummary = "Small, practical FFXIV improvements under one roof.";
     private const string InventoryModuleSummary = "Inventory Reporter exports character and retainer inventory snapshots as JSON.";
-    private const string WorkshopPrepModuleSummary = "Workshop Prep tracks company workshop projects and their direct material needs.";
+    private const string WorkshopLogisticsModuleSummary = "Workshop Logistics tracks company workshop jobs, materials, retainer restock, handoff, and assembly.";
     private const string LocalReceiverUrl = "http://localhost:8080/inventory";
     private const string DevReceiverUrl = "https://dev.xivcraftarchitect.com/api/marketmafioso/inventory";
     private const string ProductionReceiverUrl = "https://xivcraftarchitect.com/api/marketmafioso/inventory";
@@ -122,7 +122,7 @@ public class MainWindow : Window, IDisposable
                 ImGui.EndTabItem();
             }
 
-            if (ImGui.BeginTabItem("Workshop Prep"))
+            if (ImGui.BeginTabItem("Workshop Logistics"))
             {
                 DrawWorkshopPrepTab();
                 ImGui.EndTabItem();
@@ -142,7 +142,7 @@ public class MainWindow : Window, IDisposable
     {
         ImGui.TextColored(ColHeader, "MarketMafioso");
         ImGui.TextWrapped(ProductSummary);
-        ImGui.TextColored(ColMuted, "Current modules: Inventory Reporter, Workshop Prep");
+        ImGui.TextColored(ColMuted, "Current modules: Inventory Reporter, Workshop Logistics");
     }
 
     private void DrawOverviewTab()
@@ -152,7 +152,7 @@ public class MainWindow : Window, IDisposable
         ImGui.Separator();
 
         DrawModuleSummary("Inventory Reporter", "Enabled", InventoryModuleSummary);
-        DrawModuleSummary("Workshop Prep", "Enabled", WorkshopPrepModuleSummary);
+        DrawModuleSummary("Workshop Logistics", "Enabled", WorkshopLogisticsModuleSummary);
         DrawModuleSummary("Market Tools", "Planned", "Future market-board helpers will build on captured inventory and item data.");
         DrawModuleSummary("General Improvements", "Planned", "Small quality-of-life tools that are useful, but too narrow for their own plugin.");
     }
@@ -182,8 +182,8 @@ public class MainWindow : Window, IDisposable
     private void DrawWorkshopPrepTab()
     {
         ImGui.Spacing();
-        ImGui.TextColored(ColHeader, "Workshop Prep");
-        ImGui.TextWrapped(WorkshopPrepModuleSummary);
+        ImGui.TextColored(ColHeader, "Workshop Logistics");
+        ImGui.TextWrapped(WorkshopLogisticsModuleSummary);
         ImGui.Spacing();
 
         var projects = workshopCatalog.GetProjects();
@@ -262,8 +262,8 @@ public class MainWindow : Window, IDisposable
             if (ImGuiUi.MenuItem("Copy Artisan Manifest", hasPrepQueue))
                 CopyWorkshopArtisanManifest();
 
-            if (ImGuiUi.MenuItem("Copy Craft Architect Import", hasPrepQueue))
-                CopyWorkshopCraftArchitectManifest();
+            if (ImGuiUi.MenuItem("Copy Craft Architect Plan", hasPrepQueue))
+                CopyWorkshopCraftArchitectPlan();
 
             ImGui.EndPopup();
         }
@@ -321,7 +321,7 @@ public class MainWindow : Window, IDisposable
         if (ImGui.Button("Manage Saved Jobs"))
             FrozenQueueBrowser.IsOpen = true;
 
-        ImGui.TextColored(ColMuted, "Handoff contains VIWI and future queue targets. Export contains Artisan JSON and Craft Architect plain-text import manifests.");
+        ImGui.TextColored(ColMuted, "Handoff contains VIWI and future queue targets. Export contains Artisan JSON and Craft Architect .craftplan JSON.");
 
         DrawFrozenQueueConfirmations(canEditQueue);
     }
@@ -779,9 +779,9 @@ public class MainWindow : Window, IDisposable
             DateTime.UtcNow));
     }
 
-    private void CopyWorkshopCraftArchitectManifest()
+    private void CopyWorkshopCraftArchitectPlan()
     {
-        CopyWorkshopManifest(WorkshopMaterialManifestExportService.ExportCraftArchitectManifest(
+        CopyWorkshopManifest(WorkshopMaterialManifestExportService.ExportCraftArchitectPlan(
             config.WorkshopPrepQueue,
             workshopCatalog.GetProjects(),
             GetWorkshopAvailability(),

@@ -44,6 +44,11 @@ public sealed class WorkshopMaterialManifestExportService
         WriteIndented = false,
     };
 
+    private static readonly JsonSerializerOptions CraftArchitectJsonOptions = new()
+    {
+        WriteIndented = true,
+    };
+
     private readonly IWorkshopMaterialCraftRecipeResolver recipeResolver;
 
     public WorkshopMaterialManifestExportService(IWorkshopMaterialCraftRecipeResolver recipeResolver)
@@ -61,17 +66,17 @@ public sealed class WorkshopMaterialManifestExportService
         return ExportArtisanManifest(queue, projects, availability, quantityMode, exportedAt, recipeResolver);
     }
 
-    public static WorkshopMaterialManifestExportResult ExportCraftArchitectManifest(
+    public static WorkshopMaterialManifestExportResult ExportCraftArchitectPlan(
         IReadOnlyList<WorkshopPrepQueueItem> queue,
         IReadOnlyList<WorkshopProjectDefinition> projects,
         IReadOnlyList<WorkshopMaterialAvailability> availability,
         WorkshopMaterialManifestQuantityMode quantityMode,
         DateTime exportedAt)
     {
-        return ExportCraftArchitectManifest(queue, projects, availability, quantityMode, exportedAt, null);
+        return ExportCraftArchitectPlan(queue, projects, availability, quantityMode, exportedAt, null);
     }
 
-    public static WorkshopMaterialManifestExportResult ExportCraftArchitectManifest(
+    public static WorkshopMaterialManifestExportResult ExportCraftArchitectPlan(
         IReadOnlyList<WorkshopPrepQueueItem> queue,
         IReadOnlyList<WorkshopProjectDefinition> projects,
         IReadOnlyList<WorkshopMaterialAvailability> availability,
@@ -90,8 +95,8 @@ public sealed class WorkshopMaterialManifestExportService
         return new WorkshopMaterialManifestExportResult(
             true,
             WorkshopMaterialManifestExportSeverity.Success,
-            $"Copied Craft Architect import text: {materials.Count} materials.",
-            BuildTeamcraftImportText(name, materials, quantityMode),
+            $"Copied Craft Architect .craftplan JSON: {materials.Count} materials.",
+            BuildCraftArchitectPlanJson(name, materials, quantityMode, exportedAt),
             materials.Count,
             []);
     }
@@ -195,19 +200,104 @@ public sealed class WorkshopMaterialManifestExportService
         };
     }
 
-    private static string BuildTeamcraftImportText(
+    private static string BuildCraftArchitectPlanJson(
         string name,
         IReadOnlyList<WorkshopMaterialAvailability> materials,
-        WorkshopMaterialManifestQuantityMode quantityMode)
+        WorkshopMaterialManifestQuantityMode quantityMode,
+        DateTime exportedAt)
     {
-        var lines = new List<string>
-        {
-            name,
-            "Items:",
-        };
-        lines.AddRange(materials.Select(x => $"{GetExportQuantity(x, quantityMode)}x {x.ItemName}"));
-        return string.Join(Environment.NewLine, lines);
+        var nodes = materials
+            .Select(material => new CraftArchitectPlanNode(
+                ItemId: (int)material.ItemId,
+                Name: material.ItemName,
+                IconId: material.IconId,
+                Quantity: GetExportQuantity(material, quantityMode),
+                IsBuy: false,
+                Source: 3,
+                SourceReason: 0,
+                RequiresHq: false,
+                MustBeHq: false,
+                CanBeHq: false,
+                CanBuyFromMarket: true,
+                IsUncraftable: false,
+                RecipeLevel: 0,
+                RecipeDisplayLevel: 0,
+                RecipeStars: 0,
+                RecipeUnlockItemId: 0,
+                Job: string.Empty,
+                Yield: 1,
+                MarketPrice: 0,
+                HqMarketPrice: 0,
+                VendorPrice: 0,
+                CanBuyFromVendor: false,
+                CanCraft: false,
+                Vendors: [],
+                SelectedVendorIndex: -1,
+                NodeId: BuildCraftArchitectNodeId(material.ItemId),
+                ParentNodeId: null,
+                Notes: "Exported from MarketMafioso Workshop Logistics.",
+                ChildNodeIds: []))
+            .ToList();
+        var plan = new CraftArchitectPlan(
+            Version: 2,
+            Id: Guid.NewGuid(),
+            Name: name,
+            CreatedAt: exportedAt,
+            ModifiedAt: exportedAt,
+            DataCenter: string.Empty,
+            World: string.Empty,
+            RootNodeIds: nodes.Select(x => x.NodeId).ToList(),
+            Nodes: nodes);
+
+        return JsonSerializer.Serialize(plan, CraftArchitectJsonOptions);
     }
+
+    private static string BuildCraftArchitectNodeId(uint itemId)
+    {
+        return $"mmf-{itemId}";
+    }
+
+    private sealed record CraftArchitectPlan(
+        int Version,
+        Guid Id,
+        string Name,
+        DateTime CreatedAt,
+        DateTime ModifiedAt,
+        string DataCenter,
+        string World,
+        IReadOnlyList<string> RootNodeIds,
+        IReadOnlyList<CraftArchitectPlanNode> Nodes);
+
+    private sealed record CraftArchitectPlanNode(
+        int ItemId,
+        string Name,
+        uint IconId,
+        int Quantity,
+        bool IsBuy,
+        int Source,
+        int SourceReason,
+        bool RequiresHq,
+        bool MustBeHq,
+        bool CanBeHq,
+        bool CanBuyFromMarket,
+        bool IsUncraftable,
+        int RecipeLevel,
+        int RecipeDisplayLevel,
+        int RecipeStars,
+        int RecipeUnlockItemId,
+        string Job,
+        int Yield,
+        decimal MarketPrice,
+        decimal HqMarketPrice,
+        decimal VendorPrice,
+        bool CanBuyFromVendor,
+        bool CanCraft,
+        IReadOnlyList<object> Vendors,
+        int SelectedVendorIndex,
+        string NodeId,
+        string? ParentNodeId,
+        string? Notes,
+        IReadOnlyList<string> ChildNodeIds);
 
     private static string BuildExportName(
         IReadOnlyList<WorkshopPrepQueueItem> queue,

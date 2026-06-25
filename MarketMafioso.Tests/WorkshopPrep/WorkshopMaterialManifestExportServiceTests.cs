@@ -6,10 +6,10 @@ namespace MarketMafioso.Tests.WorkshopPrep;
 public sealed class WorkshopMaterialManifestExportServiceTests
 {
     [Fact]
-    public void ExportCraftArchitectManifest_UsesCraftArchitectTeamcraftTextImportFormat()
+    public void ExportCraftArchitectPlan_UsesNativeCraftPlanJsonFormat()
     {
         var exportedAt = new DateTime(2026, 6, 23, 21, 15, 0, DateTimeKind.Utc);
-        var result = WorkshopMaterialManifestExportService.ExportCraftArchitectManifest(
+        var result = WorkshopMaterialManifestExportService.ExportCraftArchitectPlan(
             CreateQueue(),
             CreateProjects(),
             CreateAvailability(),
@@ -18,20 +18,38 @@ public sealed class WorkshopMaterialManifestExportServiceTests
 
         Assert.True(result.Success);
         Assert.Equal(2, result.ExportedCount);
-        Assert.Equal(
-            """
-            Workshop Materials - Shark-class Pressure Hull x16 + 1 more - Inventory Missing - 2026-06-23 2115
-            Items:
-            288x Cobalt Ingot
-            32x Darksteel Ore
-            """.ReplaceLineEndings("\n"),
-            result.Content.ReplaceLineEndings("\n"));
+        Assert.Equal("Copied Craft Architect .craftplan JSON: 2 materials.", result.Message);
+
+        using var document = JsonDocument.Parse(result.Content);
+        var root = document.RootElement;
+        Assert.Equal(2, root.GetProperty("Version").GetInt32());
+        Assert.Equal("Workshop Materials - Shark-class Pressure Hull x16 + 1 more - Inventory Missing - 2026-06-23 2115", root.GetProperty("Name").GetString());
+        Assert.Equal(string.Empty, root.GetProperty("DataCenter").GetString());
+        Assert.Equal(string.Empty, root.GetProperty("World").GetString());
+
+        var rootNodeIds = root.GetProperty("RootNodeIds").EnumerateArray().Select(x => x.GetString()).ToList();
+        Assert.Equal(["mmf-5378", "mmf-6000"], rootNodeIds);
+
+        var cobalt = FindNode(root, "mmf-5378");
+        Assert.Equal(5378, cobalt.GetProperty("ItemId").GetInt32());
+        Assert.Equal("Cobalt Ingot", cobalt.GetProperty("Name").GetString());
+        Assert.Equal(20, cobalt.GetProperty("IconId").GetInt32());
+        Assert.Equal(288, cobalt.GetProperty("Quantity").GetInt32());
+        Assert.Equal(3, cobalt.GetProperty("Source").GetInt32());
+        Assert.Equal(0, cobalt.GetProperty("SourceReason").GetInt32());
+        Assert.False(cobalt.GetProperty("MustBeHq").GetBoolean());
+        Assert.True(cobalt.GetProperty("CanBuyFromMarket").GetBoolean());
+        Assert.False(cobalt.GetProperty("CanCraft").GetBoolean());
+        Assert.Empty(cobalt.GetProperty("ChildNodeIds").EnumerateArray());
+
+        var darksteel = FindNode(root, "mmf-6000");
+        Assert.Equal(32, darksteel.GetProperty("Quantity").GetInt32());
     }
 
     [Fact]
-    public void ExportCraftArchitectManifest_TotalMissingMode_ExportsOnlyUnownedQuantity()
+    public void ExportCraftArchitectPlan_TotalMissingMode_ExportsOnlyUnownedQuantity()
     {
-        var result = WorkshopMaterialManifestExportService.ExportCraftArchitectManifest(
+        var result = WorkshopMaterialManifestExportService.ExportCraftArchitectPlan(
             CreateQueue(),
             CreateProjects(),
             CreateAvailability(),
@@ -40,9 +58,14 @@ public sealed class WorkshopMaterialManifestExportServiceTests
 
         Assert.True(result.Success);
         Assert.Equal(1, result.ExportedCount);
-        Assert.Contains("Items:", result.Content);
-        Assert.Contains("32x Darksteel Ore", result.Content);
-        Assert.DoesNotContain("Cobalt Ingot", result.Content);
+
+        using var document = JsonDocument.Parse(result.Content);
+        var root = document.RootElement;
+        var nodes = root.GetProperty("Nodes").EnumerateArray().ToList();
+        Assert.Single(nodes);
+        Assert.Equal("mmf-6000", nodes[0].GetProperty("NodeId").GetString());
+        Assert.Equal("Darksteel Ore", nodes[0].GetProperty("Name").GetString());
+        Assert.Equal(32, nodes[0].GetProperty("Quantity").GetInt32());
     }
 
     [Fact]
@@ -106,13 +129,13 @@ public sealed class WorkshopMaterialManifestExportServiceTests
     }
 
     [Fact]
-    public void ExportCraftArchitectManifest_ReturnsInfoWhenNoMissingMaterials()
+    public void ExportCraftArchitectPlan_ReturnsInfoWhenNoMissingMaterials()
     {
         var availability = CreateAvailability()
             .Select(item => item with { Shortage = 0, TotalMissing = 0 })
             .ToList();
 
-        var result = WorkshopMaterialManifestExportService.ExportCraftArchitectManifest(
+        var result = WorkshopMaterialManifestExportService.ExportCraftArchitectPlan(
             CreateQueue(),
             CreateProjects(),
             availability,
@@ -123,6 +146,13 @@ public sealed class WorkshopMaterialManifestExportServiceTests
         Assert.Equal(WorkshopMaterialManifestExportSeverity.Info, result.Severity);
         Assert.Equal(string.Empty, result.Content);
         Assert.Contains("No missing workshop materials", result.Message);
+    }
+
+    private static JsonElement FindNode(JsonElement root, string nodeId)
+    {
+        return root.GetProperty("Nodes")
+            .EnumerateArray()
+            .Single(x => x.GetProperty("NodeId").GetString() == nodeId);
     }
 
     private static IReadOnlyList<WorkshopPrepQueueItem> CreateQueue() =>

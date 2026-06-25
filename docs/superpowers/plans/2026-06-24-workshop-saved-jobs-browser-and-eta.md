@@ -76,7 +76,7 @@ Known limitation for first pass:
 
 ## Export Label Guardrail
 
-Workshop Prep's Craft Architect export is the current plain-text Craft Architect import manifest. It is not a `.craftplan` export and should not be labeled, documented, or implied as one while touching this UI. Keep the visible action as `Copy Craft Architect Import` unless there is a separate Craft Architect importer/exporter feature that explicitly changes the format.
+Superseded on 2026-06-25: Craft Architect export is now native `.craftplan` JSON and the visible action should be `Copy Craft Architect Plan`. This section originally preserved the older Teamcraft text bridge and should not be used for new UI work.
 
 ### Task 1: Add Estimate Metadata to Project and Plan Models
 
@@ -659,10 +659,10 @@ if (ImGui.Button("Manage Saved Jobs"))
     FrozenQueueBrowser.IsOpen = true;
 ```
 
-If this task touches the nearby export helper text, keep Craft Architect described as a plain-text import target:
+Superseded on 2026-06-25: if this task touches the nearby export helper text, keep Craft Architect described as a native `.craftplan` JSON target:
 
 ```csharp
-ImGui.TextColored(ColMuted, "Handoff contains VIWI and future queue targets. Export contains Artisan JSON and Craft Architect plain-text import manifests.");
+ImGui.TextColored(ColMuted, "Handoff contains VIWI and future queue targets. Export contains Artisan JSON and Craft Architect .craftplan JSON.");
 ```
 
 Change confirmation messages:
@@ -766,6 +766,6 @@ git commit -m "fix: polish workshop saved jobs browser"
 
 - Spec coverage: The plan covers Saved Jobs naming, browser layout redesign, and ETA display in both list and inspector.
 - ETA coverage: The plan derives contribution steps from `SetsRequired`, models phase/final/retrieval/cutscene overhead, and centralizes constants in `WorkshopAssemblyTiming`.
-- Export copy: The plan explicitly preserves Craft Architect as a plain-text import manifest, not a `.craftplan` export.
+- Export copy: Superseded on 2026-06-25; Craft Architect export is now native `.craftplan` JSON, not a plain-text import manifest.
 - Compatibility: Persisted config names and JSON keys remain unchanged.
 - Risk: Exact ETA still depends on runtime behavior and game latency. The initial constants are deliberately explicit and testable so they can later be tuned from diagnostic logs.

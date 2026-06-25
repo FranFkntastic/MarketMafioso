@@ -2,16 +2,16 @@
 
 ## Goal
 
-Add Workshop Prep actions that export the current missing material demand for use outside MarketMafioso:
+Add Workshop Logistics actions that export the current missing material demand for use outside MarketMafioso:
 
 - Artisan: copy Artisan's native crafting-list JSON for craftable missing materials.
-- Craft Architect: copy text in Craft Architect's current Teamcraft-style import format so Craft Architect can import the material demand immediately and analyze it with its own craft/buy/vendor logic.
+- Craft Architect: copy native Craft Architect `.craftplan` JSON so Craft Architect can import the material demand immediately and analyze it with its own craft/buy/vendor logic.
 
 MarketMafioso remains the in-game source of truth for the workshop prep queue, player inventory, and retainer cache. It should not try to reproduce Craft Architect's procurement planner.
 
 ## Source Data
 
-The export source is `WorkshopMaterialAvailability` built from the active Workshop Prep queue:
+The export source is `WorkshopMaterialAvailability` built from the active Workshop Logistics queue:
 
 - `Required`: total material quantity for queued workshop projects.
 - `PlayerInventory`: quantity currently held by the player.
@@ -60,18 +60,36 @@ This export is best-effort by nature. Gathered, vendor-only, currency, crystal, 
 
 Craft Architect should receive demand, not a pre-decided procurement plan. Craft Architect is better positioned to decide whether an item should be crafted, bought from market, bought from vendor, or handled some other way.
 
-Export Teamcraft-style text with a descriptive first line followed by an `Items:` section. Craft Architect's current Teamcraft importer ignores the descriptive first line and imports the `Items:` section as project/root item demand.
+Export native Craft Architect plan JSON using Craft Architect's `PlanSerializationWrapper` shape. The export is intentionally a shallow plan: one root node per missing workshop material, no child nodes, and acquisition source set to `UnknownSource` so Craft Architect can remain responsible for procurement analysis.
 
 Example:
 
-```text
-Workshop Materials - Shark-class Pressure Hull x16 - Inventory Missing - 2026-06-23 1715
-Items:
-288x Cobalt Ingot
-144x Cedar Lumber
+```json
+{
+  "Version": 2,
+  "Name": "Workshop Materials - Shark-class Pressure Hull x16 - Inventory Missing - 2026-06-23 1715",
+  "DataCenter": "",
+  "World": "",
+  "RootNodeIds": [ "mmf-5378" ],
+  "Nodes": [
+    {
+      "ItemId": 5378,
+      "Name": "Cobalt Ingot",
+      "IconId": 20,
+      "Quantity": 288,
+      "Source": 3,
+      "SourceReason": 0,
+      "CanBuyFromMarket": true,
+      "CanCraft": false,
+      "NodeId": "mmf-5378",
+      "ParentNodeId": null,
+      "ChildNodeIds": []
+    }
+  ]
+}
 ```
 
-This is intentionally a dumb compatibility format. It does not carry item IDs or retainer context, but it works with Craft Architect today and lets Craft Architect rebuild the plan using its normal item lookup and procurement workflow.
+The shallow native plan carries item IDs, names, icons, and quantities without embedding MarketMafioso's retainer context. Craft Architect can deserialize it through its native `.craftplan` importer and then use its own workflow for pricing and procurement decisions.
 
 ## Stretch Goal: Rich Craft Architect Manifest
 
@@ -124,14 +142,14 @@ Craft Architect could import `materials` as project/root items using `itemId`, `
 
 ## UI
 
-Add compact buttons to Workshop Prep actions:
+Add compact menu actions to Workshop Logistics:
 
 - `Copy Artisan Manifest`
-- `Copy Craft Architect Import`
+- `Copy Craft Architect Plan`
 
 Keep status text explicit:
 
-- `Copied Craft Architect import text: 24 materials.`
+- `Copied Craft Architect .craftplan JSON: 24 materials.`
 - `Copied Artisan manifest: 12 recipes. Skipped 7 non-craftable materials: Earth Cluster, Darksteel Ore, ...`
 - `No missing workshop materials to export.`
 
@@ -142,7 +160,7 @@ Do not add a large export wizard for the first pass. If quantity mode selection 
 - Empty queue: return an info result and do not touch the clipboard.
 - No missing materials for selected quantity mode: return an info result and do not touch the clipboard.
 - Artisan has no craftable materials: return a warning and do not copy an empty list.
-- Craft Architect export should fail only for invalid source state, because the Teamcraft-style text path does not need recipe resolution.
+- Craft Architect export should fail only for invalid source state, because the native shallow plan path does not need recipe resolution.
 - All results should include counts and a short skipped-item summary.
 
 ## Tests
@@ -152,7 +170,7 @@ Add focused tests around a pure export service:
 - Builds descriptive names from one project, several projects, and generic fallbacks.
 - Filters material quantities by `InventoryMissing`.
 - Supports `TotalMissing` if the quantity mode selector is included.
-- Emits Craft Architect-compatible Teamcraft-style text with a descriptive first line and an `Items:` section.
+- Emits Craft Architect-compatible native `.craftplan` JSON with version 2 wrapper metadata and one root node per exported material.
 - Resolves Artisan recipes and applies recipe yield to craft counts.
 - Reports Artisan skipped materials without failing the whole export.
 - Returns clean info/warning results for empty queue and zero exportable materials.

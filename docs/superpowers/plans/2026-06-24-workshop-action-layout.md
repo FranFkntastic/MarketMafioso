@@ -273,8 +273,8 @@ private void DrawWorkshopQueueHeaderActions()
         if (ImGuiUi.MenuItem("Copy Artisan Manifest", hasPrepQueue))
             CopyWorkshopArtisanManifest();
 
-        if (ImGuiUi.MenuItem("Copy Craft Architect Import", hasPrepQueue))
-            CopyWorkshopCraftArchitectManifest();
+        if (ImGuiUi.MenuItem("Copy Craft Architect Plan", hasPrepQueue))
+            CopyWorkshopCraftArchitectPlan();
 
         ImGui.EndPopup();
     }
@@ -526,7 +526,7 @@ Reload MarketMafioso in Dalamud and verify:
 - `Save Queue` overwrites the active frozen queue when one is loaded.
 - `Save As...` creates a separate frozen queue.
 - `Handoff > Send to VIWI` opens the existing confirmation.
-- `Export` menu copies the Artisan manifest and the Craft Architect plain-text import.
+- `Export` menu copies the Artisan manifest and the Craft Architect native `.craftplan` JSON.
 - Material refresh/restock buttons appear in the Materials header.
 - Bottom workflow only shows assembly controls, status, diagnostics, and progress.
 
