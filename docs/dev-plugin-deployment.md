@@ -47,6 +47,18 @@ When you intentionally need both sides refreshed, run the explicit combined help
 
 `Deploy-DevAll.ps1` runs the server deploy first, waits for the GitHub Actions smoke checks, then deploys the local plugin DLL. Keep using the separate scripts unless you specifically want this full sequence.
 
+For the least-decision workflow, use the changed-surface router:
+
+```powershell
+.\MarketMafioso\tools\Deploy-ChangedDev.ps1
+```
+
+It looks at changed files since `origin/local-dev`, plus staged, unstaged, and untracked files, then routes to the server deploy, plugin deploy, combined deploy, or no deploy. Use PowerShell's built-in `-WhatIf` to preview the chosen action:
+
+```powershell
+.\MarketMafioso\tools\Deploy-ChangedDev.ps1 -WhatIf
+```
+
 ## Worktree Rules
 
 - Normal `dotnet build` output is not deployment.

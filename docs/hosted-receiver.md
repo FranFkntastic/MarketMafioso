@@ -97,6 +97,14 @@ The workflow installs or updates the `marketmafioso-dev` systemd service, stores
 
 Server deployment is intentionally separate from plugin deployment. A backend deploy updates the VPS receiver only; it does not copy a DLL into Dalamud. Use `Deploy-PluginDev.ps1` when the in-game plugin needs to change too.
 
+When you just want the tooling to choose based on the files you changed, use the changed-surface router:
+
+```powershell
+.\MarketMafioso\tools\Deploy-ChangedDev.ps1
+```
+
+It classifies committed, staged, unstaged, and untracked paths. Server paths run the server deploy, plugin paths run the plugin deploy, both surfaces run the explicit combined deploy, and docs/tooling-only changes do not deploy. If a path is ambiguous, the router stops and asks you to run the explicit server/plugin/both command.
+
 ## First-Time Setup
 
 Generate a dev ingest key and dashboard password outside the repo:
