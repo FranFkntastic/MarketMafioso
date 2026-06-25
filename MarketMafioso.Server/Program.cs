@@ -1212,6 +1212,28 @@ static string RenderAcquisitionDashboard(
                     border-color: #5a3034;
                     background: #201417;
                 }
+                .stage-status {
+                    min-height: 0;
+                    padding: 8px 10px;
+                    border: 1px solid var(--line);
+                    border-radius: 6px;
+                    color: var(--muted);
+                    background: #10161d;
+                    line-height: 1.45;
+                }
+                .stage-status:empty {
+                    display: none;
+                }
+                .stage-status.error {
+                    color: #ffd2d6;
+                    border-color: #5a3034;
+                    background: #201417;
+                }
+                .stage-status.good {
+                    color: #c8f0d5;
+                    border-color: #2e5a3f;
+                    background: #14231a;
+                }
                 .button-row {
                     display: flex;
                     align-items: center;
@@ -1544,6 +1566,7 @@ static string RenderAcquisitionRequestForm(
                 <button type="button" onclick="addAcquisitionQueueRow()">Add to Queue</button>
                 <button class="primary" type="button" onclick="stageAcquisitionQueue()">Stage Queue</button>
             </div>
+            <div id="acquisitionStageStatus" class="stage-status" role="status" aria-live="polite"></div>
             <div class="section">
                 <p class="section-title">Queued Items</p>
                 <table>
@@ -1621,15 +1644,35 @@ static string RenderAcquisitionRequestForm(
             const form = document.querySelector('.request-form');
             const data = new FormData(form);
             if (!selectedAcquisitionItem) {
-                alert('Select a resolved item before queueing.');
+                setAcquisitionStageStatus('Select a resolved item before queueing.', true);
                 return;
             }
             const row = Object.fromEntries(data.entries());
             row.itemId = String(selectedAcquisitionItem.itemId);
             row.itemName = selectedAcquisitionItem.name;
             row.idempotencyKey = crypto.randomUUID ? crypto.randomUUID().replaceAll('-', '') : `${Date.now()}${Math.random()}`;
+            const validationError = validateAcquisitionQueueRow(row);
+            if (validationError) {
+                setAcquisitionStageStatus(validationError, true);
+                return;
+            }
             acquisitionQueue.push(row);
+            setAcquisitionStageStatus(`Queued ${row.itemName}. Stage Queue to persist the request.`, false, true);
             renderAcquisitionQueueRows();
+        }
+
+        function validateAcquisitionQueueRow(row) {
+            if (!isPositiveWholeNumber(row.quantity)) return 'Quantity must be a positive whole number.';
+            if (!isPositiveWholeNumber(row.maxUnitPrice)) return 'Max unit price must be a positive whole number.';
+            if (!isPositiveWholeNumber(row.maxTotalGil)) return 'Gil cap is required and must be a positive whole number.';
+            if (!row.quantityMode) return 'Quantity mode is required.';
+            if (!row.hqPolicy) return 'HQ policy is required.';
+            if (!row.worldMode) return 'World mode is required.';
+            return '';
+        }
+
+        function isPositiveWholeNumber(value) {
+            return /^[1-9]\d*$/.test(String(value ?? '').trim());
         }
 
         function renderAcquisitionQueueRows() {
@@ -1648,23 +1691,50 @@ static string RenderAcquisitionRequestForm(
         async function stageAcquisitionQueue() {
             const form = document.querySelector('.request-form');
             if (!form || acquisitionQueue.length === 0) {
-                alert('Queue at least one resolved item first.');
+                setAcquisitionStageStatus('Queue at least one resolved item first.', true);
                 return;
             }
             let staged = 0;
+            const failures = [];
             for (const row of acquisitionQueue) {
                 const response = await fetch(form.action, {
                     method: 'POST',
                     body: new URLSearchParams(row),
                     redirect: 'manual'
                 });
-                if (response.ok || response.status === 0 || response.status === 302) staged++;
+                if (response.ok || response.status === 0 || response.status === 302) {
+                    staged++;
+                } else {
+                    failures.push(`${row.itemName}: ${await readAcquisitionStageError(response)}`);
+                }
             }
             if (staged === acquisitionQueue.length) {
                 window.location.href = '{{Html(AppUrl(pathBase, "/acquisition"))}}';
             } else {
-                alert(`${staged} of ${acquisitionQueue.length} acquisition rows staged.`);
+                setAcquisitionStageStatus(`${staged} of ${acquisitionQueue.length} acquisition rows staged. ${failures.join(' ')}`, true);
             }
+        }
+
+        async function readAcquisitionStageError(response) {
+            try {
+                const payload = await response.json();
+                return payload.error || `HTTP ${response.status}`;
+            } catch {
+                try {
+                    const text = await response.text();
+                    return text || `HTTP ${response.status}`;
+                } catch {
+                    return `HTTP ${response.status}`;
+                }
+            }
+        }
+
+        function setAcquisitionStageStatus(message, isError, isGood = false) {
+            const status = document.getElementById('acquisitionStageStatus');
+            if (!status) return;
+            status.textContent = message || '';
+            status.classList.toggle('error', Boolean(isError));
+            status.classList.toggle('good', Boolean(isGood) && !isError);
         }
 
         function escapeHtml(value) {

@@ -678,7 +678,10 @@ public sealed class MarketAcquisitionRequestEndpointTests
         Assert.Contains("name=\"itemId\"", acquisitionPage, StringComparison.Ordinal);
         Assert.Contains("name=\"itemName\"", acquisitionPage, StringComparison.Ordinal);
         Assert.Contains("id=\"acquisitionQueueRows\"", acquisitionPage, StringComparison.Ordinal);
+        Assert.Contains("id=\"acquisitionStageStatus\"", acquisitionPage, StringComparison.Ordinal);
         Assert.Contains("searchAcquisitionItems", acquisitionPage, StringComparison.Ordinal);
+        Assert.Contains("validateAcquisitionQueueRow", acquisitionPage, StringComparison.Ordinal);
+        Assert.Contains("readAcquisitionStageError", acquisitionPage, StringComparison.Ordinal);
         Assert.Contains("addAcquisitionQueueRow", acquisitionPage, StringComparison.Ordinal);
         Assert.Contains("stageAcquisitionQueue", acquisitionPage, StringComparison.Ordinal);
         Assert.Contains("data-xiv-data-base-url=\"https://dev.xivcraftarchitect.com/api/xivdata\"", acquisitionPage, StringComparison.Ordinal);
