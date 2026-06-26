@@ -1698,6 +1698,7 @@ static string RenderAcquisitionDashboard(
                             return;
                         }
                         const payload = await response.json();
+                        refreshAcquisitionCsrfToken(payload.csrfToken);
                         document.getElementById('acquisitionQueueBody').innerHTML = payload.queueRows;
                         document.getElementById('acquisitionActiveSummary').textContent = payload.activeSummary;
                         document.getElementById('selectedRequestName').textContent = payload.selectedRequestName;
@@ -1710,6 +1711,14 @@ static string RenderAcquisitionDashboard(
                         document.getElementById('latestRequestEvent').textContent = 'Queue refresh failed. Check browser network details.';
                     }
                 }
+
+                function refreshAcquisitionCsrfToken(csrfToken) {
+                    if (!csrfToken) return;
+                    document.querySelectorAll('input[name="csrf"]').forEach(input => {
+                        input.value = csrfToken;
+                    });
+                }
+
                 function applyAcquisitionQueueFilter() {
                     const text = document.getElementById('acquisitionQueueFilter').value.trim().toLowerCase();
                     const status = document.getElementById('acquisitionStatusFilter').value.toLowerCase();
@@ -1951,7 +1960,9 @@ static string RenderAcquisitionRequestForm(
             }
             let staged = 0;
             const failures = [];
+            const currentCsrf = new FormData(form).get('csrf');
             for (const row of acquisitionQueue) {
+                row.csrf = currentCsrf;
                 const response = await fetch(form.action, {
                     method: 'POST',
                     body: new URLSearchParams(row),
@@ -2051,6 +2062,7 @@ static object BuildAcquisitionQueueUpdate(
         latestRequestStatus = latestRequest == null ? "Idle" : FormatAcquisitionStatus(latestRequest.Status),
         latestRequestEvent = latestRequest == null ? "-" : FormatAcquisitionLatestEvent(latestRequest),
         latestRequestExpiry = latestRequest == null ? "-" : FormatAcquisitionExpiry(latestRequest),
+        csrfToken,
     };
 }
 
