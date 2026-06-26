@@ -1,5 +1,9 @@
 # Market Acquisition Roadmap
 
+Full-loop design: `docs/superpowers/specs/2026-06-26-market-acquisition-full-loop-design.md`
+
+Full-loop implementation plan: `docs/superpowers/plans/2026-06-26-market-acquisition-full-loop.md`
+
 ## Goal
 
 Build Market Acquisition as a private, self-hosted dashboard-to-plugin workflow where the browser dashboard stages a request, the plugin explicitly picks it up, and the plugin owns all in-game validation and execution.
