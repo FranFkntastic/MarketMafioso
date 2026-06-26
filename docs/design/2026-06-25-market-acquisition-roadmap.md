@@ -49,7 +49,7 @@ Current status after the 2026-06-25 local-dev pass:
 | Phase 4: Market Planning Dry Run | Done | Accepted requests can prepare a Universalis-backed advisory plan and display world/listing batches. Planner semantics now need to align with the two-mode quantity model and optional gil cap everywhere. |
 | Phase 5: Live Market Board Read-Only Probe | Done for visible rows | In-game probe succeeded on current patch: item id, visible listing rows, listing id, retainer id/name, HQ flag, unit price, and quantity populated correctly. The `WaitingForListings` flag can remain set while visible rows exist, and the reader now treats populated rows as ready with a diagnostic note. Current-world live candidate evaluation is included in this phase because it only classifies the visible page after the read-only probe. Remaining risk moves to pagination/deeper listing-page behavior. No purchase path exists. |
 | Phase 5.5: Current-World Live Candidate Evaluation | Done for visible rows | After `Read Live Listings`, the plugin validates item/world, builds a confirmed live candidate pool, sorts by live unit price, supports favorable drift, respects HQ/max-unit/gil-cap constraints, and reports would-buy/skip/under-procure outcomes without purchasing. Verbose tables live in a diagnostics popout so the main Market Acquisition tab stays operational. |
-| Phase 6: Lifestream-Guided World-Batch Orchestration | Not started | Multi-world progression should delegate travel to Lifestream, expected first as `/li <world> mb`, then detect arrival/current world, rerun the live probe, and re-rank confirmed live candidates. This is not a hand-rolled world-travel UI automation phase. |
+| Phase 6: Lifestream-Guided World-Batch Orchestration | Partially done | The plugin can start a volatile guided route from the prepared plan, show/copy the next `/li <world> mb` command, check whether the current world matches the active stop, and advance stops after a successful live probe/dry-run. Automatic Lifestream invocation, server progress reporting, pause/resume, and live re-ranking across remaining stops are still pending. |
 | Phase 7: Purchase Mechanism Investigation | Not started | Blocks any real purchase executor. Must prove the purchase path, success/failure observation, and safe stop behavior with low-value current-world tests. |
 | Phase 8: Guarded Purchase Execution | Blocked | Only starts if Phase 7 proves a safe purchase mechanism. |
 | Phase 9: Travel Automation Spike | Deferred | Only needed if Lifestream cannot cover the required region/world routes. Until then, travel work is an integration/orchestration problem rather than native aetheryte automation. |
@@ -431,20 +431,28 @@ Add a local runner that walks through planned world batches by delegating travel
 
 ### Proposed Files
 
-- Later runner files remain proposed:
-  - `MarketMafioso/MarketAcquisition/MarketAcquisitionRunner.cs`
-  - `MarketMafioso/MarketAcquisition/WorldTravel/LifestreamWorldTravelDriver.cs`
-  - `MarketMafioso/MarketAcquisition/MarketAcquisitionDiagnostics.cs`
-  - `MarketMafioso.Tests/MarketAcquisition/MarketAcquisitionRunnerTests.cs`
+### Implemented Files
+
+- `MarketMafioso/MarketAcquisition/MarketAcquisitionGuidedRouteSession.cs`
+- `MarketMafioso.Tests/MarketAcquisition/MarketAcquisitionGuidedRouteSessionTests.cs`
+- `MarketMafioso/Windows/MainWindow.cs` exposes the first guided route controls.
+
+### Proposed Later Files
+
+- `MarketMafioso/MarketAcquisition/MarketAcquisitionRunner.cs`
+- `MarketMafioso/MarketAcquisition/WorldTravel/LifestreamWorldTravelDriver.cs`
+- `MarketMafioso/MarketAcquisition/MarketAcquisitionDiagnostics.cs`
+- `MarketMafioso.Tests/MarketAcquisition/MarketAcquisitionRunnerTests.cs`
 
 ### Capability
 
-- Runner moves through planned worlds in current best-price order.
-- Runner issues or guides Lifestream travel, expected first as `/li <world> mb`.
+- First slice moves through planned worlds in prepared-plan order.
+- First slice guides Lifestream travel by showing and copying `/li <world> mb`.
+- Later slices may issue Lifestream commands directly if the command path is proven safe.
 - For each world, runner waits until current world matches expected world.
 - Runner waits for market board/listings to be available.
 - Runner reuses Phase 5.5 candidate evaluation at each destination.
-- Runner re-ranks remaining world stops if a live-confirmed cheaper candidate changes the best path.
+- Later slices re-rank remaining world stops if a live-confirmed cheaper candidate changes the best path.
 - Runner shows one world-batch confirmation.
 - `Dry Run Batch` records what would be bought and advances.
 
@@ -471,6 +479,14 @@ Add a local runner that walks through planned world batches by delegating travel
 - Runner can pause, stop, fail, and complete with clear status.
 - Server receives progress/failure/completion reports.
 - Confirmation invalidates if current world, current search item, confirmed candidate identity, confirmed candidate price, confirmed candidate quantity, or remaining configured budget changes before batch action.
+
+### Current Slice Exit Criteria
+
+- User can start a volatile guided route from a ready plan.
+- Plugin shows and copies `/li <world> mb` for the active planned world.
+- Plugin can check current world against the active stop.
+- Successful live probe/dry-run records current stop quantities and advances to the next stop.
+- No purchase path exists.
 
 ## Phase 7: Purchase Mechanism Investigation
 

@@ -706,6 +706,7 @@ Manual verification:
 
 - Add runner state machine.
 - Add Lifestream-assisted travel driver, expected first as `/li <world> mb`.
+- First implementation shows and copies `/li <world> mb`; automatic command execution waits until the command path is deliberately proven.
 - Detect arrival/current world before probing each destination.
 - Add batch confirmation UI.
 - Add dry-run batch execution.
