@@ -538,9 +538,18 @@ public class MainWindow : Window, IDisposable
                     return;
                 }
 
+                var pendingCurrentWorld = playerState.CurrentWorld.IsValid ? GetCurrentWorldName() : null;
+                if (playerState.CurrentWorld.IsValid &&
+                    !activeStop.WorldName.Equals(pendingCurrentWorld, StringComparison.OrdinalIgnoreCase) &&
+                    !EnsureRouteTravelUiIsClear(route))
+                {
+                    nextGuidedRouteMonitorUtc = DateTimeOffset.UtcNow.AddSeconds(2);
+                    return;
+                }
+
                 route.PreparePendingStopForCurrentWorld(
                     playerState.CurrentWorld.IsValid,
-                    playerState.CurrentWorld.IsValid ? GetCurrentWorldName() : null,
+                    pendingCurrentWorld,
                     Plugin.CommandManager.ProcessCommand);
                 nextGuidedRouteMonitorUtc = DateTimeOffset.UtcNow.AddSeconds(2);
                 return;
@@ -574,6 +583,12 @@ public class MainWindow : Window, IDisposable
                     route.RecordMarketBoardApproach(approachResult);
                     if (approachResult.MarketBoardTravelNeeded)
                     {
+                        if (!EnsureRouteTravelUiIsClear(route))
+                        {
+                            nextGuidedRouteMonitorUtc = DateTimeOffset.UtcNow.AddSeconds(2);
+                            return;
+                        }
+
                         route.ExecuteMarketBoardTravelCommand(Plugin.CommandManager.ProcessCommand);
                         nextGuidedRouteMonitorUtc = DateTimeOffset.UtcNow.AddSeconds(2);
                         return;
@@ -611,6 +626,23 @@ public class MainWindow : Window, IDisposable
         {
             ReportGuidedRouteProgress();
         }
+    }
+
+    private static bool EnsureRouteTravelUiIsClear(MarketAcquisitionRouteRunner route)
+    {
+        var preflight = MarketAcquisitionRouteTravelPreflight.Check(GetOpenRouteTravelBlockingAddons());
+        if (preflight.CanSendCommand)
+            return true;
+
+        route.RecordTravelBlockedByUi(preflight);
+        return false;
+    }
+
+    private static IReadOnlyList<string> GetOpenRouteTravelBlockingAddons()
+    {
+        return MarketAcquisitionRouteTravelPreflight.BlockingAddonNames
+            .Where(IsAddonOpen)
+            .ToArray();
     }
 
     private static unsafe bool TryCloseMarketBoardWindows()

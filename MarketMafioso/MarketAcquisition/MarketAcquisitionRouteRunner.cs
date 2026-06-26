@@ -204,6 +204,24 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         return MarketAcquisitionRouteActionResult.Ok(StatusMessage);
     }
 
+    public MarketAcquisitionRouteActionResult RecordTravelBlockedByUi(MarketAcquisitionRouteTravelPreflightResult preflight)
+    {
+        ArgumentNullException.ThrowIfNull(preflight);
+
+        if (!IsRunning)
+            return Fail($"Route is {State}; travel preflight was not recorded.");
+
+        StatusMessage = preflight.Message;
+        diagnostics.Record(
+            "travel-ui-blocked",
+            preflight.Message,
+            new Dictionary<string, string?>
+            {
+                ["blockingAddons"] = string.Join(", ", preflight.BlockingAddons),
+            });
+        return MarketAcquisitionRouteActionResult.Ok(preflight.Message);
+    }
+
     public MarketAcquisitionRouteActionResult PreparePendingStopForCurrentWorld(
         bool currentWorldIsValid,
         string? currentWorld,
