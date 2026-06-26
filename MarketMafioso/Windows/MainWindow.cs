@@ -537,6 +537,13 @@ public class MainWindow : Window, IDisposable
                 {
                     var approachResult = marketBoardApproachService.OpenOrApproach();
                     route.RecordMarketBoardApproach(approachResult);
+                    if (approachResult.MarketBoardTravelNeeded)
+                    {
+                        route.ExecuteMarketBoardTravelCommand(Plugin.CommandManager.ProcessCommand);
+                        nextGuidedRouteMonitorUtc = DateTimeOffset.UtcNow.AddSeconds(2);
+                        return;
+                    }
+
                     if (!approachResult.ReadyToSearch)
                     {
                         nextGuidedRouteMonitorUtc = DateTimeOffset.UtcNow.AddSeconds(1);

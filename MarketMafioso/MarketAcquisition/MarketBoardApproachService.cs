@@ -62,6 +62,8 @@ public sealed class MarketBoardApproachService
         {
             MarketBoardApproachDecisionKind.InteractDirectly => InteractWithBoard(board, playerPosition),
             MarketBoardApproachDecisionKind.StartNavigation => StartNavigation(board, playerPosition),
+            MarketBoardApproachDecisionKind.RequestMarketBoardTravel => MarketBoardApproachResult.MarketBoardTravel(
+                DescribeMarketBoardTravelRequest(board, playerPosition)),
             MarketBoardApproachDecisionKind.WaitForMovement => MarketBoardApproachResult.Wait(
                 "vnavmesh is moving toward the nearby market board."),
             MarketBoardApproachDecisionKind.ReadyToSearch => MarketBoardApproachResult.Ready(
@@ -85,7 +87,7 @@ public sealed class MarketBoardApproachService
             return new(MarketBoardApproachDecisionKind.ReadyToSearch);
 
         if (boardDistance == null || boardDistance > MaximumApproachDistance)
-            return new(MarketBoardApproachDecisionKind.WaitForManualOpen);
+            return new(MarketBoardApproachDecisionKind.RequestMarketBoardTravel);
 
         if (boardDistance <= DirectInteractionDistance)
             return new(MarketBoardApproachDecisionKind.InteractDirectly);
@@ -95,7 +97,7 @@ public sealed class MarketBoardApproachService
 
         return vnavmeshAvailable
             ? new(MarketBoardApproachDecisionKind.StartNavigation)
-            : new(MarketBoardApproachDecisionKind.WaitForManualOpen);
+            : new(MarketBoardApproachDecisionKind.RequestMarketBoardTravel);
     }
 
     private unsafe bool IsMarketBoardUiOpen()
@@ -202,6 +204,21 @@ public sealed class MarketBoardApproachService
         return "Open a market board manually; vnavmesh is unavailable for approach movement.";
     }
 
+    private string DescribeMarketBoardTravelRequest(IGameObject? board, Vector3? playerPosition)
+    {
+        if (board == null)
+            return "No nearby market board target was found; requesting Lifestream market board travel.";
+
+        if (playerPosition == null)
+            return "Player position is unavailable; requesting Lifestream market board travel.";
+
+        var distance = CalculateHorizontalDistance(playerPosition.Value, board.Position);
+        if (distance > MaximumApproachDistance)
+            return $"Nearest market board is {distance:0.0}y away; requesting Lifestream market board travel.";
+
+        return $"Market board is {distance:0.0}y away and vnavmesh is unavailable; requesting Lifestream market board travel.";
+    }
+
     private static unsafe bool IsAddonReady(AtkUnitBase* addon)
     {
         return addon != null && addon->IsReady && addon->IsVisible;
@@ -220,6 +237,7 @@ public enum MarketBoardApproachDecisionKind
     ReadyToSearch,
     InteractDirectly,
     StartNavigation,
+    RequestMarketBoardTravel,
     WaitForMovement,
     WaitForManualOpen,
 }
@@ -232,6 +250,7 @@ public sealed record MarketBoardApproachResult
     public string Message { get; init; } = string.Empty;
     public bool ReadyToSearch => string.Equals(Status, "ReadyToSearch", StringComparison.OrdinalIgnoreCase);
     public bool ActionTaken => string.Equals(Status, "ActionTaken", StringComparison.OrdinalIgnoreCase);
+    public bool MarketBoardTravelNeeded => string.Equals(Status, "MarketBoardTravelNeeded", StringComparison.OrdinalIgnoreCase);
     public IReadOnlyDictionary<string, string?> Details { get; init; } = new Dictionary<string, string?>();
 
     public static MarketBoardApproachResult Ready(string message)
@@ -247,6 +266,11 @@ public sealed record MarketBoardApproachResult
             Message = message,
             Details = details ?? new Dictionary<string, string?>(),
         };
+    }
+
+    public static MarketBoardApproachResult MarketBoardTravel(string message)
+    {
+        return new() { Status = "MarketBoardTravelNeeded", Message = message };
     }
 
     public static MarketBoardApproachResult Wait(string message)

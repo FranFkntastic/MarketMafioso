@@ -72,7 +72,7 @@ public sealed class MarketBoardApproachServiceTests
     }
 
     [Fact]
-    public void Decide_WaitsForManualInteractionWhenVnavmeshUnavailableOutsideDirectRange()
+    public void Decide_RequestsMarketBoardTravelWhenVnavmeshUnavailableOutsideDirectRange()
     {
         var decision = MarketBoardApproachService.Decide(
             marketBoardUiOpen: false,
@@ -80,7 +80,7 @@ public sealed class MarketBoardApproachServiceTests
             vnavmeshAvailable: false,
             vnavmeshRunning: false);
 
-        Assert.Equal(MarketBoardApproachDecisionKind.WaitForManualOpen, decision.Kind);
+        Assert.Equal(MarketBoardApproachDecisionKind.RequestMarketBoardTravel, decision.Kind);
     }
 
     [Fact]
@@ -92,11 +92,11 @@ public sealed class MarketBoardApproachServiceTests
             vnavmeshAvailable: true,
             vnavmeshRunning: false);
 
-        Assert.Equal(MarketBoardApproachDecisionKind.WaitForManualOpen, decision.Kind);
+        Assert.Equal(MarketBoardApproachDecisionKind.RequestMarketBoardTravel, decision.Kind);
     }
 
     [Fact]
-    public void Decide_WaitsForManualInteractionWhenBoardIsOutsideApproachRange()
+    public void Decide_RequestsMarketBoardTravelWhenBoardIsOutsideApproachRange()
     {
         var decision = MarketBoardApproachService.Decide(
             marketBoardUiOpen: false,
@@ -104,7 +104,7 @@ public sealed class MarketBoardApproachServiceTests
             vnavmeshAvailable: true,
             vnavmeshRunning: false);
 
-        Assert.Equal(MarketBoardApproachDecisionKind.WaitForManualOpen, decision.Kind);
+        Assert.Equal(MarketBoardApproachDecisionKind.RequestMarketBoardTravel, decision.Kind);
     }
 
     [Fact]

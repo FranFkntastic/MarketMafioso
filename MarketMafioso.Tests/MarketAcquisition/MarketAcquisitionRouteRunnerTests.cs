@@ -67,6 +67,46 @@ public sealed class MarketAcquisitionRouteRunnerTests
     }
 
     [Fact]
+    public void ExecuteMarketBoardTravelCommand_SendsLocalMarketBoardCommandOnce()
+    {
+        using var runner = CreateRunner();
+        runner.Start(CreatePlan("Maduin"));
+        runner.RecordCurrentWorld("Maduin");
+        List<string> commands = [];
+
+        var first = runner.ExecuteMarketBoardTravelCommand(value =>
+        {
+            commands.Add(value);
+            return true;
+        });
+        var second = runner.ExecuteMarketBoardTravelCommand(value =>
+        {
+            commands.Add(value);
+            return true;
+        });
+
+        Assert.True(first.Success);
+        Assert.True(second.Success);
+        Assert.Equal(["/li mb"], commands);
+        Assert.Equal("Arrived", runner.ActiveStop?.Status);
+        Assert.Contains("Waiting for Lifestream", runner.StatusMessage, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void ExecuteMarketBoardTravelCommand_ReportsUnhandledCommand()
+    {
+        using var runner = CreateRunner();
+        runner.Start(CreatePlan("Maduin"));
+        runner.RecordCurrentWorld("Maduin");
+
+        var result = runner.ExecuteMarketBoardTravelCommand(_ => false);
+
+        Assert.False(result.Success);
+        Assert.Equal("Arrived", runner.ActiveStop?.Status);
+        Assert.Contains("not handled", runner.StatusMessage, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void PreparePendingStopForCurrentWorld_SendsCommandWhenCurrentWorldDiffers()
     {
         using var runner = CreateRunner();

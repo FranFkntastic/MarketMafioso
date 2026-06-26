@@ -125,6 +125,7 @@ public sealed record MarketAcquisitionGuidedRouteStop
     public string? DryRunStatus { get; set; }
     public uint WouldBuyQuantity { get; set; }
     public uint WouldSpendGil { get; set; }
+    public bool MarketBoardTravelCommandSent { get; set; }
 }
 
 public sealed record MarketAcquisitionGuidedRouteResult
