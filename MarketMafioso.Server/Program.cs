@@ -1059,12 +1059,13 @@ static string RenderAcquisitionDashboard(
         : $"""<p class="notice">Created request <code>{Html(acquisition)}</code>. Open <code>/mmf</code> in-game, select <code>Market Acquisition</code>, and fetch dashboard requests.</p>""";
     var targetCharacter = selectedCharacter?.CharacterName ?? string.Empty;
     var targetWorld = selectedCharacter?.HomeWorld ?? string.Empty;
-    var activeCount = acquisitionRequests.Count(request =>
+    var visibleRequests = VisibleAcquisitionQueueRequests(acquisitionRequests);
+    var activeCount = visibleRequests.Count(request =>
         request.Status is MarketAcquisitionStatuses.PendingPickup
             or MarketAcquisitionStatuses.Claimed
             or MarketAcquisitionStatuses.AcceptedInPlugin
             or MarketAcquisitionStatuses.Running);
-    var latestRequest = acquisitionRequests.FirstOrDefault();
+    var latestRequest = visibleRequests.FirstOrDefault();
     var latestRequestLabel = latestRequest == null
         ? "No staged request"
         : FormatAcquisitionItem(latestRequest);
@@ -1077,9 +1078,9 @@ static string RenderAcquisitionDashboard(
     var latestRequestExpiry = latestRequest == null
         ? "-"
         : FormatAcquisitionExpiry(latestRequest);
-    var queueRows = RenderAcquisitionQueueRows(acquisitionRequests, pathBase, csrfToken);
+    var queueRows = RenderAcquisitionQueueRows(visibleRequests, pathBase, csrfToken);
     var characterHeader = RenderAcquisitionCharacterHeader(characters, selectedCharacterId, selectedCharacter, pathBase);
-    var activeSummary = $"{activeCount:N0} active / {acquisitionRequests.Count:N0} recent";
+    var activeSummary = $"{activeCount:N0} active / {visibleRequests.Count:N0} recent";
     var selectedRequestName = latestRequest == null
         ? "None selected"
         : FormatAcquisitionItem(latestRequest);
@@ -2026,22 +2027,31 @@ static object BuildAcquisitionQueueUpdate(
     PathString pathBase,
     string csrfToken)
 {
-    var activeCount = acquisitionRequests.Count(request =>
+    var visibleRequests = VisibleAcquisitionQueueRequests(acquisitionRequests);
+    var activeCount = visibleRequests.Count(request =>
         request.Status is MarketAcquisitionStatuses.PendingPickup
             or MarketAcquisitionStatuses.Claimed
             or MarketAcquisitionStatuses.AcceptedInPlugin
             or MarketAcquisitionStatuses.Running);
-    var latestRequest = acquisitionRequests.FirstOrDefault();
+    var latestRequest = visibleRequests.FirstOrDefault();
 
     return new
     {
-        queueRows = RenderAcquisitionQueueRows(acquisitionRequests, pathBase, csrfToken),
-        activeSummary = $"{activeCount:N0} active / {acquisitionRequests.Count:N0} recent",
+        queueRows = RenderAcquisitionQueueRows(visibleRequests, pathBase, csrfToken),
+        activeSummary = $"{activeCount:N0} active / {visibleRequests.Count:N0} recent",
         selectedRequestName = latestRequest == null ? "None selected" : FormatAcquisitionItem(latestRequest),
         latestRequestStatus = latestRequest == null ? "Idle" : FormatAcquisitionStatus(latestRequest.Status),
         latestRequestEvent = latestRequest == null ? "-" : FormatAcquisitionLatestEvent(latestRequest),
         latestRequestExpiry = latestRequest == null ? "-" : FormatAcquisitionExpiry(latestRequest),
     };
+}
+
+static IReadOnlyList<MarketAcquisitionRequestView> VisibleAcquisitionQueueRequests(
+    IReadOnlyList<MarketAcquisitionRequestView> requests)
+{
+    return requests
+        .Where(request => request.Status != MarketAcquisitionStatuses.Cancelled)
+        .ToList();
 }
 
 static string RenderAcquisitionRequestActions(

@@ -754,6 +754,38 @@ public sealed class MarketAcquisitionRequestEndpointTests
     }
 
     [Fact]
+    public async Task AcquisitionDashboardRecentQueueEndpointClearsCancelledRequests()
+    {
+        await using var application = CreateHostedApplication(
+            extraConfiguration: new KeyValuePair<string, string?>("MarketMafioso:TrustExternalDashboardAuth", "true"));
+        using var client = application.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false,
+        });
+        var claimed = await CreateAndClaimAsync(client, "dashboard-live-cancelled");
+        var acquisitionPage = await client.GetStringAsync("/api/marketmafioso/acquisition");
+        var csrf = Regex.Match(acquisitionPage, "name=\"csrf\" value=\"(?<token>[^\"]+)\"").Groups["token"].Value;
+
+        var cancelled = await client.PostAsync(
+            $"/api/marketmafioso/acquisition/requests/{claimed.RequestId}/cancel",
+            new FormUrlEncodedContent(new Dictionary<string, string>
+            {
+                ["csrf"] = csrf,
+            }));
+
+        Assert.Equal(HttpStatusCode.Redirect, cancelled.StatusCode);
+        var recent = await client.GetAsync("/api/marketmafioso/acquisition/requests/recent");
+
+        recent.EnsureSuccessStatusCode();
+        using var recentJson = JsonDocument.Parse(await recent.Content.ReadAsStringAsync());
+        var root = recentJson.RootElement;
+        Assert.Equal("0 active / 0 recent", root.GetProperty("activeSummary").GetString());
+        Assert.Equal("Idle", root.GetProperty("latestRequestStatus").GetString());
+        Assert.Contains("No acquisition requests yet.", root.GetProperty("queueRows").GetString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("Cancelled", root.GetProperty("queueRows").GetString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task AcquisitionDashboardCanCancelClaimedRequest()
     {
         await using var application = CreateHostedApplication(
@@ -775,7 +807,8 @@ public sealed class MarketAcquisitionRequestEndpointTests
 
         Assert.Equal(HttpStatusCode.Redirect, cancelled.StatusCode);
         var refreshedPage = await client.GetStringAsync("/api/marketmafioso/acquisition");
-        Assert.Contains("Cancelled", refreshedPage, StringComparison.Ordinal);
+        Assert.Contains("No acquisition requests yet.", refreshedPage, StringComparison.Ordinal);
+        Assert.DoesNotContain("Cancelled", refreshedPage, StringComparison.Ordinal);
 
         var pending = await SendWithKeyAsync(
             client,
