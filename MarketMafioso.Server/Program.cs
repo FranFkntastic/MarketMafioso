@@ -690,6 +690,7 @@ static async Task<MarketAcquisitionCreateRequest> ReadAcquisitionFormAsync(
     var form = await request.ReadFormAsync(token);
     var itemId = ParseUInt(form["itemId"].ToString(), "itemId");
     var itemName = form["itemName"].ToString().Trim();
+    var quantityMode = form["quantityMode"].ToString();
     return new MarketAcquisitionCreateRequest
     {
         SchemaVersion = ParseInt(form["schemaVersion"].ToString(), "schemaVersion"),
@@ -699,8 +700,10 @@ static async Task<MarketAcquisitionCreateRequest> ReadAcquisitionFormAsync(
         Region = form["region"].ToString(),
         ItemId = itemId,
         ItemName = string.IsNullOrWhiteSpace(itemName) ? $"Item {itemId}" : itemName,
-        QuantityMode = form["quantityMode"].ToString(),
-        Quantity = ParseUInt(form["quantity"].ToString(), "quantity"),
+        QuantityMode = quantityMode,
+        Quantity = quantityMode == "AllBelowThreshold"
+            ? ParseOptionalUInt(form["quantity"].ToString(), "quantity")
+            : ParseUInt(form["quantity"].ToString(), "quantity"),
         HqPolicy = form["hqPolicy"].ToString(),
         MaxUnitPrice = ParseUInt(form["maxUnitPrice"].ToString(), "maxUnitPrice"),
         MaxTotalGil = ParseOptionalUInt(form["maxTotalGil"].ToString(), "maxTotalGil"),
@@ -1015,8 +1018,8 @@ static string RenderDashboard(
                         <label>Region<input name="region" value="North America" required></label>
                         <label>Item ID<input name="itemId" inputmode="numeric" required></label>
                         <label>Item name<input name="itemName" autocomplete="off"></label>
-                        <label>Quantity mode<select name="quantityMode"><option>Exact</option><option>UpTo</option><option>AllBelowThreshold</option></select></label>
-                        <label>Quantity<input name="quantity" inputmode="numeric" required></label>
+                        <label>Quantity mode<select name="quantityMode"><option>TargetQuantity</option><option>AllBelowThreshold</option></select></label>
+                        <label>Target / max quantity<input name="quantity" inputmode="numeric"></label>
                         <label>HQ policy<select name="hqPolicy"><option>Either</option><option>NQOnly</option><option>HQOnly</option></select></label>
                         <label>Max unit price<input name="maxUnitPrice" inputmode="numeric" required></label>
                         <label>Gil cap (optional)<input name="maxTotalGil" inputmode="numeric"></label>
@@ -1800,8 +1803,8 @@ static string RenderAcquisitionRequestForm(
             <div class="section">
                 <p class="section-title">Purchase Limits</p>
                 <div class="grid">
-                    <label>Quantity mode<select name="quantityMode"><option>Exact</option><option>UpTo</option><option>AllBelowThreshold</option></select></label>
-                    <label>Quantity<input name="quantity" inputmode="numeric" required></label>
+                    <label>Quantity mode<select id="acquisitionQuantityMode" name="quantityMode"><option>TargetQuantity</option><option>AllBelowThreshold</option></select></label>
+                    <label><span id="acquisitionQuantityLabelText">Target quantity</span><input id="acquisitionQuantityInput" name="quantity" inputmode="numeric" required></label>
                     <label>Max unit price<input name="maxUnitPrice" inputmode="numeric" required></label>
                     <label>Gil cap (optional)<input name="maxTotalGil" inputmode="numeric"></label>
                 </div>
@@ -1857,6 +1860,8 @@ static string RenderAcquisitionRequestForm(
                 button.dataset.itemName || '',
                 button.dataset.itemType || '');
         });
+        document.getElementById('acquisitionQuantityMode')?.addEventListener('change', updateAcquisitionQuantityMode);
+        updateAcquisitionQuantityMode();
 
         async function searchAcquisitionItems(query) {
             const suggestions = document.getElementById('acquisitionItemSuggestions');
@@ -1922,13 +1927,24 @@ static string RenderAcquisitionRequestForm(
         }
 
         function validateAcquisitionQueueRow(row) {
-            if (!isPositiveWholeNumber(row.quantity)) return 'Quantity must be a positive whole number.';
+            if (row.quantityMode === 'TargetQuantity' && !isPositiveWholeNumber(row.quantity)) return 'Target quantity must be a positive whole number.';
+            if (row.quantityMode === 'AllBelowThreshold' && String(row.quantity ?? '').trim() && !isWholeNumber(row.quantity)) return 'Max quantity must be blank, zero, or a positive whole number.';
             if (!isPositiveWholeNumber(row.maxUnitPrice)) return 'Max unit price must be a positive whole number.';
             if (String(row.maxTotalGil ?? '').trim() && !isWholeNumber(row.maxTotalGil)) return 'Gil cap must be blank, zero, or a positive whole number.';
             if (!row.quantityMode) return 'Quantity mode is required.';
             if (!row.hqPolicy) return 'HQ policy is required.';
             if (!row.worldMode) return 'World mode is required.';
             return '';
+        }
+
+        function updateAcquisitionQuantityMode() {
+            const mode = document.getElementById('acquisitionQuantityMode')?.value || 'TargetQuantity';
+            const label = document.getElementById('acquisitionQuantityLabelText');
+            const input = document.getElementById('acquisitionQuantityInput');
+            if (label) label.textContent = mode === 'AllBelowThreshold' ? 'Max quantity (optional)' : 'Target quantity';
+            if (!input) return;
+            input.required = mode !== 'AllBelowThreshold';
+            input.placeholder = mode === 'AllBelowThreshold' ? 'No cap' : '';
         }
 
         function isPositiveWholeNumber(value) {
@@ -1943,8 +1959,14 @@ static string RenderAcquisitionRequestForm(
             const body = document.getElementById('acquisitionQueueRows');
             if (!body) return;
             body.innerHTML = acquisitionQueue.length
-                ? acquisitionQueue.map((row, index) => `<tr><td>${escapeHtml(row.itemName)}<br><span>Item ${row.itemId}</span></td><td>${escapeHtml(row.quantity)}</td><td>${escapeHtml(row.maxUnitPrice)}</td><td>${formatOptionalGilCap(row.maxTotalGil)}</td><td><button type="button" onclick="removeAcquisitionQueueRow(${index})">Remove</button></td></tr>`).join('')
+                ? acquisitionQueue.map((row, index) => `<tr><td>${escapeHtml(row.itemName)}<br><span>Item ${row.itemId}</span></td><td>${formatOptionalQuantity(row)}</td><td>${escapeHtml(row.maxUnitPrice)}</td><td>${formatOptionalGilCap(row.maxTotalGil)}</td><td><button type="button" onclick="removeAcquisitionQueueRow(${index})">Remove</button></td></tr>`).join('')
                 : '<tr><td colspan="5" class="empty-cell">No queued items.</td></tr>';
+        }
+
+        function formatOptionalQuantity(row) {
+            const trimmed = String(row.quantity ?? '').trim();
+            if (row.quantityMode === 'AllBelowThreshold' && (!trimmed || trimmed === '0')) return 'No cap';
+            return escapeHtml(trimmed);
         }
 
         function formatOptionalGilCap(value) {

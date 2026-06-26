@@ -898,14 +898,16 @@ public sealed class MarketAcquisitionRequestStore
             throw new ArgumentException("Region is required.", nameof(request));
         if (request.ItemId == 0)
             throw new ArgumentException("Item id is required.", nameof(request));
-        if (request.Quantity == 0)
-            throw new ArgumentException("Quantity is required.", nameof(request));
         if (request.MaxUnitPrice == 0)
             throw new ArgumentException("Max unit price is required.", nameof(request));
         if (string.IsNullOrWhiteSpace(request.QuantityMode) ||
             string.IsNullOrWhiteSpace(request.HqPolicy) ||
             string.IsNullOrWhiteSpace(request.WorldMode))
             throw new ArgumentException("Quantity mode, HQ policy, and world mode are required.", nameof(request));
+        if (request.QuantityMode is not ("TargetQuantity" or "AllBelowThreshold"))
+            throw new ArgumentException("Quantity mode must be TargetQuantity or AllBelowThreshold.", nameof(request));
+        if (request.QuantityMode == "TargetQuantity" && request.Quantity == 0)
+            throw new ArgumentException("Target quantity is required.", nameof(request));
     }
 
     private static string CreateSecretToken()

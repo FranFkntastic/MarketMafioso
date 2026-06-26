@@ -2,13 +2,40 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Convert the proven one-shot market purchase mechanisms into a full route loop that buys all safe live candidates for each confirmed world batch, advances across planned worlds, and reports terminal lifecycle state.
+**Goal:** Convert the proven one-shot market purchase mechanisms into a full route loop that buys all safe live candidates after one local route launch, advances across planned worlds without routine user input, and reports terminal lifecycle state.
 
 **Architecture:** Keep the server/dashboard as the intent and audit surface while the plugin owns live execution. Extend the existing pure purchase planner/executor and route runner with batch purchase state, then wire the ImGui controls to those services. Unsafe market-board interactions stay isolated in `DalamudMarketBoardPurchaseAdapter`.
 
 **Tech Stack:** C# 12, .NET 8 plugin target, Dalamud API 15, FFXIVClientStructs, ASP.NET Core server, SQLite request store, xUnit.
 
 ---
+
+### Task 0: Quantity Mode Cleanup And Dashboard Semantics
+
+**Files:**
+- Modify: `MarketMafioso.Server/Program.cs`
+- Modify: `MarketMafioso.Server/MarketAcquisitionModels.cs`
+- Modify: `MarketMafioso/MarketAcquisition/MarketAcquisitionLiveDryRunPlanner.cs`
+- Modify: `MarketMafioso/MarketAcquisition/MarketAcquisitionRequestModels.cs`
+- Test: `MarketMafioso.Server.Tests/MarketAcquisitionRequestEndpointTests.cs`
+- Test: `MarketMafioso.Tests/MarketAcquisition/MarketAcquisitionLiveDryRunPlannerTests.cs`
+- Test: `MarketMafioso.Tests/MarketAcquisition/MarketAcquisitionRequestClientTests.cs`
+
+- [ ] Write failing tests:
+  - `CreateRequest_RejectsExactQuantityMode`
+  - `CreateRequest_RejectsUpToQuantityMode`
+  - `CreateRequest_AllBelowThreshold_AllowsBlankMaxQuantity`
+  - `CreateRequest_AllBelowThreshold_TreatsQuantityAsMaxQuantityWhenProvided`
+  - `LiveDryRunPlanner_RejectsLegacyQuantityMode`
+- [ ] Remove `Exact` and `UpTo` from dashboard select controls, server validation, plugin request DTO examples, planner normalization, and tests.
+- [ ] Rename or relabel dashboard quantity input for `AllBelowThreshold` to `Max quantity`, and allow it to be blank/zero for no quantity cap.
+- [ ] Keep `TargetQuantity` requiring a positive target quantity.
+- [ ] Run focused quantity tests:
+  - `dotnet test "MarketMafioso.Server.Tests/MarketMafioso.Server.Tests.csproj" -c Debug --filter "FullyQualifiedName~MarketAcquisitionRequestEndpointTests" -v minimal`
+  - `dotnet test "MarketMafioso.Tests/MarketMafioso.Tests.csproj" -c Debug --filter "FullyQualifiedName~MarketAcquisitionLiveDryRunPlannerTests|FullyQualifiedName~MarketAcquisitionRequestClientTests" -v minimal`
+- [ ] Commit:
+  - `git add MarketMafioso.Server/Program.cs MarketMafioso.Server/MarketAcquisitionModels.cs MarketMafioso/MarketAcquisition/MarketAcquisitionLiveDryRunPlanner.cs MarketMafioso/MarketAcquisition/MarketAcquisitionRequestModels.cs MarketMafioso.Server.Tests/MarketAcquisitionRequestEndpointTests.cs MarketMafioso.Tests/MarketAcquisition/MarketAcquisitionLiveDryRunPlannerTests.cs MarketMafioso.Tests/MarketAcquisition/MarketAcquisitionRequestClientTests.cs`
+  - `git commit -m "Remove legacy market acquisition quantity modes"`
 
 ### Task 1: Batch Purchase Models And Selection
 
@@ -21,6 +48,8 @@
   - `BuildBatch_TargetQuantity_SelectsCheapestSafeCandidatesUntilTarget`
   - `BuildBatch_TargetQuantity_AllowsWholeStackOverage`
   - `BuildBatch_AllBelowThreshold_SelectsEverySafeCandidate`
+  - `BuildBatch_AllBelowThreshold_RespectsOptionalMaxQuantity`
+  - `BuildBatch_AllBelowThreshold_AllowsNoQuantityCap`
   - `BuildBatch_PositiveGilCapStopsBeforeExceeded`
   - `BuildBatch_SkipsHqMismatch`
   - `BuildBatch_SkipsAboveThreshold`
@@ -105,8 +134,7 @@
   - `RecordWorldPurchaseBatch_FailsRouteOnUnknownPurchaseResult`
 - [ ] Run route/session test filters and confirm failure.
 - [ ] Add route runner methods:
-  - `BeginWorldBatchConfirmation(...)`
-  - `RecordWorldBatchConfirmed(...)`
+  - `BeginWorldBatchExecution(...)`
   - `RecordWorldPurchaseProgress(...)`
   - `RecordWorldPurchaseBatchComplete(...)`
   - `RecordWorldPurchaseBatchFailed(...)`
@@ -139,22 +167,22 @@
   - `git add MarketMafioso.Server/MarketAcquisitionModels.cs MarketMafioso.Server/MarketAcquisitionRequestStore.cs MarketMafioso.Server/Program.cs MarketMafioso.Server.Tests/MarketAcquisitionRequestEndpointTests.cs`
   - `git commit -m "Persist market acquisition purchase audit progress"`
 
-### Task 6: Plugin World-Batch Confirmation UI
+### Task 6: Plugin Autonomous Route Control UI
 
 **Files:**
 - Modify: `MarketMafioso/Windows/MainWindow.cs`
 - Modify: `MarketMafioso/Windows/MarketAcquisitionDiagnosticsWindow.cs`
 
-- [ ] Add `AwaitingBatchConfirmation` UI state in the Market Acquisition tab.
-- [ ] Show item, world, data center, HQ policy, candidate count, cheapest unit, highest unit, estimated spend, remaining target quantity, and remaining gil cap.
-- [ ] Add `Confirm This World Batch` and `Reconcile Again` buttons.
-- [ ] Disable confirmation when live listings are stale, current world mismatches, current item mismatches, no candidate exists, or max unit price is missing.
+- [ ] Replace one-shot purchase controls with route controls: `Start`, `Pause`, `Stop`, and `Restart`.
+- [ ] Show launch summary before `Start`: item, route order, data centers, HQ policy, quantity rule, max unit price, optional gil cap, optional max quantity, and estimated route spend.
+- [ ] After `Start`, do not require per-world or per-purchase confirmation.
+- [ ] Show explicit intervention states when live listings are stale, current world mismatches, current item mismatches, no candidate exists, max unit price is missing, inventory is full, gil is insufficient, or UI state is ambiguous.
 - [ ] Move verbose candidate rows and purchase audit rows to `MarketAcquisitionDiagnosticsWindow`.
 - [ ] Run plugin build:
   - `dotnet build "MarketMafioso/MarketMafioso.csproj" -c Debug`
 - [ ] Commit:
   - `git add MarketMafioso/Windows/MainWindow.cs MarketMafioso/Windows/MarketAcquisitionDiagnosticsWindow.cs`
-  - `git commit -m "Add market acquisition world batch confirmation UI"`
+  - `git commit -m "Add autonomous market acquisition route controls"`
 
 ### Task 7: Plugin Batch Execution Loop
 
@@ -165,17 +193,17 @@
 - Test: `MarketMafioso.Tests/MarketAcquisition/MarketBoardPurchaseBatchExecutorTests.cs`
 
 - [ ] Add framework monitor path for active purchase batch sessions.
-- [ ] After confirmation, execute one candidate.
+- [ ] After route launch and successful live reconciliation, execute one candidate.
 - [ ] Wait for confirmation prompt and listing removal using existing `MarketBoardPurchaseSession`.
 - [ ] Re-read live listings after each completed purchase.
 - [ ] Rebuild safe candidates after each read.
-- [ ] Continue until current world is complete, under-procured, budget exhausted, or failed.
+- [ ] Continue until current world is complete, under-procured, budget exhausted, or failed, then advance route automatically when safe.
 - [ ] Stop route on unknown purchase result.
 - [ ] Re-run focused purchase tests.
 - [ ] Run plugin build.
 - [ ] Commit:
   - `git add MarketMafioso/Windows/MainWindow.cs MarketMafioso/MarketAcquisition/DalamudMarketBoardPurchaseAdapter.cs MarketMafioso/MarketAcquisition/MarketBoardPurchaseBatchExecutor.cs MarketMafioso.Tests/MarketAcquisition/MarketBoardPurchaseBatchExecutorTests.cs`
-  - `git commit -m "Run confirmed market acquisition purchase batches"`
+  - `git commit -m "Run autonomous market acquisition purchase batches"`
 
 ### Task 8: Route Continuation And Reranking
 

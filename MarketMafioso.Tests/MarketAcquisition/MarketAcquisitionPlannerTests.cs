@@ -246,7 +246,7 @@ public sealed class MarketAcquisitionPlannerTests
             Region = "North-America",
             ItemId = 2,
             ItemName = "Fire Shard",
-            QuantityMode = "Exact",
+            QuantityMode = "TargetQuantity",
             Quantity = quantity,
             HqPolicy = hqPolicy,
             MaxUnitPrice = maxUnitPrice,
