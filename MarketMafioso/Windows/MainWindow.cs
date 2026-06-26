@@ -1249,16 +1249,26 @@ public class MainWindow : Window, IDisposable
             try
             {
                 using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-                var updated = string.Equals(runnerState, "Failed", StringComparison.OrdinalIgnoreCase)
-                    ? await acquisitionClient.FailAsync(
+                var action = MarketAcquisitionRouteProgressReporter.ResolveAction(runnerState);
+                var updated = action switch
+                {
+                    MarketAcquisitionRouteProgressReporter.FailAction => await acquisitionClient.FailAsync(
                         config.ServerUrl,
                         config.ApiKey,
                         claimed.Id,
                         claimed.ClaimToken,
                         idempotencyKey,
                         message,
-                        cancellation.Token).ConfigureAwait(false)
-                    : await acquisitionClient.ReportProgressAsync(
+                        cancellation.Token).ConfigureAwait(false),
+                    MarketAcquisitionRouteProgressReporter.CompleteAction => await acquisitionClient.CompleteAsync(
+                        config.ServerUrl,
+                        config.ApiKey,
+                        claimed.Id,
+                        claimed.ClaimToken,
+                        idempotencyKey,
+                        message,
+                        cancellation.Token).ConfigureAwait(false),
+                    _ => await acquisitionClient.ReportProgressAsync(
                         config.ServerUrl,
                         config.ApiKey,
                         claimed.Id,
@@ -1266,16 +1276,29 @@ public class MainWindow : Window, IDisposable
                         idempotencyKey,
                         runnerState,
                         message,
-                        cancellation.Token).ConfigureAwait(false);
+                        cancellation.Token).ConfigureAwait(false),
+                };
 
                 if (claimedAcquisitionRequest?.Id == claimed.Id)
                 {
-                    claimedAcquisitionRequest = claimed with { Status = updated.Status };
-                    MarketAcquisitionClaimPersistence.Save(
-                        config,
-                        claimedAcquisitionRequest,
-                        claimedAcceptIdempotencyKey,
-                        claimedRejectIdempotencyKey);
+                    if (action.Equals(MarketAcquisitionRouteProgressReporter.CompleteAction, StringComparison.Ordinal))
+                    {
+                        MarketAcquisitionClaimPersistence.Clear(config);
+                        claimedAcquisitionRequest = null;
+                        claimedAcceptIdempotencyKey = null;
+                        claimedRejectIdempotencyKey = null;
+                        acquisitionStatus = $"Route complete: {message}";
+                    }
+                    else
+                    {
+                        claimedAcquisitionRequest = claimed with { Status = updated.Status };
+                        MarketAcquisitionClaimPersistence.Save(
+                            config,
+                            claimedAcquisitionRequest,
+                            claimedAcceptIdempotencyKey,
+                            claimedRejectIdempotencyKey);
+                    }
+
                     config.Save();
                 }
             }

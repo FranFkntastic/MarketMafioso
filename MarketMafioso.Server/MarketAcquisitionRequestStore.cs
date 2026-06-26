@@ -345,7 +345,7 @@ public sealed class MarketAcquisitionRequestStore
         if (current.Status is MarketAcquisitionStatuses.Complete
             or MarketAcquisitionStatuses.Failed
             or MarketAcquisitionStatuses.Cancelled)
-            throw new MarketAcquisitionInvalidTransitionException(current.Status, MarketAcquisitionStatuses.Cancelled);
+            return current;
 
         await using var update = connection.CreateCommand();
         update.Transaction = (SqliteTransaction)transaction;

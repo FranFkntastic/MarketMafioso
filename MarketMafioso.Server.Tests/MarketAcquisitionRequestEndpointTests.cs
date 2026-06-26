@@ -788,6 +788,63 @@ public sealed class MarketAcquisitionRequestEndpointTests
     }
 
     [Fact]
+    public async Task AcquisitionDashboardCancelIsIdempotentForCancelledAndCompleteRequests()
+    {
+        await using var application = CreateHostedApplication(
+            extraConfiguration: new KeyValuePair<string, string?>("MarketMafioso:TrustExternalDashboardAuth", "true"));
+        using var client = application.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false,
+        });
+        var claimed = await CreateAndClaimAsync(client, "dashboard-cancel-terminal");
+        var acquisitionPage = await client.GetStringAsync("/api/marketmafioso/acquisition");
+        var csrf = Regex.Match(acquisitionPage, "name=\"csrf\" value=\"(?<token>[^\"]+)\"").Groups["token"].Value;
+
+        var accepted = await SendWithKeyAsync(
+            client,
+            HttpMethod.Post,
+            $"/api/marketmafioso/acquisition/requests/{claimed.RequestId}/accept",
+            "client-secret",
+            new
+            {
+                claimToken = claimed.ClaimToken,
+                idempotencyKey = "terminal-cancel-accept",
+            });
+        accepted.EnsureSuccessStatusCode();
+        var complete = await SendWithKeyAsync(
+            client,
+            HttpMethod.Post,
+            $"/api/marketmafioso/acquisition/requests/{claimed.RequestId}/complete",
+            "client-secret",
+            new
+            {
+                claimToken = claimed.ClaimToken,
+                idempotencyKey = "terminal-cancel-complete",
+                message = "Dry-run route complete.",
+            });
+        complete.EnsureSuccessStatusCode();
+
+        var cancelComplete = await client.PostAsync(
+            $"/api/marketmafioso/acquisition/requests/{claimed.RequestId}/cancel",
+            new FormUrlEncodedContent(new Dictionary<string, string>
+            {
+                ["csrf"] = csrf,
+            }));
+        var cancelCompleteAgain = await client.PostAsync(
+            $"/api/marketmafioso/acquisition/requests/{claimed.RequestId}/cancel",
+            new FormUrlEncodedContent(new Dictionary<string, string>
+            {
+                ["csrf"] = csrf,
+            }));
+
+        Assert.Equal(HttpStatusCode.Redirect, cancelComplete.StatusCode);
+        Assert.Equal(HttpStatusCode.Redirect, cancelCompleteAgain.StatusCode);
+        var refreshedPage = await client.GetStringAsync("/api/marketmafioso/acquisition");
+        Assert.Contains("Complete", refreshedPage, StringComparison.Ordinal);
+        Assert.DoesNotContain("Cancelled", refreshedPage, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task AcquisitionDashboardCanResendClaimedRequest()
     {
         await using var application = CreateHostedApplication(
