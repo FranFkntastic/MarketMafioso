@@ -642,6 +642,32 @@ public sealed class MarketAcquisitionRequestEndpointTests
     }
 
     [Fact]
+    public async Task AcquisitionDashboardAjaxCreateReturnsJsonInsteadOfRedirect()
+    {
+        await using var application = CreateHostedApplication(
+            extraConfiguration: new KeyValuePair<string, string?>("MarketMafioso:TrustExternalDashboardAuth", "true"));
+        using var client = application.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false,
+        });
+
+        var acquisitionPage = await client.GetStringAsync("/api/marketmafioso/acquisition");
+        var csrf = Regex.Match(acquisitionPage, "name=\"csrf\" value=\"(?<token>[^\"]+)\"").Groups["token"].Value;
+        using var createRequest = new HttpRequestMessage(HttpMethod.Post, "/api/marketmafioso/acquisition/requests")
+        {
+            Content = new FormUrlEncodedContent(CreateFormFields(csrf, "acquisition-ajax-create")),
+        };
+        createRequest.Headers.Accept.ParseAdd("application/json");
+
+        var created = await client.SendAsync(createRequest);
+
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        Assert.Equal("application/json", created.Content.Headers.ContentType?.MediaType);
+        using var createdJson = JsonDocument.Parse(await created.Content.ReadAsStringAsync());
+        Assert.Equal("Fire Shard", createdJson.RootElement.GetProperty("itemName").GetString());
+    }
+
+    [Fact]
     public async Task AcquisitionDashboardRendersControlSurfaceWithRequestQueue()
     {
         await using var application = CreateHostedApplication(
@@ -691,6 +717,8 @@ public sealed class MarketAcquisitionRequestEndpointTests
         Assert.Contains("stageAcquisitionQueue", acquisitionPage, StringComparison.Ordinal);
         Assert.Contains("refreshAcquisitionCsrfToken(payload.csrfToken)", acquisitionPage, StringComparison.Ordinal);
         Assert.Contains("row.csrf = currentCsrf", acquisitionPage, StringComparison.Ordinal);
+        Assert.Contains("'Accept': 'application/json'", acquisitionPage, StringComparison.Ordinal);
+        Assert.DoesNotContain("redirect: 'manual'", acquisitionPage, StringComparison.Ordinal);
         Assert.Contains("id=\"acquisitionQueueTable\"", acquisitionPage, StringComparison.Ordinal);
         Assert.Contains("id=\"acquisitionQueueBody\"", acquisitionPage, StringComparison.Ordinal);
         Assert.Contains("data-resize=\"status\"", acquisitionPage, StringComparison.Ordinal);

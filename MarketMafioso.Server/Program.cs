@@ -342,7 +342,7 @@ async Task<IResult> CreateAcquisitionRequest(
             return Results.BadRequest(new { error = "Request body is required." });
 
         var created = await store.CreateAsync(acquisitionRequest, token);
-        if (isBrowserForm)
+        if (isBrowserForm && !WantsJsonResponse(request))
             return Results.Redirect($"{request.PathBase}/acquisition?acquisition={Uri.EscapeDataString(created.Request.Id)}");
 
         return created.IsReplay
@@ -578,6 +578,11 @@ static bool IsAcquisitionBrowserControl(HttpRequest request) =>
 static bool IsAcquisitionBrowserRead(HttpRequest request) =>
     HttpMethods.IsGet(request.Method) &&
     request.Path.Equals("/acquisition/requests/recent", StringComparison.OrdinalIgnoreCase);
+
+static bool WantsJsonResponse(HttpRequest request)
+{
+    return request.Headers.Accept.Any(value => value?.Contains("application/json", StringComparison.OrdinalIgnoreCase) == true);
+}
 
 static bool IsAcquisitionPluginRoute(HttpRequest request) =>
     request.Path.StartsWithSegments("/acquisition/requests") &&
@@ -1966,9 +1971,11 @@ static string RenderAcquisitionRequestForm(
                 const response = await fetch(form.action, {
                     method: 'POST',
                     body: new URLSearchParams(row),
-                    redirect: 'manual'
+                    headers: {
+                        'Accept': 'application/json'
+                    }
                 });
-                if (response.ok || response.status === 0 || response.status === 302) {
+                if (response.ok) {
                     staged++;
                 } else {
                     failures.push(`${row.itemName}: ${await readAcquisitionStageError(response)}`);
