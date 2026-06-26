@@ -13,8 +13,6 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
     private MarketAcquisitionGuidedRouteSession? session;
     private MarketAcquisitionRouteDiagnostics diagnostics = MarketAcquisitionRouteDiagnostics.Disabled;
     private bool diagnosticsRequested;
-    private string? searchCaptureItemName;
-    private uint searchCaptureItemId;
     private DateTimeOffset? itemSearchAutomationStartedUtc;
 
     public MarketAcquisitionRouteRunner(string diagnosticsDirectory)
@@ -35,10 +33,6 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
 
     public bool MarketBoardCloseRequiredBeforeTravel { get; private set; }
 
-    public bool SearchCaptureEnabled { get; private set; }
-
-    public MarketAcquisitionSearchCaptureStep SearchCaptureStep { get; private set; }
-
     public MarketAcquisitionGuidedRouteStop? ActiveStop =>
         State is "Completed" or "Stopped" or "Failed"
             ? null
@@ -54,13 +48,12 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
 
     public MarketAcquisitionRouteActionResult Start(
         MarketAcquisitionPlan plan,
-        bool enableDiagnostics = false,
-        bool enableSearchCapture = false)
+        bool enableDiagnostics = false)
     {
         ArgumentNullException.ThrowIfNull(plan);
 
         CloseDiagnostics();
-        diagnosticsRequested = enableDiagnostics || enableSearchCapture;
+        diagnosticsRequested = enableDiagnostics;
         diagnostics = diagnosticsRequested
             ? MarketAcquisitionRouteDiagnostics.CreateEnabled(diagnosticsDirectory, DateTimeOffset.Now)
             : MarketAcquisitionRouteDiagnostics.Disabled;
@@ -69,10 +62,6 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         State = "Running";
         SearchSubmitted = false;
         MarketBoardCloseRequiredBeforeTravel = false;
-        SearchCaptureEnabled = enableSearchCapture;
-        SearchCaptureStep = MarketAcquisitionSearchCaptureStep.None;
-        searchCaptureItemId = 0;
-        searchCaptureItemName = null;
         itemSearchAutomationStartedUtc = null;
         StatusMessage = $"Route started. Next stop: {session.ActiveStop?.WorldName}.";
         diagnostics.Record(
@@ -84,7 +73,6 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
                 ["worldCount"] = plan.WorldBatches.Count.ToString(),
                 ["plannedQuantity"] = plan.PlannedQuantity.ToString(),
                 ["plannedGil"] = plan.PlannedGil.ToString(),
-                ["searchCaptureEnabled"] = SearchCaptureEnabled.ToString(),
             });
         return MarketAcquisitionRouteActionResult.Ok(StatusMessage);
     }
@@ -93,9 +81,8 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
     {
         ArgumentNullException.ThrowIfNull(plan);
 
-        var preserveSearchCapture = SearchCaptureEnabled;
         diagnostics.Record("route-restart", "Restarting market acquisition route.");
-        return Start(plan, diagnosticsRequested, preserveSearchCapture);
+        return Start(plan, diagnosticsRequested);
     }
 
     public MarketAcquisitionRouteActionResult Pause()
@@ -129,7 +116,6 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         StatusMessage = "Route stopped.";
         SearchSubmitted = false;
         MarketBoardCloseRequiredBeforeTravel = false;
-        ResetSearchCapture();
         itemSearchAutomationStartedUtc = null;
         diagnostics.Record("stopped", StatusMessage);
         CloseDiagnostics();
@@ -144,7 +130,6 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         StatusMessage = statusMessage;
         SearchSubmitted = false;
         MarketBoardCloseRequiredBeforeTravel = false;
-        ResetSearchCapture();
         itemSearchAutomationStartedUtc = null;
         diagnosticsRequested = false;
         LastDiagnosticFilePath = null;
@@ -280,9 +265,9 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         return RecordSearchResult(searchResult, DateTimeOffset.UtcNow);
     }
 
-    public MarketAcquisitionRouteActionResult RecordInputSnapshot(string label, MarketBoardItemSearchResult snapshot)
+    public MarketAcquisitionRouteActionResult RecordInputCapture(string label, MarketBoardInputCapture capture)
     {
-        ArgumentNullException.ThrowIfNull(snapshot);
+        ArgumentNullException.ThrowIfNull(capture);
 
         if (!diagnostics.IsEnabled)
         {
@@ -293,13 +278,13 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         var details = new Dictionary<string, string?>
         {
             ["label"] = label,
-            ["status"] = snapshot.Status,
+            ["status"] = capture.Status,
         };
-        foreach (var pair in snapshot.Details)
+        foreach (var pair in capture.Details)
             details[pair.Key] = pair.Value;
 
-        diagnostics.Record("input-snapshot", snapshot.Message, details);
-        StatusMessage = $"Captured market board input snapshot: {label}.";
+        diagnostics.Record("input-capture", capture.Message, details);
+        StatusMessage = $"Captured market board input state: {label}.";
         return MarketAcquisitionRouteActionResult.Ok(StatusMessage);
     }
 
@@ -350,101 +335,6 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         return searchResult.IsInProgress || searchResult.ReadyForListings
             ? MarketAcquisitionRouteActionResult.Ok(searchResult.Message)
             : MarketAcquisitionRouteActionResult.Fail(searchResult.Message);
-    }
-
-    public MarketAcquisitionRouteActionResult BeginSearchCapture(uint itemId, string itemName)
-    {
-        if (!IsRunning)
-            return Fail($"Route is {State}; search capture was not started.");
-
-        if (!SearchCaptureEnabled)
-            return Fail("Search capture is not enabled for this route.");
-
-        if (itemId == 0)
-            return Fail("Search capture requires a planned item id.");
-
-        if (string.IsNullOrWhiteSpace(itemName))
-            return Fail("Search capture requires a planned item name.");
-
-        if (SearchCaptureStep is MarketAcquisitionSearchCaptureStep.AwaitingManualSearch
-            or MarketAcquisitionSearchCaptureStep.AwaitingManualItemSelection)
-            return MarketAcquisitionRouteActionResult.Ok(StatusMessage);
-
-        searchCaptureItemId = itemId;
-        searchCaptureItemName = itemName.Trim();
-        SearchCaptureStep = MarketAcquisitionSearchCaptureStep.AwaitingManualSearch;
-        SearchSubmitted = false;
-        StatusMessage = BuildSearchCaptureManualSearchPrompt();
-        diagnostics.Record(
-            "search-capture-step",
-            StatusMessage,
-            new Dictionary<string, string?>
-            {
-                ["step"] = SearchCaptureStep.ToString(),
-                ["itemId"] = searchCaptureItemId.ToString(),
-                ["itemName"] = searchCaptureItemName,
-            });
-        return MarketAcquisitionRouteActionResult.Ok(StatusMessage);
-    }
-
-    public MarketAcquisitionRouteActionResult RecordSearchCaptureObservation(MarketBoardItemSearchResult observation)
-    {
-        ArgumentNullException.ThrowIfNull(observation);
-
-        if (!IsRunning)
-            return Fail($"Route is {State}; search capture observation was not recorded.");
-
-        if (!SearchCaptureEnabled)
-            return Fail("Search capture is not enabled for this route.");
-
-        var details = new Dictionary<string, string?>
-        {
-            ["step"] = SearchCaptureStep.ToString(),
-            ["status"] = observation.Status,
-            ["searchSubmitted"] = SearchSubmitted.ToString(),
-        };
-        foreach (var pair in observation.Details)
-            details[pair.Key] = pair.Value;
-
-        if (observation.ReadyForListings)
-        {
-            SearchCaptureStep = MarketAcquisitionSearchCaptureStep.Complete;
-            SearchSubmitted = true;
-            StatusMessage = observation.Message;
-            details["step"] = SearchCaptureStep.ToString();
-            details["searchSubmitted"] = SearchSubmitted.ToString();
-            diagnostics.Record("search-capture-observation", observation.Message, details);
-            return MarketAcquisitionRouteActionResult.Ok(observation.Message);
-        }
-
-        if (string.Equals(observation.Status, "ItemResultsReady", StringComparison.OrdinalIgnoreCase) &&
-            SearchCaptureStep == MarketAcquisitionSearchCaptureStep.AwaitingManualSearch)
-        {
-            SearchCaptureStep = MarketAcquisitionSearchCaptureStep.AwaitingManualItemSelection;
-            StatusMessage = BuildSearchCaptureManualSelectionPrompt();
-            details["step"] = SearchCaptureStep.ToString();
-            diagnostics.Record("search-capture-observation", observation.Message, details);
-            diagnostics.Record(
-                "search-capture-step",
-                StatusMessage,
-                new Dictionary<string, string?>
-                {
-                    ["step"] = SearchCaptureStep.ToString(),
-                    ["itemId"] = searchCaptureItemId.ToString(),
-                    ["itemName"] = searchCaptureItemName,
-                });
-            return MarketAcquisitionRouteActionResult.Ok(StatusMessage);
-        }
-
-        if (SearchCaptureStep == MarketAcquisitionSearchCaptureStep.AwaitingManualItemSelection)
-            StatusMessage = BuildSearchCaptureManualSelectionPrompt();
-        else if (SearchCaptureStep == MarketAcquisitionSearchCaptureStep.AwaitingManualSearch)
-            StatusMessage = BuildSearchCaptureManualSearchPrompt();
-        else
-            StatusMessage = observation.Message;
-
-        diagnostics.Record("search-capture-observation", observation.Message, details);
-        return MarketAcquisitionRouteActionResult.Ok(StatusMessage);
     }
 
     public MarketAcquisitionRouteActionResult RecordMarketBoardApproach(MarketBoardApproachResult approachResult)
@@ -529,8 +419,6 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
     {
         SearchSubmitted = false;
         itemSearchAutomationStartedUtc = null;
-        if (SearchCaptureEnabled && SearchCaptureStep == MarketAcquisitionSearchCaptureStep.Complete)
-            SearchCaptureStep = MarketAcquisitionSearchCaptureStep.None;
 
         diagnostics.Record("item-search-reset", reason);
     }
@@ -557,13 +445,6 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
                      MarketAcquisitionGuidedRouteResult.Fail("No route has started.");
         StatusMessage = result.Message;
         SearchSubmitted = false;
-        if (SearchCaptureEnabled)
-        {
-            SearchCaptureStep = MarketAcquisitionSearchCaptureStep.None;
-            searchCaptureItemId = 0;
-            searchCaptureItemName = null;
-        }
-
         itemSearchAutomationStartedUtc = null;
         diagnostics.Record(
             "probe-result",
@@ -604,7 +485,6 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         StatusMessage = message;
         SearchSubmitted = false;
         MarketBoardCloseRequiredBeforeTravel = false;
-        ResetSearchCapture();
         itemSearchAutomationStartedUtc = null;
         diagnostics.Fail(message, exception);
         CloseDiagnostics();
@@ -622,7 +502,6 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         StatusMessage = message;
         SearchSubmitted = false;
         MarketBoardCloseRequiredBeforeTravel = false;
-        ResetSearchCapture();
         itemSearchAutomationStartedUtc = null;
         diagnostics.Complete(message);
         CloseDiagnostics();
@@ -641,34 +520,6 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         diagnostics = MarketAcquisitionRouteDiagnostics.Disabled;
     }
 
-    private string BuildSearchCaptureManualSearchPrompt()
-    {
-        var itemName = searchCaptureItemName ?? "the planned item";
-        var itemId = searchCaptureItemId == 0 ? string.Empty : $" ({searchCaptureItemId})";
-        return $"Capture step 1: Type {itemName}{itemId} into the market board search box, then press Search.";
-    }
-
-    private string BuildSearchCaptureManualSelectionPrompt()
-    {
-        var itemName = searchCaptureItemName ?? "the planned item";
-        return $"Capture step 2: Select the exact item result: {itemName}.";
-    }
-
-    private void ResetSearchCapture()
-    {
-        SearchCaptureEnabled = false;
-        SearchCaptureStep = MarketAcquisitionSearchCaptureStep.None;
-        searchCaptureItemId = 0;
-        searchCaptureItemName = null;
-    }
-}
-
-public enum MarketAcquisitionSearchCaptureStep
-{
-    None,
-    AwaitingManualSearch,
-    AwaitingManualItemSelection,
-    Complete,
 }
 
 public sealed record MarketAcquisitionRouteActionResult

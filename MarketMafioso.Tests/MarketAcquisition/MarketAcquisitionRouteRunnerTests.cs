@@ -33,81 +33,6 @@ public sealed class MarketAcquisitionRouteRunnerTests
     }
 
     [Fact]
-    public void Start_WithSearchCaptureEnablesDiagnosticsAndCaptureMode()
-    {
-        var directory = CreateTempDirectory();
-        using var runner = new MarketMafioso.MarketAcquisition.MarketAcquisitionRouteRunner(directory);
-
-        runner.Start(CreatePlan("Maduin"), enableSearchCapture: true);
-
-        Assert.True(runner.SearchCaptureEnabled);
-        Assert.Equal(MarketMafioso.MarketAcquisition.MarketAcquisitionSearchCaptureStep.None, runner.SearchCaptureStep);
-        Assert.NotNull(runner.LastDiagnosticFilePath);
-        var text = ReadLog(runner.LastDiagnosticFilePath!);
-        Assert.Contains("searchCaptureEnabled: True", text, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void BeginSearchCapture_PromptsForManualSearch()
-    {
-        var directory = CreateTempDirectory();
-        using var runner = new MarketMafioso.MarketAcquisition.MarketAcquisitionRouteRunner(directory);
-        runner.Start(CreatePlan("Maduin"), enableSearchCapture: true);
-        runner.RecordCurrentWorld("Maduin");
-
-        var result = runner.BeginSearchCapture(7017, "Varnish");
-
-        Assert.True(result.Success);
-        Assert.Equal(MarketMafioso.MarketAcquisition.MarketAcquisitionSearchCaptureStep.AwaitingManualSearch, runner.SearchCaptureStep);
-        Assert.Contains("Capture step 1", runner.StatusMessage, StringComparison.Ordinal);
-        Assert.Contains("Varnish", runner.StatusMessage, StringComparison.Ordinal);
-        var text = ReadLog(runner.LastDiagnosticFilePath!);
-        Assert.Contains("search-capture-step", text, StringComparison.Ordinal);
-        Assert.Contains("AwaitingManualSearch", text, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void RecordSearchCaptureObservation_WhenItemResultsAreReadyPromptsForExactSelection()
-    {
-        using var runner = CreateRunner();
-        runner.Start(CreatePlan("Maduin"), enableSearchCapture: true);
-        runner.RecordCurrentWorld("Maduin");
-        runner.BeginSearchCapture(7017, "Varnish");
-
-        var result = runner.RecordSearchCaptureObservation(new MarketMafioso.MarketAcquisition.MarketBoardItemSearchResult
-        {
-            Status = "ItemResultsReady",
-            Message = "Market board item search results are visible.",
-        });
-
-        Assert.True(result.Success);
-        Assert.False(runner.SearchSubmitted);
-        Assert.Equal(MarketMafioso.MarketAcquisition.MarketAcquisitionSearchCaptureStep.AwaitingManualItemSelection, runner.SearchCaptureStep);
-        Assert.Contains("Capture step 2", runner.StatusMessage, StringComparison.Ordinal);
-        Assert.Contains("Select the exact item result", runner.StatusMessage, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void RecordSearchCaptureObservation_WhenListingsAreReadyMarksSearchSubmitted()
-    {
-        using var runner = CreateRunner();
-        runner.Start(CreatePlan("Maduin"), enableSearchCapture: true);
-        runner.RecordCurrentWorld("Maduin");
-        runner.BeginSearchCapture(7017, "Varnish");
-
-        var result = runner.RecordSearchCaptureObservation(new MarketMafioso.MarketAcquisition.MarketBoardItemSearchResult
-        {
-            Status = "ListingsReady",
-            Message = "Market board listings are open for Varnish (7017).",
-        });
-
-        Assert.True(result.Success);
-        Assert.True(runner.SearchSubmitted);
-        Assert.Equal(MarketMafioso.MarketAcquisition.MarketAcquisitionSearchCaptureStep.Complete, runner.SearchCaptureStep);
-        Assert.Contains("listings are open", runner.StatusMessage, StringComparison.OrdinalIgnoreCase);
-    }
-
-    [Fact]
     public void ExecutePendingTravelCommand_SendsCurrentStopCommand()
     {
         using var runner = CreateRunner();
@@ -430,26 +355,30 @@ public sealed class MarketAcquisitionRouteRunnerTests
     }
 
     [Fact]
-    public void RecordInputSnapshot_CreatesDiagnosticsWhenRouteIsNotRunning()
+    public void RecordInputCapture_CreatesDiagnosticsWhenRouteIsNotRunning()
     {
         using var runner = CreateRunner();
 
-        var result = runner.RecordInputSnapshot("before-click", new MarketMafioso.MarketAcquisition.MarketBoardItemSearchResult
+        var result = runner.RecordInputCapture("before-purchase-click", new MarketMafioso.MarketAcquisition.MarketBoardInputCapture
         {
-            Status = "InputSnapshot",
-            Message = "Captured market board input state.",
+            Status = "Captured",
+            Message = "Captured current market board UI/input state.",
             Details = new Dictionary<string, string?>
             {
-                ["searchButtonEnabled"] = false.ToString(),
+                ["itemSearchVisible"] = true.ToString(),
+                ["selectYesnoVisible"] = false.ToString(),
+                ["focusedNode"] = "AtkComponentTextInput#12",
             },
         });
 
         Assert.True(result.Success);
         Assert.NotNull(runner.LastDiagnosticFilePath);
         var text = ReadLog(runner.LastDiagnosticFilePath!);
-        Assert.Contains("input-snapshot", text, StringComparison.Ordinal);
-        Assert.Contains("label: before-click", text, StringComparison.Ordinal);
-        Assert.Contains("searchButtonEnabled: False", text, StringComparison.Ordinal);
+        Assert.Contains("input-capture", text, StringComparison.Ordinal);
+        Assert.Contains("label: before-purchase-click", text, StringComparison.Ordinal);
+        Assert.Contains("itemSearchVisible: True", text, StringComparison.Ordinal);
+        Assert.Contains("selectYesnoVisible: False", text, StringComparison.Ordinal);
+        Assert.Contains("focusedNode: AtkComponentTextInput#12", text, StringComparison.Ordinal);
     }
 
     private static MarketMafioso.MarketAcquisition.MarketAcquisitionRouteRunner CreateRunner() =>
