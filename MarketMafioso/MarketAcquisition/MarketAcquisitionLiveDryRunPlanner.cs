@@ -21,6 +21,7 @@ public static class MarketAcquisitionLiveDryRunPlanner
 
         var mode = NormalizeQuantityMode(request.QuantityMode);
         var hasGilCap = request.MaxTotalGil > 0;
+        var hasMaxQuantity = mode == "AllBelowThreshold" && request.Quantity > 0;
         var selectedQuantity = 0u;
         var selectedGil = 0u;
         var rows = new List<MarketAcquisitionLiveDryRunRow>();
@@ -53,6 +54,13 @@ public static class MarketAcquisitionLiveDryRunPlanner
                 continue;
             }
 
+            var nextQuantity = checked(selectedQuantity + listing.Quantity);
+            if (hasMaxQuantity && nextQuantity > request.Quantity)
+            {
+                rows.Add(Skipped(listing, "MaxQuantityExceeded", "Buying this whole listing would exceed the configured max quantity.", selectedQuantity, selectedGil));
+                continue;
+            }
+
             var listingGil = checked(listing.UnitPrice * listing.Quantity);
             if (hasGilCap && selectedGil + listingGil > request.MaxTotalGil)
             {
@@ -60,7 +68,7 @@ public static class MarketAcquisitionLiveDryRunPlanner
                 continue;
             }
 
-            selectedQuantity = checked(selectedQuantity + listing.Quantity);
+            selectedQuantity = nextQuantity;
             selectedGil = checked(selectedGil + listingGil);
             rows.Add(new MarketAcquisitionLiveDryRunRow
             {
@@ -122,7 +130,7 @@ public static class MarketAcquisitionLiveDryRunPlanner
     private static string NormalizeQuantityMode(string quantityMode) =>
         quantityMode switch
         {
-            "TargetQuantity" or "Exact" or "UpTo" => "TargetQuantity",
+            "TargetQuantity" => "TargetQuantity",
             "AllBelowThreshold" => "AllBelowThreshold",
             _ => throw new InvalidOperationException($"Unknown quantity mode {quantityMode}."),
         };

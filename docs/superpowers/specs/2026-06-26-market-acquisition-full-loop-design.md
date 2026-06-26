@@ -2,7 +2,7 @@
 
 ## Goal
 
-Ship the full Market Acquisition loop end to end: dashboard request, plugin pickup, advisory planning, guided travel, live market-board search, world-batch confirmation, guarded purchases, progress reporting, and terminal audit.
+Ship the full Market Acquisition loop end to end: dashboard request, plugin pickup, advisory planning, guided travel, live market-board search, guarded purchases, progress reporting, and terminal audit.
 
 The mechanisms have now been proven individually. The final design should stop treating the system as a probe and start treating it as a controlled execution pipeline.
 
@@ -12,11 +12,12 @@ Market Acquisition remains a private, self-hosted, plugin-owned buying assistant
 
 - The dashboard stages intent.
 - The plugin explicitly picks up and accepts a request.
+- The user provides local consent once by launching the accepted route.
 - Remote market data creates an advisory route.
 - Live in-game market board rows are the purchase authority.
-- The plugin confirms once per world batch, not once per listing.
+- The runner does not require routine user input after launch.
 - The plugin buys only live-confirmed safe listings.
-- Unknown or ambiguous states stop the runner.
+- Unknown, ambiguous, or catastrophic states stop the runner and ask for intervention.
 
 The first full loop targets one dashboard request for one item. Multi-item queue orchestration can compose later by running one completed request after another.
 
@@ -35,8 +36,7 @@ The first full loop targets one dashboard request for one item. Multi-item queue
    - Search the accepted item by name and select the exact item id from results.
    - Wait for visible live listings.
    - Build the safe candidate pool from the current live rows.
-   - Present a world-batch confirmation.
-   - After confirmation, buy safe candidates in live unit-price order.
+   - Buy safe candidates in live unit-price order.
    - Re-read live listings after each confirmed purchase.
    - Continue while the request rules still permit buying.
    - Mark the world complete, skipped, under-procured, or failed.
@@ -49,11 +49,11 @@ The first full loop targets one dashboard request for one item. Multi-item queue
 New requests expose only two quantity modes.
 
 - `TargetQuantity`: buy cheapest safe whole stacks until the target is satisfied or safe stock runs out. Harmless overage is allowed because market board stacks cannot be partially bought.
-- `AllBelowThreshold`: buy every confirmed live listing at or below max unit price, optionally limited by a positive gil cap.
+- `AllBelowThreshold`: buy every confirmed live listing at or below max unit price, optionally limited by a positive gil cap and/or an optional max quantity.
 
-Legacy `Exact` and `UpTo` remain migration aliases for `TargetQuantity` only. They should not appear in new dashboard UI.
+`Exact` and `UpTo` are removed quantity modes. They are not functionally distinct under whole-stack live purchasing and should not appear in new dashboard UI, request validation, plugin planning, or purchase execution code.
 
-Max unit price is mandatory. Gil cap is optional; blank or zero means no total spend cap. A positive gil cap is a hard stop.
+Max unit price is mandatory. Gil cap is optional; blank or zero means no total spend cap. A positive gil cap is a hard stop. Dashboard quantity input means required target quantity for `TargetQuantity`; when `AllBelowThreshold` is selected, the same control is disabled or relabeled to `Max quantity`, and blank or zero means no quantity cap.
 
 ## Planning Contract
 
@@ -94,19 +94,18 @@ For each world batch:
 
 1. Build safe candidates from live listings.
 2. Sort by unit price ascending, then total gil ascending, then listing identity for stable display.
-3. Present confirmation for the current world batch.
-4. When confirmed, select the cheapest current candidate.
-5. Re-read and revalidate that exact candidate.
-6. Execute one purchase.
-7. Wait for success evidence:
+3. Select the cheapest current candidate.
+4. Re-read and revalidate that exact candidate.
+5. Execute one purchase.
+6. Wait for success evidence:
    - confirmation accepted,
    - guarded listing disappears from fresh live listing data,
    - or a classified game/UI failure appears.
-8. Record a purchase audit row.
-9. Re-read live listings and rebuild the candidate pool.
-10. Continue until the world's request rule is satisfied, safe stock runs out, budget is exhausted, or a stop condition occurs.
+7. Record a purchase audit row.
+8. Re-read live listings and rebuild the candidate pool.
+9. Continue until the world's request rule is satisfied, safe stock runs out, budget is exhausted, or a stop condition occurs.
 
-The batch confirmation is invalidated if current world, current item, candidate identities, candidate prices, candidate quantities, or remaining budget change before the first purchase. After a purchase succeeds, the loop may continue on a rebuilt live candidate pool under the same confirmation only if the remaining candidates are equal or better than the confirmed limits. Worse or ambiguous changes require reconfirmation or stop.
+After a purchase succeeds, the loop continues on a rebuilt live candidate pool when remaining candidates are still within configured limits. Favorable drift such as cheaper replacement stock and more below-threshold stock is accepted automatically. Worse listings are skipped. Ambiguous changes stop the route and request intervention.
 
 ## Success And Terminal States
 
@@ -124,7 +123,6 @@ World stop states:
 - `TravelCommandSent`
 - `Arrived`
 - `Searching`
-- `AwaitingConfirmation`
 - `Purchasing`
 - `Complete`
 - `Skipped`
@@ -169,7 +167,7 @@ Every game action must have a visible precondition and postcondition.
 - Positive gil cap is always enforced before each purchase.
 - Whole-stack overage is allowed only within max unit price and optional gil cap.
 - Surprise cheaper stock is allowed and preferred.
-- Surprise more expensive stock is skipped or requires reconfirmation.
+- Surprise more expensive stock is skipped or stops for intervention when the state cannot be classified safely.
 
 ### Recovery
 
@@ -221,7 +219,7 @@ Plugin:
 - Shows compact route status.
 - Keeps verbose diagnostics in the diagnostics popout.
 - Provides `Start`, `Pause`, `Stop`, and `Restart`.
-- Shows a world-batch confirmation before purchase loop starts on each world.
+- Shows launch controls and explicit intervention states, not routine purchase confirmations.
 
 ## Failure Taxonomy
 
@@ -244,7 +242,6 @@ Skip listing:
 Stop world batch:
 
 - No safe live candidates remain.
-- Confirmation invalidated before first purchase.
 - Inventory looks full.
 - Insufficient gil.
 - Search item is wrong.
@@ -276,7 +273,7 @@ The first shippable full loop is:
 - one request,
 - one item,
 - multiple planned worlds,
-- one confirmation per world,
+- one launch consent for the accepted route,
 - multiple purchases per world,
 - live re-read after every purchase,
 - route continues across worlds,

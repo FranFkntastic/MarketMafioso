@@ -1101,6 +1101,56 @@ public sealed class MarketAcquisitionRequestEndpointTests
         Assert.Equal(0u, request.GetProperty("maxTotalGil").GetUInt32());
     }
 
+    [Theory]
+    [InlineData("Exact")]
+    [InlineData("UpTo")]
+    public async Task AcquisitionRequestRejectsRemovedQuantityModes(string quantityMode)
+    {
+        await using var application = CreateHostedApplication();
+        using var client = application.CreateClient();
+
+        var response = await SendWithKeyAsync(
+            client,
+            HttpMethod.Post,
+            "/api/marketmafioso/acquisition/requests",
+            "client-secret",
+            CreateRequest($"removed-mode-{quantityMode}", quantityMode: quantityMode));
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task AcquisitionDashboardAllowsBlankAllBelowThresholdQuantity()
+    {
+        await using var application = CreateHostedApplication(
+            extraConfiguration: new KeyValuePair<string, string?>("MarketMafioso:TrustExternalDashboardAuth", "true"));
+        using var client = application.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false,
+        });
+        var acquisitionPage = await client.GetStringAsync("/api/marketmafioso/acquisition");
+        var csrf = Regex.Match(acquisitionPage, "name=\"csrf\" value=\"(?<token>[^\"]+)\"").Groups["token"].Value;
+        var fields = CreateFormFields(csrf, "blank-all-below-quantity");
+        fields["quantityMode"] = "AllBelowThreshold";
+        fields["quantity"] = string.Empty;
+
+        var response = await client.PostAsync(
+            "/api/marketmafioso/acquisition/requests",
+            new FormUrlEncodedContent(fields));
+
+        Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
+
+        var pending = await SendWithKeyAsync(
+            client,
+            HttpMethod.Get,
+            "/api/marketmafioso/acquisition/requests/pending?characterName=Wei%20Ning&world=Gilgamesh",
+            "client-secret");
+        pending.EnsureSuccessStatusCode();
+        using var pendingJson = JsonDocument.Parse(await pending.Content.ReadAsStringAsync());
+        var request = Assert.Single(pendingJson.RootElement.GetProperty("requests").EnumerateArray());
+        Assert.Equal(0u, request.GetProperty("quantity").GetUInt32());
+    }
+
     [Fact]
     public async Task AcquisitionDashboardShowsEmptyQueueState()
     {
@@ -1165,7 +1215,9 @@ public sealed class MarketAcquisitionRequestEndpointTests
         string idempotencyKey,
         uint itemId = 2,
         string itemName = "Fire Shard",
-        int expiresInSeconds = 90) => new
+        int expiresInSeconds = 90,
+        string quantityMode = "TargetQuantity",
+        uint quantity = 10) => new
         {
             schemaVersion = 1,
             idempotencyKey,
@@ -1174,8 +1226,8 @@ public sealed class MarketAcquisitionRequestEndpointTests
             region = "North America",
             itemId,
             itemName,
-            quantityMode = "Exact",
-            quantity = 10,
+            quantityMode,
+            quantity,
             hqPolicy = "Either",
             maxUnitPrice = 99,
             maxTotalGil = 990,
@@ -1193,7 +1245,7 @@ public sealed class MarketAcquisitionRequestEndpointTests
         ["region"] = "North America",
         ["itemId"] = "2",
         ["itemName"] = "Fire Shard",
-        ["quantityMode"] = "Exact",
+        ["quantityMode"] = "TargetQuantity",
         ["quantity"] = "10",
         ["hqPolicy"] = "Either",
         ["maxUnitPrice"] = "99",
