@@ -55,6 +55,26 @@ public sealed class MarketAcquisitionGuidedRouteSessionTests
     }
 
     [Fact]
+    public void ShouldMonitorActiveStop_IsTrueAfterTravelCommandUntilProbeCompletes()
+    {
+        var session = MarketMafioso.MarketAcquisition.MarketAcquisitionGuidedRouteSession.Start(CreatePlan("Zalera"));
+
+        Assert.False(session.ShouldMonitorActiveStop);
+
+        session.ExecuteActiveStop(_ => true);
+
+        Assert.True(session.ShouldMonitorActiveStop);
+
+        session.RecordCurrentWorld("Zalera");
+
+        Assert.True(session.ShouldMonitorActiveStop);
+
+        session.RecordProbe("Zalera", CreateDryRun(status: "Ready", quantity: 20, gil: 1_000));
+
+        Assert.False(session.ShouldMonitorActiveStop);
+    }
+
+    [Fact]
     public void RecordCurrentWorld_ReportsWhenTravelHasNotReachedActiveStop()
     {
         var session = MarketMafioso.MarketAcquisition.MarketAcquisitionGuidedRouteSession.Start(CreatePlan("Zalera"));

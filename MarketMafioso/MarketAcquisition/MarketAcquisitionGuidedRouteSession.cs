@@ -20,6 +20,8 @@ public sealed class MarketAcquisitionGuidedRouteSession
         Status == "Complete" || activeStopIndex >= Stops.Count
             ? null
             : Stops[activeStopIndex];
+    public bool ShouldMonitorActiveStop =>
+        ActiveStop?.Status is "TravelCommandSent" or "Arrived";
 
     public static MarketAcquisitionGuidedRouteSession Start(MarketAcquisitionPlan plan)
     {

@@ -118,6 +118,7 @@ public sealed class Plugin : IDalamudPlugin
         PluginInterface.UiBuilder.Draw += DrawUI;
         PluginInterface.UiBuilder.OpenConfigUi += OpenConfigUi;
         PluginInterface.UiBuilder.OpenMainUi += OpenConfigUi;
+        Framework.Update += mainWindow.OnFrameworkUpdate;
 
         StartTimer();
 
@@ -148,6 +149,7 @@ public sealed class Plugin : IDalamudPlugin
         PluginInterface.UiBuilder.Draw -= DrawUI;
         PluginInterface.UiBuilder.OpenConfigUi -= OpenConfigUi;
         PluginInterface.UiBuilder.OpenMainUi -= OpenConfigUi;
+        Framework.Update -= mainWindow.OnFrameworkUpdate;
 
         CommandManager.RemoveHandler(CmdMain);
 

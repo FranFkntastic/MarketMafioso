@@ -49,6 +49,8 @@ public class MainWindow : Window, IDisposable
     private MarketAcquisitionLiveDryRun? marketAcquisitionLiveDryRun;
     private MarketAcquisitionGuidedRouteSession? acquisitionGuidedRoute;
     private string guidedRouteStatus = "No guided route has started.";
+    private DateTimeOffset nextGuidedRouteMonitorUtc = DateTimeOffset.MinValue;
+    private bool guidedRouteProbeRunning = false;
     private bool acquisitionRequestBusy = false;
     private string acquisitionStatus = "No dashboard request has been fetched this session.";
     private CancellationTokenSource? acquisitionRequestCancellation;
@@ -151,6 +153,8 @@ public class MainWindow : Window, IDisposable
     public WorkshopProjectBrowserWindow ProjectBrowser { get; }
     public WorkshopFrozenQueueBrowserWindow FrozenQueueBrowser { get; }
     public MarketAcquisitionDiagnosticsWindow AcquisitionDiagnostics { get; }
+
+    public void OnFrameworkUpdate(IFramework _) => MonitorGuidedRoute();
 
     public override void Draw()
     {
@@ -468,6 +472,75 @@ public class MainWindow : Window, IDisposable
 
         if (ImGuiUi.Button("Open Diagnostics", marketBoardReadResult != null))
             AcquisitionDiagnostics.IsOpen = true;
+    }
+
+    private void MonitorGuidedRoute()
+    {
+        if (acquisitionRequestBusy || guidedRouteProbeRunning)
+            return;
+
+        var route = acquisitionGuidedRoute;
+        if (route is not { ShouldMonitorActiveStop: true })
+            return;
+
+        var now = DateTimeOffset.UtcNow;
+        if (now < nextGuidedRouteMonitorUtc)
+            return;
+
+        nextGuidedRouteMonitorUtc = now.AddSeconds(2);
+
+        try
+        {
+            var activeStop = route.ActiveStop;
+            if (activeStop == null)
+                return;
+
+            var currentWorld = GetCurrentWorldName();
+            if (!activeStop.WorldName.Equals(currentWorld, StringComparison.OrdinalIgnoreCase))
+            {
+                var result = route.RecordCurrentWorld(currentWorld);
+                guidedRouteStatus = result.Message;
+                return;
+            }
+
+            if (string.Equals(activeStop.Status, "TravelCommandSent", StringComparison.OrdinalIgnoreCase))
+            {
+                var result = route.RecordCurrentWorld(currentWorld);
+                guidedRouteStatus = result.Message;
+            }
+
+            if (route.ActiveStop?.Status == "Arrived")
+            {
+                guidedRouteStatus = $"Arrived on {currentWorld}. Reading live listings when the market board is ready.";
+                guidedRouteProbeRunning = true;
+                _ = ProbeGuidedRouteMarketBoardAsync();
+            }
+        }
+        catch (Exception ex)
+        {
+            guidedRouteStatus = $"Unable to monitor guided route. {ex.Message}";
+            log.Warning(ex, "[MarketMafioso] Unable to monitor guided market acquisition route.");
+        }
+    }
+
+    private async Task ProbeGuidedRouteMarketBoardAsync()
+    {
+        try
+        {
+            await ProbeLiveMarketBoardAsync().ConfigureAwait(false);
+
+            var activeStop = acquisitionGuidedRoute?.ActiveStop;
+            if (activeStop is { Status: "Arrived" } &&
+                !string.Equals(marketBoardReadResult?.Status, "Ready", StringComparison.OrdinalIgnoreCase))
+            {
+                guidedRouteStatus = $"Arrived on {activeStop.WorldName}; waiting for live listings. {marketBoardReadResult?.Message ?? "Market board read has not completed."}";
+            }
+        }
+        finally
+        {
+            guidedRouteProbeRunning = false;
+            nextGuidedRouteMonitorUtc = DateTimeOffset.UtcNow.AddSeconds(2);
+        }
     }
 
     private void DrawLiveDryRunResult()
@@ -806,6 +879,8 @@ public class MainWindow : Window, IDisposable
     {
         acquisitionGuidedRoute = null;
         guidedRouteStatus = status;
+        guidedRouteProbeRunning = false;
+        nextGuidedRouteMonitorUtc = DateTimeOffset.MinValue;
     }
 
     private void RecordGuidedRouteCurrentWorld()
@@ -843,9 +918,11 @@ public class MainWindow : Window, IDisposable
     private Vector4 GetGuidedRouteStatusColor()
     {
         if (guidedRouteStatus.StartsWith("Unable", StringComparison.OrdinalIgnoreCase) ||
-            guidedRouteStatus.Contains("Waiting", StringComparison.OrdinalIgnoreCase) ||
             guidedRouteStatus.Contains("Cannot", StringComparison.OrdinalIgnoreCase))
             return ColError;
+
+        if (guidedRouteStatus.Contains("Waiting", StringComparison.OrdinalIgnoreCase))
+            return ColHeader;
 
         if (guidedRouteStatus.Contains("Arrived", StringComparison.OrdinalIgnoreCase) ||
             guidedRouteStatus.Contains("Recorded", StringComparison.OrdinalIgnoreCase) ||
