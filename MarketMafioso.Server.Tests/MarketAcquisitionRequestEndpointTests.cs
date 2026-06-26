@@ -698,6 +698,74 @@ public sealed class MarketAcquisitionRequestEndpointTests
     }
 
     [Fact]
+    public async Task AcquisitionDashboardCanCancelClaimedRequest()
+    {
+        await using var application = CreateHostedApplication(
+            extraConfiguration: new KeyValuePair<string, string?>("MarketMafioso:TrustExternalDashboardAuth", "true"));
+        using var client = application.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false,
+        });
+        var claimed = await CreateAndClaimAsync(client, "dashboard-cancel-claimed");
+        var acquisitionPage = await client.GetStringAsync("/api/marketmafioso/acquisition");
+        var csrf = Regex.Match(acquisitionPage, "name=\"csrf\" value=\"(?<token>[^\"]+)\"").Groups["token"].Value;
+
+        var cancelled = await client.PostAsync(
+            $"/api/marketmafioso/acquisition/requests/{claimed.RequestId}/cancel",
+            new FormUrlEncodedContent(new Dictionary<string, string>
+            {
+                ["csrf"] = csrf,
+            }));
+
+        Assert.Equal(HttpStatusCode.Redirect, cancelled.StatusCode);
+        var refreshedPage = await client.GetStringAsync("/api/marketmafioso/acquisition");
+        Assert.Contains("Cancelled", refreshedPage, StringComparison.Ordinal);
+
+        var pending = await SendWithKeyAsync(
+            client,
+            HttpMethod.Get,
+            "/api/marketmafioso/acquisition/requests/pending?characterName=Wei%20Ning&world=Gilgamesh",
+            "client-secret");
+        pending.EnsureSuccessStatusCode();
+        using var pendingJson = JsonDocument.Parse(await pending.Content.ReadAsStringAsync());
+        Assert.Empty(pendingJson.RootElement.GetProperty("requests").EnumerateArray());
+    }
+
+    [Fact]
+    public async Task AcquisitionDashboardCanResendClaimedRequest()
+    {
+        await using var application = CreateHostedApplication(
+            extraConfiguration: new KeyValuePair<string, string?>("MarketMafioso:TrustExternalDashboardAuth", "true"));
+        using var client = application.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false,
+        });
+        var claimed = await CreateAndClaimAsync(client, "dashboard-resend-claimed");
+        var acquisitionPage = await client.GetStringAsync("/api/marketmafioso/acquisition");
+        var csrf = Regex.Match(acquisitionPage, "name=\"csrf\" value=\"(?<token>[^\"]+)\"").Groups["token"].Value;
+
+        var resent = await client.PostAsync(
+            $"/api/marketmafioso/acquisition/requests/{claimed.RequestId}/resend",
+            new FormUrlEncodedContent(new Dictionary<string, string>
+            {
+                ["csrf"] = csrf,
+            }));
+
+        Assert.Equal(HttpStatusCode.Redirect, resent.StatusCode);
+
+        var pending = await SendWithKeyAsync(
+            client,
+            HttpMethod.Get,
+            "/api/marketmafioso/acquisition/requests/pending?characterName=Wei%20Ning&world=Gilgamesh",
+            "client-secret");
+        pending.EnsureSuccessStatusCode();
+        using var pendingJson = JsonDocument.Parse(await pending.Content.ReadAsStringAsync());
+        var request = Assert.Single(pendingJson.RootElement.GetProperty("requests").EnumerateArray());
+        Assert.Equal(claimed.RequestId, request.GetProperty("id").GetString());
+        Assert.Equal("PendingPickup", request.GetProperty("status").GetString());
+    }
+
+    [Fact]
     public async Task AcquisitionDashboardUsesConfiguredXivDataBaseUrl()
     {
         await using var application = CreateHostedApplication(

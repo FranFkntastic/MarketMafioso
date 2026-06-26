@@ -130,6 +130,15 @@ public class MainWindow : Window, IDisposable
                 DuplicateFrozenQueue,
                 DeleteFrozenQueue,
                 SaveCurrentQueueAsNew));
+
+        var restoredAcquisitionClaim = MarketAcquisitionClaimPersistence.Restore(config);
+        if (restoredAcquisitionClaim != null)
+        {
+            claimedAcquisitionRequest = restoredAcquisitionClaim.Value.Claim;
+            claimedAcceptIdempotencyKey = restoredAcquisitionClaim.Value.AcceptIdempotencyKey;
+            claimedRejectIdempotencyKey = restoredAcquisitionClaim.Value.RejectIdempotencyKey;
+            acquisitionStatus = "Restored previously claimed dashboard request from plugin settings.";
+        }
     }
 
     public WorkshopProjectBrowserWindow ProjectBrowser { get; }
@@ -346,6 +355,10 @@ public class MainWindow : Window, IDisposable
             _ = RejectClaimedAcquisitionRequestAsync();
 
         ImGui.SameLine();
+        if (ImGuiUi.Button("Forget Local", !acquisitionRequestBusy))
+            ForgetLocalAcquisitionRequest();
+
+        ImGui.SameLine();
         var canPrepare = !acquisitionRequestBusy &&
                          string.Equals(claimedAcquisitionRequest.Status, "AcceptedInPlugin", StringComparison.OrdinalIgnoreCase);
         if (ImGuiUi.Button("Prepare Plan", canPrepare))
@@ -523,6 +536,12 @@ public class MainWindow : Window, IDisposable
 
             claimedAcceptIdempotencyKey = Guid.NewGuid().ToString("N");
             claimedRejectIdempotencyKey = Guid.NewGuid().ToString("N");
+            MarketAcquisitionClaimPersistence.Save(
+                config,
+                claimedAcquisitionRequest,
+                claimedAcceptIdempotencyKey,
+                claimedRejectIdempotencyKey);
+            config.Save();
             acquisitionPlan = null;
             marketBoardReadResult = null;
             marketBoardReconciliation = null;
@@ -550,6 +569,12 @@ public class MainWindow : Window, IDisposable
                 token).ConfigureAwait(false);
 
             claimedAcquisitionRequest = claimed with { Status = accepted.Status };
+            MarketAcquisitionClaimPersistence.Save(
+                config,
+                claimedAcquisitionRequest,
+                claimedAcceptIdempotencyKey,
+                claimedRejectIdempotencyKey);
+            config.Save();
             acquisitionPlan = null;
             marketBoardReadResult = null;
             marketBoardReconciliation = null;
@@ -575,11 +600,27 @@ public class MainWindow : Window, IDisposable
                 token).ConfigureAwait(false);
 
             claimedAcquisitionRequest = claimed with { Status = rejected.Status };
+            MarketAcquisitionClaimPersistence.Clear(config);
+            config.Save();
+            claimedAcquisitionRequest = null;
             acquisitionPlan = null;
             marketBoardReadResult = null;
             marketBoardReconciliation = null;
             acquisitionStatus = "Request rejected.";
         }).ConfigureAwait(false);
+    }
+
+    private void ForgetLocalAcquisitionRequest()
+    {
+        MarketAcquisitionClaimPersistence.Clear(config);
+        config.Save();
+        claimedAcquisitionRequest = null;
+        claimedAcceptIdempotencyKey = null;
+        claimedRejectIdempotencyKey = null;
+        acquisitionPlan = null;
+        marketBoardReadResult = null;
+        marketBoardReconciliation = null;
+        acquisitionStatus = "Forgot local acquisition claim. Fetch dashboard requests to pick up a pending request.";
     }
 
     private async Task PrepareMarketAcquisitionPlanAsync()

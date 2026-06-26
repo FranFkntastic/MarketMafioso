@@ -69,14 +69,36 @@ public sealed class MarketBoardListingReader
             });
         }
 
+        return BuildReadResult(infoProxy->WaitingForListings, itemId, currentWorld, listings);
+    }
+
+    internal static MarketBoardReadResult BuildReadResult(
+        bool waitingForListings,
+        uint itemId,
+        string currentWorld,
+        IReadOnlyList<MarketBoardLiveListing> listings)
+    {
+        if (listings.Count > 0)
+        {
+            var waitingNote = waitingForListings
+                ? " Waiting flag is still set, but visible listing rows were present."
+                : string.Empty;
+            return new MarketBoardReadResult
+            {
+                Status = "Ready",
+                Message = $"Read {listings.Count} live market board listing(s).{waitingNote}",
+                ItemId = itemId,
+                WorldName = currentWorld,
+                Listings = listings,
+            };
+        }
+
         return new MarketBoardReadResult
         {
-            Status = infoProxy->WaitingForListings ? "WaitingForListings" : listings.Count == 0 ? "NoListings" : "Ready",
-            Message = infoProxy->WaitingForListings
+            Status = waitingForListings ? "WaitingForListings" : "NoListings",
+            Message = waitingForListings
                 ? "Market board listings are still loading."
-                : listings.Count == 0
-                ? "No live market board listings were available for the current search."
-                : $"Read {listings.Count} live market board listing(s).",
+                : "No live market board listings were available for the current search.",
             ItemId = itemId,
             WorldName = currentWorld,
             Listings = listings,

@@ -14,6 +14,7 @@ public class Configuration : IPluginConfiguration
     public string ApiKey { get; set; } = string.Empty;
     public string CommandPickupApiKey { get; set; } = string.Empty;
     public string PluginInstanceId { get; set; } = Guid.NewGuid().ToString("N");
+    public PersistedMarketAcquisitionClaim? ActiveMarketAcquisitionClaim { get; set; }
 
     public bool IncludeArmoury { get; set; } = false;
     public bool IncludeCrystals { get; set; } = true;
@@ -76,4 +77,25 @@ public class CachedMarketListing
     public float Condition { get; set; }
     public uint? UnitPrice { get; set; }
     public string? ListedAt { get; set; }
+}
+
+[Serializable]
+public sealed class PersistedMarketAcquisitionClaim
+{
+    public string Id { get; set; } = string.Empty;
+    public string Status { get; set; } = string.Empty;
+    public string TargetCharacterName { get; set; } = string.Empty;
+    public string TargetWorld { get; set; } = string.Empty;
+    public string Region { get; set; } = string.Empty;
+    public uint ItemId { get; set; }
+    public string? ItemName { get; set; }
+    public string QuantityMode { get; set; } = string.Empty;
+    public uint Quantity { get; set; }
+    public string HqPolicy { get; set; } = string.Empty;
+    public uint MaxUnitPrice { get; set; }
+    public uint MaxTotalGil { get; set; }
+    public string WorldMode { get; set; } = string.Empty;
+    public string ClaimToken { get; set; } = string.Empty;
+    public string? AcceptIdempotencyKey { get; set; }
+    public string? RejectIdempotencyKey { get; set; }
 }

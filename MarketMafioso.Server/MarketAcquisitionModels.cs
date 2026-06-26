@@ -100,6 +100,7 @@ public static class MarketAcquisitionStatuses
     public const string Failed = "Failed";
     public const string Rejected = "Rejected";
     public const string Expired = "Expired";
+    public const string Cancelled = "Cancelled";
 }
 
 public sealed class MarketAcquisitionIdempotencyConflictException : Exception

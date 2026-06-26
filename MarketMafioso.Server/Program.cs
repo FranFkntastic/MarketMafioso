@@ -154,6 +154,8 @@ app.MapGet("/acquisition/requests/pending", ListPendingAcquisitionRequests);
 app.MapPost("/acquisition/requests/{id}/claim", ClaimAcquisitionRequest);
 app.MapPost("/acquisition/requests/{id}/accept", AcceptAcquisitionRequest);
 app.MapPost("/acquisition/requests/{id}/reject", RejectAcquisitionRequest);
+app.MapPost("/acquisition/requests/{id}/cancel", CancelAcquisitionRequest);
+app.MapPost("/acquisition/requests/{id}/resend", ResendAcquisitionRequest);
 app.MapPost("/acquisition/requests/{id}/progress", ReportAcquisitionProgress);
 app.MapPost("/acquisition/requests/{id}/complete", CompleteAcquisitionRequest);
 app.MapPost("/acquisition/requests/{id}/fail", FailAcquisitionRequest);
@@ -404,6 +406,50 @@ Task<IResult> RejectAcquisitionRequest(
     CancellationToken token) =>
     ApplyAcquisitionLifecycleAsync(store.RejectAsync, id, lifecycleRequest, token);
 
+async Task<IResult> CancelAcquisitionRequest(
+    HttpRequest request,
+    string id,
+    MarketAcquisitionRequestStore store,
+    CancellationToken token)
+{
+    if (!await IsValidDashboardPostAsync(request, publicOrigin, token))
+        return Results.BadRequest(new { error = "invalid_csrf" });
+
+    try
+    {
+        var cancelled = await store.CancelAsync(id, token);
+        return cancelled == null
+            ? Results.NotFound()
+            : Results.Redirect($"{request.PathBase}/acquisition?cancelled={Uri.EscapeDataString(id)}");
+    }
+    catch (MarketAcquisitionInvalidTransitionException ex)
+    {
+        return Results.Conflict(new { error = ex.Message });
+    }
+}
+
+async Task<IResult> ResendAcquisitionRequest(
+    HttpRequest request,
+    string id,
+    MarketAcquisitionRequestStore store,
+    CancellationToken token)
+{
+    if (!await IsValidDashboardPostAsync(request, publicOrigin, token))
+        return Results.BadRequest(new { error = "invalid_csrf" });
+
+    try
+    {
+        var resent = await store.ResendAsync(id, token);
+        return resent == null
+            ? Results.NotFound()
+            : Results.Redirect($"{request.PathBase}/acquisition?resent={Uri.EscapeDataString(id)}");
+    }
+    catch (MarketAcquisitionInvalidTransitionException ex)
+    {
+        return Results.Conflict(new { error = ex.Message });
+    }
+}
+
 Task<IResult> ReportAcquisitionProgress(
     string id,
     MarketAcquisitionLifecycleRequest lifecycleRequest,
@@ -473,6 +519,9 @@ static ApiKeyPurpose RequiredApiKeyPurpose(HttpRequest request, bool requireApiK
     if (IsAcquisitionBrowserCreate(request))
         return ApiKeyPurpose.None;
 
+    if (IsAcquisitionBrowserControl(request))
+        return ApiKeyPurpose.None;
+
     if (IsAcquisitionCreate(request))
         return ApiKeyPurpose.Read;
 
@@ -505,9 +554,17 @@ static bool IsAcquisitionBrowserCreate(HttpRequest request) =>
     IsAcquisitionCreate(request) &&
     request.HasFormContentType;
 
+static bool IsAcquisitionBrowserControl(HttpRequest request) =>
+    HttpMethods.IsPost(request.Method) &&
+    request.HasFormContentType &&
+    request.Path.StartsWithSegments("/acquisition/requests") &&
+    (request.Path.Value?.EndsWith("/cancel", StringComparison.OrdinalIgnoreCase) == true ||
+     request.Path.Value?.EndsWith("/resend", StringComparison.OrdinalIgnoreCase) == true);
+
 static bool IsAcquisitionPluginRoute(HttpRequest request) =>
     request.Path.StartsWithSegments("/acquisition/requests") &&
-    !IsAcquisitionCreate(request);
+    !IsAcquisitionCreate(request) &&
+    !IsAcquisitionBrowserControl(request);
 
 static bool HasValidApiKey(
     HttpRequest request,
@@ -999,7 +1056,7 @@ static string RenderAcquisitionDashboard(
     var latestRequestExpiry = latestRequest == null
         ? "-"
         : FormatAcquisitionExpiry(latestRequest);
-    var queueRows = RenderAcquisitionQueueRows(acquisitionRequests);
+    var queueRows = RenderAcquisitionQueueRows(acquisitionRequests, pathBase, csrfToken);
     var characterHeader = RenderAcquisitionCharacterHeader(characters, selectedCharacterId, selectedCharacter, pathBase);
     var activeSummary = $"{activeCount:N0} active / {acquisitionRequests.Count:N0} recent";
     var selectedRequestName = latestRequest == null
@@ -1328,6 +1385,14 @@ static string RenderAcquisitionDashboard(
                     font-size: 12px;
                 }
                 .number { text-align: right; font-variant-numeric: tabular-nums; }
+                .actions {
+                    display: flex;
+                    align-items: center;
+                    gap: 6px;
+                    overflow: visible;
+                }
+                .actions form { margin: 0; }
+                .actions button { height: 28px; padding: 0 8px; font-size: 12px; }
                 .empty-cell {
                     height: 74px;
                     color: var(--muted);
@@ -1446,13 +1511,14 @@ static string RenderAcquisitionDashboard(
                         <div class="table-wrap">
                                 <table>
                                     <colgroup>
-                                        <col style="width: 25%">
-                                        <col style="width: 12%">
-                                        <col style="width: 12%">
-                                        <col style="width: 17%">
+                                        <col style="width: 22%">
+                                        <col style="width: 10%">
+                                        <col style="width: 10%">
                                         <col style="width: 15%">
-                                        <col style="width: 12%">
-                                        <col style="width: 7%">
+                                        <col style="width: 15%">
+                                        <col style="width: 10%">
+                                        <col style="width: 8%">
+                                        <col style="width: 10%">
                                     </colgroup>
                                     <thead>
                                         <tr>
@@ -1463,6 +1529,7 @@ static string RenderAcquisitionDashboard(
                                             <th>Target</th>
                                             <th>Status</th>
                                             <th>Age</th>
+                                            <th>Actions</th>
                                         </tr>
                                     </thead>
                                     <tbody>
@@ -1761,12 +1828,18 @@ static string RenderAcquisitionRequestForm(
         </script>
         """;
 
-static string RenderAcquisitionQueueRows(IReadOnlyList<MarketAcquisitionRequestView> requests)
+static string RenderAcquisitionQueueRows(
+    IReadOnlyList<MarketAcquisitionRequestView> requests,
+    PathString pathBase,
+    string csrfToken)
 {
     if (requests.Count == 0)
-        return """<tr><td colspan="7" class="empty-cell">No acquisition requests yet.</td></tr>""";
+        return """<tr><td colspan="8" class="empty-cell">No acquisition requests yet.</td></tr>""";
 
     return string.Join(Environment.NewLine, requests.Select(request =>
+    {
+        var actions = RenderAcquisitionRequestActions(request, pathBase, csrfToken);
+        return
         $$"""
         <tr>
             <td><div class="item"><strong>{{Html(string.IsNullOrWhiteSpace(request.ItemName) ? $"Item {request.ItemId}" : request.ItemName)}}</strong><span>item {{request.ItemId}} / {{Html(request.HqPolicy)}}</span></div></td>
@@ -1776,8 +1849,55 @@ static string RenderAcquisitionQueueRows(IReadOnlyList<MarketAcquisitionRequestV
             <td>{{Html(request.TargetCharacterName)}} @ {{Html(request.TargetWorld)}}</td>
             <td><span class="status {{Html(AcquisitionStatusClass(request.Status))}}">{{Html(FormatAcquisitionStatus(request.Status))}}</span></td>
             <td>{{Html(FormatAcquisitionAge(request.CreatedAtUtc))}}</td>
+            <td class="actions">{{actions}}</td>
         </tr>
-        """));
+        """;
+    }));
+}
+
+static string RenderAcquisitionRequestActions(
+    MarketAcquisitionRequestView request,
+    PathString pathBase,
+    string csrfToken)
+{
+    var canCancel = request.Status is MarketAcquisitionStatuses.PendingPickup
+        or MarketAcquisitionStatuses.Claimed
+        or MarketAcquisitionStatuses.AcceptedInPlugin
+        or MarketAcquisitionStatuses.Running
+        or MarketAcquisitionStatuses.Expired
+        or MarketAcquisitionStatuses.Rejected;
+    var canResend = request.Status is MarketAcquisitionStatuses.PendingPickup
+        or MarketAcquisitionStatuses.Claimed
+        or MarketAcquisitionStatuses.AcceptedInPlugin
+        or MarketAcquisitionStatuses.Expired
+        or MarketAcquisitionStatuses.Rejected
+        or MarketAcquisitionStatuses.Failed
+        or MarketAcquisitionStatuses.Cancelled;
+
+    var buttons = new StringBuilder();
+    if (canCancel)
+    {
+        buttons.Append($$"""
+            <form method="post" action="{{Html(AppUrl(pathBase, $"/acquisition/requests/{Uri.EscapeDataString(request.Id)}/cancel"))}}" onsubmit="return confirm('Cancel this acquisition request?');">
+                <input type="hidden" name="csrf" value="{{Html(csrfToken)}}">
+                <button type="submit">Cancel</button>
+            </form>
+            """);
+    }
+
+    if (canResend)
+    {
+        buttons.Append($$"""
+            <form method="post" action="{{Html(AppUrl(pathBase, $"/acquisition/requests/{Uri.EscapeDataString(request.Id)}/resend"))}}">
+                <input type="hidden" name="csrf" value="{{Html(csrfToken)}}">
+                <button type="submit">Resend</button>
+            </form>
+            """);
+    }
+
+    return buttons.Length == 0
+        ? """<span class="muted">-</span>"""
+        : buttons.ToString();
 }
 
 static string FormatAcquisitionItem(MarketAcquisitionRequestView request)
@@ -1793,6 +1913,7 @@ static string FormatAcquisitionStatus(string status) =>
     {
         MarketAcquisitionStatuses.PendingPickup => "Pending",
         MarketAcquisitionStatuses.AcceptedInPlugin => "Accepted",
+        MarketAcquisitionStatuses.Cancelled => "Cancelled",
         _ => status,
     };
 
@@ -1807,6 +1928,7 @@ static string AcquisitionStatusClass(string status) =>
         MarketAcquisitionStatuses.Failed => "failed",
         MarketAcquisitionStatuses.Rejected => "failed",
         MarketAcquisitionStatuses.Expired => "failed",
+        MarketAcquisitionStatuses.Cancelled => "failed",
         _ => string.Empty,
     };
 

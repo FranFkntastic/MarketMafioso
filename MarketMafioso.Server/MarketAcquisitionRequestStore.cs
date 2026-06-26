@@ -291,6 +291,98 @@ public sealed class MarketAcquisitionRequestStore
             request,
             cancellationToken);
 
+    public async Task<MarketAcquisitionRequestView?> CancelAsync(
+        string id,
+        CancellationToken cancellationToken)
+    {
+        await ExpirePendingAsync(cancellationToken).ConfigureAwait(false);
+        await ExpireClaimedAsync(cancellationToken).ConfigureAwait(false);
+
+        await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+
+        var current = await GetByIdAsync(connection, transaction, id, cancellationToken).ConfigureAwait(false);
+        if (current == null)
+            return null;
+
+        if (current.Status is MarketAcquisitionStatuses.Complete
+            or MarketAcquisitionStatuses.Failed
+            or MarketAcquisitionStatuses.Cancelled)
+            throw new MarketAcquisitionInvalidTransitionException(current.Status, MarketAcquisitionStatuses.Cancelled);
+
+        await using var update = connection.CreateCommand();
+        update.Transaction = (SqliteTransaction)transaction;
+        update.CommandText =
+            """
+            UPDATE acquisition_requests
+            SET status = $status,
+                claimed_at_utc = NULL,
+                claim_expires_at_utc = NULL,
+                claim_token = NULL,
+                claimed_by = NULL
+            WHERE id = $id;
+            """;
+        update.Parameters.AddWithValue("$status", MarketAcquisitionStatuses.Cancelled);
+        update.Parameters.AddWithValue("$id", id);
+        await update.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return current with
+        {
+            Status = MarketAcquisitionStatuses.Cancelled,
+            ClaimedAtUtc = null,
+            ClaimExpiresAtUtc = null,
+        };
+    }
+
+    public async Task<MarketAcquisitionRequestView?> ResendAsync(
+        string id,
+        CancellationToken cancellationToken)
+    {
+        await ExpirePendingAsync(cancellationToken).ConfigureAwait(false);
+        await ExpireClaimedAsync(cancellationToken).ConfigureAwait(false);
+
+        await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+
+        var current = await GetByIdAsync(connection, transaction, id, cancellationToken).ConfigureAwait(false);
+        if (current == null)
+            return null;
+
+        if (current.Status is MarketAcquisitionStatuses.Complete
+            or MarketAcquisitionStatuses.Running)
+            throw new MarketAcquisitionInvalidTransitionException(current.Status, MarketAcquisitionStatuses.PendingPickup);
+
+        var expiresAtUtc = DateTimeOffset.UtcNow.AddSeconds(Math.Clamp((int)current.ExpiresAtUtc.Subtract(current.CreatedAtUtc).TotalSeconds, minimumExpirySeconds, 300));
+
+        await using var update = connection.CreateCommand();
+        update.Transaction = (SqliteTransaction)transaction;
+        update.CommandText =
+            """
+            UPDATE acquisition_requests
+            SET status = $status,
+                expires_at_utc = $expiresAtUtc,
+                claimed_at_utc = NULL,
+                claim_expires_at_utc = NULL,
+                claim_token = NULL,
+                claimed_by = NULL
+            WHERE id = $id;
+            """;
+        update.Parameters.AddWithValue("$status", MarketAcquisitionStatuses.PendingPickup);
+        update.Parameters.AddWithValue("$expiresAtUtc", expiresAtUtc.ToString("O"));
+        update.Parameters.AddWithValue("$id", id);
+        await update.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return current with
+        {
+            Status = MarketAcquisitionStatuses.PendingPickup,
+            ExpiresAtUtc = expiresAtUtc,
+            ClaimedAtUtc = null,
+            ClaimExpiresAtUtc = null,
+        };
+    }
+
     private void Initialize()
     {
         using var connection = new SqliteConnection(connectionString);

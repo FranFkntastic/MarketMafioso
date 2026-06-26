@@ -131,10 +131,10 @@ Dalamud and FFXIVClientStructs expose enough market board state to design a safe
 1. User opens the browser dashboard and creates a market acquisition request:
    - Item name or item id.
    - Maximum unit price.
-   - Quantity mode: exact quantity, up to quantity, or all listings below threshold.
+   - Quantity mode: target quantity or all listings below threshold.
    - HQ policy: NQ only, HQ only, or either.
    - World source: recommended worlds from market data, selected worlds, current world only, or explicit all-world sweep mode.
-   - Mandatory total gil cap.
+   - Optional total gil cap. Blank or zero means no total spend cap; max unit price remains mandatory.
 2. Dashboard stores the request and shows pickup instructions.
 3. User opens `/mmf` in-game and selects `Market Acquisition`.
 4. User clicks `Fetch Dashboard Requests`.
@@ -147,9 +147,9 @@ Dalamud and FFXIVClientStructs expose enough market board state to design a safe
    - MarketMafioso gets the user to that world, either by guided travel or supported travel automation.
    - MarketMafioso waits for the user to open the market board, or opens/searches it if that path is implemented safely.
    - MarketMafioso loads live listings for the item.
-   - MarketMafioso reconciles live listings against the remote plan and price threshold.
+   - MarketMafioso builds a confirmed candidate pool from live listings at or below the max unit price.
    - MarketMafioso presents one world-batch confirmation.
-   - After confirmation, MarketMafioso purchases all still-valid listings in that batch until quantity, price, or budget limits stop the batch.
+   - After confirmation, MarketMafioso purchases still-valid confirmed listings in lowest-price order until the target quantity, all-below-threshold rule, optional gil cap, inventory state, or a safety stop ends the batch.
 11. The run ends as complete, paused, stopped, cancelled, or failed with diagnostics.
 
 ## Command Contract
@@ -367,7 +367,9 @@ Rules:
 - Endpoint authorization is fixed:
   - `POST /acquisition/requests` as a non-browser JSON lifecycle endpoint requires dashboard auth.
   - Browser-originated request creation requires dashboard/read auth and CSRF. Hosted deployments must set `MarketMafioso:TrustExternalDashboardAuth=true` only when the dashboard is protected by an external layer such as Caddy Basic Auth.
-  - Dashboard pre-claim cancellation requires dashboard/read auth and CSRF, and only works while the request is `PendingPickup`.
+  - Dashboard queue recovery actions require dashboard/read auth and CSRF.
+  - Dashboard `Cancel` marks a request cancelled and clears stale claim ownership.
+  - Dashboard `Resend` clears stale claim ownership and returns the existing request to `PendingPickup`; it does not create a duplicate row.
   - `GET /acquisition/requests/pending`, `POST /acquisition/requests/{id}/claim`, and all plugin lifecycle mutation routes require client API key auth.
 - Browser-originated mutation routes require the server's CSRF token pattern. API keys are not CSRF tokens and must not be embedded in dashboard forms or JavaScript.
 - Pickup requests are scoped to account, character, and world.
@@ -376,11 +378,11 @@ Rules:
 - Secrets are never placed in URLs.
 - Secrets are generated outside dashboard HTML, are redacted from logs and diagnostics, and are never included in audit records.
 - Request payloads are typed and versioned.
-- Request payloads require hard bounds: positive quantity, positive max unit price, mandatory positive gil cap, allowed enum values, supported schema version, and server-capped expiry.
+- Request payloads require hard bounds: positive quantity when the selected quantity mode uses a target, positive max unit price, optional non-negative gil cap, allowed enum values, supported schema version, and server-capped expiry.
 - No arbitrary code, script, low-level UI selector, or raw click instruction is accepted.
 - Server records who created the request, when the plugin claimed it, and the plugin-reported final result.
 - Pending and claim endpoints fail closed and avoid enumeration. Unauthorized or wrong-scope callers receive generic unauthorized or not-found responses that do not reveal whether a request id, character, world, item, or gil cap exists.
-- The dashboard may cancel only `PendingPickup` requests. Once a request is `Claimed`, `AcceptedInPlugin`, or later, dashboard cancellation is rejected or recorded as advisory only; it must not stop, alter, or remotely control an in-game runner.
+- Dashboard cancel/resend actions are queue recovery controls. They may recover a stranded claimed request before real purchase execution exists, but they must not become a remote control surface for an active in-game runner.
 - Pickup, claim, and lifecycle mutation endpoints should have conservative rate limits and request-size limits.
 - Audit records include lifecycle event timestamps, request id, schema version, actor type, non-secret actor label, source route, previous state, next state, and failure reason when applicable. Audit records must not store auth headers, API keys, CSRF tokens, raw plugin config, or unnecessary live game diagnostic dumps.
 - Acquisition request/audit retention is separate from inventory snapshot and raw JSON retention.
@@ -537,9 +539,9 @@ Actions:
 - `Accept Request`
 - `Reject`
 
-Before acceptance, show character/world, item id/name, quantity mode, HQ policy, max unit price, max total gil, world mode, request age, expiry, and source. Disable `Accept Request` if max unit price, max total gil, item id, quantity mode, or target character/world is missing or mismatched.
+Before acceptance, show character/world, item id/name, quantity mode, HQ policy, max unit price, max total gil if present, world mode, request age, expiry, and source. Disable `Accept Request` if max unit price, item id, quantity mode, or target character/world is missing or mismatched.
 
-Claimed but unaccepted requests are volatile local UI state. If the plugin closes or the character/world changes before acceptance, the plugin reports the request as rejected or abandoned with a diagnostic reason when possible, and clears the local pending request. `Accept Request` must not start planning, travel, market-board reads, dry-run execution, or purchases. It only records local consent and moves the request into the local accepted state.
+Claimed but unaccepted requests persist enough local state to survive plugin reload: request summary, claim token, and lifecycle idempotency keys. If the dashboard cancels or resends the request while the plugin still has stale local claim state, the plugin can forget the local claim and fetch again. `Accept Request` must not start planning, travel, market-board reads, dry-run execution, or purchases. It only records local consent and moves the request into the local accepted state.
 
 ### Local Runner
 
@@ -585,7 +587,7 @@ There are two separate confirmations:
 - Local request acceptance confirms intent only.
 - World-batch confirmation authorizes the next batch after live listing reconciliation.
 
-World-batch confirmation must be an explicit ImGui confirmation block or popup that lists world, item, HQ policy, planned quantity, live valid listing count, cheapest and highest unit price, estimated spend, remaining gil cap, market data age, live refresh time, and exact stop conditions. The primary button should read `Confirm This World Batch`.
+World-batch confirmation must be an explicit ImGui confirmation block or popup that lists world, item, HQ policy, quantity rule, confirmed listing count, cheapest and highest unit price, estimated spend, remaining gil cap when configured, market data age, live refresh time, and exact stop conditions. The primary button should read `Confirm This World Batch`.
 
 If live listings, current world, current search item, price, quantity, or remaining budget change after confirmation but before the first purchase, immediately invalidate the confirmation, disable the batch action, and show `Live listings changed; reconcile again before continuing.`
 
@@ -599,13 +601,19 @@ Known safe stops are item mismatch, world mismatch, market board not open, wrong
 
 ## Safety Rules
 
-- Require a max unit price and max total gil before live purchasing is enabled.
+- Require a max unit price before live purchasing is enabled.
+- Treat max total gil as optional. Blank or zero means no total cap; a positive value is a hard spend stop.
 - Default routes must contain only planned worlds with supporting market data.
 - Never buy a listing whose live unit price exceeds the threshold.
-- Never exceed the configured total gil cap.
+- Never exceed the configured total gil cap when one is set.
+- Treat the server/dashboard plan as advisory. Live in-game listings are authoritative at purchase time.
+- Purchase only from a confirmed candidate pool built from live market board rows read during the current run.
+- Lowest confirmed live unit price wins. If a newly discovered below-threshold listing is cheaper than listings on later planned worlds, buy the cheaper confirmed listing first.
+- Remove the old `Exact` and `UpTo` quantity semantics from new requests. `TargetQuantity` replaces both and buys safe whole stacks until the target is satisfied or safe stock runs out. Harmless whole-stack overage is allowed.
+- `AllBelowThreshold` buys every confirmed live listing at or below the max unit price, optionally bounded by a configured gil cap.
 - Never keep purchasing after a purchase response error unless the error is explicitly classified as safe to continue.
 - Stop on item mismatch, world mismatch, market board search mismatch, insufficient gil, inventory full, unknown confirmation prompt, or ambiguous listing selection.
-- If live listings differ from the confirmed batch before the first purchase, invalidate the confirmation and reconcile again.
+- If live listings differ from the confirmed batch before the first purchase, invalidate the confirmation and rebuild the confirmed candidate pool.
 - If live listings differ after a successful purchase, re-read and continue only with still-valid listings under the original batch confirmation.
 
 ## Testing Plan
@@ -619,7 +627,7 @@ Unit tests:
 - Planner filters by price threshold.
 - Planner respects HQ policy.
 - Planner respects requested quantity.
-- Planner respects max total gil.
+- Planner respects max total gil when configured.
 - Planner groups listings into world batches.
 - Planner excludes non-promising worlds by default.
 - Planner supports explicit all-world sweep mode separately from recommended mode.
@@ -704,7 +712,7 @@ Manual verification:
 
 - Acquisition scope is region-wide by default. Recommended mode may consider all worlds in the configured FFXIV region, but it emits only worlds with supporting listings under the threshold.
 - Cross-data-center automated travel remains gated behind the regional travel probe. Until that probe passes, region-wide plans can still be executed through guided/manual travel.
-- Quantity mode starts with exact requested quantity. "Buy all below threshold" can be added only after guarded purchase execution is stable.
+- Quantity mode starts with `TargetQuantity` and `AllBelowThreshold`. The old `Exact` and `UpTo` aliases should be removed from new dashboard requests because they are not functionally unique under live, whole-stack purchase execution.
 - HQ policy defaults to `Either`, with explicit `NQ only` and `HQ only` options available in the dashboard request form.
 - Purchase execution requires live in-game listing validation. Fresh external market upload age is displayed and used for planning confidence, but it is not the final purchase authority.
 - First planning uses direct Universalis-backed threshold filtering. A Craft Architect-quality planning endpoint is a later integration, not a dependency for the first implementation.
