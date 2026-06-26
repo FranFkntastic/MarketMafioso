@@ -1,3 +1,4 @@
+using System.Numerics;
 using MarketMafioso.MarketAcquisition;
 
 namespace MarketMafioso.Tests.MarketAcquisition;
@@ -86,5 +87,15 @@ public sealed class MarketBoardApproachServiceTests
             vnavmeshRunning: false);
 
         Assert.Equal(MarketBoardApproachDecisionKind.WaitForManualOpen, decision.Kind);
+    }
+
+    [Fact]
+    public void CalculateHorizontalDistance_UsesPlayerAndBoardPositions()
+    {
+        var distance = MarketBoardApproachService.CalculateHorizontalDistance(
+            new Vector3(10, 20, 30),
+            new Vector3(13, 99, 34));
+
+        Assert.Equal(5, distance);
     }
 }

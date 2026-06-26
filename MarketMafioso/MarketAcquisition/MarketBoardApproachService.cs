@@ -47,23 +47,26 @@ public sealed class MarketBoardApproachService
         if (IsMarketBoardUiOpen())
             return MarketBoardApproachResult.Ready("Market board UI is already open.");
 
-        var board = FindMarketBoard();
+        var playerPosition = objectTable.LocalPlayer?.Position;
+        var board = FindMarketBoard(playerPosition);
         var vnavmeshRunning = vnavmesh.IsRunning;
         var decision = Decide(
             marketBoardUiOpen: false,
-            boardDistance: board == null ? null : GetDistance(board),
+            boardDistance: board == null || playerPosition == null
+                ? null
+                : CalculateHorizontalDistance(playerPosition.Value, board.Position),
             vnavmeshAvailable: vnavmesh.IsReady,
             vnavmeshRunning: vnavmeshRunning);
 
         return decision.Kind switch
         {
-            MarketBoardApproachDecisionKind.InteractDirectly => InteractWithBoard(board),
-            MarketBoardApproachDecisionKind.StartNavigation => StartNavigation(board),
+            MarketBoardApproachDecisionKind.InteractDirectly => InteractWithBoard(board, playerPosition),
+            MarketBoardApproachDecisionKind.StartNavigation => StartNavigation(board, playerPosition),
             MarketBoardApproachDecisionKind.WaitForMovement => MarketBoardApproachResult.Wait(
                 "vnavmesh is moving toward the nearby market board."),
             MarketBoardApproachDecisionKind.ReadyToSearch => MarketBoardApproachResult.Ready(
                 "Market board UI is already open."),
-            _ => MarketBoardApproachResult.Wait(DescribeManualWait(board, vnavmeshRunning)),
+            _ => MarketBoardApproachResult.Wait(DescribeManualWait(board, playerPosition, vnavmeshRunning)),
         };
     }
 
@@ -101,14 +104,17 @@ public sealed class MarketBoardApproachService
                IsAddonReady(gameGui.GetAddonByName<AtkUnitBase>(ItemSearchResultAddon, 1));
     }
 
-    private IGameObject? FindMarketBoard()
+    private IGameObject? FindMarketBoard(Vector3? playerPosition)
     {
         if (IsMarketBoardObject(targetManager.Target))
             return targetManager.Target;
 
-        return objectTable
-            .Where(IsMarketBoardObject)
-            .OrderBy(GetDistance)
+        var candidates = objectTable.Where(IsMarketBoardObject);
+        if (playerPosition == null)
+            return candidates.FirstOrDefault();
+
+        return candidates
+            .OrderBy(x => CalculateHorizontalDistance(playerPosition.Value, x.Position))
             .FirstOrDefault();
     }
 
@@ -123,7 +129,7 @@ public sealed class MarketBoardApproachService
         return gameObject.Name.TextValue.Equals(MarketBoardObjectName, StringComparison.OrdinalIgnoreCase);
     }
 
-    private unsafe MarketBoardApproachResult InteractWithBoard(IGameObject? board)
+    private unsafe MarketBoardApproachResult InteractWithBoard(IGameObject? board, Vector3? playerPosition)
     {
         if (board == null)
             return MarketBoardApproachResult.Wait("No nearby market board target was found.");
@@ -135,20 +141,25 @@ public sealed class MarketBoardApproachService
         targetManager.Target = board;
         var result = targetSystem->InteractWithObject((ClientGameObject*)board.Address, true);
         log.Verbose($"[MarketMafioso] Interacted with market board {board.Name.TextValue} ({board.GameObjectId:X}).");
+        float? distance = playerPosition == null
+            ? null
+            : CalculateHorizontalDistance(playerPosition.Value, board.Position);
         return MarketBoardApproachResult.Action(
-            $"Interacted with nearby market board ({GetDistance(board):0.0}y).",
+            distance == null
+                ? "Interacted with nearby market board."
+                : $"Interacted with nearby market board ({distance.Value:0.0}y).",
             new Dictionary<string, string?>
             {
                 ["name"] = board.Name.TextValue,
                 ["objectKind"] = board.ObjectKind.ToString(),
                 ["gameObjectId"] = board.GameObjectId.ToString("X"),
                 ["baseId"] = board.BaseId.ToString(),
-                ["distance"] = GetDistance(board).ToString("0.00"),
+                ["distance"] = distance?.ToString("0.00") ?? "unavailable",
                 ["result"] = result.ToString(),
             });
     }
 
-    private MarketBoardApproachResult StartNavigation(IGameObject? board)
+    private MarketBoardApproachResult StartNavigation(IGameObject? board, Vector3? playerPosition)
     {
         if (board == null)
             return MarketBoardApproachResult.Wait("No nearby market board target was found.");
@@ -157,18 +168,23 @@ public sealed class MarketBoardApproachService
         if (!result.Success)
             return MarketBoardApproachResult.Wait(result.Message);
 
+        float? distance = playerPosition == null
+            ? null
+            : CalculateHorizontalDistance(playerPosition.Value, board.Position);
         return MarketBoardApproachResult.Action(
-            $"vnavmesh is approaching nearby market board ({GetDistance(board):0.0}y).",
+            distance == null
+                ? "vnavmesh is approaching nearby market board."
+                : $"vnavmesh is approaching nearby market board ({distance.Value:0.0}y).",
             new Dictionary<string, string?>
             {
                 ["name"] = board.Name.TextValue,
                 ["gameObjectId"] = board.GameObjectId.ToString("X"),
-                ["distance"] = GetDistance(board).ToString("0.00"),
+                ["distance"] = distance?.ToString("0.00") ?? "unavailable",
                 ["destination"] = board.Position.ToString(),
             });
     }
 
-    private string DescribeManualWait(IGameObject? board, bool vnavmeshRunning)
+    private string DescribeManualWait(IGameObject? board, Vector3? playerPosition, bool vnavmeshRunning)
     {
         if (vnavmeshRunning)
             return "vnavmesh is moving toward the market board.";
@@ -176,7 +192,10 @@ public sealed class MarketBoardApproachService
         if (board == null)
             return "Open a market board manually; no nearby market board target was found.";
 
-        var distance = GetDistance(board);
+        if (playerPosition == null)
+            return "Open a market board manually; player position is unavailable.";
+
+        var distance = CalculateHorizontalDistance(playerPosition.Value, board.Position);
         if (distance > MaximumApproachDistance)
             return $"Open a market board manually; nearest board is {distance:0.0}y away.";
 
@@ -188,11 +207,11 @@ public sealed class MarketBoardApproachService
         return addon != null && addon->IsReady && addon->IsVisible;
     }
 
-    private static float GetDistance(IGameObject gameObject)
+    internal static float CalculateHorizontalDistance(Vector3 playerPosition, Vector3 objectPosition)
     {
         return MathF.Sqrt(
-            gameObject.YalmDistanceX * gameObject.YalmDistanceX +
-            gameObject.YalmDistanceZ * gameObject.YalmDistanceZ);
+            MathF.Pow(playerPosition.X - objectPosition.X, 2) +
+            MathF.Pow(playerPosition.Z - objectPosition.Z, 2));
     }
 }
 
