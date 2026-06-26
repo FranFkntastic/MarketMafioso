@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace MarketMafioso.MarketAcquisition;
 
@@ -207,6 +208,27 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         return searchResult.SearchSent
             ? MarketAcquisitionRouteActionResult.Ok(searchResult.Message)
             : MarketAcquisitionRouteActionResult.Fail(searchResult.Message);
+    }
+
+    public MarketAcquisitionRouteActionResult RecordMarketBoardApproach(MarketBoardApproachResult approachResult)
+    {
+        ArgumentNullException.ThrowIfNull(approachResult);
+
+        if (!IsRunning)
+            return Fail($"Route is {State}; market board approach was not recorded.");
+
+        StatusMessage = approachResult.Message;
+        diagnostics.Record(
+            "market-board-approach",
+            approachResult.Message,
+            new Dictionary<string, string?>
+            {
+                ["status"] = approachResult.Status,
+            }.Concat(approachResult.Details).ToDictionary(pair => pair.Key, pair => pair.Value));
+
+        return approachResult.ReadyToSearch || approachResult.ActionTaken
+            ? MarketAcquisitionRouteActionResult.Ok(approachResult.Message)
+            : MarketAcquisitionRouteActionResult.Fail(approachResult.Message);
     }
 
     public void ClearSearchSubmission(string reason)

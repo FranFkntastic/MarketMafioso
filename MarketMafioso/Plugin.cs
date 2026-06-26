@@ -7,6 +7,7 @@ using Dalamud.IoC;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
 using Dalamud.Interface.Windowing;
+using MarketMafioso.MarketAcquisition;
 using MarketMafioso.WorkshopPrep;
 using MarketMafioso.Windows;
 
@@ -101,6 +102,12 @@ public sealed class Plugin : IDalamudPlugin
             workshopAssemblyRunner,
             workshopMaterialManifestExport,
             PlayerState,
+            new MarketBoardApproachService(
+                GameGui,
+                ObjectTable,
+                TargetManager,
+                new VNavmeshIpc(new DalamudVNavmeshIpcAdapter(PluginInterface, Log)),
+                Log),
             Path.Combine(PluginInterface.GetPluginConfigDirectory(), "market-acquisition-route-logs"),
             Log);
 

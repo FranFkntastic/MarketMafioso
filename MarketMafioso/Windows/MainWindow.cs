@@ -32,6 +32,7 @@ public class MainWindow : Window, IDisposable
     private readonly UniversalisMarketAcquisitionPlanSource acquisitionPlanSource;
     private readonly MarketBoardListingReader marketBoardListingReader;
     private readonly MarketBoardItemSearchDriver marketBoardItemSearchDriver;
+    private readonly MarketBoardApproachService marketBoardApproachService;
     private readonly MarketAcquisitionRouteRunner marketAcquisitionRouteRunner;
 
     private string urlBuffer = string.Empty;
@@ -85,6 +86,7 @@ public class MainWindow : Window, IDisposable
         WorkshopAssemblyRunner workshopAssemblyRunner,
         WorkshopMaterialManifestExportService workshopMaterialManifestExport,
         IPlayerState playerState,
+        MarketBoardApproachService marketBoardApproachService,
         string marketAcquisitionRouteDiagnosticsDirectory,
         IPluginLog log)
         : base("MarketMafioso##MarketMafiosoMainWindow",
@@ -105,6 +107,7 @@ public class MainWindow : Window, IDisposable
         acquisitionPlanSource = new UniversalisMarketAcquisitionPlanSource(acquisitionHttpClient);
         marketBoardListingReader = new MarketBoardListingReader(Plugin.GameGui);
         marketBoardItemSearchDriver = new MarketBoardItemSearchDriver(Plugin.GameGui);
+        this.marketBoardApproachService = marketBoardApproachService;
         marketAcquisitionRouteRunner = new MarketAcquisitionRouteRunner(marketAcquisitionRouteDiagnosticsDirectory);
 
         SizeConstraints = new WindowSizeConstraints
@@ -529,6 +532,14 @@ public class MainWindow : Window, IDisposable
                               throw new InvalidOperationException("No dashboard request is accepted.");
                 if (!route.SearchSubmitted)
                 {
+                    var approachResult = marketBoardApproachService.OpenOrApproach();
+                    route.RecordMarketBoardApproach(approachResult);
+                    if (!approachResult.ReadyToSearch)
+                    {
+                        nextGuidedRouteMonitorUtc = DateTimeOffset.UtcNow.AddSeconds(1);
+                        return;
+                    }
+
                     var searchResult = marketBoardItemSearchDriver.Search(claimed.ItemId, claimed.ItemName);
                     route.RecordSearchResult(searchResult);
                     if (!searchResult.SearchSent)
@@ -828,12 +839,18 @@ public class MainWindow : Window, IDisposable
         else
         {
             if (ImGuiUi.Button("Pause", marketAcquisitionRouteRunner.IsRunning))
+            {
+                marketBoardApproachService.StopNavigation();
                 marketAcquisitionRouteRunner.Pause();
+            }
         }
 
         ImGui.SameLine();
         if (ImGuiUi.Button("Stop", marketAcquisitionRouteRunner.IsRunning || marketAcquisitionRouteRunner.IsPaused))
+        {
+            marketBoardApproachService.StopNavigation();
             marketAcquisitionRouteRunner.Stop();
+        }
 
         ImGui.SameLine();
         if (ImGuiUi.Button("Restart", canStart && marketAcquisitionRouteRunner.CanRestart))
@@ -923,6 +940,7 @@ public class MainWindow : Window, IDisposable
         {
             var plan = acquisitionPlan ??
                        throw new InvalidOperationException("Prepare a plan before restarting a guided route.");
+            marketBoardApproachService.StopNavigation();
             marketAcquisitionRouteRunner.Restart(plan);
             marketBoardReadResult = null;
             marketBoardReconciliation = null;
@@ -939,6 +957,7 @@ public class MainWindow : Window, IDisposable
 
     private void ResetGuidedRoute(string status)
     {
+        marketBoardApproachService.StopNavigation();
         marketAcquisitionRouteRunner.Reset(status);
         guidedRouteProbeRunning = false;
         nextGuidedRouteMonitorUtc = DateTimeOffset.MinValue;
