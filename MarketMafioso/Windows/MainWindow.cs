@@ -131,6 +131,10 @@ public class MainWindow : Window, IDisposable
                 DuplicateFrozenQueue,
                 DeleteFrozenQueue,
                 SaveCurrentQueueAsNew));
+        AcquisitionDiagnostics = new MarketAcquisitionDiagnosticsWindow(
+            () => marketBoardReadResult,
+            () => marketBoardReconciliation,
+            () => marketAcquisitionLiveDryRun);
 
         var restoredAcquisitionClaim = MarketAcquisitionClaimPersistence.Restore(config);
         if (restoredAcquisitionClaim != null)
@@ -144,6 +148,7 @@ public class MainWindow : Window, IDisposable
 
     public WorkshopProjectBrowserWindow ProjectBrowser { get; }
     public WorkshopFrozenQueueBrowserWindow FrozenQueueBrowser { get; }
+    public MarketAcquisitionDiagnosticsWindow AcquisitionDiagnostics { get; }
 
     public override void Draw()
     {
@@ -453,43 +458,12 @@ public class MainWindow : Window, IDisposable
             ImGui.TextColored(
                 marketBoardReconciliation.Status == "Ready" ? ColSuccess : ColError,
                 $"Reconciliation: {marketBoardReconciliation.Status}");
-
-            var tableFlags = ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.Resizable;
-            if (ImGui.BeginTable("MarketBoardProbeReconciliation", 6, tableFlags))
-            {
-                ImGui.TableSetupColumn("Status");
-                ImGui.TableSetupColumn("Retainer");
-                ImGui.TableSetupColumn("Qty");
-                ImGui.TableSetupColumn("Unit");
-                ImGui.TableSetupColumn("HQ");
-                ImGui.TableSetupColumn("Message");
-                ImGui.TableHeadersRow();
-
-                foreach (var row in marketBoardReconciliation.Listings)
-                {
-                    var listing = row.LiveListing;
-                    ImGui.TableNextRow();
-                    ImGui.TableNextColumn();
-                    ImGui.TextColored(row.Status == "Matched" ? ColSuccess : ColError, row.Status);
-                    ImGui.TableNextColumn();
-                    ImGui.TextUnformatted(string.IsNullOrWhiteSpace(listing?.RetainerName)
-                        ? row.PlannedListing.RetainerName
-                        : listing.RetainerName);
-                    ImGui.TableNextColumn();
-                    ImGui.TextUnformatted((listing?.Quantity ?? row.PlannedListing.Quantity).ToString("N0"));
-                    ImGui.TableNextColumn();
-                    ImGui.TextUnformatted(FormatGil(listing?.UnitPrice ?? row.PlannedListing.UnitPrice));
-                    ImGui.TableNextColumn();
-                    ImGui.TextUnformatted((listing?.IsHq ?? row.PlannedListing.IsHq) ? "HQ" : "NQ");
-                    ImGui.TableNextColumn();
-                    ImGui.TextWrapped(row.Message);
-                }
-
-                ImGui.EndTable();
-            }
         }
 
         DrawLiveDryRunResult();
+
+        if (ImGuiUi.Button("Open Diagnostics", marketBoardReadResult != null))
+            AcquisitionDiagnostics.IsOpen = true;
     }
 
     private void DrawLiveDryRunResult()
@@ -503,39 +477,8 @@ public class MainWindow : Window, IDisposable
             $"Live dry-run: {marketAcquisitionLiveDryRun.Status}  -  Would buy {marketAcquisitionLiveDryRun.WouldBuyQuantity:N0}/{marketAcquisitionLiveDryRun.RequestedQuantity:N0}, spend {FormatGil(marketAcquisitionLiveDryRun.WouldSpendGil)}");
         ImGui.TextWrapped(marketAcquisitionLiveDryRun.Message);
 
-        var tableFlags = ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.Resizable;
-        if (ImGui.BeginTable("MarketAcquisitionLiveDryRun", 7, tableFlags))
-        {
-            ImGui.TableSetupColumn("Decision");
-            ImGui.TableSetupColumn("Reason");
-            ImGui.TableSetupColumn("Retainer");
-            ImGui.TableSetupColumn("Qty");
-            ImGui.TableSetupColumn("Unit");
-            ImGui.TableSetupColumn("HQ");
-            ImGui.TableSetupColumn("Message");
-            ImGui.TableHeadersRow();
-
-            foreach (var row in marketAcquisitionLiveDryRun.Rows)
-            {
-                ImGui.TableNextRow();
-                ImGui.TableNextColumn();
-                ImGui.TextColored(row.Decision == "WouldBuy" ? ColSuccess : ColMuted, row.Decision);
-                ImGui.TableNextColumn();
-                ImGui.TextUnformatted(row.Reason);
-                ImGui.TableNextColumn();
-                ImGui.TextUnformatted(row.LiveListing.RetainerName);
-                ImGui.TableNextColumn();
-                ImGui.TextUnformatted(row.LiveListing.Quantity.ToString("N0"));
-                ImGui.TableNextColumn();
-                ImGui.TextUnformatted(FormatGil(row.LiveListing.UnitPrice));
-                ImGui.TableNextColumn();
-                ImGui.TextUnformatted(row.LiveListing.IsHq ? "HQ" : "NQ");
-                ImGui.TableNextColumn();
-                ImGui.TextWrapped(row.Message);
-            }
-
-            ImGui.EndTable();
-        }
+        var summary = MarketAcquisitionLiveDryRunPresenter.BuildSummary(marketAcquisitionLiveDryRun);
+        ImGui.TextColored(ColMuted, $"{summary.WouldBuyRows:N0} buy row(s), {summary.SkippedRows:N0} skipped row(s).");
     }
 
     private static void DrawClaimedRequestRow(string label, string value)

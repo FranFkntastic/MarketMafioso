@@ -10,7 +10,7 @@ This roadmap is intentionally investigation-heavy. The feature touches three are
 - Plugin-side request pickup and local consent.
 - In-game market board reading, travel, and purchase execution.
 
-The safe order is to make the server and plugin speak first, then prove read-only market-board visibility, then add dry-run world batches, and only then consider guarded purchases.
+The safe order is to make the server and plugin speak first, then prove read-only market-board visibility, then add guided world-batch orchestration, and only then consider guarded purchases.
 
 ## Roadmap Principles
 
@@ -47,11 +47,12 @@ Current status after the 2026-06-25 local-dev pass:
 | Phase 2: Dashboard Request Creation Surface | Done | Dashboard has a Market Acquisition surface, item search/ID resolution, queue staging, diagnostic error display, optional gil cap, request list, and queue recovery actions to cancel or resend stranded requests. Quantity modes still need to be simplified from legacy `Exact`/`UpTo`/`AllBelowThreshold` UI to `TargetQuantity`/`AllBelowThreshold`. |
 | Phase 3: Plugin Request Pickup UI | Done | `/mmf` has a Market Acquisition tab with one-shot fetch, claim, accept, reject, persisted active claim restore after plugin reload, local claim forget, and shared plugin-wide server/API-key settings. |
 | Phase 4: Market Planning Dry Run | Done | Accepted requests can prepare a Universalis-backed advisory plan and display world/listing batches. Planner semantics now need to align with the two-mode quantity model and optional gil cap everywhere. |
-| Phase 5: Live Market Board Read-Only Probe | Done for visible rows | In-game probe succeeded on current patch: item id, visible listing rows, listing id, retainer id/name, HQ flag, unit price, and quantity populated correctly. The `WaitingForListings` flag can remain set while visible rows exist, and the reader now treats populated rows as ready with a diagnostic note. Remaining risk moves to pagination/deeper listing-page behavior. No purchase path exists. |
-| Phase 6: Guided World-Batch Dry Run | Partially done | Current-world live dry-run candidate selection exists after `Read Live Listings`: it validates item/world, builds a confirmed live candidate pool, sorts by live unit price, supports favorable drift, respects HQ/max-unit/gil-cap constraints, and reports would-buy/skip/under-procure outcomes without purchasing. Multi-world runner progression is still not started. |
+| Phase 5: Live Market Board Read-Only Probe | Done for visible rows | In-game probe succeeded on current patch: item id, visible listing rows, listing id, retainer id/name, HQ flag, unit price, and quantity populated correctly. The `WaitingForListings` flag can remain set while visible rows exist, and the reader now treats populated rows as ready with a diagnostic note. Current-world live candidate evaluation is included in this phase because it only classifies the visible page after the read-only probe. Remaining risk moves to pagination/deeper listing-page behavior. No purchase path exists. |
+| Phase 5.5: Current-World Live Candidate Evaluation | Done for visible rows | After `Read Live Listings`, the plugin validates item/world, builds a confirmed live candidate pool, sorts by live unit price, supports favorable drift, respects HQ/max-unit/gil-cap constraints, and reports would-buy/skip/under-procure outcomes without purchasing. Verbose tables live in a diagnostics popout so the main Market Acquisition tab stays operational. |
+| Phase 6: Lifestream-Guided World-Batch Orchestration | Not started | Multi-world progression should delegate travel to Lifestream, expected first as `/li <world> mb`, then detect arrival/current world, rerun the live probe, and re-rank confirmed live candidates. This is not a hand-rolled world-travel UI automation phase. |
 | Phase 7: Purchase Mechanism Investigation | Not started | Blocks any real purchase executor. Must prove the purchase path, success/failure observation, and safe stop behavior with low-value current-world tests. |
 | Phase 8: Guarded Purchase Execution | Blocked | Only starts if Phase 7 proves a safe purchase mechanism. |
-| Phase 9: Travel Automation Spike | Not started | Can run after Phase 6; travel automation remains gated behind documented UI preconditions/postconditions. |
+| Phase 9: Travel Automation Spike | Deferred | Only needed if Lifestream cannot cover the required region/world routes. Until then, travel work is an integration/orchestration problem rather than native aetheryte automation. |
 | Phase 10: Craft Architect Plan Integration | Deferred | Wait until the core loop is proven and a clean HTTP/JSON service boundary exists. |
 
 ## Phase 0: Baseline Alignment
@@ -329,6 +330,7 @@ Read and reconcile live market board listings from the game without sending any 
 - Reconciliation requires the current market-board world to match a world batch in the prepared plan.
 - Planned listings are advisory rows. Live rows become executable only after item id, world, HQ policy, unit price threshold, listing id, retainer id, quantity, and purchase preconditions are read from the current market board state.
 - Missing planned listings, cheaper replacement listings, extra below-threshold stock, and changed quantities are classified explicitly. Favorable changes can produce executable candidates; unsafe or ambiguous changes block the affected candidate.
+- Current-world live candidate evaluation is treated as Phase 5.5, not full Phase 6, because it only works on the current visible market-board page and does not advance through world batches.
 - The probe reads `SearchItemId`, `ListingCount`, `WaitingForListings`, and current `Listings` only.
 - Live proof on 2026-06-25 confirmed visible listing rows populate even when `WaitingForListings` remains true. When rows are visible, the reader treats the result as ready and includes a diagnostic message that the waiting flag was still set.
 - No callback, packet, purchase request, world-travel automation, market-board search automation, or row selection exists yet.
@@ -341,13 +343,14 @@ Read and reconcile live market board listings from the game without sending any 
 - `MarketMafioso/MarketAcquisition/MarketBoardListingReconciler.cs`
 - `MarketMafioso.Tests/MarketAcquisition/MarketBoardListingReconcilerTests.cs`
 - `MarketMafioso.Tests/MarketAcquisition/MarketBoardListingReaderTests.cs`
-- `MarketMafioso/Windows/MainWindow.cs` exposes the `Read Live Listings` probe and reconciliation table.
+- `MarketMafioso/Windows/MainWindow.cs` exposes the `Read Live Listings` probe and compact summary.
+- `MarketMafioso/Windows/MarketAcquisitionDiagnosticsWindow.cs` exposes verbose reconciliation and live dry-run tables.
 
 ### Remaining Work
 
 - Confirm pagination and deeper listing-page behavior when more listings exist than the currently visible result set.
 - Confirm no-listings behavior on an item/world with no stock.
-- Keep strict reconciliation as diagnostics and use the Phase 6 candidate-pool builder for favorable drift and would-buy decisions.
+- Keep strict reconciliation as diagnostics and use the Phase 5.5 candidate-pool builder for favorable drift and would-buy decisions.
 
 ### Capability
 
@@ -388,39 +391,69 @@ Read and reconcile live market board listings from the game without sending any 
 - Unknown UI state produces a clear diagnostic.
 - Populated visible rows override a stale `WaitingForListings` flag and produce a ready result with a diagnostic note.
 
-## Phase 6: Guided World-Batch Dry Run
+## Phase 5.5: Current-World Live Candidate Evaluation
 
 ### Objective
 
-Add a local runner that walks through planned world batches with manual/guided travel and world-batch confirmation, still without purchasing.
+Build a confirmed buy/skip candidate pool from the current visible market-board page after the read-only probe, still without purchasing.
+
+### Implemented Files
+
+- `MarketMafioso/MarketAcquisition/MarketAcquisitionLiveDryRunModels.cs`
+- `MarketMafioso/MarketAcquisition/MarketAcquisitionLiveDryRunPlanner.cs`
+- `MarketMafioso/MarketAcquisition/MarketAcquisitionLiveDryRunPresenter.cs`
+- `MarketMafioso/Windows/MarketAcquisitionDiagnosticsWindow.cs`
+- `MarketMafioso.Tests/MarketAcquisition/MarketAcquisitionLiveDryRunPlannerTests.cs`
+- `MarketMafioso.Tests/MarketAcquisition/MarketAcquisitionLiveDryRunPresenterTests.cs`
+
+### Capability
+
+- Candidate evaluation runs only after a successful visible-page live market-board read.
+- Candidate evaluation validates item id and current world against the accepted request and prepared plan.
+- Candidate evaluation builds a confirmed candidate pool from live listings at or below max unit price.
+- Candidate evaluation sorts confirmed candidates by unit price before any future dry-run or purchase action.
+- Candidate evaluation records favorable drift such as cheaper listings, replacement listings, and more below-threshold stock.
+- Candidate evaluation reports per-listing `WouldBuy` or `Skipped` rows with explicit reasons such as above threshold, HQ mismatch, gil cap exceeded, or target already satisfied.
+- Candidate evaluation reports aggregate `Ready`, `UnderProcured`, or `NoSafeListings`.
+- The main plugin tab shows a compact summary; verbose reconciliation and candidate rows live in the diagnostics popout.
+
+### Exit Criteria
+
+- Current-world dry-run can classify the current visible page without purchase calls.
+- Main Market Acquisition tab remains compact.
+- Diagnostics popout contains verbose reconciliation and candidate tables.
+
+## Phase 6: Lifestream-Guided World-Batch Orchestration
+
+### Objective
+
+Add a local runner that walks through planned world batches by delegating travel to Lifestream and re-running live probe/candidate evaluation at each destination, still without purchasing.
 
 ### Proposed Files
 
-- Created first slice: `MarketMafioso/MarketAcquisition/MarketAcquisitionLiveDryRunModels.cs`
-- Created first slice: `MarketMafioso/MarketAcquisition/MarketAcquisitionLiveDryRunPlanner.cs`
-- Added first-slice tests in `MarketMafioso.Tests/MarketAcquisition/MarketAcquisitionLiveDryRunPlannerTests.cs`
 - Later runner files remain proposed:
   - `MarketMafioso/MarketAcquisition/MarketAcquisitionRunner.cs`
-  - `MarketMafioso/MarketAcquisition/WorldTravel/ManualWorldTravelDriver.cs`
+  - `MarketMafioso/MarketAcquisition/WorldTravel/LifestreamWorldTravelDriver.cs`
   - `MarketMafioso/MarketAcquisition/MarketAcquisitionDiagnostics.cs`
   - `MarketMafioso.Tests/MarketAcquisition/MarketAcquisitionRunnerTests.cs`
 
 ### Capability
 
-- Runner moves through planned worlds in order.
+- Runner moves through planned worlds in current best-price order.
+- Runner issues or guides Lifestream travel, expected first as `/li <world> mb`.
 - For each world, runner waits until current world matches expected world.
 - Runner waits for market board/listings to be available.
-- Runner builds a confirmed candidate pool from live listings at or below max unit price.
-- Runner sorts confirmed candidates by unit price before purchase or dry-run action.
-- Runner records favorable drift such as cheaper listings, replacement listings, and more below-threshold stock.
-- First slice performs these candidate-pool decisions for the current visible market-board result set immediately after the read-only probe.
-- First slice reports per-listing `WouldBuy` or `Skipped` rows with explicit reasons such as above threshold, HQ mismatch, gil cap exceeded, or target already satisfied.
-- First slice reports aggregate `Ready`, `UnderProcured`, or `NoSafeListings`.
+- Runner reuses Phase 5.5 candidate evaluation at each destination.
+- Runner re-ranks remaining world stops if a live-confirmed cheaper candidate changes the best path.
 - Runner shows one world-batch confirmation.
 - `Dry Run Batch` records what would be bought and advances.
 
 ### Investigation Points
 
+- Lifestream integration:
+  - Confirm the command shape for same-data-center and cross-data-center market board travel.
+  - Confirm whether `/li <world> mb` can be issued from the plugin chat/command path or should be presented as a copyable/manual command.
+  - Confirm failure messages for inaccessible, congested, or temporarily unavailable worlds.
 - Current world detection:
   - Confirm stable source for current world after world travel.
   - Confirm timing after travel completes.
@@ -434,7 +467,7 @@ Add a local runner that walks through planned world batches with manual/guided t
 
 ### Exit Criteria
 
-- User can dry-run a full multi-world plan manually.
+- User can dry-run a full multi-world plan with Lifestream-assisted travel.
 - Runner can pause, stop, fail, and complete with clear status.
 - Server receives progress/failure/completion reports.
 - Confirmation invalidates if current world, current search item, confirmed candidate identity, confirmed candidate price, confirmed candidate quantity, or remaining configured budget changes before batch action.
@@ -524,11 +557,11 @@ Add live purchases behind strict gates if Phase 7 proves the mechanism.
 - Unknown purchase response stops the runner.
 - Execution audit records enough listing identity and validation facts to explain why a purchase was attempted, without storing secrets or raw unstable client dumps by default.
 
-## Phase 9: Travel Automation Spike
+## Phase 9: Native Travel Automation Spike
 
 ### Objective
 
-Investigate whether regional world travel can be automated safely, including both same-data-center world travel and cross-data-center travel within the configured FFXIV region.
+Investigate native regional world travel automation only if Lifestream-assisted travel cannot cover the required route.
 
 ### Proposed Files
 
@@ -553,8 +586,8 @@ Investigate whether regional world travel can be automated safely, including bot
 
 ### Exit Criteria
 
-- If safe, add an `AetheryteWorldTravelDriver` plan.
-- If unsafe or unstable, keep manual/guided travel as the supported mode.
+- If safe and still needed, add an `AetheryteWorldTravelDriver` plan.
+- If unsafe, unstable, or unnecessary because Lifestream covers the route, keep Lifestream/manual travel as the supported mode.
 - Automated travel remains blocked until the probe documents visible preconditions, action steps, postconditions, timeout behavior, and all known failure surfaces.
 
 ## Phase 10: Craft Architect Plan Integration
@@ -616,10 +649,11 @@ Replace or augment the simple local planner with Craft Architect's richer market
 3. Phase 3: Plugin Request Pickup UI.
 4. Phase 4: Market Planning Dry Run.
 5. Phase 5: Live Market Board Read-Only Probe.
-6. Phase 6: Guided World-Batch Dry Run.
-7. Phase 7: Purchase Mechanism Investigation.
-8. Phase 8 only if Phase 7 passes.
-9. Phase 9 can run in parallel after Phase 6.
-10. Phase 10 can wait until the core loop is proven.
+6. Phase 5.5: Current-World Live Candidate Evaluation.
+7. Phase 6: Lifestream-Guided World-Batch Orchestration.
+8. Phase 7: Purchase Mechanism Investigation.
+9. Phase 8 only if Phase 7 passes.
+10. Phase 9 is deferred unless Lifestream cannot cover required routes.
+11. Phase 10 can wait until the core loop is proven.
 
 The first milestone worth deploying to the VPS is Phase 3: dashboard request creation plus plugin pickup. That proves the novel server-to-plugin workflow without touching game automation.

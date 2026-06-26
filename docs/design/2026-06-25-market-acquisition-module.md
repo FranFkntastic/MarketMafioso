@@ -446,22 +446,24 @@ Every state should have:
 
 ## World Travel Boundary
 
-The end-state feature should be able to travel worlds automatically when safe. The first implementation should treat travel as its own spike because MarketMafioso does not currently automate world travel.
+The end-state feature should be able to move through world stops efficiently, but MarketMafioso should not hand-roll native world-travel UI automation while Lifestream can cover the route. The first implementation should treat travel as a Lifestream-assisted orchestration boundary.
 
 Travel targets should come from accepted world batches, not from every world in a region. If a request uses `recommended`, the plugin should only guide or automate travel to those recommended worlds. If a request uses `allWorldSweep`, the UI should make that broader mode obvious before execution.
 
 Recommended first slice:
 
-- Support guided travel:
+- Support Lifestream-guided travel:
   - Show the next destination.
+  - Issue or present the expected `/li <world> mb` command.
   - Wait until the current world matches the batch world.
   - Continue automatically once the world is detected.
 - Keep an internal `IWorldTravelDriver` boundary:
-  - `ManualWorldTravelDriver`
+  - `LifestreamWorldTravelDriver`
+  - `ManualWorldTravelDriver` as fallback
   - Future `AetheryteWorldTravelDriver`
   - Future `DataCenterTravelDriver`
 
-This lets us build the purchase planner and live market-board validation without mixing in the riskiest UI-navigation work on day one.
+This lets us build the purchase planner and live market-board validation without mixing in native aetheryte UI-navigation work on day one.
 
 ## Purchase Execution Boundary
 
@@ -689,20 +691,22 @@ Manual verification:
 - Produce diagnostics.
 - Current patch proof succeeded for visible rows. `WaitingForListings` can remain true while rows are visible, so populated rows are treated as ready with a diagnostic note.
 
-### Slice 3.5: Current-World Live Candidate Dry Run
+### Slice 3.5: Current-World Live Candidate Evaluation
 
 - Build confirmed candidates from the current visible live market-board result set.
 - Sort candidates by live unit price.
 - Include cheaper replacement listings and extra below-threshold stock as favorable drift.
 - Respect HQ policy, max unit price, and optional gil cap.
 - Report aggregate `Ready`, `UnderProcured`, or `NoSafeListings`.
-- Show per-row `WouldBuy` or `Skipped` decisions in the plugin UI.
+- Show a compact summary in the main plugin UI.
+- Put per-row `WouldBuy` or `Skipped` decisions in a diagnostics popout.
 - No row selection, purchase calls, travel automation, or server lifecycle completion.
 
-### Slice 4: Semi-Automatic World Batch Runner
+### Slice 4: Lifestream-Guided World Batch Runner
 
 - Add runner state machine.
-- Add manual/guided world travel driver.
+- Add Lifestream-assisted travel driver, expected first as `/li <world> mb`.
+- Detect arrival/current world before probing each destination.
 - Add batch confirmation UI.
 - Add dry-run batch execution.
 - Keep purchase executor disabled by default.
@@ -715,11 +719,11 @@ Manual verification:
 - Stop on unsafe or unknown response.
 - Add tests for every stop condition.
 
-### Slice 6: Regional Travel Automation Spike
+### Slice 6: Native Regional Travel Automation Spike
 
-- Investigate same-data-center and cross-data-center world travel UI automation within the configured region.
+- Investigate same-data-center and cross-data-center world travel UI automation only if Lifestream cannot cover required routes.
 - Add `AetheryteWorldTravelDriver` only after preconditions and postconditions are documented.
-- Keep manual travel available.
+- Keep Lifestream/manual travel available.
 
 ## Locked Defaults For First Implementation
 
