@@ -151,6 +151,16 @@ public static class MarketAcquisitionPlanner
         return batches;
     }
 
+    public static string ResolveNorthAmericaDataCenter(string worldName)
+    {
+        if (string.IsNullOrWhiteSpace(worldName))
+            throw new InvalidOperationException("World name is required before route data center sorting.");
+
+        return NorthAmericaDataCenters.TryGetValue(worldName.Trim(), out var dataCenter)
+            ? dataCenter
+            : throw new InvalidOperationException($"World {worldName} is not mapped to a North America data center.");
+    }
+
     private static MarketAcquisitionWorldBatch BuildWorldBatch(
         MarketAcquisitionRequestView request,
         string worldName,
@@ -187,6 +197,7 @@ public static class MarketAcquisitionPlanner
         return new MarketAcquisitionWorldBatch
         {
             WorldName = worldName,
+            DataCenter = ResolveNorthAmericaDataCenter(worldName),
             PlannedQuantity = plannedQuantity,
             PlannedGil = plannedGil,
             ExceedsRequestedQuantity = plannedQuantity > request.Quantity,
@@ -201,13 +212,15 @@ public static class MarketAcquisitionPlanner
         if (string.IsNullOrWhiteSpace(currentWorld))
             return batches;
 
-        var currentDataCenter = GetNorthAmericaDataCenter(currentWorld);
+        var currentDataCenter = ResolveNorthAmericaDataCenter(currentWorld);
         var indexedBatches = batches
             .Select((batch, index) => new
             {
                 Batch = batch,
                 Index = index,
-                DataCenter = GetNorthAmericaDataCenter(batch.WorldName),
+                DataCenter = string.IsNullOrWhiteSpace(batch.DataCenter)
+                    ? ResolveNorthAmericaDataCenter(batch.WorldName)
+                    : batch.DataCenter,
             })
             .ToList();
 
@@ -224,15 +237,5 @@ public static class MarketAcquisitionPlanner
             .ThenBy(entry => entry.Index)
             .Select(entry => entry.Batch)
             .ToList();
-    }
-
-    private static string GetNorthAmericaDataCenter(string worldName)
-    {
-        if (string.IsNullOrWhiteSpace(worldName))
-            throw new InvalidOperationException("World name is required before route data center sorting.");
-
-        return NorthAmericaDataCenters.TryGetValue(worldName.Trim(), out var dataCenter)
-            ? dataCenter
-            : throw new InvalidOperationException($"World {worldName} is not mapped to a North America data center.");
     }
 }

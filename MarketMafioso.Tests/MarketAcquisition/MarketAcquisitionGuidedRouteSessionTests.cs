@@ -9,6 +9,7 @@ public sealed class MarketAcquisitionGuidedRouteSessionTests
 
         Assert.Equal("Active", session.Status);
         Assert.Equal("Zalera", session.ActiveStop?.WorldName);
+        Assert.Equal("Crystal", session.ActiveStop?.DataCenter);
         Assert.Equal("/li Zalera mb", session.ActiveStop?.LifestreamCommand);
         Assert.Equal(["Pending", "Pending"], session.Stops.Select(stop => stop.Status).ToArray());
     }

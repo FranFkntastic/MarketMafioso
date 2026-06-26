@@ -163,6 +163,27 @@ public sealed class MarketAcquisitionPlannerTests
     }
 
     [Fact]
+    public void BuildPlan_PopulatesWorldBatchDataCenters()
+    {
+        var request = CreateRequest(quantity: 1_500, maxUnitPrice: 2_000, maxTotalGil: 0);
+        var listings = new[]
+        {
+            CreateListing("Ultros", quantity: 300, unitPrice: 1_000, listingId: "primal"),
+            CreateListing("Zalera", quantity: 300, unitPrice: 1_000, listingId: "crystal"),
+            CreateListing("Maduin", quantity: 300, unitPrice: 1_000, listingId: "dynamis"),
+        };
+
+        var plan = MarketMafioso.MarketAcquisition.MarketAcquisitionPlanner.BuildPlan(
+            request,
+            listings,
+            DateTimeOffset.UnixEpoch);
+
+        Assert.Contains(plan.WorldBatches, batch => batch.WorldName == "Ultros" && batch.DataCenter == "Primal");
+        Assert.Contains(plan.WorldBatches, batch => batch.WorldName == "Zalera" && batch.DataCenter == "Crystal");
+        Assert.Contains(plan.WorldBatches, batch => batch.WorldName == "Maduin" && batch.DataCenter == "Dynamis");
+    }
+
+    [Fact]
     public void BuildPlan_FailsWhenRouteWorldDataCenterIsUnknown()
     {
         var request = CreateRequest(quantity: 10, maxUnitPrice: 2_000, maxTotalGil: 0);

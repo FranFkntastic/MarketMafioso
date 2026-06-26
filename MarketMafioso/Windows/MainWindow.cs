@@ -424,9 +424,10 @@ public class MainWindow : Window, IDisposable
             return;
 
         var tableFlags = ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.Resizable;
-        if (ImGui.BeginTable("MarketAcquisitionPlanBatches", 6, tableFlags))
+        if (ImGui.BeginTable("MarketAcquisitionPlanBatches", 7, tableFlags))
         {
             ImGui.TableSetupColumn("World");
+            ImGui.TableSetupColumn("Data Center");
             ImGui.TableSetupColumn("Qty");
             ImGui.TableSetupColumn("Gil");
             ImGui.TableSetupColumn("Unit");
@@ -447,6 +448,8 @@ public class MainWindow : Window, IDisposable
                         ImGui.TextColored(ColMuted, "(over)");
                     }
 
+                    ImGui.TableNextColumn();
+                    ImGui.TextUnformatted(FormatRouteDataCenter(batch.DataCenter));
                     ImGui.TableNextColumn();
                     ImGui.TextUnformatted(listing.Quantity.ToString("N0"));
                     ImGui.TableNextColumn();
@@ -1110,9 +1113,10 @@ public class MainWindow : Window, IDisposable
 
     private void DrawGuidedRouteStops(IReadOnlyList<MarketAcquisitionGuidedRouteStop> stops)
     {
-        if (ImGui.BeginTable("MarketAcquisitionGuidedRouteStops", 5, ImGuiUi.InteractiveTableFlags))
+        if (ImGui.BeginTable("MarketAcquisitionGuidedRouteStops", 6, ImGuiUi.InteractiveTableFlags))
         {
             ImGui.TableSetupColumn("World");
+            ImGui.TableSetupColumn("Data Center");
             ImGui.TableSetupColumn("Status");
             ImGui.TableSetupColumn("Planned");
             ImGui.TableSetupColumn("Live");
@@ -1124,6 +1128,8 @@ public class MainWindow : Window, IDisposable
                 ImGui.TableNextRow();
                 ImGui.TableNextColumn();
                 ImGui.TextUnformatted(stop.WorldName);
+                ImGui.TableNextColumn();
+                ImGui.TextUnformatted(FormatRouteDataCenter(stop.DataCenter));
                 ImGui.TableNextColumn();
                 ImGui.TextColored(GetGuidedRouteStopColor(stop), stop.Status);
                 ImGui.TableNextColumn();
@@ -1395,6 +1401,9 @@ public class MainWindow : Window, IDisposable
     private static string FormatGil(uint gil) => $"{gil:N0} gil";
 
     private static string FormatGilCap(uint gil) => gil == 0 ? "No cap" : FormatGil(gil);
+
+    private static string FormatRouteDataCenter(string dataCenter) =>
+        string.IsNullOrWhiteSpace(dataCenter) ? "-" : dataCenter;
 
     private static string FormatWorldMode(string worldMode) =>
         worldMode switch

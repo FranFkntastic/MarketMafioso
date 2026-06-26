@@ -35,6 +35,9 @@ public sealed class MarketAcquisitionGuidedRouteSession
             .Select(batch => new MarketAcquisitionGuidedRouteStop
             {
                 WorldName = batch.WorldName,
+                DataCenter = string.IsNullOrWhiteSpace(batch.DataCenter)
+                    ? MarketAcquisitionPlanner.ResolveNorthAmericaDataCenter(batch.WorldName)
+                    : batch.DataCenter,
                 PlannedQuantity = batch.PlannedQuantity,
                 PlannedGil = batch.PlannedGil,
                 LifestreamCommand = BuildLifestreamCommand(batch.WorldName),
@@ -118,6 +121,7 @@ public sealed class MarketAcquisitionGuidedRouteSession
 public sealed record MarketAcquisitionGuidedRouteStop
 {
     public string WorldName { get; init; } = string.Empty;
+    public string DataCenter { get; init; } = string.Empty;
     public string LifestreamCommand { get; init; } = string.Empty;
     public uint PlannedQuantity { get; init; }
     public uint PlannedGil { get; init; }

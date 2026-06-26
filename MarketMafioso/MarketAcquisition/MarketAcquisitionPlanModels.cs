@@ -32,6 +32,7 @@ public sealed record MarketAcquisitionPlannedListing
 public sealed record MarketAcquisitionWorldBatch
 {
     public string WorldName { get; init; } = string.Empty;
+    public string DataCenter { get; init; } = string.Empty;
     public uint PlannedQuantity { get; init; }
     public uint PlannedGil { get; init; }
     public bool ExceedsRequestedQuantity { get; init; }
