@@ -228,14 +228,18 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
 
         StatusMessage = searchResult.Message;
         SearchSubmitted = searchResult.SearchSent;
+        var details = new Dictionary<string, string?>
+        {
+            ["status"] = searchResult.Status,
+            ["searchSubmitted"] = SearchSubmitted.ToString(),
+        };
+        foreach (var pair in searchResult.Details)
+            details[pair.Key] = pair.Value;
+
         diagnostics.Record(
             "item-search",
             searchResult.Message,
-            new Dictionary<string, string?>
-            {
-                ["status"] = searchResult.Status,
-                ["searchSubmitted"] = SearchSubmitted.ToString(),
-            });
+            details);
         return searchResult.SearchSent
             ? MarketAcquisitionRouteActionResult.Ok(searchResult.Message)
             : MarketAcquisitionRouteActionResult.Fail(searchResult.Message);

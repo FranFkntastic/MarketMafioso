@@ -22,4 +22,16 @@ public sealed class MarketBoardItemSearchDriverTests
     {
         Assert.False(MarketBoardItemSearchDriver.ShouldResetToNormalSearch(0));
     }
+
+    [Fact]
+    public void ChooseAction_ReturnsResetModeForWishlistMode()
+    {
+        Assert.Equal(MarketBoardItemSearchAction.ResetMode, MarketBoardItemSearchDriver.ChooseAction(5));
+    }
+
+    [Fact]
+    public void ChooseAction_ReturnsSubmitSearchForNormalMode()
+    {
+        Assert.Equal(MarketBoardItemSearchAction.SubmitSearch, MarketBoardItemSearchDriver.ChooseAction(0));
+    }
 }

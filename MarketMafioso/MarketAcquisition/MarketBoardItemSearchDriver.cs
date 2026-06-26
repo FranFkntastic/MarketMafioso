@@ -1,12 +1,15 @@
 using System;
+using System.Collections.Generic;
 using Dalamud.Plugin.Services;
 using FFXIVClientStructs.FFXIV.Client.UI;
+using FFXIVClientStructs.FFXIV.Component.GUI;
 
 namespace MarketMafioso.MarketAcquisition;
 
 public sealed class MarketBoardItemSearchDriver
 {
     private const string ItemSearchAddon = "ItemSearch";
+    private const string ItemSearchResultAddon = "ItemSearchResult";
 
     private readonly IGameGui gameGui;
 
@@ -34,9 +37,24 @@ public sealed class MarketBoardItemSearchDriver
         }
 
         var searchText = itemName.Trim();
-        var resetMode = ShouldResetToNormalSearch((uint)addon->Mode);
-        if (resetMode)
+        var mode = (uint)addon->Mode;
+        var details = new Dictionary<string, string?>
+        {
+            ["mode"] = FormatMode(mode),
+            ["modeRaw"] = mode.ToString(),
+            ["itemSearchResultVisible"] = IsAddonReady(gameGui.GetAddonByName<AtkUnitBase>(ItemSearchResultAddon, 1)).ToString(),
+        };
+
+        if (ChooseAction(mode) == MarketBoardItemSearchAction.ResetMode)
+        {
             addon->SetModeFilter(AddonItemSearch.SearchMode.Normal, 0);
+            return new MarketBoardItemSearchResult
+            {
+                Status = "ModeReset",
+                Message = $"Resetting market board item search mode from {FormatMode(mode)} before searching for {searchText} ({itemId}).",
+                Details = details,
+            };
+        }
 
         addon->SearchText.SetString(searchText);
         addon->SearchText2.SetString(searchText);
@@ -47,9 +65,8 @@ public sealed class MarketBoardItemSearchDriver
         return new MarketBoardItemSearchResult
         {
             Status = "SearchSent",
-            Message = resetMode
-                ? $"Searching market board for {searchText} ({itemId}) after resetting item search mode."
-                : $"Searching market board for {searchText} ({itemId}).",
+            Message = $"Searching market board for {searchText} ({itemId}).",
+            Details = details,
         };
     }
 
@@ -57,11 +74,37 @@ public sealed class MarketBoardItemSearchDriver
     {
         return mode != (uint)AddonItemSearch.SearchMode.Normal;
     }
+
+    internal static MarketBoardItemSearchAction ChooseAction(uint mode)
+    {
+        return ShouldResetToNormalSearch(mode)
+            ? MarketBoardItemSearchAction.ResetMode
+            : MarketBoardItemSearchAction.SubmitSearch;
+    }
+
+    private static unsafe bool IsAddonReady(AtkUnitBase* addon)
+    {
+        return addon != null && addon->IsReady && addon->IsVisible;
+    }
+
+    private static string FormatMode(uint mode)
+    {
+        return Enum.IsDefined(typeof(AddonItemSearch.SearchMode), mode)
+            ? ((AddonItemSearch.SearchMode)mode).ToString()
+            : mode.ToString();
+    }
+}
+
+public enum MarketBoardItemSearchAction
+{
+    ResetMode,
+    SubmitSearch,
 }
 
 public sealed record MarketBoardItemSearchResult
 {
     public string Status { get; init; } = string.Empty;
     public string Message { get; init; } = string.Empty;
+    public IReadOnlyDictionary<string, string?> Details { get; init; } = new Dictionary<string, string?>();
     public bool SearchSent => string.Equals(Status, "SearchSent", StringComparison.OrdinalIgnoreCase);
 }

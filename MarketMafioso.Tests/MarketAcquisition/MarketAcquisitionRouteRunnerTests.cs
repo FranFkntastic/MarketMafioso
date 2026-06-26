@@ -208,6 +208,31 @@ public sealed class MarketAcquisitionRouteRunnerTests
         Assert.Equal(10u, runner.Stops[0].WouldBuyQuantity);
     }
 
+    [Fact]
+    public void RecordSearchResult_DoesNotMarkSubmittedWhenModeWasOnlyReset()
+    {
+        var directory = CreateTempDirectory();
+        using var runner = new MarketMafioso.MarketAcquisition.MarketAcquisitionRouteRunner(directory);
+        runner.Start(CreatePlan("Maduin"), enableDiagnostics: true);
+        runner.RecordCurrentWorld("Maduin");
+
+        var result = runner.RecordSearchResult(new MarketMafioso.MarketAcquisition.MarketBoardItemSearchResult
+        {
+            Status = "ModeReset",
+            Message = "Resetting market board item search mode before submitting.",
+            Details = new Dictionary<string, string?>
+            {
+                ["mode"] = "Wishlist",
+            },
+        });
+
+        Assert.False(result.Success);
+        Assert.False(runner.SearchSubmitted);
+        var text = ReadLog(runner.LastDiagnosticFilePath!);
+        Assert.Contains("mode: Wishlist", text, StringComparison.Ordinal);
+        Assert.Contains("searchSubmitted: False", text, StringComparison.Ordinal);
+    }
+
     private static MarketMafioso.MarketAcquisition.MarketAcquisitionRouteRunner CreateRunner() =>
         new(CreateTempDirectory());
 
