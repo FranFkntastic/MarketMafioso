@@ -38,10 +38,12 @@ public sealed class MarketBoardItemSearchDriver
 
         var searchText = itemName.Trim();
         var mode = (uint)addon->Mode;
+        var partialSearchWasEnabled = addon->PartialMatch;
         var details = new Dictionary<string, string?>
         {
             ["mode"] = FormatMode(mode),
             ["modeRaw"] = mode.ToString(),
+            ["partialSearch"] = partialSearchWasEnabled.ToString(),
             ["itemSearchResultVisible"] = IsAddonReady(gameGui.GetAddonByName<AtkUnitBase>(ItemSearchResultAddon, 1)).ToString(),
         };
 
@@ -54,6 +56,13 @@ public sealed class MarketBoardItemSearchDriver
                 Message = $"Resetting market board item search mode from {FormatMode(mode)} before searching for {searchText} ({itemId}).",
                 Details = details,
             };
+        }
+
+        if (ShouldDisablePartialSearch(partialSearchWasEnabled))
+        {
+            addon->PartialMatch = false;
+            if (addon->PartialSearchCheckBox != null)
+                addon->PartialSearchCheckBox->AtkComponentButton.SetChecked(false);
         }
 
         addon->SearchText.SetString(searchText);
@@ -80,6 +89,11 @@ public sealed class MarketBoardItemSearchDriver
         return ShouldResetToNormalSearch(mode)
             ? MarketBoardItemSearchAction.ResetMode
             : MarketBoardItemSearchAction.SubmitSearch;
+    }
+
+    internal static bool ShouldDisablePartialSearch(bool partialSearchEnabled)
+    {
+        return partialSearchEnabled;
     }
 
     private static unsafe bool IsAddonReady(AtkUnitBase* addon)

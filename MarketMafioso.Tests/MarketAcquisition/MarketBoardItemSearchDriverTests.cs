@@ -34,4 +34,16 @@ public sealed class MarketBoardItemSearchDriverTests
     {
         Assert.Equal(MarketBoardItemSearchAction.SubmitSearch, MarketBoardItemSearchDriver.ChooseAction(0));
     }
+
+    [Fact]
+    public void ShouldDisablePartialSearch_ReturnsTrueWhenPartialSearchIsEnabled()
+    {
+        Assert.True(MarketBoardItemSearchDriver.ShouldDisablePartialSearch(true));
+    }
+
+    [Fact]
+    public void ShouldDisablePartialSearch_ReturnsFalseWhenPartialSearchIsAlreadyDisabled()
+    {
+        Assert.False(MarketBoardItemSearchDriver.ShouldDisablePartialSearch(false));
+    }
 }
