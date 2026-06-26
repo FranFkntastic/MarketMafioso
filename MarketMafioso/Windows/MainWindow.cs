@@ -740,6 +740,10 @@ public class MainWindow : Window, IDisposable
             }
 
             ImGui.SameLine();
+            if (ImGui.Button("Execute /li Command"))
+                ExecuteGuidedRouteCommand();
+
+            ImGui.SameLine();
             if (ImGui.Button("Check Current World"))
                 RecordGuidedRouteCurrentWorld();
         }
@@ -817,6 +821,22 @@ public class MainWindow : Window, IDisposable
         {
             guidedRouteStatus = $"Unable to check current world. {ex.Message}";
             log.Warning(ex, "[MarketMafioso] Unable to check guided route current world.");
+        }
+    }
+
+    private void ExecuteGuidedRouteCommand()
+    {
+        try
+        {
+            var route = acquisitionGuidedRoute ??
+                        throw new InvalidOperationException("No guided route has started.");
+            var result = route.ExecuteActiveStop(Plugin.CommandManager.ProcessCommand);
+            guidedRouteStatus = result.Message;
+        }
+        catch (Exception ex)
+        {
+            guidedRouteStatus = $"Unable to execute Lifestream command. {ex.Message}";
+            log.Warning(ex, "[MarketMafioso] Unable to execute guided route Lifestream command.");
         }
     }
 

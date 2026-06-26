@@ -59,6 +59,21 @@ public sealed class MarketAcquisitionGuidedRouteSession
         return MarketAcquisitionGuidedRouteResult.Ok($"Arrived on {stop.WorldName}. Run the live market board probe when the item search results are visible.");
     }
 
+    public MarketAcquisitionGuidedRouteResult ExecuteActiveStop(Func<string, bool> processCommand)
+    {
+        ArgumentNullException.ThrowIfNull(processCommand);
+
+        var stop = ActiveStop;
+        if (stop == null)
+            return MarketAcquisitionGuidedRouteResult.Fail("Guided route is already complete.");
+
+        if (!processCommand(stop.LifestreamCommand))
+            return MarketAcquisitionGuidedRouteResult.Fail($"Lifestream command was not handled: {stop.LifestreamCommand}");
+
+        stop.Status = "TravelCommandSent";
+        return MarketAcquisitionGuidedRouteResult.Ok($"Sent {stop.LifestreamCommand}. Waiting for arrival on {stop.WorldName}.");
+    }
+
     public MarketAcquisitionGuidedRouteResult RecordProbe(string currentWorld, MarketAcquisitionLiveDryRun dryRun)
     {
         ArgumentNullException.ThrowIfNull(dryRun);

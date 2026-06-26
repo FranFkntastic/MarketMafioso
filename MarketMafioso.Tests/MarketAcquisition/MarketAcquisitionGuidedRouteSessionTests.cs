@@ -26,6 +26,35 @@ public sealed class MarketAcquisitionGuidedRouteSessionTests
     }
 
     [Fact]
+    public void ExecuteActiveStop_SendsLifestreamCommand()
+    {
+        var session = MarketMafioso.MarketAcquisition.MarketAcquisitionGuidedRouteSession.Start(CreatePlan("Zalera"));
+        string? command = null;
+
+        var result = session.ExecuteActiveStop(value =>
+        {
+            command = value;
+            return true;
+        });
+
+        Assert.True(result.Success);
+        Assert.Equal("/li Zalera mb", command);
+        Assert.Equal("TravelCommandSent", session.ActiveStop?.Status);
+    }
+
+    [Fact]
+    public void ExecuteActiveStop_ReportsUnhandledCommand()
+    {
+        var session = MarketMafioso.MarketAcquisition.MarketAcquisitionGuidedRouteSession.Start(CreatePlan("Zalera"));
+
+        var result = session.ExecuteActiveStop(_ => false);
+
+        Assert.False(result.Success);
+        Assert.Equal("Pending", session.ActiveStop?.Status);
+        Assert.Contains("not handled", result.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void RecordCurrentWorld_ReportsWhenTravelHasNotReachedActiveStop()
     {
         var session = MarketMafioso.MarketAcquisition.MarketAcquisitionGuidedRouteSession.Start(CreatePlan("Zalera"));
