@@ -358,6 +358,9 @@ public sealed class MarketAcquisitionRequestEndpointTests
         Assert.Equal(HttpStatusCode.OK, progress.StatusCode);
         using var progressJson = JsonDocument.Parse(await progress.Content.ReadAsStringAsync());
         Assert.Equal("Running", progressJson.RootElement.GetProperty("status").GetString());
+        Assert.Equal("progress", progressJson.RootElement.GetProperty("latestEventType").GetString());
+        Assert.Equal("PreparingWorldBatch", progressJson.RootElement.GetProperty("latestRunnerState").GetString());
+        Assert.Equal("Preparing Gilgamesh batch", progressJson.RootElement.GetProperty("latestMessage").GetString());
 
         var complete = await SendWithKeyAsync(
             client,
@@ -374,6 +377,8 @@ public sealed class MarketAcquisitionRequestEndpointTests
         Assert.Equal(HttpStatusCode.OK, complete.StatusCode);
         using var completeJson = JsonDocument.Parse(await complete.Content.ReadAsStringAsync());
         Assert.Equal("Complete", completeJson.RootElement.GetProperty("status").GetString());
+        Assert.Equal("complete", completeJson.RootElement.GetProperty("latestEventType").GetString());
+        Assert.Equal("Done", completeJson.RootElement.GetProperty("latestMessage").GetString());
 
         var failAfterComplete = await SendWithKeyAsync(
             client,

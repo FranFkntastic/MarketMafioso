@@ -1053,6 +1053,9 @@ static string RenderAcquisitionDashboard(
     var latestRequestStatus = latestRequest == null
         ? "Idle"
         : FormatAcquisitionStatus(latestRequest.Status);
+    var latestRequestEvent = latestRequest == null
+        ? "-"
+        : FormatAcquisitionLatestEvent(latestRequest);
     var latestRequestExpiry = latestRequest == null
         ? "-"
         : FormatAcquisitionExpiry(latestRequest);
@@ -1415,6 +1418,18 @@ static string RenderAcquisitionDashboard(
                 .status.running { background: #3a3020; color: #ffe4a8; }
                 .status.complete { background: #1e3a2b; color: #c8f0d5; }
                 .status.failed { background: #3d2528; color: #ffd2d6; }
+                .status-stack {
+                    display: grid;
+                    gap: 4px;
+                    min-width: 0;
+                }
+                .lifecycle-note {
+                    color: var(--muted);
+                    font-size: 12px;
+                    overflow: hidden;
+                    text-overflow: ellipsis;
+                    white-space: nowrap;
+                }
                 .detail {
                     display: grid;
                     grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -1541,7 +1556,7 @@ static string RenderAcquisitionDashboard(
                             <div class="metric"><span>Selected request</span><strong>{{Html(selectedRequestName)}}</strong></div>
                             <div class="metric"><span>Pickup endpoint</span><strong>Ready</strong></div>
                             <div class="metric"><span>Expires in</span><strong>{{Html(latestRequestExpiry)}}</strong></div>
-                            <div class="metric"><span>Plugin status</span><strong>{{Html(latestRequestStatus)}}</strong></div>
+                            <div class="metric"><span>Plugin status</span><strong>{{Html(latestRequestStatus)}}</strong><span>{{Html(latestRequestEvent)}}</span></div>
                         </div>
                     </section>
                 </main>
@@ -1839,6 +1854,7 @@ static string RenderAcquisitionQueueRows(
     return string.Join(Environment.NewLine, requests.Select(request =>
     {
         var actions = RenderAcquisitionRequestActions(request, pathBase, csrfToken);
+        var latestEvent = RenderAcquisitionLatestEvent(request);
         return
         $$"""
         <tr>
@@ -1847,7 +1863,7 @@ static string RenderAcquisitionQueueRows(
             <td class="number">{{FormatGil(request.MaxUnitPrice)}}</td>
             <td>{{Html(FormatWorldMode(request.WorldMode))}}</td>
             <td>{{Html(request.TargetCharacterName)}} @ {{Html(request.TargetWorld)}}</td>
-            <td><span class="status {{Html(AcquisitionStatusClass(request.Status))}}">{{Html(FormatAcquisitionStatus(request.Status))}}</span></td>
+            <td><div class="status-stack"><span class="status {{Html(AcquisitionStatusClass(request.Status))}}">{{Html(FormatAcquisitionStatus(request.Status))}}</span>{{latestEvent}}</div></td>
             <td>{{Html(FormatAcquisitionAge(request.CreatedAtUtc))}}</td>
             <td class="actions">{{actions}}</td>
         </tr>
@@ -1916,6 +1932,26 @@ static string FormatAcquisitionStatus(string status) =>
         MarketAcquisitionStatuses.Cancelled => "Cancelled",
         _ => status,
     };
+
+static string RenderAcquisitionLatestEvent(MarketAcquisitionRequestView request)
+{
+    var latestEvent = FormatAcquisitionLatestEvent(request);
+    return latestEvent == "-"
+        ? string.Empty
+        : $"""<span class="lifecycle-note" title="{Html(latestEvent)}">{Html(latestEvent)}</span>""";
+}
+
+static string FormatAcquisitionLatestEvent(MarketAcquisitionRequestView request)
+{
+    var message = request.LatestMessage ?? request.LatestReason ?? request.LatestRunnerState;
+    if (string.IsNullOrWhiteSpace(message))
+        return "-";
+
+    var prefix = request.LatestRunnerState ?? request.LatestEventType;
+    return string.IsNullOrWhiteSpace(prefix)
+        ? message
+        : $"{prefix}: {message}";
+}
 
 static string AcquisitionStatusClass(string status) =>
     status switch

@@ -54,6 +54,8 @@ public class MainWindow : Window, IDisposable
     private DateTimeOffset nextGuidedRouteMonitorUtc = DateTimeOffset.MinValue;
     private int marketSearchInputSnapshotIndex;
     private bool guidedRouteProbeRunning = false;
+    private long guidedRouteProgressReportSequence;
+    private string? lastGuidedRouteProgressReportKey;
     private bool acquisitionRequestBusy = false;
     private string acquisitionStatus = "No dashboard request has been fetched this session.";
     private CancellationTokenSource? acquisitionRequestCancellation;
@@ -382,7 +384,7 @@ public class MainWindow : Window, IDisposable
 
         ImGui.SameLine();
         var canPrepare = !acquisitionRequestBusy &&
-                         string.Equals(claimedAcquisitionRequest.Status, "AcceptedInPlugin", StringComparison.OrdinalIgnoreCase);
+                         IsAcceptedOrRunning(claimedAcquisitionRequest.Status);
         if (ImGuiUi.Button("Prepare Plan", canPrepare))
             _ = PrepareMarketAcquisitionPlanAsync();
 
@@ -590,6 +592,10 @@ public class MainWindow : Window, IDisposable
             route.FailRoute($"Unable to monitor guided route. {ex.Message}", ex);
             log.Warning(ex, "[MarketMafioso] Unable to monitor guided market acquisition route.");
         }
+        finally
+        {
+            ReportGuidedRouteProgress();
+        }
     }
 
     private static unsafe bool TryCloseMarketBoardWindows()
@@ -655,6 +661,7 @@ public class MainWindow : Window, IDisposable
 
             guidedRouteProbeRunning = false;
             nextGuidedRouteMonitorUtc = DateTimeOffset.UtcNow.AddSeconds(2);
+            ReportGuidedRouteProgress();
         }
     }
 
@@ -919,7 +926,10 @@ public class MainWindow : Window, IDisposable
         if (marketAcquisitionRouteRunner.IsPaused)
         {
             if (ImGuiUi.Button("Resume", true))
+            {
                 marketAcquisitionRouteRunner.Resume();
+                ReportGuidedRouteProgress();
+            }
         }
         else
         {
@@ -927,6 +937,7 @@ public class MainWindow : Window, IDisposable
             {
                 marketBoardApproachService.StopNavigation();
                 marketAcquisitionRouteRunner.Pause();
+                ReportGuidedRouteProgress();
             }
         }
 
@@ -935,6 +946,7 @@ public class MainWindow : Window, IDisposable
         {
             marketBoardApproachService.StopNavigation();
             marketAcquisitionRouteRunner.Stop();
+            ReportGuidedRouteProgress();
         }
 
         ImGui.SameLine();
@@ -1017,10 +1029,12 @@ public class MainWindow : Window, IDisposable
             marketAcquisitionLiveDryRun = null;
             guidedRouteProbeRunning = false;
             nextGuidedRouteMonitorUtc = DateTimeOffset.MinValue;
+            ReportGuidedRouteProgress();
         }
         catch (Exception ex)
         {
             marketAcquisitionRouteRunner.FailRoute($"Unable to start guided route. {ex.Message}", ex);
+            ReportGuidedRouteProgress();
             log.Warning(ex, "[MarketMafioso] Unable to start guided market acquisition route.");
         }
     }
@@ -1038,10 +1052,12 @@ public class MainWindow : Window, IDisposable
             marketAcquisitionLiveDryRun = null;
             guidedRouteProbeRunning = false;
             nextGuidedRouteMonitorUtc = DateTimeOffset.MinValue;
+            ReportGuidedRouteProgress();
         }
         catch (Exception ex)
         {
             marketAcquisitionRouteRunner.FailRoute($"Unable to restart guided route. {ex.Message}", ex);
+            ReportGuidedRouteProgress();
             log.Warning(ex, "[MarketMafioso] Unable to restart guided market acquisition route.");
         }
     }
@@ -1071,7 +1087,69 @@ public class MainWindow : Window, IDisposable
         marketBoardApproachService.StopNavigation();
         marketAcquisitionRouteRunner.Reset(status);
         guidedRouteProbeRunning = false;
+        lastGuidedRouteProgressReportKey = null;
         nextGuidedRouteMonitorUtc = DateTimeOffset.MinValue;
+    }
+
+    private void ReportGuidedRouteProgress()
+    {
+        var claimed = claimedAcquisitionRequest;
+        if (claimed == null ||
+            string.IsNullOrWhiteSpace(claimed.ClaimToken) ||
+            string.IsNullOrWhiteSpace(config.ApiKey) ||
+            string.IsNullOrWhiteSpace(config.ServerUrl) ||
+            string.Equals(marketAcquisitionRouteRunner.State, "Idle", StringComparison.OrdinalIgnoreCase))
+            return;
+
+        var runnerState = marketAcquisitionRouteRunner.State;
+        var message = marketAcquisitionRouteRunner.StatusMessage;
+        var reportKey = $"{claimed.Id}|{runnerState}|{message}";
+        if (string.Equals(lastGuidedRouteProgressReportKey, reportKey, StringComparison.Ordinal))
+            return;
+
+        lastGuidedRouteProgressReportKey = reportKey;
+        var idempotencyKey = $"{config.PluginInstanceId}-route-{Interlocked.Increment(ref guidedRouteProgressReportSequence)}";
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                var updated = string.Equals(runnerState, "Failed", StringComparison.OrdinalIgnoreCase)
+                    ? await acquisitionClient.FailAsync(
+                        config.ServerUrl,
+                        config.ApiKey,
+                        claimed.Id,
+                        claimed.ClaimToken,
+                        idempotencyKey,
+                        message,
+                        cancellation.Token).ConfigureAwait(false)
+                    : await acquisitionClient.ReportProgressAsync(
+                        config.ServerUrl,
+                        config.ApiKey,
+                        claimed.Id,
+                        claimed.ClaimToken,
+                        idempotencyKey,
+                        runnerState,
+                        message,
+                        cancellation.Token).ConfigureAwait(false);
+
+                if (claimedAcquisitionRequest?.Id == claimed.Id)
+                {
+                    claimedAcquisitionRequest = claimed with { Status = updated.Status };
+                    MarketAcquisitionClaimPersistence.Save(
+                        config,
+                        claimedAcquisitionRequest,
+                        claimedAcceptIdempotencyKey,
+                        claimedRejectIdempotencyKey);
+                    config.Save();
+                }
+            }
+            catch (Exception ex)
+            {
+                acquisitionStatus = $"Route progress report failed: {ex.Message}";
+                log.Warning(ex, "[MarketMafioso] Unable to report market acquisition route progress.");
+            }
+        });
     }
 
     private Vector4 GetGuidedRouteStatusColor()
@@ -1102,6 +1180,10 @@ public class MainWindow : Window, IDisposable
             "Arrived" => ColHeader,
             _ => ColMuted,
         };
+
+    private static bool IsAcceptedOrRunning(string status) =>
+        string.Equals(status, "AcceptedInPlugin", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(status, "Running", StringComparison.OrdinalIgnoreCase);
 
     private async Task RunAcquisitionRequestAsync(Func<CancellationToken, Task> action)
     {

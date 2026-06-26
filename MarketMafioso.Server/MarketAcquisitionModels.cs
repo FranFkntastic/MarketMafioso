@@ -59,6 +59,11 @@ public sealed record MarketAcquisitionRequestView
     public uint MaxUnitPrice { get; init; }
     public uint MaxTotalGil { get; init; }
     public string WorldMode { get; init; } = string.Empty;
+    public string? LatestEventType { get; init; }
+    public string? LatestRunnerState { get; init; }
+    public string? LatestMessage { get; init; }
+    public string? LatestReason { get; init; }
+    public DateTimeOffset? LatestEventAtUtc { get; init; }
 }
 
 public sealed record MarketAcquisitionClaimView
@@ -80,6 +85,11 @@ public sealed record MarketAcquisitionClaimView
     public uint MaxUnitPrice { get; init; }
     public uint MaxTotalGil { get; init; }
     public string WorldMode { get; init; } = string.Empty;
+    public string? LatestEventType { get; init; }
+    public string? LatestRunnerState { get; init; }
+    public string? LatestMessage { get; init; }
+    public string? LatestReason { get; init; }
+    public DateTimeOffset? LatestEventAtUtc { get; init; }
     public string ClaimToken { get; init; } = string.Empty;
 }
 

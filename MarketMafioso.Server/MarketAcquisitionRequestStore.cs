@@ -61,7 +61,8 @@ public sealed class MarketAcquisitionRequestStore
             expiresAtUtc: now.AddSeconds(expirySeconds),
             claimedAtUtc: null,
             claimExpiresAtUtc: null,
-            request);
+            request,
+            latestEvent: null);
 
         await using var command = connection.CreateCommand();
         command.CommandText =
@@ -116,12 +117,30 @@ public sealed class MarketAcquisitionRequestStore
         await using var command = connection.CreateCommand();
         command.CommandText =
             """
-            SELECT id, status, created_at_utc, expires_at_utc, claimed_at_utc, claim_expires_at_utc, payload_json
-            FROM acquisition_requests
-            WHERE status = $status
-              AND lower(target_character_name) = lower($targetCharacterName)
-              AND lower(target_world) = lower($targetWorld)
-            ORDER BY created_at_utc ASC;
+            SELECT
+                requests.id,
+                requests.status,
+                requests.created_at_utc,
+                requests.expires_at_utc,
+                requests.claimed_at_utc,
+                requests.claim_expires_at_utc,
+                requests.payload_json,
+                events.event_type,
+                events.payload_json,
+                events.created_at_utc
+            FROM acquisition_requests AS requests
+            LEFT JOIN acquisition_request_events AS events
+              ON events.id = (
+                SELECT latest.id
+                FROM acquisition_request_events AS latest
+                WHERE latest.request_id = requests.id
+                ORDER BY latest.id DESC
+                LIMIT 1
+              )
+            WHERE requests.status = $status
+              AND lower(requests.target_character_name) = lower($targetCharacterName)
+              AND lower(requests.target_world) = lower($targetWorld)
+            ORDER BY requests.created_at_utc ASC;
             """;
         command.Parameters.AddWithValue("$status", MarketAcquisitionStatuses.PendingPickup);
         command.Parameters.AddWithValue("$targetCharacterName", characterName.Trim());
@@ -149,9 +168,27 @@ public sealed class MarketAcquisitionRequestStore
         await using var command = connection.CreateCommand();
         command.CommandText =
             """
-            SELECT id, status, created_at_utc, expires_at_utc, claimed_at_utc, claim_expires_at_utc, payload_json
-            FROM acquisition_requests
-            ORDER BY created_at_utc DESC
+            SELECT
+                requests.id,
+                requests.status,
+                requests.created_at_utc,
+                requests.expires_at_utc,
+                requests.claimed_at_utc,
+                requests.claim_expires_at_utc,
+                requests.payload_json,
+                events.event_type,
+                events.payload_json,
+                events.created_at_utc
+            FROM acquisition_requests AS requests
+            LEFT JOIN acquisition_request_events AS events
+              ON events.id = (
+                SELECT latest.id
+                FROM acquisition_request_events AS latest
+                WHERE latest.request_id = requests.id
+                ORDER BY latest.id DESC
+                LIMIT 1
+              )
+            ORDER BY requests.created_at_utc DESC
             LIMIT $limit;
             """;
         command.Parameters.AddWithValue("$limit", limit);
@@ -461,7 +498,12 @@ public sealed class MarketAcquisitionRequestStore
                 !string.Equals(existingEvent.Value.PayloadJson, payloadJson, StringComparison.Ordinal))
                 throw new MarketAcquisitionIdempotencyConflictException();
 
-            return current with { Status = existingEvent.Value.ResultStatus };
+            return ApplyLatestLifecycleEvent(
+                current,
+                existingEvent.Value.ResultStatus,
+                existingEvent.Value.EventType,
+                existingEvent.Value.PayloadJson,
+                DateTimeOffset.Parse(existingEvent.Value.CreatedAtUtc));
         }
 
         if (!allowedSourceStatuses.Contains(current.Status))
@@ -479,6 +521,7 @@ public sealed class MarketAcquisitionRequestStore
         update.Parameters.AddWithValue("$id", id);
         await update.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
 
+        var eventCreatedAtUtc = DateTimeOffset.UtcNow;
         await using var insertEvent = connection.CreateCommand();
         insertEvent.Transaction = (SqliteTransaction)transaction;
         insertEvent.CommandText =
@@ -505,11 +548,11 @@ public sealed class MarketAcquisitionRequestStore
         insertEvent.Parameters.AddWithValue("$eventType", eventType);
         insertEvent.Parameters.AddWithValue("$payloadJson", payloadJson);
         insertEvent.Parameters.AddWithValue("$resultStatus", targetStatus);
-        insertEvent.Parameters.AddWithValue("$createdAtUtc", DateTimeOffset.UtcNow.ToString("O"));
+        insertEvent.Parameters.AddWithValue("$createdAtUtc", eventCreatedAtUtc.ToString("O"));
         await insertEvent.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
 
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-        return current with { Status = targetStatus };
+        return ApplyLatestLifecycleEvent(current, targetStatus, eventType, payloadJson, eventCreatedAtUtc);
     }
 
     private async Task ExpirePendingAsync(CancellationToken cancellationToken)
@@ -563,13 +606,31 @@ public sealed class MarketAcquisitionRequestStore
         command.Transaction = (SqliteTransaction)transaction;
         command.CommandText =
             """
-            SELECT id, status, created_at_utc, expires_at_utc, claimed_at_utc, claim_expires_at_utc, payload_json
-            FROM acquisition_requests
-            WHERE id = $id
-              AND status = $status
-              AND lower(target_character_name) = lower($targetCharacterName)
-              AND lower(target_world) = lower($targetWorld)
-              AND expires_at_utc > $now;
+            SELECT
+                requests.id,
+                requests.status,
+                requests.created_at_utc,
+                requests.expires_at_utc,
+                requests.claimed_at_utc,
+                requests.claim_expires_at_utc,
+                requests.payload_json,
+                events.event_type,
+                events.payload_json,
+                events.created_at_utc
+            FROM acquisition_requests AS requests
+            LEFT JOIN acquisition_request_events AS events
+              ON events.id = (
+                SELECT latest.id
+                FROM acquisition_request_events AS latest
+                WHERE latest.request_id = requests.id
+                ORDER BY latest.id DESC
+                LIMIT 1
+              )
+            WHERE requests.id = $id
+              AND requests.status = $status
+              AND lower(requests.target_character_name) = lower($targetCharacterName)
+              AND lower(requests.target_world) = lower($targetWorld)
+              AND requests.expires_at_utc > $now;
             """;
         command.Parameters.AddWithValue("$id", id);
         command.Parameters.AddWithValue("$status", MarketAcquisitionStatuses.PendingPickup);
@@ -593,9 +654,27 @@ public sealed class MarketAcquisitionRequestStore
         command.Transaction = (SqliteTransaction)transaction;
         command.CommandText =
             """
-            SELECT id, status, created_at_utc, expires_at_utc, claimed_at_utc, claim_expires_at_utc, payload_json
-            FROM acquisition_requests
-            WHERE id = $id;
+            SELECT
+                requests.id,
+                requests.status,
+                requests.created_at_utc,
+                requests.expires_at_utc,
+                requests.claimed_at_utc,
+                requests.claim_expires_at_utc,
+                requests.payload_json,
+                events.event_type,
+                events.payload_json,
+                events.created_at_utc
+            FROM acquisition_requests AS requests
+            LEFT JOIN acquisition_request_events AS events
+              ON events.id = (
+                SELECT latest.id
+                FROM acquisition_request_events AS latest
+                WHERE latest.request_id = requests.id
+                ORDER BY latest.id DESC
+                LIMIT 1
+              )
+            WHERE requests.id = $id;
             """;
         command.Parameters.AddWithValue("$id", id);
 
@@ -613,9 +692,27 @@ public sealed class MarketAcquisitionRequestStore
         await using var command = connection.CreateCommand();
         command.CommandText =
             """
-            SELECT id, status, created_at_utc, expires_at_utc, claimed_at_utc, claim_expires_at_utc, payload_json
-            FROM acquisition_requests
-            WHERE idempotency_key = $idempotencyKey;
+            SELECT
+                requests.id,
+                requests.status,
+                requests.created_at_utc,
+                requests.expires_at_utc,
+                requests.claimed_at_utc,
+                requests.claim_expires_at_utc,
+                requests.payload_json,
+                events.event_type,
+                events.payload_json,
+                events.created_at_utc
+            FROM acquisition_requests AS requests
+            LEFT JOIN acquisition_request_events AS events
+              ON events.id = (
+                SELECT latest.id
+                FROM acquisition_request_events AS latest
+                WHERE latest.request_id = requests.id
+                ORDER BY latest.id DESC
+                LIMIT 1
+              )
+            WHERE requests.idempotency_key = $idempotencyKey;
             """;
         command.Parameters.AddWithValue("$idempotencyKey", idempotencyKey);
 
@@ -641,7 +738,7 @@ public sealed class MarketAcquisitionRequestStore
         return value as string;
     }
 
-    private static async Task<(string RequestId, string EventType, string PayloadJson, string ResultStatus)?> GetEventByIdempotencyKeyAsync(
+    private static async Task<(string RequestId, string EventType, string PayloadJson, string ResultStatus, string CreatedAtUtc)?> GetEventByIdempotencyKeyAsync(
         SqliteConnection connection,
         System.Data.Common.DbTransaction transaction,
         string idempotencyKey,
@@ -651,15 +748,34 @@ public sealed class MarketAcquisitionRequestStore
         command.Transaction = (SqliteTransaction)transaction;
         command.CommandText =
             """
-            SELECT request_id, event_type, payload_json, result_status
+            SELECT request_id, event_type, payload_json, result_status, created_at_utc
             FROM acquisition_request_events
             WHERE idempotency_key = $idempotencyKey;
             """;
         command.Parameters.AddWithValue("$idempotencyKey", idempotencyKey);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         return await reader.ReadAsync(cancellationToken).ConfigureAwait(false)
-            ? (reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetString(3))
+            ? (reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetString(3), reader.GetString(4))
             : null;
+    }
+
+    private static MarketAcquisitionRequestView ApplyLatestLifecycleEvent(
+        MarketAcquisitionRequestView request,
+        string status,
+        string eventType,
+        string payloadJson,
+        DateTimeOffset eventCreatedAtUtc)
+    {
+        var payload = JsonSerializer.Deserialize<MarketAcquisitionLifecycleRequest>(payloadJson, JsonOptions);
+        return request with
+        {
+            Status = status,
+            LatestEventType = eventType,
+            LatestRunnerState = payload?.RunnerState,
+            LatestMessage = payload?.Message,
+            LatestReason = payload?.Reason,
+            LatestEventAtUtc = eventCreatedAtUtc,
+        };
     }
 
     private static MarketAcquisitionRequestView ReadView(SqliteDataReader reader)
@@ -667,6 +783,7 @@ public sealed class MarketAcquisitionRequestStore
         var request = JsonSerializer.Deserialize<MarketAcquisitionCreateRequest>(
             reader.GetString(6),
             JsonOptions) ?? throw new InvalidOperationException("Stored acquisition payload is invalid.");
+        var latestEvent = ReadLatestEvent(reader);
 
         return ToView(
             reader.GetString(0),
@@ -675,7 +792,24 @@ public sealed class MarketAcquisitionRequestStore
             DateTimeOffset.Parse(reader.GetString(3)),
             reader.IsDBNull(4) ? null : DateTimeOffset.Parse(reader.GetString(4)),
             reader.IsDBNull(5) ? null : DateTimeOffset.Parse(reader.GetString(5)),
-            request);
+            request,
+            latestEvent);
+    }
+
+    private static MarketAcquisitionLatestEvent? ReadLatestEvent(SqliteDataReader reader)
+    {
+        if (reader.FieldCount < 10 || reader.IsDBNull(7))
+            return null;
+
+        var eventPayload = reader.IsDBNull(8)
+            ? null
+            : JsonSerializer.Deserialize<MarketAcquisitionLifecycleRequest>(reader.GetString(8), JsonOptions);
+        return new MarketAcquisitionLatestEvent(
+            reader.GetString(7),
+            eventPayload?.RunnerState,
+            eventPayload?.Message,
+            eventPayload?.Reason,
+            DateTimeOffset.Parse(reader.GetString(9)));
     }
 
     private static MarketAcquisitionRequestView ToView(
@@ -685,7 +819,8 @@ public sealed class MarketAcquisitionRequestStore
         DateTimeOffset expiresAtUtc,
         DateTimeOffset? claimedAtUtc,
         DateTimeOffset? claimExpiresAtUtc,
-        MarketAcquisitionCreateRequest request) =>
+        MarketAcquisitionCreateRequest request,
+        MarketAcquisitionLatestEvent? latestEvent) =>
         new()
         {
             Id = id,
@@ -705,6 +840,11 @@ public sealed class MarketAcquisitionRequestStore
             MaxUnitPrice = request.MaxUnitPrice,
             MaxTotalGil = request.MaxTotalGil,
             WorldMode = request.WorldMode,
+            LatestEventType = latestEvent?.EventType,
+            LatestRunnerState = latestEvent?.RunnerState,
+            LatestMessage = latestEvent?.Message,
+            LatestReason = latestEvent?.Reason,
+            LatestEventAtUtc = latestEvent?.CreatedAtUtc,
         };
 
     private static MarketAcquisitionClaimView ToClaimView(
@@ -729,8 +869,20 @@ public sealed class MarketAcquisitionRequestStore
             MaxUnitPrice = request.MaxUnitPrice,
             MaxTotalGil = request.MaxTotalGil,
             WorldMode = request.WorldMode,
+            LatestEventType = request.LatestEventType,
+            LatestRunnerState = request.LatestRunnerState,
+            LatestMessage = request.LatestMessage,
+            LatestReason = request.LatestReason,
+            LatestEventAtUtc = request.LatestEventAtUtc,
             ClaimToken = claimToken,
         };
+
+    private sealed record MarketAcquisitionLatestEvent(
+        string EventType,
+        string? RunnerState,
+        string? Message,
+        string? Reason,
+        DateTimeOffset CreatedAtUtc);
 
     private static void ValidateCreateRequest(MarketAcquisitionCreateRequest request)
     {
