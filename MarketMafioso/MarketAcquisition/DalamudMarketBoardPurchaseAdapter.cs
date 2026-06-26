@@ -1,8 +1,10 @@
 using System;
+using System.Linq;
 using Dalamud.Plugin.Services;
 using Dalamud.Utility;
 using FFXIVClientStructs.FFXIV.Client.UI;
 using FFXIVClientStructs.FFXIV.Client.UI.Info;
+using FFXIVClientStructs.FFXIV.Component.GUI;
 
 namespace MarketMafioso.MarketAcquisition;
 
@@ -10,6 +12,7 @@ public sealed class DalamudMarketBoardPurchaseAdapter : IMarketBoardPurchaseAdap
 {
     private const string ItemSearchResultAddon = "ItemSearchResult";
     private const string SelectYesNoAddon = "SelectYesno";
+    private static readonly uint[] CandidateListingListIds = Enumerable.Range(1, 80).Select(static id => (uint)id).ToArray();
 
     private readonly IGameGui gameGui;
     private readonly IPluginLog log;
@@ -61,7 +64,19 @@ public sealed class DalamudMarketBoardPurchaseAdapter : IMarketBoardPurchaseAdap
                 candidate);
         }
 
-        addon->AtkUnitBase.FireCallbackInt(listingIndex);
+        var listingList = FindListingList(addon, listingIndex);
+        if (listingList == null)
+        {
+            return Fail(
+                "ListingListUnavailable",
+                $"Could not find a market-board listing list component containing row {listingIndex}.",
+                candidate);
+        }
+
+        listingList->ScrollToItem((short)listingIndex);
+        listingList->SelectItem(listingIndex, true);
+        listingList->DispatchItemEvent(listingIndex, AtkEventType.ListItemClick);
+        listingList->DispatchItemEvent(listingIndex, AtkEventType.ListItemDoubleClick);
         log.Info(
             "[MarketMafioso] Sent market board purchase selection for listing {ListingId} retainer {RetainerId} at {UnitPrice} x {Quantity}.",
             candidate.ListingId,
@@ -140,6 +155,26 @@ public sealed class DalamudMarketBoardPurchaseAdapter : IMarketBoardPurchaseAdap
         }
 
         return false;
+    }
+
+    private static unsafe AtkComponentList* FindListingList(AddonItemSearchResult* addon, int listingIndex)
+    {
+        foreach (var listId in CandidateListingListIds)
+        {
+            var list = addon->AtkUnitBase.GetComponentListById(listId);
+            if (list == null)
+                continue;
+
+            if (list->GetItemCount() <= listingIndex)
+                continue;
+
+            if (!list->IsItemVisible(listingIndex, true))
+                list->ScrollToItem((short)listingIndex);
+
+            return list;
+        }
+
+        return null;
     }
 
     private static bool LooksLikeMarketPurchasePrompt(string text)

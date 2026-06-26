@@ -34,6 +34,8 @@ public class MainWindow : Window, IDisposable
     private readonly MarketBoardListingReader marketBoardListingReader;
     private readonly MarketBoardItemSearchDriver marketBoardItemSearchDriver;
     private readonly MarketBoardInputCaptureReader marketBoardInputCaptureReader;
+    private readonly DalamudMarketBoardPurchaseAdapter marketBoardPurchaseAdapter;
+    private readonly MarketBoardPurchaseExecutor marketBoardPurchaseExecutor;
     private readonly MarketBoardApproachService marketBoardApproachService;
     private readonly MarketAcquisitionRouteRunner marketAcquisitionRouteRunner;
 
@@ -52,7 +54,10 @@ public class MainWindow : Window, IDisposable
     private MarketBoardReadResult? marketBoardReadResult;
     private MarketBoardListingReconciliation? marketBoardReconciliation;
     private MarketAcquisitionLiveDryRun? marketAcquisitionLiveDryRun;
+    private MarketBoardPurchaseSession? marketBoardPurchaseSession;
+    private MarketBoardPurchaseResult? marketBoardPurchaseResult;
     private DateTimeOffset nextGuidedRouteMonitorUtc = DateTimeOffset.MinValue;
+    private DateTimeOffset nextMarketBoardPurchaseMonitorUtc = DateTimeOffset.MinValue;
     private int marketInputCaptureIndex;
     private bool guidedRouteProbeRunning = false;
     private long guidedRouteProgressReportSequence;
@@ -74,6 +79,8 @@ public class MainWindow : Window, IDisposable
     private const string LocalReceiverUrl = "http://localhost:8080/inventory";
     private const string DevReceiverUrl = "https://dev.xivcraftarchitect.com/api/marketmafioso/inventory";
     private const string ProductionReceiverUrl = "https://xivcraftarchitect.com/api/marketmafioso/inventory";
+    private static readonly TimeSpan MarketBoardPurchaseConfirmationWatchdog = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan MarketBoardPurchaseListingRemovalWatchdog = TimeSpan.FromSeconds(15);
 
     private static readonly Vector4 ColHeader = new(0.38f, 0.73f, 1.00f, 1f);
     private static readonly Vector4 ColSuccess = new(0.45f, 0.90f, 0.55f, 1f);
@@ -113,6 +120,8 @@ public class MainWindow : Window, IDisposable
         marketBoardListingReader = new MarketBoardListingReader(Plugin.GameGui);
         marketBoardItemSearchDriver = new MarketBoardItemSearchDriver(Plugin.GameGui);
         marketBoardInputCaptureReader = new MarketBoardInputCaptureReader(Plugin.GameGui);
+        marketBoardPurchaseAdapter = new DalamudMarketBoardPurchaseAdapter(Plugin.GameGui, log);
+        marketBoardPurchaseExecutor = new MarketBoardPurchaseExecutor(marketBoardPurchaseAdapter);
         this.marketBoardApproachService = marketBoardApproachService;
         marketAcquisitionRouteRunner = new MarketAcquisitionRouteRunner(marketAcquisitionRouteDiagnosticsDirectory);
 
@@ -166,7 +175,11 @@ public class MainWindow : Window, IDisposable
     public WorkshopFrozenQueueBrowserWindow FrozenQueueBrowser { get; }
     public MarketAcquisitionDiagnosticsWindow AcquisitionDiagnostics { get; }
 
-    public void OnFrameworkUpdate(IFramework _) => MonitorGuidedRoute();
+    public void OnFrameworkUpdate(IFramework _)
+    {
+        MonitorMarketBoardPurchase();
+        MonitorGuidedRoute();
+    }
 
     public override void Draw()
     {
@@ -668,7 +681,15 @@ public class MainWindow : Window, IDisposable
         ImGui.TextColored(ColMuted, $"{summary.WouldBuyRows:N0} buy row(s), {summary.SkippedRows:N0} skipped row(s).");
 
         var firstCandidate = MarketBoardPurchasePlanner.SelectFirstCandidate(marketAcquisitionLiveDryRun);
-        ImGuiUi.Button("Purchase Automation Disabled", false);
+        var purchaseActive = marketBoardPurchaseSession?.IsActive == true;
+        var canBuyFirstListing =
+            firstCandidate != null &&
+            marketBoardReadResult?.Status == "Ready" &&
+            marketAcquisitionLiveDryRun.Status == "Ready" &&
+            !purchaseActive &&
+            !acquisitionRequestBusy;
+        if (ImGuiUi.Button("Buy First Safe Listing", canBuyFirstListing))
+            BeginFirstLivePurchase();
 
         if (firstCandidate != null)
         {
@@ -678,7 +699,104 @@ public class MainWindow : Window, IDisposable
                 $"First safe listing: {firstCandidate.Quantity:N0} @ {FormatGil(firstCandidate.UnitPrice)} ({FormatGil(firstCandidate.TotalGil)})");
         }
 
-        ImGui.TextColored(ColMuted, "Use Input Capture while purchasing manually; automated purchase selection is paused until we map the real confirmation path.");
+        if (marketBoardPurchaseSession != null)
+        {
+            ImGui.TextColored(
+                marketBoardPurchaseSession.Status is "Completed" ? ColSuccess :
+                marketBoardPurchaseSession.IsActive ? ColHeader : ColError,
+                $"Purchase status: {marketBoardPurchaseSession.Status} - {marketBoardPurchaseSession.Message}");
+        }
+        else if (marketBoardPurchaseResult != null)
+        {
+            ImGui.TextColored(
+                marketBoardPurchaseResult.Status is "PurchaseSelectionSent" or "ConfirmationAccepted" ? ColHeader : ColError,
+                $"Purchase status: {marketBoardPurchaseResult.Status} - {marketBoardPurchaseResult.Message}");
+        }
+    }
+
+    private void BeginFirstLivePurchase()
+    {
+        try
+        {
+            var dryRun = marketAcquisitionLiveDryRun ??
+                         throw new InvalidOperationException("No live dry-run is available.");
+            var currentWorld = GetCurrentWorldName();
+            var freshRead = marketBoardListingReader.ReadCurrentListings(currentWorld);
+            marketBoardReadResult = freshRead;
+            marketBoardPurchaseResult = marketBoardPurchaseExecutor.ExecuteFirstCandidate(dryRun, freshRead);
+            marketBoardPurchaseSession = null;
+
+            if (marketBoardPurchaseResult.Status.Equals("PurchaseSelectionSent", StringComparison.OrdinalIgnoreCase) &&
+                marketBoardPurchaseResult.Candidate != null)
+            {
+                marketBoardPurchaseSession = MarketBoardPurchaseSession.Start(
+                    marketBoardPurchaseResult.Candidate,
+                    DateTimeOffset.UtcNow,
+                    MarketBoardPurchaseConfirmationWatchdog);
+                nextMarketBoardPurchaseMonitorUtc = DateTimeOffset.UtcNow.AddMilliseconds(250);
+            }
+
+            acquisitionStatus = $"Purchase: {marketBoardPurchaseResult.Status}. {marketBoardPurchaseResult.Message}";
+        }
+        catch (Exception ex)
+        {
+            marketBoardPurchaseResult = new MarketBoardPurchaseResult
+            {
+                Status = "PurchaseStartFailed",
+                Message = ex.Message,
+            };
+            marketBoardPurchaseSession = null;
+            acquisitionStatus = $"Purchase start failed: {ex.Message}";
+            log.Warning(ex, "[MarketMafioso] Unable to start guarded market-board purchase.");
+        }
+    }
+
+    private void MonitorMarketBoardPurchase()
+    {
+        if (acquisitionRequestBusy)
+            return;
+
+        var session = marketBoardPurchaseSession;
+        if (session?.IsActive != true)
+            return;
+
+        var now = DateTimeOffset.UtcNow;
+        if (now < nextMarketBoardPurchaseMonitorUtc)
+            return;
+
+        nextMarketBoardPurchaseMonitorUtc = now.AddMilliseconds(500);
+
+        try
+        {
+            if (session.Status.Equals("WaitingForConfirmation", StringComparison.OrdinalIgnoreCase))
+            {
+                marketBoardPurchaseResult = marketBoardPurchaseAdapter.TryConfirmPendingPurchase(session.Candidate);
+                session = session.RecordConfirmationAttempt(
+                    marketBoardPurchaseResult,
+                    now,
+                    MarketBoardPurchaseListingRemovalWatchdog);
+            }
+
+            if (session.Status.Equals("WaitingForListingRemoval", StringComparison.OrdinalIgnoreCase))
+            {
+                var freshRead = marketBoardListingReader.ReadCurrentListings(GetCurrentWorldName());
+                marketBoardReadResult = freshRead;
+                session = session.RecordFreshRead(freshRead, now);
+            }
+
+            marketBoardPurchaseSession = session;
+            acquisitionStatus = $"Purchase: {session.Status}. {session.Message}";
+        }
+        catch (Exception ex)
+        {
+            marketBoardPurchaseSession = session with
+            {
+                Status = "PurchaseMonitorFailed",
+                Message = ex.Message,
+            };
+            acquisitionStatus = $"Purchase monitor failed: {ex.Message}";
+            log.Warning(ex, "[MarketMafioso] Unable to monitor guarded market-board purchase.");
+        }
     }
 
     private static void DrawClaimedRequestRow(string label, string value)
