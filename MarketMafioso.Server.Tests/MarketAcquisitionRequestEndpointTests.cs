@@ -689,6 +689,11 @@ public sealed class MarketAcquisitionRequestEndpointTests
         Assert.Contains("readAcquisitionStageError", acquisitionPage, StringComparison.Ordinal);
         Assert.Contains("addAcquisitionQueueRow", acquisitionPage, StringComparison.Ordinal);
         Assert.Contains("stageAcquisitionQueue", acquisitionPage, StringComparison.Ordinal);
+        Assert.Contains("id=\"acquisitionQueueTable\"", acquisitionPage, StringComparison.Ordinal);
+        Assert.Contains("id=\"acquisitionQueueBody\"", acquisitionPage, StringComparison.Ordinal);
+        Assert.Contains("data-resize=\"status\"", acquisitionPage, StringComparison.Ordinal);
+        Assert.Contains("refreshAcquisitionQueue", acquisitionPage, StringComparison.Ordinal);
+        Assert.Contains("setInterval(refreshAcquisitionQueue, 3000)", acquisitionPage, StringComparison.Ordinal);
         Assert.Contains("data-xiv-data-base-url=\"https://dev.xivcraftarchitect.com/api/xivdata\"", acquisitionPage, StringComparison.Ordinal);
         Assert.Contains("Plugin pickup required", acquisitionPage, StringComparison.Ordinal);
         Assert.Contains("No background polling", acquisitionPage, StringComparison.Ordinal);
@@ -700,6 +705,52 @@ public sealed class MarketAcquisitionRequestEndpointTests
         Assert.Contains("Accepted", acquisitionPage, StringComparison.Ordinal);
         Assert.Contains("Plugin status", acquisitionPage, StringComparison.Ordinal);
         Assert.Contains("Plugin pickup uses the same client API key", acquisitionPage, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AcquisitionDashboardRecentQueueEndpointReturnsLiveStatusMarkup()
+    {
+        await using var application = CreateHostedApplication(
+            extraConfiguration: new KeyValuePair<string, string?>("MarketMafioso:TrustExternalDashboardAuth", "true"));
+        using var client = application.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false,
+        });
+        var claimed = await CreateAndClaimAsync(client, "dashboard-live-queue");
+        var accept = await SendWithKeyAsync(
+            client,
+            HttpMethod.Post,
+            $"/api/marketmafioso/acquisition/requests/{claimed.RequestId}/accept",
+            "client-secret",
+            new
+            {
+                claimToken = claimed.ClaimToken,
+                idempotencyKey = "dashboard-live-queue-accept",
+            });
+        accept.EnsureSuccessStatusCode();
+        var progress = await SendWithKeyAsync(
+            client,
+            HttpMethod.Post,
+            $"/api/marketmafioso/acquisition/requests/{claimed.RequestId}/progress",
+            "client-secret",
+            new
+            {
+                claimToken = claimed.ClaimToken,
+                idempotencyKey = "dashboard-live-queue-progress",
+                runnerState = "Running",
+                message = "Arrived on Maduin; reading live listings.",
+            });
+        progress.EnsureSuccessStatusCode();
+
+        var recent = await client.GetAsync("/api/marketmafioso/acquisition/requests/recent");
+
+        recent.EnsureSuccessStatusCode();
+        using var recentJson = JsonDocument.Parse(await recent.Content.ReadAsStringAsync());
+        var root = recentJson.RootElement;
+        Assert.Contains("Running", root.GetProperty("latestRequestStatus").GetString(), StringComparison.Ordinal);
+        Assert.Contains("Arrived on Maduin", root.GetProperty("latestRequestEvent").GetString(), StringComparison.Ordinal);
+        Assert.Contains("data-resize-col=\"status\"", root.GetProperty("queueRows").GetString(), StringComparison.Ordinal);
+        Assert.Contains("Arrived on Maduin", root.GetProperty("queueRows").GetString(), StringComparison.Ordinal);
     }
 
     [Fact]

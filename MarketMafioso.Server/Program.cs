@@ -135,6 +135,17 @@ app.MapGet("/acquisition", async (
         "text/html; charset=utf-8");
 });
 
+app.MapGet("/acquisition/requests/recent", async (
+    HttpRequest request,
+    HttpResponse response,
+    MarketAcquisitionRequestStore acquisitionStore,
+    CancellationToken token) =>
+{
+    var acquisitionRequests = await acquisitionStore.ListRecentAsync(50, token);
+    var csrfToken = SetCsrfCookie(response);
+    return Results.Json(BuildAcquisitionQueueUpdate(acquisitionRequests, request.PathBase, csrfToken));
+});
+
 app.MapGet("/diagnostics", async (
     HttpRequest request,
     InventoryReportStore store,
@@ -522,6 +533,9 @@ static ApiKeyPurpose RequiredApiKeyPurpose(HttpRequest request, bool requireApiK
     if (IsAcquisitionBrowserControl(request))
         return ApiKeyPurpose.None;
 
+    if (IsAcquisitionBrowserRead(request))
+        return ApiKeyPurpose.None;
+
     if (IsAcquisitionCreate(request))
         return ApiKeyPurpose.Read;
 
@@ -560,6 +574,10 @@ static bool IsAcquisitionBrowserControl(HttpRequest request) =>
     request.Path.StartsWithSegments("/acquisition/requests") &&
     (request.Path.Value?.EndsWith("/cancel", StringComparison.OrdinalIgnoreCase) == true ||
      request.Path.Value?.EndsWith("/resend", StringComparison.OrdinalIgnoreCase) == true);
+
+static bool IsAcquisitionBrowserRead(HttpRequest request) =>
+    HttpMethods.IsGet(request.Method) &&
+    request.Path.Equals("/acquisition/requests/recent", StringComparison.OrdinalIgnoreCase);
 
 static bool IsAcquisitionPluginRoute(HttpRequest request) =>
     request.Path.StartsWithSegments("/acquisition/requests") &&
@@ -1065,6 +1083,7 @@ static string RenderAcquisitionDashboard(
     var selectedRequestName = latestRequest == null
         ? "None selected"
         : FormatAcquisitionItem(latestRequest);
+    var refreshUrl = AppUrl(pathBase, "/acquisition/requests/recent");
 
     return $$"""
         <!doctype html>
@@ -1418,6 +1437,39 @@ static string RenderAcquisitionDashboard(
                 .status.running { background: #3a3020; color: #ffe4a8; }
                 .status.complete { background: #1e3a2b; color: #c8f0d5; }
                 .status.failed { background: #3d2528; color: #ffd2d6; }
+                .queue-table th {
+                    padding: 0;
+                    height: 34px;
+                }
+                .queue-table td[data-resize-col] { position: relative; }
+                .queue-table td[data-resize-col].separator-hover { cursor: col-resize; }
+                .queue-table td[data-resize-col].separator-hover::after {
+                    content: "";
+                    position: absolute;
+                    top: 0;
+                    right: -1px;
+                    bottom: 0;
+                    width: 3px;
+                    background: var(--accent);
+                    pointer-events: none;
+                }
+                .th-inner {
+                    display: grid;
+                    grid-template-columns: minmax(0, 1fr) 6px;
+                    align-items: stretch;
+                    height: 34px;
+                }
+                .th-label {
+                    display: flex;
+                    align-items: center;
+                    min-width: 0;
+                    padding: 0 9px;
+                    overflow: hidden;
+                    text-overflow: ellipsis;
+                    white-space: nowrap;
+                }
+                .resizer { cursor: col-resize; }
+                .resizer:hover { background: var(--accent); }
                 .status-stack {
                     display: grid;
                     gap: 4px;
@@ -1510,53 +1562,53 @@ static string RenderAcquisitionDashboard(
                     <section class="pane queue-pane">
                         <div class="pane-head">
                             <h2>Request Queue</h2>
-                            <span>{{Html(activeSummary)}}</span>
+                            <span id="acquisitionActiveSummary">{{Html(activeSummary)}}</span>
                         </div>
                         <div class="toolbar">
-                            <input type="search" placeholder="Filter by item, world, status" aria-label="Filter request queue">
-                            <select aria-label="Request status filter">
+                            <input id="acquisitionQueueFilter" type="search" placeholder="Filter by item, world, status" aria-label="Filter request queue">
+                            <select id="acquisitionStatusFilter" aria-label="Request status filter">
                                 <option>All statuses</option>
                                 <option>Pending pickup</option>
                                 <option>Claimed</option>
                                 <option>Accepted</option>
                                 <option>Failed</option>
                             </select>
-                            <button type="button">Refresh</button>
+                            <button type="button" onclick="refreshAcquisitionQueue()">Refresh</button>
                         </div>
                         <div class="table-wrap">
-                                <table>
+                                <table id="acquisitionQueueTable" class="queue-table">
                                     <colgroup>
-                                        <col style="width: 22%">
-                                        <col style="width: 10%">
-                                        <col style="width: 10%">
-                                        <col style="width: 15%">
-                                        <col style="width: 15%">
-                                        <col style="width: 10%">
-                                        <col style="width: 8%">
-                                        <col style="width: 10%">
+                                        <col data-col="item" style="width: 22%">
+                                        <col data-col="qty" style="width: 10%">
+                                        <col data-col="max-unit" style="width: 10%">
+                                        <col data-col="routing" style="width: 15%">
+                                        <col data-col="target" style="width: 15%">
+                                        <col data-col="status" style="width: 10%">
+                                        <col data-col="age" style="width: 8%">
+                                        <col data-col="actions" style="width: 10%">
                                     </colgroup>
                                     <thead>
                                         <tr>
-                                            <th>Item</th>
-                                            <th class="number">Qty</th>
-                                            <th class="number">Max Unit</th>
-                                            <th>Routing</th>
-                                            <th>Target</th>
-                                            <th>Status</th>
-                                            <th>Age</th>
-                                            <th>Actions</th>
+                                            <th><div class="th-inner"><span class="th-label">Item</span><span class="resizer" data-resize="item"></span></div></th>
+                                            <th class="number"><div class="th-inner"><span class="th-label">Qty</span><span class="resizer" data-resize="qty"></span></div></th>
+                                            <th class="number"><div class="th-inner"><span class="th-label">Max Unit</span><span class="resizer" data-resize="max-unit"></span></div></th>
+                                            <th><div class="th-inner"><span class="th-label">Routing</span><span class="resizer" data-resize="routing"></span></div></th>
+                                            <th><div class="th-inner"><span class="th-label">Target</span><span class="resizer" data-resize="target"></span></div></th>
+                                            <th><div class="th-inner"><span class="th-label">Status</span><span class="resizer" data-resize="status"></span></div></th>
+                                            <th><div class="th-inner"><span class="th-label">Age</span><span class="resizer" data-resize="age"></span></div></th>
+                                            <th><div class="th-inner"><span class="th-label">Actions</span><span class="resizer" data-resize="actions"></span></div></th>
                                         </tr>
                                     </thead>
-                                    <tbody>
+                                    <tbody id="acquisitionQueueBody">
                                         {{queueRows}}
                                     </tbody>
                                 </table>
                         </div>
                         <div class="detail">
-                            <div class="metric"><span>Selected request</span><strong>{{Html(selectedRequestName)}}</strong></div>
+                            <div class="metric"><span>Selected request</span><strong id="selectedRequestName">{{Html(selectedRequestName)}}</strong></div>
                             <div class="metric"><span>Pickup endpoint</span><strong>Ready</strong></div>
-                            <div class="metric"><span>Expires in</span><strong>{{Html(latestRequestExpiry)}}</strong></div>
-                            <div class="metric"><span>Plugin status</span><strong>{{Html(latestRequestStatus)}}</strong><span>{{Html(latestRequestEvent)}}</span></div>
+                            <div class="metric"><span>Expires in</span><strong id="latestRequestExpiry">{{Html(latestRequestExpiry)}}</strong></div>
+                            <div class="metric"><span>Plugin status</span><strong id="latestRequestStatus">{{Html(latestRequestStatus)}}</strong><span id="latestRequestEvent">{{Html(latestRequestEvent)}}</span></div>
                         </div>
                     </section>
                 </main>
@@ -1565,6 +1617,104 @@ static string RenderAcquisitionDashboard(
                     <span>Dashboard creates intent only; the plugin validates live market rows.</span>
                 </footer>
             </div>
+            <script>
+                const acquisitionQueueRefreshUrl = '{{Html(refreshUrl)}}';
+                let acquisitionResizeState = { active: false, current: null, neighbor: null, startX: 0, tableWidth: 0, currentStart: 0, neighborStart: 0, direction: 1 };
+
+                function getAcquisitionColumnPercent(col) { return Number.parseFloat(col.style.width || '0') || 0; }
+                function findAcquisitionResizePair(columnKey) {
+                    const cols = [...document.querySelectorAll('#acquisitionQueueTable col[data-col]')];
+                    const index = cols.findIndex(col => col.dataset.col === columnKey);
+                    if (index < 0) return null;
+                    if (index < cols.length - 1) return { current: cols[index], neighbor: cols[index + 1], direction: 1 };
+                    if (index > 0) return { current: cols[index], neighbor: cols[index - 1], direction: -1 };
+                    return null;
+                }
+                function beginAcquisitionResize(columnKey, event) {
+                    const pair = findAcquisitionResizePair(columnKey);
+                    if (!pair) return false;
+                    acquisitionResizeState = {
+                        active: true,
+                        current: pair.current,
+                        neighbor: pair.neighbor,
+                        direction: pair.direction,
+                        startX: event.clientX,
+                        tableWidth: document.getElementById('acquisitionQueueTable').getBoundingClientRect().width,
+                        currentStart: getAcquisitionColumnPercent(pair.current),
+                        neighborStart: getAcquisitionColumnPercent(pair.neighbor)
+                    };
+                    document.body.style.cursor = 'col-resize';
+                    event.preventDefault();
+                    event.stopPropagation();
+                    return true;
+                }
+                function isNearAcquisitionSeparator(cell, event) {
+                    const rect = cell.getBoundingClientRect();
+                    return rect.right - event.clientX <= 7;
+                }
+                function wireAcquisitionResizeHandles() {
+                    document.querySelectorAll('#acquisitionQueueTable .resizer').forEach(handle => {
+                        if (handle.dataset.resizeWired === 'true') return;
+                        handle.dataset.resizeWired = 'true';
+                        handle.addEventListener('mousedown', event => beginAcquisitionResize(handle.dataset.resize, event));
+                    });
+                    document.querySelectorAll('#acquisitionQueueTable td[data-resize-col]').forEach(cell => {
+                        if (cell.dataset.resizeWired === 'true') return;
+                        cell.dataset.resizeWired = 'true';
+                        cell.addEventListener('mousemove', event => cell.classList.toggle('separator-hover', isNearAcquisitionSeparator(cell, event)));
+                        cell.addEventListener('mouseleave', () => cell.classList.remove('separator-hover'));
+                        cell.addEventListener('mousedown', event => {
+                            if (isNearAcquisitionSeparator(cell, event)) beginAcquisitionResize(cell.dataset.resizeCol, event);
+                        });
+                    });
+                }
+                window.addEventListener('mousemove', event => {
+                    if (!acquisitionResizeState.active) return;
+                    const minPercent = 6;
+                    const deltaPercent = ((event.clientX - acquisitionResizeState.startX) / acquisitionResizeState.tableWidth) * 100 * acquisitionResizeState.direction;
+                    const combined = acquisitionResizeState.currentStart + acquisitionResizeState.neighborStart;
+                    const current = Math.min(combined - minPercent, Math.max(minPercent, acquisitionResizeState.currentStart + deltaPercent));
+                    acquisitionResizeState.current.style.width = `${current.toFixed(2)}%`;
+                    acquisitionResizeState.neighbor.style.width = `${(combined - current).toFixed(2)}%`;
+                });
+                window.addEventListener('mouseup', () => {
+                    acquisitionResizeState.active = false;
+                    acquisitionResizeState.current = null;
+                    acquisitionResizeState.neighbor = null;
+                    document.body.style.cursor = '';
+                    document.querySelectorAll('#acquisitionQueueTable .separator-hover').forEach(cell => cell.classList.remove('separator-hover'));
+                });
+
+                async function refreshAcquisitionQueue() {
+                    const response = await fetch(acquisitionQueueRefreshUrl, {
+                        headers: { 'Accept': 'application/json' },
+                        cache: 'no-store'
+                    });
+                    if (!response.ok) return;
+                    const payload = await response.json();
+                    document.getElementById('acquisitionQueueBody').innerHTML = payload.queueRows;
+                    document.getElementById('acquisitionActiveSummary').textContent = payload.activeSummary;
+                    document.getElementById('selectedRequestName').textContent = payload.selectedRequestName;
+                    document.getElementById('latestRequestExpiry').textContent = payload.latestRequestExpiry;
+                    document.getElementById('latestRequestStatus').textContent = payload.latestRequestStatus;
+                    document.getElementById('latestRequestEvent').textContent = payload.latestRequestEvent;
+                    wireAcquisitionResizeHandles();
+                    applyAcquisitionQueueFilter();
+                }
+                function applyAcquisitionQueueFilter() {
+                    const text = document.getElementById('acquisitionQueueFilter').value.trim().toLowerCase();
+                    const status = document.getElementById('acquisitionStatusFilter').value.toLowerCase();
+                    document.querySelectorAll('#acquisitionQueueBody tr[data-status]').forEach(row => {
+                        const matchesText = !text || row.textContent.toLowerCase().includes(text);
+                        const matchesStatus = status === 'all statuses' || row.dataset.status.toLowerCase().includes(status.replace(' pickup', ''));
+                        row.hidden = !(matchesText && matchesStatus);
+                    });
+                }
+                document.getElementById('acquisitionQueueFilter')?.addEventListener('input', applyAcquisitionQueueFilter);
+                document.getElementById('acquisitionStatusFilter')?.addEventListener('change', applyAcquisitionQueueFilter);
+                wireAcquisitionResizeHandles();
+                window.setInterval(refreshAcquisitionQueue, 3000);
+            </script>
         </body>
         </html>
         """;
@@ -1857,18 +2007,41 @@ static string RenderAcquisitionQueueRows(
         var latestEvent = RenderAcquisitionLatestEvent(request);
         return
         $$"""
-        <tr>
-            <td><div class="item"><strong>{{Html(string.IsNullOrWhiteSpace(request.ItemName) ? $"Item {request.ItemId}" : request.ItemName)}}</strong><span>item {{request.ItemId}} / {{Html(request.HqPolicy)}}</span></div></td>
-            <td class="number">{{request.Quantity:N0}}</td>
-            <td class="number">{{FormatGil(request.MaxUnitPrice)}}</td>
-            <td>{{Html(FormatWorldMode(request.WorldMode))}}</td>
-            <td>{{Html(request.TargetCharacterName)}} @ {{Html(request.TargetWorld)}}</td>
-            <td><div class="status-stack"><span class="status {{Html(AcquisitionStatusClass(request.Status))}}">{{Html(FormatAcquisitionStatus(request.Status))}}</span>{{latestEvent}}</div></td>
-            <td>{{Html(FormatAcquisitionAge(request.CreatedAtUtc))}}</td>
-            <td class="actions">{{actions}}</td>
+        <tr data-status="{{Html(FormatAcquisitionStatus(request.Status))}}">
+            <td data-resize-col="item"><div class="item"><strong>{{Html(string.IsNullOrWhiteSpace(request.ItemName) ? $"Item {request.ItemId}" : request.ItemName)}}</strong><span>item {{request.ItemId}} / {{Html(request.HqPolicy)}}</span></div></td>
+            <td class="number" data-resize-col="qty">{{request.Quantity:N0}}</td>
+            <td class="number" data-resize-col="max-unit">{{FormatGil(request.MaxUnitPrice)}}</td>
+            <td data-resize-col="routing">{{Html(FormatWorldMode(request.WorldMode))}}</td>
+            <td data-resize-col="target">{{Html(request.TargetCharacterName)}} @ {{Html(request.TargetWorld)}}</td>
+            <td data-resize-col="status"><div class="status-stack"><span class="status {{Html(AcquisitionStatusClass(request.Status))}}">{{Html(FormatAcquisitionStatus(request.Status))}}</span>{{latestEvent}}</div></td>
+            <td data-resize-col="age">{{Html(FormatAcquisitionAge(request.CreatedAtUtc))}}</td>
+            <td class="actions" data-resize-col="actions">{{actions}}</td>
         </tr>
         """;
     }));
+}
+
+static object BuildAcquisitionQueueUpdate(
+    IReadOnlyList<MarketAcquisitionRequestView> acquisitionRequests,
+    PathString pathBase,
+    string csrfToken)
+{
+    var activeCount = acquisitionRequests.Count(request =>
+        request.Status is MarketAcquisitionStatuses.PendingPickup
+            or MarketAcquisitionStatuses.Claimed
+            or MarketAcquisitionStatuses.AcceptedInPlugin
+            or MarketAcquisitionStatuses.Running);
+    var latestRequest = acquisitionRequests.FirstOrDefault();
+
+    return new
+    {
+        queueRows = RenderAcquisitionQueueRows(acquisitionRequests, pathBase, csrfToken),
+        activeSummary = $"{activeCount:N0} active / {acquisitionRequests.Count:N0} recent",
+        selectedRequestName = latestRequest == null ? "None selected" : FormatAcquisitionItem(latestRequest),
+        latestRequestStatus = latestRequest == null ? "Idle" : FormatAcquisitionStatus(latestRequest.Status),
+        latestRequestEvent = latestRequest == null ? "-" : FormatAcquisitionLatestEvent(latestRequest),
+        latestRequestExpiry = latestRequest == null ? "-" : FormatAcquisitionExpiry(latestRequest),
+    };
 }
 
 static string RenderAcquisitionRequestActions(
