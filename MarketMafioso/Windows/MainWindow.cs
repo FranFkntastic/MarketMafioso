@@ -33,6 +33,8 @@ public class MainWindow : Window, IDisposable
     private readonly UniversalisMarketAcquisitionPlanSource acquisitionPlanSource;
     private readonly MarketBoardListingReader marketBoardListingReader;
     private readonly MarketBoardItemSearchDriver marketBoardItemSearchDriver;
+    private readonly DalamudMarketBoardPurchaseAdapter marketBoardPurchaseAdapter;
+    private readonly MarketBoardPurchaseExecutor marketBoardPurchaseExecutor;
     private readonly MarketBoardApproachService marketBoardApproachService;
     private readonly MarketAcquisitionRouteRunner marketAcquisitionRouteRunner;
 
@@ -51,6 +53,9 @@ public class MainWindow : Window, IDisposable
     private MarketBoardReadResult? marketBoardReadResult;
     private MarketBoardListingReconciliation? marketBoardReconciliation;
     private MarketAcquisitionLiveDryRun? marketAcquisitionLiveDryRun;
+    private MarketBoardPurchaseResult? marketBoardPurchaseResult;
+    private MarketBoardPurchaseCandidate? pendingMarketBoardPurchaseCandidate;
+    private DateTimeOffset pendingMarketBoardPurchaseExpiresUtc = DateTimeOffset.MinValue;
     private DateTimeOffset nextGuidedRouteMonitorUtc = DateTimeOffset.MinValue;
     private int marketSearchInputSnapshotIndex;
     private bool guidedRouteProbeRunning = false;
@@ -111,6 +116,8 @@ public class MainWindow : Window, IDisposable
         acquisitionPlanSource = new UniversalisMarketAcquisitionPlanSource(acquisitionHttpClient);
         marketBoardListingReader = new MarketBoardListingReader(Plugin.GameGui);
         marketBoardItemSearchDriver = new MarketBoardItemSearchDriver(Plugin.GameGui);
+        marketBoardPurchaseAdapter = new DalamudMarketBoardPurchaseAdapter(Plugin.GameGui, log);
+        marketBoardPurchaseExecutor = new MarketBoardPurchaseExecutor(marketBoardPurchaseAdapter);
         this.marketBoardApproachService = marketBoardApproachService;
         marketAcquisitionRouteRunner = new MarketAcquisitionRouteRunner(marketAcquisitionRouteDiagnosticsDirectory);
 
@@ -168,6 +175,8 @@ public class MainWindow : Window, IDisposable
 
     public override void Draw()
     {
+        MonitorPendingMarketBoardPurchase();
+
         DrawHeader();
         ImGui.Spacing();
 
@@ -678,6 +687,30 @@ public class MainWindow : Window, IDisposable
 
         var summary = MarketAcquisitionLiveDryRunPresenter.BuildSummary(marketAcquisitionLiveDryRun);
         ImGui.TextColored(ColMuted, $"{summary.WouldBuyRows:N0} buy row(s), {summary.SkippedRows:N0} skipped row(s).");
+
+        var firstCandidate = MarketBoardPurchasePlanner.SelectFirstCandidate(marketAcquisitionLiveDryRun);
+        var canAttemptPurchase = !acquisitionRequestBusy &&
+                                 firstCandidate != null &&
+                                 pendingMarketBoardPurchaseCandidate == null &&
+                                 marketAcquisitionLiveDryRun.Status == "Ready";
+        if (ImGuiUi.Button("Buy First Safe Listing", canAttemptPurchase))
+            ExecuteFirstMarketBoardPurchase();
+
+        if (firstCandidate != null)
+        {
+            ImGui.SameLine();
+            ImGui.TextColored(
+                ColMuted,
+                $"Next: {firstCandidate.Quantity:N0} @ {FormatGil(firstCandidate.UnitPrice)} ({FormatGil(firstCandidate.TotalGil)})");
+        }
+
+        if (marketBoardPurchaseResult != null)
+        {
+            var color = marketBoardPurchaseResult.Status is "ConfirmationAccepted" ? ColSuccess :
+                marketBoardPurchaseResult.Status is "PurchaseSelectionSent" or "ConfirmationPending" ? ColHeader :
+                ColError;
+            ImGui.TextColored(color, $"Purchase: {marketBoardPurchaseResult.Status} - {marketBoardPurchaseResult.Message}");
+        }
     }
 
     private static void DrawClaimedRequestRow(string label, string value)
@@ -737,6 +770,7 @@ public class MainWindow : Window, IDisposable
             marketBoardReadResult = null;
             marketBoardReconciliation = null;
             marketAcquisitionLiveDryRun = null;
+            ClearMarketBoardPurchaseState();
             ResetGuidedRoute("No guided route has started.");
             pendingAcquisitionRequests = pendingAcquisitionRequests
                 .Where(request => !string.Equals(request.Id, requestId, StringComparison.Ordinal))
@@ -772,6 +806,7 @@ public class MainWindow : Window, IDisposable
             marketBoardReadResult = null;
             marketBoardReconciliation = null;
             marketAcquisitionLiveDryRun = null;
+            ClearMarketBoardPurchaseState();
             ResetGuidedRoute("No guided route has started.");
             acquisitionStatus = "Request accepted locally. Prepare a dry-run plan when ready.";
         }).ConfigureAwait(false);
@@ -802,6 +837,7 @@ public class MainWindow : Window, IDisposable
             marketBoardReadResult = null;
             marketBoardReconciliation = null;
             marketAcquisitionLiveDryRun = null;
+            ClearMarketBoardPurchaseState();
             ResetGuidedRoute("No guided route has started.");
             acquisitionStatus = "Request rejected.";
         }).ConfigureAwait(false);
@@ -818,6 +854,7 @@ public class MainWindow : Window, IDisposable
         marketBoardReadResult = null;
         marketBoardReconciliation = null;
         marketAcquisitionLiveDryRun = null;
+        ClearMarketBoardPurchaseState();
         ResetGuidedRoute("No route has started.");
         acquisitionStatus = "Forgot local acquisition claim. Fetch dashboard requests to pick up a pending request.";
     }
@@ -847,6 +884,7 @@ public class MainWindow : Window, IDisposable
             marketBoardReadResult = null;
             marketBoardReconciliation = null;
             marketAcquisitionLiveDryRun = null;
+            ClearMarketBoardPurchaseState();
             ResetGuidedRoute("No route has started.");
             acquisitionStatus = acquisitionPlan.Status == "Ready"
                 ? $"Prepared {acquisitionPlan.WorldBatches.Count} world batch(es)."
@@ -865,6 +903,7 @@ public class MainWindow : Window, IDisposable
             var currentWorld = GetCurrentWorldName();
             marketBoardReconciliation = null;
             marketAcquisitionLiveDryRun = null;
+            ClearPendingMarketBoardPurchase();
             marketBoardReadResult = marketBoardListingReader.ReadCurrentListings(currentWorld);
 
             marketBoardReconciliation = marketBoardReadResult.Status == "Ready"
@@ -897,6 +936,80 @@ public class MainWindow : Window, IDisposable
 
             return Task.CompletedTask;
         });
+    }
+
+    private void ExecuteFirstMarketBoardPurchase()
+    {
+        try
+        {
+            var dryRun = marketAcquisitionLiveDryRun ??
+                         throw new InvalidOperationException("Run a live dry-run before attempting a market-board purchase.");
+            var currentWorld = GetCurrentWorldName();
+            var freshRead = marketBoardListingReader.ReadCurrentListings(currentWorld);
+
+            marketBoardPurchaseResult = marketBoardPurchaseExecutor.ExecuteFirstCandidate(dryRun, freshRead);
+            if (marketBoardPurchaseResult.Status == "PurchaseSelectionSent" &&
+                marketBoardPurchaseResult.Candidate != null)
+            {
+                pendingMarketBoardPurchaseCandidate = marketBoardPurchaseResult.Candidate;
+                pendingMarketBoardPurchaseExpiresUtc = DateTimeOffset.UtcNow.AddSeconds(15);
+            }
+
+            acquisitionStatus = $"Market-board purchase attempt: {marketBoardPurchaseResult.Status}. {marketBoardPurchaseResult.Message}";
+        }
+        catch (Exception ex)
+        {
+            ClearPendingMarketBoardPurchase();
+            marketBoardPurchaseResult = new MarketBoardPurchaseResult
+            {
+                Status = "PurchaseFailed",
+                Message = ex.Message,
+            };
+            acquisitionStatus = $"Market-board purchase attempt failed: {ex.Message}";
+            log.Error(ex, "[MarketMafioso] Market-board purchase attempt failed.");
+        }
+    }
+
+    private void MonitorPendingMarketBoardPurchase()
+    {
+        if (pendingMarketBoardPurchaseCandidate == null)
+            return;
+
+        if (DateTimeOffset.UtcNow > pendingMarketBoardPurchaseExpiresUtc)
+        {
+            marketBoardPurchaseResult = new MarketBoardPurchaseResult
+            {
+                Status = "ConfirmationTimeout",
+                Message = "No market-board purchase confirmation prompt appeared within 15 seconds.",
+                Candidate = pendingMarketBoardPurchaseCandidate,
+            };
+            acquisitionStatus = marketBoardPurchaseResult.Message;
+            ClearPendingMarketBoardPurchase();
+            return;
+        }
+
+        var result = marketBoardPurchaseAdapter.TryConfirmPendingPurchase(pendingMarketBoardPurchaseCandidate);
+        if (result.Status == "ConfirmationPending")
+        {
+            marketBoardPurchaseResult = result;
+            return;
+        }
+
+        marketBoardPurchaseResult = result;
+        acquisitionStatus = $"Market-board purchase confirmation: {result.Status}. {result.Message}";
+        ClearPendingMarketBoardPurchase();
+    }
+
+    private void ClearPendingMarketBoardPurchase()
+    {
+        pendingMarketBoardPurchaseCandidate = null;
+        pendingMarketBoardPurchaseExpiresUtc = DateTimeOffset.MinValue;
+    }
+
+    private void ClearMarketBoardPurchaseState()
+    {
+        marketBoardPurchaseResult = null;
+        ClearPendingMarketBoardPurchase();
     }
 
     private void DrawMarketAcquisitionGuidedRoute()
@@ -1027,6 +1140,7 @@ public class MainWindow : Window, IDisposable
             marketBoardReadResult = null;
             marketBoardReconciliation = null;
             marketAcquisitionLiveDryRun = null;
+            ClearMarketBoardPurchaseState();
             guidedRouteProbeRunning = false;
             nextGuidedRouteMonitorUtc = DateTimeOffset.MinValue;
             ReportGuidedRouteProgress();
@@ -1050,6 +1164,7 @@ public class MainWindow : Window, IDisposable
             marketBoardReadResult = null;
             marketBoardReconciliation = null;
             marketAcquisitionLiveDryRun = null;
+            ClearMarketBoardPurchaseState();
             guidedRouteProbeRunning = false;
             nextGuidedRouteMonitorUtc = DateTimeOffset.MinValue;
             ReportGuidedRouteProgress();

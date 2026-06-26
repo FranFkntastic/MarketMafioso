@@ -1,0 +1,63 @@
+using System;
+using System.Linq;
+
+namespace MarketMafioso.MarketAcquisition;
+
+public static class MarketBoardPurchasePlanner
+{
+    public static MarketBoardPurchaseCandidate? SelectFirstCandidate(MarketAcquisitionLiveDryRun dryRun)
+    {
+        ArgumentNullException.ThrowIfNull(dryRun);
+
+        var row = dryRun.Rows.FirstOrDefault(row =>
+            row.Decision.Equals("WouldBuy", StringComparison.OrdinalIgnoreCase));
+        return row == null
+            ? null
+            : MarketBoardPurchaseCandidate.FromLiveListing(row.LiveListing);
+    }
+
+    public static MarketBoardPurchaseRevalidation RevalidateCandidate(
+        MarketBoardPurchaseCandidate candidate,
+        MarketBoardReadResult freshRead)
+    {
+        ArgumentNullException.ThrowIfNull(candidate);
+        ArgumentNullException.ThrowIfNull(freshRead);
+
+        if (!freshRead.Status.Equals("Ready", StringComparison.OrdinalIgnoreCase))
+        {
+            return MarketBoardPurchaseRevalidation.Fail(
+                freshRead.Status,
+                $"Fresh live listing read is not ready: {freshRead.Message}");
+        }
+
+        if (freshRead.ItemId != candidate.ItemId)
+        {
+            return MarketBoardPurchaseRevalidation.Fail(
+                "WrongItem",
+                "Fresh live listing read item id does not match the guarded purchase candidate.");
+        }
+
+        if (!freshRead.WorldName.Equals(candidate.WorldName, StringComparison.OrdinalIgnoreCase))
+        {
+            return MarketBoardPurchaseRevalidation.Fail(
+                "WrongWorld",
+                "Fresh live listing read world does not match the guarded purchase candidate.");
+        }
+
+        var sameIdentity = freshRead.Listings.FirstOrDefault(listing =>
+            listing.ListingId.Equals(candidate.ListingId, StringComparison.Ordinal) &&
+            listing.RetainerId.Equals(candidate.RetainerId, StringComparison.Ordinal));
+        if (sameIdentity == null)
+        {
+            return MarketBoardPurchaseRevalidation.Fail(
+                "ListingMissing",
+                "Fresh live listing read no longer contains the guarded purchase candidate.");
+        }
+
+        return candidate.Matches(sameIdentity)
+            ? MarketBoardPurchaseRevalidation.Ready(candidate, sameIdentity)
+            : MarketBoardPurchaseRevalidation.Fail(
+                "ListingChanged",
+                "Fresh live listing identity still exists, but item, price, quantity, world, or HQ changed.");
+    }
+}
