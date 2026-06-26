@@ -38,7 +38,7 @@ The safe order is to make the server and plugin speak first, then prove read-onl
 
 ## Progress Snapshot
 
-Current status after the 2026-06-25 local-dev pass:
+Current status after the 2026-06-26 local-dev pass:
 
 | Phase | Status | Notes |
 | --- | --- | --- |
@@ -47,11 +47,11 @@ Current status after the 2026-06-25 local-dev pass:
 | Phase 2: Dashboard Request Creation Surface | Done | Dashboard has a Market Acquisition surface, item search/ID resolution, queue staging, diagnostic error display, optional gil cap, request list, and queue recovery actions to cancel or resend stranded requests. Quantity modes still need to be simplified from legacy `Exact`/`UpTo`/`AllBelowThreshold` UI to `TargetQuantity`/`AllBelowThreshold`. |
 | Phase 3: Plugin Request Pickup UI | Done | `/mmf` has a Market Acquisition tab with one-shot fetch, claim, accept, reject, persisted active claim restore after plugin reload, local claim forget, and shared plugin-wide server/API-key settings. |
 | Phase 4: Market Planning Dry Run | Done | Accepted requests can prepare a Universalis-backed advisory plan and display world/listing batches. Planner semantics now need to align with the two-mode quantity model and optional gil cap everywhere. |
-| Phase 5: Live Market Board Read-Only Probe | Done for visible rows | In-game probe succeeded on current patch: item id, visible listing rows, listing id, retainer id/name, HQ flag, unit price, and quantity populated correctly. The `WaitingForListings` flag can remain set while visible rows exist, and the reader now treats populated rows as ready with a diagnostic note. Current-world live candidate evaluation is included in this phase because it only classifies the visible page after the read-only probe. Remaining risk moves to pagination/deeper listing-page behavior. No purchase path exists. |
+| Phase 5: Live Market Board Read-Only Probe | Done for visible rows | In-game probe succeeded on current patch: item id, visible listing rows, listing id, retainer id/name, HQ flag, unit price, and quantity populated correctly. The `WaitingForListings` flag can remain set while visible rows exist, and the reader now treats populated rows as ready with a diagnostic note. Current-world live candidate evaluation is included in this phase because it only classifies the visible page after the read-only probe. Remaining risk moves to pagination/deeper listing-page behavior. |
 | Phase 5.5: Current-World Live Candidate Evaluation | Done for visible rows | After `Read Live Listings`, the plugin validates item/world, builds a confirmed live candidate pool, sorts by live unit price, supports favorable drift, respects HQ/max-unit/gil-cap constraints, and reports would-buy/skip/under-procure outcomes without purchasing. Verbose tables live in a diagnostics popout so the main Market Acquisition tab stays operational. |
-| Phase 6: Lifestream-Guided World-Batch Orchestration | Dry-run route proven locally | Local live testing completed a full multi-world guided dry-run with Lifestream travel, market-board approach, item search, exact item-result selection, visible listing reads, candidate evaluation, market-board close-before-travel, and route completion. Planning now route-sorts selected batches from the player's current world and data center before crossing to other data centers. Plugin route progress/failure is reported into the server lifecycle and surfaced on the dashboard queue. Purchase confirmation, purchase execution, true completion reporting, and live re-ranking across remaining stops remain pending. |
-| Phase 7: Purchase Mechanism Investigation | Not started | Blocks any real purchase executor. Must prove the purchase path, success/failure observation, and safe stop behavior with low-value current-world tests. |
-| Phase 8: Guarded Purchase Execution | Blocked | Only starts if Phase 7 proves a safe purchase mechanism. |
+| Phase 6: Lifestream-Guided World-Batch Orchestration | Dry-run route proven locally | Local live testing completed a full multi-world guided dry-run with Lifestream travel, market-board approach, item search, exact item-result selection, visible listing reads, candidate evaluation, market-board close-before-travel, and route completion. Planning now route-sorts selected batches from the player's current world and data center before crossing to other data centers. Plugin route progress/failure is reported into the server lifecycle and surfaced on the dashboard queue. True completion reporting and live re-ranking across remaining stops remain pending. |
+| Phase 7: Purchase Mechanism Investigation | Done for first safe listing | Human-equivalent purchase input capture and guarded adapter work proved that a selected, live-revalidated market-board row can be driven to purchase. The first live test confirmed `Buy First Safe Listing` functions from a populated listing page. |
+| Phase 8: Guarded Purchase Execution | First current-world slice proven | Current implementation selects the first safe live candidate, revalidates against a fresh read, executes one guarded purchase attempt, and stops. Remaining work is multi-listing single-world batches, world-batch confirmation, per-purchase audit/progress, terminal completion reporting, and favorable-drift re-ranking across the remaining route. |
 | Phase 9: Travel Automation Spike | Deferred | Only needed if Lifestream cannot cover the required region/world routes. Until then, travel work is an integration/orchestration problem rather than native aetheryte automation. |
 | Phase 10: Craft Architect Plan Integration | Deferred | Wait until the core loop is proven and a clean HTTP/JSON service boundary exists. |
 
@@ -496,10 +496,11 @@ Add a local runner that walks through planned world batches by delegating travel
 - Done: Market-board windows are closed before the next travel command.
 - Done: Route ordering prefers the player's current world/data center before crossing to other data centers.
 - Done: Plugin reports guided route progress/failure into the server lifecycle, and the dashboard queue surfaces the latest runner state/message.
-- Still pending: Completion reporting is intentionally held until the plugin actually purchases stock.
+- Done: Travel command preflight blocks Lifestream dispatch while known blocking UI is open.
+- Still pending: Completion reporting is intentionally held until the plugin completes live purchase batches.
 - Still pending: World-batch confirmation surface for future live purchases.
 - Still pending: Live re-ranking of remaining stops after favorable live drift.
-- No purchase path exists.
+- Single-listing purchase now exists outside the guided route batch loop.
 
 ## Phase 7: Purchase Mechanism Investigation
 
@@ -508,6 +509,15 @@ Add a local runner that walks through planned world batches by delegating travel
 Prove or reject a safe way to execute a purchase programmatically from a live validated listing.
 
 This is an investigation phase, not a shipping phase.
+
+### Current Implementation Status
+
+- Done: General-purpose input capture can record market-board UI/input state and finalize standalone diagnostics logs.
+- Done: Human-equivalent search automation proved the game requires focused text-input state before item search becomes valid.
+- Done: Exact item-result selection is driven through the visible result list instead of the wishlist/category surface.
+- Done: Purchase adapter can locate a matching live listing row, select it, and drive the confirmation path for the first safe candidate.
+- Done: `Buy First Safe Listing` was confirmed live on 2026-06-26 after a successful diagnostic run.
+- Remaining: Broaden purchase observation beyond the first low-risk listing and keep refining failure classification as live failures are observed.
 
 ### Proposed Files
 
@@ -538,15 +548,24 @@ This is an investigation phase, not a shipping phase.
 ### Exit Criteria
 
 - Written probe result explains whether guarded purchase execution is feasible.
-- If feasible, exact required fields, preconditions, postconditions, success signal, failure signal, and safe stop behavior are documented.
-- If not feasible, roadmap stops at dry-run/guided mode until a safer path exists.
-- No purchase code may be merged behind a runtime flag until this probe passes.
+- Feasible: exact required fields, preconditions, postconditions, success signal, failure signal, and safe stop behavior are now implemented for the first safe listing.
+- No purchase code advances beyond the one-listing slice until the next live batch behavior is intentionally designed and tested.
 
 ## Phase 8: Guarded Purchase Execution
 
 ### Objective
 
 Add live purchases behind strict gates if Phase 7 proves the mechanism.
+
+### Current Implementation Status
+
+- Done: `MarketBoardPurchasePlanner` selects the first `WouldBuy` row and revalidates it against a fresh live listing read.
+- Done: `MarketBoardPurchaseExecutor` refuses missing or mismatched candidates, calls the adapter once for a validated candidate, and stops after one attempt.
+- Done: The plugin exposes a guarded one-shot `Buy First Safe Listing` action after a ready live dry-run.
+- Done: Live testing confirmed the one-shot purchase action functions.
+- Pending: Build the single-world batch loop that consumes multiple safe visible listings after one explicit confirmation.
+- Pending: Add guided-route integration so successful batch purchases can advance worlds and report terminal completion to the dashboard.
+- Pending: Add audit/progress rows for actual purchase attempts, skips, and stop classifications.
 
 ### Proposed Files
 
@@ -582,7 +601,7 @@ Add live purchases behind strict gates if Phase 7 proves the mechanism.
 - One low-value current-world purchase succeeds under max unit price.
 - Multi-listing single-world batch succeeds after one confirmation.
 - Unsafe or ambiguous mismatch stops the affected candidate or batch according to the failure taxonomy. Favorable live drift can continue.
-- No purchase path exists without local plugin acceptance and world-batch confirmation.
+- No purchase path exists without local plugin acceptance and an explicit plugin action or confirmation.
 - Unknown purchase response stops the runner.
 - Execution audit records enough listing identity and validation facts to explain why a purchase was attempted, without storing secrets or raw unstable client dumps by default.
 
