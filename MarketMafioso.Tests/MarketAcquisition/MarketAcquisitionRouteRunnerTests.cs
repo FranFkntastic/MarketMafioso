@@ -381,6 +381,46 @@ public sealed class MarketAcquisitionRouteRunnerTests
         Assert.Contains("focusedNode: AtkComponentTextInput#12", text, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void FinalizeInputCaptureLog_ClosesStandaloneCaptureDiagnostics()
+    {
+        using var runner = CreateRunner();
+        runner.RecordInputCapture("before-purchase-click", new MarketMafioso.MarketAcquisition.MarketBoardInputCapture
+        {
+            Status = "Captured",
+            Message = "Captured current market board UI/input state.",
+        });
+
+        var result = runner.FinalizeInputCaptureLog();
+
+        Assert.True(result.Success);
+        Assert.False(runner.CanFinalizeInputCaptureLog);
+        Assert.Contains("finalized", runner.StatusMessage, StringComparison.OrdinalIgnoreCase);
+        var text = ReadLog(runner.LastDiagnosticFilePath!);
+        Assert.Contains("input-capture-finalized", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void FinalizeInputCaptureLog_DoesNotCloseRouteDiagnostics()
+    {
+        using var runner = CreateRunner();
+        runner.Start(CreatePlan("Maduin"), enableDiagnostics: true);
+        runner.RecordInputCapture("during-route", new MarketMafioso.MarketAcquisition.MarketBoardInputCapture
+        {
+            Status = "Captured",
+            Message = "Captured current market board UI/input state.",
+        });
+
+        var result = runner.FinalizeInputCaptureLog();
+
+        Assert.False(result.Success);
+        Assert.False(runner.CanFinalizeInputCaptureLog);
+        Assert.Contains("route diagnostics", runner.StatusMessage, StringComparison.OrdinalIgnoreCase);
+        runner.ExecutePendingTravelCommand(_ => true);
+        var text = ReadLog(runner.LastDiagnosticFilePath!);
+        Assert.Contains("travel-command", text, StringComparison.Ordinal);
+    }
+
     private static MarketMafioso.MarketAcquisition.MarketAcquisitionRouteRunner CreateRunner() =>
         new(CreateTempDirectory());
 

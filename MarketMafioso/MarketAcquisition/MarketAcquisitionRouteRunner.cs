@@ -13,6 +13,7 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
     private MarketAcquisitionGuidedRouteSession? session;
     private MarketAcquisitionRouteDiagnostics diagnostics = MarketAcquisitionRouteDiagnostics.Disabled;
     private bool diagnosticsRequested;
+    private bool standaloneInputCaptureLogOpen;
     private DateTimeOffset? itemSearchAutomationStartedUtc;
 
     public MarketAcquisitionRouteRunner(string diagnosticsDirectory)
@@ -32,6 +33,8 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
     public bool SearchSubmitted { get; private set; }
 
     public bool MarketBoardCloseRequiredBeforeTravel { get; private set; }
+
+    public bool CanFinalizeInputCaptureLog => standaloneInputCaptureLogOpen && diagnostics.IsEnabled;
 
     public MarketAcquisitionGuidedRouteStop? ActiveStop =>
         State is "Completed" or "Stopped" or "Failed"
@@ -62,6 +65,7 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         State = "Running";
         SearchSubmitted = false;
         MarketBoardCloseRequiredBeforeTravel = false;
+        standaloneInputCaptureLogOpen = false;
         itemSearchAutomationStartedUtc = null;
         StatusMessage = $"Route started. Next stop: {session.ActiveStop?.WorldName}.";
         diagnostics.Record(
@@ -116,6 +120,7 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         StatusMessage = "Route stopped.";
         SearchSubmitted = false;
         MarketBoardCloseRequiredBeforeTravel = false;
+        standaloneInputCaptureLogOpen = false;
         itemSearchAutomationStartedUtc = null;
         diagnostics.Record("stopped", StatusMessage);
         CloseDiagnostics();
@@ -130,6 +135,7 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         StatusMessage = statusMessage;
         SearchSubmitted = false;
         MarketBoardCloseRequiredBeforeTravel = false;
+        standaloneInputCaptureLogOpen = false;
         itemSearchAutomationStartedUtc = null;
         diagnosticsRequested = false;
         LastDiagnosticFilePath = null;
@@ -273,6 +279,7 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         {
             diagnostics = MarketAcquisitionRouteDiagnostics.CreateEnabled(diagnosticsDirectory, DateTimeOffset.Now);
             LastDiagnosticFilePath = diagnostics.FilePath;
+            standaloneInputCaptureLogOpen = true;
         }
 
         var details = new Dictionary<string, string?>
@@ -285,6 +292,27 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
 
         diagnostics.Record("input-capture", capture.Message, details);
         StatusMessage = $"Captured market board input state: {label}.";
+        return MarketAcquisitionRouteActionResult.Ok(StatusMessage);
+    }
+
+    public MarketAcquisitionRouteActionResult FinalizeInputCaptureLog()
+    {
+        if (diagnosticsRequested && IsRunning)
+        {
+            StatusMessage = "Active route diagnostics are still running; stop or complete the route to finalize that log.";
+            return MarketAcquisitionRouteActionResult.Fail(StatusMessage);
+        }
+
+        if (!CanFinalizeInputCaptureLog)
+        {
+            StatusMessage = "No standalone input capture log is open.";
+            return MarketAcquisitionRouteActionResult.Fail(StatusMessage);
+        }
+
+        StatusMessage = "Standalone input capture log finalized.";
+        diagnostics.Record("input-capture-finalized", StatusMessage);
+        standaloneInputCaptureLogOpen = false;
+        CloseDiagnostics();
         return MarketAcquisitionRouteActionResult.Ok(StatusMessage);
     }
 
@@ -485,6 +513,7 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         StatusMessage = message;
         SearchSubmitted = false;
         MarketBoardCloseRequiredBeforeTravel = false;
+        standaloneInputCaptureLogOpen = false;
         itemSearchAutomationStartedUtc = null;
         diagnostics.Fail(message, exception);
         CloseDiagnostics();
@@ -502,6 +531,7 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         StatusMessage = message;
         SearchSubmitted = false;
         MarketBoardCloseRequiredBeforeTravel = false;
+        standaloneInputCaptureLogOpen = false;
         itemSearchAutomationStartedUtc = null;
         diagnostics.Complete(message);
         CloseDiagnostics();

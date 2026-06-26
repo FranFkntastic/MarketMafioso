@@ -982,6 +982,10 @@ public class MainWindow : Window, IDisposable
         if (ImGuiUi.Button("Capture Input State", true))
             CaptureMarketBoardInputState();
 
+        ImGui.SameLine();
+        if (ImGuiUi.Button("Finish Capture Log", marketAcquisitionRouteRunner.CanFinalizeInputCaptureLog))
+            FinalizeMarketBoardInputCaptureLog();
+
         if (marketAcquisitionRouteRunner.LastDiagnosticFilePath != null)
             ImGui.TextColored(ColMuted, $"Capture log: {marketAcquisitionRouteRunner.LastDiagnosticFilePath}");
     }
@@ -1078,6 +1082,20 @@ public class MainWindow : Window, IDisposable
         {
             acquisitionStatus = $"Unable to capture market board input state. {ex.Message}";
             log.Warning(ex, "[MarketMafioso] Unable to capture market board input state.");
+        }
+    }
+
+    private void FinalizeMarketBoardInputCaptureLog()
+    {
+        try
+        {
+            var result = marketAcquisitionRouteRunner.FinalizeInputCaptureLog();
+            acquisitionStatus = result.Message;
+        }
+        catch (Exception ex)
+        {
+            acquisitionStatus = $"Unable to finalize market board input capture log. {ex.Message}";
+            log.Warning(ex, "[MarketMafioso] Unable to finalize market board input capture log.");
         }
     }
 
