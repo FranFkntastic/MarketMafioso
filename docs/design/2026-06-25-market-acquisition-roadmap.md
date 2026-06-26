@@ -47,8 +47,8 @@ Current status after the 2026-06-25 local-dev pass:
 | Phase 2: Dashboard Request Creation Surface | Done | Dashboard has a Market Acquisition surface, item search/ID resolution, queue staging, diagnostic error display, optional gil cap, request list, and queue recovery actions to cancel or resend stranded requests. Quantity modes still need to be simplified from legacy `Exact`/`UpTo`/`AllBelowThreshold` UI to `TargetQuantity`/`AllBelowThreshold`. |
 | Phase 3: Plugin Request Pickup UI | Done | `/mmf` has a Market Acquisition tab with one-shot fetch, claim, accept, reject, persisted active claim restore after plugin reload, local claim forget, and shared plugin-wide server/API-key settings. |
 | Phase 4: Market Planning Dry Run | Done | Accepted requests can prepare a Universalis-backed advisory plan and display world/listing batches. Planner semantics now need to align with the two-mode quantity model and optional gil cap everywhere. |
-| Phase 5: Live Market Board Read-Only Probe | Partially done | Code exists for read-only market-board reading and strict reconciliation, and the UI exposes `Read Live Listings`. Remaining work is live in-game proof of current patch field population, identity stability, pagination/loading behavior, and candidate-pool semantics for favorable drift. No purchase path exists. |
-| Phase 6: Guided World-Batch Dry Run | Not started | Next implementation phase. It should turn Phase 5 reads into a confirmed candidate pool, sort by live unit price, support favorable drift, and report dry-run outcomes without purchasing. |
+| Phase 5: Live Market Board Read-Only Probe | Done for visible rows | In-game probe succeeded on current patch: item id, visible listing rows, listing id, retainer id/name, HQ flag, unit price, and quantity populated correctly. The `WaitingForListings` flag can remain set while visible rows exist, and the reader now treats populated rows as ready with a diagnostic note. Remaining risk moves to pagination/deeper listing-page behavior. No purchase path exists. |
+| Phase 6: Guided World-Batch Dry Run | Partially done | Current-world live dry-run candidate selection exists after `Read Live Listings`: it validates item/world, builds a confirmed live candidate pool, sorts by live unit price, supports favorable drift, respects HQ/max-unit/gil-cap constraints, and reports would-buy/skip/under-procure outcomes without purchasing. Multi-world runner progression is still not started. |
 | Phase 7: Purchase Mechanism Investigation | Not started | Blocks any real purchase executor. Must prove the purchase path, success/failure observation, and safe stop behavior with low-value current-world tests. |
 | Phase 8: Guarded Purchase Execution | Blocked | Only starts if Phase 7 proves a safe purchase mechanism. |
 | Phase 9: Travel Automation Spike | Not started | Can run after Phase 6; travel automation remains gated behind documented UI preconditions/postconditions. |
@@ -330,8 +330,9 @@ Read and reconcile live market board listings from the game without sending any 
 - Planned listings are advisory rows. Live rows become executable only after item id, world, HQ policy, unit price threshold, listing id, retainer id, quantity, and purchase preconditions are read from the current market board state.
 - Missing planned listings, cheaper replacement listings, extra below-threshold stock, and changed quantities are classified explicitly. Favorable changes can produce executable candidates; unsafe or ambiguous changes block the affected candidate.
 - The probe reads `SearchItemId`, `ListingCount`, `WaitingForListings`, and current `Listings` only.
+- Live proof on 2026-06-25 confirmed visible listing rows populate even when `WaitingForListings` remains true. When rows are visible, the reader treats the result as ready and includes a diagnostic message that the waiting flag was still set.
 - No callback, packet, purchase request, world-travel automation, market-board search automation, or row selection exists yet.
-- Local FFXIVClientStructs XML exposes `AddonItemSearchResult`, `AgentItemSearch`, and `InfoProxyItemSearch.Listings`; exact field interpretation still requires an in-game read-only probe.
+- Local FFXIVClientStructs XML exposes `AddonItemSearchResult`, `AgentItemSearch`, and `InfoProxyItemSearch.Listings`; visible-row field interpretation has been proven for the current patch.
 
 ### Implemented Files
 
@@ -339,15 +340,14 @@ Read and reconcile live market board listings from the game without sending any 
 - `MarketMafioso/MarketAcquisition/MarketBoardLiveListingModels.cs`
 - `MarketMafioso/MarketAcquisition/MarketBoardListingReconciler.cs`
 - `MarketMafioso.Tests/MarketAcquisition/MarketBoardListingReconcilerTests.cs`
+- `MarketMafioso.Tests/MarketAcquisition/MarketBoardListingReaderTests.cs`
 - `MarketMafioso/Windows/MainWindow.cs` exposes the `Read Live Listings` probe and reconciliation table.
 
 ### Remaining Work
 
-- Run the probe in-game on the current patch and record the observed field population.
-- Confirm listing id, retainer id, item id, world, price, quantity, HQ flag, pagination, loading, and no-listings behavior.
-- Update the reconciler/reader from strict plan-vs-live matching toward a confirmed candidate-pool builder that accepts favorable drift.
-- Add or update tests for cheaper replacement listings, extra below-threshold stock, missing planned listings, worse prices, and ambiguous identity.
-- Add a diagnostic note under `docs/design/` after the in-game probe.
+- Confirm pagination and deeper listing-page behavior when more listings exist than the currently visible result set.
+- Confirm no-listings behavior on an item/world with no stock.
+- Keep strict reconciliation as diagnostics and use the Phase 6 candidate-pool builder for favorable drift and would-buy decisions.
 
 ### Capability
 
@@ -386,6 +386,7 @@ Read and reconcile live market board listings from the game without sending any 
 - Probe produces live listing rows and validation status.
 - No purchase request path is called.
 - Unknown UI state produces a clear diagnostic.
+- Populated visible rows override a stale `WaitingForListings` flag and produce a ready result with a diagnostic note.
 
 ## Phase 6: Guided World-Batch Dry Run
 
@@ -395,10 +396,14 @@ Add a local runner that walks through planned world batches with manual/guided t
 
 ### Proposed Files
 
-- Create `MarketMafioso/MarketAcquisition/MarketAcquisitionRunner.cs`
-- Create `MarketMafioso/MarketAcquisition/WorldTravel/ManualWorldTravelDriver.cs`
-- Create `MarketMafioso/MarketAcquisition/MarketAcquisitionDiagnostics.cs`
-- Add tests in `MarketMafioso.Tests/MarketAcquisition/MarketAcquisitionRunnerTests.cs`
+- Created first slice: `MarketMafioso/MarketAcquisition/MarketAcquisitionLiveDryRunModels.cs`
+- Created first slice: `MarketMafioso/MarketAcquisition/MarketAcquisitionLiveDryRunPlanner.cs`
+- Added first-slice tests in `MarketMafioso.Tests/MarketAcquisition/MarketAcquisitionLiveDryRunPlannerTests.cs`
+- Later runner files remain proposed:
+  - `MarketMafioso/MarketAcquisition/MarketAcquisitionRunner.cs`
+  - `MarketMafioso/MarketAcquisition/WorldTravel/ManualWorldTravelDriver.cs`
+  - `MarketMafioso/MarketAcquisition/MarketAcquisitionDiagnostics.cs`
+  - `MarketMafioso.Tests/MarketAcquisition/MarketAcquisitionRunnerTests.cs`
 
 ### Capability
 
@@ -408,6 +413,9 @@ Add a local runner that walks through planned world batches with manual/guided t
 - Runner builds a confirmed candidate pool from live listings at or below max unit price.
 - Runner sorts confirmed candidates by unit price before purchase or dry-run action.
 - Runner records favorable drift such as cheaper listings, replacement listings, and more below-threshold stock.
+- First slice performs these candidate-pool decisions for the current visible market-board result set immediately after the read-only probe.
+- First slice reports per-listing `WouldBuy` or `Skipped` rows with explicit reasons such as above threshold, HQ mismatch, gil cap exceeded, or target already satisfied.
+- First slice reports aggregate `Ready`, `UnderProcured`, or `NoSafeListings`.
 - Runner shows one world-batch confirmation.
 - `Dry Run Batch` records what would be bought and advances.
 

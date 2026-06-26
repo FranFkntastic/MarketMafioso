@@ -148,6 +148,7 @@ Dalamud and FFXIVClientStructs expose enough market board state to design a safe
    - MarketMafioso waits for the user to open the market board, or opens/searches it if that path is implemented safely.
    - MarketMafioso loads live listings for the item.
    - MarketMafioso builds a confirmed candidate pool from live listings at or below the max unit price.
+   - The current read-only slice can already dry-run that candidate pool for the current visible market-board result set and report would-buy/skip rows without purchasing.
    - MarketMafioso presents one world-batch confirmation.
    - After confirmation, MarketMafioso purchases still-valid confirmed listings in lowest-price order until the target quantity, all-below-threshold rule, optional gil cap, inventory state, or a safety stop ends the batch.
 11. The run ends as complete, paused, stopped, cancelled, or failed with diagnostics.
@@ -608,6 +609,7 @@ Known safe stops are item mismatch, world mismatch, market board not open, wrong
 - Never exceed the configured total gil cap when one is set.
 - Treat the server/dashboard plan as advisory. Live in-game listings are authoritative at purchase time.
 - Purchase only from a confirmed candidate pool built from live market board rows read during the current run.
+- The first confirmed-candidate implementation is read-only: after `Read Live Listings`, the plugin sorts visible live rows by unit price and reports `WouldBuy`/`Skipped` decisions without selecting rows or sending purchases.
 - Lowest confirmed live unit price wins. If a newly discovered below-threshold listing is cheaper than listings on later planned worlds, buy the cheaper confirmed listing first.
 - Remove the old `Exact` and `UpTo` quantity semantics from new requests. `TargetQuantity` replaces both and buys safe whole stacks until the target is satisfied or safe stock runs out. Harmless whole-stack overage is allowed.
 - `AllBelowThreshold` buys every confirmed live listing at or below the max unit price, optionally bounded by a configured gil cap.
@@ -685,6 +687,17 @@ Manual verification:
 - Reconcile live rows against planned rows.
 - Show live validation status in the UI.
 - Produce diagnostics.
+- Current patch proof succeeded for visible rows. `WaitingForListings` can remain true while rows are visible, so populated rows are treated as ready with a diagnostic note.
+
+### Slice 3.5: Current-World Live Candidate Dry Run
+
+- Build confirmed candidates from the current visible live market-board result set.
+- Sort candidates by live unit price.
+- Include cheaper replacement listings and extra below-threshold stock as favorable drift.
+- Respect HQ policy, max unit price, and optional gil cap.
+- Report aggregate `Ready`, `UnderProcured`, or `NoSafeListings`.
+- Show per-row `WouldBuy` or `Skipped` decisions in the plugin UI.
+- No row selection, purchase calls, travel automation, or server lifecycle completion.
 
 ### Slice 4: Semi-Automatic World Batch Runner
 

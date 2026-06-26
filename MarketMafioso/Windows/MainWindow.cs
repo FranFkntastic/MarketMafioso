@@ -46,6 +46,7 @@ public class MainWindow : Window, IDisposable
     private MarketAcquisitionPlan? acquisitionPlan;
     private MarketBoardReadResult? marketBoardReadResult;
     private MarketBoardListingReconciliation? marketBoardReconciliation;
+    private MarketAcquisitionLiveDryRun? marketAcquisitionLiveDryRun;
     private bool acquisitionRequestBusy = false;
     private string acquisitionStatus = "No dashboard request has been fetched this session.";
     private CancellationTokenSource? acquisitionRequestCancellation;
@@ -487,6 +488,54 @@ public class MainWindow : Window, IDisposable
                 ImGui.EndTable();
             }
         }
+
+        DrawLiveDryRunResult();
+    }
+
+    private void DrawLiveDryRunResult()
+    {
+        if (marketAcquisitionLiveDryRun == null)
+            return;
+
+        ImGui.Spacing();
+        ImGui.TextColored(
+            marketAcquisitionLiveDryRun.Status == "Ready" ? ColSuccess : ColHeader,
+            $"Live dry-run: {marketAcquisitionLiveDryRun.Status}  -  Would buy {marketAcquisitionLiveDryRun.WouldBuyQuantity:N0}/{marketAcquisitionLiveDryRun.RequestedQuantity:N0}, spend {FormatGil(marketAcquisitionLiveDryRun.WouldSpendGil)}");
+        ImGui.TextWrapped(marketAcquisitionLiveDryRun.Message);
+
+        var tableFlags = ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.Resizable;
+        if (ImGui.BeginTable("MarketAcquisitionLiveDryRun", 7, tableFlags))
+        {
+            ImGui.TableSetupColumn("Decision");
+            ImGui.TableSetupColumn("Reason");
+            ImGui.TableSetupColumn("Retainer");
+            ImGui.TableSetupColumn("Qty");
+            ImGui.TableSetupColumn("Unit");
+            ImGui.TableSetupColumn("HQ");
+            ImGui.TableSetupColumn("Message");
+            ImGui.TableHeadersRow();
+
+            foreach (var row in marketAcquisitionLiveDryRun.Rows)
+            {
+                ImGui.TableNextRow();
+                ImGui.TableNextColumn();
+                ImGui.TextColored(row.Decision == "WouldBuy" ? ColSuccess : ColMuted, row.Decision);
+                ImGui.TableNextColumn();
+                ImGui.TextUnformatted(row.Reason);
+                ImGui.TableNextColumn();
+                ImGui.TextUnformatted(row.LiveListing.RetainerName);
+                ImGui.TableNextColumn();
+                ImGui.TextUnformatted(row.LiveListing.Quantity.ToString("N0"));
+                ImGui.TableNextColumn();
+                ImGui.TextUnformatted(FormatGil(row.LiveListing.UnitPrice));
+                ImGui.TableNextColumn();
+                ImGui.TextUnformatted(row.LiveListing.IsHq ? "HQ" : "NQ");
+                ImGui.TableNextColumn();
+                ImGui.TextWrapped(row.Message);
+            }
+
+            ImGui.EndTable();
+        }
     }
 
     private static void DrawClaimedRequestRow(string label, string value)
@@ -545,6 +594,7 @@ public class MainWindow : Window, IDisposable
             acquisitionPlan = null;
             marketBoardReadResult = null;
             marketBoardReconciliation = null;
+            marketAcquisitionLiveDryRun = null;
             pendingAcquisitionRequests = pendingAcquisitionRequests
                 .Where(request => !string.Equals(request.Id, requestId, StringComparison.Ordinal))
                 .ToList();
@@ -578,6 +628,7 @@ public class MainWindow : Window, IDisposable
             acquisitionPlan = null;
             marketBoardReadResult = null;
             marketBoardReconciliation = null;
+            marketAcquisitionLiveDryRun = null;
             acquisitionStatus = "Request accepted locally. Prepare a dry-run plan when ready.";
         }).ConfigureAwait(false);
     }
@@ -606,6 +657,7 @@ public class MainWindow : Window, IDisposable
             acquisitionPlan = null;
             marketBoardReadResult = null;
             marketBoardReconciliation = null;
+            marketAcquisitionLiveDryRun = null;
             acquisitionStatus = "Request rejected.";
         }).ConfigureAwait(false);
     }
@@ -620,6 +672,7 @@ public class MainWindow : Window, IDisposable
         acquisitionPlan = null;
         marketBoardReadResult = null;
         marketBoardReconciliation = null;
+        marketAcquisitionLiveDryRun = null;
         acquisitionStatus = "Forgot local acquisition claim. Fetch dashboard requests to pick up a pending request.";
     }
 
@@ -640,6 +693,7 @@ public class MainWindow : Window, IDisposable
             acquisitionPlan = MarketAcquisitionPlanner.BuildPlan(claimed, listings, DateTimeOffset.UtcNow);
             marketBoardReadResult = null;
             marketBoardReconciliation = null;
+            marketAcquisitionLiveDryRun = null;
             acquisitionStatus = acquisitionPlan.Status == "Ready"
                 ? $"Prepared {acquisitionPlan.WorldBatches.Count} world batch(es)."
                 : "No supported listings found under the configured thresholds.";
@@ -652,8 +706,11 @@ public class MainWindow : Window, IDisposable
         {
             var plan = acquisitionPlan ??
                        throw new InvalidOperationException("Prepare a dry-run plan before probing live market board listings.");
+            var claimed = claimedAcquisitionRequest ??
+                          throw new InvalidOperationException("No dashboard request is accepted.");
             var currentWorld = GetCurrentWorldName();
             marketBoardReconciliation = null;
+            marketAcquisitionLiveDryRun = null;
             marketBoardReadResult = marketBoardListingReader.ReadCurrentListings(currentWorld);
 
             marketBoardReconciliation = marketBoardReadResult.Status == "Ready"
@@ -663,9 +720,17 @@ public class MainWindow : Window, IDisposable
                     marketBoardReadResult.ItemId,
                     marketBoardReadResult.Listings)
                 : null;
+            marketAcquisitionLiveDryRun = marketBoardReadResult.Status == "Ready"
+                ? MarketAcquisitionLiveDryRunPlanner.BuildDryRun(
+                    claimed,
+                    plan,
+                    currentWorld,
+                    marketBoardReadResult.ItemId,
+                    marketBoardReadResult.Listings)
+                : null;
             acquisitionStatus = marketBoardReconciliation == null
                 ? marketBoardReadResult.Message
-                : $"Live listing reconciliation {marketBoardReconciliation.Status}.";
+                : $"Live listing reconciliation {marketBoardReconciliation.Status}; dry-run {marketAcquisitionLiveDryRun?.Status ?? "Unavailable"}.";
 
             return Task.CompletedTask;
         });

@@ -62,7 +62,7 @@ public static class MarketAcquisitionPlanner
         if (listing.UnitPrice > request.MaxUnitPrice)
             return false;
 
-        if (!HqMatches(request.HqPolicy, listing.IsHq))
+        if (!MarketAcquisitionPolicy.HqMatches(request.HqPolicy, listing.IsHq))
             return false;
 
         if (request.WorldMode.Equals("CurrentWorldOnly", StringComparison.OrdinalIgnoreCase) &&
@@ -72,19 +72,9 @@ public static class MarketAcquisitionPlanner
         return true;
     }
 
-    private static bool HqMatches(string hqPolicy, bool isHq) =>
-        hqPolicy switch
-        {
-            "HqOnly" => isHq,
-            "NqOnly" => !isHq,
-            "Either" => true,
-            _ => throw new InvalidOperationException($"Unknown HQ policy {hqPolicy}."),
-        };
-
     private static void ValidateRequest(MarketAcquisitionRequestView request)
     {
-        if (request.HqPolicy is not ("Either" or "HqOnly" or "NqOnly"))
-            throw new InvalidOperationException($"Unknown HQ policy {request.HqPolicy}.");
+        _ = MarketAcquisitionPolicy.NormalizeHqPolicy(request.HqPolicy);
 
         if (request.WorldMode is not ("Recommended" or "CurrentWorldOnly" or "Selected" or "AllWorldSweep"))
             throw new InvalidOperationException($"Unknown world mode {request.WorldMode}.");

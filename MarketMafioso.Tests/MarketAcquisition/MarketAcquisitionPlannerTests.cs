@@ -54,6 +54,25 @@ public sealed class MarketAcquisitionPlannerTests
     }
 
     [Fact]
+    public void BuildPlan_AcceptsDashboardHqPolicyAliases()
+    {
+        var request = CreateRequest(quantity: 10, maxUnitPrice: 100, maxTotalGil: 550, hqPolicy: "HQOnly");
+        var listings = new[]
+        {
+            CreateListing("Gilgamesh", quantity: 4, unitPrice: 80, hq: false, listingId: "nq"),
+            CreateListing("Gilgamesh", quantity: 4, unitPrice: 90, hq: true, listingId: "hq"),
+        };
+
+        var plan = MarketMafioso.MarketAcquisition.MarketAcquisitionPlanner.BuildPlan(
+            request,
+            listings,
+            DateTimeOffset.UnixEpoch);
+
+        var batch = Assert.Single(plan.WorldBatches);
+        Assert.Equal(["hq"], batch.Listings.Select(x => x.ListingId).ToArray());
+    }
+
+    [Fact]
     public void BuildPlan_TreatsZeroGilCapAsNoTotalCap()
     {
         var request = CreateRequest(quantity: 10, maxUnitPrice: 100, maxTotalGil: 0);
