@@ -36,14 +36,64 @@ public sealed class MarketBoardItemSearchDriverTests
     }
 
     [Fact]
-    public void ShouldDisablePartialSearch_ReturnsTrueWhenPartialSearchIsEnabled()
+    public void ShouldDisablePartialSearch_ReturnsFalseWhenPartialSearchIsEnabled()
     {
-        Assert.True(MarketBoardItemSearchDriver.ShouldDisablePartialSearch(true));
+        Assert.False(MarketBoardItemSearchDriver.ShouldDisablePartialSearch(true));
     }
 
     [Fact]
     public void ShouldDisablePartialSearch_ReturnsFalseWhenPartialSearchIsAlreadyDisabled()
     {
         Assert.False(MarketBoardItemSearchDriver.ShouldDisablePartialSearch(false));
+    }
+
+    [Fact]
+    public void IsSubmittedSearchCurrent_MatchesSameItemAndTrimmedSearchText()
+    {
+        Assert.True(MarketBoardItemSearchDriver.IsSubmittedSearchCurrent(7017, "Varnish", 7017, " Varnish "));
+    }
+
+    [Fact]
+    public void IsSubmittedSearchCurrent_ReturnsFalseForDifferentSearchText()
+    {
+        Assert.False(MarketBoardItemSearchDriver.IsSubmittedSearchCurrent(7017, "Varnish", 7017, "Manor Varnish"));
+    }
+
+    [Fact]
+    public void IsSubmittedSearchCurrent_ReturnsFalseForDifferentItem()
+    {
+        Assert.False(MarketBoardItemSearchDriver.IsSubmittedSearchCurrent(7017, "Varnish", 7808, "Varnish"));
+    }
+
+    [Fact]
+    public void GetSearchSubmitCallbackSequence_PrimesInputBeforeEnter()
+    {
+        Assert.Equal(
+            [MarketBoardItemSearchSubmitCallback.TextChanged, MarketBoardItemSearchSubmitCallback.Enter],
+            MarketBoardItemSearchDriver.GetSearchSubmitCallbackSequence());
+    }
+
+    [Fact]
+    public void GetResultActivationEventSequence_ActivatesRowsAsListItems()
+    {
+        Assert.Equal(
+            [MarketBoardItemSearchResultActivationEvent.ListItemClick, MarketBoardItemSearchResultActivationEvent.ListItemDoubleClick],
+            MarketBoardItemSearchDriver.GetResultActivationEventSequence());
+    }
+
+    [Fact]
+    public void ChooseTextInputFocusTarget_PrefersCollisionNode()
+    {
+        Assert.Equal(
+            MarketBoardItemSearchFocusTarget.CollisionNode,
+            MarketBoardItemSearchDriver.ChooseTextInputFocusTarget(hasCollisionNode: true, hasOwnerNode: true));
+    }
+
+    [Fact]
+    public void ChooseTextInputFocusTarget_FallsBackToOwnerNode()
+    {
+        Assert.Equal(
+            MarketBoardItemSearchFocusTarget.OwnerNode,
+            MarketBoardItemSearchDriver.ChooseTextInputFocusTarget(hasCollisionNode: false, hasOwnerNode: true));
     }
 }

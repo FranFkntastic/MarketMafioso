@@ -6,10 +6,51 @@ namespace MarketMafioso.MarketAcquisition;
 
 public static class MarketAcquisitionPlanner
 {
+    private static readonly IReadOnlyDictionary<string, string> NorthAmericaDataCenters =
+        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Adamantoise"] = "Aether",
+            ["Cactuar"] = "Aether",
+            ["Faerie"] = "Aether",
+            ["Gilgamesh"] = "Aether",
+            ["Jenova"] = "Aether",
+            ["Midgardsormr"] = "Aether",
+            ["Sargatanas"] = "Aether",
+            ["Siren"] = "Aether",
+
+            ["Behemoth"] = "Primal",
+            ["Excalibur"] = "Primal",
+            ["Exodus"] = "Primal",
+            ["Famfrit"] = "Primal",
+            ["Hyperion"] = "Primal",
+            ["Lamia"] = "Primal",
+            ["Leviathan"] = "Primal",
+            ["Ultros"] = "Primal",
+
+            ["Balmung"] = "Crystal",
+            ["Brynhildr"] = "Crystal",
+            ["Coeurl"] = "Crystal",
+            ["Diabolos"] = "Crystal",
+            ["Goblin"] = "Crystal",
+            ["Malboro"] = "Crystal",
+            ["Mateus"] = "Crystal",
+            ["Zalera"] = "Crystal",
+
+            ["Cuchulainn"] = "Dynamis",
+            ["Golem"] = "Dynamis",
+            ["Halicarnassus"] = "Dynamis",
+            ["Kraken"] = "Dynamis",
+            ["Maduin"] = "Dynamis",
+            ["Marilith"] = "Dynamis",
+            ["Rafflesia"] = "Dynamis",
+            ["Seraph"] = "Dynamis",
+        };
+
     public static MarketAcquisitionPlan BuildPlan(
         MarketAcquisitionRequestView request,
         IEnumerable<MarketAcquisitionListing> listings,
-        DateTimeOffset preparedAtUtc)
+        DateTimeOffset preparedAtUtc,
+        string? currentWorld = null)
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(listings);
@@ -35,7 +76,9 @@ public static class MarketAcquisitionPlanner
             .ThenBy(batch => batch.Listings[0].UnitPrice)
             .ThenBy(batch => batch.WorldName, StringComparer.OrdinalIgnoreCase)
             .ToList();
-        var batches = BuildExecutableBatchPlan(request, candidateBatches);
+        var batches = RouteSortBatches(
+            BuildExecutableBatchPlan(request, candidateBatches),
+            currentWorld);
 
         var totalQuantity = (uint)batches.Sum(batch => batch.PlannedQuantity);
         var totalGil = (uint)batches.Sum(batch => batch.PlannedGil);
@@ -149,5 +192,47 @@ public static class MarketAcquisitionPlanner
             ExceedsRequestedQuantity = plannedQuantity > request.Quantity,
             Listings = plannedListings,
         };
+    }
+
+    private static IReadOnlyList<MarketAcquisitionWorldBatch> RouteSortBatches(
+        IReadOnlyList<MarketAcquisitionWorldBatch> batches,
+        string? currentWorld)
+    {
+        if (string.IsNullOrWhiteSpace(currentWorld))
+            return batches;
+
+        var currentDataCenter = GetNorthAmericaDataCenter(currentWorld);
+        var indexedBatches = batches
+            .Select((batch, index) => new
+            {
+                Batch = batch,
+                Index = index,
+                DataCenter = GetNorthAmericaDataCenter(batch.WorldName),
+            })
+            .ToList();
+
+        if (indexedBatches.Count <= 1)
+            return batches;
+
+        return indexedBatches
+            .OrderBy(entry => !entry.Batch.WorldName.Equals(currentWorld, StringComparison.OrdinalIgnoreCase))
+            .ThenBy(entry => !entry.DataCenter.Equals(currentDataCenter, StringComparison.OrdinalIgnoreCase))
+            .ThenBy(entry => entry.DataCenter.Equals(currentDataCenter, StringComparison.OrdinalIgnoreCase)
+                ? string.Empty
+                : entry.DataCenter,
+                StringComparer.OrdinalIgnoreCase)
+            .ThenBy(entry => entry.Index)
+            .Select(entry => entry.Batch)
+            .ToList();
+    }
+
+    private static string GetNorthAmericaDataCenter(string worldName)
+    {
+        if (string.IsNullOrWhiteSpace(worldName))
+            throw new InvalidOperationException("World name is required before route data center sorting.");
+
+        return NorthAmericaDataCenters.TryGetValue(worldName.Trim(), out var dataCenter)
+            ? dataCenter
+            : throw new InvalidOperationException($"World {worldName} is not mapped to a North America data center.");
     }
 }

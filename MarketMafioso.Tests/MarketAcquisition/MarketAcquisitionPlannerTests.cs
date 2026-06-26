@@ -143,6 +143,45 @@ public sealed class MarketAcquisitionPlannerTests
     }
 
     [Fact]
+    public void BuildPlan_RouteOrdersCurrentWorldThenCurrentDataCenterBeforeOtherDataCenters()
+    {
+        var request = CreateRequest(quantity: 1_500, maxUnitPrice: 2_000, maxTotalGil: 0, targetWorld: "Siren");
+        var listings = new[]
+        {
+            CreateListing("Rafflesia", quantity: 800, unitPrice: 1_000, listingId: "ra cheap"),
+            CreateListing("Zalera", quantity: 400, unitPrice: 1_050, listingId: "za cheaper remote"),
+            CreateListing("Maduin", quantity: 300, unitPrice: 1_100, listingId: "ma same dc"),
+        };
+
+        var plan = MarketMafioso.MarketAcquisition.MarketAcquisitionPlanner.BuildPlan(
+            request,
+            listings,
+            DateTimeOffset.UnixEpoch,
+            currentWorld: "Rafflesia");
+
+        Assert.Equal(["Rafflesia", "Maduin", "Zalera"], plan.WorldBatches.Select(batch => batch.WorldName).ToArray());
+    }
+
+    [Fact]
+    public void BuildPlan_FailsWhenRouteWorldDataCenterIsUnknown()
+    {
+        var request = CreateRequest(quantity: 10, maxUnitPrice: 2_000, maxTotalGil: 0);
+        var listings = new[]
+        {
+            CreateListing("Notaworld", quantity: 10, unitPrice: 1, listingId: "unknown"),
+        };
+
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            MarketMafioso.MarketAcquisition.MarketAcquisitionPlanner.BuildPlan(
+                request,
+                listings,
+                DateTimeOffset.UnixEpoch,
+                currentWorld: "Rafflesia"));
+        Assert.Contains("data center", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Notaworld", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void BuildPlan_RejectsUnknownHqPolicy()
     {
         var request = CreateRequest(quantity: 1, hqPolicy: "ProbablyFine");

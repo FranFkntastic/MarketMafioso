@@ -9,6 +9,7 @@ using System.Threading.Tasks;
 using Dalamud.Interface.Windowing;
 using Dalamud.Plugin.Services;
 using Dalamud.Bindings.ImGui;
+using FFXIVClientStructs.FFXIV.Component.GUI;
 using MarketMafioso.MarketAcquisition;
 using MarketMafioso.WorkshopPrep;
 
@@ -51,6 +52,7 @@ public class MainWindow : Window, IDisposable
     private MarketBoardListingReconciliation? marketBoardReconciliation;
     private MarketAcquisitionLiveDryRun? marketAcquisitionLiveDryRun;
     private DateTimeOffset nextGuidedRouteMonitorUtc = DateTimeOffset.MinValue;
+    private int marketSearchInputSnapshotIndex;
     private bool guidedRouteProbeRunning = false;
     private bool acquisitionRequestBusy = false;
     private string acquisitionStatus = "No dashboard request has been fetched this session.";
@@ -384,7 +386,7 @@ public class MainWindow : Window, IDisposable
         if (ImGuiUi.Button("Prepare Plan", canPrepare))
             _ = PrepareMarketAcquisitionPlanAsync();
 
-        ImGui.TextColored(ColMuted, "Preparing a plan only reads remote market data. Game UI automation and purchases are not implemented.");
+        ImGui.TextColored(ColMuted, "Preparing a plan only reads remote market data. Guided route automation is available after planning; purchases are not implemented.");
     }
 
     private void DrawMarketAcquisitionPlan()
@@ -503,6 +505,19 @@ public class MainWindow : Window, IDisposable
 
             if (string.Equals(activeStop.Status, "Pending", StringComparison.OrdinalIgnoreCase))
             {
+                if (route.MarketBoardCloseRequiredBeforeTravel)
+                {
+                    if (TryCloseMarketBoardWindows())
+                    {
+                        nextGuidedRouteMonitorUtc = DateTimeOffset.UtcNow.AddSeconds(1);
+                        return;
+                    }
+
+                    route.RecordMarketBoardClosedBeforeTravel();
+                    nextGuidedRouteMonitorUtc = DateTimeOffset.UtcNow.AddMilliseconds(500);
+                    return;
+                }
+
                 route.PreparePendingStopForCurrentWorld(
                     playerState.CurrentWorld.IsValid,
                     playerState.CurrentWorld.IsValid ? GetCurrentWorldName() : null,
@@ -550,13 +565,19 @@ public class MainWindow : Window, IDisposable
                         return;
                     }
 
-                    var searchResult = marketBoardItemSearchDriver.Search(claimed.ItemId, claimed.ItemName);
-                    route.RecordSearchResult(searchResult);
-                    if (!searchResult.SearchSent)
-                        return;
+                    var searchResult = route.SearchCaptureEnabled
+                        ? ObserveSearchCapture(route, claimed.ItemId, claimed.ItemName)
+                        : marketBoardItemSearchDriver.Search(claimed.ItemId, claimed.ItemName);
+                    if (!route.SearchCaptureEnabled)
+                        route.RecordSearchResult(searchResult);
 
-                    nextGuidedRouteMonitorUtc = DateTimeOffset.UtcNow.AddSeconds(1);
-                    return;
+                    if (!searchResult.ReadyForListings)
+                    {
+                        nextGuidedRouteMonitorUtc = DateTimeOffset.UtcNow.AddSeconds(2);
+                        return;
+                    }
+
+                    nextGuidedRouteMonitorUtc = DateTimeOffset.UtcNow;
                 }
 
                 route.BeginProbe($"Arrived on {currentWorld}. Reading live listings for {FormatAcquisitionItem(claimed)}.");
@@ -569,6 +590,45 @@ public class MainWindow : Window, IDisposable
             route.FailRoute($"Unable to monitor guided route. {ex.Message}", ex);
             log.Warning(ex, "[MarketMafioso] Unable to monitor guided market acquisition route.");
         }
+    }
+
+    private static unsafe bool TryCloseMarketBoardWindows()
+    {
+        var closeRequested = false;
+        closeRequested |= TryCloseAddon("ItemSearchResult");
+        closeRequested |= TryCloseAddon("ItemSearch");
+        return closeRequested || IsAddonOpen("ItemSearchResult") || IsAddonOpen("ItemSearch");
+    }
+
+    private static unsafe bool TryCloseAddon(string addonName)
+    {
+        var addon = Plugin.GameGui.GetAddonByName<AtkUnitBase>(addonName, 1);
+        if (!IsAddonOpen(addon))
+            return false;
+
+        addon->Close(true);
+        return true;
+    }
+
+    private static unsafe bool IsAddonOpen(string addonName)
+    {
+        return IsAddonOpen(Plugin.GameGui.GetAddonByName<AtkUnitBase>(addonName, 1));
+    }
+
+    private static unsafe bool IsAddonOpen(AtkUnitBase* addon)
+    {
+        return addon != null && addon->IsReady && addon->IsVisible;
+    }
+
+    private MarketBoardItemSearchResult ObserveSearchCapture(
+        MarketAcquisitionRouteRunner route,
+        uint itemId,
+        string? itemName)
+    {
+        route.BeginSearchCapture(itemId, itemName ?? string.Empty);
+        var observation = marketBoardItemSearchDriver.Observe(itemId, itemName);
+        route.RecordSearchCaptureObservation(observation);
+        return observation;
     }
 
     private async Task ProbeGuidedRouteMarketBoardAsync()
@@ -769,7 +829,14 @@ public class MainWindow : Window, IDisposable
                 claimed.ItemId,
                 100,
                 token).ConfigureAwait(false);
-            acquisitionPlan = MarketAcquisitionPlanner.BuildPlan(claimed, listings, DateTimeOffset.UtcNow);
+            if (!playerState.CurrentWorld.IsValid)
+                throw new InvalidOperationException("Current world is required before preparing a route-aware dry-run plan.");
+
+            acquisitionPlan = MarketAcquisitionPlanner.BuildPlan(
+                claimed,
+                listings,
+                DateTimeOffset.UtcNow,
+                GetCurrentWorldName());
             marketBoardReadResult = null;
             marketBoardReconciliation = null;
             marketAcquisitionLiveDryRun = null;
@@ -841,6 +908,14 @@ public class MainWindow : Window, IDisposable
             StartGuidedRoute(enableDiagnostics: true);
 
         ImGui.SameLine();
+        if (ImGuiUi.Button("Search Capture", canStart))
+            StartGuidedRoute(enableDiagnostics: true, enableSearchCapture: true);
+
+        ImGui.SameLine();
+        if (ImGuiUi.Button("Input Snapshot", true))
+            CaptureMarketSearchInputSnapshot();
+
+        ImGui.SameLine();
         if (marketAcquisitionRouteRunner.IsPaused)
         {
             if (ImGuiUi.Button("Resume", true))
@@ -867,6 +942,12 @@ public class MainWindow : Window, IDisposable
             RestartGuidedRoute();
 
         ImGui.TextColored(GetGuidedRouteStatusColor(), marketAcquisitionRouteRunner.StatusMessage);
+        if (marketAcquisitionRouteRunner.SearchCaptureStep is
+            MarketAcquisitionSearchCaptureStep.AwaitingManualSearch or
+            MarketAcquisitionSearchCaptureStep.AwaitingManualItemSelection)
+        {
+            ImGui.TextWrapped(marketAcquisitionRouteRunner.StatusMessage);
+        }
 
         if (marketAcquisitionRouteRunner.Stops.Count == 0)
         {
@@ -924,13 +1005,13 @@ public class MainWindow : Window, IDisposable
         }
     }
 
-    private void StartGuidedRoute(bool enableDiagnostics)
+    private void StartGuidedRoute(bool enableDiagnostics, bool enableSearchCapture = false)
     {
         try
         {
             var plan = acquisitionPlan ??
                        throw new InvalidOperationException("Prepare a plan before starting a guided route.");
-            marketAcquisitionRouteRunner.Start(plan, enableDiagnostics);
+            marketAcquisitionRouteRunner.Start(plan, enableDiagnostics, enableSearchCapture);
             marketBoardReadResult = null;
             marketBoardReconciliation = null;
             marketAcquisitionLiveDryRun = null;
@@ -962,6 +1043,26 @@ public class MainWindow : Window, IDisposable
         {
             marketAcquisitionRouteRunner.FailRoute($"Unable to restart guided route. {ex.Message}", ex);
             log.Warning(ex, "[MarketMafioso] Unable to restart guided market acquisition route.");
+        }
+    }
+
+    private void CaptureMarketSearchInputSnapshot()
+    {
+        try
+        {
+            var itemId = acquisitionPlan?.ItemId ?? claimedAcquisitionRequest?.ItemId ?? 0;
+            var itemName = claimedAcquisitionRequest?.ItemName;
+            var label = $"input-snapshot-{++marketSearchInputSnapshotIndex}";
+            var snapshot = marketBoardItemSearchDriver.CaptureInputSnapshot(itemId, itemName);
+            var result = marketAcquisitionRouteRunner.RecordInputSnapshot(label, snapshot);
+            acquisitionStatus = result.Success
+                ? $"{result.Message} {marketAcquisitionRouteRunner.LastDiagnosticFilePath}"
+                : result.Message;
+        }
+        catch (Exception ex)
+        {
+            acquisitionStatus = $"Unable to capture market board input snapshot. {ex.Message}";
+            log.Warning(ex, "[MarketMafioso] Unable to capture market board input snapshot.");
         }
     }
 
