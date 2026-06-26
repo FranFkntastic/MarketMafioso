@@ -58,7 +58,7 @@ public sealed class MarketAcquisitionGuidedRouteSession
             return MarketAcquisitionGuidedRouteResult.Fail($"Waiting for {stop.WorldName}; current world is {currentWorld}.");
 
         stop.Status = "Arrived";
-        return MarketAcquisitionGuidedRouteResult.Ok($"Arrived on {stop.WorldName}. Run the live market board probe when the item search results are visible.");
+        return MarketAcquisitionGuidedRouteResult.Ok($"Arrived on {stop.WorldName}. Searching the market board item when the market board is ready.");
     }
 
     public MarketAcquisitionGuidedRouteResult ExecuteActiveStop(Func<string, bool> processCommand)

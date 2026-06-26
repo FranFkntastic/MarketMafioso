@@ -31,6 +31,7 @@ public class MainWindow : Window, IDisposable
     private readonly MarketAcquisitionRequestClient acquisitionClient;
     private readonly UniversalisMarketAcquisitionPlanSource acquisitionPlanSource;
     private readonly MarketBoardListingReader marketBoardListingReader;
+    private readonly MarketBoardItemSearchDriver marketBoardItemSearchDriver;
 
     private string urlBuffer = string.Empty;
     private string apiKeyBuffer = string.Empty;
@@ -51,6 +52,7 @@ public class MainWindow : Window, IDisposable
     private string guidedRouteStatus = "No guided route has started.";
     private DateTimeOffset nextGuidedRouteMonitorUtc = DateTimeOffset.MinValue;
     private bool guidedRouteProbeRunning = false;
+    private bool guidedRouteSearchSubmitted = false;
     private bool acquisitionRequestBusy = false;
     private string acquisitionStatus = "No dashboard request has been fetched this session.";
     private CancellationTokenSource? acquisitionRequestCancellation;
@@ -103,6 +105,7 @@ public class MainWindow : Window, IDisposable
         acquisitionClient = new MarketAcquisitionRequestClient(acquisitionHttpClient);
         acquisitionPlanSource = new UniversalisMarketAcquisitionPlanSource(acquisitionHttpClient);
         marketBoardListingReader = new MarketBoardListingReader(Plugin.GameGui);
+        marketBoardItemSearchDriver = new MarketBoardItemSearchDriver(Plugin.GameGui);
 
         SizeConstraints = new WindowSizeConstraints
         {
@@ -511,7 +514,21 @@ public class MainWindow : Window, IDisposable
 
             if (route.ActiveStop?.Status == "Arrived")
             {
-                guidedRouteStatus = $"Arrived on {currentWorld}. Reading live listings when the market board is ready.";
+                var claimed = claimedAcquisitionRequest ??
+                              throw new InvalidOperationException("No dashboard request is accepted.");
+                if (!guidedRouteSearchSubmitted)
+                {
+                    var searchResult = marketBoardItemSearchDriver.Search(claimed.ItemId, claimed.ItemName);
+                    guidedRouteStatus = searchResult.Message;
+                    if (!searchResult.SearchSent)
+                        return;
+
+                    guidedRouteSearchSubmitted = true;
+                    nextGuidedRouteMonitorUtc = DateTimeOffset.UtcNow.AddSeconds(1);
+                    return;
+                }
+
+                guidedRouteStatus = $"Arrived on {currentWorld}. Reading live listings for {FormatAcquisitionItem(claimed)}.";
                 guidedRouteProbeRunning = true;
                 _ = ProbeGuidedRouteMarketBoardAsync();
             }
@@ -533,11 +550,17 @@ public class MainWindow : Window, IDisposable
             if (activeStop is { Status: "Arrived" } &&
                 !string.Equals(marketBoardReadResult?.Status, "Ready", StringComparison.OrdinalIgnoreCase))
             {
+                if (string.Equals(marketBoardReadResult?.Status, "NoSearchItem", StringComparison.OrdinalIgnoreCase))
+                    guidedRouteSearchSubmitted = false;
+
                 guidedRouteStatus = $"Arrived on {activeStop.WorldName}; waiting for live listings. {marketBoardReadResult?.Message ?? "Market board read has not completed."}";
             }
         }
         finally
         {
+            if (acquisitionGuidedRoute?.ActiveStop?.Status != "Arrived")
+                guidedRouteSearchSubmitted = false;
+
             guidedRouteProbeRunning = false;
             nextGuidedRouteMonitorUtc = DateTimeOffset.UtcNow.AddSeconds(2);
         }
@@ -880,6 +903,7 @@ public class MainWindow : Window, IDisposable
         acquisitionGuidedRoute = null;
         guidedRouteStatus = status;
         guidedRouteProbeRunning = false;
+        guidedRouteSearchSubmitted = false;
         nextGuidedRouteMonitorUtc = DateTimeOffset.MinValue;
     }
 

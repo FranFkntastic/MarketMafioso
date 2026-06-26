@@ -457,7 +457,8 @@ Recommended first slice:
   - Issue or present the expected `/li <world> mb` command.
   - Wait until the current world matches the batch world.
   - Continue automatically once the world is detected.
-  - Retry the read-only market-board probe after arrival until visible listings are ready or a diagnostic failure is reported.
+  - Submit the accepted item name to the market board search addon.
+  - Retry the read-only market-board probe after search submission until visible listings are ready or a diagnostic failure is reported.
 - Keep an internal `IWorldTravelDriver` boundary:
   - `LifestreamWorldTravelDriver`
   - `ManualWorldTravelDriver` as fallback
@@ -710,7 +711,8 @@ Manual verification:
 - First implementation shows, copies, and executes `/li <world> mb` through Dalamud command dispatch.
 - If command dispatch reports no handler, keep the active stop unchanged and show a clear status.
 - Detect arrival/current world automatically before probing each destination.
-- Retry the read-only live listing probe after arrival so the user does not need to press `Read Live Listings` manually after Lifestream opens the market board.
+- Submit the accepted item name to the market board item search addon after arrival.
+- Retry the read-only live listing probe after search submission so the user does not need to press `Read Live Listings` manually after Lifestream opens the market board.
 - Add batch confirmation UI.
 - Add dry-run batch execution.
 - Keep purchase executor disabled by default.
