@@ -51,6 +51,43 @@ public sealed class MarketAcquisitionRouteRunnerTests
     }
 
     [Fact]
+    public void PreparePendingStopForCurrentWorld_MarksArrivedWithoutSendingCommand()
+    {
+        using var runner = CreateRunner();
+        runner.Start(CreatePlan("Maduin"));
+
+        var result = runner.PreparePendingStopForCurrentWorld(
+            currentWorldIsValid: true,
+            currentWorld: "Maduin",
+            _ => throw new InvalidOperationException("Should not execute Lifestream when already on the stop world."));
+
+        Assert.True(result.Success);
+        Assert.Equal("Arrived", runner.ActiveStop?.Status);
+        Assert.Contains("Arrived on Maduin", runner.StatusMessage, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void PreparePendingStopForCurrentWorld_SendsCommandWhenCurrentWorldDiffers()
+    {
+        using var runner = CreateRunner();
+        runner.Start(CreatePlan("Maduin"));
+        string? command = null;
+
+        var result = runner.PreparePendingStopForCurrentWorld(
+            currentWorldIsValid: true,
+            currentWorld: "Zalera",
+            value =>
+            {
+                command = value;
+                return true;
+            });
+
+        Assert.True(result.Success);
+        Assert.Equal("/li Maduin mb", command);
+        Assert.Equal("TravelCommandSent", runner.ActiveStop?.Status);
+    }
+
+    [Fact]
     public void Pause_PreventsProgressionUntilResume()
     {
         using var runner = CreateRunner();

@@ -155,6 +155,35 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
             : Fail(result.Message);
     }
 
+    public MarketAcquisitionRouteActionResult PreparePendingStopForCurrentWorld(
+        bool currentWorldIsValid,
+        string? currentWorld,
+        Func<string, bool> processCommand)
+    {
+        ArgumentNullException.ThrowIfNull(processCommand);
+
+        if (!IsRunning)
+            return Fail($"Route is {State}; pending stop was not prepared.");
+
+        var activeStop = ActiveStop;
+        if (activeStop == null)
+            return Complete("Route complete. No purchases were executed.");
+
+        if (!string.Equals(activeStop.Status, "Pending", StringComparison.OrdinalIgnoreCase))
+            return MarketAcquisitionRouteActionResult.Ok(StatusMessage);
+
+        if (currentWorldIsValid &&
+            activeStop.WorldName.Equals(currentWorld, StringComparison.OrdinalIgnoreCase))
+        {
+            return RecordCurrentWorld(currentWorld!);
+        }
+
+        if (!currentWorldIsValid)
+            return RecordCurrentWorldUnavailable();
+
+        return ExecutePendingTravelCommand(processCommand);
+    }
+
     public MarketAcquisitionRouteActionResult RecordCurrentWorldUnavailable()
     {
         if (!IsRunning)

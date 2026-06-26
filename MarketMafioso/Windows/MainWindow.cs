@@ -503,7 +503,10 @@ public class MainWindow : Window, IDisposable
 
             if (string.Equals(activeStop.Status, "Pending", StringComparison.OrdinalIgnoreCase))
             {
-                route.ExecutePendingTravelCommand(Plugin.CommandManager.ProcessCommand);
+                route.PreparePendingStopForCurrentWorld(
+                    playerState.CurrentWorld.IsValid,
+                    playerState.CurrentWorld.IsValid ? GetCurrentWorldName() : null,
+                    Plugin.CommandManager.ProcessCommand);
                 nextGuidedRouteMonitorUtc = DateTimeOffset.UtcNow.AddSeconds(2);
                 return;
             }
