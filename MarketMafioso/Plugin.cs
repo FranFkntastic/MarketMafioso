@@ -101,6 +101,7 @@ public sealed class Plugin : IDalamudPlugin
             workshopAssemblyRunner,
             workshopMaterialManifestExport,
             PlayerState,
+            Path.Combine(PluginInterface.GetPluginConfigDirectory(), "market-acquisition-route-logs"),
             Log);
 
         windowSystem.AddWindow(mainWindow);

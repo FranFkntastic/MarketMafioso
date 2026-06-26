@@ -49,7 +49,7 @@ Current status after the 2026-06-25 local-dev pass:
 | Phase 4: Market Planning Dry Run | Done | Accepted requests can prepare a Universalis-backed advisory plan and display world/listing batches. Planner semantics now need to align with the two-mode quantity model and optional gil cap everywhere. |
 | Phase 5: Live Market Board Read-Only Probe | Done for visible rows | In-game probe succeeded on current patch: item id, visible listing rows, listing id, retainer id/name, HQ flag, unit price, and quantity populated correctly. The `WaitingForListings` flag can remain set while visible rows exist, and the reader now treats populated rows as ready with a diagnostic note. Current-world live candidate evaluation is included in this phase because it only classifies the visible page after the read-only probe. Remaining risk moves to pagination/deeper listing-page behavior. No purchase path exists. |
 | Phase 5.5: Current-World Live Candidate Evaluation | Done for visible rows | After `Read Live Listings`, the plugin validates item/world, builds a confirmed live candidate pool, sorts by live unit price, supports favorable drift, respects HQ/max-unit/gil-cap constraints, and reports would-buy/skip/under-procure outcomes without purchasing. Verbose tables live in a diagnostics popout so the main Market Acquisition tab stays operational. |
-| Phase 6: Lifestream-Guided World-Batch Orchestration | Partially done | The plugin can start a volatile guided route from the prepared plan, show/copy/execute the next `/li <world> mb` command through Dalamud command dispatch, automatically monitor arrival on the expected world, submit the accepted item name to the market board search addon, retry the read-only live probe when listings are ready, and advance stops after a successful live probe/dry-run. Server progress reporting, pause/resume, and live re-ranking across remaining stops are still pending. |
+| Phase 6: Lifestream-Guided World-Batch Orchestration | Runner foundation in progress | The plugin now needs a real route runner rather than halfway command controls. Current pass replaces the copy/execute `/li` surface with start/pause/stop/restart route controls, optional route diagnostics, automatic Lifestream command dispatch, current-world transition handling, item-search submission, live probe retry, and stop advancement after live dry-run. Server progress reporting, purchase execution, and live re-ranking across remaining stops remain pending. |
 | Phase 7: Purchase Mechanism Investigation | Not started | Blocks any real purchase executor. Must prove the purchase path, success/failure observation, and safe stop behavior with low-value current-world tests. |
 | Phase 8: Guarded Purchase Execution | Blocked | Only starts if Phase 7 proves a safe purchase mechanism. |
 | Phase 9: Travel Automation Spike | Deferred | Only needed if Lifestream cannot cover the required region/world routes. Until then, travel work is an integration/orchestration problem rather than native aetheryte automation. |
@@ -434,24 +434,26 @@ Add a local runner that walks through planned world batches by delegating travel
 ### Implemented Files
 
 - `MarketMafioso/MarketAcquisition/MarketAcquisitionGuidedRouteSession.cs`
+- `MarketMafioso/MarketAcquisition/MarketAcquisitionRouteDiagnostics.cs`
+- `MarketMafioso/MarketAcquisition/MarketAcquisitionRouteRunner.cs`
 - `MarketMafioso.Tests/MarketAcquisition/MarketAcquisitionGuidedRouteSessionTests.cs`
-- `MarketMafioso/Windows/MainWindow.cs` exposes the first guided route controls.
+- `MarketMafioso.Tests/MarketAcquisition/MarketAcquisitionRouteDiagnosticsTests.cs`
+- `MarketMafioso.Tests/MarketAcquisition/MarketAcquisitionRouteRunnerTests.cs`
+- `MarketMafioso/Windows/MainWindow.cs` exposes route lifecycle controls.
 
 ### Proposed Later Files
 
-- `MarketMafioso/MarketAcquisition/MarketAcquisitionRunner.cs`
 - `MarketMafioso/MarketAcquisition/WorldTravel/LifestreamWorldTravelDriver.cs`
-- `MarketMafioso/MarketAcquisition/MarketAcquisitionDiagnostics.cs`
-- `MarketMafioso.Tests/MarketAcquisition/MarketAcquisitionRunnerTests.cs`
 
 ### Capability
 
 - First slice moves through planned worlds in prepared-plan order.
-- First slice guides Lifestream travel by showing, copying, and executing `/li <world> mb` through Dalamud command dispatch.
+- First slice starts route execution from route controls and executes `/li <world> mb` through Dalamud command dispatch.
 - If command dispatch returns unhandled, the route remains on the active stop and reports that Lifestream did not handle the command.
 - For each world, runner automatically watches the current world after command dispatch and marks the active stop arrived when the current world matches the expected world.
 - Runner submits the accepted item name to the market board search addon after arrival, then retries the read-only live probe while waiting for listings to be available.
 - Runner reuses Phase 5.5 candidate evaluation at each destination.
+- Route execution supports pause, resume, stop, restart, and optional file-backed diagnostics.
 - Later slices re-rank remaining world stops if a live-confirmed cheaper candidate changes the best path.
 - Runner shows one world-batch confirmation.
 - `Dry Run Batch` records what would be bought and advances.

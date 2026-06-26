@@ -32,6 +32,7 @@ public class MainWindow : Window, IDisposable
     private readonly UniversalisMarketAcquisitionPlanSource acquisitionPlanSource;
     private readonly MarketBoardListingReader marketBoardListingReader;
     private readonly MarketBoardItemSearchDriver marketBoardItemSearchDriver;
+    private readonly MarketAcquisitionRouteRunner marketAcquisitionRouteRunner;
 
     private string urlBuffer = string.Empty;
     private string apiKeyBuffer = string.Empty;
@@ -48,11 +49,8 @@ public class MainWindow : Window, IDisposable
     private MarketBoardReadResult? marketBoardReadResult;
     private MarketBoardListingReconciliation? marketBoardReconciliation;
     private MarketAcquisitionLiveDryRun? marketAcquisitionLiveDryRun;
-    private MarketAcquisitionGuidedRouteSession? acquisitionGuidedRoute;
-    private string guidedRouteStatus = "No guided route has started.";
     private DateTimeOffset nextGuidedRouteMonitorUtc = DateTimeOffset.MinValue;
     private bool guidedRouteProbeRunning = false;
-    private bool guidedRouteSearchSubmitted = false;
     private bool acquisitionRequestBusy = false;
     private string acquisitionStatus = "No dashboard request has been fetched this session.";
     private CancellationTokenSource? acquisitionRequestCancellation;
@@ -87,6 +85,7 @@ public class MainWindow : Window, IDisposable
         WorkshopAssemblyRunner workshopAssemblyRunner,
         WorkshopMaterialManifestExportService workshopMaterialManifestExport,
         IPlayerState playerState,
+        string marketAcquisitionRouteDiagnosticsDirectory,
         IPluginLog log)
         : base("MarketMafioso##MarketMafiosoMainWindow",
                ImGuiWindowFlags.None)
@@ -106,6 +105,7 @@ public class MainWindow : Window, IDisposable
         acquisitionPlanSource = new UniversalisMarketAcquisitionPlanSource(acquisitionHttpClient);
         marketBoardListingReader = new MarketBoardListingReader(Plugin.GameGui);
         marketBoardItemSearchDriver = new MarketBoardItemSearchDriver(Plugin.GameGui);
+        marketAcquisitionRouteRunner = new MarketAcquisitionRouteRunner(marketAcquisitionRouteDiagnosticsDirectory);
 
         SizeConstraints = new WindowSizeConstraints
         {
@@ -482,8 +482,8 @@ public class MainWindow : Window, IDisposable
         if (acquisitionRequestBusy || guidedRouteProbeRunning)
             return;
 
-        var route = acquisitionGuidedRoute;
-        if (route is not { ShouldMonitorActiveStop: true })
+        var route = marketAcquisitionRouteRunner;
+        if (!route.IsRunning)
             return;
 
         var now = DateTimeOffset.UtcNow;
@@ -498,51 +498,54 @@ public class MainWindow : Window, IDisposable
             if (activeStop == null)
                 return;
 
+            if (string.Equals(activeStop.Status, "Pending", StringComparison.OrdinalIgnoreCase))
+            {
+                route.ExecutePendingTravelCommand(Plugin.CommandManager.ProcessCommand);
+                nextGuidedRouteMonitorUtc = DateTimeOffset.UtcNow.AddSeconds(2);
+                return;
+            }
+
             if (!playerState.CurrentWorld.IsValid)
             {
-                var result = route.RecordCurrentWorldUnavailable();
-                guidedRouteStatus = result.Message;
+                route.RecordCurrentWorldUnavailable();
                 return;
             }
 
             var currentWorld = GetCurrentWorldName();
             if (!activeStop.WorldName.Equals(currentWorld, StringComparison.OrdinalIgnoreCase))
             {
-                var result = route.RecordCurrentWorld(currentWorld);
-                guidedRouteStatus = result.Message;
+                route.RecordCurrentWorld(currentWorld);
                 return;
             }
 
             if (string.Equals(activeStop.Status, "TravelCommandSent", StringComparison.OrdinalIgnoreCase))
             {
-                var result = route.RecordCurrentWorld(currentWorld);
-                guidedRouteStatus = result.Message;
+                route.RecordCurrentWorld(currentWorld);
             }
 
             if (route.ActiveStop?.Status == "Arrived")
             {
                 var claimed = claimedAcquisitionRequest ??
                               throw new InvalidOperationException("No dashboard request is accepted.");
-                if (!guidedRouteSearchSubmitted)
+                if (!route.SearchSubmitted)
                 {
                     var searchResult = marketBoardItemSearchDriver.Search(claimed.ItemId, claimed.ItemName);
-                    guidedRouteStatus = searchResult.Message;
+                    route.RecordSearchResult(searchResult);
                     if (!searchResult.SearchSent)
                         return;
 
-                    guidedRouteSearchSubmitted = true;
                     nextGuidedRouteMonitorUtc = DateTimeOffset.UtcNow.AddSeconds(1);
                     return;
                 }
 
-                guidedRouteStatus = $"Arrived on {currentWorld}. Reading live listings for {FormatAcquisitionItem(claimed)}.";
+                route.BeginProbe($"Arrived on {currentWorld}. Reading live listings for {FormatAcquisitionItem(claimed)}.");
                 guidedRouteProbeRunning = true;
                 _ = ProbeGuidedRouteMarketBoardAsync();
             }
         }
         catch (Exception ex)
         {
-            guidedRouteStatus = $"Unable to monitor guided route. {ex.Message}";
+            route.FailRoute($"Unable to monitor guided route. {ex.Message}", ex);
             log.Warning(ex, "[MarketMafioso] Unable to monitor guided market acquisition route.");
         }
     }
@@ -553,20 +556,21 @@ public class MainWindow : Window, IDisposable
         {
             await ProbeLiveMarketBoardAsync().ConfigureAwait(false);
 
-            var activeStop = acquisitionGuidedRoute?.ActiveStop;
+            var activeStop = marketAcquisitionRouteRunner.ActiveStop;
             if (activeStop is { Status: "Arrived" } &&
                 !string.Equals(marketBoardReadResult?.Status, "Ready", StringComparison.OrdinalIgnoreCase))
             {
                 if (string.Equals(marketBoardReadResult?.Status, "NoSearchItem", StringComparison.OrdinalIgnoreCase))
-                    guidedRouteSearchSubmitted = false;
+                    marketAcquisitionRouteRunner.ClearSearchSubmission("Market board results did not expose a searched item id.");
 
-                guidedRouteStatus = $"Arrived on {activeStop.WorldName}; waiting for live listings. {marketBoardReadResult?.Message ?? "Market board read has not completed."}";
+                marketAcquisitionRouteRunner.BeginProbe(
+                    $"Arrived on {activeStop.WorldName}; waiting for live listings. {marketBoardReadResult?.Message ?? "Market board read has not completed."}");
             }
         }
         finally
         {
-            if (acquisitionGuidedRoute?.ActiveStop?.Status != "Arrived")
-                guidedRouteSearchSubmitted = false;
+            if (marketAcquisitionRouteRunner.ActiveStop?.Status != "Arrived")
+                marketAcquisitionRouteRunner.ClearSearchSubmission("Route advanced or stopped before the next live listing read.");
 
             guidedRouteProbeRunning = false;
             nextGuidedRouteMonitorUtc = DateTimeOffset.UtcNow.AddSeconds(2);
@@ -726,7 +730,7 @@ public class MainWindow : Window, IDisposable
         marketBoardReadResult = null;
         marketBoardReconciliation = null;
         marketAcquisitionLiveDryRun = null;
-        ResetGuidedRoute("No guided route has started.");
+        ResetGuidedRoute("No route has started.");
         acquisitionStatus = "Forgot local acquisition claim. Fetch dashboard requests to pick up a pending request.";
     }
 
@@ -748,7 +752,7 @@ public class MainWindow : Window, IDisposable
             marketBoardReadResult = null;
             marketBoardReconciliation = null;
             marketAcquisitionLiveDryRun = null;
-            ResetGuidedRoute("No guided route has started.");
+            ResetGuidedRoute("No route has started.");
             acquisitionStatus = acquisitionPlan.Status == "Ready"
                 ? $"Prepared {acquisitionPlan.WorldBatches.Count} world batch(es)."
                 : "No supported listings found under the configured thresholds.";
@@ -783,15 +787,16 @@ public class MainWindow : Window, IDisposable
                     marketBoardReadResult.ItemId,
                     marketBoardReadResult.Listings)
                 : null;
-            var guidedRouteResult = acquisitionGuidedRoute != null && marketAcquisitionLiveDryRun != null
-                ? acquisitionGuidedRoute.RecordProbe(currentWorld, marketAcquisitionLiveDryRun)
+            var guidedRouteResult = marketAcquisitionRouteRunner.IsRunning &&
+                                    marketAcquisitionRouteRunner.ActiveStop is { Status: "Arrived" } &&
+                                    marketAcquisitionLiveDryRun != null
+                ? marketAcquisitionRouteRunner.RecordProbe(currentWorld, marketAcquisitionLiveDryRun)
                 : null;
             acquisitionStatus = marketBoardReconciliation == null
                 ? marketBoardReadResult.Message
                 : $"Live listing reconciliation {marketBoardReconciliation.Status}; dry-run {marketAcquisitionLiveDryRun?.Status ?? "Unavailable"}.";
             if (guidedRouteResult != null)
             {
-                guidedRouteStatus = guidedRouteResult.Message;
                 acquisitionStatus = $"{acquisitionStatus} Route: {guidedRouteResult.Message}";
             }
 
@@ -805,56 +810,62 @@ public class MainWindow : Window, IDisposable
 
         var canStart = acquisitionPlan is { Status: "Ready" } &&
                        acquisitionPlan.WorldBatches.Count > 0 &&
-                       acquisitionGuidedRoute == null;
-        if (ImGuiUi.Button("Start Guided Route", canStart))
-            StartGuidedRoute();
+                       !marketAcquisitionRouteRunner.IsRunning &&
+                       !marketAcquisitionRouteRunner.IsPaused;
+        if (ImGuiUi.Button("Start Route", canStart))
+            StartGuidedRoute(enableDiagnostics: false);
 
         ImGui.SameLine();
-        if (ImGuiUi.Button("Reset Route", acquisitionGuidedRoute != null))
-            ResetGuidedRoute("Guided route reset.");
+        if (ImGuiUi.Button("Start With Diagnostics", canStart))
+            StartGuidedRoute(enableDiagnostics: true);
 
-        ImGui.TextColored(GetGuidedRouteStatusColor(), guidedRouteStatus);
-
-        if (acquisitionGuidedRoute == null)
+        ImGui.SameLine();
+        if (marketAcquisitionRouteRunner.IsPaused)
         {
-            ImGui.TextColored(ColMuted, "Start after preparing a plan. This only guides travel and read-only probes; it does not purchase.");
+            if (ImGuiUi.Button("Resume", true))
+                marketAcquisitionRouteRunner.Resume();
+        }
+        else
+        {
+            if (ImGuiUi.Button("Pause", marketAcquisitionRouteRunner.IsRunning))
+                marketAcquisitionRouteRunner.Pause();
+        }
+
+        ImGui.SameLine();
+        if (ImGuiUi.Button("Stop", marketAcquisitionRouteRunner.IsRunning || marketAcquisitionRouteRunner.IsPaused))
+            marketAcquisitionRouteRunner.Stop();
+
+        ImGui.SameLine();
+        if (ImGuiUi.Button("Restart", canStart && marketAcquisitionRouteRunner.CanRestart))
+            RestartGuidedRoute();
+
+        ImGui.TextColored(GetGuidedRouteStatusColor(), marketAcquisitionRouteRunner.StatusMessage);
+
+        if (marketAcquisitionRouteRunner.Stops.Count == 0)
+        {
+            ImGui.TextColored(ColMuted, "Start after preparing a plan. Routes guide travel and read-only probes; they do not purchase yet.");
             return;
         }
 
-        var activeStop = acquisitionGuidedRoute.ActiveStop;
+        if (marketAcquisitionRouteRunner.LastDiagnosticFilePath != null)
+            ImGui.TextColored(ColMuted, $"Diagnostics: {marketAcquisitionRouteRunner.LastDiagnosticFilePath}");
+
+        var activeStop = marketAcquisitionRouteRunner.ActiveStop;
         if (activeStop == null)
         {
-            ImGui.TextColored(ColSuccess, "Guided route complete. No purchases were executed.");
+            ImGui.TextColored(ColSuccess, "Route is not actively executing.");
         }
         else
         {
             ImGui.TextColored(ColHeader, $"Next stop: {activeStop.WorldName}");
             ImGui.SameLine();
             ImGui.TextColored(ColMuted, $"Planned {activeStop.PlannedQuantity:N0} item(s), {FormatGil(activeStop.PlannedGil)}");
-
-            var command = activeStop.LifestreamCommand;
-            ImGui.SetNextItemWidth(Math.Max(180f, ImGui.GetContentRegionAvail().X - 260f));
-            ImGui.InputText("##marketAcquisitionLifestreamCommand", ref command, 128, ImGuiInputTextFlags.ReadOnly);
-            ImGui.SameLine();
-            if (ImGui.Button("Copy /li Command"))
-            {
-                ImGui.SetClipboardText(activeStop.LifestreamCommand);
-                guidedRouteStatus = $"Copied {activeStop.LifestreamCommand}.";
-            }
-
-            ImGui.SameLine();
-            if (ImGui.Button("Execute /li Command"))
-                ExecuteGuidedRouteCommand();
-
-            ImGui.SameLine();
-            if (ImGui.Button("Check Current World"))
-                RecordGuidedRouteCurrentWorld();
         }
 
-        DrawGuidedRouteStops(acquisitionGuidedRoute);
+        DrawGuidedRouteStops(marketAcquisitionRouteRunner.Stops);
     }
 
-    private void DrawGuidedRouteStops(MarketAcquisitionGuidedRouteSession route)
+    private void DrawGuidedRouteStops(IReadOnlyList<MarketAcquisitionGuidedRouteStop> stops)
     {
         if (ImGui.BeginTable("MarketAcquisitionGuidedRouteStops", 5, ImGuiUi.InteractiveTableFlags))
         {
@@ -865,7 +876,7 @@ public class MainWindow : Window, IDisposable
             ImGui.TableSetupColumn("Dry-run");
             ImGui.TableHeadersRow();
 
-            foreach (var stop in route.Stops)
+            foreach (var stop in stops)
             {
                 ImGui.TableNextRow();
                 ImGui.TableNextColumn();
@@ -886,81 +897,69 @@ public class MainWindow : Window, IDisposable
         }
     }
 
-    private void StartGuidedRoute()
+    private void StartGuidedRoute(bool enableDiagnostics)
     {
         try
         {
             var plan = acquisitionPlan ??
                        throw new InvalidOperationException("Prepare a plan before starting a guided route.");
-            acquisitionGuidedRoute = MarketAcquisitionGuidedRouteSession.Start(plan);
-            guidedRouteStatus = $"Guided route started. Next stop: {acquisitionGuidedRoute.ActiveStop?.WorldName}.";
+            marketAcquisitionRouteRunner.Start(plan, enableDiagnostics);
             marketBoardReadResult = null;
             marketBoardReconciliation = null;
             marketAcquisitionLiveDryRun = null;
+            guidedRouteProbeRunning = false;
+            nextGuidedRouteMonitorUtc = DateTimeOffset.MinValue;
         }
         catch (Exception ex)
         {
-            guidedRouteStatus = $"Unable to start guided route. {ex.Message}";
+            marketAcquisitionRouteRunner.FailRoute($"Unable to start guided route. {ex.Message}", ex);
             log.Warning(ex, "[MarketMafioso] Unable to start guided market acquisition route.");
+        }
+    }
+
+    private void RestartGuidedRoute()
+    {
+        try
+        {
+            var plan = acquisitionPlan ??
+                       throw new InvalidOperationException("Prepare a plan before restarting a guided route.");
+            marketAcquisitionRouteRunner.Restart(plan);
+            marketBoardReadResult = null;
+            marketBoardReconciliation = null;
+            marketAcquisitionLiveDryRun = null;
+            guidedRouteProbeRunning = false;
+            nextGuidedRouteMonitorUtc = DateTimeOffset.MinValue;
+        }
+        catch (Exception ex)
+        {
+            marketAcquisitionRouteRunner.FailRoute($"Unable to restart guided route. {ex.Message}", ex);
+            log.Warning(ex, "[MarketMafioso] Unable to restart guided market acquisition route.");
         }
     }
 
     private void ResetGuidedRoute(string status)
     {
-        acquisitionGuidedRoute = null;
-        guidedRouteStatus = status;
+        marketAcquisitionRouteRunner.Reset(status);
         guidedRouteProbeRunning = false;
-        guidedRouteSearchSubmitted = false;
         nextGuidedRouteMonitorUtc = DateTimeOffset.MinValue;
-    }
-
-    private void RecordGuidedRouteCurrentWorld()
-    {
-        try
-        {
-            var route = acquisitionGuidedRoute ??
-                        throw new InvalidOperationException("No guided route has started.");
-            var result = playerState.CurrentWorld.IsValid
-                ? route.RecordCurrentWorld(GetCurrentWorldName())
-                : route.RecordCurrentWorldUnavailable();
-            guidedRouteStatus = result.Message;
-        }
-        catch (Exception ex)
-        {
-            guidedRouteStatus = $"Unable to check current world. {ex.Message}";
-            log.Warning(ex, "[MarketMafioso] Unable to check guided route current world.");
-        }
-    }
-
-    private void ExecuteGuidedRouteCommand()
-    {
-        try
-        {
-            var route = acquisitionGuidedRoute ??
-                        throw new InvalidOperationException("No guided route has started.");
-            var result = route.ExecuteActiveStop(Plugin.CommandManager.ProcessCommand);
-            guidedRouteStatus = result.Message;
-        }
-        catch (Exception ex)
-        {
-            guidedRouteStatus = $"Unable to execute Lifestream command. {ex.Message}";
-            log.Warning(ex, "[MarketMafioso] Unable to execute guided route Lifestream command.");
-        }
     }
 
     private Vector4 GetGuidedRouteStatusColor()
     {
-        if (guidedRouteStatus.StartsWith("Unable", StringComparison.OrdinalIgnoreCase) ||
-            guidedRouteStatus.Contains("Cannot", StringComparison.OrdinalIgnoreCase))
+        var status = marketAcquisitionRouteRunner.StatusMessage;
+        if (status.StartsWith("Unable", StringComparison.OrdinalIgnoreCase) ||
+            status.Contains("Cannot", StringComparison.OrdinalIgnoreCase) ||
+            status.Contains("Failed", StringComparison.OrdinalIgnoreCase))
             return ColError;
 
-        if (guidedRouteStatus.Contains("Waiting", StringComparison.OrdinalIgnoreCase))
+        if (status.Contains("Waiting", StringComparison.OrdinalIgnoreCase) ||
+            marketAcquisitionRouteRunner.IsPaused)
             return ColHeader;
 
-        if (guidedRouteStatus.Contains("Arrived", StringComparison.OrdinalIgnoreCase) ||
-            guidedRouteStatus.Contains("Recorded", StringComparison.OrdinalIgnoreCase) ||
-            guidedRouteStatus.Contains("complete", StringComparison.OrdinalIgnoreCase) ||
-            guidedRouteStatus.Contains("Copied", StringComparison.OrdinalIgnoreCase))
+        if (status.Contains("Arrived", StringComparison.OrdinalIgnoreCase) ||
+            status.Contains("Recorded", StringComparison.OrdinalIgnoreCase) ||
+            status.Contains("complete", StringComparison.OrdinalIgnoreCase) ||
+            status.Contains("started", StringComparison.OrdinalIgnoreCase))
             return ColSuccess;
 
         return ColMuted;
@@ -1991,6 +1990,7 @@ public class MainWindow : Window, IDisposable
     public void Dispose()
     {
         acquisitionRequestCancellation?.Dispose();
+        marketAcquisitionRouteRunner.Dispose();
         acquisitionHttpClient.Dispose();
     }
 }
