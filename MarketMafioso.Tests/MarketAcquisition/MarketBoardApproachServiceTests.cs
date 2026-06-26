@@ -54,6 +54,24 @@ public sealed class MarketBoardApproachServiceTests
     }
 
     [Fact]
+    public void Decide_ContinuesApproachAtKnownTooFarDistance()
+    {
+        var decision = MarketBoardApproachService.Decide(
+            marketBoardUiOpen: false,
+            boardDistance: 5.49f,
+            vnavmeshAvailable: true,
+            vnavmeshRunning: false);
+
+        Assert.Equal(MarketBoardApproachDecisionKind.StartNavigation, decision.Kind);
+    }
+
+    [Fact]
+    public void NavigationStopDistance_IsInsideDirectInteractionDistance()
+    {
+        Assert.True(MarketBoardApproachService.NavigationStopDistance < MarketBoardApproachService.DirectInteractionDistance);
+    }
+
+    [Fact]
     public void Decide_WaitsForManualInteractionWhenVnavmeshUnavailableOutsideDirectRange()
     {
         var decision = MarketBoardApproachService.Decide(

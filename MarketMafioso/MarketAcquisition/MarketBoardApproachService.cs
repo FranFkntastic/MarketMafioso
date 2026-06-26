@@ -18,9 +18,9 @@ public sealed class MarketBoardApproachService
     private const string ItemSearchResultAddon = "ItemSearchResult";
     private const string MarketBoardObjectName = "Market Board";
 
-    public const float DirectInteractionDistance = 6.5f;
+    public const float DirectInteractionDistance = 4.25f;
     public const float MaximumApproachDistance = 80f;
-    public const float NavigationStopDistance = 5.5f;
+    public const float NavigationStopDistance = 3.5f;
 
     private readonly IGameGui gameGui;
     private readonly IObjectTable objectTable;
@@ -140,14 +140,14 @@ public sealed class MarketBoardApproachService
 
         targetManager.Target = board;
         var result = targetSystem->InteractWithObject((ClientGameObject*)board.Address, true);
-        log.Verbose($"[MarketMafioso] Interacted with market board {board.Name.TextValue} ({board.GameObjectId:X}).");
+        log.Verbose($"[MarketMafioso] Attempted market board interaction {board.Name.TextValue} ({board.GameObjectId:X}).");
         float? distance = playerPosition == null
             ? null
             : CalculateHorizontalDistance(playerPosition.Value, board.Position);
         return MarketBoardApproachResult.Action(
             distance == null
-                ? "Interacted with nearby market board."
-                : $"Interacted with nearby market board ({distance.Value:0.0}y).",
+                ? "Attempted to open nearby market board."
+                : $"Attempted to open nearby market board ({distance.Value:0.0}y).",
             new Dictionary<string, string?>
             {
                 ["name"] = board.Name.TextValue,
