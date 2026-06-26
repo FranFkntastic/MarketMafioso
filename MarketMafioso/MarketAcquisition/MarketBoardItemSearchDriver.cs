@@ -34,6 +34,10 @@ public sealed class MarketBoardItemSearchDriver
         }
 
         var searchText = itemName.Trim();
+        var resetMode = ShouldResetToNormalSearch((uint)addon->Mode);
+        if (resetMode)
+            addon->SetModeFilter(AddonItemSearch.SearchMode.Normal, 0);
+
         addon->SearchText.SetString(searchText);
         addon->SearchText2.SetString(searchText);
         if (addon->SearchTextInput != null)
@@ -43,8 +47,15 @@ public sealed class MarketBoardItemSearchDriver
         return new MarketBoardItemSearchResult
         {
             Status = "SearchSent",
-            Message = $"Searching market board for {searchText} ({itemId}).",
+            Message = resetMode
+                ? $"Searching market board for {searchText} ({itemId}) after resetting item search mode."
+                : $"Searching market board for {searchText} ({itemId}).",
         };
+    }
+
+    internal static bool ShouldResetToNormalSearch(uint mode)
+    {
+        return mode != (uint)AddonItemSearch.SearchMode.Normal;
     }
 }
 
