@@ -61,6 +61,16 @@ public sealed class MarketAcquisitionGuidedRouteSession
         return MarketAcquisitionGuidedRouteResult.Ok($"Arrived on {stop.WorldName}. Searching the market board item when the market board is ready.");
     }
 
+    public MarketAcquisitionGuidedRouteResult RecordCurrentWorldUnavailable()
+    {
+        var stop = ActiveStop;
+        if (stop == null)
+            return MarketAcquisitionGuidedRouteResult.Fail("Guided route is already complete.");
+
+        return MarketAcquisitionGuidedRouteResult.Fail(
+            $"Waiting for {stop.WorldName}; current world is unavailable during world travel.");
+    }
+
     public MarketAcquisitionGuidedRouteResult ExecuteActiveStop(Func<string, bool> processCommand)
     {
         ArgumentNullException.ThrowIfNull(processCommand);

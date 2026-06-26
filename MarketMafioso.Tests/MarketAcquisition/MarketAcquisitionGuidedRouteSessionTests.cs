@@ -88,6 +88,21 @@ public sealed class MarketAcquisitionGuidedRouteSessionTests
     }
 
     [Fact]
+    public void RecordCurrentWorldUnavailable_ReportsExpectedTravelTransition()
+    {
+        var session = MarketMafioso.MarketAcquisition.MarketAcquisitionGuidedRouteSession.Start(CreatePlan("Zalera"));
+        session.ExecuteActiveStop(_ => true);
+
+        var result = session.RecordCurrentWorldUnavailable();
+
+        Assert.False(result.Success);
+        Assert.Equal("TravelCommandSent", session.ActiveStop?.Status);
+        Assert.Contains("Waiting", result.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Zalera", result.Message, StringComparison.Ordinal);
+        Assert.Contains("unavailable", result.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void RecordProbe_AdvancesToNextStop()
     {
         var session = MarketMafioso.MarketAcquisition.MarketAcquisitionGuidedRouteSession.Start(CreatePlan("Zalera", "Maduin"));

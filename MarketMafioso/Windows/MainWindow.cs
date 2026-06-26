@@ -498,6 +498,13 @@ public class MainWindow : Window, IDisposable
             if (activeStop == null)
                 return;
 
+            if (!playerState.CurrentWorld.IsValid)
+            {
+                var result = route.RecordCurrentWorldUnavailable();
+                guidedRouteStatus = result.Message;
+                return;
+            }
+
             var currentWorld = GetCurrentWorldName();
             if (!activeStop.WorldName.Equals(currentWorld, StringComparison.OrdinalIgnoreCase))
             {
@@ -913,7 +920,9 @@ public class MainWindow : Window, IDisposable
         {
             var route = acquisitionGuidedRoute ??
                         throw new InvalidOperationException("No guided route has started.");
-            var result = route.RecordCurrentWorld(GetCurrentWorldName());
+            var result = playerState.CurrentWorld.IsValid
+                ? route.RecordCurrentWorld(GetCurrentWorldName())
+                : route.RecordCurrentWorldUnavailable();
             guidedRouteStatus = result.Message;
         }
         catch (Exception ex)
