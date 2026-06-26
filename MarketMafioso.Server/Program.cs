@@ -1687,20 +1687,28 @@ static string RenderAcquisitionDashboard(
                 });
 
                 async function refreshAcquisitionQueue() {
-                    const response = await fetch(acquisitionQueueRefreshUrl, {
-                        headers: { 'Accept': 'application/json' },
-                        cache: 'no-store'
-                    });
-                    if (!response.ok) return;
-                    const payload = await response.json();
-                    document.getElementById('acquisitionQueueBody').innerHTML = payload.queueRows;
-                    document.getElementById('acquisitionActiveSummary').textContent = payload.activeSummary;
-                    document.getElementById('selectedRequestName').textContent = payload.selectedRequestName;
-                    document.getElementById('latestRequestExpiry').textContent = payload.latestRequestExpiry;
-                    document.getElementById('latestRequestStatus').textContent = payload.latestRequestStatus;
-                    document.getElementById('latestRequestEvent').textContent = payload.latestRequestEvent;
-                    wireAcquisitionResizeHandles();
-                    applyAcquisitionQueueFilter();
+                    try {
+                        const response = await fetch(acquisitionQueueRefreshUrl, {
+                            headers: { 'Accept': 'application/json' },
+                            cache: 'no-store',
+                            credentials: 'same-origin'
+                        });
+                        if (!response.ok) {
+                            document.getElementById('latestRequestEvent').textContent = `Queue refresh failed. HTTP ${response.status}.`;
+                            return;
+                        }
+                        const payload = await response.json();
+                        document.getElementById('acquisitionQueueBody').innerHTML = payload.queueRows;
+                        document.getElementById('acquisitionActiveSummary').textContent = payload.activeSummary;
+                        document.getElementById('selectedRequestName').textContent = payload.selectedRequestName;
+                        document.getElementById('latestRequestExpiry').textContent = payload.latestRequestExpiry;
+                        document.getElementById('latestRequestStatus').textContent = payload.latestRequestStatus;
+                        document.getElementById('latestRequestEvent').textContent = payload.latestRequestEvent;
+                        wireAcquisitionResizeHandles();
+                        applyAcquisitionQueueFilter();
+                    } catch (error) {
+                        document.getElementById('latestRequestEvent').textContent = 'Queue refresh failed. Check browser network details.';
+                    }
                 }
                 function applyAcquisitionQueueFilter() {
                     const text = document.getElementById('acquisitionQueueFilter').value.trim().toLowerCase();

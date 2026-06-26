@@ -694,6 +694,9 @@ public sealed class MarketAcquisitionRequestEndpointTests
         Assert.Contains("data-resize=\"status\"", acquisitionPage, StringComparison.Ordinal);
         Assert.Contains("refreshAcquisitionQueue", acquisitionPage, StringComparison.Ordinal);
         Assert.Contains("setInterval(refreshAcquisitionQueue, 3000)", acquisitionPage, StringComparison.Ordinal);
+        Assert.Contains("credentials: 'same-origin'", acquisitionPage, StringComparison.Ordinal);
+        Assert.Contains("catch (error)", acquisitionPage, StringComparison.Ordinal);
+        Assert.Contains("Queue refresh failed.", acquisitionPage, StringComparison.Ordinal);
         Assert.Contains("data-xiv-data-base-url=\"https://dev.xivcraftarchitect.com/api/xivdata\"", acquisitionPage, StringComparison.Ordinal);
         Assert.Contains("Plugin pickup required", acquisitionPage, StringComparison.Ordinal);
         Assert.Contains("No background polling", acquisitionPage, StringComparison.Ordinal);
