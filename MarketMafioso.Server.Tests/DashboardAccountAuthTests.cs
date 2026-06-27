@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
+using Microsoft.Data.Sqlite;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
@@ -70,12 +71,49 @@ public sealed class DashboardAccountAuthTests
         Assert.Equal(HttpStatusCode.OK, authenticated.StatusCode);
     }
 
-    private static WebApplicationFactory<Program> CreateApplication(params KeyValuePair<string, string?>[] extraConfiguration)
+    [Fact]
+    public async Task DashboardRoutes_ReuseCachedCredentialsWithinTtl()
+    {
+        var values = CreateApplicationValues(
+            new KeyValuePair<string, string?>("MarketMafioso:DashboardAuthCacheSeconds", "60"));
+        await using var application = values.Application;
+        using var client = application.CreateClient();
+
+        using var firstRequest = new HttpRequestMessage(HttpMethod.Get, "/");
+        firstRequest.Headers.Authorization = CreateBasicAuth("admin", "secret-password");
+        var first = await client.SendAsync(firstRequest);
+        first.EnsureSuccessStatusCode();
+
+        await using (var connection = new SqliteConnection($"Data Source={values.DatabasePath}"))
+        {
+            await connection.OpenAsync();
+            await using var command = connection.CreateCommand();
+            command.CommandText = """
+                UPDATE dashboard_users
+                SET disabled_at_utc = $disabledAt
+                WHERE username = 'admin'
+                """;
+            command.Parameters.AddWithValue("$disabledAt", DateTimeOffset.UtcNow.ToString("O"));
+            await command.ExecuteNonQueryAsync();
+        }
+
+        using var cachedRequest = new HttpRequestMessage(HttpMethod.Get, "/acquisition/requests/recent");
+        cachedRequest.Headers.Authorization = CreateBasicAuth("admin", "secret-password");
+        var cached = await client.SendAsync(cachedRequest);
+
+        Assert.Equal(HttpStatusCode.OK, cached.StatusCode);
+    }
+
+    private static WebApplicationFactory<Program> CreateApplication(params KeyValuePair<string, string?>[] extraConfiguration) =>
+        CreateApplicationValues(extraConfiguration).Application;
+
+    private static ApplicationValues CreateApplicationValues(params KeyValuePair<string, string?>[] extraConfiguration)
     {
         var contentRoot = Path.Combine(Path.GetTempPath(), "MarketMafioso.Server.Tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(contentRoot);
+        var databasePath = Path.Combine(contentRoot, "marketmafioso.db");
 
-        return new WebApplicationFactory<Program>()
+        var application = new WebApplicationFactory<Program>()
             .WithWebHostBuilder(builder =>
             {
                 builder.UseContentRoot(contentRoot);
@@ -83,7 +121,7 @@ public sealed class DashboardAccountAuthTests
                 {
                     var values = new Dictionary<string, string?>
                     {
-                        ["MarketMafioso:DatabasePath"] = Path.Combine(contentRoot, "marketmafioso.db"),
+                        ["MarketMafioso:DatabasePath"] = databasePath,
                         ["MarketMafioso:RequireDashboardAuth"] = "true",
                         ["MarketMafioso:DashboardBootstrapUsername"] = "admin",
                         ["MarketMafioso:DashboardBootstrapPassword"] = "secret-password",
@@ -94,6 +132,7 @@ public sealed class DashboardAccountAuthTests
                     config.AddInMemoryCollection(values);
                 });
             });
+        return new ApplicationValues(application, databasePath);
     }
 
     private static AuthenticationHeaderValue CreateBasicAuth(string username, string password)
@@ -101,4 +140,6 @@ public sealed class DashboardAccountAuthTests
         var credentials = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{username}:{password}"));
         return new AuthenticationHeaderValue("Basic", credentials);
     }
+
+    private sealed record ApplicationValues(WebApplicationFactory<Program> Application, string DatabasePath);
 }
