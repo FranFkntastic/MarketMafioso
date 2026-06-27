@@ -80,7 +80,7 @@ jobs:
           chmod 600 marketmafioso-dev.env
           cat > marketmafioso-dev.caddy <<CADDY
           @marketmafioso {
-              path /api/marketmafioso*
+              path /api/marketmafioso /api/marketmafioso/*
           }
 
           handle @marketmafioso {
