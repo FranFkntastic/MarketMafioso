@@ -106,9 +106,9 @@ public sealed class MarketAcquisitionGuidedRouteSession
 
         if (candidatePlan.WouldBuyQuantity > 0)
         {
-            stop.Status = "AwaitingPurchaseConfirmation";
+            stop.Status = "Purchasing";
             return MarketAcquisitionGuidedRouteResult.Ok(
-                $"Approve purchases on {stop.WorldName}: {candidatePlan.WouldBuyQuantity:N0} item(s), {candidatePlan.WouldSpendGil:N0} gil.");
+                $"Purchasing on {stop.WorldName}: {candidatePlan.WouldBuyQuantity:N0} safe live item(s), {candidatePlan.WouldSpendGil:N0} gil.");
         }
 
         CompleteActiveStop(0, 0);
@@ -116,19 +116,6 @@ public sealed class MarketAcquisitionGuidedRouteSession
             return MarketAcquisitionGuidedRouteResult.Ok("Guided route complete. No safe live candidates remained.");
 
         return MarketAcquisitionGuidedRouteResult.Ok($"Recorded {currentWorld}. Next stop: {ActiveStop?.WorldName}.");
-    }
-
-    public MarketAcquisitionGuidedRouteResult ConfirmActiveWorldPurchaseBatch()
-    {
-        var stop = ActiveStop;
-        if (stop == null)
-            return MarketAcquisitionGuidedRouteResult.Fail("Guided route is already complete.");
-
-        if (!stop.Status.Equals("AwaitingPurchaseConfirmation", StringComparison.OrdinalIgnoreCase))
-            return MarketAcquisitionGuidedRouteResult.Fail($"Cannot start purchases while stop is {stop.Status}.");
-
-        stop.Status = "Purchasing";
-        return MarketAcquisitionGuidedRouteResult.Ok($"Purchasing approved for {stop.WorldName}.");
     }
 
     public MarketAcquisitionGuidedRouteResult RecordWorldPurchaseBatchComplete(

@@ -58,6 +58,7 @@ public class MainWindow : Window, IDisposable
     private MarketBoardPurchaseResult? marketBoardPurchaseResult;
     private uint activeWorldPurchasedQuantity;
     private uint activeWorldSpentGil;
+    private string? activeWorldPurchaseBatchWorld;
     private DateTimeOffset nextGuidedRouteMonitorUtc = DateTimeOffset.MinValue;
     private DateTimeOffset nextMarketBoardPurchaseMonitorUtc = DateTimeOffset.MinValue;
     private int marketInputCaptureIndex;
@@ -161,7 +162,13 @@ public class MainWindow : Window, IDisposable
         AcquisitionDiagnostics = new MarketAcquisitionDiagnosticsWindow(
             () => marketBoardReadResult,
             () => marketBoardReconciliation,
-            () => marketAcquisitionLiveCandidatePlan);
+            () => marketAcquisitionLiveCandidatePlan,
+            CanProbeLiveMarketBoard,
+            () => _ = ProbeLiveMarketBoardAsync(),
+            CaptureMarketBoardInputState,
+            () => marketAcquisitionRouteRunner.CanFinalizeInputCaptureLog,
+            FinalizeMarketBoardInputCaptureLog,
+            () => marketAcquisitionRouteRunner.LastDiagnosticFilePath);
 
         var restoredAcquisitionClaim = MarketAcquisitionClaimPersistence.Restore(config);
         if (restoredAcquisitionClaim != null)
@@ -299,8 +306,6 @@ public class MainWindow : Window, IDisposable
         DrawMarketAcquisitionPlan();
         ImGui.Spacing();
         DrawMarketAcquisitionGuidedRoute();
-        ImGui.Spacing();
-        DrawMarketBoardProbe();
     }
 
     private void DrawMarketAcquisitionPickupSection()
@@ -348,13 +353,13 @@ public class MainWindow : Window, IDisposable
                 ImGui.TableNextColumn();
                 ImGui.TextUnformatted(FormatAcquisitionItem(request));
                 ImGui.TableNextColumn();
-                ImGui.TextUnformatted(request.Quantity.ToString());
+                ImGui.TextUnformatted(MarketAcquisitionQuantityModePresenter.FormatQuantity(request.QuantityMode, request.Quantity));
                 ImGui.TableNextColumn();
                 ImGui.TextUnformatted(request.HqPolicy);
                 ImGui.TableNextColumn();
                 ImGui.TextUnformatted(FormatGil(request.MaxUnitPrice));
                 ImGui.TableNextColumn();
-                ImGui.TextUnformatted(request.WorldMode);
+                ImGui.TextUnformatted(MarketAcquisitionQuantityModePresenter.FormatMode(request.QuantityMode));
                 ImGui.TableNextColumn();
                 if (ImGuiUi.Button($"Claim##marketAcquisitionClaim{request.Id}", !acquisitionRequestBusy))
                     _ = ClaimAcquisitionRequestAsync(request.Id);
@@ -378,7 +383,8 @@ public class MainWindow : Window, IDisposable
         {
             DrawClaimedRequestRow("Status", claimedAcquisitionRequest.Status);
             DrawClaimedRequestRow("Item", FormatAcquisitionItem(claimedAcquisitionRequest));
-            DrawClaimedRequestRow("Quantity", $"{claimedAcquisitionRequest.QuantityMode} {claimedAcquisitionRequest.Quantity}");
+            DrawClaimedRequestRow("Mode", MarketAcquisitionQuantityModePresenter.FormatMode(claimedAcquisitionRequest.QuantityMode));
+            DrawClaimedRequestRow("Quantity", MarketAcquisitionQuantityModePresenter.FormatQuantity(claimedAcquisitionRequest.QuantityMode, claimedAcquisitionRequest.Quantity));
             DrawClaimedRequestRow("HQ Policy", claimedAcquisitionRequest.HqPolicy);
             DrawClaimedRequestRow("Max Unit", FormatGil(claimedAcquisitionRequest.MaxUnitPrice));
             DrawClaimedRequestRow("Gil Cap", FormatGilCap(claimedAcquisitionRequest.MaxTotalGil));
@@ -405,6 +411,7 @@ public class MainWindow : Window, IDisposable
         if (ImGuiUi.Button("Prepare Plan", canPrepare))
             _ = PrepareMarketAcquisitionPlanAsync();
 
+        ImGui.TextColored(ColMuted, MarketAcquisitionQuantityModePresenter.FormatExecutionHint(claimedAcquisitionRequest.QuantityMode));
         ImGui.TextColored(ColMuted, "Preparing a plan reads remote market data. Guided routes validate live rows before purchasing.");
     }
 
@@ -424,6 +431,12 @@ public class MainWindow : Window, IDisposable
 
         if (acquisitionPlan.WorldBatches.Count == 0)
             return;
+
+        if (!ImGui.CollapsingHeader("World Listings##MarketAcquisitionPlanWorldListings"))
+        {
+            ImGui.TextColored(ColMuted, "Expand to inspect advisory listings. Live market-board rows remain authoritative.");
+            return;
+        }
 
         var tableFlags = ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.Resizable;
         if (ImGui.BeginTable("MarketAcquisitionPlanBatches", 7, tableFlags))
@@ -469,38 +482,18 @@ public class MainWindow : Window, IDisposable
         }
     }
 
-    private void DrawMarketBoardProbe()
+    private bool CanProbeLiveMarketBoard()
     {
-        ImGuiUi.SectionHeader("Live Market Board Probe", ColHeader);
+        return !acquisitionRequestBusy &&
+               acquisitionPlan is { Status: "Ready" } &&
+               acquisitionPlan.WorldBatches.Count > 0;
+    }
 
-        ImGui.TextColored(ColMuted, "Open market board search results for a planned item/world, then run the read-only probe.");
-
-        var canProbe = !acquisitionRequestBusy &&
-                       acquisitionPlan is { Status: "Ready" } &&
-                       acquisitionPlan.WorldBatches.Count > 0;
-        if (ImGuiUi.Button("Read Live Listings", canProbe))
-            _ = ProbeLiveMarketBoardAsync();
-
-        if (marketBoardReadResult == null)
-        {
-            ImGui.TextColored(ColMuted, "No live market board probe has run.");
-            return;
-        }
-
-        ImGui.TextColored(
-            marketBoardReadResult.Status == "Ready" ? ColSuccess : ColMuted,
-            $"Read status: {marketBoardReadResult.Status}  -  {marketBoardReadResult.Message}");
-
-        if (marketBoardReconciliation != null)
-        {
-            ImGui.TextColored(
-                marketBoardReconciliation.Status == "Ready" ? ColSuccess : ColError,
-                $"Reconciliation: {marketBoardReconciliation.Status}");
-        }
-
+    private void DrawMarketBoardProbeStatus()
+    {
         DrawLiveCandidatePlanResult();
 
-        if (ImGuiUi.Button("Open Diagnostics", marketBoardReadResult != null))
+        if (ImGuiUi.Button("Open Diagnostics", true))
             AcquisitionDiagnostics.IsOpen = true;
     }
 
@@ -618,6 +611,13 @@ public class MainWindow : Window, IDisposable
                 guidedRouteProbeRunning = true;
                 _ = ProbeGuidedRouteMarketBoardAsync();
             }
+
+            if (route.ActiveStop is { Status: "Purchasing" } &&
+                marketBoardPurchaseSession?.IsActive != true)
+            {
+                BeginNextWorldPurchase();
+                nextGuidedRouteMonitorUtc = DateTimeOffset.UtcNow.AddSeconds(1);
+            }
         }
         catch (Exception ex)
         {
@@ -719,29 +719,17 @@ public class MainWindow : Window, IDisposable
 
         var purchaseActive = marketBoardPurchaseSession?.IsActive == true;
         var activeStop = marketAcquisitionRouteRunner.ActiveStop;
-        var awaitingWorldConfirmation = activeStop is { Status: "AwaitingPurchaseConfirmation" };
         var purchasingWorld = activeStop is { Status: "Purchasing" };
-        var canApproveWorldPurchases =
-            awaitingWorldConfirmation &&
-            marketBoardReadResult?.Status == "Ready" &&
-            marketAcquisitionLiveCandidatePlan.Status == "Ready" &&
-            !purchaseActive &&
-            !acquisitionRequestBusy;
-        if (ImGuiUi.Button("Approve World Purchases", canApproveWorldPurchases))
-            StartActiveWorldPurchaseBatch();
 
         var firstCandidate = MarketBoardPurchasePlanner.SelectFirstCandidate(marketAcquisitionLiveCandidatePlan);
-        if (firstCandidate != null && (awaitingWorldConfirmation || purchasingWorld))
+        if (firstCandidate != null && purchasingWorld)
         {
-            ImGui.SameLine();
             ImGui.TextColored(
                 ColMuted,
                 $"Next safe listing: {firstCandidate.Quantity:N0} @ {FormatGil(firstCandidate.UnitPrice)} ({FormatGil(firstCandidate.TotalGil)})");
         }
 
-        if (awaitingWorldConfirmation)
-            ImGui.TextColored(ColHeader, "World batch is waiting for approval before automated purchases begin.");
-        else if (purchasingWorld)
+        if (purchasingWorld)
             ImGui.TextColored(ColHeader, $"World batch running: purchased {activeWorldPurchasedQuantity:N0}, spent {FormatGil(activeWorldSpentGil)}.");
 
         if (marketBoardPurchaseSession != null)
@@ -759,38 +747,6 @@ public class MainWindow : Window, IDisposable
         }
     }
 
-    private void StartActiveWorldPurchaseBatch()
-    {
-        try
-        {
-            var result = marketAcquisitionRouteRunner.ConfirmActiveWorldPurchaseBatch();
-            if (!result.Success)
-                throw new InvalidOperationException(result.Message);
-
-            activeWorldPurchasedQuantity = 0;
-            activeWorldSpentGil = 0;
-            marketBoardPurchaseSession = null;
-            marketBoardPurchaseResult = null;
-            acquisitionStatus = result.Message;
-            BeginNextWorldPurchase();
-            ReportGuidedRouteProgress();
-        }
-        catch (Exception ex)
-        {
-            if (marketAcquisitionRouteRunner.ActiveStop is { Status: "Purchasing" })
-                marketAcquisitionRouteRunner.FailRoute($"World purchase batch failed to start. {ex.Message}", ex);
-
-            marketBoardPurchaseResult = new MarketBoardPurchaseResult
-            {
-                Status = "PurchaseStartFailed",
-                Message = ex.Message,
-            };
-            marketBoardPurchaseSession = null;
-            acquisitionStatus = $"World purchase batch start failed: {ex.Message}";
-            log.Warning(ex, "[MarketMafioso] Unable to start guarded market-board purchase batch.");
-        }
-    }
-
     private void BeginNextWorldPurchase()
     {
         var activeStop = marketAcquisitionRouteRunner.ActiveStop;
@@ -804,6 +760,13 @@ public class MainWindow : Window, IDisposable
         var currentWorld = GetCurrentWorldName();
         if (!activeStop.WorldName.Equals(currentWorld, StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException($"Cannot purchase on {currentWorld}; active route stop is {activeStop.WorldName}.");
+
+        if (!string.Equals(activeWorldPurchaseBatchWorld, activeStop.WorldName, StringComparison.OrdinalIgnoreCase))
+        {
+            activeWorldPurchaseBatchWorld = activeStop.WorldName;
+            activeWorldPurchasedQuantity = 0;
+            activeWorldSpentGil = 0;
+        }
 
         var freshRead = marketBoardListingReader.ReadCurrentListings(currentWorld);
         marketBoardReadResult = freshRead;
@@ -855,6 +818,7 @@ public class MainWindow : Window, IDisposable
         acquisitionStatus = result.Message;
         marketBoardPurchaseSession = null;
         marketBoardPurchaseResult = null;
+        activeWorldPurchaseBatchWorld = null;
         ReportGuidedRouteProgress();
     }
 
@@ -1182,11 +1146,10 @@ public class MainWindow : Window, IDisposable
             RestartGuidedRoute();
 
         ImGui.TextColored(GetGuidedRouteStatusColor(), marketAcquisitionRouteRunner.StatusMessage);
-        DrawMarketBoardInputCapture();
 
         if (marketAcquisitionRouteRunner.Stops.Count == 0)
         {
-            ImGui.TextColored(ColMuted, "Start after preparing a plan. Routes travel, validate live listings, then wait for one purchase approval per world.");
+            ImGui.TextColored(ColMuted, "Start after preparing a plan. Routes travel, validate live listings, and purchase safe rows automatically.");
             return;
         }
 
@@ -1206,6 +1169,7 @@ public class MainWindow : Window, IDisposable
         }
 
         DrawGuidedRouteStops(marketAcquisitionRouteRunner.Stops);
+        DrawMarketBoardProbeStatus();
     }
 
     private void DrawMarketBoardInputCapture()
@@ -1274,6 +1238,7 @@ public class MainWindow : Window, IDisposable
             marketBoardPurchaseResult = null;
             activeWorldPurchasedQuantity = 0;
             activeWorldSpentGil = 0;
+            activeWorldPurchaseBatchWorld = null;
             guidedRouteProbeRunning = false;
             nextGuidedRouteMonitorUtc = DateTimeOffset.MinValue;
             ReportGuidedRouteProgress();
@@ -1301,6 +1266,7 @@ public class MainWindow : Window, IDisposable
             marketBoardPurchaseResult = null;
             activeWorldPurchasedQuantity = 0;
             activeWorldSpentGil = 0;
+            activeWorldPurchaseBatchWorld = null;
             guidedRouteProbeRunning = false;
             nextGuidedRouteMonitorUtc = DateTimeOffset.MinValue;
             ReportGuidedRouteProgress();
@@ -1353,6 +1319,7 @@ public class MainWindow : Window, IDisposable
         marketBoardPurchaseResult = null;
         activeWorldPurchasedQuantity = 0;
         activeWorldSpentGil = 0;
+        activeWorldPurchaseBatchWorld = null;
         guidedRouteProbeRunning = false;
         lastGuidedRouteProgressReportKey = null;
         nextGuidedRouteMonitorUtc = DateTimeOffset.MinValue;
@@ -1469,7 +1436,7 @@ public class MainWindow : Window, IDisposable
         stop.Status switch
         {
             "Complete" => ColSuccess,
-            "Arrived" or "AwaitingPurchaseConfirmation" or "Purchasing" => ColHeader,
+            "Arrived" or "Purchasing" => ColHeader,
             _ => ColMuted,
         };
 

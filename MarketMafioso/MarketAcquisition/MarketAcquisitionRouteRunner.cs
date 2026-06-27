@@ -526,28 +526,6 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
             : MarketAcquisitionRouteActionResult.Fail(result.Message);
     }
 
-    public MarketAcquisitionRouteActionResult ConfirmActiveWorldPurchaseBatch()
-    {
-        if (!IsRunning)
-            return Fail($"Route is {State}; world purchases were not approved.");
-
-        var result = session?.ConfirmActiveWorldPurchaseBatch() ??
-                     MarketAcquisitionGuidedRouteResult.Fail("No route has started.");
-        StatusMessage = result.Message;
-        diagnostics.Record(
-            "world-purchase-confirmed",
-            result.Message,
-            new Dictionary<string, string?>
-            {
-                ["world"] = ActiveStop?.WorldName,
-                ["success"] = result.Success.ToString(),
-            });
-
-        return result.Success
-            ? MarketAcquisitionRouteActionResult.Ok(result.Message)
-            : MarketAcquisitionRouteActionResult.Fail(result.Message);
-    }
-
     public MarketAcquisitionRouteActionResult RecordWorldPurchaseBatchComplete(
         string currentWorld,
         uint purchasedQuantity,

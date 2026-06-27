@@ -209,7 +209,7 @@ public sealed class MarketAcquisitionRouteRunnerTests
     }
 
     [Fact]
-    public void RecordProbe_WithSafeListingsWaitsForWorldPurchaseConfirmation()
+    public void RecordProbe_WithSafeListingsStartsPurchasing()
     {
         using var runner = CreateRunner();
         runner.Start(CreatePlan("Maduin"));
@@ -220,23 +220,8 @@ public sealed class MarketAcquisitionRouteRunnerTests
 
         Assert.True(result.Success);
         Assert.Equal("Running", runner.State);
-        Assert.Equal("AwaitingPurchaseConfirmation", runner.ActiveStop?.Status);
-        Assert.Equal(10u, runner.Stops[0].WouldBuyQuantity);
-        Assert.Contains("Approve", runner.StatusMessage, StringComparison.OrdinalIgnoreCase);
-    }
-
-    [Fact]
-    public void ConfirmActiveWorldPurchaseBatch_MarksStopPurchasing()
-    {
-        using var runner = CreateRunner();
-        runner.Start(CreatePlan("Maduin"));
-        runner.RecordCurrentWorld("Maduin");
-        runner.RecordProbe("Maduin", CreateCandidatePlan(status: "Ready", quantity: 10, gil: 100));
-
-        var result = runner.ConfirmActiveWorldPurchaseBatch();
-
-        Assert.True(result.Success);
         Assert.Equal("Purchasing", runner.ActiveStop?.Status);
+        Assert.Equal(10u, runner.Stops[0].WouldBuyQuantity);
         Assert.Contains("Purchasing", runner.StatusMessage, StringComparison.OrdinalIgnoreCase);
     }
 
@@ -247,7 +232,6 @@ public sealed class MarketAcquisitionRouteRunnerTests
         runner.Start(CreatePlan("Rafflesia", "Zalera"));
         runner.RecordCurrentWorld("Rafflesia");
         runner.RecordProbe("Rafflesia", CreateCandidatePlan(status: "Ready", quantity: 10, gil: 100));
-        runner.ConfirmActiveWorldPurchaseBatch();
 
         var result = runner.RecordWorldPurchaseBatchComplete("Rafflesia", purchasedQuantity: 10, spentGil: 100);
 
