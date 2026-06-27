@@ -66,6 +66,36 @@ public sealed class MarketBoardItemSearchDriverTests
     }
 
     [Fact]
+    public void ShouldWaitForSubmittedSearch_ReturnsFalseWhenAgentIsIdleAndExactItemIsMissing()
+    {
+        Assert.False(MarketBoardItemSearchDriver.ShouldWaitForSubmittedSearch(
+            searchMatches: true,
+            exactItemVisible: false,
+            agentIsPartialSearching: false,
+            agentIsItemPushPending: false));
+    }
+
+    [Fact]
+    public void ShouldWaitForSubmittedSearch_ReturnsTrueWhenAgentIsStillSearching()
+    {
+        Assert.True(MarketBoardItemSearchDriver.ShouldWaitForSubmittedSearch(
+            searchMatches: true,
+            exactItemVisible: false,
+            agentIsPartialSearching: true,
+            agentIsItemPushPending: false));
+    }
+
+    [Fact]
+    public void ShouldWaitForSubmittedSearch_ReturnsTrueWhenExactItemIsVisible()
+    {
+        Assert.True(MarketBoardItemSearchDriver.ShouldWaitForSubmittedSearch(
+            searchMatches: true,
+            exactItemVisible: true,
+            agentIsPartialSearching: false,
+            agentIsItemPushPending: false));
+    }
+
+    [Fact]
     public void GetSearchSubmitCallbackSequence_PrimesInputBeforeEnter()
     {
         Assert.Equal(

@@ -98,18 +98,36 @@ public sealed class MarketBoardItemSearchDriver
             };
         }
 
-        if (IsSubmittedSearchCurrent(submittedSearchItemId, submittedSearchText, itemId, searchText))
+        var searchMatchesSubmittedState = IsSubmittedSearchCurrent(submittedSearchItemId, submittedSearchText, itemId, searchText);
+        if (searchMatchesSubmittedState)
         {
-            details["searchAlreadySubmitted"] = true.ToString();
-            details["searchSource"] = "TextInputEnterCallback";
-            details["partialSearchAfter"] = addon->PartialMatch.ToString();
+            var exactItemVisible = AgentContainsItem(agent, itemId);
+            var agentIsPartialSearching = agent != null && agent->IsPartialSearching;
+            var agentIsItemPushPending = agent != null && agent->IsItemPushPending;
+            var shouldWait = ShouldWaitForSubmittedSearch(
+                searchMatchesSubmittedState,
+                exactItemVisible,
+                agentIsPartialSearching,
+                agentIsItemPushPending);
 
-            return new MarketBoardItemSearchResult
+            details["searchAlreadySubmitted"] = true.ToString();
+            details["submittedSearchExactItemVisible"] = exactItemVisible.ToString();
+            details["submittedSearchStillInFlight"] = shouldWait.ToString();
+            if (shouldWait)
             {
-                Status = "SearchSent",
-                Message = $"Waiting for market board item search results for {searchText} ({itemId}).",
-                Details = details,
-            };
+                details["searchSource"] = "TextInputEnterCallback";
+                details["partialSearchAfter"] = addon->PartialMatch.ToString();
+
+                return new MarketBoardItemSearchResult
+                {
+                    Status = "SearchSent",
+                    Message = $"Waiting for market board item search results for {searchText} ({itemId}).",
+                    Details = details,
+                };
+            }
+
+            details["staleSubmittedSearchCleared"] = true.ToString();
+            ClearSubmittedSearch();
         }
 
         if (!TrySubmitSearchWithTextInputEnter(addon, searchText, details))
@@ -226,6 +244,15 @@ public sealed class MarketBoardItemSearchDriver
     {
         return submittedItemId == itemId
             && string.Equals(submittedText?.Trim(), searchText.Trim(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    internal static bool ShouldWaitForSubmittedSearch(
+        bool searchMatches,
+        bool exactItemVisible,
+        bool agentIsPartialSearching,
+        bool agentIsItemPushPending)
+    {
+        return searchMatches && (exactItemVisible || agentIsPartialSearching || agentIsItemPushPending);
     }
 
     internal static IReadOnlyList<MarketBoardItemSearchSubmitCallback> GetSearchSubmitCallbackSequence()
