@@ -12,7 +12,7 @@
 }
 else if (_session is null)
 {
-    <MudPaper Class="login-shell compact-card" Elevation="0">
+    <MudPaper Class="login-shell compact-card dashboard-panel" Elevation="0">
         <MudStack Spacing="2">
             <MudText Typo="Typo.h5">Sign in</MudText>
             <MudText Typo="Typo.body2" Class="muted">Use the dashboard account configured for this receiver.</MudText>
@@ -28,28 +28,34 @@ else if (_session is null)
 }
 else
 {
-    <MudStack Spacing="2">
-        <MudStack Row="true" AlignItems="AlignItems.Center">
+    <MudStack Spacing="2" Class="dashboard-page acquisition-page">
+        <MudStack Row="true" AlignItems="AlignItems.Center" Class="page-title-row">
             <div>
                 <MudText Typo="Typo.h5">Acquisition</MudText>
                 <MudText Typo="Typo.body2" Class="muted">Stage purchase intent here; the plugin validates live market rows before buying.</MudText>
             </div>
             <MudSpacer />
-            <MudChip T="string" Color="@(_eventsConnected ? Color.Success : Color.Info)" Variant="Variant.Outlined">@_liveStatus</MudChip>
-            <MudButton Variant="Variant.Outlined" OnClick="LogoutAsync">Logout @_session.User.Username</MudButton>
+            <MudChip T="string" Class="status-chip" Color="@(_eventsConnected ? Color.Success : Color.Info)" Variant="Variant.Outlined">@_liveStatus</MudChip>
+            <MudButton Variant="Variant.Outlined" Class="quiet-button" OnClick="LogoutAsync">Logout @_session.User.Username</MudButton>
         </MudStack>
 
         @if (!string.IsNullOrWhiteSpace(_status))
         {
-            <MudAlert Severity="_statusIsError ? Severity.Error : Severity.Info" Dense="true">@_status</MudAlert>
+            <MudAlert Class="status-alert" Severity="_statusIsError ? Severity.Error : Severity.Info" Dense="true">@_status</MudAlert>
         }
 
         <div class="page-grid acquisition-grid">
-            <MudPaper Class="compact-card" Elevation="0">
+            <MudPaper Class="compact-card dashboard-panel builder-panel" Elevation="0">
                 <MudStack Spacing="2">
-                    <MudText Typo="Typo.h6">New Purchase Request</MudText>
+                    <MudStack Row="true" AlignItems="AlignItems.Center" Class="panel-heading">
+                        <MudText Typo="Typo.h6">New Purchase Request</MudText>
+                        <MudSpacer />
+                        <MudText Typo="Typo.caption" Class="muted">@_targetCharacter @@ @_targetWorld</MudText>
+                    </MudStack>
 
-                    <MudGrid Spacing="2">
+                    <div class="form-section">
+                        <MudText Typo="Typo.overline" Class="section-label">Target</MudText>
+                        <MudGrid Spacing="2">
                         <MudItem xs="12" sm="6">
                             <MudTextField @bind-Value="_targetCharacter" Label="Character" Variant="Variant.Outlined" Margin="Margin.Dense" />
                         </MudItem>
@@ -68,59 +74,66 @@ else
                                 <MudSelectItem Value="@("AllWorldSweep")">All-world sweep</MudSelectItem>
                             </MudSelect>
                         </MudItem>
-                    </MudGrid>
+                        </MudGrid>
+                    </div>
 
-                    <MudAutocomplete T="XivItemSearchResult"
-                                     Label="Item"
-                                     Variant="Variant.Outlined"
-                                     Margin="Margin.Dense"
-                                     Value="_selectedItem"
-                                     ValueChanged="OnItemSelected"
-                                     SearchFunc="SearchItemsAsync"
-                                     ToStringFunc="item => item?.ToString() ?? string.Empty"
-                                     ResetValueOnEmptyText="true"
-                                     CoerceText="false"
-                                     Dense="true" />
+                    <div class="form-section">
+                        <MudText Typo="Typo.overline" Class="section-label">Item</MudText>
+                        <MudAutocomplete T="XivItemSearchResult"
+                                         Label="Item"
+                                         Variant="Variant.Outlined"
+                                         Margin="Margin.Dense"
+                                         Value="_selectedItem"
+                                         ValueChanged="OnItemSelected"
+                                         SearchFunc="SearchItemsAsync"
+                                         ToStringFunc="item => item?.ToString() ?? string.Empty"
+                                         ResetValueOnEmptyText="true"
+                                         CoerceText="false"
+                                         Dense="true" />
+                    </div>
 
-                    <MudGrid Spacing="2">
-                        <MudItem xs="12" sm="6">
-                            <MudSelect T="string" Value="_quantityMode" ValueChanged="QuantityModeChanged" Label="Quantity mode" Variant="Variant.Outlined" Margin="Margin.Dense">
-                                <MudSelectItem Value="@("TargetQuantity")">Target quantity</MudSelectItem>
-                                <MudSelectItem Value="@("AllBelowThreshold")">All below threshold</MudSelectItem>
-                            </MudSelect>
-                        </MudItem>
-                        <MudItem xs="12" sm="6">
-                            <MudNumericField T="uint?" @bind-Value="_quantity" Label="@QuantityLabel" Variant="Variant.Outlined" Margin="Margin.Dense" Min="0" />
-                        </MudItem>
-                        <MudItem xs="12" sm="6">
-                            <MudNumericField T="uint?" @bind-Value="_maxUnitPrice" Label="Max unit price" Variant="Variant.Outlined" Margin="Margin.Dense" Min="1" />
-                        </MudItem>
-                        <MudItem xs="12" sm="6">
-                            <MudNumericField T="uint?" @bind-Value="_gilCap" Label="Gil cap (optional)" Variant="Variant.Outlined" Margin="Margin.Dense" Min="0" />
-                        </MudItem>
-                        <MudItem xs="12" sm="6">
-                            <MudSelect T="string" @bind-Value="_hqPolicy" Label="HQ policy" Variant="Variant.Outlined" Margin="Margin.Dense">
-                                <MudSelectItem Value="@("Either")">Either</MudSelectItem>
-                                <MudSelectItem Value="@("NqOnly")">NQ only</MudSelectItem>
-                                <MudSelectItem Value="@("HqOnly")">HQ only</MudSelectItem>
-                            </MudSelect>
-                        </MudItem>
-                        <MudItem xs="12" sm="6">
-                            <MudSelect T="int" @bind-Value="_expiresInSeconds" Label="Pickup expires" Variant="Variant.Outlined" Margin="Margin.Dense">
-                                <MudSelectItem Value="300">5 minutes</MudSelectItem>
-                                <MudSelectItem Value="900">15 minutes</MudSelectItem>
-                            </MudSelect>
-                        </MudItem>
-                    </MudGrid>
+                    <div class="form-section">
+                        <MudText Typo="Typo.overline" Class="section-label">Purchase Limits</MudText>
+                        <MudGrid Spacing="2">
+                            <MudItem xs="12" sm="6">
+                                <MudSelect T="string" Value="_quantityMode" ValueChanged="QuantityModeChanged" Label="Quantity mode" Variant="Variant.Outlined" Margin="Margin.Dense">
+                                    <MudSelectItem Value="@("TargetQuantity")">Target quantity</MudSelectItem>
+                                    <MudSelectItem Value="@("AllBelowThreshold")">All below threshold</MudSelectItem>
+                                </MudSelect>
+                            </MudItem>
+                            <MudItem xs="12" sm="6">
+                                <MudNumericField T="uint?" @bind-Value="_quantity" Label="@QuantityLabel" Variant="Variant.Outlined" Margin="Margin.Dense" Min="0" />
+                            </MudItem>
+                            <MudItem xs="12" sm="6">
+                                <MudNumericField T="uint?" @bind-Value="_maxUnitPrice" Label="Max unit price" Variant="Variant.Outlined" Margin="Margin.Dense" Min="1" />
+                            </MudItem>
+                            <MudItem xs="12" sm="6">
+                                <MudNumericField T="uint?" @bind-Value="_gilCap" Label="Gil cap (optional)" Variant="Variant.Outlined" Margin="Margin.Dense" Min="0" />
+                            </MudItem>
+                            <MudItem xs="12" sm="6">
+                                <MudSelect T="string" @bind-Value="_hqPolicy" Label="HQ policy" Variant="Variant.Outlined" Margin="Margin.Dense">
+                                    <MudSelectItem Value="@("Either")">Either</MudSelectItem>
+                                    <MudSelectItem Value="@("NqOnly")">NQ only</MudSelectItem>
+                                    <MudSelectItem Value="@("HqOnly")">HQ only</MudSelectItem>
+                                </MudSelect>
+                            </MudItem>
+                            <MudItem xs="12" sm="6">
+                                <MudSelect T="int" @bind-Value="_expiresInSeconds" Label="Pickup expires" Variant="Variant.Outlined" Margin="Margin.Dense">
+                                    <MudSelectItem Value="300">5 minutes</MudSelectItem>
+                                    <MudSelectItem Value="900">15 minutes</MudSelectItem>
+                                </MudSelect>
+                            </MudItem>
+                        </MudGrid>
+                    </div>
 
-                    <MudAlert Severity="Severity.Info" Dense="true">
+                    <MudAlert Class="help-alert" Severity="Severity.Info" Dense="true">
                         @QuantityHelp
                     </MudAlert>
 
-                    <MudStack Row="true">
-                        <MudButton Variant="Variant.Outlined" OnClick="ClearBuilder">Clear</MudButton>
+                    <MudStack Row="true" Class="action-row">
+                        <MudButton Variant="Variant.Outlined" Class="quiet-button" OnClick="ClearBuilder">Clear</MudButton>
                         <MudSpacer />
-                        <MudButton Variant="Variant.Outlined" OnClick="AddToQueue">Add to Queue</MudButton>
+                        <MudButton Variant="Variant.Outlined" Class="quiet-button" OnClick="AddToQueue">Add to Queue</MudButton>
                         <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="_busy || _queue.Count == 0" OnClick="StageQueueAsync">Stage Queue</MudButton>
                     </MudStack>
 
@@ -146,12 +159,13 @@ else
                 </MudStack>
             </MudPaper>
 
-            <MudPaper Class="compact-card" Elevation="0">
+            <MudPaper Class="compact-card dashboard-panel queue-panel" Elevation="0">
                 <MudStack Spacing="2">
-                    <MudStack Row="true" AlignItems="AlignItems.Center">
+                    <MudStack Row="true" AlignItems="AlignItems.Center" Class="panel-heading">
                         <MudText Typo="Typo.h6">Request Queue</MudText>
                         <MudSpacer />
-                        <MudButton Variant="Variant.Outlined" OnClick="LoadRequestsAsync">Refresh</MudButton>
+                        <MudText Typo="Typo.caption" Class="muted">@_requests.Count active / @_queue.Count queued locally</MudText>
+                        <MudButton Variant="Variant.Outlined" Class="quiet-button" OnClick="LoadRequestsAsync">Refresh</MudButton>
                     </MudStack>
                     <MudTable Items="_requests" Dense="true" Hover="true" Class="queue-table">
                         <HeaderContent>
