@@ -1048,8 +1048,20 @@ public class MainWindow : Window, IDisposable
             ResetGuidedRoute("No route has started.");
             acquisitionStatus = acquisitionPlan.Status == "Ready"
                 ? $"Prepared {acquisitionPlan.WorldBatches.Count} world batch(es)."
-                : "No supported listings found under the configured thresholds.";
+                : BuildNoSupportedListingsStatus(acquisitionPlan);
         }).ConfigureAwait(false);
+    }
+
+    private static string BuildNoSupportedListingsStatus(MarketAcquisitionPlan plan)
+    {
+        var diagnostics = plan.Diagnostics;
+        return "No supported listings found under the configured thresholds. " +
+               $"Fetched {diagnostics.SourceListingCount:N0}; " +
+               $"{diagnostics.NonZeroListingCount:N0} non-zero; " +
+               $"{diagnostics.PriceSupportedListingCount:N0} at/below max unit; " +
+               $"{diagnostics.HqSupportedListingCount:N0} after HQ policy; " +
+               $"{diagnostics.WorldSupportedListingCount:N0} after world mode; " +
+               $"{diagnostics.PlannedListingCount:N0} planned.";
     }
 
     private Task ProbeLiveMarketBoardAsync()

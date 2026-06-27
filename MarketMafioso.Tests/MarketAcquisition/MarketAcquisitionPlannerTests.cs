@@ -95,6 +95,34 @@ public sealed class MarketAcquisitionPlannerTests
     }
 
     [Fact]
+    public void BuildPlan_AllBelowThresholdWithoutQuantityCapIncludesEverySupportedListing()
+    {
+        var request = CreateRequest(
+            quantity: 0,
+            maxUnitPrice: 600,
+            maxTotalGil: 0,
+            quantityMode: "AllBelowThreshold");
+        var listings = new[]
+        {
+            CreateListing("Seraph", quantity: 1, unitPrice: 299, listingId: "cheap"),
+            CreateListing("Golem", quantity: 20, unitPrice: 384, listingId: "cheaper-stack"),
+            CreateListing("Brynhildr", quantity: 10, unitPrice: 601, listingId: "too-expensive"),
+        };
+
+        var plan = MarketMafioso.MarketAcquisition.MarketAcquisitionPlanner.BuildPlan(
+            request,
+            listings,
+            DateTimeOffset.UnixEpoch,
+            currentWorld: "Siren");
+
+        Assert.Equal("Ready", plan.Status);
+        Assert.Equal(21u, plan.PlannedQuantity);
+        Assert.Equal(7_979u, plan.PlannedGil);
+        Assert.Equal(["Golem", "Seraph"], plan.WorldBatches.Select(batch => batch.WorldName).Order().ToArray());
+        Assert.All(plan.WorldBatches, batch => Assert.False(batch.ExceedsRequestedQuantity));
+    }
+
+    [Fact]
     public void BuildPlan_CurrentWorldOnlyIgnoresOtherWorlds()
     {
         var request = CreateRequest(quantity: 10, worldMode: "CurrentWorldOnly", targetWorld: "Gilgamesh");
@@ -236,7 +264,8 @@ public sealed class MarketAcquisitionPlannerTests
         string targetWorld = "Gilgamesh",
         uint maxUnitPrice = 100,
         uint maxTotalGil = 1_000,
-        string hqPolicy = "Either") =>
+        string hqPolicy = "Either",
+        string quantityMode = "TargetQuantity") =>
         new()
         {
             Id = "request-1",
@@ -246,7 +275,7 @@ public sealed class MarketAcquisitionPlannerTests
             Region = "North-America",
             ItemId = 2,
             ItemName = "Fire Shard",
-            QuantityMode = "TargetQuantity",
+            QuantityMode = quantityMode,
             Quantity = quantity,
             HqPolicy = hqPolicy,
             MaxUnitPrice = maxUnitPrice,
