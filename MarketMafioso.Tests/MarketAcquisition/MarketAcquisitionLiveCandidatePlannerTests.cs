@@ -80,6 +80,59 @@ public sealed class MarketAcquisitionLiveCandidatePlannerTests
     }
 
     [Fact]
+    public void BuildCandidatePlan_TargetQuantityUsesRemainingQuantityAfterPurchases()
+    {
+        var request = CreateRequest(quantityMode: "TargetQuantity", quantity: 10, maxUnitPrice: 100);
+        var plan = CreatePlan();
+        var liveListings = new[]
+        {
+            CreateLiveListing("needed", quantity: 4, unitPrice: 50),
+            CreateLiveListing("extra", quantity: 6, unitPrice: 60),
+        };
+
+        var candidatePlan = MarketMafioso.MarketAcquisition.MarketAcquisitionLiveCandidatePlanner.BuildCandidatePlan(
+            request,
+            plan,
+            "Gilgamesh",
+            itemId: 2,
+            liveListings,
+            alreadyPurchasedQuantity: 6,
+            alreadySpentGil: 300);
+
+        Assert.Equal("Ready", candidatePlan.Status);
+        Assert.Equal(4u, candidatePlan.WouldBuyQuantity);
+        Assert.Equal(["needed"], candidatePlan.Rows.Where(row => row.Decision == "WouldBuy").Select(row => row.LiveListing.ListingId).ToArray());
+        Assert.Equal("TargetSatisfied", candidatePlan.Rows.Single(row => row.LiveListing.ListingId == "extra").Reason);
+    }
+
+    [Fact]
+    public void BuildCandidatePlan_AllBelowThresholdUsesRemainingMaxQuantityAndGilCapAfterPurchases()
+    {
+        var request = CreateRequest(quantityMode: "AllBelowThreshold", quantity: 11, maxUnitPrice: 100, maxTotalGil: 1_000);
+        var plan = CreatePlan();
+        var liveListings = new[]
+        {
+            CreateLiveListing("fits", quantity: 4, unitPrice: 50),
+            CreateLiveListing("quantity-overage", quantity: 2, unitPrice: 50),
+            CreateLiveListing("gil-overage", quantity: 1, unitPrice: 100),
+        };
+
+        var candidatePlan = MarketMafioso.MarketAcquisition.MarketAcquisitionLiveCandidatePlanner.BuildCandidatePlan(
+            request,
+            plan,
+            "Gilgamesh",
+            itemId: 2,
+            liveListings,
+            alreadyPurchasedQuantity: 6,
+            alreadySpentGil: 800);
+
+        Assert.Equal("Ready", candidatePlan.Status);
+        Assert.Equal(["fits"], candidatePlan.Rows.Where(row => row.Decision == "WouldBuy").Select(row => row.LiveListing.ListingId).ToArray());
+        Assert.Equal("MaxQuantityExceeded", candidatePlan.Rows.Single(row => row.LiveListing.ListingId == "quantity-overage").Reason);
+        Assert.Equal("GilCapExceeded", candidatePlan.Rows.Single(row => row.LiveListing.ListingId == "gil-overage").Reason);
+    }
+
+    [Fact]
     public void BuildCandidatePlan_ReportsUnderProcurementWhenTargetQuantityCannotBeMet()
     {
         var request = CreateRequest(quantityMode: "TargetQuantity", quantity: 10, maxUnitPrice: 100);

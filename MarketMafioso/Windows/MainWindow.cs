@@ -56,6 +56,8 @@ public class MainWindow : Window, IDisposable
     private MarketAcquisitionLiveCandidatePlan? marketAcquisitionLiveCandidatePlan;
     private MarketBoardPurchaseSession? marketBoardPurchaseSession;
     private MarketBoardPurchaseResult? marketBoardPurchaseResult;
+    private uint activeWorldPurchasedQuantity;
+    private uint activeWorldSpentGil;
     private DateTimeOffset nextGuidedRouteMonitorUtc = DateTimeOffset.MinValue;
     private DateTimeOffset nextMarketBoardPurchaseMonitorUtc = DateTimeOffset.MinValue;
     private int marketInputCaptureIndex;
@@ -403,7 +405,7 @@ public class MainWindow : Window, IDisposable
         if (ImGuiUi.Button("Prepare Plan", canPrepare))
             _ = PrepareMarketAcquisitionPlanAsync();
 
-        ImGui.TextColored(ColMuted, "Preparing a plan only reads remote market data. Guided route automation is available after planning; purchases are not implemented.");
+        ImGui.TextColored(ColMuted, "Preparing a plan reads remote market data. Guided routes validate live rows before purchasing.");
     }
 
     private void DrawMarketAcquisitionPlan()
@@ -715,24 +717,32 @@ public class MainWindow : Window, IDisposable
         var summary = MarketAcquisitionLiveCandidatePresenter.BuildSummary(marketAcquisitionLiveCandidatePlan);
         ImGui.TextColored(ColMuted, $"{summary.WouldBuyRows:N0} buy row(s), {summary.SkippedRows:N0} skipped row(s).");
 
-        var firstCandidate = MarketBoardPurchasePlanner.SelectFirstCandidate(marketAcquisitionLiveCandidatePlan);
         var purchaseActive = marketBoardPurchaseSession?.IsActive == true;
-        var canBuyFirstListing =
-            firstCandidate != null &&
+        var activeStop = marketAcquisitionRouteRunner.ActiveStop;
+        var awaitingWorldConfirmation = activeStop is { Status: "AwaitingPurchaseConfirmation" };
+        var purchasingWorld = activeStop is { Status: "Purchasing" };
+        var canApproveWorldPurchases =
+            awaitingWorldConfirmation &&
             marketBoardReadResult?.Status == "Ready" &&
             marketAcquisitionLiveCandidatePlan.Status == "Ready" &&
             !purchaseActive &&
             !acquisitionRequestBusy;
-        if (ImGuiUi.Button("Buy First Safe Listing", canBuyFirstListing))
-            BeginFirstLivePurchase();
+        if (ImGuiUi.Button("Approve World Purchases", canApproveWorldPurchases))
+            StartActiveWorldPurchaseBatch();
 
-        if (firstCandidate != null)
+        var firstCandidate = MarketBoardPurchasePlanner.SelectFirstCandidate(marketAcquisitionLiveCandidatePlan);
+        if (firstCandidate != null && (awaitingWorldConfirmation || purchasingWorld))
         {
             ImGui.SameLine();
             ImGui.TextColored(
                 ColMuted,
-                $"First safe listing: {firstCandidate.Quantity:N0} @ {FormatGil(firstCandidate.UnitPrice)} ({FormatGil(firstCandidate.TotalGil)})");
+                $"Next safe listing: {firstCandidate.Quantity:N0} @ {FormatGil(firstCandidate.UnitPrice)} ({FormatGil(firstCandidate.TotalGil)})");
         }
+
+        if (awaitingWorldConfirmation)
+            ImGui.TextColored(ColHeader, "World batch is waiting for approval before automated purchases begin.");
+        else if (purchasingWorld)
+            ImGui.TextColored(ColHeader, $"World batch running: purchased {activeWorldPurchasedQuantity:N0}, spent {FormatGil(activeWorldSpentGil)}.");
 
         if (marketBoardPurchaseSession != null)
         {
@@ -749,41 +759,103 @@ public class MainWindow : Window, IDisposable
         }
     }
 
-    private void BeginFirstLivePurchase()
+    private void StartActiveWorldPurchaseBatch()
     {
         try
         {
-            var candidatePlan = marketAcquisitionLiveCandidatePlan ??
-                         throw new InvalidOperationException("No live candidate plan is available.");
-            var currentWorld = GetCurrentWorldName();
-            var freshRead = marketBoardListingReader.ReadCurrentListings(currentWorld);
-            marketBoardReadResult = freshRead;
-            marketBoardPurchaseResult = marketBoardPurchaseExecutor.ExecuteFirstCandidate(candidatePlan, freshRead);
+            var result = marketAcquisitionRouteRunner.ConfirmActiveWorldPurchaseBatch();
+            if (!result.Success)
+                throw new InvalidOperationException(result.Message);
+
+            activeWorldPurchasedQuantity = 0;
+            activeWorldSpentGil = 0;
             marketBoardPurchaseSession = null;
-
-            if (marketBoardPurchaseResult.Status.Equals("PurchaseSelectionSent", StringComparison.OrdinalIgnoreCase) &&
-                marketBoardPurchaseResult.Candidate != null)
-            {
-                marketBoardPurchaseSession = MarketBoardPurchaseSession.Start(
-                    marketBoardPurchaseResult.Candidate,
-                    DateTimeOffset.UtcNow,
-                    MarketBoardPurchaseConfirmationWatchdog);
-                nextMarketBoardPurchaseMonitorUtc = DateTimeOffset.UtcNow.AddMilliseconds(250);
-            }
-
-            acquisitionStatus = $"Purchase: {marketBoardPurchaseResult.Status}. {marketBoardPurchaseResult.Message}";
+            marketBoardPurchaseResult = null;
+            acquisitionStatus = result.Message;
+            BeginNextWorldPurchase();
+            ReportGuidedRouteProgress();
         }
         catch (Exception ex)
         {
+            if (marketAcquisitionRouteRunner.ActiveStop is { Status: "Purchasing" })
+                marketAcquisitionRouteRunner.FailRoute($"World purchase batch failed to start. {ex.Message}", ex);
+
             marketBoardPurchaseResult = new MarketBoardPurchaseResult
             {
                 Status = "PurchaseStartFailed",
                 Message = ex.Message,
             };
             marketBoardPurchaseSession = null;
-            acquisitionStatus = $"Purchase start failed: {ex.Message}";
-            log.Warning(ex, "[MarketMafioso] Unable to start guarded market-board purchase.");
+            acquisitionStatus = $"World purchase batch start failed: {ex.Message}";
+            log.Warning(ex, "[MarketMafioso] Unable to start guarded market-board purchase batch.");
         }
+    }
+
+    private void BeginNextWorldPurchase()
+    {
+        var activeStop = marketAcquisitionRouteRunner.ActiveStop;
+        if (activeStop is not { Status: "Purchasing" })
+            return;
+
+        var claimed = claimedAcquisitionRequest ??
+                      throw new InvalidOperationException("No dashboard request is accepted.");
+        var plan = acquisitionPlan ??
+                   throw new InvalidOperationException("No market acquisition plan is prepared.");
+        var currentWorld = GetCurrentWorldName();
+        if (!activeStop.WorldName.Equals(currentWorld, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException($"Cannot purchase on {currentWorld}; active route stop is {activeStop.WorldName}.");
+
+        var freshRead = marketBoardListingReader.ReadCurrentListings(currentWorld);
+        marketBoardReadResult = freshRead;
+        if (!freshRead.Status.Equals("Ready", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException(freshRead.Message);
+
+        marketAcquisitionLiveCandidatePlan = MarketAcquisitionLiveCandidatePlanner.BuildCandidatePlan(
+            claimed,
+            plan,
+            currentWorld,
+            freshRead.ItemId,
+            freshRead.Listings,
+            activeWorldPurchasedQuantity,
+            activeWorldSpentGil);
+        marketBoardPurchaseResult = marketBoardPurchaseExecutor.ExecuteFirstCandidate(
+            marketAcquisitionLiveCandidatePlan,
+            freshRead);
+        marketBoardPurchaseSession = null;
+
+        if (marketBoardPurchaseResult.Status.Equals("NoCandidate", StringComparison.OrdinalIgnoreCase))
+        {
+            CompleteActiveWorldPurchaseBatch(currentWorld);
+            return;
+        }
+
+        if (!marketBoardPurchaseResult.Status.Equals("PurchaseSelectionSent", StringComparison.OrdinalIgnoreCase) ||
+            marketBoardPurchaseResult.Candidate == null)
+        {
+            marketAcquisitionRouteRunner.FailRoute($"World purchase batch stopped: {marketBoardPurchaseResult.Message}");
+            acquisitionStatus = marketAcquisitionRouteRunner.StatusMessage;
+            ReportGuidedRouteProgress();
+            return;
+        }
+
+        marketBoardPurchaseSession = MarketBoardPurchaseSession.Start(
+            marketBoardPurchaseResult.Candidate,
+            DateTimeOffset.UtcNow,
+            MarketBoardPurchaseConfirmationWatchdog);
+        nextMarketBoardPurchaseMonitorUtc = DateTimeOffset.UtcNow.AddMilliseconds(250);
+        acquisitionStatus = $"Purchase: {marketBoardPurchaseResult.Status}. {marketBoardPurchaseResult.Message}";
+    }
+
+    private void CompleteActiveWorldPurchaseBatch(string currentWorld)
+    {
+        var result = marketAcquisitionRouteRunner.RecordWorldPurchaseBatchComplete(
+            currentWorld,
+            activeWorldPurchasedQuantity,
+            activeWorldSpentGil);
+        acquisitionStatus = result.Message;
+        marketBoardPurchaseSession = null;
+        marketBoardPurchaseResult = null;
+        ReportGuidedRouteProgress();
     }
 
     private void MonitorMarketBoardPurchase()
@@ -821,6 +893,14 @@ public class MainWindow : Window, IDisposable
 
             marketBoardPurchaseSession = session;
             acquisitionStatus = $"Purchase: {session.Status}. {session.Message}";
+            if (session.Status.Equals("Completed", StringComparison.OrdinalIgnoreCase))
+            {
+                activeWorldPurchasedQuantity = checked(activeWorldPurchasedQuantity + session.Candidate.Quantity);
+                activeWorldSpentGil = checked(activeWorldSpentGil + session.Candidate.TotalGil);
+                marketBoardPurchaseSession = null;
+                marketBoardPurchaseResult = null;
+                BeginNextWorldPurchase();
+            }
         }
         catch (Exception ex)
         {
@@ -1092,6 +1172,8 @@ public class MainWindow : Window, IDisposable
         {
             marketBoardApproachService.StopNavigation();
             marketAcquisitionRouteRunner.Stop();
+            marketBoardPurchaseSession = null;
+            marketBoardPurchaseResult = null;
             ReportGuidedRouteProgress();
         }
 
@@ -1104,7 +1186,7 @@ public class MainWindow : Window, IDisposable
 
         if (marketAcquisitionRouteRunner.Stops.Count == 0)
         {
-            ImGui.TextColored(ColMuted, "Start after preparing a plan. Routes guide travel and read-only probes; they do not purchase yet.");
+            ImGui.TextColored(ColMuted, "Start after preparing a plan. Routes travel, validate live listings, then wait for one purchase approval per world.");
             return;
         }
 
@@ -1188,6 +1270,10 @@ public class MainWindow : Window, IDisposable
             marketBoardReadResult = null;
             marketBoardReconciliation = null;
             marketAcquisitionLiveCandidatePlan = null;
+            marketBoardPurchaseSession = null;
+            marketBoardPurchaseResult = null;
+            activeWorldPurchasedQuantity = 0;
+            activeWorldSpentGil = 0;
             guidedRouteProbeRunning = false;
             nextGuidedRouteMonitorUtc = DateTimeOffset.MinValue;
             ReportGuidedRouteProgress();
@@ -1211,6 +1297,10 @@ public class MainWindow : Window, IDisposable
             marketBoardReadResult = null;
             marketBoardReconciliation = null;
             marketAcquisitionLiveCandidatePlan = null;
+            marketBoardPurchaseSession = null;
+            marketBoardPurchaseResult = null;
+            activeWorldPurchasedQuantity = 0;
+            activeWorldSpentGil = 0;
             guidedRouteProbeRunning = false;
             nextGuidedRouteMonitorUtc = DateTimeOffset.MinValue;
             ReportGuidedRouteProgress();
@@ -1259,6 +1349,10 @@ public class MainWindow : Window, IDisposable
     {
         marketBoardApproachService.StopNavigation();
         marketAcquisitionRouteRunner.Reset(status);
+        marketBoardPurchaseSession = null;
+        marketBoardPurchaseResult = null;
+        activeWorldPurchasedQuantity = 0;
+        activeWorldSpentGil = 0;
         guidedRouteProbeRunning = false;
         lastGuidedRouteProgressReportKey = null;
         nextGuidedRouteMonitorUtc = DateTimeOffset.MinValue;
@@ -1357,6 +1451,8 @@ public class MainWindow : Window, IDisposable
             return ColError;
 
         if (status.Contains("Waiting", StringComparison.OrdinalIgnoreCase) ||
+            status.Contains("Approve", StringComparison.OrdinalIgnoreCase) ||
+            status.Contains("Purchasing", StringComparison.OrdinalIgnoreCase) ||
             marketAcquisitionRouteRunner.IsPaused)
             return ColHeader;
 
@@ -1373,7 +1469,7 @@ public class MainWindow : Window, IDisposable
         stop.Status switch
         {
             "Complete" => ColSuccess,
-            "Arrived" => ColHeader,
+            "Arrived" or "AwaitingPurchaseConfirmation" or "Purchasing" => ColHeader,
             _ => ColMuted,
         };
 

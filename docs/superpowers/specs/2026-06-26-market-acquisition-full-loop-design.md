@@ -19,6 +19,11 @@ Market Acquisition remains a private, self-hosted, plugin-owned buying assistant
 - The plugin buys only live-confirmed safe listings.
 - Unknown, ambiguous, or catastrophic states stop the runner and ask for intervention.
 
+Interim live rollout note: until the full unattended loop has more live mileage,
+the plugin pauses once per world after live candidates are visible and requires a
+local `Approve World Purchases` click. That approval covers the entire current
+world batch; it must never ask before each listing purchase.
+
 The first full loop targets one dashboard request for one item. Multi-item queue orchestration can compose later by running one completed request after another.
 
 ## Primary Loop
@@ -88,7 +93,7 @@ Remote listing id, remote retainer name, and external data age are hints only. T
 
 ## Purchase Loop
 
-The current `Buy First Safe Listing` mechanism becomes the primitive used by a batch loop.
+The former `Buy First Safe Listing` mechanism becomes the primitive used by a batch loop.
 
 For each world batch:
 
