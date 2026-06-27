@@ -11,7 +11,9 @@ public static class MarketAcquisitionLiveCandidatePlanner
         MarketAcquisitionPlan plan,
         string currentWorld,
         uint itemId,
-        IEnumerable<MarketBoardLiveListing> liveListings)
+        IEnumerable<MarketBoardLiveListing> liveListings,
+        uint alreadyPurchasedQuantity = 0,
+        uint alreadySpentGil = 0)
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(plan);
@@ -48,28 +50,32 @@ public static class MarketAcquisitionLiveCandidatePlanner
                 continue;
             }
 
-            if (mode == "TargetQuantity" && selectedQuantity >= request.Quantity)
+            var runningTotalQuantity = checked(alreadyPurchasedQuantity + selectedQuantity);
+            if (mode == "TargetQuantity" && runningTotalQuantity >= request.Quantity)
             {
                 rows.Add(Skipped(listing, "TargetSatisfied", "Target quantity is already satisfied by cheaper confirmed live listings.", selectedQuantity, selectedGil));
                 continue;
             }
 
-            var nextQuantity = checked(selectedQuantity + listing.Quantity);
-            if (hasMaxQuantity && nextQuantity > request.Quantity)
+            var nextSelectedQuantity = checked(selectedQuantity + listing.Quantity);
+            var nextTotalQuantity = checked(alreadyPurchasedQuantity + nextSelectedQuantity);
+            if (hasMaxQuantity && nextTotalQuantity > request.Quantity)
             {
                 rows.Add(Skipped(listing, "MaxQuantityExceeded", "Buying this whole listing would exceed the configured max quantity.", selectedQuantity, selectedGil));
                 continue;
             }
 
             var listingGil = checked(listing.UnitPrice * listing.Quantity);
-            if (hasGilCap && selectedGil + listingGil > request.MaxTotalGil)
+            var nextSelectedGil = checked(selectedGil + listingGil);
+            var nextTotalGil = checked(alreadySpentGil + nextSelectedGil);
+            if (hasGilCap && nextTotalGil > request.MaxTotalGil)
             {
                 rows.Add(Skipped(listing, "GilCapExceeded", "Buying this whole listing would exceed the configured gil cap.", selectedQuantity, selectedGil));
                 continue;
             }
 
-            selectedQuantity = nextQuantity;
-            selectedGil = checked(selectedGil + listingGil);
+            selectedQuantity = nextSelectedQuantity;
+            selectedGil = nextSelectedGil;
             rows.Add(new MarketAcquisitionLiveCandidateRow
             {
                 Decision = "WouldBuy",
@@ -81,11 +87,11 @@ public static class MarketAcquisitionLiveCandidatePlanner
             });
         }
 
-        var status = ResolveStatus(mode, request.Quantity, selectedQuantity);
+        var status = ResolveStatus(mode, request.Quantity, checked(alreadyPurchasedQuantity + selectedQuantity), selectedQuantity);
         return new MarketAcquisitionLiveCandidatePlan
         {
             Status = status,
-            Message = ResolveMessage(status, mode, request.Quantity, selectedQuantity),
+            Message = ResolveMessage(status, mode, request.Quantity, alreadyPurchasedQuantity, selectedQuantity),
             RequestedQuantity = request.Quantity,
             WouldBuyQuantity = selectedQuantity,
             WouldSpendGil = selectedGil,
@@ -151,23 +157,28 @@ public static class MarketAcquisitionLiveCandidatePlanner
             RunningGilAfter = runningGil,
         };
 
-    private static string ResolveStatus(string mode, uint requestedQuantity, uint selectedQuantity)
+    private static string ResolveStatus(string mode, uint requestedQuantity, uint totalQuantityAfter, uint selectedQuantity)
     {
         if (selectedQuantity == 0)
             return "NoSafeListings";
 
-        if (mode == "TargetQuantity" && selectedQuantity < requestedQuantity)
+        if (mode == "TargetQuantity" && totalQuantityAfter < requestedQuantity)
             return "UnderProcured";
 
         return "Ready";
     }
 
-    private static string ResolveMessage(string status, string mode, uint requestedQuantity, uint selectedQuantity) =>
+    private static string ResolveMessage(
+        string status,
+        string mode,
+        uint requestedQuantity,
+        uint alreadyPurchasedQuantity,
+        uint selectedQuantity) =>
         status switch
         {
-            "Ready" when mode == "TargetQuantity" => $"Would satisfy target quantity with {selectedQuantity:N0}/{requestedQuantity:N0} confirmed live item(s).",
+            "Ready" when mode == "TargetQuantity" => $"Would satisfy target quantity with {alreadyPurchasedQuantity + selectedQuantity:N0}/{requestedQuantity:N0} confirmed live item(s).",
             "Ready" => $"Would buy {selectedQuantity:N0} confirmed live item(s) below threshold.",
-            "UnderProcured" => $"Only {selectedQuantity:N0}/{requestedQuantity:N0} requested item(s) are safely available on this live market board page.",
+            "UnderProcured" => $"Only {alreadyPurchasedQuantity + selectedQuantity:N0}/{requestedQuantity:N0} requested item(s) are safely available so far.",
             _ => "No visible live listings satisfy the request constraints.",
         };
 }

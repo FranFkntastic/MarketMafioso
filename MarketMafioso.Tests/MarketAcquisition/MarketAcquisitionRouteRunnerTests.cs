@@ -192,7 +192,24 @@ public sealed class MarketAcquisitionRouteRunnerTests
     }
 
     [Fact]
-    public void RecordProbe_AdvancesStopAndCompletesRoute()
+    public void RecordProbe_WithNoSafeListingsAdvancesStopAndCompletesRoute()
+    {
+        using var runner = CreateRunner();
+        runner.Start(CreatePlan("Maduin"));
+        runner.ExecutePendingTravelCommand(_ => true);
+        runner.RecordCurrentWorld("Maduin");
+
+        var result = runner.RecordProbe("Maduin", CreateCandidatePlan(status: "NoSafeListings", quantity: 0, gil: 0));
+
+        Assert.True(result.Success);
+        Assert.Equal("Completed", runner.State);
+        Assert.Null(runner.ActiveStop);
+        Assert.Equal("Complete", runner.Stops[0].Status);
+        Assert.Equal(0u, runner.Stops[0].WouldBuyQuantity);
+    }
+
+    [Fact]
+    public void RecordProbe_WithSafeListingsStartsPurchasing()
     {
         using var runner = CreateRunner();
         runner.Start(CreatePlan("Maduin"));
@@ -202,10 +219,28 @@ public sealed class MarketAcquisitionRouteRunnerTests
         var result = runner.RecordProbe("Maduin", CreateCandidatePlan(status: "Ready", quantity: 10, gil: 100));
 
         Assert.True(result.Success);
-        Assert.Equal("Completed", runner.State);
-        Assert.Null(runner.ActiveStop);
-        Assert.Equal("Complete", runner.Stops[0].Status);
+        Assert.Equal("Running", runner.State);
+        Assert.Equal("Purchasing", runner.ActiveStop?.Status);
         Assert.Equal(10u, runner.Stops[0].WouldBuyQuantity);
+        Assert.Contains("Purchasing", runner.StatusMessage, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void RecordWorldPurchaseBatchComplete_AdvancesStopAndRequiresMarketBoardCloseBeforeTravel()
+    {
+        using var runner = CreateRunner();
+        runner.Start(CreatePlan("Rafflesia", "Zalera"));
+        runner.RecordCurrentWorld("Rafflesia");
+        runner.RecordProbe("Rafflesia", CreateCandidatePlan(status: "Ready", quantity: 10, gil: 100));
+
+        var result = runner.RecordWorldPurchaseBatchComplete("Rafflesia", purchasedQuantity: 10, spentGil: 100);
+
+        Assert.True(result.Success);
+        Assert.Equal("Pending", runner.ActiveStop?.Status);
+        Assert.Equal("Complete", runner.Stops[0].Status);
+        Assert.True(runner.MarketBoardCloseRequiredBeforeTravel);
+        Assert.Equal(10u, runner.Stops[0].PurchasedQuantity);
+        Assert.Equal(100u, runner.Stops[0].SpentGil);
     }
 
     [Fact]
@@ -215,7 +250,7 @@ public sealed class MarketAcquisitionRouteRunnerTests
         runner.Start(CreatePlan("Rafflesia", "Zalera"));
         runner.RecordCurrentWorld("Rafflesia");
 
-        var probe = runner.RecordProbe("Rafflesia", CreateCandidatePlan(status: "Ready", quantity: 10, gil: 100));
+        var probe = runner.RecordProbe("Rafflesia", CreateCandidatePlan(status: "NoSafeListings", quantity: 0, gil: 0));
         var blocked = runner.ExecutePendingTravelCommand(_ => throw new InvalidOperationException("Travel should wait for market board close."));
 
         Assert.True(probe.Success);
@@ -231,7 +266,7 @@ public sealed class MarketAcquisitionRouteRunnerTests
         using var runner = CreateRunner();
         runner.Start(CreatePlan("Rafflesia", "Zalera"));
         runner.RecordCurrentWorld("Rafflesia");
-        runner.RecordProbe("Rafflesia", CreateCandidatePlan(status: "Ready", quantity: 10, gil: 100));
+        runner.RecordProbe("Rafflesia", CreateCandidatePlan(status: "NoSafeListings", quantity: 0, gil: 0));
         string? command = null;
 
         var closed = runner.RecordMarketBoardClosedBeforeTravel();

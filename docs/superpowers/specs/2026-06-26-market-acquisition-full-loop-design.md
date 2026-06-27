@@ -88,7 +88,7 @@ Remote listing id, remote retainer name, and external data age are hints only. T
 
 ## Purchase Loop
 
-The current `Buy First Safe Listing` mechanism becomes the primitive used by a batch loop.
+The former `Buy First Safe Listing` mechanism becomes the primitive used by a batch loop.
 
 For each world batch:
 

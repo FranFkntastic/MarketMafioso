@@ -1803,7 +1803,7 @@ static string RenderAcquisitionRequestForm(
             <div class="section">
                 <p class="section-title">Purchase Limits</p>
                 <div class="grid">
-                    <label>Quantity mode<select id="acquisitionQuantityMode" name="quantityMode"><option>TargetQuantity</option><option>AllBelowThreshold</option></select></label>
+                    <label>Quantity mode<select id="acquisitionQuantityMode" name="quantityMode"><option value="TargetQuantity">Target quantity</option><option value="AllBelowThreshold">All safe listings below max unit</option></select></label>
                     <label><span id="acquisitionQuantityLabelText">Target quantity</span><input id="acquisitionQuantityInput" name="quantity" inputmode="numeric" required></label>
                     <label>Max unit price<input name="maxUnitPrice" inputmode="numeric" required></label>
                     <label>Gil cap (optional)<input name="maxTotalGil" inputmode="numeric"></label>
@@ -1818,6 +1818,7 @@ static string RenderAcquisitionRequestForm(
             </div>
             <div class="preview">
                 <strong>Request Preview</strong>
+                <div id="acquisitionQuantityModeHelp" class="preview-line">Target quantity buys safe whole listings until the requested quantity is satisfied.</div>
                 <div class="preview-line">Stage a bounded purchase intent, then pick it up manually from the in-game Market Acquisition tab.</div>
                 <div class="chips">
                     <span class="chip warn">Plugin pickup required</span>
@@ -1834,7 +1835,7 @@ static string RenderAcquisitionRequestForm(
                 <p class="section-title">Queued Items</p>
                 <table>
                     <thead>
-                        <tr><th>Item</th><th>Qty</th><th>Max Unit</th><th>Gil Cap</th><th></th></tr>
+                        <tr><th>Item</th><th>Mode / Qty</th><th>Max Unit</th><th>Gil Cap</th><th></th></tr>
                     </thead>
                     <tbody id="acquisitionQueueRows">
                         <tr><td colspan="5" class="empty-cell">No queued items.</td></tr>
@@ -1941,7 +1942,13 @@ static string RenderAcquisitionRequestForm(
             const mode = document.getElementById('acquisitionQuantityMode')?.value || 'TargetQuantity';
             const label = document.getElementById('acquisitionQuantityLabelText');
             const input = document.getElementById('acquisitionQuantityInput');
+            const help = document.getElementById('acquisitionQuantityModeHelp');
             if (label) label.textContent = mode === 'AllBelowThreshold' ? 'Max quantity (optional)' : 'Target quantity';
+            if (help) {
+                help.textContent = mode === 'AllBelowThreshold'
+                    ? 'All safe listings below max unit buys every safe whole listing at or below the max price. Max quantity is optional; whole-stack overage is expected when stacks are larger than the remaining cap.'
+                    : 'Target quantity buys safe whole listings until the requested quantity is satisfied. Whole-stack overage can happen on the final listing.';
+            }
             if (!input) return;
             input.required = mode !== 'AllBelowThreshold';
             input.placeholder = mode === 'AllBelowThreshold' ? 'No cap' : '';
@@ -1959,8 +1966,14 @@ static string RenderAcquisitionRequestForm(
             const body = document.getElementById('acquisitionQueueRows');
             if (!body) return;
             body.innerHTML = acquisitionQueue.length
-                ? acquisitionQueue.map((row, index) => `<tr><td>${escapeHtml(row.itemName)}<br><span>Item ${row.itemId}</span></td><td>${formatOptionalQuantity(row)}</td><td>${escapeHtml(row.maxUnitPrice)}</td><td>${formatOptionalGilCap(row.maxTotalGil)}</td><td><button type="button" onclick="removeAcquisitionQueueRow(${index})">Remove</button></td></tr>`).join('')
+                ? acquisitionQueue.map((row, index) => `<tr><td>${escapeHtml(row.itemName)}<br><span>Item ${row.itemId}</span></td><td>${formatQuantityMode(row)}<br><span>${formatOptionalQuantity(row)}</span></td><td>${escapeHtml(row.maxUnitPrice)}</td><td>${formatOptionalGilCap(row.maxTotalGil)}</td><td><button type="button" onclick="removeAcquisitionQueueRow(${index})">Remove</button></td></tr>`).join('')
                 : '<tr><td colspan="5" class="empty-cell">No queued items.</td></tr>';
+        }
+
+        function formatQuantityMode(row) {
+            return row.quantityMode === 'AllBelowThreshold'
+                ? 'All safe below max'
+                : 'Target';
         }
 
         function formatOptionalQuantity(row) {

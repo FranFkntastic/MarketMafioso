@@ -11,6 +11,12 @@ public sealed class MarketAcquisitionDiagnosticsWindow : Window
     private readonly Func<MarketBoardReadResult?> getReadResult;
     private readonly Func<MarketBoardListingReconciliation?> getReconciliation;
     private readonly Func<MarketAcquisitionLiveCandidatePlan?> getCandidatePlan;
+    private readonly Func<bool> canProbeLiveListings;
+    private readonly Action probeLiveListings;
+    private readonly Action captureInputState;
+    private readonly Func<bool> canFinalizeInputCaptureLog;
+    private readonly Action finalizeInputCaptureLog;
+    private readonly Func<string?> getDiagnosticFilePath;
 
     private static readonly Vector4 ColHeader = new(0.38f, 0.73f, 1.00f, 1f);
     private static readonly Vector4 ColSuccess = new(0.45f, 0.90f, 0.55f, 1f);
@@ -20,12 +26,24 @@ public sealed class MarketAcquisitionDiagnosticsWindow : Window
     public MarketAcquisitionDiagnosticsWindow(
         Func<MarketBoardReadResult?> getReadResult,
         Func<MarketBoardListingReconciliation?> getReconciliation,
-        Func<MarketAcquisitionLiveCandidatePlan?> getCandidatePlan)
+        Func<MarketAcquisitionLiveCandidatePlan?> getCandidatePlan,
+        Func<bool> canProbeLiveListings,
+        Action probeLiveListings,
+        Action captureInputState,
+        Func<bool> canFinalizeInputCaptureLog,
+        Action finalizeInputCaptureLog,
+        Func<string?> getDiagnosticFilePath)
         : base("Market Acquisition Diagnostics##MarketAcquisitionDiagnostics")
     {
         this.getReadResult = getReadResult;
         this.getReconciliation = getReconciliation;
         this.getCandidatePlan = getCandidatePlan;
+        this.canProbeLiveListings = canProbeLiveListings;
+        this.probeLiveListings = probeLiveListings;
+        this.captureInputState = captureInputState;
+        this.canFinalizeInputCaptureLog = canFinalizeInputCaptureLog;
+        this.finalizeInputCaptureLog = finalizeInputCaptureLog;
+        this.getDiagnosticFilePath = getDiagnosticFilePath;
 
         SizeConstraints = new WindowSizeConstraints
         {
@@ -41,7 +59,10 @@ public sealed class MarketAcquisitionDiagnosticsWindow : Window
         var candidatePlan = getCandidatePlan();
 
         ImGui.TextColored(ColHeader, "Live Market Board Diagnostics");
-        ImGui.TextWrapped("Read-only probe data and candidate decisions for the current Market Acquisition request.");
+        ImGui.TextWrapped("Manual probe tools, input capture, and candidate decisions for the current Market Acquisition request.");
+        ImGui.Separator();
+
+        DrawDiagnosticControls();
         ImGui.Separator();
 
         if (readResult == null)
@@ -55,6 +76,24 @@ public sealed class MarketAcquisitionDiagnosticsWindow : Window
         DrawReconciliation(reconciliation);
         ImGui.Spacing();
         DrawLiveCandidatePlan(candidatePlan);
+    }
+
+    private void DrawDiagnosticControls()
+    {
+        if (ImGuiUi.Button("Read Live Listings", canProbeLiveListings()))
+            probeLiveListings();
+
+        ImGui.SameLine();
+        if (ImGuiUi.Button("Capture Input State", true))
+            captureInputState();
+
+        ImGui.SameLine();
+        if (ImGuiUi.Button("Finish Capture Log", canFinalizeInputCaptureLog()))
+            finalizeInputCaptureLog();
+
+        var diagnosticFilePath = getDiagnosticFilePath();
+        if (!string.IsNullOrWhiteSpace(diagnosticFilePath))
+            ImGui.TextColored(ColMuted, $"Diagnostics: {diagnosticFilePath}");
     }
 
     private static void DrawReadResult(MarketBoardReadResult readResult)

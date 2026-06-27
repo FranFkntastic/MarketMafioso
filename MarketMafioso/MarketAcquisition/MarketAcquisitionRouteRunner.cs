@@ -150,7 +150,7 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
 
         var activeStop = ActiveStop;
         if (activeStop == null)
-            return Complete("Route complete. No purchases were executed.");
+            return Complete("Route complete.");
 
         if (!string.Equals(activeStop.Status, "Pending", StringComparison.OrdinalIgnoreCase))
             return MarketAcquisitionRouteActionResult.Ok(StatusMessage);
@@ -234,7 +234,7 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
 
         var activeStop = ActiveStop;
         if (activeStop == null)
-            return Complete("Route complete. No purchases were executed.");
+            return Complete("Route complete.");
 
         if (!string.Equals(activeStop.Status, "Pending", StringComparison.OrdinalIgnoreCase))
             return MarketAcquisitionRouteActionResult.Ok(StatusMessage);
@@ -413,7 +413,7 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
 
         var activeStop = ActiveStop;
         if (activeStop == null)
-            return Complete("Route complete. No purchases were executed.");
+            return Complete("Route complete.");
 
         if (!string.Equals(activeStop.Status, "Arrived", StringComparison.OrdinalIgnoreCase))
             return Fail($"Cannot request market board travel while stop is {activeStop.Status}.");
@@ -501,6 +501,52 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
                 ["liveCandidateStatus"] = candidatePlan.Status,
                 ["wouldBuyQuantity"] = candidatePlan.WouldBuyQuantity.ToString(),
                 ["wouldSpendGil"] = candidatePlan.WouldSpendGil.ToString(),
+                ["success"] = result.Success.ToString(),
+            });
+
+        if (result.Success && session?.ActiveStop == null)
+            return Complete(result.Message);
+
+        if (result.Success &&
+            string.Equals(session?.ActiveStop?.Status, "Pending", StringComparison.OrdinalIgnoreCase))
+        {
+            MarketBoardCloseRequiredBeforeTravel = true;
+            StatusMessage = $"{result.Message} Closing market board windows before next travel.";
+            diagnostics.Record(
+                "market-board-close-required",
+                StatusMessage,
+                new Dictionary<string, string?>
+                {
+                    ["nextWorld"] = session?.ActiveStop?.WorldName,
+                });
+        }
+
+        return result.Success
+            ? MarketAcquisitionRouteActionResult.Ok(result.Message)
+            : MarketAcquisitionRouteActionResult.Fail(result.Message);
+    }
+
+    public MarketAcquisitionRouteActionResult RecordWorldPurchaseBatchComplete(
+        string currentWorld,
+        uint purchasedQuantity,
+        uint spentGil)
+    {
+        if (!IsRunning)
+            return Fail($"Route is {State}; world purchase result was not recorded.");
+
+        var result = session?.RecordWorldPurchaseBatchComplete(currentWorld, purchasedQuantity, spentGil) ??
+                     MarketAcquisitionGuidedRouteResult.Fail("No route has started.");
+        StatusMessage = result.Message;
+        SearchSubmitted = false;
+        itemSearchAutomationStartedUtc = null;
+        diagnostics.Record(
+            "world-purchase-complete",
+            result.Message,
+            new Dictionary<string, string?>
+            {
+                ["currentWorld"] = currentWorld,
+                ["purchasedQuantity"] = purchasedQuantity.ToString(),
+                ["spentGil"] = spentGil.ToString(),
                 ["success"] = result.Success.ToString(),
             });
 

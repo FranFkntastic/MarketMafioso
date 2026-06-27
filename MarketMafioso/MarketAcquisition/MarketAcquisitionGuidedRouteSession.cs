@@ -21,7 +21,7 @@ public sealed class MarketAcquisitionGuidedRouteSession
             ? null
             : Stops[activeStopIndex];
     public bool ShouldMonitorActiveStop =>
-        ActiveStop?.Status is "TravelCommandSent" or "Arrived";
+        ActiveStop?.Status is "TravelCommandSent" or "Arrived" or "Purchasing";
 
     public static MarketAcquisitionGuidedRouteSession Start(MarketAcquisitionPlan plan)
     {
@@ -100,19 +100,60 @@ public sealed class MarketAcquisitionGuidedRouteSession
         if (!stop.WorldName.Equals(currentWorld, StringComparison.OrdinalIgnoreCase))
             return MarketAcquisitionGuidedRouteResult.Fail($"Cannot record probe for {currentWorld}; active stop is {stop.WorldName}.");
 
-        stop.Status = "Complete";
         stop.LiveCandidateStatus = candidatePlan.Status;
         stop.WouldBuyQuantity = candidatePlan.WouldBuyQuantity;
         stop.WouldSpendGil = candidatePlan.WouldSpendGil;
 
-        activeStopIndex++;
-        if (activeStopIndex >= Stops.Count)
+        if (candidatePlan.WouldBuyQuantity > 0)
         {
-            Status = "Complete";
-            return MarketAcquisitionGuidedRouteResult.Ok("Guided route complete. No purchases were executed.");
+            stop.Status = "Purchasing";
+            return MarketAcquisitionGuidedRouteResult.Ok(
+                $"Purchasing on {stop.WorldName}: {candidatePlan.WouldBuyQuantity:N0} safe live item(s), {candidatePlan.WouldSpendGil:N0} gil.");
         }
 
+        CompleteActiveStop(0, 0);
+        if (Status == "Complete")
+            return MarketAcquisitionGuidedRouteResult.Ok("Guided route complete. No safe live candidates remained.");
+
         return MarketAcquisitionGuidedRouteResult.Ok($"Recorded {currentWorld}. Next stop: {ActiveStop?.WorldName}.");
+    }
+
+    public MarketAcquisitionGuidedRouteResult RecordWorldPurchaseBatchComplete(
+        string currentWorld,
+        uint purchasedQuantity,
+        uint spentGil)
+    {
+        var stop = ActiveStop;
+        if (stop == null)
+            return MarketAcquisitionGuidedRouteResult.Fail("Guided route is already complete.");
+
+        if (!stop.WorldName.Equals(currentWorld, StringComparison.OrdinalIgnoreCase))
+            return MarketAcquisitionGuidedRouteResult.Fail($"Cannot complete purchases for {currentWorld}; active stop is {stop.WorldName}.");
+
+        if (!stop.Status.Equals("Purchasing", StringComparison.OrdinalIgnoreCase))
+            return MarketAcquisitionGuidedRouteResult.Fail($"Cannot complete purchases while stop is {stop.Status}.");
+
+        CompleteActiveStop(purchasedQuantity, spentGil);
+        if (Status == "Complete")
+            return MarketAcquisitionGuidedRouteResult.Ok(
+                $"Guided route complete. Purchased {purchasedQuantity:N0} item(s), spent {spentGil:N0} gil on {currentWorld}.");
+
+        return MarketAcquisitionGuidedRouteResult.Ok(
+            $"Completed {currentWorld}: purchased {purchasedQuantity:N0} item(s), spent {spentGil:N0} gil. Next stop: {ActiveStop?.WorldName}.");
+    }
+
+    private void CompleteActiveStop(uint purchasedQuantity, uint spentGil)
+    {
+        var stop = ActiveStop;
+        if (stop == null)
+            return;
+
+        stop.Status = "Complete";
+        stop.PurchasedQuantity = purchasedQuantity;
+        stop.SpentGil = spentGil;
+        activeStopIndex++;
+        if (activeStopIndex >= Stops.Count)
+            Status = "Complete";
     }
 
     private static string BuildLifestreamCommand(string worldName) => $"/li {worldName} mb";
@@ -129,6 +170,8 @@ public sealed record MarketAcquisitionGuidedRouteStop
     public string? LiveCandidateStatus { get; set; }
     public uint WouldBuyQuantity { get; set; }
     public uint WouldSpendGil { get; set; }
+    public uint PurchasedQuantity { get; set; }
+    public uint SpentGil { get; set; }
     public bool MarketBoardTravelCommandSent { get; set; }
 }
 
