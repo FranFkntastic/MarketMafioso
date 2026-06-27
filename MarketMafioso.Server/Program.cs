@@ -36,6 +36,7 @@ var previousClientApiKey = FirstConfigured(
 var requireApiKey = app.Configuration.GetValue<bool>("MarketMafioso:RequireApiKey") ||
                     !string.IsNullOrWhiteSpace(clientApiKey);
 var basePath = app.Configuration["MarketMafioso:BasePath"];
+var configuredBasePath = NormalizeConfiguredBasePath(basePath);
 var publicOrigin = app.Configuration["MarketMafioso:PublicOrigin"];
 var storageLabel = app.Configuration["MarketMafioso:StorageLabel"];
 var xivDataBaseUrl = NormalizeXivDataBaseUrl(FirstConfigured(
@@ -45,8 +46,31 @@ var xivDataBaseUrl = NormalizeXivDataBaseUrl(FirstConfigured(
 if (requireApiKey && string.IsNullOrWhiteSpace(clientApiKey))
     throw new InvalidOperationException("MarketMafioso:ClientApiKey is required when API key authentication is enabled.");
 
-if (!string.IsNullOrWhiteSpace(basePath))
-    app.UsePathBase(basePath);
+if (configuredBasePath.HasValue)
+{
+    app.Use(async (context, next) =>
+    {
+        if (!context.Request.Path.StartsWithSegments(configuredBasePath, out var remainingPath))
+        {
+            await next(context);
+            return;
+        }
+
+        var originalPath = context.Request.Path;
+        var originalPathBase = context.Request.PathBase;
+        context.Request.PathBase = originalPathBase.Add(configuredBasePath);
+        context.Request.Path = remainingPath.HasValue ? remainingPath : "/";
+        try
+        {
+            await next(context);
+        }
+        finally
+        {
+            context.Request.Path = originalPath;
+            context.Request.PathBase = originalPathBase;
+        }
+    });
+}
 
 app.UseBlazorFrameworkFiles();
 app.UseStaticFiles();
@@ -424,6 +448,20 @@ static CookieOptions CreateDashboardCookieOptions(HttpRequest request, DateTimeO
     Expires = expiresAt,
     Path = string.IsNullOrWhiteSpace(request.PathBase) ? "/" : request.PathBase.ToString(),
 };
+
+static PathString NormalizeConfiguredBasePath(string? value)
+{
+    if (string.IsNullOrWhiteSpace(value))
+        return PathString.Empty;
+
+    var trimmed = value.Trim().TrimEnd('/');
+    if (trimmed.Length == 0 || trimmed == "/")
+        return PathString.Empty;
+
+    return trimmed.StartsWith("/", StringComparison.Ordinal)
+        ? new PathString(trimmed)
+        : new PathString($"/{trimmed}");
+}
 
 static async Task WriteSseEventAsync<T>(
     HttpResponse response,
