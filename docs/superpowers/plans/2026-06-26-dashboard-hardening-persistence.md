@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add hybrid server/browser dashboard preferences, acquisition page reload/tab persistence, recoverable invalid-CSRF handling, and responsive shell hardening.
+**Goal:** Add hybrid server/browser dashboard preferences, acquisition page reload/tab persistence, remove dashboard CSRF overhead, and responsive shell hardening.
 
 **Architecture:** Add a focused SQLite-backed dashboard preference store keyed by dashboard owner, expose dashboard-authenticated preference endpoints, and hydrate the acquisition page from server state first with browser localStorage fallback. Keep transient page state browser-local while durable options such as default character persist on the server and mirror to browser storage.
 
@@ -16,11 +16,11 @@
 - Create `MarketMafioso.Server/DashboardPreferenceStore.cs` for SQLite persistence.
 - Modify `MarketMafioso.Server/Sqlite/SqliteSchemaMigrator.cs` to create `dashboard_preferences`.
 - Modify `MarketMafioso.Server/Auth/DashboardBasicAuthMiddleware.cs` to expose the authenticated dashboard user ID in `HttpContext.Items`.
-- Modify `MarketMafioso.Server/Program.cs` to register the store, add preference endpoints, render options/bootstrap data, persist page state in JavaScript, fix CSRF recovery, and update responsive CSS.
+- Modify `MarketMafioso.Server/Program.cs` to register the store, add preference endpoints, render options/bootstrap data, persist page state in JavaScript, remove dashboard CSRF plumbing, and update responsive CSS.
 - Modify `MarketMafioso.Server.Tests/SqliteSchemaMigratorTests.cs` for schema coverage.
 - Create `MarketMafioso.Server.Tests/DashboardPreferenceStoreTests.cs` for store behavior.
 - Modify `MarketMafioso.Server.Tests/DashboardAccountAuthTests.cs` for preference endpoint auth.
-- Modify `MarketMafioso.Server.Tests/MarketAcquisitionRequestEndpointTests.cs` for acquisition page, CSRF, and responsive assertions.
+- Modify `MarketMafioso.Server.Tests/MarketAcquisitionRequestEndpointTests.cs` for acquisition page, CSRF removal, and responsive assertions.
 
 ---
 
@@ -384,7 +384,7 @@ builder.Services.AddSingleton<DashboardPreferenceStore>();
 
 - [ ] **Step 2: Add owner resolver helper**
 
-Add near the CSRF helpers:
+Add near the other dashboard helpers:
 
 ```csharp
 static DashboardPreferenceOwner ResolveDashboardPreferenceOwner(HttpContext context, IConfiguration configuration)
@@ -425,11 +425,8 @@ public async Task DashboardPreferences_SaveAndLoadAcquisitionPreferences()
     await using var application = CreateHostedApplication(
         extraConfiguration: new KeyValuePair<string, string?>("MarketMafioso:TrustExternalDashboardAuth", "true"));
     using var client = application.CreateClient();
-    var dashboard = await client.GetStringAsync("/api/marketmafioso/acquisition");
-    var csrf = Regex.Match(dashboard, "name=\"csrf\" value=\"(?<token>[^\"]+)\"").Groups["token"].Value;
 
     using var save = new HttpRequestMessage(HttpMethod.Put, "/api/marketmafioso/dashboard/preferences/acquisition");
-    save.Headers.Add("X-CSRF-Token", csrf);
     save.Content = JsonContent.Create(new
     {
         schemaVersion = 1,
@@ -474,9 +471,6 @@ app.MapPut("/dashboard/preferences/acquisition", async (
     IConfiguration configuration,
     CancellationToken token) =>
 {
-    if (!await IsValidDashboardJsonPostAsync(request, publicOrigin, token))
-        return Results.BadRequest(new { error = "invalid_csrf" });
-
     var incoming = await JsonSerializer.DeserializeAsync<AcquisitionDashboardPreferences>(
         request.Body,
         new JsonSerializerOptions(JsonSerializerDefaults.Web),
@@ -490,19 +484,7 @@ app.MapPut("/dashboard/preferences/acquisition", async (
 });
 ```
 
-Add `IsValidDashboardJsonPostAsync`:
-
-```csharp
-static Task<bool> IsValidDashboardJsonPostAsync(HttpRequest request, string? publicOrigin, CancellationToken token)
-{
-    if (!HasValidOrigin(request, publicOrigin))
-        return Task.FromResult(false);
-
-    var headerToken = request.Headers["X-CSRF-Token"].ToString();
-    var cookieToken = request.Cookies["mmf_csrf"];
-    return Task.FromResult(MatchesConfiguredKey(headerToken, cookieToken));
-}
-```
+Dashboard authorization comes from the dashboard auth middleware/trusted external auth boundary, not CSRF headers.
 
 - [ ] **Step 5: Verify preference endpoint tests**
 
@@ -542,7 +524,6 @@ var bootstrapJson = JsonSerializer.Serialize(new
     schemaVersion = 1,
     preferencesUrl = AppUrl(pathBase, "/dashboard/preferences/acquisition"),
     refreshUrl,
-    csrfToken,
     selectedCharacterId,
     selectedCharacter = selectedCharacter == null ? null : new
     {
@@ -721,7 +702,7 @@ function hydrateAcquisitionPageState() {
     const form = document.querySelector('.request-form');
     if (form && dashboardState.requestForm) {
         Object.entries(dashboardState.requestForm).forEach(([name, value]) => {
-            if (name === 'csrf' || name === 'idempotencyKey') return;
+            if (name === 'idempotencyKey') return;
             const input = form.elements.namedItem(name);
             if (input) input.value = value;
         });
@@ -789,7 +770,7 @@ Assert:
 ```csharp
 Assert.Contains("fetch(dashboardBootstrap.preferencesUrl", acquisitionPage, StringComparison.Ordinal);
 Assert.Contains("method: 'PUT'", acquisitionPage, StringComparison.Ordinal);
-Assert.Contains("'X-CSRF-Token': getCurrentCsrfToken()", acquisitionPage, StringComparison.Ordinal);
+Assert.DoesNotContain("X-CSRF-Token", acquisitionPage, StringComparison.Ordinal);
 Assert.Contains("serverPreferenceUpdatedAtUtc", acquisitionPage, StringComparison.Ordinal);
 ```
 
@@ -853,10 +834,6 @@ async function loadDashboardPreferences() {
 Add:
 
 ```javascript
-function getCurrentCsrfToken() {
-    return document.querySelector('input[name="csrf"]')?.value || dashboardBootstrap.csrfToken || '';
-}
-
 async function saveDashboardPreferences() {
     const preferences = {
         schemaVersion: 1,
@@ -872,8 +849,7 @@ async function saveDashboardPreferences() {
             method: 'PUT',
             headers: {
                 'Accept': 'application/json',
-                'Content-Type': 'application/json',
-                'X-CSRF-Token': getCurrentCsrfToken()
+                'Content-Type': 'application/json'
             },
             credentials: 'same-origin',
             body: JSON.stringify(preferences)
@@ -962,103 +938,57 @@ Remove the old unconditional `window.setInterval(refreshAcquisitionQueue, 3000);
 
 Run acquisition endpoint tests. Expected: pass.
 
-### Task 8: Recover From Invalid CSRF
+### Task 8: Remove Dashboard CSRF Plumbing
 
 **Files:**
 - Modify: `MarketMafioso.Server/Program.cs`
 - Modify: `MarketMafioso.Server.Tests/InventoryReportViewEndpointTests.cs`
 - Modify: `MarketMafioso.Server.Tests/MarketAcquisitionRequestEndpointTests.cs`
 
-- [ ] **Step 1: Add invalid CSRF redirect tests**
+- [ ] **Step 1: Add CSRF-removal tests**
 
-Add tests so browser form posts to acquisition cancel/create and report delete return redirects with an `error=invalid_csrf` query when `Accept` does not ask for JSON.
+Add tests proving dashboard pages do not render CSRF fields/cookies/scripts, queue refresh JSON does not return a CSRF token, and browser mutation posts succeed or redirect normally without a CSRF field.
 
-Example acquisition create test:
+Example queue refresh test:
 
 ```csharp
 [Fact]
-public async Task AcquisitionDashboardCreate_InvalidCsrfRedirectsToRecoverableNotice()
+public async Task AcquisitionDashboardQueueRefreshDoesNotReturnCsrfToken()
 {
     await using var application = CreateHostedApplication(
         extraConfiguration: new KeyValuePair<string, string?>("MarketMafioso:TrustExternalDashboardAuth", "true"));
-    using var client = application.CreateClient(new WebApplicationFactoryClientOptions
-    {
-        AllowAutoRedirect = false,
-    });
+    using var client = application.CreateClient();
 
-    var response = await client.PostAsync(
-        "/api/marketmafioso/acquisition/requests",
-        new FormUrlEncodedContent(CreateFormFields("stale-token", "invalid-csrf-dashboard")));
+    using var response = await client.GetAsync("/api/marketmafioso/acquisition/requests/recent");
+    using var recentJson = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync());
 
-    Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
-    Assert.Equal("/api/marketmafioso/acquisition?error=invalid_csrf", response.Headers.Location?.ToString());
+    Assert.False(recentJson.RootElement.TryGetProperty("csrfToken", out _));
 }
 ```
 
-- [ ] **Step 2: Add notice render assertion**
+- [ ] **Step 2: Remove server token issuance and validation**
 
-Assert:
+Delete the dashboard CSRF cookie/token helpers and remove CSRF validation from browser dashboard mutation routes:
 
-```csharp
-var page = await client.GetStringAsync("/api/marketmafioso/acquisition?error=invalid_csrf");
-Assert.Contains("security token expired", page, StringComparison.OrdinalIgnoreCase);
-```
+- `SetCsrfCookie`
+- `IsValidDashboardPostAsync`
+- `HasValidOrigin`
+- browser-form CSRF checks in report delete/delete-all
+- browser-form CSRF checks in acquisition create/cancel/resend
 
-- [ ] **Step 3: Add helper**
+- [ ] **Step 3: Remove rendered CSRF fields and client token plumbing**
 
-Add:
+Remove hidden `csrf` inputs, `mmf_csrf` cookie assumptions, refresh-payload `csrfToken`, staged-row token injection, stale-token retry handling, and any `invalid_csrf` UI copy from the dashboard JavaScript.
 
-```csharp
-static IResult InvalidDashboardCsrf(HttpRequest request, string fallbackPath)
-{
-    if (WantsJsonResponse(request))
-        return Results.BadRequest(new { error = "invalid_csrf" });
-
-    return Results.Redirect($"{request.PathBase}{fallbackPath}?error=invalid_csrf");
-}
-```
-
-- [ ] **Step 4: Replace raw invalid CSRF returns**
-
-For browser form routes, replace:
-
-```csharp
-return Results.BadRequest(new { error = "invalid_csrf" });
-```
-
-with:
-
-```csharp
-return InvalidDashboardCsrf(request, "/acquisition");
-```
-
-or `"/"` / report detail path for report deletion routes.
-
-- [ ] **Step 5: Render notice**
-
-Add `string? error` query parameters to dashboard GET handlers and render:
-
-```csharp
-var errorNotice = string.Equals(error, "invalid_csrf", StringComparison.OrdinalIgnoreCase)
-    ? """<p class="notice error">The dashboard security token expired. Review the page and retry the action.</p>"""
-    : string.Empty;
-```
-
-Render the notice above the relevant dashboard content.
-
-- [ ] **Step 6: Add JavaScript retry for staged queue**
-
-In `stageAcquisitionQueue`, when `readAcquisitionStageError(response)` returns `invalid_csrf`, call `await refreshAcquisitionQueue()` and retry that row once with the new token. Keep a per-row retry flag so it cannot loop.
-
-- [ ] **Step 7: Verify CSRF tests**
+- [ ] **Step 4: Verify CSRF-removal tests**
 
 Run:
 
 ```powershell
-dotnet test "MarketMafioso.Server.Tests/MarketMafioso.Server.Tests.csproj" -c Debug -v minimal --filter "csrf"
+dotnet test "MarketMafioso.Server.Tests/MarketMafioso.Server.Tests.csproj" -c Debug -v minimal --filter "FullyQualifiedName~MarketAcquisitionRequestEndpointTests.AcquisitionDashboardRendersControlSurfaceWithRequestQueue|FullyQualifiedName~MarketAcquisitionRequestEndpointTests.AcquisitionDashboardQueueRefreshDoesNotReturnCsrfToken|FullyQualifiedName~InventoryReportViewEndpointTests.HostedMode_DashboardDeleteDoesNotRequireCsrf|FullyQualifiedName~InventoryReportViewEndpointTests.HostedMode_ReportDetailsDoesNotRenderCsrf"
 ```
 
-Expected: relevant CSRF tests pass.
+Expected: CSRF-removal tests pass.
 
 ### Task 9: Responsive Shell Hardening
 
@@ -1155,7 +1085,7 @@ Run the server, open `/acquisition`, and verify:
 - Reload keeps default character, filters, form fields, and staged queue rows.
 - A second tab receives local page-state changes through `storage`.
 - Server preferences win over browser fallback after saving options.
-- Simulated stale CSRF shows a recoverable notice or retries once for queue staging.
+- Dashboard mutation posts do not require CSRF fields, and dashboard pages/refresh payloads do not emit CSRF tokens.
 - Narrow viewport does not overlap header/footer with dashboard content.
 
 - [ ] **Step 6: Commit**

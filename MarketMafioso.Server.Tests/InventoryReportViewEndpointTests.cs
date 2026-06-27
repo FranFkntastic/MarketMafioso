@@ -636,7 +636,7 @@ public sealed class InventoryReportViewEndpointTests
     }
 
     [Fact]
-    public async Task HostedMode_DashboardDeleteRejectsMissingCsrf()
+    public async Task HostedMode_DashboardDeleteDoesNotRequireCsrf()
     {
         await using var application = CreateHostedApplication(
             new KeyValuePair<string, string?>("MarketMafioso:PublicOrigin", "https://dev.xivcraftarchitect.com"));
@@ -647,7 +647,7 @@ public sealed class InventoryReportViewEndpointTests
             HttpMethod.Post,
             "/inventory",
             "test-client-secret",
-            CreateReport("Csrf Missing Character"));
+            CreateReport("Delete Without Csrf Character"));
         createResponse.EnsureSuccessStatusCode();
 
         var id = await ReadCreatedIdAsync(createResponse);
@@ -657,11 +657,11 @@ public sealed class InventoryReportViewEndpointTests
 
         var response = await client.SendAsync(request);
 
-        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
 
     [Fact]
-    public async Task HostedMode_DashboardDeleteAcceptsValidCsrf()
+    public async Task HostedMode_ReportDetailsDoesNotRenderCsrf()
     {
         await using var application = CreateHostedApplication(
             new KeyValuePair<string, string?>("MarketMafioso:PublicOrigin", "https://dev.xivcraftarchitect.com"));
@@ -672,24 +672,13 @@ public sealed class InventoryReportViewEndpointTests
             HttpMethod.Post,
             "/inventory",
             "test-client-secret",
-            CreateReport("Csrf Valid Character"));
+            CreateReport("No Csrf Render Character"));
         createResponse.EnsureSuccessStatusCode();
 
         var id = await ReadCreatedIdAsync(createResponse);
         var detail = await client.GetStringAsync($"/reports/{id}");
-        var csrf = Regex.Match(detail, "name=\"csrf\" value=\"(?<token>[^\"]+)\"").Groups["token"].Value;
-        Assert.False(string.IsNullOrWhiteSpace(csrf));
-
-        using var request = new HttpRequestMessage(HttpMethod.Post, $"/reports/{id}/delete");
-        request.Headers.Add("Origin", "https://dev.xivcraftarchitect.com");
-        request.Content = new FormUrlEncodedContent(
-        [
-            new KeyValuePair<string, string>("csrf", csrf),
-        ]);
-
-        var response = await client.SendAsync(request);
-
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.DoesNotContain("name=\"csrf\"", detail, StringComparison.Ordinal);
+        Assert.DoesNotContain("mmf_csrf", detail, StringComparison.Ordinal);
     }
 
     private sealed class HostedApplicationValues

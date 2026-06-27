@@ -2,7 +2,7 @@
 
 ## Goal
 
-Harden the MarketMafioso receiver dashboard so acquisition pages survive reloads and tab switches, recover cleanly from stale CSRF, and provide a server/browser hybrid options menu for durable user preferences such as the default character.
+Harden the MarketMafioso receiver dashboard so acquisition pages survive reloads and tab switches, remove dashboard CSRF overhead, and provide a server/browser hybrid options menu for durable user preferences such as the default character.
 
 ## Scope
 
@@ -13,7 +13,7 @@ The dashboard remains self-hosted/private-first. Hosted receiver dashboard route
 ## Current Problems
 
 - The acquisition dashboard shell uses fixed grid rows (`54px 1fr 30px`) while mobile header/footer content can wrap, creating overlap risk.
-- Browser form posts with stale or mismatched CSRF tokens return raw JSON (`{"error":"invalid_csrf"}`), which is secure but poor dashboard UX.
+- Browser dashboard form posts carry CSRF token overhead that creates stale-token failures and makes a private self-hosted receiver harder to operate.
 - The acquisition page has useful transient state, but filters, staged queue rows, form entries, and selected/default character are lost across reloads.
 - There is no dashboard options surface for setting a default character or future user-level preferences.
 - Browser-only state is not enough for authenticated hosted dashboards; server save state should follow the dashboard user when possible.
@@ -116,7 +116,7 @@ PUT /dashboard/preferences/acquisition
 - `200 OK` with a preference object when server state exists.
 - `404 Not Found` with `{ "error": "preferences_not_found" }` when no server state exists.
 
-`PUT` accepts form-compatible dashboard CSRF protection and JSON body preferences. It returns the normalized saved preference object. The endpoint must be covered by dashboard auth when auth is enabled. It must not accept the plugin client API key as dashboard authorization.
+`PUT` accepts a JSON body and returns the normalized saved preference object. The endpoint must be covered by dashboard auth when auth is enabled. It must not accept the plugin client API key as dashboard authorization.
 
 The server normalizes preference payloads:
 
@@ -155,7 +155,7 @@ The initial UI can be plain HTML/CSS and inline JavaScript, matching the current
 
 On load:
 
-1. The page parses server-rendered bootstrap JSON that includes known characters, current selected character, endpoint URLs, CSRF token, and default server-rendered settings.
+1. The page parses server-rendered bootstrap JSON that includes known characters, current selected character, endpoint URLs, and default server-rendered settings.
 2. The page requests server preferences.
 3. If server preferences exist, they hydrate the durable option fields and mirror to localStorage.
 4. If server preferences do not exist, localStorage hydrates the page.
@@ -170,18 +170,17 @@ During use:
 - Default character is applied by setting the character select and request form target fields when the selected character is known.
 - `storage` events hydrate other open dashboard tabs when the local key changes.
 
-The page must not persist CSRF tokens. Staged queue rows must inject the current hidden form token at submit time.
+The page does not issue, persist, rotate, or inject dashboard CSRF tokens.
 
-## CSRF Recovery
+## Dashboard Mutation Model
 
-Dashboard form routes keep rejecting invalid CSRF, but browser-facing responses become recoverable:
+Dashboard browser mutations do not use CSRF tokens. This receiver is private/self-hosted-first, and the extra stale-token failure mode is not worth the operational cost for the current deployment model.
 
-- HTML form posts redirect back to the relevant dashboard page with `?error=invalid_csrf`.
-- The dashboard renders a notice explaining that the page security token expired and the user should retry.
-- JavaScript queue staging catches `invalid_csrf`, refreshes `/acquisition/requests/recent` once to get a new token, and retries the affected row once.
-- API-style JSON callers continue receiving JSON error codes.
+The remaining boundaries are:
 
-This preserves explicit failure while avoiding a raw JSON dead end for dashboard users.
+- Dashboard routes use Basic Auth or trusted external dashboard auth when configured.
+- Plugin/API acquisition routes continue using the client API key and claim-token contracts.
+- Dashboard preference endpoints stay dashboard-authenticated and must not accept plugin client API keys as authorization.
 
 ## Responsive Hardening
 
@@ -203,8 +202,8 @@ Server tests should cover:
 - Server preferences returning 404 when absent.
 - Invalid preference payload rejection.
 - Acquisition page includes bootstrap data, options UI, and state manager hooks.
-- Invalid CSRF browser posts redirect with a dashboard notice.
-- JSON/API-like invalid CSRF behavior remains JSON.
+- Dashboard mutation routes accept authorized browser posts without CSRF fields.
+- Dashboard pages and JSON refresh payloads do not render or return CSRF tokens.
 - Acquisition CSS uses `auto 1fr auto` shell rows.
 
 Browser smoke should cover:
@@ -212,11 +211,12 @@ Browser smoke should cover:
 - default character save, reload, and second tab hydration.
 - queue filter and status persistence across reload.
 - form and staged queue persistence across reload.
-- stale CSRF retry path.
+- reload/tab persistence after staged queue submissions.
 
 ## Risks And Guardrails
 
-- Do not store API keys, Basic Auth credentials, claim tokens, or CSRF tokens in localStorage.
+- Do not store API keys, Basic Auth credentials, or claim tokens in localStorage.
+- Do not reintroduce dashboard CSRF tokens without an explicit product decision.
 - Do not let plugin client API keys authorize dashboard preference endpoints.
 - Keep server state scoped to receiver-local or dashboard user identity; do not create a public/shared hosted preference model.
 - Keep staged acquisition queue rows browser-local unless a future requirement explicitly asks for cross-device staged queues.

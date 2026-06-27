@@ -591,20 +591,15 @@ public sealed class MarketAcquisitionRequestEndpointTests
         Assert.Contains("name=\"targetCharacterName\"", acquisitionPage, StringComparison.Ordinal);
         Assert.Contains("name=\"worldMode\"", acquisitionPage, StringComparison.Ordinal);
         Assert.Contains("/api/marketmafioso/acquisition/requests", acquisitionPage, StringComparison.Ordinal);
+        Assert.DoesNotContain("name=\"csrf\"", acquisitionPage, StringComparison.Ordinal);
+        Assert.DoesNotContain("mmf_csrf", acquisitionPage, StringComparison.Ordinal);
 
         var inventory = await client.GetStringAsync("/api/marketmafioso/inventory");
         Assert.Contains(">Acquisition</a>", inventory, StringComparison.Ordinal);
-        var csrf = Regex.Match(acquisitionPage, "name=\"csrf\" value=\"(?<token>[^\"]+)\"").Groups["token"].Value;
-        Assert.False(string.IsNullOrWhiteSpace(csrf));
-
-        var missingCsrf = await client.PostAsync(
-            "/api/marketmafioso/acquisition/requests",
-            new FormUrlEncodedContent(CreateFormFields(csrf: string.Empty, idempotencyKey: "missing-csrf")));
-        Assert.Equal(HttpStatusCode.BadRequest, missingCsrf.StatusCode);
 
         var created = await client.PostAsync(
             "/api/marketmafioso/acquisition/requests",
-            new FormUrlEncodedContent(CreateFormFields(csrf, "dashboard-create")));
+            new FormUrlEncodedContent(CreateFormFields("dashboard-create")));
         Assert.Equal(HttpStatusCode.Redirect, created.StatusCode);
 
         var pending = await SendWithKeyAsync(
@@ -627,12 +622,9 @@ public sealed class MarketAcquisitionRequestEndpointTests
             AllowAutoRedirect = false,
         });
 
-        var acquisitionPage = await client.GetStringAsync("/api/marketmafioso/acquisition");
-        var csrf = Regex.Match(acquisitionPage, "name=\"csrf\" value=\"(?<token>[^\"]+)\"").Groups["token"].Value;
-
         var created = await client.PostAsync(
             "/api/marketmafioso/acquisition/requests",
-            new FormUrlEncodedContent(CreateFormFields(csrf, "acquisition-page-create")));
+            new FormUrlEncodedContent(CreateFormFields("acquisition-page-create")));
 
         Assert.Equal(HttpStatusCode.Redirect, created.StatusCode);
         Assert.StartsWith(
@@ -651,11 +643,9 @@ public sealed class MarketAcquisitionRequestEndpointTests
             AllowAutoRedirect = false,
         });
 
-        var acquisitionPage = await client.GetStringAsync("/api/marketmafioso/acquisition");
-        var csrf = Regex.Match(acquisitionPage, "name=\"csrf\" value=\"(?<token>[^\"]+)\"").Groups["token"].Value;
         using var createRequest = new HttpRequestMessage(HttpMethod.Post, "/api/marketmafioso/acquisition/requests")
         {
-            Content = new FormUrlEncodedContent(CreateFormFields(csrf, "acquisition-ajax-create")),
+            Content = new FormUrlEncodedContent(CreateFormFields("acquisition-ajax-create")),
         };
         createRequest.Headers.Accept.ParseAdd("application/json");
 
@@ -715,10 +705,12 @@ public sealed class MarketAcquisitionRequestEndpointTests
         Assert.Contains("readAcquisitionStageError", acquisitionPage, StringComparison.Ordinal);
         Assert.Contains("addAcquisitionQueueRow", acquisitionPage, StringComparison.Ordinal);
         Assert.Contains("stageAcquisitionQueue", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("refreshAcquisitionCsrfToken(payload.csrfToken)", acquisitionPage, StringComparison.Ordinal);
+        Assert.DoesNotContain("name=\"csrf\"", acquisitionPage, StringComparison.Ordinal);
+        Assert.DoesNotContain("refreshAcquisitionCsrfToken", acquisitionPage, StringComparison.Ordinal);
         Assert.Contains("startAcquisitionQueueRefresh", acquisitionPage, StringComparison.Ordinal);
         Assert.Contains("stopAcquisitionQueueRefresh", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("getCurrentAcquisitionCsrfToken", acquisitionPage, StringComparison.Ordinal);
+        Assert.DoesNotContain("getCurrentAcquisitionCsrfToken", acquisitionPage, StringComparison.Ordinal);
+        Assert.DoesNotContain("invalid_csrf", acquisitionPage, StringComparison.Ordinal);
         Assert.Contains("stageAcquisitionRowsInBatches", acquisitionPage, StringComparison.Ordinal);
         Assert.Contains("console.info('[MarketMafioso] Staging acquisition queue'", acquisitionPage, StringComparison.Ordinal);
         Assert.Contains("console.debug('[MarketMafioso] Staged acquisition row'", acquisitionPage, StringComparison.Ordinal);
@@ -793,7 +785,7 @@ public sealed class MarketAcquisitionRequestEndpointTests
     }
 
     [Fact]
-    public async Task AcquisitionDashboardQueueRefreshReturnsUsableCsrfToken()
+    public async Task AcquisitionDashboardQueueRefreshDoesNotReturnCsrfToken()
     {
         await using var application = CreateHostedApplication(
             extraConfiguration: new KeyValuePair<string, string?>("MarketMafioso:TrustExternalDashboardAuth", "true"));
@@ -802,27 +794,16 @@ public sealed class MarketAcquisitionRequestEndpointTests
             AllowAutoRedirect = false,
         });
 
-        var acquisitionPage = await client.GetStringAsync("/api/marketmafioso/acquisition");
-        var originalCsrf = Regex.Match(acquisitionPage, "name=\"csrf\" value=\"(?<token>[^\"]+)\"").Groups["token"].Value;
-        Assert.False(string.IsNullOrWhiteSpace(originalCsrf));
-
         var recent = await client.GetAsync("/api/marketmafioso/acquisition/requests/recent");
 
         recent.EnsureSuccessStatusCode();
         using var recentJson = JsonDocument.Parse(await recent.Content.ReadAsStringAsync());
-        var refreshedCsrf = recentJson.RootElement.GetProperty("csrfToken").GetString();
-        Assert.False(string.IsNullOrWhiteSpace(refreshedCsrf));
-        Assert.NotEqual(originalCsrf, refreshedCsrf);
+        Assert.False(recentJson.RootElement.TryGetProperty("csrfToken", out _));
 
-        var stalePost = await client.PostAsync(
+        var postWithoutCsrf = await client.PostAsync(
             "/api/marketmafioso/acquisition/requests",
-            new FormUrlEncodedContent(CreateFormFields(originalCsrf, "stale-csrf")));
-        Assert.Equal(HttpStatusCode.BadRequest, stalePost.StatusCode);
-
-        var refreshedPost = await client.PostAsync(
-            "/api/marketmafioso/acquisition/requests",
-            new FormUrlEncodedContent(CreateFormFields(refreshedCsrf!, "refreshed-csrf")));
-        Assert.Equal(HttpStatusCode.Redirect, refreshedPost.StatusCode);
+            new FormUrlEncodedContent(CreateFormFields("without-csrf")));
+        Assert.Equal(HttpStatusCode.Redirect, postWithoutCsrf.StatusCode);
     }
 
     [Fact]
@@ -835,15 +816,10 @@ public sealed class MarketAcquisitionRequestEndpointTests
             AllowAutoRedirect = false,
         });
         var claimed = await CreateAndClaimAsync(client, "dashboard-live-cancelled");
-        var acquisitionPage = await client.GetStringAsync("/api/marketmafioso/acquisition");
-        var csrf = Regex.Match(acquisitionPage, "name=\"csrf\" value=\"(?<token>[^\"]+)\"").Groups["token"].Value;
 
         var cancelled = await client.PostAsync(
             $"/api/marketmafioso/acquisition/requests/{claimed.RequestId}/cancel",
-            new FormUrlEncodedContent(new Dictionary<string, string>
-            {
-                ["csrf"] = csrf,
-            }));
+            new FormUrlEncodedContent([]));
 
         Assert.Equal(HttpStatusCode.Redirect, cancelled.StatusCode);
         var recent = await client.GetAsync("/api/marketmafioso/acquisition/requests/recent");
@@ -867,15 +843,10 @@ public sealed class MarketAcquisitionRequestEndpointTests
             AllowAutoRedirect = false,
         });
         var claimed = await CreateAndClaimAsync(client, "dashboard-cancel-claimed");
-        var acquisitionPage = await client.GetStringAsync("/api/marketmafioso/acquisition");
-        var csrf = Regex.Match(acquisitionPage, "name=\"csrf\" value=\"(?<token>[^\"]+)\"").Groups["token"].Value;
 
         var cancelled = await client.PostAsync(
             $"/api/marketmafioso/acquisition/requests/{claimed.RequestId}/cancel",
-            new FormUrlEncodedContent(new Dictionary<string, string>
-            {
-                ["csrf"] = csrf,
-            }));
+            new FormUrlEncodedContent([]));
 
         Assert.Equal(HttpStatusCode.Redirect, cancelled.StatusCode);
         var refreshedPage = await client.GetStringAsync("/api/marketmafioso/acquisition");
@@ -902,8 +873,6 @@ public sealed class MarketAcquisitionRequestEndpointTests
             AllowAutoRedirect = false,
         });
         var claimed = await CreateAndClaimAsync(client, "dashboard-cancel-terminal");
-        var acquisitionPage = await client.GetStringAsync("/api/marketmafioso/acquisition");
-        var csrf = Regex.Match(acquisitionPage, "name=\"csrf\" value=\"(?<token>[^\"]+)\"").Groups["token"].Value;
 
         var accepted = await SendWithKeyAsync(
             client,
@@ -931,16 +900,10 @@ public sealed class MarketAcquisitionRequestEndpointTests
 
         var cancelComplete = await client.PostAsync(
             $"/api/marketmafioso/acquisition/requests/{claimed.RequestId}/cancel",
-            new FormUrlEncodedContent(new Dictionary<string, string>
-            {
-                ["csrf"] = csrf,
-            }));
+            new FormUrlEncodedContent([]));
         var cancelCompleteAgain = await client.PostAsync(
             $"/api/marketmafioso/acquisition/requests/{claimed.RequestId}/cancel",
-            new FormUrlEncodedContent(new Dictionary<string, string>
-            {
-                ["csrf"] = csrf,
-            }));
+            new FormUrlEncodedContent([]));
 
         Assert.Equal(HttpStatusCode.Redirect, cancelComplete.StatusCode);
         Assert.Equal(HttpStatusCode.Redirect, cancelCompleteAgain.StatusCode);
@@ -959,15 +922,10 @@ public sealed class MarketAcquisitionRequestEndpointTests
             AllowAutoRedirect = false,
         });
         var claimed = await CreateAndClaimAsync(client, "dashboard-resend-claimed");
-        var acquisitionPage = await client.GetStringAsync("/api/marketmafioso/acquisition");
-        var csrf = Regex.Match(acquisitionPage, "name=\"csrf\" value=\"(?<token>[^\"]+)\"").Groups["token"].Value;
 
         var resent = await client.PostAsync(
             $"/api/marketmafioso/acquisition/requests/{claimed.RequestId}/resend",
-            new FormUrlEncodedContent(new Dictionary<string, string>
-            {
-                ["csrf"] = csrf,
-            }));
+            new FormUrlEncodedContent([]));
 
         Assert.Equal(HttpStatusCode.Redirect, resent.StatusCode);
 
@@ -1030,9 +988,7 @@ public sealed class MarketAcquisitionRequestEndpointTests
         {
             AllowAutoRedirect = false,
         });
-        var acquisitionPage = await client.GetStringAsync("/api/marketmafioso/acquisition");
-        var csrf = Regex.Match(acquisitionPage, "name=\"csrf\" value=\"(?<token>[^\"]+)\"").Groups["token"].Value;
-        var fields = CreateFormFields(csrf, "unresolved-item");
+        var fields = CreateFormFields("unresolved-item");
         fields["itemId"] = string.Empty;
         fields["itemName"] = "Darksteel Nugget";
 
@@ -1052,9 +1008,7 @@ public sealed class MarketAcquisitionRequestEndpointTests
         {
             AllowAutoRedirect = false,
         });
-        var acquisitionPage = await client.GetStringAsync("/api/marketmafioso/acquisition");
-        var csrf = Regex.Match(acquisitionPage, "name=\"csrf\" value=\"(?<token>[^\"]+)\"").Groups["token"].Value;
-        var fields = CreateFormFields(csrf, "item-id-fallback");
+        var fields = CreateFormFields("item-id-fallback");
         fields["itemId"] = "5057";
         fields["itemName"] = string.Empty;
 
@@ -1084,9 +1038,7 @@ public sealed class MarketAcquisitionRequestEndpointTests
         {
             AllowAutoRedirect = false,
         });
-        var acquisitionPage = await client.GetStringAsync("/api/marketmafioso/acquisition");
-        var csrf = Regex.Match(acquisitionPage, "name=\"csrf\" value=\"(?<token>[^\"]+)\"").Groups["token"].Value;
-        var fields = CreateFormFields(csrf, "blank-gil-cap");
+        var fields = CreateFormFields("blank-gil-cap");
         fields["quantityMode"] = "AllBelowThreshold";
         fields["maxTotalGil"] = string.Empty;
 
@@ -1134,9 +1086,7 @@ public sealed class MarketAcquisitionRequestEndpointTests
         {
             AllowAutoRedirect = false,
         });
-        var acquisitionPage = await client.GetStringAsync("/api/marketmafioso/acquisition");
-        var csrf = Regex.Match(acquisitionPage, "name=\"csrf\" value=\"(?<token>[^\"]+)\"").Groups["token"].Value;
-        var fields = CreateFormFields(csrf, "blank-all-below-quantity");
+        var fields = CreateFormFields("blank-all-below-quantity");
         fields["quantityMode"] = "AllBelowThreshold";
         fields["quantity"] = string.Empty;
 
@@ -1180,12 +1130,9 @@ public sealed class MarketAcquisitionRequestEndpointTests
         {
             AllowAutoRedirect = false,
         });
-        var dashboard = await client.GetStringAsync("/api/marketmafioso/");
-        var csrf = Regex.Match(dashboard, "name=\"csrf\" value=\"(?<token>[^\"]+)\"").Groups["token"].Value;
-
         var response = await client.PostAsync(
             "/api/marketmafioso/acquisition/requests",
-            new FormUrlEncodedContent(CreateFormFields(csrf, "untrusted-dashboard")));
+            new FormUrlEncodedContent(CreateFormFields("untrusted-dashboard")));
 
         Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
     }
@@ -1241,9 +1188,8 @@ public sealed class MarketAcquisitionRequestEndpointTests
             expiresInSeconds,
         };
 
-    private static Dictionary<string, string> CreateFormFields(string csrf, string idempotencyKey) => new()
+    private static Dictionary<string, string> CreateFormFields(string idempotencyKey) => new()
     {
-        ["csrf"] = csrf,
         ["schemaVersion"] = "1",
         ["idempotencyKey"] = idempotencyKey,
         ["targetCharacterName"] = "Wei Ning",
