@@ -119,7 +119,7 @@ jobs:
           After=network.target
 
           [Service]
-          WorkingDirectory=$data_root
+          WorkingDirectory=$root/current
           ExecStart=$root/current/MarketMafioso.Server
           EnvironmentFile=$root/marketmafioso-dev.env
           Restart=always
