@@ -1,0 +1,92 @@
+@using MarketMafioso.Dashboard.Models
+
+<MudDrawer Anchor="Anchor.Right"
+           Open="Request is not null"
+           OpenChanged="OnOpenChanged"
+           Variant="DrawerVariant.Temporary"
+           Width="420px"
+           Class="details-drawer">
+    @if (Request is null)
+    {
+        <MudText Class="muted">Select a request to inspect it.</MudText>
+    }
+    else
+    {
+        <MudStack Spacing="2" Class="details-drawer-content">
+            <MudStack Row="true" AlignItems="AlignItems.Center">
+                <MudText Typo="Typo.h6">@(Request.ItemName ?? $"Item {Request.ItemId}")</MudText>
+                <MudSpacer />
+                <MudIconButton Icon="@Icons.Material.Filled.Close" OnClick="CloseAsync" />
+            </MudStack>
+
+            <MudChip T="string" Size="Size.Small" Color="@StatusColor(Request.Status)">@Request.Status</MudChip>
+
+            <MudSimpleTable Dense="true" Class="details-table">
+                <tbody>
+                    <tr><td>Request</td><td>@Request.Id</td></tr>
+                    <tr><td>Target</td><td>@Request.TargetCharacterName @@ @Request.TargetWorld</td></tr>
+                    <tr><td>Mode</td><td>@Request.QuantityMode</td></tr>
+                    <tr><td>Quantity</td><td>@FormatQuantity(Request)</td></tr>
+                    <tr><td>Max unit</td><td>@Request.MaxUnitPrice.ToString("N0") gil</td></tr>
+                    <tr><td>Gil cap</td><td>@(Request.MaxTotalGil == 0 ? "No cap" : $"{Request.MaxTotalGil:N0} gil")</td></tr>
+                    <tr><td>Route</td><td>@Request.WorldMode</td></tr>
+                    <tr><td>Latest event</td><td>@FormatLatestRequestEvent(Request)</td></tr>
+                    <tr><td>Runner state</td><td>@(Request.LatestRunnerState ?? "-")</td></tr>
+                    <tr><td>Attempt</td><td>@(Request.LatestAttemptId ?? "-")</td></tr>
+                    <tr><td>Plugin version</td><td>@(Request.LatestAttemptPluginVersion ?? "-")</td></tr>
+                </tbody>
+            </MudSimpleTable>
+
+            <MudStack Row="true">
+                <MudButton Variant="Variant.Outlined" OnClick="@(() => CancelRequested.InvokeAsync(Request.Id))">Cancel</MudButton>
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="@(() => ResendRequested.InvokeAsync(Request.Id))">Resend</MudButton>
+            </MudStack>
+        </MudStack>
+    }
+</MudDrawer>
+
+@code {
+    [Parameter] public MarketAcquisitionRequestView? Request { get; set; }
+    [Parameter] public EventCallback Closed { get; set; }
+    [Parameter] public EventCallback<string> CancelRequested { get; set; }
+    [Parameter] public EventCallback<string> ResendRequested { get; set; }
+
+    private Task OnOpenChanged(bool open) => open ? Task.CompletedTask : CloseAsync();
+
+    private async Task CloseAsync()
+    {
+        await Closed.InvokeAsync();
+    }
+
+    private static Color StatusColor(string status) => status switch
+    {
+        "Complete" => Color.Success,
+        "Failed" or "Cancelled" or "Rejected" => Color.Error,
+        "Running" or "AcceptedInPlugin" => Color.Warning,
+        _ => Color.Info,
+    };
+
+    private static string FormatQuantity(MarketAcquisitionRequestView request) =>
+        request.QuantityMode == "AllBelowThreshold"
+            ? request.Quantity == 0 ? "All safe stock" : $"Max {request.Quantity:N0}"
+            : request.Quantity.ToString("N0");
+
+    private static string FormatLatestRequestEvent(MarketAcquisitionRequestView request)
+    {
+        if (!string.IsNullOrWhiteSpace(request.LatestAttemptId))
+        {
+            var world = string.IsNullOrWhiteSpace(request.LatestAttemptWorld)
+                ? "route"
+                : request.LatestAttemptWorld;
+            var phase = string.IsNullOrWhiteSpace(request.LatestAttemptPhase)
+                ? request.LatestAttemptEventType ?? "event"
+                : request.LatestAttemptPhase;
+            var result = string.IsNullOrWhiteSpace(request.LatestAttemptResult)
+                ? string.Empty
+                : $" / {request.LatestAttemptResult}";
+            return $"{world}: {phase}{result}";
+        }
+
+        return request.LatestMessage ?? request.LatestReason ?? "-";
+    }
+}

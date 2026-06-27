@@ -1,0 +1,28 @@
+@implements IDisposable
+@inject DashboardStatusService Status
+
+@if (Status.Current is not null)
+{
+    <MudAlert Class="status-alert"
+              Severity="@(Status.Current.IsError ? Severity.Error : Severity.Info)"
+              Dense="true">
+        @Status.Current.Message
+    </MudAlert>
+}
+
+@code {
+    protected override void OnInitialized()
+    {
+        Status.Changed += OnStatusChanged;
+    }
+
+    private void OnStatusChanged()
+    {
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    public void Dispose()
+    {
+        Status.Changed -= OnStatusChanged;
+    }
+}

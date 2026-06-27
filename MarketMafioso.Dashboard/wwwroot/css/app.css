@@ -259,6 +259,74 @@ body,
     padding: 8px 10px;
 }
 
+.operation-grid .mud-table-container {
+    min-height: 420px;
+}
+
+.operation-grid .mud-table-cell {
+    border-right: 1px solid #253646;
+}
+
+.operation-grid .mud-table-cell:last-child {
+    border-right: 0;
+}
+
+.selected-grid-row .mud-table-cell {
+    background: #14273a !important;
+}
+
+.live-status-strip {
+    border: 1px solid #253646;
+    border-radius: 7px;
+    background: #0d141b;
+    min-height: 38px;
+    padding: 4px 8px;
+}
+
+.details-drawer {
+    background: #0d141b !important;
+    border-left: 1px solid #304357;
+    color: #f4f8ff;
+}
+
+.details-drawer-content {
+    padding: 16px;
+}
+
+.details-table td:first-child {
+    color: #9eb4cc;
+    width: 120px;
+}
+
+.details-table td {
+    border-bottom: 1px solid #223141;
+    padding: 6px 4px;
+}
+
+.diagnostics-filter {
+    max-width: 520px;
+}
+
+.diagnostics-grid .mud-table-container {
+    max-height: calc(100vh - 260px);
+}
+
+.payload-summary {
+    background: #091017 !important;
+    border: 1px solid #223141;
+    border-radius: 6px;
+    color: #d8e9ff;
+    overflow: auto;
+    padding: 10px;
+}
+
+.payload-summary pre {
+    font-family: Consolas, "Cascadia Mono", monospace;
+    font-size: 12px;
+    margin: 0;
+    white-space: pre-wrap;
+}
+
 .queue-table .mud-table-cell {
     border-bottom: 1px solid #253444;
     border-right: 1px solid #253444;

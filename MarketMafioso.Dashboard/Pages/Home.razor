@@ -1,6 +1,8 @@
 @page "/"
 @page "/acquisition"
 @inject DashboardApiClient Api
+@inject AcquisitionDashboardState State
+@inject DashboardStatusService Status
 @inject IJSRuntime JS
 @implements IAsyncDisposable
 
@@ -19,10 +21,7 @@ else if (_session is null)
             <MudTextField @bind-Value="_loginUsername" Label="Username" Variant="Variant.Outlined" Margin="Margin.Dense" />
             <MudTextField @bind-Value="_loginPassword" Label="Password" InputType="InputType.Password" Variant="Variant.Outlined" Margin="Margin.Dense" />
             <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="_busy" OnClick="LoginAsync">Login</MudButton>
-            @if (!string.IsNullOrWhiteSpace(_status))
-            {
-                <MudAlert Severity="Severity.Error" Dense="true">@_status</MudAlert>
-            }
+            <DashboardStatusHost />
         </MudStack>
     </MudPaper>
 }
@@ -35,174 +34,29 @@ else
                 <MudText Typo="Typo.body2" Class="muted">Stage purchase intent here; the plugin validates live market rows before buying.</MudText>
             </div>
             <MudSpacer />
-            <MudChip T="string" Class="status-chip" Color="@(_eventsConnected ? Color.Success : Color.Info)" Variant="Variant.Outlined">@_liveStatus</MudChip>
             <MudButton Variant="Variant.Outlined" Class="quiet-button" OnClick="LogoutAsync">Logout @_session.User.Username</MudButton>
         </MudStack>
 
-        @if (!string.IsNullOrWhiteSpace(_status))
-        {
-            <MudAlert Class="status-alert" Severity="_statusIsError ? Severity.Error : Severity.Info" Dense="true">@_status</MudAlert>
-        }
+        <DashboardStatusHost />
+        <LiveStatusStrip Connected="_eventsConnected"
+                         StatusText="@_liveStatus"
+                         RequestCount="State.Requests.Count"
+                         RefreshRequested="RefreshRequestsAsync" />
 
         <div class="page-grid acquisition-grid">
-            <MudPaper Class="compact-card dashboard-panel builder-panel" Elevation="0">
-                <MudStack Spacing="2">
-                    <MudStack Row="true" AlignItems="AlignItems.Center" Class="panel-heading">
-                        <MudText Typo="Typo.h6">New Purchase Request</MudText>
-                        <MudSpacer />
-                        <MudText Typo="Typo.caption" Class="muted">@_targetCharacter @@ @_targetWorld</MudText>
-                    </MudStack>
-
-                    <div class="form-section">
-                        <MudText Typo="Typo.overline" Class="section-label">Target</MudText>
-                        <MudGrid Spacing="2">
-                        <MudItem xs="12" sm="6">
-                            <MudTextField @bind-Value="_targetCharacter" Label="Character" Variant="Variant.Outlined" Margin="Margin.Dense" />
-                        </MudItem>
-                        <MudItem xs="12" sm="6">
-                            <MudTextField @bind-Value="_targetWorld" Label="Home world" Variant="Variant.Outlined" Margin="Margin.Dense" />
-                        </MudItem>
-                        <MudItem xs="12" sm="6">
-                            <MudSelect T="string" @bind-Value="_region" Label="Region" Variant="Variant.Outlined" Margin="Margin.Dense">
-                                <MudSelectItem Value="@("North America")">North America</MudSelectItem>
-                            </MudSelect>
-                        </MudItem>
-                        <MudItem xs="12" sm="6">
-                            <MudSelect T="string" @bind-Value="_worldMode" Label="Routing" Variant="Variant.Outlined" Margin="Margin.Dense">
-                                <MudSelectItem Value="@("Recommended")">Recommended worlds</MudSelectItem>
-                                <MudSelectItem Value="@("CurrentWorld")">Current world</MudSelectItem>
-                                <MudSelectItem Value="@("AllWorldSweep")">All-world sweep</MudSelectItem>
-                            </MudSelect>
-                        </MudItem>
-                        </MudGrid>
-                    </div>
-
-                    <div class="form-section">
-                        <MudText Typo="Typo.overline" Class="section-label">Item</MudText>
-                        <MudAutocomplete T="XivItemSearchResult"
-                                         Label="Item"
-                                         Variant="Variant.Outlined"
-                                         Margin="Margin.Dense"
-                                         Value="_selectedItem"
-                                         ValueChanged="OnItemSelected"
-                                         SearchFunc="SearchItemsAsync"
-                                         ToStringFunc="item => item?.ToString() ?? string.Empty"
-                                         ResetValueOnEmptyText="true"
-                                         CoerceText="false"
-                                         Dense="true" />
-                    </div>
-
-                    <div class="form-section">
-                        <MudText Typo="Typo.overline" Class="section-label">Purchase Limits</MudText>
-                        <MudGrid Spacing="2">
-                            <MudItem xs="12" sm="6">
-                                <MudSelect T="string" Value="_quantityMode" ValueChanged="QuantityModeChanged" Label="Quantity mode" Variant="Variant.Outlined" Margin="Margin.Dense">
-                                    <MudSelectItem Value="@("TargetQuantity")">Target quantity</MudSelectItem>
-                                    <MudSelectItem Value="@("AllBelowThreshold")">All below threshold</MudSelectItem>
-                                </MudSelect>
-                            </MudItem>
-                            <MudItem xs="12" sm="6">
-                                <MudNumericField T="uint?" @bind-Value="_quantity" Label="@QuantityLabel" Variant="Variant.Outlined" Margin="Margin.Dense" Min="0" />
-                            </MudItem>
-                            <MudItem xs="12" sm="6">
-                                <MudNumericField T="uint?" @bind-Value="_maxUnitPrice" Label="Max unit price" Variant="Variant.Outlined" Margin="Margin.Dense" Min="1" />
-                            </MudItem>
-                            <MudItem xs="12" sm="6">
-                                <MudNumericField T="uint?" @bind-Value="_gilCap" Label="Gil cap (optional)" Variant="Variant.Outlined" Margin="Margin.Dense" Min="0" />
-                            </MudItem>
-                            <MudItem xs="12" sm="6">
-                                <MudSelect T="string" @bind-Value="_hqPolicy" Label="HQ policy" Variant="Variant.Outlined" Margin="Margin.Dense">
-                                    <MudSelectItem Value="@("Either")">Either</MudSelectItem>
-                                    <MudSelectItem Value="@("NqOnly")">NQ only</MudSelectItem>
-                                    <MudSelectItem Value="@("HqOnly")">HQ only</MudSelectItem>
-                                </MudSelect>
-                            </MudItem>
-                            <MudItem xs="12" sm="6">
-                                <MudSelect T="int" @bind-Value="_expiresInSeconds" Label="Pickup expires" Variant="Variant.Outlined" Margin="Margin.Dense">
-                                    <MudSelectItem Value="300">5 minutes</MudSelectItem>
-                                    <MudSelectItem Value="900">15 minutes</MudSelectItem>
-                                </MudSelect>
-                            </MudItem>
-                        </MudGrid>
-                    </div>
-
-                    <MudAlert Class="help-alert" Severity="Severity.Info" Dense="true">
-                        @QuantityHelp
-                    </MudAlert>
-
-                    <MudStack Row="true" Class="action-row">
-                        <MudButton Variant="Variant.Outlined" Class="quiet-button" OnClick="ClearBuilder">Clear</MudButton>
-                        <MudSpacer />
-                        <MudButton Variant="Variant.Outlined" Class="quiet-button" OnClick="AddToQueue">Add to Queue</MudButton>
-                        <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="_busy || _queue.Count == 0" OnClick="StageQueueAsync">Stage Queue</MudButton>
-                    </MudStack>
-
-                    <MudTable Items="_queue" Dense="true" Hover="true" Class="queue-table">
-                        <HeaderContent>
-                            <MudTh>Item</MudTh>
-                            <MudTh>Mode</MudTh>
-                            <MudTh>Max Unit</MudTh>
-                            <MudTh>Cap</MudTh>
-                            <MudTh></MudTh>
-                        </HeaderContent>
-                        <RowTemplate>
-                            <MudTd>@context.ItemName<br /><span class="muted">Item @context.ItemId</span></MudTd>
-                            <MudTd>@context.QuantityMode<br /><span class="muted">@FormatQuantity(context)</span></MudTd>
-                            <MudTd>@context.MaxUnitPrice.ToString("N0")</MudTd>
-                            <MudTd>@(context.MaxTotalGil == 0 ? "No cap" : context.MaxTotalGil.ToString("N0"))</MudTd>
-                            <MudTd><MudButton Size="Size.Small" OnClick="@(() => RemoveQueued(context))">Remove</MudButton></MudTd>
-                        </RowTemplate>
-                        <NoRecordsContent>
-                            <MudText Class="muted">No queued items.</MudText>
-                        </NoRecordsContent>
-                    </MudTable>
-                </MudStack>
-            </MudPaper>
-
-            <MudPaper Class="compact-card dashboard-panel queue-panel" Elevation="0">
-                <MudStack Spacing="2">
-                    <MudStack Row="true" AlignItems="AlignItems.Center" Class="panel-heading">
-                        <MudText Typo="Typo.h6">Request Queue</MudText>
-                        <MudSpacer />
-                        <MudText Typo="Typo.caption" Class="muted">@_requests.Count active / @_queue.Count queued locally</MudText>
-                        <MudButton Variant="Variant.Outlined" Class="quiet-button" OnClick="LoadRequestsAsync">Refresh</MudButton>
-                    </MudStack>
-                    <MudTable Items="_requests" Dense="true" Hover="true" Class="queue-table">
-                        <HeaderContent>
-                            <MudTh>Item</MudTh>
-                            <MudTh>Qty</MudTh>
-                            <MudTh>Max Unit</MudTh>
-                            <MudTh>Routing</MudTh>
-                            <MudTh>Status</MudTh>
-                            <MudTh>Latest</MudTh>
-                            <MudTh></MudTh>
-                        </HeaderContent>
-                        <RowTemplate>
-                            <MudTd>@(context.ItemName ?? $"Item {context.ItemId}")<br /><span class="muted">@context.TargetCharacterName @@ @context.TargetWorld</span></MudTd>
-                            <MudTd>@FormatQuantity(context)</MudTd>
-                            <MudTd>@context.MaxUnitPrice.ToString("N0")</MudTd>
-                            <MudTd>@context.WorldMode</MudTd>
-                            <MudTd><MudChip T="string" Size="Size.Small" Color="@StatusColor(context.Status)">@context.Status</MudChip></MudTd>
-                            <MudTd>@(context.LatestMessage ?? "-")</MudTd>
-                            <MudTd>
-                                <MudMenu Dense="true">
-                                    <ActivatorContent>
-                                        <MudButton Size="Size.Small" Variant="Variant.Outlined">Actions</MudButton>
-                                    </ActivatorContent>
-                                    <ChildContent>
-                                        <MudMenuItem OnClick="@(() => CancelRequestAsync(context.Id))">Cancel</MudMenuItem>
-                                        <MudMenuItem OnClick="@(() => ResendRequestAsync(context.Id))">Resend</MudMenuItem>
-                                    </ChildContent>
-                                </MudMenu>
-                            </MudTd>
-                        </RowTemplate>
-                        <NoRecordsContent>
-                            <MudText Class="muted">No acquisition requests yet.</MudText>
-                        </NoRecordsContent>
-                    </MudTable>
-                </MudStack>
-            </MudPaper>
+            <RequestBuilder Busy="State.IsBusy" StageRequested="StageRequestsAsync" />
+            <ServerRequestGrid Requests="State.Requests"
+                               SelectedRequest="State.SelectedRequest"
+                               SelectedRequestChanged="SelectRequestAsync"
+                               RefreshRequested="RefreshRequestsAsync"
+                               CancelRequested="CancelRequestAsync"
+                               ResendRequested="ResendRequestAsync" />
         </div>
+
+        <RequestDetailsDrawer Request="State.SelectedRequest"
+                              Closed="ClearSelectedRequestAsync"
+                              CancelRequested="CancelRequestAsync"
+                              ResendRequested="ResendRequestAsync" />
     </MudStack>
 }
 
@@ -211,37 +65,17 @@ else
     private bool _loading = true;
     private bool _busy;
     private bool _eventsConnected;
-    private bool _statusIsError;
-    private string? _status;
     private string _liveStatus = "Live updates idle";
     private string _loginUsername = string.Empty;
     private string _loginPassword = string.Empty;
-    private string _targetCharacter = "Wei Ning";
-    private string _targetWorld = "Siren";
-    private string _region = "North America";
-    private string _worldMode = "Recommended";
-    private XivItemSearchResult? _selectedItem;
-    private string _quantityMode = "AllBelowThreshold";
-    private uint? _quantity;
-    private uint? _maxUnitPrice;
-    private uint? _gilCap;
-    private string _hqPolicy = "Either";
-    private int _expiresInSeconds = 300;
-    private List<MarketAcquisitionCreateRequest> _queue = [];
-    private IReadOnlyList<MarketAcquisitionRequestView> _requests = [];
     private DotNetObjectReference<Home>? _dotNetRef;
-
-    private string QuantityLabel => _quantityMode == "AllBelowThreshold" ? "Max quantity (optional)" : "Target quantity";
-
-    private string QuantityHelp => _quantityMode == "AllBelowThreshold"
-        ? "All below threshold buys every confirmed live listing at or below max unit price. Max quantity and gil cap are optional hard stops."
-        : "Target quantity buys safe whole stacks until the target is satisfied; harmless overage can happen because stacks are indivisible.";
 
     protected override async Task OnInitializedAsync()
     {
+        State.Changed += OnStateChanged;
         await LoadSessionAsync();
         if (_session is not null)
-            await LoadRequestsAsync();
+            await State.RefreshAsync();
         _loading = false;
     }
 
@@ -253,36 +87,31 @@ else
 
     private async Task LoginAsync()
     {
-        await RunAsync(async () =>
+        await RunPageAsync(async () =>
         {
             await Api.LoginAsync(_loginUsername, _loginPassword);
             await LoadSessionAsync();
-            await LoadRequestsAsync();
+            await State.RefreshAsync();
             await StartEventsAsync();
-            SetStatus("Logged in.", false);
+            Status.Info("Logged in.");
         }, "Login failed.");
     }
 
     private async Task LogoutAsync()
     {
-        await RunAsync(async () =>
+        await RunPageAsync(async () =>
         {
             await Api.LogoutAsync();
             await StopEventsAsync();
             _session = null;
-            _requests = [];
-            SetStatus("Logged out.", false);
+            State.ApplySnapshot([]);
+            Status.Info("Logged out.");
         }, "Logout failed.");
     }
 
     private async Task LoadSessionAsync()
     {
         _session = await Api.GetSessionAsync();
-    }
-
-    private async Task LoadRequestsAsync()
-    {
-        _requests = await Api.GetAcquisitionRequestsAsync();
     }
 
     private async Task StartEventsAsync()
@@ -310,7 +139,7 @@ else
             json,
             new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
         if (requests is not null)
-            _requests = requests;
+            State.ApplySnapshot(requests);
 
         return InvokeAsync(StateHasChanged);
     }
@@ -323,122 +152,28 @@ else
         return InvokeAsync(StateHasChanged);
     }
 
-    private async Task<IEnumerable<XivItemSearchResult>> SearchItemsAsync(string value, CancellationToken token)
+    private Task<bool> StageRequestsAsync(IReadOnlyList<MarketAcquisitionCreateRequest> requests) =>
+        State.StageAsync(requests);
+
+    private Task RefreshRequestsAsync() => State.RefreshAsync();
+
+    private Task CancelRequestAsync(string id) => State.CancelAsync(id);
+
+    private Task ResendRequestAsync(string id) => State.ResendAsync(id);
+
+    private Task SelectRequestAsync(MarketAcquisitionRequestView? request)
     {
-        try
-        {
-            return await Api.SearchItemsAsync(value, token);
-        }
-        catch (Exception ex)
-        {
-            SetStatus($"Item lookup failed: {ex.Message}", true);
-            return [];
-        }
+        State.SelectRequest(request);
+        return Task.CompletedTask;
     }
 
-    private void OnItemSelected(XivItemSearchResult? item)
+    private Task ClearSelectedRequestAsync()
     {
-        _selectedItem = item;
+        State.SelectRequest(null);
+        return Task.CompletedTask;
     }
 
-    private void QuantityModeChanged(string mode)
-    {
-        _quantityMode = mode;
-        if (mode == "AllBelowThreshold" && _quantity == 0)
-            _quantity = null;
-    }
-
-    private void AddToQueue()
-    {
-        if (_selectedItem is null)
-        {
-            SetStatus("Pick an item before adding to the queue.", true);
-            return;
-        }
-
-        if (_maxUnitPrice is null or 0)
-        {
-            SetStatus("Max unit price is required.", true);
-            return;
-        }
-
-        if (_quantityMode == "TargetQuantity" && (_quantity is null or 0))
-        {
-            SetStatus("Target quantity is required for TargetQuantity mode.", true);
-            return;
-        }
-
-        _queue.Add(new MarketAcquisitionCreateRequest
-        {
-            IdempotencyKey = Guid.NewGuid().ToString("N"),
-            TargetCharacterName = _targetCharacter.Trim(),
-            TargetWorld = _targetWorld.Trim(),
-            Region = _region,
-            ItemId = _selectedItem.ItemId,
-            ItemName = _selectedItem.Name,
-            QuantityMode = _quantityMode,
-            Quantity = _quantity ?? 0,
-            HqPolicy = _hqPolicy,
-            MaxUnitPrice = _maxUnitPrice.Value,
-            MaxTotalGil = _gilCap ?? 0,
-            WorldMode = _worldMode,
-            ExpiresInSeconds = _expiresInSeconds,
-        });
-        SetStatus($"Queued {_selectedItem.Name}.", false);
-    }
-
-    private async Task StageQueueAsync()
-    {
-        await RunAsync(async () =>
-        {
-            var staged = 0;
-            foreach (var request in _queue.ToArray())
-            {
-                await Api.CreateAcquisitionRequestAsync(request);
-                staged++;
-            }
-
-            _queue.Clear();
-            await LoadRequestsAsync();
-            SetStatus($"Staged {staged:N0} acquisition request(s).", false);
-        }, "Stage queue failed.");
-    }
-
-    private async Task CancelRequestAsync(string id)
-    {
-        await RunAsync(async () =>
-        {
-            await Api.CancelAcquisitionRequestAsync(id);
-            await LoadRequestsAsync();
-            SetStatus("Request cancelled.", false);
-        }, "Cancel failed.");
-    }
-
-    private async Task ResendRequestAsync(string id)
-    {
-        await RunAsync(async () =>
-        {
-            await Api.ResendAcquisitionRequestAsync(id);
-            await LoadRequestsAsync();
-            SetStatus("Request resent.", false);
-        }, "Resend failed.");
-    }
-
-    private void RemoveQueued(MarketAcquisitionCreateRequest request)
-    {
-        _queue.Remove(request);
-    }
-
-    private void ClearBuilder()
-    {
-        _selectedItem = null;
-        _quantity = null;
-        _maxUnitPrice = null;
-        _gilCap = null;
-        SetStatus("Builder cleared.", false);
-    }
-
-    private async Task RunAsync(Func<Task> action, string failurePrefix)
+    private async Task RunPageAsync(Func<Task> action, string failurePrefix)
     {
         try
         {
@@ -447,7 +182,7 @@ else
         }
         catch (Exception ex)
         {
-            SetStatus($"{failurePrefix} {ex.Message}", true);
+            Status.Error($"{failurePrefix} {ex.Message}");
         }
         finally
         {
@@ -455,32 +190,14 @@ else
         }
     }
 
-    private void SetStatus(string message, bool isError)
+    private void OnStateChanged()
     {
-        _status = message;
-        _statusIsError = isError;
+        _ = InvokeAsync(StateHasChanged);
     }
-
-    private static Color StatusColor(string status) => status switch
-    {
-        "Complete" => Color.Success,
-        "Failed" or "Cancelled" or "Rejected" => Color.Error,
-        "Running" or "AcceptedInPlugin" => Color.Warning,
-        _ => Color.Info,
-    };
-
-    private static string FormatQuantity(MarketAcquisitionCreateRequest request) =>
-        request.QuantityMode == "AllBelowThreshold"
-            ? request.Quantity == 0 ? "All safe stock" : $"Max {request.Quantity:N0}"
-            : request.Quantity.ToString("N0");
-
-    private static string FormatQuantity(MarketAcquisitionRequestView request) =>
-        request.QuantityMode == "AllBelowThreshold"
-            ? request.Quantity == 0 ? "All safe stock" : $"Max {request.Quantity:N0}"
-            : request.Quantity.ToString("N0");
 
     public async ValueTask DisposeAsync()
     {
+        State.Changed -= OnStateChanged;
         await StopEventsAsync();
         _dotNetRef?.Dispose();
     }

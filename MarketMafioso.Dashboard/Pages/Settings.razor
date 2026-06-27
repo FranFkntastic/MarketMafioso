@@ -17,30 +17,12 @@
                 <MudStack Spacing="2">
                     <MudStack Row="true" AlignItems="AlignItems.Center">
                         <MudText Typo="Typo.h6">Diagnostics</MudText>
-                        <MudSpacer />
-                        <MudButton Variant="Variant.Outlined" OnClick="LoadDiagnosticsAsync">Refresh</MudButton>
                     </MudStack>
-                    <MudTable Items="_events" Dense="true" Hover="true" Class="queue-table">
-                        <HeaderContent>
-                            <MudTh>ID</MudTh>
-                            <MudTh>When</MudTh>
-                            <MudTh>Category</MudTh>
-                            <MudTh>Severity</MudTh>
-                            <MudTh>Message</MudTh>
-                            <MudTh>Correlation</MudTh>
-                        </HeaderContent>
-                        <RowTemplate>
-                            <MudTd>@context.Id</MudTd>
-                            <MudTd>@context.OccurredAtUtc.LocalDateTime.ToString("yyyy-MM-dd HH:mm:ss")</MudTd>
-                            <MudTd>@context.Category<br /><span class="muted">@context.Type</span></MudTd>
-                            <MudTd><MudChip T="string" Size="Size.Small" Color="@SeverityColor(context.Severity)">@context.Severity</MudChip></MudTd>
-                            <MudTd>@context.Message</MudTd>
-                            <MudTd>@(context.CorrelationId ?? "-")</MudTd>
-                        </RowTemplate>
-                        <NoRecordsContent>
-                            <MudText Class="muted">No diagnostics captured yet.</MudText>
-                        </NoRecordsContent>
-                    </MudTable>
+                    <DiagnosticsEventGrid Events="_events"
+                                          RefreshRequested="LoadDiagnosticsAsync"
+                                          SelectedEventChanged="SelectDiagnosticEvent" />
+                    <DiagnosticEventDrawer Event="_selectedEvent"
+                                           Closed="@(() => _selectedEvent = null)" />
                 </MudStack>
             </MudPaper>
         </MudTabPanel>
@@ -61,6 +43,7 @@
 
 @code {
     private IReadOnlyList<DiagnosticEventView> _events = [];
+    private DiagnosticEventView? _selectedEvent;
 
     protected override async Task OnInitializedAsync()
     {
@@ -72,11 +55,8 @@
         _events = await Api.GetDiagnosticsAsync();
     }
 
-    private static Color SeverityColor(string severity) => severity switch
+    private void SelectDiagnosticEvent(DiagnosticEventView item)
     {
-        "Critical" or "Error" => Color.Error,
-        "Warn" => Color.Warning,
-        "Debug" or "Trace" => Color.Default,
-        _ => Color.Info,
-    };
+        _selectedEvent = item;
+    }
 }

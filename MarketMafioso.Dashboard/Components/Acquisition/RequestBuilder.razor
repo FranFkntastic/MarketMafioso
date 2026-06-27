@@ -1,0 +1,258 @@
+@using MarketMafioso.Dashboard.Models
+@inject DashboardApiClient Api
+@inject DashboardStatusService Status
+
+<MudPaper Class="compact-card dashboard-panel builder-panel" Elevation="0">
+    <MudStack Spacing="2">
+        <MudStack Row="true" AlignItems="AlignItems.Center" Class="panel-heading">
+            <MudText Typo="Typo.h6">New Purchase Request</MudText>
+            <MudSpacer />
+            <MudText Typo="Typo.caption" Class="muted">@_targetCharacter @@ @_targetWorld</MudText>
+        </MudStack>
+
+        <div class="form-section">
+            <MudText Typo="Typo.overline" Class="section-label">Target</MudText>
+            <MudGrid Spacing="2">
+                <MudItem xs="12" sm="6">
+                    <MudTextField @bind-Value="_targetCharacter" Label="Character" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                </MudItem>
+                <MudItem xs="12" sm="6">
+                    <MudTextField @bind-Value="_targetWorld" Label="Home world" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                </MudItem>
+                <MudItem xs="12" sm="6">
+                    <MudSelect T="string" @bind-Value="_region" Label="Region" Variant="Variant.Outlined" Margin="Margin.Dense">
+                        <MudSelectItem Value="@("North America")">North America</MudSelectItem>
+                    </MudSelect>
+                </MudItem>
+                <MudItem xs="12" sm="6">
+                    <MudSelect T="string" @bind-Value="_worldMode" Label="Routing" Variant="Variant.Outlined" Margin="Margin.Dense">
+                        <MudSelectItem Value="@("Recommended")">Recommended worlds</MudSelectItem>
+                        <MudSelectItem Value="@("CurrentWorld")">Current world</MudSelectItem>
+                        <MudSelectItem Value="@("AllWorldSweep")">All-world sweep</MudSelectItem>
+                    </MudSelect>
+                </MudItem>
+            </MudGrid>
+        </div>
+
+        <div class="form-section">
+            <MudText Typo="Typo.overline" Class="section-label">Item</MudText>
+            <MudAutocomplete T="XivItemSearchResult"
+                             Label="Item"
+                             Variant="Variant.Outlined"
+                             Margin="Margin.Dense"
+                             Value="_selectedItem"
+                             ValueChanged="OnItemSelected"
+                             Text="_itemSearchText"
+                             TextChanged="OnItemSearchTextChanged"
+                             SearchFunc="SearchItemsAsync"
+                             ToStringFunc="item => item?.ToString() ?? string.Empty"
+                             ResetValueOnEmptyText="true"
+                             CoerceText="false"
+                             Clearable="true"
+                             Dense="true" />
+        </div>
+
+        <div class="form-section">
+            <MudText Typo="Typo.overline" Class="section-label">Purchase Limits</MudText>
+            <MudGrid Spacing="2">
+                <MudItem xs="12" sm="6">
+                    <MudSelect T="string" Value="_quantityMode" ValueChanged="QuantityModeChanged" Label="Quantity mode" Variant="Variant.Outlined" Margin="Margin.Dense">
+                        <MudSelectItem Value="@("TargetQuantity")">Target quantity</MudSelectItem>
+                        <MudSelectItem Value="@("AllBelowThreshold")">All below threshold</MudSelectItem>
+                    </MudSelect>
+                </MudItem>
+                <MudItem xs="12" sm="6">
+                    <MudNumericField T="uint?" @bind-Value="_quantity" Label="@QuantityLabel" Variant="Variant.Outlined" Margin="Margin.Dense" Min="0" />
+                </MudItem>
+                <MudItem xs="12" sm="6">
+                    <MudNumericField T="uint?" @bind-Value="_maxUnitPrice" Label="Max unit price" Variant="Variant.Outlined" Margin="Margin.Dense" Min="1" />
+                </MudItem>
+                <MudItem xs="12" sm="6">
+                    <MudNumericField T="uint?" @bind-Value="_gilCap" Label="Gil cap (optional)" Variant="Variant.Outlined" Margin="Margin.Dense" Min="0" />
+                </MudItem>
+                <MudItem xs="12" sm="6">
+                    <MudSelect T="string" @bind-Value="_hqPolicy" Label="HQ policy" Variant="Variant.Outlined" Margin="Margin.Dense">
+                        <MudSelectItem Value="@("Either")">Either</MudSelectItem>
+                        <MudSelectItem Value="@("NqOnly")">NQ only</MudSelectItem>
+                        <MudSelectItem Value="@("HqOnly")">HQ only</MudSelectItem>
+                    </MudSelect>
+                </MudItem>
+                <MudItem xs="12" sm="6">
+                    <MudSelect T="int" @bind-Value="_expiresInSeconds" Label="Pickup expires" Variant="Variant.Outlined" Margin="Margin.Dense">
+                        <MudSelectItem Value="300">5 minutes</MudSelectItem>
+                        <MudSelectItem Value="900">15 minutes</MudSelectItem>
+                    </MudSelect>
+                </MudItem>
+            </MudGrid>
+        </div>
+
+        <MudAlert Class="help-alert" Severity="Severity.Info" Dense="true">
+            @QuantityHelp
+        </MudAlert>
+
+        <MudStack Row="true" Class="action-row">
+            <MudButton Variant="Variant.Outlined" Class="quiet-button" OnClick="ClearBuilder">Clear</MudButton>
+            <MudSpacer />
+            <MudButton Variant="Variant.Outlined" Class="quiet-button" OnClick="AddToQueue">Add to Queue</MudButton>
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="Busy || _queue.Count == 0" OnClick="StageAsync">Stage Queue</MudButton>
+        </MudStack>
+
+        <MudTable Items="_queue" Dense="true" Hover="true" Class="queue-table">
+            <HeaderContent>
+                <MudTh>Item</MudTh>
+                <MudTh>Mode</MudTh>
+                <MudTh>Max Unit</MudTh>
+                <MudTh>Cap</MudTh>
+                <MudTh></MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd>@context.Item.Name<br /><span class="muted">Item @context.Item.ItemId</span></MudTd>
+                <MudTd>@context.QuantityMode<br /><span class="muted">@context.QuantityDisplay</span></MudTd>
+                <MudTd>@context.MaxUnitPrice.ToString("N0")</MudTd>
+                <MudTd>@context.GilCapDisplay</MudTd>
+                <MudTd><MudButton Size="Size.Small" OnClick="@(() => RemoveQueued(context))">Remove</MudButton></MudTd>
+            </RowTemplate>
+            <NoRecordsContent>
+                <MudText Class="muted">No queued items.</MudText>
+            </NoRecordsContent>
+        </MudTable>
+    </MudStack>
+</MudPaper>
+
+@code {
+    [Parameter] public bool Busy { get; set; }
+    [Parameter] public Func<IReadOnlyList<MarketAcquisitionCreateRequest>, Task<bool>>? StageRequested { get; set; }
+
+    private string _targetCharacter = "Wei Ning";
+    private string _targetWorld = "Siren";
+    private string _region = "North America";
+    private string _worldMode = "Recommended";
+    private XivItemSearchResult? _selectedItem;
+    private string _itemSearchText = string.Empty;
+    private string _quantityMode = "AllBelowThreshold";
+    private uint? _quantity;
+    private uint? _maxUnitPrice;
+    private uint? _gilCap;
+    private string _hqPolicy = "Either";
+    private int _expiresInSeconds = 300;
+    private readonly List<QueuedAcquisitionItem> _queue = [];
+
+    private string QuantityLabel => _quantityMode == "AllBelowThreshold" ? "Max quantity (optional)" : "Target quantity";
+
+    private string QuantityHelp => _quantityMode == "AllBelowThreshold"
+        ? "All below threshold buys every confirmed live listing at or below max unit price. Max quantity and gil cap are optional hard stops."
+        : "Target quantity buys safe whole stacks until the target is satisfied; harmless overage can happen because stacks are indivisible.";
+
+    private async Task<IEnumerable<XivItemSearchResult>> SearchItemsAsync(string value, CancellationToken token)
+    {
+        try
+        {
+            return await Api.SearchItemsAsync(value, token);
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            return [];
+        }
+        catch (Exception ex)
+        {
+            Status.Error($"Item lookup failed: {ex.Message}");
+            return [];
+        }
+    }
+
+    private void OnItemSelected(XivItemSearchResult? item)
+    {
+        _selectedItem = item;
+        if (item is not null)
+            _itemSearchText = item.ToString();
+    }
+
+    private void OnItemSearchTextChanged(string value)
+    {
+        _itemSearchText = value;
+        if (string.IsNullOrWhiteSpace(value))
+            _selectedItem = null;
+    }
+
+    private void QuantityModeChanged(string mode)
+    {
+        _quantityMode = mode;
+        if (mode == "AllBelowThreshold" && _quantity == 0)
+            _quantity = null;
+    }
+
+    private void AddToQueue()
+    {
+        if (_selectedItem is null)
+        {
+            Status.Error("Pick an item before adding to the queue.");
+            return;
+        }
+
+        if (_maxUnitPrice is null or 0)
+        {
+            Status.Error("Max unit price is required.");
+            return;
+        }
+
+        if (_quantityMode == "TargetQuantity" && (_quantity is null or 0))
+        {
+            Status.Error("Target quantity is required for TargetQuantity mode.");
+            return;
+        }
+
+        _queue.Add(new QueuedAcquisitionItem
+        {
+            Item = _selectedItem,
+            QuantityMode = _quantityMode,
+            Quantity = _quantity ?? 0,
+            HqPolicy = _hqPolicy,
+            MaxUnitPrice = _maxUnitPrice.Value,
+            MaxTotalGil = _gilCap ?? 0,
+            WorldMode = _worldMode,
+        });
+        Status.Info($"Queued {_selectedItem.Name}.");
+    }
+
+    private async Task StageAsync()
+    {
+        if (StageRequested is null)
+            return;
+
+        var requests = _queue.Select(ToCreateRequest).ToArray();
+        if (await StageRequested.Invoke(requests))
+            _queue.Clear();
+    }
+
+    private MarketAcquisitionCreateRequest ToCreateRequest(QueuedAcquisitionItem item) => new()
+    {
+        IdempotencyKey = Guid.NewGuid().ToString("N"),
+        TargetCharacterName = _targetCharacter.Trim(),
+        TargetWorld = _targetWorld.Trim(),
+        Region = _region,
+        ItemId = item.Item.ItemId,
+        ItemName = item.Item.Name,
+        QuantityMode = item.QuantityMode,
+        Quantity = item.Quantity,
+        HqPolicy = item.HqPolicy,
+        MaxUnitPrice = item.MaxUnitPrice,
+        MaxTotalGil = item.MaxTotalGil,
+        WorldMode = item.WorldMode,
+        ExpiresInSeconds = _expiresInSeconds,
+    };
+
+    private void RemoveQueued(QueuedAcquisitionItem item)
+    {
+        _queue.Remove(item);
+    }
+
+    private void ClearBuilder()
+    {
+        _selectedItem = null;
+        _itemSearchText = string.Empty;
+        _quantity = null;
+        _maxUnitPrice = null;
+        _gilCap = null;
+        Status.Info("Builder cleared.");
+    }
+}
