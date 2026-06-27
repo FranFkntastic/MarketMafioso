@@ -12,22 +12,20 @@ param(
 $ErrorActionPreference = "Stop"
 
 $deployScript = Join-Path -Path $PSScriptRoot -ChildPath "Deploy-DevPlugin.ps1"
-$arguments = @()
-
-if ($SkipBuild) {
-    $arguments += "-SkipBuild"
+$arguments = @{
+    SkipBuild = $SkipBuild
 }
 
 if (-not [string]::IsNullOrWhiteSpace($Configuration)) {
-    $arguments += @("-Configuration", $Configuration)
+    $arguments.Configuration = $Configuration
 }
 
 if (-not [string]::IsNullOrWhiteSpace($TargetDll)) {
-    $arguments += @("-TargetDll", $TargetDll)
+    $arguments.TargetDll = $TargetDll
 }
 
 if (-not [string]::IsNullOrWhiteSpace($ConfigPath)) {
-    $arguments += @("-ConfigPath", $ConfigPath)
+    $arguments.ConfigPath = $ConfigPath
 }
 
 Write-Host "Deploying MarketMafioso dev plugin to the local Dalamud watched DLL..."
