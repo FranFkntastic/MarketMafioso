@@ -64,6 +64,13 @@ public sealed record MarketAcquisitionRequestView
     public string? LatestMessage { get; init; }
     public string? LatestReason { get; init; }
     public DateTimeOffset? LatestEventAtUtc { get; init; }
+    public string? LatestAttemptId { get; init; }
+    public long? LatestAttemptSequence { get; init; }
+    public string? LatestAttemptEventType { get; init; }
+    public string? LatestAttemptPhase { get; init; }
+    public string? LatestAttemptWorld { get; init; }
+    public string? LatestAttemptResult { get; init; }
+    public string? LatestAttemptPluginVersion { get; init; }
 }
 
 public sealed record MarketAcquisitionClaimView
@@ -90,6 +97,13 @@ public sealed record MarketAcquisitionClaimView
     public string? LatestMessage { get; init; }
     public string? LatestReason { get; init; }
     public DateTimeOffset? LatestEventAtUtc { get; init; }
+    public string? LatestAttemptId { get; init; }
+    public long? LatestAttemptSequence { get; init; }
+    public string? LatestAttemptEventType { get; init; }
+    public string? LatestAttemptPhase { get; init; }
+    public string? LatestAttemptWorld { get; init; }
+    public string? LatestAttemptResult { get; init; }
+    public string? LatestAttemptPluginVersion { get; init; }
     public string ClaimToken { get; init; } = string.Empty;
 }
 
@@ -117,6 +131,14 @@ public sealed class MarketAcquisitionIdempotencyConflictException : Exception
 {
     public MarketAcquisitionIdempotencyConflictException()
         : base("Idempotency key was already used with a different request body.")
+    {
+    }
+}
+
+public sealed class MarketAcquisitionAttemptSequenceConflictException : Exception
+{
+    public MarketAcquisitionAttemptSequenceConflictException()
+        : base("Attempt event sequence was already used with a different request body.")
     {
     }
 }

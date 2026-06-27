@@ -396,6 +396,227 @@ public sealed class MarketAcquisitionRequestEndpointTests
     }
 
     [Fact]
+    public async Task RecentQueueIncludesLatestAttemptProjection()
+    {
+        await using var application = CreateHostedApplication();
+        using var client = application.CreateClient();
+        var claimed = await CreateAcceptedRequestAsync(client, "attempt-projection");
+
+        var progress = await SendAttemptProgressAsync(
+            client,
+            claimed.RequestId,
+            claimed.ClaimToken,
+            "attempt-projection-progress-1",
+            "attempt-001",
+            1,
+            "Traveling",
+            "Traveling to Brynhildr.",
+            worldName: "Brynhildr",
+            routeStopId: "stop-brynhildr");
+        progress.EnsureSuccessStatusCode();
+
+        var recentResponse = await SendWithKeyAsync(
+            client,
+            HttpMethod.Get,
+            "/api/marketmafioso/api/acquisition/requests",
+            "client-secret");
+        recentResponse.EnsureSuccessStatusCode();
+        var recent = await recentResponse.Content.ReadFromJsonAsync<JsonElement>();
+
+        var payload = recent[0];
+        Assert.Equal("attempt-001", payload.GetProperty("latestAttemptId").GetString());
+        Assert.Equal(1, payload.GetProperty("latestAttemptSequence").GetInt64());
+        Assert.Equal("Traveling", payload.GetProperty("latestAttemptPhase").GetString());
+        Assert.Equal("Brynhildr", payload.GetProperty("latestAttemptWorld").GetString());
+    }
+
+    [Fact]
+    public async Task ProgressAttemptEventIsIdempotentForSameBody()
+    {
+        await using var application = CreateHostedApplication();
+        using var client = application.CreateClient();
+        var claimed = await CreateAcceptedRequestAsync(client, "attempt-idempotent-same");
+        var body = CreateAttemptProgress(
+            claimed.ClaimToken,
+            "req-attempt-001-1-progress",
+            "attempt-001",
+            1,
+            "Traveling",
+            "Traveling.",
+            worldName: "Brynhildr",
+            routeStopId: "stop-brynhildr");
+
+        var first = await SendWithKeyAsync(
+            client,
+            HttpMethod.Post,
+            $"/api/marketmafioso/acquisition/requests/{claimed.RequestId}/progress",
+            "client-secret",
+            body);
+        var second = await SendWithKeyAsync(
+            client,
+            HttpMethod.Post,
+            $"/api/marketmafioso/acquisition/requests/{claimed.RequestId}/progress",
+            "client-secret",
+            body);
+
+        first.EnsureSuccessStatusCode();
+        second.EnsureSuccessStatusCode();
+        using var secondJson = JsonDocument.Parse(await second.Content.ReadAsStringAsync());
+        Assert.Equal("replayed", secondJson.RootElement.GetProperty("result").GetString());
+    }
+
+    [Fact]
+    public async Task ProgressAttemptEventRejectsSameIdempotencyKeyWithDifferentBody()
+    {
+        await using var application = CreateHostedApplication();
+        using var client = application.CreateClient();
+        var claimed = await CreateAcceptedRequestAsync(client, "attempt-idempotent-different");
+
+        var first = CreateAttemptProgress(
+            claimed.ClaimToken,
+            "req-attempt-001-1-progress",
+            "attempt-001",
+            1,
+            "Traveling",
+            "Traveling.");
+        var second = CreateAttemptProgress(
+            claimed.ClaimToken,
+            "req-attempt-001-1-progress",
+            "attempt-001",
+            1,
+            "Traveling",
+            "Different payload.");
+
+        var accepted = await SendWithKeyAsync(
+            client,
+            HttpMethod.Post,
+            $"/api/marketmafioso/acquisition/requests/{claimed.RequestId}/progress",
+            "client-secret",
+            first);
+        accepted.EnsureSuccessStatusCode();
+        var conflict = await SendWithKeyAsync(
+            client,
+            HttpMethod.Post,
+            $"/api/marketmafioso/acquisition/requests/{claimed.RequestId}/progress",
+            "client-secret",
+            second);
+
+        Assert.Equal(HttpStatusCode.Conflict, conflict.StatusCode);
+        var text = await conflict.Content.ReadAsStringAsync();
+        Assert.Contains("Idempotency key was already used with a different request body", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ProgressAttemptEventRejectsSameAttemptSequenceWithDifferentIdempotencyKey()
+    {
+        await using var application = CreateHostedApplication();
+        using var client = application.CreateClient();
+        var claimed = await CreateAcceptedRequestAsync(client, "attempt-sequence-conflict");
+
+        var first = CreateAttemptProgress(
+            claimed.ClaimToken,
+            "attempt-sequence-key-a",
+            "attempt-001",
+            1,
+            "Traveling",
+            "First sequence payload.");
+        var second = CreateAttemptProgress(
+            claimed.ClaimToken,
+            "attempt-sequence-key-b",
+            "attempt-001",
+            1,
+            "Traveling",
+            "Second sequence payload.");
+
+        var accepted = await SendWithKeyAsync(
+            client,
+            HttpMethod.Post,
+            $"/api/marketmafioso/acquisition/requests/{claimed.RequestId}/progress",
+            "client-secret",
+            first);
+        accepted.EnsureSuccessStatusCode();
+        var conflict = await SendWithKeyAsync(
+            client,
+            HttpMethod.Post,
+            $"/api/marketmafioso/acquisition/requests/{claimed.RequestId}/progress",
+            "client-secret",
+            second);
+
+        Assert.Equal(HttpStatusCode.Conflict, conflict.StatusCode);
+        var text = await conflict.Content.ReadAsStringAsync();
+        Assert.Contains("Attempt event sequence was already used", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task LateOldAttemptProgressAfterNewAttemptIsClassifiedStale()
+    {
+        await using var application = CreateHostedApplication();
+        using var client = application.CreateClient();
+        var claimed = await CreateAcceptedRequestAsync(client, "attempt-stale");
+
+        var first = await SendAttemptProgressAsync(
+            client,
+            claimed.RequestId,
+            claimed.ClaimToken,
+            "attempt-a-1",
+            "attempt-a",
+            1,
+            "Traveling",
+            "Attempt A.");
+        first.EnsureSuccessStatusCode();
+
+        var second = await SendAttemptProgressAsync(
+            client,
+            claimed.RequestId,
+            claimed.ClaimToken,
+            "attempt-b-1",
+            "attempt-b",
+            1,
+            "Traveling",
+            "Attempt B.");
+        second.EnsureSuccessStatusCode();
+
+        var stale = await SendAttemptProgressAsync(
+            client,
+            claimed.RequestId,
+            claimed.ClaimToken,
+            "attempt-a-2",
+            "attempt-a",
+            2,
+            "SearchingItem",
+            "Old attempt woke up.");
+
+        stale.EnsureSuccessStatusCode();
+        using var staleJson = JsonDocument.Parse(await stale.Content.ReadAsStringAsync());
+        Assert.Equal("stale_attempt", staleJson.RootElement.GetProperty("result").GetString());
+    }
+
+    [Fact]
+    public async Task LegacyProgressWithoutAttemptIdStillWorksDuringMigration()
+    {
+        await using var application = CreateHostedApplication();
+        using var client = application.CreateClient();
+        var claimed = await CreateAcceptedRequestAsync(client, "legacy-progress");
+
+        var progress = await SendWithKeyAsync(
+            client,
+            HttpMethod.Post,
+            $"/api/marketmafioso/acquisition/requests/{claimed.RequestId}/progress",
+            "client-secret",
+            new
+            {
+                claimToken = claimed.ClaimToken,
+                idempotencyKey = "legacy-progress-1",
+                runnerState = "Running",
+                message = "Legacy plugin progress.",
+            });
+
+        progress.EnsureSuccessStatusCode();
+        using var json = JsonDocument.Parse(await progress.Content.ReadAsStringAsync());
+        Assert.Equal("Running", json.RootElement.GetProperty("status").GetString());
+    }
+
+    [Fact]
     public async Task ExpiredRequestCannotBeListedOrClaimed()
     {
         await using var application = CreateHostedApplication(
@@ -1294,6 +1515,76 @@ public sealed class MarketAcquisitionRequestEndpointTests
         using var claimJson = JsonDocument.Parse(await claim.Content.ReadAsStringAsync());
         return (requestId, claimJson.RootElement.GetProperty("claimToken").GetString()!);
     }
+
+    private static async Task<(string RequestId, string ClaimToken)> CreateAcceptedRequestAsync(
+        HttpClient client,
+        string idempotencyKey)
+    {
+        var claimed = await CreateAndClaimAsync(client, idempotencyKey);
+        var accept = await SendWithKeyAsync(
+            client,
+            HttpMethod.Post,
+            $"/api/marketmafioso/acquisition/requests/{claimed.RequestId}/accept",
+            "client-secret",
+            new
+            {
+                claimToken = claimed.ClaimToken,
+                idempotencyKey = $"{idempotencyKey}-accept",
+            });
+        accept.EnsureSuccessStatusCode();
+        return claimed;
+    }
+
+    private static Task<HttpResponseMessage> SendAttemptProgressAsync(
+        HttpClient client,
+        string requestId,
+        string claimToken,
+        string idempotencyKey,
+        string attemptId,
+        long eventSequence,
+        string phase,
+        string message,
+        string? worldName = null,
+        string? routeStopId = null) =>
+        SendWithKeyAsync(
+            client,
+            HttpMethod.Post,
+            $"/api/marketmafioso/acquisition/requests/{requestId}/progress",
+            "client-secret",
+            CreateAttemptProgress(
+                claimToken,
+                idempotencyKey,
+                attemptId,
+                eventSequence,
+                phase,
+                message,
+                worldName,
+                routeStopId));
+
+    private static object CreateAttemptProgress(
+        string claimToken,
+        string idempotencyKey,
+        string attemptId,
+        long eventSequence,
+        string phase,
+        string message,
+        string? worldName = null,
+        string? routeStopId = null) => new
+        {
+            claimToken,
+            idempotencyKey,
+            pluginInstanceId = "plugin-test-instance",
+            attemptId,
+            eventSequence,
+            eventType = "progress",
+            phase,
+            routeStopId,
+            runnerState = "Running",
+            message,
+            worldName,
+            pluginVersion = "1.0.159.53063",
+            clientTimestampUtc = DateTimeOffset.UtcNow,
+        };
 
     private static Task<HttpResponseMessage> SendWithKeyAsync(
         HttpClient client,

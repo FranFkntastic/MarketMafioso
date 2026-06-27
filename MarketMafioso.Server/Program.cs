@@ -643,12 +643,34 @@ async Task<IResult> AcceptAcquisitionRequest(
     }
 }
 
-Task<IResult> RejectAcquisitionRequest(
+async Task<IResult> RejectAcquisitionRequest(
     string id,
     MarketAcquisitionLifecycleRequest lifecycleRequest,
     MarketAcquisitionRequestStore store,
-    CancellationToken token) =>
-    ApplyAcquisitionLifecycleAsync(store.RejectAsync, id, lifecycleRequest, token);
+    CancellationToken token)
+{
+    try
+    {
+        var result = await store.RejectAsync(id, lifecycleRequest, token);
+        return result == null ? Results.NotFound() : Results.Ok(result);
+    }
+    catch (UnauthorizedAccessException)
+    {
+        return InvalidApiKey();
+    }
+    catch (ArgumentException ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+    catch (MarketAcquisitionIdempotencyConflictException ex)
+    {
+        return Results.Conflict(new { error = ex.Message });
+    }
+    catch (MarketAcquisitionInvalidTransitionException ex)
+    {
+        return Results.Conflict(new { error = ex.Message });
+    }
+}
 
 async Task<IResult> CancelAcquisitionRequest(
     HttpRequest request,
@@ -693,34 +715,63 @@ async Task<IResult> ResendAcquisitionRequest(
 }
 
 Task<IResult> ReportAcquisitionProgress(
+    HttpRequest request,
     string id,
-    MarketAcquisitionLifecycleRequest lifecycleRequest,
     MarketAcquisitionRequestStore store,
     CancellationToken token) =>
-    ApplyAcquisitionLifecycleAsync(store.ReportProgressAsync, id, lifecycleRequest, token);
+    ApplyAcquisitionLifecycleAsync(
+        store.ReportProgressAsync,
+        store.ReportAttemptProgressAsync,
+        id,
+        request,
+        token);
 
 Task<IResult> CompleteAcquisitionRequest(
+    HttpRequest request,
     string id,
-    MarketAcquisitionLifecycleRequest lifecycleRequest,
     MarketAcquisitionRequestStore store,
     CancellationToken token) =>
-    ApplyAcquisitionLifecycleAsync(store.CompleteAsync, id, lifecycleRequest, token);
+    ApplyAcquisitionLifecycleAsync(
+        store.CompleteAsync,
+        store.CompleteAttemptAsync,
+        id,
+        request,
+        token);
 
 Task<IResult> FailAcquisitionRequest(
+    HttpRequest request,
     string id,
-    MarketAcquisitionLifecycleRequest lifecycleRequest,
     MarketAcquisitionRequestStore store,
     CancellationToken token) =>
-    ApplyAcquisitionLifecycleAsync(store.FailAsync, id, lifecycleRequest, token);
+    ApplyAcquisitionLifecycleAsync(
+        store.FailAsync,
+        store.FailAttemptAsync,
+        id,
+        request,
+        token);
 
 static async Task<IResult> ApplyAcquisitionLifecycleAsync(
     Func<string, MarketAcquisitionLifecycleRequest, CancellationToken, Task<MarketAcquisitionRequestView?>> apply,
+    Func<string, MarketAcquisitionAttemptEventRequest, CancellationToken, Task<MarketAcquisitionAttemptEventResult?>> applyAttempt,
     string id,
-    MarketAcquisitionLifecycleRequest lifecycleRequest,
+    HttpRequest request,
     CancellationToken token)
 {
     try
     {
+        using var document = await JsonDocument.ParseAsync(request.Body, cancellationToken: token);
+        var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        if (document.RootElement.TryGetProperty("attemptId", out var attemptIdElement) &&
+            !string.IsNullOrWhiteSpace(attemptIdElement.GetString()))
+        {
+            var attemptRequest = document.Deserialize<MarketAcquisitionAttemptEventRequest>(jsonOptions)
+                ?? throw new ArgumentException("Attempt lifecycle payload is required.");
+            var attemptResult = await applyAttempt(id, attemptRequest, token);
+            return attemptResult == null ? Results.NotFound() : Results.Ok(attemptResult);
+        }
+
+        var lifecycleRequest = document.Deserialize<MarketAcquisitionLifecycleRequest>(jsonOptions)
+            ?? throw new ArgumentException("Lifecycle payload is required.");
         var result = await apply(id, lifecycleRequest, token);
         return result == null ? Results.NotFound() : Results.Ok(result);
     }
@@ -728,11 +779,19 @@ static async Task<IResult> ApplyAcquisitionLifecycleAsync(
     {
         return InvalidApiKey();
     }
+    catch (JsonException ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
     catch (ArgumentException ex)
     {
         return Results.BadRequest(new { error = ex.Message });
     }
     catch (MarketAcquisitionIdempotencyConflictException ex)
+    {
+        return Results.Conflict(new { error = ex.Message });
+    }
+    catch (MarketAcquisitionAttemptSequenceConflictException ex)
     {
         return Results.Conflict(new { error = ex.Message });
     }

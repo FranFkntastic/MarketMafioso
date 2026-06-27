@@ -127,7 +127,14 @@ public sealed class MarketAcquisitionRequestStore
                 requests.payload_json,
                 events.event_type,
                 events.payload_json,
-                events.created_at_utc
+                events.created_at_utc,
+                attempt_events.attempt_id,
+                attempt_events.sequence,
+                attempt_events.event_type,
+                attempt_events.phase,
+                attempt_events.world_name,
+                attempt_events.result,
+                attempt_events.plugin_version
             FROM acquisition_requests AS requests
             LEFT JOIN acquisition_request_events AS events
               ON events.id = (
@@ -135,6 +142,14 @@ public sealed class MarketAcquisitionRequestStore
                 FROM acquisition_request_events AS latest
                 WHERE latest.request_id = requests.id
                 ORDER BY latest.id DESC
+                LIMIT 1
+              )
+            LEFT JOIN acquisition_attempt_events AS attempt_events
+              ON attempt_events.id = (
+                SELECT latest_attempt.id
+                FROM acquisition_attempt_events AS latest_attempt
+                WHERE latest_attempt.request_id = requests.id
+                ORDER BY latest_attempt.id DESC
                 LIMIT 1
               )
             WHERE requests.status = $status
@@ -178,7 +193,14 @@ public sealed class MarketAcquisitionRequestStore
                 requests.payload_json,
                 events.event_type,
                 events.payload_json,
-                events.created_at_utc
+                events.created_at_utc,
+                attempt_events.attempt_id,
+                attempt_events.sequence,
+                attempt_events.event_type,
+                attempt_events.phase,
+                attempt_events.world_name,
+                attempt_events.result,
+                attempt_events.plugin_version
             FROM acquisition_requests AS requests
             LEFT JOIN acquisition_request_events AS events
               ON events.id = (
@@ -186,6 +208,14 @@ public sealed class MarketAcquisitionRequestStore
                 FROM acquisition_request_events AS latest
                 WHERE latest.request_id = requests.id
                 ORDER BY latest.id DESC
+                LIMIT 1
+              )
+            LEFT JOIN acquisition_attempt_events AS attempt_events
+              ON attempt_events.id = (
+                SELECT latest_attempt.id
+                FROM acquisition_attempt_events AS latest_attempt
+                WHERE latest_attempt.request_id = requests.id
+                ORDER BY latest_attempt.id DESC
                 LIMIT 1
               )
             ORDER BY requests.created_at_utc DESC
@@ -328,6 +358,39 @@ public sealed class MarketAcquisitionRequestStore
             request,
             cancellationToken);
 
+    public Task<MarketAcquisitionAttemptEventResult?> ReportAttemptProgressAsync(
+        string id,
+        MarketAcquisitionAttemptEventRequest request,
+        CancellationToken cancellationToken) =>
+        ApplyAttemptLifecycleAsync(
+            id,
+            MarketAcquisitionStatuses.Running,
+            [MarketAcquisitionStatuses.AcceptedInPlugin, MarketAcquisitionStatuses.Running],
+            request,
+            cancellationToken);
+
+    public Task<MarketAcquisitionAttemptEventResult?> CompleteAttemptAsync(
+        string id,
+        MarketAcquisitionAttemptEventRequest request,
+        CancellationToken cancellationToken) =>
+        ApplyAttemptLifecycleAsync(
+            id,
+            MarketAcquisitionStatuses.Complete,
+            [MarketAcquisitionStatuses.AcceptedInPlugin, MarketAcquisitionStatuses.Running],
+            request,
+            cancellationToken);
+
+    public Task<MarketAcquisitionAttemptEventResult?> FailAttemptAsync(
+        string id,
+        MarketAcquisitionAttemptEventRequest request,
+        CancellationToken cancellationToken) =>
+        ApplyAttemptLifecycleAsync(
+            id,
+            MarketAcquisitionStatuses.Failed,
+            [MarketAcquisitionStatuses.AcceptedInPlugin, MarketAcquisitionStatuses.Running],
+            request,
+            cancellationToken);
+
     public async Task<MarketAcquisitionRequestView?> CancelAsync(
         string id,
         CancellationToken cancellationToken)
@@ -454,6 +517,46 @@ public sealed class MarketAcquisitionRequestStore
                 result_status TEXT NOT NULL,
                 created_at_utc TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS acquisition_request_attempts (
+                attempt_id TEXT NOT NULL PRIMARY KEY,
+                request_id TEXT NOT NULL,
+                plugin_instance_id TEXT NOT NULL,
+                status TEXT NOT NULL,
+                started_at_utc TEXT NOT NULL,
+                ended_at_utc TEXT NULL,
+                latest_sequence INTEGER NOT NULL DEFAULT 0,
+                latest_phase TEXT NULL,
+                latest_world TEXT NULL,
+                latest_message TEXT NULL,
+                latest_result TEXT NULL,
+                plugin_version TEXT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_acquisition_attempts_request
+                ON acquisition_request_attempts(request_id, started_at_utc DESC);
+
+            CREATE TABLE IF NOT EXISTS acquisition_attempt_events (
+                id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                request_id TEXT NOT NULL,
+                attempt_id TEXT NOT NULL,
+                sequence INTEGER NOT NULL,
+                idempotency_key TEXT NOT NULL UNIQUE,
+                plugin_instance_id TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                phase TEXT NOT NULL,
+                route_stop_id TEXT NULL,
+                world_name TEXT NULL,
+                plugin_version TEXT NULL,
+                payload_json TEXT NOT NULL,
+                payload_hash TEXT NOT NULL,
+                result TEXT NOT NULL,
+                client_timestamp_utc TEXT NULL,
+                created_at_utc TEXT NOT NULL
+            );
+
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_acquisition_attempt_events_attempt_sequence
+                ON acquisition_attempt_events(attempt_id, sequence);
             """;
         command.ExecuteNonQuery();
     }
@@ -555,6 +658,169 @@ public sealed class MarketAcquisitionRequestStore
         return ApplyLatestLifecycleEvent(current, targetStatus, eventType, payloadJson, eventCreatedAtUtc);
     }
 
+    private async Task<MarketAcquisitionAttemptEventResult?> ApplyAttemptLifecycleAsync(
+        string id,
+        string targetStatus,
+        IReadOnlyCollection<string> allowedSourceStatuses,
+        MarketAcquisitionAttemptEventRequest request,
+        CancellationToken cancellationToken)
+    {
+        ValidateAttemptEventRequest(request);
+
+        await ExpireClaimedAsync(cancellationToken).ConfigureAwait(false);
+
+        var payloadJson = JsonSerializer.Serialize(request, JsonOptions);
+        var payloadHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(payloadJson)));
+
+        await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+
+        var current = await GetByIdAsync(connection, transaction, id, cancellationToken).ConfigureAwait(false);
+        if (current == null)
+            return null;
+
+        var storedClaimToken = await GetClaimTokenAsync(connection, transaction, id, cancellationToken).ConfigureAwait(false);
+        if (!MatchesSecret(request.ClaimToken, storedClaimToken))
+            throw new UnauthorizedAccessException("Claim token does not match.");
+
+        var existingByKey = await GetAttemptEventByIdempotencyKeyAsync(
+            connection,
+            transaction,
+            request.IdempotencyKey,
+            cancellationToken).ConfigureAwait(false);
+        if (existingByKey != null)
+        {
+            if (!string.Equals(existingByKey.Value.RequestId, id, StringComparison.Ordinal) ||
+                !string.Equals(existingByKey.Value.AttemptId, request.AttemptId, StringComparison.Ordinal) ||
+                existingByKey.Value.Sequence != request.EventSequence ||
+                !string.Equals(existingByKey.Value.PayloadJson, payloadJson, StringComparison.Ordinal))
+                throw new MarketAcquisitionIdempotencyConflictException();
+
+            return new MarketAcquisitionAttemptEventResult
+            {
+                Request = ApplyLatestAttemptEvent(current, existingByKey.Value),
+                Result = MarketAcquisitionAttemptEventResults.Replayed,
+            };
+        }
+
+        var existingBySequence = await GetAttemptEventBySequenceAsync(
+            connection,
+            transaction,
+            request.AttemptId,
+            request.EventSequence,
+            cancellationToken).ConfigureAwait(false);
+        if (existingBySequence != null)
+        {
+            if (!string.Equals(existingBySequence.Value.IdempotencyKey, request.IdempotencyKey, StringComparison.Ordinal) ||
+                !string.Equals(existingBySequence.Value.PayloadJson, payloadJson, StringComparison.Ordinal))
+                throw new MarketAcquisitionAttemptSequenceConflictException();
+
+            return new MarketAcquisitionAttemptEventResult
+            {
+                Request = ApplyLatestAttemptEvent(current, existingBySequence.Value),
+                Result = MarketAcquisitionAttemptEventResults.Replayed,
+            };
+        }
+
+        var attemptExists = await AttemptExistsAsync(
+            connection,
+            transaction,
+            request.AttemptId,
+            cancellationToken).ConfigureAwait(false);
+        var latestAttemptId = await GetLatestAttemptIdAsync(
+            connection,
+            transaction,
+            id,
+            cancellationToken).ConfigureAwait(false);
+        var result = attemptExists &&
+            latestAttemptId != null &&
+            !string.Equals(latestAttemptId, request.AttemptId, StringComparison.Ordinal)
+                ? MarketAcquisitionAttemptEventResults.StaleAttempt
+                : MarketAcquisitionAttemptEventResults.Accepted;
+
+        if (result == MarketAcquisitionAttemptEventResults.Accepted &&
+            !allowedSourceStatuses.Contains(current.Status))
+        {
+            if (current.Status is MarketAcquisitionStatuses.Complete
+                or MarketAcquisitionStatuses.Failed
+                or MarketAcquisitionStatuses.Cancelled
+                or MarketAcquisitionStatuses.Rejected
+                or MarketAcquisitionStatuses.Expired)
+            {
+                result = MarketAcquisitionAttemptEventResults.RequestTerminal;
+            }
+            else
+            {
+                throw new MarketAcquisitionInvalidTransitionException(current.Status, targetStatus);
+            }
+        }
+
+        var eventCreatedAtUtc = DateTimeOffset.UtcNow;
+        await UpsertAttemptAsync(
+            connection,
+            transaction,
+            id,
+            targetStatus,
+            request,
+            result,
+            eventCreatedAtUtc,
+            cancellationToken).ConfigureAwait(false);
+
+        if (result == MarketAcquisitionAttemptEventResults.Accepted)
+        {
+            await using var update = connection.CreateCommand();
+            update.Transaction = (SqliteTransaction)transaction;
+            update.CommandText =
+                """
+                UPDATE acquisition_requests
+                SET status = $status
+                WHERE id = $id;
+                """;
+            update.Parameters.AddWithValue("$status", targetStatus);
+            update.Parameters.AddWithValue("$id", id);
+            await update.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        await InsertAttemptEventAsync(
+            connection,
+            transaction,
+            id,
+            request,
+            payloadJson,
+            payloadHash,
+            result,
+            eventCreatedAtUtc,
+            cancellationToken).ConfigureAwait(false);
+
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        var eventRecord = new StoredAttemptEvent(
+            id,
+            request.AttemptId,
+            request.EventSequence,
+            request.IdempotencyKey,
+            request.EventType,
+            request.Phase,
+            request.WorldName,
+            request.PluginVersion,
+            payloadJson,
+            result,
+            eventCreatedAtUtc.ToString("O"));
+        return new MarketAcquisitionAttemptEventResult
+        {
+            Request = ApplyLatestAttemptEvent(
+                result == MarketAcquisitionAttemptEventResults.Accepted
+                    ? current with { Status = targetStatus }
+                    : current,
+                eventRecord),
+            Result = result,
+            Reason = result == MarketAcquisitionAttemptEventResults.StaleAttempt
+                ? "A newer execution attempt is already active for this request."
+                : result == MarketAcquisitionAttemptEventResults.RequestTerminal
+                    ? "The request is already terminal."
+                    : null,
+        };
+    }
+
     private async Task ExpirePendingAsync(CancellationToken cancellationToken)
     {
         await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
@@ -616,7 +882,14 @@ public sealed class MarketAcquisitionRequestStore
                 requests.payload_json,
                 events.event_type,
                 events.payload_json,
-                events.created_at_utc
+                events.created_at_utc,
+                attempt_events.attempt_id,
+                attempt_events.sequence,
+                attempt_events.event_type,
+                attempt_events.phase,
+                attempt_events.world_name,
+                attempt_events.result,
+                attempt_events.plugin_version
             FROM acquisition_requests AS requests
             LEFT JOIN acquisition_request_events AS events
               ON events.id = (
@@ -624,6 +897,14 @@ public sealed class MarketAcquisitionRequestStore
                 FROM acquisition_request_events AS latest
                 WHERE latest.request_id = requests.id
                 ORDER BY latest.id DESC
+                LIMIT 1
+              )
+            LEFT JOIN acquisition_attempt_events AS attempt_events
+              ON attempt_events.id = (
+                SELECT latest_attempt.id
+                FROM acquisition_attempt_events AS latest_attempt
+                WHERE latest_attempt.request_id = requests.id
+                ORDER BY latest_attempt.id DESC
                 LIMIT 1
               )
             WHERE requests.id = $id
@@ -664,7 +945,14 @@ public sealed class MarketAcquisitionRequestStore
                 requests.payload_json,
                 events.event_type,
                 events.payload_json,
-                events.created_at_utc
+                events.created_at_utc,
+                attempt_events.attempt_id,
+                attempt_events.sequence,
+                attempt_events.event_type,
+                attempt_events.phase,
+                attempt_events.world_name,
+                attempt_events.result,
+                attempt_events.plugin_version
             FROM acquisition_requests AS requests
             LEFT JOIN acquisition_request_events AS events
               ON events.id = (
@@ -672,6 +960,14 @@ public sealed class MarketAcquisitionRequestStore
                 FROM acquisition_request_events AS latest
                 WHERE latest.request_id = requests.id
                 ORDER BY latest.id DESC
+                LIMIT 1
+              )
+            LEFT JOIN acquisition_attempt_events AS attempt_events
+              ON attempt_events.id = (
+                SELECT latest_attempt.id
+                FROM acquisition_attempt_events AS latest_attempt
+                WHERE latest_attempt.request_id = requests.id
+                ORDER BY latest_attempt.id DESC
                 LIMIT 1
               )
             WHERE requests.id = $id;
@@ -702,7 +998,14 @@ public sealed class MarketAcquisitionRequestStore
                 requests.payload_json,
                 events.event_type,
                 events.payload_json,
-                events.created_at_utc
+                events.created_at_utc,
+                attempt_events.attempt_id,
+                attempt_events.sequence,
+                attempt_events.event_type,
+                attempt_events.phase,
+                attempt_events.world_name,
+                attempt_events.result,
+                attempt_events.plugin_version
             FROM acquisition_requests AS requests
             LEFT JOIN acquisition_request_events AS events
               ON events.id = (
@@ -710,6 +1013,14 @@ public sealed class MarketAcquisitionRequestStore
                 FROM acquisition_request_events AS latest
                 WHERE latest.request_id = requests.id
                 ORDER BY latest.id DESC
+                LIMIT 1
+              )
+            LEFT JOIN acquisition_attempt_events AS attempt_events
+              ON attempt_events.id = (
+                SELECT latest_attempt.id
+                FROM acquisition_attempt_events AS latest_attempt
+                WHERE latest_attempt.request_id = requests.id
+                ORDER BY latest_attempt.id DESC
                 LIMIT 1
               )
             WHERE requests.idempotency_key = $idempotencyKey;
@@ -759,6 +1070,247 @@ public sealed class MarketAcquisitionRequestStore
             : null;
     }
 
+    private static async Task<StoredAttemptEvent?> GetAttemptEventByIdempotencyKeyAsync(
+        SqliteConnection connection,
+        System.Data.Common.DbTransaction transaction,
+        string idempotencyKey,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = (SqliteTransaction)transaction;
+        command.CommandText =
+            """
+            SELECT
+                request_id,
+                attempt_id,
+                sequence,
+                idempotency_key,
+                event_type,
+                phase,
+                world_name,
+                plugin_version,
+                payload_json,
+                result,
+                created_at_utc
+            FROM acquisition_attempt_events
+            WHERE idempotency_key = $idempotencyKey;
+            """;
+        command.Parameters.AddWithValue("$idempotencyKey", idempotencyKey);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        return await reader.ReadAsync(cancellationToken).ConfigureAwait(false)
+            ? ReadStoredAttemptEvent(reader)
+            : null;
+    }
+
+    private static async Task<StoredAttemptEvent?> GetAttemptEventBySequenceAsync(
+        SqliteConnection connection,
+        System.Data.Common.DbTransaction transaction,
+        string attemptId,
+        long sequence,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = (SqliteTransaction)transaction;
+        command.CommandText =
+            """
+            SELECT
+                request_id,
+                attempt_id,
+                sequence,
+                idempotency_key,
+                event_type,
+                phase,
+                world_name,
+                plugin_version,
+                payload_json,
+                result,
+                created_at_utc
+            FROM acquisition_attempt_events
+            WHERE attempt_id = $attemptId
+              AND sequence = $sequence;
+            """;
+        command.Parameters.AddWithValue("$attemptId", attemptId);
+        command.Parameters.AddWithValue("$sequence", sequence);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        return await reader.ReadAsync(cancellationToken).ConfigureAwait(false)
+            ? ReadStoredAttemptEvent(reader)
+            : null;
+    }
+
+    private static async Task<bool> AttemptExistsAsync(
+        SqliteConnection connection,
+        System.Data.Common.DbTransaction transaction,
+        string attemptId,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = (SqliteTransaction)transaction;
+        command.CommandText = "SELECT 1 FROM acquisition_request_attempts WHERE attempt_id = $attemptId LIMIT 1;";
+        command.Parameters.AddWithValue("$attemptId", attemptId);
+        var result = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+        return result != null;
+    }
+
+    private static async Task<string?> GetLatestAttemptIdAsync(
+        SqliteConnection connection,
+        System.Data.Common.DbTransaction transaction,
+        string requestId,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = (SqliteTransaction)transaction;
+        command.CommandText =
+            """
+            SELECT attempt_id
+            FROM acquisition_request_attempts
+            WHERE request_id = $requestId
+            ORDER BY started_at_utc DESC, attempt_id DESC
+            LIMIT 1;
+            """;
+        command.Parameters.AddWithValue("$requestId", requestId);
+        var value = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+        return value as string;
+    }
+
+    private static async Task UpsertAttemptAsync(
+        SqliteConnection connection,
+        System.Data.Common.DbTransaction transaction,
+        string requestId,
+        string status,
+        MarketAcquisitionAttemptEventRequest request,
+        string result,
+        DateTimeOffset eventCreatedAtUtc,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = (SqliteTransaction)transaction;
+        command.CommandText =
+            """
+            INSERT INTO acquisition_request_attempts (
+                attempt_id,
+                request_id,
+                plugin_instance_id,
+                status,
+                started_at_utc,
+                ended_at_utc,
+                latest_sequence,
+                latest_phase,
+                latest_world,
+                latest_message,
+                latest_result,
+                plugin_version
+            )
+            VALUES (
+                $attemptId,
+                $requestId,
+                $pluginInstanceId,
+                $status,
+                $startedAtUtc,
+                $endedAtUtc,
+                $latestSequence,
+                $latestPhase,
+                $latestWorld,
+                $latestMessage,
+                $latestResult,
+                $pluginVersion
+            )
+            ON CONFLICT(attempt_id) DO UPDATE SET
+                status = $status,
+                ended_at_utc = $endedAtUtc,
+                latest_sequence = $latestSequence,
+                latest_phase = $latestPhase,
+                latest_world = $latestWorld,
+                latest_message = $latestMessage,
+                latest_result = $latestResult,
+                plugin_version = $pluginVersion;
+            """;
+        command.Parameters.AddWithValue("$attemptId", request.AttemptId);
+        command.Parameters.AddWithValue("$requestId", requestId);
+        command.Parameters.AddWithValue("$pluginInstanceId", request.PluginInstanceId);
+        command.Parameters.AddWithValue("$status", status);
+        command.Parameters.AddWithValue("$startedAtUtc", eventCreatedAtUtc.ToString("O"));
+        command.Parameters.AddWithValue("$endedAtUtc", status is MarketAcquisitionStatuses.Complete or MarketAcquisitionStatuses.Failed
+            ? eventCreatedAtUtc.ToString("O")
+            : DBNull.Value);
+        command.Parameters.AddWithValue("$latestSequence", request.EventSequence);
+        command.Parameters.AddWithValue("$latestPhase", request.Phase);
+        command.Parameters.AddWithValue("$latestWorld", (object?)request.WorldName ?? DBNull.Value);
+        command.Parameters.AddWithValue("$latestMessage", (object?)request.Message ?? DBNull.Value);
+        command.Parameters.AddWithValue("$latestResult", result);
+        command.Parameters.AddWithValue("$pluginVersion", (object?)request.PluginVersion ?? DBNull.Value);
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async Task InsertAttemptEventAsync(
+        SqliteConnection connection,
+        System.Data.Common.DbTransaction transaction,
+        string requestId,
+        MarketAcquisitionAttemptEventRequest request,
+        string payloadJson,
+        string payloadHash,
+        string result,
+        DateTimeOffset eventCreatedAtUtc,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = (SqliteTransaction)transaction;
+        command.CommandText =
+            """
+            INSERT INTO acquisition_attempt_events (
+                request_id,
+                attempt_id,
+                sequence,
+                idempotency_key,
+                plugin_instance_id,
+                event_type,
+                phase,
+                route_stop_id,
+                world_name,
+                plugin_version,
+                payload_json,
+                payload_hash,
+                result,
+                client_timestamp_utc,
+                created_at_utc
+            )
+            VALUES (
+                $requestId,
+                $attemptId,
+                $sequence,
+                $idempotencyKey,
+                $pluginInstanceId,
+                $eventType,
+                $phase,
+                $routeStopId,
+                $worldName,
+                $pluginVersion,
+                $payloadJson,
+                $payloadHash,
+                $result,
+                $clientTimestampUtc,
+                $createdAtUtc
+            );
+            """;
+        command.Parameters.AddWithValue("$requestId", requestId);
+        command.Parameters.AddWithValue("$attemptId", request.AttemptId);
+        command.Parameters.AddWithValue("$sequence", request.EventSequence);
+        command.Parameters.AddWithValue("$idempotencyKey", request.IdempotencyKey);
+        command.Parameters.AddWithValue("$pluginInstanceId", request.PluginInstanceId);
+        command.Parameters.AddWithValue("$eventType", request.EventType);
+        command.Parameters.AddWithValue("$phase", request.Phase);
+        command.Parameters.AddWithValue("$routeStopId", (object?)request.RouteStopId ?? DBNull.Value);
+        command.Parameters.AddWithValue("$worldName", (object?)request.WorldName ?? DBNull.Value);
+        command.Parameters.AddWithValue("$pluginVersion", (object?)request.PluginVersion ?? DBNull.Value);
+        command.Parameters.AddWithValue("$payloadJson", payloadJson);
+        command.Parameters.AddWithValue("$payloadHash", payloadHash);
+        command.Parameters.AddWithValue("$result", result);
+        command.Parameters.AddWithValue("$clientTimestampUtc", request.ClientTimestampUtc == default
+            ? DBNull.Value
+            : request.ClientTimestampUtc.ToString("O"));
+        command.Parameters.AddWithValue("$createdAtUtc", eventCreatedAtUtc.ToString("O"));
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
     private static MarketAcquisitionRequestView ApplyLatestLifecycleEvent(
         MarketAcquisitionRequestView request,
         string status,
@@ -778,12 +1330,41 @@ public sealed class MarketAcquisitionRequestStore
         };
     }
 
+    private static MarketAcquisitionRequestView ApplyLatestAttemptEvent(
+        MarketAcquisitionRequestView request,
+        StoredAttemptEvent attemptEvent) =>
+        request with
+        {
+            LatestAttemptId = attemptEvent.AttemptId,
+            LatestAttemptSequence = attemptEvent.Sequence,
+            LatestAttemptEventType = attemptEvent.EventType,
+            LatestAttemptPhase = attemptEvent.Phase,
+            LatestAttemptWorld = attemptEvent.WorldName,
+            LatestAttemptResult = attemptEvent.Result,
+            LatestAttemptPluginVersion = attemptEvent.PluginVersion,
+        };
+
+    private static StoredAttemptEvent ReadStoredAttemptEvent(SqliteDataReader reader) =>
+        new(
+            reader.GetString(0),
+            reader.GetString(1),
+            reader.GetInt64(2),
+            reader.GetString(3),
+            reader.GetString(4),
+            reader.GetString(5),
+            reader.IsDBNull(6) ? null : reader.GetString(6),
+            reader.IsDBNull(7) ? null : reader.GetString(7),
+            reader.GetString(8),
+            reader.GetString(9),
+            reader.GetString(10));
+
     private static MarketAcquisitionRequestView ReadView(SqliteDataReader reader)
     {
         var request = JsonSerializer.Deserialize<MarketAcquisitionCreateRequest>(
             reader.GetString(6),
             JsonOptions) ?? throw new InvalidOperationException("Stored acquisition payload is invalid.");
         var latestEvent = ReadLatestEvent(reader);
+        var latestAttempt = ReadLatestAttempt(reader);
 
         return ToView(
             reader.GetString(0),
@@ -793,7 +1374,8 @@ public sealed class MarketAcquisitionRequestStore
             reader.IsDBNull(4) ? null : DateTimeOffset.Parse(reader.GetString(4)),
             reader.IsDBNull(5) ? null : DateTimeOffset.Parse(reader.GetString(5)),
             request,
-            latestEvent);
+            latestEvent,
+            latestAttempt);
     }
 
     private static MarketAcquisitionLatestEvent? ReadLatestEvent(SqliteDataReader reader)
@@ -812,6 +1394,21 @@ public sealed class MarketAcquisitionRequestStore
             DateTimeOffset.Parse(reader.GetString(9)));
     }
 
+    private static MarketAcquisitionLatestAttempt? ReadLatestAttempt(SqliteDataReader reader)
+    {
+        if (reader.FieldCount < 17 || reader.IsDBNull(10))
+            return null;
+
+        return new MarketAcquisitionLatestAttempt(
+            reader.GetString(10),
+            reader.GetInt64(11),
+            reader.GetString(12),
+            reader.GetString(13),
+            reader.IsDBNull(14) ? null : reader.GetString(14),
+            reader.GetString(15),
+            reader.IsDBNull(16) ? null : reader.GetString(16));
+    }
+
     private static MarketAcquisitionRequestView ToView(
         string id,
         string status,
@@ -820,7 +1417,8 @@ public sealed class MarketAcquisitionRequestStore
         DateTimeOffset? claimedAtUtc,
         DateTimeOffset? claimExpiresAtUtc,
         MarketAcquisitionCreateRequest request,
-        MarketAcquisitionLatestEvent? latestEvent) =>
+        MarketAcquisitionLatestEvent? latestEvent,
+        MarketAcquisitionLatestAttempt? latestAttempt = null) =>
         new()
         {
             Id = id,
@@ -845,6 +1443,13 @@ public sealed class MarketAcquisitionRequestStore
             LatestMessage = latestEvent?.Message,
             LatestReason = latestEvent?.Reason,
             LatestEventAtUtc = latestEvent?.CreatedAtUtc,
+            LatestAttemptId = latestAttempt?.AttemptId,
+            LatestAttemptSequence = latestAttempt?.Sequence,
+            LatestAttemptEventType = latestAttempt?.EventType,
+            LatestAttemptPhase = latestAttempt?.Phase,
+            LatestAttemptWorld = latestAttempt?.WorldName,
+            LatestAttemptResult = latestAttempt?.Result,
+            LatestAttemptPluginVersion = latestAttempt?.PluginVersion,
         };
 
     private static MarketAcquisitionClaimView ToClaimView(
@@ -874,6 +1479,13 @@ public sealed class MarketAcquisitionRequestStore
             LatestMessage = request.LatestMessage,
             LatestReason = request.LatestReason,
             LatestEventAtUtc = request.LatestEventAtUtc,
+            LatestAttemptId = request.LatestAttemptId,
+            LatestAttemptSequence = request.LatestAttemptSequence,
+            LatestAttemptEventType = request.LatestAttemptEventType,
+            LatestAttemptPhase = request.LatestAttemptPhase,
+            LatestAttemptWorld = request.LatestAttemptWorld,
+            LatestAttemptResult = request.LatestAttemptResult,
+            LatestAttemptPluginVersion = request.LatestAttemptPluginVersion,
             ClaimToken = claimToken,
         };
 
@@ -883,6 +1495,28 @@ public sealed class MarketAcquisitionRequestStore
         string? Message,
         string? Reason,
         DateTimeOffset CreatedAtUtc);
+
+    private sealed record MarketAcquisitionLatestAttempt(
+        string AttemptId,
+        long Sequence,
+        string EventType,
+        string Phase,
+        string? WorldName,
+        string Result,
+        string? PluginVersion);
+
+    private readonly record struct StoredAttemptEvent(
+        string RequestId,
+        string AttemptId,
+        long Sequence,
+        string IdempotencyKey,
+        string EventType,
+        string Phase,
+        string? WorldName,
+        string? PluginVersion,
+        string PayloadJson,
+        string Result,
+        string CreatedAtUtc);
 
     private static void ValidateCreateRequest(MarketAcquisitionCreateRequest request)
     {
@@ -908,6 +1542,24 @@ public sealed class MarketAcquisitionRequestStore
             throw new ArgumentException("Quantity mode must be TargetQuantity or AllBelowThreshold.", nameof(request));
         if (request.QuantityMode == "TargetQuantity" && request.Quantity == 0)
             throw new ArgumentException("Target quantity is required.", nameof(request));
+    }
+
+    private static void ValidateAttemptEventRequest(MarketAcquisitionAttemptEventRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.ClaimToken))
+            throw new UnauthorizedAccessException("Claim token is required.");
+        if (string.IsNullOrWhiteSpace(request.IdempotencyKey))
+            throw new ArgumentException("Idempotency key is required.", nameof(request));
+        if (string.IsNullOrWhiteSpace(request.PluginInstanceId))
+            throw new ArgumentException("Plugin instance id is required.", nameof(request));
+        if (string.IsNullOrWhiteSpace(request.AttemptId))
+            throw new ArgumentException("Attempt id is required.", nameof(request));
+        if (request.EventSequence < 1)
+            throw new ArgumentException("Attempt event sequence must be one or greater.", nameof(request));
+        if (string.IsNullOrWhiteSpace(request.EventType))
+            throw new ArgumentException("Attempt event type is required.", nameof(request));
+        if (string.IsNullOrWhiteSpace(request.Phase))
+            throw new ArgumentException("Attempt phase is required.", nameof(request));
     }
 
     private static string CreateSecretToken()
