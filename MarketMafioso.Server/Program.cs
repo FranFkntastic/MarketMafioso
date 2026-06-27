@@ -279,7 +279,7 @@ app.MapPost("/reports/delete-all", async (HttpRequest request, InventoryReportSt
     return Results.Redirect($"{request.PathBase}/?deleted={Uri.EscapeDataString($"{deleted:N0} snapshots")}");
 });
 
-app.MapFallback(ServeBlazorIndex);
+app.MapFallback(ServeBlazorIndex).WithMetadata(new HttpMethodMetadata([HttpMethods.Get, HttpMethods.Head]));
 
 app.Run();
 
