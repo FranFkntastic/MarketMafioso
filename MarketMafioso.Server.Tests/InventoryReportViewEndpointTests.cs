@@ -527,6 +527,29 @@ public sealed class InventoryReportViewEndpointTests
     }
 
     [Fact]
+    public async Task HostedMode_ServesDashboardStaticAssets()
+    {
+        await using var application = CreateHostedApplication(
+            new KeyValuePair<string, string?>("MarketMafioso:BasePath", "/api/marketmafioso"));
+        using var client = application.CreateClient();
+
+        var dashboard = await client.GetStringAsync("/api/marketmafioso/");
+        var bootScript = Regex.Match(
+            dashboard,
+            "_framework/blazor\\.webassembly\\.[^\"]+\\.js").Value;
+
+        Assert.False(string.IsNullOrWhiteSpace(bootScript));
+
+        var appCss = await client.GetAsync("/api/marketmafioso/css/app.css");
+        var dotnetJs = await client.GetAsync("/api/marketmafioso/_framework/dotnet.js");
+        var bootJs = await client.GetAsync($"/api/marketmafioso/{bootScript}");
+
+        Assert.Equal(HttpStatusCode.OK, appCss.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, dotnetJs.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, bootJs.StatusCode);
+    }
+
+    [Fact]
     public async Task HostedMode_CreateResponse_ReturnsDashboardUrlsFromPublicOriginAndBasePath()
     {
         await using var application = CreateHostedApplication(
