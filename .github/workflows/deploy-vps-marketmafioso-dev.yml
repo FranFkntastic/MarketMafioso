@@ -79,11 +79,11 @@ jobs:
           ENV
           chmod 600 marketmafioso-dev.env
           cat > marketmafioso-dev.caddy <<CADDY
-          @marketmafioso {
-              path /api/marketmafioso /api/marketmafioso/*
+          handle /api/marketmafioso {
+              reverse_proxy 127.0.0.1:5088
           }
 
-          handle @marketmafioso {
+          handle /api/marketmafioso/* {
               reverse_proxy 127.0.0.1:5088
           }
           CADDY
