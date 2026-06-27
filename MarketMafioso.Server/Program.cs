@@ -1629,6 +1629,9 @@ static string RenderAcquisitionDashboard(
             <script>
                 const acquisitionQueueRefreshUrl = '{{Html(refreshUrl)}}';
                 let acquisitionResizeState = { active: false, current: null, neighbor: null, startX: 0, tableWidth: 0, currentStart: 0, neighborStart: 0, direction: 1 };
+                let acquisitionRefreshTimer = null;
+                let isStagingAcquisitionQueue = false;
+                let acquisitionCsrfRefreshPromise = null;
 
                 function getAcquisitionColumnPercent(col) { return Number.parseFloat(col.style.width || '0') || 0; }
                 function findAcquisitionResizePair(columnKey) {
@@ -1694,7 +1697,8 @@ static string RenderAcquisitionDashboard(
                     document.querySelectorAll('#acquisitionQueueTable .separator-hover').forEach(cell => cell.classList.remove('separator-hover'));
                 });
 
-                async function refreshAcquisitionQueue() {
+                async function refreshAcquisitionQueue(force = false) {
+                    if (isStagingAcquisitionQueue && !force) return;
                     try {
                         const response = await fetch(acquisitionQueueRefreshUrl, {
                             headers: { 'Accept': 'application/json' },
@@ -1720,6 +1724,17 @@ static string RenderAcquisitionDashboard(
                     }
                 }
 
+                function startAcquisitionQueueRefresh() {
+                    stopAcquisitionQueueRefresh();
+                    acquisitionRefreshTimer = window.setInterval(() => refreshAcquisitionQueue(), 3000);
+                }
+
+                function stopAcquisitionQueueRefresh() {
+                    if (acquisitionRefreshTimer == null) return;
+                    window.clearInterval(acquisitionRefreshTimer);
+                    acquisitionRefreshTimer = null;
+                }
+
                 function refreshAcquisitionCsrfToken(csrfToken) {
                     if (!csrfToken) return;
                     document.querySelectorAll('input[name="csrf"]').forEach(input => {
@@ -1739,7 +1754,7 @@ static string RenderAcquisitionDashboard(
                 document.getElementById('acquisitionQueueFilter')?.addEventListener('input', applyAcquisitionQueueFilter);
                 document.getElementById('acquisitionStatusFilter')?.addEventListener('change', applyAcquisitionQueueFilter);
                 wireAcquisitionResizeHandles();
-                window.setInterval(refreshAcquisitionQueue, 3000);
+                startAcquisitionQueueRefresh();
             </script>
         </body>
         </html>
@@ -1828,7 +1843,7 @@ static string RenderAcquisitionRequestForm(
             <div class="button-row">
                 <button type="reset">Clear</button>
                 <button type="button" onclick="addAcquisitionQueueRow()">Add to Queue</button>
-                <button class="primary" type="button" onclick="stageAcquisitionQueue()">Stage Queue</button>
+                <button id="acquisitionStageQueueButton" class="primary" type="button" onclick="stageAcquisitionQueue()">Stage Queue</button>
             </div>
             <div id="acquisitionStageStatus" class="stage-status" role="status" aria-live="polite"></div>
             <div class="section">
@@ -1998,29 +2013,133 @@ static string RenderAcquisitionRequestForm(
                 setAcquisitionStageStatus('Queue at least one resolved item first.', true);
                 return;
             }
-            let staged = 0;
-            const failures = [];
-            const currentCsrf = new FormData(form).get('csrf');
-            for (const row of acquisitionQueue) {
-                row.csrf = currentCsrf;
-                const response = await fetch(form.action, {
-                    method: 'POST',
-                    body: new URLSearchParams(row),
-                    headers: {
-                        'Accept': 'application/json'
-                    }
+            const startedAt = performance.now();
+            const stageButton = document.getElementById('acquisitionStageQueueButton');
+            isStagingAcquisitionQueue = true;
+            stopAcquisitionQueueRefresh();
+            if (stageButton) stageButton.disabled = true;
+            setAcquisitionStageStatus(`Staging 0 of ${acquisitionQueue.length} acquisition rows...`, false);
+            console.info('[MarketMafioso] Staging acquisition queue', { rows: acquisitionQueue.length });
+
+            let results;
+            try {
+                results = await stageAcquisitionRowsInBatches(form, acquisitionQueue, 4, (completed, total, row, result) => {
+                    const status = result.ok ? 'staged' : 'failed';
+                    setAcquisitionStageStatus(`Staging ${completed} of ${total} acquisition rows... ${row.itemName} ${status}.`, !result.ok, result.ok);
+                    console.debug('[MarketMafioso] Staged acquisition row', {
+                        itemName: row.itemName,
+                        itemId: row.itemId,
+                        ok: result.ok,
+                        status: result.status,
+                        elapsedMs: Math.round(result.elapsedMs)
+                    });
                 });
-                if (response.ok) {
-                    staged++;
-                } else {
-                    failures.push(`${row.itemName}: ${await readAcquisitionStageError(response)}`);
-                }
+            } finally {
+                isStagingAcquisitionQueue = false;
+                if (stageButton) stageButton.disabled = false;
+                startAcquisitionQueueRefresh();
             }
+
+            const staged = results.filter(result => result.ok).length;
+            const failures = results
+                .filter(result => !result.ok)
+                .map(result => `${result.row.itemName}: ${result.error}`);
+            console.info('[MarketMafioso] Acquisition queue staging finished', {
+                staged,
+                total: acquisitionQueue.length,
+                failed: failures.length,
+                elapsedMs: Math.round(performance.now() - startedAt)
+            });
+
             if (staged === acquisitionQueue.length) {
                 window.location.href = '{{Html(AppUrl(pathBase, "/acquisition"))}}';
             } else {
                 setAcquisitionStageStatus(`${staged} of ${acquisitionQueue.length} acquisition rows staged. ${failures.join(' ')}`, true);
             }
+        }
+
+        async function stageAcquisitionRowsInBatches(form, rows, batchSize, onSettled) {
+            const results = new Array(rows.length);
+            let nextIndex = 0;
+            let completed = 0;
+            const workerCount = Math.min(batchSize, rows.length);
+
+            async function worker() {
+                while (nextIndex < rows.length) {
+                    const index = nextIndex++;
+                    const row = rows[index];
+                    const result = await stageAcquisitionRow(form, row);
+                    results[index] = result;
+                    completed++;
+                    onSettled(completed, rows.length, row, result);
+                }
+            }
+
+            await Promise.all(Array.from({ length: workerCount }, () => worker()));
+            return results;
+        }
+
+        async function stageAcquisitionRow(form, row) {
+            let result = await postAcquisitionQueueRow(form, row);
+            if (!result.ok && result.error === 'invalid_csrf') {
+                console.warn('[MarketMafioso] Acquisition CSRF expired while staging; refreshing token and retrying row once.', {
+                    itemName: row.itemName,
+                    itemId: row.itemId
+                });
+                await refreshAcquisitionCsrfForStaging();
+                result = await postAcquisitionQueueRow(form, row);
+            }
+
+            return { ...result, row };
+        }
+
+        async function refreshAcquisitionCsrfForStaging() {
+            acquisitionCsrfRefreshPromise ??= refreshAcquisitionQueue(true)
+                .finally(() => {
+                    acquisitionCsrfRefreshPromise = null;
+                });
+            await acquisitionCsrfRefreshPromise;
+        }
+
+        async function postAcquisitionQueueRow(form, row) {
+            const startedAt = performance.now();
+            try {
+                row.csrf = getCurrentAcquisitionCsrfToken(form);
+                const response = await fetch(form.action, {
+                    method: 'POST',
+                    body: new URLSearchParams(row),
+                    headers: {
+                        'Accept': 'application/json'
+                    },
+                    credentials: 'same-origin'
+                });
+                if (response.ok) {
+                    return { ok: true, status: response.status, elapsedMs: performance.now() - startedAt };
+                }
+
+                return {
+                    ok: false,
+                    status: response.status,
+                    error: await readAcquisitionStageError(response),
+                    elapsedMs: performance.now() - startedAt
+                };
+            } catch (error) {
+                console.error('[MarketMafioso] Acquisition row staging request failed.', {
+                    itemName: row.itemName,
+                    itemId: row.itemId,
+                    error
+                });
+                return {
+                    ok: false,
+                    status: 0,
+                    error: error instanceof Error ? error.message : 'network_error',
+                    elapsedMs: performance.now() - startedAt
+                };
+            }
+        }
+
+        function getCurrentAcquisitionCsrfToken(form) {
+            return new FormData(form).get('csrf') || '';
         }
 
         async function readAcquisitionStageError(response) {
