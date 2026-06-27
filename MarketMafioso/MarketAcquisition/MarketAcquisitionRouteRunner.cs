@@ -313,6 +313,17 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         return MarketAcquisitionRouteActionResult.Ok(StatusMessage);
     }
 
+    public MarketAcquisitionRouteActionResult RecordAutomationSnapshot(MarketBoardAutomationSnapshot snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+
+        if (!diagnostics.IsEnabled)
+            return MarketAcquisitionRouteActionResult.Ok(StatusMessage);
+
+        diagnostics.RecordAutomationSnapshot(snapshot);
+        return MarketAcquisitionRouteActionResult.Ok(StatusMessage);
+    }
+
     public MarketAcquisitionRouteActionResult FinalizeInputCaptureLog()
     {
         if (diagnosticsRequested && IsRunning)
@@ -369,12 +380,16 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
             searchResult.Message,
             details);
 
+        var snapshot = CreateSearchAutomationSnapshot(searchResult, "Observed", details);
+        diagnostics.RecordAutomationSnapshot(snapshot);
+
         if (searchResult.IsInProgress &&
             itemSearchAutomationStartedUtc is { } started &&
             nowUtc - started > ItemSearchAutomationTimeout)
         {
             var timeoutMessage =
                 $"Market board item search automation timed out after {ItemSearchAutomationTimeout.TotalSeconds:N0}s while waiting for listings. Last status: {searchResult.Status}.";
+            diagnostics.RecordAutomationSnapshot(CreateSearchAutomationSnapshot(searchResult, "TimedOut", details));
             return FailRoute(timeoutMessage);
         }
 
@@ -614,6 +629,50 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         diagnostics = MarketAcquisitionRouteDiagnostics.Disabled;
     }
 
+    private static MarketBoardAutomationSnapshot CreateSearchAutomationSnapshot(
+        MarketBoardItemSearchResult searchResult,
+        string phase,
+        IReadOnlyDictionary<string, string?> details)
+    {
+        var outcome = phase.Equals("TimedOut", StringComparison.OrdinalIgnoreCase)
+            ? MarketBoardAutomationOutcome.Fatal
+            : ClassifySearchOutcome(searchResult);
+        return MarketBoardAutomationSnapshot.Create(
+            "SearchItem",
+            phase,
+            "ItemSearchResultReady",
+            searchResult.Status,
+            outcome,
+            ChooseSearchNextAction(searchResult, outcome),
+            details);
+    }
+
+    private static MarketBoardAutomationOutcome ClassifySearchOutcome(MarketBoardItemSearchResult searchResult)
+    {
+        if (searchResult.ReadyForListings)
+            return MarketBoardAutomationOutcome.Success;
+
+        if (searchResult.IsInProgress)
+            return MarketBoardAutomationOutcome.InProgress;
+
+        return MarketBoardAutomationOutcome.Recoverable;
+    }
+
+    private static string ChooseSearchNextAction(
+        MarketBoardItemSearchResult searchResult,
+        MarketBoardAutomationOutcome outcome)
+    {
+        if (outcome == MarketBoardAutomationOutcome.Fatal)
+            return "CaptureInputState";
+
+        if (searchResult.ReadyForListings)
+            return "ReadLiveListings";
+
+        if (searchResult.IsInProgress)
+            return "ContinuePolling";
+
+        return "TryAlternateInputPath";
+    }
 }
 
 public sealed record MarketAcquisitionRouteActionResult

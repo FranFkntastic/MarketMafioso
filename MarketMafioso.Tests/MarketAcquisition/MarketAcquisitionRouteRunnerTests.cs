@@ -373,6 +373,48 @@ public sealed class MarketAcquisitionRouteRunnerTests
     }
 
     [Fact]
+    public void RecordSearchResult_LogsAutomationSnapshotWhenSearchTimesOut()
+    {
+        var directory = CreateTempDirectory();
+        using var runner = new MarketMafioso.MarketAcquisition.MarketAcquisitionRouteRunner(directory);
+        runner.Start(CreatePlan("Maduin"), enableDiagnostics: true);
+        runner.RecordCurrentWorld("Maduin");
+        var startedAt = DateTimeOffset.UnixEpoch;
+
+        runner.RecordSearchResult(new MarketMafioso.MarketAcquisition.MarketBoardItemSearchResult
+        {
+            Status = "SearchSent",
+            Message = "Searching market board for Varnish (7017).",
+            Details = new Dictionary<string, string?>
+            {
+                ["searchSource"] = "AutofocusedTextInputRewrite",
+                ["searchButtonEnabledAfterCallbacks"] = false.ToString(),
+            },
+        }, startedAt);
+
+        runner.RecordSearchResult(new MarketMafioso.MarketAcquisition.MarketBoardItemSearchResult
+        {
+            Status = "SearchSent",
+            Message = "Searching market board for Varnish (7017).",
+            Details = new Dictionary<string, string?>
+            {
+                ["searchSource"] = "AutofocusedTextInputRewrite",
+                ["searchButtonEnabledAfterCallbacks"] = false.ToString(),
+            },
+        }, startedAt.AddSeconds(16));
+
+        var text = ReadLog(runner.LastDiagnosticFilePath!);
+        Assert.Contains("automation-snapshot", text, StringComparison.Ordinal);
+        Assert.Contains("step: SearchItem", text, StringComparison.Ordinal);
+        Assert.Contains("phase: TimedOut", text, StringComparison.Ordinal);
+        Assert.Contains("expected: ItemSearchResultReady", text, StringComparison.Ordinal);
+        Assert.Contains("observed: SearchSent", text, StringComparison.Ordinal);
+        Assert.Contains("outcome: Fatal", text, StringComparison.Ordinal);
+        Assert.Contains("nextAction: CaptureInputState", text, StringComparison.Ordinal);
+        Assert.Contains("searchSource: AutofocusedTextInputRewrite", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void RecordSearchResult_MarksSubmittedOnlyWhenListingsAreReady()
     {
         using var runner = CreateRunner();
@@ -414,6 +456,29 @@ public sealed class MarketAcquisitionRouteRunnerTests
         Assert.Contains("itemSearchVisible: True", text, StringComparison.Ordinal);
         Assert.Contains("selectYesnoVisible: False", text, StringComparison.Ordinal);
         Assert.Contains("focusedNode: AtkComponentTextInput#12", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RecordAutomationSnapshot_WritesSnapshotToActiveRouteDiagnostics()
+    {
+        var directory = CreateTempDirectory();
+        using var runner = new MarketMafioso.MarketAcquisition.MarketAcquisitionRouteRunner(directory);
+        runner.Start(CreatePlan("Maduin"), enableDiagnostics: true);
+
+        var result = runner.RecordAutomationSnapshot(
+            MarketMafioso.MarketAcquisition.MarketBoardAutomationSnapshot.Create(
+                "BuyListing",
+                "AfterConfirmation",
+                "ListingRemoved",
+                "MarketBoardNotOpen",
+                MarketMafioso.MarketAcquisition.MarketBoardAutomationOutcome.ExpectedAlternate,
+                "TreatListingAsRemoved"));
+
+        Assert.True(result.Success);
+        var text = ReadLog(runner.LastDiagnosticFilePath!);
+        Assert.Contains("automation-snapshot", text, StringComparison.Ordinal);
+        Assert.Contains("step: BuyListing", text, StringComparison.Ordinal);
+        Assert.Contains("outcome: ExpectedAlternate", text, StringComparison.Ordinal);
     }
 
     [Fact]

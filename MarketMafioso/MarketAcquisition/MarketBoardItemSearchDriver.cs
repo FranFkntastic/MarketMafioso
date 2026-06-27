@@ -399,11 +399,11 @@ public sealed class MarketBoardItemSearchDriver
                 switch (step)
                 {
                     case MarketBoardItemSearchSubmitStep.ClearSearchText:
-                        SetSearchInputText(addon, input, inputBase, string.Empty);
+                        SetSearchInputText(addon, input, inputBase, string.Empty, updateAddonSearchStrings: false);
                         callbackResults.Add(step.ToString());
                         break;
                     case MarketBoardItemSearchSubmitStep.SetSearchText:
-                        SetSearchInputText(addon, input, inputBase, searchText);
+                        SetSearchInputText(addon, input, inputBase, searchText, updateAddonSearchStrings: false);
                         callbackResults.Add(step.ToString());
                         break;
                     case MarketBoardItemSearchSubmitStep.TextChanged:
@@ -421,7 +421,7 @@ public sealed class MarketBoardItemSearchDriver
         }
         else
         {
-            SetSearchInputText(addon, input, inputBase, searchText);
+            SetSearchInputText(addon, input, inputBase, searchText, updateAddonSearchStrings: true);
             foreach (var callback in GetSearchSubmitCallbackSequence())
                 callbackResults.Add(InvokeInputCallback(addon, inputBase, callback));
 
@@ -438,10 +438,15 @@ public sealed class MarketBoardItemSearchDriver
         AddonItemSearch* addon,
         AtkComponentTextInput* input,
         AtkComponentInputBase* inputBase,
-        string text)
+        string text,
+        bool updateAddonSearchStrings)
     {
-        addon->SearchText.SetString(text);
-        addon->SearchText2.SetString(text);
+        if (updateAddonSearchStrings)
+        {
+            addon->SearchText.SetString(text);
+            addon->SearchText2.SetString(text);
+        }
+
         input->SetText(text);
         inputBase->SelectionStart = text.Length;
         inputBase->SelectionEnd = text.Length;

@@ -72,6 +72,10 @@ public sealed class MarketAcquisitionGuidedRouteSessionTests
 
         session.RecordProbe("Zalera", CreateCandidatePlan(status: "Ready", quantity: 20, gil: 1_000));
 
+        Assert.True(session.ShouldMonitorActiveStop);
+
+        session.RecordWorldPurchaseBatchComplete("Zalera", purchasedQuantity: 20, spentGil: 1_000);
+
         Assert.False(session.ShouldMonitorActiveStop);
     }
 
@@ -104,30 +108,61 @@ public sealed class MarketAcquisitionGuidedRouteSessionTests
     }
 
     [Fact]
-    public void RecordProbe_AdvancesToNextStop()
+    public void RecordProbe_WithSafeListingsStartsPurchasing()
     {
         var session = MarketMafioso.MarketAcquisition.MarketAcquisitionGuidedRouteSession.Start(CreatePlan("Zalera", "Maduin"));
 
         var result = session.RecordProbe("Zalera", CreateCandidatePlan(status: "Ready", quantity: 20, gil: 1_000));
 
         Assert.True(result.Success);
-        Assert.Equal("Maduin", session.ActiveStop?.WorldName);
-        Assert.Equal("Complete", session.Stops[0].Status);
+        Assert.Equal("Zalera", session.ActiveStop?.WorldName);
+        Assert.Equal("Purchasing", session.Stops[0].Status);
         Assert.Equal(20u, session.Stops[0].WouldBuyQuantity);
         Assert.Equal(1_000u, session.Stops[0].WouldSpendGil);
     }
 
     [Fact]
-    public void RecordProbe_CompletesAfterLastStop()
+    public void RecordWorldPurchaseBatchComplete_AdvancesToNextStop()
+    {
+        var session = MarketMafioso.MarketAcquisition.MarketAcquisitionGuidedRouteSession.Start(CreatePlan("Zalera", "Maduin"));
+        session.RecordProbe("Zalera", CreateCandidatePlan(status: "Ready", quantity: 20, gil: 1_000));
+
+        var result = session.RecordWorldPurchaseBatchComplete("Zalera", purchasedQuantity: 20, spentGil: 1_000);
+
+        Assert.True(result.Success);
+        Assert.Equal("Maduin", session.ActiveStop?.WorldName);
+        Assert.Equal("Complete", session.Stops[0].Status);
+        Assert.Equal(20u, session.Stops[0].PurchasedQuantity);
+        Assert.Equal(1_000u, session.Stops[0].SpentGil);
+    }
+
+    [Fact]
+    public void RecordProbe_CompletesAfterLastStopWhenNoSafeListingsRemain()
     {
         var session = MarketMafioso.MarketAcquisition.MarketAcquisitionGuidedRouteSession.Start(CreatePlan("Zalera"));
 
-        var result = session.RecordProbe("Zalera", CreateCandidatePlan(status: "UnderProcured", quantity: 4, gil: 400));
+        var result = session.RecordProbe("Zalera", CreateCandidatePlan(status: "NoSafeListings", quantity: 0, gil: 0));
 
         Assert.True(result.Success);
         Assert.Equal("Complete", session.Status);
         Assert.Null(session.ActiveStop);
-        Assert.Equal("UnderProcured", session.Stops[0].LiveCandidateStatus);
+        Assert.Equal("NoSafeListings", session.Stops[0].LiveCandidateStatus);
+    }
+
+    [Fact]
+    public void RecordWorldPurchaseBatchComplete_CompletesAfterLastPurchasingStop()
+    {
+        var session = MarketMafioso.MarketAcquisition.MarketAcquisitionGuidedRouteSession.Start(CreatePlan("Zalera"));
+        session.RecordProbe("Zalera", CreateCandidatePlan(status: "Ready", quantity: 4, gil: 400));
+
+        var result = session.RecordWorldPurchaseBatchComplete("Zalera", purchasedQuantity: 4, spentGil: 400);
+
+        Assert.True(result.Success);
+        Assert.Equal("Complete", session.Status);
+        Assert.Null(session.ActiveStop);
+        Assert.Equal("Ready", session.Stops[0].LiveCandidateStatus);
+        Assert.Equal(4u, session.Stops[0].PurchasedQuantity);
+        Assert.Equal(400u, session.Stops[0].SpentGil);
     }
 
     [Fact]

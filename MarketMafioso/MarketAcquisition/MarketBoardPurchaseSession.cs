@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 
 namespace MarketMafioso.MarketAcquisition;
 
@@ -67,6 +68,24 @@ public sealed record MarketBoardPurchaseSession
         if (!Status.Equals("WaitingForListingRemoval", StringComparison.OrdinalIgnoreCase))
             return this;
 
+        if (freshRead.Status.Equals("MarketBoardNotOpen", StringComparison.OrdinalIgnoreCase))
+        {
+            return this with
+            {
+                Status = "Completed",
+                Message = "Confirmed purchase: the market-board result window closed after confirmation, so the guarded listing is considered removed.",
+            };
+        }
+
+        if (freshRead.Status.Equals("NoListings", StringComparison.OrdinalIgnoreCase))
+        {
+            return this with
+            {
+                Status = "Completed",
+                Message = "Confirmed purchase: the market-board search has no remaining live listings.",
+            };
+        }
+
         var revalidation = MarketBoardPurchasePlanner.RevalidateCandidate(Candidate, freshRead);
         if (revalidation.Status.Equals("ListingMissing", StringComparison.OrdinalIgnoreCase))
         {
@@ -89,6 +108,59 @@ public sealed record MarketBoardPurchaseSession
         {
             Status = "ListingRemovalTimeout",
             Message = $"Purchase confirmation was accepted, but the guarded listing is still present or unreadable: {revalidation.Message}",
+        };
+    }
+
+    public MarketBoardAutomationSnapshot CreateFreshReadSnapshot(MarketBoardReadResult freshRead)
+    {
+        ArgumentNullException.ThrowIfNull(freshRead);
+
+        var outcome = ClassifyFreshReadOutcome(freshRead);
+        return MarketBoardAutomationSnapshot.Create(
+            "BuyListing",
+            "AfterConfirmation",
+            "ListingRemoved",
+            freshRead.Status,
+            outcome,
+            ChooseFreshReadNextAction(outcome),
+            new Dictionary<string, string?>
+            {
+                ["candidateItemId"] = Candidate.ItemId.ToString(),
+                ["candidateWorld"] = Candidate.WorldName,
+                ["candidateListingId"] = Candidate.ListingId,
+                ["candidateRetainerId"] = Candidate.RetainerId,
+                ["candidateQuantity"] = Candidate.Quantity.ToString(),
+                ["candidateUnitPrice"] = Candidate.UnitPrice.ToString(),
+                ["readItemId"] = freshRead.ItemId == 0 ? null : freshRead.ItemId.ToString(),
+                ["readWorld"] = string.IsNullOrWhiteSpace(freshRead.WorldName) ? null : freshRead.WorldName,
+                ["readListingCount"] = freshRead.Listings.Count.ToString(),
+            });
+    }
+
+    private MarketBoardAutomationOutcome ClassifyFreshReadOutcome(MarketBoardReadResult freshRead)
+    {
+        if (freshRead.Status is "MarketBoardNotOpen" or "NoListings")
+            return MarketBoardAutomationOutcome.ExpectedAlternate;
+
+        if (!freshRead.Status.Equals("Ready", StringComparison.OrdinalIgnoreCase))
+            return MarketBoardAutomationOutcome.Recoverable;
+
+        var revalidation = MarketBoardPurchasePlanner.RevalidateCandidate(Candidate, freshRead);
+        return revalidation.Status.Equals("ListingMissing", StringComparison.OrdinalIgnoreCase)
+            ? MarketBoardAutomationOutcome.Success
+            : MarketBoardAutomationOutcome.InProgress;
+    }
+
+    private static string ChooseFreshReadNextAction(MarketBoardAutomationOutcome outcome)
+    {
+        return outcome switch
+        {
+            MarketBoardAutomationOutcome.Success => "BeginNextPurchase",
+            MarketBoardAutomationOutcome.ExpectedAlternate => "TreatListingAsRemoved",
+            MarketBoardAutomationOutcome.Recoverable => "ContinueMonitoring",
+            MarketBoardAutomationOutcome.InProgress => "ContinueMonitoring",
+            MarketBoardAutomationOutcome.Fatal => "CaptureInputState",
+            _ => "ContinueMonitoring",
         };
     }
 }
