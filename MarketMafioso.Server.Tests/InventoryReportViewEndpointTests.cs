@@ -521,6 +521,8 @@ public sealed class InventoryReportViewEndpointTests
 
         Assert.Contains("<base href=\"/api/marketmafioso/\" />", dashboard, StringComparison.Ordinal);
         Assert.Contains("_framework/blazor", dashboard, StringComparison.Ordinal);
+        Assert.Contains("_framework/blazor.webassembly.", dashboard, StringComparison.Ordinal);
+        Assert.DoesNotContain("[.{fingerprint}]", dashboard, StringComparison.Ordinal);
         Assert.DoesNotContain("href=\"/api/marketmafioso/api/reports", dashboard, StringComparison.Ordinal);
     }
 
@@ -594,6 +596,7 @@ public sealed class InventoryReportViewEndpointTests
         var dashboard = await client.GetStringAsync("/api/marketmafioso/");
 
         Assert.Contains("<base href=\"/api/marketmafioso/\" />", dashboard, StringComparison.Ordinal);
+        Assert.DoesNotContain("[.{fingerprint}]", dashboard, StringComparison.Ordinal);
         Assert.DoesNotContain(contentRoot!, dashboard, StringComparison.Ordinal);
     }
 

@@ -476,7 +476,30 @@ static async Task<IResult> ServeBlazorIndex(
         ? "/"
         : $"{request.PathBase.ToString().TrimEnd('/')}/";
     html = html.Replace("<base href=\"/\" />", $"<base href=\"{Html(baseHref)}\" />", StringComparison.Ordinal);
+    html = html.Replace(
+        "_framework/blazor.webassembly#[.{fingerprint}].js",
+        ResolveBlazorBootScript(environment),
+        StringComparison.Ordinal);
     return Results.Content(html, "text/html; charset=utf-8", Encoding.UTF8);
+}
+
+static string ResolveBlazorBootScript(IWebHostEnvironment environment)
+{
+    var directory = environment.WebRootFileProvider.GetDirectoryContents("_framework");
+    if (!directory.Exists)
+        throw new DirectoryNotFoundException("Dashboard framework assets were not found under wwwroot/_framework.");
+
+    var bootScript = directory
+        .Where(file => !file.IsDirectory &&
+                       file.Name.StartsWith("blazor.webassembly.", StringComparison.Ordinal) &&
+                       file.Name.EndsWith(".js", StringComparison.Ordinal))
+        .OrderBy(file => file.Name, StringComparer.Ordinal)
+        .FirstOrDefault();
+
+    if (bootScript == null)
+        throw new FileNotFoundException("Dashboard Blazor WebAssembly boot script was not found under wwwroot/_framework.");
+
+    return $"_framework/{bootScript.Name}";
 }
 
 async Task<IResult> ListPendingAcquisitionRequests(
