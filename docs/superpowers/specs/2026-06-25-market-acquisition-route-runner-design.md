@@ -40,7 +40,7 @@ Each world stop progresses through this read-only pipeline:
 5. Submit the planned item search.
 6. Wait for live search results.
 7. Read live listings.
-8. Build the live dry-run candidate decision.
+8. Build the live candidate decision.
 9. Record the stop and advance to the next world.
 
 This pass does not execute purchases. It establishes the lifecycle and diagnostic surface needed before purchase automation.
@@ -54,7 +54,7 @@ Diagnostic route runs write a timestamped log under the plugin config directory.
 - active world and stop status transitions
 - Lifestream command execution
 - market board search result status
-- live probe and dry-run result status
+- live probe and live candidate result status
 - failures with exception type and message
 
 Search-mode internals can be added to this same diagnostic file once the item-search driver is instrumented in the follow-up pass.

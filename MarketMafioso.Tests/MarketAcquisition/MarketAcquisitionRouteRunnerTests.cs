@@ -199,7 +199,7 @@ public sealed class MarketAcquisitionRouteRunnerTests
         runner.ExecutePendingTravelCommand(_ => true);
         runner.RecordCurrentWorld("Maduin");
 
-        var result = runner.RecordProbe("Maduin", CreateDryRun(status: "Ready", quantity: 10, gil: 100));
+        var result = runner.RecordProbe("Maduin", CreateCandidatePlan(status: "Ready", quantity: 10, gil: 100));
 
         Assert.True(result.Success);
         Assert.Equal("Completed", runner.State);
@@ -215,7 +215,7 @@ public sealed class MarketAcquisitionRouteRunnerTests
         runner.Start(CreatePlan("Rafflesia", "Zalera"));
         runner.RecordCurrentWorld("Rafflesia");
 
-        var probe = runner.RecordProbe("Rafflesia", CreateDryRun(status: "Ready", quantity: 10, gil: 100));
+        var probe = runner.RecordProbe("Rafflesia", CreateCandidatePlan(status: "Ready", quantity: 10, gil: 100));
         var blocked = runner.ExecutePendingTravelCommand(_ => throw new InvalidOperationException("Travel should wait for market board close."));
 
         Assert.True(probe.Success);
@@ -231,7 +231,7 @@ public sealed class MarketAcquisitionRouteRunnerTests
         using var runner = CreateRunner();
         runner.Start(CreatePlan("Rafflesia", "Zalera"));
         runner.RecordCurrentWorld("Rafflesia");
-        runner.RecordProbe("Rafflesia", CreateDryRun(status: "Ready", quantity: 10, gil: 100));
+        runner.RecordProbe("Rafflesia", CreateCandidatePlan(status: "Ready", quantity: 10, gil: 100));
         string? command = null;
 
         var closed = runner.RecordMarketBoardClosedBeforeTravel();
@@ -446,14 +446,14 @@ public sealed class MarketAcquisitionRouteRunnerTests
                 .ToArray(),
         };
 
-    private static MarketMafioso.MarketAcquisition.MarketAcquisitionLiveDryRun CreateDryRun(
+    private static MarketMafioso.MarketAcquisition.MarketAcquisitionLiveCandidatePlan CreateCandidatePlan(
         string status,
         uint quantity,
         uint gil) =>
         new()
         {
             Status = status,
-            Message = "Dry run result.",
+            Message = "Live candidate result.",
             RequestedQuantity = 999,
             WouldBuyQuantity = quantity,
             WouldSpendGil = gil,

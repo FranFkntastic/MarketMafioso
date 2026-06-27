@@ -1,9 +1,9 @@
 namespace MarketMafioso.Tests.MarketAcquisition;
 
-public sealed class MarketAcquisitionLiveDryRunPlannerTests
+public sealed class MarketAcquisitionLiveCandidatePlannerTests
 {
     [Fact]
-    public void BuildDryRun_TargetQuantityUsesLowestConfirmedLivePriceAndAllowsWholeStackOverage()
+    public void BuildCandidatePlan_TargetQuantityUsesLowestConfirmedLivePriceAndAllowsWholeStackOverage()
     {
         var request = CreateRequest(quantityMode: "TargetQuantity", quantity: 10, maxUnitPrice: 100);
         var plan = CreatePlan();
@@ -14,23 +14,23 @@ public sealed class MarketAcquisitionLiveDryRunPlannerTests
             CreateLiveListing("too-expensive", quantity: 99, unitPrice: 101),
         };
 
-        var dryRun = MarketMafioso.MarketAcquisition.MarketAcquisitionLiveDryRunPlanner.BuildDryRun(
+        var candidatePlan = MarketMafioso.MarketAcquisition.MarketAcquisitionLiveCandidatePlanner.BuildCandidatePlan(
             request,
             plan,
             "Gilgamesh",
             itemId: 2,
             liveListings);
 
-        Assert.Equal("Ready", dryRun.Status);
-        Assert.Equal(12u, dryRun.WouldBuyQuantity);
-        Assert.Equal(600u, dryRun.WouldSpendGil);
-        Assert.Equal(["new-cheap"], dryRun.Rows.Where(row => row.Decision == "WouldBuy").Select(row => row.LiveListing.ListingId).ToArray());
-        Assert.Equal("TargetSatisfied", dryRun.Rows.Single(row => row.LiveListing.ListingId == "planned-expensive").Reason);
-        Assert.Equal("AboveThreshold", dryRun.Rows.Single(row => row.LiveListing.ListingId == "too-expensive").Reason);
+        Assert.Equal("Ready", candidatePlan.Status);
+        Assert.Equal(12u, candidatePlan.WouldBuyQuantity);
+        Assert.Equal(600u, candidatePlan.WouldSpendGil);
+        Assert.Equal(["new-cheap"], candidatePlan.Rows.Where(row => row.Decision == "WouldBuy").Select(row => row.LiveListing.ListingId).ToArray());
+        Assert.Equal("TargetSatisfied", candidatePlan.Rows.Single(row => row.LiveListing.ListingId == "planned-expensive").Reason);
+        Assert.Equal("AboveThreshold", candidatePlan.Rows.Single(row => row.LiveListing.ListingId == "too-expensive").Reason);
     }
 
     [Fact]
-    public void BuildDryRun_AllBelowThresholdIncludesEverySafeVisibleListing()
+    public void BuildCandidatePlan_AllBelowThresholdIncludesEverySafeVisibleListing()
     {
         var request = CreateRequest(quantityMode: "AllBelowThreshold", quantity: 0, maxUnitPrice: 100, maxTotalGil: 0);
         var plan = CreatePlan();
@@ -41,21 +41,21 @@ public sealed class MarketAcquisitionLiveDryRunPlannerTests
             CreateLiveListing("too-expensive", quantity: 1, unitPrice: 101),
         };
 
-        var dryRun = MarketMafioso.MarketAcquisition.MarketAcquisitionLiveDryRunPlanner.BuildDryRun(
+        var candidatePlan = MarketMafioso.MarketAcquisition.MarketAcquisitionLiveCandidatePlanner.BuildCandidatePlan(
             request,
             plan,
             "Gilgamesh",
             itemId: 2,
             liveListings);
 
-        Assert.Equal("Ready", dryRun.Status);
-        Assert.Equal(5u, dryRun.WouldBuyQuantity);
-        Assert.Equal(380u, dryRun.WouldSpendGil);
-        Assert.Equal(["new-cheap", "planned"], dryRun.Rows.Where(row => row.Decision == "WouldBuy").Select(row => row.LiveListing.ListingId).ToArray());
+        Assert.Equal("Ready", candidatePlan.Status);
+        Assert.Equal(5u, candidatePlan.WouldBuyQuantity);
+        Assert.Equal(380u, candidatePlan.WouldSpendGil);
+        Assert.Equal(["new-cheap", "planned"], candidatePlan.Rows.Where(row => row.Decision == "WouldBuy").Select(row => row.LiveListing.ListingId).ToArray());
     }
 
     [Fact]
-    public void BuildDryRun_AllBelowThresholdRespectsMaxQuantityWhenProvided()
+    public void BuildCandidatePlan_AllBelowThresholdRespectsMaxQuantityWhenProvided()
     {
         var request = CreateRequest(quantityMode: "AllBelowThreshold", quantity: 5, maxUnitPrice: 100, maxTotalGil: 0);
         var plan = CreatePlan();
@@ -66,21 +66,21 @@ public sealed class MarketAcquisitionLiveDryRunPlannerTests
             CreateLiveListing("second", quantity: 2, unitPrice: 90),
         };
 
-        var dryRun = MarketMafioso.MarketAcquisition.MarketAcquisitionLiveDryRunPlanner.BuildDryRun(
+        var candidatePlan = MarketMafioso.MarketAcquisition.MarketAcquisitionLiveCandidatePlanner.BuildCandidatePlan(
             request,
             plan,
             "Gilgamesh",
             itemId: 2,
             liveListings);
 
-        Assert.Equal("Ready", dryRun.Status);
-        Assert.Equal(5u, dryRun.WouldBuyQuantity);
-        Assert.Equal(["first", "second"], dryRun.Rows.Where(row => row.Decision == "WouldBuy").Select(row => row.LiveListing.ListingId).ToArray());
-        Assert.Equal("MaxQuantityExceeded", dryRun.Rows.Single(row => row.LiveListing.ListingId == "would-exceed-cap").Reason);
+        Assert.Equal("Ready", candidatePlan.Status);
+        Assert.Equal(5u, candidatePlan.WouldBuyQuantity);
+        Assert.Equal(["first", "second"], candidatePlan.Rows.Where(row => row.Decision == "WouldBuy").Select(row => row.LiveListing.ListingId).ToArray());
+        Assert.Equal("MaxQuantityExceeded", candidatePlan.Rows.Single(row => row.LiveListing.ListingId == "would-exceed-cap").Reason);
     }
 
     [Fact]
-    public void BuildDryRun_ReportsUnderProcurementWhenTargetQuantityCannotBeMet()
+    public void BuildCandidatePlan_ReportsUnderProcurementWhenTargetQuantityCannotBeMet()
     {
         var request = CreateRequest(quantityMode: "TargetQuantity", quantity: 10, maxUnitPrice: 100);
         var plan = CreatePlan();
@@ -89,27 +89,27 @@ public sealed class MarketAcquisitionLiveDryRunPlannerTests
             CreateLiveListing("available", quantity: 4, unitPrice: 50),
         };
 
-        var dryRun = MarketMafioso.MarketAcquisition.MarketAcquisitionLiveDryRunPlanner.BuildDryRun(
+        var candidatePlan = MarketMafioso.MarketAcquisition.MarketAcquisitionLiveCandidatePlanner.BuildCandidatePlan(
             request,
             plan,
             "Gilgamesh",
             itemId: 2,
             liveListings);
 
-        Assert.Equal("UnderProcured", dryRun.Status);
-        Assert.Equal(4u, dryRun.WouldBuyQuantity);
+        Assert.Equal("UnderProcured", candidatePlan.Status);
+        Assert.Equal(4u, candidatePlan.WouldBuyQuantity);
     }
 
     [Theory]
     [InlineData("Exact")]
     [InlineData("UpTo")]
-    public void BuildDryRun_RejectsRemovedQuantityModes(string quantityMode)
+    public void BuildCandidatePlan_RejectsRemovedQuantityModes(string quantityMode)
     {
         var request = CreateRequest(quantityMode: quantityMode, quantity: 10, maxUnitPrice: 100);
         var plan = CreatePlan();
 
         var ex = Assert.Throws<InvalidOperationException>(() =>
-            MarketMafioso.MarketAcquisition.MarketAcquisitionLiveDryRunPlanner.BuildDryRun(
+            MarketMafioso.MarketAcquisition.MarketAcquisitionLiveCandidatePlanner.BuildCandidatePlan(
                 request,
                 plan,
                 "Gilgamesh",
@@ -120,7 +120,7 @@ public sealed class MarketAcquisitionLiveDryRunPlannerTests
     }
 
     [Fact]
-    public void BuildDryRun_RespectsHqPolicyAndGilCap()
+    public void BuildCandidatePlan_RespectsHqPolicyAndGilCap()
     {
         var request = CreateRequest(quantityMode: "AllBelowThreshold", quantity: 999, maxUnitPrice: 100, maxTotalGil: 500, hqPolicy: "HQOnly");
         var plan = CreatePlan();
@@ -131,27 +131,27 @@ public sealed class MarketAcquisitionLiveDryRunPlannerTests
             CreateLiveListing("hq-over-cap", quantity: 3, unitPrice: 100, hq: true),
         };
 
-        var dryRun = MarketMafioso.MarketAcquisition.MarketAcquisitionLiveDryRunPlanner.BuildDryRun(
+        var candidatePlan = MarketMafioso.MarketAcquisition.MarketAcquisitionLiveCandidatePlanner.BuildCandidatePlan(
             request,
             plan,
             "Gilgamesh",
             itemId: 2,
             liveListings);
 
-        Assert.Equal("Ready", dryRun.Status);
-        Assert.Equal(["hq-first"], dryRun.Rows.Where(row => row.Decision == "WouldBuy").Select(row => row.LiveListing.ListingId).ToArray());
-        Assert.Equal("HqPolicyMismatch", dryRun.Rows.Single(row => row.LiveListing.ListingId == "nq").Reason);
-        Assert.Equal("GilCapExceeded", dryRun.Rows.Single(row => row.LiveListing.ListingId == "hq-over-cap").Reason);
+        Assert.Equal("Ready", candidatePlan.Status);
+        Assert.Equal(["hq-first"], candidatePlan.Rows.Where(row => row.Decision == "WouldBuy").Select(row => row.LiveListing.ListingId).ToArray());
+        Assert.Equal("HqPolicyMismatch", candidatePlan.Rows.Single(row => row.LiveListing.ListingId == "nq").Reason);
+        Assert.Equal("GilCapExceeded", candidatePlan.Rows.Single(row => row.LiveListing.ListingId == "hq-over-cap").Reason);
     }
 
     [Fact]
-    public void BuildDryRun_FailsClosedWhenCurrentWorldIsNotInPlan()
+    public void BuildCandidatePlan_FailsClosedWhenCurrentWorldIsNotInPlan()
     {
         var request = CreateRequest();
         var plan = CreatePlan();
 
         var ex = Assert.Throws<InvalidOperationException>(() =>
-            MarketMafioso.MarketAcquisition.MarketAcquisitionLiveDryRunPlanner.BuildDryRun(
+            MarketMafioso.MarketAcquisition.MarketAcquisitionLiveCandidatePlanner.BuildCandidatePlan(
                 request,
                 plan,
                 "Faerie",

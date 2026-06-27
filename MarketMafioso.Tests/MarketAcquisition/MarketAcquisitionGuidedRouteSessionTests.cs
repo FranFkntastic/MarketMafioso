@@ -70,7 +70,7 @@ public sealed class MarketAcquisitionGuidedRouteSessionTests
 
         Assert.True(session.ShouldMonitorActiveStop);
 
-        session.RecordProbe("Zalera", CreateDryRun(status: "Ready", quantity: 20, gil: 1_000));
+        session.RecordProbe("Zalera", CreateCandidatePlan(status: "Ready", quantity: 20, gil: 1_000));
 
         Assert.False(session.ShouldMonitorActiveStop);
     }
@@ -108,7 +108,7 @@ public sealed class MarketAcquisitionGuidedRouteSessionTests
     {
         var session = MarketMafioso.MarketAcquisition.MarketAcquisitionGuidedRouteSession.Start(CreatePlan("Zalera", "Maduin"));
 
-        var result = session.RecordProbe("Zalera", CreateDryRun(status: "Ready", quantity: 20, gil: 1_000));
+        var result = session.RecordProbe("Zalera", CreateCandidatePlan(status: "Ready", quantity: 20, gil: 1_000));
 
         Assert.True(result.Success);
         Assert.Equal("Maduin", session.ActiveStop?.WorldName);
@@ -122,12 +122,12 @@ public sealed class MarketAcquisitionGuidedRouteSessionTests
     {
         var session = MarketMafioso.MarketAcquisition.MarketAcquisitionGuidedRouteSession.Start(CreatePlan("Zalera"));
 
-        var result = session.RecordProbe("Zalera", CreateDryRun(status: "UnderProcured", quantity: 4, gil: 400));
+        var result = session.RecordProbe("Zalera", CreateCandidatePlan(status: "UnderProcured", quantity: 4, gil: 400));
 
         Assert.True(result.Success);
         Assert.Equal("Complete", session.Status);
         Assert.Null(session.ActiveStop);
-        Assert.Equal("UnderProcured", session.Stops[0].DryRunStatus);
+        Assert.Equal("UnderProcured", session.Stops[0].LiveCandidateStatus);
     }
 
     [Fact]
@@ -135,7 +135,7 @@ public sealed class MarketAcquisitionGuidedRouteSessionTests
     {
         var session = MarketMafioso.MarketAcquisition.MarketAcquisitionGuidedRouteSession.Start(CreatePlan("Zalera"));
 
-        var result = session.RecordProbe("Maduin", CreateDryRun(status: "Ready", quantity: 20, gil: 1_000));
+        var result = session.RecordProbe("Maduin", CreateCandidatePlan(status: "Ready", quantity: 20, gil: 1_000));
 
         Assert.False(result.Success);
         Assert.Equal("Pending", session.ActiveStop?.Status);
@@ -163,14 +163,14 @@ public sealed class MarketAcquisitionGuidedRouteSessionTests
                 .ToArray(),
         };
 
-    private static MarketMafioso.MarketAcquisition.MarketAcquisitionLiveDryRun CreateDryRun(
+    private static MarketMafioso.MarketAcquisition.MarketAcquisitionLiveCandidatePlan CreateCandidatePlan(
         string status,
         uint quantity,
         uint gil) =>
         new()
         {
             Status = status,
-            Message = "Dry run result.",
+            Message = "Live candidate result.",
             RequestedQuantity = 999,
             WouldBuyQuantity = quantity,
             WouldSpendGil = gil,

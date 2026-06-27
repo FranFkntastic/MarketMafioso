@@ -10,7 +10,7 @@ public sealed class MarketAcquisitionDiagnosticsWindow : Window
 {
     private readonly Func<MarketBoardReadResult?> getReadResult;
     private readonly Func<MarketBoardListingReconciliation?> getReconciliation;
-    private readonly Func<MarketAcquisitionLiveDryRun?> getDryRun;
+    private readonly Func<MarketAcquisitionLiveCandidatePlan?> getCandidatePlan;
 
     private static readonly Vector4 ColHeader = new(0.38f, 0.73f, 1.00f, 1f);
     private static readonly Vector4 ColSuccess = new(0.45f, 0.90f, 0.55f, 1f);
@@ -20,12 +20,12 @@ public sealed class MarketAcquisitionDiagnosticsWindow : Window
     public MarketAcquisitionDiagnosticsWindow(
         Func<MarketBoardReadResult?> getReadResult,
         Func<MarketBoardListingReconciliation?> getReconciliation,
-        Func<MarketAcquisitionLiveDryRun?> getDryRun)
+        Func<MarketAcquisitionLiveCandidatePlan?> getCandidatePlan)
         : base("Market Acquisition Diagnostics##MarketAcquisitionDiagnostics")
     {
         this.getReadResult = getReadResult;
         this.getReconciliation = getReconciliation;
-        this.getDryRun = getDryRun;
+        this.getCandidatePlan = getCandidatePlan;
 
         SizeConstraints = new WindowSizeConstraints
         {
@@ -38,7 +38,7 @@ public sealed class MarketAcquisitionDiagnosticsWindow : Window
     {
         var readResult = getReadResult();
         var reconciliation = getReconciliation();
-        var dryRun = getDryRun();
+        var candidatePlan = getCandidatePlan();
 
         ImGui.TextColored(ColHeader, "Live Market Board Diagnostics");
         ImGui.TextWrapped("Read-only probe data and candidate decisions for the current Market Acquisition request.");
@@ -54,7 +54,7 @@ public sealed class MarketAcquisitionDiagnosticsWindow : Window
         ImGui.Spacing();
         DrawReconciliation(reconciliation);
         ImGui.Spacing();
-        DrawDryRun(dryRun);
+        DrawLiveCandidatePlan(candidatePlan);
     }
 
     private static void DrawReadResult(MarketBoardReadResult readResult)
@@ -112,23 +112,23 @@ public sealed class MarketAcquisitionDiagnosticsWindow : Window
         }
     }
 
-    private static void DrawDryRun(MarketAcquisitionLiveDryRun? dryRun)
+    private static void DrawLiveCandidatePlan(MarketAcquisitionLiveCandidatePlan? candidatePlan)
     {
-        ImGuiUi.SectionHeader("Live Candidate Dry Run", ColHeader);
-        if (dryRun == null)
+        ImGuiUi.SectionHeader("Live Candidates", ColHeader);
+        if (candidatePlan == null)
         {
-            ImGui.TextColored(ColMuted, "No live candidate dry-run rows are available.");
+            ImGui.TextColored(ColMuted, "No live candidate rows are available.");
             return;
         }
 
-        var summary = MarketAcquisitionLiveDryRunPresenter.BuildSummary(dryRun);
+        var summary = MarketAcquisitionLiveCandidatePresenter.BuildSummary(candidatePlan);
         ImGui.TextColored(
             summary.Status == "Ready" ? ColSuccess : ColHeader,
-            $"Dry-run: {summary.Status} - would buy {summary.WouldBuyQuantity:N0}/{summary.RequestedQuantity:N0}, spend {FormatGil(summary.WouldSpendGil)}");
+            $"Live candidate: {summary.Status} - would buy {summary.WouldBuyQuantity:N0}/{summary.RequestedQuantity:N0}, spend {FormatGil(summary.WouldSpendGil)}");
         ImGui.TextColored(ColMuted, $"{summary.WouldBuyRows:N0} buy row(s), {summary.SkippedRows:N0} skipped row(s), {summary.TotalRows:N0} total live row(s).");
         ImGui.TextWrapped(summary.Message);
 
-        if (ImGui.BeginTable("MarketAcquisitionLiveDryRunDiagnostics", 7, ImGuiUi.InteractiveTableFlags))
+        if (ImGui.BeginTable("MarketAcquisitionLiveCandidatePlanDiagnostics", 7, ImGuiUi.InteractiveTableFlags))
         {
             ImGui.TableSetupColumn("Decision");
             ImGui.TableSetupColumn("Reason");
@@ -139,7 +139,7 @@ public sealed class MarketAcquisitionDiagnosticsWindow : Window
             ImGui.TableSetupColumn("Message");
             ImGui.TableHeadersRow();
 
-            foreach (var row in dryRun.Rows)
+            foreach (var row in candidatePlan.Rows)
             {
                 ImGui.TableNextRow();
                 ImGui.TableNextColumn();

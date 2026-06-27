@@ -919,7 +919,7 @@ public sealed class MarketAcquisitionRequestEndpointTests
             {
                 claimToken = claimed.ClaimToken,
                 idempotencyKey = "terminal-cancel-complete",
-                message = "Dry-run route complete.",
+                message = "Route complete.",
             });
         complete.EnsureSuccessStatusCode();
 

@@ -480,14 +480,14 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         return MarketAcquisitionRouteActionResult.Ok(message);
     }
 
-    public MarketAcquisitionRouteActionResult RecordProbe(string currentWorld, MarketAcquisitionLiveDryRun dryRun)
+    public MarketAcquisitionRouteActionResult RecordProbe(string currentWorld, MarketAcquisitionLiveCandidatePlan candidatePlan)
     {
-        ArgumentNullException.ThrowIfNull(dryRun);
+        ArgumentNullException.ThrowIfNull(candidatePlan);
 
         if (!IsRunning)
             return Fail($"Route is {State}; probe result was not recorded.");
 
-        var result = session?.RecordProbe(currentWorld, dryRun) ??
+        var result = session?.RecordProbe(currentWorld, candidatePlan) ??
                      MarketAcquisitionGuidedRouteResult.Fail("No route has started.");
         StatusMessage = result.Message;
         SearchSubmitted = false;
@@ -498,9 +498,9 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
             new Dictionary<string, string?>
             {
                 ["currentWorld"] = currentWorld,
-                ["dryRunStatus"] = dryRun.Status,
-                ["wouldBuyQuantity"] = dryRun.WouldBuyQuantity.ToString(),
-                ["wouldSpendGil"] = dryRun.WouldSpendGil.ToString(),
+                ["liveCandidateStatus"] = candidatePlan.Status,
+                ["wouldBuyQuantity"] = candidatePlan.WouldBuyQuantity.ToString(),
+                ["wouldSpendGil"] = candidatePlan.WouldSpendGil.ToString(),
                 ["success"] = result.Success.ToString(),
             });
 
