@@ -279,9 +279,15 @@ app.MapPost("/reports/delete-all", async (HttpRequest request, InventoryReportSt
     return Results.Redirect($"{request.PathBase}/?deleted={Uri.EscapeDataString($"{deleted:N0} snapshots")}");
 });
 
-app.MapGet("/{*path:nonfile}", ServeBlazorIndex);
+MapDashboardShellRoute("/");
+MapDashboardShellRoute("/acquisition");
+MapDashboardShellRoute("/inventory");
+MapDashboardShellRoute("/overview");
+MapDashboardShellRoute("/settings");
 
 app.Run();
+
+void MapDashboardShellRoute(string route) => app.MapGet(route, ServeBlazorIndex);
 
 async Task<IResult> LoginDashboard(
     HttpRequest request,
