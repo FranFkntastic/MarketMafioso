@@ -146,3 +146,9 @@ public sealed record ReportSummary
     public int RetainerItemStacks { get; init; }
     public int RetainerItemQuantity { get; init; }
 }
+
+public sealed record DashboardLoginRequest
+{
+    public string Username { get; init; } = string.Empty;
+    public string Password { get; init; } = string.Empty;
+}

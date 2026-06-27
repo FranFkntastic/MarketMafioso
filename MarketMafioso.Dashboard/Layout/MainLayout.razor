@@ -1,0 +1,41 @@
+@inherits LayoutComponentBase
+
+<MudThemeProvider Theme="_theme" />
+<MudPopoverProvider />
+<MudDialogProvider />
+<MudSnackbarProvider />
+
+<MudLayout>
+    <MudAppBar Elevation="0" Dense="true" Class="app-bar">
+        <MudText Typo="Typo.h6" Class="brand">MarketMafioso</MudText>
+        <MudText Typo="Typo.body2" Class="section-title">Dashboard</MudText>
+        <MudSpacer />
+        <MudNavLink Href="/" Match="NavLinkMatch.All">Acquisition</MudNavLink>
+        <MudNavLink Href="/inventory">Inventory</MudNavLink>
+        <MudNavLink Href="/overview">Overview</MudNavLink>
+        <MudNavLink Href="/settings">Settings</MudNavLink>
+    </MudAppBar>
+    <MudMainContent Class="main-content">
+        @Body
+    </MudMainContent>
+</MudLayout>
+
+@code {
+    private readonly MudTheme _theme = new()
+    {
+        PaletteDark = new PaletteDark
+        {
+            Primary = "#5aa8ff",
+            Secondary = "#8bd6a3",
+            Surface = "#141a20",
+            Background = "#0d1116",
+            AppbarBackground = "#101720",
+            AppbarText = "#f4f8ff",
+            DrawerBackground = "#111821",
+            TextPrimary = "#f4f8ff",
+            TextSecondary = "#a8bed8",
+            LinesDefault = "#273646",
+            TableLines = "#273646",
+        },
+    };
+}

@@ -1,0 +1,82 @@
+@page "/settings"
+@inject DashboardApiClient Api
+
+<PageTitle>MarketMafioso Settings</PageTitle>
+
+<MudStack Spacing="2">
+    <MudText Typo="Typo.h5">Settings</MudText>
+    <MudTabs Rounded="true" Elevation="0" PanelClass="pt-4">
+        <MudTabPanel Text="General">
+            <MudPaper Class="compact-card" Elevation="0">
+                <MudText Typo="Typo.h6">Dashboard</MudText>
+                <MudText Class="muted">Cookie-backed sessions and SSE-backed status are active in this rebuild.</MudText>
+            </MudPaper>
+        </MudTabPanel>
+        <MudTabPanel Text="Diagnostics">
+            <MudPaper Class="compact-card" Elevation="0">
+                <MudStack Spacing="2">
+                    <MudStack Row="true" AlignItems="AlignItems.Center">
+                        <MudText Typo="Typo.h6">Diagnostics</MudText>
+                        <MudSpacer />
+                        <MudButton Variant="Variant.Outlined" OnClick="LoadDiagnosticsAsync">Refresh</MudButton>
+                    </MudStack>
+                    <MudTable Items="_events" Dense="true" Hover="true" Class="queue-table">
+                        <HeaderContent>
+                            <MudTh>ID</MudTh>
+                            <MudTh>When</MudTh>
+                            <MudTh>Category</MudTh>
+                            <MudTh>Severity</MudTh>
+                            <MudTh>Message</MudTh>
+                            <MudTh>Correlation</MudTh>
+                        </HeaderContent>
+                        <RowTemplate>
+                            <MudTd>@context.Id</MudTd>
+                            <MudTd>@context.OccurredAtUtc.LocalDateTime.ToString("yyyy-MM-dd HH:mm:ss")</MudTd>
+                            <MudTd>@context.Category<br /><span class="muted">@context.Type</span></MudTd>
+                            <MudTd><MudChip T="string" Size="Size.Small" Color="@SeverityColor(context.Severity)">@context.Severity</MudChip></MudTd>
+                            <MudTd>@context.Message</MudTd>
+                            <MudTd>@(context.CorrelationId ?? "-")</MudTd>
+                        </RowTemplate>
+                        <NoRecordsContent>
+                            <MudText Class="muted">No diagnostics captured yet.</MudText>
+                        </NoRecordsContent>
+                    </MudTable>
+                </MudStack>
+            </MudPaper>
+        </MudTabPanel>
+        <MudTabPanel Text="Snapshots">
+            <MudPaper Class="compact-card" Elevation="0">
+                <MudText Typo="Typo.h6">Snapshots</MudText>
+                <MudText Class="muted">Snapshot management will live here. Inventory browsing stays on the Inventory page.</MudText>
+            </MudPaper>
+        </MudTabPanel>
+        <MudTabPanel Text="Authentication">
+            <MudPaper Class="compact-card" Elevation="0">
+                <MudText Typo="Typo.h6">Authentication</MudText>
+                <MudText Class="muted">Dashboard sessions are cookie-backed. Plugin ingest and pickup still use the configured client API key.</MudText>
+            </MudPaper>
+        </MudTabPanel>
+    </MudTabs>
+</MudStack>
+
+@code {
+    private IReadOnlyList<DiagnosticEventView> _events = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadDiagnosticsAsync();
+    }
+
+    private async Task LoadDiagnosticsAsync()
+    {
+        _events = await Api.GetDiagnosticsAsync();
+    }
+
+    private static Color SeverityColor(string severity) => severity switch
+    {
+        "Critical" or "Error" => Color.Error,
+        "Warn" => Color.Warning,
+        "Debug" or "Trace" => Color.Default,
+        _ => Color.Info,
+    };
+}

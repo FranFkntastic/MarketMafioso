@@ -1,9 +1,8 @@
 using System.Net;
-using System.Net.Http.Headers;
-using System.Text;
-using Microsoft.Data.Sqlite;
+using System.Net.Http.Json;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Configuration;
 
 namespace MarketMafioso.Server.Tests;
@@ -11,78 +10,85 @@ namespace MarketMafioso.Server.Tests;
 public sealed class DashboardAccountAuthTests
 {
     [Fact]
-    public async Task DashboardRoutes_RequireBootstrapUserCredentials()
+    public async Task DashboardShell_LoadsWithoutBrowserAuthPrompt()
     {
         await using var application = CreateApplication();
         using var client = application.CreateClient();
 
-        var unauthenticated = await client.GetAsync("/");
-        var health = await client.GetAsync("/health");
-        using var authenticatedRequest = new HttpRequestMessage(HttpMethod.Get, "/");
-        authenticatedRequest.Headers.Authorization = CreateBasicAuth("admin", "secret-password");
-        var authenticated = await client.SendAsync(authenticatedRequest);
+        var response = await client.GetAsync("/");
 
-        Assert.Equal(HttpStatusCode.Unauthorized, unauthenticated.StatusCode);
-        Assert.Equal("Basic", unauthenticated.Headers.WwwAuthenticate.Single().Scheme);
-        Assert.Equal(HttpStatusCode.OK, health.StatusCode);
-        Assert.Equal(HttpStatusCode.OK, authenticated.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Contains("MarketMafioso", await response.Content.ReadAsStringAsync(), StringComparison.Ordinal);
     }
 
     [Fact]
-    public async Task DashboardRoutes_RejectInvalidBootstrapUserCredentials()
+    public async Task DashboardSession_LoginCreatesCookieAndSession()
     {
         await using var application = CreateApplication();
         using var client = application.CreateClient();
 
-        using var request = new HttpRequestMessage(HttpMethod.Get, "/");
-        request.Headers.Authorization = CreateBasicAuth("admin", "wrong-password");
-        var response = await client.SendAsync(request);
+        var anonymous = await client.GetAsync("/auth/session");
+        var login = await client.PostAsJsonAsync("/auth/login", new
+        {
+            username = "admin",
+            password = "secret-password",
+        });
+        var session = await client.GetAsync("/auth/session");
+
+        Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, login.StatusCode);
+        Assert.True(login.Headers.TryGetValues("Set-Cookie", out var cookies));
+        Assert.Contains(cookies, cookie => cookie.Contains("mmf_dashboard_session=", StringComparison.Ordinal));
+        Assert.Equal(HttpStatusCode.OK, session.StatusCode);
+    }
+
+    [Fact]
+    public async Task DashboardSession_RejectsInvalidCredentials()
+    {
+        await using var application = CreateApplication();
+        using var client = application.CreateClient();
+
+        var response = await client.PostAsJsonAsync("/auth/login", new
+        {
+            username = "admin",
+            password = "wrong-password",
+        });
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 
     [Fact]
-    public async Task DashboardRoutes_RequireCredentialsForBasePathWithoutTrailingSlash()
-    {
-        await using var application = CreateApplication(
-            new KeyValuePair<string, string?>("MarketMafioso:BasePath", "/api/marketmafioso"));
-        using var client = application.CreateClient();
-
-        var response = await client.GetAsync("/api/marketmafioso");
-
-        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
-    }
-
-    [Theory]
-    [InlineData("/inventory")]
-    [InlineData("/acquisition")]
-    [InlineData("/diagnostics")]
-    public async Task DashboardToolRoutes_RequireBootstrapUserCredentials(string path)
+    public async Task DashboardApi_RequiresCookieSession()
     {
         await using var application = CreateApplication();
         using var client = application.CreateClient();
 
-        var unauthenticated = await client.GetAsync(path);
-        using var authenticatedRequest = new HttpRequestMessage(HttpMethod.Get, path);
-        authenticatedRequest.Headers.Authorization = CreateBasicAuth("admin", "secret-password");
-        var authenticated = await client.SendAsync(authenticatedRequest);
+        var anonymous = await client.GetAsync("/api/acquisition/requests");
+        var login = await client.PostAsJsonAsync("/auth/login", new
+        {
+            username = "admin",
+            password = "secret-password",
+        });
+        var authenticated = await client.GetAsync("/api/acquisition/requests");
 
-        Assert.Equal(HttpStatusCode.Unauthorized, unauthenticated.StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, login.StatusCode);
         Assert.Equal(HttpStatusCode.OK, authenticated.StatusCode);
     }
 
     [Fact]
-    public async Task DashboardRoutes_ReuseCachedCredentialsWithinTtl()
+    public async Task DashboardSession_StopsWorkingWhenUserIsDisabled()
     {
-        var values = CreateApplicationValues(
-            new KeyValuePair<string, string?>("MarketMafioso:DashboardAuthCacheSeconds", "60"));
+        var values = CreateApplicationValues();
         await using var application = values.Application;
         using var client = application.CreateClient();
 
-        using var firstRequest = new HttpRequestMessage(HttpMethod.Get, "/");
-        firstRequest.Headers.Authorization = CreateBasicAuth("admin", "secret-password");
-        var first = await client.SendAsync(firstRequest);
-        first.EnsureSuccessStatusCode();
+        var login = await client.PostAsJsonAsync("/auth/login", new
+        {
+            username = "admin",
+            password = "secret-password",
+        });
+        login.EnsureSuccessStatusCode();
 
         await using (var connection = new SqliteConnection($"Data Source={values.DatabasePath}"))
         {
@@ -97,11 +103,9 @@ public sealed class DashboardAccountAuthTests
             await command.ExecuteNonQueryAsync();
         }
 
-        using var cachedRequest = new HttpRequestMessage(HttpMethod.Get, "/acquisition/requests/recent");
-        cachedRequest.Headers.Authorization = CreateBasicAuth("admin", "secret-password");
-        var cached = await client.SendAsync(cachedRequest);
+        var session = await client.GetAsync("/auth/session");
 
-        Assert.Equal(HttpStatusCode.OK, cached.StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, session.StatusCode);
     }
 
     private static WebApplicationFactory<Program> CreateApplication(params KeyValuePair<string, string?>[] extraConfiguration) =>
@@ -133,12 +137,6 @@ public sealed class DashboardAccountAuthTests
                 });
             });
         return new ApplicationValues(application, databasePath);
-    }
-
-    private static AuthenticationHeaderValue CreateBasicAuth(string username, string password)
-    {
-        var credentials = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{username}:{password}"));
-        return new AuthenticationHeaderValue("Basic", credentials);
     }
 
     private sealed record ApplicationValues(WebApplicationFactory<Program> Application, string DatabasePath);

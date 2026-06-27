@@ -1,0 +1,79 @@
+html,
+body,
+#app {
+    min-height: 100%;
+    margin: 0;
+    background: #0d1116;
+    color: #f4f8ff;
+    font-family: "Segoe UI", system-ui, sans-serif;
+}
+
+.app-bar {
+    border-bottom: 1px solid #273646;
+}
+
+.brand {
+    font-weight: 700;
+    margin-right: 16px;
+}
+
+.section-title {
+    color: #a8bed8;
+}
+
+.main-content {
+    min-height: 100vh;
+    padding: 72px 20px 20px;
+}
+
+.page-grid {
+    display: grid;
+    gap: 14px;
+}
+
+.acquisition-grid {
+    grid-template-columns: minmax(360px, 520px) minmax(0, 1fr);
+}
+
+.queue-table .mud-table-cell {
+    border-right: 1px solid #273646;
+}
+
+.compact-card {
+    border: 1px solid #273646;
+    background: #141a20;
+}
+
+.muted {
+    color: #a8bed8;
+}
+
+.login-shell {
+    max-width: 420px;
+    margin: 10vh auto 0;
+}
+
+#blazor-error-ui {
+    background: #3b1720;
+    bottom: 0;
+    color: white;
+    display: none;
+    left: 0;
+    padding: 12px 16px;
+    position: fixed;
+    right: 0;
+    z-index: 1000;
+}
+
+#blazor-error-ui .dismiss {
+    cursor: pointer;
+    position: absolute;
+    right: 12px;
+    top: 8px;
+}
+
+@media (max-width: 1100px) {
+    .acquisition-grid {
+        grid-template-columns: 1fr;
+    }
+}

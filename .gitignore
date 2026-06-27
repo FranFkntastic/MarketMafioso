@@ -9,6 +9,7 @@ obj/
 
 # IDE/editor state
 .agents/
+.superpowers/
 .docs/
 .codex/
 mockups/

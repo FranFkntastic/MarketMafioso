@@ -11,11 +11,14 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddSingleton<SqliteConnectionFactory>();
 builder.Services.AddSingleton<SqliteSchemaMigrator>();
 builder.Services.AddSingleton<DashboardPasswordHasher>();
+builder.Services.AddSingleton<DashboardSessionStore>();
 builder.Services.AddSingleton<ReceiverBootstrapper>();
 builder.Services.AddSingleton<IngestKeyAccountResolver>();
 builder.Services.AddSingleton<InventoryReportStore>();
 builder.Services.AddSingleton<JsonSnapshotImporter>();
 builder.Services.AddSingleton<MarketAcquisitionRequestStore>();
+builder.Services.AddSingleton<DiagnosticEventStore>();
+builder.Services.AddHttpClient();
 
 var app = builder.Build();
 await app.Services.GetRequiredService<SqliteSchemaMigrator>().MigrateAsync(CancellationToken.None);
@@ -45,6 +48,9 @@ if (requireApiKey && string.IsNullOrWhiteSpace(clientApiKey))
 if (!string.IsNullOrWhiteSpace(basePath))
     app.UsePathBase(basePath);
 
+app.UseBlazorFrameworkFiles();
+app.UseStaticFiles();
+
 app.Use(async (context, next) =>
 {
     var purpose = RequiredApiKeyPurpose(context.Request, requireApiKey);
@@ -62,33 +68,11 @@ app.Use(async (context, next) =>
     await next(context);
 });
 
-app.UseMiddleware<DashboardBasicAuthMiddleware>();
+app.UseMiddleware<DashboardSessionAuthMiddleware>();
 
-app.MapGet("/", async (
-    HttpRequest request,
-    InventoryReportStore store,
-    string? deleted,
-    string? acquisition,
-    long? characterId,
-    bool? allCharacters,
-    CancellationToken token) =>
-{
-    var showAllCharacters = allCharacters == true;
-    var characters = await store.ListCharactersAsync(1, token);
-    var selectedCharacterId = showAllCharacters ? null : characterId ?? characters.FirstOrDefault()?.Id;
-    var reports = await store.ListSummariesAsync(1, selectedCharacterId, token);
-    return Results.Content(
-        RenderDashboard(
-            reports,
-            characters,
-            selectedCharacterId,
-            showAllCharacters,
-            StorageDisplayName(store.ReportDirectory, storageLabel, requireApiKey),
-            deleted,
-            acquisition,
-            request.PathBase),
-        "text/html; charset=utf-8");
-});
+app.MapPost("/auth/login", LoginDashboard);
+app.MapPost("/auth/logout", LogoutDashboard);
+app.MapGet("/auth/session", GetDashboardSession);
 
 app.MapGet("/health", () => Results.Ok(new
 {
@@ -96,40 +80,57 @@ app.MapGet("/health", () => Results.Ok(new
     utc = DateTimeOffset.UtcNow,
 }));
 
-app.MapGet("/inventory", async (
-    HttpRequest request,
-    InventoryReportStore store,
-    long? characterId,
-    string? search,
-    string? scope,
+app.MapGet("/api/acquisition/requests", async (
+    MarketAcquisitionRequestStore acquisitionStore,
     CancellationToken token) =>
 {
-    var characters = await store.ListCharactersAsync(1, token);
-    var selectedCharacterId = characterId ?? characters.FirstOrDefault()?.Id;
-    var latest = await store.GetLatestAsync(1, selectedCharacterId, token);
-    var view = InventoryBrowserViewBuilder.Build(latest, search, scope);
-    return Results.Content(
-        RenderInventoryBrowser(view, characters, selectedCharacterId, request.PathBase),
-        "text/html; charset=utf-8");
+    var acquisitionRequests = await acquisitionStore.ListRecentAsync(100, token);
+    return Results.Ok(acquisitionRequests);
 });
 
-app.MapGet("/acquisition", async (
-    HttpRequest request,
-    InventoryReportStore store,
-    MarketAcquisitionRequestStore acquisitionStore,
-    string? acquisition,
-    long? characterId,
+app.MapGet("/api/diagnostics/events", async (
+    DiagnosticEventStore diagnostics,
+    int? limit,
+    string? category,
+    string? severity,
+    string? correlationId,
     CancellationToken token) =>
 {
-    var characters = await store.ListCharactersAsync(1, token);
-    var selectedCharacterId = characterId ?? characters.FirstOrDefault()?.Id;
-    var selectedCharacter = selectedCharacterId == null
-        ? null
-        : characters.FirstOrDefault(c => c.Id == selectedCharacterId.Value);
-    var acquisitionRequests = await acquisitionStore.ListRecentAsync(50, token);
-    return Results.Content(
-        RenderAcquisitionDashboard(characters, selectedCharacterId, selectedCharacter, acquisitionRequests, acquisition, request.PathBase, xivDataBaseUrl),
-        "text/html; charset=utf-8");
+    var events = await diagnostics.ListRecentAsync(limit ?? 100, category, severity, correlationId, token);
+    return Results.Ok(events);
+});
+
+app.MapGet("/api/diagnostics/events/stream", async (
+    HttpResponse response,
+    DiagnosticEventStore diagnostics,
+    CancellationToken token) =>
+{
+    response.Headers.ContentType = "text/event-stream";
+    response.Headers.CacheControl = "no-cache";
+    var events = await diagnostics.ListRecentAsync(100, null, null, null, token);
+    await WriteSseEventAsync(response, "snapshot", events, token);
+});
+
+app.MapGet("/api/events/stream", async (
+    HttpResponse response,
+    MarketAcquisitionRequestStore acquisitionStore,
+    DiagnosticEventStore diagnostics,
+    CancellationToken token) =>
+{
+    response.Headers.ContentType = "text/event-stream";
+    response.Headers.CacheControl = "no-cache";
+    response.Headers.Connection = "keep-alive";
+
+    while (!token.IsCancellationRequested)
+    {
+        var acquisitionRequests = await acquisitionStore.ListRecentAsync(100, token);
+        await WriteSseEventAsync(response, "acquisition", acquisitionRequests, token);
+
+        var events = await diagnostics.ListRecentAsync(25, null, null, null, token);
+        await WriteSseEventAsync(response, "diagnostics", events, token);
+
+        await Task.Delay(TimeSpan.FromSeconds(3), token);
+    }
 });
 
 app.MapGet("/acquisition/requests/recent", async (
@@ -141,30 +142,38 @@ app.MapGet("/acquisition/requests/recent", async (
     return Results.Json(BuildAcquisitionQueueUpdate(acquisitionRequests, request.PathBase));
 });
 
-app.MapGet("/diagnostics", async (
-    HttpRequest request,
-    InventoryReportStore store,
-    CancellationToken token) =>
-{
-    var reports = await store.ListSummariesAsync(1, characterId: null, token);
-    return Results.Content(
-        RenderDiagnostics(reports, request.PathBase),
-        "text/html; charset=utf-8");
-});
-
 app.MapPost("/inventory", SaveInventoryReport);
 app.MapPost("/api/inventory", SaveInventoryReport);
 
 app.MapPost("/acquisition/requests", CreateAcquisitionRequest);
+app.MapPost("/api/acquisition/requests", CreateAcquisitionRequest);
 app.MapGet("/acquisition/requests/pending", ListPendingAcquisitionRequests);
 app.MapPost("/acquisition/requests/{id}/claim", ClaimAcquisitionRequest);
 app.MapPost("/acquisition/requests/{id}/accept", AcceptAcquisitionRequest);
 app.MapPost("/acquisition/requests/{id}/reject", RejectAcquisitionRequest);
 app.MapPost("/acquisition/requests/{id}/cancel", CancelAcquisitionRequest);
+app.MapPost("/api/acquisition/requests/{id}/cancel", CancelAcquisitionRequest);
 app.MapPost("/acquisition/requests/{id}/resend", ResendAcquisitionRequest);
+app.MapPost("/api/acquisition/requests/{id}/resend", ResendAcquisitionRequest);
 app.MapPost("/acquisition/requests/{id}/progress", ReportAcquisitionProgress);
 app.MapPost("/acquisition/requests/{id}/complete", CompleteAcquisitionRequest);
 app.MapPost("/acquisition/requests/{id}/fail", FailAcquisitionRequest);
+
+app.MapGet("/api/xivdata/items/search", async (
+    IHttpClientFactory httpClientFactory,
+    string q,
+    int? limit,
+    CancellationToken token) =>
+{
+    if (string.IsNullOrWhiteSpace(q))
+        return Results.BadRequest(new { error = "query_required" });
+
+    var client = httpClientFactory.CreateClient();
+    var url = $"{xivDataBaseUrl}/items/search?q={Uri.EscapeDataString(q)}&limit={Math.Clamp(limit ?? 12, 1, 50)}";
+    using var response = await client.GetAsync(url, token);
+    var body = await response.Content.ReadAsStringAsync(token);
+    return Results.Content(body, "application/json; charset=utf-8", statusCode: (int)response.StatusCode);
+});
 
 app.MapGet("/api/reports", async (InventoryReportStore store, CancellationToken token) =>
 {
@@ -246,7 +255,69 @@ app.MapPost("/reports/delete-all", async (HttpRequest request, InventoryReportSt
     return Results.Redirect($"{request.PathBase}/?deleted={Uri.EscapeDataString($"{deleted:N0} snapshots")}");
 });
 
+app.MapFallback(ServeBlazorIndex);
+
 app.Run();
+
+async Task<IResult> LoginDashboard(
+    HttpRequest request,
+    HttpResponse response,
+    DashboardSessionStore sessions,
+    DashboardLoginRequest login,
+    CancellationToken token)
+{
+    var created = await sessions.CreateAsync(login.Username, login.Password, token);
+    if (created == null)
+        return Results.Unauthorized();
+
+    response.Cookies.Append(
+        DashboardSessionStore.CookieName,
+        created.Token,
+        CreateDashboardCookieOptions(request, created.Session.ExpiresAtUtc));
+
+    return Results.Ok(new
+    {
+        user = new
+        {
+            created.Session.UserId,
+            created.Session.Username,
+        },
+        created.Session.ExpiresAtUtc,
+    });
+}
+
+async Task<IResult> LogoutDashboard(
+    HttpRequest request,
+    HttpResponse response,
+    DashboardSessionStore sessions,
+    CancellationToken token)
+{
+    await sessions.RevokeAsync(request.Cookies[DashboardSessionStore.CookieName], token);
+    response.Cookies.Delete(
+        DashboardSessionStore.CookieName,
+        CreateDashboardCookieOptions(request, DateTimeOffset.UtcNow.AddDays(-1)));
+    return Results.Ok(new { ok = true });
+}
+
+async Task<IResult> GetDashboardSession(
+    HttpRequest request,
+    DashboardSessionStore sessions,
+    CancellationToken token)
+{
+    var session = await sessions.GetAsync(request.Cookies[DashboardSessionStore.CookieName], token);
+    if (session == null)
+        return Results.Unauthorized();
+
+    return Results.Ok(new
+    {
+        user = new
+        {
+            session.UserId,
+            session.Username,
+        },
+        session.ExpiresAtUtc,
+    });
+}
 
 async Task<IResult> SaveInventoryReport(
     HttpRequest request,
@@ -327,7 +398,7 @@ async Task<IResult> CreateAcquisitionRequest(
             return Results.BadRequest(new { error = "Request body is required." });
 
         var created = await store.CreateAsync(acquisitionRequest, token);
-        if (isBrowserForm && !WantsJsonResponse(request))
+        if (isBrowserForm && !IsDashboardApiRoute(request) && !WantsJsonResponse(request))
             return Results.Redirect($"{request.PathBase}/acquisition?acquisition={Uri.EscapeDataString(created.Request.Id)}");
 
         return created.IsReplay
@@ -342,6 +413,47 @@ async Task<IResult> CreateAcquisitionRequest(
     {
         return Results.Conflict(new { error = ex.Message });
     }
+}
+
+static CookieOptions CreateDashboardCookieOptions(HttpRequest request, DateTimeOffset expiresAt) => new()
+{
+    HttpOnly = true,
+    IsEssential = true,
+    SameSite = SameSiteMode.Lax,
+    Secure = request.IsHttps,
+    Expires = expiresAt,
+    Path = string.IsNullOrWhiteSpace(request.PathBase) ? "/" : request.PathBase.ToString(),
+};
+
+static async Task WriteSseEventAsync<T>(
+    HttpResponse response,
+    string eventName,
+    T payload,
+    CancellationToken cancellationToken)
+{
+    var json = JsonSerializer.Serialize(payload, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+    await response.WriteAsync($"event: {eventName}\n", cancellationToken);
+    await response.WriteAsync($"data: {json}\n\n", cancellationToken);
+    await response.Body.FlushAsync(cancellationToken);
+}
+
+static async Task<IResult> ServeBlazorIndex(
+    HttpRequest request,
+    IWebHostEnvironment environment,
+    CancellationToken cancellationToken)
+{
+    var file = environment.WebRootFileProvider.GetFileInfo("index.html");
+    if (!file.Exists)
+        return Results.NotFound();
+
+    await using var stream = file.CreateReadStream();
+    using var reader = new StreamReader(stream, Encoding.UTF8);
+    var html = await reader.ReadToEndAsync(cancellationToken);
+    var baseHref = string.IsNullOrWhiteSpace(request.PathBase)
+        ? "/"
+        : $"{request.PathBase.ToString().TrimEnd('/')}/";
+    html = html.Replace("<base href=\"/\" />", $"<base href=\"{Html(baseHref)}\" />", StringComparison.Ordinal);
+    return Results.Content(html, "text/html; charset=utf-8", Encoding.UTF8);
 }
 
 async Task<IResult> ListPendingAcquisitionRequests(
@@ -413,7 +525,9 @@ async Task<IResult> CancelAcquisitionRequest(
         var cancelled = await store.CancelAsync(id, token);
         return cancelled == null
             ? Results.NotFound()
-            : Results.Redirect($"{request.PathBase}/acquisition?cancelled={Uri.EscapeDataString(id)}");
+            : IsDashboardApiRoute(request) || WantsJsonResponse(request)
+                ? Results.Ok(cancelled)
+                : Results.Redirect($"{request.PathBase}/acquisition?cancelled={Uri.EscapeDataString(id)}");
     }
     catch (MarketAcquisitionInvalidTransitionException ex)
     {
@@ -432,7 +546,9 @@ async Task<IResult> ResendAcquisitionRequest(
         var resent = await store.ResendAsync(id, token);
         return resent == null
             ? Results.NotFound()
-            : Results.Redirect($"{request.PathBase}/acquisition?resent={Uri.EscapeDataString(id)}");
+            : IsDashboardApiRoute(request) || WantsJsonResponse(request)
+                ? Results.Ok(resent)
+                : Results.Redirect($"{request.PathBase}/acquisition?resent={Uri.EscapeDataString(id)}");
     }
     catch (MarketAcquisitionInvalidTransitionException ex)
     {
@@ -562,6 +678,9 @@ static bool WantsJsonResponse(HttpRequest request)
 {
     return request.Headers.Accept.Any(value => value?.Contains("application/json", StringComparison.OrdinalIgnoreCase) == true);
 }
+
+static bool IsDashboardApiRoute(HttpRequest request) =>
+    request.Path.StartsWithSegments("/api", StringComparison.OrdinalIgnoreCase);
 
 static bool IsAcquisitionPluginRoute(HttpRequest request) =>
     request.Path.StartsWithSegments("/acquisition/requests") &&
