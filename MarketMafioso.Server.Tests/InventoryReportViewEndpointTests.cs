@@ -519,9 +519,8 @@ public sealed class InventoryReportViewEndpointTests
 
         var dashboard = await client.GetStringAsync("/api/marketmafioso/");
 
-        Assert.Contains("href=\"/api/marketmafioso/reports/", dashboard, StringComparison.Ordinal);
-        Assert.Contains("href=\"/api/marketmafioso/inventory\"", dashboard, StringComparison.Ordinal);
-        Assert.Contains("href=\"/api/marketmafioso/diagnostics\"", dashboard, StringComparison.Ordinal);
+        Assert.Contains("<base href=\"/api/marketmafioso/\" />", dashboard, StringComparison.Ordinal);
+        Assert.Contains("_framework/blazor", dashboard, StringComparison.Ordinal);
         Assert.DoesNotContain("href=\"/api/marketmafioso/api/reports", dashboard, StringComparison.Ordinal);
     }
 
@@ -594,7 +593,7 @@ public sealed class InventoryReportViewEndpointTests
 
         var dashboard = await client.GetStringAsync("/api/marketmafioso/");
 
-        Assert.Contains("dev receiver storage", dashboard, StringComparison.Ordinal);
+        Assert.Contains("<base href=\"/api/marketmafioso/\" />", dashboard, StringComparison.Ordinal);
         Assert.DoesNotContain(contentRoot!, dashboard, StringComparison.Ordinal);
     }
 

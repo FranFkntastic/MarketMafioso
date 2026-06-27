@@ -48,28 +48,7 @@ if (requireApiKey && string.IsNullOrWhiteSpace(clientApiKey))
 
 if (configuredBasePath.HasValue)
 {
-    app.Use(async (context, next) =>
-    {
-        if (!context.Request.Path.StartsWithSegments(configuredBasePath, out var remainingPath))
-        {
-            await next(context);
-            return;
-        }
-
-        var originalPath = context.Request.Path;
-        var originalPathBase = context.Request.PathBase;
-        context.Request.PathBase = originalPathBase.Add(configuredBasePath);
-        context.Request.Path = remainingPath.HasValue ? remainingPath : "/";
-        try
-        {
-            await next(context);
-        }
-        finally
-        {
-            context.Request.Path = originalPath;
-            context.Request.PathBase = originalPathBase;
-        }
-    });
+    app.UsePathBase(configuredBasePath);
 }
 
 app.UseBlazorFrameworkFiles();
