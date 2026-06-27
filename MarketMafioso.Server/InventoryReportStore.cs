@@ -269,6 +269,7 @@ public sealed class InventoryReportStore
 
         var playerBags = new List<InventoryBag>();
         var retainers = new List<RetainerReport>();
+        var owners = new List<InventoryOwnerRow>();
 
         await using var ownerCommand = connection.CreateCommand();
         ownerCommand.CommandText = """
@@ -278,28 +279,37 @@ public sealed class InventoryReportStore
             ORDER BY sort_order
             """;
         ownerCommand.Parameters.AddWithValue("$snapshotId", id);
-        await using var ownerReader = await ownerCommand.ExecuteReaderAsync(cancellationToken);
-        while (await ownerReader.ReadAsync(cancellationToken))
+        await using (var ownerReader = await ownerCommand.ExecuteReaderAsync(cancellationToken))
         {
-            var ownerId = ownerReader.GetInt64(0);
-            var ownerType = ownerReader.GetString(1);
-            var bags = await ReadBagsAsync(connection, ownerId, cancellationToken);
-            if (ownerType == "player")
+            while (await ownerReader.ReadAsync(cancellationToken))
+            {
+                owners.Add(new InventoryOwnerRow(
+                    ownerReader.GetInt64(0),
+                    ownerReader.GetString(1),
+                    ownerReader.GetString(2),
+                    ownerReader.IsDBNull(3) ? null : checked((ulong)ownerReader.GetInt64(3)),
+                    ownerReader.IsDBNull(4) ? null : ownerReader.GetString(4),
+                    ownerReader.IsDBNull(5) ? null : checked((ulong)ownerReader.GetInt64(5))));
+            }
+        }
+
+        foreach (var owner in owners)
+        {
+            var bags = await ReadBagsAsync(connection, owner.Id, cancellationToken);
+            if (owner.OwnerType == "player")
             {
                 playerBags.AddRange(bags);
                 continue;
             }
 
-            var retainerId = ownerReader.IsDBNull(3) ? 0UL : checked((ulong)ownerReader.GetInt64(3));
-            var gil = ownerReader.IsDBNull(5) ? 0UL : checked((ulong)ownerReader.GetInt64(5));
             retainers.Add(new RetainerReport
             {
-                RetainerName = ownerReader.GetString(2),
-                RetainerId = retainerId,
-                LastUpdated = ownerReader.IsDBNull(4) ? string.Empty : ownerReader.GetString(4),
-                Gil = gil,
+                RetainerName = owner.OwnerName,
+                RetainerId = owner.RetainerId ?? 0,
+                LastUpdated = owner.LastUpdated ?? string.Empty,
+                Gil = owner.Gil ?? 0,
                 Bags = bags,
-                MarketListings = await ReadMarketListingsAsync(connection, ownerId, cancellationToken),
+                MarketListings = await ReadMarketListingsAsync(connection, owner.Id, cancellationToken),
             });
         }
 
@@ -863,6 +873,14 @@ public sealed class InventoryReportStore
         string? HomeWorld,
         string ReportTimestamp,
         InventoryReportMetadata Metadata);
+
+    private sealed record InventoryOwnerRow(
+        long Id,
+        string OwnerType,
+        string OwnerName,
+        ulong? RetainerId,
+        string? LastUpdated,
+        ulong? Gil);
 }
 
 public sealed record RawInventoryReportJson(string Id, string? RawJson);
