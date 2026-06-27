@@ -134,6 +134,46 @@ public sealed class MarketAcquisitionRequestClientTests
         Assert.Equal("accept-key", body.RootElement.GetProperty("idempotencyKey").GetString());
     }
 
+    [Fact]
+    public async Task ResendAsync_PostsResendRequestAndReturnsPendingRequest()
+    {
+        using var handler = new CapturingHandler("""
+            {
+              "id": "request-1",
+              "status": "PendingPickup",
+              "targetCharacterName": "Wei Ning",
+              "targetWorld": "Gilgamesh",
+              "region": "North America",
+              "itemId": 2,
+              "itemName": "Fire Shard",
+              "quantityMode": "TargetQuantity",
+              "quantity": 10,
+              "hqPolicy": "Either",
+              "maxUnitPrice": 99,
+              "maxTotalGil": 990,
+              "worldMode": "Recommended"
+            }
+            """);
+        using var httpClient = new HttpClient(handler);
+        var client = new MarketMafioso.MarketAcquisition.MarketAcquisitionRequestClient(httpClient);
+
+        var resent = await client.ResendAsync(
+            "https://dev.xivcraftarchitect.com/api/marketmafioso/inventory",
+            "client-secret",
+            "request-1",
+            CancellationToken.None);
+
+        Assert.Equal("PendingPickup", resent.Status);
+        Assert.Equal(HttpMethod.Post, handler.LastRequest?.Method);
+        Assert.Equal(
+            "https://dev.xivcraftarchitect.com/api/marketmafioso/acquisition/requests/request-1/resend",
+            handler.LastRequest?.RequestUri?.ToString());
+        Assert.NotNull(handler.LastRequest);
+        Assert.True(handler.LastRequest.Headers.TryGetValues("X-Api-Key", out var values));
+        Assert.Equal("client-secret", Assert.Single(values));
+        Assert.Equal("{}", handler.LastBody);
+    }
+
     private sealed class CapturingHandler(string responseJson) : HttpMessageHandler
     {
         public HttpRequestMessage? LastRequest { get; private set; }

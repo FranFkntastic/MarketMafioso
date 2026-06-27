@@ -185,6 +185,19 @@ public sealed class MarketAcquisitionRequestClient
             },
             cancellationToken);
 
+    public Task<MarketAcquisitionRequestView> ResendAsync(
+        string serverUrl,
+        string clientApiKey,
+        string requestId,
+        CancellationToken cancellationToken) =>
+        PostLifecycleAsync(
+            serverUrl,
+            clientApiKey,
+            requestId,
+            "resend",
+            new { },
+            cancellationToken);
+
     private async Task<MarketAcquisitionRequestView> PostLifecycleAsync<TRequest>(
         string serverUrl,
         string clientApiKey,
@@ -204,6 +217,7 @@ public sealed class MarketAcquisitionRequestClient
             Content = JsonContent.Create(body, options: JsonOptions),
         };
         request.Headers.Add("X-Api-Key", clientApiKey);
+        request.Headers.Accept.ParseAdd("application/json");
 
         using var response = await httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();

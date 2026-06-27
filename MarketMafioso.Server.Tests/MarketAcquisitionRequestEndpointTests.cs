@@ -942,6 +942,65 @@ public sealed class MarketAcquisitionRequestEndpointTests
     }
 
     [Fact]
+    public async Task AcquisitionClientCanResendFailedRequest()
+    {
+        await using var application = CreateHostedApplication();
+        using var client = application.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false,
+        });
+        var claimed = await CreateAndClaimAsync(client, "client-resend-failed");
+
+        var accepted = await SendWithKeyAsync(
+            client,
+            HttpMethod.Post,
+            $"/api/marketmafioso/acquisition/requests/{claimed.RequestId}/accept",
+            "client-secret",
+            new
+            {
+                claimToken = claimed.ClaimToken,
+                idempotencyKey = "accept-client-resend-failed",
+            });
+        accepted.EnsureSuccessStatusCode();
+
+        var failed = await SendWithKeyAsync(
+            client,
+            HttpMethod.Post,
+            $"/api/marketmafioso/acquisition/requests/{claimed.RequestId}/fail",
+            "client-secret",
+            new
+            {
+                claimToken = claimed.ClaimToken,
+                idempotencyKey = "fail-client-resend-failed",
+                reason = "Synthetic route failure.",
+            });
+        failed.EnsureSuccessStatusCode();
+
+        var resent = await SendWithKeyAsync(
+            client,
+            HttpMethod.Post,
+            $"/api/marketmafioso/acquisition/requests/{claimed.RequestId}/resend",
+            "client-secret",
+            new { });
+
+        resent.EnsureSuccessStatusCode();
+        using var resentJson = JsonDocument.Parse(await resent.Content.ReadAsStringAsync());
+        Assert.Equal(claimed.RequestId, resentJson.RootElement.GetProperty("id").GetString());
+        Assert.Equal("PendingPickup", resentJson.RootElement.GetProperty("status").GetString());
+
+        var pending = await SendWithKeyAsync(
+            client,
+            HttpMethod.Get,
+            "/api/marketmafioso/acquisition/requests/pending?characterName=Wei%20Ning&world=Gilgamesh",
+            "client-secret");
+        pending.EnsureSuccessStatusCode();
+        using var pendingJson = JsonDocument.Parse(await pending.Content.ReadAsStringAsync());
+        var request = Assert.Single(pendingJson.RootElement.GetProperty("requests").EnumerateArray());
+        Assert.Equal(claimed.RequestId, request.GetProperty("id").GetString());
+        Assert.Equal("PendingPickup", request.GetProperty("status").GetString());
+    }
+
+    [Fact]
     public async Task AcquisitionDashboardUsesConfiguredXivDataBaseUrl()
     {
         await using var application = CreateHostedApplication(
@@ -1245,6 +1304,7 @@ public sealed class MarketAcquisitionRequestEndpointTests
     {
         var request = new HttpRequestMessage(method, requestUri);
         request.Headers.Add("X-Api-Key", apiKey);
+        request.Headers.Accept.ParseAdd("application/json");
         if (body != null)
             request.Content = JsonContent.Create(body);
 

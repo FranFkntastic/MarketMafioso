@@ -407,7 +407,7 @@ public class MainWindow : Window, IDisposable
 
         ImGui.SameLine();
         var canPrepare = !acquisitionRequestBusy &&
-                         IsAcceptedOrRunning(claimedAcquisitionRequest.Status);
+                         CanPrepareAcquisitionPlanForStatus(claimedAcquisitionRequest.Status);
         if (ImGuiUi.Button("Prepare Plan", canPrepare))
             _ = PrepareMarketAcquisitionPlanAsync();
 
@@ -1026,6 +1026,7 @@ public class MainWindow : Window, IDisposable
         {
             var claimed = claimedAcquisitionRequest ??
                           throw new InvalidOperationException("No dashboard request is accepted.");
+            claimed = await EnsureAcquisitionClaimReadyForPlanningAsync(claimed, token).ConfigureAwait(false);
             if (string.Equals(claimed.WorldMode, "Selected", StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException("Selected world mode cannot be planned until selected worlds are carried in the dashboard request payload.");
 
@@ -1050,6 +1051,52 @@ public class MainWindow : Window, IDisposable
                 ? $"Prepared {acquisitionPlan.WorldBatches.Count} world batch(es)."
                 : BuildNoSupportedListingsStatus(acquisitionPlan);
         }).ConfigureAwait(false);
+    }
+
+    private async Task<MarketAcquisitionClaimView> EnsureAcquisitionClaimReadyForPlanningAsync(
+        MarketAcquisitionClaimView claimed,
+        CancellationToken token)
+    {
+        if (!IsFailedAcquisitionStatus(claimed.Status))
+            return claimed;
+
+        await acquisitionClient.ResendAsync(
+            config.ServerUrl,
+            config.ApiKey,
+            claimed.Id,
+            token).ConfigureAwait(false);
+
+        var reclaimed = await acquisitionClient.ClaimAsync(
+            config.ServerUrl,
+            config.ApiKey,
+            claimed.Id,
+            claimed.TargetCharacterName,
+            claimed.TargetWorld,
+            config.PluginInstanceId,
+            token).ConfigureAwait(false);
+
+        claimedAcceptIdempotencyKey = Guid.NewGuid().ToString("N");
+        claimedRejectIdempotencyKey = Guid.NewGuid().ToString("N");
+        var accepted = await acquisitionClient.AcceptAsync(
+            config.ServerUrl,
+            config.ApiKey,
+            reclaimed.Id,
+            reclaimed.ClaimToken,
+            claimedAcceptIdempotencyKey,
+            token).ConfigureAwait(false);
+
+        claimedAcquisitionRequest = reclaimed with { Status = accepted.Status };
+        MarketAcquisitionClaimPersistence.Save(
+            config,
+            claimedAcquisitionRequest,
+            claimedAcceptIdempotencyKey,
+            claimedRejectIdempotencyKey);
+        config.Save();
+        pendingAcquisitionRequests = pendingAcquisitionRequests
+            .Where(request => !string.Equals(request.Id, reclaimed.Id, StringComparison.Ordinal))
+            .ToList();
+        acquisitionStatus = "Failed request was reopened and accepted locally. Preparing a fresh plan.";
+        return claimedAcquisitionRequest;
     }
 
     private static string BuildNoSupportedListingsStatus(MarketAcquisitionPlan plan)
@@ -1452,9 +1499,13 @@ public class MainWindow : Window, IDisposable
             _ => ColMuted,
         };
 
-    private static bool IsAcceptedOrRunning(string status) =>
+    internal static bool CanPrepareAcquisitionPlanForStatus(string status) =>
         string.Equals(status, "AcceptedInPlugin", StringComparison.OrdinalIgnoreCase) ||
-        string.Equals(status, "Running", StringComparison.OrdinalIgnoreCase);
+        string.Equals(status, "Running", StringComparison.OrdinalIgnoreCase) ||
+        IsFailedAcquisitionStatus(status);
+
+    private static bool IsFailedAcquisitionStatus(string status) =>
+        string.Equals(status, "Failed", StringComparison.OrdinalIgnoreCase);
 
     private async Task RunAcquisitionRequestAsync(Func<CancellationToken, Task> action)
     {
