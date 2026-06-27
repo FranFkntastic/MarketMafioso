@@ -89,9 +89,9 @@ public sealed class MarketAcquisitionGuidedRouteSession
         return MarketAcquisitionGuidedRouteResult.Ok($"Sent {stop.LifestreamCommand}. Waiting for arrival on {stop.WorldName}.");
     }
 
-    public MarketAcquisitionGuidedRouteResult RecordProbe(string currentWorld, MarketAcquisitionLiveDryRun dryRun)
+    public MarketAcquisitionGuidedRouteResult RecordProbe(string currentWorld, MarketAcquisitionLiveCandidatePlan candidatePlan)
     {
-        ArgumentNullException.ThrowIfNull(dryRun);
+        ArgumentNullException.ThrowIfNull(candidatePlan);
 
         var stop = ActiveStop;
         if (stop == null)
@@ -101,9 +101,9 @@ public sealed class MarketAcquisitionGuidedRouteSession
             return MarketAcquisitionGuidedRouteResult.Fail($"Cannot record probe for {currentWorld}; active stop is {stop.WorldName}.");
 
         stop.Status = "Complete";
-        stop.DryRunStatus = dryRun.Status;
-        stop.WouldBuyQuantity = dryRun.WouldBuyQuantity;
-        stop.WouldSpendGil = dryRun.WouldSpendGil;
+        stop.LiveCandidateStatus = candidatePlan.Status;
+        stop.WouldBuyQuantity = candidatePlan.WouldBuyQuantity;
+        stop.WouldSpendGil = candidatePlan.WouldSpendGil;
 
         activeStopIndex++;
         if (activeStopIndex >= Stops.Count)
@@ -126,7 +126,7 @@ public sealed record MarketAcquisitionGuidedRouteStop
     public uint PlannedQuantity { get; init; }
     public uint PlannedGil { get; init; }
     public string Status { get; set; } = string.Empty;
-    public string? DryRunStatus { get; set; }
+    public string? LiveCandidateStatus { get; set; }
     public uint WouldBuyQuantity { get; set; }
     public uint WouldSpendGil { get; set; }
     public bool MarketBoardTravelCommandSent { get; set; }

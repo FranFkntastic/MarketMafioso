@@ -4,7 +4,7 @@
 
 **Goal:** Add the first live purchase slice: execute exactly one guarded purchase candidate on the current world, then stop and report the result.
 
-**Architecture:** Reuse the existing live dry-run as the purchase candidate source. Add a pure selector/revalidator that can be tested without Dalamud, then isolate unsafe market-board activation/confirmation behind a small adapter. The first UI surface is an explicit one-shot button that only appears after a ready live dry-run.
+**Architecture:** Reuse the existing live candidate plan as the purchase candidate source. Add a pure selector/revalidator that can be tested without Dalamud, then isolate unsafe market-board activation/confirmation behind a small adapter. The first UI surface is an explicit one-shot button that only appears after a ready live candidate plan.
 
 **Tech Stack:** C# 12, Dalamud API 15, FFXIVClientStructs, xUnit.
 
@@ -49,8 +49,8 @@
 - Modify: `MarketMafioso/Windows/MainWindow.cs`
 - No `Plugin.cs` change was needed; `MainWindow` owns this explicit UI action.
 
-- [x] Add a guarded one-shot `Buy First Safe Listing` button beside the live dry-run summary.
-- [x] Wire it to the executor using the current `marketAcquisitionLiveDryRun` and a fresh `MarketBoardListingReader.ReadCurrentListings(...)`.
+- [x] Add a guarded one-shot `Buy First Safe Listing` button beside the live candidate summary.
+- [x] Wire it to the executor using the current `marketAcquisitionLiveCandidatePlan` and a fresh `MarketBoardListingReader.ReadCurrentListings(...)`.
 - [x] Adapter begins with a guarded current-row action: locate the matching current listing row, prime `LastPurchasedMarketboardItem`, send one listing callback, and wait for the purchase confirmation prompt. Do not loop purchases in this slice.
 - [x] Preserve diagnostics: status message includes candidate quantity, unit price, total gil, and result classification; adapter logs candidate listing and retainer identities.
 
@@ -71,4 +71,4 @@ Deployment note: `Deploy-DevPlugin.ps1` verifies the AppData dev-plugin target a
 - The plan deliberately buys at most one listing.
 - It keeps the unsafe client interaction behind one adapter.
 - It does not add multi-world batch purchasing yet.
-- It allows favorable live drift only through the existing dry-run candidate selection and a fresh pre-action revalidation.
+- It allows favorable live drift only through the existing live candidate selection and a fresh pre-action revalidation.

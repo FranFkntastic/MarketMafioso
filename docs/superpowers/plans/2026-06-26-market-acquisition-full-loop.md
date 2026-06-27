@@ -15,10 +15,10 @@
 **Files:**
 - Modify: `MarketMafioso.Server/Program.cs`
 - Modify: `MarketMafioso.Server/MarketAcquisitionModels.cs`
-- Modify: `MarketMafioso/MarketAcquisition/MarketAcquisitionLiveDryRunPlanner.cs`
+- Modify: `MarketMafioso/MarketAcquisition/MarketAcquisitionLiveCandidatePlanner.cs`
 - Modify: `MarketMafioso/MarketAcquisition/MarketAcquisitionRequestModels.cs`
 - Test: `MarketMafioso.Server.Tests/MarketAcquisitionRequestEndpointTests.cs`
-- Test: `MarketMafioso.Tests/MarketAcquisition/MarketAcquisitionLiveDryRunPlannerTests.cs`
+- Test: `MarketMafioso.Tests/MarketAcquisition/MarketAcquisitionLiveCandidatePlannerTests.cs`
 - Test: `MarketMafioso.Tests/MarketAcquisition/MarketAcquisitionRequestClientTests.cs`
 
 - [ ] Write failing tests:
@@ -26,15 +26,15 @@
   - `CreateRequest_RejectsUpToQuantityMode`
   - `CreateRequest_AllBelowThreshold_AllowsBlankMaxQuantity`
   - `CreateRequest_AllBelowThreshold_TreatsQuantityAsMaxQuantityWhenProvided`
-  - `LiveDryRunPlanner_RejectsLegacyQuantityMode`
+  - `LiveCandidatePlanner_RejectsLegacyQuantityMode`
 - [ ] Remove `Exact` and `UpTo` from dashboard select controls, server validation, plugin request DTO examples, planner normalization, and tests.
 - [ ] Rename or relabel dashboard quantity input for `AllBelowThreshold` to `Max quantity`, and allow it to be blank/zero for no quantity cap.
 - [ ] Keep `TargetQuantity` requiring a positive target quantity.
 - [ ] Run focused quantity tests:
   - `dotnet test "MarketMafioso.Server.Tests/MarketMafioso.Server.Tests.csproj" -c Debug --filter "FullyQualifiedName~MarketAcquisitionRequestEndpointTests" -v minimal`
-  - `dotnet test "MarketMafioso.Tests/MarketMafioso.Tests.csproj" -c Debug --filter "FullyQualifiedName~MarketAcquisitionLiveDryRunPlannerTests|FullyQualifiedName~MarketAcquisitionRequestClientTests" -v minimal`
+  - `dotnet test "MarketMafioso.Tests/MarketMafioso.Tests.csproj" -c Debug --filter "FullyQualifiedName~MarketAcquisitionLiveCandidatePlannerTests|FullyQualifiedName~MarketAcquisitionRequestClientTests" -v minimal`
 - [ ] Commit:
-  - `git add MarketMafioso.Server/Program.cs MarketMafioso.Server/MarketAcquisitionModels.cs MarketMafioso/MarketAcquisition/MarketAcquisitionLiveDryRunPlanner.cs MarketMafioso/MarketAcquisition/MarketAcquisitionRequestModels.cs MarketMafioso.Server.Tests/MarketAcquisitionRequestEndpointTests.cs MarketMafioso.Tests/MarketAcquisition/MarketAcquisitionLiveDryRunPlannerTests.cs MarketMafioso.Tests/MarketAcquisition/MarketAcquisitionRequestClientTests.cs`
+  - `git add MarketMafioso.Server/Program.cs MarketMafioso.Server/MarketAcquisitionModels.cs MarketMafioso/MarketAcquisition/MarketAcquisitionLiveCandidatePlanner.cs MarketMafioso/MarketAcquisition/MarketAcquisitionRequestModels.cs MarketMafioso.Server.Tests/MarketAcquisitionRequestEndpointTests.cs MarketMafioso.Tests/MarketAcquisition/MarketAcquisitionLiveCandidatePlannerTests.cs MarketMafioso.Tests/MarketAcquisition/MarketAcquisitionRequestClientTests.cs`
   - `git commit -m "Remove legacy market acquisition quantity modes"`
 
 ### Task 1: Batch Purchase Models And Selection
@@ -61,7 +61,7 @@
   - `MarketBoardPurchaseBatchRow`
   - `MarketBoardPurchaseBatchTotals`
   - row statuses `WouldBuy`, `SkippedPriceAboveThreshold`, `SkippedHqMismatch`, `SkippedBudgetExceeded`, `SkippedTargetSatisfied`
-- [ ] Implement `MarketBoardPurchasePlanner.BuildBatch(MarketAcquisitionLiveDryRun dryRun, MarketAcquisitionRequestView request, uint alreadyPurchasedQuantity, uint alreadySpentGil)`.
+- [ ] Implement `MarketBoardPurchasePlanner.BuildBatch(MarketAcquisitionLiveCandidatePlan candidatePlan, MarketAcquisitionRequestView request, uint alreadyPurchasedQuantity, uint alreadySpentGil)`.
 - [ ] Re-run the focused test filter and confirm all batch planner tests pass.
 - [ ] Commit:
   - `git add MarketMafioso/MarketAcquisition/MarketBoardPurchaseBatchModels.cs MarketMafioso/MarketAcquisition/MarketBoardPurchasePlanner.cs MarketMafioso.Tests/MarketAcquisition/MarketBoardPurchaseBatchPlannerTests.cs`
@@ -110,7 +110,7 @@
 - [ ] Implement `MarketBoardPurchaseBatchExecutor` as a pure coordinator around:
   - current request,
   - current world,
-  - current live dry-run,
+  - current live candidate plan,
   - fresh listing reads,
   - `MarketBoardPurchaseExecutor`.
 - [ ] Keep adapter calls one-at-a-time. The executor returns after each attempt so the framework loop can wait for confirmation/listing removal.
@@ -138,7 +138,7 @@
   - `RecordWorldPurchaseProgress(...)`
   - `RecordWorldPurchaseBatchComplete(...)`
   - `RecordWorldPurchaseBatchFailed(...)`
-- [ ] Store per-stop live purchased quantity and live spent gil separately from planned dry-run quantities.
+- [ ] Store per-stop live purchased quantity and live spent gil separately from live candidate quantities.
 - [ ] Re-run route/session tests.
 - [ ] Commit:
   - `git add MarketMafioso/MarketAcquisition/MarketAcquisitionRouteRunner.cs MarketMafioso/MarketAcquisition/MarketAcquisitionGuidedRouteSession.cs MarketMafioso.Tests/MarketAcquisition/MarketAcquisitionRouteRunnerTests.cs MarketMafioso.Tests/MarketAcquisition/MarketAcquisitionGuidedRouteSessionTests.cs`

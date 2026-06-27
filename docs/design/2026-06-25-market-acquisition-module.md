@@ -150,7 +150,7 @@ Dalamud and FFXIVClientStructs expose enough market board state to design a safe
    - MarketMafioso waits for the user to open the market board, or opens/searches it if that path is implemented safely.
    - MarketMafioso loads live listings for the item.
    - MarketMafioso builds a confirmed candidate pool from live listings at or below the max unit price.
-   - The current read-only slice can already dry-run that candidate pool for the current visible market-board result set and report would-buy/skip rows without purchasing.
+   - The current live candidate planner can already classify that candidate pool for the current visible market-board result set and report buy/skip rows.
    - MarketMafioso purchases still-valid confirmed listings in lowest-price order until the target quantity, all-below-threshold rule, optional max quantity, optional gil cap, inventory state, or a safety stop ends the batch.
 11. The run ends as complete, paused, stopped, cancelled, or failed with diagnostics.
 
@@ -487,7 +487,7 @@ public interface IMarketBoardPurchaseExecutor
 }
 ```
 
-First implementation mode should include a read-only dry run:
+First implementation mode should include live candidate reconciliation:
 
 - Load the live item search.
 - Capture listings.
@@ -510,7 +510,7 @@ Primary controls:
 - Phase 3 pickup is one-shot manual fetch plus manual retry. Do not show a countdown or `Stop Fetching` button until timed polling is implemented.
 - Pending request summary.
 - `Accept Request` and `Reject` buttons.
-- Local runner controls after acceptance: `Prepare`, `Dry Run`, `Pause`, `Stop`.
+- Local runner controls after acceptance: `Prepare`, `Start`, `Pause`, `Stop`, and `Restart`.
 
 The tab should match the existing ImGui style shown by Inventory Reporter and Workshop Prep:
 
@@ -552,7 +552,7 @@ Actions:
 
 Before acceptance, show character/world, item id/name, quantity mode, HQ policy, max unit price, max total gil if present, world mode, request age, expiry, and source. Disable `Accept Request` if max unit price, item id, quantity mode, or target character/world is missing or mismatched.
 
-Claimed but unaccepted requests persist enough local state to survive plugin reload: request summary, claim token, and lifecycle idempotency keys. If the dashboard cancels or resends the request while the plugin still has stale local claim state, the plugin can forget the local claim and fetch again. `Accept Request` must not start planning, travel, market-board reads, dry-run execution, or purchases. It only records local consent and moves the request into the local accepted state.
+Claimed but unaccepted requests persist enough local state to survive plugin reload: request summary, claim token, and lifecycle idempotency keys. If the dashboard cancels or resends the request while the plugin still has stale local claim state, the plugin can forget the local claim and fetch again. `Accept Request` must not start planning, travel, market-board reads, candidate execution, or purchases. It only records local consent and moves the request into the local accepted state.
 
 ### Local Runner
 
@@ -572,7 +572,7 @@ Compact summary:
 - Last validation result.
 - Last server progress result.
 
-Use action-specific labels instead of ambiguous `Dry Run` where possible: `Prepare Plan`, `Read Market Board`, `Dry Run Batch`, and `Start Guided Run`. Disabled controls must have adjacent muted text explaining the missing prerequisite.
+Use action-specific labels such as `Prepare Plan`, `Start Route`, `Pause`, `Stop`, and `Restart`. Disabled controls must have adjacent muted text explaining the missing prerequisite.
 
 Optional world table:
 
@@ -664,9 +664,9 @@ Manual verification:
 - Confirm wrong-character requests do not appear.
 - Confirm recommended mode only includes worlds with supporting listings under the threshold.
 - Confirm all-world sweep is visually and behaviorally distinct from recommended mode.
-- Dry-run live listing capture on a common item.
-- Dry-run on a mixed HQ/NQ item.
-- Dry-run after listings change externally.
+- Live candidate live listing capture on a common item.
+- Live candidate on a mixed HQ/NQ item.
+- Live candidate after listings change externally.
 - One-item low-value purchase test with a strict gil cap.
 - Multi-listing route purchase test after one local launch.
 
@@ -682,7 +682,7 @@ Manual verification:
 - Display pending request summary and accept/reject controls.
 - No game UI automation and no purchases.
 
-### Slice 2: Planner And UI Dry Run
+### Slice 2: Planner And Candidate UI
 
 - Add acquisition plan DTOs.
 - Add Universalis-backed plan source.
@@ -721,7 +721,7 @@ Manual verification:
 - Submit the accepted item name to the market board item search addon after arrival.
 - Retry the read-only live listing probe after search submission so the user does not need to press `Read Live Listings` manually after Lifestream opens the market board.
 - Add route launch and intervention UI.
-- Add dry-run batch execution.
+- Add live candidate batch execution.
 - Keep purchase executor disabled by default.
 
 ### Slice 5: Guarded Purchase Executor
@@ -749,6 +749,6 @@ Manual verification:
 
 ## Remaining Investigation Gates
 
-- Live market board probe must prove the current patch's listing fields, loading/no-listing states, row identity tuple, and pagination behavior before dry-run reconciliation is accepted.
+- Live market board probe must prove the current patch's listing fields, loading/no-listing states, row identity tuple, and pagination behavior before live candidate reconciliation is accepted.
 - Purchase probe must prove the purchase packet path, success/failure observation, listing-disappeared behavior, price-change behavior, inventory-full behavior, and insufficient-gil behavior before any purchase executor can merge.
 - World travel probe must prove visible preconditions, action steps, postconditions, timeout behavior, and failure surfaces before automated travel can merge.

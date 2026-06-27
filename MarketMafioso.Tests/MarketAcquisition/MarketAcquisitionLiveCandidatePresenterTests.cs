@@ -1,11 +1,11 @@
 namespace MarketMafioso.Tests.MarketAcquisition;
 
-public sealed class MarketAcquisitionLiveDryRunPresenterTests
+public sealed class MarketAcquisitionLiveCandidatePresenterTests
 {
     [Fact]
     public void BuildSummary_CountsBuyAndSkippedRows()
     {
-        var dryRun = new MarketMafioso.MarketAcquisition.MarketAcquisitionLiveDryRun
+        var candidatePlan = new MarketMafioso.MarketAcquisition.MarketAcquisitionLiveCandidatePlan
         {
             Status = "Ready",
             Message = "Would buy confirmed live listings.",
@@ -20,7 +20,7 @@ public sealed class MarketAcquisitionLiveDryRunPresenterTests
             ],
         };
 
-        var summary = MarketMafioso.MarketAcquisition.MarketAcquisitionLiveDryRunPresenter.BuildSummary(dryRun);
+        var summary = MarketMafioso.MarketAcquisition.MarketAcquisitionLiveCandidatePresenter.BuildSummary(candidatePlan);
 
         Assert.Equal("Ready", summary.Status);
         Assert.Equal("Would buy confirmed live listings.", summary.Message);
@@ -32,7 +32,7 @@ public sealed class MarketAcquisitionLiveDryRunPresenterTests
         Assert.Equal(3, summary.TotalRows);
     }
 
-    private static MarketMafioso.MarketAcquisition.MarketAcquisitionLiveDryRunRow CreateRow(string decision) =>
+    private static MarketMafioso.MarketAcquisition.MarketAcquisitionLiveCandidateRow CreateRow(string decision) =>
         new()
         {
             Decision = decision,

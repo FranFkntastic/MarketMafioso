@@ -19,13 +19,13 @@ public sealed class MarketBoardPurchaseExecutor
     }
 
     public MarketBoardPurchaseResult ExecuteFirstCandidate(
-        MarketAcquisitionLiveDryRun dryRun,
+        MarketAcquisitionLiveCandidatePlan candidatePlan,
         MarketBoardReadResult freshRead)
     {
-        ArgumentNullException.ThrowIfNull(dryRun);
+        ArgumentNullException.ThrowIfNull(candidatePlan);
         ArgumentNullException.ThrowIfNull(freshRead);
 
-        var candidate = MarketBoardPurchasePlanner.SelectFirstCandidate(dryRun);
+        var candidate = MarketBoardPurchasePlanner.SelectFirstCandidate(candidatePlan);
         if (candidate == null)
         {
             return new MarketBoardPurchaseResult

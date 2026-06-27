@@ -4,9 +4,9 @@ using System.Linq;
 
 namespace MarketMafioso.MarketAcquisition;
 
-public static class MarketAcquisitionLiveDryRunPlanner
+public static class MarketAcquisitionLiveCandidatePlanner
 {
-    public static MarketAcquisitionLiveDryRun BuildDryRun(
+    public static MarketAcquisitionLiveCandidatePlan BuildCandidatePlan(
         MarketAcquisitionRequestView request,
         MarketAcquisitionPlan plan,
         string currentWorld,
@@ -24,7 +24,7 @@ public static class MarketAcquisitionLiveDryRunPlanner
         var hasMaxQuantity = mode == "AllBelowThreshold" && request.Quantity > 0;
         var selectedQuantity = 0u;
         var selectedGil = 0u;
-        var rows = new List<MarketAcquisitionLiveDryRunRow>();
+        var rows = new List<MarketAcquisitionLiveCandidateRow>();
 
         var candidates = liveListings
             .Select(listing => ValidateLiveListing(listing, currentWorld, itemId))
@@ -70,7 +70,7 @@ public static class MarketAcquisitionLiveDryRunPlanner
 
             selectedQuantity = nextQuantity;
             selectedGil = checked(selectedGil + listingGil);
-            rows.Add(new MarketAcquisitionLiveDryRunRow
+            rows.Add(new MarketAcquisitionLiveCandidateRow
             {
                 Decision = "WouldBuy",
                 Reason = "SafeLiveCandidate",
@@ -82,7 +82,7 @@ public static class MarketAcquisitionLiveDryRunPlanner
         }
 
         var status = ResolveStatus(mode, request.Quantity, selectedQuantity);
-        return new MarketAcquisitionLiveDryRun
+        return new MarketAcquisitionLiveCandidatePlan
         {
             Status = status,
             Message = ResolveMessage(status, mode, request.Quantity, selectedQuantity),
@@ -135,7 +135,7 @@ public static class MarketAcquisitionLiveDryRunPlanner
             _ => throw new InvalidOperationException($"Unknown quantity mode {quantityMode}."),
         };
 
-    private static MarketAcquisitionLiveDryRunRow Skipped(
+    private static MarketAcquisitionLiveCandidateRow Skipped(
         MarketBoardLiveListing listing,
         string reason,
         string message,

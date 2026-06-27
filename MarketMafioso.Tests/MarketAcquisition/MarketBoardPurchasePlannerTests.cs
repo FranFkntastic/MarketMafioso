@@ -5,7 +5,7 @@ public sealed class MarketBoardPurchasePlannerTests
     [Fact]
     public void SelectFirstCandidate_UsesFirstWouldBuyRow()
     {
-        var dryRun = new MarketMafioso.MarketAcquisition.MarketAcquisitionLiveDryRun
+        var candidatePlan = new MarketMafioso.MarketAcquisition.MarketAcquisitionLiveCandidatePlan
         {
             Status = "Ready",
             Rows =
@@ -16,7 +16,7 @@ public sealed class MarketBoardPurchasePlannerTests
             ],
         };
 
-        var candidate = MarketMafioso.MarketAcquisition.MarketBoardPurchasePlanner.SelectFirstCandidate(dryRun);
+        var candidate = MarketMafioso.MarketAcquisition.MarketBoardPurchasePlanner.SelectFirstCandidate(candidatePlan);
 
         Assert.NotNull(candidate);
         Assert.Equal("cheap", candidate.ListingId);
@@ -26,7 +26,7 @@ public sealed class MarketBoardPurchasePlannerTests
     [Fact]
     public void SelectFirstCandidate_ReturnsNullWhenNoWouldBuyRowsExist()
     {
-        var dryRun = new MarketMafioso.MarketAcquisition.MarketAcquisitionLiveDryRun
+        var candidatePlan = new MarketMafioso.MarketAcquisition.MarketAcquisitionLiveCandidatePlan
         {
             Status = "NoSafeListings",
             Rows =
@@ -35,7 +35,7 @@ public sealed class MarketBoardPurchasePlannerTests
             ],
         };
 
-        var candidate = MarketMafioso.MarketAcquisition.MarketBoardPurchasePlanner.SelectFirstCandidate(dryRun);
+        var candidate = MarketMafioso.MarketAcquisition.MarketBoardPurchasePlanner.SelectFirstCandidate(candidatePlan);
 
         Assert.Null(candidate);
     }
@@ -107,7 +107,7 @@ public sealed class MarketBoardPurchasePlannerTests
     private static MarketMafioso.MarketAcquisition.MarketBoardPurchaseCandidate CreateCandidate(string listingId) =>
         MarketMafioso.MarketAcquisition.MarketBoardPurchaseCandidate.FromLiveListing(CreateListing(listingId));
 
-    private static MarketMafioso.MarketAcquisition.MarketAcquisitionLiveDryRunRow CreateRow(
+    private static MarketMafioso.MarketAcquisition.MarketAcquisitionLiveCandidateRow CreateRow(
         string decision,
         MarketMafioso.MarketAcquisition.MarketBoardLiveListing listing) =>
         new()
