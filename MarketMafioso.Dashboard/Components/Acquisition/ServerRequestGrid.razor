@@ -1,76 +1,84 @@
 @using MarketMafioso.Dashboard.Models
 
 <MudPaper Class="compact-card dashboard-panel queue-panel" Elevation="0">
-    <MudStack Spacing="2">
-        <MudStack Row="true" AlignItems="AlignItems.Center" Class="panel-heading">
-            <MudText Typo="Typo.h6">Request Board</MudText>
-            <MudSpacer />
-            <MudText Typo="Typo.caption" Class="muted">@ActiveRequestCount active</MudText>
-        </MudStack>
+    <div class="queue-shell">
+        <header class="panel-heading">
+            <h2>Request Board</h2>
+            <span class="target-chip">@ActiveRequestCount active</span>
+        </header>
 
-        <MudStack Row="true" AlignItems="AlignItems.Center" Class="queue-toolbar">
-            <MudChip T="string"
-                     Class="status-chip"
-                     Color="@(LiveConnected ? Color.Success : Color.Info)"
-                     Variant="Variant.Outlined">
-                @LiveStatusText
-            </MudChip>
-            <MudText Typo="Typo.caption" Class="muted">@Requests.Count total request(s)</MudText>
-            <MudSpacer />
+        <div class="queue-toolbar">
+            <span class="status-pill @(LiveConnected ? "connected" : "disconnected")">
+                <span class="status-dot"></span>
+                <span>@LiveStatusText</span>
+            </span>
+            <span class="status-pill">@Requests.Count total request(s)</span>
+            <span class="toolbar-spacer"></span>
             <MudButton Variant="Variant.Outlined" Class="quiet-button" OnClick="RefreshRequested">Refresh</MudButton>
-        </MudStack>
+        </div>
 
-        <MudDataGrid T="MarketAcquisitionRequestView"
-                     Items="Requests"
-                     Dense="true"
-                     Hover="true"
-                     FixedHeader="true"
-                     ReadOnly="true"
-                     SortMode="SortMode.Multiple"
-                     Filterable="true"
-                     ShowFilterIcons="true"
-                     Class="queue-table operation-grid"
-                     RowClassFunc="RowClass"
-                     RowClick="@OnRowClicked">
-            <Columns>
-                <TemplateColumn Title="Item" Resizable="true">
-                    <CellTemplate>
-                        @(context.Item.ItemName ?? $"Item {context.Item.ItemId}")<br /><span class="muted">@context.Item.TargetCharacterName @@ @context.Item.TargetWorld</span>
-                    </CellTemplate>
-                </TemplateColumn>
-                <TemplateColumn Title="Qty" Resizable="true">
-                    <CellTemplate>@FormatQuantity(context.Item)</CellTemplate>
-                </TemplateColumn>
-                <PropertyColumn Property="request => request.MaxUnitPrice" Title="Max Unit" Resizable="true" />
-                <PropertyColumn Property="request => request.WorldMode" Title="Routing" Resizable="true" />
-                <TemplateColumn Title="Status" Resizable="true">
-                    <CellTemplate>
-                        <MudChip T="string" Size="Size.Small" Color="@StatusColor(context.Item.Status)">@context.Item.Status</MudChip>
-                    </CellTemplate>
-                </TemplateColumn>
-                <TemplateColumn Title="Latest" Resizable="true">
-                    <CellTemplate>@FormatLatestRequestEvent(context.Item)</CellTemplate>
-                </TemplateColumn>
-                <TemplateColumn Title="Actions" Resizable="true" Sortable="false" Filterable="false">
-                    <CellTemplate>
-                        <MudMenu Dense="true">
-                            <ActivatorContent>
-                                <MudButton Size="Size.Small" Variant="Variant.Outlined">Actions</MudButton>
-                            </ActivatorContent>
-                            <ChildContent>
-                                <MudMenuItem OnClick="@(() => CancelRequested.InvokeAsync(context.Item.Id))">Cancel</MudMenuItem>
-                                <MudMenuItem OnClick="@(() => ResendRequested.InvokeAsync(context.Item.Id))">Resend</MudMenuItem>
-                                <MudMenuItem OnClick="@(() => TemplateRequested.InvokeAsync(context.Item))">Use as template</MudMenuItem>
-                            </ChildContent>
-                        </MudMenu>
-                    </CellTemplate>
-                </TemplateColumn>
-            </Columns>
-            <NoRecordsContent>
-                <MudText Class="muted">No acquisition requests yet.</MudText>
-            </NoRecordsContent>
-        </MudDataGrid>
-    </MudStack>
+        <div class="queue-body">
+            @if (Requests.Count == 0)
+            {
+                <div class="request-empty-state">
+                    <div>
+                        <h3>No acquisition requests yet</h3>
+                        <p>Create a request on the left. Active, waiting, running, and completed requests will appear here.</p>
+                    </div>
+                </div>
+            }
+            else
+            {
+                <MudDataGrid T="MarketAcquisitionRequestView"
+                             Items="Requests"
+                             Dense="true"
+                             Hover="true"
+                             FixedHeader="true"
+                             ReadOnly="true"
+                             SortMode="SortMode.Multiple"
+                             Filterable="true"
+                             ShowFilterIcons="true"
+                             Class="queue-table operation-grid request-data-grid"
+                             RowClassFunc="RowClass"
+                             RowClick="@OnRowClicked">
+                    <Columns>
+                        <TemplateColumn Title="Item" Resizable="true">
+                            <CellTemplate>
+                                @(context.Item.ItemName ?? $"Item {context.Item.ItemId}")<br /><span class="muted">@context.Item.TargetCharacterName @@ @context.Item.TargetWorld</span>
+                            </CellTemplate>
+                        </TemplateColumn>
+                        <TemplateColumn Title="Qty" Resizable="true">
+                            <CellTemplate>@FormatQuantity(context.Item)</CellTemplate>
+                        </TemplateColumn>
+                        <PropertyColumn Property="request => request.MaxUnitPrice" Title="Max Unit" Resizable="true" />
+                        <PropertyColumn Property="request => request.WorldMode" Title="Routing" Resizable="true" />
+                        <TemplateColumn Title="Status" Resizable="true">
+                            <CellTemplate>
+                                <MudChip T="string" Size="Size.Small" Color="@StatusColor(context.Item.Status)">@context.Item.Status</MudChip>
+                            </CellTemplate>
+                        </TemplateColumn>
+                        <TemplateColumn Title="Latest" Resizable="true">
+                            <CellTemplate>@FormatLatestRequestEvent(context.Item)</CellTemplate>
+                        </TemplateColumn>
+                        <TemplateColumn Title="Actions" Resizable="true" Sortable="false" Filterable="false">
+                            <CellTemplate>
+                                <MudMenu Dense="true">
+                                    <ActivatorContent>
+                                        <MudButton Size="Size.Small" Variant="Variant.Outlined">Actions</MudButton>
+                                    </ActivatorContent>
+                                    <ChildContent>
+                                        <MudMenuItem OnClick="@(() => CancelRequested.InvokeAsync(context.Item.Id))">Cancel</MudMenuItem>
+                                        <MudMenuItem OnClick="@(() => ResendRequested.InvokeAsync(context.Item.Id))">Resend</MudMenuItem>
+                                        <MudMenuItem OnClick="@(() => TemplateRequested.InvokeAsync(context.Item))">Use as template</MudMenuItem>
+                                    </ChildContent>
+                                </MudMenu>
+                            </CellTemplate>
+                        </TemplateColumn>
+                    </Columns>
+                </MudDataGrid>
+            }
+        </div>
+    </div>
 </MudPaper>
 
 @code {
