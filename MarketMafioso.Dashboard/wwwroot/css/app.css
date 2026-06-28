@@ -398,8 +398,30 @@ body,
 .mud-select .mud-input-slot {
     color: var(--mmf-text) !important;
     font-size: 13px;
-    line-height: 1.35;
-    min-height: 28px;
+    line-height: 1.2;
+    min-height: 42px;
+}
+
+.mud-input > input.mud-input-root,
+.mud-select .mud-input-slot,
+.mud-select .mud-input-control-input-container {
+    align-items: center;
+    display: flex;
+}
+
+.mud-input > input.mud-input-root {
+    height: 42px;
+    padding-bottom: 0 !important;
+    padding-top: 0 !important;
+}
+
+.mud-select .mud-input-slot {
+    padding-bottom: 0 !important;
+    padding-top: 0 !important;
+}
+
+.mud-input-adornment {
+    align-self: center;
 }
 
 .mud-input-control-helper-container {
