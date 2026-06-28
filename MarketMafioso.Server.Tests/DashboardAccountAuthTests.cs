@@ -105,6 +105,25 @@ public sealed class DashboardAccountAuthTests
     }
 
     [Fact]
+    public async Task DashboardSession_AllowsPluginBatchPendingWithApiKeyUnderBasePath()
+    {
+        await using var application = CreateApplication(
+            new KeyValuePair<string, string?>("MarketMafioso:RequireApiKey", "true"),
+            new KeyValuePair<string, string?>("MarketMafioso:ClientApiKey", "client-secret"),
+            new KeyValuePair<string, string?>("MarketMafioso:BasePath", "/marketmafioso"));
+        using var client = application.CreateClient();
+
+        using var request = new HttpRequestMessage(
+            HttpMethod.Get,
+            "/marketmafioso/api/acquisition/batches/pending?characterName=Wei%20Ning&world=Siren");
+        request.Headers.Add("X-Api-Key", "client-secret");
+
+        var response = await client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
     public async Task DashboardSession_StopsWorkingWhenUserIsDisabled()
     {
         var values = CreateApplicationValues();

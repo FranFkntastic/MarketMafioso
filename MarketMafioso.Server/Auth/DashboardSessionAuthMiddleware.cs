@@ -75,7 +75,8 @@ public sealed class DashboardSessionAuthMiddleware
 
     private static bool IsPluginAcquisitionApiRoute(HttpRequest request)
     {
-        if (!request.Path.StartsWithSegments("/api/acquisition/requests", StringComparison.OrdinalIgnoreCase))
+        if (!request.Path.StartsWithSegments("/api/acquisition/requests", StringComparison.OrdinalIgnoreCase) &&
+            !request.Path.StartsWithSegments("/api/acquisition/batches", StringComparison.OrdinalIgnoreCase))
             return false;
 
         if (HttpMethods.IsPost(request.Method) &&
@@ -85,7 +86,8 @@ public sealed class DashboardSessionAuthMiddleware
         }
 
         if (HttpMethods.IsGet(request.Method) &&
-            request.Path.Equals("/api/acquisition/requests/pending", StringComparison.OrdinalIgnoreCase))
+            (request.Path.Equals("/api/acquisition/requests/pending", StringComparison.OrdinalIgnoreCase) ||
+             request.Path.Equals("/api/acquisition/batches/pending", StringComparison.OrdinalIgnoreCase)))
         {
             return true;
         }
