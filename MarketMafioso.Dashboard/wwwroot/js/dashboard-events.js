@@ -11,6 +11,9 @@ window.marketMafiosoEvents = (() => {
     function start(url, dotNetRef) {
         stop();
         source = new EventSource(url, { withCredentials: true });
+        source.onopen = () => {
+            dotNetRef.invokeMethodAsync("OnEventStreamOpenAsync");
+        };
         source.addEventListener("acquisition", event => {
             dotNetRef.invokeMethodAsync("OnAcquisitionEventAsync", event.data);
         });

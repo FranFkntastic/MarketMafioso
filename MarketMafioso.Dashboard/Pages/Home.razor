@@ -70,6 +70,7 @@ else
     private DashboardSessionResponse? _session;
     private bool _loading = true;
     private bool _busy;
+    private bool _eventsStarted;
     private bool _eventsConnected;
     private string _liveStatus = "Live updates idle";
     private string _loginUsername = string.Empty;
@@ -94,7 +95,7 @@ else
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (_session is not null && !_eventsConnected)
+        if (_session is not null && !_eventsStarted)
             await StartEventsAsync();
     }
 
@@ -136,20 +137,30 @@ else
 
     private async Task StartEventsAsync()
     {
-        if (_eventsConnected)
+        if (_eventsStarted)
             return;
 
         _dotNetRef ??= DotNetObjectReference.Create(this);
         await JS.InvokeVoidAsync("marketMafiosoEvents.start", "api/events/stream", _dotNetRef);
-        _eventsConnected = true;
-        _liveStatus = "Live updates connected";
+        _eventsStarted = true;
+        _eventsConnected = false;
+        _liveStatus = "Live updates connecting";
     }
 
     private async Task StopEventsAsync()
     {
         await JS.InvokeVoidAsync("marketMafiosoEvents.stop");
+        _eventsStarted = false;
         _eventsConnected = false;
         _liveStatus = "Live updates idle";
+    }
+
+    [JSInvokable]
+    public Task OnEventStreamOpenAsync()
+    {
+        _eventsConnected = true;
+        _liveStatus = "Live updates connected";
+        return InvokeAsync(StateHasChanged);
     }
 
     [JSInvokable]
