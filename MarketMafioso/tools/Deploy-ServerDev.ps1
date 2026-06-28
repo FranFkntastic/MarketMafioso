@@ -86,18 +86,18 @@ function Invoke-PublicSmoke {
         throw "Dashboard shell smoke check failed."
     }
 
-    $retiredRouteStillServesDashboard = $false
+    $retiredRouteStillServes = $false
     try {
         $retiredShell = Invoke-WebRequest -Uri $retiredDashboardUrl -UseBasicParsing
-        if ($retiredShell.StatusCode -eq 200 -and $retiredShell.Content -like "*_framework/blazor*") {
-            $retiredRouteStillServesDashboard = $true
+        if ($retiredShell.StatusCode -eq 200) {
+            $retiredRouteStillServes = $true
         }
     }
     catch {
         # Expected when the retired route is gone.
     }
-    if ($retiredRouteStillServesDashboard) {
-        throw "Retired /api/marketmafioso route still serves the dashboard."
+    if ($retiredRouteStillServes) {
+        throw "Retired /api/marketmafioso route still returns 200."
     }
 
     if (Test-Path -LiteralPath $dashboardPasswordPath) {

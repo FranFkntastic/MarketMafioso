@@ -79,6 +79,10 @@ jobs:
           ENV
           chmod 600 marketmafioso-dev.env
           cat > marketmafioso-dev.caddy <<CADDY
+          handle /api/marketmafioso /api/marketmafioso/* {
+              respond "The MarketMafioso hosted route moved to /marketmafioso/." 410
+          }
+
           handle /marketmafioso {
               reverse_proxy 127.0.0.1:5088
           }
