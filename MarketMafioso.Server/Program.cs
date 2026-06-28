@@ -2,6 +2,8 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Globalization;
+using System.Text.RegularExpressions;
+using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Primitives;
 using MarketMafioso.Server;
 using MarketMafioso.Server.Auth;
@@ -772,11 +774,66 @@ static async Task ServeDashboardStaticAssetAsync(HttpContext context, RequestDel
         context.Response.Headers.CacheControl = "no-cache";
     }
 
+    if (IsMudBlazorStylesheet(path))
+    {
+        await ServeSanitizedMudBlazorStylesheetAsync(context, file);
+        return;
+    }
+
     if (HttpMethods.IsHead(context.Request.Method))
         return;
 
     await using var stream = file.CreateReadStream();
     await stream.CopyToAsync(context.Response.Body, context.RequestAborted);
+}
+
+static bool IsMudBlazorStylesheet(string path) =>
+    path.Equals("_content/MudBlazor/MudBlazor.min.css", StringComparison.Ordinal);
+
+static async Task ServeSanitizedMudBlazorStylesheetAsync(HttpContext context, IFileInfo file)
+{
+    context.Response.Headers.CacheControl = "no-cache";
+    if (HttpMethods.IsHead(context.Request.Method))
+        return;
+
+    await using var stream = file.CreateReadStream();
+    using var reader = new StreamReader(stream, Encoding.UTF8);
+    var css = await reader.ReadToEndAsync(context.RequestAborted);
+    var sanitized = SanitizeMudBlazorStylesheet(css);
+    await context.Response.WriteAsync(sanitized, context.RequestAborted);
+}
+
+static string SanitizeMudBlazorStylesheet(string css)
+{
+    if (string.IsNullOrEmpty(css))
+        return css;
+
+    css = css.Replace("-moz-osx-font-smoothing:grayscale;", string.Empty, StringComparison.Ordinal);
+    css = css.Replace("@-o-keyframes mud-animation-fadein{0%{opacity:0}100%{opacity:1}}", string.Empty, StringComparison.Ordinal);
+    css = css.Replace("@-ms-keyframes mud-animation-fadein{0%{opacity:0}100%{opacity:1}}", string.Empty, StringComparison.Ordinal);
+    css = css.Replace("outline-style:hidden", "outline-style:none", StringComparison.Ordinal);
+    css = css.Replace(".cursor-url{cursor:url !important}", string.Empty, StringComparison.Ordinal);
+
+    var invalidPaddingDeclarations = new[]
+    {
+        "padding-top:auto !important;",
+        "padding-right:auto !important;",
+        "padding-left:auto !important;",
+        "padding-bottom:auto !important;",
+        "padding-inline-start:auto !important;",
+        "padding-inline-end:auto !important;",
+        "padding:auto !important;",
+    };
+
+    foreach (var invalidPaddingDeclaration in invalidPaddingDeclarations)
+    {
+        css = css.Replace(invalidPaddingDeclaration, string.Empty, StringComparison.Ordinal);
+    }
+
+    css = Regex.Replace(css, @"[^{}]*::?-ms-[^{]*\{[^{}]*\}", string.Empty, RegexOptions.CultureInvariant);
+    css = Regex.Replace(css, @"[^{}]*::-webkit-[^{]*\{[^{}]*\}", string.Empty, RegexOptions.CultureInvariant);
+    css = Regex.Replace(css, @"[^{}]*::-moz-focus-inner[^{]*\{[^{}]*\}", string.Empty, RegexOptions.CultureInvariant);
+    return css;
 }
 
 static bool IsDashboardStaticAssetPath(string path) =>
