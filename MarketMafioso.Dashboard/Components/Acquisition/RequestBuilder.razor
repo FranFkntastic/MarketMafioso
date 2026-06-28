@@ -10,11 +10,12 @@
             <MudText Typo="Typo.caption" Class="muted">@TargetDisplay</MudText>
         </MudStack>
 
-        <div class="form-section">
+        <div class="builder-section">
             <MudText Typo="Typo.overline" Class="section-label">Target</MudText>
             <MudGrid Spacing="2">
                 <MudItem xs="12">
-                    <MudSelect T="long?" Value="_selectedCharacterId" ValueChanged="OnCharacterChanged" Label="Character" Variant="Variant.Outlined" Margin="Margin.Dense" Disabled="@(!Characters.Any())">
+                    <MudText Typo="Typo.caption" Class="field-label">Character</MudText>
+                    <MudSelect T="long?" Value="_selectedCharacterId" ValueChanged="OnCharacterChanged" Placeholder="Choose character" Variant="Variant.Outlined" Margin="Margin.Dense" Disabled="@(!Characters.Any())">
                         @foreach (var character in Characters)
                         {
                             <MudSelectItem T="long?" Value="@character.Id">@character.DisplayName</MudSelectItem>
@@ -26,12 +27,14 @@
                     }
                 </MudItem>
                 <MudItem xs="12" sm="6">
-                    <MudSelect T="string" @bind-Value="_region" Label="Region" Variant="Variant.Outlined" Margin="Margin.Dense">
+                    <MudText Typo="Typo.caption" Class="field-label">Region</MudText>
+                    <MudSelect T="string" @bind-Value="_region" Placeholder="Choose region" Variant="Variant.Outlined" Margin="Margin.Dense">
                         <MudSelectItem Value="@("North America")">North America</MudSelectItem>
                     </MudSelect>
                 </MudItem>
                 <MudItem xs="12" sm="6">
-                    <MudSelect T="string" @bind-Value="_worldMode" Label="Routing" Variant="Variant.Outlined" Margin="Margin.Dense">
+                    <MudText Typo="Typo.caption" Class="field-label">Routing</MudText>
+                    <MudSelect T="string" @bind-Value="_worldMode" Placeholder="Choose routing" Variant="Variant.Outlined" Margin="Margin.Dense">
                         <MudSelectItem Value="@("Recommended")">Recommended worlds</MudSelectItem>
                         <MudSelectItem Value="@("CurrentWorld")">Current world</MudSelectItem>
                         <MudSelectItem Value="@("AllWorldSweep")">All-world sweep</MudSelectItem>
@@ -44,10 +47,10 @@
             }
         </div>
 
-        <div class="form-section">
-            <MudText Typo="Typo.overline" Class="section-label">Item</MudText>
+        <div class="builder-section item-section">
+            <MudText Typo="Typo.caption" Class="field-label">Item</MudText>
             <MudAutocomplete T="XivItemSearchResult"
-                             Label="Item"
+                             Placeholder="Search by item name"
                              Variant="Variant.Outlined"
                              Margin="Margin.Dense"
                              Value="_selectedItem"
@@ -63,33 +66,39 @@
                              DebounceInterval="250" />
         </div>
 
-        <div class="form-section">
+        <div class="builder-section">
             <MudText Typo="Typo.overline" Class="section-label">Purchase Limits</MudText>
             <MudGrid Spacing="2">
                 <MudItem xs="12" sm="6">
-                    <MudSelect T="string" Value="@_quantityMode" ValueChanged="QuantityModeChanged" Label="Quantity mode" Variant="Variant.Outlined" Margin="Margin.Dense">
+                    <MudText Typo="Typo.caption" Class="field-label">Quantity mode</MudText>
+                    <MudSelect T="string" Value="@_quantityMode" ValueChanged="QuantityModeChanged" Placeholder="Choose quantity mode" Variant="Variant.Outlined" Margin="Margin.Dense">
                         <MudSelectItem Value="@("TargetQuantity")">Target quantity</MudSelectItem>
                         <MudSelectItem Value="@("AllBelowThreshold")">All below threshold</MudSelectItem>
                     </MudSelect>
                 </MudItem>
                 <MudItem xs="12" sm="6">
-                    <MudNumericField T="uint?" @bind-Value="_quantity" Label="@QuantityLabel" Variant="Variant.Outlined" Margin="Margin.Dense" Min="0" />
+                    <MudText Typo="Typo.caption" Class="field-label">@QuantityLabel</MudText>
+                    <MudNumericField T="uint?" @bind-Value="_quantity" Placeholder="@QuantityLabel" Variant="Variant.Outlined" Margin="Margin.Dense" Min="0" />
                 </MudItem>
                 <MudItem xs="12" sm="6">
-                    <MudNumericField T="uint?" @bind-Value="_maxUnitPrice" Label="Max unit price" Variant="Variant.Outlined" Margin="Margin.Dense" Min="1" />
+                    <MudText Typo="Typo.caption" Class="field-label">Max unit price</MudText>
+                    <MudNumericField T="uint?" @bind-Value="_maxUnitPrice" Placeholder="Max unit price" Variant="Variant.Outlined" Margin="Margin.Dense" Min="1" />
                 </MudItem>
                 <MudItem xs="12" sm="6">
-                    <MudNumericField T="uint?" @bind-Value="_gilCap" Label="Gil cap (optional)" Variant="Variant.Outlined" Margin="Margin.Dense" Min="0" />
+                    <MudText Typo="Typo.caption" Class="field-label">Gil cap (optional)</MudText>
+                    <MudNumericField T="uint?" @bind-Value="_gilCap" Placeholder="Gil cap (optional)" Variant="Variant.Outlined" Margin="Margin.Dense" Min="0" />
                 </MudItem>
                 <MudItem xs="12" sm="6">
-                    <MudSelect T="string" @bind-Value="_hqPolicy" Label="HQ policy" Variant="Variant.Outlined" Margin="Margin.Dense">
+                    <MudText Typo="Typo.caption" Class="field-label">HQ policy</MudText>
+                    <MudSelect T="string" @bind-Value="_hqPolicy" Placeholder="Choose HQ policy" Variant="Variant.Outlined" Margin="Margin.Dense">
                         <MudSelectItem Value="@("Either")">Either</MudSelectItem>
                         <MudSelectItem Value="@("NqOnly")">NQ only</MudSelectItem>
                         <MudSelectItem Value="@("HqOnly")">HQ only</MudSelectItem>
                     </MudSelect>
                 </MudItem>
                 <MudItem xs="12" sm="6">
-                    <MudSelect T="int" @bind-Value="_expiresInSeconds" Label="Pickup expires" Variant="Variant.Outlined" Margin="Margin.Dense">
+                    <MudText Typo="Typo.caption" Class="field-label">Pickup expires</MudText>
+                    <MudSelect T="int" @bind-Value="_expiresInSeconds" Placeholder="Choose pickup window" Variant="Variant.Outlined" Margin="Margin.Dense">
                         <MudSelectItem Value="300">5 minutes</MudSelectItem>
                         <MudSelectItem Value="900">15 minutes</MudSelectItem>
                     </MudSelect>

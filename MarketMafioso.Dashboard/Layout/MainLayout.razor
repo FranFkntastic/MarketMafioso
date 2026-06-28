@@ -1,11 +1,12 @@
 @inherits LayoutComponentBase
+@inject DashboardThemeService ThemeService
 
-<MudThemeProvider Theme="_theme" IsDarkMode="true" />
+<MudThemeProvider Theme="ThemeService.Theme" IsDarkMode="true" />
 <MudPopoverProvider />
 <MudDialogProvider />
 <MudSnackbarProvider />
 
-<MudLayout>
+<MudLayout Style="@ThemeService.RootStyle">
     <MudAppBar Elevation="0" Dense="true" Class="app-bar">
         <MudText Typo="Typo.h6" Class="brand">MarketMafioso</MudText>
         <MudText Typo="Typo.caption" Class="section-title">Dashboard</MudText>
@@ -21,31 +22,3 @@
         @Body
     </MudMainContent>
 </MudLayout>
-
-@code {
-    private readonly MudTheme _theme = new()
-    {
-        PaletteDark = new PaletteDark
-        {
-            Primary = "#5aa8ff",
-            Secondary = "#8bd6a3",
-            Surface = "#121920",
-            Background = "#090e13",
-            BackgroundGray = "#0f151b",
-            AppbarBackground = "#101720",
-            AppbarText = "#f4f8ff",
-            DrawerBackground = "#111821",
-            TextPrimary = "#f4f8ff",
-            TextSecondary = "#a8bed8",
-            LinesDefault = "#273646",
-            TableLines = "#273646",
-            TableStriped = "#111a22",
-            ActionDefault = "#a8bed8",
-            ActionDisabled = "#637080",
-            Error = "#ff6b7a",
-            Info = "#5aa8ff",
-            Success = "#3ddc84",
-            Warning = "#f8c14a",
-        },
-    };
-}
