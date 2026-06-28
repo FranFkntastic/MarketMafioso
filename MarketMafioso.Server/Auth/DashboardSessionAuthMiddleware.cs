@@ -42,6 +42,9 @@ public sealed class DashboardSessionAuthMiddleware
 
     private static bool RequiresDashboardSession(HttpRequest request)
     {
+        if (IsPluginInventoryIngestRoute(request))
+            return false;
+
         if (IsPluginAcquisitionApiRoute(request))
             return false;
 
@@ -63,6 +66,12 @@ public sealed class DashboardSessionAuthMiddleware
 
         return false;
     }
+
+    private static bool IsPluginInventoryIngestRoute(HttpRequest request) =>
+        HttpMethods.IsPost(request.Method) &&
+        request.Headers.ContainsKey("X-Api-Key") &&
+        (request.Path.Equals("/inventory", StringComparison.OrdinalIgnoreCase) ||
+         request.Path.Equals("/api/inventory", StringComparison.OrdinalIgnoreCase));
 
     private static bool IsPluginAcquisitionApiRoute(HttpRequest request)
     {

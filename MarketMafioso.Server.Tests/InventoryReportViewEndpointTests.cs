@@ -512,7 +512,10 @@ public sealed class InventoryReportViewEndpointTests
     public async Task HostedMode_AcceptsConfiguredBasePath()
     {
         await using var application = CreateHostedApplication(
-            new KeyValuePair<string, string?>("MarketMafioso:BasePath", "/marketmafioso"));
+            new KeyValuePair<string, string?>("MarketMafioso:BasePath", "/marketmafioso"),
+            new KeyValuePair<string, string?>("MarketMafioso:RequireDashboardAuth", "true"),
+            new KeyValuePair<string, string?>("MarketMafioso:DashboardBootstrapUsername", "admin"),
+            new KeyValuePair<string, string?>("MarketMafioso:DashboardBootstrapPassword", "secret-password"));
         using var client = application.CreateClient();
 
         using var request = new HttpRequestMessage(HttpMethod.Post, "/marketmafioso/api/inventory")
