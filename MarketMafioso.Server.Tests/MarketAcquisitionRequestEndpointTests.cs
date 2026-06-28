@@ -455,6 +455,63 @@ public sealed class MarketAcquisitionRequestEndpointTests
     }
 
     [Fact]
+    public async Task AcquisitionRequestTimelineReturnsLifecycleAndAttemptEvents()
+    {
+        await using var application = CreateHostedApplication();
+        using var client = application.CreateClient();
+        var claimed = await CreateAcceptedRequestAsync(client, "attempt-timeline");
+
+        var firstProgress = await SendAttemptProgressAsync(
+            client,
+            claimed.RequestId,
+            claimed.ClaimToken,
+            "attempt-timeline-progress-1",
+            "attempt-001",
+            1,
+            "Traveling",
+            "Traveling to Brynhildr.",
+            worldName: "Brynhildr",
+            routeStopId: "stop-brynhildr");
+        var secondProgress = await SendAttemptProgressAsync(
+            client,
+            claimed.RequestId,
+            claimed.ClaimToken,
+            "attempt-timeline-progress-2",
+            "attempt-001",
+            2,
+            "Buying",
+            "Bought safe listing.",
+            worldName: "Brynhildr",
+            routeStopId: "stop-brynhildr");
+        firstProgress.EnsureSuccessStatusCode();
+        secondProgress.EnsureSuccessStatusCode();
+
+        var timelineResponse = await SendWithKeyAsync(
+            client,
+            HttpMethod.Get,
+            $"/marketmafioso/api/acquisition/requests/{claimed.RequestId}/timeline",
+            "client-secret");
+
+        timelineResponse.EnsureSuccessStatusCode();
+        using var timelineJson = JsonDocument.Parse(await timelineResponse.Content.ReadAsStringAsync());
+        var root = timelineJson.RootElement;
+        Assert.Equal(claimed.RequestId, root.GetProperty("request").GetProperty("id").GetString());
+
+        var lifecycleEvents = root.GetProperty("lifecycleEvents").EnumerateArray().ToArray();
+        Assert.Contains(lifecycleEvents, entry => entry.GetProperty("eventType").GetString() == "accept");
+
+        var attemptEvents = root.GetProperty("attemptEvents").EnumerateArray().ToArray();
+        Assert.Equal(2, attemptEvents.Length);
+        Assert.Equal("attempt-001", attemptEvents[0].GetProperty("attemptId").GetString());
+        Assert.Equal(1, attemptEvents[0].GetProperty("sequence").GetInt64());
+        Assert.Equal("Traveling", attemptEvents[0].GetProperty("phase").GetString());
+        Assert.Equal("Brynhildr", attemptEvents[0].GetProperty("worldName").GetString());
+        Assert.Equal("Traveling to Brynhildr.", attemptEvents[0].GetProperty("message").GetString());
+        Assert.Equal("Buying", attemptEvents[1].GetProperty("phase").GetString());
+        Assert.Equal("Bought safe listing.", attemptEvents[1].GetProperty("message").GetString());
+    }
+
+    [Fact]
     public async Task ProgressAttemptEventIsIdempotentForSameBody()
     {
         await using var application = CreateHostedApplication();

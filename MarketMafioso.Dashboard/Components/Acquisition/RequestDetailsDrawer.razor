@@ -1,10 +1,11 @@
 @using MarketMafioso.Dashboard.Models
+@inject DashboardApiClient Api
 
 <MudDrawer Anchor="Anchor.Right"
            Open="Request is not null"
            OpenChanged="OnOpenChanged"
            Variant="DrawerVariant.Temporary"
-           Width="420px"
+           Width="620px"
            Class="details-drawer">
     @if (Request is null)
     {
@@ -21,7 +22,7 @@
 
             <MudChip T="string" Size="Size.Small" Color="@StatusColor(Request.Status)">@Request.Status</MudChip>
 
-            <MudSimpleTable Dense="true" Class="details-table">
+            <MudSimpleTable Dense="true" Class="details-table request-summary-table">
                 <tbody>
                     <tr><td>Request</td><td>@Request.Id</td></tr>
                     <tr><td>Target</td><td>@Request.TargetCharacterName @@ @Request.TargetWorld</td></tr>
@@ -37,6 +38,95 @@
                 </tbody>
             </MudSimpleTable>
 
+            @if (_loadingTimeline)
+            {
+                <MudProgressLinear Indeterminate="true" Color="Color.Primary" />
+            }
+            else if (!string.IsNullOrWhiteSpace(_timelineError))
+            {
+                <MudAlert Severity="Severity.Warning" Dense="true">@_timelineError</MudAlert>
+            }
+            else
+            {
+                <MudPaper Class="compact-card dashboard-panel details-section" Elevation="0">
+                    <MudStack Spacing="1">
+                        <MudText Typo="Typo.subtitle2">Lifecycle</MudText>
+                        @if ((_timeline?.LifecycleEvents.Count ?? 0) == 0)
+                        {
+                            <MudText Typo="Typo.body2" Class="muted">No lifecycle events recorded.</MudText>
+                        }
+                        else
+                        {
+                            <MudSimpleTable Dense="true" Class="details-table timeline-table">
+                                <thead>
+                                    <tr>
+                                        <th>Time</th>
+                                        <th>Event</th>
+                                        <th>State</th>
+                                        <th>Message</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var entry in _timeline!.LifecycleEvents)
+                                    {
+                                        <tr>
+                                            <td>@FormatTime(entry.CreatedAtUtc)</td>
+                                            <td>@entry.EventType -> @entry.ResultStatus</td>
+                                            <td>@(entry.RunnerState ?? "-")</td>
+                                            <td>@FormatMessage(entry.Message, entry.Reason)</td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </MudSimpleTable>
+                        }
+                    </MudStack>
+                </MudPaper>
+
+                <MudPaper Class="compact-card dashboard-panel details-section" Elevation="0">
+                    <MudStack Spacing="1">
+                        <MudText Typo="Typo.subtitle2">Attempt Events</MudText>
+                        @if ((_timeline?.AttemptEvents.Count ?? 0) == 0)
+                        {
+                            <MudText Typo="Typo.body2" Class="muted">No route or purchase attempt events recorded.</MudText>
+                        }
+                        else
+                        {
+                            <MudSimpleTable Dense="true" Class="details-table attempt-table">
+                                <thead>
+                                    <tr>
+                                        <th>Seq</th>
+                                        <th>World</th>
+                                        <th>Phase</th>
+                                        <th>Result</th>
+                                        <th>Message</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var entry in _timeline!.AttemptEvents)
+                                    {
+                                        <tr>
+                                            <td>@entry.Sequence</td>
+                                            <td>@(entry.WorldName ?? "-")</td>
+                                            <td>
+                                                <div>@entry.Phase</div>
+                                                <span class="muted">@entry.EventType</span>
+                                            </td>
+                                            <td>
+                                                <MudChip T="string" Size="Size.Small" Color="@AttemptResultColor(entry.Result)">@entry.Result</MudChip>
+                                            </td>
+                                            <td>
+                                                <div>@FormatMessage(entry.Message, entry.Reason)</div>
+                                                <span class="muted">@FormatAttemptMeta(entry)</span>
+                                            </td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </MudSimpleTable>
+                        }
+                    </MudStack>
+                </MudPaper>
+            }
+
             <MudStack Row="true">
                 <MudButton Variant="Variant.Outlined" OnClick="@(() => CancelRequested.InvokeAsync(Request.Id))">Cancel</MudButton>
                 <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="@(() => ResendRequested.InvokeAsync(Request.Id))">Resend</MudButton>
@@ -50,6 +140,42 @@
     [Parameter] public EventCallback Closed { get; set; }
     [Parameter] public EventCallback<string> CancelRequested { get; set; }
     [Parameter] public EventCallback<string> ResendRequested { get; set; }
+
+    private string? _timelineRequestId;
+    private MarketAcquisitionRequestTimelineView? _timeline;
+    private bool _loadingTimeline;
+    private string? _timelineError;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (Request is null)
+        {
+            _timelineRequestId = null;
+            _timeline = null;
+            _timelineError = null;
+            return;
+        }
+
+        if (string.Equals(_timelineRequestId, Request.Id, StringComparison.Ordinal))
+            return;
+
+        _timelineRequestId = Request.Id;
+        _timeline = null;
+        _timelineError = null;
+        _loadingTimeline = true;
+        try
+        {
+            _timeline = await Api.GetAcquisitionRequestTimelineAsync(Request.Id);
+        }
+        catch (Exception ex)
+        {
+            _timelineError = $"Timeline load failed: {ex.Message}";
+        }
+        finally
+        {
+            _loadingTimeline = false;
+        }
+    }
 
     private Task OnOpenChanged(bool open) => open ? Task.CompletedTask : CloseAsync();
 
@@ -66,10 +192,40 @@
         _ => Color.Info,
     };
 
+    private static Color AttemptResultColor(string result) => result switch
+    {
+        "accepted" or "replayed" => Color.Success,
+        "stale_attempt" or "request_terminal" => Color.Warning,
+        _ => Color.Info,
+    };
+
     private static string FormatQuantity(MarketAcquisitionRequestView request) =>
         request.QuantityMode == "AllBelowThreshold"
             ? request.Quantity == 0 ? "All safe stock" : $"Max {request.Quantity:N0}"
             : request.Quantity.ToString("N0");
+
+    private static string FormatTime(DateTimeOffset value) => value.ToLocalTime().ToString("HH:mm:ss");
+
+    private static string FormatMessage(string? message, string? reason)
+    {
+        if (!string.IsNullOrWhiteSpace(message) && !string.IsNullOrWhiteSpace(reason))
+            return $"{message} ({reason})";
+
+        return message ?? reason ?? "-";
+    }
+
+    private static string FormatAttemptMeta(MarketAcquisitionAttemptEventView entry)
+    {
+        var parts = new List<string>();
+        if (!string.IsNullOrWhiteSpace(entry.AttemptId))
+            parts.Add(entry.AttemptId);
+        if (!string.IsNullOrWhiteSpace(entry.RouteStopId))
+            parts.Add(entry.RouteStopId);
+        if (!string.IsNullOrWhiteSpace(entry.PluginVersion))
+            parts.Add(entry.PluginVersion);
+
+        return parts.Count == 0 ? string.Empty : string.Join(" / ", parts);
+    }
 
     private static string FormatLatestRequestEvent(MarketAcquisitionRequestView request)
     {

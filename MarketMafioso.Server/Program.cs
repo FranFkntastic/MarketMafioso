@@ -92,6 +92,15 @@ app.MapGet("/api/acquisition/requests", async (
     return Results.Ok(acquisitionRequests);
 });
 
+app.MapGet("/api/acquisition/requests/{id}/timeline", async (
+    string id,
+    MarketAcquisitionRequestStore acquisitionStore,
+    CancellationToken token) =>
+{
+    var timeline = await acquisitionStore.GetTimelineAsync(id, token);
+    return timeline == null ? Results.NotFound() : Results.Ok(timeline);
+});
+
 app.MapGet("/api/diagnostics/events", async (
     DiagnosticEventStore diagnostics,
     int? limit,

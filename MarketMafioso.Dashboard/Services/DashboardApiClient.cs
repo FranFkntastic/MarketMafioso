@@ -55,6 +55,16 @@ public sealed class DashboardApiClient
             cancellationToken) ?? [];
     }
 
+    public async Task<MarketAcquisitionRequestTimelineView> GetAcquisitionRequestTimelineAsync(
+        string id,
+        CancellationToken cancellationToken = default)
+    {
+        return await http.GetFromJsonAsync<MarketAcquisitionRequestTimelineView>(
+            $"api/acquisition/requests/{Uri.EscapeDataString(id)}/timeline",
+            JsonOptions,
+            cancellationToken) ?? new MarketAcquisitionRequestTimelineView();
+    }
+
     public async Task<MarketAcquisitionRequestView> CreateAcquisitionRequestAsync(
         MarketAcquisitionCreateRequest request,
         CancellationToken cancellationToken = default)

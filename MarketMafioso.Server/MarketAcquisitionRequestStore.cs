@@ -231,6 +231,42 @@ public sealed class MarketAcquisitionRequestStore
         return requests;
     }
 
+    public async Task<MarketAcquisitionRequestTimelineView?> GetTimelineAsync(
+        string id,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(id))
+            throw new ArgumentException("Request id is required.", nameof(id));
+
+        await ExpirePendingAsync(cancellationToken).ConfigureAwait(false);
+        await ExpireClaimedAsync(cancellationToken).ConfigureAwait(false);
+
+        await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+
+        var request = await GetByIdAsync(connection, transaction, id, cancellationToken).ConfigureAwait(false);
+        if (request == null)
+            return null;
+
+        var lifecycleEvents = await ListLifecycleEventsAsync(
+            connection,
+            transaction,
+            id,
+            cancellationToken).ConfigureAwait(false);
+        var attemptEvents = await ListAttemptEventsAsync(
+            connection,
+            transaction,
+            id,
+            cancellationToken).ConfigureAwait(false);
+
+        return new MarketAcquisitionRequestTimelineView
+        {
+            Request = request,
+            LifecycleEvents = lifecycleEvents,
+            AttemptEvents = attemptEvents,
+        };
+    }
+
     public async Task<MarketAcquisitionClaimView?> ClaimAsync(
         string id,
         MarketAcquisitionClaimRequest request,
@@ -1068,6 +1104,102 @@ public sealed class MarketAcquisitionRequestStore
         return await reader.ReadAsync(cancellationToken).ConfigureAwait(false)
             ? (reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetString(3), reader.GetString(4))
             : null;
+    }
+
+    private static async Task<IReadOnlyList<MarketAcquisitionLifecycleEventView>> ListLifecycleEventsAsync(
+        SqliteConnection connection,
+        System.Data.Common.DbTransaction transaction,
+        string requestId,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = (SqliteTransaction)transaction;
+        command.CommandText =
+            """
+            SELECT event_type, payload_json, result_status, created_at_utc
+            FROM acquisition_request_events
+            WHERE request_id = $requestId
+            ORDER BY id ASC;
+            """;
+        command.Parameters.AddWithValue("$requestId", requestId);
+
+        var events = new List<MarketAcquisitionLifecycleEventView>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            var payload = JsonSerializer.Deserialize<MarketAcquisitionLifecycleRequest>(
+                reader.GetString(1),
+                JsonOptions);
+            events.Add(new MarketAcquisitionLifecycleEventView
+            {
+                EventType = reader.GetString(0),
+                ResultStatus = reader.GetString(2),
+                RunnerState = payload?.RunnerState,
+                Message = payload?.Message,
+                Reason = payload?.Reason,
+                CreatedAtUtc = DateTimeOffset.Parse(reader.GetString(3)),
+            });
+        }
+
+        return events;
+    }
+
+    private static async Task<IReadOnlyList<MarketAcquisitionAttemptEventView>> ListAttemptEventsAsync(
+        SqliteConnection connection,
+        System.Data.Common.DbTransaction transaction,
+        string requestId,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = (SqliteTransaction)transaction;
+        command.CommandText =
+            """
+            SELECT
+                attempt_id,
+                sequence,
+                event_type,
+                phase,
+                route_stop_id,
+                world_name,
+                plugin_version,
+                payload_json,
+                result,
+                client_timestamp_utc,
+                created_at_utc
+            FROM acquisition_attempt_events
+            WHERE request_id = $requestId
+            ORDER BY created_at_utc ASC, id ASC;
+            """;
+        command.Parameters.AddWithValue("$requestId", requestId);
+
+        var events = new List<MarketAcquisitionAttemptEventView>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            var payload = JsonSerializer.Deserialize<MarketAcquisitionAttemptEventRequest>(
+                reader.GetString(7),
+                JsonOptions);
+            events.Add(new MarketAcquisitionAttemptEventView
+            {
+                AttemptId = reader.GetString(0),
+                Sequence = reader.GetInt64(1),
+                EventType = reader.GetString(2),
+                Phase = reader.GetString(3),
+                RouteStopId = reader.IsDBNull(4) ? null : reader.GetString(4),
+                WorldName = reader.IsDBNull(5) ? null : reader.GetString(5),
+                PluginVersion = reader.IsDBNull(6) ? null : reader.GetString(6),
+                Result = reader.GetString(8),
+                RunnerState = payload?.RunnerState,
+                Message = payload?.Message,
+                Reason = payload?.Reason,
+                ClientTimestampUtc = reader.IsDBNull(9)
+                    ? null
+                    : DateTimeOffset.Parse(reader.GetString(9)),
+                CreatedAtUtc = DateTimeOffset.Parse(reader.GetString(10)),
+            });
+        }
+
+        return events;
     }
 
     private static async Task<StoredAttemptEvent?> GetAttemptEventByIdempotencyKeyAsync(

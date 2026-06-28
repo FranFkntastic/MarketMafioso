@@ -47,7 +47,7 @@ Use these docs as supporting references:
 - [ ] Settings Diagnostics retention/SSE health visibility is still pending.
 - [x] Settings Snapshots lists recent account-scoped structured snapshots.
 - [ ] Settings Snapshots exposes raw JSON retention controls.
-- [ ] Acquisition attempt timeline and purchase audit rows are visible from the dashboard.
+- [x] Acquisition attempt timeline and purchase audit rows are visible from the dashboard.
 - [ ] Completed and failed acquisition requests are archived and reusable as presets.
 - [ ] Remaining server-rendered dashboard HTML is removed after equivalent Blazor pages exist.
 
@@ -129,9 +129,9 @@ Use these docs as supporting references:
 - Modify: `MarketMafioso.Dashboard/Services/DashboardApiClient.cs`
 - Modify server acquisition APIs/stores only if existing request projections do not expose attempt/purchase audit facts.
 
-- [ ] Show attempt identity and current/latest attempt state.
-- [ ] Show route events in chronological order.
-- [ ] Show purchase attempts, skips, and stop classifications.
+- [x] Show attempt identity and current/latest attempt state.
+- [x] Show route events in chronological order.
+- [x] Show purchase attempts, skips, and stop classifications.
 - [ ] Preserve completed and failed requests in the request grid by default.
 - [ ] Add archive affordance only after completed/failed rows remain inspectable.
 - [ ] Add preset/reuse affordance after archive behavior is stable.
