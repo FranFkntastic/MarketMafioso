@@ -38,9 +38,6 @@ else
         </MudStack>
 
         <DashboardStatusHost />
-        <LiveStatusStrip Connected="_eventsConnected"
-                         StatusText="@_liveStatus"
-                         RequestCount="State.Requests.Count" />
 
         <div class="page-grid acquisition-grid">
             <RequestBuilder Busy="State.IsBusy"
@@ -52,6 +49,8 @@ else
             <ServerRequestGrid Requests="State.Requests"
                                SelectedRequest="State.SelectedRequest"
                                SelectedRequestChanged="SelectRequestAsync"
+                               LiveConnected="@_eventsConnected"
+                               LiveStatusText="@_liveStatus"
                                RefreshRequested="RefreshRequestsAsync"
                                CancelRequested="CancelRequestAsync"
                                ResendRequested="ResendRequestAsync"

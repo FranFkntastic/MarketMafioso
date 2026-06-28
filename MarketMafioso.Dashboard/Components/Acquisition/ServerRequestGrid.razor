@@ -3,9 +3,20 @@
 <MudPaper Class="compact-card dashboard-panel queue-panel" Elevation="0">
     <MudStack Spacing="2">
         <MudStack Row="true" AlignItems="AlignItems.Center" Class="panel-heading">
-            <MudText Typo="Typo.h6">Request Queue</MudText>
+            <MudText Typo="Typo.h6">Request Board</MudText>
             <MudSpacer />
-            <MudText Typo="Typo.caption" Class="muted">@Requests.Count active</MudText>
+            <MudText Typo="Typo.caption" Class="muted">@ActiveRequestCount active</MudText>
+        </MudStack>
+
+        <MudStack Row="true" AlignItems="AlignItems.Center" Class="queue-toolbar">
+            <MudChip T="string"
+                     Class="status-chip"
+                     Color="@(LiveConnected ? Color.Success : Color.Info)"
+                     Variant="Variant.Outlined">
+                @LiveStatusText
+            </MudChip>
+            <MudText Typo="Typo.caption" Class="muted">@Requests.Count total request(s)</MudText>
+            <MudSpacer />
             <MudButton Variant="Variant.Outlined" Class="quiet-button" OnClick="RefreshRequested">Refresh</MudButton>
         </MudStack>
 
@@ -66,10 +77,14 @@
     [Parameter] public IReadOnlyList<MarketAcquisitionRequestView> Requests { get; set; } = [];
     [Parameter] public MarketAcquisitionRequestView? SelectedRequest { get; set; }
     [Parameter] public EventCallback<MarketAcquisitionRequestView?> SelectedRequestChanged { get; set; }
+    [Parameter] public bool LiveConnected { get; set; }
+    [Parameter] public string LiveStatusText { get; set; } = "Live updates idle";
     [Parameter] public EventCallback RefreshRequested { get; set; }
     [Parameter] public EventCallback<string> CancelRequested { get; set; }
     [Parameter] public EventCallback<string> ResendRequested { get; set; }
     [Parameter] public EventCallback<MarketAcquisitionRequestView> TemplateRequested { get; set; }
+
+    private int ActiveRequestCount => Requests.Count(IsActiveRequest);
 
     private async Task OnRowClicked(DataGridRowClickEventArgs<MarketAcquisitionRequestView> args)
     {
@@ -86,6 +101,9 @@
         "Running" or "AcceptedInPlugin" => Color.Warning,
         _ => Color.Info,
     };
+
+    private static bool IsActiveRequest(MarketAcquisitionRequestView request) =>
+        request.Status is not ("Complete" or "Failed" or "Cancelled" or "Rejected");
 
     private static string FormatQuantity(MarketAcquisitionRequestView request) =>
         request.QuantityMode == "AllBelowThreshold"

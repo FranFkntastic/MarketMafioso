@@ -21,6 +21,10 @@ public sealed record QueuedAcquisitionItem
         ? Quantity == 0 ? "All safe stock" : $"Max {Quantity:N0}"
         : Quantity.ToString("N0");
 
+    public string QuantityModeDisplay => QuantityMode == "AllBelowThreshold"
+        ? "All below threshold"
+        : "Target quantity";
+
     public string GilCapDisplay => MaxTotalGil == 0
         ? "No cap"
         : MaxTotalGil.ToString("N0");

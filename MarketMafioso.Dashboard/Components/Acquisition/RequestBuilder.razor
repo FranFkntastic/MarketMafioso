@@ -5,7 +5,7 @@
 <MudPaper Class="compact-card dashboard-panel builder-panel" Elevation="0">
     <MudStack Spacing="2">
         <MudStack Row="true" AlignItems="AlignItems.Center" Class="panel-heading">
-            <MudText Typo="Typo.h6">New Purchase Request</MudText>
+            <MudText Typo="Typo.h6">Purchase Composer</MudText>
             <MudSpacer />
             <MudText Typo="Typo.caption" Class="muted">@TargetDisplay</MudText>
         </MudStack>
@@ -48,7 +48,7 @@
         </div>
 
         <div class="builder-section item-section">
-            <MudText Typo="Typo.caption" Class="field-label">Item</MudText>
+            <MudText Typo="Typo.caption" Class="field-label">Item <span class="required-marker">Required</span></MudText>
             <MudAutocomplete T="XivItemSearchResult"
                              Placeholder="Search by item name"
                              Variant="Variant.Outlined"
@@ -67,25 +67,25 @@
         </div>
 
         <div class="builder-section">
-            <MudText Typo="Typo.overline" Class="section-label">Purchase Limits</MudText>
+            <MudText Typo="Typo.overline" Class="section-label">Buy Rules</MudText>
             <MudGrid Spacing="2">
                 <MudItem xs="12" sm="6">
-                    <MudText Typo="Typo.caption" Class="field-label">Quantity mode</MudText>
+                    <span class="field-label help-label" title="@QuantityModeHelp">Quantity mode</span>
                     <MudSelect T="string" Value="@_quantityMode" ValueChanged="QuantityModeChanged" Placeholder="Choose quantity mode" Variant="Variant.Outlined" Margin="Margin.Dense">
                         <MudSelectItem Value="@("TargetQuantity")">Target quantity</MudSelectItem>
                         <MudSelectItem Value="@("AllBelowThreshold")">All below threshold</MudSelectItem>
                     </MudSelect>
                 </MudItem>
                 <MudItem xs="12" sm="6">
-                    <MudText Typo="Typo.caption" Class="field-label">@QuantityLabel</MudText>
+                    <span class="field-label help-label" title="@QuantityHelp">@QuantityLabel <span class="optional-marker">@QuantityRequirementLabel</span></span>
                     <MudNumericField T="uint?" @bind-Value="_quantity" Placeholder="@QuantityLabel" Variant="Variant.Outlined" Margin="Margin.Dense" Min="0" />
                 </MudItem>
                 <MudItem xs="12" sm="6">
-                    <MudText Typo="Typo.caption" Class="field-label">Max unit price</MudText>
+                    <span class="field-label help-label" title="Required safety threshold. The plugin skips live listings above this unit price.">Max unit price <span class="required-marker">Required</span></span>
                     <MudNumericField T="uint?" @bind-Value="_maxUnitPrice" Placeholder="Max unit price" Variant="Variant.Outlined" Margin="Margin.Dense" Min="1" />
                 </MudItem>
                 <MudItem xs="12" sm="6">
-                    <MudText Typo="Typo.caption" Class="field-label">Gil cap (optional)</MudText>
+                    <span class="field-label help-label" title="Optional hard stop on total spend for this line. Leave blank to let max unit price govern buying.">Gil cap <span class="optional-marker">Optional</span></span>
                     <MudNumericField T="uint?" @bind-Value="_gilCap" Placeholder="Gil cap (optional)" Variant="Variant.Outlined" Margin="Margin.Dense" Min="0" />
                 </MudItem>
                 <MudItem xs="12" sm="6">
@@ -106,15 +106,11 @@
             </MudGrid>
         </div>
 
-        <MudAlert Class="help-alert" Severity="Severity.Info" Dense="true">
-            @QuantityHelp
-        </MudAlert>
-
         <MudStack Row="true" Class="action-row">
             <MudButton Variant="Variant.Outlined" Class="quiet-button" OnClick="ClearBuilder">Clear</MudButton>
-            <MudSpacer />
+            <MudText Typo="Typo.caption" Class="muted local-queue-count">@LocalQueueDisplay</MudText>
             <MudButton Variant="Variant.Outlined" Class="quiet-button" OnClick="AddToQueue">Add to Queue</MudButton>
-            <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="Busy || _queue.Count == 0" OnClick="StageAsync">Stage Queue</MudButton>
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="Busy || _queue.Count == 0" OnClick="StageAsync">@StageButtonText</MudButton>
         </MudStack>
 
         <MudTable Items="_queue" Dense="true" Hover="true" Class="queue-table">
@@ -127,7 +123,7 @@
             </HeaderContent>
             <RowTemplate>
                 <MudTd>@context.Item.Name<br /><span class="muted">Item @context.Item.ItemId</span></MudTd>
-                <MudTd>@context.QuantityMode<br /><span class="muted">@context.QuantityDisplay</span></MudTd>
+                <MudTd>@context.QuantityModeDisplay<br /><span class="muted">@context.QuantityDisplay</span></MudTd>
                 <MudTd>@context.MaxUnitPrice.ToString("N0")</MudTd>
                 <MudTd>@context.GilCapDisplay</MudTd>
                 <MudTd><MudButton Size="Size.Small" OnClick="@(() => RemoveQueued(context))">Remove</MudButton></MudTd>
@@ -168,6 +164,18 @@
     private string TargetDisplay => SelectedCharacter?.DisplayName ?? "No character selected";
 
     private string QuantityLabel => _quantityMode == "AllBelowThreshold" ? "Max quantity (optional)" : "Target quantity";
+
+    private string QuantityRequirementLabel => _quantityMode == "AllBelowThreshold" ? "Optional" : "Required";
+
+    private string LocalQueueDisplay => _queue.Count == 0
+        ? "No queued items"
+        : _queue.Count == 1 ? "1 queued item" : $"{_queue.Count} queued items";
+
+    private string StageButtonText => _queue.Count > 1 ? $"Stage {_queue.Count} Items" : "Stage Queue";
+
+    private string QuantityModeHelp => _quantityMode == "AllBelowThreshold"
+        ? "All below threshold buys every confirmed live listing at or below max unit price."
+        : "Target quantity buys safe whole stacks until the target is satisfied.";
 
     private string QuantityHelp => _quantityMode == "AllBelowThreshold"
         ? "All below threshold buys every confirmed live listing at or below max unit price. Max quantity and gil cap are optional hard stops."
