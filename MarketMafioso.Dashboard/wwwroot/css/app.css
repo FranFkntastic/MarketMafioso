@@ -384,9 +384,12 @@ body,
 }
 
 .mud-input-control > .mud-input-control-input-container > div.mud-input.mud-input-outlined {
+    align-items: center;
     background: var(--mmf-field-bg);
     border-radius: 5px;
+    display: flex;
     min-height: 44px;
+    width: 100%;
 }
 
 .mud-input-control .mud-input-label {
@@ -402,22 +405,20 @@ body,
     min-height: 42px;
 }
 
-.mud-input > input.mud-input-root,
-.mud-select .mud-input-slot,
-.mud-select .mud-input-control-input-container {
-    align-items: center;
-    display: flex;
-}
-
 .mud-input > input.mud-input-root {
     height: 42px;
     padding-bottom: 0 !important;
     padding-top: 0 !important;
+    width: 100%;
 }
 
 .mud-select .mud-input-slot {
+    align-items: center;
+    display: flex;
+    min-width: 0;
     padding-bottom: 0 !important;
     padding-top: 0 !important;
+    width: 100%;
 }
 
 .mud-input-adornment {
