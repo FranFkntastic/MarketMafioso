@@ -359,6 +359,28 @@ body,
     width: min(46vw, 760px);
 }
 
+.item-icon,
+.item-icon-placeholder {
+    align-items: center;
+    border: 1px solid #2a3c4d;
+    border-radius: 4px;
+    display: inline-flex;
+    height: 32px;
+    justify-content: center;
+    width: 32px;
+}
+
+.item-icon {
+    background: #101821;
+    object-fit: contain;
+}
+
+.item-icon-placeholder {
+    background: #0a1118;
+    color: #5f7893;
+    font-size: 14px;
+}
+
 .inventory-metrics {
     display: grid;
     gap: 10px;

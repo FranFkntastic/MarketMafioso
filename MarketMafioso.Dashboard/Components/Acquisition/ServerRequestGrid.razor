@@ -49,6 +49,7 @@
                             <ChildContent>
                                 <MudMenuItem OnClick="@(() => CancelRequested.InvokeAsync(context.Item.Id))">Cancel</MudMenuItem>
                                 <MudMenuItem OnClick="@(() => ResendRequested.InvokeAsync(context.Item.Id))">Resend</MudMenuItem>
+                                <MudMenuItem OnClick="@(() => TemplateRequested.InvokeAsync(context.Item))">Use as template</MudMenuItem>
                             </ChildContent>
                         </MudMenu>
                     </CellTemplate>
@@ -68,6 +69,7 @@
     [Parameter] public EventCallback RefreshRequested { get; set; }
     [Parameter] public EventCallback<string> CancelRequested { get; set; }
     [Parameter] public EventCallback<string> ResendRequested { get; set; }
+    [Parameter] public EventCallback<MarketAcquisitionRequestView> TemplateRequested { get; set; }
 
     private async Task OnRowClicked(DataGridRowClickEventArgs<MarketAcquisitionRequestView> args)
     {

@@ -46,19 +46,23 @@ else
             <RequestBuilder Busy="State.IsBusy"
                             Characters="_characters"
                             Settings="_settings"
+                            PresetRequest="_builderPreset"
+                            PresetVersion="_builderPresetVersion"
                             StageRequested="StageRequestsAsync" />
             <ServerRequestGrid Requests="State.Requests"
                                SelectedRequest="State.SelectedRequest"
                                SelectedRequestChanged="SelectRequestAsync"
                                RefreshRequested="RefreshRequestsAsync"
                                CancelRequested="CancelRequestAsync"
-                               ResendRequested="ResendRequestAsync" />
+                               ResendRequested="ResendRequestAsync"
+                               TemplateRequested="UseRequestAsTemplateAsync" />
         </div>
 
         <RequestDetailsDrawer Request="State.SelectedRequest"
                               Closed="ClearSelectedRequestAsync"
                               CancelRequested="CancelRequestAsync"
-                              ResendRequested="ResendRequestAsync" />
+                              ResendRequested="ResendRequestAsync"
+                              TemplateRequested="UseRequestAsTemplateAsync" />
     </MudStack>
 }
 
@@ -73,6 +77,8 @@ else
     private IReadOnlyList<DashboardCharacterOption> _characters = [];
     private DashboardSettingsView _settings = new();
     private DotNetObjectReference<Home>? _dotNetRef;
+    private MarketAcquisitionRequestView? _builderPreset;
+    private long _builderPresetVersion;
 
     protected override async Task OnInitializedAsync()
     {
@@ -174,6 +180,14 @@ else
     private Task CancelRequestAsync(string id) => State.CancelAsync(id);
 
     private Task ResendRequestAsync(string id) => State.ResendAsync(id);
+
+    private Task UseRequestAsTemplateAsync(MarketAcquisitionRequestView request)
+    {
+        _builderPreset = request;
+        _builderPresetVersion++;
+        Status.Info($"Loaded {(request.ItemName ?? $"Item {request.ItemId}")} as a draft.");
+        return Task.CompletedTask;
+    }
 
     private Task SelectRequestAsync(MarketAcquisitionRequestView? request)
     {

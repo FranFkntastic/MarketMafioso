@@ -48,7 +48,7 @@ Use these docs as supporting references:
 - [x] Settings Snapshots lists recent account-scoped structured snapshots.
 - [x] Settings Snapshots exposes raw JSON retention visibility.
 - [x] Acquisition attempt timeline and purchase audit rows are visible from the dashboard.
-- [ ] Completed and failed acquisition requests are archived and reusable as presets.
+- [x] Completed and failed acquisition requests remain inspectable and reusable as draft presets.
 - [ ] Remaining server-rendered dashboard HTML is removed after equivalent Blazor pages exist.
 
 ## Task 1: Acquisition Page Polish
@@ -102,7 +102,7 @@ Use these docs as supporting references:
 - [x] Show inventory scopes for player inventory, retainers, and retainer market listings.
 - [x] Keep retainer market listings visually separate from regular inventory entries.
 - [x] Use dense sortable/resizable tables matching the Craft Architect-like operational style.
-- [ ] Preserve optional icon column support, hidden by default.
+- [x] Preserve optional icon column support, hidden by default.
 - [x] Build dashboard and run focused inventory/server tests if API projections change.
 
 ## Task 4: Overview Rebuild
@@ -132,10 +132,10 @@ Use these docs as supporting references:
 - [x] Show attempt identity and current/latest attempt state.
 - [x] Show route events in chronological order.
 - [x] Show purchase attempts, skips, and stop classifications.
-- [ ] Preserve completed and failed requests in the request grid by default.
+- [x] Preserve completed and failed requests in the request grid by default.
 - [ ] Add archive affordance only after completed/failed rows remain inspectable.
-- [ ] Add preset/reuse affordance after archive behavior is stable.
-- [ ] Build dashboard and run focused acquisition/server tests.
+- [x] Add preset/reuse affordance after completed/failed rows remain inspectable.
+- [x] Build dashboard and run focused acquisition/server tests.
 
 ## Task 6: Remove Superseded Server-Rendered Dashboard HTML
 

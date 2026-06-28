@@ -135,6 +135,8 @@
     [Parameter] public Func<IReadOnlyList<MarketAcquisitionCreateRequest>, Task<bool>>? StageRequested { get; set; }
     [Parameter] public IReadOnlyList<DashboardCharacterOption> Characters { get; set; } = [];
     [Parameter] public DashboardSettingsView Settings { get; set; } = new();
+    [Parameter] public MarketAcquisitionRequestView? PresetRequest { get; set; }
+    [Parameter] public long PresetVersion { get; set; }
 
     private long? _selectedCharacterId;
     private string _region = "North America";
@@ -149,6 +151,7 @@
     private int _expiresInSeconds = 300;
     private readonly List<QueuedAcquisitionItem> _queue = [];
     private bool _settingsApplied;
+    private long _appliedPresetVersion;
 
     private DashboardCharacterOption? SelectedCharacter =>
         Characters.FirstOrDefault(character => character.Id == _selectedCharacterId);
@@ -164,7 +167,10 @@
     protected override void OnParametersSet()
     {
         if (_settingsApplied)
+        {
+            ApplyPresetIfChanged();
             return;
+        }
 
         _selectedCharacterId = Settings.DefaultCharacterId;
         if (_selectedCharacterId == null || Characters.All(character => character.Id != _selectedCharacterId))
@@ -174,6 +180,38 @@
         _worldMode = Settings.DefaultWorldMode;
         _expiresInSeconds = Settings.DefaultPickupExpiresSeconds;
         _settingsApplied = true;
+
+        ApplyPresetIfChanged();
+    }
+
+    private void ApplyPresetIfChanged()
+    {
+        if (PresetRequest is null || PresetVersion == _appliedPresetVersion)
+            return;
+
+        _appliedPresetVersion = PresetVersion;
+        var itemName = string.IsNullOrWhiteSpace(PresetRequest.ItemName)
+            ? $"Item {PresetRequest.ItemId}"
+            : PresetRequest.ItemName;
+
+        _selectedCharacterId = Characters
+            .FirstOrDefault(character =>
+                string.Equals(character.CharacterName, PresetRequest.TargetCharacterName, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(character.HomeWorld, PresetRequest.TargetWorld, StringComparison.OrdinalIgnoreCase))
+            ?.Id ?? _selectedCharacterId;
+        _region = string.IsNullOrWhiteSpace(PresetRequest.Region) ? _region : PresetRequest.Region;
+        _worldMode = string.IsNullOrWhiteSpace(PresetRequest.WorldMode) ? _worldMode : PresetRequest.WorldMode;
+        _selectedItem = new XivItemSearchResult
+        {
+            ItemId = PresetRequest.ItemId,
+            Name = itemName,
+        };
+        _itemSearchText = _selectedItem.ToString();
+        _quantityMode = string.IsNullOrWhiteSpace(PresetRequest.QuantityMode) ? "AllBelowThreshold" : PresetRequest.QuantityMode;
+        _quantity = PresetRequest.Quantity == 0 ? null : PresetRequest.Quantity;
+        _hqPolicy = string.IsNullOrWhiteSpace(PresetRequest.HqPolicy) ? "Either" : PresetRequest.HqPolicy;
+        _maxUnitPrice = PresetRequest.MaxUnitPrice == 0 ? null : PresetRequest.MaxUnitPrice;
+        _gilCap = PresetRequest.MaxTotalGil == 0 ? null : PresetRequest.MaxTotalGil;
     }
 
     private async Task<IEnumerable<XivItemSearchResult>> SearchItemsAsync(string value, CancellationToken token)

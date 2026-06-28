@@ -158,6 +158,7 @@ public sealed record InventoryBrowserItemView
     public uint ItemId { get; init; }
     public string DisplayName { get; init; } = string.Empty;
     public string? ItemType { get; init; }
+    public string? IconUrl { get; init; }
     public int TotalQuantity { get; init; }
     public int HqQuantity { get; init; }
     public IReadOnlyList<InventoryBrowserLocationView> Locations { get; init; } = [];
@@ -189,6 +190,7 @@ public sealed record InventoryBrowserMarketListingView
     public uint ItemId { get; init; }
     public string DisplayName { get; init; } = string.Empty;
     public string? ItemType { get; init; }
+    public string? IconUrl { get; init; }
     public int Quantity { get; init; }
     public int HqQuantity { get; init; }
     public uint? UnitPrice { get; init; }

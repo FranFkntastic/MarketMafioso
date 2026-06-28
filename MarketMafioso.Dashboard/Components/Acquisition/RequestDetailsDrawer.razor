@@ -130,6 +130,7 @@
             <MudStack Row="true">
                 <MudButton Variant="Variant.Outlined" OnClick="@(() => CancelRequested.InvokeAsync(Request.Id))">Cancel</MudButton>
                 <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="@(() => ResendRequested.InvokeAsync(Request.Id))">Resend</MudButton>
+                <MudButton Variant="Variant.Outlined" Color="Color.Primary" OnClick="@(() => TemplateRequested.InvokeAsync(Request))">Use as Template</MudButton>
             </MudStack>
         </MudStack>
     }
@@ -140,6 +141,7 @@
     [Parameter] public EventCallback Closed { get; set; }
     [Parameter] public EventCallback<string> CancelRequested { get; set; }
     [Parameter] public EventCallback<string> ResendRequested { get; set; }
+    [Parameter] public EventCallback<MarketAcquisitionRequestView> TemplateRequested { get; set; }
 
     private string? _timelineRequestId;
     private MarketAcquisitionRequestTimelineView? _timeline;

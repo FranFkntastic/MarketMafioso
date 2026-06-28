@@ -63,6 +63,11 @@
                                   DebounceInterval="250"
                                   Class="inventory-search" />
                     <MudSpacer />
+                    <MudSwitch T="bool"
+                               Value="_showIconColumn"
+                               ValueChanged="OnIconColumnChanged"
+                               Label="Icons"
+                               Color="Color.Primary" />
                     <MudText Typo="Typo.caption" Class="muted">@CharacterLabel</MudText>
                 </MudStack>
             </MudPaper>
@@ -94,6 +99,14 @@
                                  Class="queue-table inventory-grid"
                                  RowClick="OnItemClicked">
                         <Columns>
+                            @if (_showIconColumn)
+                            {
+                                <TemplateColumn Title="Icon" Resizable="true" Sortable="false" Filterable="false">
+                                    <CellTemplate>
+                                        <ItemIconCell IconUrl="@context.Item.IconUrl" ItemName="@context.Item.DisplayName" />
+                                    </CellTemplate>
+                                </TemplateColumn>
+                            }
                             <TemplateColumn Title="Item" Resizable="true">
                                 <CellTemplate>
                                     @context.Item.DisplayName<br />
@@ -164,6 +177,14 @@
                                  Class="queue-table inventory-grid listings-grid">
                         <Columns>
                             <PropertyColumn Property="listing => listing.OwnerName" Title="Retainer" Resizable="true" />
+                            @if (_showIconColumn)
+                            {
+                                <TemplateColumn Title="Icon" Resizable="true" Sortable="false" Filterable="false">
+                                    <CellTemplate>
+                                        <ItemIconCell IconUrl="@context.Item.IconUrl" ItemName="@context.Item.DisplayName" />
+                                    </CellTemplate>
+                                </TemplateColumn>
+                            }
                             <TemplateColumn Title="Item" Resizable="true">
                                 <CellTemplate>
                                     @context.Item.DisplayName<br />
@@ -199,6 +220,7 @@
     private long? _selectedCharacterId;
     private string _searchText = string.Empty;
     private string _scope = "all";
+    private bool _showIconColumn;
     private bool _loading;
     private CancellationTokenSource? _loadCts;
 
@@ -241,6 +263,12 @@
         _scope = string.IsNullOrWhiteSpace(scope) ? "all" : scope;
         _selectedItem = null;
         await LoadInventoryAsync();
+    }
+
+    private Task OnIconColumnChanged(bool value)
+    {
+        _showIconColumn = value;
+        return Task.CompletedTask;
     }
 
     private async Task LoadInventoryAsync()

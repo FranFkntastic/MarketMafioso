@@ -1,0 +1,15 @@
+@namespace MarketMafioso.Dashboard.Components.Inventory
+
+@if (string.IsNullOrWhiteSpace(IconUrl))
+{
+    <div class="item-icon-placeholder" title="Icon metadata is not cached yet">-</div>
+}
+else
+{
+    <img class="item-icon" src="@IconUrl" alt="@ItemName" loading="lazy" />
+}
+
+@code {
+    [Parameter] public string? IconUrl { get; set; }
+    [Parameter] public string ItemName { get; set; } = string.Empty;
+}
