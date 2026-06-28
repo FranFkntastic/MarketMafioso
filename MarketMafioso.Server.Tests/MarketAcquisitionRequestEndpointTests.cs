@@ -982,64 +982,14 @@ public sealed class MarketAcquisitionRequestEndpointTests
         Assert.DoesNotContain("name=\"csrf\"", acquisitionPage, StringComparison.Ordinal);
         Assert.DoesNotContain("mmf_csrf", acquisitionPage, StringComparison.Ordinal);
 
-        var recent = await client.GetAsync("/marketmafioso/api/acquisition/requests/recent");
-        recent.EnsureSuccessStatusCode();
-        using var recentJson = JsonDocument.Parse(await recent.Content.ReadAsStringAsync());
-        var root = recentJson.RootElement;
-        Assert.Equal("1 active / 1 recent", root.GetProperty("activeSummary").GetString());
-        Assert.Contains("Fire Shard", root.GetProperty("queueRows").GetString(), StringComparison.Ordinal);
-        Assert.Contains("Accepted", root.GetProperty("queueRows").GetString(), StringComparison.Ordinal);
-        Assert.DoesNotContain("invalid_csrf", root.GetProperty("queueRows").GetString(), StringComparison.Ordinal);
+        var requests = await client.GetFromJsonAsync<JsonElement[]>("/marketmafioso/api/acquisition/requests");
+        var request = Assert.Single(requests!);
+        Assert.Equal("Fire Shard", request.GetProperty("itemName").GetString());
+        Assert.Equal("AcceptedInPlugin", request.GetProperty("status").GetString());
     }
 
     [Fact]
-    public async Task AcquisitionDashboardRecentQueueEndpointReturnsLiveStatusMarkup()
-    {
-        await using var application = CreateHostedApplication(
-            extraConfiguration: new KeyValuePair<string, string?>("MarketMafioso:TrustExternalDashboardAuth", "true"));
-        using var client = application.CreateClient(new WebApplicationFactoryClientOptions
-        {
-            AllowAutoRedirect = false,
-        });
-        var claimed = await CreateAndClaimAsync(client, "dashboard-live-queue");
-        var accept = await SendWithKeyAsync(
-            client,
-            HttpMethod.Post,
-            $"/marketmafioso/api/acquisition/requests/{claimed.RequestId}/accept",
-            "client-secret",
-            new
-            {
-                claimToken = claimed.ClaimToken,
-                idempotencyKey = "dashboard-live-queue-accept",
-            });
-        accept.EnsureSuccessStatusCode();
-        var progress = await SendWithKeyAsync(
-            client,
-            HttpMethod.Post,
-            $"/marketmafioso/api/acquisition/requests/{claimed.RequestId}/progress",
-            "client-secret",
-            new
-            {
-                claimToken = claimed.ClaimToken,
-                idempotencyKey = "dashboard-live-queue-progress",
-                runnerState = "Running",
-                message = "Arrived on Maduin; reading live listings.",
-            });
-        progress.EnsureSuccessStatusCode();
-
-        var recent = await client.GetAsync("/marketmafioso/api/acquisition/requests/recent");
-
-        recent.EnsureSuccessStatusCode();
-        using var recentJson = JsonDocument.Parse(await recent.Content.ReadAsStringAsync());
-        var root = recentJson.RootElement;
-        Assert.Contains("Running", root.GetProperty("latestRequestStatus").GetString(), StringComparison.Ordinal);
-        Assert.Contains("Arrived on Maduin", root.GetProperty("latestRequestEvent").GetString(), StringComparison.Ordinal);
-        Assert.Contains("data-resize-col=\"status\"", root.GetProperty("queueRows").GetString(), StringComparison.Ordinal);
-        Assert.Contains("Arrived on Maduin", root.GetProperty("queueRows").GetString(), StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public async Task AcquisitionDashboardQueueRefreshDoesNotReturnCsrfToken()
+    public async Task AcquisitionDashboardRequestListDoesNotReturnCsrfToken()
     {
         await using var application = CreateHostedApplication(
             extraConfiguration: new KeyValuePair<string, string?>("MarketMafioso:TrustExternalDashboardAuth", "true"));
@@ -1048,43 +998,16 @@ public sealed class MarketAcquisitionRequestEndpointTests
             AllowAutoRedirect = false,
         });
 
-        var recent = await client.GetAsync("/marketmafioso/api/acquisition/requests/recent");
+        var recent = await client.GetAsync("/marketmafioso/api/acquisition/requests");
 
         recent.EnsureSuccessStatusCode();
         using var recentJson = JsonDocument.Parse(await recent.Content.ReadAsStringAsync());
-        Assert.False(recentJson.RootElement.TryGetProperty("csrfToken", out _));
+        Assert.Equal(JsonValueKind.Array, recentJson.RootElement.ValueKind);
 
         var postWithoutCsrf = await client.PostAsync(
             "/marketmafioso/acquisition/requests",
             new FormUrlEncodedContent(CreateFormFields("without-csrf")));
         Assert.Equal(HttpStatusCode.Redirect, postWithoutCsrf.StatusCode);
-    }
-
-    [Fact]
-    public async Task AcquisitionDashboardRecentQueueEndpointClearsCancelledRequests()
-    {
-        await using var application = CreateHostedApplication(
-            extraConfiguration: new KeyValuePair<string, string?>("MarketMafioso:TrustExternalDashboardAuth", "true"));
-        using var client = application.CreateClient(new WebApplicationFactoryClientOptions
-        {
-            AllowAutoRedirect = false,
-        });
-        var claimed = await CreateAndClaimAsync(client, "dashboard-live-cancelled");
-
-        var cancelled = await client.PostAsync(
-            $"/marketmafioso/acquisition/requests/{claimed.RequestId}/cancel",
-            new FormUrlEncodedContent([]));
-
-        Assert.Equal(HttpStatusCode.Redirect, cancelled.StatusCode);
-        var recent = await client.GetAsync("/marketmafioso/api/acquisition/requests/recent");
-
-        recent.EnsureSuccessStatusCode();
-        using var recentJson = JsonDocument.Parse(await recent.Content.ReadAsStringAsync());
-        var root = recentJson.RootElement;
-        Assert.Equal("0 active / 0 recent", root.GetProperty("activeSummary").GetString());
-        Assert.Equal("Idle", root.GetProperty("latestRequestStatus").GetString());
-        Assert.Contains("No acquisition requests yet.", root.GetProperty("queueRows").GetString(), StringComparison.Ordinal);
-        Assert.DoesNotContain("Cancelled", root.GetProperty("queueRows").GetString(), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1103,12 +1026,6 @@ public sealed class MarketAcquisitionRequestEndpointTests
             new FormUrlEncodedContent([]));
 
         Assert.Equal(HttpStatusCode.Redirect, cancelled.StatusCode);
-        var recent = await client.GetAsync("/marketmafioso/api/acquisition/requests/recent");
-        recent.EnsureSuccessStatusCode();
-        using var recentJson = JsonDocument.Parse(await recent.Content.ReadAsStringAsync());
-        Assert.Contains("No acquisition requests yet.", recentJson.RootElement.GetProperty("queueRows").GetString(), StringComparison.Ordinal);
-        Assert.DoesNotContain("Cancelled", recentJson.RootElement.GetProperty("queueRows").GetString(), StringComparison.Ordinal);
-
         var pending = await SendWithKeyAsync(
             client,
             HttpMethod.Get,
@@ -1163,11 +1080,10 @@ public sealed class MarketAcquisitionRequestEndpointTests
 
         Assert.Equal(HttpStatusCode.Redirect, cancelComplete.StatusCode);
         Assert.Equal(HttpStatusCode.Redirect, cancelCompleteAgain.StatusCode);
-        var recent = await client.GetAsync("/marketmafioso/api/acquisition/requests/recent");
-        recent.EnsureSuccessStatusCode();
-        using var recentJson = JsonDocument.Parse(await recent.Content.ReadAsStringAsync());
-        Assert.Contains("Complete", recentJson.RootElement.GetProperty("queueRows").GetString(), StringComparison.Ordinal);
-        Assert.DoesNotContain("Cancelled", recentJson.RootElement.GetProperty("queueRows").GetString(), StringComparison.Ordinal);
+        var requests = await client.GetFromJsonAsync<JsonElement[]>("/marketmafioso/api/acquisition/requests");
+        var request = Assert.Single(requests!);
+        Assert.Equal(claimed.RequestId, request.GetProperty("id").GetString());
+        Assert.Equal("Complete", request.GetProperty("status").GetString());
     }
 
     [Fact]
@@ -1434,11 +1350,24 @@ public sealed class MarketAcquisitionRequestEndpointTests
             AllowAutoRedirect = false,
         });
 
-        var recent = await client.GetAsync("/marketmafioso/api/acquisition/requests/recent");
+        var requests = await client.GetFromJsonAsync<JsonElement[]>("/marketmafioso/api/acquisition/requests");
 
-        recent.EnsureSuccessStatusCode();
-        using var recentJson = JsonDocument.Parse(await recent.Content.ReadAsStringAsync());
-        Assert.Contains("No acquisition requests yet.", recentJson.RootElement.GetProperty("queueRows").GetString(), StringComparison.Ordinal);
+        Assert.Empty(requests!);
+    }
+
+    [Fact]
+    public async Task AcquisitionDashboardLegacyRecentQueueEndpointIsRetired()
+    {
+        await using var application = CreateHostedApplication(
+            extraConfiguration: new KeyValuePair<string, string?>("MarketMafioso:TrustExternalDashboardAuth", "true"));
+        using var client = application.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false,
+        });
+
+        var response = await client.GetAsync("/marketmafioso/api/acquisition/requests/recent");
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
 
     [Fact]

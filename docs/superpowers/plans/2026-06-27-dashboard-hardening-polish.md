@@ -49,7 +49,8 @@ Use these docs as supporting references:
 - [x] Settings Snapshots exposes raw JSON retention visibility.
 - [x] Acquisition attempt timeline and purchase audit rows are visible from the dashboard.
 - [x] Completed and failed acquisition requests remain inspectable and reusable as draft presets.
-- [ ] Remaining server-rendered dashboard HTML is removed after equivalent Blazor pages exist.
+- [x] Legacy acquisition queue HTML refresh endpoint is removed after Blazor/SSE queue parity.
+- [ ] Raw report detail HTML is retired after an equivalent Blazor snapshot detail page exists.
 
 ## Task 1: Acquisition Page Polish
 
@@ -144,11 +145,12 @@ Use these docs as supporting references:
 - Modify: `MarketMafioso.Server/Program.cs`
 - Modify tests under `MarketMafioso.Server.Tests/`
 
-- [ ] Confirm Blazor equivalents exist for acquisition, inventory, overview, settings diagnostics, and settings snapshots.
-- [ ] Remove obsolete string-rendered dashboard pages.
-- [ ] Keep JSON/plugin/raw report endpoints intact.
-- [ ] Add route tests proving dashboard routes serve the Blazor shell and API routes serve JSON.
-- [ ] Run focused server tests and dashboard build.
+- [x] Confirm Blazor equivalents exist for acquisition, inventory, overview, settings diagnostics, and settings snapshots.
+- [x] Remove obsolete acquisition queue row-rendering endpoint and helpers.
+- [x] Keep JSON/plugin/raw report endpoints intact.
+- [x] Add route tests proving retired acquisition snippet endpoint is gone.
+- [ ] Add a Blazor snapshot detail/raw viewer before retiring `/reports/{id}` HTML.
+- [x] Run focused server tests and dashboard build.
 
 ## Verification Rhythm
 

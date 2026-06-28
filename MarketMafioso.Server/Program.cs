@@ -153,23 +153,6 @@ app.MapGet("/api/events/stream", async (
     }
 });
 
-app.MapGet("/acquisition/requests/recent", async (
-    HttpRequest request,
-    MarketAcquisitionRequestStore acquisitionStore,
-    CancellationToken token) =>
-{
-    var acquisitionRequests = await acquisitionStore.ListRecentAsync(50, token);
-    return Results.Json(BuildAcquisitionQueueUpdate(acquisitionRequests, request.PathBase));
-});
-app.MapGet("/api/acquisition/requests/recent", async (
-    HttpRequest request,
-    MarketAcquisitionRequestStore acquisitionStore,
-    CancellationToken token) =>
-{
-    var acquisitionRequests = await acquisitionStore.ListRecentAsync(50, token);
-    return Results.Json(BuildAcquisitionQueueUpdate(acquisitionRequests, request.PathBase));
-});
-
 app.MapPost("/inventory", SaveInventoryReport);
 app.MapPost("/api/inventory", SaveInventoryReport);
 
@@ -1081,9 +1064,7 @@ static bool IsAcquisitionBrowserControl(HttpRequest request) =>
 
 static bool IsAcquisitionBrowserRead(HttpRequest request) =>
     HttpMethods.IsGet(request.Method) &&
-    (request.Path.Equals("/api/acquisition/requests", StringComparison.OrdinalIgnoreCase) ||
-     request.Path.Equals("/acquisition/requests/recent", StringComparison.OrdinalIgnoreCase) ||
-     request.Path.Equals("/api/acquisition/requests/recent", StringComparison.OrdinalIgnoreCase));
+    request.Path.Equals("/api/acquisition/requests", StringComparison.OrdinalIgnoreCase);
 
 static bool WantsJsonResponse(HttpRequest request)
 {
@@ -1094,10 +1075,33 @@ static bool IsDashboardApiRoute(HttpRequest request) =>
     request.Path.StartsWithSegments("/api", StringComparison.OrdinalIgnoreCase);
 
 static bool IsAcquisitionPluginRoute(HttpRequest request) =>
-    (request.Path.StartsWithSegments("/acquisition/requests") ||
-     request.Path.StartsWithSegments("/api/acquisition/requests")) &&
+    IsKnownAcquisitionPluginRoute(request) &&
     !IsAcquisitionCreate(request) &&
     !IsAcquisitionBrowserControl(request);
+
+static bool IsKnownAcquisitionPluginRoute(HttpRequest request)
+{
+    if (HttpMethods.IsGet(request.Method))
+    {
+        return request.Path.Equals("/acquisition/requests/pending", StringComparison.OrdinalIgnoreCase) ||
+               request.Path.Equals("/api/acquisition/requests/pending", StringComparison.OrdinalIgnoreCase);
+    }
+
+    if (!HttpMethods.IsPost(request.Method))
+        return false;
+
+    var path = request.Path.Value ?? string.Empty;
+    return (path.StartsWith("/acquisition/requests/", StringComparison.OrdinalIgnoreCase) ||
+            path.StartsWith("/api/acquisition/requests/", StringComparison.OrdinalIgnoreCase)) &&
+           (path.EndsWith("/claim", StringComparison.OrdinalIgnoreCase) ||
+            path.EndsWith("/accept", StringComparison.OrdinalIgnoreCase) ||
+            path.EndsWith("/reject", StringComparison.OrdinalIgnoreCase) ||
+            path.EndsWith("/cancel", StringComparison.OrdinalIgnoreCase) ||
+            path.EndsWith("/resend", StringComparison.OrdinalIgnoreCase) ||
+            path.EndsWith("/progress", StringComparison.OrdinalIgnoreCase) ||
+            path.EndsWith("/complete", StringComparison.OrdinalIgnoreCase) ||
+            path.EndsWith("/fail", StringComparison.OrdinalIgnoreCase));
+}
 
 static bool HasValidApiKey(
     HttpRequest request,
@@ -1205,194 +1209,6 @@ static string DefaultXivDataBaseUrl(string? publicOrigin)
     return string.IsNullOrWhiteSpace(normalizedPublicOrigin)
         ? "https://dev.xivcraftarchitect.com/api/xivdata"
         : $"{normalizedPublicOrigin}/api/xivdata";
-}
-
-static string RenderAcquisitionQueueRows(
-    IReadOnlyList<MarketAcquisitionRequestView> requests,
-    PathString pathBase)
-{
-    if (requests.Count == 0)
-        return """<tr><td colspan="8" class="empty-cell">No acquisition requests yet.</td></tr>""";
-
-    return string.Join(Environment.NewLine, requests.Select(request =>
-    {
-        var actions = RenderAcquisitionRequestActions(request, pathBase);
-        var latestEvent = RenderAcquisitionLatestEvent(request);
-        return
-        $$"""
-        <tr data-status="{{Html(FormatAcquisitionStatus(request.Status))}}">
-            <td data-resize-col="item"><div class="item"><strong>{{Html(string.IsNullOrWhiteSpace(request.ItemName) ? $"Item {request.ItemId}" : request.ItemName)}}</strong><span>item {{request.ItemId}} / {{Html(request.HqPolicy)}}</span></div></td>
-            <td class="number" data-resize-col="qty">{{request.Quantity:N0}}</td>
-            <td class="number" data-resize-col="max-unit">{{FormatGil(request.MaxUnitPrice)}}</td>
-            <td data-resize-col="routing">{{Html(FormatWorldMode(request.WorldMode))}}</td>
-            <td data-resize-col="target">{{Html(request.TargetCharacterName)}} @ {{Html(request.TargetWorld)}}</td>
-            <td data-resize-col="status"><div class="status-stack"><span class="status {{Html(AcquisitionStatusClass(request.Status))}}">{{Html(FormatAcquisitionStatus(request.Status))}}</span>{{latestEvent}}</div></td>
-            <td data-resize-col="age">{{Html(FormatAcquisitionAge(request.CreatedAtUtc))}}</td>
-            <td class="actions" data-resize-col="actions">{{actions}}</td>
-        </tr>
-        """;
-    }));
-}
-
-static object BuildAcquisitionQueueUpdate(
-    IReadOnlyList<MarketAcquisitionRequestView> acquisitionRequests,
-    PathString pathBase)
-{
-    var visibleRequests = VisibleAcquisitionQueueRequests(acquisitionRequests);
-    var activeCount = visibleRequests.Count(request =>
-        request.Status is MarketAcquisitionStatuses.PendingPickup
-            or MarketAcquisitionStatuses.Claimed
-            or MarketAcquisitionStatuses.AcceptedInPlugin
-            or MarketAcquisitionStatuses.Running);
-    var latestRequest = visibleRequests.FirstOrDefault();
-
-    return new
-    {
-        queueRows = RenderAcquisitionQueueRows(visibleRequests, pathBase),
-        activeSummary = $"{activeCount:N0} active / {visibleRequests.Count:N0} recent",
-        selectedRequestName = latestRequest == null ? "None selected" : FormatAcquisitionItem(latestRequest),
-        latestRequestStatus = latestRequest == null ? "Idle" : FormatAcquisitionStatus(latestRequest.Status),
-        latestRequestEvent = latestRequest == null ? "-" : FormatAcquisitionLatestEvent(latestRequest),
-        latestRequestExpiry = latestRequest == null ? "-" : FormatAcquisitionExpiry(latestRequest),
-    };
-}
-
-static IReadOnlyList<MarketAcquisitionRequestView> VisibleAcquisitionQueueRequests(
-    IReadOnlyList<MarketAcquisitionRequestView> requests)
-{
-    return requests
-        .Where(request => request.Status != MarketAcquisitionStatuses.Cancelled)
-        .ToList();
-}
-
-static string RenderAcquisitionRequestActions(
-    MarketAcquisitionRequestView request,
-    PathString pathBase)
-{
-    var canCancel = request.Status is MarketAcquisitionStatuses.PendingPickup
-        or MarketAcquisitionStatuses.Claimed
-        or MarketAcquisitionStatuses.AcceptedInPlugin
-        or MarketAcquisitionStatuses.Running
-        or MarketAcquisitionStatuses.Expired
-        or MarketAcquisitionStatuses.Rejected;
-    var canResend = request.Status is MarketAcquisitionStatuses.PendingPickup
-        or MarketAcquisitionStatuses.Claimed
-        or MarketAcquisitionStatuses.AcceptedInPlugin
-        or MarketAcquisitionStatuses.Expired
-        or MarketAcquisitionStatuses.Rejected
-        or MarketAcquisitionStatuses.Failed
-        or MarketAcquisitionStatuses.Cancelled;
-
-    var buttons = new StringBuilder();
-    if (canCancel)
-    {
-        buttons.Append($$"""
-            <form method="post" action="{{Html(AppUrl(pathBase, $"/acquisition/requests/{Uri.EscapeDataString(request.Id)}/cancel"))}}" onsubmit="return confirm('Cancel this acquisition request?');">
-                <button type="submit">Cancel</button>
-            </form>
-            """);
-    }
-
-    if (canResend)
-    {
-        buttons.Append($$"""
-            <form method="post" action="{{Html(AppUrl(pathBase, $"/acquisition/requests/{Uri.EscapeDataString(request.Id)}/resend"))}}">
-                <button type="submit">Resend</button>
-            </form>
-            """);
-    }
-
-    return buttons.Length == 0
-        ? """<span class="muted">-</span>"""
-        : buttons.ToString();
-}
-
-static string FormatAcquisitionItem(MarketAcquisitionRequestView request)
-{
-    var name = string.IsNullOrWhiteSpace(request.ItemName)
-        ? $"Item {request.ItemId}"
-        : request.ItemName;
-    return $"{name} ({request.ItemId})";
-}
-
-static string FormatAcquisitionStatus(string status) =>
-    status switch
-    {
-        MarketAcquisitionStatuses.PendingPickup => "Pending",
-        MarketAcquisitionStatuses.AcceptedInPlugin => "Accepted",
-        MarketAcquisitionStatuses.Cancelled => "Cancelled",
-        _ => status,
-    };
-
-static string RenderAcquisitionLatestEvent(MarketAcquisitionRequestView request)
-{
-    var latestEvent = FormatAcquisitionLatestEvent(request);
-    return latestEvent == "-"
-        ? string.Empty
-        : $"""<span class="lifecycle-note" title="{Html(latestEvent)}">{Html(latestEvent)}</span>""";
-}
-
-static string FormatAcquisitionLatestEvent(MarketAcquisitionRequestView request)
-{
-    var message = request.LatestMessage ?? request.LatestReason ?? request.LatestRunnerState;
-    if (string.IsNullOrWhiteSpace(message))
-        return "-";
-
-    var prefix = request.LatestRunnerState ?? request.LatestEventType;
-    return string.IsNullOrWhiteSpace(prefix)
-        ? message
-        : $"{prefix}: {message}";
-}
-
-static string AcquisitionStatusClass(string status) =>
-    status switch
-    {
-        MarketAcquisitionStatuses.PendingPickup => "pending",
-        MarketAcquisitionStatuses.Claimed => "claimed",
-        MarketAcquisitionStatuses.AcceptedInPlugin => "accepted",
-        MarketAcquisitionStatuses.Running => "running",
-        MarketAcquisitionStatuses.Complete => "complete",
-        MarketAcquisitionStatuses.Failed => "failed",
-        MarketAcquisitionStatuses.Rejected => "failed",
-        MarketAcquisitionStatuses.Expired => "failed",
-        MarketAcquisitionStatuses.Cancelled => "failed",
-        _ => string.Empty,
-    };
-
-static string FormatWorldMode(string worldMode) =>
-    worldMode switch
-    {
-        "AllWorldSweep" => "All-world sweep",
-        "CurrentWorldOnly" => "Current world only",
-        _ => worldMode,
-    };
-
-static string FormatGil(uint gil) => $"{gil:N0}";
-
-static string FormatAcquisitionAge(DateTimeOffset createdAtUtc)
-{
-    var age = DateTimeOffset.UtcNow - createdAtUtc.ToUniversalTime();
-    if (age.TotalSeconds < 60)
-        return "now";
-    if (age.TotalMinutes < 60)
-        return $"{(int)age.TotalMinutes}m";
-    if (age.TotalHours < 24)
-        return $"{(int)age.TotalHours}h";
-
-    return $"{(int)age.TotalDays}d";
-}
-
-static string FormatAcquisitionExpiry(MarketAcquisitionRequestView request)
-{
-    var expiresIn = request.ExpiresAtUtc.ToUniversalTime() - DateTimeOffset.UtcNow;
-    if (expiresIn <= TimeSpan.Zero)
-        return "expired";
-    if (expiresIn.TotalMinutes < 1)
-        return "<1m";
-    if (expiresIn.TotalHours < 1)
-        return $"{Math.Ceiling(expiresIn.TotalMinutes):N0}m";
-
-    return $"{Math.Ceiling(expiresIn.TotalHours):N0}h";
 }
 
 static string RenderReportDetails(StoredInventoryReport stored, InventorySnapshotView view, PathString pathBase)

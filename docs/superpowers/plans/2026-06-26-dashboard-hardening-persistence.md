@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **Status:** Superseded by `docs/superpowers/plans/2026-06-27-dashboard-hardening-polish.md`. This plan predates the Blazor dashboard rebuild and still references retired server-rendered acquisition refresh routes such as `/acquisition/requests/recent`; do not use those route shapes for new work.
+
 **Goal:** Add hybrid server/browser dashboard preferences, acquisition page reload/tab persistence, remove dashboard CSRF overhead, and responsive shell hardening.
 
 **Architecture:** Add a focused SQLite-backed dashboard preference store keyed by dashboard owner, expose dashboard-authenticated preference endpoints, and hydrate the acquisition page from server state first with browser localStorage fallback. Keep transient page state browser-local while durable options such as default character persist on the server and mirror to browser storage.
@@ -448,7 +450,7 @@ public async Task DashboardPreferences_SaveAndLoadAcquisitionPreferences()
 
 - [ ] **Step 4: Implement endpoints**
 
-Add routes after `/acquisition/requests/recent`:
+Add routes near the dashboard API route registration:
 
 ```csharp
 app.MapGet("/dashboard/preferences/acquisition", async (
@@ -959,7 +961,7 @@ public async Task AcquisitionDashboardQueueRefreshDoesNotReturnCsrfToken()
         extraConfiguration: new KeyValuePair<string, string?>("MarketMafioso:TrustExternalDashboardAuth", "true"));
     using var client = application.CreateClient();
 
-    using var response = await client.GetAsync("/api/marketmafioso/acquisition/requests/recent");
+    using var response = await client.GetAsync("/marketmafioso/api/acquisition/requests");
     using var recentJson = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync());
 
     Assert.False(recentJson.RootElement.TryGetProperty("csrfToken", out _));

@@ -113,12 +113,12 @@ public async Task RecentQueueIncludesLatestAttemptProjection()
     var recentResponse = await SendWithKeyAsync(
         client,
         HttpMethod.Get,
-        "/marketmafioso/api/acquisition/requests/recent",
+        "/marketmafioso/api/acquisition/requests",
         "client-secret");
     recentResponse.EnsureSuccessStatusCode();
     var recent = await recentResponse.Content.ReadFromJsonAsync<JsonElement>();
 
-    var payload = recent.GetProperty("requests")[0];
+    var payload = recent[0];
     Assert.Equal("attempt-001", payload.GetProperty("latestAttemptId").GetString());
     Assert.Equal(1, payload.GetProperty("latestAttemptSequence").GetInt32());
     Assert.Equal("Traveling", payload.GetProperty("latestAttemptPhase").GetString());
@@ -881,12 +881,11 @@ Expected: tests pass, plugin build passes.
 
 - [ ] **Step 0: Treat both dashboard data surfaces as first-class**
 
-The server currently exposes acquisition queue data through both:
+The server exposes acquisition queue data through:
 
 - `/api/acquisition/requests`
-- `/acquisition/requests/recent`
 
-Every attempt projection change in this task must update and test both surfaces. Do not rely on only the rendered HTML path or only the Blazor/API path.
+The retired `/acquisition/requests/recent` HTML-snippet refresh endpoint must not be reintroduced. Queue rendering now belongs to the Blazor dashboard and SSE/request-list JSON path.
 
 - [ ] **Step 1: Add a failing dashboard projection test**
 
@@ -974,10 +973,9 @@ Expected: fail until rendering includes attempt projection.
 
 - [ ] **Step 3: Add attempt fields to both queue update surfaces**
 
-In the queue update DTO/render helper, include latest attempt fields from `MarketAcquisitionRequestView` for:
+In the request-list DTO, include latest attempt fields from `MarketAcquisitionRequestView` for:
 
 - `/api/acquisition/requests`, used by the new dashboard app path.
-- `/acquisition/requests/recent`, used by the existing refresh payload.
 
 - [ ] **Step 4: Render attempt summary in queue rows**
 
