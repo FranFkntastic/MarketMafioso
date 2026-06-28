@@ -6,17 +6,18 @@ body,
     background: #090e13;
     color: #f4f8ff;
     font-family: "Segoe UI", system-ui, sans-serif;
-    font-size: 14px;
+    font-size: 13px;
 }
 
 .app-bar {
-    height: 50px;
+    height: 44px;
     border-bottom: 1px solid #253444;
     background: #0f151d !important;
     padding: 0 18px;
 }
 
 .brand {
+    font-size: 16px;
     font-weight: 700;
     margin-right: 4px;
     letter-spacing: 0;
@@ -24,6 +25,7 @@ body,
 
 .section-title {
     color: #a8bed8;
+    font-size: 10px;
     margin-left: 0;
     transform: translateY(2px);
 }
@@ -41,8 +43,9 @@ body,
     border-radius: 6px;
     color: #b8cbe2 !important;
     display: inline-flex;
-    height: 32px;
-    min-height: 32px;
+    font-size: 12px;
+    height: 30px;
+    min-height: 30px;
     padding: 0 12px;
 }
 
@@ -59,7 +62,7 @@ body,
 
 .main-content {
     min-height: 100vh;
-    padding: 66px 18px 18px;
+    padding: 54px 16px 16px;
 }
 
 .dashboard-page {
@@ -67,13 +70,19 @@ body,
 }
 
 .page-title-row {
-    min-height: 48px;
+    min-height: 38px;
 }
 
 .page-title-row .mud-typography-h5 {
-    font-size: 20px;
+    font-size: 18px;
     font-weight: 700;
     letter-spacing: 0;
+    line-height: 1.15;
+}
+
+.page-title-row .mud-typography-body2 {
+    font-size: 12px;
+    line-height: 1.25;
 }
 
 .page-grid {
@@ -83,8 +92,8 @@ body,
 
 .acquisition-grid {
     align-items: start;
-    grid-template-columns: minmax(420px, 500px) minmax(0, 1fr);
-    min-height: calc(100vh - 150px);
+    grid-template-columns: minmax(380px, 460px) minmax(0, 1fr);
+    min-height: calc(100vh - 126px);
 }
 
 .dashboard-panel {
@@ -107,18 +116,18 @@ body,
 
 .builder-panel > .mud-stack,
 .queue-panel > .mud-stack {
-    padding: 12px;
+    padding: 10px;
 }
 
 .panel-heading {
     border-bottom: 1px solid #263646;
-    margin: -12px -12px 0;
-    min-height: 42px;
-    padding: 0 12px;
+    margin: -10px -10px 0;
+    min-height: 34px;
+    padding: 0 10px;
 }
 
 .panel-heading .mud-typography-h6 {
-    font-size: 15px;
+    font-size: 14px;
     font-weight: 700;
     letter-spacing: 0;
 }
@@ -127,17 +136,17 @@ body,
     background: #0d141b;
     border: 1px solid #223141;
     border-radius: 7px;
-    padding: 10px 12px 12px;
+    padding: 8px 10px 10px;
 }
 
 .section-label {
     color: #5eb1ff;
     display: block;
-    font-size: 11px;
+    font-size: 10px;
     font-weight: 700;
     letter-spacing: .04em;
     line-height: 1;
-    margin-bottom: 10px;
+    margin-bottom: 8px;
 }
 
 .action-row {
@@ -174,6 +183,7 @@ body,
 
 .mud-button {
     border-radius: 5px;
+    font-size: 12px;
     font-weight: 650;
     letter-spacing: 0;
     text-transform: none;
@@ -193,6 +203,10 @@ body,
     margin-top: 0;
 }
 
+.mud-input-control .mud-input-label {
+    font-size: 11px;
+}
+
 .mud-input-control > .mud-input-control-input-container > div.mud-input.mud-input-outlined {
     background: #091017;
     border-radius: 5px;
@@ -206,6 +220,17 @@ body,
 .mud-input > textarea.mud-input-root,
 .mud-select .mud-input-slot {
     color: #f4f8ff !important;
+    font-size: 13px;
+    min-height: 20px;
+}
+
+.mud-input-adornment,
+.mud-select-input {
+    font-size: 13px;
+}
+
+.mud-input-control-helper-container {
+    font-size: 11px;
 }
 
 .mud-input-outlined-border {
@@ -225,6 +250,7 @@ body,
 
 .mud-list-item {
     color: #f4f8ff !important;
+    font-size: 13px;
 }
 
 .queue-table {
@@ -246,17 +272,17 @@ body,
 
 .queue-table .mud-table-head .mud-table-cell {
     color: #bdd6f1;
-    font-size: 12px;
+    font-size: 11px;
     font-weight: 700;
     letter-spacing: .02em;
-    padding: 8px 10px;
+    padding: 7px 9px;
     text-transform: uppercase;
 }
 
 .queue-table .mud-table-body .mud-table-cell {
     color: #f4f8ff;
-    font-size: 13px;
-    padding: 8px 10px;
+    font-size: 12px;
+    padding: 7px 9px;
 }
 
 .operation-grid .mud-table-container {
@@ -279,7 +305,7 @@ body,
     border: 1px solid #253646;
     border-radius: 7px;
     background: #0d141b;
-    min-height: 38px;
+    min-height: 34px;
     padding: 4px 8px;
 }
 
