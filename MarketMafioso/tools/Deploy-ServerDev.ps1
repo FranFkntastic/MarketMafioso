@@ -80,22 +80,27 @@ function Invoke-PublicSmoke {
         throw "Health check did not return ok=true."
     }
 
-    try {
-        Invoke-WebRequest -Uri $inventoryUrl -UseBasicParsing | Out-Null
-        throw "Inventory dashboard unexpectedly allowed unauthenticated access."
-    }
-    catch {
-        if ($null -eq $_.Exception.Response -or [int]$_.Exception.Response.StatusCode -ne 401) {
-            throw
-        }
+    $shell = Invoke-WebRequest -Uri $dashboardUrl -UseBasicParsing
+    if ($shell.StatusCode -ne 200 -or $shell.Content -notlike "*_framework/blazor*") {
+        throw "Dashboard shell smoke check failed."
     }
 
     if (Test-Path -LiteralPath $dashboardPasswordPath) {
         $password = (Get-Content -LiteralPath $dashboardPasswordPath -Raw).Trim()
-        $basic = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("marketmafioso:$password"))
-        $response = Invoke-WebRequest -Uri $dashboardUrl -Headers @{ Authorization = "Basic $basic" } -UseBasicParsing
-        if ($response.StatusCode -ne 200 -or $response.Content -notlike "*MarketMafioso*") {
-            throw "Authenticated dashboard smoke check failed."
+        $login = Invoke-WebRequest `
+            -Method Post `
+            -Uri "$($dashboardUrl)auth/login" `
+            -ContentType "application/json" `
+            -Body (@{ username = "marketmafioso"; password = $password } | ConvertTo-Json -Compress) `
+            -SessionVariable dashboardSession `
+            -UseBasicParsing
+        if ($login.StatusCode -ne 200) {
+            throw "Dashboard login smoke check failed."
+        }
+
+        $response = Invoke-WebRequest -Uri "$($dashboardUrl)api/acquisition/requests" -WebSession $dashboardSession -UseBasicParsing
+        if ($response.StatusCode -ne 200) {
+            throw "Authenticated dashboard API smoke check failed."
         }
     }
     else {

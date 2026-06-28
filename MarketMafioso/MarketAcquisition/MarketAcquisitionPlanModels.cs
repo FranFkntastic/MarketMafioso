@@ -49,5 +49,16 @@ public sealed record MarketAcquisitionPlan
     public uint PlannedQuantity { get; init; }
     public uint PlannedGil { get; init; }
     public DateTimeOffset PreparedAtUtc { get; init; }
+    public MarketAcquisitionPlanDiagnostics Diagnostics { get; init; } = new();
     public IReadOnlyList<MarketAcquisitionWorldBatch> WorldBatches { get; init; } = [];
+}
+
+public sealed record MarketAcquisitionPlanDiagnostics
+{
+    public int SourceListingCount { get; init; }
+    public int NonZeroListingCount { get; init; }
+    public int PriceSupportedListingCount { get; init; }
+    public int HqSupportedListingCount { get; init; }
+    public int WorldSupportedListingCount { get; init; }
+    public int PlannedListingCount { get; init; }
 }

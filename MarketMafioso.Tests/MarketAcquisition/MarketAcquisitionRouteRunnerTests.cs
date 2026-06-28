@@ -192,20 +192,55 @@ public sealed class MarketAcquisitionRouteRunnerTests
     }
 
     [Fact]
-    public void RecordProbe_AdvancesStopAndCompletesRoute()
+    public void RecordProbe_WithNoSafeListingsAdvancesStopAndCompletesRoute()
     {
         using var runner = CreateRunner();
         runner.Start(CreatePlan("Maduin"));
         runner.ExecutePendingTravelCommand(_ => true);
         runner.RecordCurrentWorld("Maduin");
 
-        var result = runner.RecordProbe("Maduin", CreateDryRun(status: "Ready", quantity: 10, gil: 100));
+        var result = runner.RecordProbe("Maduin", CreateCandidatePlan(status: "NoSafeListings", quantity: 0, gil: 0));
 
         Assert.True(result.Success);
         Assert.Equal("Completed", runner.State);
         Assert.Null(runner.ActiveStop);
         Assert.Equal("Complete", runner.Stops[0].Status);
+        Assert.Equal(0u, runner.Stops[0].WouldBuyQuantity);
+    }
+
+    [Fact]
+    public void RecordProbe_WithSafeListingsStartsPurchasing()
+    {
+        using var runner = CreateRunner();
+        runner.Start(CreatePlan("Maduin"));
+        runner.ExecutePendingTravelCommand(_ => true);
+        runner.RecordCurrentWorld("Maduin");
+
+        var result = runner.RecordProbe("Maduin", CreateCandidatePlan(status: "Ready", quantity: 10, gil: 100));
+
+        Assert.True(result.Success);
+        Assert.Equal("Running", runner.State);
+        Assert.Equal("Purchasing", runner.ActiveStop?.Status);
         Assert.Equal(10u, runner.Stops[0].WouldBuyQuantity);
+        Assert.Contains("Purchasing", runner.StatusMessage, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void RecordWorldPurchaseBatchComplete_AdvancesStopAndRequiresMarketBoardCloseBeforeTravel()
+    {
+        using var runner = CreateRunner();
+        runner.Start(CreatePlan("Rafflesia", "Zalera"));
+        runner.RecordCurrentWorld("Rafflesia");
+        runner.RecordProbe("Rafflesia", CreateCandidatePlan(status: "Ready", quantity: 10, gil: 100));
+
+        var result = runner.RecordWorldPurchaseBatchComplete("Rafflesia", purchasedQuantity: 10, spentGil: 100);
+
+        Assert.True(result.Success);
+        Assert.Equal("Pending", runner.ActiveStop?.Status);
+        Assert.Equal("Complete", runner.Stops[0].Status);
+        Assert.True(runner.MarketBoardCloseRequiredBeforeTravel);
+        Assert.Equal(10u, runner.Stops[0].PurchasedQuantity);
+        Assert.Equal(100u, runner.Stops[0].SpentGil);
     }
 
     [Fact]
@@ -215,7 +250,7 @@ public sealed class MarketAcquisitionRouteRunnerTests
         runner.Start(CreatePlan("Rafflesia", "Zalera"));
         runner.RecordCurrentWorld("Rafflesia");
 
-        var probe = runner.RecordProbe("Rafflesia", CreateDryRun(status: "Ready", quantity: 10, gil: 100));
+        var probe = runner.RecordProbe("Rafflesia", CreateCandidatePlan(status: "NoSafeListings", quantity: 0, gil: 0));
         var blocked = runner.ExecutePendingTravelCommand(_ => throw new InvalidOperationException("Travel should wait for market board close."));
 
         Assert.True(probe.Success);
@@ -231,7 +266,7 @@ public sealed class MarketAcquisitionRouteRunnerTests
         using var runner = CreateRunner();
         runner.Start(CreatePlan("Rafflesia", "Zalera"));
         runner.RecordCurrentWorld("Rafflesia");
-        runner.RecordProbe("Rafflesia", CreateDryRun(status: "Ready", quantity: 10, gil: 100));
+        runner.RecordProbe("Rafflesia", CreateCandidatePlan(status: "NoSafeListings", quantity: 0, gil: 0));
         string? command = null;
 
         var closed = runner.RecordMarketBoardClosedBeforeTravel();
@@ -338,6 +373,48 @@ public sealed class MarketAcquisitionRouteRunnerTests
     }
 
     [Fact]
+    public void RecordSearchResult_LogsAutomationSnapshotWhenSearchTimesOut()
+    {
+        var directory = CreateTempDirectory();
+        using var runner = new MarketMafioso.MarketAcquisition.MarketAcquisitionRouteRunner(directory);
+        runner.Start(CreatePlan("Maduin"), enableDiagnostics: true);
+        runner.RecordCurrentWorld("Maduin");
+        var startedAt = DateTimeOffset.UnixEpoch;
+
+        runner.RecordSearchResult(new MarketMafioso.MarketAcquisition.MarketBoardItemSearchResult
+        {
+            Status = "SearchSent",
+            Message = "Searching market board for Varnish (7017).",
+            Details = new Dictionary<string, string?>
+            {
+                ["searchSource"] = "AutofocusedTextInputRewrite",
+                ["searchButtonEnabledAfterCallbacks"] = false.ToString(),
+            },
+        }, startedAt);
+
+        runner.RecordSearchResult(new MarketMafioso.MarketAcquisition.MarketBoardItemSearchResult
+        {
+            Status = "SearchSent",
+            Message = "Searching market board for Varnish (7017).",
+            Details = new Dictionary<string, string?>
+            {
+                ["searchSource"] = "AutofocusedTextInputRewrite",
+                ["searchButtonEnabledAfterCallbacks"] = false.ToString(),
+            },
+        }, startedAt.AddSeconds(16));
+
+        var text = ReadLog(runner.LastDiagnosticFilePath!);
+        Assert.Contains("automation-snapshot", text, StringComparison.Ordinal);
+        Assert.Contains("step: SearchItem", text, StringComparison.Ordinal);
+        Assert.Contains("phase: TimedOut", text, StringComparison.Ordinal);
+        Assert.Contains("expected: ItemSearchResultReady", text, StringComparison.Ordinal);
+        Assert.Contains("observed: SearchSent", text, StringComparison.Ordinal);
+        Assert.Contains("outcome: Fatal", text, StringComparison.Ordinal);
+        Assert.Contains("nextAction: CaptureInputState", text, StringComparison.Ordinal);
+        Assert.Contains("searchSource: AutofocusedTextInputRewrite", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void RecordSearchResult_MarksSubmittedOnlyWhenListingsAreReady()
     {
         using var runner = CreateRunner();
@@ -379,6 +456,29 @@ public sealed class MarketAcquisitionRouteRunnerTests
         Assert.Contains("itemSearchVisible: True", text, StringComparison.Ordinal);
         Assert.Contains("selectYesnoVisible: False", text, StringComparison.Ordinal);
         Assert.Contains("focusedNode: AtkComponentTextInput#12", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RecordAutomationSnapshot_WritesSnapshotToActiveRouteDiagnostics()
+    {
+        var directory = CreateTempDirectory();
+        using var runner = new MarketMafioso.MarketAcquisition.MarketAcquisitionRouteRunner(directory);
+        runner.Start(CreatePlan("Maduin"), enableDiagnostics: true);
+
+        var result = runner.RecordAutomationSnapshot(
+            MarketMafioso.MarketAcquisition.MarketBoardAutomationSnapshot.Create(
+                "BuyListing",
+                "AfterConfirmation",
+                "ListingRemoved",
+                "MarketBoardNotOpen",
+                MarketMafioso.MarketAcquisition.MarketBoardAutomationOutcome.ExpectedAlternate,
+                "TreatListingAsRemoved"));
+
+        Assert.True(result.Success);
+        var text = ReadLog(runner.LastDiagnosticFilePath!);
+        Assert.Contains("automation-snapshot", text, StringComparison.Ordinal);
+        Assert.Contains("step: BuyListing", text, StringComparison.Ordinal);
+        Assert.Contains("outcome: ExpectedAlternate", text, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -446,14 +546,14 @@ public sealed class MarketAcquisitionRouteRunnerTests
                 .ToArray(),
         };
 
-    private static MarketMafioso.MarketAcquisition.MarketAcquisitionLiveDryRun CreateDryRun(
+    private static MarketMafioso.MarketAcquisition.MarketAcquisitionLiveCandidatePlan CreateCandidatePlan(
         string status,
         uint quantity,
         uint gil) =>
         new()
         {
             Status = status,
-            Message = "Dry run result.",
+            Message = "Live candidate result.",
             RequestedQuantity = 999,
             WouldBuyQuantity = quantity,
             WouldSpendGil = gil,

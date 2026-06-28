@@ -223,18 +223,22 @@ public sealed class InventoryReportViewEndpointTests
         });
         createResponse.EnsureSuccessStatusCode();
 
-        var html = await client.GetStringAsync("/inventory?search=darksteel");
+        var id = await ReadCreatedIdAsync(createResponse);
+        var stored = await client.GetFromJsonAsync<StoredInventoryReport>($"/api/reports/{id}");
+        var shell = await client.GetStringAsync("/inventory?search=darksteel");
+        var view = InventoryBrowserViewBuilder.Build(stored, "darksteel");
 
-        Assert.Contains("Inventory Browser", html, StringComparison.Ordinal);
-        Assert.Contains("Browser Character @ Gilgamesh", html, StringComparison.Ordinal);
-        Assert.Contains("Darksteel Nugget", html, StringComparison.Ordinal);
-        Assert.Contains(">111</td>", html, StringComparison.Ordinal);
-        Assert.Contains(">12</td>", html, StringComparison.Ordinal);
-        Assert.Contains("2 owners", html, StringComparison.Ordinal);
-        Assert.Contains("Player Inventory / Inventory1: 12", html, StringComparison.Ordinal);
-        Assert.Contains("Scrongle / Retainer Page 1: 99", html, StringComparison.Ordinal);
-        Assert.Contains("data-filter=\"icon\"", html, StringComparison.Ordinal);
-        Assert.DoesNotContain("Raw JSON", html, StringComparison.Ordinal);
+        Assert.Contains("_framework/blazor", shell, StringComparison.Ordinal);
+        Assert.NotNull(stored);
+        Assert.Equal("Browser Character", view.CharacterName);
+        Assert.Equal("Gilgamesh", view.HomeWorld);
+        var item = Assert.Single(view.Items);
+        Assert.Equal("Darksteel Nugget", item.DisplayName);
+        Assert.Equal(111, item.TotalQuantity);
+        Assert.Equal(12, item.HqQuantity);
+        Assert.Equal(2, item.OwnerCount);
+        Assert.Contains(item.Locations, x => x.OwnerName == "Player Inventory" && x.BagName == "Inventory1" && x.Quantity == 12);
+        Assert.Contains(item.Locations, x => x.OwnerName == "Scrongle" && x.BagName == "Retainer Page 1" && x.Quantity == 99);
     }
 
     [Fact]
@@ -324,20 +328,25 @@ public sealed class InventoryReportViewEndpointTests
         });
         createResponse.EnsureSuccessStatusCode();
 
-        var html = await client.GetStringAsync("/inventory?search=darksteel");
+        var id = await ReadCreatedIdAsync(createResponse);
+        var stored = await client.GetFromJsonAsync<StoredInventoryReport>($"/api/reports/{id}");
+        var shell = await client.GetStringAsync("/inventory?search=darksteel");
+        var view = InventoryBrowserViewBuilder.Build(stored, "darksteel");
 
-        Assert.Contains("Retainers", html, StringComparison.Ordinal);
-        Assert.Contains("Scrongle", html, StringComparison.Ordinal);
-        Assert.Contains("1,242,888 gil", html, StringComparison.Ordinal);
-        Assert.Contains("2 listings", html, StringComparison.Ordinal);
-        Assert.Contains("Retainer Market Listings", html, StringComparison.Ordinal);
-        Assert.Contains("1,800 gil each", html, StringComparison.Ordinal);
-        Assert.Contains("2,150 gil each", html, StringComparison.Ordinal);
-        Assert.Contains("Metal", html, StringComparison.Ordinal);
-        Assert.Contains("data-resize-col=\"item\"", html, StringComparison.Ordinal);
-        Assert.Contains("beginProportionalResize", html, StringComparison.Ordinal);
-        Assert.Contains("setTimeout", html, StringComparison.Ordinal);
-        Assert.DoesNotContain("<td class=\"number\">210</td>", html, StringComparison.Ordinal);
+        Assert.Contains("_framework/blazor", shell, StringComparison.Ordinal);
+        Assert.NotNull(stored);
+        Assert.Equal((ulong)1_242_888, view.RetainerGil);
+        var scope = Assert.Single(view.Scopes, x => x.DisplayName == "Scrongle");
+        Assert.Equal(1, scope.StackCount);
+        Assert.Equal((ulong)1_242_888, scope.Gil);
+        Assert.Equal(2, scope.MarketListingCount);
+        var item = Assert.Single(view.Items);
+        Assert.Equal("Metal", item.ItemType);
+        Assert.Equal(111, item.TotalQuantity);
+        Assert.Equal(12, item.HqQuantity);
+        Assert.Equal(2, view.MarketListings.Count);
+        Assert.Contains(view.MarketListings, x => x.OwnerName == "Scrongle" && x.UnitPrice == 1_800 && x.Quantity == 20);
+        Assert.Contains(view.MarketListings, x => x.OwnerName == "Scrongle" && x.UnitPrice == 2_150 && x.Quantity == 79);
     }
 
     [Fact]
@@ -519,10 +528,34 @@ public sealed class InventoryReportViewEndpointTests
 
         var dashboard = await client.GetStringAsync("/api/marketmafioso/");
 
-        Assert.Contains("href=\"/api/marketmafioso/reports/", dashboard, StringComparison.Ordinal);
-        Assert.Contains("href=\"/api/marketmafioso/inventory\"", dashboard, StringComparison.Ordinal);
-        Assert.Contains("href=\"/api/marketmafioso/diagnostics\"", dashboard, StringComparison.Ordinal);
+        Assert.Contains("<base href=\"/api/marketmafioso/\" />", dashboard, StringComparison.Ordinal);
+        Assert.Contains("_framework/blazor", dashboard, StringComparison.Ordinal);
+        Assert.Contains("_framework/blazor.webassembly.", dashboard, StringComparison.Ordinal);
+        Assert.DoesNotContain("[.{fingerprint}]", dashboard, StringComparison.Ordinal);
         Assert.DoesNotContain("href=\"/api/marketmafioso/api/reports", dashboard, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task HostedMode_ServesDashboardStaticAssets()
+    {
+        await using var application = CreateHostedApplication(
+            new KeyValuePair<string, string?>("MarketMafioso:BasePath", "/api/marketmafioso"));
+        using var client = application.CreateClient();
+
+        var dashboard = await client.GetStringAsync("/api/marketmafioso/");
+        var bootScript = Regex.Match(
+            dashboard,
+            "_framework/blazor\\.webassembly\\.[^\"]+\\.js").Value;
+
+        Assert.False(string.IsNullOrWhiteSpace(bootScript));
+
+        var appCss = await client.GetAsync("/api/marketmafioso/css/app.css");
+        var dotnetJs = await client.GetAsync("/api/marketmafioso/_framework/dotnet.js");
+        var bootJs = await client.GetAsync($"/api/marketmafioso/{bootScript}");
+
+        Assert.Equal(HttpStatusCode.OK, appCss.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, dotnetJs.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, bootJs.StatusCode);
     }
 
     [Fact]
@@ -594,7 +627,8 @@ public sealed class InventoryReportViewEndpointTests
 
         var dashboard = await client.GetStringAsync("/api/marketmafioso/");
 
-        Assert.Contains("dev receiver storage", dashboard, StringComparison.Ordinal);
+        Assert.Contains("<base href=\"/api/marketmafioso/\" />", dashboard, StringComparison.Ordinal);
+        Assert.DoesNotContain("[.{fingerprint}]", dashboard, StringComparison.Ordinal);
         Assert.DoesNotContain(contentRoot!, dashboard, StringComparison.Ordinal);
     }
 
@@ -629,14 +663,15 @@ public sealed class InventoryReportViewEndpointTests
 
         Assert.Equal(HttpStatusCode.OK, dashboard.StatusCode);
         Assert.Equal(HttpStatusCode.OK, latestJson.StatusCode);
+        Assert.Contains("_framework/blazor", await dashboard.Content.ReadAsStringAsync(), StringComparison.Ordinal);
         Assert.Contains(
             "Corrupt File Character",
-            await dashboard.Content.ReadAsStringAsync(),
+            await latestJson.Content.ReadAsStringAsync(),
             StringComparison.Ordinal);
     }
 
     [Fact]
-    public async Task HostedMode_DashboardDeleteRejectsMissingCsrf()
+    public async Task HostedMode_DashboardDeleteDoesNotRequireCsrf()
     {
         await using var application = CreateHostedApplication(
             new KeyValuePair<string, string?>("MarketMafioso:PublicOrigin", "https://dev.xivcraftarchitect.com"));
@@ -647,7 +682,7 @@ public sealed class InventoryReportViewEndpointTests
             HttpMethod.Post,
             "/inventory",
             "test-client-secret",
-            CreateReport("Csrf Missing Character"));
+            CreateReport("Delete Without Csrf Character"));
         createResponse.EnsureSuccessStatusCode();
 
         var id = await ReadCreatedIdAsync(createResponse);
@@ -657,11 +692,11 @@ public sealed class InventoryReportViewEndpointTests
 
         var response = await client.SendAsync(request);
 
-        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
 
     [Fact]
-    public async Task HostedMode_DashboardDeleteAcceptsValidCsrf()
+    public async Task HostedMode_ReportDetailsDoesNotRenderCsrf()
     {
         await using var application = CreateHostedApplication(
             new KeyValuePair<string, string?>("MarketMafioso:PublicOrigin", "https://dev.xivcraftarchitect.com"));
@@ -672,24 +707,13 @@ public sealed class InventoryReportViewEndpointTests
             HttpMethod.Post,
             "/inventory",
             "test-client-secret",
-            CreateReport("Csrf Valid Character"));
+            CreateReport("No Csrf Render Character"));
         createResponse.EnsureSuccessStatusCode();
 
         var id = await ReadCreatedIdAsync(createResponse);
         var detail = await client.GetStringAsync($"/reports/{id}");
-        var csrf = Regex.Match(detail, "name=\"csrf\" value=\"(?<token>[^\"]+)\"").Groups["token"].Value;
-        Assert.False(string.IsNullOrWhiteSpace(csrf));
-
-        using var request = new HttpRequestMessage(HttpMethod.Post, $"/reports/{id}/delete");
-        request.Headers.Add("Origin", "https://dev.xivcraftarchitect.com");
-        request.Content = new FormUrlEncodedContent(
-        [
-            new KeyValuePair<string, string>("csrf", csrf),
-        ]);
-
-        var response = await client.SendAsync(request);
-
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.DoesNotContain("name=\"csrf\"", detail, StringComparison.Ordinal);
+        Assert.DoesNotContain("mmf_csrf", detail, StringComparison.Ordinal);
     }
 
     private sealed class HostedApplicationValues

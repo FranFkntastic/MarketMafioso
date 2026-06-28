@@ -49,7 +49,7 @@ MarketMafioso__DashboardBootstrapUsername=marketmafioso
 MarketMafioso__DashboardBootstrapPassword=<dashboard-password>
 ```
 
-`/health` remains public for uptime checks. Inventory ingestion, `/api/reports...` machine-read routes, and Market Acquisition plugin pickup/lifecycle routes require the client key. Browser dashboard routes use app-managed Basic Auth backed by the receiver SQLite database.
+`/health` remains public for uptime checks. Inventory ingestion, `/api/reports...` machine-read routes, and Market Acquisition plugin pickup/lifecycle routes require the client key. Browser dashboard routes use app-managed login sessions backed by the receiver SQLite database.
 
 The dev dashboard username is fixed to `marketmafioso`; the password is stored in GitHub Actions as `MARKETMAFIOSO_DEV_BASIC_AUTH_PASSWORD`. Bootstrap credentials create the first local dashboard admin user only when no dashboard users exist.
 
@@ -130,7 +130,7 @@ Paste only the client API key into the plugin-wide `Settings` tab's `Client API 
 
 ## Caddy Shape
 
-Use Caddy routing so plugin/API and dashboard traffic reach the app. The app handles dashboard Basic Auth.
+Use Caddy routing so plugin/API and dashboard traffic reach the app. The app handles dashboard login sessions.
 
 ```caddyfile
 dev.xivcraftarchitect.com {

@@ -1,0 +1,50 @@
+@using MarketMafioso.Dashboard.Models
+
+<MudDrawer Anchor="Anchor.Right"
+           Open="Event is not null"
+           OpenChanged="OnOpenChanged"
+           Variant="DrawerVariant.Temporary"
+           Width="480px"
+           Class="details-drawer">
+    @if (Event is not null)
+    {
+        <MudStack Spacing="2" Class="details-drawer-content">
+            <MudStack Row="true" AlignItems="AlignItems.Center">
+                <MudText Typo="Typo.h6">Diagnostic @Event.Id</MudText>
+                <MudSpacer />
+                <MudIconButton Icon="@Icons.Material.Filled.Close" OnClick="CloseAsync" />
+            </MudStack>
+
+            <MudSimpleTable Dense="true" Class="details-table">
+                <tbody>
+                    <tr><td>When</td><td>@Event.OccurredAtUtc.LocalDateTime.ToString("yyyy-MM-dd HH:mm:ss")</td></tr>
+                    <tr><td>Source</td><td>@Event.Source</td></tr>
+                    <tr><td>Category</td><td>@Event.Category</td></tr>
+                    <tr><td>Type</td><td>@Event.Type</td></tr>
+                    <tr><td>Severity</td><td>@Event.Severity</td></tr>
+                    <tr><td>Outcome</td><td>@(Event.Outcome ?? "-")</td></tr>
+                    <tr><td>Correlation</td><td>@(Event.CorrelationId ?? "-")</td></tr>
+                    <tr><td>Request</td><td>@(Event.AcquisitionRequestId ?? "-")</td></tr>
+                    <tr><td>Message</td><td>@Event.Message</td></tr>
+                </tbody>
+            </MudSimpleTable>
+
+            <MudText Typo="Typo.subtitle2">Payload Summary</MudText>
+            <MudPaper Class="payload-summary" Elevation="0">
+                <pre>@(Event.PayloadSummaryJson ?? "No payload summary.")</pre>
+            </MudPaper>
+        </MudStack>
+    }
+</MudDrawer>
+
+@code {
+    [Parameter] public DiagnosticEventView? Event { get; set; }
+    [Parameter] public EventCallback Closed { get; set; }
+
+    private Task OnOpenChanged(bool open) => open ? Task.CompletedTask : CloseAsync();
+
+    private async Task CloseAsync()
+    {
+        await Closed.InvokeAsync();
+    }
+}

@@ -98,21 +98,39 @@ public sealed class MarketBoardItemSearchDriver
             };
         }
 
-        if (IsSubmittedSearchCurrent(submittedSearchItemId, submittedSearchText, itemId, searchText))
+        var searchMatchesSubmittedState = IsSubmittedSearchCurrent(submittedSearchItemId, submittedSearchText, itemId, searchText);
+        if (searchMatchesSubmittedState)
         {
-            details["searchAlreadySubmitted"] = true.ToString();
-            details["searchSource"] = "TextInputEnterCallback";
-            details["partialSearchAfter"] = addon->PartialMatch.ToString();
+            var exactItemVisible = AgentContainsItem(agent, itemId);
+            var agentIsPartialSearching = agent != null && agent->IsPartialSearching;
+            var agentIsItemPushPending = agent != null && agent->IsItemPushPending;
+            var shouldWait = ShouldWaitForSubmittedSearch(
+                searchMatchesSubmittedState,
+                exactItemVisible,
+                agentIsPartialSearching,
+                agentIsItemPushPending);
 
-            return new MarketBoardItemSearchResult
+            details["searchAlreadySubmitted"] = true.ToString();
+            details["submittedSearchExactItemVisible"] = exactItemVisible.ToString();
+            details["submittedSearchStillInFlight"] = shouldWait.ToString();
+            if (shouldWait)
             {
-                Status = "SearchSent",
-                Message = $"Waiting for market board item search results for {searchText} ({itemId}).",
-                Details = details,
-            };
+                details["searchSource"] = "TextInputEnterCallback";
+                details["partialSearchAfter"] = addon->PartialMatch.ToString();
+
+                return new MarketBoardItemSearchResult
+                {
+                    Status = "SearchSent",
+                    Message = $"Waiting for market board item search results for {searchText} ({itemId}).",
+                    Details = details,
+                };
+            }
+
+            details["staleSubmittedSearchCleared"] = true.ToString();
+            ClearSubmittedSearch();
         }
 
-        if (!TrySubmitSearchWithTextInputEnter(addon, searchText, details))
+        if (!TrySubmitSearchWithTextInputEnter(addon, agent, itemId, searchText, details))
         {
             return new MarketBoardItemSearchResult
             {
@@ -228,12 +246,52 @@ public sealed class MarketBoardItemSearchDriver
             && string.Equals(submittedText?.Trim(), searchText.Trim(), StringComparison.OrdinalIgnoreCase);
     }
 
+    internal static bool ShouldWaitForSubmittedSearch(
+        bool searchMatches,
+        bool exactItemVisible,
+        bool agentIsPartialSearching,
+        bool agentIsItemPushPending)
+    {
+        return searchMatches && (exactItemVisible || agentIsPartialSearching || agentIsItemPushPending);
+    }
+
     internal static IReadOnlyList<MarketBoardItemSearchSubmitCallback> GetSearchSubmitCallbackSequence()
     {
         return
         [
             MarketBoardItemSearchSubmitCallback.TextChanged,
             MarketBoardItemSearchSubmitCallback.Enter,
+        ];
+    }
+
+    internal static MarketBoardItemSearchSubmitStrategy ChooseSearchSubmitStrategy(
+        bool textInputWasActive,
+        bool searchButtonWasEnabled,
+        bool exactItemVisible,
+        bool agentIsPartialSearching,
+        bool agentIsItemPushPending)
+    {
+        if (textInputWasActive
+            && !searchButtonWasEnabled
+            && !exactItemVisible
+            && !agentIsPartialSearching
+            && !agentIsItemPushPending)
+        {
+            return MarketBoardItemSearchSubmitStrategy.AutofocusedTextInputRewrite;
+        }
+
+        return MarketBoardItemSearchSubmitStrategy.TextInputEnterCallback;
+    }
+
+    internal static IReadOnlyList<MarketBoardItemSearchSubmitStep> GetAutofocusedSubmitStepSequence()
+    {
+        return
+        [
+            MarketBoardItemSearchSubmitStep.ClearSearchText,
+            MarketBoardItemSearchSubmitStep.TextChanged,
+            MarketBoardItemSearchSubmitStep.SetSearchText,
+            MarketBoardItemSearchSubmitStep.TextChanged,
+            MarketBoardItemSearchSubmitStep.Enter,
         ];
     }
 
@@ -263,14 +321,12 @@ public sealed class MarketBoardItemSearchDriver
 
     private unsafe bool TrySubmitSearchWithTextInputEnter(
         AddonItemSearch* addon,
+        AgentItemSearch* agent,
+        uint itemId,
         string searchText,
         IDictionary<string, string?> details)
     {
-        addon->SearchText.SetString(searchText);
-        addon->SearchText2.SetString(searchText);
-
         var input = addon->SearchTextInput;
-        details["searchSource"] = "TextInputEnterCallback";
         details["searchTextInputAvailable"] = (input != null).ToString();
         if (input == null)
         {
@@ -278,7 +334,6 @@ public sealed class MarketBoardItemSearchDriver
             return false;
         }
 
-        input->SetText(searchText);
         var inputBase = &input->AtkComponentInputBase;
         var ownerNode = inputBase->AtkComponentBase.OwnerNode;
         var collisionNode = inputBase->CollisionNode;
@@ -289,10 +344,25 @@ public sealed class MarketBoardItemSearchDriver
             MarketBoardItemSearchFocusTarget.OwnerNode => &ownerNode->AtkResNode,
             _ => null,
         };
+        var textInputWasActive = inputBase->IsActive;
+        var searchButtonWasEnabled = addon->SearchButton != null && addon->SearchButton->IsEnabled;
+        var exactItemVisible = AgentContainsItem(agent, itemId);
+        var agentIsPartialSearching = agent != null && agent->IsPartialSearching;
+        var agentIsItemPushPending = agent != null && agent->IsItemPushPending;
+        var submitStrategy = ChooseSearchSubmitStrategy(
+            textInputWasActive,
+            searchButtonWasEnabled,
+            exactItemVisible,
+            agentIsPartialSearching,
+            agentIsItemPushPending);
+        details["searchSource"] = submitStrategy.ToString();
+        details["submitExactItemVisibleBefore"] = exactItemVisible.ToString();
+        details["submitAgentIsPartialSearchingBefore"] = agentIsPartialSearching.ToString();
+        details["submitAgentIsItemPushPendingBefore"] = agentIsItemPushPending.ToString();
         details["textInputCallbackAvailable"] = (inputBase->Callback != null).ToString();
         details["textInputCallbackEventKind"] = inputBase->CallbackEventKind.ToString();
-        details["textInputWasActive"] = inputBase->IsActive.ToString();
-        details["searchButtonWasEnabled"] = (addon->SearchButton != null && addon->SearchButton->IsEnabled).ToString();
+        details["textInputWasActive"] = textInputWasActive.ToString();
+        details["searchButtonWasEnabled"] = searchButtonWasEnabled.ToString();
         details["textInputFocusTarget"] = focusTargetKind.ToString();
         details["textInputFocusTargetNode"] = FormatNode(focusNode);
         if (inputBase->Callback == null)
@@ -321,25 +391,83 @@ public sealed class MarketBoardItemSearchDriver
         details["textInputIsActiveAfterFocus"] = inputBase->IsActive.ToString();
 
         var callbackResults = new List<string>();
-        foreach (var callback in GetSearchSubmitCallbackSequence())
+        if (submitStrategy == MarketBoardItemSearchSubmitStrategy.AutofocusedTextInputRewrite)
         {
-            var callbackType = callback == MarketBoardItemSearchSubmitCallback.TextChanged
-                ? InputCallbackType.TextChanged
-                : InputCallbackType.Enter;
-            var callbackResult = inputBase->Callback(
-                &addon->AtkUnitBase,
-                callbackType,
-                inputBase->RawString.StringPtr,
-                inputBase->EvaluatedString.StringPtr,
-                inputBase->CallbackEventKind);
-            callbackResults.Add($"{callback}:{callbackResult}");
+            var submitSteps = GetAutofocusedSubmitStepSequence();
+            foreach (var step in submitSteps)
+            {
+                switch (step)
+                {
+                    case MarketBoardItemSearchSubmitStep.ClearSearchText:
+                        SetSearchInputText(addon, input, inputBase, string.Empty, updateAddonSearchStrings: false);
+                        callbackResults.Add(step.ToString());
+                        break;
+                    case MarketBoardItemSearchSubmitStep.SetSearchText:
+                        SetSearchInputText(addon, input, inputBase, searchText, updateAddonSearchStrings: false);
+                        callbackResults.Add(step.ToString());
+                        break;
+                    case MarketBoardItemSearchSubmitStep.TextChanged:
+                        callbackResults.Add(InvokeInputCallback(addon, inputBase, MarketBoardItemSearchSubmitCallback.TextChanged));
+                        break;
+                    case MarketBoardItemSearchSubmitStep.Enter:
+                        callbackResults.Add(InvokeInputCallback(addon, inputBase, MarketBoardItemSearchSubmitCallback.Enter));
+                        break;
+                    default:
+                        throw new ArgumentOutOfRangeException(nameof(step), step, null);
+                }
+            }
+
+            details["textInputCallbackSequence"] = string.Join(",", submitSteps);
+        }
+        else
+        {
+            SetSearchInputText(addon, input, inputBase, searchText, updateAddonSearchStrings: true);
+            foreach (var callback in GetSearchSubmitCallbackSequence())
+                callbackResults.Add(InvokeInputCallback(addon, inputBase, callback));
+
+            details["textInputCallbackSequence"] = string.Join(",", GetSearchSubmitCallbackSequence());
         }
 
-        details["textInputCallbackSequence"] = string.Join(",", GetSearchSubmitCallbackSequence());
         details["textInputCallbackResults"] = string.Join(",", callbackResults);
         details["searchButtonEnabledAfterCallbacks"] = (addon->SearchButton != null && addon->SearchButton->IsEnabled).ToString();
         details["searchSubmitStatus"] = "Submitted";
         return true;
+    }
+
+    private static unsafe void SetSearchInputText(
+        AddonItemSearch* addon,
+        AtkComponentTextInput* input,
+        AtkComponentInputBase* inputBase,
+        string text,
+        bool updateAddonSearchStrings)
+    {
+        if (updateAddonSearchStrings)
+        {
+            addon->SearchText.SetString(text);
+            addon->SearchText2.SetString(text);
+        }
+
+        input->SetText(text);
+        inputBase->SelectionStart = text.Length;
+        inputBase->SelectionEnd = text.Length;
+        inputBase->CursorPos = text.Length;
+    }
+
+    private static unsafe string InvokeInputCallback(
+        AddonItemSearch* addon,
+        AtkComponentInputBase* inputBase,
+        MarketBoardItemSearchSubmitCallback callback)
+    {
+        var callbackType = callback == MarketBoardItemSearchSubmitCallback.TextChanged
+            ? InputCallbackType.TextChanged
+            : InputCallbackType.Enter;
+        var callbackResult = inputBase->Callback(
+            &addon->AtkUnitBase,
+            callbackType,
+            inputBase->RawString.StringPtr,
+            inputBase->EvaluatedString.StringPtr,
+            inputBase->CallbackEventKind);
+        return $"{callback}:{callbackResult}";
     }
 
     private void ClearSubmittedSearch()
@@ -499,6 +627,20 @@ public enum MarketBoardItemSearchAction
 
 public enum MarketBoardItemSearchSubmitCallback
 {
+    TextChanged,
+    Enter,
+}
+
+public enum MarketBoardItemSearchSubmitStrategy
+{
+    TextInputEnterCallback,
+    AutofocusedTextInputRewrite,
+}
+
+public enum MarketBoardItemSearchSubmitStep
+{
+    ClearSearchText,
+    SetSearchText,
     TextChanged,
     Enter,
 }

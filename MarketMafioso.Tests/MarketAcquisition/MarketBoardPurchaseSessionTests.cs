@@ -78,6 +78,104 @@ public sealed class MarketBoardPurchaseSessionTests
     }
 
     [Fact]
+    public void RecordFreshRead_CompletesWhenConfirmedPurchaseClosesResultsWindow()
+    {
+        var now = DateTimeOffset.Parse("2026-06-26T12:00:00Z");
+        var candidate = CreateCandidate("cheap");
+        var session = MarketMafioso.MarketAcquisition.MarketBoardPurchaseSession.Start(
+                candidate,
+                now,
+                TimeSpan.FromSeconds(15))
+            .RecordConfirmationAttempt(
+                new MarketMafioso.MarketAcquisition.MarketBoardPurchaseResult
+                {
+                    Status = "ConfirmationAccepted",
+                    Message = "Accepted.",
+                    Candidate = candidate,
+                },
+                now.AddSeconds(2),
+                TimeSpan.FromSeconds(15));
+
+        var result = session.RecordFreshRead(
+            new MarketMafioso.MarketAcquisition.MarketBoardReadResult
+            {
+                Status = "MarketBoardNotOpen",
+                Message = "Result window closed.",
+            },
+            now.AddSeconds(4));
+
+        Assert.Equal("Completed", result.Status);
+        Assert.False(result.IsActive);
+    }
+
+    [Fact]
+    public void CreateFreshReadSnapshot_ClassifiesClosedResultsWindowAsExpectedAlternate()
+    {
+        var now = DateTimeOffset.Parse("2026-06-26T12:00:00Z");
+        var candidate = CreateCandidate("cheap");
+        var session = MarketMafioso.MarketAcquisition.MarketBoardPurchaseSession.Start(
+                candidate,
+                now,
+                TimeSpan.FromSeconds(15))
+            .RecordConfirmationAttempt(
+                new MarketMafioso.MarketAcquisition.MarketBoardPurchaseResult
+                {
+                    Status = "ConfirmationAccepted",
+                    Message = "Accepted.",
+                    Candidate = candidate,
+                },
+                now.AddSeconds(2),
+                TimeSpan.FromSeconds(15));
+
+        var snapshot = session.CreateFreshReadSnapshot(new MarketMafioso.MarketAcquisition.MarketBoardReadResult
+        {
+            Status = "MarketBoardNotOpen",
+            Message = "Result window closed.",
+        });
+
+        Assert.Equal("BuyListing", snapshot.Step);
+        Assert.Equal("AfterConfirmation", snapshot.Phase);
+        Assert.Equal("ListingRemoved", snapshot.Expected);
+        Assert.Equal("MarketBoardNotOpen", snapshot.Observed);
+        Assert.Equal(MarketMafioso.MarketAcquisition.MarketBoardAutomationOutcome.ExpectedAlternate, snapshot.Outcome);
+        Assert.Equal("TreatListingAsRemoved", snapshot.NextAction);
+        Assert.Equal("cheap", snapshot.Details["candidateListingId"]);
+    }
+
+    [Fact]
+    public void RecordFreshRead_CompletesWhenConfirmedPurchaseLeavesNoListings()
+    {
+        var now = DateTimeOffset.Parse("2026-06-26T12:00:00Z");
+        var candidate = CreateCandidate("cheap");
+        var session = MarketMafioso.MarketAcquisition.MarketBoardPurchaseSession.Start(
+                candidate,
+                now,
+                TimeSpan.FromSeconds(15))
+            .RecordConfirmationAttempt(
+                new MarketMafioso.MarketAcquisition.MarketBoardPurchaseResult
+                {
+                    Status = "ConfirmationAccepted",
+                    Message = "Accepted.",
+                    Candidate = candidate,
+                },
+                now.AddSeconds(2),
+                TimeSpan.FromSeconds(15));
+
+        var result = session.RecordFreshRead(
+            new MarketMafioso.MarketAcquisition.MarketBoardReadResult
+            {
+                Status = "NoListings",
+                Message = "No listings remain.",
+                ItemId = 7017,
+                WorldName = "Rafflesia",
+            },
+            now.AddSeconds(4));
+
+        Assert.Equal("Completed", result.Status);
+        Assert.False(result.IsActive);
+    }
+
+    [Fact]
     public void RecordFreshRead_WaitsWhileConfirmedListingStillExists()
     {
         var now = DateTimeOffset.Parse("2026-06-26T12:00:00Z");

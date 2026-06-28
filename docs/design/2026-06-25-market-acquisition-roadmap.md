@@ -1,5 +1,9 @@
 # Market Acquisition Roadmap
 
+Full-loop design: `docs/superpowers/specs/2026-06-26-market-acquisition-full-loop-design.md`
+
+Full-loop implementation plan: `docs/superpowers/plans/2026-06-26-market-acquisition-full-loop.md`
+
 ## Goal
 
 Build Market Acquisition as a private, self-hosted dashboard-to-plugin workflow where the browser dashboard stages a request, the plugin explicitly picks it up, and the plugin owns all in-game validation and execution.
@@ -18,8 +22,8 @@ The safe order is to make the server and plugin speak first, then prove read-onl
 - The plugin never constantly polls in the background.
 - The plugin must explicitly pick up requests from `/mmf`.
 - A dashboard request can suggest promising worlds, but the plugin must validate live market-board rows before purchase.
-- Purchase decisions are price-led after live confirmation. The server plan is advisory; confirmed live listings read during the current run are the purchase authority.
-- New dashboard requests expose only two quantity modes: `TargetQuantity` and `AllBelowThreshold`. Legacy `Exact` and `UpTo` values are accepted only as migration aliases for `TargetQuantity`.
+- Purchase decisions are price-led after live validation. The server plan is advisory; confirmed live listings read during the current run are the purchase authority.
+- New dashboard requests expose only two quantity modes: `TargetQuantity` and `AllBelowThreshold`. `Exact` and `UpTo` are removed because they are not functionally distinct under whole-stack live purchasing.
 - Recommended-world mode is the default and may consider the configured region. Full regional sweep is a separate explicit mode.
 - Every phase must be useful and testable without assuming later automation exists.
 - Any phase that touches game UI automation must have a read-only proof pass before mutation.
@@ -29,8 +33,9 @@ The safe order is to make the server and plugin speak first, then prove read-onl
 ## Live Execution Semantics
 
 - `TargetQuantity` buys the cheapest confirmed safe live listings until the requested target is satisfied or safe stock runs out. Whole-stack overage is allowed.
-- `AllBelowThreshold` buys every confirmed live listing at or below the max unit price, optionally bounded by a positive gil cap.
+- `AllBelowThreshold` buys every confirmed live listing at or below the max unit price, optionally bounded by a positive gil cap and/or optional max quantity.
 - Blank or zero gil cap means no total spend cap. Max unit price remains mandatory and is always a hard safety threshold.
+- Dashboard quantity input is required target quantity for `TargetQuantity`; when `AllBelowThreshold` is selected, the quantity input is disabled or relabeled to `Max quantity`, and blank or zero means no quantity cap.
 - Lowest confirmed live unit price wins. If a newly discovered below-threshold listing is cheaper than listings on later planned worlds, buy the cheaper confirmed listing first.
 - Favorable drift is a valid success path: cheaper prices, replacement listings, and newly available below-threshold stock should be folded into the candidate pool instead of treated as plan mismatch.
 - Missing planned listings and worse prices are not automatically fatal. They become under-procurement or skipped listings unless no safe candidate remains or the UI state is ambiguous.
@@ -44,14 +49,14 @@ Current status after the 2026-06-26 local-dev pass:
 | --- | --- | --- |
 | Phase 0: Baseline Alignment | Done | Design docs, dashboard/plugin boundary, client API key model, and self-hosted/private assumptions are established. |
 | Phase 1: Server Request Lifecycle | Done | Server stores dashboard-created acquisition requests, supports pickup lifecycle, and uses the unified client API key for plugin routes. |
-| Phase 2: Dashboard Request Creation Surface | Done | Dashboard has a Market Acquisition surface, item search/ID resolution, queue staging, diagnostic error display, optional gil cap, request list, and queue recovery actions to cancel or resend stranded requests. Quantity modes still need to be simplified from legacy `Exact`/`UpTo`/`AllBelowThreshold` UI to `TargetQuantity`/`AllBelowThreshold`. |
+| Phase 2: Dashboard Request Creation Surface | Done | Dashboard has a Market Acquisition surface, item search/ID resolution, queue staging, diagnostic error display, optional gil cap, request list, and queue recovery actions to cancel or resend stranded requests. Quantity modes are reduced to `TargetQuantity` and `AllBelowThreshold`; `AllBelowThreshold` treats quantity as an optional max quantity and calls out whole-stack overage. |
 | Phase 3: Plugin Request Pickup UI | Done | `/mmf` has a Market Acquisition tab with one-shot fetch, claim, accept, reject, persisted active claim restore after plugin reload, local claim forget, and shared plugin-wide server/API-key settings. |
-| Phase 4: Market Planning Dry Run | Done | Accepted requests can prepare a Universalis-backed advisory plan and display world/listing batches. Planner semantics now need to align with the two-mode quantity model and optional gil cap everywhere. |
+| Phase 4: Market Planning Live Candidates | Done | Accepted requests can prepare a Universalis-backed advisory plan and display world/listing batches. Planner semantics align with the two-mode quantity model, optional gil cap, optional max quantity for `AllBelowThreshold`, and remaining quantity/gil after live purchases. |
 | Phase 5: Live Market Board Read-Only Probe | Done for visible rows | In-game probe succeeded on current patch: item id, visible listing rows, listing id, retainer id/name, HQ flag, unit price, and quantity populated correctly. The `WaitingForListings` flag can remain set while visible rows exist, and the reader now treats populated rows as ready with a diagnostic note. Current-world live candidate evaluation is included in this phase because it only classifies the visible page after the read-only probe. Remaining risk moves to pagination/deeper listing-page behavior. |
 | Phase 5.5: Current-World Live Candidate Evaluation | Done for visible rows | After `Read Live Listings`, the plugin validates item/world, builds a confirmed live candidate pool, sorts by live unit price, supports favorable drift, respects HQ/max-unit/gil-cap constraints, and reports would-buy/skip/under-procure outcomes without purchasing. Verbose tables live in a diagnostics popout so the main Market Acquisition tab stays operational. |
-| Phase 6: Lifestream-Guided World-Batch Orchestration | Dry-run route proven locally | Local live testing completed a full multi-world guided dry-run with Lifestream travel, market-board approach, item search, exact item-result selection, visible listing reads, candidate evaluation, market-board close-before-travel, and route completion. Planning now route-sorts selected batches from the player's current world and data center before crossing to other data centers. Plugin route progress/failure is reported into the server lifecycle and surfaced on the dashboard queue. True completion reporting and live re-ranking across remaining stops remain pending. |
+| Phase 6: Lifestream-Guided World-Batch Orchestration | Route proven locally; run model hardened | Local live testing completed a full multi-world guided route with Lifestream travel, market-board approach, item search, exact item-result selection, visible listing reads, candidate evaluation, market-board close-before-travel, and route completion. Planning now route-sorts selected batches from the player's current world and data center before crossing to other data centers. Plugin route progress/failure now reports under per-attempt execution identities with event sequences, stale-attempt classification, deterministic idempotency, and latest-attempt dashboard projection. Fuller attempt timeline/audit UI and live re-ranking across remaining stops remain pending. |
 | Phase 7: Purchase Mechanism Investigation | Done for first safe listing | Human-equivalent purchase input capture and guarded adapter work proved that a selected, live-revalidated market-board row can be driven to purchase. The first live test confirmed `Buy First Safe Listing` functions from a populated listing page. |
-| Phase 8: Guarded Purchase Execution | First current-world slice proven | Current implementation selects the first safe live candidate, revalidates against a fresh read, executes one guarded purchase attempt, and stops. Remaining work is multi-listing single-world batches, world-batch confirmation, per-purchase audit/progress, terminal completion reporting, and favorable-drift re-ranking across the remaining route. |
+| Phase 8: Guarded Purchase Execution | Autonomous visible-row batch ready for live test | Current implementation starts purchasing automatically after route launch and live candidate validation, revalidates before each purchase, buys through safe visible listings for the current world, re-reads after each confirmed purchase, and advances the route. Remaining work is per-purchase server audit rows, richer terminal classifications, deeper pagination, and favorable-drift re-ranking across remaining worlds. |
 | Phase 9: Travel Automation Spike | Deferred | Only needed if Lifestream cannot cover the required region/world routes. Until then, travel work is an integration/orchestration problem rather than native aetheryte automation. |
 | Phase 10: Craft Architect Plan Integration | Deferred | Wait until the core loop is proven and a clean HTTP/JSON service boundary exists. |
 
@@ -157,7 +162,7 @@ Add a small dashboard form for creating a market acquisition request, with clear
 ### Capability
 
 - Dashboard page exposes a `Market Acquisition` request form.
-- User can enter item id/name, quantity mode (`TargetQuantity` or `AllBelowThreshold`), quantity when applicable, max unit price, optional gil cap, HQ policy, region, and world mode.
+- User can enter item id/name, quantity mode (`TargetQuantity` or `AllBelowThreshold`), target quantity or optional max quantity depending on mode, max unit price, optional gil cap, HQ policy, region, and world mode.
 - Default world mode is `recommended`.
 - `allWorldSweep` is visually and behaviorally distinct.
 - After creation, dashboard shows:
@@ -258,7 +263,7 @@ Add the in-game pickup tray without any market planning, game UI automation, or 
 - Plugin can accept a request and server records it.
 - No constant polling exists.
 
-## Phase 4: Market Planning Dry Run
+## Phase 4: Market Planning Live Candidates
 
 ### Objective
 
@@ -266,13 +271,13 @@ Turn an accepted request into a data-supported world plan, without touching the 
 
 ### Current Implementation Status
 
-- Accepted requests can be prepared into a dry-run plan from the `Market Acquisition` tab.
+- Accepted requests can be prepared into an advisory plan from the `Market Acquisition` tab.
 - The first plan source reads Universalis current listings from `/api/v2/{region}/{itemId}?listings=...`.
 - The parser requires the live listing fields used by the planner: world name/id, listing id, retainer id/name, unit price, quantity, HQ flag, and review timestamp.
 - The planner filters by HQ policy, max unit price, optional max total gil, quantity mode, and world mode.
 - Recommended mode includes only worlds with listings under the configured threshold; it does not blindly include every world in the region.
 - Selected mode currently fails explicitly before remote planning because the request payload does not yet carry a selected-world list.
-- All-world sweep is allowed but labeled distinctly in the dry-run plan; richer sweep-specific routing waits for later runner phases.
+- All-world sweep is allowed but labeled distinctly in the advisory plan; richer sweep-specific routing waits for later runner phases.
 - Plans preserve individual listing rows because stack quantities and prices can differ.
 - Planning assumes whole-stack purchases. If fulfilling a request requires buying beyond the requested quantity, the batch is marked as an overage.
 - The generated plan is an advisory route, not the final purchase authority. Live confirmed listings can replace, reorder, or expand the advisory plan when they satisfy the request rules.
@@ -344,7 +349,7 @@ Read and reconcile live market board listings from the game without sending any 
 - `MarketMafioso.Tests/MarketAcquisition/MarketBoardListingReconcilerTests.cs`
 - `MarketMafioso.Tests/MarketAcquisition/MarketBoardListingReaderTests.cs`
 - `MarketMafioso/Windows/MainWindow.cs` exposes the `Read Live Listings` probe and compact summary.
-- `MarketMafioso/Windows/MarketAcquisitionDiagnosticsWindow.cs` exposes verbose reconciliation and live dry-run tables.
+- `MarketMafioso/Windows/MarketAcquisitionDiagnosticsWindow.cs` exposes verbose reconciliation and live candidate tables.
 
 ### Remaining Work
 
@@ -399,19 +404,19 @@ Build a confirmed buy/skip candidate pool from the current visible market-board 
 
 ### Implemented Files
 
-- `MarketMafioso/MarketAcquisition/MarketAcquisitionLiveDryRunModels.cs`
-- `MarketMafioso/MarketAcquisition/MarketAcquisitionLiveDryRunPlanner.cs`
-- `MarketMafioso/MarketAcquisition/MarketAcquisitionLiveDryRunPresenter.cs`
+- `MarketMafioso/MarketAcquisition/MarketAcquisitionLiveCandidatePlanModels.cs`
+- `MarketMafioso/MarketAcquisition/MarketAcquisitionLiveCandidatePlanner.cs`
+- `MarketMafioso/MarketAcquisition/MarketAcquisitionLiveCandidatePresenter.cs`
 - `MarketMafioso/Windows/MarketAcquisitionDiagnosticsWindow.cs`
-- `MarketMafioso.Tests/MarketAcquisition/MarketAcquisitionLiveDryRunPlannerTests.cs`
-- `MarketMafioso.Tests/MarketAcquisition/MarketAcquisitionLiveDryRunPresenterTests.cs`
+- `MarketMafioso.Tests/MarketAcquisition/MarketAcquisitionLiveCandidatePlannerTests.cs`
+- `MarketMafioso.Tests/MarketAcquisition/MarketAcquisitionLiveCandidatePresenterTests.cs`
 
 ### Capability
 
 - Candidate evaluation runs only after a successful visible-page live market-board read.
 - Candidate evaluation validates item id and current world against the accepted request and prepared plan.
 - Candidate evaluation builds a confirmed candidate pool from live listings at or below max unit price.
-- Candidate evaluation sorts confirmed candidates by unit price before any future dry-run or purchase action.
+- Candidate evaluation sorts confirmed candidates by unit price before any purchase action.
 - Candidate evaluation records favorable drift such as cheaper listings, replacement listings, and more below-threshold stock.
 - Candidate evaluation reports per-listing `WouldBuy` or `Skipped` rows with explicit reasons such as above threshold, HQ mismatch, gil cap exceeded, or target already satisfied.
 - Candidate evaluation reports aggregate `Ready`, `UnderProcured`, or `NoSafeListings`.
@@ -419,7 +424,7 @@ Build a confirmed buy/skip candidate pool from the current visible market-board 
 
 ### Exit Criteria
 
-- Current-world dry-run can classify the current visible page without purchase calls.
+- Current-world live candidate planning can classify the current visible page without purchase calls.
 - Main Market Acquisition tab remains compact.
 - Diagnostics popout contains verbose reconciliation and candidate tables.
 
@@ -456,8 +461,8 @@ Add a local runner that walks through planned world batches by delegating travel
 - Route execution supports pause, resume, stop, restart, and optional file-backed diagnostics.
 - Runner closes market-board windows before issuing the next travel command.
 - Later slices re-rank remaining world stops if a live-confirmed cheaper candidate changes the best path.
-- Runner shows one world-batch confirmation.
-- `Dry Run Batch` records what would be bought and advances.
+- Runner executes the accepted route after one local launch action and stops only for classified intervention states.
+- `Live Candidates Batch` records what would be bought and advances.
 
 ### Investigation Points
 
@@ -468,20 +473,20 @@ Add a local runner that walks through planned world batches by delegating travel
 - Current world detection:
   - Confirm stable source for current world after world travel.
   - Confirm timing after travel completes.
-- Confirmation surface:
-  - Use inline confirmation for low-risk actions.
-  - Reserve modal popup for high-risk world-batch purchase confirmation.
-  - Ensure confirmation is invalidated if live listings change.
+- Intervention surface:
+  - Use inline status for normal route execution.
+  - Reserve modal or prominent inline blocks for catastrophic/ambiguous intervention states.
+  - Ensure stale or ambiguous live listing changes stop the route before purchases continue.
 - Runner persistence:
   - Decide whether active run state is volatile only.
   - Recommended: volatile only; dashboard request audit stores progress/results.
 
 ### Exit Criteria
 
-- User can dry-run a full multi-world plan with Lifestream-assisted travel.
+- User can execute a full multi-world candidate route with Lifestream-assisted travel.
 - Runner can pause, stop, fail, and complete with clear status.
 - Server receives progress/failure/completion reports.
-- Confirmation invalidates if current world, current search item, confirmed candidate identity, confirmed candidate price, confirmed candidate quantity, or remaining configured budget changes before batch action.
+- Route execution stops for intervention if current world, current search item, candidate identity, candidate price, candidate quantity, or remaining configured budget becomes ambiguous before a purchase action.
 
 ### Current Slice Exit Criteria
 
@@ -492,13 +497,13 @@ Add a local runner that walks through planned world batches by delegating travel
 - Done: Plugin automatically submits the accepted item name to the market board item search after the expected world is detected.
 - Done: Plugin automatically selects the exact item result by item id and does not start probing until the market listing results addon is visible.
 - Done: Plugin automatically retries the read-only live listing probe after listing results are visible.
-- Done: Successful live probe/dry-run records current stop quantities and advances to the next stop.
+- Done: Successful live probe and candidate planning records current stop quantities and advances to the next stop.
 - Done: Market-board windows are closed before the next travel command.
 - Done: Route ordering prefers the player's current world/data center before crossing to other data centers.
 - Done: Plugin reports guided route progress/failure into the server lifecycle, and the dashboard queue surfaces the latest runner state/message.
 - Done: Travel command preflight blocks Lifestream dispatch while known blocking UI is open.
 - Still pending: Completion reporting is intentionally held until the plugin completes live purchase batches.
-- Still pending: World-batch confirmation surface for future live purchases.
+- Still pending: Autonomous route purchase surface with explicit intervention states for future live purchases.
 - Still pending: Live re-ranking of remaining stops after favorable live drift.
 - Single-listing purchase now exists outside the guided route batch loop.
 
@@ -561,10 +566,10 @@ Add live purchases behind strict gates if Phase 7 proves the mechanism.
 
 - Done: `MarketBoardPurchasePlanner` selects the first `WouldBuy` row and revalidates it against a fresh live listing read.
 - Done: `MarketBoardPurchaseExecutor` refuses missing or mismatched candidates, calls the adapter once for a validated candidate, and stops after one attempt.
-- Done: The plugin exposes a guarded one-shot `Buy First Safe Listing` action after a ready live dry-run.
 - Done: Live testing confirmed the one-shot purchase action functions.
-- Pending: Build the single-world batch loop that consumes multiple safe visible listings after one explicit confirmation.
-- Pending: Add guided-route integration so successful batch purchases can advance worlds and report terminal completion to the dashboard.
+- Done: The route now automatically starts a world purchase batch after route launch, arrival, item search, and live candidate validation.
+- Done: The world batch consumes multiple safe visible listings, re-reading and rebuilding the candidate pool after each confirmed purchase.
+- Done: Guided-route integration advances worlds after successful batch completion and reports terminal completion to the dashboard.
 - Pending: Add audit/progress rows for actual purchase attempts, skips, and stop classifications.
 
 ### Proposed Files
@@ -575,11 +580,11 @@ Add live purchases behind strict gates if Phase 7 proves the mechanism.
 
 ### Capability
 
-- Purchase execution is disabled unless the user explicitly enables it.
-- Plugin confirms once per world batch.
+- Purchase execution begins only after local plugin acceptance and route launch.
+- Plugin does not ask for routine per-world or per-purchase user confirmation after launch.
 - Before each purchase send, plugin revalidates item id, world, listing id, retainer id, HQ flag, unit price, quantity, and remaining gil cap when configured.
 - `TargetQuantity` executes cheapest confirmed live candidates until the target is satisfied, safe stock runs out, or a safety stop occurs.
-- `AllBelowThreshold` executes every confirmed live candidate at or below max unit price, optionally bounded by a configured gil cap.
+- `AllBelowThreshold` executes every confirmed live candidate at or below max unit price, optionally bounded by a configured gil cap and/or optional max quantity.
 - Confirmed replacement listings below threshold are valid purchase candidates.
 - Runner stops on unknown purchase result.
 - Server receives progress and final audit state.
@@ -599,9 +604,9 @@ Add live purchases behind strict gates if Phase 7 proves the mechanism.
 ### Exit Criteria
 
 - One low-value current-world purchase succeeds under max unit price.
-- Multi-listing single-world batch succeeds after one confirmation.
+- Multi-listing single-world batch succeeds after route launch without routine user input.
 - Unsafe or ambiguous mismatch stops the affected candidate or batch according to the failure taxonomy. Favorable live drift can continue.
-- No purchase path exists without local plugin acceptance and an explicit plugin action or confirmation.
+- No purchase path exists without local plugin acceptance and an explicit route launch action.
 - Unknown purchase response stops the runner.
 - Execution audit records enough listing identity and validation facts to explain why a purchase was attempted, without storing secrets or raw unstable client dumps by default.
 
@@ -677,7 +682,7 @@ Replace or augment the simple local planner with Craft Architect's richer market
 
 - Market board and world travel structures can break with FFXIV/Dalamud updates.
 - Keep read-only probes and diagnostics easy to run after updates.
-- After any FFXIV patch or Dalamud struct update, rerun the read-only probe before enabling dry-run reconciliation and rerun the purchase probe before enabling purchase execution.
+- After any FFXIV patch or Dalamud struct update, rerun the read-only probe before enabling live candidate reconciliation and rerun the purchase probe before enabling purchase execution.
 
 ### Economic Risk
 
@@ -695,7 +700,7 @@ Replace or augment the simple local planner with Craft Architect's richer market
 1. Phase 1: Server Request Lifecycle.
 2. Phase 2: Dashboard Request Creation Surface.
 3. Phase 3: Plugin Request Pickup UI.
-4. Phase 4: Market Planning Dry Run.
+4. Phase 4: Market Planning Live Candidates.
 5. Phase 5: Live Market Board Read-Only Probe.
 6. Phase 5.5: Current-World Live Candidate Evaluation.
 7. Phase 6: Lifestream-Guided World-Batch Orchestration.

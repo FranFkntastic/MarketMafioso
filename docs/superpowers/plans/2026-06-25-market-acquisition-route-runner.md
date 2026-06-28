@@ -62,7 +62,7 @@ Replace `Start Guided Route`, `Reset Route`, command textbox, copy command, and 
 
 - [ ] **Step 3: Move route progression through runner**
 
-Make framework ticks call the runner pipeline: execute pending travel, handle current-world transitions, submit search, run live probe, and record dry-run results.
+Make framework ticks call the runner pipeline: execute pending travel, handle current-world transitions, submit search, run live probe, and record live candidate results.
 
 ### Task 4: Verification
 

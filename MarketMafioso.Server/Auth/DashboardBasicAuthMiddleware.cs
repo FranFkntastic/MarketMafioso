@@ -1,4 +1,5 @@
 using System.Net.Http.Headers;
+using System.Collections.Concurrent;
 using System.Text;
 using System.Globalization;
 using MarketMafioso.Server.Sqlite;
@@ -7,6 +8,8 @@ namespace MarketMafioso.Server.Auth;
 
 public sealed class DashboardBasicAuthMiddleware
 {
+    public const string DashboardUserIdItemKey = "MarketMafioso.DashboardUserId";
+
     private const string Realm = "MarketMafioso Receiver";
 
     private readonly RequestDelegate next;
@@ -14,6 +17,8 @@ public sealed class DashboardBasicAuthMiddleware
     private readonly SqliteConnectionFactory connectionFactory;
     private readonly DashboardPasswordHasher passwordHasher;
     private readonly ILogger<DashboardBasicAuthMiddleware> log;
+    private readonly ConcurrentDictionary<string, CachedDashboardAuth> acceptedCredentials = new(StringComparer.Ordinal);
+    private readonly TimeSpan acceptedCredentialTtl;
 
     public DashboardBasicAuthMiddleware(
         RequestDelegate next,
@@ -27,6 +32,9 @@ public sealed class DashboardBasicAuthMiddleware
         this.connectionFactory = connectionFactory;
         this.passwordHasher = passwordHasher;
         this.log = log;
+        acceptedCredentialTtl = TimeSpan.FromSeconds(Math.Max(
+            0,
+            configuration.GetValue("MarketMafioso:DashboardAuthCacheSeconds", 300)));
     }
 
     public async Task InvokeAsync(HttpContext context)
@@ -38,14 +46,26 @@ public sealed class DashboardBasicAuthMiddleware
             return;
         }
 
-        var credentials = ParseBasicCredentials(context.Request.Headers.Authorization);
-        if (credentials == null ||
-            !await IsValidDashboardUserAsync(credentials.Value.Username, credentials.Value.Password, context.RequestAborted))
+        var authorizationHeader = context.Request.Headers.Authorization.ToString();
+        if (TryGetAcceptedCredential(authorizationHeader, out var cachedUserId))
+        {
+            context.Items[DashboardUserIdItemKey] = cachedUserId;
+            await next(context);
+            return;
+        }
+
+        var credentials = ParseBasicCredentials(authorizationHeader);
+        var userId = credentials == null
+            ? null
+            : await TryValidateDashboardUserAsync(credentials.Value.Username, credentials.Value.Password, context.RequestAborted);
+        if (userId == null)
         {
             await ChallengeAsync(context);
             return;
         }
 
+        context.Items[DashboardUserIdItemKey] = userId.Value;
+        CacheAcceptedCredential(authorizationHeader, userId.Value);
         await next(context);
     }
 
@@ -68,7 +88,37 @@ public sealed class DashboardBasicAuthMiddleware
                  request.HasFormContentType));
     }
 
-    private async Task<bool> IsValidDashboardUserAsync(string username, string password, CancellationToken cancellationToken)
+    private bool TryGetAcceptedCredential(string authorizationHeader, out long userId)
+    {
+        userId = 0;
+        if (acceptedCredentialTtl <= TimeSpan.Zero ||
+            string.IsNullOrWhiteSpace(authorizationHeader) ||
+            !acceptedCredentials.TryGetValue(authorizationHeader, out var cached))
+        {
+            return false;
+        }
+
+        if (cached.ExpiresAtUtc <= DateTimeOffset.UtcNow)
+        {
+            acceptedCredentials.TryRemove(authorizationHeader, out _);
+            return false;
+        }
+
+        userId = cached.UserId;
+        return true;
+    }
+
+    private void CacheAcceptedCredential(string authorizationHeader, long userId)
+    {
+        if (acceptedCredentialTtl <= TimeSpan.Zero || string.IsNullOrWhiteSpace(authorizationHeader))
+            return;
+
+        acceptedCredentials[authorizationHeader] = new CachedDashboardAuth(
+            userId,
+            DateTimeOffset.UtcNow.Add(acceptedCredentialTtl));
+    }
+
+    private async Task<long?> TryValidateDashboardUserAsync(string username, string password, CancellationToken cancellationToken)
     {
         await using var connection = await connectionFactory.OpenConnectionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
@@ -82,15 +132,15 @@ public sealed class DashboardBasicAuthMiddleware
 
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         if (!await reader.ReadAsync(cancellationToken))
-            return false;
+            return null;
 
         var userId = reader.GetInt64(0);
         var passwordHash = reader.GetString(1);
         if (!passwordHasher.VerifyPassword(password, passwordHash))
-            return false;
+            return null;
 
         await UpdateLastLoginAsync(connection, userId, cancellationToken);
-        return true;
+        return userId;
     }
 
     private async Task UpdateLastLoginAsync(
@@ -149,4 +199,6 @@ public sealed class DashboardBasicAuthMiddleware
         context.Response.StatusCode = StatusCodes.Status401Unauthorized;
         return context.Response.WriteAsJsonAsync(new { error = "invalid_dashboard_credentials" });
     }
+
+    private readonly record struct CachedDashboardAuth(long UserId, DateTimeOffset ExpiresAtUtc);
 }

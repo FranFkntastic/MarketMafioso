@@ -1,0 +1,111 @@
+@using MarketMafioso.Dashboard.Models
+
+<MudPaper Class="compact-card dashboard-panel queue-panel" Elevation="0">
+    <MudStack Spacing="2">
+        <MudStack Row="true" AlignItems="AlignItems.Center" Class="panel-heading">
+            <MudText Typo="Typo.h6">Request Queue</MudText>
+            <MudSpacer />
+            <MudText Typo="Typo.caption" Class="muted">@Requests.Count active</MudText>
+            <MudButton Variant="Variant.Outlined" Class="quiet-button" OnClick="RefreshRequested">Refresh</MudButton>
+        </MudStack>
+
+        <MudDataGrid T="MarketAcquisitionRequestView"
+                     Items="Requests"
+                     Dense="true"
+                     Hover="true"
+                     FixedHeader="true"
+                     ReadOnly="true"
+                     SortMode="SortMode.Multiple"
+                     Filterable="true"
+                     ShowFilterIcons="true"
+                     Class="queue-table operation-grid"
+                     RowClassFunc="RowClass"
+                     RowClick="@OnRowClicked">
+            <Columns>
+                <TemplateColumn Title="Item" Resizable="true">
+                    <CellTemplate>
+                        @(context.Item.ItemName ?? $"Item {context.Item.ItemId}")<br /><span class="muted">@context.Item.TargetCharacterName @@ @context.Item.TargetWorld</span>
+                    </CellTemplate>
+                </TemplateColumn>
+                <TemplateColumn Title="Qty" Resizable="true">
+                    <CellTemplate>@FormatQuantity(context.Item)</CellTemplate>
+                </TemplateColumn>
+                <PropertyColumn Property="request => request.MaxUnitPrice" Title="Max Unit" Resizable="true" />
+                <PropertyColumn Property="request => request.WorldMode" Title="Routing" Resizable="true" />
+                <TemplateColumn Title="Status" Resizable="true">
+                    <CellTemplate>
+                        <MudChip T="string" Size="Size.Small" Color="@StatusColor(context.Item.Status)">@context.Item.Status</MudChip>
+                    </CellTemplate>
+                </TemplateColumn>
+                <TemplateColumn Title="Latest" Resizable="true">
+                    <CellTemplate>@FormatLatestRequestEvent(context.Item)</CellTemplate>
+                </TemplateColumn>
+                <TemplateColumn Title="Actions" Resizable="true" Sortable="false" Filterable="false">
+                    <CellTemplate>
+                        <MudMenu Dense="true">
+                            <ActivatorContent>
+                                <MudButton Size="Size.Small" Variant="Variant.Outlined">Actions</MudButton>
+                            </ActivatorContent>
+                            <ChildContent>
+                                <MudMenuItem OnClick="@(() => CancelRequested.InvokeAsync(context.Item.Id))">Cancel</MudMenuItem>
+                                <MudMenuItem OnClick="@(() => ResendRequested.InvokeAsync(context.Item.Id))">Resend</MudMenuItem>
+                            </ChildContent>
+                        </MudMenu>
+                    </CellTemplate>
+                </TemplateColumn>
+            </Columns>
+            <NoRecordsContent>
+                <MudText Class="muted">No acquisition requests yet.</MudText>
+            </NoRecordsContent>
+        </MudDataGrid>
+    </MudStack>
+</MudPaper>
+
+@code {
+    [Parameter] public IReadOnlyList<MarketAcquisitionRequestView> Requests { get; set; } = [];
+    [Parameter] public MarketAcquisitionRequestView? SelectedRequest { get; set; }
+    [Parameter] public EventCallback<MarketAcquisitionRequestView?> SelectedRequestChanged { get; set; }
+    [Parameter] public EventCallback RefreshRequested { get; set; }
+    [Parameter] public EventCallback<string> CancelRequested { get; set; }
+    [Parameter] public EventCallback<string> ResendRequested { get; set; }
+
+    private async Task OnRowClicked(DataGridRowClickEventArgs<MarketAcquisitionRequestView> args)
+    {
+        await SelectedRequestChanged.InvokeAsync(args.Item);
+    }
+
+    private string RowClass(MarketAcquisitionRequestView request, int rowNumber) =>
+        SelectedRequest?.Id == request.Id ? "selected-grid-row" : string.Empty;
+
+    private static Color StatusColor(string status) => status switch
+    {
+        "Complete" => Color.Success,
+        "Failed" or "Cancelled" or "Rejected" => Color.Error,
+        "Running" or "AcceptedInPlugin" => Color.Warning,
+        _ => Color.Info,
+    };
+
+    private static string FormatQuantity(MarketAcquisitionRequestView request) =>
+        request.QuantityMode == "AllBelowThreshold"
+            ? request.Quantity == 0 ? "All safe stock" : $"Max {request.Quantity:N0}"
+            : request.Quantity.ToString("N0");
+
+    private static string FormatLatestRequestEvent(MarketAcquisitionRequestView request)
+    {
+        if (!string.IsNullOrWhiteSpace(request.LatestAttemptId))
+        {
+            var world = string.IsNullOrWhiteSpace(request.LatestAttemptWorld)
+                ? "route"
+                : request.LatestAttemptWorld;
+            var phase = string.IsNullOrWhiteSpace(request.LatestAttemptPhase)
+                ? request.LatestAttemptEventType ?? "event"
+                : request.LatestAttemptPhase;
+            var result = string.IsNullOrWhiteSpace(request.LatestAttemptResult)
+                ? string.Empty
+                : $" / {request.LatestAttemptResult}";
+            return $"{world}: {phase}{result}";
+        }
+
+        return request.LatestMessage ?? request.LatestReason ?? "-";
+    }
+}

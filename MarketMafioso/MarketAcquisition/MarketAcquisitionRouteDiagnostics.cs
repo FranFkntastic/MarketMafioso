@@ -98,6 +98,16 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
         Record("complete", message);
     }
 
+    public void RecordAutomationSnapshot(MarketBoardAutomationSnapshot snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+
+        Record(
+            "automation-snapshot",
+            $"{snapshot.Step}/{snapshot.Phase}: observed {snapshot.Observed}; outcome {snapshot.Outcome}; next {snapshot.NextAction}.",
+            snapshot.ToDetails());
+    }
+
     public void Fail(string message, Exception? exception = null)
     {
         var details = exception == null

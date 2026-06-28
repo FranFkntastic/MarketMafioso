@@ -53,14 +53,19 @@ public class MainWindow : Window, IDisposable
     private MarketAcquisitionPlan? acquisitionPlan;
     private MarketBoardReadResult? marketBoardReadResult;
     private MarketBoardListingReconciliation? marketBoardReconciliation;
-    private MarketAcquisitionLiveDryRun? marketAcquisitionLiveDryRun;
+    private MarketAcquisitionLiveCandidatePlan? marketAcquisitionLiveCandidatePlan;
     private MarketBoardPurchaseSession? marketBoardPurchaseSession;
     private MarketBoardPurchaseResult? marketBoardPurchaseResult;
+    private uint activeWorldPurchasedQuantity;
+    private uint activeWorldSpentGil;
+    private string? activeWorldPurchaseBatchWorld;
     private DateTimeOffset nextGuidedRouteMonitorUtc = DateTimeOffset.MinValue;
     private DateTimeOffset nextMarketBoardPurchaseMonitorUtc = DateTimeOffset.MinValue;
     private int marketInputCaptureIndex;
     private bool guidedRouteProbeRunning = false;
     private long guidedRouteProgressReportSequence;
+    private long guidedRouteProgressSessionVersion;
+    private string guidedRouteProgressNonce = Guid.NewGuid().ToString("N");
     private string? lastGuidedRouteProgressReportKey;
     private bool acquisitionRequestBusy = false;
     private string acquisitionStatus = "No dashboard request has been fetched this session.";
@@ -159,7 +164,13 @@ public class MainWindow : Window, IDisposable
         AcquisitionDiagnostics = new MarketAcquisitionDiagnosticsWindow(
             () => marketBoardReadResult,
             () => marketBoardReconciliation,
-            () => marketAcquisitionLiveDryRun);
+            () => marketAcquisitionLiveCandidatePlan,
+            CanProbeLiveMarketBoard,
+            () => _ = ProbeLiveMarketBoardAsync(),
+            CaptureMarketBoardInputState,
+            () => marketAcquisitionRouteRunner.CanFinalizeInputCaptureLog,
+            FinalizeMarketBoardInputCaptureLog,
+            () => marketAcquisitionRouteRunner.LastDiagnosticFilePath);
 
         var restoredAcquisitionClaim = MarketAcquisitionClaimPersistence.Restore(config);
         if (restoredAcquisitionClaim != null)
@@ -297,18 +308,36 @@ public class MainWindow : Window, IDisposable
         DrawMarketAcquisitionPlan();
         ImGui.Spacing();
         DrawMarketAcquisitionGuidedRoute();
-        ImGui.Spacing();
-        DrawMarketBoardProbe();
     }
 
     private void DrawMarketAcquisitionPickupSection()
     {
         ImGuiUi.SectionHeader("Request Pickup", ColHeader);
 
+        var routeOwnsUi = IsMarketAcquisitionRouteActive();
+        if (routeOwnsUi)
+        {
+            ImGui.TextColored(ColMuted, "Request pickup is hidden while a guided route is active.");
+            if (claimedAcquisitionRequest != null)
+                ImGui.TextColored(ColMuted, $"Active request: {FormatAcquisitionItem(claimedAcquisitionRequest)}");
+            ImGui.SameLine();
+            var visibleStatus = GetVisibleAcquisitionStatus();
+            ImGui.TextColored(GetAcquisitionStatusColor(visibleStatus), visibleStatus);
+            return;
+        }
+
         if (TryGetAcquisitionScope(out var characterName, out var world))
+        {
             ImGui.TextColored(ColMuted, $"Character scope: {characterName} @ {world}");
+        }
+        else if (IsExpectedCharacterScopeGap())
+        {
+            ImGui.TextColored(ColMuted, "Character scope temporarily unavailable during route travel.");
+        }
         else
+        {
             ImGui.TextColored(ColError, "Character scope unavailable. Log into a character before fetching requests.");
+        }
 
         var canFetch = !acquisitionRequestBusy &&
                        !string.IsNullOrWhiteSpace(apiKeyBuffer) &&
@@ -317,7 +346,8 @@ public class MainWindow : Window, IDisposable
             _ = FetchDashboardRequestsAsync();
 
         ImGui.SameLine();
-        ImGui.TextColored(GetAcquisitionStatusColor(), acquisitionStatus);
+        var visibleAcquisitionStatus = GetVisibleAcquisitionStatus();
+        ImGui.TextColored(GetAcquisitionStatusColor(visibleAcquisitionStatus), visibleAcquisitionStatus);
 
         if (pendingAcquisitionRequests.Count == 0)
         {
@@ -346,13 +376,13 @@ public class MainWindow : Window, IDisposable
                 ImGui.TableNextColumn();
                 ImGui.TextUnformatted(FormatAcquisitionItem(request));
                 ImGui.TableNextColumn();
-                ImGui.TextUnformatted(request.Quantity.ToString());
+                ImGui.TextUnformatted(MarketAcquisitionQuantityModePresenter.FormatQuantity(request.QuantityMode, request.Quantity));
                 ImGui.TableNextColumn();
                 ImGui.TextUnformatted(request.HqPolicy);
                 ImGui.TableNextColumn();
                 ImGui.TextUnformatted(FormatGil(request.MaxUnitPrice));
                 ImGui.TableNextColumn();
-                ImGui.TextUnformatted(request.WorldMode);
+                ImGui.TextUnformatted(MarketAcquisitionQuantityModePresenter.FormatMode(request.QuantityMode));
                 ImGui.TableNextColumn();
                 if (ImGuiUi.Button($"Claim##marketAcquisitionClaim{request.Id}", !acquisitionRequestBusy))
                     _ = ClaimAcquisitionRequestAsync(request.Id);
@@ -376,7 +406,8 @@ public class MainWindow : Window, IDisposable
         {
             DrawClaimedRequestRow("Status", claimedAcquisitionRequest.Status);
             DrawClaimedRequestRow("Item", FormatAcquisitionItem(claimedAcquisitionRequest));
-            DrawClaimedRequestRow("Quantity", $"{claimedAcquisitionRequest.QuantityMode} {claimedAcquisitionRequest.Quantity}");
+            DrawClaimedRequestRow("Mode", MarketAcquisitionQuantityModePresenter.FormatMode(claimedAcquisitionRequest.QuantityMode));
+            DrawClaimedRequestRow("Quantity", MarketAcquisitionQuantityModePresenter.FormatQuantity(claimedAcquisitionRequest.QuantityMode, claimedAcquisitionRequest.Quantity));
             DrawClaimedRequestRow("HQ Policy", claimedAcquisitionRequest.HqPolicy);
             DrawClaimedRequestRow("Max Unit", FormatGil(claimedAcquisitionRequest.MaxUnitPrice));
             DrawClaimedRequestRow("Gil Cap", FormatGilCap(claimedAcquisitionRequest.MaxTotalGil));
@@ -399,16 +430,17 @@ public class MainWindow : Window, IDisposable
 
         ImGui.SameLine();
         var canPrepare = !acquisitionRequestBusy &&
-                         IsAcceptedOrRunning(claimedAcquisitionRequest.Status);
+                         CanPrepareAcquisitionPlanForStatus(claimedAcquisitionRequest.Status);
         if (ImGuiUi.Button("Prepare Plan", canPrepare))
             _ = PrepareMarketAcquisitionPlanAsync();
 
-        ImGui.TextColored(ColMuted, "Preparing a plan only reads remote market data. Guided route automation is available after planning; purchases are not implemented.");
+        ImGui.TextColored(ColMuted, MarketAcquisitionQuantityModePresenter.FormatExecutionHint(claimedAcquisitionRequest.QuantityMode));
+        ImGui.TextColored(ColMuted, "Preparing a plan reads remote market data. Guided routes validate live rows before purchasing.");
     }
 
     private void DrawMarketAcquisitionPlan()
     {
-        ImGuiUi.SectionHeader("Dry-Run Plan", ColHeader);
+        ImGuiUi.SectionHeader("Advisory Plan", ColHeader);
 
         if (acquisitionPlan == null)
         {
@@ -422,6 +454,12 @@ public class MainWindow : Window, IDisposable
 
         if (acquisitionPlan.WorldBatches.Count == 0)
             return;
+
+        if (!ImGui.CollapsingHeader("World Listings##MarketAcquisitionPlanWorldListings"))
+        {
+            ImGui.TextColored(ColMuted, "Expand to inspect advisory listings. Live market-board rows remain authoritative.");
+            return;
+        }
 
         var tableFlags = ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.Resizable;
         if (ImGui.BeginTable("MarketAcquisitionPlanBatches", 7, tableFlags))
@@ -467,38 +505,18 @@ public class MainWindow : Window, IDisposable
         }
     }
 
-    private void DrawMarketBoardProbe()
+    private bool CanProbeLiveMarketBoard()
     {
-        ImGuiUi.SectionHeader("Live Market Board Probe", ColHeader);
+        return !acquisitionRequestBusy &&
+               acquisitionPlan is { Status: "Ready" } &&
+               acquisitionPlan.WorldBatches.Count > 0;
+    }
 
-        ImGui.TextColored(ColMuted, "Open market board search results for a planned item/world, then run the read-only probe.");
+    private void DrawMarketBoardProbeStatus()
+    {
+        DrawLiveCandidatePlanResult();
 
-        var canProbe = !acquisitionRequestBusy &&
-                       acquisitionPlan is { Status: "Ready" } &&
-                       acquisitionPlan.WorldBatches.Count > 0;
-        if (ImGuiUi.Button("Read Live Listings", canProbe))
-            _ = ProbeLiveMarketBoardAsync();
-
-        if (marketBoardReadResult == null)
-        {
-            ImGui.TextColored(ColMuted, "No live market board probe has run.");
-            return;
-        }
-
-        ImGui.TextColored(
-            marketBoardReadResult.Status == "Ready" ? ColSuccess : ColMuted,
-            $"Read status: {marketBoardReadResult.Status}  -  {marketBoardReadResult.Message}");
-
-        if (marketBoardReconciliation != null)
-        {
-            ImGui.TextColored(
-                marketBoardReconciliation.Status == "Ready" ? ColSuccess : ColError,
-                $"Reconciliation: {marketBoardReconciliation.Status}");
-        }
-
-        DrawLiveDryRunResult();
-
-        if (ImGuiUi.Button("Open Diagnostics", marketBoardReadResult != null))
+        if (ImGuiUi.Button("Open Diagnostics", true))
             AcquisitionDiagnostics.IsOpen = true;
     }
 
@@ -616,6 +634,13 @@ public class MainWindow : Window, IDisposable
                 guidedRouteProbeRunning = true;
                 _ = ProbeGuidedRouteMarketBoardAsync();
             }
+
+            if (route.ActiveStop is { Status: "Purchasing" } &&
+                marketBoardPurchaseSession?.IsActive != true)
+            {
+                BeginNextWorldPurchase();
+                nextGuidedRouteMonitorUtc = DateTimeOffset.UtcNow.AddSeconds(1);
+            }
         }
         catch (Exception ex)
         {
@@ -701,38 +726,34 @@ public class MainWindow : Window, IDisposable
         }
     }
 
-    private void DrawLiveDryRunResult()
+    private void DrawLiveCandidatePlanResult()
     {
-        if (marketAcquisitionLiveDryRun == null)
+        if (marketAcquisitionLiveCandidatePlan == null)
             return;
 
         ImGui.Spacing();
         ImGui.TextColored(
-            marketAcquisitionLiveDryRun.Status == "Ready" ? ColSuccess : ColHeader,
-            $"Live dry-run: {marketAcquisitionLiveDryRun.Status}  -  Would buy {marketAcquisitionLiveDryRun.WouldBuyQuantity:N0}/{marketAcquisitionLiveDryRun.RequestedQuantity:N0}, spend {FormatGil(marketAcquisitionLiveDryRun.WouldSpendGil)}");
-        ImGui.TextWrapped(marketAcquisitionLiveDryRun.Message);
+            marketAcquisitionLiveCandidatePlan.Status == "Ready" ? ColSuccess : ColHeader,
+            $"Live candidates: {marketAcquisitionLiveCandidatePlan.Status}  -  Would buy {marketAcquisitionLiveCandidatePlan.WouldBuyQuantity:N0}/{marketAcquisitionLiveCandidatePlan.RequestedQuantity:N0}, spend {FormatGil(marketAcquisitionLiveCandidatePlan.WouldSpendGil)}");
+        ImGui.TextWrapped(marketAcquisitionLiveCandidatePlan.Message);
 
-        var summary = MarketAcquisitionLiveDryRunPresenter.BuildSummary(marketAcquisitionLiveDryRun);
+        var summary = MarketAcquisitionLiveCandidatePresenter.BuildSummary(marketAcquisitionLiveCandidatePlan);
         ImGui.TextColored(ColMuted, $"{summary.WouldBuyRows:N0} buy row(s), {summary.SkippedRows:N0} skipped row(s).");
 
-        var firstCandidate = MarketBoardPurchasePlanner.SelectFirstCandidate(marketAcquisitionLiveDryRun);
         var purchaseActive = marketBoardPurchaseSession?.IsActive == true;
-        var canBuyFirstListing =
-            firstCandidate != null &&
-            marketBoardReadResult?.Status == "Ready" &&
-            marketAcquisitionLiveDryRun.Status == "Ready" &&
-            !purchaseActive &&
-            !acquisitionRequestBusy;
-        if (ImGuiUi.Button("Buy First Safe Listing", canBuyFirstListing))
-            BeginFirstLivePurchase();
+        var activeStop = marketAcquisitionRouteRunner.ActiveStop;
+        var purchasingWorld = activeStop is { Status: "Purchasing" };
 
-        if (firstCandidate != null)
+        var firstCandidate = MarketBoardPurchasePlanner.SelectFirstCandidate(marketAcquisitionLiveCandidatePlan);
+        if (firstCandidate != null && purchasingWorld)
         {
-            ImGui.SameLine();
             ImGui.TextColored(
                 ColMuted,
-                $"First safe listing: {firstCandidate.Quantity:N0} @ {FormatGil(firstCandidate.UnitPrice)} ({FormatGil(firstCandidate.TotalGil)})");
+                $"Next safe listing: {firstCandidate.Quantity:N0} @ {FormatGil(firstCandidate.UnitPrice)} ({FormatGil(firstCandidate.TotalGil)})");
         }
+
+        if (purchasingWorld)
+            ImGui.TextColored(ColHeader, $"World batch running: purchased {activeWorldPurchasedQuantity:N0}, spent {FormatGil(activeWorldSpentGil)}.");
 
         if (marketBoardPurchaseSession != null)
         {
@@ -749,41 +770,79 @@ public class MainWindow : Window, IDisposable
         }
     }
 
-    private void BeginFirstLivePurchase()
+    private void BeginNextWorldPurchase()
     {
-        try
-        {
-            var dryRun = marketAcquisitionLiveDryRun ??
-                         throw new InvalidOperationException("No live dry-run is available.");
-            var currentWorld = GetCurrentWorldName();
-            var freshRead = marketBoardListingReader.ReadCurrentListings(currentWorld);
-            marketBoardReadResult = freshRead;
-            marketBoardPurchaseResult = marketBoardPurchaseExecutor.ExecuteFirstCandidate(dryRun, freshRead);
-            marketBoardPurchaseSession = null;
+        var activeStop = marketAcquisitionRouteRunner.ActiveStop;
+        if (activeStop is not { Status: "Purchasing" })
+            return;
 
-            if (marketBoardPurchaseResult.Status.Equals("PurchaseSelectionSent", StringComparison.OrdinalIgnoreCase) &&
-                marketBoardPurchaseResult.Candidate != null)
-            {
-                marketBoardPurchaseSession = MarketBoardPurchaseSession.Start(
-                    marketBoardPurchaseResult.Candidate,
-                    DateTimeOffset.UtcNow,
-                    MarketBoardPurchaseConfirmationWatchdog);
-                nextMarketBoardPurchaseMonitorUtc = DateTimeOffset.UtcNow.AddMilliseconds(250);
-            }
+        var claimed = claimedAcquisitionRequest ??
+                      throw new InvalidOperationException("No dashboard request is accepted.");
+        var plan = acquisitionPlan ??
+                   throw new InvalidOperationException("No market acquisition plan is prepared.");
+        var currentWorld = GetCurrentWorldName();
+        if (!activeStop.WorldName.Equals(currentWorld, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException($"Cannot purchase on {currentWorld}; active route stop is {activeStop.WorldName}.");
 
-            acquisitionStatus = $"Purchase: {marketBoardPurchaseResult.Status}. {marketBoardPurchaseResult.Message}";
-        }
-        catch (Exception ex)
+        if (!string.Equals(activeWorldPurchaseBatchWorld, activeStop.WorldName, StringComparison.OrdinalIgnoreCase))
         {
-            marketBoardPurchaseResult = new MarketBoardPurchaseResult
-            {
-                Status = "PurchaseStartFailed",
-                Message = ex.Message,
-            };
-            marketBoardPurchaseSession = null;
-            acquisitionStatus = $"Purchase start failed: {ex.Message}";
-            log.Warning(ex, "[MarketMafioso] Unable to start guarded market-board purchase.");
+            activeWorldPurchaseBatchWorld = activeStop.WorldName;
+            activeWorldPurchasedQuantity = 0;
+            activeWorldSpentGil = 0;
         }
+
+        var freshRead = marketBoardListingReader.ReadCurrentListings(currentWorld);
+        marketBoardReadResult = freshRead;
+        if (!freshRead.Status.Equals("Ready", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException(freshRead.Message);
+
+        marketAcquisitionLiveCandidatePlan = MarketAcquisitionLiveCandidatePlanner.BuildCandidatePlan(
+            claimed,
+            plan,
+            currentWorld,
+            freshRead.ItemId,
+            freshRead.Listings,
+            activeWorldPurchasedQuantity,
+            activeWorldSpentGil);
+        marketBoardPurchaseResult = marketBoardPurchaseExecutor.ExecuteFirstCandidate(
+            marketAcquisitionLiveCandidatePlan,
+            freshRead);
+        marketBoardPurchaseSession = null;
+
+        if (marketBoardPurchaseResult.Status.Equals("NoCandidate", StringComparison.OrdinalIgnoreCase))
+        {
+            CompleteActiveWorldPurchaseBatch(currentWorld);
+            return;
+        }
+
+        if (!marketBoardPurchaseResult.Status.Equals("PurchaseSelectionSent", StringComparison.OrdinalIgnoreCase) ||
+            marketBoardPurchaseResult.Candidate == null)
+        {
+            marketAcquisitionRouteRunner.FailRoute($"World purchase batch stopped: {marketBoardPurchaseResult.Message}");
+            acquisitionStatus = marketAcquisitionRouteRunner.StatusMessage;
+            ReportGuidedRouteProgress();
+            return;
+        }
+
+        marketBoardPurchaseSession = MarketBoardPurchaseSession.Start(
+            marketBoardPurchaseResult.Candidate,
+            DateTimeOffset.UtcNow,
+            MarketBoardPurchaseConfirmationWatchdog);
+        nextMarketBoardPurchaseMonitorUtc = DateTimeOffset.UtcNow.AddMilliseconds(250);
+        acquisitionStatus = $"Purchase: {marketBoardPurchaseResult.Status}. {marketBoardPurchaseResult.Message}";
+    }
+
+    private void CompleteActiveWorldPurchaseBatch(string currentWorld)
+    {
+        var result = marketAcquisitionRouteRunner.RecordWorldPurchaseBatchComplete(
+            currentWorld,
+            activeWorldPurchasedQuantity,
+            activeWorldSpentGil);
+        acquisitionStatus = result.Message;
+        marketBoardPurchaseSession = null;
+        marketBoardPurchaseResult = null;
+        activeWorldPurchaseBatchWorld = null;
+        ReportGuidedRouteProgress();
     }
 
     private void MonitorMarketBoardPurchase()
@@ -816,11 +875,23 @@ public class MainWindow : Window, IDisposable
             {
                 var freshRead = marketBoardListingReader.ReadCurrentListings(GetCurrentWorldName());
                 marketBoardReadResult = freshRead;
+                marketAcquisitionRouteRunner.RecordAutomationSnapshot(session.CreateFreshReadSnapshot(freshRead));
                 session = session.RecordFreshRead(freshRead, now);
             }
 
             marketBoardPurchaseSession = session;
             acquisitionStatus = $"Purchase: {session.Status}. {session.Message}";
+            if (session.Status.Equals("Completed", StringComparison.OrdinalIgnoreCase))
+            {
+                activeWorldPurchasedQuantity = checked(activeWorldPurchasedQuantity + session.Candidate.Quantity);
+                activeWorldSpentGil = checked(activeWorldSpentGil + session.Candidate.TotalGil);
+                marketBoardPurchaseSession = null;
+                marketBoardPurchaseResult = null;
+                if (marketBoardReadResult?.Status is "MarketBoardNotOpen" or "NoListings")
+                    CompleteActiveWorldPurchaseBatch(GetCurrentWorldName());
+                else
+                    BeginNextWorldPurchase();
+            }
         }
         catch (Exception ex)
         {
@@ -890,7 +961,7 @@ public class MainWindow : Window, IDisposable
             acquisitionPlan = null;
             marketBoardReadResult = null;
             marketBoardReconciliation = null;
-            marketAcquisitionLiveDryRun = null;
+            marketAcquisitionLiveCandidatePlan = null;
             ResetGuidedRoute("No guided route has started.");
             pendingAcquisitionRequests = pendingAcquisitionRequests
                 .Where(request => !string.Equals(request.Id, requestId, StringComparison.Ordinal))
@@ -925,9 +996,9 @@ public class MainWindow : Window, IDisposable
             acquisitionPlan = null;
             marketBoardReadResult = null;
             marketBoardReconciliation = null;
-            marketAcquisitionLiveDryRun = null;
+            marketAcquisitionLiveCandidatePlan = null;
             ResetGuidedRoute("No guided route has started.");
-            acquisitionStatus = "Request accepted locally. Prepare a dry-run plan when ready.";
+            acquisitionStatus = "Request accepted locally. Prepare an advisory plan when ready.";
         }).ConfigureAwait(false);
     }
 
@@ -955,7 +1026,7 @@ public class MainWindow : Window, IDisposable
             acquisitionPlan = null;
             marketBoardReadResult = null;
             marketBoardReconciliation = null;
-            marketAcquisitionLiveDryRun = null;
+            marketAcquisitionLiveCandidatePlan = null;
             ResetGuidedRoute("No guided route has started.");
             acquisitionStatus = "Request rejected.";
         }).ConfigureAwait(false);
@@ -971,7 +1042,7 @@ public class MainWindow : Window, IDisposable
         acquisitionPlan = null;
         marketBoardReadResult = null;
         marketBoardReconciliation = null;
-        marketAcquisitionLiveDryRun = null;
+        marketAcquisitionLiveCandidatePlan = null;
         ResetGuidedRoute("No route has started.");
         acquisitionStatus = "Forgot local acquisition claim. Fetch dashboard requests to pick up a pending request.";
     }
@@ -982,6 +1053,7 @@ public class MainWindow : Window, IDisposable
         {
             var claimed = claimedAcquisitionRequest ??
                           throw new InvalidOperationException("No dashboard request is accepted.");
+            claimed = await EnsureAcquisitionClaimReadyForPlanningAsync(claimed, token).ConfigureAwait(false);
             if (string.Equals(claimed.WorldMode, "Selected", StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException("Selected world mode cannot be planned until selected worlds are carried in the dashboard request payload.");
 
@@ -991,7 +1063,7 @@ public class MainWindow : Window, IDisposable
                 100,
                 token).ConfigureAwait(false);
             if (!playerState.CurrentWorld.IsValid)
-                throw new InvalidOperationException("Current world is required before preparing a route-aware dry-run plan.");
+                throw new InvalidOperationException("Current world is required before preparing a route-aware advisory plan.");
 
             acquisitionPlan = MarketAcquisitionPlanner.BuildPlan(
                 claimed,
@@ -1000,12 +1072,70 @@ public class MainWindow : Window, IDisposable
                 GetCurrentWorldName());
             marketBoardReadResult = null;
             marketBoardReconciliation = null;
-            marketAcquisitionLiveDryRun = null;
+            marketAcquisitionLiveCandidatePlan = null;
             ResetGuidedRoute("No route has started.");
             acquisitionStatus = acquisitionPlan.Status == "Ready"
                 ? $"Prepared {acquisitionPlan.WorldBatches.Count} world batch(es)."
-                : "No supported listings found under the configured thresholds.";
+                : BuildNoSupportedListingsStatus(acquisitionPlan);
         }).ConfigureAwait(false);
+    }
+
+    private async Task<MarketAcquisitionClaimView> EnsureAcquisitionClaimReadyForPlanningAsync(
+        MarketAcquisitionClaimView claimed,
+        CancellationToken token)
+    {
+        if (!IsFailedAcquisitionStatus(claimed.Status))
+            return claimed;
+
+        await acquisitionClient.ResendAsync(
+            config.ServerUrl,
+            config.ApiKey,
+            claimed.Id,
+            token).ConfigureAwait(false);
+
+        var reclaimed = await acquisitionClient.ClaimAsync(
+            config.ServerUrl,
+            config.ApiKey,
+            claimed.Id,
+            claimed.TargetCharacterName,
+            claimed.TargetWorld,
+            config.PluginInstanceId,
+            token).ConfigureAwait(false);
+
+        claimedAcceptIdempotencyKey = Guid.NewGuid().ToString("N");
+        claimedRejectIdempotencyKey = Guid.NewGuid().ToString("N");
+        var accepted = await acquisitionClient.AcceptAsync(
+            config.ServerUrl,
+            config.ApiKey,
+            reclaimed.Id,
+            reclaimed.ClaimToken,
+            claimedAcceptIdempotencyKey,
+            token).ConfigureAwait(false);
+
+        claimedAcquisitionRequest = reclaimed with { Status = accepted.Status };
+        MarketAcquisitionClaimPersistence.Save(
+            config,
+            claimedAcquisitionRequest,
+            claimedAcceptIdempotencyKey,
+            claimedRejectIdempotencyKey);
+        config.Save();
+        pendingAcquisitionRequests = pendingAcquisitionRequests
+            .Where(request => !string.Equals(request.Id, reclaimed.Id, StringComparison.Ordinal))
+            .ToList();
+        acquisitionStatus = "Failed request was reopened and accepted locally. Preparing a fresh plan.";
+        return claimedAcquisitionRequest;
+    }
+
+    private static string BuildNoSupportedListingsStatus(MarketAcquisitionPlan plan)
+    {
+        var diagnostics = plan.Diagnostics;
+        return "No supported listings found under the configured thresholds. " +
+               $"Fetched {diagnostics.SourceListingCount:N0}; " +
+               $"{diagnostics.NonZeroListingCount:N0} non-zero; " +
+               $"{diagnostics.PriceSupportedListingCount:N0} at/below max unit; " +
+               $"{diagnostics.HqSupportedListingCount:N0} after HQ policy; " +
+               $"{diagnostics.WorldSupportedListingCount:N0} after world mode; " +
+               $"{diagnostics.PlannedListingCount:N0} planned.";
     }
 
     private Task ProbeLiveMarketBoardAsync()
@@ -1013,14 +1143,15 @@ public class MainWindow : Window, IDisposable
         return RunAcquisitionRequestAsync(_ =>
         {
             var plan = acquisitionPlan ??
-                       throw new InvalidOperationException("Prepare a dry-run plan before probing live market board listings.");
+                       throw new InvalidOperationException("Prepare a live candidate plan before probing live market board listings.");
             var claimed = claimedAcquisitionRequest ??
                           throw new InvalidOperationException("No dashboard request is accepted.");
             var currentWorld = GetCurrentWorldName();
             marketBoardReconciliation = null;
-            marketAcquisitionLiveDryRun = null;
+            marketAcquisitionLiveCandidatePlan = null;
             marketBoardReadResult = marketBoardListingReader.ReadCurrentListings(currentWorld);
 
+            var canBuildLiveCandidatePlan = marketBoardReadResult.Status is "Ready" or "NoListings";
             marketBoardReconciliation = marketBoardReadResult.Status == "Ready"
                 ? MarketBoardListingReconciler.Reconcile(
                     plan,
@@ -1028,8 +1159,8 @@ public class MainWindow : Window, IDisposable
                     marketBoardReadResult.ItemId,
                     marketBoardReadResult.Listings)
                 : null;
-            marketAcquisitionLiveDryRun = marketBoardReadResult.Status == "Ready"
-                ? MarketAcquisitionLiveDryRunPlanner.BuildDryRun(
+            marketAcquisitionLiveCandidatePlan = canBuildLiveCandidatePlan
+                ? MarketAcquisitionLiveCandidatePlanner.BuildCandidatePlan(
                     claimed,
                     plan,
                     currentWorld,
@@ -1038,12 +1169,12 @@ public class MainWindow : Window, IDisposable
                 : null;
             var guidedRouteResult = marketAcquisitionRouteRunner.IsRunning &&
                                     marketAcquisitionRouteRunner.ActiveStop is { Status: "Arrived" } &&
-                                    marketAcquisitionLiveDryRun != null
-                ? marketAcquisitionRouteRunner.RecordProbe(currentWorld, marketAcquisitionLiveDryRun)
+                                    marketAcquisitionLiveCandidatePlan != null
+                ? marketAcquisitionRouteRunner.RecordProbe(currentWorld, marketAcquisitionLiveCandidatePlan)
                 : null;
             acquisitionStatus = marketBoardReconciliation == null
                 ? marketBoardReadResult.Message
-                : $"Live listing reconciliation {marketBoardReconciliation.Status}; dry-run {marketAcquisitionLiveDryRun?.Status ?? "Unavailable"}.";
+                : $"Live listing reconciliation {marketBoardReconciliation.Status}; live candidates {marketAcquisitionLiveCandidatePlan?.Status ?? "Unavailable"}.";
             if (guidedRouteResult != null)
             {
                 acquisitionStatus = $"{acquisitionStatus} Route: {guidedRouteResult.Message}";
@@ -1062,11 +1193,11 @@ public class MainWindow : Window, IDisposable
                        !marketAcquisitionRouteRunner.IsRunning &&
                        !marketAcquisitionRouteRunner.IsPaused;
         if (ImGuiUi.Button("Start Route", canStart))
-            StartGuidedRoute(enableDiagnostics: false);
+            _ = StartGuidedRouteAsync(enableDiagnostics: false);
 
         ImGui.SameLine();
         if (ImGuiUi.Button("Start With Diagnostics", canStart))
-            StartGuidedRoute(enableDiagnostics: true);
+            _ = StartGuidedRouteAsync(enableDiagnostics: true);
 
         ImGui.SameLine();
         if (marketAcquisitionRouteRunner.IsPaused)
@@ -1092,19 +1223,20 @@ public class MainWindow : Window, IDisposable
         {
             marketBoardApproachService.StopNavigation();
             marketAcquisitionRouteRunner.Stop();
+            marketBoardPurchaseSession = null;
+            marketBoardPurchaseResult = null;
             ReportGuidedRouteProgress();
         }
 
         ImGui.SameLine();
         if (ImGuiUi.Button("Restart", canStart && marketAcquisitionRouteRunner.CanRestart))
-            RestartGuidedRoute();
+            _ = RestartGuidedRouteAsync();
 
         ImGui.TextColored(GetGuidedRouteStatusColor(), marketAcquisitionRouteRunner.StatusMessage);
-        DrawMarketBoardInputCapture();
 
         if (marketAcquisitionRouteRunner.Stops.Count == 0)
         {
-            ImGui.TextColored(ColMuted, "Start after preparing a plan. Routes guide travel and read-only probes; they do not purchase yet.");
+            ImGui.TextColored(ColMuted, "Start after preparing a plan. Routes travel, validate live listings, and purchase safe rows automatically.");
             return;
         }
 
@@ -1124,6 +1256,7 @@ public class MainWindow : Window, IDisposable
         }
 
         DrawGuidedRouteStops(marketAcquisitionRouteRunner.Stops);
+        DrawMarketBoardProbeStatus();
     }
 
     private void DrawMarketBoardInputCapture()
@@ -1152,7 +1285,7 @@ public class MainWindow : Window, IDisposable
             ImGui.TableSetupColumn("Status");
             ImGui.TableSetupColumn("Planned");
             ImGui.TableSetupColumn("Live");
-            ImGui.TableSetupColumn("Dry-run");
+            ImGui.TableSetupColumn("Live candidate");
             ImGui.TableHeadersRow();
 
             foreach (var stop in stops)
@@ -1171,56 +1304,68 @@ public class MainWindow : Window, IDisposable
                     ? "-"
                     : $"{stop.WouldBuyQuantity:N0} / {FormatGil(stop.WouldSpendGil)}");
                 ImGui.TableNextColumn();
-                ImGui.TextUnformatted(stop.DryRunStatus ?? "-");
+                ImGui.TextUnformatted(stop.LiveCandidateStatus ?? "-");
             }
 
             ImGui.EndTable();
         }
     }
 
-    private void StartGuidedRoute(bool enableDiagnostics)
+    private Task StartGuidedRouteAsync(bool enableDiagnostics)
     {
-        try
+        return RunAcquisitionRequestAsync(async token =>
         {
             var plan = acquisitionPlan ??
                        throw new InvalidOperationException("Prepare a plan before starting a guided route.");
+            var claimed = claimedAcquisitionRequest ??
+                          throw new InvalidOperationException("No dashboard request is accepted.");
+            await EnsureRouteReportableClaimAsync(claimed, token).ConfigureAwait(false);
             marketAcquisitionRouteRunner.Start(plan, enableDiagnostics);
             marketBoardReadResult = null;
             marketBoardReconciliation = null;
-            marketAcquisitionLiveDryRun = null;
+            marketAcquisitionLiveCandidatePlan = null;
+            marketBoardPurchaseSession = null;
+            marketBoardPurchaseResult = null;
+            activeWorldPurchasedQuantity = 0;
+            activeWorldSpentGil = 0;
+            activeWorldPurchaseBatchWorld = null;
             guidedRouteProbeRunning = false;
             nextGuidedRouteMonitorUtc = DateTimeOffset.MinValue;
+            Interlocked.Increment(ref guidedRouteProgressSessionVersion);
+            guidedRouteProgressNonce = Guid.NewGuid().ToString("N");
+            Interlocked.Exchange(ref guidedRouteProgressReportSequence, 0);
+            lastGuidedRouteProgressReportKey = null;
             ReportGuidedRouteProgress();
-        }
-        catch (Exception ex)
-        {
-            marketAcquisitionRouteRunner.FailRoute($"Unable to start guided route. {ex.Message}", ex);
-            ReportGuidedRouteProgress();
-            log.Warning(ex, "[MarketMafioso] Unable to start guided market acquisition route.");
-        }
+        });
     }
 
-    private void RestartGuidedRoute()
+    private Task RestartGuidedRouteAsync()
     {
-        try
+        return RunAcquisitionRequestAsync(async token =>
         {
             var plan = acquisitionPlan ??
                        throw new InvalidOperationException("Prepare a plan before restarting a guided route.");
+            var claimed = claimedAcquisitionRequest ??
+                          throw new InvalidOperationException("No dashboard request is accepted.");
+            await EnsureRouteReportableClaimAsync(claimed, token).ConfigureAwait(false);
             marketBoardApproachService.StopNavigation();
             marketAcquisitionRouteRunner.Restart(plan);
             marketBoardReadResult = null;
             marketBoardReconciliation = null;
-            marketAcquisitionLiveDryRun = null;
+            marketAcquisitionLiveCandidatePlan = null;
+            marketBoardPurchaseSession = null;
+            marketBoardPurchaseResult = null;
+            activeWorldPurchasedQuantity = 0;
+            activeWorldSpentGil = 0;
+            activeWorldPurchaseBatchWorld = null;
             guidedRouteProbeRunning = false;
             nextGuidedRouteMonitorUtc = DateTimeOffset.MinValue;
+            Interlocked.Increment(ref guidedRouteProgressSessionVersion);
+            guidedRouteProgressNonce = Guid.NewGuid().ToString("N");
+            Interlocked.Exchange(ref guidedRouteProgressReportSequence, 0);
+            lastGuidedRouteProgressReportKey = null;
             ReportGuidedRouteProgress();
-        }
-        catch (Exception ex)
-        {
-            marketAcquisitionRouteRunner.FailRoute($"Unable to restart guided route. {ex.Message}", ex);
-            ReportGuidedRouteProgress();
-            log.Warning(ex, "[MarketMafioso] Unable to restart guided market acquisition route.");
-        }
+        });
     }
 
     private void CaptureMarketBoardInputState()
@@ -1259,7 +1404,15 @@ public class MainWindow : Window, IDisposable
     {
         marketBoardApproachService.StopNavigation();
         marketAcquisitionRouteRunner.Reset(status);
+        marketBoardPurchaseSession = null;
+        marketBoardPurchaseResult = null;
+        activeWorldPurchasedQuantity = 0;
+        activeWorldSpentGil = 0;
+        activeWorldPurchaseBatchWorld = null;
         guidedRouteProbeRunning = false;
+        Interlocked.Increment(ref guidedRouteProgressSessionVersion);
+        guidedRouteProgressNonce = Guid.NewGuid().ToString("N");
+        Interlocked.Exchange(ref guidedRouteProgressReportSequence, 0);
         lastGuidedRouteProgressReportKey = null;
         nextGuidedRouteMonitorUtc = DateTimeOffset.MinValue;
     }
@@ -1275,49 +1428,93 @@ public class MainWindow : Window, IDisposable
             return;
 
         var runnerState = marketAcquisitionRouteRunner.State;
+        if (!MarketAcquisitionRouteProgressReporter.CanReportForRouteState(runnerState))
+        {
+            log.Verbose(
+                "[MarketMafioso] Skipping route progress report for local route state {RouteState}.",
+                runnerState);
+            return;
+        }
+
+        if (!MarketAcquisitionRouteProgressReporter.CanReportForRequestStatus(claimed.Status))
+        {
+            log.Verbose(
+                "[MarketMafioso] Skipping route progress report for request {RequestId} in server status {Status}.",
+                claimed.Id,
+                claimed.Status);
+            return;
+        }
+
         var message = marketAcquisitionRouteRunner.StatusMessage;
         var reportKey = $"{claimed.Id}|{runnerState}|{message}";
         if (string.Equals(lastGuidedRouteProgressReportKey, reportKey, StringComparison.Ordinal))
             return;
 
         lastGuidedRouteProgressReportKey = reportKey;
-        var idempotencyKey = $"{config.PluginInstanceId}-route-{Interlocked.Increment(ref guidedRouteProgressReportSequence)}";
+        var reportSessionVersion = Interlocked.Read(ref guidedRouteProgressSessionVersion);
+        var eventSequence = Interlocked.Increment(ref guidedRouteProgressReportSequence);
+        var attemptId = guidedRouteProgressNonce;
+        var activeStop = marketAcquisitionRouteRunner.ActiveStop;
+        var routeStopId = activeStop == null
+            ? null
+            : $"{activeStop.DataCenter}:{activeStop.WorldName}";
+        var activeWorld = activeStop?.WorldName;
+        var phase = activeStop?.Status ?? runnerState;
         _ = Task.Run(async () =>
         {
             try
             {
                 using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(10));
                 var action = MarketAcquisitionRouteProgressReporter.ResolveAction(runnerState);
-                var updated = action switch
+                var attemptResult = action switch
                 {
-                    MarketAcquisitionRouteProgressReporter.FailAction => await acquisitionClient.FailAsync(
+                    MarketAcquisitionRouteProgressReporter.FailAction => await acquisitionClient.FailAttemptAsync(
                         config.ServerUrl,
                         config.ApiKey,
                         claimed.Id,
                         claimed.ClaimToken,
-                        idempotencyKey,
+                        config.PluginInstanceId,
+                        attemptId,
+                        eventSequence,
+                        routeStopId,
+                        activeWorld,
+                        phase,
                         message,
+                        PluginBuildInfo.DisplayVersion,
                         cancellation.Token).ConfigureAwait(false),
-                    MarketAcquisitionRouteProgressReporter.CompleteAction => await acquisitionClient.CompleteAsync(
+                    MarketAcquisitionRouteProgressReporter.CompleteAction => await acquisitionClient.CompleteAttemptAsync(
                         config.ServerUrl,
                         config.ApiKey,
                         claimed.Id,
                         claimed.ClaimToken,
-                        idempotencyKey,
+                        config.PluginInstanceId,
+                        attemptId,
+                        eventSequence,
+                        routeStopId,
+                        activeWorld,
+                        phase,
                         message,
+                        PluginBuildInfo.DisplayVersion,
                         cancellation.Token).ConfigureAwait(false),
-                    _ => await acquisitionClient.ReportProgressAsync(
+                    _ => await acquisitionClient.ReportAttemptProgressAsync(
                         config.ServerUrl,
                         config.ApiKey,
                         claimed.Id,
                         claimed.ClaimToken,
-                        idempotencyKey,
-                        runnerState,
+                        config.PluginInstanceId,
+                        attemptId,
+                        eventSequence,
+                        routeStopId,
+                        activeWorld,
+                        phase,
                         message,
+                        PluginBuildInfo.DisplayVersion,
                         cancellation.Token).ConfigureAwait(false),
                 };
+                var updated = attemptResult.Request;
 
-                if (claimedAcquisitionRequest?.Id == claimed.Id)
+                if (Interlocked.Read(ref guidedRouteProgressSessionVersion) == reportSessionVersion &&
+                    claimedAcquisitionRequest?.Id == claimed.Id)
                 {
                     if (action.Equals(MarketAcquisitionRouteProgressReporter.CompleteAction, StringComparison.Ordinal))
                     {
@@ -1342,10 +1539,112 @@ public class MainWindow : Window, IDisposable
             }
             catch (Exception ex)
             {
-                acquisitionStatus = $"Route progress report failed: {ex.Message}";
-                log.Warning(ex, "[MarketMafioso] Unable to report market acquisition route progress.");
+                if (!TryHandleRouteProgressConflict(ex, claimed, reportSessionVersion))
+                {
+                    acquisitionStatus = $"Route progress report failed: {ex.Message}";
+                    log.Warning(ex, "[MarketMafioso] Unable to report market acquisition route progress.");
+                }
             }
         });
+    }
+
+    private bool TryHandleRouteProgressConflict(Exception exception, MarketAcquisitionClaimView claimed, long reportSessionVersion)
+    {
+        if (exception is not MarketAcquisitionLifecycleHttpException { StatusCode: System.Net.HttpStatusCode.Conflict } conflict ||
+            !TryExtractInvalidTransitionSourceStatus(conflict.Error, out var sourceStatus))
+            return false;
+
+        if (Interlocked.Read(ref guidedRouteProgressSessionVersion) != reportSessionVersion ||
+            claimedAcquisitionRequest?.Id != claimed.Id)
+            return true;
+
+        if (sourceStatus.Equals("Complete", StringComparison.OrdinalIgnoreCase))
+        {
+            MarketAcquisitionClaimPersistence.Clear(config);
+            claimedAcquisitionRequest = null;
+            claimedAcceptIdempotencyKey = null;
+            claimedRejectIdempotencyKey = null;
+            acquisitionStatus = "Server already marked this route complete.";
+        }
+        else if (IsFailedAcquisitionStatus(sourceStatus))
+        {
+            claimedAcquisitionRequest = claimed with { Status = sourceStatus };
+            MarketAcquisitionClaimPersistence.Save(
+                config,
+                claimedAcquisitionRequest,
+                claimedAcceptIdempotencyKey,
+                claimedRejectIdempotencyKey);
+            acquisitionStatus = "Server already marked this route failed. Restart to reopen the request.";
+        }
+        else if (!MarketAcquisitionRouteProgressReporter.CanReportForRequestStatus(sourceStatus))
+        {
+            MarketAcquisitionClaimPersistence.Clear(config);
+            claimedAcquisitionRequest = null;
+            claimedAcceptIdempotencyKey = null;
+            claimedRejectIdempotencyKey = null;
+            acquisitionStatus = $"Server request moved to {sourceStatus}; fetch dashboard requests to continue.";
+        }
+        else
+        {
+            claimedAcquisitionRequest = claimed with { Status = sourceStatus };
+            MarketAcquisitionClaimPersistence.Save(
+                config,
+                claimedAcquisitionRequest,
+                claimedAcceptIdempotencyKey,
+                claimedRejectIdempotencyKey);
+            acquisitionStatus = marketAcquisitionRouteRunner.StatusMessage;
+        }
+
+        config.Save();
+        log.Verbose(
+            "[MarketMafioso] Reconciled stale route progress conflict for request {RequestId}: {Error}",
+            claimed.Id,
+            conflict.Error ?? string.Empty);
+        return true;
+    }
+
+    private static bool TryExtractInvalidTransitionSourceStatus(string? error, out string sourceStatus)
+    {
+        const string prefix = "Cannot move acquisition request from ";
+        const string separator = " to ";
+        sourceStatus = string.Empty;
+        if (string.IsNullOrWhiteSpace(error) ||
+            !error.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var start = prefix.Length;
+        var end = error.IndexOf(separator, start, StringComparison.OrdinalIgnoreCase);
+        if (end <= start)
+            return false;
+
+        sourceStatus = error[start..end].Trim();
+        return !string.IsNullOrWhiteSpace(sourceStatus);
+    }
+
+    private async Task EnsureRouteReportableClaimAsync(MarketAcquisitionClaimView claimed, CancellationToken token)
+    {
+        claimed = await EnsureAcquisitionClaimReadyForPlanningAsync(claimed, token).ConfigureAwait(false);
+        if (!MarketAcquisitionRouteProgressReporter.CanReportForRequestStatus(claimed.Status))
+            throw new InvalidOperationException($"Request status {claimed.Status} cannot start a route. Fetch or accept a dashboard request first.");
+    }
+
+    private bool IsMarketAcquisitionRouteActive() =>
+        marketAcquisitionRouteRunner.IsRunning ||
+        marketAcquisitionRouteRunner.IsPaused ||
+        guidedRouteProbeRunning ||
+        marketBoardPurchaseSession?.IsActive == true;
+
+    private bool IsExpectedCharacterScopeGap() =>
+        claimedAcquisitionRequest != null &&
+        marketAcquisitionRouteRunner.ActiveStop?.Status == "TravelCommandSent";
+
+    private string GetVisibleAcquisitionStatus()
+    {
+        if (acquisitionStatus.StartsWith("Route progress report failed:", StringComparison.OrdinalIgnoreCase) &&
+            IsMarketAcquisitionRouteActive())
+            return marketAcquisitionRouteRunner.StatusMessage;
+
+        return acquisitionStatus;
     }
 
     private Vector4 GetGuidedRouteStatusColor()
@@ -1357,6 +1656,8 @@ public class MainWindow : Window, IDisposable
             return ColError;
 
         if (status.Contains("Waiting", StringComparison.OrdinalIgnoreCase) ||
+            status.Contains("Approve", StringComparison.OrdinalIgnoreCase) ||
+            status.Contains("Purchasing", StringComparison.OrdinalIgnoreCase) ||
             marketAcquisitionRouteRunner.IsPaused)
             return ColHeader;
 
@@ -1373,13 +1674,17 @@ public class MainWindow : Window, IDisposable
         stop.Status switch
         {
             "Complete" => ColSuccess,
-            "Arrived" => ColHeader,
+            "Arrived" or "Purchasing" => ColHeader,
             _ => ColMuted,
         };
 
-    private static bool IsAcceptedOrRunning(string status) =>
+    internal static bool CanPrepareAcquisitionPlanForStatus(string status) =>
         string.Equals(status, "AcceptedInPlugin", StringComparison.OrdinalIgnoreCase) ||
-        string.Equals(status, "Running", StringComparison.OrdinalIgnoreCase);
+        string.Equals(status, "Running", StringComparison.OrdinalIgnoreCase) ||
+        IsFailedAcquisitionStatus(status);
+
+    private static bool IsFailedAcquisitionStatus(string status) =>
+        string.Equals(status, "Failed", StringComparison.OrdinalIgnoreCase);
 
     private async Task RunAcquisitionRequestAsync(Func<CancellationToken, Task> action)
     {
@@ -1445,19 +1750,20 @@ public class MainWindow : Window, IDisposable
             _ => worldMode,
         };
 
-    private Vector4 GetAcquisitionStatusColor()
+    private Vector4 GetAcquisitionStatusColor(string? visibleStatus = null)
     {
         if (acquisitionRequestBusy)
             return ColHeader;
 
-        if (acquisitionStatus.Contains("failed", StringComparison.OrdinalIgnoreCase) ||
-            acquisitionStatus.Contains("required", StringComparison.OrdinalIgnoreCase) ||
-            acquisitionStatus.Contains("unavailable", StringComparison.OrdinalIgnoreCase))
+        var status = visibleStatus ?? acquisitionStatus;
+        if (status.Contains("failed", StringComparison.OrdinalIgnoreCase) ||
+            status.Contains("required", StringComparison.OrdinalIgnoreCase) ||
+            status.Contains("unavailable", StringComparison.OrdinalIgnoreCase))
             return ColError;
 
-        if (acquisitionStatus.Contains("Loaded", StringComparison.OrdinalIgnoreCase) ||
-            acquisitionStatus.Contains("claimed", StringComparison.OrdinalIgnoreCase) ||
-            acquisitionStatus.Contains("accepted", StringComparison.OrdinalIgnoreCase))
+        if (status.Contains("Loaded", StringComparison.OrdinalIgnoreCase) ||
+            status.Contains("claimed", StringComparison.OrdinalIgnoreCase) ||
+            status.Contains("accepted", StringComparison.OrdinalIgnoreCase))
             return ColSuccess;
 
         return ColMuted;

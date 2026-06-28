@@ -3,13 +3,13 @@ namespace MarketMafioso.Tests.MarketAcquisition;
 public sealed class MarketBoardPurchaseExecutorTests
 {
     [Fact]
-    public void ExecuteFirstCandidate_ReturnsNoCandidateWhenDryRunHasNoWouldBuyRows()
+    public void ExecuteFirstCandidate_ReturnsNoCandidateWhenCandidatePlanHasNoWouldBuyRows()
     {
         var adapter = new RecordingPurchaseAdapter();
         var executor = new MarketMafioso.MarketAcquisition.MarketBoardPurchaseExecutor(adapter);
 
         var result = executor.ExecuteFirstCandidate(
-            new MarketMafioso.MarketAcquisition.MarketAcquisitionLiveDryRun
+            new MarketMafioso.MarketAcquisition.MarketAcquisitionLiveCandidatePlan
             {
                 Rows = [CreateRow("Skipped", CreateListing("expensive"))],
             },
@@ -26,7 +26,7 @@ public sealed class MarketBoardPurchaseExecutorTests
         var executor = new MarketMafioso.MarketAcquisition.MarketBoardPurchaseExecutor(adapter);
 
         var result = executor.ExecuteFirstCandidate(
-            new MarketMafioso.MarketAcquisition.MarketAcquisitionLiveDryRun
+            new MarketMafioso.MarketAcquisition.MarketAcquisitionLiveCandidatePlan
             {
                 Rows = [CreateRow("WouldBuy", CreateListing("cheap", unitPrice: 1_000))],
             },
@@ -50,7 +50,7 @@ public sealed class MarketBoardPurchaseExecutorTests
         var executor = new MarketMafioso.MarketAcquisition.MarketBoardPurchaseExecutor(adapter);
 
         var result = executor.ExecuteFirstCandidate(
-            new MarketMafioso.MarketAcquisition.MarketAcquisitionLiveDryRun
+            new MarketMafioso.MarketAcquisition.MarketAcquisitionLiveCandidatePlan
             {
                 Rows =
                 [
@@ -85,7 +85,7 @@ public sealed class MarketBoardPurchaseExecutorTests
         }
     }
 
-    private static MarketMafioso.MarketAcquisition.MarketAcquisitionLiveDryRunRow CreateRow(
+    private static MarketMafioso.MarketAcquisition.MarketAcquisitionLiveCandidateRow CreateRow(
         string decision,
         MarketMafioso.MarketAcquisition.MarketBoardLiveListing listing) =>
         new()

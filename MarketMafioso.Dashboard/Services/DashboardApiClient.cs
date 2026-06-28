@@ -1,0 +1,132 @@
+using System.Net;
+using System.Net.Http.Json;
+using System.Text.Json;
+using MarketMafioso.Dashboard.Models;
+
+namespace MarketMafioso.Dashboard.Services;
+
+public sealed class DashboardApiClient
+{
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+
+    private readonly HttpClient http;
+
+    public DashboardApiClient(HttpClient http)
+    {
+        this.http = http;
+    }
+
+    public async Task<DashboardSessionResponse?> GetSessionAsync(CancellationToken cancellationToken = default)
+    {
+        using var response = await http.GetAsync("auth/session", cancellationToken);
+        if (response.StatusCode == HttpStatusCode.Unauthorized)
+            return null;
+
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<DashboardSessionResponse>(JsonOptions, cancellationToken);
+    }
+
+    public async Task LoginAsync(string username, string password, CancellationToken cancellationToken = default)
+    {
+        using var response = await http.PostAsJsonAsync("auth/login", new { username, password }, JsonOptions, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task LogoutAsync(CancellationToken cancellationToken = default)
+    {
+        using var response = await http.PostAsync("auth/logout", null, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task<IReadOnlyList<MarketAcquisitionRequestView>> GetAcquisitionRequestsAsync(
+        CancellationToken cancellationToken = default)
+    {
+        return await http.GetFromJsonAsync<IReadOnlyList<MarketAcquisitionRequestView>>(
+            "api/acquisition/requests",
+            JsonOptions,
+            cancellationToken) ?? [];
+    }
+
+    public async Task<MarketAcquisitionRequestView> CreateAcquisitionRequestAsync(
+        MarketAcquisitionCreateRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await http.PostAsJsonAsync("api/acquisition/requests", request, JsonOptions, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<MarketAcquisitionRequestView>(JsonOptions, cancellationToken)
+            ?? throw new InvalidOperationException("Acquisition create response was empty.");
+    }
+
+    public async Task CancelAcquisitionRequestAsync(string id, CancellationToken cancellationToken = default)
+    {
+        using var response = await http.PostAsync($"api/acquisition/requests/{Uri.EscapeDataString(id)}/cancel", null, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task ResendAcquisitionRequestAsync(string id, CancellationToken cancellationToken = default)
+    {
+        using var response = await http.PostAsync($"api/acquisition/requests/{Uri.EscapeDataString(id)}/resend", null, cancellationToken);
+        response.EnsureSuccessStatusCode();
+    }
+
+    public async Task<IReadOnlyList<XivItemSearchResult>> SearchItemsAsync(
+        string query,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(query))
+            return [];
+
+        using var response = await http.GetAsync(
+            $"api/xivdata/items/search?q={Uri.EscapeDataString(query)}&limit=12",
+            cancellationToken);
+        response.EnsureSuccessStatusCode();
+
+        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+        using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+        var root = document.RootElement;
+        IEnumerable<JsonElement> items = root.ValueKind == JsonValueKind.Array
+            ? root.EnumerateArray()
+            : root.TryGetProperty("items", out var itemArray) && itemArray.ValueKind == JsonValueKind.Array
+                ? itemArray.EnumerateArray()
+                : [];
+
+        return items
+            .Select(ReadItem)
+            .Where(item => item.ItemId != 0 && !string.IsNullOrWhiteSpace(item.Name))
+            .ToArray();
+    }
+
+    public async Task<IReadOnlyList<DiagnosticEventView>> GetDiagnosticsAsync(
+        CancellationToken cancellationToken = default)
+    {
+        return await http.GetFromJsonAsync<IReadOnlyList<DiagnosticEventView>>(
+            "api/diagnostics/events?limit=100",
+            JsonOptions,
+            cancellationToken) ?? [];
+    }
+
+    private static XivItemSearchResult ReadItem(JsonElement element)
+    {
+        var id = ReadUInt(element, "itemId") ?? ReadUInt(element, "id") ?? ReadUInt(element, "rowId") ?? 0;
+        var name = ReadString(element, "name") ?? ReadString(element, "itemName") ?? string.Empty;
+        var type = ReadString(element, "itemType") ??
+                   ReadString(element, "categoryName") ??
+                   ReadString(element, "uiCategoryName");
+        return new XivItemSearchResult
+        {
+            ItemId = id,
+            Name = name,
+            Type = type,
+        };
+    }
+
+    private static string? ReadString(JsonElement element, string propertyName) =>
+        element.TryGetProperty(propertyName, out var value) && value.ValueKind == JsonValueKind.String
+            ? value.GetString()
+            : null;
+
+    private static uint? ReadUInt(JsonElement element, string propertyName) =>
+        element.TryGetProperty(propertyName, out var value) && value.TryGetUInt32(out var number)
+            ? number
+            : null;
+}

@@ -396,6 +396,227 @@ public sealed class MarketAcquisitionRequestEndpointTests
     }
 
     [Fact]
+    public async Task RecentQueueIncludesLatestAttemptProjection()
+    {
+        await using var application = CreateHostedApplication();
+        using var client = application.CreateClient();
+        var claimed = await CreateAcceptedRequestAsync(client, "attempt-projection");
+
+        var progress = await SendAttemptProgressAsync(
+            client,
+            claimed.RequestId,
+            claimed.ClaimToken,
+            "attempt-projection-progress-1",
+            "attempt-001",
+            1,
+            "Traveling",
+            "Traveling to Brynhildr.",
+            worldName: "Brynhildr",
+            routeStopId: "stop-brynhildr");
+        progress.EnsureSuccessStatusCode();
+
+        var recentResponse = await SendWithKeyAsync(
+            client,
+            HttpMethod.Get,
+            "/api/marketmafioso/api/acquisition/requests",
+            "client-secret");
+        recentResponse.EnsureSuccessStatusCode();
+        var recent = await recentResponse.Content.ReadFromJsonAsync<JsonElement>();
+
+        var payload = recent[0];
+        Assert.Equal("attempt-001", payload.GetProperty("latestAttemptId").GetString());
+        Assert.Equal(1, payload.GetProperty("latestAttemptSequence").GetInt64());
+        Assert.Equal("Traveling", payload.GetProperty("latestAttemptPhase").GetString());
+        Assert.Equal("Brynhildr", payload.GetProperty("latestAttemptWorld").GetString());
+    }
+
+    [Fact]
+    public async Task ProgressAttemptEventIsIdempotentForSameBody()
+    {
+        await using var application = CreateHostedApplication();
+        using var client = application.CreateClient();
+        var claimed = await CreateAcceptedRequestAsync(client, "attempt-idempotent-same");
+        var body = CreateAttemptProgress(
+            claimed.ClaimToken,
+            "req-attempt-001-1-progress",
+            "attempt-001",
+            1,
+            "Traveling",
+            "Traveling.",
+            worldName: "Brynhildr",
+            routeStopId: "stop-brynhildr");
+
+        var first = await SendWithKeyAsync(
+            client,
+            HttpMethod.Post,
+            $"/api/marketmafioso/acquisition/requests/{claimed.RequestId}/progress",
+            "client-secret",
+            body);
+        var second = await SendWithKeyAsync(
+            client,
+            HttpMethod.Post,
+            $"/api/marketmafioso/acquisition/requests/{claimed.RequestId}/progress",
+            "client-secret",
+            body);
+
+        first.EnsureSuccessStatusCode();
+        second.EnsureSuccessStatusCode();
+        using var secondJson = JsonDocument.Parse(await second.Content.ReadAsStringAsync());
+        Assert.Equal("replayed", secondJson.RootElement.GetProperty("result").GetString());
+    }
+
+    [Fact]
+    public async Task ProgressAttemptEventRejectsSameIdempotencyKeyWithDifferentBody()
+    {
+        await using var application = CreateHostedApplication();
+        using var client = application.CreateClient();
+        var claimed = await CreateAcceptedRequestAsync(client, "attempt-idempotent-different");
+
+        var first = CreateAttemptProgress(
+            claimed.ClaimToken,
+            "req-attempt-001-1-progress",
+            "attempt-001",
+            1,
+            "Traveling",
+            "Traveling.");
+        var second = CreateAttemptProgress(
+            claimed.ClaimToken,
+            "req-attempt-001-1-progress",
+            "attempt-001",
+            1,
+            "Traveling",
+            "Different payload.");
+
+        var accepted = await SendWithKeyAsync(
+            client,
+            HttpMethod.Post,
+            $"/api/marketmafioso/acquisition/requests/{claimed.RequestId}/progress",
+            "client-secret",
+            first);
+        accepted.EnsureSuccessStatusCode();
+        var conflict = await SendWithKeyAsync(
+            client,
+            HttpMethod.Post,
+            $"/api/marketmafioso/acquisition/requests/{claimed.RequestId}/progress",
+            "client-secret",
+            second);
+
+        Assert.Equal(HttpStatusCode.Conflict, conflict.StatusCode);
+        var text = await conflict.Content.ReadAsStringAsync();
+        Assert.Contains("Idempotency key was already used with a different request body", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ProgressAttemptEventRejectsSameAttemptSequenceWithDifferentIdempotencyKey()
+    {
+        await using var application = CreateHostedApplication();
+        using var client = application.CreateClient();
+        var claimed = await CreateAcceptedRequestAsync(client, "attempt-sequence-conflict");
+
+        var first = CreateAttemptProgress(
+            claimed.ClaimToken,
+            "attempt-sequence-key-a",
+            "attempt-001",
+            1,
+            "Traveling",
+            "First sequence payload.");
+        var second = CreateAttemptProgress(
+            claimed.ClaimToken,
+            "attempt-sequence-key-b",
+            "attempt-001",
+            1,
+            "Traveling",
+            "Second sequence payload.");
+
+        var accepted = await SendWithKeyAsync(
+            client,
+            HttpMethod.Post,
+            $"/api/marketmafioso/acquisition/requests/{claimed.RequestId}/progress",
+            "client-secret",
+            first);
+        accepted.EnsureSuccessStatusCode();
+        var conflict = await SendWithKeyAsync(
+            client,
+            HttpMethod.Post,
+            $"/api/marketmafioso/acquisition/requests/{claimed.RequestId}/progress",
+            "client-secret",
+            second);
+
+        Assert.Equal(HttpStatusCode.Conflict, conflict.StatusCode);
+        var text = await conflict.Content.ReadAsStringAsync();
+        Assert.Contains("Attempt event sequence was already used", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task LateOldAttemptProgressAfterNewAttemptIsClassifiedStale()
+    {
+        await using var application = CreateHostedApplication();
+        using var client = application.CreateClient();
+        var claimed = await CreateAcceptedRequestAsync(client, "attempt-stale");
+
+        var first = await SendAttemptProgressAsync(
+            client,
+            claimed.RequestId,
+            claimed.ClaimToken,
+            "attempt-a-1",
+            "attempt-a",
+            1,
+            "Traveling",
+            "Attempt A.");
+        first.EnsureSuccessStatusCode();
+
+        var second = await SendAttemptProgressAsync(
+            client,
+            claimed.RequestId,
+            claimed.ClaimToken,
+            "attempt-b-1",
+            "attempt-b",
+            1,
+            "Traveling",
+            "Attempt B.");
+        second.EnsureSuccessStatusCode();
+
+        var stale = await SendAttemptProgressAsync(
+            client,
+            claimed.RequestId,
+            claimed.ClaimToken,
+            "attempt-a-2",
+            "attempt-a",
+            2,
+            "SearchingItem",
+            "Old attempt woke up.");
+
+        stale.EnsureSuccessStatusCode();
+        using var staleJson = JsonDocument.Parse(await stale.Content.ReadAsStringAsync());
+        Assert.Equal("stale_attempt", staleJson.RootElement.GetProperty("result").GetString());
+    }
+
+    [Fact]
+    public async Task LegacyProgressWithoutAttemptIdStillWorksDuringMigration()
+    {
+        await using var application = CreateHostedApplication();
+        using var client = application.CreateClient();
+        var claimed = await CreateAcceptedRequestAsync(client, "legacy-progress");
+
+        var progress = await SendWithKeyAsync(
+            client,
+            HttpMethod.Post,
+            $"/api/marketmafioso/acquisition/requests/{claimed.RequestId}/progress",
+            "client-secret",
+            new
+            {
+                claimToken = claimed.ClaimToken,
+                idempotencyKey = "legacy-progress-1",
+                runnerState = "Running",
+                message = "Legacy plugin progress.",
+            });
+
+        progress.EnsureSuccessStatusCode();
+        using var json = JsonDocument.Parse(await progress.Content.ReadAsStringAsync());
+        Assert.Equal("Running", json.RootElement.GetProperty("status").GetString());
+    }
+
+    [Fact]
     public async Task ExpiredRequestCannotBeListedOrClaimed()
     {
         await using var application = CreateHostedApplication(
@@ -583,28 +804,19 @@ public sealed class MarketAcquisitionRequestEndpointTests
         });
 
         var dashboard = await client.GetStringAsync("/api/marketmafioso/");
-        Assert.Contains("Market Acquisition", dashboard, StringComparison.Ordinal);
-        Assert.Contains("/api/marketmafioso/acquisition", dashboard, StringComparison.Ordinal);
+        AssertDashboardShell(dashboard);
 
         var acquisitionPage = await client.GetStringAsync("/api/marketmafioso/acquisition");
-        Assert.Contains("Create Dashboard Request", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("name=\"targetCharacterName\"", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("name=\"worldMode\"", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("/api/marketmafioso/acquisition/requests", acquisitionPage, StringComparison.Ordinal);
+        AssertDashboardShell(acquisitionPage);
+        Assert.DoesNotContain("name=\"csrf\"", acquisitionPage, StringComparison.Ordinal);
+        Assert.DoesNotContain("mmf_csrf", acquisitionPage, StringComparison.Ordinal);
 
         var inventory = await client.GetStringAsync("/api/marketmafioso/inventory");
-        Assert.Contains(">Acquisition</a>", inventory, StringComparison.Ordinal);
-        var csrf = Regex.Match(acquisitionPage, "name=\"csrf\" value=\"(?<token>[^\"]+)\"").Groups["token"].Value;
-        Assert.False(string.IsNullOrWhiteSpace(csrf));
-
-        var missingCsrf = await client.PostAsync(
-            "/api/marketmafioso/acquisition/requests",
-            new FormUrlEncodedContent(CreateFormFields(csrf: string.Empty, idempotencyKey: "missing-csrf")));
-        Assert.Equal(HttpStatusCode.BadRequest, missingCsrf.StatusCode);
+        AssertDashboardShell(inventory);
 
         var created = await client.PostAsync(
             "/api/marketmafioso/acquisition/requests",
-            new FormUrlEncodedContent(CreateFormFields(csrf, "dashboard-create")));
+            new FormUrlEncodedContent(CreateFormFields("dashboard-create")));
         Assert.Equal(HttpStatusCode.Redirect, created.StatusCode);
 
         var pending = await SendWithKeyAsync(
@@ -627,12 +839,9 @@ public sealed class MarketAcquisitionRequestEndpointTests
             AllowAutoRedirect = false,
         });
 
-        var acquisitionPage = await client.GetStringAsync("/api/marketmafioso/acquisition");
-        var csrf = Regex.Match(acquisitionPage, "name=\"csrf\" value=\"(?<token>[^\"]+)\"").Groups["token"].Value;
-
         var created = await client.PostAsync(
             "/api/marketmafioso/acquisition/requests",
-            new FormUrlEncodedContent(CreateFormFields(csrf, "acquisition-page-create")));
+            new FormUrlEncodedContent(CreateFormFields("acquisition-page-create")));
 
         Assert.Equal(HttpStatusCode.Redirect, created.StatusCode);
         Assert.StartsWith(
@@ -651,11 +860,9 @@ public sealed class MarketAcquisitionRequestEndpointTests
             AllowAutoRedirect = false,
         });
 
-        var acquisitionPage = await client.GetStringAsync("/api/marketmafioso/acquisition");
-        var csrf = Regex.Match(acquisitionPage, "name=\"csrf\" value=\"(?<token>[^\"]+)\"").Groups["token"].Value;
         using var createRequest = new HttpRequestMessage(HttpMethod.Post, "/api/marketmafioso/acquisition/requests")
         {
-            Content = new FormUrlEncodedContent(CreateFormFields(csrf, "acquisition-ajax-create")),
+            Content = new FormUrlEncodedContent(CreateFormFields("acquisition-ajax-create")),
         };
         createRequest.Headers.Accept.ParseAdd("application/json");
 
@@ -690,54 +897,18 @@ public sealed class MarketAcquisitionRequestEndpointTests
         acceptedResponse.EnsureSuccessStatusCode();
 
         var acquisitionPage = await client.GetStringAsync("/api/marketmafioso/acquisition");
+        AssertDashboardShell(acquisitionPage);
+        Assert.DoesNotContain("name=\"csrf\"", acquisitionPage, StringComparison.Ordinal);
+        Assert.DoesNotContain("mmf_csrf", acquisitionPage, StringComparison.Ordinal);
 
-        Assert.Contains("New Purchase Request", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("Target", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("Purchase Limits", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("Routing", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("Request Preview", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("Add to Queue", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("Stage Queue", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("Request Queue", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("Filter by item, world, status", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("class=\"acquisition-main\"", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("class=\"pane request-pane\"", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("class=\"pane queue-pane\"", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("class=\"section-title\">Item</", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("id=\"acquisitionItemSearch\"", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("id=\"acquisitionItemSuggestions\"", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("name=\"itemId\"", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("name=\"itemName\"", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("id=\"acquisitionQueueRows\"", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("id=\"acquisitionStageStatus\"", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("searchAcquisitionItems", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("validateAcquisitionQueueRow", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("readAcquisitionStageError", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("addAcquisitionQueueRow", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("stageAcquisitionQueue", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("refreshAcquisitionCsrfToken(payload.csrfToken)", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("row.csrf = currentCsrf", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("'Accept': 'application/json'", acquisitionPage, StringComparison.Ordinal);
-        Assert.DoesNotContain("redirect: 'manual'", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("id=\"acquisitionQueueTable\"", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("id=\"acquisitionQueueBody\"", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("data-resize=\"status\"", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("refreshAcquisitionQueue", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("setInterval(refreshAcquisitionQueue, 3000)", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("credentials: 'same-origin'", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("catch (error)", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("Queue refresh failed.", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("data-xiv-data-base-url=\"https://dev.xivcraftarchitect.com/api/xivdata\"", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("Plugin pickup required", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("No background polling", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("All statuses", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("Refresh", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("class=\"detail\"", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("class=\"statusbar\"", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("Fire Shard", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("Accepted", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("Plugin status", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("Plugin pickup uses the same client API key", acquisitionPage, StringComparison.Ordinal);
+        var recent = await client.GetAsync("/api/marketmafioso/acquisition/requests/recent");
+        recent.EnsureSuccessStatusCode();
+        using var recentJson = JsonDocument.Parse(await recent.Content.ReadAsStringAsync());
+        var root = recentJson.RootElement;
+        Assert.Equal("1 active / 1 recent", root.GetProperty("activeSummary").GetString());
+        Assert.Contains("Fire Shard", root.GetProperty("queueRows").GetString(), StringComparison.Ordinal);
+        Assert.Contains("Accepted", root.GetProperty("queueRows").GetString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("invalid_csrf", root.GetProperty("queueRows").GetString(), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -787,7 +958,7 @@ public sealed class MarketAcquisitionRequestEndpointTests
     }
 
     [Fact]
-    public async Task AcquisitionDashboardQueueRefreshReturnsUsableCsrfToken()
+    public async Task AcquisitionDashboardQueueRefreshDoesNotReturnCsrfToken()
     {
         await using var application = CreateHostedApplication(
             extraConfiguration: new KeyValuePair<string, string?>("MarketMafioso:TrustExternalDashboardAuth", "true"));
@@ -796,27 +967,16 @@ public sealed class MarketAcquisitionRequestEndpointTests
             AllowAutoRedirect = false,
         });
 
-        var acquisitionPage = await client.GetStringAsync("/api/marketmafioso/acquisition");
-        var originalCsrf = Regex.Match(acquisitionPage, "name=\"csrf\" value=\"(?<token>[^\"]+)\"").Groups["token"].Value;
-        Assert.False(string.IsNullOrWhiteSpace(originalCsrf));
-
         var recent = await client.GetAsync("/api/marketmafioso/acquisition/requests/recent");
 
         recent.EnsureSuccessStatusCode();
         using var recentJson = JsonDocument.Parse(await recent.Content.ReadAsStringAsync());
-        var refreshedCsrf = recentJson.RootElement.GetProperty("csrfToken").GetString();
-        Assert.False(string.IsNullOrWhiteSpace(refreshedCsrf));
-        Assert.NotEqual(originalCsrf, refreshedCsrf);
+        Assert.False(recentJson.RootElement.TryGetProperty("csrfToken", out _));
 
-        var stalePost = await client.PostAsync(
+        var postWithoutCsrf = await client.PostAsync(
             "/api/marketmafioso/acquisition/requests",
-            new FormUrlEncodedContent(CreateFormFields(originalCsrf, "stale-csrf")));
-        Assert.Equal(HttpStatusCode.BadRequest, stalePost.StatusCode);
-
-        var refreshedPost = await client.PostAsync(
-            "/api/marketmafioso/acquisition/requests",
-            new FormUrlEncodedContent(CreateFormFields(refreshedCsrf!, "refreshed-csrf")));
-        Assert.Equal(HttpStatusCode.Redirect, refreshedPost.StatusCode);
+            new FormUrlEncodedContent(CreateFormFields("without-csrf")));
+        Assert.Equal(HttpStatusCode.Redirect, postWithoutCsrf.StatusCode);
     }
 
     [Fact]
@@ -829,15 +989,10 @@ public sealed class MarketAcquisitionRequestEndpointTests
             AllowAutoRedirect = false,
         });
         var claimed = await CreateAndClaimAsync(client, "dashboard-live-cancelled");
-        var acquisitionPage = await client.GetStringAsync("/api/marketmafioso/acquisition");
-        var csrf = Regex.Match(acquisitionPage, "name=\"csrf\" value=\"(?<token>[^\"]+)\"").Groups["token"].Value;
 
         var cancelled = await client.PostAsync(
             $"/api/marketmafioso/acquisition/requests/{claimed.RequestId}/cancel",
-            new FormUrlEncodedContent(new Dictionary<string, string>
-            {
-                ["csrf"] = csrf,
-            }));
+            new FormUrlEncodedContent([]));
 
         Assert.Equal(HttpStatusCode.Redirect, cancelled.StatusCode);
         var recent = await client.GetAsync("/api/marketmafioso/acquisition/requests/recent");
@@ -861,20 +1016,17 @@ public sealed class MarketAcquisitionRequestEndpointTests
             AllowAutoRedirect = false,
         });
         var claimed = await CreateAndClaimAsync(client, "dashboard-cancel-claimed");
-        var acquisitionPage = await client.GetStringAsync("/api/marketmafioso/acquisition");
-        var csrf = Regex.Match(acquisitionPage, "name=\"csrf\" value=\"(?<token>[^\"]+)\"").Groups["token"].Value;
 
         var cancelled = await client.PostAsync(
             $"/api/marketmafioso/acquisition/requests/{claimed.RequestId}/cancel",
-            new FormUrlEncodedContent(new Dictionary<string, string>
-            {
-                ["csrf"] = csrf,
-            }));
+            new FormUrlEncodedContent([]));
 
         Assert.Equal(HttpStatusCode.Redirect, cancelled.StatusCode);
-        var refreshedPage = await client.GetStringAsync("/api/marketmafioso/acquisition");
-        Assert.Contains("No acquisition requests yet.", refreshedPage, StringComparison.Ordinal);
-        Assert.DoesNotContain("Cancelled", refreshedPage, StringComparison.Ordinal);
+        var recent = await client.GetAsync("/api/marketmafioso/acquisition/requests/recent");
+        recent.EnsureSuccessStatusCode();
+        using var recentJson = JsonDocument.Parse(await recent.Content.ReadAsStringAsync());
+        Assert.Contains("No acquisition requests yet.", recentJson.RootElement.GetProperty("queueRows").GetString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("Cancelled", recentJson.RootElement.GetProperty("queueRows").GetString(), StringComparison.Ordinal);
 
         var pending = await SendWithKeyAsync(
             client,
@@ -896,8 +1048,6 @@ public sealed class MarketAcquisitionRequestEndpointTests
             AllowAutoRedirect = false,
         });
         var claimed = await CreateAndClaimAsync(client, "dashboard-cancel-terminal");
-        var acquisitionPage = await client.GetStringAsync("/api/marketmafioso/acquisition");
-        var csrf = Regex.Match(acquisitionPage, "name=\"csrf\" value=\"(?<token>[^\"]+)\"").Groups["token"].Value;
 
         var accepted = await SendWithKeyAsync(
             client,
@@ -919,28 +1069,24 @@ public sealed class MarketAcquisitionRequestEndpointTests
             {
                 claimToken = claimed.ClaimToken,
                 idempotencyKey = "terminal-cancel-complete",
-                message = "Dry-run route complete.",
+                message = "Route complete.",
             });
         complete.EnsureSuccessStatusCode();
 
         var cancelComplete = await client.PostAsync(
             $"/api/marketmafioso/acquisition/requests/{claimed.RequestId}/cancel",
-            new FormUrlEncodedContent(new Dictionary<string, string>
-            {
-                ["csrf"] = csrf,
-            }));
+            new FormUrlEncodedContent([]));
         var cancelCompleteAgain = await client.PostAsync(
             $"/api/marketmafioso/acquisition/requests/{claimed.RequestId}/cancel",
-            new FormUrlEncodedContent(new Dictionary<string, string>
-            {
-                ["csrf"] = csrf,
-            }));
+            new FormUrlEncodedContent([]));
 
         Assert.Equal(HttpStatusCode.Redirect, cancelComplete.StatusCode);
         Assert.Equal(HttpStatusCode.Redirect, cancelCompleteAgain.StatusCode);
-        var refreshedPage = await client.GetStringAsync("/api/marketmafioso/acquisition");
-        Assert.Contains("Complete", refreshedPage, StringComparison.Ordinal);
-        Assert.DoesNotContain("Cancelled", refreshedPage, StringComparison.Ordinal);
+        var recent = await client.GetAsync("/api/marketmafioso/acquisition/requests/recent");
+        recent.EnsureSuccessStatusCode();
+        using var recentJson = JsonDocument.Parse(await recent.Content.ReadAsStringAsync());
+        Assert.Contains("Complete", recentJson.RootElement.GetProperty("queueRows").GetString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("Cancelled", recentJson.RootElement.GetProperty("queueRows").GetString(), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -953,15 +1099,10 @@ public sealed class MarketAcquisitionRequestEndpointTests
             AllowAutoRedirect = false,
         });
         var claimed = await CreateAndClaimAsync(client, "dashboard-resend-claimed");
-        var acquisitionPage = await client.GetStringAsync("/api/marketmafioso/acquisition");
-        var csrf = Regex.Match(acquisitionPage, "name=\"csrf\" value=\"(?<token>[^\"]+)\"").Groups["token"].Value;
 
         var resent = await client.PostAsync(
             $"/api/marketmafioso/acquisition/requests/{claimed.RequestId}/resend",
-            new FormUrlEncodedContent(new Dictionary<string, string>
-            {
-                ["csrf"] = csrf,
-            }));
+            new FormUrlEncodedContent([]));
 
         Assert.Equal(HttpStatusCode.Redirect, resent.StatusCode);
 
@@ -978,7 +1119,66 @@ public sealed class MarketAcquisitionRequestEndpointTests
     }
 
     [Fact]
-    public async Task AcquisitionDashboardUsesConfiguredXivDataBaseUrl()
+    public async Task AcquisitionClientCanResendFailedRequest()
+    {
+        await using var application = CreateHostedApplication();
+        using var client = application.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false,
+        });
+        var claimed = await CreateAndClaimAsync(client, "client-resend-failed");
+
+        var accepted = await SendWithKeyAsync(
+            client,
+            HttpMethod.Post,
+            $"/api/marketmafioso/acquisition/requests/{claimed.RequestId}/accept",
+            "client-secret",
+            new
+            {
+                claimToken = claimed.ClaimToken,
+                idempotencyKey = "accept-client-resend-failed",
+            });
+        accepted.EnsureSuccessStatusCode();
+
+        var failed = await SendWithKeyAsync(
+            client,
+            HttpMethod.Post,
+            $"/api/marketmafioso/acquisition/requests/{claimed.RequestId}/fail",
+            "client-secret",
+            new
+            {
+                claimToken = claimed.ClaimToken,
+                idempotencyKey = "fail-client-resend-failed",
+                reason = "Synthetic route failure.",
+            });
+        failed.EnsureSuccessStatusCode();
+
+        var resent = await SendWithKeyAsync(
+            client,
+            HttpMethod.Post,
+            $"/api/marketmafioso/acquisition/requests/{claimed.RequestId}/resend",
+            "client-secret",
+            new { });
+
+        resent.EnsureSuccessStatusCode();
+        using var resentJson = JsonDocument.Parse(await resent.Content.ReadAsStringAsync());
+        Assert.Equal(claimed.RequestId, resentJson.RootElement.GetProperty("id").GetString());
+        Assert.Equal("PendingPickup", resentJson.RootElement.GetProperty("status").GetString());
+
+        var pending = await SendWithKeyAsync(
+            client,
+            HttpMethod.Get,
+            "/api/marketmafioso/acquisition/requests/pending?characterName=Wei%20Ning&world=Gilgamesh",
+            "client-secret");
+        pending.EnsureSuccessStatusCode();
+        using var pendingJson = JsonDocument.Parse(await pending.Content.ReadAsStringAsync());
+        var request = Assert.Single(pendingJson.RootElement.GetProperty("requests").EnumerateArray());
+        Assert.Equal(claimed.RequestId, request.GetProperty("id").GetString());
+        Assert.Equal("PendingPickup", request.GetProperty("status").GetString());
+    }
+
+    [Fact]
+    public async Task AcquisitionDashboardServesShellWithConfiguredXivDataBaseUrl()
     {
         await using var application = CreateHostedApplication(
             extraConfiguration:
@@ -993,11 +1193,11 @@ public sealed class MarketAcquisitionRequestEndpointTests
 
         var acquisitionPage = await client.GetStringAsync("/api/marketmafioso/acquisition");
 
-        Assert.Contains("data-xiv-data-base-url=\"https://example.test/xivdata\"", acquisitionPage, StringComparison.Ordinal);
+        AssertDashboardShell(acquisitionPage);
     }
 
     [Fact]
-    public async Task AcquisitionDashboardDefaultsXivDataBaseUrlFromPublicOrigin()
+    public async Task AcquisitionDashboardServesShellWithPublicOriginXivDataDefault()
     {
         await using var application = CreateHostedApplication(
             extraConfiguration:
@@ -1012,7 +1212,7 @@ public sealed class MarketAcquisitionRequestEndpointTests
 
         var acquisitionPage = await client.GetStringAsync("/api/marketmafioso/acquisition");
 
-        Assert.Contains("data-xiv-data-base-url=\"https://staging.example.test/api/xivdata\"", acquisitionPage, StringComparison.Ordinal);
+        AssertDashboardShell(acquisitionPage);
     }
 
     [Fact]
@@ -1024,9 +1224,7 @@ public sealed class MarketAcquisitionRequestEndpointTests
         {
             AllowAutoRedirect = false,
         });
-        var acquisitionPage = await client.GetStringAsync("/api/marketmafioso/acquisition");
-        var csrf = Regex.Match(acquisitionPage, "name=\"csrf\" value=\"(?<token>[^\"]+)\"").Groups["token"].Value;
-        var fields = CreateFormFields(csrf, "unresolved-item");
+        var fields = CreateFormFields("unresolved-item");
         fields["itemId"] = string.Empty;
         fields["itemName"] = "Darksteel Nugget";
 
@@ -1046,9 +1244,7 @@ public sealed class MarketAcquisitionRequestEndpointTests
         {
             AllowAutoRedirect = false,
         });
-        var acquisitionPage = await client.GetStringAsync("/api/marketmafioso/acquisition");
-        var csrf = Regex.Match(acquisitionPage, "name=\"csrf\" value=\"(?<token>[^\"]+)\"").Groups["token"].Value;
-        var fields = CreateFormFields(csrf, "item-id-fallback");
+        var fields = CreateFormFields("item-id-fallback");
         fields["itemId"] = "5057";
         fields["itemName"] = string.Empty;
 
@@ -1078,9 +1274,7 @@ public sealed class MarketAcquisitionRequestEndpointTests
         {
             AllowAutoRedirect = false,
         });
-        var acquisitionPage = await client.GetStringAsync("/api/marketmafioso/acquisition");
-        var csrf = Regex.Match(acquisitionPage, "name=\"csrf\" value=\"(?<token>[^\"]+)\"").Groups["token"].Value;
-        var fields = CreateFormFields(csrf, "blank-gil-cap");
+        var fields = CreateFormFields("blank-gil-cap");
         fields["quantityMode"] = "AllBelowThreshold";
         fields["maxTotalGil"] = string.Empty;
 
@@ -1101,6 +1295,54 @@ public sealed class MarketAcquisitionRequestEndpointTests
         Assert.Equal(0u, request.GetProperty("maxTotalGil").GetUInt32());
     }
 
+    [Theory]
+    [InlineData("Exact")]
+    [InlineData("UpTo")]
+    public async Task AcquisitionRequestRejectsRemovedQuantityModes(string quantityMode)
+    {
+        await using var application = CreateHostedApplication();
+        using var client = application.CreateClient();
+
+        var response = await SendWithKeyAsync(
+            client,
+            HttpMethod.Post,
+            "/api/marketmafioso/acquisition/requests",
+            "client-secret",
+            CreateRequest($"removed-mode-{quantityMode}", quantityMode: quantityMode));
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task AcquisitionDashboardAllowsBlankAllBelowThresholdQuantity()
+    {
+        await using var application = CreateHostedApplication(
+            extraConfiguration: new KeyValuePair<string, string?>("MarketMafioso:TrustExternalDashboardAuth", "true"));
+        using var client = application.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false,
+        });
+        var fields = CreateFormFields("blank-all-below-quantity");
+        fields["quantityMode"] = "AllBelowThreshold";
+        fields["quantity"] = string.Empty;
+
+        var response = await client.PostAsync(
+            "/api/marketmafioso/acquisition/requests",
+            new FormUrlEncodedContent(fields));
+
+        Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
+
+        var pending = await SendWithKeyAsync(
+            client,
+            HttpMethod.Get,
+            "/api/marketmafioso/acquisition/requests/pending?characterName=Wei%20Ning&world=Gilgamesh",
+            "client-secret");
+        pending.EnsureSuccessStatusCode();
+        using var pendingJson = JsonDocument.Parse(await pending.Content.ReadAsStringAsync());
+        var request = Assert.Single(pendingJson.RootElement.GetProperty("requests").EnumerateArray());
+        Assert.Equal(0u, request.GetProperty("quantity").GetUInt32());
+    }
+
     [Fact]
     public async Task AcquisitionDashboardShowsEmptyQueueState()
     {
@@ -1111,9 +1353,11 @@ public sealed class MarketAcquisitionRequestEndpointTests
             AllowAutoRedirect = false,
         });
 
-        var acquisitionPage = await client.GetStringAsync("/api/marketmafioso/acquisition");
+        var recent = await client.GetAsync("/api/marketmafioso/acquisition/requests/recent");
 
-        Assert.Contains("No acquisition requests yet.", acquisitionPage, StringComparison.Ordinal);
+        recent.EnsureSuccessStatusCode();
+        using var recentJson = JsonDocument.Parse(await recent.Content.ReadAsStringAsync());
+        Assert.Contains("No acquisition requests yet.", recentJson.RootElement.GetProperty("queueRows").GetString(), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1124,12 +1368,9 @@ public sealed class MarketAcquisitionRequestEndpointTests
         {
             AllowAutoRedirect = false,
         });
-        var dashboard = await client.GetStringAsync("/api/marketmafioso/");
-        var csrf = Regex.Match(dashboard, "name=\"csrf\" value=\"(?<token>[^\"]+)\"").Groups["token"].Value;
-
         var response = await client.PostAsync(
             "/api/marketmafioso/acquisition/requests",
-            new FormUrlEncodedContent(CreateFormFields(csrf, "untrusted-dashboard")));
+            new FormUrlEncodedContent(CreateFormFields("untrusted-dashboard")));
 
         Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
     }
@@ -1165,7 +1406,9 @@ public sealed class MarketAcquisitionRequestEndpointTests
         string idempotencyKey,
         uint itemId = 2,
         string itemName = "Fire Shard",
-        int expiresInSeconds = 90) => new
+        int expiresInSeconds = 90,
+        string quantityMode = "TargetQuantity",
+        uint quantity = 10) => new
         {
             schemaVersion = 1,
             idempotencyKey,
@@ -1174,8 +1417,8 @@ public sealed class MarketAcquisitionRequestEndpointTests
             region = "North America",
             itemId,
             itemName,
-            quantityMode = "Exact",
-            quantity = 10,
+            quantityMode,
+            quantity,
             hqPolicy = "Either",
             maxUnitPrice = 99,
             maxTotalGil = 990,
@@ -1183,9 +1426,8 @@ public sealed class MarketAcquisitionRequestEndpointTests
             expiresInSeconds,
         };
 
-    private static Dictionary<string, string> CreateFormFields(string csrf, string idempotencyKey) => new()
+    private static Dictionary<string, string> CreateFormFields(string idempotencyKey) => new()
     {
-        ["csrf"] = csrf,
         ["schemaVersion"] = "1",
         ["idempotencyKey"] = idempotencyKey,
         ["targetCharacterName"] = "Wei Ning",
@@ -1193,7 +1435,7 @@ public sealed class MarketAcquisitionRequestEndpointTests
         ["region"] = "North America",
         ["itemId"] = "2",
         ["itemName"] = "Fire Shard",
-        ["quantityMode"] = "Exact",
+        ["quantityMode"] = "TargetQuantity",
         ["quantity"] = "10",
         ["hqPolicy"] = "Either",
         ["maxUnitPrice"] = "99",
@@ -1232,6 +1474,83 @@ public sealed class MarketAcquisitionRequestEndpointTests
         return (requestId, claimJson.RootElement.GetProperty("claimToken").GetString()!);
     }
 
+    private static void AssertDashboardShell(string html)
+    {
+        Assert.Contains("MarketMafioso", html, StringComparison.Ordinal);
+        Assert.Contains("_framework/blazor", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("[.{fingerprint}]", html, StringComparison.Ordinal);
+    }
+
+    private static async Task<(string RequestId, string ClaimToken)> CreateAcceptedRequestAsync(
+        HttpClient client,
+        string idempotencyKey)
+    {
+        var claimed = await CreateAndClaimAsync(client, idempotencyKey);
+        var accept = await SendWithKeyAsync(
+            client,
+            HttpMethod.Post,
+            $"/api/marketmafioso/acquisition/requests/{claimed.RequestId}/accept",
+            "client-secret",
+            new
+            {
+                claimToken = claimed.ClaimToken,
+                idempotencyKey = $"{idempotencyKey}-accept",
+            });
+        accept.EnsureSuccessStatusCode();
+        return claimed;
+    }
+
+    private static Task<HttpResponseMessage> SendAttemptProgressAsync(
+        HttpClient client,
+        string requestId,
+        string claimToken,
+        string idempotencyKey,
+        string attemptId,
+        long eventSequence,
+        string phase,
+        string message,
+        string? worldName = null,
+        string? routeStopId = null) =>
+        SendWithKeyAsync(
+            client,
+            HttpMethod.Post,
+            $"/api/marketmafioso/acquisition/requests/{requestId}/progress",
+            "client-secret",
+            CreateAttemptProgress(
+                claimToken,
+                idempotencyKey,
+                attemptId,
+                eventSequence,
+                phase,
+                message,
+                worldName,
+                routeStopId));
+
+    private static object CreateAttemptProgress(
+        string claimToken,
+        string idempotencyKey,
+        string attemptId,
+        long eventSequence,
+        string phase,
+        string message,
+        string? worldName = null,
+        string? routeStopId = null) => new
+        {
+            claimToken,
+            idempotencyKey,
+            pluginInstanceId = "plugin-test-instance",
+            attemptId,
+            eventSequence,
+            eventType = "progress",
+            phase,
+            routeStopId,
+            runnerState = "Running",
+            message,
+            worldName,
+            pluginVersion = "1.0.159.53063",
+            clientTimestampUtc = DateTimeOffset.UtcNow,
+        };
+
     private static Task<HttpResponseMessage> SendWithKeyAsync(
         HttpClient client,
         HttpMethod method,
@@ -1241,6 +1560,7 @@ public sealed class MarketAcquisitionRequestEndpointTests
     {
         var request = new HttpRequestMessage(method, requestUri);
         request.Headers.Add("X-Api-Key", apiKey);
+        request.Headers.Accept.ParseAdd("application/json");
         if (body != null)
             request.Content = JsonContent.Create(body);
 

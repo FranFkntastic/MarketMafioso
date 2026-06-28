@@ -66,11 +66,94 @@ public sealed class MarketBoardItemSearchDriverTests
     }
 
     [Fact]
+    public void ShouldWaitForSubmittedSearch_ReturnsFalseWhenAgentIsIdleAndExactItemIsMissing()
+    {
+        Assert.False(MarketBoardItemSearchDriver.ShouldWaitForSubmittedSearch(
+            searchMatches: true,
+            exactItemVisible: false,
+            agentIsPartialSearching: false,
+            agentIsItemPushPending: false));
+    }
+
+    [Fact]
+    public void ShouldWaitForSubmittedSearch_ReturnsTrueWhenAgentIsStillSearching()
+    {
+        Assert.True(MarketBoardItemSearchDriver.ShouldWaitForSubmittedSearch(
+            searchMatches: true,
+            exactItemVisible: false,
+            agentIsPartialSearching: true,
+            agentIsItemPushPending: false));
+    }
+
+    [Fact]
+    public void ShouldWaitForSubmittedSearch_ReturnsTrueWhenExactItemIsVisible()
+    {
+        Assert.True(MarketBoardItemSearchDriver.ShouldWaitForSubmittedSearch(
+            searchMatches: true,
+            exactItemVisible: true,
+            agentIsPartialSearching: false,
+            agentIsItemPushPending: false));
+    }
+
+    [Fact]
     public void GetSearchSubmitCallbackSequence_PrimesInputBeforeEnter()
     {
         Assert.Equal(
             [MarketBoardItemSearchSubmitCallback.TextChanged, MarketBoardItemSearchSubmitCallback.Enter],
             MarketBoardItemSearchDriver.GetSearchSubmitCallbackSequence());
+    }
+
+    [Fact]
+    public void ChooseSearchSubmitStrategy_UsesAutofocusedRewriteWhenFocusedInputIsIdle()
+    {
+        Assert.Equal(
+            MarketBoardItemSearchSubmitStrategy.AutofocusedTextInputRewrite,
+            MarketBoardItemSearchDriver.ChooseSearchSubmitStrategy(
+                textInputWasActive: true,
+                searchButtonWasEnabled: false,
+                exactItemVisible: false,
+                agentIsPartialSearching: false,
+                agentIsItemPushPending: false));
+    }
+
+    [Fact]
+    public void ChooseSearchSubmitStrategy_UsesNormalCallbackWhenInputIsNotAlreadyFocused()
+    {
+        Assert.Equal(
+            MarketBoardItemSearchSubmitStrategy.TextInputEnterCallback,
+            MarketBoardItemSearchDriver.ChooseSearchSubmitStrategy(
+                textInputWasActive: false,
+                searchButtonWasEnabled: false,
+                exactItemVisible: false,
+                agentIsPartialSearching: false,
+                agentIsItemPushPending: false));
+    }
+
+    [Fact]
+    public void ChooseSearchSubmitStrategy_UsesNormalCallbackWhenSearchIsAlreadyInFlight()
+    {
+        Assert.Equal(
+            MarketBoardItemSearchSubmitStrategy.TextInputEnterCallback,
+            MarketBoardItemSearchDriver.ChooseSearchSubmitStrategy(
+                textInputWasActive: true,
+                searchButtonWasEnabled: false,
+                exactItemVisible: false,
+                agentIsPartialSearching: true,
+                agentIsItemPushPending: false));
+    }
+
+    [Fact]
+    public void GetAutofocusedSubmitStepSequence_RewritesTextBeforeEnter()
+    {
+        Assert.Equal(
+            [
+                MarketBoardItemSearchSubmitStep.ClearSearchText,
+                MarketBoardItemSearchSubmitStep.TextChanged,
+                MarketBoardItemSearchSubmitStep.SetSearchText,
+                MarketBoardItemSearchSubmitStep.TextChanged,
+                MarketBoardItemSearchSubmitStep.Enter,
+            ],
+            MarketBoardItemSearchDriver.GetAutofocusedSubmitStepSequence());
     }
 
     [Fact]

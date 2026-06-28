@@ -5,11 +5,11 @@ namespace MarketMafioso.MarketAcquisition;
 
 public static class MarketBoardPurchasePlanner
 {
-    public static MarketBoardPurchaseCandidate? SelectFirstCandidate(MarketAcquisitionLiveDryRun dryRun)
+    public static MarketBoardPurchaseCandidate? SelectFirstCandidate(MarketAcquisitionLiveCandidatePlan candidatePlan)
     {
-        ArgumentNullException.ThrowIfNull(dryRun);
+        ArgumentNullException.ThrowIfNull(candidatePlan);
 
-        var row = dryRun.Rows.FirstOrDefault(row =>
+        var row = candidatePlan.Rows.FirstOrDefault(row =>
             row.Decision.Equals("WouldBuy", StringComparison.OrdinalIgnoreCase));
         return row == null
             ? null

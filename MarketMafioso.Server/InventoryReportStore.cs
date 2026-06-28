@@ -162,11 +162,27 @@ public sealed class InventoryReportStore
         long? characterId,
         CancellationToken cancellationToken)
     {
-        var reports = await ListReportsAsync(accountId, characterId, cancellationToken);
-        return reports
-            .Select(r => r.Summary)
-            .OrderByDescending(r => r.ReceivedAt)
-            .ToList();
+        var summaries = new List<ReportSummary>();
+        await using var connection = await connectionFactory.OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = characterId == null
+            ? SummaryQuery + Environment.NewLine + """
+              WHERE s.account_id = $accountId
+              ORDER BY s.received_at_utc DESC
+              """
+            : SummaryQuery + Environment.NewLine + """
+              WHERE s.account_id = $accountId AND s.character_id = $characterId
+              ORDER BY s.received_at_utc DESC
+              """;
+        command.Parameters.AddWithValue("$accountId", accountId);
+        if (characterId != null)
+            command.Parameters.AddWithValue("$characterId", characterId.Value);
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+            summaries.Add(ReadSummary(reader));
+
+        return summaries;
     }
 
     public Task<StoredInventoryReport?> GetLatestAsync(CancellationToken cancellationToken) =>
@@ -253,6 +269,7 @@ public sealed class InventoryReportStore
 
         var playerBags = new List<InventoryBag>();
         var retainers = new List<RetainerReport>();
+        var owners = new List<InventoryOwnerRow>();
 
         await using var ownerCommand = connection.CreateCommand();
         ownerCommand.CommandText = """
@@ -262,28 +279,37 @@ public sealed class InventoryReportStore
             ORDER BY sort_order
             """;
         ownerCommand.Parameters.AddWithValue("$snapshotId", id);
-        await using var ownerReader = await ownerCommand.ExecuteReaderAsync(cancellationToken);
-        while (await ownerReader.ReadAsync(cancellationToken))
+        await using (var ownerReader = await ownerCommand.ExecuteReaderAsync(cancellationToken))
         {
-            var ownerId = ownerReader.GetInt64(0);
-            var ownerType = ownerReader.GetString(1);
-            var bags = await ReadBagsAsync(connection, ownerId, cancellationToken);
-            if (ownerType == "player")
+            while (await ownerReader.ReadAsync(cancellationToken))
+            {
+                owners.Add(new InventoryOwnerRow(
+                    ownerReader.GetInt64(0),
+                    ownerReader.GetString(1),
+                    ownerReader.GetString(2),
+                    ownerReader.IsDBNull(3) ? null : checked((ulong)ownerReader.GetInt64(3)),
+                    ownerReader.IsDBNull(4) ? null : ownerReader.GetString(4),
+                    ownerReader.IsDBNull(5) ? null : checked((ulong)ownerReader.GetInt64(5))));
+            }
+        }
+
+        foreach (var owner in owners)
+        {
+            var bags = await ReadBagsAsync(connection, owner.Id, cancellationToken);
+            if (owner.OwnerType == "player")
             {
                 playerBags.AddRange(bags);
                 continue;
             }
 
-            var retainerId = ownerReader.IsDBNull(3) ? 0UL : checked((ulong)ownerReader.GetInt64(3));
-            var gil = ownerReader.IsDBNull(5) ? 0UL : checked((ulong)ownerReader.GetInt64(5));
             retainers.Add(new RetainerReport
             {
-                RetainerName = ownerReader.GetString(2),
-                RetainerId = retainerId,
-                LastUpdated = ownerReader.IsDBNull(4) ? string.Empty : ownerReader.GetString(4),
-                Gil = gil,
+                RetainerName = owner.OwnerName,
+                RetainerId = owner.RetainerId ?? 0,
+                LastUpdated = owner.LastUpdated ?? string.Empty,
+                Gil = owner.Gil ?? 0,
                 Bags = bags,
-                MarketListings = await ReadMarketListingsAsync(connection, ownerId, cancellationToken),
+                MarketListings = await ReadMarketListingsAsync(connection, owner.Id, cancellationToken),
             });
         }
 
@@ -330,44 +356,6 @@ public sealed class InventoryReportStore
         command.CommandText = "DELETE FROM snapshots WHERE account_id = $accountId";
         command.Parameters.AddWithValue("$accountId", accountId);
         return await command.ExecuteNonQueryAsync(cancellationToken);
-    }
-
-    private async Task<IReadOnlyList<StoredInventoryReport>> ListReportsAsync(
-        long accountId,
-        long? characterId,
-        CancellationToken cancellationToken)
-    {
-        var ids = new List<string>();
-        await using var connection = await connectionFactory.OpenConnectionAsync(cancellationToken);
-        await using var command = connection.CreateCommand();
-        command.CommandText = characterId == null
-            ? """
-              SELECT id FROM snapshots
-              WHERE account_id = $accountId
-              ORDER BY received_at_utc DESC
-              """
-            : """
-              SELECT id FROM snapshots
-              WHERE account_id = $accountId AND character_id = $characterId
-              ORDER BY received_at_utc DESC
-              """;
-        command.Parameters.AddWithValue("$accountId", accountId);
-        if (characterId != null)
-            command.Parameters.AddWithValue("$characterId", characterId.Value);
-
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        while (await reader.ReadAsync(cancellationToken))
-            ids.Add(reader.GetString(0));
-
-        var reports = new List<StoredInventoryReport>();
-        foreach (var id in ids)
-        {
-            var report = await GetAsync(accountId, id, cancellationToken);
-            if (report != null)
-                reports.Add(report);
-        }
-
-        return reports;
     }
 
     private static async Task<long?> UpsertCharacterAsync(
@@ -813,6 +801,71 @@ public sealed class InventoryReportStore
         };
     }
 
+    private static ReportSummary ReadSummary(SqliteDataReader reader) =>
+        new()
+        {
+            Id = reader.GetString(0),
+            ReceivedAt = DateTimeOffset.Parse(reader.GetString(1), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+            CharacterName = reader.IsDBNull(2) ? null : reader.GetString(2),
+            HomeWorld = reader.IsDBNull(3) ? null : reader.GetString(3),
+            ReportTimestamp = reader.GetString(4),
+            PlayerBagCount = checked((int)reader.GetInt64(5)),
+            PlayerItemStacks = checked((int)reader.GetInt64(6)),
+            PlayerItemQuantity = checked((int)reader.GetInt64(7)),
+            RetainerCount = checked((int)reader.GetInt64(8)),
+            RetainerItemStacks = checked((int)reader.GetInt64(9)),
+            RetainerItemQuantity = checked((int)reader.GetInt64(10)),
+        };
+
+    private const string SummaryQuery = """
+        SELECT
+            s.id,
+            s.received_at_utc,
+            s.character_name,
+            s.home_world,
+            s.report_timestamp,
+            (
+                SELECT COUNT(*)
+                FROM inventory_owners o
+                JOIN inventory_bags b ON b.owner_id = o.id
+                WHERE o.snapshot_id = s.id AND o.owner_type = 'player'
+            ) AS player_bag_count,
+            (
+                SELECT COUNT(*)
+                FROM inventory_owners o
+                JOIN inventory_bags b ON b.owner_id = o.id
+                JOIN inventory_items i ON i.bag_id = b.id
+                WHERE o.snapshot_id = s.id AND o.owner_type = 'player'
+            ) AS player_item_stacks,
+            (
+                SELECT COALESCE(SUM(i.quantity), 0)
+                FROM inventory_owners o
+                JOIN inventory_bags b ON b.owner_id = o.id
+                JOIN inventory_items i ON i.bag_id = b.id
+                WHERE o.snapshot_id = s.id AND o.owner_type = 'player'
+            ) AS player_item_quantity,
+            (
+                SELECT COUNT(*)
+                FROM inventory_owners o
+                WHERE o.snapshot_id = s.id AND o.owner_type = 'retainer'
+            ) AS retainer_count,
+            (
+                SELECT COUNT(*)
+                FROM inventory_owners o
+                JOIN inventory_bags b ON b.owner_id = o.id
+                JOIN inventory_items i ON i.bag_id = b.id
+                WHERE o.snapshot_id = s.id AND o.owner_type = 'retainer'
+            ) AS retainer_item_stacks,
+            (
+                SELECT COALESCE(SUM(i.quantity), 0)
+                FROM inventory_owners o
+                JOIN inventory_bags b ON b.owner_id = o.id
+                JOIN inventory_items i ON i.bag_id = b.id
+                WHERE o.snapshot_id = s.id AND o.owner_type = 'retainer'
+            ) AS retainer_item_quantity
+        FROM snapshots s
+        """;
+
     private sealed record SnapshotRow(
         DateTimeOffset ReceivedAt,
         string? ApiKeyLabel,
@@ -820,6 +873,14 @@ public sealed class InventoryReportStore
         string? HomeWorld,
         string ReportTimestamp,
         InventoryReportMetadata Metadata);
+
+    private sealed record InventoryOwnerRow(
+        long Id,
+        string OwnerType,
+        string OwnerName,
+        ulong? RetainerId,
+        string? LastUpdated,
+        ulong? Gil);
 }
 
 public sealed record RawInventoryReportJson(string Id, string? RawJson);

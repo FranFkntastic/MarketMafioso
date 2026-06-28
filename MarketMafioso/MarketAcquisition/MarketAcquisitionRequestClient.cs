@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Net;
 using System.Net.Http;
 using System.Net.Http.Json;
 using System.Text.Json;
@@ -185,6 +186,121 @@ public sealed class MarketAcquisitionRequestClient
             },
             cancellationToken);
 
+    public Task<MarketAcquisitionAttemptEventResult> ReportAttemptProgressAsync(
+        string serverUrl,
+        string clientApiKey,
+        string requestId,
+        string claimToken,
+        string pluginInstanceId,
+        string attemptId,
+        long eventSequence,
+        string? routeStopId,
+        string? worldName,
+        string phase,
+        string? message,
+        string? pluginVersion,
+        CancellationToken cancellationToken) =>
+        PostAttemptLifecycleAsync(
+            serverUrl,
+            clientApiKey,
+            requestId,
+            "progress",
+            CreateAttemptEventRequest(
+                claimToken,
+                pluginInstanceId,
+                attemptId,
+                eventSequence,
+                "progress",
+                phase,
+                routeStopId,
+                worldName,
+                phase,
+                message,
+                reason: null,
+                pluginVersion),
+            cancellationToken);
+
+    public Task<MarketAcquisitionAttemptEventResult> CompleteAttemptAsync(
+        string serverUrl,
+        string clientApiKey,
+        string requestId,
+        string claimToken,
+        string pluginInstanceId,
+        string attemptId,
+        long eventSequence,
+        string? routeStopId,
+        string? worldName,
+        string phase,
+        string? message,
+        string? pluginVersion,
+        CancellationToken cancellationToken) =>
+        PostAttemptLifecycleAsync(
+            serverUrl,
+            clientApiKey,
+            requestId,
+            "complete",
+            CreateAttemptEventRequest(
+                claimToken,
+                pluginInstanceId,
+                attemptId,
+                eventSequence,
+                "complete",
+                phase,
+                routeStopId,
+                worldName,
+                phase,
+                message,
+                reason: null,
+                pluginVersion),
+            cancellationToken);
+
+    public Task<MarketAcquisitionAttemptEventResult> FailAttemptAsync(
+        string serverUrl,
+        string clientApiKey,
+        string requestId,
+        string claimToken,
+        string pluginInstanceId,
+        string attemptId,
+        long eventSequence,
+        string? routeStopId,
+        string? worldName,
+        string phase,
+        string reason,
+        string? pluginVersion,
+        CancellationToken cancellationToken) =>
+        PostAttemptLifecycleAsync(
+            serverUrl,
+            clientApiKey,
+            requestId,
+            "fail",
+            CreateAttemptEventRequest(
+                claimToken,
+                pluginInstanceId,
+                attemptId,
+                eventSequence,
+                "fail",
+                phase,
+                routeStopId,
+                worldName,
+                phase,
+                message: null,
+                reason,
+                pluginVersion),
+            cancellationToken);
+
+    public Task<MarketAcquisitionRequestView> ResendAsync(
+        string serverUrl,
+        string clientApiKey,
+        string requestId,
+        CancellationToken cancellationToken) =>
+        PostLifecycleAsync(
+            serverUrl,
+            clientApiKey,
+            requestId,
+            "resend",
+            new { },
+            cancellationToken);
+
     private async Task<MarketAcquisitionRequestView> PostLifecycleAsync<TRequest>(
         string serverUrl,
         string clientApiKey,
@@ -204,17 +320,139 @@ public sealed class MarketAcquisitionRequestClient
             Content = JsonContent.Create(body, options: JsonOptions),
         };
         request.Headers.Add("X-Api-Key", clientApiKey);
+        request.Headers.Accept.ParseAdd("application/json");
 
         using var response = await httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
-        response.EnsureSuccessStatusCode();
+        if (!response.IsSuccessStatusCode)
+            throw await CreateLifecycleExceptionAsync(response, action, cancellationToken).ConfigureAwait(false);
+
         return await response.Content.ReadFromJsonAsync<MarketAcquisitionRequestView>(
             JsonOptions,
             cancellationToken).ConfigureAwait(false)
             ?? throw new InvalidOperationException("Lifecycle response was empty.");
     }
 
+    private async Task<MarketAcquisitionAttemptEventResult> PostAttemptLifecycleAsync(
+        string serverUrl,
+        string clientApiKey,
+        string requestId,
+        string action,
+        MarketAcquisitionAttemptEventRequest body,
+        CancellationToken cancellationToken)
+    {
+        var acquisitionBaseUrl = ResolveAcquisitionBaseUrl(serverUrl);
+        if (string.IsNullOrWhiteSpace(clientApiKey))
+            throw new InvalidOperationException("Client API key is required.");
+
+        using var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            $"{acquisitionBaseUrl}/requests/{Uri.EscapeDataString(requestId)}/{action}")
+        {
+            Content = JsonContent.Create(body, options: JsonOptions),
+        };
+        request.Headers.Add("X-Api-Key", clientApiKey);
+        request.Headers.Accept.ParseAdd("application/json");
+
+        using var response = await httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
+        if (!response.IsSuccessStatusCode)
+            throw await CreateLifecycleExceptionAsync(response, action, cancellationToken).ConfigureAwait(false);
+
+        return await response.Content.ReadFromJsonAsync<MarketAcquisitionAttemptEventResult>(
+            JsonOptions,
+            cancellationToken).ConfigureAwait(false)
+            ?? throw new InvalidOperationException("Attempt lifecycle response was empty.");
+    }
+
+    private static MarketAcquisitionAttemptEventRequest CreateAttemptEventRequest(
+        string claimToken,
+        string pluginInstanceId,
+        string attemptId,
+        long eventSequence,
+        string eventType,
+        string phase,
+        string? routeStopId,
+        string? worldName,
+        string? runnerState,
+        string? message,
+        string? reason,
+        string? pluginVersion) =>
+        new()
+        {
+            ClaimToken = claimToken,
+            IdempotencyKey = $"{pluginInstanceId}-route-{attemptId}-{eventSequence}",
+            PluginInstanceId = pluginInstanceId,
+            AttemptId = attemptId,
+            EventSequence = eventSequence,
+            EventType = eventType,
+            Phase = phase,
+            RouteStopId = routeStopId,
+            WorldName = worldName,
+            RunnerState = runnerState,
+            Message = message,
+            Reason = reason,
+            PluginVersion = pluginVersion,
+            ClientTimestampUtc = DateTimeOffset.UtcNow,
+        };
+
+    private static async Task<MarketAcquisitionLifecycleHttpException> CreateLifecycleExceptionAsync(
+        HttpResponseMessage response,
+        string action,
+        CancellationToken cancellationToken)
+    {
+        var body = response.Content == null
+            ? null
+            : await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+        var error = TryReadErrorMessage(body) ?? body;
+        return new MarketAcquisitionLifecycleHttpException(response.StatusCode, action, error, body);
+    }
+
+    private static string? TryReadErrorMessage(string? body)
+    {
+        if (string.IsNullOrWhiteSpace(body))
+            return null;
+
+        try
+        {
+            using var document = JsonDocument.Parse(body);
+            return document.RootElement.TryGetProperty("error", out var error) &&
+                   error.ValueKind == JsonValueKind.String
+                ? error.GetString()
+                : null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
     private static string ResolveAcquisitionBaseUrl(string serverUrl) =>
         ReceiverEndpointClassifier.BuildAcquisitionBaseUrl(serverUrl) ??
         throw new InvalidOperationException("The configured receiver URL cannot derive an acquisition endpoint.");
+}
+
+public sealed class MarketAcquisitionLifecycleHttpException : HttpRequestException
+{
+    public MarketAcquisitionLifecycleHttpException(
+        HttpStatusCode statusCode,
+        string action,
+        string? error,
+        string? responseBody)
+        : base(BuildMessage(statusCode, action, error), null, statusCode)
+    {
+        Action = action;
+        Error = error;
+        ResponseBody = responseBody;
+    }
+
+    public string Action { get; }
+
+    public string? Error { get; }
+
+    public string? ResponseBody { get; }
+
+    private static string BuildMessage(HttpStatusCode statusCode, string action, string? error) =>
+        string.IsNullOrWhiteSpace(error)
+            ? $"Market acquisition {action} failed with {(int)statusCode} {statusCode}."
+            : $"Market acquisition {action} failed with {(int)statusCode} {statusCode}: {error}";
 }
 

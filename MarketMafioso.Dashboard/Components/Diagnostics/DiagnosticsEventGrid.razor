@@ -1,0 +1,81 @@
+@using MarketMafioso.Dashboard.Models
+
+<MudStack Spacing="2">
+    <MudStack Row="true">
+        <MudTextField @bind-Value="_filter"
+                      Placeholder="Filter category, severity, request, message"
+                      Variant="Variant.Outlined"
+                      Margin="Margin.Dense"
+                      Immediate="true"
+                      Class="diagnostics-filter" />
+        <MudSpacer />
+        <MudButton Variant="Variant.Outlined" OnClick="RefreshRequested">Refresh</MudButton>
+    </MudStack>
+
+    <MudTable T="DiagnosticEventView"
+              Items="FilteredEvents"
+              Dense="true"
+              Hover="true"
+              FixedHeader="true"
+              Class="queue-table operation-grid diagnostics-grid"
+              OnRowClick="@OnRowClicked">
+        <HeaderContent>
+            <MudTh>ID</MudTh>
+            <MudTh>When</MudTh>
+            <MudTh>Category</MudTh>
+            <MudTh>Severity</MudTh>
+            <MudTh>Message</MudTh>
+            <MudTh>Correlation</MudTh>
+        </HeaderContent>
+        <RowTemplate>
+            <MudTd>@context.Id</MudTd>
+            <MudTd>@context.OccurredAtUtc.LocalDateTime.ToString("yyyy-MM-dd HH:mm:ss")</MudTd>
+            <MudTd>@context.Category<br /><span class="muted">@context.Type</span></MudTd>
+            <MudTd><MudChip T="string" Size="Size.Small" Color="@SeverityColor(context.Severity)">@context.Severity</MudChip></MudTd>
+            <MudTd>@context.Message</MudTd>
+            <MudTd>@(context.CorrelationId ?? context.AcquisitionRequestId ?? "-")</MudTd>
+        </RowTemplate>
+        <NoRecordsContent>
+            <MudText Class="muted">No diagnostics match this filter.</MudText>
+        </NoRecordsContent>
+    </MudTable>
+</MudStack>
+
+@code {
+    [Parameter] public IReadOnlyList<DiagnosticEventView> Events { get; set; } = [];
+    [Parameter] public EventCallback RefreshRequested { get; set; }
+    [Parameter] public EventCallback<DiagnosticEventView> SelectedEventChanged { get; set; }
+
+    private string _filter = string.Empty;
+
+    private IEnumerable<DiagnosticEventView> FilteredEvents => string.IsNullOrWhiteSpace(_filter)
+        ? Events
+        : Events.Where(MatchesFilter);
+
+    private bool MatchesFilter(DiagnosticEventView item)
+    {
+        var filter = _filter.Trim();
+        return Contains(item.Category, filter) ||
+               Contains(item.Type, filter) ||
+               Contains(item.Severity, filter) ||
+               Contains(item.Message, filter) ||
+               Contains(item.CorrelationId, filter) ||
+               Contains(item.AcquisitionRequestId, filter);
+    }
+
+    private async Task OnRowClicked(TableRowClickEventArgs<DiagnosticEventView> args)
+    {
+        await SelectedEventChanged.InvokeAsync(args.Item);
+    }
+
+    private static bool Contains(string? value, string filter) =>
+        value?.Contains(filter, StringComparison.OrdinalIgnoreCase) == true;
+
+    private static Color SeverityColor(string severity) => severity switch
+    {
+        "Critical" or "Error" => Color.Error,
+        "Warn" => Color.Warning,
+        "Debug" or "Trace" => Color.Default,
+        _ => Color.Info,
+    };
+}

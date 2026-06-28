@@ -150,7 +150,7 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
 
         var activeStop = ActiveStop;
         if (activeStop == null)
-            return Complete("Route complete. No purchases were executed.");
+            return Complete("Route complete.");
 
         if (!string.Equals(activeStop.Status, "Pending", StringComparison.OrdinalIgnoreCase))
             return MarketAcquisitionRouteActionResult.Ok(StatusMessage);
@@ -234,7 +234,7 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
 
         var activeStop = ActiveStop;
         if (activeStop == null)
-            return Complete("Route complete. No purchases were executed.");
+            return Complete("Route complete.");
 
         if (!string.Equals(activeStop.Status, "Pending", StringComparison.OrdinalIgnoreCase))
             return MarketAcquisitionRouteActionResult.Ok(StatusMessage);
@@ -313,6 +313,17 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         return MarketAcquisitionRouteActionResult.Ok(StatusMessage);
     }
 
+    public MarketAcquisitionRouteActionResult RecordAutomationSnapshot(MarketBoardAutomationSnapshot snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+
+        if (!diagnostics.IsEnabled)
+            return MarketAcquisitionRouteActionResult.Ok(StatusMessage);
+
+        diagnostics.RecordAutomationSnapshot(snapshot);
+        return MarketAcquisitionRouteActionResult.Ok(StatusMessage);
+    }
+
     public MarketAcquisitionRouteActionResult FinalizeInputCaptureLog()
     {
         if (diagnosticsRequested && IsRunning)
@@ -369,12 +380,16 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
             searchResult.Message,
             details);
 
+        var snapshot = CreateSearchAutomationSnapshot(searchResult, "Observed", details);
+        diagnostics.RecordAutomationSnapshot(snapshot);
+
         if (searchResult.IsInProgress &&
             itemSearchAutomationStartedUtc is { } started &&
             nowUtc - started > ItemSearchAutomationTimeout)
         {
             var timeoutMessage =
                 $"Market board item search automation timed out after {ItemSearchAutomationTimeout.TotalSeconds:N0}s while waiting for listings. Last status: {searchResult.Status}.";
+            diagnostics.RecordAutomationSnapshot(CreateSearchAutomationSnapshot(searchResult, "TimedOut", details));
             return FailRoute(timeoutMessage);
         }
 
@@ -413,7 +428,7 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
 
         var activeStop = ActiveStop;
         if (activeStop == null)
-            return Complete("Route complete. No purchases were executed.");
+            return Complete("Route complete.");
 
         if (!string.Equals(activeStop.Status, "Arrived", StringComparison.OrdinalIgnoreCase))
             return Fail($"Cannot request market board travel while stop is {activeStop.Status}.");
@@ -480,14 +495,14 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         return MarketAcquisitionRouteActionResult.Ok(message);
     }
 
-    public MarketAcquisitionRouteActionResult RecordProbe(string currentWorld, MarketAcquisitionLiveDryRun dryRun)
+    public MarketAcquisitionRouteActionResult RecordProbe(string currentWorld, MarketAcquisitionLiveCandidatePlan candidatePlan)
     {
-        ArgumentNullException.ThrowIfNull(dryRun);
+        ArgumentNullException.ThrowIfNull(candidatePlan);
 
         if (!IsRunning)
             return Fail($"Route is {State}; probe result was not recorded.");
 
-        var result = session?.RecordProbe(currentWorld, dryRun) ??
+        var result = session?.RecordProbe(currentWorld, candidatePlan) ??
                      MarketAcquisitionGuidedRouteResult.Fail("No route has started.");
         StatusMessage = result.Message;
         SearchSubmitted = false;
@@ -498,9 +513,55 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
             new Dictionary<string, string?>
             {
                 ["currentWorld"] = currentWorld,
-                ["dryRunStatus"] = dryRun.Status,
-                ["wouldBuyQuantity"] = dryRun.WouldBuyQuantity.ToString(),
-                ["wouldSpendGil"] = dryRun.WouldSpendGil.ToString(),
+                ["liveCandidateStatus"] = candidatePlan.Status,
+                ["wouldBuyQuantity"] = candidatePlan.WouldBuyQuantity.ToString(),
+                ["wouldSpendGil"] = candidatePlan.WouldSpendGil.ToString(),
+                ["success"] = result.Success.ToString(),
+            });
+
+        if (result.Success && session?.ActiveStop == null)
+            return Complete(result.Message);
+
+        if (result.Success &&
+            string.Equals(session?.ActiveStop?.Status, "Pending", StringComparison.OrdinalIgnoreCase))
+        {
+            MarketBoardCloseRequiredBeforeTravel = true;
+            StatusMessage = $"{result.Message} Closing market board windows before next travel.";
+            diagnostics.Record(
+                "market-board-close-required",
+                StatusMessage,
+                new Dictionary<string, string?>
+                {
+                    ["nextWorld"] = session?.ActiveStop?.WorldName,
+                });
+        }
+
+        return result.Success
+            ? MarketAcquisitionRouteActionResult.Ok(result.Message)
+            : MarketAcquisitionRouteActionResult.Fail(result.Message);
+    }
+
+    public MarketAcquisitionRouteActionResult RecordWorldPurchaseBatchComplete(
+        string currentWorld,
+        uint purchasedQuantity,
+        uint spentGil)
+    {
+        if (!IsRunning)
+            return Fail($"Route is {State}; world purchase result was not recorded.");
+
+        var result = session?.RecordWorldPurchaseBatchComplete(currentWorld, purchasedQuantity, spentGil) ??
+                     MarketAcquisitionGuidedRouteResult.Fail("No route has started.");
+        StatusMessage = result.Message;
+        SearchSubmitted = false;
+        itemSearchAutomationStartedUtc = null;
+        diagnostics.Record(
+            "world-purchase-complete",
+            result.Message,
+            new Dictionary<string, string?>
+            {
+                ["currentWorld"] = currentWorld,
+                ["purchasedQuantity"] = purchasedQuantity.ToString(),
+                ["spentGil"] = spentGil.ToString(),
                 ["success"] = result.Success.ToString(),
             });
 
@@ -568,6 +629,50 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         diagnostics = MarketAcquisitionRouteDiagnostics.Disabled;
     }
 
+    private static MarketBoardAutomationSnapshot CreateSearchAutomationSnapshot(
+        MarketBoardItemSearchResult searchResult,
+        string phase,
+        IReadOnlyDictionary<string, string?> details)
+    {
+        var outcome = phase.Equals("TimedOut", StringComparison.OrdinalIgnoreCase)
+            ? MarketBoardAutomationOutcome.Fatal
+            : ClassifySearchOutcome(searchResult);
+        return MarketBoardAutomationSnapshot.Create(
+            "SearchItem",
+            phase,
+            "ItemSearchResultReady",
+            searchResult.Status,
+            outcome,
+            ChooseSearchNextAction(searchResult, outcome),
+            details);
+    }
+
+    private static MarketBoardAutomationOutcome ClassifySearchOutcome(MarketBoardItemSearchResult searchResult)
+    {
+        if (searchResult.ReadyForListings)
+            return MarketBoardAutomationOutcome.Success;
+
+        if (searchResult.IsInProgress)
+            return MarketBoardAutomationOutcome.InProgress;
+
+        return MarketBoardAutomationOutcome.Recoverable;
+    }
+
+    private static string ChooseSearchNextAction(
+        MarketBoardItemSearchResult searchResult,
+        MarketBoardAutomationOutcome outcome)
+    {
+        if (outcome == MarketBoardAutomationOutcome.Fatal)
+            return "CaptureInputState";
+
+        if (searchResult.ReadyForListings)
+            return "ReadLiveListings";
+
+        if (searchResult.IsInProgress)
+            return "ContinuePolling";
+
+        return "TryAlternateInputPath";
+    }
 }
 
 public sealed record MarketAcquisitionRouteActionResult

@@ -56,7 +56,9 @@ public static class MarketAcquisitionPlanner
         ArgumentNullException.ThrowIfNull(listings);
         ValidateRequest(request);
 
-        var acceptedListings = listings
+        var sourceListings = listings.ToList();
+        var diagnostics = BuildDiagnostics(request, sourceListings);
+        var acceptedListings = sourceListings
             .Where(listing => ListingMatchesRequest(request, listing))
             .OrderBy(listing => listing.UnitPrice)
             .ThenByDescending(listing => listing.Quantity)
@@ -93,7 +95,40 @@ public static class MarketAcquisitionPlanner
             PlannedQuantity = totalQuantity,
             PlannedGil = totalGil,
             PreparedAtUtc = preparedAtUtc,
+            Diagnostics = diagnostics with
+            {
+                PlannedListingCount = batches.Sum(batch => batch.Listings.Count),
+            },
             WorldBatches = batches,
+        };
+    }
+
+    private static MarketAcquisitionPlanDiagnostics BuildDiagnostics(
+        MarketAcquisitionRequestView request,
+        IReadOnlyList<MarketAcquisitionListing> listings)
+    {
+        var nonZero = listings
+            .Where(listing => listing.Quantity != 0 && listing.UnitPrice != 0)
+            .ToList();
+        var priceSupported = nonZero
+            .Where(listing => listing.UnitPrice <= request.MaxUnitPrice)
+            .ToList();
+        var hqSupported = priceSupported
+            .Where(listing => MarketAcquisitionPolicy.HqMatches(request.HqPolicy, listing.IsHq))
+            .ToList();
+        var worldSupported = hqSupported
+            .Where(listing =>
+                !request.WorldMode.Equals("CurrentWorldOnly", StringComparison.OrdinalIgnoreCase) ||
+                listing.WorldName.Equals(request.TargetWorld, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        return new MarketAcquisitionPlanDiagnostics
+        {
+            SourceListingCount = listings.Count,
+            NonZeroListingCount = nonZero.Count,
+            PriceSupportedListingCount = priceSupported.Count,
+            HqSupportedListingCount = hqSupported.Count,
+            WorldSupportedListingCount = worldSupported.Count,
         };
     }
 
@@ -137,7 +172,7 @@ public static class MarketAcquisitionPlanner
 
         foreach (var batch in candidates)
         {
-            if (plannedQuantity >= request.Quantity)
+            if (HasReachedQuantityCap(request, plannedQuantity))
                 break;
 
             if (hasGilCap && plannedGil + batch.PlannedGil > request.MaxTotalGil)
@@ -173,7 +208,7 @@ public static class MarketAcquisitionPlanner
 
         foreach (var listing in listings)
         {
-            if (plannedQuantity >= request.Quantity)
+            if (HasReachedQuantityCap(request, plannedQuantity))
                 break;
 
             if (hasGilCap && plannedGil + listing.TotalGil > request.MaxTotalGil)
@@ -200,10 +235,17 @@ public static class MarketAcquisitionPlanner
             DataCenter = ResolveNorthAmericaDataCenter(worldName),
             PlannedQuantity = plannedQuantity,
             PlannedGil = plannedGil,
-            ExceedsRequestedQuantity = plannedQuantity > request.Quantity,
+            ExceedsRequestedQuantity = request.Quantity > 0 && plannedQuantity > request.Quantity,
             Listings = plannedListings,
         };
     }
+
+    private static bool HasReachedQuantityCap(MarketAcquisitionRequestView request, uint plannedQuantity) =>
+        !IsUnboundedAllBelowThreshold(request) && plannedQuantity >= request.Quantity;
+
+    private static bool IsUnboundedAllBelowThreshold(MarketAcquisitionRequestView request) =>
+        request.Quantity == 0 &&
+        request.QuantityMode.Equals("AllBelowThreshold", StringComparison.OrdinalIgnoreCase);
 
     private static IReadOnlyList<MarketAcquisitionWorldBatch> RouteSortBatches(
         IReadOnlyList<MarketAcquisitionWorldBatch> batches,

@@ -4,8 +4,10 @@ on:
   push:
     branches: [ local-dev ]
     paths:
+      - 'MarketMafioso.Dashboard/**'
       - 'MarketMafioso.Server/**'
       - 'MarketMafioso.Server.Tests/**'
+      - 'MarketMafioso.sln'
       - '.github/workflows/deploy-vps-marketmafioso-dev.yml'
   workflow_dispatch:
 
@@ -77,19 +79,11 @@ jobs:
           ENV
           chmod 600 marketmafioso-dev.env
           cat > marketmafioso-dev.caddy <<CADDY
-          @marketmafiosoApi {
-              path /api/marketmafioso/health /api/marketmafioso/inventory /api/marketmafioso/api/inventory /api/marketmafioso/api/reports* /api/marketmafioso/acquisition*
-          }
-
-          handle @marketmafiosoApi {
+          handle /api/marketmafioso {
               reverse_proxy 127.0.0.1:5088
           }
 
-          @marketmafiosoDashboard {
-              path /api/marketmafioso /api/marketmafioso/ /api/marketmafioso/reports* /api/marketmafioso/diagnostics /api/marketmafioso/inventory
-          }
-
-          handle @marketmafiosoDashboard {
+          handle /api/marketmafioso/* {
               reverse_proxy 127.0.0.1:5088
           }
           CADDY
@@ -125,7 +119,7 @@ jobs:
           After=network.target
 
           [Service]
-          WorkingDirectory=$data_root
+          WorkingDirectory=$root/current
           ExecStart=$root/current/MarketMafioso.Server
           EnvironmentFile=$root/marketmafioso-dev.env
           Restart=always
@@ -228,40 +222,53 @@ jobs:
           curl --fail --silent --show-error "https://dev.xivcraftarchitect.com/api/marketmafioso/health" > /dev/null
 
           dashboard_status="$(curl --silent --output /dev/null --write-out '%{http_code}' "https://dev.xivcraftarchitect.com/api/marketmafioso/")"
-          test "$dashboard_status" = "401"
+          test "$dashboard_status" = "200"
 
           dashboard_no_slash_status="$(curl --silent --output /dev/null --write-out '%{http_code}' "https://dev.xivcraftarchitect.com/api/marketmafioso")"
-          test "$dashboard_no_slash_status" = "401" || test "$dashboard_no_slash_status" = "308" || test "$dashboard_no_slash_status" = "301"
+          test "$dashboard_no_slash_status" = "200" || test "$dashboard_no_slash_status" = "308" || test "$dashboard_no_slash_status" = "301"
 
-          curl --fail --silent --show-error --user "marketmafioso:$MARKETMAFIOSO_DEV_BASIC_AUTH_PASSWORD" \
+          curl --fail --silent --show-error \
             "https://dev.xivcraftarchitect.com/api/marketmafioso/" | grep -F "MarketMafioso" > /dev/null
-          curl --fail --silent --show-error --user "marketmafioso:$MARKETMAFIOSO_DEV_BASIC_AUTH_PASSWORD" \
-            "https://dev.xivcraftarchitect.com/api/marketmafioso/" | grep -F "Market Acquisition" > /dev/null
+          curl --fail --silent --show-error \
+            "https://dev.xivcraftarchitect.com/api/marketmafioso/" | grep -F "_framework/blazor" > /dev/null
 
           acquisition_page_status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
             "https://dev.xivcraftarchitect.com/api/marketmafioso/acquisition")"
-          test "$acquisition_page_status" = "401"
+          test "$acquisition_page_status" = "200"
 
-          curl --fail --silent --show-error --user "marketmafioso:$MARKETMAFIOSO_DEV_BASIC_AUTH_PASSWORD" \
-            "https://dev.xivcraftarchitect.com/api/marketmafioso/acquisition" | grep -F "Create Dashboard Request" > /dev/null
-          curl --fail --silent --show-error --user "marketmafioso:$MARKETMAFIOSO_DEV_BASIC_AUTH_PASSWORD" \
-            "https://dev.xivcraftarchitect.com/api/marketmafioso/acquisition" | grep -F "New Purchase Request" > /dev/null
-          curl --fail --silent --show-error --user "marketmafioso:$MARKETMAFIOSO_DEV_BASIC_AUTH_PASSWORD" \
-            "https://dev.xivcraftarchitect.com/api/marketmafioso/acquisition" | grep -F "Request Queue" > /dev/null
+          api_without_session="$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            "https://dev.xivcraftarchitect.com/api/marketmafioso/api/acquisition/requests")"
+          test "$api_without_session" = "401"
+
+          cookie_jar="$(mktemp)"
+          login_status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            --cookie-jar "$cookie_jar" \
+            --header 'Content-Type: application/json' \
+            --data "{\"username\":\"marketmafioso\",\"password\":\"$MARKETMAFIOSO_DEV_BASIC_AUTH_PASSWORD\"}" \
+            "https://dev.xivcraftarchitect.com/api/marketmafioso/auth/login")"
+          test "$login_status" = "200"
+
+          api_with_session="$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            --cookie "$cookie_jar" \
+            "https://dev.xivcraftarchitect.com/api/marketmafioso/api/acquisition/requests")"
+          test "$api_with_session" = "200"
 
           inventory_status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
             "https://dev.xivcraftarchitect.com/api/marketmafioso/inventory")"
-          test "$inventory_status" = "401"
+          test "$inventory_status" = "200"
 
-          curl --fail --silent --show-error --user "marketmafioso:$MARKETMAFIOSO_DEV_BASIC_AUTH_PASSWORD" \
-            "https://dev.xivcraftarchitect.com/api/marketmafioso/inventory" | grep -F "Inventory Browser" > /dev/null
+          inventory_api_without_session="$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            "https://dev.xivcraftarchitect.com/api/marketmafioso/api/inventory")"
+          test "$inventory_api_without_session" = "401" || test "$inventory_api_without_session" = "405"
 
-          diagnostics_status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
-            "https://dev.xivcraftarchitect.com/api/marketmafioso/diagnostics")"
-          test "$diagnostics_status" = "401"
+          settings_status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            "https://dev.xivcraftarchitect.com/api/marketmafioso/settings")"
+          test "$settings_status" = "200"
 
-          curl --fail --silent --show-error --user "marketmafioso:$MARKETMAFIOSO_DEV_BASIC_AUTH_PASSWORD" \
-            "https://dev.xivcraftarchitect.com/api/marketmafioso/diagnostics" | grep -F "Diagnostics" > /dev/null
+          diagnostics_with_session="$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            --cookie "$cookie_jar" \
+            "https://dev.xivcraftarchitect.com/api/marketmafioso/api/diagnostics/events?limit=1")"
+          test "$diagnostics_with_session" = "200"
 
           acquisition_without_key="$(curl --silent --output /dev/null --write-out '%{http_code}' \
             "https://dev.xivcraftarchitect.com/api/marketmafioso/acquisition/requests/pending?characterName=Smoke&world=Gilgamesh")"

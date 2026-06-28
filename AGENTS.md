@@ -90,6 +90,18 @@ Lint notes:
 - For plugin behavior changes, run `MarketMafioso/tools/Deploy-DevPlugin.ps1` from the intended active worktree, verify the reported source and target hashes match, then reload the plugin in game.
 - Side/client worktrees should build and test normally, but should not deploy to the active Dalamud target unless intentionally configured to own that deployment.
 
+### Fast Patch Lane
+Use this lane for tiny, speculative client/plugin changes when the user is actively testing in game, especially Market Acquisition UI automation patches.
+
+- Read only the exact source file and latest route log needed to understand the failure.
+- Patch the smallest observable decision point.
+- Prefer focused compile/tests only; skip format/full solution verification until the behavior is confirmed unless the diff is broad or risky.
+- Deploy with `MarketMafioso/tools/Deploy-DevPlugin.ps1` and report the visible manifest version plus verified target DLL hash.
+- Hand off for live testing before commit/push when the patch is speculative or likely to need another iteration.
+- After the user confirms the behavior, commit/push and optionally redeploy from the committed head so artifact metadata matches source control.
+
+Use the durable workflow instead for server/dashboard/auth/persistence changes, purchase-safety changes, routing semantics, or any change where uncommitted behavior would be hard to reconstruct safely.
+
 ## Code Style Guidelines
 Follow established patterns already present in `MarketMafioso/`.
 

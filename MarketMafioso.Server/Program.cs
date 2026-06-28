@@ -11,11 +11,14 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddSingleton<SqliteConnectionFactory>();
 builder.Services.AddSingleton<SqliteSchemaMigrator>();
 builder.Services.AddSingleton<DashboardPasswordHasher>();
+builder.Services.AddSingleton<DashboardSessionStore>();
 builder.Services.AddSingleton<ReceiverBootstrapper>();
 builder.Services.AddSingleton<IngestKeyAccountResolver>();
 builder.Services.AddSingleton<InventoryReportStore>();
 builder.Services.AddSingleton<JsonSnapshotImporter>();
 builder.Services.AddSingleton<MarketAcquisitionRequestStore>();
+builder.Services.AddSingleton<DiagnosticEventStore>();
+builder.Services.AddHttpClient();
 
 var app = builder.Build();
 await app.Services.GetRequiredService<SqliteSchemaMigrator>().MigrateAsync(CancellationToken.None);
@@ -33,6 +36,7 @@ var previousClientApiKey = FirstConfigured(
 var requireApiKey = app.Configuration.GetValue<bool>("MarketMafioso:RequireApiKey") ||
                     !string.IsNullOrWhiteSpace(clientApiKey);
 var basePath = app.Configuration["MarketMafioso:BasePath"];
+var configuredBasePath = NormalizeConfiguredBasePath(basePath);
 var publicOrigin = app.Configuration["MarketMafioso:PublicOrigin"];
 var storageLabel = app.Configuration["MarketMafioso:StorageLabel"];
 var xivDataBaseUrl = NormalizeXivDataBaseUrl(FirstConfigured(
@@ -42,8 +46,13 @@ var xivDataBaseUrl = NormalizeXivDataBaseUrl(FirstConfigured(
 if (requireApiKey && string.IsNullOrWhiteSpace(clientApiKey))
     throw new InvalidOperationException("MarketMafioso:ClientApiKey is required when API key authentication is enabled.");
 
-if (!string.IsNullOrWhiteSpace(basePath))
-    app.UsePathBase(basePath);
+if (configuredBasePath.HasValue)
+{
+    app.UsePathBase(configuredBasePath);
+}
+
+app.Use(ServeDashboardStaticAssetAsync);
+app.UseStaticFiles();
 
 app.Use(async (context, next) =>
 {
@@ -62,35 +71,11 @@ app.Use(async (context, next) =>
     await next(context);
 });
 
-app.UseMiddleware<DashboardBasicAuthMiddleware>();
+app.UseMiddleware<DashboardSessionAuthMiddleware>();
 
-app.MapGet("/", async (
-    HttpRequest request,
-    InventoryReportStore store,
-    string? deleted,
-    string? acquisition,
-    long? characterId,
-    bool? allCharacters,
-    CancellationToken token) =>
-{
-    var showAllCharacters = allCharacters == true;
-    var characters = await store.ListCharactersAsync(1, token);
-    var selectedCharacterId = showAllCharacters ? null : characterId ?? characters.FirstOrDefault()?.Id;
-    var reports = await store.ListSummariesAsync(1, selectedCharacterId, token);
-    var csrfToken = SetCsrfCookie(request.HttpContext.Response);
-    return Results.Content(
-        RenderDashboard(
-            reports,
-            characters,
-            selectedCharacterId,
-            showAllCharacters,
-            StorageDisplayName(store.ReportDirectory, storageLabel, requireApiKey),
-            deleted,
-            acquisition,
-            request.PathBase,
-            csrfToken),
-        "text/html; charset=utf-8");
-});
+app.MapPost("/auth/login", LoginDashboard);
+app.MapPost("/auth/logout", LogoutDashboard);
+app.MapGet("/auth/session", GetDashboardSession);
 
 app.MapGet("/health", () => Results.Ok(new
 {
@@ -98,78 +83,100 @@ app.MapGet("/health", () => Results.Ok(new
     utc = DateTimeOffset.UtcNow,
 }));
 
-app.MapGet("/inventory", async (
-    HttpRequest request,
-    InventoryReportStore store,
-    long? characterId,
-    string? search,
-    string? scope,
+app.MapGet("/api/acquisition/requests", async (
+    MarketAcquisitionRequestStore acquisitionStore,
     CancellationToken token) =>
 {
-    var characters = await store.ListCharactersAsync(1, token);
-    var selectedCharacterId = characterId ?? characters.FirstOrDefault()?.Id;
-    var latest = await store.GetLatestAsync(1, selectedCharacterId, token);
-    var view = InventoryBrowserViewBuilder.Build(latest, search, scope);
-    return Results.Content(
-        RenderInventoryBrowser(view, characters, selectedCharacterId, request.PathBase),
-        "text/html; charset=utf-8");
+    var acquisitionRequests = await acquisitionStore.ListRecentAsync(100, token);
+    return Results.Ok(acquisitionRequests);
 });
 
-app.MapGet("/acquisition", async (
-    HttpRequest request,
-    InventoryReportStore store,
-    MarketAcquisitionRequestStore acquisitionStore,
-    string? acquisition,
-    long? characterId,
+app.MapGet("/api/diagnostics/events", async (
+    DiagnosticEventStore diagnostics,
+    int? limit,
+    string? category,
+    string? severity,
+    string? correlationId,
     CancellationToken token) =>
 {
-    var characters = await store.ListCharactersAsync(1, token);
-    var selectedCharacterId = characterId ?? characters.FirstOrDefault()?.Id;
-    var selectedCharacter = selectedCharacterId == null
-        ? null
-        : characters.FirstOrDefault(c => c.Id == selectedCharacterId.Value);
-    var acquisitionRequests = await acquisitionStore.ListRecentAsync(50, token);
-    var csrfToken = SetCsrfCookie(request.HttpContext.Response);
-    return Results.Content(
-        RenderAcquisitionDashboard(characters, selectedCharacterId, selectedCharacter, acquisitionRequests, acquisition, request.PathBase, csrfToken, xivDataBaseUrl),
-        "text/html; charset=utf-8");
+    var events = await diagnostics.ListRecentAsync(limit ?? 100, category, severity, correlationId, token);
+    return Results.Ok(events);
+});
+
+app.MapGet("/api/diagnostics/events/stream", async (
+    HttpResponse response,
+    DiagnosticEventStore diagnostics,
+    CancellationToken token) =>
+{
+    response.Headers.ContentType = "text/event-stream";
+    response.Headers.CacheControl = "no-cache";
+    var events = await diagnostics.ListRecentAsync(100, null, null, null, token);
+    await WriteSseEventAsync(response, "snapshot", events, token);
+});
+
+app.MapGet("/api/events/stream", async (
+    HttpResponse response,
+    MarketAcquisitionRequestStore acquisitionStore,
+    DiagnosticEventStore diagnostics,
+    CancellationToken token) =>
+{
+    response.Headers.ContentType = "text/event-stream";
+    response.Headers.CacheControl = "no-cache";
+    response.Headers.Connection = "keep-alive";
+
+    while (!token.IsCancellationRequested)
+    {
+        var acquisitionRequests = await acquisitionStore.ListRecentAsync(100, token);
+        await WriteSseEventAsync(response, "acquisition", acquisitionRequests, token);
+
+        var events = await diagnostics.ListRecentAsync(25, null, null, null, token);
+        await WriteSseEventAsync(response, "diagnostics", events, token);
+
+        await Task.Delay(TimeSpan.FromSeconds(3), token);
+    }
 });
 
 app.MapGet("/acquisition/requests/recent", async (
     HttpRequest request,
-    HttpResponse response,
     MarketAcquisitionRequestStore acquisitionStore,
     CancellationToken token) =>
 {
     var acquisitionRequests = await acquisitionStore.ListRecentAsync(50, token);
-    var csrfToken = SetCsrfCookie(response);
-    return Results.Json(BuildAcquisitionQueueUpdate(acquisitionRequests, request.PathBase, csrfToken));
-});
-
-app.MapGet("/diagnostics", async (
-    HttpRequest request,
-    InventoryReportStore store,
-    CancellationToken token) =>
-{
-    var reports = await store.ListSummariesAsync(1, characterId: null, token);
-    return Results.Content(
-        RenderDiagnostics(reports, request.PathBase),
-        "text/html; charset=utf-8");
+    return Results.Json(BuildAcquisitionQueueUpdate(acquisitionRequests, request.PathBase));
 });
 
 app.MapPost("/inventory", SaveInventoryReport);
 app.MapPost("/api/inventory", SaveInventoryReport);
 
 app.MapPost("/acquisition/requests", CreateAcquisitionRequest);
+app.MapPost("/api/acquisition/requests", CreateAcquisitionRequest);
 app.MapGet("/acquisition/requests/pending", ListPendingAcquisitionRequests);
 app.MapPost("/acquisition/requests/{id}/claim", ClaimAcquisitionRequest);
 app.MapPost("/acquisition/requests/{id}/accept", AcceptAcquisitionRequest);
 app.MapPost("/acquisition/requests/{id}/reject", RejectAcquisitionRequest);
 app.MapPost("/acquisition/requests/{id}/cancel", CancelAcquisitionRequest);
+app.MapPost("/api/acquisition/requests/{id}/cancel", CancelAcquisitionRequest);
 app.MapPost("/acquisition/requests/{id}/resend", ResendAcquisitionRequest);
+app.MapPost("/api/acquisition/requests/{id}/resend", ResendAcquisitionRequest);
 app.MapPost("/acquisition/requests/{id}/progress", ReportAcquisitionProgress);
 app.MapPost("/acquisition/requests/{id}/complete", CompleteAcquisitionRequest);
 app.MapPost("/acquisition/requests/{id}/fail", FailAcquisitionRequest);
+
+app.MapGet("/api/xivdata/items/search", async (
+    IHttpClientFactory httpClientFactory,
+    string q,
+    int? limit,
+    CancellationToken token) =>
+{
+    if (string.IsNullOrWhiteSpace(q))
+        return Results.BadRequest(new { error = "query_required" });
+
+    var client = httpClientFactory.CreateClient();
+    var url = $"{xivDataBaseUrl}/items/search?q={Uri.EscapeDataString(q)}&limit={Math.Clamp(limit ?? 12, 1, 50)}";
+    using var response = await client.GetAsync(url, token);
+    var body = await response.Content.ReadAsStringAsync(token);
+    return Results.Content(body, "application/json; charset=utf-8", statusCode: (int)response.StatusCode);
+});
 
 app.MapGet("/api/reports", async (InventoryReportStore store, CancellationToken token) =>
 {
@@ -230,19 +237,15 @@ app.MapDelete("/api/reports", async (InventoryReportStore store, CancellationTok
 app.MapGet("/reports/{id}", async (HttpRequest request, string id, InventoryReportStore store, CancellationToken token) =>
 {
     var report = await store.GetAsync(id, token);
-    var csrfToken = SetCsrfCookie(request.HttpContext.Response);
     return report == null
         ? Results.NotFound(RenderNotFound(id, request.PathBase))
         : Results.Content(
-            RenderReportDetails(report, InventorySnapshotViewBuilder.Build(report), request.PathBase, csrfToken),
+            RenderReportDetails(report, InventorySnapshotViewBuilder.Build(report), request.PathBase),
             "text/html; charset=utf-8");
 });
 
 app.MapPost("/reports/{id}/delete", async (HttpRequest request, string id, InventoryReportStore store, CancellationToken token) =>
 {
-    if (!await IsValidDashboardPostAsync(request, publicOrigin, token))
-        return Results.BadRequest(new { error = "invalid_csrf" });
-
     var deleted = await store.DeleteAsync(id, token);
     return deleted
         ? Results.Redirect($"{request.PathBase}/?deleted={Uri.EscapeDataString($"snapshot {id}")}")
@@ -251,14 +254,79 @@ app.MapPost("/reports/{id}/delete", async (HttpRequest request, string id, Inven
 
 app.MapPost("/reports/delete-all", async (HttpRequest request, InventoryReportStore store, CancellationToken token) =>
 {
-    if (!await IsValidDashboardPostAsync(request, publicOrigin, token))
-        return Results.BadRequest(new { error = "invalid_csrf" });
-
     var deleted = await store.DeleteAllAsync(token);
     return Results.Redirect($"{request.PathBase}/?deleted={Uri.EscapeDataString($"{deleted:N0} snapshots")}");
 });
 
+MapDashboardShellRoute("/");
+MapDashboardShellRoute("/acquisition");
+MapDashboardShellRoute("/inventory");
+MapDashboardShellRoute("/overview");
+MapDashboardShellRoute("/settings");
+
 app.Run();
+
+void MapDashboardShellRoute(string route) => app.MapGet(route, ServeBlazorIndex);
+
+async Task<IResult> LoginDashboard(
+    HttpRequest request,
+    HttpResponse response,
+    DashboardSessionStore sessions,
+    DashboardLoginRequest login,
+    CancellationToken token)
+{
+    var created = await sessions.CreateAsync(login.Username, login.Password, token);
+    if (created == null)
+        return Results.Unauthorized();
+
+    response.Cookies.Append(
+        DashboardSessionStore.CookieName,
+        created.Token,
+        CreateDashboardCookieOptions(request, created.Session.ExpiresAtUtc));
+
+    return Results.Ok(new
+    {
+        user = new
+        {
+            created.Session.UserId,
+            created.Session.Username,
+        },
+        created.Session.ExpiresAtUtc,
+    });
+}
+
+async Task<IResult> LogoutDashboard(
+    HttpRequest request,
+    HttpResponse response,
+    DashboardSessionStore sessions,
+    CancellationToken token)
+{
+    await sessions.RevokeAsync(request.Cookies[DashboardSessionStore.CookieName], token);
+    response.Cookies.Delete(
+        DashboardSessionStore.CookieName,
+        CreateDashboardCookieOptions(request, DateTimeOffset.UtcNow.AddDays(-1)));
+    return Results.Ok(new { ok = true });
+}
+
+async Task<IResult> GetDashboardSession(
+    HttpRequest request,
+    DashboardSessionStore sessions,
+    CancellationToken token)
+{
+    var session = await sessions.GetAsync(request.Cookies[DashboardSessionStore.CookieName], token);
+    if (session == null)
+        return Results.Unauthorized();
+
+    return Results.Ok(new
+    {
+        user = new
+        {
+            session.UserId,
+            session.Username,
+        },
+        session.ExpiresAtUtc,
+    });
+}
 
 async Task<IResult> SaveInventoryReport(
     HttpRequest request,
@@ -329,9 +397,6 @@ async Task<IResult> CreateAcquisitionRequest(
     try
     {
         var isBrowserForm = request.HasFormContentType;
-        if (isBrowserForm && !await IsValidDashboardPostAsync(request, publicOrigin, token))
-            return Results.BadRequest(new { error = "invalid_csrf" });
-
         var acquisitionRequest = isBrowserForm
             ? await ReadAcquisitionFormAsync(request, token)
             : await JsonSerializer.DeserializeAsync<MarketAcquisitionCreateRequest>(
@@ -342,7 +407,7 @@ async Task<IResult> CreateAcquisitionRequest(
             return Results.BadRequest(new { error = "Request body is required." });
 
         var created = await store.CreateAsync(acquisitionRequest, token);
-        if (isBrowserForm && !WantsJsonResponse(request))
+        if (isBrowserForm && !IsDashboardApiRoute(request) && !WantsJsonResponse(request))
             return Results.Redirect($"{request.PathBase}/acquisition?acquisition={Uri.EscapeDataString(created.Request.Id)}");
 
         return created.IsReplay
@@ -357,6 +422,174 @@ async Task<IResult> CreateAcquisitionRequest(
     {
         return Results.Conflict(new { error = ex.Message });
     }
+}
+
+static CookieOptions CreateDashboardCookieOptions(HttpRequest request, DateTimeOffset expiresAt) => new()
+{
+    HttpOnly = true,
+    IsEssential = true,
+    SameSite = SameSiteMode.Lax,
+    Secure = request.IsHttps,
+    Expires = expiresAt,
+    Path = string.IsNullOrWhiteSpace(request.PathBase) ? "/" : request.PathBase.ToString(),
+};
+
+static PathString NormalizeConfiguredBasePath(string? value)
+{
+    if (string.IsNullOrWhiteSpace(value))
+        return PathString.Empty;
+
+    var trimmed = value.Trim().TrimEnd('/');
+    if (trimmed.Length == 0 || trimmed == "/")
+        return PathString.Empty;
+
+    return trimmed.StartsWith("/", StringComparison.Ordinal)
+        ? new PathString(trimmed)
+        : new PathString($"/{trimmed}");
+}
+
+static async Task WriteSseEventAsync<T>(
+    HttpResponse response,
+    string eventName,
+    T payload,
+    CancellationToken cancellationToken)
+{
+    var json = JsonSerializer.Serialize(payload, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+    await response.WriteAsync($"event: {eventName}\n", cancellationToken);
+    await response.WriteAsync($"data: {json}\n\n", cancellationToken);
+    await response.Body.FlushAsync(cancellationToken);
+}
+
+static async Task<IResult> ServeBlazorIndex(
+    HttpRequest request,
+    IWebHostEnvironment environment,
+    CancellationToken cancellationToken)
+{
+    var file = environment.WebRootFileProvider.GetFileInfo("index.html");
+    if (!file.Exists)
+        return Results.NotFound();
+
+    await using var stream = file.CreateReadStream();
+    using var reader = new StreamReader(stream, Encoding.UTF8);
+    var html = await reader.ReadToEndAsync(cancellationToken);
+    var baseHref = string.IsNullOrWhiteSpace(request.PathBase)
+        ? "/"
+        : $"{request.PathBase.ToString().TrimEnd('/')}/";
+    html = html.Replace("<base href=\"/\" />", $"<base href=\"{Html(baseHref)}\" />", StringComparison.Ordinal);
+    html = html.Replace(
+        "_framework/blazor.webassembly#[.{fingerprint}].js",
+        ResolveBlazorBootScript(environment),
+        StringComparison.Ordinal);
+    return Results.Content(html, "text/html; charset=utf-8", Encoding.UTF8);
+}
+
+static string ResolveBlazorBootScript(IWebHostEnvironment environment)
+{
+    var directory = environment.WebRootFileProvider.GetDirectoryContents("_framework");
+    if (!directory.Exists)
+        throw new DirectoryNotFoundException("Dashboard framework assets were not found under wwwroot/_framework.");
+
+    var bootScript = directory
+        .Where(file => !file.IsDirectory &&
+                       file.Name.StartsWith("blazor.webassembly.", StringComparison.Ordinal) &&
+                       file.Name.EndsWith(".js", StringComparison.Ordinal))
+        .OrderBy(file => file.Name, StringComparer.Ordinal)
+        .FirstOrDefault();
+
+    if (bootScript == null)
+        throw new FileNotFoundException("Dashboard Blazor WebAssembly boot script was not found under wwwroot/_framework.");
+
+    return $"_framework/{bootScript.Name}";
+}
+
+static async Task ServeDashboardStaticAssetAsync(HttpContext context, RequestDelegate next)
+{
+    if (!HttpMethods.IsGet(context.Request.Method) && !HttpMethods.IsHead(context.Request.Method))
+    {
+        await next(context);
+        return;
+    }
+
+    var path = context.Request.Path.Value?.TrimStart('/');
+    if (string.IsNullOrWhiteSpace(path) || !IsDashboardStaticAssetPath(path))
+    {
+        await next(context);
+        return;
+    }
+
+    var environment = context.RequestServices.GetRequiredService<IWebHostEnvironment>();
+    var resolvedPath = ResolveDashboardStaticAssetPath(environment, path);
+    var file = environment.WebRootFileProvider.GetFileInfo(resolvedPath);
+    if (!file.Exists || file.IsDirectory)
+    {
+        await next(context);
+        return;
+    }
+
+    context.Response.ContentType = ContentTypeForDashboardAsset(resolvedPath);
+    if (HttpMethods.IsHead(context.Request.Method))
+        return;
+
+    await using var stream = file.CreateReadStream();
+    await stream.CopyToAsync(context.Response.Body, context.RequestAborted);
+}
+
+static bool IsDashboardStaticAssetPath(string path) =>
+    path.StartsWith("_framework/", StringComparison.Ordinal) ||
+    path.StartsWith("_content/", StringComparison.Ordinal) ||
+    path.StartsWith("css/", StringComparison.Ordinal) ||
+    path.StartsWith("js/", StringComparison.Ordinal) ||
+    path.Equals("favicon.png", StringComparison.Ordinal) ||
+    path.Equals("icon-192.png", StringComparison.Ordinal) ||
+    path.Equals("MarketMafioso.Dashboard.styles.css", StringComparison.Ordinal);
+
+static string ResolveDashboardStaticAssetPath(IWebHostEnvironment environment, string path) =>
+    path switch
+    {
+        "_framework/dotnet.js" => ResolveSingleDashboardAsset(environment, "_framework", "dotnet.", ".js", static name =>
+            !name.StartsWith("dotnet.native.", StringComparison.Ordinal) &&
+            !name.StartsWith("dotnet.runtime.", StringComparison.Ordinal)),
+        _ => path,
+    };
+
+static string ResolveSingleDashboardAsset(
+    IWebHostEnvironment environment,
+    string directoryPath,
+    string prefix,
+    string suffix,
+    Func<string, bool>? predicate = null)
+{
+    var directory = environment.WebRootFileProvider.GetDirectoryContents(directoryPath);
+    if (!directory.Exists)
+        return $"{directoryPath}/{prefix.TrimEnd('.')}{suffix}";
+
+    var asset = directory
+        .Where(file => !file.IsDirectory &&
+                       file.Name.StartsWith(prefix, StringComparison.Ordinal) &&
+                       file.Name.EndsWith(suffix, StringComparison.Ordinal) &&
+                       (predicate == null || predicate(file.Name)))
+        .OrderBy(file => file.Name, StringComparer.Ordinal)
+        .FirstOrDefault();
+
+    return asset == null
+        ? $"{directoryPath}/{prefix.TrimEnd('.')}{suffix}"
+        : $"{directoryPath}/{asset.Name}";
+}
+
+static string ContentTypeForDashboardAsset(string path)
+{
+    var extension = Path.GetExtension(path);
+    return extension switch
+    {
+        ".css" => "text/css; charset=utf-8",
+        ".dat" => "application/octet-stream",
+        ".js" => "text/javascript; charset=utf-8",
+        ".json" => "application/json; charset=utf-8",
+        ".map" => "application/json; charset=utf-8",
+        ".png" => "image/png",
+        ".wasm" => "application/wasm",
+        _ => "application/octet-stream",
+    };
 }
 
 async Task<IResult> ListPendingAcquisitionRequests(
@@ -410,12 +643,34 @@ async Task<IResult> AcceptAcquisitionRequest(
     }
 }
 
-Task<IResult> RejectAcquisitionRequest(
+async Task<IResult> RejectAcquisitionRequest(
     string id,
     MarketAcquisitionLifecycleRequest lifecycleRequest,
     MarketAcquisitionRequestStore store,
-    CancellationToken token) =>
-    ApplyAcquisitionLifecycleAsync(store.RejectAsync, id, lifecycleRequest, token);
+    CancellationToken token)
+{
+    try
+    {
+        var result = await store.RejectAsync(id, lifecycleRequest, token);
+        return result == null ? Results.NotFound() : Results.Ok(result);
+    }
+    catch (UnauthorizedAccessException)
+    {
+        return InvalidApiKey();
+    }
+    catch (ArgumentException ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+    catch (MarketAcquisitionIdempotencyConflictException ex)
+    {
+        return Results.Conflict(new { error = ex.Message });
+    }
+    catch (MarketAcquisitionInvalidTransitionException ex)
+    {
+        return Results.Conflict(new { error = ex.Message });
+    }
+}
 
 async Task<IResult> CancelAcquisitionRequest(
     HttpRequest request,
@@ -423,15 +678,14 @@ async Task<IResult> CancelAcquisitionRequest(
     MarketAcquisitionRequestStore store,
     CancellationToken token)
 {
-    if (!await IsValidDashboardPostAsync(request, publicOrigin, token))
-        return Results.BadRequest(new { error = "invalid_csrf" });
-
     try
     {
         var cancelled = await store.CancelAsync(id, token);
         return cancelled == null
             ? Results.NotFound()
-            : Results.Redirect($"{request.PathBase}/acquisition?cancelled={Uri.EscapeDataString(id)}");
+            : IsDashboardApiRoute(request) || WantsJsonResponse(request)
+                ? Results.Ok(cancelled)
+                : Results.Redirect($"{request.PathBase}/acquisition?cancelled={Uri.EscapeDataString(id)}");
     }
     catch (MarketAcquisitionInvalidTransitionException ex)
     {
@@ -445,15 +699,14 @@ async Task<IResult> ResendAcquisitionRequest(
     MarketAcquisitionRequestStore store,
     CancellationToken token)
 {
-    if (!await IsValidDashboardPostAsync(request, publicOrigin, token))
-        return Results.BadRequest(new { error = "invalid_csrf" });
-
     try
     {
         var resent = await store.ResendAsync(id, token);
         return resent == null
             ? Results.NotFound()
-            : Results.Redirect($"{request.PathBase}/acquisition?resent={Uri.EscapeDataString(id)}");
+            : IsDashboardApiRoute(request) || WantsJsonResponse(request)
+                ? Results.Ok(resent)
+                : Results.Redirect($"{request.PathBase}/acquisition?resent={Uri.EscapeDataString(id)}");
     }
     catch (MarketAcquisitionInvalidTransitionException ex)
     {
@@ -462,34 +715,63 @@ async Task<IResult> ResendAcquisitionRequest(
 }
 
 Task<IResult> ReportAcquisitionProgress(
+    HttpRequest request,
     string id,
-    MarketAcquisitionLifecycleRequest lifecycleRequest,
     MarketAcquisitionRequestStore store,
     CancellationToken token) =>
-    ApplyAcquisitionLifecycleAsync(store.ReportProgressAsync, id, lifecycleRequest, token);
+    ApplyAcquisitionLifecycleAsync(
+        store.ReportProgressAsync,
+        store.ReportAttemptProgressAsync,
+        id,
+        request,
+        token);
 
 Task<IResult> CompleteAcquisitionRequest(
+    HttpRequest request,
     string id,
-    MarketAcquisitionLifecycleRequest lifecycleRequest,
     MarketAcquisitionRequestStore store,
     CancellationToken token) =>
-    ApplyAcquisitionLifecycleAsync(store.CompleteAsync, id, lifecycleRequest, token);
+    ApplyAcquisitionLifecycleAsync(
+        store.CompleteAsync,
+        store.CompleteAttemptAsync,
+        id,
+        request,
+        token);
 
 Task<IResult> FailAcquisitionRequest(
+    HttpRequest request,
     string id,
-    MarketAcquisitionLifecycleRequest lifecycleRequest,
     MarketAcquisitionRequestStore store,
     CancellationToken token) =>
-    ApplyAcquisitionLifecycleAsync(store.FailAsync, id, lifecycleRequest, token);
+    ApplyAcquisitionLifecycleAsync(
+        store.FailAsync,
+        store.FailAttemptAsync,
+        id,
+        request,
+        token);
 
 static async Task<IResult> ApplyAcquisitionLifecycleAsync(
     Func<string, MarketAcquisitionLifecycleRequest, CancellationToken, Task<MarketAcquisitionRequestView?>> apply,
+    Func<string, MarketAcquisitionAttemptEventRequest, CancellationToken, Task<MarketAcquisitionAttemptEventResult?>> applyAttempt,
     string id,
-    MarketAcquisitionLifecycleRequest lifecycleRequest,
+    HttpRequest request,
     CancellationToken token)
 {
     try
     {
+        using var document = await JsonDocument.ParseAsync(request.Body, cancellationToken: token);
+        var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        if (document.RootElement.TryGetProperty("attemptId", out var attemptIdElement) &&
+            !string.IsNullOrWhiteSpace(attemptIdElement.GetString()))
+        {
+            var attemptRequest = document.Deserialize<MarketAcquisitionAttemptEventRequest>(jsonOptions)
+                ?? throw new ArgumentException("Attempt lifecycle payload is required.");
+            var attemptResult = await applyAttempt(id, attemptRequest, token);
+            return attemptResult == null ? Results.NotFound() : Results.Ok(attemptResult);
+        }
+
+        var lifecycleRequest = document.Deserialize<MarketAcquisitionLifecycleRequest>(jsonOptions)
+            ?? throw new ArgumentException("Lifecycle payload is required.");
         var result = await apply(id, lifecycleRequest, token);
         return result == null ? Results.NotFound() : Results.Ok(result);
     }
@@ -497,11 +779,19 @@ static async Task<IResult> ApplyAcquisitionLifecycleAsync(
     {
         return InvalidApiKey();
     }
+    catch (JsonException ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
     catch (ArgumentException ex)
     {
         return Results.BadRequest(new { error = ex.Message });
     }
     catch (MarketAcquisitionIdempotencyConflictException ex)
+    {
+        return Results.Conflict(new { error = ex.Message });
+    }
+    catch (MarketAcquisitionAttemptSequenceConflictException ex)
     {
         return Results.Conflict(new { error = ex.Message });
     }
@@ -584,6 +874,9 @@ static bool WantsJsonResponse(HttpRequest request)
     return request.Headers.Accept.Any(value => value?.Contains("application/json", StringComparison.OrdinalIgnoreCase) == true);
 }
 
+static bool IsDashboardApiRoute(HttpRequest request) =>
+    request.Path.StartsWithSegments("/api", StringComparison.OrdinalIgnoreCase);
+
 static bool IsAcquisitionPluginRoute(HttpRequest request) =>
     request.Path.StartsWithSegments("/acquisition/requests") &&
     !IsAcquisitionCreate(request) &&
@@ -647,42 +940,6 @@ static string StorageDisplayName(string reportDirectory, string? storageLabel, b
             ? "hosted receiver storage"
             : reportDirectory;
 
-static string SetCsrfCookie(HttpResponse response)
-{
-    var tokenBytes = RandomNumberGenerator.GetBytes(32);
-    var token = Convert.ToBase64String(tokenBytes)
-        .TrimEnd('=')
-        .Replace("+", "-", StringComparison.Ordinal)
-        .Replace("/", "_", StringComparison.Ordinal);
-
-    response.Cookies.Append(
-        "mmf_csrf",
-        token,
-        new CookieOptions
-        {
-            HttpOnly = true,
-            SameSite = SameSiteMode.Strict,
-            IsEssential = true,
-        });
-
-    return token;
-}
-
-static async Task<bool> IsValidDashboardPostAsync(HttpRequest request, string? publicOrigin, CancellationToken token)
-{
-    if (!HasValidOrigin(request, publicOrigin))
-        return false;
-
-    if (!request.HasFormContentType)
-        return false;
-
-    var form = await request.ReadFormAsync(token);
-    var formToken = form["csrf"].ToString();
-    var cookieToken = request.Cookies["mmf_csrf"];
-
-    return MatchesConfiguredKey(formToken, cookieToken);
-}
-
 static async Task<MarketAcquisitionCreateRequest> ReadAcquisitionFormAsync(
     HttpRequest request,
     CancellationToken token)
@@ -690,6 +947,7 @@ static async Task<MarketAcquisitionCreateRequest> ReadAcquisitionFormAsync(
     var form = await request.ReadFormAsync(token);
     var itemId = ParseUInt(form["itemId"].ToString(), "itemId");
     var itemName = form["itemName"].ToString().Trim();
+    var quantityMode = form["quantityMode"].ToString();
     return new MarketAcquisitionCreateRequest
     {
         SchemaVersion = ParseInt(form["schemaVersion"].ToString(), "schemaVersion"),
@@ -699,8 +957,10 @@ static async Task<MarketAcquisitionCreateRequest> ReadAcquisitionFormAsync(
         Region = form["region"].ToString(),
         ItemId = itemId,
         ItemName = string.IsNullOrWhiteSpace(itemName) ? $"Item {itemId}" : itemName,
-        QuantityMode = form["quantityMode"].ToString(),
-        Quantity = ParseUInt(form["quantity"].ToString(), "quantity"),
+        QuantityMode = quantityMode,
+        Quantity = quantityMode == "AllBelowThreshold"
+            ? ParseOptionalUInt(form["quantity"].ToString(), "quantity")
+            : ParseUInt(form["quantity"].ToString(), "quantity"),
         HqPolicy = form["hqPolicy"].ToString(),
         MaxUnitPrice = ParseUInt(form["maxUnitPrice"].ToString(), "maxUnitPrice"),
         MaxTotalGil = ParseOptionalUInt(form["maxTotalGil"].ToString(), "maxTotalGil"),
@@ -737,25 +997,6 @@ static string DefaultXivDataBaseUrl(string? publicOrigin)
         : $"{normalizedPublicOrigin}/api/xivdata";
 }
 
-static bool HasValidOrigin(HttpRequest request, string? publicOrigin)
-{
-    if (string.IsNullOrWhiteSpace(publicOrigin))
-        return true;
-
-    var origin = request.Headers.Origin.ToString();
-    if (!string.IsNullOrWhiteSpace(origin))
-        return string.Equals(origin, publicOrigin, StringComparison.OrdinalIgnoreCase);
-
-    var referer = request.Headers.Referer.ToString();
-    if (!Uri.TryCreate(referer, UriKind.Absolute, out var refererUri))
-        return false;
-
-    return string.Equals(
-        refererUri.GetLeftPart(UriPartial.Authority),
-        publicOrigin,
-        StringComparison.OrdinalIgnoreCase);
-}
-
 static string RenderDashboard(
     IReadOnlyList<ReportSummary> reports,
     IReadOnlyList<CharacterSummary> characters,
@@ -764,8 +1005,7 @@ static string RenderDashboard(
     string storageDisplayName,
     string? deleted,
     string? acquisition,
-    PathString pathBase,
-    string csrfToken)
+    PathString pathBase)
 {
     var rows = new StringBuilder();
     foreach (var report in reports)
@@ -782,7 +1022,6 @@ static string RenderDashboard(
                     <a class="button" href="{Html(AppUrl(pathBase, $"/reports/{report.Id}"))}">View</a>
                     <a class="button" href="{Html(AppUrl(pathBase, $"/reports/{report.Id}/json"))}">JSON</a>
                     <form method="post" action="{Html(AppUrl(pathBase, $"/reports/{report.Id}/delete"))}" onsubmit="return confirm('Delete snapshot {Html(report.Id)}?');">
-                        <input type="hidden" name="csrf" value="{Html(csrfToken)}">
                         <button class="danger" type="submit">Delete</button>
                     </form>
                 </td>
@@ -990,7 +1229,6 @@ static string RenderDashboard(
                         <a class="button" href="{{Html(AppUrl(pathBase, "/diagnostics"))}}">Diagnostics</a>
                         <a class="button" href="{{Html(AppUrl(pathBase, "/"))}}">Refresh</a>
                         <form method="post" action="{{Html(AppUrl(pathBase, "/reports/delete-all"))}}" onsubmit="return confirm('Delete all stored snapshots?');">
-                            <input type="hidden" name="csrf" value="{{Html(csrfToken)}}">
                             <button class="danger" type="submit">Delete All</button>
                         </form>
                     </div>
@@ -1006,7 +1244,6 @@ static string RenderDashboard(
                 <div class="path">Storage: <code>{{Html(storageDisplayName)}}</code></div>
                 <h2>Market Acquisition</h2>
                 <form method="post" action="{{Html(AppUrl(pathBase, "/acquisition/requests"))}}">
-                    <input type="hidden" name="csrf" value="{{Html(csrfToken)}}">
                     <input type="hidden" name="schemaVersion" value="1">
                     <input type="hidden" name="idempotencyKey" value="{{Guid.NewGuid():N}}">
                     <div class="form-grid">
@@ -1015,8 +1252,8 @@ static string RenderDashboard(
                         <label>Region<input name="region" value="North America" required></label>
                         <label>Item ID<input name="itemId" inputmode="numeric" required></label>
                         <label>Item name<input name="itemName" autocomplete="off"></label>
-                        <label>Quantity mode<select name="quantityMode"><option>Exact</option><option>UpTo</option><option>AllBelowThreshold</option></select></label>
-                        <label>Quantity<input name="quantity" inputmode="numeric" required></label>
+                        <label>Quantity mode<select name="quantityMode"><option>TargetQuantity</option><option>AllBelowThreshold</option></select></label>
+                        <label>Target / max quantity<input name="quantity" inputmode="numeric"></label>
                         <label>HQ policy<select name="hqPolicy"><option>Either</option><option>NQOnly</option><option>HQOnly</option></select></label>
                         <label>Max unit price<input name="maxUnitPrice" inputmode="numeric" required></label>
                         <label>Gil cap (optional)<input name="maxTotalGil" inputmode="numeric"></label>
@@ -1056,7 +1293,6 @@ static string RenderAcquisitionDashboard(
     IReadOnlyList<MarketAcquisitionRequestView> acquisitionRequests,
     string? acquisition,
     PathString pathBase,
-    string csrfToken,
     string xivDataBaseUrl)
 {
     var acquisitionNotice = string.IsNullOrWhiteSpace(acquisition)
@@ -1083,7 +1319,7 @@ static string RenderAcquisitionDashboard(
     var latestRequestExpiry = latestRequest == null
         ? "-"
         : FormatAcquisitionExpiry(latestRequest);
-    var queueRows = RenderAcquisitionQueueRows(visibleRequests, pathBase, csrfToken);
+    var queueRows = RenderAcquisitionQueueRows(visibleRequests, pathBase);
     var characterHeader = RenderAcquisitionCharacterHeader(characters, selectedCharacterId, selectedCharacter, pathBase);
     var activeSummary = $"{activeCount:N0} active / {visibleRequests.Count:N0} recent";
     var selectedRequestName = latestRequest == null
@@ -1561,7 +1797,7 @@ static string RenderAcquisitionDashboard(
                             {{characterHeader}}
                         </div>
                         <div class="pane-body">
-                            {{RenderAcquisitionRequestForm(pathBase, csrfToken, targetCharacter, targetWorld, xivDataBaseUrl)}}
+                            {{RenderAcquisitionRequestForm(pathBase, targetCharacter, targetWorld, xivDataBaseUrl)}}
                         </div>
                     </section>
 
@@ -1626,6 +1862,8 @@ static string RenderAcquisitionDashboard(
             <script>
                 const acquisitionQueueRefreshUrl = '{{Html(refreshUrl)}}';
                 let acquisitionResizeState = { active: false, current: null, neighbor: null, startX: 0, tableWidth: 0, currentStart: 0, neighborStart: 0, direction: 1 };
+                let acquisitionRefreshTimer = null;
+                let isStagingAcquisitionQueue = false;
 
                 function getAcquisitionColumnPercent(col) { return Number.parseFloat(col.style.width || '0') || 0; }
                 function findAcquisitionResizePair(columnKey) {
@@ -1691,7 +1929,8 @@ static string RenderAcquisitionDashboard(
                     document.querySelectorAll('#acquisitionQueueTable .separator-hover').forEach(cell => cell.classList.remove('separator-hover'));
                 });
 
-                async function refreshAcquisitionQueue() {
+                async function refreshAcquisitionQueue(force = false) {
+                    if (isStagingAcquisitionQueue && !force) return;
                     try {
                         const response = await fetch(acquisitionQueueRefreshUrl, {
                             headers: { 'Accept': 'application/json' },
@@ -1703,7 +1942,6 @@ static string RenderAcquisitionDashboard(
                             return;
                         }
                         const payload = await response.json();
-                        refreshAcquisitionCsrfToken(payload.csrfToken);
                         document.getElementById('acquisitionQueueBody').innerHTML = payload.queueRows;
                         document.getElementById('acquisitionActiveSummary').textContent = payload.activeSummary;
                         document.getElementById('selectedRequestName').textContent = payload.selectedRequestName;
@@ -1717,11 +1955,15 @@ static string RenderAcquisitionDashboard(
                     }
                 }
 
-                function refreshAcquisitionCsrfToken(csrfToken) {
-                    if (!csrfToken) return;
-                    document.querySelectorAll('input[name="csrf"]').forEach(input => {
-                        input.value = csrfToken;
-                    });
+                function startAcquisitionQueueRefresh() {
+                    stopAcquisitionQueueRefresh();
+                    acquisitionRefreshTimer = window.setInterval(() => refreshAcquisitionQueue(), 3000);
+                }
+
+                function stopAcquisitionQueueRefresh() {
+                    if (acquisitionRefreshTimer == null) return;
+                    window.clearInterval(acquisitionRefreshTimer);
+                    acquisitionRefreshTimer = null;
                 }
 
                 function applyAcquisitionQueueFilter() {
@@ -1736,7 +1978,7 @@ static string RenderAcquisitionDashboard(
                 document.getElementById('acquisitionQueueFilter')?.addEventListener('input', applyAcquisitionQueueFilter);
                 document.getElementById('acquisitionStatusFilter')?.addEventListener('change', applyAcquisitionQueueFilter);
                 wireAcquisitionResizeHandles();
-                window.setInterval(refreshAcquisitionQueue, 3000);
+                startAcquisitionQueueRefresh();
             </script>
         </body>
         </html>
@@ -1764,13 +2006,11 @@ static string RenderAcquisitionCharacterHeader(
 
 static string RenderAcquisitionRequestForm(
     PathString pathBase,
-    string csrfToken,
     string targetCharacter,
     string targetWorld,
     string xivDataBaseUrl) =>
     $$"""
         <form class="request-form" method="post" action="{{Html(AppUrl(pathBase, "/acquisition/requests"))}}" data-xiv-data-base-url="{{Html(xivDataBaseUrl)}}">
-            <input type="hidden" name="csrf" value="{{Html(csrfToken)}}">
             <input type="hidden" name="schemaVersion" value="1">
             <input type="hidden" name="idempotencyKey" value="{{Guid.NewGuid():N}}">
             <input id="selectedItemId" type="hidden" name="itemId">
@@ -1800,8 +2040,8 @@ static string RenderAcquisitionRequestForm(
             <div class="section">
                 <p class="section-title">Purchase Limits</p>
                 <div class="grid">
-                    <label>Quantity mode<select name="quantityMode"><option>Exact</option><option>UpTo</option><option>AllBelowThreshold</option></select></label>
-                    <label>Quantity<input name="quantity" inputmode="numeric" required></label>
+                    <label>Quantity mode<select id="acquisitionQuantityMode" name="quantityMode"><option value="TargetQuantity">Target quantity</option><option value="AllBelowThreshold">All safe listings below max unit</option></select></label>
+                    <label><span id="acquisitionQuantityLabelText">Target quantity</span><input id="acquisitionQuantityInput" name="quantity" inputmode="numeric" required></label>
                     <label>Max unit price<input name="maxUnitPrice" inputmode="numeric" required></label>
                     <label>Gil cap (optional)<input name="maxTotalGil" inputmode="numeric"></label>
                 </div>
@@ -1815,6 +2055,7 @@ static string RenderAcquisitionRequestForm(
             </div>
             <div class="preview">
                 <strong>Request Preview</strong>
+                <div id="acquisitionQuantityModeHelp" class="preview-line">Target quantity buys safe whole listings until the requested quantity is satisfied.</div>
                 <div class="preview-line">Stage a bounded purchase intent, then pick it up manually from the in-game Market Acquisition tab.</div>
                 <div class="chips">
                     <span class="chip warn">Plugin pickup required</span>
@@ -1824,14 +2065,14 @@ static string RenderAcquisitionRequestForm(
             <div class="button-row">
                 <button type="reset">Clear</button>
                 <button type="button" onclick="addAcquisitionQueueRow()">Add to Queue</button>
-                <button class="primary" type="button" onclick="stageAcquisitionQueue()">Stage Queue</button>
+                <button id="acquisitionStageQueueButton" class="primary" type="button" onclick="stageAcquisitionQueue()">Stage Queue</button>
             </div>
             <div id="acquisitionStageStatus" class="stage-status" role="status" aria-live="polite"></div>
             <div class="section">
                 <p class="section-title">Queued Items</p>
                 <table>
                     <thead>
-                        <tr><th>Item</th><th>Qty</th><th>Max Unit</th><th>Gil Cap</th><th></th></tr>
+                        <tr><th>Item</th><th>Mode / Qty</th><th>Max Unit</th><th>Gil Cap</th><th></th></tr>
                     </thead>
                     <tbody id="acquisitionQueueRows">
                         <tr><td colspan="5" class="empty-cell">No queued items.</td></tr>
@@ -1857,6 +2098,8 @@ static string RenderAcquisitionRequestForm(
                 button.dataset.itemName || '',
                 button.dataset.itemType || '');
         });
+        document.getElementById('acquisitionQuantityMode')?.addEventListener('change', updateAcquisitionQuantityMode);
+        updateAcquisitionQuantityMode();
 
         async function searchAcquisitionItems(query) {
             const suggestions = document.getElementById('acquisitionItemSuggestions');
@@ -1922,13 +2165,30 @@ static string RenderAcquisitionRequestForm(
         }
 
         function validateAcquisitionQueueRow(row) {
-            if (!isPositiveWholeNumber(row.quantity)) return 'Quantity must be a positive whole number.';
+            if (row.quantityMode === 'TargetQuantity' && !isPositiveWholeNumber(row.quantity)) return 'Target quantity must be a positive whole number.';
+            if (row.quantityMode === 'AllBelowThreshold' && String(row.quantity ?? '').trim() && !isWholeNumber(row.quantity)) return 'Max quantity must be blank, zero, or a positive whole number.';
             if (!isPositiveWholeNumber(row.maxUnitPrice)) return 'Max unit price must be a positive whole number.';
             if (String(row.maxTotalGil ?? '').trim() && !isWholeNumber(row.maxTotalGil)) return 'Gil cap must be blank, zero, or a positive whole number.';
             if (!row.quantityMode) return 'Quantity mode is required.';
             if (!row.hqPolicy) return 'HQ policy is required.';
             if (!row.worldMode) return 'World mode is required.';
             return '';
+        }
+
+        function updateAcquisitionQuantityMode() {
+            const mode = document.getElementById('acquisitionQuantityMode')?.value || 'TargetQuantity';
+            const label = document.getElementById('acquisitionQuantityLabelText');
+            const input = document.getElementById('acquisitionQuantityInput');
+            const help = document.getElementById('acquisitionQuantityModeHelp');
+            if (label) label.textContent = mode === 'AllBelowThreshold' ? 'Max quantity (optional)' : 'Target quantity';
+            if (help) {
+                help.textContent = mode === 'AllBelowThreshold'
+                    ? 'All safe listings below max unit buys every safe whole listing at or below the max price. Max quantity is optional; whole-stack overage is expected when stacks are larger than the remaining cap.'
+                    : 'Target quantity buys safe whole listings until the requested quantity is satisfied. Whole-stack overage can happen on the final listing.';
+            }
+            if (!input) return;
+            input.required = mode !== 'AllBelowThreshold';
+            input.placeholder = mode === 'AllBelowThreshold' ? 'No cap' : '';
         }
 
         function isPositiveWholeNumber(value) {
@@ -1943,8 +2203,20 @@ static string RenderAcquisitionRequestForm(
             const body = document.getElementById('acquisitionQueueRows');
             if (!body) return;
             body.innerHTML = acquisitionQueue.length
-                ? acquisitionQueue.map((row, index) => `<tr><td>${escapeHtml(row.itemName)}<br><span>Item ${row.itemId}</span></td><td>${escapeHtml(row.quantity)}</td><td>${escapeHtml(row.maxUnitPrice)}</td><td>${formatOptionalGilCap(row.maxTotalGil)}</td><td><button type="button" onclick="removeAcquisitionQueueRow(${index})">Remove</button></td></tr>`).join('')
+                ? acquisitionQueue.map((row, index) => `<tr><td>${escapeHtml(row.itemName)}<br><span>Item ${row.itemId}</span></td><td>${formatQuantityMode(row)}<br><span>${formatOptionalQuantity(row)}</span></td><td>${escapeHtml(row.maxUnitPrice)}</td><td>${formatOptionalGilCap(row.maxTotalGil)}</td><td><button type="button" onclick="removeAcquisitionQueueRow(${index})">Remove</button></td></tr>`).join('')
                 : '<tr><td colspan="5" class="empty-cell">No queued items.</td></tr>';
+        }
+
+        function formatQuantityMode(row) {
+            return row.quantityMode === 'AllBelowThreshold'
+                ? 'All safe below max'
+                : 'Target';
+        }
+
+        function formatOptionalQuantity(row) {
+            const trimmed = String(row.quantity ?? '').trim();
+            if (row.quantityMode === 'AllBelowThreshold' && (!trimmed || trimmed === '0')) return 'No cap';
+            return escapeHtml(trimmed);
         }
 
         function formatOptionalGilCap(value) {
@@ -1963,28 +2235,110 @@ static string RenderAcquisitionRequestForm(
                 setAcquisitionStageStatus('Queue at least one resolved item first.', true);
                 return;
             }
-            let staged = 0;
-            const failures = [];
-            const currentCsrf = new FormData(form).get('csrf');
-            for (const row of acquisitionQueue) {
-                row.csrf = currentCsrf;
+            const startedAt = performance.now();
+            const stageButton = document.getElementById('acquisitionStageQueueButton');
+            isStagingAcquisitionQueue = true;
+            stopAcquisitionQueueRefresh();
+            if (stageButton) stageButton.disabled = true;
+            setAcquisitionStageStatus(`Staging 0 of ${acquisitionQueue.length} acquisition rows...`, false);
+            console.info('[MarketMafioso] Staging acquisition queue', { rows: acquisitionQueue.length });
+
+            let results;
+            try {
+                results = await stageAcquisitionRowsInBatches(form, acquisitionQueue, 4, (completed, total, row, result) => {
+                    const status = result.ok ? 'staged' : 'failed';
+                    setAcquisitionStageStatus(`Staging ${completed} of ${total} acquisition rows... ${row.itemName} ${status}.`, !result.ok, result.ok);
+                    console.debug('[MarketMafioso] Staged acquisition row', {
+                        itemName: row.itemName,
+                        itemId: row.itemId,
+                        ok: result.ok,
+                        status: result.status,
+                        elapsedMs: Math.round(result.elapsedMs)
+                    });
+                });
+            } finally {
+                isStagingAcquisitionQueue = false;
+                if (stageButton) stageButton.disabled = false;
+                startAcquisitionQueueRefresh();
+            }
+
+            const staged = results.filter(result => result.ok).length;
+            const failures = results
+                .filter(result => !result.ok)
+                .map(result => `${result.row.itemName}: ${result.error}`);
+            console.info('[MarketMafioso] Acquisition queue staging finished', {
+                staged,
+                total: acquisitionQueue.length,
+                failed: failures.length,
+                elapsedMs: Math.round(performance.now() - startedAt)
+            });
+
+            if (staged === acquisitionQueue.length) {
+                window.location.href = '{{Html(AppUrl(pathBase, "/acquisition"))}}';
+            } else {
+                setAcquisitionStageStatus(`${staged} of ${acquisitionQueue.length} acquisition rows staged. ${failures.join(' ')}`, true);
+            }
+        }
+
+        async function stageAcquisitionRowsInBatches(form, rows, batchSize, onSettled) {
+            const results = new Array(rows.length);
+            let nextIndex = 0;
+            let completed = 0;
+            const workerCount = Math.min(batchSize, rows.length);
+
+            async function worker() {
+                while (nextIndex < rows.length) {
+                    const index = nextIndex++;
+                    const row = rows[index];
+                    const result = await stageAcquisitionRow(form, row);
+                    results[index] = result;
+                    completed++;
+                    onSettled(completed, rows.length, row, result);
+                }
+            }
+
+            await Promise.all(Array.from({ length: workerCount }, () => worker()));
+            return results;
+        }
+
+        async function stageAcquisitionRow(form, row) {
+            const result = await postAcquisitionQueueRow(form, row);
+            return { ...result, row };
+        }
+
+        async function postAcquisitionQueueRow(form, row) {
+            const startedAt = performance.now();
+            try {
                 const response = await fetch(form.action, {
                     method: 'POST',
                     body: new URLSearchParams(row),
                     headers: {
                         'Accept': 'application/json'
-                    }
+                    },
+                    credentials: 'same-origin'
                 });
                 if (response.ok) {
-                    staged++;
-                } else {
-                    failures.push(`${row.itemName}: ${await readAcquisitionStageError(response)}`);
+                    return { ok: true, status: response.status, elapsedMs: performance.now() - startedAt };
                 }
-            }
-            if (staged === acquisitionQueue.length) {
-                window.location.href = '{{Html(AppUrl(pathBase, "/acquisition"))}}';
-            } else {
-                setAcquisitionStageStatus(`${staged} of ${acquisitionQueue.length} acquisition rows staged. ${failures.join(' ')}`, true);
+
+                return {
+                    ok: false,
+                    status: response.status,
+                    error: await readAcquisitionStageError(response),
+                    elapsedMs: performance.now() - startedAt
+                };
+            } catch (error) {
+                console.error('[MarketMafioso] Acquisition row staging request failed.', {
+                    itemName: row.itemName,
+                    itemId: row.itemId,
+                    error
+                });
+                return {
+                    ok: false,
+                    status: 0,
+                    error: error instanceof Error ? error.message : 'network_error',
+                    elapsedMs: performance.now() - startedAt
+                };
             }
         }
 
@@ -2022,15 +2376,14 @@ static string RenderAcquisitionRequestForm(
 
 static string RenderAcquisitionQueueRows(
     IReadOnlyList<MarketAcquisitionRequestView> requests,
-    PathString pathBase,
-    string csrfToken)
+    PathString pathBase)
 {
     if (requests.Count == 0)
         return """<tr><td colspan="8" class="empty-cell">No acquisition requests yet.</td></tr>""";
 
     return string.Join(Environment.NewLine, requests.Select(request =>
     {
-        var actions = RenderAcquisitionRequestActions(request, pathBase, csrfToken);
+        var actions = RenderAcquisitionRequestActions(request, pathBase);
         var latestEvent = RenderAcquisitionLatestEvent(request);
         return
         $$"""
@@ -2050,8 +2403,7 @@ static string RenderAcquisitionQueueRows(
 
 static object BuildAcquisitionQueueUpdate(
     IReadOnlyList<MarketAcquisitionRequestView> acquisitionRequests,
-    PathString pathBase,
-    string csrfToken)
+    PathString pathBase)
 {
     var visibleRequests = VisibleAcquisitionQueueRequests(acquisitionRequests);
     var activeCount = visibleRequests.Count(request =>
@@ -2063,13 +2415,12 @@ static object BuildAcquisitionQueueUpdate(
 
     return new
     {
-        queueRows = RenderAcquisitionQueueRows(visibleRequests, pathBase, csrfToken),
+        queueRows = RenderAcquisitionQueueRows(visibleRequests, pathBase),
         activeSummary = $"{activeCount:N0} active / {visibleRequests.Count:N0} recent",
         selectedRequestName = latestRequest == null ? "None selected" : FormatAcquisitionItem(latestRequest),
         latestRequestStatus = latestRequest == null ? "Idle" : FormatAcquisitionStatus(latestRequest.Status),
         latestRequestEvent = latestRequest == null ? "-" : FormatAcquisitionLatestEvent(latestRequest),
         latestRequestExpiry = latestRequest == null ? "-" : FormatAcquisitionExpiry(latestRequest),
-        csrfToken,
     };
 }
 
@@ -2083,8 +2434,7 @@ static IReadOnlyList<MarketAcquisitionRequestView> VisibleAcquisitionQueueReques
 
 static string RenderAcquisitionRequestActions(
     MarketAcquisitionRequestView request,
-    PathString pathBase,
-    string csrfToken)
+    PathString pathBase)
 {
     var canCancel = request.Status is MarketAcquisitionStatuses.PendingPickup
         or MarketAcquisitionStatuses.Claimed
@@ -2105,7 +2455,6 @@ static string RenderAcquisitionRequestActions(
     {
         buttons.Append($$"""
             <form method="post" action="{{Html(AppUrl(pathBase, $"/acquisition/requests/{Uri.EscapeDataString(request.Id)}/cancel"))}}" onsubmit="return confirm('Cancel this acquisition request?');">
-                <input type="hidden" name="csrf" value="{{Html(csrfToken)}}">
                 <button type="submit">Cancel</button>
             </form>
             """);
@@ -2115,7 +2464,6 @@ static string RenderAcquisitionRequestActions(
     {
         buttons.Append($$"""
             <form method="post" action="{{Html(AppUrl(pathBase, $"/acquisition/requests/{Uri.EscapeDataString(request.Id)}/resend"))}}">
-                <input type="hidden" name="csrf" value="{{Html(csrfToken)}}">
                 <button type="submit">Resend</button>
             </form>
             """);
@@ -2821,7 +3169,7 @@ static string RenderDiagnostics(IReadOnlyList<ReportSummary> reports, PathString
         """;
 }
 
-static string RenderReportDetails(StoredInventoryReport stored, InventorySnapshotView view, PathString pathBase, string csrfToken)
+static string RenderReportDetails(StoredInventoryReport stored, InventorySnapshotView view, PathString pathBase)
 {
     var json = JsonSerializer.Serialize(stored, new JsonSerializerOptions(JsonSerializerDefaults.Web)
     {
@@ -2901,7 +3249,6 @@ static string RenderReportDetails(StoredInventoryReport stored, InventorySnapsho
                         <a class="button" href="{{Html(AppUrl(pathBase, $"/reports/{stored.Id}/json"))}}">JSON</a>
                         <a class="button" href="{{Html(AppUrl(pathBase, $"/reports/{stored.Id}/json"))}}">Parsed JSON</a>
                         <form method="post" action="{{Html(AppUrl(pathBase, $"/reports/{stored.Id}/delete"))}}" onsubmit="return confirm('Delete snapshot {{Html(stored.Id)}}?');">
-                            <input type="hidden" name="csrf" value="{{Html(csrfToken)}}">
                             <button class="danger" type="submit">Delete</button>
                         </form>
                     </div>

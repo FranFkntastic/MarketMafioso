@@ -6,14 +6,15 @@ Roadmap: `docs/design/2026-06-25-market-acquisition-roadmap.md`
 
 Add a client-side MarketMafioso module that helps buy market board stock for a requested item below a configured price threshold.
 
-The first version should be semi-automatic:
+The final loop should be locally launched and then autonomous:
 
 - The user creates an acquisition request in the browser dashboard.
 - The server stores that request for short-lived plugin pickup.
 - The plugin fetches pending dashboard requests only when the user explicitly starts pickup from `/mmf`.
 - MarketMafioso can guide or automate travel between eligible worlds.
-- The user confirms once per world batch before purchases begin on that world.
-- MarketMafioso does not ask before every individual purchase in a confirmed batch.
+- The user accepts and launches the route locally.
+- MarketMafioso does not ask for routine per-world or per-purchase input after launch.
+- MarketMafioso stops and asks for intervention only for catastrophic, ambiguous, or explicitly unsafe states.
 
 The important boundary: the browser dashboard can stage intent, but the plugin owns pickup, local acceptance, live in-game validation, and execution. Remote market data can propose a route, but live in-game market board listings are the authority before a purchase is sent.
 
@@ -118,7 +119,7 @@ Dalamud and FFXIVClientStructs expose enough market board state to design a safe
 
 - No constant background command polling.
 - No server-pushed control channel.
-- No per-purchase confirmation prompts after a world batch is confirmed.
+- No routine user prompts after the accepted route is launched.
 - No unattended cross-world purchasing from stale remote data.
 - No blind sweep of every world in a region in the default mode.
 - No selling, undercutting, repricing, flipping, or retainer-sale automation.
@@ -132,6 +133,7 @@ Dalamud and FFXIVClientStructs expose enough market board state to design a safe
    - Item name or item id.
    - Maximum unit price.
    - Quantity mode: target quantity or all listings below threshold.
+   - Target quantity for `TargetQuantity`, or optional max quantity for `AllBelowThreshold`.
    - HQ policy: NQ only, HQ only, or either.
    - World source: recommended worlds from market data, selected worlds, current world only, or explicit all-world sweep mode.
    - Optional total gil cap. Blank or zero means no total spend cap; max unit price remains mandatory.
@@ -148,9 +150,8 @@ Dalamud and FFXIVClientStructs expose enough market board state to design a safe
    - MarketMafioso waits for the user to open the market board, or opens/searches it if that path is implemented safely.
    - MarketMafioso loads live listings for the item.
    - MarketMafioso builds a confirmed candidate pool from live listings at or below the max unit price.
-   - The current read-only slice can already dry-run that candidate pool for the current visible market-board result set and report would-buy/skip rows without purchasing.
-   - MarketMafioso presents one world-batch confirmation.
-   - After confirmation, MarketMafioso purchases still-valid confirmed listings in lowest-price order until the target quantity, all-below-threshold rule, optional gil cap, inventory state, or a safety stop ends the batch.
+   - The current live candidate planner can already classify that candidate pool for the current visible market-board result set and report buy/skip rows.
+   - MarketMafioso purchases still-valid confirmed listings in lowest-price order until the target quantity, all-below-threshold rule, optional max quantity, optional gil cap, inventory state, or a safety stop ends the batch.
 11. The run ends as complete, paused, stopped, cancelled, or failed with diagnostics.
 
 ## Command Contract
@@ -173,8 +174,8 @@ Example:
     "itemName": "Darksteel Nugget",
     "maxUnitPrice": 430,
     "maxTotalGil": 160000,
-    "quantityMode": "upTo",
-    "quantity": 400,
+    "quantityMode": "TargetQuantity",
+    "targetQuantity": 400,
     "hqPolicy": "either",
     "worldMode": "recommended",
     "dataCenter": "Crystal"
@@ -210,24 +211,30 @@ Claim must be atomic. The server may claim a request only when all conditions ar
 
 On successful claim, the server records `claimedAtUtc`, `claimedBy`, `claimToken`, and `claimExpiresAtUtc`. `expiresAtUtc` is pickup expiry. `claimExpiresAtUtc` is local review expiry; first implementation should use 5 minutes. Claimed requests that are not accepted or rejected before `claimExpiresAtUtc` become `Expired` and are never returned as pending again.
 
-## Batch Confirmation Contract
+## Route Launch And Intervention Contract
 
-The confirmation prompt should be world-scoped, not purchase-scoped.
+The user-facing approval point is route launch, not a per-world purchase checkpoint. Once launched, the plugin owns execution until the route completes, is paused/stopped locally, or reaches an intervention state.
 
-It should display:
+The launch summary should display:
 
-- World name and data center.
 - Item name and id.
 - HQ policy.
+- Quantity rule: target quantity or all below threshold.
+- Optional max quantity for `AllBelowThreshold`.
+- Max unit price.
+- Optional gil cap.
+- Planned worlds and data centers in route order.
 - Remote data source and data age.
-- Live market board refresh age if available.
-- Planned quantity.
-- Number of listings to buy.
-- Cheapest and most expensive unit price in the batch.
-- Estimated subtotal, tax if known, and maximum possible gil spend.
-- Remaining run budget.
+- Estimated route quantity and spend.
 
-The confirmation should be invalidated and re-shown if the live listing set changes before purchases begin.
+Intervention states should display enough context to decide whether to stop, restart, or recover manually:
+
+- Current world and expected world.
+- Current item/search state and expected item id.
+- Last live listing refresh age.
+- Last safe candidate count.
+- Purchase attempt result or failure classification.
+- Whether the route can be restarted safely or must be cancelled.
 
 ## Data Source And Plan Boundary
 
@@ -426,7 +433,6 @@ Suggested states:
 - `SearchingMarketBoardItem`
 - `WaitingForLiveListings`
 - `ReconcilingLiveListings`
-- `AwaitingBatchConfirmation`
 - `PurchasingBatch`
 - `WaitingForPurchaseResult`
 - `WorldBatchComplete`
@@ -481,7 +487,7 @@ public interface IMarketBoardPurchaseExecutor
 }
 ```
 
-First implementation mode should include a read-only dry run:
+First implementation mode should include live candidate reconciliation:
 
 - Load the live item search.
 - Capture listings.
@@ -504,7 +510,7 @@ Primary controls:
 - Phase 3 pickup is one-shot manual fetch plus manual retry. Do not show a countdown or `Stop Fetching` button until timed polling is implemented.
 - Pending request summary.
 - `Accept Request` and `Reject` buttons.
-- Local runner controls after acceptance: `Prepare`, `Dry Run`, `Pause`, `Stop`.
+- Local runner controls after acceptance: `Prepare`, `Start`, `Pause`, `Stop`, and `Restart`.
 
 The tab should match the existing ImGui style shown by Inventory Reporter and Workshop Prep:
 
@@ -546,7 +552,7 @@ Actions:
 
 Before acceptance, show character/world, item id/name, quantity mode, HQ policy, max unit price, max total gil if present, world mode, request age, expiry, and source. Disable `Accept Request` if max unit price, item id, quantity mode, or target character/world is missing or mismatched.
 
-Claimed but unaccepted requests persist enough local state to survive plugin reload: request summary, claim token, and lifecycle idempotency keys. If the dashboard cancels or resends the request while the plugin still has stale local claim state, the plugin can forget the local claim and fetch again. `Accept Request` must not start planning, travel, market-board reads, dry-run execution, or purchases. It only records local consent and moves the request into the local accepted state.
+Claimed but unaccepted requests persist enough local state to survive plugin reload: request summary, claim token, and lifecycle idempotency keys. If the dashboard cancels or resends the request while the plugin still has stale local claim state, the plugin can forget the local claim and fetch again. `Accept Request` must not start planning, travel, market-board reads, candidate execution, or purchases. It only records local consent and moves the request into the local accepted state.
 
 ### Local Runner
 
@@ -566,7 +572,7 @@ Compact summary:
 - Last validation result.
 - Last server progress result.
 
-Use action-specific labels instead of ambiguous `Dry Run` where possible: `Prepare Plan`, `Read Market Board`, `Dry Run Batch`, and `Start Guided Run`. Disabled controls must have adjacent muted text explaining the missing prerequisite.
+Use action-specific labels such as `Prepare Plan`, `Start Route`, `Pause`, `Stop`, and `Restart`. Disabled controls must have adjacent muted text explaining the missing prerequisite.
 
 Optional world table:
 
@@ -585,22 +591,22 @@ Small text block, not a separate pane:
 - Last validation failure.
 - Diagnostic dump path if one exists.
 
-### Confirmation UI
+### Route Launch And Intervention UI
 
-There are two separate confirmations:
+There is one normal user approval point before purchasing:
 
 - Local request acceptance confirms intent only.
-- World-batch confirmation authorizes the next batch after live listing reconciliation.
+- Route launch starts the autonomous route and purchase loop.
 
-World-batch confirmation must be an explicit ImGui confirmation block or popup that lists world, item, HQ policy, quantity rule, confirmed listing count, cheapest and highest unit price, estimated spend, remaining gil cap when configured, market data age, live refresh time, and exact stop conditions. The primary button should read `Confirm This World Batch`.
+The route launch block should list item, HQ policy, quantity rule, max unit price, optional gil cap, optional max quantity, planned worlds/data centers, estimated route quantity, estimated spend, and exact stop conditions. The primary button should read `Start Route`.
 
-If live listings, current world, current search item, price, quantity, or remaining budget change after confirmation but before the first purchase, immediately invalidate the confirmation, disable the batch action, and show `Live listings changed; reconcile again before continuing.`
+After launch, the main UI should show compact route status and clear intervention banners. If current world, current search item, price, quantity, remaining budget, inventory state, purchase result, or UI state becomes ambiguous, stop the route and show the intervention state instead of asking for routine confirmation.
 
-Prefer inline confirmation for low-risk actions to match the existing VIWI queue sync pattern. Reserve modal popups for high-risk world-batch purchase confirmation, and keep them compact enough for the current `MainWindow` minimum size.
+Prefer inline route launch and intervention controls to match the existing VIWI queue sync pattern. Reserve modal popups for catastrophic failures that must not be missed, and keep them compact enough for the current `MainWindow` minimum size.
 
 ### Error States
 
-Every failed pickup, plan, live-read, travel, confirmation, and purchase state must produce one visible user-facing status line and one diagnostic detail string. Never show only `Failed`; include the state name and the specific failed precondition or response.
+Every failed pickup, plan, live-read, travel, route launch, intervention, and purchase state must produce one visible user-facing status line and one diagnostic detail string. Never show only `Failed`; include the state name and the specific failed precondition or response.
 
 Known safe stops are item mismatch, world mismatch, market board not open, wrong search item, listing disappeared, price above threshold, budget exceeded, insufficient gil, inventory full, ambiguous listing selection, expired request, auth failed, and unknown purchase result. Unknown states stop the runner by default.
 
@@ -615,12 +621,13 @@ Known safe stops are item mismatch, world mismatch, market board not open, wrong
 - Purchase only from a confirmed candidate pool built from live market board rows read during the current run.
 - The first confirmed-candidate implementation is read-only: after `Read Live Listings`, the plugin sorts visible live rows by unit price and reports `WouldBuy`/`Skipped` decisions without selecting rows or sending purchases.
 - Lowest confirmed live unit price wins. If a newly discovered below-threshold listing is cheaper than listings on later planned worlds, buy the cheaper confirmed listing first.
-- Remove the old `Exact` and `UpTo` quantity semantics from new requests. `TargetQuantity` replaces both and buys safe whole stacks until the target is satisfied or safe stock runs out. Harmless whole-stack overage is allowed.
-- `AllBelowThreshold` buys every confirmed live listing at or below the max unit price, optionally bounded by a configured gil cap.
+- Remove `Exact` and `UpTo` quantity semantics from code, tests, dashboard UI, validation, and planner normalization. `TargetQuantity` buys safe whole stacks until the target is satisfied or safe stock runs out. Harmless whole-stack overage is allowed.
+- `AllBelowThreshold` buys every confirmed live listing at or below the max unit price, optionally bounded by a configured gil cap and/or optional max quantity.
 - Never keep purchasing after a purchase response error unless the error is explicitly classified as safe to continue.
 - Stop on item mismatch, world mismatch, market board search mismatch, insufficient gil, inventory full, unknown confirmation prompt, or ambiguous listing selection.
-- If live listings differ from the confirmed batch before the first purchase, invalidate the confirmation and rebuild the confirmed candidate pool.
-- If live listings differ after a successful purchase, re-read and continue only with still-valid listings under the original batch confirmation.
+- If live listings differ before or after a purchase, re-read and continue automatically only with still-valid listings under the configured request limits.
+- Favorable drift such as cheaper replacement stock or more below-threshold stock is accepted automatically.
+- Ambiguous drift stops the route for intervention.
 
 ## Testing Plan
 
@@ -637,7 +644,7 @@ Unit tests:
 - Planner groups listings into world batches.
 - Planner excludes non-promising worlds by default.
 - Planner supports explicit all-world sweep mode separately from recommended mode.
-- Batch confirmation invalidates when live listings change.
+- Route execution stops for intervention when live listings become ambiguous.
 - Live reconciliation rejects item id, HQ, world, quantity, and price mismatches.
 - Purchase loop stops at budget, quantity, or unsafe purchase result.
 
@@ -657,11 +664,11 @@ Manual verification:
 - Confirm wrong-character requests do not appear.
 - Confirm recommended mode only includes worlds with supporting listings under the threshold.
 - Confirm all-world sweep is visually and behaviorally distinct from recommended mode.
-- Dry-run live listing capture on a common item.
-- Dry-run on a mixed HQ/NQ item.
-- Dry-run after listings change externally.
+- Live candidate live listing capture on a common item.
+- Live candidate on a mixed HQ/NQ item.
+- Live candidate after listings change externally.
 - One-item low-value purchase test with a strict gil cap.
-- Multi-listing world-batch purchase test with one confirmation.
+- Multi-listing route purchase test after one local launch.
 
 ## Implementation Slices
 
@@ -675,7 +682,7 @@ Manual verification:
 - Display pending request summary and accept/reject controls.
 - No game UI automation and no purchases.
 
-### Slice 2: Planner And UI Dry Run
+### Slice 2: Planner And Candidate UI
 
 - Add acquisition plan DTOs.
 - Add Universalis-backed plan source.
@@ -713,15 +720,15 @@ Manual verification:
 - Detect arrival/current world automatically before probing each destination.
 - Submit the accepted item name to the market board item search addon after arrival.
 - Retry the read-only live listing probe after search submission so the user does not need to press `Read Live Listings` manually after Lifestream opens the market board.
-- Add batch confirmation UI.
-- Add dry-run batch execution.
+- Add route launch and intervention UI.
+- Add live candidate batch execution.
 - Keep purchase executor disabled by default.
 
 ### Slice 5: Guarded Purchase Executor
 
-- Add purchase executor behind an explicit setting.
+- Add purchase executor behind local route launch.
 - Revalidate before every purchase send.
-- Confirm once per world batch.
+- Continue autonomously after launch until completion or intervention.
 - Stop on unsafe or unknown response.
 - Add tests for every stop condition.
 
@@ -735,13 +742,13 @@ Manual verification:
 
 - Acquisition scope is region-wide by default. Recommended mode may consider all worlds in the configured FFXIV region, but it emits only worlds with supporting listings under the threshold.
 - Cross-data-center automated travel remains gated behind the regional travel probe. Until that probe passes, region-wide plans can still be executed through guided/manual travel.
-- Quantity mode starts with `TargetQuantity` and `AllBelowThreshold`. The old `Exact` and `UpTo` aliases should be removed from new dashboard requests because they are not functionally unique under live, whole-stack purchase execution.
+- Quantity mode starts with `TargetQuantity` and `AllBelowThreshold`. `Exact` and `UpTo` should be removed from code because they are not functionally unique under live, whole-stack purchase execution.
 - HQ policy defaults to `Either`, with explicit `NQ only` and `HQ only` options available in the dashboard request form.
 - Purchase execution requires live in-game listing validation. Fresh external market upload age is displayed and used for planning confidence, but it is not the final purchase authority.
 - First planning uses direct Universalis-backed threshold filtering. A Craft Architect-quality planning endpoint is a later integration, not a dependency for the first implementation.
 
 ## Remaining Investigation Gates
 
-- Live market board probe must prove the current patch's listing fields, loading/no-listing states, row identity tuple, and pagination behavior before dry-run reconciliation is accepted.
+- Live market board probe must prove the current patch's listing fields, loading/no-listing states, row identity tuple, and pagination behavior before live candidate reconciliation is accepted.
 - Purchase probe must prove the purchase packet path, success/failure observation, listing-disappeared behavior, price-change behavior, inventory-full behavior, and insufficient-gil behavior before any purchase executor can merge.
 - World travel probe must prove visible preconditions, action steps, postconditions, timeout behavior, and failure surfaces before automated travel can merge.

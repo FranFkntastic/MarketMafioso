@@ -99,6 +99,52 @@ public sealed class SqliteSchemaMigrator
             PRIMARY KEY (dashboard_user_id, account_id)
         );
 
+        CREATE TABLE IF NOT EXISTS dashboard_sessions (
+            id TEXT PRIMARY KEY,
+            dashboard_user_id INTEGER NOT NULL REFERENCES dashboard_users(id) ON DELETE CASCADE,
+            token_hash TEXT NOT NULL UNIQUE,
+            created_at_utc TEXT NOT NULL,
+            expires_at_utc TEXT NOT NULL,
+            last_seen_at_utc TEXT NOT NULL,
+            revoked_at_utc TEXT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS diagnostic_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            occurred_at_utc TEXT NOT NULL,
+            received_at_utc TEXT NOT NULL,
+            source TEXT NOT NULL,
+            category TEXT NOT NULL,
+            type TEXT NOT NULL,
+            severity TEXT NOT NULL,
+            outcome TEXT NULL,
+            message TEXT NOT NULL,
+            correlation_id TEXT NULL,
+            account_id INTEGER NULL,
+            dashboard_user_id INTEGER NULL,
+            dashboard_session_id TEXT NULL,
+            plugin_instance_id TEXT NULL,
+            acquisition_request_id TEXT NULL,
+            route_run_id TEXT NULL,
+            route_stop_id TEXT NULL,
+            purchase_attempt_id TEXT NULL,
+            snapshot_id TEXT NULL,
+            item_id INTEGER NULL,
+            item_name TEXT NULL,
+            world TEXT NULL,
+            character_name TEXT NULL,
+            http_method TEXT NULL,
+            route_pattern TEXT NULL,
+            status_code INTEGER NULL,
+            duration_ms INTEGER NULL,
+            exception_type TEXT NULL,
+            exception_message TEXT NULL,
+            payload_summary_json TEXT NULL,
+            payload_raw_json TEXT NULL,
+            payload_size_bytes INTEGER NULL,
+            payload_sha256 TEXT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS ingest_keys (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
@@ -186,6 +232,12 @@ public sealed class SqliteSchemaMigrator
         CREATE INDEX IF NOT EXISTS idx_inventory_items_bag ON inventory_items(bag_id, sort_order);
         CREATE INDEX IF NOT EXISTS idx_inventory_items_item ON inventory_items(item_id);
         CREATE INDEX IF NOT EXISTS idx_retainer_market_listings_owner ON retainer_market_listings(owner_id, sort_order);
+        CREATE INDEX IF NOT EXISTS idx_diagnostic_events_occurred ON diagnostic_events(occurred_at_utc DESC);
+        CREATE INDEX IF NOT EXISTS idx_diagnostic_events_category ON diagnostic_events(category, occurred_at_utc DESC);
+        CREATE INDEX IF NOT EXISTS idx_diagnostic_events_severity ON diagnostic_events(severity, occurred_at_utc DESC);
+        CREATE INDEX IF NOT EXISTS idx_diagnostic_events_correlation ON diagnostic_events(correlation_id);
+        CREATE INDEX IF NOT EXISTS idx_diagnostic_events_acquisition ON diagnostic_events(acquisition_request_id);
+        CREATE INDEX IF NOT EXISTS idx_diagnostic_events_snapshot ON diagnostic_events(snapshot_id);
 
         INSERT OR IGNORE INTO schema_migrations (version, applied_at_utc)
         VALUES (1, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'));

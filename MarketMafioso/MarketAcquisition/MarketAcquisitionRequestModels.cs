@@ -44,6 +44,27 @@ public record MarketAcquisitionRequestView
 
     [JsonPropertyName("worldMode")]
     public string WorldMode { get; init; } = string.Empty;
+
+    [JsonPropertyName("latestAttemptId")]
+    public string? LatestAttemptId { get; init; }
+
+    [JsonPropertyName("latestAttemptSequence")]
+    public long? LatestAttemptSequence { get; init; }
+
+    [JsonPropertyName("latestAttemptEventType")]
+    public string? LatestAttemptEventType { get; init; }
+
+    [JsonPropertyName("latestAttemptPhase")]
+    public string? LatestAttemptPhase { get; init; }
+
+    [JsonPropertyName("latestAttemptWorld")]
+    public string? LatestAttemptWorld { get; init; }
+
+    [JsonPropertyName("latestAttemptResult")]
+    public string? LatestAttemptResult { get; init; }
+
+    [JsonPropertyName("latestAttemptPluginVersion")]
+    public string? LatestAttemptPluginVersion { get; init; }
 }
 
 public sealed record MarketAcquisitionClaimView : MarketAcquisitionRequestView
@@ -92,6 +113,63 @@ public sealed record MarketAcquisitionLifecycleRequest
 
     [JsonPropertyName("message")]
     public string? Message { get; init; }
+
+    [JsonPropertyName("reason")]
+    public string? Reason { get; init; }
+}
+
+public sealed record MarketAcquisitionAttemptEventRequest
+{
+    [JsonPropertyName("claimToken")]
+    public string ClaimToken { get; init; } = string.Empty;
+
+    [JsonPropertyName("idempotencyKey")]
+    public string IdempotencyKey { get; init; } = string.Empty;
+
+    [JsonPropertyName("pluginInstanceId")]
+    public string PluginInstanceId { get; init; } = string.Empty;
+
+    [JsonPropertyName("runnerState")]
+    public string? RunnerState { get; init; }
+
+    [JsonPropertyName("message")]
+    public string? Message { get; init; }
+
+    [JsonPropertyName("reason")]
+    public string? Reason { get; init; }
+
+    [JsonPropertyName("attemptId")]
+    public string AttemptId { get; init; } = string.Empty;
+
+    [JsonPropertyName("eventSequence")]
+    public long EventSequence { get; init; }
+
+    [JsonPropertyName("eventType")]
+    public string EventType { get; init; } = string.Empty;
+
+    [JsonPropertyName("phase")]
+    public string Phase { get; init; } = string.Empty;
+
+    [JsonPropertyName("routeStopId")]
+    public string? RouteStopId { get; init; }
+
+    [JsonPropertyName("worldName")]
+    public string? WorldName { get; init; }
+
+    [JsonPropertyName("pluginVersion")]
+    public string? PluginVersion { get; init; }
+
+    [JsonPropertyName("clientTimestampUtc")]
+    public DateTimeOffset ClientTimestampUtc { get; init; }
+}
+
+public sealed record MarketAcquisitionAttemptEventResult
+{
+    [JsonPropertyName("request")]
+    public MarketAcquisitionRequestView Request { get; init; } = new();
+
+    [JsonPropertyName("result")]
+    public string Result { get; init; } = string.Empty;
 
     [JsonPropertyName("reason")]
     public string? Reason { get; init; }

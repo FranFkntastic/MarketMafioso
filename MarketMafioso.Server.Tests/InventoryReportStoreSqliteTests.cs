@@ -185,6 +185,7 @@ public sealed class InventoryReportStoreSqliteTests
             CancellationToken.None);
 
         var loaded = await fixture.Store.GetAsync(fixture.AccountId, stored.Id, CancellationToken.None);
+        var summaries = await fixture.Store.ListSummariesAsync(fixture.AccountId, characterId: null, CancellationToken.None);
 
         Assert.NotNull(loaded);
         var retainer = Assert.Single(loaded.Report.Retainers);
@@ -196,6 +197,10 @@ public sealed class InventoryReportStoreSqliteTests
         Assert.Equal("Metal", retainer.MarketListings[0].ItemType);
         Assert.Equal(1, stored.Summary.RetainerItemStacks);
         Assert.Equal(20, stored.Summary.RetainerItemQuantity);
+        var summary = Assert.Single(summaries);
+        Assert.Equal(1, summary.RetainerCount);
+        Assert.Equal(1, summary.RetainerItemStacks);
+        Assert.Equal(20, summary.RetainerItemQuantity);
     }
 
     private static InventoryReport CreateReport(string characterName, string homeWorld, uint itemId) =>

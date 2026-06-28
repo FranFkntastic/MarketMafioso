@@ -1,0 +1,204 @@
+@page "/"
+@page "/acquisition"
+@inject DashboardApiClient Api
+@inject AcquisitionDashboardState State
+@inject DashboardStatusService Status
+@inject IJSRuntime JS
+@implements IAsyncDisposable
+
+<PageTitle>MarketMafioso Acquisition</PageTitle>
+
+@if (_loading)
+{
+    <MudProgressLinear Indeterminate="true" Color="Color.Primary" />
+}
+else if (_session is null)
+{
+    <MudPaper Class="login-shell compact-card dashboard-panel" Elevation="0">
+        <MudStack Spacing="2">
+            <MudText Typo="Typo.h5">Sign in</MudText>
+            <MudText Typo="Typo.body2" Class="muted">Use the dashboard account configured for this receiver.</MudText>
+            <MudTextField @bind-Value="_loginUsername" Label="Username" Variant="Variant.Outlined" Margin="Margin.Dense" />
+            <MudTextField @bind-Value="_loginPassword" Label="Password" InputType="InputType.Password" Variant="Variant.Outlined" Margin="Margin.Dense" />
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="_busy" OnClick="LoginAsync">Login</MudButton>
+            <DashboardStatusHost />
+        </MudStack>
+    </MudPaper>
+}
+else
+{
+    <MudStack Spacing="2" Class="dashboard-page acquisition-page">
+        <MudStack Row="true" AlignItems="AlignItems.Center" Class="page-title-row">
+            <div>
+                <MudText Typo="Typo.h5">Acquisition</MudText>
+                <MudText Typo="Typo.body2" Class="muted">Stage purchase intent here; the plugin validates live market rows before buying.</MudText>
+            </div>
+            <MudSpacer />
+            <MudButton Variant="Variant.Outlined" Class="quiet-button" OnClick="LogoutAsync">Logout @_session.User.Username</MudButton>
+        </MudStack>
+
+        <DashboardStatusHost />
+        <LiveStatusStrip Connected="_eventsConnected"
+                         StatusText="@_liveStatus"
+                         RequestCount="State.Requests.Count"
+                         RefreshRequested="RefreshRequestsAsync" />
+
+        <div class="page-grid acquisition-grid">
+            <RequestBuilder Busy="State.IsBusy" StageRequested="StageRequestsAsync" />
+            <ServerRequestGrid Requests="State.Requests"
+                               SelectedRequest="State.SelectedRequest"
+                               SelectedRequestChanged="SelectRequestAsync"
+                               RefreshRequested="RefreshRequestsAsync"
+                               CancelRequested="CancelRequestAsync"
+                               ResendRequested="ResendRequestAsync" />
+        </div>
+
+        <RequestDetailsDrawer Request="State.SelectedRequest"
+                              Closed="ClearSelectedRequestAsync"
+                              CancelRequested="CancelRequestAsync"
+                              ResendRequested="ResendRequestAsync" />
+    </MudStack>
+}
+
+@code {
+    private DashboardSessionResponse? _session;
+    private bool _loading = true;
+    private bool _busy;
+    private bool _eventsConnected;
+    private string _liveStatus = "Live updates idle";
+    private string _loginUsername = string.Empty;
+    private string _loginPassword = string.Empty;
+    private DotNetObjectReference<Home>? _dotNetRef;
+
+    protected override async Task OnInitializedAsync()
+    {
+        State.Changed += OnStateChanged;
+        await LoadSessionAsync();
+        if (_session is not null)
+            await State.RefreshAsync();
+        _loading = false;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_session is not null && !_eventsConnected)
+            await StartEventsAsync();
+    }
+
+    private async Task LoginAsync()
+    {
+        await RunPageAsync(async () =>
+        {
+            await Api.LoginAsync(_loginUsername, _loginPassword);
+            await LoadSessionAsync();
+            await State.RefreshAsync();
+            await StartEventsAsync();
+            Status.Info("Logged in.");
+        }, "Login failed.");
+    }
+
+    private async Task LogoutAsync()
+    {
+        await RunPageAsync(async () =>
+        {
+            await Api.LogoutAsync();
+            await StopEventsAsync();
+            _session = null;
+            State.ApplySnapshot([]);
+            Status.Info("Logged out.");
+        }, "Logout failed.");
+    }
+
+    private async Task LoadSessionAsync()
+    {
+        _session = await Api.GetSessionAsync();
+    }
+
+    private async Task StartEventsAsync()
+    {
+        if (_eventsConnected)
+            return;
+
+        _dotNetRef ??= DotNetObjectReference.Create(this);
+        await JS.InvokeVoidAsync("marketMafiosoEvents.start", "api/events/stream", _dotNetRef);
+        _eventsConnected = true;
+        _liveStatus = "Live updates connected";
+    }
+
+    private async Task StopEventsAsync()
+    {
+        await JS.InvokeVoidAsync("marketMafiosoEvents.stop");
+        _eventsConnected = false;
+        _liveStatus = "Live updates idle";
+    }
+
+    [JSInvokable]
+    public Task OnAcquisitionEventAsync(string json)
+    {
+        var requests = System.Text.Json.JsonSerializer.Deserialize<IReadOnlyList<MarketAcquisitionRequestView>>(
+            json,
+            new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
+        if (requests is not null)
+            State.ApplySnapshot(requests);
+
+        return InvokeAsync(StateHasChanged);
+    }
+
+    [JSInvokable]
+    public Task OnEventStreamErrorAsync(string message)
+    {
+        _eventsConnected = false;
+        _liveStatus = "Live updates disconnected";
+        return InvokeAsync(StateHasChanged);
+    }
+
+    private Task<bool> StageRequestsAsync(IReadOnlyList<MarketAcquisitionCreateRequest> requests) =>
+        State.StageAsync(requests);
+
+    private Task RefreshRequestsAsync() => State.RefreshAsync();
+
+    private Task CancelRequestAsync(string id) => State.CancelAsync(id);
+
+    private Task ResendRequestAsync(string id) => State.ResendAsync(id);
+
+    private Task SelectRequestAsync(MarketAcquisitionRequestView? request)
+    {
+        State.SelectRequest(request);
+        return Task.CompletedTask;
+    }
+
+    private Task ClearSelectedRequestAsync()
+    {
+        State.SelectRequest(null);
+        return Task.CompletedTask;
+    }
+
+    private async Task RunPageAsync(Func<Task> action, string failurePrefix)
+    {
+        try
+        {
+            _busy = true;
+            await action();
+        }
+        catch (Exception ex)
+        {
+            Status.Error($"{failurePrefix} {ex.Message}");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void OnStateChanged()
+    {
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        State.Changed -= OnStateChanged;
+        await StopEventsAsync();
+        _dotNetRef?.Dispose();
+    }
+}

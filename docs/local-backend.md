@@ -2,7 +2,7 @@
 
 MarketMafioso includes a small ASP.NET receiver for inventory report uploads. The hosted VPS receiver is the normal direction for day-to-day use; the local receiver remains useful for offline debugging and development.
 
-Hosted receiver notes live in [hosted-receiver.md](hosted-receiver.md).
+Hosted receiver notes live in [hosted-receiver.md](hosted-receiver.md). Self-hosting and Docker notes live in [self-hosting.md](self-hosting.md).
 
 ## Run
 
@@ -68,7 +68,7 @@ Set the same API key in the plugin UI before sending.
 
 ## Dashboard Auth
 
-The local dashboard is unauthenticated by default. To enable app-managed Basic Auth for dashboard pages:
+The local dashboard is unauthenticated by default. To enable app-managed dashboard login sessions:
 
 ```powershell
 $env:MarketMafioso__RequireDashboardAuth = "true"

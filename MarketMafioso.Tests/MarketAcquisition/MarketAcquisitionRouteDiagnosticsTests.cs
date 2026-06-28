@@ -61,6 +61,38 @@ public sealed class MarketAcquisitionRouteDiagnosticsTests
     }
 
     [Fact]
+    public void RecordAutomationSnapshot_WritesClassifiedState()
+    {
+        var directory = CreateTempDirectory();
+        using var diagnostics = MarketMafioso.MarketAcquisition.MarketAcquisitionRouteDiagnostics.CreateEnabled(
+            directory,
+            DateTimeOffset.UnixEpoch);
+
+        diagnostics.RecordAutomationSnapshot(
+            MarketMafioso.MarketAcquisition.MarketBoardAutomationSnapshot.Create(
+                "SearchItem",
+                "AfterInput",
+                "ItemSearchResultReady",
+                "SearchSent",
+                MarketMafioso.MarketAcquisition.MarketBoardAutomationOutcome.Recoverable,
+                "RetryHumanEnterPath",
+                new Dictionary<string, string?>
+                {
+                    ["searchText"] = "Varnish",
+                }));
+
+        var text = ReadLog(diagnostics.FilePath!);
+        Assert.Contains("automation-snapshot", text, StringComparison.Ordinal);
+        Assert.Contains("step: SearchItem", text, StringComparison.Ordinal);
+        Assert.Contains("phase: AfterInput", text, StringComparison.Ordinal);
+        Assert.Contains("expected: ItemSearchResultReady", text, StringComparison.Ordinal);
+        Assert.Contains("observed: SearchSent", text, StringComparison.Ordinal);
+        Assert.Contains("outcome: Recoverable", text, StringComparison.Ordinal);
+        Assert.Contains("nextAction: RetryHumanEnterPath", text, StringComparison.Ordinal);
+        Assert.Contains("searchText: Varnish", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Disabled_IgnoresRecords()
     {
         var diagnostics = MarketMafioso.MarketAcquisition.MarketAcquisitionRouteDiagnostics.Disabled;
