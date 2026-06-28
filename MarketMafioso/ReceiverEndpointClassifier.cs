@@ -33,7 +33,10 @@ public static class ReceiverEndpointClassifier
         if (uri.Host.Equals("dev.xivcraftarchitect.com", StringComparison.OrdinalIgnoreCase) ||
             uri.Host.Equals("xivcraftarchitect.com", StringComparison.OrdinalIgnoreCase))
         {
-            var dashboardBaseUrl = $"{uri.Scheme}://{uri.Host}/api/marketmafioso";
+            if (IsRetiredHostedPath(uri))
+                return new ReceiverEndpointInfo(ReceiverEndpointKind.Invalid, uri, null);
+
+            var dashboardBaseUrl = $"{uri.Scheme}://{uri.Host}/marketmafioso";
             return new ReceiverEndpointInfo(ReceiverEndpointKind.KnownHosted, uri, dashboardBaseUrl);
         }
 
@@ -60,10 +63,10 @@ public static class ReceiverEndpointClassifier
 
     public static string? BuildAcquisitionBaseUrl(string? serverUrl)
     {
-        var dashboardBaseUrl = BuildDashboardBaseUrl(serverUrl);
-        return string.IsNullOrWhiteSpace(dashboardBaseUrl)
+        var apiBaseUrl = BuildApiBaseUrl(serverUrl);
+        return string.IsNullOrWhiteSpace(apiBaseUrl)
             ? null
-            : $"{dashboardBaseUrl}/acquisition";
+            : $"{apiBaseUrl}/acquisition";
     }
 
     public static string? BuildDashboardUrl(string? serverUrl)
@@ -80,13 +83,51 @@ public static class ReceiverEndpointClassifier
         host.Equals("::1", StringComparison.OrdinalIgnoreCase) ||
         host.Equals("[::1]", StringComparison.OrdinalIgnoreCase);
 
+    private static bool IsRetiredHostedPath(Uri uri) =>
+        uri.AbsolutePath.StartsWith("/api/marketmafioso", StringComparison.OrdinalIgnoreCase);
+
+    private static string? BuildApiBaseUrl(string? serverUrl)
+    {
+        var endpoint = Classify(serverUrl);
+        if (endpoint.Kind == ReceiverEndpointKind.Invalid || endpoint.Uri == null)
+            return null;
+
+        return DeriveApiBaseUrl(endpoint.Uri);
+    }
+
     private static string? DeriveDashboardBaseUrl(Uri uri)
     {
         var path = uri.AbsolutePath;
-        if (!path.EndsWith("/inventory", StringComparison.OrdinalIgnoreCase))
+        const string apiInventorySuffix = "/api/inventory";
+        if (path.EndsWith(apiInventorySuffix, StringComparison.OrdinalIgnoreCase))
+        {
+            var dashboardBasePathFromApi = path[..^apiInventorySuffix.Length].TrimEnd('/');
+            return $"{uri.Scheme}://{uri.Authority}{dashboardBasePathFromApi}";
+        }
+
+        const string inventorySuffix = "/inventory";
+        if (!path.EndsWith(inventorySuffix, StringComparison.OrdinalIgnoreCase))
             return null;
 
-        var basePath = path[..^"/inventory".Length].TrimEnd('/');
-        return $"{uri.Scheme}://{uri.Authority}{basePath}";
+        var dashboardBasePathFromInventory = path[..^inventorySuffix.Length].TrimEnd('/');
+        return $"{uri.Scheme}://{uri.Authority}{dashboardBasePathFromInventory}";
+    }
+
+    private static string? DeriveApiBaseUrl(Uri uri)
+    {
+        var path = uri.AbsolutePath;
+        const string apiInventorySuffix = "/api/inventory";
+        if (path.EndsWith(apiInventorySuffix, StringComparison.OrdinalIgnoreCase))
+        {
+            var apiBasePathFromApi = path[..^"/inventory".Length].TrimEnd('/');
+            return $"{uri.Scheme}://{uri.Authority}{apiBasePathFromApi}";
+        }
+
+        const string inventorySuffix = "/inventory";
+        if (!path.EndsWith(inventorySuffix, StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        var apiBasePathFromInventory = path[..^inventorySuffix.Length].TrimEnd('/');
+        return $"{uri.Scheme}://{uri.Authority}{apiBasePathFromInventory}";
     }
 }

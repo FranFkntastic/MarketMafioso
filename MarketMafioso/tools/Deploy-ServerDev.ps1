@@ -13,9 +13,10 @@ $ErrorActionPreference = "Stop"
 $projectDir = Split-Path -Parent $PSScriptRoot
 $repoRoot = Split-Path -Parent $projectDir
 $workflow = "deploy-vps-marketmafioso-dev.yml"
-$healthUrl = "https://dev.xivcraftarchitect.com/api/marketmafioso/health"
-$inventoryUrl = "https://dev.xivcraftarchitect.com/api/marketmafioso/inventory"
-$dashboardUrl = "https://dev.xivcraftarchitect.com/api/marketmafioso/"
+$healthUrl = "https://dev.xivcraftarchitect.com/marketmafioso/health"
+$inventoryUrl = "https://dev.xivcraftarchitect.com/marketmafioso/api/inventory"
+$dashboardUrl = "https://dev.xivcraftarchitect.com/marketmafioso/"
+$retiredDashboardUrl = "https://dev.xivcraftarchitect.com/api/marketmafioso/"
 $ingestKeyPath = Join-Path -Path $env:USERPROFILE -ChildPath ".ssh\marketmafioso_dev_api_key.txt"
 $dashboardPasswordPath = Join-Path -Path $env:USERPROFILE -ChildPath ".ssh\marketmafioso_dashboard_password.txt"
 $sampleReportPath = Join-Path -Path $repoRoot -ChildPath "docs\samples\inventory-report.sample.json"
@@ -83,6 +84,20 @@ function Invoke-PublicSmoke {
     $shell = Invoke-WebRequest -Uri $dashboardUrl -UseBasicParsing
     if ($shell.StatusCode -ne 200 -or $shell.Content -notlike "*_framework/blazor*") {
         throw "Dashboard shell smoke check failed."
+    }
+
+    $retiredRouteStillServesDashboard = $false
+    try {
+        $retiredShell = Invoke-WebRequest -Uri $retiredDashboardUrl -UseBasicParsing
+        if ($retiredShell.StatusCode -eq 200 -and $retiredShell.Content -like "*_framework/blazor*") {
+            $retiredRouteStillServesDashboard = $true
+        }
+    }
+    catch {
+        # Expected when the retired route is gone.
+    }
+    if ($retiredRouteStillServesDashboard) {
+        throw "Retired /api/marketmafioso route still serves the dashboard."
     }
 
     if (Test-Path -LiteralPath $dashboardPasswordPath) {

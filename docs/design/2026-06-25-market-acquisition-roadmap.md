@@ -28,7 +28,7 @@ The safe order is to make the server and plugin speak first, then prove read-onl
 - Every phase must be useful and testable without assuming later automation exists.
 - Any phase that touches game UI automation must have a read-only proof pass before mutation.
 - Plugin pickup auth uses the same client API key as inventory ingest and machine-read report routes.
-- Logical acquisition routes live under `{basePath}/acquisition/...`; hosted dev resolves that to `/api/marketmafioso/acquisition/...`.
+- Canonical hosted routes live under `/marketmafioso/` for the dashboard and `/marketmafioso/api/...` for machine endpoints. The old `/api/marketmafioso/...` shape is retired during the route migration rather than kept as a compatibility alias.
 
 ## Live Execution Semantics
 
@@ -119,8 +119,9 @@ Add a server-side request queue that can store, expire, claim, and audit dashboa
   - Hosted/API-key mode fails at startup if `MarketMafioso:ClientApiKey` is missing.
   - Dashboard Basic Auth can create browser-originated acquisition requests, but cannot claim, accept, reject, progress, complete, or fail plugin lifecycle.
 - Path/base-path behavior:
-  - All new endpoints are logical `/acquisition/...` routes under the existing base path.
-  - Hosted dev path must be `/api/marketmafioso/acquisition/...`.
+  - Canonical machine endpoints live under `/api/...` inside the MarketMafioso app base path.
+  - Hosted dev path must be `/marketmafioso/api/acquisition/...`.
+  - Legacy hosted `/api/marketmafioso/acquisition/...` routes are removed in the same pass that plugin configs and smoke checks migrate.
   - Tests must fail on accidental `/api/plugin/...` routes.
 - Expiry cleanup:
   - Expired requests can be marked lazily on reads.
@@ -144,7 +145,7 @@ Add a server-side request queue that can store, expire, claim, and audit dashboa
 
 - Endpoint tests cover create, pending, claim, accept, wrong-character, stale claim token, idempotency replay, idempotency conflict, restart persistence, hosted base path, auth split, and accidental `/api/plugin/...` routes.
 - Remaining Phase 1 lifecycle coverage still needed before calling the whole phase complete: reject, progress, complete, fail, expiry before claim, claim-expiry after claim, already-claimed response shape, invalid transition, duplicate terminal retry, concurrent claims, and retention pruning.
-- Manual smoke can create and claim a request through the hosted base path.
+- Manual smoke can create and claim a request through the canonical hosted path, with a negative smoke proving the old `/api/marketmafioso/...` route shape is no longer accepted.
 - No plugin code is required for the phase to pass.
 
 ## Phase 2: Dashboard Request Creation Surface

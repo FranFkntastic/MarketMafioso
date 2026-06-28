@@ -82,8 +82,8 @@ public class MainWindow : Window, IDisposable
     private const string WorkshopLogisticsModuleSummary = "Workshop Logistics tracks company workshop jobs, materials, retainer restock, handoff, and assembly.";
     private const string MarketAcquisitionModuleSummary = "Market Acquisition picks up dashboard-created purchase requests for local review.";
     private const string LocalReceiverUrl = "http://localhost:8080/inventory";
-    private const string DevReceiverUrl = "https://dev.xivcraftarchitect.com/api/marketmafioso/inventory";
-    private const string ProductionReceiverUrl = "https://xivcraftarchitect.com/api/marketmafioso/inventory";
+    private const string DevReceiverUrl = "https://dev.xivcraftarchitect.com/marketmafioso/api/inventory";
+    private const string ProductionReceiverUrl = "https://xivcraftarchitect.com/marketmafioso/api/inventory";
     private static readonly TimeSpan MarketBoardPurchaseConfirmationWatchdog = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan MarketBoardPurchaseListingRemovalWatchdog = TimeSpan.FromSeconds(15);
 

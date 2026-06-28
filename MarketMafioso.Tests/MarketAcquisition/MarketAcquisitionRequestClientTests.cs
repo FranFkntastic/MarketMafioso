@@ -33,7 +33,7 @@ public sealed class MarketAcquisitionRequestClientTests
         var client = new MarketMafioso.MarketAcquisition.MarketAcquisitionRequestClient(httpClient);
 
         var requests = await client.FetchPendingAsync(
-            "https://dev.xivcraftarchitect.com/api/marketmafioso/inventory",
+            "https://dev.xivcraftarchitect.com/marketmafioso/api/inventory",
             "client-secret",
             "Wei Ning",
             "Gilgamesh",
@@ -42,7 +42,7 @@ public sealed class MarketAcquisitionRequestClientTests
         Assert.Single(requests);
         Assert.Equal("request-1", requests[0].Id);
         Assert.Equal(
-            "https://dev.xivcraftarchitect.com/api/marketmafioso/acquisition/requests/pending?characterName=Wei%20Ning&world=Gilgamesh",
+            "https://dev.xivcraftarchitect.com/marketmafioso/api/acquisition/requests/pending?characterName=Wei%20Ning&world=Gilgamesh",
             handler.LastRequest?.RequestUri?.OriginalString);
         Assert.NotNull(handler.LastRequest);
         Assert.True(handler.LastRequest.Headers.TryGetValues("X-Api-Key", out var values));
@@ -74,7 +74,7 @@ public sealed class MarketAcquisitionRequestClientTests
         var client = new MarketMafioso.MarketAcquisition.MarketAcquisitionRequestClient(httpClient);
 
         var claimed = await client.ClaimAsync(
-            "https://dev.xivcraftarchitect.com/api/marketmafioso/inventory",
+            "https://dev.xivcraftarchitect.com/marketmafioso/api/inventory",
             "client-secret",
             "request-1",
             "Wei Ning",
@@ -85,7 +85,7 @@ public sealed class MarketAcquisitionRequestClientTests
         Assert.Equal("claim-token", claimed.ClaimToken);
         Assert.Equal(HttpMethod.Post, handler.LastRequest?.Method);
         Assert.Equal(
-            "https://dev.xivcraftarchitect.com/api/marketmafioso/acquisition/requests/request-1/claim",
+            "https://dev.xivcraftarchitect.com/marketmafioso/api/acquisition/requests/request-1/claim",
             handler.LastRequest?.RequestUri?.ToString());
 
         var body = JsonDocument.Parse(handler.LastBody!);
@@ -118,7 +118,7 @@ public sealed class MarketAcquisitionRequestClientTests
         var client = new MarketMafioso.MarketAcquisition.MarketAcquisitionRequestClient(httpClient);
 
         var accepted = await client.AcceptAsync(
-            "https://dev.xivcraftarchitect.com/api/marketmafioso/inventory",
+            "https://dev.xivcraftarchitect.com/marketmafioso/api/inventory",
             "client-secret",
             "request-1",
             "claim-token",
@@ -127,7 +127,7 @@ public sealed class MarketAcquisitionRequestClientTests
 
         Assert.Equal("AcceptedInPlugin", accepted.Status);
         Assert.Equal(
-            "https://dev.xivcraftarchitect.com/api/marketmafioso/acquisition/requests/request-1/accept",
+            "https://dev.xivcraftarchitect.com/marketmafioso/api/acquisition/requests/request-1/accept",
             handler.LastRequest?.RequestUri?.ToString());
         var body = JsonDocument.Parse(handler.LastBody!);
         Assert.Equal("claim-token", body.RootElement.GetProperty("claimToken").GetString());
@@ -158,7 +158,7 @@ public sealed class MarketAcquisitionRequestClientTests
         var client = new MarketMafioso.MarketAcquisition.MarketAcquisitionRequestClient(httpClient);
 
         var resent = await client.ResendAsync(
-            "https://dev.xivcraftarchitect.com/api/marketmafioso/inventory",
+            "https://dev.xivcraftarchitect.com/marketmafioso/api/inventory",
             "client-secret",
             "request-1",
             CancellationToken.None);
@@ -166,7 +166,7 @@ public sealed class MarketAcquisitionRequestClientTests
         Assert.Equal("PendingPickup", resent.Status);
         Assert.Equal(HttpMethod.Post, handler.LastRequest?.Method);
         Assert.Equal(
-            "https://dev.xivcraftarchitect.com/api/marketmafioso/acquisition/requests/request-1/resend",
+            "https://dev.xivcraftarchitect.com/marketmafioso/api/acquisition/requests/request-1/resend",
             handler.LastRequest?.RequestUri?.ToString());
         Assert.NotNull(handler.LastRequest);
         Assert.True(handler.LastRequest.Headers.TryGetValues("X-Api-Key", out var values));
@@ -185,7 +185,7 @@ public sealed class MarketAcquisitionRequestClientTests
 
         var ex = await Assert.ThrowsAsync<MarketMafioso.MarketAcquisition.MarketAcquisitionLifecycleHttpException>(() =>
             client.ReportProgressAsync(
-                "https://dev.xivcraftarchitect.com/api/marketmafioso/inventory",
+                "https://dev.xivcraftarchitect.com/marketmafioso/api/inventory",
                 "client-secret",
                 "request-1",
                 "claim-token",
@@ -231,7 +231,7 @@ public sealed class MarketAcquisitionRequestClientTests
         var client = new MarketMafioso.MarketAcquisition.MarketAcquisitionRequestClient(httpClient);
 
         var result = await client.ReportAttemptProgressAsync(
-            "https://dev.xivcraftarchitect.com/api/marketmafioso/inventory",
+            "https://dev.xivcraftarchitect.com/marketmafioso/api/inventory",
             "client-secret",
             "request-1",
             "claim-token",
@@ -249,7 +249,7 @@ public sealed class MarketAcquisitionRequestClientTests
         Assert.Equal("attempt-1", result.Request.LatestAttemptId);
         Assert.Equal(7, result.Request.LatestAttemptSequence);
         Assert.Equal(
-            "https://dev.xivcraftarchitect.com/api/marketmafioso/acquisition/requests/request-1/progress",
+            "https://dev.xivcraftarchitect.com/marketmafioso/api/acquisition/requests/request-1/progress",
             handler.LastRequest?.RequestUri?.ToString());
 
         var body = JsonDocument.Parse(handler.LastBody!);

@@ -96,6 +96,34 @@ public sealed class DashboardApiClient
             .ToArray();
     }
 
+    public async Task<IReadOnlyList<DashboardCharacterOption>> GetCharactersAsync(
+        CancellationToken cancellationToken = default)
+    {
+        return await http.GetFromJsonAsync<IReadOnlyList<DashboardCharacterOption>>(
+            "api/inventory/characters",
+            JsonOptions,
+            cancellationToken) ?? [];
+    }
+
+    public async Task<DashboardSettingsView> GetDashboardSettingsAsync(
+        CancellationToken cancellationToken = default)
+    {
+        return await http.GetFromJsonAsync<DashboardSettingsView>(
+            "api/settings/dashboard",
+            JsonOptions,
+            cancellationToken) ?? new DashboardSettingsView();
+    }
+
+    public async Task<DashboardSettingsView> SaveDashboardSettingsAsync(
+        DashboardSettingsUpdate settings,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await http.PutAsJsonAsync("api/settings/dashboard", settings, JsonOptions, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<DashboardSettingsView>(JsonOptions, cancellationToken)
+            ?? throw new InvalidOperationException("Dashboard settings response was empty.");
+    }
+
     public async Task<IReadOnlyList<DiagnosticEventView>> GetDiagnosticsAsync(
         CancellationToken cancellationToken = default)
     {

@@ -77,6 +77,30 @@ public sealed class DashboardAccountAuthTests
     }
 
     [Fact]
+    public async Task DashboardSession_WorksUnderConfiguredBasePath()
+    {
+        await using var application = CreateApplication(
+            new KeyValuePair<string, string?>("MarketMafioso:BasePath", "/marketmafioso"));
+        using var client = application.CreateClient();
+
+        var anonymous = await client.GetAsync("/marketmafioso/auth/session");
+        var anonymousApi = await client.GetAsync("/marketmafioso/api/acquisition/requests");
+        var login = await client.PostAsJsonAsync("/marketmafioso/auth/login", new
+        {
+            username = "admin",
+            password = "secret-password",
+        });
+        var session = await client.GetAsync("/marketmafioso/auth/session");
+        var authenticatedApi = await client.GetAsync("/marketmafioso/api/acquisition/requests");
+
+        Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, anonymousApi.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, login.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, session.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, authenticatedApi.StatusCode);
+    }
+
+    [Fact]
     public async Task DashboardSession_StopsWorkingWhenUserIsDisabled()
     {
         var values = CreateApplicationValues();

@@ -62,7 +62,7 @@ body,
 
 .main-content {
     min-height: 100vh;
-    padding: 54px 16px 16px;
+    padding: 58px 18px 18px;
 }
 
 .dashboard-page {
@@ -92,7 +92,7 @@ body,
 
 .acquisition-grid {
     align-items: start;
-    grid-template-columns: minmax(380px, 460px) minmax(0, 1fr);
+    grid-template-columns: minmax(440px, 520px) minmax(0, 1fr);
     min-height: calc(100vh - 126px);
 }
 
@@ -116,14 +116,14 @@ body,
 
 .builder-panel > .mud-stack,
 .queue-panel > .mud-stack {
-    padding: 10px;
+    padding: 14px;
 }
 
 .panel-heading {
     border-bottom: 1px solid #263646;
-    margin: -10px -10px 0;
-    min-height: 34px;
-    padding: 0 10px;
+    margin: -14px -14px 0;
+    min-height: 42px;
+    padding: 0 14px;
 }
 
 .panel-heading .mud-typography-h6 {
@@ -136,7 +136,7 @@ body,
     background: #0d141b;
     border: 1px solid #223141;
     border-radius: 7px;
-    padding: 8px 10px 10px;
+    padding: 12px 12px 14px;
 }
 
 .section-label {
@@ -147,6 +147,12 @@ body,
     letter-spacing: .04em;
     line-height: 1;
     margin-bottom: 8px;
+}
+
+.target-empty-hint {
+    display: block;
+    line-height: 1.35;
+    margin-top: 10px;
 }
 
 .action-row {
@@ -164,6 +170,16 @@ body,
     max-width: 420px;
     margin: 10vh auto 0;
     padding: 18px;
+}
+
+.settings-section {
+    padding: 16px;
+}
+
+.settings-section .mud-typography-h6 {
+    font-size: 16px;
+    font-weight: 700;
+    letter-spacing: 0;
 }
 
 .status-chip {
@@ -205,6 +221,7 @@ body,
 
 .mud-input-control .mud-input-label {
     font-size: 11px;
+    padding-left: 2px;
 }
 
 .mud-input-control > .mud-input-control-input-container > div.mud-input.mud-input-outlined {
@@ -221,7 +238,7 @@ body,
 .mud-select .mud-input-slot {
     color: #f4f8ff !important;
     font-size: 13px;
-    min-height: 20px;
+    min-height: 24px;
 }
 
 .mud-input-adornment,

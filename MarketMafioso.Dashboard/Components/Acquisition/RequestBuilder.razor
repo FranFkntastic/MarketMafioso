@@ -7,17 +7,19 @@
         <MudStack Row="true" AlignItems="AlignItems.Center" Class="panel-heading">
             <MudText Typo="Typo.h6">New Purchase Request</MudText>
             <MudSpacer />
-            <MudText Typo="Typo.caption" Class="muted">@_targetCharacter @@ @_targetWorld</MudText>
+            <MudText Typo="Typo.caption" Class="muted">@TargetDisplay</MudText>
         </MudStack>
 
         <div class="form-section">
             <MudText Typo="Typo.overline" Class="section-label">Target</MudText>
             <MudGrid Spacing="2">
-                <MudItem xs="12" sm="6">
-                    <MudTextField @bind-Value="_targetCharacter" Label="Character" Variant="Variant.Outlined" Margin="Margin.Dense" />
-                </MudItem>
-                <MudItem xs="12" sm="6">
-                    <MudTextField @bind-Value="_targetWorld" Label="Home world" Variant="Variant.Outlined" Margin="Margin.Dense" />
+                <MudItem xs="12">
+                    <MudSelect T="long?" Value="_selectedCharacterId" ValueChanged="OnCharacterChanged" Label="Character" Variant="Variant.Outlined" Margin="Margin.Dense" Disabled="@(!Characters.Any())">
+                        @foreach (var character in Characters)
+                        {
+                            <MudSelectItem T="long?" Value="@character.Id">@character.DisplayName</MudSelectItem>
+                        }
+                    </MudSelect>
                 </MudItem>
                 <MudItem xs="12" sm="6">
                     <MudSelect T="string" @bind-Value="_region" Label="Region" Variant="Variant.Outlined" Margin="Margin.Dense">
@@ -32,6 +34,10 @@
                     </MudSelect>
                 </MudItem>
             </MudGrid>
+            @if (!Characters.Any())
+            {
+                <MudText Typo="Typo.caption" Class="muted target-empty-hint">No characters are associated with this dashboard account yet. Send an inventory report with the configured API key first.</MudText>
+            }
         </div>
 
         <div class="form-section">
@@ -56,7 +62,7 @@
             <MudText Typo="Typo.overline" Class="section-label">Purchase Limits</MudText>
             <MudGrid Spacing="2">
                 <MudItem xs="12" sm="6">
-                    <MudSelect T="string" Value="_quantityMode" ValueChanged="QuantityModeChanged" Label="Quantity mode" Variant="Variant.Outlined" Margin="Margin.Dense">
+                    <MudSelect T="string" Value="@_quantityMode" ValueChanged="QuantityModeChanged" Label="Quantity mode" Variant="Variant.Outlined" Margin="Margin.Dense">
                         <MudSelectItem Value="@("TargetQuantity")">Target quantity</MudSelectItem>
                         <MudSelectItem Value="@("AllBelowThreshold")">All below threshold</MudSelectItem>
                     </MudSelect>
@@ -122,9 +128,10 @@
 @code {
     [Parameter] public bool Busy { get; set; }
     [Parameter] public Func<IReadOnlyList<MarketAcquisitionCreateRequest>, Task<bool>>? StageRequested { get; set; }
+    [Parameter] public IReadOnlyList<DashboardCharacterOption> Characters { get; set; } = [];
+    [Parameter] public DashboardSettingsView Settings { get; set; } = new();
 
-    private string _targetCharacter = "Wei Ning";
-    private string _targetWorld = "Siren";
+    private long? _selectedCharacterId;
     private string _region = "North America";
     private string _worldMode = "Recommended";
     private XivItemSearchResult? _selectedItem;
@@ -136,12 +143,33 @@
     private string _hqPolicy = "Either";
     private int _expiresInSeconds = 300;
     private readonly List<QueuedAcquisitionItem> _queue = [];
+    private bool _settingsApplied;
+
+    private DashboardCharacterOption? SelectedCharacter =>
+        Characters.FirstOrDefault(character => character.Id == _selectedCharacterId);
+
+    private string TargetDisplay => SelectedCharacter?.DisplayName ?? "No character selected";
 
     private string QuantityLabel => _quantityMode == "AllBelowThreshold" ? "Max quantity (optional)" : "Target quantity";
 
     private string QuantityHelp => _quantityMode == "AllBelowThreshold"
         ? "All below threshold buys every confirmed live listing at or below max unit price. Max quantity and gil cap are optional hard stops."
         : "Target quantity buys safe whole stacks until the target is satisfied; harmless overage can happen because stacks are indivisible.";
+
+    protected override void OnParametersSet()
+    {
+        if (_settingsApplied)
+            return;
+
+        _selectedCharacterId = Settings.DefaultCharacterId;
+        if (_selectedCharacterId == null || Characters.All(character => character.Id != _selectedCharacterId))
+            _selectedCharacterId = Characters.FirstOrDefault()?.Id;
+
+        _region = Settings.DefaultRegion;
+        _worldMode = Settings.DefaultWorldMode;
+        _expiresInSeconds = Settings.DefaultPickupExpiresSeconds;
+        _settingsApplied = true;
+    }
 
     private async Task<IEnumerable<XivItemSearchResult>> SearchItemsAsync(string value, CancellationToken token)
     {
@@ -174,6 +202,11 @@
             _selectedItem = null;
     }
 
+    private void OnCharacterChanged(long? characterId)
+    {
+        _selectedCharacterId = characterId;
+    }
+
     private void QuantityModeChanged(string mode)
     {
         _quantityMode = mode;
@@ -186,6 +219,12 @@
         if (_selectedItem is null)
         {
             Status.Error("Pick an item before adding to the queue.");
+            return;
+        }
+
+        if (SelectedCharacter is null)
+        {
+            Status.Error("Pick a dashboard character before adding to the queue.");
             return;
         }
 
@@ -227,8 +266,8 @@
     private MarketAcquisitionCreateRequest ToCreateRequest(QueuedAcquisitionItem item) => new()
     {
         IdempotencyKey = Guid.NewGuid().ToString("N"),
-        TargetCharacterName = _targetCharacter.Trim(),
-        TargetWorld = _targetWorld.Trim(),
+        TargetCharacterName = SelectedCharacter?.CharacterName ?? string.Empty,
+        TargetWorld = SelectedCharacter?.HomeWorld ?? string.Empty,
         Region = _region,
         ItemId = item.Item.ItemId,
         ItemName = item.Item.Name,

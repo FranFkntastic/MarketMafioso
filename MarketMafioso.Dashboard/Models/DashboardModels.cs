@@ -71,6 +71,33 @@ public sealed record XivItemSearchResult
         : $"{Name} ({ItemId}) - {Type}";
 }
 
+public sealed record DashboardCharacterOption
+{
+    public long Id { get; init; }
+    public string CharacterName { get; init; } = string.Empty;
+    public string? HomeWorld { get; init; }
+    public DateTimeOffset LastSeenAt { get; init; }
+    public string DisplayName { get; init; } = string.Empty;
+}
+
+public sealed record DashboardSettingsView
+{
+    public int SchemaVersion { get; init; } = 1;
+    public long? DefaultCharacterId { get; init; }
+    public string DefaultRegion { get; init; } = "North America";
+    public string DefaultWorldMode { get; init; } = "Recommended";
+    public int DefaultPickupExpiresSeconds { get; init; } = 300;
+    public DateTimeOffset? UpdatedAtUtc { get; init; }
+}
+
+public sealed record DashboardSettingsUpdate
+{
+    public long? DefaultCharacterId { get; init; }
+    public string DefaultRegion { get; init; } = "North America";
+    public string DefaultWorldMode { get; init; } = "Recommended";
+    public int DefaultPickupExpiresSeconds { get; init; } = 300;
+}
+
 public sealed record DiagnosticEventView
 {
     public long Id { get; init; }

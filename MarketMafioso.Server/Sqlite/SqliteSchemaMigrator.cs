@@ -109,6 +109,15 @@ public sealed class SqliteSchemaMigrator
             revoked_at_utc TEXT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS dashboard_preferences (
+            owner_kind TEXT NOT NULL,
+            owner_key TEXT NOT NULL,
+            scope TEXT NOT NULL,
+            preferences_json TEXT NOT NULL,
+            updated_at_utc TEXT NOT NULL,
+            PRIMARY KEY (owner_kind, owner_key, scope)
+        );
+
         CREATE TABLE IF NOT EXISTS diagnostic_events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             occurred_at_utc TEXT NOT NULL,

@@ -512,10 +512,10 @@ public sealed class InventoryReportViewEndpointTests
     public async Task HostedMode_AcceptsConfiguredBasePath()
     {
         await using var application = CreateHostedApplication(
-            new KeyValuePair<string, string?>("MarketMafioso:BasePath", "/api/marketmafioso"));
+            new KeyValuePair<string, string?>("MarketMafioso:BasePath", "/marketmafioso"));
         using var client = application.CreateClient();
 
-        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/marketmafioso/inventory")
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/marketmafioso/api/inventory")
         {
             Content = JsonContent.Create(CreateReport("Base Path Character")),
         };
@@ -524,34 +524,34 @@ public sealed class InventoryReportViewEndpointTests
         var response = await client.SendAsync(request);
 
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
-        Assert.StartsWith("/api/marketmafioso/api/reports/", response.Headers.Location?.ToString(), StringComparison.Ordinal);
+        Assert.StartsWith("/marketmafioso/api/reports/", response.Headers.Location?.ToString(), StringComparison.Ordinal);
 
-        var dashboard = await client.GetStringAsync("/api/marketmafioso/");
+        var dashboard = await client.GetStringAsync("/marketmafioso/");
 
-        Assert.Contains("<base href=\"/api/marketmafioso/\" />", dashboard, StringComparison.Ordinal);
+        Assert.Contains("<base href=\"/marketmafioso/\" />", dashboard, StringComparison.Ordinal);
         Assert.Contains("_framework/blazor", dashboard, StringComparison.Ordinal);
         Assert.Contains("_framework/blazor.webassembly.", dashboard, StringComparison.Ordinal);
         Assert.DoesNotContain("[.{fingerprint}]", dashboard, StringComparison.Ordinal);
-        Assert.DoesNotContain("href=\"/api/marketmafioso/api/reports", dashboard, StringComparison.Ordinal);
+        Assert.DoesNotContain("href=\"/marketmafioso/api/reports", dashboard, StringComparison.Ordinal);
     }
 
     [Fact]
     public async Task HostedMode_ServesDashboardStaticAssets()
     {
         await using var application = CreateHostedApplication(
-            new KeyValuePair<string, string?>("MarketMafioso:BasePath", "/api/marketmafioso"));
+            new KeyValuePair<string, string?>("MarketMafioso:BasePath", "/marketmafioso"));
         using var client = application.CreateClient();
 
-        var dashboard = await client.GetStringAsync("/api/marketmafioso/");
+        var dashboard = await client.GetStringAsync("/marketmafioso/");
         var bootScript = Regex.Match(
             dashboard,
             "_framework/blazor\\.webassembly\\.[^\"]+\\.js").Value;
 
         Assert.False(string.IsNullOrWhiteSpace(bootScript));
 
-        var appCss = await client.GetAsync("/api/marketmafioso/css/app.css");
-        var dotnetJs = await client.GetAsync("/api/marketmafioso/_framework/dotnet.js");
-        var bootJs = await client.GetAsync($"/api/marketmafioso/{bootScript}");
+        var appCss = await client.GetAsync("/marketmafioso/css/app.css");
+        var dotnetJs = await client.GetAsync("/marketmafioso/_framework/dotnet.js");
+        var bootJs = await client.GetAsync($"/marketmafioso/{bootScript}");
 
         Assert.Equal(HttpStatusCode.OK, appCss.StatusCode);
         Assert.Equal(HttpStatusCode.OK, dotnetJs.StatusCode);
@@ -562,14 +562,14 @@ public sealed class InventoryReportViewEndpointTests
     public async Task HostedMode_CreateResponse_ReturnsDashboardUrlsFromPublicOriginAndBasePath()
     {
         await using var application = CreateHostedApplication(
-            new KeyValuePair<string, string?>("MarketMafioso:BasePath", "/api/marketmafioso"),
+            new KeyValuePair<string, string?>("MarketMafioso:BasePath", "/marketmafioso"),
             new KeyValuePair<string, string?>("MarketMafioso:PublicOrigin", "https://dev.xivcraftarchitect.com"));
         using var client = application.CreateClient();
 
         var createResponse = await SendWithKeyAsync(
             client,
             HttpMethod.Post,
-            "/api/marketmafioso/inventory",
+            "/marketmafioso/api/inventory",
             "test-client-secret",
             CreateReport("Response Link Character"));
         createResponse.EnsureSuccessStatusCode();
@@ -579,13 +579,13 @@ public sealed class InventoryReportViewEndpointTests
         var id = createJson.RootElement.GetProperty("id").GetString();
 
         Assert.Equal(
-            "https://dev.xivcraftarchitect.com/api/marketmafioso/",
+            "https://dev.xivcraftarchitect.com/marketmafioso/",
             createJson.RootElement.GetProperty("dashboardUrl").GetString());
         Assert.Equal(
-            $"https://dev.xivcraftarchitect.com/api/marketmafioso/reports/{id}",
+            $"https://dev.xivcraftarchitect.com/marketmafioso/reports/{id}",
             createJson.RootElement.GetProperty("reportUrl").GetString());
         Assert.Equal(
-            $"https://dev.xivcraftarchitect.com/api/marketmafioso/api/reports/{id}",
+            $"https://dev.xivcraftarchitect.com/marketmafioso/api/reports/{id}",
             createJson.RootElement.GetProperty("apiReportUrl").GetString());
     }
 
@@ -620,14 +620,14 @@ public sealed class InventoryReportViewEndpointTests
             values =>
             {
                 contentRoot = values.ContentRoot;
-                values.Configuration["MarketMafioso:BasePath"] = "/api/marketmafioso";
+                values.Configuration["MarketMafioso:BasePath"] = "/marketmafioso";
                 values.Configuration["MarketMafioso:StorageLabel"] = "dev receiver storage";
             });
         using var client = application.CreateClient();
 
-        var dashboard = await client.GetStringAsync("/api/marketmafioso/");
+        var dashboard = await client.GetStringAsync("/marketmafioso/");
 
-        Assert.Contains("<base href=\"/api/marketmafioso/\" />", dashboard, StringComparison.Ordinal);
+        Assert.Contains("<base href=\"/marketmafioso/\" />", dashboard, StringComparison.Ordinal);
         Assert.DoesNotContain("[.{fingerprint}]", dashboard, StringComparison.Ordinal);
         Assert.DoesNotContain(contentRoot!, dashboard, StringComparison.Ordinal);
     }
@@ -640,7 +640,7 @@ public sealed class InventoryReportViewEndpointTests
             values =>
             {
                 contentRoot = values.ContentRoot;
-                values.Configuration["MarketMafioso:BasePath"] = "/api/marketmafioso";
+                values.Configuration["MarketMafioso:BasePath"] = "/marketmafioso";
             });
         using var client = application.CreateClient();
 
@@ -653,13 +653,13 @@ public sealed class InventoryReportViewEndpointTests
         var createResponse = await SendWithKeyAsync(
             client,
             HttpMethod.Post,
-            "/api/marketmafioso/inventory",
+            "/marketmafioso/api/inventory",
             "test-client-secret",
             CreateReport("Corrupt File Character"));
         createResponse.EnsureSuccessStatusCode();
 
-        var dashboard = await client.GetAsync("/api/marketmafioso/");
-        var latestJson = await client.GetAsync("/api/marketmafioso/reports/latest/json");
+        var dashboard = await client.GetAsync("/marketmafioso/");
+        var latestJson = await client.GetAsync("/marketmafioso/reports/latest/json");
 
         Assert.Equal(HttpStatusCode.OK, dashboard.StatusCode);
         Assert.Equal(HttpStatusCode.OK, latestJson.StatusCode);

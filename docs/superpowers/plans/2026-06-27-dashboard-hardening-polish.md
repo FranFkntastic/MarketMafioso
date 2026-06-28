@@ -10,6 +10,13 @@
 
 ---
 
+## Current Status
+
+- Done: Acquisition has been split into focused Blazor components backed by typed client services and live SSE request updates.
+- Done in the 2026-06-27 follow-up slice: dashboard navigation is base-path safe, Acquisition has one queue refresh surface, the request builder uses account-scoped dashboard characters instead of free-typed character/world fields, Settings has dashboard defaults for character/routing/expiry, and dashboard preferences are stored in SQLite.
+- Still pending: Inventory, Overview, full Diagnostics, Snapshots, richer request attempt timeline, and archival/preset behavior for completed or failed acquisition requests.
+- Route-shape decision: make `/marketmafioso/` the canonical browser dashboard and `/marketmafioso/api/*` the canonical machine/API/plugin namespace. Retire `/api/marketmafioso/*` in the same migration so stale configs fail loudly instead of slowing adoption of the new shape.
+
 ## File Structure
 
 Create:
@@ -49,12 +56,93 @@ Modify:
   Add attempt/event view fields only if missing from server projections.
 - `MarketMafioso.Dashboard/wwwroot/css/app.css`  
   Add dense grid, drawer, field, and status polish.
+- `MarketMafioso.Server/Program.cs`  
+  Promote canonical dashboard/API routes for `/marketmafioso/` + `/marketmafioso/api/*` hosting.
+- VPS deploy/Caddy workflow files  
+  Route `/marketmafioso/*` to the MarketMafioso receiver and remove the old `/api/marketmafioso/*` route.
 
 Test and verify:
 
 - `dotnet build "MarketMafioso.Dashboard/MarketMafioso.Dashboard.csproj" -c Debug`
 - `dotnet test "MarketMafioso.Server.Tests/MarketMafioso.Server.Tests.csproj" -c Debug --filter "FullyQualifiedName~MarketAcquisition" -v minimal` when server API projections change.
-- Browser smoke against deployed dev only after commit/push/deploy: login, item lookup, add to queue, stage queue, live update, row action, diagnostics open.
+- Browser smoke against deployed dev only after commit/push/deploy: canonical `/marketmafioso/` login, item lookup, add to queue, stage queue, live update, row action, diagnostics open, plus a negative smoke proving `/api/marketmafioso/` no longer serves the dashboard.
+
+---
+
+### Task 0: Migrate Hosted Route Namespace
+
+**Files:**
+- Modify: `MarketMafioso.Server/Program.cs`
+- Modify: VPS deploy/Caddy workflow files that route `dev.xivcraftarchitect.com`
+- Modify: `MarketMafioso/ReceiverEndpointClassifier.cs` or equivalent dashboard URL derivation code if the plugin owns canonical dashboard URL construction
+- Test: `MarketMafioso.Server.Tests/*Route*` or focused acquisition/dashboard route endpoint tests
+
+- [x] **Step 1: Add canonical route expectations to tests**
+
+Add focused route tests that prove these public shapes are valid after the hosted base path is set to `/marketmafioso`:
+
+```text
+GET  /marketmafioso/                          -> dashboard shell
+GET  /marketmafioso/settings                  -> dashboard shell
+GET  /marketmafioso/health                    -> health JSON
+GET  /marketmafioso/api/inventory/characters  -> dashboard JSON, session required
+GET  /marketmafioso/api/acquisition/requests/pending?... -> plugin API-key route
+POST /marketmafioso/api/acquisition/requests/{id}/claim -> plugin API-key route
+POST /marketmafioso/api/acquisition/requests/{id}/progress -> plugin API-key route
+```
+
+Also add retirement tests for the old hosted route:
+
+```text
+GET /api/marketmafioso/ -> not the MarketMafioso dashboard
+GET /api/marketmafioso/acquisition/requests/pending?... -> not a valid plugin endpoint
+POST /api/marketmafioso/acquisition/requests -> not a valid dashboard or plugin create endpoint
+```
+
+Expected: tests fail before the migration if canonical `/marketmafioso/api/*` is not routed.
+
+- [x] **Step 2: Promote `/marketmafioso` as the hosted app base**
+
+Configure hosted dev so the MarketMafioso receiver sees `PathBase=/marketmafioso` for canonical traffic. The dashboard shell must continue to rewrite `<base href="/marketmafioso/" />` from `HttpRequest.PathBase`.
+
+Expected: dashboard nav links resolve to `/marketmafioso/settings`, not `/settings` and not `/api/marketmafioso/settings`.
+
+- [x] **Step 3: Add canonical API routes under `/api/*` inside the app**
+
+Make dashboard JSON and plugin lifecycle endpoints available under the receiver app's `/api/*` namespace so the hosted public routes become `/marketmafioso/api/*`.
+
+Expected: the canonical machine route shape is consistent across dashboard JSON, item lookup, acquisition lifecycle, inventory/report read APIs, diagnostics, and SSE.
+
+- [x] **Step 4: Remove `/api/marketmafioso/*` hosted compatibility**
+
+Remove the old hosted route shape from dev Caddy/deploy configuration and from any generated/dashboard-derived URLs. Stale clients should fail clearly and be fixed at their configuration source.
+
+Expected: new docs and default dashboard/API URLs point at `/marketmafioso/` and `/marketmafioso/api/*`; stale `/api/marketmafioso/*` configs no longer appear supported.
+
+- [x] **Step 5: Update plugin dashboard URL derivation and endpoint presets**
+
+Update plugin-side endpoint classification so a configured canonical API endpoint derives the canonical dashboard URL:
+
+```text
+https://dev.xivcraftarchitect.com/marketmafioso/api/inventory
+  -> https://dev.xivcraftarchitect.com/marketmafioso/
+```
+
+Expected: the plugin opens the canonical dashboard from canonical API endpoints. Legacy `/api/marketmafioso/*` derivation should be removed or classified as unsupported.
+
+- [x] **Step 6: Update deploy smoke checks**
+
+After deploying to dev, smoke:
+
+```text
+https://dev.xivcraftarchitect.com/marketmafioso/
+https://dev.xivcraftarchitect.com/marketmafioso/health
+https://dev.xivcraftarchitect.com/api/marketmafioso/
+```
+
+Also keep the Caddy service-user config check in the deploy path: `sudo -u caddy caddy adapt --config /etc/caddy/Caddyfile`.
+
+Expected: canonical dashboard loads, canonical health returns success, canonical plugin lifecycle routes authenticate correctly, and the old `/api/marketmafioso/` route no longer serves the MarketMafioso dashboard/API.
 
 ---
 
@@ -1445,7 +1533,7 @@ Expected: deploy succeeds against the pushed `local-dev` ref.
 
 - [ ] **Step 6: Browser smoke test on dev**
 
-Use `https://dev.xivcraftarchitect.com/api/marketmafioso/` and verify:
+Use `https://dev.xivcraftarchitect.com/marketmafioso/` and verify:
 
 1. Login succeeds.
 2. Item lookup accepts typing without deleting search text.
@@ -1455,6 +1543,8 @@ Use `https://dev.xivcraftarchitect.com/api/marketmafioso/` and verify:
 6. Clicking a request opens details drawer.
 7. Cancel and resend actions update the row.
 8. Settings > Diagnostics loads events, filters rows, and opens event drawer.
+
+Also verify `https://dev.xivcraftarchitect.com/api/marketmafioso/` no longer serves the MarketMafioso dashboard/API after the route migration lands.
 
 ---
 

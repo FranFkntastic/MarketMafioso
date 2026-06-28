@@ -3,13 +3,10 @@
         @StatusText
     </MudChip>
     <MudText Typo="Typo.caption" Class="muted">@RequestCount active request(s)</MudText>
-    <MudSpacer />
-    <MudButton Variant="Variant.Outlined" Class="quiet-button" OnClick="RefreshRequested">Refresh</MudButton>
 </MudStack>
 
 @code {
     [Parameter] public bool Connected { get; set; }
     [Parameter] public string StatusText { get; set; } = "Live updates idle";
     [Parameter] public int RequestCount { get; set; }
-    [Parameter] public EventCallback RefreshRequested { get; set; }
 }

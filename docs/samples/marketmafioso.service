@@ -14,7 +14,7 @@ User=marketmafioso
 Environment=ASPNETCORE_URLS=http://127.0.0.1:5088
 Environment=MarketMafioso__RequireApiKey=true
 Environment=MarketMafioso__ClientApiKey=replace-with-a-random-client-key
-Environment=MarketMafioso__BasePath=/api/marketmafioso
+Environment=MarketMafioso__BasePath=/marketmafioso
 Environment=MarketMafioso__PublicOrigin=https://marketmafioso.example.com
 Environment=MarketMafioso__StorageLabel=self-hosted receiver storage
 Environment=MarketMafioso__DatabasePath=/var/lib/marketmafioso/marketmafioso.db

@@ -121,6 +121,8 @@ POST /auth/logout
 GET /auth/session
 ```
 
+These routes are relative to the dashboard base path. On hosted dev that means `/marketmafioso/auth/login`, not root `/auth/login`.
+
 Dashboard routes and JSON endpoints require an active dashboard session. Login accepts the existing dashboard user table and password hash model. The bootstrap user behavior can remain, but the browser experience should become a normal login screen.
 
 Cookies should be:
@@ -146,16 +148,16 @@ POST   /api/acquisition/requests/{id}/resend
 GET    /api/acquisition/events/stream
 ```
 
-Plugin acquisition contract should remain stable unless a server-side model change is required:
+Plugin acquisition contract uses the same API namespace as browser JSON endpoints, but with client API key auth instead of dashboard cookie auth:
 
 ```http
-GET    /acquisition/requests/pending
-POST   /acquisition/requests/{id}/claim
-POST   /acquisition/requests/{id}/accept
-POST   /acquisition/requests/{id}/reject
-POST   /acquisition/requests/{id}/progress
-POST   /acquisition/requests/{id}/complete
-POST   /acquisition/requests/{id}/fail
+GET    /api/acquisition/requests/pending
+POST   /api/acquisition/requests/{id}/claim
+POST   /api/acquisition/requests/{id}/accept
+POST   /api/acquisition/requests/{id}/reject
+POST   /api/acquisition/requests/{id}/progress
+POST   /api/acquisition/requests/{id}/complete
+POST   /api/acquisition/requests/{id}/fail
 ```
 
 Inventory:
@@ -457,6 +459,34 @@ Diagnostics should explicitly classify:
 
 For VPS smoke and deploy diagnostics, root-level Caddy validation is not enough. The service-user `caddy adapt` check should be treated as a first-class smoke result.
 
+## Hosting And Route Shape
+
+The current hosted dev receiver lives under `/api/marketmafioso` because it began as an API-shaped receiver mounted beside Craft Architect. The dashboard rebuild intentionally breaks from that shape instead of preserving it as a compatibility surface.
+
+Canonical hosted shape:
+
+- `/marketmafioso/` serves the browser dashboard.
+- `/marketmafioso/settings`, `/marketmafioso/inventory`, `/marketmafioso/overview`, and other non-API child routes are dashboard routes.
+- `/marketmafioso/api/*` is the canonical machine/API namespace for dashboard JSON, plugin ingest, plugin acquisition pickup/lifecycle, inventory reads, XIV data, diagnostics, and SSE.
+- `/api/marketmafioso/*` is retired during the migration. Existing plugin configs, derived dashboard links, docs, and deployed smoke scripts must move to the canonical shape in the same pass.
+
+Migration pass:
+
+- Set the hosted dashboard base path to `/marketmafioso`.
+- Keep the Blazor shell base-path-safe by rewriting `<base href>` from the active `PathBase` and by using relative dashboard navigation links.
+- Add or promote canonical API routes under `/api/*` inside the MarketMafioso app so the public hosted paths become `/marketmafioso/api/*`.
+- Remove the `/api/marketmafioso/*` hosted route from Caddy/deploy configuration once plugin defaults and smoke checks point at `/marketmafioso/api/*`.
+- Make route diagnostics report requests that hit an unrecognized or retired route shape as configuration errors, not compatibility traffic.
+
+Long-term:
+
+- Treat `/marketmafioso/api/*` as machine/API/plugin space.
+- If a dedicated subdomain is introduced later, serve the dashboard at `https://marketmafioso.dev.xivcraftarchitect.com/` and machine endpoints at `https://marketmafioso.dev.xivcraftarchitect.com/api/*`.
+- For self-hosted single-purpose MarketMafioso receivers, serving the dashboard at `/` is acceptable and probably the simplest default.
+- Do not move Craft Architect away from `/` casually. It is the historical primary app for the domain, and moving it to `/craftarchitect/` would require a separate migration for Blazor base href, browser storage, bookmarks, app links, service-worker/static asset behavior if present, and docs.
+
+The practical migration is therefore to leave Craft Architect at the root for now and move MarketMafioso to `/marketmafioso/` with `/marketmafioso/api/*` during the dashboard rebuild.
+
 ## Compatibility And Migration
 
 Keep these working while replacing the browser UI:
@@ -467,18 +497,30 @@ Keep these working while replacing the browser UI:
 - raw report JSON access,
 - structured inventory database.
 
-The HTML dashboard routes can become Blazor static host routes. Existing JSON routes can either remain as compatibility aliases or move behind `/api/*` with redirects only for browser navigation. Plugin routes should not be moved casually.
+The HTML dashboard routes can become Blazor static host routes. JSON and plugin routes move behind `/marketmafioso/api/*` for hosted deployments. Plugin routes should not be moved casually after this migration is complete.
 
 ## Implementation Priorities
 
-1. Add dashboard client project and static hosting.
-2. Add cookie session auth and login/logout/session APIs.
-3. Add persistent diagnostics store and SSE broadcaster.
-4. Rebuild Acquisition as the first Blazor page.
-5. Move item lookup and acquisition queue staging to typed client services.
-6. Rebuild Inventory against structured JSON APIs.
-7. Move Diagnostics and Snapshots under Settings.
-8. Remove server-rendered dashboard HTML once equivalent Blazor pages exist.
+### Current Status
+
+- Done: Dashboard client project and static hosting exist.
+- Done: Server-side dashboard shell hosting rewrites Blazor `<base href>` from the configured receiver base path.
+- Done: Cookie-backed dashboard login/session APIs exist.
+- Done: Acquisition is the first Blazor page and uses typed client services for item lookup, queue staging, SSE queue updates, cancel, and resend.
+- Partial: Persistent diagnostics storage exists and diagnostics can be viewed from Settings, but the Settings IA is still mostly a shell.
+- Partial: Acquisition UI is functional but still needs deployment of the latest base-path-safe navigation/settings polish, plus continued spacing and table polish.
+- Pending: Inventory, Overview, Snapshots, and the full Diagnostics workspace have not been rebuilt to the same standard as Acquisition.
+- Pending: Move the hosted receiver to the canonical `/marketmafioso/` dashboard and `/marketmafioso/api/*` machine route shape, retiring `/api/marketmafioso/*` in the same pass.
+
+### Next Priorities
+
+1. Migrate the dev-hosted route shape to `/marketmafioso/` and `/marketmafioso/api/*`, then remove `/api/marketmafioso/*` from the hosted route surface.
+2. Stabilize the dashboard shell: base-path-safe navigation, one refresh model, and readable control spacing.
+3. Make Settings real enough for Acquisition: default character, default routing, default expiry, and account-scoped character choices.
+4. Replace free-typed Acquisition target character/world fields with a character selector populated from account-associated inventory characters.
+5. Rebuild Inventory against structured JSON APIs.
+6. Move Diagnostics and Snapshots into full Settings workspaces with filters, detail drawers, and retention visibility.
+7. Remove server-rendered dashboard HTML once equivalent Blazor pages exist.
 
 ## Non-Goals For This Pass
 

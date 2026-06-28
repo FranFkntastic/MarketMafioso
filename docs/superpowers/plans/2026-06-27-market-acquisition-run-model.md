@@ -79,7 +79,7 @@ public async Task RecentQueueIncludesLatestAttemptProjection()
     await SendWithKeyAsync(
         client,
         HttpMethod.Post,
-        $"/api/marketmafioso/acquisition/requests/{claimed.RequestId}/accept",
+        $"/marketmafioso/api/acquisition/requests/{claimed.RequestId}/accept",
         "client-secret",
         new
         {
@@ -90,7 +90,7 @@ public async Task RecentQueueIncludesLatestAttemptProjection()
     var progress = await SendWithKeyAsync(
         client,
         HttpMethod.Post,
-        $"/api/marketmafioso/acquisition/requests/{claimed.RequestId}/progress",
+        $"/marketmafioso/api/acquisition/requests/{claimed.RequestId}/progress",
         "client-secret",
         new
         {
@@ -113,7 +113,7 @@ public async Task RecentQueueIncludesLatestAttemptProjection()
     var recentResponse = await SendWithKeyAsync(
         client,
         HttpMethod.Get,
-        "/api/marketmafioso/acquisition/requests/recent",
+        "/marketmafioso/api/acquisition/requests/recent",
         "client-secret");
     recentResponse.EnsureSuccessStatusCode();
     var recent = await recentResponse.Content.ReadFromJsonAsync<JsonElement>();
@@ -233,8 +233,8 @@ public async Task ProgressAttemptEventIsIdempotentForSameBody()
         clientTimestampUtc = DateTimeOffset.UtcNow,
     };
 
-    var first = await SendWithKeyAsync(client, HttpMethod.Post, $"/api/marketmafioso/acquisition/requests/{claimed.RequestId}/progress", "client-secret", body);
-    var second = await SendWithKeyAsync(client, HttpMethod.Post, $"/api/marketmafioso/acquisition/requests/{claimed.RequestId}/progress", "client-secret", body);
+    var first = await SendWithKeyAsync(client, HttpMethod.Post, $"/marketmafioso/api/acquisition/requests/{claimed.RequestId}/progress", "client-secret", body);
+    var second = await SendWithKeyAsync(client, HttpMethod.Post, $"/marketmafioso/api/acquisition/requests/{claimed.RequestId}/progress", "client-secret", body);
 
     first.EnsureSuccessStatusCode();
     second.EnsureSuccessStatusCode();
@@ -280,8 +280,8 @@ public async Task ProgressAttemptEventRejectsSameIdempotencyKeyWithDifferentBody
         clientTimestampUtc = DateTimeOffset.UtcNow,
     };
 
-    await SendWithKeyAsync(client, HttpMethod.Post, $"/api/marketmafioso/acquisition/requests/{claimed.RequestId}/progress", "client-secret", first);
-    var conflict = await SendWithKeyAsync(client, HttpMethod.Post, $"/api/marketmafioso/acquisition/requests/{claimed.RequestId}/progress", "client-secret", second);
+    await SendWithKeyAsync(client, HttpMethod.Post, $"/marketmafioso/api/acquisition/requests/{claimed.RequestId}/progress", "client-secret", first);
+    var conflict = await SendWithKeyAsync(client, HttpMethod.Post, $"/marketmafioso/api/acquisition/requests/{claimed.RequestId}/progress", "client-secret", second);
 
     Assert.Equal(HttpStatusCode.Conflict, conflict.StatusCode);
     var text = await conflict.Content.ReadAsStringAsync();
@@ -322,10 +322,10 @@ public async Task ProgressAttemptEventRejectsSameAttemptSequenceWithDifferentIde
         clientTimestampUtc = DateTimeOffset.UtcNow,
     };
 
-    var accepted = await SendWithKeyAsync(client, HttpMethod.Post, $"/api/marketmafioso/acquisition/requests/{claimed.RequestId}/progress", "client-secret", first);
+    var accepted = await SendWithKeyAsync(client, HttpMethod.Post, $"/marketmafioso/api/acquisition/requests/{claimed.RequestId}/progress", "client-secret", first);
     accepted.EnsureSuccessStatusCode();
 
-    var conflict = await SendWithKeyAsync(client, HttpMethod.Post, $"/api/marketmafioso/acquisition/requests/{claimed.RequestId}/progress", "client-secret", second);
+    var conflict = await SendWithKeyAsync(client, HttpMethod.Post, $"/marketmafioso/api/acquisition/requests/{claimed.RequestId}/progress", "client-secret", second);
 
     Assert.Equal(HttpStatusCode.Conflict, conflict.StatusCode);
     var text = await conflict.Content.ReadAsStringAsync();
@@ -346,7 +346,7 @@ private static async Task<(string RequestId, string ClaimToken)> CreateAcceptedR
     var accept = await SendWithKeyAsync(
         client,
         HttpMethod.Post,
-        $"/api/marketmafioso/acquisition/requests/{claimed.RequestId}/accept",
+        $"/marketmafioso/api/acquisition/requests/{claimed.RequestId}/accept",
         "client-secret",
         new
         {
@@ -370,7 +370,7 @@ public async Task LateOldAttemptProgressAfterNewAttemptIsClassifiedStale()
     using var client = application.CreateClient();
     var claimed = await CreateAcceptedRequestAsync(client, "attempt-stale");
 
-    var first = await SendWithKeyAsync(client, HttpMethod.Post, $"/api/marketmafioso/acquisition/requests/{claimed.RequestId}/progress", "client-secret", new
+    var first = await SendWithKeyAsync(client, HttpMethod.Post, $"/marketmafioso/api/acquisition/requests/{claimed.RequestId}/progress", "client-secret", new
     {
         claimToken = claimed.ClaimToken,
         idempotencyKey = "attempt-a-1",
@@ -385,7 +385,7 @@ public async Task LateOldAttemptProgressAfterNewAttemptIsClassifiedStale()
     });
     first.EnsureSuccessStatusCode();
 
-    var second = await SendWithKeyAsync(client, HttpMethod.Post, $"/api/marketmafioso/acquisition/requests/{claimed.RequestId}/progress", "client-secret", new
+    var second = await SendWithKeyAsync(client, HttpMethod.Post, $"/marketmafioso/api/acquisition/requests/{claimed.RequestId}/progress", "client-secret", new
     {
         claimToken = claimed.ClaimToken,
         idempotencyKey = "attempt-b-1",
@@ -400,7 +400,7 @@ public async Task LateOldAttemptProgressAfterNewAttemptIsClassifiedStale()
     });
     second.EnsureSuccessStatusCode();
 
-    var stale = await SendWithKeyAsync(client, HttpMethod.Post, $"/api/marketmafioso/acquisition/requests/{claimed.RequestId}/progress", "client-secret", new
+    var stale = await SendWithKeyAsync(client, HttpMethod.Post, $"/marketmafioso/api/acquisition/requests/{claimed.RequestId}/progress", "client-secret", new
     {
         claimToken = claimed.ClaimToken,
         idempotencyKey = "attempt-a-2",
@@ -435,7 +435,7 @@ public async Task LegacyProgressWithoutAttemptIdStillWorksDuringMigration()
     var progress = await SendWithKeyAsync(
         client,
         HttpMethod.Post,
-        $"/api/marketmafioso/acquisition/requests/{claimed.RequestId}/progress",
+        $"/marketmafioso/api/acquisition/requests/{claimed.RequestId}/progress",
         "client-secret",
         new
         {
@@ -706,7 +706,7 @@ public async Task ReportProgressAsync_PostsAttemptEventFields()
 
     var client = new MarketAcquisitionRequestClient(httpClient);
     await client.ReportAttemptProgressAsync(
-        "https://example.test/api/marketmafioso/inventory",
+        "https://example.test/marketmafioso/api/inventory",
         "secret",
         "request-1",
         "claim-token",
@@ -900,7 +900,7 @@ public async Task AcquisitionDashboardShowsAttemptPhaseAndWorld()
     using var client = application.CreateClient();
     var claimed = await CreateAcceptedRequestAsync(client, "dashboard-attempt-projection");
 
-    await SendWithKeyAsync(client, HttpMethod.Post, $"/api/marketmafioso/acquisition/requests/{claimed.RequestId}/progress", "client-secret", new
+    await SendWithKeyAsync(client, HttpMethod.Post, $"/marketmafioso/api/acquisition/requests/{claimed.RequestId}/progress", "client-secret", new
     {
         claimToken = claimed.ClaimToken,
         idempotencyKey = "dashboard-attempt-1",
@@ -917,7 +917,7 @@ public async Task AcquisitionDashboardShowsAttemptPhaseAndWorld()
         clientTimestampUtc = DateTimeOffset.UtcNow,
     });
 
-    var page = await client.GetStringAsync("/api/marketmafioso/acquisition");
+    var page = await client.GetStringAsync("/marketmafioso/acquisition");
 
     Assert.Contains("Purchasing", page, StringComparison.Ordinal);
     Assert.Contains("Brynhildr", page, StringComparison.Ordinal);
@@ -935,7 +935,7 @@ public async Task AcquisitionApiRequestsIncludesAttemptProjection()
     using var client = application.CreateClient();
     var claimed = await CreateAcceptedRequestAsync(client, "api-attempt-projection");
 
-    await SendWithKeyAsync(client, HttpMethod.Post, $"/api/marketmafioso/acquisition/requests/{claimed.RequestId}/progress", "client-secret", new
+    await SendWithKeyAsync(client, HttpMethod.Post, $"/marketmafioso/api/acquisition/requests/{claimed.RequestId}/progress", "client-secret", new
     {
         claimToken = claimed.ClaimToken,
         idempotencyKey = "api-attempt-1",
@@ -954,7 +954,7 @@ public async Task AcquisitionApiRequestsIncludesAttemptProjection()
     var response = await SendWithKeyAsync(
         client,
         HttpMethod.Get,
-        "/api/marketmafioso/api/acquisition/requests",
+        "/marketmafioso/api/acquisition/requests",
         "client-secret");
     response.EnsureSuccessStatusCode();
     var json = await response.Content.ReadFromJsonAsync<JsonElement>();
@@ -1010,7 +1010,7 @@ public async Task AcquisitionAttemptEventsEndpointReturnsSanitizedTimeline()
     using var client = application.CreateClient();
     var claimed = await CreateAcceptedRequestAsync(client, "attempt-events-endpoint");
 
-    await SendWithKeyAsync(client, HttpMethod.Post, $"/api/marketmafioso/acquisition/requests/{claimed.RequestId}/progress", "client-secret", new
+    await SendWithKeyAsync(client, HttpMethod.Post, $"/marketmafioso/api/acquisition/requests/{claimed.RequestId}/progress", "client-secret", new
     {
         claimToken = claimed.ClaimToken,
         idempotencyKey = "timeline-attempt-1",
@@ -1027,7 +1027,7 @@ public async Task AcquisitionAttemptEventsEndpointReturnsSanitizedTimeline()
     var response = await SendWithKeyAsync(
         client,
         HttpMethod.Get,
-        $"/api/marketmafioso/acquisition/requests/{claimed.RequestId}/events",
+        $"/marketmafioso/api/acquisition/requests/{claimed.RequestId}/events",
         "client-secret");
     response.EnsureSuccessStatusCode();
     var events = await response.Content.ReadFromJsonAsync<JsonElement>();
@@ -1043,7 +1043,7 @@ Add a second assertion or second test for the API-prefixed diagnostics path:
 var apiResponse = await SendWithKeyAsync(
     client,
     HttpMethod.Get,
-    $"/api/marketmafioso/api/acquisition/requests/{claimed.RequestId}/events",
+    $"/marketmafioso/api/acquisition/requests/{claimed.RequestId}/events",
     "client-secret");
 apiResponse.EnsureSuccessStatusCode();
 ```

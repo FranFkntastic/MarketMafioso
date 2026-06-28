@@ -42,6 +42,9 @@ public sealed class DashboardSessionAuthMiddleware
 
     private static bool RequiresDashboardSession(HttpRequest request)
     {
+        if (IsPluginAcquisitionApiRoute(request))
+            return false;
+
         if (request.Path.StartsWithSegments("/api/acquisition", StringComparison.OrdinalIgnoreCase) ||
             request.Path.StartsWithSegments("/api/inventory", StringComparison.OrdinalIgnoreCase) ||
             request.Path.StartsWithSegments("/api/settings", StringComparison.OrdinalIgnoreCase) ||
@@ -59,5 +62,36 @@ public sealed class DashboardSessionAuthMiddleware
         }
 
         return false;
+    }
+
+    private static bool IsPluginAcquisitionApiRoute(HttpRequest request)
+    {
+        if (!request.Path.StartsWithSegments("/api/acquisition/requests", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        if (HttpMethods.IsPost(request.Method) &&
+            request.Path.Equals("/api/acquisition/requests", StringComparison.OrdinalIgnoreCase))
+        {
+            return request.Headers.ContainsKey("X-Api-Key");
+        }
+
+        if (HttpMethods.IsGet(request.Method) &&
+            request.Path.Equals("/api/acquisition/requests/pending", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (!HttpMethods.IsPost(request.Method))
+            return false;
+
+        return request.Path.Value?.Contains("/claim", StringComparison.OrdinalIgnoreCase) == true ||
+               request.Path.Value?.Contains("/accept", StringComparison.OrdinalIgnoreCase) == true ||
+               request.Path.Value?.Contains("/reject", StringComparison.OrdinalIgnoreCase) == true ||
+               request.Path.Value?.Contains("/progress", StringComparison.OrdinalIgnoreCase) == true ||
+               request.Path.Value?.Contains("/complete", StringComparison.OrdinalIgnoreCase) == true ||
+               request.Path.Value?.Contains("/fail", StringComparison.OrdinalIgnoreCase) == true ||
+               (request.Headers.ContainsKey("X-Api-Key") &&
+                (request.Path.Value?.Contains("/cancel", StringComparison.OrdinalIgnoreCase) == true ||
+                 request.Path.Value?.Contains("/resend", StringComparison.OrdinalIgnoreCase) == true));
     }
 }

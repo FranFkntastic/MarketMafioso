@@ -40,11 +40,13 @@ else
         <DashboardStatusHost />
         <LiveStatusStrip Connected="_eventsConnected"
                          StatusText="@_liveStatus"
-                         RequestCount="State.Requests.Count"
-                         RefreshRequested="RefreshRequestsAsync" />
+                         RequestCount="State.Requests.Count" />
 
         <div class="page-grid acquisition-grid">
-            <RequestBuilder Busy="State.IsBusy" StageRequested="StageRequestsAsync" />
+            <RequestBuilder Busy="State.IsBusy"
+                            Characters="_characters"
+                            Settings="_settings"
+                            StageRequested="StageRequestsAsync" />
             <ServerRequestGrid Requests="State.Requests"
                                SelectedRequest="State.SelectedRequest"
                                SelectedRequestChanged="SelectRequestAsync"
@@ -68,6 +70,8 @@ else
     private string _liveStatus = "Live updates idle";
     private string _loginUsername = string.Empty;
     private string _loginPassword = string.Empty;
+    private IReadOnlyList<DashboardCharacterOption> _characters = [];
+    private DashboardSettingsView _settings = new();
     private DotNetObjectReference<Home>? _dotNetRef;
 
     protected override async Task OnInitializedAsync()
@@ -75,7 +79,10 @@ else
         State.Changed += OnStateChanged;
         await LoadSessionAsync();
         if (_session is not null)
+        {
+            await LoadDashboardContextAsync();
             await State.RefreshAsync();
+        }
         _loading = false;
     }
 
@@ -91,6 +98,7 @@ else
         {
             await Api.LoginAsync(_loginUsername, _loginPassword);
             await LoadSessionAsync();
+            await LoadDashboardContextAsync();
             await State.RefreshAsync();
             await StartEventsAsync();
             Status.Info("Logged in.");
@@ -112,6 +120,12 @@ else
     private async Task LoadSessionAsync()
     {
         _session = await Api.GetSessionAsync();
+    }
+
+    private async Task LoadDashboardContextAsync()
+    {
+        _characters = await Api.GetCharactersAsync();
+        _settings = await Api.GetDashboardSettingsAsync();
     }
 
     private async Task StartEventsAsync()

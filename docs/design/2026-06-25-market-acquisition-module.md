@@ -185,7 +185,7 @@ Example:
 
 The server can create and store this request from the dashboard. The plugin can claim it only through the plugin pickup endpoint. The dashboard should not be able to mark a request as accepted, running, or complete on behalf of the plugin.
 
-All Market Acquisition routes are mounted under the existing receiver base path. In hosted dev, that means `/api/marketmafioso/acquisition/...`. The logical routes below are relative to that base path.
+Market Acquisition machine routes are mounted under the MarketMafioso API namespace. Canonical hosted dev paths use `/marketmafioso/api/acquisition/...`. The older `/api/marketmafioso/acquisition/...` shape is retired during the route migration rather than kept as a compatibility alias. The logical routes below are relative to the MarketMafioso API namespace.
 
 Endpoint shape:
 

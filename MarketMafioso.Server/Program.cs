@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Globalization;
 using Microsoft.Extensions.Primitives;
 using MarketMafioso.Server;
 using MarketMafioso.Server.Auth;
@@ -114,6 +115,10 @@ app.MapGet("/api/diagnostics/events/stream", async (
     await WriteSseEventAsync(response, "snapshot", events, token);
 });
 
+app.MapGet("/api/inventory/characters", ListDashboardCharacters);
+app.MapGet("/api/settings/dashboard", GetDashboardSettings);
+app.MapPut("/api/settings/dashboard", SaveDashboardSettings);
+
 app.MapGet("/api/events/stream", async (
     HttpResponse response,
     MarketAcquisitionRequestStore acquisitionStore,
@@ -144,6 +149,14 @@ app.MapGet("/acquisition/requests/recent", async (
     var acquisitionRequests = await acquisitionStore.ListRecentAsync(50, token);
     return Results.Json(BuildAcquisitionQueueUpdate(acquisitionRequests, request.PathBase));
 });
+app.MapGet("/api/acquisition/requests/recent", async (
+    HttpRequest request,
+    MarketAcquisitionRequestStore acquisitionStore,
+    CancellationToken token) =>
+{
+    var acquisitionRequests = await acquisitionStore.ListRecentAsync(50, token);
+    return Results.Json(BuildAcquisitionQueueUpdate(acquisitionRequests, request.PathBase));
+});
 
 app.MapPost("/inventory", SaveInventoryReport);
 app.MapPost("/api/inventory", SaveInventoryReport);
@@ -151,16 +164,23 @@ app.MapPost("/api/inventory", SaveInventoryReport);
 app.MapPost("/acquisition/requests", CreateAcquisitionRequest);
 app.MapPost("/api/acquisition/requests", CreateAcquisitionRequest);
 app.MapGet("/acquisition/requests/pending", ListPendingAcquisitionRequests);
+app.MapGet("/api/acquisition/requests/pending", ListPendingAcquisitionRequests);
 app.MapPost("/acquisition/requests/{id}/claim", ClaimAcquisitionRequest);
+app.MapPost("/api/acquisition/requests/{id}/claim", ClaimAcquisitionRequest);
 app.MapPost("/acquisition/requests/{id}/accept", AcceptAcquisitionRequest);
+app.MapPost("/api/acquisition/requests/{id}/accept", AcceptAcquisitionRequest);
 app.MapPost("/acquisition/requests/{id}/reject", RejectAcquisitionRequest);
+app.MapPost("/api/acquisition/requests/{id}/reject", RejectAcquisitionRequest);
 app.MapPost("/acquisition/requests/{id}/cancel", CancelAcquisitionRequest);
 app.MapPost("/api/acquisition/requests/{id}/cancel", CancelAcquisitionRequest);
 app.MapPost("/acquisition/requests/{id}/resend", ResendAcquisitionRequest);
 app.MapPost("/api/acquisition/requests/{id}/resend", ResendAcquisitionRequest);
 app.MapPost("/acquisition/requests/{id}/progress", ReportAcquisitionProgress);
+app.MapPost("/api/acquisition/requests/{id}/progress", ReportAcquisitionProgress);
 app.MapPost("/acquisition/requests/{id}/complete", CompleteAcquisitionRequest);
+app.MapPost("/api/acquisition/requests/{id}/complete", CompleteAcquisitionRequest);
 app.MapPost("/acquisition/requests/{id}/fail", FailAcquisitionRequest);
+app.MapPost("/api/acquisition/requests/{id}/fail", FailAcquisitionRequest);
 
 app.MapGet("/api/xivdata/items/search", async (
     IHttpClientFactory httpClientFactory,
@@ -326,6 +346,108 @@ async Task<IResult> GetDashboardSession(
         },
         session.ExpiresAtUtc,
     });
+}
+
+async Task<IResult> ListDashboardCharacters(
+    HttpContext context,
+    SqliteConnectionFactory connectionFactory,
+    InventoryReportStore store,
+    CancellationToken token)
+{
+    var accountIds = await GetDashboardAccountIdsAsync(context, connectionFactory, token);
+    var characters = new List<DashboardCharacterOption>();
+    foreach (var accountId in accountIds)
+    {
+        var accountCharacters = await store.ListCharactersAsync(accountId, token);
+        characters.AddRange(accountCharacters.Select(character => new DashboardCharacterOption(
+            character.Id,
+            character.CharacterName,
+            character.HomeWorld,
+            character.LastSeenAt)));
+    }
+
+    return Results.Ok(characters
+        .GroupBy(character => character.Id)
+        .Select(group => group.First())
+        .OrderByDescending(character => character.LastSeenAt)
+        .ThenBy(character => character.CharacterName, StringComparer.OrdinalIgnoreCase)
+        .ToArray());
+}
+
+async Task<IResult> GetDashboardSettings(
+    HttpContext context,
+    SqliteConnectionFactory connectionFactory,
+    CancellationToken token)
+{
+    var owner = DashboardPreferenceOwner(context);
+    var settings = await LoadDashboardSettingsAsync(connectionFactory, owner, token);
+    if (settings != null)
+        return Results.Ok(settings);
+
+    return Results.Ok(new DashboardSettingsView());
+}
+
+async Task<IResult> SaveDashboardSettings(
+    HttpContext context,
+    SqliteConnectionFactory connectionFactory,
+    DashboardSettingsUpdate update,
+    CancellationToken token)
+{
+    if (!string.Equals(update.DefaultRegion, "North America", StringComparison.Ordinal))
+        return Results.BadRequest(new { error = "unsupported_region" });
+
+    if (update.DefaultWorldMode is not ("Recommended" or "CurrentWorld" or "AllWorldSweep"))
+        return Results.BadRequest(new { error = "unsupported_world_mode" });
+
+    if (update.DefaultPickupExpiresSeconds is < 60 or > 3600)
+        return Results.BadRequest(new { error = "unsupported_pickup_expiry" });
+
+    if (update.DefaultCharacterId != null &&
+        !await DashboardCanAccessCharacterAsync(context, connectionFactory, update.DefaultCharacterId.Value, token))
+    {
+        return Results.BadRequest(new { error = "unknown_character" });
+    }
+
+    var now = DateTimeOffset.UtcNow;
+    var view = new DashboardSettingsView
+    {
+        DefaultCharacterId = update.DefaultCharacterId,
+        DefaultRegion = update.DefaultRegion,
+        DefaultWorldMode = update.DefaultWorldMode,
+        DefaultPickupExpiresSeconds = update.DefaultPickupExpiresSeconds,
+        UpdatedAtUtc = now,
+    };
+    var owner = DashboardPreferenceOwner(context);
+    await using var connection = await connectionFactory.OpenConnectionAsync(token);
+    await using var command = connection.CreateCommand();
+    command.CommandText = """
+        INSERT INTO dashboard_preferences (
+            owner_kind,
+            owner_key,
+            scope,
+            preferences_json,
+            updated_at_utc
+        )
+        VALUES (
+            $ownerKind,
+            $ownerKey,
+            $scope,
+            $preferencesJson,
+            $updatedAt
+        )
+        ON CONFLICT(owner_kind, owner_key, scope)
+        DO UPDATE SET
+            preferences_json = excluded.preferences_json,
+            updated_at_utc = excluded.updated_at_utc
+        """;
+    command.Parameters.AddWithValue("$ownerKind", owner.OwnerKind);
+    command.Parameters.AddWithValue("$ownerKey", owner.OwnerKey);
+    command.Parameters.AddWithValue("$scope", owner.Scope);
+    command.Parameters.AddWithValue("$preferencesJson", JsonSerializer.Serialize(view, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+    command.Parameters.AddWithValue("$updatedAt", now.ToString("O", CultureInfo.InvariantCulture));
+    await command.ExecuteNonQueryAsync(token);
+
+    return Results.Ok(view);
 }
 
 async Task<IResult> SaveInventoryReport(
@@ -826,7 +948,7 @@ static ApiKeyPurpose RequiredApiKeyPurpose(HttpRequest request, bool requireApiK
     if (IsAcquisitionBrowserRead(request))
         return ApiKeyPurpose.None;
 
-    if (IsAcquisitionCreate(request))
+    if (IsApiKeyAcquisitionCreate(request))
         return ApiKeyPurpose.Read;
 
     if (IsAcquisitionPluginRoute(request))
@@ -852,7 +974,12 @@ static bool IsReportsApiRead(HttpRequest request) =>
 
 static bool IsAcquisitionCreate(HttpRequest request) =>
     HttpMethods.IsPost(request.Method) &&
-    request.Path.Equals("/acquisition/requests", StringComparison.OrdinalIgnoreCase);
+    (request.Path.Equals("/acquisition/requests", StringComparison.OrdinalIgnoreCase) ||
+     request.Path.Equals("/api/acquisition/requests", StringComparison.OrdinalIgnoreCase));
+
+static bool IsApiKeyAcquisitionCreate(HttpRequest request) =>
+    IsAcquisitionCreate(request) &&
+    request.Headers.ContainsKey("X-Api-Key");
 
 static bool IsAcquisitionBrowserCreate(HttpRequest request) =>
     IsAcquisitionCreate(request) &&
@@ -860,14 +987,16 @@ static bool IsAcquisitionBrowserCreate(HttpRequest request) =>
 
 static bool IsAcquisitionBrowserControl(HttpRequest request) =>
     HttpMethods.IsPost(request.Method) &&
-    request.HasFormContentType &&
-    request.Path.StartsWithSegments("/acquisition/requests") &&
+    !request.Headers.ContainsKey("X-Api-Key") &&
+    (request.Path.StartsWithSegments("/acquisition/requests") ||
+     request.Path.StartsWithSegments("/api/acquisition/requests")) &&
     (request.Path.Value?.EndsWith("/cancel", StringComparison.OrdinalIgnoreCase) == true ||
      request.Path.Value?.EndsWith("/resend", StringComparison.OrdinalIgnoreCase) == true);
 
 static bool IsAcquisitionBrowserRead(HttpRequest request) =>
     HttpMethods.IsGet(request.Method) &&
-    request.Path.Equals("/acquisition/requests/recent", StringComparison.OrdinalIgnoreCase);
+    (request.Path.Equals("/acquisition/requests/recent", StringComparison.OrdinalIgnoreCase) ||
+     request.Path.Equals("/api/acquisition/requests/recent", StringComparison.OrdinalIgnoreCase));
 
 static bool WantsJsonResponse(HttpRequest request)
 {
@@ -878,7 +1007,8 @@ static bool IsDashboardApiRoute(HttpRequest request) =>
     request.Path.StartsWithSegments("/api", StringComparison.OrdinalIgnoreCase);
 
 static bool IsAcquisitionPluginRoute(HttpRequest request) =>
-    request.Path.StartsWithSegments("/acquisition/requests") &&
+    (request.Path.StartsWithSegments("/acquisition/requests") ||
+     request.Path.StartsWithSegments("/api/acquisition/requests")) &&
     !IsAcquisitionCreate(request) &&
     !IsAcquisitionBrowserControl(request);
 
@@ -1364,6 +1494,103 @@ static string RenderNotFound(string id, PathString pathBase) =>
 static string AppUrl(PathString pathBase, string path) =>
     $"{pathBase}{path}";
 
+static DashboardPreferenceOwner DashboardPreferenceOwner(HttpContext context)
+{
+    var userId = DashboardUserId(context);
+    return userId == null
+        ? new DashboardPreferenceOwner("global", "default", "dashboard")
+        : new DashboardPreferenceOwner("dashboard-user", userId.Value.ToString(CultureInfo.InvariantCulture), "dashboard");
+}
+
+static long? DashboardUserId(HttpContext context) =>
+    context.Items.TryGetValue(DashboardSessionStore.DashboardUserIdItemKey, out var value) && value is long userId
+        ? userId
+        : null;
+
+static async Task<IReadOnlyList<long>> GetDashboardAccountIdsAsync(
+    HttpContext context,
+    SqliteConnectionFactory connectionFactory,
+    CancellationToken cancellationToken)
+{
+    var userId = DashboardUserId(context);
+    if (userId == null)
+        return [1];
+
+    var accounts = new List<long>();
+    await using var connection = await connectionFactory.OpenConnectionAsync(cancellationToken);
+    await using var command = connection.CreateCommand();
+    command.CommandText = """
+        SELECT account_id
+        FROM dashboard_user_accounts
+        WHERE dashboard_user_id = $dashboardUserId
+        ORDER BY is_default DESC, account_id
+        """;
+    command.Parameters.AddWithValue("$dashboardUserId", userId.Value);
+
+    await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+    while (await reader.ReadAsync(cancellationToken))
+        accounts.Add(reader.GetInt64(0));
+
+    return accounts.Count == 0 ? [1] : accounts;
+}
+
+static async Task<bool> DashboardCanAccessCharacterAsync(
+    HttpContext context,
+    SqliteConnectionFactory connectionFactory,
+    long characterId,
+    CancellationToken cancellationToken)
+{
+    var accountIds = await GetDashboardAccountIdsAsync(context, connectionFactory, cancellationToken);
+    await using var connection = await connectionFactory.OpenConnectionAsync(cancellationToken);
+    await using var command = connection.CreateCommand();
+    command.CommandText = $"""
+        SELECT 1
+        FROM characters
+        WHERE id = $characterId
+          AND account_id IN ({string.Join(", ", accountIds.Select((_, index) => $"$account{index}"))})
+        LIMIT 1
+        """;
+    command.Parameters.AddWithValue("$characterId", characterId);
+    for (var i = 0; i < accountIds.Count; i++)
+        command.Parameters.AddWithValue($"$account{i}", accountIds[i]);
+
+    return await command.ExecuteScalarAsync(cancellationToken) != null;
+}
+
+static async Task<DashboardSettingsView?> LoadDashboardSettingsAsync(
+    SqliteConnectionFactory connectionFactory,
+    DashboardPreferenceOwner owner,
+    CancellationToken cancellationToken)
+{
+    await using var connection = await connectionFactory.OpenConnectionAsync(cancellationToken);
+    await using var command = connection.CreateCommand();
+    command.CommandText = """
+        SELECT preferences_json, updated_at_utc
+        FROM dashboard_preferences
+        WHERE owner_kind = $ownerKind
+          AND owner_key = $ownerKey
+          AND scope = $scope
+        """;
+    command.Parameters.AddWithValue("$ownerKind", owner.OwnerKind);
+    command.Parameters.AddWithValue("$ownerKey", owner.OwnerKey);
+    command.Parameters.AddWithValue("$scope", owner.Scope);
+
+    await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+    if (!await reader.ReadAsync(cancellationToken))
+        return null;
+
+    var settings = JsonSerializer.Deserialize<DashboardSettingsView>(
+        reader.GetString(0),
+        new JsonSerializerOptions(JsonSerializerDefaults.Web));
+    if (settings == null)
+        return null;
+
+    return settings with
+    {
+        UpdatedAtUtc = DateTimeOffset.Parse(reader.GetString(1), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+    };
+}
+
 static string PublicAppUrl(HttpRequest request, string? publicOrigin, string path)
 {
     var relativeUrl = AppUrl(request.PathBase, path);
@@ -1401,6 +1628,8 @@ static string Html(string? value) =>
         .Replace("\"", "&quot;", StringComparison.Ordinal);
 
 public partial class Program;
+
+sealed record DashboardPreferenceOwner(string OwnerKind, string OwnerKey, string Scope);
 
 enum ApiKeyPurpose
 {

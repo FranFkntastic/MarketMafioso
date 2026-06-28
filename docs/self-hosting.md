@@ -128,14 +128,14 @@ https://marketmafioso.example.com/
 If hosting under a path, set the base path and preserve that path when proxying:
 
 ```text
-MarketMafioso__BasePath=/api/marketmafioso
+MarketMafioso__BasePath=/marketmafioso
 MarketMafioso__PublicOrigin=https://example.com
 ```
 
 The plugin inventory endpoint would then be:
 
 ```text
-https://example.com/api/marketmafioso/inventory
+https://example.com/marketmafioso/api/inventory
 ```
 
 ## Backups

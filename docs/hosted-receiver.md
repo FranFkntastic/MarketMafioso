@@ -7,7 +7,7 @@ MarketMafioso can send inventory snapshots to a hosted or self-hosted ASP.NET re
 The receiver API is environment-scoped, not Craft Architect branch-scoped.
 
 ```text
-Dev receiver:        https://dev.xivcraftarchitect.com/api/marketmafioso/inventory
+Dev receiver:        https://dev.xivcraftarchitect.com/marketmafioso/api/inventory
 Production receiver: not deployed yet
 Local fallback:      http://localhost:8080/inventory
 ```
@@ -37,7 +37,7 @@ ASPNETCORE_URLS=http://127.0.0.1:5088
 MarketMafioso__RequireApiKey=true
 MarketMafioso__ClientApiKey=<secret>
 MarketMafioso__PreviousClientApiKey=<optional-previous-secret>
-MarketMafioso__BasePath=/api/marketmafioso
+MarketMafioso__BasePath=/marketmafioso
 MarketMafioso__PublicOrigin=https://dev.xivcraftarchitect.com
 MarketMafioso__StorageLabel=dev receiver storage
 MarketMafioso__DatabasePath=/srv/craftarchitect/data/marketmafioso/dev/marketmafioso.db
@@ -60,7 +60,7 @@ The dev dashboard username is fixed to `marketmafioso`; the password is stored i
 The `Deploy MarketMafioso Dev Receiver to VPS` GitHub Actions workflow publishes `MarketMafioso.Server` as a self-contained Linux app and deploys it to the dev receiver:
 
 ```text
-https://dev.xivcraftarchitect.com/api/marketmafioso/
+https://dev.xivcraftarchitect.com/marketmafioso/
 ```
 
 Use the server-specific helper when you want to force a backend deployment and watch the smoke checks from PowerShell:
@@ -134,25 +134,17 @@ Use Caddy routing so plugin/API and dashboard traffic reach the app. The app han
 
 ```caddyfile
 dev.xivcraftarchitect.com {
-    @marketmafiosoApi {
-        path /api/marketmafioso/health /api/marketmafioso/inventory /api/marketmafioso/api/inventory /api/marketmafioso/api/reports*
-    }
-
-    handle @marketmafiosoApi {
+    handle /marketmafioso {
         reverse_proxy 127.0.0.1:5088
     }
 
-    @marketmafiosoDashboard {
-        path /api/marketmafioso /api/marketmafioso/ /api/marketmafioso/reports* /api/marketmafioso/diagnostics
-    }
-
-    handle @marketmafiosoDashboard {
+    handle /marketmafioso/* {
         reverse_proxy 127.0.0.1:5088
     }
 }
 ```
 
-Keep the `/api/marketmafioso` prefix when proxying to the app. The receiver uses `MarketMafioso__BasePath=/api/marketmafioso` to route those requests correctly.
+Keep the `/marketmafioso` prefix when proxying to the app. The receiver uses `MarketMafioso__BasePath=/marketmafioso` to route those requests correctly.
 
 The deployed Caddy fragment is installed as `root:root` with mode `644` so the Caddy service user can import it during reload. Keep the runtime environment file at `600`; that file contains API keys.
 
@@ -181,7 +173,7 @@ Smoke-test ingestion with:
 ```powershell
 Invoke-RestMethod `
   -Method Post `
-  -Uri https://dev.xivcraftarchitect.com/api/marketmafioso/inventory `
+  -Uri https://dev.xivcraftarchitect.com/marketmafioso/api/inventory `
   -Headers @{ "X-Api-Key" = "<secret>" } `
   -ContentType application/json `
   -Body (Get-Content docs/samples/inventory-report.sample.json -Raw)
@@ -190,7 +182,7 @@ Invoke-RestMethod `
 Then open the dashboard through the Caddy-protected URL:
 
 ```text
-https://dev.xivcraftarchitect.com/api/marketmafioso/
+https://dev.xivcraftarchitect.com/marketmafioso/
 ```
 
 Use username `marketmafioso` and the dashboard password stored outside the repo.

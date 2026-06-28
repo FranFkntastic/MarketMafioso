@@ -24,6 +24,7 @@ public sealed class SqliteSchemaMigratorTests
         Assert.True(await TableExistsAsync(connection, "accounts"));
         Assert.True(await TableExistsAsync(connection, "dashboard_users"));
         Assert.True(await TableExistsAsync(connection, "dashboard_user_accounts"));
+        Assert.True(await TableExistsAsync(connection, "dashboard_preferences"));
         Assert.True(await TableExistsAsync(connection, "ingest_keys"));
         Assert.True(await TableExistsAsync(connection, "characters"));
         Assert.True(await TableExistsAsync(connection, "snapshots"));

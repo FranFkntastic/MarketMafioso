@@ -8,8 +8,45 @@
     <MudTabs Rounded="true" Elevation="0" PanelClass="pt-4">
         <MudTabPanel Text="General">
             <MudPaper Class="compact-card" Elevation="0">
-                <MudText Typo="Typo.h6">Dashboard</MudText>
-                <MudText Class="muted">Cookie-backed sessions and SSE-backed status are active in this rebuild.</MudText>
+                <MudStack Spacing="3" Class="settings-section">
+                    <div>
+                        <MudText Typo="Typo.h6">Dashboard Defaults</MudText>
+                        <MudText Class="muted">Defaults apply to new acquisition requests on this dashboard account.</MudText>
+                    </div>
+                    <MudGrid Spacing="2">
+                        <MudItem xs="12" md="6">
+                            <MudSelect T="long?" @bind-Value="_defaultCharacterId" Label="Default character" Variant="Variant.Outlined" Margin="Margin.Dense">
+                                <MudSelectItem T="long?" Value="@null">No default</MudSelectItem>
+                                @foreach (var character in _characters)
+                                {
+                                    <MudSelectItem T="long?" Value="@character.Id">@character.DisplayName</MudSelectItem>
+                                }
+                            </MudSelect>
+                        </MudItem>
+                        <MudItem xs="12" md="6">
+                            <MudSelect T="string" @bind-Value="_defaultRegion" Label="Default region" Variant="Variant.Outlined" Margin="Margin.Dense">
+                                <MudSelectItem Value="@("North America")">North America</MudSelectItem>
+                            </MudSelect>
+                        </MudItem>
+                        <MudItem xs="12" md="6">
+                            <MudSelect T="string" @bind-Value="_defaultWorldMode" Label="Default routing" Variant="Variant.Outlined" Margin="Margin.Dense">
+                                <MudSelectItem Value="@("Recommended")">Recommended worlds</MudSelectItem>
+                                <MudSelectItem Value="@("CurrentWorld")">Current world</MudSelectItem>
+                                <MudSelectItem Value="@("AllWorldSweep")">All-world sweep</MudSelectItem>
+                            </MudSelect>
+                        </MudItem>
+                        <MudItem xs="12" md="6">
+                            <MudSelect T="int" @bind-Value="_defaultPickupExpiresSeconds" Label="Default pickup expiry" Variant="Variant.Outlined" Margin="Margin.Dense">
+                                <MudSelectItem Value="300">5 minutes</MudSelectItem>
+                                <MudSelectItem Value="900">15 minutes</MudSelectItem>
+                            </MudSelect>
+                        </MudItem>
+                    </MudGrid>
+                    <MudStack Row="true" AlignItems="AlignItems.Center">
+                        <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="_saving" OnClick="SaveSettingsAsync">Save Settings</MudButton>
+                        <MudText Typo="Typo.caption" Class="muted">@_settingsStatus</MudText>
+                    </MudStack>
+                </MudStack>
             </MudPaper>
         </MudTabPanel>
         <MudTabPanel Text="Diagnostics">
@@ -43,11 +80,57 @@
 
 @code {
     private IReadOnlyList<DiagnosticEventView> _events = [];
+    private IReadOnlyList<DashboardCharacterOption> _characters = [];
     private DiagnosticEventView? _selectedEvent;
+    private long? _defaultCharacterId;
+    private string _defaultRegion = "North America";
+    private string _defaultWorldMode = "Recommended";
+    private int _defaultPickupExpiresSeconds = 300;
+    private bool _saving;
+    private string _settingsStatus = string.Empty;
 
     protected override async Task OnInitializedAsync()
     {
+        await LoadSettingsAsync();
         await LoadDiagnosticsAsync();
+    }
+
+    private async Task LoadSettingsAsync()
+    {
+        _characters = await Api.GetCharactersAsync();
+        var settings = await Api.GetDashboardSettingsAsync();
+        _defaultCharacterId = settings.DefaultCharacterId;
+        if (_defaultCharacterId != null && _characters.All(character => character.Id != _defaultCharacterId))
+            _defaultCharacterId = null;
+        _defaultRegion = settings.DefaultRegion;
+        _defaultWorldMode = settings.DefaultWorldMode;
+        _defaultPickupExpiresSeconds = settings.DefaultPickupExpiresSeconds;
+    }
+
+    private async Task SaveSettingsAsync()
+    {
+        try
+        {
+            _saving = true;
+            var saved = await Api.SaveDashboardSettingsAsync(new DashboardSettingsUpdate
+            {
+                DefaultCharacterId = _defaultCharacterId,
+                DefaultRegion = _defaultRegion,
+                DefaultWorldMode = _defaultWorldMode,
+                DefaultPickupExpiresSeconds = _defaultPickupExpiresSeconds,
+            });
+            _settingsStatus = saved.UpdatedAtUtc == null
+                ? "Settings saved."
+                : $"Settings saved {saved.UpdatedAtUtc.Value.ToLocalTime():HH:mm:ss}.";
+        }
+        catch (Exception ex)
+        {
+            _settingsStatus = $"Save failed: {ex.Message}";
+        }
+        finally
+        {
+            _saving = false;
+        }
     }
 
     private async Task LoadDiagnosticsAsync()

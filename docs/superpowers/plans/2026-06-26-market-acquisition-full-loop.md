@@ -263,7 +263,7 @@
   - `git add docs/design/2026-06-25-market-acquisition-roadmap.md docs/superpowers/specs/2026-06-26-market-acquisition-full-loop-design.md`
   - `git commit -m "Document market acquisition full loop completion"`
 - [ ] Push `local-dev`.
-- [ ] If server files changed, confirm the GitHub Actions deploy for `Deploy MarketMafioso Dev Receiver to VPS` succeeds and smoke-check `/api/marketmafioso/health`.
+- [ ] If server files changed, confirm the GitHub Actions deploy for `Deploy MarketMafioso Dev Receiver to VPS` succeeds and smoke-check `/marketmafioso/health`.
 
 ## Execution Notes
 
