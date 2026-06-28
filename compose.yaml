@@ -1,0 +1,13 @@
+services:
+  marketmafioso:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: marketmafioso-server:local
+    restart: unless-stopped
+    ports:
+      - "5088:8080"
+    env_file:
+      - ./marketmafioso.env
+    volumes:
+      - ./data/marketmafioso:/data

@@ -1,0 +1,30 @@
+[Unit]
+Description=MarketMafioso self-hosted receiver
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=/opt/marketmafioso
+ExecStart=/opt/marketmafioso/MarketMafioso.Server
+Restart=always
+RestartSec=10
+KillSignal=SIGINT
+SyslogIdentifier=marketmafioso
+User=marketmafioso
+Environment=ASPNETCORE_URLS=http://127.0.0.1:5088
+Environment=MarketMafioso__RequireApiKey=true
+Environment=MarketMafioso__ClientApiKey=replace-with-a-random-client-key
+Environment=MarketMafioso__BasePath=/api/marketmafioso
+Environment=MarketMafioso__PublicOrigin=https://marketmafioso.example.com
+Environment=MarketMafioso__StorageLabel=self-hosted receiver storage
+Environment=MarketMafioso__DatabasePath=/var/lib/marketmafioso/marketmafioso.db
+Environment=MarketMafioso__RawJsonRetentionCount=20
+Environment=MarketMafioso__SnapshotRetentionCount=500
+Environment=MarketMafioso__DiagnosticsRetentionCount=5000
+Environment=MarketMafioso__XivDataBaseUrl=
+Environment=MarketMafioso__RequireDashboardAuth=true
+Environment=MarketMafioso__DashboardBootstrapUsername=marketmafioso
+Environment=MarketMafioso__DashboardBootstrapPassword=replace-with-a-random-dashboard-password
+
+[Install]
+WantedBy=multi-user.target

@@ -30,6 +30,13 @@ Thumbs.db
 dist/
 *.nupkg
 
+# Docker/self-host local data
+/data/
+marketmafioso.env
+release/self-host/data/
+release/self-host/backups/
+release/self-host/marketmafioso.env
+
 # Local backend data
 MarketMafioso.Server/data/
 

@@ -6,7 +6,7 @@ namespace MarketMafioso.Server.Tests;
 public sealed class DashboardCharacterFilterTests
 {
     [Fact]
-    public async Task Dashboard_DefaultsToLatestCharacterAndCanShowAllCharacters()
+    public async Task ReportsApi_ReturnsLatestAndListsAllCharacters()
     {
         await using var application = new WebApplicationFactory<Program>();
         using var client = application.CreateClient();
@@ -17,14 +17,14 @@ public sealed class DashboardCharacterFilterTests
         var second = await client.PostAsJsonAsync("/inventory", CreateReport("Second Character", 4));
         second.EnsureSuccessStatusCode();
 
-        var defaultDashboard = await client.GetStringAsync("/");
-        var allDashboard = await client.GetStringAsync("/?allCharacters=true");
+        var latest = await client.GetFromJsonAsync<StoredInventoryReport>("/api/reports/latest");
+        var allReports = await client.GetFromJsonAsync<IReadOnlyList<ReportSummary>>("/api/reports");
 
-        Assert.Contains("Second Character", defaultDashboard, StringComparison.Ordinal);
-        Assert.DoesNotContain("<td>First Character</td>", defaultDashboard, StringComparison.Ordinal);
-        Assert.Contains("Second Character", allDashboard, StringComparison.Ordinal);
-        Assert.Contains("<td>First Character</td>", allDashboard, StringComparison.Ordinal);
-        Assert.Contains("All Characters", allDashboard, StringComparison.Ordinal);
+        Assert.NotNull(latest);
+        Assert.Equal("Second Character", latest.Report.CharacterName);
+        Assert.NotNull(allReports);
+        Assert.Contains(allReports, x => string.Equals(x.CharacterName, "Second Character", StringComparison.Ordinal));
+        Assert.Contains(allReports, x => string.Equals(x.CharacterName, "First Character", StringComparison.Ordinal));
     }
 
     private static InventoryReport CreateReport(string characterName, uint itemId) =>

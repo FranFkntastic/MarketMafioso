@@ -1,0 +1,12 @@
+marketmafioso.example.com {
+    reverse_proxy 127.0.0.1:5088
+}
+
+# Path-mounted example. Pair this with:
+# MarketMafioso__BasePath=/api/marketmafioso
+# MarketMafioso__PublicOrigin=https://example.com
+example.com {
+    handle /api/marketmafioso* {
+        reverse_proxy 127.0.0.1:5088
+    }
+}

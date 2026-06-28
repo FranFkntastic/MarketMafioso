@@ -1,0 +1,17 @@
+.git
+.github
+.idea
+.vs
+.vscode
+.agents
+.codex
+.superpowers
+**/bin
+**/obj
+dist
+mockups
+MarketMafioso.Server/data
+MarketMafioso/dev-plugin.local.json
+*.user
+*.suo
+*.log

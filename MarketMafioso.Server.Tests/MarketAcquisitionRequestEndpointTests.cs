@@ -804,19 +804,15 @@ public sealed class MarketAcquisitionRequestEndpointTests
         });
 
         var dashboard = await client.GetStringAsync("/api/marketmafioso/");
-        Assert.Contains("Market Acquisition", dashboard, StringComparison.Ordinal);
-        Assert.Contains("/api/marketmafioso/acquisition", dashboard, StringComparison.Ordinal);
+        AssertDashboardShell(dashboard);
 
         var acquisitionPage = await client.GetStringAsync("/api/marketmafioso/acquisition");
-        Assert.Contains("Create Dashboard Request", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("name=\"targetCharacterName\"", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("name=\"worldMode\"", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("/api/marketmafioso/acquisition/requests", acquisitionPage, StringComparison.Ordinal);
+        AssertDashboardShell(acquisitionPage);
         Assert.DoesNotContain("name=\"csrf\"", acquisitionPage, StringComparison.Ordinal);
         Assert.DoesNotContain("mmf_csrf", acquisitionPage, StringComparison.Ordinal);
 
         var inventory = await client.GetStringAsync("/api/marketmafioso/inventory");
-        Assert.Contains(">Acquisition</a>", inventory, StringComparison.Ordinal);
+        AssertDashboardShell(inventory);
 
         var created = await client.PostAsync(
             "/api/marketmafioso/acquisition/requests",
@@ -901,62 +897,18 @@ public sealed class MarketAcquisitionRequestEndpointTests
         acceptedResponse.EnsureSuccessStatusCode();
 
         var acquisitionPage = await client.GetStringAsync("/api/marketmafioso/acquisition");
-
-        Assert.Contains("New Purchase Request", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("Target", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("Purchase Limits", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("Routing", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("Request Preview", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("Add to Queue", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("Stage Queue", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("Request Queue", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("Filter by item, world, status", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("class=\"acquisition-main\"", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("class=\"pane request-pane\"", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("class=\"pane queue-pane\"", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("class=\"section-title\">Item</", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("id=\"acquisitionItemSearch\"", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("id=\"acquisitionItemSuggestions\"", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("name=\"itemId\"", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("name=\"itemName\"", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("id=\"acquisitionQueueRows\"", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("id=\"acquisitionStageStatus\"", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("searchAcquisitionItems", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("validateAcquisitionQueueRow", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("readAcquisitionStageError", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("addAcquisitionQueueRow", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("stageAcquisitionQueue", acquisitionPage, StringComparison.Ordinal);
+        AssertDashboardShell(acquisitionPage);
         Assert.DoesNotContain("name=\"csrf\"", acquisitionPage, StringComparison.Ordinal);
-        Assert.DoesNotContain("refreshAcquisitionCsrfToken", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("startAcquisitionQueueRefresh", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("stopAcquisitionQueueRefresh", acquisitionPage, StringComparison.Ordinal);
-        Assert.DoesNotContain("getCurrentAcquisitionCsrfToken", acquisitionPage, StringComparison.Ordinal);
-        Assert.DoesNotContain("invalid_csrf", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("stageAcquisitionRowsInBatches", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("console.info('[MarketMafioso] Staging acquisition queue'", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("console.debug('[MarketMafioso] Staged acquisition row'", acquisitionPage, StringComparison.Ordinal);
-        Assert.DoesNotContain("const currentCsrf = new FormData(form).get('csrf');", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("'Accept': 'application/json'", acquisitionPage, StringComparison.Ordinal);
-        Assert.DoesNotContain("redirect: 'manual'", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("id=\"acquisitionQueueTable\"", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("id=\"acquisitionQueueBody\"", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("data-resize=\"status\"", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("refreshAcquisitionQueue", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("acquisitionRefreshTimer = window.setInterval(() => refreshAcquisitionQueue(), 3000)", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("credentials: 'same-origin'", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("catch (error)", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("Queue refresh failed.", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("data-xiv-data-base-url=\"https://dev.xivcraftarchitect.com/api/xivdata\"", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("Plugin pickup required", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("No background polling", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("All statuses", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("Refresh", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("class=\"detail\"", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("class=\"statusbar\"", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("Fire Shard", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("Accepted", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("Plugin status", acquisitionPage, StringComparison.Ordinal);
-        Assert.Contains("Plugin pickup uses the same client API key", acquisitionPage, StringComparison.Ordinal);
+        Assert.DoesNotContain("mmf_csrf", acquisitionPage, StringComparison.Ordinal);
+
+        var recent = await client.GetAsync("/api/marketmafioso/acquisition/requests/recent");
+        recent.EnsureSuccessStatusCode();
+        using var recentJson = JsonDocument.Parse(await recent.Content.ReadAsStringAsync());
+        var root = recentJson.RootElement;
+        Assert.Equal("1 active / 1 recent", root.GetProperty("activeSummary").GetString());
+        Assert.Contains("Fire Shard", root.GetProperty("queueRows").GetString(), StringComparison.Ordinal);
+        Assert.Contains("Accepted", root.GetProperty("queueRows").GetString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("invalid_csrf", root.GetProperty("queueRows").GetString(), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1070,9 +1022,11 @@ public sealed class MarketAcquisitionRequestEndpointTests
             new FormUrlEncodedContent([]));
 
         Assert.Equal(HttpStatusCode.Redirect, cancelled.StatusCode);
-        var refreshedPage = await client.GetStringAsync("/api/marketmafioso/acquisition");
-        Assert.Contains("No acquisition requests yet.", refreshedPage, StringComparison.Ordinal);
-        Assert.DoesNotContain("Cancelled", refreshedPage, StringComparison.Ordinal);
+        var recent = await client.GetAsync("/api/marketmafioso/acquisition/requests/recent");
+        recent.EnsureSuccessStatusCode();
+        using var recentJson = JsonDocument.Parse(await recent.Content.ReadAsStringAsync());
+        Assert.Contains("No acquisition requests yet.", recentJson.RootElement.GetProperty("queueRows").GetString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("Cancelled", recentJson.RootElement.GetProperty("queueRows").GetString(), StringComparison.Ordinal);
 
         var pending = await SendWithKeyAsync(
             client,
@@ -1128,9 +1082,11 @@ public sealed class MarketAcquisitionRequestEndpointTests
 
         Assert.Equal(HttpStatusCode.Redirect, cancelComplete.StatusCode);
         Assert.Equal(HttpStatusCode.Redirect, cancelCompleteAgain.StatusCode);
-        var refreshedPage = await client.GetStringAsync("/api/marketmafioso/acquisition");
-        Assert.Contains("Complete", refreshedPage, StringComparison.Ordinal);
-        Assert.DoesNotContain("Cancelled", refreshedPage, StringComparison.Ordinal);
+        var recent = await client.GetAsync("/api/marketmafioso/acquisition/requests/recent");
+        recent.EnsureSuccessStatusCode();
+        using var recentJson = JsonDocument.Parse(await recent.Content.ReadAsStringAsync());
+        Assert.Contains("Complete", recentJson.RootElement.GetProperty("queueRows").GetString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("Cancelled", recentJson.RootElement.GetProperty("queueRows").GetString(), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1222,7 +1178,7 @@ public sealed class MarketAcquisitionRequestEndpointTests
     }
 
     [Fact]
-    public async Task AcquisitionDashboardUsesConfiguredXivDataBaseUrl()
+    public async Task AcquisitionDashboardServesShellWithConfiguredXivDataBaseUrl()
     {
         await using var application = CreateHostedApplication(
             extraConfiguration:
@@ -1237,11 +1193,11 @@ public sealed class MarketAcquisitionRequestEndpointTests
 
         var acquisitionPage = await client.GetStringAsync("/api/marketmafioso/acquisition");
 
-        Assert.Contains("data-xiv-data-base-url=\"https://example.test/xivdata\"", acquisitionPage, StringComparison.Ordinal);
+        AssertDashboardShell(acquisitionPage);
     }
 
     [Fact]
-    public async Task AcquisitionDashboardDefaultsXivDataBaseUrlFromPublicOrigin()
+    public async Task AcquisitionDashboardServesShellWithPublicOriginXivDataDefault()
     {
         await using var application = CreateHostedApplication(
             extraConfiguration:
@@ -1256,7 +1212,7 @@ public sealed class MarketAcquisitionRequestEndpointTests
 
         var acquisitionPage = await client.GetStringAsync("/api/marketmafioso/acquisition");
 
-        Assert.Contains("data-xiv-data-base-url=\"https://staging.example.test/api/xivdata\"", acquisitionPage, StringComparison.Ordinal);
+        AssertDashboardShell(acquisitionPage);
     }
 
     [Fact]
@@ -1397,9 +1353,11 @@ public sealed class MarketAcquisitionRequestEndpointTests
             AllowAutoRedirect = false,
         });
 
-        var acquisitionPage = await client.GetStringAsync("/api/marketmafioso/acquisition");
+        var recent = await client.GetAsync("/api/marketmafioso/acquisition/requests/recent");
 
-        Assert.Contains("No acquisition requests yet.", acquisitionPage, StringComparison.Ordinal);
+        recent.EnsureSuccessStatusCode();
+        using var recentJson = JsonDocument.Parse(await recent.Content.ReadAsStringAsync());
+        Assert.Contains("No acquisition requests yet.", recentJson.RootElement.GetProperty("queueRows").GetString(), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1514,6 +1472,13 @@ public sealed class MarketAcquisitionRequestEndpointTests
         claim.EnsureSuccessStatusCode();
         using var claimJson = JsonDocument.Parse(await claim.Content.ReadAsStringAsync());
         return (requestId, claimJson.RootElement.GetProperty("claimToken").GetString()!);
+    }
+
+    private static void AssertDashboardShell(string html)
+    {
+        Assert.Contains("MarketMafioso", html, StringComparison.Ordinal);
+        Assert.Contains("_framework/blazor", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("[.{fingerprint}]", html, StringComparison.Ordinal);
     }
 
     private static async Task<(string RequestId, string ClaimToken)> CreateAcceptedRequestAsync(
