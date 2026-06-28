@@ -22,7 +22,7 @@
                                 <span>Character</span>
                                 <span class="required-marker">Required</span>
                             </div>
-                            <MudSelect T="long?" Value="_selectedCharacterId" ValueChanged="OnCharacterChanged" Placeholder="Choose character" Variant="Variant.Outlined" Margin="Margin.Dense" Disabled="@(!Characters.Any())">
+                            <MudSelect T="long?" Value="_selectedCharacterId" ValueChanged="OnCharacterChanged" Placeholder="Choose character" Variant="Variant.Outlined" Margin="Margin.Dense" FullWidth="true" Disabled="@(!Characters.Any())">
                                 @foreach (var character in Characters)
                                 {
                                     <MudSelectItem T="long?" Value="@character.Id">@character.DisplayName</MudSelectItem>
@@ -37,13 +37,13 @@
                         <div class="input-grid two-column">
                             <div class="field-block">
                                 <div class="field-label-row"><span>Region</span></div>
-                                <MudSelect T="string" @bind-Value="_region" Placeholder="Choose region" Variant="Variant.Outlined" Margin="Margin.Dense">
+                                <MudSelect T="string" @bind-Value="_region" Placeholder="Choose region" Variant="Variant.Outlined" Margin="Margin.Dense" FullWidth="true">
                                     <MudSelectItem Value="@("North America")">North America</MudSelectItem>
                                 </MudSelect>
                             </div>
                             <div class="field-block">
                                 <div class="field-label-row"><span>Routing</span></div>
-                                <MudSelect T="string" @bind-Value="_worldMode" Placeholder="Choose routing" Variant="Variant.Outlined" Margin="Margin.Dense">
+                                <MudSelect T="string" @bind-Value="_worldMode" Placeholder="Choose routing" Variant="Variant.Outlined" Margin="Margin.Dense" FullWidth="true">
                                     <MudSelectItem Value="@("Recommended")">Recommended worlds</MudSelectItem>
                                     <MudSelectItem Value="@("CurrentWorld")">Current world</MudSelectItem>
                                     <MudSelectItem Value="@("AllWorldSweep")">All-world sweep</MudSelectItem>
@@ -71,6 +71,7 @@
                                          Placeholder="Search by item name"
                                          Variant="Variant.Outlined"
                                          Margin="Margin.Dense"
+                                         FullWidth="true"
                                          Value="_selectedItem"
                                          ValueChanged="OnItemSelected"
                                          Text="@_itemSearchText"
@@ -93,7 +94,7 @@
                     <div class="input-grid two-column">
                         <div class="field-block">
                             <div class="field-label-row help-label" title="@QuantityModeHelp"><span>Mode</span></div>
-                            <MudSelect T="string" Value="@_quantityMode" ValueChanged="QuantityModeChanged" Placeholder="Choose quantity mode" Variant="Variant.Outlined" Margin="Margin.Dense">
+                            <MudSelect T="string" Value="@_quantityMode" ValueChanged="QuantityModeChanged" Placeholder="Choose quantity mode" Variant="Variant.Outlined" Margin="Margin.Dense" FullWidth="true">
                                 <MudSelectItem Value="@("TargetQuantity")">Target quantity</MudSelectItem>
                                 <MudSelectItem Value="@("AllBelowThreshold")">All below threshold</MudSelectItem>
                             </MudSelect>
@@ -103,25 +104,25 @@
                                 <span>@QuantityLabel</span>
                                 <span class="optional-marker">@QuantityRequirementLabel</span>
                             </div>
-                            <MudNumericField T="uint?" @bind-Value="_quantity" Placeholder="@QuantityLabel" Variant="Variant.Outlined" Margin="Margin.Dense" Min="0" />
+                            <MudNumericField T="uint?" @bind-Value="_quantity" Placeholder="@QuantityLabel" Variant="Variant.Outlined" Margin="Margin.Dense" FullWidth="true" Min="0" />
                         </div>
                         <div class="field-block">
                             <div class="field-label-row help-label" title="Required safety threshold. The plugin skips live listings above this unit price.">
                                 <span>Max unit price</span>
                                 <span class="required-marker">Required</span>
                             </div>
-                            <MudNumericField T="uint?" @bind-Value="_maxUnitPrice" Placeholder="Max unit price" Variant="Variant.Outlined" Margin="Margin.Dense" Min="1" />
+                            <MudNumericField T="uint?" @bind-Value="_maxUnitPrice" Placeholder="Max unit price" Variant="Variant.Outlined" Margin="Margin.Dense" FullWidth="true" Min="1" />
                         </div>
                         <div class="field-block">
                             <div class="field-label-row help-label" title="Optional hard stop on total spend for this line. Leave blank to let max unit price govern buying.">
                                 <span>Gil cap</span>
                                 <span class="optional-marker">Optional</span>
                             </div>
-                            <MudNumericField T="uint?" @bind-Value="_gilCap" Placeholder="Gil cap (optional)" Variant="Variant.Outlined" Margin="Margin.Dense" Min="0" />
+                            <MudNumericField T="uint?" @bind-Value="_gilCap" Placeholder="Gil cap (optional)" Variant="Variant.Outlined" Margin="Margin.Dense" FullWidth="true" Min="0" />
                         </div>
                         <div class="field-block">
                             <div class="field-label-row"><span>HQ policy</span></div>
-                            <MudSelect T="string" @bind-Value="_hqPolicy" Placeholder="Choose HQ policy" Variant="Variant.Outlined" Margin="Margin.Dense">
+                            <MudSelect T="string" @bind-Value="_hqPolicy" Placeholder="Choose HQ policy" Variant="Variant.Outlined" Margin="Margin.Dense" FullWidth="true">
                                 <MudSelectItem Value="@("Either")">Either</MudSelectItem>
                                 <MudSelectItem Value="@("NqOnly")">NQ only</MudSelectItem>
                                 <MudSelectItem Value="@("HqOnly")">HQ only</MudSelectItem>
@@ -129,7 +130,7 @@
                         </div>
                         <div class="field-block">
                             <div class="field-label-row"><span>Pickup expires</span></div>
-                            <MudSelect T="int" @bind-Value="_expiresInSeconds" Placeholder="Choose pickup window" Variant="Variant.Outlined" Margin="Margin.Dense">
+                            <MudSelect T="int" @bind-Value="_expiresInSeconds" Placeholder="Choose pickup window" Variant="Variant.Outlined" Margin="Margin.Dense" FullWidth="true">
                                 <MudSelectItem Value="300">5 minutes</MudSelectItem>
                                 <MudSelectItem Value="900">15 minutes</MudSelectItem>
                             </MudSelect>
