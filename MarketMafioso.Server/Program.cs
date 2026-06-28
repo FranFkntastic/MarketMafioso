@@ -129,6 +129,7 @@ app.MapGet("/api/inventory/browser", GetInventoryBrowser);
 app.MapGet("/api/inventory/snapshots", ListDashboardSnapshots);
 app.MapGet("/api/settings/dashboard", GetDashboardSettings);
 app.MapPut("/api/settings/dashboard", SaveDashboardSettings);
+app.MapGet("/api/settings/storage", GetStorageSummary);
 
 app.MapGet("/api/events/stream", async (
     HttpResponse response,
@@ -507,6 +508,32 @@ async Task<IResult> SaveDashboardSettings(
     await command.ExecuteNonQueryAsync(token);
 
     return Results.Ok(view);
+}
+
+async Task<IResult> GetStorageSummary(
+    HttpContext context,
+    SqliteConnectionFactory connectionFactory,
+    InventoryReportStore inventoryStore,
+    DiagnosticEventStore diagnostics,
+    IConfiguration configuration,
+    CancellationToken token)
+{
+    var accountIds = await GetDashboardAccountIdsAsync(context, connectionFactory, token);
+    var inventory = await inventoryStore.GetRetentionSummaryAsync(accountIds, token);
+    var diagnosticCount = await diagnostics.CountAsync(token);
+
+    return Results.Ok(new ReceiverStorageSummaryView
+    {
+        SnapshotRetentionCount = configuration.GetValue("MarketMafioso:SnapshotRetentionCount", 500),
+        RawJsonRetentionCount = configuration.GetValue("MarketMafioso:RawJsonRetentionCount", 20),
+        DiagnosticEventRetentionCount = Math.Max(1, configuration.GetValue("MarketMafioso:DiagnosticEventRetention", 5000)),
+        SnapshotCount = inventory.SnapshotCount,
+        RawJsonRetainedCount = inventory.RawJsonRetainedCount,
+        RawJsonPrunedCount = inventory.RawJsonPrunedCount,
+        DiagnosticEventCount = diagnosticCount,
+        NewestSnapshotReceivedAtUtc = inventory.NewestSnapshotReceivedAtUtc,
+        OldestSnapshotReceivedAtUtc = inventory.OldestSnapshotReceivedAtUtc,
+    });
 }
 
 async Task<IResult> SaveInventoryReport(

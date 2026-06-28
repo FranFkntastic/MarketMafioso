@@ -25,6 +25,7 @@
         <MetricTile Label="Receiver" Value="@ReceiverStatus" />
         <MetricTile Label="Characters" Value="@_characters.Count.ToString("N0")" />
         <MetricTile Label="Active Requests" Value="@ActiveRequestCount.ToString("N0")" />
+        <MetricTile Label="Diagnostics" Value="@_storage.DiagnosticEventCount.ToString("N0")" />
         <MetricTile Label="Recent Errors" Value="@RecentErrorCount.ToString("N0")" />
     </div>
 
@@ -41,7 +42,14 @@
                         <MetricTile Label="Matching Items" Value="@_inventory.Items.Count.ToString("N0")" />
                         <MetricTile Label="Total Quantity" Value="@_inventory.TotalQuantity.ToString("N0")" />
                         <MetricTile Label="Retainer Gil" Value="@FormatGil(_inventory.RetainerGil)" />
+                        <MetricTile Label="Snapshots Stored" Value="@_storage.SnapshotCount.ToString("N0")" />
+                        <MetricTile Label="Raw JSON Kept" Value="@_storage.RawJsonRetainedCount.ToString("N0")" />
+                        <MetricTile Label="Raw JSON Pruned" Value="@_storage.RawJsonPrunedCount.ToString("N0")" />
                     </div>
+                    <MudText Typo="Typo.caption" Class="muted">
+                        Structured retention keeps @_storage.SnapshotRetentionCount.ToString("N0") snapshot(s);
+                        raw JSON retention keeps @_storage.RawJsonRetentionCount.ToString("N0").
+                    </MudText>
                 </div>
             </MudStack>
         </MudPaper>
@@ -101,13 +109,14 @@
     private IReadOnlyList<MarketAcquisitionRequestView> _requests = [];
     private IReadOnlyList<DiagnosticEventView> _diagnostics = [];
     private InventoryBrowserView _inventory = new();
+    private ReceiverStorageSummaryView _storage = new();
     private bool _loading = true;
 
     private string ReceiverStatus => _health.Ok
         ? $"Online {_health.Utc.ToLocalTime():HH:mm:ss}"
         : "Unknown";
 
-    private int ActiveRequestCount => _requests.Count(request => request.Status is "Pending" or "AcceptedInPlugin" or "Running");
+    private int ActiveRequestCount => _requests.Count(request => request.Status is "PendingPickup" or "AcceptedInPlugin" or "Running");
 
     private int RecentErrorCount => _diagnostics.Count(diagnostic =>
         diagnostic.Severity.Equals("Error", StringComparison.OrdinalIgnoreCase) ||
@@ -144,6 +153,7 @@
             _requests = await Api.GetAcquisitionRequestsAsync();
             _diagnostics = await Api.GetDiagnosticsAsync();
             _inventory = await Api.GetInventoryBrowserAsync(null, null, "all");
+            _storage = await Api.GetStorageSummaryAsync();
         }
         catch (Exception ex)
         {

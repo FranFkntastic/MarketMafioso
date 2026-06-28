@@ -202,6 +202,14 @@ public sealed class DiagnosticEventStore
         return events;
     }
 
+    public async Task<int> CountAsync(CancellationToken cancellationToken)
+    {
+        await using var connection = await connectionFactory.OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT COUNT(*) FROM diagnostic_events";
+        return checked((int)(long)(await command.ExecuteScalarAsync(cancellationToken) ?? 0L));
+    }
+
     private async Task PruneAsync(SqliteConnection connection, CancellationToken cancellationToken)
     {
         var retention = Math.Max(1, configuration.GetValue("MarketMafioso:DiagnosticEventRetention", 5000));

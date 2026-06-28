@@ -44,9 +44,9 @@ Use these docs as supporting references:
 - [x] Inventory page has a first functional Blazor pass against structured inventory APIs.
 - [x] Overview page has a first functional summary of receiver health, inventory ingest, recent acquisition activity, and diagnostics.
 - [x] Settings Diagnostics has structured category, severity, source, and text filters.
-- [ ] Settings Diagnostics retention/SSE health visibility is still pending.
+- [x] Settings Diagnostics retention and SSE endpoint visibility exists.
 - [x] Settings Snapshots lists recent account-scoped structured snapshots.
-- [ ] Settings Snapshots exposes raw JSON retention controls.
+- [x] Settings Snapshots exposes raw JSON retention visibility.
 - [x] Acquisition attempt timeline and purchase audit rows are visible from the dashboard.
 - [ ] Completed and failed acquisition requests are archived and reusable as presets.
 - [ ] Remaining server-rendered dashboard HTML is removed after equivalent Blazor pages exist.
@@ -79,12 +79,12 @@ Use these docs as supporting references:
 - Modify: `MarketMafioso.Dashboard/wwwroot/css/app.css`
 - Modify server APIs only if missing fields block the UI.
 
-- [ ] Keep General defaults useful for acquisition: default character, region, routing, and pickup expiry.
+- [x] Keep General defaults useful for acquisition: default character, region, routing, and pickup expiry.
 - [x] Add diagnostics filters for category, severity, source, correlation id, request id, and message text.
-- [ ] Add diagnostics retention visibility.
-- [ ] Add SSE health visibility.
+- [x] Add diagnostics retention visibility.
+- [x] Add SSE endpoint and cadence visibility.
 - [x] Add snapshot management shell under Settings with latest structured snapshot visibility.
-- [ ] Add raw JSON retention visibility.
+- [x] Add raw JSON retention visibility.
 - [x] Build dashboard and run focused server tests if new API fields are added.
 
 ## Task 3: Inventory Rebuild
@@ -115,7 +115,7 @@ Use these docs as supporting references:
 
 - [x] Show receiver health.
 - [x] Show latest inventory ingest.
-- [ ] Show raw/structured retention counts.
+- [x] Show raw/structured retention counts.
 - [x] Show active/recent acquisition requests.
 - [x] Show diagnostics severity summary.
 - [x] Build dashboard.

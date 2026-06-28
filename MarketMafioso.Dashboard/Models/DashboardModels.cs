@@ -18,6 +18,22 @@ public sealed record ReceiverHealthView
     public DateTimeOffset Utc { get; init; }
 }
 
+public sealed record ReceiverStorageSummaryView
+{
+    public int SnapshotRetentionCount { get; init; }
+    public int RawJsonRetentionCount { get; init; }
+    public int DiagnosticEventRetentionCount { get; init; }
+    public int SnapshotCount { get; init; }
+    public int RawJsonRetainedCount { get; init; }
+    public int RawJsonPrunedCount { get; init; }
+    public int DiagnosticEventCount { get; init; }
+    public DateTimeOffset? NewestSnapshotReceivedAtUtc { get; init; }
+    public DateTimeOffset? OldestSnapshotReceivedAtUtc { get; init; }
+    public string AcquisitionSseEndpoint { get; init; } = "api/events/stream";
+    public string DiagnosticsSseEndpoint { get; init; } = "api/diagnostics/events/stream";
+    public int AcquisitionSseCadenceSeconds { get; init; } = 3;
+}
+
 public sealed record MarketAcquisitionRequestView
 {
     public string Id { get; init; } = string.Empty;

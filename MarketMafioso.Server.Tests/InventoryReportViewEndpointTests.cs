@@ -706,6 +706,32 @@ public sealed class InventoryReportViewEndpointTests
     }
 
     [Fact]
+    public async Task StorageSummary_ReturnsStructuredRawAndDiagnosticRetentionCounts()
+    {
+        await using var application = CreateApplication(
+            new KeyValuePair<string, string?>("MarketMafioso:RawJsonRetentionCount", "1"),
+            new KeyValuePair<string, string?>("MarketMafioso:SnapshotRetentionCount", "2"),
+            new KeyValuePair<string, string?>("MarketMafioso:DiagnosticEventRetention", "5000"));
+        using var client = application.CreateClient();
+
+        var first = await client.PostAsJsonAsync("/inventory", CreateReport("Retention Character"));
+        first.EnsureSuccessStatusCode();
+        var second = await client.PostAsJsonAsync("/inventory", CreateReport("Retention Character"));
+        second.EnsureSuccessStatusCode();
+
+        var summary = await client.GetFromJsonAsync<ReceiverStorageSummaryView>("/api/settings/storage");
+
+        Assert.NotNull(summary);
+        Assert.Equal(2, summary.SnapshotRetentionCount);
+        Assert.Equal(1, summary.RawJsonRetentionCount);
+        Assert.Equal(5000, summary.DiagnosticEventRetentionCount);
+        Assert.Equal(2, summary.SnapshotCount);
+        Assert.Equal(1, summary.RawJsonRetainedCount);
+        Assert.Equal(1, summary.RawJsonPrunedCount);
+        Assert.Equal(0, summary.DiagnosticEventCount);
+    }
+
+    [Fact]
     public async Task HostedMode_DashboardHidesFilesystemPath()
     {
         string? contentRoot = null;
@@ -822,10 +848,16 @@ public sealed class InventoryReportViewEndpointTests
                 values.Configuration[item.Key] = item.Value;
         });
 
-    private static WebApplicationFactory<Program> CreateApplication()
+    private static WebApplicationFactory<Program> CreateApplication(params KeyValuePair<string, string?>[] extraConfiguration)
     {
         var contentRoot = Path.Combine(Path.GetTempPath(), "MarketMafioso.Server.Tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(contentRoot);
+        var configuration = new Dictionary<string, string?>
+        {
+            ["MarketMafioso:DatabasePath"] = Path.Combine(contentRoot, "marketmafioso.db"),
+        };
+        foreach (var item in extraConfiguration)
+            configuration[item.Key] = item.Value;
 
         return new WebApplicationFactory<Program>()
             .WithWebHostBuilder(builder =>
@@ -833,10 +865,7 @@ public sealed class InventoryReportViewEndpointTests
                 builder.UseContentRoot(contentRoot);
                 builder.ConfigureAppConfiguration(config =>
                 {
-                    config.AddInMemoryCollection(new Dictionary<string, string?>
-                    {
-                        ["MarketMafioso:DatabasePath"] = Path.Combine(contentRoot, "marketmafioso.db"),
-                    });
+                    config.AddInMemoryCollection(configuration);
                 });
             });
     }

@@ -454,7 +454,7 @@ body,
 }
 
 .overview-metrics {
-    grid-template-columns: repeat(4, minmax(140px, 1fr));
+    grid-template-columns: repeat(5, minmax(130px, 1fr));
 }
 
 .overview-mini-grid {
@@ -600,6 +600,16 @@ body,
     display: grid;
     gap: 10px;
     grid-template-columns: repeat(3, minmax(120px, 1fr));
+}
+
+.settings-metric-grid {
+    display: grid;
+    gap: 10px;
+    grid-template-columns: repeat(3, minmax(150px, 1fr));
+}
+
+.snapshot-retention-summary.wide {
+    grid-template-columns: repeat(4, minmax(130px, 1fr));
 }
 
 .snapshots-grid .mud-table-container {

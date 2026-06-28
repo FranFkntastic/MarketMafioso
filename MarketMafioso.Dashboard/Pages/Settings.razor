@@ -55,6 +55,14 @@
                     <MudStack Row="true" AlignItems="AlignItems.Center">
                         <MudText Typo="Typo.h6">Diagnostics</MudText>
                     </MudStack>
+                    <div class="settings-metric-grid">
+                        <MetricTile Label="Stored Events" Value="@_storage.DiagnosticEventCount.ToString("N0")" />
+                        <MetricTile Label="Retention Cap" Value="@_storage.DiagnosticEventRetentionCount.ToString("N0")" />
+                        <MetricTile Label="Live Stream" Value="@SseLabel" />
+                    </div>
+                    <MudText Typo="Typo.caption" Class="muted">
+                        Acquisition and diagnostic snapshots stream through @_storage.AcquisitionSseEndpoint every @_storage.AcquisitionSseCadenceSeconds second(s).
+                    </MudText>
                     <DiagnosticsEventGrid Events="_events"
                                           RefreshRequested="LoadDiagnosticsAsync"
                                           SelectedEventChanged="SelectDiagnosticEvent" />
@@ -86,7 +94,15 @@
                         </MudItem>
                         <MudItem xs="12" md="8">
                             <div class="snapshot-retention-summary">
-                                <MetricTile Label="Visible Snapshots" Value="@_snapshots.Count.ToString("N0")" />
+                                <MetricTile Label="Structured Snapshots" Value="@_storage.SnapshotCount.ToString("N0")" />
+                                <MetricTile Label="Raw JSON Retained" Value="@_storage.RawJsonRetainedCount.ToString("N0")" />
+                                <MetricTile Label="Raw JSON Pruned" Value="@_storage.RawJsonPrunedCount.ToString("N0")" />
+                            </div>
+                        </MudItem>
+                        <MudItem xs="12">
+                            <div class="snapshot-retention-summary wide">
+                                <MetricTile Label="Structured Retention" Value="@($"{_storage.SnapshotRetentionCount:N0} snapshots")" />
+                                <MetricTile Label="Raw JSON Retention" Value="@($"{_storage.RawJsonRetentionCount:N0} snapshots")" />
                                 <MetricTile Label="Newest Snapshot" Value="@NewestSnapshotLabel" />
                                 <MetricTile Label="Oldest Snapshot" Value="@OldestSnapshotLabel" />
                             </div>
@@ -140,6 +156,7 @@
     private IReadOnlyList<DiagnosticEventView> _events = [];
     private IReadOnlyList<DashboardCharacterOption> _characters = [];
     private IReadOnlyList<ReportSummaryView> _snapshots = [];
+    private ReceiverStorageSummaryView _storage = new();
     private DiagnosticEventView? _selectedEvent;
     private long? _defaultCharacterId;
     private long? _snapshotCharacterId;
@@ -158,9 +175,14 @@
         ? "-"
         : _snapshots.Min(snapshot => snapshot.ReceivedAt).ToLocalTime().ToString("yyyy-MM-dd HH:mm");
 
+    private string SseLabel => _storage.AcquisitionSseCadenceSeconds <= 0
+        ? "Configured"
+        : $"{_storage.AcquisitionSseCadenceSeconds}s cadence";
+
     protected override async Task OnInitializedAsync()
     {
         await LoadSettingsAsync();
+        await LoadStorageAsync();
         await LoadDiagnosticsAsync();
         await LoadSnapshotsAsync();
     }
@@ -206,6 +228,7 @@
     private async Task LoadDiagnosticsAsync()
     {
         _events = await Api.GetDiagnosticsAsync();
+        await LoadStorageAsync();
     }
 
     private async Task OnSnapshotCharacterChanged(long? value)
@@ -219,6 +242,7 @@
         try
         {
             _snapshots = await Api.GetInventorySnapshotsAsync(_snapshotCharacterId);
+            await LoadStorageAsync();
             _snapshotStatus = $"Loaded {_snapshots.Count:N0} snapshot(s).";
         }
         catch (Exception ex)
@@ -230,5 +254,10 @@
     private void SelectDiagnosticEvent(DiagnosticEventView item)
     {
         _selectedEvent = item;
+    }
+
+    private async Task LoadStorageAsync()
+    {
+        _storage = await Api.GetStorageSummaryAsync();
     }
 }

@@ -46,6 +46,14 @@ public sealed class DashboardApiClient
             cancellationToken) ?? new ReceiverHealthView();
     }
 
+    public async Task<ReceiverStorageSummaryView> GetStorageSummaryAsync(CancellationToken cancellationToken = default)
+    {
+        return await http.GetFromJsonAsync<ReceiverStorageSummaryView>(
+            "api/settings/storage",
+            JsonOptions,
+            cancellationToken) ?? new ReceiverStorageSummaryView();
+    }
+
     public async Task<IReadOnlyList<MarketAcquisitionRequestView>> GetAcquisitionRequestsAsync(
         CancellationToken cancellationToken = default)
     {

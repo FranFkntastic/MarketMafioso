@@ -185,6 +185,48 @@ public sealed class InventoryReportStore
         return summaries;
     }
 
+    public async Task<InventoryRetentionSummary> GetRetentionSummaryAsync(
+        IReadOnlyList<long> accountIds,
+        CancellationToken cancellationToken)
+    {
+        if (accountIds.Count == 0)
+            return new InventoryRetentionSummary();
+
+        await using var connection = await connectionFactory.OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        var accountParameters = accountIds.Select((_, index) => $"$account{index}").ToArray();
+        command.CommandText = $"""
+            SELECT
+                COUNT(*),
+                COALESCE(SUM(CASE WHEN raw_report_json IS NOT NULL THEN 1 ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN raw_report_json IS NULL THEN 1 ELSE 0 END), 0),
+                MAX(received_at_utc),
+                MIN(received_at_utc)
+            FROM snapshots
+            WHERE account_id IN ({string.Join(", ", accountParameters)})
+            """;
+
+        for (var i = 0; i < accountIds.Count; i++)
+            command.Parameters.AddWithValue(accountParameters[i], accountIds[i]);
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken))
+            return new InventoryRetentionSummary();
+
+        return new InventoryRetentionSummary
+        {
+            SnapshotCount = checked((int)reader.GetInt64(0)),
+            RawJsonRetainedCount = checked((int)reader.GetInt64(1)),
+            RawJsonPrunedCount = checked((int)reader.GetInt64(2)),
+            NewestSnapshotReceivedAtUtc = reader.IsDBNull(3)
+                ? null
+                : DateTimeOffset.Parse(reader.GetString(3), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+            OldestSnapshotReceivedAtUtc = reader.IsDBNull(4)
+                ? null
+                : DateTimeOffset.Parse(reader.GetString(4), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+        };
+    }
+
     public Task<StoredInventoryReport?> GetLatestAsync(CancellationToken cancellationToken) =>
         GetLatestAsync(1, null, cancellationToken);
 
@@ -886,3 +928,12 @@ public sealed class InventoryReportStore
 public sealed record RawInventoryReportJson(string Id, string? RawJson);
 
 public sealed record CharacterSummary(long Id, string CharacterName, string? HomeWorld, DateTimeOffset LastSeenAt);
+
+public sealed record InventoryRetentionSummary
+{
+    public int SnapshotCount { get; init; }
+    public int RawJsonRetainedCount { get; init; }
+    public int RawJsonPrunedCount { get; init; }
+    public DateTimeOffset? NewestSnapshotReceivedAtUtc { get; init; }
+    public DateTimeOffset? OldestSnapshotReceivedAtUtc { get; init; }
+}
