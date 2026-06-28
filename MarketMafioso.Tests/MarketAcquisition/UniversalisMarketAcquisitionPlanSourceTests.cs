@@ -39,6 +39,7 @@ public sealed class UniversalisMarketAcquisitionPlanSourceTests
         var listing = Assert.Single(listings);
         Assert.Equal("https://universalis.app/api/v2/North-America/2?listings=5", handler.LastRequest?.RequestUri?.ToString());
         Assert.Equal("9227171949922142549", listing.ListingId);
+        Assert.Equal(2u, listing.ItemId);
         Assert.Equal("Faerie", listing.WorldName);
         Assert.Equal(54u, listing.WorldId);
         Assert.Equal(500u, listing.Quantity);

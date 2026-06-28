@@ -37,9 +37,19 @@ public sealed class MarketAcquisitionRequestStore
     {
         ValidateCreateRequest(request);
 
+        return await CreateBatchAsync(ToBatchCreateRequest(request), cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<MarketAcquisitionCreateResult> CreateBatchAsync(
+        MarketAcquisitionBatchCreateRequest request,
+        CancellationToken cancellationToken)
+    {
+        ValidateBatchCreateRequest(request);
+
         var now = DateTimeOffset.UtcNow;
         var expirySeconds = Math.Clamp(request.ExpiresInSeconds, minimumExpirySeconds, 300);
         var payloadJson = JsonSerializer.Serialize(request, JsonOptions);
+        var primaryRequest = ToPrimaryCreateRequest(request);
 
         await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         var existing = await GetByIdempotencyKeyAsync(
@@ -61,10 +71,12 @@ public sealed class MarketAcquisitionRequestStore
             expiresAtUtc: now.AddSeconds(expirySeconds),
             claimedAtUtc: null,
             claimExpiresAtUtc: null,
-            request,
+            primaryRequest,
             latestEvent: null);
 
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
+        command.Transaction = (SqliteTransaction)transaction;
         command.CommandText =
             """
             INSERT INTO acquisition_requests (
@@ -98,7 +110,16 @@ public sealed class MarketAcquisitionRequestStore
         command.Parameters.AddWithValue("$payloadJson", payloadJson);
 
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
-        return new MarketAcquisitionCreateResult(view, false);
+        var lines = await InsertBatchLinesAsync(
+            connection,
+            transaction,
+            view.Id,
+            request.Lines,
+            now,
+            cancellationToken).ConfigureAwait(false);
+
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return new MarketAcquisitionCreateResult(view with { Lines = lines }, false);
     }
 
     public async Task<IReadOnlyList<MarketAcquisitionRequestView>> ListPendingAsync(
@@ -166,7 +187,8 @@ public sealed class MarketAcquisitionRequestStore
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
             requests.Add(ReadView(reader));
 
-        return requests;
+        await reader.DisposeAsync().ConfigureAwait(false);
+        return await PopulateLinesAsync(connection, requests, cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<IReadOnlyList<MarketAcquisitionRequestView>> ListRecentAsync(
@@ -228,7 +250,8 @@ public sealed class MarketAcquisitionRequestStore
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
             requests.Add(ReadView(reader));
 
-        return requests;
+        await reader.DisposeAsync().ConfigureAwait(false);
+        return await PopulateLinesAsync(connection, requests, cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<MarketAcquisitionRequestTimelineView?> GetTimelineAsync(
@@ -543,6 +566,30 @@ public sealed class MarketAcquisitionRequestStore
 
             CREATE INDEX IF NOT EXISTS idx_acquisition_requests_pending_scope
                 ON acquisition_requests(status, target_character_name, target_world);
+
+            CREATE TABLE IF NOT EXISTS acquisition_batch_lines (
+                line_id TEXT NOT NULL PRIMARY KEY,
+                request_id TEXT NOT NULL,
+                ordinal INTEGER NOT NULL,
+                item_id INTEGER NOT NULL,
+                item_name TEXT NULL,
+                item_kind TEXT NULL,
+                quantity_mode TEXT NOT NULL,
+                target_quantity INTEGER NOT NULL,
+                max_quantity INTEGER NOT NULL,
+                hq_policy TEXT NOT NULL,
+                max_unit_price INTEGER NOT NULL,
+                gil_cap INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                purchased_quantity INTEGER NOT NULL DEFAULT 0,
+                spent_gil INTEGER NOT NULL DEFAULT 0,
+                latest_message TEXT NULL,
+                created_at_utc TEXT NOT NULL,
+                updated_at_utc TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_acquisition_batch_lines_request
+                ON acquisition_batch_lines(request_id, ordinal);
 
             CREATE TABLE IF NOT EXISTS acquisition_request_events (
                 id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
@@ -956,9 +1003,12 @@ public sealed class MarketAcquisitionRequestStore
         command.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToString("O"));
 
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-        return await reader.ReadAsync(cancellationToken).ConfigureAwait(false)
-            ? ReadView(reader)
-            : null;
+        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            return null;
+
+        var view = ReadView(reader);
+        await reader.DisposeAsync().ConfigureAwait(false);
+        return await PopulateLinesAsync(connection, transaction, view, cancellationToken).ConfigureAwait(false);
     }
 
     private static async Task<MarketAcquisitionRequestView?> GetByIdAsync(
@@ -1011,9 +1061,12 @@ public sealed class MarketAcquisitionRequestStore
         command.Parameters.AddWithValue("$id", id);
 
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-        return await reader.ReadAsync(cancellationToken).ConfigureAwait(false)
-            ? ReadView(reader)
-            : null;
+        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            return null;
+
+        var view = ReadView(reader);
+        await reader.DisposeAsync().ConfigureAwait(false);
+        return await PopulateLinesAsync(connection, transaction, view, cancellationToken).ConfigureAwait(false);
     }
 
     private static async Task<(MarketAcquisitionRequestView View, string PayloadJson)?> GetByIdempotencyKeyAsync(
@@ -1068,7 +1121,9 @@ public sealed class MarketAcquisitionRequestStore
             return null;
 
         var payloadJson = reader.GetString(6);
-        return (ReadView(reader), payloadJson);
+        var view = ReadView(reader);
+        await reader.DisposeAsync().ConfigureAwait(false);
+        return (await PopulateLinesAsync(connection, transaction: null, view, cancellationToken).ConfigureAwait(false), payloadJson);
     }
 
     private static async Task<string?> GetClaimTokenAsync(
@@ -1104,6 +1159,196 @@ public sealed class MarketAcquisitionRequestStore
         return await reader.ReadAsync(cancellationToken).ConfigureAwait(false)
             ? (reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetString(3), reader.GetString(4))
             : null;
+    }
+
+    private static async Task<IReadOnlyList<MarketAcquisitionRequestView>> PopulateLinesAsync(
+        SqliteConnection connection,
+        IReadOnlyList<MarketAcquisitionRequestView> requests,
+        CancellationToken cancellationToken)
+    {
+        if (requests.Count == 0)
+            return requests;
+
+        var populated = new List<MarketAcquisitionRequestView>(requests.Count);
+        foreach (var request in requests)
+            populated.Add(await PopulateLinesAsync(connection, transaction: null, request, cancellationToken).ConfigureAwait(false));
+
+        return populated;
+    }
+
+    private static async Task<MarketAcquisitionRequestView> PopulateLinesAsync(
+        SqliteConnection connection,
+        System.Data.Common.DbTransaction? transaction,
+        MarketAcquisitionRequestView request,
+        CancellationToken cancellationToken)
+    {
+        var lines = await LoadLinesAsync(connection, transaction, request.Id, cancellationToken).ConfigureAwait(false);
+        return request with
+        {
+            Lines = lines.Count == 0
+                ? [ToFallbackLineView(request)]
+                : lines,
+        };
+    }
+
+    private static async Task<IReadOnlyList<MarketAcquisitionBatchLineView>> InsertBatchLinesAsync(
+        SqliteConnection connection,
+        System.Data.Common.DbTransaction transaction,
+        string requestId,
+        IReadOnlyList<MarketAcquisitionBatchLineCreateRequest> lines,
+        DateTimeOffset now,
+        CancellationToken cancellationToken)
+    {
+        var views = new List<MarketAcquisitionBatchLineView>(lines.Count);
+        for (var index = 0; index < lines.Count; index++)
+        {
+            var line = lines[index];
+            var view = new MarketAcquisitionBatchLineView
+            {
+                LineId = $"{requestId}-line-{index + 1}",
+                BatchId = requestId,
+                Ordinal = index,
+                ItemId = line.ItemId,
+                ItemName = line.ItemName,
+                ItemKind = line.ItemKind,
+                QuantityMode = line.QuantityMode,
+                TargetQuantity = line.TargetQuantity,
+                MaxQuantity = line.MaxQuantity,
+                HqPolicy = line.HqPolicy,
+                MaxUnitPrice = line.MaxUnitPrice,
+                GilCap = line.GilCap,
+                Status = MarketAcquisitionStatuses.PendingPickup,
+            };
+
+            await using var command = connection.CreateCommand();
+            command.Transaction = (SqliteTransaction)transaction;
+            command.CommandText =
+                """
+                INSERT INTO acquisition_batch_lines (
+                    line_id,
+                    request_id,
+                    ordinal,
+                    item_id,
+                    item_name,
+                    item_kind,
+                    quantity_mode,
+                    target_quantity,
+                    max_quantity,
+                    hq_policy,
+                    max_unit_price,
+                    gil_cap,
+                    status,
+                    purchased_quantity,
+                    spent_gil,
+                    latest_message,
+                    created_at_utc,
+                    updated_at_utc
+                )
+                VALUES (
+                    $lineId,
+                    $requestId,
+                    $ordinal,
+                    $itemId,
+                    $itemName,
+                    $itemKind,
+                    $quantityMode,
+                    $targetQuantity,
+                    $maxQuantity,
+                    $hqPolicy,
+                    $maxUnitPrice,
+                    $gilCap,
+                    $status,
+                    0,
+                    0,
+                    NULL,
+                    $createdAtUtc,
+                    $updatedAtUtc
+                );
+                """;
+            command.Parameters.AddWithValue("$lineId", view.LineId);
+            command.Parameters.AddWithValue("$requestId", requestId);
+            command.Parameters.AddWithValue("$ordinal", view.Ordinal);
+            command.Parameters.AddWithValue("$itemId", view.ItemId);
+            command.Parameters.AddWithValue("$itemName", (object?)view.ItemName ?? DBNull.Value);
+            command.Parameters.AddWithValue("$itemKind", (object?)view.ItemKind ?? DBNull.Value);
+            command.Parameters.AddWithValue("$quantityMode", view.QuantityMode);
+            command.Parameters.AddWithValue("$targetQuantity", view.TargetQuantity);
+            command.Parameters.AddWithValue("$maxQuantity", view.MaxQuantity);
+            command.Parameters.AddWithValue("$hqPolicy", view.HqPolicy);
+            command.Parameters.AddWithValue("$maxUnitPrice", view.MaxUnitPrice);
+            command.Parameters.AddWithValue("$gilCap", view.GilCap);
+            command.Parameters.AddWithValue("$status", view.Status);
+            command.Parameters.AddWithValue("$createdAtUtc", now.ToString("O"));
+            command.Parameters.AddWithValue("$updatedAtUtc", now.ToString("O"));
+            await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+
+            views.Add(view);
+        }
+
+        return views;
+    }
+
+    private static async Task<IReadOnlyList<MarketAcquisitionBatchLineView>> LoadLinesAsync(
+        SqliteConnection connection,
+        System.Data.Common.DbTransaction? transaction,
+        string requestId,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        if (transaction != null)
+            command.Transaction = (SqliteTransaction)transaction;
+
+        command.CommandText =
+            """
+            SELECT
+                line_id,
+                request_id,
+                ordinal,
+                item_id,
+                item_name,
+                item_kind,
+                quantity_mode,
+                target_quantity,
+                max_quantity,
+                hq_policy,
+                max_unit_price,
+                gil_cap,
+                status,
+                purchased_quantity,
+                spent_gil,
+                latest_message
+            FROM acquisition_batch_lines
+            WHERE request_id = $requestId
+            ORDER BY ordinal ASC;
+            """;
+        command.Parameters.AddWithValue("$requestId", requestId);
+
+        var lines = new List<MarketAcquisitionBatchLineView>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            lines.Add(new MarketAcquisitionBatchLineView
+            {
+                LineId = reader.GetString(0),
+                BatchId = reader.GetString(1),
+                Ordinal = reader.GetInt32(2),
+                ItemId = checked((uint)reader.GetInt64(3)),
+                ItemName = reader.IsDBNull(4) ? null : reader.GetString(4),
+                ItemKind = reader.IsDBNull(5) ? null : reader.GetString(5),
+                QuantityMode = reader.GetString(6),
+                TargetQuantity = checked((uint)reader.GetInt64(7)),
+                MaxQuantity = checked((uint)reader.GetInt64(8)),
+                HqPolicy = reader.GetString(9),
+                MaxUnitPrice = checked((uint)reader.GetInt64(10)),
+                GilCap = checked((uint)reader.GetInt64(11)),
+                Status = reader.GetString(12),
+                PurchasedQuantity = checked((uint)reader.GetInt64(13)),
+                SpentGil = checked((uint)reader.GetInt64(14)),
+                LatestMessage = reader.IsDBNull(15) ? null : reader.GetString(15),
+            });
+        }
+
+        return lines;
     }
 
     private static async Task<IReadOnlyList<MarketAcquisitionLifecycleEventView>> ListLifecycleEventsAsync(
@@ -1492,9 +1737,7 @@ public sealed class MarketAcquisitionRequestStore
 
     private static MarketAcquisitionRequestView ReadView(SqliteDataReader reader)
     {
-        var request = JsonSerializer.Deserialize<MarketAcquisitionCreateRequest>(
-            reader.GetString(6),
-            JsonOptions) ?? throw new InvalidOperationException("Stored acquisition payload is invalid.");
+        var request = ReadPrimaryCreateRequest(reader.GetString(6));
         var latestEvent = ReadLatestEvent(reader);
         var latestAttempt = ReadLatestAttempt(reader);
 
@@ -1618,7 +1861,91 @@ public sealed class MarketAcquisitionRequestStore
             LatestAttemptWorld = request.LatestAttemptWorld,
             LatestAttemptResult = request.LatestAttemptResult,
             LatestAttemptPluginVersion = request.LatestAttemptPluginVersion,
+            Lines = request.Lines,
             ClaimToken = claimToken,
+        };
+
+    private static MarketAcquisitionCreateRequest ReadPrimaryCreateRequest(string payloadJson)
+    {
+        using var document = JsonDocument.Parse(payloadJson);
+        if (document.RootElement.TryGetProperty("lines", out var linesElement) &&
+            linesElement.ValueKind == JsonValueKind.Array)
+        {
+            var batch = document.Deserialize<MarketAcquisitionBatchCreateRequest>(JsonOptions)
+                ?? throw new InvalidOperationException("Stored acquisition batch payload is invalid.");
+            return ToPrimaryCreateRequest(batch);
+        }
+
+        return document.Deserialize<MarketAcquisitionCreateRequest>(JsonOptions)
+            ?? throw new InvalidOperationException("Stored acquisition payload is invalid.");
+    }
+
+    private static MarketAcquisitionBatchCreateRequest ToBatchCreateRequest(MarketAcquisitionCreateRequest request) =>
+        new()
+        {
+            SchemaVersion = request.SchemaVersion,
+            IdempotencyKey = request.IdempotencyKey,
+            TargetCharacterName = request.TargetCharacterName,
+            TargetWorld = request.TargetWorld,
+            Region = request.Region,
+            WorldMode = request.WorldMode,
+            ExpiresInSeconds = request.ExpiresInSeconds,
+            Lines =
+            [
+                new MarketAcquisitionBatchLineCreateRequest
+                {
+                    ItemId = request.ItemId,
+                    ItemName = request.ItemName,
+                    QuantityMode = request.QuantityMode,
+                    TargetQuantity = request.QuantityMode == "TargetQuantity" ? request.Quantity : 0,
+                    MaxQuantity = request.QuantityMode == "AllBelowThreshold" ? request.Quantity : 0,
+                    HqPolicy = request.HqPolicy,
+                    MaxUnitPrice = request.MaxUnitPrice,
+                    GilCap = request.MaxTotalGil,
+                },
+            ],
+        };
+
+    private static MarketAcquisitionCreateRequest ToPrimaryCreateRequest(MarketAcquisitionBatchCreateRequest request)
+    {
+        var primaryLine = request.Lines.FirstOrDefault()
+            ?? throw new InvalidOperationException("Stored acquisition batch has no lines.");
+        return new MarketAcquisitionCreateRequest
+        {
+            SchemaVersion = request.SchemaVersion,
+            IdempotencyKey = request.IdempotencyKey,
+            TargetCharacterName = request.TargetCharacterName,
+            TargetWorld = request.TargetWorld,
+            Region = request.Region,
+            ItemId = primaryLine.ItemId,
+            ItemName = primaryLine.ItemName,
+            QuantityMode = primaryLine.QuantityMode,
+            Quantity = primaryLine.QuantityMode == "AllBelowThreshold"
+                ? primaryLine.MaxQuantity
+                : primaryLine.TargetQuantity,
+            HqPolicy = primaryLine.HqPolicy,
+            MaxUnitPrice = primaryLine.MaxUnitPrice,
+            MaxTotalGil = primaryLine.GilCap,
+            WorldMode = request.WorldMode,
+            ExpiresInSeconds = request.ExpiresInSeconds,
+        };
+    }
+
+    private static MarketAcquisitionBatchLineView ToFallbackLineView(MarketAcquisitionRequestView request) =>
+        new()
+        {
+            LineId = $"{request.Id}-line-1",
+            BatchId = request.Id,
+            Ordinal = 0,
+            ItemId = request.ItemId,
+            ItemName = request.ItemName,
+            QuantityMode = request.QuantityMode,
+            TargetQuantity = request.QuantityMode == "TargetQuantity" ? request.Quantity : 0,
+            MaxQuantity = request.QuantityMode == "AllBelowThreshold" ? request.Quantity : 0,
+            HqPolicy = request.HqPolicy,
+            MaxUnitPrice = request.MaxUnitPrice,
+            GilCap = request.MaxTotalGil,
+            Status = request.Status,
         };
 
     private sealed record MarketAcquisitionLatestEvent(
@@ -1674,6 +2001,42 @@ public sealed class MarketAcquisitionRequestStore
             throw new ArgumentException("Quantity mode must be TargetQuantity or AllBelowThreshold.", nameof(request));
         if (request.QuantityMode == "TargetQuantity" && request.Quantity == 0)
             throw new ArgumentException("Target quantity is required.", nameof(request));
+    }
+
+    private static void ValidateBatchCreateRequest(MarketAcquisitionBatchCreateRequest request)
+    {
+        if (request.SchemaVersion != 1)
+            throw new ArgumentException("Schema version must be 1.", nameof(request));
+        if (string.IsNullOrWhiteSpace(request.IdempotencyKey))
+            throw new ArgumentException("Idempotency key is required.", nameof(request));
+        if (string.IsNullOrWhiteSpace(request.TargetCharacterName))
+            throw new ArgumentException("Target character name is required.", nameof(request));
+        if (string.IsNullOrWhiteSpace(request.TargetWorld))
+            throw new ArgumentException("Target world is required.", nameof(request));
+        if (string.IsNullOrWhiteSpace(request.Region))
+            throw new ArgumentException("Region is required.", nameof(request));
+        if (string.IsNullOrWhiteSpace(request.WorldMode))
+            throw new ArgumentException("World mode is required.", nameof(request));
+        if (request.Lines.Count == 0)
+            throw new ArgumentException("At least one acquisition line is required.", nameof(request));
+
+        foreach (var line in request.Lines)
+            ValidateBatchLineCreateRequest(line);
+    }
+
+    private static void ValidateBatchLineCreateRequest(MarketAcquisitionBatchLineCreateRequest line)
+    {
+        if (line.ItemId == 0)
+            throw new ArgumentException("Item id is required.", nameof(line));
+        if (line.MaxUnitPrice == 0)
+            throw new ArgumentException("Max unit price is required.", nameof(line));
+        if (string.IsNullOrWhiteSpace(line.QuantityMode) ||
+            string.IsNullOrWhiteSpace(line.HqPolicy))
+            throw new ArgumentException("Quantity mode and HQ policy are required.", nameof(line));
+        if (line.QuantityMode is not ("TargetQuantity" or "AllBelowThreshold"))
+            throw new ArgumentException("Quantity mode must be TargetQuantity or AllBelowThreshold.", nameof(line));
+        if (line.QuantityMode == "TargetQuantity" && line.TargetQuantity == 0)
+            throw new ArgumentException("Target quantity is required.", nameof(line));
     }
 
     private static void ValidateAttemptEventRequest(MarketAcquisitionAttemptEventRequest request)

@@ -5,6 +5,8 @@ namespace MarketMafioso.MarketAcquisition;
 
 public sealed record MarketAcquisitionListing
 {
+    public uint ItemId { get; init; }
+    public string? ItemName { get; init; }
     public string ListingId { get; init; } = string.Empty;
     public string WorldName { get; init; } = string.Empty;
     public uint WorldId { get; init; }
@@ -19,6 +21,9 @@ public sealed record MarketAcquisitionListing
 
 public sealed record MarketAcquisitionPlannedListing
 {
+    public string LineId { get; init; } = string.Empty;
+    public uint ItemId { get; init; }
+    public string? ItemName { get; init; }
     public string ListingId { get; init; } = string.Empty;
     public string RetainerName { get; init; } = string.Empty;
     public string RetainerId { get; init; } = string.Empty;
@@ -29,6 +34,41 @@ public sealed record MarketAcquisitionPlannedListing
     public DateTimeOffset LastReviewTimeUtc { get; init; }
 }
 
+public sealed record MarketAcquisitionPlanLine
+{
+    public string LineId { get; init; } = string.Empty;
+    public int Ordinal { get; init; }
+    public uint ItemId { get; init; }
+    public string? ItemName { get; init; }
+    public string QuantityMode { get; init; } = string.Empty;
+    public uint RequestedQuantity { get; init; }
+    public string HqPolicy { get; init; } = string.Empty;
+    public uint MaxUnitPrice { get; init; }
+    public uint GilCap { get; init; }
+    public string Status { get; init; } = string.Empty;
+    public uint PlannedQuantity { get; init; }
+    public uint PlannedGil { get; init; }
+}
+
+public sealed record MarketAcquisitionWorldItemSubtask
+{
+    public string LineId { get; init; } = string.Empty;
+    public int LineOrdinal { get; init; }
+    public uint ItemId { get; init; }
+    public string? ItemName { get; init; }
+    public string WorldName { get; init; } = string.Empty;
+    public string DataCenter { get; init; } = string.Empty;
+    public string QuantityMode { get; init; } = string.Empty;
+    public uint RequestedQuantity { get; init; }
+    public string HqPolicy { get; init; } = string.Empty;
+    public uint MaxUnitPrice { get; init; }
+    public uint GilCap { get; init; }
+    public uint PlannedQuantity { get; init; }
+    public uint PlannedGil { get; init; }
+    public bool ExceedsRequestedQuantity { get; init; }
+    public IReadOnlyList<MarketAcquisitionPlannedListing> Listings { get; init; } = [];
+}
+
 public sealed record MarketAcquisitionWorldBatch
 {
     public string WorldName { get; init; } = string.Empty;
@@ -36,6 +76,7 @@ public sealed record MarketAcquisitionWorldBatch
     public uint PlannedQuantity { get; init; }
     public uint PlannedGil { get; init; }
     public bool ExceedsRequestedQuantity { get; init; }
+    public IReadOnlyList<MarketAcquisitionWorldItemSubtask> ItemSubtasks { get; init; } = [];
     public IReadOnlyList<MarketAcquisitionPlannedListing> Listings { get; init; } = [];
 }
 
@@ -50,6 +91,7 @@ public sealed record MarketAcquisitionPlan
     public uint PlannedGil { get; init; }
     public DateTimeOffset PreparedAtUtc { get; init; }
     public MarketAcquisitionPlanDiagnostics Diagnostics { get; init; } = new();
+    public IReadOnlyList<MarketAcquisitionPlanLine> Lines { get; init; } = [];
     public IReadOnlyList<MarketAcquisitionWorldBatch> WorldBatches { get; init; } = [];
 }
 

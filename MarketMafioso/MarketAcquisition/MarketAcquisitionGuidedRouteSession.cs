@@ -40,6 +40,7 @@ public sealed class MarketAcquisitionGuidedRouteSession
                     : batch.DataCenter,
                 PlannedQuantity = batch.PlannedQuantity,
                 PlannedGil = batch.PlannedGil,
+                ItemSubtasks = batch.ItemSubtasks,
                 LifestreamCommand = BuildLifestreamCommand(batch.WorldName),
                 Status = "Pending",
             })
@@ -108,10 +109,16 @@ public sealed class MarketAcquisitionGuidedRouteSession
         {
             stop.Status = "Purchasing";
             return MarketAcquisitionGuidedRouteResult.Ok(
-                $"Purchasing on {stop.WorldName}: {candidatePlan.WouldBuyQuantity:N0} safe live item(s), {candidatePlan.WouldSpendGil:N0} gil.");
+                $"Purchasing {FormatActiveItem(stop)} on {stop.WorldName}: {candidatePlan.WouldBuyQuantity:N0} safe live item(s), {candidatePlan.WouldSpendGil:N0} gil.");
         }
 
-        CompleteActiveStop(0, 0);
+        if (TryAdvanceActiveItemSubtask(stop))
+        {
+            return MarketAcquisitionGuidedRouteResult.Ok(
+                $"No safe live candidates remained for {FormatPreviousItem(stop)} on {currentWorld}. Next item: {FormatActiveItem(stop)}.");
+        }
+
+        CompleteActiveStop(stop.PurchasedQuantity, stop.SpentGil);
         if (Status == "Complete")
             return MarketAcquisitionGuidedRouteResult.Ok("Guided route complete. No safe live candidates remained.");
 
@@ -133,13 +140,25 @@ public sealed class MarketAcquisitionGuidedRouteSession
         if (!stop.Status.Equals("Purchasing", StringComparison.OrdinalIgnoreCase))
             return MarketAcquisitionGuidedRouteResult.Fail($"Cannot complete purchases while stop is {stop.Status}.");
 
-        CompleteActiveStop(purchasedQuantity, spentGil);
+        if (stop.ItemSubtasks.Count == 0)
+        {
+            CompleteActiveStop(purchasedQuantity, spentGil);
+        }
+        else if (TryAdvanceActiveItemSubtask(stop, purchasedQuantity, spentGil))
+        {
+            return MarketAcquisitionGuidedRouteResult.Ok(
+                $"Completed {FormatPreviousItem(stop)} on {currentWorld}: purchased {purchasedQuantity:N0} item(s), spent {spentGil:N0} gil. Next item: {FormatActiveItem(stop)}.");
+        }
+        else
+        {
+            CompleteActiveStop(stop.PurchasedQuantity, stop.SpentGil);
+        }
         if (Status == "Complete")
             return MarketAcquisitionGuidedRouteResult.Ok(
-                $"Guided route complete. Purchased {purchasedQuantity:N0} item(s), spent {spentGil:N0} gil on {currentWorld}.");
+                $"Guided route complete. Purchased {stop.PurchasedQuantity:N0} item(s), spent {stop.SpentGil:N0} gil on {currentWorld}.");
 
         return MarketAcquisitionGuidedRouteResult.Ok(
-            $"Completed {currentWorld}: purchased {purchasedQuantity:N0} item(s), spent {spentGil:N0} gil. Next stop: {ActiveStop?.WorldName}.");
+            $"Completed {currentWorld}: purchased {stop.PurchasedQuantity:N0} item(s), spent {stop.SpentGil:N0} gil. Next stop: {ActiveStop?.WorldName}.");
     }
 
     private void CompleteActiveStop(uint purchasedQuantity, uint spentGil)
@@ -157,6 +176,49 @@ public sealed class MarketAcquisitionGuidedRouteSession
     }
 
     private static string BuildLifestreamCommand(string worldName) => $"/li {worldName} mb";
+
+    private static bool TryAdvanceActiveItemSubtask(
+        MarketAcquisitionGuidedRouteStop stop,
+        uint purchasedQuantity = 0,
+        uint spentGil = 0)
+    {
+        if (stop.ItemSubtasks.Count == 0)
+            return false;
+
+        stop.PurchasedQuantity = checked(stop.PurchasedQuantity + purchasedQuantity);
+        stop.SpentGil = checked(stop.SpentGil + spentGil);
+        stop.CompletedItemSubtaskCount++;
+        if (stop.CompletedItemSubtaskCount >= stop.ItemSubtasks.Count)
+            return false;
+
+        stop.Status = "Arrived";
+        stop.LiveCandidateStatus = null;
+        stop.WouldBuyQuantity = 0;
+        stop.WouldSpendGil = 0;
+        return true;
+    }
+
+    private static string FormatActiveItem(MarketAcquisitionGuidedRouteStop stop) =>
+        FormatItem(stop.ActiveItemSubtask);
+
+    private static string FormatPreviousItem(MarketAcquisitionGuidedRouteStop stop)
+    {
+        if (stop.ItemSubtasks.Count == 0)
+            return "item";
+
+        var previousIndex = Math.Clamp(stop.CompletedItemSubtaskCount - 1, 0, stop.ItemSubtasks.Count - 1);
+        return FormatItem(stop.ItemSubtasks[previousIndex]);
+    }
+
+    private static string FormatItem(MarketAcquisitionWorldItemSubtask? subtask)
+    {
+        if (subtask == null)
+            return "item";
+
+        return string.IsNullOrWhiteSpace(subtask.ItemName)
+            ? $"item {subtask.ItemId}"
+            : $"{subtask.ItemName} ({subtask.ItemId})";
+    }
 }
 
 public sealed record MarketAcquisitionGuidedRouteStop
@@ -166,6 +228,12 @@ public sealed record MarketAcquisitionGuidedRouteStop
     public string LifestreamCommand { get; init; } = string.Empty;
     public uint PlannedQuantity { get; init; }
     public uint PlannedGil { get; init; }
+    public IReadOnlyList<MarketAcquisitionWorldItemSubtask> ItemSubtasks { get; init; } = [];
+    public int CompletedItemSubtaskCount { get; set; }
+    public MarketAcquisitionWorldItemSubtask? ActiveItemSubtask =>
+        CompletedItemSubtaskCount >= ItemSubtasks.Count
+            ? null
+            : ItemSubtasks[CompletedItemSubtaskCount];
     public string Status { get; set; } = string.Empty;
     public string? LiveCandidateStatus { get; set; }
     public uint WouldBuyQuantity { get; set; }

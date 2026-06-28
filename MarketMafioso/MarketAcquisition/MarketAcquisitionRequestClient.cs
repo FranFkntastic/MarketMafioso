@@ -31,7 +31,7 @@ public sealed class MarketAcquisitionRequestClient
             throw new InvalidOperationException("Client API key is required.");
 
         var url =
-            $"{acquisitionBaseUrl}/requests/pending" +
+            $"{acquisitionBaseUrl}/batches/pending" +
             $"?characterName={Uri.EscapeDataString(characterName)}" +
             $"&world={Uri.EscapeDataString(world)}";
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
@@ -39,10 +39,10 @@ public sealed class MarketAcquisitionRequestClient
 
         using var response = await httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
-        var pending = await response.Content.ReadFromJsonAsync<MarketAcquisitionPendingResponse>(
+        var pending = await response.Content.ReadFromJsonAsync<MarketAcquisitionBatchPendingResponse>(
             JsonOptions,
             cancellationToken).ConfigureAwait(false);
-        return pending?.Requests ?? [];
+        return pending?.Batches ?? [];
     }
 
     public async Task<MarketAcquisitionClaimView> ClaimAsync(

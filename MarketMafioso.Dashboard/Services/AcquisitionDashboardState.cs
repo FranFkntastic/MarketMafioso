@@ -61,20 +61,14 @@ public sealed class AcquisitionDashboardState
     }
 
     public async Task<bool> StageAsync(
-        IEnumerable<MarketAcquisitionCreateRequest> requests,
+        MarketAcquisitionBatchCreateRequest request,
         CancellationToken cancellationToken = default)
     {
         return await RunAsync(async () =>
         {
-            var staged = 0;
-            foreach (var request in requests)
-            {
-                await api.CreateAcquisitionRequestAsync(request, cancellationToken);
-                staged++;
-            }
-
+            await api.CreateAcquisitionBatchAsync(request, cancellationToken);
             await RefreshCoreAsync(cancellationToken);
-            status.Info($"Staged {staged:N0} acquisition request(s).");
+            status.Info($"Staged acquisition batch with {request.Lines.Count:N0} line(s).");
         }, "Stage queue failed.");
     }
 

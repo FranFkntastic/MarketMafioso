@@ -212,6 +212,66 @@ public sealed class MarketAcquisitionPlannerTests
     }
 
     [Fact]
+    public void BuildPlan_TwoLinesOnSameWorldCreateOneWorldBatchWithTwoSubtasks()
+    {
+        var request = CreateRequest(quantity: 0) with
+        {
+            Lines =
+            [
+                CreateLine("line-1", ordinal: 0, itemId: 2, itemName: "Fire Shard", quantity: 50, maxUnitPrice: 100),
+                CreateLine("line-2", ordinal: 1, itemId: 4, itemName: "Lightning Shard", quantity: 20, maxUnitPrice: 200),
+            ],
+        };
+        var listings = new[]
+        {
+            CreateListing("Maduin", quantity: 50, unitPrice: 80, listingId: "fire", itemId: 2),
+            CreateListing("Maduin", quantity: 20, unitPrice: 150, listingId: "lightning", itemId: 4),
+        };
+
+        var plan = MarketMafioso.MarketAcquisition.MarketAcquisitionPlanner.BuildPlan(
+            request,
+            listings,
+            DateTimeOffset.UnixEpoch,
+            currentWorld: "Siren");
+
+        var batch = Assert.Single(plan.WorldBatches);
+        Assert.Equal("Maduin", batch.WorldName);
+        Assert.Equal(70u, batch.PlannedQuantity);
+        Assert.Equal(7_000u, batch.PlannedGil);
+        Assert.Equal(["line-1", "line-2"], batch.ItemSubtasks.Select(subtask => subtask.LineId).ToArray());
+        Assert.Equal(["fire", "lightning"], batch.Listings.Select(listing => listing.ListingId).ToArray());
+        Assert.Equal(["Ready", "Ready"], plan.Lines.Select(line => line.Status).ToArray());
+    }
+
+    [Fact]
+    public void BuildPlan_LineWithoutSupportedListingsDoesNotFailWholeBatch()
+    {
+        var request = CreateRequest(quantity: 0) with
+        {
+            Lines =
+            [
+                CreateLine("line-1", ordinal: 0, itemId: 2, itemName: "Fire Shard", quantity: 50, maxUnitPrice: 100),
+                CreateLine("line-2", ordinal: 1, itemId: 4, itemName: "Lightning Shard", quantity: 20, maxUnitPrice: 200),
+            ],
+        };
+        var listings = new[]
+        {
+            CreateListing("Maduin", quantity: 50, unitPrice: 80, listingId: "fire", itemId: 2),
+            CreateListing("Maduin", quantity: 20, unitPrice: 250, listingId: "too-expensive", itemId: 4),
+        };
+
+        var plan = MarketMafioso.MarketAcquisition.MarketAcquisitionPlanner.BuildPlan(
+            request,
+            listings,
+            DateTimeOffset.UnixEpoch);
+
+        Assert.Equal("Ready", plan.Status);
+        Assert.Equal(["Ready", "NoSupportedListings"], plan.Lines.Select(line => line.Status).ToArray());
+        var batch = Assert.Single(plan.WorldBatches);
+        Assert.Equal(["line-1"], batch.ItemSubtasks.Select(subtask => subtask.LineId).ToArray());
+    }
+
+    [Fact]
     public void BuildPlan_FailsWhenRouteWorldDataCenterIsUnknown()
     {
         var request = CreateRequest(quantity: 10, maxUnitPrice: 2_000, maxTotalGil: 0);
@@ -288,9 +348,11 @@ public sealed class MarketAcquisitionPlannerTests
         uint quantity,
         uint unitPrice,
         bool hq = false,
-        string listingId = "listing") =>
+        string listingId = "listing",
+        uint itemId = 2) =>
         new()
         {
+            ItemId = itemId,
             ListingId = listingId,
             WorldName = worldName,
             WorldId = 63,
@@ -300,5 +362,29 @@ public sealed class MarketAcquisitionPlannerTests
             UnitPrice = unitPrice,
             IsHq = hq,
             LastReviewTimeUtc = DateTimeOffset.UnixEpoch,
+        };
+
+    private static MarketMafioso.MarketAcquisition.MarketAcquisitionBatchLineView CreateLine(
+        string lineId,
+        int ordinal,
+        uint itemId,
+        string itemName,
+        uint quantity,
+        uint maxUnitPrice,
+        string quantityMode = "TargetQuantity",
+        uint gilCap = 0,
+        string hqPolicy = "Either") =>
+        new()
+        {
+            LineId = lineId,
+            Ordinal = ordinal,
+            ItemId = itemId,
+            ItemName = itemName,
+            QuantityMode = quantityMode,
+            TargetQuantity = quantity,
+            MaxQuantity = quantity,
+            HqPolicy = hqPolicy,
+            MaxUnitPrice = maxUnitPrice,
+            GilCap = gilCap,
         };
 }

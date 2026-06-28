@@ -172,8 +172,8 @@ else
         return InvokeAsync(StateHasChanged);
     }
 
-    private Task<bool> StageRequestsAsync(IReadOnlyList<MarketAcquisitionCreateRequest> requests) =>
-        State.StageAsync(requests);
+    private Task<bool> StageRequestsAsync(MarketAcquisitionBatchCreateRequest request) =>
+        State.StageAsync(request);
 
     private Task RefreshRequestsAsync() => State.RefreshAsync();
 

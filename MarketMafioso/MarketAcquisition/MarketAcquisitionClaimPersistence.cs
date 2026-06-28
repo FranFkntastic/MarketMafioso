@@ -1,3 +1,5 @@
+using System.Linq;
+
 namespace MarketMafioso.MarketAcquisition;
 
 internal static class MarketAcquisitionClaimPersistence
@@ -30,6 +32,29 @@ internal static class MarketAcquisitionClaimPersistence
                 MaxTotalGil = stored.MaxTotalGil,
                 WorldMode = stored.WorldMode,
                 ClaimToken = stored.ClaimToken,
+                Lines = stored.Lines.Count == 0
+                    ? [CreateFallbackLine(stored)]
+                    : stored.Lines
+                        .Select(line => new MarketAcquisitionBatchLineView
+                        {
+                            LineId = line.LineId,
+                            BatchId = line.BatchId,
+                            Ordinal = line.Ordinal,
+                            ItemId = line.ItemId,
+                            ItemName = line.ItemName,
+                            ItemKind = line.ItemKind,
+                            QuantityMode = line.QuantityMode,
+                            TargetQuantity = line.TargetQuantity,
+                            MaxQuantity = line.MaxQuantity,
+                            HqPolicy = line.HqPolicy,
+                            MaxUnitPrice = line.MaxUnitPrice,
+                            GilCap = line.GilCap,
+                            Status = line.Status,
+                            PurchasedQuantity = line.PurchasedQuantity,
+                            SpentGil = line.SpentGil,
+                            LatestMessage = line.LatestMessage,
+                        })
+                        .ToList(),
             },
             stored.AcceptIdempotencyKey,
             stored.RejectIdempotencyKey);
@@ -59,6 +84,27 @@ internal static class MarketAcquisitionClaimPersistence
             ClaimToken = claim.ClaimToken,
             AcceptIdempotencyKey = acceptIdempotencyKey,
             RejectIdempotencyKey = rejectIdempotencyKey,
+            Lines = claim.Lines
+                .Select(line => new PersistedMarketAcquisitionLine
+                {
+                    LineId = line.LineId,
+                    BatchId = line.BatchId,
+                    Ordinal = line.Ordinal,
+                    ItemId = line.ItemId,
+                    ItemName = line.ItemName,
+                    ItemKind = line.ItemKind,
+                    QuantityMode = line.QuantityMode,
+                    TargetQuantity = line.TargetQuantity,
+                    MaxQuantity = line.MaxQuantity,
+                    HqPolicy = line.HqPolicy,
+                    MaxUnitPrice = line.MaxUnitPrice,
+                    GilCap = line.GilCap,
+                    Status = line.Status,
+                    PurchasedQuantity = line.PurchasedQuantity,
+                    SpentGil = line.SpentGil,
+                    LatestMessage = line.LatestMessage,
+                })
+                .ToList(),
         };
     }
 
@@ -66,4 +112,21 @@ internal static class MarketAcquisitionClaimPersistence
     {
         config.ActiveMarketAcquisitionClaim = null;
     }
+
+    private static MarketAcquisitionBatchLineView CreateFallbackLine(PersistedMarketAcquisitionClaim stored) =>
+        new()
+        {
+            LineId = $"{stored.Id}-line-1",
+            BatchId = stored.Id,
+            Ordinal = 0,
+            ItemId = stored.ItemId,
+            ItemName = stored.ItemName,
+            QuantityMode = stored.QuantityMode,
+            TargetQuantity = stored.QuantityMode == "TargetQuantity" ? stored.Quantity : 0,
+            MaxQuantity = stored.QuantityMode == "AllBelowThreshold" ? stored.Quantity : 0,
+            HqPolicy = stored.HqPolicy,
+            MaxUnitPrice = stored.MaxUnitPrice,
+            GilCap = stored.MaxTotalGil,
+            Status = stored.Status,
+        };
 }

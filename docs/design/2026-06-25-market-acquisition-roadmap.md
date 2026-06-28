@@ -712,9 +712,15 @@ Replace or augment the simple local planner with Craft Architect's richer market
 
 The first milestone worth deploying to the VPS is Phase 3: dashboard request creation plus plugin pickup. That proves the novel server-to-plugin workflow without touching game automation.
 
-## Active Follow-Up Roadmap
+## Historical Status And Follow-Up
 
-The acquisition mechanism is no longer blocked on proving that dashboard requests, plugin pickup, Lifestream routing, market-board item search, visible listing reads, or low-risk purchase execution can work. The active work now splits into three tracks:
+The original acquisition mechanism is no longer blocked on proving that dashboard requests, plugin pickup, Lifestream routing, market-board item search, visible listing reads, or low-risk purchase execution can work.
+
+This roadmap is now historical for the single-item proof track. The next acquisition milestone has its own roadmap:
+
+- `docs/design/2026-06-28-market-acquisition-multi-item-roadmap.md`
+
+Remaining follow-up work still splits into three tracks:
 
 1. Dashboard rebuild:
    - Keep `/marketmafioso/` as the canonical browser dashboard and `/marketmafioso/api/*` as the canonical machine endpoint namespace.
@@ -723,6 +729,7 @@ The acquisition mechanism is no longer blocked on proving that dashboard request
    - Preserve completed and failed requests for inspection and eventual preset reuse instead of treating terminal rows as disposable noise.
 
 2. Acquisition hardening:
+   - Multi-item batch work continues in `docs/design/2026-06-28-market-acquisition-multi-item-roadmap.md`.
    - Add per-purchase audit/progress rows for attempted purchases, purchased rows, skipped rows, stale listings, and stop classifications.
    - Make route restart/retry behavior explicit and tied to attempts so failed runs can be retried without corrupting request identity.
    - Add pagination/deeper-listing behavior after the visible-row loop is comfortable.

@@ -10,7 +10,7 @@ public sealed class MarketAcquisitionRequestClientTests
     {
         using var handler = new CapturingHandler("""
             {
-              "requests": [
+              "batches": [
                 {
                   "id": "request-1",
                   "status": "PendingPickup",
@@ -42,7 +42,7 @@ public sealed class MarketAcquisitionRequestClientTests
         Assert.Single(requests);
         Assert.Equal("request-1", requests[0].Id);
         Assert.Equal(
-            "https://dev.xivcraftarchitect.com/marketmafioso/api/acquisition/requests/pending?characterName=Wei%20Ning&world=Gilgamesh",
+            "https://dev.xivcraftarchitect.com/marketmafioso/api/acquisition/batches/pending?characterName=Wei%20Ning&world=Gilgamesh",
             handler.LastRequest?.RequestUri?.OriginalString);
         Assert.NotNull(handler.LastRequest);
         Assert.True(handler.LastRequest.Headers.TryGetValues("X-Api-Key", out var values));

@@ -568,7 +568,8 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         if (result.Success && session?.ActiveStop == null)
             return Complete(result.Message);
 
-        if (result.Success)
+        if (result.Success &&
+            string.Equals(session?.ActiveStop?.Status, "Pending", StringComparison.OrdinalIgnoreCase))
         {
             MarketBoardCloseRequiredBeforeTravel = true;
             StatusMessage = $"{result.Message} Closing market board windows before next travel.";

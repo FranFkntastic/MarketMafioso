@@ -98,4 +98,26 @@ public sealed class PersistedMarketAcquisitionClaim
     public string ClaimToken { get; set; } = string.Empty;
     public string? AcceptIdempotencyKey { get; set; }
     public string? RejectIdempotencyKey { get; set; }
+    public List<PersistedMarketAcquisitionLine> Lines { get; set; } = [];
+}
+
+[Serializable]
+public sealed class PersistedMarketAcquisitionLine
+{
+    public string LineId { get; set; } = string.Empty;
+    public string BatchId { get; set; } = string.Empty;
+    public int Ordinal { get; set; }
+    public uint ItemId { get; set; }
+    public string? ItemName { get; set; }
+    public string? ItemKind { get; set; }
+    public string QuantityMode { get; set; } = string.Empty;
+    public uint TargetQuantity { get; set; }
+    public uint MaxQuantity { get; set; }
+    public string HqPolicy { get; set; } = string.Empty;
+    public uint MaxUnitPrice { get; set; }
+    public uint GilCap { get; set; }
+    public string Status { get; set; } = string.Empty;
+    public uint PurchasedQuantity { get; set; }
+    public uint SpentGil { get; set; }
+    public string? LatestMessage { get; set; }
 }

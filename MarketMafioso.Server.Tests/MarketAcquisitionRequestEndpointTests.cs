@@ -86,6 +86,108 @@ public sealed class MarketAcquisitionRequestEndpointTests
     }
 
     [Fact]
+    public async Task HostedMode_CreatesListsAndClaimsAcquisitionBatchWithLines()
+    {
+        await using var application = CreateHostedApplication();
+        using var client = application.CreateClient();
+
+        var created = await SendWithKeyAsync(
+            client,
+            HttpMethod.Post,
+            "/marketmafioso/api/acquisition/batches",
+            "client-secret",
+            CreateBatchRequest("batch-1"));
+
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        using var createdJson = JsonDocument.Parse(await created.Content.ReadAsStringAsync());
+        var requestId = createdJson.RootElement.GetProperty("id").GetString();
+        Assert.False(string.IsNullOrWhiteSpace(requestId));
+        var createdLines = createdJson.RootElement.GetProperty("lines");
+        Assert.Equal(2, createdLines.GetArrayLength());
+        Assert.Equal(2u, createdLines[0].GetProperty("itemId").GetUInt32());
+        Assert.Equal(4u, createdLines[1].GetProperty("itemId").GetUInt32());
+        Assert.Equal("AllBelowThreshold", createdLines[1].GetProperty("quantityMode").GetString());
+        Assert.Equal(999u, createdLines[1].GetProperty("maxQuantity").GetUInt32());
+
+        var pending = await SendWithKeyAsync(
+            client,
+            HttpMethod.Get,
+            "/marketmafioso/api/acquisition/batches/pending?characterName=Wei%20Ning&world=Gilgamesh",
+            "client-secret");
+
+        Assert.Equal(HttpStatusCode.OK, pending.StatusCode);
+        using var pendingJson = JsonDocument.Parse(await pending.Content.ReadAsStringAsync());
+        var batches = pendingJson.RootElement.GetProperty("batches");
+        Assert.Single(batches.EnumerateArray());
+        Assert.Equal(requestId, batches[0].GetProperty("id").GetString());
+        Assert.Equal(2, batches[0].GetProperty("lines").GetArrayLength());
+
+        var claim = await SendWithKeyAsync(
+            client,
+            HttpMethod.Post,
+            $"/marketmafioso/api/acquisition/requests/{requestId}/claim",
+            "client-secret",
+            new
+            {
+                characterName = "Wei Ning",
+                world = "Gilgamesh",
+                pluginInstanceId = "plugin-test-instance",
+            });
+
+        Assert.Equal(HttpStatusCode.OK, claim.StatusCode);
+        using var claimJson = JsonDocument.Parse(await claim.Content.ReadAsStringAsync());
+        Assert.Equal(2, claimJson.RootElement.GetProperty("lines").GetArrayLength());
+        Assert.False(string.IsNullOrWhiteSpace(claimJson.RootElement.GetProperty("claimToken").GetString()));
+    }
+
+    [Fact]
+    public async Task HostedMode_RejectsAcquisitionBatchWithoutLines()
+    {
+        await using var application = CreateHostedApplication();
+        using var client = application.CreateClient();
+
+        var created = await SendWithKeyAsync(
+            client,
+            HttpMethod.Post,
+            "/marketmafioso/api/acquisition/batches",
+            "client-secret",
+            new
+            {
+                schemaVersion = 1,
+                idempotencyKey = "empty-batch",
+                targetCharacterName = "Wei Ning",
+                targetWorld = "Gilgamesh",
+                region = "North America",
+                worldMode = "Recommended",
+                expiresInSeconds = 90,
+                lines = Array.Empty<object>(),
+            });
+
+        Assert.Equal(HttpStatusCode.BadRequest, created.StatusCode);
+    }
+
+    [Fact]
+    public async Task HostedMode_SingleRequestExposesCompatibilityLine()
+    {
+        await using var application = CreateHostedApplication();
+        using var client = application.CreateClient();
+
+        var created = await SendWithKeyAsync(
+            client,
+            HttpMethod.Post,
+            "/marketmafioso/api/acquisition/requests",
+            "client-secret",
+            CreateRequest("single-line-view"));
+
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        using var createdJson = JsonDocument.Parse(await created.Content.ReadAsStringAsync());
+        var lines = createdJson.RootElement.GetProperty("lines");
+        Assert.Single(lines.EnumerateArray());
+        Assert.Equal(createdJson.RootElement.GetProperty("id").GetString(), lines[0].GetProperty("batchId").GetString());
+        Assert.Equal(createdJson.RootElement.GetProperty("itemId").GetUInt32(), lines[0].GetProperty("itemId").GetUInt32());
+    }
+
+    [Fact]
     public async Task HostedMode_AcquisitionRoutesUseSameClientKeyAsInventory()
     {
         await using var application = CreateHostedApplication();
@@ -1435,6 +1537,44 @@ public sealed class MarketAcquisitionRequestEndpointTests
             worldMode = "Recommended",
             expiresInSeconds,
         };
+
+    private static object CreateBatchRequest(string idempotencyKey) => new
+    {
+        schemaVersion = 1,
+        idempotencyKey,
+        targetCharacterName = "Wei Ning",
+        targetWorld = "Gilgamesh",
+        region = "North America",
+        worldMode = "Recommended",
+        expiresInSeconds = 90,
+        lines = new object[]
+        {
+            new
+            {
+                itemId = 2,
+                itemName = "Fire Shard",
+                itemKind = "Crystal",
+                quantityMode = "TargetQuantity",
+                targetQuantity = 10,
+                maxQuantity = 0,
+                hqPolicy = "Either",
+                maxUnitPrice = 99,
+                gilCap = 990,
+            },
+            new
+            {
+                itemId = 4,
+                itemName = "Lightning Shard",
+                itemKind = "Crystal",
+                quantityMode = "AllBelowThreshold",
+                targetQuantity = 0,
+                maxQuantity = 999,
+                hqPolicy = "Either",
+                maxUnitPrice = 120,
+                gilCap = 0,
+            },
+        },
+    };
 
     private static Dictionary<string, string> CreateFormFields(string idempotencyKey) => new()
     {

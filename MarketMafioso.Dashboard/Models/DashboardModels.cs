@@ -62,6 +62,7 @@ public sealed record MarketAcquisitionRequestView
     public string? LatestAttemptWorld { get; init; }
     public string? LatestAttemptResult { get; init; }
     public string? LatestAttemptPluginVersion { get; init; }
+    public IReadOnlyList<MarketAcquisitionBatchLineView> Lines { get; init; } = [];
 }
 
 public sealed record MarketAcquisitionRequestTimelineView
@@ -114,6 +115,51 @@ public sealed record MarketAcquisitionCreateRequest
     public uint MaxTotalGil { get; init; }
     public string WorldMode { get; init; } = "Recommended";
     public int ExpiresInSeconds { get; init; } = 300;
+}
+
+public sealed record MarketAcquisitionBatchCreateRequest
+{
+    public int SchemaVersion { get; init; } = 1;
+    public string IdempotencyKey { get; init; } = Guid.NewGuid().ToString("N");
+    public string TargetCharacterName { get; init; } = string.Empty;
+    public string TargetWorld { get; init; } = string.Empty;
+    public string Region { get; init; } = "North America";
+    public string WorldMode { get; init; } = "Recommended";
+    public int ExpiresInSeconds { get; init; } = 300;
+    public IReadOnlyList<MarketAcquisitionBatchLineCreateRequest> Lines { get; init; } = [];
+}
+
+public sealed record MarketAcquisitionBatchLineCreateRequest
+{
+    public uint ItemId { get; init; }
+    public string? ItemName { get; init; }
+    public string? ItemKind { get; init; }
+    public string QuantityMode { get; init; } = "AllBelowThreshold";
+    public uint TargetQuantity { get; init; }
+    public uint MaxQuantity { get; init; }
+    public string HqPolicy { get; init; } = "Either";
+    public uint MaxUnitPrice { get; init; }
+    public uint GilCap { get; init; }
+}
+
+public sealed record MarketAcquisitionBatchLineView
+{
+    public string LineId { get; init; } = string.Empty;
+    public string BatchId { get; init; } = string.Empty;
+    public int Ordinal { get; init; }
+    public uint ItemId { get; init; }
+    public string? ItemName { get; init; }
+    public string? ItemKind { get; init; }
+    public string QuantityMode { get; init; } = string.Empty;
+    public uint TargetQuantity { get; init; }
+    public uint MaxQuantity { get; init; }
+    public string HqPolicy { get; init; } = string.Empty;
+    public uint MaxUnitPrice { get; init; }
+    public uint GilCap { get; init; }
+    public string Status { get; init; } = string.Empty;
+    public uint PurchasedQuantity { get; init; }
+    public uint SpentGil { get; init; }
+    public string? LatestMessage { get; init; }
 }
 
 public sealed record XivItemSearchResult

@@ -158,8 +158,12 @@ app.MapPost("/api/inventory", SaveInventoryReport);
 
 app.MapPost("/acquisition/requests", CreateAcquisitionRequest);
 app.MapPost("/api/acquisition/requests", CreateAcquisitionRequest);
+app.MapPost("/acquisition/batches", CreateAcquisitionBatch);
+app.MapPost("/api/acquisition/batches", CreateAcquisitionBatch);
 app.MapGet("/acquisition/requests/pending", ListPendingAcquisitionRequests);
 app.MapGet("/api/acquisition/requests/pending", ListPendingAcquisitionRequests);
+app.MapGet("/acquisition/batches/pending", ListPendingAcquisitionBatches);
+app.MapGet("/api/acquisition/batches/pending", ListPendingAcquisitionBatches);
 app.MapPost("/acquisition/requests/{id}/claim", ClaimAcquisitionRequest);
 app.MapPost("/api/acquisition/requests/{id}/claim", ClaimAcquisitionRequest);
 app.MapPost("/acquisition/requests/{id}/accept", AcceptAcquisitionRequest);
@@ -615,6 +619,35 @@ async Task<IResult> CreateAcquisitionRequest(
     }
 }
 
+async Task<IResult> CreateAcquisitionBatch(
+    HttpRequest request,
+    MarketAcquisitionRequestStore store,
+    CancellationToken token)
+{
+    try
+    {
+        var acquisitionRequest = await JsonSerializer.DeserializeAsync<MarketAcquisitionBatchCreateRequest>(
+            request.Body,
+            new JsonSerializerOptions(JsonSerializerDefaults.Web),
+            token);
+        if (acquisitionRequest == null)
+            return Results.BadRequest(new { error = "Request body is required." });
+
+        var created = await store.CreateBatchAsync(acquisitionRequest, token);
+        return created.IsReplay
+            ? Results.Ok(created.Request)
+            : Results.Created(AppUrl(request.PathBase, $"/acquisition/batches/{created.Request.Id}"), created.Request);
+    }
+    catch (ArgumentException ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+    catch (MarketAcquisitionIdempotencyConflictException ex)
+    {
+        return Results.Conflict(new { error = ex.Message });
+    }
+}
+
 static CookieOptions CreateDashboardCookieOptions(HttpRequest request, DateTimeOffset expiresAt) => new()
 {
     HttpOnly = true,
@@ -794,6 +827,19 @@ async Task<IResult> ListPendingAcquisitionRequests(
 
     var pending = await store.ListPendingAsync(characterName, world, token);
     return Results.Ok(new MarketAcquisitionPendingResponse { Requests = pending });
+}
+
+async Task<IResult> ListPendingAcquisitionBatches(
+    string? characterName,
+    string? world,
+    MarketAcquisitionRequestStore store,
+    CancellationToken token)
+{
+    if (string.IsNullOrWhiteSpace(characterName) || string.IsNullOrWhiteSpace(world))
+        return Results.BadRequest(new { error = "characterName and world are required." });
+
+    var pending = await store.ListPendingAsync(characterName, world, token);
+    return Results.Ok(new MarketAcquisitionBatchPendingResponse { Batches = pending });
 }
 
 async Task<IResult> ClaimAcquisitionRequest(
@@ -1044,7 +1090,9 @@ static bool IsReportsApiRead(HttpRequest request) =>
 static bool IsAcquisitionCreate(HttpRequest request) =>
     HttpMethods.IsPost(request.Method) &&
     (request.Path.Equals("/acquisition/requests", StringComparison.OrdinalIgnoreCase) ||
-     request.Path.Equals("/api/acquisition/requests", StringComparison.OrdinalIgnoreCase));
+     request.Path.Equals("/api/acquisition/requests", StringComparison.OrdinalIgnoreCase) ||
+     request.Path.Equals("/acquisition/batches", StringComparison.OrdinalIgnoreCase) ||
+     request.Path.Equals("/api/acquisition/batches", StringComparison.OrdinalIgnoreCase));
 
 static bool IsApiKeyAcquisitionCreate(HttpRequest request) =>
     IsAcquisitionCreate(request) &&
@@ -1084,7 +1132,9 @@ static bool IsKnownAcquisitionPluginRoute(HttpRequest request)
     if (HttpMethods.IsGet(request.Method))
     {
         return request.Path.Equals("/acquisition/requests/pending", StringComparison.OrdinalIgnoreCase) ||
-               request.Path.Equals("/api/acquisition/requests/pending", StringComparison.OrdinalIgnoreCase);
+               request.Path.Equals("/api/acquisition/requests/pending", StringComparison.OrdinalIgnoreCase) ||
+               request.Path.Equals("/acquisition/batches/pending", StringComparison.OrdinalIgnoreCase) ||
+               request.Path.Equals("/api/acquisition/batches/pending", StringComparison.OrdinalIgnoreCase);
     }
 
     if (!HttpMethods.IsPost(request.Method))

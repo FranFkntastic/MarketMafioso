@@ -60,6 +60,7 @@ public sealed class UniversalisMarketAcquisitionPlanSource
 
             listings.Add(new MarketAcquisitionListing
             {
+                ItemId = itemId,
                 ListingId = listingId,
                 WorldName = worldName,
                 WorldId = RequiredUInt(listingElement, "worldID"),

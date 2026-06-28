@@ -18,6 +18,51 @@ public sealed record MarketAcquisitionCreateRequest
     public int ExpiresInSeconds { get; init; } = 90;
 }
 
+public sealed record MarketAcquisitionBatchCreateRequest
+{
+    public int SchemaVersion { get; init; }
+    public string IdempotencyKey { get; init; } = string.Empty;
+    public string TargetCharacterName { get; init; } = string.Empty;
+    public string TargetWorld { get; init; } = string.Empty;
+    public string Region { get; init; } = string.Empty;
+    public string WorldMode { get; init; } = string.Empty;
+    public int ExpiresInSeconds { get; init; } = 90;
+    public IReadOnlyList<MarketAcquisitionBatchLineCreateRequest> Lines { get; init; } = [];
+}
+
+public sealed record MarketAcquisitionBatchLineCreateRequest
+{
+    public uint ItemId { get; init; }
+    public string? ItemName { get; init; }
+    public string? ItemKind { get; init; }
+    public string QuantityMode { get; init; } = string.Empty;
+    public uint TargetQuantity { get; init; }
+    public uint MaxQuantity { get; init; }
+    public string HqPolicy { get; init; } = string.Empty;
+    public uint MaxUnitPrice { get; init; }
+    public uint GilCap { get; init; }
+}
+
+public sealed record MarketAcquisitionBatchLineView
+{
+    public string LineId { get; init; } = string.Empty;
+    public string BatchId { get; init; } = string.Empty;
+    public int Ordinal { get; init; }
+    public uint ItemId { get; init; }
+    public string? ItemName { get; init; }
+    public string? ItemKind { get; init; }
+    public string QuantityMode { get; init; } = string.Empty;
+    public uint TargetQuantity { get; init; }
+    public uint MaxQuantity { get; init; }
+    public string HqPolicy { get; init; } = string.Empty;
+    public uint MaxUnitPrice { get; init; }
+    public uint GilCap { get; init; }
+    public string Status { get; init; } = string.Empty;
+    public uint PurchasedQuantity { get; init; }
+    public uint SpentGil { get; init; }
+    public string? LatestMessage { get; init; }
+}
+
 public sealed record MarketAcquisitionClaimRequest
 {
     public string CharacterName { get; init; } = string.Empty;
@@ -71,6 +116,7 @@ public sealed record MarketAcquisitionRequestView
     public string? LatestAttemptWorld { get; init; }
     public string? LatestAttemptResult { get; init; }
     public string? LatestAttemptPluginVersion { get; init; }
+    public IReadOnlyList<MarketAcquisitionBatchLineView> Lines { get; init; } = [];
 }
 
 public sealed record MarketAcquisitionClaimView
@@ -104,12 +150,18 @@ public sealed record MarketAcquisitionClaimView
     public string? LatestAttemptWorld { get; init; }
     public string? LatestAttemptResult { get; init; }
     public string? LatestAttemptPluginVersion { get; init; }
+    public IReadOnlyList<MarketAcquisitionBatchLineView> Lines { get; init; } = [];
     public string ClaimToken { get; init; } = string.Empty;
 }
 
 public sealed record MarketAcquisitionPendingResponse
 {
     public IReadOnlyList<MarketAcquisitionRequestView> Requests { get; init; } = [];
+}
+
+public sealed record MarketAcquisitionBatchPendingResponse
+{
+    public IReadOnlyList<MarketAcquisitionRequestView> Batches { get; init; } = [];
 }
 
 public sealed record MarketAcquisitionCreateResult(MarketAcquisitionRequestView Request, bool IsReplay);

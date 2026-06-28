@@ -65,6 +65,9 @@ public record MarketAcquisitionRequestView
 
     [JsonPropertyName("latestAttemptPluginVersion")]
     public string? LatestAttemptPluginVersion { get; init; }
+
+    [JsonPropertyName("lines")]
+    public List<MarketAcquisitionBatchLineView> Lines { get; init; } = new();
 }
 
 public sealed record MarketAcquisitionClaimView : MarketAcquisitionRequestView
@@ -77,6 +80,63 @@ public sealed record MarketAcquisitionPendingResponse
 {
     [JsonPropertyName("requests")]
     public List<MarketAcquisitionRequestView> Requests { get; init; } = new();
+}
+
+public sealed record MarketAcquisitionBatchPendingResponse
+{
+    [JsonPropertyName("batches")]
+    public List<MarketAcquisitionRequestView> Batches { get; init; } = new();
+}
+
+public sealed record MarketAcquisitionBatchLineView
+{
+    [JsonPropertyName("lineId")]
+    public string LineId { get; init; } = string.Empty;
+
+    [JsonPropertyName("batchId")]
+    public string BatchId { get; init; } = string.Empty;
+
+    [JsonPropertyName("ordinal")]
+    public int Ordinal { get; init; }
+
+    [JsonPropertyName("itemId")]
+    public uint ItemId { get; init; }
+
+    [JsonPropertyName("itemName")]
+    public string? ItemName { get; init; }
+
+    [JsonPropertyName("itemKind")]
+    public string? ItemKind { get; init; }
+
+    [JsonPropertyName("quantityMode")]
+    public string QuantityMode { get; init; } = string.Empty;
+
+    [JsonPropertyName("targetQuantity")]
+    public uint TargetQuantity { get; init; }
+
+    [JsonPropertyName("maxQuantity")]
+    public uint MaxQuantity { get; init; }
+
+    [JsonPropertyName("hqPolicy")]
+    public string HqPolicy { get; init; } = string.Empty;
+
+    [JsonPropertyName("maxUnitPrice")]
+    public uint MaxUnitPrice { get; init; }
+
+    [JsonPropertyName("gilCap")]
+    public uint GilCap { get; init; }
+
+    [JsonPropertyName("status")]
+    public string Status { get; init; } = string.Empty;
+
+    [JsonPropertyName("purchasedQuantity")]
+    public uint PurchasedQuantity { get; init; }
+
+    [JsonPropertyName("spentGil")]
+    public uint SpentGil { get; init; }
+
+    [JsonPropertyName("latestMessage")]
+    public string? LatestMessage { get; init; }
 }
 
 public sealed record MarketAcquisitionClaimRequest

@@ -406,6 +406,7 @@ public class MainWindow : Window, IDisposable
         {
             DrawClaimedRequestRow("Status", claimedAcquisitionRequest.Status);
             DrawClaimedRequestRow("Item", FormatAcquisitionItem(claimedAcquisitionRequest));
+            DrawClaimedRequestRow("Lines", FormatAcquisitionLineCount(claimedAcquisitionRequest));
             DrawClaimedRequestRow("Mode", MarketAcquisitionQuantityModePresenter.FormatMode(claimedAcquisitionRequest.QuantityMode));
             DrawClaimedRequestRow("Quantity", MarketAcquisitionQuantityModePresenter.FormatQuantity(claimedAcquisitionRequest.QuantityMode, claimedAcquisitionRequest.Quantity));
             DrawClaimedRequestRow("HQ Policy", claimedAcquisitionRequest.HqPolicy);
@@ -462,8 +463,9 @@ public class MainWindow : Window, IDisposable
         }
 
         var tableFlags = ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.Resizable;
-        if (ImGui.BeginTable("MarketAcquisitionPlanBatches", 7, tableFlags))
+        if (ImGui.BeginTable("MarketAcquisitionPlanBatches", 8, tableFlags))
         {
+            ImGui.TableSetupColumn("Item");
             ImGui.TableSetupColumn("World");
             ImGui.TableSetupColumn("Data Center");
             ImGui.TableSetupColumn("Qty");
@@ -478,6 +480,8 @@ public class MainWindow : Window, IDisposable
                 foreach (var listing in batch.Listings)
                 {
                     ImGui.TableNextRow();
+                    ImGui.TableNextColumn();
+                    ImGui.TextUnformatted(FormatPlannedListingItem(listing));
                     ImGui.TableNextColumn();
                     ImGui.TextUnformatted(batch.WorldName);
                     if (batch.ExceedsRequestedQuantity)
@@ -504,6 +508,11 @@ public class MainWindow : Window, IDisposable
             ImGui.EndTable();
         }
     }
+
+    private static string FormatPlannedListingItem(MarketAcquisitionPlannedListing listing) =>
+        string.IsNullOrWhiteSpace(listing.ItemName)
+            ? $"Item {listing.ItemId}"
+            : $"{listing.ItemName} ({listing.ItemId})";
 
     private bool CanProbeLiveMarketBoard()
     {
@@ -618,7 +627,8 @@ public class MainWindow : Window, IDisposable
                         return;
                     }
 
-                    var searchResult = marketBoardItemSearchDriver.Search(claimed.ItemId, claimed.ItemName);
+                    var activeLine = GetActiveRouteLine(claimed);
+                    var searchResult = marketBoardItemSearchDriver.Search(activeLine.ItemId, activeLine.ItemName);
                     route.RecordSearchResult(searchResult);
 
                     if (!searchResult.ReadyForListings)
@@ -630,7 +640,7 @@ public class MainWindow : Window, IDisposable
                     nextGuidedRouteMonitorUtc = DateTimeOffset.UtcNow;
                 }
 
-                route.BeginProbe($"Arrived on {currentWorld}. Reading live listings for {FormatAcquisitionItem(claimed)}.");
+                route.BeginProbe($"Arrived on {currentWorld}. Reading live listings for {FormatAcquisitionItem(GetActiveRouteLine(claimed))}.");
                 guidedRouteProbeRunning = true;
                 _ = ProbeGuidedRouteMarketBoardAsync();
             }
@@ -778,6 +788,7 @@ public class MainWindow : Window, IDisposable
 
         var claimed = claimedAcquisitionRequest ??
                       throw new InvalidOperationException("No dashboard request is accepted.");
+        var activeLine = GetActiveRouteLine(claimed);
         var plan = acquisitionPlan ??
                    throw new InvalidOperationException("No market acquisition plan is prepared.");
         var currentWorld = GetCurrentWorldName();
@@ -797,7 +808,7 @@ public class MainWindow : Window, IDisposable
             throw new InvalidOperationException(freshRead.Message);
 
         marketAcquisitionLiveCandidatePlan = MarketAcquisitionLiveCandidatePlanner.BuildCandidatePlan(
-            claimed,
+            activeLine,
             plan,
             currentWorld,
             freshRead.ItemId,
@@ -930,7 +941,7 @@ public class MainWindow : Window, IDisposable
 
             acquisitionStatus = pendingAcquisitionRequests.Count == 0
                 ? "No matching dashboard requests."
-                : $"Loaded {pendingAcquisitionRequests.Count} dashboard request(s).";
+                : $"Loaded {pendingAcquisitionRequests.Count} dashboard batch(es).";
         }).ConfigureAwait(false);
     }
 
@@ -966,7 +977,7 @@ public class MainWindow : Window, IDisposable
             pendingAcquisitionRequests = pendingAcquisitionRequests
                 .Where(request => !string.Equals(request.Id, requestId, StringComparison.Ordinal))
                 .ToList();
-            acquisitionStatus = "Dashboard request claimed. Review it before accepting.";
+            acquisitionStatus = "Dashboard batch claimed. Review it before accepting.";
         }).ConfigureAwait(false);
     }
 
@@ -1057,11 +1068,18 @@ public class MainWindow : Window, IDisposable
             if (string.Equals(claimed.WorldMode, "Selected", StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException("Selected world mode cannot be planned until selected worlds are carried in the dashboard request payload.");
 
-            var listings = await acquisitionPlanSource.FetchListingsAsync(
-                claimed.Region,
-                claimed.ItemId,
-                100,
-                token).ConfigureAwait(false);
+            var planLines = GetAcquisitionPlanLines(claimed);
+            var listings = new List<MarketAcquisitionListing>();
+            foreach (var line in planLines)
+            {
+                var lineListings = await acquisitionPlanSource.FetchListingsAsync(
+                    claimed.Region,
+                    line.ItemId,
+                    100,
+                    token).ConfigureAwait(false);
+                listings.AddRange(lineListings);
+            }
+
             if (!playerState.CurrentWorld.IsValid)
                 throw new InvalidOperationException("Current world is required before preparing a route-aware advisory plan.");
 
@@ -1078,6 +1096,50 @@ public class MainWindow : Window, IDisposable
                 ? $"Prepared {acquisitionPlan.WorldBatches.Count} world batch(es)."
                 : BuildNoSupportedListingsStatus(acquisitionPlan);
         }).ConfigureAwait(false);
+    }
+
+    private static IReadOnlyList<MarketAcquisitionBatchLineView> GetAcquisitionPlanLines(MarketAcquisitionClaimView claimed)
+    {
+        if (claimed.Lines.Count > 0)
+            return claimed.Lines
+                .OrderBy(line => line.Ordinal)
+                .ToList();
+
+        return
+        [
+            new MarketAcquisitionBatchLineView
+            {
+                LineId = claimed.Id,
+                Ordinal = 0,
+                ItemId = claimed.ItemId,
+                ItemName = claimed.ItemName,
+                QuantityMode = claimed.QuantityMode,
+                TargetQuantity = claimed.Quantity,
+                MaxQuantity = claimed.Quantity,
+                HqPolicy = claimed.HqPolicy,
+                MaxUnitPrice = claimed.MaxUnitPrice,
+                GilCap = claimed.MaxTotalGil,
+            },
+        ];
+    }
+
+    private MarketAcquisitionRequestView GetActiveRouteLine(MarketAcquisitionRequestView claimed)
+    {
+        var activeStop = marketAcquisitionRouteRunner.ActiveStop;
+        var activeSubtask = activeStop?.ActiveItemSubtask;
+        if (activeSubtask == null)
+            return claimed;
+
+        return claimed with
+        {
+            ItemId = activeSubtask.ItemId,
+            ItemName = activeSubtask.ItemName,
+            QuantityMode = activeSubtask.QuantityMode,
+            Quantity = activeSubtask.RequestedQuantity,
+            HqPolicy = activeSubtask.HqPolicy,
+            MaxUnitPrice = activeSubtask.MaxUnitPrice,
+            MaxTotalGil = activeSubtask.GilCap,
+        };
     }
 
     private async Task<MarketAcquisitionClaimView> EnsureAcquisitionClaimReadyForPlanningAsync(
@@ -1146,6 +1208,7 @@ public class MainWindow : Window, IDisposable
                        throw new InvalidOperationException("Prepare a live candidate plan before probing live market board listings.");
             var claimed = claimedAcquisitionRequest ??
                           throw new InvalidOperationException("No dashboard request is accepted.");
+            var activeLine = GetActiveRouteLine(claimed);
             var currentWorld = GetCurrentWorldName();
             marketBoardReconciliation = null;
             marketAcquisitionLiveCandidatePlan = null;
@@ -1161,7 +1224,7 @@ public class MainWindow : Window, IDisposable
                 : null;
             marketAcquisitionLiveCandidatePlan = canBuildLiveCandidatePlan
                 ? MarketAcquisitionLiveCandidatePlanner.BuildCandidatePlan(
-                    claimed,
+                    activeLine,
                     plan,
                     currentWorld,
                     marketBoardReadResult.ItemId,
@@ -1278,11 +1341,12 @@ public class MainWindow : Window, IDisposable
 
     private void DrawGuidedRouteStops(IReadOnlyList<MarketAcquisitionGuidedRouteStop> stops)
     {
-        if (ImGui.BeginTable("MarketAcquisitionGuidedRouteStops", 6, ImGuiUi.InteractiveTableFlags))
+        if (ImGui.BeginTable("MarketAcquisitionGuidedRouteStops", 7, ImGuiUi.InteractiveTableFlags))
         {
             ImGui.TableSetupColumn("World");
             ImGui.TableSetupColumn("Data Center");
             ImGui.TableSetupColumn("Status");
+            ImGui.TableSetupColumn("Items");
             ImGui.TableSetupColumn("Planned");
             ImGui.TableSetupColumn("Live");
             ImGui.TableSetupColumn("Live candidate");
@@ -1297,6 +1361,8 @@ public class MainWindow : Window, IDisposable
                 ImGui.TextUnformatted(FormatRouteDataCenter(stop.DataCenter));
                 ImGui.TableNextColumn();
                 ImGui.TextColored(GetGuidedRouteStopColor(stop), stop.Status);
+                ImGui.TableNextColumn();
+                ImGui.TextUnformatted(stop.ItemSubtasks.Count == 0 ? "1" : stop.ItemSubtasks.Count.ToString("N0"));
                 ImGui.TableNextColumn();
                 ImGui.TextUnformatted($"{stop.PlannedQuantity:N0} / {FormatGil(stop.PlannedGil)}");
                 ImGui.TableNextColumn();
@@ -1729,11 +1795,22 @@ public class MainWindow : Window, IDisposable
 
     private static string FormatAcquisitionItem(MarketAcquisitionRequestView request)
     {
+        if (request.Lines.Count > 1)
+            return $"{request.Lines.Count:N0} item batch ({FormatPrimaryAcquisitionItem(request)})";
+
+        return FormatPrimaryAcquisitionItem(request);
+    }
+
+    private static string FormatPrimaryAcquisitionItem(MarketAcquisitionRequestView request)
+    {
         var name = string.IsNullOrWhiteSpace(request.ItemName)
             ? $"Item {request.ItemId}"
             : request.ItemName;
         return $"{name} ({request.ItemId})";
     }
+
+    private static string FormatAcquisitionLineCount(MarketAcquisitionRequestView request) =>
+        request.Lines.Count == 0 ? "1 line" : $"{request.Lines.Count:N0} line(s)";
 
     private static string FormatGil(uint gil) => $"{gil:N0} gil";
 

@@ -108,11 +108,18 @@ public static class MarketAcquisitionLiveCandidatePlanner
         if (string.IsNullOrWhiteSpace(currentWorld))
             throw new InvalidOperationException("Current market board world is required.");
 
-        if (request.ItemId != itemId || plan.ItemId != itemId)
+        if (request.ItemId != itemId)
             throw new InvalidOperationException("Current market board search item does not match the acquisition request.");
 
-        if (!plan.WorldBatches.Any(batch => batch.WorldName.Equals(currentWorld, StringComparison.OrdinalIgnoreCase)))
+        var batch = plan.WorldBatches.SingleOrDefault(batch => batch.WorldName.Equals(currentWorld, StringComparison.OrdinalIgnoreCase));
+        if (batch == null)
             throw new InvalidOperationException($"Current market board world {currentWorld} is not present in the prepared plan.");
+
+        if (batch.ItemSubtasks.Count > 0 && !batch.ItemSubtasks.Any(subtask => subtask.ItemId == itemId))
+            throw new InvalidOperationException("Current market board search item is not present in the active route stop.");
+
+        if (batch.ItemSubtasks.Count == 0 && plan.ItemId != itemId)
+            throw new InvalidOperationException("Current market board search item does not match the prepared plan item.");
 
         _ = NormalizeQuantityMode(request.QuantityMode);
 

@@ -132,7 +132,7 @@
 
 @code {
     [Parameter] public bool Busy { get; set; }
-    [Parameter] public Func<IReadOnlyList<MarketAcquisitionCreateRequest>, Task<bool>>? StageRequested { get; set; }
+    [Parameter] public Func<MarketAcquisitionBatchCreateRequest, Task<bool>>? StageRequested { get; set; }
     [Parameter] public IReadOnlyList<DashboardCharacterOption> Characters { get; set; } = [];
     [Parameter] public DashboardSettingsView Settings { get; set; } = new();
     [Parameter] public MarketAcquisitionRequestView? PresetRequest { get; set; }
@@ -301,27 +301,42 @@
         if (StageRequested is null)
             return;
 
-        var requests = _queue.Select(ToCreateRequest).ToArray();
-        if (await StageRequested.Invoke(requests))
+        if (SelectedCharacter is null)
+        {
+            Status.Error("Pick a dashboard character before staging the queue.");
+            return;
+        }
+
+        var request = new MarketAcquisitionBatchCreateRequest
+        {
+            IdempotencyKey = Guid.NewGuid().ToString("N"),
+            TargetCharacterName = SelectedCharacter.CharacterName,
+            TargetWorld = SelectedCharacter.HomeWorld ?? string.Empty,
+            Region = _region,
+            WorldMode = NormalizeWorldMode(_worldMode),
+            ExpiresInSeconds = _expiresInSeconds,
+            Lines = _queue.Select(ToBatchLineRequest).ToArray(),
+        };
+
+        if (await StageRequested.Invoke(request))
             _queue.Clear();
     }
 
-    private MarketAcquisitionCreateRequest ToCreateRequest(QueuedAcquisitionItem item) => new()
+    private static MarketAcquisitionBatchLineCreateRequest ToBatchLineRequest(QueuedAcquisitionItem item) => new()
     {
-        IdempotencyKey = Guid.NewGuid().ToString("N"),
-        TargetCharacterName = SelectedCharacter?.CharacterName ?? string.Empty,
-        TargetWorld = SelectedCharacter?.HomeWorld ?? string.Empty,
-        Region = _region,
         ItemId = item.Item.ItemId,
         ItemName = item.Item.Name,
+        ItemKind = item.Item.Type,
         QuantityMode = item.QuantityMode,
-        Quantity = item.Quantity,
+        TargetQuantity = item.QuantityMode == "TargetQuantity" ? item.Quantity : 0,
+        MaxQuantity = item.QuantityMode == "AllBelowThreshold" ? item.Quantity : 0,
         HqPolicy = item.HqPolicy,
         MaxUnitPrice = item.MaxUnitPrice,
-        MaxTotalGil = item.MaxTotalGil,
-        WorldMode = item.WorldMode,
-        ExpiresInSeconds = _expiresInSeconds,
+        GilCap = item.MaxTotalGil,
     };
+
+    private static string NormalizeWorldMode(string value) =>
+        value == "CurrentWorld" ? "CurrentWorldOnly" : value;
 
     private void RemoveQueued(QueuedAcquisitionItem item)
     {

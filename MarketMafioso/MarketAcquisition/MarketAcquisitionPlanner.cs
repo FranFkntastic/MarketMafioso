@@ -56,32 +56,59 @@ public static class MarketAcquisitionPlanner
         ArgumentNullException.ThrowIfNull(listings);
         ValidateRequest(request);
 
+        var requestLines = BuildRequestLines(request);
         var sourceListings = listings.ToList();
-        var diagnostics = BuildDiagnostics(request, sourceListings);
-        var acceptedListings = sourceListings
-            .Where(listing => ListingMatchesRequest(request, listing))
-            .OrderBy(listing => listing.UnitPrice)
-            .ThenByDescending(listing => listing.Quantity)
-            .ThenBy(listing => listing.LastReviewTimeUtc)
-            .ThenBy(listing => listing.WorldName, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(listing => listing.RetainerName, StringComparer.OrdinalIgnoreCase)
-            .ToList();
+        var diagnostics = BuildDiagnostics(request, requestLines, sourceListings);
+        var selectedSubtasks = new List<MarketAcquisitionWorldItemSubtask>();
+        var planLines = new List<MarketAcquisitionPlanLine>();
 
-        var candidateBatches = acceptedListings
-            .GroupBy(listing => listing.WorldName, StringComparer.OrdinalIgnoreCase)
-            .Select(group => BuildWorldBatch(request, group.Key, group))
-            .Where(batch => batch.Listings.Count > 0)
-            .OrderByDescending(batch => batch.PlannedQuantity >= request.Quantity)
-            .ThenBy(batch => batch.ExceedsRequestedQuantity)
-            .ThenByDescending(batch => batch.PlannedQuantity)
-            .ThenBy(batch => batch.PlannedGil)
-            .ThenBy(batch => batch.Listings[0].UnitPrice)
-            .ThenBy(batch => batch.WorldName, StringComparer.OrdinalIgnoreCase)
-            .ToList();
+        foreach (var line in requestLines)
+        {
+            var candidates = sourceListings
+                .Where(listing => ListingMatchesLine(request, line, listing))
+                .OrderBy(listing => listing.UnitPrice)
+                .ThenByDescending(listing => listing.Quantity)
+                .ThenBy(listing => listing.LastReviewTimeUtc)
+                .ThenBy(listing => listing.WorldName, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(listing => listing.RetainerName, StringComparer.OrdinalIgnoreCase)
+                .GroupBy(listing => listing.WorldName, StringComparer.OrdinalIgnoreCase)
+                .Select(group => BuildWorldSubtask(line, group.Key, group))
+                .Where(subtask => subtask.Listings.Count > 0)
+                .OrderByDescending(subtask => LineSatisfiesQuantity(line, subtask.PlannedQuantity))
+                .ThenBy(subtask => subtask.ExceedsRequestedQuantity)
+                .ThenByDescending(subtask => subtask.PlannedQuantity)
+                .ThenBy(subtask => subtask.PlannedGil)
+                .ThenBy(subtask => subtask.Listings[0].UnitPrice)
+                .ThenBy(subtask => subtask.WorldName, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            var lineSubtasks = BuildExecutableLinePlan(line, candidates);
+            selectedSubtasks.AddRange(lineSubtasks);
+            planLines.Add(new MarketAcquisitionPlanLine
+            {
+                LineId = line.LineId,
+                Ordinal = line.Ordinal,
+                ItemId = line.ItemId,
+                ItemName = line.ItemName,
+                QuantityMode = line.QuantityMode,
+                RequestedQuantity = line.Quantity,
+                HqPolicy = line.HqPolicy,
+                MaxUnitPrice = line.MaxUnitPrice,
+                GilCap = line.MaxTotalGil,
+                Status = lineSubtasks.Count == 0 ? "NoSupportedListings" : "Ready",
+                PlannedQuantity = (uint)lineSubtasks.Sum(subtask => subtask.PlannedQuantity),
+                PlannedGil = (uint)lineSubtasks.Sum(subtask => subtask.PlannedGil),
+            });
+        }
+
         var batches = RouteSortBatches(
-            BuildExecutableBatchPlan(request, candidateBatches),
+            selectedSubtasks
+                .GroupBy(subtask => subtask.WorldName, StringComparer.OrdinalIgnoreCase)
+                .Select(group => BuildWorldBatch(group.Key, group))
+                .ToList(),
             currentWorld);
 
+        var primaryLine = requestLines[0];
         var totalQuantity = (uint)batches.Sum(batch => batch.PlannedQuantity);
         var totalGil = (uint)batches.Sum(batch => batch.PlannedGil);
 
@@ -90,8 +117,8 @@ public static class MarketAcquisitionPlanner
             RequestId = request.Id,
             Status = batches.Count == 0 ? "NoSupportedListings" : "Ready",
             WorldMode = request.WorldMode,
-            ItemId = request.ItemId,
-            RequestedQuantity = request.Quantity,
+            ItemId = primaryLine.ItemId,
+            RequestedQuantity = (uint)requestLines.Sum(line => line.Quantity),
             PlannedQuantity = totalQuantity,
             PlannedGil = totalGil,
             PreparedAtUtc = preparedAtUtc,
@@ -99,22 +126,75 @@ public static class MarketAcquisitionPlanner
             {
                 PlannedListingCount = batches.Sum(batch => batch.Listings.Count),
             },
+            Lines = planLines,
             WorldBatches = batches,
         };
     }
 
+    private static IReadOnlyList<PlannerLine> BuildRequestLines(MarketAcquisitionRequestView request)
+    {
+        var lines = request.Lines.Count == 0
+            ? new[]
+            {
+                new MarketAcquisitionBatchLineView
+                {
+                    LineId = request.Id,
+                    Ordinal = 0,
+                    ItemId = request.ItemId,
+                    ItemName = request.ItemName,
+                    QuantityMode = request.QuantityMode,
+                    TargetQuantity = request.Quantity,
+                    MaxQuantity = request.Quantity,
+                    HqPolicy = request.HqPolicy,
+                    MaxUnitPrice = request.MaxUnitPrice,
+                    GilCap = request.MaxTotalGil,
+                },
+            }.ToList()
+            : request.Lines
+                .OrderBy(line => line.Ordinal)
+                .ToList();
+
+        if (lines.Count == 0)
+            throw new InvalidOperationException("At least one acquisition line is required before planning.");
+
+        return lines
+            .Select(line => new PlannerLine
+            {
+                LineId = string.IsNullOrWhiteSpace(line.LineId) ? request.Id : line.LineId,
+                Ordinal = line.Ordinal,
+                ItemId = line.ItemId,
+                ItemName = line.ItemName,
+                QuantityMode = NormalizeQuantityMode(line.QuantityMode),
+                Quantity = ResolveLineQuantity(line),
+                HqPolicy = MarketAcquisitionPolicy.NormalizeHqPolicy(line.HqPolicy),
+                MaxUnitPrice = line.MaxUnitPrice,
+                MaxTotalGil = line.GilCap,
+            })
+            .ToList();
+    }
+
+    private static uint ResolveLineQuantity(MarketAcquisitionBatchLineView line) =>
+        line.QuantityMode.Equals("AllBelowThreshold", StringComparison.OrdinalIgnoreCase)
+            ? line.MaxQuantity
+            : line.TargetQuantity;
+
     private static MarketAcquisitionPlanDiagnostics BuildDiagnostics(
         MarketAcquisitionRequestView request,
+        IReadOnlyList<PlannerLine> requestLines,
         IReadOnlyList<MarketAcquisitionListing> listings)
     {
-        var nonZero = listings
+        var lineItemIds = requestLines.Select(line => line.ItemId).ToHashSet();
+        var relevantListings = listings
+            .Where(listing => lineItemIds.Contains(listing.ItemId))
+            .ToList();
+        var nonZero = relevantListings
             .Where(listing => listing.Quantity != 0 && listing.UnitPrice != 0)
             .ToList();
         var priceSupported = nonZero
-            .Where(listing => listing.UnitPrice <= request.MaxUnitPrice)
+            .Where(listing => requestLines.Any(line => line.ItemId == listing.ItemId && listing.UnitPrice <= line.MaxUnitPrice))
             .ToList();
         var hqSupported = priceSupported
-            .Where(listing => MarketAcquisitionPolicy.HqMatches(request.HqPolicy, listing.IsHq))
+            .Where(listing => requestLines.Any(line => line.ItemId == listing.ItemId && MarketAcquisitionPolicy.HqMatches(line.HqPolicy, listing.IsHq)))
             .ToList();
         var worldSupported = hqSupported
             .Where(listing =>
@@ -132,15 +212,21 @@ public static class MarketAcquisitionPlanner
         };
     }
 
-    private static bool ListingMatchesRequest(MarketAcquisitionRequestView request, MarketAcquisitionListing listing)
+    private static bool ListingMatchesLine(
+        MarketAcquisitionRequestView request,
+        PlannerLine line,
+        MarketAcquisitionListing listing)
     {
         if (listing.Quantity == 0 || listing.UnitPrice == 0)
             return false;
 
-        if (listing.UnitPrice > request.MaxUnitPrice)
+        if (listing.ItemId != line.ItemId)
             return false;
 
-        if (!MarketAcquisitionPolicy.HqMatches(request.HqPolicy, listing.IsHq))
+        if (listing.UnitPrice > line.MaxUnitPrice)
+            return false;
+
+        if (!MarketAcquisitionPolicy.HqMatches(line.HqPolicy, listing.IsHq))
             return false;
 
         if (request.WorldMode.Equals("CurrentWorldOnly", StringComparison.OrdinalIgnoreCase) &&
@@ -152,7 +238,8 @@ public static class MarketAcquisitionPlanner
 
     private static void ValidateRequest(MarketAcquisitionRequestView request)
     {
-        _ = MarketAcquisitionPolicy.NormalizeHqPolicy(request.HqPolicy);
+        if (!string.IsNullOrWhiteSpace(request.HqPolicy))
+            _ = MarketAcquisitionPolicy.NormalizeHqPolicy(request.HqPolicy);
 
         if (request.WorldMode is not ("Recommended" or "CurrentWorldOnly" or "Selected" or "AllWorldSweep"))
             throw new InvalidOperationException($"Unknown world mode {request.WorldMode}.");
@@ -161,29 +248,29 @@ public static class MarketAcquisitionPlanner
             throw new InvalidOperationException("Selected world mode requires selected worlds in the request payload before it can be planned.");
     }
 
-    private static IReadOnlyList<MarketAcquisitionWorldBatch> BuildExecutableBatchPlan(
-        MarketAcquisitionRequestView request,
-        IReadOnlyList<MarketAcquisitionWorldBatch> candidates)
+    private static IReadOnlyList<MarketAcquisitionWorldItemSubtask> BuildExecutableLinePlan(
+        PlannerLine line,
+        IReadOnlyList<MarketAcquisitionWorldItemSubtask> candidates)
     {
-        var batches = new List<MarketAcquisitionWorldBatch>();
+        var subtasks = new List<MarketAcquisitionWorldItemSubtask>();
         uint plannedQuantity = 0;
         uint plannedGil = 0;
-        var hasGilCap = request.MaxTotalGil > 0;
+        var hasGilCap = line.MaxTotalGil > 0;
 
-        foreach (var batch in candidates)
+        foreach (var subtask in candidates)
         {
-            if (HasReachedQuantityCap(request, plannedQuantity))
+            if (HasReachedQuantityCap(line, plannedQuantity))
                 break;
 
-            if (hasGilCap && plannedGil + batch.PlannedGil > request.MaxTotalGil)
+            if (hasGilCap && plannedGil + subtask.PlannedGil > line.MaxTotalGil)
                 continue;
 
-            batches.Add(batch);
-            plannedQuantity += batch.PlannedQuantity;
-            plannedGil += batch.PlannedGil;
+            subtasks.Add(subtask);
+            plannedQuantity += subtask.PlannedQuantity;
+            plannedGil += subtask.PlannedGil;
         }
 
-        return batches;
+        return subtasks;
     }
 
     public static string ResolveNorthAmericaDataCenter(string worldName)
@@ -196,26 +283,29 @@ public static class MarketAcquisitionPlanner
             : throw new InvalidOperationException($"World {worldName} is not mapped to a North America data center.");
     }
 
-    private static MarketAcquisitionWorldBatch BuildWorldBatch(
-        MarketAcquisitionRequestView request,
+    private static MarketAcquisitionWorldItemSubtask BuildWorldSubtask(
+        PlannerLine line,
         string worldName,
         IEnumerable<MarketAcquisitionListing> listings)
     {
         var plannedListings = new List<MarketAcquisitionPlannedListing>();
         uint plannedQuantity = 0;
         uint plannedGil = 0;
-        var hasGilCap = request.MaxTotalGil > 0;
+        var hasGilCap = line.MaxTotalGil > 0;
 
         foreach (var listing in listings)
         {
-            if (HasReachedQuantityCap(request, plannedQuantity))
+            if (HasReachedQuantityCap(line, plannedQuantity))
                 break;
 
-            if (hasGilCap && plannedGil + listing.TotalGil > request.MaxTotalGil)
+            if (hasGilCap && plannedGil + listing.TotalGil > line.MaxTotalGil)
                 continue;
 
             plannedListings.Add(new MarketAcquisitionPlannedListing
             {
+                LineId = line.LineId,
+                ItemId = line.ItemId,
+                ItemName = line.ItemName,
                 ListingId = listing.ListingId,
                 RetainerName = listing.RetainerName,
                 RetainerId = listing.RetainerId,
@@ -229,23 +319,58 @@ public static class MarketAcquisitionPlanner
             plannedGil += listing.TotalGil;
         }
 
-        return new MarketAcquisitionWorldBatch
+        return new MarketAcquisitionWorldItemSubtask
         {
+            LineId = line.LineId,
+            LineOrdinal = line.Ordinal,
+            ItemId = line.ItemId,
+            ItemName = line.ItemName,
             WorldName = worldName,
             DataCenter = ResolveNorthAmericaDataCenter(worldName),
+            QuantityMode = line.QuantityMode,
+            RequestedQuantity = line.Quantity,
+            HqPolicy = line.HqPolicy,
+            MaxUnitPrice = line.MaxUnitPrice,
+            GilCap = line.MaxTotalGil,
             PlannedQuantity = plannedQuantity,
             PlannedGil = plannedGil,
-            ExceedsRequestedQuantity = request.Quantity > 0 && plannedQuantity > request.Quantity,
+            ExceedsRequestedQuantity = line.Quantity > 0 && plannedQuantity > line.Quantity,
             Listings = plannedListings,
         };
     }
 
-    private static bool HasReachedQuantityCap(MarketAcquisitionRequestView request, uint plannedQuantity) =>
-        !IsUnboundedAllBelowThreshold(request) && plannedQuantity >= request.Quantity;
+    private static MarketAcquisitionWorldBatch BuildWorldBatch(
+        string worldName,
+        IEnumerable<MarketAcquisitionWorldItemSubtask> subtasks)
+    {
+        var orderedSubtasks = subtasks
+            .OrderBy(subtask => subtask.LineOrdinal)
+            .ToList();
+        var listings = orderedSubtasks
+            .SelectMany(subtask => subtask.Listings)
+            .ToList();
 
-    private static bool IsUnboundedAllBelowThreshold(MarketAcquisitionRequestView request) =>
-        request.Quantity == 0 &&
-        request.QuantityMode.Equals("AllBelowThreshold", StringComparison.OrdinalIgnoreCase);
+        return new MarketAcquisitionWorldBatch
+        {
+            WorldName = worldName,
+            DataCenter = ResolveNorthAmericaDataCenter(worldName),
+            PlannedQuantity = (uint)orderedSubtasks.Sum(subtask => subtask.PlannedQuantity),
+            PlannedGil = (uint)orderedSubtasks.Sum(subtask => subtask.PlannedGil),
+            ExceedsRequestedQuantity = orderedSubtasks.Any(subtask => subtask.ExceedsRequestedQuantity),
+            ItemSubtasks = orderedSubtasks,
+            Listings = listings,
+        };
+    }
+
+    private static bool HasReachedQuantityCap(PlannerLine line, uint plannedQuantity) =>
+        !IsUnboundedAllBelowThreshold(line) && plannedQuantity >= line.Quantity;
+
+    private static bool IsUnboundedAllBelowThreshold(PlannerLine line) =>
+        line.Quantity == 0 &&
+        line.QuantityMode.Equals("AllBelowThreshold", StringComparison.OrdinalIgnoreCase);
+
+    private static bool LineSatisfiesQuantity(PlannerLine line, uint plannedQuantity) =>
+        IsUnboundedAllBelowThreshold(line) || plannedQuantity >= line.Quantity;
 
     private static IReadOnlyList<MarketAcquisitionWorldBatch> RouteSortBatches(
         IReadOnlyList<MarketAcquisitionWorldBatch> batches,
@@ -279,5 +404,26 @@ public static class MarketAcquisitionPlanner
             .ThenBy(entry => entry.Index)
             .Select(entry => entry.Batch)
             .ToList();
+    }
+
+    private static string NormalizeQuantityMode(string quantityMode) =>
+        quantityMode switch
+        {
+            "TargetQuantity" => "TargetQuantity",
+            "AllBelowThreshold" => "AllBelowThreshold",
+            _ => throw new InvalidOperationException($"Unknown quantity mode {quantityMode}."),
+        };
+
+    private sealed record PlannerLine
+    {
+        public string LineId { get; init; } = string.Empty;
+        public int Ordinal { get; init; }
+        public uint ItemId { get; init; }
+        public string? ItemName { get; init; }
+        public string QuantityMode { get; init; } = string.Empty;
+        public uint Quantity { get; init; }
+        public string HqPolicy { get; init; } = string.Empty;
+        public uint MaxUnitPrice { get; init; }
+        public uint MaxTotalGil { get; init; }
     }
 }

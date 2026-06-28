@@ -15,6 +15,54 @@ public sealed class MarketAcquisitionGuidedRouteSessionTests
     }
 
     [Fact]
+    public void Start_CarriesWorldItemSubtasksIntoStops()
+    {
+        var plan = CreatePlan("Maduin") with
+        {
+            WorldBatches =
+            [
+                new MarketMafioso.MarketAcquisition.MarketAcquisitionWorldBatch
+                {
+                    WorldName = "Maduin",
+                    DataCenter = "Dynamis",
+                    PlannedQuantity = 30,
+                    PlannedGil = 3_000,
+                    ItemSubtasks =
+                    [
+                        new MarketMafioso.MarketAcquisition.MarketAcquisitionWorldItemSubtask
+                        {
+                            LineId = "line-1",
+                            LineOrdinal = 0,
+                            ItemId = 2,
+                            ItemName = "Fire Shard",
+                            WorldName = "Maduin",
+                            DataCenter = "Dynamis",
+                            PlannedQuantity = 10,
+                            PlannedGil = 1_000,
+                        },
+                        new MarketMafioso.MarketAcquisition.MarketAcquisitionWorldItemSubtask
+                        {
+                            LineId = "line-2",
+                            LineOrdinal = 1,
+                            ItemId = 4,
+                            ItemName = "Lightning Shard",
+                            WorldName = "Maduin",
+                            DataCenter = "Dynamis",
+                            PlannedQuantity = 20,
+                            PlannedGil = 2_000,
+                        },
+                    ],
+                },
+            ],
+        };
+
+        var session = MarketMafioso.MarketAcquisition.MarketAcquisitionGuidedRouteSession.Start(plan);
+
+        var activeStop = Assert.IsType<MarketMafioso.MarketAcquisition.MarketAcquisitionGuidedRouteStop>(session.ActiveStop);
+        Assert.Equal(["line-1", "line-2"], activeStop.ItemSubtasks.Select(subtask => subtask.LineId).ToArray());
+    }
+
+    [Fact]
     public void RecordCurrentWorld_MarksActiveStopArrived()
     {
         var session = MarketMafioso.MarketAcquisition.MarketAcquisitionGuidedRouteSession.Start(CreatePlan("Zalera"));
@@ -122,6 +170,20 @@ public sealed class MarketAcquisitionGuidedRouteSessionTests
     }
 
     [Fact]
+    public void RecordProbe_WithNoSafeListingsAdvancesToNextItemSubtaskOnSameWorld()
+    {
+        var session = MarketMafioso.MarketAcquisition.MarketAcquisitionGuidedRouteSession.Start(CreateMultiItemWorldPlan());
+
+        var result = session.RecordProbe("Maduin", CreateCandidatePlan(status: "NoSafeListings", quantity: 0, gil: 0));
+
+        Assert.True(result.Success);
+        Assert.Equal("Active", session.Status);
+        Assert.Equal("Arrived", session.ActiveStop?.Status);
+        Assert.Equal("line-2", session.ActiveStop?.ActiveItemSubtask?.LineId);
+        Assert.Equal(1, session.ActiveStop?.CompletedItemSubtaskCount);
+    }
+
+    [Fact]
     public void RecordWorldPurchaseBatchComplete_AdvancesToNextStop()
     {
         var session = MarketMafioso.MarketAcquisition.MarketAcquisitionGuidedRouteSession.Start(CreatePlan("Zalera", "Maduin"));
@@ -134,6 +196,22 @@ public sealed class MarketAcquisitionGuidedRouteSessionTests
         Assert.Equal("Complete", session.Stops[0].Status);
         Assert.Equal(20u, session.Stops[0].PurchasedQuantity);
         Assert.Equal(1_000u, session.Stops[0].SpentGil);
+    }
+
+    [Fact]
+    public void RecordWorldPurchaseBatchComplete_AdvancesToNextItemSubtaskBeforeNextWorld()
+    {
+        var session = MarketMafioso.MarketAcquisition.MarketAcquisitionGuidedRouteSession.Start(CreateMultiItemWorldPlan("Maduin", "Rafflesia"));
+        session.RecordProbe("Maduin", CreateCandidatePlan(status: "Ready", quantity: 10, gil: 1_000));
+
+        var result = session.RecordWorldPurchaseBatchComplete("Maduin", purchasedQuantity: 10, spentGil: 1_000);
+
+        Assert.True(result.Success);
+        Assert.Equal("Maduin", session.ActiveStop?.WorldName);
+        Assert.Equal("Arrived", session.ActiveStop?.Status);
+        Assert.Equal("line-2", session.ActiveStop?.ActiveItemSubtask?.LineId);
+        Assert.Equal(10u, session.ActiveStop?.PurchasedQuantity);
+        Assert.Equal(1_000u, session.ActiveStop?.SpentGil);
     }
 
     [Fact]
@@ -197,6 +275,51 @@ public sealed class MarketAcquisitionGuidedRouteSessionTests
                 })
                 .ToArray(),
         };
+
+    private static MarketMafioso.MarketAcquisition.MarketAcquisitionPlan CreateMultiItemWorldPlan(params string[] worlds)
+    {
+        if (worlds.Length == 0)
+            worlds = ["Maduin"];
+
+        return CreatePlan(worlds) with
+        {
+            WorldBatches = worlds
+                .Select((world, index) => new MarketMafioso.MarketAcquisition.MarketAcquisitionWorldBatch
+                {
+                    WorldName = world,
+                    DataCenter = MarketMafioso.MarketAcquisition.MarketAcquisitionPlanner.ResolveNorthAmericaDataCenter(world),
+                    PlannedQuantity = 30,
+                    PlannedGil = 3_000,
+                    ItemSubtasks = index == 0
+                    ?
+                    [
+                        new MarketMafioso.MarketAcquisition.MarketAcquisitionWorldItemSubtask
+                        {
+                            LineId = "line-1",
+                            LineOrdinal = 0,
+                            ItemId = 2,
+                            ItemName = "Fire Shard",
+                            WorldName = world,
+                            PlannedQuantity = 10,
+                            PlannedGil = 1_000,
+                        },
+                        new MarketMafioso.MarketAcquisition.MarketAcquisitionWorldItemSubtask
+                        {
+                            LineId = "line-2",
+                            LineOrdinal = 1,
+                            ItemId = 4,
+                            ItemName = "Lightning Shard",
+                            WorldName = world,
+                            PlannedQuantity = 20,
+                            PlannedGil = 2_000,
+                        },
+                    ]
+                    : [],
+                    Listings = [],
+                })
+                .ToArray(),
+        };
+    }
 
     private static MarketMafioso.MarketAcquisition.MarketAcquisitionLiveCandidatePlan CreateCandidatePlan(
         string status,

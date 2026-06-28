@@ -83,6 +83,16 @@ public sealed class DashboardApiClient
             ?? throw new InvalidOperationException("Acquisition create response was empty.");
     }
 
+    public async Task<MarketAcquisitionRequestView> CreateAcquisitionBatchAsync(
+        MarketAcquisitionBatchCreateRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await http.PostAsJsonAsync("api/acquisition/batches", request, JsonOptions, cancellationToken);
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<MarketAcquisitionRequestView>(JsonOptions, cancellationToken)
+            ?? throw new InvalidOperationException("Acquisition batch create response was empty.");
+    }
+
     public async Task CancelAcquisitionRequestAsync(string id, CancellationToken cancellationToken = default)
     {
         using var response = await http.PostAsync($"api/acquisition/requests/{Uri.EscapeDataString(id)}/cancel", null, cancellationToken);
