@@ -80,11 +80,14 @@ public sealed class DashboardAccountAuthTests
     public async Task DashboardSession_WorksUnderConfiguredBasePath()
     {
         await using var application = CreateApplication(
+            new KeyValuePair<string, string?>("MarketMafioso:RequireApiKey", "true"),
+            new KeyValuePair<string, string?>("MarketMafioso:ClientApiKey", "client-secret"),
             new KeyValuePair<string, string?>("MarketMafioso:BasePath", "/marketmafioso"));
         using var client = application.CreateClient();
 
         var anonymous = await client.GetAsync("/marketmafioso/auth/session");
         var anonymousApi = await client.GetAsync("/marketmafioso/api/acquisition/requests");
+        var anonymousPending = await client.GetAsync("/marketmafioso/api/acquisition/requests/pending?characterName=Smoke&world=Gilgamesh");
         var login = await client.PostAsJsonAsync("/marketmafioso/auth/login", new
         {
             username = "admin",
@@ -95,6 +98,7 @@ public sealed class DashboardAccountAuthTests
 
         Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
         Assert.Equal(HttpStatusCode.Unauthorized, anonymousApi.StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, anonymousPending.StatusCode);
         Assert.Equal(HttpStatusCode.OK, login.StatusCode);
         Assert.Equal(HttpStatusCode.OK, session.StatusCode);
         Assert.Equal(HttpStatusCode.OK, authenticatedApi.StatusCode);

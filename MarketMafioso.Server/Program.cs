@@ -995,7 +995,8 @@ static bool IsAcquisitionBrowserControl(HttpRequest request) =>
 
 static bool IsAcquisitionBrowserRead(HttpRequest request) =>
     HttpMethods.IsGet(request.Method) &&
-    (request.Path.Equals("/acquisition/requests/recent", StringComparison.OrdinalIgnoreCase) ||
+    (request.Path.Equals("/api/acquisition/requests", StringComparison.OrdinalIgnoreCase) ||
+     request.Path.Equals("/acquisition/requests/recent", StringComparison.OrdinalIgnoreCase) ||
      request.Path.Equals("/api/acquisition/requests/recent", StringComparison.OrdinalIgnoreCase));
 
 static bool WantsJsonResponse(HttpRequest request)
