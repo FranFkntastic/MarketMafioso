@@ -12,4 +12,13 @@
   <ItemGroup>
     <ProjectReference Include="..\MarketMafioso.Dashboard\MarketMafioso.Dashboard.csproj" />
   </ItemGroup>
+
+  <Target Name="CopyDashboardSourceMapsToPublish" AfterTargets="Publish">
+    <ItemGroup>
+      <DashboardSourceMapFiles Include="..\MarketMafioso.Dashboard\bin\$(Configuration)\$(TargetFramework)\wwwroot\_framework\*.map" />
+    </ItemGroup>
+    <Copy SourceFiles="@(DashboardSourceMapFiles)"
+          DestinationFolder="$(PublishDir)wwwroot\_framework"
+          SkipUnchangedFiles="true" />
+  </Target>
 </Project>
