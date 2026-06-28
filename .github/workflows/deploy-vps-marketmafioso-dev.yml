@@ -79,7 +79,8 @@ jobs:
           ENV
           chmod 600 marketmafioso-dev.env
           cat > marketmafioso-dev.caddy <<CADDY
-          handle /api/marketmafioso /api/marketmafioso/* {
+          @retired_marketmafioso path /api/marketmafioso /api/marketmafioso/*
+          handle @retired_marketmafioso {
               respond "The MarketMafioso hosted route moved to /marketmafioso/." 410
           }
 
