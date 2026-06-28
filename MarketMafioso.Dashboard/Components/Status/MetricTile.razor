@@ -1,0 +1,9 @@
+<div class="metric-tile">
+    <span>@Label</span>
+    <strong>@Value</strong>
+</div>
+
+@code {
+    [Parameter] public string Label { get; set; } = string.Empty;
+    [Parameter] public string Value { get; set; } = string.Empty;
+}

@@ -43,7 +43,7 @@ The safe order is to make the server and plugin speak first, then prove read-onl
 
 ## Progress Snapshot
 
-Current status after the 2026-06-26 local-dev pass:
+Current status after the 2026-06-28 dashboard route and rebuild pass:
 
 | Phase | Status | Notes |
 | --- | --- | --- |
@@ -54,9 +54,9 @@ Current status after the 2026-06-26 local-dev pass:
 | Phase 4: Market Planning Live Candidates | Done | Accepted requests can prepare a Universalis-backed advisory plan and display world/listing batches. Planner semantics align with the two-mode quantity model, optional gil cap, optional max quantity for `AllBelowThreshold`, and remaining quantity/gil after live purchases. |
 | Phase 5: Live Market Board Read-Only Probe | Done for visible rows | In-game probe succeeded on current patch: item id, visible listing rows, listing id, retainer id/name, HQ flag, unit price, and quantity populated correctly. The `WaitingForListings` flag can remain set while visible rows exist, and the reader now treats populated rows as ready with a diagnostic note. Current-world live candidate evaluation is included in this phase because it only classifies the visible page after the read-only probe. Remaining risk moves to pagination/deeper listing-page behavior. |
 | Phase 5.5: Current-World Live Candidate Evaluation | Done for visible rows | After `Read Live Listings`, the plugin validates item/world, builds a confirmed live candidate pool, sorts by live unit price, supports favorable drift, respects HQ/max-unit/gil-cap constraints, and reports would-buy/skip/under-procure outcomes without purchasing. Verbose tables live in a diagnostics popout so the main Market Acquisition tab stays operational. |
-| Phase 6: Lifestream-Guided World-Batch Orchestration | Route proven locally; run model hardened | Local live testing completed a full multi-world guided route with Lifestream travel, market-board approach, item search, exact item-result selection, visible listing reads, candidate evaluation, market-board close-before-travel, and route completion. Planning now route-sorts selected batches from the player's current world and data center before crossing to other data centers. Plugin route progress/failure now reports under per-attempt execution identities with event sequences, stale-attempt classification, deterministic idempotency, and latest-attempt dashboard projection. Fuller attempt timeline/audit UI and live re-ranking across remaining stops remain pending. |
-| Phase 7: Purchase Mechanism Investigation | Done for first safe listing | Human-equivalent purchase input capture and guarded adapter work proved that a selected, live-revalidated market-board row can be driven to purchase. The first live test confirmed `Buy First Safe Listing` functions from a populated listing page. |
-| Phase 8: Guarded Purchase Execution | Autonomous visible-row batch ready for live test | Current implementation starts purchasing automatically after route launch and live candidate validation, revalidates before each purchase, buys through safe visible listings for the current world, re-reads after each confirmed purchase, and advances the route. Remaining work is per-purchase server audit rows, richer terminal classifications, deeper pagination, and favorable-drift re-ranking across remaining worlds. |
+| Phase 6: Lifestream-Guided World-Batch Orchestration | Done for Lifestream route execution | Local live testing completed full multi-world guided routes with Lifestream travel, market-board approach, item search, exact item-result selection, visible listing reads, candidate evaluation, market-board close-before-travel, route completion, and route ordering from the player's current world/data center before crossing to other data centers. Plugin route progress/failure reports use per-attempt execution identities with event sequences, stale-attempt classification, deterministic idempotency, and latest-attempt dashboard projection. Remaining work belongs to dashboard attempt timeline/audit visibility, not core route proof. |
+| Phase 7: Purchase Mechanism Investigation | Done for first safe listing | Human-equivalent purchase input capture and guarded adapter work proved that a selected, live-revalidated market-board row can be driven to purchase. Live testing confirmed `Buy First Safe Listing` works from a populated listing page. |
+| Phase 8: Guarded Purchase Execution | Live visible-row loop proven; hardening remains | Current implementation starts purchasing automatically after route launch and live candidate validation, revalidates before each purchase, buys through safe visible listings for the current world, re-reads after each confirmed purchase, advances worlds, and reports terminal completion to the dashboard. Remaining work is per-purchase server audit rows, richer terminal classifications, deeper pagination, better retry/restart affordances, and favorable-drift re-ranking across remaining worlds. |
 | Phase 9: Travel Automation Spike | Deferred | Only needed if Lifestream cannot cover the required region/world routes. Until then, travel work is an integration/orchestration problem rather than native aetheryte automation. |
 | Phase 10: Craft Architect Plan Integration | Deferred | Wait until the core loop is proven and a clean HTTP/JSON service boundary exists. |
 
@@ -711,3 +711,23 @@ Replace or augment the simple local planner with Craft Architect's richer market
 11. Phase 10 can wait until the core loop is proven.
 
 The first milestone worth deploying to the VPS is Phase 3: dashboard request creation plus plugin pickup. That proves the novel server-to-plugin workflow without touching game automation.
+
+## Active Follow-Up Roadmap
+
+The acquisition mechanism is no longer blocked on proving that dashboard requests, plugin pickup, Lifestream routing, market-board item search, visible listing reads, or low-risk purchase execution can work. The active work now splits into three tracks:
+
+1. Dashboard rebuild:
+   - Keep `/marketmafioso/` as the canonical browser dashboard and `/marketmafioso/api/*` as the canonical machine endpoint namespace.
+   - Finish the Blazor/MudBlazor dashboard around Acquisition first, then Inventory, Overview, Settings Diagnostics, and Settings Snapshots.
+   - Surface per-attempt route and purchase history in a request details/timeline view.
+   - Preserve completed and failed requests for inspection and eventual preset reuse instead of treating terminal rows as disposable noise.
+
+2. Acquisition hardening:
+   - Add per-purchase audit/progress rows for attempted purchases, purchased rows, skipped rows, stale listings, and stop classifications.
+   - Make route restart/retry behavior explicit and tied to attempts so failed runs can be retried without corrupting request identity.
+   - Add pagination/deeper-listing behavior after the visible-row loop is comfortable.
+   - Add favorable-drift re-ranking across remaining worlds once the current-world candidate loop is stable enough to explain its decisions.
+
+3. Deferred integrations:
+   - Keep native travel automation deferred while Lifestream remains adequate.
+   - Keep Craft Architect plan integration deferred until the MarketMafioso API/dashboard boundary is clean enough to consume richer external plans.

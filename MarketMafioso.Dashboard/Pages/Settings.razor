@@ -65,8 +65,66 @@
         </MudTabPanel>
         <MudTabPanel Text="Snapshots">
             <MudPaper Class="compact-card" Elevation="0">
-                <MudText Typo="Typo.h6">Snapshots</MudText>
-                <MudText Class="muted">Snapshot management will live here. Inventory browsing stays on the Inventory page.</MudText>
+                <MudStack Spacing="2" Class="settings-section">
+                    <MudStack Row="true" AlignItems="AlignItems.Center">
+                        <div>
+                            <MudText Typo="Typo.h6">Snapshots</MudText>
+                            <MudText Class="muted">Recent structured inventory snapshots visible to this dashboard account.</MudText>
+                        </div>
+                        <MudSpacer />
+                        <MudButton Variant="Variant.Outlined" Class="quiet-button" OnClick="LoadSnapshotsAsync">Refresh</MudButton>
+                    </MudStack>
+                    <MudGrid Spacing="2">
+                        <MudItem xs="12" md="4">
+                            <MudSelect T="long?" Value="_snapshotCharacterId" ValueChanged="OnSnapshotCharacterChanged" Label="Character filter" Variant="Variant.Outlined" Margin="Margin.Dense">
+                                <MudSelectItem T="long?" Value="@null">All characters</MudSelectItem>
+                                @foreach (var character in _characters)
+                                {
+                                    <MudSelectItem T="long?" Value="@character.Id">@character.DisplayName</MudSelectItem>
+                                }
+                            </MudSelect>
+                        </MudItem>
+                        <MudItem xs="12" md="8">
+                            <div class="snapshot-retention-summary">
+                                <MetricTile Label="Visible Snapshots" Value="@_snapshots.Count.ToString("N0")" />
+                                <MetricTile Label="Newest Snapshot" Value="@NewestSnapshotLabel" />
+                                <MetricTile Label="Oldest Snapshot" Value="@OldestSnapshotLabel" />
+                            </div>
+                        </MudItem>
+                    </MudGrid>
+                    <MudDataGrid T="ReportSummaryView"
+                                 Items="_snapshots"
+                                 Dense="true"
+                                 Hover="true"
+                                 FixedHeader="true"
+                                 ReadOnly="true"
+                                 SortMode="SortMode.Multiple"
+                                 Filterable="true"
+                                 ShowFilterIcons="true"
+                                 Class="queue-table snapshots-grid">
+                        <Columns>
+                            <TemplateColumn Title="Snapshot" Resizable="true">
+                                <CellTemplate>
+                                    @context.Item.Id<br />
+                                    <span class="muted">@context.Item.ReceivedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss") local</span>
+                                </CellTemplate>
+                            </TemplateColumn>
+                            <TemplateColumn Title="Character" Resizable="true">
+                                <CellTemplate>@($"{context.Item.CharacterName ?? "Unknown"} @ {context.Item.HomeWorld ?? "Unknown"}")</CellTemplate>
+                            </TemplateColumn>
+                            <PropertyColumn Property="snapshot => snapshot.PlayerItemStacks" Title="Player Stacks" Resizable="true" />
+                            <PropertyColumn Property="snapshot => snapshot.RetainerCount" Title="Retainers" Resizable="true" />
+                            <PropertyColumn Property="snapshot => snapshot.RetainerItemStacks" Title="Retainer Stacks" Resizable="true" />
+                            <TemplateColumn Title="Quantity" Resizable="true">
+                                <CellTemplate>@((context.Item.PlayerItemQuantity + context.Item.RetainerItemQuantity).ToString("N0"))</CellTemplate>
+                            </TemplateColumn>
+                        </Columns>
+                        <NoRecordsContent>
+                            <MudText Class="muted">No snapshots are available for this filter.</MudText>
+                        </NoRecordsContent>
+                    </MudDataGrid>
+                    <MudText Typo="Typo.caption" Class="muted">@_snapshotStatus</MudText>
+                </MudStack>
             </MudPaper>
         </MudTabPanel>
         <MudTabPanel Text="Authentication">
@@ -81,18 +139,30 @@
 @code {
     private IReadOnlyList<DiagnosticEventView> _events = [];
     private IReadOnlyList<DashboardCharacterOption> _characters = [];
+    private IReadOnlyList<ReportSummaryView> _snapshots = [];
     private DiagnosticEventView? _selectedEvent;
     private long? _defaultCharacterId;
+    private long? _snapshotCharacterId;
     private string _defaultRegion = "North America";
     private string _defaultWorldMode = "Recommended";
     private int _defaultPickupExpiresSeconds = 300;
     private bool _saving;
     private string _settingsStatus = string.Empty;
+    private string _snapshotStatus = string.Empty;
+
+    private string NewestSnapshotLabel => _snapshots.Count == 0
+        ? "-"
+        : _snapshots.Max(snapshot => snapshot.ReceivedAt).ToLocalTime().ToString("yyyy-MM-dd HH:mm");
+
+    private string OldestSnapshotLabel => _snapshots.Count == 0
+        ? "-"
+        : _snapshots.Min(snapshot => snapshot.ReceivedAt).ToLocalTime().ToString("yyyy-MM-dd HH:mm");
 
     protected override async Task OnInitializedAsync()
     {
         await LoadSettingsAsync();
         await LoadDiagnosticsAsync();
+        await LoadSnapshotsAsync();
     }
 
     private async Task LoadSettingsAsync()
@@ -136,6 +206,25 @@
     private async Task LoadDiagnosticsAsync()
     {
         _events = await Api.GetDiagnosticsAsync();
+    }
+
+    private async Task OnSnapshotCharacterChanged(long? value)
+    {
+        _snapshotCharacterId = value;
+        await LoadSnapshotsAsync();
+    }
+
+    private async Task LoadSnapshotsAsync()
+    {
+        try
+        {
+            _snapshots = await Api.GetInventorySnapshotsAsync(_snapshotCharacterId);
+            _snapshotStatus = $"Loaded {_snapshots.Count:N0} snapshot(s).";
+        }
+        catch (Exception ex)
+        {
+            _snapshotStatus = $"Snapshot load failed: {ex.Message}";
+        }
     }
 
     private void SelectDiagnosticEvent(DiagnosticEventView item)

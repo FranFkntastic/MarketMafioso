@@ -350,6 +350,96 @@ public sealed class InventoryReportViewEndpointTests
     }
 
     [Fact]
+    public async Task InventoryBrowserApi_ReturnsLatestStructuredInventoryView()
+    {
+        await using var application = CreateApplication();
+        using var client = application.CreateClient();
+
+        var createResponse = await client.PostAsJsonAsync("/inventory", new InventoryReport
+        {
+            CharacterName = "Api Browser",
+            HomeWorld = "Siren",
+            Timestamp = "2026-06-24T12:00:00.0000000Z",
+            PlayerInventory =
+            [
+                new InventoryBag
+                {
+                    BagName = "Inventory1",
+                    Items =
+                    [
+                        new ItemSlot
+                        {
+                            ItemId = 5057,
+                            ItemName = "Darksteel Nugget",
+                            ItemType = "Metal",
+                            Quantity = 12,
+                            IsHQ = true,
+                            Condition = 100,
+                        },
+                    ],
+                },
+            ],
+            Retainers =
+            [
+                new RetainerReport
+                {
+                    RetainerName = "Api Retainer",
+                    RetainerId = 42,
+                    LastUpdated = "2026-06-24T11:53:00.0000000Z",
+                    Gil = 55_000,
+                    Bags =
+                    [
+                        new InventoryBag
+                        {
+                            BagName = "RetainerInventory",
+                            Items =
+                            [
+                                new ItemSlot
+                                {
+                                    ItemId = 5057,
+                                    ItemName = "Darksteel Nugget",
+                                    ItemType = "Metal",
+                                    Quantity = 99,
+                                    IsHQ = false,
+                                    Condition = 100,
+                                },
+                            ],
+                        },
+                    ],
+                    MarketListings =
+                    [
+                        new RetainerMarketListing
+                        {
+                            ItemId = 5057,
+                            ItemName = "Darksteel Nugget",
+                            ItemType = "Metal",
+                            Quantity = 20,
+                            IsHQ = false,
+                            Condition = 100,
+                            UnitPrice = 1_800,
+                            ListedAt = "2026-06-24T11:53:00.0000000Z",
+                        },
+                    ],
+                },
+            ],
+        });
+        createResponse.EnsureSuccessStatusCode();
+
+        var view = await client.GetFromJsonAsync<InventoryBrowserView>("/api/inventory/browser?search=darksteel");
+
+        Assert.NotNull(view);
+        Assert.Equal("Api Browser", view.CharacterName);
+        Assert.Equal("Siren", view.HomeWorld);
+        Assert.Equal((ulong)55_000, view.RetainerGil);
+        var item = Assert.Single(view.Items);
+        Assert.Equal("Metal", item.ItemType);
+        Assert.Equal(111, item.TotalQuantity);
+        Assert.Equal(12, item.HqQuantity);
+        Assert.Single(view.MarketListings);
+        Assert.Contains(view.Scopes, x => x.DisplayName == "Api Retainer" && x.Gil == 55_000 && x.MarketListingCount == 1);
+    }
+
+    [Fact]
     public async Task GetReportView_ReturnsNotFoundForMissingSnapshot()
     {
         await using var application = CreateApplication();

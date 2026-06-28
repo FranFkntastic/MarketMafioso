@@ -1,13 +1,159 @@
 @page "/overview"
+@inject DashboardApiClient Api
+@inject DashboardStatusService Status
 
 <PageTitle>MarketMafioso Overview</PageTitle>
 
-<MudStack Spacing="2">
-    <MudText Typo="Typo.h5">Overview</MudText>
-    <MudPaper Class="compact-card" Elevation="0">
-        <MudText Typo="Typo.h6">Receiver Health</MudText>
-        <MudText Class="muted">
-            Overview will summarize receiver health, plugin freshness, recent acquisition activity, and inventory ingest state.
-        </MudText>
-    </MudPaper>
+<MudStack Spacing="2" Class="dashboard-page overview-page">
+    <MudStack Row="true" AlignItems="AlignItems.Center" Class="page-title-row">
+        <div>
+            <MudText Typo="Typo.h5">Overview</MudText>
+            <MudText Typo="Typo.body2" Class="muted">Receiver health, recent acquisition activity, inventory ingest state, and diagnostics at a glance.</MudText>
+        </div>
+        <MudSpacer />
+        <MudButton Variant="Variant.Outlined" Class="quiet-button" Disabled="_loading" OnClick="LoadOverviewAsync">Refresh</MudButton>
+    </MudStack>
+
+    <DashboardStatusHost />
+
+    @if (_loading)
+    {
+        <MudProgressLinear Indeterminate="true" Color="Color.Primary" />
+    }
+
+    <div class="overview-metrics">
+        <MetricTile Label="Receiver" Value="@ReceiverStatus" />
+        <MetricTile Label="Characters" Value="@_characters.Count.ToString("N0")" />
+        <MetricTile Label="Active Requests" Value="@ActiveRequestCount.ToString("N0")" />
+        <MetricTile Label="Recent Errors" Value="@RecentErrorCount.ToString("N0")" />
+    </div>
+
+    <div class="overview-grid">
+        <MudPaper Class="compact-card dashboard-panel" Elevation="0">
+            <MudStack Spacing="2">
+                <MudStack Row="true" AlignItems="AlignItems.Center" Class="panel-heading">
+                    <MudText Typo="Typo.h6">Inventory Ingest</MudText>
+                </MudStack>
+                <div class="overview-section-body">
+                    <MudText Typo="Typo.subtitle2">@InventoryCharacterLabel</MudText>
+                    <MudText Class="muted">@InventorySnapshotLabel</MudText>
+                    <div class="overview-mini-grid">
+                        <MetricTile Label="Matching Items" Value="@_inventory.Items.Count.ToString("N0")" />
+                        <MetricTile Label="Total Quantity" Value="@_inventory.TotalQuantity.ToString("N0")" />
+                        <MetricTile Label="Retainer Gil" Value="@FormatGil(_inventory.RetainerGil)" />
+                    </div>
+                </div>
+            </MudStack>
+        </MudPaper>
+
+        <MudPaper Class="compact-card dashboard-panel" Elevation="0">
+            <MudStack Spacing="2">
+                <MudStack Row="true" AlignItems="AlignItems.Center" Class="panel-heading">
+                    <MudText Typo="Typo.h6">Acquisition Activity</MudText>
+                </MudStack>
+                <MudTable T="MarketAcquisitionRequestView" Items="RecentRequests" Dense="true" Hover="true" Class="queue-table overview-table">
+                    <HeaderContent>
+                        <MudTh>Item</MudTh>
+                        <MudTh>Status</MudTh>
+                        <MudTh>Latest</MudTh>
+                    </HeaderContent>
+                    <RowTemplate>
+                        <MudTd>
+                            @(context.ItemName ?? $"Item {context.ItemId}")<br />
+                            <span class="muted">@context.TargetCharacterName @@ @context.TargetWorld</span>
+                        </MudTd>
+                        <MudTd>@context.Status</MudTd>
+                        <MudTd>@(context.LatestMessage ?? context.LatestReason ?? "-")</MudTd>
+                    </RowTemplate>
+                    <NoRecordsContent>
+                        <MudText Class="muted">No acquisition requests yet.</MudText>
+                    </NoRecordsContent>
+                </MudTable>
+            </MudStack>
+        </MudPaper>
+
+        <MudPaper Class="compact-card dashboard-panel" Elevation="0">
+            <MudStack Spacing="2">
+                <MudStack Row="true" AlignItems="AlignItems.Center" Class="panel-heading">
+                    <MudText Typo="Typo.h6">Diagnostics</MudText>
+                </MudStack>
+                <div class="overview-section-body">
+                    @foreach (var group in DiagnosticSeverityGroups)
+                    {
+                        <div class="severity-row">
+                            <span>@group.Key</span>
+                            <strong>@group.Count().ToString("N0")</strong>
+                        </div>
+                    }
+                    @if (!DiagnosticSeverityGroups.Any())
+                    {
+                        <MudText Class="muted">No diagnostics recorded.</MudText>
+                    }
+                </div>
+            </MudStack>
+        </MudPaper>
+    </div>
 </MudStack>
+
+@code {
+    private ReceiverHealthView _health = new();
+    private IReadOnlyList<DashboardCharacterOption> _characters = [];
+    private IReadOnlyList<MarketAcquisitionRequestView> _requests = [];
+    private IReadOnlyList<DiagnosticEventView> _diagnostics = [];
+    private InventoryBrowserView _inventory = new();
+    private bool _loading = true;
+
+    private string ReceiverStatus => _health.Ok
+        ? $"Online {_health.Utc.ToLocalTime():HH:mm:ss}"
+        : "Unknown";
+
+    private int ActiveRequestCount => _requests.Count(request => request.Status is "Pending" or "AcceptedInPlugin" or "Running");
+
+    private int RecentErrorCount => _diagnostics.Count(diagnostic =>
+        diagnostic.Severity.Equals("Error", StringComparison.OrdinalIgnoreCase) ||
+        diagnostic.Severity.Equals("Warning", StringComparison.OrdinalIgnoreCase));
+
+    private IEnumerable<MarketAcquisitionRequestView> RecentRequests =>
+        _requests.OrderByDescending(request => request.LatestEventAtUtc ?? request.CreatedAtUtc).Take(8);
+
+    private IEnumerable<IGrouping<string, DiagnosticEventView>> DiagnosticSeverityGroups =>
+        _diagnostics
+            .GroupBy(diagnostic => string.IsNullOrWhiteSpace(diagnostic.Severity) ? "Unknown" : diagnostic.Severity)
+            .OrderByDescending(group => group.Count());
+
+    private string InventoryCharacterLabel => string.IsNullOrWhiteSpace(_inventory.CharacterName)
+        ? "No inventory snapshot"
+        : $"{_inventory.CharacterName} @ {_inventory.HomeWorld}";
+
+    private string InventorySnapshotLabel => _inventory.ReceivedAt == null
+        ? "No latest snapshot available."
+        : $"Latest snapshot received {_inventory.ReceivedAt.Value.ToLocalTime():yyyy-MM-dd HH:mm:ss} local.";
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadOverviewAsync();
+    }
+
+    private async Task LoadOverviewAsync()
+    {
+        try
+        {
+            _loading = true;
+            _health = await Api.GetHealthAsync();
+            _characters = await Api.GetCharactersAsync();
+            _requests = await Api.GetAcquisitionRequestsAsync();
+            _diagnostics = await Api.GetDiagnosticsAsync();
+            _inventory = await Api.GetInventoryBrowserAsync(null, null, "all");
+        }
+        catch (Exception ex)
+        {
+            Status.Error($"Overview load failed: {ex.Message}");
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private static string FormatGil(ulong gil) => gil == 0 ? "0 gil" : $"{gil:N0} gil";
+}

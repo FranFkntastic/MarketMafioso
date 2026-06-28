@@ -506,21 +506,46 @@ The HTML dashboard routes can become Blazor static host routes. JSON and plugin 
 - Done: Dashboard client project and static hosting exist.
 - Done: Server-side dashboard shell hosting rewrites Blazor `<base href>` from the configured receiver base path.
 - Done: Cookie-backed dashboard login/session APIs exist.
+- Done: Canonical hosted route shape is `/marketmafioso/` for browser routes and `/marketmafioso/api/*` for machine/API routes. The old `/api/marketmafioso/*` route shape is retired instead of kept as a compatibility alias.
 - Done: Acquisition is the first Blazor page and uses typed client services for item lookup, queue staging, SSE queue updates, cancel, and resend.
-- Partial: Persistent diagnostics storage exists and diagnostics can be viewed from Settings, but the Settings IA is still mostly a shell.
-- Partial: Acquisition UI is functional but still needs deployment of the latest base-path-safe navigation/settings polish, plus continued spacing and table polish.
-- Pending: Inventory, Overview, Snapshots, and the full Diagnostics workspace have not been rebuilt to the same standard as Acquisition.
-- Pending: Move the hosted receiver to the canonical `/marketmafioso/` dashboard and `/marketmafioso/api/*` machine route shape, retiring `/api/marketmafioso/*` in the same pass.
+- Done: Acquisition request building uses account-scoped dashboard characters instead of free-typed target character/world fields.
+- Done: Settings has dashboard defaults for character, routing, region, and pickup expiry backed by SQLite dashboard preferences.
+- Done: Persistent diagnostics storage exists, and Settings can show a filtered diagnostics grid and event drawer.
+- Done: Acquisition UI has first-pass spacing, typography, table-density, and request builder polish.
+- Done: Inventory has a first functional Blazor rebuild against structured inventory APIs, including character scope, inventory scopes, dense item rows, and separate retainer market listings.
+- Done: Overview has a first functional summary of receiver health, latest inventory ingest, recent acquisition activity, and diagnostics severity.
+- Done: Settings Snapshots lists recent account-scoped structured snapshots.
+- Partial: Diagnostics exists as a useful starter, but it is not yet the full operational workspace described by this design.
+- Pending: Raw JSON retention controls, diagnostics retention/SSE health, and authentication/server configuration readouts remain.
+- Pending: Request attempt and purchase-audit history needs a richer timeline/details view. Do not fake this from latest-event-only request rows; add a request-scoped attempt/event projection first.
 
-### Next Priorities
+### Active Dashboard Rebuild Priorities
 
-1. Migrate the dev-hosted route shape to `/marketmafioso/` and `/marketmafioso/api/*`, then remove `/api/marketmafioso/*` from the hosted route surface.
-2. Stabilize the dashboard shell: base-path-safe navigation, one refresh model, and readable control spacing.
-3. Make Settings real enough for Acquisition: default character, default routing, default expiry, and account-scoped character choices.
-4. Replace free-typed Acquisition target character/world fields with a character selector populated from account-associated inventory characters.
-5. Rebuild Inventory against structured JSON APIs.
-6. Move Diagnostics and Snapshots into full Settings workspaces with filters, detail drawers, and retention visibility.
-7. Remove server-rendered dashboard HTML once equivalent Blazor pages exist.
+1. Polish the Acquisition page shell:
+   - remove duplicate refresh affordances,
+   - make panel spacing and text hierarchy feel intentional,
+   - keep the builder compact without cramming labels into corners,
+   - ensure item search text entry remains stable.
+2. Expand Settings into real workspaces:
+   - General defaults,
+   - Diagnostics with filters, event detail, SSE health, and retention status,
+   - Snapshots with raw JSON/structured-store retention controls,
+   - Authentication/server configuration readouts.
+3. Rebuild Inventory against structured JSON APIs:
+   - account-scoped character selector,
+   - inventory scopes for player, retainers, and retainer market listings,
+   - dense sortable/resizable tables,
+   - current snapshot age and source visibility.
+4. Rebuild Overview:
+   - receiver health,
+   - latest inventory ingest,
+   - active/recent acquisition runs,
+   - diagnostics severity summary.
+5. Add acquisition attempt timeline and archive/preset behavior:
+   - preserve completed and failed rows,
+   - expose per-attempt progress and purchase audit rows,
+   - allow later reuse as request presets.
+6. Remove remaining server-rendered dashboard HTML only after equivalent Blazor pages exist.
 
 ## Non-Goals For This Pass
 

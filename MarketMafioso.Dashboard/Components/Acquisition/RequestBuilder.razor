@@ -20,6 +20,10 @@
                             <MudSelectItem T="long?" Value="@character.Id">@character.DisplayName</MudSelectItem>
                         }
                     </MudSelect>
+                    @if (SelectedCharacter is not null)
+                    {
+                        <MudText Typo="Typo.caption" Class="muted field-note">Home world: @SelectedCharacter.HomeWorld</MudText>
+                    }
                 </MudItem>
                 <MudItem xs="12" sm="6">
                     <MudSelect T="string" @bind-Value="_region" Label="Region" Variant="Variant.Outlined" Margin="Margin.Dense">
@@ -55,7 +59,8 @@
                              ResetValueOnEmptyText="true"
                              CoerceText="false"
                              Clearable="true"
-                             Dense="true" />
+                             Dense="true"
+                             DebounceInterval="250" />
         </div>
 
         <div class="form-section">
@@ -177,7 +182,7 @@
         {
             return await Api.SearchItemsAsync(value, token);
         }
-        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        catch (OperationCanceledException)
         {
             return [];
         }

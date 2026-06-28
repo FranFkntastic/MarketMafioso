@@ -116,6 +116,8 @@ app.MapGet("/api/diagnostics/events/stream", async (
 });
 
 app.MapGet("/api/inventory/characters", ListDashboardCharacters);
+app.MapGet("/api/inventory/browser", GetInventoryBrowser);
+app.MapGet("/api/inventory/snapshots", ListDashboardSnapshots);
 app.MapGet("/api/settings/dashboard", GetDashboardSettings);
 app.MapPut("/api/settings/dashboard", SaveDashboardSettings);
 
@@ -371,6 +373,54 @@ async Task<IResult> ListDashboardCharacters(
         .Select(group => group.First())
         .OrderByDescending(character => character.LastSeenAt)
         .ThenBy(character => character.CharacterName, StringComparer.OrdinalIgnoreCase)
+        .ToArray());
+}
+
+async Task<IResult> GetInventoryBrowser(
+    HttpContext context,
+    SqliteConnectionFactory connectionFactory,
+    InventoryReportStore store,
+    long? characterId,
+    string? search,
+    string? scope,
+    CancellationToken token)
+{
+    if (characterId != null &&
+        !await DashboardCanAccessCharacterAsync(context, connectionFactory, characterId.Value, token))
+    {
+        return Results.NotFound();
+    }
+
+    foreach (var accountId in await GetDashboardAccountIdsAsync(context, connectionFactory, token))
+    {
+        var report = await store.GetLatestAsync(accountId, characterId, token);
+        if (report != null)
+            return Results.Ok(InventoryBrowserViewBuilder.Build(report, search, scope));
+    }
+
+    return Results.Ok(InventoryBrowserViewBuilder.Build(null, search, scope));
+}
+
+async Task<IResult> ListDashboardSnapshots(
+    HttpContext context,
+    SqliteConnectionFactory connectionFactory,
+    InventoryReportStore store,
+    long? characterId,
+    CancellationToken token)
+{
+    if (characterId != null &&
+        !await DashboardCanAccessCharacterAsync(context, connectionFactory, characterId.Value, token))
+    {
+        return Results.NotFound();
+    }
+
+    var summaries = new List<ReportSummary>();
+    foreach (var accountId in await GetDashboardAccountIdsAsync(context, connectionFactory, token))
+        summaries.AddRange(await store.ListSummariesAsync(accountId, characterId, token));
+
+    return Results.Ok(summaries
+        .OrderByDescending(summary => summary.ReceivedAt)
+        .Take(500)
         .ToArray());
 }
 

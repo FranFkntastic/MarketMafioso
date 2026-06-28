@@ -1,13 +1,315 @@
 @page "/inventory"
+@inject DashboardApiClient Api
+@inject DashboardStatusService Status
+@implements IDisposable
 
 <PageTitle>MarketMafioso Inventory</PageTitle>
 
-<MudStack Spacing="2">
-    <MudText Typo="Typo.h5">Inventory</MudText>
-    <MudPaper Class="compact-card" Elevation="0">
-        <MudText Typo="Typo.h6">Inventory Browser</MudText>
-        <MudText Class="muted">
-            The structured inventory browser is next to port. Snapshot controls now belong under Settings.
-        </MudText>
-    </MudPaper>
+<MudStack Spacing="2" Class="dashboard-page inventory-page">
+    <MudStack Row="true" AlignItems="AlignItems.Center" Class="page-title-row">
+        <div>
+            <MudText Typo="Typo.h5">Inventory</MudText>
+            <MudText Typo="Typo.body2" Class="muted">Browse the latest structured inventory snapshot by character and scope.</MudText>
+        </div>
+        <MudSpacer />
+        <MudButton Variant="Variant.Outlined" Class="quiet-button" Disabled="_loading" OnClick="LoadInventoryAsync">Refresh</MudButton>
+    </MudStack>
+
+    <DashboardStatusHost />
+
+    <div class="inventory-browser-grid">
+        <MudPaper Class="compact-card dashboard-panel inventory-sidebar" Elevation="0">
+            <MudStack Spacing="3">
+                <div>
+                    <MudText Typo="Typo.h6">Snapshot</MudText>
+                    <MudText Typo="Typo.caption" Class="muted">@SnapshotLabel</MudText>
+                </div>
+
+                <MudSelect T="long?" Value="_selectedCharacterId" ValueChanged="OnCharacterChanged" Label="Character" Variant="Variant.Outlined" Margin="Margin.Dense">
+                    <MudSelectItem T="long?" Value="@null">Latest available</MudSelectItem>
+                    @foreach (var character in _characters)
+                    {
+                        <MudSelectItem T="long?" Value="@character.Id">@character.DisplayName</MudSelectItem>
+                    }
+                </MudSelect>
+
+                <div class="scope-section">
+                    <MudText Typo="Typo.subtitle2" Class="section-kicker">Scopes</MudText>
+                    <button class="@ScopeButtonClass("all")" @onclick="@(() => SetScopeAsync("all"))">
+                        <span>All Inventories</span>
+                        <small>@_view.Items.Count matching item row(s)</small>
+                    </button>
+                    @foreach (var scope in _view.Scopes)
+                    {
+                        <button class="@ScopeButtonClass(scope.ScopeKey)" @onclick="@(() => SetScopeAsync(scope.ScopeKey))">
+                            <span>@scope.DisplayName</span>
+                            <small>@ScopeSummary(scope)</small>
+                        </button>
+                    }
+                </div>
+            </MudStack>
+        </MudPaper>
+
+        <MudStack Spacing="2" Class="inventory-main">
+            <MudPaper Class="compact-card dashboard-panel" Elevation="0">
+                <MudStack Row="true" AlignItems="AlignItems.Center" Class="inventory-toolbar">
+                    <MudTextField T="string"
+                                  Value="_searchText"
+                                  ValueChanged="OnSearchChanged"
+                                  Label="Search by item name or id"
+                                  Variant="Variant.Outlined"
+                                  Margin="Margin.Dense"
+                                  Immediate="true"
+                                  DebounceInterval="250"
+                                  Class="inventory-search" />
+                    <MudSpacer />
+                    <MudText Typo="Typo.caption" Class="muted">@CharacterLabel</MudText>
+                </MudStack>
+            </MudPaper>
+
+            <div class="inventory-metrics">
+                <MetricTile Label="Matching Items" Value="@_view.Items.Count.ToString("N0")" />
+                <MetricTile Label="Total Quantity" Value="@_view.TotalQuantity.ToString("N0")" />
+                <MetricTile Label="HQ Quantity" Value="@_view.HqQuantity.ToString("N0")" />
+                <MetricTile Label="Owners Matched" Value="@_view.OwnerCount.ToString("N0")" />
+                <MetricTile Label="Retainer Gil" Value="@FormatGil(_view.RetainerGil)" />
+            </div>
+
+            <MudPaper Class="compact-card dashboard-panel inventory-table-panel" Elevation="0">
+                <MudStack Spacing="2">
+                    <MudStack Row="true" AlignItems="AlignItems.Center" Class="panel-heading">
+                        <MudText Typo="Typo.h6">Items</MudText>
+                        <MudSpacer />
+                        <MudText Typo="Typo.caption" Class="muted">@_view.Scope</MudText>
+                    </MudStack>
+                    <MudDataGrid T="InventoryBrowserItemView"
+                                 Items="_view.Items"
+                                 Dense="true"
+                                 Hover="true"
+                                 FixedHeader="true"
+                                 ReadOnly="true"
+                                 SortMode="SortMode.Multiple"
+                                 Filterable="true"
+                                 ShowFilterIcons="true"
+                                 Class="queue-table inventory-grid"
+                                 RowClick="OnItemClicked">
+                        <Columns>
+                            <TemplateColumn Title="Item" Resizable="true">
+                                <CellTemplate>
+                                    @context.Item.DisplayName<br />
+                                    <span class="muted">Item @context.Item.ItemId</span>
+                                </CellTemplate>
+                            </TemplateColumn>
+                            <TemplateColumn Title="Type" Resizable="true">
+                                <CellTemplate>@(context.Item.ItemType ?? "Unknown")</CellTemplate>
+                            </TemplateColumn>
+                            <PropertyColumn Property="item => item.TotalQuantity" Title="Total" Resizable="true" />
+                            <PropertyColumn Property="item => item.HqQuantity" Title="HQ" Resizable="true" />
+                            <TemplateColumn Title="Where" Resizable="true" Sortable="false">
+                                <CellTemplate>
+                                    @FormatLocations(context.Item)
+                                </CellTemplate>
+                            </TemplateColumn>
+                        </Columns>
+                        <NoRecordsContent>
+                            <MudText Class="muted">No matching inventory items.</MudText>
+                        </NoRecordsContent>
+                    </MudDataGrid>
+                </MudStack>
+            </MudPaper>
+
+            @if (_selectedItem is not null)
+            {
+                <MudPaper Class="compact-card dashboard-panel" Elevation="0">
+                    <MudStack Spacing="2">
+                        <MudStack Row="true" AlignItems="AlignItems.Center" Class="panel-heading">
+                            <MudText Typo="Typo.h6">@_selectedItem.DisplayName Locations</MudText>
+                            <MudSpacer />
+                            <MudButton Variant="Variant.Text" Class="quiet-button" OnClick="@(() => _selectedItem = null)">Close</MudButton>
+                        </MudStack>
+                        <MudTable T="InventoryBrowserLocationView" Items="_selectedItem.Locations" Dense="true" Hover="true" Class="queue-table">
+                            <HeaderContent>
+                                <MudTh>Owner</MudTh>
+                                <MudTh>Bag</MudTh>
+                                <MudTh>Qty</MudTh>
+                                <MudTh>HQ</MudTh>
+                            </HeaderContent>
+                            <RowTemplate>
+                                <MudTd>@context.OwnerName</MudTd>
+                                <MudTd>@context.BagName</MudTd>
+                                <MudTd>@context.Quantity.ToString("N0")</MudTd>
+                                <MudTd>@context.HqQuantity.ToString("N0")</MudTd>
+                            </RowTemplate>
+                        </MudTable>
+                    </MudStack>
+                </MudPaper>
+            }
+
+            <MudPaper Class="compact-card dashboard-panel inventory-table-panel" Elevation="0">
+                <MudStack Spacing="2">
+                    <MudStack Row="true" AlignItems="AlignItems.Center" Class="panel-heading">
+                        <MudText Typo="Typo.h6">Retainer Market Listings</MudText>
+                        <MudSpacer />
+                        <MudText Typo="Typo.caption" Class="muted">Displayed separately from regular inventory totals</MudText>
+                    </MudStack>
+                    <MudDataGrid T="InventoryBrowserMarketListingView"
+                                 Items="_view.MarketListings"
+                                 Dense="true"
+                                 Hover="true"
+                                 FixedHeader="true"
+                                 ReadOnly="true"
+                                 SortMode="SortMode.Multiple"
+                                 Filterable="true"
+                                 ShowFilterIcons="true"
+                                 Class="queue-table inventory-grid listings-grid">
+                        <Columns>
+                            <PropertyColumn Property="listing => listing.OwnerName" Title="Retainer" Resizable="true" />
+                            <TemplateColumn Title="Item" Resizable="true">
+                                <CellTemplate>
+                                    @context.Item.DisplayName<br />
+                                    <span class="muted">Item @context.Item.ItemId</span>
+                                </CellTemplate>
+                            </TemplateColumn>
+                            <TemplateColumn Title="Type" Resizable="true">
+                                <CellTemplate>@(context.Item.ItemType ?? "Unknown")</CellTemplate>
+                            </TemplateColumn>
+                            <PropertyColumn Property="listing => listing.Quantity" Title="Qty" Resizable="true" />
+                            <PropertyColumn Property="listing => listing.HqQuantity" Title="HQ" Resizable="true" />
+                            <TemplateColumn Title="Unit" Resizable="true">
+                                <CellTemplate>@FormatUnitPrice(context.Item.UnitPrice)</CellTemplate>
+                            </TemplateColumn>
+                            <TemplateColumn Title="Listed" Resizable="true">
+                                <CellTemplate>@(context.Item.ListedAt ?? "-")</CellTemplate>
+                            </TemplateColumn>
+                        </Columns>
+                        <NoRecordsContent>
+                            <MudText Class="muted">No market listings for this scope.</MudText>
+                        </NoRecordsContent>
+                    </MudDataGrid>
+                </MudStack>
+            </MudPaper>
+        </MudStack>
+    </div>
 </MudStack>
+
+@code {
+    private IReadOnlyList<DashboardCharacterOption> _characters = [];
+    private InventoryBrowserView _view = new();
+    private InventoryBrowserItemView? _selectedItem;
+    private long? _selectedCharacterId;
+    private string _searchText = string.Empty;
+    private string _scope = "all";
+    private bool _loading;
+    private CancellationTokenSource? _loadCts;
+
+    private string SnapshotLabel => _view.ReceivedAt == null
+        ? "No snapshot loaded"
+        : $"{_view.ReceivedAt.Value.ToLocalTime():yyyy-MM-dd HH:mm:ss} local";
+
+    private string CharacterLabel => string.IsNullOrWhiteSpace(_view.CharacterName)
+        ? "No character selected"
+        : $"{_view.CharacterName} @ {_view.HomeWorld}";
+
+    protected override async Task OnInitializedAsync()
+    {
+        _characters = await Api.GetCharactersAsync();
+        var settings = await Api.GetDashboardSettingsAsync();
+        _selectedCharacterId = settings.DefaultCharacterId;
+        if (_selectedCharacterId != null && _characters.All(character => character.Id != _selectedCharacterId))
+            _selectedCharacterId = null;
+
+        await LoadInventoryAsync();
+    }
+
+    private async Task OnCharacterChanged(long? value)
+    {
+        _selectedCharacterId = value;
+        _scope = "all";
+        _selectedItem = null;
+        await LoadInventoryAsync();
+    }
+
+    private async Task OnSearchChanged(string value)
+    {
+        _searchText = value;
+        _selectedItem = null;
+        await LoadInventoryAsync();
+    }
+
+    private async Task SetScopeAsync(string scope)
+    {
+        _scope = string.IsNullOrWhiteSpace(scope) ? "all" : scope;
+        _selectedItem = null;
+        await LoadInventoryAsync();
+    }
+
+    private async Task LoadInventoryAsync()
+    {
+        _loadCts?.Cancel();
+        _loadCts?.Dispose();
+        _loadCts = new CancellationTokenSource();
+        var token = _loadCts.Token;
+
+        try
+        {
+            _loading = true;
+            _view = await Api.GetInventoryBrowserAsync(_selectedCharacterId, _searchText, _scope, token);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            Status.Error($"Inventory load failed: {ex.Message}");
+        }
+        finally
+        {
+            if (!token.IsCancellationRequested)
+                _loading = false;
+        }
+    }
+
+    private void OnItemClicked(DataGridRowClickEventArgs<InventoryBrowserItemView> args)
+    {
+        _selectedItem = args.Item;
+    }
+
+    private string ScopeButtonClass(string scope) =>
+        string.Equals(_scope, scope, StringComparison.OrdinalIgnoreCase)
+            ? "scope-button active"
+            : "scope-button";
+
+    private static string ScopeSummary(InventoryBrowserScopeView scope)
+    {
+        var parts = new List<string> { $"{scope.StackCount:N0} stack(s)" };
+        if (scope.Gil > 0)
+            parts.Add($"{scope.Gil:N0} gil");
+        if (scope.MarketListingCount > 0)
+            parts.Add($"{scope.MarketListingCount:N0} listing(s)");
+        if (!string.IsNullOrWhiteSpace(scope.LastUpdated))
+            parts.Add(scope.LastUpdated);
+        return string.Join(" / ", parts);
+    }
+
+    private static string FormatLocations(InventoryBrowserItemView item)
+    {
+        var first = item.Locations.FirstOrDefault();
+        if (first is null)
+            return "-";
+
+        var suffix = item.Locations.Count > 1
+            ? $" + {item.Locations.Count - 1:N0} more"
+            : string.Empty;
+        return $"{first.OwnerName} / {first.BagName}{suffix}";
+    }
+
+    private static string FormatGil(ulong gil) => gil == 0 ? "0 gil" : $"{gil:N0} gil";
+
+    private static string FormatUnitPrice(uint? unitPrice) => unitPrice == null ? "-" : $"{unitPrice.Value:N0} gil";
+
+    public void Dispose()
+    {
+        _loadCts?.Cancel();
+        _loadCts?.Dispose();
+    }
+}

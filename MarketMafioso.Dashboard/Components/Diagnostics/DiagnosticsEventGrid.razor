@@ -1,13 +1,34 @@
 @using MarketMafioso.Dashboard.Models
 
 <MudStack Spacing="2">
-    <MudStack Row="true">
+    <MudStack Row="true" Class="diagnostics-filter-row">
         <MudTextField @bind-Value="_filter"
-                      Placeholder="Filter category, severity, request, message"
+                      Placeholder="Filter request, correlation, type, message"
                       Variant="Variant.Outlined"
                       Margin="Margin.Dense"
                       Immediate="true"
                       Class="diagnostics-filter" />
+        <MudSelect T="string" @bind-Value="_categoryFilter" Label="Category" Variant="Variant.Outlined" Margin="Margin.Dense" Class="diagnostics-select">
+            <MudSelectItem Value="@AllFilter">All categories</MudSelectItem>
+            @foreach (var category in Categories)
+            {
+                <MudSelectItem Value="@category">@category</MudSelectItem>
+            }
+        </MudSelect>
+        <MudSelect T="string" @bind-Value="_severityFilter" Label="Severity" Variant="Variant.Outlined" Margin="Margin.Dense" Class="diagnostics-select">
+            <MudSelectItem Value="@AllFilter">All severities</MudSelectItem>
+            @foreach (var severity in Severities)
+            {
+                <MudSelectItem Value="@severity">@severity</MudSelectItem>
+            }
+        </MudSelect>
+        <MudSelect T="string" @bind-Value="_sourceFilter" Label="Source" Variant="Variant.Outlined" Margin="Margin.Dense" Class="diagnostics-select">
+            <MudSelectItem Value="@AllFilter">All sources</MudSelectItem>
+            @foreach (var source in Sources)
+            {
+                <MudSelectItem Value="@source">@source</MudSelectItem>
+            }
+        </MudSelect>
         <MudSpacer />
         <MudButton Variant="Variant.Outlined" OnClick="RefreshRequested">Refresh</MudButton>
     </MudStack>
@@ -46,18 +67,33 @@
     [Parameter] public EventCallback RefreshRequested { get; set; }
     [Parameter] public EventCallback<DiagnosticEventView> SelectedEventChanged { get; set; }
 
-    private string _filter = string.Empty;
+    private const string AllFilter = "";
 
-    private IEnumerable<DiagnosticEventView> FilteredEvents => string.IsNullOrWhiteSpace(_filter)
-        ? Events
-        : Events.Where(MatchesFilter);
+    private string _filter = string.Empty;
+    private string _categoryFilter = AllFilter;
+    private string _severityFilter = AllFilter;
+    private string _sourceFilter = AllFilter;
+
+    private IEnumerable<string> Categories => Unique(Events.Select(item => item.Category));
+    private IEnumerable<string> Severities => Unique(Events.Select(item => item.Severity));
+    private IEnumerable<string> Sources => Unique(Events.Select(item => item.Source));
+
+    private IEnumerable<DiagnosticEventView> FilteredEvents => Events.Where(MatchesFilter);
 
     private bool MatchesFilter(DiagnosticEventView item)
     {
+        if (!MatchesExact(item.Category, _categoryFilter) ||
+            !MatchesExact(item.Severity, _severityFilter) ||
+            !MatchesExact(item.Source, _sourceFilter))
+        {
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(_filter))
+            return true;
+
         var filter = _filter.Trim();
-        return Contains(item.Category, filter) ||
-               Contains(item.Type, filter) ||
-               Contains(item.Severity, filter) ||
+        return Contains(item.Type, filter) ||
                Contains(item.Message, filter) ||
                Contains(item.CorrelationId, filter) ||
                Contains(item.AcquisitionRequestId, filter);
@@ -70,6 +106,15 @@
 
     private static bool Contains(string? value, string filter) =>
         value?.Contains(filter, StringComparison.OrdinalIgnoreCase) == true;
+
+    private static bool MatchesExact(string value, string filter) =>
+        string.IsNullOrWhiteSpace(filter) || string.Equals(value, filter, StringComparison.OrdinalIgnoreCase);
+
+    private static IEnumerable<string> Unique(IEnumerable<string> values) =>
+        values
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(value => value, StringComparer.OrdinalIgnoreCase);
 
     private static Color SeverityColor(string severity) => severity switch
     {

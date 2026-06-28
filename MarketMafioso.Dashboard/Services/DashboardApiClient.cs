@@ -38,6 +38,14 @@ public sealed class DashboardApiClient
         response.EnsureSuccessStatusCode();
     }
 
+    public async Task<ReceiverHealthView> GetHealthAsync(CancellationToken cancellationToken = default)
+    {
+        return await http.GetFromJsonAsync<ReceiverHealthView>(
+            "health",
+            JsonOptions,
+            cancellationToken) ?? new ReceiverHealthView();
+    }
+
     public async Task<IReadOnlyList<MarketAcquisitionRequestView>> GetAcquisitionRequestsAsync(
         CancellationToken cancellationToken = default)
     {
@@ -101,6 +109,44 @@ public sealed class DashboardApiClient
     {
         return await http.GetFromJsonAsync<IReadOnlyList<DashboardCharacterOption>>(
             "api/inventory/characters",
+            JsonOptions,
+            cancellationToken) ?? [];
+    }
+
+    public async Task<InventoryBrowserView> GetInventoryBrowserAsync(
+        long? characterId,
+        string? search,
+        string? scope,
+        CancellationToken cancellationToken = default)
+    {
+        var query = new List<string>();
+        if (characterId != null)
+            query.Add($"characterId={characterId.Value}");
+        if (!string.IsNullOrWhiteSpace(search))
+            query.Add($"search={Uri.EscapeDataString(search)}");
+        if (!string.IsNullOrWhiteSpace(scope))
+            query.Add($"scope={Uri.EscapeDataString(scope)}");
+
+        var path = query.Count == 0
+            ? "api/inventory/browser"
+            : $"api/inventory/browser?{string.Join("&", query)}";
+
+        return await http.GetFromJsonAsync<InventoryBrowserView>(
+            path,
+            JsonOptions,
+            cancellationToken) ?? new InventoryBrowserView();
+    }
+
+    public async Task<IReadOnlyList<ReportSummaryView>> GetInventorySnapshotsAsync(
+        long? characterId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var path = characterId == null
+            ? "api/inventory/snapshots"
+            : $"api/inventory/snapshots?characterId={characterId.Value}";
+
+        return await http.GetFromJsonAsync<IReadOnlyList<ReportSummaryView>>(
+            path,
             JsonOptions,
             cancellationToken) ?? [];
     }
