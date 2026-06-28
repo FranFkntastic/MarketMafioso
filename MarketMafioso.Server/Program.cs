@@ -686,6 +686,7 @@ static async Task WriteSseEventAsync<T>(
 
 static async Task<IResult> ServeBlazorIndex(
     HttpRequest request,
+    HttpResponse response,
     IWebHostEnvironment environment,
     CancellationToken cancellationToken)
 {
@@ -701,10 +702,24 @@ static async Task<IResult> ServeBlazorIndex(
         : $"{request.PathBase.ToString().TrimEnd('/')}/";
     html = html.Replace("<base href=\"/\" />", $"<base href=\"{Html(baseHref)}\" />", StringComparison.Ordinal);
     html = html.Replace(
+        "css/app.css",
+        $"css/app.css?v={ResolveDashboardAssetVersion(environment, "css/app.css")}",
+        StringComparison.Ordinal);
+    html = html.Replace(
         "_framework/blazor.webassembly#[.{fingerprint}].js",
         ResolveBlazorBootScript(environment),
         StringComparison.Ordinal);
+    response.Headers.CacheControl = "no-cache";
     return Results.Content(html, "text/html; charset=utf-8", Encoding.UTF8);
+}
+
+static string ResolveDashboardAssetVersion(IWebHostEnvironment environment, string path)
+{
+    var file = environment.WebRootFileProvider.GetFileInfo(path);
+    if (!file.Exists)
+        return "missing";
+
+    return $"{file.Length:x}-{file.LastModified.UtcTicks:x}";
 }
 
 static string ResolveBlazorBootScript(IWebHostEnvironment environment)
@@ -751,6 +766,12 @@ static async Task ServeDashboardStaticAssetAsync(HttpContext context, RequestDel
     }
 
     context.Response.ContentType = ContentTypeForDashboardAsset(resolvedPath);
+    if (path.StartsWith("css/", StringComparison.Ordinal) ||
+        path.Equals("MarketMafioso.Dashboard.styles.css", StringComparison.Ordinal))
+    {
+        context.Response.Headers.CacheControl = "no-cache";
+    }
+
     if (HttpMethods.IsHead(context.Request.Method))
         return;
 
