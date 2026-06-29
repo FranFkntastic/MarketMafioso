@@ -16,6 +16,7 @@ public sealed class MarketAcquisitionGuidedRouteSession
 
     public string Status { get; private set; }
     public IReadOnlyList<MarketAcquisitionGuidedRouteStop> Stops { get; }
+    public MarketAcquisitionWorldCompletionSummary? LastWorldCompletionSummary { get; private set; }
     public MarketAcquisitionGuidedRouteStop? ActiveStop =>
         Status == "Complete" || activeStopIndex >= Stops.Count
             ? null
@@ -187,6 +188,7 @@ public sealed class MarketAcquisitionGuidedRouteSession
         stop.Status = "Complete";
         stop.PurchasedQuantity = purchasedQuantity;
         stop.SpentGil = spentGil;
+        LastWorldCompletionSummary = BuildWorldSummary(stop);
         activeStopIndex++;
         if (activeStopIndex >= Stops.Count)
             Status = "Complete";
@@ -206,7 +208,7 @@ public sealed class MarketAcquisitionGuidedRouteSession
         stop.SpentGil = checked(stop.SpentGil + spentGil);
         UpdateActiveLine(
             stop,
-            status: "Complete",
+            status: purchasedQuantity == 0 && spentGil == 0 ? "SkippedNoLiveStock" : "Complete",
             purchasedQuantity,
             spentGil,
             purchasedQuantity == 0 && spentGil == 0
@@ -244,6 +246,18 @@ public sealed class MarketAcquisitionGuidedRouteSession
         line.SpentGil = checked(line.SpentGil + spentGil);
         line.LatestMessage = message;
     }
+
+    private static MarketAcquisitionWorldCompletionSummary BuildWorldSummary(MarketAcquisitionGuidedRouteStop stop) => new()
+    {
+        WorldName = stop.WorldName,
+        DataCenter = stop.DataCenter,
+        PurchasedQuantity = stop.PurchasedQuantity,
+        SpentGil = stop.SpentGil,
+        CompletedLineCount = stop.LineStates.Count(line => line.Status.Equals("Complete", StringComparison.OrdinalIgnoreCase)),
+        SkippedLineCount = stop.LineStates.Count(line => line.Status.StartsWith("Skipped", StringComparison.OrdinalIgnoreCase)),
+        FailedLineCount = stop.LineStates.Count(line => line.Status.Equals("Failed", StringComparison.OrdinalIgnoreCase)),
+        Message = $"{stop.WorldName} complete: bought {stop.PurchasedQuantity:N0} item(s), spent {stop.SpentGil:N0} gil across {stop.LineStates.Count:N0} line(s).",
+    };
 
     private static string FormatActiveItem(MarketAcquisitionGuidedRouteStop stop) =>
         FormatItem(stop.ActiveItemSubtask);
@@ -302,6 +316,18 @@ public sealed record MarketAcquisitionRouteLineState
     public uint PurchasedQuantity { get; set; }
     public uint SpentGil { get; set; }
     public string? LatestMessage { get; set; }
+}
+
+public sealed record MarketAcquisitionWorldCompletionSummary
+{
+    public string WorldName { get; init; } = string.Empty;
+    public string DataCenter { get; init; } = string.Empty;
+    public uint PurchasedQuantity { get; init; }
+    public uint SpentGil { get; init; }
+    public int CompletedLineCount { get; init; }
+    public int SkippedLineCount { get; init; }
+    public int FailedLineCount { get; init; }
+    public string Message { get; init; } = string.Empty;
 }
 
 public sealed record MarketAcquisitionGuidedRouteResult

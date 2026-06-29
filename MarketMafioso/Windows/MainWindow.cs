@@ -1482,6 +1482,7 @@ public class MainWindow : Window, IDisposable
             _ = RestartGuidedRouteAsync();
 
         ImGui.TextColored(GetGuidedRouteStatusColor(), marketAcquisitionRouteRunner.StatusMessage);
+        DrawLatestWorldCompletionSummary();
 
         if (marketAcquisitionRouteRunner.Stops.Count == 0)
         {
@@ -1506,6 +1507,17 @@ public class MainWindow : Window, IDisposable
 
         DrawGuidedRouteStops(marketAcquisitionRouteRunner.Stops);
         DrawMarketBoardProbeStatus();
+    }
+
+    private void DrawLatestWorldCompletionSummary()
+    {
+        var summary = marketAcquisitionRouteRunner.LatestWorldCompletionSummary;
+        if (summary == null)
+            return;
+
+        ImGui.TextColored(
+            ColMuted,
+            $"Latest world: {summary.WorldName} ({FormatRouteDataCenter(summary.DataCenter)}) bought {summary.PurchasedQuantity:N0}, spent {FormatGil(summary.SpentGil)}; {summary.CompletedLineCount:N0} complete / {summary.SkippedLineCount:N0} skipped.");
     }
 
     private void DrawMarketBoardInputCapture()

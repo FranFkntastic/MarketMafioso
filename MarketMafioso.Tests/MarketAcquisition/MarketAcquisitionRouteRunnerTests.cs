@@ -315,6 +315,33 @@ public sealed class MarketAcquisitionRouteRunnerTests
     }
 
     [Fact]
+    public void RecordWorldPurchaseBatchComplete_WritesWorldCompletionSummaryAfterFinalLine()
+    {
+        using var runner = CreateRunner();
+        runner.Start(CreateMultiItemWorldPlan("Maduin"), enableDiagnostics: true);
+        runner.RecordCurrentWorld("Maduin");
+        runner.RecordProbe("Maduin", CreateCandidatePlan(status: "Ready", quantity: 10, gil: 100));
+
+        var firstLine = runner.RecordWorldPurchaseBatchComplete("Maduin", purchasedQuantity: 10, spentGil: 100);
+        var secondLine = runner.RecordProbe("Maduin", CreateCandidatePlan(status: "NoSafeListings", quantity: 0, gil: 0));
+
+        Assert.True(firstLine.Success);
+        Assert.True(secondLine.Success);
+        Assert.NotNull(runner.LatestWorldCompletionSummary);
+        Assert.Equal("Maduin", runner.LatestWorldCompletionSummary!.WorldName);
+        Assert.Equal("Dynamis", runner.LatestWorldCompletionSummary.DataCenter);
+        Assert.Equal(10u, runner.LatestWorldCompletionSummary.PurchasedQuantity);
+        Assert.Equal(100u, runner.LatestWorldCompletionSummary.SpentGil);
+        Assert.Equal(1, runner.LatestWorldCompletionSummary.CompletedLineCount);
+        Assert.Equal(1, runner.LatestWorldCompletionSummary.SkippedLineCount);
+
+        var text = ReadLog(runner.LastDiagnosticFilePath!);
+        Assert.Contains("world-summary", text, StringComparison.Ordinal);
+        Assert.Contains("completedLineCount: 1", text, StringComparison.Ordinal);
+        Assert.Contains("skippedLineCount: 1", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void RecordProbe_RequiresMarketBoardCloseBeforeNextTravel()
     {
         using var runner = CreateRunner();

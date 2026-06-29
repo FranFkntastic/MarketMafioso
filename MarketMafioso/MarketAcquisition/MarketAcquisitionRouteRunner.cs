@@ -15,6 +15,7 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
     private bool diagnosticsRequested;
     private bool standaloneInputCaptureLogOpen;
     private DateTimeOffset? itemSearchAutomationStartedUtc;
+    private string? lastWorldSummarySignature;
 
     public MarketAcquisitionRouteRunner(string diagnosticsDirectory)
     {
@@ -29,6 +30,8 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
     public string StatusMessage { get; private set; } = "No route has started.";
 
     public string? LastDiagnosticFilePath { get; private set; }
+
+    public MarketAcquisitionWorldCompletionSummary? LatestWorldCompletionSummary { get; private set; }
 
     public bool SearchSubmitted { get; private set; }
 
@@ -67,6 +70,8 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         MarketBoardCloseRequiredBeforeTravel = false;
         standaloneInputCaptureLogOpen = false;
         itemSearchAutomationStartedUtc = null;
+        LatestWorldCompletionSummary = null;
+        lastWorldSummarySignature = null;
         StatusMessage = $"Route started. Next stop: {session.ActiveStop?.WorldName}.";
         diagnostics.Record(
             "route-start",
@@ -145,6 +150,8 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         itemSearchAutomationStartedUtc = null;
         diagnosticsRequested = false;
         LastDiagnosticFilePath = null;
+        LatestWorldCompletionSummary = null;
+        lastWorldSummarySignature = null;
     }
 
     public MarketAcquisitionRouteActionResult ExecutePendingTravelCommand(Func<string, bool> processCommand)
@@ -525,6 +532,9 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
                 ["success"] = result.Success.ToString(),
             });
 
+        if (result.Success)
+            RecordLatestWorldSummary();
+
         if (result.Success && session?.ActiveStop == null)
             return Complete(result.Message);
 
@@ -594,6 +604,26 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
             });
     }
 
+    public void RecordWorldSummary(MarketAcquisitionWorldCompletionSummary summary)
+    {
+        ArgumentNullException.ThrowIfNull(summary);
+
+        LatestWorldCompletionSummary = summary;
+        diagnostics.Record(
+            "world-summary",
+            summary.Message,
+            new Dictionary<string, string?>
+            {
+                ["world"] = summary.WorldName,
+                ["dataCenter"] = summary.DataCenter,
+                ["purchasedQuantity"] = summary.PurchasedQuantity.ToString(),
+                ["spentGil"] = summary.SpentGil.ToString(),
+                ["completedLineCount"] = summary.CompletedLineCount.ToString(),
+                ["skippedLineCount"] = summary.SkippedLineCount.ToString(),
+                ["failedLineCount"] = summary.FailedLineCount.ToString(),
+            });
+    }
+
     public MarketAcquisitionRouteActionResult RecordWorldPurchaseBatchComplete(
         string currentWorld,
         uint purchasedQuantity,
@@ -617,6 +647,9 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
                 ["spentGil"] = spentGil.ToString(),
                 ["success"] = result.Success.ToString(),
             });
+
+        if (result.Success)
+            RecordLatestWorldSummary();
 
         if (result.Success && session?.ActiveStop == null)
             return Complete(result.Message);
@@ -656,6 +689,20 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
     public void Dispose()
     {
         CloseDiagnostics();
+    }
+
+    private void RecordLatestWorldSummary()
+    {
+        var summary = session?.LastWorldCompletionSummary;
+        if (summary == null)
+            return;
+
+        var signature = $"{summary.DataCenter}:{summary.WorldName}:{summary.PurchasedQuantity}:{summary.SpentGil}:{summary.CompletedLineCount}:{summary.SkippedLineCount}:{summary.FailedLineCount}";
+        if (string.Equals(lastWorldSummarySignature, signature, StringComparison.Ordinal))
+            return;
+
+        lastWorldSummarySignature = signature;
+        RecordWorldSummary(summary);
     }
 
     private MarketAcquisitionRouteActionResult Complete(string message)

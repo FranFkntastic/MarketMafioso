@@ -1149,7 +1149,7 @@ Expected: build passes.
 - Modify: `MarketMafioso/Windows/MainWindow.cs`
 - Test: `MarketMafioso.Tests/MarketAcquisition/MarketAcquisitionRouteRunnerTests.cs`
 
-- [ ] **Step 1: Add world summary model**
+- [x] **Step 1: Add world summary model**
 
 Add:
 
@@ -1167,7 +1167,7 @@ public sealed record MarketAcquisitionWorldCompletionSummary
 }
 ```
 
-- [ ] **Step 2: Build summary when completing a stop**
+- [x] **Step 2: Build summary when completing a stop**
 
 In route session:
 
@@ -1185,7 +1185,7 @@ private static MarketAcquisitionWorldCompletionSummary BuildWorldSummary(MarketA
 };
 ```
 
-- [ ] **Step 3: Write summary to diagnostics**
+- [x] **Step 3: Write summary to diagnostics**
 
 Add `RecordWorldSummary(MarketAcquisitionWorldCompletionSummary summary)` in route runner and write:
 
@@ -1199,11 +1199,11 @@ World complete
   skippedLineCount: 1
 ```
 
-- [ ] **Step 4: Show latest summary in plugin UI**
+- [x] **Step 4: Show latest summary in plugin UI**
 
 Add a compact latest-world summary below route status. Keep full details in diagnostics.
 
-- [ ] **Step 5: Run route runner tests**
+- [x] **Step 5: Run route runner tests**
 
 Run:
 
@@ -1212,6 +1212,8 @@ dotnet test "MarketMafioso.Tests\MarketMafioso.Tests.csproj" -c Debug --filter "
 ```
 
 Expected: tests pass.
+
+Actual: route runner tests passed, and `dotnet build "MarketMafioso/MarketMafioso.csproj" -c Debug` passed.
 
 ---
 
