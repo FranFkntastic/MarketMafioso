@@ -144,7 +144,7 @@ Expected: commit succeeds. If unrelated dirty files are present, do not stage th
 - Modify: `MarketMafioso.Tests/MarketAcquisition/RecordingHttpMessageHandler.cs`
 - Modify or create: `MarketMafioso.Tests/TestUtilities/TemporaryDirectory.cs`
 
-- [ ] **Step 1: Locate existing helpers**
+- [x] **Step 1: Locate existing helpers**
 
 Run:
 
@@ -154,7 +154,7 @@ rg -n "CreateAcceptedBatchAsync|CreateClaimedBatchAsync|RecordingHttpMessageHand
 
 Expected: identify existing helper names and paths. If a helper already exists with a different name, adapt the later plan steps to that local name instead of creating duplicate scaffolding.
 
-- [ ] **Step 2: Add server endpoint helpers**
+- [x] **Step 2: Add server endpoint helpers**
 
 Add or extend helpers so endpoint tests can do this without duplicating request setup:
 
@@ -170,7 +170,7 @@ The helper must:
 - return a typed view containing batch id, claim token, and line ids,
 - use unique idempotency keys derived from the supplied slug.
 
-- [ ] **Step 3: Add store fixture helpers**
+- [x] **Step 3: Add store fixture helpers**
 
 Add or extend store helpers so store tests can create accepted batches directly:
 
@@ -180,7 +180,7 @@ var claimed = await store.CreateAcceptedBatchAsync("test-slug", lineCount: 2);
 
 The helper must return the same typed view shape used by endpoint tests where practical.
 
-- [ ] **Step 4: Add plugin route test plans**
+- [x] **Step 4: Add plugin route test plans**
 
 Add or extend a static test-plan helper with:
 
@@ -192,7 +192,7 @@ MarketAcquisitionTestPlans.ReadyCandidatePlan(uint quantity, uint gil)
 
 The plans must include stable request id, line ids, item ids, world names, data centers, and listing ids so route diagnostics can be asserted exactly.
 
-- [ ] **Step 5: Add focused HTTP and temporary directory helpers**
+- [x] **Step 5: Add focused HTTP and temporary directory helpers**
 
 Create or reuse:
 
@@ -203,7 +203,7 @@ TemporaryDirectory
 
 `RecordingHttpMessageHandler` records method, URI, auth header, and request body. `TemporaryDirectory` creates and deletes an isolated directory under the test temp root.
 
-- [ ] **Step 6: Run helper compile**
+- [x] **Step 6: Run helper compile**
 
 Run:
 
