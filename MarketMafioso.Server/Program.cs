@@ -453,7 +453,7 @@ async Task<IResult> SaveDashboardSettings(
     DashboardSettingsUpdate update,
     CancellationToken token)
 {
-    if (!string.Equals(update.DefaultRegion, "North America", StringComparison.Ordinal))
+    if (!IsSupportedAcquisitionRegion(update.DefaultRegion))
         return Results.BadRequest(new { error = "unsupported_region" });
 
     if (update.DefaultWorldMode is not ("Recommended" or "CurrentWorld" or "AllWorldSweep"))
@@ -509,6 +509,9 @@ async Task<IResult> SaveDashboardSettings(
 
     return Results.Ok(view);
 }
+
+static bool IsSupportedAcquisitionRegion(string region) =>
+    region is "North America" or "Europe" or "Japan" or "Oceania";
 
 async Task<IResult> GetStorageSummary(
     HttpContext context,

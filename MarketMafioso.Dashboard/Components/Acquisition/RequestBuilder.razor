@@ -37,8 +37,11 @@
                         <div class="input-grid two-column">
                             <div class="field-block">
                                 <div class="field-label-row"><span>Region</span></div>
-                                <MudSelect T="string" @bind-Value="_region" Placeholder="Choose region" Variant="Variant.Outlined" Margin="Margin.Dense" FullWidth="true">
-                                    <MudSelectItem Value="@("North America")">North America</MudSelectItem>
+                                <MudSelect T="string" Value="_region" ValueChanged="OnRegionChanged" Placeholder="Choose region" Variant="Variant.Outlined" Margin="Margin.Dense" FullWidth="true">
+                                    @foreach (var region in SupportedRegions)
+                                    {
+                                        <MudSelectItem Value="@region">@region</MudSelectItem>
+                                    }
                                 </MudSelect>
                             </div>
                             <div class="field-block">
@@ -53,7 +56,7 @@
                         @if (IsAllWorldSweep)
                         {
                             <div class="field-block">
-                                <div class="field-label-row help-label" title="Choose which North America worlds the sweep should explicitly visit and probe.">
+                                <div class="field-label-row help-label" title="Choose which worlds the sweep should explicitly visit and probe. Non-native regions are advanced route targets.">
                                     <span>Sweep scope</span>
                                 </div>
                                 <MudSelect T="string" @bind-Value="_sweepScope" Placeholder="Choose sweep scope" Variant="Variant.Outlined" Margin="Margin.Dense" FullWidth="true">
@@ -65,7 +68,7 @@
                             @if (_sweepScope == "DataCenters")
                             {
                                 <div class="sweep-dc-list">
-                                    @foreach (var dataCenter in NorthAmericaDataCenters)
+                                    @foreach (var dataCenter in AvailableSweepDataCenters)
                                     {
                                         <label class="sweep-dc-option">
                                             <input type="checkbox"
@@ -246,13 +249,19 @@
 
     private bool IsAllWorldSweep => NormalizeWorldMode(_worldMode).Equals("AllWorldSweep", StringComparison.OrdinalIgnoreCase);
 
-    private static readonly string[] NorthAmericaDataCenters =
-    [
-        "Aether",
-        "Primal",
-        "Crystal",
-        "Dynamis",
-    ];
+    private static readonly IReadOnlyDictionary<string, string[]> RegionDataCenters =
+        new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["North America"] = ["Aether", "Primal", "Crystal", "Dynamis"],
+            ["Europe"] = ["Chaos", "Light"],
+            ["Japan"] = ["Elemental", "Gaia", "Mana", "Meteor"],
+            ["Oceania"] = ["Materia"],
+        };
+
+    private static IReadOnlyList<string> SupportedRegions { get; } = RegionDataCenters.Keys.ToArray();
+
+    private IReadOnlyList<string> AvailableSweepDataCenters =>
+        RegionDataCenters.TryGetValue(_region, out var dataCenters) ? dataCenters : [];
 
     private string QuantityModeHelp => _quantityMode == "AllBelowThreshold"
         ? "All below threshold buys every confirmed live listing at or below max unit price."
@@ -274,7 +283,7 @@
         if (_selectedCharacterId == null || Characters.All(character => character.Id != _selectedCharacterId))
             _selectedCharacterId = Characters.FirstOrDefault()?.Id;
 
-        _region = Settings.DefaultRegion;
+        _region = NormalizeRegion(Settings.DefaultRegion);
         _worldMode = Settings.DefaultWorldMode;
         _expiresInSeconds = Settings.DefaultPickupExpiresSeconds;
         _settingsApplied = true;
@@ -297,7 +306,7 @@
                 string.Equals(character.CharacterName, PresetRequest.TargetCharacterName, StringComparison.OrdinalIgnoreCase) &&
                 string.Equals(character.HomeWorld, PresetRequest.TargetWorld, StringComparison.OrdinalIgnoreCase))
             ?.Id ?? _selectedCharacterId;
-        _region = string.IsNullOrWhiteSpace(PresetRequest.Region) ? _region : PresetRequest.Region;
+        _region = string.IsNullOrWhiteSpace(PresetRequest.Region) ? _region : NormalizeRegion(PresetRequest.Region);
         _worldMode = string.IsNullOrWhiteSpace(PresetRequest.WorldMode) ? _worldMode : PresetRequest.WorldMode;
         _sweepScope = string.IsNullOrWhiteSpace(PresetRequest.SweepScope) ? "Region" : PresetRequest.SweepScope;
         _sweepDataCenters.Clear();
@@ -453,8 +462,22 @@
 
     private IReadOnlyList<string> ResolveSweepDataCenters() =>
         IsAllWorldSweep && _sweepScope == "DataCenters"
-            ? NorthAmericaDataCenters.Where(dataCenter => _sweepDataCenters.Contains(dataCenter)).ToArray()
+            ? AvailableSweepDataCenters.Where(dataCenter => _sweepDataCenters.Contains(dataCenter)).ToArray()
             : [];
+
+    private void OnRegionChanged(string region)
+    {
+        _region = NormalizeRegion(region);
+        _sweepDataCenters.RemoveWhere(dataCenter => !AvailableSweepDataCenters.Contains(dataCenter, StringComparer.OrdinalIgnoreCase));
+    }
+
+    private static string NormalizeRegion(string region)
+    {
+        if (region.Equals("North-America", StringComparison.OrdinalIgnoreCase))
+            return "North America";
+
+        return RegionDataCenters.ContainsKey(region) ? region : "North America";
+    }
 
     private void ToggleSweepDataCenter(string dataCenter, ChangeEventArgs args)
     {

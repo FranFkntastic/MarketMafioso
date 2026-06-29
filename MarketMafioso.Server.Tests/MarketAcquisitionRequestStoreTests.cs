@@ -3,6 +3,45 @@ namespace MarketMafioso.Server.Tests;
 public sealed class MarketAcquisitionRequestStoreTests
 {
     [Fact]
+    public async Task CreateBatchAsyncRejectsSweepDataCenterOutsideRegion()
+    {
+        using var fixture = await MarketAcquisitionStoreFixture.CreateAsync();
+        var request = new MarketAcquisitionBatchCreateRequest
+        {
+            SchemaVersion = 1,
+            IdempotencyKey = "wrong-region-dc",
+            TargetCharacterName = MarketAcquisitionTestApp.CharacterName,
+            TargetWorld = MarketAcquisitionTestApp.WorldName,
+            Region = "Oceania",
+            WorldMode = "AllWorldSweep",
+            SweepScope = "DataCenters",
+            SweepDataCenters = ["Dynamis"],
+            ExpiresInSeconds = 90,
+            Lines =
+            [
+                new MarketAcquisitionBatchLineCreateRequest
+                {
+                    ItemId = 2,
+                    ItemName = "Fire Shard",
+                    ItemKind = "Crystal",
+                    QuantityMode = "TargetQuantity",
+                    TargetQuantity = 10,
+                    MaxQuantity = 10,
+                    HqPolicy = "Either",
+                    MaxUnitPrice = 99,
+                    GilCap = 990,
+                },
+            ],
+        };
+
+        var ex = await Assert.ThrowsAsync<ArgumentException>(() =>
+            fixture.Store.CreateBatchAsync(request, CancellationToken.None));
+
+        Assert.Contains("Dynamis", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("Oceania", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task RecordLineProgressAsyncRejectsLineFromDifferentBatch()
     {
         using var fixture = await MarketAcquisitionStoreFixture.CreateAsync();

@@ -227,6 +227,85 @@ public sealed class MarketAcquisitionPlannerTests
     }
 
     [Fact]
+    public void BuildPlan_AllWorldSweepCanResolveOceaniaRegion()
+    {
+        var request = CreateRequest(
+            quantity: 0,
+            worldMode: "AllWorldSweep",
+            maxUnitPrice: 100,
+            maxTotalGil: 0,
+            quantityMode: "AllBelowThreshold",
+            region: "Oceania",
+            targetWorld: "Ravana");
+
+        var plan = MarketMafioso.MarketAcquisition.MarketAcquisitionPlanner.BuildPlan(
+            request,
+            [],
+            DateTimeOffset.UnixEpoch,
+            currentWorld: "Ravana");
+
+        Assert.Equal(5, plan.WorldBatches.Count);
+        Assert.All(plan.WorldBatches, batch => Assert.Equal("Materia", batch.DataCenter));
+        Assert.Contains(plan.WorldBatches, batch => batch.WorldName == "Ravana");
+        Assert.Contains(plan.WorldBatches, batch => batch.WorldName == "Sophia");
+    }
+
+    [Fact]
+    public void BuildPlan_AllWorldSweepCanScopeEuropeDataCenters()
+    {
+        var request = CreateRequest(
+            quantity: 0,
+            worldMode: "AllWorldSweep",
+            maxUnitPrice: 100,
+            maxTotalGil: 0,
+            quantityMode: "AllBelowThreshold",
+            region: "Europe",
+            targetWorld: "Alpha") with
+        {
+            SweepScope = "DataCenters",
+            SweepDataCenters = ["Light"],
+        };
+
+        var plan = MarketMafioso.MarketAcquisition.MarketAcquisitionPlanner.BuildPlan(
+            request,
+            [],
+            DateTimeOffset.UnixEpoch,
+            currentWorld: "Alpha");
+
+        Assert.Equal(8, plan.WorldBatches.Count);
+        Assert.All(plan.WorldBatches, batch => Assert.Equal("Light", batch.DataCenter));
+        Assert.Contains(plan.WorldBatches, batch => batch.WorldName == "Alpha");
+        Assert.DoesNotContain(plan.WorldBatches, batch => batch.WorldName == "Omega");
+    }
+
+    [Fact]
+    public void BuildPlan_AllWorldSweepRejectsDataCenterOutsideRegion()
+    {
+        var request = CreateRequest(
+            quantity: 0,
+            worldMode: "AllWorldSweep",
+            maxUnitPrice: 100,
+            maxTotalGil: 0,
+            quantityMode: "AllBelowThreshold",
+            region: "Oceania",
+            targetWorld: "Ravana") with
+        {
+            SweepScope = "DataCenters",
+            SweepDataCenters = ["Dynamis"],
+        };
+
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            MarketMafioso.MarketAcquisition.MarketAcquisitionPlanner.BuildPlan(
+                request,
+                [],
+                DateTimeOffset.UnixEpoch,
+                currentWorld: "Ravana"));
+
+        Assert.Contains("Dynamis", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("Oceania", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void BuildPlan_RouteOrdersCurrentWorldThenCurrentDataCenterBeforeOtherDataCenters()
     {
         var request = CreateRequest(quantity: 1_500, maxUnitPrice: 2_000, maxTotalGil: 0, targetWorld: "Siren");
@@ -382,14 +461,15 @@ public sealed class MarketAcquisitionPlannerTests
         uint maxUnitPrice = 100,
         uint maxTotalGil = 1_000,
         string hqPolicy = "Either",
-        string quantityMode = "TargetQuantity") =>
+        string quantityMode = "TargetQuantity",
+        string region = "North-America") =>
         new()
         {
             Id = "request-1",
             Status = "AcceptedInPlugin",
             TargetCharacterName = "Wei Ning",
             TargetWorld = targetWorld,
-            Region = "North-America",
+            Region = region,
             ItemId = 2,
             ItemName = "Fire Shard",
             QuantityMode = quantityMode,

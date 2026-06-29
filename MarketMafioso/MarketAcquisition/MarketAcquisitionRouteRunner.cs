@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace MarketMafioso.MarketAcquisition;
 
@@ -10,6 +12,9 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
     private static readonly TimeSpan ItemSearchAutomationTimeout = TimeSpan.FromSeconds(15);
 
     private readonly string diagnosticsDirectory;
+    private readonly UniversalisFreshnessVerifierDelegate? universalisFreshnessVerifier;
+    private readonly Dictionary<FreshnessObservationKey, FreshnessObservation> freshnessObservations = [];
+    private readonly HashSet<FreshnessObservationKey> verifiedFreshnessObservations = [];
     private MarketAcquisitionGuidedRouteSession? session;
     private MarketAcquisitionRouteDiagnostics diagnostics = MarketAcquisitionRouteDiagnostics.Disabled;
     private bool diagnosticsRequested;
@@ -19,11 +24,19 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
     private string? lastWorldSummarySignature;
 
     public MarketAcquisitionRouteRunner(string diagnosticsDirectory)
+        : this(diagnosticsDirectory, null)
+    {
+    }
+
+    public MarketAcquisitionRouteRunner(
+        string diagnosticsDirectory,
+        UniversalisFreshnessVerifierDelegate? universalisFreshnessVerifier)
     {
         if (string.IsNullOrWhiteSpace(diagnosticsDirectory))
             throw new ArgumentException("Diagnostics directory is required.", nameof(diagnosticsDirectory));
 
         this.diagnosticsDirectory = diagnosticsDirectory;
+        this.universalisFreshnessVerifier = universalisFreshnessVerifier;
     }
 
     public string State { get; private set; } = "Idle";
@@ -75,6 +88,8 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         itemSearchAutomationStartedUtc = null;
         LatestWorldCompletionSummary = null;
         lastWorldSummarySignature = null;
+        freshnessObservations.Clear();
+        verifiedFreshnessObservations.Clear();
         StatusMessage = $"Route started. Next stop: {session.ActiveStop?.WorldName}.";
         diagnostics.Record(
             "route-start",
@@ -158,6 +173,8 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         LastDiagnosticFilePath = null;
         LatestWorldCompletionSummary = null;
         lastWorldSummarySignature = null;
+        freshnessObservations.Clear();
+        verifiedFreshnessObservations.Clear();
     }
 
     public MarketAcquisitionRouteActionResult ExecutePendingTravelCommand(Func<string, bool> processCommand)
@@ -614,6 +631,9 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
                 ["totalGil"] = totalGil.ToString(),
                 ["result"] = result,
             });
+
+        if (result.Equals("Purchased", StringComparison.OrdinalIgnoreCase))
+            RecordFreshnessObservation(lineId, itemName, worldName, listingId);
     }
 
     public void RecordWorldSummary(MarketAcquisitionWorldCompletionSummary summary)
@@ -686,6 +706,64 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
             : MarketAcquisitionRouteActionResult.Fail(result.Message);
     }
 
+    public async Task<MarketAcquisitionRouteActionResult> VerifyLatestWorldFreshnessAsync(
+        CancellationToken cancellationToken)
+    {
+        if (universalisFreshnessVerifier == null)
+            return MarketAcquisitionRouteActionResult.Ok("Universalis freshness verification is not configured.");
+
+        var summary = LatestWorldCompletionSummary;
+        if (summary == null)
+            return MarketAcquisitionRouteActionResult.Ok("No completed world is available for Universalis freshness verification.");
+
+        var observations = freshnessObservations
+            .Where(pair => pair.Key.WorldName.Equals(summary.WorldName, StringComparison.OrdinalIgnoreCase))
+            .Where(pair => !verifiedFreshnessObservations.Contains(pair.Key))
+            .Select(pair => pair.Value)
+            .ToList();
+
+        if (observations.Count == 0)
+            return MarketAcquisitionRouteActionResult.Ok($"No purchased listings require Universalis freshness verification for {summary.WorldName}.");
+
+        foreach (var observation in observations)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            UniversalisFreshnessResult result;
+            try
+            {
+                result = await universalisFreshnessVerifier(
+                    observation.WorldName,
+                    observation.ItemId,
+                    observation.ObservedAtUtc,
+                    observation.ListingIds,
+                    cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                result = UniversalisFreshnessResult.Unavailable(ex.Message);
+            }
+
+            diagnostics.Record(
+                "universalis-freshness",
+                $"{result.Status}: {FormatFreshnessItem(observation)} on {observation.WorldName}. {result.Message}",
+                new Dictionary<string, string?>
+                {
+                    ["world"] = observation.WorldName,
+                    ["itemId"] = observation.ItemId.ToString(),
+                    ["itemName"] = observation.ItemName,
+                    ["status"] = result.Status,
+                    ["message"] = result.Message,
+                    ["observedAtUtc"] = observation.ObservedAtUtc.ToString("O"),
+                    ["listingIds"] = string.Join(", ", observation.ListingIds),
+                });
+            verifiedFreshnessObservations.Add(new FreshnessObservationKey(observation.WorldName, observation.ItemId));
+        }
+
+        return MarketAcquisitionRouteActionResult.Ok(
+            $"Recorded Universalis freshness for {observations.Count:N0} item(s) on {summary.WorldName}.");
+    }
+
     public MarketAcquisitionRouteActionResult FailRoute(string message, Exception? exception = null)
     {
         State = "Failed";
@@ -727,7 +805,6 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         standaloneInputCaptureLogOpen = false;
         itemSearchAutomationStartedUtc = null;
         diagnostics.Complete(message);
-        CloseDiagnostics();
         return MarketAcquisitionRouteActionResult.Ok(message);
     }
 
@@ -797,7 +874,75 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
             ? subtask.ItemId.ToString()
             : $"{subtask.ItemName} ({subtask.ItemId})";
     }
+
+    private void RecordFreshnessObservation(
+        string lineId,
+        string? itemName,
+        string worldName,
+        string listingId)
+    {
+        if (string.IsNullOrWhiteSpace(worldName) ||
+            string.IsNullOrWhiteSpace(listingId))
+        {
+            return;
+        }
+
+        var itemId = ResolveLineItemId(lineId);
+        if (itemId == 0)
+            return;
+
+        var key = new FreshnessObservationKey(worldName, itemId);
+        if (!freshnessObservations.TryGetValue(key, out var observation))
+        {
+            observation = new FreshnessObservation(worldName, itemId, itemName);
+            freshnessObservations.Add(key, observation);
+        }
+
+        observation.ObservedAtUtc = DateTimeOffset.UtcNow;
+        observation.ListingIds.Add(listingId);
+    }
+
+    private uint ResolveLineItemId(string lineId)
+    {
+        if (string.IsNullOrWhiteSpace(lineId))
+            return session?.ActiveStop?.ActiveItemSubtask?.ItemId ?? 0;
+
+        return session?.ActiveStop?.LineStates.FirstOrDefault(line =>
+                   line.LineId.Equals(lineId, StringComparison.Ordinal))?.ItemId ??
+               session?.ActiveStop?.ActiveItemSubtask?.ItemId ??
+               0;
+    }
+
+    private static string FormatFreshnessItem(FreshnessObservation observation) =>
+        string.IsNullOrWhiteSpace(observation.ItemName)
+            ? $"item {observation.ItemId}"
+            : $"{observation.ItemName} ({observation.ItemId})";
+
+    private sealed record FreshnessObservationKey(string WorldName, uint ItemId);
+
+    private sealed class FreshnessObservation
+    {
+        public FreshnessObservation(string worldName, uint itemId, string? itemName)
+        {
+            WorldName = worldName;
+            ItemId = itemId;
+            ItemName = itemName;
+        }
+
+        public string WorldName { get; }
+        public uint ItemId { get; }
+        public string? ItemName { get; }
+        public DateTimeOffset ObservedAtUtc { get; set; }
+        public HashSet<string> ListingIds { get; } = new(StringComparer.Ordinal);
+    }
 }
+
+public delegate Task<UniversalisFreshnessResult> UniversalisFreshnessVerifierDelegate(
+    string worldName,
+    uint itemId,
+    DateTimeOffset observedAtUtc,
+    IReadOnlyCollection<string> purchasedListingIds,
+    CancellationToken cancellationToken);
 
 public sealed record MarketAcquisitionRouteActionResult
 {

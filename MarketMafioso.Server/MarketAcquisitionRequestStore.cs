@@ -8,6 +8,15 @@ namespace MarketMafioso.Server;
 public sealed class MarketAcquisitionRequestStore
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private static readonly IReadOnlyDictionary<string, string[]> SupportedSweepDataCenters =
+        new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["North America"] = ["Aether", "Primal", "Crystal", "Dynamis"],
+            ["Europe"] = ["Chaos", "Light"],
+            ["Japan"] = ["Elemental", "Gaia", "Mana", "Meteor"],
+            ["Oceania"] = ["Materia"],
+        };
+
     private readonly string connectionString;
     private readonly int minimumExpirySeconds;
     private readonly int claimExpirySeconds;
@@ -2669,6 +2678,7 @@ public sealed class MarketAcquisitionRequestStore
             throw new ArgumentException("Target world is required.", nameof(request));
         if (string.IsNullOrWhiteSpace(request.Region))
             throw new ArgumentException("Region is required.", nameof(request));
+        var region = NormalizeSupportedRegion(request.Region, nameof(request));
         if (request.ItemId == 0)
             throw new ArgumentException("Item id is required.", nameof(request));
         if (request.MaxUnitPrice == 0)
@@ -2681,7 +2691,7 @@ public sealed class MarketAcquisitionRequestStore
             throw new ArgumentException("Quantity mode must be TargetQuantity or AllBelowThreshold.", nameof(request));
         if (request.QuantityMode == "TargetQuantity" && request.Quantity == 0)
             throw new ArgumentException("Target quantity is required.", nameof(request));
-        ValidateSweepScope(request.WorldMode, request.SweepScope, request.SweepDataCenters, nameof(request));
+        ValidateSweepScope(region, request.WorldMode, request.SweepScope, request.SweepDataCenters, nameof(request));
     }
 
     private static void ValidateBatchCreateRequest(MarketAcquisitionBatchCreateRequest request)
@@ -2696,17 +2706,19 @@ public sealed class MarketAcquisitionRequestStore
             throw new ArgumentException("Target world is required.", nameof(request));
         if (string.IsNullOrWhiteSpace(request.Region))
             throw new ArgumentException("Region is required.", nameof(request));
+        var region = NormalizeSupportedRegion(request.Region, nameof(request));
         if (string.IsNullOrWhiteSpace(request.WorldMode))
             throw new ArgumentException("World mode is required.", nameof(request));
         if (request.Lines.Count == 0)
             throw new ArgumentException("At least one acquisition line is required.", nameof(request));
-        ValidateSweepScope(request.WorldMode, request.SweepScope, request.SweepDataCenters, nameof(request));
+        ValidateSweepScope(region, request.WorldMode, request.SweepScope, request.SweepDataCenters, nameof(request));
 
         foreach (var line in request.Lines)
             ValidateBatchLineCreateRequest(line);
     }
 
     private static void ValidateSweepScope(
+        string region,
         string worldMode,
         string sweepScope,
         IReadOnlyList<string> sweepDataCenters,
@@ -2721,6 +2733,25 @@ public sealed class MarketAcquisitionRequestStore
             throw new ArgumentException("Sweep scope must be Region, CurrentDataCenter, or DataCenters.", argumentName);
         if (sweepScope == "DataCenters" && sweepDataCenters.Count == 0)
             throw new ArgumentException("At least one data center is required for selected data-center sweep.", argumentName);
+        if (sweepScope != "DataCenters")
+            return;
+
+        var supportedDataCenters = SupportedSweepDataCenters[region];
+        var unsupported = sweepDataCenters
+            .FirstOrDefault(dataCenter => !supportedDataCenters.Contains(dataCenter, StringComparer.OrdinalIgnoreCase));
+        if (unsupported != null)
+            throw new ArgumentException($"{unsupported} is not a {region} data center.", argumentName);
+    }
+
+    private static string NormalizeSupportedRegion(string region, string argumentName)
+    {
+        var normalized = region.Trim();
+        if (normalized.Equals("North-America", StringComparison.OrdinalIgnoreCase))
+            normalized = "North America";
+
+        return SupportedSweepDataCenters.ContainsKey(normalized)
+            ? normalized
+            : throw new ArgumentException($"{region} is not a supported market acquisition region.", argumentName);
     }
 
     private static void ValidateBatchLineCreateRequest(MarketAcquisitionBatchLineCreateRequest line)

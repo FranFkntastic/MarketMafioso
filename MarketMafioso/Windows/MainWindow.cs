@@ -137,13 +137,16 @@ public class MainWindow : Window, IDisposable
         this.log = log;
         acquisitionClient = new MarketAcquisitionRequestClient(acquisitionHttpClient);
         acquisitionPlanSource = new UniversalisMarketAcquisitionPlanSource(acquisitionHttpClient);
+        var universalisFreshnessVerifier = new UniversalisMarketFreshnessVerifier(acquisitionHttpClient);
         marketBoardListingReader = new MarketBoardListingReader(Plugin.GameGui);
         marketBoardItemSearchDriver = new MarketBoardItemSearchDriver(Plugin.GameGui);
         marketBoardInputCaptureReader = new MarketBoardInputCaptureReader(Plugin.GameGui);
         marketBoardPurchaseAdapter = new DalamudMarketBoardPurchaseAdapter(Plugin.GameGui, log);
         marketBoardPurchaseExecutor = new MarketBoardPurchaseExecutor(marketBoardPurchaseAdapter);
         this.marketBoardApproachService = marketBoardApproachService;
-        marketAcquisitionRouteRunner = new MarketAcquisitionRouteRunner(marketAcquisitionRouteDiagnosticsDirectory);
+        marketAcquisitionRouteRunner = new MarketAcquisitionRouteRunner(
+            marketAcquisitionRouteDiagnosticsDirectory,
+            universalisFreshnessVerifier.VerifyAsync);
 
         SizeConstraints = new WindowSizeConstraints
         {
@@ -1024,6 +1027,27 @@ public class MainWindow : Window, IDisposable
 
         activeWorldPurchaseBatchWorld = marketAcquisitionRouteRunner.ActiveStop?.WorldName;
         ReportGuidedRouteProgress();
+        if (result.Success &&
+            marketAcquisitionRouteRunner.LatestWorldCompletionSummary?.WorldName.Equals(currentWorld, StringComparison.OrdinalIgnoreCase) == true)
+        {
+            ReportUniversalisFreshnessAsync();
+        }
+    }
+
+    private void ReportUniversalisFreshnessAsync()
+    {
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await marketAcquisitionRouteRunner.VerifyLatestWorldFreshnessAsync(CancellationToken.None)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                log.Warning(ex, "[MarketMafioso] Unable to record Universalis freshness diagnostics.");
+            }
+        });
     }
 
     private void MonitorMarketBoardPurchase()

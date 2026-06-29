@@ -1340,7 +1340,7 @@ Actual: focused route-session/planner tests passed, and `dotnet build "MarketMaf
 - Modify: `MarketMafioso.Server/MarketAcquisitionRequestStore.cs`
 - Test: `MarketMafioso.Tests/MarketAcquisition/MarketAcquisitionPlannerTests.cs`
 
-- [ ] **Step 1: Add region catalog**
+- [x] **Step 1: Add region catalog**
 
 Create or extend a catalog:
 
@@ -1377,9 +1377,9 @@ public static class MarketAcquisitionWorldCatalog
 }
 ```
 
-Verify world names against the current XIV world list before committing this task.
+Verified world names against the current Lodestone world status list before committing this task.
 
-- [ ] **Step 2: Replace North-America-only sweep resolver**
+- [x] **Step 2: Replace North-America-only sweep resolver**
 
 Change resolver shape:
 
@@ -1400,11 +1400,11 @@ private static IReadOnlyList<string> ResolveSweepWorlds(MarketAcquisitionRequest
 }
 ```
 
-- [ ] **Step 3: Dashboard region choices**
+- [x] **Step 3: Dashboard region choices**
 
 Allow region selector to include supported regions. If non-NA route execution is not verified, annotate non-native regions in UI copy as advanced. Do not make Oceania part of a North America default.
 
-- [ ] **Step 4: Add planner tests for Europe/Oceania**
+- [x] **Step 4: Add planner tests for Europe/Oceania**
 
 Add tests:
 
@@ -1419,7 +1419,7 @@ public void BuildPlan_AllWorldSweepCanResolveOceaniaRegion()
 }
 ```
 
-- [ ] **Step 5: Run planner tests**
+- [x] **Step 5: Run planner tests**
 
 Run:
 
@@ -1428,6 +1428,8 @@ dotnet test "MarketMafioso.Tests\MarketMafioso.Tests.csproj" -c Debug --filter "
 ```
 
 Expected: tests pass.
+
+Actual: focused planner tests passed 20/20. Focused server settings/store tests passed 7/7. Dashboard project build passed with 0 warnings and 0 errors.
 
 ---
 
@@ -1439,7 +1441,7 @@ Expected: tests pass.
 - Modify: `MarketMafioso/MarketAcquisition/MarketAcquisitionRouteRunner.cs`
 - Modify: `MarketMafioso/Windows/MainWindow.cs`
 
-- [ ] **Step 1: Add freshness tests**
+- [x] **Step 1: Add freshness tests**
 
 Add:
 
@@ -1483,7 +1485,7 @@ public async Task VerifyAsyncReturnsUnconfirmedWhenListingStillPresent()
 }
 ```
 
-- [ ] **Step 2: Implement verifier**
+- [x] **Step 2: Implement verifier**
 
 Create:
 
@@ -1531,11 +1533,11 @@ public sealed class UniversalisMarketFreshnessVerifier
 }
 ```
 
-- [ ] **Step 3: Run freshness verification at end of each world stop**
+- [x] **Step 3: Run freshness verification at end of each world stop**
 
 After world completion summary is recorded, run verifier once per touched `world + itemId`. Log `Confirmed`, `Unconfirmed`, or `Unavailable`. Do not block route progress.
 
-- [ ] **Step 4: Run freshness tests**
+- [x] **Step 4: Run freshness tests**
 
 Run:
 
@@ -1544,6 +1546,8 @@ dotnet test "MarketMafioso.Tests\MarketMafioso.Tests.csproj" -c Debug --filter "
 ```
 
 Expected: tests pass.
+
+Actual: verifier tests passed 2/2. Focused route-runner plus verifier tests passed 33/33. Freshness checks are diagnostic-only, keyed by purchased listing ids per completed world/item, and use the existing plugin acquisition `HttpClient`.
 
 ---
 

@@ -6,54 +6,6 @@ namespace MarketMafioso.MarketAcquisition;
 
 public static class MarketAcquisitionPlanner
 {
-    private static readonly string[] NorthAmericaDataCenterOrder =
-    [
-        "Aether",
-        "Primal",
-        "Crystal",
-        "Dynamis",
-    ];
-
-    private static readonly IReadOnlyDictionary<string, string> NorthAmericaDataCenters =
-        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-        {
-            ["Adamantoise"] = "Aether",
-            ["Cactuar"] = "Aether",
-            ["Faerie"] = "Aether",
-            ["Gilgamesh"] = "Aether",
-            ["Jenova"] = "Aether",
-            ["Midgardsormr"] = "Aether",
-            ["Sargatanas"] = "Aether",
-            ["Siren"] = "Aether",
-
-            ["Behemoth"] = "Primal",
-            ["Excalibur"] = "Primal",
-            ["Exodus"] = "Primal",
-            ["Famfrit"] = "Primal",
-            ["Hyperion"] = "Primal",
-            ["Lamia"] = "Primal",
-            ["Leviathan"] = "Primal",
-            ["Ultros"] = "Primal",
-
-            ["Balmung"] = "Crystal",
-            ["Brynhildr"] = "Crystal",
-            ["Coeurl"] = "Crystal",
-            ["Diabolos"] = "Crystal",
-            ["Goblin"] = "Crystal",
-            ["Malboro"] = "Crystal",
-            ["Mateus"] = "Crystal",
-            ["Zalera"] = "Crystal",
-
-            ["Cuchulainn"] = "Dynamis",
-            ["Golem"] = "Dynamis",
-            ["Halicarnassus"] = "Dynamis",
-            ["Kraken"] = "Dynamis",
-            ["Maduin"] = "Dynamis",
-            ["Marilith"] = "Dynamis",
-            ["Rafflesia"] = "Dynamis",
-            ["Seraph"] = "Dynamis",
-        };
-
     public static MarketAcquisitionPlan BuildPlan(
         MarketAcquisitionRequestView request,
         IEnumerable<MarketAcquisitionListing> listings,
@@ -313,61 +265,29 @@ public static class MarketAcquisitionPlanner
     }
 
     public static string ResolveNorthAmericaDataCenter(string worldName)
-    {
-        if (string.IsNullOrWhiteSpace(worldName))
-            throw new InvalidOperationException("World name is required before route data center sorting.");
-
-        return NorthAmericaDataCenters.TryGetValue(worldName.Trim(), out var dataCenter)
-            ? dataCenter
-            : throw new InvalidOperationException($"World {worldName} is not mapped to a North America data center.");
-    }
+        => MarketAcquisitionWorldCatalog.ResolveDataCenter(worldName);
 
     public static IReadOnlyList<string> ResolveNorthAmericaWorldsForDataCenters(IEnumerable<string> dataCenters)
-    {
-        ArgumentNullException.ThrowIfNull(dataCenters);
-
-        var normalizedDataCenters = dataCenters
-            .Select(NormalizeNorthAmericaDataCenterName)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        if (normalizedDataCenters.Count == 0)
-            throw new InvalidOperationException("At least one data center is required for a scoped all-world sweep.");
-
-        return NorthAmericaDataCenters
-            .Where(entry => normalizedDataCenters.Contains(entry.Value))
-            .Select(entry => entry.Key)
-            .ToList();
-    }
+        => MarketAcquisitionWorldCatalog.ResolveWorldsForDataCenters("North America", dataCenters);
 
     private static IReadOnlyList<string> ResolveSweepWorlds(
         MarketAcquisitionRequestView request,
         string? currentWorld)
     {
-        if (!request.Region.Equals("North America", StringComparison.OrdinalIgnoreCase) &&
-            !request.Region.Equals("North-America", StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException("All-world sweep currently supports the North America region only.");
-
+        var regionDataCenters = MarketAcquisitionWorldCatalog.ResolveDataCenters(request.Region);
         var scope = string.IsNullOrWhiteSpace(request.SweepScope)
             ? "Region"
             : request.SweepScope.Trim();
 
         return scope switch
         {
-            "Region" => NorthAmericaDataCenters.Keys.ToList(),
-            "CurrentDataCenter" => ResolveNorthAmericaWorldsForDataCenters(
-                [ResolveNorthAmericaDataCenter(string.IsNullOrWhiteSpace(currentWorld) ? request.TargetWorld : currentWorld)]),
-            "DataCenters" => ResolveNorthAmericaWorldsForDataCenters(request.SweepDataCenters),
+            "Region" => regionDataCenters.Values.SelectMany(worlds => worlds).ToArray(),
+            "CurrentDataCenter" => MarketAcquisitionWorldCatalog.ResolveWorldsForDataCenters(
+                request.Region,
+                [MarketAcquisitionWorldCatalog.ResolveDataCenter(string.IsNullOrWhiteSpace(currentWorld) ? request.TargetWorld : currentWorld)]),
+            "DataCenters" => MarketAcquisitionWorldCatalog.ResolveWorldsForDataCenters(request.Region, request.SweepDataCenters),
             _ => throw new InvalidOperationException($"Unknown all-world sweep scope {request.SweepScope}."),
         };
-    }
-
-    private static string NormalizeNorthAmericaDataCenterName(string dataCenter)
-    {
-        if (string.IsNullOrWhiteSpace(dataCenter))
-            throw new InvalidOperationException("Data center name is required for a scoped all-world sweep.");
-
-        var normalized = NorthAmericaDataCenterOrder
-            .FirstOrDefault(candidate => candidate.Equals(dataCenter.Trim(), StringComparison.OrdinalIgnoreCase));
-        return normalized ?? throw new InvalidOperationException($"{dataCenter} is not a North America data center.");
     }
 
     private static MarketAcquisitionWorldItemSubtask BuildWorldSubtask(
@@ -415,7 +335,7 @@ public static class MarketAcquisitionPlanner
             ItemId = line.ItemId,
             ItemName = line.ItemName,
             WorldName = worldName,
-            DataCenter = ResolveNorthAmericaDataCenter(worldName),
+            DataCenter = MarketAcquisitionWorldCatalog.ResolveDataCenter(worldName),
             QuantityMode = line.QuantityMode,
             RequestedQuantity = line.Quantity,
             HqPolicy = line.HqPolicy,
@@ -452,7 +372,7 @@ public static class MarketAcquisitionPlanner
         return new MarketAcquisitionWorldBatch
         {
             WorldName = worldName,
-            DataCenter = ResolveNorthAmericaDataCenter(worldName),
+            DataCenter = MarketAcquisitionWorldCatalog.ResolveDataCenter(worldName),
             PlannedQuantity = (uint)orderedSubtasks.Sum(subtask => subtask.PlannedQuantity),
             PlannedGil = (uint)orderedSubtasks.Sum(subtask => subtask.PlannedGil),
             ExceedsRequestedQuantity = orderedSubtasks.Any(subtask => subtask.ExceedsRequestedQuantity),
@@ -478,14 +398,14 @@ public static class MarketAcquisitionPlanner
         if (string.IsNullOrWhiteSpace(currentWorld))
             return batches;
 
-        var currentDataCenter = ResolveNorthAmericaDataCenter(currentWorld);
+        var currentDataCenter = MarketAcquisitionWorldCatalog.ResolveDataCenter(currentWorld);
         var indexedBatches = batches
             .Select((batch, index) => new
             {
                 Batch = batch,
                 Index = index,
                 DataCenter = string.IsNullOrWhiteSpace(batch.DataCenter)
-                    ? ResolveNorthAmericaDataCenter(batch.WorldName)
+                    ? MarketAcquisitionWorldCatalog.ResolveDataCenter(batch.WorldName)
                     : batch.DataCenter,
             })
             .ToList();

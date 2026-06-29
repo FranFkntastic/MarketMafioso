@@ -25,7 +25,10 @@
                         </MudItem>
                         <MudItem xs="12" md="6">
                             <MudSelect T="string" @bind-Value="_defaultRegion" Label="Default region" Variant="Variant.Outlined" Margin="Margin.Dense">
-                                <MudSelectItem Value="@("North America")">North America</MudSelectItem>
+                                @foreach (var region in SupportedRegions)
+                                {
+                                    <MudSelectItem Value="@region">@region</MudSelectItem>
+                                }
                             </MudSelect>
                         </MudItem>
                         <MudItem xs="12" md="6">
@@ -167,6 +170,14 @@
     private string _settingsStatus = string.Empty;
     private string _snapshotStatus = string.Empty;
 
+    private static readonly string[] SupportedRegions =
+    [
+        "North America",
+        "Europe",
+        "Japan",
+        "Oceania",
+    ];
+
     private string NewestSnapshotLabel => _snapshots.Count == 0
         ? "-"
         : _snapshots.Max(snapshot => snapshot.ReceivedAt).ToLocalTime().ToString("yyyy-MM-dd HH:mm");
@@ -194,9 +205,17 @@
         _defaultCharacterId = settings.DefaultCharacterId;
         if (_defaultCharacterId != null && _characters.All(character => character.Id != _defaultCharacterId))
             _defaultCharacterId = null;
-        _defaultRegion = settings.DefaultRegion;
+        _defaultRegion = NormalizeRegion(settings.DefaultRegion);
         _defaultWorldMode = settings.DefaultWorldMode;
         _defaultPickupExpiresSeconds = settings.DefaultPickupExpiresSeconds;
+    }
+
+    private static string NormalizeRegion(string region)
+    {
+        if (region.Equals("North-America", StringComparison.OrdinalIgnoreCase))
+            return "North America";
+
+        return SupportedRegions.Contains(region, StringComparer.OrdinalIgnoreCase) ? region : "North America";
     }
 
     private async Task SaveSettingsAsync()

@@ -86,6 +86,59 @@ public sealed class MarketAcquisitionRouteRunnerTests
     }
 
     [Fact]
+    public async Task VerifyLatestWorldFreshnessAsync_RecordsPurchasedListingResultsForCompletedWorld()
+    {
+        var directory = CreateTempDirectory();
+        var calls = new List<(string WorldName, uint ItemId, string[] ListingIds)>();
+        using var runner = new MarketMafioso.MarketAcquisition.MarketAcquisitionRouteRunner(
+            directory,
+            (worldName, itemId, _, purchasedListingIds, _) =>
+            {
+                calls.Add((worldName, itemId, purchasedListingIds.ToArray()));
+                return Task.FromResult(MarketMafioso.MarketAcquisition.UniversalisFreshnessResult.Confirmed("fresh"));
+            });
+        runner.Start(MarketAcquisitionTestPlans.MultiLineSingleWorld(), enableDiagnostics: true);
+        runner.RecordCurrentWorld("Siren");
+
+        runner.RecordProbe("Siren", MarketAcquisitionTestPlans.ReadyCandidatePlan(10, 1_000));
+        runner.RecordPurchaseAudit(
+            lineId: "batch-1-line-1",
+            itemName: "Fire Shard",
+            worldName: "Siren",
+            listingId: "listing-fire",
+            retainerId: "retainer-fire",
+            quantity: 10,
+            totalGil: 1_000,
+            result: "Purchased");
+        runner.RecordWorldPurchaseBatchComplete("Siren", 10, 1_000);
+
+        runner.RecordProbe("Siren", MarketAcquisitionTestPlans.ReadyCandidatePlan(20, 2_000));
+        runner.RecordPurchaseAudit(
+            lineId: "batch-1-line-2",
+            itemName: "Lightning Shard",
+            worldName: "Siren",
+            listingId: "listing-lightning",
+            retainerId: "retainer-lightning",
+            quantity: 20,
+            totalGil: 2_000,
+            result: "Purchased");
+        runner.RecordWorldPurchaseBatchComplete("Siren", 20, 2_000);
+
+        var result = await runner.VerifyLatestWorldFreshnessAsync(CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Equal("Completed", runner.State);
+        Assert.Equal(["listing-fire"], calls.Single(call => call.ItemId == 2).ListingIds);
+        Assert.Equal(["listing-lightning"], calls.Single(call => call.ItemId == 4).ListingIds);
+        var text = ReadLog(runner.LastDiagnosticFilePath!);
+        Assert.Contains("universalis-freshness", text, StringComparison.Ordinal);
+        Assert.Contains("itemId: 2", text, StringComparison.Ordinal);
+        Assert.Contains("listing-fire", text, StringComparison.Ordinal);
+        Assert.Contains("itemId: 4", text, StringComparison.Ordinal);
+        Assert.Contains("listing-lightning", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ExecutePendingTravelCommand_SendsCurrentStopCommand()
     {
         using var runner = CreateRunner();

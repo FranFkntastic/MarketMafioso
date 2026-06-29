@@ -54,6 +54,28 @@ public sealed class DashboardSettingsEndpointTests
     }
 
     [Fact]
+    public async Task DashboardSettings_CanSaveNonNorthAmericaDefaultRegion()
+    {
+        await using var application = CreateApplication();
+        using var client = application.CreateClient();
+        await LoginAsync(client);
+
+        var save = await client.PutAsJsonAsync("/api/settings/dashboard", new DashboardSettingsUpdate
+        {
+            DefaultCharacterId = null,
+            DefaultRegion = "Oceania",
+            DefaultWorldMode = "AllWorldSweep",
+            DefaultPickupExpiresSeconds = 900,
+        });
+        save.EnsureSuccessStatusCode();
+        var loaded = await client.GetFromJsonAsync<DashboardSettingsView>("/api/settings/dashboard");
+
+        Assert.NotNull(loaded);
+        Assert.Equal("Oceania", loaded.DefaultRegion);
+        Assert.Equal("AllWorldSweep", loaded.DefaultWorldMode);
+    }
+
+    [Fact]
     public async Task DashboardSettings_RejectsUnknownDefaultCharacter()
     {
         await using var application = CreateApplication();
