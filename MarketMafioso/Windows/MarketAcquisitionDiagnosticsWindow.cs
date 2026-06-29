@@ -135,8 +135,21 @@ public sealed class MarketAcquisitionDiagnosticsWindow : Window
         ImGui.TextColored(
             color,
             $"Pagination: {probeResult.Status} (request {paginationState.CurrentRequestId} -> {paginationState.NextRequestId})");
+        ImGui.SameLine();
+        _ = ImGuiUi.Button("Probe Next Listing Page", false);
         if (readResult.IsListingCountTruncated)
+        {
             ImGui.TextWrapped(probeResult.Message);
+            ImGui.TextColored(
+                ColMuted,
+                probeResult.CanAttemptLiveProbe
+                    ? "Next-page probing is intentionally disabled until live capture proves which market-board action advances the cache safely."
+                    : "Next-page probing is unavailable for this read state.");
+        }
+        else
+        {
+            ImGui.TextColored(ColMuted, "No deeper page is needed for the current read.");
+        }
     }
 
     private static void DrawPlanDecisions(MarketAcquisitionPlan? plan)

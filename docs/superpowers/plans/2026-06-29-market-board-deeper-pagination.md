@@ -193,7 +193,7 @@ Run the same `dotnet test` command and confirm all pagination state tests pass.
 
 ## Task 3: Add A Non-Purchasing Pagination Probe
 
-Status: Partial. The pure classifier is complete in `MarketMafioso/MarketAcquisition/MarketBoardPaginationProbe.cs` with tests in `MarketMafioso.Tests/MarketAcquisition/MarketBoardPaginationProbeTests.cs`, and the diagnostics window now displays the probe classification for the current read result. The diagnostics-window button and any live page-request attempt remain intentionally unimplemented until Task 1 captures prove the safe request transition.
+Status: Partial. The pure classifier is complete in `MarketMafioso/MarketAcquisition/MarketBoardPaginationProbe.cs` with tests in `MarketMafioso.Tests/MarketAcquisition/MarketBoardPaginationProbeTests.cs`, and the diagnostics window now displays the probe classification plus a disabled next-page probe control for the current read result. Any live page-request attempt remains intentionally unimplemented until Task 1 captures prove the safe request transition.
 
 **Files:**
 - Create: `MarketMafioso/MarketAcquisition/MarketBoardPaginationProbe.cs`
@@ -225,9 +225,9 @@ public sealed record MarketBoardPaginationProbeResult
 }
 ```
 
-- [ ] **Step 3: Surface probe result in diagnostics**
+- [x] **Step 3: Surface probe result in diagnostics**
 
-Add a diagnostics-window button labeled `Probe Next Listing Page`. Show the result under the live market-board diagnostics. The button must be disabled unless the current read result is truncated.
+Add a diagnostics-window button labeled `Probe Next Listing Page`. Show the result under the live market-board diagnostics. The control currently stays disabled and explains that live page requests are gated on capture evidence.
 
 - [x] **Step 4: Verify no route behavior changes**
 
