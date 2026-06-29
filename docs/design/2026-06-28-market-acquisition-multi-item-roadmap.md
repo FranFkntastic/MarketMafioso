@@ -4,6 +4,8 @@ Design source: `docs/design/2026-06-28-market-acquisition-multi-item-batches.md`
 
 Implementation plan: `docs/superpowers/plans/2026-06-28-market-acquisition-multi-item-batches.md`
 
+Current sprint handoff: `docs/design/2026-06-29-market-acquisition-sprint-handoff.md`
+
 ## Goal
 
 Promote Market Acquisition from single-item request execution to multi-item batch execution.

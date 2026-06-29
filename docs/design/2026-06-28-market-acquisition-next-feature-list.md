@@ -20,6 +20,7 @@ The normal Universalis update path remains XIVLauncher/Dalamud observing real ma
 - The dashboard acquisition board now defaults to active requests, has an archive view for terminal batches, and can reuse prior one-line or multi-line batches as composer drafts with `Run again`.
 - Server-side route-log indexing remains future convenience work. The dashboard settings diagnostics view explicitly notes that detailed route logs are currently client-local until the plugin uploads sanitized route summaries.
 - Dev plugin and dev receiver/dashboard were both deployed from `c055e4a` on 2026-06-29 after focused acquisition tests and dashboard build passed.
+- Sprint handoff state is summarized in `2026-06-29-market-acquisition-sprint-handoff.md`, including deployed plugin manifest/hash, completed source work, live-only gates, and the next deeper-pagination capture procedure.
 
 ## Paper Stack
 
@@ -28,6 +29,7 @@ This document is the active holding list for the next feature track. It should n
 - `2026-06-25-market-acquisition-roadmap.md` is historical for the single-item proof track and points at the active follow-up tracks.
 - `2026-06-28-market-acquisition-multi-item-batches.md` is the durable model/spec for batch, line, attempt, route stop, and subtask semantics.
 - `2026-06-28-market-acquisition-multi-item-roadmap.md` is the active roadmap for finishing multi-item execution.
+- `2026-06-29-market-acquisition-sprint-handoff.md` is the current short-form handoff for what was completed during the sprint and what remains live-only.
 - This document is the queue of follow-up features after the multi-item foundation, plus investigation notes for features that may need to feed back into that roadmap.
 
 When a feature here depends on unfinished multi-item foundation work, it should say so explicitly instead of pretending the dependent data already exists.
