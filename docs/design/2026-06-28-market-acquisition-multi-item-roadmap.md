@@ -126,17 +126,17 @@ Exit criteria:
 
 Current caveat:
 
-- The route monitor can search/probe/purchase the active stop's item subtasks and can advance from one item to the next on the same world. Live validation should continue to focus on stale search-state regression, candidate reuse, and opportunistic mid-flight expansion.
+- The route monitor can search/probe/purchase the active stop's item subtasks and can advance from one item to the next on the same world. Live validation should continue to focus on stale search-state regression, candidate reuse, opportunistic mid-flight expansion, and visible-cache exhaustion on very deep market-board results.
 
 ## Phase 5: Multi-Item World Execution
 
-Status: In progress
+Status: Mostly complete
 
 Objective: Execute all relevant item subtasks on a world before traveling.
 
 Exit criteria:
 
-- Route runner searches/selects/reads/purchases per item subtask. In progress: route stops now track an active item-subtask cursor, and search/probe/purchase uses that active line.
+- Route runner searches/selects/reads/purchases per item subtask. Done for the current runner: route stops track an active item-subtask cursor, and search/probe/purchase uses that active line.
 - Re-read-after-purchase behavior remains intact.
 - Listing window closure after the last listing is normal exhaustion. Existing behavior preserved for world completion; needs line-level confirmation in live testing.
 - Item B cannot reuse stale live candidates from item A. Done for the current route runner: route advancement clears search submission, read results, live candidates, reconciliation, and purchase session state before monitoring the next same-world item.
@@ -148,7 +148,7 @@ Exit criteria:
 
 Current caveat:
 
-- Opportunistic subtasks can now be probed and reconciled against live market-board rows, but live validation still needs more end-to-end testing for mid-flight plan expansion.
+- Opportunistic subtasks can now be probed and reconciled against live market-board rows, but live validation still needs more end-to-end testing for mid-flight plan expansion and for items with more than 100 visible listings.
 - The market-board listing reader now reports when the game exposes more listings than the readable `InfoProxyItemSearch` cache, and zero-purchase line advancement preserves that as `SkippedVisibleCacheExhausted`. This is truncation-aware behavior, not deeper-pagination support.
 
 ## Phase 6: Per-Line Progress And Audit
@@ -188,6 +188,6 @@ Exit criteria:
 
 - Global batch gil cap.
 - Server-side route-log indexing.
-- Deeper market-board pagination beyond the visible game listing cache. This needs a proven `InfoProxyPageInterface` / request-data contract or packet-capture-backed implementation before it is safe to automate.
+- Deeper market-board pagination beyond the visible game listing cache. Current source evidence shows `InfoProxyItemSearch` has a fixed 100-listing cache and `InfoProxyPageInterface.AddPage` is receive-side; no safe next-page request method is exposed yet. This needs a proven `InfoProxyPageInterface` / request-data contract or packet-capture-backed implementation before it is safe to automate.
 - Craft Architect quality planning integration.
 - Native travel automation beyond Lifestream.

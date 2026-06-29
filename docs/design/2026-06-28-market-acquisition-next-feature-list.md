@@ -362,7 +362,7 @@ Sorting helps catch route-planning oddities, inspect expensive worlds, and compa
 - Route optimizer transparency: show why worlds were ordered the way they were, including current-world priority, data-center grouping, planned gil, planned quantity, and sweep/probe-only stops.
 - Dashboard attempt detail timeline for world summaries and freshness checks.
 - Route log index view in the dashboard, with searchable logs and clearer route/input-capture filenames.
-- Deeper market-board pagination beyond the fixed visible listing cache, after proving the game request/page contract; until then, use explicit visible-cache-exhausted diagnostics.
+- Deeper market-board pagination beyond the fixed visible listing cache, after proving the game request/page contract. Current ClientStructs evidence exposes the fixed readable cache and receive-side `AddPage`, but not a safe next-page request API; until that contract is proven, use explicit visible-cache-exhausted diagnostics.
 - Completed batch archive and `Run again` preset flow for repeated procurement needs.
 - Inventory and gil readiness warnings before launch, kept advisory unless the route would obviously be impossible.
 - Optional route time-cost estimates once all-world sweep and opportunistic checks are stable enough to make ETA meaningful.
