@@ -95,6 +95,18 @@ public class MainWindow : Window, IDisposable
     private static readonly Vector4 ColError = new(1.00f, 0.40f, 0.40f, 1f);
     private static readonly Vector4 ColMuted = new(0.60f, 0.60f, 0.60f, 1f);
 
+    private sealed record AdvisoryPlanRow(
+        int RouteOrdinal,
+        string Item,
+        string World,
+        string DataCenter,
+        uint Quantity,
+        uint Gil,
+        uint Unit,
+        bool IsHq,
+        string Listing,
+        bool ExceedsRequestedQuantity);
+
     public MainWindow(
         Configuration config,
         HttpReporter reporter,
@@ -397,30 +409,25 @@ public class MainWindow : Window, IDisposable
 
     private void DrawClaimedAcquisitionRequest()
     {
-        ImGuiUi.SectionHeader("Claimed Request", ColHeader);
+        ImGuiUi.SectionHeader("Claimed Batch", ColHeader);
 
         if (claimedAcquisitionRequest == null)
         {
-            ImGui.TextColored(ColMuted, "No request is claimed by this plugin session.");
+            ImGui.TextColored(ColMuted, "No batch is claimed by this plugin session.");
             return;
         }
 
-        if (ImGui.BeginTable("MarketAcquisitionClaimedRequest", 2, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg))
-        {
-            DrawClaimedRequestRow("Status", claimedAcquisitionRequest.Status);
-            DrawClaimedRequestRow("Item", FormatAcquisitionItem(claimedAcquisitionRequest));
-            DrawClaimedRequestRow("Lines", FormatAcquisitionLineCount(claimedAcquisitionRequest));
-            DrawClaimedRequestRow("Mode", MarketAcquisitionQuantityModePresenter.FormatMode(claimedAcquisitionRequest.QuantityMode));
-            DrawClaimedRequestRow("Quantity", MarketAcquisitionQuantityModePresenter.FormatQuantity(claimedAcquisitionRequest.QuantityMode, claimedAcquisitionRequest.Quantity));
-            DrawClaimedRequestRow("HQ Policy", claimedAcquisitionRequest.HqPolicy);
-            DrawClaimedRequestRow("Max Unit", FormatGil(claimedAcquisitionRequest.MaxUnitPrice));
-            DrawClaimedRequestRow("Gil Cap", FormatGilCap(claimedAcquisitionRequest.MaxTotalGil));
-            DrawClaimedRequestRow("World Mode", claimedAcquisitionRequest.WorldMode);
-            ImGui.EndTable();
-        }
+        DrawClaimedBatchSummary(claimedAcquisitionRequest);
+        ImGui.Spacing();
+        DrawClaimedBatchLines(claimedAcquisitionRequest);
+        ImGui.Spacing();
+        DrawClaimedBatchActions(claimedAcquisitionRequest);
+    }
 
+    private void DrawClaimedBatchActions(MarketAcquisitionClaimView claimed)
+    {
         var canMutateClaim = !acquisitionRequestBusy &&
-                             string.Equals(claimedAcquisitionRequest.Status, "Claimed", StringComparison.OrdinalIgnoreCase);
+                             string.Equals(claimed.Status, "Claimed", StringComparison.OrdinalIgnoreCase);
         if (ImGuiUi.Button("Accept Locally", canMutateClaim))
             _ = AcceptClaimedAcquisitionRequestAsync();
 
@@ -434,12 +441,72 @@ public class MainWindow : Window, IDisposable
 
         ImGui.SameLine();
         var canPrepare = !acquisitionRequestBusy &&
-                         CanPrepareAcquisitionPlanForStatus(claimedAcquisitionRequest.Status);
+                         CanPrepareAcquisitionPlanForStatus(claimed.Status);
         if (ImGuiUi.Button("Prepare Plan", canPrepare))
             _ = PrepareMarketAcquisitionPlanAsync();
 
-        ImGui.TextColored(ColMuted, MarketAcquisitionQuantityModePresenter.FormatExecutionHint(claimedAcquisitionRequest.QuantityMode));
         ImGui.TextColored(ColMuted, "Preparing a plan reads remote market data. Guided routes validate live rows before purchasing.");
+    }
+
+    private static void DrawClaimedBatchSummary(MarketAcquisitionClaimView claimed)
+    {
+        if (!ImGui.BeginTable("MarketAcquisitionClaimedBatchSummary", 2, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg))
+            return;
+
+        DrawClaimedRequestRow("Status", claimed.Status);
+        DrawClaimedRequestRow("Target", $"{claimed.TargetCharacterName} @ {claimed.TargetWorld}");
+        DrawClaimedRequestRow("Lines", FormatAcquisitionLineCount(claimed));
+        DrawClaimedRequestRow("Routing", FormatClaimedBatchRouting(claimed));
+        DrawClaimedRequestRow("Latest", FormatClaimedBatchLatest(claimed));
+        ImGui.EndTable();
+    }
+
+    private static void DrawClaimedBatchLines(MarketAcquisitionClaimView claimed)
+    {
+        const ImGuiTableFlags Flags =
+            ImGuiTableFlags.Borders |
+            ImGuiTableFlags.RowBg |
+            ImGuiTableFlags.Resizable |
+            ImGuiTableFlags.ScrollX;
+
+        if (!ImGui.BeginTable("MarketAcquisitionClaimedBatchLines", 9, Flags))
+            return;
+
+        ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.WidthStretch);
+        ImGui.TableSetupColumn("Mode", ImGuiTableColumnFlags.WidthFixed, 120);
+        ImGui.TableSetupColumn("Max Unit", ImGuiTableColumnFlags.WidthFixed, 88);
+        ImGui.TableSetupColumn("Max Qty", ImGuiTableColumnFlags.WidthFixed, 88);
+        ImGui.TableSetupColumn("Gil Cap", ImGuiTableColumnFlags.WidthFixed, 88);
+        ImGui.TableSetupColumn("HQ", ImGuiTableColumnFlags.WidthFixed, 64);
+        ImGui.TableSetupColumn("Bought", ImGuiTableColumnFlags.WidthFixed, 88);
+        ImGui.TableSetupColumn("Spent", ImGuiTableColumnFlags.WidthFixed, 88);
+        ImGui.TableSetupColumn("Status", ImGuiTableColumnFlags.WidthFixed, 128);
+        ImGui.TableHeadersRow();
+
+        foreach (var line in GetAcquisitionPlanLines(claimed).OrderBy(line => line.Ordinal))
+        {
+            ImGui.TableNextRow();
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(FormatLineItem(line));
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(MarketAcquisitionQuantityModePresenter.FormatMode(line.QuantityMode));
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(FormatGil(line.MaxUnitPrice));
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(FormatLineMaxQuantity(line));
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(FormatGilCap(line.GilCap));
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(line.HqPolicy);
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(line.PurchasedQuantity == 0 ? "-" : line.PurchasedQuantity.ToString("N0"));
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(line.SpentGil == 0 ? "-" : FormatGil(line.SpentGil));
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(string.IsNullOrWhiteSpace(line.Status) ? "-" : line.Status);
+        }
+
+        ImGui.EndTable();
     }
 
     private void DrawMarketAcquisitionPlan()
@@ -465,47 +532,50 @@ public class MainWindow : Window, IDisposable
             return;
         }
 
-        var tableFlags = ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.Resizable;
+        var tableFlags =
+            ImGuiTableFlags.Borders |
+            ImGuiTableFlags.RowBg |
+            ImGuiTableFlags.Resizable |
+            ImGuiTableFlags.ScrollX |
+            ImGuiTableFlags.Sortable;
         if (ImGui.BeginTable("MarketAcquisitionPlanBatches", 8, tableFlags))
         {
-            ImGui.TableSetupColumn("Item");
-            ImGui.TableSetupColumn("World");
-            ImGui.TableSetupColumn("Data Center");
-            ImGui.TableSetupColumn("Qty");
-            ImGui.TableSetupColumn("Gil");
-            ImGui.TableSetupColumn("Unit");
-            ImGui.TableSetupColumn("HQ");
-            ImGui.TableSetupColumn("Listing");
+            ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.WidthStretch | ImGuiTableColumnFlags.DefaultSort);
+            ImGui.TableSetupColumn("World", ImGuiTableColumnFlags.WidthFixed, 120);
+            ImGui.TableSetupColumn("Data Center", ImGuiTableColumnFlags.WidthFixed, 96);
+            ImGui.TableSetupColumn("Qty", ImGuiTableColumnFlags.WidthFixed, 72);
+            ImGui.TableSetupColumn("Gil", ImGuiTableColumnFlags.WidthFixed, 96);
+            ImGui.TableSetupColumn("Unit", ImGuiTableColumnFlags.WidthFixed, 80);
+            ImGui.TableSetupColumn("HQ", ImGuiTableColumnFlags.WidthFixed, 48);
+            ImGui.TableSetupColumn("Listing", ImGuiTableColumnFlags.WidthStretch);
             ImGui.TableHeadersRow();
 
-            foreach (var batch in acquisitionPlan.WorldBatches)
+            var rows = SortAdvisoryPlanRows(BuildAdvisoryPlanRows(acquisitionPlan), ImGui.TableGetSortSpecs());
+            foreach (var row in rows)
             {
-                foreach (var listing in batch.Listings)
+                ImGui.TableNextRow();
+                ImGui.TableNextColumn();
+                ImGui.TextUnformatted(row.Item);
+                ImGui.TableNextColumn();
+                ImGui.TextUnformatted(row.World);
+                if (row.ExceedsRequestedQuantity)
                 {
-                    ImGui.TableNextRow();
-                    ImGui.TableNextColumn();
-                    ImGui.TextUnformatted(FormatPlannedListingItem(listing));
-                    ImGui.TableNextColumn();
-                    ImGui.TextUnformatted(batch.WorldName);
-                    if (batch.ExceedsRequestedQuantity)
-                    {
-                        ImGui.SameLine();
-                        ImGui.TextColored(ColMuted, "(over)");
-                    }
-
-                    ImGui.TableNextColumn();
-                    ImGui.TextUnformatted(FormatRouteDataCenter(batch.DataCenter));
-                    ImGui.TableNextColumn();
-                    ImGui.TextUnformatted(listing.Quantity.ToString("N0"));
-                    ImGui.TableNextColumn();
-                    ImGui.TextUnformatted(FormatGil(listing.TotalGil));
-                    ImGui.TableNextColumn();
-                    ImGui.TextUnformatted(FormatGil(listing.UnitPrice));
-                    ImGui.TableNextColumn();
-                    ImGui.TextUnformatted(listing.IsHq ? "HQ" : "NQ");
-                    ImGui.TableNextColumn();
-                    ImGui.TextUnformatted($"{listing.RetainerName} / {listing.ListingId}");
+                    ImGui.SameLine();
+                    ImGui.TextColored(ColMuted, "(over)");
                 }
+
+                ImGui.TableNextColumn();
+                ImGui.TextUnformatted(FormatRouteDataCenter(row.DataCenter));
+                ImGui.TableNextColumn();
+                ImGui.TextUnformatted(row.Quantity.ToString("N0"));
+                ImGui.TableNextColumn();
+                ImGui.TextUnformatted(FormatGil(row.Gil));
+                ImGui.TableNextColumn();
+                ImGui.TextUnformatted(FormatGil(row.Unit));
+                ImGui.TableNextColumn();
+                ImGui.TextUnformatted(row.IsHq ? "HQ" : "NQ");
+                ImGui.TableNextColumn();
+                ImGui.TextUnformatted(row.Listing);
             }
 
             ImGui.EndTable();
@@ -516,6 +586,65 @@ public class MainWindow : Window, IDisposable
         string.IsNullOrWhiteSpace(listing.ItemName)
             ? $"Item {listing.ItemId}"
             : $"{listing.ItemName} ({listing.ItemId})";
+
+    private static IReadOnlyList<AdvisoryPlanRow> BuildAdvisoryPlanRows(MarketAcquisitionPlan plan)
+    {
+        var rows = new List<AdvisoryPlanRow>();
+        var ordinal = 0;
+        foreach (var batch in plan.WorldBatches)
+        {
+            foreach (var listing in batch.Listings)
+            {
+                rows.Add(new AdvisoryPlanRow(
+                    ordinal++,
+                    FormatPlannedListingItem(listing),
+                    batch.WorldName,
+                    batch.DataCenter,
+                    listing.Quantity,
+                    listing.TotalGil,
+                    listing.UnitPrice,
+                    listing.IsHq,
+                    $"{listing.RetainerName} / {listing.ListingId}",
+                    batch.ExceedsRequestedQuantity));
+            }
+        }
+
+        return rows;
+    }
+
+    private static IReadOnlyList<AdvisoryPlanRow> SortAdvisoryPlanRows(
+        IReadOnlyList<AdvisoryPlanRow> rows,
+        ImGuiTableSortSpecsPtr sortSpecs)
+    {
+        if (sortSpecs.SpecsCount == 0)
+            return rows.OrderBy(row => row.RouteOrdinal).ToList();
+
+        var spec = sortSpecs.Specs;
+        return spec.ColumnIndex switch
+        {
+            0 => SortAdvisoryPlanRowsBy(rows, row => row.Item, spec.SortDirection),
+            1 => SortAdvisoryPlanRowsBy(rows, row => row.World, spec.SortDirection),
+            2 => SortAdvisoryPlanRowsBy(rows, row => row.DataCenter, spec.SortDirection),
+            3 => SortAdvisoryPlanRowsBy(rows, row => row.Quantity, spec.SortDirection),
+            4 => SortAdvisoryPlanRowsBy(rows, row => row.Gil, spec.SortDirection),
+            5 => SortAdvisoryPlanRowsBy(rows, row => row.Unit, spec.SortDirection),
+            6 => SortAdvisoryPlanRowsBy(rows, row => row.IsHq, spec.SortDirection),
+            7 => SortAdvisoryPlanRowsBy(rows, row => row.Listing, spec.SortDirection),
+            _ => rows.OrderBy(row => row.RouteOrdinal).ToList(),
+        };
+    }
+
+    private static IReadOnlyList<AdvisoryPlanRow> SortAdvisoryPlanRowsBy<TKey>(
+        IReadOnlyList<AdvisoryPlanRow> rows,
+        Func<AdvisoryPlanRow, TKey> keySelector,
+        ImGuiSortDirection direction)
+    {
+        var ordered = direction == ImGuiSortDirection.Descending
+            ? rows.OrderByDescending(keySelector).ThenBy(row => row.RouteOrdinal)
+            : rows.OrderBy(keySelector).ThenBy(row => row.RouteOrdinal);
+
+        return ordered.ToList();
+    }
 
     private bool CanProbeLiveMarketBoard()
     {
@@ -2071,6 +2200,40 @@ public class MainWindow : Window, IDisposable
 
     private static string FormatAcquisitionLineCount(MarketAcquisitionRequestView request) =>
         request.Lines.Count == 0 ? "1 line" : $"{request.Lines.Count:N0} line(s)";
+
+    private static string FormatClaimedBatchRouting(MarketAcquisitionClaimView claimed) =>
+        $"{FormatWorldMode(claimed.WorldMode)} / {claimed.Region}";
+
+    private static string FormatClaimedBatchLatest(MarketAcquisitionClaimView claimed)
+    {
+        var latestLineMessage = claimed.Lines
+            .OrderByDescending(line => line.Ordinal)
+            .Select(line => line.LatestMessage)
+            .FirstOrDefault(message => !string.IsNullOrWhiteSpace(message));
+        if (!string.IsNullOrWhiteSpace(latestLineMessage))
+            return latestLineMessage;
+
+        if (!string.IsNullOrWhiteSpace(claimed.LatestAttemptResult))
+            return claimed.LatestAttemptResult;
+
+        return "-";
+    }
+
+    private static string FormatLineItem(MarketAcquisitionBatchLineView line)
+    {
+        var name = string.IsNullOrWhiteSpace(line.ItemName)
+            ? $"Item {line.ItemId}"
+            : line.ItemName;
+        return $"{name} ({line.ItemId})";
+    }
+
+    private static string FormatLineMaxQuantity(MarketAcquisitionBatchLineView line)
+    {
+        if (line.MaxQuantity == 0)
+            return "No cap";
+
+        return line.MaxQuantity.ToString("N0");
+    }
 
     private static string FormatGil(uint gil) => $"{gil:N0} gil";
 

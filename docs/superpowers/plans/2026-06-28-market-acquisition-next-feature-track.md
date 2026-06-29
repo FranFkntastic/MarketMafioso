@@ -930,7 +930,7 @@ Expected: plugin builds.
 - Modify: `MarketMafioso/Windows/MainWindow.cs`
 - Test: focused build only unless UI helper tests already exist.
 
-- [ ] **Step 1: Split claimed UI into batch summary and line table**
+- [x] **Step 1: Split claimed UI into batch summary and line table**
 
 Replace the existing single key-value claimed table with:
 
@@ -953,7 +953,7 @@ private void DrawClaimedAcquisitionRequest()
 }
 ```
 
-- [ ] **Step 2: Draw true batch-level summary**
+- [x] **Step 2: Draw true batch-level summary**
 
 Add:
 
@@ -972,7 +972,7 @@ private static void DrawClaimedBatchSummary(MarketAcquisitionClaimView claimed)
 }
 ```
 
-- [ ] **Step 3: Draw line table**
+- [x] **Step 3: Draw line table**
 
 Add:
 
@@ -1026,11 +1026,11 @@ private static void DrawClaimedBatchLines(MarketAcquisitionClaimView claimed)
 }
 ```
 
-- [ ] **Step 4: Keep actions batch-level**
+- [x] **Step 4: Keep actions batch-level**
 
 Move existing accept/reject/forget/prepare buttons into `DrawClaimedBatchActions`.
 
-- [ ] **Step 5: Build plugin**
+- [x] **Step 5: Build plugin**
 
 Run:
 
@@ -1048,7 +1048,7 @@ Expected: plugin builds.
 - Modify: `MarketMafioso/Windows/MainWindow.cs`
 - Test: focused build plus live visual check.
 
-- [ ] **Step 1: Add advisory table sort state**
+- [x] **Step 1: Add advisory table sort state**
 
 Add fields:
 
@@ -1057,7 +1057,7 @@ private int advisoryPlanSortColumn;
 private ImGuiSortDirection advisoryPlanSortDirection = ImGuiSortDirection.Ascending;
 ```
 
-- [ ] **Step 2: Enable sort flags**
+- [x] **Step 2: Enable sort flags**
 
 In `DrawMarketAcquisitionPlan`, change the world listings table flags to include sorting:
 
@@ -1084,7 +1084,7 @@ ImGui.TableSetupColumn("HQ", ImGuiTableColumnFlags.WidthFixed, 48);
 ImGui.TableSetupColumn("Listing", ImGuiTableColumnFlags.WidthStretch);
 ```
 
-- [ ] **Step 3: Sort display rows only**
+- [x] **Step 3: Sort display rows only**
 
 Build a row projection:
 
@@ -1128,7 +1128,7 @@ private static IEnumerable<AdvisoryPlanRow> SortAdvisoryPlanRows(
 
 Do not reorder `acquisitionPlan.WorldBatches`.
 
-- [ ] **Step 4: Build plugin**
+- [x] **Step 4: Build plugin**
 
 Run:
 
