@@ -74,9 +74,15 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
             new Dictionary<string, string?>
             {
                 ["requestId"] = plan.RequestId,
+                ["worldMode"] = plan.WorldMode,
+                ["lineCount"] = plan.Lines.Count.ToString(),
                 ["worldCount"] = plan.WorldBatches.Count.ToString(),
                 ["plannedQuantity"] = plan.PlannedQuantity.ToString(),
                 ["plannedGil"] = plan.PlannedGil.ToString(),
+                ["firstStop"] = session.ActiveStop?.WorldName,
+                ["firstItem"] = FormatRouteItem(session.ActiveStop?.ActiveItemSubtask),
+                ["sourceListingCount"] = plan.Diagnostics.SourceListingCount.ToString(),
+                ["plannedListingCount"] = plan.Diagnostics.PlannedListingCount.ToString(),
             });
         return MarketAcquisitionRouteActionResult.Ok(StatusMessage);
     }
@@ -295,7 +301,7 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
 
         if (!diagnostics.IsEnabled)
         {
-            diagnostics = MarketAcquisitionRouteDiagnostics.CreateEnabled(diagnosticsDirectory, DateTimeOffset.Now);
+            diagnostics = MarketAcquisitionRouteDiagnostics.CreateInputCapture(diagnosticsDirectory, DateTimeOffset.Now);
             LastDiagnosticFilePath = diagnostics.FilePath;
             standaloneInputCaptureLogOpen = true;
         }
@@ -673,6 +679,16 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
             return "ContinuePolling";
 
         return "TryAlternateInputPath";
+    }
+
+    private static string? FormatRouteItem(MarketAcquisitionWorldItemSubtask? subtask)
+    {
+        if (subtask == null)
+            return null;
+
+        return string.IsNullOrWhiteSpace(subtask.ItemName)
+            ? subtask.ItemId.ToString()
+            : $"{subtask.ItemName} ({subtask.ItemId})";
     }
 }
 

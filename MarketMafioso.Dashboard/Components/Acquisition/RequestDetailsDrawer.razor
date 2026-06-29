@@ -30,7 +30,7 @@
                     <tr><td>Quantity</td><td>@FormatQuantity(Request)</td></tr>
                     <tr><td>Max unit</td><td>@Request.MaxUnitPrice.ToString("N0") gil</td></tr>
                     <tr><td>Gil cap</td><td>@(Request.MaxTotalGil == 0 ? "No cap" : $"{Request.MaxTotalGil:N0} gil")</td></tr>
-                    <tr><td>Route</td><td>@Request.WorldMode</td></tr>
+                    <tr><td>Route</td><td>@FormatRoute(Request)</td></tr>
                     <tr><td>Latest event</td><td>@FormatLatestRequestEvent(Request)</td></tr>
                     <tr><td>Runner state</td><td>@(Request.LatestRunnerState ?? "-")</td></tr>
                     <tr><td>Attempt</td><td>@(Request.LatestAttemptId ?? "-")</td></tr>
@@ -207,6 +207,19 @@
             : request.Quantity.ToString("N0");
 
     private static string FormatTime(DateTimeOffset value) => value.ToLocalTime().ToString("HH:mm:ss");
+
+    private static string FormatRoute(MarketAcquisitionRequestView request)
+    {
+        if (!request.WorldMode.Equals("AllWorldSweep", StringComparison.OrdinalIgnoreCase))
+            return request.WorldMode;
+
+        return request.SweepScope switch
+        {
+            "DataCenters" when request.SweepDataCenters.Count > 0 => $"All-world sweep: {string.Join(", ", request.SweepDataCenters)}",
+            "CurrentDataCenter" => "All-world sweep: current data center",
+            _ => "All-world sweep: region",
+        };
+    }
 
     private static string FormatMessage(string? message, string? reason)
     {

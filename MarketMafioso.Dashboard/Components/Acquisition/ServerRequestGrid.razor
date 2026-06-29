@@ -51,7 +51,9 @@
                             <CellTemplate>@FormatQuantity(context.Item)</CellTemplate>
                         </TemplateColumn>
                         <PropertyColumn Property="request => request.MaxUnitPrice" Title="Max Unit" Resizable="true" />
-                        <PropertyColumn Property="request => request.WorldMode" Title="Routing" Resizable="true" />
+                        <TemplateColumn Title="Routing" Resizable="true">
+                            <CellTemplate>@FormatRoute(context.Item)</CellTemplate>
+                        </TemplateColumn>
                         <TemplateColumn Title="Status" Resizable="true">
                             <CellTemplate>
                                 <MudChip T="string" Size="Size.Small" Color="@StatusColor(context.Item.Status)">@context.Item.Status</MudChip>
@@ -117,6 +119,19 @@
         request.QuantityMode == "AllBelowThreshold"
             ? request.Quantity == 0 ? "All safe stock" : $"Max {request.Quantity:N0}"
             : request.Quantity.ToString("N0");
+
+    private static string FormatRoute(MarketAcquisitionRequestView request)
+    {
+        if (!request.WorldMode.Equals("AllWorldSweep", StringComparison.OrdinalIgnoreCase))
+            return request.WorldMode;
+
+        return request.SweepScope switch
+        {
+            "DataCenters" when request.SweepDataCenters.Count > 0 => $"Sweep: {string.Join(", ", request.SweepDataCenters)}",
+            "CurrentDataCenter" => "Sweep: current DC",
+            _ => "Sweep: region",
+        };
+    }
 
     private static string FormatLatestRequestEvent(MarketAcquisitionRequestView request)
     {

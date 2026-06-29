@@ -45,6 +45,12 @@ public record MarketAcquisitionRequestView
     [JsonPropertyName("worldMode")]
     public string WorldMode { get; init; } = string.Empty;
 
+    [JsonPropertyName("sweepScope")]
+    public string SweepScope { get; init; } = "Region";
+
+    [JsonPropertyName("sweepDataCenters")]
+    public List<string> SweepDataCenters { get; init; } = new();
+
     [JsonPropertyName("latestAttemptId")]
     public string? LatestAttemptId { get; init; }
 

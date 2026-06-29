@@ -4,6 +4,7 @@ using System.Globalization;
 using Dalamud.Plugin.Services;
 using FFXIVClientStructs.FFXIV.Client.UI;
 using FFXIVClientStructs.FFXIV.Client.UI.Agent;
+using FFXIVClientStructs.FFXIV.Client.UI.Info;
 using FFXIVClientStructs.FFXIV.Component.GUI;
 
 namespace MarketMafioso.MarketAcquisition;
@@ -30,17 +31,37 @@ public sealed class MarketBoardItemSearchDriver
         if (string.IsNullOrWhiteSpace(itemName))
             throw new InvalidOperationException($"Item name is required before searching the market board for item {itemId}.");
 
-        var itemSearchResult = gameGui.GetAddonByName<AtkUnitBase>(ItemSearchResultAddon, 1);
-        if (IsAddonReady(itemSearchResult))
+        var itemSearchResult = gameGui.GetAddonByName<AddonItemSearchResult>(ItemSearchResultAddon, 1);
+        if (itemSearchResult != null && IsAddonReady(&itemSearchResult->AtkUnitBase))
         {
+            var infoProxy = InfoProxyItemSearch.Instance();
+            var openResultItemId = infoProxy == null ? 0 : infoProxy->SearchItemId;
+            if (IsOpenListingResultForRequestedItem(itemId, openResultItemId))
+            {
+                ClearSubmittedSearch();
+                return new MarketBoardItemSearchResult
+                {
+                    Status = "ListingsReady",
+                    Message = $"Market board listings are open for {itemName.Trim()} ({itemId}).",
+                    Details = new Dictionary<string, string?>
+                    {
+                        ["itemSearchResultVisible"] = true.ToString(),
+                        ["openResultItemId"] = openResultItemId.ToString(CultureInfo.InvariantCulture),
+                    },
+                };
+            }
+
             ClearSubmittedSearch();
+            itemSearchResult->AtkUnitBase.Close(true);
             return new MarketBoardItemSearchResult
             {
-                Status = "ListingsReady",
-                Message = $"Market board listings are open for {itemName.Trim()} ({itemId}).",
+                Status = "StaleListingsClosed",
+                Message = $"Closed stale market board listings for item {openResultItemId}; preparing to search {itemName.Trim()} ({itemId}).",
                 Details = new Dictionary<string, string?>
                 {
                     ["itemSearchResultVisible"] = true.ToString(),
+                    ["openResultItemId"] = openResultItemId.ToString(CultureInfo.InvariantCulture),
+                    ["requestedItemId"] = itemId.ToString(CultureInfo.InvariantCulture),
                 },
             };
         }
@@ -253,6 +274,11 @@ public sealed class MarketBoardItemSearchDriver
         bool agentIsItemPushPending)
     {
         return searchMatches && (exactItemVisible || agentIsPartialSearching || agentIsItemPushPending);
+    }
+
+    internal static bool IsOpenListingResultForRequestedItem(uint requestedItemId, uint openResultItemId)
+    {
+        return requestedItemId != 0 && openResultItemId == requestedItemId;
     }
 
     internal static IReadOnlyList<MarketBoardItemSearchSubmitCallback> GetSearchSubmitCallbackSequence()
@@ -666,5 +692,5 @@ public sealed record MarketBoardItemSearchResult
     public bool SearchSent => string.Equals(Status, "SearchSent", StringComparison.OrdinalIgnoreCase);
     public bool ReadyForListings => string.Equals(Status, "ListingsReady", StringComparison.OrdinalIgnoreCase);
     public bool IsInProgress =>
-        Status is "MarketBoardNotOpen" or "ModeReset" or "SearchSent" or "ItemSelectionSent" or "ItemOpenSent";
+        Status is "MarketBoardNotOpen" or "ModeReset" or "StaleListingsClosed" or "SearchSent" or "ItemSelectionSent" or "ItemOpenSent";
 }

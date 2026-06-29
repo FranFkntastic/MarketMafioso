@@ -51,6 +51,8 @@ public sealed record MarketAcquisitionRequestView
     public uint MaxUnitPrice { get; init; }
     public uint MaxTotalGil { get; init; }
     public string WorldMode { get; init; } = string.Empty;
+    public string SweepScope { get; init; } = "Region";
+    public IReadOnlyList<string> SweepDataCenters { get; init; } = [];
     public string? LatestRunnerState { get; init; }
     public string? LatestMessage { get; init; }
     public string? LatestReason { get; init; }
@@ -114,6 +116,8 @@ public sealed record MarketAcquisitionCreateRequest
     public uint MaxUnitPrice { get; init; }
     public uint MaxTotalGil { get; init; }
     public string WorldMode { get; init; } = "Recommended";
+    public string SweepScope { get; init; } = "Region";
+    public IReadOnlyList<string> SweepDataCenters { get; init; } = [];
     public int ExpiresInSeconds { get; init; } = 300;
 }
 
@@ -125,6 +129,8 @@ public sealed record MarketAcquisitionBatchCreateRequest
     public string TargetWorld { get; init; } = string.Empty;
     public string Region { get; init; } = "North America";
     public string WorldMode { get; init; } = "Recommended";
+    public string SweepScope { get; init; } = "Region";
+    public IReadOnlyList<string> SweepDataCenters { get; init; } = [];
     public int ExpiresInSeconds { get; init; } = 300;
     public IReadOnlyList<MarketAcquisitionBatchLineCreateRequest> Lines { get; init; } = [];
 }

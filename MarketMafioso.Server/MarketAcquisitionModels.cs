@@ -15,6 +15,8 @@ public sealed record MarketAcquisitionCreateRequest
     public uint MaxUnitPrice { get; init; }
     public uint MaxTotalGil { get; init; }
     public string WorldMode { get; init; } = string.Empty;
+    public string SweepScope { get; init; } = "Region";
+    public IReadOnlyList<string> SweepDataCenters { get; init; } = [];
     public int ExpiresInSeconds { get; init; } = 90;
 }
 
@@ -26,6 +28,8 @@ public sealed record MarketAcquisitionBatchCreateRequest
     public string TargetWorld { get; init; } = string.Empty;
     public string Region { get; init; } = string.Empty;
     public string WorldMode { get; init; } = string.Empty;
+    public string SweepScope { get; init; } = "Region";
+    public IReadOnlyList<string> SweepDataCenters { get; init; } = [];
     public int ExpiresInSeconds { get; init; } = 90;
     public IReadOnlyList<MarketAcquisitionBatchLineCreateRequest> Lines { get; init; } = [];
 }
@@ -104,6 +108,8 @@ public sealed record MarketAcquisitionRequestView
     public uint MaxUnitPrice { get; init; }
     public uint MaxTotalGil { get; init; }
     public string WorldMode { get; init; } = string.Empty;
+    public string SweepScope { get; init; } = "Region";
+    public IReadOnlyList<string> SweepDataCenters { get; init; } = [];
     public string? LatestEventType { get; init; }
     public string? LatestRunnerState { get; init; }
     public string? LatestMessage { get; init; }
@@ -138,6 +144,8 @@ public sealed record MarketAcquisitionClaimView
     public uint MaxUnitPrice { get; init; }
     public uint MaxTotalGil { get; init; }
     public string WorldMode { get; init; } = string.Empty;
+    public string SweepScope { get; init; } = "Region";
+    public IReadOnlyList<string> SweepDataCenters { get; init; } = [];
     public string? LatestEventType { get; init; }
     public string? LatestRunnerState { get; init; }
     public string? LatestMessage { get; init; }

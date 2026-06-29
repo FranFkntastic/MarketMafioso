@@ -1813,6 +1813,8 @@ public sealed class MarketAcquisitionRequestStore
             MaxUnitPrice = request.MaxUnitPrice,
             MaxTotalGil = request.MaxTotalGil,
             WorldMode = request.WorldMode,
+            SweepScope = request.SweepScope,
+            SweepDataCenters = request.SweepDataCenters,
             LatestEventType = latestEvent?.EventType,
             LatestRunnerState = latestEvent?.RunnerState,
             LatestMessage = latestEvent?.Message,
@@ -1849,6 +1851,8 @@ public sealed class MarketAcquisitionRequestStore
             MaxUnitPrice = request.MaxUnitPrice,
             MaxTotalGil = request.MaxTotalGil,
             WorldMode = request.WorldMode,
+            SweepScope = request.SweepScope,
+            SweepDataCenters = request.SweepDataCenters,
             LatestEventType = request.LatestEventType,
             LatestRunnerState = request.LatestRunnerState,
             LatestMessage = request.LatestMessage,
@@ -1889,6 +1893,8 @@ public sealed class MarketAcquisitionRequestStore
             TargetWorld = request.TargetWorld,
             Region = request.Region,
             WorldMode = request.WorldMode,
+            SweepScope = request.SweepScope,
+            SweepDataCenters = request.SweepDataCenters,
             ExpiresInSeconds = request.ExpiresInSeconds,
             Lines =
             [
@@ -1927,6 +1933,8 @@ public sealed class MarketAcquisitionRequestStore
             MaxUnitPrice = primaryLine.MaxUnitPrice,
             MaxTotalGil = primaryLine.GilCap,
             WorldMode = request.WorldMode,
+            SweepScope = request.SweepScope,
+            SweepDataCenters = request.SweepDataCenters,
             ExpiresInSeconds = request.ExpiresInSeconds,
         };
     }
@@ -2001,6 +2009,7 @@ public sealed class MarketAcquisitionRequestStore
             throw new ArgumentException("Quantity mode must be TargetQuantity or AllBelowThreshold.", nameof(request));
         if (request.QuantityMode == "TargetQuantity" && request.Quantity == 0)
             throw new ArgumentException("Target quantity is required.", nameof(request));
+        ValidateSweepScope(request.WorldMode, request.SweepScope, request.SweepDataCenters, nameof(request));
     }
 
     private static void ValidateBatchCreateRequest(MarketAcquisitionBatchCreateRequest request)
@@ -2019,9 +2028,27 @@ public sealed class MarketAcquisitionRequestStore
             throw new ArgumentException("World mode is required.", nameof(request));
         if (request.Lines.Count == 0)
             throw new ArgumentException("At least one acquisition line is required.", nameof(request));
+        ValidateSweepScope(request.WorldMode, request.SweepScope, request.SweepDataCenters, nameof(request));
 
         foreach (var line in request.Lines)
             ValidateBatchLineCreateRequest(line);
+    }
+
+    private static void ValidateSweepScope(
+        string worldMode,
+        string sweepScope,
+        IReadOnlyList<string> sweepDataCenters,
+        string argumentName)
+    {
+        if (!worldMode.Equals("AllWorldSweep", StringComparison.OrdinalIgnoreCase))
+            return;
+
+        if (string.IsNullOrWhiteSpace(sweepScope))
+            throw new ArgumentException("Sweep scope is required for all-world sweep.", argumentName);
+        if (sweepScope is not ("Region" or "CurrentDataCenter" or "DataCenters"))
+            throw new ArgumentException("Sweep scope must be Region, CurrentDataCenter, or DataCenters.", argumentName);
+        if (sweepScope == "DataCenters" && sweepDataCenters.Count == 0)
+            throw new ArgumentException("At least one data center is required for selected data-center sweep.", argumentName);
     }
 
     private static void ValidateBatchLineCreateRequest(MarketAcquisitionBatchLineCreateRequest line)

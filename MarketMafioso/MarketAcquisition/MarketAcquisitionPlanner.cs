@@ -6,6 +6,14 @@ namespace MarketMafioso.MarketAcquisition;
 
 public static class MarketAcquisitionPlanner
 {
+    private static readonly string[] NorthAmericaDataCenterOrder =
+    [
+        "Aether",
+        "Primal",
+        "Crystal",
+        "Dynamis",
+    ];
+
     private static readonly IReadOnlyDictionary<string, string> NorthAmericaDataCenters =
         new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
@@ -61,10 +69,14 @@ public static class MarketAcquisitionPlanner
         var diagnostics = BuildDiagnostics(request, requestLines, sourceListings);
         var selectedSubtasks = new List<MarketAcquisitionWorldItemSubtask>();
         var planLines = new List<MarketAcquisitionPlanLine>();
+        var isAllWorldSweep = request.WorldMode.Equals("AllWorldSweep", StringComparison.OrdinalIgnoreCase);
+        var sweepWorlds = isAllWorldSweep
+            ? ResolveSweepWorlds(request, currentWorld)
+            : [];
 
         foreach (var line in requestLines)
         {
-            var candidates = sourceListings
+            var matchingListings = sourceListings
                 .Where(listing => ListingMatchesLine(request, line, listing))
                 .OrderBy(listing => listing.UnitPrice)
                 .ThenByDescending(listing => listing.Quantity)
@@ -72,17 +84,30 @@ public static class MarketAcquisitionPlanner
                 .ThenBy(listing => listing.WorldName, StringComparer.OrdinalIgnoreCase)
                 .ThenBy(listing => listing.RetainerName, StringComparer.OrdinalIgnoreCase)
                 .GroupBy(listing => listing.WorldName, StringComparer.OrdinalIgnoreCase)
-                .Select(group => BuildWorldSubtask(line, group.Key, group))
-                .Where(subtask => subtask.Listings.Count > 0)
+                .ToDictionary(
+                    group => group.Key,
+                    group => group.AsEnumerable(),
+                    StringComparer.OrdinalIgnoreCase);
+
+            var candidates = isAllWorldSweep
+                ? sweepWorlds
+                    .Select(world => BuildWorldSubtask(
+                        line,
+                        world,
+                        matchingListings.TryGetValue(world, out var worldListings) ? worldListings : []))
+                    .ToList()
+                : matchingListings
+                    .Select(group => BuildWorldSubtask(line, group.Key, group.Value))
+                    .Where(subtask => subtask.Listings.Count > 0)
                 .OrderByDescending(subtask => LineSatisfiesQuantity(line, subtask.PlannedQuantity))
                 .ThenBy(subtask => subtask.ExceedsRequestedQuantity)
                 .ThenByDescending(subtask => subtask.PlannedQuantity)
                 .ThenBy(subtask => subtask.PlannedGil)
-                .ThenBy(subtask => subtask.Listings[0].UnitPrice)
+                .ThenBy(subtask => subtask.Listings.Count == 0 ? uint.MaxValue : subtask.Listings[0].UnitPrice)
                 .ThenBy(subtask => subtask.WorldName, StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
-            var lineSubtasks = BuildExecutableLinePlan(line, candidates);
+            var lineSubtasks = BuildExecutableLinePlan(line, candidates, isAllWorldSweep);
             selectedSubtasks.AddRange(lineSubtasks);
             planLines.Add(new MarketAcquisitionPlanLine
             {
@@ -250,7 +275,8 @@ public static class MarketAcquisitionPlanner
 
     private static IReadOnlyList<MarketAcquisitionWorldItemSubtask> BuildExecutableLinePlan(
         PlannerLine line,
-        IReadOnlyList<MarketAcquisitionWorldItemSubtask> candidates)
+        IReadOnlyList<MarketAcquisitionWorldItemSubtask> candidates,
+        bool keepProbeSubtasksAfterCaps = false)
     {
         var subtasks = new List<MarketAcquisitionWorldItemSubtask>();
         uint plannedQuantity = 0;
@@ -260,10 +286,18 @@ public static class MarketAcquisitionPlanner
         foreach (var subtask in candidates)
         {
             if (HasReachedQuantityCap(line, plannedQuantity))
-                break;
+            {
+                if (keepProbeSubtasksAfterCaps)
+                    subtasks.Add(ToProbeSubtask(subtask));
+                continue;
+            }
 
             if (hasGilCap && plannedGil + subtask.PlannedGil > line.MaxTotalGil)
+            {
+                if (keepProbeSubtasksAfterCaps)
+                    subtasks.Add(ToProbeSubtask(subtask));
                 continue;
+            }
 
             subtasks.Add(subtask);
             plannedQuantity += subtask.PlannedQuantity;
@@ -281,6 +315,54 @@ public static class MarketAcquisitionPlanner
         return NorthAmericaDataCenters.TryGetValue(worldName.Trim(), out var dataCenter)
             ? dataCenter
             : throw new InvalidOperationException($"World {worldName} is not mapped to a North America data center.");
+    }
+
+    public static IReadOnlyList<string> ResolveNorthAmericaWorldsForDataCenters(IEnumerable<string> dataCenters)
+    {
+        ArgumentNullException.ThrowIfNull(dataCenters);
+
+        var normalizedDataCenters = dataCenters
+            .Select(NormalizeNorthAmericaDataCenterName)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (normalizedDataCenters.Count == 0)
+            throw new InvalidOperationException("At least one data center is required for a scoped all-world sweep.");
+
+        return NorthAmericaDataCenters
+            .Where(entry => normalizedDataCenters.Contains(entry.Value))
+            .Select(entry => entry.Key)
+            .ToList();
+    }
+
+    private static IReadOnlyList<string> ResolveSweepWorlds(
+        MarketAcquisitionRequestView request,
+        string? currentWorld)
+    {
+        if (!request.Region.Equals("North America", StringComparison.OrdinalIgnoreCase) &&
+            !request.Region.Equals("North-America", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("All-world sweep currently supports the North America region only.");
+
+        var scope = string.IsNullOrWhiteSpace(request.SweepScope)
+            ? "Region"
+            : request.SweepScope.Trim();
+
+        return scope switch
+        {
+            "Region" => NorthAmericaDataCenters.Keys.ToList(),
+            "CurrentDataCenter" => ResolveNorthAmericaWorldsForDataCenters(
+                [ResolveNorthAmericaDataCenter(string.IsNullOrWhiteSpace(currentWorld) ? request.TargetWorld : currentWorld)]),
+            "DataCenters" => ResolveNorthAmericaWorldsForDataCenters(request.SweepDataCenters),
+            _ => throw new InvalidOperationException($"Unknown all-world sweep scope {request.SweepScope}."),
+        };
+    }
+
+    private static string NormalizeNorthAmericaDataCenterName(string dataCenter)
+    {
+        if (string.IsNullOrWhiteSpace(dataCenter))
+            throw new InvalidOperationException("Data center name is required for a scoped all-world sweep.");
+
+        var normalized = NorthAmericaDataCenterOrder
+            .FirstOrDefault(candidate => candidate.Equals(dataCenter.Trim(), StringComparison.OrdinalIgnoreCase));
+        return normalized ?? throw new InvalidOperationException($"{dataCenter} is not a North America data center.");
     }
 
     private static MarketAcquisitionWorldItemSubtask BuildWorldSubtask(
@@ -338,6 +420,15 @@ public static class MarketAcquisitionPlanner
             Listings = plannedListings,
         };
     }
+
+    private static MarketAcquisitionWorldItemSubtask ToProbeSubtask(MarketAcquisitionWorldItemSubtask subtask) =>
+        subtask with
+        {
+            PlannedQuantity = 0,
+            PlannedGil = 0,
+            ExceedsRequestedQuantity = false,
+            Listings = [],
+        };
 
     private static MarketAcquisitionWorldBatch BuildWorldBatch(
         string worldName,

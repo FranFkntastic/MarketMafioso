@@ -50,6 +50,33 @@
                                 </MudSelect>
                             </div>
                         </div>
+                        @if (IsAllWorldSweep)
+                        {
+                            <div class="field-block">
+                                <div class="field-label-row help-label" title="Choose which North America worlds the sweep should explicitly visit and probe.">
+                                    <span>Sweep scope</span>
+                                </div>
+                                <MudSelect T="string" @bind-Value="_sweepScope" Placeholder="Choose sweep scope" Variant="Variant.Outlined" Margin="Margin.Dense" FullWidth="true">
+                                    <MudSelectItem Value="@("Region")">Entire region</MudSelectItem>
+                                    <MudSelectItem Value="@("CurrentDataCenter")">Current data center</MudSelectItem>
+                                    <MudSelectItem Value="@("DataCenters")">Selected data centers</MudSelectItem>
+                                </MudSelect>
+                            </div>
+                            @if (_sweepScope == "DataCenters")
+                            {
+                                <div class="sweep-dc-list">
+                                    @foreach (var dataCenter in NorthAmericaDataCenters)
+                                    {
+                                        <label class="sweep-dc-option">
+                                            <input type="checkbox"
+                                                   checked="@_sweepDataCenters.Contains(dataCenter)"
+                                                   @onchange="eventArgs => ToggleSweepDataCenter(dataCenter, eventArgs)" />
+                                            <span>@dataCenter</span>
+                                        </label>
+                                    }
+                                </div>
+                            }
+                        }
                     </div>
                     @if (!Characters.Any())
                     {
@@ -189,6 +216,8 @@
     private XivItemSearchResult? _selectedItem;
     private string _itemSearchText = string.Empty;
     private string _quantityMode = "AllBelowThreshold";
+    private string _sweepScope = "Region";
+    private readonly HashSet<string> _sweepDataCenters = new(StringComparer.OrdinalIgnoreCase);
     private uint? _quantity;
     private uint? _maxUnitPrice;
     private uint? _gilCap;
@@ -214,6 +243,16 @@
     private string StageButtonText => _queue.Count > 1 ? $"Stage {_queue.Count} Items" : "Stage Queue";
 
     private bool CanAddRequest => SelectedCharacter is not null && _selectedItem is not null && _maxUnitPrice is > 0;
+
+    private bool IsAllWorldSweep => NormalizeWorldMode(_worldMode).Equals("AllWorldSweep", StringComparison.OrdinalIgnoreCase);
+
+    private static readonly string[] NorthAmericaDataCenters =
+    [
+        "Aether",
+        "Primal",
+        "Crystal",
+        "Dynamis",
+    ];
 
     private string QuantityModeHelp => _quantityMode == "AllBelowThreshold"
         ? "All below threshold buys every confirmed live listing at or below max unit price."
@@ -260,6 +299,10 @@
             ?.Id ?? _selectedCharacterId;
         _region = string.IsNullOrWhiteSpace(PresetRequest.Region) ? _region : PresetRequest.Region;
         _worldMode = string.IsNullOrWhiteSpace(PresetRequest.WorldMode) ? _worldMode : PresetRequest.WorldMode;
+        _sweepScope = string.IsNullOrWhiteSpace(PresetRequest.SweepScope) ? "Region" : PresetRequest.SweepScope;
+        _sweepDataCenters.Clear();
+        foreach (var dataCenter in PresetRequest.SweepDataCenters)
+            _sweepDataCenters.Add(dataCenter);
         _selectedItem = new XivItemSearchResult
         {
             ItemId = PresetRequest.ItemId,
@@ -366,6 +409,12 @@
             return;
         }
 
+        if (IsAllWorldSweep && _sweepScope == "DataCenters" && _sweepDataCenters.Count == 0)
+        {
+            Status.Error("Pick at least one data center for a selected data-center sweep.");
+            return;
+        }
+
         var request = new MarketAcquisitionBatchCreateRequest
         {
             IdempotencyKey = Guid.NewGuid().ToString("N"),
@@ -373,6 +422,8 @@
             TargetWorld = SelectedCharacter.HomeWorld ?? string.Empty,
             Region = _region,
             WorldMode = NormalizeWorldMode(_worldMode),
+            SweepScope = NormalizeSweepScope(),
+            SweepDataCenters = ResolveSweepDataCenters(),
             ExpiresInSeconds = _expiresInSeconds,
             Lines = _queue.Select(ToBatchLineRequest).ToArray(),
         };
@@ -396,6 +447,23 @@
 
     private static string NormalizeWorldMode(string value) =>
         value == "CurrentWorld" ? "CurrentWorldOnly" : value;
+
+    private string NormalizeSweepScope() =>
+        IsAllWorldSweep ? _sweepScope : "Region";
+
+    private IReadOnlyList<string> ResolveSweepDataCenters() =>
+        IsAllWorldSweep && _sweepScope == "DataCenters"
+            ? NorthAmericaDataCenters.Where(dataCenter => _sweepDataCenters.Contains(dataCenter)).ToArray()
+            : [];
+
+    private void ToggleSweepDataCenter(string dataCenter, ChangeEventArgs args)
+    {
+        var selected = args.Value is bool value && value;
+        if (selected)
+            _sweepDataCenters.Add(dataCenter);
+        else
+            _sweepDataCenters.Remove(dataCenter);
+    }
 
     private void RemoveQueued(QueuedAcquisitionItem item)
     {

@@ -20,6 +20,23 @@ public sealed class MarketAcquisitionRouteDiagnosticsTests
     }
 
     [Fact]
+    public void CreateInputCapture_CreatesTimestampedInputCaptureLog()
+    {
+        var directory = CreateTempDirectory();
+        var startedAt = new DateTimeOffset(2026, 6, 25, 22, 45, 12, TimeSpan.Zero);
+
+        using var diagnostics = MarketMafioso.MarketAcquisition.MarketAcquisitionRouteDiagnostics.CreateInputCapture(
+            directory,
+            startedAt);
+
+        Assert.True(diagnostics.IsEnabled);
+        Assert.NotNull(diagnostics.FilePath);
+        Assert.StartsWith(directory, diagnostics.FilePath, StringComparison.Ordinal);
+        Assert.EndsWith("input-capture-20260625-224512.log", diagnostics.FilePath, StringComparison.Ordinal);
+        Assert.True(File.Exists(diagnostics.FilePath));
+    }
+
+    [Fact]
     public void Record_WritesEventDetails()
     {
         var directory = CreateTempDirectory();

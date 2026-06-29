@@ -171,6 +171,61 @@ public sealed class MarketAcquisitionPlannerTests
     }
 
     [Fact]
+    public void BuildPlan_AllWorldSweepCreatesProbeSubtasksForEveryNorthAmericaWorld()
+    {
+        var request = CreateRequest(
+            quantity: 0,
+            worldMode: "AllWorldSweep",
+            quantityMode: "AllBelowThreshold",
+            maxUnitPrice: 100,
+            maxTotalGil: 0);
+        var listings = new[] { CreateListing("Gilgamesh", quantity: 1, unitPrice: 1, listingId: "known") };
+
+        var plan = MarketMafioso.MarketAcquisition.MarketAcquisitionPlanner.BuildPlan(
+            request,
+            listings,
+            DateTimeOffset.UnixEpoch,
+            currentWorld: "Siren");
+
+        Assert.Equal("Ready", plan.Status);
+        Assert.Equal(32, plan.WorldBatches.Count);
+        Assert.All(plan.WorldBatches, batch =>
+        {
+            var subtask = Assert.Single(batch.ItemSubtasks);
+            Assert.Equal(request.ItemId, subtask.ItemId);
+        });
+        Assert.Contains(plan.WorldBatches, batch => batch.WorldName == "Gilgamesh" && batch.Listings.Count == 1);
+        Assert.Contains(plan.WorldBatches, batch => batch.WorldName == "Siren" && batch.Listings.Count == 0);
+    }
+
+    [Fact]
+    public void BuildPlan_AllWorldSweepCanScopeToSelectedDataCenters()
+    {
+        var request = CreateRequest(
+            quantity: 0,
+            worldMode: "AllWorldSweep",
+            quantityMode: "AllBelowThreshold",
+            maxUnitPrice: 100,
+            maxTotalGil: 0) with
+        {
+            SweepScope = "DataCenters",
+            SweepDataCenters = ["Dynamis", "Crystal"],
+        };
+
+        var plan = MarketMafioso.MarketAcquisition.MarketAcquisitionPlanner.BuildPlan(
+            request,
+            [],
+            DateTimeOffset.UnixEpoch,
+            currentWorld: "Rafflesia");
+
+        Assert.Equal(16, plan.WorldBatches.Count);
+        Assert.All(plan.WorldBatches, batch => Assert.Contains(batch.DataCenter, new[] { "Dynamis", "Crystal" }));
+        Assert.Contains(plan.WorldBatches, batch => batch.WorldName == "Rafflesia");
+        Assert.Contains(plan.WorldBatches, batch => batch.WorldName == "Zalera");
+        Assert.DoesNotContain(plan.WorldBatches, batch => batch.WorldName == "Siren");
+    }
+
+    [Fact]
     public void BuildPlan_RouteOrdersCurrentWorldThenCurrentDataCenterBeforeOtherDataCenters()
     {
         var request = CreateRequest(quantity: 1_500, maxUnitPrice: 2_000, maxTotalGil: 0, targetWorld: "Siren");

@@ -96,6 +96,21 @@ public sealed class MarketBoardItemSearchDriverTests
     }
 
     [Fact]
+    public void IsOpenListingResultForRequestedItem_ReturnsTrueForMatchingListingItem()
+    {
+        Assert.True(MarketBoardItemSearchDriver.IsOpenListingResultForRequestedItem(5118, 5118));
+    }
+
+    [Theory]
+    [InlineData(5118u, 12551u)]
+    [InlineData(5118u, 0u)]
+    [InlineData(0u, 5118u)]
+    public void IsOpenListingResultForRequestedItem_ReturnsFalseForStaleOrMissingListingItem(uint requestedItemId, uint openResultItemId)
+    {
+        Assert.False(MarketBoardItemSearchDriver.IsOpenListingResultForRequestedItem(requestedItemId, openResultItemId));
+    }
+
+    [Fact]
     public void GetSearchSubmitCallbackSequence_PrimesInputBeforeEnter()
     {
         Assert.Equal(

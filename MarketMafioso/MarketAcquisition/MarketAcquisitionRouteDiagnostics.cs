@@ -60,8 +60,18 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
 
     public static MarketAcquisitionRouteDiagnostics CreateEnabled(string directory, DateTimeOffset startedAt)
     {
+        return CreateEnabled(directory, startedAt, "route");
+    }
+
+    public static MarketAcquisitionRouteDiagnostics CreateInputCapture(string directory, DateTimeOffset startedAt)
+    {
+        return CreateEnabled(directory, startedAt, "input-capture");
+    }
+
+    private static MarketAcquisitionRouteDiagnostics CreateEnabled(string directory, DateTimeOffset startedAt, string filePrefix)
+    {
         Directory.CreateDirectory(directory);
-        return new MarketAcquisitionRouteDiagnostics(GetAvailableLogPath(directory, startedAt), startedAt);
+        return new MarketAcquisitionRouteDiagnostics(GetAvailableLogPath(directory, startedAt, filePrefix), startedAt);
     }
 
     public void Record(
@@ -201,9 +211,9 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
             : elapsed.ToString(@"mm\:ss\.fff", CultureInfo.InvariantCulture);
     }
 
-    private static string GetAvailableLogPath(string directory, DateTimeOffset startedAt)
+    private static string GetAvailableLogPath(string directory, DateTimeOffset startedAt, string filePrefix)
     {
-        var baseName = $"route-{startedAt:yyyyMMdd-HHmmss}";
+        var baseName = $"{filePrefix}-{startedAt:yyyyMMdd-HHmmss}";
         var path = Path.Combine(directory, $"{baseName}.log");
         if (!File.Exists(path))
             return path;

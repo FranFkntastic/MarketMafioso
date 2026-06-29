@@ -22,13 +22,18 @@ public sealed class MarketAcquisitionRouteRunnerTests
         var directory = CreateTempDirectory();
         using var runner = new MarketMafioso.MarketAcquisition.MarketAcquisitionRouteRunner(directory);
 
-        runner.Start(CreatePlan("Maduin"), enableDiagnostics: true);
+        runner.Start(CreateMultiItemWorldPlan("Maduin"), enableDiagnostics: true);
         runner.ExecutePendingTravelCommand(_ => true);
 
         Assert.NotNull(runner.LastDiagnosticFilePath);
         var text = ReadLog(runner.LastDiagnosticFilePath!);
         Assert.Contains("Market acquisition route diagnostics started.", text, StringComparison.Ordinal);
         Assert.Contains("route-start", text, StringComparison.Ordinal);
+        Assert.Contains("requestId: request-1", text, StringComparison.Ordinal);
+        Assert.Contains("worldMode: Recommended", text, StringComparison.Ordinal);
+        Assert.Contains("worldCount: 1", text, StringComparison.Ordinal);
+        Assert.Contains("firstStop: Maduin", text, StringComparison.Ordinal);
+        Assert.Contains("firstItem: Varnish (7017)", text, StringComparison.Ordinal);
         Assert.Contains("travel-command", text, StringComparison.Ordinal);
     }
 
@@ -468,6 +473,8 @@ public sealed class MarketAcquisitionRouteRunnerTests
 
         Assert.True(result.Success);
         Assert.NotNull(runner.LastDiagnosticFilePath);
+        Assert.EndsWith(".log", runner.LastDiagnosticFilePath!, StringComparison.Ordinal);
+        Assert.Contains("input-capture-", Path.GetFileName(runner.LastDiagnosticFilePath!), StringComparison.Ordinal);
         var text = ReadLog(runner.LastDiagnosticFilePath!);
         Assert.Contains("input-capture", text, StringComparison.Ordinal);
         Assert.Contains("label: before-purchase-click", text, StringComparison.Ordinal);
