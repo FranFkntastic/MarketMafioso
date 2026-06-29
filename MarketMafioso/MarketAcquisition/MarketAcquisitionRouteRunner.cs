@@ -547,6 +547,53 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
             : MarketAcquisitionRouteActionResult.Fail(result.Message);
     }
 
+    public void RecordLineProgress(
+        string lineId,
+        string? itemName,
+        string status,
+        uint purchasedQuantity,
+        uint spentGil,
+        string message)
+    {
+        diagnostics.Record(
+            "line-progress",
+            message,
+            new Dictionary<string, string?>
+            {
+                ["lineId"] = lineId,
+                ["itemName"] = itemName,
+                ["status"] = status,
+                ["purchasedQuantity"] = purchasedQuantity.ToString(),
+                ["spentGil"] = spentGil.ToString(),
+            });
+    }
+
+    public void RecordPurchaseAudit(
+        string lineId,
+        string? itemName,
+        string worldName,
+        string listingId,
+        string retainerId,
+        uint quantity,
+        uint totalGil,
+        string result)
+    {
+        diagnostics.Record(
+            "purchase-audit",
+            $"Purchase audit {result}: {itemName ?? lineId} on {worldName}, listing {listingId}.",
+            new Dictionary<string, string?>
+            {
+                ["lineId"] = lineId,
+                ["itemName"] = itemName,
+                ["world"] = worldName,
+                ["listingId"] = listingId,
+                ["retainerId"] = retainerId,
+                ["quantity"] = quantity.ToString(),
+                ["totalGil"] = totalGil.ToString(),
+                ["result"] = result,
+            });
+    }
+
     public MarketAcquisitionRouteActionResult RecordWorldPurchaseBatchComplete(
         string currentWorld,
         uint purchasedQuantity,

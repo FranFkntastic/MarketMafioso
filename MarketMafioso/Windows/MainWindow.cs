@@ -59,6 +59,9 @@ public class MainWindow : Window, IDisposable
     private uint activeWorldPurchasedQuantity;
     private uint activeWorldSpentGil;
     private string? activeWorldPurchaseBatchWorld;
+    private string? activePurchaseLineId;
+    private uint activeLinePurchasedQuantity;
+    private uint activeLineSpentGil;
     private DateTimeOffset nextGuidedRouteMonitorUtc = DateTimeOffset.MinValue;
     private DateTimeOffset nextMarketBoardPurchaseMonitorUtc = DateTimeOffset.MinValue;
     private int marketInputCaptureIndex;
@@ -802,6 +805,23 @@ public class MainWindow : Window, IDisposable
             activeWorldSpentGil = 0;
         }
 
+        var activeLineId = GetActiveRouteLineId(claimed);
+        if (!string.Equals(activePurchaseLineId, activeLineId, StringComparison.Ordinal))
+        {
+            activePurchaseLineId = activeLineId;
+            activeLinePurchasedQuantity = 0;
+            activeLineSpentGil = 0;
+            if (activeStop.ActiveItemSubtask != null)
+            {
+                ReportAcquisitionLineProgress(
+                    activeStop.ActiveItemSubtask,
+                    "Running",
+                    activeLinePurchasedQuantity,
+                    activeLineSpentGil,
+                    $"Started purchasing {FormatAcquisitionItem(activeLine)} on {activeStop.WorldName}.");
+            }
+        }
+
         var freshRead = marketBoardListingReader.ReadCurrentListings(currentWorld);
         marketBoardReadResult = freshRead;
         if (!freshRead.Status.Equals("Ready", StringComparison.OrdinalIgnoreCase))
@@ -845,14 +865,35 @@ public class MainWindow : Window, IDisposable
 
     private void CompleteActiveWorldPurchaseBatch(string currentWorld)
     {
+        var activeSubtask = marketAcquisitionRouteRunner.ActiveStop?.ActiveItemSubtask;
+        if (activeSubtask != null && claimedAcquisitionRequest != null)
+        {
+            var lineStatus = activeLinePurchasedQuantity == 0
+                ? "SkippedNoLiveStock"
+                : "Complete";
+            ReportAcquisitionLineProgress(
+                activeSubtask,
+                lineStatus,
+                activeLinePurchasedQuantity,
+                activeLineSpentGil,
+                $"Completed {FormatAcquisitionItem(GetActiveRouteLine(claimedAcquisitionRequest))} on {currentWorld}: purchased {activeLinePurchasedQuantity:N0}, spent {FormatGil(activeLineSpentGil)}.");
+        }
+
         var result = marketAcquisitionRouteRunner.RecordWorldPurchaseBatchComplete(
             currentWorld,
-            activeWorldPurchasedQuantity,
-            activeWorldSpentGil);
+            activeSubtask == null ? activeWorldPurchasedQuantity : activeLinePurchasedQuantity,
+            activeSubtask == null ? activeWorldSpentGil : activeLineSpentGil);
         acquisitionStatus = result.Message;
         marketBoardPurchaseSession = null;
         marketBoardPurchaseResult = null;
-        activeWorldPurchaseBatchWorld = null;
+        if (marketAcquisitionRouteRunner.ActiveStop?.ActiveItemSubtask == null)
+        {
+            activePurchaseLineId = null;
+            activeLinePurchasedQuantity = 0;
+            activeLineSpentGil = 0;
+        }
+
+        activeWorldPurchaseBatchWorld = marketAcquisitionRouteRunner.ActiveStop?.WorldName;
         ReportGuidedRouteProgress();
     }
 
@@ -894,8 +935,12 @@ public class MainWindow : Window, IDisposable
             acquisitionStatus = $"Purchase: {session.Status}. {session.Message}";
             if (session.Status.Equals("Completed", StringComparison.OrdinalIgnoreCase))
             {
+                var completedCandidate = session.Candidate;
                 activeWorldPurchasedQuantity = checked(activeWorldPurchasedQuantity + session.Candidate.Quantity);
                 activeWorldSpentGil = checked(activeWorldSpentGil + session.Candidate.TotalGil);
+                activeLinePurchasedQuantity = checked(activeLinePurchasedQuantity + completedCandidate.Quantity);
+                activeLineSpentGil = checked(activeLineSpentGil + completedCandidate.TotalGil);
+                ReportConfirmedPurchase(completedCandidate, activeLinePurchasedQuantity, activeLineSpentGil);
                 marketBoardPurchaseSession = null;
                 marketBoardPurchaseResult = null;
                 if (marketBoardReadResult?.Status is "MarketBoardNotOpen" or "NoListings")
@@ -1140,6 +1185,18 @@ public class MainWindow : Window, IDisposable
             MaxUnitPrice = activeSubtask.MaxUnitPrice,
             MaxTotalGil = activeSubtask.GilCap,
         };
+    }
+
+    private string GetActiveRouteLineId(MarketAcquisitionClaimView claimed)
+    {
+        var activeSubtask = marketAcquisitionRouteRunner.ActiveStop?.ActiveItemSubtask;
+        if (!string.IsNullOrWhiteSpace(activeSubtask?.LineId))
+            return activeSubtask.LineId;
+
+        var firstLine = GetAcquisitionPlanLines(claimed).FirstOrDefault();
+        return string.IsNullOrWhiteSpace(firstLine?.LineId)
+            ? claimed.Id
+            : firstLine.LineId;
     }
 
     private async Task<MarketAcquisitionClaimView> EnsureAcquisitionClaimReadyForPlanningAsync(
@@ -1395,6 +1452,9 @@ public class MainWindow : Window, IDisposable
             activeWorldPurchasedQuantity = 0;
             activeWorldSpentGil = 0;
             activeWorldPurchaseBatchWorld = null;
+            activePurchaseLineId = null;
+            activeLinePurchasedQuantity = 0;
+            activeLineSpentGil = 0;
             guidedRouteProbeRunning = false;
             nextGuidedRouteMonitorUtc = DateTimeOffset.MinValue;
             Interlocked.Increment(ref guidedRouteProgressSessionVersion);
@@ -1424,6 +1484,9 @@ public class MainWindow : Window, IDisposable
             activeWorldPurchasedQuantity = 0;
             activeWorldSpentGil = 0;
             activeWorldPurchaseBatchWorld = null;
+            activePurchaseLineId = null;
+            activeLinePurchasedQuantity = 0;
+            activeLineSpentGil = 0;
             guidedRouteProbeRunning = false;
             nextGuidedRouteMonitorUtc = DateTimeOffset.MinValue;
             Interlocked.Increment(ref guidedRouteProgressSessionVersion);
@@ -1475,6 +1538,9 @@ public class MainWindow : Window, IDisposable
         activeWorldPurchasedQuantity = 0;
         activeWorldSpentGil = 0;
         activeWorldPurchaseBatchWorld = null;
+        activePurchaseLineId = null;
+        activeLinePurchasedQuantity = 0;
+        activeLineSpentGil = 0;
         guidedRouteProbeRunning = false;
         Interlocked.Increment(ref guidedRouteProgressSessionVersion);
         guidedRouteProgressNonce = Guid.NewGuid().ToString("N");
@@ -1610,6 +1676,200 @@ public class MainWindow : Window, IDisposable
                     acquisitionStatus = $"Route progress report failed: {ex.Message}";
                     log.Warning(ex, "[MarketMafioso] Unable to report market acquisition route progress.");
                 }
+            }
+        });
+    }
+
+    private void ReportConfirmedPurchase(
+        MarketBoardPurchaseCandidate candidate,
+        uint linePurchasedQuantity,
+        uint lineSpentGil)
+    {
+        var claimed = claimedAcquisitionRequest;
+        var activeSubtask = marketAcquisitionRouteRunner.ActiveStop?.ActiveItemSubtask;
+        if (claimed == null ||
+            activeSubtask == null ||
+            string.IsNullOrWhiteSpace(claimed.ClaimToken))
+            return;
+
+        var lineId = string.IsNullOrWhiteSpace(activeSubtask.LineId)
+            ? GetActiveRouteLineId(claimed)
+            : activeSubtask.LineId;
+        var itemName = activeSubtask.ItemName;
+        var worldName = string.IsNullOrWhiteSpace(candidate.WorldName)
+            ? GetCurrentWorldName()
+            : candidate.WorldName;
+        var message = $"Purchased {candidate.Quantity:N0} {FormatAcquisitionItem(GetActiveRouteLine(claimed))} on {worldName} for {FormatGil(candidate.TotalGil)}.";
+
+        marketAcquisitionRouteRunner.RecordPurchaseAudit(
+            lineId,
+            itemName,
+            worldName,
+            candidate.ListingId,
+            candidate.RetainerId,
+            candidate.Quantity,
+            candidate.TotalGil,
+            "Purchased");
+        marketAcquisitionRouteRunner.RecordLineProgress(
+            lineId,
+            itemName,
+            "Running",
+            linePurchasedQuantity,
+            lineSpentGil,
+            message);
+
+        ReportPurchaseAuditAsync(
+            claimed,
+            lineId,
+            itemName,
+            candidate,
+            worldName,
+            message);
+        ReportLineProgressAsync(
+            claimed,
+            lineId,
+            itemName,
+            "Running",
+            linePurchasedQuantity,
+            lineSpentGil,
+            message,
+            reason: null);
+    }
+
+    private void ReportAcquisitionLineProgress(
+        MarketAcquisitionWorldItemSubtask subtask,
+        string status,
+        uint purchasedQuantity,
+        uint spentGil,
+        string message)
+    {
+        var claimed = claimedAcquisitionRequest;
+        if (claimed == null ||
+            string.IsNullOrWhiteSpace(claimed.ClaimToken))
+            return;
+
+        var lineId = string.IsNullOrWhiteSpace(subtask.LineId)
+            ? GetActiveRouteLineId(claimed)
+            : subtask.LineId;
+        marketAcquisitionRouteRunner.RecordLineProgress(
+            lineId,
+            subtask.ItemName,
+            status,
+            purchasedQuantity,
+            spentGil,
+            message);
+        ReportLineProgressAsync(
+            claimed,
+            lineId,
+            subtask.ItemName,
+            status,
+            purchasedQuantity,
+            spentGil,
+            message,
+            reason: null);
+    }
+
+    private void ReportPurchaseAuditAsync(
+        MarketAcquisitionClaimView claimed,
+        string lineId,
+        string? itemName,
+        MarketBoardPurchaseCandidate candidate,
+        string worldName,
+        string message)
+    {
+        if (string.IsNullOrWhiteSpace(config.ApiKey) ||
+            string.IsNullOrWhiteSpace(config.ServerUrl))
+            return;
+
+        var eventSequence = Interlocked.Increment(ref guidedRouteProgressReportSequence);
+        var attemptId = guidedRouteProgressNonce;
+        var idempotencyKey = $"{config.PluginInstanceId}:{attemptId}:purchase:{eventSequence}";
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                await acquisitionClient.PostPurchaseAuditAsync(
+                    config.ServerUrl,
+                    config.ApiKey,
+                    claimed.Id,
+                    new MarketAcquisitionPurchaseAuditRequest
+                    {
+                        ClaimToken = claimed.ClaimToken,
+                        IdempotencyKey = idempotencyKey,
+                        AttemptId = attemptId,
+                        Sequence = eventSequence,
+                        LineId = lineId,
+                        WorldName = worldName,
+                        ItemId = candidate.ItemId,
+                        ItemName = itemName,
+                        ListingId = candidate.ListingId,
+                        RetainerName = candidate.RetainerName,
+                        RetainerId = candidate.RetainerId,
+                        Quantity = candidate.Quantity,
+                        UnitPrice = candidate.UnitPrice,
+                        TotalGil = candidate.TotalGil,
+                        IsHq = candidate.IsHq,
+                        Result = "Purchased",
+                        Message = message,
+                    },
+                    cancellation.Token).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                log.Warning(ex, "[MarketMafioso] Unable to report market acquisition purchase audit.");
+            }
+        });
+    }
+
+    private void ReportLineProgressAsync(
+        MarketAcquisitionClaimView claimed,
+        string lineId,
+        string? itemName,
+        string status,
+        uint purchasedQuantity,
+        uint spentGil,
+        string message,
+        string? reason)
+    {
+        if (string.IsNullOrWhiteSpace(config.ApiKey) ||
+            string.IsNullOrWhiteSpace(config.ServerUrl))
+            return;
+
+        var eventSequence = Interlocked.Increment(ref guidedRouteProgressReportSequence);
+        var attemptId = guidedRouteProgressNonce;
+        var idempotencyKey = $"{config.PluginInstanceId}:{attemptId}:line:{lineId}:{eventSequence}";
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                await acquisitionClient.PostLineProgressAsync(
+                    config.ServerUrl,
+                    config.ApiKey,
+                    claimed.Id,
+                    lineId,
+                    new MarketAcquisitionLineProgressRequest
+                    {
+                        ClaimToken = claimed.ClaimToken,
+                        IdempotencyKey = idempotencyKey,
+                        AttemptId = attemptId,
+                        Sequence = eventSequence,
+                        Status = status,
+                        PurchasedQuantity = purchasedQuantity,
+                        SpentGil = spentGil,
+                        Message = message,
+                        Reason = reason,
+                    },
+                    cancellation.Token).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                log.Warning(
+                    ex,
+                    "[MarketMafioso] Unable to report market acquisition line progress for {LineId} ({ItemName}).",
+                    lineId,
+                    itemName ?? "unknown item");
             }
         });
     }

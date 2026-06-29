@@ -792,7 +792,7 @@ Expected: route session line-state tests pass.
 - Modify: `MarketMafioso/MarketAcquisition/MarketAcquisitionRouteRunner.cs`
 - Test: `MarketMafioso.Tests/MarketAcquisition/MarketAcquisitionRouteRunnerTests.cs`
 
-- [ ] **Step 1: Add route diagnostics expectation**
+- [x] **Step 1: Add route diagnostics expectation**
 
 Add route runner test proving line id appears in diagnostics:
 
@@ -818,7 +818,7 @@ public void RecordLineProgressWritesLineIdentity()
 }
 ```
 
-- [ ] **Step 2: Add plugin line progress helper**
+- [x] **Step 2: Add plugin line progress helper**
 
 In `MainWindow`, add:
 
@@ -856,7 +856,7 @@ private Task ReportAcquisitionLineProgressAsync(
 
 Use the existing progress nonce/sequence model. If sequence must remain single-use across event kinds, reserve a helper that increments exactly once per outbound event.
 
-- [ ] **Step 3: Add plugin purchase audit helper**
+- [x] **Step 3: Add plugin purchase audit helper**
 
 In `MainWindow`, add:
 
@@ -901,7 +901,7 @@ private Task ReportAcquisitionPurchaseAuditAsync(
 
 Adjust property names to match `MarketBoardPurchaseCandidate`; keep the payload complete and stable.
 
-- [ ] **Step 4: Call line progress at subtask boundaries**
+- [x] **Step 4: Call line progress at subtask boundaries**
 
 Emit:
 
@@ -912,7 +912,7 @@ Emit:
 
 Batch-level route failures continue using existing lifecycle progress/fail endpoints.
 
-- [ ] **Step 5: Run plugin build**
+- [x] **Step 5: Run plugin build**
 
 Run:
 

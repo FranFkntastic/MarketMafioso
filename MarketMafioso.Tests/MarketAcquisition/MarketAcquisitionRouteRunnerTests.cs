@@ -38,6 +38,54 @@ public sealed class MarketAcquisitionRouteRunnerTests
     }
 
     [Fact]
+    public void RecordLineProgress_WritesLineIdentityToDiagnostics()
+    {
+        var directory = CreateTempDirectory();
+        using var runner = new MarketMafioso.MarketAcquisition.MarketAcquisitionRouteRunner(directory);
+        runner.Start(MarketAcquisitionTestPlans.MultiLineSingleWorld(), enableDiagnostics: true);
+
+        runner.RecordLineProgress(
+            lineId: "batch-1-line-2",
+            itemName: "Silver Ingot",
+            status: "Running",
+            purchasedQuantity: 5,
+            spentGil: 2500,
+            message: "Bought safe listing.");
+
+        var text = ReadLog(runner.LastDiagnosticFilePath!);
+        Assert.Contains("line-progress", text, StringComparison.Ordinal);
+        Assert.Contains("lineId: batch-1-line-2", text, StringComparison.Ordinal);
+        Assert.Contains("itemName: Silver Ingot", text, StringComparison.Ordinal);
+        Assert.Contains("purchasedQuantity: 5", text, StringComparison.Ordinal);
+        Assert.Contains("spentGil: 2500", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RecordPurchaseAudit_WritesListingIdentityToDiagnostics()
+    {
+        var directory = CreateTempDirectory();
+        using var runner = new MarketMafioso.MarketAcquisition.MarketAcquisitionRouteRunner(directory);
+        runner.Start(MarketAcquisitionTestPlans.MultiLineSingleWorld(), enableDiagnostics: true);
+
+        runner.RecordPurchaseAudit(
+            lineId: "batch-1-line-2",
+            itemName: "Silver Ingot",
+            worldName: "Siren",
+            listingId: "listing-1",
+            retainerId: "retainer-1",
+            quantity: 5,
+            totalGil: 2500,
+            result: "Purchased");
+
+        var text = ReadLog(runner.LastDiagnosticFilePath!);
+        Assert.Contains("purchase-audit", text, StringComparison.Ordinal);
+        Assert.Contains("lineId: batch-1-line-2", text, StringComparison.Ordinal);
+        Assert.Contains("world: Siren", text, StringComparison.Ordinal);
+        Assert.Contains("listingId: listing-1", text, StringComparison.Ordinal);
+        Assert.Contains("retainerId: retainer-1", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ExecutePendingTravelCommand_SendsCurrentStopCommand()
     {
         using var runner = CreateRunner();
