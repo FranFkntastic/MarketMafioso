@@ -213,6 +213,7 @@ public sealed class MarketAcquisitionRequestStore
 
     public async Task<IReadOnlyList<MarketAcquisitionRequestView>> ListRecentAsync(
         int limit,
+        bool includeTerminal,
         CancellationToken cancellationToken)
     {
         if (limit < 1)
@@ -260,10 +261,18 @@ public sealed class MarketAcquisitionRequestStore
                 ORDER BY latest_attempt.id DESC
                 LIMIT 1
               )
+            WHERE $includeTerminal = 1
+               OR requests.status NOT IN ($completeStatus, $failedStatus, $cancelledStatus, $rejectedStatus, $expiredStatus)
             ORDER BY requests.created_at_utc DESC
             LIMIT $limit;
             """;
         command.Parameters.AddWithValue("$limit", limit);
+        command.Parameters.AddWithValue("$includeTerminal", includeTerminal ? 1 : 0);
+        command.Parameters.AddWithValue("$completeStatus", MarketAcquisitionStatuses.Complete);
+        command.Parameters.AddWithValue("$failedStatus", MarketAcquisitionStatuses.Failed);
+        command.Parameters.AddWithValue("$cancelledStatus", MarketAcquisitionStatuses.Cancelled);
+        command.Parameters.AddWithValue("$rejectedStatus", MarketAcquisitionStatuses.Rejected);
+        command.Parameters.AddWithValue("$expiredStatus", MarketAcquisitionStatuses.Expired);
 
         var requests = new List<MarketAcquisitionRequestView>();
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);

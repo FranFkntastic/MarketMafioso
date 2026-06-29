@@ -51,7 +51,9 @@ else
                                SelectedRequestChanged="SelectRequestAsync"
                                LiveConnected="@_eventsConnected"
                                LiveStatusText="@_liveStatus"
+                               IncludeTerminal="State.IncludeTerminal"
                                RefreshRequested="RefreshRequestsAsync"
+                               IncludeTerminalChanged="SetIncludeTerminalAsync"
                                CancelRequested="CancelRequestAsync"
                                ResendRequested="ResendRequestAsync"
                                TemplateRequested="UseRequestAsTemplateAsync" />
@@ -169,7 +171,10 @@ else
             json,
             new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
         if (requests is not null)
-            State.ApplySnapshot(requests);
+        {
+            if (!State.IncludeTerminal)
+                State.ApplySnapshot(requests);
+        }
 
         return InvokeAsync(StateHasChanged);
     }
@@ -186,6 +191,9 @@ else
         State.StageAsync(request);
 
     private Task RefreshRequestsAsync() => State.RefreshAsync();
+
+    private Task SetIncludeTerminalAsync(bool includeTerminal) =>
+        State.SetIncludeTerminalAsync(includeTerminal);
 
     private Task CancelRequestAsync(string id) => State.CancelAsync(id);
 

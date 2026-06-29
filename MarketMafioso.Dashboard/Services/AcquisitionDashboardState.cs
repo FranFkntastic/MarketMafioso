@@ -18,6 +18,7 @@ public sealed class AcquisitionDashboardState
     public IReadOnlyList<MarketAcquisitionRequestView> Requests { get; private set; } = [];
     public MarketAcquisitionRequestView? SelectedRequest { get; private set; }
     public bool IsBusy { get; private set; }
+    public bool IncludeTerminal { get; private set; }
 
     public async Task RefreshAsync(CancellationToken cancellationToken = default)
     {
@@ -29,9 +30,20 @@ public sealed class AcquisitionDashboardState
 
     public void ApplySnapshot(IReadOnlyList<MarketAcquisitionRequestView> requests)
     {
-        Requests = requests;
+        Requests = IncludeTerminal ? requests : requests.Where(request => !IsTerminalRequest(request)).ToArray();
         ReconcileSelectedRequest();
         Changed?.Invoke();
+    }
+
+    public async Task SetIncludeTerminalAsync(
+        bool includeTerminal,
+        CancellationToken cancellationToken = default)
+    {
+        if (IncludeTerminal == includeTerminal)
+            return;
+
+        IncludeTerminal = includeTerminal;
+        await RefreshAsync(cancellationToken);
     }
 
     public void SelectRequest(MarketAcquisitionRequestView? request)
@@ -74,7 +86,7 @@ public sealed class AcquisitionDashboardState
 
     private async Task RefreshCoreAsync(CancellationToken cancellationToken)
     {
-        Requests = await api.GetAcquisitionRequestsAsync(cancellationToken);
+        Requests = await api.GetAcquisitionRequestsAsync(IncludeTerminal, cancellationToken);
         ReconcileSelectedRequest();
     }
 
@@ -106,4 +118,7 @@ public sealed class AcquisitionDashboardState
 
         SelectedRequest = Requests.FirstOrDefault(request => request.Id == SelectedRequest.Id);
     }
+
+    private static bool IsTerminalRequest(MarketAcquisitionRequestView request) =>
+        request.Status is "Complete" or "Failed" or "Cancelled" or "Rejected" or "Expired";
 }

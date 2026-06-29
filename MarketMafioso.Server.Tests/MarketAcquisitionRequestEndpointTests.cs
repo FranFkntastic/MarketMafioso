@@ -1250,8 +1250,55 @@ public sealed class MarketAcquisitionRequestEndpointTests
 
         Assert.Equal(HttpStatusCode.Redirect, cancelComplete.StatusCode);
         Assert.Equal(HttpStatusCode.Redirect, cancelCompleteAgain.StatusCode);
-        var requests = await client.GetFromJsonAsync<JsonElement[]>("/marketmafioso/api/acquisition/requests");
+        var activeRequests = await client.GetFromJsonAsync<JsonElement[]>("/marketmafioso/api/acquisition/requests");
+        Assert.Empty(activeRequests!);
+
+        var requests = await client.GetFromJsonAsync<JsonElement[]>("/marketmafioso/api/acquisition/requests?includeTerminal=true");
         var request = Assert.Single(requests!);
+        Assert.Equal(claimed.RequestId, request.GetProperty("id").GetString());
+        Assert.Equal("Complete", request.GetProperty("status").GetString());
+    }
+
+    [Fact]
+    public async Task AcquisitionDashboardRequestListIncludesTerminalRequestsOnlyWhenRequested()
+    {
+        await using var application = CreateHostedApplication(
+            extraConfiguration: new KeyValuePair<string, string?>("MarketMafioso:TrustExternalDashboardAuth", "true"));
+        using var client = application.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false,
+        });
+        var claimed = await CreateAndClaimAsync(client, "dashboard-terminal-filter");
+
+        var accepted = await SendWithKeyAsync(
+            client,
+            HttpMethod.Post,
+            $"/marketmafioso/api/acquisition/requests/{claimed.RequestId}/accept",
+            "client-secret",
+            new
+            {
+                claimToken = claimed.ClaimToken,
+                idempotencyKey = "dashboard-terminal-filter-accept",
+            });
+        accepted.EnsureSuccessStatusCode();
+        var complete = await SendWithKeyAsync(
+            client,
+            HttpMethod.Post,
+            $"/marketmafioso/api/acquisition/requests/{claimed.RequestId}/complete",
+            "client-secret",
+            new
+            {
+                claimToken = claimed.ClaimToken,
+                idempotencyKey = "dashboard-terminal-filter-complete",
+                message = "Route complete.",
+            });
+        complete.EnsureSuccessStatusCode();
+
+        var active = await client.GetFromJsonAsync<JsonElement[]>("/marketmafioso/api/acquisition/requests");
+        var archived = await client.GetFromJsonAsync<JsonElement[]>("/marketmafioso/api/acquisition/requests?includeTerminal=true");
+
+        Assert.Empty(active!);
+        var request = Assert.Single(archived!);
         Assert.Equal(claimed.RequestId, request.GetProperty("id").GetString());
         Assert.Equal("Complete", request.GetProperty("status").GetString());
     }

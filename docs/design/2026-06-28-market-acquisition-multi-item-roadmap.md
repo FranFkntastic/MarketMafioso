@@ -51,7 +51,7 @@ Exit criteria:
 
 ## Phase 1: Batch Contracts And Storage
 
-Status: In progress
+Status: Mostly complete
 
 Objective: Add batch and line DTOs/storage while preserving existing single-item data as one-line batches.
 
@@ -148,11 +148,11 @@ Exit criteria:
 Current caveat:
 
 - Opportunistic subtasks can now be probed and reconciled against live market-board rows, but live validation still needs more end-to-end testing for mid-flight plan expansion.
-- Line-level purchase totals are currently local route-stop totals. Server progress/audit still needs explicit `lineId` payloads in Phase 6.
+- The market-board listing reader now reports when the game exposes more listings than the readable `InfoProxyItemSearch` cache. This is truncation evidence, not deeper-pagination support.
 
 ## Phase 6: Per-Line Progress And Audit
 
-Status: Planned
+Status: Mostly complete
 
 Objective: Make server and dashboard progress meaningful for batches.
 
@@ -161,13 +161,16 @@ Exit criteria:
 - Attempt events can include `lineId`.
 - Unknown or wrong-batch line ids fail explicitly.
 - Idempotent line-event replay works.
-- Batch status projects from line statuses and attempt terminal state.
 - Purchase audit rows include `lineId`.
-- Dashboard details show per-line status and purchase/skip history.
+- Dashboard details show per-line status and purchase totals.
+
+Current caveat:
+
+- Batch status still follows explicit batch lifecycle events. Richer batch-status projection from all line statuses can be added later if we want partial/under-procured terminal states to appear as first-class statuses.
 
 ## Phase 7: Cleanup And Live Validation
 
-Status: Planned
+Status: In progress
 
 Objective: Remove stale single-request assumptions and prove the multi-item loop live.
 
@@ -176,13 +179,14 @@ Exit criteria:
 - Dashboard cannot stage N independent requests from one queue.
 - Plugin cannot silently overwrite accepted/running batch state.
 - Single-line behavior still works through the new batch model.
-- Two low-value items can be staged, claimed, planned, routed, and purchased in one batch.
+- Two low-value items can be staged, claimed, planned, routed, and purchased in one batch. Needs final live-test confirmation after this feature track deploy.
 - Roadmap status is updated with live-test notes.
+- Terminal batches remain inspectable in the dashboard archive and can be reused as composer drafts through `Run again`.
 
 ## Deferred
 
 - Global batch gil cap.
-- Archive/preset `Run again` workflows.
-- Deeper market-board pagination.
+- Server-side route-log indexing.
+- Deeper market-board pagination beyond the visible game listing cache.
 - Craft Architect quality planning integration.
 - Native travel automation beyond Lifestream.

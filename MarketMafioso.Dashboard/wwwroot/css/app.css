@@ -512,6 +512,12 @@ body,
     padding: 8px 14px;
 }
 
+.request-view-toggle {
+    align-items: center;
+    display: inline-flex;
+    gap: 6px;
+}
+
 .status-pill {
     align-items: center;
     background: var(--mmf-field-bg);

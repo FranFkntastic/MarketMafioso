@@ -13,6 +13,16 @@
                 <span>@LiveStatusText</span>
             </span>
             <span class="status-pill">@Requests.Count total request(s)</span>
+            <div class="request-view-toggle">
+                <MudButton Size="Size.Small"
+                           Variant="@(!IncludeTerminal ? Variant.Filled : Variant.Outlined)"
+                           Class="quiet-button"
+                           OnClick="@(() => IncludeTerminalChanged.InvokeAsync(false))">Active</MudButton>
+                <MudButton Size="Size.Small"
+                           Variant="@(IncludeTerminal ? Variant.Filled : Variant.Outlined)"
+                           Class="quiet-button"
+                           OnClick="@(() => IncludeTerminalChanged.InvokeAsync(true))">Archive</MudButton>
+            </div>
             <span class="toolbar-spacer"></span>
             <MudButton Variant="Variant.Outlined" Class="quiet-button" OnClick="RefreshRequested">Refresh</MudButton>
         </div>
@@ -22,8 +32,8 @@
             {
                 <div class="request-empty-state">
                     <div>
-                        <h3>No acquisition requests yet</h3>
-                        <p>Create a request on the left. Active, waiting, running, and completed requests will appear here.</p>
+                        <h3>@EmptyTitle</h3>
+                        <p>@EmptyMessage</p>
                     </div>
                 </div>
             }
@@ -98,9 +108,12 @@
                                         <MudButton Size="Size.Small" Variant="Variant.Outlined">Actions</MudButton>
                                     </ActivatorContent>
                                     <ChildContent>
-                                        <MudMenuItem OnClick="@(() => CancelRequested.InvokeAsync(context.Item.Id))">Cancel</MudMenuItem>
+                                        @if (!IsTerminalRequest(context.Item))
+                                        {
+                                            <MudMenuItem OnClick="@(() => CancelRequested.InvokeAsync(context.Item.Id))">Cancel</MudMenuItem>
+                                        }
                                         <MudMenuItem OnClick="@(() => ResendRequested.InvokeAsync(context.Item.Id))">Resend</MudMenuItem>
-                                        <MudMenuItem OnClick="@(() => TemplateRequested.InvokeAsync(context.Item))">Use as template</MudMenuItem>
+                                        <MudMenuItem OnClick="@(() => TemplateRequested.InvokeAsync(context.Item))">@TemplateActionText(context.Item)</MudMenuItem>
                                     </ChildContent>
                                 </MudMenu>
                             </CellTemplate>
@@ -118,12 +131,22 @@
     [Parameter] public EventCallback<MarketAcquisitionRequestView?> SelectedRequestChanged { get; set; }
     [Parameter] public bool LiveConnected { get; set; }
     [Parameter] public string LiveStatusText { get; set; } = "Live updates idle";
+    [Parameter] public bool IncludeTerminal { get; set; }
     [Parameter] public EventCallback RefreshRequested { get; set; }
+    [Parameter] public EventCallback<bool> IncludeTerminalChanged { get; set; }
     [Parameter] public EventCallback<string> CancelRequested { get; set; }
     [Parameter] public EventCallback<string> ResendRequested { get; set; }
     [Parameter] public EventCallback<MarketAcquisitionRequestView> TemplateRequested { get; set; }
 
     private int ActiveRequestCount => Requests.Count(IsActiveRequest);
+
+    private string EmptyTitle => IncludeTerminal
+        ? "No archived requests yet"
+        : "No acquisition requests yet";
+
+    private string EmptyMessage => IncludeTerminal
+        ? "Completed, failed, cancelled, and rejected requests will appear here for inspection and reuse."
+        : "Create a request on the left. Waiting and running requests will appear here.";
 
     private async Task OnRowClicked(DataGridRowClickEventArgs<MarketAcquisitionRequestView> args)
     {
@@ -142,7 +165,13 @@
     };
 
     private static bool IsActiveRequest(MarketAcquisitionRequestView request) =>
-        request.Status is not ("Complete" or "Failed" or "Cancelled" or "Rejected");
+        !IsTerminalRequest(request);
+
+    private static bool IsTerminalRequest(MarketAcquisitionRequestView request) =>
+        request.Status is "Complete" or "Failed" or "Cancelled" or "Rejected" or "Expired";
+
+    private static string TemplateActionText(MarketAcquisitionRequestView request) =>
+        IsTerminalRequest(request) ? "Run again" : "Use as template";
 
     private static string FormatRoute(MarketAcquisitionRequestView request)
     {

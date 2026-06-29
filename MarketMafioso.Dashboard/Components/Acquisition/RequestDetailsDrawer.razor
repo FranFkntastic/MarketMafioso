@@ -161,9 +161,12 @@
             }
 
             <MudStack Row="true">
-                <MudButton Variant="Variant.Outlined" OnClick="@(() => CancelRequested.InvokeAsync(Request.Id))">Cancel</MudButton>
+                @if (!IsTerminalRequest(Request))
+                {
+                    <MudButton Variant="Variant.Outlined" OnClick="@(() => CancelRequested.InvokeAsync(Request.Id))">Cancel</MudButton>
+                }
                 <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="@(() => ResendRequested.InvokeAsync(Request.Id))">Resend</MudButton>
-                <MudButton Variant="Variant.Outlined" Color="Color.Primary" OnClick="@(() => TemplateRequested.InvokeAsync(Request))">Use as Template</MudButton>
+                <MudButton Variant="Variant.Outlined" Color="Color.Primary" OnClick="@(() => TemplateRequested.InvokeAsync(Request))">@TemplateActionText(Request)</MudButton>
             </MudStack>
         </MudStack>
     }
@@ -226,6 +229,12 @@
         "Running" or "AcceptedInPlugin" => Color.Warning,
         _ => Color.Info,
     };
+
+    private static bool IsTerminalRequest(MarketAcquisitionRequestView request) =>
+        request.Status is "Complete" or "Failed" or "Cancelled" or "Rejected" or "Expired";
+
+    private static string TemplateActionText(MarketAcquisitionRequestView request) =>
+        IsTerminalRequest(request) ? "Run Again" : "Use as Template";
 
     private static Color AttemptResultColor(string result) => result switch
     {

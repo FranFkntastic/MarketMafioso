@@ -1698,7 +1698,7 @@ Actual: focused planner tests pass. Plan diagnostics now explain hard-filter rej
 - Modify: `MarketMafioso.Server/Program.cs`
 - Modify: `MarketMafioso.Server/MarketAcquisitionRequestStore.cs`
 
-- [ ] **Step 1: Add dashboard API for terminal batches**
+- [x] **Step 1: Add dashboard API for terminal batches**
 
 Expose a query parameter on existing batch list:
 
@@ -1708,7 +1708,7 @@ GET /marketmafioso/api/acquisition/batches?includeTerminal=true
 
 Server should include terminal rows when `includeTerminal=true`; default remains active/non-terminal rows for the main board.
 
-- [ ] **Step 2: Add dashboard archive view**
+- [x] **Step 2: Add dashboard archive view**
 
 Add a dashboard tab or filter that shows:
 
@@ -1719,11 +1719,11 @@ Add a dashboard tab or filter that shows:
 
 Rows include item count, target, status, latest message, completed time, and actions.
 
-- [ ] **Step 3: Add `Run again` payload reuse**
+- [x] **Step 3: Add `Run again` payload reuse**
 
 On a terminal batch row, add `Run again` action that rehydrates the request builder with the old lines, routing, sweep scope, HQ policy, max unit, max quantity, and gil cap. It does not immediately stage.
 
-- [ ] **Step 4: Add client-local route log notice**
+- [x] **Step 4: Add client-local route log notice**
 
 Because route logs are currently plugin-local, add a dashboard diagnostics page section that clearly says:
 
@@ -1733,7 +1733,7 @@ Route logs are currently stored by the plugin on the client machine. Server-side
 
 Do not fake server log visibility.
 
-- [ ] **Step 5: Build dashboard**
+- [x] **Step 5: Build dashboard**
 
 Run:
 
@@ -1750,7 +1750,7 @@ Expected: dashboard builds.
 **Files:**
 - No source files expected unless verification exposes defects.
 
-- [ ] **Step 1: Run focused tests**
+- [x] **Step 1: Run focused tests**
 
 Run:
 
@@ -1761,7 +1761,7 @@ dotnet test "MarketMafioso.Server.Tests\MarketMafioso.Server.Tests.csproj" -c De
 
 Expected: all filtered tests pass.
 
-- [ ] **Step 2: Build solution**
+- [x] **Step 2: Build solution**
 
 Run:
 
@@ -1771,7 +1771,7 @@ dotnet build "MarketMafioso.sln" -c Debug
 
 Expected: build passes with no errors.
 
-- [ ] **Step 3: Deploy plugin for live testing**
+- [x] **Step 3: Deploy plugin for live testing**
 
 Run:
 
@@ -1796,7 +1796,7 @@ git status --short
 
 If the active branch is not the deployment branch, merge or cherry-pick intentionally before running the server deploy helper. Do not deploy a branch that does not contain the feature-track commits.
 
-- [ ] **Step 5: Update docs with execution discoveries**
+- [x] **Step 5: Update docs with execution discoveries**
 
 Update:
 

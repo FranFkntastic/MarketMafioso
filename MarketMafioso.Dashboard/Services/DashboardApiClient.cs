@@ -55,10 +55,14 @@ public sealed class DashboardApiClient
     }
 
     public async Task<IReadOnlyList<MarketAcquisitionRequestView>> GetAcquisitionRequestsAsync(
+        bool includeTerminal = false,
         CancellationToken cancellationToken = default)
     {
+        var path = includeTerminal
+            ? "api/acquisition/requests?includeTerminal=true"
+            : "api/acquisition/requests";
         return await http.GetFromJsonAsync<IReadOnlyList<MarketAcquisitionRequestView>>(
-            "api/acquisition/requests",
+            path,
             JsonOptions,
             cancellationToken) ?? [];
     }

@@ -86,9 +86,10 @@ app.MapGet("/health", () => Results.Ok(new
 
 app.MapGet("/api/acquisition/requests", async (
     MarketAcquisitionRequestStore acquisitionStore,
+    bool? includeTerminal,
     CancellationToken token) =>
 {
-    var acquisitionRequests = await acquisitionStore.ListRecentAsync(100, token);
+    var acquisitionRequests = await acquisitionStore.ListRecentAsync(100, includeTerminal ?? false, token);
     return Results.Ok(acquisitionRequests);
 });
 
@@ -152,7 +153,7 @@ app.MapGet("/api/events/stream", async (
 
     while (!token.IsCancellationRequested)
     {
-        var acquisitionRequests = await acquisitionStore.ListRecentAsync(100, token);
+        var acquisitionRequests = await acquisitionStore.ListRecentAsync(100, includeTerminal: false, token);
         await WriteSseEventAsync(response, "acquisition", acquisitionRequests, token);
 
         var events = await diagnostics.ListRecentAsync(25, null, null, null, token);

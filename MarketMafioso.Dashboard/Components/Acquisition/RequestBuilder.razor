@@ -297,10 +297,6 @@
             return;
 
         _appliedPresetVersion = PresetVersion;
-        var itemName = string.IsNullOrWhiteSpace(PresetRequest.ItemName)
-            ? $"Item {PresetRequest.ItemId}"
-            : PresetRequest.ItemName;
-
         _selectedCharacterId = Characters
             .FirstOrDefault(character =>
                 string.Equals(character.CharacterName, PresetRequest.TargetCharacterName, StringComparison.OrdinalIgnoreCase) &&
@@ -312,17 +308,47 @@
         _sweepDataCenters.Clear();
         foreach (var dataCenter in PresetRequest.SweepDataCenters)
             _sweepDataCenters.Add(dataCenter);
-        _selectedItem = new XivItemSearchResult
+
+        var lines = MarketAcquisitionRequestDisplay.LinesFor(PresetRequest);
+        _queue.Clear();
+        foreach (var line in lines)
         {
-            ItemId = PresetRequest.ItemId,
-            Name = itemName,
-        };
-        _itemSearchText = _selectedItem.ToString();
-        _quantityMode = string.IsNullOrWhiteSpace(PresetRequest.QuantityMode) ? "AllBelowThreshold" : PresetRequest.QuantityMode;
-        _quantity = PresetRequest.Quantity == 0 ? null : PresetRequest.Quantity;
-        _hqPolicy = string.IsNullOrWhiteSpace(PresetRequest.HqPolicy) ? "Either" : PresetRequest.HqPolicy;
-        _maxUnitPrice = PresetRequest.MaxUnitPrice == 0 ? null : PresetRequest.MaxUnitPrice;
-        _gilCap = PresetRequest.MaxTotalGil == 0 ? null : PresetRequest.MaxTotalGil;
+            _queue.Add(new QueuedAcquisitionItem
+            {
+                Item = new XivItemSearchResult
+                {
+                    ItemId = line.ItemId,
+                    Name = MarketAcquisitionRequestDisplay.ItemLabel(line),
+                    Type = line.ItemKind,
+                },
+                QuantityMode = string.IsNullOrWhiteSpace(line.QuantityMode) ? "AllBelowThreshold" : line.QuantityMode,
+                Quantity = line.QuantityMode == "AllBelowThreshold" ? line.MaxQuantity : line.TargetQuantity,
+                HqPolicy = string.IsNullOrWhiteSpace(line.HqPolicy) ? "Either" : line.HqPolicy,
+                MaxUnitPrice = line.MaxUnitPrice,
+                MaxTotalGil = line.GilCap,
+                WorldMode = _worldMode,
+            });
+        }
+
+        var firstLine = lines.FirstOrDefault();
+        _selectedItem = firstLine is null
+            ? null
+            : new XivItemSearchResult
+            {
+                ItemId = firstLine.ItemId,
+                Name = MarketAcquisitionRequestDisplay.ItemLabel(firstLine),
+                Type = firstLine.ItemKind,
+            };
+        _itemSearchText = _selectedItem?.ToString() ?? string.Empty;
+        _quantityMode = firstLine is null || string.IsNullOrWhiteSpace(firstLine.QuantityMode) ? "AllBelowThreshold" : firstLine.QuantityMode;
+        _quantity = firstLine is null
+            ? null
+            : _quantityMode == "AllBelowThreshold"
+                ? firstLine.MaxQuantity == 0 ? null : firstLine.MaxQuantity
+                : firstLine.TargetQuantity == 0 ? null : firstLine.TargetQuantity;
+        _hqPolicy = firstLine is null || string.IsNullOrWhiteSpace(firstLine.HqPolicy) ? "Either" : firstLine.HqPolicy;
+        _maxUnitPrice = firstLine?.MaxUnitPrice is null or 0 ? null : firstLine.MaxUnitPrice;
+        _gilCap = firstLine?.GilCap is null or 0 ? null : firstLine.GilCap;
     }
 
     private async Task<IEnumerable<XivItemSearchResult>> SearchItemsAsync(string value, CancellationToken token)

@@ -66,6 +66,9 @@
                     <MudText Typo="Typo.caption" Class="muted">
                         Acquisition and diagnostic snapshots stream through @_storage.AcquisitionSseEndpoint every @_storage.AcquisitionSseCadenceSeconds second(s).
                     </MudText>
+                    <MudAlert Severity="Severity.Info" Dense="true" Variant="Variant.Outlined">
+                        Route logs are currently stored by the plugin on the client machine. Server-side log indexing requires plugin upload of sanitized route summaries.
+                    </MudAlert>
                     <DiagnosticsEventGrid Events="_events"
                                           RefreshRequested="LoadDiagnosticsAsync"
                                           SelectedEventChanged="SelectDiagnosticEvent" />
