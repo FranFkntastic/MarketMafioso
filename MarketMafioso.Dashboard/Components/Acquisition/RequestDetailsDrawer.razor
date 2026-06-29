@@ -15,7 +15,7 @@
     {
         <MudStack Spacing="2" Class="details-drawer-content">
             <MudStack Row="true" AlignItems="AlignItems.Center">
-                <MudText Typo="Typo.h6">@(Request.ItemName ?? $"Item {Request.ItemId}")</MudText>
+                <MudText Typo="Typo.h6">@MarketAcquisitionRequestDisplay.TitleFor(Request)</MudText>
                 <MudSpacer />
                 <MudIconButton Icon="@Icons.Material.Filled.Close" OnClick="CloseAsync" />
             </MudStack>
@@ -26,10 +26,7 @@
                 <tbody>
                     <tr><td>Request</td><td>@Request.Id</td></tr>
                     <tr><td>Target</td><td>@Request.TargetCharacterName @@ @Request.TargetWorld</td></tr>
-                    <tr><td>Mode</td><td>@Request.QuantityMode</td></tr>
-                    <tr><td>Quantity</td><td>@FormatQuantity(Request)</td></tr>
-                    <tr><td>Max unit</td><td>@Request.MaxUnitPrice.ToString("N0") gil</td></tr>
-                    <tr><td>Gil cap</td><td>@(Request.MaxTotalGil == 0 ? "No cap" : $"{Request.MaxTotalGil:N0} gil")</td></tr>
+                    <tr><td>Lines</td><td>@MarketAcquisitionRequestDisplay.LinesFor(Request).Count.ToString("N0")</td></tr>
                     <tr><td>Route</td><td>@FormatRoute(Request)</td></tr>
                     <tr><td>Latest event</td><td>@FormatLatestRequestEvent(Request)</td></tr>
                     <tr><td>Runner state</td><td>@(Request.LatestRunnerState ?? "-")</td></tr>
@@ -37,6 +34,42 @@
                     <tr><td>Plugin version</td><td>@(Request.LatestAttemptPluginVersion ?? "-")</td></tr>
                 </tbody>
             </MudSimpleTable>
+
+            <MudPaper Class="compact-card dashboard-panel details-section" Elevation="0">
+                <MudStack Spacing="1">
+                    <MudText Typo="Typo.subtitle2">Purchase Lines</MudText>
+                    <MudSimpleTable Dense="true" Class="details-table batch-lines-table">
+                        <thead>
+                            <tr>
+                                <th>Item</th>
+                                <th>Mode</th>
+                                <th>Qty</th>
+                                <th>Max Unit</th>
+                                <th>Gil Cap</th>
+                                <th>Status</th>
+                                <th>Bought</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var line in MarketAcquisitionRequestDisplay.LinesFor(Request))
+                            {
+                                <tr>
+                                    <td>
+                                        @MarketAcquisitionRequestDisplay.ItemLabel(line)<br />
+                                        <span class="muted">Item @line.ItemId</span>
+                                    </td>
+                                    <td>@MarketAcquisitionRequestDisplay.ModeDisplay(line)</td>
+                                    <td>@MarketAcquisitionRequestDisplay.QuantityDisplay(line)</td>
+                                    <td>@MarketAcquisitionRequestDisplay.MaxUnitGilDisplay(line)</td>
+                                    <td>@MarketAcquisitionRequestDisplay.GilCapDisplay(line)</td>
+                                    <td>@(string.IsNullOrWhiteSpace(line.Status) ? Request.Status : line.Status)</td>
+                                    <td>@line.PurchasedQuantity.ToString("N0") / @line.SpentGil.ToString("N0") gil</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </MudSimpleTable>
+                </MudStack>
+            </MudPaper>
 
             @if (_loadingTimeline)
             {
@@ -200,11 +233,6 @@
         "stale_attempt" or "request_terminal" => Color.Warning,
         _ => Color.Info,
     };
-
-    private static string FormatQuantity(MarketAcquisitionRequestView request) =>
-        request.QuantityMode == "AllBelowThreshold"
-            ? request.Quantity == 0 ? "All safe stock" : $"Max {request.Quantity:N0}"
-            : request.Quantity.ToString("N0");
 
     private static string FormatTime(DateTimeOffset value) => value.ToLocalTime().ToString("HH:mm:ss");
 

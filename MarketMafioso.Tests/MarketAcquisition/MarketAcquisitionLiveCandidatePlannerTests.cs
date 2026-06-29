@@ -214,7 +214,33 @@ public sealed class MarketAcquisitionLiveCandidatePlannerTests
         Assert.Contains("prepared plan", ex.Message, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public void BuildCandidatePlan_AllowsActiveOpportunisticSubtaskThatWasNotInPreparedWorldBatch()
+    {
+        var request = CreateRequest(itemId: 4, itemName: "Lightning Shard", quantityMode: "AllBelowThreshold", quantity: 0, maxUnitPrice: 100);
+        var plan = CreatePlan();
+        var activeSubtask = CreateActiveSubtask(itemId: 4, itemName: "Lightning Shard", source: "Opportunistic");
+        var liveListings = new[]
+        {
+            CreateLiveListing("opportunistic-cheap", quantity: 8, unitPrice: 50, itemId: 4),
+        };
+
+        var candidatePlan = MarketMafioso.MarketAcquisition.MarketAcquisitionLiveCandidatePlanner.BuildCandidatePlan(
+            request,
+            plan,
+            activeSubtask,
+            "Gilgamesh",
+            4,
+            liveListings);
+
+        Assert.Equal("Ready", candidatePlan.Status);
+        Assert.Equal(8u, candidatePlan.WouldBuyQuantity);
+        Assert.Equal(["opportunistic-cheap"], candidatePlan.Rows.Where(row => row.Decision == "WouldBuy").Select(row => row.LiveListing.ListingId).ToArray());
+    }
+
     private static MarketMafioso.MarketAcquisition.MarketAcquisitionRequestView CreateRequest(
+        uint itemId = 2,
+        string itemName = "Fire Shard",
         string quantityMode = "TargetQuantity",
         uint quantity = 10,
         uint maxUnitPrice = 100,
@@ -227,8 +253,8 @@ public sealed class MarketAcquisitionLiveCandidatePlannerTests
             TargetCharacterName = "Wei Ning",
             TargetWorld = "Gilgamesh",
             Region = "North America",
-            ItemId = 2,
-            ItemName = "Fire Shard",
+            ItemId = itemId,
+            ItemName = itemName,
             QuantityMode = quantityMode,
             Quantity = quantity,
             HqPolicy = hqPolicy,
@@ -255,19 +281,47 @@ public sealed class MarketAcquisitionLiveCandidatePlannerTests
                     WorldName = "Gilgamesh",
                     PlannedQuantity = 10,
                     PlannedGil = 900,
+                    ItemSubtasks =
+                    [
+                        CreateActiveSubtask(itemId: 2, itemName: "Fire Shard", source: "Planned"),
+                    ],
                     Listings = [],
                 },
             ],
+        };
+
+    private static MarketMafioso.MarketAcquisition.MarketAcquisitionWorldItemSubtask CreateActiveSubtask(
+        uint itemId,
+        string itemName,
+        string source) =>
+        new()
+        {
+            LineId = $"line-{itemId}",
+            LineOrdinal = 0,
+            Source = source,
+            ItemId = itemId,
+            ItemName = itemName,
+            WorldName = "Gilgamesh",
+            DataCenter = "Aether",
+            QuantityMode = "AllBelowThreshold",
+            RequestedQuantity = 0,
+            HqPolicy = "Either",
+            MaxUnitPrice = 100,
+            GilCap = 0,
+            PlannedQuantity = 0,
+            PlannedGil = 0,
+            Listings = [],
         };
 
     private static MarketMafioso.MarketAcquisition.MarketBoardLiveListing CreateLiveListing(
         string listingId,
         uint quantity,
         uint unitPrice,
+        uint itemId = 2,
         bool hq = false) =>
         new()
         {
-            ItemId = 2,
+            ItemId = itemId,
             WorldName = "Gilgamesh",
             ListingId = listingId,
             RetainerId = $"retainer-{listingId}",

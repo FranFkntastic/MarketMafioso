@@ -195,7 +195,7 @@ else
     {
         _builderPreset = request;
         _builderPresetVersion++;
-        Status.Info($"Loaded {(request.ItemName ?? $"Item {request.ItemId}")} as a draft.");
+        Status.Info($"Loaded {MarketAcquisitionRequestDisplay.TitleFor(request)} as a draft.");
         return Task.CompletedTask;
     }
 

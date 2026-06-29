@@ -677,7 +677,7 @@ public class MainWindow : Window, IDisposable
         if (now < nextGuidedRouteMonitorUtc)
             return;
 
-        nextGuidedRouteMonitorUtc = now.AddSeconds(2);
+        nextGuidedRouteMonitorUtc = now.AddMilliseconds(500);
 
         try
         {
@@ -691,7 +691,7 @@ public class MainWindow : Window, IDisposable
                 {
                     if (TryCloseMarketBoardWindows())
                     {
-                        nextGuidedRouteMonitorUtc = DateTimeOffset.UtcNow.AddSeconds(1);
+                        nextGuidedRouteMonitorUtc = DateTimeOffset.UtcNow.AddMilliseconds(250);
                         return;
                     }
 
@@ -705,7 +705,7 @@ public class MainWindow : Window, IDisposable
                     !activeStop.WorldName.Equals(pendingCurrentWorld, StringComparison.OrdinalIgnoreCase) &&
                     !EnsureRouteTravelUiIsClear(route))
                 {
-                    nextGuidedRouteMonitorUtc = DateTimeOffset.UtcNow.AddSeconds(2);
+                    nextGuidedRouteMonitorUtc = DateTimeOffset.UtcNow.AddMilliseconds(500);
                     return;
                 }
 
@@ -747,18 +747,18 @@ public class MainWindow : Window, IDisposable
                     {
                         if (!EnsureRouteTravelUiIsClear(route))
                         {
-                            nextGuidedRouteMonitorUtc = DateTimeOffset.UtcNow.AddSeconds(2);
+                            nextGuidedRouteMonitorUtc = DateTimeOffset.UtcNow.AddMilliseconds(500);
                             return;
                         }
 
                         route.ExecuteMarketBoardTravelCommand(Plugin.CommandManager.ProcessCommand);
-                        nextGuidedRouteMonitorUtc = DateTimeOffset.UtcNow.AddSeconds(2);
+                        nextGuidedRouteMonitorUtc = DateTimeOffset.UtcNow.AddMilliseconds(750);
                         return;
                     }
 
                     if (!approachResult.ReadyToSearch)
                     {
-                        nextGuidedRouteMonitorUtc = DateTimeOffset.UtcNow.AddSeconds(1);
+                        nextGuidedRouteMonitorUtc = DateTimeOffset.UtcNow.AddMilliseconds(250);
                         return;
                     }
 
@@ -768,7 +768,7 @@ public class MainWindow : Window, IDisposable
 
                     if (!searchResult.ReadyForListings)
                     {
-                        nextGuidedRouteMonitorUtc = DateTimeOffset.UtcNow.AddSeconds(2);
+                        nextGuidedRouteMonitorUtc = DateTimeOffset.UtcNow.AddMilliseconds(500);
                         return;
                     }
 
@@ -784,7 +784,7 @@ public class MainWindow : Window, IDisposable
                 marketBoardPurchaseSession?.IsActive != true)
             {
                 BeginNextWorldPurchase();
-                nextGuidedRouteMonitorUtc = DateTimeOffset.UtcNow.AddSeconds(1);
+                nextGuidedRouteMonitorUtc = DateTimeOffset.UtcNow.AddMilliseconds(500);
             }
         }
         catch (Exception ex)
@@ -843,11 +843,11 @@ public class MainWindow : Window, IDisposable
         return addon != null && addon->IsReady && addon->IsVisible;
     }
 
-    private async Task ProbeGuidedRouteMarketBoardAsync()
+    private Task ProbeGuidedRouteMarketBoardAsync()
     {
         try
         {
-            await ProbeLiveMarketBoardAsync().ConfigureAwait(false);
+            ProbeLiveMarketBoardCore();
 
             var activeStop = marketAcquisitionRouteRunner.ActiveStop;
             if (activeStop is { Status: "Arrived" } &&
@@ -860,15 +860,28 @@ public class MainWindow : Window, IDisposable
                     $"Arrived on {activeStop.WorldName}; waiting for live listings. {marketBoardReadResult?.Message ?? "Market board read has not completed."}");
             }
         }
+        catch (Exception ex)
+        {
+            var activeStop = marketAcquisitionRouteRunner.ActiveStop;
+            var activeLine = claimedAcquisitionRequest == null ? null : GetActiveRouteLine(claimedAcquisitionRequest);
+            var itemLabel = activeLine == null ? "active item" : FormatAcquisitionItem(activeLine);
+            var worldLabel = activeStop?.WorldName ?? GetCurrentWorldName();
+            var message = $"Live market board probe failed for {itemLabel} on {worldLabel}. {ex.Message}";
+            marketAcquisitionRouteRunner.FailRoute(message, ex);
+            acquisitionStatus = message;
+            log.Warning(ex, "[MarketMafioso] Market acquisition route probe failed.");
+        }
         finally
         {
             if (marketAcquisitionRouteRunner.ActiveStop?.Status != "Arrived")
                 marketAcquisitionRouteRunner.ClearSearchSubmission("Route advanced or stopped before the next live listing read.");
 
             guidedRouteProbeRunning = false;
-            nextGuidedRouteMonitorUtc = DateTimeOffset.UtcNow.AddSeconds(2);
+            nextGuidedRouteMonitorUtc = DateTimeOffset.UtcNow.AddMilliseconds(500);
             ReportGuidedRouteProgress();
         }
+
+        return Task.CompletedTask;
     }
 
     private void DrawLiveCandidatePlanResult()
@@ -959,14 +972,24 @@ public class MainWindow : Window, IDisposable
         if (!freshRead.Status.Equals("Ready", StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException(freshRead.Message);
 
-        marketAcquisitionLiveCandidatePlan = MarketAcquisitionLiveCandidatePlanner.BuildCandidatePlan(
-            activeLine,
-            plan,
-            currentWorld,
-            freshRead.ItemId,
-            freshRead.Listings,
-            activeWorldPurchasedQuantity,
-            activeWorldSpentGil);
+        marketAcquisitionLiveCandidatePlan = activeStop.ActiveItemSubtask == null
+            ? MarketAcquisitionLiveCandidatePlanner.BuildCandidatePlan(
+                activeLine,
+                plan,
+                currentWorld,
+                freshRead.ItemId,
+                freshRead.Listings,
+                activeWorldPurchasedQuantity,
+                activeWorldSpentGil)
+            : MarketAcquisitionLiveCandidatePlanner.BuildCandidatePlan(
+                activeLine,
+                plan,
+                activeStop.ActiveItemSubtask,
+                currentWorld,
+                freshRead.ItemId,
+                freshRead.Listings,
+                activeWorldPurchasedQuantity,
+                activeWorldSpentGil);
         marketBoardPurchaseResult = marketBoardPurchaseExecutor.ExecuteFirstCandidate(
             marketAcquisitionLiveCandidatePlan,
             freshRead);
@@ -1414,47 +1437,67 @@ public class MainWindow : Window, IDisposable
     {
         return RunAcquisitionRequestAsync(_ =>
         {
-            var plan = acquisitionPlan ??
-                       throw new InvalidOperationException("Prepare a live candidate plan before probing live market board listings.");
-            var claimed = claimedAcquisitionRequest ??
-                          throw new InvalidOperationException("No dashboard request is accepted.");
-            var activeLine = GetActiveRouteLine(claimed);
-            var currentWorld = GetCurrentWorldName();
-            marketBoardReconciliation = null;
-            marketAcquisitionLiveCandidatePlan = null;
-            marketBoardReadResult = marketBoardListingReader.ReadCurrentListings(currentWorld);
+            ProbeLiveMarketBoardCore();
+            return Task.CompletedTask;
+        });
+    }
 
-            var canBuildLiveCandidatePlan = marketBoardReadResult.Status is "Ready" or "NoListings";
-            marketBoardReconciliation = marketBoardReadResult.Status == "Ready"
+    private void ProbeLiveMarketBoardCore()
+    {
+        var plan = acquisitionPlan ??
+                   throw new InvalidOperationException("Prepare a live candidate plan before probing live market board listings.");
+        var claimed = claimedAcquisitionRequest ??
+                      throw new InvalidOperationException("No dashboard request is accepted.");
+        var activeLine = GetActiveRouteLine(claimed);
+        var activeSubtask = marketAcquisitionRouteRunner.ActiveStop?.ActiveItemSubtask;
+        var currentWorld = GetCurrentWorldName();
+        marketBoardReconciliation = null;
+        marketAcquisitionLiveCandidatePlan = null;
+        marketBoardReadResult = marketBoardListingReader.ReadCurrentListings(currentWorld);
+
+        var canBuildLiveCandidatePlan = marketBoardReadResult.Status is "Ready" or "NoListings";
+        marketBoardReconciliation = marketBoardReadResult.Status == "Ready"
+            ? activeSubtask == null
                 ? MarketBoardListingReconciler.Reconcile(
                     plan,
                     currentWorld,
                     marketBoardReadResult.ItemId,
                     marketBoardReadResult.Listings)
-                : null;
-            marketAcquisitionLiveCandidatePlan = canBuildLiveCandidatePlan
+                : MarketBoardListingReconciler.Reconcile(
+                    plan,
+                    activeSubtask,
+                    currentWorld,
+                    marketBoardReadResult.ItemId,
+                    marketBoardReadResult.Listings)
+            : null;
+        marketAcquisitionLiveCandidatePlan = canBuildLiveCandidatePlan
+            ? activeSubtask == null
                 ? MarketAcquisitionLiveCandidatePlanner.BuildCandidatePlan(
                     activeLine,
                     plan,
                     currentWorld,
                     marketBoardReadResult.ItemId,
                     marketBoardReadResult.Listings)
-                : null;
-            var guidedRouteResult = marketAcquisitionRouteRunner.IsRunning &&
-                                    marketAcquisitionRouteRunner.ActiveStop is { Status: "Arrived" } &&
-                                    marketAcquisitionLiveCandidatePlan != null
-                ? marketAcquisitionRouteRunner.RecordProbe(currentWorld, marketAcquisitionLiveCandidatePlan)
-                : null;
-            acquisitionStatus = marketBoardReconciliation == null
-                ? marketBoardReadResult.Message
-                : $"Live listing reconciliation {marketBoardReconciliation.Status}; live candidates {marketAcquisitionLiveCandidatePlan?.Status ?? "Unavailable"}.";
-            if (guidedRouteResult != null)
-            {
-                acquisitionStatus = $"{acquisitionStatus} Route: {guidedRouteResult.Message}";
-            }
-
-            return Task.CompletedTask;
-        });
+                : MarketAcquisitionLiveCandidatePlanner.BuildCandidatePlan(
+                    activeLine,
+                    plan,
+                    activeSubtask,
+                    currentWorld,
+                    marketBoardReadResult.ItemId,
+                    marketBoardReadResult.Listings)
+            : null;
+        var guidedRouteResult = marketAcquisitionRouteRunner.IsRunning &&
+                                marketAcquisitionRouteRunner.ActiveStop is { Status: "Arrived" } &&
+                                marketAcquisitionLiveCandidatePlan != null
+            ? marketAcquisitionRouteRunner.RecordProbe(currentWorld, marketAcquisitionLiveCandidatePlan)
+            : null;
+        acquisitionStatus = marketBoardReconciliation == null
+            ? marketBoardReadResult.Message
+            : $"Live listing reconciliation {marketBoardReconciliation.Status}; live candidates {marketAcquisitionLiveCandidatePlan?.Status ?? "Unavailable"}.";
+        if (guidedRouteResult != null)
+        {
+            acquisitionStatus = $"{acquisitionStatus} Route: {guidedRouteResult.Message}";
+        }
     }
 
     private void DrawMarketAcquisitionGuidedRoute()

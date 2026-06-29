@@ -17,6 +17,7 @@ public sealed class MarketBoardApproachService
     private const string ItemSearchAddon = "ItemSearch";
     private const string ItemSearchResultAddon = "ItemSearchResult";
     private const string MarketBoardObjectName = "Market Board";
+    private static readonly TimeSpan DirectInteractionCooldown = TimeSpan.FromMilliseconds(750);
 
     public const float DirectInteractionDistance = 4.25f;
     public const float MaximumApproachDistance = 80f;
@@ -27,6 +28,7 @@ public sealed class MarketBoardApproachService
     private readonly ITargetManager targetManager;
     private readonly VNavmeshIpc vnavmesh;
     private readonly IPluginLog log;
+    private DateTimeOffset? lastDirectInteractionUtc;
 
     public MarketBoardApproachService(
         IGameGui gameGui,
@@ -45,7 +47,10 @@ public sealed class MarketBoardApproachService
     public unsafe MarketBoardApproachResult OpenOrApproach()
     {
         if (IsMarketBoardUiOpen())
+        {
+            lastDirectInteractionUtc = null;
             return MarketBoardApproachResult.Ready("Market board UI is already open.");
+        }
 
         var playerPosition = objectTable.LocalPlayer?.Position;
         var board = FindMarketBoard(playerPosition);
@@ -75,6 +80,7 @@ public sealed class MarketBoardApproachService
     public void StopNavigation()
     {
         vnavmesh.Stop();
+        lastDirectInteractionUtc = null;
     }
 
     internal static MarketBoardApproachDecision Decide(
@@ -136,12 +142,19 @@ public sealed class MarketBoardApproachService
         if (board == null)
             return MarketBoardApproachResult.Wait("No nearby market board target was found.");
 
+        if (lastDirectInteractionUtc is { } lastInteraction &&
+            DateTimeOffset.UtcNow - lastInteraction < DirectInteractionCooldown)
+        {
+            return MarketBoardApproachResult.Wait("Waiting for nearby market board UI to open.");
+        }
+
         var targetSystem = TargetSystem.Instance();
         if (targetSystem == null)
             return MarketBoardApproachResult.Wait("Target system is unavailable; open the market board manually.");
 
         targetManager.Target = board;
         var result = targetSystem->InteractWithObject((ClientGameObject*)board.Address, true);
+        lastDirectInteractionUtc = DateTimeOffset.UtcNow;
         log.Verbose($"[MarketMafioso] Attempted market board interaction {board.Name.TextValue} ({board.GameObjectId:X}).");
         float? distance = playerPosition == null
             ? null

@@ -20,6 +20,47 @@ public static class MarketAcquisitionLiveCandidatePlanner
         ArgumentNullException.ThrowIfNull(liveListings);
 
         Validate(request, plan, currentWorld, itemId);
+        return BuildCandidatePlanCore(
+            request,
+            currentWorld,
+            itemId,
+            liveListings,
+            alreadyPurchasedQuantity,
+            alreadySpentGil);
+    }
+
+    public static MarketAcquisitionLiveCandidatePlan BuildCandidatePlan(
+        MarketAcquisitionRequestView request,
+        MarketAcquisitionPlan plan,
+        MarketAcquisitionWorldItemSubtask activeSubtask,
+        string currentWorld,
+        uint itemId,
+        IEnumerable<MarketBoardLiveListing> liveListings,
+        uint alreadyPurchasedQuantity = 0,
+        uint alreadySpentGil = 0)
+    {
+        ArgumentNullException.ThrowIfNull(activeSubtask);
+
+        Validate(request, plan, activeSubtask, currentWorld, itemId);
+        return BuildCandidatePlanCore(
+            request,
+            currentWorld,
+            itemId,
+            liveListings,
+            alreadyPurchasedQuantity,
+            alreadySpentGil);
+    }
+
+    private static MarketAcquisitionLiveCandidatePlan BuildCandidatePlanCore(
+        MarketAcquisitionRequestView request,
+        string currentWorld,
+        uint itemId,
+        IEnumerable<MarketBoardLiveListing> liveListings,
+        uint alreadyPurchasedQuantity,
+        uint alreadySpentGil)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(liveListings);
 
         var mode = NormalizeQuantityMode(request.QuantityMode);
         var hasGilCap = request.MaxTotalGil > 0;
@@ -120,6 +161,33 @@ public static class MarketAcquisitionLiveCandidatePlanner
 
         if (batch.ItemSubtasks.Count == 0 && plan.ItemId != itemId)
             throw new InvalidOperationException("Current market board search item does not match the prepared plan item.");
+
+        _ = NormalizeQuantityMode(request.QuantityMode);
+
+        _ = MarketAcquisitionPolicy.NormalizeHqPolicy(request.HqPolicy);
+    }
+
+    private static void Validate(
+        MarketAcquisitionRequestView request,
+        MarketAcquisitionPlan plan,
+        MarketAcquisitionWorldItemSubtask activeSubtask,
+        string currentWorld,
+        uint itemId)
+    {
+        if (string.IsNullOrWhiteSpace(currentWorld))
+            throw new InvalidOperationException("Current market board world is required.");
+
+        if (request.ItemId != itemId)
+            throw new InvalidOperationException("Current market board search item does not match the acquisition request.");
+
+        if (activeSubtask.ItemId != itemId)
+            throw new InvalidOperationException("Current market board search item does not match the active route item.");
+
+        if (!activeSubtask.WorldName.Equals(currentWorld, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException($"Current market board world {currentWorld} does not match the active route stop {activeSubtask.WorldName}.");
+
+        if (!plan.WorldBatches.Any(batch => batch.WorldName.Equals(currentWorld, StringComparison.OrdinalIgnoreCase)))
+            throw new InvalidOperationException($"Current market board world {currentWorld} is not present in the prepared plan.");
 
         _ = NormalizeQuantityMode(request.QuantityMode);
 

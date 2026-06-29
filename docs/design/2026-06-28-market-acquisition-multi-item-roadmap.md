@@ -72,7 +72,7 @@ Next work:
 
 ## Phase 2: Dashboard Batch Staging
 
-Status: In progress
+Status: Mostly complete
 
 Objective: Make the dashboard builder's local queue stage one batch.
 
@@ -80,13 +80,13 @@ Exit criteria:
 
 - `Stage Queue` sends one batch payload containing all queued lines. Done in first dashboard slice.
 - Dashboard shows one row per batch. Mostly done through existing request grid because one staged queue now produces one server row.
-- Batch details show line status, thresholds, caps, and purchased quantity.
+- Batch details show line status, thresholds, caps, and purchased quantity. Done in the dashboard request drawer with an explicit purchase-lines table.
 - Terminal batches remain visible but are not active pickup candidates.
 - Dashboard routing value mismatches such as `CurrentWorld` vs `CurrentWorldOnly` are normalized before submit. Done at batch submit.
+- Dashboard request-board rows render all batch lines instead of the request-level first-line compatibility fields. Done; quantity and max-unit columns now show per-line values.
 
 Next work:
 
-- Render `Lines` explicitly in the dashboard queue/details instead of only showing primary-line summary columns.
 - Confirm the builder's template/preset flow can restore multi-line batches once completed runs are reused as presets.
 - Remove stale per-line routing fields from the dashboard UI model if they remain unused after plugin migration.
 
@@ -139,12 +139,13 @@ Exit criteria:
 - Route runner searches/selects/reads/purchases per item subtask. In progress: route stops now track an active item-subtask cursor, and search/probe/purchase uses that active line.
 - Re-read-after-purchase behavior remains intact.
 - Listing window closure after the last listing is normal exhaustion. Existing behavior preserved for world completion; needs line-level confirmation in live testing.
-- Item B cannot reuse stale live candidates from item A. In progress: route advancement clears search submission and candidate state; more purchase-loop tests remain.
+- Item B cannot reuse stale live candidates from item A. In progress: route advancement clears search submission and candidate state; active-subtask validation now accepts planned and opportunistic subtasks without requiring the searched item to exist in the original prepared world batch.
 - Non-catastrophic line exhaustion continues to the next line. Done in route session for no-safe-candidates and purchase-complete transitions on the same world.
 - Catastrophic/ambiguous failures stop the batch.
 
 Current caveat:
 
+- Opportunistic subtasks can now be probed and reconciled against live market-board rows, but live validation still needs more end-to-end testing for mid-flight plan expansion.
 - Line-level purchase totals are currently local route-stop totals. Server progress/audit still needs explicit `lineId` payloads in Phase 6.
 
 ## Phase 6: Per-Line Progress And Audit

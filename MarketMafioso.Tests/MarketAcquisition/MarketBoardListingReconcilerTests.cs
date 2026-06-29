@@ -82,6 +82,40 @@ public sealed class MarketBoardListingReconcilerTests
         Assert.Equal("Missing", listing.Status);
     }
 
+    [Fact]
+    public void Reconcile_AllowsActiveOpportunisticSubtaskThatWasNotInPreparedWorldBatch()
+    {
+        var plan = CreatePlan();
+        var activeSubtask = new MarketMafioso.MarketAcquisition.MarketAcquisitionWorldItemSubtask
+        {
+            LineId = "line-4",
+            LineOrdinal = 1,
+            Source = "Opportunistic",
+            ItemId = 4,
+            ItemName = "Lightning Shard",
+            WorldName = "Gilgamesh",
+            DataCenter = "Aether",
+            QuantityMode = "AllBelowThreshold",
+            HqPolicy = "Either",
+            MaxUnitPrice = 100,
+            Listings = [],
+        };
+        var liveListings = new[]
+        {
+            CreateLiveListing(listingId: "live-4", retainerId: "retainer-4", unitPrice: 50, quantity: 8, itemId: 4),
+        };
+
+        var result = MarketMafioso.MarketAcquisition.MarketBoardListingReconciler.Reconcile(
+            plan,
+            activeSubtask,
+            "Gilgamesh",
+            4,
+            liveListings);
+
+        Assert.Equal("Ready", result.Status);
+        Assert.Empty(result.Listings);
+    }
+
     private static MarketMafioso.MarketAcquisition.MarketAcquisitionPlan CreatePlan() =>
         new()
         {
@@ -100,6 +134,24 @@ public sealed class MarketBoardListingReconcilerTests
                     WorldName = "Gilgamesh",
                     PlannedQuantity = 10,
                     PlannedGil = 500,
+                    ItemSubtasks =
+                    [
+                        new MarketMafioso.MarketAcquisition.MarketAcquisitionWorldItemSubtask
+                        {
+                            LineId = "line-2",
+                            LineOrdinal = 0,
+                            Source = "Planned",
+                            ItemId = 2,
+                            ItemName = "Fire Shard",
+                            WorldName = "Gilgamesh",
+                            DataCenter = "Aether",
+                            QuantityMode = "TargetQuantity",
+                            RequestedQuantity = 10,
+                            HqPolicy = "Either",
+                            MaxUnitPrice = 100,
+                            Listings = [],
+                        },
+                    ],
                     Listings =
                     [
                         new MarketMafioso.MarketAcquisition.MarketAcquisitionPlannedListing
@@ -122,10 +174,11 @@ public sealed class MarketBoardListingReconcilerTests
         string listingId,
         string retainerId,
         uint unitPrice,
-        uint quantity) =>
+        uint quantity,
+        uint itemId = 2) =>
         new()
         {
-            ItemId = 2,
+            ItemId = itemId,
             WorldName = "Gilgamesh",
             ListingId = listingId,
             RetainerId = retainerId,

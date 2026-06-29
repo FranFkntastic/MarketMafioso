@@ -67,7 +67,7 @@
                     </HeaderContent>
                     <RowTemplate>
                         <MudTd>
-                            @(context.ItemName ?? $"Item {context.ItemId}")<br />
+                            @MarketAcquisitionRequestDisplay.TitleFor(context)<br />
                             <span class="muted">@context.TargetCharacterName @@ @context.TargetWorld</span>
                         </MudTd>
                         <MudTd>@context.Status</MudTd>

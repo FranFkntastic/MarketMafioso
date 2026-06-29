@@ -47,6 +47,47 @@ public static class MarketBoardListingReconciler
         };
     }
 
+    public static MarketBoardListingReconciliation Reconcile(
+        MarketAcquisitionPlan plan,
+        MarketAcquisitionWorldItemSubtask activeSubtask,
+        string currentWorld,
+        uint itemId,
+        IEnumerable<MarketBoardLiveListing> liveListings)
+    {
+        ArgumentNullException.ThrowIfNull(plan);
+        ArgumentNullException.ThrowIfNull(activeSubtask);
+        ArgumentNullException.ThrowIfNull(liveListings);
+
+        if (string.IsNullOrWhiteSpace(currentWorld))
+            throw new InvalidOperationException("Current market board world is required.");
+
+        if (activeSubtask.ItemId != itemId)
+            throw new InvalidOperationException("Current market board search item does not match the active route item.");
+
+        if (!activeSubtask.WorldName.Equals(currentWorld, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException($"Current market board world {currentWorld} does not match the active route stop {activeSubtask.WorldName}.");
+
+        if (!plan.WorldBatches.Any(batch => batch.WorldName.Equals(currentWorld, StringComparison.OrdinalIgnoreCase)))
+            throw new InvalidOperationException($"Current market board world {currentWorld} is not present in the prepared plan.");
+
+        var live = liveListings.ToList();
+        if (live.Any(listing => listing.ItemId != itemId))
+            throw new InvalidOperationException("Live market board rows include a different item id than the current search item.");
+
+        if (live.Any(listing => !listing.WorldName.Equals(currentWorld, StringComparison.OrdinalIgnoreCase)))
+            throw new InvalidOperationException("Live market board rows include a different world than the current market board world.");
+
+        var rows = activeSubtask.Listings
+            .Select(planned => ReconcileListing(planned, live))
+            .ToList();
+
+        return new MarketBoardListingReconciliation
+        {
+            Status = rows.All(row => row.Status == "Matched") ? "Ready" : "Blocked",
+            Listings = rows,
+        };
+    }
+
     private static MarketBoardListingReconciliationRow ReconcileListing(
         MarketAcquisitionPlannedListing planned,
         IReadOnlyList<MarketBoardLiveListing> liveListings)

@@ -66,13 +66,27 @@ public sealed class MarketBoardItemSearchDriverTests
     }
 
     [Fact]
-    public void ShouldWaitForSubmittedSearch_ReturnsFalseWhenAgentIsIdleAndExactItemIsMissing()
+    public void ShouldWaitForSubmittedSearch_ReturnsFalseWhenAgentIsIdleAndExactItemIsMissingAfterRetryDelay()
     {
         Assert.False(MarketBoardItemSearchDriver.ShouldWaitForSubmittedSearch(
             searchMatches: true,
             exactItemVisible: false,
             agentIsPartialSearching: false,
-            agentIsItemPushPending: false));
+            agentIsItemPushPending: false,
+            elapsedSinceSubmit: TimeSpan.FromSeconds(4),
+            retryDelay: TimeSpan.FromSeconds(4)));
+    }
+
+    [Fact]
+    public void ShouldWaitForSubmittedSearch_ReturnsTrueWhenSubmittedSearchIsStillSettling()
+    {
+        Assert.True(MarketBoardItemSearchDriver.ShouldWaitForSubmittedSearch(
+            searchMatches: true,
+            exactItemVisible: false,
+            agentIsPartialSearching: false,
+            agentIsItemPushPending: false,
+            elapsedSinceSubmit: TimeSpan.FromSeconds(2),
+            retryDelay: TimeSpan.FromSeconds(4)));
     }
 
     [Fact]
@@ -82,7 +96,9 @@ public sealed class MarketBoardItemSearchDriverTests
             searchMatches: true,
             exactItemVisible: false,
             agentIsPartialSearching: true,
-            agentIsItemPushPending: false));
+            agentIsItemPushPending: false,
+            elapsedSinceSubmit: TimeSpan.FromSeconds(4),
+            retryDelay: TimeSpan.FromSeconds(4)));
     }
 
     [Fact]
@@ -92,7 +108,9 @@ public sealed class MarketBoardItemSearchDriverTests
             searchMatches: true,
             exactItemVisible: true,
             agentIsPartialSearching: false,
-            agentIsItemPushPending: false));
+            agentIsItemPushPending: false,
+            elapsedSinceSubmit: TimeSpan.FromSeconds(4),
+            retryDelay: TimeSpan.FromSeconds(4)));
     }
 
     [Fact]

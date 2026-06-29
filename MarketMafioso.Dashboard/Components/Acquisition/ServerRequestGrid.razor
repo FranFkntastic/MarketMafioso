@@ -44,13 +44,42 @@
                     <Columns>
                         <TemplateColumn Title="Item" Resizable="true">
                             <CellTemplate>
-                                @(context.Item.ItemName ?? $"Item {context.Item.ItemId}")<br /><span class="muted">@context.Item.TargetCharacterName @@ @context.Item.TargetWorld</span>
+                                <div class="batch-cell">
+                                    @if (MarketAcquisitionRequestDisplay.LinesFor(context.Item).Count > 1)
+                                    {
+                                        <div class="batch-title">@MarketAcquisitionRequestDisplay.TitleFor(context.Item)</div>
+                                    }
+                                    @foreach (var line in MarketAcquisitionRequestDisplay.LinesFor(context.Item))
+                                    {
+                                        <div class="batch-line">
+                                            <span>@MarketAcquisitionRequestDisplay.ItemLabel(line)</span>
+                                            <span class="muted">Item @line.ItemId</span>
+                                        </div>
+                                    }
+                                    <span class="muted">@context.Item.TargetCharacterName @@ @context.Item.TargetWorld</span>
+                                </div>
                             </CellTemplate>
                         </TemplateColumn>
                         <TemplateColumn Title="Qty" Resizable="true">
-                            <CellTemplate>@FormatQuantity(context.Item)</CellTemplate>
+                            <CellTemplate>
+                                <div class="batch-cell compact">
+                                    @foreach (var line in MarketAcquisitionRequestDisplay.LinesFor(context.Item))
+                                    {
+                                        <span>@MarketAcquisitionRequestDisplay.QuantityDisplay(line)</span>
+                                    }
+                                </div>
+                            </CellTemplate>
                         </TemplateColumn>
-                        <PropertyColumn Property="request => request.MaxUnitPrice" Title="Max Unit" Resizable="true" />
+                        <TemplateColumn Title="Max Unit" Resizable="true">
+                            <CellTemplate>
+                                <div class="batch-cell compact">
+                                    @foreach (var line in MarketAcquisitionRequestDisplay.LinesFor(context.Item))
+                                    {
+                                        <span>@MarketAcquisitionRequestDisplay.MaxUnitDisplay(line)</span>
+                                    }
+                                </div>
+                            </CellTemplate>
+                        </TemplateColumn>
                         <TemplateColumn Title="Routing" Resizable="true">
                             <CellTemplate>@FormatRoute(context.Item)</CellTemplate>
                         </TemplateColumn>
@@ -114,11 +143,6 @@
 
     private static bool IsActiveRequest(MarketAcquisitionRequestView request) =>
         request.Status is not ("Complete" or "Failed" or "Cancelled" or "Rejected");
-
-    private static string FormatQuantity(MarketAcquisitionRequestView request) =>
-        request.QuantityMode == "AllBelowThreshold"
-            ? request.Quantity == 0 ? "All safe stock" : $"Max {request.Quantity:N0}"
-            : request.Quantity.ToString("N0");
 
     private static string FormatRoute(MarketAcquisitionRequestView request)
     {
