@@ -1641,7 +1641,7 @@ public class MainWindow : Window, IDisposable
     {
         ImGui.Spacing();
         ImGuiUi.SectionHeader("Input Capture", ColHeader);
-        ImGui.TextColored(ColMuted, "Capture current market-board UI/input state before and after manual purchase clicks.");
+        ImGui.TextColored(ColMuted, "Capture current market-board UI/input state before and after manual purchase clicks or pagination attempts.");
 
         if (ImGuiUi.Button("Capture Input State", true))
             CaptureMarketBoardInputState();

@@ -37,6 +37,18 @@
 - Test: `MarketMafioso.Tests/MarketAcquisition/MarketBoardInputCaptureReaderTests.cs` if a practical fake can be introduced without large unsafe scaffolding
 - Docs: `docs/design/2026-06-28-market-acquisition-next-feature-list.md`
 
+**Live Capture Playbook:**
+
+1. Search an item with more than 100 market-board listings.
+2. Open Market Acquisition Diagnostics and confirm it says the read is truncated.
+3. Click `Capture Input State` before touching the market-board result controls.
+4. Use only a normal human UI action to reveal deeper results, if the game exposes one.
+5. Click `Capture Input State` again immediately after the attempted page/scroll/load action.
+6. Click `Finish Capture Log`.
+7. Compare `infoProxyCurrentRequestId`, `infoProxyNextRequestId`, and `infoProxyListingPreview` between the two capture entries.
+
+Passing evidence for automation is a same-item, same-world capture pair where request ids advance and the listing preview changes. If ids and preview do not change, deeper pagination remains deferred and the route should continue to use `VisibleCacheExhausted`.
+
 - [x] **Step 1: Build and deploy the current request-id capture fields**
 
 Run:

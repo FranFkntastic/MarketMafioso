@@ -145,6 +145,7 @@ public sealed class MarketAcquisitionDiagnosticsWindow : Window
                 probeResult.CanAttemptLiveProbe
                     ? "Next-page probing is intentionally disabled until live capture proves which market-board action advances the cache safely."
                     : "Next-page probing is unavailable for this read state.");
+            ImGui.TextWrapped("Pagination capture: capture input state before manually revealing deeper results, reveal the next result page if possible, then capture input state again and finish the capture log.");
         }
         else
         {
