@@ -19,6 +19,7 @@
 - `InfoProxyPageInterface.AddPage(nint packetPtr)` is documented as handling received page packets and may dispatch pagination/fetch work internally, but it requires a packet pointer and is not a safe "next page" command by itself.
 - MarketMafioso already records truncation and preserves `SkippedVisibleCacheExhausted` rather than pretending no safe stock exists.
 - `MarketBoardInputCaptureReader` records `infoProxyEntryCount`, `infoProxyCurrentRequestId`, and `infoProxyNextRequestId` for future captures.
+- `MarketBoardPaginationState` and `MarketBoardPaginationProbe` now provide pure, tested diagnostics for "not truncated", "request ids incoherent", "ready for live probe", "advanced", "wrong continuation", and "unchanged".
 
 ## Non-Negotiable Safety Rules
 
@@ -90,6 +91,8 @@ Append the capture finding to `docs/design/2026-06-28-market-acquisition-next-fe
 If natural page movement is not observable, stop this plan and keep deeper pagination deferred.
 
 ## Task 2: Add A Pure Pagination State Model
+
+Status: Complete in `MarketMafioso/MarketAcquisition/MarketBoardPaginationState.cs` with tests in `MarketMafioso.Tests/MarketAcquisition/MarketBoardPaginationStateTests.cs`.
 
 **Files:**
 - Create: `MarketMafioso/MarketAcquisition/MarketBoardPaginationState.cs`
@@ -186,6 +189,8 @@ public sealed record MarketBoardPaginationState(
 Run the same `dotnet test` command and confirm all pagination state tests pass.
 
 ## Task 3: Add A Non-Purchasing Pagination Probe
+
+Status: Partial. The pure classifier is complete in `MarketMafioso/MarketAcquisition/MarketBoardPaginationProbe.cs` with tests in `MarketMafioso.Tests/MarketAcquisition/MarketBoardPaginationProbeTests.cs`. The diagnostics-window button and any live page-request attempt remain intentionally unimplemented until Task 1 captures prove the safe request transition.
 
 **Files:**
 - Create: `MarketMafioso/MarketAcquisition/MarketBoardPaginationProbe.cs`
