@@ -63,6 +63,17 @@ public sealed class MarketAcquisitionGuidedRouteSessionTests
     }
 
     [Fact]
+    public void Start_InitializesLineStatesFromWorldItemSubtasks()
+    {
+        var session = MarketMafioso.MarketAcquisition.MarketAcquisitionGuidedRouteSession.Start(
+            MarketAcquisitionTestPlans.MultiLineSingleWorld());
+
+        var activeStop = Assert.IsType<MarketMafioso.MarketAcquisition.MarketAcquisitionGuidedRouteStop>(session.ActiveStop);
+        Assert.Equal(["batch-1-line-1", "batch-1-line-2"], activeStop.LineStates.Select(line => line.LineId).ToArray());
+        Assert.Equal(["Pending", "Pending"], activeStop.LineStates.Select(line => line.Status).ToArray());
+    }
+
+    [Fact]
     public void RecordCurrentWorld_MarksActiveStopArrived()
     {
         var session = MarketMafioso.MarketAcquisition.MarketAcquisitionGuidedRouteSession.Start(CreatePlan("Zalera"));
@@ -212,6 +223,26 @@ public sealed class MarketAcquisitionGuidedRouteSessionTests
         Assert.Equal("line-2", session.ActiveStop?.ActiveItemSubtask?.LineId);
         Assert.Equal(10u, session.ActiveStop?.PurchasedQuantity);
         Assert.Equal(1_000u, session.ActiveStop?.SpentGil);
+    }
+
+    [Fact]
+    public void RecordWorldPurchaseBatchComplete_AccumulatesActiveLineTotals()
+    {
+        var plan = MarketAcquisitionTestPlans.MultiLineSingleWorld();
+        var session = MarketMafioso.MarketAcquisition.MarketAcquisitionGuidedRouteSession.Start(plan);
+        session.RecordCurrentWorld("Siren");
+        session.RecordProbe("Siren", MarketAcquisitionTestPlans.ReadyCandidatePlan(quantity: 10, gil: 500));
+
+        var result = session.RecordWorldPurchaseBatchComplete("Siren", purchasedQuantity: 10, spentGil: 500);
+
+        Assert.True(result.Success);
+        var stop = Assert.Single(session.Stops);
+        var firstLine = Assert.Single(stop.LineStates, line => line.LineId == plan.Lines[0].LineId);
+        Assert.Equal((uint)10, firstLine.PurchasedQuantity);
+        Assert.Equal((uint)500, firstLine.SpentGil);
+        Assert.Equal("Complete", firstLine.Status);
+        var secondLine = Assert.Single(stop.LineStates, line => line.LineId == plan.Lines[1].LineId);
+        Assert.Equal("Pending", secondLine.Status);
     }
 
     [Fact]

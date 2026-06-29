@@ -41,6 +41,17 @@ public sealed class MarketAcquisitionGuidedRouteSession
                 PlannedQuantity = batch.PlannedQuantity,
                 PlannedGil = batch.PlannedGil,
                 ItemSubtasks = batch.ItemSubtasks,
+                LineStates = batch.ItemSubtasks
+                    .Select(subtask => new MarketAcquisitionRouteLineState
+                    {
+                        LineId = subtask.LineId,
+                        ItemId = subtask.ItemId,
+                        ItemName = subtask.ItemName,
+                        PlannedQuantity = subtask.PlannedQuantity,
+                        PlannedGil = subtask.PlannedGil,
+                        Status = "Pending",
+                    })
+                    .ToList(),
                 LifestreamCommand = BuildLifestreamCommand(batch.WorldName),
                 Status = "Pending",
             })
@@ -108,6 +119,12 @@ public sealed class MarketAcquisitionGuidedRouteSession
         if (candidatePlan.WouldBuyQuantity > 0)
         {
             stop.Status = "Purchasing";
+            UpdateActiveLine(
+                stop,
+                status: "Purchasing",
+                purchasedQuantity: 0,
+                spentGil: 0,
+                $"Purchasing {candidatePlan.WouldBuyQuantity:N0} safe live item(s), {candidatePlan.WouldSpendGil:N0} gil.");
             return MarketAcquisitionGuidedRouteResult.Ok(
                 $"Purchasing {FormatActiveItem(stop)} on {stop.WorldName}: {candidatePlan.WouldBuyQuantity:N0} safe live item(s), {candidatePlan.WouldSpendGil:N0} gil.");
         }
@@ -187,6 +204,14 @@ public sealed class MarketAcquisitionGuidedRouteSession
 
         stop.PurchasedQuantity = checked(stop.PurchasedQuantity + purchasedQuantity);
         stop.SpentGil = checked(stop.SpentGil + spentGil);
+        UpdateActiveLine(
+            stop,
+            status: "Complete",
+            purchasedQuantity,
+            spentGil,
+            purchasedQuantity == 0 && spentGil == 0
+                ? "No safe live candidates remained."
+                : $"Purchased {purchasedQuantity:N0} item(s), spent {spentGil:N0} gil.");
         stop.CompletedItemSubtaskCount++;
         if (stop.CompletedItemSubtaskCount >= stop.ItemSubtasks.Count)
             return false;
@@ -196,6 +221,28 @@ public sealed class MarketAcquisitionGuidedRouteSession
         stop.WouldBuyQuantity = 0;
         stop.WouldSpendGil = 0;
         return true;
+    }
+
+    private static void UpdateActiveLine(
+        MarketAcquisitionGuidedRouteStop stop,
+        string status,
+        uint purchasedQuantity,
+        uint spentGil,
+        string? message)
+    {
+        var activeSubtask = stop.ActiveItemSubtask;
+        if (activeSubtask == null)
+            return;
+
+        var line = stop.LineStates.FirstOrDefault(lineState =>
+            lineState.LineId.Equals(activeSubtask.LineId, StringComparison.Ordinal));
+        if (line == null)
+            return;
+
+        line.Status = status;
+        line.PurchasedQuantity = checked(line.PurchasedQuantity + purchasedQuantity);
+        line.SpentGil = checked(line.SpentGil + spentGil);
+        line.LatestMessage = message;
     }
 
     private static string FormatActiveItem(MarketAcquisitionGuidedRouteStop stop) =>
@@ -229,6 +276,7 @@ public sealed record MarketAcquisitionGuidedRouteStop
     public uint PlannedQuantity { get; init; }
     public uint PlannedGil { get; init; }
     public IReadOnlyList<MarketAcquisitionWorldItemSubtask> ItemSubtasks { get; init; } = [];
+    public IReadOnlyList<MarketAcquisitionRouteLineState> LineStates { get; init; } = [];
     public int CompletedItemSubtaskCount { get; set; }
     public MarketAcquisitionWorldItemSubtask? ActiveItemSubtask =>
         CompletedItemSubtaskCount >= ItemSubtasks.Count
@@ -241,6 +289,19 @@ public sealed record MarketAcquisitionGuidedRouteStop
     public uint PurchasedQuantity { get; set; }
     public uint SpentGil { get; set; }
     public bool MarketBoardTravelCommandSent { get; set; }
+}
+
+public sealed record MarketAcquisitionRouteLineState
+{
+    public string LineId { get; init; } = string.Empty;
+    public uint ItemId { get; init; }
+    public string? ItemName { get; init; }
+    public string Status { get; set; } = "Pending";
+    public uint PlannedQuantity { get; init; }
+    public uint PlannedGil { get; init; }
+    public uint PurchasedQuantity { get; set; }
+    public uint SpentGil { get; set; }
+    public string? LatestMessage { get; set; }
 }
 
 public sealed record MarketAcquisitionGuidedRouteResult

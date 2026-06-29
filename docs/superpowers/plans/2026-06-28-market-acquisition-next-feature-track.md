@@ -684,7 +684,7 @@ Expected: client tests pass.
 - Modify: `MarketMafioso/MarketAcquisition/MarketAcquisitionGuidedRouteSession.cs`
 - Test: `MarketMafioso.Tests/MarketAcquisition/MarketAcquisitionGuidedRouteSessionTests.cs`
 
-- [ ] **Step 1: Add failing route-session tests**
+- [x] **Step 1: Add failing route-session tests**
 
 Add:
 
@@ -709,7 +709,7 @@ public void RecordWorldPurchaseBatchCompleteAccumulatesActiveLineTotals()
 
 Expected before implementation: test fails because line states do not exist.
 
-- [ ] **Step 2: Add route stop line state model**
+- [x] **Step 2: Add route stop line state model**
 
 Add:
 
@@ -730,7 +730,7 @@ public sealed record MarketAcquisitionRouteLineState
 
 Add `IReadOnlyList<MarketAcquisitionRouteLineState> LineStates` to `MarketAcquisitionGuidedRouteStop`.
 
-- [ ] **Step 3: Initialize line states from item subtasks**
+- [x] **Step 3: Initialize line states from item subtasks**
 
 During `Start(plan)`, create one line state per item subtask on each world:
 
@@ -747,7 +747,7 @@ LineStates = batch.ItemSubtasks
     .ToList()
 ```
 
-- [ ] **Step 4: Update active line state on probe and purchase completion**
+- [x] **Step 4: Update active line state on probe and purchase completion**
 
 When a probe yields no candidates:
 
@@ -773,7 +773,7 @@ if (activeLine != null)
 }
 ```
 
-- [ ] **Step 5: Run route-session tests**
+- [x] **Step 5: Run route-session tests**
 
 Run:
 
