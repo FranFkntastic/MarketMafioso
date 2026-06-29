@@ -37,7 +37,7 @@ That roadmap answered whether the full loop could work. This roadmap changes the
 
 ## Phase 0: Batch Model Alignment
 
-Status: Planned
+Status: Complete
 
 Objective: Lock vocabulary, migration behavior, and line semantics before code changes.
 
@@ -48,6 +48,11 @@ Exit criteria:
 - Route ordering and in-world item ordering are settled.
 - Server `lineId` ownership and validation rules are defined.
 - The old `/api/marketmafioso/...` route shape remains retired.
+
+Evidence:
+
+- `docs/design/2026-06-28-market-acquisition-multi-item-batches.md` defines the durable batch model and the single-line compatibility shape.
+- Server, dashboard, and plugin DTOs now expose batch `lines` and line ids.
 
 ## Phase 1: Batch Contracts And Storage
 
@@ -92,13 +97,13 @@ Next work:
 
 ## Phase 3: Plugin Batch Pickup
 
-Status: In progress
+Status: Mostly complete
 
 Objective: Let the plugin fetch, claim, accept, persist, and reconcile one batch with many lines.
 
 Exit criteria:
 
-- Pending pickup shows batches with item counts and line summaries. Partially done; pending/active rows identify multi-line batches, detailed summaries remain basic.
+- Pending pickup shows batches with item counts and line summaries. Mostly done; pending/active rows identify multi-line batches and the claimed batch view shows line rows.
 - Claiming returns all lines. Done at contract/model level.
 - Accepted batch state survives plugin reload. Done for line summaries.
 - Old single-line accepted state restores as a one-line batch. Done via persistence fallback.
@@ -107,7 +112,7 @@ Exit criteria:
 
 Current caveat:
 
-- The plugin consumes batch lines and the planner builds item subtasks. The route runner still executes only the first active subtask on a world until Phase 5.
+- Live validation still needs to prove terminal server-state reconciliation across reloads and failed/retried batches. The old "first subtask only" caveat is no longer current; Phase 5 now owns remaining multi-item execution validation.
 
 ## Phase 4: Combined Advisory Planning
 
@@ -184,10 +189,15 @@ Exit criteria:
 - Roadmap status is updated with live-test notes.
 - Terminal batches remain inspectable in the dashboard archive and can be reused as composer drafts through `Run again`.
 
+Current caveat:
+
+- This phase cannot be closed from source and unit tests alone. It needs at least one live multi-item batch that purchases or safely skips more than one item line across at least one shared-world stop.
+- Deeper pagination is tracked separately in `docs/superpowers/plans/2026-06-29-market-board-deeper-pagination.md`; current code records truncation and request-id diagnostics but does not yet request additional market-board pages.
+
 ## Deferred
 
 - Global batch gil cap.
 - Server-side route-log indexing.
-- Deeper market-board pagination beyond the visible game listing cache. Current source evidence shows `InfoProxyItemSearch` has a fixed 100-listing cache and `InfoProxyPageInterface.AddPage` is receive-side; no safe next-page request method is exposed yet. This needs a proven `InfoProxyPageInterface` / request-data contract or packet-capture-backed implementation before it is safe to automate.
+- Deeper market-board pagination beyond the visible game listing cache. Current source evidence shows `InfoProxyItemSearch` has a fixed 100-listing cache. `InfoProxyPageInterface` exposes `CurrentRequestId`, `NextRequestId`, and `RequestData()`, and its `AddPage(...)` path may dispatch additional pagination/fetch work internally, but the safe state transition is not yet proven. Follow `docs/superpowers/plans/2026-06-29-market-board-deeper-pagination.md` before automating this.
 - Craft Architect quality planning integration.
 - Native travel automation beyond Lifestream.

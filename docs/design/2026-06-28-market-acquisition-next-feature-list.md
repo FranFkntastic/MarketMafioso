@@ -13,7 +13,7 @@ The normal Universalis update path remains XIVLauncher/Dalamud observing real ma
 ## Current Implementation Notes
 
 - Same-world multi-item execution now resets market-board search, candidate, read, and purchase state when advancing from one route line to the next on the same world.
-- The market-board listing reader consumes the full visible `InfoProxyItemSearch` cache and reports when the game reports more listings than that readable cache exposes. This is diagnostic coverage for truncation, not proof of deeper pagination support.
+- The market-board listing reader consumes the full visible `InfoProxyItemSearch` cache and reports when the game reports more listings than that readable cache exposes. Input captures now include `InfoProxyPageInterface` request ids to support pagination investigation. This is diagnostic coverage for truncation, not proof of deeper pagination support.
 - Universalis freshness verification is wired as post-world diagnostic evidence. Unconfirmed or unavailable freshness checks produce loud post-run warnings but do not block route progress.
 - Planner diagnostics now include per-listing decisions for hard filters, quantity caps, gil caps, and explicit sweep-probe worlds. The diagnostics window exposes these in a `Plan Decisions` table.
 - The dashboard acquisition board now defaults to active requests, has an archive view for terminal batches, and can reuse prior one-line or multi-line batches as composer drafts with `Run again`.
@@ -362,7 +362,7 @@ Sorting helps catch route-planning oddities, inspect expensive worlds, and compa
 - Route optimizer transparency: show why worlds were ordered the way they were, including current-world priority, data-center grouping, planned gil, planned quantity, and sweep/probe-only stops.
 - Dashboard attempt detail timeline for world summaries and freshness checks.
 - Route log index view in the dashboard, with searchable logs and clearer route/input-capture filenames.
-- Deeper market-board pagination beyond the fixed visible listing cache, after proving the game request/page contract. Current ClientStructs evidence exposes the fixed readable cache and receive-side `AddPage`, but not a safe next-page request API; until that contract is proven, use explicit visible-cache-exhausted diagnostics.
+- Deeper market-board pagination beyond the fixed visible listing cache, after proving the game request/page contract. Current ClientStructs evidence exposes the fixed readable cache plus `InfoProxyPageInterface` request ids and `RequestData()`, but not the safe transition for requesting additional item-search pages. Follow `docs/superpowers/plans/2026-06-29-market-board-deeper-pagination.md`; until that contract is proven, use explicit visible-cache-exhausted diagnostics.
 - Completed batch archive and `Run again` preset flow for repeated procurement needs.
 - Inventory and gil readiness warnings before launch, kept advisory unless the route would obviously be impossible.
 - Optional route time-cost estimates once all-world sweep and opportunistic checks are stable enough to make ETA meaningful.
