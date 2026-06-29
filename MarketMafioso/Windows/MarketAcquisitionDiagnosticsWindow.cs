@@ -116,6 +116,27 @@ public sealed class MarketAcquisitionDiagnosticsWindow : Window
         }
 
         ImGui.TextWrapped(readResult.Message);
+        DrawPaginationProbe(readResult);
+    }
+
+    private static void DrawPaginationProbe(MarketBoardReadResult readResult)
+    {
+        if (readResult.ItemId == 0 || string.IsNullOrWhiteSpace(readResult.WorldName))
+            return;
+
+        var paginationState = MarketBoardPaginationState.FromReadResult(readResult);
+        var probeResult = MarketBoardPaginationProbe.Evaluate(paginationState);
+        var color = probeResult.CanAttemptLiveProbe
+            ? ColHeader
+            : readResult.IsListingCountTruncated
+                ? ColError
+                : ColMuted;
+
+        ImGui.TextColored(
+            color,
+            $"Pagination: {probeResult.Status} (request {paginationState.CurrentRequestId} -> {paginationState.NextRequestId})");
+        if (readResult.IsListingCountTruncated)
+            ImGui.TextWrapped(probeResult.Message);
     }
 
     private static void DrawPlanDecisions(MarketAcquisitionPlan? plan)

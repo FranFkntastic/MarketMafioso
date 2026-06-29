@@ -88,4 +88,21 @@ public sealed class MarketBoardListingReaderTests
         Assert.True(result.IsListingCountTruncated);
         Assert.Contains("truncated", result.Message, StringComparison.OrdinalIgnoreCase);
     }
+
+    [Fact]
+    public void BuildReadResult_CarriesInfoProxyRequestIds()
+    {
+        var result = MarketMafioso.MarketAcquisition.MarketBoardListingReader.BuildReadResult(
+            waitingForListings: false,
+            itemId: 18,
+            currentWorld: "Siren",
+            listings: [],
+            reportedListingCount: 120,
+            listingCapacity: 100,
+            currentRequestId: 7,
+            nextRequestId: 8);
+
+        Assert.Equal(7, result.CurrentRequestId);
+        Assert.Equal(8, result.NextRequestId);
+    }
 }

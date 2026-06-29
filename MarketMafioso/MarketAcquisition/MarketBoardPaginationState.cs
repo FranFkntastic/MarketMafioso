@@ -36,4 +36,7 @@ public sealed record MarketBoardPaginationState(
             readResult.ListingCapacity,
             currentRequestId,
             nextRequestId);
+
+    public static MarketBoardPaginationState FromReadResult(MarketBoardReadResult readResult) =>
+        FromReadResult(readResult, readResult.CurrentRequestId, readResult.NextRequestId);
 }

@@ -24,6 +24,8 @@ public sealed record MarketBoardReadResult
     public int ListingCapacity { get; init; }
     public bool IsAtListingCapacity { get; init; }
     public bool IsListingCountTruncated { get; init; }
+    public byte CurrentRequestId { get; init; }
+    public byte NextRequestId { get; init; }
     public IReadOnlyList<MarketBoardLiveListing> Listings { get; init; } = [];
 }
 

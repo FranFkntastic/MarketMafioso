@@ -105,6 +105,8 @@ public sealed class MarketBoardPaginationStateTests
             WorldName = "Siren",
             ReportedListingCount = 180,
             ListingCapacity = 100,
+            CurrentRequestId = 7,
+            NextRequestId = 8,
             Listings =
             [
                 new MarketMafioso.MarketAcquisition.MarketBoardLiveListing(),
@@ -112,10 +114,7 @@ public sealed class MarketBoardPaginationStateTests
             ],
         };
 
-        var state = MarketMafioso.MarketAcquisition.MarketBoardPaginationState.FromReadResult(
-            readResult,
-            currentRequestId: 7,
-            nextRequestId: 8);
+        var state = MarketMafioso.MarketAcquisition.MarketBoardPaginationState.FromReadResult(readResult);
 
         Assert.Equal(5064u, state.ItemId);
         Assert.Equal("Siren", state.WorldName);

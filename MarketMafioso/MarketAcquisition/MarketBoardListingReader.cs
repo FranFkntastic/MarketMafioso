@@ -77,7 +77,9 @@ public sealed class MarketBoardListingReader
             currentWorld,
             listings,
             reportedListingCount,
-            listingCapacity);
+            listingCapacity,
+            infoProxy->InfoProxyPageInterface.CurrentRequestId,
+            infoProxy->InfoProxyPageInterface.NextRequestId);
     }
 
     internal static MarketBoardReadResult BuildReadResult(
@@ -86,7 +88,9 @@ public sealed class MarketBoardListingReader
         string currentWorld,
         IReadOnlyList<MarketBoardLiveListing> listings,
         int? reportedListingCount = null,
-        int? listingCapacity = null)
+        int? listingCapacity = null,
+        byte currentRequestId = 0,
+        byte nextRequestId = 0)
     {
         var effectiveReportedListingCount = Math.Max(reportedListingCount ?? listings.Count, listings.Count);
         var effectiveListingCapacity = Math.Max(listingCapacity ?? listings.Count, listings.Count);
@@ -113,6 +117,8 @@ public sealed class MarketBoardListingReader
                 ListingCapacity = effectiveListingCapacity,
                 IsAtListingCapacity = isAtListingCapacity,
                 IsListingCountTruncated = isListingCountTruncated,
+                CurrentRequestId = currentRequestId,
+                NextRequestId = nextRequestId,
                 Listings = listings,
             };
         }
@@ -129,6 +135,8 @@ public sealed class MarketBoardListingReader
             ListingCapacity = effectiveListingCapacity,
             IsAtListingCapacity = isAtListingCapacity,
             IsListingCountTruncated = isListingCountTruncated,
+            CurrentRequestId = currentRequestId,
+            NextRequestId = nextRequestId,
             Listings = listings,
         };
     }

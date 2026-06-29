@@ -20,6 +20,7 @@
 - MarketMafioso already records truncation and preserves `SkippedVisibleCacheExhausted` rather than pretending no safe stock exists.
 - `MarketBoardInputCaptureReader` records `infoProxyEntryCount`, `infoProxyCurrentRequestId`, and `infoProxyNextRequestId` for future captures.
 - `MarketBoardPaginationState` and `MarketBoardPaginationProbe` now provide pure, tested diagnostics for "not truncated", "request ids incoherent", "ready for live probe", "advanced", "wrong continuation", and "unchanged".
+- `MarketBoardReadResult` carries `InfoProxyPageInterface` request ids into the diagnostics window, so truncation logs can be interpreted without relying only on separate input-capture files.
 
 ## Non-Negotiable Safety Rules
 
@@ -190,7 +191,7 @@ Run the same `dotnet test` command and confirm all pagination state tests pass.
 
 ## Task 3: Add A Non-Purchasing Pagination Probe
 
-Status: Partial. The pure classifier is complete in `MarketMafioso/MarketAcquisition/MarketBoardPaginationProbe.cs` with tests in `MarketMafioso.Tests/MarketAcquisition/MarketBoardPaginationProbeTests.cs`. The diagnostics-window button and any live page-request attempt remain intentionally unimplemented until Task 1 captures prove the safe request transition.
+Status: Partial. The pure classifier is complete in `MarketMafioso/MarketAcquisition/MarketBoardPaginationProbe.cs` with tests in `MarketMafioso.Tests/MarketAcquisition/MarketBoardPaginationProbeTests.cs`, and the diagnostics window now displays the probe classification for the current read result. The diagnostics-window button and any live page-request attempt remain intentionally unimplemented until Task 1 captures prove the safe request transition.
 
 **Files:**
 - Create: `MarketMafioso/MarketAcquisition/MarketBoardPaginationProbe.cs`
