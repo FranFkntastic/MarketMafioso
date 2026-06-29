@@ -13,6 +13,7 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
     private MarketAcquisitionGuidedRouteSession? session;
     private MarketAcquisitionRouteDiagnostics diagnostics = MarketAcquisitionRouteDiagnostics.Disabled;
     private bool diagnosticsRequested;
+    private bool includeOpportunisticChecksRequested;
     private bool standaloneInputCaptureLogOpen;
     private DateTimeOffset? itemSearchAutomationStartedUtc;
     private string? lastWorldSummarySignature;
@@ -54,17 +55,19 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
 
     public MarketAcquisitionRouteActionResult Start(
         MarketAcquisitionPlan plan,
-        bool enableDiagnostics = false)
+        bool enableDiagnostics = false,
+        bool includeOpportunisticChecks = false)
     {
         ArgumentNullException.ThrowIfNull(plan);
 
         CloseDiagnostics();
         diagnosticsRequested = enableDiagnostics;
+        includeOpportunisticChecksRequested = includeOpportunisticChecks;
         diagnostics = diagnosticsRequested
             ? MarketAcquisitionRouteDiagnostics.CreateEnabled(diagnosticsDirectory, DateTimeOffset.Now)
             : MarketAcquisitionRouteDiagnostics.Disabled;
         LastDiagnosticFilePath = diagnostics.FilePath;
-        session = MarketAcquisitionGuidedRouteSession.Start(plan);
+        session = MarketAcquisitionGuidedRouteSession.Start(plan, includeOpportunisticChecks);
         State = "Running";
         SearchSubmitted = false;
         MarketBoardCloseRequiredBeforeTravel = false;
@@ -86,8 +89,10 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
                 ["plannedGil"] = plan.PlannedGil.ToString(),
                 ["firstStop"] = session.ActiveStop?.WorldName,
                 ["firstItem"] = FormatRouteItem(session.ActiveStop?.ActiveItemSubtask),
+                ["firstItemSource"] = session.ActiveStop?.ActiveItemSubtask?.Source,
                 ["sourceListingCount"] = plan.Diagnostics.SourceListingCount.ToString(),
                 ["plannedListingCount"] = plan.Diagnostics.PlannedListingCount.ToString(),
+                ["opportunisticChecks"] = includeOpportunisticChecks.ToString(),
             });
         return MarketAcquisitionRouteActionResult.Ok(StatusMessage);
     }
@@ -97,7 +102,7 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         ArgumentNullException.ThrowIfNull(plan);
 
         diagnostics.Record("route-restart", "Restarting market acquisition route.");
-        return Start(plan, diagnosticsRequested);
+        return Start(plan, diagnosticsRequested, includeOpportunisticChecksRequested);
     }
 
     public MarketAcquisitionRouteActionResult Pause()
@@ -149,6 +154,7 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         standaloneInputCaptureLogOpen = false;
         itemSearchAutomationStartedUtc = null;
         diagnosticsRequested = false;
+        includeOpportunisticChecksRequested = false;
         LastDiagnosticFilePath = null;
         LatestWorldCompletionSummary = null;
         lastWorldSummarySignature = null;
@@ -378,6 +384,7 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         {
             ["status"] = searchResult.Status,
             ["searchSubmitted"] = SearchSubmitted.ToString(),
+            ["subtaskSource"] = session?.ActiveStop?.ActiveItemSubtask?.Source,
         };
         if (itemSearchAutomationStartedUtc is { } startedAt)
         {
@@ -529,6 +536,7 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
                 ["liveCandidateStatus"] = candidatePlan.Status,
                 ["wouldBuyQuantity"] = candidatePlan.WouldBuyQuantity.ToString(),
                 ["wouldSpendGil"] = candidatePlan.WouldSpendGil.ToString(),
+                ["subtaskSource"] = session?.ActiveStop?.ActiveItemSubtask?.Source,
                 ["success"] = result.Success.ToString(),
             });
 
@@ -563,7 +571,8 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         string status,
         uint purchasedQuantity,
         uint spentGil,
-        string message)
+        string message,
+        string? source = null)
     {
         diagnostics.Record(
             "line-progress",
@@ -573,6 +582,7 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
                 ["lineId"] = lineId,
                 ["itemName"] = itemName,
                 ["status"] = status,
+                ["source"] = source,
                 ["purchasedQuantity"] = purchasedQuantity.ToString(),
                 ["spentGil"] = spentGil.ToString(),
             });
@@ -586,7 +596,8 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         string retainerId,
         uint quantity,
         uint totalGil,
-        string result)
+        string result,
+        string? source = null)
     {
         diagnostics.Record(
             "purchase-audit",
@@ -598,6 +609,7 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
                 ["world"] = worldName,
                 ["listingId"] = listingId,
                 ["retainerId"] = retainerId,
+                ["source"] = source,
                 ["quantity"] = quantity.ToString(),
                 ["totalGil"] = totalGil.ToString(),
                 ["result"] = result,
@@ -645,6 +657,7 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
                 ["currentWorld"] = currentWorld,
                 ["purchasedQuantity"] = purchasedQuantity.ToString(),
                 ["spentGil"] = spentGil.ToString(),
+                ["subtaskSource"] = session?.ActiveStop?.ActiveItemSubtask?.Source,
                 ["success"] = result.Success.ToString(),
             });
 

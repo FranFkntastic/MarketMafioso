@@ -24,7 +24,9 @@ public sealed class MarketAcquisitionGuidedRouteSession
     public bool ShouldMonitorActiveStop =>
         ActiveStop?.Status is "TravelCommandSent" or "Arrived" or "Purchasing";
 
-    public static MarketAcquisitionGuidedRouteSession Start(MarketAcquisitionPlan plan)
+    public static MarketAcquisitionGuidedRouteSession Start(
+        MarketAcquisitionPlan plan,
+        bool includeOpportunisticChecks = false)
     {
         ArgumentNullException.ThrowIfNull(plan);
 
@@ -33,28 +35,37 @@ public sealed class MarketAcquisitionGuidedRouteSession
 
         var stops = plan.WorldBatches
             .Where(batch => !string.IsNullOrWhiteSpace(batch.WorldName))
-            .Select(batch => new MarketAcquisitionGuidedRouteStop
+            .Select(batch =>
             {
-                WorldName = batch.WorldName,
-                DataCenter = string.IsNullOrWhiteSpace(batch.DataCenter)
+                var dataCenter = string.IsNullOrWhiteSpace(batch.DataCenter)
                     ? MarketAcquisitionPlanner.ResolveNorthAmericaDataCenter(batch.WorldName)
-                    : batch.DataCenter,
-                PlannedQuantity = batch.PlannedQuantity,
-                PlannedGil = batch.PlannedGil,
-                ItemSubtasks = batch.ItemSubtasks,
-                LineStates = batch.ItemSubtasks
-                    .Select(subtask => new MarketAcquisitionRouteLineState
-                    {
-                        LineId = subtask.LineId,
-                        ItemId = subtask.ItemId,
-                        ItemName = subtask.ItemName,
-                        PlannedQuantity = subtask.PlannedQuantity,
-                        PlannedGil = subtask.PlannedGil,
-                        Status = "Pending",
-                    })
-                    .ToList(),
-                LifestreamCommand = BuildLifestreamCommand(batch.WorldName),
-                Status = "Pending",
+                    : batch.DataCenter;
+                var subtasks = includeOpportunisticChecks
+                    ? AddOpportunisticSubtasks(batch, plan.Lines, dataCenter)
+                    : batch.ItemSubtasks;
+
+                return new MarketAcquisitionGuidedRouteStop
+                {
+                    WorldName = batch.WorldName,
+                    DataCenter = dataCenter,
+                    PlannedQuantity = batch.PlannedQuantity,
+                    PlannedGil = batch.PlannedGil,
+                    ItemSubtasks = subtasks,
+                    LineStates = subtasks
+                        .Select(subtask => new MarketAcquisitionRouteLineState
+                        {
+                            LineId = subtask.LineId,
+                            ItemId = subtask.ItemId,
+                            ItemName = subtask.ItemName,
+                            Source = subtask.Source,
+                            PlannedQuantity = subtask.PlannedQuantity,
+                            PlannedGil = subtask.PlannedGil,
+                            Status = "Pending",
+                        })
+                        .ToList(),
+                    LifestreamCommand = BuildLifestreamCommand(batch.WorldName),
+                    Status = "Pending",
+                };
             })
             .ToList();
 
@@ -62,6 +73,54 @@ public sealed class MarketAcquisitionGuidedRouteSession
             throw new InvalidOperationException("A guided route requires at least one planned world batch.");
 
         return new MarketAcquisitionGuidedRouteSession(stops);
+    }
+
+    private static IReadOnlyList<MarketAcquisitionWorldItemSubtask> AddOpportunisticSubtasks(
+        MarketAcquisitionWorldBatch batch,
+        IReadOnlyList<MarketAcquisitionPlanLine> lines,
+        string dataCenter)
+    {
+        if (lines.Count == 0)
+            return batch.ItemSubtasks;
+
+        var existing = batch.ItemSubtasks
+            .Select(subtask => subtask.LineId)
+            .ToHashSet(StringComparer.Ordinal);
+        var subtasks = batch.ItemSubtasks
+            .Select(subtask => subtask.Source.Equals("Planned", StringComparison.OrdinalIgnoreCase)
+                ? subtask
+                : subtask with { Source = "Planned" })
+            .ToList();
+
+        foreach (var line in lines.OrderBy(line => line.Ordinal))
+        {
+            if (existing.Contains(line.LineId))
+                continue;
+
+            subtasks.Add(new MarketAcquisitionWorldItemSubtask
+            {
+                LineId = line.LineId,
+                LineOrdinal = line.Ordinal,
+                Source = "Opportunistic",
+                ItemId = line.ItemId,
+                ItemName = line.ItemName,
+                WorldName = batch.WorldName,
+                DataCenter = dataCenter,
+                QuantityMode = line.QuantityMode,
+                RequestedQuantity = line.RequestedQuantity,
+                HqPolicy = line.HqPolicy,
+                MaxUnitPrice = line.MaxUnitPrice,
+                GilCap = line.GilCap,
+                PlannedQuantity = 0,
+                PlannedGil = 0,
+                Listings = [],
+            });
+        }
+
+        return subtasks
+            .OrderBy(subtask => subtask.LineOrdinal)
+            .ThenBy(subtask => subtask.Source.Equals("Planned", StringComparison.OrdinalIgnoreCase) ? 0 : 1)
+            .ToList();
     }
 
     public MarketAcquisitionGuidedRouteResult RecordCurrentWorld(string currentWorld)
@@ -310,6 +369,7 @@ public sealed record MarketAcquisitionRouteLineState
     public string LineId { get; init; } = string.Empty;
     public uint ItemId { get; init; }
     public string? ItemName { get; init; }
+    public string Source { get; init; } = "Planned";
     public string Status { get; set; } = "Pending";
     public uint PlannedQuantity { get; init; }
     public uint PlannedGil { get; init; }

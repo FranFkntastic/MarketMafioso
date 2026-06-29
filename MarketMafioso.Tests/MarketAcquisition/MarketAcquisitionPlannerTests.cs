@@ -193,6 +193,7 @@ public sealed class MarketAcquisitionPlannerTests
         {
             var subtask = Assert.Single(batch.ItemSubtasks);
             Assert.Equal(request.ItemId, subtask.ItemId);
+            Assert.Equal(batch.Listings.Count == 0 ? "SweepProbe" : "Planned", subtask.Source);
         });
         Assert.Contains(plan.WorldBatches, batch => batch.WorldName == "Gilgamesh" && batch.Listings.Count == 1);
         Assert.Contains(plan.WorldBatches, batch => batch.WorldName == "Siren" && batch.Listings.Count == 0);
@@ -294,6 +295,7 @@ public sealed class MarketAcquisitionPlannerTests
         Assert.Equal(70u, batch.PlannedQuantity);
         Assert.Equal(7_000u, batch.PlannedGil);
         Assert.Equal(["line-1", "line-2"], batch.ItemSubtasks.Select(subtask => subtask.LineId).ToArray());
+        Assert.Equal(["Planned", "Planned"], batch.ItemSubtasks.Select(subtask => subtask.Source).ToArray());
         Assert.Equal(["fire", "lightning"], batch.Listings.Select(listing => listing.ListingId).ToArray());
         Assert.Equal(["Ready", "Ready"], plan.Lines.Select(line => line.Status).ToArray());
     }

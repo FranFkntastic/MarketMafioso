@@ -1227,7 +1227,7 @@ Actual: route runner tests passed, and `dotnet build "MarketMafioso/MarketMafios
 - Test: `MarketMafioso.Tests/MarketAcquisition/MarketAcquisitionGuidedRouteSessionTests.cs`
 - Test: `MarketMafioso.Tests/MarketAcquisition/MarketAcquisitionPlannerTests.cs`
 
-- [ ] **Step 1: Add default-on setting**
+- [x] **Step 1: Add default-on setting**
 
 In `Configuration.cs`, add:
 
@@ -1246,7 +1246,7 @@ if (ImGui.Checkbox("Check all batch items on each visited world", ref enableOppo
 }
 ```
 
-- [ ] **Step 2: Add route-session test**
+- [x] **Step 2: Add route-session test**
 
 Add a test proving a world stop gets planned subtasks first, then opportunistic subtasks for unfinished lines:
 
@@ -1266,7 +1266,7 @@ public void StartWithOpportunisticChecksAddsUnplannedLinesToWorldStop()
 
 Expected before implementation: compile fails because `Source` and overload do not exist.
 
-- [ ] **Step 3: Add subtask source**
+- [x] **Step 3: Add subtask source**
 
 In `MarketAcquisitionWorldItemSubtask`, add:
 
@@ -1276,7 +1276,7 @@ public string Source { get; init; } = "Planned";
 
 Planner-created subtasks use `"Planned"` for ordinary recommendations and `"SweepProbe"` for scope-probe stops created by all-world sweep.
 
-- [ ] **Step 4: Build opportunistic subtasks at route-session start**
+- [x] **Step 4: Build opportunistic subtasks at route-session start**
 
 When `includeOpportunisticChecks` is true, for each world stop append one zero-listing subtask for each unfinished plan line not already present on that world:
 
@@ -1314,11 +1314,11 @@ private static IReadOnlyList<MarketAcquisitionWorldItemSubtask> AddOpportunistic
 }
 ```
 
-- [ ] **Step 5: Diagnostics distinguish source**
+- [x] **Step 5: Diagnostics distinguish source**
 
 Log `subtask.Source` when searching, reading, buying, skipping, or completing a subtask.
 
-- [ ] **Step 6: Run tests**
+- [x] **Step 6: Run tests**
 
 Run:
 
@@ -1327,6 +1327,8 @@ dotnet test "MarketMafioso.Tests\MarketMafioso.Tests.csproj" -c Debug --filter "
 ```
 
 Expected: tests pass.
+
+Actual: focused route-session/planner tests passed, and `dotnet build "MarketMafioso/MarketMafioso.csproj" -c Debug` passed.
 
 ---
 

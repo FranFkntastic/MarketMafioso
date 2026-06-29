@@ -91,10 +91,15 @@ public static class MarketAcquisitionPlanner
 
             var candidates = isAllWorldSweep
                 ? sweepWorlds
-                    .Select(world => BuildWorldSubtask(
-                        line,
-                        world,
-                        matchingListings.TryGetValue(world, out var worldListings) ? worldListings : []))
+                    .Select(world =>
+                    {
+                        var hasListings = matchingListings.TryGetValue(world, out var worldListings);
+                        return BuildWorldSubtask(
+                            line,
+                            world,
+                            hasListings ? worldListings! : [],
+                            hasListings ? "Planned" : "SweepProbe");
+                    })
                     .ToList()
                 : matchingListings
                     .Select(group => BuildWorldSubtask(line, group.Key, group.Value))
@@ -368,7 +373,8 @@ public static class MarketAcquisitionPlanner
     private static MarketAcquisitionWorldItemSubtask BuildWorldSubtask(
         PlannerLine line,
         string worldName,
-        IEnumerable<MarketAcquisitionListing> listings)
+        IEnumerable<MarketAcquisitionListing> listings,
+        string source = "Planned")
     {
         var plannedListings = new List<MarketAcquisitionPlannedListing>();
         uint plannedQuantity = 0;
@@ -405,6 +411,7 @@ public static class MarketAcquisitionPlanner
         {
             LineId = line.LineId,
             LineOrdinal = line.Ordinal,
+            Source = source,
             ItemId = line.ItemId,
             ItemName = line.ItemName,
             WorldName = worldName,
@@ -424,6 +431,7 @@ public static class MarketAcquisitionPlanner
     private static MarketAcquisitionWorldItemSubtask ToProbeSubtask(MarketAcquisitionWorldItemSubtask subtask) =>
         subtask with
         {
+            Source = "SweepProbe",
             PlannedQuantity = 0,
             PlannedGil = 0,
             ExceedsRequestedQuantity = false,

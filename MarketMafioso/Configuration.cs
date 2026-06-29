@@ -15,6 +15,7 @@ public class Configuration : IPluginConfiguration
     public string CommandPickupApiKey { get; set; } = string.Empty;
     public string PluginInstanceId { get; set; } = Guid.NewGuid().ToString("N");
     public PersistedMarketAcquisitionClaim? ActiveMarketAcquisitionClaim { get; set; }
+    public bool EnableOpportunisticWorldChecks { get; set; } = true;
 
     public bool IncludeArmoury { get; set; } = false;
     public bool IncludeCrystals { get; set; } = true;

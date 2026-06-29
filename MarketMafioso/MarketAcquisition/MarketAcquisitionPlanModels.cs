@@ -54,6 +54,7 @@ public sealed record MarketAcquisitionWorldItemSubtask
 {
     public string LineId { get; init; } = string.Empty;
     public int LineOrdinal { get; init; }
+    public string Source { get; init; } = "Planned";
     public uint ItemId { get; init; }
     public string? ItemName { get; init; }
     public string WorldName { get; init; } = string.Empty;

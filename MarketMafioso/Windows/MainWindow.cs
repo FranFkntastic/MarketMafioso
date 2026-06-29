@@ -1584,7 +1584,10 @@ public class MainWindow : Window, IDisposable
             var claimed = claimedAcquisitionRequest ??
                           throw new InvalidOperationException("No dashboard request is accepted.");
             await EnsureRouteReportableClaimAsync(claimed, token).ConfigureAwait(false);
-            marketAcquisitionRouteRunner.Start(plan, enableDiagnostics);
+            marketAcquisitionRouteRunner.Start(
+                plan,
+                enableDiagnostics,
+                config.EnableOpportunisticWorldChecks);
             marketBoardReadResult = null;
             marketBoardReconciliation = null;
             marketAcquisitionLiveCandidatePlan = null;
@@ -1850,14 +1853,16 @@ public class MainWindow : Window, IDisposable
             candidate.RetainerId,
             candidate.Quantity,
             candidate.TotalGil,
-            "Purchased");
+            "Purchased",
+            activeSubtask.Source);
         marketAcquisitionRouteRunner.RecordLineProgress(
             lineId,
             itemName,
             "Running",
             linePurchasedQuantity,
             lineSpentGil,
-            message);
+            message,
+            activeSubtask.Source);
 
         ReportPurchaseAuditAsync(
             claimed,
@@ -1898,7 +1903,8 @@ public class MainWindow : Window, IDisposable
             status,
             purchasedQuantity,
             spentGil,
-            message);
+            message,
+            subtask.Source);
         ReportLineProgressAsync(
             claimed,
             lineId,
@@ -2917,6 +2923,8 @@ public class MainWindow : Window, IDisposable
         ImGui.Spacing();
 
         DrawServerSection();
+        ImGui.Spacing();
+        DrawMarketAcquisitionSettingsSection();
     }
 
     private void DrawModuleSummary(string name, string state, string description)
@@ -2977,6 +2985,23 @@ public class MainWindow : Window, IDisposable
 
         ImGui.Spacing();
         DrawDashboardOpenSection();
+    }
+
+    private void DrawMarketAcquisitionSettingsSection()
+    {
+        ImGui.TextColored(ColHeader, "Market Acquisition");
+        ImGui.Separator();
+
+        var enableOpportunistic = config.EnableOpportunisticWorldChecks;
+        if (ImGui.Checkbox("Check every batch item on each visited world", ref enableOpportunistic))
+        {
+            config.EnableOpportunisticWorldChecks = enableOpportunistic;
+            config.Save();
+        }
+
+        ImGui.TextColored(
+            ColMuted,
+            "Default on. While already on a world, MarketMafioso checks other unfinished items from the same claimed batch.");
     }
 
     private void DrawDashboardOpenSection()

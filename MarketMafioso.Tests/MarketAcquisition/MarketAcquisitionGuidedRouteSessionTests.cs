@@ -60,6 +60,7 @@ public sealed class MarketAcquisitionGuidedRouteSessionTests
 
         var activeStop = Assert.IsType<MarketMafioso.MarketAcquisition.MarketAcquisitionGuidedRouteStop>(session.ActiveStop);
         Assert.Equal(["line-1", "line-2"], activeStop.ItemSubtasks.Select(subtask => subtask.LineId).ToArray());
+        Assert.Equal(["Planned", "Planned"], activeStop.ItemSubtasks.Select(subtask => subtask.Source).ToArray());
     }
 
     [Fact]
@@ -71,6 +72,28 @@ public sealed class MarketAcquisitionGuidedRouteSessionTests
         var activeStop = Assert.IsType<MarketMafioso.MarketAcquisition.MarketAcquisitionGuidedRouteStop>(session.ActiveStop);
         Assert.Equal(["batch-1-line-1", "batch-1-line-2"], activeStop.LineStates.Select(line => line.LineId).ToArray());
         Assert.Equal(["Pending", "Pending"], activeStop.LineStates.Select(line => line.Status).ToArray());
+    }
+
+    [Fact]
+    public void StartWithOpportunisticChecksAddsUnplannedLinesToWorldStop()
+    {
+        var plan = MarketAcquisitionTestPlans.MultiLineTwoWorlds(firstWorldHasOnlyFirstLine: true);
+
+        var session = MarketMafioso.MarketAcquisition.MarketAcquisitionGuidedRouteSession.Start(
+            plan,
+            includeOpportunisticChecks: true);
+
+        var firstStop = Assert.IsType<MarketMafioso.MarketAcquisition.MarketAcquisitionGuidedRouteStop>(session.ActiveStop);
+        Assert.Equal(["batch-1-line-1", "batch-1-line-2"], firstStop.ItemSubtasks.Select(subtask => subtask.LineId).ToArray());
+        Assert.Contains(firstStop.ItemSubtasks, subtask =>
+            subtask.LineId == plan.Lines[0].LineId &&
+            subtask.Source == "Planned");
+        Assert.Contains(firstStop.ItemSubtasks, subtask =>
+            subtask.LineId == plan.Lines[1].LineId &&
+            subtask.Source == "Opportunistic" &&
+            subtask.PlannedQuantity == 0 &&
+            subtask.WorldName == "Siren");
+        Assert.Equal(["Planned", "Opportunistic"], firstStop.LineStates.Select(line => line.Source).ToArray());
     }
 
     [Fact]
