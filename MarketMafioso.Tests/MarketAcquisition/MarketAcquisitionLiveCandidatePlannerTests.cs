@@ -88,6 +88,61 @@ public sealed class MarketAcquisitionLiveCandidatePlannerTests
     }
 
     [Fact]
+    public void BuildCandidatePlan_UsesSafeListingFromAccumulatedLaterPage()
+    {
+        var request = CreateRequest(quantityMode: "AllBelowThreshold", quantity: 0, maxUnitPrice: 100, maxTotalGil: 0);
+        var plan = CreatePlan();
+        var firstPage = new MarketMafioso.MarketAcquisition.MarketBoardReadResult
+        {
+            Status = "Ready",
+            ItemId = 2,
+            WorldName = "Gilgamesh",
+            ReportedListingCount = 3,
+            ListingCapacity = 2,
+            IsAtListingCapacity = true,
+            IsListingCountTruncated = true,
+            CurrentRequestId = 1,
+            NextRequestId = 2,
+            Listings =
+            [
+                CreateLiveListing("first-expensive", quantity: 1, unitPrice: 500),
+                CreateLiveListing("second-expensive", quantity: 1, unitPrice: 400),
+            ],
+        };
+
+        var secondPage = new MarketMafioso.MarketAcquisition.MarketBoardReadResult
+        {
+            Status = "Ready",
+            ItemId = 2,
+            WorldName = "Gilgamesh",
+            ReportedListingCount = 3,
+            ListingCapacity = 2,
+            CurrentRequestId = 2,
+            NextRequestId = 3,
+            Listings =
+            [
+                CreateLiveListing("later-page-cheap", quantity: 4, unitPrice: 50),
+            ],
+        };
+
+        var accumulated = MarketMafioso.MarketAcquisition.MarketBoardAccumulatedReadResult
+            .FromReadResult(firstPage)
+            .Append(secondPage);
+
+        var candidatePlan = MarketMafioso.MarketAcquisition.MarketAcquisitionLiveCandidatePlanner.BuildCandidatePlan(
+            request,
+            plan,
+            "Gilgamesh",
+            accumulated);
+
+        Assert.Equal("Ready", candidatePlan.Status);
+        Assert.False(candidatePlan.IsVisibleListingCacheTruncated);
+        Assert.Equal(["later-page-cheap"], candidatePlan.Rows.Where(row => row.Decision == "WouldBuy").Select(row => row.LiveListing.ListingId).ToArray());
+        Assert.Equal(3, candidatePlan.ReportedListingCount);
+        Assert.Equal(3, candidatePlan.ReadableListingCount);
+    }
+
+    [Fact]
     public void BuildCandidatePlan_AllBelowThresholdRespectsMaxQuantityWhenProvided()
     {
         var request = CreateRequest(quantityMode: "AllBelowThreshold", quantity: 5, maxUnitPrice: 100, maxTotalGil: 0);

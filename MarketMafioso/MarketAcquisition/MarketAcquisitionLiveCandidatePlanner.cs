@@ -53,6 +53,25 @@ public static class MarketAcquisitionLiveCandidatePlanner
     public static MarketAcquisitionLiveCandidatePlan BuildCandidatePlan(
         MarketAcquisitionRequestView request,
         MarketAcquisitionPlan plan,
+        string currentWorld,
+        MarketBoardAccumulatedReadResult accumulatedRead,
+        uint alreadyPurchasedQuantity = 0,
+        uint alreadySpentGil = 0)
+    {
+        ArgumentNullException.ThrowIfNull(accumulatedRead);
+
+        return BuildCandidatePlan(
+            request,
+            plan,
+            currentWorld,
+            accumulatedRead.ToReadResult(),
+            alreadyPurchasedQuantity,
+            alreadySpentGil);
+    }
+
+    public static MarketAcquisitionLiveCandidatePlan BuildCandidatePlan(
+        MarketAcquisitionRequestView request,
+        MarketAcquisitionPlan plan,
         MarketAcquisitionWorldItemSubtask activeSubtask,
         string currentWorld,
         uint itemId,
@@ -93,6 +112,27 @@ public static class MarketAcquisitionLiveCandidatePlanner
             alreadyPurchasedQuantity,
             alreadySpentGil,
             readResult);
+    }
+
+    public static MarketAcquisitionLiveCandidatePlan BuildCandidatePlan(
+        MarketAcquisitionRequestView request,
+        MarketAcquisitionPlan plan,
+        MarketAcquisitionWorldItemSubtask activeSubtask,
+        string currentWorld,
+        MarketBoardAccumulatedReadResult accumulatedRead,
+        uint alreadyPurchasedQuantity = 0,
+        uint alreadySpentGil = 0)
+    {
+        ArgumentNullException.ThrowIfNull(accumulatedRead);
+
+        return BuildCandidatePlan(
+            request,
+            plan,
+            activeSubtask,
+            currentWorld,
+            accumulatedRead.ToReadResult(),
+            alreadyPurchasedQuantity,
+            alreadySpentGil);
     }
 
     private static MarketAcquisitionLiveCandidatePlan BuildCandidatePlanCore(

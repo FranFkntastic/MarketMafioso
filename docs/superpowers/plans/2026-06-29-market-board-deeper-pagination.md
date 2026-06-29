@@ -241,17 +241,19 @@ Expected: existing route and candidate tests still pass.
 
 ## Task 4: Merge Additional Pages Into Live Candidate Planning
 
+Status: Pure model/planner support complete. `MarketBoardAccumulatedReadResult` safely merges unique visible listings from multiple reads for the same item/world, rejects mixed item/world reads, preserves reported listing counts and request ids, and can be fed into live candidate planning. Actual live page requesting remains blocked on Task 1 capture evidence.
+
 **Files:**
 - Modify: `MarketMafioso/MarketAcquisition/MarketBoardLiveListingModels.cs`
 - Modify: `MarketMafioso/MarketAcquisition/MarketBoardListingReader.cs`
 - Modify: `MarketMafioso/MarketAcquisition/MarketAcquisitionLiveCandidatePlanner.cs`
 - Test: `MarketMafioso.Tests/MarketAcquisition/MarketAcquisitionLiveCandidatePlannerTests.cs`
 
-- [ ] **Step 1: Add accumulated-read model tests**
+- [x] **Step 1: Add accumulated-read model tests**
 
 Write tests proving two reads for the same item/world merge by listing id and reads for different item/worlds are rejected.
 
-- [ ] **Step 2: Implement accumulated reads**
+- [x] **Step 2: Implement accumulated reads**
 
 Add a model that preserves:
 
@@ -261,11 +263,11 @@ Add a model that preserves:
 - page count read,
 - whether the final result is still truncated.
 
-- [ ] **Step 3: Feed accumulated reads into candidate planning**
+- [x] **Step 3: Feed accumulated reads into candidate planning**
 
 When a line has accumulated reads, candidate planning should evaluate all accumulated listings. If the accumulated read is still truncated and no safe candidate was found, keep status `VisibleCacheExhausted`.
 
-- [ ] **Step 4: Verify candidate behavior**
+- [x] **Step 4: Verify candidate behavior**
 
 Run:
 
@@ -274,6 +276,12 @@ dotnet test "MarketMafioso.Tests/MarketMafioso.Tests.csproj" -c Debug --filter "
 ```
 
 Expected: candidate planner distinguishes ordinary no-stock from visible-cache exhaustion and can select candidates from later accumulated pages.
+
+Status: Complete. Focused verification passed with 33 tests:
+
+```powershell
+dotnet test "MarketMafioso.Tests/MarketMafioso.Tests.csproj" -c Debug --filter "FullyQualifiedName~MarketBoardPagination|FullyQualifiedName~MarketBoardListingReaderTests|FullyQualifiedName~MarketBoardAccumulatedReadResultTests|FullyQualifiedName~MarketAcquisitionLiveCandidatePlannerTests" -v minimal
+```
 
 ## Task 5: Live Validation Gate
 
