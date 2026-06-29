@@ -143,6 +143,108 @@ public sealed class MarketAcquisitionPlannerTests
     }
 
     [Fact]
+    public void BuildPlan_DiagnosticsExplainListingDecisions()
+    {
+        var request = CreateRequest(
+            quantity: 10,
+            worldMode: "CurrentWorldOnly",
+            targetWorld: "Gilgamesh",
+            maxUnitPrice: 600,
+            maxTotalGil: 0,
+            hqPolicy: "NqOnly");
+        var listings = new[]
+        {
+            CreateListing("Gilgamesh", quantity: 10, unitPrice: 500, listingId: "accepted"),
+            CreateListing("Gilgamesh", quantity: 10, unitPrice: 700, listingId: "too-expensive"),
+            CreateListing("Gilgamesh", quantity: 10, unitPrice: 500, hq: true, listingId: "wrong-quality"),
+            CreateListing("Faerie", quantity: 10, unitPrice: 500, listingId: "wrong-world"),
+            CreateListing("Gilgamesh", quantity: 10, unitPrice: 500, listingId: "wrong-item", itemId: 999),
+        };
+
+        var plan = MarketMafioso.MarketAcquisition.MarketAcquisitionPlanner.BuildPlan(
+            request,
+            listings,
+            DateTimeOffset.UnixEpoch);
+
+        Assert.Contains(plan.Diagnostics.ListingDecisions, decision => decision.ListingId == "accepted" && decision.Decision == "AcceptedRemoteCandidate");
+        Assert.Contains(plan.Diagnostics.ListingDecisions, decision => decision.ListingId == "too-expensive" && decision.Decision == "RejectedAboveMaxUnit");
+        Assert.Contains(plan.Diagnostics.ListingDecisions, decision => decision.ListingId == "wrong-quality" && decision.Decision == "RejectedHqPolicy");
+        Assert.Contains(plan.Diagnostics.ListingDecisions, decision => decision.ListingId == "wrong-world" && decision.Decision == "RejectedWrongWorldScope");
+        Assert.Contains(plan.Diagnostics.ListingDecisions, decision => decision.ListingId == "wrong-item" && decision.Decision == "RejectedWrongItem");
+    }
+
+    [Fact]
+    public void BuildPlan_DiagnosticsExplainGilCapRejections()
+    {
+        var request = CreateRequest(quantity: 10, maxUnitPrice: 100, maxTotalGil: 550);
+        var listings = new[]
+        {
+            CreateListing("Gilgamesh", quantity: 4, unitPrice: 90, listingId: "selected"),
+            CreateListing("Gilgamesh", quantity: 4, unitPrice: 95, listingId: "gil-cap"),
+        };
+
+        var plan = MarketMafioso.MarketAcquisition.MarketAcquisitionPlanner.BuildPlan(
+            request,
+            listings,
+            DateTimeOffset.UnixEpoch);
+
+        Assert.Contains(plan.Diagnostics.ListingDecisions, decision =>
+            decision.ListingId == "selected" &&
+            decision.Decision == "AcceptedRemoteCandidate");
+        Assert.Contains(plan.Diagnostics.ListingDecisions, decision =>
+            decision.ListingId == "gil-cap" &&
+            decision.Decision == "RejectedGilCap" &&
+            decision.Reason.Contains("gil cap", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void BuildPlan_DiagnosticsExplainQuantityCapRejections()
+    {
+        var request = CreateRequest(quantity: 4, maxUnitPrice: 100, maxTotalGil: 0);
+        var listings = new[]
+        {
+            CreateListing("Gilgamesh", quantity: 4, unitPrice: 90, listingId: "selected"),
+            CreateListing("Gilgamesh", quantity: 4, unitPrice: 95, listingId: "quantity-cap"),
+        };
+
+        var plan = MarketMafioso.MarketAcquisition.MarketAcquisitionPlanner.BuildPlan(
+            request,
+            listings,
+            DateTimeOffset.UnixEpoch);
+
+        Assert.Contains(plan.Diagnostics.ListingDecisions, decision =>
+            decision.ListingId == "selected" &&
+            decision.Decision == "AcceptedRemoteCandidate");
+        Assert.Contains(plan.Diagnostics.ListingDecisions, decision =>
+            decision.ListingId == "quantity-cap" &&
+            decision.Decision == "RejectedMaxQuantity" &&
+            decision.Reason.Contains("quantity cap", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void BuildPlan_AllWorldSweepDiagnosticsExplainProbeWorlds()
+    {
+        var request = CreateRequest(
+            quantity: 0,
+            worldMode: "AllWorldSweep",
+            quantityMode: "AllBelowThreshold",
+            maxUnitPrice: 100,
+            maxTotalGil: 0);
+
+        var plan = MarketMafioso.MarketAcquisition.MarketAcquisitionPlanner.BuildPlan(
+            request,
+            [],
+            DateTimeOffset.UnixEpoch,
+            currentWorld: "Siren");
+
+        Assert.Contains(
+            plan.Diagnostics.ListingDecisions,
+            decision => decision.WorldName == "Siren" &&
+                        decision.Decision == "SweepProbeNoRemoteListing" &&
+                        decision.ItemId == request.ItemId);
+    }
+
+    [Fact]
     public void BuildPlan_RejectsSelectedModeUntilSelectedWorldsAreCarried()
     {
         var request = CreateRequest(quantity: 1, worldMode: "Selected");

@@ -139,6 +139,62 @@ public sealed class MarketAcquisitionRouteRunnerTests
     }
 
     [Fact]
+    public async Task VerifyLatestWorldFreshnessAsync_SummarizesUnconfirmedAndUnavailableWarnings()
+    {
+        var directory = CreateTempDirectory();
+        using var runner = new MarketMafioso.MarketAcquisition.MarketAcquisitionRouteRunner(
+            directory,
+            (_, itemId, _, _, _) =>
+            {
+                var result = itemId == 2
+                    ? MarketMafioso.MarketAcquisition.UniversalisFreshnessResult.Unconfirmed("stale")
+                    : MarketMafioso.MarketAcquisition.UniversalisFreshnessResult.Unavailable("HTTP 503");
+                return Task.FromResult(result);
+            });
+        runner.Start(MarketAcquisitionTestPlans.MultiLineSingleWorld(), enableDiagnostics: true);
+        runner.RecordCurrentWorld("Siren");
+
+        runner.RecordProbe("Siren", MarketAcquisitionTestPlans.ReadyCandidatePlan(10, 1_000));
+        runner.RecordPurchaseAudit(
+            lineId: "batch-1-line-1",
+            itemName: "Fire Shard",
+            worldName: "Siren",
+            listingId: "listing-fire",
+            retainerId: "retainer-fire",
+            quantity: 10,
+            totalGil: 1_000,
+            result: "Purchased");
+        runner.RecordWorldPurchaseBatchComplete("Siren", 10, 1_000);
+
+        runner.RecordProbe("Siren", MarketAcquisitionTestPlans.ReadyCandidatePlan(20, 2_000));
+        runner.RecordPurchaseAudit(
+            lineId: "batch-1-line-2",
+            itemName: "Lightning Shard",
+            worldName: "Siren",
+            listingId: "listing-lightning",
+            retainerId: "retainer-lightning",
+            quantity: 20,
+            totalGil: 2_000,
+            result: "Purchased");
+        runner.RecordWorldPurchaseBatchComplete("Siren", 20, 2_000);
+
+        var result = await runner.VerifyLatestWorldFreshnessAsync(CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Equal(0, runner.LastRunDiagnosticSummary.FreshnessConfirmedCount);
+        Assert.Equal(1, runner.LastRunDiagnosticSummary.FreshnessUnconfirmedCount);
+        Assert.Equal(1, runner.LastRunDiagnosticSummary.FreshnessUnavailableCount);
+        Assert.Equal(2, runner.LastRunDiagnosticSummary.Warnings.Count);
+        Assert.Contains(runner.LastRunDiagnosticSummary.Warnings, warning => warning.Contains("Fire Shard", StringComparison.Ordinal));
+        Assert.Contains(runner.LastRunDiagnosticSummary.Warnings, warning => warning.Contains("Lightning Shard", StringComparison.Ordinal));
+
+        var text = ReadLog(runner.LastDiagnosticFilePath!);
+        Assert.Contains("universalis-freshness-warning", text, StringComparison.Ordinal);
+        Assert.Contains("status: Unconfirmed", text, StringComparison.Ordinal);
+        Assert.Contains("status: Unavailable", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ExecutePendingTravelCommand_SendsCurrentStopCommand()
     {
         using var runner = CreateRunner();

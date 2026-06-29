@@ -90,6 +90,12 @@ public sealed class MarketBoardItemSearchDriverTests
     }
 
     [Fact]
+    public void SubmittedSearchRetryDelay_IsShortEnoughForRouteAutomation()
+    {
+        Assert.True(MarketBoardItemSearchDriver.SubmittedSearchRetryDelay <= TimeSpan.FromSeconds(1.5));
+    }
+
+    [Fact]
     public void ShouldWaitForSubmittedSearch_ReturnsTrueWhenAgentIsStillSearching()
     {
         Assert.True(MarketBoardItemSearchDriver.ShouldWaitForSubmittedSearch(
@@ -187,6 +193,15 @@ public sealed class MarketBoardItemSearchDriverTests
                 MarketBoardItemSearchSubmitStep.Enter,
             ],
             MarketBoardItemSearchDriver.GetAutofocusedSubmitStepSequence());
+    }
+
+    [Fact]
+    public void ShouldMirrorSubmitTextToAddonSearchStrings_AlwaysKeepsVisibleSearchTextInSync()
+    {
+        Assert.True(MarketBoardItemSearchDriver.ShouldMirrorSubmitTextToAddonSearchStrings(
+            MarketBoardItemSearchSubmitStrategy.TextInputEnterCallback));
+        Assert.True(MarketBoardItemSearchDriver.ShouldMirrorSubmitTextToAddonSearchStrings(
+            MarketBoardItemSearchSubmitStrategy.AutofocusedTextInputRewrite));
     }
 
     [Fact]

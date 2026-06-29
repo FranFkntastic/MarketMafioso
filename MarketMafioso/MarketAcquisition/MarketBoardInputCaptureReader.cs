@@ -108,9 +108,14 @@ public sealed class MarketBoardInputCaptureReader
         if (infoProxy == null)
             return;
 
-        var listingCount = Math.Min((int)infoProxy->ListingCount, infoProxy->Listings.Length);
+        var reportedListingCount = (int)infoProxy->ListingCount;
+        var listingCapacity = infoProxy->Listings.Length;
+        var listingCount = Math.Min(reportedListingCount, listingCapacity);
         details["infoProxySearchItemId"] = infoProxy->SearchItemId.ToString(CultureInfo.InvariantCulture);
         details["infoProxyListingCount"] = listingCount.ToString(CultureInfo.InvariantCulture);
+        details["infoProxyReportedListingCount"] = reportedListingCount.ToString(CultureInfo.InvariantCulture);
+        details["infoProxyListingCapacity"] = listingCapacity.ToString(CultureInfo.InvariantCulture);
+        details["infoProxyListingCountTruncated"] = (reportedListingCount > listingCount).ToString();
         details["infoProxyWaitingForListings"] = infoProxy->WaitingForListings.ToString();
         details["infoProxyListingPreview"] = FormatListingPreview(infoProxy, listingCount);
     }

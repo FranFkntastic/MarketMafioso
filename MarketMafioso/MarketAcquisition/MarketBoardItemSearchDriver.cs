@@ -13,7 +13,7 @@ public sealed class MarketBoardItemSearchDriver
 {
     private const string ItemSearchAddon = "ItemSearch";
     private const string ItemSearchResultAddon = "ItemSearchResult";
-    private static readonly TimeSpan SearchRetryDelay = TimeSpan.FromSeconds(4);
+    private static readonly TimeSpan SearchRetryDelay = TimeSpan.FromSeconds(1.25);
 
     private readonly IGameGui gameGui;
     private uint submittedSearchItemId;
@@ -24,6 +24,10 @@ public sealed class MarketBoardItemSearchDriver
     {
         this.gameGui = gameGui;
     }
+
+    internal static TimeSpan SubmittedSearchRetryDelay => SearchRetryDelay;
+
+    public void ResetSubmittedSearch() => ClearSubmittedSearch();
 
     public unsafe MarketBoardItemSearchResult Search(uint itemId, string? itemName)
     {
@@ -335,6 +339,16 @@ public sealed class MarketBoardItemSearchDriver
         ];
     }
 
+    internal static bool ShouldMirrorSubmitTextToAddonSearchStrings(MarketBoardItemSearchSubmitStrategy strategy)
+    {
+        return strategy switch
+        {
+            MarketBoardItemSearchSubmitStrategy.TextInputEnterCallback => true,
+            MarketBoardItemSearchSubmitStrategy.AutofocusedTextInputRewrite => true,
+            _ => throw new ArgumentOutOfRangeException(nameof(strategy), strategy, null),
+        };
+    }
+
     internal static IReadOnlyList<MarketBoardItemSearchResultActivationEvent> GetResultActivationEventSequence()
     {
         return
@@ -439,11 +453,21 @@ public sealed class MarketBoardItemSearchDriver
                 switch (step)
                 {
                     case MarketBoardItemSearchSubmitStep.ClearSearchText:
-                        SetSearchInputText(addon, input, inputBase, string.Empty, updateAddonSearchStrings: false);
+                        SetSearchInputText(
+                            addon,
+                            input,
+                            inputBase,
+                            string.Empty,
+                            updateAddonSearchStrings: ShouldMirrorSubmitTextToAddonSearchStrings(submitStrategy));
                         callbackResults.Add(step.ToString());
                         break;
                     case MarketBoardItemSearchSubmitStep.SetSearchText:
-                        SetSearchInputText(addon, input, inputBase, searchText, updateAddonSearchStrings: false);
+                        SetSearchInputText(
+                            addon,
+                            input,
+                            inputBase,
+                            searchText,
+                            updateAddonSearchStrings: ShouldMirrorSubmitTextToAddonSearchStrings(submitStrategy));
                         callbackResults.Add(step.ToString());
                         break;
                     case MarketBoardItemSearchSubmitStep.TextChanged:
@@ -461,7 +485,12 @@ public sealed class MarketBoardItemSearchDriver
         }
         else
         {
-            SetSearchInputText(addon, input, inputBase, searchText, updateAddonSearchStrings: true);
+            SetSearchInputText(
+                addon,
+                input,
+                inputBase,
+                searchText,
+                updateAddonSearchStrings: ShouldMirrorSubmitTextToAddonSearchStrings(submitStrategy));
             foreach (var callback in GetSearchSubmitCallbackSequence())
                 callbackResults.Add(InvokeInputCallback(addon, inputBase, callback));
 

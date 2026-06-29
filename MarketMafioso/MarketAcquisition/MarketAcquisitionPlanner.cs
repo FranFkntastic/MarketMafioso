@@ -18,7 +18,6 @@ public static class MarketAcquisitionPlanner
 
         var requestLines = BuildRequestLines(request);
         var sourceListings = listings.ToList();
-        var diagnostics = BuildDiagnostics(request, requestLines, sourceListings);
         var selectedSubtasks = new List<MarketAcquisitionWorldItemSubtask>();
         var planLines = new List<MarketAcquisitionPlanLine>();
         var isAllWorldSweep = request.WorldMode.Equals("AllWorldSweep", StringComparison.OrdinalIgnoreCase);
@@ -93,6 +92,7 @@ public static class MarketAcquisitionPlanner
         var primaryLine = requestLines[0];
         var totalQuantity = (uint)batches.Sum(batch => batch.PlannedQuantity);
         var totalGil = (uint)batches.Sum(batch => batch.PlannedGil);
+        var diagnostics = BuildDiagnostics(request, requestLines, sourceListings, sweepWorlds, selectedSubtasks);
 
         return new MarketAcquisitionPlan
         {
@@ -163,7 +163,9 @@ public static class MarketAcquisitionPlanner
     private static MarketAcquisitionPlanDiagnostics BuildDiagnostics(
         MarketAcquisitionRequestView request,
         IReadOnlyList<PlannerLine> requestLines,
-        IReadOnlyList<MarketAcquisitionListing> listings)
+        IReadOnlyList<MarketAcquisitionListing> listings,
+        IReadOnlyList<string> sweepWorlds,
+        IReadOnlyList<MarketAcquisitionWorldItemSubtask> selectedSubtasks)
     {
         var lineItemIds = requestLines.Select(line => line.ItemId).ToHashSet();
         var relevantListings = listings
@@ -191,8 +193,218 @@ public static class MarketAcquisitionPlanner
             PriceSupportedListingCount = priceSupported.Count,
             HqSupportedListingCount = hqSupported.Count,
             WorldSupportedListingCount = worldSupported.Count,
+            ListingDecisions = BuildListingDecisions(request, requestLines, listings, worldSupported, sweepWorlds, selectedSubtasks),
         };
     }
+
+    private static IReadOnlyList<MarketAcquisitionListingDecision> BuildListingDecisions(
+        MarketAcquisitionRequestView request,
+        IReadOnlyList<PlannerLine> requestLines,
+        IReadOnlyList<MarketAcquisitionListing> listings,
+        IReadOnlyCollection<MarketAcquisitionListing> worldSupportedListings,
+        IReadOnlyList<string> sweepWorlds,
+        IReadOnlyList<MarketAcquisitionWorldItemSubtask> selectedSubtasks)
+    {
+        var decisions = new List<MarketAcquisitionListingDecision>();
+        var worldSupportedLookup = worldSupportedListings
+            .Select(listing => listing.ListingId)
+            .Where(listingId => !string.IsNullOrWhiteSpace(listingId))
+            .ToHashSet(StringComparer.Ordinal);
+        var plannedListingIdsByLine = selectedSubtasks
+            .SelectMany(subtask => subtask.Listings)
+            .GroupBy(listing => listing.LineId, StringComparer.Ordinal)
+            .ToDictionary(
+                group => group.Key,
+                group => group
+                    .Select(listing => listing.ListingId)
+                    .Where(listingId => !string.IsNullOrWhiteSpace(listingId))
+                    .ToHashSet(StringComparer.Ordinal),
+                StringComparer.Ordinal);
+        var plannedQuantityByLine = selectedSubtasks
+            .GroupBy(subtask => subtask.LineId, StringComparer.Ordinal)
+            .ToDictionary(
+                group => group.Key,
+                group => (uint)group.Sum(subtask => subtask.PlannedQuantity),
+                StringComparer.Ordinal);
+        var plannedGilByLine = selectedSubtasks
+            .GroupBy(subtask => subtask.LineId, StringComparer.Ordinal)
+            .ToDictionary(
+                group => group.Key,
+                group => (uint)group.Sum(subtask => subtask.PlannedGil),
+                StringComparer.Ordinal);
+
+        foreach (var listing in listings)
+        {
+            var matchingLines = requestLines
+                .Where(line => line.ItemId == listing.ItemId)
+                .ToList();
+            if (matchingLines.Count == 0)
+            {
+                decisions.Add(CreateListingDecision(
+                    new PlannerLine { ItemId = listing.ItemId, ItemName = listing.ItemName },
+                    listing,
+                    "RejectedWrongItem",
+                    "Listing item id is not part of this acquisition batch."));
+                continue;
+            }
+
+            foreach (var line in matchingLines)
+            {
+                decisions.Add(EvaluateListingDecision(
+                    request,
+                    line,
+                    listing,
+                    worldSupportedLookup,
+                    plannedListingIdsByLine,
+                    plannedQuantityByLine,
+                    plannedGilByLine));
+            }
+        }
+
+        if (request.WorldMode.Equals("AllWorldSweep", StringComparison.OrdinalIgnoreCase))
+        {
+            foreach (var line in requestLines)
+            {
+                var plannedWorlds = listings
+                    .Where(listing => listing.ItemId == line.ItemId)
+                    .Where(listing => worldSupportedLookup.Contains(listing.ListingId))
+                    .Select(listing => listing.WorldName)
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+                decisions.AddRange(sweepWorlds
+                    .Where(world => !plannedWorlds.Contains(world))
+                    .Select(world => new MarketAcquisitionListingDecision
+                    {
+                        LineId = line.LineId,
+                        ItemId = line.ItemId,
+                        ItemName = line.ItemName,
+                        WorldName = world,
+                        Decision = "SweepProbeNoRemoteListing",
+                        Reason = "Explicit all-world sweep will probe this world even though remote data has no supported listing.",
+                    }));
+            }
+        }
+
+        return decisions;
+    }
+
+    private static MarketAcquisitionListingDecision EvaluateListingDecision(
+        MarketAcquisitionRequestView request,
+        PlannerLine line,
+        MarketAcquisitionListing listing,
+        IReadOnlySet<string> worldSupportedListingIds,
+        IReadOnlyDictionary<string, HashSet<string>> plannedListingIdsByLine,
+        IReadOnlyDictionary<string, uint> plannedQuantityByLine,
+        IReadOnlyDictionary<string, uint> plannedGilByLine)
+    {
+        if (listing.Quantity == 0 || listing.UnitPrice == 0)
+        {
+            return CreateListingDecision(
+                line,
+                listing,
+                "RejectedZeroQuantityOrPrice",
+                "Listing has zero quantity or zero unit price.");
+        }
+
+        if (listing.UnitPrice > line.MaxUnitPrice)
+        {
+            return CreateListingDecision(
+                line,
+                listing,
+                "RejectedAboveMaxUnit",
+                $"Listing unit price {listing.UnitPrice:N0} is above max unit {line.MaxUnitPrice:N0}.");
+        }
+
+        if (!MarketAcquisitionPolicy.HqMatches(line.HqPolicy, listing.IsHq))
+        {
+            return CreateListingDecision(
+                line,
+                listing,
+                "RejectedHqPolicy",
+                $"Listing quality does not satisfy {line.HqPolicy}.");
+        }
+
+        if (request.WorldMode.Equals("CurrentWorldOnly", StringComparison.OrdinalIgnoreCase) &&
+            !listing.WorldName.Equals(request.TargetWorld, StringComparison.OrdinalIgnoreCase))
+        {
+            return CreateListingDecision(
+                line,
+                listing,
+                "RejectedWrongWorldScope",
+                $"Listing world {listing.WorldName} is outside current-world target {request.TargetWorld}.");
+        }
+
+        var isWorldSupported = string.IsNullOrWhiteSpace(listing.ListingId) ||
+            worldSupportedListingIds.Contains(listing.ListingId);
+        if (isWorldSupported &&
+            plannedListingIdsByLine.TryGetValue(line.LineId, out var plannedListingIds) &&
+            plannedListingIds.Contains(listing.ListingId))
+        {
+            return CreateListingDecision(
+                line,
+                listing,
+                "AcceptedRemoteCandidate",
+                "Remote listing satisfies item, price, quality, and world scope filters.");
+        }
+
+        if (isWorldSupported &&
+            line.MaxTotalGil > 0 &&
+            plannedGilByLine.TryGetValue(line.LineId, out var plannedGil) &&
+            plannedGil + listing.TotalGil > line.MaxTotalGil)
+        {
+            return CreateListingDecision(
+                line,
+                listing,
+                "RejectedGilCap",
+                $"Listing would exceed the line gil cap of {line.MaxTotalGil:N0}.");
+        }
+
+        if (isWorldSupported &&
+            !IsUnboundedAllBelowThreshold(line) &&
+            plannedQuantityByLine.TryGetValue(line.LineId, out var plannedQuantity) &&
+            plannedQuantity >= line.Quantity)
+        {
+            return CreateListingDecision(
+                line,
+                listing,
+                "RejectedMaxQuantity",
+                $"Line quantity cap of {line.Quantity:N0} was already satisfied by cheaper planned listings.");
+        }
+
+        if (isWorldSupported)
+        {
+            return CreateListingDecision(
+                line,
+                listing,
+                "AcceptedRemoteCandidateNotPlanned",
+                "Remote listing satisfies hard filters but was not selected for the current route plan.");
+        }
+
+        return CreateListingDecision(
+            line,
+            listing,
+            "RejectedWrongWorldScope",
+            "Listing is outside the selected route scope.");
+    }
+
+    private static MarketAcquisitionListingDecision CreateListingDecision(
+        PlannerLine line,
+        MarketAcquisitionListing listing,
+        string decision,
+        string reason) =>
+        new()
+        {
+            LineId = line.LineId,
+            ItemId = line.ItemId == 0 ? listing.ItemId : line.ItemId,
+            ItemName = string.IsNullOrWhiteSpace(line.ItemName) ? listing.ItemName : line.ItemName,
+            WorldName = listing.WorldName,
+            ListingId = listing.ListingId,
+            Decision = decision,
+            Reason = reason,
+            Quantity = listing.Quantity,
+            UnitPrice = listing.UnitPrice,
+            IsHq = listing.IsHq,
+        };
 
     private static bool ListingMatchesLine(
         MarketAcquisitionRequestView request,

@@ -1558,7 +1558,7 @@ Actual: verifier tests passed 2/2. Focused route-runner plus verifier tests pass
 - Modify: `MarketMafioso/Windows/MarketAcquisitionDiagnosticsWindow.cs`
 - Modify: `MarketMafioso/Windows/MainWindow.cs`
 
-- [ ] **Step 1: Add diagnostics summary model**
+- [x] **Step 1: Add diagnostics summary model**
 
 Add:
 
@@ -1572,7 +1572,7 @@ public sealed record MarketAcquisitionRunDiagnosticSummary
 }
 ```
 
-- [ ] **Step 2: Record warnings**
+- [x] **Step 2: Record warnings**
 
 When freshness returns `Unconfirmed` or `Unavailable`, add a warning:
 
@@ -1580,7 +1580,7 @@ When freshness returns `Unconfirmed` or `Unavailable`, add a warning:
 Universalis freshness unconfirmed for Silver Ingot on Siren after local market-board observation.
 ```
 
-- [ ] **Step 3: Show post-run warning**
+- [x] **Step 3: Show post-run warning**
 
 In route UI, after completion:
 
@@ -1591,7 +1591,7 @@ if (lastRunDiagnosticSummary?.Warnings.Count > 0)
 }
 ```
 
-- [ ] **Step 4: Build plugin**
+- [x] **Step 4: Build plugin**
 
 Run:
 
@@ -1600,6 +1600,8 @@ dotnet build "MarketMafioso/MarketMafioso.csproj" -c Debug
 ```
 
 Expected: build passes.
+
+Actual: focused route-runner freshness tests pass. `MarketAcquisitionRouteRunner` records confirmed, unconfirmed, and unavailable freshness counts; unconfirmed/unavailable checks emit route diagnostics and a post-run warning count in the guided route UI.
 
 ---
 
@@ -1611,7 +1613,7 @@ Expected: build passes.
 - Modify: `MarketMafioso/Windows/MainWindow.cs`
 - Test: `MarketMafioso.Tests/MarketAcquisition/MarketAcquisitionPlannerTests.cs`
 
-- [ ] **Step 1: Add listing decision model**
+- [x] **Step 1: Add listing decision model**
 
 Add:
 
@@ -1633,7 +1635,7 @@ public sealed record MarketAcquisitionListingDecision
 
 Add `IReadOnlyList<MarketAcquisitionListingDecision> ListingDecisions` to `MarketAcquisitionPlanDiagnostics`.
 
-- [ ] **Step 2: Record explicit reasons**
+- [x] **Step 2: Record explicit reasons**
 
 Planner should emit decisions such as:
 
@@ -1645,8 +1647,9 @@ Planner should emit decisions such as:
 - `RejectedGilCap`
 - `RejectedMaxQuantity`
 - `SweepProbeNoRemoteListing`
+- `AcceptedRemoteCandidateNotPlanned`
 
-- [ ] **Step 3: Add planner test for rejected explanation**
+- [x] **Step 3: Add planner test for rejected explanation**
 
 ```csharp
 [Fact]
@@ -1666,13 +1669,13 @@ public void BuildPlan_DiagnosticsExplainAboveThresholdListings()
 }
 ```
 
-- [ ] **Step 4: Show compact explanation in plugin diagnostics**
+- [x] **Step 4: Show compact explanation in plugin diagnostics**
 
 In diagnostics window, add a collapsible `Plan Decisions` table with:
 
 `Item`, `World`, `Unit`, `Qty`, `Decision`, `Reason`.
 
-- [ ] **Step 5: Run planner tests**
+- [x] **Step 5: Run planner tests**
 
 Run:
 
@@ -1681,6 +1684,8 @@ dotnet test "MarketMafioso.Tests\MarketMafioso.Tests.csproj" -c Debug --filter "
 ```
 
 Expected: tests pass.
+
+Actual: focused planner tests pass. Plan diagnostics now explain hard-filter rejections, sweep probe worlds, and post-selection cap rejections for gil cap and quantity cap. The diagnostics window includes a collapsible `Plan Decisions` table.
 
 ---
 

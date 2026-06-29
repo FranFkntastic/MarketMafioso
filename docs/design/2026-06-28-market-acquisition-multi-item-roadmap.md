@@ -126,7 +126,7 @@ Exit criteria:
 
 Current caveat:
 
-- The route monitor can search/probe/purchase the active stop's first item subtask, including worlds whose first viable subtask is not the batch primary item. It does not yet advance through every item subtask on the same world.
+- The route monitor can search/probe/purchase the active stop's item subtasks and can advance from one item to the next on the same world. Live validation should continue to focus on stale search-state regression, candidate reuse, and opportunistic mid-flight expansion.
 
 ## Phase 5: Multi-Item World Execution
 
@@ -139,9 +139,11 @@ Exit criteria:
 - Route runner searches/selects/reads/purchases per item subtask. In progress: route stops now track an active item-subtask cursor, and search/probe/purchase uses that active line.
 - Re-read-after-purchase behavior remains intact.
 - Listing window closure after the last listing is normal exhaustion. Existing behavior preserved for world completion; needs line-level confirmation in live testing.
-- Item B cannot reuse stale live candidates from item A. In progress: route advancement clears search submission and candidate state; active-subtask validation now accepts planned and opportunistic subtasks without requiring the searched item to exist in the original prepared world batch.
+- Item B cannot reuse stale live candidates from item A. Done for the current route runner: route advancement clears search submission, read results, live candidates, reconciliation, and purchase session state before monitoring the next same-world item.
 - Non-catastrophic line exhaustion continues to the next line. Done in route session for no-safe-candidates and purchase-complete transitions on the same world.
 - Catastrophic/ambiguous failures stop the batch.
+- The market-board reader exposes listing-cache capacity and truncation diagnostics when the game reports more listings than the readable cache contains.
+- Planner diagnostics explain accepted/rejected listings, including price, HQ policy, world scope, gil cap, quantity cap, wrong item, and sweep-probe worlds.
 
 Current caveat:
 

@@ -183,6 +183,7 @@ public class MainWindow : Window, IDisposable
             () => marketBoardReadResult,
             () => marketBoardReconciliation,
             () => marketAcquisitionLiveCandidatePlan,
+            () => acquisitionPlan,
             CanProbeLiveMarketBoard,
             () => _ = ProbeLiveMarketBoardAsync(),
             CaptureMarketBoardInputState,
@@ -1041,11 +1042,18 @@ public class MainWindow : Window, IDisposable
         acquisitionStatus = result.Message;
         marketBoardPurchaseSession = null;
         marketBoardPurchaseResult = null;
-        if (marketAcquisitionRouteRunner.ActiveStop?.ActiveItemSubtask == null)
+        var nextSubtask = marketAcquisitionRouteRunner.ActiveStop?.ActiveItemSubtask;
+        if (nextSubtask == null)
         {
             activePurchaseLineId = null;
             activeLinePurchasedQuantity = 0;
             activeLineSpentGil = 0;
+        }
+        else if (activeSubtask != null &&
+                 !string.Equals(activeSubtask.LineId, nextSubtask.LineId, StringComparison.Ordinal))
+        {
+            ResetMarketBoardStateForNextRouteItem(
+                $"Advancing from {activeSubtask.ItemName ?? activeSubtask.LineId} to {nextSubtask.ItemName ?? nextSubtask.LineId} on {currentWorld}.");
         }
 
         activeWorldPurchaseBatchWorld = marketAcquisitionRouteRunner.ActiveStop?.WorldName;
@@ -1055,6 +1063,19 @@ public class MainWindow : Window, IDisposable
         {
             ReportUniversalisFreshnessAsync();
         }
+    }
+
+    private void ResetMarketBoardStateForNextRouteItem(string reason)
+    {
+        marketBoardReadResult = null;
+        marketBoardReconciliation = null;
+        marketAcquisitionLiveCandidatePlan = null;
+        marketBoardPurchaseSession = null;
+        marketBoardPurchaseResult = null;
+        marketBoardItemSearchDriver.ResetSubmittedSearch();
+        marketAcquisitionRouteRunner.ClearSearchSubmission(reason);
+        TryCloseMarketBoardWindows();
+        nextGuidedRouteMonitorUtc = DateTimeOffset.UtcNow.AddMilliseconds(250);
     }
 
     private void ReportUniversalisFreshnessAsync()
@@ -1549,6 +1570,7 @@ public class MainWindow : Window, IDisposable
             _ = RestartGuidedRouteAsync();
 
         ImGui.TextColored(GetGuidedRouteStatusColor(), marketAcquisitionRouteRunner.StatusMessage);
+        DrawPostRunDiagnosticSummary();
         DrawLatestWorldCompletionSummary();
 
         if (marketAcquisitionRouteRunner.Stops.Count == 0)
@@ -1585,6 +1607,17 @@ public class MainWindow : Window, IDisposable
         ImGui.TextColored(
             ColMuted,
             $"Latest world: {summary.WorldName} ({FormatRouteDataCenter(summary.DataCenter)}) bought {summary.PurchasedQuantity:N0}, spent {FormatGil(summary.SpentGil)}; {summary.CompletedLineCount:N0} complete / {summary.SkippedLineCount:N0} skipped.");
+    }
+
+    private void DrawPostRunDiagnosticSummary()
+    {
+        var summary = marketAcquisitionRouteRunner.LastRunDiagnosticSummary;
+        if (summary.Warnings.Count == 0)
+            return;
+
+        ImGui.TextColored(
+            ColError,
+            $"Post-run diagnostics: {summary.Warnings.Count:N0} warning(s). Open Diagnostics for details.");
     }
 
     private void DrawMarketBoardInputCapture()

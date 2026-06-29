@@ -134,6 +134,9 @@ public sealed record MarketBoardPurchaseSession
                 ["readItemId"] = freshRead.ItemId == 0 ? null : freshRead.ItemId.ToString(),
                 ["readWorld"] = string.IsNullOrWhiteSpace(freshRead.WorldName) ? null : freshRead.WorldName,
                 ["readListingCount"] = freshRead.Listings.Count.ToString(),
+                ["readReportedListingCount"] = freshRead.ReportedListingCount.ToString(),
+                ["readListingCapacity"] = freshRead.ListingCapacity.ToString(),
+                ["readIsListingCountTruncated"] = freshRead.IsListingCountTruncated.ToString(),
             });
     }
 

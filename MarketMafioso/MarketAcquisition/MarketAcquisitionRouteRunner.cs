@@ -15,6 +15,10 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
     private readonly UniversalisFreshnessVerifierDelegate? universalisFreshnessVerifier;
     private readonly Dictionary<FreshnessObservationKey, FreshnessObservation> freshnessObservations = [];
     private readonly HashSet<FreshnessObservationKey> verifiedFreshnessObservations = [];
+    private readonly List<string> freshnessWarnings = [];
+    private int freshnessConfirmedCount;
+    private int freshnessUnconfirmedCount;
+    private int freshnessUnavailableCount;
     private MarketAcquisitionGuidedRouteSession? session;
     private MarketAcquisitionRouteDiagnostics diagnostics = MarketAcquisitionRouteDiagnostics.Disabled;
     private bool diagnosticsRequested;
@@ -46,6 +50,14 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
     public string? LastDiagnosticFilePath { get; private set; }
 
     public MarketAcquisitionWorldCompletionSummary? LatestWorldCompletionSummary { get; private set; }
+
+    public MarketAcquisitionRunDiagnosticSummary LastRunDiagnosticSummary => new()
+    {
+        FreshnessConfirmedCount = freshnessConfirmedCount,
+        FreshnessUnconfirmedCount = freshnessUnconfirmedCount,
+        FreshnessUnavailableCount = freshnessUnavailableCount,
+        Warnings = freshnessWarnings.ToArray(),
+    };
 
     public bool SearchSubmitted { get; private set; }
 
@@ -90,6 +102,7 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         lastWorldSummarySignature = null;
         freshnessObservations.Clear();
         verifiedFreshnessObservations.Clear();
+        ResetRunDiagnosticSummary();
         StatusMessage = $"Route started. Next stop: {session.ActiveStop?.WorldName}.";
         diagnostics.Record(
             "route-start",
@@ -175,6 +188,7 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         lastWorldSummarySignature = null;
         freshnessObservations.Clear();
         verifiedFreshnessObservations.Clear();
+        ResetRunDiagnosticSummary();
     }
 
     public MarketAcquisitionRouteActionResult ExecutePendingTravelCommand(Func<string, bool> processCommand)
@@ -757,6 +771,7 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
                     ["observedAtUtc"] = observation.ObservedAtUtc.ToString("O"),
                     ["listingIds"] = string.Join(", ", observation.ListingIds),
                 });
+            RecordFreshnessDiagnosticResult(observation, result);
             verifiedFreshnessObservations.Add(new FreshnessObservationKey(observation.WorldName, observation.ItemId));
         }
 
@@ -902,6 +917,46 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         observation.ListingIds.Add(listingId);
     }
 
+    private void RecordFreshnessDiagnosticResult(
+        FreshnessObservation observation,
+        UniversalisFreshnessResult result)
+    {
+        if (result.Status.Equals("Confirmed", StringComparison.OrdinalIgnoreCase))
+        {
+            freshnessConfirmedCount++;
+            return;
+        }
+
+        if (result.Status.Equals("Unconfirmed", StringComparison.OrdinalIgnoreCase))
+            freshnessUnconfirmedCount++;
+        else if (result.Status.Equals("Unavailable", StringComparison.OrdinalIgnoreCase))
+            freshnessUnavailableCount++;
+
+        var warning = $"Universalis freshness {result.Status.ToLowerInvariant()} for {FormatFreshnessItem(observation)} on {observation.WorldName} after local market-board observation. {result.Message}";
+        freshnessWarnings.Add(warning);
+        diagnostics.Record(
+            "universalis-freshness-warning",
+            warning,
+            new Dictionary<string, string?>
+            {
+                ["world"] = observation.WorldName,
+                ["itemId"] = observation.ItemId.ToString(),
+                ["itemName"] = observation.ItemName,
+                ["status"] = result.Status,
+                ["message"] = result.Message,
+                ["observedAtUtc"] = observation.ObservedAtUtc.ToString("O"),
+                ["listingIds"] = string.Join(", ", observation.ListingIds),
+            });
+    }
+
+    private void ResetRunDiagnosticSummary()
+    {
+        freshnessConfirmedCount = 0;
+        freshnessUnconfirmedCount = 0;
+        freshnessUnavailableCount = 0;
+        freshnessWarnings.Clear();
+    }
+
     private uint ResolveLineItemId(string lineId)
     {
         if (string.IsNullOrWhiteSpace(lineId))
@@ -960,4 +1015,12 @@ public sealed record MarketAcquisitionRouteActionResult
         Success = false,
         Message = message,
     };
+}
+
+public sealed record MarketAcquisitionRunDiagnosticSummary
+{
+    public int FreshnessConfirmedCount { get; init; }
+    public int FreshnessUnconfirmedCount { get; init; }
+    public int FreshnessUnavailableCount { get; init; }
+    public IReadOnlyList<string> Warnings { get; init; } = [];
 }

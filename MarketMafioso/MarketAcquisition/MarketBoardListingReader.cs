@@ -53,7 +53,9 @@ public sealed class MarketBoardListingReader
         }
 
         var listings = new List<MarketBoardLiveListing>();
-        var listingCount = Math.Min((int)infoProxy->ListingCount, infoProxy->Listings.Length);
+        var reportedListingCount = (int)infoProxy->ListingCount;
+        var listingCapacity = infoProxy->Listings.Length;
+        var listingCount = Math.Min(reportedListingCount, listingCapacity);
         foreach (var listing in infoProxy->Listings[..listingCount])
         {
             listings.Add(new MarketBoardLiveListing
@@ -69,15 +71,33 @@ public sealed class MarketBoardListingReader
             });
         }
 
-        return BuildReadResult(infoProxy->WaitingForListings, itemId, currentWorld, listings);
+        return BuildReadResult(
+            infoProxy->WaitingForListings,
+            itemId,
+            currentWorld,
+            listings,
+            reportedListingCount,
+            listingCapacity);
     }
 
     internal static MarketBoardReadResult BuildReadResult(
         bool waitingForListings,
         uint itemId,
         string currentWorld,
-        IReadOnlyList<MarketBoardLiveListing> listings)
+        IReadOnlyList<MarketBoardLiveListing> listings,
+        int? reportedListingCount = null,
+        int? listingCapacity = null)
     {
+        var effectiveReportedListingCount = Math.Max(reportedListingCount ?? listings.Count, listings.Count);
+        var effectiveListingCapacity = Math.Max(listingCapacity ?? listings.Count, listings.Count);
+        var isAtListingCapacity = effectiveListingCapacity > 0 && listings.Count >= effectiveListingCapacity;
+        var isListingCountTruncated = effectiveReportedListingCount > listings.Count;
+        var capacityNote = effectiveListingCapacity > 0
+            ? $" Listing cache capacity {listings.Count}/{effectiveListingCapacity}."
+            : string.Empty;
+        var truncatedNote = isListingCountTruncated
+            ? $" Reported listing count {effectiveReportedListingCount} was truncated to the readable cache."
+            : string.Empty;
         if (listings.Count > 0)
         {
             var waitingNote = waitingForListings
@@ -86,9 +106,13 @@ public sealed class MarketBoardListingReader
             return new MarketBoardReadResult
             {
                 Status = "Ready",
-                Message = $"Read {listings.Count} live market board listing(s).{waitingNote}",
+                Message = $"Read {listings.Count} live market board listing(s).{capacityNote}{truncatedNote}{waitingNote}",
                 ItemId = itemId,
                 WorldName = currentWorld,
+                ReportedListingCount = effectiveReportedListingCount,
+                ListingCapacity = effectiveListingCapacity,
+                IsAtListingCapacity = isAtListingCapacity,
+                IsListingCountTruncated = isListingCountTruncated,
                 Listings = listings,
             };
         }
@@ -101,6 +125,10 @@ public sealed class MarketBoardListingReader
                 : "No live market board listings were available for the current search.",
             ItemId = itemId,
             WorldName = currentWorld,
+            ReportedListingCount = effectiveReportedListingCount,
+            ListingCapacity = effectiveListingCapacity,
+            IsAtListingCapacity = isAtListingCapacity,
+            IsListingCountTruncated = isListingCountTruncated,
             Listings = listings,
         };
     }

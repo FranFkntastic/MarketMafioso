@@ -10,6 +10,14 @@ The acquisition loop can now stage batches, claim them in the plugin, prepare ro
 
 The normal Universalis update path remains XIVLauncher/Dalamud observing real market-board activity. MarketMafioso should not spoof or partially upload current-listing data. It should verify that normal uploads eventually reflected the market-board state it caused.
 
+## Current Implementation Notes
+
+- Same-world multi-item execution now resets market-board search, candidate, read, and purchase state when advancing from one route line to the next on the same world.
+- The market-board listing reader consumes the full visible `InfoProxyItemSearch` cache and reports when the game reports more listings than that readable cache exposes. This is diagnostic coverage for truncation, not proof of deeper pagination support.
+- Universalis freshness verification is wired as post-world diagnostic evidence. Unconfirmed or unavailable freshness checks produce loud post-run warnings but do not block route progress.
+- Planner diagnostics now include per-listing decisions for hard filters, quantity caps, gil caps, and explicit sweep-probe worlds. The diagnostics window exposes these in a `Plan Decisions` table.
+- Dashboard route-log indexing, completed-batch archive controls, and reusable `Run again` presets remain future convenience work.
+
 ## Paper Stack
 
 This document is the active holding list for the next feature track. It should not replace the existing acquisition design docs:

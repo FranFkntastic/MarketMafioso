@@ -20,6 +20,10 @@ public sealed record MarketBoardReadResult
     public string Message { get; init; } = string.Empty;
     public uint ItemId { get; init; }
     public string WorldName { get; init; } = string.Empty;
+    public int ReportedListingCount { get; init; }
+    public int ListingCapacity { get; init; }
+    public bool IsAtListingCapacity { get; init; }
+    public bool IsListingCountTruncated { get; init; }
     public IReadOnlyList<MarketBoardLiveListing> Listings { get; init; } = [];
 }
 

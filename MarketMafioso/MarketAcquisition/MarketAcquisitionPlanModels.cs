@@ -104,4 +104,19 @@ public sealed record MarketAcquisitionPlanDiagnostics
     public int HqSupportedListingCount { get; init; }
     public int WorldSupportedListingCount { get; init; }
     public int PlannedListingCount { get; init; }
+    public IReadOnlyList<MarketAcquisitionListingDecision> ListingDecisions { get; init; } = [];
+}
+
+public sealed record MarketAcquisitionListingDecision
+{
+    public string LineId { get; init; } = string.Empty;
+    public uint ItemId { get; init; }
+    public string? ItemName { get; init; }
+    public string WorldName { get; init; } = string.Empty;
+    public string ListingId { get; init; } = string.Empty;
+    public string Decision { get; init; } = string.Empty;
+    public string Reason { get; init; } = string.Empty;
+    public uint Quantity { get; init; }
+    public uint UnitPrice { get; init; }
+    public bool IsHq { get; init; }
 }
