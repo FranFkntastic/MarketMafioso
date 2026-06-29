@@ -223,7 +223,7 @@ Expected: existing tests still pass.
 - Modify: `MarketMafioso/MarketAcquisition/MarketAcquisitionRequestModels.cs`
 - Modify: `MarketMafioso.Server.Tests/MarketAcquisitionRequestEndpointTests.cs`
 
-- [ ] **Step 1: Add endpoint tests for line progress validation**
+- [x] **Step 1: Add endpoint tests for line progress validation**
 
 Add tests that prove:
 
@@ -286,7 +286,7 @@ public async Task LineProgressUpdatesLineProjection()
 
 Expected before implementation: tests fail because the endpoint and helper overloads do not exist.
 
-- [ ] **Step 2: Add shared DTOs**
+- [x] **Step 2: Add shared DTOs**
 
 Add these records to both server and plugin DTO model files, keeping namespace-local style:
 
@@ -326,7 +326,7 @@ public sealed record MarketAcquisitionPurchaseAuditRequest
 }
 ```
 
-- [ ] **Step 3: Run DTO compile**
+- [x] **Step 3: Run DTO compile**
 
 Run:
 
@@ -344,7 +344,7 @@ Expected: build fails only because endpoint/store methods are missing, not becau
 - Modify: `MarketMafioso.Server/MarketAcquisitionRequestStore.cs`
 - Modify: `MarketMafioso.Server.Tests/MarketAcquisitionRequestStoreTests.cs`
 
-- [ ] **Step 1: Add failing store tests**
+- [x] **Step 1: Add failing store tests**
 
 Add tests proving:
 
@@ -407,7 +407,7 @@ public async Task RecordPurchaseAuditAsyncInsertsIdempotentPurchaseRecord()
 
 Expected before implementation: tests fail because store APIs and exception do not exist.
 
-- [ ] **Step 2: Add schema migration**
+- [x] **Step 2: Add schema migration**
 
 In the store schema setup, add a purchase audit table:
 
@@ -438,7 +438,7 @@ CREATE TABLE IF NOT EXISTS acquisition_purchase_audit (
 
 If the store uses migration versioning, add this through the next migration step instead of a standalone `CREATE TABLE` block.
 
-- [ ] **Step 3: Implement line validation helper**
+- [x] **Step 3: Implement line validation helper**
 
 Add a helper with this behavior:
 
@@ -466,7 +466,7 @@ private static async Task EnsureLineBelongsToRequestAsync(
 }
 ```
 
-- [ ] **Step 4: Implement line progress projection**
+- [x] **Step 4: Implement line progress projection**
 
 Implement store method:
 
@@ -489,7 +489,7 @@ It must:
 - update `latest_message`,
 - return the updated line view.
 
-- [ ] **Step 5: Implement purchase audit insert**
+- [x] **Step 5: Implement purchase audit insert**
 
 Implement store method:
 
@@ -508,7 +508,7 @@ It must:
 - return the existing row on exact replay,
 - throw idempotency conflict if key/sequence is reused with a different body.
 
-- [ ] **Step 6: Run store tests**
+- [x] **Step 6: Run store tests**
 
 Run:
 
@@ -526,7 +526,7 @@ Expected: new store tests pass.
 - Modify: `MarketMafioso.Server/Program.cs`
 - Modify: `MarketMafioso.Server.Tests/MarketAcquisitionRequestEndpointTests.cs`
 
-- [ ] **Step 1: Add canonical endpoints**
+- [x] **Step 1: Add canonical endpoints**
 
 Add:
 
@@ -559,7 +559,7 @@ marketMafiosoApi.MapPost(
 
 Wrap the endpoints in the same exception-to-response mapping used by existing acquisition lifecycle endpoints.
 
-- [ ] **Step 2: Ensure old namespace stays retired**
+- [x] **Step 2: Ensure old namespace stays retired**
 
 Add endpoint tests:
 
@@ -578,7 +578,7 @@ public async Task OldApiNamespaceDoesNotExposeLineProgress()
 }
 ```
 
-- [ ] **Step 3: Run endpoint tests**
+- [x] **Step 3: Run endpoint tests**
 
 Run:
 

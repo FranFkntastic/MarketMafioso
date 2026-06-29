@@ -89,6 +89,62 @@ public sealed record MarketAcquisitionLifecycleRequest
     public string? Reason { get; init; }
 }
 
+public sealed record MarketAcquisitionLineProgressRequest
+{
+    public string ClaimToken { get; init; } = string.Empty;
+    public string IdempotencyKey { get; init; } = string.Empty;
+    public string AttemptId { get; init; } = string.Empty;
+    public long Sequence { get; init; }
+    public string Status { get; init; } = string.Empty;
+    public uint PurchasedQuantity { get; init; }
+    public uint SpentGil { get; init; }
+    public string? Message { get; init; }
+    public string? Reason { get; init; }
+}
+
+public sealed record MarketAcquisitionPurchaseAuditRequest
+{
+    public string ClaimToken { get; init; } = string.Empty;
+    public string IdempotencyKey { get; init; } = string.Empty;
+    public string AttemptId { get; init; } = string.Empty;
+    public long Sequence { get; init; }
+    public string LineId { get; init; } = string.Empty;
+    public string WorldName { get; init; } = string.Empty;
+    public uint ItemId { get; init; }
+    public string? ItemName { get; init; }
+    public string ListingId { get; init; } = string.Empty;
+    public string RetainerName { get; init; } = string.Empty;
+    public string RetainerId { get; init; } = string.Empty;
+    public uint Quantity { get; init; }
+    public uint UnitPrice { get; init; }
+    public uint TotalGil { get; init; }
+    public bool IsHq { get; init; }
+    public string Result { get; init; } = string.Empty;
+    public string? Message { get; init; }
+}
+
+public sealed record MarketAcquisitionPurchaseAuditView
+{
+    public string AuditId { get; init; } = string.Empty;
+    public string RequestId { get; init; } = string.Empty;
+    public string LineId { get; init; } = string.Empty;
+    public string AttemptId { get; init; } = string.Empty;
+    public long Sequence { get; init; }
+    public string WorldName { get; init; } = string.Empty;
+    public uint ItemId { get; init; }
+    public string? ItemName { get; init; }
+    public string ListingId { get; init; } = string.Empty;
+    public string RetainerName { get; init; } = string.Empty;
+    public string RetainerId { get; init; } = string.Empty;
+    public uint Quantity { get; init; }
+    public uint UnitPrice { get; init; }
+    public uint TotalGil { get; init; }
+    public bool IsHq { get; init; }
+    public string Result { get; init; } = string.Empty;
+    public string? Message { get; init; }
+    public DateTimeOffset CreatedAtUtc { get; init; }
+}
+
 public sealed record MarketAcquisitionRequestView
 {
     public string Id { get; init; } = string.Empty;
@@ -207,6 +263,14 @@ public sealed class MarketAcquisitionInvalidTransitionException : Exception
 {
     public MarketAcquisitionInvalidTransitionException(string status, string targetStatus)
         : base($"Cannot move acquisition request from {status} to {targetStatus}.")
+    {
+    }
+}
+
+public sealed class MarketAcquisitionInvalidLineException : Exception
+{
+    public MarketAcquisitionInvalidLineException(string requestId, string lineId)
+        : base($"Line {lineId} does not belong to acquisition request {requestId}.")
     {
     }
 }

@@ -141,6 +141,74 @@ public sealed class MarketAcquisitionRequestEndpointTests
     }
 
     [Fact]
+    public async Task LineProgressRejectsUnknownLineId()
+    {
+        using var app = await MarketAcquisitionTestApp.CreateAsync();
+        var client = app.CreateAuthenticatedClient();
+        var claimed = await app.CreateClaimedBatchAsync(client, "line-progress-unknown");
+
+        var response = await client.PostAsJsonAsync(
+            $"/marketmafioso/api/acquisition/batches/{claimed.Id}/lines/not-a-line/progress",
+            new
+            {
+                claimToken = claimed.ClaimToken,
+                idempotencyKey = "line-progress-unknown-key",
+                attemptId = "attempt-1",
+                sequence = 1,
+                status = "Running",
+                message = "Testing wrong line."
+            });
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task LineProgressUpdatesLineProjection()
+    {
+        using var app = await MarketAcquisitionTestApp.CreateAsync();
+        var client = app.CreateAuthenticatedClient();
+        var claimed = await app.CreateAcceptedBatchAsync(client, "line-progress-projection", lineCount: 2);
+        var line = claimed.Lines[1];
+
+        var response = await client.PostAsJsonAsync(
+            $"/marketmafioso/api/acquisition/batches/{claimed.Id}/lines/{line.LineId}/progress",
+            new
+            {
+                claimToken = claimed.ClaimToken,
+                idempotencyKey = "line-progress-projection-key",
+                attemptId = "attempt-1",
+                sequence = 1,
+                status = "Running",
+                purchasedQuantity = 5,
+                spentGil = 2500,
+                message = "Bought one safe stack."
+            });
+
+        response.EnsureSuccessStatusCode();
+        var view = await client.GetFromJsonAsync<MarketAcquisitionRequestView>(
+            $"/marketmafioso/api/acquisition/batches/{claimed.Id}");
+
+        var updatedLine = Assert.Single(view!.Lines, l => l.LineId == line.LineId);
+        Assert.Equal("Running", updatedLine.Status);
+        Assert.Equal((uint)5, updatedLine.PurchasedQuantity);
+        Assert.Equal((uint)2500, updatedLine.SpentGil);
+        Assert.Equal("Bought one safe stack.", updatedLine.LatestMessage);
+    }
+
+    [Fact]
+    public async Task OldApiNamespaceDoesNotExposeLineProgress()
+    {
+        using var app = await MarketAcquisitionTestApp.CreateAsync();
+        var client = app.CreateAuthenticatedClient();
+
+        var response = await client.PostAsJsonAsync(
+            "/api/marketmafioso/acquisition/batches/request-1/lines/line-1/progress",
+            new { });
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
     public async Task HostedMode_RejectsAcquisitionBatchWithoutLines()
     {
         await using var application = CreateHostedApplication();

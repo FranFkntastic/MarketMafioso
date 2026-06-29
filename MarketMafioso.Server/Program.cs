@@ -101,6 +101,15 @@ app.MapGet("/api/acquisition/requests/{id}/timeline", async (
     return timeline == null ? Results.NotFound() : Results.Ok(timeline);
 });
 
+app.MapGet("/api/acquisition/batches/{id}", async (
+    string id,
+    MarketAcquisitionRequestStore acquisitionStore,
+    CancellationToken token) =>
+{
+    var batch = await acquisitionStore.GetAsync(id, token);
+    return batch == null ? Results.NotFound() : Results.Ok(batch);
+});
+
 app.MapGet("/api/diagnostics/events", async (
     DiagnosticEventStore diagnostics,
     int? limit,
@@ -176,6 +185,10 @@ app.MapPost("/acquisition/requests/{id}/resend", ResendAcquisitionRequest);
 app.MapPost("/api/acquisition/requests/{id}/resend", ResendAcquisitionRequest);
 app.MapPost("/acquisition/requests/{id}/progress", ReportAcquisitionProgress);
 app.MapPost("/api/acquisition/requests/{id}/progress", ReportAcquisitionProgress);
+app.MapPost("/acquisition/batches/{id}/lines/{lineId}/progress", ReportAcquisitionLineProgress);
+app.MapPost("/api/acquisition/batches/{id}/lines/{lineId}/progress", ReportAcquisitionLineProgress);
+app.MapPost("/acquisition/batches/{id}/purchases", RecordAcquisitionPurchase);
+app.MapPost("/api/acquisition/batches/{id}/purchases", RecordAcquisitionPurchase);
 app.MapPost("/acquisition/requests/{id}/complete", CompleteAcquisitionRequest);
 app.MapPost("/api/acquisition/requests/{id}/complete", CompleteAcquisitionRequest);
 app.MapPost("/acquisition/requests/{id}/fail", FailAcquisitionRequest);
@@ -983,6 +996,77 @@ Task<IResult> ReportAcquisitionProgress(
         id,
         request,
         token);
+
+async Task<IResult> ReportAcquisitionLineProgress(
+    string id,
+    string lineId,
+    MarketAcquisitionLineProgressRequest progressRequest,
+    MarketAcquisitionRequestStore store,
+    CancellationToken token)
+{
+    try
+    {
+        var line = await store.RecordLineProgressAsync(id, lineId, progressRequest, token);
+        return line == null ? Results.NotFound() : Results.Ok(line);
+    }
+    catch (UnauthorizedAccessException)
+    {
+        return InvalidApiKey();
+    }
+    catch (ArgumentException ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+    catch (MarketAcquisitionInvalidLineException)
+    {
+        return Results.NotFound();
+    }
+    catch (MarketAcquisitionIdempotencyConflictException ex)
+    {
+        return Results.Conflict(new { error = ex.Message });
+    }
+    catch (MarketAcquisitionAttemptSequenceConflictException ex)
+    {
+        return Results.Conflict(new { error = ex.Message });
+    }
+    catch (MarketAcquisitionInvalidTransitionException ex)
+    {
+        return Results.Conflict(new { error = ex.Message });
+    }
+}
+
+async Task<IResult> RecordAcquisitionPurchase(
+    string id,
+    MarketAcquisitionPurchaseAuditRequest purchaseRequest,
+    MarketAcquisitionRequestStore store,
+    CancellationToken token)
+{
+    try
+    {
+        var audit = await store.RecordPurchaseAuditAsync(id, purchaseRequest, token);
+        return audit == null ? Results.NotFound() : Results.Ok(audit);
+    }
+    catch (UnauthorizedAccessException)
+    {
+        return InvalidApiKey();
+    }
+    catch (ArgumentException ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+    catch (MarketAcquisitionInvalidLineException)
+    {
+        return Results.NotFound();
+    }
+    catch (MarketAcquisitionIdempotencyConflictException ex)
+    {
+        return Results.Conflict(new { error = ex.Message });
+    }
+    catch (MarketAcquisitionAttemptSequenceConflictException ex)
+    {
+        return Results.Conflict(new { error = ex.Message });
+    }
+}
 
 Task<IResult> CompleteAcquisitionRequest(
     HttpRequest request,

@@ -122,6 +122,17 @@ public sealed class MarketAcquisitionRequestStore
         return new MarketAcquisitionCreateResult(view with { Lines = lines }, false);
     }
 
+    public async Task<MarketAcquisitionRequestView?> GetAsync(
+        string id,
+        CancellationToken cancellationToken)
+    {
+        await ExpirePendingAsync(cancellationToken).ConfigureAwait(false);
+        await ExpireClaimedAsync(cancellationToken).ConfigureAwait(false);
+
+        await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        return await GetByIdAsync(connection, transaction: null, id, cancellationToken).ConfigureAwait(false);
+    }
+
     public async Task<IReadOnlyList<MarketAcquisitionRequestView>> ListPendingAsync(
         string characterName,
         string world,
@@ -450,6 +461,242 @@ public sealed class MarketAcquisitionRequestStore
             request,
             cancellationToken);
 
+    public async Task<MarketAcquisitionBatchLineView?> RecordLineProgressAsync(
+        string requestId,
+        string lineId,
+        MarketAcquisitionLineProgressRequest request,
+        CancellationToken cancellationToken)
+    {
+        ValidateLineProgressRequest(request);
+
+        await ExpireClaimedAsync(cancellationToken).ConfigureAwait(false);
+
+        var payloadJson = JsonSerializer.Serialize(request, JsonOptions);
+        var payloadHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(payloadJson)));
+        var eventCreatedAtUtc = DateTimeOffset.UtcNow;
+
+        await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+
+        var current = await GetByIdAsync(connection, transaction, requestId, cancellationToken).ConfigureAwait(false);
+        if (current == null)
+            return null;
+
+        var storedClaimToken = await GetClaimTokenAsync(connection, transaction, requestId, cancellationToken).ConfigureAwait(false);
+        if (!MatchesSecret(request.ClaimToken, storedClaimToken))
+            throw new UnauthorizedAccessException("Claim token does not match.");
+
+        await EnsureLineBelongsToRequestAsync(connection, transaction, requestId, lineId, cancellationToken).ConfigureAwait(false);
+
+        var existingByKey = await GetLineProgressEventByIdempotencyKeyAsync(
+            connection,
+            transaction,
+            request.IdempotencyKey,
+            cancellationToken).ConfigureAwait(false);
+        if (existingByKey != null)
+        {
+            if (!string.Equals(existingByKey.Value.RequestId, requestId, StringComparison.Ordinal) ||
+                !string.Equals(existingByKey.Value.LineId, lineId, StringComparison.Ordinal) ||
+                !string.Equals(existingByKey.Value.AttemptId, request.AttemptId, StringComparison.Ordinal) ||
+                existingByKey.Value.Sequence != request.Sequence ||
+                !string.Equals(existingByKey.Value.PayloadJson, payloadJson, StringComparison.Ordinal))
+                throw new MarketAcquisitionIdempotencyConflictException();
+
+            return await LoadLineByIdAsync(connection, transaction, lineId, cancellationToken).ConfigureAwait(false);
+        }
+
+        var existingBySequence = await GetLineProgressEventBySequenceAsync(
+            connection,
+            transaction,
+            requestId,
+            lineId,
+            request.AttemptId,
+            request.Sequence,
+            cancellationToken).ConfigureAwait(false);
+        if (existingBySequence != null)
+        {
+            if (!string.Equals(existingBySequence.Value.IdempotencyKey, request.IdempotencyKey, StringComparison.Ordinal) ||
+                !string.Equals(existingBySequence.Value.PayloadJson, payloadJson, StringComparison.Ordinal))
+                throw new MarketAcquisitionAttemptSequenceConflictException();
+
+            return await LoadLineByIdAsync(connection, transaction, lineId, cancellationToken).ConfigureAwait(false);
+        }
+
+        if (current.Status is not (MarketAcquisitionStatuses.AcceptedInPlugin or MarketAcquisitionStatuses.Running))
+            throw new MarketAcquisitionInvalidTransitionException(current.Status, MarketAcquisitionStatuses.Running);
+
+        await using (var updateRequest = connection.CreateCommand())
+        {
+            updateRequest.Transaction = (SqliteTransaction)transaction;
+            updateRequest.CommandText =
+                """
+                UPDATE acquisition_requests
+                SET status = $status
+                WHERE id = $requestId;
+                """;
+            updateRequest.Parameters.AddWithValue("$status", MarketAcquisitionStatuses.Running);
+            updateRequest.Parameters.AddWithValue("$requestId", requestId);
+            await updateRequest.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        await using (var updateLine = connection.CreateCommand())
+        {
+            updateLine.Transaction = (SqliteTransaction)transaction;
+            updateLine.CommandText =
+                """
+                UPDATE acquisition_batch_lines
+                SET status = $status,
+                    purchased_quantity = $purchasedQuantity,
+                    spent_gil = $spentGil,
+                    latest_message = $latestMessage,
+                    updated_at_utc = $updatedAtUtc
+                WHERE request_id = $requestId
+                  AND line_id = $lineId;
+                """;
+            updateLine.Parameters.AddWithValue("$status", request.Status);
+            updateLine.Parameters.AddWithValue("$purchasedQuantity", request.PurchasedQuantity);
+            updateLine.Parameters.AddWithValue("$spentGil", request.SpentGil);
+            updateLine.Parameters.AddWithValue("$latestMessage", (object?)request.Message ?? DBNull.Value);
+            updateLine.Parameters.AddWithValue("$updatedAtUtc", eventCreatedAtUtc.ToString("O"));
+            updateLine.Parameters.AddWithValue("$requestId", requestId);
+            updateLine.Parameters.AddWithValue("$lineId", lineId);
+            await updateLine.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        await InsertLineProgressEventAsync(
+            connection,
+            transaction,
+            requestId,
+            lineId,
+            request,
+            payloadJson,
+            payloadHash,
+            eventCreatedAtUtc,
+            cancellationToken).ConfigureAwait(false);
+
+        var line = await LoadLineByIdAsync(connection, transaction, lineId, cancellationToken).ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return line;
+    }
+
+    public async Task<MarketAcquisitionPurchaseAuditView?> RecordPurchaseAuditAsync(
+        string requestId,
+        MarketAcquisitionPurchaseAuditRequest request,
+        CancellationToken cancellationToken)
+    {
+        ValidatePurchaseAuditRequest(request);
+
+        await ExpireClaimedAsync(cancellationToken).ConfigureAwait(false);
+
+        var payloadJson = JsonSerializer.Serialize(request, JsonOptions);
+        var payloadHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(payloadJson)));
+        var createdAtUtc = DateTimeOffset.UtcNow;
+
+        await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+
+        var current = await GetByIdAsync(connection, transaction, requestId, cancellationToken).ConfigureAwait(false);
+        if (current == null)
+            return null;
+
+        var storedClaimToken = await GetClaimTokenAsync(connection, transaction, requestId, cancellationToken).ConfigureAwait(false);
+        if (!MatchesSecret(request.ClaimToken, storedClaimToken))
+            throw new UnauthorizedAccessException("Claim token does not match.");
+
+        await EnsureLineBelongsToRequestAsync(connection, transaction, requestId, request.LineId, cancellationToken).ConfigureAwait(false);
+
+        var existingByKey = await GetPurchaseAuditByIdempotencyKeyAsync(
+            connection,
+            transaction,
+            request.IdempotencyKey,
+            cancellationToken).ConfigureAwait(false);
+        if (existingByKey != null)
+        {
+            if (!string.Equals(existingByKey.Value.View.RequestId, requestId, StringComparison.Ordinal) ||
+                !string.Equals(existingByKey.Value.PayloadJson, payloadJson, StringComparison.Ordinal))
+                throw new MarketAcquisitionIdempotencyConflictException();
+
+            return existingByKey.Value.View;
+        }
+
+        var existingBySequence = await GetPurchaseAuditBySequenceAsync(
+            connection,
+            transaction,
+            requestId,
+            request.AttemptId,
+            request.Sequence,
+            cancellationToken).ConfigureAwait(false);
+        if (existingBySequence != null)
+        {
+            if (!string.Equals(existingBySequence.Value.IdempotencyKey, request.IdempotencyKey, StringComparison.Ordinal) ||
+                !string.Equals(existingBySequence.Value.PayloadJson, payloadJson, StringComparison.Ordinal))
+                throw new MarketAcquisitionAttemptSequenceConflictException();
+
+            return existingBySequence.Value.View;
+        }
+
+        var auditId = $"{DateTimeOffset.UtcNow:yyyyMMddHHmmssfff}-{Guid.NewGuid():N}"[..26];
+        await using (var command = connection.CreateCommand())
+        {
+            command.Transaction = (SqliteTransaction)transaction;
+            command.CommandText =
+                """
+                INSERT INTO acquisition_purchase_audit (
+                    audit_id,
+                    request_id,
+                    line_id,
+                    attempt_id,
+                    sequence,
+                    idempotency_key,
+                    world_name,
+                    item_id,
+                    item_name,
+                    listing_id,
+                    retainer_name,
+                    retainer_id,
+                    quantity,
+                    unit_price,
+                    total_gil,
+                    is_hq,
+                    result,
+                    message,
+                    payload_json,
+                    payload_hash,
+                    created_at_utc
+                )
+                VALUES (
+                    $auditId,
+                    $requestId,
+                    $lineId,
+                    $attemptId,
+                    $sequence,
+                    $idempotencyKey,
+                    $worldName,
+                    $itemId,
+                    $itemName,
+                    $listingId,
+                    $retainerName,
+                    $retainerId,
+                    $quantity,
+                    $unitPrice,
+                    $totalGil,
+                    $isHq,
+                    $result,
+                    $message,
+                    $payloadJson,
+                    $payloadHash,
+                    $createdAtUtc
+                );
+                """;
+            AddPurchaseAuditParameters(command, auditId, requestId, request, payloadJson, payloadHash, createdAtUtc);
+            await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        var audit = await GetPurchaseAuditByIdAsync(connection, transaction, auditId, cancellationToken).ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return audit;
+    }
+
     public async Task<MarketAcquisitionRequestView?> CancelAsync(
         string id,
         CancellationToken cancellationToken)
@@ -640,6 +887,49 @@ public sealed class MarketAcquisitionRequestStore
 
             CREATE UNIQUE INDEX IF NOT EXISTS idx_acquisition_attempt_events_attempt_sequence
                 ON acquisition_attempt_events(attempt_id, sequence);
+
+            CREATE TABLE IF NOT EXISTS acquisition_line_progress_events (
+                id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                request_id TEXT NOT NULL,
+                line_id TEXT NOT NULL,
+                attempt_id TEXT NOT NULL,
+                sequence INTEGER NOT NULL,
+                idempotency_key TEXT NOT NULL UNIQUE,
+                status TEXT NOT NULL,
+                purchased_quantity INTEGER NOT NULL,
+                spent_gil INTEGER NOT NULL,
+                payload_json TEXT NOT NULL,
+                payload_hash TEXT NOT NULL,
+                created_at_utc TEXT NOT NULL,
+                UNIQUE(request_id, line_id, attempt_id, sequence),
+                FOREIGN KEY(line_id) REFERENCES acquisition_batch_lines(line_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS acquisition_purchase_audit (
+                audit_id TEXT PRIMARY KEY,
+                request_id TEXT NOT NULL,
+                line_id TEXT NOT NULL,
+                attempt_id TEXT NOT NULL,
+                sequence INTEGER NOT NULL,
+                idempotency_key TEXT NOT NULL UNIQUE,
+                world_name TEXT NOT NULL,
+                item_id INTEGER NOT NULL,
+                item_name TEXT NULL,
+                listing_id TEXT NOT NULL,
+                retainer_name TEXT NOT NULL,
+                retainer_id TEXT NOT NULL,
+                quantity INTEGER NOT NULL,
+                unit_price INTEGER NOT NULL,
+                total_gil INTEGER NOT NULL,
+                is_hq INTEGER NOT NULL,
+                result TEXT NOT NULL,
+                message TEXT NULL,
+                payload_json TEXT NOT NULL,
+                payload_hash TEXT NOT NULL,
+                created_at_utc TEXT NOT NULL,
+                UNIQUE(request_id, attempt_id, sequence),
+                FOREIGN KEY(line_id) REFERENCES acquisition_batch_lines(line_id)
+            );
             """;
         command.ExecuteNonQuery();
     }
@@ -1013,12 +1303,13 @@ public sealed class MarketAcquisitionRequestStore
 
     private static async Task<MarketAcquisitionRequestView?> GetByIdAsync(
         SqliteConnection connection,
-        System.Data.Common.DbTransaction transaction,
+        System.Data.Common.DbTransaction? transaction,
         string id,
         CancellationToken cancellationToken)
     {
         await using var command = connection.CreateCommand();
-        command.Transaction = (SqliteTransaction)transaction;
+        if (transaction != null)
+            command.Transaction = (SqliteTransaction)transaction;
         command.CommandText =
             """
             SELECT
@@ -1138,6 +1429,335 @@ public sealed class MarketAcquisitionRequestStore
         command.Parameters.AddWithValue("$id", id);
         var value = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
         return value as string;
+    }
+
+    private static async Task EnsureLineBelongsToRequestAsync(
+        SqliteConnection connection,
+        System.Data.Common.DbTransaction transaction,
+        string requestId,
+        string lineId,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = (SqliteTransaction)transaction;
+        command.CommandText =
+            """
+            SELECT COUNT(*)
+            FROM acquisition_batch_lines
+            WHERE request_id = $requestId AND line_id = $lineId;
+            """;
+        command.Parameters.AddWithValue("$requestId", requestId);
+        command.Parameters.AddWithValue("$lineId", lineId);
+
+        var count = (long)(await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) ?? 0L);
+        if (count == 0)
+            throw new MarketAcquisitionInvalidLineException(requestId, lineId);
+    }
+
+    private static async Task<StoredLineProgressEvent?> GetLineProgressEventByIdempotencyKeyAsync(
+        SqliteConnection connection,
+        System.Data.Common.DbTransaction transaction,
+        string idempotencyKey,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = (SqliteTransaction)transaction;
+        command.CommandText =
+            """
+            SELECT request_id, line_id, attempt_id, sequence, idempotency_key, payload_json
+            FROM acquisition_line_progress_events
+            WHERE idempotency_key = $idempotencyKey;
+            """;
+        command.Parameters.AddWithValue("$idempotencyKey", idempotencyKey);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        return await reader.ReadAsync(cancellationToken).ConfigureAwait(false)
+            ? new StoredLineProgressEvent(
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.GetString(2),
+                reader.GetInt64(3),
+                reader.GetString(4),
+                reader.GetString(5))
+            : null;
+    }
+
+    private static async Task<StoredLineProgressEvent?> GetLineProgressEventBySequenceAsync(
+        SqliteConnection connection,
+        System.Data.Common.DbTransaction transaction,
+        string requestId,
+        string lineId,
+        string attemptId,
+        long sequence,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = (SqliteTransaction)transaction;
+        command.CommandText =
+            """
+            SELECT request_id, line_id, attempt_id, sequence, idempotency_key, payload_json
+            FROM acquisition_line_progress_events
+            WHERE request_id = $requestId
+              AND line_id = $lineId
+              AND attempt_id = $attemptId
+              AND sequence = $sequence;
+            """;
+        command.Parameters.AddWithValue("$requestId", requestId);
+        command.Parameters.AddWithValue("$lineId", lineId);
+        command.Parameters.AddWithValue("$attemptId", attemptId);
+        command.Parameters.AddWithValue("$sequence", sequence);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        return await reader.ReadAsync(cancellationToken).ConfigureAwait(false)
+            ? new StoredLineProgressEvent(
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.GetString(2),
+                reader.GetInt64(3),
+                reader.GetString(4),
+                reader.GetString(5))
+            : null;
+    }
+
+    private static async Task InsertLineProgressEventAsync(
+        SqliteConnection connection,
+        System.Data.Common.DbTransaction transaction,
+        string requestId,
+        string lineId,
+        MarketAcquisitionLineProgressRequest request,
+        string payloadJson,
+        string payloadHash,
+        DateTimeOffset createdAtUtc,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = (SqliteTransaction)transaction;
+        command.CommandText =
+            """
+            INSERT INTO acquisition_line_progress_events (
+                request_id,
+                line_id,
+                attempt_id,
+                sequence,
+                idempotency_key,
+                status,
+                purchased_quantity,
+                spent_gil,
+                payload_json,
+                payload_hash,
+                created_at_utc
+            )
+            VALUES (
+                $requestId,
+                $lineId,
+                $attemptId,
+                $sequence,
+                $idempotencyKey,
+                $status,
+                $purchasedQuantity,
+                $spentGil,
+                $payloadJson,
+                $payloadHash,
+                $createdAtUtc
+            );
+            """;
+        command.Parameters.AddWithValue("$requestId", requestId);
+        command.Parameters.AddWithValue("$lineId", lineId);
+        command.Parameters.AddWithValue("$attemptId", request.AttemptId);
+        command.Parameters.AddWithValue("$sequence", request.Sequence);
+        command.Parameters.AddWithValue("$idempotencyKey", request.IdempotencyKey);
+        command.Parameters.AddWithValue("$status", request.Status);
+        command.Parameters.AddWithValue("$purchasedQuantity", request.PurchasedQuantity);
+        command.Parameters.AddWithValue("$spentGil", request.SpentGil);
+        command.Parameters.AddWithValue("$payloadJson", payloadJson);
+        command.Parameters.AddWithValue("$payloadHash", payloadHash);
+        command.Parameters.AddWithValue("$createdAtUtc", createdAtUtc.ToString("O"));
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async Task<StoredPurchaseAudit?> GetPurchaseAuditByIdempotencyKeyAsync(
+        SqliteConnection connection,
+        System.Data.Common.DbTransaction transaction,
+        string idempotencyKey,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = (SqliteTransaction)transaction;
+        command.CommandText =
+            """
+            SELECT
+                audit_id,
+                request_id,
+                line_id,
+                attempt_id,
+                sequence,
+                idempotency_key,
+                world_name,
+                item_id,
+                item_name,
+                listing_id,
+                retainer_name,
+                retainer_id,
+                quantity,
+                unit_price,
+                total_gil,
+                is_hq,
+                result,
+                message,
+                payload_json,
+                created_at_utc
+            FROM acquisition_purchase_audit
+            WHERE idempotency_key = $idempotencyKey;
+            """;
+        command.Parameters.AddWithValue("$idempotencyKey", idempotencyKey);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        return await reader.ReadAsync(cancellationToken).ConfigureAwait(false)
+            ? ReadStoredPurchaseAudit(reader)
+            : null;
+    }
+
+    private static async Task<StoredPurchaseAudit?> GetPurchaseAuditBySequenceAsync(
+        SqliteConnection connection,
+        System.Data.Common.DbTransaction transaction,
+        string requestId,
+        string attemptId,
+        long sequence,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = (SqliteTransaction)transaction;
+        command.CommandText =
+            """
+            SELECT
+                audit_id,
+                request_id,
+                line_id,
+                attempt_id,
+                sequence,
+                idempotency_key,
+                world_name,
+                item_id,
+                item_name,
+                listing_id,
+                retainer_name,
+                retainer_id,
+                quantity,
+                unit_price,
+                total_gil,
+                is_hq,
+                result,
+                message,
+                payload_json,
+                created_at_utc
+            FROM acquisition_purchase_audit
+            WHERE request_id = $requestId
+              AND attempt_id = $attemptId
+              AND sequence = $sequence;
+            """;
+        command.Parameters.AddWithValue("$requestId", requestId);
+        command.Parameters.AddWithValue("$attemptId", attemptId);
+        command.Parameters.AddWithValue("$sequence", sequence);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        return await reader.ReadAsync(cancellationToken).ConfigureAwait(false)
+            ? ReadStoredPurchaseAudit(reader)
+            : null;
+    }
+
+    private static async Task<MarketAcquisitionPurchaseAuditView?> GetPurchaseAuditByIdAsync(
+        SqliteConnection connection,
+        System.Data.Common.DbTransaction transaction,
+        string auditId,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = (SqliteTransaction)transaction;
+        command.CommandText =
+            """
+            SELECT
+                audit_id,
+                request_id,
+                line_id,
+                attempt_id,
+                sequence,
+                idempotency_key,
+                world_name,
+                item_id,
+                item_name,
+                listing_id,
+                retainer_name,
+                retainer_id,
+                quantity,
+                unit_price,
+                total_gil,
+                is_hq,
+                result,
+                message,
+                payload_json,
+                created_at_utc
+            FROM acquisition_purchase_audit
+            WHERE audit_id = $auditId;
+            """;
+        command.Parameters.AddWithValue("$auditId", auditId);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        return await reader.ReadAsync(cancellationToken).ConfigureAwait(false)
+            ? ReadStoredPurchaseAudit(reader).View
+            : null;
+    }
+
+    private static StoredPurchaseAudit ReadStoredPurchaseAudit(SqliteDataReader reader)
+    {
+        var view = new MarketAcquisitionPurchaseAuditView
+        {
+            AuditId = reader.GetString(0),
+            RequestId = reader.GetString(1),
+            LineId = reader.GetString(2),
+            AttemptId = reader.GetString(3),
+            Sequence = reader.GetInt64(4),
+            WorldName = reader.GetString(6),
+            ItemId = checked((uint)reader.GetInt64(7)),
+            ItemName = reader.IsDBNull(8) ? null : reader.GetString(8),
+            ListingId = reader.GetString(9),
+            RetainerName = reader.GetString(10),
+            RetainerId = reader.GetString(11),
+            Quantity = checked((uint)reader.GetInt64(12)),
+            UnitPrice = checked((uint)reader.GetInt64(13)),
+            TotalGil = checked((uint)reader.GetInt64(14)),
+            IsHq = reader.GetInt64(15) != 0,
+            Result = reader.GetString(16),
+            Message = reader.IsDBNull(17) ? null : reader.GetString(17),
+            CreatedAtUtc = DateTimeOffset.Parse(reader.GetString(19)),
+        };
+        return new StoredPurchaseAudit(view, reader.GetString(5), reader.GetString(18));
+    }
+
+    private static void AddPurchaseAuditParameters(
+        SqliteCommand command,
+        string auditId,
+        string requestId,
+        MarketAcquisitionPurchaseAuditRequest request,
+        string payloadJson,
+        string payloadHash,
+        DateTimeOffset createdAtUtc)
+    {
+        command.Parameters.AddWithValue("$auditId", auditId);
+        command.Parameters.AddWithValue("$requestId", requestId);
+        command.Parameters.AddWithValue("$lineId", request.LineId);
+        command.Parameters.AddWithValue("$attemptId", request.AttemptId);
+        command.Parameters.AddWithValue("$sequence", request.Sequence);
+        command.Parameters.AddWithValue("$idempotencyKey", request.IdempotencyKey);
+        command.Parameters.AddWithValue("$worldName", request.WorldName);
+        command.Parameters.AddWithValue("$itemId", request.ItemId);
+        command.Parameters.AddWithValue("$itemName", (object?)request.ItemName ?? DBNull.Value);
+        command.Parameters.AddWithValue("$listingId", request.ListingId);
+        command.Parameters.AddWithValue("$retainerName", request.RetainerName);
+        command.Parameters.AddWithValue("$retainerId", request.RetainerId);
+        command.Parameters.AddWithValue("$quantity", request.Quantity);
+        command.Parameters.AddWithValue("$unitPrice", request.UnitPrice);
+        command.Parameters.AddWithValue("$totalGil", request.TotalGil);
+        command.Parameters.AddWithValue("$isHq", request.IsHq ? 1 : 0);
+        command.Parameters.AddWithValue("$result", request.Result);
+        command.Parameters.AddWithValue("$message", (object?)request.Message ?? DBNull.Value);
+        command.Parameters.AddWithValue("$payloadJson", payloadJson);
+        command.Parameters.AddWithValue("$payloadHash", payloadHash);
+        command.Parameters.AddWithValue("$createdAtUtc", createdAtUtc.ToString("O"));
     }
 
     private static async Task<(string RequestId, string EventType, string PayloadJson, string ResultStatus, string CreatedAtUtc)?> GetEventByIdempotencyKeyAsync(
@@ -1288,6 +1908,44 @@ public sealed class MarketAcquisitionRequestStore
         return views;
     }
 
+    private static async Task<MarketAcquisitionBatchLineView?> LoadLineByIdAsync(
+        SqliteConnection connection,
+        System.Data.Common.DbTransaction transaction,
+        string lineId,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = (SqliteTransaction)transaction;
+        command.CommandText =
+            """
+            SELECT
+                line_id,
+                request_id,
+                ordinal,
+                item_id,
+                item_name,
+                item_kind,
+                quantity_mode,
+                target_quantity,
+                max_quantity,
+                hq_policy,
+                max_unit_price,
+                gil_cap,
+                status,
+                purchased_quantity,
+                spent_gil,
+                latest_message
+            FROM acquisition_batch_lines
+            WHERE line_id = $lineId;
+            """;
+        command.Parameters.AddWithValue("$lineId", lineId);
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        return await reader.ReadAsync(cancellationToken).ConfigureAwait(false)
+            ? ReadLineView(reader)
+            : null;
+    }
+
     private static async Task<IReadOnlyList<MarketAcquisitionBatchLineView>> LoadLinesAsync(
         SqliteConnection connection,
         System.Data.Common.DbTransaction? transaction,
@@ -1326,30 +1984,31 @@ public sealed class MarketAcquisitionRequestStore
         var lines = new List<MarketAcquisitionBatchLineView>();
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
-        {
-            lines.Add(new MarketAcquisitionBatchLineView
-            {
-                LineId = reader.GetString(0),
-                BatchId = reader.GetString(1),
-                Ordinal = reader.GetInt32(2),
-                ItemId = checked((uint)reader.GetInt64(3)),
-                ItemName = reader.IsDBNull(4) ? null : reader.GetString(4),
-                ItemKind = reader.IsDBNull(5) ? null : reader.GetString(5),
-                QuantityMode = reader.GetString(6),
-                TargetQuantity = checked((uint)reader.GetInt64(7)),
-                MaxQuantity = checked((uint)reader.GetInt64(8)),
-                HqPolicy = reader.GetString(9),
-                MaxUnitPrice = checked((uint)reader.GetInt64(10)),
-                GilCap = checked((uint)reader.GetInt64(11)),
-                Status = reader.GetString(12),
-                PurchasedQuantity = checked((uint)reader.GetInt64(13)),
-                SpentGil = checked((uint)reader.GetInt64(14)),
-                LatestMessage = reader.IsDBNull(15) ? null : reader.GetString(15),
-            });
-        }
+            lines.Add(ReadLineView(reader));
 
         return lines;
     }
+
+    private static MarketAcquisitionBatchLineView ReadLineView(SqliteDataReader reader) =>
+        new()
+        {
+            LineId = reader.GetString(0),
+            BatchId = reader.GetString(1),
+            Ordinal = reader.GetInt32(2),
+            ItemId = checked((uint)reader.GetInt64(3)),
+            ItemName = reader.IsDBNull(4) ? null : reader.GetString(4),
+            ItemKind = reader.IsDBNull(5) ? null : reader.GetString(5),
+            QuantityMode = reader.GetString(6),
+            TargetQuantity = checked((uint)reader.GetInt64(7)),
+            MaxQuantity = checked((uint)reader.GetInt64(8)),
+            HqPolicy = reader.GetString(9),
+            MaxUnitPrice = checked((uint)reader.GetInt64(10)),
+            GilCap = checked((uint)reader.GetInt64(11)),
+            Status = reader.GetString(12),
+            PurchasedQuantity = checked((uint)reader.GetInt64(13)),
+            SpentGil = checked((uint)reader.GetInt64(14)),
+            LatestMessage = reader.IsDBNull(15) ? null : reader.GetString(15),
+        };
 
     private static async Task<IReadOnlyList<MarketAcquisitionLifecycleEventView>> ListLifecycleEventsAsync(
         SqliteConnection connection,
@@ -1985,6 +2644,19 @@ public sealed class MarketAcquisitionRequestStore
         string Result,
         string CreatedAtUtc);
 
+    private readonly record struct StoredLineProgressEvent(
+        string RequestId,
+        string LineId,
+        string AttemptId,
+        long Sequence,
+        string IdempotencyKey,
+        string PayloadJson);
+
+    private readonly record struct StoredPurchaseAudit(
+        MarketAcquisitionPurchaseAuditView View,
+        string IdempotencyKey,
+        string PayloadJson);
+
     private static void ValidateCreateRequest(MarketAcquisitionCreateRequest request)
     {
         if (request.SchemaVersion != 1)
@@ -2082,6 +2754,48 @@ public sealed class MarketAcquisitionRequestStore
             throw new ArgumentException("Attempt event type is required.", nameof(request));
         if (string.IsNullOrWhiteSpace(request.Phase))
             throw new ArgumentException("Attempt phase is required.", nameof(request));
+    }
+
+    private static void ValidateLineProgressRequest(MarketAcquisitionLineProgressRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.ClaimToken))
+            throw new UnauthorizedAccessException("Claim token is required.");
+        if (string.IsNullOrWhiteSpace(request.IdempotencyKey))
+            throw new ArgumentException("Idempotency key is required.", nameof(request));
+        if (string.IsNullOrWhiteSpace(request.AttemptId))
+            throw new ArgumentException("Attempt id is required.", nameof(request));
+        if (request.Sequence < 1)
+            throw new ArgumentException("Line progress sequence must be one or greater.", nameof(request));
+        if (string.IsNullOrWhiteSpace(request.Status))
+            throw new ArgumentException("Line status is required.", nameof(request));
+    }
+
+    private static void ValidatePurchaseAuditRequest(MarketAcquisitionPurchaseAuditRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.ClaimToken))
+            throw new UnauthorizedAccessException("Claim token is required.");
+        if (string.IsNullOrWhiteSpace(request.IdempotencyKey))
+            throw new ArgumentException("Idempotency key is required.", nameof(request));
+        if (string.IsNullOrWhiteSpace(request.AttemptId))
+            throw new ArgumentException("Attempt id is required.", nameof(request));
+        if (request.Sequence < 1)
+            throw new ArgumentException("Purchase audit sequence must be one or greater.", nameof(request));
+        if (string.IsNullOrWhiteSpace(request.LineId))
+            throw new ArgumentException("Line id is required.", nameof(request));
+        if (string.IsNullOrWhiteSpace(request.WorldName))
+            throw new ArgumentException("World name is required.", nameof(request));
+        if (request.ItemId == 0)
+            throw new ArgumentException("Item id is required.", nameof(request));
+        if (string.IsNullOrWhiteSpace(request.ListingId))
+            throw new ArgumentException("Listing id is required.", nameof(request));
+        if (string.IsNullOrWhiteSpace(request.RetainerName))
+            throw new ArgumentException("Retainer name is required.", nameof(request));
+        if (request.Quantity == 0)
+            throw new ArgumentException("Purchase quantity is required.", nameof(request));
+        if (request.UnitPrice == 0 || request.TotalGil == 0)
+            throw new ArgumentException("Purchase gil values are required.", nameof(request));
+        if (string.IsNullOrWhiteSpace(request.Result))
+            throw new ArgumentException("Purchase result is required.", nameof(request));
     }
 
     private static string CreateSecretToken()

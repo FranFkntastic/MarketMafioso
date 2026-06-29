@@ -184,6 +184,147 @@ public sealed record MarketAcquisitionLifecycleRequest
     public string? Reason { get; init; }
 }
 
+public sealed record MarketAcquisitionLineProgressRequest
+{
+    [JsonPropertyName("claimToken")]
+    public string ClaimToken { get; init; } = string.Empty;
+
+    [JsonPropertyName("idempotencyKey")]
+    public string IdempotencyKey { get; init; } = string.Empty;
+
+    [JsonPropertyName("attemptId")]
+    public string AttemptId { get; init; } = string.Empty;
+
+    [JsonPropertyName("sequence")]
+    public long Sequence { get; init; }
+
+    [JsonPropertyName("status")]
+    public string Status { get; init; } = string.Empty;
+
+    [JsonPropertyName("purchasedQuantity")]
+    public uint PurchasedQuantity { get; init; }
+
+    [JsonPropertyName("spentGil")]
+    public uint SpentGil { get; init; }
+
+    [JsonPropertyName("message")]
+    public string? Message { get; init; }
+
+    [JsonPropertyName("reason")]
+    public string? Reason { get; init; }
+}
+
+public sealed record MarketAcquisitionPurchaseAuditRequest
+{
+    [JsonPropertyName("claimToken")]
+    public string ClaimToken { get; init; } = string.Empty;
+
+    [JsonPropertyName("idempotencyKey")]
+    public string IdempotencyKey { get; init; } = string.Empty;
+
+    [JsonPropertyName("attemptId")]
+    public string AttemptId { get; init; } = string.Empty;
+
+    [JsonPropertyName("sequence")]
+    public long Sequence { get; init; }
+
+    [JsonPropertyName("lineId")]
+    public string LineId { get; init; } = string.Empty;
+
+    [JsonPropertyName("worldName")]
+    public string WorldName { get; init; } = string.Empty;
+
+    [JsonPropertyName("itemId")]
+    public uint ItemId { get; init; }
+
+    [JsonPropertyName("itemName")]
+    public string? ItemName { get; init; }
+
+    [JsonPropertyName("listingId")]
+    public string ListingId { get; init; } = string.Empty;
+
+    [JsonPropertyName("retainerName")]
+    public string RetainerName { get; init; } = string.Empty;
+
+    [JsonPropertyName("retainerId")]
+    public string RetainerId { get; init; } = string.Empty;
+
+    [JsonPropertyName("quantity")]
+    public uint Quantity { get; init; }
+
+    [JsonPropertyName("unitPrice")]
+    public uint UnitPrice { get; init; }
+
+    [JsonPropertyName("totalGil")]
+    public uint TotalGil { get; init; }
+
+    [JsonPropertyName("isHq")]
+    public bool IsHq { get; init; }
+
+    [JsonPropertyName("result")]
+    public string Result { get; init; } = string.Empty;
+
+    [JsonPropertyName("message")]
+    public string? Message { get; init; }
+}
+
+public sealed record MarketAcquisitionPurchaseAuditView
+{
+    [JsonPropertyName("auditId")]
+    public string AuditId { get; init; } = string.Empty;
+
+    [JsonPropertyName("requestId")]
+    public string RequestId { get; init; } = string.Empty;
+
+    [JsonPropertyName("lineId")]
+    public string LineId { get; init; } = string.Empty;
+
+    [JsonPropertyName("attemptId")]
+    public string AttemptId { get; init; } = string.Empty;
+
+    [JsonPropertyName("sequence")]
+    public long Sequence { get; init; }
+
+    [JsonPropertyName("worldName")]
+    public string WorldName { get; init; } = string.Empty;
+
+    [JsonPropertyName("itemId")]
+    public uint ItemId { get; init; }
+
+    [JsonPropertyName("itemName")]
+    public string? ItemName { get; init; }
+
+    [JsonPropertyName("listingId")]
+    public string ListingId { get; init; } = string.Empty;
+
+    [JsonPropertyName("retainerName")]
+    public string RetainerName { get; init; } = string.Empty;
+
+    [JsonPropertyName("retainerId")]
+    public string RetainerId { get; init; } = string.Empty;
+
+    [JsonPropertyName("quantity")]
+    public uint Quantity { get; init; }
+
+    [JsonPropertyName("unitPrice")]
+    public uint UnitPrice { get; init; }
+
+    [JsonPropertyName("totalGil")]
+    public uint TotalGil { get; init; }
+
+    [JsonPropertyName("isHq")]
+    public bool IsHq { get; init; }
+
+    [JsonPropertyName("result")]
+    public string Result { get; init; } = string.Empty;
+
+    [JsonPropertyName("message")]
+    public string? Message { get; init; }
+
+    [JsonPropertyName("createdAtUtc")]
+    public DateTimeOffset CreatedAtUtc { get; init; }
+}
+
 public sealed record MarketAcquisitionAttemptEventRequest
 {
     [JsonPropertyName("claimToken")]
