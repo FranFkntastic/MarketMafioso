@@ -265,6 +265,125 @@ public sealed class MarketAcquisitionRequestClientTests
         Assert.True(body.RootElement.TryGetProperty("clientTimestampUtc", out _));
     }
 
+    [Fact]
+    public async Task PostLineProgressAsync_UsesCanonicalBatchLineEndpoint()
+    {
+        using var handler = new CapturingHandler("""
+            {
+              "lineId": "line-1",
+              "batchId": "batch-1",
+              "status": "Running",
+              "purchasedQuantity": 5,
+              "spentGil": 2500,
+              "latestMessage": "Line running."
+            }
+            """);
+        using var httpClient = new HttpClient(handler);
+        var client = new MarketMafioso.MarketAcquisition.MarketAcquisitionRequestClient(httpClient);
+
+        var line = await client.PostLineProgressAsync(
+            "https://dev.xivcraftarchitect.com/marketmafioso/api/inventory",
+            "client-secret",
+            "batch-1",
+            "line-1",
+            new MarketMafioso.MarketAcquisition.MarketAcquisitionLineProgressRequest
+            {
+                ClaimToken = "claim-token",
+                IdempotencyKey = "line-progress-key",
+                AttemptId = "attempt-1",
+                Sequence = 1,
+                Status = "Running",
+                PurchasedQuantity = 5,
+                SpentGil = 2500,
+                Message = "Line running.",
+            },
+            CancellationToken.None);
+
+        Assert.Equal("line-1", line.LineId);
+        Assert.Equal(
+            "https://dev.xivcraftarchitect.com/marketmafioso/api/acquisition/batches/batch-1/lines/line-1/progress",
+            handler.LastRequest?.RequestUri?.ToString());
+        Assert.NotNull(handler.LastRequest);
+        Assert.True(handler.LastRequest.Headers.TryGetValues("X-Api-Key", out var values));
+        Assert.Equal("client-secret", Assert.Single(values));
+
+        var body = JsonDocument.Parse(handler.LastBody!);
+        Assert.Equal("claim-token", body.RootElement.GetProperty("claimToken").GetString());
+        Assert.Equal("line-progress-key", body.RootElement.GetProperty("idempotencyKey").GetString());
+        Assert.Equal("attempt-1", body.RootElement.GetProperty("attemptId").GetString());
+        Assert.Equal(1, body.RootElement.GetProperty("sequence").GetInt64());
+        Assert.Equal("Running", body.RootElement.GetProperty("status").GetString());
+        Assert.Equal((uint)5, body.RootElement.GetProperty("purchasedQuantity").GetUInt32());
+        Assert.Equal((uint)2500, body.RootElement.GetProperty("spentGil").GetUInt32());
+    }
+
+    [Fact]
+    public async Task PostPurchaseAuditAsync_UsesCanonicalPurchaseEndpoint()
+    {
+        using var handler = new CapturingHandler("""
+            {
+              "auditId": "audit-1",
+              "requestId": "batch-1",
+              "lineId": "line-1",
+              "attemptId": "attempt-1",
+              "sequence": 2,
+              "worldName": "Siren",
+              "itemId": 5064,
+              "itemName": "Silver Ingot",
+              "listingId": "listing-1",
+              "retainerName": "Seller",
+              "retainerId": "retainer-1",
+              "quantity": 10,
+              "unitPrice": 50,
+              "totalGil": 500,
+              "isHq": false,
+              "result": "Purchased"
+            }
+            """);
+        using var httpClient = new HttpClient(handler);
+        var client = new MarketMafioso.MarketAcquisition.MarketAcquisitionRequestClient(httpClient);
+
+        var audit = await client.PostPurchaseAuditAsync(
+            "https://dev.xivcraftarchitect.com/marketmafioso/api/inventory",
+            "client-secret",
+            "batch-1",
+            new MarketMafioso.MarketAcquisition.MarketAcquisitionPurchaseAuditRequest
+            {
+                ClaimToken = "claim-token",
+                IdempotencyKey = "purchase-audit-key",
+                AttemptId = "attempt-1",
+                Sequence = 2,
+                LineId = "line-1",
+                WorldName = "Siren",
+                ItemId = 5064,
+                ItemName = "Silver Ingot",
+                ListingId = "listing-1",
+                RetainerName = "Seller",
+                RetainerId = "retainer-1",
+                Quantity = 10,
+                UnitPrice = 50,
+                TotalGil = 500,
+                IsHq = false,
+                Result = "Purchased",
+            },
+            CancellationToken.None);
+
+        Assert.Equal("audit-1", audit.AuditId);
+        Assert.Equal(
+            "https://dev.xivcraftarchitect.com/marketmafioso/api/acquisition/batches/batch-1/purchases",
+            handler.LastRequest?.RequestUri?.ToString());
+        Assert.NotNull(handler.LastRequest);
+        Assert.True(handler.LastRequest.Headers.TryGetValues("X-Api-Key", out var values));
+        Assert.Equal("client-secret", Assert.Single(values));
+
+        var body = JsonDocument.Parse(handler.LastBody!);
+        Assert.Equal("claim-token", body.RootElement.GetProperty("claimToken").GetString());
+        Assert.Equal("purchase-audit-key", body.RootElement.GetProperty("idempotencyKey").GetString());
+        Assert.Equal("line-1", body.RootElement.GetProperty("lineId").GetString());
+        Assert.Equal("Purchased", body.RootElement.GetProperty("result").GetString());
+        Assert.Equal((uint)500, body.RootElement.GetProperty("totalGil").GetUInt32());
+    }
+
     private sealed class CapturingHandler(string responseJson, HttpStatusCode statusCode = HttpStatusCode.OK) : HttpMessageHandler
     {
         public HttpRequestMessage? LastRequest { get; private set; }

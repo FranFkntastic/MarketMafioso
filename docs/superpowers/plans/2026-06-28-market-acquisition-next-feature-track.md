@@ -596,7 +596,7 @@ Expected: endpoint tests pass.
 - Modify: `MarketMafioso/MarketAcquisition/MarketAcquisitionRequestClient.cs`
 - Test: `MarketMafioso.Tests/MarketAcquisition/MarketAcquisitionRequestClientTests.cs`
 
-- [ ] **Step 1: Add failing client tests**
+- [x] **Step 1: Add failing client tests**
 
 Add tests that assert route and body:
 
@@ -629,7 +629,7 @@ public async Task PostLineProgressAsyncUsesCanonicalBatchLineEndpoint()
 }
 ```
 
-- [ ] **Step 2: Implement client methods**
+- [x] **Step 2: Implement client methods**
 
 Add:
 
@@ -666,7 +666,7 @@ public Task<MarketAcquisitionPurchaseAuditView> PostPurchaseAuditAsync(
 
 If `PostLifecycleAsync` cannot address nested paths cleanly, add a small path builder that accepts path segments and reuses the same auth/idempotency behavior.
 
-- [ ] **Step 3: Run client tests**
+- [x] **Step 3: Run client tests**
 
 Run:
 
