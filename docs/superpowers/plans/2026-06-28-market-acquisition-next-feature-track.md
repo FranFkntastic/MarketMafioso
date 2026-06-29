@@ -8,7 +8,7 @@
 
 **Tech Stack:** C# 12, .NET 8, ASP.NET minimal APIs, SQLite, Dalamud ImGui, Blazor WebAssembly, MudBlazor, xUnit.
 
-**Execution status (2026-06-29):** Source work through Task 16 is implemented and focused tests are passing. The dev plugin was deployed from `main@c055e4a` with visible manifest `1.1.211.1203`, and the dev receiver/dashboard was deployed from `local-dev@c055e4a` with public smoke checks passing. Remaining gates are live gameplay validation of multi-item opportunistic batches and deeper market-board pagination beyond the first readable cache.
+**Execution status (2026-06-29):** Source work through Task 16 is implemented and focused tests are passing. The dev plugin was deployed from `main@7339ce2` with visible manifest `1.1.213.30767`; the dev receiver/dashboard was last deployed from `local-dev@c055e4a` with public smoke checks passing. Remaining gates are live gameplay validation of multi-item opportunistic batches and deeper market-board pagination beyond the first readable cache.
 
 ---
 

@@ -48,7 +48,7 @@ dotnet build "MarketMafioso/MarketMafioso.csproj" -c Debug
 
 Expected: build succeeds, deploy script reports matching source/target hashes, and the visible manifest version changes.
 
-Status: Complete. The dev plugin was deployed from `main@c055e4a` with visible manifest `1.1.211.1203`; read results and input captures both carry pagination request IDs.
+Status: Complete. The dev plugin was deployed from `main@7339ce2` with visible manifest `1.1.213.30767`; read results and input captures both carry pagination request IDs, and accumulated-read planner support is available for future live pagination validation.
 
 - [ ] **Step 2: Capture before natural page movement**
 
@@ -101,7 +101,7 @@ Status: Complete in `MarketMafioso/MarketAcquisition/MarketBoardPaginationState.
 - Create: `MarketMafioso/MarketAcquisition/MarketBoardPaginationState.cs`
 - Test: `MarketMafioso.Tests/MarketAcquisition/MarketBoardPaginationStateTests.cs`
 
-- [ ] **Step 1: Write tests for safe/unsafe pagination states**
+- [x] **Step 1: Write tests for safe/unsafe pagination states**
 
 Create tests covering:
 
@@ -146,7 +146,7 @@ public void IsContinuationOf_RejectsDifferentItem()
 }
 ```
 
-- [ ] **Step 2: Run tests to verify failure**
+- [x] **Step 2: Run tests to verify failure**
 
 Run:
 
@@ -156,7 +156,7 @@ dotnet test "MarketMafioso.Tests/MarketMafioso.Tests.csproj" -c Debug --filter "
 
 Expected: fail because the new model does not exist.
 
-- [ ] **Step 3: Implement `MarketBoardPaginationState`**
+- [x] **Step 3: Implement `MarketBoardPaginationState`**
 
 Add:
 
@@ -187,7 +187,7 @@ public sealed record MarketBoardPaginationState(
 }
 ```
 
-- [ ] **Step 4: Run focused tests**
+- [x] **Step 4: Run focused tests**
 
 Run the same `dotnet test` command and confirm all pagination state tests pass.
 
@@ -200,7 +200,7 @@ Status: Partial. The pure classifier is complete in `MarketMafioso/MarketAcquisi
 - Modify: `MarketMafioso/Windows/MarketAcquisitionDiagnosticsWindow.cs`
 - Test: `MarketMafioso.Tests/MarketAcquisition/MarketBoardPaginationProbeTests.cs`
 
-- [ ] **Step 1: Write tests for probe refusal**
+- [x] **Step 1: Write tests for probe refusal**
 
 Tests should prove the probe refuses:
 
@@ -209,7 +209,7 @@ Tests should prove the probe refuses:
 - unchanged request ids after a probe attempt,
 - changed item id after a probe attempt.
 
-- [ ] **Step 2: Implement the probe as diagnostics-only**
+- [x] **Step 2: Implement the probe as diagnostics-only**
 
 The first implementation must not purchase or advance the route. It may call a proved request method only after Task 1 capture evidence identifies the correct method and field transition. If Task 1 only proves that no safe request method is available, implement the probe as a refusal result that explains why deeper pagination remains unavailable.
 
@@ -229,7 +229,7 @@ public sealed record MarketBoardPaginationProbeResult
 
 Add a diagnostics-window button labeled `Probe Next Listing Page`. Show the result under the live market-board diagnostics. The button must be disabled unless the current read result is truncated.
 
-- [ ] **Step 4: Verify no route behavior changes**
+- [x] **Step 4: Verify no route behavior changes**
 
 Run:
 
@@ -289,7 +289,7 @@ dotnet test "MarketMafioso.Tests/MarketMafioso.Tests.csproj" -c Debug --filter "
 - Modify: `docs/design/2026-06-28-market-acquisition-multi-item-roadmap.md`
 - Modify: `docs/design/2026-06-28-market-acquisition-next-feature-list.md`
 
-- [ ] **Step 1: Deploy the diagnostic build**
+- [x] **Step 1: Deploy the diagnostic build**
 
 Run:
 
