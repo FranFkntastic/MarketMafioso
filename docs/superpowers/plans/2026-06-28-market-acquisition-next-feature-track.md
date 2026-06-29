@@ -8,6 +8,8 @@
 
 **Tech Stack:** C# 12, .NET 8, ASP.NET minimal APIs, SQLite, Dalamud ImGui, Blazor WebAssembly, MudBlazor, xUnit.
 
+**Execution status (2026-06-29):** Source work through Task 16 is implemented and focused tests are passing. The dev plugin was deployed from `main@c055e4a` with visible manifest `1.1.211.1203`, and the dev receiver/dashboard was deployed from `local-dev@c055e4a` with public smoke checks passing. Remaining gates are live gameplay validation of multi-item opportunistic batches and deeper market-board pagination beyond the first readable cache.
+
 ---
 
 ## Scope And Dependency Order
@@ -84,7 +86,7 @@ This plan covers the whole feature list so execution does not drift. The work is
   - `MarketMafioso.Dashboard/Models/DashboardModels.cs`
   - `MarketMafioso.Tests/MarketAcquisition/MarketAcquisitionPlannerTests.cs`
 
-- [ ] **Step 1: Verify scoped sweep planner tests**
+- [x] **Step 1: Verify scoped sweep planner tests**
 
 Run:
 
@@ -94,7 +96,7 @@ dotnet test "MarketMafioso.Tests\MarketMafioso.Tests.csproj" -c Debug --filter "
 
 Expected: all planner tests pass, including scoped sweep tests for region and selected data centers.
 
-- [ ] **Step 2: Verify server acquisition tests**
+- [x] **Step 2: Verify server acquisition tests**
 
 Run:
 
@@ -104,7 +106,7 @@ dotnet test "MarketMafioso.Server.Tests\MarketMafioso.Server.Tests.csproj" -c De
 
 Expected: all filtered server acquisition tests pass.
 
-- [ ] **Step 3: Update roadmap status for scoped sweep**
+- [x] **Step 3: Update roadmap status for scoped sweep**
 
 In `docs/design/2026-06-28-market-acquisition-multi-item-roadmap.md`, add a short note under Deferred or the relevant phase:
 
@@ -112,7 +114,7 @@ In `docs/design/2026-06-28-market-acquisition-multi-item-roadmap.md`, add a shor
 - Scoped all-world sweep has a first implementation slice: server and dashboard contracts can select region, current data center, or selected data centers, and the planner can create probe-only world stops. Live validation and diagnostics polish remain in the next feature track.
 ```
 
-- [ ] **Step 4: Commit scoped sweep and documents**
+- [x] **Step 4: Commit scoped sweep and documents**
 
 Run:
 
@@ -1785,7 +1787,7 @@ Expected:
 - target is the dedicated deployed DLL path,
 - manifest version is visible and incremented.
 
-- [ ] **Step 4: Deploy server/dashboard only from the intended branch**
+- [x] **Step 4: Deploy server/dashboard only from the intended branch**
 
 Before VPS deployment:
 
@@ -1811,7 +1813,7 @@ Record discoveries about:
 - sweep live validation results,
 - any new UI automation failure surfaces.
 
-- [ ] **Step 6: Commit completed feature track**
+- [x] **Step 6: Commit completed feature track**
 
 Run:
 

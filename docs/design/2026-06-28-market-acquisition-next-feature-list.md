@@ -14,10 +14,12 @@ The normal Universalis update path remains XIVLauncher/Dalamud observing real ma
 
 - Same-world multi-item execution now resets market-board search, candidate, read, and purchase state when advancing from one route line to the next on the same world.
 - The market-board listing reader consumes the full visible `InfoProxyItemSearch` cache and reports when the game reports more listings than that readable cache exposes. Input captures now include `InfoProxyPageInterface` request ids to support pagination investigation. This is diagnostic coverage for truncation, not proof of deeper pagination support.
+- Normal live-read diagnostics now also surface pagination request ids and a safe probe classification, so truncation can be diagnosed from the diagnostics window without relying solely on separate input-capture logs.
 - Universalis freshness verification is wired as post-world diagnostic evidence. Unconfirmed or unavailable freshness checks produce loud post-run warnings but do not block route progress.
 - Planner diagnostics now include per-listing decisions for hard filters, quantity caps, gil caps, and explicit sweep-probe worlds. The diagnostics window exposes these in a `Plan Decisions` table.
 - The dashboard acquisition board now defaults to active requests, has an archive view for terminal batches, and can reuse prior one-line or multi-line batches as composer drafts with `Run again`.
 - Server-side route-log indexing remains future convenience work. The dashboard settings diagnostics view explicitly notes that detailed route logs are currently client-local until the plugin uploads sanitized route summaries.
+- Dev plugin and dev receiver/dashboard were both deployed from `c055e4a` on 2026-06-29 after focused acquisition tests and dashboard build passed.
 
 ## Paper Stack
 

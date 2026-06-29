@@ -37,7 +37,7 @@
 - Test: `MarketMafioso.Tests/MarketAcquisition/MarketBoardInputCaptureReaderTests.cs` if a practical fake can be introduced without large unsafe scaffolding
 - Docs: `docs/design/2026-06-28-market-acquisition-next-feature-list.md`
 
-- [ ] **Step 1: Build and deploy the current request-id capture fields**
+- [x] **Step 1: Build and deploy the current request-id capture fields**
 
 Run:
 
@@ -47,6 +47,8 @@ dotnet build "MarketMafioso/MarketMafioso.csproj" -c Debug
 ```
 
 Expected: build succeeds, deploy script reports matching source/target hashes, and the visible manifest version changes.
+
+Status: Complete. The dev plugin was deployed from `main@c055e4a` with visible manifest `1.1.211.1203`; read results and input captures both carry pagination request IDs.
 
 - [ ] **Step 2: Capture before natural page movement**
 
