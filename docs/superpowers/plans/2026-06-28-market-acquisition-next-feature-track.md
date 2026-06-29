@@ -1844,3 +1844,9 @@ Expected: commit succeeds after verification.
   - Opportunistic checks are default on and configurable off.
   - Universalis failure is loud in post-run diagnostics but never blocks route progress.
   - Sweep should support multiple regions through an explicit region/world catalog, with non-native regions treated as advanced usage rather than the default.
+
+## 2026-06-29 Checkpoint: Visible Listing Cache Exhaustion
+
+Current implementation work distinguishes ordinary no-safe-stock from the market-board visible listing cache being exhausted. The reader can prove when the game reports more listings than the fixed readable cache exposes; the route runner should now preserve that as `SkippedVisibleCacheExhausted` instead of flattening it into `SkippedNoLiveStock`.
+
+This is not deeper pagination. True deeper pagination remains deferred until the plugin has a proven `InfoProxyPageInterface` / market-board request contract or captured packet path for moving beyond the visible listing cache without blindly poking game internals.

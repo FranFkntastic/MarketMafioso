@@ -32,6 +32,27 @@ public static class MarketAcquisitionLiveCandidatePlanner
     public static MarketAcquisitionLiveCandidatePlan BuildCandidatePlan(
         MarketAcquisitionRequestView request,
         MarketAcquisitionPlan plan,
+        string currentWorld,
+        MarketBoardReadResult readResult,
+        uint alreadyPurchasedQuantity = 0,
+        uint alreadySpentGil = 0)
+    {
+        ArgumentNullException.ThrowIfNull(readResult);
+
+        Validate(request, plan, currentWorld, readResult.ItemId);
+        return BuildCandidatePlanCore(
+            request,
+            currentWorld,
+            readResult.ItemId,
+            readResult.Listings,
+            alreadyPurchasedQuantity,
+            alreadySpentGil,
+            readResult);
+    }
+
+    public static MarketAcquisitionLiveCandidatePlan BuildCandidatePlan(
+        MarketAcquisitionRequestView request,
+        MarketAcquisitionPlan plan,
         MarketAcquisitionWorldItemSubtask activeSubtask,
         string currentWorld,
         uint itemId,
@@ -51,13 +72,37 @@ public static class MarketAcquisitionLiveCandidatePlanner
             alreadySpentGil);
     }
 
+    public static MarketAcquisitionLiveCandidatePlan BuildCandidatePlan(
+        MarketAcquisitionRequestView request,
+        MarketAcquisitionPlan plan,
+        MarketAcquisitionWorldItemSubtask activeSubtask,
+        string currentWorld,
+        MarketBoardReadResult readResult,
+        uint alreadyPurchasedQuantity = 0,
+        uint alreadySpentGil = 0)
+    {
+        ArgumentNullException.ThrowIfNull(activeSubtask);
+        ArgumentNullException.ThrowIfNull(readResult);
+
+        Validate(request, plan, activeSubtask, currentWorld, readResult.ItemId);
+        return BuildCandidatePlanCore(
+            request,
+            currentWorld,
+            readResult.ItemId,
+            readResult.Listings,
+            alreadyPurchasedQuantity,
+            alreadySpentGil,
+            readResult);
+    }
+
     private static MarketAcquisitionLiveCandidatePlan BuildCandidatePlanCore(
         MarketAcquisitionRequestView request,
         string currentWorld,
         uint itemId,
         IEnumerable<MarketBoardLiveListing> liveListings,
         uint alreadyPurchasedQuantity,
-        uint alreadySpentGil)
+        uint alreadySpentGil,
+        MarketBoardReadResult? readResult = null)
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(liveListings);
@@ -128,11 +173,15 @@ public static class MarketAcquisitionLiveCandidatePlanner
             });
         }
 
-        var status = ResolveStatus(mode, request.Quantity, checked(alreadyPurchasedQuantity + selectedQuantity), selectedQuantity);
+        var status = ResolveStatus(mode, request.Quantity, checked(alreadyPurchasedQuantity + selectedQuantity), selectedQuantity, readResult);
         return new MarketAcquisitionLiveCandidatePlan
         {
             Status = status,
-            Message = ResolveMessage(status, mode, request.Quantity, alreadyPurchasedQuantity, selectedQuantity),
+            Message = ResolveMessage(status, mode, request.Quantity, alreadyPurchasedQuantity, selectedQuantity, readResult),
+            ReadableListingCount = readResult?.Listings.Count ?? rows.Count,
+            ReportedListingCount = readResult?.ReportedListingCount ?? rows.Count,
+            ListingCapacity = readResult?.ListingCapacity ?? rows.Count,
+            IsVisibleListingCacheTruncated = readResult?.IsListingCountTruncated == true,
             RequestedQuantity = request.Quantity,
             WouldBuyQuantity = selectedQuantity,
             WouldSpendGil = selectedGil,
@@ -232,10 +281,20 @@ public static class MarketAcquisitionLiveCandidatePlanner
             RunningGilAfter = runningGil,
         };
 
-    private static string ResolveStatus(string mode, uint requestedQuantity, uint totalQuantityAfter, uint selectedQuantity)
+    private static string ResolveStatus(
+        string mode,
+        uint requestedQuantity,
+        uint totalQuantityAfter,
+        uint selectedQuantity,
+        MarketBoardReadResult? readResult)
     {
         if (selectedQuantity == 0)
+        {
+            if (readResult?.IsListingCountTruncated == true)
+                return "VisibleCacheExhausted";
+
             return "NoSafeListings";
+        }
 
         if (mode == "TargetQuantity" && totalQuantityAfter < requestedQuantity)
             return "UnderProcured";
@@ -248,12 +307,14 @@ public static class MarketAcquisitionLiveCandidatePlanner
         string mode,
         uint requestedQuantity,
         uint alreadyPurchasedQuantity,
-        uint selectedQuantity) =>
+        uint selectedQuantity,
+        MarketBoardReadResult? readResult) =>
         status switch
         {
             "Ready" when mode == "TargetQuantity" => $"Would satisfy target quantity with {alreadyPurchasedQuantity + selectedQuantity:N0}/{requestedQuantity:N0} confirmed live item(s).",
             "Ready" => $"Would buy {selectedQuantity:N0} confirmed live item(s) below threshold.",
             "UnderProcured" => $"Only {alreadyPurchasedQuantity + selectedQuantity:N0}/{requestedQuantity:N0} requested item(s) are safely available so far.",
+            "VisibleCacheExhausted" => $"No visible live listings satisfy the request constraints; the game reported {readResult?.ReportedListingCount ?? 0:N0} listing(s), but only {readResult?.Listings.Count ?? 0:N0} are currently readable from the visible listing cache.",
             _ => "No visible live listings satisfy the request constraints.",
         };
 }

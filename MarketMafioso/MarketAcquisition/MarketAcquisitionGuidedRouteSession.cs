@@ -189,7 +189,10 @@ public sealed class MarketAcquisitionGuidedRouteSession
                 $"Purchasing {FormatActiveItem(stop)} on {stop.WorldName}: {candidatePlan.WouldBuyQuantity:N0} safe live item(s), {candidatePlan.WouldSpendGil:N0} gil.");
         }
 
-        if (TryAdvanceActiveItemSubtask(stop))
+        if (TryAdvanceActiveItemSubtask(
+                stop,
+                zeroPurchaseStatus: ResolveZeroPurchaseLineStatus(candidatePlan.Status),
+                zeroPurchaseMessage: candidatePlan.Message))
         {
             return MarketAcquisitionGuidedRouteResult.Ok(
                 $"No safe live candidates remained for {FormatPreviousItem(stop)} on {currentWorld}. Next item: {FormatActiveItem(stop)}.");
@@ -205,7 +208,9 @@ public sealed class MarketAcquisitionGuidedRouteSession
     public MarketAcquisitionGuidedRouteResult RecordWorldPurchaseBatchComplete(
         string currentWorld,
         uint purchasedQuantity,
-        uint spentGil)
+        uint spentGil,
+        string? zeroPurchaseStatus = null,
+        string? zeroPurchaseMessage = null)
     {
         var stop = ActiveStop;
         if (stop == null)
@@ -221,7 +226,7 @@ public sealed class MarketAcquisitionGuidedRouteSession
         {
             CompleteActiveStop(purchasedQuantity, spentGil);
         }
-        else if (TryAdvanceActiveItemSubtask(stop, purchasedQuantity, spentGil))
+        else if (TryAdvanceActiveItemSubtask(stop, purchasedQuantity, spentGil, zeroPurchaseStatus, zeroPurchaseMessage))
         {
             return MarketAcquisitionGuidedRouteResult.Ok(
                 $"Completed {FormatPreviousItem(stop)} on {currentWorld}: purchased {purchasedQuantity:N0} item(s), spent {spentGil:N0} gil. Next item: {FormatActiveItem(stop)}.");
@@ -258,20 +263,23 @@ public sealed class MarketAcquisitionGuidedRouteSession
     private static bool TryAdvanceActiveItemSubtask(
         MarketAcquisitionGuidedRouteStop stop,
         uint purchasedQuantity = 0,
-        uint spentGil = 0)
+        uint spentGil = 0,
+        string? zeroPurchaseStatus = null,
+        string? zeroPurchaseMessage = null)
     {
         if (stop.ItemSubtasks.Count == 0)
             return false;
 
+        var didPurchase = purchasedQuantity > 0 || spentGil > 0;
         stop.PurchasedQuantity = checked(stop.PurchasedQuantity + purchasedQuantity);
         stop.SpentGil = checked(stop.SpentGil + spentGil);
         UpdateActiveLine(
             stop,
-            status: purchasedQuantity == 0 && spentGil == 0 ? "SkippedNoLiveStock" : "Complete",
+            status: didPurchase ? "Complete" : zeroPurchaseStatus ?? "SkippedNoLiveStock",
             purchasedQuantity,
             spentGil,
-            purchasedQuantity == 0 && spentGil == 0
-                ? "No safe live candidates remained."
+            !didPurchase
+                ? zeroPurchaseMessage ?? "No safe live candidates remained."
                 : $"Purchased {purchasedQuantity:N0} item(s), spent {spentGil:N0} gil.");
         stop.CompletedItemSubtaskCount++;
         if (stop.CompletedItemSubtaskCount >= stop.ItemSubtasks.Count)
@@ -317,6 +325,11 @@ public sealed class MarketAcquisitionGuidedRouteSession
         FailedLineCount = stop.LineStates.Count(line => line.Status.Equals("Failed", StringComparison.OrdinalIgnoreCase)),
         Message = $"{stop.WorldName} complete: bought {stop.PurchasedQuantity:N0} item(s), spent {stop.SpentGil:N0} gil across {stop.LineStates.Count:N0} line(s).",
     };
+
+    private static string ResolveZeroPurchaseLineStatus(string candidateStatus) =>
+        candidateStatus.Equals("VisibleCacheExhausted", StringComparison.OrdinalIgnoreCase)
+            ? "SkippedVisibleCacheExhausted"
+            : "SkippedNoLiveStock";
 
     private static string FormatActiveItem(MarketAcquisitionGuidedRouteStop stop) =>
         FormatItem(stop.ActiveItemSubtask);

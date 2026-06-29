@@ -978,8 +978,7 @@ public class MainWindow : Window, IDisposable
                 activeLine,
                 plan,
                 currentWorld,
-                freshRead.ItemId,
-                freshRead.Listings,
+                freshRead,
                 activeWorldPurchasedQuantity,
                 activeWorldSpentGil)
             : MarketAcquisitionLiveCandidatePlanner.BuildCandidatePlan(
@@ -987,10 +986,9 @@ public class MainWindow : Window, IDisposable
                 plan,
                 activeStop.ActiveItemSubtask,
                 currentWorld,
-                freshRead.ItemId,
-                freshRead.Listings,
-                activeWorldPurchasedQuantity,
-                activeWorldSpentGil);
+                freshRead,
+                activeLinePurchasedQuantity,
+                activeLineSpentGil);
         marketBoardPurchaseResult = marketBoardPurchaseExecutor.ExecuteFirstCandidate(
             marketAcquisitionLiveCandidatePlan,
             freshRead);
@@ -1024,9 +1022,7 @@ public class MainWindow : Window, IDisposable
         var activeSubtask = marketAcquisitionRouteRunner.ActiveStop?.ActiveItemSubtask;
         if (activeSubtask != null && claimedAcquisitionRequest != null)
         {
-            var lineStatus = activeLinePurchasedQuantity == 0
-                ? "SkippedNoLiveStock"
-                : "Complete";
+            var lineStatus = ResolveZeroPurchaseLineStatus(marketAcquisitionLiveCandidatePlan, activeLinePurchasedQuantity, activeLineSpentGil);
             ReportAcquisitionLineProgress(
                 activeSubtask,
                 lineStatus,
@@ -1038,7 +1034,13 @@ public class MainWindow : Window, IDisposable
         var result = marketAcquisitionRouteRunner.RecordWorldPurchaseBatchComplete(
             currentWorld,
             activeSubtask == null ? activeWorldPurchasedQuantity : activeLinePurchasedQuantity,
-            activeSubtask == null ? activeWorldSpentGil : activeLineSpentGil);
+            activeSubtask == null ? activeWorldSpentGil : activeLineSpentGil,
+            activeLinePurchasedQuantity == 0 && activeLineSpentGil == 0
+                ? ResolveZeroPurchaseLineStatus(marketAcquisitionLiveCandidatePlan, activeLinePurchasedQuantity, activeLineSpentGil)
+                : null,
+            activeLinePurchasedQuantity == 0 && activeLineSpentGil == 0
+                ? marketAcquisitionLiveCandidatePlan?.Message
+                : null);
         acquisitionStatus = result.Message;
         marketBoardPurchaseSession = null;
         marketBoardPurchaseResult = null;
@@ -1454,6 +1456,19 @@ public class MainWindow : Window, IDisposable
                $"{diagnostics.PlannedListingCount:N0} planned.";
     }
 
+    private static string ResolveZeroPurchaseLineStatus(
+        MarketAcquisitionLiveCandidatePlan? candidatePlan,
+        uint purchasedQuantity,
+        uint spentGil)
+    {
+        if (purchasedQuantity > 0 || spentGil > 0)
+            return "Complete";
+
+        return candidatePlan?.Status.Equals("VisibleCacheExhausted", StringComparison.OrdinalIgnoreCase) == true
+            ? "SkippedVisibleCacheExhausted"
+            : "SkippedNoLiveStock";
+    }
+
     private Task ProbeLiveMarketBoardAsync()
     {
         return RunAcquisitionRequestAsync(_ =>
@@ -1497,15 +1512,17 @@ public class MainWindow : Window, IDisposable
                     activeLine,
                     plan,
                     currentWorld,
-                    marketBoardReadResult.ItemId,
-                    marketBoardReadResult.Listings)
+                    marketBoardReadResult,
+                    activeSubtask == null ? activeWorldPurchasedQuantity : activeLinePurchasedQuantity,
+                    activeSubtask == null ? activeWorldSpentGil : activeLineSpentGil)
                 : MarketAcquisitionLiveCandidatePlanner.BuildCandidatePlan(
                     activeLine,
                     plan,
                     activeSubtask,
                     currentWorld,
-                    marketBoardReadResult.ItemId,
-                    marketBoardReadResult.Listings)
+                    marketBoardReadResult,
+                    activeLinePurchasedQuantity,
+                    activeLineSpentGil)
             : null;
         var guidedRouteResult = marketAcquisitionRouteRunner.IsRunning &&
                                 marketAcquisitionRouteRunner.ActiveStop is { Status: "Arrived" } &&

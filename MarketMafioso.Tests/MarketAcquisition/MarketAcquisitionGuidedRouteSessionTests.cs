@@ -218,6 +218,26 @@ public sealed class MarketAcquisitionGuidedRouteSessionTests
     }
 
     [Fact]
+    public void RecordProbe_WithVisibleCacheExhaustionPreservesLineSkipReason()
+    {
+        var session = MarketMafioso.MarketAcquisition.MarketAcquisitionGuidedRouteSession.Start(CreateMultiItemWorldPlan());
+
+        var result = session.RecordProbe(
+            "Maduin",
+            CreateCandidatePlan(
+                status: "VisibleCacheExhausted",
+                quantity: 0,
+                gil: 0,
+                message: "No visible safe listings; the game reported more rows than the readable cache exposes."));
+
+        Assert.True(result.Success);
+        var skippedLine = Assert.Single(session.Stops[0].LineStates, line => line.LineId == "line-1");
+        Assert.Equal("SkippedVisibleCacheExhausted", skippedLine.Status);
+        Assert.Contains("readable cache", skippedLine.LatestMessage, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("line-2", session.ActiveStop?.ActiveItemSubtask?.LineId);
+    }
+
+    [Fact]
     public void RecordWorldPurchaseBatchComplete_AdvancesToNextStop()
     {
         var session = MarketMafioso.MarketAcquisition.MarketAcquisitionGuidedRouteSession.Start(CreatePlan("Zalera", "Maduin"));
@@ -378,11 +398,12 @@ public sealed class MarketAcquisitionGuidedRouteSessionTests
     private static MarketMafioso.MarketAcquisition.MarketAcquisitionLiveCandidatePlan CreateCandidatePlan(
         string status,
         uint quantity,
-        uint gil) =>
+        uint gil,
+        string message = "Live candidate result.") =>
         new()
         {
             Status = status,
-            Message = "Live candidate result.",
+            Message = message,
             RequestedQuantity = 999,
             WouldBuyQuantity = quantity,
             WouldSpendGil = gil,

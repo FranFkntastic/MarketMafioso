@@ -143,12 +143,13 @@ Exit criteria:
 - Non-catastrophic line exhaustion continues to the next line. Done in route session for no-safe-candidates and purchase-complete transitions on the same world.
 - Catastrophic/ambiguous failures stop the batch.
 - The market-board reader exposes listing-cache capacity and truncation diagnostics when the game reports more listings than the readable cache contains.
+- The route session preserves visible-cache exhaustion as a line-level skip reason instead of presenting it as ordinary no-safe-stock.
 - Planner diagnostics explain accepted/rejected listings, including price, HQ policy, world scope, gil cap, quantity cap, wrong item, and sweep-probe worlds.
 
 Current caveat:
 
 - Opportunistic subtasks can now be probed and reconciled against live market-board rows, but live validation still needs more end-to-end testing for mid-flight plan expansion.
-- The market-board listing reader now reports when the game exposes more listings than the readable `InfoProxyItemSearch` cache. This is truncation evidence, not deeper-pagination support.
+- The market-board listing reader now reports when the game exposes more listings than the readable `InfoProxyItemSearch` cache, and zero-purchase line advancement preserves that as `SkippedVisibleCacheExhausted`. This is truncation-aware behavior, not deeper-pagination support.
 
 ## Phase 6: Per-Line Progress And Audit
 
@@ -187,6 +188,6 @@ Exit criteria:
 
 - Global batch gil cap.
 - Server-side route-log indexing.
-- Deeper market-board pagination beyond the visible game listing cache.
+- Deeper market-board pagination beyond the visible game listing cache. This needs a proven `InfoProxyPageInterface` / request-data contract or packet-capture-backed implementation before it is safe to automate.
 - Craft Architect quality planning integration.
 - Native travel automation beyond Lifestream.

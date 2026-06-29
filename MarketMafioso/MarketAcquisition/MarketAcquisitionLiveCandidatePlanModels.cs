@@ -6,6 +6,10 @@ public sealed record MarketAcquisitionLiveCandidatePlan
 {
     public string Status { get; init; } = string.Empty;
     public string Message { get; init; } = string.Empty;
+    public int ReadableListingCount { get; init; }
+    public int ReportedListingCount { get; init; }
+    public int ListingCapacity { get; init; }
+    public bool IsVisibleListingCacheTruncated { get; init; }
     public uint RequestedQuantity { get; init; }
     public uint WouldBuyQuantity { get; init; }
     public uint WouldSpendGil { get; init; }

@@ -673,13 +673,21 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
     public MarketAcquisitionRouteActionResult RecordWorldPurchaseBatchComplete(
         string currentWorld,
         uint purchasedQuantity,
-        uint spentGil)
+        uint spentGil,
+        string? zeroPurchaseStatus = null,
+        string? zeroPurchaseMessage = null)
     {
         if (!IsRunning)
             return Fail($"Route is {State}; world purchase result was not recorded.");
 
-        var result = session?.RecordWorldPurchaseBatchComplete(currentWorld, purchasedQuantity, spentGil) ??
-                     MarketAcquisitionGuidedRouteResult.Fail("No route has started.");
+        var completedSubtaskSource = session?.ActiveStop?.ActiveItemSubtask?.Source;
+        var result = session?.RecordWorldPurchaseBatchComplete(
+            currentWorld,
+            purchasedQuantity,
+            spentGil,
+            zeroPurchaseStatus,
+            zeroPurchaseMessage) ??
+                      MarketAcquisitionGuidedRouteResult.Fail("No route has started.");
         StatusMessage = result.Message;
         SearchSubmitted = false;
         itemSearchAutomationStartedUtc = null;
@@ -691,7 +699,9 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
                 ["currentWorld"] = currentWorld,
                 ["purchasedQuantity"] = purchasedQuantity.ToString(),
                 ["spentGil"] = spentGil.ToString(),
-                ["subtaskSource"] = session?.ActiveStop?.ActiveItemSubtask?.Source,
+                ["subtaskSource"] = completedSubtaskSource,
+                ["zeroPurchaseStatus"] = zeroPurchaseStatus,
+                ["zeroPurchaseMessage"] = zeroPurchaseMessage,
                 ["success"] = result.Success.ToString(),
             });
 

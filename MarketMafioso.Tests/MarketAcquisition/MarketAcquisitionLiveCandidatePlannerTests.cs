@@ -55,6 +55,39 @@ public sealed class MarketAcquisitionLiveCandidatePlannerTests
     }
 
     [Fact]
+    public void BuildCandidatePlan_DistinguishesVisibleCacheExhaustionFromOrdinaryNoSafeListings()
+    {
+        var request = CreateRequest(quantityMode: "AllBelowThreshold", quantity: 0, maxUnitPrice: 100, maxTotalGil: 0);
+        var plan = CreatePlan();
+        var readResult = new MarketMafioso.MarketAcquisition.MarketBoardReadResult
+        {
+            Status = "Ready",
+            Message = "Read truncated market board listings.",
+            ItemId = 2,
+            WorldName = "Gilgamesh",
+            ReportedListingCount = 120,
+            ListingCapacity = 100,
+            IsAtListingCapacity = true,
+            IsListingCountTruncated = true,
+            Listings =
+            [
+                CreateLiveListing("too-expensive", quantity: 1, unitPrice: 101),
+            ],
+        };
+
+        var candidatePlan = MarketMafioso.MarketAcquisition.MarketAcquisitionLiveCandidatePlanner.BuildCandidatePlan(
+            request,
+            plan,
+            "Gilgamesh",
+            readResult);
+
+        Assert.Equal("VisibleCacheExhausted", candidatePlan.Status);
+        Assert.True(candidatePlan.IsVisibleListingCacheTruncated);
+        Assert.Equal(120, candidatePlan.ReportedListingCount);
+        Assert.Contains("only 1", candidatePlan.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void BuildCandidatePlan_AllBelowThresholdRespectsMaxQuantityWhenProvided()
     {
         var request = CreateRequest(quantityMode: "AllBelowThreshold", quantity: 5, maxUnitPrice: 100, maxTotalGil: 0);
