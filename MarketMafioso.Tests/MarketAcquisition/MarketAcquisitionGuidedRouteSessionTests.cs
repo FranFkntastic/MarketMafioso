@@ -208,13 +208,66 @@ public sealed class MarketAcquisitionGuidedRouteSessionTests
     {
         var session = MarketMafioso.MarketAcquisition.MarketAcquisitionGuidedRouteSession.Start(CreateMultiItemWorldPlan());
 
-        var result = session.RecordProbe("Maduin", CreateCandidatePlan(status: "NoSafeListings", quantity: 0, gil: 0));
+        var result = session.RecordProbe(
+            "Maduin",
+            CreateObservedCandidatePlan(
+                status: "NoSafeListings",
+                quantity: 0,
+                gil: 0,
+                rows:
+                [
+                    CreateLiveCandidateRow(decision: "Skipped", reason: "AboveThreshold", quantity: 5, unitPrice: 200),
+                ]));
 
         Assert.True(result.Success);
         Assert.Equal("Active", session.Status);
         Assert.Equal("Arrived", session.ActiveStop?.Status);
         Assert.Equal("line-2", session.ActiveStop?.ActiveItemSubtask?.LineId);
         Assert.Equal(1, session.ActiveStop?.CompletedItemSubtaskCount);
+        var firstLine = Assert.Single(session.Stops[0].LineStates, line => line.LineId == "line-1");
+        Assert.Equal("NoSafeListings", firstLine.LiveCandidateStatus);
+        Assert.Equal(1, firstLine.LiveReadableListingCount);
+        Assert.Equal(1, firstLine.LiveReportedListingCount);
+        Assert.Equal(5u, firstLine.LiveObservedQuantity);
+        Assert.Equal(1_000u, firstLine.LiveObservedGil);
+        Assert.Equal(0u, firstLine.WouldBuyQuantity);
+    }
+
+    [Fact]
+    public void RecordProbe_WithMultipleItemWorldPreservesEachLineLiveProbe()
+    {
+        var session = MarketMafioso.MarketAcquisition.MarketAcquisitionGuidedRouteSession.Start(CreateMultiItemWorldPlan());
+
+        session.RecordProbe(
+            "Maduin",
+            CreateObservedCandidatePlan(
+                status: "NoSafeListings",
+                quantity: 0,
+                gil: 0,
+                rows:
+                [
+                    CreateLiveCandidateRow(decision: "Skipped", reason: "AboveThreshold", quantity: 5, unitPrice: 200),
+                ]));
+        var result = session.RecordProbe(
+            "Maduin",
+            CreateObservedCandidatePlan(
+                status: "Ready",
+                quantity: 3,
+                gil: 150,
+                rows:
+                [
+                    CreateLiveCandidateRow(decision: "WouldBuy", reason: "SafeLiveCandidate", quantity: 3, unitPrice: 50),
+                ]));
+
+        Assert.True(result.Success);
+        var stop = Assert.Single(session.Stops);
+        var firstLine = Assert.Single(stop.LineStates, line => line.LineId == "line-1");
+        var secondLine = Assert.Single(stop.LineStates, line => line.LineId == "line-2");
+        Assert.Equal("NoSafeListings", firstLine.LiveCandidateStatus);
+        Assert.Equal(5u, firstLine.LiveObservedQuantity);
+        Assert.Equal("Ready", secondLine.LiveCandidateStatus);
+        Assert.Equal(3u, secondLine.LiveObservedQuantity);
+        Assert.Equal(150u, secondLine.WouldSpendGil);
     }
 
     [Fact]
@@ -408,5 +461,45 @@ public sealed class MarketAcquisitionGuidedRouteSessionTests
             WouldBuyQuantity = quantity,
             WouldSpendGil = gil,
             Rows = [],
+        };
+
+    private static MarketMafioso.MarketAcquisition.MarketAcquisitionLiveCandidatePlan CreateObservedCandidatePlan(
+        string status,
+        uint quantity,
+        uint gil,
+        IReadOnlyList<MarketMafioso.MarketAcquisition.MarketAcquisitionLiveCandidateRow> rows,
+        string message = "Live candidate result.") =>
+        new()
+        {
+            Status = status,
+            Message = message,
+            ReadableListingCount = rows.Count,
+            ReportedListingCount = rows.Count,
+            ListingCapacity = Math.Max(rows.Count, 10),
+            RequestedQuantity = 999,
+            WouldBuyQuantity = quantity,
+            WouldSpendGil = gil,
+            Rows = rows,
+        };
+
+    private static MarketMafioso.MarketAcquisition.MarketAcquisitionLiveCandidateRow CreateLiveCandidateRow(
+        string decision,
+        string reason,
+        uint quantity,
+        uint unitPrice) =>
+        new()
+        {
+            Decision = decision,
+            Reason = reason,
+            Message = "Test row.",
+            LiveListing = new MarketMafioso.MarketAcquisition.MarketBoardLiveListing
+            {
+                ItemId = 2,
+                WorldName = "Maduin",
+                ListingId = Guid.NewGuid().ToString("N"),
+                RetainerName = "Test Retainer",
+                Quantity = quantity,
+                UnitPrice = unitPrice,
+            },
         };
 }

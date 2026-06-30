@@ -6,6 +6,7 @@ namespace MarketMafioso.MarketAcquisition;
 public sealed record MarketBoardLiveListing
 {
     public uint ItemId { get; init; }
+    public uint? RawItemId { get; init; }
     public string WorldName { get; init; } = string.Empty;
     public string ListingId { get; init; } = string.Empty;
     public string RetainerId { get; init; } = string.Empty;

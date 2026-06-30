@@ -17,6 +17,10 @@ public sealed class MarketAcquisitionRouteDiagnosticsTests
         Assert.StartsWith(directory, diagnostics.FilePath, StringComparison.Ordinal);
         Assert.EndsWith("route-20260625-224512.log", diagnostics.FilePath, StringComparison.Ordinal);
         Assert.True(File.Exists(diagnostics.FilePath));
+        Assert.EndsWith("observed-listings-20260625-224512.csv", diagnostics.ObservedListingsCsvPath, StringComparison.Ordinal);
+        Assert.True(File.Exists(diagnostics.ObservedListingsCsvPath));
+        Assert.EndsWith("purchase-records-20260625-224512.csv", diagnostics.PurchaseRecordsCsvPath, StringComparison.Ordinal);
+        Assert.True(File.Exists(diagnostics.PurchaseRecordsCsvPath));
     }
 
     [Fact]
@@ -34,6 +38,8 @@ public sealed class MarketAcquisitionRouteDiagnosticsTests
         Assert.StartsWith(directory, diagnostics.FilePath, StringComparison.Ordinal);
         Assert.EndsWith("input-capture-20260625-224512.log", diagnostics.FilePath, StringComparison.Ordinal);
         Assert.True(File.Exists(diagnostics.FilePath));
+        Assert.Null(diagnostics.ObservedListingsCsvPath);
+        Assert.Null(diagnostics.PurchaseRecordsCsvPath);
     }
 
     [Fact]
@@ -107,6 +113,117 @@ public sealed class MarketAcquisitionRouteDiagnosticsTests
         Assert.Contains("outcome: Recoverable", text, StringComparison.Ordinal);
         Assert.Contains("nextAction: RetryHumanEnterPath", text, StringComparison.Ordinal);
         Assert.Contains("searchText: Varnish", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RecordObservedListings_WritesCandidateRowsToCsv()
+    {
+        var directory = CreateTempDirectory();
+        using var diagnostics = MarketMafioso.MarketAcquisition.MarketAcquisitionRouteDiagnostics.CreateEnabled(
+            directory,
+            DateTimeOffset.UnixEpoch);
+
+        diagnostics.RecordObservedListings(
+            "request-1",
+            "Coeurl",
+            "Crystal",
+            new MarketMafioso.MarketAcquisition.MarketAcquisitionWorldItemSubtask
+            {
+                LineId = "line-1",
+                LineOrdinal = 2,
+                Source = "Planned",
+                ItemId = 5121,
+                ItemName = "Darksteel Ore",
+            },
+            new MarketMafioso.MarketAcquisition.MarketAcquisitionLiveCandidatePlan
+            {
+                Status = "Ready",
+                Message = "Would buy this row.",
+                ReadableListingCount = 1,
+                ReportedListingCount = 32,
+                ListingCapacity = 100,
+                IsVisibleListingCacheTruncated = false,
+                RequestedQuantity = 999,
+                WouldBuyQuantity = 55,
+                WouldSpendGil = 30140,
+                Rows =
+                [
+                    new MarketMafioso.MarketAcquisition.MarketAcquisitionLiveCandidateRow
+                    {
+                        Decision = "WouldBuy",
+                        Reason = "SafeLiveCandidate",
+                        Message = "Below threshold.",
+                        RunningQuantityAfter = 55,
+                        RunningGilAfter = 30140,
+                        LiveListing = new MarketMafioso.MarketAcquisition.MarketBoardLiveListing
+                        {
+                            ItemId = 5121,
+                            RawItemId = 5121,
+                            WorldName = "Coeurl",
+                            ListingId = "listing-1",
+                            RetainerId = "retainer-1",
+                            RetainerName = "Eth",
+                            UnitPrice = 548,
+                            Quantity = 55,
+                        },
+                    },
+                ],
+            });
+
+        var csv = ReadLog(diagnostics.ObservedListingsCsvPath!);
+        Assert.Contains("request-1,Coeurl,Crystal,line-1,2,Planned,5121,Darksteel Ore", csv, StringComparison.Ordinal);
+        Assert.Contains("WouldBuy,SafeLiveCandidate,Below threshold.,5121,5121,Coeurl,listing-1,retainer-1,Eth,548,55,30140,False,55,30140", csv, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RecordObservedListings_WritesZeroRowProbeSummaryToCsv()
+    {
+        var directory = CreateTempDirectory();
+        using var diagnostics = MarketMafioso.MarketAcquisition.MarketAcquisitionRouteDiagnostics.CreateEnabled(
+            directory,
+            DateTimeOffset.UnixEpoch);
+
+        diagnostics.RecordObservedListings(
+            "request-1",
+            "Coeurl",
+            "Crystal",
+            null,
+            new MarketMafioso.MarketAcquisition.MarketAcquisitionLiveCandidatePlan
+            {
+                Status = "VisibleCacheExhausted",
+                Message = "No safe rows.",
+                ReportedListingCount = 32,
+                ListingCapacity = 100,
+                IsVisibleListingCacheTruncated = true,
+            });
+
+        var csv = ReadLog(diagnostics.ObservedListingsCsvPath!);
+        Assert.Contains("VisibleCacheExhausted,No safe rows.,0,32,100,True", csv, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RecordPurchaseAudit_WritesPurchaseRecordsCsv()
+    {
+        var directory = CreateTempDirectory();
+        using var diagnostics = MarketMafioso.MarketAcquisition.MarketAcquisitionRouteDiagnostics.CreateEnabled(
+            directory,
+            DateTimeOffset.UnixEpoch);
+
+        diagnostics.RecordPurchaseAudit(
+            "request-1",
+            "Crystal",
+            "line-1",
+            "Darksteel Ore",
+            "Coeurl",
+            "listing-1",
+            "retainer-1",
+            55,
+            30140,
+            "Purchased",
+            "Planned");
+
+        var csv = ReadLog(diagnostics.PurchaseRecordsCsvPath!);
+        Assert.Contains("request-1,Coeurl,Crystal,line-1,Darksteel Ore,Planned,purchase-audit,Purchased,listing-1,retainer-1,55,30140,548", csv, StringComparison.Ordinal);
     }
 
     [Fact]

@@ -1802,15 +1802,48 @@ public class MainWindow : Window, IDisposable
                 ImGui.TableNextColumn();
                 ImGui.TextUnformatted($"{stop.PlannedQuantity:N0} / {FormatGil(stop.PlannedGil)}");
                 ImGui.TableNextColumn();
-                ImGui.TextUnformatted(stop.WouldBuyQuantity == 0
-                    ? "-"
-                    : $"{stop.WouldBuyQuantity:N0} / {FormatGil(stop.WouldSpendGil)}");
+                ImGui.TextUnformatted(FormatGuidedRouteLiveSummary(stop));
                 ImGui.TableNextColumn();
-                ImGui.TextUnformatted(stop.LiveCandidateStatus ?? "-");
+                ImGui.TextUnformatted(FormatGuidedRouteLiveCandidateSummary(stop));
             }
 
             ImGui.EndTable();
         }
+    }
+
+    private static string FormatGuidedRouteLiveSummary(MarketAcquisitionGuidedRouteStop stop)
+    {
+        var probedLines = stop.LineStates
+            .Where(line => !string.IsNullOrWhiteSpace(line.LiveCandidateStatus))
+            .ToList();
+        if (probedLines.Count == 0)
+            return stop.WouldBuyQuantity == 0
+                ? "-"
+                : $"{stop.WouldBuyQuantity:N0} / {FormatGil(stop.WouldSpendGil)}";
+
+        var observedQuantity = probedLines.Aggregate(0u, (total, line) => checked(total + line.LiveObservedQuantity));
+        var observedGil = probedLines.Aggregate(0u, (total, line) => checked(total + line.LiveObservedGil));
+        var readableListings = probedLines.Sum(line => line.LiveReadableListingCount);
+        var reportedListings = probedLines.Sum(line => line.LiveReportedListingCount);
+        var listingSuffix = reportedListings > 0
+            ? $" ({readableListings:N0}/{reportedListings:N0} rows)"
+            : string.Empty;
+
+        return $"{observedQuantity:N0} / {FormatGil(observedGil)}{listingSuffix}";
+    }
+
+    private static string FormatGuidedRouteLiveCandidateSummary(MarketAcquisitionGuidedRouteStop stop)
+    {
+        var probedStatuses = stop.LineStates
+            .Where(line => !string.IsNullOrWhiteSpace(line.LiveCandidateStatus))
+            .GroupBy(line => line.LiveCandidateStatus!, StringComparer.OrdinalIgnoreCase)
+            .OrderBy(group => group.Key, StringComparer.OrdinalIgnoreCase)
+            .Select(group => $"{group.Count():N0} {group.Key}");
+
+        var summary = string.Join(" / ", probedStatuses);
+        return string.IsNullOrWhiteSpace(summary)
+            ? stop.LiveCandidateStatus ?? "-"
+            : summary;
     }
 
     private Task StartGuidedRouteAsync(bool enableDiagnostics)

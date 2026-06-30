@@ -175,6 +175,7 @@ public sealed class MarketAcquisitionGuidedRouteSession
         stop.LiveCandidateStatus = candidatePlan.Status;
         stop.WouldBuyQuantity = candidatePlan.WouldBuyQuantity;
         stop.WouldSpendGil = candidatePlan.WouldSpendGil;
+        UpdateActiveLineProbe(stop, candidatePlan);
 
         if (candidatePlan.WouldBuyQuantity > 0)
         {
@@ -314,6 +315,46 @@ public sealed class MarketAcquisitionGuidedRouteSession
         line.LatestMessage = message;
     }
 
+    private static void UpdateActiveLineProbe(
+        MarketAcquisitionGuidedRouteStop stop,
+        MarketAcquisitionLiveCandidatePlan candidatePlan)
+    {
+        var activeSubtask = stop.ActiveItemSubtask;
+        if (activeSubtask == null)
+            return;
+
+        var line = stop.LineStates.FirstOrDefault(lineState =>
+            lineState.LineId.Equals(activeSubtask.LineId, StringComparison.Ordinal));
+        if (line == null)
+            return;
+
+        line.LiveCandidateStatus = candidatePlan.Status;
+        line.LiveReadableListingCount = candidatePlan.ReadableListingCount;
+        line.LiveReportedListingCount = candidatePlan.ReportedListingCount;
+        line.LiveObservedQuantity = SumObservedQuantity(candidatePlan);
+        line.LiveObservedGil = SumObservedGil(candidatePlan);
+        line.WouldBuyQuantity = candidatePlan.WouldBuyQuantity;
+        line.WouldSpendGil = candidatePlan.WouldSpendGil;
+    }
+
+    private static uint SumObservedQuantity(MarketAcquisitionLiveCandidatePlan candidatePlan)
+    {
+        var total = 0u;
+        foreach (var row in candidatePlan.Rows)
+            total = checked(total + row.LiveListing.Quantity);
+
+        return total;
+    }
+
+    private static uint SumObservedGil(MarketAcquisitionLiveCandidatePlan candidatePlan)
+    {
+        var total = 0u;
+        foreach (var row in candidatePlan.Rows)
+            total = checked(total + checked(row.LiveListing.UnitPrice * row.LiveListing.Quantity));
+
+        return total;
+    }
+
     private static MarketAcquisitionWorldCompletionSummary BuildWorldSummary(MarketAcquisitionGuidedRouteStop stop) => new()
     {
         WorldName = stop.WorldName,
@@ -388,6 +429,13 @@ public sealed record MarketAcquisitionRouteLineState
     public uint PlannedGil { get; init; }
     public uint PurchasedQuantity { get; set; }
     public uint SpentGil { get; set; }
+    public string? LiveCandidateStatus { get; set; }
+    public int LiveReadableListingCount { get; set; }
+    public int LiveReportedListingCount { get; set; }
+    public uint LiveObservedQuantity { get; set; }
+    public uint LiveObservedGil { get; set; }
+    public uint WouldBuyQuantity { get; set; }
+    public uint WouldSpendGil { get; set; }
     public string? LatestMessage { get; set; }
 }
 

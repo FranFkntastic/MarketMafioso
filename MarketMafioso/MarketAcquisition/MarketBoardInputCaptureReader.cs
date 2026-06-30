@@ -166,7 +166,7 @@ public sealed class MarketBoardInputCaptureReader
             var listing = infoProxy->Listings[index];
             values[index] = string.Create(
                 CultureInfo.InvariantCulture,
-                $"{listing.ListingId}/{listing.UnitPrice}/{listing.Quantity}/{(listing.IsHqItem ? "HQ" : "NQ")}");
+                $"{listing.ListingId}/{listing.ItemId}/{listing.UnitPrice}/{listing.Quantity}/{(listing.IsHqItem ? "HQ" : "NQ")}");
         }
 
         return string.Join(",", values);

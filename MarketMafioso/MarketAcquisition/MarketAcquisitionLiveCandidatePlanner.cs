@@ -155,6 +155,7 @@ public static class MarketAcquisitionLiveCandidatePlanner
         var rows = new List<MarketAcquisitionLiveCandidateRow>();
 
         var candidates = liveListings
+            .Where(MarketBoardListingIntegrity.IsRealListing)
             .Select(listing => ValidateLiveListing(listing, currentWorld, itemId))
             .OrderBy(listing => listing.UnitPrice)
             .ThenByDescending(listing => listing.Quantity)

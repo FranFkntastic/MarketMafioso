@@ -41,6 +41,26 @@ public sealed class MarketBoardPurchasePlannerTests
     }
 
     [Fact]
+    public void SelectFirstCandidate_IgnoresInvalidZeroWouldBuyRows()
+    {
+        var candidatePlan = new MarketMafioso.MarketAcquisition.MarketAcquisitionLiveCandidatePlan
+        {
+            Status = "Ready",
+            Rows =
+            [
+                CreateRow("WouldBuy", CreateInvalidListing()),
+                CreateRow("WouldBuy", CreateListing("real", unitPrice: 900)),
+            ],
+        };
+
+        var candidate = MarketMafioso.MarketAcquisition.MarketBoardPurchasePlanner.SelectFirstCandidate(candidatePlan);
+
+        Assert.NotNull(candidate);
+        Assert.Equal("real", candidate.ListingId);
+        Assert.Equal(900u, candidate.UnitPrice);
+    }
+
+    [Fact]
     public void RevalidateCandidate_ReturnsReadyWhenFreshListingMatches()
     {
         var candidate = CreateCandidate("cheap");
@@ -104,6 +124,27 @@ public sealed class MarketBoardPurchasePlannerTests
         Assert.False(result.CanAttemptPurchase);
     }
 
+    [Fact]
+    public void RevalidateCandidate_RejectsInvalidZeroCandidate()
+    {
+        var candidate = MarketMafioso.MarketAcquisition.MarketBoardPurchaseCandidate.FromLiveListing(CreateInvalidListing());
+        var freshRead = new MarketMafioso.MarketAcquisition.MarketBoardReadResult
+        {
+            Status = "Ready",
+            ItemId = 7017,
+            WorldName = "Rafflesia",
+            Listings =
+            [
+                CreateInvalidListing(),
+            ],
+        };
+
+        var result = MarketMafioso.MarketAcquisition.MarketBoardPurchasePlanner.RevalidateCandidate(candidate, freshRead);
+
+        Assert.Equal("InvalidCandidate", result.Status);
+        Assert.False(result.CanAttemptPurchase);
+    }
+
     private static MarketMafioso.MarketAcquisition.MarketBoardPurchaseCandidate CreateCandidate(string listingId) =>
         MarketMafioso.MarketAcquisition.MarketBoardPurchaseCandidate.FromLiveListing(CreateListing(listingId));
 
@@ -130,6 +171,18 @@ public sealed class MarketBoardPurchasePlannerTests
             RetainerName = "Pann",
             UnitPrice = unitPrice,
             Quantity = quantity,
+            IsHq = false,
+        };
+
+    private static MarketMafioso.MarketAcquisition.MarketBoardLiveListing CreateInvalidListing() =>
+        new()
+        {
+            ItemId = 7017,
+            WorldName = "Rafflesia",
+            ListingId = "0",
+            RetainerId = "0",
+            UnitPrice = 0,
+            Quantity = 0,
             IsHq = false,
         };
 }

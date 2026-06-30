@@ -26,6 +26,7 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
     private bool standaloneInputCaptureLogOpen;
     private DateTimeOffset? itemSearchAutomationStartedUtc;
     private string? lastWorldSummarySignature;
+    private string? currentRequestId;
 
     public MarketAcquisitionRouteRunner(string diagnosticsDirectory)
         : this(diagnosticsDirectory, null)
@@ -93,6 +94,7 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
             : MarketAcquisitionRouteDiagnostics.Disabled;
         LastDiagnosticFilePath = diagnostics.FilePath;
         session = MarketAcquisitionGuidedRouteSession.Start(plan, includeOpportunisticChecks);
+        currentRequestId = plan.RequestId;
         State = "Running";
         SearchSubmitted = false;
         MarketBoardCloseRequiredBeforeTravel = false;
@@ -175,6 +177,7 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
     {
         CloseDiagnostics();
         session = null;
+        currentRequestId = null;
         State = "Idle";
         StatusMessage = statusMessage;
         SearchSubmitted = false;
@@ -553,6 +556,10 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         if (!IsRunning)
             return Fail($"Route is {State}; probe result was not recorded.");
 
+        var activeSubtask = session?.ActiveStop?.ActiveItemSubtask;
+        var activeStop = session?.ActiveStop;
+        var observedQuantity = SumObservedQuantity(candidatePlan);
+        var observedGil = SumObservedGil(candidatePlan);
         var result = session?.RecordProbe(currentWorld, candidatePlan) ??
                      MarketAcquisitionGuidedRouteResult.Fail("No route has started.");
         StatusMessage = result.Message;
@@ -564,12 +571,31 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
             new Dictionary<string, string?>
             {
                 ["currentWorld"] = currentWorld,
+                ["itemId"] = activeSubtask?.ItemId.ToString(),
+                ["itemName"] = activeSubtask?.ItemName,
                 ["liveCandidateStatus"] = candidatePlan.Status,
+                ["readableListings"] = candidatePlan.ReadableListingCount.ToString(),
+                ["reportedListings"] = candidatePlan.ReportedListingCount.ToString(),
+                ["listingCapacity"] = candidatePlan.ListingCapacity.ToString(),
+                ["visibleListingCacheTruncated"] = candidatePlan.IsVisibleListingCacheTruncated.ToString(),
+                ["observedQuantity"] = observedQuantity.ToString(),
+                ["observedGil"] = observedGil.ToString(),
                 ["wouldBuyQuantity"] = candidatePlan.WouldBuyQuantity.ToString(),
                 ["wouldSpendGil"] = candidatePlan.WouldSpendGil.ToString(),
-                ["subtaskSource"] = session?.ActiveStop?.ActiveItemSubtask?.Source,
+                ["wouldBuyRows"] = candidatePlan.Rows.Count(row =>
+                    row.Decision.Equals("WouldBuy", StringComparison.OrdinalIgnoreCase)).ToString(),
+                ["skippedRows"] = candidatePlan.Rows.Count(row =>
+                    !row.Decision.Equals("WouldBuy", StringComparison.OrdinalIgnoreCase)).ToString(),
+                ["skipReasons"] = SummarizeSkipReasons(candidatePlan),
+                ["subtaskSource"] = activeSubtask?.Source,
                 ["success"] = result.Success.ToString(),
             });
+        diagnostics.RecordObservedListings(
+            currentRequestId ?? string.Empty,
+            currentWorld,
+            activeStop?.DataCenter,
+            activeSubtask,
+            candidatePlan);
 
         if (result.Success)
             RecordLatestWorldSummary();
@@ -594,6 +620,35 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         return result.Success
             ? MarketAcquisitionRouteActionResult.Ok(result.Message)
             : MarketAcquisitionRouteActionResult.Fail(result.Message);
+    }
+
+    private static string SummarizeSkipReasons(MarketAcquisitionLiveCandidatePlan candidatePlan)
+    {
+        var reasons = candidatePlan.Rows
+            .Where(row => !row.Decision.Equals("WouldBuy", StringComparison.OrdinalIgnoreCase))
+            .GroupBy(row => string.IsNullOrWhiteSpace(row.Reason) ? "Unspecified" : row.Reason)
+            .OrderBy(group => group.Key, StringComparer.OrdinalIgnoreCase)
+            .Select(group => $"{group.Key}={group.Count()}");
+
+        return string.Join("; ", reasons);
+    }
+
+    private static uint SumObservedQuantity(MarketAcquisitionLiveCandidatePlan candidatePlan)
+    {
+        var total = 0u;
+        foreach (var row in candidatePlan.Rows)
+            total = checked(total + row.LiveListing.Quantity);
+
+        return total;
+    }
+
+    private static uint SumObservedGil(MarketAcquisitionLiveCandidatePlan candidatePlan)
+    {
+        var total = 0u;
+        foreach (var row in candidatePlan.Rows)
+            total = checked(total + checked(row.LiveListing.UnitPrice * row.LiveListing.Quantity));
+
+        return total;
     }
 
     public void RecordLineProgress(
@@ -645,6 +700,18 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
                 ["totalGil"] = totalGil.ToString(),
                 ["result"] = result,
             });
+        diagnostics.RecordPurchaseAudit(
+            currentRequestId ?? string.Empty,
+            session?.ActiveStop?.DataCenter,
+            lineId,
+            itemName,
+            worldName,
+            listingId,
+            retainerId,
+            quantity,
+            totalGil,
+            result,
+            source);
 
         if (result.Equals("Purchased", StringComparison.OrdinalIgnoreCase))
             RecordFreshnessObservation(lineId, itemName, worldName, listingId);

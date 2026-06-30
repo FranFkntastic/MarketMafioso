@@ -49,6 +49,16 @@ public sealed class DalamudMarketBoardPurchaseAdapter : IMarketBoardPurchaseAdap
         };
 
         diagnostics["addonPresent"] = (addon != null).ToString();
+        if (!MarketBoardListingIntegrity.IsRealCandidate(candidate) ||
+            !MarketBoardListingIntegrity.IsRealListing(freshListing))
+        {
+            return Fail(
+                "InvalidListingIdentity",
+                "The guarded purchase candidate did not contain a real market-board listing identity.",
+                candidate,
+                diagnostics);
+        }
+
         if (addon == null || !addon->AtkUnitBase.IsReady || !addon->AtkUnitBase.IsVisible)
         {
             if (addon != null)
@@ -214,6 +224,15 @@ public sealed class DalamudMarketBoardPurchaseAdapter : IMarketBoardPurchaseAdap
         for (var index = 0; index < listingCount; index++)
         {
             var candidateListing = infoProxy->Listings[index];
+            if (!MarketBoardListingIntegrity.HasRealListingIdentity(
+                candidateListing.ListingId.ToString(),
+                candidateListing.RetainerId.ToString(),
+                candidateListing.UnitPrice,
+                candidateListing.Quantity))
+            {
+                continue;
+            }
+
             if (!Matches(candidateListing, infoProxy->SearchItemId, candidate, freshListing))
                 continue;
 
@@ -281,7 +300,10 @@ public sealed class DalamudMarketBoardPurchaseAdapter : IMarketBoardPurchaseAdap
     {
         _ = rawListingItemId;
 
-        return activeSearchItemId == candidate.ItemId &&
+        return MarketBoardListingIntegrity.HasRealListingIdentity(listingId, retainerId, unitPrice, quantity) &&
+               MarketBoardListingIntegrity.IsRealCandidate(candidate) &&
+               MarketBoardListingIntegrity.IsRealListing(freshListing) &&
+               activeSearchItemId == candidate.ItemId &&
                activeSearchItemId == freshListing.ItemId &&
                listingId.Equals(candidate.ListingId, StringComparison.Ordinal) &&
                listingId.Equals(freshListing.ListingId, StringComparison.Ordinal) &&

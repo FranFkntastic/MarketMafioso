@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+
 namespace MarketMafioso.MarketAcquisition;
 
 public sealed record MarketBoardPurchaseCandidate
@@ -67,4 +69,7 @@ public sealed record MarketBoardPurchaseResult
     public string Status { get; init; } = string.Empty;
     public string Message { get; init; } = string.Empty;
     public MarketBoardPurchaseCandidate? Candidate { get; init; }
+    public string? ConfirmationPromptText { get; init; }
+    public string? ConfirmationAddonName { get; init; }
+    public IReadOnlyDictionary<string, string> Diagnostics { get; init; } = new Dictionary<string, string>();
 }

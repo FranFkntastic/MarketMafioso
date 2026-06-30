@@ -451,6 +451,36 @@ public sealed class MarketAcquisitionRouteRunnerTests
     }
 
     [Fact]
+    public void RecordProbe_WritesOriginalSubtaskAndLiveObservationDiagnostics()
+    {
+        using var runner = CreateRunner();
+        runner.Start(CreateMultiItemWorldPlan("Maduin"), enableDiagnostics: true);
+        runner.RecordCurrentWorld("Maduin");
+
+        var result = runner.RecordProbe(
+            "Maduin",
+            CreateObservedCandidatePlan(
+                status: "NoSafeListings",
+                quantity: 0,
+                gil: 0,
+                rows:
+                [
+                    CreateLiveCandidateRow(decision: "Skipped", reason: "AboveThreshold", quantity: 5, unitPrice: 200),
+                ]));
+
+        Assert.True(result.Success);
+        Assert.Equal("line-2", runner.ActiveStop?.ActiveItemSubtask?.LineId);
+        var text = ReadLog(runner.LastDiagnosticFilePath!);
+        Assert.Contains("probe-result", text, StringComparison.Ordinal);
+        Assert.Contains("itemId: 7017", text, StringComparison.Ordinal);
+        Assert.Contains("itemName: Varnish", text, StringComparison.Ordinal);
+        Assert.Contains("subtaskSource: Planned", text, StringComparison.Ordinal);
+        Assert.Contains("observedQuantity: 5", text, StringComparison.Ordinal);
+        Assert.Contains("observedGil: 1000", text, StringComparison.Ordinal);
+        Assert.Contains("skipReasons: AboveThreshold=1", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void RecordProbe_RequiresMarketBoardCloseBeforeNextTravel()
     {
         using var runner = CreateRunner();
@@ -807,6 +837,45 @@ public sealed class MarketAcquisitionRouteRunnerTests
             WouldBuyQuantity = quantity,
             WouldSpendGil = gil,
             Rows = [],
+        };
+
+    private static MarketMafioso.MarketAcquisition.MarketAcquisitionLiveCandidatePlan CreateObservedCandidatePlan(
+        string status,
+        uint quantity,
+        uint gil,
+        IReadOnlyList<MarketMafioso.MarketAcquisition.MarketAcquisitionLiveCandidateRow> rows) =>
+        new()
+        {
+            Status = status,
+            Message = "Live candidate result.",
+            ReadableListingCount = rows.Count,
+            ReportedListingCount = rows.Count,
+            ListingCapacity = Math.Max(rows.Count, 10),
+            RequestedQuantity = 999,
+            WouldBuyQuantity = quantity,
+            WouldSpendGil = gil,
+            Rows = rows,
+        };
+
+    private static MarketMafioso.MarketAcquisition.MarketAcquisitionLiveCandidateRow CreateLiveCandidateRow(
+        string decision,
+        string reason,
+        uint quantity,
+        uint unitPrice) =>
+        new()
+        {
+            Decision = decision,
+            Reason = reason,
+            Message = "Test row.",
+            LiveListing = new MarketMafioso.MarketAcquisition.MarketBoardLiveListing
+            {
+                ItemId = 2,
+                WorldName = "Maduin",
+                ListingId = Guid.NewGuid().ToString("N"),
+                RetainerName = "Test Retainer",
+                Quantity = quantity,
+                UnitPrice = unitPrice,
+            },
         };
 
     private static string CreateTempDirectory()

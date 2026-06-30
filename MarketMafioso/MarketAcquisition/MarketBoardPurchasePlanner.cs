@@ -10,7 +10,8 @@ public static class MarketBoardPurchasePlanner
         ArgumentNullException.ThrowIfNull(candidatePlan);
 
         var row = candidatePlan.Rows.FirstOrDefault(row =>
-            row.Decision.Equals("WouldBuy", StringComparison.OrdinalIgnoreCase));
+            row.Decision.Equals("WouldBuy", StringComparison.OrdinalIgnoreCase) &&
+            MarketBoardListingIntegrity.IsRealListing(row.LiveListing));
         return row == null
             ? null
             : MarketBoardPurchaseCandidate.FromLiveListing(row.LiveListing);
@@ -22,6 +23,13 @@ public static class MarketBoardPurchasePlanner
     {
         ArgumentNullException.ThrowIfNull(candidate);
         ArgumentNullException.ThrowIfNull(freshRead);
+
+        if (!MarketBoardListingIntegrity.IsRealCandidate(candidate))
+        {
+            return MarketBoardPurchaseRevalidation.Fail(
+                "InvalidCandidate",
+                "Guarded purchase candidate does not contain a real market-board listing identity.");
+        }
 
         if (!freshRead.Status.Equals("Ready", StringComparison.OrdinalIgnoreCase))
         {
@@ -45,6 +53,7 @@ public static class MarketBoardPurchasePlanner
         }
 
         var sameIdentity = freshRead.Listings.FirstOrDefault(listing =>
+            MarketBoardListingIntegrity.IsRealListing(listing) &&
             listing.ListingId.Equals(candidate.ListingId, StringComparison.Ordinal) &&
             listing.RetainerId.Equals(candidate.RetainerId, StringComparison.Ordinal));
         if (sameIdentity == null)

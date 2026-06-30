@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Dalamud.Plugin.Services;
 using FFXIVClientStructs.FFXIV.Client.UI;
 using FFXIVClientStructs.FFXIV.Client.UI.Info;
@@ -58,9 +59,18 @@ public sealed class MarketBoardListingReader
         var listingCount = Math.Min(reportedListingCount, listingCapacity);
         foreach (var listing in infoProxy->Listings[..listingCount])
         {
+            if (listing.ListingId == 0 ||
+                listing.RetainerId == 0 ||
+                listing.UnitPrice == 0 ||
+                listing.Quantity == 0)
+            {
+                continue;
+            }
+
             listings.Add(new MarketBoardLiveListing
             {
                 ItemId = listing.ItemId,
+                RawItemId = listing.ItemId,
                 WorldName = currentWorld,
                 ListingId = listing.ListingId.ToString(),
                 RetainerId = listing.RetainerId.ToString(),
@@ -92,17 +102,25 @@ public sealed class MarketBoardListingReader
         byte currentRequestId = 0,
         byte nextRequestId = 0)
     {
-        var effectiveReportedListingCount = Math.Max(reportedListingCount ?? listings.Count, listings.Count);
-        var effectiveListingCapacity = Math.Max(listingCapacity ?? listings.Count, listings.Count);
-        var isAtListingCapacity = effectiveListingCapacity > 0 && listings.Count >= effectiveListingCapacity;
-        var isListingCountTruncated = effectiveReportedListingCount > listings.Count;
+        var realListings = listings
+            .Where(MarketBoardListingIntegrity.IsRealListing)
+            .ToArray();
+        var normalizedListings = NormalizeListingItemIds(itemId, realListings);
+        var effectiveReportedListingCount = Math.Max(reportedListingCount ?? normalizedListings.Count, normalizedListings.Count);
+        var effectiveListingCapacity = Math.Max(listingCapacity ?? normalizedListings.Count, normalizedListings.Count);
+        var isAtListingCapacity = effectiveListingCapacity > 0 && normalizedListings.Count >= effectiveListingCapacity;
+        var isListingCountTruncated = effectiveReportedListingCount > normalizedListings.Count;
+        var rawItemIdMismatchCount = normalizedListings.Count(listing => listing.RawItemId.HasValue && listing.RawItemId.Value != itemId);
         var capacityNote = effectiveListingCapacity > 0
-            ? $" Listing cache capacity {listings.Count}/{effectiveListingCapacity}."
+            ? $" Listing cache capacity {normalizedListings.Count}/{effectiveListingCapacity}."
             : string.Empty;
         var truncatedNote = isListingCountTruncated
             ? $" Reported listing count {effectiveReportedListingCount} was truncated to the readable cache."
             : string.Empty;
-        if (listings.Count > 0)
+        var rawItemIdMismatchNote = rawItemIdMismatchCount > 0
+            ? $" Normalized {rawItemIdMismatchCount} proxy row item id mismatch(es) to the active search item."
+            : string.Empty;
+        if (normalizedListings.Count > 0)
         {
             var waitingNote = waitingForListings
                 ? " Waiting flag is still set, but visible listing rows were present."
@@ -110,7 +128,7 @@ public sealed class MarketBoardListingReader
             return new MarketBoardReadResult
             {
                 Status = "Ready",
-                Message = $"Read {listings.Count} live market board listing(s).{capacityNote}{truncatedNote}{waitingNote}",
+                Message = $"Read {normalizedListings.Count} live market board listing(s).{capacityNote}{truncatedNote}{rawItemIdMismatchNote}{waitingNote}",
                 ItemId = itemId,
                 WorldName = currentWorld,
                 ReportedListingCount = effectiveReportedListingCount,
@@ -119,7 +137,7 @@ public sealed class MarketBoardListingReader
                 IsListingCountTruncated = isListingCountTruncated,
                 CurrentRequestId = currentRequestId,
                 NextRequestId = nextRequestId,
-                Listings = listings,
+                Listings = normalizedListings,
             };
         }
 
@@ -137,7 +155,38 @@ public sealed class MarketBoardListingReader
             IsListingCountTruncated = isListingCountTruncated,
             CurrentRequestId = currentRequestId,
             NextRequestId = nextRequestId,
-            Listings = listings,
+            Listings = normalizedListings,
         };
+    }
+
+    private static IReadOnlyList<MarketBoardLiveListing> NormalizeListingItemIds(
+        uint itemId,
+        IReadOnlyList<MarketBoardLiveListing> listings)
+    {
+        if (itemId == 0 || listings.Count == 0)
+            return listings;
+
+        List<MarketBoardLiveListing>? normalized = null;
+        for (var index = 0; index < listings.Count; index++)
+        {
+            var listing = listings[index];
+            if (listing.ItemId == itemId)
+            {
+                normalized?.Add(listing);
+                continue;
+            }
+
+            normalized ??= new List<MarketBoardLiveListing>(listings.Count);
+            for (var copyIndex = normalized.Count; copyIndex < index; copyIndex++)
+                normalized.Add(listings[copyIndex]);
+
+            normalized.Add(listing with
+            {
+                ItemId = itemId,
+                RawItemId = listing.RawItemId ?? listing.ItemId,
+            });
+        }
+
+        return normalized ?? listings;
     }
 }

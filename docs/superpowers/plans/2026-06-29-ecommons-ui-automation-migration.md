@@ -4,7 +4,7 @@
 
 **Goal:** Replace Market Acquisition's fragile time-gated market-board automation with an ECommons-backed, condition-driven automation layer while keeping the plugin loadable and usable between every slice.
 
-**Architecture:** ECommons should be added as a dependency, but isolated behind `MarketMafioso.UiAutomation` facades. Market Acquisition will migrate one behavior path at a time: bootstrap dependency, introduce task/predicate helpers, convert search, convert listing selection, convert confirmation/removal waiting, then extract execution orchestration out of `MainWindow`.
+**Architecture:** ECommons should be added as a dependency, but isolated behind `MarketMafioso.UiAutomation` facades. Market Acquisition will migrate one behavior path at a time: bootstrap dependency, introduce task/predicate helpers, convert search, convert listing selection, convert confirmation/removal waiting, prove listing-cache freshness, then extract execution orchestration out of `MainWindow`.
 
 **Tech Stack:** C# 12, `net8.0-windows`, Dalamud.NET.Sdk 15, ECommons `3.2.1.15`, xUnit tests, Dalamud dev-plugin deployment via `MarketMafioso/tools/Deploy-DevPlugin.ps1`.
 
@@ -19,6 +19,7 @@ Last updated: 2026-06-29
 - Slice 3 complete: market-board item search uses the shared text-input helper and ECommons button-click helper, and only reports submitted search when an exact result, visible result, agent work, or actual search-button activation is observed.
 - Slice 4 complete: listing selection now uses `MarketBoardListingListProbe` and treats a not-yet-clickable listing list as recoverable instead of terminal.
 - Slice 5 complete: purchase confirmation now has explicit phases through `MarketBoardPurchaseSessionPhase`; confirmation submission and listing-removal proof are separate states.
+- Slice 5.5 newly required: listing-cache freshness must be explicit before further orchestration refactor. The 2026-06-30 Malboro Darksteel Ore route proved that `InfoProxyItemSearch.SearchItemId` can switch to the new item while readable row data still contains stale previous-item evidence.
 - Slice 6 partially complete: `MarketBoardAutomationController` exists as a tested seam for purchase-session progress, but `MainWindow` still owns most route orchestration. Full extraction remains future-refactor work.
 - Slice 7 intentionally partial: obsolete arbitrary search success checks were removed where proven harmful, but watchdogs remain as failure boundaries. Do not remove remaining timing boundaries until live logs prove equivalent condition-based behavior.
 - Slice 8 pending live validation: SimpleTweaks-enabled search, listing-list retry, multi-item same-world routes, and multi-world routes still need in-game confirmation.
@@ -68,6 +69,16 @@ Last updated: 2026-06-29
   - Uses `MarketBoardListingListProbe` and waits for clickable rows before dispatching purchase selection.
 - Modify: `MarketMafioso/MarketAcquisition/MarketBoardPurchaseSession.cs`
   - Converts confirmation/removal waiting into explicit step state.
+- Modify: `MarketMafioso/MarketAcquisition/MarketBoardListingReader.cs`
+  - Surfaces listing-cache freshness/generation state instead of treating active search item id as proof that rows are current.
+- Modify: `MarketMafioso/MarketAcquisition/MarketBoardLiveListingModels.cs`
+  - Adds a typed listing read state that route code can consume without string comparisons.
+- Modify: `MarketMafioso/MarketAcquisition/MarketAcquisitionLiveCandidatePlanner.cs`
+  - Plans only from fresh listing reads.
+- Modify: `MarketMafioso/MarketAcquisition/MarketAcquisitionRouteRunner.cs`
+  - Retries stale or switching listing reads instead of marking the line/world complete.
+- Modify: `MarketMafioso/MarketAcquisition/MarketAcquisitionRouteDiagnostics.cs`
+  - Records read-state and raw item-id mismatch evidence in route logs and observed-listing CSVs.
 - Modify: `MarketMafioso/Windows/MainWindow.cs`
   - Removes low-level time-gated orchestration gradually; delegates to controller once equivalent behavior exists.
 - Test: `MarketMafioso.Tests/MarketAcquisition/*`
@@ -490,6 +501,8 @@ git commit -m "feat: model market purchase confirmation phases"
 
 ## Slice 6: Introduce MarketBoardAutomationController
 
+Execution guard: do not continue new Slice 6 extraction work until Slice 5.5 is implemented and live-validated. The controller should not inherit the current stale listing-cache ambiguity.
+
 **Files:**
 - Create: `MarketMafioso/MarketAcquisition/MarketBoardAutomationController.cs`
 - Modify: `MarketMafioso/Windows/MainWindow.cs`
@@ -556,6 +569,265 @@ Expected: UI still shows the same route/purchase information, but `MainWindow` n
 ```powershell
 git add MarketMafioso/MarketAcquisition/MarketBoardAutomationController.cs MarketMafioso/Windows/MainWindow.cs MarketMafioso.Tests/MarketAcquisition/MarketBoardAutomationControllerTests.cs
 git commit -m "refactor: move market board automation into controller"
+```
+
+---
+
+## Slice 5.5: Make Listing-Cache Freshness Explicit
+
+Execution order: this slice was added after the original Slice 6 shell had already partially landed. Treat it as the next required implementation slice before any further controller extraction or cleanup.
+
+**Files:**
+- Modify: `MarketMafioso/MarketAcquisition/MarketBoardLiveListingModels.cs`
+- Modify: `MarketMafioso/MarketAcquisition/MarketBoardListingReader.cs`
+- Modify: `MarketMafioso/MarketAcquisition/MarketAcquisitionLiveCandidatePlanner.cs`
+- Modify: `MarketMafioso/MarketAcquisition/MarketAcquisitionRouteRunner.cs`
+- Modify: `MarketMafioso/MarketAcquisition/MarketAcquisitionGuidedRouteSession.cs`
+- Modify: `MarketMafioso/MarketAcquisition/MarketAcquisitionRouteDiagnostics.cs`
+- Test: `MarketMafioso.Tests/MarketAcquisition/MarketBoardListingReaderTests.cs`
+- Test: `MarketMafioso.Tests/MarketAcquisition/MarketAcquisitionLiveCandidatePlannerTests.cs`
+- Test: `MarketMafioso.Tests/MarketAcquisition/MarketAcquisitionRouteRunnerTests.cs`
+- Test: `MarketMafioso.Tests/MarketAcquisition/MarketAcquisitionRouteDiagnosticsTests.cs`
+
+This slice covers the captured `route-20260630-020624.log` failure shape: Malboro Darksteel Ore had active search item id `5121`, but readable listing rows still included raw Electrum Ingot item id `5066` from the previous item. The reader normalized those rows to the active item, the planner saw only above-threshold rows, and route progression treated `VisibleCacheExhausted` as successful line/world completion.
+
+- [ ] **Step 1: Add a typed listing read state**
+
+In `MarketMafioso/MarketAcquisition/MarketBoardLiveListingModels.cs`, add:
+
+```csharp
+public enum MarketBoardListingReadState
+{
+    Unavailable,
+    Loading,
+    SwitchingItem,
+    FreshPartial,
+    FreshComplete,
+}
+```
+
+Add these properties to `MarketBoardReadResult`:
+
+```csharp
+public MarketBoardListingReadState ReadState { get; init; }
+public bool IsFresh =>
+    ReadState is MarketBoardListingReadState.FreshPartial or MarketBoardListingReadState.FreshComplete;
+public IReadOnlyDictionary<uint, int> RawItemIdMismatchCounts { get; init; } =
+    new Dictionary<uint, int>();
+```
+
+Expected responsibility:
+
+- `Status` remains for UI text and diagnostics.
+- `ReadState` becomes the route/planner decision input.
+- `RawItemIdMismatchCounts` preserves evidence for stale row diagnosis.
+
+- [ ] **Step 2: Write reader tests for stale mixed-row cache**
+
+In `MarketMafioso.Tests/MarketAcquisition/MarketBoardListingReaderTests.cs`, add a test equivalent to:
+
+```csharp
+[Fact]
+public void BuildReadResult_ReturnsSwitchingItem_WhenRowsContainPreviousItemEvidence()
+{
+    var listings = new[]
+    {
+        new MarketBoardLiveListing
+        {
+            ItemId = 5066,
+            RawItemId = 5066,
+            WorldName = "Malboro",
+            ListingId = "5277656679361153",
+            RetainerId = "33777097236802393",
+            UnitPrice = 2000,
+            Quantity = 99,
+        },
+        new MarketBoardLiveListing
+        {
+            ItemId = 5121,
+            RawItemId = 5121,
+            WorldName = "Malboro",
+            ListingId = "2885119312730168",
+            RetainerId = "33777097240228606",
+            UnitPrice = 800,
+            Quantity = 99,
+        },
+    };
+
+    var result = MarketBoardListingReader.BuildReadResult(
+        waitingForListings: false,
+        itemId: 5121,
+        currentWorld: "Malboro",
+        listings,
+        reportedListingCount: 73,
+        listingCapacity: 100,
+        currentRequestId: 12,
+        nextRequestId: 13);
+
+    Assert.Equal(MarketBoardListingReadState.SwitchingItem, result.ReadState);
+    Assert.False(result.IsFresh);
+    Assert.Equal("ListingCacheSwitching", result.Status);
+    Assert.Equal(1, result.RawItemIdMismatchCounts[5066]);
+    Assert.Empty(result.Listings);
+}
+```
+
+Run:
+
+```powershell
+dotnet test "MarketMafioso.Tests/MarketMafioso.Tests.csproj" -c Debug --filter "FullyQualifiedName~MarketBoardListingReaderTests.BuildReadResult_ReturnsSwitchingItem_WhenRowsContainPreviousItemEvidence" -v minimal
+```
+
+Expected: FAIL until `MarketBoardListingReader` stops normalizing stale rows into purchasable rows.
+
+- [ ] **Step 3: Implement freshness classification in the reader**
+
+In `MarketBoardListingReader.BuildReadResult(...)`:
+
+- compute raw item-id mismatch counts before normalization;
+- if any real row has `RawItemId` or `ItemId` different from the active `itemId`, return:
+
+```csharp
+return new MarketBoardReadResult
+{
+    Status = "ListingCacheSwitching",
+    Message = $"Market board listing cache is still switching to item {itemId}; raw row item ids included {FormatRawItemIdMismatchCounts(rawItemIdMismatchCounts)}.",
+    ReadState = MarketBoardListingReadState.SwitchingItem,
+    ItemId = itemId,
+    WorldName = currentWorld,
+    ReportedListingCount = effectiveReportedListingCount,
+    ListingCapacity = effectiveListingCapacity,
+    IsAtListingCapacity = isAtListingCapacity,
+    IsListingCountTruncated = isListingCountTruncated,
+    CurrentRequestId = currentRequestId,
+    NextRequestId = nextRequestId,
+    RawItemIdMismatchCounts = rawItemIdMismatchCounts,
+    Listings = [],
+};
+```
+
+When no stale evidence exists:
+
+- `waitingForListings` with no rows returns `Loading`;
+- missing addon/info proxy remains `Unavailable`;
+- rows with `IsListingCountTruncated == true` return `FreshPartial`;
+- rows with `IsListingCountTruncated == false` return `FreshComplete`.
+
+Do not pass stale mismatched rows to the candidate planner.
+
+- [ ] **Step 4: Make candidate planning reject non-fresh reads**
+
+In `MarketAcquisitionLiveCandidatePlanner`, before calling `BuildCandidatePlanCore` from overloads that accept `MarketBoardReadResult`, add:
+
+```csharp
+if (!readResult.IsFresh)
+    throw new InvalidOperationException($"Market board listings are not fresh enough to plan purchases: {readResult.Status}.");
+```
+
+Add a focused test in `MarketAcquisitionLiveCandidatePlannerTests`:
+
+```csharp
+[Fact]
+public void BuildCandidatePlan_RejectsSwitchingItemRead()
+{
+    var read = new MarketBoardReadResult
+    {
+        Status = "ListingCacheSwitching",
+        ReadState = MarketBoardListingReadState.SwitchingItem,
+        ItemId = 5121,
+        WorldName = "Malboro",
+    };
+
+    var exception = Assert.Throws<InvalidOperationException>(() =>
+        MarketAcquisitionLiveCandidatePlanner.BuildCandidatePlan(
+            CreateRequest(itemId: 5121, maxUnitPrice: 720),
+            CreatePlanForWorld("Malboro", itemId: 5121),
+            CreateSubtask("Malboro", itemId: 5121),
+            "Malboro",
+            read));
+
+    Assert.Contains("not fresh enough", exception.Message, StringComparison.OrdinalIgnoreCase);
+}
+```
+
+- [ ] **Step 5: Keep stale reads non-terminal in route progression**
+
+In `MarketAcquisitionRouteRunner` where live reads become candidate plans:
+
+- if `readResult.ReadState == MarketBoardListingReadState.SwitchingItem`, record diagnostics and retry the listing-read step;
+- do not call `MarketAcquisitionLiveCandidatePlanner`;
+- do not call `session.MarkActiveItem...`;
+- do not advance the active route item or world;
+- if the route watchdog expires while still switching, fail loudly with a message like:
+
+```text
+Market board listing cache did not become fresh for Darksteel Ore (5121) on Malboro.
+```
+
+In `MarketAcquisitionGuidedRouteSession`, preserve the existing `VisibleCacheExhausted` behavior only for fresh reads. Stale reads are not line outcomes.
+
+- [ ] **Step 6: Extend diagnostics and CSV evidence**
+
+In `MarketAcquisitionRouteDiagnostics`:
+
+- add route-log fields:
+  - `listingReadState`;
+  - `rawItemIdMismatchCounts`;
+  - `readIsFresh`;
+  - `readIsTerminalForProgression`;
+- add observed-listings CSV columns:
+  - `listingReadState`;
+  - `rawItemIdMismatchCounts`;
+  - `readIsFresh`.
+
+For stale reads with no candidate rows, still emit a summary route-log event so live diagnostics have evidence even when no observed-listings CSV rows are written.
+
+- [ ] **Step 7: Run focused verification**
+
+Run:
+
+```powershell
+dotnet test "MarketMafioso.Tests/MarketMafioso.Tests.csproj" -c Debug --filter "FullyQualifiedName~MarketBoardListingReaderTests|FullyQualifiedName~MarketAcquisitionLiveCandidatePlannerTests|FullyQualifiedName~MarketAcquisitionRouteRunnerTests|FullyQualifiedName~MarketAcquisitionRouteDiagnosticsTests" -v minimal
+dotnet build "MarketMafioso/MarketMafioso.csproj" -c Debug
+```
+
+Expected:
+
+- stale mixed-row reads are non-fresh;
+- planner does not receive stale rows;
+- route runner retries or fails loudly instead of silently skipping;
+- existing fresh read tests still pass.
+
+- [ ] **Step 8: Deploy for live validation**
+
+Run:
+
+```powershell
+MarketMafioso/tools/Deploy-DevPlugin.ps1
+```
+
+Expected:
+
+- source and target hashes match;
+- visible manifest version changes;
+- a repeated Malboro-style item switch either waits until the row cache is fresh or fails as a listing freshness failure with raw item-id evidence.
+
+- [ ] **Step 9: Commit freshness slice after live confirmation**
+
+```powershell
+git add MarketMafioso/MarketAcquisition/MarketBoardLiveListingModels.cs `
+        MarketMafioso/MarketAcquisition/MarketBoardListingReader.cs `
+        MarketMafioso/MarketAcquisition/MarketAcquisitionLiveCandidatePlanner.cs `
+        MarketMafioso/MarketAcquisition/MarketAcquisitionRouteRunner.cs `
+        MarketMafioso/MarketAcquisition/MarketAcquisitionGuidedRouteSession.cs `
+        MarketMafioso/MarketAcquisition/MarketAcquisitionRouteDiagnostics.cs `
+        MarketMafioso.Tests/MarketAcquisition/MarketBoardListingReaderTests.cs `
+        MarketMafioso.Tests/MarketAcquisition/MarketAcquisitionLiveCandidatePlannerTests.cs `
+        MarketMafioso.Tests/MarketAcquisition/MarketAcquisitionRouteRunnerTests.cs `
+        MarketMafioso.Tests/MarketAcquisition/MarketAcquisitionRouteDiagnosticsTests.cs `
+        docs/design/2026-06-29-market-acquisition-future-refactor.md `
+        docs/superpowers/plans/2026-06-29-ecommons-ui-automation-migration.md
+git commit -m "fix: require fresh market listing cache before planning"
 ```
 
 ---
@@ -681,7 +953,8 @@ Expected: tests pass, solution builds, deploy succeeds.
 - Slice 1 is the only slice that should touch dependency/lifecycle setup.
 - Slice 2 is the only slice that should introduce generic automation wrappers.
 - Slices 3 through 5 should each be live-testable independently.
-- Slice 6 is the first larger refactor. Do not begin it until search and purchase behavior are stable under ECommons-backed predicates.
+- Slice 5.5 is now the required next slice. It must land before further Slice 6 extraction so stale or mixed listing-cache reads cannot become controller-owned behavior.
+- Slice 6 is the first larger refactor. Do not continue it until search, purchase behavior, and listing-cache freshness are stable under ECommons-backed predicates.
 - Slice 7 is cleanup. Do not remove old diagnostics before Slice 8 produces at least one successful live route log.
 
 ## Self-Review
