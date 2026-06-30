@@ -1,0 +1,691 @@
+# ECommons UI Automation Migration Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Replace Market Acquisition's fragile time-gated market-board automation with an ECommons-backed, condition-driven automation layer while keeping the plugin loadable and usable between every slice.
+
+**Architecture:** ECommons should be added as a dependency, but isolated behind `MarketMafioso.UiAutomation` facades. Market Acquisition will migrate one behavior path at a time: bootstrap dependency, introduce task/predicate helpers, convert search, convert listing selection, convert confirmation/removal waiting, then extract execution orchestration out of `MainWindow`.
+
+**Tech Stack:** C# 12, `net8.0-windows`, Dalamud.NET.Sdk 15, ECommons `3.2.1.15`, xUnit tests, Dalamud dev-plugin deployment via `MarketMafioso/tools/Deploy-DevPlugin.ps1`.
+
+---
+
+## Current Execution Status
+
+Last updated: 2026-06-29
+
+- Slice 1 complete: ECommons is pinned, initialized on plugin startup, disposed during plugin shutdown, and deployed through the dev-plugin path.
+- Slice 2 complete: `MarketMafioso.UiAutomation` now owns the ECommons task queue/readiness wrapper seam so market-acquisition code does not call ECommons directly for generic orchestration.
+- Slice 3 complete: market-board item search uses the shared text-input helper and ECommons button-click helper, and only reports submitted search when an exact result, visible result, agent work, or actual search-button activation is observed.
+- Slice 4 complete: listing selection now uses `MarketBoardListingListProbe` and treats a not-yet-clickable listing list as recoverable instead of terminal.
+- Slice 5 complete: purchase confirmation now has explicit phases through `MarketBoardPurchaseSessionPhase`; confirmation submission and listing-removal proof are separate states.
+- Slice 6 partially complete: `MarketBoardAutomationController` exists as a tested seam for purchase-session progress, but `MainWindow` still owns most route orchestration. Full extraction remains future-refactor work.
+- Slice 7 intentionally partial: obsolete arbitrary search success checks were removed where proven harmful, but watchdogs remain as failure boundaries. Do not remove remaining timing boundaries until live logs prove equivalent condition-based behavior.
+- Slice 8 pending live validation: SimpleTweaks-enabled search, listing-list retry, multi-item same-world routes, and multi-world routes still need in-game confirmation.
+
+## Verification Log
+
+- `dotnet build "MarketMafioso/MarketMafioso.csproj" -c Debug` passed for the ECommons bootstrap.
+- `dotnet test "MarketMafioso.Tests/MarketMafioso.Tests.csproj" -c Debug --filter "FullyQualifiedName~MarketBoardItemSearchDriverTests" -v minimal` passed after search conversion.
+- `dotnet test "MarketMafioso.Tests/MarketMafioso.Tests.csproj" -c Debug --filter "FullyQualifiedName~DalamudMarketBoardPurchaseAdapterTests" -v minimal` passed after listing-list readiness conversion.
+- `dotnet test "MarketMafioso.Tests/MarketMafioso.Tests.csproj" -c Debug --filter "FullyQualifiedName~MarketBoardPurchaseSessionTests" -v minimal` passed after purchase-session phase modeling.
+- `dotnet test "MarketMafioso.Tests/MarketMafioso.Tests.csproj" -c Debug --filter "FullyQualifiedName~MarketBoardAutomationControllerTests" -v minimal` passed after introducing the controller seam.
+- Parallel test/build execution caused a known `DalamudPackager` artifact file lock. Run focused tests and builds sequentially for this repo.
+
+---
+
+## Stability Rules
+
+- Each slice must compile independently.
+- Each slice must leave Inventory Reporter and Workshop Logistics untouched.
+- Until a new ECommons-backed behavior is proven live, keep the current path available through a small adapter boundary.
+- Do not introduce broad market-acquisition rewrites inside the dependency bootstrap slice.
+- Do not delete current diagnostics until the replacement diagnostics are visible in route logs.
+- For live-tested plugin behavior, deploy with `MarketMafioso/tools/Deploy-DevPlugin.ps1` and report the visible manifest version plus target DLL hash.
+- The existing dirty work in the current tree is part of the active market-acquisition patch lane. Do not revert it while executing this plan.
+
+## Target File Structure
+
+- Modify: `MarketMafioso/MarketMafioso.csproj`
+  - Adds the pinned ECommons dependency.
+- Modify: `MarketMafioso/Plugin.cs`
+  - Initializes and disposes ECommons.
+- Create: `MarketMafioso/UiAutomation/UiAutomationTaskQueue.cs`
+  - Thin wrapper around `ECommons.Automation.NeoTaskManager.TaskManager`.
+- Create: `MarketMafioso/UiAutomation/UiAutomationTaskResult.cs`
+  - Small MMF-owned task result/status contract.
+- Create: `MarketMafioso/UiAutomation/AddonStateReader.cs`
+  - MMF-owned wrapper for addon lookup/readiness checks.
+- Modify: `MarketMafioso/UiAutomation/AtkTextInputAutomation.cs`
+  - Moves text-input callback/focus behavior onto ECommons helpers where useful.
+- Create: `MarketMafioso/MarketAcquisition/MarketBoardAutomationController.cs`
+  - Coordinates market-board search, listing readiness, purchase selection, and confirmation as named condition-based steps.
+- Create: `MarketMafioso/MarketAcquisition/MarketBoardListingListProbe.cs`
+  - Probes clickable market-board listing list components and returns rich diagnostics.
+- Modify: `MarketMafioso/MarketAcquisition/MarketBoardItemSearchDriver.cs`
+  - Converts search submission and item-result selection to condition-gated operations.
+- Modify: `MarketMafioso/MarketAcquisition/DalamudMarketBoardPurchaseAdapter.cs`
+  - Uses `MarketBoardListingListProbe` and waits for clickable rows before dispatching purchase selection.
+- Modify: `MarketMafioso/MarketAcquisition/MarketBoardPurchaseSession.cs`
+  - Converts confirmation/removal waiting into explicit step state.
+- Modify: `MarketMafioso/Windows/MainWindow.cs`
+  - Removes low-level time-gated orchestration gradually; delegates to controller once equivalent behavior exists.
+- Test: `MarketMafioso.Tests/MarketAcquisition/*`
+  - Adds focused tests for step transitions, probe diagnostics, and timeout classification.
+
+---
+
+## Slice 1: Dependency Bootstrap With No Behavior Change
+
+**Files:**
+- Modify: `MarketMafioso/MarketMafioso.csproj`
+- Modify: `MarketMafioso/Plugin.cs`
+
+- [ ] **Step 1: Add ECommons package reference**
+
+Add this package reference to `MarketMafioso/MarketMafioso.csproj`:
+
+```xml
+<PackageReference Include="ECommons" Version="3.2.1.15" />
+```
+
+Keep it in a normal `ItemGroup`. Do not add ECommons usage in market-acquisition code yet.
+
+- [ ] **Step 2: Initialize ECommons in plugin startup**
+
+In `MarketMafioso/Plugin.cs`, add:
+
+```csharp
+using ECommons;
+```
+
+In the `Plugin()` constructor, immediately after `Instance = this;`, initialize ECommons with reduced logging:
+
+```csharp
+ECommonsMain.ReducedLogging = true;
+ECommonsMain.Init(PluginInterface, this);
+```
+
+- [ ] **Step 3: Dispose ECommons last**
+
+In `Plugin.Dispose()`, after existing MMF cleanup has disposed windows/services, add:
+
+```csharp
+ECommonsMain.Dispose();
+```
+
+If ECommons disposal throws during early live testing, wrap it in a narrow `try/catch` that logs an error through `Log.Error`, but do not swallow initialization failure during startup.
+
+- [ ] **Step 4: Verify bootstrap only**
+
+Run:
+
+```powershell
+dotnet build "MarketMafioso/MarketMafioso.csproj" -c Debug
+```
+
+Expected: build succeeds.
+
+Run:
+
+```powershell
+MarketMafioso/tools/Deploy-DevPlugin.ps1
+```
+
+Expected: source and target hashes match, plugin loads, current Market Acquisition behavior is unchanged.
+
+- [ ] **Step 5: Commit bootstrap**
+
+Commit only the ECommons bootstrap files:
+
+```powershell
+git add MarketMafioso/MarketMafioso.csproj MarketMafioso/Plugin.cs
+git commit -m "chore: bootstrap ECommons dependency"
+```
+
+---
+
+## Slice 2: Add MMF-Owned Automation Facades
+
+**Files:**
+- Create: `MarketMafioso/UiAutomation/UiAutomationTaskResult.cs`
+- Create: `MarketMafioso/UiAutomation/UiAutomationTaskQueue.cs`
+- Create: `MarketMafioso/UiAutomation/AddonStateReader.cs`
+- Modify: `MarketMafioso.Tests/MarketAcquisition/DalamudMarketBoardPurchaseAdapterTests.cs` only if helper tests need existing test fixtures
+
+- [ ] **Step 1: Create task result model**
+
+Create `MarketMafioso/UiAutomation/UiAutomationTaskResult.cs`:
+
+```csharp
+namespace MarketMafioso.UiAutomation;
+
+public enum UiAutomationTaskOutcome
+{
+    Waiting,
+    Complete,
+    Abort,
+}
+
+public sealed record UiAutomationTaskResult(
+    UiAutomationTaskOutcome Outcome,
+    string Message,
+    IReadOnlyDictionary<string, string>? Diagnostics = null)
+{
+    public static UiAutomationTaskResult Waiting(string message, IReadOnlyDictionary<string, string>? diagnostics = null) =>
+        new(UiAutomationTaskOutcome.Waiting, message, diagnostics);
+
+    public static UiAutomationTaskResult Complete(string message, IReadOnlyDictionary<string, string>? diagnostics = null) =>
+        new(UiAutomationTaskOutcome.Complete, message, diagnostics);
+
+    public static UiAutomationTaskResult Abort(string message, IReadOnlyDictionary<string, string>? diagnostics = null) =>
+        new(UiAutomationTaskOutcome.Abort, message, diagnostics);
+}
+```
+
+- [ ] **Step 2: Create ECommons task queue wrapper**
+
+Create `MarketMafioso/UiAutomation/UiAutomationTaskQueue.cs`:
+
+```csharp
+using ECommons.Automation.NeoTaskManager;
+
+namespace MarketMafioso.UiAutomation;
+
+public sealed class UiAutomationTaskQueue : IDisposable
+{
+    private readonly TaskManager taskManager;
+
+    public UiAutomationTaskQueue(int timeLimitMs = 15000)
+    {
+        taskManager = new TaskManager(new TaskManagerConfiguration(
+            abortOnTimeout: true,
+            abortOnError: true,
+            showDebug: false,
+            timeLimitMS: timeLimitMs,
+            timeoutSilently: true));
+    }
+
+    public bool IsBusy => taskManager.IsBusy;
+
+    public void Enqueue(string name, Func<UiAutomationTaskResult> step)
+    {
+        taskManager.Enqueue(
+            () =>
+            {
+                var result = step();
+                return result.Outcome switch
+                {
+                    UiAutomationTaskOutcome.Waiting => false,
+                    UiAutomationTaskOutcome.Complete => true,
+                    UiAutomationTaskOutcome.Abort => null,
+                    _ => null,
+                };
+            },
+            name);
+    }
+
+    public void Abort() => taskManager.Abort();
+
+    public void Dispose() => taskManager.Dispose();
+}
+```
+
+- [ ] **Step 3: Create addon state reader wrapper**
+
+Create `MarketMafioso/UiAutomation/AddonStateReader.cs`:
+
+```csharp
+using Dalamud.Plugin.Services;
+using FFXIVClientStructs.FFXIV.Component.GUI;
+using static ECommons.GenericHelpers;
+
+namespace MarketMafioso.UiAutomation;
+
+public sealed class AddonStateReader
+{
+    private readonly IGameGui gameGui;
+
+    public AddonStateReader(IGameGui gameGui)
+    {
+        this.gameGui = gameGui;
+    }
+
+    public unsafe T* GetAddon<T>(string addonName) where T : unmanaged =>
+        gameGui.GetAddonByName<T>(addonName, 1);
+
+    public unsafe bool IsReady(AtkUnitBase* addon) =>
+        addon != null && IsAddonReady(addon);
+}
+```
+
+- [ ] **Step 4: Build facade slice**
+
+Run:
+
+```powershell
+dotnet build "MarketMafioso/MarketMafioso.csproj" -c Debug
+```
+
+Expected: build succeeds and behavior remains unchanged.
+
+- [ ] **Step 5: Commit facade slice**
+
+```powershell
+git add MarketMafioso/UiAutomation/UiAutomationTaskResult.cs MarketMafioso/UiAutomation/UiAutomationTaskQueue.cs MarketMafioso/UiAutomation/AddonStateReader.cs
+git commit -m "feat: add ECommons-backed UI automation facade"
+```
+
+---
+
+## Slice 3: Convert Market-Board Search Behind Existing Public Contract
+
+**Files:**
+- Modify: `MarketMafioso/MarketAcquisition/MarketBoardItemSearchDriver.cs`
+- Modify: `MarketMafioso.Tests/MarketAcquisition/MarketBoardItemSearchDriverTests.cs`
+- Modify: `MarketMafioso/UiAutomation/AtkTextInputAutomation.cs`
+
+- [ ] **Step 1: Preserve `MarketBoardItemSearchDriver.Search` and `Observe` method signatures**
+
+Do not change call sites in `MainWindow` in this slice. `Search(uint itemId, string? itemName)` and `Observe(uint itemId, string? itemName)` must still return `MarketBoardItemSearchResult`.
+
+- [ ] **Step 2: Replace fixed retry interpretation with predicate statuses**
+
+In `MarketBoardItemSearchDriver`, keep the existing statuses:
+
+- `MarketBoardNotOpen`
+- `ModeReset`
+- `SearchSent`
+- `ItemResultsReady`
+- `ItemOpenSent`
+- `ListingsReady`
+- `SearchSubmitFailed`
+
+Change internals so `SearchSent` means the addon accepted the input/search event, not merely that MMF wrote text into a field. If ECommons/Atk focus evidence says the button remains disabled, return `SearchSubmitFailed` with diagnostics instead of `SearchSent`.
+
+- [ ] **Step 3: Convert text submission helper to ECommons-compatible callback flow**
+
+Use `AtkTextInputAutomation` as the only place that directly touches input focus, text, text-changed callbacks, enter callbacks, or receive-event click helpers. `MarketBoardItemSearchDriver` should call helper methods rather than manipulating input fields directly.
+
+- [ ] **Step 4: Add focused tests for status classification**
+
+Update `MarketMafioso.Tests/MarketAcquisition/MarketBoardItemSearchDriverTests.cs` with pure tests for helper methods already exposed as `internal static`:
+
+```csharp
+[Fact]
+public void ShouldWaitForSubmittedSearch_WhenExactItemNotVisibleAndPushPending_ReturnsTrue()
+{
+    var result = MarketBoardItemSearchDriver.ShouldWaitForSubmittedSearch(
+        searchMatchesSubmittedState: true,
+        exactItemVisible: false,
+        agentIsPartialSearching: false,
+        agentIsItemPushPending: true,
+        elapsedSinceSubmit: TimeSpan.FromMilliseconds(250),
+        retryDelay: TimeSpan.FromSeconds(1));
+
+    Assert.True(result);
+}
+```
+
+Add companion tests for "retry delay elapsed" and "exact item visible".
+
+- [ ] **Step 5: Verify search conversion**
+
+Run:
+
+```powershell
+dotnet test "MarketMafioso.Tests/MarketMafioso.Tests.csproj" -c Debug --filter "FullyQualifiedName~MarketBoardItemSearchDriverTests" -v minimal
+dotnet build "MarketMafioso/MarketMafioso.csproj" -c Debug
+MarketMafioso/tools/Deploy-DevPlugin.ps1
+```
+
+Expected: focused tests pass, plugin builds, deploy succeeds. Live test should confirm SimpleTweaks-enabled search still triggers.
+
+- [ ] **Step 6: Commit search slice after live confirmation**
+
+```powershell
+git add MarketMafioso/MarketAcquisition/MarketBoardItemSearchDriver.cs MarketMafioso/UiAutomation/AtkTextInputAutomation.cs MarketMafioso.Tests/MarketAcquisition/MarketBoardItemSearchDriverTests.cs
+git commit -m "feat: drive market search through condition-aware UI automation"
+```
+
+---
+
+## Slice 4: Convert Listing Selection Readiness
+
+**Files:**
+- Create: `MarketMafioso/MarketAcquisition/MarketBoardListingListProbe.cs`
+- Modify: `MarketMafioso/MarketAcquisition/DalamudMarketBoardPurchaseAdapter.cs`
+- Create or modify: `MarketMafioso.Tests/MarketAcquisition/DalamudMarketBoardPurchaseAdapterTests.cs`
+
+- [ ] **Step 1: Extract list probing from purchase adapter**
+
+Move `FindListingList`, `DescribeListingLists`, and list-candidate selection rules from `DalamudMarketBoardPurchaseAdapter` into `MarketBoardListingListProbe`.
+
+The probe result must include:
+
+```csharp
+public sealed record MarketBoardListingListProbeResult(
+    bool IsReady,
+    uint? ComponentId,
+    int VisibleItemCount,
+    int RequestedRow,
+    string Diagnostic);
+```
+
+- [ ] **Step 2: Define readiness explicitly**
+
+`IsReady` is true only when:
+
+- the listing addon is present,
+- the addon is ready and visible,
+- a candidate list component exists,
+- the component has at least one visible/clickable item,
+- the requested row can be selected or scrolled into range.
+
+`InfoProxyItemSearch.ListingCount > 0` is not sufficient.
+
+- [ ] **Step 3: Change purchase adapter failure status**
+
+If info proxy has rows but the clickable list is not ready, return:
+
+```text
+Status: ListingListNotReady
+Message: Market-board listing data is ready, but the clickable listing component is not ready yet.
+```
+
+This status is recoverable. It must not fail the route immediately.
+
+- [ ] **Step 4: Teach MainWindow/route monitor to retry recoverable listing readiness**
+
+In `MainWindow.BeginNextWorldPurchase`, treat `ListingListNotReady` like a wait state:
+
+- record automation snapshot,
+- set `nextGuidedRouteMonitorUtc` to a short retry,
+- do not call `FailRoute`.
+
+This is a transitional step. Slice 6 will move this out of `MainWindow`.
+
+- [ ] **Step 5: Verify listing readiness slice**
+
+Run:
+
+```powershell
+dotnet test "MarketMafioso.Tests/MarketMafioso.Tests.csproj" -c Debug --filter "FullyQualifiedName~DalamudMarketBoardPurchaseAdapterTests" -v minimal
+dotnet build "MarketMafioso/MarketMafioso.csproj" -c Debug
+MarketMafioso/tools/Deploy-DevPlugin.ps1
+```
+
+Expected: recoverable list-not-ready results retry instead of killing route.
+
+- [ ] **Step 6: Commit listing readiness slice after live confirmation**
+
+```powershell
+git add MarketMafioso/MarketAcquisition/MarketBoardListingListProbe.cs MarketMafioso/MarketAcquisition/DalamudMarketBoardPurchaseAdapter.cs MarketMafioso/Windows/MainWindow.cs MarketMafioso.Tests/MarketAcquisition/DalamudMarketBoardPurchaseAdapterTests.cs
+git commit -m "feat: wait for clickable market listing readiness"
+```
+
+---
+
+## Slice 5: Convert Purchase Confirmation and Removal Waiting
+
+**Files:**
+- Modify: `MarketMafioso/MarketAcquisition/MarketBoardPurchaseSession.cs`
+- Modify: `MarketMafioso/MarketAcquisition/DalamudMarketBoardPurchaseAdapter.cs`
+- Modify: `MarketMafioso.Tests/MarketAcquisition/MarketBoardPurchaseSessionTests.cs`
+- Modify: `MarketMafioso/Windows/MainWindow.cs`
+
+- [ ] **Step 1: Make purchase session statuses typed internally**
+
+Add an enum in `MarketBoardPurchaseSession.cs`:
+
+```csharp
+public enum MarketBoardPurchaseSessionPhase
+{
+    WaitingForConfirmation,
+    WaitingForListingRemoval,
+    Completed,
+    Failed,
+}
+```
+
+Keep the existing string `Status` property for UI/API output during this slice, but derive it from the enum.
+
+- [ ] **Step 2: Split confirmation waiting from listing-removal waiting**
+
+`TryConfirmPendingPurchase` should only decide whether the confirmation prompt is present and valid. Listing-removal verification should be a separate predicate that compares current live listings against the candidate that was purchased.
+
+- [ ] **Step 3: Use watchdogs only as failure boundaries**
+
+Keep the current 15-second watchdogs as maximum bounds, but do not use them as normal step pacing. The monitor should re-check predicates on framework ticks or short retry intervals.
+
+- [ ] **Step 4: Add tests for session phase transitions**
+
+Update `MarketBoardPurchaseSessionTests` to assert:
+
+- confirmation submitted moves to `WaitingForListingRemoval`,
+- listing changed/removal observed moves to `Completed`,
+- confirmation timeout moves to `Failed`,
+- removal timeout moves to `Failed` with a diagnostic message naming the listing id.
+
+- [ ] **Step 5: Verify confirmation/removal slice**
+
+Run:
+
+```powershell
+dotnet test "MarketMafioso.Tests/MarketMafioso.Tests.csproj" -c Debug --filter "FullyQualifiedName~MarketBoardPurchaseSessionTests" -v minimal
+dotnet build "MarketMafioso/MarketMafioso.csproj" -c Debug
+MarketMafioso/tools/Deploy-DevPlugin.ps1
+```
+
+Expected: purchase confirmation and post-purchase listing removal still work in the live single-world purchase path.
+
+- [ ] **Step 6: Commit confirmation/removal slice after live confirmation**
+
+```powershell
+git add MarketMafioso/MarketAcquisition/MarketBoardPurchaseSession.cs MarketMafioso/MarketAcquisition/DalamudMarketBoardPurchaseAdapter.cs MarketMafioso/Windows/MainWindow.cs MarketMafioso.Tests/MarketAcquisition/MarketBoardPurchaseSessionTests.cs
+git commit -m "feat: model market purchase confirmation phases"
+```
+
+---
+
+## Slice 6: Introduce MarketBoardAutomationController
+
+**Files:**
+- Create: `MarketMafioso/MarketAcquisition/MarketBoardAutomationController.cs`
+- Modify: `MarketMafioso/Windows/MainWindow.cs`
+- Test: `MarketMafioso.Tests/MarketAcquisition/MarketBoardAutomationControllerTests.cs`
+
+- [ ] **Step 1: Create controller shell**
+
+Create `MarketBoardAutomationController` with explicit methods:
+
+```csharp
+public sealed class MarketBoardAutomationController : IDisposable
+{
+    public bool IsBusy { get; }
+    public string Status { get; }
+    public string Message { get; }
+
+    public void StartSearchAndPurchase(MarketBoardPurchaseCandidate candidate);
+    public void Abort();
+    public void Dispose();
+}
+```
+
+The first implementation may delegate to the existing search driver and purchase adapter. The value of this slice is moving orchestration ownership away from `MainWindow`, not changing behavior.
+
+- [ ] **Step 2: Move low-level purchase monitor fields out of MainWindow**
+
+Move these from `MainWindow` into the controller where possible:
+
+- `marketBoardPurchaseSession`
+- `marketBoardPurchaseResult`
+- `nextMarketBoardPurchaseMonitorUtc`
+- purchase confirmation polling
+- purchase listing-removal polling
+
+Keep route-level counters in `MainWindow` for this slice if moving them would broaden the diff.
+
+- [ ] **Step 3: Keep UI rendering stable**
+
+`MainWindow` should still render the same market-acquisition status text, but read it from the controller.
+
+- [ ] **Step 4: Add controller tests**
+
+Create tests for controller behavior using fake collaborators:
+
+- returns busy after `StartSearchAndPurchase`,
+- records recoverable wait when listing list is not ready,
+- abort clears busy state,
+- failed purchase selection exposes failure message.
+
+- [ ] **Step 5: Verify controller slice**
+
+Run:
+
+```powershell
+dotnet test "MarketMafioso.Tests/MarketMafioso.Tests.csproj" -c Debug --filter "FullyQualifiedName~MarketBoardAutomationControllerTests" -v minimal
+dotnet build "MarketMafioso/MarketMafioso.csproj" -c Debug
+MarketMafioso/tools/Deploy-DevPlugin.ps1
+```
+
+Expected: UI still shows the same route/purchase information, but `MainWindow` no longer owns the low-level purchase session.
+
+- [ ] **Step 6: Commit controller slice**
+
+```powershell
+git add MarketMafioso/MarketAcquisition/MarketBoardAutomationController.cs MarketMafioso/Windows/MainWindow.cs MarketMafioso.Tests/MarketAcquisition/MarketBoardAutomationControllerTests.cs
+git commit -m "refactor: move market board automation into controller"
+```
+
+---
+
+## Slice 7: Remove Obsolete Time-Gated Search/Purchase Paths
+
+**Files:**
+- Modify: `MarketMafioso/MarketAcquisition/MarketBoardItemSearchDriver.cs`
+- Modify: `MarketMafioso/MarketAcquisition/DalamudMarketBoardPurchaseAdapter.cs`
+- Modify: `MarketMafioso/MarketAcquisition/MarketBoardPurchaseSession.cs`
+- Modify: `MarketMafioso/Windows/MainWindow.cs`
+- Modify: `docs/design/2026-06-29-market-acquisition-future-refactor.md`
+
+- [ ] **Step 1: Remove dead retry constants**
+
+Remove constants and fields that only exist for the legacy time-gated path, such as stale submitted-search retry fields that are no longer used by predicate gates.
+
+- [ ] **Step 2: Preserve timeout diagnostics**
+
+Do not remove watchdogs. Rename them to reflect their role as failure boundaries:
+
+- `MarketBoardSearchWatchdog`
+- `MarketBoardPurchaseConfirmationWatchdog`
+- `MarketBoardPurchaseListingRemovalWatchdog`
+
+- [ ] **Step 3: Update route diagnostics vocabulary**
+
+Diagnostics should include:
+
+- current automation task name,
+- last predicate that returned waiting,
+- addon readiness summary,
+- info proxy item id/listing count,
+- clickable listing list status,
+- timeout boundary if failure occurred.
+
+- [ ] **Step 4: Update future-refactor doc**
+
+Mark the following as completed or partially completed in `docs/design/2026-06-29-market-acquisition-future-refactor.md`:
+
+- reusable UI automation primitives,
+- listing-list selection diagnostics,
+- execution controller extraction if Slice 6 completed.
+
+- [ ] **Step 5: Run broader verification**
+
+Run:
+
+```powershell
+dotnet test "MarketMafioso.Tests/MarketMafioso.Tests.csproj" -c Debug -v minimal
+dotnet build "MarketMafioso/MarketMafioso.csproj" -c Debug
+MarketMafioso/tools/Deploy-DevPlugin.ps1
+```
+
+Expected: plugin tests pass, plugin builds, deploy succeeds.
+
+- [ ] **Step 6: Commit cleanup slice**
+
+```powershell
+git add MarketMafioso/MarketAcquisition MarketMafioso/Windows/MainWindow.cs docs/design/2026-06-29-market-acquisition-future-refactor.md
+git commit -m "refactor: remove legacy market automation timing gates"
+```
+
+---
+
+## Slice 8: Live Route Validation and Rollback Boundary
+
+**Files:**
+- Modify only if live diagnostics expose a specific bug.
+
+- [ ] **Step 1: Run live single-item route**
+
+Expected:
+
+- route travels,
+- search submits under SimpleTweaks-enabled and default paths,
+- exact item result is selected,
+- listings open,
+- first safe listing is purchased,
+- confirmation is accepted,
+- listing removal is observed,
+- route advances or completes.
+
+- [ ] **Step 2: Run live multi-item same-world route**
+
+Expected:
+
+- first item buys or skips safely,
+- market results close/reset,
+- second item search submits,
+- second item buys or skips safely,
+- world summary includes both item lines.
+
+- [ ] **Step 3: Run live multi-world route**
+
+Expected:
+
+- route stays within current data center before cross-DC travel when possible,
+- route closes market-board windows before Lifestream travel,
+- route resumes after arrival,
+- per-world summary records purchases and Universalis freshness verification.
+
+- [ ] **Step 4: Patch only evidence-backed failures**
+
+If live test fails, read the route log and patch the smallest specific condition/predicate. Do not reintroduce arbitrary sleeps as primary synchronization.
+
+- [ ] **Step 5: Final broad verification**
+
+Run:
+
+```powershell
+dotnet test "MarketMafioso.Tests/MarketMafioso.Tests.csproj" -c Debug -v minimal
+dotnet build "MarketMafioso.sln" -c Debug
+MarketMafioso/tools/Deploy-DevPlugin.ps1
+```
+
+Expected: tests pass, solution builds, deploy succeeds.
+
+---
+
+## Execution Notes
+
+- Slice 1 is the only slice that should touch dependency/lifecycle setup.
+- Slice 2 is the only slice that should introduce generic automation wrappers.
+- Slices 3 through 5 should each be live-testable independently.
+- Slice 6 is the first larger refactor. Do not begin it until search and purchase behavior are stable under ECommons-backed predicates.
+- Slice 7 is cleanup. Do not remove old diagnostics before Slice 8 produces at least one successful live route log.
+
+## Self-Review
+
+- Spec coverage: the plan covers dependency bootstrap, facade isolation, condition-gated search, clickable listing readiness, purchase confirmation/removal, controller extraction, cleanup, and live validation.
+- Placeholder scan: no `TBD`, `TODO`, or intentionally vague implementation steps remain.
+- Type consistency: new type names are consistent across slices: `UiAutomationTaskQueue`, `UiAutomationTaskResult`, `AddonStateReader`, `MarketBoardAutomationController`, and `MarketBoardListingListProbe`.
