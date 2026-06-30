@@ -117,6 +117,17 @@ foreach ($file in $optionalFiles) {
     }
 }
 
+$dependencyAssemblies = Get-ChildItem -LiteralPath $SourceDir -Filter "*.dll" -File |
+    Where-Object { -not [string]::Equals($_.Name, "$PluginName.dll", [System.StringComparison]::OrdinalIgnoreCase) }
+
+foreach ($dependencyAssembly in $dependencyAssemblies) {
+    Copy-WithRetry -Source $dependencyAssembly.FullName -Destination $DestDir -MaxAttempts $RetryCount -DelayMs $RetryDelayMs
+}
+
+if ($dependencyAssemblies.Count -gt 0) {
+    Write-Host "Synced dependency assemblies: $($dependencyAssemblies.Name -join ', ')"
+}
+
 $assemblyPath = Join-Path -Path $DestDir -ChildPath "$PluginName.dll"
 $manifestPath = Join-Path -Path $DestDir -ChildPath "$PluginName.json"
 Sync-ManifestAssemblyVersion -AssemblyPath $assemblyPath -ManifestPath $manifestPath
