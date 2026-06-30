@@ -1,5 +1,5 @@
 using System;
-using System.Linq;
+using System.Collections.Generic;
 using Dalamud.Plugin.Services;
 using Dalamud.Utility;
 using FFXIVClientStructs.FFXIV.Client.UI;
@@ -12,7 +12,6 @@ public sealed class DalamudMarketBoardPurchaseAdapter : IMarketBoardPurchaseAdap
 {
     private const string ItemSearchResultAddon = "ItemSearchResult";
     private const string SelectYesNoAddon = "SelectYesno";
-    private static readonly uint[] CandidateListingListIds = Enumerable.Range(1, 80).Select(static id => (uint)id).ToArray();
 
     private readonly IGameGui gameGui;
     private readonly IPluginLog log;
@@ -31,13 +30,43 @@ public sealed class DalamudMarketBoardPurchaseAdapter : IMarketBoardPurchaseAdap
         ArgumentNullException.ThrowIfNull(freshListing);
 
         var addon = gameGui.GetAddonByName<AddonItemSearchResult>(ItemSearchResultAddon, 1);
+        var diagnostics = new Dictionary<string, string>
+        {
+            ["candidateItemId"] = candidate.ItemId.ToString(),
+            ["candidateWorld"] = candidate.WorldName,
+            ["candidateListingId"] = candidate.ListingId,
+            ["candidateRetainerId"] = candidate.RetainerId,
+            ["candidateQuantity"] = candidate.Quantity.ToString(),
+            ["candidateUnitPrice"] = candidate.UnitPrice.ToString(),
+            ["candidateHq"] = candidate.IsHq.ToString(),
+            ["freshItemId"] = freshListing.ItemId.ToString(),
+            ["freshWorld"] = freshListing.WorldName,
+            ["freshListingId"] = freshListing.ListingId,
+            ["freshRetainerId"] = freshListing.RetainerId,
+            ["freshQuantity"] = freshListing.Quantity.ToString(),
+            ["freshUnitPrice"] = freshListing.UnitPrice.ToString(),
+            ["freshHq"] = freshListing.IsHq.ToString(),
+        };
+
+        diagnostics["addonPresent"] = (addon != null).ToString();
         if (addon == null || !addon->AtkUnitBase.IsReady || !addon->AtkUnitBase.IsVisible)
         {
+            if (addon != null)
+            {
+                diagnostics["addonReady"] = addon->AtkUnitBase.IsReady.ToString();
+                diagnostics["addonVisible"] = addon->AtkUnitBase.IsVisible.ToString();
+            }
+
             return Fail(
                 "MarketBoardNotOpen",
                 "Market board listing results closed before the purchase click could be sent.",
-                candidate);
+                candidate,
+                diagnostics);
         }
+
+        diagnostics["addonReady"] = addon->AtkUnitBase.IsReady.ToString();
+        diagnostics["addonVisible"] = addon->AtkUnitBase.IsVisible.ToString();
+        diagnostics["listComponentsBeforeMatch"] = MarketBoardListingListProbe.DescribeListingLists(addon);
 
         var infoProxy = InfoProxyItemSearch.Instance();
         if (infoProxy == null)
@@ -45,32 +74,64 @@ public sealed class DalamudMarketBoardPurchaseAdapter : IMarketBoardPurchaseAdap
             return Fail(
                 "InfoProxyUnavailable",
                 "InfoProxyItemSearch is unavailable before the purchase click could be sent.",
-                candidate);
+                candidate,
+                diagnostics);
         }
+
+        diagnostics["infoProxySearchItemId"] = infoProxy->SearchItemId.ToString();
+        diagnostics["infoProxyListingCount"] = infoProxy->ListingCount.ToString();
+        diagnostics["infoProxyListingCapacity"] = infoProxy->Listings.Length.ToString();
+        diagnostics["infoProxyPreview"] = DescribeInfoProxyListings(infoProxy, 10);
 
         if (!TryFindMatchingListing(infoProxy, candidate, freshListing, out var listingIndex, out var listing))
         {
             return Fail(
                 "ListingMissing",
                 "The exact guarded listing was not present in InfoProxyItemSearch at purchase time.",
-                candidate);
+                candidate,
+                diagnostics);
         }
+
+        diagnostics["matchedRow"] = listingIndex.ToString();
+        diagnostics["matchedListing"] = DescribeListing(listing);
+        diagnostics["listComponentsBeforeSetLastPurchased"] = MarketBoardListingListProbe.DescribeListingLists(addon);
 
         if (!infoProxy->SetLastPurchasedItem(&listing))
         {
+            diagnostics["listComponentsAfterSetLastPurchased"] = MarketBoardListingListProbe.DescribeListingLists(addon);
             return Fail(
                 "SetLastPurchasedFailed",
                 "The game rejected priming LastPurchasedMarketboardItem for the guarded listing.",
-                candidate);
+                candidate,
+                diagnostics);
         }
 
-        var listingList = FindListingList(addon, listingIndex);
+        diagnostics["setLastPurchasedAccepted"] = true.ToString();
+        diagnostics["listComponentsAfterSetLastPurchased"] = MarketBoardListingListProbe.DescribeListingLists(addon);
+
+        var listProbe = MarketBoardListingListProbe.Probe(addon, listingIndex);
+        diagnostics["listingListProbeReady"] = listProbe.IsReady.ToString();
+        diagnostics["listingListComponentId"] = listProbe.ComponentId?.ToString() ?? string.Empty;
+        diagnostics["listingListVisibleItemCount"] = listProbe.VisibleItemCount.ToString();
+        diagnostics["listingListRequestedRow"] = listProbe.RequestedRow.ToString();
+        diagnostics["findListingList"] = listProbe.Diagnostic;
+        if (!listProbe.IsReady || listProbe.ComponentId == null)
+        {
+            return Fail(
+                "ListingListNotReady",
+                $"Market-board listing data is ready, but the clickable listing component is not ready yet. {listProbe.Diagnostic}",
+                candidate,
+                diagnostics);
+        }
+
+        var listingList = addon->AtkUnitBase.GetComponentListById(listProbe.ComponentId.Value);
         if (listingList == null)
         {
             return Fail(
-                "ListingListUnavailable",
-                $"Could not find a market-board listing list component containing row {listingIndex}.",
-                candidate);
+                "ListingListNotReady",
+                $"Market-board listing data was ready, but list component {listProbe.ComponentId.Value} disappeared before selection.",
+                candidate,
+                diagnostics);
         }
 
         listingList->ScrollToItem((short)listingIndex);
@@ -89,6 +150,7 @@ public sealed class DalamudMarketBoardPurchaseAdapter : IMarketBoardPurchaseAdap
             Status = "PurchaseSelectionSent",
             Message = "Sent one market-board listing selection; waiting for the purchase confirmation prompt.",
             Candidate = candidate,
+            Diagnostics = diagnostics,
         };
     }
 
@@ -115,20 +177,26 @@ public sealed class DalamudMarketBoardPurchaseAdapter : IMarketBoardPurchaseAdap
             return Fail(
                 "UnexpectedConfirmation",
                 $"A SelectYesno prompt appeared, but it did not look like a market-board purchase prompt: {text}",
-                candidate);
+                candidate) with
+                {
+                    ConfirmationPromptText = text,
+                    ConfirmationAddonName = SelectYesNoAddon,
+                };
         }
 
         addon->AtkUnitBase.FireCallbackInt(0);
         log.Info(
-            "[MarketMafioso] Accepted market board purchase confirmation for listing {ListingId} retainer {RetainerId}.",
+            "[MarketMafioso] Submitted market board purchase confirmation for listing {ListingId} retainer {RetainerId}.",
             candidate.ListingId,
             candidate.RetainerId);
 
         return new MarketBoardPurchaseResult
         {
-            Status = "ConfirmationAccepted",
-            Message = $"Accepted market-board purchase confirmation: {text}",
+            Status = "ConfirmationSubmitted",
+            Message = $"Submitted market-board purchase confirmation: {text}",
             Candidate = candidate,
+            ConfirmationPromptText = text,
+            ConfirmationAddonName = SelectYesNoAddon,
         };
     }
 
@@ -146,7 +214,7 @@ public sealed class DalamudMarketBoardPurchaseAdapter : IMarketBoardPurchaseAdap
         for (var index = 0; index < listingCount; index++)
         {
             var candidateListing = infoProxy->Listings[index];
-            if (!Matches(candidateListing, candidate, freshListing))
+            if (!Matches(candidateListing, infoProxy->SearchItemId, candidate, freshListing))
                 continue;
 
             listingIndex = index;
@@ -157,25 +225,22 @@ public sealed class DalamudMarketBoardPurchaseAdapter : IMarketBoardPurchaseAdap
         return false;
     }
 
-    private static unsafe AtkComponentList* FindListingList(AddonItemSearchResult* addon, int listingIndex)
+    private static unsafe string DescribeInfoProxyListings(InfoProxyItemSearch* infoProxy, int limit)
     {
-        foreach (var listId in CandidateListingListIds)
-        {
-            var list = addon->AtkUnitBase.GetComponentListById(listId);
-            if (list == null)
-                continue;
+        var listingCount = Math.Min((int)infoProxy->ListingCount, infoProxy->Listings.Length);
+        var previewCount = Math.Min(listingCount, limit);
+        if (previewCount <= 0)
+            return "none";
 
-            if (list->GetItemCount() <= listingIndex)
-                continue;
+        var preview = new List<string>();
+        for (var index = 0; index < previewCount; index++)
+            preview.Add($"{index}:{DescribeListing(infoProxy->Listings[index])}");
 
-            if (!list->IsItemVisible(listingIndex, true))
-                list->ScrollToItem((short)listingIndex);
-
-            return list;
-        }
-
-        return null;
+        return string.Join(" | ", preview);
     }
+
+    private static string DescribeListing(MarketBoardListing listing) =>
+        $"item={listing.ItemId},listing={listing.ListingId},retainer={listing.RetainerId},unit={listing.UnitPrice},qty={listing.Quantity},hq={listing.IsHqItem}";
 
     private static bool LooksLikeMarketPurchasePrompt(string text)
     {
@@ -189,29 +254,57 @@ public sealed class DalamudMarketBoardPurchaseAdapter : IMarketBoardPurchaseAdap
 
     private static bool Matches(
         MarketBoardListing listing,
+        uint activeSearchItemId,
         MarketBoardPurchaseCandidate candidate,
         MarketBoardLiveListing freshListing) =>
-        listing.ItemId == candidate.ItemId &&
-        listing.ItemId == freshListing.ItemId &&
-        listing.ListingId.ToString().Equals(candidate.ListingId, StringComparison.Ordinal) &&
-        listing.ListingId.ToString().Equals(freshListing.ListingId, StringComparison.Ordinal) &&
-        listing.RetainerId.ToString().Equals(candidate.RetainerId, StringComparison.Ordinal) &&
-        listing.RetainerId.ToString().Equals(freshListing.RetainerId, StringComparison.Ordinal) &&
-        listing.UnitPrice == candidate.UnitPrice &&
-        listing.UnitPrice == freshListing.UnitPrice &&
-        listing.Quantity == candidate.Quantity &&
-        listing.Quantity == freshListing.Quantity &&
-        listing.IsHqItem == candidate.IsHq &&
-        listing.IsHqItem == freshListing.IsHq;
+        MatchesListingForActiveSearch(
+            activeSearchItemId,
+            listing.ItemId,
+            listing.ListingId.ToString(),
+            listing.RetainerId.ToString(),
+            listing.UnitPrice,
+            listing.Quantity,
+            listing.IsHqItem,
+            candidate,
+            freshListing);
+
+    internal static bool MatchesListingForActiveSearch(
+        uint activeSearchItemId,
+        uint rawListingItemId,
+        string listingId,
+        string retainerId,
+        uint unitPrice,
+        uint quantity,
+        bool isHq,
+        MarketBoardPurchaseCandidate candidate,
+        MarketBoardLiveListing freshListing)
+    {
+        _ = rawListingItemId;
+
+        return activeSearchItemId == candidate.ItemId &&
+               activeSearchItemId == freshListing.ItemId &&
+               listingId.Equals(candidate.ListingId, StringComparison.Ordinal) &&
+               listingId.Equals(freshListing.ListingId, StringComparison.Ordinal) &&
+               retainerId.Equals(candidate.RetainerId, StringComparison.Ordinal) &&
+               retainerId.Equals(freshListing.RetainerId, StringComparison.Ordinal) &&
+               unitPrice == candidate.UnitPrice &&
+               unitPrice == freshListing.UnitPrice &&
+               quantity == candidate.Quantity &&
+               quantity == freshListing.Quantity &&
+               isHq == candidate.IsHq &&
+               isHq == freshListing.IsHq;
+    }
 
     private static MarketBoardPurchaseResult Fail(
         string status,
         string message,
-        MarketBoardPurchaseCandidate candidate) =>
+        MarketBoardPurchaseCandidate candidate,
+        IReadOnlyDictionary<string, string>? diagnostics = null) =>
         new()
         {
             Status = status,
             Message = message,
             Candidate = candidate,
+            Diagnostics = diagnostics ?? new Dictionary<string, string>(),
         };
 }

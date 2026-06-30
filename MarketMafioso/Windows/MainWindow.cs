@@ -924,7 +924,7 @@ public class MainWindow : Window, IDisposable
         else if (marketBoardPurchaseResult != null)
         {
             ImGui.TextColored(
-                marketBoardPurchaseResult.Status is "PurchaseSelectionSent" or "ConfirmationAccepted" ? ColHeader : ColError,
+                marketBoardPurchaseResult.Status is "PurchaseSelectionSent" or "ConfirmationSubmitted" ? ColHeader : ColError,
                 $"Purchase status: {marketBoardPurchaseResult.Status} - {marketBoardPurchaseResult.Message}");
         }
     }
@@ -993,10 +993,18 @@ public class MainWindow : Window, IDisposable
             marketAcquisitionLiveCandidatePlan,
             freshRead);
         marketBoardPurchaseSession = null;
+        marketAcquisitionRouteRunner.RecordAutomationSnapshot(CreatePurchaseSelectionSnapshot(marketBoardPurchaseResult));
 
         if (marketBoardPurchaseResult.Status.Equals("NoCandidate", StringComparison.OrdinalIgnoreCase))
         {
             CompleteActiveWorldPurchaseBatch(currentWorld);
+            return;
+        }
+
+        if (ClassifyPurchaseSelectionOutcome(marketBoardPurchaseResult.Status) == MarketBoardAutomationOutcome.Recoverable)
+        {
+            acquisitionStatus = $"Purchase: {marketBoardPurchaseResult.Status}. {marketBoardPurchaseResult.Message}";
+            nextGuidedRouteMonitorUtc = DateTimeOffset.UtcNow.AddMilliseconds(250);
             return;
         }
 
@@ -1116,6 +1124,7 @@ public class MainWindow : Window, IDisposable
             if (session.Status.Equals("WaitingForConfirmation", StringComparison.OrdinalIgnoreCase))
             {
                 marketBoardPurchaseResult = marketBoardPurchaseAdapter.TryConfirmPendingPurchase(session.Candidate);
+                marketAcquisitionRouteRunner.RecordAutomationSnapshot(CreatePurchaseConfirmationSnapshot(marketBoardPurchaseResult, session.Candidate));
                 session = session.RecordConfirmationAttempt(
                     marketBoardPurchaseResult,
                     now,
@@ -1147,6 +1156,12 @@ public class MainWindow : Window, IDisposable
                 else
                     BeginNextWorldPurchase();
             }
+            else if (!session.IsActive)
+            {
+                marketAcquisitionRouteRunner.FailRoute($"World purchase batch stopped: {session.Message}");
+                acquisitionStatus = marketAcquisitionRouteRunner.StatusMessage;
+                ReportGuidedRouteProgress();
+            }
         }
         catch (Exception ex)
         {
@@ -1158,6 +1173,112 @@ public class MainWindow : Window, IDisposable
             acquisitionStatus = $"Purchase monitor failed: {ex.Message}";
             log.Warning(ex, "[MarketMafioso] Unable to monitor guarded market-board purchase.");
         }
+    }
+
+    private static MarketBoardAutomationSnapshot CreatePurchaseConfirmationSnapshot(
+        MarketBoardPurchaseResult result,
+        MarketBoardPurchaseCandidate candidate)
+    {
+        return MarketBoardAutomationSnapshot.Create(
+            "BuyListing",
+            "Confirmation",
+            "PurchasePrompt",
+            result.Status,
+            ClassifyPurchaseConfirmationOutcome(result.Status),
+            ChoosePurchaseConfirmationNextAction(result.Status),
+            new Dictionary<string, string?>
+            {
+                ["candidateItemId"] = candidate.ItemId.ToString(),
+                ["candidateWorld"] = candidate.WorldName,
+                ["candidateListingId"] = candidate.ListingId,
+                ["candidateRetainerId"] = candidate.RetainerId,
+                ["candidateQuantity"] = candidate.Quantity.ToString(),
+                ["candidateUnitPrice"] = candidate.UnitPrice.ToString(),
+                ["candidateTotalGil"] = candidate.TotalGil.ToString(),
+                ["confirmationAddon"] = result.ConfirmationAddonName,
+                ["confirmationPromptText"] = result.ConfirmationPromptText,
+            });
+    }
+
+    private static MarketBoardAutomationSnapshot CreatePurchaseSelectionSnapshot(MarketBoardPurchaseResult result)
+    {
+        var details = new Dictionary<string, string?>(StringComparer.Ordinal)
+        {
+            ["resultMessage"] = result.Message,
+        };
+
+        if (result.Candidate != null)
+        {
+            details["candidateItemId"] = result.Candidate.ItemId.ToString();
+            details["candidateWorld"] = result.Candidate.WorldName;
+            details["candidateListingId"] = result.Candidate.ListingId;
+            details["candidateRetainerId"] = result.Candidate.RetainerId;
+            details["candidateQuantity"] = result.Candidate.Quantity.ToString();
+            details["candidateUnitPrice"] = result.Candidate.UnitPrice.ToString();
+            details["candidateTotalGil"] = result.Candidate.TotalGil.ToString();
+        }
+
+        foreach (var pair in result.Diagnostics)
+            details[pair.Key] = pair.Value;
+
+        return MarketBoardAutomationSnapshot.Create(
+            "BuyListing",
+            "Selection",
+            "ClickableMarketBoardListing",
+            result.Status,
+            ClassifyPurchaseSelectionOutcome(result.Status),
+            ChoosePurchaseSelectionNextAction(result.Status),
+            details);
+    }
+
+    private static MarketBoardAutomationOutcome ClassifyPurchaseSelectionOutcome(string status)
+    {
+        return status switch
+        {
+            "PurchaseSelectionSent" => MarketBoardAutomationOutcome.InProgress,
+            "NoCandidate" => MarketBoardAutomationOutcome.ExpectedAlternate,
+            "MarketBoardNotOpen" => MarketBoardAutomationOutcome.Recoverable,
+            "InfoProxyUnavailable" => MarketBoardAutomationOutcome.Recoverable,
+            "ListingListUnavailable" => MarketBoardAutomationOutcome.Recoverable,
+            "ListingListNotReady" => MarketBoardAutomationOutcome.Recoverable,
+            _ => MarketBoardAutomationOutcome.Fatal,
+        };
+    }
+
+    private static string ChoosePurchaseSelectionNextAction(string status)
+    {
+        return status switch
+        {
+            "PurchaseSelectionSent" => "WaitForConfirmation",
+            "NoCandidate" => "CompleteWorldBatch",
+            "MarketBoardNotOpen" => "ReopenMarketBoard",
+            "InfoProxyUnavailable" => "RetryPurchaseSelection",
+            "ListingListUnavailable" => "InspectListComponentState",
+            "ListingListNotReady" => "RetryPurchaseSelection",
+            _ => "StopRoute",
+        };
+    }
+
+    private static MarketBoardAutomationOutcome ClassifyPurchaseConfirmationOutcome(string status)
+    {
+        return status switch
+        {
+            "ConfirmationSubmitted" => MarketBoardAutomationOutcome.InProgress,
+            "ConfirmationPending" => MarketBoardAutomationOutcome.InProgress,
+            "UnexpectedConfirmation" => MarketBoardAutomationOutcome.Fatal,
+            _ => MarketBoardAutomationOutcome.Recoverable,
+        };
+    }
+
+    private static string ChoosePurchaseConfirmationNextAction(string status)
+    {
+        return status switch
+        {
+            "ConfirmationSubmitted" => "VerifyListingRemoval",
+            "ConfirmationPending" => "ContinueMonitoring",
+            "UnexpectedConfirmation" => "CaptureInputState",
+            _ => "ContinueMonitoring",
+        };
     }
 
     private static void DrawClaimedRequestRow(string label, string value)
