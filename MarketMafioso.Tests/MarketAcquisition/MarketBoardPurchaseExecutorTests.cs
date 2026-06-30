@@ -65,6 +65,28 @@ public sealed class MarketBoardPurchaseExecutorTests
         Assert.Equal("cheap", adapter.LastCandidate?.ListingId);
     }
 
+    [Fact]
+    public void ExecuteFirstCandidate_PrefersFirstFreshSafeRowOverCheapestPlannedIdentity()
+    {
+        var adapter = new RecordingPurchaseAdapter();
+        var executor = new MarketMafioso.MarketAcquisition.MarketBoardPurchaseExecutor(adapter);
+
+        var result = executor.ExecuteFirstCandidate(
+            new MarketMafioso.MarketAcquisition.MarketAcquisitionLiveCandidatePlan
+            {
+                Rows =
+                [
+                    CreateRow("WouldBuy", CreateListing("offscreen-cheapest", unitPrice: 900)),
+                    CreateRow("WouldBuy", CreateListing("visible-first", unitPrice: 1_000)),
+                ],
+            },
+            CreateRead(CreateListing("visible-first", unitPrice: 1_000), CreateListing("offscreen-cheapest", unitPrice: 900)));
+
+        Assert.Equal("AdapterCalled", result.Status);
+        Assert.Equal(1, adapter.Attempts);
+        Assert.Equal("visible-first", adapter.LastCandidate?.ListingId);
+    }
+
     private sealed class RecordingPurchaseAdapter : MarketMafioso.MarketAcquisition.IMarketBoardPurchaseAdapter
     {
         public int Attempts { get; private set; }

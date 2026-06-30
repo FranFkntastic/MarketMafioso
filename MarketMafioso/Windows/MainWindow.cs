@@ -1094,7 +1094,6 @@ public class MainWindow : Window, IDisposable
         marketBoardReconciliation = null;
         marketAcquisitionLiveCandidatePlan = null;
         ClearMarketBoardAutomationState();
-        marketBoardItemSearchDriver.ResetSubmittedSearch();
         marketAcquisitionRouteRunner.ClearSearchSubmission(reason);
         TryCloseMarketBoardWindows();
         nextGuidedRouteMonitorUtc = DateTimeOffset.UtcNow.AddMilliseconds(250);

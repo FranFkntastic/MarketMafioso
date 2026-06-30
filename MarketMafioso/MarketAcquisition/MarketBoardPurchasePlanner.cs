@@ -17,6 +17,26 @@ public static class MarketBoardPurchasePlanner
             : MarketBoardPurchaseCandidate.FromLiveListing(row.LiveListing);
     }
 
+    public static MarketBoardPurchaseCandidate? SelectFirstFreshSafeCandidate(
+        MarketAcquisitionLiveCandidatePlan candidatePlan,
+        MarketBoardReadResult freshRead)
+    {
+        ArgumentNullException.ThrowIfNull(candidatePlan);
+        ArgumentNullException.ThrowIfNull(freshRead);
+
+        foreach (var freshListing in freshRead.Listings.Where(MarketBoardListingIntegrity.IsRealListing))
+        {
+            var safeRow = candidatePlan.Rows.FirstOrDefault(row =>
+                row.Decision.Equals("WouldBuy", StringComparison.OrdinalIgnoreCase) &&
+                MarketBoardListingIntegrity.IsRealListing(row.LiveListing) &&
+                MarketBoardPurchaseCandidate.FromLiveListing(row.LiveListing).Matches(freshListing));
+            if (safeRow != null)
+                return MarketBoardPurchaseCandidate.FromLiveListing(freshListing);
+        }
+
+        return null;
+    }
+
     public static MarketBoardPurchaseRevalidation RevalidateCandidate(
         MarketBoardPurchaseCandidate candidate,
         MarketBoardReadResult freshRead)

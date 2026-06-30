@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -9,8 +10,8 @@ namespace MarketMafioso.MarketAcquisition;
 public sealed class MarketAcquisitionRouteRunner : IDisposable
 {
     private const string LocalMarketBoardCommand = "/li mb";
-    private static readonly TimeSpan ItemSearchAutomationTimeout = TimeSpan.FromSeconds(15);
-    private static readonly TimeSpan ListingCacheFreshnessTimeout = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan MarketBoardSearchWatchdog = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan MarketBoardListingFreshnessWatchdog = TimeSpan.FromSeconds(15);
 
     private readonly string diagnosticsDirectory;
     private readonly UniversalisFreshnessVerifierDelegate? universalisFreshnessVerifier;
@@ -428,6 +429,9 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         SearchSubmitted = searchResult.ReadyForListings;
         var details = new Dictionary<string, string?>
         {
+            ["automationTaskName"] = "MarketBoardItemSearch",
+            ["lastWaitingPredicate"] = searchResult.ReadyForListings ? "ListingsReady" : searchResult.Status,
+            ["watchdogBoundarySeconds"] = MarketBoardSearchWatchdog.TotalSeconds.ToString("F0", CultureInfo.InvariantCulture),
             ["status"] = searchResult.Status,
             ["searchSubmitted"] = SearchSubmitted.ToString(),
             ["subtaskSource"] = session?.ActiveStop?.ActiveItemSubtask?.Source,
@@ -451,10 +455,11 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
 
         if (searchResult.IsInProgress &&
             itemSearchAutomationStartedUtc is { } started &&
-            nowUtc - started > ItemSearchAutomationTimeout)
+            nowUtc - started > MarketBoardSearchWatchdog)
         {
             var timeoutMessage =
-                $"Market board item search automation timed out after {ItemSearchAutomationTimeout.TotalSeconds:N0}s while waiting for listings. Last status: {searchResult.Status}.";
+                $"Market board item search automation timed out after {MarketBoardSearchWatchdog.TotalSeconds:N0}s while waiting for listings. Last status: {searchResult.Status}.";
+            details["timeoutBoundary"] = "MarketBoardSearchWatchdog";
             diagnostics.RecordAutomationSnapshot(CreateSearchAutomationSnapshot(searchResult, "TimedOut", details));
             return FailRoute(timeoutMessage);
         }
@@ -604,7 +609,7 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
             });
 
         if (listingReadPendingStartedUtc is { } startedAt &&
-            nowUtc - startedAt > ListingCacheFreshnessTimeout)
+            nowUtc - startedAt > MarketBoardListingFreshnessWatchdog)
         {
             var timeoutMessage =
                 $"Market board listing cache did not become fresh for {activeSubtask?.ItemName ?? $"item {readResult.ItemId}"} ({readResult.ItemId}) on {currentWorld}. {readResult.Message}";

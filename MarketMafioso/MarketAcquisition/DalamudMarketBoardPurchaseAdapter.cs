@@ -188,10 +188,10 @@ public sealed class DalamudMarketBoardPurchaseAdapter : IMarketBoardPurchaseAdap
                 "UnexpectedConfirmation",
                 $"A SelectYesno prompt appeared, but it did not look like a market-board purchase prompt: {text}",
                 candidate) with
-                {
-                    ConfirmationPromptText = text,
-                    ConfirmationAddonName = SelectYesNoAddon,
-                };
+            {
+                ConfirmationPromptText = text,
+                ConfirmationAddonName = SelectYesNoAddon,
+            };
         }
 
         addon->AtkUnitBase.FireCallbackInt(0);

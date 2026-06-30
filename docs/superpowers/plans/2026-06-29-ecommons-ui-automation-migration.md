@@ -21,6 +21,7 @@ Last updated: 2026-06-30
 - Slice 5 complete: purchase confirmation now has explicit phases through `MarketBoardPurchaseSessionPhase`; confirmation submission and listing-removal proof are separate states.
 - Slice 5.5 complete: listing-cache freshness is explicit before further orchestration refactor. The 2026-06-30 route after the freshness slice completed without incident, and commit `073372a` was pushed to `local-dev`, fast-forwarded into `main`, pushed, and deployed to the configured dev-plugin DLL.
 - Slice 6 complete as a local-dev checkpoint: `MarketBoardAutomationController` owns purchase session/result state, the purchase monitor schedule, and the confirmation/listing-removal polling state machine. `MainWindow` still owns route orchestration, diagnostic snapshot recording, and route-level purchase counters.
+- Slice 6.5 in progress: purchase execution now prefers the first currently fresh safe market-board row over the globally cheapest planned listing identity. The plan remains advisory; live read order is authoritative for the physical click.
 - Slice 7 intentionally partial: obsolete arbitrary search success checks were removed where proven harmful, but watchdogs remain as failure boundaries. Do not remove remaining timing boundaries until live logs prove equivalent condition-based behavior.
 - Slice 8 pending live validation: SimpleTweaks-enabled search, listing-list retry, multi-item same-world routes, and multi-world routes still need in-game confirmation.
 
@@ -847,6 +848,60 @@ git commit -m "fix: require fresh market listing cache before planning"
 
 ---
 
+## Slice 6.5: Prefer Fresh Clickable Purchase Rows
+
+Execution trigger: `route-20260630-054843.log` reached Seraph with a valid Hardened Sap live candidate but timed out waiting for purchase confirmation. Diagnostics showed the globally cheapest planned listing was `matchedRow: 10` while the clickable list exposed `10` visible rows. Treating an absolute `InfoProxy` row as a clickable list row made the adapter report `PurchaseSelectionSent` without opening a confirmation prompt.
+
+Design:
+
+- Advisory planning may still sort safe listings by price for route summaries and totals.
+- Purchase execution must choose the first fresh market-board listing row that is already marked safe by the candidate plan.
+- Do not construct a candidate from a changed listing merely because its listing id/retainer id matches; item, world, price, quantity, and HQ must still match a safe row.
+- If a safe advisory candidate exists but no currently fresh row matches it, report recoverable `ListingListNotReady` instead of dispatching a blind click.
+
+**Files:**
+- Modify: `MarketMafioso/MarketAcquisition/MarketBoardPurchasePlanner.cs`
+- Modify: `MarketMafioso/MarketAcquisition/MarketBoardPurchaseExecutor.cs`
+- Modify: `MarketMafioso.Tests/MarketAcquisition/MarketBoardPurchaseExecutorTests.cs`
+
+- [x] **Step 1: Add regression test**
+
+Added `ExecuteFirstCandidate_PrefersFirstFreshSafeRowOverCheapestPlannedIdentity`.
+
+Expected failure before patch: adapter receives `offscreen-cheapest` instead of `visible-first`.
+
+- [x] **Step 2: Add fresh-row selector**
+
+`MarketBoardPurchasePlanner.SelectFirstFreshSafeCandidate` iterates fresh read order and only accepts rows that exactly match a `WouldBuy` candidate-plan row.
+
+- [x] **Step 3: Switch executor selection**
+
+`MarketBoardPurchaseExecutor` now buys the first fresh safe row. It preserves old revalidation failures for changed/missing candidates and returns recoverable `ListingListNotReady` when a safe advisory candidate exists but no fresh visible/read row can be selected.
+
+- [x] **Step 4: Focused verification**
+
+Run:
+
+```powershell
+dotnet test "MarketMafioso.Tests/MarketMafioso.Tests.csproj" -c Debug --filter "FullyQualifiedName~MarketBoardPurchaseExecutorTests" -v minimal
+```
+
+Expected: executor tests pass.
+
+- [x] **Step 5: Deploy for live validation**
+
+Run:
+
+```powershell
+MarketMafioso/tools/Deploy-DevPlugin.ps1
+```
+
+Result: deployed manifest `1.1.228.20331` to the configured dev-plugin DLL with SHA256 `4F6BA4580B12AFD428397BA1C2C7D50EA6E1FFBD35B8BDA032322DDBD5AA09D7`.
+
+Expected live validation: route no longer times out after choosing an offscreen cheaper identity when a safe fresh top row is available.
+
+---
+
 ## Slice 7: Remove Obsolete Time-Gated Search/Purchase Paths
 
 **Files:**
@@ -856,11 +911,13 @@ git commit -m "fix: require fresh market listing cache before planning"
 - Modify: `MarketMafioso/Windows/MainWindow.cs`
 - Modify: `docs/design/2026-06-29-market-acquisition-future-refactor.md`
 
-- [ ] **Step 1: Remove dead retry constants**
+- [x] **Step 1: Remove dead retry constants**
 
 Remove constants and fields that only exist for the legacy time-gated path, such as stale submitted-search retry fields that are no longer used by predicate gates.
 
-- [ ] **Step 2: Preserve timeout diagnostics**
+Result: `MarketBoardItemSearchDriver` no longer stores submitted-search item/text/timestamp state and no longer owns a retry delay. Search waiting is now based on current addon/agent predicates, while route-level watchdogs remain the failure boundary.
+
+- [x] **Step 2: Preserve timeout diagnostics**
 
 Do not remove watchdogs. Rename them to reflect their role as failure boundaries:
 
@@ -868,7 +925,9 @@ Do not remove watchdogs. Rename them to reflect their role as failure boundaries
 - `MarketBoardPurchaseConfirmationWatchdog`
 - `MarketBoardPurchaseListingRemovalWatchdog`
 
-- [ ] **Step 3: Update route diagnostics vocabulary**
+Result: route search and listing freshness timeouts are named as watchdogs. Purchase confirmation and listing-removal watchdog names were already in the desired shape.
+
+- [x] **Step 3: Update route diagnostics vocabulary**
 
 Diagnostics should include:
 
@@ -879,7 +938,9 @@ Diagnostics should include:
 - clickable listing list status,
 - timeout boundary if failure occurred.
 
-- [ ] **Step 4: Update future-refactor doc**
+Result: search automation journal entries now include `automationTaskName`, `lastWaitingPredicate`, and `watchdogBoundarySeconds`; timeout snapshots include `timeoutBoundary`. Addon/agent readiness and listing/probe details continue to be emitted by the search driver, listing reader, and listing-list probe.
+
+- [x] **Step 4: Update future-refactor doc**
 
 Mark the following as completed or partially completed in `docs/design/2026-06-29-market-acquisition-future-refactor.md`:
 
@@ -887,7 +948,9 @@ Mark the following as completed or partially completed in `docs/design/2026-06-2
 - listing-list selection diagnostics,
 - execution controller extraction if Slice 6 completed.
 
-- [ ] **Step 5: Run broader verification**
+Result: updated the future-refactor note to reflect that the obsolete submitted-search timing gate has been removed and watchdogs are now diagnostic boundaries.
+
+- [x] **Step 5: Run broader verification**
 
 Run:
 
@@ -899,12 +962,21 @@ MarketMafioso/tools/Deploy-DevPlugin.ps1
 
 Expected: plugin tests pass, plugin builds, deploy succeeds.
 
-- [ ] **Step 6: Commit cleanup slice**
+Result:
+
+- `dotnet test "MarketMafioso.Tests/MarketMafioso.Tests.csproj" -c Debug -v minimal`: 389 passed.
+- `dotnet build "MarketMafioso/MarketMafioso.csproj" -c Debug`: succeeded with 0 warnings and 0 errors.
+- `dotnet format "MarketMafioso.sln" --verify-no-changes`: passed after a small whitespace cleanup.
+- `MarketMafioso/tools/Deploy-DevPlugin.ps1`: deployed visible manifest `1.1.228.19672` to the configured dev-plugin DLL with SHA256 `4CD827757216C048CC3C2EA354FEC6AF23E8087980BF11AA3213DE22110F632B`.
+
+- [x] **Step 6: Commit cleanup slice**
 
 ```powershell
 git add MarketMafioso/MarketAcquisition MarketMafioso/Windows/MainWindow.cs docs/design/2026-06-29-market-acquisition-future-refactor.md
 git commit -m "refactor: remove legacy market automation timing gates"
 ```
+
+Result: committed the Slice 6.5 and Slice 7 checkpoint together as `38b818d refactor: simplify market board purchase automation`.
 
 ---
 

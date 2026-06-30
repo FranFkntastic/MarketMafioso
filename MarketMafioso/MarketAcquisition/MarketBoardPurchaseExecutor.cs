@@ -35,17 +35,36 @@ public sealed class MarketBoardPurchaseExecutor
             };
         }
 
-        var revalidation = MarketBoardPurchasePlanner.RevalidateCandidate(candidate, freshRead);
+        var freshCandidate = MarketBoardPurchasePlanner.SelectFirstFreshSafeCandidate(candidatePlan, freshRead);
+        if (freshCandidate == null)
+        {
+            var advisoryRevalidation = MarketBoardPurchasePlanner.RevalidateCandidate(candidate, freshRead);
+            return advisoryRevalidation.CanAttemptPurchase
+                ? new MarketBoardPurchaseResult
+                {
+                    Status = "ListingListNotReady",
+                    Message = "A safe purchase candidate exists, but no currently visible fresh market-board row matches it yet.",
+                    Candidate = candidate,
+                }
+                : new MarketBoardPurchaseResult
+                {
+                    Status = advisoryRevalidation.Status,
+                    Message = advisoryRevalidation.Message,
+                    Candidate = candidate,
+                };
+        }
+
+        var revalidation = MarketBoardPurchasePlanner.RevalidateCandidate(freshCandidate, freshRead);
         if (!revalidation.CanAttemptPurchase)
         {
             return new MarketBoardPurchaseResult
             {
                 Status = revalidation.Status,
                 Message = revalidation.Message,
-                Candidate = candidate,
+                Candidate = freshCandidate,
             };
         }
 
-        return adapter.ExecutePurchase(candidate, revalidation.FreshListing!);
+        return adapter.ExecutePurchase(freshCandidate, revalidation.FreshListing!);
     }
 }

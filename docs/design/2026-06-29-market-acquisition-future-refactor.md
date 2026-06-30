@@ -30,9 +30,10 @@ This is much healthier than the original shape: planners, readers, sessions, and
 - Completed: market-board item search now records whether an activation was actually sent, instead of treating an enabled button as proof that search happened.
 - Completed: listing-list selection now reports clickable-list readiness and candidate component diagnostics, reducing the "row exists visually but code cannot click it" failure shape.
 - Completed: purchase confirmation state distinguishes confirmation submission from proven listing removal.
+- Completed: the obsolete submitted-search retry timer/state was removed from `MarketBoardItemSearchDriver`. Market-board search waiting now uses current addon/agent predicates, with `MarketBoardSearchWatchdog` reserved as a route-level failure boundary.
 - Completed, pending live validation: listing-cache freshness is now an explicit typed read state. Stale mixed-item rows become `SwitchingItem`, are excluded from candidate planning, and keep the route waiting until the cache becomes fresh or the freshness watchdog fails loudly.
 - Partial: the execution-controller seam exists, but `MainWindow` still owns route orchestration, active route ticks, and most user-facing acquisition status.
-- Pending: route diagnostics still need a single structured snapshot model that spans search, listing read, selection, confirmation, and post-purchase verification.
+- Partial: route diagnostics now use structured snapshots for search, selection, confirmation, and post-purchase verification, and search snapshots now name the automation task, waiting predicate, and watchdog boundary. Listing-read diagnostics are still journal-first rather than one unified snapshot vocabulary.
 - Completed: route diagnostics now emit companion CSV evidence files for observed live listing rows and purchase audit records beside each route log.
 
 ## Main Structural Problems

@@ -15,21 +15,13 @@ public sealed class MarketBoardItemSearchDriver
 {
     private const string ItemSearchAddon = "ItemSearch";
     private const string ItemSearchResultAddon = "ItemSearchResult";
-    private static readonly TimeSpan SearchRetryDelay = TimeSpan.FromSeconds(1.25);
 
     private readonly IGameGui gameGui;
-    private uint submittedSearchItemId;
-    private string? submittedSearchText;
-    private DateTimeOffset? submittedSearchAtUtc;
 
     public MarketBoardItemSearchDriver(IGameGui gameGui)
     {
         this.gameGui = gameGui;
     }
-
-    internal static TimeSpan SubmittedSearchRetryDelay => SearchRetryDelay;
-
-    public void ResetSubmittedSearch() => ClearSubmittedSearch();
 
     public unsafe MarketBoardItemSearchResult Search(uint itemId, string? itemName)
     {
@@ -46,7 +38,6 @@ public sealed class MarketBoardItemSearchDriver
             var openResultItemId = infoProxy == null ? 0 : infoProxy->SearchItemId;
             if (IsOpenListingResultForRequestedItem(itemId, openResultItemId))
             {
-                ClearSubmittedSearch();
                 return new MarketBoardItemSearchResult
                 {
                     Status = "ListingsReady",
@@ -59,7 +50,6 @@ public sealed class MarketBoardItemSearchDriver
                 };
             }
 
-            ClearSubmittedSearch();
             itemSearchResult->AtkUnitBase.Close(true);
             return new MarketBoardItemSearchResult
             {
@@ -98,7 +88,6 @@ public sealed class MarketBoardItemSearchDriver
 
         if (ChooseAction(mode) == MarketBoardItemSearchAction.ResetMode)
         {
-            ClearSubmittedSearch();
             addon->SetModeFilter(AddonItemSearch.SearchMode.Normal, 0);
             return new MarketBoardItemSearchResult
             {
@@ -118,7 +107,6 @@ public sealed class MarketBoardItemSearchDriver
         AddAgentDetails(details, agent);
         if (TryOpenExactItemResult(addon, agent, itemId, details))
         {
-            ClearSubmittedSearch();
             return new MarketBoardItemSearchResult
             {
                 Status = "ItemOpenSent",
@@ -127,41 +115,23 @@ public sealed class MarketBoardItemSearchDriver
             };
         }
 
-        var searchMatchesSubmittedState = IsSubmittedSearchCurrent(submittedSearchItemId, submittedSearchText, itemId, searchText);
-        if (searchMatchesSubmittedState)
+        if (IsSearchAgentStillWorking(agent))
         {
-            var exactItemVisible = AgentContainsItem(agent, itemId);
             var agentIsPartialSearching = agent != null && agent->IsPartialSearching;
             var agentIsItemPushPending = agent != null && agent->IsItemPushPending;
-            var elapsedSinceSubmit = DateTimeOffset.UtcNow - submittedSearchAtUtc.GetValueOrDefault(DateTimeOffset.UtcNow);
-            var shouldWait = ShouldWaitForSubmittedSearch(
-                searchMatchesSubmittedState,
-                exactItemVisible,
-                agentIsPartialSearching,
-                agentIsItemPushPending,
-                elapsedSinceSubmit,
-                SearchRetryDelay);
+            details["searchAgentStillWorking"] = true.ToString();
+            details["searchAgentExactItemVisible"] = AgentContainsItem(agent, itemId).ToString();
+            details["submitAgentIsPartialSearching"] = agentIsPartialSearching.ToString();
+            details["submitAgentIsItemPushPending"] = agentIsItemPushPending.ToString();
+            details["searchSource"] = "AgentPredicate";
+            details["partialSearchAfter"] = addon->PartialMatch.ToString();
 
-            details["searchAlreadySubmitted"] = true.ToString();
-            details["submittedSearchExactItemVisible"] = exactItemVisible.ToString();
-            details["submittedSearchStillInFlight"] = shouldWait.ToString();
-            details["submittedSearchElapsedSeconds"] = Math.Max(0, elapsedSinceSubmit.TotalSeconds).ToString("F1", CultureInfo.InvariantCulture);
-            details["submittedSearchRetryDelaySeconds"] = SearchRetryDelay.TotalSeconds.ToString("F1", CultureInfo.InvariantCulture);
-            if (shouldWait)
+            return new MarketBoardItemSearchResult
             {
-                details["searchSource"] = "TextInputEnterCallback";
-                details["partialSearchAfter"] = addon->PartialMatch.ToString();
-
-                return new MarketBoardItemSearchResult
-                {
-                    Status = "SearchSent",
-                    Message = $"Waiting for market board item search results for {searchText} ({itemId}).",
-                    Details = details,
-                };
-            }
-
-            details["staleSubmittedSearchCleared"] = true.ToString();
-            ClearSubmittedSearch();
+                Status = "SearchSent",
+                Message = $"Waiting for market board item search results for {searchText} ({itemId}).",
+                Details = details,
+            };
         }
 
         if (!TrySubmitSearchWithTextInputEnter(addon, agent, itemId, searchText, details))
@@ -174,12 +144,9 @@ public sealed class MarketBoardItemSearchDriver
             };
         }
 
-        submittedSearchItemId = itemId;
-        submittedSearchText = searchText;
-        submittedSearchAtUtc = DateTimeOffset.UtcNow;
         details["partialSearchAfter"] = addon->PartialMatch.ToString();
         AddAgentDetails(details, agent);
-        details["searchAlreadySubmitted"] = false.ToString();
+        details["searchAgentStillWorking"] = false.ToString();
 
         return new MarketBoardItemSearchResult
         {
@@ -275,25 +242,9 @@ public sealed class MarketBoardItemSearchDriver
         return false;
     }
 
-    internal static bool IsSubmittedSearchCurrent(uint submittedItemId, string? submittedText, uint itemId, string searchText)
+    internal static unsafe bool IsSearchAgentStillWorking(AgentItemSearch* agent)
     {
-        return submittedItemId == itemId
-            && string.Equals(submittedText?.Trim(), searchText.Trim(), StringComparison.OrdinalIgnoreCase);
-    }
-
-    internal static bool ShouldWaitForSubmittedSearch(
-        bool searchMatches,
-        bool exactItemVisible,
-        bool agentIsPartialSearching,
-        bool agentIsItemPushPending,
-        TimeSpan elapsedSinceSubmit,
-        TimeSpan retryDelay)
-    {
-        return searchMatches &&
-               (exactItemVisible ||
-                agentIsPartialSearching ||
-                agentIsItemPushPending ||
-                elapsedSinceSubmit < retryDelay);
+        return agent != null && (agent->IsPartialSearching || agent->IsItemPushPending);
     }
 
     internal static bool IsOpenListingResultForRequestedItem(uint requestedItemId, uint openResultItemId)
@@ -591,13 +542,6 @@ public sealed class MarketBoardItemSearchDriver
                 AtkTextInputAutomation.InvokeCallback(&addon->AtkUnitBase, inputBase, UiTextInputCallbackKind.Enter),
             _ => throw new ArgumentOutOfRangeException(nameof(callback), callback, null),
         };
-    }
-
-    private void ClearSubmittedSearch()
-    {
-        submittedSearchItemId = 0;
-        submittedSearchText = null;
-        submittedSearchAtUtc = null;
     }
 
     private static unsafe bool TryOpenExactItemResult(
