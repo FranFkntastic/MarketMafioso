@@ -10,8 +10,9 @@ public sealed record MarketBoardPurchaseSession
     public MarketBoardPurchaseCandidate Candidate { get; init; } = new();
     public DateTimeOffset StartedAtUtc { get; init; }
     public DateTimeOffset DeadlineUtc { get; init; }
+    public MarketBoardPurchaseSessionPhase Phase => ResolvePhase(Status);
     public bool IsActive =>
-        Status is "WaitingForConfirmation" or "WaitingForListingRemoval";
+        Phase is MarketBoardPurchaseSessionPhase.WaitingForConfirmation or MarketBoardPurchaseSessionPhase.WaitingForListingRemoval;
 
     public static MarketBoardPurchaseSession Start(
         MarketBoardPurchaseCandidate candidate,
@@ -36,12 +37,12 @@ public sealed record MarketBoardPurchaseSession
         if (!Status.Equals("WaitingForConfirmation", StringComparison.OrdinalIgnoreCase))
             return this;
 
-        if (result.Status.Equals("ConfirmationAccepted", StringComparison.OrdinalIgnoreCase))
+        if (result.Status.Equals("ConfirmationSubmitted", StringComparison.OrdinalIgnoreCase))
         {
             return this with
             {
                 Status = "WaitingForListingRemoval",
-                Message = "Purchase confirmation accepted; waiting for the purchased listing to disappear.",
+                Message = "Purchase confirmation submitted; waiting for the guarded listing to disappear.",
                 DeadlineUtc = nowUtc.Add(listingRemovalWatchdog),
             };
         }
@@ -73,7 +74,7 @@ public sealed record MarketBoardPurchaseSession
             return this with
             {
                 Status = "Completed",
-                Message = "Confirmed purchase: the market-board result window closed after confirmation, so the guarded listing is considered removed.",
+                Message = "Confirmed purchase: the market-board result window closed after confirmation submission, so the guarded listing is considered removed.",
             };
         }
 
@@ -100,14 +101,14 @@ public sealed record MarketBoardPurchaseSession
         {
             return this with
             {
-                Message = "Purchase confirmation was accepted; waiting for live listings to reflect the purchase.",
+                Message = "Purchase confirmation was submitted; waiting for live listings to reflect the purchase.",
             };
         }
 
         return this with
         {
-            Status = "ListingRemovalTimeout",
-            Message = $"Purchase confirmation was accepted, but the guarded listing is still present or unreadable: {revalidation.Message}",
+            Status = "PurchaseOutcomeUnknown",
+            Message = $"Purchase confirmation was submitted, but guarded listing {Candidate.ListingId} is still present or unreadable: {revalidation.Message}",
         };
     }
 
@@ -115,6 +116,9 @@ public sealed record MarketBoardPurchaseSession
     {
         ArgumentNullException.ThrowIfNull(freshRead);
 
+        var revalidation = freshRead.Status.Equals("Ready", StringComparison.OrdinalIgnoreCase)
+            ? MarketBoardPurchasePlanner.RevalidateCandidate(Candidate, freshRead)
+            : MarketBoardPurchaseRevalidation.Fail(freshRead.Status, freshRead.Message);
         var outcome = ClassifyFreshReadOutcome(freshRead);
         return MarketBoardAutomationSnapshot.Create(
             "BuyListing",
@@ -137,6 +141,9 @@ public sealed record MarketBoardPurchaseSession
                 ["readReportedListingCount"] = freshRead.ReportedListingCount.ToString(),
                 ["readListingCapacity"] = freshRead.ListingCapacity.ToString(),
                 ["readIsListingCountTruncated"] = freshRead.IsListingCountTruncated.ToString(),
+                ["revalidationStatus"] = revalidation.Status,
+                ["revalidationMessage"] = revalidation.Message,
+                ["candidateStillPresent"] = ResolveCandidateStillPresent(revalidation.Status),
             });
     }
 
@@ -166,4 +173,34 @@ public sealed record MarketBoardPurchaseSession
             _ => "ContinueMonitoring",
         };
     }
+
+    private static string ResolveCandidateStillPresent(string revalidationStatus)
+    {
+        if (revalidationStatus.Equals("Ready", StringComparison.OrdinalIgnoreCase))
+            return "True";
+
+        if (revalidationStatus.Equals("ListingMissing", StringComparison.OrdinalIgnoreCase))
+            return "False";
+
+        return "Unknown";
+    }
+
+    private static MarketBoardPurchaseSessionPhase ResolvePhase(string status)
+    {
+        return status switch
+        {
+            "WaitingForConfirmation" => MarketBoardPurchaseSessionPhase.WaitingForConfirmation,
+            "WaitingForListingRemoval" => MarketBoardPurchaseSessionPhase.WaitingForListingRemoval,
+            "Completed" => MarketBoardPurchaseSessionPhase.Completed,
+            _ => MarketBoardPurchaseSessionPhase.Failed,
+        };
+    }
+}
+
+public enum MarketBoardPurchaseSessionPhase
+{
+    WaitingForConfirmation,
+    WaitingForListingRemoval,
+    Completed,
+    Failed,
 }

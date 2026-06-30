@@ -3,7 +3,7 @@ namespace MarketMafioso.Tests.MarketAcquisition;
 public sealed class MarketBoardPurchaseSessionTests
 {
     [Fact]
-    public void RecordConfirmationAttempt_WaitsUntilPromptIsAccepted()
+    public void RecordConfirmationAttempt_WaitsUntilPromptIsSubmitted()
     {
         var now = DateTimeOffset.Parse("2026-06-26T12:00:00Z");
         var candidate = CreateCandidate("cheap");
@@ -23,6 +23,7 @@ public sealed class MarketBoardPurchaseSessionTests
             TimeSpan.FromSeconds(15));
 
         Assert.Equal("WaitingForConfirmation", result.Status);
+        Assert.Equal(MarketMafioso.MarketAcquisition.MarketBoardPurchaseSessionPhase.WaitingForConfirmation, result.Phase);
         Assert.True(result.IsActive);
     }
 
@@ -47,6 +48,7 @@ public sealed class MarketBoardPurchaseSessionTests
             TimeSpan.FromSeconds(15));
 
         Assert.Equal("ConfirmationTimeout", result.Status);
+        Assert.Equal(MarketMafioso.MarketAcquisition.MarketBoardPurchaseSessionPhase.Failed, result.Phase);
         Assert.False(result.IsActive);
     }
 
@@ -62,8 +64,8 @@ public sealed class MarketBoardPurchaseSessionTests
             .RecordConfirmationAttempt(
                 new MarketMafioso.MarketAcquisition.MarketBoardPurchaseResult
                 {
-                    Status = "ConfirmationAccepted",
-                    Message = "Accepted.",
+                    Status = "ConfirmationSubmitted",
+                    Message = "Submitted.",
                     Candidate = candidate,
                 },
                 now.AddSeconds(2),
@@ -74,6 +76,7 @@ public sealed class MarketBoardPurchaseSessionTests
             now.AddSeconds(4));
 
         Assert.Equal("Completed", result.Status);
+        Assert.Equal(MarketMafioso.MarketAcquisition.MarketBoardPurchaseSessionPhase.Completed, result.Phase);
         Assert.False(result.IsActive);
     }
 
@@ -89,8 +92,8 @@ public sealed class MarketBoardPurchaseSessionTests
             .RecordConfirmationAttempt(
                 new MarketMafioso.MarketAcquisition.MarketBoardPurchaseResult
                 {
-                    Status = "ConfirmationAccepted",
-                    Message = "Accepted.",
+                    Status = "ConfirmationSubmitted",
+                    Message = "Submitted.",
                     Candidate = candidate,
                 },
                 now.AddSeconds(2),
@@ -120,8 +123,8 @@ public sealed class MarketBoardPurchaseSessionTests
             .RecordConfirmationAttempt(
                 new MarketMafioso.MarketAcquisition.MarketBoardPurchaseResult
                 {
-                    Status = "ConfirmationAccepted",
-                    Message = "Accepted.",
+                    Status = "ConfirmationSubmitted",
+                    Message = "Submitted.",
                     Candidate = candidate,
                 },
                 now.AddSeconds(2),
@@ -154,8 +157,8 @@ public sealed class MarketBoardPurchaseSessionTests
             .RecordConfirmationAttempt(
                 new MarketMafioso.MarketAcquisition.MarketBoardPurchaseResult
                 {
-                    Status = "ConfirmationAccepted",
-                    Message = "Accepted.",
+                    Status = "ConfirmationSubmitted",
+                    Message = "Submitted.",
                     Candidate = candidate,
                 },
                 now.AddSeconds(2),
@@ -187,8 +190,8 @@ public sealed class MarketBoardPurchaseSessionTests
             .RecordConfirmationAttempt(
                 new MarketMafioso.MarketAcquisition.MarketBoardPurchaseResult
                 {
-                    Status = "ConfirmationAccepted",
-                    Message = "Accepted.",
+                    Status = "ConfirmationSubmitted",
+                    Message = "Submitted.",
                     Candidate = candidate,
                 },
                 now.AddSeconds(2),
@@ -199,7 +202,39 @@ public sealed class MarketBoardPurchaseSessionTests
             now.AddSeconds(4));
 
         Assert.Equal("WaitingForListingRemoval", result.Status);
+        Assert.Equal(MarketMafioso.MarketAcquisition.MarketBoardPurchaseSessionPhase.WaitingForListingRemoval, result.Phase);
         Assert.True(result.IsActive);
+    }
+
+    [Fact]
+    public void RecordFreshRead_ReportsUnknownOutcomeWhenSubmittedListingStillExistsAfterDeadline()
+    {
+        var now = DateTimeOffset.Parse("2026-06-26T12:00:00Z");
+        var candidate = CreateCandidate("cheap");
+        var session = MarketMafioso.MarketAcquisition.MarketBoardPurchaseSession.Start(
+                candidate,
+                now,
+                TimeSpan.FromSeconds(15))
+            .RecordConfirmationAttempt(
+                new MarketMafioso.MarketAcquisition.MarketBoardPurchaseResult
+                {
+                    Status = "ConfirmationSubmitted",
+                    Message = "Submitted.",
+                    Candidate = candidate,
+                },
+                now.AddSeconds(2),
+                TimeSpan.FromSeconds(15));
+
+        var result = session.RecordFreshRead(
+            CreateRead(CreateListing("cheap")),
+            now.AddSeconds(18));
+
+        Assert.Equal("PurchaseOutcomeUnknown", result.Status);
+        Assert.Equal(MarketMafioso.MarketAcquisition.MarketBoardPurchaseSessionPhase.Failed, result.Phase);
+        Assert.False(result.IsActive);
+        Assert.Contains("confirmation was submitted", result.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("cheap", result.Message, StringComparison.Ordinal);
+        Assert.Contains("still present", result.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     private static MarketMafioso.MarketAcquisition.MarketBoardPurchaseCandidate CreateCandidate(string listingId) =>
