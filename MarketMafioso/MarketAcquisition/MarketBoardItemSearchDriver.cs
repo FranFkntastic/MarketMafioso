@@ -2,10 +2,12 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using Dalamud.Plugin.Services;
+using ECommons.Automation.UIInput;
 using FFXIVClientStructs.FFXIV.Client.UI;
 using FFXIVClientStructs.FFXIV.Client.UI.Agent;
 using FFXIVClientStructs.FFXIV.Client.UI.Info;
 using FFXIVClientStructs.FFXIV.Component.GUI;
+using MarketMafioso.UiAutomation;
 
 namespace MarketMafioso.MarketAcquisition;
 
@@ -343,10 +345,24 @@ public sealed class MarketBoardItemSearchDriver
     {
         return strategy switch
         {
-            MarketBoardItemSearchSubmitStrategy.TextInputEnterCallback => true,
-            MarketBoardItemSearchSubmitStrategy.AutofocusedTextInputRewrite => true,
+            MarketBoardItemSearchSubmitStrategy.TextInputEnterCallback => false,
+            MarketBoardItemSearchSubmitStrategy.AutofocusedTextInputRewrite => false,
             _ => throw new ArgumentOutOfRangeException(nameof(strategy), strategy, null),
         };
+    }
+
+    internal static bool IsSearchSubmitAccepted(
+        bool exactItemVisible,
+        bool agentIsPartialSearching,
+        bool agentIsItemPushPending,
+        bool searchButtonClickSent,
+        bool itemSearchResultVisible)
+    {
+        return AtkTextInputAutomation.IsSubmitAccepted(new UiTextInputSubmitEvidence(
+            TargetVisible: exactItemVisible,
+            ResultVisible: itemSearchResultVisible,
+            WorkInProgress: agentIsPartialSearching || agentIsItemPushPending,
+            ActivationSent: searchButtonClickSent));
     }
 
     internal static IReadOnlyList<MarketBoardItemSearchResultActivationEvent> GetResultActivationEventSequence()
@@ -425,26 +441,15 @@ public sealed class MarketBoardItemSearchDriver
             return false;
         }
 
-        var focusSet = false;
-        if (focusNode != null)
-        {
-            addon->AtkUnitBase.Focus();
-            addon->AtkUnitBase.SetFocusNode(focusNode, setCursorFocusNode: true);
-            addon->AtkUnitBase.SetComponentFocusNode(&inputBase->AtkComponentBase);
-
-            var stage = AtkStage.Instance();
-            if (stage != null && stage->AtkInputManager != null)
-                focusSet = stage->AtkInputManager->SetFocus(focusNode, &addon->AtkUnitBase, 0);
-        }
-
-        inputBase->IsActive = true;
+        var focusResult = AtkTextInputAutomation.FocusTextInput(&addon->AtkUnitBase, inputBase, focusNode);
         inputBase->SelectionStart = searchText.Length;
         inputBase->SelectionEnd = searchText.Length;
         inputBase->CursorPos = searchText.Length;
-        details["textInputFocusSet"] = focusSet.ToString();
-        details["textInputIsActiveAfterFocus"] = inputBase->IsActive.ToString();
+        details["textInputFocusSet"] = focusResult.FocusSet.ToString();
+        details["textInputIsActiveAfterFocus"] = focusResult.IsActive.ToString();
 
         var callbackResults = new List<string>();
+        var searchButtonEnabledBeforeEnter = addon->SearchButton != null && addon->SearchButton->IsEnabled;
         if (submitStrategy == MarketBoardItemSearchSubmitStrategy.AutofocusedTextInputRewrite)
         {
             var submitSteps = GetAutofocusedSubmitStepSequence();
@@ -458,7 +463,7 @@ public sealed class MarketBoardItemSearchDriver
                             input,
                             inputBase,
                             string.Empty,
-                            updateAddonSearchStrings: ShouldMirrorSubmitTextToAddonSearchStrings(submitStrategy));
+                            updateAddonSearchStrings: true);
                         callbackResults.Add(step.ToString());
                         break;
                     case MarketBoardItemSearchSubmitStep.SetSearchText:
@@ -472,6 +477,7 @@ public sealed class MarketBoardItemSearchDriver
                         break;
                     case MarketBoardItemSearchSubmitStep.TextChanged:
                         callbackResults.Add(InvokeInputCallback(addon, inputBase, MarketBoardItemSearchSubmitCallback.TextChanged));
+                        searchButtonEnabledBeforeEnter = addon->SearchButton != null && addon->SearchButton->IsEnabled;
                         break;
                     case MarketBoardItemSearchSubmitStep.Enter:
                         callbackResults.Add(InvokeInputCallback(addon, inputBase, MarketBoardItemSearchSubmitCallback.Enter));
@@ -498,9 +504,31 @@ public sealed class MarketBoardItemSearchDriver
         }
 
         details["textInputCallbackResults"] = string.Join(",", callbackResults);
-        details["searchButtonEnabledAfterCallbacks"] = (addon->SearchButton != null && addon->SearchButton->IsEnabled).ToString();
-        details["searchSubmitStatus"] = "Submitted";
-        return true;
+        var searchButtonEnabledAfterCallbacks = addon->SearchButton != null && addon->SearchButton->IsEnabled;
+        var searchButtonClickSent = false;
+        if (searchButtonEnabledAfterCallbacks)
+            searchButtonClickSent = TryClickSearchButton(addon, details);
+
+        var itemSearchResultVisible = IsAddonReady(gameGui.GetAddonByName<AtkUnitBase>(ItemSearchResultAddon, 1));
+        exactItemVisible = AgentContainsItem(agent, itemId);
+        agentIsPartialSearching = agent != null && agent->IsPartialSearching;
+        agentIsItemPushPending = agent != null && agent->IsItemPushPending;
+        details["searchButtonEnabledBeforeEnter"] = searchButtonEnabledBeforeEnter.ToString();
+        details["searchButtonEnabledAfterCallbacks"] = searchButtonEnabledAfterCallbacks.ToString();
+        details["searchButtonClickSent"] = searchButtonClickSent.ToString();
+        details["submitExactItemVisibleAfter"] = exactItemVisible.ToString();
+        details["submitAgentIsPartialSearchingAfter"] = agentIsPartialSearching.ToString();
+        details["submitAgentIsItemPushPendingAfter"] = agentIsItemPushPending.ToString();
+        details["submitItemSearchResultVisibleAfter"] = itemSearchResultVisible.ToString();
+        var submitAccepted = IsSearchSubmitAccepted(
+            exactItemVisible,
+            agentIsPartialSearching,
+            agentIsItemPushPending,
+            searchButtonClickSent,
+            itemSearchResultVisible);
+        details["searchSubmitAccepted"] = submitAccepted.ToString();
+        details["searchSubmitStatus"] = submitAccepted ? "Submitted" : "InputRejected";
+        return submitAccepted;
     }
 
     private static unsafe void SetSearchInputText(
@@ -516,10 +544,38 @@ public sealed class MarketBoardItemSearchDriver
             addon->SearchText2.SetString(text);
         }
 
-        input->SetText(text);
-        inputBase->SelectionStart = text.Length;
-        inputBase->SelectionEnd = text.Length;
-        inputBase->CursorPos = text.Length;
+        AtkTextInputAutomation.SetEditableText(input, inputBase, text);
+    }
+
+    private static unsafe bool TryClickSearchButton(
+        AddonItemSearch* addon,
+        IDictionary<string, string?> details)
+    {
+        if (addon->SearchButton == null)
+        {
+            details["searchButtonClickStatus"] = "Unavailable";
+            return false;
+        }
+
+        if (!addon->SearchButton->IsEnabled)
+        {
+            details["searchButtonClickStatus"] = "Disabled";
+            return false;
+        }
+
+        try
+        {
+            (*addon->SearchButton).ClickAddonButton(&addon->AtkUnitBase);
+            details["searchButtonClickStatus"] = "Clicked";
+            return true;
+        }
+        catch (Exception ex)
+        {
+            details["searchButtonClickStatus"] = "Failed";
+            details["searchButtonClickException"] = ex.GetType().Name;
+            details["searchButtonClickMessage"] = ex.Message;
+            return false;
+        }
     }
 
     private static unsafe string InvokeInputCallback(
@@ -527,16 +583,14 @@ public sealed class MarketBoardItemSearchDriver
         AtkComponentInputBase* inputBase,
         MarketBoardItemSearchSubmitCallback callback)
     {
-        var callbackType = callback == MarketBoardItemSearchSubmitCallback.TextChanged
-            ? InputCallbackType.TextChanged
-            : InputCallbackType.Enter;
-        var callbackResult = inputBase->Callback(
-            &addon->AtkUnitBase,
-            callbackType,
-            inputBase->RawString.StringPtr,
-            inputBase->EvaluatedString.StringPtr,
-            inputBase->CallbackEventKind);
-        return $"{callback}:{callbackResult}";
+        return callback switch
+        {
+            MarketBoardItemSearchSubmitCallback.TextChanged =>
+                AtkTextInputAutomation.InvokeCallback(&addon->AtkUnitBase, inputBase, UiTextInputCallbackKind.TextChanged),
+            MarketBoardItemSearchSubmitCallback.Enter =>
+                AtkTextInputAutomation.InvokeCallback(&addon->AtkUnitBase, inputBase, UiTextInputCallbackKind.Enter),
+            _ => throw new ArgumentOutOfRangeException(nameof(callback), callback, null),
+        };
     }
 
     private void ClearSubmittedSearch()

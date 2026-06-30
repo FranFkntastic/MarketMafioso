@@ -196,12 +196,45 @@ public sealed class MarketBoardItemSearchDriverTests
     }
 
     [Fact]
-    public void ShouldMirrorSubmitTextToAddonSearchStrings_AlwaysKeepsVisibleSearchTextInSync()
+    public void ShouldMirrorSubmitTextToAddonSearchStrings_DoesNotPrecommitEditableText()
     {
-        Assert.True(MarketBoardItemSearchDriver.ShouldMirrorSubmitTextToAddonSearchStrings(
+        Assert.False(MarketBoardItemSearchDriver.ShouldMirrorSubmitTextToAddonSearchStrings(
             MarketBoardItemSearchSubmitStrategy.TextInputEnterCallback));
-        Assert.True(MarketBoardItemSearchDriver.ShouldMirrorSubmitTextToAddonSearchStrings(
+        Assert.False(MarketBoardItemSearchDriver.ShouldMirrorSubmitTextToAddonSearchStrings(
             MarketBoardItemSearchSubmitStrategy.AutofocusedTextInputRewrite));
+    }
+
+    [Fact]
+    public void IsSearchSubmitAccepted_ReturnsFalseWhenCallbacksLeaveSearchUiIdle()
+    {
+        Assert.False(MarketBoardItemSearchDriver.IsSearchSubmitAccepted(
+            exactItemVisible: false,
+            agentIsPartialSearching: false,
+            agentIsItemPushPending: false,
+            searchButtonClickSent: false,
+            itemSearchResultVisible: false));
+    }
+
+    [Fact]
+    public void IsSearchSubmitAccepted_ReturnsFalseWhenSearchButtonOnlyBecomesAvailable()
+    {
+        Assert.False(MarketBoardItemSearchDriver.IsSearchSubmitAccepted(
+            exactItemVisible: false,
+            agentIsPartialSearching: false,
+            agentIsItemPushPending: false,
+            searchButtonClickSent: false,
+            itemSearchResultVisible: false));
+    }
+
+    [Fact]
+    public void IsSearchSubmitAccepted_ReturnsTrueWhenSearchButtonClickWasSent()
+    {
+        Assert.True(MarketBoardItemSearchDriver.IsSearchSubmitAccepted(
+            exactItemVisible: false,
+            agentIsPartialSearching: false,
+            agentIsItemPushPending: false,
+            searchButtonClickSent: true,
+            itemSearchResultVisible: false));
     }
 
     [Fact]
