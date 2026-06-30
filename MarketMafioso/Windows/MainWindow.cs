@@ -40,6 +40,7 @@ public class MainWindow : Window, IDisposable
     private readonly MarketBoardPurchaseExecutor marketBoardPurchaseExecutor;
     private readonly MarketBoardApproachService marketBoardApproachService;
     private readonly MarketAcquisitionRouteRunner marketAcquisitionRouteRunner;
+    private readonly MarketBoardAutomationController marketBoardAutomationController = new();
 
     private string urlBuffer = string.Empty;
     private string apiKeyBuffer = string.Empty;
@@ -56,8 +57,6 @@ public class MainWindow : Window, IDisposable
     private MarketBoardReadResult? marketBoardReadResult;
     private MarketBoardListingReconciliation? marketBoardReconciliation;
     private MarketAcquisitionLiveCandidatePlan? marketAcquisitionLiveCandidatePlan;
-    private MarketBoardPurchaseSession? marketBoardPurchaseSession;
-    private MarketBoardPurchaseResult? marketBoardPurchaseResult;
     private uint activeWorldPurchasedQuantity;
     private uint activeWorldSpentGil;
     private string? activeWorldPurchaseBatchWorld;
@@ -65,7 +64,6 @@ public class MainWindow : Window, IDisposable
     private uint activeLinePurchasedQuantity;
     private uint activeLineSpentGil;
     private DateTimeOffset nextGuidedRouteMonitorUtc = DateTimeOffset.MinValue;
-    private DateTimeOffset nextMarketBoardPurchaseMonitorUtc = DateTimeOffset.MinValue;
     private int marketInputCaptureIndex;
     private bool guidedRouteProbeRunning = false;
     private long guidedRouteProgressReportSequence;
@@ -91,6 +89,8 @@ public class MainWindow : Window, IDisposable
     private const string ProductionReceiverUrl = "https://xivcraftarchitect.com/marketmafioso/api/inventory";
     private static readonly TimeSpan MarketBoardPurchaseConfirmationWatchdog = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan MarketBoardPurchaseListingRemovalWatchdog = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan MarketBoardPurchaseInitialMonitorDelay = TimeSpan.FromMilliseconds(250);
+    private static readonly TimeSpan MarketBoardPurchaseMonitorInterval = TimeSpan.FromMilliseconds(500);
 
     private static readonly Vector4 ColHeader = new(0.38f, 0.73f, 1.00f, 1f);
     private static readonly Vector4 ColSuccess = new(0.45f, 0.90f, 0.55f, 1f);
@@ -784,7 +784,7 @@ public class MainWindow : Window, IDisposable
             }
 
             if (route.ActiveStop is { Status: "Purchasing" } &&
-                marketBoardPurchaseSession?.IsActive != true)
+                marketBoardAutomationController.PurchaseSession?.IsActive != true)
             {
                 BeginNextWorldPurchase();
                 nextGuidedRouteMonitorUtc = DateTimeOffset.UtcNow.AddMilliseconds(500);
@@ -901,7 +901,7 @@ public class MainWindow : Window, IDisposable
         var summary = MarketAcquisitionLiveCandidatePresenter.BuildSummary(marketAcquisitionLiveCandidatePlan);
         ImGui.TextColored(ColMuted, $"{summary.WouldBuyRows:N0} buy row(s), {summary.SkippedRows:N0} skipped row(s).");
 
-        var purchaseActive = marketBoardPurchaseSession?.IsActive == true;
+        var purchaseActive = marketBoardAutomationController.PurchaseSession?.IsActive == true;
         var activeStop = marketAcquisitionRouteRunner.ActiveStop;
         var purchasingWorld = activeStop is { Status: "Purchasing" };
 
@@ -916,18 +916,20 @@ public class MainWindow : Window, IDisposable
         if (purchasingWorld)
             ImGui.TextColored(ColHeader, $"World batch running: purchased {activeWorldPurchasedQuantity:N0}, spent {FormatGil(activeWorldSpentGil)}.");
 
-        if (marketBoardPurchaseSession != null)
+        var purchaseSession = marketBoardAutomationController.PurchaseSession;
+        var purchaseResult = marketBoardAutomationController.LastPurchaseResult;
+        if (purchaseSession != null)
         {
             ImGui.TextColored(
-                marketBoardPurchaseSession.Status is "Completed" ? ColSuccess :
-                marketBoardPurchaseSession.IsActive ? ColHeader : ColError,
-                $"Purchase status: {marketBoardPurchaseSession.Status} - {marketBoardPurchaseSession.Message}");
+                purchaseSession.Status is "Completed" ? ColSuccess :
+                purchaseSession.IsActive ? ColHeader : ColError,
+                $"Purchase status: {purchaseSession.Status} - {purchaseSession.Message}");
         }
-        else if (marketBoardPurchaseResult != null)
+        else if (purchaseResult != null)
         {
             ImGui.TextColored(
-                marketBoardPurchaseResult.Status is "PurchaseSelectionSent" or "ConfirmationSubmitted" ? ColHeader : ColError,
-                $"Purchase status: {marketBoardPurchaseResult.Status} - {marketBoardPurchaseResult.Message}");
+                purchaseResult.Status is "PurchaseSelectionSent" or "ConfirmationSubmitted" ? ColHeader : ColError,
+                $"Purchase status: {purchaseResult.Status} - {purchaseResult.Message}");
         }
     }
 
@@ -1001,40 +1003,40 @@ public class MainWindow : Window, IDisposable
                 freshRead,
                 activeLinePurchasedQuantity,
                 activeLineSpentGil);
-        marketBoardPurchaseResult = marketBoardPurchaseExecutor.ExecuteFirstCandidate(
+        var purchaseResult = marketBoardPurchaseExecutor.ExecuteFirstCandidate(
             marketAcquisitionLiveCandidatePlan,
             freshRead);
-        marketBoardPurchaseSession = null;
-        marketAcquisitionRouteRunner.RecordAutomationSnapshot(CreatePurchaseSelectionSnapshot(marketBoardPurchaseResult));
+        var now = DateTimeOffset.UtcNow;
+        marketBoardAutomationController.RecordPurchaseSelection(
+            purchaseResult,
+            now,
+            MarketBoardPurchaseConfirmationWatchdog);
+        marketAcquisitionRouteRunner.RecordAutomationSnapshot(CreatePurchaseSelectionSnapshot(purchaseResult));
 
-        if (marketBoardPurchaseResult.Status.Equals("NoCandidate", StringComparison.OrdinalIgnoreCase))
+        if (purchaseResult.Status.Equals("NoCandidate", StringComparison.OrdinalIgnoreCase))
         {
             CompleteActiveWorldPurchaseBatch(currentWorld);
             return;
         }
 
-        if (ClassifyPurchaseSelectionOutcome(marketBoardPurchaseResult.Status) == MarketBoardAutomationOutcome.Recoverable)
+        if (ClassifyPurchaseSelectionOutcome(purchaseResult.Status) == MarketBoardAutomationOutcome.Recoverable)
         {
-            acquisitionStatus = $"Purchase: {marketBoardPurchaseResult.Status}. {marketBoardPurchaseResult.Message}";
+            acquisitionStatus = $"Purchase: {purchaseResult.Status}. {purchaseResult.Message}";
             nextGuidedRouteMonitorUtc = DateTimeOffset.UtcNow.AddMilliseconds(250);
             return;
         }
 
-        if (!marketBoardPurchaseResult.Status.Equals("PurchaseSelectionSent", StringComparison.OrdinalIgnoreCase) ||
-            marketBoardPurchaseResult.Candidate == null)
+        if (!purchaseResult.Status.Equals("PurchaseSelectionSent", StringComparison.OrdinalIgnoreCase) ||
+            purchaseResult.Candidate == null)
         {
-            marketAcquisitionRouteRunner.FailRoute($"World purchase batch stopped: {marketBoardPurchaseResult.Message}");
+            marketAcquisitionRouteRunner.FailRoute($"World purchase batch stopped: {purchaseResult.Message}");
             acquisitionStatus = marketAcquisitionRouteRunner.StatusMessage;
             ReportGuidedRouteProgress();
             return;
         }
 
-        marketBoardPurchaseSession = MarketBoardPurchaseSession.Start(
-            marketBoardPurchaseResult.Candidate,
-            DateTimeOffset.UtcNow,
-            MarketBoardPurchaseConfirmationWatchdog);
-        nextMarketBoardPurchaseMonitorUtc = DateTimeOffset.UtcNow.AddMilliseconds(250);
-        acquisitionStatus = $"Purchase: {marketBoardPurchaseResult.Status}. {marketBoardPurchaseResult.Message}";
+        marketBoardAutomationController.ScheduleNextMonitor(now, MarketBoardPurchaseInitialMonitorDelay);
+        acquisitionStatus = $"Purchase: {purchaseResult.Status}. {purchaseResult.Message}";
     }
 
     private void CompleteActiveWorldPurchaseBatch(string currentWorld)
@@ -1062,8 +1064,7 @@ public class MainWindow : Window, IDisposable
                 ? marketAcquisitionLiveCandidatePlan?.Message
                 : null);
         acquisitionStatus = result.Message;
-        marketBoardPurchaseSession = null;
-        marketBoardPurchaseResult = null;
+        ClearMarketBoardAutomationState();
         var nextSubtask = marketAcquisitionRouteRunner.ActiveStop?.ActiveItemSubtask;
         if (nextSubtask == null)
         {
@@ -1092,12 +1093,16 @@ public class MainWindow : Window, IDisposable
         marketBoardReadResult = null;
         marketBoardReconciliation = null;
         marketAcquisitionLiveCandidatePlan = null;
-        marketBoardPurchaseSession = null;
-        marketBoardPurchaseResult = null;
+        ClearMarketBoardAutomationState();
         marketBoardItemSearchDriver.ResetSubmittedSearch();
         marketAcquisitionRouteRunner.ClearSearchSubmission(reason);
         TryCloseMarketBoardWindows();
         nextGuidedRouteMonitorUtc = DateTimeOffset.UtcNow.AddMilliseconds(250);
+    }
+
+    private void ClearMarketBoardAutomationState()
+    {
+        marketBoardAutomationController.Clear();
     }
 
     private void ReportUniversalisFreshnessAsync()
@@ -1123,37 +1128,40 @@ public class MainWindow : Window, IDisposable
         if (acquisitionRequestBusy)
             return;
 
-        var session = marketBoardPurchaseSession;
+        var session = marketBoardAutomationController.PurchaseSession;
         if (session?.IsActive != true)
             return;
 
         var now = DateTimeOffset.UtcNow;
-        if (now < nextMarketBoardPurchaseMonitorUtc)
+        if (!marketBoardAutomationController.IsMonitorDue(now))
             return;
-
-        nextMarketBoardPurchaseMonitorUtc = now.AddMilliseconds(500);
 
         try
         {
-            if (session.Status.Equals("WaitingForConfirmation", StringComparison.OrdinalIgnoreCase))
+            var tick = marketBoardAutomationController.MonitorPurchase(
+                now,
+                MarketBoardPurchaseMonitorInterval,
+                MarketBoardPurchaseListingRemovalWatchdog,
+                candidate => marketBoardPurchaseAdapter.TryConfirmPendingPurchase(candidate),
+                () => marketBoardListingReader.ReadCurrentListings(GetCurrentWorldName()));
+
+            if (!tick.DidWork)
+                return;
+
+            if (tick.ConfirmationResult != null)
             {
-                marketBoardPurchaseResult = marketBoardPurchaseAdapter.TryConfirmPendingPurchase(session.Candidate);
-                marketAcquisitionRouteRunner.RecordAutomationSnapshot(CreatePurchaseConfirmationSnapshot(marketBoardPurchaseResult, session.Candidate));
-                session = session.RecordConfirmationAttempt(
-                    marketBoardPurchaseResult,
-                    now,
-                    MarketBoardPurchaseListingRemovalWatchdog);
+                var candidate = tick.ConfirmationResult.Candidate ?? session.Candidate;
+                marketAcquisitionRouteRunner.RecordAutomationSnapshot(CreatePurchaseConfirmationSnapshot(tick.ConfirmationResult, candidate));
             }
 
-            if (session.Status.Equals("WaitingForListingRemoval", StringComparison.OrdinalIgnoreCase))
+            if (tick.FreshRead != null)
             {
-                var freshRead = marketBoardListingReader.ReadCurrentListings(GetCurrentWorldName());
-                marketBoardReadResult = freshRead;
-                marketAcquisitionRouteRunner.RecordAutomationSnapshot(session.CreateFreshReadSnapshot(freshRead));
-                session = session.RecordFreshRead(freshRead, now);
+                marketBoardReadResult = tick.FreshRead;
+                if (tick.FreshReadSession != null)
+                    marketAcquisitionRouteRunner.RecordAutomationSnapshot(tick.FreshReadSession.CreateFreshReadSnapshot(tick.FreshRead));
             }
 
-            marketBoardPurchaseSession = session;
+            session = tick.Session ?? session;
             acquisitionStatus = $"Purchase: {session.Status}. {session.Message}";
             if (session.Status.Equals("Completed", StringComparison.OrdinalIgnoreCase))
             {
@@ -1163,8 +1171,7 @@ public class MainWindow : Window, IDisposable
                 activeLinePurchasedQuantity = checked(activeLinePurchasedQuantity + completedCandidate.Quantity);
                 activeLineSpentGil = checked(activeLineSpentGil + completedCandidate.TotalGil);
                 ReportConfirmedPurchase(completedCandidate, activeLinePurchasedQuantity, activeLineSpentGil);
-                marketBoardPurchaseSession = null;
-                marketBoardPurchaseResult = null;
+                ClearMarketBoardAutomationState();
                 if (marketBoardReadResult?.Status is "MarketBoardNotOpen" or "NoListings")
                     CompleteActiveWorldPurchaseBatch(GetCurrentWorldName());
                 else
@@ -1179,11 +1186,7 @@ public class MainWindow : Window, IDisposable
         }
         catch (Exception ex)
         {
-            marketBoardPurchaseSession = session with
-            {
-                Status = "PurchaseMonitorFailed",
-                Message = ex.Message,
-            };
+            marketBoardAutomationController.RecordMonitorFailure("PurchaseMonitorFailed", ex.Message);
             acquisitionStatus = $"Purchase monitor failed: {ex.Message}";
             log.Warning(ex, "[MarketMafioso] Unable to monitor guarded market-board purchase.");
         }
@@ -1721,8 +1724,7 @@ public class MainWindow : Window, IDisposable
         {
             marketBoardApproachService.StopNavigation();
             marketAcquisitionRouteRunner.Stop();
-            marketBoardPurchaseSession = null;
-            marketBoardPurchaseResult = null;
+            ClearMarketBoardAutomationState();
             ReportGuidedRouteProgress();
         }
 
@@ -1885,8 +1887,7 @@ public class MainWindow : Window, IDisposable
             marketBoardReadResult = null;
             marketBoardReconciliation = null;
             marketAcquisitionLiveCandidatePlan = null;
-            marketBoardPurchaseSession = null;
-            marketBoardPurchaseResult = null;
+            ClearMarketBoardAutomationState();
             activeWorldPurchasedQuantity = 0;
             activeWorldSpentGil = 0;
             activeWorldPurchaseBatchWorld = null;
@@ -1917,8 +1918,7 @@ public class MainWindow : Window, IDisposable
             marketBoardReadResult = null;
             marketBoardReconciliation = null;
             marketAcquisitionLiveCandidatePlan = null;
-            marketBoardPurchaseSession = null;
-            marketBoardPurchaseResult = null;
+            ClearMarketBoardAutomationState();
             activeWorldPurchasedQuantity = 0;
             activeWorldSpentGil = 0;
             activeWorldPurchaseBatchWorld = null;
@@ -1971,8 +1971,7 @@ public class MainWindow : Window, IDisposable
     {
         marketBoardApproachService.StopNavigation();
         marketAcquisitionRouteRunner.Reset(status);
-        marketBoardPurchaseSession = null;
-        marketBoardPurchaseResult = null;
+        ClearMarketBoardAutomationState();
         activeWorldPurchasedQuantity = 0;
         activeWorldSpentGil = 0;
         activeWorldPurchaseBatchWorld = null;
@@ -2399,7 +2398,7 @@ public class MainWindow : Window, IDisposable
         marketAcquisitionRouteRunner.IsRunning ||
         marketAcquisitionRouteRunner.IsPaused ||
         guidedRouteProbeRunning ||
-        marketBoardPurchaseSession?.IsActive == true;
+        marketBoardAutomationController.PurchaseSession?.IsActive == true;
 
     private bool IsExpectedCharacterScopeGap() =>
         claimedAcquisitionRequest != null &&
@@ -3538,6 +3537,7 @@ public class MainWindow : Window, IDisposable
     public void Dispose()
     {
         acquisitionRequestCancellation?.Dispose();
+        marketBoardAutomationController.Dispose();
         marketAcquisitionRouteRunner.Dispose();
         acquisitionHttpClient.Dispose();
     }

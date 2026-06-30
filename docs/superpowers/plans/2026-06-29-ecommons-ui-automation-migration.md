@@ -19,8 +19,8 @@ Last updated: 2026-06-30
 - Slice 3 complete: market-board item search uses the shared text-input helper and ECommons button-click helper, and only reports submitted search when an exact result, visible result, agent work, or actual search-button activation is observed.
 - Slice 4 complete: listing selection now uses `MarketBoardListingListProbe` and treats a not-yet-clickable listing list as recoverable instead of terminal.
 - Slice 5 complete: purchase confirmation now has explicit phases through `MarketBoardPurchaseSessionPhase`; confirmation submission and listing-removal proof are separate states.
-- Slice 5.5 implemented, pending live validation: listing-cache freshness is explicit before further orchestration refactor. The 2026-06-30 Malboro Darksteel Ore route proved that `InfoProxyItemSearch.SearchItemId` can switch to the new item while readable row data still contains stale previous-item evidence.
-- Slice 6 partially complete: `MarketBoardAutomationController` exists as a tested seam for purchase-session progress, but `MainWindow` still owns most route orchestration. Full extraction remains future-refactor work.
+- Slice 5.5 complete: listing-cache freshness is explicit before further orchestration refactor. The 2026-06-30 route after the freshness slice completed without incident, and commit `073372a` was pushed to `local-dev`, fast-forwarded into `main`, pushed, and deployed to the configured dev-plugin DLL.
+- Slice 6 complete as a local-dev checkpoint: `MarketBoardAutomationController` owns purchase session/result state, the purchase monitor schedule, and the confirmation/listing-removal polling state machine. `MainWindow` still owns route orchestration, diagnostic snapshot recording, and route-level purchase counters.
 - Slice 7 intentionally partial: obsolete arbitrary search success checks were removed where proven harmful, but watchdogs remain as failure boundaries. Do not remove remaining timing boundaries until live logs prove equivalent condition-based behavior.
 - Slice 8 pending live validation: SimpleTweaks-enabled search, listing-list retry, multi-item same-world routes, and multi-world routes still need in-game confirmation.
 
@@ -32,6 +32,12 @@ Last updated: 2026-06-30
 - `dotnet test "MarketMafioso.Tests/MarketMafioso.Tests.csproj" -c Debug --filter "FullyQualifiedName~MarketBoardPurchaseSessionTests" -v minimal` passed after purchase-session phase modeling.
 - `dotnet test "MarketMafioso.Tests/MarketMafioso.Tests.csproj" -c Debug --filter "FullyQualifiedName~MarketBoardAutomationControllerTests" -v minimal` passed after introducing the controller seam.
 - `dotnet test "MarketMafioso.Tests/MarketMafioso.Tests.csproj" -c Debug --filter "FullyQualifiedName~MarketBoardListingReaderTests|FullyQualifiedName~MarketAcquisitionLiveCandidatePlannerTests|FullyQualifiedName~MarketAcquisitionRouteDiagnosticsTests|FullyQualifiedName~MarketAcquisitionRouteRunnerTests" -v minimal` passed after listing-cache freshness classification and non-terminal route retry handling.
+- `dotnet test "MarketMafioso.Tests/MarketMafioso.Tests.csproj" -c Debug --filter "FullyQualifiedName~MarketBoardAutomationControllerTests" -v minimal` passed with 8/8 after moving purchase session/result state and monitor scheduling into `MarketBoardAutomationController`.
+- `dotnet build "MarketMafioso/MarketMafioso.csproj" -c Debug` passed with 0 warnings / 0 errors after the controller state extraction.
+- `MarketMafioso/tools/Deploy-DevPlugin.ps1` deployed the controller state extraction from `local-dev@073372a`; visible manifest `1.1.227.226`, target DLL SHA256 `00E2F81CC1B3490874CC2D6C77317BD4BA7E085E78E2107BDE407DA3731B4894`.
+- `dotnet test "MarketMafioso.Tests/MarketMafioso.Tests.csproj" -c Debug --filter "FullyQualifiedName~MarketBoardAutomationControllerTests" -v minimal` passed with 11/11 after moving confirmation/listing-removal polling into `MarketBoardAutomationController`.
+- `dotnet build "MarketMafioso/MarketMafioso.csproj" -c Debug` passed with 0 warnings / 0 errors after controller-owned polling.
+- `MarketMafioso/tools/Deploy-DevPlugin.ps1` deployed the controller-owned polling checkpoint from the pre-commit local-dev worktree; visible manifest `1.1.227.11306`, target DLL SHA256 `2C2AE8AD58A12919D273A904FFEE9CC63BC863C3D9450AD01741E2D294A32075`.
 - Parallel test/build execution caused a known `DalamudPackager` artifact file lock. Run focused tests and builds sequentially for this repo.
 
 ---
@@ -502,14 +508,14 @@ git commit -m "feat: model market purchase confirmation phases"
 
 ## Slice 6: Introduce MarketBoardAutomationController
 
-Execution guard: do not continue new Slice 6 extraction work until Slice 5.5 is implemented and live-validated. The controller should not inherit the current stale listing-cache ambiguity.
+Execution guard satisfied: Slice 5.5 is implemented, live-validated, committed, pushed, merged to `main`, and deployed. Continue controller extraction without reintroducing stale listing-cache ambiguity.
 
 **Files:**
 - Create: `MarketMafioso/MarketAcquisition/MarketBoardAutomationController.cs`
 - Modify: `MarketMafioso/Windows/MainWindow.cs`
 - Test: `MarketMafioso.Tests/MarketAcquisition/MarketBoardAutomationControllerTests.cs`
 
-- [ ] **Step 1: Create controller shell**
+- [x] **Step 1: Create controller shell**
 
 Create `MarketBoardAutomationController` with explicit methods:
 
@@ -528,7 +534,7 @@ public sealed class MarketBoardAutomationController : IDisposable
 
 The first implementation may delegate to the existing search driver and purchase adapter. The value of this slice is moving orchestration ownership away from `MainWindow`, not changing behavior.
 
-- [ ] **Step 2: Move low-level purchase monitor fields out of MainWindow**
+- [x] **Step 2: Move low-level purchase monitor fields out of MainWindow**
 
 Move these from `MainWindow` into the controller where possible:
 
@@ -540,11 +546,13 @@ Move these from `MainWindow` into the controller where possible:
 
 Keep route-level counters in `MainWindow` for this slice if moving them would broaden the diff.
 
-- [ ] **Step 3: Keep UI rendering stable**
+Progress: `marketBoardPurchaseSession`, `marketBoardPurchaseResult`, `nextMarketBoardPurchaseMonitorUtc`, confirmation polling, and listing-removal polling are now owned by `MarketBoardAutomationController`. `MainWindow` records diagnostics and applies route counters from the controller tick result.
+
+- [x] **Step 3: Keep UI rendering stable**
 
 `MainWindow` should still render the same market-acquisition status text, but read it from the controller.
 
-- [ ] **Step 4: Add controller tests**
+- [x] **Step 4: Add controller tests**
 
 Create tests for controller behavior using fake collaborators:
 
@@ -553,7 +561,9 @@ Create tests for controller behavior using fake collaborators:
 - abort clears busy state,
 - failed purchase selection exposes failure message.
 
-- [ ] **Step 5: Verify controller slice**
+Progress: controller tests cover purchase-session start, recoverable selection waits, abort, monitor failure state, clear, monitor scheduling, confirmation polling, listing-removal polling, and not polling before the scheduled monitor time.
+
+- [x] **Step 5: Verify controller slice**
 
 Run:
 
@@ -565,7 +575,9 @@ MarketMafioso/tools/Deploy-DevPlugin.ps1
 
 Expected: UI still shows the same route/purchase information, but `MainWindow` no longer owns the low-level purchase session.
 
-- [ ] **Step 6: Commit controller slice**
+- [x] **Step 6: Commit controller slice**
+
+Committed as `refactor: move market board purchase polling into controller`.
 
 ```powershell
 git add MarketMafioso/MarketAcquisition/MarketBoardAutomationController.cs MarketMafioso/Windows/MainWindow.cs MarketMafioso.Tests/MarketAcquisition/MarketBoardAutomationControllerTests.cs
@@ -813,7 +825,9 @@ Expected:
 - visible manifest version changes;
 - a repeated Malboro-style item switch either waits until the row cache is fresh or fails as a listing freshness failure with raw item-id evidence.
 
-- [ ] **Step 9: Commit freshness slice after live confirmation**
+- [x] **Step 9: Commit freshness slice after live confirmation**
+
+Committed as `073372a Harden market acquisition listing freshness`, pushed to `local-dev`, fast-forwarded into `main`, pushed, and redeployed from `local-dev@073372a`.
 
 ```powershell
 git add MarketMafioso/MarketAcquisition/MarketBoardLiveListingModels.cs `
