@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using Dalamud.Plugin.Services;
 using Dalamud.Utility;
 using FFXIVClientStructs.FFXIV.Client.UI;
@@ -11,7 +12,19 @@ namespace MarketMafioso.MarketAcquisition;
 public sealed class DalamudMarketBoardPurchaseAdapter : IMarketBoardPurchaseAdapter
 {
     private const string ItemSearchResultAddon = "ItemSearchResult";
+    private const string ItemSearchAddon = "ItemSearch";
     private const string SelectYesNoAddon = "SelectYesno";
+    private static readonly string[] PurchaseActivationAddonProbeNames =
+    [
+        ItemSearchResultAddon,
+        ItemSearchAddon,
+        SelectYesNoAddon,
+        "SelectString",
+        "SelectIconString",
+        "ContextMenu",
+        "ContextMenuTitle",
+        "InventoryExpansion",
+    ];
 
     private readonly IGameGui gameGui;
     private readonly IPluginLog log;
@@ -144,10 +157,15 @@ public sealed class DalamudMarketBoardPurchaseAdapter : IMarketBoardPurchaseAdap
                 diagnostics);
         }
 
+        AddPurchaseActivationState(diagnostics, "activationBeforeScroll", addon, listingList, infoProxy, listingIndex);
         listingList->ScrollToItem((short)listingIndex);
+        AddPurchaseActivationState(diagnostics, "activationAfterScroll", addon, listingList, infoProxy, listingIndex);
         listingList->SelectItem(listingIndex, true);
+        AddPurchaseActivationState(diagnostics, "activationAfterSelect", addon, listingList, infoProxy, listingIndex);
         listingList->DispatchItemEvent(listingIndex, AtkEventType.ListItemClick);
+        AddPurchaseActivationState(diagnostics, "activationAfterClick", addon, listingList, infoProxy, listingIndex);
         listingList->DispatchItemEvent(listingIndex, AtkEventType.ListItemDoubleClick);
+        AddPurchaseActivationState(diagnostics, "activationAfterDoubleClick", addon, listingList, infoProxy, listingIndex);
         log.Info(
             "[MarketMafioso] Sent market board purchase selection for listing {ListingId} retainer {RetainerId} at {UnitPrice} x {Quantity}.",
             candidate.ListingId,
@@ -176,6 +194,7 @@ public sealed class DalamudMarketBoardPurchaseAdapter : IMarketBoardPurchaseAdap
                 Status = "ConfirmationPending",
                 Message = "Waiting for the market-board purchase confirmation prompt.",
                 Candidate = candidate,
+                Diagnostics = CaptureConfirmationPendingDiagnostics(),
             };
         }
 
@@ -208,6 +227,93 @@ public sealed class DalamudMarketBoardPurchaseAdapter : IMarketBoardPurchaseAdap
             ConfirmationPromptText = text,
             ConfirmationAddonName = SelectYesNoAddon,
         };
+    }
+
+    private unsafe void AddPurchaseActivationState(
+        Dictionary<string, string> diagnostics,
+        string prefix,
+        AddonItemSearchResult* addon,
+        AtkComponentList* listingList,
+        InfoProxyItemSearch* infoProxy,
+        int listingIndex)
+    {
+        diagnostics[$"{prefix}Utc"] = DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture);
+        diagnostics[$"{prefix}ListComponents"] = MarketBoardListingListProbe.DescribeListingLists(addon);
+        diagnostics[$"{prefix}ListPresent"] = (listingList != null).ToString();
+        diagnostics[$"{prefix}RequestedRow"] = listingIndex.ToString(CultureInfo.InvariantCulture);
+        if (listingList != null)
+        {
+            diagnostics[$"{prefix}ListItemCount"] = listingList->GetItemCount().ToString(CultureInfo.InvariantCulture);
+            diagnostics[$"{prefix}ListSelectedItemIndex"] = listingList->SelectedItemIndex.ToString(CultureInfo.InvariantCulture);
+            diagnostics[$"{prefix}ListInteractionEnabled"] = listingList->IsItemInteractionEnabled.ToString();
+            diagnostics[$"{prefix}ListClickEnabled"] = listingList->IsItemClickEnabled.ToString();
+        }
+
+        diagnostics[$"{prefix}InfoProxySearchItemId"] = infoProxy == null
+            ? "unavailable"
+            : infoProxy->SearchItemId.ToString(CultureInfo.InvariantCulture);
+        diagnostics[$"{prefix}InfoProxyListingCount"] = infoProxy == null
+            ? "unavailable"
+            : infoProxy->ListingCount.ToString(CultureInfo.InvariantCulture);
+        diagnostics[$"{prefix}InfoProxyPreview"] = infoProxy == null
+            ? "unavailable"
+            : DescribeInfoProxyListings(infoProxy, 5);
+        AddAddonProbeStates(diagnostics, prefix);
+    }
+
+    private unsafe IReadOnlyDictionary<string, string> CaptureConfirmationPendingDiagnostics()
+    {
+        var diagnostics = new Dictionary<string, string>(StringComparer.Ordinal);
+        AddAddonProbeStates(diagnostics, "confirmationPending");
+
+        var infoProxy = InfoProxyItemSearch.Instance();
+        diagnostics["confirmationPendingInfoProxySearchItemId"] = infoProxy == null
+            ? "unavailable"
+            : infoProxy->SearchItemId.ToString(CultureInfo.InvariantCulture);
+        diagnostics["confirmationPendingInfoProxyListingCount"] = infoProxy == null
+            ? "unavailable"
+            : infoProxy->ListingCount.ToString(CultureInfo.InvariantCulture);
+        diagnostics["confirmationPendingInfoProxyPreview"] = infoProxy == null
+            ? "unavailable"
+            : DescribeInfoProxyListings(infoProxy, 5);
+
+        var itemSearchResult = gameGui.GetAddonByName<AddonItemSearchResult>(ItemSearchResultAddon, 1);
+        diagnostics["confirmationPendingItemSearchResultLists"] =
+            MarketBoardListingListProbe.DescribeListingLists(itemSearchResult);
+        return diagnostics;
+    }
+
+    private unsafe void AddAddonProbeStates(Dictionary<string, string> diagnostics, string prefix)
+    {
+        foreach (var addonName in PurchaseActivationAddonProbeNames)
+            diagnostics[$"{prefix}Addon:{addonName}"] = DescribeAddonState(addonName);
+
+        diagnostics[$"{prefix}SelectYesnoPrompt"] = DescribeSelectYesnoPrompt();
+    }
+
+    private unsafe string DescribeAddonState(string addonName)
+    {
+        var addon = gameGui.GetAddonByName<AtkUnitBase>(addonName, 1);
+        if (addon == null)
+            return "missing";
+
+        return $"ready={addon->IsReady},visible={addon->IsVisible}";
+    }
+
+    private unsafe string DescribeSelectYesnoPrompt()
+    {
+        var addon = gameGui.GetAddonByName<AddonSelectYesno>(SelectYesNoAddon, 1);
+        if (addon == null)
+            return "missing";
+
+        var state = $"ready={addon->AtkUnitBase.IsReady},visible={addon->AtkUnitBase.IsVisible}";
+        if (!addon->AtkUnitBase.IsReady || !addon->AtkUnitBase.IsVisible)
+            return state;
+
+        var text = addon->PromptText->NodeText.ExtractText()
+            .Replace("\n", string.Empty, StringComparison.Ordinal)
+            .Replace("\r", string.Empty, StringComparison.Ordinal);
+        return $"{state},text={text}";
     }
 
     private static unsafe bool TryFindMatchingListing(
