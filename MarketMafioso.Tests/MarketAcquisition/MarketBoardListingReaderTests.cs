@@ -107,30 +107,48 @@ public sealed class MarketBoardListingReaderTests
     }
 
     [Fact]
-    public void BuildReadResult_NormalizesProxyListingItemIdsToCurrentSearchItem()
+    public void BuildReadResult_ReturnsSwitchingItemWhenRowsContainPreviousItemEvidence()
     {
         var listings = new[]
         {
             new MarketMafioso.MarketAcquisition.MarketBoardLiveListing
             {
-                ItemId = 5121,
-                WorldName = "Siren",
-                ListingId = "listing-1",
+                ItemId = 5066,
+                RawItemId = 5066,
+                WorldName = "Malboro",
+                ListingId = "electrum-listing",
                 RetainerId = "retainer-1",
-                UnitPrice = 800,
-                Quantity = 4,
+                UnitPrice = 2_000,
+                Quantity = 99,
+            },
+            new MarketMafioso.MarketAcquisition.MarketBoardLiveListing
+            {
+                ItemId = 5121,
+                RawItemId = 5121,
+                WorldName = "Malboro",
+                ListingId = "darksteel-listing",
+                RetainerId = "retainer-2",
+                UnitPrice = 548,
+                Quantity = 55,
             },
         };
 
         var result = MarketMafioso.MarketAcquisition.MarketBoardListingReader.BuildReadResult(
             waitingForListings: false,
-            itemId: 5066,
-            currentWorld: "Siren",
-            listings);
+            itemId: 5121,
+            currentWorld: "Malboro",
+            listings,
+            reportedListingCount: 73,
+            listingCapacity: 100,
+            currentRequestId: 12,
+            nextRequestId: 13);
 
-        var listing = Assert.Single(result.Listings);
-        Assert.Equal((uint)5066, listing.ItemId);
-        Assert.Equal((uint)5121, listing.RawItemId);
+        Assert.Equal("ListingCacheSwitching", result.Status);
+        Assert.Equal(MarketMafioso.MarketAcquisition.MarketBoardListingReadState.SwitchingItem, result.ReadState);
+        Assert.False(result.IsFresh);
+        Assert.Empty(result.Listings);
+        Assert.Equal(1, result.RawItemIdMismatchCounts[5066]);
+        Assert.Contains("5066=1", result.Message, StringComparison.Ordinal);
     }
 
     [Fact]

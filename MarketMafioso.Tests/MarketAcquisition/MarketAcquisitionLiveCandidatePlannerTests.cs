@@ -88,6 +88,31 @@ public sealed class MarketAcquisitionLiveCandidatePlannerTests
     }
 
     [Fact]
+    public void BuildCandidatePlan_RejectsSwitchingItemRead()
+    {
+        var request = CreateRequest(itemId: 5121, itemName: "Darksteel Ore", quantityMode: "AllBelowThreshold", quantity: 0, maxUnitPrice: 720);
+        var plan = CreatePlan(itemId: 5121, itemName: "Darksteel Ore");
+        var activeSubtask = CreateActiveSubtask(itemId: 5121, itemName: "Darksteel Ore", source: "Planned");
+        var readResult = new MarketMafioso.MarketAcquisition.MarketBoardReadResult
+        {
+            Status = "ListingCacheSwitching",
+            ReadState = MarketMafioso.MarketAcquisition.MarketBoardListingReadState.SwitchingItem,
+            ItemId = 5121,
+            WorldName = "Gilgamesh",
+        };
+
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            MarketMafioso.MarketAcquisition.MarketAcquisitionLiveCandidatePlanner.BuildCandidatePlan(
+                request,
+                plan,
+                activeSubtask,
+                "Gilgamesh",
+                readResult));
+
+        Assert.Contains("not fresh enough", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void BuildCandidatePlan_UsesSafeListingFromAccumulatedLaterPage()
     {
         var request = CreateRequest(quantityMode: "AllBelowThreshold", quantity: 0, maxUnitPrice: 100, maxTotalGil: 0);
@@ -351,13 +376,15 @@ public sealed class MarketAcquisitionLiveCandidatePlannerTests
             WorldMode = "Recommended",
         };
 
-    private static MarketMafioso.MarketAcquisition.MarketAcquisitionPlan CreatePlan() =>
+    private static MarketMafioso.MarketAcquisition.MarketAcquisitionPlan CreatePlan(
+        uint itemId = 2,
+        string itemName = "Fire Shard") =>
         new()
         {
             RequestId = "request-1",
             Status = "Ready",
             WorldMode = "Recommended",
-            ItemId = 2,
+            ItemId = itemId,
             RequestedQuantity = 10,
             PlannedQuantity = 10,
             PlannedGil = 900,
@@ -371,7 +398,7 @@ public sealed class MarketAcquisitionLiveCandidatePlannerTests
                     PlannedGil = 900,
                     ItemSubtasks =
                     [
-                        CreateActiveSubtask(itemId: 2, itemName: "Fire Shard", source: "Planned"),
+                        CreateActiveSubtask(itemId: itemId, itemName: itemName, source: "Planned"),
                     ],
                     Listings = [],
                 },

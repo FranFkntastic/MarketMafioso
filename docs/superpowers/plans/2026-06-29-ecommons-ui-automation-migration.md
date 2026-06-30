@@ -12,14 +12,14 @@
 
 ## Current Execution Status
 
-Last updated: 2026-06-29
+Last updated: 2026-06-30
 
 - Slice 1 complete: ECommons is pinned, initialized on plugin startup, disposed during plugin shutdown, and deployed through the dev-plugin path.
 - Slice 2 complete: `MarketMafioso.UiAutomation` now owns the ECommons task queue/readiness wrapper seam so market-acquisition code does not call ECommons directly for generic orchestration.
 - Slice 3 complete: market-board item search uses the shared text-input helper and ECommons button-click helper, and only reports submitted search when an exact result, visible result, agent work, or actual search-button activation is observed.
 - Slice 4 complete: listing selection now uses `MarketBoardListingListProbe` and treats a not-yet-clickable listing list as recoverable instead of terminal.
 - Slice 5 complete: purchase confirmation now has explicit phases through `MarketBoardPurchaseSessionPhase`; confirmation submission and listing-removal proof are separate states.
-- Slice 5.5 newly required: listing-cache freshness must be explicit before further orchestration refactor. The 2026-06-30 Malboro Darksteel Ore route proved that `InfoProxyItemSearch.SearchItemId` can switch to the new item while readable row data still contains stale previous-item evidence.
+- Slice 5.5 implemented, pending live validation: listing-cache freshness is explicit before further orchestration refactor. The 2026-06-30 Malboro Darksteel Ore route proved that `InfoProxyItemSearch.SearchItemId` can switch to the new item while readable row data still contains stale previous-item evidence.
 - Slice 6 partially complete: `MarketBoardAutomationController` exists as a tested seam for purchase-session progress, but `MainWindow` still owns most route orchestration. Full extraction remains future-refactor work.
 - Slice 7 intentionally partial: obsolete arbitrary search success checks were removed where proven harmful, but watchdogs remain as failure boundaries. Do not remove remaining timing boundaries until live logs prove equivalent condition-based behavior.
 - Slice 8 pending live validation: SimpleTweaks-enabled search, listing-list retry, multi-item same-world routes, and multi-world routes still need in-game confirmation.
@@ -31,6 +31,7 @@ Last updated: 2026-06-29
 - `dotnet test "MarketMafioso.Tests/MarketMafioso.Tests.csproj" -c Debug --filter "FullyQualifiedName~DalamudMarketBoardPurchaseAdapterTests" -v minimal` passed after listing-list readiness conversion.
 - `dotnet test "MarketMafioso.Tests/MarketMafioso.Tests.csproj" -c Debug --filter "FullyQualifiedName~MarketBoardPurchaseSessionTests" -v minimal` passed after purchase-session phase modeling.
 - `dotnet test "MarketMafioso.Tests/MarketMafioso.Tests.csproj" -c Debug --filter "FullyQualifiedName~MarketBoardAutomationControllerTests" -v minimal` passed after introducing the controller seam.
+- `dotnet test "MarketMafioso.Tests/MarketMafioso.Tests.csproj" -c Debug --filter "FullyQualifiedName~MarketBoardListingReaderTests|FullyQualifiedName~MarketAcquisitionLiveCandidatePlannerTests|FullyQualifiedName~MarketAcquisitionRouteDiagnosticsTests|FullyQualifiedName~MarketAcquisitionRouteRunnerTests" -v minimal` passed after listing-cache freshness classification and non-terminal route retry handling.
 - Parallel test/build execution caused a known `DalamudPackager` artifact file lock. Run focused tests and builds sequentially for this repo.
 
 ---
@@ -591,7 +592,7 @@ Execution order: this slice was added after the original Slice 6 shell had alrea
 
 This slice covers the captured `route-20260630-020624.log` failure shape: Malboro Darksteel Ore had active search item id `5121`, but readable listing rows still included raw Electrum Ingot item id `5066` from the previous item. The reader normalized those rows to the active item, the planner saw only above-threshold rows, and route progression treated `VisibleCacheExhausted` as successful line/world completion.
 
-- [ ] **Step 1: Add a typed listing read state**
+- [x] **Step 1: Add a typed listing read state**
 
 In `MarketMafioso/MarketAcquisition/MarketBoardLiveListingModels.cs`, add:
 
@@ -622,7 +623,7 @@ Expected responsibility:
 - `ReadState` becomes the route/planner decision input.
 - `RawItemIdMismatchCounts` preserves evidence for stale row diagnosis.
 
-- [ ] **Step 2: Write reader tests for stale mixed-row cache**
+- [x] **Step 2: Write reader tests for stale mixed-row cache**
 
 In `MarketMafioso.Tests/MarketAcquisition/MarketBoardListingReaderTests.cs`, add a test equivalent to:
 
@@ -680,7 +681,7 @@ dotnet test "MarketMafioso.Tests/MarketMafioso.Tests.csproj" -c Debug --filter "
 
 Expected: FAIL until `MarketBoardListingReader` stops normalizing stale rows into purchasable rows.
 
-- [ ] **Step 3: Implement freshness classification in the reader**
+- [x] **Step 3: Implement freshness classification in the reader**
 
 In `MarketBoardListingReader.BuildReadResult(...)`:
 
@@ -715,7 +716,7 @@ When no stale evidence exists:
 
 Do not pass stale mismatched rows to the candidate planner.
 
-- [ ] **Step 4: Make candidate planning reject non-fresh reads**
+- [x] **Step 4: Make candidate planning reject non-fresh reads**
 
 In `MarketAcquisitionLiveCandidatePlanner`, before calling `BuildCandidatePlanCore` from overloads that accept `MarketBoardReadResult`, add:
 
@@ -750,7 +751,7 @@ public void BuildCandidatePlan_RejectsSwitchingItemRead()
 }
 ```
 
-- [ ] **Step 5: Keep stale reads non-terminal in route progression**
+- [x] **Step 5: Keep stale reads non-terminal in route progression**
 
 In `MarketAcquisitionRouteRunner` where live reads become candidate plans:
 
@@ -766,7 +767,7 @@ Market board listing cache did not become fresh for Darksteel Ore (5121) on Malb
 
 In `MarketAcquisitionGuidedRouteSession`, preserve the existing `VisibleCacheExhausted` behavior only for fresh reads. Stale reads are not line outcomes.
 
-- [ ] **Step 6: Extend diagnostics and CSV evidence**
+- [x] **Step 6: Extend diagnostics and CSV evidence**
 
 In `MarketAcquisitionRouteDiagnostics`:
 
@@ -782,7 +783,7 @@ In `MarketAcquisitionRouteDiagnostics`:
 
 For stale reads with no candidate rows, still emit a summary route-log event so live diagnostics have evidence even when no observed-listings CSV rows are written.
 
-- [ ] **Step 7: Run focused verification**
+- [x] **Step 7: Run focused verification**
 
 Run:
 
@@ -798,7 +799,7 @@ Expected:
 - route runner retries or fails loudly instead of silently skipping;
 - existing fresh read tests still pass.
 
-- [ ] **Step 8: Deploy for live validation**
+- [x] **Step 8: Deploy for live validation**
 
 Run:
 

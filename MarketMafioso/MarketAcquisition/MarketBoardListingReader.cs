@@ -30,6 +30,7 @@ public sealed class MarketBoardListingReader
             {
                 Status = "MarketBoardNotOpen",
                 Message = "Open market board search results for the planned item before running the read-only probe.",
+                ReadState = MarketBoardListingReadState.Unavailable,
             };
         }
 
@@ -40,6 +41,7 @@ public sealed class MarketBoardListingReader
             {
                 Status = "InfoProxyUnavailable",
                 Message = "InfoProxyItemSearch is unavailable.",
+                ReadState = MarketBoardListingReadState.Unavailable,
             };
         }
 
@@ -50,6 +52,7 @@ public sealed class MarketBoardListingReader
             {
                 Status = "NoSearchItem",
                 Message = "Market board search results are open, but no searched item id is available.",
+                ReadState = MarketBoardListingReadState.Unavailable,
             };
         }
 
@@ -105,30 +108,27 @@ public sealed class MarketBoardListingReader
         var realListings = listings
             .Where(MarketBoardListingIntegrity.IsRealListing)
             .ToArray();
-        var normalizedListings = NormalizeListingItemIds(itemId, realListings);
-        var effectiveReportedListingCount = Math.Max(reportedListingCount ?? normalizedListings.Count, normalizedListings.Count);
-        var effectiveListingCapacity = Math.Max(listingCapacity ?? normalizedListings.Count, normalizedListings.Count);
-        var isAtListingCapacity = effectiveListingCapacity > 0 && normalizedListings.Count >= effectiveListingCapacity;
-        var isListingCountTruncated = effectiveReportedListingCount > normalizedListings.Count;
-        var rawItemIdMismatchCount = normalizedListings.Count(listing => listing.RawItemId.HasValue && listing.RawItemId.Value != itemId);
+        var rawItemIdMismatchCounts = BuildRawItemIdMismatchCounts(itemId, realListings);
+        var effectiveReportedListingCount = Math.Max(reportedListingCount ?? realListings.Length, realListings.Length);
+        var effectiveListingCapacity = Math.Max(listingCapacity ?? realListings.Length, realListings.Length);
+        var isAtListingCapacity = effectiveListingCapacity > 0 && realListings.Length >= effectiveListingCapacity;
+        var isListingCountTruncated = effectiveReportedListingCount > realListings.Length;
+        var readState = isListingCountTruncated
+            ? MarketBoardListingReadState.FreshPartial
+            : MarketBoardListingReadState.FreshComplete;
         var capacityNote = effectiveListingCapacity > 0
-            ? $" Listing cache capacity {normalizedListings.Count}/{effectiveListingCapacity}."
+            ? $" Listing cache capacity {realListings.Length}/{effectiveListingCapacity}."
             : string.Empty;
         var truncatedNote = isListingCountTruncated
             ? $" Reported listing count {effectiveReportedListingCount} was truncated to the readable cache."
             : string.Empty;
-        var rawItemIdMismatchNote = rawItemIdMismatchCount > 0
-            ? $" Normalized {rawItemIdMismatchCount} proxy row item id mismatch(es) to the active search item."
-            : string.Empty;
-        if (normalizedListings.Count > 0)
+        if (rawItemIdMismatchCounts.Count > 0)
         {
-            var waitingNote = waitingForListings
-                ? " Waiting flag is still set, but visible listing rows were present."
-                : string.Empty;
             return new MarketBoardReadResult
             {
-                Status = "Ready",
-                Message = $"Read {normalizedListings.Count} live market board listing(s).{capacityNote}{truncatedNote}{rawItemIdMismatchNote}{waitingNote}",
+                Status = "ListingCacheSwitching",
+                Message = $"Market board listing cache is still switching to item {itemId}; raw row item ids included {FormatRawItemIdMismatchCounts(rawItemIdMismatchCounts)}.",
+                ReadState = MarketBoardListingReadState.SwitchingItem,
                 ItemId = itemId,
                 WorldName = currentWorld,
                 ReportedListingCount = effectiveReportedListingCount,
@@ -137,7 +137,31 @@ public sealed class MarketBoardListingReader
                 IsListingCountTruncated = isListingCountTruncated,
                 CurrentRequestId = currentRequestId,
                 NextRequestId = nextRequestId,
-                Listings = normalizedListings,
+                RawItemIdMismatchCounts = rawItemIdMismatchCounts,
+                Listings = [],
+            };
+        }
+
+        if (realListings.Length > 0)
+        {
+            var waitingNote = waitingForListings
+                ? " Waiting flag is still set, but visible listing rows were present."
+                : string.Empty;
+            return new MarketBoardReadResult
+            {
+                Status = "Ready",
+                Message = $"Read {realListings.Length} live market board listing(s).{capacityNote}{truncatedNote}{waitingNote}",
+                ReadState = readState,
+                ItemId = itemId,
+                WorldName = currentWorld,
+                ReportedListingCount = effectiveReportedListingCount,
+                ListingCapacity = effectiveListingCapacity,
+                IsAtListingCapacity = isAtListingCapacity,
+                IsListingCountTruncated = isListingCountTruncated,
+                CurrentRequestId = currentRequestId,
+                NextRequestId = nextRequestId,
+                RawItemIdMismatchCounts = rawItemIdMismatchCounts,
+                Listings = realListings,
             };
         }
 
@@ -147,6 +171,9 @@ public sealed class MarketBoardListingReader
             Message = waitingForListings
                 ? "Market board listings are still loading."
                 : "No live market board listings were available for the current search.",
+            ReadState = waitingForListings
+                ? MarketBoardListingReadState.Loading
+                : MarketBoardListingReadState.FreshComplete,
             ItemId = itemId,
             WorldName = currentWorld,
             ReportedListingCount = effectiveReportedListingCount,
@@ -155,38 +182,39 @@ public sealed class MarketBoardListingReader
             IsListingCountTruncated = isListingCountTruncated,
             CurrentRequestId = currentRequestId,
             NextRequestId = nextRequestId,
-            Listings = normalizedListings,
+            RawItemIdMismatchCounts = rawItemIdMismatchCounts,
+            Listings = [],
         };
     }
 
-    private static IReadOnlyList<MarketBoardLiveListing> NormalizeListingItemIds(
+    private static IReadOnlyDictionary<uint, int> BuildRawItemIdMismatchCounts(
         uint itemId,
         IReadOnlyList<MarketBoardLiveListing> listings)
     {
         if (itemId == 0 || listings.Count == 0)
-            return listings;
+            return new Dictionary<uint, int>();
 
-        List<MarketBoardLiveListing>? normalized = null;
-        for (var index = 0; index < listings.Count; index++)
+        var counts = new Dictionary<uint, int>();
+        foreach (var listing in listings)
         {
-            var listing = listings[index];
-            if (listing.ItemId == itemId)
-            {
-                normalized?.Add(listing);
+            var rawItemId = listing.RawItemId ?? listing.ItemId;
+            if (rawItemId == itemId && listing.ItemId == itemId)
                 continue;
-            }
 
-            normalized ??= new List<MarketBoardLiveListing>(listings.Count);
-            for (var copyIndex = normalized.Count; copyIndex < index; copyIndex++)
-                normalized.Add(listings[copyIndex]);
+            var mismatchItemId = rawItemId != itemId
+                ? rawItemId
+                : listing.ItemId;
 
-            normalized.Add(listing with
-            {
-                ItemId = itemId,
-                RawItemId = listing.RawItemId ?? listing.ItemId,
-            });
+            counts[mismatchItemId] = counts.GetValueOrDefault(mismatchItemId) + 1;
         }
 
-        return normalized ?? listings;
+        return counts;
     }
+
+    private static string FormatRawItemIdMismatchCounts(IReadOnlyDictionary<uint, int> counts) =>
+        string.Join(
+            ", ",
+            counts
+                .OrderBy(count => count.Key)
+                .Select(count => $"{count.Key}={count.Value}"));
 }

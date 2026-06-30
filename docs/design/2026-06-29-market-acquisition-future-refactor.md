@@ -30,6 +30,7 @@ This is much healthier than the original shape: planners, readers, sessions, and
 - Completed: market-board item search now records whether an activation was actually sent, instead of treating an enabled button as proof that search happened.
 - Completed: listing-list selection now reports clickable-list readiness and candidate component diagnostics, reducing the "row exists visually but code cannot click it" failure shape.
 - Completed: purchase confirmation state distinguishes confirmation submission from proven listing removal.
+- Completed, pending live validation: listing-cache freshness is now an explicit typed read state. Stale mixed-item rows become `SwitchingItem`, are excluded from candidate planning, and keep the route waiting until the cache becomes fresh or the freshness watchdog fails loudly.
 - Partial: the execution-controller seam exists, but `MainWindow` still owns route orchestration, active route ticks, and most user-facing acquisition status.
 - Pending: route diagnostics still need a single structured snapshot model that spans search, listing read, selection, confirmation, and post-purchase verification.
 - Completed: route diagnostics now emit companion CSV evidence files for observed live listing rows and purchase audit records beside each route log.
@@ -92,7 +93,7 @@ The clearest captured case was `route-20260630-020624.log` with `observed-listin
 
 That means "market-board listings addon is open for item X" and "the readable listing cache currently belongs to item X" are also two different states. `InfoProxyItemSearch.SearchItemId` alone is not enough evidence that `InfoProxyItemSearch.Listings` has finished switching to the new item.
 
-Do not patch this by making another one-off exception in the route runner. The safer read is that "market-board listings addon is open for item X" and "live listing cache is hydrated enough to plan purchases" are two different states. Today that boundary is blurred between `MarketBoardItemSearchDriver`, `MarketBoardListingReader`, `MarketAcquisitionLiveCandidatePlanner`, and `MarketAcquisitionGuidedRouteSession`.
+This has now been split into an explicit read-state contract: "market-board listings addon is open for item X" and "live listing cache is hydrated enough to plan purchases" are two different states. `MarketBoardListingReader` owns that classification, `MarketAcquisitionLiveCandidatePlanner` refuses non-fresh reads, and `MarketAcquisitionRouteRunner` records pending stale reads without advancing the route.
 
 The new CSV diagnostics are intentionally observational:
 
@@ -101,17 +102,17 @@ The new CSV diagnostics are intentionally observational:
 
 These files should make the next fix evidence-driven: confirm whether the reader observed stale/partial rows, whether the planner filtered real rows incorrectly, or whether route-session advancement treated a non-terminal read status as a skippable line.
 
-The next fix should make listing-read freshness an explicit contract:
+The listing-read freshness contract now lives in code:
 
-- `MarketBoardListingReader` should surface a typed read quality/freshness result, not only `Status = "Ready"`.
-- Raw per-row item id mismatches should not be silently normalized into purchasable rows unless the reader can prove the row belongs to the current listing generation by another signal.
+- `MarketBoardListingReader` surfaces a typed read quality/freshness result, not only `Status = "Ready"`.
+- Raw per-row item id mismatches are not silently normalized into purchasable rows.
 - Switching active route items must clear any accumulated read state for the previous item/world pair.
-- A read with stale raw row identity, mixed current/previous item rows, or unstable request ids should return a non-terminal state such as `ListingCacheStale` or `ListingCacheSwitching`.
-- `MarketAcquisitionLiveCandidatePlanner` should only plan from fresh rows. It should not be responsible for deciding whether a UI cache belongs to the active item.
-- `MarketAcquisitionGuidedRouteSession` should not mark `VisibleCacheExhausted` as successful completion when the read is stale, mixed, or otherwise incomplete.
-- Route diagnostics should preserve the evidence that made a read non-terminal: active search item id, raw row item id summary, request ids, reported count, readable count, and whether the row cache changed between reads.
+- A read with stale raw row identity or mixed current/previous item rows returns the non-terminal `SwitchingItem` state with `ListingCacheSwitching` status.
+- `MarketAcquisitionLiveCandidatePlanner` only plans from fresh rows. It is not responsible for deciding whether a UI cache belongs to the active item.
+- `MarketAcquisitionGuidedRouteSession` only receives fresh candidate plans, so `VisibleCacheExhausted` remains a fresh-read outcome rather than a stale-cache skip.
+- Route diagnostics preserve the evidence that made a read non-terminal: active search item id, raw row item id summary, request ids, reported count, readable count, and read state.
 
-This is a better refactor target than another threshold-specific patch. The runner needs a durable state boundary: search opens an item; the listing reader proves a fresh listing snapshot; only then may the planner classify rows as buyable or skippable.
+Live validation still needs to prove this against the captured multi-item route failure shape, but the durable state boundary is now in place: search opens an item; the listing reader proves a fresh listing snapshot; only then may the planner classify rows as buyable or skippable.
 
 ### UI automation primitives are still uneven
 
@@ -129,24 +130,26 @@ Recent failures around visible row counts and selected row identity show this ar
 
 ### 0. Make listing-read freshness explicit
 
-This should happen before broader controller extraction, because the current live failures are rooted in stale or mixed listing-cache reads.
+Status: implemented, pending live validation.
 
-Add a focused freshness layer around `MarketBoardListingReader`:
+This happened before broader controller extraction, because the current live failures were rooted in stale or mixed listing-cache reads.
 
-- Introduce a typed read-state model for market-board listings:
+The focused freshness layer around `MarketBoardListingReader` now:
+
+- Introduces a typed read-state model for market-board listings:
   - `Unavailable`: market board/listing addon is not readable.
   - `Loading`: the game is still waiting for listings.
   - `SwitchingItem`: the active search item changed, but row identity still contains previous-item evidence.
   - `FreshPartial`: rows are current-item consistent, but the game reports more rows than the readable cache exposes.
   - `FreshComplete`: rows are current-item consistent and the readable cache is not truncated.
-- Preserve string messages for UI/diagnostics, but route decisions should use the typed state.
-- Stop normalizing stale raw row ids into safe candidate rows unless a separate freshness signal proves the cache belongs to the active item.
-- Add tests for the captured failure shape:
+- Preserves string messages for UI/diagnostics, while route decisions use the typed state.
+- Stops normalizing stale raw row ids into safe candidate rows.
+- Adds tests for the captured failure shape:
   - previous item Electrum Ingot (`5066`) rows appear while active search item is Darksteel Ore (`5121`);
   - reader returns `SwitchingItem` or equivalent non-terminal state;
   - planner is not called with those rows;
   - route session does not mark the line/world complete.
-- Add route-log and CSV fields for:
+- Adds route-log and CSV fields for:
   - active search item id;
   - raw row item id mismatch counts by item id;
   - current and next request ids;
@@ -156,7 +159,7 @@ Add a focused freshness layer around `MarketBoardListingReader`:
 Acceptance criteria:
 
 - A stale mixed-row read cannot produce `WouldBuy`, `NoSafeListings`, or `VisibleCacheExhausted`.
-- A stale mixed-row read causes the route runner to wait/retry within its normal automation watchdog.
+- A stale mixed-row read causes the route runner to wait/retry within its listing-freshness watchdog.
 - If the cache never becomes fresh, the route fails loudly as a listing freshness failure rather than silently skipping the item.
 - Existing successful single-item reads still produce buy candidates once the row cache is fresh.
 

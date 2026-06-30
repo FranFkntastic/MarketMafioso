@@ -285,6 +285,9 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
                 "reportedListings",
                 "listingCapacity",
                 "visibleListingCacheTruncated",
+                "listingReadState",
+                "listingReadFresh",
+                "rawItemIdMismatchCounts",
                 "requestedQuantity",
                 "wouldBuyQuantity",
                 "wouldSpendGil",
@@ -359,6 +362,9 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
                 candidatePlan.ReportedListingCount.ToString(CultureInfo.InvariantCulture),
                 candidatePlan.ListingCapacity.ToString(CultureInfo.InvariantCulture),
                 candidatePlan.IsVisibleListingCacheTruncated.ToString(),
+                candidatePlan.ListingReadState.ToString(),
+                candidatePlan.IsListingReadFresh.ToString(),
+                FormatRawItemIdMismatchCounts(candidatePlan.RawItemIdMismatchCounts),
                 candidatePlan.RequestedQuantity.ToString(CultureInfo.InvariantCulture),
                 candidatePlan.WouldBuyQuantity.ToString(CultureInfo.InvariantCulture),
                 candidatePlan.WouldSpendGil.ToString(CultureInfo.InvariantCulture),
@@ -473,6 +479,18 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
         return value
             .Replace("\r", "\\r", StringComparison.Ordinal)
             .Replace("\n", "\\n", StringComparison.Ordinal);
+    }
+
+    private static string? FormatRawItemIdMismatchCounts(IReadOnlyDictionary<uint, int> counts)
+    {
+        if (counts.Count == 0)
+            return null;
+
+        return string.Join(
+            ";",
+            counts
+                .OrderBy(count => count.Key)
+                .Select(count => $"{count.Key}={count.Value}"));
     }
 
     private static StreamWriter CreateCsvWriter(string filePath) =>

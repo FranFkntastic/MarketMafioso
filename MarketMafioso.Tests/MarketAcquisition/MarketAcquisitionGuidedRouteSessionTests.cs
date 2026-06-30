@@ -371,6 +371,22 @@ public sealed class MarketAcquisitionGuidedRouteSessionTests
     }
 
     [Fact]
+    public void RecordWorldPurchaseBatchComplete_FinalMessageReportsWholeRouteTotals()
+    {
+        var session = MarketMafioso.MarketAcquisition.MarketAcquisitionGuidedRouteSession.Start(CreatePlan("Zalera", "Maduin"));
+        session.RecordProbe("Zalera", CreateCandidatePlan(status: "Ready", quantity: 4, gil: 400));
+        session.RecordWorldPurchaseBatchComplete("Zalera", purchasedQuantity: 4, spentGil: 400);
+        session.RecordProbe("Maduin", CreateCandidatePlan(status: "Ready", quantity: 8, gil: 800));
+
+        var result = session.RecordWorldPurchaseBatchComplete("Maduin", purchasedQuantity: 8, spentGil: 800);
+
+        Assert.True(result.Success);
+        Assert.Equal("Complete", session.Status);
+        Assert.Contains("Purchased 12 item(s)", result.Message, StringComparison.Ordinal);
+        Assert.Contains("spent 1,200 gil", result.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void RecordProbe_RejectsWrongWorld()
     {
         var session = MarketMafioso.MarketAcquisition.MarketAcquisitionGuidedRouteSession.Start(CreatePlan("Zalera"));

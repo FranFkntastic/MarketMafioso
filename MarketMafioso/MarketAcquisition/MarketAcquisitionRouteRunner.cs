@@ -10,6 +10,7 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
 {
     private const string LocalMarketBoardCommand = "/li mb";
     private static readonly TimeSpan ItemSearchAutomationTimeout = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan ListingCacheFreshnessTimeout = TimeSpan.FromSeconds(15);
 
     private readonly string diagnosticsDirectory;
     private readonly UniversalisFreshnessVerifierDelegate? universalisFreshnessVerifier;
@@ -25,6 +26,8 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
     private bool includeOpportunisticChecksRequested;
     private bool standaloneInputCaptureLogOpen;
     private DateTimeOffset? itemSearchAutomationStartedUtc;
+    private DateTimeOffset? listingReadPendingStartedUtc;
+    private string? listingReadPendingSignature;
     private string? lastWorldSummarySignature;
     private string? currentRequestId;
 
@@ -100,6 +103,7 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         MarketBoardCloseRequiredBeforeTravel = false;
         standaloneInputCaptureLogOpen = false;
         itemSearchAutomationStartedUtc = null;
+        ClearListingReadPendingWatchdog();
         LatestWorldCompletionSummary = null;
         lastWorldSummarySignature = null;
         freshnessObservations.Clear();
@@ -168,6 +172,7 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         MarketBoardCloseRequiredBeforeTravel = false;
         standaloneInputCaptureLogOpen = false;
         itemSearchAutomationStartedUtc = null;
+        ClearListingReadPendingWatchdog();
         diagnostics.Record("stopped", StatusMessage);
         CloseDiagnostics();
         return MarketAcquisitionRouteActionResult.Ok(StatusMessage);
@@ -184,6 +189,7 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         MarketBoardCloseRequiredBeforeTravel = false;
         standaloneInputCaptureLogOpen = false;
         itemSearchAutomationStartedUtc = null;
+        ClearListingReadPendingWatchdog();
         diagnosticsRequested = false;
         includeOpportunisticChecksRequested = false;
         LastDiagnosticFilePath = null;
@@ -406,9 +412,15 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
             return Fail($"Route is {State}; search result was not recorded.");
 
         if (searchResult.ReadyForListings)
+        {
             itemSearchAutomationStartedUtc = null;
+            ClearListingReadPendingWatchdog();
+        }
         else if (searchResult.IsInProgress)
+        {
             itemSearchAutomationStartedUtc ??= nowUtc;
+            ClearListingReadPendingWatchdog();
+        }
 
         StatusMessage = searchResult.ReadyForListings
             ? searchResult.Message
@@ -549,6 +561,59 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         return MarketAcquisitionRouteActionResult.Ok(message);
     }
 
+    public MarketAcquisitionRouteActionResult RecordListingReadPending(string currentWorld, MarketBoardReadResult readResult)
+    {
+        return RecordListingReadPending(currentWorld, readResult, DateTimeOffset.UtcNow);
+    }
+
+    internal MarketAcquisitionRouteActionResult RecordListingReadPending(
+        string currentWorld,
+        MarketBoardReadResult readResult,
+        DateTimeOffset nowUtc)
+    {
+        ArgumentNullException.ThrowIfNull(readResult);
+
+        if (!IsRunning)
+            return Fail($"Route is {State}; listing read was not recorded.");
+
+        var activeSubtask = session?.ActiveStop?.ActiveItemSubtask;
+        var signature = BuildListingReadPendingSignature(currentWorld, readResult);
+        if (!string.Equals(listingReadPendingSignature, signature, StringComparison.Ordinal))
+        {
+            listingReadPendingSignature = signature;
+            listingReadPendingStartedUtc = nowUtc;
+        }
+
+        StatusMessage = readResult.Message;
+        diagnostics.Record(
+            "listing-read-pending",
+            readResult.Message,
+            new Dictionary<string, string?>
+            {
+                ["currentWorld"] = currentWorld,
+                ["itemId"] = readResult.ItemId.ToString(),
+                ["itemName"] = activeSubtask?.ItemName,
+                ["status"] = readResult.Status,
+                ["readState"] = readResult.ReadState.ToString(),
+                ["isFresh"] = readResult.IsFresh.ToString(),
+                ["readableListings"] = readResult.Listings.Count.ToString(),
+                ["reportedListings"] = readResult.ReportedListingCount.ToString(),
+                ["listingCapacity"] = readResult.ListingCapacity.ToString(),
+                ["rawItemIdMismatchCounts"] = FormatRawItemIdMismatchCounts(readResult.RawItemIdMismatchCounts),
+                ["subtaskSource"] = activeSubtask?.Source,
+            });
+
+        if (listingReadPendingStartedUtc is { } startedAt &&
+            nowUtc - startedAt > ListingCacheFreshnessTimeout)
+        {
+            var timeoutMessage =
+                $"Market board listing cache did not become fresh for {activeSubtask?.ItemName ?? $"item {readResult.ItemId}"} ({readResult.ItemId}) on {currentWorld}. {readResult.Message}";
+            return FailRoute(timeoutMessage);
+        }
+
+        return MarketAcquisitionRouteActionResult.Ok(readResult.Message);
+    }
+
     public MarketAcquisitionRouteActionResult RecordProbe(string currentWorld, MarketAcquisitionLiveCandidatePlan candidatePlan)
     {
         ArgumentNullException.ThrowIfNull(candidatePlan);
@@ -565,6 +630,7 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         StatusMessage = result.Message;
         SearchSubmitted = false;
         itemSearchAutomationStartedUtc = null;
+        ClearListingReadPendingWatchdog();
         diagnostics.Record(
             "probe-result",
             result.Message,
@@ -578,6 +644,9 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
                 ["reportedListings"] = candidatePlan.ReportedListingCount.ToString(),
                 ["listingCapacity"] = candidatePlan.ListingCapacity.ToString(),
                 ["visibleListingCacheTruncated"] = candidatePlan.IsVisibleListingCacheTruncated.ToString(),
+                ["listingReadState"] = candidatePlan.ListingReadState.ToString(),
+                ["listingReadFresh"] = candidatePlan.IsListingReadFresh.ToString(),
+                ["rawItemIdMismatchCounts"] = FormatRawItemIdMismatchCounts(candidatePlan.RawItemIdMismatchCounts),
                 ["observedQuantity"] = observedQuantity.ToString(),
                 ["observedGil"] = observedGil.ToString(),
                 ["wouldBuyQuantity"] = candidatePlan.WouldBuyQuantity.ToString(),
@@ -631,6 +700,32 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
             .Select(group => $"{group.Key}={group.Count()}");
 
         return string.Join("; ", reasons);
+    }
+
+    private static string? FormatRawItemIdMismatchCounts(IReadOnlyDictionary<uint, int> counts)
+    {
+        if (counts.Count == 0)
+            return null;
+
+        return string.Join(
+            ";",
+            counts
+                .OrderBy(count => count.Key)
+                .Select(count => $"{count.Key}={count.Value}"));
+    }
+
+    private static string BuildListingReadPendingSignature(string currentWorld, MarketBoardReadResult readResult) =>
+        string.Join(
+            "|",
+            currentWorld,
+            readResult.ItemId.ToString(),
+            readResult.ReadState.ToString(),
+            FormatRawItemIdMismatchCounts(readResult.RawItemIdMismatchCounts) ?? string.Empty);
+
+    private void ClearListingReadPendingWatchdog()
+    {
+        listingReadPendingStartedUtc = null;
+        listingReadPendingSignature = null;
     }
 
     private static uint SumObservedQuantity(MarketAcquisitionLiveCandidatePlan candidatePlan)
@@ -864,6 +959,7 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         MarketBoardCloseRequiredBeforeTravel = false;
         standaloneInputCaptureLogOpen = false;
         itemSearchAutomationStartedUtc = null;
+        ClearListingReadPendingWatchdog();
         diagnostics.Fail(message, exception);
         CloseDiagnostics();
         return MarketAcquisitionRouteActionResult.Fail(message);

@@ -40,6 +40,7 @@ public static class MarketAcquisitionLiveCandidatePlanner
         ArgumentNullException.ThrowIfNull(readResult);
 
         Validate(request, plan, currentWorld, readResult.ItemId);
+        EnsureFresh(readResult);
         return BuildCandidatePlanCore(
             request,
             currentWorld,
@@ -104,6 +105,7 @@ public static class MarketAcquisitionLiveCandidatePlanner
         ArgumentNullException.ThrowIfNull(readResult);
 
         Validate(request, plan, activeSubtask, currentWorld, readResult.ItemId);
+        EnsureFresh(readResult);
         return BuildCandidatePlanCore(
             request,
             currentWorld,
@@ -219,6 +221,8 @@ public static class MarketAcquisitionLiveCandidatePlanner
         {
             Status = status,
             Message = ResolveMessage(status, mode, request.Quantity, alreadyPurchasedQuantity, selectedQuantity, readResult),
+            ListingReadState = readResult?.ReadState ?? MarketBoardListingReadState.FreshComplete,
+            RawItemIdMismatchCounts = readResult?.RawItemIdMismatchCounts ?? new Dictionary<uint, int>(),
             ReadableListingCount = readResult?.Listings.Count ?? rows.Count,
             ReportedListingCount = readResult?.ReportedListingCount ?? rows.Count,
             ListingCapacity = readResult?.ListingCapacity ?? rows.Count,
@@ -282,6 +286,15 @@ public static class MarketAcquisitionLiveCandidatePlanner
         _ = NormalizeQuantityMode(request.QuantityMode);
 
         _ = MarketAcquisitionPolicy.NormalizeHqPolicy(request.HqPolicy);
+    }
+
+    private static void EnsureFresh(MarketBoardReadResult readResult)
+    {
+        if (!readResult.IsFresh)
+        {
+            throw new InvalidOperationException(
+                $"Market board listings are not fresh enough to plan purchases: {readResult.Status}.");
+        }
     }
 
     private static MarketBoardLiveListing ValidateLiveListing(

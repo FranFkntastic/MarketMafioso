@@ -17,6 +17,8 @@ namespace MarketMafioso.Windows;
 
 public class MainWindow : Window, IDisposable
 {
+    private static readonly TimeSpan UniversalisFreshnessVerificationDelay = TimeSpan.FromSeconds(10);
+
     private readonly Configuration config;
     private readonly HttpReporter reporter;
     private readonly InventoryScanner scanner;
@@ -971,7 +973,17 @@ public class MainWindow : Window, IDisposable
         var freshRead = marketBoardListingReader.ReadCurrentListings(currentWorld);
         marketBoardReadResult = freshRead;
         if (!freshRead.Status.Equals("Ready", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!freshRead.IsFresh)
+            {
+                marketAcquisitionRouteRunner.RecordListingReadPending(currentWorld, freshRead);
+                acquisitionStatus = $"Waiting for fresh market listings. {freshRead.Message}";
+                nextGuidedRouteMonitorUtc = DateTimeOffset.UtcNow.AddMilliseconds(500);
+                return;
+            }
+
             throw new InvalidOperationException(freshRead.Message);
+        }
 
         marketAcquisitionLiveCandidatePlan = activeStop.ActiveItemSubtask == null
             ? MarketAcquisitionLiveCandidatePlanner.BuildCandidatePlan(
@@ -1094,6 +1106,8 @@ public class MainWindow : Window, IDisposable
         {
             try
             {
+                await Task.Delay(UniversalisFreshnessVerificationDelay)
+                    .ConfigureAwait(false);
                 await marketAcquisitionRouteRunner.VerifyLatestWorldFreshnessAsync(CancellationToken.None)
                     .ConfigureAwait(false);
             }
@@ -1627,6 +1641,15 @@ public class MainWindow : Window, IDisposable
                     marketBoardReadResult.ItemId,
                     marketBoardReadResult.Listings)
             : null;
+        if (!marketBoardReadResult.IsFresh)
+        {
+            if (marketAcquisitionRouteRunner.IsRunning)
+                marketAcquisitionRouteRunner.RecordListingReadPending(currentWorld, marketBoardReadResult);
+
+            acquisitionStatus = marketBoardReadResult.Message;
+            return;
+        }
+
         marketAcquisitionLiveCandidatePlan = canBuildLiveCandidatePlan
             ? activeSubtask == null
                 ? MarketAcquisitionLiveCandidatePlanner.BuildCandidatePlan(

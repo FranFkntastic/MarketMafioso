@@ -371,6 +371,71 @@ public sealed class MarketAcquisitionRouteRunnerTests
     }
 
     [Fact]
+    public void RecordListingReadPending_DoesNotAdvanceArrivedStop()
+    {
+        var directory = CreateTempDirectory();
+        using var runner = new MarketMafioso.MarketAcquisition.MarketAcquisitionRouteRunner(directory);
+        runner.Start(CreateMultiItemWorldPlan("Maduin"), enableDiagnostics: true);
+        runner.ExecutePendingTravelCommand(_ => true);
+        runner.RecordCurrentWorld("Maduin");
+
+        var result = runner.RecordListingReadPending(
+            "Maduin",
+            new MarketMafioso.MarketAcquisition.MarketBoardReadResult
+            {
+                Status = "ListingCacheSwitching",
+                Message = "Market board listing cache is still switching.",
+                ReadState = MarketMafioso.MarketAcquisition.MarketBoardListingReadState.SwitchingItem,
+                ItemId = 7017,
+                WorldName = "Maduin",
+                RawItemIdMismatchCounts = new Dictionary<uint, int>
+                {
+                    [5066] = 2,
+                },
+            });
+
+        Assert.True(result.Success);
+        Assert.Equal("Running", runner.State);
+        Assert.Equal("Arrived", runner.ActiveStop?.Status);
+        Assert.Equal("Maduin", runner.ActiveStop?.WorldName);
+
+        var text = ReadLog(runner.LastDiagnosticFilePath!);
+        Assert.Contains("listing-read-pending", text, StringComparison.Ordinal);
+        Assert.Contains("readState: SwitchingItem", text, StringComparison.Ordinal);
+        Assert.Contains("rawItemIdMismatchCounts: 5066=2", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RecordListingReadPending_FailsRouteAfterFreshnessTimeout()
+    {
+        using var runner = CreateRunner();
+        runner.Start(CreateMultiItemWorldPlan("Maduin"));
+        runner.ExecutePendingTravelCommand(_ => true);
+        runner.RecordCurrentWorld("Maduin");
+        var read = new MarketMafioso.MarketAcquisition.MarketBoardReadResult
+        {
+            Status = "ListingCacheSwitching",
+            Message = "Market board listing cache is still switching.",
+            ReadState = MarketMafioso.MarketAcquisition.MarketBoardListingReadState.SwitchingItem,
+            ItemId = 7017,
+            WorldName = "Maduin",
+            RawItemIdMismatchCounts = new Dictionary<uint, int>
+            {
+                [5066] = 2,
+            },
+        };
+        var startedAt = new DateTimeOffset(2026, 6, 30, 2, 30, 0, TimeSpan.Zero);
+
+        _ = runner.RecordListingReadPending("Maduin", read, startedAt);
+        var result = runner.RecordListingReadPending("Maduin", read, startedAt.AddSeconds(16));
+
+        Assert.False(result.Success);
+        Assert.Equal("Failed", runner.State);
+        Assert.Contains("did not become fresh", runner.StatusMessage, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Varnish", runner.StatusMessage, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void RecordProbe_WithSafeListingsStartsPurchasing()
     {
         using var runner = CreateRunner();

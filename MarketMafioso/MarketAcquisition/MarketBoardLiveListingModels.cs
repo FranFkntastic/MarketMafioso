@@ -3,6 +3,15 @@ using System.Collections.Generic;
 
 namespace MarketMafioso.MarketAcquisition;
 
+public enum MarketBoardListingReadState
+{
+    Unavailable,
+    Loading,
+    SwitchingItem,
+    FreshPartial,
+    FreshComplete,
+}
+
 public sealed record MarketBoardLiveListing
 {
     public uint ItemId { get; init; }
@@ -20,6 +29,9 @@ public sealed record MarketBoardReadResult
 {
     public string Status { get; init; } = string.Empty;
     public string Message { get; init; } = string.Empty;
+    public MarketBoardListingReadState ReadState { get; init; } = MarketBoardListingReadState.FreshComplete;
+    public bool IsFresh =>
+        ReadState is MarketBoardListingReadState.FreshPartial or MarketBoardListingReadState.FreshComplete;
     public uint ItemId { get; init; }
     public string WorldName { get; init; } = string.Empty;
     public int ReportedListingCount { get; init; }
@@ -28,6 +40,8 @@ public sealed record MarketBoardReadResult
     public bool IsListingCountTruncated { get; init; }
     public byte CurrentRequestId { get; init; }
     public byte NextRequestId { get; init; }
+    public IReadOnlyDictionary<uint, int> RawItemIdMismatchCounts { get; init; } =
+        new Dictionary<uint, int>();
     public IReadOnlyList<MarketBoardLiveListing> Listings { get; init; } = [];
 }
 
@@ -110,6 +124,9 @@ public sealed record MarketBoardAccumulatedReadResult
             Message = IsListingCountTruncated
                 ? $"Read {Listings.Count:N0}/{ReportedListingCount:N0} accumulated market board listing(s); deeper listings are still unread."
                 : $"Read {Listings.Count:N0} accumulated market board listing(s).",
+            ReadState = IsListingCountTruncated
+                ? MarketBoardListingReadState.FreshPartial
+                : MarketBoardListingReadState.FreshComplete,
             ItemId = ItemId,
             WorldName = WorldName,
             ReportedListingCount = Math.Max(ReportedListingCount, Listings.Count),

@@ -237,8 +237,11 @@ public sealed class MarketAcquisitionGuidedRouteSession
             CompleteActiveStop(stop.PurchasedQuantity, stop.SpentGil);
         }
         if (Status == "Complete")
+        {
+            var routeTotals = BuildRouteTotals();
             return MarketAcquisitionGuidedRouteResult.Ok(
-                $"Guided route complete. Purchased {stop.PurchasedQuantity:N0} item(s), spent {stop.SpentGil:N0} gil on {currentWorld}.");
+                $"Guided route complete. Purchased {routeTotals.PurchasedQuantity:N0} item(s), spent {routeTotals.SpentGil:N0} gil.");
+        }
 
         return MarketAcquisitionGuidedRouteResult.Ok(
             $"Completed {currentWorld}: purchased {stop.PurchasedQuantity:N0} item(s), spent {stop.SpentGil:N0} gil. Next stop: {ActiveStop?.WorldName}.");
@@ -367,6 +370,19 @@ public sealed class MarketAcquisitionGuidedRouteSession
         Message = $"{stop.WorldName} complete: bought {stop.PurchasedQuantity:N0} item(s), spent {stop.SpentGil:N0} gil across {stop.LineStates.Count:N0} line(s).",
     };
 
+    private RouteTotals BuildRouteTotals()
+    {
+        var purchasedQuantity = 0u;
+        var spentGil = 0u;
+        foreach (var stop in Stops)
+        {
+            purchasedQuantity = checked(purchasedQuantity + stop.PurchasedQuantity);
+            spentGil = checked(spentGil + stop.SpentGil);
+        }
+
+        return new RouteTotals(purchasedQuantity, spentGil);
+    }
+
     private static string ResolveZeroPurchaseLineStatus(string candidateStatus) =>
         candidateStatus.Equals("VisibleCacheExhausted", StringComparison.OrdinalIgnoreCase)
             ? "SkippedVisibleCacheExhausted"
@@ -393,6 +409,8 @@ public sealed class MarketAcquisitionGuidedRouteSession
             ? $"item {subtask.ItemId}"
             : $"{subtask.ItemName} ({subtask.ItemId})";
     }
+
+    private sealed record RouteTotals(uint PurchasedQuantity, uint SpentGil);
 }
 
 public sealed record MarketAcquisitionGuidedRouteStop

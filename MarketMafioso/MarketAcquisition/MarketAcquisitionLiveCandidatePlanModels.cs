@@ -6,6 +6,11 @@ public sealed record MarketAcquisitionLiveCandidatePlan
 {
     public string Status { get; init; } = string.Empty;
     public string Message { get; init; } = string.Empty;
+    public MarketBoardListingReadState ListingReadState { get; init; } = MarketBoardListingReadState.FreshComplete;
+    public bool IsListingReadFresh =>
+        ListingReadState is MarketBoardListingReadState.FreshPartial or MarketBoardListingReadState.FreshComplete;
+    public IReadOnlyDictionary<uint, int> RawItemIdMismatchCounts { get; init; } =
+        new Dictionary<uint, int>();
     public int ReadableListingCount { get; init; }
     public int ReportedListingCount { get; init; }
     public int ListingCapacity { get; init; }
