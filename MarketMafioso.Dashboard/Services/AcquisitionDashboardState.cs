@@ -84,6 +84,19 @@ public sealed class AcquisitionDashboardState
         }, "Stage queue failed.");
     }
 
+    public async Task<bool> AppendAsync(
+        string requestId,
+        MarketAcquisitionBatchAppendLinesRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        return await RunAsync(async () =>
+        {
+            await api.AppendAcquisitionBatchLinesAsync(requestId, request, cancellationToken);
+            await RefreshCoreAsync(cancellationToken);
+            status.Info($"Added {request.Lines.Count:N0} line(s) to pending acquisition batch.");
+        }, "Append queue failed.");
+    }
+
     private async Task RefreshCoreAsync(CancellationToken cancellationToken)
     {
         Requests = await api.GetAcquisitionRequestsAsync(IncludeTerminal, cancellationToken);

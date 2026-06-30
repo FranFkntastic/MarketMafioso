@@ -42,10 +42,12 @@ else
         <div class="page-grid acquisition-grid">
             <RequestBuilder Busy="State.IsBusy"
                             Characters="_characters"
+                            PendingRequests="State.Requests"
                             Settings="_settings"
                             PresetRequest="_builderPreset"
                             PresetVersion="_builderPresetVersion"
-                            StageRequested="StageRequestsAsync" />
+                            StageRequested="StageRequestsAsync"
+                            AppendRequested="AppendRequestsAsync" />
             <ServerRequestGrid Requests="State.Requests"
                                SelectedRequest="State.SelectedRequest"
                                SelectedRequestChanged="SelectRequestAsync"
@@ -189,6 +191,9 @@ else
 
     private Task<bool> StageRequestsAsync(MarketAcquisitionBatchCreateRequest request) =>
         State.StageAsync(request);
+
+    private Task<bool> AppendRequestsAsync(string requestId, MarketAcquisitionBatchAppendLinesRequest request) =>
+        State.AppendAsync(requestId, request);
 
     private Task RefreshRequestsAsync() => State.RefreshAsync();
 

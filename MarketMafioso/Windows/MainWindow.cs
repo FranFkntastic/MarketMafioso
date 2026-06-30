@@ -70,6 +70,7 @@ public class MainWindow : Window, IDisposable
     private long guidedRouteProgressSessionVersion;
     private string guidedRouteProgressNonce = Guid.NewGuid().ToString("N");
     private string? lastGuidedRouteProgressReportKey;
+    private readonly HashSet<string> expandedGuidedRouteStops = new(StringComparer.OrdinalIgnoreCase);
     private bool acquisitionRequestBusy = false;
     private string acquisitionStatus = "No dashboard request has been fetched this session.";
     private CancellationTokenSource? acquisitionRequestCancellation;
@@ -1801,37 +1802,84 @@ public class MainWindow : Window, IDisposable
 
     private void DrawGuidedRouteStops(IReadOnlyList<MarketAcquisitionGuidedRouteStop> stops)
     {
-        if (ImGui.BeginTable("MarketAcquisitionGuidedRouteStops", 7, ImGuiUi.InteractiveTableFlags))
+        if (ImGui.BeginTable("MarketAcquisitionGuidedRouteStops", 8, ImGuiUi.InteractiveTableFlags))
         {
             ImGui.TableSetupColumn("World");
             ImGui.TableSetupColumn("Data Center");
             ImGui.TableSetupColumn("Status");
             ImGui.TableSetupColumn("Items");
             ImGui.TableSetupColumn("Planned");
-            ImGui.TableSetupColumn("Live");
-            ImGui.TableSetupColumn("Live candidate");
+            ImGui.TableSetupColumn("Discovered");
+            ImGui.TableSetupColumn("Bought");
+            ImGui.TableSetupColumn("Result");
             ImGui.TableHeadersRow();
 
             foreach (var stop in stops)
             {
                 ImGui.TableNextRow();
                 ImGui.TableNextColumn();
-                ImGui.TextUnformatted(stop.WorldName);
+                DrawGuidedRouteStopExpander(stop);
                 ImGui.TableNextColumn();
                 ImGui.TextUnformatted(FormatRouteDataCenter(stop.DataCenter));
                 ImGui.TableNextColumn();
                 ImGui.TextColored(GetGuidedRouteStopColor(stop), stop.Status);
                 ImGui.TableNextColumn();
-                ImGui.TextUnformatted(stop.ItemSubtasks.Count == 0 ? "1" : stop.ItemSubtasks.Count.ToString("N0"));
+                ImGui.TextUnformatted(FormatGuidedRouteItemsSummary(stop));
                 ImGui.TableNextColumn();
                 ImGui.TextUnformatted($"{stop.PlannedQuantity:N0} / {FormatGil(stop.PlannedGil)}");
                 ImGui.TableNextColumn();
                 ImGui.TextUnformatted(FormatGuidedRouteLiveSummary(stop));
                 ImGui.TableNextColumn();
+                ImGui.TextUnformatted(stop.PurchasedQuantity == 0 ? "-" : $"{stop.PurchasedQuantity:N0} / {FormatGil(stop.SpentGil)}");
+                ImGui.TableNextColumn();
                 ImGui.TextUnformatted(FormatGuidedRouteLiveCandidateSummary(stop));
+
+                if (expandedGuidedRouteStops.Contains(GetGuidedRouteStopKey(stop)))
+                    DrawGuidedRouteStopLineRows(stop);
             }
 
             ImGui.EndTable();
+        }
+    }
+
+    private void DrawGuidedRouteStopExpander(MarketAcquisitionGuidedRouteStop stop)
+    {
+        var key = GetGuidedRouteStopKey(stop);
+        var expanded = expandedGuidedRouteStops.Contains(key);
+        var buttonLabel = expanded ? $"v##route-stop-{key}" : $">##route-stop-{key}";
+        if (ImGui.SmallButton(buttonLabel))
+        {
+            if (expanded)
+                expandedGuidedRouteStops.Remove(key);
+            else
+                expandedGuidedRouteStops.Add(key);
+        }
+
+        ImGui.SameLine();
+        ImGui.TextUnformatted(stop.WorldName);
+    }
+
+    private void DrawGuidedRouteStopLineRows(MarketAcquisitionGuidedRouteStop stop)
+    {
+        foreach (var line in stop.LineStates)
+        {
+            ImGui.TableNextRow();
+            ImGui.TableNextColumn();
+            ImGui.TextColored(ColMuted, "  item");
+            ImGui.TableNextColumn();
+            ImGui.TextColored(ColMuted, line.Source);
+            ImGui.TableNextColumn();
+            ImGui.TextColored(GetRouteLineStateColor(line), line.Status);
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(FormatGuidedRouteLineItem(line));
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted($"{line.PlannedQuantity:N0} / {FormatGil(line.PlannedGil)}");
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(FormatGuidedRouteLineObserved(line));
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(line.PurchasedQuantity == 0 ? "-" : $"{line.PurchasedQuantity:N0} / {FormatGil(line.SpentGil)}");
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(FormatGuidedRouteLineResult(line));
         }
     }
 
@@ -1869,6 +1917,53 @@ public class MainWindow : Window, IDisposable
             ? stop.LiveCandidateStatus ?? "-"
             : summary;
     }
+
+    private static string FormatGuidedRouteItemsSummary(MarketAcquisitionGuidedRouteStop stop)
+    {
+        var names = stop.LineStates
+            .Select(FormatGuidedRouteLineItem)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (names.Length == 0)
+            return "-";
+
+        var shown = string.Join(", ", names.Take(2));
+        return names.Length <= 2
+            ? shown
+            : $"{shown} +{names.Length - 2:N0}";
+    }
+
+    private static string FormatGuidedRouteLineItem(MarketAcquisitionRouteLineState line)
+    {
+        var name = string.IsNullOrWhiteSpace(line.ItemName)
+            ? $"Item {line.ItemId}"
+            : line.ItemName;
+        return $"{name} ({line.ItemId})";
+    }
+
+    private static string FormatGuidedRouteLineObserved(MarketAcquisitionRouteLineState line)
+    {
+        if (string.IsNullOrWhiteSpace(line.LiveCandidateStatus))
+            return "-";
+
+        var listingSuffix = line.LiveReportedListingCount > 0
+            ? $" ({line.LiveReadableListingCount:N0}/{line.LiveReportedListingCount:N0} rows)"
+            : string.Empty;
+        return $"{line.LiveObservedQuantity:N0} / {FormatGil(line.LiveObservedGil)}{listingSuffix}";
+    }
+
+    private static string FormatGuidedRouteLineResult(MarketAcquisitionRouteLineState line)
+    {
+        if (!string.IsNullOrWhiteSpace(line.LiveCandidateStatus))
+            return line.LiveCandidateStatus;
+
+        return string.IsNullOrWhiteSpace(line.LatestMessage)
+            ? "-"
+            : line.LatestMessage;
+    }
+
+    private static string GetGuidedRouteStopKey(MarketAcquisitionGuidedRouteStop stop) =>
+        $"{stop.WorldName}|{stop.DataCenter}";
 
     private Task StartGuidedRouteAsync(bool enableDiagnostics)
     {
@@ -2441,6 +2536,16 @@ public class MainWindow : Window, IDisposable
             "Complete" => ColSuccess,
             "Arrived" or "Purchasing" => ColHeader,
             _ => ColMuted,
+        };
+
+    private static Vector4 GetRouteLineStateColor(MarketAcquisitionRouteLineState line) =>
+        line.Status switch
+        {
+            "Complete" or "Purchasing" => ColSuccess,
+            "Pending" => ColMuted,
+            _ when line.Status.StartsWith("Skipped", StringComparison.OrdinalIgnoreCase) => ColMuted,
+            _ when line.Status.Contains("fail", StringComparison.OrdinalIgnoreCase) => ColError,
+            _ => ColHeader,
         };
 
     internal static bool CanPrepareAcquisitionPlanForStatus(string status) =>

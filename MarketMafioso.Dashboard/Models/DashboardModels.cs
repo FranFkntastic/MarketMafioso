@@ -37,6 +37,7 @@ public sealed record ReceiverStorageSummaryView
 public sealed record MarketAcquisitionRequestView
 {
     public string Id { get; init; } = string.Empty;
+    public int Revision { get; init; }
     public string Status { get; init; } = string.Empty;
     public DateTimeOffset CreatedAtUtc { get; init; }
     public DateTimeOffset ExpiresAtUtc { get; init; }
@@ -131,6 +132,13 @@ public sealed record MarketAcquisitionBatchCreateRequest
     public string WorldMode { get; init; } = "Recommended";
     public string SweepScope { get; init; } = "Region";
     public IReadOnlyList<string> SweepDataCenters { get; init; } = [];
+    public int ExpiresInSeconds { get; init; } = 300;
+    public IReadOnlyList<MarketAcquisitionBatchLineCreateRequest> Lines { get; init; } = [];
+}
+
+public sealed record MarketAcquisitionBatchAppendLinesRequest
+{
+    public int ExpectedRevision { get; init; }
     public int ExpiresInSeconds { get; init; } = 300;
     public IReadOnlyList<MarketAcquisitionBatchLineCreateRequest> Lines { get; init; } = [];
 }

@@ -111,6 +111,8 @@ app.MapGet("/api/acquisition/batches/{id}", async (
     return batch == null ? Results.NotFound() : Results.Ok(batch);
 });
 
+app.MapPost("/api/acquisition/batches/{id}/lines", AppendAcquisitionBatchLines);
+
 app.MapGet("/api/diagnostics/events", async (
     DiagnosticEventStore diagnostics,
     int? limit,
@@ -662,6 +664,36 @@ async Task<IResult> CreateAcquisitionBatch(
     catch (MarketAcquisitionIdempotencyConflictException ex)
     {
         return Results.Conflict(new { error = ex.Message });
+    }
+}
+
+async Task<IResult> AppendAcquisitionBatchLines(
+    string id,
+    MarketAcquisitionBatchAppendLinesRequest appendRequest,
+    MarketAcquisitionRequestStore store,
+    CancellationToken token)
+{
+    try
+    {
+        var updated = await store.AppendLinesAsync(id, appendRequest, token);
+        return updated == null ? Results.NotFound() : Results.Ok(updated);
+    }
+    catch (ArgumentException ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+    catch (MarketAcquisitionInvalidTransitionException ex)
+    {
+        return Results.Conflict(new { error = ex.Message });
+    }
+    catch (MarketAcquisitionRevisionConflictException ex)
+    {
+        return Results.Conflict(new
+        {
+            error = ex.Message,
+            expectedRevision = ex.ExpectedRevision,
+            actualRevision = ex.ActualRevision,
+        });
     }
 }
 

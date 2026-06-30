@@ -3,6 +3,99 @@ namespace MarketMafioso.Server.Tests;
 public sealed class MarketAcquisitionRequestStoreTests
 {
     [Fact]
+    public async Task CreateBatchAsyncAllowsConfiguredLongPickupExpiry()
+    {
+        using var fixture = await MarketAcquisitionStoreFixture.CreateAsync(
+            new KeyValuePair<string, string?>("MarketMafioso:AcquisitionMaximumExpirySeconds", "86400"));
+        var request = CreateBatchRequest("long-pickup-expiry", expiresInSeconds: 7200);
+
+        var created = await fixture.Store.CreateBatchAsync(request, CancellationToken.None);
+
+        var lifetime = created.Request.ExpiresAtUtc - created.Request.CreatedAtUtc;
+        Assert.True(lifetime >= TimeSpan.FromMinutes(119), $"Expected roughly two hours, got {lifetime}.");
+    }
+
+    [Fact]
+    public async Task AppendLinesAsyncAddsDistinctPendingLineAndIncrementsRevision()
+    {
+        using var fixture = await MarketAcquisitionStoreFixture.CreateAsync(
+            new KeyValuePair<string, string?>("MarketMafioso:AcquisitionMaximumExpirySeconds", "86400"));
+        var created = await fixture.Store.CreateBatchAsync(
+            CreateBatchRequest("append-distinct-line", expiresInSeconds: 300),
+            CancellationToken.None);
+
+        var appended = await fixture.Store.AppendLinesAsync(
+            created.Request.Id,
+            new MarketAcquisitionBatchAppendLinesRequest
+            {
+                ExpectedRevision = created.Request.Revision,
+                ExpiresInSeconds = 3600,
+                Lines =
+                [
+                    CreateLine(4, "Lightning Shard", "Crystal", maxUnitPrice: 25),
+                ],
+            },
+            CancellationToken.None);
+
+        Assert.NotNull(appended);
+        Assert.Equal(created.Request.Revision + 1, appended.Revision);
+        Assert.Equal(2, appended.Lines.Count);
+        Assert.Contains(appended.Lines, line => line.ItemId == 4 && line.Ordinal == 1);
+        Assert.True(appended.ExpiresAtUtc - appended.CreatedAtUtc >= TimeSpan.FromMinutes(59));
+    }
+
+    [Fact]
+    public async Task AppendLinesAsyncCoalescesMatchingPendingAllBelowThresholdLine()
+    {
+        using var fixture = await MarketAcquisitionStoreFixture.CreateAsync();
+        var created = await fixture.Store.CreateBatchAsync(
+            CreateBatchRequest("append-coalesce-line"),
+            CancellationToken.None);
+
+        var appended = await fixture.Store.AppendLinesAsync(
+            created.Request.Id,
+            new MarketAcquisitionBatchAppendLinesRequest
+            {
+                ExpectedRevision = created.Request.Revision,
+                ExpiresInSeconds = 300,
+                Lines =
+                [
+                    CreateLine(2, "Fire Shard", "Crystal", maxQuantity: 250, maxUnitPrice: 99),
+                ],
+            },
+            CancellationToken.None);
+
+        Assert.NotNull(appended);
+        Assert.Single(appended.Lines);
+        Assert.Equal((uint)750, appended.Lines[0].MaxQuantity);
+    }
+
+    [Fact]
+    public async Task AppendLinesAsyncRejectsClaimedBatch()
+    {
+        using var fixture = await MarketAcquisitionStoreFixture.CreateAsync();
+        var claimed = await fixture.CreateClaimedBatchAsync("append-reject-claimed");
+        var claimedView = await fixture.Store.GetAsync(claimed.Id, CancellationToken.None)
+            ?? throw new InvalidOperationException("Claimed test batch disappeared.");
+
+        var ex = await Assert.ThrowsAsync<MarketAcquisitionInvalidTransitionException>(() =>
+            fixture.Store.AppendLinesAsync(
+                claimed.Id,
+                new MarketAcquisitionBatchAppendLinesRequest
+                {
+                    ExpectedRevision = claimedView.Revision,
+                    ExpiresInSeconds = 300,
+                    Lines =
+                    [
+                        CreateLine(4, "Lightning Shard", "Crystal", maxUnitPrice: 25),
+                    ],
+                },
+                CancellationToken.None));
+
+        Assert.Contains(MarketAcquisitionStatuses.Claimed, ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task CreateBatchAsyncRejectsSweepDataCenterOutsideRegion()
     {
         using var fixture = await MarketAcquisitionStoreFixture.CreateAsync();
@@ -97,4 +190,42 @@ public sealed class MarketAcquisitionRequestStoreTests
         Assert.NotNull(second);
         Assert.Equal(first.AuditId, second.AuditId);
     }
+
+    private static MarketAcquisitionBatchCreateRequest CreateBatchRequest(
+        string idempotencyKey,
+        int expiresInSeconds = 300) =>
+        new()
+        {
+            SchemaVersion = 1,
+            IdempotencyKey = idempotencyKey,
+            TargetCharacterName = MarketAcquisitionTestApp.CharacterName,
+            TargetWorld = MarketAcquisitionTestApp.WorldName,
+            Region = "North America",
+            WorldMode = "Recommended",
+            SweepScope = "Region",
+            ExpiresInSeconds = expiresInSeconds,
+            Lines =
+            [
+                CreateLine(2, "Fire Shard", "Crystal", maxQuantity: 500, maxUnitPrice: 99),
+            ],
+        };
+
+    private static MarketAcquisitionBatchLineCreateRequest CreateLine(
+        uint itemId,
+        string itemName,
+        string itemKind,
+        uint maxUnitPrice,
+        uint maxQuantity = 0) =>
+        new()
+        {
+            ItemId = itemId,
+            ItemName = itemName,
+            ItemKind = itemKind,
+            QuantityMode = "AllBelowThreshold",
+            TargetQuantity = 0,
+            MaxQuantity = maxQuantity,
+            HqPolicy = "Either",
+            MaxUnitPrice = maxUnitPrice,
+            GilCap = 0,
+        };
 }

@@ -34,6 +34,13 @@ public sealed record MarketAcquisitionBatchCreateRequest
     public IReadOnlyList<MarketAcquisitionBatchLineCreateRequest> Lines { get; init; } = [];
 }
 
+public sealed record MarketAcquisitionBatchAppendLinesRequest
+{
+    public int ExpectedRevision { get; init; }
+    public int ExpiresInSeconds { get; init; } = 90;
+    public IReadOnlyList<MarketAcquisitionBatchLineCreateRequest> Lines { get; init; } = [];
+}
+
 public sealed record MarketAcquisitionBatchLineCreateRequest
 {
     public uint ItemId { get; init; }
@@ -148,6 +155,7 @@ public sealed record MarketAcquisitionPurchaseAuditView
 public sealed record MarketAcquisitionRequestView
 {
     public string Id { get; init; } = string.Empty;
+    public int Revision { get; init; }
     public string Status { get; init; } = string.Empty;
     public DateTimeOffset CreatedAtUtc { get; init; }
     public DateTimeOffset ExpiresAtUtc { get; init; }
@@ -184,6 +192,7 @@ public sealed record MarketAcquisitionRequestView
 public sealed record MarketAcquisitionClaimView
 {
     public string Id { get; init; } = string.Empty;
+    public int Revision { get; init; }
     public string Status { get; init; } = string.Empty;
     public DateTimeOffset CreatedAtUtc { get; init; }
     public DateTimeOffset ExpiresAtUtc { get; init; }
@@ -265,6 +274,20 @@ public sealed class MarketAcquisitionInvalidTransitionException : Exception
         : base($"Cannot move acquisition request from {status} to {targetStatus}.")
     {
     }
+}
+
+public sealed class MarketAcquisitionRevisionConflictException : Exception
+{
+    public MarketAcquisitionRevisionConflictException(int expectedRevision, int actualRevision)
+        : base($"Acquisition request revision changed from {expectedRevision} to {actualRevision}.")
+    {
+        ExpectedRevision = expectedRevision;
+        ActualRevision = actualRevision;
+    }
+
+    public int ExpectedRevision { get; }
+
+    public int ActualRevision { get; }
 }
 
 public sealed class MarketAcquisitionInvalidLineException : Exception

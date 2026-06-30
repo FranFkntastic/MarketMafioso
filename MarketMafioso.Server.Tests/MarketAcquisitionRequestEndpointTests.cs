@@ -141,6 +141,59 @@ public sealed class MarketAcquisitionRequestEndpointTests
     }
 
     [Fact]
+    public async Task HostedMode_AppendsPendingBatchLines()
+    {
+        await using var application = CreateHostedApplication(
+            extraConfiguration: new KeyValuePair<string, string?>("MarketMafioso:AcquisitionMaximumExpirySeconds", "86400"));
+        using var client = application.CreateClient();
+
+        var created = await SendWithKeyAsync(
+            client,
+            HttpMethod.Post,
+            "/marketmafioso/api/acquisition/batches",
+            "client-secret",
+            CreateBatchRequest("append-endpoint-batch"));
+        created.EnsureSuccessStatusCode();
+        using var createdJson = JsonDocument.Parse(await created.Content.ReadAsStringAsync());
+        var requestId = createdJson.RootElement.GetProperty("id").GetString();
+        var revision = createdJson.RootElement.GetProperty("revision").GetInt32();
+
+        var appended = await SendWithKeyAsync(
+            client,
+            HttpMethod.Post,
+            $"/marketmafioso/api/acquisition/batches/{requestId}/lines",
+            "client-secret",
+            new
+            {
+                expectedRevision = revision,
+                expiresInSeconds = 3600,
+                lines = new object[]
+                {
+                    new
+                    {
+                        itemId = 6,
+                        itemName = "Ice Shard",
+                        itemKind = "Crystal",
+                        quantityMode = "AllBelowThreshold",
+                        targetQuantity = 0,
+                        maxQuantity = 250,
+                        hqPolicy = "Either",
+                        maxUnitPrice = 40,
+                        gilCap = 0,
+                    },
+                },
+            });
+
+        appended.EnsureSuccessStatusCode();
+        using var appendedJson = JsonDocument.Parse(await appended.Content.ReadAsStringAsync());
+        Assert.Equal(revision + 1, appendedJson.RootElement.GetProperty("revision").GetInt32());
+        Assert.Equal(3, appendedJson.RootElement.GetProperty("lines").GetArrayLength());
+        Assert.Contains(
+            appendedJson.RootElement.GetProperty("lines").EnumerateArray(),
+            line => line.GetProperty("itemId").GetUInt32() == 6);
+    }
+
+    [Fact]
     public async Task LineProgressRejectsUnknownLineId()
     {
         using var app = await MarketAcquisitionTestApp.CreateAsync();
