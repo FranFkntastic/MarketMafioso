@@ -6,6 +6,7 @@ using Dalamud.Game.Command;
 using Dalamud.IoC;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
+using ECommons;
 using Dalamud.Interface.Windowing;
 using MarketMafioso.MarketAcquisition;
 using MarketMafioso.WorkshopPrep;
@@ -52,6 +53,8 @@ public sealed class Plugin : IDalamudPlugin
     public Plugin()
     {
         Instance = this;
+        ECommonsMain.ReducedLogging = true;
+        ECommonsMain.Init(PluginInterface, this);
 
         Configuration = PluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
 
@@ -169,6 +172,7 @@ public sealed class Plugin : IDalamudPlugin
         windowSystem.RemoveAllWindows();
         mainWindow.ProjectBrowser.Dispose();
         mainWindow.Dispose();
+        ECommonsMain.Dispose();
     }
 
     public void RestartTimer() => StartTimer();

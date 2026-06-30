@@ -27,6 +27,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="ECommons" Version="3.2.1.15" />
     <Content Include="MarketMafioso.json">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </Content>
