@@ -13,14 +13,17 @@ obj/
 .docs/
 .codex/
 mockups/
-.idea/*
-!.idea/
-!.idea/runConfigurations/
-!.idea/runConfigurations/*.xml
+.idea/
 .vscode/
 .vs/
 *.suo
 *.user
+
+# Internal agent/maintainer notes and local workflow hooks
+AGENTS.md
+.githooks/
+docs/design/
+docs/superpowers/
 
 # OS noise
 .DS_Store

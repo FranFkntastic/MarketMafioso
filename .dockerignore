@@ -6,6 +6,10 @@
 .agents
 .codex
 .superpowers
+AGENTS.md
+.githooks
+docs/design
+docs/superpowers
 **/bin
 **/obj
 dist
