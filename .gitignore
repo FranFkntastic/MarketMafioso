@@ -42,9 +42,11 @@ release/self-host/marketmafioso.env
 
 # Local backend data
 src/MarketMafioso.Server/data/
+MarketMafioso.Server/data/
 
 # Local dev-plugin deployment target
 src/MarketMafioso/dev-plugin.local.json
+MarketMafioso/dev-plugin.local.json
 
 # Logs
 *.log
