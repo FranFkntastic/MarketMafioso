@@ -14,8 +14,8 @@ docs/superpowers
 **/obj
 dist
 mockups
-MarketMafioso.Server/data
-MarketMafioso/dev-plugin.local.json
+src/MarketMafioso.Server/data
+src/MarketMafioso/dev-plugin.local.json
 *.user
 *.suo
 *.log

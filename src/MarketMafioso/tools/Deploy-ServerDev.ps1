@@ -11,7 +11,8 @@ param(
 $ErrorActionPreference = "Stop"
 
 $projectDir = Split-Path -Parent $PSScriptRoot
-$repoRoot = Split-Path -Parent $projectDir
+$srcDir = Split-Path -Parent $projectDir
+$repoRoot = Split-Path -Parent $srcDir
 $workflow = "deploy-vps-marketmafioso-dev.yml"
 $healthUrl = "https://dev.xivcraftarchitect.com/marketmafioso/health"
 $inventoryUrl = "https://dev.xivcraftarchitect.com/marketmafioso/api/inventory"

@@ -4,9 +4,9 @@ on:
   push:
     branches: [ local-dev ]
     paths:
-      - 'MarketMafioso.Dashboard/**'
-      - 'MarketMafioso.Server/**'
-      - 'MarketMafioso.Server.Tests/**'
+      - 'src/MarketMafioso.Dashboard/**'
+      - 'src/MarketMafioso.Server/**'
+      - 'tests/MarketMafioso.Server.Tests/**'
       - 'MarketMafioso.sln'
       - '.github/workflows/deploy-vps-marketmafioso-dev.yml'
   workflow_dispatch:
@@ -40,7 +40,7 @@ jobs:
 
       - name: Publish receiver
         run: >
-          dotnet publish "MarketMafioso.Server/MarketMafioso.Server.csproj"
+          dotnet publish "src/MarketMafioso.Server/MarketMafioso.Server.csproj"
           -c Release
           -r linux-x64
           --self-contained true

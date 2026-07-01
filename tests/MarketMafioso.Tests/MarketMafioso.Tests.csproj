@@ -26,6 +26,6 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\MarketMafioso\MarketMafioso.csproj" />
+    <ProjectReference Include="..\..\src\MarketMafioso\MarketMafioso.csproj" />
   </ItemGroup>
 </Project>

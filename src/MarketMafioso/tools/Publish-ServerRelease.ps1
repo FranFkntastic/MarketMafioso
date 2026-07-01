@@ -7,8 +7,9 @@ param(
 $ErrorActionPreference = "Stop"
 
 $projectDir = Split-Path -Parent $PSScriptRoot
-$repoRoot = Split-Path -Parent $projectDir
-$serverProject = Join-Path $repoRoot "MarketMafioso.Server\MarketMafioso.Server.csproj"
+$srcDir = Split-Path -Parent $projectDir
+$repoRoot = Split-Path -Parent $srcDir
+$serverProject = Join-Path $repoRoot "src\MarketMafioso.Server\MarketMafioso.Server.csproj"
 
 if ([string]::IsNullOrWhiteSpace($OutputPath)) {
     $OutputPath = Join-Path $repoRoot "dist\server"
@@ -34,4 +35,4 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Host "Server publish complete."
-Write-Host "Copy docs/samples/marketmafioso.env.example or MarketMafioso.Server/appsettings.SelfHost.example.json and replace all secrets before hosting."
+Write-Host "Copy docs/samples/marketmafioso.env.example or src/MarketMafioso.Server/appsettings.SelfHost.example.json and replace all secrets before hosting."

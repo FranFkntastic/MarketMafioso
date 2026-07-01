@@ -3,15 +3,15 @@ Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 18
 VisualStudioVersion = 18.3.11520.95
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MarketMafioso", "MarketMafioso\MarketMafioso.csproj", "{A4B8B8D1-1B1B-4B8B-B1B1-B1B1B1B1B1B1}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MarketMafioso", "src\MarketMafioso\MarketMafioso.csproj", "{A4B8B8D1-1B1B-4B8B-B1B1-B1B1B1B1B1B1}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MarketMafioso.Server", "MarketMafioso.Server\MarketMafioso.Server.csproj", "{7FB923CE-7F1C-4F71-987F-40CA9A99CB65}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MarketMafioso.Server", "src\MarketMafioso.Server\MarketMafioso.Server.csproj", "{7FB923CE-7F1C-4F71-987F-40CA9A99CB65}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MarketMafioso.Server.Tests", "MarketMafioso.Server.Tests\MarketMafioso.Server.Tests.csproj", "{77D7ADB5-0A5F-4C64-A88E-04EEB797F853}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MarketMafioso.Server.Tests", "tests\MarketMafioso.Server.Tests\MarketMafioso.Server.Tests.csproj", "{77D7ADB5-0A5F-4C64-A88E-04EEB797F853}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MarketMafioso.Tests", "MarketMafioso.Tests\MarketMafioso.Tests.csproj", "{B6E8F9B1-9648-45E7-AEED-0C4315DBDA5D}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MarketMafioso.Tests", "tests\MarketMafioso.Tests\MarketMafioso.Tests.csproj", "{B6E8F9B1-9648-45E7-AEED-0C4315DBDA5D}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MarketMafioso.Dashboard", "MarketMafioso.Dashboard\MarketMafioso.Dashboard.csproj", "{E52D0CF8-38A7-4FC6-9683-BE000376B1DB}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MarketMafioso.Dashboard", "src\MarketMafioso.Dashboard\MarketMafioso.Dashboard.csproj", "{E52D0CF8-38A7-4FC6-9683-BE000376B1DB}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution

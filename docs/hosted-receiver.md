@@ -66,13 +66,13 @@ https://dev.xivcraftarchitect.com/marketmafioso/
 Use the server-specific helper when you want to force a backend deployment and watch the smoke checks from PowerShell:
 
 ```powershell
-.\MarketMafioso\tools\Deploy-ServerDev.ps1
+.\src\MarketMafioso\tools\Deploy-ServerDev.ps1
 ```
 
 The helper triggers the GitHub Actions workflow for `local-dev`, waits for it to complete, then checks the public health/dashboard routes. If local secret files exist under `%USERPROFILE%\.ssh`, it also smoke-tests authenticated dashboard access and inventory ingestion without printing the secrets. To deploy a non-default ref deliberately, pass `-Ref`:
 
 ```powershell
-.\MarketMafioso\tools\Deploy-ServerDev.ps1 -Ref test/inventory-browser-vps
+.\src\MarketMafioso\tools\Deploy-ServerDev.ps1 -Ref test/inventory-browser-vps
 ```
 
 Required repository secrets:
@@ -101,7 +101,7 @@ Server deployment is intentionally separate from plugin deployment. A backend de
 When you just want the tooling to choose based on the files you changed, use the changed-surface router:
 
 ```powershell
-.\MarketMafioso\tools\Deploy-ChangedDev.ps1
+.\src\MarketMafioso\tools\Deploy-ChangedDev.ps1
 ```
 
 It classifies committed, staged, unstaged, and untracked paths. Server paths run the server deploy, plugin paths run the plugin deploy, both surfaces run the explicit combined deploy, and docs/tooling-only changes do not deploy. If a path is ambiguous, the router stops and asks you to run the explicit server/plugin/both command.
@@ -153,7 +153,7 @@ The deployed Caddy fragment is installed as `root:root` with mode `644` so the C
 The receiver stores structured inventory data in SQLite:
 
 ```text
-MarketMafioso.Server/data/marketmafioso.db
+src/MarketMafioso.Server/data/marketmafioso.db
 ```
 
 For the dev VPS, the database is:

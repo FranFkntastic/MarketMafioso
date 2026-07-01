@@ -13,7 +13,8 @@ param(
 $ErrorActionPreference = "Stop"
 
 $projectDir = Split-Path -Parent $PSScriptRoot
-$repoRoot = Split-Path -Parent $projectDir
+$srcDir = Split-Path -Parent $projectDir
+$repoRoot = Split-Path -Parent $srcDir
 $serverScript = Join-Path -Path $PSScriptRoot -ChildPath "Deploy-ServerDev.ps1"
 $pluginScript = Join-Path -Path $PSScriptRoot -ChildPath "Deploy-PluginDev.ps1"
 $allScript = Join-Path -Path $PSScriptRoot -ChildPath "Deploy-DevAll.ps1"
@@ -100,8 +101,9 @@ function Test-IsServerPath {
         [string]$Path
     )
 
-    return $Path.StartsWith("MarketMafioso.Server/", [System.StringComparison]::OrdinalIgnoreCase) -or
-           $Path.StartsWith("MarketMafioso.Server.Tests/", [System.StringComparison]::OrdinalIgnoreCase) -or
+    return $Path.StartsWith("src/MarketMafioso.Server/", [System.StringComparison]::OrdinalIgnoreCase) -or
+           $Path.StartsWith("src/MarketMafioso.Dashboard/", [System.StringComparison]::OrdinalIgnoreCase) -or
+           $Path.StartsWith("tests/MarketMafioso.Server.Tests/", [System.StringComparison]::OrdinalIgnoreCase) -or
            [string]::Equals($Path, ".github/workflows/deploy-vps-marketmafioso-dev.yml", [System.StringComparison]::OrdinalIgnoreCase)
 }
 
@@ -111,12 +113,12 @@ function Test-IsPluginPath {
         [string]$Path
     )
 
-    if ($Path.StartsWith("MarketMafioso/tools/", [System.StringComparison]::OrdinalIgnoreCase)) {
+    if ($Path.StartsWith("src/MarketMafioso/tools/", [System.StringComparison]::OrdinalIgnoreCase)) {
         return $false
     }
 
-    return $Path.StartsWith("MarketMafioso/", [System.StringComparison]::OrdinalIgnoreCase) -or
-           $Path.StartsWith("MarketMafioso.Tests/", [System.StringComparison]::OrdinalIgnoreCase)
+    return $Path.StartsWith("src/MarketMafioso/", [System.StringComparison]::OrdinalIgnoreCase) -or
+           $Path.StartsWith("tests/MarketMafioso.Tests/", [System.StringComparison]::OrdinalIgnoreCase)
 }
 
 function Test-IsNoDeployPath {
@@ -126,7 +128,7 @@ function Test-IsNoDeployPath {
     )
 
     return $Path.StartsWith("docs/", [System.StringComparison]::OrdinalIgnoreCase) -or
-           $Path.StartsWith("MarketMafioso/tools/", [System.StringComparison]::OrdinalIgnoreCase) -or
+           $Path.StartsWith("src/MarketMafioso/tools/", [System.StringComparison]::OrdinalIgnoreCase) -or
            [string]::Equals($Path, "AGENTS.md", [System.StringComparison]::OrdinalIgnoreCase) -or
            [string]::Equals($Path, "README.md", [System.StringComparison]::OrdinalIgnoreCase)
 }

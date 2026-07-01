@@ -77,19 +77,19 @@ The Docker path stores SQLite data under `./data/marketmafioso/` on the host.
 Publish the server:
 
 ```powershell
-.\MarketMafioso\tools\Publish-ServerRelease.ps1
+.\src\MarketMafioso\tools\Publish-ServerRelease.ps1
 ```
 
 For a self-contained Linux x64 build:
 
 ```powershell
-.\MarketMafioso\tools\Publish-ServerRelease.ps1 -Runtime linux-x64
+.\src\MarketMafioso\tools\Publish-ServerRelease.ps1 -Runtime linux-x64
 ```
 
 Copy the publish output to the host, then configure it with either environment variables or an appsettings file based on:
 
 ```text
-MarketMafioso.Server/appsettings.SelfHost.example.json
+src/MarketMafioso.Server/appsettings.SelfHost.example.json
 ```
 
 Useful samples:

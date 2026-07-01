@@ -41,10 +41,10 @@ release/self-host/backups/
 release/self-host/marketmafioso.env
 
 # Local backend data
-MarketMafioso.Server/data/
+src/MarketMafioso.Server/data/
 
 # Local dev-plugin deployment target
-MarketMafioso/dev-plugin.local.json
+src/MarketMafioso/dev-plugin.local.json
 
 # Logs
 *.log

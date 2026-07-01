@@ -7,7 +7,7 @@ Hosted receiver notes live in [hosted-receiver.md](hosted-receiver.md). Self-hos
 ## Run
 
 ```powershell
-dotnet run --project MarketMafioso.Server --urls http://localhost:8080
+dotnet run --project src/MarketMafioso.Server --urls http://localhost:8080
 ```
 
 Set the plugin server URL to:
@@ -45,7 +45,7 @@ DELETE /api/reports
 DELETE /api/reports/{id}
 ```
 
-Reports are stored in SQLite at `MarketMafioso.Server/data/marketmafioso.db` by default. Existing JSON files under `MarketMafioso.Server/data/reports/` are imported on startup and left in place.
+Reports are stored in SQLite at `src/MarketMafioso.Server/data/marketmafioso.db` by default. Existing JSON files under `src/MarketMafioso.Server/data/reports/` are imported on startup and left in place.
 
 The original incoming JSON is retained only for the newest 20 snapshots by default. Older snapshots remain available through parsed dashboard/API views until the structured snapshot retention limit is reached, while raw JSON routes return `410 Gone` once the original JSON has been pruned.
 
@@ -61,7 +61,7 @@ The local server accepts unauthenticated reports by default. To require the plug
 
 ```powershell
 $env:MarketMafioso__ApiKey = "local-dev-key"
-dotnet run --project MarketMafioso.Server --urls http://localhost:8080
+dotnet run --project src/MarketMafioso.Server --urls http://localhost:8080
 ```
 
 Set the same API key in the plugin UI before sending.
@@ -74,7 +74,7 @@ The local dashboard is unauthenticated by default. To enable app-managed dashboa
 $env:MarketMafioso__RequireDashboardAuth = "true"
 $env:MarketMafioso__DashboardBootstrapUsername = "admin"
 $env:MarketMafioso__DashboardBootstrapPassword = "change-me"
-dotnet run --project MarketMafioso.Server --urls http://localhost:8080
+dotnet run --project src/MarketMafioso.Server --urls http://localhost:8080
 ```
 
 The bootstrap user is created only when no dashboard users exist. Dashboard users are local to this receiver instance.
