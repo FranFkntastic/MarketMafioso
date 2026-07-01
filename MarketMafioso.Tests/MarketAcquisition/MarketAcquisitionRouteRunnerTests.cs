@@ -86,6 +86,29 @@ public sealed class MarketAcquisitionRouteRunnerTests
     }
 
     [Fact]
+    public void RecordWorldPurchaseBatchComplete_StoresPostRunSummaryWithDiagnosticArtifacts()
+    {
+        var directory = CreateTempDirectory();
+        using var runner = new MarketMafioso.MarketAcquisition.MarketAcquisitionRouteRunner(directory);
+        runner.Start(MarketAcquisitionTestPlans.MultiLineSingleWorld(), enableDiagnostics: true);
+        runner.RecordCurrentWorld("Siren");
+
+        runner.RecordProbe("Siren", MarketAcquisitionTestPlans.ReadyCandidatePlan(10, 1_000));
+        runner.RecordWorldPurchaseBatchComplete("Siren", 10, 1_000);
+        runner.RecordProbe("Siren", MarketAcquisitionTestPlans.ReadyCandidatePlan(20, 2_000));
+        runner.RecordWorldPurchaseBatchComplete("Siren", 20, 2_000);
+
+        var summary = Assert.IsType<MarketMafioso.MarketAcquisition.MarketAcquisitionRouteRunSummary>(runner.LastRunSummary);
+        Assert.Equal(30u, summary.PurchasedQuantity);
+        Assert.Equal(3_000u, summary.SpentGil);
+        Assert.Equal(1, summary.CompletedWorldCount);
+        Assert.Equal(2, summary.CompletedLineCount);
+        Assert.Equal(runner.LastDiagnosticFilePath, summary.DiagnosticsPath);
+        Assert.Equal(runner.LastObservedListingsCsvPath, summary.ObservedListingsCsvPath);
+        Assert.Equal(runner.LastPurchaseRecordsCsvPath, summary.PurchaseRecordsCsvPath);
+    }
+
+    [Fact]
     public async Task VerifyLatestWorldFreshnessAsync_RecordsPurchasedListingResultsForCompletedWorld()
     {
         var directory = CreateTempDirectory();

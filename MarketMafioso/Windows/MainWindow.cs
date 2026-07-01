@@ -1774,13 +1774,47 @@ public class MainWindow : Window, IDisposable
 
     private void DrawPostRunDiagnosticSummary()
     {
-        var summary = marketAcquisitionRouteRunner.LastRunDiagnosticSummary;
-        if (summary.Warnings.Count == 0)
-            return;
+        var runSummary = marketAcquisitionRouteRunner.LastRunSummary;
+        if (runSummary != null)
+        {
+            ImGui.TextColored(
+                runSummary.FailedWorldCount > 0 || runSummary.Warnings.Count > 0 ? ColHeader : ColSuccess,
+                $"Run rollup: purchased {runSummary.PurchasedQuantity:N0}, spent {FormatGil(runSummary.SpentGil)}; {runSummary.CompletedWorldCount:N0} complete / {runSummary.PartialWorldCount:N0} partial / {runSummary.FailedWorldCount:N0} failed world(s).");
 
-        ImGui.TextColored(
-            ColError,
-            $"Post-run diagnostics: {summary.Warnings.Count:N0} warning(s). Open Diagnostics for details.");
+            if (runSummary.OpportunisticPurchasedQuantity > 0 || runSummary.PlannedPurchasedQuantity > 0)
+            {
+                ImGui.TextColored(
+                    ColMuted,
+                    $"Planned buys: {runSummary.PlannedPurchasedQuantity:N0} / {FormatGil(runSummary.PlannedSpentGil)}. Opportunistic buys: {runSummary.OpportunisticPurchasedQuantity:N0} / {FormatGil(runSummary.OpportunisticSpentGil)}.");
+            }
+
+            if (runSummary.TopItemsBySpentGil.Count > 0)
+            {
+                var topItems = string.Join(
+                    "; ",
+                    runSummary.TopItemsBySpentGil
+                        .Take(3)
+                        .Select(item => $"{item.ItemName} {item.PurchasedQuantity:N0} / {FormatGil(item.SpentGil)}"));
+                ImGui.TextColored(ColMuted, $"Top buys: {topItems}");
+            }
+
+            if (runSummary.Warnings.Count > 0)
+            {
+                ImGui.TextColored(
+                    ColError,
+                    $"Post-run diagnostics: {runSummary.Warnings.Count:N0} warning(s). Open Diagnostics for details.");
+            }
+
+            return;
+        }
+
+        var summary = marketAcquisitionRouteRunner.LastRunDiagnosticSummary;
+        if (summary.Warnings.Count > 0)
+        {
+            ImGui.TextColored(
+                ColError,
+                $"Post-run diagnostics: {summary.Warnings.Count:N0} warning(s). Open Diagnostics for details.");
+        }
     }
 
     private void DrawMarketBoardInputCapture()
@@ -1802,49 +1836,53 @@ public class MainWindow : Window, IDisposable
 
     private void DrawGuidedRouteStops(IReadOnlyList<MarketAcquisitionGuidedRouteStop> stops)
     {
-        if (ImGui.BeginTable("MarketAcquisitionGuidedRouteStops", 8, ImGuiUi.InteractiveTableFlags))
+        var rows = MarketAcquisitionRouteTablePresenter.BuildRows(stops);
+        if (ImGui.BeginTable("MarketAcquisitionGuidedRouteStops", 7, ImGuiUi.InteractiveTableFlags))
         {
-            ImGui.TableSetupColumn("World");
+            ImGui.TableSetupColumn("World", ImGuiTableColumnFlags.WidthFixed, 140);
             ImGui.TableSetupColumn("Data Center");
-            ImGui.TableSetupColumn("Status");
-            ImGui.TableSetupColumn("Items");
-            ImGui.TableSetupColumn("Planned");
-            ImGui.TableSetupColumn("Discovered");
-            ImGui.TableSetupColumn("Bought");
+            ImGui.TableSetupColumn("Route Lines");
+            ImGui.TableSetupColumn("State");
+            ImGui.TableSetupColumn("Intent");
             ImGui.TableSetupColumn("Result");
+            ImGui.TableSetupColumn("Notes");
             ImGui.TableHeadersRow();
 
-            foreach (var stop in stops)
+            foreach (var row in rows)
             {
                 ImGui.TableNextRow();
                 ImGui.TableNextColumn();
-                DrawGuidedRouteStopExpander(stop);
+                DrawGuidedRouteStopExpander(row);
                 ImGui.TableNextColumn();
-                ImGui.TextUnformatted(FormatRouteDataCenter(stop.DataCenter));
+                ImGui.TextUnformatted(FormatRouteDataCenter(row.DataCenter));
                 ImGui.TableNextColumn();
-                ImGui.TextColored(GetGuidedRouteStopColor(stop), stop.Status);
-                ImGui.TableNextColumn();
-                ImGui.TextUnformatted(FormatGuidedRouteItemsSummary(stop));
-                ImGui.TableNextColumn();
-                ImGui.TextUnformatted($"{stop.PlannedQuantity:N0} / {FormatGil(stop.PlannedGil)}");
-                ImGui.TableNextColumn();
-                ImGui.TextUnformatted(FormatGuidedRouteLiveSummary(stop));
-                ImGui.TableNextColumn();
-                ImGui.TextUnformatted(stop.PurchasedQuantity == 0 ? "-" : $"{stop.PurchasedQuantity:N0} / {FormatGil(stop.SpentGil)}");
-                ImGui.TableNextColumn();
-                ImGui.TextUnformatted(FormatGuidedRouteLiveCandidateSummary(stop));
+                ImGui.TextUnformatted(row.RouteLines);
+                if (!string.IsNullOrWhiteSpace(row.LineMix) && !string.Equals(row.LineMix, "No route lines", StringComparison.Ordinal))
+                {
+                    if (ImGui.IsItemHovered())
+                        ImGui.SetTooltip(row.LineMix);
+                }
 
-                if (expandedGuidedRouteStops.Contains(GetGuidedRouteStopKey(stop)))
-                    DrawGuidedRouteStopLineRows(stop);
+                ImGui.TableNextColumn();
+                ImGui.TextColored(GetGuidedRouteStopColor(row.State), row.State);
+                ImGui.TableNextColumn();
+                ImGui.TextUnformatted(row.Intent);
+                ImGui.TableNextColumn();
+                ImGui.TextUnformatted(row.Result);
+                ImGui.TableNextColumn();
+                ImGui.TextColored(row.Aggregate.FailedLineCount > 0 ? ColError : ColMuted, row.Notes);
+
+                if (expandedGuidedRouteStops.Contains(GetGuidedRouteStopKey(row)))
+                    DrawGuidedRouteStopLineRows(row);
             }
 
             ImGui.EndTable();
         }
     }
 
-    private void DrawGuidedRouteStopExpander(MarketAcquisitionGuidedRouteStop stop)
+    private void DrawGuidedRouteStopExpander(MarketAcquisitionRouteStopRow row)
     {
-        var key = GetGuidedRouteStopKey(stop);
+        var key = GetGuidedRouteStopKey(row);
         var expanded = expandedGuidedRouteStops.Contains(key);
         var buttonLabel = expanded ? $"v##route-stop-{key}" : $">##route-stop-{key}";
         if (ImGui.SmallButton(buttonLabel))
@@ -1856,114 +1894,49 @@ public class MainWindow : Window, IDisposable
         }
 
         ImGui.SameLine();
-        ImGui.TextUnformatted(stop.WorldName);
+        ImGui.TextUnformatted(row.WorldName);
     }
 
-    private void DrawGuidedRouteStopLineRows(MarketAcquisitionGuidedRouteStop stop)
+    private void DrawGuidedRouteStopLineRows(MarketAcquisitionRouteStopRow stop)
     {
-        foreach (var line in stop.LineStates)
+        ImGui.TableNextRow();
+        ImGui.TableNextColumn();
+        ImGui.TextColored(ColMuted, "  Item");
+        ImGui.TableNextColumn();
+        ImGui.TextColored(ColMuted, "Source");
+        ImGui.TableNextColumn();
+        ImGui.TextColored(ColMuted, "State");
+        ImGui.TableNextColumn();
+        ImGui.TextColored(ColMuted, "Planned");
+        ImGui.TableNextColumn();
+        ImGui.TextColored(ColMuted, "Discovered");
+        ImGui.TableNextColumn();
+        ImGui.TextColored(ColMuted, "Bought");
+        ImGui.TableNextColumn();
+        ImGui.TextColored(ColMuted, "Notes");
+
+        foreach (var line in stop.Lines)
         {
             ImGui.TableNextRow();
             ImGui.TableNextColumn();
-            ImGui.TextColored(ColMuted, "  item");
+            ImGui.TextColored(ColMuted, $"  {line.Item}");
             ImGui.TableNextColumn();
             ImGui.TextColored(ColMuted, line.Source);
             ImGui.TableNextColumn();
-            ImGui.TextColored(GetRouteLineStateColor(line), line.Status);
+            ImGui.TextColored(GetRouteLineStateColor(line.State), line.State);
             ImGui.TableNextColumn();
-            ImGui.TextUnformatted(FormatGuidedRouteLineItem(line));
+            ImGui.TextUnformatted(line.Planned);
             ImGui.TableNextColumn();
-            ImGui.TextUnformatted($"{line.PlannedQuantity:N0} / {FormatGil(line.PlannedGil)}");
+            ImGui.TextUnformatted(line.Discovered);
             ImGui.TableNextColumn();
-            ImGui.TextUnformatted(FormatGuidedRouteLineObserved(line));
+            ImGui.TextUnformatted(line.Bought);
             ImGui.TableNextColumn();
-            ImGui.TextUnformatted(line.PurchasedQuantity == 0 ? "-" : $"{line.PurchasedQuantity:N0} / {FormatGil(line.SpentGil)}");
-            ImGui.TableNextColumn();
-            ImGui.TextUnformatted(FormatGuidedRouteLineResult(line));
+            ImGui.TextColored(line.State.Equals("Blocked", StringComparison.OrdinalIgnoreCase) ? ColError : ColMuted, line.Notes);
         }
     }
 
-    private static string FormatGuidedRouteLiveSummary(MarketAcquisitionGuidedRouteStop stop)
-    {
-        var probedLines = stop.LineStates
-            .Where(line => !string.IsNullOrWhiteSpace(line.LiveCandidateStatus))
-            .ToList();
-        if (probedLines.Count == 0)
-            return stop.WouldBuyQuantity == 0
-                ? "-"
-                : $"{stop.WouldBuyQuantity:N0} / {FormatGil(stop.WouldSpendGil)}";
-
-        var observedQuantity = probedLines.Aggregate(0u, (total, line) => checked(total + line.LiveObservedQuantity));
-        var observedGil = probedLines.Aggregate(0u, (total, line) => checked(total + line.LiveObservedGil));
-        var readableListings = probedLines.Sum(line => line.LiveReadableListingCount);
-        var reportedListings = probedLines.Sum(line => line.LiveReportedListingCount);
-        var listingSuffix = reportedListings > 0
-            ? $" ({readableListings:N0}/{reportedListings:N0} rows)"
-            : string.Empty;
-
-        return $"{observedQuantity:N0} / {FormatGil(observedGil)}{listingSuffix}";
-    }
-
-    private static string FormatGuidedRouteLiveCandidateSummary(MarketAcquisitionGuidedRouteStop stop)
-    {
-        var probedStatuses = stop.LineStates
-            .Where(line => !string.IsNullOrWhiteSpace(line.LiveCandidateStatus))
-            .GroupBy(line => line.LiveCandidateStatus!, StringComparer.OrdinalIgnoreCase)
-            .OrderBy(group => group.Key, StringComparer.OrdinalIgnoreCase)
-            .Select(group => $"{group.Count():N0} {group.Key}");
-
-        var summary = string.Join(" / ", probedStatuses);
-        return string.IsNullOrWhiteSpace(summary)
-            ? stop.LiveCandidateStatus ?? "-"
-            : summary;
-    }
-
-    private static string FormatGuidedRouteItemsSummary(MarketAcquisitionGuidedRouteStop stop)
-    {
-        var names = stop.LineStates
-            .Select(FormatGuidedRouteLineItem)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-        if (names.Length == 0)
-            return "-";
-
-        var shown = string.Join(", ", names.Take(2));
-        return names.Length <= 2
-            ? shown
-            : $"{shown} +{names.Length - 2:N0}";
-    }
-
-    private static string FormatGuidedRouteLineItem(MarketAcquisitionRouteLineState line)
-    {
-        var name = string.IsNullOrWhiteSpace(line.ItemName)
-            ? $"Item {line.ItemId}"
-            : line.ItemName;
-        return $"{name} ({line.ItemId})";
-    }
-
-    private static string FormatGuidedRouteLineObserved(MarketAcquisitionRouteLineState line)
-    {
-        if (string.IsNullOrWhiteSpace(line.LiveCandidateStatus))
-            return "-";
-
-        var listingSuffix = line.LiveReportedListingCount > 0
-            ? $" ({line.LiveReadableListingCount:N0}/{line.LiveReportedListingCount:N0} rows)"
-            : string.Empty;
-        return $"{line.LiveObservedQuantity:N0} / {FormatGil(line.LiveObservedGil)}{listingSuffix}";
-    }
-
-    private static string FormatGuidedRouteLineResult(MarketAcquisitionRouteLineState line)
-    {
-        if (!string.IsNullOrWhiteSpace(line.LiveCandidateStatus))
-            return line.LiveCandidateStatus;
-
-        return string.IsNullOrWhiteSpace(line.LatestMessage)
-            ? "-"
-            : line.LatestMessage;
-    }
-
-    private static string GetGuidedRouteStopKey(MarketAcquisitionGuidedRouteStop stop) =>
-        $"{stop.WorldName}|{stop.DataCenter}";
+    private static string GetGuidedRouteStopKey(MarketAcquisitionRouteStopRow row) =>
+        $"{row.WorldName}|{row.DataCenter}";
 
     private Task StartGuidedRouteAsync(bool enableDiagnostics)
     {
@@ -2530,21 +2503,23 @@ public class MainWindow : Window, IDisposable
         return ColMuted;
     }
 
-    private static Vector4 GetGuidedRouteStopColor(MarketAcquisitionGuidedRouteStop stop) =>
-        stop.Status switch
+    private static Vector4 GetGuidedRouteStopColor(string state) =>
+        state switch
         {
             "Complete" => ColSuccess,
-            "Arrived" or "Purchasing" => ColHeader,
+            "Partial" or "Buying" or "Traveling" or "Arrived" => ColHeader,
+            "Blocked" or "Failed" => ColError,
             _ => ColMuted,
         };
 
-    private static Vector4 GetRouteLineStateColor(MarketAcquisitionRouteLineState line) =>
-        line.Status switch
+    private static Vector4 GetRouteLineStateColor(string state) =>
+        state switch
         {
-            "Complete" or "Purchasing" => ColSuccess,
+            "Complete" or "Purchasing" or "Buying" => ColSuccess,
             "Pending" => ColMuted,
-            _ when line.Status.StartsWith("Skipped", StringComparison.OrdinalIgnoreCase) => ColMuted,
-            _ when line.Status.Contains("fail", StringComparison.OrdinalIgnoreCase) => ColError,
+            _ when state.StartsWith("Skipped", StringComparison.OrdinalIgnoreCase) => ColMuted,
+            _ when state.Contains("fail", StringComparison.OrdinalIgnoreCase) ||
+                   state.Equals("Blocked", StringComparison.OrdinalIgnoreCase) => ColError,
             _ => ColHeader,
         };
 

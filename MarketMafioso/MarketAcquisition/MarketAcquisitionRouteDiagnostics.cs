@@ -199,7 +199,9 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
         uint quantity,
         uint totalGil,
         string result,
-        string? source)
+        string? source,
+        uint? itemId = null,
+        string? sourceCandidateStatus = null)
     {
         if (purchaseRecordsWriter == null)
             return;
@@ -217,8 +219,10 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
                     worldName,
                     dataCenter,
                     lineId,
+                    itemId?.ToString(CultureInfo.InvariantCulture),
                     itemName,
                     source,
+                    sourceCandidateStatus,
                     "purchase-audit",
                     result,
                     listingId,
@@ -320,8 +324,10 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
                 "world",
                 "dataCenter",
                 "lineId",
+                "itemId",
                 "itemName",
                 "source",
+                "sourceCandidateStatus",
                 "event",
                 "result",
                 "listingId",

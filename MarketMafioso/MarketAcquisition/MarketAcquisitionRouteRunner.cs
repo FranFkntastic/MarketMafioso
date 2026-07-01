@@ -54,6 +54,12 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
 
     public string? LastDiagnosticFilePath { get; private set; }
 
+    public string? LastObservedListingsCsvPath { get; private set; }
+
+    public string? LastPurchaseRecordsCsvPath { get; private set; }
+
+    public MarketAcquisitionRouteRunSummary? LastRunSummary { get; private set; }
+
     public MarketAcquisitionWorldCompletionSummary? LatestWorldCompletionSummary { get; private set; }
 
     public MarketAcquisitionRunDiagnosticSummary LastRunDiagnosticSummary => new()
@@ -97,6 +103,9 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
             ? MarketAcquisitionRouteDiagnostics.CreateEnabled(diagnosticsDirectory, DateTimeOffset.Now)
             : MarketAcquisitionRouteDiagnostics.Disabled;
         LastDiagnosticFilePath = diagnostics.FilePath;
+        LastObservedListingsCsvPath = diagnostics.ObservedListingsCsvPath;
+        LastPurchaseRecordsCsvPath = diagnostics.PurchaseRecordsCsvPath;
+        LastRunSummary = null;
         session = MarketAcquisitionGuidedRouteSession.Start(plan, includeOpportunisticChecks);
         currentRequestId = plan.RequestId;
         State = "Running";
@@ -194,6 +203,9 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         diagnosticsRequested = false;
         includeOpportunisticChecksRequested = false;
         LastDiagnosticFilePath = null;
+        LastObservedListingsCsvPath = null;
+        LastPurchaseRecordsCsvPath = null;
+        LastRunSummary = null;
         LatestWorldCompletionSummary = null;
         lastWorldSummarySignature = null;
         freshnessObservations.Clear();
@@ -800,18 +812,24 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
                 ["totalGil"] = totalGil.ToString(),
                 ["result"] = result,
             });
+        var activeLine = session?.ActiveStop?.LineStates.FirstOrDefault(line => line.LineId.Equals(lineId, StringComparison.Ordinal));
+        var purchaseSource = source ?? activeLine?.Source;
+        var sourceCandidateStatus = activeLine?.LiveCandidateStatus ?? session?.ActiveStop?.LiveCandidateStatus;
+
         diagnostics.RecordPurchaseAudit(
             currentRequestId ?? string.Empty,
             session?.ActiveStop?.DataCenter,
             lineId,
-            itemName,
+            itemName ?? activeLine?.ItemName,
             worldName,
             listingId,
             retainerId,
             quantity,
             totalGil,
             result,
-            source);
+            purchaseSource,
+            activeLine?.ItemId,
+            sourceCandidateStatus);
 
         if (result.Equals("Purchased", StringComparison.OrdinalIgnoreCase))
             RecordFreshnessObservation(lineId, itemName, worldName, listingId);
@@ -952,6 +970,7 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
             verifiedFreshnessObservations.Add(new FreshnessObservationKey(observation.WorldName, observation.ItemId));
         }
 
+        RefreshLastRunSummary();
         return MarketAcquisitionRouteActionResult.Ok(
             $"Recorded Universalis freshness for {observations.Count:N0} item(s) on {summary.WorldName}.");
     }
@@ -966,6 +985,7 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         itemSearchAutomationStartedUtc = null;
         ClearListingReadPendingWatchdog();
         diagnostics.Fail(message, exception);
+        RefreshLastRunSummary();
         CloseDiagnostics();
         return MarketAcquisitionRouteActionResult.Fail(message);
     }
@@ -998,7 +1018,21 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         standaloneInputCaptureLogOpen = false;
         itemSearchAutomationStartedUtc = null;
         diagnostics.Complete(message);
+        RefreshLastRunSummary();
         return MarketAcquisitionRouteActionResult.Ok(message);
+    }
+
+    private void RefreshLastRunSummary()
+    {
+        if (session == null)
+            return;
+
+        LastRunSummary = MarketAcquisitionRouteRunSummary.Build(
+            session.Stops,
+            LastRunDiagnosticSummary,
+            LastDiagnosticFilePath,
+            LastObservedListingsCsvPath,
+            LastPurchaseRecordsCsvPath);
     }
 
     private MarketAcquisitionRouteActionResult Fail(string message)

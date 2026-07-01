@@ -220,10 +220,13 @@ public sealed class MarketAcquisitionRouteDiagnosticsTests
             55,
             30140,
             "Purchased",
-            "Planned");
+            "Planned",
+            5121,
+            "Ready");
 
         var csv = ReadLog(diagnostics.PurchaseRecordsCsvPath!);
-        Assert.Contains("request-1,Coeurl,Crystal,line-1,Darksteel Ore,Planned,purchase-audit,Purchased,listing-1,retainer-1,55,30140,548", csv, StringComparison.Ordinal);
+        Assert.Contains("requestId,world,dataCenter,lineId,itemId,itemName,source,sourceCandidateStatus,event,result", csv, StringComparison.Ordinal);
+        Assert.Contains("request-1,Coeurl,Crystal,line-1,5121,Darksteel Ore,Planned,Ready,purchase-audit,Purchased,listing-1,retainer-1,55,30140,548", csv, StringComparison.Ordinal);
     }
 
     [Fact]
