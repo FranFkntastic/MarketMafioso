@@ -9,12 +9,12 @@ The plugin can open without the receiver, and Workshop Logistics can be used loc
 
 ## Install The Plugin Client
 
-MarketMafioso should be installed like a normal third-party Dalamud plugin: add the MarketMafioso plugin repository URL in Dalamud's Experimental settings, then install it from the plugin installer.
+MarketMafioso should be installed like a normal third-party Dalamud plugin: add the FranFkntastic plugin repository URL in Dalamud's Experimental settings, then install it from the plugin installer.
 
-After the repository is published, use this repository URL:
+Use this repository URL:
 
 ```text
-https://raw.githubusercontent.com/FranFkntastic/MarketMafioso/main/pluginmaster.json
+https://raw.githubusercontent.com/FranFkntastic/DalamudPlugins/main/pluginmaster.json
 ```
 
 In game:

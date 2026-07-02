@@ -6,10 +6,10 @@ MarketMafioso is a Dalamud plugin for Workshop Logistics and optional self-hoste
 
 Most users only need two steps:
 
-1. **Install the plugin:** copy the MarketMafioso plugin repository URL into Dalamud's Experimental > Custom Plugin Repositories settings, then install MarketMafioso from `/xlplugins`.
+1. **Install the plugin:** copy the FranFkntastic plugin repository URL into Dalamud's Experimental > Custom Plugin Repositories settings, then install MarketMafioso from `/xlplugins`.
 
 ```text
-https://raw.githubusercontent.com/FranFkntastic/MarketMafioso/main/pluginmaster.json
+https://raw.githubusercontent.com/FranFkntastic/DalamudPlugins/main/pluginmaster.json
 ```
 
 2. **Optional receiver dashboard:** download `marketmafioso-self-host-<version>.zip` from the GitHub [Releases](https://github.com/FranFkntastic/MarketMafioso/releases) page, extract it somewhere permanent, install Docker Desktop if needed, then double-click `Install Receiver.bat`.

@@ -1,6 +1,6 @@
 # PluginMaster Repository Preview
 
-This is a local review copy for MarketMafioso's future third-party Dalamud plugin repository. Do not publish it until the release ZIP, icon URL, and public repository URL are ready.
+This is a local review copy for MarketMafioso's entry in the FranFkntastic third-party Dalamud plugin repository. Do not publish changes until the release ZIP, icon URL, and public repository URL are ready.
 
 MarketMafioso is not being submitted to the official Dalamud testing channel. The intended install path is a custom plugin repository added by the user under Dalamud settings > Experimental > Custom Plugin Repositories.
 
@@ -9,7 +9,7 @@ MarketMafioso is not being submitted to the official Dalamud testing channel. Th
 When published, the user-facing repository URL should be:
 
 ```text
-https://raw.githubusercontent.com/FranFkntastic/MarketMafioso/main/pluginmaster.json
+https://raw.githubusercontent.com/FranFkntastic/DalamudPlugins/main/pluginmaster.json
 ```
 
 The reviewed draft currently lives at:
@@ -18,10 +18,10 @@ The reviewed draft currently lives at:
 docs/pluginmaster/pluginmaster.preview.json
 ```
 
-Before publishing, copy the reviewed JSON to repository root as:
+Before publishing, merge the reviewed entry into the FranFkntastic DalamudPlugins manifest:
 
 ```text
-pluginmaster.json
+F:\Everything (HDD)\Misc\Gooseworks (Projects)\FFXIV-Development\DalamudPlugins\pluginmaster.json
 ```
 
 ## Store Entry Draft
@@ -112,8 +112,8 @@ The public receiver docs are:
 - Publish a release ZIP that contains the plugin files expected by Dalamud.
 - Replace the preview download URLs if the final release tag or ZIP name changes.
 - Confirm `docs/pluginmaster/assets/icon.png` is present and reachable through `IconUrl`.
-- Copy `docs/pluginmaster/pluginmaster.preview.json` to root `pluginmaster.json`.
-- Confirm `pluginmaster.json` is reachable by unauthenticated HTTP GET.
+- Merge `docs/pluginmaster/pluginmaster.preview.json` into the `FranFkntastic/DalamudPlugins` `pluginmaster.json`.
+- Confirm `https://raw.githubusercontent.com/FranFkntastic/DalamudPlugins/main/pluginmaster.json` is reachable by unauthenticated HTTP GET.
 - Confirm the plugin appears after adding the repository URL in Dalamud Experimental settings.
 - Confirm Release build succeeds from a clean checkout.
 - Confirm public docs describe Workshop Logistics and receiver-backed inventory history without presenting inventory upload as useful before receiver setup.
