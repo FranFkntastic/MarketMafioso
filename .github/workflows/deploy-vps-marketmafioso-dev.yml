@@ -70,6 +70,7 @@ jobs:
           MarketMafioso__BasePath=/marketmafioso
           MarketMafioso__PublicOrigin=https://dev.xivcraftarchitect.com
           MarketMafioso__StorageLabel=dev receiver storage
+          MarketMafioso__EnableMarketAcquisition=true
           MarketMafioso__DatabasePath=/srv/craftarchitect/data/marketmafioso/dev/marketmafioso.db
           MarketMafioso__RawJsonRetentionCount=20
           MarketMafioso__SnapshotRetentionCount=500
