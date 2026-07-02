@@ -586,6 +586,24 @@ public sealed class MarketAcquisitionRouteRunnerTests
     }
 
     [Fact]
+    public void RecordProbe_WithVisibleCacheExhaustedFailsClosedInsteadOfAdvancing()
+    {
+        using var runner = CreateRunner();
+        runner.Start(CreatePlan("Rafflesia", "Zalera"));
+        runner.RecordCurrentWorld("Rafflesia");
+
+        var result = runner.RecordProbe("Rafflesia", CreateCandidatePlan(status: "VisibleCacheExhausted", quantity: 0, gil: 0));
+
+        Assert.False(result.Success);
+        Assert.Equal("Failed", runner.State);
+        Assert.False(runner.MarketBoardCloseRequiredBeforeTravel);
+        Assert.Null(runner.ActiveStop);
+        Assert.Contains("visible", result.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("Failed", runner.Stops[0].Status);
+        Assert.Equal("Pending", runner.Stops[1].Status);
+    }
+
+    [Fact]
     public void RecordMarketBoardClosedBeforeTravel_AllowsNextTravel()
     {
         using var runner = CreateRunner();

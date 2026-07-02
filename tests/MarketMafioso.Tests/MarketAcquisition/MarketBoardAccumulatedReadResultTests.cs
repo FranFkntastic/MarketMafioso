@@ -82,6 +82,25 @@ public sealed class MarketBoardAccumulatedReadResultTests
         Assert.Equal(3, readResult.Listings.Count);
     }
 
+    [Fact]
+    public void ToReadResult_ReportsStillTruncatedWhenReadableRowsAreBelowCapacity()
+    {
+        var accumulated = MarketMafioso.Automation.MarketBoard.MarketBoardAccumulatedReadResult.FromReadResult(CreateRead(
+            reportedListingCount: 6,
+            listingCapacity: 100,
+            listings:
+            [
+                CreateListing("visible-expensive-1", unitPrice: 7_999),
+                CreateListing("visible-expensive-2", unitPrice: 8_000),
+            ]));
+
+        var readResult = accumulated.ToReadResult();
+
+        Assert.True(readResult.IsListingCountTruncated);
+        Assert.Equal(MarketMafioso.Automation.MarketBoard.MarketBoardListingReadState.FreshPartial, readResult.ReadState);
+        Assert.Contains("2/6", readResult.Message, StringComparison.Ordinal);
+    }
+
     private static MarketMafioso.Automation.MarketBoard.MarketBoardReadResult CreateRead(
         uint itemId = 2,
         string worldName = "Gilgamesh",

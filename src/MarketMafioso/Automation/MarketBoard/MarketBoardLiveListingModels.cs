@@ -61,8 +61,7 @@ public sealed record MarketBoardAccumulatedReadResult
         Listings.Count >= ListingCapacity;
 
     public bool IsListingCountTruncated =>
-        ReportedListingCount > Listings.Count &&
-        IsAtListingCapacity;
+        ReportedListingCount > Listings.Count;
 
     public static MarketBoardAccumulatedReadResult FromReadResult(MarketBoardReadResult readResult)
     {
