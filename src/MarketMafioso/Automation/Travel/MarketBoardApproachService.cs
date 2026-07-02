@@ -10,7 +10,7 @@ using FFXIVClientStructs.FFXIV.Client.UI;
 using FFXIVClientStructs.FFXIV.Component.GUI;
 using ClientGameObject = FFXIVClientStructs.FFXIV.Client.Game.Object.GameObject;
 
-namespace MarketMafioso.MarketAcquisition;
+namespace MarketMafioso.Automation.Travel;
 
 public sealed class MarketBoardApproachService
 {

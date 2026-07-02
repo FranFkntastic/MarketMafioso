@@ -8,6 +8,8 @@ using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
 using ECommons;
 using Dalamud.Interface.Windowing;
+using MarketMafioso.Automation.Runtime;
+using MarketMafioso.Automation.Travel;
 using MarketMafioso.MarketAcquisition;
 using MarketMafioso.WorkshopPrep;
 using MarketMafioso.Windows;
@@ -82,7 +84,7 @@ public sealed class Plugin : IDalamudPlugin
                 ObjectTable,
                 TargetManager,
                 Condition,
-                new WorkshopExternalAutomationCoordinator(new DalamudPluginDataStore(PluginInterface), Log)),
+                new ExternalAutomationCoordinator(new DalamudPluginDataStore(PluginInterface), Log)),
             Path.Combine(PluginInterface.GetPluginConfigDirectory(), "workshop-assembly-logs"),
             entry =>
             {

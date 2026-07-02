@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using MarketMafioso.Automation.Travel;
 
 namespace MarketMafioso.MarketAcquisition;
 
@@ -276,7 +277,7 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         return MarketAcquisitionRouteActionResult.Ok(StatusMessage);
     }
 
-    public MarketAcquisitionRouteActionResult RecordTravelBlockedByUi(MarketAcquisitionRouteTravelPreflightResult preflight)
+    public MarketAcquisitionRouteActionResult RecordTravelBlockedByUi(AutomationTravelPreflightResult preflight)
     {
         ArgumentNullException.ThrowIfNull(preflight);
 

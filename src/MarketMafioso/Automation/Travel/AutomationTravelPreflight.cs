@@ -2,9 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 
-namespace MarketMafioso.MarketAcquisition;
+namespace MarketMafioso.Automation.Travel;
 
-public static class MarketAcquisitionRouteTravelPreflight
+public static class AutomationTravelPreflight
 {
     public static readonly IReadOnlyList<string> BlockingAddonNames =
     [
@@ -20,7 +20,7 @@ public static class MarketAcquisitionRouteTravelPreflight
         "InventoryRetainerSmall",
     ];
 
-    public static MarketAcquisitionRouteTravelPreflightResult Check(IReadOnlyList<string> openBlockingAddons)
+    public static AutomationTravelPreflightResult Check(IReadOnlyList<string> openBlockingAddons)
     {
         ArgumentNullException.ThrowIfNull(openBlockingAddons);
 
@@ -30,7 +30,7 @@ public static class MarketAcquisitionRouteTravelPreflight
             .ToArray();
         if (blockers.Length == 0)
         {
-            return new MarketAcquisitionRouteTravelPreflightResult
+            return new AutomationTravelPreflightResult
             {
                 CanSendCommand = true,
                 Message = "No blocking UI is open.",
@@ -38,7 +38,7 @@ public static class MarketAcquisitionRouteTravelPreflight
             };
         }
 
-        return new MarketAcquisitionRouteTravelPreflightResult
+        return new AutomationTravelPreflightResult
         {
             CanSendCommand = false,
             Message = $"Close blocking UI before Lifestream travel: {string.Join(", ", blockers)}.",
@@ -47,7 +47,7 @@ public static class MarketAcquisitionRouteTravelPreflight
     }
 }
 
-public sealed record MarketAcquisitionRouteTravelPreflightResult
+public sealed record AutomationTravelPreflightResult
 {
     public bool CanSendCommand { get; init; }
     public string Message { get; init; } = string.Empty;

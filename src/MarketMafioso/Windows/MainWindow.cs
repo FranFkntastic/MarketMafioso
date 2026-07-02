@@ -12,6 +12,7 @@ using Dalamud.Bindings.ImGui;
 using FFXIVClientStructs.FFXIV.Component.GUI;
 using MarketMafioso.Automation.Diagnostics;
 using MarketMafioso.Automation.Retainers;
+using MarketMafioso.Automation.Travel;
 using MarketMafioso.MarketAcquisition;
 using MarketMafioso.WorkshopPrep;
 
@@ -819,7 +820,7 @@ public class MainWindow : Window, IDisposable
 
     private static bool EnsureRouteTravelUiIsClear(MarketAcquisitionRouteRunner route)
     {
-        var preflight = MarketAcquisitionRouteTravelPreflight.Check(GetOpenRouteTravelBlockingAddons());
+        var preflight = AutomationTravelPreflight.Check(GetOpenRouteTravelBlockingAddons());
         if (preflight.CanSendCommand)
             return true;
 
@@ -829,7 +830,7 @@ public class MainWindow : Window, IDisposable
 
     private static IReadOnlyList<string> GetOpenRouteTravelBlockingAddons()
     {
-        return MarketAcquisitionRouteTravelPreflight.BlockingAddonNames
+        return AutomationTravelPreflight.BlockingAddonNames
             .Where(IsAddonOpen)
             .ToArray();
     }

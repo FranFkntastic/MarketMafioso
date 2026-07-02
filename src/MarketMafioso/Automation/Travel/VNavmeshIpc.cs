@@ -4,7 +4,7 @@ using System.Numerics;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
 
-namespace MarketMafioso.MarketAcquisition;
+namespace MarketMafioso.Automation.Travel;
 
 public interface IVNavmeshIpcAdapter
 {

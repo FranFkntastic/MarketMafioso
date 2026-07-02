@@ -1,3 +1,5 @@
+using MarketMafioso.Automation.Travel;
+
 namespace MarketMafioso.Tests.MarketAcquisition;
 
 public sealed class MarketAcquisitionRouteTravelPreflightTests
@@ -5,7 +7,7 @@ public sealed class MarketAcquisitionRouteTravelPreflightTests
     [Fact]
     public void Check_AllowsTravelWhenNoBlockingAddonsAreOpen()
     {
-        var result = MarketMafioso.MarketAcquisition.MarketAcquisitionRouteTravelPreflight.Check([]);
+        var result = AutomationTravelPreflight.Check([]);
 
         Assert.True(result.CanSendCommand);
         Assert.Empty(result.BlockingAddons);
@@ -14,7 +16,7 @@ public sealed class MarketAcquisitionRouteTravelPreflightTests
     [Fact]
     public void Check_BlocksTravelWhenBlockingAddonsAreOpen()
     {
-        var result = MarketMafioso.MarketAcquisition.MarketAcquisitionRouteTravelPreflight.Check(
+        var result = AutomationTravelPreflight.Check(
             ["ItemSearch", "SelectString"]);
 
         Assert.False(result.CanSendCommand);

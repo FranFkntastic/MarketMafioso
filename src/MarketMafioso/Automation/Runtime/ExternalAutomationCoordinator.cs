@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
 
-namespace MarketMafioso.WorkshopPrep;
+namespace MarketMafioso.Automation.Runtime;
 
 internal interface IPluginDataStore
 {
@@ -18,7 +18,7 @@ internal sealed class DalamudPluginDataStore(IDalamudPluginInterface pluginInter
         pluginInterface.TryGetData(key, out data);
 }
 
-public sealed class WorkshopExternalAutomationCoordinator : IDisposable
+public sealed class ExternalAutomationCoordinator : IDisposable
 {
     private const string TextAdvanceStopRequests = "TextAdvance.StopRequests";
     private const string StopRequestOwner = "MarketMafioso";
@@ -27,7 +27,7 @@ public sealed class WorkshopExternalAutomationCoordinator : IDisposable
     private readonly IPluginLog log;
     private bool textAdvanceSuppressed;
 
-    internal WorkshopExternalAutomationCoordinator(IPluginDataStore pluginDataStore, IPluginLog log)
+    internal ExternalAutomationCoordinator(IPluginDataStore pluginDataStore, IPluginLog log)
     {
         this.pluginDataStore = pluginDataStore;
         this.log = log;
