@@ -270,10 +270,20 @@ jobs:
           expect_status acquisition-api-without-session "$api_without_session" 401
 
           cookie_jar="$(mktemp)"
+          login_body="$(python3 - <<'PY'
+import json
+import os
+
+print(json.dumps({
+    "username": "marketmafioso",
+    "password": os.environ["MARKETMAFIOSO_DEV_BASIC_AUTH_PASSWORD"],
+}))
+PY
+)"
           login_status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
             --cookie-jar "$cookie_jar" \
             --header 'Content-Type: application/json' \
-            --data "{\"username\":\"marketmafioso\",\"password\":\"$MARKETMAFIOSO_DEV_BASIC_AUTH_PASSWORD\"}" \
+            --data "$login_body" \
             "https://dev.xivcraftarchitect.com/marketmafioso/auth/login")"
           expect_status dashboard-login "$login_status" 200
 
