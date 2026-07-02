@@ -154,7 +154,7 @@ public sealed class WorkshopRetainerRestockService
     private static async Task WaitForRetainerListAsync()
     {
         var startError = await Plugin.Framework.RunOnTick(() =>
-            RetainerUiAutomationText.GetAutomatedRestockStartError(IsRetainerListReady(), IsRetainerInventoryReady())).ConfigureAwait(false);
+            GetAutomatedRestockStartError(IsRetainerListReady(), IsRetainerInventoryReady())).ConfigureAwait(false);
         if (startError != null)
             throw new InvalidOperationException(startError);
     }
@@ -218,6 +218,20 @@ public sealed class WorkshopRetainerRestockService
             return new(true, true, $"Workshop material restock partially complete. Retrieved {totalRetrieved} item(s); remaining shortages: {remainingText}.");
 
         return new(false, false, $"No matching live retainer stacks were found for the workshop material shortages: {remainingText}.");
+    }
+
+    internal static string? GetAutomatedRestockStartError(bool isRetainerListReady, bool isRetainerInventoryReady)
+    {
+        if (isRetainerInventoryReady && isRetainerListReady)
+            return "Close the current retainer inventory before starting automated workshop material restock.";
+
+        if (isRetainerInventoryReady)
+            return "Close the current retainer inventory and open the retainer list before starting automated workshop material restock.";
+
+        if (!isRetainerListReady)
+            return "Open the retainer list before starting automated workshop material restock.";
+
+        return null;
     }
 
     private async Task<int> WithdrawFromOpenRetainerAsync(Dictionary<uint, int> remaining)

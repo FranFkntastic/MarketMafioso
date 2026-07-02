@@ -8,20 +8,6 @@ public sealed record RetainerListEntry(string Name, bool IsActive);
 
 public static class RetainerUiAutomationText
 {
-    public static string? GetAutomatedRestockStartError(bool isRetainerListReady, bool isRetainerInventoryReady)
-    {
-        if (isRetainerInventoryReady && isRetainerListReady)
-            return "Close the current retainer inventory before starting automated workshop material restock.";
-
-        if (isRetainerInventoryReady)
-            return "Close the current retainer inventory and open the retainer list before starting automated workshop material restock.";
-
-        if (!isRetainerListReady)
-            return "Open the retainer list before starting automated workshop material restock.";
-
-        return null;
-    }
-
     public static int? FindRetainerListIndex(IReadOnlyList<RetainerListEntry> entries, string retainerName)
     {
         for (var index = 0; index < entries.Count; index++)

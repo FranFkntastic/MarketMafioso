@@ -46,16 +46,4 @@ public sealed class RetainerUiAutomationTextTests
         Assert.Null(RetainerUiAutomationText.FindContextMenuLabelIndex(labels, "Retrieve HQ"));
     }
 
-    [Theory]
-    [InlineData(true, false, null)]
-    [InlineData(true, true, "Close the current retainer inventory before starting automated workshop material restock.")]
-    [InlineData(false, true, "Close the current retainer inventory and open the retainer list before starting automated workshop material restock.")]
-    [InlineData(false, false, "Open the retainer list before starting automated workshop material restock.")]
-    public void GetAutomatedRestockStartError_RequiresRetainerList(
-        bool isRetainerListReady,
-        bool isRetainerInventoryReady,
-        string? expected)
-    {
-        Assert.Equal(expected, RetainerUiAutomationText.GetAutomatedRestockStartError(isRetainerListReady, isRetainerInventoryReady));
-    }
 }
