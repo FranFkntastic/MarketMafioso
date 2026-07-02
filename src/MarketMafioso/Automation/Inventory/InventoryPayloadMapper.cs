@@ -88,7 +88,7 @@ public static class InventoryPayloadMapper
         Func<uint, string?> resolveItemName)
     {
         return slots
-            .GroupBy(slot => new { slot.ItemId, slot.IsHighQuality })
+            .GroupBy(slot => slot.ItemId)
             .Select(group =>
             {
                 var first = group.First();
@@ -98,7 +98,7 @@ public static class InventoryPayloadMapper
                     ItemName = includeItemNames ? resolveItemName(first.ItemId) : null,
                     ItemType = null,
                     Quantity = checked((uint)group.Sum(slot => slot.Quantity)),
-                    IsHQ = first.IsHighQuality,
+                    IsHQ = false,
                     Condition = group.Max(slot => slot.Condition),
                 };
             })

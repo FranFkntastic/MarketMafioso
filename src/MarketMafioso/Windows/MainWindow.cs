@@ -199,7 +199,7 @@ public class MainWindow : Window, IDisposable
             () => marketAcquisitionRouteRunner.CanFinalizeInputCaptureLog,
             FinalizeMarketBoardInputCaptureLog,
             () => marketAcquisitionRouteRunner.LastDiagnosticFilePath);
-        AutomationDiagnostics = new AutomationDiagnosticsWindow(CreateAutomationDiagnosticProbes());
+        AutomationDiagnostics = new AutomationDiagnosticsWindow(CreateAutomationDiagnosticProbes(), IsMarketAcquisitionUnlocked);
 
         var restoredAcquisitionClaim = MarketAcquisitionClaimPersistence.Restore(config);
         if (restoredAcquisitionClaim != null)
@@ -3569,7 +3569,7 @@ public class MainWindow : Window, IDisposable
 
     private AutomationDiagnosticProbeResult RunExternalHelperDiagnosticProbe()
     {
-        var autoRetainerAvailable = autoRetainerRefresh.IsAvailable;
+        var autoRetainerAvailable = autoRetainerRefresh.IsLoaded;
         var viwiAvailable = viwiWorkshoppaIpc.IsAvailable;
         return new AutomationDiagnosticProbeResult(
             "External Helpers",

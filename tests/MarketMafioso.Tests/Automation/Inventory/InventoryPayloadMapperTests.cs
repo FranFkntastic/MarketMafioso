@@ -23,18 +23,19 @@ public sealed class InventoryPayloadMapperTests
     }
 
     [Fact]
-    public void MapInventoryBags_keeps_quality_variants_separate()
+    public void MapInventoryBags_preserves_legacy_quality_grouping()
     {
         var snapshot = CreateSnapshot(
             "Inventory1",
             new AutomationInventorySlot(0, 100, 5, false, 0.25f),
             new AutomationInventorySlot(1, 100, 7, true, 0.80f));
 
-        var items = Assert.Single(InventoryPayloadMapper.MapInventoryBags([snapshot], includeItemNames: true, ResolveItemName)).Items;
+        var item = Assert.Single(Assert.Single(InventoryPayloadMapper.MapInventoryBags([snapshot], includeItemNames: true, ResolveItemName)).Items);
 
-        Assert.Equal(2, items.Count);
-        Assert.Contains(items, item => item.ItemId == 100 && !item.IsHQ && item.Quantity == 5);
-        Assert.Contains(items, item => item.ItemId == 100 && item.IsHQ && item.Quantity == 7);
+        Assert.Equal(100u, item.ItemId);
+        Assert.Equal(12u, item.Quantity);
+        Assert.False(item.IsHQ);
+        Assert.Equal(0.80f, item.Condition);
     }
 
     [Fact]
@@ -100,7 +101,7 @@ public sealed class InventoryPayloadMapperTests
         Assert.Equal(100u, listing.ItemId);
         Assert.Equal("Item 100", listing.ItemName);
         Assert.Equal(5u, listing.Quantity);
-        Assert.True(listing.IsHQ);
+        Assert.False(listing.IsHQ);
         Assert.Equal(0.35f, listing.Condition);
         Assert.Equal("2026-07-02T12:00:00.0000000Z", listing.ListedAt);
     }

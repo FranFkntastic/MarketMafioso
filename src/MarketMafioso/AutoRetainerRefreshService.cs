@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading.Tasks;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Game.ClientState.Objects.Enums;
@@ -19,6 +20,7 @@ public sealed class AutoRetainerRefreshService : IDisposable
 {
     private const string PluginName = "MarketMafioso";
 
+    private const string AutoRetainerInternalName = "AutoRetainer";
     private const string AutoRetainerInit = "AutoRetainer.Init";
     private const string OnRetainerListTaskButtonsDraw = "AutoRetainer.OnRetainerListTaskButtonsDraw";
     private const string OnRetainerListCustomTask = "AutoRetainer.OnRetainerListCustomTask";
@@ -96,6 +98,9 @@ public sealed class AutoRetainerRefreshService : IDisposable
     public int ExpectedRetainers => expectedRetainers;
     public int ProcessedRetainers => processedRetainers;
     public string LastStatus => lastStatus;
+    public bool IsLoaded => pluginInterface.InstalledPlugins.Any(plugin =>
+        plugin.IsLoaded &&
+        string.Equals(plugin.InternalName, AutoRetainerInternalName, StringComparison.OrdinalIgnoreCase));
 
     public bool IsAvailable
     {

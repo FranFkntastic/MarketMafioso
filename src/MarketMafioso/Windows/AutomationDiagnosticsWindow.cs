@@ -11,6 +11,7 @@ namespace MarketMafioso.Windows;
 public sealed class AutomationDiagnosticsWindow : Window
 {
     private readonly IReadOnlyList<IAutomationDiagnosticProbe> probes;
+    private readonly Func<bool> canAccess;
     private AutomationDiagnosticProbeResult? lastResult;
 
     private static readonly Vector4 ColHeader = new(0.38f, 0.73f, 1.00f, 1f);
@@ -18,10 +19,11 @@ public sealed class AutomationDiagnosticsWindow : Window
     private static readonly Vector4 ColError = new(1.00f, 0.40f, 0.40f, 1f);
     private static readonly Vector4 ColMuted = new(0.60f, 0.60f, 0.60f, 1f);
 
-    public AutomationDiagnosticsWindow(IReadOnlyList<IAutomationDiagnosticProbe> probes)
+    public AutomationDiagnosticsWindow(IReadOnlyList<IAutomationDiagnosticProbe> probes, Func<bool> canAccess)
         : base("Automation Diagnostics##AutomationDiagnostics")
     {
         this.probes = probes;
+        this.canAccess = canAccess;
         SizeConstraints = new WindowSizeConstraints
         {
             MinimumSize = new Vector2(560, 360),
@@ -31,6 +33,13 @@ public sealed class AutomationDiagnosticsWindow : Window
 
     public override void Draw()
     {
+        if (!canAccess())
+        {
+            IsOpen = false;
+            lastResult = null;
+            return;
+        }
+
         ImGui.TextColored(ColHeader, "Automation Diagnostics");
         ImGui.Separator();
 
