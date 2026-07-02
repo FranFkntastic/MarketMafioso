@@ -5,7 +5,7 @@ using Dalamud.Plugin.Services;
 using FFXIVClientStructs.FFXIV.Client.UI;
 using FFXIVClientStructs.FFXIV.Client.UI.Info;
 
-namespace MarketMafioso.MarketAcquisition;
+namespace MarketMafioso.Automation.MarketBoard;
 
 public sealed class MarketBoardListingReader
 {
@@ -218,3 +218,4 @@ public sealed class MarketBoardListingReader
                 .OrderBy(count => count.Key)
                 .Select(count => $"{count.Key}={count.Value}"));
 }
+

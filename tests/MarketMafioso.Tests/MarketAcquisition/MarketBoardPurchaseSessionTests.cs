@@ -13,7 +13,7 @@ public sealed class MarketBoardPurchaseSessionTests
             TimeSpan.FromSeconds(15));
 
         var result = session.RecordConfirmationAttempt(
-            new MarketMafioso.MarketAcquisition.MarketBoardPurchaseResult
+            new MarketMafioso.Automation.MarketBoard.MarketBoardPurchaseResult
             {
                 Status = "ConfirmationPending",
                 Message = "Waiting.",
@@ -38,7 +38,7 @@ public sealed class MarketBoardPurchaseSessionTests
             TimeSpan.FromSeconds(15));
 
         var result = session.RecordConfirmationAttempt(
-            new MarketMafioso.MarketAcquisition.MarketBoardPurchaseResult
+            new MarketMafioso.Automation.MarketBoard.MarketBoardPurchaseResult
             {
                 Status = "ConfirmationPending",
                 Message = "Waiting.",
@@ -62,7 +62,7 @@ public sealed class MarketBoardPurchaseSessionTests
                 now,
                 TimeSpan.FromSeconds(15))
             .RecordConfirmationAttempt(
-                new MarketMafioso.MarketAcquisition.MarketBoardPurchaseResult
+                new MarketMafioso.Automation.MarketBoard.MarketBoardPurchaseResult
                 {
                     Status = "ConfirmationSubmitted",
                     Message = "Submitted.",
@@ -90,7 +90,7 @@ public sealed class MarketBoardPurchaseSessionTests
                 now,
                 TimeSpan.FromSeconds(15))
             .RecordConfirmationAttempt(
-                new MarketMafioso.MarketAcquisition.MarketBoardPurchaseResult
+                new MarketMafioso.Automation.MarketBoard.MarketBoardPurchaseResult
                 {
                     Status = "ConfirmationSubmitted",
                     Message = "Submitted.",
@@ -100,7 +100,7 @@ public sealed class MarketBoardPurchaseSessionTests
                 TimeSpan.FromSeconds(15));
 
         var result = session.RecordFreshRead(
-            new MarketMafioso.MarketAcquisition.MarketBoardReadResult
+            new MarketMafioso.Automation.MarketBoard.MarketBoardReadResult
             {
                 Status = "MarketBoardNotOpen",
                 Message = "Result window closed.",
@@ -121,7 +121,7 @@ public sealed class MarketBoardPurchaseSessionTests
                 now,
                 TimeSpan.FromSeconds(15))
             .RecordConfirmationAttempt(
-                new MarketMafioso.MarketAcquisition.MarketBoardPurchaseResult
+                new MarketMafioso.Automation.MarketBoard.MarketBoardPurchaseResult
                 {
                     Status = "ConfirmationSubmitted",
                     Message = "Submitted.",
@@ -130,7 +130,7 @@ public sealed class MarketBoardPurchaseSessionTests
                 now.AddSeconds(2),
                 TimeSpan.FromSeconds(15));
 
-        var snapshot = session.CreateFreshReadSnapshot(new MarketMafioso.MarketAcquisition.MarketBoardReadResult
+        var snapshot = session.CreateFreshReadSnapshot(new MarketMafioso.Automation.MarketBoard.MarketBoardReadResult
         {
             Status = "MarketBoardNotOpen",
             Message = "Result window closed.",
@@ -140,7 +140,7 @@ public sealed class MarketBoardPurchaseSessionTests
         Assert.Equal("AfterConfirmation", snapshot.Phase);
         Assert.Equal("ListingRemoved", snapshot.Expected);
         Assert.Equal("MarketBoardNotOpen", snapshot.Observed);
-        Assert.Equal(MarketMafioso.MarketAcquisition.MarketBoardAutomationOutcome.ExpectedAlternate, snapshot.Outcome);
+        Assert.Equal(MarketMafioso.Automation.MarketBoard.MarketBoardAutomationOutcome.ExpectedAlternate, snapshot.Outcome);
         Assert.Equal("TreatListingAsRemoved", snapshot.NextAction);
         Assert.Equal("cheap", snapshot.Details["candidateListingId"]);
     }
@@ -155,7 +155,7 @@ public sealed class MarketBoardPurchaseSessionTests
                 now,
                 TimeSpan.FromSeconds(15))
             .RecordConfirmationAttempt(
-                new MarketMafioso.MarketAcquisition.MarketBoardPurchaseResult
+                new MarketMafioso.Automation.MarketBoard.MarketBoardPurchaseResult
                 {
                     Status = "ConfirmationSubmitted",
                     Message = "Submitted.",
@@ -165,7 +165,7 @@ public sealed class MarketBoardPurchaseSessionTests
                 TimeSpan.FromSeconds(15));
 
         var result = session.RecordFreshRead(
-            new MarketMafioso.MarketAcquisition.MarketBoardReadResult
+            new MarketMafioso.Automation.MarketBoard.MarketBoardReadResult
             {
                 Status = "NoListings",
                 Message = "No listings remain.",
@@ -188,7 +188,7 @@ public sealed class MarketBoardPurchaseSessionTests
                 now,
                 TimeSpan.FromSeconds(15))
             .RecordConfirmationAttempt(
-                new MarketMafioso.MarketAcquisition.MarketBoardPurchaseResult
+                new MarketMafioso.Automation.MarketBoard.MarketBoardPurchaseResult
                 {
                     Status = "ConfirmationSubmitted",
                     Message = "Submitted.",
@@ -216,7 +216,7 @@ public sealed class MarketBoardPurchaseSessionTests
                 now,
                 TimeSpan.FromSeconds(15))
             .RecordConfirmationAttempt(
-                new MarketMafioso.MarketAcquisition.MarketBoardPurchaseResult
+                new MarketMafioso.Automation.MarketBoard.MarketBoardPurchaseResult
                 {
                     Status = "ConfirmationSubmitted",
                     Message = "Submitted.",
@@ -237,11 +237,11 @@ public sealed class MarketBoardPurchaseSessionTests
         Assert.Contains("still present", result.Message, StringComparison.OrdinalIgnoreCase);
     }
 
-    private static MarketMafioso.MarketAcquisition.MarketBoardPurchaseCandidate CreateCandidate(string listingId) =>
-        MarketMafioso.MarketAcquisition.MarketBoardPurchaseCandidate.FromLiveListing(CreateListing(listingId));
+    private static MarketMafioso.Automation.MarketBoard.MarketBoardPurchaseCandidate CreateCandidate(string listingId) =>
+        MarketMafioso.Automation.MarketBoard.MarketBoardPurchaseCandidate.FromLiveListing(CreateListing(listingId));
 
-    private static MarketMafioso.MarketAcquisition.MarketBoardReadResult CreateRead(
-        params MarketMafioso.MarketAcquisition.MarketBoardLiveListing[] listings) =>
+    private static MarketMafioso.Automation.MarketBoard.MarketBoardReadResult CreateRead(
+        params MarketMafioso.Automation.MarketBoard.MarketBoardLiveListing[] listings) =>
         new()
         {
             Status = "Ready",
@@ -250,7 +250,7 @@ public sealed class MarketBoardPurchaseSessionTests
             Listings = listings,
         };
 
-    private static MarketMafioso.MarketAcquisition.MarketBoardLiveListing CreateListing(string listingId) =>
+    private static MarketMafioso.Automation.MarketBoard.MarketBoardLiveListing CreateListing(string listingId) =>
         new()
         {
             ItemId = 7017,
@@ -263,3 +263,5 @@ public sealed class MarketBoardPurchaseSessionTests
             IsHq = false,
         };
 }
+
+

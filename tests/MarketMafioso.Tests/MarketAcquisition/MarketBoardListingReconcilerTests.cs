@@ -170,7 +170,7 @@ public sealed class MarketBoardListingReconcilerTests
             ],
         };
 
-    private static MarketMafioso.MarketAcquisition.MarketBoardLiveListing CreateLiveListing(
+    private static MarketMafioso.Automation.MarketBoard.MarketBoardLiveListing CreateLiveListing(
         string listingId,
         string retainerId,
         uint unitPrice,
@@ -188,3 +188,5 @@ public sealed class MarketBoardListingReconcilerTests
             IsHq = false,
         };
 }
+
+

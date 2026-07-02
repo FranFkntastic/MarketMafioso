@@ -38,7 +38,7 @@ public sealed class MarketAcquisitionLiveCandidatePresenterTests
             Decision = decision,
             Reason = "Test",
             Message = "Test row",
-            LiveListing = new MarketMafioso.MarketAcquisition.MarketBoardLiveListing
+            LiveListing = new MarketMafioso.Automation.MarketBoard.MarketBoardLiveListing
             {
                 ItemId = 2,
                 WorldName = "Gilgamesh",
@@ -50,3 +50,4 @@ public sealed class MarketAcquisitionLiveCandidatePresenterTests
             },
         };
 }
+

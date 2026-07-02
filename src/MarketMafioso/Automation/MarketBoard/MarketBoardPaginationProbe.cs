@@ -1,4 +1,4 @@
-namespace MarketMafioso.MarketAcquisition;
+namespace MarketMafioso.Automation.MarketBoard;
 
 public static class MarketBoardPaginationProbe
 {
@@ -82,3 +82,4 @@ public sealed record MarketBoardPaginationProbeResult
     public MarketBoardPaginationState? Before { get; init; }
     public MarketBoardPaginationState? After { get; init; }
 }
+

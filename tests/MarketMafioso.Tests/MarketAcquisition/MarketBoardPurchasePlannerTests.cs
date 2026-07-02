@@ -64,7 +64,7 @@ public sealed class MarketBoardPurchasePlannerTests
     public void RevalidateCandidate_ReturnsReadyWhenFreshListingMatches()
     {
         var candidate = CreateCandidate("cheap");
-        var freshRead = new MarketMafioso.MarketAcquisition.MarketBoardReadResult
+        var freshRead = new MarketMafioso.Automation.MarketBoard.MarketBoardReadResult
         {
             Status = "Ready",
             ItemId = 7017,
@@ -86,7 +86,7 @@ public sealed class MarketBoardPurchasePlannerTests
     public void RevalidateCandidate_RejectsChangedUnitPrice()
     {
         var candidate = CreateCandidate("cheap");
-        var freshRead = new MarketMafioso.MarketAcquisition.MarketBoardReadResult
+        var freshRead = new MarketMafioso.Automation.MarketBoard.MarketBoardReadResult
         {
             Status = "Ready",
             ItemId = 7017,
@@ -107,7 +107,7 @@ public sealed class MarketBoardPurchasePlannerTests
     public void RevalidateCandidate_RejectsMissingListing()
     {
         var candidate = CreateCandidate("cheap");
-        var freshRead = new MarketMafioso.MarketAcquisition.MarketBoardReadResult
+        var freshRead = new MarketMafioso.Automation.MarketBoard.MarketBoardReadResult
         {
             Status = "Ready",
             ItemId = 7017,
@@ -127,8 +127,8 @@ public sealed class MarketBoardPurchasePlannerTests
     [Fact]
     public void RevalidateCandidate_RejectsInvalidZeroCandidate()
     {
-        var candidate = MarketMafioso.MarketAcquisition.MarketBoardPurchaseCandidate.FromLiveListing(CreateInvalidListing());
-        var freshRead = new MarketMafioso.MarketAcquisition.MarketBoardReadResult
+        var candidate = MarketMafioso.Automation.MarketBoard.MarketBoardPurchaseCandidate.FromLiveListing(CreateInvalidListing());
+        var freshRead = new MarketMafioso.Automation.MarketBoard.MarketBoardReadResult
         {
             Status = "Ready",
             ItemId = 7017,
@@ -145,12 +145,12 @@ public sealed class MarketBoardPurchasePlannerTests
         Assert.False(result.CanAttemptPurchase);
     }
 
-    private static MarketMafioso.MarketAcquisition.MarketBoardPurchaseCandidate CreateCandidate(string listingId) =>
-        MarketMafioso.MarketAcquisition.MarketBoardPurchaseCandidate.FromLiveListing(CreateListing(listingId));
+    private static MarketMafioso.Automation.MarketBoard.MarketBoardPurchaseCandidate CreateCandidate(string listingId) =>
+        MarketMafioso.Automation.MarketBoard.MarketBoardPurchaseCandidate.FromLiveListing(CreateListing(listingId));
 
     private static MarketMafioso.MarketAcquisition.MarketAcquisitionLiveCandidateRow CreateRow(
         string decision,
-        MarketMafioso.MarketAcquisition.MarketBoardLiveListing listing) =>
+        MarketMafioso.Automation.MarketBoard.MarketBoardLiveListing listing) =>
         new()
         {
             Decision = decision,
@@ -158,7 +158,7 @@ public sealed class MarketBoardPurchasePlannerTests
             LiveListing = listing,
         };
 
-    private static MarketMafioso.MarketAcquisition.MarketBoardLiveListing CreateListing(
+    private static MarketMafioso.Automation.MarketBoard.MarketBoardLiveListing CreateListing(
         string listingId,
         uint unitPrice = 1_000,
         uint quantity = 5) =>
@@ -174,7 +174,7 @@ public sealed class MarketBoardPurchasePlannerTests
             IsHq = false,
         };
 
-    private static MarketMafioso.MarketAcquisition.MarketBoardLiveListing CreateInvalidListing() =>
+    private static MarketMafioso.Automation.MarketBoard.MarketBoardLiveListing CreateInvalidListing() =>
         new()
         {
             ItemId = 7017,
@@ -186,3 +186,5 @@ public sealed class MarketBoardPurchasePlannerTests
             IsHq = false,
         };
 }
+
+

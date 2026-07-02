@@ -5,12 +5,12 @@ public sealed class MarketBoardAutomationSnapshotTests
     [Fact]
     public void Create_SearchSnapshotPreservesStructuredFields()
     {
-        var snapshot = MarketMafioso.MarketAcquisition.MarketBoardAutomationSnapshot.Create(
+        var snapshot = MarketMafioso.Automation.MarketBoard.MarketBoardAutomationSnapshot.Create(
             "SearchItem",
             "AfterInput",
             "ItemSearchResultReady",
             "SearchSent",
-            MarketMafioso.MarketAcquisition.MarketBoardAutomationOutcome.Recoverable,
+            MarketMafioso.Automation.MarketBoard.MarketBoardAutomationOutcome.Recoverable,
             "RetryHumanEnterPath",
             new Dictionary<string, string?>
             {
@@ -23,7 +23,7 @@ public sealed class MarketBoardAutomationSnapshotTests
         Assert.Equal("AfterInput", snapshot.Phase);
         Assert.Equal("ItemSearchResultReady", snapshot.Expected);
         Assert.Equal("SearchSent", snapshot.Observed);
-        Assert.Equal(MarketMafioso.MarketAcquisition.MarketBoardAutomationOutcome.Recoverable, snapshot.Outcome);
+        Assert.Equal(MarketMafioso.Automation.MarketBoard.MarketBoardAutomationOutcome.Recoverable, snapshot.Outcome);
         Assert.Equal("RetryHumanEnterPath", snapshot.NextAction);
         Assert.Equal("Varnish", snapshot.Details["searchText"]);
         Assert.Equal(false.ToString(), snapshot.Details["searchButtonEnabled"]);
@@ -33,12 +33,12 @@ public sealed class MarketBoardAutomationSnapshotTests
     [Fact]
     public void ToDetails_IncludesCoreClassificationBeforeObservedDetails()
     {
-        var snapshot = MarketMafioso.MarketAcquisition.MarketBoardAutomationSnapshot.Create(
+        var snapshot = MarketMafioso.Automation.MarketBoard.MarketBoardAutomationSnapshot.Create(
             "BuyListing",
             "AfterConfirmation",
             "ListingRemoved",
             "MarketBoardNotOpen",
-            MarketMafioso.MarketAcquisition.MarketBoardAutomationOutcome.ExpectedAlternate,
+            MarketMafioso.Automation.MarketBoard.MarketBoardAutomationOutcome.ExpectedAlternate,
             "TreatListingAsRemoved",
             new Dictionary<string, string?>
             {
@@ -56,3 +56,4 @@ public sealed class MarketBoardAutomationSnapshotTests
         Assert.Equal("123", details["candidateListingId"]);
     }
 }
+

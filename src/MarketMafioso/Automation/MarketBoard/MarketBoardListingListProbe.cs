@@ -2,7 +2,7 @@ using System.Collections.Generic;
 using System.Linq;
 using FFXIVClientStructs.FFXIV.Client.UI;
 
-namespace MarketMafioso.MarketAcquisition;
+namespace MarketMafioso.Automation.MarketBoard;
 
 public static class MarketBoardListingListProbe
 {
@@ -131,3 +131,4 @@ public sealed record MarketBoardListingListProbeResult(
     int VisibleItemCount,
     int RequestedRow,
     string Diagnostic);
+

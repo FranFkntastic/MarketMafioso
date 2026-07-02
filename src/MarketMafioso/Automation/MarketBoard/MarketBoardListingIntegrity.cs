@@ -1,6 +1,6 @@
 using System;
 
-namespace MarketMafioso.MarketAcquisition;
+namespace MarketMafioso.Automation.MarketBoard;
 
 public static class MarketBoardListingIntegrity
 {
@@ -38,3 +38,4 @@ public static class MarketBoardListingIntegrity
         unitPrice > 0 &&
         quantity > 0;
 }
+

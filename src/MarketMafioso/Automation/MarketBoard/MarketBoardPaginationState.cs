@@ -1,6 +1,6 @@
 using System;
 
-namespace MarketMafioso.MarketAcquisition;
+namespace MarketMafioso.Automation.MarketBoard;
 
 public sealed record MarketBoardPaginationState(
     uint ItemId,
@@ -40,3 +40,4 @@ public sealed record MarketBoardPaginationState(
     public static MarketBoardPaginationState FromReadResult(MarketBoardReadResult readResult) =>
         FromReadResult(readResult, readResult.CurrentRequestId, readResult.NextRequestId);
 }
+

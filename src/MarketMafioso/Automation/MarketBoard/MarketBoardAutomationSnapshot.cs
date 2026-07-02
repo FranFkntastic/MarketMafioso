@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 
-namespace MarketMafioso.MarketAcquisition;
+namespace MarketMafioso.Automation.MarketBoard;
 
 public enum MarketBoardAutomationOutcome
 {
@@ -78,3 +78,4 @@ public sealed record MarketBoardAutomationSnapshot
             .ToDictionary(pair => pair.Key, pair => pair.Value!);
     }
 }
+

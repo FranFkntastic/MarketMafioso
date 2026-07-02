@@ -404,11 +404,11 @@ public sealed class MarketAcquisitionRouteRunnerTests
 
         var result = runner.RecordListingReadPending(
             "Maduin",
-            new MarketMafioso.MarketAcquisition.MarketBoardReadResult
+            new MarketMafioso.Automation.MarketBoard.MarketBoardReadResult
             {
                 Status = "ListingCacheSwitching",
                 Message = "Market board listing cache is still switching.",
-                ReadState = MarketMafioso.MarketAcquisition.MarketBoardListingReadState.SwitchingItem,
+                ReadState = MarketMafioso.Automation.MarketBoard.MarketBoardListingReadState.SwitchingItem,
                 ItemId = 7017,
                 WorldName = "Maduin",
                 RawItemIdMismatchCounts = new Dictionary<uint, int>
@@ -435,11 +435,11 @@ public sealed class MarketAcquisitionRouteRunnerTests
         runner.Start(CreateMultiItemWorldPlan("Maduin"));
         runner.ExecutePendingTravelCommand(_ => true);
         runner.RecordCurrentWorld("Maduin");
-        var read = new MarketMafioso.MarketAcquisition.MarketBoardReadResult
+        var read = new MarketMafioso.Automation.MarketBoard.MarketBoardReadResult
         {
             Status = "ListingCacheSwitching",
             Message = "Market board listing cache is still switching.",
-            ReadState = MarketMafioso.MarketAcquisition.MarketBoardListingReadState.SwitchingItem,
+            ReadState = MarketMafioso.Automation.MarketBoard.MarketBoardListingReadState.SwitchingItem,
             ItemId = 7017,
             WorldName = "Maduin",
             RawItemIdMismatchCounts = new Dictionary<uint, int>
@@ -616,7 +616,7 @@ public sealed class MarketAcquisitionRouteRunnerTests
         runner.Start(CreatePlan("Maduin"), enableDiagnostics: true);
         runner.RecordCurrentWorld("Maduin");
 
-        var result = runner.RecordSearchResult(new MarketMafioso.MarketAcquisition.MarketBoardItemSearchResult
+        var result = runner.RecordSearchResult(new MarketMafioso.Automation.MarketBoard.MarketBoardItemSearchResult
         {
             Status = "ModeReset",
             Message = "Resetting market board item search mode before submitting.",
@@ -640,7 +640,7 @@ public sealed class MarketAcquisitionRouteRunnerTests
         runner.Start(CreatePlan("Maduin"));
         runner.RecordCurrentWorld("Maduin");
 
-        var result = runner.RecordSearchResult(new MarketMafioso.MarketAcquisition.MarketBoardItemSearchResult
+        var result = runner.RecordSearchResult(new MarketMafioso.Automation.MarketBoard.MarketBoardItemSearchResult
         {
             Status = "SearchSent",
             Message = "Searching market board for Varnish (7017).",
@@ -659,7 +659,7 @@ public sealed class MarketAcquisitionRouteRunnerTests
         runner.RecordCurrentWorld("Maduin");
         var startedAt = DateTimeOffset.UnixEpoch;
 
-        var result = runner.RecordSearchResult(new MarketMafioso.MarketAcquisition.MarketBoardItemSearchResult
+        var result = runner.RecordSearchResult(new MarketMafioso.Automation.MarketBoard.MarketBoardItemSearchResult
         {
             Status = "ItemOpenSent",
             Message = "Opening market board listings for Varnish (7017).",
@@ -678,13 +678,13 @@ public sealed class MarketAcquisitionRouteRunnerTests
         runner.RecordCurrentWorld("Maduin");
         var startedAt = DateTimeOffset.UnixEpoch;
 
-        var first = runner.RecordSearchResult(new MarketMafioso.MarketAcquisition.MarketBoardItemSearchResult
+        var first = runner.RecordSearchResult(new MarketMafioso.Automation.MarketBoard.MarketBoardItemSearchResult
         {
             Status = "SearchSent",
             Message = "Searching market board for Varnish (7017).",
         }, startedAt);
 
-        var timedOut = runner.RecordSearchResult(new MarketMafioso.MarketAcquisition.MarketBoardItemSearchResult
+        var timedOut = runner.RecordSearchResult(new MarketMafioso.Automation.MarketBoard.MarketBoardItemSearchResult
         {
             Status = "SearchSent",
             Message = "Searching market board for Varnish (7017).",
@@ -706,7 +706,7 @@ public sealed class MarketAcquisitionRouteRunnerTests
         runner.RecordCurrentWorld("Maduin");
         var startedAt = DateTimeOffset.UnixEpoch;
 
-        runner.RecordSearchResult(new MarketMafioso.MarketAcquisition.MarketBoardItemSearchResult
+        runner.RecordSearchResult(new MarketMafioso.Automation.MarketBoard.MarketBoardItemSearchResult
         {
             Status = "SearchSent",
             Message = "Searching market board for Varnish (7017).",
@@ -717,7 +717,7 @@ public sealed class MarketAcquisitionRouteRunnerTests
             },
         }, startedAt);
 
-        runner.RecordSearchResult(new MarketMafioso.MarketAcquisition.MarketBoardItemSearchResult
+        runner.RecordSearchResult(new MarketMafioso.Automation.MarketBoard.MarketBoardItemSearchResult
         {
             Status = "SearchSent",
             Message = "Searching market board for Varnish (7017).",
@@ -746,7 +746,7 @@ public sealed class MarketAcquisitionRouteRunnerTests
         runner.Start(CreatePlan("Maduin"));
         runner.RecordCurrentWorld("Maduin");
 
-        var result = runner.RecordSearchResult(new MarketMafioso.MarketAcquisition.MarketBoardItemSearchResult
+        var result = runner.RecordSearchResult(new MarketMafioso.Automation.MarketBoard.MarketBoardItemSearchResult
         {
             Status = "ListingsReady",
             Message = "Market board listings are open for Varnish (7017).",
@@ -761,7 +761,7 @@ public sealed class MarketAcquisitionRouteRunnerTests
     {
         using var runner = CreateRunner();
 
-        var result = runner.RecordInputCapture("before-purchase-click", new MarketMafioso.MarketAcquisition.MarketBoardInputCapture
+        var result = runner.RecordInputCapture("before-purchase-click", new MarketMafioso.Automation.MarketBoard.MarketBoardInputCapture
         {
             Status = "Captured",
             Message = "Captured current market board UI/input state.",
@@ -793,12 +793,12 @@ public sealed class MarketAcquisitionRouteRunnerTests
         runner.Start(CreatePlan("Maduin"), enableDiagnostics: true);
 
         var result = runner.RecordAutomationSnapshot(
-            MarketMafioso.MarketAcquisition.MarketBoardAutomationSnapshot.Create(
+            MarketMafioso.Automation.MarketBoard.MarketBoardAutomationSnapshot.Create(
                 "BuyListing",
                 "AfterConfirmation",
                 "ListingRemoved",
                 "MarketBoardNotOpen",
-                MarketMafioso.MarketAcquisition.MarketBoardAutomationOutcome.ExpectedAlternate,
+                MarketMafioso.Automation.MarketBoard.MarketBoardAutomationOutcome.ExpectedAlternate,
                 "TreatListingAsRemoved"));
 
         Assert.True(result.Success);
@@ -812,7 +812,7 @@ public sealed class MarketAcquisitionRouteRunnerTests
     public void FinalizeInputCaptureLog_ClosesStandaloneCaptureDiagnostics()
     {
         using var runner = CreateRunner();
-        runner.RecordInputCapture("before-purchase-click", new MarketMafioso.MarketAcquisition.MarketBoardInputCapture
+        runner.RecordInputCapture("before-purchase-click", new MarketMafioso.Automation.MarketBoard.MarketBoardInputCapture
         {
             Status = "Captured",
             Message = "Captured current market board UI/input state.",
@@ -832,7 +832,7 @@ public sealed class MarketAcquisitionRouteRunnerTests
     {
         using var runner = CreateRunner();
         runner.Start(CreatePlan("Maduin"), enableDiagnostics: true);
-        runner.RecordInputCapture("during-route", new MarketMafioso.MarketAcquisition.MarketBoardInputCapture
+        runner.RecordInputCapture("during-route", new MarketMafioso.Automation.MarketBoard.MarketBoardInputCapture
         {
             Status = "Captured",
             Message = "Captured current market board UI/input state.",
@@ -955,7 +955,7 @@ public sealed class MarketAcquisitionRouteRunnerTests
             Decision = decision,
             Reason = reason,
             Message = "Test row.",
-            LiveListing = new MarketMafioso.MarketAcquisition.MarketBoardLiveListing
+            LiveListing = new MarketMafioso.Automation.MarketBoard.MarketBoardLiveListing
             {
                 ItemId = 2,
                 WorldName = "Maduin",
@@ -980,3 +980,4 @@ public sealed class MarketAcquisitionRouteRunnerTests
         return reader.ReadToEnd();
     }
 }
+

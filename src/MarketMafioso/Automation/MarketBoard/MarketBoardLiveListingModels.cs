@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 
-namespace MarketMafioso.MarketAcquisition;
+namespace MarketMafioso.Automation.MarketBoard;
 
 public enum MarketBoardListingReadState
 {
@@ -158,17 +158,4 @@ public sealed record MarketBoardAccumulatedReadResult
             : $"{listing.RetainerId}:{listing.UnitPrice}:{listing.Quantity}:{listing.IsHq}";
 }
 
-public sealed record MarketBoardListingReconciliation
-{
-    public string Status { get; init; } = string.Empty;
-    public IReadOnlyList<MarketBoardListingReconciliationRow> Listings { get; init; } = [];
-}
 
-public sealed record MarketBoardListingReconciliationRow
-{
-    public string Status { get; init; } = string.Empty;
-    public string Message { get; init; } = string.Empty;
-    public bool IsExactMatch { get; init; }
-    public MarketAcquisitionPlannedListing PlannedListing { get; init; } = new();
-    public MarketBoardLiveListing? LiveListing { get; init; }
-}

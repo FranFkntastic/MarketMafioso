@@ -5,7 +5,7 @@ public sealed class MarketBoardPaginationProbeTests
     [Fact]
     public void Evaluate_ReturnsNotTruncatedForCompleteVisibleCache()
     {
-        var state = new MarketMafioso.MarketAcquisition.MarketBoardPaginationState(
+        var state = new MarketMafioso.Automation.MarketBoard.MarketBoardPaginationState(
             ItemId: 5064,
             WorldName: "Siren",
             ReportedListingCount: 40,
@@ -14,7 +14,7 @@ public sealed class MarketBoardPaginationProbeTests
             CurrentRequestId: 1,
             NextRequestId: 2);
 
-        var result = MarketMafioso.MarketAcquisition.MarketBoardPaginationProbe.Evaluate(state);
+        var result = MarketMafioso.Automation.MarketBoard.MarketBoardPaginationProbe.Evaluate(state);
 
         Assert.Equal("NotTruncated", result.Status);
         Assert.False(result.CanAttemptLiveProbe);
@@ -23,7 +23,7 @@ public sealed class MarketBoardPaginationProbeTests
     [Fact]
     public void Evaluate_ReturnsRequestIdsNotCoherentForUnadvancedRequestIds()
     {
-        var state = new MarketMafioso.MarketAcquisition.MarketBoardPaginationState(
+        var state = new MarketMafioso.Automation.MarketBoard.MarketBoardPaginationState(
             ItemId: 5064,
             WorldName: "Siren",
             ReportedListingCount: 180,
@@ -32,7 +32,7 @@ public sealed class MarketBoardPaginationProbeTests
             CurrentRequestId: 1,
             NextRequestId: 1);
 
-        var result = MarketMafioso.MarketAcquisition.MarketBoardPaginationProbe.Evaluate(state);
+        var result = MarketMafioso.Automation.MarketBoard.MarketBoardPaginationProbe.Evaluate(state);
 
         Assert.Equal("RequestIdsNotCoherent", result.Status);
         Assert.False(result.CanAttemptLiveProbe);
@@ -41,7 +41,7 @@ public sealed class MarketBoardPaginationProbeTests
     [Fact]
     public void Evaluate_ReturnsReadyForLiveProbeWhenTruncatedAndRequestIdsAreCoherent()
     {
-        var state = new MarketMafioso.MarketAcquisition.MarketBoardPaginationState(
+        var state = new MarketMafioso.Automation.MarketBoard.MarketBoardPaginationState(
             ItemId: 5064,
             WorldName: "Siren",
             ReportedListingCount: 180,
@@ -50,7 +50,7 @@ public sealed class MarketBoardPaginationProbeTests
             CurrentRequestId: 1,
             NextRequestId: 2);
 
-        var result = MarketMafioso.MarketAcquisition.MarketBoardPaginationProbe.Evaluate(state);
+        var result = MarketMafioso.Automation.MarketBoard.MarketBoardPaginationProbe.Evaluate(state);
 
         Assert.Equal("ReadyForLiveProbe", result.Status);
         Assert.True(result.CanAttemptLiveProbe);
@@ -59,7 +59,7 @@ public sealed class MarketBoardPaginationProbeTests
     [Fact]
     public void EvaluateContinuation_ReturnsAdvancedWhenContinuationIsSameItemAndRequestIdChanges()
     {
-        var before = new MarketMafioso.MarketAcquisition.MarketBoardPaginationState(
+        var before = new MarketMafioso.Automation.MarketBoard.MarketBoardPaginationState(
             ItemId: 5064,
             WorldName: "Siren",
             ReportedListingCount: 180,
@@ -67,7 +67,7 @@ public sealed class MarketBoardPaginationProbeTests
             ListingCapacity: 100,
             CurrentRequestId: 1,
             NextRequestId: 2);
-        var after = new MarketMafioso.MarketAcquisition.MarketBoardPaginationState(
+        var after = new MarketMafioso.Automation.MarketBoard.MarketBoardPaginationState(
             ItemId: 5064,
             WorldName: "Siren",
             ReportedListingCount: 80,
@@ -76,7 +76,7 @@ public sealed class MarketBoardPaginationProbeTests
             CurrentRequestId: 2,
             NextRequestId: 3);
 
-        var result = MarketMafioso.MarketAcquisition.MarketBoardPaginationProbe.EvaluateContinuation(before, after);
+        var result = MarketMafioso.Automation.MarketBoard.MarketBoardPaginationProbe.EvaluateContinuation(before, after);
 
         Assert.Equal("Advanced", result.Status);
     }
@@ -84,7 +84,7 @@ public sealed class MarketBoardPaginationProbeTests
     [Fact]
     public void EvaluateContinuation_ReturnsWrongContinuationWhenItemChanges()
     {
-        var before = new MarketMafioso.MarketAcquisition.MarketBoardPaginationState(
+        var before = new MarketMafioso.Automation.MarketBoard.MarketBoardPaginationState(
             ItemId: 5064,
             WorldName: "Siren",
             ReportedListingCount: 180,
@@ -92,7 +92,7 @@ public sealed class MarketBoardPaginationProbeTests
             ListingCapacity: 100,
             CurrentRequestId: 1,
             NextRequestId: 2);
-        var after = new MarketMafioso.MarketAcquisition.MarketBoardPaginationState(
+        var after = new MarketMafioso.Automation.MarketBoard.MarketBoardPaginationState(
             ItemId: 2,
             WorldName: "Siren",
             ReportedListingCount: 80,
@@ -101,7 +101,7 @@ public sealed class MarketBoardPaginationProbeTests
             CurrentRequestId: 2,
             NextRequestId: 3);
 
-        var result = MarketMafioso.MarketAcquisition.MarketBoardPaginationProbe.EvaluateContinuation(before, after);
+        var result = MarketMafioso.Automation.MarketBoard.MarketBoardPaginationProbe.EvaluateContinuation(before, after);
 
         Assert.Equal("WrongContinuation", result.Status);
     }
@@ -109,7 +109,7 @@ public sealed class MarketBoardPaginationProbeTests
     [Fact]
     public void EvaluateContinuation_ReturnsUnchangedWhenRequestIdDoesNotMove()
     {
-        var before = new MarketMafioso.MarketAcquisition.MarketBoardPaginationState(
+        var before = new MarketMafioso.Automation.MarketBoard.MarketBoardPaginationState(
             ItemId: 5064,
             WorldName: "Siren",
             ReportedListingCount: 180,
@@ -123,8 +123,9 @@ public sealed class MarketBoardPaginationProbeTests
             ReadableListingCount = 100,
         };
 
-        var result = MarketMafioso.MarketAcquisition.MarketBoardPaginationProbe.EvaluateContinuation(before, after);
+        var result = MarketMafioso.Automation.MarketBoard.MarketBoardPaginationProbe.EvaluateContinuation(before, after);
 
         Assert.Equal("Unchanged", result.Status);
     }
 }
+

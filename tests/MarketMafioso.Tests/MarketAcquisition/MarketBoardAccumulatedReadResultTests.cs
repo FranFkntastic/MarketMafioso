@@ -5,7 +5,7 @@ public sealed class MarketBoardAccumulatedReadResultTests
     [Fact]
     public void Append_MergesSameItemAndWorldByListingId()
     {
-        var first = MarketMafioso.MarketAcquisition.MarketBoardAccumulatedReadResult.FromReadResult(CreateRead(
+        var first = MarketMafioso.Automation.MarketBoard.MarketBoardAccumulatedReadResult.FromReadResult(CreateRead(
             reportedListingCount: 4,
             listings:
             [
@@ -35,7 +35,7 @@ public sealed class MarketBoardAccumulatedReadResultTests
     [Fact]
     public void Append_RejectsDifferentItem()
     {
-        var first = MarketMafioso.MarketAcquisition.MarketBoardAccumulatedReadResult.FromReadResult(CreateRead());
+        var first = MarketMafioso.Automation.MarketBoard.MarketBoardAccumulatedReadResult.FromReadResult(CreateRead());
         var second = CreateRead(itemId: 4);
 
         var ex = Assert.Throws<InvalidOperationException>(() => first.Append(second));
@@ -46,7 +46,7 @@ public sealed class MarketBoardAccumulatedReadResultTests
     [Fact]
     public void Append_RejectsDifferentWorld()
     {
-        var first = MarketMafioso.MarketAcquisition.MarketBoardAccumulatedReadResult.FromReadResult(CreateRead());
+        var first = MarketMafioso.Automation.MarketBoard.MarketBoardAccumulatedReadResult.FromReadResult(CreateRead());
         var second = CreateRead(worldName: "Faerie");
 
         var ex = Assert.Throws<InvalidOperationException>(() => first.Append(second));
@@ -57,7 +57,7 @@ public sealed class MarketBoardAccumulatedReadResultTests
     [Fact]
     public void ToReadResult_ReportsStillTruncatedUntilAccumulatedListingsReachReportedCount()
     {
-        var first = MarketMafioso.MarketAcquisition.MarketBoardAccumulatedReadResult.FromReadResult(CreateRead(
+        var first = MarketMafioso.Automation.MarketBoard.MarketBoardAccumulatedReadResult.FromReadResult(CreateRead(
             reportedListingCount: 3,
             listingCapacity: 2,
             listings:
@@ -82,14 +82,14 @@ public sealed class MarketBoardAccumulatedReadResultTests
         Assert.Equal(3, readResult.Listings.Count);
     }
 
-    private static MarketMafioso.MarketAcquisition.MarketBoardReadResult CreateRead(
+    private static MarketMafioso.Automation.MarketBoard.MarketBoardReadResult CreateRead(
         uint itemId = 2,
         string worldName = "Gilgamesh",
         int reportedListingCount = 1,
         int listingCapacity = 100,
         byte currentRequestId = 1,
         byte nextRequestId = 2,
-        params MarketMafioso.MarketAcquisition.MarketBoardLiveListing[] listings) =>
+        params MarketMafioso.Automation.MarketBoard.MarketBoardLiveListing[] listings) =>
         new()
         {
             Status = "Ready",
@@ -104,7 +104,7 @@ public sealed class MarketBoardAccumulatedReadResultTests
             Listings = listings,
         };
 
-    private static MarketMafioso.MarketAcquisition.MarketBoardLiveListing CreateListing(
+    private static MarketMafioso.Automation.MarketBoard.MarketBoardLiveListing CreateListing(
         string listingId = "listing",
         uint itemId = 2,
         string worldName = "Gilgamesh",
@@ -120,3 +120,4 @@ public sealed class MarketBoardAccumulatedReadResultTests
             Quantity = 1,
         };
 }
+

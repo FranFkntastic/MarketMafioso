@@ -41,7 +41,7 @@ public sealed class MarketBoardPurchaseExecutorTests
     {
         var adapter = new RecordingPurchaseAdapter
         {
-            Result = new MarketMafioso.MarketAcquisition.MarketBoardPurchaseResult
+            Result = new MarketMafioso.Automation.MarketBoard.MarketBoardPurchaseResult
             {
                 Status = "ConfirmationOpened",
                 Message = "Opened purchase confirmation.",
@@ -90,16 +90,16 @@ public sealed class MarketBoardPurchaseExecutorTests
     private sealed class RecordingPurchaseAdapter : MarketMafioso.MarketAcquisition.IMarketBoardPurchaseAdapter
     {
         public int Attempts { get; private set; }
-        public MarketMafioso.MarketAcquisition.MarketBoardPurchaseCandidate? LastCandidate { get; private set; }
-        public MarketMafioso.MarketAcquisition.MarketBoardPurchaseResult Result { get; init; } = new()
+        public MarketMafioso.Automation.MarketBoard.MarketBoardPurchaseCandidate? LastCandidate { get; private set; }
+        public MarketMafioso.Automation.MarketBoard.MarketBoardPurchaseResult Result { get; init; } = new()
         {
             Status = "AdapterCalled",
             Message = "Adapter was called.",
         };
 
-        public MarketMafioso.MarketAcquisition.MarketBoardPurchaseResult ExecutePurchase(
-            MarketMafioso.MarketAcquisition.MarketBoardPurchaseCandidate candidate,
-            MarketMafioso.MarketAcquisition.MarketBoardLiveListing freshListing)
+        public MarketMafioso.Automation.MarketBoard.MarketBoardPurchaseResult ExecutePurchase(
+            MarketMafioso.Automation.MarketBoard.MarketBoardPurchaseCandidate candidate,
+            MarketMafioso.Automation.MarketBoard.MarketBoardLiveListing freshListing)
         {
             Attempts++;
             LastCandidate = candidate;
@@ -109,7 +109,7 @@ public sealed class MarketBoardPurchaseExecutorTests
 
     private static MarketMafioso.MarketAcquisition.MarketAcquisitionLiveCandidateRow CreateRow(
         string decision,
-        MarketMafioso.MarketAcquisition.MarketBoardLiveListing listing) =>
+        MarketMafioso.Automation.MarketBoard.MarketBoardLiveListing listing) =>
         new()
         {
             Decision = decision,
@@ -117,8 +117,8 @@ public sealed class MarketBoardPurchaseExecutorTests
             LiveListing = listing,
         };
 
-    private static MarketMafioso.MarketAcquisition.MarketBoardReadResult CreateRead(
-        params MarketMafioso.MarketAcquisition.MarketBoardLiveListing[] listings) =>
+    private static MarketMafioso.Automation.MarketBoard.MarketBoardReadResult CreateRead(
+        params MarketMafioso.Automation.MarketBoard.MarketBoardLiveListing[] listings) =>
         new()
         {
             Status = "Ready",
@@ -127,7 +127,7 @@ public sealed class MarketBoardPurchaseExecutorTests
             Listings = listings,
         };
 
-    private static MarketMafioso.MarketAcquisition.MarketBoardLiveListing CreateListing(
+    private static MarketMafioso.Automation.MarketBoard.MarketBoardLiveListing CreateListing(
         string listingId,
         uint unitPrice = 1_000) =>
         new()
@@ -142,3 +142,5 @@ public sealed class MarketBoardPurchaseExecutorTests
             IsHq = false,
         };
 }
+
+

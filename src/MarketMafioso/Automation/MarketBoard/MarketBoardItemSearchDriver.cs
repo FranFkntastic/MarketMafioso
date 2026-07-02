@@ -9,7 +9,7 @@ using FFXIVClientStructs.FFXIV.Client.UI.Info;
 using FFXIVClientStructs.FFXIV.Component.GUI;
 using MarketMafioso.Automation.Runtime;
 
-namespace MarketMafioso.MarketAcquisition;
+namespace MarketMafioso.Automation.MarketBoard;
 
 public sealed class MarketBoardItemSearchDriver
 {
@@ -736,3 +736,4 @@ public sealed record MarketBoardItemSearchResult
     public bool IsInProgress =>
         Status is "MarketBoardNotOpen" or "ModeReset" or "StaleListingsClosed" or "SearchSent" or "ItemSelectionSent" or "ItemOpenSent";
 }
+

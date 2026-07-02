@@ -5,7 +5,7 @@ public sealed class MarketBoardPaginationStateTests
     [Fact]
     public void CanRequestNextPage_ReturnsFalseWhenReadIsNotTruncated()
     {
-        var state = new MarketMafioso.MarketAcquisition.MarketBoardPaginationState(
+        var state = new MarketMafioso.Automation.MarketBoard.MarketBoardPaginationState(
             ItemId: 5064,
             WorldName: "Siren",
             ReportedListingCount: 42,
@@ -21,7 +21,7 @@ public sealed class MarketBoardPaginationStateTests
     [Fact]
     public void CanRequestNextPage_ReturnsTrueWhenTruncatedAndRequestIdsAreCoherent()
     {
-        var state = new MarketMafioso.MarketAcquisition.MarketBoardPaginationState(
+        var state = new MarketMafioso.Automation.MarketBoard.MarketBoardPaginationState(
             ItemId: 5064,
             WorldName: "Siren",
             ReportedListingCount: 180,
@@ -37,7 +37,7 @@ public sealed class MarketBoardPaginationStateTests
     [Fact]
     public void CanRequestNextPage_ReturnsFalseWhenRequestIdsAreNotCoherent()
     {
-        var state = new MarketMafioso.MarketAcquisition.MarketBoardPaginationState(
+        var state = new MarketMafioso.Automation.MarketBoard.MarketBoardPaginationState(
             ItemId: 5064,
             WorldName: "Siren",
             ReportedListingCount: 180,
@@ -53,7 +53,7 @@ public sealed class MarketBoardPaginationStateTests
     [Fact]
     public void IsContinuationOf_RejectsDifferentItem()
     {
-        var first = new MarketMafioso.MarketAcquisition.MarketBoardPaginationState(
+        var first = new MarketMafioso.Automation.MarketBoard.MarketBoardPaginationState(
             ItemId: 5064,
             WorldName: "Siren",
             ReportedListingCount: 180,
@@ -61,7 +61,7 @@ public sealed class MarketBoardPaginationStateTests
             ListingCapacity: 100,
             CurrentRequestId: 1,
             NextRequestId: 2);
-        var next = new MarketMafioso.MarketAcquisition.MarketBoardPaginationState(
+        var next = new MarketMafioso.Automation.MarketBoard.MarketBoardPaginationState(
             ItemId: 2,
             WorldName: "Siren",
             ReportedListingCount: 80,
@@ -76,7 +76,7 @@ public sealed class MarketBoardPaginationStateTests
     [Fact]
     public void IsContinuationOf_AllowsSameItemAndWorldIgnoringCase()
     {
-        var first = new MarketMafioso.MarketAcquisition.MarketBoardPaginationState(
+        var first = new MarketMafioso.Automation.MarketBoard.MarketBoardPaginationState(
             ItemId: 5064,
             WorldName: "Siren",
             ReportedListingCount: 180,
@@ -84,7 +84,7 @@ public sealed class MarketBoardPaginationStateTests
             ListingCapacity: 100,
             CurrentRequestId: 1,
             NextRequestId: 2);
-        var next = new MarketMafioso.MarketAcquisition.MarketBoardPaginationState(
+        var next = new MarketMafioso.Automation.MarketBoard.MarketBoardPaginationState(
             ItemId: 5064,
             WorldName: "siren",
             ReportedListingCount: 180,
@@ -99,7 +99,7 @@ public sealed class MarketBoardPaginationStateTests
     [Fact]
     public void FromReadResult_CopiesPaginationFields()
     {
-        var readResult = new MarketMafioso.MarketAcquisition.MarketBoardReadResult
+        var readResult = new MarketMafioso.Automation.MarketBoard.MarketBoardReadResult
         {
             ItemId = 5064,
             WorldName = "Siren",
@@ -109,12 +109,12 @@ public sealed class MarketBoardPaginationStateTests
             NextRequestId = 8,
             Listings =
             [
-                new MarketMafioso.MarketAcquisition.MarketBoardLiveListing(),
-                new MarketMafioso.MarketAcquisition.MarketBoardLiveListing(),
+                new MarketMafioso.Automation.MarketBoard.MarketBoardLiveListing(),
+                new MarketMafioso.Automation.MarketBoard.MarketBoardLiveListing(),
             ],
         };
 
-        var state = MarketMafioso.MarketAcquisition.MarketBoardPaginationState.FromReadResult(readResult);
+        var state = MarketMafioso.Automation.MarketBoard.MarketBoardPaginationState.FromReadResult(readResult);
 
         Assert.Equal(5064u, state.ItemId);
         Assert.Equal("Siren", state.WorldName);
@@ -125,3 +125,4 @@ public sealed class MarketBoardPaginationStateTests
         Assert.Equal(8, state.NextRequestId);
     }
 }
+

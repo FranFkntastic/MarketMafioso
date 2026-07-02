@@ -78,7 +78,7 @@ public sealed class DalamudMarketBoardPurchaseAdapterTests
     public void IsBetterListingListCandidate_AllowsVisibleListForOffscreenAbsoluteRow()
     {
         Assert.True(
-            MarketMafioso.MarketAcquisition.MarketBoardListingListProbe.IsBetterListingListCandidate(
+            MarketMafioso.Automation.MarketBoard.MarketBoardListingListProbe.IsBetterListingListCandidate(
                 itemCount: 9,
                 isInteractive: true,
                 bestItemCount: 0,
@@ -89,14 +89,14 @@ public sealed class DalamudMarketBoardPurchaseAdapterTests
     public void IsBetterListingListCandidate_KeepsLargestVisibleListCandidate()
     {
         Assert.False(
-            MarketMafioso.MarketAcquisition.MarketBoardListingListProbe.IsBetterListingListCandidate(
+            MarketMafioso.Automation.MarketBoard.MarketBoardListingListProbe.IsBetterListingListCandidate(
                 itemCount: 3,
                 isInteractive: true,
                 bestItemCount: 9,
                 bestIsInteractive: true));
     }
 
-    private static MarketMafioso.MarketAcquisition.MarketBoardPurchaseCandidate CreateCandidate(uint itemId) =>
+    private static MarketMafioso.Automation.MarketBoard.MarketBoardPurchaseCandidate CreateCandidate(uint itemId) =>
         new()
         {
             ItemId = itemId,
@@ -109,7 +109,7 @@ public sealed class DalamudMarketBoardPurchaseAdapterTests
             IsHq = false,
         };
 
-    private static MarketMafioso.MarketAcquisition.MarketBoardLiveListing CreateFreshListing(uint itemId) =>
+    private static MarketMafioso.Automation.MarketBoard.MarketBoardLiveListing CreateFreshListing(uint itemId) =>
         new()
         {
             ItemId = itemId,
@@ -123,3 +123,4 @@ public sealed class DalamudMarketBoardPurchaseAdapterTests
             IsHq = false,
         };
 }
+

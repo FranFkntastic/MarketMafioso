@@ -92,12 +92,12 @@ public sealed class MarketAcquisitionRouteDiagnosticsTests
             DateTimeOffset.UnixEpoch);
 
         diagnostics.RecordAutomationSnapshot(
-            MarketMafioso.MarketAcquisition.MarketBoardAutomationSnapshot.Create(
+            MarketMafioso.Automation.MarketBoard.MarketBoardAutomationSnapshot.Create(
                 "SearchItem",
                 "AfterInput",
                 "ItemSearchResultReady",
                 "SearchSent",
-                MarketMafioso.MarketAcquisition.MarketBoardAutomationOutcome.Recoverable,
+                MarketMafioso.Automation.MarketBoard.MarketBoardAutomationOutcome.Recoverable,
                 "RetryHumanEnterPath",
                 new Dictionary<string, string?>
                 {
@@ -155,7 +155,7 @@ public sealed class MarketAcquisitionRouteDiagnosticsTests
                         Message = "Below threshold.",
                         RunningQuantityAfter = 55,
                         RunningGilAfter = 30140,
-                        LiveListing = new MarketMafioso.MarketAcquisition.MarketBoardLiveListing
+                        LiveListing = new MarketMafioso.Automation.MarketBoard.MarketBoardLiveListing
                         {
                             ItemId = 5121,
                             RawItemId = 5121,
@@ -255,3 +255,4 @@ public sealed class MarketAcquisitionRouteDiagnosticsTests
         return reader.ReadToEnd();
     }
 }
+

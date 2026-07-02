@@ -508,7 +508,7 @@ public sealed class MarketAcquisitionGuidedRouteSessionTests
             Decision = decision,
             Reason = reason,
             Message = "Test row.",
-            LiveListing = new MarketMafioso.MarketAcquisition.MarketBoardLiveListing
+            LiveListing = new MarketMafioso.Automation.MarketBoard.MarketBoardLiveListing
             {
                 ItemId = 2,
                 WorldName = "Maduin",
@@ -519,3 +519,4 @@ public sealed class MarketAcquisitionGuidedRouteSessionTests
             },
         };
 }
+

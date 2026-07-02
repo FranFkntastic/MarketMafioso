@@ -7,7 +7,7 @@ using FFXIVClientStructs.FFXIV.Client.UI.Agent;
 using FFXIVClientStructs.FFXIV.Client.UI.Info;
 using FFXIVClientStructs.FFXIV.Component.GUI;
 
-namespace MarketMafioso.MarketAcquisition;
+namespace MarketMafioso.Automation.MarketBoard;
 
 public sealed class MarketBoardInputCaptureReader
 {
@@ -217,3 +217,4 @@ public sealed class MarketBoardInputCaptureReader
         return char.ToLowerInvariant(addonName[0]) + addonName[1..];
     }
 }
+

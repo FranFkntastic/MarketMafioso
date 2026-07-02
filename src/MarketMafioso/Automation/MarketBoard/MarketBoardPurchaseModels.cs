@@ -1,6 +1,6 @@
 using System.Collections.Generic;
 
-namespace MarketMafioso.MarketAcquisition;
+namespace MarketMafioso.Automation.MarketBoard;
 
 public sealed record MarketBoardPurchaseCandidate
 {
@@ -73,3 +73,4 @@ public sealed record MarketBoardPurchaseResult
     public string? ConfirmationAddonName { get; init; }
     public IReadOnlyDictionary<string, string> Diagnostics { get; init; } = new Dictionary<string, string>();
 }
+
