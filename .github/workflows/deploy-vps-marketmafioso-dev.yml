@@ -224,13 +224,36 @@ jobs:
       - name: Verify public receiver routes
         shell: bash
         run: |
-          curl --fail --silent --show-error "https://dev.xivcraftarchitect.com/marketmafioso/health" > /dev/null
+          expect_status() {
+            local name="$1"
+            local actual="$2"
+            shift 2
+            echo "$name returned HTTP $actual"
+            for expected in "$@"; do
+              if [ "$actual" = "$expected" ]; then
+                return 0
+              fi
+            done
+            echo "::error::$name returned HTTP $actual; expected one of: $*"
+            return 1
+          }
+
+          health_ok=false
+          for attempt in {1..20}; do
+            if curl --fail --silent --show-error "https://dev.xivcraftarchitect.com/marketmafioso/health" > /dev/null; then
+              health_ok=true
+              break
+            fi
+            echo "Health check not ready on attempt $attempt; retrying..."
+            sleep 2
+          done
+          test "$health_ok" = "true"
 
           dashboard_status="$(curl --silent --output /dev/null --write-out '%{http_code}' "https://dev.xivcraftarchitect.com/marketmafioso/")"
-          test "$dashboard_status" = "200"
+          expect_status dashboard "$dashboard_status" 200
 
           dashboard_no_slash_status="$(curl --silent --output /dev/null --write-out '%{http_code}' "https://dev.xivcraftarchitect.com/marketmafioso")"
-          test "$dashboard_no_slash_status" = "200" || test "$dashboard_no_slash_status" = "308" || test "$dashboard_no_slash_status" = "301"
+          expect_status dashboard-no-slash "$dashboard_no_slash_status" 200 308 301
 
           curl --fail --silent --show-error \
             "https://dev.xivcraftarchitect.com/marketmafioso/" | grep -F "MarketMafioso" > /dev/null
@@ -239,11 +262,11 @@ jobs:
 
           acquisition_page_status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
             "https://dev.xivcraftarchitect.com/marketmafioso/acquisition")"
-          test "$acquisition_page_status" = "200"
+          expect_status acquisition-page "$acquisition_page_status" 200
 
           api_without_session="$(curl --silent --output /dev/null --write-out '%{http_code}' \
             "https://dev.xivcraftarchitect.com/marketmafioso/api/acquisition/requests")"
-          test "$api_without_session" = "401"
+          expect_status acquisition-api-without-session "$api_without_session" 401
 
           cookie_jar="$(mktemp)"
           login_status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
@@ -251,45 +274,45 @@ jobs:
             --header 'Content-Type: application/json' \
             --data "{\"username\":\"marketmafioso\",\"password\":\"$MARKETMAFIOSO_DEV_BASIC_AUTH_PASSWORD\"}" \
             "https://dev.xivcraftarchitect.com/marketmafioso/auth/login")"
-          test "$login_status" = "200"
+          expect_status dashboard-login "$login_status" 200
 
           api_with_session="$(curl --silent --output /dev/null --write-out '%{http_code}' \
             --cookie "$cookie_jar" \
             "https://dev.xivcraftarchitect.com/marketmafioso/api/acquisition/requests")"
-          test "$api_with_session" = "200"
+          expect_status acquisition-api-with-session "$api_with_session" 200
 
           inventory_status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
             "https://dev.xivcraftarchitect.com/marketmafioso/inventory")"
-          test "$inventory_status" = "200"
+          expect_status inventory-page "$inventory_status" 200
 
           inventory_api_without_session="$(curl --silent --output /dev/null --write-out '%{http_code}' \
             "https://dev.xivcraftarchitect.com/marketmafioso/api/inventory")"
-          test "$inventory_api_without_session" = "401" || test "$inventory_api_without_session" = "405"
+          expect_status inventory-api-without-session "$inventory_api_without_session" 401 405
 
           settings_status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
             "https://dev.xivcraftarchitect.com/marketmafioso/settings")"
-          test "$settings_status" = "200"
+          expect_status settings-page "$settings_status" 200
 
           diagnostics_with_session="$(curl --silent --output /dev/null --write-out '%{http_code}' \
             --cookie "$cookie_jar" \
             "https://dev.xivcraftarchitect.com/marketmafioso/api/diagnostics/events?limit=1")"
-          test "$diagnostics_with_session" = "200"
+          expect_status diagnostics-with-session "$diagnostics_with_session" 200
 
           acquisition_without_key="$(curl --silent --output /dev/null --write-out '%{http_code}' \
             "https://dev.xivcraftarchitect.com/marketmafioso/api/acquisition/requests/pending?characterName=Smoke&world=Gilgamesh")"
-          test "$acquisition_without_key" = "401"
+          expect_status acquisition-pending-without-key "$acquisition_without_key" 401
 
           acquisition_with_client_key="$(curl --silent --output /dev/null --write-out '%{http_code}' \
             --header "X-Api-Key: $MARKETMAFIOSO_DEV_INGEST_API_KEY" \
             "https://dev.xivcraftarchitect.com/marketmafioso/api/acquisition/requests/pending?characterName=Smoke&world=Gilgamesh")"
-          test "$acquisition_with_client_key" = "200"
+          expect_status acquisition-pending-with-key "$acquisition_with_client_key" 200
 
           ingest_without_key="$(curl --silent --output /dev/null --write-out '%{http_code}' \
             --request POST \
             --header 'Content-Type: application/json' \
             --data-binary @docs/samples/inventory-report.sample.json \
             "https://dev.xivcraftarchitect.com/marketmafioso/api/inventory")"
-          test "$ingest_without_key" = "401"
+          expect_status ingest-without-key "$ingest_without_key" 401
 
           ingest_with_key="$(curl --silent --output /dev/null --write-out '%{http_code}' \
             --request POST \
@@ -297,18 +320,20 @@ jobs:
             --header 'Content-Type: application/json' \
             --data-binary @docs/samples/inventory-report.sample.json \
             "https://dev.xivcraftarchitect.com/marketmafioso/api/inventory")"
-          test "$ingest_with_key" = "201"
+          expect_status ingest-with-key "$ingest_with_key" 201
 
           read_with_client_key="$(curl --silent --output /dev/null --write-out '%{http_code}' \
             --header "X-Api-Key: $MARKETMAFIOSO_DEV_INGEST_API_KEY" \
             "https://dev.xivcraftarchitect.com/marketmafioso/api/reports")"
-          test "$read_with_client_key" = "200"
+          expect_status read-with-key "$read_with_client_key" 200
 
           retired_dashboard_status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
             "https://dev.xivcraftarchitect.com/api/marketmafioso/")"
+          echo "retired-dashboard returned HTTP $retired_dashboard_status"
           test "$retired_dashboard_status" != "200"
 
           retired_plugin_status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
             --header "X-Api-Key: $MARKETMAFIOSO_DEV_INGEST_API_KEY" \
             "https://dev.xivcraftarchitect.com/api/marketmafioso/acquisition/requests/pending?characterName=Smoke&world=Gilgamesh")"
+          echo "retired-plugin returned HTTP $retired_plugin_status"
           test "$retired_plugin_status" != "200"
