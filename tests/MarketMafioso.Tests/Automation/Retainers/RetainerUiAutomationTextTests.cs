@@ -1,6 +1,6 @@
-using MarketMafioso.WorkshopPrep;
+using MarketMafioso.Automation.Retainers;
 
-namespace MarketMafioso.Tests.WorkshopPrep;
+namespace MarketMafioso.Tests.Automation.Retainers;
 
 public sealed class RetainerUiAutomationTextTests
 {

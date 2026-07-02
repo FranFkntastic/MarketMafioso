@@ -9,6 +9,7 @@ using FFXIVClientStructs.FFXIV.Client.UI;
 using FFXIVClientStructs.FFXIV.Client.UI.Agent;
 using FFXIVClientStructs.FFXIV.Component.GUI;
 using Lumina.Excel.Sheets;
+using MarketMafioso.Automation.Retainers;
 
 namespace MarketMafioso.WorkshopPrep;
 
@@ -27,23 +28,21 @@ public enum WorkshopRetainerRestockState
 
 public sealed class WorkshopRetainerRestockService
 {
-    private const string RetainerListAddon = "RetainerList";
-    private const string SelectStringAddon = "SelectString";
-    private const string ContextMenuAddon = "ContextMenu";
-    private const string RetainerInventoryLargeAddon = "InventoryRetainerLarge";
-    private const string RetainerInventorySmallAddon = "InventoryRetainer";
+    private const string RetainerListAddon = RetainerInventoryAddonNames.RetainerList;
+    private const string SelectStringAddon = RetainerInventoryAddonNames.SelectString;
+    private const string ContextMenuAddon = RetainerInventoryAddonNames.ContextMenu;
+    private const string RetainerInventoryLargeAddon = RetainerInventoryAddonNames.InventoryLarge;
+    private const string RetainerInventorySmallAddon = RetainerInventoryAddonNames.InventorySmall;
     private const uint RetrieveFromRetainerAddonRow = 98;
     private const uint RetrieveQuantityAddonRow = 773;
 
-    private static readonly InventoryType[] RetainerPages =
+    private static readonly string[] RetainerUiStateAddons =
     [
-        InventoryType.RetainerPage1,
-        InventoryType.RetainerPage2,
-        InventoryType.RetainerPage3,
-        InventoryType.RetainerPage4,
-        InventoryType.RetainerPage5,
-        InventoryType.RetainerPage6,
-        InventoryType.RetainerPage7,
+        RetainerListAddon,
+        SelectStringAddon,
+        RetainerInventoryLargeAddon,
+        RetainerInventorySmallAddon,
+        RetainerInventoryAddonNames.InputNumeric,
     ];
 
     private static readonly InventoryType[] PlayerInventoryPages =
@@ -56,12 +55,14 @@ public sealed class WorkshopRetainerRestockService
     ];
 
     private readonly IPluginLog log;
+    private readonly RetainerLiveInventoryScanner liveInventoryScanner;
     private bool isRunning;
     private string lastStatus = "Workshop material restock has not run.";
 
     public WorkshopRetainerRestockService(IPluginLog log)
     {
         this.log = log;
+        liveInventoryScanner = new RetainerLiveInventoryScanner();
     }
 
     public bool IsRunning => isRunning;
@@ -147,28 +148,7 @@ public sealed class WorkshopRetainerRestockService
 
     public unsafe IReadOnlyList<LiveRetainerStack> ScanLiveRetainerStacks(IReadOnlySet<uint> itemIds)
     {
-        var inventoryManager = InventoryManager.Instance();
-        if (inventoryManager == null)
-            return [];
-
-        var stacks = new List<LiveRetainerStack>();
-        foreach (var page in RetainerPages)
-        {
-            var container = inventoryManager->GetInventoryContainer(page);
-            if (container == null || !container->IsLoaded)
-                continue;
-
-            for (var slotIndex = 0; slotIndex < container->Size; slotIndex++)
-            {
-                var slot = container->GetInventorySlot(slotIndex);
-                if (slot == null || slot->ItemId == 0 || !itemIds.Contains(slot->ItemId))
-                    continue;
-
-                stacks.Add(new LiveRetainerStack(page, slotIndex, slot->ItemId, slot->Quantity));
-            }
-        }
-
-        return stacks;
+        return liveInventoryScanner.ScanLiveRetainerStacks(itemIds);
     }
 
     private static async Task WaitForRetainerListAsync()
@@ -535,54 +515,7 @@ public sealed class WorkshopRetainerRestockService
 
     private static unsafe string DescribeRetainerUiState()
     {
-        var trackedAddons = new[]
-        {
-            RetainerListAddon,
-            SelectStringAddon,
-            RetainerInventoryLargeAddon,
-            RetainerInventorySmallAddon,
-            "InputNumeric",
-        };
-        var activeAddons = new List<string>();
-        foreach (var addonName in trackedAddons)
-        {
-            var addon = Plugin.GameGui.GetAddonByName<AtkUnitBase>(addonName, 1);
-            if (addon == null)
-                continue;
-
-            activeAddons.Add($"{addonName}({(addon->IsReady ? "ready" : "not ready")}, {(addon->IsVisible ? "visible" : "hidden")})");
-        }
-
-        var state = activeAddons.Count == 0
-            ? "Retainer UI state: no tracked addons present"
-            : $"Retainer UI state: {string.Join(", ", activeAddons)}";
-
-        var selectStringEntries = DescribeSelectStringEntries();
-        if (!string.IsNullOrWhiteSpace(selectStringEntries))
-            state += $"; SelectString entries: {selectStringEntries}";
-
-        return state;
-    }
-
-    private static unsafe string DescribeSelectStringEntries()
-    {
-        var addon = Plugin.GameGui.GetAddonByName<AddonSelectString>(SelectStringAddon, 1);
-        if (addon == null || !addon->AtkUnitBase.IsReady || !addon->AtkUnitBase.IsVisible)
-            return string.Empty;
-
-        var popup = addon->PopupMenu.PopupMenu;
-        if (popup.EntryCount <= 0)
-            return string.Empty;
-
-        var entries = new List<string>();
-        for (var i = 0; i < popup.EntryCount; i++)
-        {
-            var entry = popup.EntryNames[i].ToString();
-            if (!string.IsNullOrWhiteSpace(entry))
-                entries.Add($"[{i}] {entry}");
-        }
-
-        return string.Join(" | ", entries);
+        return new RetainerUiStateReader(Plugin.GameGui).DescribeRetainerUiState(RetainerUiStateAddons);
     }
 
     private static unsafe string ReadAtkValueString(AtkValue* value)
@@ -777,12 +710,6 @@ public sealed class WorkshopRetainerRestockService
                 .Select(x => $"{x.Key}:{x.Value}"));
     }
 }
-
-public sealed record LiveRetainerStack(
-    InventoryType Page,
-    int SlotIndex,
-    uint ItemId,
-    int Quantity);
 
 public sealed record RetainerRetrievalResult(
     bool Success,

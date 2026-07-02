@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 
-namespace MarketMafioso.WorkshopPrep;
+namespace MarketMafioso.Automation.Retainers;
 
 public sealed record RetainerListEntry(string Name, bool IsActive);
 
