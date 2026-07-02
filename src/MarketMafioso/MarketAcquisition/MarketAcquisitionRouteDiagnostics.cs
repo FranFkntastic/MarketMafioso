@@ -19,6 +19,7 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
     private readonly AutomationDiagnosticsLog log;
     private readonly AutomationCsvLog? observedListingsCsv;
     private readonly AutomationCsvLog? purchaseRecordsCsv;
+    private bool disposed;
 
     private MarketAcquisitionRouteDiagnostics(
         AutomationDiagnosticsLog log,
@@ -119,6 +120,9 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
 
         lock (sync)
         {
+            if (disposed)
+                return;
+
             if (candidatePlan.Rows.Count == 0)
             {
                 WriteObservedListingRow(
@@ -166,6 +170,9 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
 
         lock (sync)
         {
+            if (disposed)
+                return;
+
             purchaseRecordsCsv.WriteRow(
             [
                 FormatElapsed(),
@@ -201,6 +208,10 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
     {
         lock (sync)
         {
+            if (disposed)
+                return;
+
+            disposed = true;
             observedListingsCsv?.Dispose();
             purchaseRecordsCsv?.Dispose();
             log.Dispose();

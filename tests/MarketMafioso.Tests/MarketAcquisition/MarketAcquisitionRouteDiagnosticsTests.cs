@@ -241,6 +241,38 @@ public sealed class MarketAcquisitionRouteDiagnosticsTests
         Assert.Null(diagnostics.FilePath);
     }
 
+    [Fact]
+    public void RecordCsvEvents_after_dispose_is_noop()
+    {
+        var directory = CreateTempDirectory();
+        var diagnostics = MarketMafioso.MarketAcquisition.MarketAcquisitionRouteDiagnostics.CreateEnabled(
+            directory,
+            DateTimeOffset.UnixEpoch);
+
+        diagnostics.Dispose();
+
+        diagnostics.RecordObservedListings(
+            "request-1",
+            "Coeurl",
+            "Crystal",
+            null,
+            new MarketMafioso.MarketAcquisition.MarketAcquisitionLiveCandidatePlan());
+        diagnostics.RecordPurchaseAudit(
+            "request-1",
+            "Crystal",
+            "line-1",
+            "Darksteel Ore",
+            "Coeurl",
+            "listing-1",
+            "retainer-1",
+            1,
+            100,
+            "Skipped",
+            "Planned",
+            5121,
+            "Ready");
+    }
+
     private static string CreateTempDirectory()
     {
         var directory = Path.Combine(Path.GetTempPath(), "MarketMafiosoTests", Guid.NewGuid().ToString("N"));
