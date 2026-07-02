@@ -4,7 +4,7 @@
   "Punchline": "Workshop logistics and self-hosted inventory history.",
   "Description": "A practical FFXIV utility plugin for Workshop Logistics and optional receiver-backed inventory history. Use /mmf to open settings.",
   "InternalName": "MarketMafioso",
-  "AssemblyVersion": "1.1.2.0",
+  "AssemblyVersion": "1.1.2.1",
   "DalamudApiLevel": 15,
   "ApplicableVersion": "any",
   "Tags": [

@@ -47,7 +47,7 @@ public class MainWindow : Window, IDisposable
     private string dashboardUrlBuffer = string.Empty;
     private string dashboardOpenStatus = "Dashboard link appears after a successful send.";
     private string marketAcquisitionUnlockKeyBuffer = string.Empty;
-    private string marketAcquisitionUnlockStatus = "Market Acquisition is hidden until unlocked.";
+    private string marketAcquisitionUnlockStatus = "Private module is hidden until unlocked.";
     private bool showApiKey = false;
     private bool showMarketAcquisitionUnlockKey = false;
     private bool showPreview = false;
@@ -3411,7 +3411,7 @@ public class MainWindow : Window, IDisposable
                 MarketAcquisitionUnlock.Lock(config);
                 config.Save();
                 marketAcquisitionUnlockKeyBuffer = string.Empty;
-                marketAcquisitionUnlockStatus = "Market Acquisition locked.";
+                marketAcquisitionUnlockStatus = "Private module locked.";
             }
 
             ImGui.TextColored(ColMuted, "Locking hides the UI only. Existing local request state and server data are left untouched.");
@@ -3428,13 +3428,13 @@ public class MainWindow : Window, IDisposable
         if (ImGui.Button(showMarketAcquisitionUnlockKey ? "Hide##marketAcquisitionUnlock" : "Show##marketAcquisitionUnlock", new Vector2(72, 0)))
             showMarketAcquisitionUnlockKey = !showMarketAcquisitionUnlockKey;
 
-        if (ImGuiUi.Button("Unlock Market Acquisition", !string.IsNullOrWhiteSpace(marketAcquisitionUnlockKeyBuffer)))
+        if (ImGuiUi.Button("Unlock private module", !string.IsNullOrWhiteSpace(marketAcquisitionUnlockKeyBuffer)))
         {
             if (MarketAcquisitionUnlock.TryUnlock(config, marketAcquisitionUnlockKeyBuffer))
             {
                 config.Save();
                 marketAcquisitionUnlockKeyBuffer = string.Empty;
-                marketAcquisitionUnlockStatus = "Market Acquisition unlocked.";
+                marketAcquisitionUnlockStatus = "Private module unlocked.";
             }
             else
             {
