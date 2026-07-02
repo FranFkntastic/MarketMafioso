@@ -10,6 +10,8 @@ using Dalamud.Interface.Windowing;
 using Dalamud.Plugin.Services;
 using Dalamud.Bindings.ImGui;
 using FFXIVClientStructs.FFXIV.Component.GUI;
+using MarketMafioso.Automation.Diagnostics;
+using MarketMafioso.Automation.Retainers;
 using MarketMafioso.MarketAcquisition;
 using MarketMafioso.WorkshopPrep;
 
@@ -196,6 +198,7 @@ public class MainWindow : Window, IDisposable
             () => marketAcquisitionRouteRunner.CanFinalizeInputCaptureLog,
             FinalizeMarketBoardInputCaptureLog,
             () => marketAcquisitionRouteRunner.LastDiagnosticFilePath);
+        AutomationDiagnostics = new AutomationDiagnosticsWindow(CreateAutomationDiagnosticProbes());
 
         var restoredAcquisitionClaim = MarketAcquisitionClaimPersistence.Restore(config);
         if (restoredAcquisitionClaim != null)
@@ -210,6 +213,7 @@ public class MainWindow : Window, IDisposable
     public WorkshopProjectBrowserWindow ProjectBrowser { get; }
     public WorkshopFrozenQueueBrowserWindow FrozenQueueBrowser { get; }
     public MarketAcquisitionDiagnosticsWindow AcquisitionDiagnostics { get; }
+    public AutomationDiagnosticsWindow AutomationDiagnostics { get; }
 
     public void OnFrameworkUpdate(IFramework _)
     {
@@ -3408,6 +3412,7 @@ public class MainWindow : Window, IDisposable
             {
                 marketAcquisitionRouteRunner.Stop();
                 AcquisitionDiagnostics.IsOpen = false;
+                AutomationDiagnostics.IsOpen = false;
                 MarketAcquisitionUnlock.Lock(config);
                 config.Save();
                 marketAcquisitionUnlockKeyBuffer = string.Empty;
@@ -3415,8 +3420,12 @@ public class MainWindow : Window, IDisposable
             }
 
             ImGui.TextColored(ColMuted, "Locking hides the UI only. Existing local request state and server data are left untouched.");
+            if (ImGui.Button("Automation Diagnostics"))
+                AutomationDiagnostics.IsOpen = true;
             return;
         }
+
+        AutomationDiagnostics.IsOpen = false;
 
         ImGui.TextColored(ColMuted, "Private/internal modules are hidden by default.");
         ImGui.Text("Unlock key:");
@@ -3502,6 +3511,84 @@ public class MainWindow : Window, IDisposable
             : ColMuted;
 
     private bool IsMarketAcquisitionUnlocked() => MarketAcquisitionUnlock.IsUnlocked(config);
+
+    private IReadOnlyList<IAutomationDiagnosticProbe> CreateAutomationDiagnosticProbes()
+    {
+        return
+        [
+            new AutomationDiagnosticProbe("Retainer UI", RunRetainerUiDiagnosticProbe),
+            new AutomationDiagnosticProbe("Market Board UI", RunMarketBoardUiDiagnosticProbe),
+            new AutomationDiagnosticProbe("External Helpers", RunExternalHelperDiagnosticProbe),
+        ];
+    }
+
+    private AutomationDiagnosticProbeResult RunRetainerUiDiagnosticProbe()
+    {
+        var state = new RetainerUiStateReader(Plugin.GameGui).DescribeRetainerUiState(
+            [
+                RetainerInventoryAddonNames.RetainerList,
+                RetainerInventoryAddonNames.SelectString,
+                RetainerInventoryAddonNames.InventoryLarge,
+                RetainerInventoryAddonNames.InventorySmall,
+                RetainerInventoryAddonNames.InputNumeric,
+            ]);
+
+        return new AutomationDiagnosticProbeResult(
+            "Retainer UI",
+            IsSuccess: true,
+            state,
+            new Dictionary<string, string?>
+            {
+                ["retainerList"] = DescribeAddon(RetainerInventoryAddonNames.RetainerList),
+                ["selectString"] = DescribeAddon(RetainerInventoryAddonNames.SelectString),
+                ["inventoryLarge"] = DescribeAddon(RetainerInventoryAddonNames.InventoryLarge),
+                ["inventorySmall"] = DescribeAddon(RetainerInventoryAddonNames.InventorySmall),
+                ["inputNumeric"] = DescribeAddon(RetainerInventoryAddonNames.InputNumeric),
+            });
+    }
+
+    private AutomationDiagnosticProbeResult RunMarketBoardUiDiagnosticProbe()
+    {
+        var details = new Dictionary<string, string?>
+        {
+            ["itemSearch"] = DescribeAddon("ItemSearch"),
+            ["itemSearchResult"] = DescribeAddon("ItemSearchResult"),
+            ["itemDetail"] = DescribeAddon("ItemDetail"),
+        };
+        var isAnyMarketBoardAddonVisible = details.Values.Any(value => value?.Contains("visible", StringComparison.OrdinalIgnoreCase) == true);
+
+        return new AutomationDiagnosticProbeResult(
+            "Market Board UI",
+            isAnyMarketBoardAddonVisible,
+            isAnyMarketBoardAddonVisible
+                ? "At least one tracked market-board addon is visible."
+                : "No tracked market-board addon is visible.",
+            details);
+    }
+
+    private AutomationDiagnosticProbeResult RunExternalHelperDiagnosticProbe()
+    {
+        var autoRetainerAvailable = autoRetainerRefresh.IsAvailable;
+        var viwiAvailable = viwiWorkshoppaIpc.IsAvailable;
+        return new AutomationDiagnosticProbeResult(
+            "External Helpers",
+            autoRetainerAvailable || viwiAvailable,
+            "External helper availability probe completed.",
+            new Dictionary<string, string?>
+            {
+                ["autoRetainer"] = autoRetainerAvailable ? "loaded" : "not loaded",
+                ["viwiWorkshoppa"] = viwiAvailable ? "loaded" : "not loaded",
+            });
+    }
+
+    private static unsafe string DescribeAddon(string addonName)
+    {
+        var addon = Plugin.GameGui.GetAddonByName<AtkUnitBase>(addonName, 1);
+        if (addon == null)
+            return "not present";
+
+        return $"{(addon->IsReady ? "ready" : "not ready")}, {(addon->IsVisible ? "visible" : "hidden")}";
+    }
 
     private void ApplyServerUrlPreset(string serverUrl)
     {

@@ -118,6 +118,7 @@ public sealed class Plugin : IDalamudPlugin
         windowSystem.AddWindow(mainWindow.ProjectBrowser);
         windowSystem.AddWindow(mainWindow.FrozenQueueBrowser);
         windowSystem.AddWindow(mainWindow.AcquisitionDiagnostics);
+        windowSystem.AddWindow(mainWindow.AutomationDiagnostics);
 
         CommandManager.AddHandler(CmdMain, new CommandInfo(OnCommand)
         {
