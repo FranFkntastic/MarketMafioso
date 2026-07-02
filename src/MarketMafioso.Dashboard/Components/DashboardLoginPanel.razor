@@ -1,0 +1,48 @@
+@inject DashboardApiClient Api
+@inject DashboardStatusService Status
+
+<MudPaper Class="login-shell compact-card dashboard-panel" Elevation="0">
+    <MudStack Spacing="2">
+        <MudText Typo="Typo.h5">Sign in</MudText>
+        <MudText Typo="Typo.body2" Class="muted">Use the dashboard account configured for this receiver.</MudText>
+        <MudTextField @bind-Value="_loginUsername" Label="Username" Variant="Variant.Outlined" Margin="Margin.Dense" />
+        <MudTextField @bind-Value="_loginPassword" Label="Password" InputType="InputType.Password" Variant="Variant.Outlined" Margin="Margin.Dense" />
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="_busy" OnClick="LoginAsync">Login</MudButton>
+        <DashboardStatusHost />
+    </MudStack>
+</MudPaper>
+
+@code {
+    [Parameter]
+    public EventCallback<DashboardSessionResponse> LoggedIn { get; set; }
+
+    private string _loginUsername = string.Empty;
+    private string _loginPassword = string.Empty;
+    private bool _busy;
+
+    private async Task LoginAsync()
+    {
+        try
+        {
+            _busy = true;
+            await Api.LoginAsync(_loginUsername, _loginPassword);
+            var session = await Api.GetSessionAsync();
+            if (session is null)
+            {
+                Status.Error("Login did not create a dashboard session.");
+                return;
+            }
+
+            Status.Info("Logged in.");
+            await LoggedIn.InvokeAsync(session);
+        }
+        catch (Exception ex)
+        {
+            Status.Error($"Login failed. {ex.Message}");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

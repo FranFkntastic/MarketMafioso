@@ -1,10 +1,22 @@
 @page "/settings"
 @inject DashboardApiClient Api
+@inject DashboardStatusService Status
 
 <PageTitle>MarketMafioso Settings</PageTitle>
 
+@if (_checkingSession)
+{
+    <MudProgressLinear Indeterminate="true" Color="Color.Primary" />
+}
+else if (_session is null)
+{
+    <DashboardLoginPanel LoggedIn="OnLoginSucceededAsync" />
+}
+else
+{
 <MudStack Spacing="2">
     <MudText Typo="Typo.h5">Settings</MudText>
+    <DashboardStatusHost />
     <MudTabs Rounded="true" Elevation="0" PanelClass="pt-4">
         @if (_features.EnableMarketAcquisition)
         {
@@ -160,8 +172,10 @@
         </MudTabPanel>
     </MudTabs>
 </MudStack>
+}
 
 @code {
+    private DashboardSessionResponse? _session;
     private IReadOnlyList<DiagnosticEventView> _events = [];
     private IReadOnlyList<DashboardCharacterOption> _characters = [];
     private IReadOnlyList<ReportSummaryView> _snapshots = [];
@@ -173,6 +187,7 @@
     private string _defaultRegion = "North America";
     private string _defaultWorldMode = "Recommended";
     private int _defaultPickupExpiresSeconds = 300;
+    private bool _checkingSession = true;
     private bool _saving;
     private string _settingsStatus = string.Empty;
     private string _snapshotStatus = string.Empty;
@@ -204,10 +219,40 @@
     protected override async Task OnInitializedAsync()
     {
         _features = await Api.GetFeatureFlagsAsync();
-        await LoadSettingsAsync();
-        await LoadStorageAsync();
-        await LoadDiagnosticsAsync();
-        await LoadSnapshotsAsync();
+        _session = await Api.GetSessionAsync();
+        _checkingSession = false;
+        if (_session is null)
+            return;
+
+        await LoadDashboardAsync();
+    }
+
+    private async Task OnLoginSucceededAsync(DashboardSessionResponse session)
+    {
+        _session = session;
+        await LoadDashboardAsync();
+    }
+
+    private async Task LoadDashboardAsync()
+    {
+        try
+        {
+            await LoadSettingsAsync();
+            await LoadStorageAsync();
+            await LoadDiagnosticsAsync();
+            if (_session is null)
+                return;
+
+            await LoadSnapshotsAsync();
+        }
+        catch (DashboardUnauthorizedException)
+        {
+            ExpireSession();
+        }
+        catch (Exception ex)
+        {
+            Status.Error($"Settings load failed: {ex.Message}");
+        }
     }
 
     private async Task LoadSettingsAsync()
@@ -246,6 +291,10 @@
                 ? "Settings saved."
                 : $"Settings saved {saved.UpdatedAtUtc.Value.ToLocalTime():HH:mm:ss}.";
         }
+        catch (DashboardUnauthorizedException)
+        {
+            ExpireSession();
+        }
         catch (Exception ex)
         {
             _settingsStatus = $"Save failed: {ex.Message}";
@@ -258,8 +307,19 @@
 
     private async Task LoadDiagnosticsAsync()
     {
-        _events = await Api.GetDiagnosticsAsync();
-        await LoadStorageAsync();
+        try
+        {
+            _events = await Api.GetDiagnosticsAsync();
+            await LoadStorageAsync();
+        }
+        catch (DashboardUnauthorizedException)
+        {
+            ExpireSession();
+        }
+        catch (Exception ex)
+        {
+            Status.Error($"Diagnostics load failed: {ex.Message}");
+        }
     }
 
     private async Task OnSnapshotCharacterChanged(long? value)
@@ -276,6 +336,10 @@
             await LoadStorageAsync();
             _snapshotStatus = $"Loaded {_snapshots.Count:N0} snapshot(s).";
         }
+        catch (DashboardUnauthorizedException)
+        {
+            ExpireSession();
+        }
         catch (Exception ex)
         {
             _snapshotStatus = $"Snapshot load failed: {ex.Message}";
@@ -290,5 +354,11 @@
     private async Task LoadStorageAsync()
     {
         _storage = await Api.GetStorageSummaryAsync();
+    }
+
+    private void ExpireSession()
+    {
+        _session = null;
+        Status.Info("Dashboard session expired. Sign in again.");
     }
 }

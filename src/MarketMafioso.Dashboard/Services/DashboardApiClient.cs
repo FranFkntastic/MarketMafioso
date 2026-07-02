@@ -48,10 +48,10 @@ public sealed class DashboardApiClient
 
     public async Task<ReceiverStorageSummaryView> GetStorageSummaryAsync(CancellationToken cancellationToken = default)
     {
-        return await http.GetFromJsonAsync<ReceiverStorageSummaryView>(
+        return await GetJsonAsync(
             "api/settings/storage",
-            JsonOptions,
-            cancellationToken) ?? new ReceiverStorageSummaryView();
+            new ReceiverStorageSummaryView(),
+            cancellationToken);
     }
 
     public async Task<DashboardFeatureFlagsView> GetFeatureFlagsAsync(CancellationToken cancellationToken = default)
@@ -69,20 +69,20 @@ public sealed class DashboardApiClient
         var path = includeTerminal
             ? "api/acquisition/requests?includeTerminal=true"
             : "api/acquisition/requests";
-        return await http.GetFromJsonAsync<IReadOnlyList<MarketAcquisitionRequestView>>(
+        return await GetJsonAsync(
             path,
-            JsonOptions,
-            cancellationToken) ?? [];
+            Array.Empty<MarketAcquisitionRequestView>(),
+            cancellationToken);
     }
 
     public async Task<MarketAcquisitionRequestTimelineView> GetAcquisitionRequestTimelineAsync(
         string id,
         CancellationToken cancellationToken = default)
     {
-        return await http.GetFromJsonAsync<MarketAcquisitionRequestTimelineView>(
+        return await GetJsonAsync(
             $"api/acquisition/requests/{Uri.EscapeDataString(id)}/timeline",
-            JsonOptions,
-            cancellationToken) ?? new MarketAcquisitionRequestTimelineView();
+            new MarketAcquisitionRequestTimelineView(),
+            cancellationToken);
     }
 
     public async Task<MarketAcquisitionRequestView> CreateAcquisitionRequestAsync(
@@ -90,7 +90,7 @@ public sealed class DashboardApiClient
         CancellationToken cancellationToken = default)
     {
         using var response = await http.PostAsJsonAsync("api/acquisition/requests", request, JsonOptions, cancellationToken);
-        response.EnsureSuccessStatusCode();
+        EnsureAuthorizedSuccess(response);
         return await response.Content.ReadFromJsonAsync<MarketAcquisitionRequestView>(JsonOptions, cancellationToken)
             ?? throw new InvalidOperationException("Acquisition create response was empty.");
     }
@@ -100,7 +100,7 @@ public sealed class DashboardApiClient
         CancellationToken cancellationToken = default)
     {
         using var response = await http.PostAsJsonAsync("api/acquisition/batches", request, JsonOptions, cancellationToken);
-        response.EnsureSuccessStatusCode();
+        EnsureAuthorizedSuccess(response);
         return await response.Content.ReadFromJsonAsync<MarketAcquisitionRequestView>(JsonOptions, cancellationToken)
             ?? throw new InvalidOperationException("Acquisition batch create response was empty.");
     }
@@ -115,7 +115,7 @@ public sealed class DashboardApiClient
             request,
             JsonOptions,
             cancellationToken);
-        response.EnsureSuccessStatusCode();
+        EnsureAuthorizedSuccess(response);
         return await response.Content.ReadFromJsonAsync<MarketAcquisitionRequestView>(JsonOptions, cancellationToken)
             ?? throw new InvalidOperationException("Acquisition batch append response was empty.");
     }
@@ -123,13 +123,13 @@ public sealed class DashboardApiClient
     public async Task CancelAcquisitionRequestAsync(string id, CancellationToken cancellationToken = default)
     {
         using var response = await http.PostAsync($"api/acquisition/requests/{Uri.EscapeDataString(id)}/cancel", null, cancellationToken);
-        response.EnsureSuccessStatusCode();
+        EnsureAuthorizedSuccess(response);
     }
 
     public async Task ResendAcquisitionRequestAsync(string id, CancellationToken cancellationToken = default)
     {
         using var response = await http.PostAsync($"api/acquisition/requests/{Uri.EscapeDataString(id)}/resend", null, cancellationToken);
-        response.EnsureSuccessStatusCode();
+        EnsureAuthorizedSuccess(response);
     }
 
     public async Task<IReadOnlyList<XivItemSearchResult>> SearchItemsAsync(
@@ -142,7 +142,7 @@ public sealed class DashboardApiClient
         using var response = await http.GetAsync(
             $"api/xivdata/items/search?q={Uri.EscapeDataString(query)}&limit=12",
             cancellationToken);
-        response.EnsureSuccessStatusCode();
+        EnsureAuthorizedSuccess(response);
 
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
         using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
@@ -162,10 +162,10 @@ public sealed class DashboardApiClient
     public async Task<IReadOnlyList<DashboardCharacterOption>> GetCharactersAsync(
         CancellationToken cancellationToken = default)
     {
-        return await http.GetFromJsonAsync<IReadOnlyList<DashboardCharacterOption>>(
+        return await GetJsonAsync(
             "api/inventory/characters",
-            JsonOptions,
-            cancellationToken) ?? [];
+            Array.Empty<DashboardCharacterOption>(),
+            cancellationToken);
     }
 
     public async Task<InventoryBrowserView> GetInventoryBrowserAsync(
@@ -186,10 +186,10 @@ public sealed class DashboardApiClient
             ? "api/inventory/browser"
             : $"api/inventory/browser?{string.Join("&", query)}";
 
-        return await http.GetFromJsonAsync<InventoryBrowserView>(
+        return await GetJsonAsync(
             path,
-            JsonOptions,
-            cancellationToken) ?? new InventoryBrowserView();
+            new InventoryBrowserView(),
+            cancellationToken);
     }
 
     public async Task<IReadOnlyList<ReportSummaryView>> GetInventorySnapshotsAsync(
@@ -200,19 +200,19 @@ public sealed class DashboardApiClient
             ? "api/inventory/snapshots"
             : $"api/inventory/snapshots?characterId={characterId.Value}";
 
-        return await http.GetFromJsonAsync<IReadOnlyList<ReportSummaryView>>(
+        return await GetJsonAsync(
             path,
-            JsonOptions,
-            cancellationToken) ?? [];
+            Array.Empty<ReportSummaryView>(),
+            cancellationToken);
     }
 
     public async Task<DashboardSettingsView> GetDashboardSettingsAsync(
         CancellationToken cancellationToken = default)
     {
-        return await http.GetFromJsonAsync<DashboardSettingsView>(
+        return await GetJsonAsync(
             "api/settings/dashboard",
-            JsonOptions,
-            cancellationToken) ?? new DashboardSettingsView();
+            new DashboardSettingsView(),
+            cancellationToken);
     }
 
     public async Task<DashboardSettingsView> SaveDashboardSettingsAsync(
@@ -220,7 +220,7 @@ public sealed class DashboardApiClient
         CancellationToken cancellationToken = default)
     {
         using var response = await http.PutAsJsonAsync("api/settings/dashboard", settings, JsonOptions, cancellationToken);
-        response.EnsureSuccessStatusCode();
+        EnsureAuthorizedSuccess(response);
         return await response.Content.ReadFromJsonAsync<DashboardSettingsView>(JsonOptions, cancellationToken)
             ?? throw new InvalidOperationException("Dashboard settings response was empty.");
     }
@@ -228,10 +228,25 @@ public sealed class DashboardApiClient
     public async Task<IReadOnlyList<DiagnosticEventView>> GetDiagnosticsAsync(
         CancellationToken cancellationToken = default)
     {
-        return await http.GetFromJsonAsync<IReadOnlyList<DiagnosticEventView>>(
+        return await GetJsonAsync(
             "api/diagnostics/events?limit=100",
-            JsonOptions,
-            cancellationToken) ?? [];
+            Array.Empty<DiagnosticEventView>(),
+            cancellationToken);
+    }
+
+    private async Task<T> GetJsonAsync<T>(string path, T fallback, CancellationToken cancellationToken)
+    {
+        using var response = await http.GetAsync(path, cancellationToken);
+        EnsureAuthorizedSuccess(response);
+        return await response.Content.ReadFromJsonAsync<T>(JsonOptions, cancellationToken) ?? fallback;
+    }
+
+    private static void EnsureAuthorizedSuccess(HttpResponseMessage response)
+    {
+        if (response.StatusCode == HttpStatusCode.Unauthorized)
+            throw new DashboardUnauthorizedException();
+
+        response.EnsureSuccessStatusCode();
     }
 
     private static XivItemSearchResult ReadItem(JsonElement element)
