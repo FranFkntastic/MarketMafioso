@@ -177,6 +177,19 @@ public sealed class MarketAcquisitionGuidedRouteSession
         stop.WouldSpendGil = candidatePlan.WouldSpendGil;
         UpdateActiveLineProbe(stop, candidatePlan);
 
+        if (candidatePlan.Status.Equals("VisibleCacheExhausted", StringComparison.OrdinalIgnoreCase))
+        {
+            stop.Status = "Failed";
+            UpdateActiveLine(
+                stop,
+                status: "Failed",
+                purchasedQuantity: 0,
+                spentGil: 0,
+                candidatePlan.Message);
+            return MarketAcquisitionGuidedRouteResult.Fail(
+                $"Visible listing cache exhausted for {FormatActiveItem(stop)} on {currentWorld}. {candidatePlan.Message}");
+        }
+
         if (candidatePlan.WouldBuyQuantity > 0)
         {
             stop.Status = "Purchasing";

@@ -686,6 +686,9 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         if (result.Success)
             RecordLatestWorldSummary();
 
+        if (!result.Success)
+            return FailRoute(result.Message);
+
         if (result.Success && session?.ActiveStop == null)
             return Complete(result.Message);
 

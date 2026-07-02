@@ -49,7 +49,7 @@ public sealed class MarketAcquisitionRouteTablePresenterTests
         Assert.Equal("2 planned / 1 opportunistic", row.LineMix);
         Assert.Equal("Buying", row.State);
         Assert.Equal("3,366 / 944,658 gil", row.Intent);
-        Assert.Equal("990 / 275,022 gil", row.Result);
+        Assert.Equal("3,200 / 844,000 gil", row.Result);
         Assert.Contains("Opportunistic", row.Notes, StringComparison.OrdinalIgnoreCase);
     }
 
@@ -119,6 +119,20 @@ public sealed class MarketAcquisitionRouteTablePresenterTests
                 Assert.Equal("200 / 44,000 gil", third.Discovered);
                 Assert.Equal("-", third.Bought);
             });
+    }
+
+    [Fact]
+    public void BuildRows_UsesWorldDiscoveredTotalsForCollapsedResult()
+    {
+        var stop = CreateMultiItemStop() with
+        {
+            PurchasedQuantity = 12_345,
+            SpentGil = 6_789_000,
+        };
+
+        var row = Assert.Single(MarketMafioso.MarketAcquisition.MarketAcquisitionRouteTablePresenter.BuildRows([stop]));
+
+        Assert.Equal("3,200 / 844,000 gil", row.Result);
     }
 
     private static MarketMafioso.MarketAcquisition.MarketAcquisitionGuidedRouteStop CreateMultiItemStop() =>

@@ -30,9 +30,7 @@ public static class MarketAcquisitionRouteTablePresenter
             LineMix = FormatLineMix(stop.LineStates),
             State = aggregate.State,
             Intent = FormatQuantityGil(stop.PlannedQuantity, stop.PlannedGil),
-            Result = stop.PurchasedQuantity == 0 && stop.SpentGil == 0
-                ? "-"
-                : FormatQuantityGil(stop.PurchasedQuantity, stop.SpentGil),
+            Result = FormatDiscoveredResult(stop.LineStates),
             Notes = FormatNotes(stop.LineStates, aggregate),
             Aggregate = aggregate,
             Lines = lines,
@@ -154,6 +152,24 @@ public static class MarketAcquisitionRouteTablePresenter
             notes.Add($"{noSafeStock:N0} no safe stock");
 
         return notes.Count == 0 ? "-" : string.Join("; ", notes);
+    }
+
+    private static string FormatDiscoveredResult(IReadOnlyList<MarketAcquisitionRouteLineState> lines)
+    {
+        var discoveredQuantity = 0u;
+        var discoveredGil = 0u;
+        foreach (var line in lines)
+        {
+            if (string.IsNullOrWhiteSpace(line.LiveCandidateStatus))
+                continue;
+
+            discoveredQuantity = checked(discoveredQuantity + line.LiveObservedQuantity);
+            discoveredGil = checked(discoveredGil + line.LiveObservedGil);
+        }
+
+        return discoveredQuantity == 0 && discoveredGil == 0
+            ? "-"
+            : FormatQuantityGil(discoveredQuantity, discoveredGil);
     }
 
     private static string FormatLineNotes(MarketAcquisitionRouteLineState line)

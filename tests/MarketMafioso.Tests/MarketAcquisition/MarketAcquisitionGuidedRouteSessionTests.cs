@@ -271,7 +271,7 @@ public sealed class MarketAcquisitionGuidedRouteSessionTests
     }
 
     [Fact]
-    public void RecordProbe_WithVisibleCacheExhaustionPreservesLineSkipReason()
+    public void RecordProbe_WithVisibleCacheExhaustionFailsClosedWithoutAdvancing()
     {
         var session = MarketMafioso.MarketAcquisition.MarketAcquisitionGuidedRouteSession.Start(CreateMultiItemWorldPlan());
 
@@ -283,11 +283,11 @@ public sealed class MarketAcquisitionGuidedRouteSessionTests
                 gil: 0,
                 message: "No visible safe listings; the game reported more rows than the readable cache exposes."));
 
-        Assert.True(result.Success);
-        var skippedLine = Assert.Single(session.Stops[0].LineStates, line => line.LineId == "line-1");
-        Assert.Equal("SkippedVisibleCacheExhausted", skippedLine.Status);
-        Assert.Contains("readable cache", skippedLine.LatestMessage, StringComparison.OrdinalIgnoreCase);
-        Assert.Equal("line-2", session.ActiveStop?.ActiveItemSubtask?.LineId);
+        Assert.False(result.Success);
+        var failedLine = Assert.Single(session.Stops[0].LineStates, line => line.LineId == "line-1");
+        Assert.Equal("Failed", failedLine.Status);
+        Assert.Contains("readable cache", failedLine.LatestMessage, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("line-1", session.ActiveStop?.ActiveItemSubtask?.LineId);
     }
 
     [Fact]
