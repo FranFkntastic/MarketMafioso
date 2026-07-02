@@ -4,6 +4,16 @@
 
 <PageTitle>MarketMafioso Overview</PageTitle>
 
+@if (_checkingSession)
+{
+    <MudProgressLinear Indeterminate="true" Color="Color.Primary" />
+}
+else if (_session is null)
+{
+    <DashboardLoginPanel LoggedIn="OnLoginSucceededAsync" />
+}
+else
+{
 <MudStack Spacing="2" Class="dashboard-page overview-page">
     <MudStack Row="true" AlignItems="AlignItems.Center" Class="page-title-row">
         <div>
@@ -108,8 +118,10 @@
         </MudPaper>
     </div>
 </MudStack>
+}
 
 @code {
+    private DashboardSessionResponse? _session;
     private ReceiverHealthView _health = new();
     private IReadOnlyList<DashboardCharacterOption> _characters = [];
     private IReadOnlyList<MarketAcquisitionRequestView> _requests = [];
@@ -117,6 +129,7 @@
     private InventoryBrowserView _inventory = new();
     private ReceiverStorageSummaryView _storage = new();
     private DashboardFeatureFlagsView _features = new();
+    private bool _checkingSession = true;
     private bool _loading = true;
 
     private string ReceiverStatus => _health.Ok
@@ -151,6 +164,17 @@
 
     protected override async Task OnInitializedAsync()
     {
+        _session = await Api.GetSessionAsync();
+        _checkingSession = false;
+        if (_session is null)
+            return;
+
+        await LoadOverviewAsync();
+    }
+
+    private async Task OnLoginSucceededAsync(DashboardSessionResponse session)
+    {
+        _session = session;
         await LoadOverviewAsync();
     }
 
@@ -171,12 +195,21 @@
         }
         catch (Exception ex)
         {
-            Status.Error($"Overview load failed: {ex.Message}");
+            if (ex is DashboardUnauthorizedException)
+                ExpireSession();
+            else
+                Status.Error($"Overview load failed: {ex.Message}");
         }
         finally
         {
             _loading = false;
         }
+    }
+
+    private void ExpireSession()
+    {
+        _session = null;
+        Status.Info("Dashboard session expired. Sign in again.");
     }
 
     private static string FormatGil(ulong gil) => gil == 0 ? "0 gil" : $"{gil:N0} gil";
