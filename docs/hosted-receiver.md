@@ -26,7 +26,7 @@ The plugin settings window has endpoint preset buttons:
 
 The URL remains editable. The plugin does not change existing saved URLs automatically.
 
-Hosted receivers require a client API key for plugin-to-server traffic. Set the same value in the plugin-wide `Settings` tab's `Client API Key` field and in `MarketMafioso__ClientApiKey` on the server. This one key is used for inventory ingest, machine-read report routes, and Market Acquisition pickup/lifecycle routes.
+Hosted receivers require a client API key for plugin-to-server traffic. Set the same value in the plugin-wide `Settings` tab's `Client API Key` field and in `MarketMafioso__ClientApiKey` on the server. This one key is used for inventory ingest and machine-read report routes.
 
 ## Server Configuration
 
@@ -43,17 +43,14 @@ MarketMafioso__StorageLabel=dev receiver storage
 MarketMafioso__DatabasePath=/srv/craftarchitect/data/marketmafioso/dev/marketmafioso.db
 MarketMafioso__RawJsonRetentionCount=20
 MarketMafioso__SnapshotRetentionCount=500
-MarketMafioso__XivDataBaseUrl=https://dev.xivcraftarchitect.com/api/xivdata
 MarketMafioso__RequireDashboardAuth=true
 MarketMafioso__DashboardBootstrapUsername=marketmafioso
 MarketMafioso__DashboardBootstrapPassword=<dashboard-password>
 ```
 
-`/health` remains public for uptime checks. Inventory ingestion, `/api/reports...` machine-read routes, and Market Acquisition plugin pickup/lifecycle routes require the client key. Browser dashboard routes use app-managed login sessions backed by the receiver SQLite database.
+`/health` remains public for uptime checks. Inventory ingestion and `/api/reports...` machine-read routes require the client key. Browser dashboard routes use app-managed login sessions backed by the receiver SQLite database.
 
 The dev dashboard username is fixed to `marketmafioso`; the password is stored in GitHub Actions as `MARKETMAFIOSO_DEV_BASIC_AUTH_PASSWORD`. Bootstrap credentials create the first local dashboard admin user only when no dashboard users exist.
-
-`MarketMafioso__XivDataBaseUrl` points the Market Acquisition dashboard at the shared XIV item data gateway used for item-name search and ID resolution. The browser uses this URL directly when building staged purchase requests, while the MarketMafioso receiver still requires a resolved `itemId` before it stores a request.
 
 ## Dev VPS Deployment
 

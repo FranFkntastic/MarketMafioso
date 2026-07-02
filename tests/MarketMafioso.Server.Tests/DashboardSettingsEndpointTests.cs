@@ -93,6 +93,33 @@ public sealed class DashboardSettingsEndpointTests
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
 
+    [Fact]
+    public async Task DashboardFeatures_HidesMarketAcquisitionByDefault()
+    {
+        await using var application = CreateApplication();
+        using var client = application.CreateClient();
+
+        var features = await client.GetFromJsonAsync<DashboardFeatureFlagsView>("/api/settings/features");
+
+        Assert.NotNull(features);
+        Assert.False(features.EnableMarketAcquisition);
+        Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync("/acquisition")).StatusCode);
+    }
+
+    [Fact]
+    public async Task DashboardFeatures_CanEnableMarketAcquisitionForPrivateReceivers()
+    {
+        await using var application = CreateApplication(
+            new KeyValuePair<string, string?>("MarketMafioso:EnableMarketAcquisition", "true"));
+        using var client = application.CreateClient();
+
+        var features = await client.GetFromJsonAsync<DashboardFeatureFlagsView>("/api/settings/features");
+
+        Assert.NotNull(features);
+        Assert.True(features.EnableMarketAcquisition);
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/acquisition")).StatusCode);
+    }
+
     private static async Task LoginAsync(HttpClient client)
     {
         var login = await client.PostAsJsonAsync("/auth/login", new
@@ -103,7 +130,7 @@ public sealed class DashboardSettingsEndpointTests
         login.EnsureSuccessStatusCode();
     }
 
-    private static WebApplicationFactory<Program> CreateApplication()
+    private static WebApplicationFactory<Program> CreateApplication(params KeyValuePair<string, string?>[] extraConfiguration)
     {
         var contentRoot = Path.Combine(Path.GetTempPath(), "MarketMafioso.Server.Tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(contentRoot);
@@ -115,13 +142,17 @@ public sealed class DashboardSettingsEndpointTests
                 builder.UseContentRoot(contentRoot);
                 builder.ConfigureAppConfiguration(config =>
                 {
-                    config.AddInMemoryCollection(new Dictionary<string, string?>
+                    var values = new Dictionary<string, string?>
                     {
                         ["MarketMafioso:DatabasePath"] = databasePath,
                         ["MarketMafioso:RequireDashboardAuth"] = "true",
                         ["MarketMafioso:DashboardBootstrapUsername"] = "admin",
                         ["MarketMafioso:DashboardBootstrapPassword"] = "secret-password",
-                    });
+                    };
+                    foreach (var item in extraConfiguration)
+                        values[item.Key] = item.Value;
+
+                    config.AddInMemoryCollection(values);
                 });
             });
     }

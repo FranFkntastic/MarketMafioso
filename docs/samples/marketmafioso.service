@@ -21,7 +21,6 @@ Environment=MarketMafioso__DatabasePath=/var/lib/marketmafioso/marketmafioso.db
 Environment=MarketMafioso__RawJsonRetentionCount=20
 Environment=MarketMafioso__SnapshotRetentionCount=500
 Environment=MarketMafioso__DiagnosticsRetentionCount=5000
-Environment=MarketMafioso__XivDataBaseUrl=
 Environment=MarketMafioso__RequireDashboardAuth=true
 Environment=MarketMafioso__DashboardBootstrapUsername=marketmafioso
 Environment=MarketMafioso__DashboardBootstrapPassword=replace-with-a-random-dashboard-password

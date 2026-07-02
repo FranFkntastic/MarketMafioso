@@ -78,5 +78,5 @@ jobs:
         if: github.ref_type == 'tag'
         uses: softprops/action-gh-release@v2
         with:
-          body_path: release/self-host/INSTALLATION-NOTE.md
+          body_path: release/self-host/docs/INSTALLATION-NOTE.md
           files: dist/marketmafioso-self-host-${{ github.ref_name }}.zip

@@ -1,9 +1,9 @@
-@page "/"
 @page "/acquisition"
 @inject DashboardApiClient Api
 @inject AcquisitionDashboardState State
 @inject DashboardStatusService Status
 @inject IJSRuntime JS
+@inject NavigationManager Navigation
 @implements IAsyncDisposable
 
 <PageTitle>MarketMafioso Acquisition</PageTitle>
@@ -86,6 +86,13 @@ else
 
     protected override async Task OnInitializedAsync()
     {
+        var features = await Api.GetFeatureFlagsAsync();
+        if (!features.EnableMarketAcquisition)
+        {
+            Navigation.NavigateTo("inventory", replace: true);
+            return;
+        }
+
         State.Changed += OnStateChanged;
         await LoadSessionAsync();
         if (_session is not null)

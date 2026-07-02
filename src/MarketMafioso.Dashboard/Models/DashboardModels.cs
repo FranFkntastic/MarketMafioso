@@ -18,6 +18,11 @@ public sealed record ReceiverHealthView
     public DateTimeOffset Utc { get; init; }
 }
 
+public sealed record DashboardFeatureFlagsView
+{
+    public bool EnableMarketAcquisition { get; init; }
+}
+
 public sealed record ReceiverStorageSummaryView
 {
     public int SnapshotRetentionCount { get; init; }

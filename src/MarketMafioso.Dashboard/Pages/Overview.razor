@@ -8,7 +8,7 @@
     <MudStack Row="true" AlignItems="AlignItems.Center" Class="page-title-row">
         <div>
             <MudText Typo="Typo.h5">Overview</MudText>
-            <MudText Typo="Typo.body2" Class="muted">Receiver health, recent acquisition activity, inventory ingest state, and diagnostics at a glance.</MudText>
+            <MudText Typo="Typo.body2" Class="muted">@OverviewSubtitle</MudText>
         </div>
         <MudSpacer />
         <MudButton Variant="Variant.Outlined" Class="quiet-button" Disabled="_loading" OnClick="LoadOverviewAsync">Refresh</MudButton>
@@ -24,7 +24,10 @@
     <div class="overview-metrics">
         <MetricTile Label="Receiver" Value="@ReceiverStatus" />
         <MetricTile Label="Characters" Value="@_characters.Count.ToString("N0")" />
-        <MetricTile Label="Active Requests" Value="@ActiveRequestCount.ToString("N0")" />
+        @if (_features.EnableMarketAcquisition)
+        {
+            <MetricTile Label="Active Requests" Value="@ActiveRequestCount.ToString("N0")" />
+        }
         <MetricTile Label="Diagnostics" Value="@_storage.DiagnosticEventCount.ToString("N0")" />
         <MetricTile Label="Recent Errors" Value="@RecentErrorCount.ToString("N0")" />
     </div>
@@ -54,31 +57,34 @@
             </MudStack>
         </MudPaper>
 
-        <MudPaper Class="compact-card dashboard-panel" Elevation="0">
-            <MudStack Spacing="2">
-                <MudStack Row="true" AlignItems="AlignItems.Center" Class="panel-heading">
-                    <MudText Typo="Typo.h6">Acquisition Activity</MudText>
+        @if (_features.EnableMarketAcquisition)
+        {
+            <MudPaper Class="compact-card dashboard-panel" Elevation="0">
+                <MudStack Spacing="2">
+                    <MudStack Row="true" AlignItems="AlignItems.Center" Class="panel-heading">
+                        <MudText Typo="Typo.h6">Acquisition Activity</MudText>
+                    </MudStack>
+                    <MudTable T="MarketAcquisitionRequestView" Items="RecentRequests" Dense="true" Hover="true" Class="queue-table overview-table">
+                        <HeaderContent>
+                            <MudTh>Item</MudTh>
+                            <MudTh>Status</MudTh>
+                            <MudTh>Latest</MudTh>
+                        </HeaderContent>
+                        <RowTemplate>
+                            <MudTd>
+                                @MarketAcquisitionRequestDisplay.TitleFor(context)<br />
+                                <span class="muted">@context.TargetCharacterName @@ @context.TargetWorld</span>
+                            </MudTd>
+                            <MudTd>@context.Status</MudTd>
+                            <MudTd>@(context.LatestMessage ?? context.LatestReason ?? "-")</MudTd>
+                        </RowTemplate>
+                        <NoRecordsContent>
+                            <MudText Class="muted">No acquisition requests yet.</MudText>
+                        </NoRecordsContent>
+                    </MudTable>
                 </MudStack>
-                <MudTable T="MarketAcquisitionRequestView" Items="RecentRequests" Dense="true" Hover="true" Class="queue-table overview-table">
-                    <HeaderContent>
-                        <MudTh>Item</MudTh>
-                        <MudTh>Status</MudTh>
-                        <MudTh>Latest</MudTh>
-                    </HeaderContent>
-                    <RowTemplate>
-                        <MudTd>
-                            @MarketAcquisitionRequestDisplay.TitleFor(context)<br />
-                            <span class="muted">@context.TargetCharacterName @@ @context.TargetWorld</span>
-                        </MudTd>
-                        <MudTd>@context.Status</MudTd>
-                        <MudTd>@(context.LatestMessage ?? context.LatestReason ?? "-")</MudTd>
-                    </RowTemplate>
-                    <NoRecordsContent>
-                        <MudText Class="muted">No acquisition requests yet.</MudText>
-                    </NoRecordsContent>
-                </MudTable>
-            </MudStack>
-        </MudPaper>
+            </MudPaper>
+        }
 
         <MudPaper Class="compact-card dashboard-panel" Elevation="0">
             <MudStack Spacing="2">
@@ -110,6 +116,7 @@
     private IReadOnlyList<DiagnosticEventView> _diagnostics = [];
     private InventoryBrowserView _inventory = new();
     private ReceiverStorageSummaryView _storage = new();
+    private DashboardFeatureFlagsView _features = new();
     private bool _loading = true;
 
     private string ReceiverStatus => _health.Ok
@@ -117,6 +124,10 @@
         : "Unknown";
 
     private int ActiveRequestCount => _requests.Count(request => request.Status is "PendingPickup" or "AcceptedInPlugin" or "Running");
+
+    private string OverviewSubtitle => _features.EnableMarketAcquisition
+        ? "Receiver health, recent acquisition activity, inventory ingest state, and diagnostics at a glance."
+        : "Receiver health, inventory ingest state, and diagnostics at a glance.";
 
     private int RecentErrorCount => _diagnostics.Count(diagnostic =>
         diagnostic.Severity.Equals("Error", StringComparison.OrdinalIgnoreCase) ||
@@ -148,9 +159,12 @@
         try
         {
             _loading = true;
+            _features = await Api.GetFeatureFlagsAsync();
             _health = await Api.GetHealthAsync();
             _characters = await Api.GetCharactersAsync();
-            _requests = await Api.GetAcquisitionRequestsAsync();
+            _requests = _features.EnableMarketAcquisition
+                ? await Api.GetAcquisitionRequestsAsync()
+                : [];
             _diagnostics = await Api.GetDiagnosticsAsync();
             _inventory = await Api.GetInventoryBrowserAsync(null, null, "all");
             _storage = await Api.GetStorageSummaryAsync();

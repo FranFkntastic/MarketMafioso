@@ -40,6 +40,7 @@ var basePath = app.Configuration["MarketMafioso:BasePath"];
 var configuredBasePath = NormalizeConfiguredBasePath(basePath);
 var publicOrigin = app.Configuration["MarketMafioso:PublicOrigin"];
 var storageLabel = app.Configuration["MarketMafioso:StorageLabel"];
+var enableMarketAcquisition = app.Configuration.GetValue<bool>("MarketMafioso:EnableMarketAcquisition");
 var xivDataBaseUrl = NormalizeXivDataBaseUrl(FirstConfigured(
     app.Configuration["MarketMafioso:XivDataBaseUrl"],
     DefaultXivDataBaseUrl(publicOrigin)));
@@ -142,6 +143,10 @@ app.MapGet("/api/inventory/snapshots", ListDashboardSnapshots);
 app.MapGet("/api/settings/dashboard", GetDashboardSettings);
 app.MapPut("/api/settings/dashboard", SaveDashboardSettings);
 app.MapGet("/api/settings/storage", GetStorageSummary);
+app.MapGet("/api/settings/features", () => Results.Ok(new DashboardFeatureFlagsView
+{
+    EnableMarketAcquisition = enableMarketAcquisition,
+}));
 
 app.MapGet("/api/events/stream", async (
     HttpResponse response,
@@ -294,7 +299,8 @@ app.MapPost("/reports/delete-all", async (HttpRequest request, InventoryReportSt
 });
 
 MapDashboardShellRoute("/");
-MapDashboardShellRoute("/acquisition");
+if (enableMarketAcquisition)
+    MapDashboardShellRoute("/acquisition");
 MapDashboardShellRoute("/inventory");
 MapDashboardShellRoute("/overview");
 MapDashboardShellRoute("/settings");

@@ -1,89 +1,177 @@
 # MarketMafioso Self-Hosted Receiver
 
-This folder is the quick-start bundle for running a private MarketMafioso backend.
+Start here after extracting the self-hosted receiver zip.
 
-It runs the server in Docker, stores data in a local SQLite database, and exposes the dashboard on port `5088` by default.
+This package is intentionally split by purpose:
 
-## Install
-
-1. Install Docker Desktop or Docker Engine.
-2. Extract this folder somewhere permanent.
-3. Run PowerShell in this folder.
-4. Run:
-
-```powershell
-.\Setup-MarketMafiosoServer.ps1
+```text
+README.md
+Install Receiver.bat
+Update Receiver.bat
+config/
+  compose.yaml
+  marketmafioso.env.example
+docs/
+  INSTALLATION-NOTE.md
+  RECEIVER-SETTINGS.md
+  ADVANCED-CONFIGURATION.md
+scripts/
+  Install-MarketMafiosoReceiver.ps1
+  Update-MarketMafiosoReceiver.ps1
 ```
 
-The setup script generates:
+There is no compilable source code in this package. The receiver runs from the published Docker image.
 
-- the plugin/server API key,
-- the dashboard password,
-- `marketmafioso.env`,
-- the Docker container.
+## What The Receiver Does
 
-At the end it prints the values to paste into the MarketMafioso plugin:
+The receiver is a small background server. It saves inventory reports in a local SQLite database and gives you a browser dashboard at `http://localhost:5088/`.
+
+You do not need the receiver for basic plugin use. Install it only if you want stored inventory history, the browser dashboard, or receiver diagnostics.
+
+## Install Docker First
+
+The receiver uses Docker so you do not have to install .NET, database tools, or web-server dependencies by hand.
+
+On Windows:
+
+1. Install Docker Desktop from Docker's official Windows guide:
+
+```text
+https://docs.docker.com/desktop/setup/install/windows-install/
+```
+
+2. Start **Docker Desktop** from the Start menu.
+3. Wait until Docker says it is running.
+4. Open PowerShell and check:
+
+```powershell
+docker --version
+docker compose version
+```
+
+If those commands fail, Docker Desktop is not ready yet. Start Docker Desktop, wait for it to finish starting, then open a new PowerShell window.
+
+## First Install
+
+Keep this extracted folder somewhere permanent. The receiver stores its config and database here.
+
+Double-click:
+
+```text
+Install Receiver.bat
+```
+
+The launcher runs the PowerShell installer with the right execution-policy setting for this package.
+
+If Windows shows a warning for the downloaded script, only continue if the package came from the official MarketMafioso release page.
+
+If you prefer PowerShell, run:
+
+```powershell
+.\scripts\Install-MarketMafiosoReceiver.ps1
+```
+
+The installer wizard:
+
+- checks that Docker is installed and running;
+- asks for a dashboard username;
+- asks whether the receiver is local-only;
+- creates `config\marketmafioso.env`;
+- generates the plugin/server API key;
+- generates the first dashboard password;
+- downloads the receiver image;
+- starts the receiver;
+- waits for the health check;
+- prints the values to paste into the plugin.
+
+Default local values:
+
+```text
+Dashboard: http://localhost:5088/
+Plugin Server URL: http://localhost:5088/inventory
+Database file: data\marketmafioso\marketmafioso.db
+```
+
+## Plugin Settings
+
+After setup, copy the printed values into MarketMafioso:
 
 ```text
 Server URL: http://localhost:5088/inventory
 Client API Key: <generated key>
 ```
 
-Open the dashboard at:
+Open the dashboard:
 
 ```text
 http://localhost:5088/
 ```
 
-## Market Acquisition Item Search
+Log in with the generated dashboard username and password.
 
-Market Acquisition needs an XIV data gateway for item-name search and item-id resolution. During setup, provide a compatible URL when prompted.
+## Files To Keep
 
-If you leave it blank, inventory upload and browsing still work, but the dashboard item selector cannot resolve new acquisition requests by item name.
+Do not delete:
+
+```text
+config\marketmafioso.env
+data\
+backups\
+```
+
+`config\marketmafioso.env` contains the generated API key and dashboard bootstrap password. `data\` contains the SQLite database. `backups\` is created by the update script.
 
 ## Updating
 
-Run:
+Double-click:
+
+```text
+Update Receiver.bat
+```
+
+Or run:
 
 ```powershell
-.\Update-MarketMafiosoServer.ps1
+.\scripts\Update-MarketMafiosoReceiver.ps1
 ```
 
-The update script backs up the SQLite database, pulls the latest server image, and restarts the container.
+The update script backs up `data\marketmafioso\marketmafioso.db`, downloads the latest server image, restarts the receiver, and waits for the health check.
 
-## Backups
+Use:
 
-Keep these:
-
-```text
-marketmafioso.env
-data/
+```powershell
+.\scripts\Update-MarketMafiosoReceiver.ps1 -SkipBackup
 ```
 
-The SQLite database lives under:
+only if you already handled the database backup.
+
+## More Help
+
+Read:
 
 ```text
-data/marketmafioso/marketmafioso.db
+docs\RECEIVER-SETTINGS.md
+docs\ADVANCED-CONFIGURATION.md
 ```
 
-The update script writes timestamped backups to:
+Use the advanced guide for remote hosting, HTTPS, reverse proxy, and path-prefix setup.
 
-```text
-backups/
+## Smoke Checks
+
+Receiver health:
+
+```powershell
+Invoke-RestMethod -Uri http://localhost:5088/health
 ```
 
-## Public Hosting
+Container status:
 
-For a public domain, put Caddy, nginx, Cloudflare Tunnel, or another reverse proxy in front of `http://localhost:5088`.
-
-Use a subdomain such as:
-
-```text
-https://mmf.example.com
+```powershell
+docker compose -f config\compose.yaml ps
 ```
 
-Then set the public origin during setup to that URL and configure the plugin endpoint as:
+Logs:
 
-```text
-https://mmf.example.com/inventory
+```powershell
+docker compose -f config\compose.yaml logs marketmafioso
 ```

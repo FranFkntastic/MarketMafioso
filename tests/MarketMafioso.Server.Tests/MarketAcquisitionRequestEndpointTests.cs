@@ -1667,6 +1667,7 @@ public sealed class MarketAcquisitionRequestEndpointTests
             ["MarketMafioso:RequireApiKey"] = "true",
             ["MarketMafioso:ClientApiKey"] = "client-secret",
             ["MarketMafioso:BasePath"] = "/marketmafioso",
+            ["MarketMafioso:EnableMarketAcquisition"] = "true",
         };
         foreach (var item in extraConfiguration)
             values[item.Key] = item.Value;

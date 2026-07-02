@@ -42,6 +42,9 @@ public sealed class DashboardSessionAuthMiddleware
 
     private static bool RequiresDashboardSession(HttpRequest request)
     {
+        if (request.Path.Equals("/api/settings/features", StringComparison.OrdinalIgnoreCase))
+            return false;
+
         if (IsPluginInventoryIngestRoute(request))
             return false;
 

@@ -54,6 +54,14 @@ public sealed class DashboardApiClient
             cancellationToken) ?? new ReceiverStorageSummaryView();
     }
 
+    public async Task<DashboardFeatureFlagsView> GetFeatureFlagsAsync(CancellationToken cancellationToken = default)
+    {
+        return await http.GetFromJsonAsync<DashboardFeatureFlagsView>(
+            "api/settings/features",
+            JsonOptions,
+            cancellationToken) ?? new DashboardFeatureFlagsView();
+    }
+
     public async Task<IReadOnlyList<MarketAcquisitionRequestView>> GetAcquisitionRequestsAsync(
         bool includeTerminal = false,
         CancellationToken cancellationToken = default)

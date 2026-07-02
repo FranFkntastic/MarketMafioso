@@ -6,52 +6,55 @@
 <MudStack Spacing="2">
     <MudText Typo="Typo.h5">Settings</MudText>
     <MudTabs Rounded="true" Elevation="0" PanelClass="pt-4">
-        <MudTabPanel Text="General">
-            <MudPaper Class="compact-card" Elevation="0">
-                <MudStack Spacing="3" Class="settings-section">
-                    <div>
-                        <MudText Typo="Typo.h6">Dashboard Defaults</MudText>
-                        <MudText Class="muted">Defaults apply to new acquisition requests on this dashboard account.</MudText>
-                    </div>
-                    <MudGrid Spacing="2">
-                        <MudItem xs="12" md="6">
-                            <MudSelect T="long?" @bind-Value="_defaultCharacterId" Label="Default character" Variant="Variant.Outlined" Margin="Margin.Dense">
-                                <MudSelectItem T="long?" Value="@null">No default</MudSelectItem>
-                                @foreach (var character in _characters)
-                                {
-                                    <MudSelectItem T="long?" Value="@character.Id">@character.DisplayName</MudSelectItem>
-                                }
-                            </MudSelect>
-                        </MudItem>
-                        <MudItem xs="12" md="6">
-                            <MudSelect T="string" @bind-Value="_defaultRegion" Label="Default region" Variant="Variant.Outlined" Margin="Margin.Dense">
-                                @foreach (var region in SupportedRegions)
-                                {
-                                    <MudSelectItem Value="@region">@region</MudSelectItem>
-                                }
-                            </MudSelect>
-                        </MudItem>
-                        <MudItem xs="12" md="6">
-                            <MudSelect T="string" @bind-Value="_defaultWorldMode" Label="Default routing" Variant="Variant.Outlined" Margin="Margin.Dense">
-                                <MudSelectItem Value="@("Recommended")">Recommended worlds</MudSelectItem>
-                                <MudSelectItem Value="@("CurrentWorld")">Current world</MudSelectItem>
-                                <MudSelectItem Value="@("AllWorldSweep")">All-world sweep</MudSelectItem>
-                            </MudSelect>
-                        </MudItem>
-                        <MudItem xs="12" md="6">
-                            <MudSelect T="int" @bind-Value="_defaultPickupExpiresSeconds" Label="Default pickup expiry" Variant="Variant.Outlined" Margin="Margin.Dense">
-                                <MudSelectItem Value="300">5 minutes</MudSelectItem>
-                                <MudSelectItem Value="900">15 minutes</MudSelectItem>
-                            </MudSelect>
-                        </MudItem>
-                    </MudGrid>
-                    <MudStack Row="true" AlignItems="AlignItems.Center">
-                        <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="_saving" OnClick="SaveSettingsAsync">Save Settings</MudButton>
-                        <MudText Typo="Typo.caption" Class="muted">@_settingsStatus</MudText>
+        @if (_features.EnableMarketAcquisition)
+        {
+            <MudTabPanel Text="General">
+                <MudPaper Class="compact-card" Elevation="0">
+                    <MudStack Spacing="3" Class="settings-section">
+                        <div>
+                            <MudText Typo="Typo.h6">Dashboard Defaults</MudText>
+                            <MudText Class="muted">Defaults apply to new acquisition requests on this dashboard account.</MudText>
+                        </div>
+                        <MudGrid Spacing="2">
+                            <MudItem xs="12" md="6">
+                                <MudSelect T="long?" @bind-Value="_defaultCharacterId" Label="Default character" Variant="Variant.Outlined" Margin="Margin.Dense">
+                                    <MudSelectItem T="long?" Value="@null">No default</MudSelectItem>
+                                    @foreach (var character in _characters)
+                                    {
+                                        <MudSelectItem T="long?" Value="@character.Id">@character.DisplayName</MudSelectItem>
+                                    }
+                                </MudSelect>
+                            </MudItem>
+                            <MudItem xs="12" md="6">
+                                <MudSelect T="string" @bind-Value="_defaultRegion" Label="Default region" Variant="Variant.Outlined" Margin="Margin.Dense">
+                                    @foreach (var region in SupportedRegions)
+                                    {
+                                        <MudSelectItem Value="@region">@region</MudSelectItem>
+                                    }
+                                </MudSelect>
+                            </MudItem>
+                            <MudItem xs="12" md="6">
+                                <MudSelect T="string" @bind-Value="_defaultWorldMode" Label="Default routing" Variant="Variant.Outlined" Margin="Margin.Dense">
+                                    <MudSelectItem Value="@("Recommended")">Recommended worlds</MudSelectItem>
+                                    <MudSelectItem Value="@("CurrentWorld")">Current world</MudSelectItem>
+                                    <MudSelectItem Value="@("AllWorldSweep")">All-world sweep</MudSelectItem>
+                                </MudSelect>
+                            </MudItem>
+                            <MudItem xs="12" md="6">
+                                <MudSelect T="int" @bind-Value="_defaultPickupExpiresSeconds" Label="Default pickup expiry" Variant="Variant.Outlined" Margin="Margin.Dense">
+                                    <MudSelectItem Value="300">5 minutes</MudSelectItem>
+                                    <MudSelectItem Value="900">15 minutes</MudSelectItem>
+                                </MudSelect>
+                            </MudItem>
+                        </MudGrid>
+                        <MudStack Row="true" AlignItems="AlignItems.Center">
+                            <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="_saving" OnClick="SaveSettingsAsync">Save Settings</MudButton>
+                            <MudText Typo="Typo.caption" Class="muted">@_settingsStatus</MudText>
+                        </MudStack>
                     </MudStack>
-                </MudStack>
-            </MudPaper>
-        </MudTabPanel>
+                </MudPaper>
+            </MudTabPanel>
+        }
         <MudTabPanel Text="Diagnostics">
             <MudPaper Class="compact-card" Elevation="0">
                 <MudStack Spacing="2">
@@ -64,7 +67,7 @@
                         <MetricTile Label="Live Stream" Value="@SseLabel" />
                     </div>
                     <MudText Typo="Typo.caption" Class="muted">
-                        Acquisition and diagnostic snapshots stream through @_storage.AcquisitionSseEndpoint every @_storage.AcquisitionSseCadenceSeconds second(s).
+                        @DiagnosticsStreamText
                     </MudText>
                     <MudAlert Severity="Severity.Info" Dense="true" Variant="Variant.Outlined">
                         Route logs are currently stored by the plugin on the client machine. Server-side log indexing requires plugin upload of sanitized route summaries.
@@ -163,6 +166,7 @@
     private IReadOnlyList<DashboardCharacterOption> _characters = [];
     private IReadOnlyList<ReportSummaryView> _snapshots = [];
     private ReceiverStorageSummaryView _storage = new();
+    private DashboardFeatureFlagsView _features = new();
     private DiagnosticEventView? _selectedEvent;
     private long? _defaultCharacterId;
     private long? _snapshotCharacterId;
@@ -193,8 +197,13 @@
         ? "Configured"
         : $"{_storage.AcquisitionSseCadenceSeconds}s cadence";
 
+    private string DiagnosticsStreamText => _features.EnableMarketAcquisition
+        ? $"Acquisition and diagnostic snapshots stream through {_storage.AcquisitionSseEndpoint} every {_storage.AcquisitionSseCadenceSeconds} second(s)."
+        : "Diagnostic snapshots are retained for receiver troubleshooting.";
+
     protected override async Task OnInitializedAsync()
     {
+        _features = await Api.GetFeatureFlagsAsync();
         await LoadSettingsAsync();
         await LoadStorageAsync();
         await LoadDiagnosticsAsync();

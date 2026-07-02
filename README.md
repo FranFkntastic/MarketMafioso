@@ -1,16 +1,33 @@
 # MarketMafioso
 
-MarketMafioso is a Dalamud plugin for small, practical FFXIV quality-of-life tools.
+MarketMafioso is a Dalamud plugin for Workshop Logistics and optional self-hosted inventory history.
 
-## Features
+## Start Here
 
-- **Inventory Reporter** exports player and retainer inventory snapshots as JSON.
-- **Retainer cache tools** help refresh and inspect the retainer data used by reports.
+Most users only need two steps:
+
+1. **Install the plugin:** copy the MarketMafioso plugin repository URL into Dalamud's Experimental > Custom Plugin Repositories settings, then install MarketMafioso from `/xlplugins`.
+
+```text
+https://raw.githubusercontent.com/FranFkntastic/MarketMafioso/main/pluginmaster.json
+```
+
+2. **Optional receiver dashboard:** download `marketmafioso-self-host-<version>.zip` from the GitHub [Releases](https://github.com/FranFkntastic/MarketMafioso/releases) page, extract it somewhere permanent, install Docker Desktop if needed, then double-click `Install Receiver.bat`.
+
+Full step-by-step instructions live in [docs/installation.md](docs/installation.md).
+
+## What You Get
+
+### Works Without The Receiver
+
 - **Workshop Logistics** builds Free Company workshop material queues, checks player and retainer stock, withdraws available materials from retainers, can execute the MarketMafioso queue natively, and can still send the prepared queue to VIWI Workshoppa.
-- **Hosted, local, or self-hosted receiver support** lets inventory reports be sent to a compatible endpoint.
-- **Market Acquisition** can stage server-backed purchase intents and drive the in-game plugin through guided market-board acquisition flows when a receiver is configured.
 
-## Usage
+### With The Optional Receiver
+
+- The optional receiver stores inventory snapshots in SQLite and serves the browser dashboard.
+- Retainer cache data makes those stored snapshots more useful after you have refreshed retainer data in game.
+
+## Opening The Plugin
 
 Open MarketMafioso in game:
 
@@ -18,25 +35,15 @@ Open MarketMafioso in game:
 /mmf
 ```
 
-Send an inventory report immediately:
-
-```text
-/mmf send
-```
-
-Most interaction happens in the `/mmf` window:
-
-- Use **Inventory Reporter** to configure report endpoints, included data, and retainer cache refresh behavior.
-- Use **Workshop Logistics** to pick workshop projects, review material requirements, restock from retainers, run native assembly, export material plans, or hand the queue to VIWI when ready.
-- Use **Status** to check the plugin's current configuration and recent activity.
+To use inventory history, install the receiver first, then paste the receiver Server URL and Client API Key into MarketMafioso settings.
 
 ## Notes
 
-Retainer inventory is only as fresh as the last cache refresh or retainer window scan. For the best workshop prep results, refresh the retainer cache before planning a restock.
+Retainer inventory is only as fresh as the last cache refresh or retainer window scan. For the best Workshop Logistics results, refresh the retainer cache before planning a restock.
 
 The receiver backend can be run privately or self-hosted from the server package. MarketMafioso does not provide public multi-user inventory hosting; users who want persistent hosted inventory storage should run their own receiver instance.
 
-Self-hosting notes live in [docs/self-hosting.md](docs/self-hosting.md). The shorter developer-local receiver notes remain in [docs/local-backend.md](docs/local-backend.md).
+Installation notes for the plugin and optional receiver live in [docs/installation.md](docs/installation.md). Self-hosting notes live in [docs/self-hosting.md](docs/self-hosting.md).
 
 ## Acknowledgements
 

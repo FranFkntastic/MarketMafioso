@@ -4,6 +4,10 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+function Get-PackageRoot {
+    return Split-Path -Parent $PSScriptRoot
+}
+
 function Get-DockerCommand {
     $command = Get-Command docker -ErrorAction SilentlyContinue
     if ($null -ne $command) {
@@ -15,17 +19,31 @@ function Get-DockerCommand {
         return $dockerDesktopCommand
     }
 
-    throw "Docker was not found. Install Docker Desktop or Docker Engine first."
+    throw "Docker was not found. Install Docker Desktop first, start it, then open a new PowerShell window."
 }
 
-$root = Split-Path -Parent $MyInvocation.MyCommand.Path
-$envPath = Join-Path $root "marketmafioso.env"
-$composePath = Join-Path $root "compose.yaml"
+function Invoke-DockerChecked {
+    param(
+        [string]$Docker,
+        [string[]]$Arguments,
+        [string]$FailureMessage
+    )
+
+    & $Docker @Arguments
+    if ($LASTEXITCODE -ne 0) {
+        throw $FailureMessage
+    }
+}
+
+$root = Get-PackageRoot
+$configDir = Join-Path $root "config"
+$envPath = Join-Path $configDir "marketmafioso.env"
+$composePath = Join-Path $configDir "compose.yaml"
 $dataDir = Join-Path (Join-Path $root "data") "marketmafioso"
 $databasePath = Join-Path $dataDir "marketmafioso.db"
 
 if (-not (Test-Path -LiteralPath $envPath)) {
-    throw "marketmafioso.env does not exist. Run Setup-MarketMafiosoServer.ps1 first."
+    throw "config\marketmafioso.env does not exist. Run scripts\Install-MarketMafiosoReceiver.ps1 first."
 }
 
 $docker = Get-DockerCommand
@@ -41,15 +59,8 @@ if (-not $SkipBackup -and (Test-Path -LiteralPath $databasePath)) {
 
 Push-Location $root
 try {
-    & $docker compose -f $composePath pull
-    if ($LASTEXITCODE -ne 0) {
-        throw "docker compose pull failed."
-    }
-
-    & $docker compose -f $composePath up -d
-    if ($LASTEXITCODE -ne 0) {
-        throw "docker compose up failed."
-    }
+    Invoke-DockerChecked -Docker $docker -Arguments @("compose", "-f", $composePath, "pull") -FailureMessage "docker compose pull failed."
+    Invoke-DockerChecked -Docker $docker -Arguments @("compose", "-f", $composePath, "up", "-d") -FailureMessage "docker compose up failed."
 }
 finally {
     Pop-Location

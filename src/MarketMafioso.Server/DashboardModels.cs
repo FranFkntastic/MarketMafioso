@@ -28,3 +28,8 @@ public sealed record DashboardSettingsUpdate
     public string DefaultWorldMode { get; init; } = "Recommended";
     public int DefaultPickupExpiresSeconds { get; init; } = 300;
 }
+
+public sealed record DashboardFeatureFlagsView
+{
+    public bool EnableMarketAcquisition { get; init; }
+}

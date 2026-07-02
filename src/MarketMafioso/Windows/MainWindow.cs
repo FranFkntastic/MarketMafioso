@@ -46,7 +46,10 @@ public class MainWindow : Window, IDisposable
     private string apiKeyBuffer = string.Empty;
     private string dashboardUrlBuffer = string.Empty;
     private string dashboardOpenStatus = "Dashboard link appears after a successful send.";
+    private string marketAcquisitionUnlockKeyBuffer = string.Empty;
+    private string marketAcquisitionUnlockStatus = "Market Acquisition is hidden until unlocked.";
     private bool showApiKey = false;
+    private bool showMarketAcquisitionUnlockKey = false;
     private bool showPreview = false;
     private readonly WorkshopProjectSelectionState workshopProjectSelection = new();
     private IReadOnlyList<MarketAcquisitionRequestView> pendingAcquisitionRequests = [];
@@ -81,7 +84,7 @@ public class MainWindow : Window, IDisposable
     private string frozenQueueNameInput = string.Empty;
     private string workshopStatus = "Workshop prep queue is idle.";
 
-    private const string ProductSummary = "Small, practical FFXIV improvements under one roof.";
+    private const string ProductSummary = "Workshop logistics and self-hosted inventory history.";
     private const string InventoryModuleSummary = "Inventory Reporter exports character and retainer inventory snapshots as JSON.";
     private const string WorkshopLogisticsModuleSummary = "Workshop Logistics tracks company workshop jobs, materials, retainer restock, handoff, and assembly.";
     private const string MarketAcquisitionModuleSummary = "Market Acquisition picks up dashboard-created purchase requests for local review.";
@@ -210,6 +213,9 @@ public class MainWindow : Window, IDisposable
 
     public void OnFrameworkUpdate(IFramework _)
     {
+        if (!IsMarketAcquisitionUnlocked())
+            return;
+
         MonitorMarketBoardPurchase();
         MonitorGuidedRoute();
     }
@@ -239,7 +245,7 @@ public class MainWindow : Window, IDisposable
                 ImGui.EndTabItem();
             }
 
-            if (ImGui.BeginTabItem("Market Acquisition"))
+            if (IsMarketAcquisitionUnlocked() && ImGui.BeginTabItem("Market Acquisition"))
             {
                 DrawMarketAcquisitionTab();
                 ImGui.EndTabItem();
@@ -265,7 +271,11 @@ public class MainWindow : Window, IDisposable
     {
         ImGui.TextColored(ColHeader, "MarketMafioso");
         ImGui.TextWrapped(ProductSummary);
-        ImGui.TextColored(ColMuted, "Current modules: Inventory Reporter, Workshop Logistics, Market Acquisition");
+        ImGui.TextColored(
+            ColMuted,
+            IsMarketAcquisitionUnlocked()
+                ? "Current modules: Inventory Reporter, Workshop Logistics, Market Acquisition"
+                : "Current modules: Inventory Reporter, Workshop Logistics");
     }
 
     private void DrawOverviewTab()
@@ -276,7 +286,8 @@ public class MainWindow : Window, IDisposable
 
         DrawModuleSummary("Inventory Reporter", "Enabled", InventoryModuleSummary);
         DrawModuleSummary("Workshop Logistics", "Enabled", WorkshopLogisticsModuleSummary);
-        DrawModuleSummary("Market Acquisition", "Foundation", MarketAcquisitionModuleSummary);
+        if (IsMarketAcquisitionUnlocked())
+            DrawModuleSummary("Market Acquisition", "Internal", MarketAcquisitionModuleSummary);
         DrawModuleSummary("General Improvements", "Planned", "Small quality-of-life tools that are useful, but too narrow for their own plugin.");
     }
 
@@ -3291,12 +3302,17 @@ public class MainWindow : Window, IDisposable
     {
         ImGui.Spacing();
         ImGui.TextColored(ColHeader, "Plugin Settings");
-        ImGui.TextWrapped("Shared MarketMafioso client/server settings used by Inventory Reporter and Market Acquisition.");
+        ImGui.TextWrapped("Shared MarketMafioso client/server settings used by Inventory Reporter, Workshop Logistics, and receiver-backed features.");
         ImGui.Spacing();
 
         DrawServerSection();
         ImGui.Spacing();
-        DrawMarketAcquisitionSettingsSection();
+        DrawInternalFeatureSettingsSection();
+        if (IsMarketAcquisitionUnlocked())
+        {
+            ImGui.Spacing();
+            DrawMarketAcquisitionSettingsSection();
+        }
     }
 
     private void DrawModuleSummary(string name, string state, string description)
@@ -3376,6 +3392,61 @@ public class MainWindow : Window, IDisposable
             "Default on. While already on a world, MarketMafioso checks other unfinished items from the same claimed batch.");
     }
 
+    private void DrawInternalFeatureSettingsSection()
+    {
+        ImGui.TextColored(ColHeader, "Internal Features");
+        ImGui.Separator();
+
+        if (IsMarketAcquisitionUnlocked())
+        {
+            var unlockedAt = config.MarketAcquisitionUnlockedAtUtc == null
+                ? "enabled"
+                : $"enabled {config.MarketAcquisitionUnlockedAtUtc.Value:yyyy-MM-dd HH:mm:ss} UTC";
+            ImGui.TextColored(ColSuccess, $"Market Acquisition {unlockedAt}.");
+            ImGui.SameLine();
+            if (ImGui.Button("Lock Market Acquisition"))
+            {
+                marketAcquisitionRouteRunner.Stop();
+                AcquisitionDiagnostics.IsOpen = false;
+                MarketAcquisitionUnlock.Lock(config);
+                config.Save();
+                marketAcquisitionUnlockKeyBuffer = string.Empty;
+                marketAcquisitionUnlockStatus = "Market Acquisition locked.";
+            }
+
+            ImGui.TextColored(ColMuted, "Locking hides the UI only. Existing local request state and server data are left untouched.");
+            return;
+        }
+
+        ImGui.TextColored(ColMuted, "Private/internal modules are hidden by default.");
+        ImGui.Text("Unlock key:");
+        var keyWidth = ImGui.GetContentRegionAvail().X - 82;
+        ImGui.SetNextItemWidth(Math.Max(120f, keyWidth));
+        var flags = showMarketAcquisitionUnlockKey ? ImGuiInputTextFlags.None : ImGuiInputTextFlags.Password;
+        ImGui.InputText("##marketAcquisitionUnlockKey", ref marketAcquisitionUnlockKeyBuffer, 256, flags);
+        ImGui.SameLine();
+        if (ImGui.Button(showMarketAcquisitionUnlockKey ? "Hide##marketAcquisitionUnlock" : "Show##marketAcquisitionUnlock", new Vector2(72, 0)))
+            showMarketAcquisitionUnlockKey = !showMarketAcquisitionUnlockKey;
+
+        if (ImGuiUi.Button("Unlock Market Acquisition", !string.IsNullOrWhiteSpace(marketAcquisitionUnlockKeyBuffer)))
+        {
+            if (MarketAcquisitionUnlock.TryUnlock(config, marketAcquisitionUnlockKeyBuffer))
+            {
+                config.Save();
+                marketAcquisitionUnlockKeyBuffer = string.Empty;
+                marketAcquisitionUnlockStatus = "Market Acquisition unlocked.";
+            }
+            else
+            {
+                marketAcquisitionUnlockStatus = "Unlock key was not accepted.";
+            }
+        }
+
+        ImGui.TextColored(
+            marketAcquisitionUnlockStatus.Contains("not accepted", StringComparison.OrdinalIgnoreCase) ? ColError : ColMuted,
+            marketAcquisitionUnlockStatus);
+    }
+
     private void DrawDashboardOpenSection()
     {
         var dashboardUrl = HttpReporter.ResolveDashboardUrlForDisplay(reporter.LastDashboardUrl, urlBuffer) ?? string.Empty;
@@ -3429,6 +3500,8 @@ public class MainWindow : Window, IDisposable
         status.Contains("not a valid", StringComparison.OrdinalIgnoreCase)
             ? ColError
             : ColMuted;
+
+    private bool IsMarketAcquisitionUnlocked() => MarketAcquisitionUnlock.IsUnlocked(config);
 
     private void ApplyServerUrlPreset(string serverUrl)
     {

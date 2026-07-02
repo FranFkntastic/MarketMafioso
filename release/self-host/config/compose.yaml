@@ -1,3 +1,5 @@
+name: marketmafioso
+
 services:
   marketmafioso:
     image: ghcr.io/franfkntastic/marketmafioso-server:latest
@@ -7,4 +9,4 @@ services:
     env_file:
       - ./marketmafioso.env
     volumes:
-      - ./data/marketmafioso:/data
+      - ../data/marketmafioso:/data

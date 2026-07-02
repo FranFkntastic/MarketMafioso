@@ -11,6 +11,7 @@ obj/
 .agents/
 .superpowers/
 .docs/
+docs/private/
 .codex/
 mockups/
 .idea/
@@ -39,6 +40,7 @@ marketmafioso.env
 release/self-host/data/
 release/self-host/backups/
 release/self-host/marketmafioso.env
+release/self-host/config/marketmafioso.env
 
 # Local backend data
 src/MarketMafioso.Server/data/

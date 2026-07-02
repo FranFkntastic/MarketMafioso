@@ -2,7 +2,7 @@
 
 MarketMafioso's receiver is a private ASP.NET Core service with a bundled dashboard and a local SQLite database. It is meant for self-hosted or small trusted deployments, not public multi-user hosting.
 
-The receiver enables persistent inventory snapshots, the inventory browser, diagnostics, and Market Acquisition dashboard requests. The in-game plugin can still run without it, but server-backed features will be unavailable.
+The receiver enables persistent inventory snapshots, the inventory browser, and diagnostics. The in-game plugin can still run without it, but server-backed inventory history and dashboard features will be unavailable.
 
 ## Requirements
 
@@ -10,9 +10,19 @@ The receiver enables persistent inventory snapshots, the inventory browser, diag
 - A random client API key shared between the plugin and receiver.
 - A dashboard username/password for browser login.
 - Persistent storage for the SQLite database.
-- Optional but recommended: HTTPS behind Caddy, nginx, or another reverse proxy.
 
-Market Acquisition item search also needs a compatible XIV data gateway. Configure `MarketMafioso__XivDataBaseUrl` if you want the dashboard's item selector to resolve names to item IDs. Without it, inventory upload and browsing still work, but acquisition request creation is limited.
+For Windows users who do not already have Docker, install Docker Desktop first. Docker's official Windows install guide is:
+
+```text
+https://docs.docker.com/desktop/setup/install/windows-install/
+```
+
+Start Docker Desktop before running receiver setup, then confirm Docker is available:
+
+```powershell
+docker --version
+docker compose version
+```
 
 ## Quick Docker Setup
 
@@ -20,16 +30,16 @@ The easiest path is the release bundle under `release/self-host/`. It uses the p
 
 ```powershell
 cd release/self-host
-.\Setup-MarketMafiosoServer.ps1
+.\scripts\Install-MarketMafiosoReceiver.ps1
 ```
 
-The setup script generates `marketmafioso.env`, pulls the server image, starts the container, and prints the plugin endpoint/API key.
+The installer wizard generates `config/marketmafioso.env`, pulls the server image, starts the container, checks `/health`, and prints the plugin endpoint/API key.
 
 To update later:
 
 ```powershell
 cd release/self-host
-.\Update-MarketMafiosoServer.ps1
+.\scripts\Update-MarketMafiosoReceiver.ps1
 ```
 
 The update script backs up the SQLite database, pulls the latest image, and restarts the container.
@@ -39,22 +49,21 @@ The update script backs up the SQLite database, pulls the latest image, and rest
 1. Copy the environment sample and replace every placeholder secret:
 
 ```powershell
-Copy-Item docs/samples/marketmafioso.env.example marketmafioso.env
+Copy-Item release/self-host/config/marketmafioso.env.example release/self-host/config/marketmafioso.env
 ```
 
-2. Edit `marketmafioso.env`:
+2. Edit `config/marketmafioso.env`:
 
 ```text
 MarketMafioso__ClientApiKey=<random-client-key>
 MarketMafioso__DashboardBootstrapUsername=marketmafioso
 MarketMafioso__DashboardBootstrapPassword=<random-dashboard-password>
-MarketMafioso__XivDataBaseUrl=<compatible-xivdata-url-if-using-acquisition>
 ```
 
 3. Start the receiver from the repo-local compose file:
 
 ```powershell
-docker compose up -d
+docker compose -f release/self-host/config/compose.yaml up -d
 ```
 
 4. Open the dashboard:
@@ -70,7 +79,7 @@ Server URL:     http://localhost:5088/inventory
 Client API Key: the same MarketMafioso__ClientApiKey value
 ```
 
-The Docker path stores SQLite data under `./data/marketmafioso/` on the host.
+The release-bundle Docker path stores SQLite data under `release/self-host/data/marketmafioso/` on the host.
 
 ## Direct .NET Hosting
 
@@ -109,7 +118,6 @@ MarketMafioso__DatabasePath=<sqlite-file-path>
 MarketMafioso__RawJsonRetentionCount=20
 MarketMafioso__SnapshotRetentionCount=500
 MarketMafioso__DiagnosticsRetentionCount=5000
-MarketMafioso__XivDataBaseUrl=<compatible-xivdata-url>
 MarketMafioso__RequireDashboardAuth=true
 MarketMafioso__DashboardBootstrapUsername=<dashboard-user>
 MarketMafioso__DashboardBootstrapPassword=<dashboard-password>
@@ -117,26 +125,15 @@ MarketMafioso__DashboardBootstrapPassword=<dashboard-password>
 
 The bootstrap dashboard user is created only when the receiver database has no dashboard users. Changing the bootstrap password later does not rotate an existing user's password.
 
-## Reverse Proxy Notes
-
-If hosting at the root of a domain, leave `MarketMafioso__BasePath` empty:
+For setting-by-setting explanations, see:
 
 ```text
-https://marketmafioso.example.com/
+docs/receiver-settings.md
 ```
 
-If hosting under a path, set the base path and preserve that path when proxying:
+## Advanced Hosting
 
-```text
-MarketMafioso__BasePath=/marketmafioso
-MarketMafioso__PublicOrigin=https://example.com
-```
-
-The plugin inventory endpoint would then be:
-
-```text
-https://example.com/marketmafioso/api/inventory
-```
+Reverse proxy, HTTPS, path-prefix, manual Docker, and direct .NET hosting notes live in `docs/receiver-advanced-configuration.md`.
 
 ## Backups
 
