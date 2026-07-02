@@ -2,7 +2,7 @@ using Dalamud.Plugin.Services;
 using FFXIVClientStructs.FFXIV.Component.GUI;
 using static ECommons.GenericHelpers;
 
-namespace MarketMafioso.UiAutomation;
+namespace MarketMafioso.Automation.Runtime;
 
 public sealed class AddonStateReader
 {

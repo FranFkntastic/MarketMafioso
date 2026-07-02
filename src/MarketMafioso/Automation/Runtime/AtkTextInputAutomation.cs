@@ -2,7 +2,7 @@ using System;
 using System.Globalization;
 using FFXIVClientStructs.FFXIV.Component.GUI;
 
-namespace MarketMafioso.UiAutomation;
+namespace MarketMafioso.Automation.Runtime;
 
 public static class AtkTextInputAutomation
 {

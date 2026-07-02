@@ -1,7 +1,7 @@
 using System;
 using ECommons.Automation.NeoTaskManager;
 
-namespace MarketMafioso.UiAutomation;
+namespace MarketMafioso.Automation.Runtime;
 
 public sealed class UiAutomationTaskQueue : IDisposable
 {

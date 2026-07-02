@@ -7,7 +7,7 @@ using FFXIVClientStructs.FFXIV.Client.UI;
 using FFXIVClientStructs.FFXIV.Client.UI.Agent;
 using FFXIVClientStructs.FFXIV.Client.UI.Info;
 using FFXIVClientStructs.FFXIV.Component.GUI;
-using MarketMafioso.UiAutomation;
+using MarketMafioso.Automation.Runtime;
 
 namespace MarketMafioso.MarketAcquisition;
 

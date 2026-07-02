@@ -1,6 +1,6 @@
 using System.Collections.Generic;
 
-namespace MarketMafioso.UiAutomation;
+namespace MarketMafioso.Automation.Runtime;
 
 public enum UiAutomationTaskOutcome
 {
