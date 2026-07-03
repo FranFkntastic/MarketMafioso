@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Numerics;
@@ -10,6 +11,9 @@ using Dalamud.Interface.Windowing;
 using Dalamud.Plugin.Services;
 using Dalamud.Bindings.ImGui;
 using FFXIVClientStructs.FFXIV.Component.GUI;
+using MarketMafioso.Automation.Diagnostics;
+using MarketMafioso.Automation.Retainers;
+using MarketMafioso.Automation.Travel;
 using MarketMafioso.MarketAcquisition;
 using MarketMafioso.WorkshopPrep;
 
@@ -41,11 +45,13 @@ public class MainWindow : Window, IDisposable
     private readonly MarketBoardApproachService marketBoardApproachService;
     private readonly MarketAcquisitionRouteRunner marketAcquisitionRouteRunner;
     private readonly MarketBoardAutomationController marketBoardAutomationController = new();
+    private readonly string marketAcquisitionRouteDiagnosticsDirectory;
 
     private string urlBuffer = string.Empty;
     private string apiKeyBuffer = string.Empty;
     private string dashboardUrlBuffer = string.Empty;
     private string dashboardOpenStatus = "Dashboard link appears after a successful send.";
+    private string diagnosticsFolderStatus = "Route diagnostics folder opens in Explorer.";
     private string marketAcquisitionUnlockKeyBuffer = string.Empty;
     private string marketAcquisitionUnlockStatus = "Private module is hidden until unlocked.";
     private bool showApiKey = false;
@@ -150,6 +156,7 @@ public class MainWindow : Window, IDisposable
         marketBoardPurchaseAdapter = new DalamudMarketBoardPurchaseAdapter(Plugin.GameGui, log);
         marketBoardPurchaseExecutor = new MarketBoardPurchaseExecutor(marketBoardPurchaseAdapter);
         this.marketBoardApproachService = marketBoardApproachService;
+        this.marketAcquisitionRouteDiagnosticsDirectory = marketAcquisitionRouteDiagnosticsDirectory;
         marketAcquisitionRouteRunner = new MarketAcquisitionRouteRunner(
             marketAcquisitionRouteDiagnosticsDirectory,
             universalisFreshnessVerifier.VerifyAsync);
@@ -196,6 +203,7 @@ public class MainWindow : Window, IDisposable
             () => marketAcquisitionRouteRunner.CanFinalizeInputCaptureLog,
             FinalizeMarketBoardInputCaptureLog,
             () => marketAcquisitionRouteRunner.LastDiagnosticFilePath);
+        AutomationDiagnostics = new AutomationDiagnosticsWindow(CreateAutomationDiagnosticProbes(), IsMarketAcquisitionUnlocked);
 
         var restoredAcquisitionClaim = MarketAcquisitionClaimPersistence.Restore(config);
         if (restoredAcquisitionClaim != null)
@@ -210,6 +218,7 @@ public class MainWindow : Window, IDisposable
     public WorkshopProjectBrowserWindow ProjectBrowser { get; }
     public WorkshopFrozenQueueBrowserWindow FrozenQueueBrowser { get; }
     public MarketAcquisitionDiagnosticsWindow AcquisitionDiagnostics { get; }
+    public AutomationDiagnosticsWindow AutomationDiagnostics { get; }
 
     public void OnFrameworkUpdate(IFramework _)
     {
@@ -248,6 +257,12 @@ public class MainWindow : Window, IDisposable
             if (IsMarketAcquisitionUnlocked() && ImGui.BeginTabItem("Market Acquisition"))
             {
                 DrawMarketAcquisitionTab();
+                ImGui.EndTabItem();
+            }
+
+            if (IsMarketAcquisitionUnlocked() && ImGui.BeginTabItem("Diagnostics"))
+            {
+                DrawDiagnosticsTab();
                 ImGui.EndTabItem();
             }
 
@@ -815,7 +830,7 @@ public class MainWindow : Window, IDisposable
 
     private static bool EnsureRouteTravelUiIsClear(MarketAcquisitionRouteRunner route)
     {
-        var preflight = MarketAcquisitionRouteTravelPreflight.Check(GetOpenRouteTravelBlockingAddons());
+        var preflight = AutomationTravelPreflight.Check(GetOpenRouteTravelBlockingAddons());
         if (preflight.CanSendCommand)
             return true;
 
@@ -825,7 +840,7 @@ public class MainWindow : Window, IDisposable
 
     private static IReadOnlyList<string> GetOpenRouteTravelBlockingAddons()
     {
-        return MarketAcquisitionRouteTravelPreflight.BlockingAddonNames
+        return AutomationTravelPreflight.BlockingAddonNames
             .Where(IsAddonOpen)
             .ToArray();
     }
@@ -999,22 +1014,23 @@ public class MainWindow : Window, IDisposable
             throw new InvalidOperationException(freshRead.Message);
         }
 
+        var candidatePurchaseTotals = ResolveActiveRouteLinePurchaseTotals(activeStop.ActiveItemSubtask);
         marketAcquisitionLiveCandidatePlan = activeStop.ActiveItemSubtask == null
             ? MarketAcquisitionLiveCandidatePlanner.BuildCandidatePlan(
                 activeLine,
                 plan,
                 currentWorld,
                 freshRead,
-                activeWorldPurchasedQuantity,
-                activeWorldSpentGil)
+                candidatePurchaseTotals.PurchasedQuantity,
+                candidatePurchaseTotals.SpentGil)
             : MarketAcquisitionLiveCandidatePlanner.BuildCandidatePlan(
                 activeLine,
                 plan,
                 activeStop.ActiveItemSubtask,
                 currentWorld,
                 freshRead,
-                activeLinePurchasedQuantity,
-                activeLineSpentGil);
+                candidatePurchaseTotals.PurchasedQuantity,
+                candidatePurchaseTotals.SpentGil);
         var purchaseResult = marketBoardPurchaseExecutor.ExecuteFirstCandidate(
             marketAcquisitionLiveCandidatePlan,
             freshRead);
@@ -1077,21 +1093,36 @@ public class MainWindow : Window, IDisposable
                 : null);
         acquisitionStatus = result.Message;
         ClearMarketBoardAutomationState();
-        var nextSubtask = marketAcquisitionRouteRunner.ActiveStop?.ActiveItemSubtask;
-        if (nextSubtask == null)
+        var nextStop = marketAcquisitionRouteRunner.ActiveStop;
+        if (nextStop == null ||
+            !nextStop.WorldName.Equals(currentWorld, StringComparison.OrdinalIgnoreCase))
         {
+            activeWorldPurchasedQuantity = 0;
+            activeWorldSpentGil = 0;
+            activeWorldPurchaseBatchWorld = null;
             activePurchaseLineId = null;
             activeLinePurchasedQuantity = 0;
             activeLineSpentGil = 0;
         }
-        else if (activeSubtask != null &&
-                 !string.Equals(activeSubtask.LineId, nextSubtask.LineId, StringComparison.Ordinal))
+        else
         {
-            ResetMarketBoardStateForNextRouteItem(
-                $"Advancing from {activeSubtask.ItemName ?? activeSubtask.LineId} to {nextSubtask.ItemName ?? nextSubtask.LineId} on {currentWorld}.");
+            var nextSubtask = nextStop.ActiveItemSubtask;
+            if (nextSubtask == null)
+            {
+                activePurchaseLineId = null;
+                activeLinePurchasedQuantity = 0;
+                activeLineSpentGil = 0;
+            }
+            else if (activeSubtask != null &&
+                     !string.Equals(activeSubtask.LineId, nextSubtask.LineId, StringComparison.Ordinal))
+            {
+                ResetMarketBoardStateForNextRouteItem(
+                    $"Advancing from {activeSubtask.ItemName ?? activeSubtask.LineId} to {nextSubtask.ItemName ?? nextSubtask.LineId} on {currentWorld}.");
+            }
+
+            activeWorldPurchaseBatchWorld = nextStop.WorldName;
         }
 
-        activeWorldPurchaseBatchWorld = marketAcquisitionRouteRunner.ActiveStop?.WorldName;
         ReportGuidedRouteProgress();
         if (result.Success &&
             marketAcquisitionRouteRunner.LatestWorldCompletionSummary?.WorldName.Equals(currentWorld, StringComparison.OrdinalIgnoreCase) == true)
@@ -1664,6 +1695,7 @@ public class MainWindow : Window, IDisposable
             return;
         }
 
+        var liveCandidatePurchaseTotals = ResolveActiveRouteLinePurchaseTotals(activeSubtask);
         marketAcquisitionLiveCandidatePlan = canBuildLiveCandidatePlan
             ? activeSubtask == null
                 ? MarketAcquisitionLiveCandidatePlanner.BuildCandidatePlan(
@@ -1671,16 +1703,16 @@ public class MainWindow : Window, IDisposable
                     plan,
                     currentWorld,
                     marketBoardReadResult,
-                    activeSubtask == null ? activeWorldPurchasedQuantity : activeLinePurchasedQuantity,
-                    activeSubtask == null ? activeWorldSpentGil : activeLineSpentGil)
+                    liveCandidatePurchaseTotals.PurchasedQuantity,
+                    liveCandidatePurchaseTotals.SpentGil)
                 : MarketAcquisitionLiveCandidatePlanner.BuildCandidatePlan(
                     activeLine,
                     plan,
                     activeSubtask,
                     currentWorld,
                     marketBoardReadResult,
-                    activeLinePurchasedQuantity,
-                    activeLineSpentGil)
+                    liveCandidatePurchaseTotals.PurchasedQuantity,
+                    liveCandidatePurchaseTotals.SpentGil)
             : null;
         var guidedRouteResult = marketAcquisitionRouteRunner.IsRunning &&
                                 marketAcquisitionRouteRunner.ActiveStop is { Status: "Arrived" } &&
@@ -1770,6 +1802,32 @@ public class MainWindow : Window, IDisposable
 
         DrawGuidedRouteStops(marketAcquisitionRouteRunner.Stops);
         DrawMarketBoardProbeStatus();
+    }
+
+    private void DrawDiagnosticsTab()
+    {
+        ImGui.Spacing();
+        ImGuiUi.SectionHeader("Diagnostics", ColHeader);
+
+        if (ImGuiUi.Button("Open Route Diagnostics Folder", true))
+            OpenDiagnosticsFolder(marketAcquisitionRouteDiagnosticsDirectory);
+
+        ImGui.SameLine();
+        if (ImGuiUi.Button("Market Acquisition Diagnostics", true))
+            AcquisitionDiagnostics.IsOpen = true;
+
+        ImGui.SameLine();
+        if (ImGuiUi.Button("Automation Diagnostics", true))
+            AutomationDiagnostics.IsOpen = true;
+
+        ImGui.TextColored(GetDiagnosticsFolderStatusColor(), diagnosticsFolderStatus);
+        ImGui.TextColored(ColMuted, marketAcquisitionRouteDiagnosticsDirectory);
+
+        if (marketAcquisitionRouteRunner.LastDiagnosticFilePath != null)
+            ImGui.TextColored(ColMuted, $"Latest report: {marketAcquisitionRouteRunner.LastDiagnosticFilePath}");
+
+        DrawPostRunDiagnosticSummary();
+        DrawMarketBoardInputCapture();
     }
 
     private void DrawLatestWorldCompletionSummary()
@@ -3298,6 +3356,40 @@ public class MainWindow : Window, IDisposable
         DrawRetainerCacheSection();
     }
 
+    private void OpenDiagnosticsFolder(string folderPath)
+    {
+        try
+        {
+            Directory.CreateDirectory(folderPath);
+            Process.Start(new ProcessStartInfo(folderPath)
+            {
+                UseShellExecute = true,
+            });
+            diagnosticsFolderStatus = "Opened route diagnostics folder.";
+        }
+        catch (Exception ex)
+        {
+            diagnosticsFolderStatus = $"Unable to open route diagnostics folder. {ex.Message}";
+            log.Error(ex, "[MarketMafioso] Unable to open route diagnostics folder.");
+        }
+    }
+
+    private MarketAcquisitionRouteLinePurchaseTotals ResolveActiveRouteLinePurchaseTotals(MarketAcquisitionWorldItemSubtask? activeSubtask)
+    {
+        if (activeSubtask == null)
+            return new MarketAcquisitionRouteLinePurchaseTotals(activeWorldPurchasedQuantity, activeWorldSpentGil);
+
+        var completedTotals = marketAcquisitionRouteRunner.GetLinePurchaseTotals(activeSubtask.LineId);
+        return new MarketAcquisitionRouteLinePurchaseTotals(
+            checked(completedTotals.PurchasedQuantity + activeLinePurchasedQuantity),
+            checked(completedTotals.SpentGil + activeLineSpentGil));
+    }
+
+    private Vector4 GetDiagnosticsFolderStatusColor() =>
+        diagnosticsFolderStatus.StartsWith("Unable", StringComparison.OrdinalIgnoreCase)
+            ? ColError
+            : ColMuted;
+
     private void DrawSettingsTab()
     {
         ImGui.Spacing();
@@ -3408,6 +3500,7 @@ public class MainWindow : Window, IDisposable
             {
                 marketAcquisitionRouteRunner.Stop();
                 AcquisitionDiagnostics.IsOpen = false;
+                AutomationDiagnostics.IsOpen = false;
                 MarketAcquisitionUnlock.Lock(config);
                 config.Save();
                 marketAcquisitionUnlockKeyBuffer = string.Empty;
@@ -3415,8 +3508,12 @@ public class MainWindow : Window, IDisposable
             }
 
             ImGui.TextColored(ColMuted, "Locking hides the UI only. Existing local request state and server data are left untouched.");
+            if (ImGui.Button("Automation Diagnostics"))
+                AutomationDiagnostics.IsOpen = true;
             return;
         }
+
+        AutomationDiagnostics.IsOpen = false;
 
         ImGui.TextColored(ColMuted, "Private/internal modules are hidden by default.");
         ImGui.Text("Unlock key:");
@@ -3502,6 +3599,84 @@ public class MainWindow : Window, IDisposable
             : ColMuted;
 
     private bool IsMarketAcquisitionUnlocked() => MarketAcquisitionUnlock.IsUnlocked(config);
+
+    private IReadOnlyList<IAutomationDiagnosticProbe> CreateAutomationDiagnosticProbes()
+    {
+        return
+        [
+            new AutomationDiagnosticProbe("Retainer UI", RunRetainerUiDiagnosticProbe),
+            new AutomationDiagnosticProbe("Market Board UI", RunMarketBoardUiDiagnosticProbe),
+            new AutomationDiagnosticProbe("External Helpers", RunExternalHelperDiagnosticProbe),
+        ];
+    }
+
+    private AutomationDiagnosticProbeResult RunRetainerUiDiagnosticProbe()
+    {
+        var state = new RetainerUiStateReader(Plugin.GameGui).DescribeRetainerUiState(
+            [
+                RetainerInventoryAddonNames.RetainerList,
+                RetainerInventoryAddonNames.SelectString,
+                RetainerInventoryAddonNames.InventoryLarge,
+                RetainerInventoryAddonNames.InventorySmall,
+                RetainerInventoryAddonNames.InputNumeric,
+            ]);
+
+        return new AutomationDiagnosticProbeResult(
+            "Retainer UI",
+            IsSuccess: true,
+            state,
+            new Dictionary<string, string?>
+            {
+                ["retainerList"] = DescribeAddon(RetainerInventoryAddonNames.RetainerList),
+                ["selectString"] = DescribeAddon(RetainerInventoryAddonNames.SelectString),
+                ["inventoryLarge"] = DescribeAddon(RetainerInventoryAddonNames.InventoryLarge),
+                ["inventorySmall"] = DescribeAddon(RetainerInventoryAddonNames.InventorySmall),
+                ["inputNumeric"] = DescribeAddon(RetainerInventoryAddonNames.InputNumeric),
+            });
+    }
+
+    private AutomationDiagnosticProbeResult RunMarketBoardUiDiagnosticProbe()
+    {
+        var details = new Dictionary<string, string?>
+        {
+            ["itemSearch"] = DescribeAddon("ItemSearch"),
+            ["itemSearchResult"] = DescribeAddon("ItemSearchResult"),
+            ["itemDetail"] = DescribeAddon("ItemDetail"),
+        };
+        var isAnyMarketBoardAddonVisible = details.Values.Any(value => value?.Contains("visible", StringComparison.OrdinalIgnoreCase) == true);
+
+        return new AutomationDiagnosticProbeResult(
+            "Market Board UI",
+            isAnyMarketBoardAddonVisible,
+            isAnyMarketBoardAddonVisible
+                ? "At least one tracked market-board addon is visible."
+                : "No tracked market-board addon is visible.",
+            details);
+    }
+
+    private AutomationDiagnosticProbeResult RunExternalHelperDiagnosticProbe()
+    {
+        var autoRetainerAvailable = autoRetainerRefresh.IsLoaded;
+        var viwiAvailable = viwiWorkshoppaIpc.IsAvailable;
+        return new AutomationDiagnosticProbeResult(
+            "External Helpers",
+            autoRetainerAvailable || viwiAvailable,
+            "External helper availability probe completed.",
+            new Dictionary<string, string?>
+            {
+                ["autoRetainer"] = autoRetainerAvailable ? "loaded" : "not loaded",
+                ["viwiWorkshoppa"] = viwiAvailable ? "loaded" : "not loaded",
+            });
+    }
+
+    private static unsafe string DescribeAddon(string addonName)
+    {
+        var addon = Plugin.GameGui.GetAddonByName<AtkUnitBase>(addonName, 1);
+        if (addon == null)
+            return "not present";
+
+        return $"{(addon->IsReady ? "ready" : "not ready")}, {(addon->IsVisible ? "visible" : "hidden")}";
+    }
 
     private void ApplyServerUrlPreset(string serverUrl)
     {

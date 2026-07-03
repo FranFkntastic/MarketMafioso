@@ -12,6 +12,7 @@ using FFXIVClientStructs.FFXIV.Client.Game.Control;
 using FFXIVClientStructs.FFXIV.Client.Game;
 using FFXIVClientStructs.FFXIV.Client.UI;
 using FFXIVClientStructs.FFXIV.Component.GUI;
+using MarketMafioso.Automation.Runtime;
 using ClientGameObject = FFXIVClientStructs.FFXIV.Client.Game.Object.GameObject;
 
 namespace MarketMafioso.WorkshopPrep;
@@ -41,7 +42,7 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
     private readonly IObjectTable objectTable;
     private readonly ITargetManager targetManager;
     private readonly ICondition condition;
-    private readonly WorkshopExternalAutomationCoordinator externalAutomationCoordinator;
+    private readonly ExternalAutomationCoordinator externalAutomationCoordinator;
     private uint? pendingContributionItemId;
     private WorkshopAssemblyPendingConfirmationKind pendingConfirmationKind;
     private bool requestItemSelectionStarted;
@@ -54,7 +55,7 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
         IObjectTable objectTable,
         ITargetManager targetManager,
         ICondition condition,
-        WorkshopExternalAutomationCoordinator externalAutomationCoordinator)
+        ExternalAutomationCoordinator externalAutomationCoordinator)
     {
         this.gameGui = gameGui;
         this.addonLifecycle = addonLifecycle;

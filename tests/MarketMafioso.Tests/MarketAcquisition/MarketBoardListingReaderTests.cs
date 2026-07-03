@@ -7,7 +7,7 @@ public sealed class MarketBoardListingReaderTests
     {
         var listings = new[]
         {
-            new MarketMafioso.MarketAcquisition.MarketBoardLiveListing
+            new MarketMafioso.Automation.MarketBoard.MarketBoardLiveListing
             {
                 ItemId = 7017,
                 WorldName = "Maduin",
@@ -18,7 +18,7 @@ public sealed class MarketBoardListingReaderTests
             },
         };
 
-        var result = MarketMafioso.MarketAcquisition.MarketBoardListingReader.BuildReadResult(
+        var result = MarketMafioso.Automation.MarketBoard.MarketBoardListingReader.BuildReadResult(
             waitingForListings: true,
             itemId: 7017,
             currentWorld: "Maduin",
@@ -33,7 +33,7 @@ public sealed class MarketBoardListingReaderTests
     public void BuildReadResult_ReportsInfoProxyListingCapacity()
     {
         var listings = Enumerable.Range(0, 100)
-            .Select(index => new MarketMafioso.MarketAcquisition.MarketBoardLiveListing
+            .Select(index => new MarketMafioso.Automation.MarketBoard.MarketBoardLiveListing
             {
                 ItemId = 18,
                 WorldName = "Siren",
@@ -44,7 +44,7 @@ public sealed class MarketBoardListingReaderTests
             })
             .ToArray();
 
-        var result = MarketMafioso.MarketAcquisition.MarketBoardListingReader.BuildReadResult(
+        var result = MarketMafioso.Automation.MarketBoard.MarketBoardListingReader.BuildReadResult(
             waitingForListings: false,
             itemId: 18,
             currentWorld: "Siren",
@@ -63,7 +63,7 @@ public sealed class MarketBoardListingReaderTests
     public void BuildReadResult_ReportsTruncatedInfoProxyListingCount()
     {
         var listings = Enumerable.Range(0, 100)
-            .Select(index => new MarketMafioso.MarketAcquisition.MarketBoardLiveListing
+            .Select(index => new MarketMafioso.Automation.MarketBoard.MarketBoardLiveListing
             {
                 ItemId = 18,
                 WorldName = "Siren",
@@ -74,7 +74,7 @@ public sealed class MarketBoardListingReaderTests
             })
             .ToArray();
 
-        var result = MarketMafioso.MarketAcquisition.MarketBoardListingReader.BuildReadResult(
+        var result = MarketMafioso.Automation.MarketBoard.MarketBoardListingReader.BuildReadResult(
             waitingForListings: false,
             itemId: 18,
             currentWorld: "Siren",
@@ -92,7 +92,7 @@ public sealed class MarketBoardListingReaderTests
     [Fact]
     public void BuildReadResult_CarriesInfoProxyRequestIds()
     {
-        var result = MarketMafioso.MarketAcquisition.MarketBoardListingReader.BuildReadResult(
+        var result = MarketMafioso.Automation.MarketBoard.MarketBoardListingReader.BuildReadResult(
             waitingForListings: false,
             itemId: 18,
             currentWorld: "Siren",
@@ -111,7 +111,7 @@ public sealed class MarketBoardListingReaderTests
     {
         var listings = new[]
         {
-            new MarketMafioso.MarketAcquisition.MarketBoardLiveListing
+            new MarketMafioso.Automation.MarketBoard.MarketBoardLiveListing
             {
                 ItemId = 5066,
                 RawItemId = 5066,
@@ -121,7 +121,7 @@ public sealed class MarketBoardListingReaderTests
                 UnitPrice = 2_000,
                 Quantity = 99,
             },
-            new MarketMafioso.MarketAcquisition.MarketBoardLiveListing
+            new MarketMafioso.Automation.MarketBoard.MarketBoardLiveListing
             {
                 ItemId = 5121,
                 RawItemId = 5121,
@@ -133,7 +133,7 @@ public sealed class MarketBoardListingReaderTests
             },
         };
 
-        var result = MarketMafioso.MarketAcquisition.MarketBoardListingReader.BuildReadResult(
+        var result = MarketMafioso.Automation.MarketBoard.MarketBoardListingReader.BuildReadResult(
             waitingForListings: false,
             itemId: 5121,
             currentWorld: "Malboro",
@@ -144,7 +144,7 @@ public sealed class MarketBoardListingReaderTests
             nextRequestId: 13);
 
         Assert.Equal("ListingCacheSwitching", result.Status);
-        Assert.Equal(MarketMafioso.MarketAcquisition.MarketBoardListingReadState.SwitchingItem, result.ReadState);
+        Assert.Equal(MarketMafioso.Automation.MarketBoard.MarketBoardListingReadState.SwitchingItem, result.ReadState);
         Assert.False(result.IsFresh);
         Assert.Empty(result.Listings);
         Assert.Equal(1, result.RawItemIdMismatchCounts[5066]);
@@ -156,7 +156,7 @@ public sealed class MarketBoardListingReaderTests
     {
         var listings = new[]
         {
-            new MarketMafioso.MarketAcquisition.MarketBoardLiveListing
+            new MarketMafioso.Automation.MarketBoard.MarketBoardLiveListing
             {
                 ItemId = 5066,
                 WorldName = "Coeurl",
@@ -165,7 +165,7 @@ public sealed class MarketBoardListingReaderTests
                 UnitPrice = 0,
                 Quantity = 0,
             },
-            new MarketMafioso.MarketAcquisition.MarketBoardLiveListing
+            new MarketMafioso.Automation.MarketBoard.MarketBoardLiveListing
             {
                 ItemId = 5066,
                 WorldName = "Coeurl",
@@ -176,7 +176,7 @@ public sealed class MarketBoardListingReaderTests
             },
         };
 
-        var result = MarketMafioso.MarketAcquisition.MarketBoardListingReader.BuildReadResult(
+        var result = MarketMafioso.Automation.MarketBoard.MarketBoardListingReader.BuildReadResult(
             waitingForListings: false,
             itemId: 5066,
             currentWorld: "Coeurl",
@@ -190,3 +190,4 @@ public sealed class MarketBoardListingReaderTests
         Assert.Equal(10u, listing.Quantity);
     }
 }
+

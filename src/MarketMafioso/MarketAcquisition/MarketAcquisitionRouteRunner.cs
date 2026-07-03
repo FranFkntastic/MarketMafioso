@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using MarketMafioso.Automation.Travel;
 
 namespace MarketMafioso.MarketAcquisition;
 
@@ -149,6 +150,9 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         return Start(plan, diagnosticsRequested, includeOpportunisticChecksRequested);
     }
 
+    public MarketAcquisitionRouteLinePurchaseTotals GetLinePurchaseTotals(string lineId) =>
+        session?.GetLinePurchaseTotals(lineId) ?? default;
+
     public MarketAcquisitionRouteActionResult Pause()
     {
         if (!IsRunning)
@@ -276,7 +280,7 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         return MarketAcquisitionRouteActionResult.Ok(StatusMessage);
     }
 
-    public MarketAcquisitionRouteActionResult RecordTravelBlockedByUi(MarketAcquisitionRouteTravelPreflightResult preflight)
+    public MarketAcquisitionRouteActionResult RecordTravelBlockedByUi(AutomationTravelPreflightResult preflight)
     {
         ArgumentNullException.ThrowIfNull(preflight);
 
@@ -757,11 +761,11 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         return total;
     }
 
-    private static uint SumObservedGil(MarketAcquisitionLiveCandidatePlan candidatePlan)
+    private static ulong SumObservedGil(MarketAcquisitionLiveCandidatePlan candidatePlan)
     {
-        var total = 0u;
+        var total = 0ul;
         foreach (var row in candidatePlan.Rows)
-            total = checked(total + checked(row.LiveListing.UnitPrice * row.LiveListing.Quantity));
+            total = checked(total + ((ulong)row.LiveListing.UnitPrice * row.LiveListing.Quantity));
 
         return total;
     }

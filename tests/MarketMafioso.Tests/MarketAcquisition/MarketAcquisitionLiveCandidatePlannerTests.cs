@@ -55,11 +55,11 @@ public sealed class MarketAcquisitionLiveCandidatePlannerTests
     }
 
     [Fact]
-    public void BuildCandidatePlan_DistinguishesVisibleCacheExhaustionFromOrdinaryNoSafeListings()
+    public void BuildCandidatePlan_FailsClosedWhenTruncatedRowsMightHideEligibleListings()
     {
-        var request = CreateRequest(quantityMode: "AllBelowThreshold", quantity: 0, maxUnitPrice: 100, maxTotalGil: 0);
+        var request = CreateRequest(quantityMode: "AllBelowThreshold", quantity: 0, maxUnitPrice: 100, maxTotalGil: 0, hqPolicy: "HQOnly");
         var plan = CreatePlan();
-        var readResult = new MarketMafioso.MarketAcquisition.MarketBoardReadResult
+        var readResult = new MarketMafioso.Automation.MarketBoard.MarketBoardReadResult
         {
             Status = "Ready",
             Message = "Read truncated market board listings.",
@@ -71,7 +71,7 @@ public sealed class MarketAcquisitionLiveCandidatePlannerTests
             IsListingCountTruncated = true,
             Listings =
             [
-                CreateLiveListing("too-expensive", quantity: 1, unitPrice: 101),
+                CreateLiveListing("nq-visible", quantity: 1, unitPrice: 50, hq: false),
             ],
         };
 
@@ -88,15 +88,83 @@ public sealed class MarketAcquisitionLiveCandidatePlannerTests
     }
 
     [Fact]
+    public void BuildCandidatePlan_TreatsTruncatedAllAboveThresholdRowsAsNoSafeListings()
+    {
+        var request = CreateRequest(quantityMode: "AllBelowThreshold", quantity: 0, maxUnitPrice: 100, maxTotalGil: 0);
+        var plan = CreatePlan();
+        var readResult = new MarketMafioso.Automation.MarketBoard.MarketBoardReadResult
+        {
+            Status = "Ready",
+            Message = "Read truncated market board listings.",
+            ItemId = 2,
+            WorldName = "Gilgamesh",
+            ReportedListingCount = 120,
+            ListingCapacity = 100,
+            IsAtListingCapacity = true,
+            IsListingCountTruncated = true,
+            Listings =
+            [
+                CreateLiveListing("too-expensive-1", quantity: 99, unitPrice: 101),
+                CreateLiveListing("too-expensive-2", quantity: 99, unitPrice: 150),
+            ],
+        };
+
+        var candidatePlan = MarketMafioso.MarketAcquisition.MarketAcquisitionLiveCandidatePlanner.BuildCandidatePlan(
+            request,
+            plan,
+            "Gilgamesh",
+            readResult);
+
+        Assert.Equal("NoSafeListings", candidatePlan.Status);
+        Assert.True(candidatePlan.IsVisibleListingCacheTruncated);
+        Assert.Equal(0u, candidatePlan.WouldBuyQuantity);
+        Assert.All(candidatePlan.Rows, row => Assert.Equal("AboveThreshold", row.Reason));
+    }
+
+    [Fact]
+    public void BuildCandidatePlan_IgnoresNonMeaningfulJokePriceRows()
+    {
+        var request = CreateRequest(quantityMode: "AllBelowThreshold", quantity: 0, maxUnitPrice: 100, maxTotalGil: 0);
+        var plan = CreatePlan();
+        var readResult = new MarketMafioso.Automation.MarketBoard.MarketBoardReadResult
+        {
+            Status = "Ready",
+            Message = "Read truncated market board listings.",
+            ItemId = 2,
+            WorldName = "Gilgamesh",
+            ReportedListingCount = 120,
+            ListingCapacity = 100,
+            IsAtListingCapacity = true,
+            IsListingCountTruncated = true,
+            Listings =
+            [
+                CreateLiveListing("joke-1", quantity: 99, unitPrice: 999_999_999),
+                CreateLiveListing("joke-2", quantity: 99, unitPrice: 99_999_999),
+            ],
+        };
+
+        var candidatePlan = MarketMafioso.MarketAcquisition.MarketAcquisitionLiveCandidatePlanner.BuildCandidatePlan(
+            request,
+            plan,
+            "Gilgamesh",
+            readResult);
+
+        Assert.Equal("NoSafeListings", candidatePlan.Status);
+        Assert.Empty(candidatePlan.Rows);
+        Assert.True(candidatePlan.IsVisibleListingCacheTruncated);
+        Assert.Equal(120, candidatePlan.ReportedListingCount);
+    }
+
+    [Fact]
     public void BuildCandidatePlan_RejectsSwitchingItemRead()
     {
         var request = CreateRequest(itemId: 5121, itemName: "Darksteel Ore", quantityMode: "AllBelowThreshold", quantity: 0, maxUnitPrice: 720);
         var plan = CreatePlan(itemId: 5121, itemName: "Darksteel Ore");
         var activeSubtask = CreateActiveSubtask(itemId: 5121, itemName: "Darksteel Ore", source: "Planned");
-        var readResult = new MarketMafioso.MarketAcquisition.MarketBoardReadResult
+        var readResult = new MarketMafioso.Automation.MarketBoard.MarketBoardReadResult
         {
             Status = "ListingCacheSwitching",
-            ReadState = MarketMafioso.MarketAcquisition.MarketBoardListingReadState.SwitchingItem,
+            ReadState = MarketMafioso.Automation.MarketBoard.MarketBoardListingReadState.SwitchingItem,
             ItemId = 5121,
             WorldName = "Gilgamesh",
         };
@@ -117,7 +185,7 @@ public sealed class MarketAcquisitionLiveCandidatePlannerTests
     {
         var request = CreateRequest(quantityMode: "AllBelowThreshold", quantity: 0, maxUnitPrice: 100, maxTotalGil: 0);
         var plan = CreatePlan();
-        var firstPage = new MarketMafioso.MarketAcquisition.MarketBoardReadResult
+        var firstPage = new MarketMafioso.Automation.MarketBoard.MarketBoardReadResult
         {
             Status = "Ready",
             ItemId = 2,
@@ -135,7 +203,7 @@ public sealed class MarketAcquisitionLiveCandidatePlannerTests
             ],
         };
 
-        var secondPage = new MarketMafioso.MarketAcquisition.MarketBoardReadResult
+        var secondPage = new MarketMafioso.Automation.MarketBoard.MarketBoardReadResult
         {
             Status = "Ready",
             ItemId = 2,
@@ -150,7 +218,7 @@ public sealed class MarketAcquisitionLiveCandidatePlannerTests
             ],
         };
 
-        var accumulated = MarketMafioso.MarketAcquisition.MarketBoardAccumulatedReadResult
+        var accumulated = MarketMafioso.Automation.MarketBoard.MarketBoardAccumulatedReadResult
             .FromReadResult(firstPage)
             .Append(secondPage);
 
@@ -428,7 +496,7 @@ public sealed class MarketAcquisitionLiveCandidatePlannerTests
             Listings = [],
         };
 
-    private static MarketMafioso.MarketAcquisition.MarketBoardLiveListing CreateLiveListing(
+    private static MarketMafioso.Automation.MarketBoard.MarketBoardLiveListing CreateLiveListing(
         string listingId,
         uint quantity,
         uint unitPrice,
@@ -446,3 +514,4 @@ public sealed class MarketAcquisitionLiveCandidatePlannerTests
             IsHq = hq,
         };
 }
+

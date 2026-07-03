@@ -14,13 +14,32 @@ public sealed class MarketAcquisitionRouteDiagnosticsTests
 
         Assert.True(diagnostics.IsEnabled);
         Assert.NotNull(diagnostics.FilePath);
-        Assert.StartsWith(directory, diagnostics.FilePath, StringComparison.Ordinal);
-        Assert.EndsWith("route-20260625-224512.log", diagnostics.FilePath, StringComparison.Ordinal);
+        var packageDirectory = Path.Combine(directory, "route-20260625-224512");
+        Assert.Equal(packageDirectory, Path.GetDirectoryName(diagnostics.FilePath));
+        Assert.EndsWith(Path.Combine("route-20260625-224512", "route.log"), diagnostics.FilePath, StringComparison.Ordinal);
         Assert.True(File.Exists(diagnostics.FilePath));
-        Assert.EndsWith("observed-listings-20260625-224512.csv", diagnostics.ObservedListingsCsvPath, StringComparison.Ordinal);
+        Assert.EndsWith(Path.Combine("route-20260625-224512", "observed-listings.csv"), diagnostics.ObservedListingsCsvPath, StringComparison.Ordinal);
         Assert.True(File.Exists(diagnostics.ObservedListingsCsvPath));
-        Assert.EndsWith("purchase-records-20260625-224512.csv", diagnostics.PurchaseRecordsCsvPath, StringComparison.Ordinal);
+        Assert.EndsWith(Path.Combine("route-20260625-224512", "purchase-records.csv"), diagnostics.PurchaseRecordsCsvPath, StringComparison.Ordinal);
         Assert.True(File.Exists(diagnostics.PurchaseRecordsCsvPath));
+    }
+
+    [Fact]
+    public void CreateEnabled_AddsSuffixWhenPackageFolderExists()
+    {
+        var directory = CreateTempDirectory();
+        var startedAt = new DateTimeOffset(2026, 6, 25, 22, 45, 12, TimeSpan.Zero);
+        using var first = MarketMafioso.MarketAcquisition.MarketAcquisitionRouteDiagnostics.CreateEnabled(
+            directory,
+            startedAt);
+
+        using var second = MarketMafioso.MarketAcquisition.MarketAcquisitionRouteDiagnostics.CreateEnabled(
+            directory,
+            startedAt);
+
+        Assert.EndsWith(Path.Combine("route-20260625-224512-1", "route.log"), second.FilePath, StringComparison.Ordinal);
+        Assert.True(Directory.Exists(Path.GetDirectoryName(second.FilePath)!));
+        Assert.NotEqual(Path.GetDirectoryName(first.FilePath), Path.GetDirectoryName(second.FilePath));
     }
 
     [Fact]
@@ -36,7 +55,7 @@ public sealed class MarketAcquisitionRouteDiagnosticsTests
         Assert.True(diagnostics.IsEnabled);
         Assert.NotNull(diagnostics.FilePath);
         Assert.StartsWith(directory, diagnostics.FilePath, StringComparison.Ordinal);
-        Assert.EndsWith("input-capture-20260625-224512.log", diagnostics.FilePath, StringComparison.Ordinal);
+        Assert.EndsWith(Path.Combine("input-capture-20260625-224512", "input-capture.log"), diagnostics.FilePath, StringComparison.Ordinal);
         Assert.True(File.Exists(diagnostics.FilePath));
         Assert.Null(diagnostics.ObservedListingsCsvPath);
         Assert.Null(diagnostics.PurchaseRecordsCsvPath);
@@ -92,12 +111,12 @@ public sealed class MarketAcquisitionRouteDiagnosticsTests
             DateTimeOffset.UnixEpoch);
 
         diagnostics.RecordAutomationSnapshot(
-            MarketMafioso.MarketAcquisition.MarketBoardAutomationSnapshot.Create(
+            MarketMafioso.Automation.MarketBoard.MarketBoardAutomationSnapshot.Create(
                 "SearchItem",
                 "AfterInput",
                 "ItemSearchResultReady",
                 "SearchSent",
-                MarketMafioso.MarketAcquisition.MarketBoardAutomationOutcome.Recoverable,
+                MarketMafioso.Automation.MarketBoard.MarketBoardAutomationOutcome.Recoverable,
                 "RetryHumanEnterPath",
                 new Dictionary<string, string?>
                 {
@@ -155,7 +174,7 @@ public sealed class MarketAcquisitionRouteDiagnosticsTests
                         Message = "Below threshold.",
                         RunningQuantityAfter = 55,
                         RunningGilAfter = 30140,
-                        LiveListing = new MarketMafioso.MarketAcquisition.MarketBoardLiveListing
+                        LiveListing = new MarketMafioso.Automation.MarketBoard.MarketBoardLiveListing
                         {
                             ItemId = 5121,
                             RawItemId = 5121,
@@ -241,6 +260,38 @@ public sealed class MarketAcquisitionRouteDiagnosticsTests
         Assert.Null(diagnostics.FilePath);
     }
 
+    [Fact]
+    public void RecordCsvEvents_after_dispose_is_noop()
+    {
+        var directory = CreateTempDirectory();
+        var diagnostics = MarketMafioso.MarketAcquisition.MarketAcquisitionRouteDiagnostics.CreateEnabled(
+            directory,
+            DateTimeOffset.UnixEpoch);
+
+        diagnostics.Dispose();
+
+        diagnostics.RecordObservedListings(
+            "request-1",
+            "Coeurl",
+            "Crystal",
+            null,
+            new MarketMafioso.MarketAcquisition.MarketAcquisitionLiveCandidatePlan());
+        diagnostics.RecordPurchaseAudit(
+            "request-1",
+            "Crystal",
+            "line-1",
+            "Darksteel Ore",
+            "Coeurl",
+            "listing-1",
+            "retainer-1",
+            1,
+            100,
+            "Skipped",
+            "Planned",
+            5121,
+            "Ready");
+    }
+
     private static string CreateTempDirectory()
     {
         var directory = Path.Combine(Path.GetTempPath(), "MarketMafiosoTests", Guid.NewGuid().ToString("N"));
@@ -255,3 +306,4 @@ public sealed class MarketAcquisitionRouteDiagnosticsTests
         return reader.ReadToEnd();
     }
 }
+

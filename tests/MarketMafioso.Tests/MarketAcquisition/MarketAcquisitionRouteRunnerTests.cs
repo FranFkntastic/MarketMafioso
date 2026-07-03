@@ -404,11 +404,11 @@ public sealed class MarketAcquisitionRouteRunnerTests
 
         var result = runner.RecordListingReadPending(
             "Maduin",
-            new MarketMafioso.MarketAcquisition.MarketBoardReadResult
+            new MarketMafioso.Automation.MarketBoard.MarketBoardReadResult
             {
                 Status = "ListingCacheSwitching",
                 Message = "Market board listing cache is still switching.",
-                ReadState = MarketMafioso.MarketAcquisition.MarketBoardListingReadState.SwitchingItem,
+                ReadState = MarketMafioso.Automation.MarketBoard.MarketBoardListingReadState.SwitchingItem,
                 ItemId = 7017,
                 WorldName = "Maduin",
                 RawItemIdMismatchCounts = new Dictionary<uint, int>
@@ -435,11 +435,11 @@ public sealed class MarketAcquisitionRouteRunnerTests
         runner.Start(CreateMultiItemWorldPlan("Maduin"));
         runner.ExecutePendingTravelCommand(_ => true);
         runner.RecordCurrentWorld("Maduin");
-        var read = new MarketMafioso.MarketAcquisition.MarketBoardReadResult
+        var read = new MarketMafioso.Automation.MarketBoard.MarketBoardReadResult
         {
             Status = "ListingCacheSwitching",
             Message = "Market board listing cache is still switching.",
-            ReadState = MarketMafioso.MarketAcquisition.MarketBoardListingReadState.SwitchingItem,
+            ReadState = MarketMafioso.Automation.MarketBoard.MarketBoardListingReadState.SwitchingItem,
             ItemId = 7017,
             WorldName = "Maduin",
             RawItemIdMismatchCounts = new Dictionary<uint, int>
@@ -491,6 +491,24 @@ public sealed class MarketAcquisitionRouteRunnerTests
         Assert.True(runner.MarketBoardCloseRequiredBeforeTravel);
         Assert.Equal(10u, runner.Stops[0].PurchasedQuantity);
         Assert.Equal(100u, runner.Stops[0].SpentGil);
+    }
+
+    [Fact]
+    public void GetLinePurchaseTotals_SumsCompletedLinePurchasesAcrossWorlds()
+    {
+        using var runner = CreateRunner();
+        runner.Start(CreateRepeatedLineWorldPlan("Siren", "Adamantoise"));
+        runner.RecordCurrentWorld("Siren");
+        runner.RecordProbe("Siren", CreateCandidatePlan(status: "Ready", quantity: 384, gil: 64_966));
+        runner.RecordWorldPurchaseBatchComplete("Siren", purchasedQuantity: 384, spentGil: 64_966);
+        runner.RecordCurrentWorld("Adamantoise");
+        runner.RecordProbe("Adamantoise", CreateCandidatePlan(status: "Ready", quantity: 182, gil: 14_716));
+        runner.RecordWorldPurchaseBatchComplete("Adamantoise", purchasedQuantity: 182, spentGil: 14_716);
+
+        var totals = runner.GetLinePurchaseTotals("line-gold-ore");
+
+        Assert.Equal(566u, totals.PurchasedQuantity);
+        Assert.Equal(79_682u, totals.SpentGil);
     }
 
     [Fact]
@@ -569,6 +587,34 @@ public sealed class MarketAcquisitionRouteRunnerTests
     }
 
     [Fact]
+    public void RecordProbe_AllowsObservedGilAboveUIntMax()
+    {
+        using var runner = CreateRunner();
+        runner.Start(CreateMultiItemWorldPlan("Maduin"), enableDiagnostics: true);
+        runner.RecordCurrentWorld("Maduin");
+
+        var result = runner.RecordProbe(
+            "Maduin",
+            CreateObservedCandidatePlan(
+                status: "NoSafeListings",
+                quantity: 0,
+                gil: 0,
+                rows:
+                [
+                    CreateLiveCandidateRow(decision: "Skipped", reason: "AboveThreshold", quantity: 99, unitPrice: 9_999_999),
+                    CreateLiveCandidateRow(decision: "Skipped", reason: "AboveThreshold", quantity: 99, unitPrice: 9_999_999),
+                    CreateLiveCandidateRow(decision: "Skipped", reason: "AboveThreshold", quantity: 99, unitPrice: 9_999_999),
+                    CreateLiveCandidateRow(decision: "Skipped", reason: "AboveThreshold", quantity: 99, unitPrice: 9_999_999),
+                    CreateLiveCandidateRow(decision: "Skipped", reason: "AboveThreshold", quantity: 99, unitPrice: 9_999_999),
+                ]));
+
+        Assert.True(result.Success);
+        var text = ReadLog(runner.LastDiagnosticFilePath!);
+        Assert.Contains("observedQuantity: 495", text, StringComparison.Ordinal);
+        Assert.Contains("observedGil: 4949999505", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void RecordProbe_RequiresMarketBoardCloseBeforeNextTravel()
     {
         using var runner = CreateRunner();
@@ -634,7 +680,7 @@ public sealed class MarketAcquisitionRouteRunnerTests
         runner.Start(CreatePlan("Maduin"), enableDiagnostics: true);
         runner.RecordCurrentWorld("Maduin");
 
-        var result = runner.RecordSearchResult(new MarketMafioso.MarketAcquisition.MarketBoardItemSearchResult
+        var result = runner.RecordSearchResult(new MarketMafioso.Automation.MarketBoard.MarketBoardItemSearchResult
         {
             Status = "ModeReset",
             Message = "Resetting market board item search mode before submitting.",
@@ -658,7 +704,7 @@ public sealed class MarketAcquisitionRouteRunnerTests
         runner.Start(CreatePlan("Maduin"));
         runner.RecordCurrentWorld("Maduin");
 
-        var result = runner.RecordSearchResult(new MarketMafioso.MarketAcquisition.MarketBoardItemSearchResult
+        var result = runner.RecordSearchResult(new MarketMafioso.Automation.MarketBoard.MarketBoardItemSearchResult
         {
             Status = "SearchSent",
             Message = "Searching market board for Varnish (7017).",
@@ -677,7 +723,7 @@ public sealed class MarketAcquisitionRouteRunnerTests
         runner.RecordCurrentWorld("Maduin");
         var startedAt = DateTimeOffset.UnixEpoch;
 
-        var result = runner.RecordSearchResult(new MarketMafioso.MarketAcquisition.MarketBoardItemSearchResult
+        var result = runner.RecordSearchResult(new MarketMafioso.Automation.MarketBoard.MarketBoardItemSearchResult
         {
             Status = "ItemOpenSent",
             Message = "Opening market board listings for Varnish (7017).",
@@ -696,13 +742,13 @@ public sealed class MarketAcquisitionRouteRunnerTests
         runner.RecordCurrentWorld("Maduin");
         var startedAt = DateTimeOffset.UnixEpoch;
 
-        var first = runner.RecordSearchResult(new MarketMafioso.MarketAcquisition.MarketBoardItemSearchResult
+        var first = runner.RecordSearchResult(new MarketMafioso.Automation.MarketBoard.MarketBoardItemSearchResult
         {
             Status = "SearchSent",
             Message = "Searching market board for Varnish (7017).",
         }, startedAt);
 
-        var timedOut = runner.RecordSearchResult(new MarketMafioso.MarketAcquisition.MarketBoardItemSearchResult
+        var timedOut = runner.RecordSearchResult(new MarketMafioso.Automation.MarketBoard.MarketBoardItemSearchResult
         {
             Status = "SearchSent",
             Message = "Searching market board for Varnish (7017).",
@@ -724,7 +770,7 @@ public sealed class MarketAcquisitionRouteRunnerTests
         runner.RecordCurrentWorld("Maduin");
         var startedAt = DateTimeOffset.UnixEpoch;
 
-        runner.RecordSearchResult(new MarketMafioso.MarketAcquisition.MarketBoardItemSearchResult
+        runner.RecordSearchResult(new MarketMafioso.Automation.MarketBoard.MarketBoardItemSearchResult
         {
             Status = "SearchSent",
             Message = "Searching market board for Varnish (7017).",
@@ -735,7 +781,7 @@ public sealed class MarketAcquisitionRouteRunnerTests
             },
         }, startedAt);
 
-        runner.RecordSearchResult(new MarketMafioso.MarketAcquisition.MarketBoardItemSearchResult
+        runner.RecordSearchResult(new MarketMafioso.Automation.MarketBoard.MarketBoardItemSearchResult
         {
             Status = "SearchSent",
             Message = "Searching market board for Varnish (7017).",
@@ -764,7 +810,7 @@ public sealed class MarketAcquisitionRouteRunnerTests
         runner.Start(CreatePlan("Maduin"));
         runner.RecordCurrentWorld("Maduin");
 
-        var result = runner.RecordSearchResult(new MarketMafioso.MarketAcquisition.MarketBoardItemSearchResult
+        var result = runner.RecordSearchResult(new MarketMafioso.Automation.MarketBoard.MarketBoardItemSearchResult
         {
             Status = "ListingsReady",
             Message = "Market board listings are open for Varnish (7017).",
@@ -779,7 +825,7 @@ public sealed class MarketAcquisitionRouteRunnerTests
     {
         using var runner = CreateRunner();
 
-        var result = runner.RecordInputCapture("before-purchase-click", new MarketMafioso.MarketAcquisition.MarketBoardInputCapture
+        var result = runner.RecordInputCapture("before-purchase-click", new MarketMafioso.Automation.MarketBoard.MarketBoardInputCapture
         {
             Status = "Captured",
             Message = "Captured current market board UI/input state.",
@@ -794,7 +840,8 @@ public sealed class MarketAcquisitionRouteRunnerTests
         Assert.True(result.Success);
         Assert.NotNull(runner.LastDiagnosticFilePath);
         Assert.EndsWith(".log", runner.LastDiagnosticFilePath!, StringComparison.Ordinal);
-        Assert.Contains("input-capture-", Path.GetFileName(runner.LastDiagnosticFilePath!), StringComparison.Ordinal);
+        Assert.Contains("input-capture-", Path.GetFileName(Path.GetDirectoryName(runner.LastDiagnosticFilePath!)), StringComparison.Ordinal);
+        Assert.Equal("input-capture.log", Path.GetFileName(runner.LastDiagnosticFilePath!));
         var text = ReadLog(runner.LastDiagnosticFilePath!);
         Assert.Contains("input-capture", text, StringComparison.Ordinal);
         Assert.Contains("label: before-purchase-click", text, StringComparison.Ordinal);
@@ -811,12 +858,12 @@ public sealed class MarketAcquisitionRouteRunnerTests
         runner.Start(CreatePlan("Maduin"), enableDiagnostics: true);
 
         var result = runner.RecordAutomationSnapshot(
-            MarketMafioso.MarketAcquisition.MarketBoardAutomationSnapshot.Create(
+            MarketMafioso.Automation.MarketBoard.MarketBoardAutomationSnapshot.Create(
                 "BuyListing",
                 "AfterConfirmation",
                 "ListingRemoved",
                 "MarketBoardNotOpen",
-                MarketMafioso.MarketAcquisition.MarketBoardAutomationOutcome.ExpectedAlternate,
+                MarketMafioso.Automation.MarketBoard.MarketBoardAutomationOutcome.ExpectedAlternate,
                 "TreatListingAsRemoved"));
 
         Assert.True(result.Success);
@@ -830,7 +877,7 @@ public sealed class MarketAcquisitionRouteRunnerTests
     public void FinalizeInputCaptureLog_ClosesStandaloneCaptureDiagnostics()
     {
         using var runner = CreateRunner();
-        runner.RecordInputCapture("before-purchase-click", new MarketMafioso.MarketAcquisition.MarketBoardInputCapture
+        runner.RecordInputCapture("before-purchase-click", new MarketMafioso.Automation.MarketBoard.MarketBoardInputCapture
         {
             Status = "Captured",
             Message = "Captured current market board UI/input state.",
@@ -850,7 +897,7 @@ public sealed class MarketAcquisitionRouteRunnerTests
     {
         using var runner = CreateRunner();
         runner.Start(CreatePlan("Maduin"), enableDiagnostics: true);
-        runner.RecordInputCapture("during-route", new MarketMafioso.MarketAcquisition.MarketBoardInputCapture
+        runner.RecordInputCapture("during-route", new MarketMafioso.Automation.MarketBoard.MarketBoardInputCapture
         {
             Status = "Captured",
             Message = "Captured current market board UI/input state.",
@@ -931,6 +978,35 @@ public sealed class MarketAcquisitionRouteRunnerTests
                 .ToArray(),
         };
 
+    private static MarketMafioso.MarketAcquisition.MarketAcquisitionPlan CreateRepeatedLineWorldPlan(params string[] worlds) =>
+        CreatePlan(worlds) with
+        {
+            WorldBatches = worlds
+                .Select(world => new MarketMafioso.MarketAcquisition.MarketAcquisitionWorldBatch
+                {
+                    WorldName = world,
+                    DataCenter = MarketMafioso.MarketAcquisition.MarketAcquisitionPlanner.ResolveNorthAmericaDataCenter(world),
+                    PlannedQuantity = 999,
+                    PlannedGil = 10_000,
+                    ItemSubtasks =
+                    [
+                        new MarketMafioso.MarketAcquisition.MarketAcquisitionWorldItemSubtask
+                        {
+                            LineId = "line-gold-ore",
+                            LineOrdinal = 0,
+                            Source = "Planned",
+                            ItemId = 5118,
+                            ItemName = "Gold Ore",
+                            WorldName = world,
+                            PlannedQuantity = 999,
+                            PlannedGil = 10_000,
+                        },
+                    ],
+                    Listings = [],
+                })
+                .ToArray(),
+        };
+
     private static MarketMafioso.MarketAcquisition.MarketAcquisitionLiveCandidatePlan CreateCandidatePlan(
         string status,
         uint quantity,
@@ -973,7 +1049,7 @@ public sealed class MarketAcquisitionRouteRunnerTests
             Decision = decision,
             Reason = reason,
             Message = "Test row.",
-            LiveListing = new MarketMafioso.MarketAcquisition.MarketBoardLiveListing
+            LiveListing = new MarketMafioso.Automation.MarketBoard.MarketBoardLiveListing
             {
                 ItemId = 2,
                 WorldName = "Maduin",
@@ -998,3 +1074,4 @@ public sealed class MarketAcquisitionRouteRunnerTests
         return reader.ReadToEnd();
     }
 }
+

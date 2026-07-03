@@ -1,6 +1,8 @@
 using System.Numerics;
 using MarketMafioso.MarketAcquisition;
 
+using MarketMafioso.Automation.Travel;
+
 namespace MarketMafioso.Tests.MarketAcquisition;
 
 public sealed class MarketBoardApproachServiceTests

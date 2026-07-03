@@ -1,6 +1,6 @@
 using System.Reflection;
 using Dalamud.Plugin.Services;
-using MarketMafioso.WorkshopPrep;
+using MarketMafioso.Automation.Runtime;
 
 namespace MarketMafioso.Tests.WorkshopPrep;
 
@@ -10,7 +10,7 @@ public sealed class WorkshopExternalAutomationCoordinatorTests
     public void SuppressTextAdvance_adds_marketmafioso_stop_request()
     {
         var stopRequests = new HashSet<string>();
-        using var coordinator = new WorkshopExternalAutomationCoordinator(
+        using var coordinator = new ExternalAutomationCoordinator(
             new FakePluginDataStore(stopRequests),
             TestPluginLog.Create());
 
@@ -23,7 +23,7 @@ public sealed class WorkshopExternalAutomationCoordinatorTests
     public void RestoreTextAdvance_removes_only_marketmafioso_stop_request()
     {
         var stopRequests = new HashSet<string> { "OtherPlugin" };
-        using var coordinator = new WorkshopExternalAutomationCoordinator(
+        using var coordinator = new ExternalAutomationCoordinator(
             new FakePluginDataStore(stopRequests),
             TestPluginLog.Create());
 
@@ -38,7 +38,7 @@ public sealed class WorkshopExternalAutomationCoordinatorTests
     public void Dispose_restores_textadvance_stop_request()
     {
         var stopRequests = new HashSet<string>();
-        var coordinator = new WorkshopExternalAutomationCoordinator(
+        var coordinator = new ExternalAutomationCoordinator(
             new FakePluginDataStore(stopRequests),
             TestPluginLog.Create());
 

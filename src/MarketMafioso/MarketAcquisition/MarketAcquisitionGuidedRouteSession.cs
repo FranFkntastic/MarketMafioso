@@ -24,6 +24,25 @@ public sealed class MarketAcquisitionGuidedRouteSession
     public bool ShouldMonitorActiveStop =>
         ActiveStop?.Status is "TravelCommandSent" or "Arrived" or "Purchasing";
 
+    public MarketAcquisitionRouteLinePurchaseTotals GetLinePurchaseTotals(string lineId)
+    {
+        if (string.IsNullOrWhiteSpace(lineId))
+            return default;
+
+        var purchasedQuantity = 0u;
+        var spentGil = 0u;
+        foreach (var line in Stops.SelectMany(stop => stop.LineStates))
+        {
+            if (!line.LineId.Equals(lineId, StringComparison.Ordinal))
+                continue;
+
+            purchasedQuantity = checked(purchasedQuantity + line.PurchasedQuantity);
+            spentGil = checked(spentGil + line.SpentGil);
+        }
+
+        return new MarketAcquisitionRouteLinePurchaseTotals(purchasedQuantity, spentGil);
+    }
+
     public static MarketAcquisitionGuidedRouteSession Start(
         MarketAcquisitionPlan plan,
         bool includeOpportunisticChecks = false)
@@ -362,11 +381,11 @@ public sealed class MarketAcquisitionGuidedRouteSession
         return total;
     }
 
-    private static uint SumObservedGil(MarketAcquisitionLiveCandidatePlan candidatePlan)
+    private static ulong SumObservedGil(MarketAcquisitionLiveCandidatePlan candidatePlan)
     {
-        var total = 0u;
+        var total = 0ul;
         foreach (var row in candidatePlan.Rows)
-            total = checked(total + checked(row.LiveListing.UnitPrice * row.LiveListing.Quantity));
+            total = checked(total + ((ulong)row.LiveListing.UnitPrice * row.LiveListing.Quantity));
 
         return total;
     }
@@ -464,7 +483,7 @@ public sealed record MarketAcquisitionRouteLineState
     public int LiveReadableListingCount { get; set; }
     public int LiveReportedListingCount { get; set; }
     public uint LiveObservedQuantity { get; set; }
-    public uint LiveObservedGil { get; set; }
+    public ulong LiveObservedGil { get; set; }
     public uint WouldBuyQuantity { get; set; }
     public uint WouldSpendGil { get; set; }
     public string? LatestMessage { get; set; }
@@ -499,3 +518,5 @@ public sealed record MarketAcquisitionGuidedRouteResult
         Message = message,
     };
 }
+
+public readonly record struct MarketAcquisitionRouteLinePurchaseTotals(uint PurchasedQuantity, uint SpentGil);

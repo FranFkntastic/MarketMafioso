@@ -9,6 +9,8 @@ using FFXIVClientStructs.FFXIV.Client.UI;
 using FFXIVClientStructs.FFXIV.Client.UI.Agent;
 using FFXIVClientStructs.FFXIV.Component.GUI;
 using Lumina.Excel.Sheets;
+using MarketMafioso.Automation.Retainers;
+using MarketMafioso.Automation.Safety;
 
 namespace MarketMafioso.WorkshopPrep;
 
@@ -27,23 +29,20 @@ public enum WorkshopRetainerRestockState
 
 public sealed class WorkshopRetainerRestockService
 {
-    private const string RetainerListAddon = "RetainerList";
-    private const string SelectStringAddon = "SelectString";
-    private const string ContextMenuAddon = "ContextMenu";
-    private const string RetainerInventoryLargeAddon = "InventoryRetainerLarge";
-    private const string RetainerInventorySmallAddon = "InventoryRetainer";
+    private const string RetainerListAddon = RetainerInventoryAddonNames.RetainerList;
+    private const string SelectStringAddon = RetainerInventoryAddonNames.SelectString;
+    private const string RetainerInventoryLargeAddon = RetainerInventoryAddonNames.InventoryLarge;
+    private const string RetainerInventorySmallAddon = RetainerInventoryAddonNames.InventorySmall;
     private const uint RetrieveFromRetainerAddonRow = 98;
     private const uint RetrieveQuantityAddonRow = 773;
 
-    private static readonly InventoryType[] RetainerPages =
+    private static readonly string[] RetainerUiStateAddons =
     [
-        InventoryType.RetainerPage1,
-        InventoryType.RetainerPage2,
-        InventoryType.RetainerPage3,
-        InventoryType.RetainerPage4,
-        InventoryType.RetainerPage5,
-        InventoryType.RetainerPage6,
-        InventoryType.RetainerPage7,
+        RetainerListAddon,
+        SelectStringAddon,
+        RetainerInventoryLargeAddon,
+        RetainerInventorySmallAddon,
+        RetainerInventoryAddonNames.InputNumeric,
     ];
 
     private static readonly InventoryType[] PlayerInventoryPages =
@@ -56,12 +55,14 @@ public sealed class WorkshopRetainerRestockService
     ];
 
     private readonly IPluginLog log;
+    private readonly RetainerLiveInventoryScanner liveInventoryScanner;
     private bool isRunning;
     private string lastStatus = "Workshop material restock has not run.";
 
     public WorkshopRetainerRestockService(IPluginLog log)
     {
         this.log = log;
+        liveInventoryScanner = new RetainerLiveInventoryScanner();
     }
 
     public bool IsRunning => isRunning;
@@ -147,34 +148,13 @@ public sealed class WorkshopRetainerRestockService
 
     public unsafe IReadOnlyList<LiveRetainerStack> ScanLiveRetainerStacks(IReadOnlySet<uint> itemIds)
     {
-        var inventoryManager = InventoryManager.Instance();
-        if (inventoryManager == null)
-            return [];
-
-        var stacks = new List<LiveRetainerStack>();
-        foreach (var page in RetainerPages)
-        {
-            var container = inventoryManager->GetInventoryContainer(page);
-            if (container == null || !container->IsLoaded)
-                continue;
-
-            for (var slotIndex = 0; slotIndex < container->Size; slotIndex++)
-            {
-                var slot = container->GetInventorySlot(slotIndex);
-                if (slot == null || slot->ItemId == 0 || !itemIds.Contains(slot->ItemId))
-                    continue;
-
-                stacks.Add(new LiveRetainerStack(page, slotIndex, slot->ItemId, slot->Quantity));
-            }
-        }
-
-        return stacks;
+        return liveInventoryScanner.ScanLiveRetainerStacks(itemIds);
     }
 
     private static async Task WaitForRetainerListAsync()
     {
         var startError = await Plugin.Framework.RunOnTick(() =>
-            RetainerUiAutomationText.GetAutomatedRestockStartError(IsRetainerListReady(), IsRetainerInventoryReady())).ConfigureAwait(false);
+            GetAutomatedRestockStartError(IsRetainerListReady(), IsRetainerInventoryReady())).ConfigureAwait(false);
         if (startError != null)
             throw new InvalidOperationException(startError);
     }
@@ -192,7 +172,7 @@ public sealed class WorkshopRetainerRestockService
     private async Task OpenRetainerInventoryAsync()
     {
         var selected = await Plugin.Framework.RunOnTick(SelectEntrustOrWithdrawItems).ConfigureAwait(false);
-        if (!selected.Success)
+        if (!selected.IsSuccess)
             throw new InvalidOperationException(selected.Message);
 
         await WaitForRetainerInventoryAsync().ConfigureAwait(false);
@@ -240,6 +220,20 @@ public sealed class WorkshopRetainerRestockService
         return new(false, false, $"No matching live retainer stacks were found for the workshop material shortages: {remainingText}.");
     }
 
+    internal static string? GetAutomatedRestockStartError(bool isRetainerListReady, bool isRetainerInventoryReady)
+    {
+        if (isRetainerInventoryReady && isRetainerListReady)
+            return "Close the current retainer inventory before starting automated workshop material restock.";
+
+        if (isRetainerInventoryReady)
+            return "Close the current retainer inventory and open the retainer list before starting automated workshop material restock.";
+
+        if (!isRetainerListReady)
+            return "Open the retainer list before starting automated workshop material restock.";
+
+        return null;
+    }
+
     private async Task<int> WithdrawFromOpenRetainerAsync(Dictionary<uint, int> remaining)
     {
         var retrievedTotal = 0;
@@ -275,7 +269,7 @@ public sealed class WorkshopRetainerRestockService
             return new(false, 0, pending.Message);
 
         var selected = await WaitForRetainerContextMenuEntryAsync(stack.ItemId, pending.ContextMenuEntryText).ConfigureAwait(false);
-        if (!selected.Success)
+        if (!selected.IsSuccess)
             return new(false, 0, selected.Message);
 
         if (pending.NeedsQuantityInput)
@@ -327,13 +321,15 @@ public sealed class WorkshopRetainerRestockService
         return new(true, retrieveQuantity, needsQuantityInput, targetText, playerQuantityBefore, $"Opened retainer context menu for item {stack.ItemId}.");
     }
 
-    private static async Task<RetainerUiActionResult> WaitForRetainerContextMenuEntryAsync(uint itemId, string targetText)
+    private static async Task<AutomationOperationResult> WaitForRetainerContextMenuEntryAsync(uint itemId, string targetText)
     {
-        RetainerUiActionResult lastResult = new(false, $"Retainer context menu entry not found for item {itemId}: {targetText}.");
+        AutomationOperationResult lastResult = AutomationOperationResult.Fail(
+            AutomationFailureKind.MissingAddon,
+            $"Retainer context menu entry not found for item {itemId}: {targetText}.");
         for (var attempt = 0; attempt < 30; attempt++)
         {
             lastResult = await Plugin.Framework.RunOnTick(() => SelectRetainerContextMenuEntry(targetText, itemId)).ConfigureAwait(false);
-            if (lastResult.Success)
+            if (lastResult.IsSuccess)
                 return lastResult;
 
             await Plugin.Framework.DelayTicks(1).ConfigureAwait(false);
@@ -474,58 +470,19 @@ public sealed class WorkshopRetainerRestockService
         addon->FireCallback(4, values, true);
     }
 
-    private static unsafe RetainerUiActionResult SelectEntrustOrWithdrawItems()
+    private static AutomationOperationResult SelectEntrustOrWithdrawItems()
     {
-        var addon = Plugin.GameGui.GetAddonByName<AddonSelectString>(SelectStringAddon, 1);
-        if (addon == null || !addon->AtkUnitBase.IsReady || !addon->AtkUnitBase.IsVisible)
-            return new(false, "Retainer command menu is not ready.");
-
-        var targetText = GetAddonText(2378);
-        if (!TryGetSelectStringIndex(addon, targetText, out var index))
-            return new(false, $"Retainer menu entry not found: {targetText}. {DescribeRetainerUiState()}");
-
-        addon->AtkUnitBase.FireCallbackInt(index);
-        return new(true, "Selected retainer inventory command.");
+        return CreateCommandMenuDriver().SelectEntrustOrWithdrawItems();
     }
 
-    private static unsafe RetainerUiActionResult SelectQuitRetainer()
+    private static AutomationOperationResult SelectQuitRetainer()
     {
-        var addon = Plugin.GameGui.GetAddonByName<AddonSelectString>(SelectStringAddon, 1);
-        if (addon == null || !addon->AtkUnitBase.IsReady || !addon->AtkUnitBase.IsVisible)
-            return new(false, "Retainer command menu is not ready for quit.");
-
-        var targetText = GetAddonText(2383);
-        if (!TryGetSelectStringIndex(addon, targetText, out var index))
-            return new(false, $"Retainer quit entry not found: {targetText}. {DescribeRetainerUiState()}");
-
-        addon->AtkUnitBase.FireCallbackInt(index);
-        return new(true, "Selected retainer quit command.");
+        return CreateCommandMenuDriver().SelectQuitRetainer();
     }
 
-    private static unsafe bool IsRetainerCommandMenuReady()
+    private static bool IsRetainerCommandMenuReady()
     {
-        var addon = Plugin.GameGui.GetAddonByName<AddonSelectString>(SelectStringAddon, 1);
-        if (addon == null || !addon->AtkUnitBase.IsReady || !addon->AtkUnitBase.IsVisible)
-            return false;
-
-        return TryGetSelectStringIndex(addon, GetAddonText(2378), out _);
-    }
-
-    private static unsafe bool TryGetSelectStringIndex(AddonSelectString* addon, string targetText, out int index)
-    {
-        var popup = addon->PopupMenu.PopupMenu;
-        for (var i = 0; i < popup.EntryCount; i++)
-        {
-            var entry = popup.EntryNames[i].ToString();
-            if (!RetainerUiAutomationText.IsSelectStringEntryMatch(entry, targetText))
-                continue;
-
-            index = i;
-            return true;
-        }
-
-        index = -1;
-        return false;
+        return CreateCommandMenuDriver().IsCommandMenuReady();
     }
 
     private static string GetAddonText(uint rowId)
@@ -535,54 +492,7 @@ public sealed class WorkshopRetainerRestockService
 
     private static unsafe string DescribeRetainerUiState()
     {
-        var trackedAddons = new[]
-        {
-            RetainerListAddon,
-            SelectStringAddon,
-            RetainerInventoryLargeAddon,
-            RetainerInventorySmallAddon,
-            "InputNumeric",
-        };
-        var activeAddons = new List<string>();
-        foreach (var addonName in trackedAddons)
-        {
-            var addon = Plugin.GameGui.GetAddonByName<AtkUnitBase>(addonName, 1);
-            if (addon == null)
-                continue;
-
-            activeAddons.Add($"{addonName}({(addon->IsReady ? "ready" : "not ready")}, {(addon->IsVisible ? "visible" : "hidden")})");
-        }
-
-        var state = activeAddons.Count == 0
-            ? "Retainer UI state: no tracked addons present"
-            : $"Retainer UI state: {string.Join(", ", activeAddons)}";
-
-        var selectStringEntries = DescribeSelectStringEntries();
-        if (!string.IsNullOrWhiteSpace(selectStringEntries))
-            state += $"; SelectString entries: {selectStringEntries}";
-
-        return state;
-    }
-
-    private static unsafe string DescribeSelectStringEntries()
-    {
-        var addon = Plugin.GameGui.GetAddonByName<AddonSelectString>(SelectStringAddon, 1);
-        if (addon == null || !addon->AtkUnitBase.IsReady || !addon->AtkUnitBase.IsVisible)
-            return string.Empty;
-
-        var popup = addon->PopupMenu.PopupMenu;
-        if (popup.EntryCount <= 0)
-            return string.Empty;
-
-        var entries = new List<string>();
-        for (var i = 0; i < popup.EntryCount; i++)
-        {
-            var entry = popup.EntryNames[i].ToString();
-            if (!string.IsNullOrWhiteSpace(entry))
-                entries.Add($"[{i}] {entry}");
-        }
-
-        return string.Join(" | ", entries);
+        return new RetainerUiStateReader(Plugin.GameGui).DescribeRetainerUiState(RetainerUiStateAddons);
     }
 
     private static unsafe string ReadAtkValueString(AtkValue* value)
@@ -601,79 +511,9 @@ public sealed class WorkshopRetainerRestockService
         return value != null && value->Type == AtkValueType.Bool && value->Byte != 0;
     }
 
-    private static unsafe RetainerUiActionResult SelectRetainerContextMenuEntry(string targetText, uint itemId)
+    private static AutomationOperationResult SelectRetainerContextMenuEntry(string targetText, uint itemId)
     {
-        var contextMenu = Plugin.GameGui.GetAddonByName<AtkUnitBase>(ContextMenuAddon, 1);
-        if (contextMenu == null || !contextMenu->IsReady || !contextMenu->IsVisible)
-            return new(false, $"Retainer item context menu did not open for item {itemId}.");
-
-        var agent = AgentInventoryContext.Instance();
-        var labels = ReadContextMenuLabels(agent);
-        var menuState = DescribeContextMenuState(agent, labels);
-        var index = RetainerUiAutomationText.FindContextMenuLabelIndex(labels, targetText);
-        if (index is null)
-            return new(false, $"Retainer context menu entry not found for item {itemId}: {targetText}. {menuState}");
-
-        var callbackResult = FireContextMenuSelect(contextMenu, index.Value);
-        if (!callbackResult)
-            return new(false, $"Retainer context menu callback returned false for item {itemId}: index={index.Value}, target=\"{targetText}\". {menuState}");
-
-        return new(
-            true,
-            $"Selected retainer context menu entry for item {itemId}: index={index.Value}, target=\"{targetText}\", callbackResult={callbackResult}.");
-    }
-
-    private static unsafe IReadOnlyList<string> ReadContextMenuLabels(AgentInventoryContext* agent)
-    {
-        var labels = new List<string>();
-        foreach (var parameter in agent->EventParams)
-        {
-            if (parameter.Type is not (AtkValueType.String or AtkValueType.ManagedString or AtkValueType.WideString or AtkValueType.ConstString))
-                continue;
-
-            labels.Add(parameter.GetValueAsString());
-        }
-
-        return labels;
-    }
-
-    private static unsafe string DescribeContextMenuState(
-        AgentInventoryContext* agent,
-        IReadOnlyList<string> labels)
-    {
-        var entries = new List<string>();
-        if (agent->ContextCallbackInfos != null)
-        {
-            var count = Math.Min(agent->ContextItemCount, labels.Count);
-            for (var index = 0; index < count; index++)
-            {
-                var info = agent->ContextCallbackInfos + index;
-                entries.Add(
-                    $"[{index}] label=\"{labels[index]}\" labelId={info->LabelId} callbackParam={info->CallbackParam} " +
-                    $"disabled={agent->IsContextItemDisabled(index)} handler={(info->Handler == null ? "null" : "set")}");
-            }
-        }
-
-        var entryText = entries.Count == 0
-            ? string.Join(" | ", labels.Select((label, index) => $"[{index}] label=\"{label}\""))
-            : string.Join(" | ", entries);
-
-        return
-            $"ContextMenuState target={agent->TargetInventoryId}/{agent->TargetInventorySlotId}, flags={agent->TargetInventoryFlags}, " +
-            $"ownerAddon={agent->OwnerAddonId}, start={agent->ContexItemStartIndex}, count={agent->ContextItemCount}, " +
-            $"disabledMask=0x{agent->ContextItemDisabledMask:X}, entries=[{entryText}].";
-    }
-
-    private static unsafe bool FireContextMenuSelect(AtkUnitBase* contextMenu, int index)
-    {
-        var values = stackalloc AtkValue[5];
-        values[0] = new AtkValue { Type = AtkValueType.Int, Int = 0 };
-        values[1] = new AtkValue { Type = AtkValueType.Int, Int = index };
-        values[2] = new AtkValue { Type = AtkValueType.Int, Int = 0 };
-        values[3] = new AtkValue { Type = AtkValueType.Int, Int = 0 };
-        values[4] = new AtkValue { Type = AtkValueType.Int, Int = 0 };
-
-        return contextMenu->FireCallback(5, values, true);
+        return new RetainerContextMenuDriver(Plugin.GameGui).SelectContextMenuEntry(targetText, itemId);
     }
 
     private static async Task CloseRetainerAsync()
@@ -682,7 +522,7 @@ public sealed class WorkshopRetainerRestockService
         await WaitForRetainerCommandMenuAsync("current retainer").ConfigureAwait(false);
 
         var selectedQuit = await Plugin.Framework.RunOnTick(SelectQuitRetainer).ConfigureAwait(false);
-        if (!selectedQuit.Success)
+        if (!selectedQuit.IsSuccess)
             throw new InvalidOperationException(selectedQuit.Message);
 
         for (var attempt = 0; attempt < 120; attempt++)
@@ -723,6 +563,11 @@ public sealed class WorkshopRetainerRestockService
     {
         var addon = Plugin.GameGui.GetAddonByName<AtkUnitBase>(addonName, 1);
         return addon != null && addon->IsReady && addon->IsVisible;
+    }
+
+    private static RetainerCommandMenuDriver CreateCommandMenuDriver()
+    {
+        return new RetainerCommandMenuDriver(Plugin.GameGui, GetAddonText, DescribeRetainerUiState);
     }
 
     private static unsafe int CountPlayerItem(uint itemId)
@@ -777,12 +622,6 @@ public sealed class WorkshopRetainerRestockService
                 .Select(x => $"{x.Key}:{x.Value}"));
     }
 }
-
-public sealed record LiveRetainerStack(
-    InventoryType Page,
-    int SlotIndex,
-    uint ItemId,
-    int Quantity);
 
 public sealed record RetainerRetrievalResult(
     bool Success,

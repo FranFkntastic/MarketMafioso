@@ -31,4 +31,17 @@ public sealed class WorkshopRetainerRestockCompletionTests
         Assert.False(summary.IsPartial);
         Assert.Equal("No matching live retainer stacks were found for the workshop material shortages: 5378:12.", summary.Message);
     }
+
+    [Theory]
+    [InlineData(true, false, null)]
+    [InlineData(true, true, "Close the current retainer inventory before starting automated workshop material restock.")]
+    [InlineData(false, true, "Close the current retainer inventory and open the retainer list before starting automated workshop material restock.")]
+    [InlineData(false, false, "Open the retainer list before starting automated workshop material restock.")]
+    public void GetAutomatedRestockStartError_RequiresRetainerList(
+        bool isRetainerListReady,
+        bool isRetainerInventoryReady,
+        string? expected)
+    {
+        Assert.Equal(expected, WorkshopRetainerRestockService.GetAutomatedRestockStartError(isRetainerListReady, isRetainerInventoryReady));
+    }
 }

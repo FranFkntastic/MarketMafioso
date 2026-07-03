@@ -1,6 +1,6 @@
 using System;
 using System.Collections.Generic;
-using System.Text;
+using System.Linq;
 using System.Threading.Tasks;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Game.ClientState.Objects.Enums;
@@ -12,7 +12,7 @@ using FFXIVClientStructs.FFXIV.Client.Game;
 using FFXIVClientStructs.FFXIV.Client.UI;
 using FFXIVClientStructs.FFXIV.Component.GUI;
 using Lumina.Excel.Sheets;
-using MarketMafioso.WorkshopPrep;
+using MarketMafioso.Automation.Retainers;
 
 namespace MarketMafioso;
 
@@ -20,6 +20,7 @@ public sealed class AutoRetainerRefreshService : IDisposable
 {
     private const string PluginName = "MarketMafioso";
 
+    private const string AutoRetainerInternalName = "AutoRetainer";
     private const string AutoRetainerInit = "AutoRetainer.Init";
     private const string OnRetainerListTaskButtonsDraw = "AutoRetainer.OnRetainerListTaskButtonsDraw";
     private const string OnRetainerListCustomTask = "AutoRetainer.OnRetainerListCustomTask";
@@ -28,11 +29,11 @@ public sealed class AutoRetainerRefreshService : IDisposable
     private const string OnRetainerReadyForPostprocess = "AutoRetainer.OnRetainerReadyForPostprocess";
     private const string FinishRetainerPostprocessRequest = "AutoRetainer.FinishPostprocessRequest";
 
-    private const string RetainerListAddon = "RetainerList";
-    private const string SelectStringAddon = "SelectString";
+    private const string RetainerListAddon = RetainerInventoryAddonNames.RetainerList;
+    private const string SelectStringAddon = RetainerInventoryAddonNames.SelectString;
     private const string SelectYesNoAddon = "SelectYesno";
-    private const string RetainerInventoryLargeAddon = "InventoryRetainerLarge";
-    private const string RetainerInventorySmallAddon = "InventoryRetainer";
+    private const string RetainerInventoryLargeAddon = RetainerInventoryAddonNames.InventoryLarge;
+    private const string RetainerInventorySmallAddon = RetainerInventoryAddonNames.InventorySmall;
     private const string RetainerTaskAddon = "RetainerTask";
     private const string RetainerTaskAskAddon = "RetainerTaskAsk";
     private const string RetainerTaskListAddon = "RetainerTaskList";
@@ -60,6 +61,7 @@ public sealed class AutoRetainerRefreshService : IDisposable
     private readonly IDataManager dataManager;
     private readonly RetainerCacheManager retainerCache;
     private readonly HttpReporter reporter;
+    private readonly RetainerUiStateReader retainerUiStateReader;
 
     private bool isRefreshing;
     private bool isStartQueued;
@@ -84,6 +86,7 @@ public sealed class AutoRetainerRefreshService : IDisposable
         this.dataManager = dataManager;
         this.retainerCache = retainerCache;
         this.reporter = reporter;
+        retainerUiStateReader = new RetainerUiStateReader(gameGui);
 
         pluginInterface.GetIpcSubscriber<object>(OnRetainerListTaskButtonsDraw).Subscribe(DrawRetainerListButton);
         pluginInterface.GetIpcSubscriber<string, object>(OnRetainerAdditionalTask).Subscribe(OnRetainerAdditionalTaskReceived);
@@ -95,6 +98,9 @@ public sealed class AutoRetainerRefreshService : IDisposable
     public int ExpectedRetainers => expectedRetainers;
     public int ProcessedRetainers => processedRetainers;
     public string LastStatus => lastStatus;
+    public bool IsLoaded => pluginInterface.InstalledPlugins.Any(plugin =>
+        plugin.IsLoaded &&
+        string.Equals(plugin.InternalName, AutoRetainerInternalName, StringComparison.OrdinalIgnoreCase));
 
     public bool IsAvailable
     {
@@ -412,36 +418,7 @@ public sealed class AutoRetainerRefreshService : IDisposable
 
     private unsafe string DescribeRetainerUiState()
     {
-        var activeAddons = new List<string>();
-        foreach (var addonName in RetainerUiStateAddons)
-        {
-            var addon = gameGui.GetAddonByName<AtkUnitBase>(addonName, 1);
-            if (addon == null)
-                continue;
-
-            var readyState = addon->IsReady ? "ready" : "not ready";
-            var visibleState = addon->IsVisible ? "visible" : "hidden";
-            activeAddons.Add($"{addonName}({readyState}, {visibleState})");
-        }
-
-        var builder = new StringBuilder();
-        builder.Append("Retainer UI state: ");
-        builder.Append(activeAddons.Count > 0 ? string.Join(", ", activeAddons) : "no tracked addons present");
-
-        if (TryGetSelectStringEntries(out var entries))
-        {
-            builder.Append("; SelectString entries: ");
-            builder.Append(entries);
-        }
-
-        var visibleRetainers = GetVisibleRetainerObjectNames();
-        if (visibleRetainers.Count > 0)
-        {
-            builder.Append("; visible retainer objects: ");
-            builder.Append(string.Join(", ", visibleRetainers));
-        }
-
-        return builder.ToString();
+        return retainerUiStateReader.DescribeRetainerUiState(RetainerUiStateAddons, GetVisibleRetainerObjectNames);
     }
 
     private bool IsRetainerSessionReady(string retainerName)
@@ -472,30 +449,6 @@ public sealed class AutoRetainerRefreshService : IDisposable
         }
 
         return names;
-    }
-
-    private unsafe bool TryGetSelectStringEntries(out string entries)
-    {
-        entries = string.Empty;
-
-        var addon = gameGui.GetAddonByName<AddonSelectString>(SelectStringAddon, 1);
-        if (addon == null || !addon->AtkUnitBase.IsReady || !addon->AtkUnitBase.IsVisible)
-            return false;
-
-        var popup = addon->PopupMenu.PopupMenu;
-        if (popup.EntryCount <= 0)
-            return false;
-
-        var entryNames = new List<string>();
-        for (var i = 0; i < popup.EntryCount; i++)
-        {
-            var entry = popup.EntryNames[i].ToString();
-            if (!string.IsNullOrWhiteSpace(entry))
-                entryNames.Add($"[{i}] {entry}");
-        }
-
-        entries = string.Join(" | ", entryNames);
-        return entries.Length > 0;
     }
 
     private unsafe void SelectEntrustOrWithdrawItems()

@@ -24,6 +24,8 @@ public sealed class VIWIWorkshoppaIpc
         this.adapter = adapter;
     }
 
+    public bool IsAvailable => adapter.IsAvailable;
+
     public VIWIWorkshoppaIpcResult SendQueue(IReadOnlyList<WorkshopPrepQueueItem> queue, bool clearExisting)
     {
         if (!adapter.IsAvailable)

@@ -3,13 +3,15 @@ using System.Collections.Generic;
 using System.Linq;
 using Dalamud.Plugin.Services;
 using FFXIVClientStructs.FFXIV.Client.Game;
-using Lumina.Excel.Sheets;
+using MarketMafioso.Automation.Inventory;
+using MarketMafioso.Automation.Items;
 
 namespace MarketMafioso;
 
 public class InventoryScanner
 {
-    private readonly IDataManager dataManager;
+    private readonly AutomationInventoryContainerScanner containerScanner;
+    private readonly AutomationItemCatalog itemCatalog;
     private readonly IPluginLog log;
 
     private static readonly InventoryType[] PlayerBags =
@@ -49,7 +51,8 @@ public class InventoryScanner
 
     public InventoryScanner(IDataManager dataManager, IPluginLog log)
     {
-        this.dataManager = dataManager;
+        containerScanner = new AutomationInventoryContainerScanner(log);
+        itemCatalog = new AutomationItemCatalog(dataManager, log);
         this.log = log;
     }
 
@@ -90,46 +93,10 @@ public class InventoryScanner
 
     public List<InventoryBag> ScanCurrentRetainer(Configuration config)
     {
-        var bags = ScanContainers(RetainerContainers, config);
-        var mergedBags = new List<InventoryBag>();
-        var retainerPagesItems = new Dictionary<uint, ItemSlot>();
-
-        foreach (var bag in bags)
-        {
-            if (bag.BagName.StartsWith("RetainerPage"))
-            {
-                foreach (var item in bag.Items)
-                {
-                    if (retainerPagesItems.TryGetValue(item.ItemId, out var existing))
-                    {
-                        retainerPagesItems[item.ItemId] = existing with
-                        {
-                            Quantity = existing.Quantity + item.Quantity,
-                            Condition = Math.Max(existing.Condition, item.Condition)
-                        };
-                    }
-                    else
-                    {
-                        retainerPagesItems[item.ItemId] = item;
-                    }
-                }
-            }
-            else
-            {
-                mergedBags.Add(bag);
-            }
-        }
-
-        if (retainerPagesItems.Count > 0)
-        {
-            mergedBags.Insert(0, new InventoryBag
-            {
-                BagName = "RetainerInventory",
-                Items = retainerPagesItems.Values.ToList()
-            });
-        }
-
-        return mergedBags;
+        return InventoryPayloadMapper.MapRetainerInventoryBags(
+            containerScanner.ScanLoadedContainers(RetainerContainers),
+            config.IncludeItemNames,
+            ResolveItemName);
     }
 
     public ulong ScanCurrentRetainerGil()
@@ -140,106 +107,24 @@ public class InventoryScanner
 
     public List<RetainerMarketListing> ScanCurrentRetainerMarketListings(Configuration config)
     {
-        return ScanContainers([InventoryType.RetainerMarket], config)
-            .SelectMany(bag => bag.Items)
-            .Select(item => new RetainerMarketListing
-            {
-                ItemId = item.ItemId,
-                ItemName = item.ItemName,
-                ItemType = item.ItemType,
-                Quantity = item.Quantity,
-                IsHQ = item.IsHQ,
-                Condition = item.Condition,
-                ListedAt = DateTime.UtcNow.ToString("o"),
-            })
-            .ToList();
+        return InventoryPayloadMapper.MapRetainerMarketListings(
+            containerScanner.ScanLoadedContainers([InventoryType.RetainerMarket]),
+            config.IncludeItemNames,
+            ResolveItemName,
+            DateTime.UtcNow);
     }
 
     public string? ResolveItemName(uint itemId)
     {
-        try
-        {
-            return dataManager.GetExcelSheet<Item>()?.GetRowOrDefault(itemId)?.Name.ToString();
-        }
-        catch (Exception ex)
-        {
-            log.Verbose(ex, $"[MarketMafioso] Could not resolve name for item {itemId}");
-            return null;
-        }
+        return itemCatalog.ResolveItemName(itemId);
     }
 
     private unsafe List<InventoryBag> ScanContainers(InventoryType[] types, Configuration config)
     {
-        var bags = new List<InventoryBag>();
-
-        var inventoryManager = InventoryManager.Instance();
-        if (inventoryManager == null)
-        {
-            log.Warning("[MarketMafioso] InventoryManager.Instance() returned null");
-            return bags;
-        }
-
-        foreach (var type in types)
-        {
-            try
-            {
-                var container = inventoryManager->GetInventoryContainer(type);
-                if (container == null || !container->IsLoaded)
-                    continue;
-
-                var itemGroups = new Dictionary<uint, ItemSlot>();
-
-                for (var i = 0; i < container->Size; i++)
-                {
-                    var slot = container->GetInventorySlot(i);
-                    if (slot == null || slot->ItemId == 0)
-                        continue;
-
-                    var itemId = slot->ItemId;
-                    var quantity = (uint)slot->Quantity;
-                    var condition = slot->Condition / 30000f;
-
-                    if (itemGroups.TryGetValue(itemId, out var existing))
-                    {
-                        itemGroups[itemId] = existing with
-                        {
-                            Quantity = existing.Quantity + quantity,
-                            Condition = Math.Max(existing.Condition, condition)
-                        };
-                    }
-                    else
-                    {
-                        string? itemName = config.IncludeItemNames ? ResolveItemName(itemId) : null;
-                        itemGroups[itemId] = new ItemSlot
-                        {
-                            ItemId = itemId,
-                            ItemName = itemName,
-                            ItemType = null,
-                            Quantity = quantity,
-                            IsHQ = false,
-                            Condition = condition,
-                        };
-                    }
-                }
-
-                var items = new List<ItemSlot>(itemGroups.Values);
-
-                if (items.Count > 0)
-                {
-                    bags.Add(new InventoryBag
-                    {
-                        BagName = type.ToString(),
-                        Items = items,
-                    });
-                }
-            }
-            catch (Exception ex)
-            {
-                log.Error(ex, $"[MarketMafioso] Error scanning container {type}");
-            }
-        }
-
-        return bags;
+        return InventoryPayloadMapper.MapInventoryBags(
+            containerScanner.ScanLoadedContainers(types),
+            config.IncludeItemNames,
+            ResolveItemName);
     }
 
     private unsafe List<ulong> ScanContainerRawQuantities(InventoryType type)
