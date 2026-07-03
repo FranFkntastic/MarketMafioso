@@ -494,6 +494,24 @@ public sealed class MarketAcquisitionRouteRunnerTests
     }
 
     [Fact]
+    public void GetLinePurchaseTotals_SumsCompletedLinePurchasesAcrossWorlds()
+    {
+        using var runner = CreateRunner();
+        runner.Start(CreateRepeatedLineWorldPlan("Siren", "Adamantoise"));
+        runner.RecordCurrentWorld("Siren");
+        runner.RecordProbe("Siren", CreateCandidatePlan(status: "Ready", quantity: 384, gil: 64_966));
+        runner.RecordWorldPurchaseBatchComplete("Siren", purchasedQuantity: 384, spentGil: 64_966);
+        runner.RecordCurrentWorld("Adamantoise");
+        runner.RecordProbe("Adamantoise", CreateCandidatePlan(status: "Ready", quantity: 182, gil: 14_716));
+        runner.RecordWorldPurchaseBatchComplete("Adamantoise", purchasedQuantity: 182, spentGil: 14_716);
+
+        var totals = runner.GetLinePurchaseTotals("line-gold-ore");
+
+        Assert.Equal(566u, totals.PurchasedQuantity);
+        Assert.Equal(79_682u, totals.SpentGil);
+    }
+
+    [Fact]
     public void RecordWorldPurchaseBatchComplete_AdvancesSameWorldItemWithoutRequiringTravelClose()
     {
         using var runner = CreateRunner();
@@ -955,6 +973,35 @@ public sealed class MarketAcquisitionRouteRunnerTests
                         },
                     ]
                     : [],
+                    Listings = [],
+                })
+                .ToArray(),
+        };
+
+    private static MarketMafioso.MarketAcquisition.MarketAcquisitionPlan CreateRepeatedLineWorldPlan(params string[] worlds) =>
+        CreatePlan(worlds) with
+        {
+            WorldBatches = worlds
+                .Select(world => new MarketMafioso.MarketAcquisition.MarketAcquisitionWorldBatch
+                {
+                    WorldName = world,
+                    DataCenter = MarketMafioso.MarketAcquisition.MarketAcquisitionPlanner.ResolveNorthAmericaDataCenter(world),
+                    PlannedQuantity = 999,
+                    PlannedGil = 10_000,
+                    ItemSubtasks =
+                    [
+                        new MarketMafioso.MarketAcquisition.MarketAcquisitionWorldItemSubtask
+                        {
+                            LineId = "line-gold-ore",
+                            LineOrdinal = 0,
+                            Source = "Planned",
+                            ItemId = 5118,
+                            ItemName = "Gold Ore",
+                            WorldName = world,
+                            PlannedQuantity = 999,
+                            PlannedGil = 10_000,
+                        },
+                    ],
                     Listings = [],
                 })
                 .ToArray(),

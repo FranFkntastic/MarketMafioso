@@ -29,8 +29,8 @@ public static class MarketAcquisitionRouteTablePresenter
             RouteLines = FormatRouteLines(stop.LineStates),
             LineMix = FormatLineMix(stop.LineStates),
             State = aggregate.State,
-            Intent = FormatQuantityGil(stop.PlannedQuantity, stop.PlannedGil),
-            Result = FormatDiscoveredResult(stop.LineStates),
+            Intent = FormatPlannedIntent(stop.LineStates),
+            Result = FormatBoughtResult(stop.LineStates),
             Notes = FormatNotes(stop.LineStates, aggregate),
             Aggregate = aggregate,
             Lines = lines,
@@ -154,22 +154,34 @@ public static class MarketAcquisitionRouteTablePresenter
         return notes.Count == 0 ? "-" : string.Join("; ", notes);
     }
 
-    private static string FormatDiscoveredResult(IReadOnlyList<MarketAcquisitionRouteLineState> lines)
+    private static string FormatPlannedIntent(IReadOnlyList<MarketAcquisitionRouteLineState> lines)
     {
-        var discoveredQuantity = 0u;
-        var discoveredGil = 0ul;
+        var plannedQuantity = 0u;
+        var plannedGil = 0ul;
         foreach (var line in lines)
         {
-            if (string.IsNullOrWhiteSpace(line.LiveCandidateStatus))
-                continue;
-
-            discoveredQuantity = checked(discoveredQuantity + line.LiveObservedQuantity);
-            discoveredGil = checked(discoveredGil + line.LiveObservedGil);
+            plannedQuantity = checked(plannedQuantity + line.PlannedQuantity);
+            plannedGil = checked(plannedGil + line.PlannedGil);
         }
 
-        return discoveredQuantity == 0 && discoveredGil == 0
+        return plannedQuantity == 0 && plannedGil == 0
             ? "-"
-            : FormatQuantityGil(discoveredQuantity, discoveredGil);
+            : FormatQuantityGil(plannedQuantity, plannedGil);
+    }
+
+    private static string FormatBoughtResult(IReadOnlyList<MarketAcquisitionRouteLineState> lines)
+    {
+        var boughtQuantity = 0u;
+        var spentGil = 0ul;
+        foreach (var line in lines)
+        {
+            boughtQuantity = checked(boughtQuantity + line.PurchasedQuantity);
+            spentGil = checked(spentGil + line.SpentGil);
+        }
+
+        return boughtQuantity == 0 && spentGil == 0
+            ? "-"
+            : FormatQuantityGil(boughtQuantity, spentGil);
     }
 
     private static string FormatLineNotes(MarketAcquisitionRouteLineState line)

@@ -24,6 +24,25 @@ public sealed class MarketAcquisitionGuidedRouteSession
     public bool ShouldMonitorActiveStop =>
         ActiveStop?.Status is "TravelCommandSent" or "Arrived" or "Purchasing";
 
+    public MarketAcquisitionRouteLinePurchaseTotals GetLinePurchaseTotals(string lineId)
+    {
+        if (string.IsNullOrWhiteSpace(lineId))
+            return default;
+
+        var purchasedQuantity = 0u;
+        var spentGil = 0u;
+        foreach (var line in Stops.SelectMany(stop => stop.LineStates))
+        {
+            if (!line.LineId.Equals(lineId, StringComparison.Ordinal))
+                continue;
+
+            purchasedQuantity = checked(purchasedQuantity + line.PurchasedQuantity);
+            spentGil = checked(spentGil + line.SpentGil);
+        }
+
+        return new MarketAcquisitionRouteLinePurchaseTotals(purchasedQuantity, spentGil);
+    }
+
     public static MarketAcquisitionGuidedRouteSession Start(
         MarketAcquisitionPlan plan,
         bool includeOpportunisticChecks = false)
@@ -499,3 +518,5 @@ public sealed record MarketAcquisitionGuidedRouteResult
         Message = message,
     };
 }
+
+public readonly record struct MarketAcquisitionRouteLinePurchaseTotals(uint PurchasedQuantity, uint SpentGil);

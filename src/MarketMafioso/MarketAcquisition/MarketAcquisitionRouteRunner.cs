@@ -150,6 +150,9 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         return Start(plan, diagnosticsRequested, includeOpportunisticChecksRequested);
     }
 
+    public MarketAcquisitionRouteLinePurchaseTotals GetLinePurchaseTotals(string lineId) =>
+        session?.GetLinePurchaseTotals(lineId) ?? default;
+
     public MarketAcquisitionRouteActionResult Pause()
     {
         if (!IsRunning)

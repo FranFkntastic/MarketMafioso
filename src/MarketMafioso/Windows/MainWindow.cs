@@ -1014,22 +1014,23 @@ public class MainWindow : Window, IDisposable
             throw new InvalidOperationException(freshRead.Message);
         }
 
+        var candidatePurchaseTotals = ResolveActiveRouteLinePurchaseTotals(activeStop.ActiveItemSubtask);
         marketAcquisitionLiveCandidatePlan = activeStop.ActiveItemSubtask == null
             ? MarketAcquisitionLiveCandidatePlanner.BuildCandidatePlan(
                 activeLine,
                 plan,
                 currentWorld,
                 freshRead,
-                activeWorldPurchasedQuantity,
-                activeWorldSpentGil)
+                candidatePurchaseTotals.PurchasedQuantity,
+                candidatePurchaseTotals.SpentGil)
             : MarketAcquisitionLiveCandidatePlanner.BuildCandidatePlan(
                 activeLine,
                 plan,
                 activeStop.ActiveItemSubtask,
                 currentWorld,
                 freshRead,
-                activeLinePurchasedQuantity,
-                activeLineSpentGil);
+                candidatePurchaseTotals.PurchasedQuantity,
+                candidatePurchaseTotals.SpentGil);
         var purchaseResult = marketBoardPurchaseExecutor.ExecuteFirstCandidate(
             marketAcquisitionLiveCandidatePlan,
             freshRead);
@@ -1092,21 +1093,36 @@ public class MainWindow : Window, IDisposable
                 : null);
         acquisitionStatus = result.Message;
         ClearMarketBoardAutomationState();
-        var nextSubtask = marketAcquisitionRouteRunner.ActiveStop?.ActiveItemSubtask;
-        if (nextSubtask == null)
+        var nextStop = marketAcquisitionRouteRunner.ActiveStop;
+        if (nextStop == null ||
+            !nextStop.WorldName.Equals(currentWorld, StringComparison.OrdinalIgnoreCase))
         {
+            activeWorldPurchasedQuantity = 0;
+            activeWorldSpentGil = 0;
+            activeWorldPurchaseBatchWorld = null;
             activePurchaseLineId = null;
             activeLinePurchasedQuantity = 0;
             activeLineSpentGil = 0;
         }
-        else if (activeSubtask != null &&
-                 !string.Equals(activeSubtask.LineId, nextSubtask.LineId, StringComparison.Ordinal))
+        else
         {
-            ResetMarketBoardStateForNextRouteItem(
-                $"Advancing from {activeSubtask.ItemName ?? activeSubtask.LineId} to {nextSubtask.ItemName ?? nextSubtask.LineId} on {currentWorld}.");
+            var nextSubtask = nextStop.ActiveItemSubtask;
+            if (nextSubtask == null)
+            {
+                activePurchaseLineId = null;
+                activeLinePurchasedQuantity = 0;
+                activeLineSpentGil = 0;
+            }
+            else if (activeSubtask != null &&
+                     !string.Equals(activeSubtask.LineId, nextSubtask.LineId, StringComparison.Ordinal))
+            {
+                ResetMarketBoardStateForNextRouteItem(
+                    $"Advancing from {activeSubtask.ItemName ?? activeSubtask.LineId} to {nextSubtask.ItemName ?? nextSubtask.LineId} on {currentWorld}.");
+            }
+
+            activeWorldPurchaseBatchWorld = nextStop.WorldName;
         }
 
-        activeWorldPurchaseBatchWorld = marketAcquisitionRouteRunner.ActiveStop?.WorldName;
         ReportGuidedRouteProgress();
         if (result.Success &&
             marketAcquisitionRouteRunner.LatestWorldCompletionSummary?.WorldName.Equals(currentWorld, StringComparison.OrdinalIgnoreCase) == true)
@@ -1679,6 +1695,7 @@ public class MainWindow : Window, IDisposable
             return;
         }
 
+        var liveCandidatePurchaseTotals = ResolveActiveRouteLinePurchaseTotals(activeSubtask);
         marketAcquisitionLiveCandidatePlan = canBuildLiveCandidatePlan
             ? activeSubtask == null
                 ? MarketAcquisitionLiveCandidatePlanner.BuildCandidatePlan(
@@ -1686,16 +1703,16 @@ public class MainWindow : Window, IDisposable
                     plan,
                     currentWorld,
                     marketBoardReadResult,
-                    activeSubtask == null ? activeWorldPurchasedQuantity : activeLinePurchasedQuantity,
-                    activeSubtask == null ? activeWorldSpentGil : activeLineSpentGil)
+                    liveCandidatePurchaseTotals.PurchasedQuantity,
+                    liveCandidatePurchaseTotals.SpentGil)
                 : MarketAcquisitionLiveCandidatePlanner.BuildCandidatePlan(
                     activeLine,
                     plan,
                     activeSubtask,
                     currentWorld,
                     marketBoardReadResult,
-                    activeLinePurchasedQuantity,
-                    activeLineSpentGil)
+                    liveCandidatePurchaseTotals.PurchasedQuantity,
+                    liveCandidatePurchaseTotals.SpentGil)
             : null;
         var guidedRouteResult = marketAcquisitionRouteRunner.IsRunning &&
                                 marketAcquisitionRouteRunner.ActiveStop is { Status: "Arrived" } &&
@@ -3355,6 +3372,17 @@ public class MainWindow : Window, IDisposable
             diagnosticsFolderStatus = $"Unable to open route diagnostics folder. {ex.Message}";
             log.Error(ex, "[MarketMafioso] Unable to open route diagnostics folder.");
         }
+    }
+
+    private MarketAcquisitionRouteLinePurchaseTotals ResolveActiveRouteLinePurchaseTotals(MarketAcquisitionWorldItemSubtask? activeSubtask)
+    {
+        if (activeSubtask == null)
+            return new MarketAcquisitionRouteLinePurchaseTotals(activeWorldPurchasedQuantity, activeWorldSpentGil);
+
+        var completedTotals = marketAcquisitionRouteRunner.GetLinePurchaseTotals(activeSubtask.LineId);
+        return new MarketAcquisitionRouteLinePurchaseTotals(
+            checked(completedTotals.PurchasedQuantity + activeLinePurchasedQuantity),
+            checked(completedTotals.SpentGil + activeLineSpentGil));
     }
 
     private Vector4 GetDiagnosticsFolderStatusColor() =>
