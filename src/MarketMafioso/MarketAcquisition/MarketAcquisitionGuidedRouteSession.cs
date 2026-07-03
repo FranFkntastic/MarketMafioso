@@ -362,11 +362,11 @@ public sealed class MarketAcquisitionGuidedRouteSession
         return total;
     }
 
-    private static uint SumObservedGil(MarketAcquisitionLiveCandidatePlan candidatePlan)
+    private static ulong SumObservedGil(MarketAcquisitionLiveCandidatePlan candidatePlan)
     {
-        var total = 0u;
+        var total = 0ul;
         foreach (var row in candidatePlan.Rows)
-            total = checked(total + checked(row.LiveListing.UnitPrice * row.LiveListing.Quantity));
+            total = checked(total + ((ulong)row.LiveListing.UnitPrice * row.LiveListing.Quantity));
 
         return total;
     }
@@ -464,7 +464,7 @@ public sealed record MarketAcquisitionRouteLineState
     public int LiveReadableListingCount { get; set; }
     public int LiveReportedListingCount { get; set; }
     public uint LiveObservedQuantity { get; set; }
-    public uint LiveObservedGil { get; set; }
+    public ulong LiveObservedGil { get; set; }
     public uint WouldBuyQuantity { get; set; }
     public uint WouldSpendGil { get; set; }
     public string? LatestMessage { get; set; }

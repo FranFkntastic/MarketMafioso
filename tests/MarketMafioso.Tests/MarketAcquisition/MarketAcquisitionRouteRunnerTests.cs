@@ -569,6 +569,34 @@ public sealed class MarketAcquisitionRouteRunnerTests
     }
 
     [Fact]
+    public void RecordProbe_AllowsObservedGilAboveUIntMax()
+    {
+        using var runner = CreateRunner();
+        runner.Start(CreateMultiItemWorldPlan("Maduin"), enableDiagnostics: true);
+        runner.RecordCurrentWorld("Maduin");
+
+        var result = runner.RecordProbe(
+            "Maduin",
+            CreateObservedCandidatePlan(
+                status: "NoSafeListings",
+                quantity: 0,
+                gil: 0,
+                rows:
+                [
+                    CreateLiveCandidateRow(decision: "Skipped", reason: "AboveThreshold", quantity: 99, unitPrice: 9_999_999),
+                    CreateLiveCandidateRow(decision: "Skipped", reason: "AboveThreshold", quantity: 99, unitPrice: 9_999_999),
+                    CreateLiveCandidateRow(decision: "Skipped", reason: "AboveThreshold", quantity: 99, unitPrice: 9_999_999),
+                    CreateLiveCandidateRow(decision: "Skipped", reason: "AboveThreshold", quantity: 99, unitPrice: 9_999_999),
+                    CreateLiveCandidateRow(decision: "Skipped", reason: "AboveThreshold", quantity: 99, unitPrice: 9_999_999),
+                ]));
+
+        Assert.True(result.Success);
+        var text = ReadLog(runner.LastDiagnosticFilePath!);
+        Assert.Contains("observedQuantity: 495", text, StringComparison.Ordinal);
+        Assert.Contains("observedGil: 4949999505", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void RecordProbe_RequiresMarketBoardCloseBeforeNextTravel()
     {
         using var runner = CreateRunner();
@@ -794,7 +822,8 @@ public sealed class MarketAcquisitionRouteRunnerTests
         Assert.True(result.Success);
         Assert.NotNull(runner.LastDiagnosticFilePath);
         Assert.EndsWith(".log", runner.LastDiagnosticFilePath!, StringComparison.Ordinal);
-        Assert.Contains("input-capture-", Path.GetFileName(runner.LastDiagnosticFilePath!), StringComparison.Ordinal);
+        Assert.Contains("input-capture-", Path.GetFileName(Path.GetDirectoryName(runner.LastDiagnosticFilePath!)), StringComparison.Ordinal);
+        Assert.Equal("input-capture.log", Path.GetFileName(runner.LastDiagnosticFilePath!));
         var text = ReadLog(runner.LastDiagnosticFilePath!);
         Assert.Contains("input-capture", text, StringComparison.Ordinal);
         Assert.Contains("label: before-purchase-click", text, StringComparison.Ordinal);

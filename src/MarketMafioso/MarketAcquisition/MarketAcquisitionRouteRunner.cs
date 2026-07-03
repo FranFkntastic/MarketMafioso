@@ -758,11 +758,11 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         return total;
     }
 
-    private static uint SumObservedGil(MarketAcquisitionLiveCandidatePlan candidatePlan)
+    private static ulong SumObservedGil(MarketAcquisitionLiveCandidatePlan candidatePlan)
     {
-        var total = 0u;
+        var total = 0ul;
         foreach (var row in candidatePlan.Rows)
-            total = checked(total + checked(row.LiveListing.UnitPrice * row.LiveListing.Quantity));
+            total = checked(total + ((ulong)row.LiveListing.UnitPrice * row.LiveListing.Quantity));
 
         return total;
     }

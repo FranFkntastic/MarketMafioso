@@ -86,6 +86,26 @@ public sealed class AutomationDiagnosticsLog : IDisposable
             metadata);
     }
 
+    public static AutomationDiagnosticsLog CreateEnabledAtPath(
+        string filePath,
+        DateTimeOffset startedAt,
+        string startMessage,
+        IReadOnlyDictionary<string, string?>? metadata)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(startMessage);
+
+        var directory = Path.GetDirectoryName(filePath);
+        if (!string.IsNullOrWhiteSpace(directory))
+            Directory.CreateDirectory(directory);
+
+        return new AutomationDiagnosticsLog(
+            filePath,
+            startedAt,
+            startMessage,
+            metadata);
+    }
+
     public void Record(
         string eventName,
         string message,

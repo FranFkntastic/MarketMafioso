@@ -15,6 +15,15 @@ public static class MarketBoardListingIntegrity
             listing.Quantity);
     }
 
+    public static bool IsMeaningfulObservation(
+        MarketBoardLiveListing listing,
+        ulong maxMeaningfulUnitPrice)
+    {
+        ArgumentNullException.ThrowIfNull(listing);
+
+        return listing.UnitPrice <= maxMeaningfulUnitPrice;
+    }
+
     public static bool IsRealCandidate(MarketBoardPurchaseCandidate candidate)
     {
         ArgumentNullException.ThrowIfNull(candidate);

@@ -157,7 +157,7 @@ public static class MarketAcquisitionRouteTablePresenter
     private static string FormatDiscoveredResult(IReadOnlyList<MarketAcquisitionRouteLineState> lines)
     {
         var discoveredQuantity = 0u;
-        var discoveredGil = 0u;
+        var discoveredGil = 0ul;
         foreach (var line in lines)
         {
             if (string.IsNullOrWhiteSpace(line.LiveCandidateStatus))
@@ -190,7 +190,7 @@ public static class MarketAcquisitionRouteTablePresenter
         return $"{name} ({itemId.ToString(CultureInfo.InvariantCulture)})";
     }
 
-    private static string FormatQuantityGil(uint quantity, uint gil) =>
+    private static string FormatQuantityGil(uint quantity, ulong gil) =>
         $"{quantity.ToString("N0", CultureInfo.InvariantCulture)} / {gil.ToString("N0", CultureInfo.InvariantCulture)} gil";
 
     private static string FormatCount(int count, string singular)

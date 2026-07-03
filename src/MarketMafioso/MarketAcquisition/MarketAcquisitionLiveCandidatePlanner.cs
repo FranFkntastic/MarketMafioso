@@ -156,13 +156,21 @@ public static class MarketAcquisitionLiveCandidatePlanner
         var selectedGil = 0u;
         var rows = new List<MarketAcquisitionLiveCandidateRow>();
 
-        var candidates = liveListings
+        var realListings = liveListings
             .Where(MarketBoardListingIntegrity.IsRealListing)
             .Select(listing => ValidateLiveListing(listing, currentWorld, itemId))
             .OrderBy(listing => listing.UnitPrice)
             .ThenByDescending(listing => listing.Quantity)
             .ThenBy(listing => listing.RetainerName, StringComparer.OrdinalIgnoreCase)
             .ThenBy(listing => listing.ListingId, StringComparer.Ordinal)
+            .ToList();
+        var maxMeaningfulObservationUnitPrice = CalculateMeaningfulObservationUnitPriceThreshold(
+            realListings,
+            request.MaxUnitPrice);
+        var nonMeaningfulObservationCount = realListings.Count(listing =>
+            !MarketBoardListingIntegrity.IsMeaningfulObservation(listing, maxMeaningfulObservationUnitPrice));
+        var candidates = realListings
+            .Where(listing => MarketBoardListingIntegrity.IsMeaningfulObservation(listing, maxMeaningfulObservationUnitPrice))
             .ToList();
 
         foreach (var listing in candidates)
@@ -222,6 +230,7 @@ public static class MarketAcquisitionLiveCandidatePlanner
             checked(alreadyPurchasedQuantity + selectedQuantity),
             selectedQuantity,
             rows,
+            nonMeaningfulObservationCount,
             readResult);
         return new MarketAcquisitionLiveCandidatePlan
         {
@@ -347,11 +356,13 @@ public static class MarketAcquisitionLiveCandidatePlanner
         uint totalQuantityAfter,
         uint selectedQuantity,
         IReadOnlyList<MarketAcquisitionLiveCandidateRow> rows,
+        int nonMeaningfulObservationCount,
         MarketBoardReadResult? readResult)
     {
         if (selectedQuantity == 0)
         {
-            if (readResult?.IsListingCountTruncated == true && !ReadableRowsProvePriceBoundary(rows))
+            if (readResult?.IsListingCountTruncated == true &&
+                !ReadableRowsProvePriceBoundary(rows, nonMeaningfulObservationCount))
                 return "VisibleCacheExhausted";
 
             return "NoSafeListings";
@@ -363,10 +374,64 @@ public static class MarketAcquisitionLiveCandidatePlanner
         return "Ready";
     }
 
-    private static bool ReadableRowsProvePriceBoundary(IReadOnlyList<MarketAcquisitionLiveCandidateRow> rows)
+    private static bool ReadableRowsProvePriceBoundary(
+        IReadOnlyList<MarketAcquisitionLiveCandidateRow> rows,
+        int nonMeaningfulObservationCount)
     {
-        return rows.Count > 0 &&
-               rows.All(row => row.Reason.Equals("AboveThreshold", StringComparison.OrdinalIgnoreCase));
+        return rows.Count > 0
+            ? rows.All(row => row.Reason.Equals("AboveThreshold", StringComparison.OrdinalIgnoreCase))
+            : nonMeaningfulObservationCount > 0;
+    }
+
+    private static ulong CalculateMeaningfulObservationUnitPriceThreshold(
+        IReadOnlyList<MarketBoardLiveListing> listings,
+        uint configuredMaxUnitPrice)
+    {
+        if (listings.Count == 0)
+            return ulong.MaxValue;
+
+        var modeSource = configuredMaxUnitPrice == 0
+            ? listings
+            : listings
+                .Where(listing => listing.UnitPrice <= (decimal)configuredMaxUnitPrice * 10m)
+                .ToArray();
+        var modePrice = modeSource.Count == 0 ? 0 : CalculateModePrice(modeSource);
+        var baselinePrice = modePrice > 0
+            ? modePrice
+            : configuredMaxUnitPrice;
+
+        if (baselinePrice <= 0)
+            return ulong.MaxValue;
+
+        return (ulong)Math.Ceiling(baselinePrice * 2.5m);
+    }
+
+    private static decimal CalculateModePrice(IReadOnlyList<MarketBoardLiveListing> listings)
+    {
+        var sortedByPrice = listings.OrderBy(listing => listing.UnitPrice).ToArray();
+        var halfCount = Math.Max(1, sortedByPrice.Length / 2);
+        var cheapestHalf = sortedByPrice.Take(halfCount).ToArray();
+        var baselinePrice = cheapestHalf.Length > 0
+            ? cheapestHalf.Average(listing => (decimal)listing.UnitPrice)
+            : sortedByPrice[0].UnitPrice;
+        var reasonableListings = listings
+            .Where(listing => listing.UnitPrice <= baselinePrice * 10m)
+            .ToArray();
+
+        if (reasonableListings.Length == 0)
+            reasonableListings = sortedByPrice.Take(3).ToArray();
+
+        return reasonableListings
+            .GroupBy(listing => listing.UnitPrice)
+            .Select(group => new
+            {
+                Price = (decimal)group.Key,
+                Quantity = group.Aggregate(0ul, (total, listing) => checked(total + listing.Quantity)),
+            })
+            .OrderByDescending(group => group.Quantity)
+            .ThenBy(group => group.Price)
+            .FirstOrDefault()
+            ?.Price ?? 0m;
     }
 
     private static string ResolveMessage(

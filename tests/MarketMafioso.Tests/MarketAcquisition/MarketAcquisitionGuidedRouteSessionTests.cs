@@ -229,8 +229,33 @@ public sealed class MarketAcquisitionGuidedRouteSessionTests
         Assert.Equal(1, firstLine.LiveReadableListingCount);
         Assert.Equal(1, firstLine.LiveReportedListingCount);
         Assert.Equal(5u, firstLine.LiveObservedQuantity);
-        Assert.Equal(1_000u, firstLine.LiveObservedGil);
+        Assert.Equal(1_000ul, firstLine.LiveObservedGil);
         Assert.Equal(0u, firstLine.WouldBuyQuantity);
+    }
+
+    [Fact]
+    public void RecordProbe_AllowsLineObservedGilAboveUIntMax()
+    {
+        var session = MarketMafioso.MarketAcquisition.MarketAcquisitionGuidedRouteSession.Start(CreateMultiItemWorldPlan());
+
+        var result = session.RecordProbe(
+            "Maduin",
+            CreateObservedCandidatePlan(
+                status: "NoSafeListings",
+                quantity: 0,
+                gil: 0,
+                rows:
+                [
+                    CreateLiveCandidateRow(decision: "Skipped", reason: "AboveThreshold", quantity: 99, unitPrice: 9_999_999),
+                    CreateLiveCandidateRow(decision: "Skipped", reason: "AboveThreshold", quantity: 99, unitPrice: 9_999_999),
+                    CreateLiveCandidateRow(decision: "Skipped", reason: "AboveThreshold", quantity: 99, unitPrice: 9_999_999),
+                    CreateLiveCandidateRow(decision: "Skipped", reason: "AboveThreshold", quantity: 99, unitPrice: 9_999_999),
+                    CreateLiveCandidateRow(decision: "Skipped", reason: "AboveThreshold", quantity: 99, unitPrice: 9_999_999),
+                ]));
+
+        Assert.True(result.Success);
+        var firstLine = Assert.Single(session.Stops[0].LineStates, line => line.LineId == "line-1");
+        Assert.Equal(4_949_999_505ul, firstLine.LiveObservedGil);
     }
 
     [Fact]

@@ -39,6 +39,20 @@ public sealed class AutomationCsvLog : IDisposable
             headers);
     }
 
+    public static AutomationCsvLog CreateAtPath(
+        string filePath,
+        IReadOnlyList<string> headers)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
+        ArgumentNullException.ThrowIfNull(headers);
+
+        var directory = Path.GetDirectoryName(filePath);
+        if (!string.IsNullOrWhiteSpace(directory))
+            Directory.CreateDirectory(directory);
+
+        return new AutomationCsvLog(filePath, headers);
+    }
+
     public void WriteRow(IReadOnlyList<string?> values)
     {
         ObjectDisposedException.ThrowIf(disposed, this);

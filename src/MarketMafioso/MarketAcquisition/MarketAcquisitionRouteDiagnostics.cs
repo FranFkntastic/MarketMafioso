@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
+using System.IO;
 using System.Linq;
 using MarketMafioso.Automation.Diagnostics;
 
@@ -11,6 +12,7 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
 {
     private static readonly MarketAcquisitionRouteDiagnostics DisabledInstance = new(
         AutomationDiagnosticsLog.Disabled,
+        null,
         null,
         null);
 
@@ -24,13 +26,15 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
     private MarketAcquisitionRouteDiagnostics(
         AutomationDiagnosticsLog log,
         AutomationCsvLog? observedListingsCsv,
-        AutomationCsvLog? purchaseRecordsCsv)
+        AutomationCsvLog? purchaseRecordsCsv,
+        string? packageDirectoryPath)
     {
         this.log = log;
         this.observedListingsCsv = observedListingsCsv;
         this.purchaseRecordsCsv = purchaseRecordsCsv;
         ObservedListingsCsvPath = observedListingsCsv?.FilePath;
         PurchaseRecordsCsvPath = purchaseRecordsCsv?.FilePath;
+        PackageDirectoryPath = packageDirectoryPath;
     }
 
     public static MarketAcquisitionRouteDiagnostics Disabled => DisabledInstance;
@@ -42,6 +46,8 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
     public string? ObservedListingsCsvPath { get; }
 
     public string? PurchaseRecordsCsvPath { get; }
+
+    public string? PackageDirectoryPath { get; }
 
     public static MarketAcquisitionRouteDiagnostics CreateEnabled(string directory, DateTimeOffset startedAt)
     {
@@ -59,28 +65,60 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
         string filePrefix)
     {
         var createCompanionCsvs = filePrefix.Equals("route", StringComparison.OrdinalIgnoreCase);
+        var packageDirectory = CreatePackageDirectory(directory, startedAt, filePrefix);
         var observedListingsCsv = createCompanionCsvs
-            ? AutomationCsvLog.Create(directory, startedAt, "observed-listings", ObservedListingsHeader)
+            ? AutomationCsvLog.CreateAtPath(Path.Combine(packageDirectory, "observed-listings.csv"), ObservedListingsHeader)
             : null;
         var purchaseRecordsCsv = createCompanionCsvs
-            ? AutomationCsvLog.Create(directory, startedAt, "purchase-records", PurchaseRecordsHeader)
+            ? AutomationCsvLog.CreateAtPath(Path.Combine(packageDirectory, "purchase-records.csv"), PurchaseRecordsHeader)
             : null;
 
         var diagnostics = new MarketAcquisitionRouteDiagnostics(
-            AutomationDiagnosticsLog.CreateEnabled(
-                directory,
+            AutomationDiagnosticsLog.CreateEnabledAtPath(
+                Path.Combine(packageDirectory, $"{filePrefix}.log"),
                 startedAt,
-                filePrefix,
                 "Market acquisition route diagnostics started.",
                 new Dictionary<string, string?>
                 {
+                    ["packageDirectoryPath"] = packageDirectory,
                     ["observedListingsCsvPath"] = observedListingsCsv?.FilePath,
                     ["purchaseRecordsCsvPath"] = purchaseRecordsCsv?.FilePath,
                 }),
             observedListingsCsv,
-            purchaseRecordsCsv);
+            purchaseRecordsCsv,
+            packageDirectory);
 
         return diagnostics;
+    }
+
+    private static string CreatePackageDirectory(
+        string directory,
+        DateTimeOffset startedAt,
+        string filePrefix)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(directory);
+        ArgumentException.ThrowIfNullOrWhiteSpace(filePrefix);
+
+        Directory.CreateDirectory(directory);
+        var baseName = $"{filePrefix}-{startedAt:yyyyMMdd-HHmmss}";
+        var packageDirectory = Path.Combine(directory, baseName);
+        if (!Directory.Exists(packageDirectory))
+        {
+            Directory.CreateDirectory(packageDirectory);
+            return packageDirectory;
+        }
+
+        for (var suffix = 1; suffix < 1000; suffix++)
+        {
+            packageDirectory = Path.Combine(directory, $"{baseName}-{suffix}");
+            if (Directory.Exists(packageDirectory))
+                continue;
+
+            Directory.CreateDirectory(packageDirectory);
+            return packageDirectory;
+        }
+
+        throw new IOException($"Unable to create a unique market acquisition diagnostics package under {directory}.");
     }
 
     public void Record(

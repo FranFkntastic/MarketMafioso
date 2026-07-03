@@ -14,13 +14,32 @@ public sealed class MarketAcquisitionRouteDiagnosticsTests
 
         Assert.True(diagnostics.IsEnabled);
         Assert.NotNull(diagnostics.FilePath);
-        Assert.StartsWith(directory, diagnostics.FilePath, StringComparison.Ordinal);
-        Assert.EndsWith("route-20260625-224512.log", diagnostics.FilePath, StringComparison.Ordinal);
+        var packageDirectory = Path.Combine(directory, "route-20260625-224512");
+        Assert.Equal(packageDirectory, Path.GetDirectoryName(diagnostics.FilePath));
+        Assert.EndsWith(Path.Combine("route-20260625-224512", "route.log"), diagnostics.FilePath, StringComparison.Ordinal);
         Assert.True(File.Exists(diagnostics.FilePath));
-        Assert.EndsWith("observed-listings-20260625-224512.csv", diagnostics.ObservedListingsCsvPath, StringComparison.Ordinal);
+        Assert.EndsWith(Path.Combine("route-20260625-224512", "observed-listings.csv"), diagnostics.ObservedListingsCsvPath, StringComparison.Ordinal);
         Assert.True(File.Exists(diagnostics.ObservedListingsCsvPath));
-        Assert.EndsWith("purchase-records-20260625-224512.csv", diagnostics.PurchaseRecordsCsvPath, StringComparison.Ordinal);
+        Assert.EndsWith(Path.Combine("route-20260625-224512", "purchase-records.csv"), diagnostics.PurchaseRecordsCsvPath, StringComparison.Ordinal);
         Assert.True(File.Exists(diagnostics.PurchaseRecordsCsvPath));
+    }
+
+    [Fact]
+    public void CreateEnabled_AddsSuffixWhenPackageFolderExists()
+    {
+        var directory = CreateTempDirectory();
+        var startedAt = new DateTimeOffset(2026, 6, 25, 22, 45, 12, TimeSpan.Zero);
+        using var first = MarketMafioso.MarketAcquisition.MarketAcquisitionRouteDiagnostics.CreateEnabled(
+            directory,
+            startedAt);
+
+        using var second = MarketMafioso.MarketAcquisition.MarketAcquisitionRouteDiagnostics.CreateEnabled(
+            directory,
+            startedAt);
+
+        Assert.EndsWith(Path.Combine("route-20260625-224512-1", "route.log"), second.FilePath, StringComparison.Ordinal);
+        Assert.True(Directory.Exists(Path.GetDirectoryName(second.FilePath)!));
+        Assert.NotEqual(Path.GetDirectoryName(first.FilePath), Path.GetDirectoryName(second.FilePath));
     }
 
     [Fact]
@@ -36,7 +55,7 @@ public sealed class MarketAcquisitionRouteDiagnosticsTests
         Assert.True(diagnostics.IsEnabled);
         Assert.NotNull(diagnostics.FilePath);
         Assert.StartsWith(directory, diagnostics.FilePath, StringComparison.Ordinal);
-        Assert.EndsWith("input-capture-20260625-224512.log", diagnostics.FilePath, StringComparison.Ordinal);
+        Assert.EndsWith(Path.Combine("input-capture-20260625-224512", "input-capture.log"), diagnostics.FilePath, StringComparison.Ordinal);
         Assert.True(File.Exists(diagnostics.FilePath));
         Assert.Null(diagnostics.ObservedListingsCsvPath);
         Assert.Null(diagnostics.PurchaseRecordsCsvPath);
