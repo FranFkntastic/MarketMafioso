@@ -55,7 +55,40 @@ public sealed class MarketAcquisitionLiveCandidatePlannerTests
     }
 
     [Fact]
-    public void BuildCandidatePlan_DistinguishesVisibleCacheExhaustionFromOrdinaryNoSafeListings()
+    public void BuildCandidatePlan_FailsClosedWhenTruncatedRowsMightHideEligibleListings()
+    {
+        var request = CreateRequest(quantityMode: "AllBelowThreshold", quantity: 0, maxUnitPrice: 100, maxTotalGil: 0, hqPolicy: "HQOnly");
+        var plan = CreatePlan();
+        var readResult = new MarketMafioso.Automation.MarketBoard.MarketBoardReadResult
+        {
+            Status = "Ready",
+            Message = "Read truncated market board listings.",
+            ItemId = 2,
+            WorldName = "Gilgamesh",
+            ReportedListingCount = 120,
+            ListingCapacity = 100,
+            IsAtListingCapacity = true,
+            IsListingCountTruncated = true,
+            Listings =
+            [
+                CreateLiveListing("nq-visible", quantity: 1, unitPrice: 50, hq: false),
+            ],
+        };
+
+        var candidatePlan = MarketMafioso.MarketAcquisition.MarketAcquisitionLiveCandidatePlanner.BuildCandidatePlan(
+            request,
+            plan,
+            "Gilgamesh",
+            readResult);
+
+        Assert.Equal("VisibleCacheExhausted", candidatePlan.Status);
+        Assert.True(candidatePlan.IsVisibleListingCacheTruncated);
+        Assert.Equal(120, candidatePlan.ReportedListingCount);
+        Assert.Contains("only 1", candidatePlan.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void BuildCandidatePlan_TreatsTruncatedAllAboveThresholdRowsAsNoSafeListings()
     {
         var request = CreateRequest(quantityMode: "AllBelowThreshold", quantity: 0, maxUnitPrice: 100, maxTotalGil: 0);
         var plan = CreatePlan();
@@ -71,7 +104,8 @@ public sealed class MarketAcquisitionLiveCandidatePlannerTests
             IsListingCountTruncated = true,
             Listings =
             [
-                CreateLiveListing("too-expensive", quantity: 1, unitPrice: 101),
+                CreateLiveListing("too-expensive-1", quantity: 99, unitPrice: 101),
+                CreateLiveListing("too-expensive-2", quantity: 99, unitPrice: 150),
             ],
         };
 
@@ -81,10 +115,10 @@ public sealed class MarketAcquisitionLiveCandidatePlannerTests
             "Gilgamesh",
             readResult);
 
-        Assert.Equal("VisibleCacheExhausted", candidatePlan.Status);
+        Assert.Equal("NoSafeListings", candidatePlan.Status);
         Assert.True(candidatePlan.IsVisibleListingCacheTruncated);
-        Assert.Equal(120, candidatePlan.ReportedListingCount);
-        Assert.Contains("only 1", candidatePlan.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(0u, candidatePlan.WouldBuyQuantity);
+        Assert.All(candidatePlan.Rows, row => Assert.Equal("AboveThreshold", row.Reason));
     }
 
     [Fact]

@@ -5,6 +5,16 @@
 
 <PageTitle>MarketMafioso Inventory</PageTitle>
 
+@if (_checkingSession)
+{
+    <MudProgressLinear Indeterminate="true" Color="Color.Primary" />
+}
+else if (_session is null)
+{
+    <DashboardLoginPanel LoggedIn="OnLoginSucceededAsync" />
+}
+else
+{
 <MudStack Spacing="2" Class="dashboard-page inventory-page">
     <MudStack Row="true" AlignItems="AlignItems.Center" Class="page-title-row">
         <div>
@@ -212,8 +222,10 @@
         </MudStack>
     </div>
 </MudStack>
+}
 
 @code {
+    private DashboardSessionResponse? _session;
     private IReadOnlyList<DashboardCharacterOption> _characters = [];
     private InventoryBrowserView _view = new();
     private InventoryBrowserItemView? _selectedItem;
@@ -221,6 +233,7 @@
     private string _searchText = string.Empty;
     private string _scope = "all";
     private bool _showIconColumn;
+    private bool _checkingSession = true;
     private bool _loading;
     private CancellationTokenSource? _loadCts;
 
@@ -234,13 +247,40 @@
 
     protected override async Task OnInitializedAsync()
     {
-        _characters = await Api.GetCharactersAsync();
-        var settings = await Api.GetDashboardSettingsAsync();
-        _selectedCharacterId = settings.DefaultCharacterId;
-        if (_selectedCharacterId != null && _characters.All(character => character.Id != _selectedCharacterId))
-            _selectedCharacterId = null;
+        _session = await Api.GetSessionAsync();
+        _checkingSession = false;
+        if (_session is null)
+            return;
 
-        await LoadInventoryAsync();
+        await LoadInventoryContextAsync();
+    }
+
+    private async Task OnLoginSucceededAsync(DashboardSessionResponse session)
+    {
+        _session = session;
+        await LoadInventoryContextAsync();
+    }
+
+    private async Task LoadInventoryContextAsync()
+    {
+        try
+        {
+            _characters = await Api.GetCharactersAsync();
+            var settings = await Api.GetDashboardSettingsAsync();
+            _selectedCharacterId = settings.DefaultCharacterId;
+            if (_selectedCharacterId != null && _characters.All(character => character.Id != _selectedCharacterId))
+                _selectedCharacterId = null;
+
+            await LoadInventoryAsync();
+        }
+        catch (DashboardUnauthorizedException)
+        {
+            ExpireSession();
+        }
+        catch (Exception ex)
+        {
+            Status.Error($"Inventory load failed: {ex.Message}");
+        }
     }
 
     private async Task OnCharacterChanged(long? value)
@@ -286,6 +326,10 @@
         catch (OperationCanceledException)
         {
         }
+        catch (DashboardUnauthorizedException)
+        {
+            ExpireSession();
+        }
         catch (Exception ex)
         {
             Status.Error($"Inventory load failed: {ex.Message}");
@@ -295,6 +339,12 @@
             if (!token.IsCancellationRequested)
                 _loading = false;
         }
+    }
+
+    private void ExpireSession()
+    {
+        _session = null;
+        Status.Info("Dashboard session expired. Sign in again.");
     }
 
     private void OnItemClicked(DataGridRowClickEventArgs<InventoryBrowserItemView> args)

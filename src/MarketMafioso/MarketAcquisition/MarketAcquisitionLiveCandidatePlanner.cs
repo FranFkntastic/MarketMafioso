@@ -216,7 +216,13 @@ public static class MarketAcquisitionLiveCandidatePlanner
             });
         }
 
-        var status = ResolveStatus(mode, request.Quantity, checked(alreadyPurchasedQuantity + selectedQuantity), selectedQuantity, readResult);
+        var status = ResolveStatus(
+            mode,
+            request.Quantity,
+            checked(alreadyPurchasedQuantity + selectedQuantity),
+            selectedQuantity,
+            rows,
+            readResult);
         return new MarketAcquisitionLiveCandidatePlan
         {
             Status = status,
@@ -340,11 +346,12 @@ public static class MarketAcquisitionLiveCandidatePlanner
         uint requestedQuantity,
         uint totalQuantityAfter,
         uint selectedQuantity,
+        IReadOnlyList<MarketAcquisitionLiveCandidateRow> rows,
         MarketBoardReadResult? readResult)
     {
         if (selectedQuantity == 0)
         {
-            if (readResult?.IsListingCountTruncated == true)
+            if (readResult?.IsListingCountTruncated == true && !ReadableRowsProvePriceBoundary(rows))
                 return "VisibleCacheExhausted";
 
             return "NoSafeListings";
@@ -354,6 +361,12 @@ public static class MarketAcquisitionLiveCandidatePlanner
             return "UnderProcured";
 
         return "Ready";
+    }
+
+    private static bool ReadableRowsProvePriceBoundary(IReadOnlyList<MarketAcquisitionLiveCandidateRow> rows)
+    {
+        return rows.Count > 0 &&
+               rows.All(row => row.Reason.Equals("AboveThreshold", StringComparison.OrdinalIgnoreCase));
     }
 
     private static string ResolveMessage(

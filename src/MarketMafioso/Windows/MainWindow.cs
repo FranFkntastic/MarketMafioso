@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Numerics;
@@ -44,11 +45,13 @@ public class MainWindow : Window, IDisposable
     private readonly MarketBoardApproachService marketBoardApproachService;
     private readonly MarketAcquisitionRouteRunner marketAcquisitionRouteRunner;
     private readonly MarketBoardAutomationController marketBoardAutomationController = new();
+    private readonly string marketAcquisitionRouteDiagnosticsDirectory;
 
     private string urlBuffer = string.Empty;
     private string apiKeyBuffer = string.Empty;
     private string dashboardUrlBuffer = string.Empty;
     private string dashboardOpenStatus = "Dashboard link appears after a successful send.";
+    private string diagnosticsFolderStatus = "Route diagnostics folder opens in Explorer.";
     private string marketAcquisitionUnlockKeyBuffer = string.Empty;
     private string marketAcquisitionUnlockStatus = "Private module is hidden until unlocked.";
     private bool showApiKey = false;
@@ -153,6 +156,7 @@ public class MainWindow : Window, IDisposable
         marketBoardPurchaseAdapter = new DalamudMarketBoardPurchaseAdapter(Plugin.GameGui, log);
         marketBoardPurchaseExecutor = new MarketBoardPurchaseExecutor(marketBoardPurchaseAdapter);
         this.marketBoardApproachService = marketBoardApproachService;
+        this.marketAcquisitionRouteDiagnosticsDirectory = marketAcquisitionRouteDiagnosticsDirectory;
         marketAcquisitionRouteRunner = new MarketAcquisitionRouteRunner(
             marketAcquisitionRouteDiagnosticsDirectory,
             universalisFreshnessVerifier.VerifyAsync);
@@ -253,6 +257,12 @@ public class MainWindow : Window, IDisposable
             if (IsMarketAcquisitionUnlocked() && ImGui.BeginTabItem("Market Acquisition"))
             {
                 DrawMarketAcquisitionTab();
+                ImGui.EndTabItem();
+            }
+
+            if (IsMarketAcquisitionUnlocked() && ImGui.BeginTabItem("Diagnostics"))
+            {
+                DrawDiagnosticsTab();
                 ImGui.EndTabItem();
             }
 
@@ -1775,6 +1785,32 @@ public class MainWindow : Window, IDisposable
 
         DrawGuidedRouteStops(marketAcquisitionRouteRunner.Stops);
         DrawMarketBoardProbeStatus();
+    }
+
+    private void DrawDiagnosticsTab()
+    {
+        ImGui.Spacing();
+        ImGuiUi.SectionHeader("Diagnostics", ColHeader);
+
+        if (ImGuiUi.Button("Open Route Diagnostics Folder", true))
+            OpenDiagnosticsFolder(marketAcquisitionRouteDiagnosticsDirectory);
+
+        ImGui.SameLine();
+        if (ImGuiUi.Button("Market Acquisition Diagnostics", true))
+            AcquisitionDiagnostics.IsOpen = true;
+
+        ImGui.SameLine();
+        if (ImGuiUi.Button("Automation Diagnostics", true))
+            AutomationDiagnostics.IsOpen = true;
+
+        ImGui.TextColored(GetDiagnosticsFolderStatusColor(), diagnosticsFolderStatus);
+        ImGui.TextColored(ColMuted, marketAcquisitionRouteDiagnosticsDirectory);
+
+        if (marketAcquisitionRouteRunner.LastDiagnosticFilePath != null)
+            ImGui.TextColored(ColMuted, $"Latest report: {marketAcquisitionRouteRunner.LastDiagnosticFilePath}");
+
+        DrawPostRunDiagnosticSummary();
+        DrawMarketBoardInputCapture();
     }
 
     private void DrawLatestWorldCompletionSummary()
@@ -3302,6 +3338,29 @@ public class MainWindow : Window, IDisposable
         ImGui.Spacing();
         DrawRetainerCacheSection();
     }
+
+    private void OpenDiagnosticsFolder(string folderPath)
+    {
+        try
+        {
+            Directory.CreateDirectory(folderPath);
+            Process.Start(new ProcessStartInfo(folderPath)
+            {
+                UseShellExecute = true,
+            });
+            diagnosticsFolderStatus = "Opened route diagnostics folder.";
+        }
+        catch (Exception ex)
+        {
+            diagnosticsFolderStatus = $"Unable to open route diagnostics folder. {ex.Message}";
+            log.Error(ex, "[MarketMafioso] Unable to open route diagnostics folder.");
+        }
+    }
+
+    private Vector4 GetDiagnosticsFolderStatusColor() =>
+        diagnosticsFolderStatus.StartsWith("Unable", StringComparison.OrdinalIgnoreCase)
+            ? ColError
+            : ColMuted;
 
     private void DrawSettingsTab()
     {
