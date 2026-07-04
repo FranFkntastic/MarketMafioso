@@ -49,6 +49,44 @@ public sealed class UniversalisMarketAcquisitionPlanSourceTests
     }
 
     [Fact]
+    public async Task FetchListingsForWorldAsync_RequestsWorldItemEndpointAndParsesListings()
+    {
+        using var handler = new CapturingHandler("""
+            {
+              "itemID": 2,
+              "worldName": "Siren",
+              "listings": [
+                {
+                  "lastReviewTime": 1782370805,
+                  "pricePerUnit": 50,
+                  "quantity": 500,
+                  "worldName": "Siren",
+                  "worldID": 57,
+                  "hq": false,
+                  "listingID": "listing-world",
+                  "retainerID": "retainer-world",
+                  "retainerName": "Worldretainer"
+                }
+              ]
+            }
+            """);
+        using var httpClient = new HttpClient(handler);
+        var source = new MarketMafioso.MarketAcquisition.UniversalisMarketAcquisitionPlanSource(httpClient);
+
+        var listings = await source.FetchListingsForWorldAsync(
+            "Siren",
+            2,
+            5,
+            CancellationToken.None);
+
+        var listing = Assert.Single(listings);
+        Assert.Equal("https://universalis.app/api/v2/Siren/2?listings=5", handler.LastRequest?.RequestUri?.ToString());
+        Assert.Equal("listing-world", listing.ListingId);
+        Assert.Equal("Siren", listing.WorldName);
+        Assert.Equal(57u, listing.WorldId);
+    }
+
+    [Fact]
     public async Task FetchListingsAsync_FailsWhenRequiredListingFieldsAreMissing()
     {
         using var handler = new CapturingHandler("""

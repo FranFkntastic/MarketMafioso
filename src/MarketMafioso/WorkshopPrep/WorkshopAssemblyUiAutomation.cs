@@ -72,6 +72,15 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
 
     public WorkshopAssemblyDiagnostics Diagnostics { get; set; } = WorkshopAssemblyDiagnostics.Disabled;
 
+    public void ResetState()
+    {
+        pendingContributionItemId = null;
+        pendingConfirmationKind = WorkshopAssemblyPendingConfirmationKind.None;
+        requestItemSelectionStarted = false;
+        requestConfirmed = false;
+        externalAutomationCoordinator.RestoreTextAdvance();
+    }
+
     public unsafe bool IsFabricationStationUiReady()
     {
         var isReady = IsAddonReady(CompanyCraftRecipeNoteBookAddon) ||

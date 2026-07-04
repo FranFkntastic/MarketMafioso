@@ -63,6 +63,8 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
 
     public MarketAcquisitionWorldCompletionSummary? LatestWorldCompletionSummary { get; private set; }
 
+    public MarketAcquisitionPlan? ActivePlan { get; private set; }
+
     public MarketAcquisitionRunDiagnosticSummary LastRunDiagnosticSummary => new()
     {
         FreshnessConfirmedCount = freshnessConfirmedCount,
@@ -90,6 +92,16 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
 
     public bool CanRestart => session != null;
 
+    public IReadOnlyList<MarketAcquisitionCompletedRouteStop> CompletedOrProbedStops =>
+        session?.Stops
+            .Where(IsCompletedOrProbed)
+            .Select(stop => new MarketAcquisitionCompletedRouteStop
+            {
+                WorldName = stop.WorldName,
+                Result = stop.PurchasedQuantity > 0 || stop.SpentGil > 0 ? "Purchased" : "Probed",
+            })
+            .ToArray() ?? [];
+
     public MarketAcquisitionRouteActionResult Start(
         MarketAcquisitionPlan plan,
         bool enableDiagnostics = false,
@@ -107,6 +119,7 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         LastObservedListingsCsvPath = diagnostics.ObservedListingsCsvPath;
         LastPurchaseRecordsCsvPath = diagnostics.PurchaseRecordsCsvPath;
         LastRunSummary = null;
+        ActivePlan = plan;
         session = MarketAcquisitionGuidedRouteSession.Start(plan, includeOpportunisticChecks);
         currentRequestId = plan.RequestId;
         State = "Running";
@@ -148,6 +161,39 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
 
         diagnostics.Record("route-restart", "Restarting market acquisition route.");
         return Start(plan, diagnosticsRequested, includeOpportunisticChecksRequested);
+    }
+
+    public MarketAcquisitionRouteActionResult ReprepareAndRestart(
+        MarketAcquisitionPlan plan,
+        DateTimeOffset preparedAtUtc)
+    {
+        ArgumentNullException.ThrowIfNull(plan);
+
+        var reprepare = MarketAcquisitionPlanRepreparer.FilterCompletedOrProbedStops(
+            plan,
+            CompletedOrProbedStops,
+            preparedAtUtc);
+        if (!reprepare.CanStart)
+        {
+            StatusMessage = reprepare.Message;
+            diagnostics.Record("route-reprepare-empty", reprepare.Message);
+            return MarketAcquisitionRouteActionResult.Fail(reprepare.Message);
+        }
+
+        diagnostics.Record(
+            "route-reprepare",
+            reprepare.Message,
+            new Dictionary<string, string?>
+            {
+                ["skippedWorlds"] = string.Join(", ", reprepare.SkippedWorlds),
+                ["remainingWorldCount"] = reprepare.Plan.WorldBatches.Count.ToString(),
+            });
+        var startResult = Start(reprepare.Plan, diagnosticsRequested, includeOpportunisticChecksRequested);
+        if (!startResult.Success)
+            return startResult;
+
+        StatusMessage = $"{reprepare.Message} {StatusMessage}";
+        return MarketAcquisitionRouteActionResult.Ok(StatusMessage);
     }
 
     public MarketAcquisitionRouteLinePurchaseTotals GetLinePurchaseTotals(string lineId) =>
@@ -196,6 +242,7 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
     {
         CloseDiagnostics();
         session = null;
+        ActivePlan = null;
         currentRequestId = null;
         State = "Idle";
         StatusMessage = statusMessage;
@@ -1028,6 +1075,12 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         RefreshLastRunSummary();
         return MarketAcquisitionRouteActionResult.Ok(message);
     }
+
+    private static bool IsCompletedOrProbed(MarketAcquisitionGuidedRouteStop stop) =>
+        stop.Status.Equals("Complete", StringComparison.OrdinalIgnoreCase) ||
+        stop.LineStates.Any(line =>
+            line.Status.Equals("Complete", StringComparison.OrdinalIgnoreCase) ||
+            line.Status.StartsWith("Skipped", StringComparison.OrdinalIgnoreCase));
 
     private void RefreshLastRunSummary()
     {

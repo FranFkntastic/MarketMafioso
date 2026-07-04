@@ -67,6 +67,7 @@ public sealed class WorkshopAssemblyRunner : IDisposable
         pendingProgressStepsComplete = null;
         stateBeforePause = WorkshopAssemblyRunnerState.Idle;
         continueAt = DateTimeOffset.MinValue;
+        uiAutomation.ResetState();
         SetState(WorkshopAssemblyRunnerState.WaitingForFabricationStation, "Waiting for fabrication station UI.");
         diagnostics.Record(
             "plan",
@@ -119,6 +120,7 @@ public sealed class WorkshopAssemblyRunner : IDisposable
 
         framework.Update -= OnFrameworkUpdate;
         stateBeforePause = WorkshopAssemblyRunnerState.Idle;
+        uiAutomation.ResetState();
         SetState(WorkshopAssemblyRunnerState.Stopped, "Workshop assembly stopped by user.");
         diagnostics.Record("stopped", "Workshop assembly stopped by user.");
         CloseDiagnostics();
@@ -383,6 +385,7 @@ public sealed class WorkshopAssemblyRunner : IDisposable
     private void Complete()
     {
         framework.Update -= OnFrameworkUpdate;
+        uiAutomation.ResetState();
         SetState(WorkshopAssemblyRunnerState.Complete, "Workshop assembly complete.");
         diagnostics.Complete("Workshop assembly complete.");
         CloseDiagnostics();
@@ -392,6 +395,7 @@ public sealed class WorkshopAssemblyRunner : IDisposable
     private void Fail(string message, Exception ex)
     {
         framework.Update -= OnFrameworkUpdate;
+        uiAutomation.ResetState();
         SetState(WorkshopAssemblyRunnerState.Failed, message);
         diagnostics.Fail(message, ex);
         CloseDiagnostics();

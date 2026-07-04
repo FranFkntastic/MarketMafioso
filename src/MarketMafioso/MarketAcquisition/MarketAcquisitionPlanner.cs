@@ -10,7 +10,8 @@ public static class MarketAcquisitionPlanner
         MarketAcquisitionRequestView request,
         IEnumerable<MarketAcquisitionListing> listings,
         DateTimeOffset preparedAtUtc,
-        string? currentWorld = null)
+        string? currentWorld = null,
+        IEnumerable<MarketAcquisitionSweepWorldExclusion>? sweepWorldExclusions = null)
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(listings);
@@ -18,6 +19,7 @@ public static class MarketAcquisitionPlanner
 
         var requestLines = BuildRequestLines(request);
         var sourceListings = listings.ToList();
+        var sweepExclusions = sweepWorldExclusions?.ToArray() ?? [];
         var selectedSubtasks = new List<MarketAcquisitionWorldItemSubtask>();
         var planLines = new List<MarketAcquisitionPlanLine>();
         var isAllWorldSweep = request.WorldMode.Equals("AllWorldSweep", StringComparison.OrdinalIgnoreCase);
@@ -40,8 +42,14 @@ public static class MarketAcquisitionPlanner
                     group => group.AsEnumerable(),
                     StringComparer.OrdinalIgnoreCase);
 
-            var candidates = isAllWorldSweep
+            var lineSweepWorlds = isAllWorldSweep
                 ? sweepWorlds
+                    .Where(world => !IsSweepWorldExcluded(line, world, sweepExclusions))
+                    .ToArray()
+                : [];
+
+            var candidates = isAllWorldSweep
+                ? lineSweepWorlds
                     .Select(world =>
                     {
                         var hasListings = matchingListings.TryGetValue(world, out var worldListings);
@@ -92,7 +100,7 @@ public static class MarketAcquisitionPlanner
         var primaryLine = requestLines[0];
         var totalQuantity = (uint)batches.Sum(batch => batch.PlannedQuantity);
         var totalGil = (uint)batches.Sum(batch => batch.PlannedGil);
-        var diagnostics = BuildDiagnostics(request, requestLines, sourceListings, sweepWorlds, selectedSubtasks);
+        var diagnostics = BuildDiagnostics(request, requestLines, sourceListings, sweepWorlds, sweepExclusions, selectedSubtasks);
 
         return new MarketAcquisitionPlan
         {
@@ -165,6 +173,7 @@ public static class MarketAcquisitionPlanner
         IReadOnlyList<PlannerLine> requestLines,
         IReadOnlyList<MarketAcquisitionListing> listings,
         IReadOnlyList<string> sweepWorlds,
+        IReadOnlyCollection<MarketAcquisitionSweepWorldExclusion> sweepWorldExclusions,
         IReadOnlyList<MarketAcquisitionWorldItemSubtask> selectedSubtasks)
     {
         var lineItemIds = requestLines.Select(line => line.ItemId).ToHashSet();
@@ -193,7 +202,7 @@ public static class MarketAcquisitionPlanner
             PriceSupportedListingCount = priceSupported.Count,
             HqSupportedListingCount = hqSupported.Count,
             WorldSupportedListingCount = worldSupported.Count,
-            ListingDecisions = BuildListingDecisions(request, requestLines, listings, worldSupported, sweepWorlds, selectedSubtasks),
+            ListingDecisions = BuildListingDecisions(request, requestLines, listings, worldSupported, sweepWorlds, sweepWorldExclusions, selectedSubtasks),
         };
     }
 
@@ -203,6 +212,7 @@ public static class MarketAcquisitionPlanner
         IReadOnlyList<MarketAcquisitionListing> listings,
         IReadOnlyCollection<MarketAcquisitionListing> worldSupportedListings,
         IReadOnlyList<string> sweepWorlds,
+        IReadOnlyCollection<MarketAcquisitionSweepWorldExclusion> sweepWorldExclusions,
         IReadOnlyList<MarketAcquisitionWorldItemSubtask> selectedSubtasks)
     {
         var decisions = new List<MarketAcquisitionListingDecision>();
@@ -272,6 +282,7 @@ public static class MarketAcquisitionPlanner
                     .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
                 decisions.AddRange(sweepWorlds
+                    .Where(world => !IsSweepWorldExcluded(line, world, sweepWorldExclusions))
                     .Where(world => !plannedWorlds.Contains(world))
                     .Select(world => new MarketAcquisitionListingDecision
                     {
@@ -429,6 +440,17 @@ public static class MarketAcquisitionPlanner
 
         return true;
     }
+
+    private static bool IsSweepWorldExcluded(
+        PlannerLine line,
+        string worldName,
+        IReadOnlyCollection<MarketAcquisitionSweepWorldExclusion> sweepWorldExclusions) =>
+        sweepWorldExclusions.Any(exclusion =>
+            exclusion.ItemId == line.ItemId &&
+            exclusion.MaxUnitPrice == line.MaxUnitPrice &&
+            exclusion.LineId.Equals(line.LineId, StringComparison.Ordinal) &&
+            exclusion.WorldName.Equals(worldName, StringComparison.OrdinalIgnoreCase) &&
+            MarketAcquisitionPolicy.NormalizeHqPolicy(exclusion.HqPolicy).Equals(line.HqPolicy, StringComparison.OrdinalIgnoreCase));
 
     private static void ValidateRequest(MarketAcquisitionRequestView request)
     {

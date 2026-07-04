@@ -6,6 +6,8 @@ public interface IWorkshopAssemblyUiAutomation : IDisposable
 {
     WorkshopAssemblyDiagnostics Diagnostics { get; set; }
 
+    void ResetState();
+
     bool IsFabricationStationUiReady();
 
     WorkshopAssemblyActionResult TrySkipCutscene();

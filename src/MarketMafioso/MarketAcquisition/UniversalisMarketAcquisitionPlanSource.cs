@@ -37,8 +37,34 @@ public sealed class UniversalisMarketAcquisitionPlanSource
             throw new InvalidOperationException("Item id is required to fetch market listings.");
 
         var normalizedRegion = NormalizeRegion(region);
+        return await FetchListingsFromEndpointAsync(normalizedRegion, itemId, listingLimit, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    public async Task<IReadOnlyList<MarketAcquisitionListing>> FetchListingsForWorldAsync(
+        string worldName,
+        uint itemId,
+        int listingLimit,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(worldName))
+            throw new InvalidOperationException("World name is required to fetch market listings.");
+
+        if (itemId == 0)
+            throw new InvalidOperationException("Item id is required to fetch market listings.");
+
+        return await FetchListingsFromEndpointAsync(worldName.Trim(), itemId, listingLimit, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private async Task<IReadOnlyList<MarketAcquisitionListing>> FetchListingsFromEndpointAsync(
+        string worldOrRegion,
+        uint itemId,
+        int listingLimit,
+        CancellationToken cancellationToken)
+    {
         var limit = Math.Clamp(listingLimit, 1, 100);
-        var requestUri = new Uri(baseUri, $"{Uri.EscapeDataString(normalizedRegion)}/{itemId}?listings={limit}");
+        var requestUri = new Uri(baseUri, $"{Uri.EscapeDataString(worldOrRegion)}/{itemId}?listings={limit}");
 
         using var response = await httpClient.GetAsync(requestUri, cancellationToken).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();

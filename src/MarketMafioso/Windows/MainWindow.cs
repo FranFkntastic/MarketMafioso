@@ -37,6 +37,7 @@ public class MainWindow : Window, IDisposable
     private readonly HttpClient acquisitionHttpClient = new();
     private readonly MarketAcquisitionRequestClient acquisitionClient;
     private readonly UniversalisMarketAcquisitionPlanSource acquisitionPlanSource;
+    private readonly MarketAcquisitionWorldVisitCatalog marketAcquisitionWorldVisitCatalog;
     private readonly MarketBoardListingReader marketBoardListingReader;
     private readonly MarketBoardItemSearchDriver marketBoardItemSearchDriver;
     private readonly MarketBoardInputCaptureReader marketBoardInputCaptureReader;
@@ -101,6 +102,7 @@ public class MainWindow : Window, IDisposable
     private static readonly TimeSpan MarketBoardPurchaseListingRemovalWatchdog = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan MarketBoardPurchaseInitialMonitorDelay = TimeSpan.FromMilliseconds(250);
     private static readonly TimeSpan MarketBoardPurchaseMonitorInterval = TimeSpan.FromMilliseconds(500);
+    private const int MarketAcquisitionWorldVisitCatalogMaxRecords = 2_000;
 
     private static readonly Vector4 ColHeader = new(0.38f, 0.73f, 1.00f, 1f);
     private static readonly Vector4 ColSuccess = new(0.45f, 0.90f, 0.55f, 1f);
@@ -149,6 +151,7 @@ public class MainWindow : Window, IDisposable
         this.log = log;
         acquisitionClient = new MarketAcquisitionRequestClient(acquisitionHttpClient);
         acquisitionPlanSource = new UniversalisMarketAcquisitionPlanSource(acquisitionHttpClient);
+        marketAcquisitionWorldVisitCatalog = new MarketAcquisitionWorldVisitCatalog(config);
         var universalisFreshnessVerifier = new UniversalisMarketFreshnessVerifier(acquisitionHttpClient);
         marketBoardListingReader = new MarketBoardListingReader(Plugin.GameGui);
         marketBoardItemSearchDriver = new MarketBoardItemSearchDriver(Plugin.GameGui);
@@ -1494,6 +1497,12 @@ public class MainWindow : Window, IDisposable
 
             var planLines = GetAcquisitionPlanLines(claimed);
             var listings = new List<MarketAcquisitionListing>();
+            var sweepWorldExclusions = new List<MarketAcquisitionSweepWorldExclusion>();
+            var freshEvidenceWorldCount = 0;
+            var recentSkippedWorldCount = 0;
+            var preparedAtUtc = DateTimeOffset.UtcNow;
+            var isAllWorldSweep = claimed.WorldMode.Equals("AllWorldSweep", StringComparison.OrdinalIgnoreCase);
+            var recentWorldTtl = GetMarketAcquisitionRecentWorldTtl();
             foreach (var line in planLines)
             {
                 var lineListings = await acquisitionPlanSource.FetchListingsAsync(
@@ -1501,6 +1510,36 @@ public class MainWindow : Window, IDisposable
                     line.ItemId,
                     100,
                     token).ConfigureAwait(false);
+                if (isAllWorldSweep)
+                {
+                    var evidenceWorlds = await FindWorldsWithNewerUsefulUniversalisEvidenceAsync(
+                        line,
+                        preparedAtUtc,
+                        recentWorldTtl,
+                        token).ConfigureAwait(false);
+                    freshEvidenceWorldCount += evidenceWorlds.Count;
+
+                    var filterResult = MarketAcquisitionRecentWorldPolicy.FilterListings(
+                        line,
+                        lineListings,
+                        marketAcquisitionWorldVisitCatalog,
+                        preparedAtUtc,
+                        recentWorldTtl,
+                        config.MarketAcquisitionIgnoreRecentWorldVisitsForSweep,
+                        evidenceWorlds);
+                    lineListings = filterResult.Listings;
+
+                    var lineExclusions = MarketAcquisitionRecentWorldPolicy.BuildSweepWorldExclusions(
+                        line,
+                        marketAcquisitionWorldVisitCatalog,
+                        preparedAtUtc,
+                        recentWorldTtl,
+                        config.MarketAcquisitionIgnoreRecentWorldVisitsForSweep,
+                        evidenceWorlds);
+                    sweepWorldExclusions.AddRange(lineExclusions);
+                    recentSkippedWorldCount += lineExclusions.Count;
+                }
+
                 listings.AddRange(lineListings);
             }
 
@@ -1510,14 +1549,15 @@ public class MainWindow : Window, IDisposable
             acquisitionPlan = MarketAcquisitionPlanner.BuildPlan(
                 claimed,
                 listings,
-                DateTimeOffset.UtcNow,
-                GetCurrentWorldName());
+                preparedAtUtc,
+                GetCurrentWorldName(),
+                sweepWorldExclusions);
             marketBoardReadResult = null;
             marketBoardReconciliation = null;
             marketAcquisitionLiveCandidatePlan = null;
             ResetGuidedRoute("No route has started.");
             acquisitionStatus = acquisitionPlan.Status == "Ready"
-                ? $"Prepared {acquisitionPlan.WorldBatches.Count} world batch(es)."
+                ? BuildPreparedPlanStatus(acquisitionPlan, recentSkippedWorldCount, freshEvidenceWorldCount)
                 : BuildNoSupportedListingsStatus(acquisitionPlan);
         }).ConfigureAwait(false);
     }
@@ -1546,6 +1586,76 @@ public class MainWindow : Window, IDisposable
             },
         ];
     }
+
+    private TimeSpan GetMarketAcquisitionRecentWorldTtl()
+    {
+        var ttlHours = Math.Clamp(config.MarketAcquisitionRecentWorldTtlHours, 1, 168);
+        if (ttlHours != config.MarketAcquisitionRecentWorldTtlHours)
+        {
+            config.MarketAcquisitionRecentWorldTtlHours = ttlHours;
+            config.Save();
+        }
+
+        return TimeSpan.FromHours(ttlHours);
+    }
+
+    private async Task<IReadOnlyList<string>> FindWorldsWithNewerUsefulUniversalisEvidenceAsync(
+        MarketAcquisitionBatchLineView line,
+        DateTimeOffset preparedAtUtc,
+        TimeSpan ttl,
+        CancellationToken token)
+    {
+        if (config.MarketAcquisitionIgnoreRecentWorldVisitsForSweep || ttl <= TimeSpan.Zero)
+            return [];
+
+        var hqPolicy = MarketAcquisitionPolicy.NormalizeHqPolicy(line.HqPolicy);
+        var recentVisits = marketAcquisitionWorldVisitCatalog.FindRecentWorlds(
+            line.ItemId,
+            hqPolicy,
+            line.MaxUnitPrice,
+            preparedAtUtc,
+            ttl);
+        if (recentVisits.Count == 0)
+            return [];
+
+        var evidenceWorlds = new List<string>();
+        foreach (var visit in recentVisits)
+        {
+            try
+            {
+                var worldListings = await acquisitionPlanSource.FetchListingsForWorldAsync(
+                    visit.WorldName,
+                    line.ItemId,
+                    100,
+                    token).ConfigureAwait(false);
+                var checkedAtUtc = DateTime.SpecifyKind(visit.CheckedAtUtc, DateTimeKind.Utc);
+                if (worldListings.Any(listing => IsNewerUsefulUniversalisListing(line, hqPolicy, checkedAtUtc, listing)))
+                    evidenceWorlds.Add(visit.WorldName);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                log.Warning(
+                    ex,
+                    "[MarketMafioso] Unable to refresh Universalis evidence for {World} item {ItemId}.",
+                    visit.WorldName,
+                    line.ItemId);
+            }
+        }
+
+        return evidenceWorlds;
+    }
+
+    private static bool IsNewerUsefulUniversalisListing(
+        MarketAcquisitionBatchLineView line,
+        string hqPolicy,
+        DateTime checkedAtUtc,
+        MarketAcquisitionListing listing) =>
+        listing.ItemId == line.ItemId &&
+        listing.Quantity > 0 &&
+        listing.UnitPrice > 0 &&
+        listing.UnitPrice <= line.MaxUnitPrice &&
+        MarketAcquisitionPolicy.HqMatches(hqPolicy, listing.IsHq) &&
+        listing.LastReviewTimeUtc > new DateTimeOffset(checkedAtUtc);
 
     private MarketAcquisitionRequestView GetActiveRouteLine(MarketAcquisitionRequestView claimed)
     {
@@ -1636,6 +1746,20 @@ public class MainWindow : Window, IDisposable
                $"{diagnostics.PlannedListingCount:N0} planned.";
     }
 
+    private static string BuildPreparedPlanStatus(
+        MarketAcquisitionPlan plan,
+        int recentSkippedWorldCount,
+        int freshEvidenceWorldCount)
+    {
+        var status = $"Prepared {plan.WorldBatches.Count:N0} world batch(es).";
+        if (recentSkippedWorldCount > 0)
+            status += $" Skipped {recentSkippedWorldCount:N0} recent sweep world/item check(s).";
+        if (freshEvidenceWorldCount > 0)
+            status += $" Reopened {freshEvidenceWorldCount:N0} recent world/item check(s) with fresh Universalis evidence.";
+
+        return status;
+    }
+
     private static string ResolveZeroPurchaseLineStatus(
         MarketAcquisitionLiveCandidatePlan? candidatePlan,
         uint purchasedQuantity,
@@ -1719,6 +1843,9 @@ public class MainWindow : Window, IDisposable
                                 marketAcquisitionLiveCandidatePlan != null
             ? marketAcquisitionRouteRunner.RecordProbe(currentWorld, marketAcquisitionLiveCandidatePlan)
             : null;
+        if (guidedRouteResult?.Success == true && marketAcquisitionLiveCandidatePlan != null)
+            RecordMarketAcquisitionProbeVisit(currentWorld, activeLine, activeSubtask, marketAcquisitionLiveCandidatePlan);
+
         acquisitionStatus = marketBoardReconciliation == null
             ? marketBoardReadResult.Message
             : $"Live listing reconciliation {marketBoardReconciliation.Status}; live candidates {marketAcquisitionLiveCandidatePlan?.Status ?? "Unavailable"}.";
@@ -1726,6 +1853,84 @@ public class MainWindow : Window, IDisposable
         {
             acquisitionStatus = $"{acquisitionStatus} Route: {guidedRouteResult.Message}";
         }
+    }
+
+    private void RecordMarketAcquisitionProbeVisit(
+        string currentWorld,
+        MarketAcquisitionRequestView activeLine,
+        MarketAcquisitionWorldItemSubtask? activeSubtask,
+        MarketAcquisitionLiveCandidatePlan candidatePlan)
+    {
+        var legalRows = candidatePlan.Rows
+            .Where(row => row.Decision.Equals("WouldBuy", StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        var observedLegalQuantity = (uint)legalRows.Sum(row => row.LiveListing.Quantity);
+        var observedLegalGil = legalRows.Aggregate(
+            0ul,
+            (total, row) => checked(total + ((ulong)row.LiveListing.UnitPrice * row.LiveListing.Quantity)));
+        var hqPolicy = MarketAcquisitionPolicy.NormalizeHqPolicy(activeSubtask?.HqPolicy ?? activeLine.HqPolicy);
+        var maxUnitPrice = activeSubtask?.MaxUnitPrice ?? activeLine.MaxUnitPrice;
+        var dataCenter = ResolveCatalogDataCenter(currentWorld, activeSubtask?.DataCenter);
+
+        marketAcquisitionWorldVisitCatalog.RecordProbe(new MarketAcquisitionWorldVisitRecord
+        {
+            WorldName = currentWorld,
+            DataCenter = dataCenter,
+            ItemId = activeSubtask?.ItemId ?? activeLine.ItemId,
+            ItemName = activeSubtask?.ItemName ?? activeLine.ItemName,
+            HqPolicy = hqPolicy,
+            MaxUnitPrice = maxUnitPrice,
+            CheckedAtUtc = DateTimeOffset.UtcNow,
+            Result = candidatePlan.WouldBuyQuantity > 0 ? "LegalStockObserved" : candidatePlan.Status,
+            ObservedLegalListingCount = legalRows.Length,
+            ObservedLegalQuantity = observedLegalQuantity,
+            ObservedLegalGil = observedLegalGil,
+            Source = "LiveMarketBoardProbe",
+            RequestId = claimedAcquisitionRequest?.Id,
+            RouteRunId = guidedRouteProgressNonce,
+            RouteStopId = $"{dataCenter}:{currentWorld}",
+        });
+        marketAcquisitionWorldVisitCatalog.Prune(MarketAcquisitionWorldVisitCatalogMaxRecords);
+        config.Save();
+    }
+
+    private void RecordMarketAcquisitionPurchaseVisit(
+        MarketBoardPurchaseCandidate candidate,
+        MarketAcquisitionWorldItemSubtask activeSubtask,
+        string worldName)
+    {
+        var hqPolicy = MarketAcquisitionPolicy.NormalizeHqPolicy(activeSubtask.HqPolicy);
+        var dataCenter = ResolveCatalogDataCenter(worldName, activeSubtask.DataCenter);
+        marketAcquisitionWorldVisitCatalog.RecordProbe(new MarketAcquisitionWorldVisitRecord
+        {
+            WorldName = worldName,
+            DataCenter = dataCenter,
+            ItemId = activeSubtask.ItemId,
+            ItemName = activeSubtask.ItemName,
+            HqPolicy = hqPolicy,
+            MaxUnitPrice = activeSubtask.MaxUnitPrice,
+            CheckedAtUtc = DateTimeOffset.UtcNow,
+            Result = "Purchased",
+            PurchasedQuantity = candidate.Quantity,
+            SpentGil = candidate.TotalGil,
+            ObservedLegalListingCount = 1,
+            ObservedLegalQuantity = candidate.Quantity,
+            ObservedLegalGil = candidate.TotalGil,
+            Source = "PurchaseAudit",
+            RequestId = claimedAcquisitionRequest?.Id,
+            RouteRunId = guidedRouteProgressNonce,
+            RouteStopId = $"{dataCenter}:{worldName}",
+        });
+        marketAcquisitionWorldVisitCatalog.Prune(MarketAcquisitionWorldVisitCatalogMaxRecords);
+        config.Save();
+    }
+
+    private static string ResolveCatalogDataCenter(string worldName, string? plannedDataCenter)
+    {
+        if (!string.IsNullOrWhiteSpace(plannedDataCenter))
+            return plannedDataCenter;
+
+        return MarketAcquisitionWorldCatalog.ResolveDataCenter(worldName);
     }
 
     private void DrawMarketAcquisitionGuidedRoute()
@@ -1736,6 +1941,9 @@ public class MainWindow : Window, IDisposable
                        acquisitionPlan.WorldBatches.Count > 0 &&
                        !marketAcquisitionRouteRunner.IsRunning &&
                        !marketAcquisitionRouteRunner.IsPaused;
+        var canReprepare = canStart &&
+                           marketAcquisitionRouteRunner.CanRestart &&
+                           marketAcquisitionRouteRunner.CompletedOrProbedStops.Count > 0;
         if (ImGuiUi.Button("Start Route", canStart))
             _ = StartGuidedRouteAsync(enableDiagnostics: false);
 
@@ -1774,6 +1982,10 @@ public class MainWindow : Window, IDisposable
         ImGui.SameLine();
         if (ImGuiUi.Button("Restart", canStart && marketAcquisitionRouteRunner.CanRestart))
             _ = RestartGuidedRouteAsync();
+
+        ImGui.SameLine();
+        if (ImGuiUi.Button("Re-prepare Route", canReprepare))
+            _ = ReprepareGuidedRouteAsync();
 
         ImGui.TextColored(GetGuidedRouteStatusColor(), marketAcquisitionRouteRunner.StatusMessage);
         DrawPostRunDiagnosticSummary();
@@ -2071,6 +2283,40 @@ public class MainWindow : Window, IDisposable
         });
     }
 
+    private Task ReprepareGuidedRouteAsync()
+    {
+        return RunAcquisitionRequestAsync(async token =>
+        {
+            var plan = acquisitionPlan ??
+                       throw new InvalidOperationException("Prepare a plan before re-preparing a guided route.");
+            var claimed = claimedAcquisitionRequest ??
+                          throw new InvalidOperationException("No dashboard request is accepted.");
+            await EnsureRouteReportableClaimAsync(claimed, token).ConfigureAwait(false);
+            marketBoardApproachService.StopNavigation();
+            var result = marketAcquisitionRouteRunner.ReprepareAndRestart(plan, DateTimeOffset.UtcNow);
+            if (marketAcquisitionRouteRunner.ActivePlan != null)
+                acquisitionPlan = marketAcquisitionRouteRunner.ActivePlan;
+            acquisitionStatus = result.Message;
+            marketBoardReadResult = null;
+            marketBoardReconciliation = null;
+            marketAcquisitionLiveCandidatePlan = null;
+            ClearMarketBoardAutomationState();
+            activeWorldPurchasedQuantity = 0;
+            activeWorldSpentGil = 0;
+            activeWorldPurchaseBatchWorld = null;
+            activePurchaseLineId = null;
+            activeLinePurchasedQuantity = 0;
+            activeLineSpentGil = 0;
+            guidedRouteProbeRunning = false;
+            nextGuidedRouteMonitorUtc = DateTimeOffset.MinValue;
+            Interlocked.Increment(ref guidedRouteProgressSessionVersion);
+            guidedRouteProgressNonce = Guid.NewGuid().ToString("N");
+            Interlocked.Exchange(ref guidedRouteProgressReportSequence, 0);
+            lastGuidedRouteProgressReportKey = null;
+            ReportGuidedRouteProgress();
+        });
+    }
+
     private void CaptureMarketBoardInputState()
     {
         try
@@ -2292,6 +2538,7 @@ public class MainWindow : Window, IDisposable
             lineSpentGil,
             message,
             activeSubtask.Source);
+        RecordMarketAcquisitionPurchaseVisit(candidate, activeSubtask, worldName);
 
         ReportPurchaseAuditAsync(
             claimed,
@@ -3482,6 +3729,26 @@ public class MainWindow : Window, IDisposable
         ImGui.TextColored(
             ColMuted,
             "Default on. While already on a world, MarketMafioso checks other unfinished items from the same claimed batch.");
+
+        ImGui.Spacing();
+        var recentWorldTtlHours = config.MarketAcquisitionRecentWorldTtlHours;
+        ImGui.SetNextItemWidth(120f);
+        if (ImGui.InputInt("All-world recent check TTL (hours)", ref recentWorldTtlHours))
+        {
+            config.MarketAcquisitionRecentWorldTtlHours = Math.Clamp(recentWorldTtlHours, 1, 168);
+            config.Save();
+        }
+
+        var ignoreRecentVisits = config.MarketAcquisitionIgnoreRecentWorldVisitsForSweep;
+        if (ImGui.Checkbox("Full all-world resweep", ref ignoreRecentVisits))
+        {
+            config.MarketAcquisitionIgnoreRecentWorldVisitsForSweep = ignoreRecentVisits;
+            config.Save();
+        }
+
+        ImGui.TextColored(
+            ColMuted,
+            "Default TTL is 18h. Full resweep ignores recent checked worlds while preparing all-world routes.");
     }
 
     private void DrawInternalFeatureSettingsSection()

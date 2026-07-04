@@ -302,6 +302,45 @@ public sealed class MarketAcquisitionPlannerTests
     }
 
     [Fact]
+    public void BuildPlan_AllWorldSweepCanExcludeRecentProbeWorlds()
+    {
+        var request = CreateRequest(
+            quantity: 0,
+            worldMode: "AllWorldSweep",
+            quantityMode: "AllBelowThreshold",
+            maxUnitPrice: 100,
+            maxTotalGil: 0) with
+        {
+            SweepScope = "CurrentDataCenter",
+        };
+
+        var plan = MarketMafioso.MarketAcquisition.MarketAcquisitionPlanner.BuildPlan(
+            request,
+            [],
+            DateTimeOffset.UnixEpoch,
+            currentWorld: "Siren",
+            sweepWorldExclusions:
+            [
+                new MarketMafioso.MarketAcquisition.MarketAcquisitionSweepWorldExclusion
+                {
+                    LineId = request.Id,
+                    ItemId = request.ItemId,
+                    WorldName = "Siren",
+                    HqPolicy = "Either",
+                    MaxUnitPrice = 100,
+                },
+            ]);
+
+        Assert.Equal(7, plan.WorldBatches.Count);
+        Assert.DoesNotContain(plan.WorldBatches, batch => batch.WorldName == "Siren");
+        Assert.DoesNotContain(
+            plan.Diagnostics.ListingDecisions,
+            decision => decision.WorldName == "Siren" &&
+                        decision.Decision == "SweepProbeNoRemoteListing" &&
+                        decision.ItemId == request.ItemId);
+    }
+
+    [Fact]
     public void BuildPlan_AllWorldSweepCanScopeToSelectedDataCenters()
     {
         var request = CreateRequest(

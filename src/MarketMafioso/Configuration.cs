@@ -18,6 +18,9 @@ public class Configuration : IPluginConfiguration
     public bool EnableMarketAcquisition { get; set; } = false;
     public DateTime? MarketAcquisitionUnlockedAtUtc { get; set; }
     public bool EnableOpportunisticWorldChecks { get; set; } = true;
+    public int MarketAcquisitionRecentWorldTtlHours { get; set; } = 18;
+    public bool MarketAcquisitionIgnoreRecentWorldVisitsForSweep { get; set; } = false;
+    public List<PersistedMarketAcquisitionWorldVisit> MarketAcquisitionWorldVisits { get; set; } = [];
 
     public bool IncludeArmoury { get; set; } = false;
     public bool IncludeCrystals { get; set; } = true;
@@ -123,4 +126,26 @@ public sealed class PersistedMarketAcquisitionLine
     public uint PurchasedQuantity { get; set; }
     public uint SpentGil { get; set; }
     public string? LatestMessage { get; set; }
+}
+
+[Serializable]
+public sealed class PersistedMarketAcquisitionWorldVisit
+{
+    public string WorldName { get; set; } = string.Empty;
+    public string DataCenter { get; set; } = string.Empty;
+    public uint ItemId { get; set; }
+    public string? ItemName { get; set; }
+    public string HqPolicy { get; set; } = string.Empty;
+    public uint MaxUnitPrice { get; set; }
+    public DateTime CheckedAtUtc { get; set; }
+    public string Result { get; set; } = string.Empty;
+    public uint PurchasedQuantity { get; set; }
+    public uint SpentGil { get; set; }
+    public int ObservedLegalListingCount { get; set; }
+    public uint ObservedLegalQuantity { get; set; }
+    public ulong ObservedLegalGil { get; set; }
+    public string Source { get; set; } = string.Empty;
+    public string? RequestId { get; set; }
+    public string? RouteRunId { get; set; }
+    public string? RouteStopId { get; set; }
 }

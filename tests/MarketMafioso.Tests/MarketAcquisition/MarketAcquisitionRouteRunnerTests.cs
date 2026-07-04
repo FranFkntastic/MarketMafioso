@@ -17,6 +17,24 @@ public sealed class MarketAcquisitionRouteRunnerTests
     }
 
     [Fact]
+    public void ReprepareAndRestart_SkipsCompletedOrProbedWorlds()
+    {
+        using var runner = CreateRunner();
+        var plan = CreatePlan("Siren", "Maduin", "Rafflesia");
+        runner.Start(plan);
+        runner.RecordCurrentWorld("Siren");
+        runner.RecordProbe("Siren", CreateCandidatePlan(status: "NoSafeListings", quantity: 0, gil: 0));
+
+        var result = runner.ReprepareAndRestart(plan, DateTimeOffset.UnixEpoch.AddHours(1));
+
+        Assert.True(result.Success);
+        Assert.Equal("Running", runner.State);
+        Assert.Equal("Maduin", runner.ActiveStop?.WorldName);
+        Assert.Equal(["Maduin", "Rafflesia"], runner.Stops.Select(stop => stop.WorldName).ToArray());
+        Assert.Contains("Skipped 1", result.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void Start_WithDiagnosticsCreatesRouteLog()
     {
         var directory = CreateTempDirectory();

@@ -306,6 +306,30 @@ public sealed class WorkshopAssemblyRunnerTests
         Assert.Equal(WorkshopAssemblyRunnerState.Stopped, runner.Progress.State);
     }
 
+    [Fact]
+    public void Start_resets_ui_automation_state_before_first_tick()
+    {
+        var framework = TestFramework.Create();
+        var automation = new FakeWorkshopAssemblyUiAutomation
+        {
+            IsReady = true,
+            OpenProjectResult = new WorkshopAssemblyActionResult(true, "Project opened."),
+        };
+        using var runner = new WorkshopAssemblyRunner(
+            framework,
+            TestPluginLog.Create(),
+            automation,
+            CreateTempDirectory());
+
+        runner.Start(BuildPlan());
+        Assert.Equal(1, automation.ResetStateCalls);
+
+        ((TestFramework)(object)framework).RaiseUpdate(framework);
+        ((TestFramework)(object)framework).RaiseUpdate(framework);
+
+        Assert.Equal(WorkshopAssemblyRunnerState.SubmittingMaterial, runner.Progress.State);
+    }
+
     private static WorkshopAssemblyPlan BuildPlan()
     {
         return new WorkshopAssemblyPlan(
@@ -344,6 +368,12 @@ public sealed class WorkshopAssemblyRunnerTests
         public WorkshopAssemblyActionResult CutsceneResult { get; set; } = new(false, "No cutscene.");
         public WorkshopAssemblyDiagnostics Diagnostics { get; set; } = WorkshopAssemblyDiagnostics.Disabled;
         public int ProgressChecks { get; private set; }
+        public int ResetStateCalls { get; private set; }
+
+        public void ResetState()
+        {
+            ResetStateCalls++;
+        }
 
         public bool IsFabricationStationUiReady() => IsReady;
 
