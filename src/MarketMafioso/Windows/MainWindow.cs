@@ -14,6 +14,7 @@ using FFXIVClientStructs.FFXIV.Component.GUI;
 using MarketMafioso.Automation.Diagnostics;
 using MarketMafioso.Automation.Retainers;
 using MarketMafioso.Automation.Travel;
+using MarketMafioso.CraftArchitectCompanion;
 using MarketMafioso.MarketAcquisition;
 using MarketMafioso.WorkshopPrep;
 
@@ -95,6 +96,7 @@ public class MainWindow : Window, IDisposable
     private const string InventoryModuleSummary = "Inventory Reporter exports character and retainer inventory snapshots as JSON.";
     private const string WorkshopLogisticsModuleSummary = "Workshop Logistics tracks company workshop jobs, materials, retainer restock, handoff, and assembly.";
     private const string MarketAcquisitionModuleSummary = "Market Acquisition picks up dashboard-created purchase requests for local review.";
+    private const string CraftArchitectCompanionModuleSummary = "Craft Architect Companion compares craft-cost evidence with market depth and hands chosen thresholds to quick-shop routes.";
     private const string LocalReceiverUrl = "http://localhost:8080/inventory";
     private const string DevReceiverUrl = "https://dev.xivcraftarchitect.com/marketmafioso/api/inventory";
     private const string ProductionReceiverUrl = "https://xivcraftarchitect.com/marketmafioso/api/inventory";
@@ -204,6 +206,14 @@ public class MainWindow : Window, IDisposable
             () => acquisitionRequestBusy,
             () => acquisitionStatus,
             CreateMonitoredQuickShopRouteAsync);
+        CraftArchitectCompanion = new CraftArchitectCompanionWindow(
+            config,
+            dataManager,
+            GetQuickShopScope,
+            IsMarketAcquisitionRouteActive,
+            () => acquisitionRequestBusy,
+            acquisitionPlanSource.FetchListingsAsync,
+            CreateMonitoredQuickShopRouteAsync);
         AcquisitionDiagnostics = new MarketAcquisitionDiagnosticsWindow(
             () => marketBoardReadResult,
             () => marketBoardReconciliation,
@@ -230,6 +240,7 @@ public class MainWindow : Window, IDisposable
     public WorkshopProjectBrowserWindow ProjectBrowser { get; }
     public WorkshopFrozenQueueBrowserWindow FrozenQueueBrowser { get; }
     public MarketAcquisitionQuickShopWindow QuickShop { get; }
+    public CraftArchitectCompanionWindow CraftArchitectCompanion { get; }
     public MarketAcquisitionDiagnosticsWindow AcquisitionDiagnostics { get; }
     public AutomationDiagnosticsWindow AutomationDiagnostics { get; }
 
@@ -273,6 +284,12 @@ public class MainWindow : Window, IDisposable
                 ImGui.EndTabItem();
             }
 
+            if (IsMarketAcquisitionUnlocked() && ImGui.BeginTabItem("CA Companion"))
+            {
+                DrawCraftArchitectCompanionTab();
+                ImGui.EndTabItem();
+            }
+
             if (IsMarketAcquisitionUnlocked() && ImGui.BeginTabItem("Diagnostics"))
             {
                 DrawDiagnosticsTab();
@@ -302,7 +319,7 @@ public class MainWindow : Window, IDisposable
         ImGui.TextColored(
             ColMuted,
             IsMarketAcquisitionUnlocked()
-                ? "Current modules: Inventory Reporter, Workshop Logistics, Market Acquisition"
+                ? "Current modules: Inventory Reporter, Workshop Logistics, Market Acquisition, Craft Architect Companion"
                 : "Current modules: Inventory Reporter, Workshop Logistics");
     }
 
@@ -316,6 +333,8 @@ public class MainWindow : Window, IDisposable
         DrawModuleSummary("Workshop Logistics", "Enabled", WorkshopLogisticsModuleSummary);
         if (IsMarketAcquisitionUnlocked())
             DrawModuleSummary("Market Acquisition", "Internal", MarketAcquisitionModuleSummary);
+        if (IsMarketAcquisitionUnlocked())
+            DrawModuleSummary("Craft Architect Companion", "Internal", CraftArchitectCompanionModuleSummary);
         DrawModuleSummary("General Improvements", "Planned", "Small quality-of-life tools that are useful, but too narrow for their own plugin.");
     }
 
@@ -371,6 +390,31 @@ public class MainWindow : Window, IDisposable
         DrawMarketAcquisitionPlan();
         ImGui.Spacing();
         DrawMarketAcquisitionGuidedRoute();
+    }
+
+    private void DrawCraftArchitectCompanionTab()
+    {
+        ImGui.Spacing();
+        ImGui.TextColored(ColHeader, "Craft Architect Companion");
+        ImGui.TextWrapped(CraftArchitectCompanionModuleSummary);
+        ImGui.Spacing();
+
+        ImGuiUi.SectionHeader("Market Appraisal", ColHeader);
+        var last = CraftArchitectCompanion.LastAppraisalResult;
+        if (last is null)
+        {
+            ImGui.TextColored(ColMuted, "No market appraisal has been fetched this session.");
+        }
+        else
+        {
+            ImGui.TextColored(ColSuccess,
+                $"{last.Request.ItemName}: {last.SupportedQuantity:N0} under-threshold unit(s) across {last.SupportedWorldCount:N0} world(s).");
+        }
+
+        if (ImGuiUi.Button("Open Companion", true))
+            CraftArchitectCompanion.IsOpen = true;
+        ImGui.SameLine();
+        ImGui.TextColored(ColMuted, "Craft cost is advisory; the buy threshold drives route handoff.");
     }
 
     private void DrawMarketAcquisitionQuickShopSection()
