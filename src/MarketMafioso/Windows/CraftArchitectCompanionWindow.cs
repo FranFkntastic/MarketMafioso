@@ -22,6 +22,7 @@ public sealed class CraftArchitectCompanionWindow : Window
     private readonly Func<string, uint, int, CancellationToken, Task<IReadOnlyList<MarketAcquisitionListing>>> fetchListings;
     private readonly Func<MarketAcquisitionQuickShopDraft, Task<bool>> createRoute;
     private readonly IReadOnlyList<CompanionItemOption> itemOptions;
+    private readonly ManualCraftQuoteProvider manualQuoteProvider;
 
     private string itemSearchBuffer = string.Empty;
     private CompanionItemOption? selectedItem;
@@ -64,6 +65,10 @@ public sealed class CraftArchitectCompanionWindow : Window
         this.fetchListings = fetchListings;
         this.createRoute = createRoute;
         itemOptions = LoadItemOptions(dataManager);
+        manualQuoteProvider = new ManualCraftQuoteProvider(_ =>
+            TryParseDecimal(craftUnitCostBuffer, out var unitCost) && unitCost > 0
+                ? unitCost
+                : null);
 
         SizeConstraints = new WindowSizeConstraints
         {
@@ -364,23 +369,8 @@ public sealed class CraftArchitectCompanionWindow : Window
         };
     }
 
-    private CraftAppraisalQuote? BuildQuote(MarketAppraisalRequest request)
-    {
-        if (!TryParseDecimal(craftUnitCostBuffer, out var unitCost) || unitCost <= 0)
-            return null;
-
-        return new CraftAppraisalQuote
-        {
-            ItemId = request.ItemId,
-            ItemName = request.ItemName,
-            OutputQuantity = 1,
-            EstimatedUnitCost = unitCost,
-            EstimatedTotalCost = unitCost * request.Quantity,
-            Source = "Manual",
-            QuotedAtUtc = DateTimeOffset.UtcNow,
-            Confidence = "Manual",
-        };
-    }
+    private CraftAppraisalQuote? BuildQuote(MarketAppraisalRequest request) =>
+        manualQuoteProvider.GetQuoteAsync(request).GetAwaiter().GetResult();
 
     private string BuildValidationMessage()
     {
