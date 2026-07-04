@@ -5,7 +5,9 @@ MarketMafioso has two pieces:
 - the Dalamud plugin client, installed through a third-party plugin repository;
 - an optional private receiver, installed separately when you want saved inventory history and the browser dashboard.
 
-The plugin can open without the receiver, and Workshop Logistics can be used locally. Inventory history, dashboard browsing, and report uploads require the receiver.
+The receiver is the current MarketMafioso runtime for **Workshop Host**, the self-hosted backend tier for private state and automation. The plugin can open without the receiver, and Workshop Logistics can be used locally. Inventory history, dashboard browsing, and report uploads require the receiver.
+
+For the architecture boundary between standalone plugin features, Craft Architect quote-file handoffs, and self-hosted automation, see `docs/workshop-host.md`.
 
 ## Install The Plugin Client
 
@@ -39,6 +41,7 @@ Use the receiver if you want:
 - stored inventory snapshots;
 - a browser dashboard for inventory history;
 - local control of the database and backups.
+- future self-hosted automation and cross-tool state under the Workshop Host tier.
 
 Skip the receiver only if you want Workshop Logistics and do not care about inventory history or dashboard storage.
 

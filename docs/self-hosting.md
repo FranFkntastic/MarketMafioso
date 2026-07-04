@@ -1,8 +1,10 @@
-# Self-Hosting the MarketMafioso Receiver
+# Self-Hosting Workshop Host
 
-MarketMafioso's receiver is a private ASP.NET Core service with a bundled dashboard and a local SQLite database. It is meant for self-hosted or small trusted deployments, not public multi-user hosting.
+MarketMafioso's receiver is the current Workshop Host runtime: a private ASP.NET Core service with a bundled dashboard and a local SQLite database. It is meant for self-hosted or small trusted deployments, not public multi-user hosting.
 
 The receiver enables persistent inventory snapshots, the inventory browser, and diagnostics. The in-game plugin can still run without it, but server-backed inventory history and dashboard features will be unavailable.
+
+Workshop Host is the broader suite boundary for private state and automation. The receiver package keeps its existing name during the transition because its current routes, installer scripts, Docker image, and settings still use receiver terminology.
 
 ## Requirements
 

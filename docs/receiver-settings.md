@@ -1,6 +1,6 @@
 # Receiver Settings Reference
 
-The receiver reads settings from environment variables. In the Docker quick-start bundle, those variables live in `config/marketmafioso.env`.
+The receiver is the current Workshop Host runtime for MarketMafioso. It reads settings from environment variables. In the Docker quick-start bundle, those variables live in `config/marketmafioso.env`.
 
 Do not share this file publicly. It contains the plugin API key and dashboard bootstrap password.
 

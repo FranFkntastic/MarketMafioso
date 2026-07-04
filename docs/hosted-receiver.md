@@ -1,6 +1,6 @@
 # Hosted Receiver
 
-MarketMafioso can send inventory snapshots to a hosted or self-hosted ASP.NET receiver instead of requiring the local backend during normal use.
+MarketMafioso can send inventory snapshots to a hosted or self-hosted ASP.NET receiver instead of requiring the local backend during normal use. This receiver is the current Workshop Host runtime; it remains optional for ordinary plugin use.
 
 ## Environments
 
