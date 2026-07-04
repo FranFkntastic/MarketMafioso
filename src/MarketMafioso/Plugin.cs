@@ -106,6 +106,7 @@ public sealed class Plugin : IDalamudPlugin
             workshopRetainerRestock,
             workshopAssemblyRunner,
             workshopMaterialManifestExport,
+            DataManager,
             PlayerState,
             new MarketBoardApproachService(
                 GameGui,
@@ -119,6 +120,7 @@ public sealed class Plugin : IDalamudPlugin
         windowSystem.AddWindow(mainWindow);
         windowSystem.AddWindow(mainWindow.ProjectBrowser);
         windowSystem.AddWindow(mainWindow.FrozenQueueBrowser);
+        windowSystem.AddWindow(mainWindow.QuickShop);
         windowSystem.AddWindow(mainWindow.AcquisitionDiagnostics);
         windowSystem.AddWindow(mainWindow.AutomationDiagnostics);
 
