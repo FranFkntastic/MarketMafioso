@@ -12,6 +12,12 @@ public record MarketAcquisitionRequestView
     [JsonPropertyName("status")]
     public string Status { get; init; } = string.Empty;
 
+    [JsonPropertyName("origin")]
+    public string Origin { get; init; } = MarketAcquisitionOrigins.DashboardCreated;
+
+    [JsonPropertyName("createdByPluginInstanceId")]
+    public string? CreatedByPluginInstanceId { get; init; }
+
     [JsonPropertyName("targetCharacterName")]
     public string TargetCharacterName { get; init; } = string.Empty;
 
@@ -94,6 +100,75 @@ public sealed record MarketAcquisitionBatchPendingResponse
     public List<MarketAcquisitionRequestView> Batches { get; init; } = new();
 }
 
+public sealed record MarketAcquisitionBatchCreateRequest
+{
+    [JsonPropertyName("schemaVersion")]
+    public int SchemaVersion { get; init; } = 1;
+
+    [JsonPropertyName("idempotencyKey")]
+    public string IdempotencyKey { get; init; } = string.Empty;
+
+    [JsonPropertyName("origin")]
+    public string Origin { get; init; } = MarketAcquisitionOrigins.ClientQuickShop;
+
+    [JsonPropertyName("createdByPluginInstanceId")]
+    public string? CreatedByPluginInstanceId { get; init; }
+
+    [JsonPropertyName("targetCharacterName")]
+    public string TargetCharacterName { get; init; } = string.Empty;
+
+    [JsonPropertyName("targetWorld")]
+    public string TargetWorld { get; init; } = string.Empty;
+
+    [JsonPropertyName("region")]
+    public string Region { get; init; } = string.Empty;
+
+    [JsonPropertyName("worldMode")]
+    public string WorldMode { get; init; } = string.Empty;
+
+    [JsonPropertyName("sweepScope")]
+    public string SweepScope { get; init; } = "Region";
+
+    [JsonPropertyName("sweepDataCenters")]
+    public List<string> SweepDataCenters { get; init; } = new();
+
+    [JsonPropertyName("expiresInSeconds")]
+    public int ExpiresInSeconds { get; init; } = 300;
+
+    [JsonPropertyName("lines")]
+    public List<MarketAcquisitionBatchLineCreateRequest> Lines { get; init; } = new();
+}
+
+public sealed record MarketAcquisitionBatchLineCreateRequest
+{
+    [JsonPropertyName("itemId")]
+    public uint ItemId { get; init; }
+
+    [JsonPropertyName("itemName")]
+    public string? ItemName { get; init; }
+
+    [JsonPropertyName("itemKind")]
+    public string? ItemKind { get; init; }
+
+    [JsonPropertyName("quantityMode")]
+    public string QuantityMode { get; init; } = string.Empty;
+
+    [JsonPropertyName("targetQuantity")]
+    public uint TargetQuantity { get; init; }
+
+    [JsonPropertyName("maxQuantity")]
+    public uint MaxQuantity { get; init; }
+
+    [JsonPropertyName("hqPolicy")]
+    public string HqPolicy { get; init; } = string.Empty;
+
+    [JsonPropertyName("maxUnitPrice")]
+    public uint MaxUnitPrice { get; init; }
+
+    [JsonPropertyName("gilCap")]
+    public uint GilCap { get; init; }
+}
+
 public sealed record MarketAcquisitionBatchLineView
 {
     [JsonPropertyName("lineId")]
@@ -143,6 +218,12 @@ public sealed record MarketAcquisitionBatchLineView
 
     [JsonPropertyName("latestMessage")]
     public string? LatestMessage { get; init; }
+}
+
+public static class MarketAcquisitionOrigins
+{
+    public const string DashboardCreated = "DashboardCreated";
+    public const string ClientQuickShop = "ClientQuickShop";
 }
 
 public sealed record MarketAcquisitionClaimRequest

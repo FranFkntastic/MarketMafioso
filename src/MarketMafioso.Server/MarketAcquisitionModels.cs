@@ -4,6 +4,8 @@ public sealed record MarketAcquisitionCreateRequest
 {
     public int SchemaVersion { get; init; }
     public string IdempotencyKey { get; init; } = string.Empty;
+    public string Origin { get; init; } = MarketAcquisitionOrigins.DashboardCreated;
+    public string? CreatedByPluginInstanceId { get; init; }
     public string TargetCharacterName { get; init; } = string.Empty;
     public string TargetWorld { get; init; } = string.Empty;
     public string Region { get; init; } = string.Empty;
@@ -24,6 +26,8 @@ public sealed record MarketAcquisitionBatchCreateRequest
 {
     public int SchemaVersion { get; init; }
     public string IdempotencyKey { get; init; } = string.Empty;
+    public string Origin { get; init; } = MarketAcquisitionOrigins.DashboardCreated;
+    public string? CreatedByPluginInstanceId { get; init; }
     public string TargetCharacterName { get; init; } = string.Empty;
     public string TargetWorld { get; init; } = string.Empty;
     public string Region { get; init; } = string.Empty;
@@ -157,6 +161,8 @@ public sealed record MarketAcquisitionRequestView
     public string Id { get; init; } = string.Empty;
     public int Revision { get; init; }
     public string Status { get; init; } = string.Empty;
+    public string Origin { get; init; } = MarketAcquisitionOrigins.DashboardCreated;
+    public string? CreatedByPluginInstanceId { get; init; }
     public DateTimeOffset CreatedAtUtc { get; init; }
     public DateTimeOffset ExpiresAtUtc { get; init; }
     public DateTimeOffset? ClaimedAtUtc { get; init; }
@@ -194,6 +200,8 @@ public sealed record MarketAcquisitionClaimView
     public string Id { get; init; } = string.Empty;
     public int Revision { get; init; }
     public string Status { get; init; } = string.Empty;
+    public string Origin { get; init; } = MarketAcquisitionOrigins.DashboardCreated;
+    public string? CreatedByPluginInstanceId { get; init; }
     public DateTimeOffset CreatedAtUtc { get; init; }
     public DateTimeOffset ExpiresAtUtc { get; init; }
     public DateTimeOffset? ClaimedAtUtc { get; init; }
@@ -238,6 +246,12 @@ public sealed record MarketAcquisitionBatchPendingResponse
 }
 
 public sealed record MarketAcquisitionCreateResult(MarketAcquisitionRequestView Request, bool IsReplay);
+
+public static class MarketAcquisitionOrigins
+{
+    public const string DashboardCreated = "DashboardCreated";
+    public const string ClientQuickShop = "ClientQuickShop";
+}
 
 public static class MarketAcquisitionStatuses
 {

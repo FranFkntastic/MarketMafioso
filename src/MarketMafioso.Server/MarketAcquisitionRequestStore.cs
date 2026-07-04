@@ -2678,6 +2678,10 @@ public sealed class MarketAcquisitionRequestStore
             Id = id,
             Revision = revision,
             Status = status,
+            Origin = NormalizeOrigin(request.Origin),
+            CreatedByPluginInstanceId = string.IsNullOrWhiteSpace(request.CreatedByPluginInstanceId)
+                ? null
+                : request.CreatedByPluginInstanceId.Trim(),
             CreatedAtUtc = createdAtUtc,
             ExpiresAtUtc = expiresAtUtc,
             ClaimedAtUtc = claimedAtUtc,
@@ -2717,6 +2721,8 @@ public sealed class MarketAcquisitionRequestStore
             Id = request.Id,
             Revision = request.Revision,
             Status = request.Status,
+            Origin = request.Origin,
+            CreatedByPluginInstanceId = request.CreatedByPluginInstanceId,
             CreatedAtUtc = request.CreatedAtUtc,
             ExpiresAtUtc = request.ExpiresAtUtc,
             ClaimedAtUtc = request.ClaimedAtUtc,
@@ -2770,6 +2776,8 @@ public sealed class MarketAcquisitionRequestStore
         {
             SchemaVersion = request.SchemaVersion,
             IdempotencyKey = request.IdempotencyKey,
+            Origin = request.Origin,
+            CreatedByPluginInstanceId = request.CreatedByPluginInstanceId,
             TargetCharacterName = request.TargetCharacterName,
             TargetWorld = request.TargetWorld,
             Region = request.Region,
@@ -2801,6 +2809,8 @@ public sealed class MarketAcquisitionRequestStore
         {
             SchemaVersion = request.SchemaVersion,
             IdempotencyKey = request.IdempotencyKey,
+            Origin = request.Origin,
+            CreatedByPluginInstanceId = request.CreatedByPluginInstanceId,
             TargetCharacterName = request.TargetCharacterName,
             TargetWorld = request.TargetWorld,
             Region = request.Region,
@@ -2885,6 +2895,7 @@ public sealed class MarketAcquisitionRequestStore
             throw new ArgumentException("Schema version must be 1.", nameof(request));
         if (string.IsNullOrWhiteSpace(request.IdempotencyKey))
             throw new ArgumentException("Idempotency key is required.", nameof(request));
+        ValidateOrigin(request.Origin, nameof(request));
         if (string.IsNullOrWhiteSpace(request.TargetCharacterName))
             throw new ArgumentException("Target character name is required.", nameof(request));
         if (string.IsNullOrWhiteSpace(request.TargetWorld))
@@ -2913,6 +2924,7 @@ public sealed class MarketAcquisitionRequestStore
             throw new ArgumentException("Schema version must be 1.", nameof(request));
         if (string.IsNullOrWhiteSpace(request.IdempotencyKey))
             throw new ArgumentException("Idempotency key is required.", nameof(request));
+        ValidateOrigin(request.Origin, nameof(request));
         if (string.IsNullOrWhiteSpace(request.TargetCharacterName))
             throw new ArgumentException("Target character name is required.", nameof(request));
         if (string.IsNullOrWhiteSpace(request.TargetWorld))
@@ -2928,6 +2940,18 @@ public sealed class MarketAcquisitionRequestStore
 
         foreach (var line in request.Lines)
             ValidateBatchLineCreateRequest(line);
+    }
+
+    private static string NormalizeOrigin(string? origin) =>
+        string.IsNullOrWhiteSpace(origin)
+            ? MarketAcquisitionOrigins.DashboardCreated
+            : origin.Trim();
+
+    private static void ValidateOrigin(string? origin, string argumentName)
+    {
+        var normalized = NormalizeOrigin(origin);
+        if (normalized is not (MarketAcquisitionOrigins.DashboardCreated or MarketAcquisitionOrigins.ClientQuickShop))
+            throw new ArgumentException($"{normalized} is not a supported market acquisition origin.", argumentName);
     }
 
     private static void ValidateBatchAppendLinesRequest(MarketAcquisitionBatchAppendLinesRequest request)

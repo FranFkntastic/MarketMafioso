@@ -20,6 +20,10 @@ internal static class MarketAcquisitionClaimPersistence
             {
                 Id = stored.Id,
                 Status = stored.Status,
+                Origin = string.IsNullOrWhiteSpace(stored.Origin)
+                    ? MarketAcquisitionOrigins.DashboardCreated
+                    : stored.Origin,
+                CreatedByPluginInstanceId = stored.CreatedByPluginInstanceId,
                 TargetCharacterName = stored.TargetCharacterName,
                 TargetWorld = stored.TargetWorld,
                 Region = stored.Region,
@@ -70,6 +74,8 @@ internal static class MarketAcquisitionClaimPersistence
         {
             Id = claim.Id,
             Status = claim.Status,
+            Origin = claim.Origin,
+            CreatedByPluginInstanceId = claim.CreatedByPluginInstanceId,
             TargetCharacterName = claim.TargetCharacterName,
             TargetWorld = claim.TargetWorld,
             Region = claim.Region,

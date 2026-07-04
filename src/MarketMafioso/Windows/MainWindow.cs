@@ -63,6 +63,15 @@ public class MainWindow : Window, IDisposable
     private MarketAcquisitionClaimView? claimedAcquisitionRequest;
     private string? claimedAcceptIdempotencyKey;
     private string? claimedRejectIdempotencyKey;
+    private MarketAcquisitionQuickShopDraft quickShopDraft = MarketAcquisitionQuickShopDraft.CreateDefault();
+    private string quickShopItemIdBuffer = string.Empty;
+    private string quickShopItemNameBuffer = string.Empty;
+    private string quickShopTargetQuantityBuffer = string.Empty;
+    private string quickShopMaxQuantityBuffer = string.Empty;
+    private string quickShopMaxUnitPriceBuffer = string.Empty;
+    private string quickShopGilCapBuffer = string.Empty;
+    private int quickShopQuantityModeIndex = 1;
+    private int quickShopHqPolicyIndex;
     private MarketAcquisitionPlan? acquisitionPlan;
     private MarketBoardReadResult? marketBoardReadResult;
     private MarketBoardListingReconciliation? marketBoardReconciliation;
@@ -103,6 +112,10 @@ public class MainWindow : Window, IDisposable
     private static readonly TimeSpan MarketBoardPurchaseInitialMonitorDelay = TimeSpan.FromMilliseconds(250);
     private static readonly TimeSpan MarketBoardPurchaseMonitorInterval = TimeSpan.FromMilliseconds(500);
     private const int MarketAcquisitionWorldVisitCatalogMaxRecords = 2_000;
+    private static readonly string[] QuickShopWorldModes = ["Recommended", "AllWorldSweep"];
+    private static readonly string[] QuickShopSweepScopes = ["Region", "CurrentDataCenter", "DataCenters"];
+    private static readonly string[] QuickShopQuantityModes = ["TargetQuantity", "AllBelowThreshold"];
+    private static readonly string[] QuickShopHqPolicies = ["Either", "HqOnly", "NqOnly"];
 
     private static readonly Vector4 ColHeader = new(0.38f, 0.73f, 1.00f, 1f);
     private static readonly Vector4 ColSuccess = new(0.45f, 0.90f, 0.55f, 1f);
@@ -352,6 +365,8 @@ public class MainWindow : Window, IDisposable
         ImGui.TextWrapped(MarketAcquisitionModuleSummary);
         ImGui.Spacing();
 
+        DrawMarketAcquisitionQuickShopSection();
+        ImGui.Spacing();
         DrawMarketAcquisitionPickupSection();
         ImGui.Spacing();
         DrawClaimedAcquisitionRequest();
@@ -360,6 +375,363 @@ public class MainWindow : Window, IDisposable
         ImGui.Spacing();
         DrawMarketAcquisitionGuidedRoute();
     }
+
+    private void DrawMarketAcquisitionQuickShopSection()
+    {
+        ImGuiUi.SectionHeader("Quick Shop Route", ColHeader);
+
+        if (IsMarketAcquisitionRouteActive())
+        {
+            ImGui.TextColored(ColMuted, "Quick shop route creation is hidden while a guided route is active.");
+            return;
+        }
+
+        if (TryGetAcquisitionScope(out var characterName, out var world))
+        {
+            ImGui.TextColored(ColMuted, $"Route target: {characterName} @ {world}");
+        }
+        else if (IsExpectedCharacterScopeGap())
+        {
+            ImGui.TextColored(ColMuted, "Character scope temporarily unavailable during route travel.");
+        }
+        else
+        {
+            ImGui.TextColored(ColError, "Character scope unavailable. Log into a character before creating a route.");
+        }
+
+        DrawQuickShopRouteSettings();
+        ImGui.Spacing();
+        DrawQuickShopLineEditor();
+        ImGui.Spacing();
+        DrawQuickShopQueuedLines();
+        ImGui.Spacing();
+
+        var validation = MarketAcquisitionQuickShopDraftValidator.Validate(
+            quickShopDraft,
+            config.ApiKey,
+            characterName,
+            world);
+        if (!validation.IsValid)
+        {
+            foreach (var error in validation.Errors.Take(4))
+                ImGui.TextColored(ColError, error);
+            if (validation.Errors.Count > 4)
+                ImGui.TextColored(ColError, $"{validation.Errors.Count - 4:N0} more quick-shop issue(s).");
+        }
+
+        var canCreate = !acquisitionRequestBusy && validation.IsValid;
+        if (ImGuiUi.Button("Create Monitored Route", canCreate))
+            _ = CreateMonitoredQuickShopRouteAsync();
+
+        ImGui.SameLine();
+        if (ImGuiUi.Button("Clear Draft", quickShopDraft.Lines.Count > 0 || HasQuickShopLineInput()))
+            ClearQuickShopDraft();
+    }
+
+    private void DrawQuickShopRouteSettings()
+    {
+        if (DrawStringCombo("Region##quickShopRegion", MarketAcquisitionWorldCatalog.SupportedRegions.ToArray(), quickShopDraft.Region, out var region))
+        {
+            quickShopDraft = quickShopDraft.WithNextRevision() with
+            {
+                Region = region,
+                SweepDataCenters = [],
+            };
+        }
+
+        if (DrawStringCombo("World Mode##quickShopWorldMode", QuickShopWorldModes, quickShopDraft.WorldMode, out var worldMode))
+        {
+            quickShopDraft = quickShopDraft.WithNextRevision() with
+            {
+                WorldMode = worldMode,
+                SweepScope = worldMode == "AllWorldSweep" ? quickShopDraft.SweepScope : "Region",
+            };
+        }
+
+        if (quickShopDraft.WorldMode != "AllWorldSweep")
+            return;
+
+        if (DrawStringCombo("Sweep Scope##quickShopSweepScope", QuickShopSweepScopes, quickShopDraft.SweepScope, out var sweepScope))
+        {
+            quickShopDraft = quickShopDraft.WithNextRevision() with
+            {
+                SweepScope = sweepScope,
+                SweepDataCenters = sweepScope == "DataCenters" ? quickShopDraft.SweepDataCenters : [],
+            };
+        }
+
+        if (quickShopDraft.SweepScope != "DataCenters")
+            return;
+
+        IReadOnlyDictionary<string, string[]> dataCenters;
+        try
+        {
+            dataCenters = MarketAcquisitionWorldCatalog.ResolveDataCenters(quickShopDraft.Region);
+        }
+        catch (InvalidOperationException ex)
+        {
+            ImGui.TextColored(ColError, ex.Message);
+            return;
+        }
+
+        ImGui.TextColored(ColMuted, "Data centers");
+        foreach (var dataCenter in dataCenters.Keys)
+        {
+            var selected = quickShopDraft.SweepDataCenters.Contains(dataCenter, StringComparer.OrdinalIgnoreCase);
+            if (ImGui.Checkbox($"{dataCenter}##quickShopDc{dataCenter}", ref selected))
+            {
+                var selectedDataCenters = quickShopDraft.SweepDataCenters
+                    .Where(existing => !existing.Equals(dataCenter, StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+                if (selected)
+                    selectedDataCenters.Add(dataCenter);
+                quickShopDraft = quickShopDraft.WithNextRevision() with { SweepDataCenters = selectedDataCenters };
+            }
+
+            ImGui.SameLine();
+        }
+
+        ImGui.NewLine();
+    }
+
+    private void DrawQuickShopLineEditor()
+    {
+        ImGui.TextColored(ColMuted, "Add line");
+        ImGui.InputText("Item ID##quickShopItemId", ref quickShopItemIdBuffer, 32);
+        ImGui.InputText("Name##quickShopItemName", ref quickShopItemNameBuffer, 128);
+        DrawIndexedCombo("Quantity Mode##quickShopQuantityMode", QuickShopQuantityModes, ref quickShopQuantityModeIndex);
+        if (QuickShopQuantityModes[quickShopQuantityModeIndex] == "TargetQuantity")
+            ImGui.InputText("Target Quantity##quickShopTargetQty", ref quickShopTargetQuantityBuffer, 32);
+        else
+            ImGui.InputText("Max Quantity##quickShopMaxQty", ref quickShopMaxQuantityBuffer, 32);
+        DrawIndexedCombo("HQ##quickShopHqPolicy", QuickShopHqPolicies, ref quickShopHqPolicyIndex);
+        ImGui.InputText("Max Unit Price##quickShopMaxUnit", ref quickShopMaxUnitPriceBuffer, 32);
+        ImGui.InputText("Gil Cap##quickShopGilCap", ref quickShopGilCapBuffer, 32);
+
+        var canAdd = CanAddQuickShopLine();
+        if (ImGuiUi.Button("Add Line##quickShopAddLine", canAdd))
+            AddQuickShopLineFromBuffers();
+    }
+
+    private void DrawQuickShopQueuedLines()
+    {
+        if (quickShopDraft.Lines.Count == 0)
+        {
+            ImGui.TextColored(ColMuted, "No quick-shop lines queued.");
+            return;
+        }
+
+        if (!ImGui.BeginTable("MarketAcquisitionQuickShopLines", 7, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.Resizable))
+            return;
+
+        ImGui.TableSetupColumn("Item");
+        ImGui.TableSetupColumn("Mode");
+        ImGui.TableSetupColumn("Qty");
+        ImGui.TableSetupColumn("HQ");
+        ImGui.TableSetupColumn("Max Unit");
+        ImGui.TableSetupColumn("Gil Cap");
+        ImGui.TableSetupColumn("");
+        ImGui.TableHeadersRow();
+
+        for (var index = 0; index < quickShopDraft.Lines.Count; index++)
+        {
+            var line = quickShopDraft.Lines[index];
+            ImGui.TableNextRow();
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(string.IsNullOrWhiteSpace(line.ItemName)
+                ? $"Item {line.ItemId}"
+                : $"{line.ItemName} ({line.ItemId})");
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(MarketAcquisitionQuantityModePresenter.FormatMode(line.QuantityMode));
+            ImGui.TableNextColumn();
+            var quantity = line.QuantityMode == "TargetQuantity"
+                ? line.TargetQuantity
+                : line.MaxQuantity;
+            ImGui.TextUnformatted(MarketAcquisitionQuantityModePresenter.FormatQuantity(line.QuantityMode, quantity));
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(line.HqPolicy);
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(FormatGil(line.MaxUnitPrice));
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(line.GilCap == 0 ? "No cap" : FormatGil(line.GilCap));
+            ImGui.TableNextColumn();
+            if (ImGui.SmallButton($"Duplicate##quickShopDuplicate{index}"))
+                DuplicateQuickShopLine(index);
+            ImGui.SameLine();
+            if (ImGui.SmallButton($"Remove##quickShopRemove{index}"))
+                RemoveQuickShopLine(index);
+        }
+
+        ImGui.EndTable();
+    }
+
+    private async Task CreateMonitoredQuickShopRouteAsync()
+    {
+        await RunAcquisitionRequestAsync(async token =>
+        {
+            if (!TryGetAcquisitionScope(out var characterName, out var world))
+                throw new InvalidOperationException("Character scope is unavailable.");
+
+            var workflow = new MarketAcquisitionQuickShopWorkflow(acquisitionClient);
+            var result = await workflow.CreateClaimAndAcceptAsync(
+                new MarketAcquisitionQuickShopWorkflowRequest(
+                    config.ServerUrl,
+                    config.ApiKey,
+                    characterName,
+                    world,
+                    config.PluginInstanceId,
+                    quickShopDraft),
+                token).ConfigureAwait(false);
+
+            claimedAcquisitionRequest = result.Claimed with { Status = result.Accepted.Status };
+            claimedAcceptIdempotencyKey = result.AcceptIdempotencyKey;
+            claimedRejectIdempotencyKey = null;
+            MarketAcquisitionClaimPersistence.Save(
+                config,
+                claimedAcquisitionRequest,
+                claimedAcceptIdempotencyKey,
+                claimedRejectIdempotencyKey);
+            config.Save();
+            acquisitionPlan = null;
+            marketBoardReadResult = null;
+            marketBoardReconciliation = null;
+            marketAcquisitionLiveCandidatePlan = null;
+            ResetGuidedRoute("No guided route has started.");
+            quickShopDraft = MarketAcquisitionQuickShopDraft.CreateDefault();
+            ClearQuickShopLineBuffers();
+            acquisitionStatus = "Quick shop route created and accepted locally. Prepare an advisory plan when ready.";
+        }).ConfigureAwait(false);
+    }
+
+    private static bool DrawStringCombo(
+        string label,
+        IReadOnlyList<string> options,
+        string current,
+        out string selected)
+    {
+        selected = current;
+        if (!ImGui.BeginCombo(label, string.IsNullOrWhiteSpace(current) ? "-" : current))
+            return false;
+
+        var changed = false;
+        foreach (var option in options)
+        {
+            var isSelected = option.Equals(current, StringComparison.OrdinalIgnoreCase);
+            if (ImGui.Selectable(option, isSelected))
+            {
+                selected = option;
+                changed = !isSelected;
+            }
+
+            if (isSelected)
+                ImGui.SetItemDefaultFocus();
+        }
+
+        ImGui.EndCombo();
+        return changed;
+    }
+
+    private static void DrawIndexedCombo(string label, IReadOnlyList<string> options, ref int index)
+    {
+        var current = options[Math.Clamp(index, 0, options.Count - 1)];
+        if (!ImGui.BeginCombo(label, current))
+            return;
+
+        for (var optionIndex = 0; optionIndex < options.Count; optionIndex++)
+        {
+            var isSelected = optionIndex == index;
+            if (ImGui.Selectable(options[optionIndex], isSelected))
+                index = optionIndex;
+            if (isSelected)
+                ImGui.SetItemDefaultFocus();
+        }
+
+        ImGui.EndCombo();
+    }
+
+    private bool CanAddQuickShopLine() =>
+        TryParseUInt(quickShopItemIdBuffer, out var itemId) &&
+        itemId > 0 &&
+        TryParseUInt(quickShopMaxUnitPriceBuffer, out var maxUnitPrice) &&
+        maxUnitPrice > 0 &&
+        (QuickShopQuantityModes[quickShopQuantityModeIndex] != "TargetQuantity" ||
+         TryParseUInt(quickShopTargetQuantityBuffer, out var targetQuantity) && targetQuantity > 0) &&
+        (string.IsNullOrWhiteSpace(quickShopGilCapBuffer) || TryParseUInt(quickShopGilCapBuffer, out _)) &&
+        (string.IsNullOrWhiteSpace(quickShopMaxQuantityBuffer) || TryParseUInt(quickShopMaxQuantityBuffer, out _));
+
+    private void AddQuickShopLineFromBuffers()
+    {
+        _ = TryParseUInt(quickShopItemIdBuffer, out var itemId);
+        _ = TryParseUInt(quickShopTargetQuantityBuffer, out var targetQuantity);
+        _ = TryParseUInt(quickShopMaxQuantityBuffer, out var maxQuantity);
+        _ = TryParseUInt(quickShopMaxUnitPriceBuffer, out var maxUnitPrice);
+        _ = TryParseUInt(quickShopGilCapBuffer, out var gilCap);
+
+        var quantityMode = QuickShopQuantityModes[quickShopQuantityModeIndex];
+        var line = new MarketAcquisitionQuickShopLineDraft
+        {
+            ItemId = itemId,
+            ItemName = quickShopItemNameBuffer.Trim(),
+            QuantityMode = quantityMode,
+            TargetQuantity = quantityMode == "TargetQuantity" ? targetQuantity : 0,
+            MaxQuantity = quantityMode == "AllBelowThreshold" ? maxQuantity : 0,
+            HqPolicy = QuickShopHqPolicies[quickShopHqPolicyIndex],
+            MaxUnitPrice = maxUnitPrice,
+            GilCap = gilCap,
+        };
+
+        var lines = quickShopDraft.Lines.ToList();
+        lines.Add(line);
+        quickShopDraft = quickShopDraft.WithNextRevision() with { Lines = lines };
+        ClearQuickShopLineBuffers();
+    }
+
+    private void DuplicateQuickShopLine(int index)
+    {
+        if (index < 0 || index >= quickShopDraft.Lines.Count)
+            return;
+
+        var lines = quickShopDraft.Lines.ToList();
+        lines.Insert(index + 1, lines[index]);
+        quickShopDraft = quickShopDraft.WithNextRevision() with { Lines = lines };
+    }
+
+    private void RemoveQuickShopLine(int index)
+    {
+        if (index < 0 || index >= quickShopDraft.Lines.Count)
+            return;
+
+        var lines = quickShopDraft.Lines.ToList();
+        lines.RemoveAt(index);
+        quickShopDraft = quickShopDraft.WithNextRevision() with { Lines = lines };
+    }
+
+    private void ClearQuickShopDraft()
+    {
+        quickShopDraft = MarketAcquisitionQuickShopDraft.CreateDefault();
+        ClearQuickShopLineBuffers();
+    }
+
+    private bool HasQuickShopLineInput() =>
+        !string.IsNullOrWhiteSpace(quickShopItemIdBuffer) ||
+        !string.IsNullOrWhiteSpace(quickShopItemNameBuffer) ||
+        !string.IsNullOrWhiteSpace(quickShopTargetQuantityBuffer) ||
+        !string.IsNullOrWhiteSpace(quickShopMaxQuantityBuffer) ||
+        !string.IsNullOrWhiteSpace(quickShopMaxUnitPriceBuffer) ||
+        !string.IsNullOrWhiteSpace(quickShopGilCapBuffer);
+
+    private void ClearQuickShopLineBuffers()
+    {
+        quickShopItemIdBuffer = string.Empty;
+        quickShopItemNameBuffer = string.Empty;
+        quickShopTargetQuantityBuffer = string.Empty;
+        quickShopMaxQuantityBuffer = string.Empty;
+        quickShopMaxUnitPriceBuffer = string.Empty;
+        quickShopGilCapBuffer = string.Empty;
+    }
+
+    private static bool TryParseUInt(string value, out uint parsed) =>
+        uint.TryParse(value?.Trim(), out parsed);
 
     private void DrawMarketAcquisitionPickupSection()
     {

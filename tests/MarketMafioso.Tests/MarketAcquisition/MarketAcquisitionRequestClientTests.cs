@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text.Json;
+using MarketMafioso.MarketAcquisition;
 
 namespace MarketMafioso.Tests.MarketAcquisition;
 
@@ -47,6 +48,100 @@ public sealed class MarketAcquisitionRequestClientTests
         Assert.NotNull(handler.LastRequest);
         Assert.True(handler.LastRequest.Headers.TryGetValues("X-Api-Key", out var values));
         Assert.Equal("client-secret", Assert.Single(values));
+    }
+
+    [Fact]
+    public async Task CreateBatchAsync_PostsBatchPayloadAndReturnsServerView()
+    {
+        using var handler = new CapturingHandler("""
+            {
+              "id": "request-1",
+              "status": "PendingPickup",
+              "origin": "ClientQuickShop",
+              "createdByPluginInstanceId": "plugin-instance",
+              "targetCharacterName": "Wei Ning",
+              "targetWorld": "Gilgamesh",
+              "region": "North America",
+              "itemId": 2,
+              "itemName": "Fire Shard",
+              "quantityMode": "TargetQuantity",
+              "quantity": 10,
+              "hqPolicy": "Either",
+              "maxUnitPrice": 99,
+              "maxTotalGil": 990,
+              "worldMode": "Recommended"
+            }
+            """);
+        using var httpClient = new HttpClient(handler);
+        var client = new MarketAcquisitionRequestClient(httpClient);
+
+        var created = await client.CreateBatchAsync(
+            "https://dev.xivcraftarchitect.com/marketmafioso/api/inventory",
+            "client-secret",
+            new MarketAcquisitionBatchCreateRequest
+            {
+                IdempotencyKey = "quick-shop-key",
+                Origin = MarketAcquisitionOrigins.ClientQuickShop,
+                CreatedByPluginInstanceId = "plugin-instance",
+                TargetCharacterName = "Wei Ning",
+                TargetWorld = "Gilgamesh",
+                Region = "North America",
+                WorldMode = "Recommended",
+                SweepScope = "Region",
+                ExpiresInSeconds = 300,
+                Lines =
+                [
+                    new MarketAcquisitionBatchLineCreateRequest
+                    {
+                        ItemId = 2,
+                        ItemName = "Fire Shard",
+                        ItemKind = "Crystal",
+                        QuantityMode = "TargetQuantity",
+                        TargetQuantity = 10,
+                        HqPolicy = "Either",
+                        MaxUnitPrice = 99,
+                        GilCap = 990,
+                    },
+                    new MarketAcquisitionBatchLineCreateRequest
+                    {
+                        ItemId = 4,
+                        ItemName = "Lightning Shard",
+                        ItemKind = "Crystal",
+                        QuantityMode = "AllBelowThreshold",
+                        MaxQuantity = 999,
+                        HqPolicy = "Either",
+                        MaxUnitPrice = 120,
+                    },
+                ],
+            },
+            CancellationToken.None);
+
+        Assert.Equal("request-1", created.Id);
+        Assert.Equal(MarketAcquisitionOrigins.ClientQuickShop, created.Origin);
+        Assert.Equal("plugin-instance", created.CreatedByPluginInstanceId);
+        Assert.Equal(HttpMethod.Post, handler.LastRequest?.Method);
+        Assert.Equal(
+            "https://dev.xivcraftarchitect.com/marketmafioso/api/acquisition/batches",
+            handler.LastRequest?.RequestUri?.ToString());
+        Assert.NotNull(handler.LastRequest);
+        Assert.True(handler.LastRequest.Headers.TryGetValues("X-Api-Key", out var values));
+        Assert.Equal("client-secret", Assert.Single(values));
+
+        var body = JsonDocument.Parse(handler.LastBody!);
+        Assert.Equal("quick-shop-key", body.RootElement.GetProperty("idempotencyKey").GetString());
+        Assert.Equal("ClientQuickShop", body.RootElement.GetProperty("origin").GetString());
+        Assert.Equal("plugin-instance", body.RootElement.GetProperty("createdByPluginInstanceId").GetString());
+        Assert.Equal("Wei Ning", body.RootElement.GetProperty("targetCharacterName").GetString());
+        Assert.Equal("Gilgamesh", body.RootElement.GetProperty("targetWorld").GetString());
+        Assert.Equal("Recommended", body.RootElement.GetProperty("worldMode").GetString());
+        var lines = body.RootElement.GetProperty("lines");
+        Assert.Equal(2, lines.GetArrayLength());
+        Assert.Equal(2u, lines[0].GetProperty("itemId").GetUInt32());
+        Assert.Equal("TargetQuantity", lines[0].GetProperty("quantityMode").GetString());
+        Assert.Equal(10u, lines[0].GetProperty("targetQuantity").GetUInt32());
+        Assert.Equal(4u, lines[1].GetProperty("itemId").GetUInt32());
+        Assert.Equal("AllBelowThreshold", lines[1].GetProperty("quantityMode").GetString());
+        Assert.Equal(999u, lines[1].GetProperty("maxQuantity").GetUInt32());
     }
 
     [Fact]

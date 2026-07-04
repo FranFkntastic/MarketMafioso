@@ -44,6 +44,8 @@ public sealed record MarketAcquisitionRequestView
     public string Id { get; init; } = string.Empty;
     public int Revision { get; init; }
     public string Status { get; init; } = string.Empty;
+    public string Origin { get; init; } = MarketAcquisitionOrigins.DashboardCreated;
+    public string? CreatedByPluginInstanceId { get; init; }
     public DateTimeOffset CreatedAtUtc { get; init; }
     public DateTimeOffset ExpiresAtUtc { get; init; }
     public string TargetCharacterName { get; init; } = string.Empty;
@@ -179,6 +181,12 @@ public sealed record MarketAcquisitionBatchLineView
     public uint PurchasedQuantity { get; init; }
     public uint SpentGil { get; init; }
     public string? LatestMessage { get; init; }
+}
+
+public static class MarketAcquisitionOrigins
+{
+    public const string DashboardCreated = "DashboardCreated";
+    public const string ClientQuickShop = "ClientQuickShop";
 }
 
 public sealed record XivItemSearchResult

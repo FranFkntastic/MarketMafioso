@@ -16,6 +16,65 @@ public sealed class MarketAcquisitionRequestStoreTests
     }
 
     [Fact]
+    public async Task CreateBatchAsyncReturnsQuickShopOriginMetadata()
+    {
+        using var fixture = await MarketAcquisitionStoreFixture.CreateAsync();
+        var request = CreateBatchRequest("quick-shop-origin") with
+        {
+            Origin = MarketAcquisitionOrigins.ClientQuickShop,
+            CreatedByPluginInstanceId = "plugin-instance-1",
+        };
+
+        var created = await fixture.Store.CreateBatchAsync(request, CancellationToken.None);
+        var claimed = await fixture.Store.ClaimAsync(
+            created.Request.Id,
+            new MarketAcquisitionClaimRequest
+            {
+                CharacterName = MarketAcquisitionTestApp.CharacterName,
+                World = MarketAcquisitionTestApp.WorldName,
+                PluginInstanceId = "plugin-instance-1",
+            },
+            CancellationToken.None);
+
+        Assert.Equal(MarketAcquisitionOrigins.ClientQuickShop, created.Request.Origin);
+        Assert.Equal("plugin-instance-1", created.Request.CreatedByPluginInstanceId);
+        Assert.NotNull(claimed);
+        Assert.Equal(MarketAcquisitionOrigins.ClientQuickShop, claimed.Origin);
+        Assert.Equal("plugin-instance-1", claimed.CreatedByPluginInstanceId);
+    }
+
+    [Fact]
+    public async Task CreateBatchAsyncDefaultsMissingOriginToDashboardCreated()
+    {
+        using var fixture = await MarketAcquisitionStoreFixture.CreateAsync();
+        var request = CreateBatchRequest("dashboard-origin-default") with
+        {
+            Origin = string.Empty,
+        };
+
+        var created = await fixture.Store.CreateBatchAsync(request, CancellationToken.None);
+
+        Assert.Equal(MarketAcquisitionOrigins.DashboardCreated, created.Request.Origin);
+        Assert.Null(created.Request.CreatedByPluginInstanceId);
+    }
+
+    [Fact]
+    public async Task CreateBatchAsyncRejectsUnsupportedOrigin()
+    {
+        using var fixture = await MarketAcquisitionStoreFixture.CreateAsync();
+        var request = CreateBatchRequest("bad-origin") with
+        {
+            Origin = "MysteryPanel",
+        };
+
+        var ex = await Assert.ThrowsAsync<ArgumentException>(() =>
+            fixture.Store.CreateBatchAsync(request, CancellationToken.None));
+
+        Assert.Contains("MysteryPanel", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("origin", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task AppendLinesAsyncAddsDistinctPendingLineAndIncrementsRevision()
     {
         using var fixture = await MarketAcquisitionStoreFixture.CreateAsync(

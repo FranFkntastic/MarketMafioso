@@ -10,6 +10,8 @@ public sealed class MarketAcquisitionClaimPersistenceTests
         {
             Id = "request-1",
             Status = "Claimed",
+            Origin = MarketMafioso.MarketAcquisition.MarketAcquisitionOrigins.ClientQuickShop,
+            CreatedByPluginInstanceId = "plugin-instance",
             TargetCharacterName = "Wei Ning",
             TargetWorld = "Gilgamesh",
             Region = "North America",
@@ -36,6 +38,8 @@ public sealed class MarketAcquisitionClaimPersistenceTests
         Assert.Equal("request-1", restored.Value.Claim.Id);
         Assert.Equal("claim-token", restored.Value.Claim.ClaimToken);
         Assert.Equal("Darksteel Nugget", restored.Value.Claim.ItemName);
+        Assert.Equal(MarketMafioso.MarketAcquisition.MarketAcquisitionOrigins.ClientQuickShop, restored.Value.Claim.Origin);
+        Assert.Equal("plugin-instance", restored.Value.Claim.CreatedByPluginInstanceId);
         Assert.Equal("accept-key", restored.Value.AcceptIdempotencyKey);
         Assert.Equal("reject-key", restored.Value.RejectIdempotencyKey);
     }

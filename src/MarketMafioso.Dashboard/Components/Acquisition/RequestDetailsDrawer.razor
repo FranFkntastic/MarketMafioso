@@ -25,6 +25,11 @@
             <MudSimpleTable Dense="true" Class="details-table request-summary-table">
                 <tbody>
                     <tr><td>Request</td><td>@Request.Id</td></tr>
+                    <tr><td>Origin</td><td>@OriginLabel(Request)</td></tr>
+                    @if (!string.IsNullOrWhiteSpace(Request.CreatedByPluginInstanceId))
+                    {
+                        <tr><td>Plugin instance</td><td>@Request.CreatedByPluginInstanceId</td></tr>
+                    }
                     <tr><td>Target</td><td>@Request.TargetCharacterName @@ @Request.TargetWorld</td></tr>
                     <tr><td>Lines</td><td>@MarketAcquisitionRequestDisplay.LinesFor(Request).Count.ToString("N0")</td></tr>
                     <tr><td>Route</td><td>@FormatRoute(Request)</td></tr>
@@ -229,6 +234,11 @@
         "Running" or "AcceptedInPlugin" => Color.Warning,
         _ => Color.Info,
     };
+
+    private static string OriginLabel(MarketAcquisitionRequestView request) =>
+        request.Origin.Equals(MarketAcquisitionOrigins.ClientQuickShop, StringComparison.OrdinalIgnoreCase)
+            ? "Quick Shop"
+            : "Dashboard";
 
     private static bool IsTerminalRequest(MarketAcquisitionRequestView request) =>
         request.Status is "Complete" or "Failed" or "Cancelled" or "Rejected" or "Expired";

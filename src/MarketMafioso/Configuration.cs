@@ -90,6 +90,8 @@ public sealed class PersistedMarketAcquisitionClaim
 {
     public string Id { get; set; } = string.Empty;
     public string Status { get; set; } = string.Empty;
+    public string Origin { get; set; } = string.Empty;
+    public string? CreatedByPluginInstanceId { get; set; }
     public string TargetCharacterName { get; set; } = string.Empty;
     public string TargetWorld { get; set; } = string.Empty;
     public string Region { get; set; } = string.Empty;

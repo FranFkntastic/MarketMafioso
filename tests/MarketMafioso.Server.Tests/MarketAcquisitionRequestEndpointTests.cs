@@ -141,6 +141,53 @@ public sealed class MarketAcquisitionRequestEndpointTests
     }
 
     [Fact]
+    public async Task HostedMode_CreatesQuickShopBatchWithOriginMetadata()
+    {
+        await using var application = CreateHostedApplication();
+        using var client = application.CreateClient();
+
+        var created = await SendWithKeyAsync(
+            client,
+            HttpMethod.Post,
+            "/marketmafioso/api/acquisition/batches",
+            "client-secret",
+            new
+            {
+                schemaVersion = 1,
+                idempotencyKey = "quick-shop-endpoint",
+                origin = "ClientQuickShop",
+                createdByPluginInstanceId = "plugin-test-instance",
+                targetCharacterName = "Wei Ning",
+                targetWorld = "Gilgamesh",
+                region = "North America",
+                worldMode = "Recommended",
+                expiresInSeconds = 90,
+                lines = new object[]
+                {
+                    new
+                    {
+                        itemId = 2,
+                        itemName = "Fire Shard",
+                        itemKind = "Crystal",
+                        quantityMode = "TargetQuantity",
+                        targetQuantity = 10,
+                        maxQuantity = 0,
+                        hqPolicy = "Either",
+                        maxUnitPrice = 99,
+                        gilCap = 990,
+                    },
+                },
+            });
+
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        using var createdJson = JsonDocument.Parse(await created.Content.ReadAsStringAsync());
+        Assert.Equal("ClientQuickShop", createdJson.RootElement.GetProperty("origin").GetString());
+        Assert.Equal(
+            "plugin-test-instance",
+            createdJson.RootElement.GetProperty("createdByPluginInstanceId").GetString());
+    }
+
+    [Fact]
     public async Task HostedMode_AppendsPendingBatchLines()
     {
         await using var application = CreateHostedApplication(

@@ -67,6 +67,12 @@
                                         </div>
                                     }
                                     <span class="muted">@context.Item.TargetCharacterName @@ @context.Item.TargetWorld</span>
+                                    <div>
+                                        <MudChip T="string"
+                                                 Size="Size.Small"
+                                                 Color="@OriginColor(context.Item)"
+                                                 Variant="Variant.Outlined">@OriginLabel(context.Item)</MudChip>
+                                    </div>
                                 </div>
                             </CellTemplate>
                         </TemplateColumn>
@@ -163,6 +169,16 @@
         "Running" or "AcceptedInPlugin" => Color.Warning,
         _ => Color.Info,
     };
+
+    private static string OriginLabel(MarketAcquisitionRequestView request) =>
+        request.Origin.Equals(MarketAcquisitionOrigins.ClientQuickShop, StringComparison.OrdinalIgnoreCase)
+            ? "Quick Shop"
+            : "Dashboard";
+
+    private static Color OriginColor(MarketAcquisitionRequestView request) =>
+        request.Origin.Equals(MarketAcquisitionOrigins.ClientQuickShop, StringComparison.OrdinalIgnoreCase)
+            ? Color.Secondary
+            : Color.Default;
 
     private static bool IsActiveRequest(MarketAcquisitionRequestView request) =>
         !IsTerminalRequest(request);
