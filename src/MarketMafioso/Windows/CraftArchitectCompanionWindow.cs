@@ -23,11 +23,14 @@ public sealed class CraftArchitectCompanionWindow : Window
     private readonly Func<MarketAcquisitionQuickShopDraft, Task<bool>> createRoute;
     private readonly IReadOnlyList<CompanionItemOption> itemOptions;
     private readonly ManualCraftQuoteProvider manualQuoteProvider;
+    private readonly CraftArchitectFileQuoteProvider fileQuoteProvider;
+    private readonly CompositeCraftQuoteProvider quoteProvider;
 
     private string itemSearchBuffer = string.Empty;
     private CompanionItemOption? selectedItem;
     private string quantityBuffer = "1";
     private string craftUnitCostBuffer = string.Empty;
+    private string quoteFilePathBuffer = string.Empty;
     private string buyThresholdBuffer = string.Empty;
     private string gilCapBuffer = string.Empty;
     private string region = "North America";
@@ -69,6 +72,9 @@ public sealed class CraftArchitectCompanionWindow : Window
             TryParseDecimal(craftUnitCostBuffer, out var unitCost) && unitCost > 0
                 ? unitCost
                 : null);
+        quoteFilePathBuffer = config.CraftArchitectQuoteFilePath;
+        fileQuoteProvider = new CraftArchitectFileQuoteProvider(() => config.CraftArchitectQuoteFilePath);
+        quoteProvider = new CompositeCraftQuoteProvider([fileQuoteProvider, manualQuoteProvider]);
 
         SizeConstraints = new WindowSizeConstraints
         {
@@ -146,6 +152,7 @@ public sealed class CraftArchitectCompanionWindow : Window
         ImGui.Spacing();
         ImGui.TextColored(ColHeader, "Craft Appraisal");
         ImGui.Separator();
+        DrawQuoteFileSettings();
         DrawInput("Craft Unit Cost", ref craftUnitCostBuffer);
         if (TryParseDecimal(craftUnitCostBuffer, out var craftCost) && craftCost > 0)
         {
@@ -169,6 +176,44 @@ public sealed class CraftArchitectCompanionWindow : Window
         ImGui.Separator();
         DrawInput("Buy Threshold", ref buyThresholdBuffer);
         DrawInput("Gil Cap", ref gilCapBuffer);
+    }
+
+    private void DrawQuoteFileSettings()
+    {
+        DrawInput("Quote File", ref quoteFilePathBuffer);
+        if (ImGuiUi.Button("Save Quote File", true))
+        {
+            config.CraftArchitectQuoteFilePath = quoteFilePathBuffer.Trim();
+            config.Save();
+            appraisalResult = null;
+            previewStatus = string.IsNullOrWhiteSpace(config.CraftArchitectQuoteFilePath)
+                ? "Craft quote file path cleared."
+                : "Craft quote file path saved.";
+        }
+
+        ImGui.SameLine();
+        if (ImGuiUi.Button("Clear Quote File", !string.IsNullOrWhiteSpace(config.CraftArchitectQuoteFilePath) || !string.IsNullOrWhiteSpace(quoteFilePathBuffer)))
+        {
+            quoteFilePathBuffer = string.Empty;
+            config.CraftArchitectQuoteFilePath = string.Empty;
+            config.Save();
+            appraisalResult = null;
+            previewStatus = "Craft quote file path cleared.";
+        }
+
+        if (!string.IsNullOrWhiteSpace(config.CraftArchitectQuoteFilePath))
+        {
+            ImGui.TextColored(ColMuted, $"Quote file: {config.CraftArchitectQuoteFilePath}");
+        }
+
+        if (appraisalResult?.CraftQuote is { } quote)
+        {
+            ImGui.TextColored(ColMuted, $"Quote source: {quote.Source} ({quote.Confidence}), {FormatGilDecimal(quote.EstimatedUnitCost)} / unit");
+            foreach (var warning in quote.Warnings.Take(2))
+            {
+                ImGui.TextColored(ColMuted, warning);
+            }
+        }
     }
 
     private void DrawRouteSettings()
@@ -370,7 +415,7 @@ public sealed class CraftArchitectCompanionWindow : Window
     }
 
     private CraftAppraisalQuote? BuildQuote(MarketAppraisalRequest request) =>
-        manualQuoteProvider.GetQuoteAsync(request).GetAwaiter().GetResult();
+        quoteProvider.GetQuoteAsync(request).GetAwaiter().GetResult();
 
     private string BuildValidationMessage()
     {
