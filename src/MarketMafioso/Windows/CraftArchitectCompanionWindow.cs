@@ -381,9 +381,11 @@ public sealed class CraftArchitectCompanionWindow : Window
 
     private async Task CreateQuickShopRouteAsync(MarketAppraisalRequest request)
     {
-        var draft = CraftArchitectQuickShopDraftBuilder.Build(request, BuildQuote(request));
-        if (await createRoute(draft).ConfigureAwait(false))
-            previewStatus = "Quick-shop route created and synced.";
+        var result = await CraftArchitectQuickShopRouteService.CreateAsync(
+            request,
+            quoteProvider,
+            createRoute).ConfigureAwait(false);
+        previewStatus = result.Message;
     }
 
     private MarketAppraisalRequest? TryBuildRequest()
