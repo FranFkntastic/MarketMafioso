@@ -45,6 +45,7 @@ public sealed class CraftArchitectCompanionWindow : Window
     private bool isRefreshing;
     private bool workshopHostCraftQuotesAvailable;
     private bool isCheckingWorkshopHostCapabilities;
+    private DateTimeOffset? workshopHostCapabilitiesCheckedAtUtc;
     private string previewStatus = "Market preview has not been fetched.";
     private string workshopHostQuoteStatus = "Workshop Host quote API disabled.";
     private MarketAppraisalResult? appraisalResult;
@@ -57,6 +58,7 @@ public sealed class CraftArchitectCompanionWindow : Window
     private static readonly string[] WorldModes = ["Recommended", "AllWorldSweep"];
     private static readonly string[] SweepScopes = ["Region", "CurrentDataCenter", "DataCenters"];
     private static readonly string[] HqPolicies = ["Either", "HqOnly", "NqOnly"];
+    private static readonly TimeSpan WorkshopHostCapabilityTtl = TimeSpan.FromMinutes(5);
 
     public CraftArchitectCompanionWindow(
         Configuration config,
@@ -226,7 +228,7 @@ public sealed class CraftArchitectCompanionWindow : Window
 
         if (appraisalResult?.CraftQuote is { } quote)
         {
-            ImGui.TextColored(ColMuted, $"Quote source: {quote.Source} ({quote.Confidence}), {FormatGilDecimal(quote.EstimatedUnitCost)} / unit");
+            ImGui.TextColored(ColMuted, CraftQuoteDisplayFormatter.FormatQuoteSummary(quote, DateTimeOffset.UtcNow));
             foreach (var warning in quote.Warnings.Take(2))
             {
                 ImGui.TextColored(ColMuted, warning);
@@ -243,6 +245,7 @@ public sealed class CraftArchitectCompanionWindow : Window
             config.Save();
             appraisalResult = null;
             workshopHostCraftQuotesAvailable = false;
+            workshopHostCapabilitiesCheckedAtUtc = null;
             workshopHostQuoteStatus = enableWorkshopHostQuotes
                 ? "Workshop Host quote API enabled; check capabilities before use."
                 : "Workshop Host quote API disabled.";
@@ -411,6 +414,7 @@ public sealed class CraftArchitectCompanionWindow : Window
 
         try
         {
+            await EnsureWorkshopHostCapabilitiesFreshAsync().ConfigureAwait(false);
             var listings = await fetchListings(request.Region, request.ItemId, 100, refreshCancellation.Token)
                 .ConfigureAwait(false);
             appraisalResult = CraftArchitectMarketAppraisalService.Build(request, listings, BuildQuote(request));
@@ -434,6 +438,7 @@ public sealed class CraftArchitectCompanionWindow : Window
 
     private async Task CreateQuickShopRouteAsync(MarketAppraisalRequest request)
     {
+        await EnsureWorkshopHostCapabilitiesFreshAsync().ConfigureAwait(false);
         var result = await CraftArchitectQuickShopRouteService.CreateAsync(
             request,
             quoteProvider,
@@ -456,6 +461,7 @@ public sealed class CraftArchitectCompanionWindow : Window
                 config.ServerUrl,
                 config.ApiKey,
                 CancellationToken.None).ConfigureAwait(false);
+            workshopHostCapabilitiesCheckedAtUtc = DateTimeOffset.UtcNow;
             workshopHostQuoteStatus = workshopHostCraftQuotesAvailable
                 ? "Workshop Host craft quotes available."
                 : "Workshop Host does not advertise craft quote support.";
@@ -469,6 +475,20 @@ public sealed class CraftArchitectCompanionWindow : Window
         {
             isCheckingWorkshopHostCapabilities = false;
         }
+    }
+
+    private async Task EnsureWorkshopHostCapabilitiesFreshAsync()
+    {
+        if (!config.EnableWorkshopHostCraftQuotes)
+            return;
+
+        if (workshopHostCapabilitiesCheckedAtUtc is { } checkedAt &&
+            DateTimeOffset.UtcNow - checkedAt < WorkshopHostCapabilityTtl)
+        {
+            return;
+        }
+
+        await RefreshWorkshopHostCapabilitiesAsync().ConfigureAwait(false);
     }
 
     private MarketAppraisalRequest? TryBuildRequest()
