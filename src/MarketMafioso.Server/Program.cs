@@ -62,11 +62,11 @@ app.UseStaticFiles();
 
 app.Use(async (context, next) =>
 {
-    var purpose = RequiredApiKeyPurpose(context.Request, requireApiKey);
-    if (purpose != ApiKeyPurpose.None &&
+    var scope = RequiredWorkshopHostScope(context.Request, requireApiKey);
+    if (scope != WorkshopHostScope.None &&
         !HasValidApiKey(
             context.Request,
-            purpose,
+            scope,
             clientApiKey,
             previousClientApiKey))
     {
@@ -637,7 +637,7 @@ async Task<IResult> SaveInventoryReport(
     if (requireApiKey &&
         !HasValidApiKey(
             request,
-            ApiKeyPurpose.Ingest,
+            WorkshopHostScope.InventoryWrite,
             clientApiKey,
             previousClientApiKey))
         return InvalidApiKey();
@@ -1276,36 +1276,39 @@ static IResult RawJsonResult(RawInventoryReportJson? report)
     return Results.Text(report.RawJson, "application/json; charset=utf-8", Encoding.UTF8);
 }
 
-static ApiKeyPurpose RequiredApiKeyPurpose(HttpRequest request, bool requireApiKey)
+static WorkshopHostScope RequiredWorkshopHostScope(HttpRequest request, bool requireApiKey)
 {
     if (!requireApiKey)
-        return ApiKeyPurpose.None;
+        return WorkshopHostScope.None;
 
     if (IsAcquisitionBrowserCreate(request))
-        return ApiKeyPurpose.None;
+        return WorkshopHostScope.None;
 
     if (IsAcquisitionBrowserControl(request))
-        return ApiKeyPurpose.None;
+        return WorkshopHostScope.None;
 
     if (IsAcquisitionBrowserRead(request))
-        return ApiKeyPurpose.None;
+        return WorkshopHostScope.None;
 
     if (IsApiKeyAcquisitionCreate(request))
-        return ApiKeyPurpose.Read;
+        return WorkshopHostScope.AcquisitionQueue;
 
     if (IsAcquisitionPluginRoute(request))
-        return ApiKeyPurpose.CommandPickup;
+        return WorkshopHostScope.AcquisitionQueue;
 
     if (IsReportsApiRead(request))
-        return ApiKeyPurpose.Read;
+        return WorkshopHostScope.InventoryRead;
 
-    if (IsWorkshopHostMachineApi(request))
-        return ApiKeyPurpose.Read;
+    if (IsWorkshopHostCapabilitiesRead(request))
+        return WorkshopHostScope.DiagnosticsRead;
+
+    if (IsWorkshopHostCraftQuote(request))
+        return WorkshopHostScope.CraftQuote;
 
     if (IsInventoryPost(request))
-        return ApiKeyPurpose.Ingest;
+        return WorkshopHostScope.InventoryWrite;
 
-    return ApiKeyPurpose.None;
+    return WorkshopHostScope.None;
 }
 
 static bool IsInventoryPost(HttpRequest request) =>
@@ -1317,11 +1320,13 @@ static bool IsReportsApiRead(HttpRequest request) =>
     HttpMethods.IsGet(request.Method) &&
     request.Path.StartsWithSegments("/api/reports");
 
-static bool IsWorkshopHostMachineApi(HttpRequest request) =>
-    (HttpMethods.IsGet(request.Method) &&
-     request.Path.Equals("/api/capabilities", StringComparison.OrdinalIgnoreCase)) ||
-    (HttpMethods.IsPost(request.Method) &&
-     request.Path.Equals("/api/craft/appraise", StringComparison.OrdinalIgnoreCase));
+static bool IsWorkshopHostCapabilitiesRead(HttpRequest request) =>
+    HttpMethods.IsGet(request.Method) &&
+    request.Path.Equals("/api/capabilities", StringComparison.OrdinalIgnoreCase);
+
+static bool IsWorkshopHostCraftQuote(HttpRequest request) =>
+    HttpMethods.IsPost(request.Method) &&
+    request.Path.Equals("/api/craft/appraise", StringComparison.OrdinalIgnoreCase);
 
 static bool IsAcquisitionCreate(HttpRequest request) =>
     HttpMethods.IsPost(request.Method) &&
@@ -1391,7 +1396,7 @@ static bool IsKnownAcquisitionPluginRoute(HttpRequest request)
 
 static bool HasValidApiKey(
     HttpRequest request,
-    ApiKeyPurpose purpose,
+    WorkshopHostScope scope,
     string? clientApiKey,
     string? previousClientApiKey)
 {
@@ -1399,9 +1404,13 @@ static bool HasValidApiKey(
     if (string.IsNullOrWhiteSpace(supplied))
         return false;
 
-    return purpose switch
+    return scope switch
     {
-        ApiKeyPurpose.Ingest or ApiKeyPurpose.Read or ApiKeyPurpose.CommandPickup =>
+        WorkshopHostScope.InventoryWrite or
+        WorkshopHostScope.InventoryRead or
+        WorkshopHostScope.CraftQuote or
+        WorkshopHostScope.AcquisitionQueue or
+        WorkshopHostScope.DiagnosticsRead =>
             MatchesConfiguredKey(supplied, clientApiKey) ||
             MatchesConfiguredKey(supplied, previousClientApiKey),
         _ => false,
@@ -1820,10 +1829,13 @@ public partial class Program;
 
 sealed record DashboardPreferenceOwner(string OwnerKind, string OwnerKey, string Scope);
 
-enum ApiKeyPurpose
+enum WorkshopHostScope
 {
     None,
-    Ingest,
-    Read,
-    CommandPickup,
+    InventoryWrite,
+    InventoryRead,
+    CraftQuote,
+    AcquisitionQueue,
+    DiagnosticsRead,
+    AutomationRun,
 }

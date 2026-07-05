@@ -39,6 +39,8 @@ cd release/self-host
 
 The installer wizard generates `config/marketmafioso.env`, pulls the server image, starts the container, checks `/health`, and prints the plugin endpoint/API key.
 
+After health passes, the installer also checks Workshop Host capabilities, verifies `craft.appraise` is advertised, confirms unauthenticated quote requests are rejected, and confirms the quote endpoint validates schema shape with the generated client key.
+
 To update later:
 
 ```powershell
@@ -46,7 +48,7 @@ cd release/self-host
 .\scripts\Update-MarketMafiosoReceiver.ps1
 ```
 
-The update script backs up the SQLite database, pulls the latest image, and restarts the container.
+The update script backs up the SQLite database, pulls the latest image, restarts the container, and runs the same health plus Workshop Host quote smoke checks.
 
 ## Manual Docker Setup
 
@@ -184,3 +186,5 @@ http://localhost:5088/api/craft/appraise
 ```
 
 The endpoint is backed by Craft Architect Core in current source builds.
+
+The installer and updater smoke-test quote auth and request validation without doing a real appraisal, so setup is not blocked by transient upstream recipe or pricing data.

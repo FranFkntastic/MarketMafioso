@@ -47,6 +47,19 @@ POST /api/craft/appraise
 
 The route requires the client API key when API-key auth is enabled. The current receiver implementation delegates directly to Craft Architect Core. MMF treats configured quote API failures as visible evidence-provider failures, not as a silent fallback to stale or manual costs.
 
+## Machine Scopes
+
+Workshop Host routes are classified with named machine scopes:
+
+- `inventory:write`
+- `inventory:read`
+- `craft:quote`
+- `acquisition:queue`
+- `diagnostics:read`
+- `automation:run`
+
+Current self-host builds keep `MarketMafioso__ClientApiKey` as the compatibility key for all implemented non-dashboard machine scopes. The scope names exist so quote evidence, acquisition queues, diagnostics, and future automation can be separated without changing the route model later.
+
 ## Public Service Boundary
 
 Do not treat the public Craft Architect VPS as the dependency boundary for MarketMafioso. Public services should stay small, cacheable, and non-user-specific.

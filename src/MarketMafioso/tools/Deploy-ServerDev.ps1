@@ -16,6 +16,8 @@ $repoRoot = Split-Path -Parent $srcDir
 $workflow = "deploy-vps-marketmafioso-dev.yml"
 $healthUrl = "https://dev.xivcraftarchitect.com/marketmafioso/health"
 $inventoryUrl = "https://dev.xivcraftarchitect.com/marketmafioso/api/inventory"
+$capabilitiesUrl = "https://dev.xivcraftarchitect.com/marketmafioso/api/capabilities"
+$quoteUrl = "https://dev.xivcraftarchitect.com/marketmafioso/api/craft/appraise"
 $dashboardUrl = "https://dev.xivcraftarchitect.com/marketmafioso/"
 $retiredDashboardUrl = "https://dev.xivcraftarchitect.com/api/marketmafioso/"
 $ingestKeyPath = Join-Path -Path $env:USERPROFILE -ChildPath ".ssh\marketmafioso_dev_api_key.txt"
@@ -42,6 +44,25 @@ function Invoke-Gh {
     & gh @Arguments
     if ($LASTEXITCODE -ne 0) {
         throw "gh $($Arguments -join ' ') failed with exit code $LASTEXITCODE."
+    }
+}
+
+function Get-HttpStatusCode {
+    param(
+        [Parameter(Mandatory = $true)]
+        [hashtable]$Request
+    )
+
+    try {
+        $response = Invoke-WebRequest @Request -UseBasicParsing
+        return [int]$response.StatusCode
+    }
+    catch {
+        if ($_.Exception.Response -and $_.Exception.Response.StatusCode) {
+            return [int]$_.Exception.Response.StatusCode
+        }
+
+        throw
     }
 }
 
@@ -134,6 +155,33 @@ function Invoke-PublicSmoke {
 
         if ([string]::IsNullOrWhiteSpace($response.dashboardUrl)) {
             throw "Ingest smoke succeeded without a dashboardUrl in the response."
+        }
+
+        $capabilities = Invoke-RestMethod -Uri $capabilitiesUrl -Headers @{ "X-Api-Key" = $key }
+        $capabilityIds = @($capabilities.capabilities | ForEach-Object { $_.id })
+        if ($capabilityIds -notcontains "craft.appraise") {
+            throw "Capabilities smoke did not include craft.appraise."
+        }
+
+        $quoteWithoutKeyStatus = Get-HttpStatusCode -Request @{
+            Method = "Post"
+            Uri = $quoteUrl
+            ContentType = "application/json"
+            Body = "{}"
+        }
+        if ($quoteWithoutKeyStatus -ne 401) {
+            throw "Unauthenticated quote smoke returned HTTP $quoteWithoutKeyStatus; expected 401."
+        }
+
+        $invalidQuoteStatus = Get-HttpStatusCode -Request @{
+            Method = "Post"
+            Uri = $quoteUrl
+            Headers = @{ "X-Api-Key" = $key }
+            ContentType = "application/json"
+            Body = (@{ schemaVersion = 2; itemId = 2; itemName = "Fire Shard"; quantity = 1 } | ConvertTo-Json -Compress)
+        }
+        if ($invalidQuoteStatus -ne 400) {
+            throw "Invalid-schema quote smoke returned HTTP $invalidQuoteStatus; expected 400."
         }
 
         Write-Host "Ingest smoke report: $($response.id)"

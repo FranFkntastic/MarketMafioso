@@ -59,6 +59,41 @@ public sealed class WorkshopHostQuoteEndpointTests
     }
 
     [Fact]
+    public async Task HostedMode_AcceptsPreviousClientKeyForCapabilities()
+    {
+        await using var application = CreateHostedApplication(
+            configureValues: values => values["MarketMafioso:PreviousClientApiKey"] = "previous-client-secret");
+        using var client = application.CreateClient();
+
+        var response = await SendWithKeyAsync(
+            client,
+            HttpMethod.Get,
+            "/marketmafioso/api/capabilities",
+            "previous-client-secret");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task HostedMode_AcceptsPreviousClientKeyForCraftAppraise()
+    {
+        await using var application = CreateHostedApplication(
+            services => services.AddSingleton<IWorkshopHostCraftQuoteService>(
+                new StaticWorkshopHostCraftQuoteService(CreateQuote())),
+            values => values["MarketMafioso:PreviousClientApiKey"] = "previous-client-secret");
+        using var client = application.CreateClient();
+
+        var response = await SendWithKeyAsync(
+            client,
+            HttpMethod.Post,
+            "/marketmafioso/api/craft/appraise",
+            "previous-client-secret",
+            CreateRequest());
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
     public async Task CraftAppraise_ReturnsAdapterQuote()
     {
         var quotedAt = DateTimeOffset.Parse("2026-07-05T14:30:00+00:00");
@@ -130,7 +165,8 @@ public sealed class WorkshopHostQuoteEndpointTests
     }
 
     private static WebApplicationFactory<Program> CreateHostedApplication(
-        Action<IServiceCollection>? configureServices = null)
+        Action<IServiceCollection>? configureServices = null,
+        Action<Dictionary<string, string?>>? configureValues = null)
     {
         var contentRoot = Path.Combine(Path.GetTempPath(), "MarketMafioso.Server.Tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(contentRoot);
@@ -142,6 +178,7 @@ public sealed class WorkshopHostQuoteEndpointTests
             ["MarketMafioso:EnableMarketAcquisition"] = "true",
             ["MarketMafioso:DatabasePath"] = Path.Combine(contentRoot, "marketmafioso.db"),
         };
+        configureValues?.Invoke(values);
 
         return new WebApplicationFactory<Program>()
             .WithWebHostBuilder(builder =>

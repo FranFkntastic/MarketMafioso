@@ -336,6 +336,30 @@ jobs:
             "https://dev.xivcraftarchitect.com/marketmafioso/api/reports")"
           expect_status read-with-key "$read_with_client_key" 200
 
+          capabilities_without_key="$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            "https://dev.xivcraftarchitect.com/marketmafioso/api/capabilities")"
+          expect_status capabilities-without-key "$capabilities_without_key" 401
+
+          capabilities_body="$(curl --fail --silent --show-error \
+            --header "X-Api-Key: $MARKETMAFIOSO_DEV_INGEST_API_KEY" \
+            "https://dev.xivcraftarchitect.com/marketmafioso/api/capabilities")"
+          printf '%s' "$capabilities_body" | grep -F "craft.appraise" > /dev/null
+
+          quote_without_key="$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            --request POST \
+            --header 'Content-Type: application/json' \
+            --data '{}' \
+            "https://dev.xivcraftarchitect.com/marketmafioso/api/craft/appraise")"
+          expect_status quote-without-key "$quote_without_key" 401
+
+          quote_invalid_schema="$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            --request POST \
+            --header "X-Api-Key: $MARKETMAFIOSO_DEV_INGEST_API_KEY" \
+            --header 'Content-Type: application/json' \
+            --data '{"schemaVersion":2,"itemId":2,"itemName":"Fire Shard","quantity":1}' \
+            "https://dev.xivcraftarchitect.com/marketmafioso/api/craft/appraise")"
+          expect_status quote-invalid-schema "$quote_invalid_schema" 400
+
           retired_dashboard_status="$(curl --silent --output /dev/null --write-out '%{http_code}' \
             "https://dev.xivcraftarchitect.com/api/marketmafioso/")"
           echo "retired-dashboard returned HTTP $retired_dashboard_status"

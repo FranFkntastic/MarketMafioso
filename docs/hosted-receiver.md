@@ -97,6 +97,8 @@ The workflow installs or updates the `marketmafioso-dev` systemd service, stores
 
 Because the server now hard-references Craft Architect Core, CI or deployment runners that build from source must make Craft Architect Core available at build time. The included workflows check out `FranFkntastic/XIV-Craft-Architect` into `craft-architect` and pass `CraftArchitectCoreProject` to MSBuild.
 
+The dev workflow also smoke-tests `/api/capabilities` for `craft.appraise` and checks quote endpoint auth/schema validation without doing a live appraisal.
+
 Server deployment is intentionally separate from plugin deployment. A backend deploy updates the VPS receiver only; it does not copy a DLL into Dalamud. Use `Deploy-PluginDev.ps1` when the in-game plugin needs to change too.
 
 When you just want the tooling to choose based on the files you changed, use the changed-surface router:

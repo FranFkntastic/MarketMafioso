@@ -84,6 +84,7 @@ The installer wizard:
 - downloads the receiver image;
 - starts the receiver;
 - waits for the health check;
+- checks Workshop Host capabilities and quote endpoint auth/validation;
 - prints the values to paste into the plugin.
 
 Default local values:
@@ -137,7 +138,7 @@ Or run:
 .\scripts\Update-MarketMafiosoReceiver.ps1
 ```
 
-The update script backs up `data\marketmafioso\marketmafioso.db`, downloads the latest server image, restarts the receiver, and waits for the health check.
+The update script backs up `data\marketmafioso\marketmafioso.db`, downloads the latest server image, restarts the receiver, waits for the health check, and checks Workshop Host quote auth/validation.
 
 Use:
 
@@ -176,6 +177,8 @@ Invoke-RestMethod `
 ```
 
 Current receiver builds should include `craft.appraise`. If it is missing, the receiver is older or custom-built without Craft Architect quote support.
+
+The installer and updater also smoke-test `/api/craft/appraise` auth and schema validation without doing a live appraisal.
 
 Container status:
 
