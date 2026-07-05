@@ -3,7 +3,7 @@ using System.Text;
 using System.Text.Json;
 using System.Globalization;
 using Microsoft.Extensions.Primitives;
-using Microsoft.Extensions.DependencyInjection.Extensions;
+using FFXIV_Craft_Architect.Core.Integrations.WorkshopHost;
 using MarketMafioso.Server;
 using MarketMafioso.Server.Auth;
 using MarketMafioso.Server.Migration;
@@ -21,7 +21,8 @@ builder.Services.AddSingleton<InventoryReportStore>();
 builder.Services.AddSingleton<JsonSnapshotImporter>();
 builder.Services.AddSingleton<MarketAcquisitionRequestStore>();
 builder.Services.AddSingleton<DiagnosticEventStore>();
-builder.Services.TryAddSingleton<IWorkshopHostCraftQuoteService, UnavailableWorkshopHostCraftQuoteService>();
+builder.Services.AddWorkshopHostCraftAppraisal();
+builder.Services.AddScoped<IWorkshopHostCraftQuoteService, CraftArchitectWorkshopHostCraftQuoteService>();
 builder.Services.AddHttpClient();
 
 var app = builder.Build();

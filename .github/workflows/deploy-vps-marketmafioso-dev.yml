@@ -33,6 +33,12 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v4
 
+      - name: Checkout Craft Architect Core
+        uses: actions/checkout@v4
+        with:
+          repository: FranFkntastic/XIV-Craft-Architect
+          path: craft-architect
+
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
@@ -44,6 +50,7 @@ jobs:
           -c Release
           -r linux-x64
           --self-contained true
+          -p:CraftArchitectCoreProject="${GITHUB_WORKSPACE}/craft-architect/src/FFXIV Craft Architect.Core/FFXIV Craft Architect.Core.csproj"
           -o dist/marketmafioso-server
 
       - name: Package receiver files

@@ -26,9 +26,9 @@ There is no compilable source code in this package. The receiver runs from the p
 
 The receiver is a small background server. It saves inventory reports in a local SQLite database and gives you a browser dashboard at `http://localhost:5088/`.
 
-You do not need the receiver for basic plugin use. Install it only if you want stored inventory history, the browser dashboard, or receiver diagnostics.
+You do not need the receiver for basic plugin use. Install it only if you want stored inventory history, the browser dashboard, receiver diagnostics, or Workshop Host integrations.
 
-The receiver is also the current Workshop Host runtime for optional suite integrations. MarketMafioso checks `http://localhost:5088/api/capabilities` before using backend-only features such as Craft Architect quote lookup. If `craft.appraise` is not listed, MMF will keep using manual craft costs or Craft Architect quote-file imports.
+The receiver is also the current Workshop Host runtime for suite integrations. MarketMafioso checks `http://localhost:5088/api/capabilities` before using backend-only features such as Craft Architect quote lookup. Current receiver builds advertise `craft.appraise`; older or custom hosts that do not list it will make MMF keep using manual craft costs or Craft Architect quote-file imports.
 
 ## Install Docker First
 
@@ -175,7 +175,7 @@ Invoke-RestMethod `
   -Headers @{ "X-Api-Key" = "<client-api-key>" }
 ```
 
-`craft.appraise` appears only when the receiver has a Craft Architect appraisal adapter installed.
+Current receiver builds should include `craft.appraise`. If it is missing, the receiver is older or custom-built without Craft Architect quote support.
 
 Container status:
 

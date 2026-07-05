@@ -6,7 +6,7 @@ The receiver enables persistent inventory snapshots, the inventory browser, and 
 
 Workshop Host is the broader suite boundary for private state and automation. The receiver package keeps its existing name during the transition because its current routes, installer scripts, Docker image, and settings still use receiver terminology.
 
-Craft Architect quote lookup is part of the Workshop Host direction, but it is capability-gated. A self-host may expose `/api/capabilities` before it has CA-backed appraisal installed. MMF will only use the Workshop Host quote provider when `craft.appraise` is advertised.
+Craft Architect quote lookup is now part of the default source build. The receiver directly references Craft Architect Core and advertises `craft.appraise` from `/api/capabilities`. MMF still checks the capability first so older or custom hosts can degrade to quote-file imports or manual craft costs.
 
 ## Requirements
 
@@ -93,6 +93,8 @@ Publish the server:
 .\src\MarketMafioso\tools\Publish-ServerRelease.ps1
 ```
 
+Direct source publishing expects the sibling `FFXIV Craft Architect C# Edition` checkout beside the MarketMafioso checkout so the server can compile its Craft Architect Core project reference.
+
 For a self-contained Linux x64 build:
 
 ```powershell
@@ -173,7 +175,7 @@ Invoke-RestMethod `
   -Headers @{ "X-Api-Key" = "<client-api-key>" }
 ```
 
-If `craft.appraise` is missing, MMF can still use manual craft costs or Craft Architect quote-file imports. If `craft.appraise` is present, MMF's Craft Architect Companion can use the Workshop Host quote API after you enable it in the companion window.
+Current source builds should include `craft.appraise`. If it is missing, you are likely talking to an older or custom receiver, and MMF can still use manual craft costs or Craft Architect quote-file imports. When `craft.appraise` is present, MMF's Craft Architect Companion can use the Workshop Host quote API after you enable it in the companion window.
 
 The quote endpoint exists at:
 
@@ -181,4 +183,4 @@ The quote endpoint exists at:
 http://localhost:5088/api/craft/appraise
 ```
 
-Until a CA-backed appraisal adapter is installed, it returns `503 craft_appraisal_unavailable`.
+The endpoint is backed by Craft Architect Core in current source builds.

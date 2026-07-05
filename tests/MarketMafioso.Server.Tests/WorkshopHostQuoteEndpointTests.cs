@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using FFXIV_Craft_Architect.Core.Integrations.WorkshopHost;
 using MarketMafioso.Server.WorkshopHost;
 
 namespace MarketMafioso.Server.Tests;
@@ -11,7 +12,7 @@ namespace MarketMafioso.Server.Tests;
 public sealed class WorkshopHostQuoteEndpointTests
 {
     [Fact]
-    public async Task Capabilities_ReportsInventoryAndOmitsCraftAppraiseWhenAdapterUnavailable()
+    public async Task Capabilities_ReportsInventoryAndCraftAppraiseByDefault()
     {
         await using var application = CreateHostedApplication();
         using var client = application.CreateClient();
@@ -29,26 +30,6 @@ public sealed class WorkshopHostQuoteEndpointTests
         Assert.Contains(capabilities.Capabilities, capability => capability.Id == "inventory.write");
         Assert.Contains(capabilities.Capabilities, capability => capability.Id == "inventory.read");
         Assert.Contains(capabilities.Capabilities, capability => capability.Id == "diagnostics.read");
-        Assert.DoesNotContain(capabilities.Capabilities, capability => capability.Id == "craft.appraise");
-    }
-
-    [Fact]
-    public async Task Capabilities_ReportsCraftAppraiseWhenAdapterAvailable()
-    {
-        await using var application = CreateHostedApplication(services =>
-            services.AddSingleton<IWorkshopHostCraftQuoteService>(
-                new StaticWorkshopHostCraftQuoteService(CreateQuote())));
-        using var client = application.CreateClient();
-
-        var response = await SendWithKeyAsync(
-            client,
-            HttpMethod.Get,
-            "/marketmafioso/api/capabilities",
-            "client-secret");
-
-        response.EnsureSuccessStatusCode();
-        var capabilities = await response.Content.ReadFromJsonAsync<WorkshopHostCapabilitiesResponse>();
-        Assert.NotNull(capabilities);
         var craft = Assert.Single(capabilities.Capabilities, capability => capability.Id == "craft.appraise");
         Assert.Equal("available", craft.Status);
         Assert.Contains(1, craft.SupportedSchemaVersions);
@@ -75,23 +56,6 @@ public sealed class WorkshopHostQuoteEndpointTests
         var response = await client.PostAsJsonAsync("/marketmafioso/api/craft/appraise", CreateRequest());
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
-    }
-
-    [Fact]
-    public async Task CraftAppraise_ReturnsUnavailableWhenAdapterUnavailable()
-    {
-        await using var application = CreateHostedApplication();
-        using var client = application.CreateClient();
-
-        var response = await SendWithKeyAsync(
-            client,
-            HttpMethod.Post,
-            "/marketmafioso/api/craft/appraise",
-            "client-secret",
-            CreateRequest());
-
-        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
-        Assert.Contains("craft_appraisal_unavailable", await response.Content.ReadAsStringAsync(), StringComparison.Ordinal);
     }
 
     [Fact]

@@ -50,7 +50,7 @@ MarketMafioso__DashboardBootstrapPassword=<dashboard-password>
 
 `/health` remains public for uptime checks. Inventory ingestion, `/api/capabilities`, and `/api/reports...` machine-read routes require the client key. Browser dashboard routes use app-managed login sessions backed by the receiver SQLite database.
 
-The hosted receiver exposes `/api/capabilities` for Workshop Host feature discovery. Treat absent capabilities as unavailable rather than as errors. In particular, `craft.appraise` appears only when the receiver has a Craft Architect appraisal adapter installed.
+The hosted receiver exposes `/api/capabilities` for Workshop Host feature discovery. Current source builds advertise `craft.appraise` by default because the receiver directly references Craft Architect Core. Treat absent capabilities from older or custom receivers as unavailable rather than as errors.
 
 The dev dashboard username is fixed to `marketmafioso`; the password is stored in GitHub Actions as `MARKETMAFIOSO_DEV_BASIC_AUTH_PASSWORD`. Bootstrap credentials create the first local dashboard admin user only when no dashboard users exist.
 
@@ -94,6 +94,8 @@ MARKETMAFIOSO_DEV_PREVIOUS_READ_API_KEY
 ```
 
 The workflow installs or updates the `marketmafioso-dev` systemd service, stores dev data under `/srv/craftarchitect/data/marketmafioso/dev`, and configures the dev Caddy site for public health, API-key ingest/read routes, and proxied dashboard routes.
+
+Because the server now hard-references Craft Architect Core, CI or deployment runners that build from source must make Craft Architect Core available at build time. The included workflows check out `FranFkntastic/XIV-Craft-Architect` into `craft-architect` and pass `CraftArchitectCoreProject` to MSBuild.
 
 Server deployment is intentionally separate from plugin deployment. A backend deploy updates the VPS receiver only; it does not copy a DLL into Dalamud. Use `Deploy-PluginDev.ps1` when the in-game plugin needs to change too.
 
@@ -195,4 +197,4 @@ Invoke-RestMethod `
   -Headers @{ "X-Api-Key" = "<secret>" }
 ```
 
-The response should include inventory/read diagnostics capabilities. `craft.appraise` may be absent until CA-backed appraisal is deployed to that receiver.
+The response should include inventory/read diagnostics capabilities and `craft.appraise` on current builds. If `craft.appraise` is absent, the receiver is older or custom-built without Craft Architect quote support.

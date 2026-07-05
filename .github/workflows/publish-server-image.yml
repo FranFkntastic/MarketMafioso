@@ -26,6 +26,12 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v4
 
+      - name: Checkout Craft Architect Core
+        uses: actions/checkout@v4
+        with:
+          repository: FranFkntastic/XIV-Craft-Architect
+          path: craft-architect
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 

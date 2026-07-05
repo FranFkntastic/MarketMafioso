@@ -1,3 +1,5 @@
+using FFXIV_Craft_Architect.Core.Integrations.WorkshopHost;
+
 namespace MarketMafioso.Server.WorkshopHost;
 
 public interface IWorkshopHostCraftQuoteService
