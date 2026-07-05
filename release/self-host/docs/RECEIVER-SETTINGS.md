@@ -42,6 +42,21 @@ The shared key pasted into the plugin's Client API Key setting. Treat it like a 
 
 Optional old key accepted during key rotation. Leave it blank unless you are changing keys.
 
+### Scoped Machine Keys
+
+Optional narrow keys for specific Workshop Host scopes:
+
+```text
+MarketMafioso__InventoryWriteApiKey=
+MarketMafioso__InventoryReadApiKey=
+MarketMafioso__CraftQuoteApiKey=
+MarketMafioso__AcquisitionQueueApiKey=
+MarketMafioso__DiagnosticsReadApiKey=
+MarketMafioso__AutomationRunApiKey=
+```
+
+Most self-host installs should leave these blank and use `MarketMafioso__ClientApiKey`. Any scoped key can read `/api/capabilities`; feature routes still require their own scope. For example, `CraftQuoteApiKey` can call `/api/craft/appraise` but cannot read inventory reports.
+
 ## Database And Retention Settings
 
 ### `MarketMafioso__DatabasePath`

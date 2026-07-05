@@ -38,6 +38,10 @@ var previousClientApiKey = FirstConfigured(
     app.Configuration["MarketMafioso:PreviousClientApiKey"],
     app.Configuration["MarketMafioso:PreviousIngestApiKey"],
     app.Configuration["MarketMafioso:PreviousReadApiKey"]);
+var workshopHostApiKeys = WorkshopHostApiKeys.FromConfiguration(
+    app.Configuration,
+    clientApiKey,
+    previousClientApiKey);
 var requireApiKey = app.Configuration.GetValue<bool>("MarketMafioso:RequireApiKey") ||
                     !string.IsNullOrWhiteSpace(clientApiKey);
 var basePath = app.Configuration["MarketMafioso:BasePath"];
@@ -67,8 +71,7 @@ app.Use(async (context, next) =>
         !HasValidApiKey(
             context.Request,
             scope,
-            clientApiKey,
-            previousClientApiKey))
+            workshopHostApiKeys))
     {
         await WriteUnauthorizedAsync(context);
         return;
@@ -638,8 +641,7 @@ async Task<IResult> SaveInventoryReport(
         !HasValidApiKey(
             request,
             WorkshopHostScope.InventoryWrite,
-            clientApiKey,
-            previousClientApiKey))
+            workshopHostApiKeys))
         return InvalidApiKey();
 
     string rawJson;
@@ -1300,7 +1302,7 @@ static WorkshopHostScope RequiredWorkshopHostScope(HttpRequest request, bool req
         return WorkshopHostScope.InventoryRead;
 
     if (IsWorkshopHostCapabilitiesRead(request))
-        return WorkshopHostScope.DiagnosticsRead;
+        return WorkshopHostScope.CapabilitiesRead;
 
     if (IsWorkshopHostCraftQuote(request))
         return WorkshopHostScope.CraftQuote;
@@ -1397,24 +1399,13 @@ static bool IsKnownAcquisitionPluginRoute(HttpRequest request)
 static bool HasValidApiKey(
     HttpRequest request,
     WorkshopHostScope scope,
-    string? clientApiKey,
-    string? previousClientApiKey)
+    WorkshopHostApiKeys apiKeys)
 {
     var supplied = GetSingleApiKeyHeader(request.Headers["X-Api-Key"]);
     if (string.IsNullOrWhiteSpace(supplied))
         return false;
 
-    return scope switch
-    {
-        WorkshopHostScope.InventoryWrite or
-        WorkshopHostScope.InventoryRead or
-        WorkshopHostScope.CraftQuote or
-        WorkshopHostScope.AcquisitionQueue or
-        WorkshopHostScope.DiagnosticsRead =>
-            MatchesConfiguredKey(supplied, clientApiKey) ||
-            MatchesConfiguredKey(supplied, previousClientApiKey),
-        _ => false,
-    };
+    return apiKeys.HasKeyForScope(supplied, scope);
 }
 
 static string? GetSingleApiKeyHeader(StringValues values)
@@ -1423,18 +1414,6 @@ static string? GetSingleApiKeyHeader(StringValues values)
         return null;
 
     return values[0];
-}
-
-static bool MatchesConfiguredKey(string supplied, string? configured)
-{
-    if (string.IsNullOrWhiteSpace(configured))
-        return false;
-
-    var suppliedBytes = Encoding.UTF8.GetBytes(supplied);
-    var configuredBytes = Encoding.UTF8.GetBytes(configured);
-
-    return suppliedBytes.Length == configuredBytes.Length &&
-           CryptographicOperations.FixedTimeEquals(suppliedBytes, configuredBytes);
 }
 
 static Task WriteUnauthorizedAsync(HttpContext context)
@@ -1829,9 +1808,82 @@ public partial class Program;
 
 sealed record DashboardPreferenceOwner(string OwnerKind, string OwnerKey, string Scope);
 
+sealed record WorkshopHostApiKeys(
+    string? Client,
+    string? PreviousClient,
+    string? InventoryWrite,
+    string? InventoryRead,
+    string? CraftQuote,
+    string? AcquisitionQueue,
+    string? DiagnosticsRead,
+    string? AutomationRun)
+{
+    public static WorkshopHostApiKeys FromConfiguration(
+        IConfiguration configuration,
+        string? clientApiKey,
+        string? previousClientApiKey) => new(
+            clientApiKey,
+            previousClientApiKey,
+            FirstNonBlank(
+                configuration["MarketMafioso:InventoryWriteApiKey"],
+                configuration["MarketMafioso:IngestWriteApiKey"]),
+            FirstNonBlank(
+                configuration["MarketMafioso:InventoryReadApiKey"],
+                configuration["MarketMafioso:ReportReadApiKey"]),
+            configuration["MarketMafioso:CraftQuoteApiKey"],
+            FirstNonBlank(
+                configuration["MarketMafioso:AcquisitionQueueApiKey"],
+                configuration["MarketMafioso:CommandPickupScopedApiKey"]),
+            configuration["MarketMafioso:DiagnosticsReadApiKey"],
+            configuration["MarketMafioso:AutomationRunApiKey"]);
+
+    public bool HasKeyForScope(string supplied, WorkshopHostScope scope)
+    {
+        if (MatchesConfiguredKey(supplied, Client) ||
+            MatchesConfiguredKey(supplied, PreviousClient))
+        {
+            return true;
+        }
+
+        return scope switch
+        {
+            WorkshopHostScope.CapabilitiesRead =>
+                MatchesConfiguredKey(supplied, InventoryWrite) ||
+                MatchesConfiguredKey(supplied, InventoryRead) ||
+                MatchesConfiguredKey(supplied, CraftQuote) ||
+                MatchesConfiguredKey(supplied, AcquisitionQueue) ||
+                MatchesConfiguredKey(supplied, DiagnosticsRead) ||
+                MatchesConfiguredKey(supplied, AutomationRun),
+            WorkshopHostScope.InventoryWrite => MatchesConfiguredKey(supplied, InventoryWrite),
+            WorkshopHostScope.InventoryRead => MatchesConfiguredKey(supplied, InventoryRead),
+            WorkshopHostScope.CraftQuote => MatchesConfiguredKey(supplied, CraftQuote),
+            WorkshopHostScope.AcquisitionQueue => MatchesConfiguredKey(supplied, AcquisitionQueue),
+            WorkshopHostScope.DiagnosticsRead => MatchesConfiguredKey(supplied, DiagnosticsRead),
+            WorkshopHostScope.AutomationRun => MatchesConfiguredKey(supplied, AutomationRun),
+            _ => false,
+        };
+    }
+
+    private static string? FirstNonBlank(params string?[] values) =>
+        values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
+
+    private static bool MatchesConfiguredKey(string supplied, string? configured)
+    {
+        if (string.IsNullOrWhiteSpace(configured))
+            return false;
+
+        var suppliedBytes = Encoding.UTF8.GetBytes(supplied);
+        var configuredBytes = Encoding.UTF8.GetBytes(configured);
+
+        return suppliedBytes.Length == configuredBytes.Length &&
+               CryptographicOperations.FixedTimeEquals(suppliedBytes, configuredBytes);
+    }
+}
+
 enum WorkshopHostScope
 {
     None,
+    CapabilitiesRead,
     InventoryWrite,
     InventoryRead,
     CraftQuote,

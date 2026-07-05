@@ -62,6 +62,8 @@ Workshop Host routes are classified with named machine scopes:
 
 Current self-host builds keep `MarketMafioso__ClientApiKey` as the compatibility key for all implemented non-dashboard machine scopes. The scope names exist so quote evidence, acquisition queues, diagnostics, and future automation can be separated without changing the route model later.
 
+Optional scoped settings are available for narrower clients: `InventoryWriteApiKey`, `InventoryReadApiKey`, `CraftQuoteApiKey`, `AcquisitionQueueApiKey`, `DiagnosticsReadApiKey`, and `AutomationRunApiKey`. Any scoped machine key may read `/api/capabilities`; feature routes still require their matching scope.
+
 ## Public Service Boundary
 
 Do not treat the public Craft Architect VPS as the dependency boundary for MarketMafioso. Public services should stay small, cacheable, and non-user-specific.

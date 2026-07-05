@@ -94,6 +94,66 @@ public sealed class WorkshopHostQuoteEndpointTests
     }
 
     [Fact]
+    public async Task HostedMode_AcceptsCraftQuoteScopedKeyForCapabilitiesAndCraftAppraise()
+    {
+        await using var application = CreateHostedApplication(
+            services => services.AddSingleton<IWorkshopHostCraftQuoteService>(
+                new StaticWorkshopHostCraftQuoteService(CreateQuote())),
+            values => values["MarketMafioso:CraftQuoteApiKey"] = "craft-quote-secret");
+        using var client = application.CreateClient();
+
+        var capabilities = await SendWithKeyAsync(
+            client,
+            HttpMethod.Get,
+            "/marketmafioso/api/capabilities",
+            "craft-quote-secret");
+        var quote = await SendWithKeyAsync(
+            client,
+            HttpMethod.Post,
+            "/marketmafioso/api/craft/appraise",
+            "craft-quote-secret",
+            CreateRequest());
+
+        Assert.Equal(HttpStatusCode.OK, capabilities.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, quote.StatusCode);
+    }
+
+    [Fact]
+    public async Task HostedMode_RejectsCraftQuoteScopedKeyForInventoryRead()
+    {
+        await using var application = CreateHostedApplication(
+            configureValues: values => values["MarketMafioso:CraftQuoteApiKey"] = "craft-quote-secret");
+        using var client = application.CreateClient();
+
+        var response = await SendWithKeyAsync(
+            client,
+            HttpMethod.Get,
+            "/marketmafioso/api/reports",
+            "craft-quote-secret");
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task HostedMode_RejectsInventoryReadScopedKeyForCraftAppraise()
+    {
+        await using var application = CreateHostedApplication(
+            services => services.AddSingleton<IWorkshopHostCraftQuoteService>(
+                new StaticWorkshopHostCraftQuoteService(CreateQuote())),
+            values => values["MarketMafioso:InventoryReadApiKey"] = "inventory-read-secret");
+        using var client = application.CreateClient();
+
+        var response = await SendWithKeyAsync(
+            client,
+            HttpMethod.Post,
+            "/marketmafioso/api/craft/appraise",
+            "inventory-read-secret",
+            CreateRequest());
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
     public async Task CraftAppraise_ReturnsAdapterQuote()
     {
         var quotedAt = DateTimeOffset.Parse("2026-07-05T14:30:00+00:00");

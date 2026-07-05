@@ -92,6 +92,32 @@ This optional value lets you temporarily accept an older key while rotating to a
 
 Why it matters: it prevents lockouts during key rotation. Leave it blank unless you are deliberately changing keys.
 
+### Scoped Machine Keys
+
+Examples:
+
+```text
+MarketMafioso__InventoryWriteApiKey=
+MarketMafioso__InventoryReadApiKey=
+MarketMafioso__CraftQuoteApiKey=
+MarketMafioso__AcquisitionQueueApiKey=
+MarketMafioso__DiagnosticsReadApiKey=
+MarketMafioso__AutomationRunApiKey=
+```
+
+These optional keys narrow a machine client to one Workshop Host scope. Leave them blank for normal self-hosting; `MarketMafioso__ClientApiKey` remains the compatibility key for every implemented non-dashboard machine route.
+
+Scope mapping:
+
+- `InventoryWriteApiKey`: inventory upload routes.
+- `InventoryReadApiKey`: machine report read routes.
+- `CraftQuoteApiKey`: `/api/craft/appraise`.
+- `AcquisitionQueueApiKey`: acquisition queue plugin routes.
+- `DiagnosticsReadApiKey`: machine diagnostics routes when exposed.
+- `AutomationRunApiKey`: reserved for future automation routes.
+
+Any valid scoped machine key may read `/api/capabilities` so a narrow client can discover whether its feature is available. A `CraftQuoteApiKey` cannot read inventory reports or drive acquisition queues.
+
 ## Database And Retention Settings
 
 ### `MarketMafioso__DatabasePath`

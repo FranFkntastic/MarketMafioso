@@ -120,6 +120,12 @@ Useful samples:
 ```text
 MarketMafioso__RequireApiKey=true
 MarketMafioso__ClientApiKey=<shared-plugin-server-key>
+MarketMafioso__InventoryWriteApiKey=<optional-inventory-write-only-key>
+MarketMafioso__InventoryReadApiKey=<optional-inventory-read-only-key>
+MarketMafioso__CraftQuoteApiKey=<optional-craft-quote-only-key>
+MarketMafioso__AcquisitionQueueApiKey=<optional-acquisition-queue-only-key>
+MarketMafioso__DiagnosticsReadApiKey=<optional-diagnostics-read-only-key>
+MarketMafioso__AutomationRunApiKey=<optional-future-automation-only-key>
 MarketMafioso__BasePath=<path-prefix-or-empty>
 MarketMafioso__PublicOrigin=<public-origin-for-dashboard-links>
 MarketMafioso__DatabasePath=<sqlite-file-path>
@@ -132,6 +138,8 @@ MarketMafioso__DashboardBootstrapPassword=<dashboard-password>
 ```
 
 The bootstrap dashboard user is created only when the receiver database has no dashboard users. Changing the bootstrap password later does not rotate an existing user's password.
+
+Scoped machine keys are optional. Most installs should leave them blank and use `MarketMafioso__ClientApiKey`, which remains the compatibility key for all implemented non-dashboard machine routes.
 
 For setting-by-setting explanations, see:
 
