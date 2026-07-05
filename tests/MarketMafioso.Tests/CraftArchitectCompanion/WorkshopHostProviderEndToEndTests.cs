@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using System.Text.Json;
 using CaWorkshop = FFXIV_Craft_Architect.Core.Integrations.WorkshopHost;
 using MarketMafioso.CraftArchitectCompanion;
 using MarketMafioso.Server.WorkshopHost;
@@ -56,6 +57,41 @@ public sealed class WorkshopHostProviderEndToEndTests
         Assert.Equal("WorkshopHostCraftArchitect", quote.Source);
     }
 
+    [Fact]
+    public async Task FileQuoteAndWorkshopHostQuoteShareCraftArchitectContractShape()
+    {
+        var fixturePath = ResolveSharedFixture("craft-appraisal-quote.v1.sample.json");
+        var caQuote = JsonSerializer.Deserialize<CaWorkshop.CraftAppraisalQuote>(
+            await File.ReadAllTextAsync(fixturePath),
+            new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        Assert.NotNull(caQuote);
+        await using var application = CreateHostedApplication(services =>
+            services.AddSingleton<IWorkshopHostCraftQuoteService>(
+                new StaticWorkshopHostCraftQuoteService(caQuote)));
+        using var client = application.CreateClient();
+        var serverUrl = new Uri(client.BaseAddress!, "/marketmafioso/api/inventory").ToString();
+        var fileProvider = new CraftArchitectFileQuoteProvider(() => fixturePath);
+        var hostProvider = new WorkshopHostCraftQuoteProvider(
+            client,
+            () => true,
+            () => true,
+            () => serverUrl,
+            () => "client-secret");
+
+        var fileQuote = await fileProvider.GetQuoteAsync(CreateRequest());
+        var hostQuote = await hostProvider.GetQuoteAsync(CreateRequest());
+
+        Assert.NotNull(fileQuote);
+        Assert.NotNull(hostQuote);
+        Assert.Equal(fileQuote.SchemaVersion, hostQuote.SchemaVersion);
+        Assert.Equal(fileQuote.ItemId, hostQuote.ItemId);
+        Assert.Equal(fileQuote.RequestedQuantity, hostQuote.RequestedQuantity);
+        Assert.Equal(fileQuote.EstimatedUnitCost, hostQuote.EstimatedUnitCost);
+        Assert.Equal(fileQuote.EstimatedTotalCost, hostQuote.EstimatedTotalCost);
+        Assert.Equal(fileQuote.Confidence, hostQuote.Confidence);
+        Assert.Equal(fileQuote.Warnings, hostQuote.Warnings);
+    }
+
     private static WebApplicationFactory<Program> CreateHostedApplication(
         Action<IServiceCollection>? configureServices = null)
     {
@@ -94,6 +130,32 @@ public sealed class WorkshopHostProviderEndToEndTests
         WorldMode = "Recommended",
         SweepScope = "Region",
     };
+
+    private static string ResolveSharedFixture(string fileName)
+    {
+        var root = AppContext.BaseDirectory;
+        for (var i = 0; i < 12; i++)
+        {
+            var candidate = Path.Combine(
+                root,
+                "FFXIV Craft Architect C# Edition",
+                "docs",
+                "superpowers",
+                "fixtures",
+                "workshop-host",
+                fileName);
+            if (File.Exists(candidate))
+                return candidate;
+
+            var parent = Directory.GetParent(root);
+            if (parent is null)
+                break;
+
+            root = parent.FullName;
+        }
+
+        throw new FileNotFoundException($"Could not find shared fixture '{fileName}'.");
+    }
 
     private sealed class StaticWorkshopHostCraftQuoteService(
         CaWorkshop.CraftAppraisalQuote? quote) : IWorkshopHostCraftQuoteService
