@@ -20,6 +20,7 @@ public sealed class CraftAppraisalPanelPresenterTests
         Assert.Equal("Get Craft Quote", state.PrimaryQuoteActionLabel);
         Assert.True(state.PrimaryQuoteActionEnabled);
         Assert.Equal("Manual / file fallback", state.FallbackSectionLabel);
+        Assert.True(state.ShowFallbackSection);
         Assert.False(state.ShowFallbackControlsByDefault);
         Assert.True(state.ShowManualFallbackControls);
     }
@@ -36,6 +37,7 @@ public sealed class CraftAppraisalPanelPresenterTests
         Assert.Equal("Workshop Host: Off", state.WorkshopHostStatus);
         Assert.Equal("Enable Workshop Host quotes to appraise from the backend.", state.Guidance);
         Assert.False(state.PrimaryQuoteActionEnabled);
+        Assert.False(state.ShowFallbackSection);
         Assert.True(state.ShowFallbackControlsByDefault);
         Assert.False(state.ShowManualFallbackControls);
     }
@@ -51,6 +53,22 @@ public sealed class CraftAppraisalPanelPresenterTests
             HasManualCraftCost = true,
         });
 
+        Assert.False(state.ShowFallbackSection);
+        Assert.False(state.ShowManualFallbackControls);
+    }
+
+    [Fact]
+    public void Build_WhenQuoteFileIsConfigured_ShowsFallbackSectionWithoutManualControls()
+    {
+        var state = CraftAppraisalPanelPresenter.Build(new CraftAppraisalPanelState
+        {
+            WorkshopHostEnabled = true,
+            WorkshopHostQuoteAvailable = true,
+            ManualFallbackEnabled = false,
+            HasQuoteFilePath = true,
+        });
+
+        Assert.True(state.ShowFallbackSection);
         Assert.False(state.ShowManualFallbackControls);
     }
 

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Net;
 using System.Net.Http;
 using System.Text.Json;
 using System.Threading;
@@ -67,7 +68,9 @@ public sealed class UniversalisMarketAcquisitionPlanSource
         var requestUri = new Uri(baseUri, $"{Uri.EscapeDataString(worldOrRegion)}/{itemId}?listings={limit}");
 
         using var response = await httpClient.GetAsync(requestUri, cancellationToken).ConfigureAwait(false);
-        response.EnsureSuccessStatusCode();
+        if (!response.IsSuccessStatusCode)
+            throw await CreateHttpExceptionAsync(response, requestUri, cancellationToken).ConfigureAwait(false);
+
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
         using var json = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken).ConfigureAwait(false);
 
@@ -104,6 +107,17 @@ public sealed class UniversalisMarketAcquisitionPlanSource
 
     private static string NormalizeRegion(string region) =>
         region.Trim().Replace(' ', '-');
+
+    private static async Task<UniversalisMarketListingsHttpException> CreateHttpExceptionAsync(
+        HttpResponseMessage response,
+        Uri requestUri,
+        CancellationToken cancellationToken)
+    {
+        var body = response.Content == null
+            ? null
+            : await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+        return new UniversalisMarketListingsHttpException(response.StatusCode, requestUri, body);
+    }
 
     private static string RequiredString(JsonElement element, string propertyName)
     {
@@ -143,4 +157,24 @@ public sealed class UniversalisMarketAcquisitionPlanSource
 
         return property.GetBoolean();
     }
+}
+
+public sealed class UniversalisMarketListingsHttpException : HttpRequestException
+{
+    public UniversalisMarketListingsHttpException(
+        HttpStatusCode statusCode,
+        Uri requestUri,
+        string? responseBody)
+        : base(BuildMessage(statusCode, requestUri), null, statusCode)
+    {
+        RequestUri = requestUri;
+        ResponseBody = responseBody;
+    }
+
+    public Uri RequestUri { get; }
+
+    public string? ResponseBody { get; }
+
+    private static string BuildMessage(HttpStatusCode statusCode, Uri requestUri) =>
+        $"Universalis listings failed with {(int)statusCode} {statusCode} at {requestUri}.";
 }

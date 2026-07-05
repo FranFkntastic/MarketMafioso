@@ -112,7 +112,28 @@ public sealed class UniversalisMarketAcquisitionPlanSourceTests
         Assert.Contains("worldName", ex.Message, StringComparison.Ordinal);
     }
 
-    private sealed class CapturingHandler(string responseJson) : HttpMessageHandler
+    [Fact]
+    public async Task FetchListingsAsync_WhenHttpFails_IncludesStatusAndEndpoint()
+    {
+        using var handler = new CapturingHandler("gateway timeout", HttpStatusCode.GatewayTimeout);
+        using var httpClient = new HttpClient(handler);
+        var source = new MarketMafioso.MarketAcquisition.UniversalisMarketAcquisitionPlanSource(httpClient);
+
+        var ex = await Assert.ThrowsAsync<MarketMafioso.MarketAcquisition.UniversalisMarketListingsHttpException>(() =>
+            source.FetchListingsAsync(
+                "North America",
+                7017,
+                100,
+                CancellationToken.None));
+
+        Assert.Equal(HttpStatusCode.GatewayTimeout, ex.StatusCode);
+        Assert.Equal("https://universalis.app/api/v2/North-America/7017?listings=100", ex.RequestUri.ToString());
+        Assert.Contains("504", ex.Message, StringComparison.Ordinal);
+    }
+
+    private sealed class CapturingHandler(
+        string responseJson,
+        HttpStatusCode statusCode = HttpStatusCode.OK) : HttpMessageHandler
     {
         public HttpRequestMessage? LastRequest { get; private set; }
 
@@ -121,7 +142,7 @@ public sealed class UniversalisMarketAcquisitionPlanSourceTests
             CancellationToken cancellationToken)
         {
             LastRequest = request;
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            return Task.FromResult(new HttpResponseMessage(statusCode)
             {
                 Content = new StringContent(responseJson),
             });

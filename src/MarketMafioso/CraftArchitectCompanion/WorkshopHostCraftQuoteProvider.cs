@@ -65,7 +65,7 @@ public sealed class WorkshopHostCraftQuoteProvider : ICraftQuoteProvider
 
         using var response = await httpClient.SendAsync(httpRequest, cancellationToken).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
-            throw await CreateHttpExceptionAsync(response, cancellationToken).ConfigureAwait(false);
+            throw await CreateHttpExceptionAsync(response, appraiseUrl, cancellationToken).ConfigureAwait(false);
 
         var quote = await response.Content.ReadFromJsonAsync<CraftAppraisalQuote>(
             JsonOptions,
@@ -116,13 +116,14 @@ public sealed class WorkshopHostCraftQuoteProvider : ICraftQuoteProvider
 
     private static async Task<WorkshopHostCraftQuoteHttpException> CreateHttpExceptionAsync(
         HttpResponseMessage response,
+        string appraiseUrl,
         CancellationToken cancellationToken)
     {
         var body = response.Content == null
             ? null
             : await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
         var error = TryReadErrorMessage(body) ?? body;
-        return new WorkshopHostCraftQuoteHttpException(response.StatusCode, error, body);
+        return new WorkshopHostCraftQuoteHttpException(response.StatusCode, appraiseUrl, error, body);
     }
 
     private static string? TryReadErrorMessage(string? body)
@@ -172,13 +173,17 @@ public sealed class WorkshopHostCraftQuoteHttpException : HttpRequestException
 {
     public WorkshopHostCraftQuoteHttpException(
         HttpStatusCode statusCode,
+        string requestUri,
         string? error,
         string? responseBody)
         : base(BuildMessage(statusCode, error), null, statusCode)
     {
+        RequestUri = requestUri;
         Error = error;
         ResponseBody = responseBody;
     }
+
+    public string RequestUri { get; }
 
     public string? Error { get; }
 

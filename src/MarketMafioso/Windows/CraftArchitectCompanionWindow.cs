@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.IO;
 using System.Net.Http;
@@ -25,6 +26,7 @@ public sealed class CraftArchitectCompanionWindow : Window
     private readonly Func<MarketAcquisitionQuickShopDraft, Task<bool>> createRoute;
     private readonly IPluginLog log;
     private readonly string craftQuoteDiagnosticsDirectory;
+    private readonly string marketDepthDiagnosticsDirectory;
     private readonly IReadOnlyList<CompanionItemOption> itemOptions;
     private readonly HttpClient workshopHostQuoteHttpClient = new();
     private readonly WorkshopHostCapabilitiesClient workshopHostCapabilitiesClient;
@@ -54,6 +56,7 @@ public sealed class CraftArchitectCompanionWindow : Window
     private string workshopHostQuoteStatus = "Workshop Host quote API disabled.";
     private string craftQuoteStatus = "No craft quote yet.";
     private string? lastCraftQuoteDiagnosticFilePath;
+    private string? lastMarketDepthDiagnosticFilePath;
     private CraftAppraisalQuote? latestCraftQuote;
     private MarketAppraisalResult? appraisalResult;
     private CancellationTokenSource? refreshCancellation;
@@ -88,6 +91,9 @@ public sealed class CraftArchitectCompanionWindow : Window
         craftQuoteDiagnosticsDirectory = Path.Combine(
             Plugin.PluginInterface.GetPluginConfigDirectory(),
             "craft-architect-quote-logs");
+        marketDepthDiagnosticsDirectory = Path.Combine(
+            Plugin.PluginInterface.GetPluginConfigDirectory(),
+            "craft-architect-market-depth-logs");
         itemOptions = LoadItemOptions(dataManager);
         workshopHostCapabilitiesClient = new WorkshopHostCapabilitiesClient(workshopHostQuoteHttpClient);
         workshopHostQuoteProvider = new WorkshopHostCraftQuoteProvider(
@@ -144,16 +150,20 @@ public sealed class CraftArchitectCompanionWindow : Window
     private void DrawBody(MarketAppraisalRequest? request)
     {
         var available = ImGui.GetContentRegionAvail();
-        if (available.X < 720)
+        var leftWidth = Math.Clamp(available.X * 0.32f, 340f, 460f);
+        var shouldStack = available.X < 900f || available.X - leftWidth < 620f;
+        if (shouldStack)
         {
-            DrawPanel("Inputs", DrawInputs, Math.Clamp(available.Y * 0.50f, 270f, 420f));
+            DrawPanel("Inputs", DrawInputs, Math.Clamp(available.Y * 0.48f, 260f, 400f));
             ImGui.Spacing();
             DrawPanel("Market Depth", () => DrawMarketDepth(request), MathF.Max(220f, ImGui.GetContentRegionAvail().Y));
             return;
         }
 
-        var leftWidth = Math.Clamp(available.X * 0.42f, 340f, 520f);
-        if (!ImGui.BeginTable("CraftArchitectCompanionBody", 2, ImGuiTableFlags.SizingStretchProp | ImGuiTableFlags.Resizable))
+        const ImGuiTableFlags bodyFlags =
+            ImGuiTableFlags.SizingFixedFit |
+            ImGuiTableFlags.NoSavedSettings;
+        if (!ImGui.BeginTable("CraftArchitectCompanionBody", 2, bodyFlags))
             return;
 
         ImGui.TableSetupColumn("Inputs", ImGuiTableColumnFlags.WidthFixed, leftWidth);
@@ -239,22 +249,29 @@ public sealed class CraftArchitectCompanionWindow : Window
         ImGui.TextColored(ColHeader, "Craft Appraisal");
         ImGui.Separator();
         DrawWorkshopHostQuoteControls(viewState, quoteRequest);
-        ImGui.Spacing();
         var quoteColor = quote is null
             ? ColMuted
             : viewState.CanApplyQuoteToThreshold
                 ? ColSuccess
                 : ColError;
-        ImGui.TextColored(quoteColor, viewState.QuoteHeadline);
-        ImGui.TextWrapped(viewState.QuoteDetail);
-        if (quote is not null)
+        if (quote is null)
         {
-            foreach (var warning in quote.Warnings.Take(2))
-                ImGui.TextColored(ColMuted, warning);
+            ImGui.TextColored(quoteColor, viewState.QuoteHeadline);
+            ImGui.TextWrapped(viewState.QuoteDetail);
+        }
+        else
+        {
+            ImGui.TextColored(quoteColor, $"{viewState.QuoteHeadline} | {viewState.QuoteDetail}");
         }
 
-        ImGui.TextColored(isFetchingCraftQuote ? ColHeader : ColMuted, craftQuoteStatus);
-        DrawQuoteDiagnostics(viewState);
+        if (isFetchingCraftQuote ||
+            craftQuoteStatus.Contains("failed", StringComparison.OrdinalIgnoreCase) ||
+            quote is null && !craftQuoteStatus.Equals("No craft quote yet.", StringComparison.Ordinal))
+        {
+            ImGui.TextColored(isFetchingCraftQuote ? ColHeader : ColMuted, craftQuoteStatus);
+        }
+
+        DrawQuoteDiagnostics(viewState, quote);
         DrawQuoteDiagnosticPrintoutPath(quote);
 
         if (quoteRequest is null)
@@ -266,21 +283,20 @@ public sealed class CraftArchitectCompanionWindow : Window
             DrawQuoteThresholdActions(quote);
         }
 
-        ImGui.Spacing();
-        var fallbackFlags = viewState.ShowFallbackControlsByDefault
-            ? ImGuiTreeNodeFlags.DefaultOpen
-            : ImGuiTreeNodeFlags.None;
-        if (ImGui.CollapsingHeader(viewState.FallbackSectionLabel, fallbackFlags))
+        if (viewState.ShowFallbackSection)
         {
-            DrawQuoteFileSettings();
-            if (viewState.ShowManualFallbackControls)
+            ImGui.Spacing();
+            var fallbackFlags = viewState.ShowFallbackControlsByDefault
+                ? ImGuiTreeNodeFlags.DefaultOpen
+                : ImGuiTreeNodeFlags.None;
+            if (ImGui.CollapsingHeader(viewState.FallbackSectionLabel, fallbackFlags))
             {
-                ImGui.Spacing();
-                DrawManualCraftCostFallback();
-            }
-            else
-            {
-                ImGui.TextColored(ColMuted, "Manual craft cost fallback is disabled in Settings.");
+                DrawQuoteFileSettings();
+                if (viewState.ShowManualFallbackControls)
+                {
+                    ImGui.Spacing();
+                    DrawManualCraftCostFallback();
+                }
             }
         }
     }
@@ -312,9 +328,14 @@ public sealed class CraftArchitectCompanionWindow : Window
         if (ImGuiUi.Button("Refresh", config.EnableWorkshopHostCraftQuotes && !isCheckingWorkshopHostCapabilities))
             _ = RefreshWorkshopHostCapabilitiesAsync();
 
-        ImGui.TextColored(workshopHostCraftQuotesAvailable ? ColSuccess : ColMuted, viewState.WorkshopHostStatus);
-        ImGui.TextWrapped(viewState.Guidance);
-        ImGui.TextColored(workshopHostCraftQuotesAvailable ? ColSuccess : ColMuted, workshopHostQuoteStatus);
+        ImGui.TextColored(
+            workshopHostCraftQuotesAvailable ? ColSuccess : ColMuted,
+            $"{viewState.WorkshopHostStatus}. {viewState.Guidance}");
+        if (!workshopHostCraftQuotesAvailable &&
+            !string.IsNullOrWhiteSpace(workshopHostQuoteStatus))
+        {
+            ImGui.TextWrapped(workshopHostQuoteStatus);
+        }
 
         var canQuote = viewState.PrimaryQuoteActionEnabled &&
                        quoteRequest is not null &&
@@ -359,20 +380,69 @@ public sealed class CraftArchitectCompanionWindow : Window
             ApplyQuoteThreshold(craftCost * 1.10m);
     }
 
-    private void DrawQuoteDiagnostics(CraftAppraisalPanelViewState viewState)
+    private void DrawQuoteDiagnostics(
+        CraftAppraisalPanelViewState viewState,
+        CraftAppraisalQuote? quote)
     {
-        if (viewState.DiagnosticLines.Count == 0)
+        if (viewState.DiagnosticLines.Count == 0 && quote?.Materials.Count is not > 0)
             return;
 
         ImGui.Spacing();
-        if (!ImGui.CollapsingHeader("Calculation details", ImGuiTreeNodeFlags.DefaultOpen))
+        var flags = quote?.IsComplete == true
+            ? ImGuiTreeNodeFlags.None
+            : ImGuiTreeNodeFlags.DefaultOpen;
+        if (!ImGui.CollapsingHeader("Calculation details", flags))
             return;
 
-        foreach (var line in viewState.DiagnosticLines.Take(12))
+        foreach (var line in viewState.DiagnosticLines
+            .Where(line => !line.StartsWith("Material:", StringComparison.Ordinal))
+            .Take(8))
+        {
             ImGui.TextWrapped(line);
+        }
+
+        if (quote?.Materials.Count is > 0)
+        {
+            DrawQuoteMaterialDiagnosticsTable(quote);
+        }
 
         if (viewState.DiagnosticLines.Count > 12)
             ImGui.TextColored(ColMuted, $"{viewState.DiagnosticLines.Count - 12:N0} more diagnostic line(s) in the printout file.");
+    }
+
+    private static void DrawQuoteMaterialDiagnosticsTable(CraftAppraisalQuote quote)
+    {
+        const ImGuiTableFlags Flags =
+            ImGuiTableFlags.Borders |
+            ImGuiTableFlags.RowBg |
+            ImGuiTableFlags.Resizable |
+            ImGuiTableFlags.SizingStretchProp;
+
+        if (!ImGui.BeginTable("CraftArchitectQuoteMaterials", 5, Flags))
+            return;
+
+        ImGui.TableSetupColumn("Material", ImGuiTableColumnFlags.WidthStretch);
+        ImGui.TableSetupColumn("Qty", ImGuiTableColumnFlags.WidthFixed, 72);
+        ImGui.TableSetupColumn("Unit", ImGuiTableColumnFlags.WidthFixed, 88);
+        ImGui.TableSetupColumn("Total", ImGuiTableColumnFlags.WidthFixed, 104);
+        ImGui.TableSetupColumn("Source", ImGuiTableColumnFlags.WidthStretch);
+        ImGui.TableHeadersRow();
+
+        foreach (var material in quote.Materials)
+        {
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(material.ItemName);
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(FormatDecimal(material.TotalQuantity));
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(FormatGilDecimal(material.UnitCost));
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(FormatGilDecimal(material.TotalCost));
+            ImGui.TableNextColumn();
+            ImGui.TextWrapped(FormatMaterialSource(material));
+        }
+
+        ImGui.EndTable();
     }
 
     private void DrawQuoteDiagnosticPrintoutPath(CraftAppraisalQuote? quote)
@@ -466,6 +536,7 @@ public sealed class CraftArchitectCompanionWindow : Window
         }
 
         ImGui.TextColored(isRefreshing ? ColHeader : ColMuted, previewStatus);
+        DrawMarketDepthDiagnosticPrintoutPath();
         ImGui.Spacing();
         if (ImGuiUi.Button("Compare Market Depth", !isRefreshing && request is not null))
             _ = RefreshMarketDepthAsync(request!);
@@ -475,6 +546,14 @@ public sealed class CraftArchitectCompanionWindow : Window
 
         ImGui.Spacing();
         DrawWorldSummaryTable();
+    }
+
+    private void DrawMarketDepthDiagnosticPrintoutPath()
+    {
+        if (string.IsNullOrWhiteSpace(lastMarketDepthDiagnosticFilePath))
+            return;
+
+        ImGui.TextColored(ColMuted, $"Telemetry: {lastMarketDepthDiagnosticFilePath}");
     }
 
     private void DrawWorldSummaryTable()
@@ -525,25 +604,122 @@ public sealed class CraftArchitectCompanionWindow : Window
         refreshCancellation = new CancellationTokenSource();
         isRefreshing = true;
         previewStatus = "Fetching Universalis listings...";
+        var startedAtUtc = DateTimeOffset.UtcNow;
+        var steps = new List<MarketDepthDiagnosticStep>();
+
+        async Task<T> RunStepAsync<T>(
+            string name,
+            Func<Task<T>> action,
+            Func<T, string> describe)
+        {
+            var stepStartedAtUtc = DateTimeOffset.UtcNow;
+            var stopwatch = Stopwatch.StartNew();
+            try
+            {
+                var result = await action().ConfigureAwait(false);
+                stopwatch.Stop();
+                steps.Add(new MarketDepthDiagnosticStep
+                {
+                    Name = name,
+                    StartedAtUtc = stepStartedAtUtc,
+                    DurationMs = stopwatch.ElapsedMilliseconds,
+                    Outcome = "Success",
+                    Detail = describe(result),
+                });
+                return result;
+            }
+            catch (Exception ex)
+            {
+                stopwatch.Stop();
+                steps.Add(BuildFailedMarketDepthStep(name, stepStartedAtUtc, stopwatch.ElapsedMilliseconds, ex));
+                throw;
+            }
+        }
 
         try
         {
-            await EnsureWorkshopHostCapabilitiesFreshAsync().ConfigureAwait(false);
-            var listings = await fetchListings(request.Region, request.ItemId, 100, refreshCancellation.Token)
+            await RunStepAsync(
+                "Workshop Host capabilities",
+                async () =>
+                {
+                    await EnsureWorkshopHostCapabilitiesFreshAsync().ConfigureAwait(false);
+                    return workshopHostCraftQuotesAvailable
+                        ? "craft quote capability available"
+                        : "craft quote capability unavailable";
+                },
+                detail => detail).ConfigureAwait(false);
+
+            var listings = await RunStepAsync(
+                "Universalis listings",
+                () => fetchListings(request.Region, request.ItemId, 100, refreshCancellation.Token),
+                listings => $"{listings.Count:N0} listing(s) returned for {request.Region}/{request.ItemId}.")
                 .ConfigureAwait(false);
-            var quote = await GetCraftQuoteAsync(request, refreshCancellation.Token).ConfigureAwait(false);
-            appraisalResult = CraftArchitectMarketAppraisalService.Build(request, listings, quote);
+
+            var quote = await RunStepAsync(
+                "Craft quote",
+                () => GetCraftQuoteAsync(request, refreshCancellation.Token),
+                quote => quote is null
+                    ? "No craft quote evidence returned."
+                    : $"{FormatGilDecimal(quote.EstimatedUnitCost)} / unit, source {quote.Source}, complete {quote.IsComplete}.")
+                .ConfigureAwait(false);
+
+            appraisalResult = await RunStepAsync(
+                "Market appraisal build",
+                () => Task.FromResult(CraftArchitectMarketAppraisalService.Build(request, listings, quote)),
+                result => $"{result.SupportedQuantity:N0} under-threshold unit(s), {result.SupportedListingCount:N0} listing(s), {result.SupportedWorldCount:N0} world(s).")
+                .ConfigureAwait(false);
+
             previewStatus = appraisalResult.SupportedQuantity == 0
                 ? "No under-threshold stock found."
                 : "Market depth refreshed.";
+            lastMarketDepthDiagnosticFilePath = WriteMarketDepthDiagnosticPrintout(
+                request,
+                startedAtUtc,
+                "Success",
+                previewStatus,
+                steps);
+            log.Information(
+                "[MarketMafioso] Craft Architect market depth refreshed for {ItemName} ({ItemId}) x{Quantity}, threshold {Threshold}, region {Region}. Diagnostic: {DiagnosticPath}",
+                request.ItemName,
+                request.ItemId,
+                request.Quantity,
+                request.BuyThresholdUnitPrice,
+                request.Region,
+                lastMarketDepthDiagnosticFilePath ?? "(not written)");
         }
         catch (OperationCanceledException)
         {
             previewStatus = "Market preview refresh cancelled.";
+            lastMarketDepthDiagnosticFilePath = WriteMarketDepthDiagnosticPrintout(
+                request,
+                startedAtUtc,
+                "Cancelled",
+                previewStatus,
+                steps);
         }
         catch (Exception ex)
         {
-            previewStatus = $"Market preview failed: {ex.Message}";
+            var failedStep = steps.LastOrDefault(step => step.Outcome.Equals("Failure", StringComparison.Ordinal));
+            var failedStage = string.IsNullOrWhiteSpace(failedStep?.Name)
+                ? "unknown stage"
+                : failedStep.Name;
+            previewStatus = $"Market preview failed during {failedStage}: {FormatExceptionSummary(ex)}";
+            lastMarketDepthDiagnosticFilePath = WriteMarketDepthDiagnosticPrintout(
+                request,
+                startedAtUtc,
+                "Failure",
+                previewStatus,
+                steps);
+            log.Warning(
+                ex,
+                "[MarketMafioso] Craft Architect market depth failed during {Stage} for {ItemName} ({ItemId}) x{Quantity}, threshold {Threshold}, region {Region}. Diagnostic: {DiagnosticPath}",
+                failedStage,
+                request.ItemName,
+                request.ItemId,
+                request.Quantity,
+                request.BuyThresholdUnitPrice,
+                request.Region,
+                lastMarketDepthDiagnosticFilePath ?? "(not written)");
         }
         finally
         {
@@ -579,6 +755,16 @@ public sealed class CraftArchitectCompanionWindow : Window
                 : "Craft quote refreshed.";
             lastCraftQuoteDiagnosticFilePath = WriteCraftQuoteDiagnosticPrintout(request, quote);
             LogCraftQuoteResult(request, quote);
+
+            if (quote is { IsComplete: true, EstimatedUnitCost: > 0m })
+            {
+                ApplyQuoteThreshold(
+                    quote.EstimatedUnitCost,
+                    "Craft quote applied as the buy threshold; refreshing market depth...");
+
+                if (TryBuildMarketRequestFromQuote(request, quote.EstimatedUnitCost) is { } marketRequest)
+                    await RefreshMarketDepthAsync(marketRequest).ConfigureAwait(false);
+            }
         }
         catch (Exception ex)
         {
@@ -695,6 +881,23 @@ public sealed class CraftArchitectCompanionWindow : Window
         };
     }
 
+    private MarketAppraisalRequest? TryBuildMarketRequestFromQuote(
+        MarketAppraisalRequest quoteRequest,
+        decimal unitCost)
+    {
+        if (unitCost <= 0 ||
+            !TryParseUIntOptional(gilCapBuffer, out var gilCap))
+        {
+            return null;
+        }
+
+        return quoteRequest with
+        {
+            BuyThresholdUnitPrice = (uint)Math.Ceiling(unitCost),
+            GilCap = gilCap,
+        };
+    }
+
     private async Task<CraftAppraisalQuote?> GetCraftQuoteAsync(
         MarketAppraisalRequest request,
         CancellationToken cancellationToken)
@@ -746,6 +949,70 @@ public sealed class CraftArchitectCompanionWindow : Window
             log.Information("[MarketMafioso] Craft Architect quote diagnostics: {Summary}", summary);
     }
 
+    private string? WriteMarketDepthDiagnosticPrintout(
+        MarketAppraisalRequest request,
+        DateTimeOffset startedAtUtc,
+        string outcome,
+        string summary,
+        IReadOnlyList<MarketDepthDiagnosticStep> steps)
+    {
+        try
+        {
+            return MarketDepthDiagnosticPrintout.Write(
+                marketDepthDiagnosticsDirectory,
+                new MarketDepthDiagnosticReport
+                {
+                    Request = request,
+                    StartedAtUtc = startedAtUtc,
+                    FinishedAtUtc = DateTimeOffset.UtcNow,
+                    Outcome = outcome,
+                    Summary = summary,
+                    Steps = steps.ToArray(),
+                });
+        }
+        catch (Exception ex)
+        {
+            log.Warning(ex, "[MarketMafioso] Failed to write Craft Architect market-depth diagnostic printout.");
+            return null;
+        }
+    }
+
+    private static MarketDepthDiagnosticStep BuildFailedMarketDepthStep(
+        string name,
+        DateTimeOffset startedAtUtc,
+        long durationMs,
+        Exception exception) => new()
+        {
+            Name = name,
+            StartedAtUtc = startedAtUtc,
+            DurationMs = durationMs,
+            Outcome = "Failure",
+            ExceptionType = exception.GetType().FullName ?? exception.GetType().Name,
+            ExceptionMessage = exception.Message,
+            HttpStatusCode = exception is HttpRequestException { StatusCode: { } statusCode }
+                ? statusCode
+                : null,
+            RequestUri = GetExceptionRequestUri(exception) ?? string.Empty,
+        };
+
+    private static string FormatExceptionSummary(Exception exception)
+    {
+        var requestUri = GetExceptionRequestUri(exception);
+        var status = exception is HttpRequestException { StatusCode: { } statusCode }
+            ? $"HTTP {(int)statusCode} {statusCode}"
+            : exception.GetType().Name;
+        return string.IsNullOrWhiteSpace(requestUri)
+            ? $"{status}: {exception.Message}"
+            : $"{status} at {requestUri}: {exception.Message}";
+    }
+
+    private static string? GetExceptionRequestUri(Exception exception) => exception switch
+    {
+        UniversalisMarketListingsHttpException universalis => universalis.RequestUri.ToString(),
+        WorkshopHostCraftQuoteHttpException workshopHost => workshopHost.RequestUri,
+        _ => null,
+    };
+
     private CraftAppraisalQuote? GetMatchingQuote(MarketAppraisalRequest? request)
     {
         if (request is null || latestCraftQuote is null)
@@ -757,14 +1024,14 @@ public sealed class CraftArchitectCompanionWindow : Window
             : null;
     }
 
-    private void ApplyQuoteThreshold(decimal unitCost)
+    private void ApplyQuoteThreshold(decimal unitCost, string? nextPreviewStatus = null)
     {
         if (unitCost <= 0)
             return;
 
         buyThresholdBuffer = ((uint)Math.Ceiling(unitCost)).ToString();
         appraisalResult = null;
-        previewStatus = "Threshold updated. Compare market depth to refresh stock.";
+        previewStatus = nextPreviewStatus ?? "Threshold updated. Compare market depth to refresh stock.";
     }
 
     private string BuildValidationMessage()
@@ -1004,8 +1271,24 @@ public sealed class CraftArchitectCompanionWindow : Window
     private static bool TryParseDecimal(string value, out decimal parsed) =>
         decimal.TryParse(value?.Trim(), out parsed);
 
+    private static string FormatDecimal(decimal value) =>
+        value % 1 == 0
+            ? value.ToString("N0")
+            : value.ToString("N2");
+
     private static string FormatGil(uint gil) => $"{gil:N0} gil";
     private static string FormatGilDecimal(decimal gil) => $"{gil:N0} gil";
+
+    private static string FormatMaterialSource(CraftAppraisalMaterialQuote material)
+    {
+        var source = string.IsNullOrWhiteSpace(material.AcquisitionSource) ||
+            string.Equals(material.AcquisitionSource, "Unknown", StringComparison.OrdinalIgnoreCase)
+                ? material.CostSource
+                : $"{material.AcquisitionSource}/{material.CostSource}";
+        return string.IsNullOrWhiteSpace(material.CostSourceDetails)
+            ? source
+            : $"{source}, {material.CostSourceDetails}";
+    }
 
     private sealed record CompanionItemOption(uint ItemId, string Name);
 }

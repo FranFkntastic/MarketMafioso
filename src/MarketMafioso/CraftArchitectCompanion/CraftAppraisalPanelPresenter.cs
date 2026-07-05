@@ -16,12 +16,15 @@ public static class CraftAppraisalPanelPresenter
 
         var guidance = state.WorkshopHostEnabled
             ? state.WorkshopHostQuoteAvailable
-                ? "Quote from Workshop Host, then apply that cost as your shopping threshold."
+                ? "Get Craft Quote applies a threshold and refreshes market depth."
                 : "Refresh Workshop Host status before quoting from the backend."
             : "Enable Workshop Host quotes to appraise from the backend.";
 
         var quoteHeadline = "No craft quote yet.";
-        var quoteDetail = "Use Workshop Host for the normal path, or open manual / file fallback.";
+        var showFallbackSection = state.ManualFallbackEnabled || state.HasQuoteFilePath;
+        var quoteDetail = showFallbackSection
+            ? "Use Workshop Host for the normal path, or open manual / file fallback."
+            : "Use Workshop Host for craft appraisal.";
         var canApplyQuoteToThreshold = false;
         IReadOnlyList<string> diagnosticLines = [];
         if (state.LatestQuote is { } quote)
@@ -39,6 +42,7 @@ public static class CraftAppraisalPanelPresenter
             PrimaryQuoteActionLabel = "Get Craft Quote",
             PrimaryQuoteActionEnabled = state.WorkshopHostEnabled && state.WorkshopHostQuoteAvailable,
             FallbackSectionLabel = "Manual / file fallback",
+            ShowFallbackSection = showFallbackSection,
             ShowFallbackControlsByDefault = !state.WorkshopHostEnabled || !state.WorkshopHostQuoteAvailable,
             ShowManualFallbackControls = state.ManualFallbackEnabled,
             QuoteHeadline = quoteHeadline,
@@ -134,6 +138,7 @@ public sealed record CraftAppraisalPanelViewState
     public string PrimaryQuoteActionLabel { get; init; } = string.Empty;
     public bool PrimaryQuoteActionEnabled { get; init; }
     public string FallbackSectionLabel { get; init; } = string.Empty;
+    public bool ShowFallbackSection { get; init; }
     public bool ShowFallbackControlsByDefault { get; init; }
     public bool ShowManualFallbackControls { get; init; }
     public string QuoteHeadline { get; init; } = string.Empty;
