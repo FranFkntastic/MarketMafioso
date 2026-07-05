@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MarketMafioso Acquisition Workbench - Run</title>
+  <style>
+    :root {
+      --bg: #0d1011;
+      --panel: rgba(18, 21, 23, 0.94);
+      --panel-2: rgba(30, 34, 37, 0.94);
+      --line: #3e464b;
+      --line-soft: #293035;
+      --text: #ebe4d7;
+      --muted: #aaa195;
+      --blue: #63b9ea;
+      --green: #79d891;
+      --red: #ef7069;
+      --amber: #e2c269;
+      --button: #4a5257;
+      --button-hot: #883333;
+      --field: #303538;
+      font-family: "Segoe UI", Arial, sans-serif;
+      color: var(--text);
+      background: var(--bg);
+    }
+
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; background: repeating-linear-gradient(90deg, #151819 0, #151819 1px, #0c0e10 1px, #0c0e10 96px); font-size: 14px; letter-spacing: 0; }
+
+    .window {
+      width: min(1180px, 100vw);
+      height: min(760px, 100vh);
+      min-height: 560px;
+      display: grid;
+      grid-template-rows: 34px 62px 44px 1fr 32px;
+      background: rgba(10, 12, 13, 0.9);
+      border-right: 1px solid #171b1e;
+      border-bottom: 1px solid #171b1e;
+    }
+
+    .titlebar { display: flex; align-items: center; justify-content: space-between; padding: 0 10px; background: linear-gradient(90deg, #6f1717, #3d1717); font-weight: 700; }
+    .chrome { display: flex; gap: 12px; color: #f1ddd7; font-size: 16px; }
+
+    .summary { display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: center; padding: 8px 12px; border-bottom: 1px solid var(--line-soft); }
+    h1 { margin: 0; font-size: 15px; color: var(--blue); }
+    .muted { color: var(--muted); font-size: 12px; }
+    .metrics { display: grid; grid-template-columns: repeat(5, minmax(92px, 1fr)); gap: 12px; min-width: min(760px, 72vw); }
+    .metric span { display: block; color: var(--muted); font-size: 12px; }
+    .metric strong { display: block; margin-top: 4px; color: var(--green); font-size: 13px; white-space: nowrap; }
+
+    .commandbar { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-bottom: 1px solid var(--line-soft); background: rgba(7, 8, 9, 0.4); }
+    button { min-height: 28px; padding: 5px 10px; border: 1px solid #5d666b; border-radius: 3px; background: var(--button); color: var(--text); font: inherit; font-weight: 600; }
+    button.primary { background: var(--button-hot); border-color: #a64a4a; }
+    button:disabled { color: #8c8c8c; border-color: #3a3d40; background: #2f3336; }
+
+    .body { display: grid; grid-template-columns: minmax(520px, 1fr) minmax(340px, 0.68fr); min-height: 0; }
+
+    .pane { min-width: 0; min-height: 0; overflow: auto; padding: 10px; border-right: 1px solid var(--line-soft); }
+    .pane:last-child { border-right: 0; }
+    .section { margin-bottom: 12px; border: 1px solid var(--line); background: var(--panel); }
+    .section header { display: flex; align-items: center; justify-content: space-between; min-height: 31px; padding: 6px 8px; color: var(--blue); border-bottom: 1px solid var(--line-soft); font-weight: 700; }
+    .content { padding: 8px; }
+    .active-world { display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: center; padding: 10px; border: 1px solid var(--blue); background: rgba(99, 185, 234, 0.11); margin-bottom: 10px; }
+    .active-world strong { font-size: 18px; color: var(--text); }
+    .active-world span { display: block; color: var(--muted); font-size: 12px; margin-top: 4px; }
+
+    table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    th, td { border-bottom: 1px solid var(--line-soft); padding: 6px; text-align: left; vertical-align: top; }
+    th { color: var(--muted); font-weight: 600; background: rgba(255, 255, 255, 0.03); }
+    .pill { display: inline-flex; align-items: center; min-height: 20px; padding: 2px 7px; border: 1px solid var(--line); border-radius: 3px; color: var(--text); background: rgba(255, 255, 255, 0.05); white-space: nowrap; }
+    .pill.green { color: var(--green); border-color: rgba(121, 216, 145, 0.45); }
+    .pill.amber { color: var(--amber); border-color: rgba(226, 194, 105, 0.45); }
+    .pill.red { color: var(--red); border-color: rgba(239, 112, 105, 0.45); }
+    .grid3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-bottom: 8px; }
+    .mini { border: 1px solid var(--line-soft); padding: 7px; background: rgba(255, 255, 255, 0.03); }
+    .mini span { display: block; color: var(--muted); font-size: 12px; }
+    .mini strong { display: block; margin-top: 4px; color: var(--text); }
+    .timeline { display: grid; gap: 8px; }
+    .event { border-left: 3px solid var(--line); padding: 4px 0 4px 10px; color: var(--muted); }
+    .event.active { border-left-color: var(--blue); color: var(--text); }
+    .event.done { border-left-color: var(--green); }
+    .event strong { display: block; color: var(--text); }
+    .statusbar { display: flex; justify-content: space-between; align-items: center; padding: 0 10px; color: var(--muted); border-top: 1px solid var(--line-soft); background: rgba(6, 7, 8, 0.72); font-size: 12px; }
+
+    @media (max-width: 920px) {
+      .window { height: auto; min-height: 100vh; }
+      .summary { grid-template-columns: 1fr; }
+      .metrics { min-width: 0; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .commandbar { flex-wrap: wrap; }
+      .body { grid-template-columns: 1fr; }
+      .pane { border-right: 0; border-bottom: 1px solid var(--line-soft); }
+      .grid3 { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <main class="window">
+    <div class="titlebar">
+      <span>Acquisition Workbench</span>
+      <div class="chrome"><span>-</span><span>x</span></div>
+    </div>
+    <section class="summary">
+      <div>
+        <h1>Run Route</h1>
+        <div class="muted">Request 4187 - Quick Shop - accepted locally and synced to dashboard</div>
+      </div>
+      <div class="metrics">
+        <div class="metric"><span>Route</span><strong>Running</strong></div>
+        <div class="metric"><span>Active World</span><strong>Jenova</strong></div>
+        <div class="metric"><span>Lines</span><strong>2 / 3 active</strong></div>
+        <div class="metric"><span>Bought</span><strong>74 / 153</strong></div>
+        <div class="metric"><span>Spent</span><strong>236,900 gil</strong></div>
+      </div>
+    </section>
+    <div class="commandbar">
+      <button disabled>Prepare Plan</button>
+      <button class="primary">Start Route</button>
+      <button>Pause</button>
+      <button>Stop</button>
+      <button>Restart Plan</button>
+      <button>Diagnostics</button>
+    </div>
+    <section class="body">
+      <section class="pane">
+        <div class="section">
+          <header><span>World Route</span><span class="pill green">Smart skip</span></header>
+          <div class="content">
+            <table>
+              <thead><tr><th>World</th><th>State</th><th>Plan</th><th>Lines</th><th>Result</th></tr></thead>
+              <tbody>
+                <tr><td>Siren</td><td><span class="pill green">Done</span></td><td>74 units</td><td>1</td><td>74 bought</td></tr>
+                <tr><td>Jenova</td><td><span class="pill amber">Active</span></td><td>35 units</td><td>2</td><td>Awaiting read</td></tr>
+                <tr><td>Midgardsormr</td><td><span class="pill">Planned</span></td><td>40 units</td><td>1</td><td>-</td></tr>
+                <tr><td>Adamantoise</td><td><span class="pill">Planned</span></td><td>42 units</td><td>1</td><td>-</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="active-world">
+          <div>
+            <strong>Jenova</strong>
+            <span>Travel complete - market board probe ready</span>
+          </div>
+          <span class="pill green">Arrived</span>
+        </div>
+
+        <div class="section">
+          <header><span>Line Progress</span><span class="pill green">Dashboard current</span></header>
+          <div class="content">
+            <table>
+              <thead><tr><th>Line</th><th>Plan</th><th>Bought</th><th>Spend</th><th>Status</th></tr></thead>
+              <tbody>
+                <tr><td>Grade 8 Dark Matter</td><td>99</td><td>74</td><td>65,120</td><td><span class="pill amber">Partial</span></td></tr>
+                <tr><td>Maghemite</td><td>42</td><td>0</td><td>0</td><td><span class="pill green">Pending</span></td></tr>
+                <tr><td>Ra'Kaznar Ingot</td><td>12</td><td>0</td><td>0</td><td><span class="pill red">Disabled</span></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+      </section>
+
+      <section class="pane">
+        <div class="section">
+          <header><span>Market Board Read</span><span class="pill amber">Extra detail</span></header>
+          <div class="content">
+            <div class="grid3">
+              <div class="mini"><span>Visible Rows</span><strong>0</strong></div>
+              <div class="mini"><span>Eligible Rows</span><strong>Waiting</strong></div>
+              <div class="mini"><span>Next Action</span><strong>Read listings</strong></div>
+            </div>
+            <table>
+              <thead><tr><th>State</th><th>Detail</th></tr></thead>
+              <tbody>
+                <tr><td>Search</td><td>Grade 8 Dark Matter, Either HQ, max 960 gil</td></tr>
+                <tr><td>Read</td><td>Open the market board search, then read visible listings.</td></tr>
+                <tr><td>Decision</td><td>Purchases appear here after live rows are parsed.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div class="section">
+          <header><span>Diagnostics Drawer</span><span class="pill amber">Inline</span></header>
+          <div class="content">
+            <table>
+              <tbody>
+                <tr><th>Last Probe</th><td>No live market-board probe this world.</td></tr>
+                <tr><th>Plan Source</th><td>Universalis, 18m freshness window.</td></tr>
+                <tr><th>Skipped Worlds</th><td>6 recently completed or probed.</td></tr>
+                <tr><th>Report</th><td>route-4187-20260705-jenova.json</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </section>
+    <footer class="statusbar">
+      <span>Build done - Appraise done - Prepare done - Run active - Review pending</span>
+      <span>Use recovery to resume, replan remaining, or restart from draft.</span>
+    </footer>
+  </main>
+</body>
+</html>

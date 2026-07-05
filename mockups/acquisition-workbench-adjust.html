@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MarketMafioso Acquisition Workbench - Adjust</title>
+  <style>
+    :root {
+      --bg: #0d1011;
+      --panel: rgba(18, 21, 23, 0.94);
+      --line: #3e464b;
+      --line-soft: #293035;
+      --text: #ebe4d7;
+      --muted: #aaa195;
+      --blue: #63b9ea;
+      --green: #79d891;
+      --red: #ef7069;
+      --amber: #e2c269;
+      --button: #4a5257;
+      --button-hot: #883333;
+      --field: #303538;
+      font-family: "Segoe UI", Arial, sans-serif;
+      color: var(--text);
+      background: var(--bg);
+    }
+
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; background: repeating-linear-gradient(90deg, #151819 0, #151819 1px, #0c0e10 1px, #0c0e10 96px); font-size: 14px; letter-spacing: 0; }
+    .window { width: min(1180px, 100vw); height: min(760px, 100vh); min-height: 560px; display: grid; grid-template-rows: 34px 62px 44px 1fr 32px; background: rgba(10, 12, 13, 0.9); border-right: 1px solid #171b1e; border-bottom: 1px solid #171b1e; }
+    .titlebar { display: flex; align-items: center; justify-content: space-between; padding: 0 10px; background: linear-gradient(90deg, #6f1717, #3d1717); font-weight: 700; }
+    .chrome { display: flex; gap: 12px; color: #f1ddd7; font-size: 16px; }
+    .summary { display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: center; padding: 8px 12px; border-bottom: 1px solid var(--line-soft); }
+    h1 { margin: 0; font-size: 15px; color: var(--blue); }
+    .muted { color: var(--muted); font-size: 12px; }
+    .metrics { display: grid; grid-template-columns: repeat(5, minmax(92px, 1fr)); gap: 12px; min-width: min(760px, 72vw); }
+    .metric span { display: block; color: var(--muted); font-size: 12px; }
+    .metric strong { display: block; margin-top: 4px; color: var(--green); font-size: 13px; white-space: nowrap; }
+    .commandbar { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-bottom: 1px solid var(--line-soft); background: rgba(7, 8, 9, 0.4); }
+    button { min-height: 28px; padding: 5px 10px; border: 1px solid #5d666b; border-radius: 3px; background: var(--button); color: var(--text); font: inherit; font-weight: 600; }
+    button.primary { background: var(--button-hot); border-color: #a64a4a; }
+    button.warning { border-color: rgba(226, 194, 105, 0.6); color: var(--amber); }
+    .body { display: grid; grid-template-columns: minmax(520px, 1fr) minmax(340px, 0.68fr); min-height: 0; }
+    .pane { min-width: 0; min-height: 0; overflow: auto; padding: 10px; border-right: 1px solid var(--line-soft); }
+    .pane:last-child { border-right: 0; }
+    .section { margin-bottom: 12px; border: 1px solid var(--line); background: var(--panel); }
+    .section header { display: flex; align-items: center; justify-content: space-between; min-height: 31px; padding: 6px 8px; color: var(--blue); border-bottom: 1px solid var(--line-soft); font-weight: 700; }
+    .content { padding: 8px; }
+    .pill { display: inline-flex; align-items: center; min-height: 20px; padding: 2px 7px; border: 1px solid var(--line); border-radius: 3px; color: var(--text); background: rgba(255, 255, 255, 0.05); white-space: nowrap; }
+    .pill.green { color: var(--green); border-color: rgba(121, 216, 145, 0.45); }
+    .pill.amber { color: var(--amber); border-color: rgba(226, 194, 105, 0.45); }
+    .pill.red { color: var(--red); border-color: rgba(239, 112, 105, 0.45); }
+    table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    th, td { border-bottom: 1px solid var(--line-soft); padding: 6px; text-align: left; vertical-align: top; }
+    th { color: var(--muted); font-weight: 600; background: rgba(255, 255, 255, 0.03); }
+    .field { min-height: 27px; padding: 5px 7px; border: 1px solid #24282b; background: var(--field); color: var(--text); border-radius: 3px; }
+    .grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+    label { display: block; color: var(--muted); font-size: 12px; margin-bottom: 4px; }
+    .decision { border: 1px solid var(--line-soft); padding: 9px; margin-bottom: 8px; background: rgba(255, 255, 255, 0.03); }
+    .decision strong { display: block; color: var(--text); margin-bottom: 4px; }
+    .decision span { color: var(--muted); font-size: 12px; }
+    .statusbar { display: flex; justify-content: space-between; align-items: center; padding: 0 10px; color: var(--muted); border-top: 1px solid var(--line-soft); background: rgba(6, 7, 8, 0.72); font-size: 12px; }
+
+    @media (max-width: 920px) {
+      .window { height: auto; min-height: 100vh; }
+      .summary { grid-template-columns: 1fr; }
+      .metrics { min-width: 0; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .commandbar { flex-wrap: wrap; }
+      .body { grid-template-columns: 1fr; }
+      .pane { border-right: 0; border-bottom: 1px solid var(--line-soft); }
+      .grid2 { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <main class="window">
+    <div class="titlebar">
+      <span>Acquisition Workbench</span>
+      <div class="chrome"><span>-</span><span>x</span></div>
+    </div>
+    <section class="summary">
+      <div>
+        <h1>Adjust And Recover</h1>
+        <div class="muted">Request 4187 stopped after Jenova - completed and probed worlds preserved</div>
+      </div>
+      <div class="metrics">
+        <div class="metric"><span>Status</span><strong>Stopped</strong></div>
+        <div class="metric"><span>Completed</span><strong>2 worlds</strong></div>
+        <div class="metric"><span>Probed</span><strong>1 world</strong></div>
+        <div class="metric"><span>Remaining</span><strong>79 units</strong></div>
+        <div class="metric"><span>Recovery</span><strong>Replan ready</strong></div>
+      </div>
+    </section>
+    <div class="commandbar">
+      <button>Resume Route</button>
+      <button class="primary">Replan Remaining</button>
+      <button class="warning">Restart Plan</button>
+      <button>Apply Line Adjustments</button>
+      <button>Stop Route</button>
+      <button>Duplicate As New Draft</button>
+    </div>
+    <section class="body">
+      <section class="pane">
+        <div class="section">
+          <header><span>Remaining Lines</span><span class="pill amber">Editable before recovery</span></header>
+          <div class="content">
+            <table>
+              <thead><tr><th>Line</th><th>Remaining</th><th>Threshold</th><th>Action</th></tr></thead>
+              <tbody>
+                <tr><td>Grade 8 Dark Matter</td><td>25</td><td><div class="field">960</div></td><td><span class="pill green">Continue</span></td></tr>
+                <tr><td>Maghemite</td><td>42</td><td><div class="field">3,300</div></td><td><span class="pill green">Continue</span></td></tr>
+                <tr><td>Ra'Kaznar Ingot</td><td>12</td><td><div class="field">18,000</div></td><td><span class="pill red">Disabled</span></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="section">
+          <header><span>Recovery Policy</span><span class="pill green">Request progress preserved</span></header>
+          <div class="content grid2">
+            <div>
+              <label>World Policy</label>
+              <div class="field">Recommended</div>
+            </div>
+            <div>
+              <label>Fulfillment Basis</label>
+              <div class="field">Remaining quantities</div>
+            </div>
+            <div>
+              <label>Recent TTL</label>
+              <div class="field">18h</div>
+            </div>
+            <div>
+              <label>Fresh Upload Check</label>
+              <div class="field">Enabled</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="pane">
+        <div class="section">
+          <header><span>Recovery</span><span class="pill amber">Choose route basis</span></header>
+          <div class="content">
+            <div class="decision">
+              <strong>Resume Route</strong>
+              <span>Continue the current prepared stop list when the interruption was temporary and the route is still valid.</span>
+            </div>
+            <div class="decision">
+              <strong>Replan Remaining</strong>
+              <span>Build a new plan for unfilled quantities while preserving purchases, spend, and dashboard audit already reported for this request.</span>
+            </div>
+            <div class="decision">
+              <strong>Restart Plan</strong>
+              <span>Recompute from the edited draft quantities. Durable world visits and observed prices remain available unless refreshed or cleared.</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="section">
+          <header><span>Route Review</span><span class="pill green">Synced</span></header>
+          <div class="content">
+            <table>
+              <tbody>
+                <tr><th>Bought</th><td>74 units across 1 line</td></tr>
+                <tr><th>Spent</th><td>236,900 gil</td></tr>
+                <tr><th>Completed Worlds</th><td>Siren, Jenova</td></tr>
+                <tr><th>Probed Worlds</th><td>Midgardsormr</td></tr>
+                <tr><th>Dashboard</th><td>Route stopped, progress current</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </section>
+    <footer class="statusbar">
+      <span>Build done - Appraise done - Prepare done - Run stopped - Review active</span>
+      <span>Replan preserves request progress; restart uses edited draft quantities.</span>
+    </footer>
+  </main>
+</body>
+</html>
