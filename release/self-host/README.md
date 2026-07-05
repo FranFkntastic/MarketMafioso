@@ -28,6 +28,8 @@ The receiver is a small background server. It saves inventory reports in a local
 
 You do not need the receiver for basic plugin use. Install it only if you want stored inventory history, the browser dashboard, or receiver diagnostics.
 
+The receiver is also the current Workshop Host runtime for optional suite integrations. MarketMafioso checks `http://localhost:5088/api/capabilities` before using backend-only features such as Craft Architect quote lookup. If `craft.appraise` is not listed, MMF will keep using manual craft costs or Craft Architect quote-file imports.
+
 ## Install Docker First
 
 The receiver uses Docker so you do not have to install .NET, database tools, or web-server dependencies by hand.
@@ -163,6 +165,17 @@ Receiver health:
 ```powershell
 Invoke-RestMethod -Uri http://localhost:5088/health
 ```
+
+Workshop Host capabilities:
+
+```powershell
+Invoke-RestMethod `
+  -Method Get `
+  -Uri http://localhost:5088/api/capabilities `
+  -Headers @{ "X-Api-Key" = "<client-api-key>" }
+```
+
+`craft.appraise` appears only when the receiver has a Craft Architect appraisal adapter installed.
 
 Container status:
 
