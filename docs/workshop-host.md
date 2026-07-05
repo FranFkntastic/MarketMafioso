@@ -12,6 +12,7 @@ Use Workshop Host when you want private state or automation:
 - browser dashboard sessions;
 - diagnostics and stored report history;
 - receiver-backed Market Acquisition queues;
+- optional Craft Architect quote lookup for MMF's Craft Architect Companion;
 - future cross-tool automation between Craft Architect and MarketMafioso.
 
 ## What Does Not Require Workshop Host
@@ -25,6 +26,28 @@ MarketMafioso should remain useful without Workshop Host:
 - local quick-shop route preparation.
 
 Craft Architect should also remain local-first. Exported quote files are the first CA/MMF handoff path because they do not require a public API, a local server process, or a self-hosted backend.
+
+## Capability Discovery
+
+Workshop Host exposes a machine-readable capabilities endpoint:
+
+```text
+GET /api/capabilities
+```
+
+MMF uses this endpoint before enabling Workshop Host craft quote lookup. If the endpoint does not advertise `craft.appraise`, MMF skips the Workshop Host quote provider and continues to quote-file or manual evidence.
+
+The current receiver runtime can expose the endpoint before Craft Architect appraisal support is installed. In that case, inventory/acquisition capabilities may appear while `craft.appraise` is absent. That is intentional: old or partial self-hosts should not break MMF shopping workflows.
+
+## Craft Quote API
+
+Workshop Host reserves the private craft appraisal route:
+
+```text
+POST /api/craft/appraise
+```
+
+The route requires the client API key when API-key auth is enabled. It returns `503 craft_appraisal_unavailable` until the host has a CA-backed quote adapter. MMF treats configured quote API failures as visible evidence-provider failures, not as a silent fallback to stale or manual costs.
 
 ## Public Service Boundary
 

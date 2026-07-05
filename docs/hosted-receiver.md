@@ -48,7 +48,9 @@ MarketMafioso__DashboardBootstrapUsername=marketmafioso
 MarketMafioso__DashboardBootstrapPassword=<dashboard-password>
 ```
 
-`/health` remains public for uptime checks. Inventory ingestion and `/api/reports...` machine-read routes require the client key. Browser dashboard routes use app-managed login sessions backed by the receiver SQLite database.
+`/health` remains public for uptime checks. Inventory ingestion, `/api/capabilities`, and `/api/reports...` machine-read routes require the client key. Browser dashboard routes use app-managed login sessions backed by the receiver SQLite database.
+
+The hosted receiver exposes `/api/capabilities` for Workshop Host feature discovery. Treat absent capabilities as unavailable rather than as errors. In particular, `craft.appraise` appears only when the receiver has a Craft Architect appraisal adapter installed.
 
 The dev dashboard username is fixed to `marketmafioso`; the password is stored in GitHub Actions as `MARKETMAFIOSO_DEV_BASIC_AUTH_PASSWORD`. Bootstrap credentials create the first local dashboard admin user only when no dashboard users exist.
 
@@ -183,3 +185,14 @@ https://dev.xivcraftarchitect.com/marketmafioso/
 ```
 
 Use username `marketmafioso` and the dashboard password stored outside the repo.
+
+Smoke-test capabilities with:
+
+```powershell
+Invoke-RestMethod `
+  -Method Get `
+  -Uri https://dev.xivcraftarchitect.com/marketmafioso/api/capabilities `
+  -Headers @{ "X-Api-Key" = "<secret>" }
+```
+
+The response should include inventory/read diagnostics capabilities. `craft.appraise` may be absent until CA-backed appraisal is deployed to that receiver.

@@ -6,6 +6,8 @@ The receiver enables persistent inventory snapshots, the inventory browser, and 
 
 Workshop Host is the broader suite boundary for private state and automation. The receiver package keeps its existing name during the transition because its current routes, installer scripts, Docker image, and settings still use receiver terminology.
 
+Craft Architect quote lookup is part of the Workshop Host direction, but it is capability-gated. A self-host may expose `/api/capabilities` before it has CA-backed appraisal installed. MMF will only use the Workshop Host quote provider when `craft.appraise` is advertised.
+
 ## Requirements
 
 - Docker with Docker Compose, or .NET 10 for direct hosting.
@@ -161,3 +163,22 @@ Invoke-RestMethod `
 ```
 
 The ingest response should include a dashboard URL.
+
+Check Workshop Host capabilities:
+
+```powershell
+Invoke-RestMethod `
+  -Method Get `
+  -Uri http://localhost:5088/api/capabilities `
+  -Headers @{ "X-Api-Key" = "<client-api-key>" }
+```
+
+If `craft.appraise` is missing, MMF can still use manual craft costs or Craft Architect quote-file imports. If `craft.appraise` is present, MMF's Craft Architect Companion can use the Workshop Host quote API after you enable it in the companion window.
+
+The quote endpoint exists at:
+
+```text
+http://localhost:5088/api/craft/appraise
+```
+
+Until a CA-backed appraisal adapter is installed, it returns `503 craft_appraisal_unavailable`.
