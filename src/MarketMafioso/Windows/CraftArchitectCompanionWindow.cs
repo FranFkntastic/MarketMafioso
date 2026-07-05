@@ -28,7 +28,7 @@ public sealed class CraftArchitectCompanionWindow : Window
     private readonly WorkshopHostCraftQuoteProvider workshopHostQuoteProvider;
     private readonly ManualCraftQuoteProvider manualQuoteProvider;
     private readonly CraftArchitectFileQuoteProvider fileQuoteProvider;
-    private readonly CompositeCraftQuoteProvider quoteProvider;
+    private readonly ICraftQuoteProvider quoteProvider;
 
     private string itemSearchBuffer = string.Empty;
     private CompanionItemOption? selectedItem;
@@ -93,7 +93,8 @@ public sealed class CraftArchitectCompanionWindow : Window
                 : null);
         quoteFilePathBuffer = config.CraftArchitectQuoteFilePath;
         fileQuoteProvider = new CraftArchitectFileQuoteProvider(() => config.CraftArchitectQuoteFilePath);
-        quoteProvider = new CompositeCraftQuoteProvider([workshopHostQuoteProvider, fileQuoteProvider, manualQuoteProvider]);
+        quoteProvider = new LastGoodCraftQuoteProvider(
+            new CompositeCraftQuoteProvider([workshopHostQuoteProvider, fileQuoteProvider, manualQuoteProvider]));
 
         SizeConstraints = new WindowSizeConstraints
         {

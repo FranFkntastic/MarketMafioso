@@ -47,6 +47,8 @@ POST /api/craft/appraise
 
 The route requires the client API key when API-key auth is enabled. The current receiver implementation delegates directly to Craft Architect Core. MMF treats configured quote API failures as visible evidence-provider failures, not as a silent fallback to stale or manual costs.
 
+MMF keeps an in-memory last-good quote cache per appraisal signature while the Craft Architect Companion window is alive. If live quote evidence fails, the cached quote is labeled with `(last-good)` and warning text. Quick-shop route creation still uses the user's explicit buy threshold, not the cached quote cost.
+
 ## Machine Scopes
 
 Workshop Host routes are classified with named machine scopes:
