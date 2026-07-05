@@ -21,6 +21,7 @@ public class Configuration : IPluginConfiguration
     public int MarketAcquisitionRecentWorldTtlHours { get; set; } = 18;
     public bool MarketAcquisitionIgnoreRecentWorldVisitsForSweep { get; set; } = false;
     public List<PersistedMarketAcquisitionWorldVisit> MarketAcquisitionWorldVisits { get; set; } = [];
+    public bool EnableWorkshopHostCraftQuotes { get; set; } = false;
     public string CraftArchitectQuoteFilePath { get; set; } = string.Empty;
 
     public bool IncludeArmoury { get; set; } = false;

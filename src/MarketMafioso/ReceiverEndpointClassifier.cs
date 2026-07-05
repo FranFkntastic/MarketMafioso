@@ -69,6 +69,22 @@ public static class ReceiverEndpointClassifier
             : $"{apiBaseUrl}/acquisition";
     }
 
+    public static string? BuildWorkshopHostCapabilitiesUrl(string? serverUrl)
+    {
+        var apiBaseUrl = BuildWorkshopHostApiBaseUrl(serverUrl);
+        return string.IsNullOrWhiteSpace(apiBaseUrl)
+            ? null
+            : $"{apiBaseUrl}/capabilities";
+    }
+
+    public static string? BuildWorkshopHostCraftAppraiseUrl(string? serverUrl)
+    {
+        var apiBaseUrl = BuildWorkshopHostApiBaseUrl(serverUrl);
+        return string.IsNullOrWhiteSpace(apiBaseUrl)
+            ? null
+            : $"{apiBaseUrl}/craft/appraise";
+    }
+
     public static string? BuildDashboardUrl(string? serverUrl)
     {
         var endpoint = Classify(serverUrl);
@@ -93,6 +109,15 @@ public static class ReceiverEndpointClassifier
             return null;
 
         return DeriveApiBaseUrl(endpoint.Uri);
+    }
+
+    private static string? BuildWorkshopHostApiBaseUrl(string? serverUrl)
+    {
+        var endpoint = Classify(serverUrl);
+        if (endpoint.Kind == ReceiverEndpointKind.Invalid || endpoint.Uri == null)
+            return null;
+
+        return DeriveWorkshopHostApiBaseUrl(endpoint.Uri);
     }
 
     private static string? DeriveDashboardBaseUrl(Uri uri)
@@ -129,5 +154,26 @@ public static class ReceiverEndpointClassifier
 
         var apiBasePathFromInventory = path[..^inventorySuffix.Length].TrimEnd('/');
         return $"{uri.Scheme}://{uri.Authority}{apiBasePathFromInventory}";
+    }
+
+    private static string? DeriveWorkshopHostApiBaseUrl(Uri uri)
+    {
+        var path = uri.AbsolutePath;
+        const string apiInventorySuffix = "/api/inventory";
+        if (path.EndsWith(apiInventorySuffix, StringComparison.OrdinalIgnoreCase))
+        {
+            var apiBasePathFromApi = path[..^"/inventory".Length].TrimEnd('/');
+            return $"{uri.Scheme}://{uri.Authority}{apiBasePathFromApi}";
+        }
+
+        const string inventorySuffix = "/inventory";
+        if (!path.EndsWith(inventorySuffix, StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        var dashboardBasePathFromInventory = path[..^inventorySuffix.Length].TrimEnd('/');
+        var apiBasePath = string.IsNullOrWhiteSpace(dashboardBasePathFromInventory)
+            ? "/api"
+            : $"{dashboardBasePathFromInventory}/api";
+        return $"{uri.Scheme}://{uri.Authority}{apiBasePath}";
     }
 }

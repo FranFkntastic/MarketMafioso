@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Net.Http;
 using System.Numerics;
 using System.Threading;
 using System.Threading.Tasks;
@@ -22,6 +23,9 @@ public sealed class CraftArchitectCompanionWindow : Window
     private readonly Func<string, uint, int, CancellationToken, Task<IReadOnlyList<MarketAcquisitionListing>>> fetchListings;
     private readonly Func<MarketAcquisitionQuickShopDraft, Task<bool>> createRoute;
     private readonly IReadOnlyList<CompanionItemOption> itemOptions;
+    private readonly HttpClient workshopHostQuoteHttpClient = new();
+    private readonly WorkshopHostCapabilitiesClient workshopHostCapabilitiesClient;
+    private readonly WorkshopHostCraftQuoteProvider workshopHostQuoteProvider;
     private readonly ManualCraftQuoteProvider manualQuoteProvider;
     private readonly CraftArchitectFileQuoteProvider fileQuoteProvider;
     private readonly CompositeCraftQuoteProvider quoteProvider;
@@ -39,7 +43,10 @@ public sealed class CraftArchitectCompanionWindow : Window
     private readonly List<string> sweepDataCenters = new();
     private int hqPolicyIndex;
     private bool isRefreshing;
+    private bool workshopHostCraftQuotesAvailable;
+    private bool isCheckingWorkshopHostCapabilities;
     private string previewStatus = "Market preview has not been fetched.";
+    private string workshopHostQuoteStatus = "Workshop Host quote API disabled.";
     private MarketAppraisalResult? appraisalResult;
     private CancellationTokenSource? refreshCancellation;
 
@@ -68,13 +75,23 @@ public sealed class CraftArchitectCompanionWindow : Window
         this.fetchListings = fetchListings;
         this.createRoute = createRoute;
         itemOptions = LoadItemOptions(dataManager);
+        workshopHostCapabilitiesClient = new WorkshopHostCapabilitiesClient(workshopHostQuoteHttpClient);
+        workshopHostQuoteProvider = new WorkshopHostCraftQuoteProvider(
+            workshopHostQuoteHttpClient,
+            () => config.EnableWorkshopHostCraftQuotes,
+            () => workshopHostCraftQuotesAvailable,
+            () => config.ServerUrl,
+            () => config.ApiKey);
+        if (config.EnableWorkshopHostCraftQuotes)
+            workshopHostQuoteStatus = "Workshop Host quote API enabled; check capabilities before use.";
+
         manualQuoteProvider = new ManualCraftQuoteProvider(_ =>
             TryParseDecimal(craftUnitCostBuffer, out var unitCost) && unitCost > 0
                 ? unitCost
                 : null);
         quoteFilePathBuffer = config.CraftArchitectQuoteFilePath;
         fileQuoteProvider = new CraftArchitectFileQuoteProvider(() => config.CraftArchitectQuoteFilePath);
-        quoteProvider = new CompositeCraftQuoteProvider([fileQuoteProvider, manualQuoteProvider]);
+        quoteProvider = new CompositeCraftQuoteProvider([workshopHostQuoteProvider, fileQuoteProvider, manualQuoteProvider]);
 
         SizeConstraints = new WindowSizeConstraints
         {
@@ -152,6 +169,7 @@ public sealed class CraftArchitectCompanionWindow : Window
         ImGui.Spacing();
         ImGui.TextColored(ColHeader, "Craft Appraisal");
         ImGui.Separator();
+        DrawWorkshopHostQuoteSettings();
         DrawQuoteFileSettings();
         DrawInput("Craft Unit Cost", ref craftUnitCostBuffer);
         if (TryParseDecimal(craftUnitCostBuffer, out var craftCost) && craftCost > 0)
@@ -213,6 +231,41 @@ public sealed class CraftArchitectCompanionWindow : Window
             {
                 ImGui.TextColored(ColMuted, warning);
             }
+        }
+    }
+
+    private void DrawWorkshopHostQuoteSettings()
+    {
+        var enableWorkshopHostQuotes = config.EnableWorkshopHostCraftQuotes;
+        if (ImGui.Checkbox("Use Workshop Host quote API", ref enableWorkshopHostQuotes))
+        {
+            config.EnableWorkshopHostCraftQuotes = enableWorkshopHostQuotes;
+            config.Save();
+            appraisalResult = null;
+            workshopHostCraftQuotesAvailable = false;
+            workshopHostQuoteStatus = enableWorkshopHostQuotes
+                ? "Workshop Host quote API enabled; check capabilities before use."
+                : "Workshop Host quote API disabled.";
+
+            if (enableWorkshopHostQuotes)
+                _ = RefreshWorkshopHostCapabilitiesAsync();
+        }
+
+        ImGui.SameLine();
+        if (ImGuiUi.Button("Check Workshop Host", config.EnableWorkshopHostCraftQuotes && !isCheckingWorkshopHostCapabilities))
+            _ = RefreshWorkshopHostCapabilitiesAsync();
+
+        if (!config.EnableWorkshopHostCraftQuotes)
+        {
+            ImGui.TextColored(ColMuted, "Workshop Host quote API disabled.");
+        }
+        else if (string.IsNullOrWhiteSpace(config.ServerUrl) || string.IsNullOrWhiteSpace(config.ApiKey))
+        {
+            ImGui.TextColored(ColMuted, "Workshop Host quote API needs receiver URL and API key.");
+        }
+        else
+        {
+            ImGui.TextColored(workshopHostCraftQuotesAvailable ? ColSuccess : ColMuted, workshopHostQuoteStatus);
         }
     }
 
@@ -386,6 +439,36 @@ public sealed class CraftArchitectCompanionWindow : Window
             quoteProvider,
             createRoute).ConfigureAwait(false);
         previewStatus = result.Message;
+    }
+
+    private async Task RefreshWorkshopHostCapabilitiesAsync()
+    {
+        if (isCheckingWorkshopHostCapabilities)
+            return;
+
+        workshopHostCraftQuotesAvailable = false;
+        isCheckingWorkshopHostCapabilities = true;
+        workshopHostQuoteStatus = "Checking Workshop Host capabilities...";
+
+        try
+        {
+            workshopHostCraftQuotesAvailable = await workshopHostCapabilitiesClient.SupportsCraftAppraiseV1Async(
+                config.ServerUrl,
+                config.ApiKey,
+                CancellationToken.None).ConfigureAwait(false);
+            workshopHostQuoteStatus = workshopHostCraftQuotesAvailable
+                ? "Workshop Host craft quotes available."
+                : "Workshop Host does not advertise craft quote support.";
+        }
+        catch (Exception ex)
+        {
+            workshopHostCraftQuotesAvailable = false;
+            workshopHostQuoteStatus = $"Workshop Host capability check failed: {ex.Message}";
+        }
+        finally
+        {
+            isCheckingWorkshopHostCapabilities = false;
+        }
     }
 
     private MarketAppraisalRequest? TryBuildRequest()
