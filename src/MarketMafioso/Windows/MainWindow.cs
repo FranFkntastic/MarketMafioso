@@ -206,6 +206,14 @@ public class MainWindow : Window, IDisposable
             () => acquisitionRequestBusy,
             () => acquisitionStatus,
             CreateMonitoredQuickShopRouteAsync);
+        AcquisitionWorkbench = new AcquisitionWorkbenchWindow(
+            config,
+            dataManager,
+            GetQuickShopScope,
+            IsMarketAcquisitionRouteActive,
+            () => acquisitionRequestBusy,
+            () => acquisitionStatus,
+            CreateMonitoredQuickShopRouteAsync);
         CraftArchitectCompanion = new CraftArchitectCompanionWindow(
             config,
             dataManager,
@@ -241,6 +249,7 @@ public class MainWindow : Window, IDisposable
     public WorkshopProjectBrowserWindow ProjectBrowser { get; }
     public WorkshopFrozenQueueBrowserWindow FrozenQueueBrowser { get; }
     public MarketAcquisitionQuickShopWindow QuickShop { get; }
+    public AcquisitionWorkbenchWindow AcquisitionWorkbench { get; }
     public CraftArchitectCompanionWindow CraftArchitectCompanion { get; }
     public MarketAcquisitionDiagnosticsWindow AcquisitionDiagnostics { get; }
     public AutomationDiagnosticsWindow AutomationDiagnostics { get; }
@@ -436,11 +445,15 @@ public class MainWindow : Window, IDisposable
             ImGui.TextColored(ColError, "Character scope unavailable. Log into a character before creating a quick-shop route.");
         }
 
-        var draftSummary = QuickShop.DraftLineCount == 0
-            ? "No quick-shop draft is queued."
-            : $"{QuickShop.DraftLineCount:N0} quick-shop line(s) queued.";
-        ImGui.TextColored(QuickShop.DraftLineCount == 0 ? ColMuted : ColSuccess, draftSummary);
+        var draftLineCount = QuickShop.DraftLineCount + AcquisitionWorkbench.DraftLineCount;
+        var draftSummary = draftLineCount == 0
+            ? "No client acquisition draft is queued."
+            : $"{draftLineCount:N0} client acquisition line(s) queued.";
+        ImGui.TextColored(draftLineCount == 0 ? ColMuted : ColSuccess, draftSummary);
 
+        if (ImGuiUi.Button("Open Acquisition Workbench", true))
+            AcquisitionWorkbench.IsOpen = true;
+        ImGui.SameLine();
         if (ImGuiUi.Button("Open Quick Shop Planner", !IsMarketAcquisitionRouteActive()))
             QuickShop.IsOpen = true;
 
