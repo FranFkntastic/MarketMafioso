@@ -213,7 +213,8 @@ public class MainWindow : Window, IDisposable
             IsMarketAcquisitionRouteActive,
             () => acquisitionRequestBusy,
             acquisitionPlanSource.FetchListingsAsync,
-            CreateMonitoredQuickShopRouteAsync);
+            CreateMonitoredQuickShopRouteAsync,
+            log);
         AcquisitionDiagnostics = new MarketAcquisitionDiagnosticsWindow(
             () => marketBoardReadResult,
             () => marketBoardReconciliation,
@@ -3892,6 +3893,9 @@ public class MainWindow : Window, IDisposable
         ImGui.TextColored(ColHeader, "Internal Features");
         ImGui.Separator();
 
+        DrawCraftArchitectCompanionSettingsSection();
+        ImGui.Spacing();
+
         if (IsMarketAcquisitionUnlocked())
         {
             var unlockedAt = config.MarketAcquisitionUnlockedAtUtc == null
@@ -3945,6 +3949,22 @@ public class MainWindow : Window, IDisposable
         ImGui.TextColored(
             marketAcquisitionUnlockStatus.Contains("not accepted", StringComparison.OrdinalIgnoreCase) ? ColError : ColMuted,
             marketAcquisitionUnlockStatus);
+    }
+
+    private void DrawCraftArchitectCompanionSettingsSection()
+    {
+        ImGui.TextColored(ColHeader, "Craft Architect Companion");
+
+        var enableManualFallback = config.EnableCraftArchitectManualFallback;
+        if (ImGui.Checkbox("Enable manual craft-cost fallback", ref enableManualFallback))
+        {
+            config.EnableCraftArchitectManualFallback = enableManualFallback;
+            config.Save();
+        }
+
+        ImGui.TextColored(
+            ColMuted,
+            "Default off. Workshop Host should be the normal quote path; manual craft cost entry is only for local troubleshooting.");
     }
 
     private void DrawDashboardOpenSection()

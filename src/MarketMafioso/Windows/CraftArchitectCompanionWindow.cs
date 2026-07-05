@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.IO;
 using System.Net.Http;
 using System.Numerics;
 using System.Threading;
@@ -22,6 +23,8 @@ public sealed class CraftArchitectCompanionWindow : Window
     private readonly Func<bool> isBusy;
     private readonly Func<string, uint, int, CancellationToken, Task<IReadOnlyList<MarketAcquisitionListing>>> fetchListings;
     private readonly Func<MarketAcquisitionQuickShopDraft, Task<bool>> createRoute;
+    private readonly IPluginLog log;
+    private readonly string craftQuoteDiagnosticsDirectory;
     private readonly IReadOnlyList<CompanionItemOption> itemOptions;
     private readonly HttpClient workshopHostQuoteHttpClient = new();
     private readonly WorkshopHostCapabilitiesClient workshopHostCapabilitiesClient;
@@ -43,11 +46,15 @@ public sealed class CraftArchitectCompanionWindow : Window
     private readonly List<string> sweepDataCenters = new();
     private int hqPolicyIndex;
     private bool isRefreshing;
+    private bool isFetchingCraftQuote;
     private bool workshopHostCraftQuotesAvailable;
     private bool isCheckingWorkshopHostCapabilities;
     private DateTimeOffset? workshopHostCapabilitiesCheckedAtUtc;
     private string previewStatus = "Market preview has not been fetched.";
     private string workshopHostQuoteStatus = "Workshop Host quote API disabled.";
+    private string craftQuoteStatus = "No craft quote yet.";
+    private string? lastCraftQuoteDiagnosticFilePath;
+    private CraftAppraisalQuote? latestCraftQuote;
     private MarketAppraisalResult? appraisalResult;
     private CancellationTokenSource? refreshCancellation;
 
@@ -67,7 +74,8 @@ public sealed class CraftArchitectCompanionWindow : Window
         Func<bool> isRouteActive,
         Func<bool> isBusy,
         Func<string, uint, int, CancellationToken, Task<IReadOnlyList<MarketAcquisitionListing>>> fetchListings,
-        Func<MarketAcquisitionQuickShopDraft, Task<bool>> createRoute)
+        Func<MarketAcquisitionQuickShopDraft, Task<bool>> createRoute,
+        IPluginLog log)
         : base("Craft Architect Companion##CraftArchitectCompanion", ImGuiWindowFlags.None)
     {
         this.config = config;
@@ -76,6 +84,10 @@ public sealed class CraftArchitectCompanionWindow : Window
         this.isBusy = isBusy;
         this.fetchListings = fetchListings;
         this.createRoute = createRoute;
+        this.log = log;
+        craftQuoteDiagnosticsDirectory = Path.Combine(
+            Plugin.PluginInterface.GetPluginConfigDirectory(),
+            "craft-architect-quote-logs");
         itemOptions = LoadItemOptions(dataManager);
         workshopHostCapabilitiesClient = new WorkshopHostCapabilitiesClient(workshopHostQuoteHttpClient);
         workshopHostQuoteProvider = new WorkshopHostCraftQuoteProvider(
@@ -123,7 +135,7 @@ public sealed class CraftArchitectCompanionWindow : Window
             return;
 
         DrawMetric("Item", selectedItem?.Name ?? "Needs item", selectedItem is not null);
-        DrawMetric("Craft", FormatCraftUnitCost(), TryParseDecimal(craftUnitCostBuffer, out var craftCost) && craftCost > 0);
+        DrawMetric("Craft", FormatCraftUnitCost(), HasCraftUnitCostForCurrentSelection());
         DrawMetric("Threshold", request is null ? "Needs input" : FormatGil(request.BuyThresholdUnitPrice), request is not null);
         DrawMetric("Stock", appraisalResult is null ? "Not fetched" : appraisalResult.SupportedQuantity.ToString("N0"), appraisalResult?.SupportedQuantity > 0);
         ImGui.EndTable();
@@ -170,28 +182,7 @@ public sealed class CraftArchitectCompanionWindow : Window
         DrawIndexedCombo("HQ", HqPolicies, ref hqPolicyIndex);
         DrawRouteSettings();
         ImGui.Spacing();
-        ImGui.TextColored(ColHeader, "Craft Appraisal");
-        ImGui.Separator();
-        DrawWorkshopHostQuoteSettings();
-        DrawQuoteFileSettings();
-        DrawInput("Craft Unit Cost", ref craftUnitCostBuffer);
-        if (TryParseDecimal(craftUnitCostBuffer, out var craftCost) && craftCost > 0)
-        {
-            ImGui.TextColored(ColMuted, $"Manual quote: {FormatGilDecimal(craftCost)} / unit");
-            if (ImGuiUi.Button("Use Craft Cost", true))
-                buyThresholdBuffer = ((uint)Math.Ceiling(craftCost)).ToString();
-            ImGui.SameLine();
-            if (ImGuiUi.Button("-10%", true))
-                buyThresholdBuffer = ((uint)Math.Ceiling(craftCost * 0.90m)).ToString();
-            ImGui.SameLine();
-            if (ImGuiUi.Button("+10%", true))
-                buyThresholdBuffer = ((uint)Math.Ceiling(craftCost * 1.10m)).ToString();
-        }
-        else
-        {
-            ImGui.TextColored(ColMuted, "No craft quote. Threshold remains manual.");
-        }
-
+        DrawCraftAppraisal();
         ImGui.Spacing();
         ImGui.TextColored(ColHeader, "Acquisition Threshold");
         ImGui.Separator();
@@ -226,51 +217,173 @@ public sealed class CraftArchitectCompanionWindow : Window
         {
             ImGui.TextColored(ColMuted, $"Quote file: {config.CraftArchitectQuoteFilePath}");
         }
+    }
 
-        if (appraisalResult?.CraftQuote is { } quote)
+    private void DrawCraftAppraisal()
+    {
+        var quoteRequest = TryBuildQuoteRequest();
+        var quote = quoteRequest is null
+            ? latestCraftQuote
+            : GetMatchingQuote(quoteRequest);
+        var viewState = CraftAppraisalPanelPresenter.Build(new CraftAppraisalPanelState
         {
-            ImGui.TextColored(ColMuted, CraftQuoteDisplayFormatter.FormatQuoteSummary(quote, DateTimeOffset.UtcNow));
+            WorkshopHostEnabled = config.EnableWorkshopHostCraftQuotes,
+            WorkshopHostQuoteAvailable = workshopHostCraftQuotesAvailable,
+            ManualFallbackEnabled = config.EnableCraftArchitectManualFallback,
+            HasQuoteFilePath = !string.IsNullOrWhiteSpace(config.CraftArchitectQuoteFilePath),
+            HasManualCraftCost = TryParseDecimal(craftUnitCostBuffer, out var manualCraftCost) && manualCraftCost > 0,
+            LatestQuote = quote,
+            NowUtc = DateTimeOffset.UtcNow,
+        });
+
+        ImGui.TextColored(ColHeader, "Craft Appraisal");
+        ImGui.Separator();
+        DrawWorkshopHostQuoteControls(viewState, quoteRequest);
+        ImGui.Spacing();
+        var quoteColor = quote is null
+            ? ColMuted
+            : viewState.CanApplyQuoteToThreshold
+                ? ColSuccess
+                : ColError;
+        ImGui.TextColored(quoteColor, viewState.QuoteHeadline);
+        ImGui.TextWrapped(viewState.QuoteDetail);
+        if (quote is not null)
+        {
             foreach (var warning in quote.Warnings.Take(2))
-            {
                 ImGui.TextColored(ColMuted, warning);
+        }
+
+        ImGui.TextColored(isFetchingCraftQuote ? ColHeader : ColMuted, craftQuoteStatus);
+        DrawQuoteDiagnostics(viewState);
+        DrawQuoteDiagnosticPrintoutPath(quote);
+
+        if (quoteRequest is null)
+        {
+            ImGui.TextColored(ColMuted, BuildQuoteValidationMessage());
+        }
+        else if (quote is not null)
+        {
+            DrawQuoteThresholdActions(quote);
+        }
+
+        ImGui.Spacing();
+        var fallbackFlags = viewState.ShowFallbackControlsByDefault
+            ? ImGuiTreeNodeFlags.DefaultOpen
+            : ImGuiTreeNodeFlags.None;
+        if (ImGui.CollapsingHeader(viewState.FallbackSectionLabel, fallbackFlags))
+        {
+            DrawQuoteFileSettings();
+            if (viewState.ShowManualFallbackControls)
+            {
+                ImGui.Spacing();
+                DrawManualCraftCostFallback();
+            }
+            else
+            {
+                ImGui.TextColored(ColMuted, "Manual craft cost fallback is disabled in Settings.");
             }
         }
     }
 
-    private void DrawWorkshopHostQuoteSettings()
+    private void DrawWorkshopHostQuoteControls(
+        CraftAppraisalPanelViewState viewState,
+        MarketAppraisalRequest? quoteRequest)
     {
         var enableWorkshopHostQuotes = config.EnableWorkshopHostCraftQuotes;
-        if (ImGui.Checkbox("Use Workshop Host quote API", ref enableWorkshopHostQuotes))
+        if (ImGui.Checkbox("Use Workshop Host", ref enableWorkshopHostQuotes))
         {
             config.EnableWorkshopHostCraftQuotes = enableWorkshopHostQuotes;
             config.Save();
             appraisalResult = null;
+            latestCraftQuote = null;
+            lastCraftQuoteDiagnosticFilePath = null;
             workshopHostCraftQuotesAvailable = false;
             workshopHostCapabilitiesCheckedAtUtc = null;
             workshopHostQuoteStatus = enableWorkshopHostQuotes
-                ? "Workshop Host quote API enabled; check capabilities before use."
+                ? "Workshop Host quote API enabled; checking capabilities..."
                 : "Workshop Host quote API disabled.";
+            craftQuoteStatus = "No craft quote yet.";
 
             if (enableWorkshopHostQuotes)
                 _ = RefreshWorkshopHostCapabilitiesAsync();
         }
 
         ImGui.SameLine();
-        if (ImGuiUi.Button("Check Workshop Host", config.EnableWorkshopHostCraftQuotes && !isCheckingWorkshopHostCapabilities))
+        if (ImGuiUi.Button("Refresh", config.EnableWorkshopHostCraftQuotes && !isCheckingWorkshopHostCapabilities))
             _ = RefreshWorkshopHostCapabilitiesAsync();
 
-        if (!config.EnableWorkshopHostCraftQuotes)
+        ImGui.TextColored(workshopHostCraftQuotesAvailable ? ColSuccess : ColMuted, viewState.WorkshopHostStatus);
+        ImGui.TextWrapped(viewState.Guidance);
+        ImGui.TextColored(workshopHostCraftQuotesAvailable ? ColSuccess : ColMuted, workshopHostQuoteStatus);
+
+        var canQuote = viewState.PrimaryQuoteActionEnabled &&
+                       quoteRequest is not null &&
+                       !isFetchingCraftQuote &&
+                       !isCheckingWorkshopHostCapabilities;
+        if (ImGuiUi.Button(viewState.PrimaryQuoteActionLabel, canQuote))
+            _ = RefreshCraftQuoteAsync(quoteRequest!);
+    }
+
+    private void DrawQuoteThresholdActions(CraftAppraisalQuote quote)
+    {
+        if (!quote.IsComplete || quote.EstimatedUnitCost <= 0)
+            return;
+
+        if (ImGuiUi.Button("Use as threshold", true))
+            ApplyQuoteThreshold(quote.EstimatedUnitCost);
+        ImGui.SameLine();
+        if (ImGuiUi.Button("-10%", true))
+            ApplyQuoteThreshold(quote.EstimatedUnitCost * 0.90m);
+        ImGui.SameLine();
+        if (ImGuiUi.Button("+10%", true))
+            ApplyQuoteThreshold(quote.EstimatedUnitCost * 1.10m);
+    }
+
+    private void DrawManualCraftCostFallback()
+    {
+        DrawInput("Craft Unit Cost", ref craftUnitCostBuffer);
+        if (!TryParseDecimal(craftUnitCostBuffer, out var craftCost) || craftCost <= 0)
         {
-            ImGui.TextColored(ColMuted, "Workshop Host quote API disabled.");
+            ImGui.TextColored(ColMuted, "Manual craft cost is empty.");
+            return;
         }
-        else if (string.IsNullOrWhiteSpace(config.ServerUrl) || string.IsNullOrWhiteSpace(config.ApiKey))
-        {
-            ImGui.TextColored(ColMuted, "Workshop Host quote API needs receiver URL and API key.");
-        }
-        else
-        {
-            ImGui.TextColored(workshopHostCraftQuotesAvailable ? ColSuccess : ColMuted, workshopHostQuoteStatus);
-        }
+
+        ImGui.TextColored(ColMuted, $"Manual quote: {FormatGilDecimal(craftCost)} / unit");
+        if (ImGuiUi.Button("Use Manual Cost", true))
+            ApplyQuoteThreshold(craftCost);
+        ImGui.SameLine();
+        if (ImGuiUi.Button("-10%##ManualCraftCost", true))
+            ApplyQuoteThreshold(craftCost * 0.90m);
+        ImGui.SameLine();
+        if (ImGuiUi.Button("+10%##ManualCraftCost", true))
+            ApplyQuoteThreshold(craftCost * 1.10m);
+    }
+
+    private void DrawQuoteDiagnostics(CraftAppraisalPanelViewState viewState)
+    {
+        if (viewState.DiagnosticLines.Count == 0)
+            return;
+
+        ImGui.Spacing();
+        if (!ImGui.CollapsingHeader("Calculation details", ImGuiTreeNodeFlags.DefaultOpen))
+            return;
+
+        foreach (var line in viewState.DiagnosticLines.Take(12))
+            ImGui.TextWrapped(line);
+
+        if (viewState.DiagnosticLines.Count > 12)
+            ImGui.TextColored(ColMuted, $"{viewState.DiagnosticLines.Count - 12:N0} more diagnostic line(s) in the printout file.");
+    }
+
+    private void DrawQuoteDiagnosticPrintoutPath(CraftAppraisalQuote? quote)
+    {
+        if (quote is null)
+            return;
+
+        if (string.IsNullOrWhiteSpace(lastCraftQuoteDiagnosticFilePath))
+            return;
+
+        ImGui.TextColored(ColMuted, $"Printout: {lastCraftQuoteDiagnosticFilePath}");
     }
 
     private void DrawRouteSettings()
@@ -354,10 +467,10 @@ public sealed class CraftArchitectCompanionWindow : Window
 
         ImGui.TextColored(isRefreshing ? ColHeader : ColMuted, previewStatus);
         ImGui.Spacing();
-        if (ImGuiUi.Button("Refresh Market Depth", !isRefreshing && request is not null))
+        if (ImGuiUi.Button("Compare Market Depth", !isRefreshing && request is not null))
             _ = RefreshMarketDepthAsync(request!);
         ImGui.SameLine();
-        if (ImGuiUi.Button("Create Quick Shop Route", !isBusy() && !isRouteActive() && request is not null))
+        if (ImGuiUi.Button("Create Quick-Shop Route", !isBusy() && !isRouteActive() && request is not null))
             _ = CreateQuickShopRouteAsync(request!);
 
         ImGui.Spacing();
@@ -418,7 +531,8 @@ public sealed class CraftArchitectCompanionWindow : Window
             await EnsureWorkshopHostCapabilitiesFreshAsync().ConfigureAwait(false);
             var listings = await fetchListings(request.Region, request.ItemId, 100, refreshCancellation.Token)
                 .ConfigureAwait(false);
-            appraisalResult = CraftArchitectMarketAppraisalService.Build(request, listings, BuildQuote(request));
+            var quote = await GetCraftQuoteAsync(request, refreshCancellation.Token).ConfigureAwait(false);
+            appraisalResult = CraftArchitectMarketAppraisalService.Build(request, listings, quote);
             previewStatus = appraisalResult.SupportedQuantity == 0
                 ? "No under-threshold stock found."
                 : "Market depth refreshed.";
@@ -445,6 +559,42 @@ public sealed class CraftArchitectCompanionWindow : Window
             quoteProvider,
             createRoute).ConfigureAwait(false);
         previewStatus = result.Message;
+    }
+
+    private async Task RefreshCraftQuoteAsync(MarketAppraisalRequest request)
+    {
+        if (isFetchingCraftQuote)
+            return;
+
+        isFetchingCraftQuote = true;
+        craftQuoteStatus = "Fetching craft quote...";
+
+        try
+        {
+            await EnsureWorkshopHostCapabilitiesFreshAsync().ConfigureAwait(false);
+            var quote = await GetCraftQuoteAsync(request, CancellationToken.None).ConfigureAwait(false);
+            latestCraftQuote = quote;
+            craftQuoteStatus = quote is null
+                ? "No craft quote source returned evidence."
+                : "Craft quote refreshed.";
+            lastCraftQuoteDiagnosticFilePath = WriteCraftQuoteDiagnosticPrintout(request, quote);
+            LogCraftQuoteResult(request, quote);
+        }
+        catch (Exception ex)
+        {
+            latestCraftQuote = null;
+            lastCraftQuoteDiagnosticFilePath = null;
+            craftQuoteStatus = $"Craft quote failed: {ex.Message}";
+            log.Warning(ex,
+                "[MarketMafioso] Craft Architect quote failed for {ItemName} ({ItemId}) x{Quantity}.",
+                request.ItemName,
+                request.ItemId,
+                request.Quantity);
+        }
+        finally
+        {
+            isFetchingCraftQuote = false;
+        }
     }
 
     private async Task RefreshWorkshopHostCapabilitiesAsync()
@@ -520,8 +670,102 @@ public sealed class CraftArchitectCompanionWindow : Window
         };
     }
 
-    private CraftAppraisalQuote? BuildQuote(MarketAppraisalRequest request) =>
-        quoteProvider.GetQuoteAsync(request).GetAwaiter().GetResult();
+    private MarketAppraisalRequest? TryBuildQuoteRequest()
+    {
+        var item = ResolveSelectedItem();
+        if (item is null ||
+            !TryParseUInt(quantityBuffer, out var quantity) ||
+            quantity == 0)
+        {
+            return null;
+        }
+
+        return new MarketAppraisalRequest
+        {
+            ItemId = item.ItemId,
+            ItemName = item.Name,
+            Quantity = quantity,
+            HqPolicy = HqPolicies[hqPolicyIndex],
+            BuyThresholdUnitPrice = 0,
+            GilCap = 0,
+            Region = region,
+            WorldMode = worldMode,
+            SweepScope = sweepScope,
+            SweepDataCenters = sweepDataCenters.ToArray(),
+        };
+    }
+
+    private async Task<CraftAppraisalQuote?> GetCraftQuoteAsync(
+        MarketAppraisalRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (GetMatchingQuote(request) is { } matchingQuote)
+            return matchingQuote;
+
+        var quote = await quoteProvider.GetQuoteAsync(request, cancellationToken).ConfigureAwait(false);
+        latestCraftQuote = quote;
+        return quote;
+    }
+
+    private string? WriteCraftQuoteDiagnosticPrintout(MarketAppraisalRequest request, CraftAppraisalQuote? quote)
+    {
+        if (quote is null)
+            return null;
+
+        try
+        {
+            return CraftQuoteDiagnosticPrintout.Write(
+                craftQuoteDiagnosticsDirectory,
+                request,
+                quote,
+                DateTimeOffset.UtcNow);
+        }
+        catch (Exception ex)
+        {
+            log.Warning(ex, "[MarketMafioso] Failed to write Craft Architect quote diagnostic printout.");
+            return null;
+        }
+    }
+
+    private void LogCraftQuoteResult(MarketAppraisalRequest request, CraftAppraisalQuote? quote)
+    {
+        if (quote is null)
+        {
+            log.Information(
+                "[MarketMafioso] Craft Architect quote returned no evidence for {ItemName} ({ItemId}) x{Quantity}.",
+                request.ItemName,
+                request.ItemId,
+                request.Quantity);
+            return;
+        }
+
+        var summary = CraftAppraisalPanelPresenter.BuildLogSummary(quote);
+        if (quote.EstimatedUnitCost <= 0 || quote.Warnings.Count > 0)
+            log.Warning("[MarketMafioso] Craft Architect quote diagnostics: {Summary}", summary);
+        else
+            log.Information("[MarketMafioso] Craft Architect quote diagnostics: {Summary}", summary);
+    }
+
+    private CraftAppraisalQuote? GetMatchingQuote(MarketAppraisalRequest? request)
+    {
+        if (request is null || latestCraftQuote is null)
+            return null;
+
+        return latestCraftQuote.ItemId == request.ItemId &&
+               latestCraftQuote.RequestedQuantity == request.Quantity
+            ? latestCraftQuote
+            : null;
+    }
+
+    private void ApplyQuoteThreshold(decimal unitCost)
+    {
+        if (unitCost <= 0)
+            return;
+
+        buyThresholdBuffer = ((uint)Math.Ceiling(unitCost)).ToString();
+        appraisalResult = null;
+        previewStatus = "Threshold updated. Compare market depth to refresh stock.";
+    }
 
     private string BuildValidationMessage()
     {
@@ -530,10 +774,21 @@ public sealed class CraftArchitectCompanionWindow : Window
         if (!TryParseUInt(quantityBuffer, out var quantity) || quantity == 0)
             return "Enter a quantity greater than zero.";
         if (!TryParseUInt(buyThresholdBuffer, out var threshold) || threshold == 0)
-            return "Enter a buy threshold greater than zero.";
+            return latestCraftQuote is null
+                ? "Get a craft quote, then apply it as the buy threshold."
+                : "Apply the craft quote as the buy threshold or enter one manually.";
         if (!TryParseUIntOptional(gilCapBuffer, out _))
             return "Enter a valid gil cap or leave it blank.";
         return "Needs input.";
+    }
+
+    private string BuildQuoteValidationMessage()
+    {
+        if (ResolveSelectedItem() is null)
+            return "Select an item to quote.";
+        if (!TryParseUInt(quantityBuffer, out var quantity) || quantity == 0)
+            return "Enter a quantity greater than zero to quote.";
+        return "Ready to quote.";
     }
 
     private void DrawItemSearch()
@@ -548,6 +803,10 @@ public sealed class CraftArchitectCompanionWindow : Window
                 !selectedItem.Name.Equals(itemSearchBuffer.Trim(), StringComparison.OrdinalIgnoreCase))
             {
                 selectedItem = null;
+                latestCraftQuote = null;
+                lastCraftQuoteDiagnosticFilePath = null;
+                appraisalResult = null;
+                craftQuoteStatus = "No craft quote yet.";
             }
         }
 
@@ -580,7 +839,10 @@ public sealed class CraftArchitectCompanionWindow : Window
             {
                 selectedItem = result;
                 itemSearchBuffer = result.Name;
+                latestCraftQuote = null;
+                lastCraftQuoteDiagnosticFilePath = null;
                 appraisalResult = null;
+                craftQuoteStatus = "No craft quote yet.";
                 previewStatus = "Market preview has not been fetched.";
             }
         }
@@ -706,10 +968,24 @@ public sealed class CraftArchitectCompanionWindow : Window
         ImGui.EndCombo();
     }
 
+    private bool HasCraftUnitCostForCurrentSelection() =>
+        GetDisplayQuote() is not null ||
+        TryParseDecimal(craftUnitCostBuffer, out var craftCost) && craftCost > 0;
+
     private string FormatCraftUnitCost() =>
-        TryParseDecimal(craftUnitCostBuffer, out var craftCost) && craftCost > 0
-            ? FormatGilDecimal(craftCost)
-            : "No quote";
+        GetDisplayQuote() is { } quote
+            ? FormatGilDecimal(quote.EstimatedUnitCost)
+            : TryParseDecimal(craftUnitCostBuffer, out var craftCost) && craftCost > 0
+                ? FormatGilDecimal(craftCost)
+                : "No quote";
+
+    private CraftAppraisalQuote? GetDisplayQuote()
+    {
+        var request = TryBuildQuoteRequest();
+        return request is null
+            ? null
+            : GetMatchingQuote(request) ?? appraisalResult?.CraftQuote;
+    }
 
     private static bool TryParseUInt(string value, out uint parsed) =>
         uint.TryParse(value?.Trim(), out parsed);

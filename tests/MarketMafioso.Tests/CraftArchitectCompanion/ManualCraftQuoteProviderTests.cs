@@ -30,6 +30,8 @@ public sealed class ManualCraftQuoteProviderTests
         Assert.Equal(800m, quote.EstimatedTotalCost);
         Assert.Equal("Manual", quote.Source);
         Assert.Equal("Manual", quote.Confidence);
+        Assert.True(quote.IsComplete);
+        Assert.Equal("Complete", quote.AppraisalStatus);
         Assert.Equal(quotedAtUtc, quote.QuotedAtUtc);
         Assert.Contains(quote.Warnings, warning => warning.Contains("advisory", StringComparison.OrdinalIgnoreCase));
     }

@@ -44,6 +44,8 @@ public sealed class ManualCraftQuoteProvider : ICraftQuoteProvider
             Source = ProviderId,
             QuotedAtUtc = getUtcNow(),
             Confidence = "Manual",
+            IsComplete = true,
+            AppraisalStatus = "Complete",
             Warnings = ["Manual craft quote is advisory evidence. User acquisition threshold remains authoritative."],
         };
 
