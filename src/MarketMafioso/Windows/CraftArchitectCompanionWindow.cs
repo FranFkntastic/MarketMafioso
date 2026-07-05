@@ -12,7 +12,7 @@ using Dalamud.Interface.Windowing;
 using Dalamud.Plugin.Services;
 using MarketMafioso.CraftArchitectCompanion;
 using MarketMafioso.MarketAcquisition;
-using LuminaItem = Lumina.Excel.Sheets.Item;
+using MarketMafioso.Windows.AcquisitionWorkbench;
 
 namespace MarketMafioso.Windows;
 
@@ -27,7 +27,7 @@ public sealed class CraftArchitectCompanionWindow : Window
     private readonly IPluginLog log;
     private readonly string craftQuoteDiagnosticsDirectory;
     private readonly string marketDepthDiagnosticsDirectory;
-    private readonly IReadOnlyList<CompanionItemOption> itemOptions;
+    private readonly IReadOnlyList<AcquisitionItemOption> itemOptions;
     private readonly HttpClient workshopHostQuoteHttpClient = new();
     private readonly WorkshopHostCapabilitiesClient workshopHostCapabilitiesClient;
     private readonly WorkshopHostCraftQuoteProvider workshopHostQuoteProvider;
@@ -35,17 +35,13 @@ public sealed class CraftArchitectCompanionWindow : Window
     private readonly CraftArchitectFileQuoteProvider fileQuoteProvider;
     private readonly ICraftQuoteProvider quoteProvider;
 
-    private string itemSearchBuffer = string.Empty;
-    private CompanionItemOption? selectedItem;
+    private readonly ItemAutocompleteState itemAutocomplete = new();
     private string quantityBuffer = "1";
     private string craftUnitCostBuffer = string.Empty;
     private string quoteFilePathBuffer = string.Empty;
     private string buyThresholdBuffer = string.Empty;
     private string gilCapBuffer = string.Empty;
-    private string region = "North America";
-    private string worldMode = "Recommended";
-    private string sweepScope = "Region";
-    private readonly List<string> sweepDataCenters = new();
+    private AcquisitionRouteScope routeScope = AcquisitionRouteScope.Default;
     private int hqPolicyIndex;
     private bool isRefreshing;
     private bool isFetchingCraftQuote;
@@ -65,8 +61,6 @@ public sealed class CraftArchitectCompanionWindow : Window
     private static readonly Vector4 ColSuccess = new(0.45f, 0.90f, 0.55f, 1f);
     private static readonly Vector4 ColError = new(1.00f, 0.40f, 0.40f, 1f);
     private static readonly Vector4 ColMuted = new(0.60f, 0.60f, 0.60f, 1f);
-    private static readonly string[] WorldModes = ["Recommended", "AllWorldSweep"];
-    private static readonly string[] SweepScopes = ["Region", "CurrentDataCenter", "DataCenters"];
     private static readonly string[] HqPolicies = ["Either", "HqOnly", "NqOnly"];
     private static readonly TimeSpan WorkshopHostCapabilityTtl = TimeSpan.FromMinutes(5);
 
@@ -94,7 +88,7 @@ public sealed class CraftArchitectCompanionWindow : Window
         marketDepthDiagnosticsDirectory = Path.Combine(
             Plugin.PluginInterface.GetPluginConfigDirectory(),
             "craft-architect-market-depth-logs");
-        itemOptions = LoadItemOptions(dataManager);
+        itemOptions = ItemAutocompleteControl.LoadItemOptions(dataManager);
         workshopHostCapabilitiesClient = new WorkshopHostCapabilitiesClient(workshopHostQuoteHttpClient);
         workshopHostQuoteProvider = new WorkshopHostCraftQuoteProvider(
             workshopHostQuoteHttpClient,
@@ -140,7 +134,8 @@ public sealed class CraftArchitectCompanionWindow : Window
         if (!ImGui.BeginTable("CraftArchitectCompanionHeader", 4, ImGuiTableFlags.SizingStretchSame))
             return;
 
-        DrawMetric("Item", selectedItem?.Name ?? "Needs item", selectedItem is not null);
+        var item = ResolveSelectedItem();
+        DrawMetric("Item", item?.Name ?? "Needs item", item is not null);
         DrawMetric("Craft", FormatCraftUnitCost(), HasCraftUnitCostForCurrentSelection());
         DrawMetric("Threshold", request is null ? "Needs input" : FormatGil(request.BuyThresholdUnitPrice), request is not null);
         DrawMetric("Stock", appraisalResult is null ? "Not fetched" : appraisalResult.SupportedQuantity.ToString("N0"), appraisalResult?.SupportedQuantity > 0);
@@ -458,63 +453,12 @@ public sealed class CraftArchitectCompanionWindow : Window
 
     private void DrawRouteSettings()
     {
-        DrawFullWidthCombo("Region##caCompanionRegion", MarketAcquisitionWorldCatalog.SupportedRegions.ToArray(), region, value =>
-        {
-            region = value;
-            sweepDataCenters.Clear();
-        });
-
-        DrawFullWidthCombo("World Mode##caCompanionWorldMode", WorldModes, worldMode, value =>
-        {
-            worldMode = value;
-            if (worldMode != "AllWorldSweep")
-            {
-                sweepScope = "Region";
-                sweepDataCenters.Clear();
-            }
-        });
-
-        if (worldMode != "AllWorldSweep")
-            return;
-
-        DrawFullWidthCombo("Sweep Scope##caCompanionSweepScope", SweepScopes, sweepScope, value =>
-        {
-            sweepScope = value;
-            if (sweepScope != "DataCenters")
-                sweepDataCenters.Clear();
-        });
-
-        if (sweepScope == "DataCenters")
-            DrawDataCenterSelector();
-    }
-
-    private void DrawDataCenterSelector()
-    {
-        IReadOnlyDictionary<string, string[]> dataCenters;
-        try
-        {
-            dataCenters = MarketAcquisitionWorldCatalog.ResolveDataCenters(region);
-        }
-        catch (InvalidOperationException ex)
-        {
-            ImGui.TextColored(ColError, ex.Message);
-            return;
-        }
-
-        foreach (var dataCenter in dataCenters.Keys)
-        {
-            var selected = sweepDataCenters.Contains(dataCenter, StringComparer.OrdinalIgnoreCase);
-            if (ImGui.Checkbox($"{dataCenter}##caCompanionDc{dataCenter}", ref selected))
-            {
-                sweepDataCenters.RemoveAll(existing => existing.Equals(dataCenter, StringComparison.OrdinalIgnoreCase));
-                if (selected)
-                    sweepDataCenters.Add(dataCenter);
-            }
-
-            ImGui.SameLine();
-        }
-
-        ImGui.NewLine();
+        RouteScopeSelector.Draw(
+            "caCompanion",
+            routeScope,
+            updated => routeScope = updated,
+            ColMuted,
+            ColError);
     }
 
     private void DrawMarketDepth(MarketAppraisalRequest? request)
@@ -849,10 +793,10 @@ public sealed class CraftArchitectCompanionWindow : Window
             HqPolicy = HqPolicies[hqPolicyIndex],
             BuyThresholdUnitPrice = threshold,
             GilCap = gilCap,
-            Region = region,
-            WorldMode = worldMode,
-            SweepScope = sweepScope,
-            SweepDataCenters = sweepDataCenters.ToArray(),
+            Region = routeScope.Region,
+            WorldMode = routeScope.WorldMode,
+            SweepScope = routeScope.SweepScope,
+            SweepDataCenters = routeScope.SweepDataCenters.ToArray(),
         };
     }
 
@@ -874,10 +818,10 @@ public sealed class CraftArchitectCompanionWindow : Window
             HqPolicy = HqPolicies[hqPolicyIndex],
             BuyThresholdUnitPrice = 0,
             GilCap = 0,
-            Region = region,
-            WorldMode = worldMode,
-            SweepScope = sweepScope,
-            SweepDataCenters = sweepDataCenters.ToArray(),
+            Region = routeScope.Region,
+            WorldMode = routeScope.WorldMode,
+            SweepScope = routeScope.SweepScope,
+            SweepDataCenters = routeScope.SweepDataCenters.ToArray(),
         };
     }
 
@@ -1060,122 +1004,29 @@ public sealed class CraftArchitectCompanionWindow : Window
 
     private void DrawItemSearch()
     {
-        ImGui.TextColored(ColMuted, "Item");
-        ImGui.SetNextItemWidth(-1);
-        var previous = itemSearchBuffer;
-        if (ImGui.InputText("##caCompanionItemSearch", ref itemSearchBuffer, 160) &&
-            !string.Equals(previous, itemSearchBuffer, StringComparison.Ordinal))
-        {
-            if (selectedItem is not null &&
-                !selectedItem.Name.Equals(itemSearchBuffer.Trim(), StringComparison.OrdinalIgnoreCase))
-            {
-                selectedItem = null;
-                latestCraftQuote = null;
-                lastCraftQuoteDiagnosticFilePath = null;
-                appraisalResult = null;
-                craftQuoteStatus = "No craft quote yet.";
-            }
-        }
-
-        var resolved = ResolveSelectedItem();
-        if (resolved is not null)
-        {
-            selectedItem = resolved;
-            ImGui.TextColored(ColSuccess, $"{resolved.Name} ({resolved.ItemId})");
-            return;
-        }
-
-        if (itemSearchBuffer.Trim().Length < 2)
-        {
-            ImGui.TextColored(ColMuted, "Type at least 2 characters.");
-            return;
-        }
-
-        var results = GetItemSearchResults();
-        if (results.Count == 0)
-        {
-            ImGui.TextColored(ColMuted, "No matching items.");
-            return;
-        }
-
-        var resultHeight = MathF.Min(132f, results.Count * ImGui.GetTextLineHeightWithSpacing() + 10f);
-        ImGui.BeginChild("##caCompanionItemResults", new Vector2(0, resultHeight), true);
-        foreach (var result in results)
-        {
-            if (ImGui.Selectable($"{result.Name} ({result.ItemId})##caCompanionItem{result.ItemId}"))
-            {
-                selectedItem = result;
-                itemSearchBuffer = result.Name;
-                latestCraftQuote = null;
-                lastCraftQuoteDiagnosticFilePath = null;
-                appraisalResult = null;
-                craftQuoteStatus = "No craft quote yet.";
-                previewStatus = "Market preview has not been fetched.";
-            }
-        }
-
-        ImGui.EndChild();
+        ItemAutocompleteControl.Draw(
+            "caCompanion",
+            itemOptions,
+            itemAutocomplete,
+            ClearSelectionDependentState,
+            ColMuted,
+            ColSuccess,
+            ColError);
     }
 
-    private CompanionItemOption? ResolveSelectedItem()
+    private AcquisitionItemOption? ResolveSelectedItem() =>
+        ItemAutocompletePresenter.ResolveSelectedItem(
+            itemOptions,
+            itemAutocomplete.SearchBuffer,
+            itemAutocomplete.SelectedItem);
+
+    private void ClearSelectionDependentState()
     {
-        var search = itemSearchBuffer.Trim();
-        if (selectedItem is not null &&
-            selectedItem.Name.Equals(search, StringComparison.OrdinalIgnoreCase))
-        {
-            return selectedItem;
-        }
-
-        if (search.Length == 0)
-            return null;
-
-        CompanionItemOption? exactMatch = null;
-        foreach (var option in itemOptions)
-        {
-            if (!option.Name.Equals(search, StringComparison.OrdinalIgnoreCase))
-                continue;
-
-            if (exactMatch is not null)
-                return null;
-
-            exactMatch = option;
-        }
-
-        return exactMatch;
-    }
-
-    private IReadOnlyList<CompanionItemOption> GetItemSearchResults()
-    {
-        var search = itemSearchBuffer.Trim();
-        if (search.Length < 2)
-            return [];
-
-        return itemOptions
-            .Where(item => item.Name.Contains(search, StringComparison.OrdinalIgnoreCase))
-            .OrderBy(item => item.Name.StartsWith(search, StringComparison.OrdinalIgnoreCase) ? 0 : 1)
-            .ThenBy(item => item.Name.Length)
-            .ThenBy(item => item.Name)
-            .Take(10)
-            .ToList();
-    }
-
-    private static IReadOnlyList<CompanionItemOption> LoadItemOptions(IDataManager dataManager)
-    {
-        try
-        {
-            return dataManager.GetExcelSheet<LuminaItem>()
-                .Where(item => item.RowId > 0)
-                .Select(item => new CompanionItemOption(item.RowId, item.Name.ToString().Trim()))
-                .Where(item => !string.IsNullOrWhiteSpace(item.Name))
-                .GroupBy(item => item.ItemId)
-                .Select(group => group.First())
-                .OrderBy(item => item.Name)
-                .ToList();
-        }
-        catch
-        {
-            return [];
-        }
+        latestCraftQuote = null;
+        lastCraftQuoteDiagnosticFilePath = null;
+        appraisalResult = null;
+        craftQuoteStatus = "No craft quote yet.";
+        previewStatus = "Market preview has not been fetched.";
     }
 
     private static void DrawMetric(string label, string value, bool positive)
@@ -1190,29 +1041,6 @@ public sealed class CraftArchitectCompanionWindow : Window
         ImGui.TextColored(ColMuted, label);
         ImGui.SetNextItemWidth(-1);
         ImGui.InputText($"##caCompanion{label}", ref value, 128);
-    }
-
-    private static void DrawFullWidthCombo(
-        string label,
-        IReadOnlyList<string> options,
-        string current,
-        Action<string> onChanged)
-    {
-        ImGui.TextColored(ColMuted, label.Split('#')[0]);
-        ImGui.SetNextItemWidth(-1);
-        if (!ImGui.BeginCombo(label, string.IsNullOrWhiteSpace(current) ? "-" : current))
-            return;
-
-        foreach (var option in options)
-        {
-            var isSelected = option.Equals(current, StringComparison.OrdinalIgnoreCase);
-            if (ImGui.Selectable(option, isSelected) && !isSelected)
-                onChanged(option);
-            if (isSelected)
-                ImGui.SetItemDefaultFocus();
-        }
-
-        ImGui.EndCombo();
     }
 
     private static void DrawIndexedCombo(string label, IReadOnlyList<string> options, ref int index)
@@ -1289,6 +1117,4 @@ public sealed class CraftArchitectCompanionWindow : Window
             ? source
             : $"{source}, {material.CostSourceDetails}";
     }
-
-    private sealed record CompanionItemOption(uint ItemId, string Name);
 }

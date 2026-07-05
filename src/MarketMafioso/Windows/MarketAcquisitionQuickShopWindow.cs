@@ -7,7 +7,7 @@ using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Windowing;
 using Dalamud.Plugin.Services;
 using MarketMafioso.MarketAcquisition;
-using LuminaItem = Lumina.Excel.Sheets.Item;
+using MarketMafioso.Windows.AcquisitionWorkbench;
 
 namespace MarketMafioso.Windows;
 
@@ -19,11 +19,10 @@ public sealed class MarketAcquisitionQuickShopWindow : Window
     private readonly Func<bool> isBusy;
     private readonly Func<string> getStatus;
     private readonly Func<MarketAcquisitionQuickShopDraft, Task<bool>> createRoute;
-    private readonly IReadOnlyList<QuickShopItemOption> itemOptions;
+    private readonly IReadOnlyList<AcquisitionItemOption> itemOptions;
 
     private MarketAcquisitionQuickShopDraft draft = MarketAcquisitionQuickShopDraft.CreateDefault();
-    private string itemSearchBuffer = string.Empty;
-    private QuickShopItemOption? selectedItem;
+    private readonly ItemAutocompleteState itemAutocomplete = new();
     private string targetQuantityBuffer = string.Empty;
     private string maxQuantityBuffer = string.Empty;
     private string maxUnitPriceBuffer = string.Empty;
@@ -35,8 +34,6 @@ public sealed class MarketAcquisitionQuickShopWindow : Window
     private static readonly Vector4 ColSuccess = new(0.45f, 0.90f, 0.55f, 1f);
     private static readonly Vector4 ColError = new(1.00f, 0.40f, 0.40f, 1f);
     private static readonly Vector4 ColMuted = new(0.60f, 0.60f, 0.60f, 1f);
-    private static readonly string[] WorldModes = ["Recommended", "AllWorldSweep"];
-    private static readonly string[] SweepScopes = ["Region", "CurrentDataCenter", "DataCenters"];
     private static readonly string[] QuantityModes = ["TargetQuantity", "AllBelowThreshold"];
     private static readonly string[] HqPolicies = ["Either", "HqOnly", "NqOnly"];
 
@@ -56,7 +53,7 @@ public sealed class MarketAcquisitionQuickShopWindow : Window
         this.isBusy = isBusy;
         this.getStatus = getStatus;
         this.createRoute = createRoute;
-        itemOptions = LoadItemOptions(dataManager);
+        itemOptions = ItemAutocompleteControl.LoadItemOptions(dataManager);
 
         SizeConstraints = new WindowSizeConstraints
         {
@@ -169,70 +166,12 @@ public sealed class MarketAcquisitionQuickShopWindow : Window
 
     private void DrawRouteSettings()
     {
-        DrawFullWidthCombo("Region##quickShopRegion", MarketAcquisitionWorldCatalog.SupportedRegions.ToArray(), draft.Region, region =>
-        {
-            draft = draft.WithNextRevision() with
-            {
-                Region = region,
-                SweepDataCenters = [],
-            };
-        });
-
-        DrawFullWidthCombo("World Mode##quickShopWorldMode", WorldModes, draft.WorldMode, worldMode =>
-        {
-            draft = draft.WithNextRevision() with
-            {
-                WorldMode = worldMode,
-                SweepScope = worldMode == "AllWorldSweep" ? draft.SweepScope : "Region",
-            };
-        });
-
-        if (draft.WorldMode != "AllWorldSweep")
-            return;
-
-        DrawFullWidthCombo("Sweep Scope##quickShopSweepScope", SweepScopes, draft.SweepScope, sweepScope =>
-        {
-            draft = draft.WithNextRevision() with
-            {
-                SweepScope = sweepScope,
-                SweepDataCenters = sweepScope == "DataCenters" ? draft.SweepDataCenters : [],
-            };
-        });
-
-        if (draft.SweepScope == "DataCenters")
-            DrawDataCenterSelector();
-    }
-
-    private void DrawDataCenterSelector()
-    {
-        IReadOnlyDictionary<string, string[]> dataCenters;
-        try
-        {
-            dataCenters = MarketAcquisitionWorldCatalog.ResolveDataCenters(draft.Region);
-        }
-        catch (InvalidOperationException ex)
-        {
-            ImGui.TextColored(ColError, ex.Message);
-            return;
-        }
-
-        foreach (var dataCenter in dataCenters.Keys)
-        {
-            var selected = draft.SweepDataCenters.Contains(dataCenter, StringComparer.OrdinalIgnoreCase);
-            if (ImGui.Checkbox($"{dataCenter}##quickShopDc{dataCenter}", ref selected))
-            {
-                var selectedDataCenters = draft.SweepDataCenters
-                    .Where(existing => !existing.Equals(dataCenter, StringComparison.OrdinalIgnoreCase))
-                    .ToList();
-                if (selected)
-                    selectedDataCenters.Add(dataCenter);
-                draft = draft.WithNextRevision() with { SweepDataCenters = selectedDataCenters };
-            }
-
-            ImGui.SameLine();
-        }
-
-        ImGui.NewLine();
+        RouteScopeSelector.Draw(
+            "quickShop",
+            AcquisitionRouteScope.FromDraft(draft),
+            ApplyRouteScope,
+            ColMuted,
+            ColError);
     }
 
     private void DrawLineEditor()
@@ -286,9 +225,7 @@ public sealed class MarketAcquisitionQuickShopWindow : Window
             var line = draft.Lines[index];
             ImGui.TableNextRow();
             ImGui.TableNextColumn();
-            ImGui.TextUnformatted(string.IsNullOrWhiteSpace(line.ItemName)
-                ? $"Item {line.ItemId}"
-                : $"{line.ItemName} ({line.ItemId})");
+            ImGui.TextUnformatted(FormatQueuedItem(line));
             ImGui.TableNextColumn();
             ImGui.TextUnformatted(MarketAcquisitionQuantityModePresenter.FormatMode(line.QuantityMode));
             ImGui.TableNextColumn();
@@ -363,81 +300,25 @@ public sealed class MarketAcquisitionQuickShopWindow : Window
 
     private void DrawItemSearch()
     {
-        ImGui.TextColored(ColMuted, "Item");
-        ImGui.SetNextItemWidth(-1);
-        var previous = itemSearchBuffer;
-        if (ImGui.InputText("##quickShopItemSearch", ref itemSearchBuffer, 160) &&
-            !string.Equals(previous, itemSearchBuffer, StringComparison.Ordinal))
-        {
-            if (selectedItem is not null &&
-                !selectedItem.Name.Equals(itemSearchBuffer.Trim(), StringComparison.OrdinalIgnoreCase))
-            {
-                selectedItem = null;
-            }
-        }
-
-        var resolved = ResolveSelectedItem();
-        if (resolved is not null)
-        {
-            selectedItem = resolved;
-            ImGui.TextColored(ColSuccess, $"{resolved.Name} ({resolved.ItemId})");
-            return;
-        }
-
-        if (itemOptions.Count == 0)
-        {
-            ImGui.TextColored(ColError, "Item catalog unavailable.");
-            return;
-        }
-
-        if (itemSearchBuffer.Trim().Length < 2)
-        {
-            ImGui.TextColored(ColMuted, "Type at least 2 characters.");
-            return;
-        }
-
-        var results = GetItemSearchResults();
-        if (results.Count == 0)
-        {
-            ImGui.TextColored(ColMuted, "No matching items.");
-            return;
-        }
-
-        var resultHeight = MathF.Min(132f, results.Count * ImGui.GetTextLineHeightWithSpacing() + 10f);
-        ImGui.BeginChild("##quickShopItemResults", new Vector2(0, resultHeight), true);
-        foreach (var result in results)
-        {
-            if (ImGui.Selectable($"{result.Name} ({result.ItemId})##quickShopItem{result.ItemId}"))
-            {
-                selectedItem = result;
-                itemSearchBuffer = result.Name;
-            }
-        }
-
-        ImGui.EndChild();
+        ItemAutocompleteControl.Draw(
+            "quickShop",
+            itemOptions,
+            itemAutocomplete,
+            null,
+            ColMuted,
+            ColSuccess,
+            ColError);
     }
 
-    private static void DrawFullWidthCombo(
-        string label,
-        IReadOnlyList<string> options,
-        string current,
-        Action<string> onChanged)
+    private void ApplyRouteScope(AcquisitionRouteScope scope)
     {
-        ImGui.TextColored(ColMuted, label.Split('#')[0]);
-        ImGui.SetNextItemWidth(-1);
-        if (!ImGui.BeginCombo(label, string.IsNullOrWhiteSpace(current) ? "-" : current))
-            return;
-
-        foreach (var option in options)
+        draft = draft.WithNextRevision() with
         {
-            var isSelected = option.Equals(current, StringComparison.OrdinalIgnoreCase);
-            if (ImGui.Selectable(option, isSelected) && !isSelected)
-                onChanged(option);
-            if (isSelected)
-                ImGui.SetItemDefaultFocus();
-        }
-
-        ImGui.EndCombo();
+            Region = scope.Region,
+            WorldMode = scope.WorldMode,
+            SweepScope = scope.SweepScope,
+            SweepDataCenters = scope.SweepDataCenters.ToList(),
+        };
     }
 
     private static void DrawIndexedCombo(string label, IReadOnlyList<string> options, ref int index)
@@ -525,7 +406,7 @@ public sealed class MarketAcquisitionQuickShopWindow : Window
     }
 
     private bool HasLineInput() =>
-        !string.IsNullOrWhiteSpace(itemSearchBuffer) ||
+        !string.IsNullOrWhiteSpace(itemAutocomplete.SearchBuffer) ||
         !string.IsNullOrWhiteSpace(targetQuantityBuffer) ||
         !string.IsNullOrWhiteSpace(maxQuantityBuffer) ||
         !string.IsNullOrWhiteSpace(maxUnitPriceBuffer) ||
@@ -533,8 +414,8 @@ public sealed class MarketAcquisitionQuickShopWindow : Window
 
     private void ClearLineBuffers()
     {
-        itemSearchBuffer = string.Empty;
-        selectedItem = null;
+        itemAutocomplete.SearchBuffer = string.Empty;
+        itemAutocomplete.SelectedItem = null;
         targetQuantityBuffer = string.Empty;
         maxQuantityBuffer = string.Empty;
         maxUnitPriceBuffer = string.Empty;
@@ -544,65 +425,21 @@ public sealed class MarketAcquisitionQuickShopWindow : Window
     private static bool TryParseUInt(string value, out uint parsed) =>
         uint.TryParse(value?.Trim(), out parsed);
 
-    private QuickShopItemOption? ResolveSelectedItem()
+    private AcquisitionItemOption? ResolveSelectedItem() =>
+        ItemAutocompletePresenter.ResolveSelectedItem(
+            itemOptions,
+            itemAutocomplete.SearchBuffer,
+            itemAutocomplete.SelectedItem);
+
+    private string FormatQueuedItem(MarketAcquisitionQuickShopLineDraft line)
     {
-        var search = itemSearchBuffer.Trim();
-        if (selectedItem is not null &&
-            selectedItem.Name.Equals(search, StringComparison.OrdinalIgnoreCase))
-        {
-            return selectedItem;
-        }
+        if (string.IsNullOrWhiteSpace(line.ItemName))
+            return $"Item {line.ItemId}";
 
-        if (search.Length == 0)
-            return null;
-
-        QuickShopItemOption? exactMatch = null;
-        foreach (var option in itemOptions)
-        {
-            if (!option.Name.Equals(search, StringComparison.OrdinalIgnoreCase))
-                continue;
-
-            if (exactMatch is not null)
-                return null;
-
-            exactMatch = option;
-        }
-
-        return exactMatch;
-    }
-
-    private IReadOnlyList<QuickShopItemOption> GetItemSearchResults()
-    {
-        var search = itemSearchBuffer.Trim();
-        if (search.Length < 2)
-            return [];
-
-        return itemOptions
-            .Where(item => item.Name.Contains(search, StringComparison.OrdinalIgnoreCase))
-            .OrderBy(item => item.Name.StartsWith(search, StringComparison.OrdinalIgnoreCase) ? 0 : 1)
-            .ThenBy(item => item.Name.Length)
-            .ThenBy(item => item.Name)
-            .Take(10)
-            .ToList();
-    }
-
-    private static IReadOnlyList<QuickShopItemOption> LoadItemOptions(IDataManager dataManager)
-    {
-        try
-        {
-            return dataManager.GetExcelSheet<LuminaItem>()
-                .Where(item => item.RowId > 0)
-                .Select(item => new QuickShopItemOption(item.RowId, item.Name.ToString().Trim()))
-                .Where(item => !string.IsNullOrWhiteSpace(item.Name))
-                .GroupBy(item => item.ItemId)
-                .Select(group => group.First())
-                .OrderBy(item => item.Name)
-                .ToList();
-        }
-        catch
-        {
-            return [];
-        }
+        var option = itemOptions.FirstOrDefault(item => item.ItemId == line.ItemId);
+        return option is null
+            ? line.ItemName
+            : ItemAutocompletePresenter.FormatDisplayName(itemOptions, option);
     }
 
     private static string FormatRouteMode(MarketAcquisitionQuickShopDraft draft)
@@ -619,8 +456,6 @@ public sealed class MarketAcquisitionQuickShopWindow : Window
     }
 
     private static string FormatGil(uint gil) => $"{gil:N0} gil";
-
-    private sealed record QuickShopItemOption(uint ItemId, string Name);
 }
 
 public sealed record MarketAcquisitionQuickShopScope(
