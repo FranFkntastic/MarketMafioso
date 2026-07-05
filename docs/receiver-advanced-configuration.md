@@ -1,12 +1,12 @@
-# Receiver Advanced Configuration
+# Workshop Host Advanced Configuration
 
-This guide covers receiver setup beyond the local Docker quick start: reverse proxies, HTTPS, path prefixes, direct .NET hosting, and manual Docker setup.
+This guide covers Workshop Host setup beyond the local Docker quick start: reverse proxies, HTTPS, path prefixes, direct .NET hosting, and manual Docker setup.
 
 For the normal first install, use `docs/installation.md`.
 
 ## Reverse Proxy And HTTPS
 
-Use a reverse proxy when you want to reach the receiver from another machine or over the internet.
+Use a reverse proxy when you want to reach Workshop Host from another machine or over the internet.
 
 Common choices include:
 
@@ -15,7 +15,7 @@ Common choices include:
 - Cloudflare Tunnel;
 - another HTTPS-capable proxy you already operate.
 
-The receiver should still listen locally through Docker. The proxy should handle public HTTPS and forward traffic to:
+Workshop Host should still listen locally through Docker. The proxy should handle public HTTPS and forward traffic to:
 
 ```text
 http://localhost:5088
@@ -23,7 +23,7 @@ http://localhost:5088
 
 ## Root Domain Or Subdomain
 
-For a receiver hosted at the root of a domain or subdomain:
+For Workshop Host at the root of a domain or subdomain:
 
 ```text
 https://mmf.example.com/
@@ -42,9 +42,9 @@ The plugin Server URL should be:
 https://mmf.example.com/inventory
 ```
 
-## Path-Mounted Receiver
+## Path-Mounted Workshop Host
 
-For a receiver hosted under a path:
+For Workshop Host hosted under a path:
 
 ```text
 https://example.com/marketmafioso/
@@ -63,7 +63,7 @@ The plugin Server URL should be:
 https://example.com/marketmafioso/inventory
 ```
 
-The proxy must preserve the `/marketmafioso` path when forwarding requests. If the proxy strips the path but the receiver expects it, dashboard routes and API calls will not line up.
+The proxy must preserve the `/marketmafioso` path when forwarding requests. If the proxy strips the path but Workshop Host expects it, dashboard routes and API calls will not line up.
 
 ## Useful Samples
 
@@ -100,7 +100,7 @@ MarketMafioso__DashboardBootstrapUsername=marketmafioso
 MarketMafioso__DashboardBootstrapPassword=<random-dashboard-password>
 ```
 
-3. Start the receiver:
+3. Start Workshop Host:
 
 ```powershell
 docker compose -f release/self-host/config/compose.yaml up -d
@@ -142,7 +142,7 @@ After configuring a public endpoint, check:
 Invoke-RestMethod -Uri https://mmf.example.com/health
 ```
 
-For a path-mounted receiver:
+For a path-mounted Workshop Host:
 
 ```powershell
 Invoke-RestMethod -Uri https://example.com/marketmafioso/health

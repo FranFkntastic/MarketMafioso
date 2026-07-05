@@ -1,11 +1,15 @@
-# MarketMafioso Self-Hosted Receiver
+# MarketMafioso Workshop Host
 
-Start here after extracting the self-hosted receiver zip.
+Start here after extracting the self-hosted Workshop Host zip.
+
+The service is still named **receiver** in some scripts, routes, Docker image names, and older docs. Receiver is the compatibility/runtime name; Workshop Host is the user-facing suite backend name.
 
 This package is intentionally split by purpose:
 
 ```text
 README.md
+Install Workshop Host.bat
+Update Workshop Host.bat
 Install Receiver.bat
 Update Receiver.bat
 config/
@@ -20,19 +24,19 @@ scripts/
   Update-MarketMafiosoReceiver.ps1
 ```
 
-There is no compilable source code in this package. The receiver runs from the published Docker image.
+There is no compilable source code in this package. Workshop Host runs from the published MarketMafioso server Docker image.
 
-## What The Receiver Does
+## What Workshop Host Does
 
-The receiver is a small background server. It saves inventory reports in a local SQLite database and gives you a browser dashboard at `http://localhost:5088/`.
+Workshop Host is a small private background server. It saves inventory reports in a local SQLite database and gives you a browser dashboard at `http://localhost:5088/`.
 
-You do not need the receiver for basic plugin use. Install it only if you want stored inventory history, the browser dashboard, receiver diagnostics, or Workshop Host integrations.
+You do not need Workshop Host for basic plugin use. Install it only if you want stored inventory history, the browser dashboard, diagnostics, or suite integrations.
 
-The receiver is also the current Workshop Host runtime for suite integrations. MarketMafioso checks `http://localhost:5088/api/capabilities` before using backend-only features such as Craft Architect quote lookup. Current receiver builds advertise `craft.appraise`; older or custom hosts that do not list it will make MMF keep using manual craft costs or Craft Architect quote-file imports.
+MarketMafioso checks `http://localhost:5088/api/capabilities` before using backend-only features such as Craft Architect quote lookup. Current Workshop Host builds advertise `craft.appraise`; older receiver-era or custom hosts that do not list it will make MMF keep using manual craft costs or Craft Architect quote-file imports.
 
 ## Install Docker First
 
-The receiver uses Docker so you do not have to install .NET, database tools, or web-server dependencies by hand.
+Workshop Host uses Docker so you do not have to install .NET, database tools, or web-server dependencies by hand.
 
 On Windows:
 
@@ -55,12 +59,12 @@ If those commands fail, Docker Desktop is not ready yet. Start Docker Desktop, w
 
 ## First Install
 
-Keep this extracted folder somewhere permanent. The receiver stores its config and database here.
+Keep this extracted folder somewhere permanent. Workshop Host stores its config and database here.
 
 Double-click:
 
 ```text
-Install Receiver.bat
+Install Workshop Host.bat
 ```
 
 The launcher runs the PowerShell installer with the right execution-policy setting for this package.
@@ -77,12 +81,12 @@ The installer wizard:
 
 - checks that Docker is installed and running;
 - asks for a dashboard username;
-- asks whether the receiver is local-only;
+- asks whether Workshop Host is local-only;
 - creates `config\marketmafioso.env`;
 - generates the plugin/server API key;
 - generates the first dashboard password;
-- downloads the receiver image;
-- starts the receiver;
+- downloads the server image;
+- starts Workshop Host;
 - waits for the health check;
 - checks Workshop Host capabilities and quote endpoint auth/validation;
 - prints the values to paste into the plugin.
@@ -129,7 +133,7 @@ backups\
 Double-click:
 
 ```text
-Update Receiver.bat
+Update Workshop Host.bat
 ```
 
 Or run:
@@ -138,7 +142,7 @@ Or run:
 .\scripts\Update-MarketMafiosoReceiver.ps1
 ```
 
-The update script backs up `data\marketmafioso\marketmafioso.db`, downloads the latest server image, restarts the receiver, waits for the health check, and checks Workshop Host quote auth/validation.
+The update script backs up `data\marketmafioso\marketmafioso.db`, downloads the latest server image, restarts Workshop Host, waits for the health check, and checks Workshop Host quote auth/validation.
 
 Use:
 
@@ -161,7 +165,7 @@ Use the advanced guide for remote hosting, HTTPS, reverse proxy, and path-prefix
 
 ## Smoke Checks
 
-Receiver health:
+Workshop Host health:
 
 ```powershell
 Invoke-RestMethod -Uri http://localhost:5088/health
@@ -176,7 +180,7 @@ Invoke-RestMethod `
   -Headers @{ "X-Api-Key" = "<client-api-key>" }
 ```
 
-Current receiver builds should include `craft.appraise`. If it is missing, the receiver is older or custom-built without Craft Architect quote support.
+Current Workshop Host builds should include `craft.appraise`. If it is missing, the host is older or custom-built without Craft Architect quote support.
 
 The installer and updater also smoke-test `/api/craft/appraise` auth and schema validation without doing a live appraisal.
 

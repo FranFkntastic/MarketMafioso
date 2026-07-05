@@ -3,9 +3,9 @@
 MarketMafioso has two pieces:
 
 - the Dalamud plugin client, installed through a third-party plugin repository;
-- an optional private receiver, installed separately when you want saved inventory history and the browser dashboard.
+- optional private Workshop Host, installed separately when you want saved inventory history and the browser dashboard.
 
-The receiver is the current MarketMafioso runtime for **Workshop Host**, the self-hosted backend tier for private state and automation. The plugin can open without the receiver, and Workshop Logistics can be used locally. Inventory history, dashboard browsing, and report uploads require the receiver.
+Workshop Host is the self-hosted backend tier for private state and automation. Its current MarketMafioso runtime is still named **receiver** in scripts, routes, and Docker image names for compatibility. The plugin can open without Workshop Host, and Workshop Logistics can be used locally. Inventory history, dashboard browsing, and report uploads require Workshop Host.
 
 For the architecture boundary between standalone plugin features, Craft Architect quote-file handoffs, and self-hosted automation, see `docs/workshop-host.md`.
 
@@ -32,35 +32,35 @@ In game:
 
 Until the repository URL and release ZIP are published, MarketMafioso is not available through the standard third-party install path. Development plugin builds are only for local contributor testing and are documented separately in `docs/dev-plugin-deployment.md`.
 
-## Decide Whether You Need The Receiver
+## Decide Whether You Need Workshop Host
 
-You do not need the receiver for basic plugin use.
+You do not need Workshop Host for basic plugin use.
 
-Use the receiver if you want:
+Use Workshop Host if you want:
 
 - stored inventory snapshots;
 - a browser dashboard for inventory history;
 - local control of the database and backups.
 - future self-hosted automation and cross-tool state under the Workshop Host tier.
 
-Skip the receiver only if you want Workshop Logistics and do not care about inventory history or dashboard storage.
+Skip Workshop Host only if you want Workshop Logistics and do not care about inventory history or dashboard storage.
 
-## Download The Receiver Package
+## Download The Workshop Host Package
 
 Skip this section if you only want the plugin.
 
-For the receiver dashboard:
+For the Workshop Host dashboard:
 
 1. Open the MarketMafioso GitHub **Releases** page: `https://github.com/FranFkntastic/MarketMafioso/releases`.
 2. Download `marketmafioso-self-host-<version>.zip` from the latest release.
 3. Right-click the zip and choose **Extract All**.
-4. Move the extracted folder somewhere permanent, such as `Documents\MarketMafioso Receiver`.
+4. Move the extracted folder somewhere permanent, such as `Documents\MarketMafioso Workshop Host`.
 
-Do not run the receiver from inside the zip preview window. Extract it first so the receiver can keep its config, database, and backups next to the installer.
+Do not run Workshop Host from inside the zip preview window. Extract it first so it can keep its config, database, and backups next to the installer.
 
 ## Install Docker Desktop
 
-The receiver runs in Docker. Docker is the app that keeps the receiver packaged so you do not need to install .NET, database tools, or web-server dependencies by hand.
+Workshop Host runs in Docker. Docker is the app that keeps it packaged so you do not need to install .NET, database tools, or web-server dependencies by hand.
 
 On Windows, the easiest path is Docker Desktop:
 
@@ -80,9 +80,9 @@ docker compose version
 
 If either command is not found, Docker Desktop is not installed, is not running, or PowerShell was opened before Docker finished installing. Start Docker Desktop, open a new PowerShell window, and try again.
 
-## Install The Receiver
+## Install Workshop Host
 
-Download or extract the self-hosted receiver bundle, then keep it in a permanent folder. Do not run it from a temporary downloads folder if you care about keeping stored inventory history.
+Download or extract the self-hosted Workshop Host bundle, then keep it in a permanent folder. Do not run it from a temporary downloads folder if you care about keeping stored inventory history.
 
 The bundle folder is:
 
@@ -90,10 +90,10 @@ The bundle folder is:
 release/self-host/
 ```
 
-Open the extracted receiver folder and double-click:
+Open the extracted folder and double-click:
 
 ```text
-Install Receiver.bat
+Install Workshop Host.bat
 ```
 
 That launcher runs the PowerShell installer with the right execution-policy setting for this package.
@@ -110,12 +110,12 @@ The installer wizard will:
 
 - confirm Docker is available;
 - ask for a dashboard username;
-- ask whether the receiver is local-only;
+- ask whether Workshop Host is local-only;
 - create `config\marketmafioso.env`;
 - generate a private plugin API key;
 - generate the first dashboard password;
-- download the MarketMafioso receiver image;
-- start the receiver container;
+- download the MarketMafioso server image;
+- start the Workshop Host container;
 - wait for the health check;
 - print the values you need for the plugin and dashboard.
 
@@ -133,9 +133,9 @@ release/self-host/config/marketmafioso.env
 release/self-host/data/marketmafioso/marketmafioso.db
 ```
 
-`config/marketmafioso.env` contains generated secrets. `data/marketmafioso/marketmafioso.db` is the receiver database. Keep both.
+`config/marketmafioso.env` contains generated secrets. `data/marketmafioso/marketmafioso.db` is the Workshop Host database. Keep both.
 
-## Connect The Plugin To The Receiver
+## Connect The Plugin To Workshop Host
 
 In `/mmf` settings, set:
 
@@ -154,9 +154,9 @@ http://localhost:5088/
 
 Use the dashboard username and password printed by the installer. They are also saved in `config/marketmafioso.env`.
 
-## Receiver Settings
+## Workshop Host Settings
 
-The generated `config/marketmafioso.env` is the receiver's configuration file. Most users should leave it alone after setup, but it is important because it contains the API key, dashboard login bootstrap values, storage location, and retention limits.
+The generated `config/marketmafioso.env` is the Workshop Host configuration file. Most users should leave it alone after setup, but it is important because it contains the API key, dashboard login bootstrap values, storage location, and retention limits.
 
 Detailed setting explanations live in:
 
@@ -175,14 +175,14 @@ MarketMafioso__DashboardBootstrapUsername
 MarketMafioso__DashboardBootstrapPassword
 ```
 
-## Updating The Receiver
+## Updating Workshop Host
 
-From the receiver bundle:
+From the Workshop Host bundle:
 
 Double-click:
 
 ```text
-Update Receiver.bat
+Update Workshop Host.bat
 ```
 
 Or run PowerShell:
@@ -191,7 +191,7 @@ Or run PowerShell:
 .\scripts\Update-MarketMafiosoReceiver.ps1
 ```
 
-The update script backs up the SQLite database, downloads the latest receiver image, restarts the container, and waits for the health check.
+The update script backs up the SQLite database, downloads the latest server image, restarts the container, waits for the health check, and checks Workshop Host quote auth/validation.
 
 ## Backups
 
@@ -203,11 +203,11 @@ release/self-host/data/
 release/self-host/backups/
 ```
 
-Losing `config/marketmafioso.env` means you may need to reconfigure the plugin API key and dashboard login. Losing `data/` means losing stored receiver history.
+Losing `config/marketmafioso.env` means you may need to reconfigure the plugin API key and dashboard login. Losing `data/` means losing stored Workshop Host history.
 
 ## Smoke Checks
 
-Check receiver health:
+Check Workshop Host health:
 
 ```powershell
 Invoke-RestMethod -Uri http://localhost:5088/health
@@ -219,7 +219,7 @@ Check Docker container status:
 docker compose -f config\compose.yaml ps
 ```
 
-Check receiver logs from the receiver bundle folder:
+Check logs from the Workshop Host bundle folder:
 
 ```powershell
 docker compose -f config\compose.yaml logs marketmafioso
@@ -228,7 +228,7 @@ docker compose -f config\compose.yaml logs marketmafioso
 If the plugin cannot send data:
 
 - confirm Docker Desktop is running;
-- confirm the receiver container is running;
+- confirm the Workshop Host container is running;
 - confirm the Server URL ends with `/inventory`;
 - confirm the plugin Client API Key matches `MarketMafioso__ClientApiKey`;
 - confirm `http://localhost:5088/health` works in the same Windows session.

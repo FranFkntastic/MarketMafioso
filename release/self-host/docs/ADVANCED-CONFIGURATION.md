@@ -1,4 +1,4 @@
-# Advanced Receiver Configuration
+# Advanced Workshop Host Configuration
 
 Use this guide only after the local Docker install works.
 
@@ -31,7 +31,7 @@ Plugin Server URL:
 https://mmf.example.com/inventory
 ```
 
-## Path-Mounted Receiver
+## Path-Mounted Workshop Host
 
 For:
 

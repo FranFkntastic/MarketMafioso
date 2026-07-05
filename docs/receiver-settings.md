@@ -1,6 +1,6 @@
-# Receiver Settings Reference
+# Workshop Host Settings Reference
 
-The receiver is the current Workshop Host runtime for MarketMafioso. It reads settings from environment variables. In the Docker quick-start bundle, those variables live in `config/marketmafioso.env`.
+Workshop Host is the private backend runtime for MarketMafioso. It still uses receiver-era routes, image names, and setting file names for compatibility. It reads settings from environment variables. In the Docker quick-start bundle, those variables live in `config/marketmafioso.env`.
 
 Do not share this file publicly. It contains the plugin API key and dashboard bootstrap password.
 
@@ -14,7 +14,7 @@ Example:
 ASPNETCORE_URLS=http://0.0.0.0:8080
 ```
 
-This tells the receiver which address to listen on inside the container. The Docker bundle maps host port `5088` to container port `8080`, so most users should not change this.
+This tells Workshop Host which address to listen on inside the container. The Docker bundle maps host port `5088` to container port `8080`, so most users should not change this.
 
 Why it matters: if this does not match the Docker port mapping, the container can start but the dashboard will not be reachable.
 
@@ -26,7 +26,7 @@ Example:
 MarketMafioso__PublicOrigin=http://localhost:5088
 ```
 
-This is the public browser address for the receiver. The receiver uses it when it returns dashboard links after a plugin upload.
+This is the public browser address for Workshop Host. The server uses it when it returns dashboard links after a plugin upload.
 
 Why it matters: if this points to the wrong address, uploads may still work but links shown by the plugin can open the wrong site.
 
@@ -38,21 +38,21 @@ Example:
 MarketMafioso__BasePath=
 ```
 
-Leave this blank for normal local installs. Use it only when an advanced reverse proxy hosts the receiver under a path such as `/marketmafioso`.
+Leave this blank for normal local installs. Use it only when an advanced reverse proxy hosts Workshop Host under a path such as `/marketmafioso`.
 
-Why it matters: the receiver uses this to understand URLs when it is not hosted at the root of a domain.
+Why it matters: Workshop Host uses this to understand URLs when it is not hosted at the root of a domain.
 
 ### `MarketMafioso__StorageLabel`
 
 Example:
 
 ```text
-MarketMafioso__StorageLabel=self-hosted receiver storage
+MarketMafioso__StorageLabel=self-hosted Workshop Host storage
 ```
 
-This is a friendly label shown in receiver-generated output.
+This is a friendly label shown in server-generated output.
 
-Why it matters: it helps identify which receiver stored a report when you run more than one environment.
+Why it matters: it helps identify which Workshop Host stored a report when you run more than one environment.
 
 ## Plugin API Key Settings
 
@@ -66,7 +66,7 @@ MarketMafioso__RequireApiKey=true
 
 This requires the plugin to send the shared API key when it uploads inventory data.
 
-Why it matters: keep this enabled for any receiver you care about. Turning it off allows uploads without the shared key.
+Why it matters: keep this enabled for any Workshop Host you care about. Turning it off allows uploads without the shared key.
 
 ### `MarketMafioso__ClientApiKey`
 
@@ -76,7 +76,7 @@ Example:
 MarketMafioso__ClientApiKey=<generated key>
 ```
 
-This is the shared secret between the plugin and the receiver. The same value must be pasted into the plugin's Client API Key setting.
+This is the shared secret between the plugin and Workshop Host. The same value must be pasted into the plugin's Client API Key setting.
 
 Why it matters: if it does not match, the plugin cannot send reports. Treat it like a password.
 
@@ -128,9 +128,9 @@ Example:
 MarketMafioso__DatabasePath=/data/marketmafioso.db
 ```
 
-This is where the receiver stores its SQLite database inside the container. The Docker bundle maps `/data` to `release/self-host/data/marketmafioso/` on your machine.
+This is where Workshop Host stores its SQLite database inside the container. The Docker bundle maps `/data` to `release/self-host/data/marketmafioso/` on your machine.
 
-Why it matters: this database is the durable receiver history. Back up the mapped host folder, not only the container.
+Why it matters: this database is the durable Workshop Host history. Back up the mapped host folder, not only the container.
 
 ### `MarketMafioso__RawJsonRetentionCount`
 
@@ -166,7 +166,7 @@ MarketMafioso__DiagnosticsRetentionCount=5000
 
 This controls how many diagnostic events are retained.
 
-Why it matters: diagnostics help troubleshoot failed uploads, dashboard behavior, and receiver state. Higher values are useful while testing, but they keep more rows in the database.
+Why it matters: diagnostics help troubleshoot failed uploads, dashboard behavior, and Workshop Host state. Higher values are useful while testing, but they keep more rows in the database.
 
 ## Dashboard Login Settings
 
@@ -180,7 +180,7 @@ MarketMafioso__RequireDashboardAuth=true
 
 This requires browser users to log in before viewing the dashboard.
 
-Why it matters: keep this enabled unless the receiver is only reachable on a fully trusted local machine.
+Why it matters: keep this enabled unless Workshop Host is only reachable on a fully trusted local machine.
 
 ### `MarketMafioso__DashboardBootstrapUsername`
 
@@ -220,11 +220,11 @@ Why it matters: shorter sessions are safer on shared machines; longer sessions a
 
 ## Changing Settings Safely
 
-1. Stop the receiver container.
+1. Stop the Workshop Host container.
 2. Back up `config/marketmafioso.env` and `data/`.
 3. Edit `config/marketmafioso.env`.
-4. Start the receiver again.
+4. Start Workshop Host again.
 5. Check `/health`.
 6. Send a test report from the plugin.
 
-If a setting change breaks the receiver, restore the previous `config/marketmafioso.env` and restart the container.
+If a setting change breaks Workshop Host, restore the previous `config/marketmafioso.env` and restart the container.

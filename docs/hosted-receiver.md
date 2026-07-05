@@ -1,10 +1,10 @@
-# Hosted Receiver
+# Hosted Workshop Host
 
-MarketMafioso can send inventory snapshots to a hosted or self-hosted ASP.NET receiver instead of requiring the local backend during normal use. This receiver is the current Workshop Host runtime; it remains optional for ordinary plugin use.
+MarketMafioso can send inventory snapshots to a hosted or self-hosted ASP.NET Workshop Host instead of requiring a local backend during normal use. The current deployed environment is still named the dev receiver in scripts and infrastructure; it remains optional for ordinary plugin use.
 
 ## Environments
 
-The receiver API is environment-scoped, not Craft Architect branch-scoped.
+The Workshop Host API is environment-scoped, not Craft Architect branch-scoped.
 
 ```text
 Dev receiver:        https://dev.xivcraftarchitect.com/marketmafioso/api/inventory
@@ -12,9 +12,9 @@ Production receiver: not deployed yet
 Local fallback:      http://localhost:8080/inventory
 ```
 
-Stored snapshots are local to the receiver environment. A snapshot sent to dev is not visible in production, and a production snapshot is not visible in dev unless it is explicitly exported and imported later.
+Stored snapshots are local to the Workshop Host environment. A snapshot sent to dev is not visible in production, and a production snapshot is not visible in dev unless it is explicitly exported and imported later.
 
-MarketMafioso does not provide public multi-user inventory hosting. Users who want their own backend can run the released server package themselves and manage their own service, domain, TLS, and backups.
+MarketMafioso does not provide public multi-user inventory hosting. Users who want their own backend can run the released Workshop Host package themselves and manage their own service, domain, TLS, and backups.
 
 ## Plugin Configuration
 
@@ -26,11 +26,11 @@ The plugin settings window has endpoint preset buttons:
 
 The URL remains editable. The plugin does not change existing saved URLs automatically.
 
-Hosted receivers require a client API key for plugin-to-server traffic. Set the same value in the plugin-wide `Settings` tab's `Client API Key` field and in `MarketMafioso__ClientApiKey` on the server. This one key is used for inventory ingest and machine-read report routes.
+Hosted Workshop Host environments require a client API key for plugin-to-server traffic. Set the same value in the plugin-wide `Settings` tab's `Client API Key` field and in `MarketMafioso__ClientApiKey` on the server. This one key is used for inventory ingest and machine-read report routes unless narrower scoped keys are configured.
 
 ## Server Configuration
 
-Run the hosted receiver behind Caddy with these environment variables:
+Run hosted Workshop Host behind Caddy with these environment variables:
 
 ```text
 ASPNETCORE_URLS=http://127.0.0.1:5088
@@ -50,13 +50,13 @@ MarketMafioso__DashboardBootstrapPassword=<dashboard-password>
 
 `/health` remains public for uptime checks. Inventory ingestion, `/api/capabilities`, and `/api/reports...` machine-read routes require the client key. Browser dashboard routes use app-managed login sessions backed by the receiver SQLite database.
 
-The hosted receiver exposes `/api/capabilities` for Workshop Host feature discovery. Current source builds advertise `craft.appraise` by default because the receiver directly references Craft Architect Core. Treat absent capabilities from older or custom receivers as unavailable rather than as errors.
+Hosted Workshop Host exposes `/api/capabilities` for feature discovery. Current source builds advertise `craft.appraise` by default because the server directly references Craft Architect Core. Treat absent capabilities from older or custom hosts as unavailable rather than as errors.
 
 The dev dashboard username is fixed to `marketmafioso`; the password is stored in GitHub Actions as `MARKETMAFIOSO_DEV_BASIC_AUTH_PASSWORD`. Bootstrap credentials create the first local dashboard admin user only when no dashboard users exist.
 
 ## Dev VPS Deployment
 
-The `Deploy MarketMafioso Dev Receiver to VPS` GitHub Actions workflow publishes `MarketMafioso.Server` as a self-contained Linux app and deploys it to the dev receiver:
+The `Deploy MarketMafioso Dev Receiver to VPS` GitHub Actions workflow publishes `MarketMafioso.Server` as a self-contained Linux app and deploys it to the dev Workshop Host environment:
 
 ```text
 https://dev.xivcraftarchitect.com/marketmafioso/
@@ -99,7 +99,7 @@ Because the server now hard-references Craft Architect Core, CI or deployment ru
 
 The dev workflow also smoke-tests `/api/capabilities` for `craft.appraise` and checks quote endpoint auth/schema validation without doing a live appraisal.
 
-Server deployment is intentionally separate from plugin deployment. A backend deploy updates the VPS receiver only; it does not copy a DLL into Dalamud. Use `Deploy-PluginDev.ps1` when the in-game plugin needs to change too.
+Server deployment is intentionally separate from plugin deployment. A backend deploy updates the VPS Workshop Host only; it does not copy a DLL into Dalamud. Use `Deploy-PluginDev.ps1` when the in-game plugin needs to change too.
 
 When you just want the tooling to choose based on the files you changed, use the changed-surface router:
 
@@ -147,13 +147,13 @@ dev.xivcraftarchitect.com {
 }
 ```
 
-Keep the `/marketmafioso` prefix when proxying to the app. The receiver uses `MarketMafioso__BasePath=/marketmafioso` to route those requests correctly.
+Keep the `/marketmafioso` prefix when proxying to the app. Workshop Host uses `MarketMafioso__BasePath=/marketmafioso` to route those requests correctly.
 
 The deployed Caddy fragment is installed as `root:root` with mode `644` so the Caddy service user can import it during reload. Keep the runtime environment file at `600`; that file contains API keys.
 
 ## Data Storage
 
-The receiver stores structured inventory data in SQLite:
+Workshop Host stores structured inventory data in SQLite:
 
 ```text
 src/MarketMafioso.Server/data/marketmafioso.db
@@ -199,4 +199,4 @@ Invoke-RestMethod `
   -Headers @{ "X-Api-Key" = "<secret>" }
 ```
 
-The response should include inventory/read diagnostics capabilities and `craft.appraise` on current builds. If `craft.appraise` is absent, the receiver is older or custom-built without Craft Architect quote support.
+The response should include inventory/read diagnostics capabilities and `craft.appraise` on current builds. If `craft.appraise` is absent, the host is older or custom-built without Craft Architect quote support.

@@ -12,19 +12,19 @@ Most users only need two steps:
 https://raw.githubusercontent.com/FranFkntastic/DalamudPlugins/main/pluginmaster.json
 ```
 
-2. **Optional receiver dashboard:** download `marketmafioso-self-host-<version>.zip` from the GitHub [Releases](https://github.com/FranFkntastic/MarketMafioso/releases) page, extract it somewhere permanent, install Docker Desktop if needed, then double-click `Install Receiver.bat`.
+2. **Optional Workshop Host dashboard:** download `marketmafioso-self-host-<version>.zip` from the GitHub [Releases](https://github.com/FranFkntastic/MarketMafioso/releases) page, extract it somewhere permanent, install Docker Desktop if needed, then double-click `Install Workshop Host.bat`.
 
 Full step-by-step instructions live in [docs/installation.md](docs/installation.md).
 
 ## What You Get
 
-### Works Without The Receiver
+### Works Without Workshop Host
 
 - **Workshop Logistics** builds Free Company workshop material queues, checks player and retainer stock, withdraws available materials from retainers, can execute the MarketMafioso queue natively, and can still send the prepared queue to VIWI Workshoppa.
 
-### With The Optional Receiver
+### With Optional Workshop Host
 
-- The optional receiver stores inventory snapshots in SQLite and serves the browser dashboard.
+- Workshop Host stores inventory snapshots in SQLite and serves the browser dashboard.
 - Retainer cache data makes those stored snapshots more useful after you have refreshed retainer data in game.
 
 ## Opening The Plugin
@@ -35,15 +35,15 @@ Open MarketMafioso in game:
 /mmf
 ```
 
-To use inventory history, install the receiver first, then paste the receiver Server URL and Client API Key into MarketMafioso settings.
+To use inventory history, install Workshop Host first, then paste the printed Server URL and Client API Key into MarketMafioso settings.
 
 ## Notes
 
 Retainer inventory is only as fresh as the last cache refresh or retainer window scan. For the best Workshop Logistics results, refresh the retainer cache before planning a restock.
 
-The receiver backend can be run privately or self-hosted from the server package. MarketMafioso does not provide public multi-user inventory hosting; users who want persistent hosted inventory storage should run their own receiver instance.
+Workshop Host can be run privately or self-hosted from the server package. MarketMafioso does not provide public multi-user inventory hosting; users who want persistent hosted inventory storage should run their own host instance.
 
-Installation notes for the plugin and optional receiver live in [docs/installation.md](docs/installation.md). Self-hosting notes live in [docs/self-hosting.md](docs/self-hosting.md).
+Installation notes for the plugin and optional Workshop Host live in [docs/installation.md](docs/installation.md). Self-hosting notes live in [docs/self-hosting.md](docs/self-hosting.md).
 
 ## Acknowledgements
 

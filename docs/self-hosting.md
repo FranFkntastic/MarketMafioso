@@ -1,17 +1,17 @@
 # Self-Hosting Workshop Host
 
-MarketMafioso's receiver is the current Workshop Host runtime: a private ASP.NET Core service with a bundled dashboard and a local SQLite database. It is meant for self-hosted or small trusted deployments, not public multi-user hosting.
+Workshop Host is MarketMafioso's private ASP.NET Core backend with a bundled dashboard and a local SQLite database. It is meant for self-hosted or small trusted deployments, not public multi-user hosting.
 
-The receiver enables persistent inventory snapshots, the inventory browser, and diagnostics. The in-game plugin can still run without it, but server-backed inventory history and dashboard features will be unavailable.
+Workshop Host enables persistent inventory snapshots, the inventory browser, diagnostics, and private suite integrations. The in-game plugin can still run without it, but server-backed inventory history and dashboard features will be unavailable.
 
-Workshop Host is the broader suite boundary for private state and automation. The receiver package keeps its existing name during the transition because its current routes, installer scripts, Docker image, and settings still use receiver terminology.
+The current package still keeps receiver-era names in scripts, routes, Docker image, and some setting filenames for compatibility.
 
-Craft Architect quote lookup is now part of the default source build. The receiver directly references Craft Architect Core and advertises `craft.appraise` from `/api/capabilities`. MMF still checks the capability first so older or custom hosts can degrade to quote-file imports or manual craft costs.
+Craft Architect quote lookup is now part of the default source build. Workshop Host directly references Craft Architect Core and advertises `craft.appraise` from `/api/capabilities`. MMF still checks the capability first so older or custom hosts can degrade to quote-file imports or manual craft costs.
 
 ## Requirements
 
 - Docker with Docker Compose, or .NET 10 for direct hosting.
-- A random client API key shared between the plugin and receiver.
+- A random client API key shared between the plugin and Workshop Host.
 - A dashboard username/password for browser login.
 - Persistent storage for the SQLite database.
 
@@ -21,7 +21,7 @@ For Windows users who do not already have Docker, install Docker Desktop first. 
 https://docs.docker.com/desktop/setup/install/windows-install/
 ```
 
-Start Docker Desktop before running receiver setup, then confirm Docker is available:
+Start Docker Desktop before running Workshop Host setup, then confirm Docker is available:
 
 ```powershell
 docker --version
@@ -66,7 +66,7 @@ MarketMafioso__DashboardBootstrapUsername=marketmafioso
 MarketMafioso__DashboardBootstrapPassword=<random-dashboard-password>
 ```
 
-3. Start the receiver from the repo-local compose file:
+3. Start Workshop Host from the repo-local compose file:
 
 ```powershell
 docker compose -f release/self-host/config/compose.yaml up -d
@@ -137,7 +137,7 @@ MarketMafioso__DashboardBootstrapUsername=<dashboard-user>
 MarketMafioso__DashboardBootstrapPassword=<dashboard-password>
 ```
 
-The bootstrap dashboard user is created only when the receiver database has no dashboard users. Changing the bootstrap password later does not rotate an existing user's password.
+The bootstrap dashboard user is created only when the Workshop Host database has no dashboard users. Changing the bootstrap password later does not rotate an existing user's password.
 
 Scoped machine keys are optional. Most installs should leave them blank and use `MarketMafioso__ClientApiKey`, which remains the compatibility key for all implemented non-dashboard machine routes.
 
@@ -153,7 +153,7 @@ Reverse proxy, HTTPS, path-prefix, manual Docker, and direct .NET hosting notes 
 
 ## Backups
 
-The receiver state lives in one SQLite database. Back up the configured `MarketMafioso__DatabasePath` file while the service is stopped, or use SQLite's online backup tooling if you need hot backups.
+Workshop Host state lives in one SQLite database. Back up the configured `MarketMafioso__DatabasePath` file while the service is stopped, or use SQLite's online backup tooling if you need hot backups.
 
 The original uploaded JSON is intentionally pruned after `RawJsonRetentionCount` snapshots. Structured inventory rows remain until `SnapshotRetentionCount` pruning removes older snapshots.
 
@@ -185,7 +185,7 @@ Invoke-RestMethod `
   -Headers @{ "X-Api-Key" = "<client-api-key>" }
 ```
 
-Current source builds should include `craft.appraise`. If it is missing, you are likely talking to an older or custom receiver, and MMF can still use manual craft costs or Craft Architect quote-file imports. When `craft.appraise` is present, MMF's Craft Architect Companion can use the Workshop Host quote API after you enable it in the companion window.
+Current source builds should include `craft.appraise`. If it is missing, you are likely talking to an older or custom host, and MMF can still use manual craft costs or Craft Architect quote-file imports. When `craft.appraise` is present, MMF's Craft Architect Companion can use the Workshop Host quote API after you enable it in the companion window.
 
 The quote endpoint exists at:
 

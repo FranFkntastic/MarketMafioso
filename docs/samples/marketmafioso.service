@@ -1,5 +1,5 @@
 [Unit]
-Description=MarketMafioso self-hosted receiver
+Description=MarketMafioso Workshop Host
 After=network-online.target
 Wants=network-online.target
 
@@ -16,7 +16,7 @@ Environment=MarketMafioso__RequireApiKey=true
 Environment=MarketMafioso__ClientApiKey=replace-with-a-random-client-key
 Environment=MarketMafioso__BasePath=/marketmafioso
 Environment=MarketMafioso__PublicOrigin=https://marketmafioso.example.com
-Environment=MarketMafioso__StorageLabel=self-hosted receiver storage
+Environment=MarketMafioso__StorageLabel=self-hosted Workshop Host storage
 Environment=MarketMafioso__DatabasePath=/var/lib/marketmafioso/marketmafioso.db
 Environment=MarketMafioso__RawJsonRetentionCount=20
 Environment=MarketMafioso__SnapshotRetentionCount=500

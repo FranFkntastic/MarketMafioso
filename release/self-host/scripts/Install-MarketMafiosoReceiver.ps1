@@ -187,8 +187,9 @@ $configDir = Join-Path $root "config"
 $envPath = Join-Path $configDir "marketmafioso.env"
 $composePath = Join-Path $configDir "compose.yaml"
 
-Write-Section "MarketMafioso Receiver Installer"
-Write-Host "This wizard installs the private receiver backend on this computer."
+Write-Section "MarketMafioso Workshop Host Installer"
+Write-Host "This wizard installs the private Workshop Host backend on this computer."
+Write-Host "The underlying service is still named receiver in scripts, routes, and Docker image names for compatibility."
 Write-Host "It will create config\marketmafioso.env and data\marketmafioso\marketmafioso.db."
 
 if ((Test-Path -LiteralPath $envPath) -and -not $Force) {
@@ -212,7 +213,7 @@ if ([string]::IsNullOrWhiteSpace($PublicOrigin)) {
         $PublicOrigin = "http://localhost:5088"
     }
     else {
-        $localOnly = Read-YesNo -Prompt "Will you use the receiver only on this computer?" -DefaultYes $true
+        $localOnly = Read-YesNo -Prompt "Will you use Workshop Host only on this computer?" -DefaultYes $true
         if ($localOnly) {
             $PublicOrigin = "http://localhost:5088"
         }
@@ -242,7 +243,7 @@ $lines = @(
     "",
     "MarketMafioso__BasePath=",
     "MarketMafioso__PublicOrigin=$PublicOrigin",
-    "MarketMafioso__StorageLabel=self-hosted receiver storage",
+    "MarketMafioso__StorageLabel=self-hosted Workshop Host storage",
     "MarketMafioso__DatabasePath=/data/marketmafioso.db",
     "",
     "MarketMafioso__RawJsonRetentionCount=20",
@@ -288,7 +289,7 @@ if ($healthPassed) {
     Invoke-WorkshopHostSmoke -BaseUrl "http://localhost:5088" -ClientApiKey $clientKey
 }
 else {
-    Write-Warning "The receiver was started, but the health check did not pass within 60 seconds. Check Docker Desktop and run: docker compose -f config\compose.yaml logs marketmafioso"
+    Write-Warning "Workshop Host was started, but the health check did not pass within 60 seconds. Check Docker Desktop and run: docker compose -f config\compose.yaml logs marketmafioso"
 }
 
 Write-Host "Dashboard: $PublicOrigin/"
@@ -297,5 +298,5 @@ Write-Host "Plugin Client API Key: $clientKey"
 Write-Host "Dashboard username: $DashboardUsername"
 Write-Host "Dashboard password: $dashboardPassword"
 Write-Host ""
-Write-Host "Keep config\marketmafioso.env and data\. They contain the receiver configuration and database."
+Write-Host "Keep config\marketmafioso.env and data\. They contain the Workshop Host configuration and database."
 Write-Host "For setting explanations, read docs\RECEIVER-SETTINGS.md."

@@ -170,7 +170,7 @@ if ($healthPassed) {
     Invoke-WorkshopHostSmoke -BaseUrl "http://localhost:5088" -ClientApiKey $clientKey
 }
 else {
-    Write-Warning "The receiver was updated, but the health check did not pass within 60 seconds. Check Docker Desktop and run: docker compose -f config\compose.yaml logs marketmafioso"
+    Write-Warning "Workshop Host was updated, but the health check did not pass within 60 seconds. Check Docker Desktop and run: docker compose -f config\compose.yaml logs marketmafioso"
 }
 
-Write-Host "MarketMafioso receiver update complete."
+Write-Host "MarketMafioso Workshop Host update complete."

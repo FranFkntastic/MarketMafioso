@@ -1,6 +1,6 @@
-# Receiver Settings Reference
+# Workshop Host Settings Reference
 
-The installer writes receiver settings to:
+The installer writes Workshop Host settings to:
 
 ```text
 config\marketmafioso.env
@@ -12,13 +12,13 @@ Do not share this file publicly. It contains the plugin API key and dashboard bo
 
 ### `ASPNETCORE_URLS`
 
-The address the receiver listens on inside Docker. Leave this as `http://0.0.0.0:8080` unless you also change the Docker port mapping.
+The address Workshop Host listens on inside Docker. Leave this as `http://0.0.0.0:8080` unless you also change the Docker port mapping.
 
 ### `MarketMafioso__PublicOrigin`
 
 The browser address users should open for the dashboard. For local installs this is `http://localhost:5088`.
 
-This matters because the receiver uses it when returning dashboard links to the plugin.
+This matters because Workshop Host uses it when returning dashboard links to the plugin.
 
 ### `MarketMafioso__BasePath`
 
@@ -26,7 +26,7 @@ Blank for normal local installs. Advanced path-mounted hosting can set this to a
 
 ### `MarketMafioso__StorageLabel`
 
-A friendly label for this receiver's storage. Useful if you run more than one receiver.
+A friendly label for this Workshop Host storage. Useful if you run more than one host.
 
 ## Plugin API Key Settings
 
@@ -67,7 +67,7 @@ The SQLite database path inside Docker. In the bundle, `/data/marketmafioso.db` 
 data\marketmafioso\marketmafioso.db
 ```
 
-This database is the durable receiver history.
+This database is the durable Workshop Host history.
 
 ### `MarketMafioso__RawJsonRetentionCount`
 
@@ -85,7 +85,7 @@ How many diagnostic events to keep.
 
 ### `MarketMafioso__RequireDashboardAuth`
 
-Requires browser login before viewing the dashboard. Keep this `true` unless the receiver is only reachable on a fully trusted local machine.
+Requires browser login before viewing the dashboard. Keep this `true` unless Workshop Host is only reachable on a fully trusted local machine.
 
 ### `MarketMafioso__DashboardBootstrapUsername`
 
@@ -103,9 +103,9 @@ How long a browser dashboard session stays valid before requiring login again.
 
 ## Changing Settings Safely
 
-1. Stop the receiver.
+1. Stop Workshop Host.
 2. Back up `config\marketmafioso.env` and `data\`.
 3. Edit `config\marketmafioso.env`.
-4. Start the receiver again.
+4. Start Workshop Host again.
 5. Check `http://localhost:5088/health`.
 6. Send a test report from the plugin.
