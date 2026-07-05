@@ -3,10 +3,12 @@ using System.Text;
 using System.Text.Json;
 using System.Globalization;
 using Microsoft.Extensions.Primitives;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using MarketMafioso.Server;
 using MarketMafioso.Server.Auth;
 using MarketMafioso.Server.Migration;
 using MarketMafioso.Server.Sqlite;
+using MarketMafioso.Server.WorkshopHost;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddSingleton<SqliteConnectionFactory>();
@@ -19,6 +21,7 @@ builder.Services.AddSingleton<InventoryReportStore>();
 builder.Services.AddSingleton<JsonSnapshotImporter>();
 builder.Services.AddSingleton<MarketAcquisitionRequestStore>();
 builder.Services.AddSingleton<DiagnosticEventStore>();
+builder.Services.TryAddSingleton<IWorkshopHostCraftQuoteService, UnavailableWorkshopHostCraftQuoteService>();
 builder.Services.AddHttpClient();
 
 var app = builder.Build();
@@ -84,6 +87,82 @@ app.MapGet("/health", () => Results.Ok(new
     ok = true,
     utc = DateTimeOffset.UtcNow,
 }));
+app.MapGet("/api/capabilities", (
+    IWorkshopHostCraftQuoteService craftQuoteService) =>
+{
+    var capabilities = new List<WorkshopHostCapability>
+    {
+        new()
+        {
+            Id = "inventory.write",
+            SupportedSchemaVersions = [1],
+            RequiredScopes = ["inventory:write"],
+        },
+        new()
+        {
+            Id = "inventory.read",
+            SupportedSchemaVersions = [1],
+            RequiredScopes = ["inventory:read"],
+        },
+        new()
+        {
+            Id = "diagnostics.read",
+            SupportedSchemaVersions = [1],
+            RequiredScopes = ["diagnostics:read"],
+        },
+    };
+
+    if (enableMarketAcquisition)
+    {
+        capabilities.Add(new WorkshopHostCapability
+        {
+            Id = "acquisition.queue",
+            SupportedSchemaVersions = [1],
+            RequiredScopes = ["acquisition:queue"],
+        });
+    }
+
+    if (craftQuoteService.IsAvailable)
+    {
+        capabilities.Add(new WorkshopHostCapability
+        {
+            Id = "craft.appraise",
+            SupportedSchemaVersions = [1],
+            RequiredScopes = ["craft:quote"],
+        });
+    }
+
+    return Results.Ok(new WorkshopHostCapabilitiesResponse
+    {
+        ServerTimeUtc = DateTimeOffset.UtcNow,
+        Capabilities = capabilities,
+    });
+});
+app.MapPost("/api/craft/appraise", async (
+    CraftAppraisalRequest quoteRequest,
+    IWorkshopHostCraftQuoteService quoteService,
+    CancellationToken token) =>
+{
+    if (quoteRequest.SchemaVersion != 1)
+        return Results.BadRequest(new { error = "unsupported_schema_version" });
+    if (quoteRequest.ItemId == 0)
+        return Results.BadRequest(new { error = "item_id_required" });
+    if (quoteRequest.Quantity == 0)
+        return Results.BadRequest(new { error = "quantity_required" });
+    if (!quoteService.IsAvailable)
+    {
+        return Results.Json(
+            new { error = "craft_appraisal_unavailable" },
+            statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
+
+    var quote = await quoteService.AppraiseAsync(quoteRequest, token);
+    return quote == null
+        ? Results.NotFound(new { error = "craft_appraisal_not_found" })
+        : Results.Ok(string.IsNullOrWhiteSpace(quote.Source)
+            ? quote with { Source = "WorkshopHostCraftArchitect" }
+            : quote);
+});
 
 app.MapGet("/api/acquisition/requests", async (
     MarketAcquisitionRequestStore acquisitionStore,
@@ -1219,6 +1298,9 @@ static ApiKeyPurpose RequiredApiKeyPurpose(HttpRequest request, bool requireApiK
     if (IsReportsApiRead(request))
         return ApiKeyPurpose.Read;
 
+    if (IsWorkshopHostMachineApi(request))
+        return ApiKeyPurpose.Read;
+
     if (IsInventoryPost(request))
         return ApiKeyPurpose.Ingest;
 
@@ -1233,6 +1315,12 @@ static bool IsInventoryPost(HttpRequest request) =>
 static bool IsReportsApiRead(HttpRequest request) =>
     HttpMethods.IsGet(request.Method) &&
     request.Path.StartsWithSegments("/api/reports");
+
+static bool IsWorkshopHostMachineApi(HttpRequest request) =>
+    (HttpMethods.IsGet(request.Method) &&
+     request.Path.Equals("/api/capabilities", StringComparison.OrdinalIgnoreCase)) ||
+    (HttpMethods.IsPost(request.Method) &&
+     request.Path.Equals("/api/craft/appraise", StringComparison.OrdinalIgnoreCase));
 
 static bool IsAcquisitionCreate(HttpRequest request) =>
     HttpMethods.IsPost(request.Method) &&
