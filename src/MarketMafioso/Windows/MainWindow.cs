@@ -16,6 +16,7 @@ using MarketMafioso.Automation.Retainers;
 using MarketMafioso.Automation.Travel;
 using MarketMafioso.CraftArchitectCompanion;
 using MarketMafioso.MarketAcquisition;
+using MarketMafioso.Windows.AcquisitionWorkbench;
 using MarketMafioso.WorkshopPrep;
 
 namespace MarketMafioso.Windows;
@@ -214,7 +215,19 @@ public class MainWindow : Window, IDisposable
             () => acquisitionRequestBusy,
             () => acquisitionStatus,
             acquisitionPlanSource.FetchListingsAsync,
-            CreateMonitoredQuickShopRouteAsync);
+            CreateMonitoredQuickShopRouteAsync,
+            () => AcquisitionWorkbenchRouteSnapshotPresenter.Build(
+                acquisitionPlan,
+                marketAcquisitionRouteRunner,
+                acquisitionRequestBusy,
+                claimedAcquisitionRequest is not null && CanPrepareAcquisitionPlanForStatus(claimedAcquisitionRequest.Status)),
+            PrepareMarketAcquisitionPlanAsync,
+            StartGuidedRouteAsync,
+            PauseGuidedRouteAsync,
+            ResumeGuidedRouteAsync,
+            StopGuidedRouteAsync,
+            RestartGuidedRouteAsync,
+            ReprepareGuidedRouteAsync);
         CraftArchitectCompanion = new CraftArchitectCompanionWindow(
             config,
             dataManager,
@@ -2106,29 +2119,17 @@ public class MainWindow : Window, IDisposable
         if (marketAcquisitionRouteRunner.IsPaused)
         {
             if (ImGuiUi.Button("Resume", true))
-            {
-                marketAcquisitionRouteRunner.Resume();
-                ReportGuidedRouteProgress();
-            }
+                _ = ResumeGuidedRouteAsync();
         }
         else
         {
             if (ImGuiUi.Button("Pause", marketAcquisitionRouteRunner.IsRunning))
-            {
-                marketBoardApproachService.StopNavigation();
-                marketAcquisitionRouteRunner.Pause();
-                ReportGuidedRouteProgress();
-            }
+                _ = PauseGuidedRouteAsync();
         }
 
         ImGui.SameLine();
         if (ImGuiUi.Button("Stop", marketAcquisitionRouteRunner.IsRunning || marketAcquisitionRouteRunner.IsPaused))
-        {
-            marketBoardApproachService.StopNavigation();
-            marketAcquisitionRouteRunner.Stop();
-            ClearMarketBoardAutomationState();
-            ReportGuidedRouteProgress();
-        }
+            _ = StopGuidedRouteAsync();
 
         ImGui.SameLine();
         if (ImGuiUi.Button("Restart", canStart && marketAcquisitionRouteRunner.CanRestart))
@@ -2401,6 +2402,30 @@ public class MainWindow : Window, IDisposable
             lastGuidedRouteProgressReportKey = null;
             ReportGuidedRouteProgress();
         });
+    }
+
+    private Task PauseGuidedRouteAsync()
+    {
+        marketBoardApproachService.StopNavigation();
+        marketAcquisitionRouteRunner.Pause();
+        ReportGuidedRouteProgress();
+        return Task.CompletedTask;
+    }
+
+    private Task ResumeGuidedRouteAsync()
+    {
+        marketAcquisitionRouteRunner.Resume();
+        ReportGuidedRouteProgress();
+        return Task.CompletedTask;
+    }
+
+    private Task StopGuidedRouteAsync()
+    {
+        marketBoardApproachService.StopNavigation();
+        marketAcquisitionRouteRunner.Stop();
+        ClearMarketBoardAutomationState();
+        ReportGuidedRouteProgress();
+        return Task.CompletedTask;
     }
 
     private Task RestartGuidedRouteAsync()

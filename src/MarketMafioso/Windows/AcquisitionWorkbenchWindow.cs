@@ -21,6 +21,14 @@ public sealed class AcquisitionWorkbenchWindow : Window
     private readonly Func<string> getStatus;
     private readonly Func<string, uint, int, CancellationToken, Task<IReadOnlyList<MarketAcquisitionListing>>> fetchListings;
     private readonly Func<MarketAcquisitionQuickShopDraft, Task<bool>> createRoute;
+    private readonly Func<AcquisitionWorkbenchRouteSnapshot> getRouteSnapshot;
+    private readonly Func<Task> prepareRoute;
+    private readonly Func<bool, Task> startRoute;
+    private readonly Func<Task> pauseRoute;
+    private readonly Func<Task> resumeRoute;
+    private readonly Func<Task> stopRoute;
+    private readonly Func<Task> restartRoute;
+    private readonly Func<Task> reprepareRoute;
     private readonly IReadOnlyList<AcquisitionItemOption> itemOptions;
     private readonly ObservedMarketSnapshotCache observedMarketSnapshots = new(64, TimeSpan.FromMinutes(15));
     private readonly Dictionary<string, WorkbenchStockState> stockStates = new(StringComparer.Ordinal);
@@ -52,7 +60,15 @@ public sealed class AcquisitionWorkbenchWindow : Window
         Func<bool> isBusy,
         Func<string> getStatus,
         Func<string, uint, int, CancellationToken, Task<IReadOnlyList<MarketAcquisitionListing>>> fetchListings,
-        Func<MarketAcquisitionQuickShopDraft, Task<bool>> createRoute)
+        Func<MarketAcquisitionQuickShopDraft, Task<bool>> createRoute,
+        Func<AcquisitionWorkbenchRouteSnapshot> getRouteSnapshot,
+        Func<Task> prepareRoute,
+        Func<bool, Task> startRoute,
+        Func<Task> pauseRoute,
+        Func<Task> resumeRoute,
+        Func<Task> stopRoute,
+        Func<Task> restartRoute,
+        Func<Task> reprepareRoute)
         : base("Acquisition Workbench##MarketAcquisitionWorkbench", ImGuiWindowFlags.None)
     {
         this.config = config;
@@ -62,6 +78,14 @@ public sealed class AcquisitionWorkbenchWindow : Window
         this.getStatus = getStatus;
         this.fetchListings = fetchListings;
         this.createRoute = createRoute;
+        this.getRouteSnapshot = getRouteSnapshot;
+        this.prepareRoute = prepareRoute;
+        this.startRoute = startRoute;
+        this.pauseRoute = pauseRoute;
+        this.resumeRoute = resumeRoute;
+        this.stopRoute = stopRoute;
+        this.restartRoute = restartRoute;
+        this.reprepareRoute = reprepareRoute;
         itemOptions = ItemAutocompleteControl.LoadItemOptions(dataManager);
 
         SizeConstraints = new WindowSizeConstraints
@@ -210,9 +234,7 @@ public sealed class AcquisitionWorkbenchWindow : Window
                 DrawAppraisePane();
                 break;
             case WorkbenchPane.Run:
-                DrawPlaceholder(isRouteActive()
-                    ? "A guided route is active. Route controls are still shown in the Market Acquisition tab."
-                    : "No prepared route is active.");
+                DrawRunPane();
                 break;
             case WorkbenchPane.Recover:
                 DrawPlaceholder("No stopped route is available for recovery.");
@@ -300,6 +322,134 @@ public sealed class AcquisitionWorkbenchWindow : Window
             ImGui.SameLine();
             if (ImGui.SmallButton($"Remove##workbenchRemove{index}"))
                 RemoveLine(index);
+        }
+
+        ImGui.EndTable();
+    }
+
+    private void DrawRunPane()
+    {
+        var snapshot = getRouteSnapshot();
+        ImGui.TextColored(GetRouteStateColor(snapshot.State), snapshot.StatusMessage);
+
+        if (snapshot.HasPreparedPlan)
+        {
+            ImGui.TextColored(
+                ColMuted,
+                $"Prepared {snapshot.PreparedWorldCount:N0} world(s), {snapshot.PreparedQuantity:N0} item(s), {FormatGil(snapshot.PreparedGil)}.");
+        }
+        else
+        {
+            ImGui.TextColored(ColMuted, "No market plan prepared.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(snapshot.ActiveWorld))
+        {
+            ImGui.TextColored(
+                ColHeader,
+                $"Active world: {snapshot.ActiveWorld} - planned {snapshot.ActiveWorldPlannedQuantity:N0} item(s), {FormatGil(snapshot.ActiveWorldPlannedGil)}");
+        }
+
+        DrawRunActions(snapshot);
+        ImGui.Spacing();
+        DrawRouteRows(snapshot);
+    }
+
+    private void DrawRunActions(AcquisitionWorkbenchRouteSnapshot snapshot)
+    {
+        if (ImGuiUi.Button("Prepare Plan", snapshot.CanPrepare))
+            _ = prepareRoute();
+        ImGui.SameLine();
+        if (ImGuiUi.Button("Start Route", snapshot.CanStart))
+            _ = startRoute(false);
+        ImGui.SameLine();
+        if (ImGuiUi.Button("Start Diagnostics", snapshot.CanStartWithDiagnostics))
+            _ = startRoute(true);
+
+        if (snapshot.CanResume)
+        {
+            if (ImGuiUi.Button("Resume", true))
+                _ = resumeRoute();
+        }
+        else
+        {
+            if (ImGuiUi.Button("Pause", snapshot.CanPause))
+                _ = pauseRoute();
+        }
+
+        ImGui.SameLine();
+        if (ImGuiUi.Button("Stop", snapshot.CanStop))
+            _ = stopRoute();
+        ImGui.SameLine();
+        if (ImGuiUi.Button("Restart", snapshot.CanRestart))
+            _ = restartRoute();
+        ImGui.SameLine();
+        if (ImGuiUi.Button("Re-prepare Route", snapshot.CanReprepare))
+            _ = reprepareRoute();
+    }
+
+    private static void DrawRouteRows(AcquisitionWorkbenchRouteSnapshot snapshot)
+    {
+        if (snapshot.RouteRows.Count == 0)
+        {
+            ImGui.TextColored(ColMuted, "Start after preparing a plan. Routes travel, validate live listings, and purchase safe rows automatically.");
+            return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(snapshot.LastDiagnosticFilePath))
+            ImGui.TextColored(ColMuted, $"Diagnostics: {snapshot.LastDiagnosticFilePath}");
+
+        var tableHeight = MathF.Max(170f, ImGui.GetContentRegionAvail().Y - 24f);
+        var flags = ImGuiUi.InteractiveTableFlags | ImGuiTableFlags.ScrollX;
+        if (!ImGui.BeginTable("AcquisitionWorkbenchRouteRows", 6, flags, new Vector2(0, tableHeight)))
+            return;
+
+        ImGui.TableSetupColumn("World", ImGuiTableColumnFlags.WidthFixed, 130);
+        ImGui.TableSetupColumn("Data Center", ImGuiTableColumnFlags.WidthFixed, 96);
+        ImGui.TableSetupColumn("Lines", ImGuiTableColumnFlags.WidthStretch);
+        ImGui.TableSetupColumn("State", ImGuiTableColumnFlags.WidthFixed, 94);
+        ImGui.TableSetupColumn("Result", ImGuiTableColumnFlags.WidthFixed, 120);
+        ImGui.TableSetupColumn("Notes", ImGuiTableColumnFlags.WidthStretch);
+        ImGui.TableHeadersRow();
+
+        foreach (var row in snapshot.RouteRows)
+        {
+            ImGui.TableNextRow();
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(row.WorldName);
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(row.DataCenter);
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(row.RouteLines);
+            if (!string.IsNullOrWhiteSpace(row.LineMix))
+            {
+                if (ImGui.IsItemHovered())
+                    ImGui.SetTooltip(row.LineMix);
+            }
+
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(row.State);
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(row.Result);
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(row.Notes);
+
+            foreach (var line in row.Lines)
+            {
+                ImGui.TableNextRow();
+                ImGui.TableNextColumn();
+                ImGui.TextColored(ColMuted, "  Item");
+                ImGui.TableNextColumn();
+                ImGui.TextColored(ColMuted, line.Source);
+                ImGui.TableNextColumn();
+                ImGui.TextColored(ColMuted, line.Item);
+                ImGui.TableNextColumn();
+                ImGui.TextUnformatted(line.State);
+                ImGui.TableNextColumn();
+                ImGui.TextUnformatted($"{line.Planned} / {line.Discovered} / {line.Bought}");
+                ImGui.TableNextColumn();
+                ImGui.TextColored(line.State.Equals("Blocked", StringComparison.OrdinalIgnoreCase) ? ColError : ColMuted, line.Notes);
+            }
         }
 
         ImGui.EndTable();
@@ -801,6 +951,16 @@ public sealed class AcquisitionWorkbenchWindow : Window
             StockAvailabilityPanelSeverity.Success => ColSuccess,
             StockAvailabilityPanelSeverity.Warning => new Vector4(1.00f, 0.76f, 0.32f, 1f),
             StockAvailabilityPanelSeverity.Error => ColError,
+            _ => ColMuted,
+        };
+
+    private static Vector4 GetRouteStateColor(string state) =>
+        state switch
+        {
+            "Running" => ColSuccess,
+            "Paused" => ColHeader,
+            "Stopped" or "Failed" => ColError,
+            "Completed" => ColSuccess,
             _ => ColMuted,
         };
 
