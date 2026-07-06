@@ -21,6 +21,8 @@ public sealed class AcquisitionWorkbenchRouteSnapshotPresenterTests
         Assert.False(snapshot.CanStop);
         Assert.False(snapshot.CanRestart);
         Assert.False(snapshot.CanReprepare);
+        Assert.Equal("No route is available to recover.", snapshot.RecoverySummary);
+        Assert.Equal("Sync and prepare a route before recovery controls are useful.", snapshot.RecoveryDetail);
     }
 
     [Fact]
@@ -75,6 +77,9 @@ public sealed class AcquisitionWorkbenchRouteSnapshotPresenterTests
         Assert.True(snapshot.CanStop);
         Assert.Equal("Siren", snapshot.ActiveWorld);
         Assert.Equal(2, snapshot.RouteRows.Count);
+        Assert.Equal("Route is running.", snapshot.RecoverySummary);
+        Assert.Contains("Pause", snapshot.RecoveryDetail, StringComparison.Ordinal);
+        Assert.Contains("stop", snapshot.RecoveryDetail, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -107,6 +112,9 @@ public sealed class AcquisitionWorkbenchRouteSnapshotPresenterTests
         Assert.False(snapshot.CanPause);
         Assert.True(snapshot.CanResume);
         Assert.True(snapshot.CanStop);
+        Assert.Equal("Route is paused.", snapshot.RecoverySummary);
+        Assert.Contains("Resume", snapshot.RecoveryDetail, StringComparison.Ordinal);
+        Assert.Contains("stop", snapshot.RecoveryDetail, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -155,6 +163,9 @@ public sealed class AcquisitionWorkbenchRouteSnapshotPresenterTests
         Assert.True(snapshot.CanRestart);
         Assert.True(snapshot.CanReprepare);
         Assert.Equal(1, snapshot.CompletedOrProbedWorldCount);
+        Assert.Equal("1 world has already been completed or probed.", snapshot.RecoverySummary);
+        Assert.Contains("Re-prepare", snapshot.RecoveryDetail, StringComparison.Ordinal);
+        Assert.Contains("Restart", snapshot.RecoveryDetail, StringComparison.Ordinal);
     }
 
     private static MarketAcquisitionRouteRunner CreateRunner() =>

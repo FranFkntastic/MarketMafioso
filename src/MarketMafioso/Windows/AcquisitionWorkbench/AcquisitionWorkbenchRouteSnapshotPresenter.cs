@@ -23,6 +23,7 @@ public static class AcquisitionWorkbenchRouteSnapshotPresenter
         var activeStop = routeRunner.ActiveStop;
         var routeRows = MarketAcquisitionRouteTablePresenter.BuildRows(routeRunner.Stops);
         var completedOrProbedWorldCount = routeRunner.CompletedOrProbedStops.Count;
+        var recovery = BuildRecoveryStatus(routeRunner, completedOrProbedWorldCount);
 
         return new AcquisitionWorkbenchRouteSnapshot
         {
@@ -51,8 +52,52 @@ public static class AcquisitionWorkbenchRouteSnapshotPresenter
             LastDiagnosticFilePath = routeRunner.LastDiagnosticFilePath,
             LastRunSummary = routeRunner.LastRunSummary,
             LatestWorldCompletionSummary = routeRunner.LatestWorldCompletionSummary,
+            RecoverySummary = recovery.Summary,
+            RecoveryDetail = recovery.Detail,
         };
     }
+
+    private static AcquisitionWorkbenchRecoveryStatus BuildRecoveryStatus(
+        MarketAcquisitionRouteRunner routeRunner,
+        int completedOrProbedWorldCount)
+    {
+        if (!routeRunner.CanRestart)
+        {
+            return new AcquisitionWorkbenchRecoveryStatus(
+                "No route is available to recover.",
+                "Sync and prepare a route before recovery controls are useful.");
+        }
+
+        if (routeRunner.IsPaused)
+        {
+            return new AcquisitionWorkbenchRecoveryStatus(
+                "Route is paused.",
+                "Resume to continue from the current stop, or stop the route before restarting or re-preparing it.");
+        }
+
+        if (routeRunner.IsRunning)
+        {
+            return new AcquisitionWorkbenchRecoveryStatus(
+                "Route is running.",
+                "Pause to hold the current stop, or stop the route if the current run should be abandoned.");
+        }
+
+        if (completedOrProbedWorldCount > 0)
+        {
+            return new AcquisitionWorkbenchRecoveryStatus(
+                $"{FormatWorldCount(completedOrProbedWorldCount)} already been completed or probed.",
+                "Re-prepare Route skips those worlds and starts the remaining plan. Restart starts the full prepared route again.");
+        }
+
+        return new AcquisitionWorkbenchRecoveryStatus(
+            "A prepared route can be restarted.",
+            "Restart starts the full prepared route again. Re-prepare becomes available after at least one world has been completed or probed.");
+    }
+
+    private static string FormatWorldCount(int count) =>
+        count == 1
+            ? "1 world has"
+            : $"{count:N0} worlds have";
 }
 
 public sealed record AcquisitionWorkbenchRouteSnapshot
@@ -80,4 +125,8 @@ public sealed record AcquisitionWorkbenchRouteSnapshot
     public string? LastDiagnosticFilePath { get; init; }
     public MarketAcquisitionRouteRunSummary? LastRunSummary { get; init; }
     public MarketAcquisitionWorldCompletionSummary? LatestWorldCompletionSummary { get; init; }
+    public string RecoverySummary { get; init; } = string.Empty;
+    public string RecoveryDetail { get; init; } = string.Empty;
 }
+
+public sealed record AcquisitionWorkbenchRecoveryStatus(string Summary, string Detail);

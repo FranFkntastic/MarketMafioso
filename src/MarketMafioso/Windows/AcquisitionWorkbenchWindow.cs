@@ -237,7 +237,7 @@ public sealed class AcquisitionWorkbenchWindow : Window
                 DrawRunPane();
                 break;
             case WorkbenchPane.Recover:
-                DrawPlaceholder("No stopped route is available for recovery.");
+                DrawRecoverPane();
                 break;
         }
 
@@ -355,6 +355,20 @@ public sealed class AcquisitionWorkbenchWindow : Window
         DrawRouteRows(snapshot);
     }
 
+    private void DrawRecoverPane()
+    {
+        var snapshot = getRouteSnapshot();
+        ImGui.TextColored(GetRouteStateColor(snapshot.State), snapshot.RecoverySummary);
+        ImGui.TextWrapped(snapshot.RecoveryDetail);
+
+        ImGui.Spacing();
+        DrawRecoveryStatusTable(snapshot);
+        ImGui.Spacing();
+        DrawRunActions(snapshot);
+        ImGui.Spacing();
+        DrawRouteRows(snapshot);
+    }
+
     private void DrawRunActions(AcquisitionWorkbenchRouteSnapshot snapshot)
     {
         if (ImGuiUi.Button("Prepare Plan", snapshot.CanPrepare))
@@ -453,6 +467,52 @@ public sealed class AcquisitionWorkbenchWindow : Window
         }
 
         ImGui.EndTable();
+    }
+
+    private static void DrawRecoveryStatusTable(AcquisitionWorkbenchRouteSnapshot snapshot)
+    {
+        if (!ImGui.BeginTable("AcquisitionWorkbenchRecoveryStatus", 4, ImGuiTableFlags.SizingStretchSame))
+            return;
+
+        DrawRecoveryMetric("Route State", snapshot.State);
+        DrawRecoveryMetric(
+            "Prepared Plan",
+            snapshot.HasPreparedPlan
+                ? $"{snapshot.PreparedWorldCount:N0} world(s), {snapshot.PreparedQuantity:N0} item(s)"
+                : "None");
+        DrawRecoveryMetric(
+            "Completed / Probed",
+            snapshot.CompletedOrProbedWorldCount > 0
+                ? snapshot.CompletedOrProbedWorldCount.ToString("N0")
+                : "None");
+        DrawRecoveryMetric(
+            "Active World",
+            string.IsNullOrWhiteSpace(snapshot.ActiveWorld)
+                ? "None"
+                : $"{snapshot.ActiveWorld}, {snapshot.ActiveWorldPlannedQuantity:N0} item(s)");
+
+        ImGui.EndTable();
+
+        if (snapshot.LatestWorldCompletionSummary is { } latestWorld)
+        {
+            ImGui.TextColored(
+                ColMuted,
+                $"Last world: {latestWorld.WorldName} - bought {latestWorld.PurchasedQuantity:N0}, spent {FormatGil(latestWorld.SpentGil)}.");
+        }
+
+        if (snapshot.LastRunSummary is { } runSummary)
+        {
+            ImGui.TextColored(
+                ColMuted,
+                $"Last run: bought {runSummary.PurchasedQuantity:N0}, spent {FormatGil(runSummary.SpentGil)}, completed {runSummary.CompletedWorldCount:N0} world(s).");
+        }
+    }
+
+    private static void DrawRecoveryMetric(string label, string value)
+    {
+        ImGui.TableNextColumn();
+        ImGui.TextColored(ColMuted, label);
+        ImGui.TextUnformatted(value);
     }
 
     private void DrawAppraisePane()
@@ -605,11 +665,6 @@ public sealed class AcquisitionWorkbenchWindow : Window
             activePane = pane;
         if (active)
             ImGui.PopStyleColor();
-    }
-
-    private static void DrawPlaceholder(string message)
-    {
-        ImGui.TextColored(ColMuted, message);
     }
 
     private async Task SubmitAsync()
