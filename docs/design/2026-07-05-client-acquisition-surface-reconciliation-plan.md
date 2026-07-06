@@ -2,6 +2,8 @@
 
 ## Status
 
+Superseded in part by `docs/design/2026-07-06-ca-appraisal-workbench-reintegration.md`, which removes the standalone Craft Architect Companion surface entirely and folds quote evidence into Acquisition Workbench plus Diagnostics.
+
 Draft proposal for review. This reconciles the scattered Market Acquisition, Quick Shop, Craft Architect Companion, and diagnostics surfaces into one client-native acquisition workbench while preserving automatic dashboard sync.
 
 Related mockups:
@@ -363,7 +365,7 @@ Primary controls:
   - Retire as a standalone primary surface after the workbench can build and sync drafts.
   - Reuse its draft validator and request builder.
 - `CraftArchitectCompanionWindow`
-  - Retire as a standalone primary surface after the workbench can quote/appraise draft lines.
+  - Superseded by the 2026-07-06 reintegration decision: remove this standalone surface after the workbench can quote/appraise draft lines and Diagnostics can show provider state.
   - Reuse its quote providers, appraisal service, and telemetry.
 - `MainWindow.DrawMarketAcquisitionTab`
   - Reduce to status launcher and route summary.
@@ -485,7 +487,7 @@ The user should not need to claim or accept the route from the dashboard. If das
 
 ### Slice 6: Retire Scattered Surfaces
 
-- Remove or demote standalone Quick Shop and CA Companion windows.
+- Remove standalone CA Companion windows; Quick Shop can remain only as a temporary shortcut until the workbench fully covers that entry path.
 - Keep deep diagnostics windows as advanced/debug surfaces.
 - Update private usage docs.
 

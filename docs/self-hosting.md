@@ -185,7 +185,7 @@ Invoke-RestMethod `
   -Headers @{ "X-Api-Key" = "<client-api-key>" }
 ```
 
-Current source builds should include `craft.appraise`. If it is missing, you are likely talking to an older or custom host, and MMF can still use manual craft costs or Craft Architect quote-file imports. When `craft.appraise` is present, MMF's Craft Architect Companion can use the Workshop Host quote API after you enable it in the companion window.
+Current source builds should include `craft.appraise`. If it is missing, you are likely talking to an older or custom host, and MMF can still use manual craft costs or Craft Architect quote-file imports. When `craft.appraise` is present, Acquisition Workbench craft appraisal can use the Workshop Host quote API after you enable Workshop Host craft quotes in plugin settings.
 
 The quote endpoint exists at:
 

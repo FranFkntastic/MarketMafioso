@@ -12,7 +12,7 @@ Use Workshop Host when you want private state or automation:
 - browser dashboard sessions;
 - diagnostics and stored report history;
 - receiver-backed Market Acquisition queues;
-- Craft Architect quote lookup for MMF's Craft Architect Companion;
+- Craft Architect quote lookup for Acquisition Workbench craft appraisal;
 - future cross-tool automation between Craft Architect and MarketMafioso.
 
 ## What Does Not Require Workshop Host
@@ -21,8 +21,8 @@ MarketMafioso should remain useful without Workshop Host:
 
 - Workshop Logistics;
 - local queue preparation;
-- Craft Architect Companion manual craft-cost evidence;
-- Craft Architect Companion quote-file imports;
+- manual craft-cost evidence for Acquisition Workbench appraisal;
+- Craft Architect quote-file imports for Acquisition Workbench appraisal;
 - local quick-shop route preparation.
 
 Craft Architect should also remain local-first. Exported quote files are the first CA/MMF handoff path because they do not require a public API, a local server process, or a self-hosted backend.
@@ -47,7 +47,7 @@ POST /api/craft/appraise
 
 The route requires the client API key when API-key auth is enabled. The current receiver implementation delegates directly to Craft Architect Core. MMF treats configured quote API failures as visible evidence-provider failures, not as a silent fallback to stale or manual costs.
 
-MMF keeps an in-memory last-good quote cache per appraisal signature while the Craft Architect Companion window is alive. If live quote evidence fails, the cached quote is labeled with `(last-good)` and warning text. Quick-shop route creation still uses the user's explicit buy threshold, not the cached quote cost.
+MMF keeps an in-memory last-good quote cache per appraisal signature while the plugin session is alive. If live quote evidence fails, the cached quote is labeled with `(last-good)` and warning text. Route creation still uses the user's explicit buy threshold, not the cached quote cost.
 
 ## Machine Scopes
 
