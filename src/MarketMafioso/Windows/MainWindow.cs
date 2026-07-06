@@ -259,7 +259,8 @@ public class MainWindow : Window, IDisposable
             CaptureMarketBoardInputState,
             () => marketAcquisitionRouteRunner.CanFinalizeInputCaptureLog,
             FinalizeMarketBoardInputCaptureLog,
-            () => marketAcquisitionRouteRunner.LastDiagnosticFilePath);
+            () => marketAcquisitionRouteRunner.LastDiagnosticFilePath,
+            () => acquisitionWorkbenchCraftAppraisal.State.CreateDiagnosticsSnapshot());
         AutomationDiagnostics = new AutomationDiagnosticsWindow(CreateAutomationDiagnosticProbes(), IsMarketAcquisitionUnlocked);
 
         var restoredAcquisitionClaim = MarketAcquisitionClaimPersistence.Restore(config);

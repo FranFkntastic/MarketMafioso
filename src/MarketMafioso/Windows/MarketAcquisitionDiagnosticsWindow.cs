@@ -3,6 +3,7 @@ using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Windowing;
 using MarketMafioso.MarketAcquisition;
+using MarketMafioso.Windows.AcquisitionWorkbench;
 
 namespace MarketMafioso.Windows;
 
@@ -18,6 +19,7 @@ public sealed class MarketAcquisitionDiagnosticsWindow : Window
     private readonly Func<bool> canFinalizeInputCaptureLog;
     private readonly Action finalizeInputCaptureLog;
     private readonly Func<string?> getDiagnosticFilePath;
+    private readonly Func<CraftAppraisalDiagnosticsSnapshot> getCraftAppraisalDiagnostics;
 
     private static readonly Vector4 ColHeader = new(0.38f, 0.73f, 1.00f, 1f);
     private static readonly Vector4 ColSuccess = new(0.45f, 0.90f, 0.55f, 1f);
@@ -34,7 +36,8 @@ public sealed class MarketAcquisitionDiagnosticsWindow : Window
         Action captureInputState,
         Func<bool> canFinalizeInputCaptureLog,
         Action finalizeInputCaptureLog,
-        Func<string?> getDiagnosticFilePath)
+        Func<string?> getDiagnosticFilePath,
+        Func<CraftAppraisalDiagnosticsSnapshot> getCraftAppraisalDiagnostics)
         : base("Market Acquisition Diagnostics##MarketAcquisitionDiagnostics")
     {
         this.getReadResult = getReadResult;
@@ -47,6 +50,7 @@ public sealed class MarketAcquisitionDiagnosticsWindow : Window
         this.canFinalizeInputCaptureLog = canFinalizeInputCaptureLog;
         this.finalizeInputCaptureLog = finalizeInputCaptureLog;
         this.getDiagnosticFilePath = getDiagnosticFilePath;
+        this.getCraftAppraisalDiagnostics = getCraftAppraisalDiagnostics;
 
         SizeConstraints = new WindowSizeConstraints
         {
@@ -67,6 +71,8 @@ public sealed class MarketAcquisitionDiagnosticsWindow : Window
         ImGui.Separator();
 
         DrawDiagnosticControls();
+        ImGui.Separator();
+        DrawCraftQuoteDiagnostics(getCraftAppraisalDiagnostics());
         ImGui.Separator();
         DrawPlanDecisions(acquisitionPlan);
         ImGui.Separator();
@@ -100,6 +106,37 @@ public sealed class MarketAcquisitionDiagnosticsWindow : Window
         var diagnosticFilePath = getDiagnosticFilePath();
         if (!string.IsNullOrWhiteSpace(diagnosticFilePath))
             ImGui.TextColored(ColMuted, $"Diagnostics: {diagnosticFilePath}");
+    }
+
+    private static void DrawCraftQuoteDiagnostics(CraftAppraisalDiagnosticsSnapshot snapshot)
+    {
+        ImGuiUi.SectionHeader("Craft Quote Diagnostics", ColHeader);
+        if (!ImGui.BeginTable("CraftQuoteDiagnostics", 2, ImGuiTableFlags.SizingStretchProp))
+            return;
+
+        DrawDiagnosticRow("Workshop Host", snapshot.WorkshopHostEnabled
+            ? snapshot.WorkshopHostAvailable ? "Available" : "Unavailable"
+            : "Disabled");
+        DrawDiagnosticRow("Capability Check", snapshot.CapabilitiesCheckedAtUtc?.ToLocalTime().ToString("g") ?? "Not checked");
+        DrawDiagnosticRow("Host Status", snapshot.WorkshopHostStatus);
+        DrawDiagnosticRow("Quote Status", snapshot.CraftQuoteStatus);
+        DrawDiagnosticRow("Last Item", string.IsNullOrWhiteSpace(snapshot.LastQuoteItemName)
+            ? "None"
+            : $"{snapshot.LastQuoteItemName} ({snapshot.LastQuoteItemId})");
+        DrawDiagnosticRow("Quote Cache", snapshot.LatestQuoteWasLastGood ? "Last-good quote" : "Live or none");
+        DrawDiagnosticRow("Quote Printout", snapshot.LastCraftQuoteDiagnosticFilePath ?? "None");
+        DrawDiagnosticRow("Market Depth Printout", snapshot.LastMarketDepthDiagnosticFilePath ?? "None");
+
+        ImGui.EndTable();
+    }
+
+    private static void DrawDiagnosticRow(string label, string value)
+    {
+        ImGui.TableNextRow();
+        ImGui.TableNextColumn();
+        ImGui.TextColored(ColMuted, label);
+        ImGui.TableNextColumn();
+        ImGui.TextWrapped(value);
     }
 
     private static void DrawReadResult(MarketBoardReadResult readResult)
