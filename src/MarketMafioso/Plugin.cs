@@ -122,7 +122,6 @@ public sealed class Plugin : IDalamudPlugin
         windowSystem.AddWindow(mainWindow.FrozenQueueBrowser);
         windowSystem.AddWindow(mainWindow.AcquisitionWorkbench);
         windowSystem.AddWindow(mainWindow.QuickShop);
-        windowSystem.AddWindow(mainWindow.CraftArchitectCompanion);
         windowSystem.AddWindow(mainWindow.AcquisitionDiagnostics);
         windowSystem.AddWindow(mainWindow.AutomationDiagnostics);
 
