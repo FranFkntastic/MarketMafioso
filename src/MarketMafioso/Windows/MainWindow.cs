@@ -213,6 +213,7 @@ public class MainWindow : Window, IDisposable
             IsMarketAcquisitionRouteActive,
             () => acquisitionRequestBusy,
             () => acquisitionStatus,
+            acquisitionPlanSource.FetchListingsAsync,
             CreateMonitoredQuickShopRouteAsync);
         CraftArchitectCompanion = new CraftArchitectCompanionWindow(
             config,

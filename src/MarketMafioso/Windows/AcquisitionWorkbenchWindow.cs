@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
+using System.Threading;
 using System.Threading.Tasks;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Windowing;
@@ -18,8 +19,12 @@ public sealed class AcquisitionWorkbenchWindow : Window
     private readonly Func<bool> isRouteActive;
     private readonly Func<bool> isBusy;
     private readonly Func<string> getStatus;
+    private readonly Func<string, uint, int, CancellationToken, Task<IReadOnlyList<MarketAcquisitionListing>>> fetchListings;
     private readonly Func<MarketAcquisitionQuickShopDraft, Task<bool>> createRoute;
     private readonly IReadOnlyList<AcquisitionItemOption> itemOptions;
+    private readonly ObservedMarketSnapshotCache observedMarketSnapshots = new(64, TimeSpan.FromMinutes(15));
+    private readonly Dictionary<string, WorkbenchStockState> stockStates = new(StringComparer.Ordinal);
+    private readonly object stockStateGate = new();
 
     private MarketAcquisitionQuickShopDraft draft = MarketAcquisitionQuickShopDraft.CreateDefault();
     private readonly ItemAutocompleteState itemAutocomplete = new();
@@ -29,6 +34,7 @@ public sealed class AcquisitionWorkbenchWindow : Window
     private string gilCapBuffer = string.Empty;
     private int quantityModeIndex = 1;
     private int hqPolicyIndex;
+    private int selectedLineIndex;
     private WorkbenchPane activePane = WorkbenchPane.Build;
 
     private static readonly Vector4 ColHeader = new(0.38f, 0.73f, 1.00f, 1f);
@@ -45,6 +51,7 @@ public sealed class AcquisitionWorkbenchWindow : Window
         Func<bool> isRouteActive,
         Func<bool> isBusy,
         Func<string> getStatus,
+        Func<string, uint, int, CancellationToken, Task<IReadOnlyList<MarketAcquisitionListing>>> fetchListings,
         Func<MarketAcquisitionQuickShopDraft, Task<bool>> createRoute)
         : base("Acquisition Workbench##MarketAcquisitionWorkbench", ImGuiWindowFlags.None)
     {
@@ -53,6 +60,7 @@ public sealed class AcquisitionWorkbenchWindow : Window
         this.isRouteActive = isRouteActive;
         this.isBusy = isBusy;
         this.getStatus = getStatus;
+        this.fetchListings = fetchListings;
         this.createRoute = createRoute;
         itemOptions = ItemAutocompleteControl.LoadItemOptions(dataManager);
 
@@ -90,12 +98,13 @@ public sealed class AcquisitionWorkbenchWindow : Window
         ImGui.TextWrapped("Build, sync, and monitor client-created acquisition routes from one popout.");
         ImGui.Spacing();
 
-        if (!ImGui.BeginTable("AcquisitionWorkbenchHeader", 5, ImGuiTableFlags.SizingStretchSame))
+        if (!ImGui.BeginTable("AcquisitionWorkbenchHeader", 6, ImGuiTableFlags.SizingStretchSame))
             return;
 
         DrawMetric("Target", scope.HasScope ? $"{scope.CharacterName} @ {scope.World}" : "Unavailable", scope.HasScope);
         DrawMetric("Route", FormatRouteMode(draft), true);
         DrawMetric("Lines", draft.Lines.Count.ToString("N0"), draft.Lines.Count > 0);
+        DrawMetric("Stock", FormatStockMetric(), HasCurrentStockResult());
         DrawMetric("Ready", validation.IsValid ? "Yes" : "Needs input", validation.IsValid);
         DrawMetric("Sync", isBusy() ? "Working" : "Idle", !isBusy());
         ImGui.EndTable();
@@ -198,7 +207,7 @@ public sealed class AcquisitionWorkbenchWindow : Window
                 DrawQueuedLines();
                 break;
             case WorkbenchPane.Appraise:
-                DrawPlaceholder("No craft or stock evidence is loaded for the selected draft line.");
+                DrawAppraisePane();
                 break;
             case WorkbenchPane.Run:
                 DrawPlaceholder(isRouteActive()
@@ -263,8 +272,11 @@ public sealed class AcquisitionWorkbenchWindow : Window
         for (var index = 0; index < draft.Lines.Count; index++)
         {
             var line = draft.Lines[index];
+            var selected = index == selectedLineIndex;
             ImGui.TableNextRow();
             ImGui.TableNextColumn();
+            ImGui.TextColored(selected ? ColSuccess : ColMuted, selected ? ">" : " ");
+            ImGui.SameLine();
             ImGui.TextUnformatted(FormatQueuedItem(line));
             ImGui.TableNextColumn();
             ImGui.TextUnformatted(MarketAcquisitionQuantityModePresenter.FormatMode(line.QuantityMode));
@@ -276,11 +288,121 @@ public sealed class AcquisitionWorkbenchWindow : Window
             ImGui.TableNextColumn();
             ImGui.TextUnformatted(line.HqPolicy);
             ImGui.TableNextColumn();
+            if (ImGui.SmallButton($"Select##workbenchSelect{index}"))
+            {
+                selectedLineIndex = index;
+                activePane = WorkbenchPane.Appraise;
+            }
+
+            ImGui.SameLine();
             if (ImGui.SmallButton($"Duplicate##workbenchDuplicate{index}"))
                 DuplicateLine(index);
             ImGui.SameLine();
             if (ImGui.SmallButton($"Remove##workbenchRemove{index}"))
                 RemoveLine(index);
+        }
+
+        ImGui.EndTable();
+    }
+
+    private void DrawAppraisePane()
+    {
+        var selected = ResolveSelectedLine();
+        DrawLineSelector(selected);
+
+        var state = selected is null ? null : GetStockState(selected);
+        var view = StockAvailabilityPanelPresenter.Build(new StockAvailabilityPanelState
+        {
+            SelectedLine = selected,
+            Result = state?.Result,
+            Source = state?.Source ?? StockAvailabilityPanelSource.None,
+            SnapshotFetchedAtUtc = state?.SnapshotFetchedAtUtc,
+            NowUtc = DateTimeOffset.UtcNow,
+            IsFetching = state?.IsFetching == true,
+            ErrorMessage = state?.ErrorMessage,
+        });
+
+        ImGui.TextColored(ToColor(view.Severity), view.Headline);
+        ImGui.TextWrapped(view.Detail);
+        if (!string.IsNullOrWhiteSpace(view.SourceLine))
+            ImGui.TextColored(ColMuted, view.SourceLine);
+
+        ImGui.Spacing();
+        var routeScopeError = ResolveStockRouteScopeError();
+        if (!string.IsNullOrWhiteSpace(routeScopeError))
+            ImGui.TextColored(ColError, routeScopeError);
+
+        var canCheck = selected is not null &&
+                       state?.IsFetching != true &&
+                       string.IsNullOrWhiteSpace(routeScopeError);
+        if (ImGuiUi.Button("Check Stock", canCheck))
+            _ = CheckStockAsync(forceRefresh: false);
+        ImGui.SameLine();
+        if (ImGuiUi.Button("Refresh Stock", canCheck))
+            _ = CheckStockAsync(forceRefresh: true);
+
+        ImGui.Spacing();
+        DrawEligibleListingPreview(state?.Result);
+    }
+
+    private void DrawLineSelector(MarketAcquisitionQuickShopLineDraft? selected)
+    {
+        if (draft.Lines.Count == 0)
+        {
+            ImGui.TextColored(ColMuted, "No queued lines.");
+            return;
+        }
+
+        selectedLineIndex = Math.Clamp(selectedLineIndex, 0, draft.Lines.Count - 1);
+        var preview = selected is null ? "Select a line" : FormatQueuedItem(selected);
+        ImGui.TextColored(ColMuted, "Selected line");
+        ImGui.SetNextItemWidth(-1);
+        if (!ImGui.BeginCombo("##workbenchStockLine", preview))
+            return;
+
+        for (var index = 0; index < draft.Lines.Count; index++)
+        {
+            var line = draft.Lines[index];
+            var isSelected = index == selectedLineIndex;
+            if (ImGui.Selectable($"{FormatQueuedItem(line)}##workbenchStockLine{index}", isSelected))
+                selectedLineIndex = index;
+            if (isSelected)
+                ImGui.SetItemDefaultFocus();
+        }
+
+        ImGui.EndCombo();
+    }
+
+    private static void DrawEligibleListingPreview(StockAvailabilityResult? result)
+    {
+        if (result?.EligibleListings.Count > 0 != true)
+            return;
+
+        ImGui.TextColored(ColHeader, "Eligible Listings");
+        var tableHeight = MathF.Min(220f, MathF.Max(120f, ImGui.GetContentRegionAvail().Y));
+        if (!ImGui.BeginTable("AcquisitionWorkbenchEligibleListings", 5, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.ScrollY, new Vector2(0, tableHeight)))
+            return;
+
+        ImGui.TableSetupColumn("World", ImGuiTableColumnFlags.WidthStretch);
+        ImGui.TableSetupColumn("Qty", ImGuiTableColumnFlags.WidthFixed, 70);
+        ImGui.TableSetupColumn("Unit", ImGuiTableColumnFlags.WidthFixed, 92);
+        ImGui.TableSetupColumn("HQ", ImGuiTableColumnFlags.WidthFixed, 42);
+        ImGui.TableSetupColumn("Retainer", ImGuiTableColumnFlags.WidthStretch);
+        ImGui.TableHeadersRow();
+
+        foreach (var listing in result.EligibleListings.Take(20))
+        {
+            ImGui.TableNextRow();
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(listing.WorldName);
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(listing.Quantity.ToString("N0"));
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(FormatGil(listing.UnitPrice));
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(listing.IsHq ? "HQ" : "NQ");
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(listing.RetainerName);
         }
 
         ImGui.EndTable();
@@ -427,6 +549,7 @@ public sealed class AcquisitionWorkbenchWindow : Window
         });
 
         draft = draft.WithNextRevision() with { Lines = lines };
+        selectedLineIndex = lines.Count - 1;
         ClearLineBuffers();
     }
 
@@ -438,6 +561,7 @@ public sealed class AcquisitionWorkbenchWindow : Window
         var lines = draft.Lines.ToList();
         lines.Insert(index + 1, lines[index]);
         draft = draft.WithNextRevision() with { Lines = lines };
+        selectedLineIndex = index + 1;
     }
 
     private void RemoveLine(int index)
@@ -448,11 +572,15 @@ public sealed class AcquisitionWorkbenchWindow : Window
         var lines = draft.Lines.ToList();
         lines.RemoveAt(index);
         draft = draft.WithNextRevision() with { Lines = lines };
+        selectedLineIndex = Math.Clamp(selectedLineIndex, 0, Math.Max(0, lines.Count - 1));
     }
 
     private void ClearDraft()
     {
         draft = MarketAcquisitionQuickShopDraft.CreateDefault();
+        selectedLineIndex = 0;
+        lock (stockStateGate)
+            stockStates.Clear();
         ClearLineBuffers();
     }
 
@@ -508,11 +636,188 @@ public sealed class AcquisitionWorkbenchWindow : Window
 
     private static string FormatGil(uint gil) => $"{gil:N0} gil";
 
+    private MarketAcquisitionQuickShopLineDraft? ResolveSelectedLine()
+    {
+        if (draft.Lines.Count == 0)
+            return null;
+
+        selectedLineIndex = Math.Clamp(selectedLineIndex, 0, draft.Lines.Count - 1);
+        return draft.Lines[selectedLineIndex];
+    }
+
+    private WorkbenchStockState? GetStockState(MarketAcquisitionQuickShopLineDraft line)
+    {
+        lock (stockStateGate)
+        {
+            stockStates.TryGetValue(BuildStockStateKey(line), out var state);
+            return state;
+        }
+    }
+
+    private async Task CheckStockAsync(bool forceRefresh)
+    {
+        var line = ResolveSelectedLine();
+        if (line is null)
+            return;
+
+        var scope = getScope();
+        if (!scope.HasScope)
+        {
+            SetStockState(BuildStockStateKey(line, string.Empty), new WorkbenchStockState
+            {
+                ErrorMessage = "Current character world is required before checking stock.",
+            });
+            return;
+        }
+
+        AcquisitionWorkbenchStockCheckContext check;
+        try
+        {
+            check = AcquisitionWorkbenchStockRequestBuilder.BuildCheckContext(draft, line, scope.World);
+        }
+        catch (Exception ex)
+        {
+            SetStockState(BuildStockStateKey(line, scope.World), new WorkbenchStockState
+            {
+                ErrorMessage = ex.Message,
+            });
+            return;
+        }
+
+        var stateKey = check.StateKey;
+        SetStockState(stateKey, new WorkbenchStockState { IsFetching = true });
+
+        try
+        {
+            var nowUtc = DateTimeOffset.UtcNow;
+            var lookup = forceRefresh
+                ? new ObservedMarketSnapshotLookup { Status = ObservedMarketSnapshotLookupStatus.Miss }
+                : observedMarketSnapshots.TryGet(check.SnapshotKey, nowUtc);
+            ObservedMarketSnapshot snapshot;
+            StockAvailabilityPanelSource source;
+
+            if (lookup.Found && lookup.Snapshot is not null)
+            {
+                snapshot = lookup.Snapshot;
+                source = StockAvailabilityPanelSource.Cache;
+            }
+            else
+            {
+                var listings = await fetchListings(check.Region, check.ItemId, 100, CancellationToken.None)
+                    .ConfigureAwait(false);
+                nowUtc = DateTimeOffset.UtcNow;
+                observedMarketSnapshots.Replace(
+                    check.SnapshotKey,
+                    listings,
+                    nowUtc,
+                    "Universalis listings fetched on demand.",
+                    forceRefresh ? "ManualRefresh" : "Fetched",
+                    $"{listings.Count:N0} listing(s) fetched for {check.ItemName}.");
+                snapshot = observedMarketSnapshots.TryGet(check.SnapshotKey, nowUtc).Snapshot
+                    ?? throw new InvalidOperationException("Fresh stock snapshot was not available after fetch.");
+                source = StockAvailabilityPanelSource.FreshFetch;
+            }
+
+            var result = StockAvailabilityService.Analyze(
+                check.AnalyzeRequest,
+                snapshot.Listings);
+            SetStockState(stateKey, new WorkbenchStockState
+            {
+                Result = result,
+                Source = source,
+                SnapshotFetchedAtUtc = snapshot.FetchedAtUtc,
+            });
+        }
+        catch (Exception ex)
+        {
+            SetStockState(stateKey, new WorkbenchStockState
+            {
+                ErrorMessage = ex.Message,
+            });
+        }
+    }
+
+    private void SetStockState(string stateKey, WorkbenchStockState state)
+    {
+        lock (stockStateGate)
+            stockStates[stateKey] = state;
+    }
+
+    private string BuildStockStateKey(MarketAcquisitionQuickShopLineDraft line)
+    {
+        var scope = getScope();
+        return BuildStockStateKey(line, scope.World);
+    }
+
+    private string BuildStockStateKey(MarketAcquisitionQuickShopLineDraft line, string currentWorld)
+    {
+        try
+        {
+            return AcquisitionWorkbenchStockRequestBuilder.BuildCheckContext(draft, line, currentWorld).StateKey;
+        }
+        catch
+        {
+            return $"{line.ItemId}|invalid-scope|{line.QuantityMode}|{line.HqPolicy}|{line.TargetQuantity}|{line.MaxQuantity}|{line.MaxUnitPrice}";
+        }
+    }
+
+    private bool HasCurrentStockResult() =>
+        ResolveSelectedLine() is { } line && GetStockState(line)?.Result is not null;
+
+    private string? ResolveStockRouteScopeError()
+    {
+        var scope = getScope();
+        var validation = MarketAcquisitionQuickShopDraftValidator.Validate(
+            draft,
+            config.ApiKey,
+            scope.CharacterName,
+            scope.World);
+        return validation.Errors.FirstOrDefault(error =>
+            error.Contains("data center", StringComparison.OrdinalIgnoreCase) ||
+            error.Contains("Sweep scope", StringComparison.OrdinalIgnoreCase) ||
+            error.Contains("World mode", StringComparison.OrdinalIgnoreCase) ||
+            error.Contains("Region", StringComparison.OrdinalIgnoreCase) ||
+            error.Contains("Current world", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private string FormatStockMetric()
+    {
+        var line = ResolveSelectedLine();
+        if (line is null)
+            return "No line";
+
+        var state = GetStockState(line);
+        if (state?.Result is null)
+            return state?.IsFetching == true ? "Checking" : "Not checked";
+
+        return state.Result.Status == StockAvailabilityStatus.Depth
+            ? $"{state.Result.EligibleQuantity:N0} depth"
+            : $"{state.Result.EligibleQuantity:N0}/{state.Result.RequiredQuantity.GetValueOrDefault():N0}";
+    }
+
+    private Vector4 ToColor(StockAvailabilityPanelSeverity severity) =>
+        severity switch
+        {
+            StockAvailabilityPanelSeverity.Success => ColSuccess,
+            StockAvailabilityPanelSeverity.Warning => new Vector4(1.00f, 0.76f, 0.32f, 1f),
+            StockAvailabilityPanelSeverity.Error => ColError,
+            _ => ColMuted,
+        };
+
     private enum WorkbenchPane
     {
         Build,
         Appraise,
         Run,
         Recover,
+    }
+
+    private sealed record WorkbenchStockState
+    {
+        public StockAvailabilityResult? Result { get; init; }
+        public StockAvailabilityPanelSource Source { get; init; }
+        public DateTimeOffset? SnapshotFetchedAtUtc { get; init; }
+        public bool IsFetching { get; init; }
+        public string? ErrorMessage { get; init; }
     }
 }
