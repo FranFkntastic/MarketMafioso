@@ -414,6 +414,14 @@ public class MainWindow : Window, IDisposable
         ImGui.TextWrapped(MarketAcquisitionModuleSummary);
         ImGui.Spacing();
 
+        DrawMarketAcquisitionWorkbenchLauncher();
+
+        ImGui.Spacing();
+        if (!ImGui.CollapsingHeader("Fallback / Debug Controls##MarketAcquisitionFallbackControls"))
+            return;
+
+        ImGui.TextColored(ColMuted, "Legacy dashboard pickup, claimed batch, advisory plan, and guided route controls are retained here for fallback/debug use while the workbench takes over the normal flow.");
+        ImGui.Spacing();
         DrawMarketAcquisitionQuickShopSection();
         ImGui.Spacing();
         DrawMarketAcquisitionPickupSection();
@@ -423,6 +431,57 @@ public class MainWindow : Window, IDisposable
         DrawMarketAcquisitionPlan();
         ImGui.Spacing();
         DrawMarketAcquisitionGuidedRoute();
+    }
+
+    private void DrawMarketAcquisitionWorkbenchLauncher()
+    {
+        ImGuiUi.SectionHeader("Acquisition Workbench", ColHeader);
+
+        var scope = GetQuickShopScope();
+        if (scope.HasScope)
+        {
+            ImGui.TextColored(ColMuted, $"Route target: {scope.CharacterName} @ {scope.World}");
+        }
+        else if (scope.IsTemporarilyUnavailable)
+        {
+            ImGui.TextColored(ColMuted, "Character scope temporarily unavailable during route travel.");
+        }
+        else
+        {
+            ImGui.TextColored(ColError, "Character scope unavailable. Log into a character before creating a route.");
+        }
+
+        var visibleStatus = GetVisibleAcquisitionStatus();
+        ImGui.TextColored(GetAcquisitionStatusColor(visibleStatus), visibleStatus);
+
+        var draftLineCount = AcquisitionWorkbench.DraftLineCount;
+        ImGui.TextColored(
+            draftLineCount == 0 ? ColMuted : ColSuccess,
+            draftLineCount == 0
+                ? "No workbench draft lines queued."
+                : $"{draftLineCount:N0} workbench draft line(s) queued.");
+
+        if (claimedAcquisitionRequest != null)
+        {
+            ImGui.TextColored(ColMuted, $"Synced request: {FormatAcquisitionItem(claimedAcquisitionRequest)}");
+            ImGui.SameLine();
+            ImGui.TextColored(GetAcquisitionStatusColor(claimedAcquisitionRequest.Status), claimedAcquisitionRequest.Status);
+        }
+
+        if (acquisitionPlan != null)
+        {
+            ImGui.TextColored(
+                acquisitionPlan.Status == "Ready" ? ColSuccess : ColMuted,
+                $"Prepared plan: {acquisitionPlan.Status}, {acquisitionPlan.WorldBatches.Count:N0} world(s), {acquisitionPlan.PlannedQuantity:N0}/{acquisitionPlan.RequestedQuantity:N0} item(s).");
+        }
+
+        ImGui.TextColored(GetGuidedRouteStatusColor(), marketAcquisitionRouteRunner.StatusMessage);
+
+        if (ImGuiUi.Button("Open Acquisition Workbench##MarketAcquisitionWorkbenchLauncher", true))
+            AcquisitionWorkbench.IsOpen = true;
+        ImGui.SameLine();
+        if (ImGuiUi.Button("Open Diagnostics##MarketAcquisitionWorkbenchLauncher", true))
+            AcquisitionDiagnostics.IsOpen = true;
     }
 
     private void DrawCraftArchitectCompanionTab()
