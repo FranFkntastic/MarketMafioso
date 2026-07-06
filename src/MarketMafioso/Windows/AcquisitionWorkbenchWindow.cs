@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Windowing;
 using Dalamud.Plugin.Services;
+using MarketMafioso.CraftArchitectCompanion;
 using MarketMafioso.MarketAcquisition;
 using MarketMafioso.Windows.AcquisitionWorkbench;
 
@@ -29,6 +30,7 @@ public sealed class AcquisitionWorkbenchWindow : Window
     private readonly Func<Task> stopRoute;
     private readonly Func<Task> restartRoute;
     private readonly Func<Task> reprepareRoute;
+    private readonly CraftAppraisalWorkbenchController craftAppraisal;
     private readonly IReadOnlyList<AcquisitionItemOption> itemOptions;
     private readonly ObservedMarketSnapshotCache observedMarketSnapshots = new(64, TimeSpan.FromMinutes(15));
     private readonly Dictionary<string, WorkbenchStockState> stockStates = new(StringComparer.Ordinal);
@@ -68,7 +70,8 @@ public sealed class AcquisitionWorkbenchWindow : Window
         Func<Task> resumeRoute,
         Func<Task> stopRoute,
         Func<Task> restartRoute,
-        Func<Task> reprepareRoute)
+        Func<Task> reprepareRoute,
+        CraftAppraisalWorkbenchController craftAppraisal)
         : base("Acquisition Workbench##MarketAcquisitionWorkbench", ImGuiWindowFlags.None)
     {
         this.config = config;
@@ -86,6 +89,7 @@ public sealed class AcquisitionWorkbenchWindow : Window
         this.stopRoute = stopRoute;
         this.restartRoute = restartRoute;
         this.reprepareRoute = reprepareRoute;
+        this.craftAppraisal = craftAppraisal;
         itemOptions = ItemAutocompleteControl.LoadItemOptions(dataManager);
 
         SizeConstraints = new WindowSizeConstraints
@@ -549,7 +553,9 @@ public sealed class AcquisitionWorkbenchWindow : Window
     private void DrawAppraisePane()
     {
         var selected = ResolveSelectedLine();
+        SyncCraftAppraisalSelection(selected);
         DrawLineSelector(selected);
+        DrawCraftAppraisal(selected);
 
         var state = selected is null ? null : GetStockState(selected);
         var view = StockAvailabilityPanelPresenter.Build(new StockAvailabilityPanelState
@@ -584,6 +590,65 @@ public sealed class AcquisitionWorkbenchWindow : Window
 
         ImGui.Spacing();
         DrawEligibleListingPreview(state?.Result);
+    }
+
+    private void DrawCraftAppraisal(MarketAcquisitionQuickShopLineDraft? selected)
+    {
+        ImGui.Spacing();
+        ImGui.TextColored(ColHeader, "Craft Cost");
+        ImGui.Separator();
+
+        if (selected is null)
+        {
+            ImGui.TextColored(ColMuted, "Select a line before fetching craft-cost evidence.");
+            return;
+        }
+
+        craftAppraisal.State.WorkshopHostEnabled = config.EnableWorkshopHostCraftQuotes;
+        var view = CraftAppraisalPanelPresenter.Build(new CraftAppraisalPanelState
+        {
+            WorkshopHostEnabled = config.EnableWorkshopHostCraftQuotes,
+            WorkshopHostQuoteAvailable = craftAppraisal.State.WorkshopHostAvailable,
+            ManualFallbackEnabled = config.EnableCraftArchitectManualFallback,
+            HasQuoteFilePath = !string.IsNullOrWhiteSpace(config.CraftArchitectQuoteFilePath),
+            LatestQuote = craftAppraisal.State.LatestQuote,
+            NowUtc = DateTimeOffset.UtcNow,
+        });
+
+        ImGui.TextColored(craftAppraisal.State.WorkshopHostAvailable ? ColSuccess : ColMuted, view.WorkshopHostStatus);
+        if (!string.IsNullOrWhiteSpace(craftAppraisal.State.WorkshopHostStatus))
+            ImGui.TextWrapped(craftAppraisal.State.WorkshopHostStatus);
+
+        if (ImGuiUi.Button("Fetch Craft Quote", !craftAppraisal.IsFetchingCraftQuote))
+            _ = FetchCraftQuoteAsync(selected);
+
+        ImGui.SameLine();
+        if (ImGuiUi.Button("Clear Quote", craftAppraisal.State.LatestQuote is not null))
+            craftAppraisal.State.ClearQuoteEvidence();
+
+        ImGui.TextColored(craftAppraisal.IsFetchingCraftQuote ? ColHeader : ColMuted, craftAppraisal.State.CraftQuoteStatus);
+        if (craftAppraisal.State.LatestQuote is not { })
+            return;
+
+        ImGui.TextColored(view.CanApplyQuoteToThreshold ? ColSuccess : ColError, view.QuoteHeadline);
+        ImGui.TextWrapped(view.QuoteDetail);
+
+        if (ImGuiUi.Button("Use Craft Cost As Threshold", craftAppraisal.TryGetQuoteThreshold() is not null))
+            ApplyQuoteThresholdToSelectedLine();
+
+        if (!string.IsNullOrWhiteSpace(craftAppraisal.State.LastCraftQuoteDiagnosticFilePath))
+            ImGui.TextColored(ColMuted, $"Printout: {craftAppraisal.State.LastCraftQuoteDiagnosticFilePath}");
+
+        if (view.DiagnosticLines.Count == 0)
+            return;
+
+        if (!ImGui.CollapsingHeader("Calculation details"))
+            return;
+
+        foreach (var line in view.DiagnosticLines.Take(8))
+            ImGui.TextWrapped(line);
+        if (view.DiagnosticLines.Count > 8)
+            ImGui.TextColored(ColMuted, $"{view.DiagnosticLines.Count - 8:N0} more diagnostic line(s) in the printout file.");
     }
 
     private void DrawLineSelector(MarketAcquisitionQuickShopLineDraft? selected)
@@ -817,6 +882,7 @@ public sealed class AcquisitionWorkbenchWindow : Window
         selectedLineIndex = 0;
         lock (stockStateGate)
             stockStates.Clear();
+        craftAppraisal.State.UpdateSelectedLine(null);
         ClearLineBuffers();
     }
 
@@ -1039,6 +1105,49 @@ public sealed class AcquisitionWorkbenchWindow : Window
             StockAvailabilityPanelSeverity.Error => ColError,
             _ => ColMuted,
         };
+
+    private async Task FetchCraftQuoteAsync(MarketAcquisitionQuickShopLineDraft selected)
+    {
+        craftAppraisal.State.WorkshopHostEnabled = config.EnableWorkshopHostCraftQuotes;
+        var request = CraftAppraisalWorkbenchRequestBuilder.Build(draft, selected);
+        await craftAppraisal.FetchQuoteAsync(request).ConfigureAwait(false);
+    }
+
+    private void ApplyQuoteThresholdToSelectedLine()
+    {
+        var threshold = craftAppraisal.TryGetQuoteThreshold();
+        var selected = ResolveSelectedLine();
+        if (threshold is null || selected is null)
+            return;
+
+        var oldStockStateKey = BuildStockStateKey(selected);
+        draft = AcquisitionWorkbenchDraftMutation.ApplyMaxUnitPrice(
+            draft,
+            selectedLineIndex,
+            threshold.Value);
+
+        lock (stockStateGate)
+            stockStates.Remove(oldStockStateKey);
+    }
+
+    private void SyncCraftAppraisalSelection(MarketAcquisitionQuickShopLineDraft? selected)
+    {
+        if (selected is null)
+        {
+            craftAppraisal.State.UpdateSelectedLine(null);
+            return;
+        }
+
+        try
+        {
+            craftAppraisal.State.UpdateSelectedLine(
+                CraftAppraisalWorkbenchRequestBuilder.BuildLineIdentity(draft, selected));
+        }
+        catch
+        {
+            craftAppraisal.State.UpdateSelectedLine(null);
+        }
+    }
 
     private static Vector4 GetRouteStateColor(string state) =>
         state switch

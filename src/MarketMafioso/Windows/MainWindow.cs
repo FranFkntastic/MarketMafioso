@@ -37,6 +37,7 @@ public class MainWindow : Window, IDisposable
     private readonly IPlayerState playerState;
     private readonly IPluginLog log;
     private readonly HttpClient acquisitionHttpClient = new();
+    private readonly HttpClient craftQuoteHttpClient = new();
     private readonly MarketAcquisitionRequestClient acquisitionClient;
     private readonly UniversalisMarketAcquisitionPlanSource acquisitionPlanSource;
     private readonly MarketAcquisitionWorldVisitCatalog marketAcquisitionWorldVisitCatalog;
@@ -208,6 +209,7 @@ public class MainWindow : Window, IDisposable
                 DuplicateFrozenQueue,
                 DeleteFrozenQueue,
                 SaveCurrentQueueAsNew));
+        var acquisitionWorkbenchCraftAppraisal = CreateAcquisitionWorkbenchCraftAppraisalController();
         QuickShop = new MarketAcquisitionQuickShopWindow(
             config,
             dataManager,
@@ -236,7 +238,8 @@ public class MainWindow : Window, IDisposable
             ResumeGuidedRouteAsync,
             StopGuidedRouteAsync,
             RestartGuidedRouteAsync,
-            ReprepareGuidedRouteAsync);
+            ReprepareGuidedRouteAsync,
+            acquisitionWorkbenchCraftAppraisal);
         CraftArchitectCompanion = new CraftArchitectCompanionWindow(
             config,
             dataManager,
@@ -3919,6 +3922,31 @@ public class MainWindow : Window, IDisposable
             "Default off. Workshop Host should be the normal quote path; manual craft cost entry is only for local troubleshooting.");
     }
 
+    private CraftAppraisalWorkbenchController CreateAcquisitionWorkbenchCraftAppraisalController()
+    {
+        var capabilitiesClient = new WorkshopHostCapabilitiesClient(craftQuoteHttpClient);
+        CraftAppraisalWorkbenchController? controller = null;
+        controller = new CraftAppraisalWorkbenchController(
+            new LastGoodCraftQuoteProvider(new CompositeCraftQuoteProvider([
+                new WorkshopHostCraftQuoteProvider(
+                    craftQuoteHttpClient,
+                    () => config.EnableWorkshopHostCraftQuotes,
+                    () => controller?.State.WorkshopHostAvailable == true,
+                    () => config.ServerUrl,
+                    () => config.ApiKey),
+                new CraftArchitectFileQuoteProvider(() => config.CraftArchitectQuoteFilePath),
+            ])),
+            cancellationToken => capabilitiesClient.SupportsCraftAppraiseV1Async(
+                config.ServerUrl,
+                config.ApiKey,
+                cancellationToken),
+            Path.Combine(
+                Plugin.PluginInterface.GetPluginConfigDirectory(),
+                "craft-architect-quote-logs"));
+        controller.State.WorkshopHostEnabled = config.EnableWorkshopHostCraftQuotes;
+        return controller;
+    }
+
     private void DrawDashboardOpenSection()
     {
         var dashboardUrl = HttpReporter.ResolveDashboardUrlForDisplay(reporter.LastDashboardUrl, urlBuffer) ?? string.Empty;
@@ -4242,5 +4270,6 @@ public class MainWindow : Window, IDisposable
         marketBoardAutomationController.Dispose();
         marketAcquisitionRouteRunner.Dispose();
         acquisitionHttpClient.Dispose();
+        craftQuoteHttpClient.Dispose();
     }
 }
