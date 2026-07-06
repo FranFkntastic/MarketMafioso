@@ -40,6 +40,7 @@ public class MainWindow : Window, IDisposable
     private readonly MarketAcquisitionRequestClient acquisitionClient;
     private readonly UniversalisMarketAcquisitionPlanSource acquisitionPlanSource;
     private readonly MarketAcquisitionWorldVisitCatalog marketAcquisitionWorldVisitCatalog;
+    private readonly MarketAcquisitionPlanPreparationService marketAcquisitionPlanPreparationService;
     private readonly MarketBoardListingReader marketBoardListingReader;
     private readonly MarketBoardItemSearchDriver marketBoardItemSearchDriver;
     private readonly MarketBoardInputCaptureReader marketBoardInputCaptureReader;
@@ -156,6 +157,14 @@ public class MainWindow : Window, IDisposable
         acquisitionClient = new MarketAcquisitionRequestClient(acquisitionHttpClient);
         acquisitionPlanSource = new UniversalisMarketAcquisitionPlanSource(acquisitionHttpClient);
         marketAcquisitionWorldVisitCatalog = new MarketAcquisitionWorldVisitCatalog(config);
+        marketAcquisitionPlanPreparationService = new MarketAcquisitionPlanPreparationService(
+            acquisitionPlanSource,
+            marketAcquisitionWorldVisitCatalog,
+            (ex, worldName, itemId) => log.Warning(
+                ex,
+                "[MarketMafioso] Unable to refresh Universalis evidence for {World} item {ItemId}.",
+                worldName,
+                itemId));
         var universalisFreshnessVerifier = new UniversalisMarketFreshnessVerifier(acquisitionHttpClient);
         marketBoardListingReader = new MarketBoardListingReader(Plugin.GameGui);
         marketBoardItemSearchDriver = new MarketBoardItemSearchDriver(Plugin.GameGui);
@@ -1656,100 +1665,29 @@ public class MainWindow : Window, IDisposable
             var claimed = claimedAcquisitionRequest ??
                           throw new InvalidOperationException("No dashboard request is accepted.");
             claimed = await EnsureAcquisitionClaimReadyForPlanningAsync(claimed, token).ConfigureAwait(false);
-            if (string.Equals(claimed.WorldMode, "Selected", StringComparison.OrdinalIgnoreCase))
-                throw new InvalidOperationException("Selected world mode cannot be planned until selected worlds are carried in the dashboard request payload.");
-
-            var planLines = GetAcquisitionPlanLines(claimed);
-            var listings = new List<MarketAcquisitionListing>();
-            var sweepWorldExclusions = new List<MarketAcquisitionSweepWorldExclusion>();
-            var freshEvidenceWorldCount = 0;
-            var recentSkippedWorldCount = 0;
-            var preparedAtUtc = DateTimeOffset.UtcNow;
-            var isAllWorldSweep = claimed.WorldMode.Equals("AllWorldSweep", StringComparison.OrdinalIgnoreCase);
-            var recentWorldTtl = GetMarketAcquisitionRecentWorldTtl();
-            foreach (var line in planLines)
-            {
-                var lineListings = await acquisitionPlanSource.FetchListingsAsync(
-                    claimed.Region,
-                    line.ItemId,
-                    100,
-                    token).ConfigureAwait(false);
-                if (isAllWorldSweep)
+            var currentWorld = playerState.CurrentWorld.IsValid ? GetCurrentWorldName() : string.Empty;
+            var result = await marketAcquisitionPlanPreparationService.PrepareAsync(
+                new MarketAcquisitionPlanPreparationRequest
                 {
-                    var evidenceWorlds = await FindWorldsWithNewerUsefulUniversalisEvidenceAsync(
-                        line,
-                        preparedAtUtc,
-                        recentWorldTtl,
-                        token).ConfigureAwait(false);
-                    freshEvidenceWorldCount += evidenceWorlds.Count;
+                    Claim = claimed,
+                    CurrentWorld = currentWorld,
+                    PreparedAtUtc = DateTimeOffset.UtcNow,
+                    RecentWorldTtl = GetMarketAcquisitionRecentWorldTtl(),
+                    IgnoreRecentWorldVisitsForSweep = config.MarketAcquisitionIgnoreRecentWorldVisitsForSweep,
+                },
+                token).ConfigureAwait(false);
 
-                    var filterResult = MarketAcquisitionRecentWorldPolicy.FilterListings(
-                        line,
-                        lineListings,
-                        marketAcquisitionWorldVisitCatalog,
-                        preparedAtUtc,
-                        recentWorldTtl,
-                        config.MarketAcquisitionIgnoreRecentWorldVisitsForSweep,
-                        evidenceWorlds);
-                    lineListings = filterResult.Listings;
-
-                    var lineExclusions = MarketAcquisitionRecentWorldPolicy.BuildSweepWorldExclusions(
-                        line,
-                        marketAcquisitionWorldVisitCatalog,
-                        preparedAtUtc,
-                        recentWorldTtl,
-                        config.MarketAcquisitionIgnoreRecentWorldVisitsForSweep,
-                        evidenceWorlds);
-                    sweepWorldExclusions.AddRange(lineExclusions);
-                    recentSkippedWorldCount += lineExclusions.Count;
-                }
-
-                listings.AddRange(lineListings);
-            }
-
-            if (!playerState.CurrentWorld.IsValid)
-                throw new InvalidOperationException("Current world is required before preparing a route-aware advisory plan.");
-
-            acquisitionPlan = MarketAcquisitionPlanner.BuildPlan(
-                claimed,
-                listings,
-                preparedAtUtc,
-                GetCurrentWorldName(),
-                sweepWorldExclusions);
+            acquisitionPlan = result.Plan;
             marketBoardReadResult = null;
             marketBoardReconciliation = null;
             marketAcquisitionLiveCandidatePlan = null;
             ResetGuidedRoute("No route has started.");
-            acquisitionStatus = acquisitionPlan.Status == "Ready"
-                ? BuildPreparedPlanStatus(acquisitionPlan, recentSkippedWorldCount, freshEvidenceWorldCount)
-                : BuildNoSupportedListingsStatus(acquisitionPlan);
+            acquisitionStatus = result.StatusMessage;
         }).ConfigureAwait(false);
     }
 
-    private static IReadOnlyList<MarketAcquisitionBatchLineView> GetAcquisitionPlanLines(MarketAcquisitionClaimView claimed)
-    {
-        if (claimed.Lines.Count > 0)
-            return claimed.Lines
-                .OrderBy(line => line.Ordinal)
-                .ToList();
-
-        return
-        [
-            new MarketAcquisitionBatchLineView
-            {
-                LineId = claimed.Id,
-                Ordinal = 0,
-                ItemId = claimed.ItemId,
-                ItemName = claimed.ItemName,
-                QuantityMode = claimed.QuantityMode,
-                TargetQuantity = claimed.Quantity,
-                MaxQuantity = claimed.Quantity,
-                HqPolicy = claimed.HqPolicy,
-                MaxUnitPrice = claimed.MaxUnitPrice,
-                GilCap = claimed.MaxTotalGil,
-            },
-        ];
-    }
+    private static IReadOnlyList<MarketAcquisitionBatchLineView> GetAcquisitionPlanLines(MarketAcquisitionClaimView claimed) =>
+        MarketAcquisitionPlanPreparationService.GetPlanLines(claimed);
 
     private TimeSpan GetMarketAcquisitionRecentWorldTtl()
     {
@@ -1762,64 +1700,6 @@ public class MainWindow : Window, IDisposable
 
         return TimeSpan.FromHours(ttlHours);
     }
-
-    private async Task<IReadOnlyList<string>> FindWorldsWithNewerUsefulUniversalisEvidenceAsync(
-        MarketAcquisitionBatchLineView line,
-        DateTimeOffset preparedAtUtc,
-        TimeSpan ttl,
-        CancellationToken token)
-    {
-        if (config.MarketAcquisitionIgnoreRecentWorldVisitsForSweep || ttl <= TimeSpan.Zero)
-            return [];
-
-        var hqPolicy = MarketAcquisitionPolicy.NormalizeHqPolicy(line.HqPolicy);
-        var recentVisits = marketAcquisitionWorldVisitCatalog.FindRecentWorlds(
-            line.ItemId,
-            hqPolicy,
-            line.MaxUnitPrice,
-            preparedAtUtc,
-            ttl);
-        if (recentVisits.Count == 0)
-            return [];
-
-        var evidenceWorlds = new List<string>();
-        foreach (var visit in recentVisits)
-        {
-            try
-            {
-                var worldListings = await acquisitionPlanSource.FetchListingsForWorldAsync(
-                    visit.WorldName,
-                    line.ItemId,
-                    100,
-                    token).ConfigureAwait(false);
-                var checkedAtUtc = DateTime.SpecifyKind(visit.CheckedAtUtc, DateTimeKind.Utc);
-                if (worldListings.Any(listing => IsNewerUsefulUniversalisListing(line, hqPolicy, checkedAtUtc, listing)))
-                    evidenceWorlds.Add(visit.WorldName);
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                log.Warning(
-                    ex,
-                    "[MarketMafioso] Unable to refresh Universalis evidence for {World} item {ItemId}.",
-                    visit.WorldName,
-                    line.ItemId);
-            }
-        }
-
-        return evidenceWorlds;
-    }
-
-    private static bool IsNewerUsefulUniversalisListing(
-        MarketAcquisitionBatchLineView line,
-        string hqPolicy,
-        DateTime checkedAtUtc,
-        MarketAcquisitionListing listing) =>
-        listing.ItemId == line.ItemId &&
-        listing.Quantity > 0 &&
-        listing.UnitPrice > 0 &&
-        listing.UnitPrice <= line.MaxUnitPrice &&
-        MarketAcquisitionPolicy.HqMatches(hqPolicy, listing.IsHq) &&
-        listing.LastReviewTimeUtc > new DateTimeOffset(checkedAtUtc);
 
     private MarketAcquisitionRequestView GetActiveRouteLine(MarketAcquisitionRequestView claimed)
     {
@@ -1896,32 +1776,6 @@ public class MainWindow : Window, IDisposable
             .ToList();
         acquisitionStatus = "Failed request was reopened and accepted locally. Preparing a fresh plan.";
         return claimedAcquisitionRequest;
-    }
-
-    private static string BuildNoSupportedListingsStatus(MarketAcquisitionPlan plan)
-    {
-        var diagnostics = plan.Diagnostics;
-        return "No supported listings found under the configured thresholds. " +
-               $"Fetched {diagnostics.SourceListingCount:N0}; " +
-               $"{diagnostics.NonZeroListingCount:N0} non-zero; " +
-               $"{diagnostics.PriceSupportedListingCount:N0} at/below max unit; " +
-               $"{diagnostics.HqSupportedListingCount:N0} after HQ policy; " +
-               $"{diagnostics.WorldSupportedListingCount:N0} after world mode; " +
-               $"{diagnostics.PlannedListingCount:N0} planned.";
-    }
-
-    private static string BuildPreparedPlanStatus(
-        MarketAcquisitionPlan plan,
-        int recentSkippedWorldCount,
-        int freshEvidenceWorldCount)
-    {
-        var status = $"Prepared {plan.WorldBatches.Count:N0} world batch(es).";
-        if (recentSkippedWorldCount > 0)
-            status += $" Skipped {recentSkippedWorldCount:N0} recent sweep world/item check(s).";
-        if (freshEvidenceWorldCount > 0)
-            status += $" Reopened {freshEvidenceWorldCount:N0} recent world/item check(s) with fresh Universalis evidence.";
-
-        return status;
     }
 
     private static string ResolveZeroPurchaseLineStatus(

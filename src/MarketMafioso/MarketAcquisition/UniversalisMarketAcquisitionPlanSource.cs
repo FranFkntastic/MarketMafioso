@@ -8,7 +8,7 @@ using System.Threading.Tasks;
 
 namespace MarketMafioso.MarketAcquisition;
 
-public sealed class UniversalisMarketAcquisitionPlanSource
+public sealed class UniversalisMarketAcquisitionPlanSource : IMarketAcquisitionListingSource
 {
     private static readonly Uri DefaultBaseUri = new("https://universalis.app/api/v2/");
     private readonly HttpClient httpClient;
