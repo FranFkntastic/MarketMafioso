@@ -80,6 +80,42 @@ public sealed class StockAvailabilityPanelPresenterTests
         Assert.Contains("Universalis exploded.", view.Detail);
     }
 
+    [Fact]
+    public void BuildSideSummary_WhenLineHasStockResult_SummarizesSelectedLine()
+    {
+        var view = StockAvailabilityPanelPresenter.BuildSideSummary(new StockAvailabilityPanelState
+        {
+            SelectedLine = CreateLine(targetQuantity: 10),
+            Result = new StockAvailabilityResult
+            {
+                Status = StockAvailabilityStatus.Enough,
+                EligibleQuantity = 12,
+                EligibleListingCount = 3,
+                RequiredQuantity = 10,
+            },
+            Source = StockAvailabilityPanelSource.Cache,
+            SnapshotFetchedAtUtc = DateTimeOffset.UnixEpoch,
+            NowUtc = DateTimeOffset.UnixEpoch.AddMinutes(3),
+        });
+
+        Assert.Equal("Fire Shard", view.Title);
+        Assert.Equal("12 of 10 units available", view.Headline);
+        Assert.Equal("3 eligible listing(s) cover the requested quantity.", view.Detail);
+        Assert.Contains("cache", view.Footer, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(StockAvailabilityPanelSeverity.Success, view.Severity);
+    }
+
+    [Fact]
+    public void BuildSideSummary_WhenNoLineSelected_UsesIdleCopy()
+    {
+        var view = StockAvailabilityPanelPresenter.BuildSideSummary(new StockAvailabilityPanelState());
+
+        Assert.Equal("Selected Line", view.Title);
+        Assert.Equal("No line selected", view.Headline);
+        Assert.Contains("Select a queued line", view.Detail);
+        Assert.Equal(StockAvailabilityPanelSeverity.Muted, view.Severity);
+    }
+
     private static MarketAcquisitionQuickShopLineDraft CreateLine(
         string quantityMode = "TargetQuantity",
         uint targetQuantity = 1,

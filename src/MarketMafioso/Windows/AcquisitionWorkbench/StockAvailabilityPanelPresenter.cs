@@ -37,6 +37,15 @@ public sealed record StockAvailabilityPanelView
     public StockAvailabilityPanelSeverity Severity { get; init; }
 }
 
+public sealed record StockAvailabilitySideSummaryView
+{
+    public string Title { get; init; } = string.Empty;
+    public string Headline { get; init; } = string.Empty;
+    public string Detail { get; init; } = string.Empty;
+    public string Footer { get; init; } = string.Empty;
+    public StockAvailabilityPanelSeverity Severity { get; init; }
+}
+
 public static class StockAvailabilityPanelPresenter
 {
     public static StockAvailabilityPanelView Build(StockAvailabilityPanelState state)
@@ -126,6 +135,35 @@ public static class StockAvailabilityPanelPresenter
                 SourceLine = BuildSourceLine(state),
                 Severity = StockAvailabilityPanelSeverity.Muted,
             },
+        };
+    }
+
+    public static StockAvailabilitySideSummaryView BuildSideSummary(StockAvailabilityPanelState state)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+
+        if (state.SelectedLine is null)
+        {
+            return new StockAvailabilitySideSummaryView
+            {
+                Title = "Selected Line",
+                Headline = "No line selected",
+                Detail = "Select a queued line to view stock context here.",
+                Footer = "No stock snapshot loaded.",
+                Severity = StockAvailabilityPanelSeverity.Muted,
+            };
+        }
+
+        var panel = Build(state);
+        return new StockAvailabilitySideSummaryView
+        {
+            Title = string.IsNullOrWhiteSpace(state.SelectedLine.ItemName)
+                ? $"Item {state.SelectedLine.ItemId:N0}"
+                : state.SelectedLine.ItemName,
+            Headline = panel.Headline,
+            Detail = panel.Detail,
+            Footer = panel.SourceLine,
+            Severity = panel.Severity,
         };
     }
 

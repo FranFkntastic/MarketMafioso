@@ -262,9 +262,40 @@ public sealed class AcquisitionWorkbenchWindow : Window
         }
 
         ImGui.Spacing();
-        ImGui.TextColored(ColHeader, "Market Board Read");
+        ImGui.TextColored(ColHeader, "Selected Line");
         ImGui.Separator();
-        ImGui.TextColored(ColMuted, "No live market-board read is active.");
+        DrawSelectedLineSummary();
+    }
+
+    private void DrawSelectedLineSummary()
+    {
+        var selected = ResolveSelectedLine();
+        var state = selected is null ? null : GetStockState(selected);
+        var view = StockAvailabilityPanelPresenter.BuildSideSummary(new StockAvailabilityPanelState
+        {
+            SelectedLine = selected,
+            Result = state?.Result,
+            Source = state?.Source ?? StockAvailabilityPanelSource.None,
+            SnapshotFetchedAtUtc = state?.SnapshotFetchedAtUtc,
+            NowUtc = DateTimeOffset.UtcNow,
+            IsFetching = state?.IsFetching == true,
+            ErrorMessage = state?.ErrorMessage,
+        });
+
+        ImGui.TextColored(ColMuted, view.Title);
+        ImGui.TextColored(ToColor(view.Severity), view.Headline);
+        ImGui.TextWrapped(view.Detail);
+        if (!string.IsNullOrWhiteSpace(view.Footer))
+            ImGui.TextColored(ColMuted, view.Footer);
+
+        if (selected is null)
+            return;
+
+        ImGui.Spacing();
+        ImGui.TextColored(ColMuted, $"Mode: {MarketAcquisitionQuantityModePresenter.FormatMode(selected.QuantityMode)}");
+        var quantity = selected.QuantityMode == "TargetQuantity" ? selected.TargetQuantity : selected.MaxQuantity;
+        ImGui.TextColored(ColMuted, $"Quantity: {MarketAcquisitionQuantityModePresenter.FormatQuantity(selected.QuantityMode, quantity)}");
+        ImGui.TextColored(ColMuted, $"Max unit: {FormatGil(selected.MaxUnitPrice)}");
     }
 
     private void DrawQueuedLines()
