@@ -56,6 +56,8 @@ public sealed class MarketBoardListingReaderTests
         Assert.Equal(100, result.ListingCapacity);
         Assert.True(result.IsAtListingCapacity);
         Assert.False(result.IsListingCountTruncated);
+        Assert.False(result.HasIncompleteCoverage);
+        Assert.Equal(0, result.UnreadListingCount);
         Assert.Contains("capacity 100/100", result.Message, StringComparison.OrdinalIgnoreCase);
     }
 
@@ -86,6 +88,8 @@ public sealed class MarketBoardListingReaderTests
         Assert.Equal(100, result.ListingCapacity);
         Assert.True(result.IsAtListingCapacity);
         Assert.True(result.IsListingCountTruncated);
+        Assert.True(result.HasIncompleteCoverage);
+        Assert.Equal(20, result.UnreadListingCount);
         Assert.Contains("truncated", result.Message, StringComparison.OrdinalIgnoreCase);
     }
 

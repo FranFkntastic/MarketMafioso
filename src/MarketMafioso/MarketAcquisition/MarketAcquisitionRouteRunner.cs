@@ -667,6 +667,8 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
                 ["readableListings"] = readResult.Listings.Count.ToString(),
                 ["reportedListings"] = readResult.ReportedListingCount.ToString(),
                 ["listingCapacity"] = readResult.ListingCapacity.ToString(),
+                ["coverageStatus"] = readResult.HasIncompleteCoverage ? "Incomplete" : "Complete",
+                ["unreadListings"] = readResult.UnreadListingCount.ToString(),
                 ["rawItemIdMismatchCounts"] = FormatRawItemIdMismatchCounts(readResult.RawItemIdMismatchCounts),
                 ["subtaskSource"] = activeSubtask?.Source,
             });
@@ -714,6 +716,10 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
                 ["visibleListingCacheTruncated"] = candidatePlan.IsVisibleListingCacheTruncated.ToString(),
                 ["listingReadState"] = candidatePlan.ListingReadState.ToString(),
                 ["listingReadFresh"] = candidatePlan.IsListingReadFresh.ToString(),
+                ["coverageStatus"] = candidatePlan.ReportedListingCount > candidatePlan.ReadableListingCount
+                    ? "Incomplete"
+                    : "Complete",
+                ["unreadListings"] = Math.Max(0, candidatePlan.ReportedListingCount - candidatePlan.ReadableListingCount).ToString(),
                 ["rawItemIdMismatchCounts"] = FormatRawItemIdMismatchCounts(candidatePlan.RawItemIdMismatchCounts),
                 ["observedQuantity"] = observedQuantity.ToString(),
                 ["observedGil"] = observedGil.ToString(),

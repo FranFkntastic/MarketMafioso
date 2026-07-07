@@ -159,7 +159,7 @@ public sealed class MarketAcquisitionRouteDiagnosticsTests
                 Status = "Ready",
                 Message = "Would buy this row.",
                 ReadableListingCount = 1,
-                ReportedListingCount = 32,
+                ReportedListingCount = 1,
                 ListingCapacity = 100,
                 IsVisibleListingCacheTruncated = false,
                 RequestedQuantity = 999,
@@ -190,6 +190,8 @@ public sealed class MarketAcquisitionRouteDiagnosticsTests
             });
 
         var csv = ReadLog(diagnostics.ObservedListingsCsvPath!);
+        Assert.Contains("listingReadFresh,coverageStatus,unreadListings,rawItemIdMismatchCounts", csv, StringComparison.Ordinal);
+        Assert.Contains("True,Complete,0,", csv, StringComparison.Ordinal);
         Assert.Contains("request-1,Coeurl,Crystal,line-1,2,Planned,5121,Darksteel Ore", csv, StringComparison.Ordinal);
         Assert.Contains("WouldBuy,SafeLiveCandidate,Below threshold.,5121,5121,Coeurl,listing-1,retainer-1,Eth,548,55,30140,False,55,30140", csv, StringComparison.Ordinal);
     }
@@ -217,6 +219,8 @@ public sealed class MarketAcquisitionRouteDiagnosticsTests
             });
 
         var csv = ReadLog(diagnostics.ObservedListingsCsvPath!);
+        Assert.Contains("listingReadFresh,coverageStatus,unreadListings,rawItemIdMismatchCounts", csv, StringComparison.Ordinal);
+        Assert.Contains("True,Incomplete,32,", csv, StringComparison.Ordinal);
         Assert.Contains("VisibleCacheExhausted,No safe rows.,0,32,100,True", csv, StringComparison.Ordinal);
     }
 

@@ -275,6 +275,8 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
         "visibleListingCacheTruncated",
         "listingReadState",
         "listingReadFresh",
+        "coverageStatus",
+        "unreadListings",
         "rawItemIdMismatchCounts",
         "requestedQuantity",
         "wouldBuyQuantity",
@@ -348,6 +350,8 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
             candidatePlan.IsVisibleListingCacheTruncated.ToString(),
             candidatePlan.ListingReadState.ToString(),
             candidatePlan.IsListingReadFresh.ToString(),
+            FormatCoverageStatus(candidatePlan),
+            FormatUnreadListings(candidatePlan),
             FormatRawItemIdMismatchCounts(candidatePlan.RawItemIdMismatchCounts),
             candidatePlan.RequestedQuantity.ToString(CultureInfo.InvariantCulture),
             candidatePlan.WouldBuyQuantity.ToString(CultureInfo.InvariantCulture),
@@ -372,6 +376,15 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
             row?.RunningGilAfter.ToString(CultureInfo.InvariantCulture),
         ]);
     }
+
+    private static string FormatCoverageStatus(MarketAcquisitionLiveCandidatePlan candidatePlan) =>
+        candidatePlan.ReportedListingCount > candidatePlan.ReadableListingCount
+            ? "Incomplete"
+            : "Complete";
+
+    private static string FormatUnreadListings(MarketAcquisitionLiveCandidatePlan candidatePlan) =>
+        Math.Max(0, candidatePlan.ReportedListingCount - candidatePlan.ReadableListingCount)
+            .ToString(CultureInfo.InvariantCulture);
 
     private string FormatElapsed()
     {

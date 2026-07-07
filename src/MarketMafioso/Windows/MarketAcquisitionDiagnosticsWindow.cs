@@ -144,50 +144,12 @@ public sealed class MarketAcquisitionDiagnosticsWindow : Window
         ImGui.TextColored(
             readResult.Status == "Ready" ? ColSuccess : ColMuted,
             $"Read status: {readResult.Status}");
-        if (readResult.ListingCapacity > 0)
-        {
-            var capacityText = readResult.IsListingCountTruncated
-                ? $"Listings: {readResult.Listings.Count:N0}/{readResult.ListingCapacity:N0} readable, {readResult.ReportedListingCount:N0} reported"
-                : $"Listings: {readResult.Listings.Count:N0}/{readResult.ListingCapacity:N0} readable";
-            ImGui.TextColored(readResult.IsListingCountTruncated ? ColError : ColMuted, capacityText);
-        }
+        var coverageText = readResult.HasIncompleteCoverage
+            ? $"Listings: {readResult.ReadableListingCount:N0}/{readResult.ReportedListingCount:N0} evaluated; {readResult.UnreadListingCount:N0} unread"
+            : $"Listings: {readResult.ReadableListingCount:N0}/{readResult.ReportedListingCount:N0} evaluated";
+        ImGui.TextColored(readResult.HasIncompleteCoverage ? ColError : ColMuted, coverageText);
 
         ImGui.TextWrapped(readResult.Message);
-        DrawPaginationProbe(readResult);
-    }
-
-    private static void DrawPaginationProbe(MarketBoardReadResult readResult)
-    {
-        if (readResult.ItemId == 0 || string.IsNullOrWhiteSpace(readResult.WorldName))
-            return;
-
-        var paginationState = MarketBoardPaginationState.FromReadResult(readResult);
-        var probeResult = MarketBoardPaginationProbe.Evaluate(paginationState);
-        var color = probeResult.CanAttemptLiveProbe
-            ? ColHeader
-            : readResult.IsListingCountTruncated
-                ? ColError
-                : ColMuted;
-
-        ImGui.TextColored(
-            color,
-            $"Pagination: {probeResult.Status} (request {paginationState.CurrentRequestId} -> {paginationState.NextRequestId})");
-        ImGui.SameLine();
-        _ = ImGuiUi.Button("Probe Next Listing Page", false);
-        if (readResult.IsListingCountTruncated)
-        {
-            ImGui.TextWrapped(probeResult.Message);
-            ImGui.TextColored(
-                ColMuted,
-                probeResult.CanAttemptLiveProbe
-                    ? "Next-page probing is intentionally disabled until live capture proves which market-board action advances the cache safely."
-                    : "Next-page probing is unavailable for this read state.");
-            ImGui.TextWrapped("Pagination capture: capture input state before manually revealing deeper results, reveal the next result page if possible, then capture input state again and finish the capture log.");
-        }
-        else
-        {
-            ImGui.TextColored(ColMuted, "No deeper page is needed for the current read.");
-        }
     }
 
     private static void DrawPlanDecisions(MarketAcquisitionPlan? plan)

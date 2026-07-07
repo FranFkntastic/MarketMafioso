@@ -1552,6 +1552,14 @@ public class MainWindow : Window, IDisposable
 
         if (purchaseResult.Status.Equals("NoCandidate", StringComparison.OrdinalIgnoreCase))
         {
+            if (ShouldFailWorldPurchaseBatchOnNoCandidate(marketAcquisitionLiveCandidatePlan))
+            {
+                marketAcquisitionRouteRunner.FailRoute(marketAcquisitionLiveCandidatePlan.Message);
+                acquisitionStatus = marketAcquisitionRouteRunner.StatusMessage;
+                ReportGuidedRouteProgress();
+                return;
+            }
+
             CompleteActiveWorldPurchaseBatch(currentWorld);
             return;
         }
@@ -2123,6 +2131,9 @@ public class MainWindow : Window, IDisposable
             ? "SkippedVisibleCacheExhausted"
             : "SkippedNoLiveStock";
     }
+
+    internal static bool ShouldFailWorldPurchaseBatchOnNoCandidate(MarketAcquisitionLiveCandidatePlan? candidatePlan) =>
+        candidatePlan?.Status.Equals("VisibleCacheExhausted", StringComparison.OrdinalIgnoreCase) == true;
 
     private Task ProbeLiveMarketBoardAsync()
     {

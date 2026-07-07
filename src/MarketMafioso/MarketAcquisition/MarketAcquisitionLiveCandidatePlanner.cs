@@ -167,8 +167,6 @@ public static class MarketAcquisitionLiveCandidatePlanner
         var maxMeaningfulObservationUnitPrice = CalculateMeaningfulObservationUnitPriceThreshold(
             realListings,
             request.MaxUnitPrice);
-        var nonMeaningfulObservationCount = realListings.Count(listing =>
-            !MarketBoardListingIntegrity.IsMeaningfulObservation(listing, maxMeaningfulObservationUnitPrice));
         var candidates = realListings
             .Where(listing => MarketBoardListingIntegrity.IsMeaningfulObservation(listing, maxMeaningfulObservationUnitPrice))
             .ToList();
@@ -230,7 +228,6 @@ public static class MarketAcquisitionLiveCandidatePlanner
             checked(alreadyPurchasedQuantity + selectedQuantity),
             selectedQuantity,
             rows,
-            nonMeaningfulObservationCount,
             readResult);
         return new MarketAcquisitionLiveCandidatePlan
         {
@@ -356,13 +353,11 @@ public static class MarketAcquisitionLiveCandidatePlanner
         uint totalQuantityAfter,
         uint selectedQuantity,
         IReadOnlyList<MarketAcquisitionLiveCandidateRow> rows,
-        int nonMeaningfulObservationCount,
         MarketBoardReadResult? readResult)
     {
         if (selectedQuantity == 0)
         {
-            if (readResult?.IsListingCountTruncated == true &&
-                !ReadableRowsProvePriceBoundary(rows, nonMeaningfulObservationCount))
+            if (readResult?.HasIncompleteCoverage == true)
                 return "VisibleCacheExhausted";
 
             return "NoSafeListings";
@@ -372,15 +367,6 @@ public static class MarketAcquisitionLiveCandidatePlanner
             return "UnderProcured";
 
         return "Ready";
-    }
-
-    private static bool ReadableRowsProvePriceBoundary(
-        IReadOnlyList<MarketAcquisitionLiveCandidateRow> rows,
-        int nonMeaningfulObservationCount)
-    {
-        return rows.Count > 0
-            ? rows.All(row => row.Reason.Equals("AboveThreshold", StringComparison.OrdinalIgnoreCase))
-            : nonMeaningfulObservationCount > 0;
     }
 
     private static ulong CalculateMeaningfulObservationUnitPriceThreshold(

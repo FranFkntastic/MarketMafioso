@@ -88,7 +88,7 @@ public sealed class MarketAcquisitionLiveCandidatePlannerTests
     }
 
     [Fact]
-    public void BuildCandidatePlan_TreatsTruncatedAllAboveThresholdRowsAsNoSafeListings()
+    public void BuildCandidatePlan_TreatsIncompleteAllAboveThresholdRowsAsVisibleCacheExhausted()
     {
         var request = CreateRequest(quantityMode: "AllBelowThreshold", quantity: 0, maxUnitPrice: 100, maxTotalGil: 0);
         var plan = CreatePlan();
@@ -115,14 +115,52 @@ public sealed class MarketAcquisitionLiveCandidatePlannerTests
             "Gilgamesh",
             readResult);
 
-        Assert.Equal("NoSafeListings", candidatePlan.Status);
+        Assert.Equal("VisibleCacheExhausted", candidatePlan.Status);
         Assert.True(candidatePlan.IsVisibleListingCacheTruncated);
         Assert.Equal(0u, candidatePlan.WouldBuyQuantity);
+        Assert.All(candidatePlan.Rows, row => Assert.Equal("AboveThreshold", row.Reason));
+        Assert.Contains("reported 120", candidatePlan.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("only 2", candidatePlan.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void BuildCandidatePlan_DoesNotTreatSeraphPartialAboveThresholdSliceAsNoSafeListings()
+    {
+        var request = CreateRequest(itemId: 5121, itemName: "Darksteel Ore", quantityMode: "AllBelowThreshold", quantity: 0, maxUnitPrice: 600, maxTotalGil: 0);
+        var plan = CreatePlan(itemId: 5121, itemName: "Darksteel Ore", worldName: "Seraph");
+        var readResult = new MarketMafioso.Automation.MarketBoard.MarketBoardReadResult
+        {
+            Status = "Ready",
+            Message = "Read partial Seraph listings.",
+            ItemId = 5121,
+            WorldName = "Seraph",
+            ReportedListingCount = 21,
+            ListingCapacity = 100,
+            IsListingCountTruncated = true,
+            Listings =
+            [
+                CreateLiveListing("seraph-901", quantity: 99, unitPrice: 901, itemId: 5121, worldName: "Seraph"),
+                CreateLiveListing("seraph-1199", quantity: 12, unitPrice: 1199, itemId: 5121, worldName: "Seraph"),
+                CreateLiveListing("seraph-1200-a", quantity: 3, unitPrice: 1200, itemId: 5121, worldName: "Seraph"),
+                CreateLiveListing("seraph-1200-b", quantity: 3, unitPrice: 1200, itemId: 5121, worldName: "Seraph"),
+                CreateLiveListing("seraph-1900", quantity: 54, unitPrice: 1900, itemId: 5121, worldName: "Seraph"),
+            ],
+        };
+
+        var candidatePlan = MarketMafioso.MarketAcquisition.MarketAcquisitionLiveCandidatePlanner.BuildCandidatePlan(
+            request,
+            plan,
+            "Seraph",
+            readResult);
+
+        Assert.Equal("VisibleCacheExhausted", candidatePlan.Status);
+        Assert.Equal(0u, candidatePlan.WouldBuyQuantity);
+        Assert.Equal(5, candidatePlan.Rows.Count);
         Assert.All(candidatePlan.Rows, row => Assert.Equal("AboveThreshold", row.Reason));
     }
 
     [Fact]
-    public void BuildCandidatePlan_IgnoresNonMeaningfulJokePriceRows()
+    public void BuildCandidatePlan_TreatsIncompleteNonMeaningfulJokePriceRowsAsVisibleCacheExhausted()
     {
         var request = CreateRequest(quantityMode: "AllBelowThreshold", quantity: 0, maxUnitPrice: 100, maxTotalGil: 0);
         var plan = CreatePlan();
@@ -149,7 +187,7 @@ public sealed class MarketAcquisitionLiveCandidatePlannerTests
             "Gilgamesh",
             readResult);
 
-        Assert.Equal("NoSafeListings", candidatePlan.Status);
+        Assert.Equal("VisibleCacheExhausted", candidatePlan.Status);
         Assert.Empty(candidatePlan.Rows);
         Assert.True(candidatePlan.IsVisibleListingCacheTruncated);
         Assert.Equal(120, candidatePlan.ReportedListingCount);
@@ -446,7 +484,8 @@ public sealed class MarketAcquisitionLiveCandidatePlannerTests
 
     private static MarketMafioso.MarketAcquisition.MarketAcquisitionPlan CreatePlan(
         uint itemId = 2,
-        string itemName = "Fire Shard") =>
+        string itemName = "Fire Shard",
+        string worldName = "Gilgamesh") =>
         new()
         {
             RequestId = "request-1",
@@ -461,12 +500,12 @@ public sealed class MarketAcquisitionLiveCandidatePlannerTests
             [
                 new MarketMafioso.MarketAcquisition.MarketAcquisitionWorldBatch
                 {
-                    WorldName = "Gilgamesh",
+                    WorldName = worldName,
                     PlannedQuantity = 10,
                     PlannedGil = 900,
                     ItemSubtasks =
                     [
-                        CreateActiveSubtask(itemId: itemId, itemName: itemName, source: "Planned"),
+                        CreateActiveSubtask(itemId: itemId, itemName: itemName, source: "Planned", worldName: worldName),
                     ],
                     Listings = [],
                 },
@@ -476,7 +515,8 @@ public sealed class MarketAcquisitionLiveCandidatePlannerTests
     private static MarketMafioso.MarketAcquisition.MarketAcquisitionWorldItemSubtask CreateActiveSubtask(
         uint itemId,
         string itemName,
-        string source) =>
+        string source,
+        string worldName = "Gilgamesh") =>
         new()
         {
             LineId = $"line-{itemId}",
@@ -484,7 +524,7 @@ public sealed class MarketAcquisitionLiveCandidatePlannerTests
             Source = source,
             ItemId = itemId,
             ItemName = itemName,
-            WorldName = "Gilgamesh",
+            WorldName = worldName,
             DataCenter = "Aether",
             QuantityMode = "AllBelowThreshold",
             RequestedQuantity = 0,
@@ -501,11 +541,12 @@ public sealed class MarketAcquisitionLiveCandidatePlannerTests
         uint quantity,
         uint unitPrice,
         uint itemId = 2,
-        bool hq = false) =>
+        bool hq = false,
+        string worldName = "Gilgamesh") =>
         new()
         {
             ItemId = itemId,
-            WorldName = "Gilgamesh",
+            WorldName = worldName,
             ListingId = listingId,
             RetainerId = $"retainer-{listingId}",
             RetainerName = $"Retainer {listingId}",

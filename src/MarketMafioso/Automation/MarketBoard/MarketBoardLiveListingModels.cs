@@ -38,6 +38,9 @@ public sealed record MarketBoardReadResult
     public int ListingCapacity { get; init; }
     public bool IsAtListingCapacity { get; init; }
     public bool IsListingCountTruncated { get; init; }
+    public int ReadableListingCount => Listings.Count;
+    public int UnreadListingCount => Math.Max(0, ReportedListingCount - ReadableListingCount);
+    public bool HasIncompleteCoverage => UnreadListingCount > 0;
     public byte CurrentRequestId { get; init; }
     public byte NextRequestId { get; init; }
     public IReadOnlyDictionary<uint, int> RawItemIdMismatchCounts { get; init; } =
@@ -55,6 +58,12 @@ public sealed record MarketBoardAccumulatedReadResult
     public byte CurrentRequestId { get; init; }
     public byte NextRequestId { get; init; }
     public IReadOnlyList<MarketBoardLiveListing> Listings { get; init; } = [];
+
+    public int ReadableListingCount => Listings.Count;
+
+    public int UnreadListingCount => Math.Max(0, ReportedListingCount - ReadableListingCount);
+
+    public bool HasIncompleteCoverage => UnreadListingCount > 0;
 
     public bool IsAtListingCapacity =>
         ListingCapacity > 0 &&

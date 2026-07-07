@@ -4,6 +4,31 @@ namespace MarketMafioso.Tests.MarketAcquisition;
 
 public sealed class MarketAcquisitionClaimStatusTests
 {
+    [Fact]
+    public void ShouldFailWorldPurchaseBatchOnNoCandidate_ReturnsTrueForVisibleCacheExhausted()
+    {
+        var candidatePlan = new MarketMafioso.MarketAcquisition.MarketAcquisitionLiveCandidatePlan
+        {
+            Status = "VisibleCacheExhausted",
+        };
+
+        Assert.True(MainWindow.ShouldFailWorldPurchaseBatchOnNoCandidate(candidatePlan));
+    }
+
+    [Theory]
+    [InlineData("NoSafeListings")]
+    [InlineData("UnderProcured")]
+    [InlineData("Ready")]
+    public void ShouldFailWorldPurchaseBatchOnNoCandidate_ReturnsFalseForOtherCandidateStatuses(string status)
+    {
+        var candidatePlan = new MarketMafioso.MarketAcquisition.MarketAcquisitionLiveCandidatePlan
+        {
+            Status = status,
+        };
+
+        Assert.False(MainWindow.ShouldFailWorldPurchaseBatchOnNoCandidate(candidatePlan));
+    }
+
     [Theory]
     [InlineData("AcceptedInPlugin")]
     [InlineData("Running")]
