@@ -52,6 +52,28 @@ public sealed class CraftAppraisalWorkbenchIntegrationTests
     }
 
     [Fact]
+    public void BuildQuoteRequest_AllowsUnsetThresholdForCraftAppraisal()
+    {
+        var draft = TestDraft.WithLine(new MarketAcquisitionQuickShopLineDraft
+        {
+            ItemId = 5060,
+            ItemName = "Darksteel Ingot",
+            QuantityMode = "TargetQuantity",
+            TargetQuantity = 3,
+            HqPolicy = "Either",
+            MaxUnitPrice = 0,
+            GilCap = 0,
+        });
+
+        var request = CraftAppraisalWorkbenchRequestBuilder.Build(draft, draft.Lines[0]);
+
+        Assert.Equal(5060u, request.ItemId);
+        Assert.Equal(3u, request.Quantity);
+        Assert.Equal(0u, request.BuyThresholdUnitPrice);
+        Assert.Equal(0u, request.GilCap);
+    }
+
+    [Fact]
     public void BuildQuoteRequest_UsesOneForUncappedAllBelowThreshold()
     {
         var draft = TestDraft.WithLine(new MarketAcquisitionQuickShopLineDraft
