@@ -7,6 +7,7 @@ using Dalamud.Game.Addon.Lifecycle.AddonArgTypes;
 using Dalamud.Plugin.Services;
 using FFXIVClientStructs.FFXIV.Client.Game;
 using FFXIVClientStructs.FFXIV.Client.Game.UI;
+using MarketMafioso.RetainerRestock;
 
 namespace MarketMafioso;
 
@@ -22,6 +23,7 @@ public class RetainerCacheManager : IDisposable
     private readonly Configuration config;
     private readonly InventoryScanner scanner;
     private readonly HttpReporter reporter;
+    private readonly IPlayerState playerState;
     private bool isBatchRefreshActive;
 
     // Both addon names are registered so the handler fires regardless of
@@ -41,13 +43,15 @@ public class RetainerCacheManager : IDisposable
         IPluginLog log,
         Configuration config,
         InventoryScanner scanner,
-        HttpReporter reporter)
+        HttpReporter reporter,
+        IPlayerState playerState)
     {
         this.addonLifecycle = addonLifecycle;
         this.log = log;
         this.config = config;
         this.scanner = scanner;
         this.reporter = reporter;
+        this.playerState = playerState;
 
         addonLifecycle.RegisterListener(AddonEvent.PostSetup, LargeAddon, OnRetainerWindowOpen);
         addonLifecycle.RegisterListener(AddonEvent.PreFinalize, LargeAddon, OnRetainerWindowClose);
@@ -117,11 +121,14 @@ public class RetainerCacheManager : IDisposable
                 .ToList();
 
             var totalItems = cachedBags.Sum(b => b.Items.Count);
+            var ownerScope = GetCurrentOwnerScope();
 
             config.RetainerCache[_activeRetainerId] = new CachedRetainer
             {
                 RetainerId = _activeRetainerId,
                 RetainerName = _activeRetainerName,
+                OwnerCharacterName = ownerScope.CharacterName,
+                OwnerHomeWorld = ownerScope.HomeWorld,
                 LastUpdated = DateTime.UtcNow,
                 Gil = scanner.ScanCurrentRetainerGil(),
                 Bags = cachedBags,
@@ -173,6 +180,11 @@ public class RetainerCacheManager : IDisposable
     {
         isBatchRefreshActive = false;
     }
+
+    private RetainerOwnerScope GetCurrentOwnerScope() =>
+        new(
+            playerState.CharacterName,
+            playerState.HomeWorld.IsValid ? playerState.HomeWorld.Value.Name.ToString() : null);
 
     public void Dispose()
     {

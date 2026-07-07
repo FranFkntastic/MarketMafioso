@@ -57,6 +57,14 @@ public record RetainerReport
     [JsonPropertyName("retainerId")]
     public ulong RetainerId { get; init; }
 
+    [JsonPropertyName("ownerCharacterName")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? OwnerCharacterName { get; init; }
+
+    [JsonPropertyName("ownerHomeWorld")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? OwnerHomeWorld { get; init; }
+
     [JsonPropertyName("lastUpdated")]
     public string LastUpdated { get; init; } = string.Empty;
 

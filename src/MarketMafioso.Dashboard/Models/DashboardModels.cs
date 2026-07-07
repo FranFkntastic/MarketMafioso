@@ -241,6 +241,8 @@ public sealed record InventoryBrowserItemView
 public sealed record InventoryBrowserLocationView
 {
     public string OwnerName { get; init; } = string.Empty;
+    public string? OwnerCharacterName { get; init; }
+    public string? OwnerHomeWorld { get; init; }
     public string BagName { get; init; } = string.Empty;
     public int Quantity { get; init; }
     public int HqQuantity { get; init; }
@@ -251,6 +253,8 @@ public sealed record InventoryBrowserScopeView
     public string ScopeKey { get; init; } = string.Empty;
     public string DisplayName { get; init; } = string.Empty;
     public string Description { get; init; } = string.Empty;
+    public string? OwnerCharacterName { get; init; }
+    public string? OwnerHomeWorld { get; init; }
     public int StackCount { get; init; }
     public ulong Gil { get; init; }
     public int MarketListingCount { get; init; }
@@ -260,6 +264,8 @@ public sealed record InventoryBrowserScopeView
 public sealed record InventoryBrowserMarketListingView
 {
     public string OwnerName { get; init; } = string.Empty;
+    public string? OwnerCharacterName { get; init; }
+    public string? OwnerHomeWorld { get; init; }
     public uint ItemId { get; init; }
     public string DisplayName { get; init; } = string.Empty;
     public string? ItemType { get; init; }

@@ -360,6 +360,14 @@ else
     private static string ScopeSummary(InventoryBrowserScopeView scope)
     {
         var parts = new List<string> { $"{scope.StackCount:N0} stack(s)" };
+        if (!string.IsNullOrWhiteSpace(scope.OwnerCharacterName))
+        {
+            var owner = string.IsNullOrWhiteSpace(scope.OwnerHomeWorld)
+                ? scope.OwnerCharacterName
+                : $"{scope.OwnerCharacterName} @ {scope.OwnerHomeWorld}";
+            parts.Add(owner);
+        }
+
         if (scope.Gil > 0)
             parts.Add($"{scope.Gil:N0} gil");
         if (scope.MarketListingCount > 0)

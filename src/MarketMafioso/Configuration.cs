@@ -1,4 +1,5 @@
 using Dalamud.Configuration;
+using MarketMafioso.RetainerRestock;
 using MarketMafioso.WorkshopPrep;
 using System;
 using System.Collections.Generic;
@@ -40,6 +41,7 @@ public class Configuration : IPluginConfiguration
     public Dictionary<ulong, CachedRetainer> RetainerCache { get; set; } = new();
     public List<WorkshopPrepQueueItem> WorkshopPrepQueue { get; set; } = new();
     public List<WorkshopFrozenQueue> FrozenWorkshopQueues { get; set; } = new();
+    public List<RetainerRestockPlanItem> RetainerRestockPlanItems { get; set; } = new();
     public Guid? ActiveFrozenWorkshopQueueId { get; set; }
     public List<uint> FavoriteWorkshopProjectIds { get; set; } = new();
 
@@ -51,6 +53,8 @@ public class CachedRetainer
 {
     public ulong RetainerId { get; set; }
     public string RetainerName { get; set; } = string.Empty;
+    public string? OwnerCharacterName { get; set; }
+    public string? OwnerHomeWorld { get; set; }
     public DateTime LastUpdated { get; set; }
     public ulong Gil { get; set; }
     public List<CachedBag> Bags { get; set; } = new();

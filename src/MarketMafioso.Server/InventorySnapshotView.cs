@@ -25,6 +25,8 @@ public sealed record InventoryOwnerView
 {
     public string Name { get; init; } = string.Empty;
     public ulong? RetainerId { get; init; }
+    public string? OwnerCharacterName { get; init; }
+    public string? OwnerHomeWorld { get; init; }
     public string? LastUpdated { get; init; }
     public IReadOnlyList<InventoryBagView> Bags { get; init; } = [];
     public int Stacks { get; init; }

@@ -45,6 +45,8 @@ public sealed class InventorySnapshotViewBuilderTests
                     {
                         RetainerName = "Sample Retainer",
                         RetainerId = 123456789,
+                        OwnerCharacterName = "Test Character",
+                        OwnerHomeWorld = "Gilgamesh",
                         LastUpdated = "2026-06-22T11:55:00.0000000Z",
                         Bags =
                         [
@@ -89,6 +91,8 @@ public sealed class InventorySnapshotViewBuilderTests
         var retainer = view.Retainers[0];
         Assert.Equal("Sample Retainer", retainer.Name);
         Assert.Equal((ulong)123456789, retainer.RetainerId);
+        Assert.Equal("Test Character", retainer.OwnerCharacterName);
+        Assert.Equal("Gilgamesh", retainer.OwnerHomeWorld);
         Assert.Equal("RetainerPage1", retainer.Bags[0].Name);
         Assert.True(retainer.Bags[0].Items[0].IsHQ);
 

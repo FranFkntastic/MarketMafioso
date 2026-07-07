@@ -8,7 +8,7 @@ public static class InventorySnapshotViewBuilder
 
         var playerInventory = BuildPlayerInventory(stored.Report.PlayerInventory);
         var retainers = stored.Report.Retainers
-            .Select(BuildRetainer)
+            .Select(retainer => BuildRetainer(retainer, stored.Report.CharacterName, stored.Report.HomeWorld))
             .ToList();
 
         var retainerStacks = retainers.Sum(r => r.Stacks);
@@ -60,18 +60,22 @@ public static class InventorySnapshotViewBuilder
     }
 
     private static InventoryOwnerView BuildPlayerInventory(IReadOnlyList<InventoryBag> bags) =>
-        BuildOwner("Player Inventory", null, null, bags);
+        BuildOwner("Player Inventory", null, null, null, null, bags);
 
-    private static InventoryOwnerView BuildRetainer(RetainerReport retainer) =>
+    private static InventoryOwnerView BuildRetainer(RetainerReport retainer, string? reportCharacterName, string? reportHomeWorld) =>
         BuildOwner(
             retainer.RetainerName,
             retainer.RetainerId,
+            string.IsNullOrWhiteSpace(retainer.OwnerCharacterName) ? reportCharacterName : retainer.OwnerCharacterName,
+            string.IsNullOrWhiteSpace(retainer.OwnerHomeWorld) ? reportHomeWorld : retainer.OwnerHomeWorld,
             retainer.LastUpdated,
             retainer.Bags);
 
     private static InventoryOwnerView BuildOwner(
         string name,
         ulong? retainerId,
+        string? ownerCharacterName,
+        string? ownerHomeWorld,
         string? lastUpdated,
         IReadOnlyList<InventoryBag> bags)
     {
@@ -81,6 +85,8 @@ public static class InventorySnapshotViewBuilder
         {
             Name = name,
             RetainerId = retainerId,
+            OwnerCharacterName = ownerCharacterName,
+            OwnerHomeWorld = ownerHomeWorld,
             LastUpdated = lastUpdated,
             Bags = bagViews,
             Stacks = bagViews.Sum(b => b.Stacks),

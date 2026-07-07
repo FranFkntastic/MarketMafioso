@@ -191,6 +191,8 @@ public sealed class InventoryReportStoreSqliteTests
         var retainer = Assert.Single(loaded.Report.Retainers);
         Assert.Equal((ulong)1_242_888, retainer.Gil);
         Assert.Equal("Metal", retainer.Bags[0].Items[0].ItemType);
+        Assert.Equal("Semantic Character", retainer.OwnerCharacterName);
+        Assert.Equal("Siren", retainer.OwnerHomeWorld);
         Assert.Equal(2, retainer.MarketListings.Count);
         Assert.Equal((uint)1_800, retainer.MarketListings[0].UnitPrice);
         Assert.Equal((uint)2_150, retainer.MarketListings[1].UnitPrice);

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using MarketMafioso.RetainerRestock;
 
 namespace MarketMafioso.WorkshopPrep;
 
@@ -11,6 +12,15 @@ public static class WorkshopMaterialAvailabilityService
         IReadOnlyDictionary<uint, int> playerInventory,
         Configuration config)
     {
+        return BuildAvailability(requirements, playerInventory, config, ownerScope: null);
+    }
+
+    public static IReadOnlyList<WorkshopMaterialAvailability> BuildAvailability(
+        IReadOnlyList<WorkshopMaterialRequirement> requirements,
+        IReadOnlyDictionary<uint, int> playerInventory,
+        Configuration config,
+        RetainerOwnerScope? ownerScope)
+    {
         return requirements
             .GroupBy(x => x.ItemId)
             .Select(group =>
@@ -19,7 +29,7 @@ public static class WorkshopMaterialAvailabilityService
                 var required = group.Sum(x => x.Quantity);
                 var playerCount = playerInventory.TryGetValue(first.ItemId, out var count) ? count : 0;
                 var shortage = Math.Max(0, required - playerCount);
-                var retainerStock = BuildRetainerStock(first.ItemId, config);
+                var retainerStock = BuildRetainerStock(first.ItemId, config, ownerScope);
                 var retainerCount = retainerStock.Sum(x => x.Quantity);
                 var totalMissing = Math.Max(0, required - playerCount - retainerCount);
                 var candidates = shortage == 0
@@ -41,9 +51,13 @@ public static class WorkshopMaterialAvailabilityService
             .ToList();
     }
 
-    private static IReadOnlyList<RetainerMaterialCandidate> BuildRetainerStock(uint itemId, Configuration config)
+    private static IReadOnlyList<RetainerMaterialCandidate> BuildRetainerStock(
+        uint itemId,
+        Configuration config,
+        RetainerOwnerScope? ownerScope)
     {
         return config.RetainerCache.Values
+            .Where(retainer => ownerScope is null || ownerScope.Matches(retainer.OwnerCharacterName, retainer.OwnerHomeWorld))
             .Select(retainer => new
             {
                 Retainer = retainer,

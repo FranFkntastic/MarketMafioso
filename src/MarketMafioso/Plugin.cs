@@ -62,7 +62,7 @@ public sealed class Plugin : IDalamudPlugin
 
         scanner = new InventoryScanner(DataManager, Log);
         reporter = new HttpReporter(Configuration, PlayerState, Log, ChatGui, scanner);
-        retainerCache = new RetainerCacheManager(AddonLifecycle, Log, Configuration, scanner, reporter);
+        retainerCache = new RetainerCacheManager(AddonLifecycle, Log, Configuration, scanner, reporter, PlayerState);
         autoRetainerRefresh = new AutoRetainerRefreshService(
             PluginInterface,
             Log,

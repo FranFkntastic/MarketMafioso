@@ -11,6 +11,7 @@ using FFXIVClientStructs.FFXIV.Component.GUI;
 using Lumina.Excel.Sheets;
 using MarketMafioso.Automation.Retainers;
 using MarketMafioso.Automation.Safety;
+using MarketMafioso.RetainerRestock;
 
 namespace MarketMafioso.WorkshopPrep;
 
@@ -69,6 +70,38 @@ public sealed class WorkshopRetainerRestockService
     public string LastStatus => lastStatus;
     public WorkshopRetainerRestockState State { get; private set; } = WorkshopRetainerRestockState.Idle;
 
+    public async Task StartRestockAsync(IReadOnlyList<RetainerRestockPlanLine> planLines)
+    {
+        if (isRunning)
+        {
+            lastStatus = "Retainer restock is already running.";
+            return;
+        }
+
+        var request = BuildRestockRunRequest(planLines);
+        if (request.RemainingQuantities.Count == 0)
+        {
+            lastStatus = "No restock quantities are needed.";
+            return;
+        }
+
+        if (request.CandidateRetainers.Count == 0)
+        {
+            lastStatus = "No cached retainer candidates are available for the restock plan.";
+            return;
+        }
+
+        await StartRunAsync(
+            request.RemainingQuantities.ToDictionary(x => x.Key, x => x.Value),
+            request.CandidateRetainers,
+            static (remaining, totalRetrieved) =>
+            {
+                var summary = RetainerRestockCompletionSummary.Build(remaining, totalRetrieved);
+                return new RestockRunCompletion(summary.IsSuccess, summary.Message);
+            },
+            "Retainer restock").ConfigureAwait(false);
+    }
+
     public async Task StartAsync(IReadOnlyList<WorkshopMaterialAvailability> availability)
     {
         if (isRunning)
@@ -84,17 +117,66 @@ public sealed class WorkshopRetainerRestockService
             return;
         }
 
+        var remaining = shortages.ToDictionary(x => x.ItemId, x => x.Shortage);
+        var candidates = shortages.SelectMany(x => x.CandidateRetainers)
+            .DistinctBy(x => x.RetainerId)
+            .ToList();
+        if (candidates.Count == 0)
+        {
+            lastStatus = "No cached retainer candidates are available for the workshop material shortages.";
+            return;
+        }
+
+        await StartRunAsync(
+            remaining,
+            candidates,
+            static (remainingQuantities, totalRetrieved) =>
+            {
+                var summary = BuildCompletionSummary(remainingQuantities, totalRetrieved);
+                return new RestockRunCompletion(summary.IsSuccess, summary.Message);
+            },
+            "Workshop material restock").ConfigureAwait(false);
+    }
+
+    public static RetainerRestockRunRequest BuildRestockRunRequest(IReadOnlyList<RetainerRestockPlanLine> planLines)
+    {
+        ArgumentNullException.ThrowIfNull(planLines);
+
+        var remaining = planLines
+            .Where(line => line.NeededQuantity > 0)
+            .GroupBy(line => line.ItemId)
+            .ToDictionary(group => group.Key, group => group.Sum(line => line.NeededQuantity));
+        var candidates = planLines
+            .Where(line => line.NeededQuantity > 0)
+            .SelectMany(line => line.Candidates)
+            .GroupBy(candidate => candidate.RetainerId)
+            .Select(group =>
+            {
+                var first = group.First();
+                return new RetainerMaterialCandidate(
+                    first.RetainerId,
+                    first.RetainerName,
+                    first.LastUpdatedUtc,
+                    group.Sum(candidate => candidate.CachedQuantity));
+            })
+            .OrderByDescending(candidate => candidate.Quantity)
+            .ThenByDescending(candidate => candidate.LastUpdated)
+            .ThenBy(candidate => candidate.RetainerName, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        return new RetainerRestockRunRequest(remaining, candidates);
+    }
+
+    private async Task StartRunAsync(
+        Dictionary<uint, int> remaining,
+        IReadOnlyList<RetainerMaterialCandidate> candidates,
+        Func<IReadOnlyDictionary<uint, int>, int, RestockRunCompletion> buildCompletion,
+        string runLabel)
+    {
         isRunning = true;
         State = WorkshopRetainerRestockState.Planning;
         try
         {
-            var remaining = shortages.ToDictionary(x => x.ItemId, x => x.Shortage);
-            var candidates = shortages.SelectMany(x => x.CandidateRetainers)
-                .DistinctBy(x => x.RetainerId)
-                .ToList();
-            if (candidates.Count == 0)
-                throw new InvalidOperationException("No cached retainer candidates are available for the workshop material shortages.");
-
             var totalRetrieved = 0;
             State = WorkshopRetainerRestockState.WaitingForRetainerList;
             await WaitForRetainerListAsync().ConfigureAwait(false);
@@ -120,7 +202,7 @@ public sealed class WorkshopRetainerRestockService
                     break;
             }
 
-            var summary = BuildCompletionSummary(remaining, totalRetrieved);
+            var summary = buildCompletion(remaining, totalRetrieved);
             if (!summary.IsSuccess)
             {
                 State = WorkshopRetainerRestockState.WithdrawingItems;
@@ -135,8 +217,8 @@ public sealed class WorkshopRetainerRestockService
         {
             var failedState = State;
             State = WorkshopRetainerRestockState.Failed;
-            lastStatus = $"Workshop material restock failed during {failedState}. {ex.Message}";
-            log.Error(ex, "[MarketMafioso] Workshop material restock failed.");
+            lastStatus = $"{runLabel} failed during {failedState}. {ex.Message}";
+            log.Error(ex, $"[MarketMafioso] {runLabel} failed.");
         }
         finally
         {
@@ -643,4 +725,12 @@ internal sealed record RetainerUiActionResult(
 public sealed record WorkshopRetainerRestockCompletionSummary(
     bool IsSuccess,
     bool IsPartial,
+    string Message);
+
+public sealed record RetainerRestockRunRequest(
+    IReadOnlyDictionary<uint, int> RemainingQuantities,
+    IReadOnlyList<RetainerMaterialCandidate> CandidateRetainers);
+
+internal sealed record RestockRunCompletion(
+    bool IsSuccess,
     string Message);

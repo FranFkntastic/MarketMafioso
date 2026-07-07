@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Json;
@@ -6,6 +7,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading.Tasks;
 using Dalamud.Plugin.Services;
+using MarketMafioso.RetainerRestock;
 
 namespace MarketMafioso;
 
@@ -69,56 +71,20 @@ public class HttpReporter : IDisposable
 
         try
         {
+            var ownerScope = new RetainerOwnerScope(
+                playerState.CharacterName,
+                playerState.HomeWorld.IsValid ? playerState.HomeWorld.Value.Name.ToString() : null);
             string? charName = null;
             string? homeWorld = null;
 
             if (config.IncludeCharacterInfo)
             {
-                charName = playerState.CharacterName;
-                homeWorld = playerState.HomeWorld.IsValid ? playerState.HomeWorld.Value.Name.ToString() : null;
+                charName = ownerScope.CharacterName;
+                homeWorld = ownerScope.HomeWorld;
             }
 
             var playerInventory = scanner.ScanPlayerInventory(config);
-
-            var retainers = config.RetainerCache.Values
-                .Select(r => new RetainerReport
-                {
-                    RetainerName = r.RetainerName,
-                    RetainerId = r.RetainerId,
-                    LastUpdated = r.LastUpdated.ToString("o"),
-                    Gil = r.Gil,
-                    Bags = r.Bags
-                        .Select(b => new InventoryBag
-                        {
-                            BagName = b.BagName,
-                            Items = b.Items
-                                .Select(i => new ItemSlot
-                                {
-                                    ItemId = i.ItemId,
-                                    ItemName = i.ItemName,
-                                    ItemType = i.ItemType,
-                                    Quantity = i.Quantity,
-                                    IsHQ = i.IsHQ,
-                                    Condition = i.Condition,
-                                })
-                                .ToList(),
-                        })
-                        .ToList(),
-                    MarketListings = r.MarketListings
-                        .Select(i => new RetainerMarketListing
-                        {
-                            ItemId = i.ItemId,
-                            ItemName = i.ItemName,
-                            ItemType = i.ItemType,
-                            Quantity = i.Quantity,
-                            IsHQ = i.IsHQ,
-                            Condition = i.Condition,
-                            UnitPrice = i.UnitPrice,
-                            ListedAt = i.ListedAt,
-                        })
-                        .ToList(),
-                })
-                .ToList();
+            var retainers = BuildRetainerReports(config, ownerScope, config.IncludeCharacterInfo);
 
             var generatedAtUtc = DateTime.UtcNow.ToString("o");
             var report = new InventoryReport
@@ -196,6 +162,58 @@ public class HttpReporter : IDisposable
     }
 
     public void Dispose() => httpClient.Dispose();
+
+    public static List<RetainerReport> BuildRetainerReports(
+        Configuration config,
+        RetainerOwnerScope ownerScope,
+        bool includeOwnerFields)
+    {
+        ArgumentNullException.ThrowIfNull(config);
+        ArgumentNullException.ThrowIfNull(ownerScope);
+
+        return config.RetainerCache.Values
+            .Where(r => ownerScope.Matches(r.OwnerCharacterName, r.OwnerHomeWorld))
+            .Select(r => new RetainerReport
+            {
+                RetainerName = r.RetainerName,
+                RetainerId = r.RetainerId,
+                OwnerCharacterName = includeOwnerFields ? r.OwnerCharacterName : null,
+                OwnerHomeWorld = includeOwnerFields ? r.OwnerHomeWorld : null,
+                LastUpdated = r.LastUpdated.ToString("o"),
+                Gil = r.Gil,
+                Bags = r.Bags
+                    .Select(b => new InventoryBag
+                    {
+                        BagName = b.BagName,
+                        Items = b.Items
+                            .Select(i => new ItemSlot
+                            {
+                                ItemId = i.ItemId,
+                                ItemName = i.ItemName,
+                                ItemType = i.ItemType,
+                                Quantity = i.Quantity,
+                                IsHQ = i.IsHQ,
+                                Condition = i.Condition,
+                            })
+                            .ToList(),
+                    })
+                    .ToList(),
+                MarketListings = r.MarketListings
+                    .Select(i => new RetainerMarketListing
+                    {
+                        ItemId = i.ItemId,
+                        ItemName = i.ItemName,
+                        ItemType = i.ItemType,
+                        Quantity = i.Quantity,
+                        IsHQ = i.IsHQ,
+                        Condition = i.Condition,
+                        UnitPrice = i.UnitPrice,
+                        ListedAt = i.ListedAt,
+                    })
+                    .ToList(),
+            })
+            .ToList();
+    }
 
     public static HttpReportResponse ParseReportResponse(string body)
     {

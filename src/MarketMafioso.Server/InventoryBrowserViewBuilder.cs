@@ -19,10 +19,12 @@ public static class InventoryBrowserViewBuilder
             .Select(group =>
             {
                 var itemLocations = group
-                    .GroupBy(x => new { x.OwnerName, x.BagName })
+                    .GroupBy(x => new { x.OwnerName, x.OwnerCharacterName, x.OwnerHomeWorld, x.BagName })
                     .Select(locationGroup => new InventoryBrowserLocationView
                     {
                         OwnerName = locationGroup.Key.OwnerName,
+                        OwnerCharacterName = locationGroup.Key.OwnerCharacterName,
+                        OwnerHomeWorld = locationGroup.Key.OwnerHomeWorld,
                         BagName = locationGroup.Key.BagName,
                         Quantity = checked((int)locationGroup.Sum(x => (long)x.Quantity)),
                         HqQuantity = checked((int)locationGroup.Sum(x => x.IsHQ ? (long)x.Quantity : 0)),
@@ -83,6 +85,8 @@ public static class InventoryBrowserViewBuilder
             {
                 yield return new ItemLocation(
                     "Player Inventory",
+                    report.CharacterName,
+                    report.HomeWorld,
                     bag.BagName,
                     item.ItemId,
                     item.ItemName,
@@ -103,6 +107,8 @@ public static class InventoryBrowserViewBuilder
                 {
                     yield return new ItemLocation(
                         retainer.RetainerName,
+                        ResolveRetainerOwnerCharacterName(report, retainer),
+                        ResolveRetainerOwnerHomeWorld(report, retainer),
                         bag.BagName,
                         item.ItemId,
                         item.ItemName,
@@ -133,6 +139,8 @@ public static class InventoryBrowserViewBuilder
             ScopeKey = retainer.RetainerName,
             DisplayName = retainer.RetainerName,
             Description = "Retainer inventory",
+            OwnerCharacterName = ResolveRetainerOwnerCharacterName(report, retainer),
+            OwnerHomeWorld = ResolveRetainerOwnerHomeWorld(report, retainer),
             StackCount = retainer.Bags
                 .Where(bag => !IsNonInventoryRetainerBag(bag.BagName))
                 .SelectMany(bag => bag.Items)
@@ -153,6 +161,8 @@ public static class InventoryBrowserViewBuilder
             .SelectMany(retainer => retainer.MarketListings.Select(listing => new InventoryBrowserMarketListingView
             {
                 OwnerName = retainer.RetainerName,
+                OwnerCharacterName = ResolveRetainerOwnerCharacterName(report, retainer),
+                OwnerHomeWorld = ResolveRetainerOwnerHomeWorld(report, retainer),
                 ItemId = listing.ItemId,
                 DisplayName = string.IsNullOrWhiteSpace(listing.ItemName)
                     ? $"Item {listing.ItemId}"
@@ -185,8 +195,20 @@ public static class InventoryBrowserViewBuilder
             .SelectMany(bag => bag.Items)
             .Count();
 
+    private static string? ResolveRetainerOwnerCharacterName(InventoryReport report, RetainerReport retainer) =>
+        string.IsNullOrWhiteSpace(retainer.OwnerCharacterName)
+            ? report.CharacterName
+            : retainer.OwnerCharacterName;
+
+    private static string? ResolveRetainerOwnerHomeWorld(InventoryReport report, RetainerReport retainer) =>
+        string.IsNullOrWhiteSpace(retainer.OwnerHomeWorld)
+            ? report.HomeWorld
+            : retainer.OwnerHomeWorld;
+
     private sealed record ItemLocation(
         string OwnerName,
+        string? OwnerCharacterName,
+        string? OwnerHomeWorld,
         string BagName,
         uint ItemId,
         string? ItemName,

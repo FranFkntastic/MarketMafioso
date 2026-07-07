@@ -1,4 +1,5 @@
 using MarketMafioso.WorkshopPrep;
+using MarketMafioso.RetainerRestock;
 
 namespace MarketMafioso.Tests.WorkshopPrep;
 
@@ -43,5 +44,56 @@ public sealed class WorkshopRetainerRestockCompletionTests
         string? expected)
     {
         Assert.Equal(expected, WorkshopRetainerRestockService.GetAutomatedRestockStartError(isRetainerListReady, isRetainerInventoryReady));
+    }
+
+    [Fact]
+    public void BuildRestockRunRequest_UsesNeededQuantitiesAndDistinctCandidateRetainers()
+    {
+        var lines = new[]
+        {
+            new RetainerRestockPlanLine(
+                Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+                100,
+                "Elm Lumber",
+                55,
+                20,
+                35,
+                80,
+                0,
+                [
+                    new RetainerRestockCandidate(10, "A", new DateTime(2026, 7, 7, 12, 0, 0, DateTimeKind.Utc), 80),
+                    new RetainerRestockCandidate(11, "B", new DateTime(2026, 7, 7, 12, 0, 0, DateTimeKind.Utc), 20),
+                ],
+                RetainerRestockPlanLineStatus.Ready,
+                TimeSpan.Zero),
+            new RetainerRestockPlanLine(
+                Guid.Parse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"),
+                101,
+                "Ash Lumber",
+                10,
+                0,
+                10,
+                20,
+                0,
+                [
+                    new RetainerRestockCandidate(10, "A", new DateTime(2026, 7, 7, 12, 0, 0, DateTimeKind.Utc), 10),
+                ],
+                RetainerRestockPlanLineStatus.Ready,
+                TimeSpan.Zero),
+        };
+
+        var request = WorkshopRetainerRestockService.BuildRestockRunRequest(lines);
+
+        Assert.Equal(
+            new Dictionary<uint, int>
+            {
+                [100] = 35,
+                [101] = 10,
+            },
+            request.RemainingQuantities);
+        Assert.Collection(
+            request.CandidateRetainers,
+            candidate => Assert.Equal(10UL, candidate.RetainerId),
+            candidate => Assert.Equal(11UL, candidate.RetainerId));
     }
 }

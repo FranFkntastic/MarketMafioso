@@ -277,6 +277,8 @@ public sealed class InventoryReportViewEndpointTests
                 {
                     RetainerName = "Scrongle",
                     RetainerId = 42,
+                    OwnerCharacterName = "Semantic Browser",
+                    OwnerHomeWorld = "Siren",
                     LastUpdated = "2026-06-24T11:53:00.0000000Z",
                     Gil = 1_242_888,
                     Bags =
@@ -340,6 +342,8 @@ public sealed class InventoryReportViewEndpointTests
         Assert.Equal(1, scope.StackCount);
         Assert.Equal((ulong)1_242_888, scope.Gil);
         Assert.Equal(2, scope.MarketListingCount);
+        Assert.Equal("Semantic Browser", scope.OwnerCharacterName);
+        Assert.Equal("Siren", scope.OwnerHomeWorld);
         var item = Assert.Single(view.Items);
         Assert.Equal("Metal", item.ItemType);
         Assert.Equal(111, item.TotalQuantity);

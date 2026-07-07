@@ -348,6 +348,8 @@ public sealed class InventoryReportStore
             {
                 RetainerName = owner.OwnerName,
                 RetainerId = owner.RetainerId ?? 0,
+                OwnerCharacterName = snapshot.CharacterName,
+                OwnerHomeWorld = snapshot.HomeWorld,
                 LastUpdated = owner.LastUpdated ?? string.Empty,
                 Gil = owner.Gil ?? 0,
                 Bags = bags,
