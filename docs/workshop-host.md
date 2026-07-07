@@ -11,9 +11,8 @@ Use Workshop Host when you want private state or automation:
 - persistent inventory snapshots;
 - browser dashboard sessions;
 - diagnostics and stored report history;
-- receiver-backed Market Acquisition queues;
 - Craft Architect quote lookup for Acquisition Workbench craft appraisal;
-- future cross-tool automation between Craft Architect and MarketMafioso.
+- future private cross-tool state between Craft Architect and MarketMafioso.
 
 ## What Does Not Require Workshop Host
 
@@ -56,13 +55,11 @@ Workshop Host routes are classified with named machine scopes:
 - `inventory:write`
 - `inventory:read`
 - `craft:quote`
-- `acquisition:queue`
 - `diagnostics:read`
-- `automation:run`
 
-Current self-host builds keep `MarketMafioso__ClientApiKey` as the compatibility key for all implemented non-dashboard machine scopes. The scope names exist so quote evidence, acquisition queues, diagnostics, and future automation can be separated without changing the route model later.
+Current self-host builds keep `MarketMafioso__ClientApiKey` as the compatibility key for all implemented non-dashboard machine scopes. The scope names exist so inventory, quote evidence, diagnostics, and future private integrations can be separated without changing the route model later.
 
-Optional scoped settings are available for narrower clients: `InventoryWriteApiKey`, `InventoryReadApiKey`, `CraftQuoteApiKey`, `AcquisitionQueueApiKey`, `DiagnosticsReadApiKey`, and `AutomationRunApiKey`. Any scoped machine key may read `/api/capabilities`; feature routes still require their matching scope.
+Optional scoped settings are available for narrower clients: `InventoryWriteApiKey`, `InventoryReadApiKey`, `CraftQuoteApiKey`, and `DiagnosticsReadApiKey`. Any scoped machine key may read `/api/capabilities`; feature routes still require their matching scope.
 
 ## Public Service Boundary
 
