@@ -124,6 +124,44 @@ public sealed class CraftAppraisalWorkbenchIntegrationTests
         Assert.Equal(draft.DraftRevision + 1, updated.DraftRevision);
     }
 
+    [Fact]
+    public void ApplyPricing_UpdatesOnlySelectedLineAndAdvancesRevision()
+    {
+        var draft = TestDraft.WithLines(
+            new MarketAcquisitionQuickShopLineDraft
+            {
+                ItemId = 2,
+                ItemName = "Fire Shard",
+                QuantityMode = "TargetQuantity",
+                TargetQuantity = 10,
+                HqPolicy = "Either",
+                MaxUnitPrice = 100,
+                GilCap = 0,
+            },
+            new MarketAcquisitionQuickShopLineDraft
+            {
+                ItemId = 5060,
+                ItemName = "Darksteel Ingot",
+                QuantityMode = "TargetQuantity",
+                TargetQuantity = 3,
+                HqPolicy = "Either",
+                MaxUnitPrice = 0,
+                GilCap = 0,
+            });
+
+        var updated = AcquisitionWorkbenchDraftMutation.ApplyPricing(
+            draft,
+            selectedLineIndex: 1,
+            maxUnitPrice: 1200,
+            gilCap: 5000);
+
+        Assert.Equal(100u, updated.Lines[0].MaxUnitPrice);
+        Assert.Equal(0u, updated.Lines[0].GilCap);
+        Assert.Equal(1200u, updated.Lines[1].MaxUnitPrice);
+        Assert.Equal(5000u, updated.Lines[1].GilCap);
+        Assert.Equal(draft.DraftRevision + 1, updated.DraftRevision);
+    }
+
     private static class TestDraft
     {
         public static MarketAcquisitionQuickShopDraft WithLine(MarketAcquisitionQuickShopLineDraft line) =>
