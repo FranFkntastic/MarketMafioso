@@ -42,9 +42,13 @@ public sealed class AcquisitionWorkbenchWindow : Window
     private string maxQuantityBuffer = string.Empty;
     private string maxUnitPriceBuffer = string.Empty;
     private string gilCapBuffer = string.Empty;
+    private string selectedMaxUnitPriceBuffer = string.Empty;
+    private string selectedGilCapBuffer = string.Empty;
     private int quantityModeIndex = 1;
     private int hqPolicyIndex;
     private int selectedLineIndex;
+    private int selectedPricingLineIndex = -1;
+    private int selectedPricingLineRevision;
     private WorkbenchPane activePane = WorkbenchPane.Build;
 
     private static readonly Vector4 ColHeader = new(0.38f, 0.73f, 1.00f, 1f);
@@ -299,7 +303,7 @@ public sealed class AcquisitionWorkbenchWindow : Window
         ImGui.TextColored(ColMuted, $"Mode: {MarketAcquisitionQuantityModePresenter.FormatMode(selected.QuantityMode)}");
         var quantity = selected.QuantityMode == "TargetQuantity" ? selected.TargetQuantity : selected.MaxQuantity;
         ImGui.TextColored(ColMuted, $"Quantity: {MarketAcquisitionQuantityModePresenter.FormatQuantity(selected.QuantityMode, quantity)}");
-        ImGui.TextColored(ColMuted, $"Max unit: {FormatGil(selected.MaxUnitPrice)}");
+        ImGui.TextColored(ColMuted, $"Max unit: {AcquisitionWorkbenchPricingFormatter.FormatOptionalGil(selected.MaxUnitPrice)}");
     }
 
     private void DrawQueuedLines()
@@ -341,7 +345,7 @@ public sealed class AcquisitionWorkbenchWindow : Window
             var quantity = line.QuantityMode == "TargetQuantity" ? line.TargetQuantity : line.MaxQuantity;
             ImGui.TextUnformatted(MarketAcquisitionQuantityModePresenter.FormatQuantity(line.QuantityMode, quantity));
             ImGui.TableNextColumn();
-            ImGui.TextUnformatted(FormatGil(line.MaxUnitPrice));
+            ImGui.TextUnformatted(AcquisitionWorkbenchPricingFormatter.FormatOptionalGil(line.MaxUnitPrice));
             ImGui.TableNextColumn();
             ImGui.TextUnformatted(line.HqPolicy);
             ImGui.TableNextColumn();
@@ -556,6 +560,8 @@ public sealed class AcquisitionWorkbenchWindow : Window
         SyncCraftAppraisalSelection(selected);
         DrawLineSelector(selected);
         DrawCraftAppraisal(selected);
+        if (selected is not null)
+            DrawSelectedLinePricingEditor(selected);
 
         var state = selected is null ? null : GetStockState(selected);
         var view = StockAvailabilityPanelPresenter.Build(new StockAvailabilityPanelState
@@ -579,7 +585,7 @@ public sealed class AcquisitionWorkbenchWindow : Window
         if (!string.IsNullOrWhiteSpace(routeScopeError))
             ImGui.TextColored(ColError, routeScopeError);
 
-        var canCheck = selected is not null &&
+        var canCheck = selected is { MaxUnitPrice: > 0 } &&
                        state?.IsFetching != true &&
                        string.IsNullOrWhiteSpace(routeScopeError);
         if (ImGuiUi.Button("Check Stock", canCheck))
@@ -649,6 +655,44 @@ public sealed class AcquisitionWorkbenchWindow : Window
             ImGui.TextWrapped(line);
         if (view.DiagnosticLines.Count > 8)
             ImGui.TextColored(ColMuted, $"{view.DiagnosticLines.Count - 8:N0} more diagnostic line(s) in the printout file.");
+    }
+
+    private void DrawSelectedLinePricingEditor(MarketAcquisitionQuickShopLineDraft selected)
+    {
+        SyncSelectedPricingBuffers(selected);
+
+        ImGui.Spacing();
+        ImGui.TextColored(ColHeader, "Route Pricing");
+        ImGui.Separator();
+        DrawInput("Selected Max Unit Price", ref selectedMaxUnitPriceBuffer);
+        DrawInput("Selected Gil Cap", ref selectedGilCapBuffer);
+
+        var maxUnitValid = string.IsNullOrWhiteSpace(selectedMaxUnitPriceBuffer) ||
+                           TryParseUInt(selectedMaxUnitPriceBuffer, out _);
+        var gilCapValid = string.IsNullOrWhiteSpace(selectedGilCapBuffer) ||
+                          TryParseUInt(selectedGilCapBuffer, out _);
+
+        if (!maxUnitValid)
+            ImGui.TextColored(ColError, "Max unit price must be a whole number.");
+        if (!gilCapValid)
+            ImGui.TextColored(ColError, "Gil cap must be a whole number.");
+
+        var canApply = maxUnitValid && gilCapValid;
+        if (!ImGuiUi.Button("Apply Pricing", canApply))
+            return;
+
+        _ = TryParseUInt(selectedMaxUnitPriceBuffer, out var maxUnitPrice);
+        _ = TryParseUInt(selectedGilCapBuffer, out var gilCap);
+        var oldStockStateKey = BuildStockStateKey(selected);
+        draft = AcquisitionWorkbenchDraftMutation.ApplyPricing(
+            draft,
+            selectedLineIndex,
+            maxUnitPrice,
+            gilCap);
+
+        selectedPricingLineRevision = draft.DraftRevision;
+        lock (stockStateGate)
+            stockStates.Remove(oldStockStateKey);
     }
 
     private void DrawLineSelector(MarketAcquisitionQuickShopLineDraft? selected)
@@ -816,13 +860,13 @@ public sealed class AcquisitionWorkbenchWindow : Window
     }
 
     private bool CanAddLine() =>
-        ResolveSelectedItem() is not null &&
-        TryParseUInt(maxUnitPriceBuffer, out var maxUnitPrice) &&
-        maxUnitPrice > 0 &&
-        (QuantityModes[quantityModeIndex] != "TargetQuantity" ||
-         TryParseUInt(targetQuantityBuffer, out var targetQuantity) && targetQuantity > 0) &&
-        (string.IsNullOrWhiteSpace(gilCapBuffer) || TryParseUInt(gilCapBuffer, out _)) &&
-        (string.IsNullOrWhiteSpace(maxQuantityBuffer) || TryParseUInt(maxQuantityBuffer, out _));
+        AcquisitionWorkbenchLineInputValidator.CanAddIntentLine(
+            ResolveSelectedItem(),
+            QuantityModes[quantityModeIndex],
+            targetQuantityBuffer,
+            maxQuantityBuffer,
+            maxUnitPriceBuffer,
+            gilCapBuffer);
 
     private void AddLineFromBuffers()
     {
@@ -947,6 +991,20 @@ public sealed class AcquisitionWorkbenchWindow : Window
         return draft.Lines[selectedLineIndex];
     }
 
+    private void SyncSelectedPricingBuffers(MarketAcquisitionQuickShopLineDraft selected)
+    {
+        if (selectedPricingLineIndex == selectedLineIndex &&
+            selectedPricingLineRevision == draft.DraftRevision)
+        {
+            return;
+        }
+
+        selectedPricingLineIndex = selectedLineIndex;
+        selectedPricingLineRevision = draft.DraftRevision;
+        selectedMaxUnitPriceBuffer = selected.MaxUnitPrice == 0 ? string.Empty : selected.MaxUnitPrice.ToString();
+        selectedGilCapBuffer = selected.GilCap == 0 ? string.Empty : selected.GilCap.ToString();
+    }
+
     private WorkbenchStockState? GetStockState(MarketAcquisitionQuickShopLineDraft line)
     {
         lock (stockStateGate)
@@ -961,6 +1019,15 @@ public sealed class AcquisitionWorkbenchWindow : Window
         var line = ResolveSelectedLine();
         if (line is null)
             return;
+
+        if (line.MaxUnitPrice == 0)
+        {
+            SetStockState(BuildStockStateKey(line, string.Empty), new WorkbenchStockState
+            {
+                ErrorMessage = "Set a max unit price before checking stock.",
+            });
+            return;
+        }
 
         var scope = getScope();
         if (!scope.HasScope)
@@ -1128,6 +1195,9 @@ public sealed class AcquisitionWorkbenchWindow : Window
 
         lock (stockStateGate)
             stockStates.Remove(oldStockStateKey);
+
+        if (ResolveSelectedLine() is { } updatedSelected)
+            SyncSelectedPricingBuffers(updatedSelected);
     }
 
     private void SyncCraftAppraisalSelection(MarketAcquisitionQuickShopLineDraft? selected)

@@ -63,6 +63,16 @@ public static class StockAvailabilityPanelPresenter
             };
         }
 
+        if (state.SelectedLine.MaxUnitPrice == 0)
+        {
+            return new StockAvailabilityPanelView
+            {
+                Headline = "Set a max unit price",
+                Detail = "Stock availability needs a max unit price because only under-threshold listings count as route-available stock.",
+                Severity = StockAvailabilityPanelSeverity.Muted,
+            };
+        }
+
         if (!string.IsNullOrWhiteSpace(state.ErrorMessage))
         {
             return new StockAvailabilityPanelView

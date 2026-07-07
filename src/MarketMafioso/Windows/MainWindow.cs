@@ -4190,6 +4190,17 @@ public class MainWindow : Window, IDisposable
     {
         ImGui.TextColored(ColHeader, "Craft Quote Evidence");
 
+        var enableWorkshopHostQuotes = config.EnableWorkshopHostCraftQuotes;
+        if (ImGui.Checkbox("Enable Workshop Host craft quotes", ref enableWorkshopHostQuotes))
+        {
+            config.EnableWorkshopHostCraftQuotes = enableWorkshopHostQuotes;
+            config.Save();
+        }
+
+        ImGui.TextColored(
+            ColMuted,
+            "Uses the configured Workshop Host service for advisory craft-cost evidence when the host advertises craft.appraise.");
+
         var enableManualFallback = config.EnableCraftArchitectManualFallback;
         if (ImGui.Checkbox("Enable manual craft-cost fallback", ref enableManualFallback))
         {
