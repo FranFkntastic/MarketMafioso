@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Move Craft Architect craft-cost appraisal into Acquisition Workbench, move quote diagnostics into Diagnostics, and remove the standalone CA Companion tab/window.
+**Goal:** Move Craft Architect craft-cost appraisal into Acquisition Workbench, move quote diagnostics into Diagnostics, and remove the standalone CA Companion tab/window without demoting the web-based acquisition dashboard.
 
-**Architecture:** Keep the existing `MarketMafioso.CraftArchitectCompanion` service layer. Extract the reusable state/control logic out of `CraftArchitectCompanionWindow`, mount it in `AcquisitionWorkbenchWindow.DrawAppraisePane`, and expose a read-only diagnostics snapshot to `MarketAcquisitionDiagnosticsWindow`.
+**Architecture:** Keep the existing `MarketMafioso.CraftArchitectCompanion` service layer. Extract the reusable state/control logic out of `CraftArchitectCompanionWindow`, mount it in `AcquisitionWorkbenchWindow.DrawAppraisePane`, and expose a read-only diagnostics snapshot to `MarketAcquisitionDiagnosticsWindow`. The workbench is the in-game route surface; the web dashboard remains a first-class acquisition, queue, monitoring, audit, and settings surface.
 
 **Tech Stack:** C#/.NET, Dalamud ImGui windows, xUnit tests, existing Market Acquisition draft/stock/cache services, existing Craft Architect quote providers.
 
@@ -497,7 +497,7 @@ In game, verify:
 - `Use Craft Cost As Threshold` updates only the selected line;
 - stock availability refreshes after threshold edits;
 - Diagnostics shows quote provider status and diagnostic paths;
-- route sync/prepare/start remains available without using the dashboard.
+- route sync/prepare/start remains available without requiring dashboard handoff for client-authored routes.
 
 - [ ] **Step 6: Commit docs cleanup**
 
@@ -516,6 +516,7 @@ git commit -m "docs: update craft appraisal workbench language"
   - docs updated: Task 6.
 - No task makes CA cost authoritative.
 - No task depends on dashboard claim/accept for client-authored routes.
+- No task treats web-dashboard-authored acquisition as fallback, legacy, or superseded.
 - No task introduces percentage threshold adjustment buttons.
 - The plan keeps `AllBelowThreshold` stock-depth semantics from the acquisition reconciliation spec.
 - The plan leaves Workshop Host API semantics unchanged.

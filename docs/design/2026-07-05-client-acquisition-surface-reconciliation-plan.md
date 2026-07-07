@@ -6,6 +6,8 @@ Superseded in part by `docs/design/2026-07-06-ca-appraisal-workbench-reintegrati
 
 Draft proposal for review. This reconciles the scattered Market Acquisition, Quick Shop, Craft Architect Companion, and diagnostics surfaces into one client-native acquisition workbench while preserving automatic dashboard sync.
 
+Correction note, 2026-07-06: this plan reconciles plugin-side acquisition surfaces. It does not demote the web dashboard, replace the web dashboard acquisition workflow, or treat dashboard-authored requests as a fallback path.
+
 Related mockups:
 
 - `mockups/acquisition-workbench-build.html`
@@ -19,7 +21,7 @@ The current plugin surfaces were introduced in useful slices, but each slice add
 - Quick shopping, craft-cost appraisal, route preparation, guided execution, and diagnostics are split across top-level tabs and popouts.
 - Single-item and multi-item acquisition are treated like different mental models even though they should both be route drafts with one or more lines.
 - Craft Architect evidence is useful, but it is visually too close to route execution and can be mistaken for authoritative pricing.
-- The dashboard sync contract is correct, but the user should not have to return to the dashboard to claim, accept, monitor, or recover a client-authored route.
+- The dashboard sync contract is correct, but after creating a route in the client, the user should not have to return to the dashboard to claim, accept, monitor, or recover that client-authored route.
 - Recovery branches, especially resume, replan remaining, and restart after interruption, are not visible enough at the point where the user needs them.
 
 ## Product Principle
@@ -28,7 +30,7 @@ The plugin should expose one operational workbench:
 
 > Build the acquisition locally, optionally appraise it with Craft Architect evidence, sync it automatically for dashboard monitoring, prepare a route, execute it, adjust it, and recover from interruptions without leaving the client.
 
-The dashboard remains a passive monitor and audit surface for client-created routes. It must not be a required step in the client workflow.
+For client-created routes, dashboard sync should be automatic and visible. The web dashboard remains a first-class planning, queue review, monitoring, audit/history, and settings surface, especially for dashboard-authored requests.
 
 ## Proposed Information Architecture
 
@@ -281,7 +283,7 @@ Purpose:
 
 - Show one workbench where single and multi-line acquisition are the same flow.
 - Put route settings, item lines, CA evidence, threshold controls, and stock availability into one coherent screen.
-- Make dashboard sync passive and visible, not a separate action outside the client.
+- Make automatic dashboard sync visible, not a separate action outside the client-authored route flow.
 
 Primary controls:
 
@@ -513,8 +515,8 @@ Manual verification:
 - Build a one-item acquisition entirely in the client.
 - Build a three-item acquisition entirely in the client.
 - Apply CA quote to one line, manually set another threshold, and leave a third manual.
-- Sync, prepare, run, stop, resume, replan remaining, and restart plan without using the dashboard.
-- Confirm dashboard passively monitors the client-created route.
+- Sync, prepare, run, stop, resume, replan remaining, and restart plan without requiring a dashboard handoff for the client-authored route.
+- Confirm the dashboard automatically receives and monitors the client-created route while dashboard-authored route creation still remains intact.
 - Confirm stale stock availability is not shown after threshold/scope changes.
 
 ## Open Questions For Review

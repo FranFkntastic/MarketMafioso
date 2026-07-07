@@ -6,6 +6,8 @@ Draft for review, written on 2026-07-06.
 
 This supersedes the earlier idea of keeping a standalone Craft Architect Companion surface as an advanced or diagnostic fallback. The service code remains valuable. The separate user-facing tab and popout do not.
 
+This decision only removes the standalone CA Companion user journey. It does not demote, replace, or relabel the web-based acquisition dashboard as fallback or legacy.
+
 ## Decision
 
 Move Craft Architect craft-cost appraisal into the Acquisition Workbench and remove the standalone CA Companion tab/window from the normal plugin surface.
@@ -58,6 +60,7 @@ The user should be able to:
 - Do not remove the quote provider service code.
 - Do not remove manual/file quote fallback support from the code path.
 - Do not require the dashboard to claim, accept, or start client-authored routes.
+- Do not treat the web dashboard acquisition workflow as fallback, legacy, or superseded by the client workbench.
 - Do not add a new quote lifecycle to the server in this plugin-side integration slice.
 - Do not broaden the Diagnostics tab into a second workbench.
 

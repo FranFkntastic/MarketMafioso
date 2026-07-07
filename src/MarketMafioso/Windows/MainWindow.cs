@@ -98,7 +98,7 @@ public class MainWindow : Window, IDisposable
     private const string ProductSummary = "Workshop logistics and self-hosted inventory history.";
     private const string InventoryModuleSummary = "Inventory Reporter exports character and retainer inventory snapshots as JSON.";
     private const string WorkshopLogisticsModuleSummary = "Workshop Logistics tracks company workshop jobs, materials, retainer restock, handoff, and assembly.";
-    private const string MarketAcquisitionModuleSummary = "Market Acquisition builds, appraises, syncs, and runs monitored purchase routes with optional Craft Architect quote evidence.";
+    private const string MarketAcquisitionModuleSummary = "Market Acquisition supports web-dashboard-authored batches and client-native workbench routes with optional Craft Architect quote evidence.";
     private const string LocalReceiverUrl = "http://localhost:8080/inventory";
     private const string DevReceiverUrl = "https://dev.xivcraftarchitect.com/marketmafioso/api/inventory";
     private const string ProductionReceiverUrl = "https://xivcraftarchitect.com/marketmafioso/api/inventory";
@@ -402,10 +402,10 @@ public class MainWindow : Window, IDisposable
         DrawMarketAcquisitionWorkbenchLauncher();
 
         ImGui.Spacing();
-        if (!ImGui.CollapsingHeader("Fallback / Debug Controls##MarketAcquisitionFallbackControls"))
+        if (!ImGui.CollapsingHeader("Advanced / Dashboard Controls##MarketAcquisitionAdvancedControls"))
             return;
 
-        ImGui.TextColored(ColMuted, "Legacy dashboard pickup, claimed batch, advisory plan, and guided route controls are retained here for fallback/debug use while the workbench takes over the normal flow.");
+        ImGui.TextColored(ColMuted, "Dashboard pickup, claimed batch review, advisory plan, and guided route controls remain available for dashboard-authored requests and direct troubleshooting. The workbench is a client-native route surface, not a replacement for the web dashboard.");
         ImGui.Spacing();
         DrawMarketAcquisitionQuickShopSection();
         ImGui.Spacing();

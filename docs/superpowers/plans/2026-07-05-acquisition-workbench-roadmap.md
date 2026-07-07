@@ -262,11 +262,11 @@
 - [ ] Use capped/target quantity and confirm stock availability reports enough/partial/none.
 - [ ] Adjust threshold and confirm cached listings are reanalyzed without a fresh Universalis fetch.
 - [ ] Refresh stock and confirm Universalis is fetched again.
-- [ ] Sync, claim, accept, prepare, and start without touching the dashboard.
+- [ ] Sync, claim, accept, prepare, and start without requiring dashboard handoff for the client-authored route.
 - [ ] Stop route and resume the same prepared stops.
 - [ ] Stop route and replan remaining quantities while preserving request fulfillment progress.
 - [ ] Stop route and restart plan from edited draft quantities.
-- [ ] Confirm dashboard passively monitors route lifecycle, line progress, purchases, completion, and failure.
+- [ ] Confirm dashboard automatically receives and monitors route lifecycle, line progress, purchases, completion, and failure while dashboard-authored route creation remains intact.
 
 ## Rollout Notes
 
