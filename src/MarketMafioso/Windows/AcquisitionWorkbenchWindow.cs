@@ -299,7 +299,7 @@ public sealed class AcquisitionWorkbenchWindow : Window
         ImGui.TextColored(ColMuted, $"Mode: {MarketAcquisitionQuantityModePresenter.FormatMode(selected.QuantityMode)}");
         var quantity = selected.QuantityMode == "TargetQuantity" ? selected.TargetQuantity : selected.MaxQuantity;
         ImGui.TextColored(ColMuted, $"Quantity: {MarketAcquisitionQuantityModePresenter.FormatQuantity(selected.QuantityMode, quantity)}");
-        ImGui.TextColored(ColMuted, $"Max unit: {FormatGil(selected.MaxUnitPrice)}");
+        ImGui.TextColored(ColMuted, $"Max unit: {AcquisitionWorkbenchPricingFormatter.FormatOptionalGil(selected.MaxUnitPrice)}");
     }
 
     private void DrawQueuedLines()
@@ -341,7 +341,7 @@ public sealed class AcquisitionWorkbenchWindow : Window
             var quantity = line.QuantityMode == "TargetQuantity" ? line.TargetQuantity : line.MaxQuantity;
             ImGui.TextUnformatted(MarketAcquisitionQuantityModePresenter.FormatQuantity(line.QuantityMode, quantity));
             ImGui.TableNextColumn();
-            ImGui.TextUnformatted(FormatGil(line.MaxUnitPrice));
+            ImGui.TextUnformatted(AcquisitionWorkbenchPricingFormatter.FormatOptionalGil(line.MaxUnitPrice));
             ImGui.TableNextColumn();
             ImGui.TextUnformatted(line.HqPolicy);
             ImGui.TableNextColumn();
