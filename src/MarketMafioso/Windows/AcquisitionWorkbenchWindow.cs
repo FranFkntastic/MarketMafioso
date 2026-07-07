@@ -42,9 +42,13 @@ public sealed class AcquisitionWorkbenchWindow : Window
     private string maxQuantityBuffer = string.Empty;
     private string maxUnitPriceBuffer = string.Empty;
     private string gilCapBuffer = string.Empty;
+    private string selectedMaxUnitPriceBuffer = string.Empty;
+    private string selectedGilCapBuffer = string.Empty;
     private int quantityModeIndex = 1;
     private int hqPolicyIndex;
     private int selectedLineIndex;
+    private int selectedPricingLineIndex = -1;
+    private int selectedPricingLineRevision;
     private WorkbenchPane activePane = WorkbenchPane.Build;
 
     private static readonly Vector4 ColHeader = new(0.38f, 0.73f, 1.00f, 1f);
@@ -556,6 +560,8 @@ public sealed class AcquisitionWorkbenchWindow : Window
         SyncCraftAppraisalSelection(selected);
         DrawLineSelector(selected);
         DrawCraftAppraisal(selected);
+        if (selected is not null)
+            DrawSelectedLinePricingEditor(selected);
 
         var state = selected is null ? null : GetStockState(selected);
         var view = StockAvailabilityPanelPresenter.Build(new StockAvailabilityPanelState
@@ -649,6 +655,44 @@ public sealed class AcquisitionWorkbenchWindow : Window
             ImGui.TextWrapped(line);
         if (view.DiagnosticLines.Count > 8)
             ImGui.TextColored(ColMuted, $"{view.DiagnosticLines.Count - 8:N0} more diagnostic line(s) in the printout file.");
+    }
+
+    private void DrawSelectedLinePricingEditor(MarketAcquisitionQuickShopLineDraft selected)
+    {
+        SyncSelectedPricingBuffers(selected);
+
+        ImGui.Spacing();
+        ImGui.TextColored(ColHeader, "Route Pricing");
+        ImGui.Separator();
+        DrawInput("Selected Max Unit Price", ref selectedMaxUnitPriceBuffer);
+        DrawInput("Selected Gil Cap", ref selectedGilCapBuffer);
+
+        var maxUnitValid = string.IsNullOrWhiteSpace(selectedMaxUnitPriceBuffer) ||
+                           TryParseUInt(selectedMaxUnitPriceBuffer, out _);
+        var gilCapValid = string.IsNullOrWhiteSpace(selectedGilCapBuffer) ||
+                          TryParseUInt(selectedGilCapBuffer, out _);
+
+        if (!maxUnitValid)
+            ImGui.TextColored(ColError, "Max unit price must be a whole number.");
+        if (!gilCapValid)
+            ImGui.TextColored(ColError, "Gil cap must be a whole number.");
+
+        var canApply = maxUnitValid && gilCapValid;
+        if (!ImGuiUi.Button("Apply Pricing", canApply))
+            return;
+
+        _ = TryParseUInt(selectedMaxUnitPriceBuffer, out var maxUnitPrice);
+        _ = TryParseUInt(selectedGilCapBuffer, out var gilCap);
+        var oldStockStateKey = BuildStockStateKey(selected);
+        draft = AcquisitionWorkbenchDraftMutation.ApplyPricing(
+            draft,
+            selectedLineIndex,
+            maxUnitPrice,
+            gilCap);
+
+        selectedPricingLineRevision = draft.DraftRevision;
+        lock (stockStateGate)
+            stockStates.Remove(oldStockStateKey);
     }
 
     private void DrawLineSelector(MarketAcquisitionQuickShopLineDraft? selected)
@@ -947,6 +991,20 @@ public sealed class AcquisitionWorkbenchWindow : Window
         return draft.Lines[selectedLineIndex];
     }
 
+    private void SyncSelectedPricingBuffers(MarketAcquisitionQuickShopLineDraft selected)
+    {
+        if (selectedPricingLineIndex == selectedLineIndex &&
+            selectedPricingLineRevision == draft.DraftRevision)
+        {
+            return;
+        }
+
+        selectedPricingLineIndex = selectedLineIndex;
+        selectedPricingLineRevision = draft.DraftRevision;
+        selectedMaxUnitPriceBuffer = selected.MaxUnitPrice == 0 ? string.Empty : selected.MaxUnitPrice.ToString();
+        selectedGilCapBuffer = selected.GilCap == 0 ? string.Empty : selected.GilCap.ToString();
+    }
+
     private WorkbenchStockState? GetStockState(MarketAcquisitionQuickShopLineDraft line)
     {
         lock (stockStateGate)
@@ -1128,6 +1186,9 @@ public sealed class AcquisitionWorkbenchWindow : Window
 
         lock (stockStateGate)
             stockStates.Remove(oldStockStateKey);
+
+        if (ResolveSelectedLine() is { } updatedSelected)
+            SyncSelectedPricingBuffers(updatedSelected);
     }
 
     private void SyncCraftAppraisalSelection(MarketAcquisitionQuickShopLineDraft? selected)
