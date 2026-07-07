@@ -16,6 +16,19 @@ public sealed class StockAvailabilityPanelPresenterTests
     }
 
     [Fact]
+    public void Build_WhenSelectedLineHasUnsetThreshold_AsksForThresholdBeforeStockCheck()
+    {
+        var view = StockAvailabilityPanelPresenter.Build(new StockAvailabilityPanelState
+        {
+            SelectedLine = CreateLine(maxUnitPrice: 0),
+        });
+
+        Assert.Equal("Set a max unit price", view.Headline);
+        Assert.Equal(StockAvailabilityPanelSeverity.Muted, view.Severity);
+        Assert.Contains("Stock availability needs a max unit price", view.Detail);
+    }
+
+    [Fact]
     public void Build_WhenUncappedAllBelowThresholdHasDepth_ReportsDepthNotSufficiency()
     {
         var view = StockAvailabilityPanelPresenter.Build(new StockAvailabilityPanelState
@@ -119,7 +132,8 @@ public sealed class StockAvailabilityPanelPresenterTests
     private static MarketAcquisitionQuickShopLineDraft CreateLine(
         string quantityMode = "TargetQuantity",
         uint targetQuantity = 1,
-        uint maxQuantity = 0) =>
+        uint maxQuantity = 0,
+        uint maxUnitPrice = 100) =>
         new()
         {
             ItemId = 2,
@@ -128,6 +142,6 @@ public sealed class StockAvailabilityPanelPresenterTests
             TargetQuantity = targetQuantity,
             MaxQuantity = maxQuantity,
             HqPolicy = "Either",
-            MaxUnitPrice = 100,
+            MaxUnitPrice = maxUnitPrice,
         };
 }

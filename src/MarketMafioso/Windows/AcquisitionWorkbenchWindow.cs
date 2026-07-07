@@ -585,7 +585,7 @@ public sealed class AcquisitionWorkbenchWindow : Window
         if (!string.IsNullOrWhiteSpace(routeScopeError))
             ImGui.TextColored(ColError, routeScopeError);
 
-        var canCheck = selected is not null &&
+        var canCheck = selected is { MaxUnitPrice: > 0 } &&
                        state?.IsFetching != true &&
                        string.IsNullOrWhiteSpace(routeScopeError);
         if (ImGuiUi.Button("Check Stock", canCheck))
@@ -1019,6 +1019,15 @@ public sealed class AcquisitionWorkbenchWindow : Window
         var line = ResolveSelectedLine();
         if (line is null)
             return;
+
+        if (line.MaxUnitPrice == 0)
+        {
+            SetStockState(BuildStockStateKey(line, string.Empty), new WorkbenchStockState
+            {
+                ErrorMessage = "Set a max unit price before checking stock.",
+            });
+            return;
+        }
 
         var scope = getScope();
         if (!scope.HasScope)
