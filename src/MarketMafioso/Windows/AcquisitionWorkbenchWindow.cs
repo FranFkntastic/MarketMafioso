@@ -816,13 +816,13 @@ public sealed class AcquisitionWorkbenchWindow : Window
     }
 
     private bool CanAddLine() =>
-        ResolveSelectedItem() is not null &&
-        TryParseUInt(maxUnitPriceBuffer, out var maxUnitPrice) &&
-        maxUnitPrice > 0 &&
-        (QuantityModes[quantityModeIndex] != "TargetQuantity" ||
-         TryParseUInt(targetQuantityBuffer, out var targetQuantity) && targetQuantity > 0) &&
-        (string.IsNullOrWhiteSpace(gilCapBuffer) || TryParseUInt(gilCapBuffer, out _)) &&
-        (string.IsNullOrWhiteSpace(maxQuantityBuffer) || TryParseUInt(maxQuantityBuffer, out _));
+        AcquisitionWorkbenchLineInputValidator.CanAddIntentLine(
+            ResolveSelectedItem(),
+            QuantityModes[quantityModeIndex],
+            targetQuantityBuffer,
+            maxQuantityBuffer,
+            maxUnitPriceBuffer,
+            gilCapBuffer);
 
     private void AddLineFromBuffers()
     {
