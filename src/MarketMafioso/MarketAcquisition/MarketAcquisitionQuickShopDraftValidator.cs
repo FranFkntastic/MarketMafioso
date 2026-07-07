@@ -100,7 +100,7 @@ public static class MarketAcquisitionQuickShopDraftValidator
         if (line.ItemId == 0)
             errors.Add($"Line {lineNumber}: item id is required.");
         if (line.MaxUnitPrice == 0)
-            errors.Add($"Line {lineNumber}: max unit price is required.");
+            errors.Add($"Line {lineNumber}: max unit price is required before route sync.");
 
         if (line.QuantityMode is not ("TargetQuantity" or "AllBelowThreshold"))
         {

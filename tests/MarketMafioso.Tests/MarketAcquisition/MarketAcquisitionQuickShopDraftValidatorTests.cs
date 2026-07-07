@@ -34,7 +34,7 @@ public sealed class MarketAcquisitionQuickShopDraftValidatorTests
         Assert.Contains("Region is required.", result.Errors);
         Assert.Contains("World mode must be Recommended or AllWorldSweep.", result.Errors);
         Assert.Contains("Line 1: item id is required.", result.Errors);
-        Assert.Contains("Line 1: max unit price is required.", result.Errors);
+        Assert.Contains("Line 1: max unit price is required before route sync.", result.Errors);
         Assert.Contains("Line 1: target quantity is required.", result.Errors);
         Assert.Contains("Line 1: HQ policy must be Either, HQOnly, or NQOnly.", result.Errors);
     }
@@ -57,6 +57,36 @@ public sealed class MarketAcquisitionQuickShopDraftValidatorTests
 
         Assert.False(result.IsValid);
         Assert.Contains("At least one data center is required for a data-center sweep.", result.Errors);
+    }
+
+    [Fact]
+    public void Validate_RejectsUnsetMaxUnitPriceOnlyAtRouteSyncBoundary()
+    {
+        var draft = ValidDraft() with
+        {
+            Lines =
+            [
+                new MarketAcquisitionQuickShopLineDraft
+                {
+                    ItemId = 5060,
+                    ItemName = "Darksteel Ingot",
+                    QuantityMode = "TargetQuantity",
+                    TargetQuantity = 3,
+                    HqPolicy = "Either",
+                    MaxUnitPrice = 0,
+                    GilCap = 0,
+                },
+            ],
+        };
+
+        var result = MarketAcquisitionQuickShopDraftValidator.Validate(
+            draft,
+            "client-secret",
+            "Wei Ning",
+            "Siren");
+
+        Assert.False(result.IsValid);
+        Assert.Contains("Line 1: max unit price is required before route sync.", result.Errors);
     }
 
     [Fact]
