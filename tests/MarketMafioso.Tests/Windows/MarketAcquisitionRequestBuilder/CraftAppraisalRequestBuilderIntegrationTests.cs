@@ -197,6 +197,13 @@ public sealed class CraftAppraisalRequestBuilderIntegrationTests
         Assert.Equal(document.LocalRevision + 1, updated.LocalRevision);
     }
 
+    [Fact]
+    public void LineTableStyle_UsesHouseInteractiveTableFlags()
+    {
+        Assert.True(AcquisitionRequestTableStyle.UsesHouseInteractiveTableFlags);
+        Assert.True(AcquisitionRequestTableStyle.UsesScrollableRegion);
+    }
+
     private static class TestDocument
     {
         public static MarketAcquisitionRequestDocument WithLine(MarketAcquisitionRequestLineDocument line) =>

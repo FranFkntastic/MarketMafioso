@@ -329,15 +329,8 @@ public sealed class MarketAcquisitionRequestBuilderPanel
 
     private void DrawLineTable()
     {
-        const ImGuiTableFlags Flags =
-            ImGuiTableFlags.Borders |
-            ImGuiTableFlags.RowBg |
-            ImGuiTableFlags.Resizable |
-            ImGuiTableFlags.ScrollX |
-            ImGuiTableFlags.ScrollY;
-
         var tableHeight = (ImGui.GetTextLineHeightWithSpacing() * 6.5f) + 8f;
-        if (!ImGui.BeginTable("AcquisitionRequestBuilderLines", 7, Flags, new Vector2(0, tableHeight)))
+        if (!ImGui.BeginTable("AcquisitionRequestBuilderLines", 7, AcquisitionRequestTableStyle.LineTableFlags, new Vector2(0, tableHeight)))
             return;
 
         ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.WidthStretch);
