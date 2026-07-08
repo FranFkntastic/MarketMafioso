@@ -1,0 +1,521 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Acquisition Layout Skeleton</title>
+  <style>
+    :root {
+      --bg: #080909;
+      --panel: rgba(18, 19, 20, 0.94);
+      --panel-soft: rgba(31, 33, 35, 0.86);
+      --line: #3a3d41;
+      --line-strong: #59606a;
+      --text: #e8e8e8;
+      --muted: #aeb4b9;
+      --blue: #5fc0ff;
+      --green: #67ef8a;
+      --yellow: #f4d35e;
+      --red: #ff6969;
+      --field: #2c2d2f;
+      --field-hi: #383a3d;
+      --chrome: #671b1d;
+      font-family: Segoe UI, Arial, sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      color: var(--text);
+      background:
+        linear-gradient(rgba(0, 0, 0, 0.56), rgba(0, 0, 0, 0.76)),
+        radial-gradient(circle at 80% 10%, rgba(93, 115, 120, 0.2), transparent 30%),
+        #111;
+      font-size: 12px;
+      line-height: 1.25;
+    }
+
+    .window {
+      width: 100vw;
+      min-height: 100vh;
+      background: rgba(5, 5, 5, 0.77);
+      border-top: 22px solid var(--chrome);
+      padding: 10px 12px 16px;
+    }
+
+    .chrome-title {
+      position: fixed;
+      top: 3px;
+      left: 10px;
+      font-weight: 700;
+      color: #fff;
+    }
+
+    .comparison {
+      display: grid;
+      grid-template-columns: minmax(520px, 1fr) minmax(520px, 1fr);
+      gap: 12px;
+      align-items: start;
+    }
+
+    .pane {
+      border: 1px solid var(--line);
+      background: rgba(8, 9, 10, 0.72);
+      min-height: calc(100vh - 52px);
+    }
+
+    .pane-title {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 7px 8px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(35, 37, 39, 0.56);
+      font-weight: 700;
+      color: var(--blue);
+    }
+
+    .pane-title span:last-child {
+      color: var(--muted);
+      font-weight: 600;
+    }
+
+    .body {
+      padding: 10px;
+    }
+
+    .section-label {
+      color: var(--blue);
+      font-weight: 700;
+      margin: 2px 0 6px;
+    }
+
+    .note {
+      color: var(--muted);
+      margin: 6px 0 12px;
+    }
+
+    .warn {
+      color: var(--yellow);
+    }
+
+    .bad {
+      color: var(--red);
+    }
+
+    .good {
+      color: var(--green);
+    }
+
+    .editor-current {
+      display: grid;
+      grid-template-columns: 2.3fr 1.1fr 0.8fr 0.9fr 0.9fr 0.9fr;
+      gap: 8px;
+      padding-bottom: 14px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .table-current {
+      display: grid;
+      grid-template-columns: minmax(145px, 1fr) 150px 88px 112px 112px 88px 88px;
+      border: 1px solid var(--line);
+      overflow: hidden;
+    }
+
+    .shared-grid {
+      display: grid;
+      grid-template-columns:
+        minmax(170px, 1.6fr)
+        minmax(178px, 0.95fr)
+        minmax(92px, 0.55fr)
+        minmax(124px, 0.7fr)
+        minmax(128px, 0.75fr)
+        minmax(120px, 0.65fr)
+        84px;
+      gap: 0;
+      border: 1px solid var(--line);
+      overflow: hidden;
+    }
+
+    .shared-add {
+      margin-bottom: 10px;
+    }
+
+    .cell {
+      min-height: 48px;
+      padding: 5px 6px;
+      border-right: 1px solid var(--line);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+      background: rgba(12, 13, 14, 0.42);
+      overflow: hidden;
+    }
+
+    .cell:last-child {
+      border-right: 0;
+    }
+
+    .head {
+      min-height: 24px;
+      font-weight: 700;
+      padding-top: 5px;
+      color: #f1f1f1;
+      background: rgba(54, 56, 59, 0.86);
+    }
+
+    .label {
+      color: var(--muted);
+      font-weight: 650;
+      margin-bottom: 4px;
+      white-space: nowrap;
+    }
+
+    .field, .combo {
+      position: relative;
+      width: 100%;
+      height: 24px;
+      display: flex;
+      align-items: center;
+      border-radius: 4px;
+      background: var(--field);
+      color: #fff;
+      font-weight: 650;
+      overflow: hidden;
+      white-space: nowrap;
+    }
+
+    .field span {
+      padding: 0 7px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .combo .preview {
+      padding: 0 6px;
+      overflow: hidden;
+      white-space: nowrap;
+    }
+
+    .combo .arrow {
+      position: absolute;
+      right: 0;
+      top: 0;
+      width: 24px;
+      height: 24px;
+      display: grid;
+      place-items: center;
+      background: #686a6d;
+      color: #fff;
+      font-size: 13px;
+    }
+
+    .combo.bad-combo .preview {
+      width: 100%;
+      text-overflow: clip;
+    }
+
+    .combo.good-combo .preview {
+      width: calc(100% - 28px);
+      padding-right: 6px;
+      text-overflow: ellipsis;
+    }
+
+    .button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      height: 24px;
+      min-width: 62px;
+      padding: 0 8px;
+      border-radius: 4px;
+      background: #4a4c50;
+      color: #fff;
+      font-weight: 700;
+    }
+
+    .overlay {
+      margin-top: 10px;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+
+    .callout {
+      border: 1px solid var(--line);
+      background: var(--panel-soft);
+      padding: 7px;
+      min-height: 74px;
+    }
+
+    .callout strong {
+      display: block;
+      color: var(--blue);
+      margin-bottom: 4px;
+    }
+
+    .mini-map {
+      margin-top: 8px;
+      border: 1px solid var(--line);
+      background: #0d0e0f;
+    }
+
+    .mini-row {
+      display: grid;
+      grid-template-columns: 70px 1fr;
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+    }
+
+    .mini-row:last-child {
+      border-bottom: 0;
+    }
+
+    .mini-row div {
+      padding: 5px 7px;
+    }
+
+    .mini-row div:first-child {
+      color: var(--muted);
+      border-right: 1px solid rgba(255,255,255,0.08);
+    }
+
+    .chips {
+      display: flex;
+      gap: 3px;
+      flex-wrap: wrap;
+    }
+
+    .chip {
+      border: 1px solid var(--line-strong);
+      background: #202226;
+      padding: 2px 5px;
+      border-radius: 3px;
+      white-space: nowrap;
+    }
+
+    .chip.bad {
+      border-color: #91414a;
+      color: #ffb5b5;
+    }
+
+    .chip.good {
+      border-color: #427a55;
+      color: #b9ffc8;
+    }
+
+    @media (max-width: 1120px) {
+      .comparison {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="window">
+    <div class="chrome-title">MarketMafioso - acquisition layout skeleton</div>
+
+    <div class="comparison">
+      <section class="pane">
+        <div class="pane-title">
+          <span>Current Skeleton</span>
+          <span>two unrelated grids</span>
+        </div>
+        <div class="body">
+          <div class="section-label">Top edit strip: 6 stretch columns</div>
+          <div class="editor-current">
+            <div class="cell">
+              <div class="label">Item</div>
+              <div class="field"><span>Darksteel Ore</span></div>
+            </div>
+            <div class="cell">
+              <div class="label">Mode</div>
+              <div class="combo bad-combo"><span class="preview">AllBelowThreshold</span><span class="arrow">v</span></div>
+            </div>
+            <div class="cell">
+              <div class="label">HQ</div>
+              <div class="combo bad-combo"><span class="preview">Either</span><span class="arrow">v</span></div>
+            </div>
+            <div class="cell">
+              <div class="label">Max Qty</div>
+              <div class="field"><span></span></div>
+            </div>
+            <div class="cell">
+              <div class="label">Unit Cost Ceiling</div>
+              <div class="field"><span></span></div>
+            </div>
+            <div class="cell">
+              <div class="label">Total Spend Ceiling</div>
+              <div class="field"><span></span></div>
+            </div>
+          </div>
+
+          <p class="note">
+            This strip uses proportional widths: Item 2.3x, Mode 1.1x, HQ 0.8x, Qty 0.9x, Unit 0.9x, Spend 0.9x.
+            It places HQ before quantity.
+          </p>
+
+          <div class="section-label">Line table: 7 mixed fixed/stretch columns</div>
+          <div class="table-current">
+            <div class="cell head">Item</div>
+            <div class="cell head">Mode</div>
+            <div class="cell head">Qty</div>
+            <div class="cell head">Unit Ceiling</div>
+            <div class="cell head">Spend Ceiling</div>
+            <div class="cell head">HQ</div>
+            <div class="cell head"></div>
+
+            <div class="cell"><strong>Darksteel Ore</strong></div>
+            <div class="cell"><div class="combo bad-combo"><span class="preview">All below max unit</span><span class="arrow">v</span></div></div>
+            <div class="cell"><div class="field"><span>0</span></div></div>
+            <div class="cell"><div class="field"><span>639</span></div></div>
+            <div class="cell"><div class="field"><span>0</span></div></div>
+            <div class="cell"><div class="combo bad-combo"><span class="preview">Either</span><span class="arrow">v</span></div></div>
+            <div class="cell"><span class="button">Remove</span></div>
+          </div>
+
+          <div class="overlay">
+            <div class="callout">
+              <strong>Misalignment source</strong>
+              Top editor and table disagree on order and width model, so Mode/HQ/Qty cannot line up reliably.
+            </div>
+            <div class="callout">
+              <strong>Text collision source</strong>
+              Combo text is allowed to use 100% of the box, but the arrow is drawn inside that same box.
+            </div>
+          </div>
+
+          <div class="mini-map">
+            <div class="mini-row">
+              <div>Editor</div>
+              <div class="chips">
+                <span class="chip">Item 2.3x</span>
+                <span class="chip bad">Mode 1.1x</span>
+                <span class="chip bad">HQ 0.8x</span>
+                <span class="chip">Qty 0.9x</span>
+                <span class="chip">Unit 0.9x</span>
+                <span class="chip">Spend 0.9x</span>
+              </div>
+            </div>
+            <div class="mini-row">
+              <div>Table</div>
+              <div class="chips">
+                <span class="chip">Item stretch</span>
+                <span class="chip bad">Mode 150px</span>
+                <span class="chip">Qty 88px</span>
+                <span class="chip">Unit 112px</span>
+                <span class="chip">Spend 112px</span>
+                <span class="chip bad">HQ 88px</span>
+                <span class="chip">Remove 88px</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="pane">
+        <div class="pane-title">
+          <span>Proposed Skeleton</span>
+          <span>one shared column contract</span>
+        </div>
+        <div class="body">
+          <div class="section-label">Shared acquisition-line columns</div>
+          <div class="shared-grid shared-add">
+            <div class="cell head">Item</div>
+            <div class="cell head">Mode</div>
+            <div class="cell head">Qty</div>
+            <div class="cell head">Unit Ceiling</div>
+            <div class="cell head">Spend Ceiling</div>
+            <div class="cell head">HQ</div>
+            <div class="cell head"></div>
+
+            <div class="cell">
+              <div class="label">Item</div>
+              <div class="field"><span>Darksteel Ore</span></div>
+            </div>
+            <div class="cell">
+              <div class="label">Mode</div>
+              <div class="combo good-combo"><span class="preview">All below ceiling</span><span class="arrow">v</span></div>
+            </div>
+            <div class="cell">
+              <div class="label">Qty</div>
+              <div class="field"><span>No cap</span></div>
+            </div>
+            <div class="cell">
+              <div class="label">Unit Ceiling</div>
+              <div class="field"><span>639</span></div>
+            </div>
+            <div class="cell">
+              <div class="label">Spend Ceiling</div>
+              <div class="field"><span>Unset</span></div>
+            </div>
+            <div class="cell">
+              <div class="label">HQ</div>
+              <div class="combo good-combo"><span class="preview">Either</span><span class="arrow">v</span></div>
+            </div>
+            <div class="cell">
+              <div class="label">&nbsp;</div>
+              <span class="button">Add</span>
+            </div>
+          </div>
+
+          <p class="note">
+            The add/edit strip and row table use the same columns, in the same order. The only difference is whether labels are visible.
+          </p>
+
+          <div class="section-label">Rows reuse the same grid</div>
+          <div class="shared-grid">
+            <div class="cell head">Item</div>
+            <div class="cell head">Mode</div>
+            <div class="cell head">Qty</div>
+            <div class="cell head">Unit Ceiling</div>
+            <div class="cell head">Spend Ceiling</div>
+            <div class="cell head">HQ</div>
+            <div class="cell head"></div>
+
+            <div class="cell"><strong>Darksteel Ore</strong></div>
+            <div class="cell"><div class="combo good-combo"><span class="preview">All below ceiling</span><span class="arrow">v</span></div></div>
+            <div class="cell"><div class="field"><span>No cap</span></div></div>
+            <div class="cell"><div class="field"><span>639</span></div></div>
+            <div class="cell"><div class="field"><span>Unset</span></div></div>
+            <div class="cell"><div class="combo good-combo"><span class="preview">Either</span><span class="arrow">v</span></div></div>
+            <div class="cell"><span class="button">Remove</span></div>
+          </div>
+
+          <div class="overlay">
+            <div class="callout">
+              <strong>Column contract</strong>
+              Item min 170, Mode min 178, Qty min 92, Unit min 124, Spend min 128, HQ min 120, Action 84.
+            </div>
+            <div class="callout">
+              <strong>Combo contract</strong>
+              Preview text gets available width minus arrow width, so the arrow never covers the label.
+            </div>
+          </div>
+
+          <div class="mini-map">
+            <div class="mini-row">
+              <div>Shared</div>
+              <div class="chips">
+                <span class="chip good">Item minmax</span>
+                <span class="chip good">Mode min text+arrow</span>
+                <span class="chip good">Qty min</span>
+                <span class="chip good">Unit min</span>
+                <span class="chip good">Spend min</span>
+                <span class="chip good">HQ min text+arrow</span>
+                <span class="chip good">Action fixed</span>
+              </div>
+            </div>
+            <div class="mini-row">
+              <div>Rule</div>
+              <div>
+                One model feeds add row, edit row, table row, and compact/mobile fallback. No duplicated column guesses.
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+  </div>
+</body>
+</html>
