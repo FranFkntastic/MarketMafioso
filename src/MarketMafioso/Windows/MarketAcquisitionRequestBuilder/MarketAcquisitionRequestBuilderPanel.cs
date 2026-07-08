@@ -246,14 +246,9 @@ public sealed class MarketAcquisitionRequestBuilderPanel
     {
         ImGui.TextColored(MainWindow.ColHeader, selectedLineIndex >= 0 ? "Edit Line" : "Add Line");
 
-        if (ImGui.BeginTable("AcquisitionRequestBuilderLineEditor", 6, ImGuiTableFlags.SizingStretchProp))
+        if (ImGui.BeginTable("AcquisitionRequestBuilderLineEditor", AcquisitionRequestLineLayout.Columns.Count, ImGuiTableFlags.SizingStretchProp))
         {
-            ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.WidthStretch, 2.3f);
-            ImGui.TableSetupColumn("Mode", ImGuiTableColumnFlags.WidthStretch, 1.1f);
-            ImGui.TableSetupColumn("HQ", ImGuiTableColumnFlags.WidthStretch, 0.8f);
-            ImGui.TableSetupColumn("Qty", ImGuiTableColumnFlags.WidthStretch, 0.9f);
-            ImGui.TableSetupColumn("Unit Cost Ceiling", ImGuiTableColumnFlags.WidthStretch, 0.9f);
-            ImGui.TableSetupColumn("Total Spend Ceiling", ImGuiTableColumnFlags.WidthStretch, 0.9f);
+            SetupLineColumns();
             ImGui.TableNextRow();
 
             ImGui.TableNextColumn();
@@ -269,8 +264,6 @@ public sealed class MarketAcquisitionRequestBuilderPanel
             ImGui.TableNextColumn();
             DrawCombo("Mode##AcquisitionRequestBuilderMode", ["AllBelowThreshold", "TargetQuantity"], ref quantityMode);
             ImGui.TableNextColumn();
-            DrawCombo("HQ##AcquisitionRequestBuilderHq", ["Either", "HQOnly", "NQOnly"], ref hqPolicy);
-            ImGui.TableNextColumn();
             if (quantityMode == "TargetQuantity")
                 DrawInput("Target Qty", "##AcquisitionRequestBuilderTargetQty", ref targetQuantityBuffer);
             else
@@ -279,24 +272,26 @@ public sealed class MarketAcquisitionRequestBuilderPanel
             DrawInput("Unit Cost Ceiling", "##AcquisitionRequestBuilderMaxUnit", ref maxUnitPriceBuffer);
             ImGui.TableNextColumn();
             DrawInput("Total Spend Ceiling", "##AcquisitionRequestBuilderGilCap", ref gilCapBuffer);
+            ImGui.TableNextColumn();
+            DrawCombo("HQ##AcquisitionRequestBuilderHq", ["Either", "HQOnly", "NQOnly"], ref hqPolicy);
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(string.Empty);
+            var canApply = !context.IsBusy &&
+                           !context.IsRouteActive &&
+                           RequestLineInputValidator.CanAddIntentLine(
+                               itemAutocomplete.SelectedItem,
+                               quantityMode,
+                               targetQuantityBuffer,
+                               maxQuantityBuffer,
+                               maxUnitPriceBuffer,
+                               gilCapBuffer);
+            var actionLabel = selectedLineIndex >= 0 ? "Update" : "Add";
+            if (ImGuiUi.Button($"{actionLabel}##AcquisitionRequestBuilderApplyLine", canApply))
+                ApplyEditorLine();
 
             ImGui.EndTable();
         }
 
-        var canApply = !context.IsBusy &&
-                       !context.IsRouteActive &&
-                       RequestLineInputValidator.CanAddIntentLine(
-                           itemAutocomplete.SelectedItem,
-                           quantityMode,
-                           targetQuantityBuffer,
-                           maxQuantityBuffer,
-                           maxUnitPriceBuffer,
-                           gilCapBuffer);
-        var actionLabel = selectedLineIndex >= 0 ? "Update Line" : "Add Line";
-        if (ImGuiUi.Button($"{actionLabel}##AcquisitionRequestBuilderApplyLine", canApply))
-            ApplyEditorLine();
-
-        ImGui.SameLine();
         if (ImGuiUi.Button("New Line##AcquisitionRequestBuilderNewLine", true))
             ClearLineEditor();
     }
@@ -312,19 +307,25 @@ public sealed class MarketAcquisitionRequestBuilderPanel
     {
         ImGui.TextColored(MainWindow.ColMuted, label.Split('#')[0]);
         ImGui.SetNextItemWidth(-1);
-        if (!ImGui.BeginCombo(label, current))
+        if (!ImGui.BeginCombo(label, FormatComboPreview(current)))
             return;
 
         foreach (var value in values)
         {
             var selected = string.Equals(value, current, StringComparison.Ordinal);
-            if (ImGui.Selectable(value, selected))
+            if (ImGui.Selectable(FormatComboPreview(value), selected))
                 current = value;
             if (selected)
                 ImGui.SetItemDefaultFocus();
         }
 
         ImGui.EndCombo();
+    }
+
+    private static void SetupLineColumns()
+    {
+        foreach (var column in AcquisitionRequestLineLayout.Columns)
+            ImGui.TableSetupColumn(column.Label, column.Flags, column.Width);
     }
 
     private void DrawLineTable()
@@ -337,16 +338,10 @@ public sealed class MarketAcquisitionRequestBuilderPanel
             ImGuiTableFlags.ScrollY;
 
         var tableHeight = (ImGui.GetTextLineHeightWithSpacing() * 6.5f) + 8f;
-        if (!ImGui.BeginTable("AcquisitionRequestBuilderLines", 7, Flags, new Vector2(0, tableHeight)))
+        if (!ImGui.BeginTable("AcquisitionRequestBuilderLines", AcquisitionRequestLineLayout.Columns.Count, Flags, new Vector2(0, tableHeight)))
             return;
 
-        ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.WidthStretch);
-        ImGui.TableSetupColumn("Mode", ImGuiTableColumnFlags.WidthFixed, 150);
-        ImGui.TableSetupColumn("Qty", ImGuiTableColumnFlags.WidthFixed, 88);
-        ImGui.TableSetupColumn("Unit Ceiling", ImGuiTableColumnFlags.WidthFixed, 112);
-        ImGui.TableSetupColumn("Spend Ceiling", ImGuiTableColumnFlags.WidthFixed, 112);
-        ImGui.TableSetupColumn("HQ", ImGuiTableColumnFlags.WidthFixed, 88);
-        ImGui.TableSetupColumn("", ImGuiTableColumnFlags.WidthFixed, 88);
+        SetupLineColumns();
         ImGui.TableHeadersRow();
 
         if (document.Lines.Count == 0)
@@ -481,13 +476,13 @@ public sealed class MarketAcquisitionRequestBuilderPanel
     {
         var current = string.IsNullOrWhiteSpace(line.QuantityMode) ? "AllBelowThreshold" : line.QuantityMode;
         ImGui.SetNextItemWidth(-1);
-        if (!ImGui.BeginCombo($"##AcquisitionRequestBuilderModeCell{index}", MarketAcquisitionQuantityModePresenter.FormatMode(current)))
+        if (!ImGui.BeginCombo($"##AcquisitionRequestBuilderModeCell{index}", FormatComboPreview(current)))
             return;
 
         foreach (var mode in new[] { "AllBelowThreshold", "TargetQuantity" })
         {
             var selected = string.Equals(mode, current, StringComparison.Ordinal);
-            if (ImGui.Selectable(MarketAcquisitionQuantityModePresenter.FormatMode(mode), selected))
+            if (ImGui.Selectable(FormatModePreview(mode), selected))
             {
                 ApplyLineEdit(
                     index,
@@ -525,7 +520,7 @@ public sealed class MarketAcquisitionRequestBuilderPanel
     {
         var current = string.IsNullOrWhiteSpace(line.HqPolicy) ? "Either" : line.HqPolicy;
         ImGui.SetNextItemWidth(-1);
-        if (!ImGui.BeginCombo($"##AcquisitionRequestBuilderHqCell{index}", current))
+        if (!ImGui.BeginCombo($"##AcquisitionRequestBuilderHqCell{index}", FormatComboPreview(current)))
             return;
 
         foreach (var hq in new[] { "Either", "HQOnly", "NQOnly" })
@@ -957,4 +952,22 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         line.QuantityMode == "TargetQuantity"
             ? line.TargetQuantity.ToString("N0")
             : line.MaxQuantity == 0 ? "No cap" : line.MaxQuantity.ToString("N0");
+
+    private static string FormatComboPreview(string value) =>
+        value switch
+        {
+            "AllBelowThreshold" => "All below ceiling",
+            "TargetQuantity" => "Target qty",
+            "HQOnly" => "HQ",
+            "NQOnly" => "NQ",
+            _ => string.IsNullOrWhiteSpace(value) ? "-" : value,
+        };
+
+    private static string FormatModePreview(string value) =>
+        value switch
+        {
+            "AllBelowThreshold" => "All below ceiling",
+            "TargetQuantity" => "Target quantity",
+            _ => MarketAcquisitionQuantityModePresenter.FormatMode(value),
+        };
 }
