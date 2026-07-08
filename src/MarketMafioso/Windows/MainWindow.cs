@@ -248,7 +248,10 @@ public class MainWindow : Window, IDisposable
             claimedAcquisitionRequest = restoredAcquisitionClaim.Value.Claim;
             claimedAcceptIdempotencyKey = restoredAcquisitionClaim.Value.AcceptIdempotencyKey;
             claimedRejectIdempotencyKey = restoredAcquisitionClaim.Value.RejectIdempotencyKey;
-            acquisitionStatus = "Restored previously claimed dashboard request from plugin settings.";
+            var adopted = acquisitionRequestBuilder.AdoptRestoredRequestIfSafe(claimedAcquisitionRequest);
+            acquisitionStatus = adopted
+                ? "Restored previously claimed dashboard request into the builder."
+                : "Restored previously claimed dashboard request; preserving local builder edits.";
         }
     }
 
@@ -694,15 +697,27 @@ public class MainWindow : Window, IDisposable
         ImGui.TextWrapped(MarketAcquisitionModuleSummary);
         ImGui.Spacing();
 
+        const ImGuiTableFlags BoardFlags =
+            ImGuiTableFlags.BordersInnerV |
+            ImGuiTableFlags.Resizable |
+            ImGuiTableFlags.SizingStretchProp;
+
+        if (!ImGui.BeginTable("MarketAcquisitionBoard", 2, BoardFlags))
+            return;
+
+        ImGui.TableSetupColumn("Request", ImGuiTableColumnFlags.WidthStretch, 0.85f);
+        ImGui.TableSetupColumn("Execution", ImGuiTableColumnFlags.WidthStretch, 1.15f);
+        ImGui.TableNextRow();
+
+        ImGui.TableNextColumn();
         DrawMarketAcquisitionRequestBuilder();
         ImGui.Spacing();
-        DrawMarketAcquisitionPickupSection();
-        ImGui.Spacing();
-        DrawClaimedAcquisitionRequest();
-        ImGui.Spacing();
-        DrawMarketAcquisitionPlan();
-        ImGui.Spacing();
-        DrawMarketAcquisitionGuidedRoute();
+        DrawMarketAcquisitionPickupSection(compactWhenClaimed: true);
+
+        ImGui.TableNextColumn();
+        DrawMarketAcquisitionExecutionPane();
+
+        ImGui.EndTable();
     }
 
     private void DrawMarketAcquisitionRequestBuilder()
@@ -720,7 +735,17 @@ public class MainWindow : Window, IDisposable
             currentAcquisitionPlanHash));
     }
 
-    private void DrawMarketAcquisitionPickupSection()
+    private void DrawMarketAcquisitionExecutionPane()
+    {
+        ImGuiUi.SectionHeader("Accepted Request, Plan, and Guided Route", ColHeader);
+        DrawClaimedAcquisitionRequest();
+        ImGui.Spacing();
+        DrawMarketAcquisitionPlan();
+        ImGui.Spacing();
+        DrawMarketAcquisitionGuidedRoute();
+    }
+
+    private void DrawMarketAcquisitionPickupSection(bool compactWhenClaimed = false)
     {
         ImGuiUi.SectionHeader("Request Pickup", ColHeader);
 
@@ -733,6 +758,19 @@ public class MainWindow : Window, IDisposable
             ImGui.SameLine();
             var visibleStatus = GetVisibleAcquisitionStatus();
             ImGui.TextColored(GetAcquisitionStatusColor(visibleStatus), visibleStatus);
+            return;
+        }
+
+        if (compactWhenClaimed && claimedAcquisitionRequest is not null && pendingAcquisitionRequests.Count == 0)
+        {
+            var canFetchCompact = !acquisitionRequestBusy &&
+                                  !string.IsNullOrWhiteSpace(apiKeyBuffer) &&
+                                  TryGetAcquisitionScope(out _, out _);
+            if (ImGuiUi.Button("Fetch Dashboard Requests", canFetchCompact))
+                _ = FetchDashboardRequestsAsync();
+
+            ImGui.SameLine();
+            ImGui.TextColored(GetAcquisitionStatusColor(GetVisibleAcquisitionStatus()), GetVisibleAcquisitionStatus());
             return;
         }
 

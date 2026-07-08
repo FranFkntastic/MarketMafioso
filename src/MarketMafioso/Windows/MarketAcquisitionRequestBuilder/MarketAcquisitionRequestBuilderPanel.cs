@@ -77,6 +77,20 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         documentAdopted(document, request);
     }
 
+    public bool AdoptRestoredRequestIfSafe(MarketAcquisitionRequestView request)
+    {
+        if (!ShouldAdoptRestoredRequest(request))
+            return false;
+
+        document = MarketAcquisitionRequestDocumentMapper.FromRequestView(request);
+        pendingRemoteDocument = null;
+        pendingRemoteRequest = null;
+        selectedLineIndex = -1;
+        status = "Loaded restored request into builder.";
+        SaveDocument();
+        return true;
+    }
+
     public void Draw(MarketAcquisitionRequestBuilderContext context)
     {
         EnsureCharacterScope(context);
@@ -90,23 +104,63 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         ImGui.Spacing();
         DrawLineTable();
         ImGui.Spacing();
+        DrawSelectedLineInspector(context);
+        ImGui.Spacing();
         DrawActions(context);
     }
 
     private void DrawStatusSummary(MarketAcquisitionRequestBuilderContext context)
     {
-        if (context.HasCharacterScope)
-            ImGui.TextColored(MainWindow.ColMuted, $"Target: {context.CharacterName} @ {context.World}");
-        else if (context.CharacterScopeTemporarilyUnavailable)
-            ImGui.TextColored(MainWindow.ColMuted, "Target temporarily unavailable during route travel.");
-        else
-            ImGui.TextColored(MainWindow.ColError, "Log into a character before syncing acquisition requests.");
+        if (ImGui.BeginTable("AcquisitionRequestBuilderStatusStrip", 4, ImGuiTableFlags.BordersInnerV | ImGuiTableFlags.SizingStretchProp))
+        {
+            ImGui.TableSetupColumn("Target", ImGuiTableColumnFlags.WidthStretch, 1f);
+            ImGui.TableSetupColumn("Request", ImGuiTableColumnFlags.WidthStretch, 1f);
+            ImGui.TableSetupColumn("Lines", ImGuiTableColumnFlags.WidthStretch, 0.75f);
+            ImGui.TableSetupColumn("Plan", ImGuiTableColumnFlags.WidthStretch, 0.75f);
+            ImGui.TableNextRow();
+
+            ImGui.TableNextColumn();
+            ImGui.TextColored(MainWindow.ColMuted, "Target");
+            if (context.HasCharacterScope)
+                ImGui.TextColored(MainWindow.ColSuccess, $"{context.CharacterName} @ {context.World}");
+            else if (context.CharacterScopeTemporarilyUnavailable)
+                ImGui.TextColored(MainWindow.ColMuted, "Temporarily unavailable");
+            else
+                ImGui.TextColored(MainWindow.ColError, "No character scope");
+
+            ImGui.TableNextColumn();
+            ImGui.TextColored(MainWindow.ColMuted, "Request");
+            ImGui.TextColored(GetSyncStatusColor(), FormatRequestStatus());
+
+            ImGui.TableNextColumn();
+            ImGui.TextColored(MainWindow.ColMuted, "Lines");
+            ImGui.TextColored(document.Lines.Count == 0 ? MainWindow.ColError : MainWindow.ColSuccess, $"{document.Lines.Count:N0} local");
+
+            ImGui.TableNextColumn();
+            ImGui.TextColored(MainWindow.ColMuted, "Plan");
+            if (IsPlanStale(context))
+                ImGui.TextColored(MainWindow.ColError, "Stale");
+            else if (context.CurrentPlan is not null)
+                ImGui.TextColored(MainWindow.ColSuccess, "Current");
+            else
+                ImGui.TextColored(MainWindow.ColMuted, "Not prepared");
+
+            ImGui.EndTable();
+        }
 
         ImGui.TextColored(GetSyncStatusColor(), FormatBuilderStatus(context));
         if (pendingRemoteDocument is not null)
             ImGui.TextColored(MainWindow.ColHeader, "Remote request changed. Review local lines, then adopt remote or update request.");
         if (context.IsRouteActive)
             ImGui.TextColored(MainWindow.ColMuted, "Request replacement is disabled while a guided route is active.");
+    }
+
+    private string FormatRequestStatus()
+    {
+        if (string.IsNullOrWhiteSpace(document.RemoteRequestId))
+            return document.SyncStatus;
+
+        return $"{document.SyncStatus} r{document.RemoteRevision}";
     }
 
     private string FormatBuilderStatus(MarketAcquisitionRequestBuilderContext context)
@@ -133,10 +187,32 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         !string.IsNullOrWhiteSpace(context.CurrentPlanHash) &&
         !string.Equals(context.CurrentPlanHash, CurrentIntentHash, StringComparison.Ordinal);
 
+    private bool ShouldAdoptRestoredRequest(MarketAcquisitionRequestView request)
+    {
+        if (string.IsNullOrWhiteSpace(request.Id))
+            return false;
+
+        if (string.IsNullOrWhiteSpace(document.RemoteRequestId))
+            return true;
+
+        if (!string.Equals(document.RemoteRequestId, request.Id, StringComparison.Ordinal))
+            return true;
+
+        if (document.SyncStatus.Equals("LocalEdits", StringComparison.OrdinalIgnoreCase) ||
+            document.SyncStatus.Equals("RemoteChanged", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return document.Lines.Count == 0 ||
+               document.RemoteRevision != request.Revision ||
+               !document.SyncStatus.Equals("SyncedClean", StringComparison.OrdinalIgnoreCase);
+    }
+
     private void DrawRouteScope(MarketAcquisitionRequestBuilderContext context)
     {
         var scope = RequestRouteScope.FromDocument(document);
-        RequestRouteScopeSelector.Draw(
+        RequestRouteScopeSelector.DrawCompact(
             "AcquisitionRequestBuilder",
             scope,
             updated =>
@@ -158,29 +234,43 @@ public sealed class MarketAcquisitionRequestBuilderPanel
     private void DrawLineEditor(MarketAcquisitionRequestBuilderContext context)
     {
         ImGui.TextColored(MainWindow.ColHeader, selectedLineIndex >= 0 ? "Edit Line" : "Add Line");
-        ItemAutocompleteControl.Draw(
-            "AcquisitionRequestBuilder",
-            itemOptions,
-            itemAutocomplete,
-            null,
-            MainWindow.ColMuted,
-            MainWindow.ColSuccess,
-            MainWindow.ColError);
 
-        DrawCombo("Mode##AcquisitionRequestBuilderMode", ["AllBelowThreshold", "TargetQuantity"], ref quantityMode);
-        DrawCombo("HQ##AcquisitionRequestBuilderHq", ["Either", "HQOnly", "NQOnly"], ref hqPolicy);
-
-        if (quantityMode == "TargetQuantity")
+        if (ImGui.BeginTable("AcquisitionRequestBuilderLineEditor", 6, ImGuiTableFlags.SizingStretchProp))
         {
-            DrawInput("Target Quantity", "##AcquisitionRequestBuilderTargetQty", ref targetQuantityBuffer);
-        }
-        else
-        {
-            DrawInput("Max Quantity", "##AcquisitionRequestBuilderMaxQty", ref maxQuantityBuffer);
-        }
+            ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.WidthStretch, 2.3f);
+            ImGui.TableSetupColumn("Mode", ImGuiTableColumnFlags.WidthStretch, 1.1f);
+            ImGui.TableSetupColumn("HQ", ImGuiTableColumnFlags.WidthStretch, 0.8f);
+            ImGui.TableSetupColumn("Qty", ImGuiTableColumnFlags.WidthStretch, 0.9f);
+            ImGui.TableSetupColumn("Max Unit", ImGuiTableColumnFlags.WidthStretch, 0.9f);
+            ImGui.TableSetupColumn("Gil Cap", ImGuiTableColumnFlags.WidthStretch, 0.9f);
+            ImGui.TableNextRow();
 
-        DrawInput("Max Unit Price", "##AcquisitionRequestBuilderMaxUnit", ref maxUnitPriceBuffer);
-        DrawInput("Gil Cap", "##AcquisitionRequestBuilderGilCap", ref gilCapBuffer);
+            ImGui.TableNextColumn();
+            ItemAutocompleteControl.Draw(
+                "AcquisitionRequestBuilder",
+                itemOptions,
+                itemAutocomplete,
+                null,
+                MainWindow.ColMuted,
+                MainWindow.ColSuccess,
+                MainWindow.ColError);
+
+            ImGui.TableNextColumn();
+            DrawCombo("Mode##AcquisitionRequestBuilderMode", ["AllBelowThreshold", "TargetQuantity"], ref quantityMode);
+            ImGui.TableNextColumn();
+            DrawCombo("HQ##AcquisitionRequestBuilderHq", ["Either", "HQOnly", "NQOnly"], ref hqPolicy);
+            ImGui.TableNextColumn();
+            if (quantityMode == "TargetQuantity")
+                DrawInput("Target Qty", "##AcquisitionRequestBuilderTargetQty", ref targetQuantityBuffer);
+            else
+                DrawInput("Max Qty", "##AcquisitionRequestBuilderMaxQty", ref maxQuantityBuffer);
+            ImGui.TableNextColumn();
+            DrawInput("Max Unit", "##AcquisitionRequestBuilderMaxUnit", ref maxUnitPriceBuffer);
+            ImGui.TableNextColumn();
+            DrawInput("Gil Cap", "##AcquisitionRequestBuilderGilCap", ref gilCapBuffer);
+
+            ImGui.EndTable();
+        }
 
         var canApply = !context.IsBusy &&
                        !context.IsRouteActive &&
@@ -203,14 +293,14 @@ public sealed class MarketAcquisitionRequestBuilderPanel
     private static void DrawInput(string label, string id, ref string buffer)
     {
         ImGui.TextColored(MainWindow.ColMuted, label);
-        ImGui.SetNextItemWidth(180);
+        ImGui.SetNextItemWidth(-1);
         ImGui.InputText(id, ref buffer, 32);
     }
 
     private static void DrawCombo(string label, IReadOnlyList<string> values, ref string current)
     {
         ImGui.TextColored(MainWindow.ColMuted, label.Split('#')[0]);
-        ImGui.SetNextItemWidth(180);
+        ImGui.SetNextItemWidth(-1);
         if (!ImGui.BeginCombo(label, current))
             return;
 
@@ -277,6 +367,54 @@ public sealed class MarketAcquisitionRequestBuilderPanel
             if (ImGuiUi.Button($"Remove##AcquisitionRequestBuilderRemove{index}", true))
                 RemoveLine(index);
         }
+
+        ImGui.EndTable();
+    }
+
+    private void DrawSelectedLineInspector(MarketAcquisitionRequestBuilderContext context)
+    {
+        ImGui.TextColored(MainWindow.ColHeader, "Selected Line");
+        var selectedLine = selectedLineIndex >= 0 && selectedLineIndex < document.Lines.Count
+            ? document.Lines[selectedLineIndex]
+            : null;
+
+        if (selectedLine is null)
+        {
+            ImGui.TextColored(MainWindow.ColMuted, document.Lines.Count == 0
+                ? "Add an acquisition line to begin."
+                : "Select a line to inspect pricing evidence and edit details.");
+            return;
+        }
+
+        if (!ImGui.BeginTable("AcquisitionRequestBuilderSelectedLine", 2, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg))
+            return;
+
+        ImGui.TableSetupColumn("Evidence", ImGuiTableColumnFlags.WidthStretch);
+        ImGui.TableSetupColumn("State", ImGuiTableColumnFlags.WidthStretch);
+        ImGui.TableHeadersRow();
+        ImGui.TableNextRow();
+
+        ImGui.TableNextColumn();
+        ImGui.TextColored(MainWindow.ColMuted, "Craft quote");
+        var identity = CraftAppraisalRequestMapper.BuildLineIdentity(document, selectedLine);
+        var threshold = craftAppraisal.State.TryGetLineQuoteThreshold(identity);
+        if (threshold is > 0)
+            ImGui.TextColored(MainWindow.ColSuccess, $"{threshold.Value:N0} gil recommended threshold");
+        else
+            ImGui.TextColored(MainWindow.ColMuted, "No craft quote yet.");
+        ImGui.TextColored(MainWindow.ColMuted, craftAppraisal.State.CraftQuoteStatus);
+
+        ImGui.TableNextColumn();
+        ImGui.TextColored(MainWindow.ColMuted, "Request state");
+        ImGui.TextUnformatted($"{FormatLineItem(selectedLine)}");
+        ImGui.TextUnformatted($"{MarketAcquisitionQuantityModePresenter.FormatMode(selectedLine.QuantityMode)} / {FormatLineQuantity(selectedLine)}");
+        ImGui.TextUnformatted($"Max unit: {RequestPricingFormatter.FormatOptionalGil(selectedLine.MaxUnitPrice)}");
+        if (IsPlanStale(context))
+            ImGui.TextColored(MainWindow.ColError, "Plan is stale until the request is updated and prepared again.");
+        else if (context.CurrentPlan is not null)
+            ImGui.TextColored(MainWindow.ColSuccess, "Plan matches current request.");
+        else
+            ImGui.TextColored(MainWindow.ColMuted, "No prepared plan yet.");
 
         ImGui.EndTable();
     }

@@ -47,6 +47,62 @@ public static class RequestRouteScopeSelector
             DrawDataCenterSelector(id, scope, onChanged, errorColor);
     }
 
+    public static void DrawCompact(
+        string id,
+        RequestRouteScope scope,
+        Action<RequestRouteScope> onChanged,
+        Vector4 mutedColor,
+        Vector4 errorColor)
+    {
+        ArgumentNullException.ThrowIfNull(scope);
+        ArgumentNullException.ThrowIfNull(onChanged);
+
+        if (ImGui.BeginTable($"##{id}RouteScopeCompact", 3, ImGuiTableFlags.SizingStretchProp))
+        {
+            ImGui.TableSetupColumn("Region", ImGuiTableColumnFlags.WidthStretch, 1f);
+            ImGui.TableSetupColumn("Mode", ImGuiTableColumnFlags.WidthStretch, 1f);
+            ImGui.TableSetupColumn("Sweep", ImGuiTableColumnFlags.WidthStretch, 1f);
+            ImGui.TableNextRow();
+
+            ImGui.TableNextColumn();
+            DrawCombo(
+                $"Region##{id}Region",
+                MarketAcquisitionWorldCatalog.SupportedRegions.ToArray(),
+                scope.Region,
+                region => onChanged(RequestRouteScopePresenter.ApplyRegion(scope, region)),
+                mutedColor);
+
+            ImGui.TableNextColumn();
+            DrawCombo(
+                $"World Mode##{id}WorldMode",
+                RequestRouteScopePresenter.WorldModes,
+                scope.WorldMode,
+                worldMode => onChanged(RequestRouteScopePresenter.ApplyWorldMode(scope, worldMode)),
+                mutedColor);
+
+            ImGui.TableNextColumn();
+            if (scope.WorldMode == "AllWorldSweep")
+            {
+                DrawCombo(
+                    $"Sweep Scope##{id}SweepScope",
+                    RequestRouteScopePresenter.SweepScopes,
+                    scope.SweepScope,
+                    sweepScope => onChanged(RequestRouteScopePresenter.ApplySweepScope(scope, sweepScope)),
+                    mutedColor);
+            }
+            else
+            {
+                ImGui.TextColored(mutedColor, "Sweep Scope");
+                ImGui.TextUnformatted("Region");
+            }
+
+            ImGui.EndTable();
+        }
+
+        if (scope.WorldMode == "AllWorldSweep" && scope.SweepScope == "DataCenters")
+            DrawDataCenterSelector(id, scope, onChanged, errorColor);
+    }
+
     private static void DrawDataCenterSelector(
         string id,
         RequestRouteScope scope,
@@ -77,6 +133,14 @@ public static class RequestRouteScopeSelector
     }
 
     private static void DrawFullWidthCombo(
+        string label,
+        IReadOnlyList<string> options,
+        string current,
+        Action<string> onChanged,
+        Vector4 mutedColor) =>
+        DrawCombo(label, options, current, onChanged, mutedColor);
+
+    private static void DrawCombo(
         string label,
         IReadOnlyList<string> options,
         string current,
