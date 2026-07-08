@@ -46,8 +46,11 @@ else
                             Settings="_settings"
                             PresetRequest="_builderPreset"
                             PresetVersion="_builderPresetVersion"
+                            EditRequest="_builderEditRequest"
+                            EditVersion="_builderEditVersion"
                             StageRequested="StageRequestsAsync"
-                            AppendRequested="AppendRequestsAsync" />
+                            AppendRequested="AppendRequestsAsync"
+                            ReplaceRequested="ReplaceRequestsAsync" />
             <ServerRequestGrid Requests="State.Requests"
                                SelectedRequest="State.SelectedRequest"
                                SelectedRequestChanged="SelectRequestAsync"
@@ -58,6 +61,7 @@ else
                                IncludeTerminalChanged="SetIncludeTerminalAsync"
                                CancelRequested="CancelRequestAsync"
                                ResendRequested="ResendRequestAsync"
+                               EditRequested="EditRequestAsync"
                                TemplateRequested="UseRequestAsTemplateAsync" />
         </div>
 
@@ -65,6 +69,7 @@ else
                               Closed="ClearSelectedRequestAsync"
                               CancelRequested="CancelRequestAsync"
                               ResendRequested="ResendRequestAsync"
+                              EditRequested="EditRequestAsync"
                               TemplateRequested="UseRequestAsTemplateAsync" />
     </MudStack>
 }
@@ -83,6 +88,8 @@ else
     private DotNetObjectReference<Home>? _dotNetRef;
     private MarketAcquisitionRequestView? _builderPreset;
     private long _builderPresetVersion;
+    private MarketAcquisitionRequestView? _builderEditRequest;
+    private long _builderEditVersion;
 
     protected override async Task OnInitializedAsync()
     {
@@ -202,6 +209,19 @@ else
     private Task<bool> AppendRequestsAsync(string requestId, MarketAcquisitionBatchAppendLinesRequest request) =>
         State.AppendAsync(requestId, request);
 
+    private async Task<bool> ReplaceRequestsAsync(string requestId, MarketAcquisitionBatchReplaceRequest request)
+    {
+        var updated = await State.ReplaceAsync(requestId, request);
+        if (updated is null)
+            return false;
+
+        _builderEditRequest = updated;
+        _builderEditVersion++;
+        _builderPreset = null;
+        State.SelectRequest(updated);
+        return true;
+    }
+
     private Task RefreshRequestsAsync() => State.RefreshAsync();
 
     private Task SetIncludeTerminalAsync(bool includeTerminal) =>
@@ -213,9 +233,23 @@ else
 
     private Task UseRequestAsTemplateAsync(MarketAcquisitionRequestView request)
     {
+        _builderEditRequest = null;
         _builderPreset = request;
         _builderPresetVersion++;
         Status.Info($"Loaded {MarketAcquisitionRequestDisplay.TitleFor(request)} as a draft.");
+        return Task.CompletedTask;
+    }
+
+    private Task EditRequestAsync(MarketAcquisitionRequestView request)
+    {
+        if (!MarketAcquisitionRequestDisplay.IsEditable(request))
+            return UseRequestAsTemplateAsync(request);
+
+        _builderPreset = null;
+        _builderEditRequest = request;
+        _builderEditVersion++;
+        State.SelectRequest(request);
+        Status.Info($"Loaded {MarketAcquisitionRequestDisplay.TitleFor(request)} for editing.");
         return Task.CompletedTask;
     }
 

@@ -97,6 +97,35 @@ public sealed class AcquisitionDashboardState
         }, "Append queue failed.");
     }
 
+    public async Task<MarketAcquisitionRequestView?> ReplaceAsync(
+        string requestId,
+        MarketAcquisitionBatchReplaceRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        MarketAcquisitionRequestView? updated = null;
+        var succeeded = await RunAsync(async () =>
+        {
+            updated = await api.ReplaceAcquisitionBatchAsync(requestId, request, cancellationToken);
+            UpsertRequest(updated);
+            status.Info($"Updated acquisition request with {request.Lines.Count:N0} line(s).");
+        }, "Update request failed.");
+
+        return succeeded ? updated : null;
+    }
+
+    public void UpsertRequest(MarketAcquisitionRequestView request)
+    {
+        var list = Requests.ToList();
+        var index = list.FindIndex(existing => existing.Id == request.Id);
+        if (index >= 0)
+            list[index] = request;
+        else if (IncludeTerminal || !IsTerminalRequest(request))
+            list.Insert(0, request);
+
+        Requests = list;
+        SelectedRequest = request;
+    }
+
     private async Task RefreshCoreAsync(CancellationToken cancellationToken)
     {
         Requests = await api.GetAcquisitionRequestsAsync(IncludeTerminal, cancellationToken);

@@ -171,7 +171,7 @@
                     <MudButton Variant="Variant.Outlined" OnClick="@(() => CancelRequested.InvokeAsync(Request.Id))">Cancel</MudButton>
                 }
                 <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="@(() => ResendRequested.InvokeAsync(Request.Id))">Resend</MudButton>
-                <MudButton Variant="Variant.Outlined" Color="Color.Primary" OnClick="@(() => TemplateRequested.InvokeAsync(Request))">@TemplateActionText(Request)</MudButton>
+                <MudButton Variant="Variant.Outlined" Color="Color.Primary" OnClick="@(() => BuilderActionRequestedAsync(Request))">@BuilderActionText(Request)</MudButton>
             </MudStack>
         </MudStack>
     }
@@ -182,6 +182,7 @@
     [Parameter] public EventCallback Closed { get; set; }
     [Parameter] public EventCallback<string> CancelRequested { get; set; }
     [Parameter] public EventCallback<string> ResendRequested { get; set; }
+    [Parameter] public EventCallback<MarketAcquisitionRequestView> EditRequested { get; set; }
     [Parameter] public EventCallback<MarketAcquisitionRequestView> TemplateRequested { get; set; }
 
     private string? _timelineRequestId;
@@ -244,8 +245,21 @@
     private static bool IsTerminalRequest(MarketAcquisitionRequestView request) =>
         request.Status is "Complete" or "Failed" or "Cancelled" or "Rejected" or "Expired";
 
-    private static string TemplateActionText(MarketAcquisitionRequestView request) =>
-        IsTerminalRequest(request) ? "Run Again" : "Use as Template";
+    private async Task BuilderActionRequestedAsync(MarketAcquisitionRequestView request)
+    {
+        if (MarketAcquisitionRequestDisplay.IsEditable(request))
+            await EditRequested.InvokeAsync(request);
+        else
+            await TemplateRequested.InvokeAsync(request);
+    }
+
+    private static string BuilderActionText(MarketAcquisitionRequestView request)
+    {
+        if (MarketAcquisitionRequestDisplay.IsEditable(request))
+            return "Edit";
+
+        return IsTerminalRequest(request) ? "Run Again" : "Use as Template";
+    }
 
     private static Color AttemptResultColor(string result) => result switch
     {

@@ -119,7 +119,7 @@
                                             <MudMenuItem OnClick="@(() => CancelRequested.InvokeAsync(context.Item.Id))">Cancel</MudMenuItem>
                                         }
                                         <MudMenuItem OnClick="@(() => ResendRequested.InvokeAsync(context.Item.Id))">Resend</MudMenuItem>
-                                        <MudMenuItem OnClick="@(() => TemplateRequested.InvokeAsync(context.Item))">@TemplateActionText(context.Item)</MudMenuItem>
+                                        <MudMenuItem OnClick="@(() => BuilderActionRequestedAsync(context.Item))">@BuilderActionText(context.Item)</MudMenuItem>
                                     </ChildContent>
                                 </MudMenu>
                             </CellTemplate>
@@ -142,6 +142,7 @@
     [Parameter] public EventCallback<bool> IncludeTerminalChanged { get; set; }
     [Parameter] public EventCallback<string> CancelRequested { get; set; }
     [Parameter] public EventCallback<string> ResendRequested { get; set; }
+    [Parameter] public EventCallback<MarketAcquisitionRequestView> EditRequested { get; set; }
     [Parameter] public EventCallback<MarketAcquisitionRequestView> TemplateRequested { get; set; }
 
     private int ActiveRequestCount => Requests.Count(IsActiveRequest);
@@ -190,8 +191,21 @@
     private static bool IsTerminalRequest(MarketAcquisitionRequestView request) =>
         request.Status is "Complete" or "Failed" or "Cancelled" or "Rejected" or "Expired";
 
-    private static string TemplateActionText(MarketAcquisitionRequestView request) =>
-        IsTerminalRequest(request) ? "Run again" : "Use as template";
+    private async Task BuilderActionRequestedAsync(MarketAcquisitionRequestView request)
+    {
+        if (MarketAcquisitionRequestDisplay.IsEditable(request))
+            await EditRequested.InvokeAsync(request);
+        else
+            await TemplateRequested.InvokeAsync(request);
+    }
+
+    private static string BuilderActionText(MarketAcquisitionRequestView request)
+    {
+        if (MarketAcquisitionRequestDisplay.IsEditable(request))
+            return "Edit";
+
+        return IsTerminalRequest(request) ? "Run again" : "Use as template";
+    }
 
     private static string FormatRoute(MarketAcquisitionRequestView request)
     {

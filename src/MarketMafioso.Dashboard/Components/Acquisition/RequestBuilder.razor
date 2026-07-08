@@ -5,7 +5,7 @@
 <MudPaper Class="compact-card dashboard-panel builder-panel" Elevation="0">
     <div class="builder-shell">
         <header class="panel-heading">
-            <h2>Purchase Composer</h2>
+            <h2>@BuilderTitle</h2>
             <span class="target-chip">@TargetDisplay</span>
         </header>
 
@@ -22,13 +22,17 @@
                                 <span>Character</span>
                                 <span class="required-marker">Required</span>
                             </div>
-                            <MudSelect T="long?" Value="_selectedCharacterId" ValueChanged="OnCharacterChanged" Placeholder="Choose character" Variant="Variant.Outlined" Margin="Margin.Dense" FullWidth="true" Disabled="@(!Characters.Any())">
+                            <MudSelect T="long?" Value="_selectedCharacterId" ValueChanged="OnCharacterChanged" Placeholder="Choose character" Variant="Variant.Outlined" Margin="Margin.Dense" FullWidth="true" Disabled="@(IsEditMode || !Characters.Any())">
                                 @foreach (var character in Characters)
                                 {
                                     <MudSelectItem T="long?" Value="@character.Id">@character.DisplayName</MudSelectItem>
                                 }
                             </MudSelect>
-                            @if (SelectedCharacter is not null)
+                            @if (IsEditMode)
+                            {
+                                <span class="muted field-note">Target is fixed: @EditTargetDisplay</span>
+                            }
+                            else if (SelectedCharacter is not null)
                             {
                                 <span class="muted field-note">Home world: @SelectedCharacter.HomeWorld</span>
                             }
@@ -197,7 +201,7 @@
                 <span class="muted local-queue-count">@LocalQueueDisplay</span>
                 <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="@(!CanAddRequest)" OnClick="AddToQueue">Add Request</MudButton>
                 <MudButton Variant="Variant.Outlined" Color="Color.Primary" Disabled="@(!CanAppendToPending)" OnClick="AppendToPendingAsync">@AppendButtonText</MudButton>
-                <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="Busy || _queue.Count == 0" OnClick="StageAsync">@StageButtonText</MudButton>
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="Busy || _queue.Count == 0" OnClick="SubmitQueueAsync">@SubmitButtonText</MudButton>
             </div>
         </div>
     </div>
@@ -207,11 +211,14 @@
     [Parameter] public bool Busy { get; set; }
     [Parameter] public Func<MarketAcquisitionBatchCreateRequest, Task<bool>>? StageRequested { get; set; }
     [Parameter] public Func<string, MarketAcquisitionBatchAppendLinesRequest, Task<bool>>? AppendRequested { get; set; }
+    [Parameter] public Func<string, MarketAcquisitionBatchReplaceRequest, Task<bool>>? ReplaceRequested { get; set; }
     [Parameter] public IReadOnlyList<DashboardCharacterOption> Characters { get; set; } = [];
     [Parameter] public IReadOnlyList<MarketAcquisitionRequestView> PendingRequests { get; set; } = [];
     [Parameter] public DashboardSettingsView Settings { get; set; } = new();
     [Parameter] public MarketAcquisitionRequestView? PresetRequest { get; set; }
     [Parameter] public long PresetVersion { get; set; }
+    [Parameter] public MarketAcquisitionRequestView? EditRequest { get; set; }
+    [Parameter] public long EditVersion { get; set; }
 
     private long? _selectedCharacterId;
     private string _region = "North America";
@@ -229,21 +236,40 @@
     private readonly List<QueuedAcquisitionItem> _queue = [];
     private bool _settingsApplied;
     private long _appliedPresetVersion;
+    private long _appliedEditVersion;
+    private string? _editRequestId;
+    private int _editExpectedRevision;
+    private string _editTargetCharacterName = string.Empty;
+    private string _editTargetWorld = string.Empty;
 
     private DashboardCharacterOption? SelectedCharacter =>
         Characters.FirstOrDefault(character => character.Id == _selectedCharacterId);
 
-    private string TargetDisplay => SelectedCharacter?.DisplayName ?? "No character selected";
+    private bool IsEditMode => !string.IsNullOrWhiteSpace(_editRequestId);
+
+    private string BuilderTitle => IsEditMode ? "Request Editor" : "Purchase Composer";
+
+    private string EditTargetDisplay => string.IsNullOrWhiteSpace(_editTargetCharacterName)
+        ? "Unknown target"
+        : $"{_editTargetCharacterName} @ {_editTargetWorld}";
+
+    private string TargetDisplay => IsEditMode
+        ? EditTargetDisplay
+        : SelectedCharacter?.DisplayName ?? "No character selected";
 
     private string QuantityLabel => _quantityMode == "AllBelowThreshold" ? "Max quantity (optional)" : "Target quantity";
 
     private string QuantityRequirementLabel => _quantityMode == "AllBelowThreshold" ? "Optional" : "Required";
 
     private string LocalQueueDisplay => _queue.Count == 0
-        ? "No queued items"
-        : _queue.Count == 1 ? "1 queued item" : $"{_queue.Count} queued items";
+        ? IsEditMode ? "No request lines" : "No queued items"
+        : _queue.Count == 1
+            ? IsEditMode ? "1 request line" : "1 queued item"
+            : IsEditMode ? $"{_queue.Count} request lines" : $"{_queue.Count} queued items";
 
     private string StageButtonText => _queue.Count > 1 ? $"Stage {_queue.Count} Items" : "Stage Queue";
+
+    private string SubmitButtonText => IsEditMode ? "Update Request" : StageButtonText;
 
     private string AppendButtonText => CompatiblePendingBatches.Count switch
     {
@@ -252,10 +278,10 @@
         _ => "Multiple Pending Matches",
     };
 
-    private bool CanAddRequest => SelectedCharacter is not null && _selectedItem is not null && _maxUnitPrice is > 0;
+    private bool CanAddRequest => (IsEditMode || SelectedCharacter is not null) && _selectedItem is not null && _maxUnitPrice is > 0;
 
     private bool CanAppendToPending =>
-        !Busy && _queue.Count > 0 && AppendRequested is not null && CompatiblePendingBatches.Count == 1;
+        !IsEditMode && !Busy && _queue.Count > 0 && AppendRequested is not null && CompatiblePendingBatches.Count == 1;
 
     private IReadOnlyList<MarketAcquisitionRequestView> CompatiblePendingBatches =>
         PendingRequests
@@ -290,7 +316,7 @@
     {
         if (_settingsApplied)
         {
-            ApplyPresetIfChanged();
+            ApplyIncomingRequestState();
             return;
         }
 
@@ -303,7 +329,35 @@
         _expiresInMinutes = SecondsToMinutes(Settings.DefaultPickupExpiresSeconds);
         _settingsApplied = true;
 
-        ApplyPresetIfChanged();
+        ApplyIncomingRequestState();
+    }
+
+    private void ApplyIncomingRequestState()
+    {
+        ApplyEditIfChanged();
+        if (!IsEditMode)
+            ApplyPresetIfChanged();
+    }
+
+    private void ApplyEditIfChanged()
+    {
+        if (EditRequest is null)
+        {
+            if (IsEditMode)
+                ClearEditMode();
+            _appliedEditVersion = EditVersion;
+            return;
+        }
+
+        if (EditVersion == _appliedEditVersion)
+            return;
+
+        _appliedEditVersion = EditVersion;
+        LoadRequestIntoBuilder(EditRequest, preserveCharacterSelection: false);
+        _editRequestId = EditRequest.Id;
+        _editExpectedRevision = EditRequest.Revision;
+        _editTargetCharacterName = EditRequest.TargetCharacterName;
+        _editTargetWorld = EditRequest.TargetWorld;
     }
 
     private void ApplyPresetIfChanged()
@@ -312,19 +366,28 @@
             return;
 
         _appliedPresetVersion = PresetVersion;
-        _selectedCharacterId = Characters
+        ClearEditMode();
+        LoadRequestIntoBuilder(PresetRequest, preserveCharacterSelection: true);
+    }
+
+    private void LoadRequestIntoBuilder(
+        MarketAcquisitionRequestView request,
+        bool preserveCharacterSelection)
+    {
+        var matchingCharacterId = Characters
             .FirstOrDefault(character =>
-                string.Equals(character.CharacterName, PresetRequest.TargetCharacterName, StringComparison.OrdinalIgnoreCase) &&
-                string.Equals(character.HomeWorld, PresetRequest.TargetWorld, StringComparison.OrdinalIgnoreCase))
-            ?.Id ?? _selectedCharacterId;
-        _region = string.IsNullOrWhiteSpace(PresetRequest.Region) ? _region : NormalizeRegion(PresetRequest.Region);
-        _worldMode = string.IsNullOrWhiteSpace(PresetRequest.WorldMode) ? _worldMode : PresetRequest.WorldMode;
-        _sweepScope = string.IsNullOrWhiteSpace(PresetRequest.SweepScope) ? "Region" : PresetRequest.SweepScope;
+                string.Equals(character.CharacterName, request.TargetCharacterName, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(character.HomeWorld, request.TargetWorld, StringComparison.OrdinalIgnoreCase))
+            ?.Id;
+        _selectedCharacterId = matchingCharacterId ?? (preserveCharacterSelection ? _selectedCharacterId : null);
+        _region = string.IsNullOrWhiteSpace(request.Region) ? _region : NormalizeRegion(request.Region);
+        _worldMode = string.IsNullOrWhiteSpace(request.WorldMode) ? _worldMode : request.WorldMode;
+        _sweepScope = string.IsNullOrWhiteSpace(request.SweepScope) ? "Region" : request.SweepScope;
         _sweepDataCenters.Clear();
-        foreach (var dataCenter in PresetRequest.SweepDataCenters)
+        foreach (var dataCenter in request.SweepDataCenters)
             _sweepDataCenters.Add(dataCenter);
 
-        var lines = MarketAcquisitionRequestDisplay.LinesFor(PresetRequest);
+        var lines = MarketAcquisitionRequestDisplay.LinesFor(request);
         _queue.Clear();
         foreach (var line in lines)
         {
@@ -364,6 +427,14 @@
         _hqPolicy = firstLine is null || string.IsNullOrWhiteSpace(firstLine.HqPolicy) ? "Either" : firstLine.HqPolicy;
         _maxUnitPrice = firstLine?.MaxUnitPrice is null or 0 ? null : firstLine.MaxUnitPrice;
         _gilCap = firstLine?.GilCap is null or 0 ? null : firstLine.GilCap;
+    }
+
+    private void ClearEditMode()
+    {
+        _editRequestId = null;
+        _editExpectedRevision = 0;
+        _editTargetCharacterName = string.Empty;
+        _editTargetWorld = string.Empty;
     }
 
     private async Task<IEnumerable<XivItemSearchResult>> SearchItemsAsync(string value, CancellationToken token)
@@ -417,7 +488,7 @@
             return;
         }
 
-        if (SelectedCharacter is null)
+        if (!IsEditMode && SelectedCharacter is null)
         {
             Status.Error("Pick a dashboard character before adding to the queue.");
             return;
@@ -448,6 +519,9 @@
         Status.Info($"Queued {_selectedItem.Name}.");
     }
 
+    private Task SubmitQueueAsync() =>
+        IsEditMode ? SaveEditAsync() : StageAsync();
+
     private async Task StageAsync()
     {
         if (StageRequested is null)
@@ -459,11 +533,8 @@
             return;
         }
 
-        if (IsAllWorldSweep && _sweepScope == "DataCenters" && _sweepDataCenters.Count == 0)
-        {
-            Status.Error("Pick at least one data center for a selected data-center sweep.");
+        if (!ValidateSweepSelection())
             return;
-        }
 
         var request = new MarketAcquisitionBatchCreateRequest
         {
@@ -480,6 +551,28 @@
 
         if (await StageRequested.Invoke(request))
             _queue.Clear();
+    }
+
+    private async Task SaveEditAsync()
+    {
+        if (ReplaceRequested is null || string.IsNullOrWhiteSpace(_editRequestId))
+            return;
+
+        if (!ValidateSweepSelection())
+            return;
+
+        var request = new MarketAcquisitionBatchReplaceRequest
+        {
+            ExpectedRevision = _editExpectedRevision,
+            Region = _region,
+            WorldMode = NormalizeWorldMode(_worldMode),
+            SweepScope = NormalizeSweepScope(),
+            SweepDataCenters = ResolveSweepDataCenters(),
+            ExpiresInSeconds = ExpirySeconds,
+            Lines = _queue.Select(ToBatchLineRequest).ToArray(),
+        };
+
+        await ReplaceRequested.Invoke(_editRequestId, request);
     }
 
     private async Task AppendToPendingAsync()
@@ -503,6 +596,17 @@
 
         if (await AppendRequested.Invoke(pendingBatch.Id, request))
             _queue.Clear();
+    }
+
+    private bool ValidateSweepSelection()
+    {
+        if (IsAllWorldSweep && _sweepScope == "DataCenters" && _sweepDataCenters.Count == 0)
+        {
+            Status.Error("Pick at least one data center for a selected data-center sweep.");
+            return false;
+        }
+
+        return true;
     }
 
     private int ExpirySeconds => Math.Clamp(_expiresInMinutes, 1, 1440) * 60;
