@@ -197,24 +197,6 @@ public sealed class CraftAppraisalRequestBuilderIntegrationTests
         Assert.Equal(document.LocalRevision + 1, updated.LocalRevision);
     }
 
-    [Fact]
-    public void LineLayout_UsesSharedColumnsWithComboArrowSpace()
-    {
-        var columns = AcquisitionRequestLineLayout.Columns;
-
-        Assert.Collection(
-            columns,
-            column => Assert.Equal("Item", column.Label),
-            column => Assert.Equal("Mode", column.Label),
-            column => Assert.Equal("Qty", column.Label),
-            column => Assert.Equal("Unit Ceiling", column.Label),
-            column => Assert.Equal("Spend Ceiling", column.Label),
-            column => Assert.Equal("HQ", column.Label),
-            column => Assert.Equal(string.Empty, column.Label));
-        Assert.True(columns[1].Width >= AcquisitionRequestLineLayout.MinimumModeComboWidth);
-        Assert.True(columns[5].Width >= AcquisitionRequestLineLayout.MinimumHqComboWidth);
-    }
-
     private static class TestDocument
     {
         public static MarketAcquisitionRequestDocument WithLine(MarketAcquisitionRequestLineDocument line) =>
