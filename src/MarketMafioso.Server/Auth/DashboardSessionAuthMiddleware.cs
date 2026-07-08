@@ -83,7 +83,8 @@ public sealed class DashboardSessionAuthMiddleware
             return false;
 
         if (HttpMethods.IsPost(request.Method) &&
-            request.Path.Equals("/api/acquisition/requests", StringComparison.OrdinalIgnoreCase))
+            (request.Path.Equals("/api/acquisition/requests", StringComparison.OrdinalIgnoreCase) ||
+             request.Path.Equals("/api/acquisition/batches", StringComparison.OrdinalIgnoreCase)))
         {
             return request.Headers.ContainsKey("X-Api-Key");
         }

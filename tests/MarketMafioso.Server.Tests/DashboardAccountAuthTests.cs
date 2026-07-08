@@ -124,6 +124,29 @@ public sealed class DashboardAccountAuthTests
     }
 
     [Fact]
+    public async Task DashboardSession_AllowsPluginBatchCreateWithApiKeyUnderBasePath()
+    {
+        await using var application = CreateApplication(
+            new KeyValuePair<string, string?>("MarketMafioso:RequireApiKey", "true"),
+            new KeyValuePair<string, string?>("MarketMafioso:ClientApiKey", "client-secret"),
+            new KeyValuePair<string, string?>("MarketMafioso:BasePath", "/marketmafioso"));
+        using var client = application.CreateClient();
+
+        using var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            "/marketmafioso/api/acquisition/batches")
+        {
+            Content = JsonContent.Create(MarketAcquisitionTestApp.CreateBatchRequest("dashboard-session-batch-create")),
+        };
+        request.Headers.Add("X-Api-Key", "client-secret");
+        request.Headers.Accept.ParseAdd("application/json");
+
+        var response = await client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+    }
+
+    [Fact]
     public async Task DashboardSession_StopsWorkingWhenUserIsDisabled()
     {
         var values = CreateApplicationValues();
