@@ -96,6 +96,13 @@ public sealed class DashboardSessionAuthMiddleware
             return true;
         }
 
+        if (HttpMethods.IsPut(request.Method) &&
+            request.Headers.ContainsKey("X-Api-Key") &&
+            request.Path.StartsWithSegments("/api/acquisition/batches", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
         if (!HttpMethods.IsPost(request.Method))
             return false;
 

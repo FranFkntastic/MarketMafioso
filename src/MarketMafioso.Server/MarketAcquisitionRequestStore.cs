@@ -230,6 +230,77 @@ public sealed class MarketAcquisitionRequestStore
         };
     }
 
+    public async Task<MarketAcquisitionRequestView?> ReplaceBatchAsync(
+        string id,
+        MarketAcquisitionBatchReplaceRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(id))
+            throw new ArgumentException("Request id is required.", nameof(id));
+        ValidateBatchReplaceRequest(request);
+
+        await ExpirePendingAsync(cancellationToken).ConfigureAwait(false);
+        await ExpireClaimedAsync(cancellationToken).ConfigureAwait(false);
+
+        var now = DateTimeOffset.UtcNow;
+        await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+
+        var current = await GetByIdAsync(connection, transaction, id, cancellationToken).ConfigureAwait(false);
+        if (current == null)
+            return null;
+
+        EnsureCanReplaceBatch(current);
+        if (current.Revision != request.ExpectedRevision)
+            throw new MarketAcquisitionRevisionConflictException(request.ExpectedRevision, current.Revision);
+
+        await DeleteBatchLinesAsync(connection, transaction, id, cancellationToken).ConfigureAwait(false);
+        var lines = await InsertBatchLinesAsync(
+            connection,
+            transaction,
+            id,
+            request.Lines,
+            now,
+            cancellationToken).ConfigureAwait(false);
+
+        var nextRevision = current.Revision + 1;
+        var expiresAtUtc = now.AddSeconds(ClampPickupExpirySeconds(request.ExpiresInSeconds));
+        var replacementPayload = BuildReplacementPayloadJson(current, request);
+
+        await using var update = connection.CreateCommand();
+        update.Transaction = (SqliteTransaction)transaction;
+        update.CommandText =
+            """
+            UPDATE acquisition_requests
+            SET revision = $revision,
+                expires_at_utc = $expiresAtUtc,
+                payload_json = $payloadJson
+            WHERE id = $id
+              AND revision = $expectedRevision;
+            """;
+        update.Parameters.AddWithValue("$revision", nextRevision);
+        update.Parameters.AddWithValue("$expiresAtUtc", expiresAtUtc.ToString("O"));
+        update.Parameters.AddWithValue("$payloadJson", replacementPayload);
+        update.Parameters.AddWithValue("$id", id);
+        update.Parameters.AddWithValue("$expectedRevision", request.ExpectedRevision);
+
+        var affected = await update.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        if (affected != 1)
+            throw new MarketAcquisitionRevisionConflictException(request.ExpectedRevision, current.Revision);
+
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return current with
+        {
+            Revision = nextRevision,
+            ExpiresAtUtc = expiresAtUtc,
+            Region = NormalizeSupportedRegion(request.Region, nameof(request)),
+            WorldMode = request.WorldMode.Trim(),
+            SweepScope = string.IsNullOrWhiteSpace(request.SweepScope) ? "Region" : request.SweepScope.Trim(),
+            SweepDataCenters = NormalizeSweepDataCenters(request.Region, request.SweepDataCenters),
+            Lines = lines.OrderBy(line => line.Ordinal).ToList(),
+        };
+    }
+
     public async Task<MarketAcquisitionRequestView?> GetAsync(
         string id,
         CancellationToken cancellationToken)
@@ -2126,6 +2197,19 @@ public sealed class MarketAcquisitionRequestStore
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
+    private static async Task DeleteBatchLinesAsync(
+        SqliteConnection connection,
+        System.Data.Common.DbTransaction transaction,
+        string requestId,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = (SqliteTransaction)transaction;
+        command.CommandText = "DELETE FROM acquisition_batch_lines WHERE request_id = $requestId;";
+        command.Parameters.AddWithValue("$requestId", requestId);
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
     private static async Task<MarketAcquisitionBatchLineView?> LoadLineByIdAsync(
         SqliteConnection connection,
         System.Data.Common.DbTransaction transaction,
@@ -2801,6 +2885,30 @@ public sealed class MarketAcquisitionRequestStore
             ],
         };
 
+    private static string BuildReplacementPayloadJson(
+        MarketAcquisitionRequestView current,
+        MarketAcquisitionBatchReplaceRequest request)
+    {
+        var region = NormalizeSupportedRegion(request.Region, nameof(request));
+        var payload = new MarketAcquisitionBatchCreateRequest
+        {
+            SchemaVersion = 1,
+            IdempotencyKey = current.Id,
+            Origin = current.Origin,
+            CreatedByPluginInstanceId = current.CreatedByPluginInstanceId,
+            TargetCharacterName = current.TargetCharacterName,
+            TargetWorld = current.TargetWorld,
+            Region = region,
+            WorldMode = request.WorldMode.Trim(),
+            SweepScope = string.IsNullOrWhiteSpace(request.SweepScope) ? "Region" : request.SweepScope.Trim(),
+            SweepDataCenters = NormalizeSweepDataCenters(region, request.SweepDataCenters),
+            ExpiresInSeconds = request.ExpiresInSeconds,
+            Lines = request.Lines,
+        };
+
+        return JsonSerializer.Serialize(payload, JsonOptions);
+    }
+
     private static MarketAcquisitionCreateRequest ToPrimaryCreateRequest(MarketAcquisitionBatchCreateRequest request)
     {
         var primaryLine = request.Lines.FirstOrDefault()
@@ -2950,7 +3058,7 @@ public sealed class MarketAcquisitionRequestStore
     private static void ValidateOrigin(string? origin, string argumentName)
     {
         var normalized = NormalizeOrigin(origin);
-        if (normalized is not (MarketAcquisitionOrigins.DashboardCreated or MarketAcquisitionOrigins.ClientQuickShop))
+        if (normalized is not (MarketAcquisitionOrigins.DashboardCreated or MarketAcquisitionOrigins.PluginBuilder or MarketAcquisitionOrigins.ClientQuickShop))
             throw new ArgumentException($"{normalized} is not a supported market acquisition origin.", argumentName);
     }
 
@@ -2963,6 +3071,42 @@ public sealed class MarketAcquisitionRequestStore
 
         foreach (var line in request.Lines)
             ValidateBatchLineCreateRequest(line);
+    }
+
+    private static void ValidateBatchReplaceRequest(MarketAcquisitionBatchReplaceRequest request)
+    {
+        if (request.ExpectedRevision < 1)
+            throw new ArgumentException("Expected revision must be one or greater.", nameof(request));
+        if (string.IsNullOrWhiteSpace(request.Region))
+            throw new ArgumentException("Region is required.", nameof(request));
+        var region = NormalizeSupportedRegion(request.Region, nameof(request));
+        if (string.IsNullOrWhiteSpace(request.WorldMode))
+            throw new ArgumentException("World mode is required.", nameof(request));
+        if (request.Lines.Count == 0)
+            throw new ArgumentException("At least one acquisition line is required.", nameof(request));
+        ValidateSweepScope(region, request.WorldMode, request.SweepScope, request.SweepDataCenters, nameof(request));
+
+        foreach (var line in request.Lines)
+            ValidateBatchLineCreateRequest(line);
+    }
+
+    private static void EnsureCanReplaceBatch(MarketAcquisitionRequestView current)
+    {
+        if (current.Status is MarketAcquisitionStatuses.Running
+            or MarketAcquisitionStatuses.Complete
+            or MarketAcquisitionStatuses.Failed
+            or MarketAcquisitionStatuses.Rejected
+            or MarketAcquisitionStatuses.Expired
+            or MarketAcquisitionStatuses.Cancelled)
+        {
+            throw new MarketAcquisitionInvalidTransitionException(current.Status, "editable request intent");
+        }
+
+        if (!string.IsNullOrWhiteSpace(current.LatestAttemptEventType) ||
+            current.Lines.Any(line => line.PurchasedQuantity > 0 || line.SpentGil > 0))
+        {
+            throw new MarketAcquisitionInvalidTransitionException(current.Status, "editable request intent");
+        }
     }
 
     private static void ValidateSweepScope(
@@ -3000,6 +3144,24 @@ public sealed class MarketAcquisitionRequestStore
         return SupportedSweepDataCenters.ContainsKey(normalized)
             ? normalized
             : throw new ArgumentException($"{region} is not a supported market acquisition region.", argumentName);
+    }
+
+    private static IReadOnlyList<string> NormalizeSweepDataCenters(
+        string region,
+        IReadOnlyList<string> sweepDataCenters)
+    {
+        var normalizedRegion = NormalizeSupportedRegion(region, nameof(region));
+        return sweepDataCenters
+            .Where(dataCenter => !string.IsNullOrWhiteSpace(dataCenter))
+            .Select(dataCenter =>
+            {
+                var trimmed = dataCenter.Trim();
+                var canonical = SupportedSweepDataCenters[normalizedRegion]
+                    .FirstOrDefault(candidate => candidate.Equals(trimmed, StringComparison.OrdinalIgnoreCase));
+                return canonical ?? trimmed;
+            })
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
     }
 
     private static void ValidateBatchLineCreateRequest(MarketAcquisitionBatchLineCreateRequest line)

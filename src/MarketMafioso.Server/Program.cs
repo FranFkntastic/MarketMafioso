@@ -195,6 +195,7 @@ app.MapGet("/api/acquisition/batches/{id}", async (
     return batch == null ? Results.NotFound() : Results.Ok(batch);
 });
 
+app.MapPut("/api/acquisition/batches/{id}", ReplaceAcquisitionBatch);
 app.MapPost("/api/acquisition/batches/{id}/lines", AppendAcquisitionBatchLines);
 
 app.MapGet("/api/diagnostics/events", async (
@@ -260,6 +261,7 @@ app.MapPost("/acquisition/requests", CreateAcquisitionRequest);
 app.MapPost("/api/acquisition/requests", CreateAcquisitionRequest);
 app.MapPost("/acquisition/batches", CreateAcquisitionBatch);
 app.MapPost("/api/acquisition/batches", CreateAcquisitionBatch);
+app.MapPut("/acquisition/batches/{id}", ReplaceAcquisitionBatch);
 app.MapGet("/acquisition/requests/pending", ListPendingAcquisitionRequests);
 app.MapGet("/api/acquisition/requests/pending", ListPendingAcquisitionRequests);
 app.MapGet("/acquisition/batches/pending", ListPendingAcquisitionBatches);
@@ -764,6 +766,36 @@ async Task<IResult> AppendAcquisitionBatchLines(
     try
     {
         var updated = await store.AppendLinesAsync(id, appendRequest, token);
+        return updated == null ? Results.NotFound() : Results.Ok(updated);
+    }
+    catch (ArgumentException ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+    catch (MarketAcquisitionInvalidTransitionException ex)
+    {
+        return Results.Conflict(new { error = ex.Message });
+    }
+    catch (MarketAcquisitionRevisionConflictException ex)
+    {
+        return Results.Conflict(new
+        {
+            error = ex.Message,
+            expectedRevision = ex.ExpectedRevision,
+            actualRevision = ex.ActualRevision,
+        });
+    }
+}
+
+async Task<IResult> ReplaceAcquisitionBatch(
+    string id,
+    MarketAcquisitionBatchReplaceRequest replaceRequest,
+    MarketAcquisitionRequestStore store,
+    CancellationToken token)
+{
+    try
+    {
+        var updated = await store.ReplaceBatchAsync(id, replaceRequest, token);
         return updated == null ? Results.NotFound() : Results.Ok(updated);
     }
     catch (ArgumentException ex)
@@ -1346,12 +1378,15 @@ static bool IsAcquisitionBrowserCreate(HttpRequest request) =>
     request.HasFormContentType;
 
 static bool IsAcquisitionBrowserControl(HttpRequest request) =>
-    HttpMethods.IsPost(request.Method) &&
     !request.Headers.ContainsKey("X-Api-Key") &&
-    (request.Path.StartsWithSegments("/acquisition/requests") ||
-     request.Path.StartsWithSegments("/api/acquisition/requests")) &&
-    (request.Path.Value?.EndsWith("/cancel", StringComparison.OrdinalIgnoreCase) == true ||
-     request.Path.Value?.EndsWith("/resend", StringComparison.OrdinalIgnoreCase) == true);
+    ((HttpMethods.IsPost(request.Method) &&
+      (request.Path.StartsWithSegments("/acquisition/requests") ||
+       request.Path.StartsWithSegments("/api/acquisition/requests")) &&
+      (request.Path.Value?.EndsWith("/cancel", StringComparison.OrdinalIgnoreCase) == true ||
+       request.Path.Value?.EndsWith("/resend", StringComparison.OrdinalIgnoreCase) == true)) ||
+     (HttpMethods.IsPut(request.Method) &&
+      (request.Path.StartsWithSegments("/acquisition/batches/") ||
+       request.Path.StartsWithSegments("/api/acquisition/batches/"))));
 
 static bool IsAcquisitionBrowserRead(HttpRequest request) =>
     HttpMethods.IsGet(request.Method) &&
@@ -1380,10 +1415,16 @@ static bool IsKnownAcquisitionPluginRoute(HttpRequest request)
                request.Path.Equals("/api/acquisition/batches/pending", StringComparison.OrdinalIgnoreCase);
     }
 
+    var path = request.Path.Value ?? string.Empty;
+    if (HttpMethods.IsPut(request.Method))
+    {
+        return path.StartsWith("/acquisition/batches/", StringComparison.OrdinalIgnoreCase) ||
+               path.StartsWith("/api/acquisition/batches/", StringComparison.OrdinalIgnoreCase);
+    }
+
     if (!HttpMethods.IsPost(request.Method))
         return false;
 
-    var path = request.Path.Value ?? string.Empty;
     return (path.StartsWith("/acquisition/requests/", StringComparison.OrdinalIgnoreCase) ||
             path.StartsWith("/api/acquisition/requests/", StringComparison.OrdinalIgnoreCase)) &&
            (path.EndsWith("/claim", StringComparison.OrdinalIgnoreCase) ||

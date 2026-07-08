@@ -241,6 +241,115 @@ public sealed class MarketAcquisitionRequestEndpointTests
     }
 
     [Fact]
+    public async Task HostedMode_ReplacesPendingBatchIntent()
+    {
+        await using var application = CreateHostedApplication(
+            extraConfiguration: new KeyValuePair<string, string?>("MarketMafioso:AcquisitionMaximumExpirySeconds", "86400"));
+        using var client = application.CreateClient();
+
+        var created = await SendWithKeyAsync(
+            client,
+            HttpMethod.Post,
+            "/marketmafioso/api/acquisition/batches",
+            "client-secret",
+            CreateBatchRequest("replace-endpoint-batch"));
+        created.EnsureSuccessStatusCode();
+        using var createdJson = JsonDocument.Parse(await created.Content.ReadAsStringAsync());
+        var requestId = createdJson.RootElement.GetProperty("id").GetString();
+        var revision = createdJson.RootElement.GetProperty("revision").GetInt32();
+
+        var replaced = await SendWithKeyAsync(
+            client,
+            HttpMethod.Put,
+            $"/marketmafioso/api/acquisition/batches/{requestId}",
+            "client-secret",
+            new
+            {
+                expectedRevision = revision,
+                region = "North America",
+                worldMode = "Recommended",
+                sweepScope = "Region",
+                expiresInSeconds = 3600,
+                lines = new object[]
+                {
+                    new
+                    {
+                        itemId = 19951,
+                        itemName = "Koppranickel Ore",
+                        itemKind = "Stone",
+                        quantityMode = "AllBelowThreshold",
+                        targetQuantity = 0,
+                        maxQuantity = 25,
+                        hqPolicy = "Either",
+                        maxUnitPrice = 276,
+                        gilCap = 0,
+                    },
+                },
+            });
+
+        replaced.EnsureSuccessStatusCode();
+        using var replacedJson = JsonDocument.Parse(await replaced.Content.ReadAsStringAsync());
+        Assert.Equal(revision + 1, replacedJson.RootElement.GetProperty("revision").GetInt32());
+        var lines = replacedJson.RootElement.GetProperty("lines");
+        var line = Assert.Single(lines.EnumerateArray());
+        Assert.Equal(19951u, line.GetProperty("itemId").GetUInt32());
+        Assert.Equal("Koppranickel Ore", line.GetProperty("itemName").GetString());
+        Assert.Equal(25u, line.GetProperty("maxQuantity").GetUInt32());
+    }
+
+    [Fact]
+    public async Task HostedMode_ReplaceBatchRejectsStaleRevision()
+    {
+        await using var application = CreateHostedApplication();
+        using var client = application.CreateClient();
+
+        var created = await SendWithKeyAsync(
+            client,
+            HttpMethod.Post,
+            "/marketmafioso/api/acquisition/batches",
+            "client-secret",
+            CreateBatchRequest("replace-endpoint-conflict"));
+        created.EnsureSuccessStatusCode();
+        using var createdJson = JsonDocument.Parse(await created.Content.ReadAsStringAsync());
+        var requestId = createdJson.RootElement.GetProperty("id").GetString();
+        var revision = createdJson.RootElement.GetProperty("revision").GetInt32();
+
+        var replaced = await SendWithKeyAsync(
+            client,
+            HttpMethod.Put,
+            $"/marketmafioso/api/acquisition/batches/{requestId}",
+            "client-secret",
+            new
+            {
+                expectedRevision = revision + 1,
+                region = "North America",
+                worldMode = "Recommended",
+                sweepScope = "Region",
+                expiresInSeconds = 300,
+                lines = new object[]
+                {
+                    new
+                    {
+                        itemId = 19951,
+                        itemName = "Koppranickel Ore",
+                        itemKind = "Stone",
+                        quantityMode = "AllBelowThreshold",
+                        targetQuantity = 0,
+                        maxQuantity = 25,
+                        hqPolicy = "Either",
+                        maxUnitPrice = 276,
+                        gilCap = 0,
+                    },
+                },
+            });
+
+        Assert.Equal(HttpStatusCode.Conflict, replaced.StatusCode);
+        using var conflictJson = JsonDocument.Parse(await replaced.Content.ReadAsStringAsync());
+        Assert.Equal(revision + 1, conflictJson.RootElement.GetProperty("expectedRevision").GetInt32());
+        Assert.Equal(revision, conflictJson.RootElement.GetProperty("actualRevision").GetInt32());
+    }
+
+    [Fact]
     public async Task LineProgressRejectsUnknownLineId()
     {
         using var app = await MarketAcquisitionTestApp.CreateAsync();

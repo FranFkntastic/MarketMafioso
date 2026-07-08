@@ -147,6 +147,64 @@ public sealed class DashboardAccountAuthTests
     }
 
     [Fact]
+    public async Task DashboardSession_AllowsPluginBatchReplaceWithApiKeyUnderBasePath()
+    {
+        await using var application = CreateApplication(
+            new KeyValuePair<string, string?>("MarketMafioso:RequireApiKey", "true"),
+            new KeyValuePair<string, string?>("MarketMafioso:ClientApiKey", "client-secret"),
+            new KeyValuePair<string, string?>("MarketMafioso:BasePath", "/marketmafioso"));
+        using var client = application.CreateClient();
+
+        using var createRequest = new HttpRequestMessage(
+            HttpMethod.Post,
+            "/marketmafioso/api/acquisition/batches")
+        {
+            Content = JsonContent.Create(MarketAcquisitionTestApp.CreateBatchRequest("dashboard-session-batch-replace")),
+        };
+        createRequest.Headers.Add("X-Api-Key", "client-secret");
+        createRequest.Headers.Accept.ParseAdd("application/json");
+        var created = await client.SendAsync(createRequest);
+        created.EnsureSuccessStatusCode();
+        var createdBatch = await created.Content.ReadFromJsonAsync<MarketAcquisitionRequestView>()
+            ?? throw new InvalidOperationException("Batch create response was empty.");
+
+        using var replaceRequest = new HttpRequestMessage(
+            HttpMethod.Put,
+            $"/marketmafioso/api/acquisition/batches/{createdBatch.Id}")
+        {
+            Content = JsonContent.Create(new
+            {
+                expectedRevision = createdBatch.Revision,
+                region = "North America",
+                worldMode = "Recommended",
+                sweepScope = "Region",
+                expiresInSeconds = 300,
+                lines = new object[]
+                {
+                    new
+                    {
+                        itemId = 19951,
+                        itemName = "Koppranickel Ore",
+                        itemKind = "Stone",
+                        quantityMode = "AllBelowThreshold",
+                        targetQuantity = 0,
+                        maxQuantity = 25,
+                        hqPolicy = "Either",
+                        maxUnitPrice = 276,
+                        gilCap = 0,
+                    },
+                },
+            }),
+        };
+        replaceRequest.Headers.Add("X-Api-Key", "client-secret");
+        replaceRequest.Headers.Accept.ParseAdd("application/json");
+
+        var response = await client.SendAsync(replaceRequest);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
     public async Task DashboardSession_StopsWorkingWhenUserIsDisabled()
     {
         var values = CreateApplicationValues();

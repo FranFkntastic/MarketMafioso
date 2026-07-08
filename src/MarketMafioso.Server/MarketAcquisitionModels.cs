@@ -45,6 +45,17 @@ public sealed record MarketAcquisitionBatchAppendLinesRequest
     public IReadOnlyList<MarketAcquisitionBatchLineCreateRequest> Lines { get; init; } = [];
 }
 
+public sealed record MarketAcquisitionBatchReplaceRequest
+{
+    public int ExpectedRevision { get; init; }
+    public string Region { get; init; } = string.Empty;
+    public string WorldMode { get; init; } = string.Empty;
+    public string SweepScope { get; init; } = "Region";
+    public IReadOnlyList<string> SweepDataCenters { get; init; } = [];
+    public int ExpiresInSeconds { get; init; } = 90;
+    public IReadOnlyList<MarketAcquisitionBatchLineCreateRequest> Lines { get; init; } = [];
+}
+
 public sealed record MarketAcquisitionBatchLineCreateRequest
 {
     public uint ItemId { get; init; }
@@ -250,6 +261,7 @@ public sealed record MarketAcquisitionCreateResult(MarketAcquisitionRequestView 
 public static class MarketAcquisitionOrigins
 {
     public const string DashboardCreated = "DashboardCreated";
+    public const string PluginBuilder = "PluginBuilder";
     public const string ClientQuickShop = "ClientQuickShop";
 }
 

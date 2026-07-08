@@ -155,6 +155,137 @@ public sealed class MarketAcquisitionRequestStoreTests
     }
 
     [Fact]
+    public async Task ReplaceBatchAsyncReplacesPendingBatchLinesAndIncrementsRevision()
+    {
+        using var fixture = await MarketAcquisitionStoreFixture.CreateAsync(
+            new KeyValuePair<string, string?>("MarketMafioso:AcquisitionMaximumExpirySeconds", "86400"));
+        var created = await fixture.Store.CreateBatchAsync(
+            CreateBatchRequest("replace-pending-lines", expiresInSeconds: 300),
+            CancellationToken.None);
+
+        var replaced = await fixture.Store.ReplaceBatchAsync(
+            created.Request.Id,
+            new MarketAcquisitionBatchReplaceRequest
+            {
+                ExpectedRevision = created.Request.Revision,
+                Region = "North America",
+                WorldMode = "Recommended",
+                SweepScope = "Region",
+                ExpiresInSeconds = 3600,
+                Lines =
+                [
+                    CreateLine(19951, "Koppranickel Ore", "Stone", maxQuantity: 25, maxUnitPrice: 276),
+                ],
+            },
+            CancellationToken.None);
+
+        Assert.NotNull(replaced);
+        Assert.Equal(created.Request.Revision + 1, replaced.Revision);
+        Assert.True(replaced.ExpiresAtUtc - replaced.CreatedAtUtc >= TimeSpan.FromMinutes(59));
+        var line = Assert.Single(replaced.Lines);
+        Assert.Equal((uint)19951, line.ItemId);
+        Assert.Equal("Koppranickel Ore", line.ItemName);
+        Assert.Equal((uint)25, line.MaxQuantity);
+        Assert.Equal((uint)276, line.MaxUnitPrice);
+    }
+
+    [Fact]
+    public async Task ReplaceBatchAsyncAllowsAcceptedUnstartedBatchAndPreservesStatus()
+    {
+        using var fixture = await MarketAcquisitionStoreFixture.CreateAsync();
+        var accepted = await fixture.CreateAcceptedBatchAsync("replace-accepted-unstarted");
+        var acceptedView = await fixture.Store.GetAsync(accepted.Id, CancellationToken.None)
+            ?? throw new InvalidOperationException("Accepted test batch disappeared.");
+
+        var replaced = await fixture.Store.ReplaceBatchAsync(
+            accepted.Id,
+            new MarketAcquisitionBatchReplaceRequest
+            {
+                ExpectedRevision = acceptedView.Revision,
+                Region = "North America",
+                WorldMode = "Recommended",
+                SweepScope = "Region",
+                ExpiresInSeconds = 300,
+                Lines =
+                [
+                    CreateLine(19951, "Koppranickel Ore", "Stone", maxQuantity: 11, maxUnitPrice: 276),
+                ],
+            },
+            CancellationToken.None);
+
+        Assert.NotNull(replaced);
+        Assert.Equal(MarketAcquisitionStatuses.AcceptedInPlugin, replaced.Status);
+        Assert.Equal(acceptedView.Revision + 1, replaced.Revision);
+        var line = Assert.Single(replaced.Lines);
+        Assert.Equal((uint)19951, line.ItemId);
+    }
+
+    [Fact]
+    public async Task ReplaceBatchAsyncRejectsStaleRevision()
+    {
+        using var fixture = await MarketAcquisitionStoreFixture.CreateAsync();
+        var created = await fixture.Store.CreateBatchAsync(
+            CreateBatchRequest("replace-stale-revision"),
+            CancellationToken.None);
+
+        var ex = await Assert.ThrowsAsync<MarketAcquisitionRevisionConflictException>(() =>
+            fixture.Store.ReplaceBatchAsync(
+                created.Request.Id,
+                new MarketAcquisitionBatchReplaceRequest
+                {
+                    ExpectedRevision = created.Request.Revision + 1,
+                    Region = "North America",
+                    WorldMode = "Recommended",
+                    SweepScope = "Region",
+                    ExpiresInSeconds = 300,
+                    Lines =
+                    [
+                        CreateLine(19951, "Koppranickel Ore", "Stone", maxQuantity: 11, maxUnitPrice: 276),
+                    ],
+                },
+                CancellationToken.None));
+
+        Assert.Equal(created.Request.Revision + 1, ex.ExpectedRevision);
+        Assert.Equal(created.Request.Revision, ex.ActualRevision);
+    }
+
+    [Fact]
+    public async Task ReplaceBatchAsyncRejectsBatchWithAttemptProgress()
+    {
+        using var fixture = await MarketAcquisitionStoreFixture.CreateAsync();
+        var accepted = await fixture.CreateAcceptedBatchAsync("replace-progress-rejected");
+        var acceptedView = await fixture.Store.GetAsync(accepted.Id, CancellationToken.None)
+            ?? throw new InvalidOperationException("Accepted test batch disappeared.");
+        await fixture.Store.ReportProgressAsync(
+            accepted.Id,
+            new MarketAcquisitionLifecycleRequest
+            {
+                ClaimToken = accepted.ClaimToken,
+                IdempotencyKey = "replace-progress-rejected-progress",
+                RunnerState = "Running",
+                Message = "Route started.",
+            },
+            CancellationToken.None);
+
+        await Assert.ThrowsAsync<MarketAcquisitionInvalidTransitionException>(() =>
+            fixture.Store.ReplaceBatchAsync(
+                accepted.Id,
+                new MarketAcquisitionBatchReplaceRequest
+                {
+                    ExpectedRevision = acceptedView.Revision,
+                    Region = "North America",
+                    WorldMode = "Recommended",
+                    SweepScope = "Region",
+                    ExpiresInSeconds = 300,
+                    Lines =
+                    [
+                        CreateLine(19951, "Koppranickel Ore", "Stone", maxQuantity: 11, maxUnitPrice: 276),
+                    ],
+                },
+                CancellationToken.None));
+    }
+
+    [Fact]
     public async Task CreateBatchAsyncRejectsSweepDataCenterOutsideRegion()
     {
         using var fixture = await MarketAcquisitionStoreFixture.CreateAsync();
