@@ -162,6 +162,41 @@ public sealed class CraftAppraisalRequestBuilderIntegrationTests
         Assert.Equal(document.LocalRevision + 1, updated.LocalRevision);
     }
 
+    [Fact]
+    public void ApplyLineEdit_UpdatesEditableFieldsAndAdvancesRevision()
+    {
+        var document = TestDocument.WithLines(
+            new MarketAcquisitionRequestLineDocument
+            {
+                ItemId = 5121,
+                ItemName = "Darksteel Ore",
+                QuantityMode = "AllBelowThreshold",
+                MaxQuantity = 0,
+                HqPolicy = "Either",
+                MaxUnitPrice = 0,
+                GilCap = 0,
+            });
+
+        var updated = RequestDocumentMutation.ApplyLineEdit(
+            document,
+            selectedLineIndex: 0,
+            quantityMode: "TargetQuantity",
+            targetQuantity: 40,
+            maxQuantity: 0,
+            hqPolicy: "NQOnly",
+            maxUnitPrice: 639,
+            gilCap: 25_000);
+
+        var line = updated.Lines[0];
+        Assert.Equal("TargetQuantity", line.QuantityMode);
+        Assert.Equal(40u, line.TargetQuantity);
+        Assert.Equal(0u, line.MaxQuantity);
+        Assert.Equal("NQOnly", line.HqPolicy);
+        Assert.Equal(639u, line.MaxUnitPrice);
+        Assert.Equal(25_000u, line.GilCap);
+        Assert.Equal(document.LocalRevision + 1, updated.LocalRevision);
+    }
+
     private static class TestDocument
     {
         public static MarketAcquisitionRequestDocument WithLine(MarketAcquisitionRequestLineDocument line) =>

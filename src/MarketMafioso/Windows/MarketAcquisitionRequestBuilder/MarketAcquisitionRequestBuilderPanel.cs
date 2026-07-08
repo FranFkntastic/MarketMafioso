@@ -252,8 +252,8 @@ public sealed class MarketAcquisitionRequestBuilderPanel
             ImGui.TableSetupColumn("Mode", ImGuiTableColumnFlags.WidthStretch, 1.1f);
             ImGui.TableSetupColumn("HQ", ImGuiTableColumnFlags.WidthStretch, 0.8f);
             ImGui.TableSetupColumn("Qty", ImGuiTableColumnFlags.WidthStretch, 0.9f);
-            ImGui.TableSetupColumn("Max Unit", ImGuiTableColumnFlags.WidthStretch, 0.9f);
-            ImGui.TableSetupColumn("Gil Cap", ImGuiTableColumnFlags.WidthStretch, 0.9f);
+            ImGui.TableSetupColumn("Unit Cost Ceiling", ImGuiTableColumnFlags.WidthStretch, 0.9f);
+            ImGui.TableSetupColumn("Total Spend Ceiling", ImGuiTableColumnFlags.WidthStretch, 0.9f);
             ImGui.TableNextRow();
 
             ImGui.TableNextColumn();
@@ -276,9 +276,9 @@ public sealed class MarketAcquisitionRequestBuilderPanel
             else
                 DrawInput("Max Qty", "##AcquisitionRequestBuilderMaxQty", ref maxQuantityBuffer);
             ImGui.TableNextColumn();
-            DrawInput("Max Unit", "##AcquisitionRequestBuilderMaxUnit", ref maxUnitPriceBuffer);
+            DrawInput("Unit Cost Ceiling", "##AcquisitionRequestBuilderMaxUnit", ref maxUnitPriceBuffer);
             ImGui.TableNextColumn();
-            DrawInput("Gil Cap", "##AcquisitionRequestBuilderGilCap", ref gilCapBuffer);
+            DrawInput("Total Spend Ceiling", "##AcquisitionRequestBuilderGilCap", ref gilCapBuffer);
 
             ImGui.EndTable();
         }
@@ -341,11 +341,11 @@ public sealed class MarketAcquisitionRequestBuilderPanel
             return;
 
         ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.WidthStretch);
-        ImGui.TableSetupColumn("Mode", ImGuiTableColumnFlags.WidthFixed, 120);
+        ImGui.TableSetupColumn("Mode", ImGuiTableColumnFlags.WidthFixed, 150);
         ImGui.TableSetupColumn("Qty", ImGuiTableColumnFlags.WidthFixed, 88);
-        ImGui.TableSetupColumn("Max Unit", ImGuiTableColumnFlags.WidthFixed, 88);
-        ImGui.TableSetupColumn("Gil Cap", ImGuiTableColumnFlags.WidthFixed, 88);
-        ImGui.TableSetupColumn("HQ", ImGuiTableColumnFlags.WidthFixed, 64);
+        ImGui.TableSetupColumn("Unit Ceiling", ImGuiTableColumnFlags.WidthFixed, 112);
+        ImGui.TableSetupColumn("Spend Ceiling", ImGuiTableColumnFlags.WidthFixed, 112);
+        ImGui.TableSetupColumn("HQ", ImGuiTableColumnFlags.WidthFixed, 88);
         ImGui.TableSetupColumn("", ImGuiTableColumnFlags.WidthFixed, 88);
         ImGui.TableHeadersRow();
 
@@ -376,15 +376,15 @@ public sealed class MarketAcquisitionRequestBuilderPanel
             }
 
             ImGui.TableNextColumn();
-            ImGui.TextUnformatted(MarketAcquisitionQuantityModePresenter.FormatMode(line.QuantityMode));
+            DrawLineModeCell(line, index);
             ImGui.TableNextColumn();
-            ImGui.TextUnformatted(FormatLineQuantity(line));
+            DrawLineQuantityCell(line, index);
             ImGui.TableNextColumn();
             DrawMaxUnitCell(line, index);
             ImGui.TableNextColumn();
             DrawGilCapCell(line, index);
             ImGui.TableNextColumn();
-            ImGui.TextUnformatted(line.HqPolicy);
+            DrawLineHqCell(line, index);
             ImGui.TableNextColumn();
             if (ImGuiUi.Button($"Remove##AcquisitionRequestBuilderRemove{index}", true))
                 RemoveLine(index);
@@ -395,7 +395,15 @@ public sealed class MarketAcquisitionRequestBuilderPanel
 
     private void DrawMaxUnitCell(MarketAcquisitionRequestLineDocument line, int index)
     {
-        ImGui.TextUnformatted(RequestPricingFormatter.FormatOptionalGil(line.MaxUnitPrice));
+        var maxUnit = ClampToInt(line.MaxUnitPrice);
+        ImGui.SetNextItemWidth(-1);
+        if (ImGui.InputInt($"##AcquisitionRequestBuilderMaxUnitCell{index}", ref maxUnit))
+            ApplyLineEdit(
+                index,
+                line,
+                maxUnitPrice: ClampToUInt(maxUnit),
+                message: "Unit cost ceiling updated.");
+
         if (!ImGui.BeginPopupContextItem($"AcquisitionRequestBuilderMaxUnitMenu{index}"))
             return;
 
@@ -404,13 +412,13 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         var threshold = craftAppraisal.State.TryGetLineQuoteThreshold(identity);
         if (threshold is > 0)
         {
-            if (ImGuiUi.MenuItem("Calculate from cost to craft", true))
-                SetLineMaxUnitPrice(index, threshold.Value, "Max unit set from Craft Architect quote.");
+            if (ImGuiUi.MenuItem("Use Craft Architect Quote", true))
+                SetLineMaxUnitPrice(index, threshold.Value, "Unit cost ceiling set from Craft Architect quote.");
         }
         else
         {
             if (ImGuiUi.MenuItem(
-                    "Calculate from cost to craft",
+                    "Get Craft Architect Quote",
                     craftAppraisal.State.WorkshopHostEnabled && !isAppraising && line.ItemId != 0))
             {
                 _ = CalculateMaxUnitFromCraftAsync(index);
@@ -423,42 +431,114 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         if (ImGuiUi.MenuItem("Enter manually", true))
         {
             SelectLineForEditing(index, line);
-            status = "Edit max price, then update the line.";
+            status = "Edit unit cost ceiling directly in the row.";
         }
 
-        if (ImGuiUi.MenuItem("Clear max unit", line.MaxUnitPrice > 0))
-            SetLineMaxUnitPrice(index, 0, "Max unit cleared.");
+        if (ImGuiUi.MenuItem("Clear unit cost ceiling", line.MaxUnitPrice > 0))
+            SetLineMaxUnitPrice(index, 0, "Unit cost ceiling cleared.");
 
         ImGui.EndPopup();
     }
 
     private void DrawGilCapCell(MarketAcquisitionRequestLineDocument line, int index)
     {
-        ImGui.TextUnformatted(RequestPricingFormatter.FormatOptionalGil(line.GilCap));
+        var gilCap = ClampToInt(line.GilCap);
+        ImGui.SetNextItemWidth(-1);
+        if (ImGui.InputInt($"##AcquisitionRequestBuilderGilCapCell{index}", ref gilCap))
+            ApplyLineEdit(
+                index,
+                line,
+                gilCap: ClampToUInt(gilCap),
+                message: "Total spend ceiling updated.");
+
         if (!ImGui.BeginPopupContextItem($"AcquisitionRequestBuilderGilCapMenu{index}"))
             return;
 
         SelectLineForEditing(index, line);
         var capQuantity = GetCapQuantity(line);
         var canCalculateCap = line.MaxUnitPrice > 0 && capQuantity > 0;
-        if (ImGuiUi.MenuItem("Set cap from max unit x quantity", canCalculateCap))
+        if (ImGuiUi.MenuItem("Set from unit ceiling x quantity", canCalculateCap))
             SetLineGilCap(
                 index,
                 CalculateGilCap(line.MaxUnitPrice, capQuantity),
-                "Gil cap set from max unit and quantity.");
+                "Total spend ceiling set from unit ceiling and quantity.");
         if (!canCalculateCap)
-            ImGui.TextColored(MainWindow.ColMuted, "Set max unit and a finite quantity before calculating a cap.");
+            ImGui.TextColored(MainWindow.ColMuted, "Set unit ceiling and a finite quantity before calculating a spend ceiling.");
 
         if (ImGuiUi.MenuItem("Enter manually", true))
         {
             SelectLineForEditing(index, line);
-            status = "Edit gil cap, then update the line.";
+            status = "Edit total spend ceiling directly in the row.";
         }
 
-        if (ImGuiUi.MenuItem("Clear gil cap", line.GilCap > 0))
-            SetLineGilCap(index, 0, "Gil cap cleared.");
+        if (ImGuiUi.MenuItem("Clear total spend ceiling", line.GilCap > 0))
+            SetLineGilCap(index, 0, "Total spend ceiling cleared.");
 
         ImGui.EndPopup();
+    }
+
+    private void DrawLineModeCell(MarketAcquisitionRequestLineDocument line, int index)
+    {
+        var current = string.IsNullOrWhiteSpace(line.QuantityMode) ? "AllBelowThreshold" : line.QuantityMode;
+        ImGui.SetNextItemWidth(-1);
+        if (!ImGui.BeginCombo($"##AcquisitionRequestBuilderModeCell{index}", MarketAcquisitionQuantityModePresenter.FormatMode(current)))
+            return;
+
+        foreach (var mode in new[] { "AllBelowThreshold", "TargetQuantity" })
+        {
+            var selected = string.Equals(mode, current, StringComparison.Ordinal);
+            if (ImGui.Selectable(MarketAcquisitionQuantityModePresenter.FormatMode(mode), selected))
+            {
+                ApplyLineEdit(
+                    index,
+                    line,
+                    quantityMode: mode,
+                    targetQuantity: mode == "TargetQuantity" ? Math.Max(1u, line.TargetQuantity) : line.TargetQuantity,
+                    message: "Quantity mode updated.");
+            }
+
+            if (selected)
+                ImGui.SetItemDefaultFocus();
+        }
+
+        ImGui.EndCombo();
+    }
+
+    private void DrawLineQuantityCell(MarketAcquisitionRequestLineDocument line, int index)
+    {
+        var isTargetQuantity = line.QuantityMode.Equals("TargetQuantity", StringComparison.OrdinalIgnoreCase);
+        var quantity = ClampToInt(isTargetQuantity ? line.TargetQuantity : line.MaxQuantity);
+        ImGui.SetNextItemWidth(-1);
+        if (!ImGui.InputInt($"##AcquisitionRequestBuilderQuantityCell{index}", ref quantity))
+            return;
+
+        var updated = ClampToUInt(quantity);
+        ApplyLineEdit(
+            index,
+            line,
+            targetQuantity: isTargetQuantity ? Math.Max(1u, updated) : line.TargetQuantity,
+            maxQuantity: isTargetQuantity ? line.MaxQuantity : updated,
+            message: isTargetQuantity ? "Target quantity updated." : "Maximum quantity updated.");
+    }
+
+    private void DrawLineHqCell(MarketAcquisitionRequestLineDocument line, int index)
+    {
+        var current = string.IsNullOrWhiteSpace(line.HqPolicy) ? "Either" : line.HqPolicy;
+        ImGui.SetNextItemWidth(-1);
+        if (!ImGui.BeginCombo($"##AcquisitionRequestBuilderHqCell{index}", current))
+            return;
+
+        foreach (var hq in new[] { "Either", "HQOnly", "NQOnly" })
+        {
+            var selected = string.Equals(hq, current, StringComparison.Ordinal);
+            if (ImGui.Selectable(hq, selected))
+                ApplyLineEdit(index, line, hqPolicy: hq, message: "HQ policy updated.");
+
+            if (selected)
+                ImGui.SetItemDefaultFocus();
+        }
+
+        ImGui.EndCombo();
     }
 
     private void DrawSelectedLineInspector(MarketAcquisitionRequestBuilderContext context)
@@ -477,7 +557,7 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         ImGui.TableNextRow();
 
         ImGui.TableNextColumn();
-        ImGui.TextColored(MainWindow.ColMuted, "Craft quote");
+        ImGui.TextColored(MainWindow.ColMuted, "Craft Architect quote");
         if (selectedLine is null)
         {
             ImGui.TextColored(MainWindow.ColMuted, document.Lines.Count == 0
@@ -495,14 +575,15 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         if (threshold is > 0)
             ImGui.TextColored(MainWindow.ColSuccess, $"{threshold.Value:N0} gil recommended threshold");
         else
-            ImGui.TextColored(MainWindow.ColMuted, "No craft quote yet.");
+            ImGui.TextColored(MainWindow.ColMuted, "No Craft Architect quote yet.");
         ImGui.TextColored(MainWindow.ColMuted, craftAppraisal.State.CraftQuoteStatus);
 
         ImGui.TableNextColumn();
         ImGui.TextColored(MainWindow.ColMuted, "Request state");
         ImGui.TextUnformatted($"{FormatLineItem(selectedLine)}");
         ImGui.TextUnformatted($"{MarketAcquisitionQuantityModePresenter.FormatMode(selectedLine.QuantityMode)} / {FormatLineQuantity(selectedLine)}");
-        ImGui.TextUnformatted($"Max unit: {RequestPricingFormatter.FormatOptionalGil(selectedLine.MaxUnitPrice)}");
+        ImGui.TextUnformatted($"Unit ceiling: {RequestPricingFormatter.FormatOptionalGil(selectedLine.MaxUnitPrice)}");
+        ImGui.TextUnformatted($"Spend ceiling: {RequestPricingFormatter.FormatOptionalGil(selectedLine.GilCap)}");
         if (IsPlanStale(context))
             ImGui.TextColored(MainWindow.ColError, "Plan is stale until the request is updated and prepared again.");
         else if (context.CurrentPlan is not null)
@@ -538,7 +619,7 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         if (ImGuiUi.Button("Clear Draft##AcquisitionRequestBuilderClear", !busy && !context.IsRouteActive))
             ClearDraft(context);
 
-        ImGui.TextColored(MainWindow.ColMuted, "Right-click max price or gil cap cells to calculate, enter, or clear pricing.");
+        ImGui.TextColored(MainWindow.ColMuted, "Right-click unit or spend ceiling cells for Craft Architect evidence and pricing shortcuts.");
     }
 
     private void SelectLineForEditing(int index, MarketAcquisitionRequestLineDocument line)
@@ -582,6 +663,37 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         SaveDocument();
     }
 
+    private void ApplyLineEdit(
+        int index,
+        MarketAcquisitionRequestLineDocument line,
+        string? quantityMode = null,
+        uint? targetQuantity = null,
+        uint? maxQuantity = null,
+        string? hqPolicy = null,
+        uint? maxUnitPrice = null,
+        uint? gilCap = null,
+        string message = "Line updated.")
+    {
+        if (index < 0 || index >= document.Lines.Count)
+            return;
+
+        document = RequestDocumentMutation.ApplyLineEdit(
+            document,
+            index,
+            quantityMode ?? line.QuantityMode,
+            targetQuantity ?? line.TargetQuantity,
+            maxQuantity ?? line.MaxQuantity,
+            hqPolicy ?? line.HqPolicy,
+            maxUnitPrice ?? line.MaxUnitPrice,
+            gilCap ?? line.GilCap);
+        pendingRemoteDocument = null;
+        pendingRemoteRequest = null;
+        selectedLineIndex = index;
+        LoadLineIntoEditor(document.Lines[index]);
+        status = message;
+        SaveDocument();
+    }
+
     private static uint GetCapQuantity(MarketAcquisitionRequestLineDocument line) =>
         line.QuantityMode == "TargetQuantity"
             ? line.TargetQuantity
@@ -613,15 +725,15 @@ public sealed class MarketAcquisitionRequestBuilderPanel
             var threshold = craftAppraisal.State.TryGetLineQuoteThreshold(identity);
             if (threshold is > 0)
             {
-                SetLineMaxUnitPrice(index, threshold.Value, "Max unit set from Craft Architect quote.");
+                SetLineMaxUnitPrice(index, threshold.Value, "Unit cost ceiling set from Craft Architect quote.");
                 return;
             }
 
-            status = "Craft Architect did not return a usable max unit price for this line.";
+            status = "Craft Architect did not return a usable unit cost ceiling for this line.";
         }
         catch (Exception ex)
         {
-            status = $"Craft quote failed: {ex.Message}";
+            status = $"Craft Architect quote failed: {ex.Message}";
         }
         finally
         {
@@ -829,6 +941,12 @@ public sealed class MarketAcquisitionRequestBuilderPanel
 
     private static uint ParseUInt(string value) =>
         uint.TryParse(value?.Trim(), out var parsed) ? parsed : 0;
+
+    private static int ClampToInt(uint value) =>
+        value > int.MaxValue ? int.MaxValue : (int)value;
+
+    private static uint ClampToUInt(int value) =>
+        value <= 0 ? 0u : (uint)value;
 
     private static string FormatLineItem(MarketAcquisitionRequestLineDocument line) =>
         string.IsNullOrWhiteSpace(line.ItemName)

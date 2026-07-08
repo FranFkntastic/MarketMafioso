@@ -32,13 +32,48 @@ public static class RequestDocumentMutation
         if (selectedLineIndex < 0 || selectedLineIndex >= document.Lines.Count)
             throw new ArgumentOutOfRangeException(nameof(selectedLineIndex));
 
+        var line = document.Lines[selectedLineIndex];
+        return ApplyLineEdit(
+            document,
+            selectedLineIndex,
+            line.QuantityMode,
+            line.TargetQuantity,
+            line.MaxQuantity,
+            line.HqPolicy,
+            maxUnitPrice,
+            gilCap);
+    }
+
+    public static MarketAcquisitionRequestDocument ApplyLineEdit(
+        MarketAcquisitionRequestDocument document,
+        int selectedLineIndex,
+        string quantityMode,
+        uint targetQuantity,
+        uint maxQuantity,
+        string hqPolicy,
+        uint maxUnitPrice,
+        uint gilCap)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        if (selectedLineIndex < 0 || selectedLineIndex >= document.Lines.Count)
+            throw new ArgumentOutOfRangeException(nameof(selectedLineIndex));
+
         var lines = document.Lines.ToList();
         lines[selectedLineIndex] = lines[selectedLineIndex] with
         {
+            QuantityMode = string.IsNullOrWhiteSpace(quantityMode) ? "AllBelowThreshold" : quantityMode,
+            TargetQuantity = targetQuantity,
+            MaxQuantity = maxQuantity,
+            HqPolicy = string.IsNullOrWhiteSpace(hqPolicy) ? "Either" : hqPolicy,
             MaxUnitPrice = maxUnitPrice,
             GilCap = gilCap,
         };
 
-        return document.WithNextRevision("LocalEdits") with { Lines = lines };
+        return MarkEdited(document) with { Lines = lines };
     }
+
+    private static MarketAcquisitionRequestDocument MarkEdited(MarketAcquisitionRequestDocument document) =>
+        document.WithNextRevision(string.IsNullOrWhiteSpace(document.RemoteRequestId)
+            ? "NewDraft"
+            : "LocalEdits");
 }
