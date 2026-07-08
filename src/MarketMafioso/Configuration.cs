@@ -17,6 +17,7 @@ public class Configuration : IPluginConfiguration
     public string CommandPickupApiKey { get; set; } = string.Empty;
     public string PluginInstanceId { get; set; } = Guid.NewGuid().ToString("N");
     public PersistedMarketAcquisitionClaim? ActiveMarketAcquisitionClaim { get; set; }
+    public PersistedMarketAcquisitionRequestDocument? ActiveMarketAcquisitionRequestDocument { get; set; }
     public bool EnableMarketAcquisition { get; set; } = false;
     public DateTime? MarketAcquisitionUnlockedAtUtc { get; set; }
     public bool EnableOpportunisticWorldChecks { get; set; } = true;
@@ -112,6 +113,7 @@ public class CachedMarketListing
 public sealed class PersistedMarketAcquisitionClaim
 {
     public string Id { get; set; } = string.Empty;
+    public int Revision { get; set; }
     public string Status { get; set; } = string.Empty;
     public string Origin { get; set; } = string.Empty;
     public string? CreatedByPluginInstanceId { get; set; }
@@ -151,6 +153,42 @@ public sealed class PersistedMarketAcquisitionLine
     public uint PurchasedQuantity { get; set; }
     public uint SpentGil { get; set; }
     public string? LatestMessage { get; set; }
+}
+
+[Serializable]
+public sealed class PersistedMarketAcquisitionRequestDocument
+{
+    public string LocalRequestId { get; set; } = string.Empty;
+    public int LocalRevision { get; set; }
+    public string TargetCharacterName { get; set; } = string.Empty;
+    public string TargetWorld { get; set; } = string.Empty;
+    public string Region { get; set; } = string.Empty;
+    public string WorldMode { get; set; } = string.Empty;
+    public string SweepScope { get; set; } = string.Empty;
+    public List<string> SweepDataCenters { get; set; } = [];
+    public List<PersistedMarketAcquisitionRequestLineDocument> Lines { get; set; } = [];
+    public string? RemoteRequestId { get; set; }
+    public int RemoteRevision { get; set; }
+    public string? RemoteOrigin { get; set; }
+    public string? LastSyncedHash { get; set; }
+    public string? RemoteHash { get; set; }
+    public string? LastPlanHash { get; set; }
+    public string SyncStatus { get; set; } = string.Empty;
+    public DateTime UpdatedAtUtc { get; set; }
+}
+
+[Serializable]
+public sealed class PersistedMarketAcquisitionRequestLineDocument
+{
+    public uint ItemId { get; set; }
+    public string ItemName { get; set; } = string.Empty;
+    public string? ItemKind { get; set; }
+    public string QuantityMode { get; set; } = string.Empty;
+    public uint TargetQuantity { get; set; }
+    public uint MaxQuantity { get; set; }
+    public string HqPolicy { get; set; } = string.Empty;
+    public uint MaxUnitPrice { get; set; }
+    public uint GilCap { get; set; }
 }
 
 [Serializable]

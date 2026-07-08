@@ -19,6 +19,7 @@ internal static class MarketAcquisitionClaimPersistence
             new MarketAcquisitionClaimView
             {
                 Id = stored.Id,
+                Revision = stored.Revision,
                 Status = stored.Status,
                 Origin = string.IsNullOrWhiteSpace(stored.Origin)
                     ? MarketAcquisitionOrigins.DashboardCreated
@@ -73,6 +74,7 @@ internal static class MarketAcquisitionClaimPersistence
         config.ActiveMarketAcquisitionClaim = new PersistedMarketAcquisitionClaim
         {
             Id = claim.Id,
+            Revision = claim.Revision,
             Status = claim.Status,
             Origin = claim.Origin,
             CreatedByPluginInstanceId = claim.CreatedByPluginInstanceId,
