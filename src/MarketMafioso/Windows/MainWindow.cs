@@ -896,20 +896,18 @@ public class MainWindow : Window, IDisposable
 
     private static void DrawClaimedBatchLines(MarketAcquisitionClaimView claimed)
     {
-        const ImGuiTableFlags Flags =
-            ImGuiTableFlags.Borders |
-            ImGuiTableFlags.RowBg |
-            ImGuiTableFlags.Resizable |
-            ImGuiTableFlags.ScrollX;
-
-        if (!ImGui.BeginTable("MarketAcquisitionClaimedBatchLines", 9, Flags))
+        if (!ImGui.BeginTable(
+                "MarketAcquisitionClaimedBatchLines",
+                9,
+                AcquisitionRequestTableStyle.ClaimedBatchLineTableFlags,
+                AcquisitionRequestTableStyle.FiveLineTableSize()))
             return;
 
-        ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.WidthStretch);
-        ImGui.TableSetupColumn("Mode", ImGuiTableColumnFlags.WidthFixed, 120);
-        ImGui.TableSetupColumn("Max Unit", ImGuiTableColumnFlags.WidthFixed, 88);
+        ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.WidthFixed, 220);
+        ImGui.TableSetupColumn("Mode", ImGuiTableColumnFlags.WidthFixed, 132);
+        ImGui.TableSetupColumn("Max Unit", ImGuiTableColumnFlags.WidthFixed, 96);
         ImGui.TableSetupColumn("Max Qty", ImGuiTableColumnFlags.WidthFixed, 88);
-        ImGui.TableSetupColumn("Gil Cap", ImGuiTableColumnFlags.WidthFixed, 88);
+        ImGui.TableSetupColumn("Gil Cap", ImGuiTableColumnFlags.WidthFixed, 96);
         ImGui.TableSetupColumn("HQ", ImGuiTableColumnFlags.WidthFixed, 64);
         ImGui.TableSetupColumn("Bought", ImGuiTableColumnFlags.WidthFixed, 88);
         ImGui.TableSetupColumn("Spent", ImGuiTableColumnFlags.WidthFixed, 88);

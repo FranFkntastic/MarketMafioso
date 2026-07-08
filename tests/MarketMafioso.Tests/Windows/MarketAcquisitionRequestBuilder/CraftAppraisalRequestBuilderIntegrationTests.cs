@@ -204,6 +204,14 @@ public sealed class CraftAppraisalRequestBuilderIntegrationTests
         Assert.True(AcquisitionRequestTableStyle.UsesScrollableRegion);
     }
 
+    [Fact]
+    public void ClaimedBatchLineTableStyle_UsesHouseScrollableFiveLineTable()
+    {
+        Assert.True(AcquisitionRequestTableStyle.ClaimedBatchLinesUseHouseInteractiveTableFlags);
+        Assert.True(AcquisitionRequestTableStyle.ClaimedBatchLinesUseScrollableRegion);
+        Assert.Equal(5f, AcquisitionRequestTableStyle.ScrollableBodyRowCount);
+    }
+
     private static class TestDocument
     {
         public static MarketAcquisitionRequestDocument WithLine(MarketAcquisitionRequestLineDocument line) =>
