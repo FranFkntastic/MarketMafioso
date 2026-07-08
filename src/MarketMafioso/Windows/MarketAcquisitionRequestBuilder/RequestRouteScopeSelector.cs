@@ -5,14 +5,14 @@ using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using MarketMafioso.MarketAcquisition;
 
-namespace MarketMafioso.Windows.AcquisitionWorkbench;
+namespace MarketMafioso.Windows.MarketAcquisitionRequestBuilder;
 
-public static class RouteScopeSelector
+public static class RequestRouteScopeSelector
 {
     public static void Draw(
         string id,
-        AcquisitionRouteScope scope,
-        Action<AcquisitionRouteScope> onChanged,
+        RequestRouteScope scope,
+        Action<RequestRouteScope> onChanged,
         Vector4 mutedColor,
         Vector4 errorColor)
     {
@@ -23,14 +23,14 @@ public static class RouteScopeSelector
             $"Region##{id}Region",
             MarketAcquisitionWorldCatalog.SupportedRegions.ToArray(),
             scope.Region,
-            region => onChanged(RouteScopePresenter.ApplyRegion(scope, region)),
+            region => onChanged(RequestRouteScopePresenter.ApplyRegion(scope, region)),
             mutedColor);
 
         DrawFullWidthCombo(
             $"World Mode##{id}WorldMode",
-            RouteScopePresenter.WorldModes,
+            RequestRouteScopePresenter.WorldModes,
             scope.WorldMode,
-            worldMode => onChanged(RouteScopePresenter.ApplyWorldMode(scope, worldMode)),
+            worldMode => onChanged(RequestRouteScopePresenter.ApplyWorldMode(scope, worldMode)),
             mutedColor);
 
         if (scope.WorldMode != "AllWorldSweep")
@@ -38,9 +38,9 @@ public static class RouteScopeSelector
 
         DrawFullWidthCombo(
             $"Sweep Scope##{id}SweepScope",
-            RouteScopePresenter.SweepScopes,
+            RequestRouteScopePresenter.SweepScopes,
             scope.SweepScope,
-            sweepScope => onChanged(RouteScopePresenter.ApplySweepScope(scope, sweepScope)),
+            sweepScope => onChanged(RequestRouteScopePresenter.ApplySweepScope(scope, sweepScope)),
             mutedColor);
 
         if (scope.SweepScope == "DataCenters")
@@ -49,8 +49,8 @@ public static class RouteScopeSelector
 
     private static void DrawDataCenterSelector(
         string id,
-        AcquisitionRouteScope scope,
-        Action<AcquisitionRouteScope> onChanged,
+        RequestRouteScope scope,
+        Action<RequestRouteScope> onChanged,
         Vector4 errorColor)
     {
         IReadOnlyDictionary<string, string[]> dataCenters;
@@ -68,7 +68,7 @@ public static class RouteScopeSelector
         {
             var selected = scope.SweepDataCenters.Contains(dataCenter, StringComparer.OrdinalIgnoreCase);
             if (ImGui.Checkbox($"{dataCenter}##{id}Dc{dataCenter}", ref selected))
-                onChanged(RouteScopePresenter.ToggleDataCenter(scope, dataCenter, selected));
+                onChanged(RequestRouteScopePresenter.ToggleDataCenter(scope, dataCenter, selected));
 
             ImGui.SameLine();
         }

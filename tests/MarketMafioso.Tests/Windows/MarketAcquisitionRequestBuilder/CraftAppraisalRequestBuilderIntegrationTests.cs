@@ -1,14 +1,14 @@
 using MarketMafioso.MarketAcquisition;
-using MarketMafioso.Windows.AcquisitionWorkbench;
+using MarketMafioso.Windows.MarketAcquisitionRequestBuilder;
 
-namespace MarketMafioso.Tests.Windows.AcquisitionWorkbench;
+namespace MarketMafioso.Tests.Windows.MarketAcquisitionRequestBuilder;
 
-public sealed class CraftAppraisalWorkbenchIntegrationTests
+public sealed class CraftAppraisalRequestBuilderIntegrationTests
 {
     [Fact]
-    public void BuildQuoteRequest_UsesSelectedWorkbenchLine()
+    public void BuildQuoteRequest_UsesSelectedBuilderLine()
     {
-        var draft = TestDraft.WithLine(new MarketAcquisitionQuickShopLineDraft
+        var document = TestDocument.WithLine(new MarketAcquisitionRequestLineDocument
         {
             ItemId = 5060,
             ItemName = "Darksteel Ingot",
@@ -19,7 +19,7 @@ public sealed class CraftAppraisalWorkbenchIntegrationTests
             GilCap = 12000,
         });
 
-        var request = CraftAppraisalWorkbenchRequestBuilder.Build(draft, draft.Lines[0]);
+        var request = CraftAppraisalRequestMapper.Build(document, document.Lines[0]);
 
         Assert.Equal(5060u, request.ItemId);
         Assert.Equal("Darksteel Ingot", request.ItemName);
@@ -35,7 +35,7 @@ public sealed class CraftAppraisalWorkbenchIntegrationTests
     [Fact]
     public void BuildQuoteRequest_UsesMaxQuantityForCappedAllBelowThreshold()
     {
-        var draft = TestDraft.WithLine(new MarketAcquisitionQuickShopLineDraft
+        var document = TestDocument.WithLine(new MarketAcquisitionRequestLineDocument
         {
             ItemId = 5060,
             ItemName = "Darksteel Ingot",
@@ -45,7 +45,7 @@ public sealed class CraftAppraisalWorkbenchIntegrationTests
             MaxUnitPrice = 1500,
         });
 
-        var request = CraftAppraisalWorkbenchRequestBuilder.Build(draft, draft.Lines[0]);
+        var request = CraftAppraisalRequestMapper.Build(document, document.Lines[0]);
 
         Assert.Equal(7u, request.Quantity);
         Assert.Equal("NqOnly", request.HqPolicy);
@@ -54,7 +54,7 @@ public sealed class CraftAppraisalWorkbenchIntegrationTests
     [Fact]
     public void BuildQuoteRequest_AllowsUnsetThresholdForCraftAppraisal()
     {
-        var draft = TestDraft.WithLine(new MarketAcquisitionQuickShopLineDraft
+        var document = TestDocument.WithLine(new MarketAcquisitionRequestLineDocument
         {
             ItemId = 5060,
             ItemName = "Darksteel Ingot",
@@ -65,7 +65,7 @@ public sealed class CraftAppraisalWorkbenchIntegrationTests
             GilCap = 0,
         });
 
-        var request = CraftAppraisalWorkbenchRequestBuilder.Build(draft, draft.Lines[0]);
+        var request = CraftAppraisalRequestMapper.Build(document, document.Lines[0]);
 
         Assert.Equal(5060u, request.ItemId);
         Assert.Equal(3u, request.Quantity);
@@ -76,7 +76,7 @@ public sealed class CraftAppraisalWorkbenchIntegrationTests
     [Fact]
     public void BuildQuoteRequest_UsesOneForUncappedAllBelowThreshold()
     {
-        var draft = TestDraft.WithLine(new MarketAcquisitionQuickShopLineDraft
+        var document = TestDocument.WithLine(new MarketAcquisitionRequestLineDocument
         {
             ItemId = 5060,
             ItemName = "Darksteel Ingot",
@@ -86,7 +86,7 @@ public sealed class CraftAppraisalWorkbenchIntegrationTests
             MaxUnitPrice = 1500,
         });
 
-        var request = CraftAppraisalWorkbenchRequestBuilder.Build(draft, draft.Lines[0]);
+        var request = CraftAppraisalRequestMapper.Build(document, document.Lines[0]);
 
         Assert.Equal(1u, request.Quantity);
     }
@@ -94,8 +94,8 @@ public sealed class CraftAppraisalWorkbenchIntegrationTests
     [Fact]
     public void ApplyMaxUnitPrice_UpdatesOnlySelectedLineAndAdvancesRevision()
     {
-        var draft = TestDraft.WithLines(
-            new MarketAcquisitionQuickShopLineDraft
+        var document = TestDocument.WithLines(
+            new MarketAcquisitionRequestLineDocument
             {
                 ItemId = 2,
                 ItemName = "Fire Shard",
@@ -104,7 +104,7 @@ public sealed class CraftAppraisalWorkbenchIntegrationTests
                 HqPolicy = "Either",
                 MaxUnitPrice = 100,
             },
-            new MarketAcquisitionQuickShopLineDraft
+            new MarketAcquisitionRequestLineDocument
             {
                 ItemId = 5060,
                 ItemName = "Darksteel Ingot",
@@ -114,21 +114,21 @@ public sealed class CraftAppraisalWorkbenchIntegrationTests
                 MaxUnitPrice = 1500,
             });
 
-        var updated = AcquisitionWorkbenchDraftMutation.ApplyMaxUnitPrice(
-            draft,
+        var updated = RequestDocumentMutation.ApplyMaxUnitPrice(
+            document,
             selectedLineIndex: 1,
             maxUnitPrice: 1200);
 
         Assert.Equal(100u, updated.Lines[0].MaxUnitPrice);
         Assert.Equal(1200u, updated.Lines[1].MaxUnitPrice);
-        Assert.Equal(draft.DraftRevision + 1, updated.DraftRevision);
+        Assert.Equal(document.LocalRevision + 1, updated.LocalRevision);
     }
 
     [Fact]
     public void ApplyPricing_UpdatesOnlySelectedLineAndAdvancesRevision()
     {
-        var draft = TestDraft.WithLines(
-            new MarketAcquisitionQuickShopLineDraft
+        var document = TestDocument.WithLines(
+            new MarketAcquisitionRequestLineDocument
             {
                 ItemId = 2,
                 ItemName = "Fire Shard",
@@ -138,7 +138,7 @@ public sealed class CraftAppraisalWorkbenchIntegrationTests
                 MaxUnitPrice = 100,
                 GilCap = 0,
             },
-            new MarketAcquisitionQuickShopLineDraft
+            new MarketAcquisitionRequestLineDocument
             {
                 ItemId = 5060,
                 ItemName = "Darksteel Ingot",
@@ -149,8 +149,8 @@ public sealed class CraftAppraisalWorkbenchIntegrationTests
                 GilCap = 0,
             });
 
-        var updated = AcquisitionWorkbenchDraftMutation.ApplyPricing(
-            draft,
+        var updated = RequestDocumentMutation.ApplyPricing(
+            document,
             selectedLineIndex: 1,
             maxUnitPrice: 1200,
             gilCap: 5000);
@@ -159,16 +159,16 @@ public sealed class CraftAppraisalWorkbenchIntegrationTests
         Assert.Equal(0u, updated.Lines[0].GilCap);
         Assert.Equal(1200u, updated.Lines[1].MaxUnitPrice);
         Assert.Equal(5000u, updated.Lines[1].GilCap);
-        Assert.Equal(draft.DraftRevision + 1, updated.DraftRevision);
+        Assert.Equal(document.LocalRevision + 1, updated.LocalRevision);
     }
 
-    private static class TestDraft
+    private static class TestDocument
     {
-        public static MarketAcquisitionQuickShopDraft WithLine(MarketAcquisitionQuickShopLineDraft line) =>
+        public static MarketAcquisitionRequestDocument WithLine(MarketAcquisitionRequestLineDocument line) =>
             WithLines(line);
 
-        public static MarketAcquisitionQuickShopDraft WithLines(params MarketAcquisitionQuickShopLineDraft[] lines) =>
-            MarketAcquisitionQuickShopDraft.CreateDefault() with
+        public static MarketAcquisitionRequestDocument WithLines(params MarketAcquisitionRequestLineDocument[] lines) =>
+            MarketAcquisitionRequestDocument.CreateDefault() with
             {
                 Region = "North America",
                 WorldMode = "Recommended",

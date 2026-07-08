@@ -3,7 +3,7 @@ using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Windowing;
 using MarketMafioso.MarketAcquisition;
-using MarketMafioso.Windows.AcquisitionWorkbench;
+using MarketMafioso.Windows.MarketAcquisitionRequestBuilder;
 
 namespace MarketMafioso.Windows;
 

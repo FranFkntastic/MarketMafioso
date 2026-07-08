@@ -3,9 +3,9 @@ using System.Threading;
 using System.Threading.Tasks;
 using MarketMafioso.CraftArchitectCompanion;
 
-namespace MarketMafioso.Windows.AcquisitionWorkbench;
+namespace MarketMafioso.Windows.MarketAcquisitionRequestBuilder;
 
-public sealed class CraftAppraisalWorkbenchController
+public sealed class CraftAppraisalRequestBuilderController
 {
     private static readonly TimeSpan DefaultCapabilityTtl = TimeSpan.FromMinutes(5);
     private readonly ICraftQuoteProvider quoteProvider;
@@ -14,7 +14,7 @@ public sealed class CraftAppraisalWorkbenchController
     private readonly Func<DateTimeOffset> getUtcNow;
     private readonly TimeSpan capabilityTtl;
 
-    public CraftAppraisalWorkbenchController(
+    public CraftAppraisalRequestBuilderController(
         ICraftQuoteProvider quoteProvider,
         Func<CancellationToken, Task<bool>> refreshCapabilities,
         string craftQuoteDiagnosticsDirectory,
@@ -29,7 +29,7 @@ public sealed class CraftAppraisalWorkbenchController
         this.capabilityTtl = capabilityTtl ?? DefaultCapabilityTtl;
     }
 
-    public CraftAppraisalWorkbenchState State { get; } = new();
+    public CraftAppraisalRequestBuilderState State { get; } = new();
     public bool IsFetchingCraftQuote { get; private set; }
     public bool IsCheckingWorkshopHostCapabilities { get; private set; }
 

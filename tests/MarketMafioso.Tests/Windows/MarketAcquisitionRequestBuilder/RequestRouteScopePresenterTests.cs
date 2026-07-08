@@ -1,8 +1,8 @@
-using MarketMafioso.Windows.AcquisitionWorkbench;
+using MarketMafioso.Windows.MarketAcquisitionRequestBuilder;
 
-namespace MarketMafioso.Tests.Windows.AcquisitionWorkbench;
+namespace MarketMafioso.Tests.Windows.MarketAcquisitionRequestBuilder;
 
-public sealed class RouteScopePresenterTests
+public sealed class RequestRouteScopePresenterTests
 {
     [Fact]
     public void ApplyRegion_ClearsSelectedDataCenters()
@@ -12,7 +12,7 @@ public sealed class RouteScopePresenterTests
             SweepDataCenters = ["Aether", "Primal"],
         };
 
-        var updated = RouteScopePresenter.ApplyRegion(scope, "Europe");
+        var updated = RequestRouteScopePresenter.ApplyRegion(scope, "Europe");
 
         Assert.Equal("Europe", updated.Region);
         Assert.Empty(updated.SweepDataCenters);
@@ -28,7 +28,7 @@ public sealed class RouteScopePresenterTests
             SweepDataCenters = ["Aether"],
         };
 
-        var updated = RouteScopePresenter.ApplyWorldMode(scope, "Recommended");
+        var updated = RequestRouteScopePresenter.ApplyWorldMode(scope, "Recommended");
 
         Assert.Equal("Recommended", updated.WorldMode);
         Assert.Equal("Region", updated.SweepScope);
@@ -44,7 +44,7 @@ public sealed class RouteScopePresenterTests
             SweepDataCenters = ["Aether"],
         };
 
-        var updated = RouteScopePresenter.ApplySweepScope(scope, "CurrentDataCenter");
+        var updated = RequestRouteScopePresenter.ApplySweepScope(scope, "CurrentDataCenter");
 
         Assert.Equal("CurrentDataCenter", updated.SweepScope);
         Assert.Empty(updated.SweepDataCenters);
@@ -58,7 +58,7 @@ public sealed class RouteScopePresenterTests
             SweepDataCenters = ["aether", "Primal"],
         };
 
-        var updated = RouteScopePresenter.ToggleDataCenter(scope, "Aether", selected: true);
+        var updated = RequestRouteScopePresenter.ToggleDataCenter(scope, "Aether", selected: true);
 
         Assert.Equal(["Primal", "Aether"], updated.SweepDataCenters);
     }
@@ -71,12 +71,12 @@ public sealed class RouteScopePresenterTests
             SweepDataCenters = ["aether", "Primal"],
         };
 
-        var updated = RouteScopePresenter.ToggleDataCenter(scope, "Aether", selected: false);
+        var updated = RequestRouteScopePresenter.ToggleDataCenter(scope, "Aether", selected: false);
 
         Assert.Equal(["Primal"], updated.SweepDataCenters);
     }
 
-    private static AcquisitionRouteScope Scope() => AcquisitionRouteScope.Default with
+    private static RequestRouteScope Scope() => RequestRouteScope.Default with
     {
         WorldMode = "AllWorldSweep",
         SweepScope = "DataCenters",

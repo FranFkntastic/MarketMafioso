@@ -3,15 +3,15 @@ using System.Linq;
 using MarketMafioso.CraftArchitectCompanion;
 using MarketMafioso.MarketAcquisition;
 
-namespace MarketMafioso.Windows.AcquisitionWorkbench;
+namespace MarketMafioso.Windows.MarketAcquisitionRequestBuilder;
 
-public static class CraftAppraisalWorkbenchRequestBuilder
+public static class CraftAppraisalRequestMapper
 {
     public static MarketAppraisalRequest Build(
-        MarketAcquisitionQuickShopDraft draft,
-        MarketAcquisitionQuickShopLineDraft line)
+        MarketAcquisitionRequestDocument document,
+        MarketAcquisitionRequestLineDocument line)
     {
-        ArgumentNullException.ThrowIfNull(draft);
+        ArgumentNullException.ThrowIfNull(document);
         ArgumentNullException.ThrowIfNull(line);
         if (line.ItemId == 0)
             throw new InvalidOperationException("Selected line must have an item id before craft appraisal.");
@@ -24,20 +24,20 @@ public static class CraftAppraisalWorkbenchRequestBuilder
             HqPolicy = string.IsNullOrWhiteSpace(line.HqPolicy) ? "Either" : line.HqPolicy,
             BuyThresholdUnitPrice = line.MaxUnitPrice,
             GilCap = line.GilCap,
-            Region = MarketAcquisitionWorldCatalog.NormalizeRegion(draft.Region),
-            WorldMode = string.IsNullOrWhiteSpace(draft.WorldMode) ? "Recommended" : draft.WorldMode,
-            SweepScope = string.IsNullOrWhiteSpace(draft.SweepScope) ? "Region" : draft.SweepScope,
-            SweepDataCenters = draft.SweepDataCenters
+            Region = MarketAcquisitionWorldCatalog.NormalizeRegion(document.Region),
+            WorldMode = string.IsNullOrWhiteSpace(document.WorldMode) ? "Recommended" : document.WorldMode,
+            SweepScope = string.IsNullOrWhiteSpace(document.SweepScope) ? "Region" : document.SweepScope,
+            SweepDataCenters = document.SweepDataCenters
                 .Where(dataCenter => !string.IsNullOrWhiteSpace(dataCenter))
                 .ToArray(),
         };
     }
 
     public static CraftAppraisalLineIdentity BuildLineIdentity(
-        MarketAcquisitionQuickShopDraft draft,
-        MarketAcquisitionQuickShopLineDraft line)
+        MarketAcquisitionRequestDocument document,
+        MarketAcquisitionRequestLineDocument line)
     {
-        var request = Build(draft, line);
+        var request = Build(document, line);
         return new CraftAppraisalLineIdentity(
             request.ItemId,
             request.ItemName,
@@ -46,7 +46,7 @@ public static class CraftAppraisalWorkbenchRequestBuilder
             request.Region);
     }
 
-    private static uint ResolveQuoteQuantity(MarketAcquisitionQuickShopLineDraft line)
+    private static uint ResolveQuoteQuantity(MarketAcquisitionRequestLineDocument line)
     {
         if (line.QuantityMode.Equals("TargetQuantity", StringComparison.OrdinalIgnoreCase))
             return Math.Max(1, line.TargetQuantity);

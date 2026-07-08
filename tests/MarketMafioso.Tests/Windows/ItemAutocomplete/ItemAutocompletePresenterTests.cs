@@ -1,6 +1,6 @@
-using MarketMafioso.Windows.AcquisitionWorkbench;
+using MarketMafioso.Windows.ItemAutocomplete;
 
-namespace MarketMafioso.Tests.Windows.AcquisitionWorkbench;
+namespace MarketMafioso.Tests.Windows.ItemAutocomplete;
 
 public sealed class ItemAutocompletePresenterTests
 {

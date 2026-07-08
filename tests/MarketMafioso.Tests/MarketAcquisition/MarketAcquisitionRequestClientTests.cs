@@ -57,7 +57,7 @@ public sealed class MarketAcquisitionRequestClientTests
             {
               "id": "request-1",
               "status": "PendingPickup",
-              "origin": "ClientQuickShop",
+              "origin": "PluginBuilder",
               "createdByPluginInstanceId": "plugin-instance",
               "targetCharacterName": "Wei Ning",
               "targetWorld": "Gilgamesh",
@@ -80,8 +80,8 @@ public sealed class MarketAcquisitionRequestClientTests
             "client-secret",
             new MarketAcquisitionBatchCreateRequest
             {
-                IdempotencyKey = "quick-shop-key",
-                Origin = MarketAcquisitionOrigins.ClientQuickShop,
+                IdempotencyKey = "request-builder-key",
+                Origin = MarketAcquisitionOrigins.PluginBuilder,
                 CreatedByPluginInstanceId = "plugin-instance",
                 TargetCharacterName = "Wei Ning",
                 TargetWorld = "Gilgamesh",
@@ -117,7 +117,7 @@ public sealed class MarketAcquisitionRequestClientTests
             CancellationToken.None);
 
         Assert.Equal("request-1", created.Id);
-        Assert.Equal(MarketAcquisitionOrigins.ClientQuickShop, created.Origin);
+        Assert.Equal(MarketAcquisitionOrigins.PluginBuilder, created.Origin);
         Assert.Equal("plugin-instance", created.CreatedByPluginInstanceId);
         Assert.Equal(HttpMethod.Post, handler.LastRequest?.Method);
         Assert.Equal(
@@ -128,8 +128,8 @@ public sealed class MarketAcquisitionRequestClientTests
         Assert.Equal("client-secret", Assert.Single(values));
 
         var body = JsonDocument.Parse(handler.LastBody!);
-        Assert.Equal("quick-shop-key", body.RootElement.GetProperty("idempotencyKey").GetString());
-        Assert.Equal("ClientQuickShop", body.RootElement.GetProperty("origin").GetString());
+        Assert.Equal("request-builder-key", body.RootElement.GetProperty("idempotencyKey").GetString());
+        Assert.Equal("PluginBuilder", body.RootElement.GetProperty("origin").GetString());
         Assert.Equal("plugin-instance", body.RootElement.GetProperty("createdByPluginInstanceId").GetString());
         Assert.Equal("Wei Ning", body.RootElement.GetProperty("targetCharacterName").GetString());
         Assert.Equal("Gilgamesh", body.RootElement.GetProperty("targetWorld").GetString());

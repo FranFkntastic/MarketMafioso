@@ -1,14 +1,14 @@
 using MarketMafioso.CraftArchitectCompanion;
-using MarketMafioso.Windows.AcquisitionWorkbench;
+using MarketMafioso.Windows.MarketAcquisitionRequestBuilder;
 
-namespace MarketMafioso.Tests.Windows.AcquisitionWorkbench;
+namespace MarketMafioso.Tests.Windows.MarketAcquisitionRequestBuilder;
 
-public sealed class CraftAppraisalWorkbenchStateTests
+public sealed class CraftAppraisalRequestBuilderStateTests
 {
     [Fact]
     public void UpdateSelection_ItemChangeClearsQuoteEvidence()
     {
-        var state = new CraftAppraisalWorkbenchState();
+        var state = new CraftAppraisalRequestBuilderState();
         state.RecordQuote(TestQuote("Darksteel Ingot", 5060, 1200m), "quote.log");
 
         state.UpdateSelectedLine(new CraftAppraisalLineIdentity(
@@ -25,7 +25,7 @@ public sealed class CraftAppraisalWorkbenchStateTests
     [Fact]
     public void UpdateSelection_SameLineKeepsQuoteEvidence()
     {
-        var state = new CraftAppraisalWorkbenchState();
+        var state = new CraftAppraisalRequestBuilderState();
         var identity = new CraftAppraisalLineIdentity(
             5060,
             "Darksteel Ingot",
@@ -44,7 +44,7 @@ public sealed class CraftAppraisalWorkbenchStateTests
     [Fact]
     public void RecordThresholdChanged_DoesNotClearQuoteEvidence()
     {
-        var state = new CraftAppraisalWorkbenchState();
+        var state = new CraftAppraisalRequestBuilderState();
         var identity = new CraftAppraisalLineIdentity(
             5060,
             "Darksteel Ingot",
@@ -63,7 +63,7 @@ public sealed class CraftAppraisalWorkbenchStateTests
     [Fact]
     public void RecordLineQuote_KeepsQuotesForMultipleLines()
     {
-        var state = new CraftAppraisalWorkbenchState();
+        var state = new CraftAppraisalRequestBuilderState();
         var first = new CraftAppraisalLineIdentity(2, "Bronze Ingot", 10, "Either", "North America");
         var second = new CraftAppraisalLineIdentity(3, "Iron Ingot", 12, "Either", "North America");
 
@@ -78,7 +78,7 @@ public sealed class CraftAppraisalWorkbenchStateTests
     [Fact]
     public void ClearLineQuote_RemovesOnlyOneLine()
     {
-        var state = new CraftAppraisalWorkbenchState();
+        var state = new CraftAppraisalRequestBuilderState();
         var first = new CraftAppraisalLineIdentity(2, "Bronze Ingot", 10, "Either", "North America");
         var second = new CraftAppraisalLineIdentity(3, "Iron Ingot", 12, "Either", "North America");
         state.RecordLineQuote(first, TestQuote("Bronze Ingot", 2, 120m), "bronze.log");
@@ -93,7 +93,7 @@ public sealed class CraftAppraisalWorkbenchStateTests
     [Fact]
     public void TryGetLineQuoteThreshold_ReturnsCeiledCompleteUnitCost()
     {
-        var state = new CraftAppraisalWorkbenchState();
+        var state = new CraftAppraisalRequestBuilderState();
         var line = new CraftAppraisalLineIdentity(2, "Bronze Ingot", 10, "Either", "North America");
         state.RecordLineQuote(line, TestQuote("Bronze Ingot", 2, 120.4m), "bronze.log");
 
@@ -104,7 +104,7 @@ public sealed class CraftAppraisalWorkbenchStateTests
     public void CreateDiagnosticsSnapshot_IncludesQuoteAndProviderStatus()
     {
         var checkedAt = DateTimeOffset.UnixEpoch.AddHours(1);
-        var state = new CraftAppraisalWorkbenchState
+        var state = new CraftAppraisalRequestBuilderState
         {
             WorkshopHostEnabled = true,
             WorkshopHostAvailable = true,

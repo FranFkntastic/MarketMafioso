@@ -1,17 +1,17 @@
 using MarketMafioso.CraftArchitectCompanion;
 using MarketMafioso.Tests.TestUtilities;
-using MarketMafioso.Windows.AcquisitionWorkbench;
+using MarketMafioso.Windows.MarketAcquisitionRequestBuilder;
 
-namespace MarketMafioso.Tests.Windows.AcquisitionWorkbench;
+namespace MarketMafioso.Tests.Windows.MarketAcquisitionRequestBuilder;
 
-public sealed class CraftAppraisalWorkbenchControllerTests
+public sealed class CraftAppraisalRequestBuilderControllerTests
 {
     [Fact]
     public async Task FetchQuoteAsync_RecordsQuoteAndDiagnosticPath()
     {
         using var directory = new TemporaryDirectory();
         var provider = new StubQuoteProvider(TestQuote("Darksteel Ingot", 5060, 1200m));
-        var controller = new CraftAppraisalWorkbenchController(
+        var controller = new CraftAppraisalRequestBuilderController(
             provider,
             _ => Task.FromResult(true),
             directory.Path,
@@ -31,7 +31,7 @@ public sealed class CraftAppraisalWorkbenchControllerTests
     {
         using var directory = new TemporaryDirectory();
         var provider = new StubQuoteProvider(TestQuote("Darksteel Ingot", 5060, 1200m));
-        var controller = new CraftAppraisalWorkbenchController(
+        var controller = new CraftAppraisalRequestBuilderController(
             provider,
             _ => Task.FromResult(true),
             directory.Path,
@@ -51,7 +51,7 @@ public sealed class CraftAppraisalWorkbenchControllerTests
     public void TryGetQuoteThreshold_RoundsCompleteQuoteUpToWholeGil()
     {
         using var directory = new TemporaryDirectory();
-        var controller = new CraftAppraisalWorkbenchController(
+        var controller = new CraftAppraisalRequestBuilderController(
             new StubQuoteProvider(TestQuote("Darksteel Ingot", 5060, 1200.49m)),
             _ => Task.FromResult(true),
             directory.Path,
@@ -69,7 +69,7 @@ public sealed class CraftAppraisalWorkbenchControllerTests
         var checks = 0;
         var now = DateTimeOffset.UnixEpoch;
         using var directory = new TemporaryDirectory();
-        var controller = new CraftAppraisalWorkbenchController(
+        var controller = new CraftAppraisalRequestBuilderController(
             new StubQuoteProvider(null),
             _ =>
             {

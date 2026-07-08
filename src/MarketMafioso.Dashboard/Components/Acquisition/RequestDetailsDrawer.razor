@@ -236,9 +236,10 @@
     };
 
     private static string OriginLabel(MarketAcquisitionRequestView request) =>
+        request.Origin.Equals(MarketAcquisitionOrigins.PluginBuilder, StringComparison.OrdinalIgnoreCase) ||
         request.Origin.Equals(MarketAcquisitionOrigins.ClientQuickShop, StringComparison.OrdinalIgnoreCase)
-            ? "Quick Shop"
-            : "Dashboard";
+            ? "In-game builder"
+            : "Dashboard builder";
 
     private static bool IsTerminalRequest(MarketAcquisitionRequestView request) =>
         request.Status is "Complete" or "Failed" or "Cancelled" or "Rejected" or "Expired";

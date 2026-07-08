@@ -1,6 +1,6 @@
 using System;
 
-namespace MarketMafioso.Windows.AcquisitionWorkbench;
+namespace MarketMafioso.Windows.MarketAcquisitionRequestBuilder;
 
 public sealed record CraftAppraisalDiagnosticsSnapshot
 {

@@ -1,13 +1,14 @@
-using MarketMafioso.Windows.AcquisitionWorkbench;
+using MarketMafioso.Windows.ItemAutocomplete;
+using MarketMafioso.Windows.MarketAcquisitionRequestBuilder;
 
-namespace MarketMafioso.Tests.Windows.AcquisitionWorkbench;
+namespace MarketMafioso.Tests.Windows.MarketAcquisitionRequestBuilder;
 
-public sealed class AcquisitionWorkbenchLineInputValidatorTests
+public sealed class RequestLineInputValidatorTests
 {
     [Fact]
     public void CanAddIntentLine_AllowsBlankMaxUnitPrice()
     {
-        var result = AcquisitionWorkbenchLineInputValidator.CanAddIntentLine(
+        var result = RequestLineInputValidator.CanAddIntentLine(
             selectedItem: new AcquisitionItemOption(5060, "Darksteel Ingot"),
             quantityMode: "TargetQuantity",
             targetQuantityBuffer: "3",
@@ -21,7 +22,7 @@ public sealed class AcquisitionWorkbenchLineInputValidatorTests
     [Fact]
     public void CanAddIntentLine_RejectsNonNumericMaxUnitPrice()
     {
-        var result = AcquisitionWorkbenchLineInputValidator.CanAddIntentLine(
+        var result = RequestLineInputValidator.CanAddIntentLine(
             selectedItem: new AcquisitionItemOption(5060, "Darksteel Ingot"),
             quantityMode: "TargetQuantity",
             targetQuantityBuffer: "3",
@@ -35,7 +36,7 @@ public sealed class AcquisitionWorkbenchLineInputValidatorTests
     [Fact]
     public void CanAddIntentLine_RequiresTargetQuantityForTargetMode()
     {
-        var result = AcquisitionWorkbenchLineInputValidator.CanAddIntentLine(
+        var result = RequestLineInputValidator.CanAddIntentLine(
             selectedItem: new AcquisitionItemOption(5060, "Darksteel Ingot"),
             quantityMode: "TargetQuantity",
             targetQuantityBuffer: "",
@@ -49,7 +50,7 @@ public sealed class AcquisitionWorkbenchLineInputValidatorTests
     [Fact]
     public void CanAddIntentLine_AllowsBlankMaxQuantityForAllBelowThreshold()
     {
-        var result = AcquisitionWorkbenchLineInputValidator.CanAddIntentLine(
+        var result = RequestLineInputValidator.CanAddIntentLine(
             selectedItem: new AcquisitionItemOption(5060, "Darksteel Ingot"),
             quantityMode: "AllBelowThreshold",
             targetQuantityBuffer: "",

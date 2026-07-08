@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 
-namespace MarketMafioso.Windows.AcquisitionWorkbench;
+namespace MarketMafioso.Windows.ItemAutocomplete;
 
 public sealed record AcquisitionItemOption(uint ItemId, string Name);
 

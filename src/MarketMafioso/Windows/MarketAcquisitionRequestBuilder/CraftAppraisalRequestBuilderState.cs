@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using MarketMafioso.CraftArchitectCompanion;
 
-namespace MarketMafioso.Windows.AcquisitionWorkbench;
+namespace MarketMafioso.Windows.MarketAcquisitionRequestBuilder;
 
 public sealed record CraftAppraisalLineIdentity(
     uint ItemId,
@@ -18,7 +18,7 @@ public sealed record CraftAppraisalLineQuoteState(
     string Status,
     DateTimeOffset RecordedAtUtc);
 
-public sealed class CraftAppraisalWorkbenchState
+public sealed class CraftAppraisalRequestBuilderState
 {
     private readonly Dictionary<CraftAppraisalLineIdentity, CraftAppraisalLineQuoteState> lineQuotes = new();
 

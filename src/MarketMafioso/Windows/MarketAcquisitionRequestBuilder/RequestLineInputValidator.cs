@@ -1,8 +1,9 @@
 using System;
+using MarketMafioso.Windows.ItemAutocomplete;
 
-namespace MarketMafioso.Windows.AcquisitionWorkbench;
+namespace MarketMafioso.Windows.MarketAcquisitionRequestBuilder;
 
-public static class AcquisitionWorkbenchLineInputValidator
+public static class RequestLineInputValidator
 {
     public static bool CanAddIntentLine(
         AcquisitionItemOption? selectedItem,

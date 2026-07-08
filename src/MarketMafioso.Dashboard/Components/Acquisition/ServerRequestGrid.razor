@@ -171,14 +171,18 @@
     };
 
     private static string OriginLabel(MarketAcquisitionRequestView request) =>
-        request.Origin.Equals(MarketAcquisitionOrigins.ClientQuickShop, StringComparison.OrdinalIgnoreCase)
-            ? "Quick Shop"
-            : "Dashboard";
+        IsInGameOrigin(request)
+            ? "In-game builder"
+            : "Dashboard builder";
 
     private static Color OriginColor(MarketAcquisitionRequestView request) =>
-        request.Origin.Equals(MarketAcquisitionOrigins.ClientQuickShop, StringComparison.OrdinalIgnoreCase)
+        IsInGameOrigin(request)
             ? Color.Secondary
             : Color.Default;
+
+    private static bool IsInGameOrigin(MarketAcquisitionRequestView request) =>
+        request.Origin.Equals(MarketAcquisitionOrigins.PluginBuilder, StringComparison.OrdinalIgnoreCase) ||
+        request.Origin.Equals(MarketAcquisitionOrigins.ClientQuickShop, StringComparison.OrdinalIgnoreCase);
 
     private static bool IsActiveRequest(MarketAcquisitionRequestView request) =>
         !IsTerminalRequest(request);

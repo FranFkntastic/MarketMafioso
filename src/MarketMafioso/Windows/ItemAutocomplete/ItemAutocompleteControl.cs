@@ -6,7 +6,7 @@ using Dalamud.Bindings.ImGui;
 using Dalamud.Plugin.Services;
 using LuminaItem = Lumina.Excel.Sheets.Item;
 
-namespace MarketMafioso.Windows.AcquisitionWorkbench;
+namespace MarketMafioso.Windows.ItemAutocomplete;
 
 public static class ItemAutocompleteControl
 {

@@ -3,41 +3,41 @@ using System.Collections.Generic;
 using System.Linq;
 using MarketMafioso.MarketAcquisition;
 
-namespace MarketMafioso.Windows.AcquisitionWorkbench;
+namespace MarketMafioso.Windows.MarketAcquisitionRequestBuilder;
 
-public sealed record AcquisitionRouteScope(
+public sealed record RequestRouteScope(
     string Region,
     string WorldMode,
     string SweepScope,
     IReadOnlyList<string> SweepDataCenters)
 {
-    public static AcquisitionRouteScope Default { get; } = new(
+    public static RequestRouteScope Default { get; } = new(
         "North America",
         "Recommended",
         "Region",
         []);
 
-    public static AcquisitionRouteScope FromDraft(MarketAcquisitionQuickShopDraft draft) =>
+    public static RequestRouteScope FromDocument(MarketAcquisitionRequestDocument document) =>
         new(
-            draft.Region,
-            draft.WorldMode,
-            draft.SweepScope,
-            draft.SweepDataCenters.ToArray());
+            document.Region,
+            document.WorldMode,
+            document.SweepScope,
+            document.SweepDataCenters.ToArray());
 }
 
-public static class RouteScopePresenter
+public static class RequestRouteScopePresenter
 {
     public static readonly IReadOnlyList<string> WorldModes = ["Recommended", "AllWorldSweep"];
     public static readonly IReadOnlyList<string> SweepScopes = ["Region", "CurrentDataCenter", "DataCenters"];
 
-    public static AcquisitionRouteScope ApplyRegion(AcquisitionRouteScope scope, string region) =>
+    public static RequestRouteScope ApplyRegion(RequestRouteScope scope, string region) =>
         scope with
         {
             Region = region,
             SweepDataCenters = [],
         };
 
-    public static AcquisitionRouteScope ApplyWorldMode(AcquisitionRouteScope scope, string worldMode) =>
+    public static RequestRouteScope ApplyWorldMode(RequestRouteScope scope, string worldMode) =>
         scope with
         {
             WorldMode = worldMode,
@@ -45,14 +45,14 @@ public static class RouteScopePresenter
             SweepDataCenters = worldMode == "AllWorldSweep" ? scope.SweepDataCenters : [],
         };
 
-    public static AcquisitionRouteScope ApplySweepScope(AcquisitionRouteScope scope, string sweepScope) =>
+    public static RequestRouteScope ApplySweepScope(RequestRouteScope scope, string sweepScope) =>
         scope with
         {
             SweepScope = sweepScope,
             SweepDataCenters = sweepScope == "DataCenters" ? scope.SweepDataCenters : [],
         };
 
-    public static AcquisitionRouteScope ToggleDataCenter(AcquisitionRouteScope scope, string dataCenter, bool selected)
+    public static RequestRouteScope ToggleDataCenter(RequestRouteScope scope, string dataCenter, bool selected)
     {
         var selectedDataCenters = scope.SweepDataCenters
             .Where(existing => !existing.Equals(dataCenter, StringComparison.OrdinalIgnoreCase))
