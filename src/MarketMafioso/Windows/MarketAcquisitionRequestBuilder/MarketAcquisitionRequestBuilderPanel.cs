@@ -158,21 +158,32 @@ public sealed class MarketAcquisitionRequestBuilderPanel
     private string FormatRequestStatus()
     {
         if (string.IsNullOrWhiteSpace(document.RemoteRequestId))
-            return document.SyncStatus;
+            return FormatSyncStatus(document.SyncStatus);
 
-        return $"{document.SyncStatus} r{document.RemoteRevision}";
+        return $"{FormatSyncStatus(document.SyncStatus)} r{document.RemoteRevision}";
     }
 
     private string FormatBuilderStatus(MarketAcquisitionRequestBuilderContext context)
     {
         var remote = string.IsNullOrWhiteSpace(document.RemoteRequestId)
-            ? "local draft"
-            : $"remote {document.RemoteRequestId} r{document.RemoteRevision}";
+            ? "not saved"
+            : $"saved r{document.RemoteRevision}";
         var plan = IsPlanStale(context)
             ? ", plan stale"
             : context.CurrentPlan is null ? string.Empty : ", plan current";
-        return $"{document.SyncStatus}: {document.Lines.Count:N0} line(s), {remote}{plan}. {status}";
+        return $"{FormatSyncStatus(document.SyncStatus)}: {document.Lines.Count:N0} line(s), {remote}{plan}. {status}";
     }
+
+    private static string FormatSyncStatus(string syncStatus) =>
+        syncStatus switch
+        {
+            "NewDraft" => "Draft",
+            "LocalEdits" => "Edited locally",
+            "SyncedClean" => "Saved",
+            "RemoteChanged" => "Server changed",
+            "SyncFailed" => "Save failed",
+            _ => string.IsNullOrWhiteSpace(syncStatus) ? "Draft" : syncStatus,
+        };
 
     private Vector4 GetSyncStatusColor() =>
         document.SyncStatus switch
@@ -322,9 +333,11 @@ public sealed class MarketAcquisitionRequestBuilderPanel
             ImGuiTableFlags.Borders |
             ImGuiTableFlags.RowBg |
             ImGuiTableFlags.Resizable |
-            ImGuiTableFlags.ScrollX;
+            ImGuiTableFlags.ScrollX |
+            ImGuiTableFlags.ScrollY;
 
-        if (!ImGui.BeginTable("AcquisitionRequestBuilderLines", 7, Flags))
+        var tableHeight = (ImGui.GetTextLineHeightWithSpacing() * 6.5f) + 8f;
+        if (!ImGui.BeginTable("AcquisitionRequestBuilderLines", 7, Flags, new Vector2(0, tableHeight)))
             return;
 
         ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.WidthStretch);
@@ -367,9 +380,9 @@ public sealed class MarketAcquisitionRequestBuilderPanel
             ImGui.TableNextColumn();
             ImGui.TextUnformatted(FormatLineQuantity(line));
             ImGui.TableNextColumn();
-            ImGui.TextUnformatted(RequestPricingFormatter.FormatOptionalGil(line.MaxUnitPrice));
+            DrawMaxUnitCell(line, index);
             ImGui.TableNextColumn();
-            ImGui.TextUnformatted(RequestPricingFormatter.FormatOptionalGil(line.GilCap));
+            DrawGilCapCell(line, index);
             ImGui.TableNextColumn();
             ImGui.TextUnformatted(line.HqPolicy);
             ImGui.TableNextColumn();
@@ -378,6 +391,74 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         }
 
         ImGui.EndTable();
+    }
+
+    private void DrawMaxUnitCell(MarketAcquisitionRequestLineDocument line, int index)
+    {
+        ImGui.TextUnformatted(RequestPricingFormatter.FormatOptionalGil(line.MaxUnitPrice));
+        if (!ImGui.BeginPopupContextItem($"AcquisitionRequestBuilderMaxUnitMenu{index}"))
+            return;
+
+        SelectLineForEditing(index, line);
+        var identity = CraftAppraisalRequestMapper.BuildLineIdentity(document, line);
+        var threshold = craftAppraisal.State.TryGetLineQuoteThreshold(identity);
+        if (threshold is > 0)
+        {
+            if (ImGuiUi.MenuItem("Calculate from cost to craft", true))
+                SetLineMaxUnitPrice(index, threshold.Value, "Max unit set from Craft Architect quote.");
+        }
+        else
+        {
+            if (ImGuiUi.MenuItem(
+                    "Calculate from cost to craft",
+                    craftAppraisal.State.WorkshopHostEnabled && !isAppraising && line.ItemId != 0))
+            {
+                _ = CalculateMaxUnitFromCraftAsync(index);
+            }
+
+            if (!craftAppraisal.State.WorkshopHostEnabled)
+                ImGui.TextColored(MainWindow.ColMuted, "Craft Architect quotes are not available.");
+        }
+
+        if (ImGuiUi.MenuItem("Enter manually", true))
+        {
+            SelectLineForEditing(index, line);
+            status = "Edit max price, then update the line.";
+        }
+
+        if (ImGuiUi.MenuItem("Clear max unit", line.MaxUnitPrice > 0))
+            SetLineMaxUnitPrice(index, 0, "Max unit cleared.");
+
+        ImGui.EndPopup();
+    }
+
+    private void DrawGilCapCell(MarketAcquisitionRequestLineDocument line, int index)
+    {
+        ImGui.TextUnformatted(RequestPricingFormatter.FormatOptionalGil(line.GilCap));
+        if (!ImGui.BeginPopupContextItem($"AcquisitionRequestBuilderGilCapMenu{index}"))
+            return;
+
+        SelectLineForEditing(index, line);
+        var capQuantity = GetCapQuantity(line);
+        var canCalculateCap = line.MaxUnitPrice > 0 && capQuantity > 0;
+        if (ImGuiUi.MenuItem("Set cap from max unit x quantity", canCalculateCap))
+            SetLineGilCap(
+                index,
+                CalculateGilCap(line.MaxUnitPrice, capQuantity),
+                "Gil cap set from max unit and quantity.");
+        if (!canCalculateCap)
+            ImGui.TextColored(MainWindow.ColMuted, "Set max unit and a finite quantity before calculating a cap.");
+
+        if (ImGuiUi.MenuItem("Enter manually", true))
+        {
+            SelectLineForEditing(index, line);
+            status = "Edit gil cap, then update the line.";
+        }
+
+        if (ImGuiUi.MenuItem("Clear gil cap", line.GilCap > 0))
+            SetLineGilCap(index, 0, "Gil cap cleared.");
+
+        ImGui.EndPopup();
     }
 
     private void DrawSelectedLineInspector(MarketAcquisitionRequestBuilderContext context)
@@ -439,64 +520,113 @@ public sealed class MarketAcquisitionRequestBuilderPanel
                       !context.IsRouteActive &&
                       context.HasCharacterScope &&
                       document.Lines.Count > 0;
-        var syncLabel = string.IsNullOrWhiteSpace(document.RemoteRequestId) ? "Sync Request" : "Update Request";
+        var syncLabel = string.IsNullOrWhiteSpace(document.RemoteRequestId) ? "Save Request" : "Update Request";
 
-        if (ImGui.BeginTable("AcquisitionRequestBuilderActions", 2, ImGuiTableFlags.SizingStretchProp))
-        {
-            ImGui.TableSetupColumn("Request", ImGuiTableColumnFlags.WidthStretch);
-            ImGui.TableSetupColumn("Evidence", ImGuiTableColumnFlags.WidthStretch);
-            ImGui.TableNextRow();
-
-            ImGui.TableNextColumn();
-            ImGui.TextColored(MainWindow.ColHeader, "Request Actions");
-            DrawRequestActionButtons(context, busy, canSync, syncLabel);
-
-            ImGui.TableNextColumn();
-            ImGui.TextColored(MainWindow.ColHeader, "Evidence Actions");
-            DrawEvidenceActionButtons(busy);
-
-            ImGui.EndTable();
-        }
-    }
-
-    private void DrawRequestActionButtons(
-        MarketAcquisitionRequestBuilderContext context,
-        bool busy,
-        bool canSync,
-        string syncLabel)
-    {
+        ImGui.TextColored(MainWindow.ColHeader, "Request");
         if (ImGuiUi.Button($"{syncLabel}##AcquisitionRequestBuilderSync", canSync))
             _ = SyncAsync(context);
 
         ImGui.SameLine();
-        if (ImGuiUi.Button("Refresh Request##AcquisitionRequestBuilderRefresh", !busy && !string.IsNullOrWhiteSpace(document.RemoteRequestId)))
+        if (ImGuiUi.Button("Reload Saved##AcquisitionRequestBuilderRefresh", !busy && !string.IsNullOrWhiteSpace(document.RemoteRequestId)))
             _ = RefreshAsync();
 
         ImGui.SameLine();
-        if (ImGuiUi.Button("Adopt Remote##AcquisitionRequestBuilderAdoptRemote", !busy && pendingRemoteDocument is not null))
+        if (ImGuiUi.Button("Use Server Copy##AcquisitionRequestBuilderAdoptRemote", !busy && pendingRemoteDocument is not null))
             AdoptRemote();
 
         ImGui.SameLine();
-        if (ImGuiUi.Button("Clear Local Draft##AcquisitionRequestBuilderClear", !busy && !context.IsRouteActive))
+        if (ImGuiUi.Button("Clear Draft##AcquisitionRequestBuilderClear", !busy && !context.IsRouteActive))
             ClearDraft(context);
+
+        ImGui.TextColored(MainWindow.ColMuted, "Right-click max price or gil cap cells to calculate, enter, or clear pricing.");
     }
 
-    private void DrawEvidenceActionButtons(bool busy)
+    private void SelectLineForEditing(int index, MarketAcquisitionRequestLineDocument line)
     {
-        if (craftAppraisal.State.WorkshopHostEnabled)
-        {
-            if (ImGuiUi.Button("Appraise Missing##AcquisitionRequestBuilderAppraiseMissing", !busy && document.Lines.Any(line => line.MaxUnitPrice == 0)))
-                _ = AppraiseMissingAsync();
+        selectedLineIndex = index;
+        LoadLineIntoEditor(line);
+    }
 
-            ImGui.SameLine();
-            if (ImGuiUi.Button("Apply Quotes##AcquisitionRequestBuilderApplyQuotes", !busy && document.Lines.Count > 0))
-                ApplyStoredQuotes();
+    private void SetLineMaxUnitPrice(int index, uint maxUnitPrice, string message)
+    {
+        UpdateLine(
+            index,
+            line => line with { MaxUnitPrice = maxUnitPrice },
+            message);
+    }
 
-            ImGui.TextColored(MainWindow.ColMuted, craftAppraisal.State.CraftQuoteStatus);
+    private void SetLineGilCap(int index, uint gilCap, string message)
+    {
+        UpdateLine(
+            index,
+            line => line with { GilCap = gilCap },
+            message);
+    }
+
+    private void UpdateLine(
+        int index,
+        Func<MarketAcquisitionRequestLineDocument, MarketAcquisitionRequestLineDocument> update,
+        string message)
+    {
+        if (index < 0 || index >= document.Lines.Count)
             return;
-        }
 
-        ImGui.TextColored(MainWindow.ColMuted, "Craft appraisal unavailable.");
+        var lines = document.Lines.ToList();
+        lines[index] = update(lines[index]);
+        document = MarkEdited(document with { Lines = lines });
+        pendingRemoteDocument = null;
+        pendingRemoteRequest = null;
+        selectedLineIndex = index;
+        LoadLineIntoEditor(lines[index]);
+        status = message;
+        SaveDocument();
+    }
+
+    private static uint GetCapQuantity(MarketAcquisitionRequestLineDocument line) =>
+        line.QuantityMode == "TargetQuantity"
+            ? line.TargetQuantity
+            : line.MaxQuantity;
+
+    private static uint CalculateGilCap(uint maxUnitPrice, uint quantity)
+    {
+        var cap = (ulong)maxUnitPrice * quantity;
+        return cap > uint.MaxValue ? uint.MaxValue : (uint)cap;
+    }
+
+    private async Task CalculateMaxUnitFromCraftAsync(int index)
+    {
+        if (isAppraising || index < 0 || index >= document.Lines.Count)
+            return;
+
+        isAppraising = true;
+        try
+        {
+            var line = document.Lines[index];
+            var identity = CraftAppraisalRequestMapper.BuildLineIdentity(document, line);
+            craftAppraisal.State.UpdateSelectedLine(identity);
+            var quote = await craftAppraisal.FetchQuoteAsync(
+                CraftAppraisalRequestMapper.Build(document, line)).ConfigureAwait(false);
+            craftAppraisal.State.RecordLineQuote(
+                identity,
+                quote,
+                craftAppraisal.State.LastCraftQuoteDiagnosticFilePath);
+            var threshold = craftAppraisal.State.TryGetLineQuoteThreshold(identity);
+            if (threshold is > 0)
+            {
+                SetLineMaxUnitPrice(index, threshold.Value, "Max unit set from Craft Architect quote.");
+                return;
+            }
+
+            status = "Craft Architect did not return a usable max unit price for this line.";
+        }
+        catch (Exception ex)
+        {
+            status = $"Craft quote failed: {ex.Message}";
+        }
+        finally
+        {
+            isAppraising = false;
+        }
     }
 
     private void ApplyEditorLine()
@@ -617,88 +747,9 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         pendingRemoteDocument = null;
         pendingRemoteRequest = null;
         selectedLineIndex = -1;
-        status = "Adopted remote request.";
+        status = "Using saved server copy.";
         SaveDocument();
         documentAdopted(document, remote);
-    }
-
-    private async Task AppraiseMissingAsync()
-    {
-        if (isAppraising)
-            return;
-
-        isAppraising = true;
-        var updated = document.Lines.ToList();
-        var applied = 0;
-        try
-        {
-            for (var index = 0; index < updated.Count; index++)
-            {
-                var line = updated[index];
-                if (line.MaxUnitPrice > 0 || line.ItemId == 0)
-                    continue;
-
-                var identity = CraftAppraisalRequestMapper.BuildLineIdentity(document, line);
-                craftAppraisal.State.UpdateSelectedLine(identity);
-                var quote = await craftAppraisal.FetchQuoteAsync(
-                    CraftAppraisalRequestMapper.Build(document, line)).ConfigureAwait(false);
-                craftAppraisal.State.RecordLineQuote(
-                    identity,
-                    quote,
-                    craftAppraisal.State.LastCraftQuoteDiagnosticFilePath);
-                var threshold = craftAppraisal.State.TryGetLineQuoteThreshold(identity);
-                if (threshold is not > 0)
-                    continue;
-
-                updated[index] = line with { MaxUnitPrice = threshold.Value };
-                applied++;
-            }
-
-            if (applied > 0)
-            {
-                document = MarkEdited(document with { Lines = updated });
-                status = $"Applied {applied:N0} craft quote(s).";
-                SaveDocument();
-            }
-            else
-            {
-                status = "No missing max prices could be appraised.";
-            }
-        }
-        finally
-        {
-            isAppraising = false;
-        }
-    }
-
-    private void ApplyStoredQuotes()
-    {
-        var updated = document.Lines.ToList();
-        var applied = 0;
-        for (var index = 0; index < updated.Count; index++)
-        {
-            var line = updated[index];
-            if (line.ItemId == 0)
-                continue;
-
-            var identity = CraftAppraisalRequestMapper.BuildLineIdentity(document, line);
-            var threshold = craftAppraisal.State.TryGetLineQuoteThreshold(identity);
-            if (threshold is not > 0)
-                continue;
-
-            updated[index] = line with { MaxUnitPrice = threshold.Value };
-            applied++;
-        }
-
-        if (applied == 0)
-        {
-            status = "No stored craft quotes are available for current lines.";
-            return;
-        }
-
-        document = MarkEdited(document with { Lines = updated });
-        status = $"Applied {applied:N0} stored quote(s).";
-        SaveDocument();
     }
 
     private void ClearDraft(MarketAcquisitionRequestBuilderContext context)
