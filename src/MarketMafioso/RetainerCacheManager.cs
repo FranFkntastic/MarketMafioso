@@ -24,6 +24,7 @@ public class RetainerCacheManager : IDisposable
     private readonly InventoryScanner scanner;
     private readonly HttpReporter reporter;
     private readonly IPlayerState playerState;
+    private readonly RetainerCacheFileStore? cacheStore;
     private bool isBatchRefreshActive;
 
     // Both addon names are registered so the handler fires regardless of
@@ -44,7 +45,8 @@ public class RetainerCacheManager : IDisposable
         Configuration config,
         InventoryScanner scanner,
         HttpReporter reporter,
-        IPlayerState playerState)
+        IPlayerState playerState,
+        RetainerCacheFileStore? cacheStore = null)
     {
         this.addonLifecycle = addonLifecycle;
         this.log = log;
@@ -52,6 +54,7 @@ public class RetainerCacheManager : IDisposable
         this.scanner = scanner;
         this.reporter = reporter;
         this.playerState = playerState;
+        this.cacheStore = cacheStore;
 
         addonLifecycle.RegisterListener(AddonEvent.PostSetup, LargeAddon, OnRetainerWindowOpen);
         addonLifecycle.RegisterListener(AddonEvent.PreFinalize, LargeAddon, OnRetainerWindowClose);
@@ -147,7 +150,14 @@ public class RetainerCacheManager : IDisposable
                     .ToList(),
             };
 
-            config.Save();
+            try
+            {
+                cacheStore?.Save(config.RetainerCache);
+            }
+            catch (Exception ex)
+            {
+                log.Error(ex, "[MarketMafioso] Error saving retainer inventory cache");
+            }
 
             log.Information(
                 $"[MarketMafioso] Cached retainer '{_activeRetainerName}' - {totalItems} item(s) across {cachedBags.Count} bag(s).");

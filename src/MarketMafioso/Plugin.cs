@@ -40,6 +40,7 @@ public sealed class Plugin : IDalamudPlugin
 
     private readonly InventoryScanner scanner;
     private readonly HttpReporter reporter;
+    private readonly RetainerCacheFileStore retainerCacheStore;
     private readonly RetainerCacheManager retainerCache;
     private readonly AutoRetainerRefreshService autoRetainerRefresh;
     private readonly WorkshopProjectCatalog workshopCatalog;
@@ -59,10 +60,20 @@ public sealed class Plugin : IDalamudPlugin
         ECommonsMain.Init(PluginInterface, this);
 
         Configuration = PluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
+        retainerCacheStore = new RetainerCacheFileStore(
+            Path.Combine(PluginInterface.GetPluginConfigDirectory(), "retainer-cache.json"));
+        LoadRetainerCache();
 
         scanner = new InventoryScanner(DataManager, Log);
         reporter = new HttpReporter(Configuration, PlayerState, Log, ChatGui, scanner);
-        retainerCache = new RetainerCacheManager(AddonLifecycle, Log, Configuration, scanner, reporter, PlayerState);
+        retainerCache = new RetainerCacheManager(
+            AddonLifecycle,
+            Log,
+            Configuration,
+            scanner,
+            reporter,
+            PlayerState,
+            retainerCacheStore);
         autoRetainerRefresh = new AutoRetainerRefreshService(
             PluginInterface,
             Log,
@@ -115,6 +126,7 @@ public sealed class Plugin : IDalamudPlugin
                 new VNavmeshIpc(new DalamudVNavmeshIpcAdapter(PluginInterface, Log)),
                 Log),
             Path.Combine(PluginInterface.GetPluginConfigDirectory(), "market-acquisition-route-logs"),
+            retainerCacheStore,
             Log);
 
         windowSystem.AddWindow(mainWindow);
@@ -158,6 +170,33 @@ public sealed class Plugin : IDalamudPlugin
 
     private void DrawUI() => windowSystem.Draw();
     private void OpenConfigUi() => mainWindow.IsOpen = true;
+
+    private void LoadRetainerCache()
+    {
+        try
+        {
+            if (retainerCacheStore.Exists)
+            {
+                Configuration.RetainerCache = retainerCacheStore.Load();
+                Log.Information(
+                    "[MarketMafioso] Loaded {Count} cached retainer(s) from retainer-cache.json.",
+                    Configuration.RetainerCache.Count);
+                return;
+            }
+
+            if (Configuration.RetainerCache.Count > 0)
+            {
+                retainerCacheStore.Save(Configuration.RetainerCache);
+                Log.Information(
+                    "[MarketMafioso] Migrated {Count} cached retainer(s) to retainer-cache.json.",
+                    Configuration.RetainerCache.Count);
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "[MarketMafioso] Error loading retainer inventory cache");
+        }
+    }
 
     public void Dispose()
     {

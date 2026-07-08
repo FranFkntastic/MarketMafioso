@@ -1,6 +1,7 @@
 using Dalamud.Configuration;
 using MarketMafioso.RetainerRestock;
 using MarketMafioso.WorkshopPrep;
+using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
 
@@ -38,7 +39,22 @@ public class Configuration : IPluginConfiguration
     public bool EnableAutoSendTimer { get; set; } = false;
     public int AutoSendIntervalMinutes { get; set; } = 5;
 
+    [JsonIgnore]
     public Dictionary<ulong, CachedRetainer> RetainerCache { get; set; } = new();
+
+    [JsonProperty("RetainerCache")]
+    private Dictionary<ulong, CachedRetainer>? LegacyRetainerCache
+    {
+        get => null;
+        set
+        {
+            if (value is { Count: > 0 })
+                RetainerCache = value;
+        }
+    }
+
+    public bool ShouldSerializeLegacyRetainerCache() => false;
+
     public List<WorkshopPrepQueueItem> WorkshopPrepQueue { get; set; } = new();
     public List<WorkshopFrozenQueue> FrozenWorkshopQueues { get; set; } = new();
     public List<RetainerRestockPlanItem> RetainerRestockPlanItems { get; set; } = new();

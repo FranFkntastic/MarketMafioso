@@ -35,6 +35,7 @@ public class MainWindow : Window, IDisposable
     private readonly WorkshopRetainerRestockService workshopRetainerRestock;
     private readonly WorkshopAssemblyRunner workshopAssemblyRunner;
     private readonly WorkshopMaterialManifestExportService workshopMaterialManifestExport;
+    private readonly RetainerCacheFileStore? retainerCacheStore;
     private readonly IPlayerState playerState;
     private readonly IPluginLog log;
     private readonly HttpClient acquisitionHttpClient = new();
@@ -144,6 +145,7 @@ public class MainWindow : Window, IDisposable
         IPlayerState playerState,
         MarketBoardApproachService marketBoardApproachService,
         string marketAcquisitionRouteDiagnosticsDirectory,
+        RetainerCacheFileStore? retainerCacheStore,
         IPluginLog log)
         : base("MarketMafioso##MarketMafiosoMainWindow",
                ImGuiWindowFlags.None)
@@ -157,6 +159,7 @@ public class MainWindow : Window, IDisposable
         this.workshopRetainerRestock = workshopRetainerRestock;
         this.workshopAssemblyRunner = workshopAssemblyRunner;
         this.workshopMaterialManifestExport = workshopMaterialManifestExport;
+        this.retainerCacheStore = retainerCacheStore;
         this.playerState = playerState;
         this.log = log;
         acquisitionClient = new MarketAcquisitionRequestClient(acquisitionHttpClient);
@@ -4464,7 +4467,14 @@ public class MainWindow : Window, IDisposable
             if (ImGui.Button("Clear Retainer Cache"))
             {
                 config.RetainerCache.Clear();
-                config.Save();
+                try
+                {
+                    retainerCacheStore?.Save(config.RetainerCache);
+                }
+                catch (Exception ex)
+                {
+                    log.Error(ex, "[MarketMafioso] Error saving cleared retainer inventory cache");
+                }
             }
         }
     }
