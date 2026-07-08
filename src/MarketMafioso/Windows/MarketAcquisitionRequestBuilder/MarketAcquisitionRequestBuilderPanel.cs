@@ -318,12 +318,6 @@ public sealed class MarketAcquisitionRequestBuilderPanel
 
     private void DrawLineTable()
     {
-        if (document.Lines.Count == 0)
-        {
-            ImGui.TextColored(MainWindow.ColMuted, "No acquisition lines queued.");
-            return;
-        }
-
         const ImGuiTableFlags Flags =
             ImGuiTableFlags.Borders |
             ImGuiTableFlags.RowBg |
@@ -341,6 +335,21 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         ImGui.TableSetupColumn("HQ", ImGuiTableColumnFlags.WidthFixed, 64);
         ImGui.TableSetupColumn("", ImGuiTableColumnFlags.WidthFixed, 88);
         ImGui.TableHeadersRow();
+
+        if (document.Lines.Count == 0)
+        {
+            ImGui.TableNextRow();
+            ImGui.TableNextColumn();
+            ImGui.TextColored(MainWindow.ColMuted, "No acquisition lines queued.");
+            ImGui.TableNextColumn();
+            ImGui.TableNextColumn();
+            ImGui.TableNextColumn();
+            ImGui.TableNextColumn();
+            ImGui.TableNextColumn();
+            ImGui.TableNextColumn();
+            ImGui.EndTable();
+            return;
+        }
 
         for (var index = 0; index < document.Lines.Count; index++)
         {
@@ -378,14 +387,6 @@ public sealed class MarketAcquisitionRequestBuilderPanel
             ? document.Lines[selectedLineIndex]
             : null;
 
-        if (selectedLine is null)
-        {
-            ImGui.TextColored(MainWindow.ColMuted, document.Lines.Count == 0
-                ? "Add an acquisition line to begin."
-                : "Select a line to inspect pricing evidence and edit details.");
-            return;
-        }
-
         if (!ImGui.BeginTable("AcquisitionRequestBuilderSelectedLine", 2, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg))
             return;
 
@@ -396,6 +397,18 @@ public sealed class MarketAcquisitionRequestBuilderPanel
 
         ImGui.TableNextColumn();
         ImGui.TextColored(MainWindow.ColMuted, "Craft quote");
+        if (selectedLine is null)
+        {
+            ImGui.TextColored(MainWindow.ColMuted, document.Lines.Count == 0
+                ? "Add an acquisition line to begin."
+                : "Select a line to inspect pricing evidence.");
+            ImGui.TableNextColumn();
+            ImGui.TextColored(MainWindow.ColMuted, "Request state");
+            ImGui.TextColored(MainWindow.ColMuted, "No line selected.");
+            ImGui.EndTable();
+            return;
+        }
+
         var identity = CraftAppraisalRequestMapper.BuildLineIdentity(document, selectedLine);
         var threshold = craftAppraisal.State.TryGetLineQuoteThreshold(identity);
         if (threshold is > 0)
@@ -427,6 +440,31 @@ public sealed class MarketAcquisitionRequestBuilderPanel
                       context.HasCharacterScope &&
                       document.Lines.Count > 0;
         var syncLabel = string.IsNullOrWhiteSpace(document.RemoteRequestId) ? "Sync Request" : "Update Request";
+
+        if (ImGui.BeginTable("AcquisitionRequestBuilderActions", 2, ImGuiTableFlags.SizingStretchProp))
+        {
+            ImGui.TableSetupColumn("Request", ImGuiTableColumnFlags.WidthStretch);
+            ImGui.TableSetupColumn("Evidence", ImGuiTableColumnFlags.WidthStretch);
+            ImGui.TableNextRow();
+
+            ImGui.TableNextColumn();
+            ImGui.TextColored(MainWindow.ColHeader, "Request Actions");
+            DrawRequestActionButtons(context, busy, canSync, syncLabel);
+
+            ImGui.TableNextColumn();
+            ImGui.TextColored(MainWindow.ColHeader, "Evidence Actions");
+            DrawEvidenceActionButtons(busy);
+
+            ImGui.EndTable();
+        }
+    }
+
+    private void DrawRequestActionButtons(
+        MarketAcquisitionRequestBuilderContext context,
+        bool busy,
+        bool canSync,
+        string syncLabel)
+    {
         if (ImGuiUi.Button($"{syncLabel}##AcquisitionRequestBuilderSync", canSync))
             _ = SyncAsync(context);
 
@@ -441,7 +479,10 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         ImGui.SameLine();
         if (ImGuiUi.Button("Clear Local Draft##AcquisitionRequestBuilderClear", !busy && !context.IsRouteActive))
             ClearDraft(context);
+    }
 
+    private void DrawEvidenceActionButtons(bool busy)
+    {
         if (craftAppraisal.State.WorkshopHostEnabled)
         {
             if (ImGuiUi.Button("Appraise Missing##AcquisitionRequestBuilderAppraiseMissing", !busy && document.Lines.Any(line => line.MaxUnitPrice == 0)))
@@ -452,7 +493,10 @@ public sealed class MarketAcquisitionRequestBuilderPanel
                 ApplyStoredQuotes();
 
             ImGui.TextColored(MainWindow.ColMuted, craftAppraisal.State.CraftQuoteStatus);
+            return;
         }
+
+        ImGui.TextColored(MainWindow.ColMuted, "Craft appraisal unavailable.");
     }
 
     private void ApplyEditorLine()

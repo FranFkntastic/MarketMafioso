@@ -2321,38 +2321,9 @@ public class MainWindow : Window, IDisposable
                        !marketAcquisitionRouteRunner.IsRunning &&
                        !marketAcquisitionRouteRunner.IsPaused;
         var canReprepare = canStart &&
-                           marketAcquisitionRouteRunner.CanRestart &&
-                           marketAcquisitionRouteRunner.CompletedOrProbedStops.Count > 0;
-        if (ImGuiUi.Button("Start Route", canStart))
-            _ = StartGuidedRouteAsync(enableDiagnostics: false);
-
-        ImGui.SameLine();
-        if (ImGuiUi.Button("Start With Diagnostics", canStart))
-            _ = StartGuidedRouteAsync(enableDiagnostics: true);
-
-        ImGui.SameLine();
-        if (marketAcquisitionRouteRunner.IsPaused)
-        {
-            if (ImGuiUi.Button("Resume", true))
-                _ = ResumeGuidedRouteAsync();
-        }
-        else
-        {
-            if (ImGuiUi.Button("Pause", marketAcquisitionRouteRunner.IsRunning))
-                _ = PauseGuidedRouteAsync();
-        }
-
-        ImGui.SameLine();
-        if (ImGuiUi.Button("Stop", marketAcquisitionRouteRunner.IsRunning || marketAcquisitionRouteRunner.IsPaused))
-            _ = StopGuidedRouteAsync();
-
-        ImGui.SameLine();
-        if (ImGuiUi.Button("Restart", canStart && marketAcquisitionRouteRunner.CanRestart))
-            _ = RestartGuidedRouteAsync();
-
-        ImGui.SameLine();
-        if (ImGuiUi.Button("Re-prepare Route", canReprepare))
-            _ = ReprepareGuidedRouteAsync();
+                            marketAcquisitionRouteRunner.CanRestart &&
+                            marketAcquisitionRouteRunner.CompletedOrProbedStops.Count > 0;
+        DrawGuidedRouteActionRow(canStart, canReprepare);
 
         ImGui.TextColored(GetGuidedRouteStatusColor(), marketAcquisitionRouteRunner.StatusMessage);
         if (IsAcquisitionPlanStale())
@@ -2383,6 +2354,51 @@ public class MainWindow : Window, IDisposable
 
         DrawGuidedRouteStops(marketAcquisitionRouteRunner.Stops);
         DrawMarketBoardProbeStatus();
+    }
+
+    private void DrawGuidedRouteActionRow(bool canStart, bool canReprepare)
+    {
+        if (!ImGui.BeginTable("MarketAcquisitionGuidedRouteActions", 3, ImGuiTableFlags.SizingStretchProp))
+            return;
+
+        ImGui.TableSetupColumn("Start", ImGuiTableColumnFlags.WidthStretch);
+        ImGui.TableSetupColumn("Control", ImGuiTableColumnFlags.WidthStretch);
+        ImGui.TableSetupColumn("Reset", ImGuiTableColumnFlags.WidthStretch);
+        ImGui.TableNextRow();
+
+        ImGui.TableNextColumn();
+        ImGui.TextColored(ColMuted, "Start");
+        if (ImGuiUi.Button("Start Route##MarketAcquisitionStartRoute", canStart))
+            _ = StartGuidedRouteAsync(enableDiagnostics: false);
+        ImGui.SameLine();
+        if (ImGuiUi.Button("Diagnostics##MarketAcquisitionStartDiagnostics", canStart))
+            _ = StartGuidedRouteAsync(enableDiagnostics: true);
+
+        ImGui.TableNextColumn();
+        ImGui.TextColored(ColMuted, "Control");
+        if (marketAcquisitionRouteRunner.IsPaused)
+        {
+            if (ImGuiUi.Button("Resume##MarketAcquisitionResumeRoute", true))
+                _ = ResumeGuidedRouteAsync();
+        }
+        else
+        {
+            if (ImGuiUi.Button("Pause##MarketAcquisitionPauseRoute", marketAcquisitionRouteRunner.IsRunning))
+                _ = PauseGuidedRouteAsync();
+        }
+        ImGui.SameLine();
+        if (ImGuiUi.Button("Stop##MarketAcquisitionStopRoute", marketAcquisitionRouteRunner.IsRunning || marketAcquisitionRouteRunner.IsPaused))
+            _ = StopGuidedRouteAsync();
+
+        ImGui.TableNextColumn();
+        ImGui.TextColored(ColMuted, "Reset");
+        if (ImGuiUi.Button("Restart##MarketAcquisitionRestartRoute", canStart && marketAcquisitionRouteRunner.CanRestart))
+            _ = RestartGuidedRouteAsync();
+        ImGui.SameLine();
+        if (ImGuiUi.Button("Re-prepare##MarketAcquisitionReprepareRoute", canReprepare))
+            _ = ReprepareGuidedRouteAsync();
+
+        ImGui.EndTable();
     }
 
     private void DrawDiagnosticsTab()
