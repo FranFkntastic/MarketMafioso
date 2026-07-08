@@ -11,10 +11,23 @@ namespace MarketMafioso.MarketAcquisition;
 
 public interface IMarketAcquisitionRequestClient
 {
+    Task<MarketAcquisitionRequestView> GetBatchAsync(
+        string serverUrl,
+        string clientApiKey,
+        string requestId,
+        CancellationToken cancellationToken);
+
     Task<MarketAcquisitionRequestView> CreateBatchAsync(
         string serverUrl,
         string clientApiKey,
         MarketAcquisitionBatchCreateRequest createRequest,
+        CancellationToken cancellationToken);
+
+    Task<MarketAcquisitionRequestView> ReplaceBatchAsync(
+        string serverUrl,
+        string clientApiKey,
+        string requestId,
+        MarketAcquisitionBatchReplaceRequest replaceRequest,
         CancellationToken cancellationToken);
 
     Task<MarketAcquisitionClaimView> ClaimAsync(
@@ -45,6 +58,30 @@ public sealed class MarketAcquisitionRequestClient : IMarketAcquisitionRequestCl
         this.httpClient = httpClient;
     }
 
+    public async Task<MarketAcquisitionRequestView> GetBatchAsync(
+        string serverUrl,
+        string clientApiKey,
+        string requestId,
+        CancellationToken cancellationToken)
+    {
+        var acquisitionBaseUrl = ResolveAcquisitionBaseUrl(serverUrl);
+        if (string.IsNullOrWhiteSpace(clientApiKey))
+            throw new InvalidOperationException("Client API key is required.");
+
+        using var request = new HttpRequestMessage(
+            HttpMethod.Get,
+            $"{acquisitionBaseUrl}/batches/{Uri.EscapeDataString(requestId)}");
+        request.Headers.Add("X-Api-Key", clientApiKey);
+        request.Headers.Accept.ParseAdd("application/json");
+
+        using var response = await httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<MarketAcquisitionRequestView>(
+            JsonOptions,
+            cancellationToken).ConfigureAwait(false)
+            ?? throw new InvalidOperationException("Get batch response was empty.");
+    }
+
     public async Task<MarketAcquisitionRequestView> CreateBatchAsync(
         string serverUrl,
         string clientApiKey,
@@ -68,6 +105,36 @@ public sealed class MarketAcquisitionRequestClient : IMarketAcquisitionRequestCl
             JsonOptions,
             cancellationToken).ConfigureAwait(false)
             ?? throw new InvalidOperationException("Create batch response was empty.");
+    }
+
+    public async Task<MarketAcquisitionRequestView> ReplaceBatchAsync(
+        string serverUrl,
+        string clientApiKey,
+        string requestId,
+        MarketAcquisitionBatchReplaceRequest replaceRequest,
+        CancellationToken cancellationToken)
+    {
+        var acquisitionBaseUrl = ResolveAcquisitionBaseUrl(serverUrl);
+        if (string.IsNullOrWhiteSpace(clientApiKey))
+            throw new InvalidOperationException("Client API key is required.");
+
+        using var request = new HttpRequestMessage(
+            HttpMethod.Put,
+            $"{acquisitionBaseUrl}/batches/{Uri.EscapeDataString(requestId)}")
+        {
+            Content = JsonContent.Create(replaceRequest, options: JsonOptions),
+        };
+        request.Headers.Add("X-Api-Key", clientApiKey);
+        request.Headers.Accept.ParseAdd("application/json");
+
+        using var response = await httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
+        if (!response.IsSuccessStatusCode)
+            throw await CreateLifecycleExceptionAsync(response, "replace", cancellationToken).ConfigureAwait(false);
+
+        return await response.Content.ReadFromJsonAsync<MarketAcquisitionRequestView>(
+            JsonOptions,
+            cancellationToken).ConfigureAwait(false)
+            ?? throw new InvalidOperationException("Replace batch response was empty.");
     }
 
     public async Task<IReadOnlyList<MarketAcquisitionRequestView>> FetchPendingAsync(

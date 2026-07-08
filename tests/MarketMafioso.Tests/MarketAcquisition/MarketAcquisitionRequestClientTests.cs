@@ -145,6 +145,122 @@ public sealed class MarketAcquisitionRequestClientTests
     }
 
     [Fact]
+    public async Task GetBatchAsync_DerivesHostedAcquisitionUrlAndReadsRevision()
+    {
+        using var handler = new CapturingHandler("""
+            {
+              "id": "batch 1",
+              "revision": 4,
+              "status": "PendingPickup",
+              "origin": "PluginBuilder",
+              "targetCharacterName": "Wei Ning",
+              "targetWorld": "Gilgamesh",
+              "region": "North America",
+              "itemId": 2,
+              "itemName": "Fire Shard",
+              "quantityMode": "TargetQuantity",
+              "quantity": 10,
+              "hqPolicy": "Either",
+              "maxUnitPrice": 99,
+              "maxTotalGil": 990,
+              "worldMode": "Recommended"
+            }
+            """);
+        using var httpClient = new HttpClient(handler);
+        var client = new MarketAcquisitionRequestClient(httpClient);
+
+        var batch = await client.GetBatchAsync(
+            "https://dev.xivcraftarchitect.com/marketmafioso/api/inventory",
+            "client-secret",
+            "batch 1",
+            CancellationToken.None);
+
+        Assert.Equal("batch 1", batch.Id);
+        Assert.Equal(4, batch.Revision);
+        Assert.Equal(MarketAcquisitionOrigins.PluginBuilder, batch.Origin);
+        Assert.Equal(HttpMethod.Get, handler.LastRequest?.Method);
+        Assert.Equal(
+            "https://dev.xivcraftarchitect.com/marketmafioso/api/acquisition/batches/batch%201",
+            handler.LastRequest?.RequestUri?.OriginalString);
+        Assert.NotNull(handler.LastRequest);
+        Assert.True(handler.LastRequest.Headers.TryGetValues("X-Api-Key", out var values));
+        Assert.Equal("client-secret", Assert.Single(values));
+    }
+
+    [Fact]
+    public async Task ReplaceBatchAsync_PutsReplacementPayloadAndReturnsUpdatedRevision()
+    {
+        using var handler = new CapturingHandler("""
+            {
+              "id": "batch-1",
+              "revision": 3,
+              "status": "PendingPickup",
+              "origin": "PluginBuilder",
+              "targetCharacterName": "Wei Ning",
+              "targetWorld": "Gilgamesh",
+              "region": "North America",
+              "itemId": 4,
+              "itemName": "Lightning Shard",
+              "quantityMode": "AllBelowThreshold",
+              "quantity": 0,
+              "hqPolicy": "Either",
+              "maxUnitPrice": 120,
+              "maxTotalGil": 0,
+              "worldMode": "Recommended"
+            }
+            """);
+        using var httpClient = new HttpClient(handler);
+        var client = new MarketAcquisitionRequestClient(httpClient);
+
+        var replaced = await client.ReplaceBatchAsync(
+            "https://dev.xivcraftarchitect.com/marketmafioso/api/inventory",
+            "client-secret",
+            "batch-1",
+            new MarketAcquisitionBatchReplaceRequest
+            {
+                ExpectedRevision = 2,
+                Region = "North America",
+                WorldMode = "Recommended",
+                SweepScope = "Region",
+                ExpiresInSeconds = 300,
+                Lines =
+                [
+                    new MarketAcquisitionBatchLineCreateRequest
+                    {
+                        ItemId = 4,
+                        ItemName = "Lightning Shard",
+                        ItemKind = "Crystal",
+                        QuantityMode = "AllBelowThreshold",
+                        MaxQuantity = 999,
+                        HqPolicy = "Either",
+                        MaxUnitPrice = 120,
+                    },
+                ],
+            },
+            CancellationToken.None);
+
+        Assert.Equal("batch-1", replaced.Id);
+        Assert.Equal(3, replaced.Revision);
+        Assert.Equal(HttpMethod.Put, handler.LastRequest?.Method);
+        Assert.Equal(
+            "https://dev.xivcraftarchitect.com/marketmafioso/api/acquisition/batches/batch-1",
+            handler.LastRequest?.RequestUri?.ToString());
+        Assert.NotNull(handler.LastRequest);
+        Assert.True(handler.LastRequest.Headers.TryGetValues("X-Api-Key", out var values));
+        Assert.Equal("client-secret", Assert.Single(values));
+
+        var body = JsonDocument.Parse(handler.LastBody!);
+        Assert.Equal(2, body.RootElement.GetProperty("expectedRevision").GetInt32());
+        Assert.Equal("North America", body.RootElement.GetProperty("region").GetString());
+        Assert.Equal("Recommended", body.RootElement.GetProperty("worldMode").GetString());
+        var lines = body.RootElement.GetProperty("lines");
+        Assert.Single(lines.EnumerateArray());
+        Assert.Equal(4u, lines[0].GetProperty("itemId").GetUInt32());
+        Assert.Equal("AllBelowThreshold", lines[0].GetProperty("quantityMode").GetString());
+        Assert.Equal(999u, lines[0].GetProperty("maxQuantity").GetUInt32());
+    }
+
+    [Fact]
     public async Task ClaimAsync_PostsClaimPayloadAndReturnsClaimToken()
     {
         using var handler = new CapturingHandler("""

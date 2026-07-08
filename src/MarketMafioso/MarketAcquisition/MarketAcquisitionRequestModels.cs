@@ -9,6 +9,9 @@ public record MarketAcquisitionRequestView
     [JsonPropertyName("id")]
     public string Id { get; init; } = string.Empty;
 
+    [JsonPropertyName("revision")]
+    public int Revision { get; init; }
+
     [JsonPropertyName("status")]
     public string Status { get; init; } = string.Empty;
 
@@ -109,7 +112,7 @@ public sealed record MarketAcquisitionBatchCreateRequest
     public string IdempotencyKey { get; init; } = string.Empty;
 
     [JsonPropertyName("origin")]
-    public string Origin { get; init; } = MarketAcquisitionOrigins.ClientQuickShop;
+    public string Origin { get; init; } = MarketAcquisitionOrigins.PluginBuilder;
 
     [JsonPropertyName("createdByPluginInstanceId")]
     public string? CreatedByPluginInstanceId { get; init; }
@@ -119,6 +122,30 @@ public sealed record MarketAcquisitionBatchCreateRequest
 
     [JsonPropertyName("targetWorld")]
     public string TargetWorld { get; init; } = string.Empty;
+
+    [JsonPropertyName("region")]
+    public string Region { get; init; } = string.Empty;
+
+    [JsonPropertyName("worldMode")]
+    public string WorldMode { get; init; } = string.Empty;
+
+    [JsonPropertyName("sweepScope")]
+    public string SweepScope { get; init; } = "Region";
+
+    [JsonPropertyName("sweepDataCenters")]
+    public List<string> SweepDataCenters { get; init; } = new();
+
+    [JsonPropertyName("expiresInSeconds")]
+    public int ExpiresInSeconds { get; init; } = 300;
+
+    [JsonPropertyName("lines")]
+    public List<MarketAcquisitionBatchLineCreateRequest> Lines { get; init; } = new();
+}
+
+public sealed record MarketAcquisitionBatchReplaceRequest
+{
+    [JsonPropertyName("expectedRevision")]
+    public int ExpectedRevision { get; init; }
 
     [JsonPropertyName("region")]
     public string Region { get; init; } = string.Empty;
@@ -223,6 +250,7 @@ public sealed record MarketAcquisitionBatchLineView
 public static class MarketAcquisitionOrigins
 {
     public const string DashboardCreated = "DashboardCreated";
+    public const string PluginBuilder = "PluginBuilder";
     public const string ClientQuickShop = "ClientQuickShop";
 }
 

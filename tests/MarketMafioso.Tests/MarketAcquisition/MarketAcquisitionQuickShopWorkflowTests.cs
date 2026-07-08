@@ -76,6 +76,13 @@ public sealed class MarketAcquisitionQuickShopWorkflowTests
         public string? LastClaimRequestId { get; private set; }
         public string? LastAcceptClaimToken { get; private set; }
 
+        public Task<MarketAcquisitionRequestView> GetBatchAsync(
+            string serverUrl,
+            string clientApiKey,
+            string requestId,
+            CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
         public Task<MarketAcquisitionRequestView> CreateBatchAsync(
             string serverUrl,
             string clientApiKey,
@@ -95,6 +102,14 @@ public sealed class MarketAcquisitionQuickShopWorkflowTests
                 CreatedByPluginInstanceId = createRequest.CreatedByPluginInstanceId,
             });
         }
+
+        public Task<MarketAcquisitionRequestView> ReplaceBatchAsync(
+            string serverUrl,
+            string clientApiKey,
+            string requestId,
+            MarketAcquisitionBatchReplaceRequest replaceRequest,
+            CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
 
         public Task<MarketAcquisitionClaimView> ClaimAsync(
             string serverUrl,

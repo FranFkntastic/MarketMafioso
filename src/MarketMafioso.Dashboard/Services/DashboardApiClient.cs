@@ -120,6 +120,21 @@ public sealed class DashboardApiClient
             ?? throw new InvalidOperationException("Acquisition batch append response was empty.");
     }
 
+    public async Task<MarketAcquisitionRequestView> ReplaceAcquisitionBatchAsync(
+        string id,
+        MarketAcquisitionBatchReplaceRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await http.PutAsJsonAsync(
+            $"api/acquisition/batches/{Uri.EscapeDataString(id)}",
+            request,
+            JsonOptions,
+            cancellationToken);
+        EnsureAuthorizedSuccess(response);
+        return await response.Content.ReadFromJsonAsync<MarketAcquisitionRequestView>(JsonOptions, cancellationToken)
+            ?? throw new InvalidOperationException("Acquisition batch replace response was empty.");
+    }
+
     public async Task CancelAcquisitionRequestAsync(string id, CancellationToken cancellationToken = default)
     {
         using var response = await http.PostAsync($"api/acquisition/requests/{Uri.EscapeDataString(id)}/cancel", null, cancellationToken);
