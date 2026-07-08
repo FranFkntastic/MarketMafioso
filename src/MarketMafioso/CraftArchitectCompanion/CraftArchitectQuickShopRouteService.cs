@@ -23,16 +23,16 @@ public static class CraftArchitectQuickShopRouteService
             var draft = CraftArchitectQuickShopDraftBuilder.Build(request, quote);
             var created = await createRoute(draft).ConfigureAwait(false);
             return created
-                ? new CraftArchitectQuickShopRouteResult(true, "Quick-shop route created and synced.")
-                : new CraftArchitectQuickShopRouteResult(false, "Quick-shop route was not created.");
+                ? new CraftArchitectQuickShopRouteResult(true, "Acquisition route created and synced.")
+                : new CraftArchitectQuickShopRouteResult(false, "Acquisition route was not created.");
         }
         catch (OperationCanceledException)
         {
-            return new CraftArchitectQuickShopRouteResult(false, "Quick-shop route creation cancelled.");
+            return new CraftArchitectQuickShopRouteResult(false, "Acquisition route creation cancelled.");
         }
         catch (Exception ex)
         {
-            return new CraftArchitectQuickShopRouteResult(false, $"Quick-shop route failed: {ex.Message}");
+            return new CraftArchitectQuickShopRouteResult(false, $"Acquisition route failed: {ex.Message}");
         }
     }
 }

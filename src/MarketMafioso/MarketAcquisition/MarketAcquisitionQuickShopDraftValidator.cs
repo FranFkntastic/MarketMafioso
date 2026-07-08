@@ -26,7 +26,7 @@ public static class MarketAcquisitionQuickShopDraftValidator
 
         if (draft.Lines.Count == 0)
         {
-            errors.Add("At least one quick-shop line is required.");
+            errors.Add("At least one acquisition route line is required.");
         }
         else
         {

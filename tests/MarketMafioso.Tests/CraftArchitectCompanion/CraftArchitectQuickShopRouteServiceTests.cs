@@ -16,7 +16,7 @@ public sealed class CraftArchitectQuickShopRouteServiceTests
             _ => Task.FromResult(true));
 
         Assert.False(result.Created);
-        Assert.Contains("Quick-shop route failed", result.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Acquisition route failed", result.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("quote file", result.Message, StringComparison.OrdinalIgnoreCase);
     }
 
@@ -45,7 +45,7 @@ public sealed class CraftArchitectQuickShopRouteServiceTests
             });
 
         Assert.True(result.Created);
-        Assert.Equal("Quick-shop route created and synced.", result.Message);
+        Assert.Equal("Acquisition route created and synced.", result.Message);
         Assert.NotNull(capturedDraft);
         var line = Assert.Single(capturedDraft.Lines);
         Assert.Equal(2u, line.ItemId);

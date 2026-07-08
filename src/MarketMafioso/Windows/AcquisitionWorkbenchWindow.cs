@@ -49,7 +49,6 @@ public sealed class AcquisitionWorkbenchWindow : Window
     private int selectedLineIndex;
     private int selectedPricingLineIndex = -1;
     private int selectedPricingLineRevision;
-    private WorkbenchPane activePane = WorkbenchPane.Build;
 
     private static readonly Vector4 ColHeader = new(0.38f, 0.73f, 1.00f, 1f);
     private static readonly Vector4 ColSuccess = new(0.45f, 0.90f, 0.55f, 1f);
@@ -118,8 +117,6 @@ public sealed class AcquisitionWorkbenchWindow : Window
         DrawHeader(scope, validation);
         ImGui.Separator();
         DrawBody(scope, validation);
-        ImGui.Separator();
-        DrawPhaseStrip();
     }
 
     private void DrawHeader(
@@ -127,7 +124,7 @@ public sealed class AcquisitionWorkbenchWindow : Window
         MarketAcquisitionQuickShopValidationResult validation)
     {
         ImGui.TextColored(ColHeader, "Acquisition Workbench");
-        ImGui.TextWrapped("Build, sync, and monitor client-created acquisition routes from one popout.");
+        ImGui.TextWrapped("Build, appraise, sync, and monitor acquisition routes from one persistent board.");
         ImGui.Spacing();
 
         if (!ImGui.BeginTable("AcquisitionWorkbenchHeader", 6, ImGuiTableFlags.SizingStretchSame))
@@ -151,17 +148,16 @@ public sealed class AcquisitionWorkbenchWindow : Window
         MarketAcquisitionQuickShopValidationResult validation)
     {
         var available = ImGui.GetContentRegionAvail();
-        var phaseStripHeight = ImGui.GetTextLineHeightWithSpacing() + ImGui.GetStyle().FramePadding.Y * 2f + ImGui.GetStyle().ItemSpacing.Y * 2f;
-        var bodyHeight = MathF.Max(300f, available.Y - phaseStripHeight);
+        var bodyHeight = MathF.Max(360f, available.Y);
         var stack = available.X < 760f;
 
         if (stack)
         {
             DrawPanel("Draft", DrawDraftBuilder, Math.Clamp(bodyHeight * 0.50f, 260f, 420f));
             ImGui.Spacing();
-            DrawPanel("Route", () => DrawMainPane(scope, validation), Math.Clamp(bodyHeight * 0.32f, 190f, 320f));
+            DrawPanel("Lines & Route", () => DrawMainPane(scope, validation), Math.Clamp(bodyHeight * 0.42f, 260f, 420f));
             ImGui.Spacing();
-            DrawPanel("Details", () => DrawSidePane(validation), MathF.Max(160f, ImGui.GetContentRegionAvail().Y));
+            DrawPanel("Inspector", () => DrawSidePane(validation), MathF.Max(240f, ImGui.GetContentRegionAvail().Y));
             return;
         }
 
@@ -169,15 +165,15 @@ public sealed class AcquisitionWorkbenchWindow : Window
             return;
 
         ImGui.TableSetupColumn("Draft", ImGuiTableColumnFlags.WidthFixed, Math.Clamp(available.X * 0.32f, 320f, 460f));
-        ImGui.TableSetupColumn("Route", ImGuiTableColumnFlags.WidthStretch);
+        ImGui.TableSetupColumn("Lines & Route", ImGuiTableColumnFlags.WidthStretch);
         ImGui.TableSetupColumn("Details", ImGuiTableColumnFlags.WidthFixed, Math.Clamp(available.X * 0.24f, 260f, 380f));
         ImGui.TableNextRow();
         ImGui.TableNextColumn();
         DrawPanel("Draft", DrawDraftBuilder, bodyHeight);
         ImGui.TableNextColumn();
-        DrawPanel("Route", () => DrawMainPane(scope, validation), bodyHeight);
+        DrawPanel("Lines & Route", () => DrawMainPane(scope, validation), bodyHeight);
         ImGui.TableNextColumn();
-        DrawPanel("Details", () => DrawSidePane(validation), bodyHeight);
+        DrawPanel("Inspector", () => DrawSidePane(validation), bodyHeight);
         ImGui.EndTable();
     }
 
@@ -233,22 +229,11 @@ public sealed class AcquisitionWorkbenchWindow : Window
         MarketAcquisitionQuickShopScope scope,
         MarketAcquisitionQuickShopValidationResult validation)
     {
-        switch (activePane)
-        {
-            case WorkbenchPane.Build:
-                DrawQueuedLines();
-                break;
-            case WorkbenchPane.Appraise:
-                DrawAppraisePane();
-                break;
-            case WorkbenchPane.Run:
-                DrawRunPane();
-                break;
-            case WorkbenchPane.Recover:
-                DrawRecoverPane();
-                break;
-        }
-
+        DrawGlobalActions(scope, validation);
+        ImGui.Spacing();
+        DrawQueuedLines();
+        ImGui.Spacing();
+        DrawRouteOverview();
         ImGui.Spacing();
         DrawSubmit(scope, validation);
     }
@@ -273,6 +258,12 @@ public sealed class AcquisitionWorkbenchWindow : Window
         ImGui.TextColored(ColHeader, "Selected Line");
         ImGui.Separator();
         DrawSelectedLineSummary();
+        var selected = ResolveSelectedLine();
+        SyncCraftAppraisalSelection(selected);
+        DrawCraftAppraisal(selected);
+        if (selected is not null)
+            DrawSelectedLinePricingEditor(selected);
+        DrawSelectedStockInspector(selected);
     }
 
     private void DrawSelectedLineSummary()
@@ -314,12 +305,12 @@ public sealed class AcquisitionWorkbenchWindow : Window
             return;
         }
 
-        var tableHeight = MathF.Max(160f, ImGui.GetContentRegionAvail().Y - 92f);
+        var tableHeight = MathF.Min(260f, MathF.Max(160f, ImGui.GetContentRegionAvail().Y * 0.42f));
         var flags = ImGuiTableFlags.Borders |
                     ImGuiTableFlags.RowBg |
                     ImGuiTableFlags.Resizable |
                     ImGuiTableFlags.ScrollY;
-        if (!ImGui.BeginTable("AcquisitionWorkbenchQueuedLines", 6, flags, new Vector2(0, tableHeight)))
+        if (!ImGui.BeginTable("AcquisitionWorkbenchQueuedLines", 9, flags, new Vector2(0, tableHeight)))
             return;
 
         ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.WidthStretch);
@@ -327,6 +318,9 @@ public sealed class AcquisitionWorkbenchWindow : Window
         ImGui.TableSetupColumn("Qty", ImGuiTableColumnFlags.WidthFixed, 108);
         ImGui.TableSetupColumn("Max Unit", ImGuiTableColumnFlags.WidthFixed, 88);
         ImGui.TableSetupColumn("HQ", ImGuiTableColumnFlags.WidthFixed, 64);
+        ImGui.TableSetupColumn("Quote", ImGuiTableColumnFlags.WidthFixed, 112);
+        ImGui.TableSetupColumn("Stock", ImGuiTableColumnFlags.WidthFixed, 96);
+        ImGui.TableSetupColumn("Sync", ImGuiTableColumnFlags.WidthFixed, 92);
         ImGui.TableSetupColumn("", ImGuiTableColumnFlags.WidthFixed, 138);
         ImGui.TableHeadersRow();
 
@@ -349,11 +343,14 @@ public sealed class AcquisitionWorkbenchWindow : Window
             ImGui.TableNextColumn();
             ImGui.TextUnformatted(line.HqPolicy);
             ImGui.TableNextColumn();
+            ImGui.TextUnformatted(FormatQuoteState(line));
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(FormatStockState(line));
+            ImGui.TableNextColumn();
+            ImGui.TextColored(line.MaxUnitPrice > 0 ? ColSuccess : ColMuted, FormatLineSyncState(line));
+            ImGui.TableNextColumn();
             if (ImGui.SmallButton($"Select##workbenchSelect{index}"))
-            {
                 selectedLineIndex = index;
-                activePane = WorkbenchPane.Appraise;
-            }
 
             ImGui.SameLine();
             if (ImGui.SmallButton($"Duplicate##workbenchDuplicate{index}"))
@@ -366,7 +363,37 @@ public sealed class AcquisitionWorkbenchWindow : Window
         ImGui.EndTable();
     }
 
-    private void DrawRunPane()
+    private void DrawGlobalActions(
+        MarketAcquisitionQuickShopScope scope,
+        MarketAcquisitionQuickShopValidationResult validation)
+    {
+        if (ImGuiUi.Button("Appraise Missing", draft.Lines.Count > 0 && !craftAppraisal.IsFetchingCraftQuote))
+            _ = AppraiseMissingLinesAsync();
+        ImGui.SameLine();
+        if (ImGuiUi.Button("Apply Quotes", craftAppraisal.State.LineQuotes.Count > 0))
+            ApplyAllQuoteThresholds();
+        ImGui.SameLine();
+        if (ImGuiUi.Button("Check Selected Stock", ResolveSelectedLine() is { MaxUnitPrice: > 0 }))
+            _ = CheckStockAsync(forceRefresh: false);
+        ImGui.SameLine();
+        if (ImGuiUi.Button("Prepare Route", getRouteSnapshot().CanPrepare))
+            _ = prepareRoute();
+
+        if (!scope.HasScope)
+        {
+            ImGui.TextColored(
+                ColError,
+                scope.IsTemporarilyUnavailable
+                    ? "Character scope is temporarily unavailable during route travel."
+                    : "Log into a character before syncing or checking a route.");
+        }
+        else if (!validation.IsValid)
+        {
+            ImGui.TextColored(ColMuted, validation.Errors.FirstOrDefault() ?? "Route needs input.");
+        }
+    }
+
+    private void DrawRouteOverview()
     {
         var snapshot = getRouteSnapshot();
         ImGui.TextColored(GetRouteStateColor(snapshot.State), snapshot.StatusMessage);
@@ -389,20 +416,6 @@ public sealed class AcquisitionWorkbenchWindow : Window
                 $"Active world: {snapshot.ActiveWorld} - planned {snapshot.ActiveWorldPlannedQuantity:N0} item(s), {FormatGil(snapshot.ActiveWorldPlannedGil)}");
         }
 
-        DrawRunActions(snapshot);
-        ImGui.Spacing();
-        DrawRouteRows(snapshot);
-    }
-
-    private void DrawRecoverPane()
-    {
-        var snapshot = getRouteSnapshot();
-        ImGui.TextColored(GetRouteStateColor(snapshot.State), snapshot.RecoverySummary);
-        ImGui.TextWrapped(snapshot.RecoveryDetail);
-
-        ImGui.Spacing();
-        DrawRecoveryStatusTable(snapshot);
-        ImGui.Spacing();
         DrawRunActions(snapshot);
         ImGui.Spacing();
         DrawRouteRows(snapshot);
@@ -508,96 +521,6 @@ public sealed class AcquisitionWorkbenchWindow : Window
         ImGui.EndTable();
     }
 
-    private static void DrawRecoveryStatusTable(AcquisitionWorkbenchRouteSnapshot snapshot)
-    {
-        if (!ImGui.BeginTable("AcquisitionWorkbenchRecoveryStatus", 4, ImGuiTableFlags.SizingStretchSame))
-            return;
-
-        DrawRecoveryMetric("Route State", snapshot.State);
-        DrawRecoveryMetric(
-            "Prepared Plan",
-            snapshot.HasPreparedPlan
-                ? $"{snapshot.PreparedWorldCount:N0} world(s), {snapshot.PreparedQuantity:N0} item(s)"
-                : "None");
-        DrawRecoveryMetric(
-            "Completed / Probed",
-            snapshot.CompletedOrProbedWorldCount > 0
-                ? snapshot.CompletedOrProbedWorldCount.ToString("N0")
-                : "None");
-        DrawRecoveryMetric(
-            "Active World",
-            string.IsNullOrWhiteSpace(snapshot.ActiveWorld)
-                ? "None"
-                : $"{snapshot.ActiveWorld}, {snapshot.ActiveWorldPlannedQuantity:N0} item(s)");
-
-        ImGui.EndTable();
-
-        if (snapshot.LatestWorldCompletionSummary is { } latestWorld)
-        {
-            ImGui.TextColored(
-                ColMuted,
-                $"Last world: {latestWorld.WorldName} - bought {latestWorld.PurchasedQuantity:N0}, spent {FormatGil(latestWorld.SpentGil)}.");
-        }
-
-        if (snapshot.LastRunSummary is { } runSummary)
-        {
-            ImGui.TextColored(
-                ColMuted,
-                $"Last run: bought {runSummary.PurchasedQuantity:N0}, spent {FormatGil(runSummary.SpentGil)}, completed {runSummary.CompletedWorldCount:N0} world(s).");
-        }
-    }
-
-    private static void DrawRecoveryMetric(string label, string value)
-    {
-        ImGui.TableNextColumn();
-        ImGui.TextColored(ColMuted, label);
-        ImGui.TextUnformatted(value);
-    }
-
-    private void DrawAppraisePane()
-    {
-        var selected = ResolveSelectedLine();
-        SyncCraftAppraisalSelection(selected);
-        DrawLineSelector(selected);
-        DrawCraftAppraisal(selected);
-        if (selected is not null)
-            DrawSelectedLinePricingEditor(selected);
-
-        var state = selected is null ? null : GetStockState(selected);
-        var view = StockAvailabilityPanelPresenter.Build(new StockAvailabilityPanelState
-        {
-            SelectedLine = selected,
-            Result = state?.Result,
-            Source = state?.Source ?? StockAvailabilityPanelSource.None,
-            SnapshotFetchedAtUtc = state?.SnapshotFetchedAtUtc,
-            NowUtc = DateTimeOffset.UtcNow,
-            IsFetching = state?.IsFetching == true,
-            ErrorMessage = state?.ErrorMessage,
-        });
-
-        ImGui.TextColored(ToColor(view.Severity), view.Headline);
-        ImGui.TextWrapped(view.Detail);
-        if (!string.IsNullOrWhiteSpace(view.SourceLine))
-            ImGui.TextColored(ColMuted, view.SourceLine);
-
-        ImGui.Spacing();
-        var routeScopeError = ResolveStockRouteScopeError();
-        if (!string.IsNullOrWhiteSpace(routeScopeError))
-            ImGui.TextColored(ColError, routeScopeError);
-
-        var canCheck = selected is { MaxUnitPrice: > 0 } &&
-                       state?.IsFetching != true &&
-                       string.IsNullOrWhiteSpace(routeScopeError);
-        if (ImGuiUi.Button("Check Stock", canCheck))
-            _ = CheckStockAsync(forceRefresh: false);
-        ImGui.SameLine();
-        if (ImGuiUi.Button("Refresh Stock", canCheck))
-            _ = CheckStockAsync(forceRefresh: true);
-
-        ImGui.Spacing();
-        DrawEligibleListingPreview(state?.Result);
-    }
-
     private void DrawCraftAppraisal(MarketAcquisitionQuickShopLineDraft? selected)
     {
         ImGui.Spacing();
@@ -630,7 +553,12 @@ public sealed class AcquisitionWorkbenchWindow : Window
 
         ImGui.SameLine();
         if (ImGuiUi.Button("Clear Quote", craftAppraisal.State.LatestQuote is not null))
-            craftAppraisal.State.ClearQuoteEvidence();
+        {
+            if (TryBuildLineIdentity(selected, out var identity))
+                craftAppraisal.State.ClearLineQuote(identity);
+            else
+                craftAppraisal.State.ClearQuoteEvidence();
+        }
 
         ImGui.TextColored(craftAppraisal.IsFetchingCraftQuote ? ColHeader : ColMuted, craftAppraisal.State.CraftQuoteStatus);
         if (craftAppraisal.State.LatestQuote is not { })
@@ -655,6 +583,44 @@ public sealed class AcquisitionWorkbenchWindow : Window
             ImGui.TextWrapped(line);
         if (view.DiagnosticLines.Count > 8)
             ImGui.TextColored(ColMuted, $"{view.DiagnosticLines.Count - 8:N0} more diagnostic line(s) in the printout file.");
+    }
+
+    private void DrawSelectedStockInspector(MarketAcquisitionQuickShopLineDraft? selected)
+    {
+        var state = selected is null ? null : GetStockState(selected);
+        var view = StockAvailabilityPanelPresenter.Build(new StockAvailabilityPanelState
+        {
+            SelectedLine = selected,
+            Result = state?.Result,
+            Source = state?.Source ?? StockAvailabilityPanelSource.None,
+            SnapshotFetchedAtUtc = state?.SnapshotFetchedAtUtc,
+            NowUtc = DateTimeOffset.UtcNow,
+            IsFetching = state?.IsFetching == true,
+            ErrorMessage = state?.ErrorMessage,
+        });
+
+        ImGui.Spacing();
+        ImGui.TextColored(ColHeader, "Stock");
+        ImGui.Separator();
+        ImGui.TextColored(ToColor(view.Severity), view.Headline);
+        ImGui.TextWrapped(view.Detail);
+        if (!string.IsNullOrWhiteSpace(view.SourceLine))
+            ImGui.TextColored(ColMuted, view.SourceLine);
+
+        var routeScopeError = ResolveStockRouteScopeError();
+        if (!string.IsNullOrWhiteSpace(routeScopeError))
+            ImGui.TextColored(ColError, routeScopeError);
+
+        var canCheck = selected is { MaxUnitPrice: > 0 } &&
+                       state?.IsFetching != true &&
+                       string.IsNullOrWhiteSpace(routeScopeError);
+        if (ImGuiUi.Button("Check Stock", canCheck))
+            _ = CheckStockAsync(forceRefresh: false);
+        ImGui.SameLine();
+        if (ImGuiUi.Button("Refresh Stock", canCheck))
+            _ = CheckStockAsync(forceRefresh: true);
+
+        DrawEligibleListingPreview(state?.Result);
     }
 
     private void DrawSelectedLinePricingEditor(MarketAcquisitionQuickShopLineDraft selected)
@@ -693,34 +659,6 @@ public sealed class AcquisitionWorkbenchWindow : Window
         selectedPricingLineRevision = draft.DraftRevision;
         lock (stockStateGate)
             stockStates.Remove(oldStockStateKey);
-    }
-
-    private void DrawLineSelector(MarketAcquisitionQuickShopLineDraft? selected)
-    {
-        if (draft.Lines.Count == 0)
-        {
-            ImGui.TextColored(ColMuted, "No queued lines.");
-            return;
-        }
-
-        selectedLineIndex = Math.Clamp(selectedLineIndex, 0, draft.Lines.Count - 1);
-        var preview = selected is null ? "Select a line" : FormatQueuedItem(selected);
-        ImGui.TextColored(ColMuted, "Selected line");
-        ImGui.SetNextItemWidth(-1);
-        if (!ImGui.BeginCombo("##workbenchStockLine", preview))
-            return;
-
-        for (var index = 0; index < draft.Lines.Count; index++)
-        {
-            var line = draft.Lines[index];
-            var isSelected = index == selectedLineIndex;
-            if (ImGui.Selectable($"{FormatQueuedItem(line)}##workbenchStockLine{index}", isSelected))
-                selectedLineIndex = index;
-            if (isSelected)
-                ImGui.SetItemDefaultFocus();
-        }
-
-        ImGui.EndCombo();
     }
 
     private static void DrawEligibleListingPreview(StockAvailabilityResult? result)
@@ -783,28 +721,6 @@ public sealed class AcquisitionWorkbenchWindow : Window
         ImGui.SameLine();
         if (ImGuiUi.Button("Clear Draft", HasDraftInput))
             ClearDraft();
-    }
-
-    private void DrawPhaseStrip()
-    {
-        DrawPhaseButton(WorkbenchPane.Build, "Build");
-        ImGui.SameLine();
-        DrawPhaseButton(WorkbenchPane.Appraise, "Appraise");
-        ImGui.SameLine();
-        DrawPhaseButton(WorkbenchPane.Run, "Run");
-        ImGui.SameLine();
-        DrawPhaseButton(WorkbenchPane.Recover, "Recover");
-    }
-
-    private void DrawPhaseButton(WorkbenchPane pane, string label)
-    {
-        var active = activePane == pane;
-        if (active)
-            ImGui.PushStyleColor(ImGuiCol.Button, ColHeader);
-        if (ImGui.Button($"{label}##workbenchPane{pane}"))
-            activePane = pane;
-        if (active)
-            ImGui.PopStyleColor();
     }
 
     private async Task SubmitAsync()
@@ -927,6 +843,7 @@ public sealed class AcquisitionWorkbenchWindow : Window
         lock (stockStateGate)
             stockStates.Clear();
         craftAppraisal.State.UpdateSelectedLine(null);
+        craftAppraisal.State.ClearAllLineQuotes();
         ClearLineBuffers();
     }
 
@@ -981,6 +898,35 @@ public sealed class AcquisitionWorkbenchWindow : Window
     }
 
     private static string FormatGil(uint gil) => $"{gil:N0} gil";
+
+    private string FormatQuoteState(MarketAcquisitionQuickShopLineDraft line)
+    {
+        if (!TryBuildLineIdentity(line, out var identity))
+            return "Invalid";
+
+        var lineQuote = craftAppraisal.State.GetLineQuote(identity);
+        if (lineQuote?.Quote is { IsComplete: true, EstimatedUnitCost: > 0m } quote)
+            return $"{Math.Ceiling(quote.EstimatedUnitCost):N0} gil";
+
+        return lineQuote?.Status ?? "Not appraised";
+    }
+
+    private string FormatStockState(MarketAcquisitionQuickShopLineDraft line)
+    {
+        var state = GetStockState(line);
+        if (state?.IsFetching == true)
+            return "Checking";
+        if (!string.IsNullOrWhiteSpace(state?.ErrorMessage))
+            return "Error";
+        if (state?.Result is null)
+            return "Not checked";
+        return state.Result.Status == StockAvailabilityStatus.Depth
+            ? $"{state.Result.EligibleQuantity:N0} depth"
+            : $"{state.Result.EligibleQuantity:N0}/{state.Result.RequiredQuantity.GetValueOrDefault():N0}";
+    }
+
+    private static string FormatLineSyncState(MarketAcquisitionQuickShopLineDraft line) =>
+        line.MaxUnitPrice > 0 ? "Ready" : "Needs price";
 
     private MarketAcquisitionQuickShopLineDraft? ResolveSelectedLine()
     {
@@ -1177,7 +1123,52 @@ public sealed class AcquisitionWorkbenchWindow : Window
     {
         craftAppraisal.State.WorkshopHostEnabled = config.EnableWorkshopHostCraftQuotes;
         var request = CraftAppraisalWorkbenchRequestBuilder.Build(draft, selected);
-        await craftAppraisal.FetchQuoteAsync(request).ConfigureAwait(false);
+        var quote = await craftAppraisal.FetchQuoteAsync(request).ConfigureAwait(false);
+        if (TryBuildLineIdentity(selected, out var identity))
+        {
+            craftAppraisal.State.RecordLineQuote(
+                identity,
+                quote,
+                craftAppraisal.State.LastCraftQuoteDiagnosticFilePath);
+        }
+    }
+
+    private async Task AppraiseMissingLinesAsync()
+    {
+        if (craftAppraisal.IsFetchingCraftQuote)
+            return;
+
+        foreach (var line in draft.Lines)
+        {
+            if (!TryBuildLineIdentity(line, out var identity) ||
+                craftAppraisal.State.GetLineQuote(identity) is not null)
+            {
+                continue;
+            }
+
+            await FetchCraftQuoteAsync(line).ConfigureAwait(false);
+        }
+    }
+
+    private void ApplyAllQuoteThresholds()
+    {
+        for (var index = 0; index < draft.Lines.Count; index++)
+        {
+            var line = draft.Lines[index];
+            if (!TryBuildLineIdentity(line, out var identity))
+                continue;
+
+            var threshold = craftAppraisal.State.TryGetLineQuoteThreshold(identity);
+            if (threshold is null)
+                continue;
+
+            draft = AcquisitionWorkbenchDraftMutation.ApplyMaxUnitPrice(draft, index, threshold.Value);
+        }
+
+        lock (stockStateGate)
+            stockStates.Clear();
+        if (ResolveSelectedLine() is { } selected)
+            SyncSelectedPricingBuffers(selected);
     }
 
     private void ApplyQuoteThresholdToSelectedLine()
@@ -1200,6 +1191,22 @@ public sealed class AcquisitionWorkbenchWindow : Window
             SyncSelectedPricingBuffers(updatedSelected);
     }
 
+    private bool TryBuildLineIdentity(
+        MarketAcquisitionQuickShopLineDraft line,
+        out CraftAppraisalLineIdentity identity)
+    {
+        try
+        {
+            identity = CraftAppraisalWorkbenchRequestBuilder.BuildLineIdentity(draft, line);
+            return true;
+        }
+        catch
+        {
+            identity = default!;
+            return false;
+        }
+    }
+
     private void SyncCraftAppraisalSelection(MarketAcquisitionQuickShopLineDraft? selected)
     {
         if (selected is null)
@@ -1210,8 +1217,10 @@ public sealed class AcquisitionWorkbenchWindow : Window
 
         try
         {
-            craftAppraisal.State.UpdateSelectedLine(
-                CraftAppraisalWorkbenchRequestBuilder.BuildLineIdentity(draft, selected));
+            var identity = CraftAppraisalWorkbenchRequestBuilder.BuildLineIdentity(draft, selected);
+            craftAppraisal.State.UpdateSelectedLine(identity);
+            if (craftAppraisal.State.GetLineQuote(identity) is { } lineQuote)
+                craftAppraisal.State.RecordQuote(lineQuote.Quote, lineQuote.DiagnosticFilePath);
         }
         catch
         {
@@ -1228,14 +1237,6 @@ public sealed class AcquisitionWorkbenchWindow : Window
             "Completed" => ColSuccess,
             _ => ColMuted,
         };
-
-    private enum WorkbenchPane
-    {
-        Build,
-        Appraise,
-        Run,
-        Recover,
-    }
 
     private sealed record WorkbenchStockState
     {

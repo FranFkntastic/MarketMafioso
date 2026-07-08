@@ -218,14 +218,6 @@ public class MainWindow : Window, IDisposable
                 DeleteFrozenQueue,
                 SaveCurrentQueueAsNew));
         var acquisitionWorkbenchCraftAppraisal = CreateAcquisitionWorkbenchCraftAppraisalController();
-        QuickShop = new MarketAcquisitionQuickShopWindow(
-            config,
-            dataManager,
-            GetQuickShopScope,
-            IsMarketAcquisitionRouteActive,
-            () => acquisitionRequestBusy,
-            () => acquisitionStatus,
-            CreateMonitoredQuickShopRouteAsync);
         AcquisitionWorkbench = new AcquisitionWorkbenchWindow(
             config,
             dataManager,
@@ -274,7 +266,6 @@ public class MainWindow : Window, IDisposable
 
     public WorkshopProjectBrowserWindow ProjectBrowser { get; }
     public WorkshopFrozenQueueBrowserWindow FrozenQueueBrowser { get; }
-    public MarketAcquisitionQuickShopWindow QuickShop { get; }
     public AcquisitionWorkbenchWindow AcquisitionWorkbench { get; }
     public MarketAcquisitionDiagnosticsWindow AcquisitionDiagnostics { get; }
     public AutomationDiagnosticsWindow AutomationDiagnostics { get; }
@@ -722,10 +713,7 @@ public class MainWindow : Window, IDisposable
         if (!ImGui.CollapsingHeader("Advanced / Dashboard Controls##MarketAcquisitionAdvancedControls"))
             return;
 
-        ImGui.TextColored(ColMuted, "Dashboard pickup, claimed batch review, advisory plan, and guided route controls remain available for dashboard-authored requests and direct troubleshooting. The workbench is a client-native route surface, not a replacement for the web dashboard.");
-        ImGui.Spacing();
-        DrawMarketAcquisitionQuickShopSection();
-        ImGui.Spacing();
+        ImGui.TextColored(ColMuted, "Dashboard pickup, claimed batch review, advisory plan, and guided route controls remain available for dashboard-authored requests and direct troubleshooting.");
         DrawMarketAcquisitionPickupSection();
         ImGui.Spacing();
         DrawClaimedAcquisitionRequest();
@@ -781,45 +769,6 @@ public class MainWindow : Window, IDisposable
 
         if (ImGuiUi.Button("Open Acquisition Workbench##MarketAcquisitionWorkbenchLauncher", true))
             AcquisitionWorkbench.IsOpen = true;
-        ImGui.SameLine();
-        if (ImGuiUi.Button("Open Diagnostics##MarketAcquisitionWorkbenchLauncher", true))
-            AcquisitionDiagnostics.IsOpen = true;
-    }
-
-    private void DrawMarketAcquisitionQuickShopSection()
-    {
-        ImGuiUi.SectionHeader("Quick Shop", ColHeader);
-
-        var scope = GetQuickShopScope();
-        if (scope.HasScope)
-        {
-            ImGui.TextColored(ColMuted, $"Route target: {scope.CharacterName} @ {scope.World}");
-        }
-        else if (scope.IsTemporarilyUnavailable)
-        {
-            ImGui.TextColored(ColMuted, "Character scope temporarily unavailable during route travel.");
-        }
-        else
-        {
-            ImGui.TextColored(ColError, "Character scope unavailable. Log into a character before creating a quick-shop route.");
-        }
-
-        var draftLineCount = QuickShop.DraftLineCount + AcquisitionWorkbench.DraftLineCount;
-        var draftSummary = draftLineCount == 0
-            ? "No client acquisition draft is queued."
-            : $"{draftLineCount:N0} client acquisition line(s) queued.";
-        ImGui.TextColored(draftLineCount == 0 ? ColMuted : ColSuccess, draftSummary);
-
-        if (ImGuiUi.Button("Open Acquisition Workbench", true))
-            AcquisitionWorkbench.IsOpen = true;
-        ImGui.SameLine();
-        if (ImGuiUi.Button("Open Quick Shop Planner", !IsMarketAcquisitionRouteActive()))
-            QuickShop.IsOpen = true;
-
-        ImGui.SameLine();
-        ImGui.TextColored(ColMuted, IsMarketAcquisitionRouteActive()
-            ? "Guided route active."
-            : "Creates, claims, accepts, and syncs a monitored route automatically.");
     }
 
     private async Task<bool> CreateMonitoredQuickShopRouteAsync(MarketAcquisitionQuickShopDraft draft)
