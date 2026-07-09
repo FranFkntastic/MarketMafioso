@@ -149,7 +149,7 @@ public sealed class RetainerRestockBrowserPanel
             return;
         }
 
-        var previewByPlanItemId = plan.Lines.ToDictionary(line => line.PlanItemId);
+        var previewByPlanItemId = plan.Lines.ToLookup(line => line.PlanItemId);
         var flags = ImGuiUi.InteractiveTableFlags |
                     ImGuiTableFlags.ScrollY |
                     ImGuiTableFlags.ScrollX |
@@ -174,13 +174,14 @@ public sealed class RetainerRestockBrowserPanel
         for (var index = 0; index < config.RetainerRestockPlanItems.Count; index++)
         {
             var item = config.RetainerRestockPlanItems[index];
-            previewByPlanItemId.TryGetValue(item.Id, out var preview);
+            var preview = previewByPlanItemId[item.Id].FirstOrDefault();
+            var rowId = $"{item.Id:N}_{index}";
 
             ImGui.TableNextRow();
 
             ImGui.TableNextColumn();
             var enabled = item.Enabled;
-            if (ImGui.Checkbox($"##RetainerRestockPlanEnabled{item.Id}", ref enabled))
+            if (ImGui.Checkbox($"##RetainerRestockPlanEnabled{rowId}", ref enabled))
             {
                 item.Enabled = enabled;
                 saveConfig();
@@ -192,7 +193,7 @@ public sealed class RetainerRestockBrowserPanel
             ImGui.TableNextColumn();
             var desired = item.DesiredPlayerQuantity;
             ImGui.SetNextItemWidth(-1);
-            if (ImGui.InputInt($"##RetainerRestockPlanDesired{item.Id}", ref desired))
+            if (ImGui.InputInt($"##RetainerRestockPlanDesired{rowId}", ref desired))
             {
                 item.DesiredPlayerQuantity = Math.Max(1, desired);
                 saveConfig();
@@ -232,10 +233,10 @@ public sealed class RetainerRestockBrowserPanel
                     FormatStatus(preview.Status));
 
             ImGui.TableNextColumn();
-            DrawCandidatesAndNote(item, preview, mutedColor);
+            DrawCandidatesAndNote(item, preview, mutedColor, rowId);
 
             ImGui.TableNextColumn();
-            if (ImGuiUi.Button($"Remove##RetainerRestockPlanRemove{item.Id}", true))
+            if (ImGuiUi.Button($"Remove##RetainerRestockPlanRemove{rowId}", true))
             {
                 config.RetainerRestockPlanItems.RemoveAt(index);
                 saveConfig();
@@ -312,7 +313,8 @@ public sealed class RetainerRestockBrowserPanel
     private void DrawCandidatesAndNote(
         RetainerRestockPlanItem item,
         RetainerRestockPlanLine? preview,
-        Vector4 mutedColor)
+        Vector4 mutedColor,
+        string rowId)
     {
         var summary = preview is null
             ? "-"
@@ -321,7 +323,7 @@ public sealed class RetainerRestockBrowserPanel
 
         var note = item.Note ?? string.Empty;
         ImGui.SetNextItemWidth(-1);
-        if (ImGui.InputText($"##RetainerRestockPlanNote{item.Id}", ref note, 160))
+        if (ImGui.InputText($"##RetainerRestockPlanNote{rowId}", ref note, 160))
         {
             item.Note = string.IsNullOrWhiteSpace(note) ? string.Empty : note;
             saveConfig();
