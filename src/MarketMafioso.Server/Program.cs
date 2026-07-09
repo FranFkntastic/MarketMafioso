@@ -1412,7 +1412,8 @@ static bool IsKnownAcquisitionPluginRoute(HttpRequest request)
         return request.Path.Equals("/acquisition/requests/pending", StringComparison.OrdinalIgnoreCase) ||
                request.Path.Equals("/api/acquisition/requests/pending", StringComparison.OrdinalIgnoreCase) ||
                request.Path.Equals("/acquisition/batches/pending", StringComparison.OrdinalIgnoreCase) ||
-               request.Path.Equals("/api/acquisition/batches/pending", StringComparison.OrdinalIgnoreCase);
+               request.Path.Equals("/api/acquisition/batches/pending", StringComparison.OrdinalIgnoreCase) ||
+               IsAcquisitionBatchDetailPath(request.Path);
     }
 
     var path = request.Path.Value ?? string.Empty;
@@ -1434,7 +1435,24 @@ static bool IsKnownAcquisitionPluginRoute(HttpRequest request)
             path.EndsWith("/resend", StringComparison.OrdinalIgnoreCase) ||
             path.EndsWith("/progress", StringComparison.OrdinalIgnoreCase) ||
             path.EndsWith("/complete", StringComparison.OrdinalIgnoreCase) ||
-            path.EndsWith("/fail", StringComparison.OrdinalIgnoreCase));
+            path.EndsWith("/fail", StringComparison.OrdinalIgnoreCase)) ||
+           ((path.StartsWith("/acquisition/batches/", StringComparison.OrdinalIgnoreCase) ||
+             path.StartsWith("/api/acquisition/batches/", StringComparison.OrdinalIgnoreCase)) &&
+            (path.EndsWith("/purchases", StringComparison.OrdinalIgnoreCase) ||
+             (path.Contains("/lines/", StringComparison.OrdinalIgnoreCase) &&
+              path.EndsWith("/progress", StringComparison.OrdinalIgnoreCase))));
+}
+
+static bool IsAcquisitionBatchDetailPath(PathString requestPath)
+{
+    var path = requestPath.Value ?? string.Empty;
+    if (!path.StartsWith("/acquisition/batches/", StringComparison.OrdinalIgnoreCase) &&
+        !path.StartsWith("/api/acquisition/batches/", StringComparison.OrdinalIgnoreCase))
+    {
+        return false;
+    }
+
+    return path.Split('/', StringSplitOptions.RemoveEmptyEntries).Length is 3 or 4;
 }
 
 static bool HasValidApiKey(

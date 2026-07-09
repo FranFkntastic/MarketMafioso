@@ -356,8 +356,11 @@ public sealed class MarketAcquisitionRequestEndpointTests
         var client = app.CreateAuthenticatedClient();
         var claimed = await app.CreateClaimedBatchAsync(client, "line-progress-unknown");
 
-        var response = await client.PostAsJsonAsync(
+        var response = await SendWithKeyAsync(
+            client,
+            HttpMethod.Post,
             $"/marketmafioso/api/acquisition/batches/{claimed.Id}/lines/not-a-line/progress",
+            "client-secret",
             new
             {
                 claimToken = claimed.ClaimToken,
@@ -372,6 +375,29 @@ public sealed class MarketAcquisitionRequestEndpointTests
     }
 
     [Fact]
+    public async Task LineProgressRequiresApiKey()
+    {
+        using var app = await MarketAcquisitionTestApp.CreateAsync();
+        var client = app.CreateAuthenticatedClient();
+        var claimed = await app.CreateClaimedBatchAsync(client, "line-progress-api-key");
+        var line = Assert.Single(claimed.Lines);
+
+        var response = await client.PostAsJsonAsync(
+            $"/marketmafioso/api/acquisition/batches/{claimed.Id}/lines/{line.LineId}/progress",
+            new
+            {
+                claimToken = claimed.ClaimToken,
+                idempotencyKey = "line-progress-api-key-missing",
+                attemptId = "attempt-1",
+                sequence = 1,
+                status = "Running",
+                message = "Missing the plugin API key.",
+            });
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
     public async Task LineProgressUpdatesLineProjection()
     {
         using var app = await MarketAcquisitionTestApp.CreateAsync();
@@ -379,8 +405,11 @@ public sealed class MarketAcquisitionRequestEndpointTests
         var claimed = await app.CreateAcceptedBatchAsync(client, "line-progress-projection", lineCount: 2);
         var line = claimed.Lines[1];
 
-        var response = await client.PostAsJsonAsync(
+        var response = await SendWithKeyAsync(
+            client,
+            HttpMethod.Post,
             $"/marketmafioso/api/acquisition/batches/{claimed.Id}/lines/{line.LineId}/progress",
+            "client-secret",
             new
             {
                 claimToken = claimed.ClaimToken,
@@ -394,8 +423,13 @@ public sealed class MarketAcquisitionRequestEndpointTests
             });
 
         response.EnsureSuccessStatusCode();
-        var view = await client.GetFromJsonAsync<MarketAcquisitionRequestView>(
-            $"/marketmafioso/api/acquisition/batches/{claimed.Id}");
+        var viewResponse = await SendWithKeyAsync(
+            client,
+            HttpMethod.Get,
+            $"/marketmafioso/api/acquisition/batches/{claimed.Id}",
+            "client-secret");
+        viewResponse.EnsureSuccessStatusCode();
+        var view = await viewResponse.Content.ReadFromJsonAsync<MarketAcquisitionRequestView>();
 
         var updatedLine = Assert.Single(view!.Lines, l => l.LineId == line.LineId);
         Assert.Equal("Running", updatedLine.Status);
