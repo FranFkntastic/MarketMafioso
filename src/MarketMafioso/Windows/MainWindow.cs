@@ -18,8 +18,8 @@ using MarketMafioso.Automation.Travel;
 using MarketMafioso.CraftArchitectCompanion;
 using MarketMafioso.MarketAcquisition;
 using MarketMafioso.RetainerRestock;
-using MarketMafioso.Windows.ItemAutocomplete;
 using MarketMafioso.Windows.MarketAcquisitionRequestBuilder;
+using MarketMafioso.Windows.RetainerRestock;
 using MarketMafioso.WorkshopPrep;
 
 namespace MarketMafioso.Windows;
@@ -57,6 +57,8 @@ public class MainWindow : Window, IDisposable
     private readonly MarketBoardAutomationController marketBoardAutomationController = new();
     private readonly string marketAcquisitionRouteDiagnosticsDirectory;
     private readonly MarketAcquisitionRequestBuilderPanel acquisitionRequestBuilder;
+    private readonly RetainerRestockBrowserState restockBrowserState = new();
+    private readonly RetainerRestockBrowserPanel restockBrowser;
 
     private string urlBuffer = string.Empty;
     private string apiKeyBuffer = string.Empty;
@@ -101,10 +103,6 @@ public class MainWindow : Window, IDisposable
     private Guid? selectedFrozenQueueId;
     private string frozenQueueNameInput = string.Empty;
     private string workshopStatus = "Workshop prep queue is idle.";
-    private readonly IReadOnlyList<AcquisitionItemOption> restockItemOptions;
-    private readonly ItemAutocompleteState restockItemAutocomplete = new();
-    private int restockDesiredQuantity = 1;
-    private bool confirmClearRetainerRestockPlan = false;
 
     private const string ProductSummary = "Workshop logistics and self-hosted inventory history.";
     private const string InventoryModuleSummary = "Inventory Reporter exports character and retainer inventory snapshots as JSON.";
@@ -205,7 +203,7 @@ public class MainWindow : Window, IDisposable
 
         urlBuffer = config.ServerUrl;
         apiKeyBuffer = config.ApiKey;
-        restockItemOptions = ItemAutocompleteControl.LoadItemOptions(dataManager);
+        restockBrowser = new RetainerRestockBrowserPanel(config, restockBrowserState, config.Save);
         ProjectBrowser = new WorkshopProjectBrowserWindow(
             config,
             workshopCatalog,
@@ -397,203 +395,17 @@ public class MainWindow : Window, IDisposable
         ImGui.TextWrapped("Build a local plan and pull matching items from cached retainers.");
         ImGui.Spacing();
 
-        var plan = GetRetainerRestockPlan();
-        DrawRetainerRestockEditor();
-        ImGui.Spacing();
-        DrawRetainerRestockPreview(plan);
+        var playerBags = scanner.ScanPlayerInventory(config);
+        var plan = GetRetainerRestockPlan(playerBags);
+        var stockRows = RetainerRestockStockCatalog.Build(
+            playerBags,
+            config,
+            DateTime.UtcNow,
+            GetCurrentRetainerOwnerScope());
+
+        restockBrowser.Draw(stockRows, plan, ColHeader, ColSuccess, ColError, ColMuted);
         ImGui.Spacing();
         DrawRetainerRestockControls(plan);
-    }
-
-    private void DrawRetainerRestockEditor()
-    {
-        ImGuiUi.SectionHeaderWithActions("Plan Editor", ColHeader, DrawRetainerRestockEditorActions, 150);
-
-        if (config.RetainerRestockPlanItems.Count == 0)
-            ImGui.TextColored(ColMuted, "No restock rows yet.");
-
-        if (ImGui.BeginTable("RetainerRestockRows", 5, ImGuiUi.InteractiveTableFlags))
-        {
-            ImGui.TableSetupColumn("Enabled", ImGuiTableColumnFlags.WidthFixed, 72);
-            ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.WidthStretch);
-            ImGui.TableSetupColumn("Desired", ImGuiTableColumnFlags.WidthFixed, 88);
-            ImGui.TableSetupColumn("Note", ImGuiTableColumnFlags.WidthStretch);
-            ImGui.TableSetupColumn("Action", ImGuiTableColumnFlags.WidthFixed, 84);
-            ImGui.TableHeadersRow();
-
-            for (var index = 0; index < config.RetainerRestockPlanItems.Count; index++)
-            {
-                var row = config.RetainerRestockPlanItems[index];
-                ImGui.TableNextRow();
-
-                ImGui.TableNextColumn();
-                var enabled = row.Enabled;
-                if (ImGui.Checkbox($"##retainerRestockEnabled{row.Id}", ref enabled))
-                {
-                    row.Enabled = enabled;
-                    config.Save();
-                }
-
-                ImGui.TableNextColumn();
-                ImGui.TextUnformatted(string.IsNullOrWhiteSpace(row.ItemName) ? $"Item {row.ItemId}" : row.ItemName);
-
-                ImGui.TableNextColumn();
-                var desired = row.DesiredPlayerQuantity;
-                ImGui.SetNextItemWidth(72);
-                if (ImGui.InputInt($"##retainerRestockDesired{row.Id}", ref desired))
-                {
-                    row.DesiredPlayerQuantity = Math.Max(1, desired);
-                    config.Save();
-                }
-
-                ImGui.TableNextColumn();
-                var note = row.Note ?? string.Empty;
-                ImGui.SetNextItemWidth(-1);
-                if (ImGui.InputText($"##retainerRestockNote{row.Id}", ref note, 160))
-                {
-                    row.Note = note;
-                    config.Save();
-                }
-
-                ImGui.TableNextColumn();
-                if (ImGuiUi.Button($"Remove##retainerRestockRemove{row.Id}", true))
-                {
-                    config.RetainerRestockPlanItems.RemoveAt(index);
-                    config.Save();
-                    index--;
-                }
-            }
-
-            ImGui.EndTable();
-        }
-    }
-
-    private void DrawRetainerRestockEditorActions()
-    {
-        if (ImGuiUi.Button("Add Item", true))
-            ImGui.OpenPopup("RetainerRestockAddItemPopup");
-
-        ImGui.SameLine();
-        if (ImGuiUi.Button("Clear Plan", config.RetainerRestockPlanItems.Count > 0))
-            confirmClearRetainerRestockPlan = true;
-
-        if (confirmClearRetainerRestockPlan)
-        {
-            ImGui.SameLine();
-            if (ImGuiUi.Button("Confirm Clear", config.RetainerRestockPlanItems.Count > 0))
-            {
-                config.RetainerRestockPlanItems.Clear();
-                config.Save();
-                confirmClearRetainerRestockPlan = false;
-            }
-        }
-
-        if (ImGui.BeginPopup("RetainerRestockAddItemPopup"))
-        {
-            ItemAutocompleteControl.Draw(
-                "RetainerRestock",
-                restockItemOptions,
-                restockItemAutocomplete,
-                null,
-                ColMuted,
-                ColSuccess,
-                ColError);
-
-            ImGui.TextColored(ColMuted, "Desired player quantity");
-            ImGui.SetNextItemWidth(120);
-            ImGui.InputInt("##retainerRestockNewDesired", ref restockDesiredQuantity);
-            restockDesiredQuantity = Math.Max(1, restockDesiredQuantity);
-
-            var selected = ItemAutocompletePresenter.ResolveSelectedItem(
-                restockItemOptions,
-                restockItemAutocomplete.SearchBuffer,
-                restockItemAutocomplete.SelectedItem);
-            var canAdd = selected is not null && restockDesiredQuantity > 0;
-            if (ImGuiUi.Button("Add To Plan", canAdd))
-            {
-                AddRetainerRestockPlanItem(selected!, restockDesiredQuantity);
-                ImGui.CloseCurrentPopup();
-            }
-
-            ImGui.EndPopup();
-        }
-    }
-
-    private void AddRetainerRestockPlanItem(AcquisitionItemOption selected, int desiredQuantity)
-    {
-        var existing = config.RetainerRestockPlanItems.FirstOrDefault(x => x.ItemId == selected.ItemId);
-        if (existing is not null)
-        {
-            existing.ItemName = selected.Name;
-            existing.DesiredPlayerQuantity = desiredQuantity;
-            existing.Enabled = true;
-        }
-        else
-        {
-            config.RetainerRestockPlanItems.Add(new RetainerRestockPlanItem
-            {
-                ItemId = selected.ItemId,
-                ItemName = selected.Name,
-                DesiredPlayerQuantity = desiredQuantity,
-                Enabled = true,
-            });
-        }
-
-        config.Save();
-        restockItemAutocomplete.SearchBuffer = string.Empty;
-        restockItemAutocomplete.SelectedItem = null;
-        restockDesiredQuantity = 1;
-    }
-
-    private void DrawRetainerRestockPreview(RetainerRestockPlan plan)
-    {
-        ImGui.TextColored(ColHeader, "Preview");
-        ImGui.Separator();
-
-        if (plan.Lines.Count == 0)
-        {
-            ImGui.TextColored(ColMuted, "Add enabled item rows to preview retainer coverage.");
-            return;
-        }
-
-        if (ImGui.BeginTable("RetainerRestockPreview", 9, ImGuiUi.InteractiveTableFlags))
-        {
-            ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.WidthStretch);
-            ImGui.TableSetupColumn("Desired", ImGuiTableColumnFlags.WidthFixed, 72);
-            ImGui.TableSetupColumn("Player", ImGuiTableColumnFlags.WidthFixed, 72);
-            ImGui.TableSetupColumn("Need", ImGuiTableColumnFlags.WidthFixed, 72);
-            ImGui.TableSetupColumn("Retainers", ImGuiTableColumnFlags.WidthFixed, 88);
-            ImGui.TableSetupColumn("Missing", ImGuiTableColumnFlags.WidthFixed, 80);
-            ImGui.TableSetupColumn("Cache Age", ImGuiTableColumnFlags.WidthFixed, 96);
-            ImGui.TableSetupColumn("Status", ImGuiTableColumnFlags.WidthFixed, 112);
-            ImGui.TableSetupColumn("Candidates", ImGuiTableColumnFlags.WidthStretch);
-            ImGui.TableHeadersRow();
-
-            foreach (var line in plan.Lines)
-            {
-                ImGui.TableNextRow();
-                ImGui.TableNextColumn();
-                ImGui.TextUnformatted(line.ItemName);
-                ImGui.TableNextColumn();
-                ImGui.TextUnformatted(line.DesiredPlayerQuantity.ToString());
-                ImGui.TableNextColumn();
-                ImGui.TextUnformatted(line.PlayerQuantity.ToString());
-                ImGui.TableNextColumn();
-                ImGui.TextColored(line.NeededQuantity > 0 ? ColError : ColSuccess, line.NeededQuantity.ToString());
-                ImGui.TableNextColumn();
-                ImGui.TextUnformatted(line.CachedRetainerQuantity.ToString());
-                ImGui.TableNextColumn();
-                ImGui.TextColored(line.MissingQuantity > 0 ? ColError : ColSuccess, line.MissingQuantity.ToString());
-                ImGui.TableNextColumn();
-                ImGui.TextColored(line.OldestRelevantCacheAge is null ? ColMuted : ColHeader, FormatRetainerRestockCacheAge(line.OldestRelevantCacheAge));
-                ImGui.TableNextColumn();
-                ImGui.TextColored(GetRetainerRestockStatusColor(line.Status), FormatRetainerRestockStatus(line.Status));
-                ImGui.TableNextColumn();
-                ImGui.TextUnformatted(FormatRetainerRestockCandidates(line.Candidates));
-            }
-
-            ImGui.EndTable();
-        }
     }
 
     private void DrawRetainerRestockControls(RetainerRestockPlan plan)
@@ -640,56 +452,22 @@ public class MainWindow : Window, IDisposable
             $"Cached retainers for {ownerScope.CharacterName} @ {ownerScope.HomeWorld}: {scopedRetainers.Count}; newest {newest:HH:mm:ss UTC}; oldest {oldest:HH:mm:ss UTC}.");
     }
 
-    private RetainerRestockPlan GetRetainerRestockPlan()
+    private RetainerRestockPlan GetRetainerRestockPlan(IReadOnlyList<InventoryBag>? playerBags = null)
     {
-        var playerInventory = scanner.CountPlayerInventory(config);
+        var playerInventory = playerBags is null
+            ? scanner.CountPlayerInventory(config)
+            : playerBags
+                .SelectMany(bag => bag.Items)
+                .Where(item => item.ItemId > 0 && item.Quantity > 0)
+                .GroupBy(item => item.ItemId)
+                .ToDictionary(group => group.Key, group => group.Sum(item => (int)item.Quantity));
+
         return RetainerRestockPlanner.BuildPlan(
             config.RetainerRestockPlanItems,
             playerInventory,
             config,
             DateTime.UtcNow,
             GetCurrentRetainerOwnerScope());
-    }
-
-    private static string FormatRetainerRestockStatus(RetainerRestockPlanLineStatus status)
-    {
-        return status switch
-        {
-            RetainerRestockPlanLineStatus.NoNeed => "No need",
-            RetainerRestockPlanLineStatus.Ready => "Ready",
-            RetainerRestockPlanLineStatus.Partial => "Partial",
-            RetainerRestockPlanLineStatus.NoCachedStock => "No cached stock",
-            _ => status.ToString(),
-        };
-    }
-
-    private static string FormatRetainerRestockCacheAge(TimeSpan? age)
-    {
-        if (age is null)
-            return "-";
-
-        if (age.Value.TotalHours >= 1)
-            return $"{age.Value.TotalHours:0.0}h";
-
-        return $"{Math.Max(0, age.Value.TotalMinutes):0}m";
-    }
-
-    private static string FormatRetainerRestockCandidates(IReadOnlyList<RetainerRestockCandidate> candidates)
-    {
-        return candidates.Count == 0
-            ? "-"
-            : string.Join(", ", candidates.Select(x => $"{x.RetainerName} x{x.CachedQuantity}"));
-    }
-
-    private static Vector4 GetRetainerRestockStatusColor(RetainerRestockPlanLineStatus status)
-    {
-        return status switch
-        {
-            RetainerRestockPlanLineStatus.NoNeed or RetainerRestockPlanLineStatus.Ready => ColSuccess,
-            RetainerRestockPlanLineStatus.Partial => ColHeader,
-            RetainerRestockPlanLineStatus.NoCachedStock => ColError,
-            _ => ColMuted,
-        };
     }
 
     private void DrawMarketAcquisitionTab()
