@@ -10,6 +10,7 @@ using System.Threading.Tasks;
 using Dalamud.Interface.Windowing;
 using Dalamud.Plugin.Services;
 using Dalamud.Bindings.ImGui;
+using FFXIVClientStructs.FFXIV.Client.UI;
 using FFXIVClientStructs.FFXIV.Component.GUI;
 using MarketMafioso.Automation.Diagnostics;
 using MarketMafioso.Automation.Retainers;
@@ -46,6 +47,7 @@ public class MainWindow : Window, IDisposable
     private readonly MarketAcquisitionWorldVisitCatalog marketAcquisitionWorldVisitCatalog;
     private readonly MarketAcquisitionPlanPreparationService marketAcquisitionPlanPreparationService;
     private readonly MarketBoardListingReader marketBoardListingReader;
+    private readonly MarketBoardListingReadAccumulator marketBoardListingReadAccumulator = new();
     private readonly MarketBoardItemSearchDriver marketBoardItemSearchDriver;
     private readonly MarketBoardInputCaptureReader marketBoardInputCaptureReader;
     private readonly DalamudMarketBoardPurchaseAdapter marketBoardPurchaseAdapter;
@@ -1406,7 +1408,8 @@ public class MainWindow : Window, IDisposable
             }
         }
 
-        var freshRead = marketBoardListingReader.ReadCurrentListings(currentWorld);
+        var freshRead = marketBoardListingReadAccumulator.Merge(
+            marketBoardListingReader.ReadCurrentListings(currentWorld));
         marketBoardReadResult = freshRead;
         if (!freshRead.Status.Equals("Ready", StringComparison.OrdinalIgnoreCase))
         {
@@ -1438,6 +1441,9 @@ public class MainWindow : Window, IDisposable
                 freshRead,
                 candidatePurchaseTotals.PurchasedQuantity,
                 candidatePurchaseTotals.SpentGil);
+        if (TryContinueVisibleListingRead(currentWorld, freshRead, marketAcquisitionLiveCandidatePlan))
+            return;
+
         var purchaseResult = marketBoardPurchaseExecutor.ExecuteFirstCandidate(
             marketAcquisitionLiveCandidatePlan,
             freshRead);
@@ -1559,6 +1565,7 @@ public class MainWindow : Window, IDisposable
 
     private void ClearMarketBoardAutomationState()
     {
+        marketBoardListingReadAccumulator.Clear();
         marketBoardAutomationController.Clear();
     }
 
@@ -2169,7 +2176,8 @@ public class MainWindow : Window, IDisposable
         var currentWorld = GetCurrentWorldName();
         marketBoardReconciliation = null;
         marketAcquisitionLiveCandidatePlan = null;
-        marketBoardReadResult = marketBoardListingReader.ReadCurrentListings(currentWorld);
+        marketBoardReadResult = marketBoardListingReadAccumulator.Merge(
+            marketBoardListingReader.ReadCurrentListings(currentWorld));
 
         var canBuildLiveCandidatePlan = marketBoardReadResult.Status is "Ready" or "NoListings";
         marketBoardReconciliation = marketBoardReadResult.Status == "Ready"
@@ -2214,6 +2222,12 @@ public class MainWindow : Window, IDisposable
                     liveCandidatePurchaseTotals.PurchasedQuantity,
                     liveCandidatePurchaseTotals.SpentGil)
             : null;
+        if (marketAcquisitionLiveCandidatePlan != null &&
+            TryContinueVisibleListingRead(currentWorld, marketBoardReadResult, marketAcquisitionLiveCandidatePlan))
+        {
+            return;
+        }
+
         var guidedRouteResult = marketAcquisitionRouteRunner.IsRunning &&
                                 marketAcquisitionRouteRunner.ActiveStop is { Status: "Arrived" } &&
                                 marketAcquisitionLiveCandidatePlan != null
@@ -2229,6 +2243,55 @@ public class MainWindow : Window, IDisposable
         {
             acquisitionStatus = $"{acquisitionStatus} Route: {guidedRouteResult.Message}";
         }
+    }
+
+    private bool TryContinueVisibleListingRead(
+        string currentWorld,
+        MarketBoardReadResult readResult,
+        MarketAcquisitionLiveCandidatePlan candidatePlan)
+    {
+        if (!marketAcquisitionRouteRunner.IsRunning ||
+            !marketBoardListingReadAccumulator.TryBeginContinuation(readResult, candidatePlan, out var continuation))
+        {
+            return false;
+        }
+
+        if (!TryScrollMarketBoardListingsToRow(continuation.RequestedRow, out var scrollMessage))
+            return false;
+
+        var message = $"{continuation.Message} {scrollMessage}";
+        acquisitionStatus = message;
+        var pending = marketAcquisitionRouteRunner.RecordListingReadPending(
+            currentWorld,
+            readResult with { Message = message });
+        if (!pending.Success)
+            acquisitionStatus = pending.Message;
+
+        nextGuidedRouteMonitorUtc = DateTimeOffset.UtcNow.AddMilliseconds(500);
+        return true;
+    }
+
+    private static unsafe bool TryScrollMarketBoardListingsToRow(int requestedRow, out string message)
+    {
+        var addon = Plugin.GameGui.GetAddonByName<AddonItemSearchResult>("ItemSearchResult", 1);
+        var probe = MarketBoardListingListProbe.Probe(addon, requestedRow);
+        if (!probe.IsReady || probe.ComponentId == null)
+        {
+            message = $"Unable to request deeper market-board listings. {probe.Diagnostic}";
+            return false;
+        }
+
+        var listingList = addon->AtkUnitBase.GetComponentListById(probe.ComponentId.Value);
+        if (listingList == null)
+        {
+            message = $"Unable to request deeper market-board listings; list component {probe.ComponentId.Value} disappeared.";
+            return false;
+        }
+
+        var row = (short)Math.Clamp(requestedRow, 0, short.MaxValue);
+        listingList->ScrollToItem(row);
+        message = $"Requested market-board listing row {requestedRow:N0}. {probe.Diagnostic}";
+        return true;
     }
 
     private void RecordMarketAcquisitionProbeVisit(
@@ -2367,10 +2430,10 @@ public class MainWindow : Window, IDisposable
         ImGui.TableNextColumn();
         ImGui.TextColored(ColMuted, "Start");
         if (ImGuiUi.Button("Start Route##MarketAcquisitionStartRoute", canStart))
-            _ = StartGuidedRouteAsync(enableDiagnostics: false);
+            _ = StartGuidedRouteAsync(forceDiagnostics: false);
         ImGui.SameLine();
         if (ImGuiUi.Button("Diagnostics##MarketAcquisitionStartDiagnostics", canStart))
-            _ = StartGuidedRouteAsync(enableDiagnostics: true);
+            _ = StartGuidedRouteAsync(forceDiagnostics: true);
 
         ImGui.TableNextColumn();
         ImGui.TextColored(ColMuted, "Control");
@@ -2602,7 +2665,7 @@ public class MainWindow : Window, IDisposable
     private static string GetGuidedRouteStopKey(MarketAcquisitionRouteStopRow row) =>
         $"{row.WorldName}|{row.DataCenter}";
 
-    private Task StartGuidedRouteAsync(bool enableDiagnostics)
+    private Task StartGuidedRouteAsync(bool forceDiagnostics)
     {
         return RunAcquisitionRequestAsync(async token =>
         {
@@ -2611,6 +2674,9 @@ public class MainWindow : Window, IDisposable
             var claimed = claimedAcquisitionRequest ??
                           throw new InvalidOperationException("No dashboard request is accepted.");
             await EnsureRouteReportableClaimAsync(claimed, token).ConfigureAwait(false);
+            var enableDiagnostics = MarketAcquisitionRouteDiagnosticsPolicy.ShouldCreatePackage(
+                config.CreateMarketAcquisitionRouteDiagnosticPackages,
+                forceDiagnostics);
             marketAcquisitionRouteRunner.Start(
                 plan,
                 enableDiagnostics,
@@ -4145,6 +4211,18 @@ public class MainWindow : Window, IDisposable
         ImGui.TextColored(
             ColMuted,
             "Default on. While already on a world, MarketMafioso checks other unfinished items from the same claimed batch.");
+
+        ImGui.Spacing();
+        var createRouteDiagnostics = config.CreateMarketAcquisitionRouteDiagnosticPackages;
+        if (ImGui.Checkbox("Create route diagnostic packages", ref createRouteDiagnostics))
+        {
+            config.CreateMarketAcquisitionRouteDiagnosticPackages = createRouteDiagnostics;
+            config.Save();
+        }
+
+        ImGui.TextColored(
+            ColMuted,
+            "When enabled, every guided route writes route.log plus observed-listings and purchase-record CSVs.");
 
         ImGui.Spacing();
         var recentWorldTtlHours = config.MarketAcquisitionRecentWorldTtlHours;
