@@ -205,6 +205,90 @@ public sealed class DashboardAccountAuthTests
     }
 
     [Fact]
+    public async Task DashboardSession_AllowsPluginBatchReadWithApiKeyUnderBasePath()
+    {
+        await using var application = CreateApplication(
+            new KeyValuePair<string, string?>("MarketMafioso:RequireApiKey", "true"),
+            new KeyValuePair<string, string?>("MarketMafioso:ClientApiKey", "client-secret"),
+            new KeyValuePair<string, string?>("MarketMafioso:BasePath", "/marketmafioso"));
+        using var client = application.CreateClient();
+        var accepted = await application.CreateAcceptedBatchAsync(client, "dashboard-session-batch-read");
+
+        var response = await MarketAcquisitionTestApp.SendWithKeyAsync(
+            client,
+            HttpMethod.Get,
+            $"/marketmafioso/api/acquisition/batches/{accepted.Id}");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task DashboardSession_AllowsPluginBatchLineProgressWithApiKeyUnderBasePath()
+    {
+        await using var application = CreateApplication(
+            new KeyValuePair<string, string?>("MarketMafioso:RequireApiKey", "true"),
+            new KeyValuePair<string, string?>("MarketMafioso:ClientApiKey", "client-secret"),
+            new KeyValuePair<string, string?>("MarketMafioso:BasePath", "/marketmafioso"));
+        using var client = application.CreateClient();
+        var accepted = await application.CreateAcceptedBatchAsync(client, "dashboard-session-line-progress");
+        var line = Assert.Single(accepted.Lines);
+
+        var response = await MarketAcquisitionTestApp.SendWithKeyAsync(
+            client,
+            HttpMethod.Post,
+            $"/marketmafioso/api/acquisition/batches/{accepted.Id}/lines/{line.LineId}/progress",
+            new
+            {
+                claimToken = accepted.ClaimToken,
+                idempotencyKey = "dashboard-session-line-progress-1",
+                attemptId = "attempt-1",
+                sequence = 1,
+                status = "Running",
+                message = "Line progress reached the server.",
+            });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task DashboardSession_AllowsPluginBatchPurchaseAuditWithApiKeyUnderBasePath()
+    {
+        await using var application = CreateApplication(
+            new KeyValuePair<string, string?>("MarketMafioso:RequireApiKey", "true"),
+            new KeyValuePair<string, string?>("MarketMafioso:ClientApiKey", "client-secret"),
+            new KeyValuePair<string, string?>("MarketMafioso:BasePath", "/marketmafioso"));
+        using var client = application.CreateClient();
+        var accepted = await application.CreateAcceptedBatchAsync(client, "dashboard-session-purchase-audit");
+        var line = Assert.Single(accepted.Lines);
+
+        var response = await MarketAcquisitionTestApp.SendWithKeyAsync(
+            client,
+            HttpMethod.Post,
+            $"/marketmafioso/api/acquisition/batches/{accepted.Id}/purchases",
+            new
+            {
+                claimToken = accepted.ClaimToken,
+                idempotencyKey = "dashboard-session-purchase-audit-1",
+                attemptId = "attempt-1",
+                sequence = 1,
+                lineId = line.LineId,
+                worldName = "Gilgamesh",
+                itemId = line.ItemId,
+                itemName = line.ItemName,
+                listingId = "listing-1",
+                retainerName = "Retainer",
+                retainerId = "retainer-1",
+                quantity = 1,
+                unitPrice = 99,
+                totalGil = 99,
+                isHq = false,
+                result = "Purchased",
+            });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
     public async Task DashboardSession_StopsWorkingWhenUserIsDisabled()
     {
         var values = CreateApplicationValues();

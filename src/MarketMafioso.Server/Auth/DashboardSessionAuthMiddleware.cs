@@ -96,6 +96,13 @@ public sealed class DashboardSessionAuthMiddleware
             return true;
         }
 
+        if (HttpMethods.IsGet(request.Method) &&
+            request.Headers.ContainsKey("X-Api-Key") &&
+            IsApiBatchDetailPath(request.Path))
+        {
+            return true;
+        }
+
         if (HttpMethods.IsPut(request.Method) &&
             request.Headers.ContainsKey("X-Api-Key") &&
             request.Path.StartsWithSegments("/api/acquisition/batches", StringComparison.OrdinalIgnoreCase))
@@ -106,14 +113,32 @@ public sealed class DashboardSessionAuthMiddleware
         if (!HttpMethods.IsPost(request.Method))
             return false;
 
-        return request.Path.Value?.Contains("/claim", StringComparison.OrdinalIgnoreCase) == true ||
-               request.Path.Value?.Contains("/accept", StringComparison.OrdinalIgnoreCase) == true ||
-               request.Path.Value?.Contains("/reject", StringComparison.OrdinalIgnoreCase) == true ||
-               request.Path.Value?.Contains("/progress", StringComparison.OrdinalIgnoreCase) == true ||
-               request.Path.Value?.Contains("/complete", StringComparison.OrdinalIgnoreCase) == true ||
-               request.Path.Value?.Contains("/fail", StringComparison.OrdinalIgnoreCase) == true ||
+        var path = request.Path.Value ?? string.Empty;
+        if (path.StartsWith("/api/acquisition/batches/", StringComparison.OrdinalIgnoreCase))
+        {
+            return request.Headers.ContainsKey("X-Api-Key") &&
+                   (path.EndsWith("/purchases", StringComparison.OrdinalIgnoreCase) ||
+                    (path.Contains("/lines/", StringComparison.OrdinalIgnoreCase) &&
+                     path.EndsWith("/progress", StringComparison.OrdinalIgnoreCase)));
+        }
+
+        return path.Contains("/claim", StringComparison.OrdinalIgnoreCase) ||
+               path.Contains("/accept", StringComparison.OrdinalIgnoreCase) ||
+               path.Contains("/reject", StringComparison.OrdinalIgnoreCase) ||
+               path.Contains("/progress", StringComparison.OrdinalIgnoreCase) ||
+               path.Contains("/complete", StringComparison.OrdinalIgnoreCase) ||
+               path.Contains("/fail", StringComparison.OrdinalIgnoreCase) ||
                (request.Headers.ContainsKey("X-Api-Key") &&
-                (request.Path.Value?.Contains("/cancel", StringComparison.OrdinalIgnoreCase) == true ||
-                 request.Path.Value?.Contains("/resend", StringComparison.OrdinalIgnoreCase) == true));
+                (path.Contains("/cancel", StringComparison.OrdinalIgnoreCase) ||
+                 path.Contains("/resend", StringComparison.OrdinalIgnoreCase)));
+    }
+
+    private static bool IsApiBatchDetailPath(PathString path)
+    {
+        var value = path.Value ?? string.Empty;
+        if (!value.StartsWith("/api/acquisition/batches/", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        return value.Split('/', StringSplitOptions.RemoveEmptyEntries).Length == 4;
     }
 }
