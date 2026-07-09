@@ -76,6 +76,9 @@ public sealed class RetainerRestockBrowserPanel
         if (ImGui.Checkbox("Retainers##RetainerRestockShowRetainers", ref showRetainerStock))
             state.ShowRetainerStock = showRetainerStock;
 
+        ImGui.SameLine();
+        DrawVisibleRowLimitSelector();
+
         var filteredRows = state.FilterRows(stockRows);
         ImGui.SameLine();
         ImGui.TextColored(
@@ -130,6 +133,25 @@ public sealed class RetainerRestockBrowserPanel
         }
 
         ImGui.EndTable();
+    }
+
+    private void DrawVisibleRowLimitSelector()
+    {
+        ImGui.SetNextItemWidth(84);
+        if (!ImGui.BeginCombo("Rows##RetainerRestockVisibleRows", state.VisibleRowLimit.ToString(CultureInfo.InvariantCulture)))
+            return;
+
+        foreach (var option in RetainerRestockBrowserState.VisibleRowLimitOptions)
+        {
+            var isSelected = state.VisibleRowLimit == option;
+            if (ImGui.Selectable(option.ToString(CultureInfo.InvariantCulture), isSelected))
+                state.VisibleRowLimit = option;
+
+            if (isSelected)
+                ImGui.SetItemDefaultFocus();
+        }
+
+        ImGui.EndCombo();
     }
 
     private void DrawPlanQueue(

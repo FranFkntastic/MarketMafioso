@@ -7,9 +7,12 @@ namespace MarketMafioso.Windows.RetainerRestock;
 
 public sealed class RetainerRestockBrowserState
 {
+    public static readonly int[] VisibleRowLimitOptions = [25, 50, 100, 250];
+
     public string SearchText { get; set; } = string.Empty;
     public bool ShowPlayerStock { get; set; } = true;
     public bool ShowRetainerStock { get; set; } = true;
+    public int VisibleRowLimit { get; set; } = 25;
     public RetainerRestockStockRow? SelectedStockRow { get; private set; }
     public Guid? SelectedPlanItemId { get; set; }
     public string StagedDesiredQuantityText { get; set; } = string.Empty;
@@ -59,7 +62,10 @@ public sealed class RetainerRestockBrowserState
                 (ShowRetainerStock && row.RetainerQuantity > 0))
             .ToList();
 
-        return RetainerRestockStockCatalog.Search(filteredRows, SearchText);
+        return RetainerRestockStockCatalog.Search(
+            filteredRows,
+            SearchText,
+            Math.Max(1, VisibleRowLimit));
     }
 
     public bool ApplyStagedItem(IList<RetainerRestockPlanItem> planItems)

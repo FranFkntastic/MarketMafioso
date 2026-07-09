@@ -132,6 +132,22 @@ public sealed class RetainerRestockBrowserStateTests
         Assert.Equal("Fire Shard", result.ItemName);
     }
 
+    [Fact]
+    public void FilterRows_UsesConfigurableVisibleRowLimitWithSmallerDefault()
+    {
+        var state = new RetainerRestockBrowserState();
+        var rows = Enumerable
+            .Range(1, 80)
+            .Select(index => Row((uint)index, $"Item {index:000}"))
+            .ToList();
+
+        Assert.Equal(25, state.FilterRows(rows).Count);
+
+        state.VisibleRowLimit = 50;
+
+        Assert.Equal(50, state.FilterRows(rows).Count);
+    }
+
     private static RetainerRestockStockRow Row(
         uint itemId,
         string itemName,
