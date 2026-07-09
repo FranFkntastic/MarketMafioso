@@ -95,7 +95,7 @@ public sealed class MarketAcquisitionRequestBuilderPanel
     {
         EnsureCharacterScope(context);
 
-        ImGuiUi.SectionHeader("Request Builder", MainWindow.ColHeader);
+        ImGuiUi.SectionHeader("Local Request", MainWindow.ColHeader);
         DrawStatusSummary(context);
         ImGui.Spacing();
         DrawRouteScope(context);
@@ -150,7 +150,7 @@ public sealed class MarketAcquisitionRequestBuilderPanel
 
         ImGui.TextColored(GetSyncStatusColor(), FormatBuilderStatus(context));
         if (pendingRemoteDocument is not null)
-            ImGui.TextColored(MainWindow.ColHeader, "Remote request changed. Review local lines, then adopt remote or update request.");
+            ImGui.TextColored(MainWindow.ColHeader, "Server copy changed. Review local lines, then load the server copy or save your local edits.");
         if (context.IsRouteActive)
             ImGui.TextColored(MainWindow.ColMuted, "Request replacement is disabled while a guided route is active.");
     }
@@ -594,22 +594,21 @@ public sealed class MarketAcquisitionRequestBuilderPanel
                       !context.IsRouteActive &&
                       context.HasCharacterScope &&
                       document.Lines.Count > 0;
-        var syncLabel = string.IsNullOrWhiteSpace(document.RemoteRequestId) ? "Save Request" : "Update Request";
+        var syncLabel = string.IsNullOrWhiteSpace(document.RemoteRequestId) ? "Save Request" : "Save Changes";
 
         ImGui.TextColored(MainWindow.ColHeader, "Request");
         if (ImGuiUi.Button($"{syncLabel}##AcquisitionRequestBuilderSync", canSync))
             _ = SyncAsync(context);
 
         ImGui.SameLine();
-        if (ImGuiUi.Button("Reload Saved##AcquisitionRequestBuilderRefresh", !busy && !string.IsNullOrWhiteSpace(document.RemoteRequestId)))
+        if (ImGuiUi.Button("Check Server##AcquisitionRequestBuilderRefresh", !busy && !string.IsNullOrWhiteSpace(document.RemoteRequestId)))
             _ = RefreshAsync();
 
-        ImGui.SameLine();
-        if (ImGuiUi.Button("Use Server Copy##AcquisitionRequestBuilderAdoptRemote", !busy && pendingRemoteDocument is not null))
+        if (ImGuiUi.Button("Load Server Copy##AcquisitionRequestBuilderAdoptRemote", !busy && pendingRemoteDocument is not null))
             AdoptRemote();
 
         ImGui.SameLine();
-        if (ImGuiUi.Button("Clear Draft##AcquisitionRequestBuilderClear", !busy && !context.IsRouteActive))
+        if (ImGuiUi.Button("Clear Local##AcquisitionRequestBuilderClear", !busy && !context.IsRouteActive))
             ClearDraft(context);
 
         ImGui.TextColored(MainWindow.ColMuted, "Right-click unit or spend ceiling cells for Craft Architect evidence and pricing shortcuts.");
@@ -852,7 +851,7 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         pendingRemoteDocument = null;
         pendingRemoteRequest = null;
         selectedLineIndex = -1;
-        status = "Using saved server copy.";
+        status = "Loaded server copy.";
         SaveDocument();
         documentAdopted(document, remote);
     }
@@ -866,7 +865,7 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         pendingRemoteRequest = null;
         selectedLineIndex = -1;
         ClearLineEditor();
-        status = "Local draft cleared.";
+        status = "Local request cleared.";
         SaveDocument();
     }
 

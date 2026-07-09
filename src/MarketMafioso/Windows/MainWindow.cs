@@ -739,7 +739,7 @@ public class MainWindow : Window, IDisposable
 
     private void DrawMarketAcquisitionExecutionPane()
     {
-        ImGuiUi.SectionHeader("Accepted Request, Plan, and Guided Route", ColHeader);
+        ImGuiUi.SectionHeader("Accepted Request, Plan, and Route", ColHeader);
         DrawClaimedAcquisitionRequest();
         ImGui.Spacing();
         DrawMarketAcquisitionPlan();
@@ -749,7 +749,7 @@ public class MainWindow : Window, IDisposable
 
     private void DrawMarketAcquisitionPickupSection(bool compactWhenClaimed = false)
     {
-        ImGuiUi.SectionHeader("Request Pickup", ColHeader);
+        ImGuiUi.SectionHeader("Dashboard Requests", ColHeader);
 
         var routeOwnsUi = IsMarketAcquisitionRouteActive();
         if (routeOwnsUi)
@@ -768,7 +768,7 @@ public class MainWindow : Window, IDisposable
             var canFetchCompact = !acquisitionRequestBusy &&
                                   !string.IsNullOrWhiteSpace(apiKeyBuffer) &&
                                   TryGetAcquisitionScope(out _, out _);
-            if (ImGuiUi.Button("Fetch Dashboard Requests", canFetchCompact))
+            if (ImGuiUi.Button("Check Dashboard##MarketAcquisitionFetchCompact", canFetchCompact))
                 _ = FetchDashboardRequestsAsync();
 
             ImGui.SameLine();
@@ -792,7 +792,7 @@ public class MainWindow : Window, IDisposable
         var canFetch = !acquisitionRequestBusy &&
                        !string.IsNullOrWhiteSpace(apiKeyBuffer) &&
                        TryGetAcquisitionScope(out _, out _);
-        if (ImGuiUi.Button("Fetch Dashboard Requests", canFetch))
+        if (ImGuiUi.Button("Check Dashboard##MarketAcquisitionFetch", canFetch))
             _ = FetchDashboardRequestsAsync();
 
         ImGui.SameLine();
@@ -844,15 +844,16 @@ public class MainWindow : Window, IDisposable
 
     private void DrawClaimedAcquisitionRequest()
     {
-        ImGuiUi.SectionHeader("Claimed Batch", ColHeader);
+        ImGuiUi.SectionHeader("Accepted Request", ColHeader);
 
         if (claimedAcquisitionRequest == null)
         {
-            ImGui.TextColored(ColMuted, "No batch is claimed by this plugin session.");
+            ImGui.TextColored(ColMuted, "No accepted request is loaded in this plugin session.");
             return;
         }
 
         DrawClaimedBatchSummary(claimedAcquisitionRequest);
+        DrawAcceptedRequestRecoveryHint(claimedAcquisitionRequest);
         ImGui.Spacing();
         DrawClaimedBatchLines(claimedAcquisitionRequest);
         ImGui.Spacing();
@@ -863,15 +864,15 @@ public class MainWindow : Window, IDisposable
     {
         var canMutateClaim = !acquisitionRequestBusy &&
                              string.Equals(claimed.Status, "Claimed", StringComparison.OrdinalIgnoreCase);
-        if (ImGuiUi.Button("Accept Locally", canMutateClaim))
+        if (ImGuiUi.Button("Accept Request", canMutateClaim))
             _ = AcceptClaimedAcquisitionRequestAsync();
 
         ImGui.SameLine();
-        if (ImGuiUi.Button("Reject", canMutateClaim))
+        if (ImGuiUi.Button("Reject Request", canMutateClaim))
             _ = RejectClaimedAcquisitionRequestAsync();
 
         ImGui.SameLine();
-        if (ImGuiUi.Button("Forget Local", !acquisitionRequestBusy))
+        if (ImGuiUi.Button("Remove Local", !acquisitionRequestBusy))
             ForgetLocalAcquisitionRequest();
 
         ImGui.SameLine();
@@ -881,6 +882,16 @@ public class MainWindow : Window, IDisposable
             _ = PrepareMarketAcquisitionPlanAsync();
 
         ImGui.TextColored(ColMuted, "Preparing a plan reads remote market data. Guided routes validate live rows before purchasing.");
+    }
+
+    private static void DrawAcceptedRequestRecoveryHint(MarketAcquisitionClaimView claimed)
+    {
+        if (!string.Equals(claimed.Status, "Failed", StringComparison.OrdinalIgnoreCase))
+            return;
+
+        ImGui.TextColored(
+            ColError,
+            "This accepted request is failed. Remove local state, check the dashboard, or prepare a fresh plan before retrying.");
     }
 
     private static void DrawClaimedBatchSummary(MarketAcquisitionClaimView claimed)
@@ -944,11 +955,11 @@ public class MainWindow : Window, IDisposable
 
     private void DrawMarketAcquisitionPlan()
     {
-        ImGuiUi.SectionHeader("Advisory Plan", ColHeader);
+        ImGuiUi.SectionHeader("Plan", ColHeader);
 
         if (acquisitionPlan == null)
         {
-            ImGui.TextColored(ColMuted, "No market plan prepared.");
+            ImGui.TextColored(ColMuted, "No plan prepared.");
             return;
         }
 
@@ -2374,7 +2385,7 @@ public class MainWindow : Window, IDisposable
 
     private void DrawMarketAcquisitionGuidedRoute()
     {
-        ImGuiUi.SectionHeader("Guided World Route", ColHeader);
+        ImGuiUi.SectionHeader("Route", ColHeader);
 
         var canStart = acquisitionPlan is { Status: "Ready" } &&
                        !IsAcquisitionPlanStale() &&
@@ -2422,17 +2433,17 @@ public class MainWindow : Window, IDisposable
         if (!ImGui.BeginTable("MarketAcquisitionGuidedRouteActions", 3, ImGuiTableFlags.SizingStretchProp))
             return;
 
-        ImGui.TableSetupColumn("Start", ImGuiTableColumnFlags.WidthStretch);
+        ImGui.TableSetupColumn("Run", ImGuiTableColumnFlags.WidthStretch);
         ImGui.TableSetupColumn("Control", ImGuiTableColumnFlags.WidthStretch);
         ImGui.TableSetupColumn("Reset", ImGuiTableColumnFlags.WidthStretch);
         ImGui.TableNextRow();
 
         ImGui.TableNextColumn();
-        ImGui.TextColored(ColMuted, "Start");
-        if (ImGuiUi.Button("Start Route##MarketAcquisitionStartRoute", canStart))
+        ImGui.TextColored(ColMuted, "Run");
+        if (ImGuiUi.Button("Start##MarketAcquisitionStartRoute", canStart))
             _ = StartGuidedRouteAsync(forceDiagnostics: false);
         ImGui.SameLine();
-        if (ImGuiUi.Button("Diagnostics##MarketAcquisitionStartDiagnostics", canStart))
+        if (ImGuiUi.Button("Diagnostic Run##MarketAcquisitionStartDiagnostics", canStart))
             _ = StartGuidedRouteAsync(forceDiagnostics: true);
 
         ImGui.TableNextColumn();
@@ -2456,7 +2467,7 @@ public class MainWindow : Window, IDisposable
         if (ImGuiUi.Button("Restart##MarketAcquisitionRestartRoute", canStart && marketAcquisitionRouteRunner.CanRestart))
             _ = RestartGuidedRouteAsync();
         ImGui.SameLine();
-        if (ImGuiUi.Button("Re-prepare##MarketAcquisitionReprepareRoute", canReprepare))
+        if (ImGuiUi.Button("Refresh Plan##MarketAcquisitionReprepareRoute", canReprepare))
             _ = ReprepareGuidedRouteAsync();
 
         ImGui.EndTable();
