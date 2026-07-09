@@ -358,15 +358,15 @@ public static class MarketAcquisitionLiveCandidatePlanner
         if (selectedQuantity == 0)
         {
             if (readResult?.HasIncompleteCoverage == true)
-                return "VisibleCacheExhausted";
+                return MarketAcquisitionLiveCandidateStatuses.IncompleteListingCoverage;
 
-            return "NoSafeListings";
+            return MarketAcquisitionLiveCandidateStatuses.NoSafeListings;
         }
 
         if (mode == "TargetQuantity" && totalQuantityAfter < requestedQuantity)
-            return "UnderProcured";
+            return MarketAcquisitionLiveCandidateStatuses.UnderProcured;
 
-        return "Ready";
+        return MarketAcquisitionLiveCandidateStatuses.Ready;
     }
 
     private static ulong CalculateMeaningfulObservationUnitPriceThreshold(
@@ -429,10 +429,10 @@ public static class MarketAcquisitionLiveCandidatePlanner
         MarketBoardReadResult? readResult) =>
         status switch
         {
-            "Ready" when mode == "TargetQuantity" => $"Would satisfy target quantity with {alreadyPurchasedQuantity + selectedQuantity:N0}/{requestedQuantity:N0} confirmed live item(s).",
-            "Ready" => $"Would buy {selectedQuantity:N0} confirmed live item(s) below threshold.",
-            "UnderProcured" => $"Only {alreadyPurchasedQuantity + selectedQuantity:N0}/{requestedQuantity:N0} requested item(s) are safely available so far.",
-            "VisibleCacheExhausted" => $"No visible live listings satisfy the request constraints; the game reported {readResult?.ReportedListingCount ?? 0:N0} listing(s), but only {readResult?.Listings.Count ?? 0:N0} are currently readable from the visible listing cache.",
+            MarketAcquisitionLiveCandidateStatuses.Ready when mode == "TargetQuantity" => $"Would satisfy target quantity with {alreadyPurchasedQuantity + selectedQuantity:N0}/{requestedQuantity:N0} confirmed live item(s).",
+            MarketAcquisitionLiveCandidateStatuses.Ready => $"Would buy {selectedQuantity:N0} confirmed live item(s) below threshold.",
+            MarketAcquisitionLiveCandidateStatuses.UnderProcured => $"Only {alreadyPurchasedQuantity + selectedQuantity:N0}/{requestedQuantity:N0} requested item(s) are safely available so far.",
+            MarketAcquisitionLiveCandidateStatuses.IncompleteListingCoverage => $"No visible live listings satisfy the request constraints; the game reported {readResult?.ReportedListingCount ?? 0:N0} listing(s), but only {readResult?.Listings.Count ?? 0:N0} are currently readable from the visible listing cache.",
             _ => "No visible live listings satisfy the request constraints.",
         };
 }

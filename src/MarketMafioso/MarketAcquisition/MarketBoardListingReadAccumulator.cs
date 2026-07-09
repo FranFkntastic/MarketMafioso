@@ -55,7 +55,7 @@ public sealed class MarketBoardListingReadAccumulator
         ArgumentNullException.ThrowIfNull(candidatePlan);
 
         continuation = default;
-        if (!candidatePlan.Status.Equals("VisibleCacheExhausted", StringComparison.OrdinalIgnoreCase) ||
+        if (!MarketAcquisitionLiveCandidateStatuses.IsIncompleteListingCoverage(candidatePlan.Status) ||
             !readResult.HasIncompleteCoverage ||
             continuationAttempts >= maxContinuationAttempts)
         {

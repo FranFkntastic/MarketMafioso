@@ -71,6 +71,37 @@ public sealed class MarketAcquisitionRecentWorldPolicyTests
     }
 
     [Fact]
+    public void FilterListings_DoesNotRemoveWorldAfterIncompleteListingCoverage()
+    {
+        var config = new MarketMafioso.Configuration();
+        var catalog = new MarketMafioso.MarketAcquisition.MarketAcquisitionWorldVisitCatalog(config);
+        var now = new DateTimeOffset(2026, 7, 4, 12, 0, 0, TimeSpan.Zero);
+        catalog.RecordProbe(new MarketMafioso.MarketAcquisition.MarketAcquisitionWorldVisitRecord
+        {
+            WorldName = "Siren",
+            DataCenter = "Aether",
+            ItemId = 2,
+            HqPolicy = "Either",
+            MaxUnitPrice = 99,
+            CheckedAtUtc = now.AddHours(-1),
+            Result = "IncompleteListingCoverage",
+            Source = "LiveMarketBoardProbe",
+        });
+
+        var result = MarketMafioso.MarketAcquisition.MarketAcquisitionRecentWorldPolicy.FilterListings(
+            CreateLine(),
+            [CreateListing("Siren", "inconclusive")],
+            catalog,
+            now,
+            TimeSpan.FromHours(18),
+            ignoreRecentVisits: false,
+            worldsWithNewerUsefulUniversalisEvidence: []);
+
+        Assert.Equal(["inconclusive"], result.Listings.Select(listing => listing.ListingId).ToArray());
+        Assert.Empty(result.SkippedRecentWorlds);
+    }
+
+    [Fact]
     public void BuildSweepWorldExclusions_RemovesRecentWorldsEvenWithoutListings()
     {
         var config = new MarketMafioso.Configuration();
@@ -100,6 +131,35 @@ public sealed class MarketAcquisitionRecentWorldPolicyTests
         Assert.Equal("line-1", exclusion.LineId);
         Assert.Equal("Siren", exclusion.WorldName);
         Assert.Equal(2u, exclusion.ItemId);
+    }
+
+    [Fact]
+    public void BuildSweepWorldExclusions_DoesNotRemoveWorldAfterIncompleteListingCoverage()
+    {
+        var config = new MarketMafioso.Configuration();
+        var catalog = new MarketMafioso.MarketAcquisition.MarketAcquisitionWorldVisitCatalog(config);
+        var now = new DateTimeOffset(2026, 7, 4, 12, 0, 0, TimeSpan.Zero);
+        catalog.RecordProbe(new MarketMafioso.MarketAcquisition.MarketAcquisitionWorldVisitRecord
+        {
+            WorldName = "Siren",
+            DataCenter = "Aether",
+            ItemId = 2,
+            HqPolicy = "Either",
+            MaxUnitPrice = 99,
+            CheckedAtUtc = now.AddHours(-1),
+            Result = "IncompleteListingCoverage",
+            Source = "LiveMarketBoardProbe",
+        });
+
+        var exclusions = MarketMafioso.MarketAcquisition.MarketAcquisitionRecentWorldPolicy.BuildSweepWorldExclusions(
+            CreateLine(),
+            catalog,
+            now,
+            TimeSpan.FromHours(18),
+            ignoreRecentVisits: false,
+            worldsWithNewerUsefulUniversalisEvidence: []);
+
+        Assert.Empty(exclusions);
     }
 
     [Fact]

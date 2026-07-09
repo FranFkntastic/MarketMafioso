@@ -1082,11 +1082,24 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         return MarketAcquisitionRouteActionResult.Ok(message);
     }
 
-    private static bool IsCompletedOrProbed(MarketAcquisitionGuidedRouteStop stop) =>
-        stop.Status.Equals("Complete", StringComparison.OrdinalIgnoreCase) ||
-        stop.LineStates.Any(line =>
-            line.Status.Equals("Complete", StringComparison.OrdinalIgnoreCase) ||
-            line.Status.StartsWith("Skipped", StringComparison.OrdinalIgnoreCase));
+    private static bool IsCompletedOrProbed(MarketAcquisitionGuidedRouteStop stop)
+    {
+        if (stop.PurchasedQuantity > 0 || stop.SpentGil > 0)
+            return true;
+
+        if (MarketAcquisitionLiveCandidateStatuses.IsIncompleteListingCoverage(stop.LiveCandidateStatus) ||
+            stop.LineStates.Any(line =>
+                MarketAcquisitionLiveCandidateStatuses.IsIncompleteListingCoverage(line.LiveCandidateStatus) ||
+                line.Status.Equals("SkippedIncompleteListingCoverage", StringComparison.OrdinalIgnoreCase)))
+        {
+            return false;
+        }
+
+        return stop.Status.Equals("Complete", StringComparison.OrdinalIgnoreCase) ||
+               stop.LineStates.Any(line =>
+                   line.Status.Equals("Complete", StringComparison.OrdinalIgnoreCase) ||
+                   line.Status.StartsWith("Skipped", StringComparison.OrdinalIgnoreCase));
+    }
 
     private void RefreshLastRunSummary()
     {

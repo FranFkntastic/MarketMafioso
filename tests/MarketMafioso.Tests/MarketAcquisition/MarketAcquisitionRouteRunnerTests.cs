@@ -35,6 +35,23 @@ public sealed class MarketAcquisitionRouteRunnerTests
     }
 
     [Fact]
+    public void ReprepareAndRestart_DoesNotSkipInconclusiveCoverageWorlds()
+    {
+        using var runner = CreateRunner();
+        var plan = CreatePlan("Siren", "Maduin");
+        runner.Start(plan);
+        runner.RecordCurrentWorld("Siren");
+        runner.RecordProbe("Siren", CreateCandidatePlan(status: "IncompleteListingCoverage", quantity: 0, gil: 0));
+
+        var result = runner.ReprepareAndRestart(plan, DateTimeOffset.UnixEpoch.AddHours(1));
+
+        Assert.True(result.Success);
+        Assert.Equal("Siren", runner.ActiveStop?.WorldName);
+        Assert.Equal(["Siren", "Maduin"], runner.Stops.Select(stop => stop.WorldName).ToArray());
+        Assert.Contains("Skipped 0", result.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void Start_WithDiagnosticsCreatesRouteLog()
     {
         var directory = CreateTempDirectory();
@@ -650,20 +667,20 @@ public sealed class MarketAcquisitionRouteRunnerTests
     }
 
     [Fact]
-    public void RecordProbe_WithVisibleCacheExhaustedFailsClosedInsteadOfAdvancing()
+    public void RecordProbe_WithIncompleteListingCoverageKeepsRouteRunning()
     {
         using var runner = CreateRunner();
         runner.Start(CreatePlan("Rafflesia", "Zalera"));
         runner.RecordCurrentWorld("Rafflesia");
 
-        var result = runner.RecordProbe("Rafflesia", CreateCandidatePlan(status: "VisibleCacheExhausted", quantity: 0, gil: 0));
+        var result = runner.RecordProbe("Rafflesia", CreateCandidatePlan(status: "IncompleteListingCoverage", quantity: 0, gil: 0));
 
-        Assert.False(result.Success);
-        Assert.Equal("Failed", runner.State);
-        Assert.False(runner.MarketBoardCloseRequiredBeforeTravel);
-        Assert.Null(runner.ActiveStop);
-        Assert.Contains("visible", result.Message, StringComparison.OrdinalIgnoreCase);
-        Assert.Equal("Failed", runner.Stops[0].Status);
+        Assert.True(result.Success);
+        Assert.Equal("Running", runner.State);
+        Assert.True(runner.MarketBoardCloseRequiredBeforeTravel);
+        Assert.Equal("Zalera", runner.ActiveStop?.WorldName);
+        Assert.Contains("incomplete", result.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("Complete", runner.Stops[0].Status);
         Assert.Equal("Pending", runner.Stops[1].Status);
     }
 

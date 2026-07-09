@@ -211,7 +211,7 @@ public sealed class MarketAcquisitionRouteDiagnosticsTests
             null,
             new MarketMafioso.MarketAcquisition.MarketAcquisitionLiveCandidatePlan
             {
-                Status = "VisibleCacheExhausted",
+                Status = "IncompleteListingCoverage",
                 Message = "No safe rows.",
                 ReportedListingCount = 32,
                 ListingCapacity = 100,
@@ -221,7 +221,7 @@ public sealed class MarketAcquisitionRouteDiagnosticsTests
         var csv = ReadLog(diagnostics.ObservedListingsCsvPath!);
         Assert.Contains("listingReadFresh,coverageStatus,unreadListings,rawItemIdMismatchCounts", csv, StringComparison.Ordinal);
         Assert.Contains("True,Incomplete,32,", csv, StringComparison.Ordinal);
-        Assert.Contains("VisibleCacheExhausted,No safe rows.,0,32,100,True", csv, StringComparison.Ordinal);
+        Assert.Contains("IncompleteListingCoverage,No safe rows.,0,32,100,True", csv, StringComparison.Ordinal);
     }
 
     [Fact]

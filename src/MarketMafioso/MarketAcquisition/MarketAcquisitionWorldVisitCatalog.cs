@@ -61,6 +61,7 @@ public sealed class MarketAcquisitionWorldVisitCatalog
 
         return config.MarketAcquisitionWorldVisits.Any(visit =>
             SameKey(visit.WorldName, visit.ItemId, visit.HqPolicy, visit.MaxUnitPrice, worldName, itemId, hqPolicy, maxUnitPrice) &&
+            MarketAcquisitionLiveCandidateStatuses.IsConclusiveWorldVisitResult(visit.Result) &&
             IsWithinTtl(visit.CheckedAtUtc, nowUtc, ttl));
     }
 
@@ -78,6 +79,7 @@ public sealed class MarketAcquisitionWorldVisitCatalog
         return config.MarketAcquisitionWorldVisits
             .Where(visit =>
                 SameKey(visit.WorldName, visit.ItemId, visit.HqPolicy, visit.MaxUnitPrice, worldName, itemId, hqPolicy, maxUnitPrice) &&
+                MarketAcquisitionLiveCandidateStatuses.IsConclusiveWorldVisitResult(visit.Result) &&
                 IsWithinTtl(visit.CheckedAtUtc, nowUtc, ttl))
             .OrderByDescending(visit => visit.CheckedAtUtc)
             .FirstOrDefault();
@@ -98,6 +100,7 @@ public sealed class MarketAcquisitionWorldVisitCatalog
                 visit.ItemId == itemId &&
                 visit.MaxUnitPrice == maxUnitPrice &&
                 visit.HqPolicy.Equals(hqPolicy, StringComparison.OrdinalIgnoreCase) &&
+                MarketAcquisitionLiveCandidateStatuses.IsConclusiveWorldVisitResult(visit.Result) &&
                 IsWithinTtl(visit.CheckedAtUtc, nowUtc, ttl))
             .GroupBy(visit => visit.WorldName, StringComparer.OrdinalIgnoreCase)
             .Select(group => group.OrderByDescending(visit => visit.CheckedAtUtc).First())

@@ -55,7 +55,7 @@ public sealed class MarketAcquisitionLiveCandidatePlannerTests
     }
 
     [Fact]
-    public void BuildCandidatePlan_FailsClosedWhenTruncatedRowsMightHideEligibleListings()
+    public void BuildCandidatePlan_MarksIncompleteCoverageWhenUnreadRowsMightHideEligibleListings()
     {
         var request = CreateRequest(quantityMode: "AllBelowThreshold", quantity: 0, maxUnitPrice: 100, maxTotalGil: 0, hqPolicy: "HQOnly");
         var plan = CreatePlan();
@@ -81,14 +81,14 @@ public sealed class MarketAcquisitionLiveCandidatePlannerTests
             "Gilgamesh",
             readResult);
 
-        Assert.Equal("VisibleCacheExhausted", candidatePlan.Status);
+        Assert.Equal("IncompleteListingCoverage", candidatePlan.Status);
         Assert.True(candidatePlan.IsVisibleListingCacheTruncated);
         Assert.Equal(120, candidatePlan.ReportedListingCount);
         Assert.Contains("only 1", candidatePlan.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
-    public void BuildCandidatePlan_TreatsIncompleteAllAboveThresholdRowsAsVisibleCacheExhausted()
+    public void BuildCandidatePlan_TreatsIncompleteAllAboveThresholdRowsAsIncompleteCoverage()
     {
         var request = CreateRequest(quantityMode: "AllBelowThreshold", quantity: 0, maxUnitPrice: 100, maxTotalGil: 0);
         var plan = CreatePlan();
@@ -115,7 +115,7 @@ public sealed class MarketAcquisitionLiveCandidatePlannerTests
             "Gilgamesh",
             readResult);
 
-        Assert.Equal("VisibleCacheExhausted", candidatePlan.Status);
+        Assert.Equal("IncompleteListingCoverage", candidatePlan.Status);
         Assert.True(candidatePlan.IsVisibleListingCacheTruncated);
         Assert.Equal(0u, candidatePlan.WouldBuyQuantity);
         Assert.All(candidatePlan.Rows, row => Assert.Equal("AboveThreshold", row.Reason));
@@ -153,14 +153,14 @@ public sealed class MarketAcquisitionLiveCandidatePlannerTests
             "Seraph",
             readResult);
 
-        Assert.Equal("VisibleCacheExhausted", candidatePlan.Status);
+        Assert.Equal("IncompleteListingCoverage", candidatePlan.Status);
         Assert.Equal(0u, candidatePlan.WouldBuyQuantity);
         Assert.Equal(5, candidatePlan.Rows.Count);
         Assert.All(candidatePlan.Rows, row => Assert.Equal("AboveThreshold", row.Reason));
     }
 
     [Fact]
-    public void BuildCandidatePlan_TreatsIncompleteNonMeaningfulJokePriceRowsAsVisibleCacheExhausted()
+    public void BuildCandidatePlan_TreatsIncompleteNonMeaningfulJokePriceRowsAsIncompleteCoverage()
     {
         var request = CreateRequest(quantityMode: "AllBelowThreshold", quantity: 0, maxUnitPrice: 100, maxTotalGil: 0);
         var plan = CreatePlan();
@@ -187,7 +187,7 @@ public sealed class MarketAcquisitionLiveCandidatePlannerTests
             "Gilgamesh",
             readResult);
 
-        Assert.Equal("VisibleCacheExhausted", candidatePlan.Status);
+        Assert.Equal("IncompleteListingCoverage", candidatePlan.Status);
         Assert.Empty(candidatePlan.Rows);
         Assert.True(candidatePlan.IsVisibleListingCacheTruncated);
         Assert.Equal(120, candidatePlan.ReportedListingCount);

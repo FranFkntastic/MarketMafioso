@@ -296,23 +296,24 @@ public sealed class MarketAcquisitionGuidedRouteSessionTests
     }
 
     [Fact]
-    public void RecordProbe_WithVisibleCacheExhaustionFailsClosedWithoutAdvancing()
+    public void RecordProbe_WithIncompleteListingCoverageMarksLineInconclusiveAndAdvances()
     {
         var session = MarketMafioso.MarketAcquisition.MarketAcquisitionGuidedRouteSession.Start(CreateMultiItemWorldPlan());
 
         var result = session.RecordProbe(
             "Maduin",
             CreateCandidatePlan(
-                status: "VisibleCacheExhausted",
+                status: "IncompleteListingCoverage",
                 quantity: 0,
                 gil: 0,
                 message: "No visible safe listings; the game reported more rows than the readable cache exposes."));
 
-        Assert.False(result.Success);
-        var failedLine = Assert.Single(session.Stops[0].LineStates, line => line.LineId == "line-1");
-        Assert.Equal("Failed", failedLine.Status);
-        Assert.Contains("readable cache", failedLine.LatestMessage, StringComparison.OrdinalIgnoreCase);
-        Assert.Equal("line-1", session.ActiveStop?.ActiveItemSubtask?.LineId);
+        Assert.True(result.Success);
+        var skippedLine = Assert.Single(session.Stops[0].LineStates, line => line.LineId == "line-1");
+        Assert.Equal("SkippedIncompleteListingCoverage", skippedLine.Status);
+        Assert.Equal("IncompleteListingCoverage", skippedLine.LiveCandidateStatus);
+        Assert.Contains("readable cache", skippedLine.LatestMessage, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("line-2", session.ActiveStop?.ActiveItemSubtask?.LineId);
     }
 
     [Fact]
@@ -377,6 +378,19 @@ public sealed class MarketAcquisitionGuidedRouteSessionTests
         Assert.Equal("Complete", session.Status);
         Assert.Null(session.ActiveStop);
         Assert.Equal("NoSafeListings", session.Stops[0].LiveCandidateStatus);
+    }
+
+    [Fact]
+    public void RecordProbe_CompletesAfterLastStopWithIncompleteListingCoverageMessage()
+    {
+        var session = MarketMafioso.MarketAcquisition.MarketAcquisitionGuidedRouteSession.Start(CreatePlan("Zalera"));
+
+        var result = session.RecordProbe("Zalera", CreateCandidatePlan(status: "IncompleteListingCoverage", quantity: 0, gil: 0));
+
+        Assert.True(result.Success);
+        Assert.Equal("Complete", session.Status);
+        Assert.Contains("Incomplete listing coverage", result.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("IncompleteListingCoverage", session.Stops[0].LiveCandidateStatus);
     }
 
     [Fact]

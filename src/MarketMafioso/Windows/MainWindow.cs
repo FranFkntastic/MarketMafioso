@@ -1937,13 +1937,13 @@ public class MainWindow : Window, IDisposable
         if (purchasedQuantity > 0 || spentGil > 0)
             return "Complete";
 
-        return candidatePlan?.Status.Equals("VisibleCacheExhausted", StringComparison.OrdinalIgnoreCase) == true
-            ? "SkippedVisibleCacheExhausted"
+        return MarketAcquisitionLiveCandidateStatuses.IsIncompleteListingCoverage(candidatePlan?.Status)
+            ? "SkippedIncompleteListingCoverage"
             : "SkippedNoLiveStock";
     }
 
     internal static bool ShouldFailWorldPurchaseBatchOnNoCandidate(MarketAcquisitionLiveCandidatePlan? candidatePlan) =>
-        candidatePlan?.Status.Equals("VisibleCacheExhausted", StringComparison.OrdinalIgnoreCase) == true;
+        MarketAcquisitionLiveCandidateStatuses.IsIncompleteListingCoverage(candidatePlan?.Status);
 
     private Task ProbeLiveMarketBoardAsync()
     {
@@ -2046,7 +2046,13 @@ public class MainWindow : Window, IDisposable
         }
 
         if (!TryScrollMarketBoardListingsToRow(continuation.RequestedRow, out var scrollMessage))
+        {
+            acquisitionStatus = scrollMessage;
+            marketAcquisitionRouteRunner.RecordListingReadPending(
+                currentWorld,
+                readResult with { Message = $"{continuation.Message} {scrollMessage}" });
             return false;
+        }
 
         var message = $"{continuation.Message} {scrollMessage}";
         acquisitionStatus = message;
@@ -2109,7 +2115,9 @@ public class MainWindow : Window, IDisposable
             HqPolicy = hqPolicy,
             MaxUnitPrice = maxUnitPrice,
             CheckedAtUtc = DateTimeOffset.UtcNow,
-            Result = candidatePlan.WouldBuyQuantity > 0 ? "LegalStockObserved" : candidatePlan.Status,
+            Result = candidatePlan.WouldBuyQuantity > 0
+                ? MarketAcquisitionLiveCandidateStatuses.LegalStockObserved
+                : candidatePlan.Status,
             ObservedLegalListingCount = legalRows.Length,
             ObservedLegalQuantity = observedLegalQuantity,
             ObservedLegalGil = observedLegalGil,
@@ -2138,7 +2146,7 @@ public class MainWindow : Window, IDisposable
             HqPolicy = hqPolicy,
             MaxUnitPrice = activeSubtask.MaxUnitPrice,
             CheckedAtUtc = DateTimeOffset.UtcNow,
-            Result = "Purchased",
+            Result = MarketAcquisitionLiveCandidateStatuses.Purchased,
             PurchasedQuantity = candidate.Quantity,
             SpentGil = candidate.TotalGil,
             ObservedLegalListingCount = 1,

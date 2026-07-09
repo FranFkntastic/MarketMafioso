@@ -28,7 +28,7 @@ public sealed class MarketBoardListingReadAccumulatorTests
     }
 
     [Fact]
-    public void TryBeginContinuation_RequestsFirstUnreadRowForVisibleCacheExhaustedPartialRead()
+    public void TryBeginContinuation_RequestsFirstUnreadRowForIncompleteListingCoverage()
     {
         var accumulator = new MarketMafioso.MarketAcquisition.MarketBoardListingReadAccumulator();
         var read = accumulator.Merge(CreateRead(
@@ -38,7 +38,7 @@ public sealed class MarketBoardListingReadAccumulatorTests
                 .ToArray()));
         var candidatePlan = new MarketMafioso.MarketAcquisition.MarketAcquisitionLiveCandidatePlan
         {
-            Status = "VisibleCacheExhausted",
+            Status = "IncompleteListingCoverage",
             ReadableListingCount = read.ReadableListingCount,
             ReportedListingCount = read.ReportedListingCount,
         };
@@ -61,7 +61,7 @@ public sealed class MarketBoardListingReadAccumulatorTests
                 .ToArray()));
         var candidatePlan = new MarketMafioso.MarketAcquisition.MarketAcquisitionLiveCandidatePlan
         {
-            Status = "VisibleCacheExhausted",
+            Status = "IncompleteListingCoverage",
             ReadableListingCount = read.ReadableListingCount,
             ReportedListingCount = read.ReportedListingCount,
         };

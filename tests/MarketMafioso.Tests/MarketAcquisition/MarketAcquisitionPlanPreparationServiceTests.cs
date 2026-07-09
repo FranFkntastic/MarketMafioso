@@ -43,7 +43,7 @@ public sealed class MarketAcquisitionPlanPreparationServiceTests
             HqPolicy = "Either",
             MaxUnitPrice = 100,
             CheckedAtUtc = preparedAtUtc.AddHours(-1),
-            Result = "Probed",
+            Result = "NoSafeListings",
             Source = "Route",
         });
         var source = new FakeListingSource();
@@ -84,7 +84,7 @@ public sealed class MarketAcquisitionPlanPreparationServiceTests
             HqPolicy = "Either",
             MaxUnitPrice = 100,
             CheckedAtUtc = preparedAtUtc.AddHours(-1),
-            Result = "Probed",
+            Result = "NoSafeListings",
             Source = "Route",
         });
         var source = new FakeListingSource();

@@ -5,11 +5,11 @@ namespace MarketMafioso.Tests.MarketAcquisition;
 public sealed class MarketAcquisitionClaimStatusTests
 {
     [Fact]
-    public void ShouldFailWorldPurchaseBatchOnNoCandidate_ReturnsTrueForVisibleCacheExhausted()
+    public void ShouldFailWorldPurchaseBatchOnNoCandidate_ReturnsTrueForIncompleteListingCoverage()
     {
         var candidatePlan = new MarketMafioso.MarketAcquisition.MarketAcquisitionLiveCandidatePlan
         {
-            Status = "VisibleCacheExhausted",
+            Status = "IncompleteListingCoverage",
         };
 
         Assert.True(MainWindow.ShouldFailWorldPurchaseBatchOnNoCandidate(candidatePlan));

@@ -196,19 +196,6 @@ public sealed class MarketAcquisitionGuidedRouteSession
         stop.WouldSpendGil = candidatePlan.WouldSpendGil;
         UpdateActiveLineProbe(stop, candidatePlan);
 
-        if (candidatePlan.Status.Equals("VisibleCacheExhausted", StringComparison.OrdinalIgnoreCase))
-        {
-            stop.Status = "Failed";
-            UpdateActiveLine(
-                stop,
-                status: "Failed",
-                purchasedQuantity: 0,
-                spentGil: 0,
-                candidatePlan.Message);
-            return MarketAcquisitionGuidedRouteResult.Fail(
-                $"Visible listing cache exhausted for {FormatActiveItem(stop)} on {currentWorld}. {candidatePlan.Message}");
-        }
-
         if (candidatePlan.WouldBuyQuantity > 0)
         {
             stop.Status = "Purchasing";
@@ -228,14 +215,16 @@ public sealed class MarketAcquisitionGuidedRouteSession
                 zeroPurchaseMessage: candidatePlan.Message))
         {
             return MarketAcquisitionGuidedRouteResult.Ok(
-                $"No safe live candidates remained for {FormatPreviousItem(stop)} on {currentWorld}. Next item: {FormatActiveItem(stop)}.");
+                $"{FormatZeroPurchaseProbeMessage(candidatePlan.Status)} for {FormatPreviousItem(stop)} on {currentWorld}. Next item: {FormatActiveItem(stop)}.");
         }
 
         CompleteActiveStop(stop.PurchasedQuantity, stop.SpentGil);
         if (Status == "Complete")
-            return MarketAcquisitionGuidedRouteResult.Ok("Guided route complete. No safe live candidates remained.");
+            return MarketAcquisitionGuidedRouteResult.Ok(
+                $"Guided route complete. {FormatZeroPurchaseProbeMessage(candidatePlan.Status)}.");
 
-        return MarketAcquisitionGuidedRouteResult.Ok($"Recorded {currentWorld}. Next stop: {ActiveStop?.WorldName}.");
+        return MarketAcquisitionGuidedRouteResult.Ok(
+            $"{FormatZeroPurchaseProbeMessage(candidatePlan.Status)} for {FormatPreviousItem(stop)} on {currentWorld}. Next stop: {ActiveStop?.WorldName}.");
     }
 
     public MarketAcquisitionGuidedRouteResult RecordWorldPurchaseBatchComplete(
@@ -416,9 +405,14 @@ public sealed class MarketAcquisitionGuidedRouteSession
     }
 
     private static string ResolveZeroPurchaseLineStatus(string candidateStatus) =>
-        candidateStatus.Equals("VisibleCacheExhausted", StringComparison.OrdinalIgnoreCase)
-            ? "SkippedVisibleCacheExhausted"
+        MarketAcquisitionLiveCandidateStatuses.IsIncompleteListingCoverage(candidateStatus)
+            ? "SkippedIncompleteListingCoverage"
             : "SkippedNoLiveStock";
+
+    private static string FormatZeroPurchaseProbeMessage(string candidateStatus) =>
+        MarketAcquisitionLiveCandidateStatuses.IsIncompleteListingCoverage(candidateStatus)
+            ? "Incomplete listing coverage"
+            : "No safe live candidates remained";
 
     private static string FormatActiveItem(MarketAcquisitionGuidedRouteStop stop) =>
         FormatItem(stop.ActiveItemSubtask);
