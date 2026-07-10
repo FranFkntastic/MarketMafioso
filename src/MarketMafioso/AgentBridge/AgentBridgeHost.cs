@@ -17,7 +17,10 @@ public sealed class AgentBridgeHost : IDisposable
     private readonly AgentBridgeProofStore proofStore;
     private readonly Action openMainWindow;
     private readonly Action openAcquisitionDiagnostics;
-    private readonly Action openProofWindow;
+    private readonly Action<string> openProofWindow;
+    private readonly Func<string, bool> selectMainTab;
+    private readonly Action captureInputState;
+    private readonly Action stopRoute;
     private readonly JsonSerializerOptions jsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
     private CancellationTokenSource? cancellation;
     private Task? listenTask;
@@ -31,7 +34,10 @@ public sealed class AgentBridgeHost : IDisposable
         AgentBridgeProofStore proofStore,
         Action openMainWindow,
         Action openAcquisitionDiagnostics,
-        Action openProofWindow)
+        Action<string> openProofWindow,
+        Func<string, bool> selectMainTab,
+        Action captureInputState,
+        Action stopRoute)
     {
         this.config = config ?? throw new ArgumentNullException(nameof(config));
         this.configDirectory = configDirectory ?? throw new ArgumentNullException(nameof(configDirectory));
@@ -41,6 +47,9 @@ public sealed class AgentBridgeHost : IDisposable
         this.openMainWindow = openMainWindow ?? throw new ArgumentNullException(nameof(openMainWindow));
         this.openAcquisitionDiagnostics = openAcquisitionDiagnostics ?? throw new ArgumentNullException(nameof(openAcquisitionDiagnostics));
         this.openProofWindow = openProofWindow ?? throw new ArgumentNullException(nameof(openProofWindow));
+        this.selectMainTab = selectMainTab ?? throw new ArgumentNullException(nameof(selectMainTab));
+        this.captureInputState = captureInputState ?? throw new ArgumentNullException(nameof(captureInputState));
+        this.stopRoute = stopRoute ?? throw new ArgumentNullException(nameof(stopRoute));
     }
 
     public string PipeName => $"MarketMafioso.AgentBridge.{Environment.ProcessId}";
@@ -145,7 +154,10 @@ public sealed class AgentBridgeHost : IDisposable
             case "hello":
                 return AgentBridgeResponse.Ok("Bridge is ready.");
             case "get-snapshot":
-                await dispatchOnFramework(() => receipt = CaptureProof(challenge: null, openWindow: false)).ConfigureAwait(false);
+                await dispatchOnFramework(() => receipt = AgentBridgeProofFactory.Create(
+                    captureTruth(),
+                    Interlocked.Increment(ref revision),
+                    challenge: null)).ConfigureAwait(false);
                 return AgentBridgeResponse.Ok("Snapshot captured.", receipt);
             case "open-main-window":
                 await dispatchOnFramework(openMainWindow).ConfigureAwait(false);
@@ -159,8 +171,25 @@ public sealed class AgentBridgeHost : IDisposable
                 await dispatchOnFramework(() => receipt = CaptureProof(request.Challenge, openWindow: true)).ConfigureAwait(false);
                 AppendAudit("capture-proof", receipt!.ProofId);
                 return AgentBridgeResponse.Ok("Proof captured; wait for the in-game proof window to render before reading it again.", receipt);
+            case "select-main-tab":
+                var tabSelected = false;
+                await dispatchOnFramework(() => tabSelected = selectMainTab(request.Target ?? string.Empty)).ConfigureAwait(false);
+                AppendAudit("select-main-tab", tabSelected ? request.Target ?? string.Empty : "rejected");
+                return tabSelected
+                    ? AgentBridgeResponse.Ok($"Queued main tab {request.Target} for the next in-game frame.")
+                    : AgentBridgeResponse.Fail("Requested main tab is unavailable or not allowed.");
+            case "capture-input-state":
+                await dispatchOnFramework(captureInputState).ConfigureAwait(false);
+                AppendAudit("capture-input-state", "accepted");
+                return AgentBridgeResponse.Ok("Market-board input state capture requested.");
+            case "stop-route":
+                await dispatchOnFramework(stopRoute).ConfigureAwait(false);
+                AppendAudit("stop-route", "accepted");
+                return AgentBridgeResponse.Ok("Route stop requested.");
             case "get-proof":
-                receipt = proofStore.GetCurrent();
+                receipt = string.IsNullOrWhiteSpace(request.ProofId)
+                    ? proofStore.GetCurrent()
+                    : proofStore.Get(request.ProofId);
                 return receipt == null
                     ? AgentBridgeResponse.Fail("No proof has been captured.")
                     : AgentBridgeResponse.Ok("Current proof returned.", receipt);
@@ -173,7 +202,7 @@ public sealed class AgentBridgeHost : IDisposable
     {
         var receipt = proofStore.Capture(captureTruth(), Interlocked.Increment(ref revision), challenge);
         if (openWindow)
-            openProofWindow();
+            openProofWindow(receipt.ProofId);
         return receipt;
     }
 
@@ -192,7 +221,7 @@ public sealed class AgentBridgeHost : IDisposable
     }
 
     private string BridgeDirectory => Path.Combine(configDirectory, "agent-bridge");
-    private string DiscoveryPath => Path.Combine(BridgeDirectory, "discovery.json");
+    private string DiscoveryPath => Path.Combine(BridgeDirectory, $"discovery-{Environment.ProcessId}.json");
     private string AuditPath => Path.Combine(BridgeDirectory, "audit.jsonl");
 
     private void AppendAudit(string action, string result)
@@ -215,6 +244,8 @@ public sealed record AgentBridgeRequest
     public string? Token { get; init; }
     public string? Command { get; init; }
     public string? Challenge { get; init; }
+    public string? Target { get; init; }
+    public string? ProofId { get; init; }
 }
 
 public sealed record AgentBridgeResponse

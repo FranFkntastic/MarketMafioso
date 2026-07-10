@@ -49,6 +49,7 @@ public sealed record AgentBridgeProofReceipt
     public required string ProofId { get; init; }
     public required string Challenge { get; init; }
     public required string TruthSha256 { get; init; }
+    public required string ProofSha256 { get; init; }
     public required bool PresentedInGame { get; init; }
     public required AgentBridgeTruth Truth { get; init; }
 }
@@ -72,15 +73,31 @@ public static class AgentBridgeProofFactory
             throw new ArgumentOutOfRangeException(nameof(revision));
 
         var canonicalTruth = JsonSerializer.Serialize(truth, CanonicalJsonOptions);
-        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonicalTruth)));
+        var truthHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonicalTruth)));
+        var capturedAt = capturedAtUtc ?? DateTimeOffset.UtcNow;
+        var proofId = Guid.NewGuid().ToString("N");
+        var normalizedChallenge = challenge ?? string.Empty;
+        var canonicalProof = JsonSerializer.Serialize(new
+        {
+            SchemaVersion = 1,
+            ProofId = proofId,
+            Revision = revision,
+            CapturedAtUtc = capturedAt,
+            Challenge = normalizedChallenge,
+            TruthSha256 = truthHash,
+            truth.PluginInstanceId,
+            truth.ProcessId,
+        }, CanonicalJsonOptions);
+        var proofHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonicalProof)));
         return new AgentBridgeProofReceipt
         {
             SchemaVersion = 1,
             Revision = revision,
-            CapturedAtUtc = capturedAtUtc ?? DateTimeOffset.UtcNow,
-            ProofId = Guid.NewGuid().ToString("N"),
-            Challenge = challenge ?? string.Empty,
-            TruthSha256 = hash,
+            CapturedAtUtc = capturedAt,
+            ProofId = proofId,
+            Challenge = normalizedChallenge,
+            TruthSha256 = truthHash,
+            ProofSha256 = proofHash,
             PresentedInGame = false,
             Truth = truth,
         };

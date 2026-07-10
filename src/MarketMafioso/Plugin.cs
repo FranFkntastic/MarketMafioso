@@ -143,7 +143,14 @@ public sealed class Plugin : IDalamudPlugin
             agentBridgeProofStore,
             () => mainWindow.IsOpen = true,
             () => mainWindow.AcquisitionDiagnostics.IsOpen = true,
-            () => agentBridgeProofWindow.IsOpen = true);
+            proofId =>
+            {
+                agentBridgeProofWindow.RequestedProofId = proofId;
+                agentBridgeProofWindow.IsOpen = true;
+            },
+            mainWindow.TrySelectAgentBridgeTab,
+            mainWindow.AgentCaptureInputState,
+            mainWindow.AgentStopRoute);
 
         windowSystem.AddWindow(mainWindow);
         windowSystem.AddWindow(mainWindow.ProjectBrowser);

@@ -22,9 +22,13 @@ public sealed class AgentBridgeProofWindow : Window
         };
     }
 
+    public string? RequestedProofId { get; set; }
+
     public override void Draw()
     {
-        var receipt = proofStore.GetCurrent();
+        var receipt = string.IsNullOrWhiteSpace(RequestedProofId)
+            ? proofStore.GetCurrent()
+            : proofStore.Get(RequestedProofId);
         if (receipt == null)
         {
             ImGui.TextColored(MarketMafiosoUiTheme.Muted, "No bridge proof has been captured yet.");
@@ -32,7 +36,7 @@ public sealed class AgentBridgeProofWindow : Window
         }
 
         proofStore.MarkPresented(receipt.ProofId);
-        receipt = proofStore.GetCurrent()!;
+        receipt = proofStore.Get(receipt.ProofId)!;
         var truth = receipt.Truth;
         ImGui.TextColored(MarketMafiosoUiTheme.Header, "Agent Bridge Proof");
         ImGui.TextWrapped("This panel and the local bridge response are rendered from the same frozen truth receipt.");
@@ -40,6 +44,7 @@ public sealed class AgentBridgeProofWindow : Window
         DrawRow("Challenge", string.IsNullOrWhiteSpace(receipt.Challenge) ? "(none)" : receipt.Challenge);
         DrawRow("Proof ID", receipt.ProofId);
         DrawRow("Truth SHA-256", receipt.TruthSha256);
+        DrawRow("Proof SHA-256", receipt.ProofSha256);
         DrawRow("Revision", receipt.Revision.ToString());
         DrawRow("Captured (UTC)", receipt.CapturedAtUtc.ToString("O"));
         DrawRow("Presented", receipt.PresentedInGame ? "Yes" : "Rendering now");

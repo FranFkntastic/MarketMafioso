@@ -13,21 +13,25 @@ public sealed class AgentBridgeProofFactoryTests
         var second = AgentBridgeProofFactory.Create(truth, 2, "fresh-challenge", DateTimeOffset.UnixEpoch.AddMinutes(1));
 
         Assert.Equal(first.TruthSha256, second.TruthSha256);
+        Assert.NotEqual(first.ProofSha256, second.ProofSha256);
         Assert.NotEqual(first.ProofId, second.ProofId);
         Assert.Equal("primary-instance", first.Challenge);
     }
 
     [Fact]
-    public void ProofStore_MarksOnlyCurrentProofAsPresented()
+    public void ProofStore_RetainsAndMarksExactProof()
     {
         var store = new AgentBridgeProofStore();
-        var receipt = store.Capture(CreateTruth(), 1, "challenge");
+        var first = store.Capture(CreateTruth(), 1, "challenge-a");
+        var second = store.Capture(CreateTruth(), 2, "challenge-b");
 
         store.MarkPresented("wrong-proof");
         Assert.False(store.GetCurrent()!.PresentedInGame);
 
-        store.MarkPresented(receipt.ProofId);
-        Assert.True(store.GetCurrent()!.PresentedInGame);
+        store.MarkPresented(first.ProofId);
+        Assert.True(store.Get(first.ProofId)!.PresentedInGame);
+        Assert.False(store.Get(second.ProofId)!.PresentedInGame);
+        Assert.Equal(second.ProofId, store.GetCurrent()!.ProofId);
     }
 
     private static AgentBridgeTruth CreateTruth() => new()

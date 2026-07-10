@@ -60,6 +60,7 @@ public class MainWindow : Window, IDisposable
     private readonly WorkshopProjectSelectionState workshopProjectSelection = new();
     private int marketInputCaptureIndex;
     private string workshopStatus = "Workshop prep queue is idle.";
+    private string? agentRequestedTab;
 
     private const string ProductSummary = "Workshop logistics and self-hosted inventory history.";
     private const string WorkshopLogisticsModuleSummary = "Workshop Logistics tracks company workshop jobs, materials, retainer restock, handoff, and assembly.";
@@ -337,57 +338,90 @@ public class MainWindow : Window, IDisposable
 
         if (ImGui.BeginTabBar("##MarketMafiosoTabs"))
         {
-            if (ImGui.BeginTabItem("Overview"))
+            if (ImGui.BeginTabItem("Overview", GetAgentTabFlags("Overview")))
             {
                 overviewTab.Draw();
                 ImGui.EndTabItem();
             }
 
-            if (ImGui.BeginTabItem("Inventory Reporter"))
+            if (ImGui.BeginTabItem("Inventory Reporter", GetAgentTabFlags("Inventory Reporter")))
             {
                 inventoryReporterTab.Draw();
                 ImGui.EndTabItem();
             }
 
-            if (ImGui.BeginTabItem("Workshop Logistics"))
+            if (ImGui.BeginTabItem("Workshop Logistics", GetAgentTabFlags("Workshop Logistics")))
             {
                 DrawWorkshopPrepTab();
                 ImGui.EndTabItem();
             }
 
-            if (ImGui.BeginTabItem("Restock"))
+            if (ImGui.BeginTabItem("Restock", GetAgentTabFlags("Restock")))
             {
                 DrawRetainerRestockTab();
                 ImGui.EndTabItem();
             }
 
-            if (IsMarketAcquisitionUnlocked() && ImGui.BeginTabItem("Market Acquisition"))
+            if (IsMarketAcquisitionUnlocked() && ImGui.BeginTabItem("Market Acquisition", GetAgentTabFlags("Market Acquisition")))
             {
                 DrawMarketAcquisitionTab();
                 ImGui.EndTabItem();
             }
 
-            if (IsMarketAcquisitionUnlocked() && ImGui.BeginTabItem("Diagnostics"))
+            if (IsMarketAcquisitionUnlocked() && ImGui.BeginTabItem("Diagnostics", GetAgentTabFlags("Diagnostics")))
             {
                 marketAcquisitionDiagnosticsPanel.Draw();
                 ImGui.EndTabItem();
             }
 
-            if (ImGui.BeginTabItem("Settings"))
+            if (ImGui.BeginTabItem("Settings", GetAgentTabFlags("Settings")))
             {
                 settingsTab.Draw();
                 ImGui.EndTabItem();
             }
 
-            if (ImGui.BeginTabItem("Status"))
+            if (ImGui.BeginTabItem("Status", GetAgentTabFlags("Status")))
             {
                 statusTab.Draw();
                 ImGui.EndTabItem();
             }
 
             ImGui.EndTabBar();
+            agentRequestedTab = null;
         }
     }
+
+    public bool TrySelectAgentBridgeTab(string tabName)
+    {
+        var allowed = tabName switch
+        {
+            "Overview" or "Inventory Reporter" or "Workshop Logistics" or "Restock" or "Settings" or "Status" => true,
+            "Market Acquisition" or "Diagnostics" => IsMarketAcquisitionUnlocked(),
+            _ => false,
+        };
+        if (!allowed)
+            return false;
+
+        agentRequestedTab = tabName;
+        IsOpen = true;
+        return true;
+    }
+
+    public void AgentCaptureInputState() => CaptureMarketBoardInputState();
+
+    public void AgentStopRoute()
+    {
+        if (!routeEngine.IsRouteActive)
+            return;
+
+        routeEngine.Stop();
+        routeEngine.ReportRouteProgress();
+    }
+
+    private ImGuiTabItemFlags GetAgentTabFlags(string tabName) =>
+        string.Equals(agentRequestedTab, tabName, StringComparison.Ordinal)
+            ? ImGuiTabItemFlags.SetSelected
+            : ImGuiTabItemFlags.None;
 
     private void DrawHeader()
     {
