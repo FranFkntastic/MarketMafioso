@@ -61,6 +61,7 @@ public class MainWindow : Window, IDisposable
     private readonly OverviewTabPanel overviewTab;
     private readonly InventoryReporterTabPanel inventoryReporterTab;
     private readonly StatusTabPanel statusTab;
+    private readonly SettingsTabPanel settingsTab;
     private readonly MarketAcquisitionPlanPanel marketAcquisitionPlanPanel = new();
     private readonly MarketAcquisitionRequestPickupPanel marketAcquisitionRequestPickupPanel;
     private readonly MarketAcquisitionAcceptedRequestPanel marketAcquisitionAcceptedRequestPanel;
@@ -68,15 +69,7 @@ public class MainWindow : Window, IDisposable
     private readonly RetainerRestockBrowserState restockBrowserState = new();
     private readonly RetainerRestockBrowserPanel restockBrowser;
 
-    private string urlBuffer = string.Empty;
-    private string apiKeyBuffer = string.Empty;
-    private string dashboardUrlBuffer = string.Empty;
-    private string dashboardOpenStatus = "Dashboard link appears after a successful send.";
     private string diagnosticsFolderStatus = "Route diagnostics folder opens in Explorer.";
-    private string marketAcquisitionUnlockKeyBuffer = string.Empty;
-    private string marketAcquisitionUnlockStatus = "Private module is hidden until unlocked.";
-    private bool showApiKey = false;
-    private bool showMarketAcquisitionUnlockKey = false;
     private readonly WorkshopProjectSelectionState workshopProjectSelection = new();
     private IReadOnlyList<MarketAcquisitionRequestView> pendingAcquisitionRequests = [];
     private MarketAcquisitionClaimView? claimedAcquisitionRequest;
@@ -114,9 +107,6 @@ public class MainWindow : Window, IDisposable
     private const string ProductSummary = "Workshop logistics and self-hosted inventory history.";
     private const string WorkshopLogisticsModuleSummary = "Workshop Logistics tracks company workshop jobs, materials, retainer restock, handoff, and assembly.";
     private const string MarketAcquisitionModuleSummary = "Build, sync, and monitor acquisition requests from one persistent board.";
-    private const string LocalReceiverUrl = "http://localhost:8080/inventory";
-    private const string DevReceiverUrl = "https://dev.xivcraftarchitect.com/marketmafioso/api/inventory";
-    private const string ProductionReceiverUrl = "https://xivcraftarchitect.com/marketmafioso/api/inventory";
     private static readonly TimeSpan MarketBoardPurchaseConfirmationWatchdog = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan MarketBoardPurchaseListingRemovalWatchdog = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan MarketBoardPurchaseInitialMonitorDelay = TimeSpan.FromMilliseconds(250);
@@ -195,8 +185,6 @@ public class MainWindow : Window, IDisposable
             config.Save();
         }
 
-        urlBuffer = config.ServerUrl;
-        apiKeyBuffer = config.ApiKey;
         overviewTab = new OverviewTabPanel(IsMarketAcquisitionUnlocked);
         inventoryReporterTab = new InventoryReporterTabPanel(
             config,
@@ -251,6 +239,14 @@ public class MainWindow : Window, IDisposable
             () => marketAcquisitionRouteRunner.LastDiagnosticFilePath,
             () => acquisitionRequestBuilderCraftAppraisal.State.CreateDiagnosticsSnapshot());
         AutomationDiagnostics = new AutomationDiagnosticsWindow(CreateAutomationDiagnosticProbes(), IsMarketAcquisitionUnlocked);
+        settingsTab = new SettingsTabPanel(
+            config,
+            reporter,
+            log,
+            () => _ = marketAcquisitionRouteRunner.Stop(),
+            () => AcquisitionDiagnostics.IsOpen = false,
+            () => AutomationDiagnostics.IsOpen = false,
+            () => AutomationDiagnostics.IsOpen = true);
 
         var restoredAcquisitionClaim = MarketAcquisitionClaimPersistence.Restore(config);
         if (restoredAcquisitionClaim != null)
@@ -324,7 +320,7 @@ public class MainWindow : Window, IDisposable
 
             if (ImGui.BeginTabItem("Settings"))
             {
-                DrawSettingsTab();
+                settingsTab.Draw();
                 ImGui.EndTabItem();
             }
 
@@ -512,7 +508,7 @@ public class MainWindow : Window, IDisposable
             claimedAcquisitionRequest,
             pendingAcquisitionRequests,
             acquisitionRequestBusy,
-            !string.IsNullOrWhiteSpace(apiKeyBuffer),
+            !string.IsNullOrWhiteSpace(config.ApiKey),
             hasScope,
             characterName,
             world,
@@ -3525,213 +3521,6 @@ public class MainWindow : Window, IDisposable
             ? ColError
             : ColMuted;
 
-    private void DrawSettingsTab()
-    {
-        ImGui.Spacing();
-        ImGui.TextColored(ColHeader, "Plugin Settings");
-        ImGui.TextWrapped("Shared MarketMafioso client/server settings used by Inventory Reporter, Workshop Logistics, and receiver-backed features.");
-        ImGui.Spacing();
-
-        DrawServerSection();
-        ImGui.Spacing();
-        DrawInternalFeatureSettingsSection();
-        if (IsMarketAcquisitionUnlocked())
-        {
-            ImGui.Spacing();
-            DrawMarketAcquisitionSettingsSection();
-        }
-    }
-
-    private void DrawServerSection()
-    {
-        ImGui.TextColored(ColHeader, "Server Connection");
-        ImGui.Separator();
-
-        ImGui.Text("Server URL:");
-        ImGui.SetNextItemWidth(-1);
-        if (ImGui.InputText("##url", ref urlBuffer, 512))
-        {
-            config.ServerUrl = urlBuffer;
-            config.Save();
-        }
-
-        if (ImGui.Button("Local Receiver"))
-            ApplyServerUrlPreset(LocalReceiverUrl);
-        ImGui.SameLine();
-        if (ImGui.Button("Dev VPS"))
-            ApplyServerUrlPreset(DevReceiverUrl);
-        ImGui.SameLine();
-        ImGui.BeginDisabled();
-        ImGui.Button("Production VPS (future)");
-        ImGui.EndDisabled();
-
-        var endpoint = ReceiverEndpointClassifier.Classify(urlBuffer);
-        var requiresApiKey = endpoint.RequiresApiKey;
-        ImGui.Text(requiresApiKey
-            ? "Client API Key (required for this endpoint):"
-            : "Client API Key (optional - sent as X-Api-Key header):");
-        var keyWidth = ImGui.GetContentRegionAvail().X - 70;
-        ImGui.SetNextItemWidth(keyWidth);
-        var flags = showApiKey ? ImGuiInputTextFlags.None : ImGuiInputTextFlags.Password;
-        if (ImGui.InputText("##apikey", ref apiKeyBuffer, 256, flags))
-        {
-            config.ApiKey = apiKeyBuffer;
-            config.Save();
-        }
-        ImGui.SameLine();
-        if (ImGui.Button(showApiKey ? "Hide##k" : "Show##k", new Vector2(60, 0)))
-            showApiKey = !showApiKey;
-
-        if (endpoint.Kind == ReceiverEndpointKind.Invalid)
-            ImGui.TextColored(ColError, "Enter a valid HTTP or HTTPS receiver URL.");
-        else if (requiresApiKey && string.IsNullOrWhiteSpace(apiKeyBuffer))
-            ImGui.TextColored(ColError, "This endpoint requires a client API key before plugin requests can be sent.");
-        else if (endpoint.Kind == ReceiverEndpointKind.CustomRemote)
-            ImGui.TextColored(ColMuted, "Custom remote endpoint. Client API key is required by default.");
-
-        ImGui.Spacing();
-        DrawDashboardOpenSection();
-    }
-
-    private void DrawMarketAcquisitionSettingsSection()
-    {
-        ImGui.TextColored(ColHeader, "Market Acquisition");
-        ImGui.Separator();
-
-        var enableOpportunistic = config.EnableOpportunisticWorldChecks;
-        if (ImGui.Checkbox("Check every batch item on each visited world", ref enableOpportunistic))
-        {
-            config.EnableOpportunisticWorldChecks = enableOpportunistic;
-            config.Save();
-        }
-
-        ImGui.TextColored(
-            ColMuted,
-            "Default on. While already on a world, MarketMafioso checks other unfinished items from the same claimed batch.");
-
-        ImGui.Spacing();
-        var createRouteDiagnostics = config.CreateMarketAcquisitionRouteDiagnosticPackages;
-        if (ImGui.Checkbox("Create route diagnostic packages", ref createRouteDiagnostics))
-        {
-            config.CreateMarketAcquisitionRouteDiagnosticPackages = createRouteDiagnostics;
-            config.Save();
-        }
-
-        ImGui.TextColored(
-            ColMuted,
-            "When enabled, every guided route writes route.log plus observed-listings and purchase-record CSVs.");
-
-        ImGui.Spacing();
-        var recentWorldTtlHours = config.MarketAcquisitionRecentWorldTtlHours;
-        ImGui.SetNextItemWidth(120f);
-        if (ImGui.InputInt("All-world recent check TTL (hours)", ref recentWorldTtlHours))
-        {
-            config.MarketAcquisitionRecentWorldTtlHours = Math.Clamp(recentWorldTtlHours, 1, 168);
-            config.Save();
-        }
-
-        var ignoreRecentVisits = config.MarketAcquisitionIgnoreRecentWorldVisitsForSweep;
-        if (ImGui.Checkbox("Full all-world resweep", ref ignoreRecentVisits))
-        {
-            config.MarketAcquisitionIgnoreRecentWorldVisitsForSweep = ignoreRecentVisits;
-            config.Save();
-        }
-
-        ImGui.TextColored(
-            ColMuted,
-            "Default TTL is 18h. Full resweep ignores recent checked worlds while preparing all-world routes.");
-    }
-
-    private void DrawInternalFeatureSettingsSection()
-    {
-        ImGui.TextColored(ColHeader, "Internal Features");
-        ImGui.Separator();
-
-        DrawCraftQuoteSettingsSection();
-        ImGui.Spacing();
-
-        if (IsMarketAcquisitionUnlocked())
-        {
-            var unlockedAt = config.MarketAcquisitionUnlockedAtUtc == null
-                ? "enabled"
-                : $"enabled {config.MarketAcquisitionUnlockedAtUtc.Value:yyyy-MM-dd HH:mm:ss} UTC";
-            ImGui.TextColored(ColSuccess, $"Market Acquisition {unlockedAt}.");
-            ImGui.SameLine();
-            if (ImGui.Button("Lock Market Acquisition"))
-            {
-                marketAcquisitionRouteRunner.Stop();
-                AcquisitionDiagnostics.IsOpen = false;
-                AutomationDiagnostics.IsOpen = false;
-                MarketAcquisitionUnlock.Lock(config);
-                config.Save();
-                marketAcquisitionUnlockKeyBuffer = string.Empty;
-                marketAcquisitionUnlockStatus = "Private module locked.";
-            }
-
-            ImGui.TextColored(ColMuted, "Locking hides the UI only. Existing local request state and server data are left untouched.");
-            if (ImGui.Button("Automation Diagnostics"))
-                AutomationDiagnostics.IsOpen = true;
-            return;
-        }
-
-        AutomationDiagnostics.IsOpen = false;
-
-        ImGui.TextColored(ColMuted, "Private/internal modules are hidden by default.");
-        ImGui.Text("Unlock key:");
-        var keyWidth = ImGui.GetContentRegionAvail().X - 82;
-        ImGui.SetNextItemWidth(Math.Max(120f, keyWidth));
-        var flags = showMarketAcquisitionUnlockKey ? ImGuiInputTextFlags.None : ImGuiInputTextFlags.Password;
-        ImGui.InputText("##marketAcquisitionUnlockKey", ref marketAcquisitionUnlockKeyBuffer, 256, flags);
-        ImGui.SameLine();
-        if (ImGui.Button(showMarketAcquisitionUnlockKey ? "Hide##marketAcquisitionUnlock" : "Show##marketAcquisitionUnlock", new Vector2(72, 0)))
-            showMarketAcquisitionUnlockKey = !showMarketAcquisitionUnlockKey;
-
-        if (ImGuiUi.Button("Unlock private module", !string.IsNullOrWhiteSpace(marketAcquisitionUnlockKeyBuffer)))
-        {
-            if (MarketAcquisitionUnlock.TryUnlock(config, marketAcquisitionUnlockKeyBuffer))
-            {
-                config.Save();
-                marketAcquisitionUnlockKeyBuffer = string.Empty;
-                marketAcquisitionUnlockStatus = "Private module unlocked.";
-            }
-            else
-            {
-                marketAcquisitionUnlockStatus = "Unlock key was not accepted.";
-            }
-        }
-
-        ImGui.TextColored(
-            marketAcquisitionUnlockStatus.Contains("not accepted", StringComparison.OrdinalIgnoreCase) ? ColError : ColMuted,
-            marketAcquisitionUnlockStatus);
-    }
-
-    private void DrawCraftQuoteSettingsSection()
-    {
-        ImGui.TextColored(ColHeader, "Craft Quote Evidence");
-
-        var enableWorkshopHostQuotes = config.EnableWorkshopHostCraftQuotes;
-        if (ImGui.Checkbox("Enable Workshop Host craft quotes", ref enableWorkshopHostQuotes))
-        {
-            config.EnableWorkshopHostCraftQuotes = enableWorkshopHostQuotes;
-            config.Save();
-        }
-
-        ImGui.TextColored(
-            ColMuted,
-            "Uses the configured Workshop Host service for advisory craft-cost evidence when the host advertises craft.appraise.");
-
-        var enableManualFallback = config.EnableCraftArchitectManualFallback;
-        if (ImGui.Checkbox("Enable manual craft-cost fallback", ref enableManualFallback))
-        {
-            config.EnableCraftArchitectManualFallback = enableManualFallback;
-            config.Save();
-        }
-
-        ImGui.TextColored(
-            ColMuted,
-            "Default off. Workshop Host should be the normal quote path; manual craft cost entry is only for local troubleshooting.");
-    }
-
     private CraftAppraisalRequestBuilderController CreateAcquisitionRequestBuilderCraftAppraisalController()
     {
         var capabilitiesClient = new WorkshopHostCapabilitiesClient(craftQuoteHttpClient);
@@ -3756,60 +3545,6 @@ public class MainWindow : Window, IDisposable
         controller.State.WorkshopHostEnabled = config.EnableWorkshopHostCraftQuotes;
         return controller;
     }
-
-    private void DrawDashboardOpenSection()
-    {
-        var dashboardUrl = HttpReporter.ResolveDashboardUrlForDisplay(reporter.LastDashboardUrl, urlBuffer) ?? string.Empty;
-        if (!string.Equals(dashboardUrlBuffer, dashboardUrl, StringComparison.Ordinal))
-            dashboardUrlBuffer = dashboardUrl;
-
-        ImGui.Text("Dashboard URL:");
-        var buttonWidth = 128f;
-        var inputWidth = Math.Max(120f, ImGui.GetContentRegionAvail().X - buttonWidth - ImGui.GetStyle().ItemSpacing.X);
-        ImGui.SetNextItemWidth(inputWidth);
-        ImGui.InputText("##dashboardUrl", ref dashboardUrlBuffer, 1024, ImGuiInputTextFlags.ReadOnly);
-        ImGui.SameLine();
-        if (ImGuiUi.Button("Open Dashboard", new Vector2(buttonWidth, 0), !string.IsNullOrWhiteSpace(dashboardUrl)))
-            OpenDashboardUrl(dashboardUrl);
-
-        var status = string.IsNullOrWhiteSpace(dashboardUrl)
-            ? dashboardOpenStatus
-            : string.IsNullOrWhiteSpace(reporter.LastDashboardUrl)
-                ? "Dashboard link derived from endpoint."
-                : dashboardOpenStatus;
-        ImGui.TextColored(GetDashboardOpenStatusColor(status), status);
-    }
-
-    private void OpenDashboardUrl(string dashboardUrl)
-    {
-        if (!Uri.TryCreate(dashboardUrl, UriKind.Absolute, out var uri) ||
-            (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
-        {
-            dashboardOpenStatus = "Dashboard URL is not a valid HTTP or HTTPS link.";
-            log.Warning($"[MarketMafioso] Refusing to open invalid dashboard URL: {dashboardUrl}");
-            return;
-        }
-
-        try
-        {
-            Process.Start(new ProcessStartInfo(uri.ToString())
-            {
-                UseShellExecute = true,
-            });
-            dashboardOpenStatus = "Opened dashboard in external browser.";
-        }
-        catch (Exception ex)
-        {
-            dashboardOpenStatus = $"Unable to open dashboard. {ex.Message}";
-            log.Error(ex, "[MarketMafioso] Unable to open dashboard URL.");
-        }
-    }
-
-    private static Vector4 GetDashboardOpenStatusColor(string status) =>
-        status.StartsWith("Unable", StringComparison.OrdinalIgnoreCase) ||
-        status.Contains("not a valid", StringComparison.OrdinalIgnoreCase)
-            ? ColError
-            : ColMuted;
 
     private bool IsMarketAcquisitionUnlocked() => MarketAcquisitionUnlock.IsUnlocked(config);
 
@@ -3889,13 +3624,6 @@ public class MainWindow : Window, IDisposable
             return "not present";
 
         return $"{(addon->IsReady ? "ready" : "not ready")}, {(addon->IsVisible ? "visible" : "hidden")}";
-    }
-
-    private void ApplyServerUrlPreset(string serverUrl)
-    {
-        urlBuffer = serverUrl;
-        config.ServerUrl = serverUrl;
-        config.Save();
     }
 
     public void Dispose()
