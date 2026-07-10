@@ -62,6 +62,7 @@ public class MainWindow : Window, IDisposable
     private readonly InventoryReporterTabPanel inventoryReporterTab;
     private readonly StatusTabPanel statusTab;
     private readonly MarketAcquisitionPlanPanel marketAcquisitionPlanPanel = new();
+    private readonly MarketAcquisitionRequestPickupPanel marketAcquisitionRequestPickupPanel;
     private readonly MarketAcquisitionRequestBuilderPanel acquisitionRequestBuilder;
     private readonly RetainerRestockBrowserState restockBrowserState = new();
     private readonly RetainerRestockBrowserPanel restockBrowser;
@@ -203,6 +204,9 @@ public class MainWindow : Window, IDisposable
             Plugin.Instance.RestartTimer,
             config.Save);
         statusTab = new StatusTabPanel(config, reporter, retainerCacheStore, log);
+        marketAcquisitionRequestPickupPanel = new MarketAcquisitionRequestPickupPanel(
+            () => _ = FetchDashboardRequestsAsync(),
+            requestId => _ = ClaimAcquisitionRequestAsync(requestId));
         restockBrowser = new RetainerRestockBrowserPanel(config, restockBrowserState, config.Save);
         ProjectBrowser = new WorkshopProjectBrowserWindow(
             config,
@@ -494,97 +498,21 @@ public class MainWindow : Window, IDisposable
 
     private void DrawMarketAcquisitionPickupSection(bool compactWhenClaimed = false)
     {
-        ImGuiUi.SectionHeader("Dashboard Requests", ColHeader);
-
-        var routeOwnsUi = IsMarketAcquisitionRouteActive();
-        if (routeOwnsUi)
-        {
-            ImGui.TextColored(ColMuted, "Request pickup is hidden while a guided route is active.");
-            if (claimedAcquisitionRequest != null)
-                ImGui.TextColored(ColMuted, $"Active request: {FormatAcquisitionItem(claimedAcquisitionRequest)}");
-            ImGui.SameLine();
-            var visibleStatus = GetVisibleAcquisitionStatus();
-            ImGui.TextColored(GetAcquisitionStatusColor(visibleStatus), visibleStatus);
-            return;
-        }
-
-        if (compactWhenClaimed && claimedAcquisitionRequest is not null && pendingAcquisitionRequests.Count == 0)
-        {
-            var canFetchCompact = !acquisitionRequestBusy &&
-                                  !string.IsNullOrWhiteSpace(apiKeyBuffer) &&
-                                  TryGetAcquisitionScope(out _, out _);
-            if (ImGuiUi.Button("Check Dashboard##MarketAcquisitionFetchCompact", canFetchCompact))
-                _ = FetchDashboardRequestsAsync();
-
-            ImGui.SameLine();
-            ImGui.TextColored(GetAcquisitionStatusColor(GetVisibleAcquisitionStatus()), GetVisibleAcquisitionStatus());
-            return;
-        }
-
-        if (TryGetAcquisitionScope(out var characterName, out var world))
-        {
-            ImGui.TextColored(ColMuted, $"Character scope: {characterName} @ {world}");
-        }
-        else if (IsExpectedCharacterScopeGap())
-        {
-            ImGui.TextColored(ColMuted, "Character scope temporarily unavailable during route travel.");
-        }
-        else
-        {
-            ImGui.TextColored(ColError, "Character scope unavailable. Log into a character before fetching requests.");
-        }
-
-        var canFetch = !acquisitionRequestBusy &&
-                       !string.IsNullOrWhiteSpace(apiKeyBuffer) &&
-                       TryGetAcquisitionScope(out _, out _);
-        if (ImGuiUi.Button("Check Dashboard##MarketAcquisitionFetch", canFetch))
-            _ = FetchDashboardRequestsAsync();
-
-        ImGui.SameLine();
-        var visibleAcquisitionStatus = GetVisibleAcquisitionStatus();
-        ImGui.TextColored(GetAcquisitionStatusColor(visibleAcquisitionStatus), visibleAcquisitionStatus);
-
-        if (pendingAcquisitionRequests.Count == 0)
-        {
-            ImGui.TextColored(
-                string.IsNullOrWhiteSpace(apiKeyBuffer) ? ColError : ColMuted,
-                string.IsNullOrWhiteSpace(apiKeyBuffer)
-                    ? "Set the client API key in Settings before fetching dashboard requests."
-                    : "No pending dashboard requests are loaded.");
-            return;
-        }
-
-        var tableFlags = ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.Resizable;
-        if (ImGui.BeginTable("MarketAcquisitionPendingRequests", 6, tableFlags))
-        {
-            ImGui.TableSetupColumn("Item");
-            ImGui.TableSetupColumn("Qty");
-            ImGui.TableSetupColumn("HQ");
-            ImGui.TableSetupColumn("Max Unit");
-            ImGui.TableSetupColumn("Mode");
-            ImGui.TableSetupColumn("");
-            ImGui.TableHeadersRow();
-
-            foreach (var request in pendingAcquisitionRequests)
-            {
-                ImGui.TableNextRow();
-                ImGui.TableNextColumn();
-                ImGui.TextUnformatted(FormatAcquisitionItem(request));
-                ImGui.TableNextColumn();
-                ImGui.TextUnformatted(MarketAcquisitionQuantityModePresenter.FormatQuantity(request.QuantityMode, request.Quantity));
-                ImGui.TableNextColumn();
-                ImGui.TextUnformatted(request.HqPolicy);
-                ImGui.TableNextColumn();
-                ImGui.TextUnformatted(FormatGil(request.MaxUnitPrice));
-                ImGui.TableNextColumn();
-                ImGui.TextUnformatted(MarketAcquisitionQuantityModePresenter.FormatMode(request.QuantityMode));
-                ImGui.TableNextColumn();
-                if (ImGuiUi.Button($"Claim##marketAcquisitionClaim{request.Id}", !acquisitionRequestBusy))
-                    _ = ClaimAcquisitionRequestAsync(request.Id);
-            }
-
-            ImGui.EndTable();
-        }
+        var hasScope = TryGetAcquisitionScope(out var characterName, out var world);
+        var visibleStatus = GetVisibleAcquisitionStatus();
+        marketAcquisitionRequestPickupPanel.Draw(new MarketAcquisitionRequestPickupContext(
+            compactWhenClaimed,
+            IsMarketAcquisitionRouteActive(),
+            claimedAcquisitionRequest,
+            pendingAcquisitionRequests,
+            acquisitionRequestBusy,
+            !string.IsNullOrWhiteSpace(apiKeyBuffer),
+            hasScope,
+            characterName,
+            world,
+            IsExpectedCharacterScopeGap(),
+            visibleStatus,
+            GetAcquisitionStatusColor(visibleStatus)));
     }
 
     private void DrawClaimedAcquisitionRequest()
