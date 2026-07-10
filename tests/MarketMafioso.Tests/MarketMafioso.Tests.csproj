@@ -32,4 +32,8 @@
     <ProjectReference Include="..\..\src\MarketMafioso\MarketMafioso.csproj" />
     <ProjectReference Include="..\..\src\MarketMafioso.Server\MarketMafioso.Server.csproj" />
   </ItemGroup>
+
+  <Target Name="ValidateCraftArchitectCoreProject" BeforeTargets="PrepareForBuild" Condition="!Exists('$(CraftArchitectCoreProject)')">
+    <Error Text="Craft Architect Core was not found at '$(CraftArchitectCoreProject)'. Check out the sibling 'FFXIV Craft Architect C# Edition' repository or set /p:CraftArchitectCoreProject=&quot;path/to/FFXIV Craft Architect.Core.csproj&quot;." />
+  </Target>
 </Project>

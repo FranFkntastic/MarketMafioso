@@ -19,7 +19,7 @@
 
   <PropertyGroup Condition="'$(Configuration)' == 'Debug'">
     <OutputPath>bin\Debug</OutputPath>
-    <DevPluginDeployDir>F:\Everything (HDD)\Misc\Gooseworks (Projects)\FFXIV-Development\_deployed\MarketMafioso</DevPluginDeployDir>
+    <DevPluginDeployDir Condition="'$(DevPluginDeployDir)' == ''">$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)\..\..\..\_deployed\MarketMafioso'))</DevPluginDeployDir>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(Configuration)' == 'Release'">

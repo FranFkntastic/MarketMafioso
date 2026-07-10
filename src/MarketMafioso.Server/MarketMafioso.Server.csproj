@@ -15,6 +15,10 @@
     <ProjectReference Include="..\MarketMafioso.Dashboard\MarketMafioso.Dashboard.csproj" />
   </ItemGroup>
 
+  <Target Name="ValidateCraftArchitectCoreProject" BeforeTargets="PrepareForBuild" Condition="!Exists('$(CraftArchitectCoreProject)')">
+    <Error Text="Craft Architect Core was not found at '$(CraftArchitectCoreProject)'. Check out the sibling 'FFXIV Craft Architect C# Edition' repository or set /p:CraftArchitectCoreProject=&quot;path/to/FFXIV Craft Architect.Core.csproj&quot;." />
+  </Target>
+
   <Target Name="CopyDashboardSourceMapsToPublish" AfterTargets="Publish">
     <ItemGroup>
       <DashboardSourceMapFiles Include="..\MarketMafioso.Dashboard\bin\$(Configuration)\$(TargetFramework)\wwwroot\_framework\*.map" />
