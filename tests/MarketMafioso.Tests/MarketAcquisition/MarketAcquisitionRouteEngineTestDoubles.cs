@@ -28,12 +28,19 @@ internal sealed class FakeRouteContext : IMarketAcquisitionRouteContext
 
 internal sealed class FakeRouteUiAutomation : IMarketAcquisitionRouteUiAutomation
 {
-    public bool ProcessCommand(string command) => true;
+    public List<string> Commands { get; } = [];
+    public bool TravelPreflightCanSend { get; set; } = true;
+    public bool ProcessCommand(string command)
+    {
+        Commands.Add(command);
+        return true;
+    }
+
     public bool TryCloseMarketBoardWindows() => true;
     public AutomationTravelPreflightResult CheckTravelPreflight() => new()
     {
-        CanSendCommand = true,
-        Message = "No blocking UI is open.",
+        CanSendCommand = TravelPreflightCanSend,
+        Message = TravelPreflightCanSend ? "No blocking UI is open." : "Close blocking UI before travel.",
     };
 
     public bool TryScrollMarketBoardListingsToRow(int requestedRow, out string message)
@@ -45,15 +52,18 @@ internal sealed class FakeRouteUiAutomation : IMarketAcquisitionRouteUiAutomatio
 
 internal sealed class FakeMarketBoardIo : IMarketAcquisitionMarketBoardIo
 {
-    public MarketBoardApproachResult OpenOrApproachMarketBoard() => MarketBoardApproachResult.Ready("Market board is ready.");
-    public MarketBoardItemSearchResult SearchItem(uint itemId, string? itemName) => new() { Status = "ListingsReady" };
-    public MarketBoardReadResult ReadCurrentListings(string currentWorld) => new()
-    {
-        Status = "NoListings",
-        Message = "No listings.",
-        ReadState = MarketBoardListingReadState.FreshComplete,
-        WorldName = currentWorld,
-    };
+    public Queue<MarketBoardReadResult> Reads { get; } = [];
+    public Queue<MarketBoardItemSearchResult> Searches { get; } = [];
+    public MarketBoardApproachResult ApproachResult { get; set; } = MarketBoardApproachResult.Ready("Market board is ready.");
+    public MarketBoardApproachResult OpenOrApproachMarketBoard() => ApproachResult;
+    public MarketBoardItemSearchResult SearchItem(uint itemId, string? itemName) => Searches.Count == 0 ? new() { Status = "ListingsReady" } : Searches.Dequeue();
+    public MarketBoardReadResult ReadCurrentListings(string currentWorld) => Reads.Count == 0 ? new()
+        {
+            Status = "NoListings",
+            Message = "No listings.",
+            ReadState = MarketBoardListingReadState.FreshComplete,
+            WorldName = currentWorld,
+        } : Reads.Dequeue();
 
     public MarketBoardInputCapture CaptureInputState() => new() { Status = "Captured" };
 }
@@ -97,6 +107,10 @@ internal sealed class FakeRouteEvidenceRecorder : IMarketAcquisitionRouteEvidenc
 
 internal sealed class MarketAcquisitionRouteEngineHarness : IDisposable
 {
+    public FakeRouteClock Clock { get; } = new();
+    public FakeRouteContext Context { get; } = new();
+    public FakeRouteUiAutomation Ui { get; } = new();
+    public FakeMarketBoardIo MarketBoard { get; } = new();
     public MarketAcquisitionRouteRunner Runner { get; }
     public MarketAcquisitionRouteEngine Engine { get; }
 
@@ -107,13 +121,13 @@ internal sealed class MarketAcquisitionRouteEngineHarness : IDisposable
         Runner = new MarketAcquisitionRouteRunner(directory);
         Engine = new MarketAcquisitionRouteEngine(
             Runner,
-            new FakeRouteContext(),
-            new FakeRouteUiAutomation(),
-            new FakeMarketBoardIo(),
+            Context,
+            Ui,
+            MarketBoard,
             new FakePurchaseIo(),
             new FakeRouteReporter(),
             new FakeRouteEvidenceRecorder(),
-            new FakeRouteClock());
+            Clock);
     }
 
     public static MarketAcquisitionRouteEngineHarness Create() => new();
