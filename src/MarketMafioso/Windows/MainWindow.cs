@@ -58,6 +58,7 @@ public class MainWindow : Window, IDisposable
     private readonly MarketBoardAutomationController marketBoardAutomationController = new();
     private readonly string marketAcquisitionRouteDiagnosticsDirectory;
     private readonly OverviewTabPanel overviewTab;
+    private readonly InventoryReporterTabPanel inventoryReporterTab;
     private readonly MarketAcquisitionRequestBuilderPanel acquisitionRequestBuilder;
     private readonly RetainerRestockBrowserState restockBrowserState = new();
     private readonly RetainerRestockBrowserPanel restockBrowser;
@@ -71,7 +72,6 @@ public class MainWindow : Window, IDisposable
     private string marketAcquisitionUnlockStatus = "Private module is hidden until unlocked.";
     private bool showApiKey = false;
     private bool showMarketAcquisitionUnlockKey = false;
-    private bool showPreview = false;
     private readonly WorkshopProjectSelectionState workshopProjectSelection = new();
     private IReadOnlyList<MarketAcquisitionRequestView> pendingAcquisitionRequests = [];
     private MarketAcquisitionClaimView? claimedAcquisitionRequest;
@@ -206,6 +206,12 @@ public class MainWindow : Window, IDisposable
         urlBuffer = config.ServerUrl;
         apiKeyBuffer = config.ApiKey;
         overviewTab = new OverviewTabPanel(IsMarketAcquisitionUnlocked);
+        inventoryReporterTab = new InventoryReporterTabPanel(
+            config,
+            reporter,
+            autoRetainerRefresh,
+            Plugin.Instance.RestartTimer,
+            config.Save);
         restockBrowser = new RetainerRestockBrowserPanel(config, restockBrowserState, config.Save);
         ProjectBrowser = new WorkshopProjectBrowserWindow(
             config,
@@ -287,7 +293,7 @@ public class MainWindow : Window, IDisposable
 
             if (ImGui.BeginTabItem("Inventory Reporter"))
             {
-                DrawInventoryReporterTab();
+                inventoryReporterTab.Draw();
                 ImGui.EndTabItem();
             }
 
@@ -340,26 +346,6 @@ public class MainWindow : Window, IDisposable
             IsMarketAcquisitionUnlocked()
                 ? "Current modules: Inventory Reporter, Workshop Logistics, Market Acquisition"
                 : "Current modules: Inventory Reporter, Workshop Logistics");
-    }
-
-    private void DrawInventoryReporterTab()
-    {
-        ImGui.Spacing();
-        ImGui.TextColored(ColHeader, "Inventory Reporter");
-        ImGui.TextWrapped(InventoryModuleSummary);
-        ImGui.Spacing();
-
-        DrawInventoryOptionsSection();
-        ImGui.Spacing();
-        DrawBehaviourSection();
-        ImGui.Spacing();
-        DrawActionsSection();
-
-        if (showPreview)
-        {
-            ImGui.Separator();
-            DrawJsonPreview();
-        }
     }
 
     private void DrawWorkshopPrepTab()
@@ -4279,58 +4265,6 @@ public class MainWindow : Window, IDisposable
         config.Save();
     }
 
-    private void DrawInventoryOptionsSection()
-    {
-        ImGui.TextColored(ColHeader, "Included Data");
-        ImGui.Separator();
-
-        ImGui.TextColored(ColMuted, "Player inventory (4 bags) is always included.");
-        ImGui.Spacing();
-
-        DrawCheckbox("Armoury Chest", v => config.IncludeArmoury = v, config.IncludeArmoury);
-        DrawCheckbox("Crystal bag", v => config.IncludeCrystals = v, config.IncludeCrystals);
-        DrawCheckbox("Equipped gear", v => config.IncludeEquipped = v, config.IncludeEquipped);
-        DrawCheckbox("Saddlebag (if subscribed)", v => config.IncludeSaddlebag = v, config.IncludeSaddlebag);
-        ImGui.Spacing();
-        DrawCheckbox("Resolve item names via Lumina", v => config.IncludeItemNames = v, config.IncludeItemNames);
-        DrawCheckbox("Include character name & world", v => config.IncludeCharacterInfo = v, config.IncludeCharacterInfo);
-    }
-
-    private void DrawBehaviourSection()
-    {
-        ImGui.TextColored(ColHeader, "Automation");
-        ImGui.Separator();
-
-        DrawCheckbox("Auto-send on retainer window close", v => config.AutoSendOnRetainerClose = v, config.AutoSendOnRetainerClose);
-        ImGui.TextColored(ColMuted,
-            "  Retainer data is cached each time you close a retainer window.\n" +
-            "  Visit each retainer once per session to populate the cache.");
-
-        ImGui.Spacing();
-
-        DrawCheckbox("Enable automatic periodic sending", v =>
-        {
-            config.EnableAutoSendTimer = v;
-            Plugin.Instance.RestartTimer();
-        }, config.EnableAutoSendTimer);
-
-        if (config.EnableAutoSendTimer)
-        {
-            var interval = config.AutoSendIntervalMinutes;
-            ImGui.SetNextItemWidth(100);
-            if (ImGui.InputInt("Send Interval (minutes)##interval", ref interval, 1, 5))
-            {
-                if (interval < 1) interval = 1;
-                if (interval != config.AutoSendIntervalMinutes)
-                {
-                    config.AutoSendIntervalMinutes = interval;
-                    config.Save();
-                    Plugin.Instance.RestartTimer();
-                }
-            }
-        }
-    }
-
     private void DrawRetainerCacheSection()
     {
         ImGui.TextColored(ColHeader, "Retainer Cache");
@@ -4365,56 +4299,6 @@ public class MainWindow : Window, IDisposable
         }
     }
 
-    private void DrawActionsSection()
-    {
-        ImGui.TextColored(ColHeader, "Inventory Reporter Actions");
-        ImGui.Separator();
-
-        var third = (ImGui.GetContentRegionAvail().X - 2 * ImGui.GetStyle().ItemSpacing.X) / 3f;
-
-        if (ImGui.Button("Send Report Now", new Vector2(third, 0)))
-            _ = reporter.SendReportAsync();
-
-        ImGui.SameLine();
-
-        var canRefreshRetainers = autoRetainerRefresh.CanStartRefresh &&
-                                  !autoRetainerRefresh.IsRefreshing &&
-                                  !autoRetainerRefresh.IsStartQueued;
-        if (!canRefreshRetainers)
-            ImGui.BeginDisabled();
-
-        if (ImGui.Button("Refresh Retainer Cache", new Vector2(third, 0)))
-            autoRetainerRefresh.StartFullRefresh();
-
-        if (!canRefreshRetainers)
-            ImGui.EndDisabled();
-
-        ImGui.SameLine();
-
-        var previewLabel = showPreview ? "Hide JSON Preview" : "Show JSON Preview";
-        if (ImGui.Button(previewLabel, new Vector2(third, 0)))
-            showPreview = !showPreview;
-
-        ImGui.Spacing();
-        ImGui.TextColored(GetRefreshStatusColor(), autoRetainerRefresh.LastStatus);
-    }
-
-    private Vector4 GetRefreshStatusColor()
-    {
-        if (autoRetainerRefresh.IsRefreshing)
-            return ColHeader;
-
-        if (autoRetainerRefresh.LastStatus.Contains("complete", StringComparison.OrdinalIgnoreCase))
-            return ColSuccess;
-
-        if (autoRetainerRefresh.LastStatus.Contains("failed", StringComparison.OrdinalIgnoreCase) ||
-            autoRetainerRefresh.LastStatus.Contains("unable", StringComparison.OrdinalIgnoreCase) ||
-            autoRetainerRefresh.LastStatus.Contains("timed out", StringComparison.OrdinalIgnoreCase))
-            return ColError;
-
-        return ColMuted;
-    }
-
     private void DrawStatusSection()
     {
         ImGui.TextColored(ColHeader, "Module Status");
@@ -4432,33 +4316,6 @@ public class MainWindow : Window, IDisposable
         else
         {
             ImGui.TextColored(ColMuted, $"Status: {reporter.LastStatus}");
-        }
-    }
-
-    private void DrawJsonPreview()
-    {
-        ImGui.TextColored(ColHeader, "JSON Preview (last payload)");
-        ImGui.Separator();
-
-        var json = reporter.LastPayload ?? "(No payload yet - press 'Send Report Now' first)";
-        ImGui.SetNextItemWidth(-1);
-        ImGui.InputTextMultiline(
-            "##jsonPreview",
-            ref json,
-            Math.Max(json.Length + 1, 8192),
-            new Vector2(-1, 240),
-            ImGuiInputTextFlags.ReadOnly,
-            (ImGui.ImGuiInputTextCallbackDelegate?)null);
-    }
-
-
-    private void DrawCheckbox(string label, Action<bool> setter, bool currentValue)
-    {
-        var v = currentValue;
-        if (ImGui.Checkbox(label, ref v))
-        {
-            setter(v);
-            config.Save();
         }
     }
 
