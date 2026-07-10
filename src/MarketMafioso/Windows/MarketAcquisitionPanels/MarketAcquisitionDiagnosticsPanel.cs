@@ -11,7 +11,7 @@ namespace MarketMafioso.Windows.MarketAcquisitionPanels;
 
 internal sealed class MarketAcquisitionDiagnosticsPanel
 {
-    private readonly MarketAcquisitionRouteRunner routeRunner;
+    private readonly Func<MarketAcquisitionRouteEngineSnapshot> getRouteSnapshot;
     private readonly string diagnosticsDirectory;
     private readonly IPluginLog log;
     private readonly Action openMarketAcquisitionDiagnostics;
@@ -22,7 +22,7 @@ internal sealed class MarketAcquisitionDiagnosticsPanel
     private string diagnosticsFolderStatus = "Route diagnostics folder opens in Explorer.";
 
     public MarketAcquisitionDiagnosticsPanel(
-        MarketAcquisitionRouteRunner routeRunner,
+        Func<MarketAcquisitionRouteEngineSnapshot> getRouteSnapshot,
         string diagnosticsDirectory,
         IPluginLog log,
         Action openMarketAcquisitionDiagnostics,
@@ -30,7 +30,7 @@ internal sealed class MarketAcquisitionDiagnosticsPanel
         Action captureMarketBoardInputState,
         Action finalizeMarketBoardInputCaptureLog)
     {
-        this.routeRunner = routeRunner ?? throw new ArgumentNullException(nameof(routeRunner));
+        this.getRouteSnapshot = getRouteSnapshot ?? throw new ArgumentNullException(nameof(getRouteSnapshot));
         this.diagnosticsDirectory = diagnosticsDirectory ?? throw new ArgumentNullException(nameof(diagnosticsDirectory));
         this.log = log ?? throw new ArgumentNullException(nameof(log));
         this.openMarketAcquisitionDiagnostics = openMarketAcquisitionDiagnostics ?? throw new ArgumentNullException(nameof(openMarketAcquisitionDiagnostics));
@@ -41,6 +41,7 @@ internal sealed class MarketAcquisitionDiagnosticsPanel
 
     public void Draw()
     {
+        var snapshot = getRouteSnapshot();
         ImGui.Spacing();
         ImGuiUi.SectionHeader("Diagnostics", MarketMafiosoUiTheme.Header);
 
@@ -58,16 +59,16 @@ internal sealed class MarketAcquisitionDiagnosticsPanel
         ImGui.TextColored(GetDiagnosticsFolderStatusColor(), diagnosticsFolderStatus);
         ImGui.TextColored(MarketMafiosoUiTheme.Muted, diagnosticsDirectory);
 
-        if (routeRunner.LastDiagnosticFilePath != null)
-            ImGui.TextColored(MarketMafiosoUiTheme.Muted, $"Latest report: {routeRunner.LastDiagnosticFilePath}");
+        if (snapshot.LastDiagnosticFilePath != null)
+            ImGui.TextColored(MarketMafiosoUiTheme.Muted, $"Latest report: {snapshot.LastDiagnosticFilePath}");
 
-        DrawPostRunDiagnosticSummary();
-        DrawMarketBoardInputCapture();
+        DrawPostRunDiagnosticSummary(snapshot);
+        DrawMarketBoardInputCapture(snapshot);
     }
 
-    public void DrawLatestWorldCompletionSummary()
+    public void DrawLatestWorldCompletionSummary(MarketAcquisitionRouteEngineSnapshot snapshot)
     {
-        var summary = routeRunner.LatestWorldCompletionSummary;
+        var summary = snapshot.LatestWorldCompletionSummary;
         if (summary == null)
             return;
 
@@ -76,9 +77,9 @@ internal sealed class MarketAcquisitionDiagnosticsPanel
             $"Latest world: {summary.WorldName} ({FormatRouteDataCenter(summary.DataCenter)}) bought {summary.PurchasedQuantity:N0}, spent {FormatGil(summary.SpentGil)}; {summary.CompletedLineCount:N0} complete / {summary.SkippedLineCount:N0} skipped.");
     }
 
-    public void DrawPostRunDiagnosticSummary()
+    public void DrawPostRunDiagnosticSummary(MarketAcquisitionRouteEngineSnapshot snapshot)
     {
-        var runSummary = routeRunner.LastRunSummary;
+        var runSummary = snapshot.LastRunSummary;
         if (runSummary != null)
         {
             ImGui.TextColored(
@@ -112,7 +113,7 @@ internal sealed class MarketAcquisitionDiagnosticsPanel
             return;
         }
 
-        var summary = routeRunner.LastRunDiagnosticSummary;
+        var summary = snapshot.LastRunDiagnosticSummary;
         if (summary.Warnings.Count > 0)
         {
             ImGui.TextColored(
@@ -121,7 +122,7 @@ internal sealed class MarketAcquisitionDiagnosticsPanel
         }
     }
 
-    private void DrawMarketBoardInputCapture()
+    private void DrawMarketBoardInputCapture(MarketAcquisitionRouteEngineSnapshot snapshot)
     {
         ImGui.Spacing();
         ImGuiUi.SectionHeader("Input Capture", MarketMafiosoUiTheme.Header);
@@ -131,11 +132,11 @@ internal sealed class MarketAcquisitionDiagnosticsPanel
             captureMarketBoardInputState();
 
         ImGui.SameLine();
-        if (ImGuiUi.Button("Finish Capture Log", routeRunner.CanFinalizeInputCaptureLog))
+        if (ImGuiUi.Button("Finish Capture Log", snapshot.CanFinalizeInputCaptureLog))
             finalizeMarketBoardInputCaptureLog();
 
-        if (routeRunner.LastDiagnosticFilePath != null)
-            ImGui.TextColored(MarketMafiosoUiTheme.Muted, $"Capture log: {routeRunner.LastDiagnosticFilePath}");
+        if (snapshot.LastDiagnosticFilePath != null)
+            ImGui.TextColored(MarketMafiosoUiTheme.Muted, $"Capture log: {snapshot.LastDiagnosticFilePath}");
     }
 
     private void OpenDiagnosticsFolder(string folderPath)

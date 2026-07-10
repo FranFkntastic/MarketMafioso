@@ -23,6 +23,14 @@ public interface IMarketAcquisitionListingSource
 
 public sealed class MarketAcquisitionPlanPreparationService
 {
+    public static bool CanPrepareForStatus(string status) =>
+        string.Equals(status, "AcceptedInPlugin", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(status, "Running", StringComparison.OrdinalIgnoreCase) ||
+        IsFailedStatus(status);
+
+    public static bool IsFailedStatus(string status) =>
+        string.Equals(status, "Failed", StringComparison.OrdinalIgnoreCase);
+
     private readonly IMarketAcquisitionListingSource listingSource;
     private readonly MarketAcquisitionWorldVisitCatalog worldVisitCatalog;
     private readonly Action<Exception, string, uint>? freshEvidenceWarningSink;

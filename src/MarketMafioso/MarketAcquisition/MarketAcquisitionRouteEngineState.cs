@@ -17,9 +17,7 @@ internal sealed class MarketAcquisitionRouteEngineState
     public bool ProbeRunning { get; set; }
     public DateTimeOffset NextRouteMonitorUtc { get; set; } = DateTimeOffset.MinValue;
     public long ProgressReportSequence { get; set; }
-    public long ProgressSessionVersion { get; set; }
     public string ProgressNonce { get; set; } = Guid.NewGuid().ToString("N");
-    public string? LastProgressReportKey { get; set; }
     public string AcquisitionStatus { get; set; } = "No route has started.";
 
     public void ResetRouteExecutionState()
@@ -35,9 +33,7 @@ internal sealed class MarketAcquisitionRouteEngineState
         ActiveLineSpentGil = 0;
         ProbeRunning = false;
         NextRouteMonitorUtc = DateTimeOffset.MinValue;
-        ProgressSessionVersion++;
         ProgressReportSequence = 0;
         ProgressNonce = Guid.NewGuid().ToString("N");
-        LastProgressReportKey = null;
     }
 }

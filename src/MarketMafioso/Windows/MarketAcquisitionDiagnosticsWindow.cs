@@ -9,16 +9,12 @@ namespace MarketMafioso.Windows;
 
 public sealed class MarketAcquisitionDiagnosticsWindow : Window
 {
-    private readonly Func<MarketBoardReadResult?> getReadResult;
-    private readonly Func<MarketBoardListingReconciliation?> getReconciliation;
-    private readonly Func<MarketAcquisitionLiveCandidatePlan?> getCandidatePlan;
+    private readonly Func<MarketAcquisitionRouteEngineSnapshot> getRouteSnapshot;
     private readonly Func<MarketAcquisitionPlan?> getAcquisitionPlan;
     private readonly Func<bool> canProbeLiveListings;
     private readonly Action probeLiveListings;
     private readonly Action captureInputState;
-    private readonly Func<bool> canFinalizeInputCaptureLog;
     private readonly Action finalizeInputCaptureLog;
-    private readonly Func<string?> getDiagnosticFilePath;
     private readonly Func<CraftAppraisalDiagnosticsSnapshot> getCraftAppraisalDiagnostics;
 
     private static readonly Vector4 ColHeader = new(0.38f, 0.73f, 1.00f, 1f);
@@ -27,29 +23,21 @@ public sealed class MarketAcquisitionDiagnosticsWindow : Window
     private static readonly Vector4 ColMuted = new(0.60f, 0.60f, 0.60f, 1f);
 
     public MarketAcquisitionDiagnosticsWindow(
-        Func<MarketBoardReadResult?> getReadResult,
-        Func<MarketBoardListingReconciliation?> getReconciliation,
-        Func<MarketAcquisitionLiveCandidatePlan?> getCandidatePlan,
+        Func<MarketAcquisitionRouteEngineSnapshot> getRouteSnapshot,
         Func<MarketAcquisitionPlan?> getAcquisitionPlan,
         Func<bool> canProbeLiveListings,
         Action probeLiveListings,
         Action captureInputState,
-        Func<bool> canFinalizeInputCaptureLog,
         Action finalizeInputCaptureLog,
-        Func<string?> getDiagnosticFilePath,
         Func<CraftAppraisalDiagnosticsSnapshot> getCraftAppraisalDiagnostics)
         : base("Market Acquisition Diagnostics##MarketAcquisitionDiagnostics")
     {
-        this.getReadResult = getReadResult;
-        this.getReconciliation = getReconciliation;
-        this.getCandidatePlan = getCandidatePlan;
+        this.getRouteSnapshot = getRouteSnapshot;
         this.getAcquisitionPlan = getAcquisitionPlan;
         this.canProbeLiveListings = canProbeLiveListings;
         this.probeLiveListings = probeLiveListings;
         this.captureInputState = captureInputState;
-        this.canFinalizeInputCaptureLog = canFinalizeInputCaptureLog;
         this.finalizeInputCaptureLog = finalizeInputCaptureLog;
-        this.getDiagnosticFilePath = getDiagnosticFilePath;
         this.getCraftAppraisalDiagnostics = getCraftAppraisalDiagnostics;
 
         SizeConstraints = new WindowSizeConstraints
@@ -61,16 +49,17 @@ public sealed class MarketAcquisitionDiagnosticsWindow : Window
 
     public override void Draw()
     {
-        var readResult = getReadResult();
-        var reconciliation = getReconciliation();
-        var candidatePlan = getCandidatePlan();
+        var routeSnapshot = getRouteSnapshot();
+        var readResult = routeSnapshot.MarketBoardReadResult;
+        var reconciliation = routeSnapshot.MarketBoardReconciliation;
+        var candidatePlan = routeSnapshot.LiveCandidatePlan;
         var acquisitionPlan = getAcquisitionPlan();
 
         ImGui.TextColored(ColHeader, "Live Market Board Diagnostics");
         ImGui.TextWrapped("Manual probe tools, input capture, and candidate decisions for the current Market Acquisition request.");
         ImGui.Separator();
 
-        DrawDiagnosticControls();
+        DrawDiagnosticControls(routeSnapshot);
         ImGui.Separator();
         DrawCraftQuoteDiagnostics(getCraftAppraisalDiagnostics());
         ImGui.Separator();
@@ -90,7 +79,7 @@ public sealed class MarketAcquisitionDiagnosticsWindow : Window
         DrawLiveCandidatePlan(candidatePlan);
     }
 
-    private void DrawDiagnosticControls()
+    private void DrawDiagnosticControls(MarketAcquisitionRouteEngineSnapshot routeSnapshot)
     {
         if (ImGuiUi.Button("Read Live Listings", canProbeLiveListings()))
             probeLiveListings();
@@ -100,10 +89,10 @@ public sealed class MarketAcquisitionDiagnosticsWindow : Window
             captureInputState();
 
         ImGui.SameLine();
-        if (ImGuiUi.Button("Finish Capture Log", canFinalizeInputCaptureLog()))
+        if (ImGuiUi.Button("Finish Capture Log", routeSnapshot.CanFinalizeInputCaptureLog))
             finalizeInputCaptureLog();
 
-        var diagnosticFilePath = getDiagnosticFilePath();
+        var diagnosticFilePath = routeSnapshot.LastDiagnosticFilePath;
         if (!string.IsNullOrWhiteSpace(diagnosticFilePath))
             ImGui.TextColored(ColMuted, $"Diagnostics: {diagnosticFilePath}");
     }

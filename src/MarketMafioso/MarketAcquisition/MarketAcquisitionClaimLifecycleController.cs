@@ -66,6 +66,8 @@ public sealed class MarketAcquisitionClaimLifecycleController
         saveConfig();
     }
 
+    public void SetStatus(string status) => setStatus(status);
+
     public bool TryHandleRouteProgressConflict(
         Exception exception,
         MarketAcquisitionClaimView claimed,

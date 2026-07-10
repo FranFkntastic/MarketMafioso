@@ -1,4 +1,4 @@
-using MarketMafioso.Windows;
+using MarketMafioso.MarketAcquisition;
 
 namespace MarketMafioso.Tests.MarketAcquisition;
 
@@ -12,7 +12,7 @@ public sealed class MarketAcquisitionClaimStatusTests
             Status = "IncompleteListingCoverage",
         };
 
-        Assert.True(MainWindow.ShouldFailWorldPurchaseBatchOnNoCandidate(candidatePlan));
+        Assert.True(MarketAcquisitionRouteEngine.ShouldFailWorldPurchaseBatchOnNoCandidate(candidatePlan));
     }
 
     [Theory]
@@ -26,7 +26,7 @@ public sealed class MarketAcquisitionClaimStatusTests
             Status = status,
         };
 
-        Assert.False(MainWindow.ShouldFailWorldPurchaseBatchOnNoCandidate(candidatePlan));
+        Assert.False(MarketAcquisitionRouteEngine.ShouldFailWorldPurchaseBatchOnNoCandidate(candidatePlan));
     }
 
     [Theory]
@@ -35,7 +35,7 @@ public sealed class MarketAcquisitionClaimStatusTests
     [InlineData("Failed")]
     public void CanPrepareAcquisitionPlanForStatus_AllowsAcceptedRunningAndFailed(string status)
     {
-        Assert.True(MainWindow.CanPrepareAcquisitionPlanForStatus(status));
+        Assert.True(MarketAcquisitionPlanPreparationService.CanPrepareForStatus(status));
     }
 
     [Theory]
@@ -46,6 +46,6 @@ public sealed class MarketAcquisitionClaimStatusTests
     [InlineData("Cancelled")]
     public void CanPrepareAcquisitionPlanForStatus_BlocksStatusesThatNeedClaimOrAreTerminal(string status)
     {
-        Assert.False(MainWindow.CanPrepareAcquisitionPlanForStatus(status));
+        Assert.False(MarketAcquisitionPlanPreparationService.CanPrepareForStatus(status));
     }
 }

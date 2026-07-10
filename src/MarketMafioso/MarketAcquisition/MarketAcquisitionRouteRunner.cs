@@ -985,14 +985,26 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         if (summary == null)
             return MarketAcquisitionRouteActionResult.Ok("No completed world is available for Universalis freshness verification.");
 
+        return await VerifyWorldFreshnessAsync(summary.WorldName, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<MarketAcquisitionRouteActionResult> VerifyWorldFreshnessAsync(
+        string worldName,
+        CancellationToken cancellationToken)
+    {
+        if (universalisFreshnessVerifier == null)
+            return MarketAcquisitionRouteActionResult.Ok("Universalis freshness verification is not configured.");
+        if (string.IsNullOrWhiteSpace(worldName))
+            throw new ArgumentException("World name is required.", nameof(worldName));
+
         var observations = freshnessObservations
-            .Where(pair => pair.Key.WorldName.Equals(summary.WorldName, StringComparison.OrdinalIgnoreCase))
+            .Where(pair => pair.Key.WorldName.Equals(worldName, StringComparison.OrdinalIgnoreCase))
             .Where(pair => !verifiedFreshnessObservations.Contains(pair.Key))
             .Select(pair => pair.Value)
             .ToList();
 
         if (observations.Count == 0)
-            return MarketAcquisitionRouteActionResult.Ok($"No purchased listings require Universalis freshness verification for {summary.WorldName}.");
+            return MarketAcquisitionRouteActionResult.Ok($"No purchased listings require Universalis freshness verification for {worldName}.");
 
         foreach (var observation in observations)
         {
@@ -1008,10 +1020,12 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
                     observation.ListingIds,
                     cancellationToken).ConfigureAwait(false);
             }
-            catch (Exception ex) when (ex is not OperationCanceledException)
+            catch (Exception ex) when (ex is not OperationCanceledException && !cancellationToken.IsCancellationRequested)
             {
                 result = UniversalisFreshnessResult.Unavailable(ex.Message);
             }
+
+            cancellationToken.ThrowIfCancellationRequested();
 
             diagnostics.Record(
                 "universalis-freshness",
@@ -1032,7 +1046,7 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
 
         RefreshLastRunSummary();
         return MarketAcquisitionRouteActionResult.Ok(
-            $"Recorded Universalis freshness for {observations.Count:N0} item(s) on {summary.WorldName}.");
+            $"Recorded Universalis freshness for {observations.Count:N0} item(s) on {worldName}.");
     }
 
     public MarketAcquisitionRouteActionResult FailRoute(string message, Exception? exception = null)

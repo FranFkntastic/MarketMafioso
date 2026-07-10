@@ -197,6 +197,59 @@ public sealed class MarketAcquisitionRouteRunnerTests
     }
 
     [Fact]
+    public async Task VerifyWorldFreshnessAsync_UsesCapturedWorldInsteadOfLatestSummary()
+    {
+        var calls = new List<string>();
+        using var runner = new MarketMafioso.MarketAcquisition.MarketAcquisitionRouteRunner(
+            CreateTempDirectory(),
+            (worldName, _, _, _, _) =>
+            {
+                calls.Add(worldName);
+                return Task.FromResult(MarketMafioso.MarketAcquisition.UniversalisFreshnessResult.Confirmed("fresh"));
+            });
+        runner.Start(MarketAcquisitionTestPlans.MultiLineSingleWorld());
+        runner.RecordPurchaseAudit("batch-1-line-1", "Fire Shard", "Maduin", "maduin-listing", "retainer-1", 1, 100, "Purchased");
+        runner.RecordPurchaseAudit("batch-1-line-1", "Fire Shard", "Seraph", "seraph-listing", "retainer-2", 1, 100, "Purchased");
+        runner.RecordWorldSummary(new MarketMafioso.MarketAcquisition.MarketAcquisitionWorldCompletionSummary
+        {
+            WorldName = "Seraph",
+            Message = "Seraph completed after Maduin.",
+        });
+
+        var result = await runner.VerifyWorldFreshnessAsync("Maduin", CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Equal(["Maduin"], calls);
+    }
+
+    [Fact]
+    public async Task VerifyWorldFreshnessAsync_CancellationAfterFetchPreventsDiagnosticMutation()
+    {
+        var verifierStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseVerifier = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var runner = new MarketMafioso.MarketAcquisition.MarketAcquisitionRouteRunner(
+            CreateTempDirectory(),
+            async (_, _, _, _, _) =>
+            {
+                verifierStarted.SetResult();
+                await releaseVerifier.Task;
+                return MarketMafioso.MarketAcquisition.UniversalisFreshnessResult.Confirmed("fresh");
+            });
+        runner.Start(MarketAcquisitionTestPlans.MultiLineSingleWorld());
+        runner.RecordPurchaseAudit("batch-1-line-1", "Fire Shard", "Maduin", "maduin-listing", "retainer-1", 1, 100, "Purchased");
+        using var cancellation = new CancellationTokenSource();
+
+        var verification = runner.VerifyWorldFreshnessAsync("Maduin", cancellation.Token);
+        await verifierStarted.Task;
+        cancellation.Cancel();
+        releaseVerifier.SetResult();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => verification);
+        Assert.Equal(0, runner.LastRunDiagnosticSummary.FreshnessConfirmedCount);
+        Assert.Empty(runner.LastRunDiagnosticSummary.Warnings);
+    }
+
+    [Fact]
     public async Task VerifyLatestWorldFreshnessAsync_SummarizesUnconfirmedAndUnavailableWarnings()
     {
         var directory = CreateTempDirectory();

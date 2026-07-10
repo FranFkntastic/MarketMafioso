@@ -1,29 +1,31 @@
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using System.Threading.Tasks;
 using MarketMafioso.Automation.MarketBoard;
 
 namespace MarketMafioso.MarketAcquisition;
 
-public sealed class MarketAcquisitionRouteEngine
+public sealed class MarketAcquisitionRouteEngine : IDisposable
 {
     private static readonly TimeSpan RouteMonitorInterval = TimeSpan.FromMilliseconds(500);
     private static readonly TimeSpan MarketBoardPurchaseConfirmationWatchdog = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan MarketBoardPurchaseInitialMonitorDelay = TimeSpan.FromMilliseconds(250);
     private static readonly TimeSpan MarketBoardPurchaseListingRemovalWatchdog = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan MarketBoardPurchaseMonitorInterval = TimeSpan.FromMilliseconds(500);
+    private static readonly TimeSpan UniversalisFreshnessVerificationDelay = TimeSpan.FromSeconds(10);
     private readonly MarketAcquisitionRouteRunner runner;
     private readonly IMarketAcquisitionRouteContext context;
     private readonly IMarketAcquisitionRouteUiAutomation uiAutomation;
     private readonly IMarketAcquisitionMarketBoardIo marketBoard;
     private readonly IMarketAcquisitionPurchaseIo purchase;
-    private readonly IMarketAcquisitionRouteReporter reporter;
     private readonly IMarketAcquisitionRouteEvidenceRecorder evidence;
-    private readonly MarketAcquisitionClaimLifecycleController claimLifecycle;
+    private readonly MarketAcquisitionRouteReportDispatcher reportDispatcher;
     private readonly IMarketAcquisitionRouteClock clock;
     private readonly MarketBoardListingReadAccumulator listingReadAccumulator = new();
     private readonly MarketBoardAutomationController purchaseAutomation = new();
     private readonly MarketAcquisitionRouteEngineState state = new();
+    private CancellationTokenSource freshnessCancellation = new();
     private MarketAcquisitionClaimView? claimedRequest;
 
     public MarketAcquisitionRouteEngine(
@@ -35,6 +37,7 @@ public sealed class MarketAcquisitionRouteEngine
         IMarketAcquisitionRouteReporter reporter,
         IMarketAcquisitionRouteEvidenceRecorder evidence,
         MarketAcquisitionClaimLifecycleController claimLifecycle,
+        IMarketAcquisitionRouteCallbackDispatcher callbackDispatcher,
         IMarketAcquisitionRouteClock clock)
     {
         this.runner = runner ?? throw new ArgumentNullException(nameof(runner));
@@ -42,9 +45,11 @@ public sealed class MarketAcquisitionRouteEngine
         this.uiAutomation = uiAutomation ?? throw new ArgumentNullException(nameof(uiAutomation));
         this.marketBoard = marketBoard ?? throw new ArgumentNullException(nameof(marketBoard));
         this.purchase = purchase ?? throw new ArgumentNullException(nameof(purchase));
-        this.reporter = reporter ?? throw new ArgumentNullException(nameof(reporter));
         this.evidence = evidence ?? throw new ArgumentNullException(nameof(evidence));
-        this.claimLifecycle = claimLifecycle ?? throw new ArgumentNullException(nameof(claimLifecycle));
+        reportDispatcher = new MarketAcquisitionRouteReportDispatcher(
+            reporter ?? throw new ArgumentNullException(nameof(reporter)),
+            claimLifecycle ?? throw new ArgumentNullException(nameof(claimLifecycle)),
+            callbackDispatcher ?? throw new ArgumentNullException(nameof(callbackDispatcher)));
         this.clock = clock ?? throw new ArgumentNullException(nameof(clock));
     }
 
@@ -59,6 +64,15 @@ public sealed class MarketAcquisitionRouteEngine
         StatusMessage = runner.StatusMessage,
         VisibleAcquisitionStatus = state.AcquisitionStatus,
         IsRouteActive = IsRouteActive,
+        IsRunning = runner.IsRunning,
+        IsPaused = runner.IsPaused,
+        CanRestart = runner.CanRestart,
+        CanFinalizeInputCaptureLog = runner.CanFinalizeInputCaptureLog,
+        CompletedOrProbedStopCount = runner.CompletedOrProbedStops.Count,
+        RouteState = runner.State,
+        ActiveStop = runner.ActiveStop,
+        Stops = runner.Stops,
+        ActivePlan = runner.ActivePlan,
         IsProbeRunning = state.ProbeRunning,
         MarketBoardReadResult = state.MarketBoardReadResult,
         MarketBoardReconciliation = state.MarketBoardReconciliation,
@@ -74,6 +88,7 @@ public sealed class MarketAcquisitionRouteEngine
         LastPurchaseRecordsCsvPath = runner.LastPurchaseRecordsCsvPath,
         LastRunSummary = runner.LastRunSummary,
         LatestWorldCompletionSummary = runner.LatestWorldCompletionSummary,
+        LastRunDiagnosticSummary = runner.LastRunDiagnosticSummary,
     };
 
     public MarketAcquisitionRouteActionResult Start(
@@ -87,6 +102,7 @@ public sealed class MarketAcquisitionRouteEngine
 
         claimedRequest = claimed;
         ClearExecutionState();
+        reportDispatcher.BeginSession(claimed);
         var result = runner.Start(plan, enableDiagnostics, includeOpportunisticChecks);
         state.AcquisitionStatus = result.Message;
         return result;
@@ -101,6 +117,8 @@ public sealed class MarketAcquisitionRouteEngine
         var result = runner.Stop();
         listingReadAccumulator.Clear();
         purchaseAutomation.Clear();
+        reportDispatcher.ResetSession();
+        freshnessCancellation.Cancel();
         return UpdateStatus(result);
     }
 
@@ -108,6 +126,7 @@ public sealed class MarketAcquisitionRouteEngine
     {
         ArgumentNullException.ThrowIfNull(plan);
         ClearExecutionState();
+        reportDispatcher.BeginSession(claimedRequest ?? throw new InvalidOperationException("No dashboard request is accepted."));
         return UpdateStatus(runner.Restart(plan));
     }
 
@@ -115,6 +134,7 @@ public sealed class MarketAcquisitionRouteEngine
     {
         ArgumentNullException.ThrowIfNull(plan);
         ClearExecutionState();
+        reportDispatcher.BeginSession(claimedRequest ?? throw new InvalidOperationException("No dashboard request is accepted."));
         return UpdateStatus(runner.ReprepareAndRestart(plan, preparedAtUtc));
     }
 
@@ -125,6 +145,12 @@ public sealed class MarketAcquisitionRouteEngine
         state.AcquisitionStatus = status;
         claimedRequest = null;
     }
+
+    public MarketAcquisitionRouteActionResult CaptureInputState(string label) =>
+        runner.RecordInputCapture(label, marketBoard.CaptureInputState());
+
+    public MarketAcquisitionRouteActionResult FinalizeInputCaptureLog() =>
+        runner.FinalizeInputCaptureLog();
 
     public MarketAcquisitionRouteEngineTickResult TickRoute(bool isRequestBusy)
     {
@@ -171,7 +197,10 @@ public sealed class MarketAcquisitionRouteEngine
     {
         try
         {
-            ProbeLiveMarketBoardCore();
+            ProbeLiveMarketBoardCore(
+                runner.ActivePlan ?? throw new InvalidOperationException("Prepare a live candidate plan before probing live market board listings."),
+                claimedRequest ?? throw new InvalidOperationException("No dashboard request is accepted."),
+                recordRouteResult: true);
             var activeStop = runner.ActiveStop;
             if (activeStop is { Status: "Arrived" } &&
                 !string.Equals(state.MarketBoardReadResult?.Status, "Ready", StringComparison.OrdinalIgnoreCase))
@@ -202,6 +231,29 @@ public sealed class MarketAcquisitionRouteEngine
             state.ProbeRunning = false;
             state.NextRouteMonitorUtc = clock.UtcNow.Add(RouteMonitorInterval);
             ReportRouteProgress();
+        }
+    }
+
+    public void ProbePreparedPlan(MarketAcquisitionPlan plan, MarketAcquisitionClaimView claimed)
+    {
+        ArgumentNullException.ThrowIfNull(plan);
+        ArgumentNullException.ThrowIfNull(claimed);
+        if (IsRouteActive)
+            throw new InvalidOperationException("A prepared-plan probe cannot run while a route or purchase is active.");
+
+        claimedRequest = claimed;
+        state.ProbeRunning = true;
+        try
+        {
+            ProbeLiveMarketBoardCore(plan, claimed, recordRouteResult: false);
+        }
+        catch (Exception ex)
+        {
+            state.AcquisitionStatus = $"Live market board probe failed: {ex.Message}";
+        }
+        finally
+        {
+            state.ProbeRunning = false;
         }
     }
 
@@ -303,13 +355,13 @@ public sealed class MarketAcquisitionRouteEngine
         ProbeLiveMarketBoard();
     }
 
-    private void ProbeLiveMarketBoardCore()
+    private void ProbeLiveMarketBoardCore(
+        MarketAcquisitionPlan plan,
+        MarketAcquisitionClaimView claimed,
+        bool recordRouteResult)
     {
-        var plan = runner.ActivePlan ??
-                   throw new InvalidOperationException("Prepare a live candidate plan before probing live market board listings.");
-        var claimed = claimedRequest ?? throw new InvalidOperationException("No dashboard request is accepted.");
         var activeLine = GetActiveRouteLine(claimed);
-        var activeSubtask = runner.ActiveStop?.ActiveItemSubtask;
+        var activeSubtask = recordRouteResult ? runner.ActiveStop?.ActiveItemSubtask : null;
         var currentWorld = context.GetCurrentWorldName();
 
         state.MarketBoardReconciliation = null;
@@ -331,16 +383,23 @@ public sealed class MarketAcquisitionRouteEngine
             return;
         }
 
-        var totals = ResolveActiveRouteLinePurchaseTotals(activeSubtask);
+        var totals = recordRouteResult
+            ? ResolveActiveRouteLinePurchaseTotals(activeSubtask)
+            : default;
         state.LiveCandidatePlan = canBuildLiveCandidatePlan
             ? activeSubtask == null
                 ? MarketAcquisitionLiveCandidatePlanner.BuildCandidatePlan(activeLine, plan, currentWorld, state.MarketBoardReadResult, totals.PurchasedQuantity, totals.SpentGil)
                 : MarketAcquisitionLiveCandidatePlanner.BuildCandidatePlan(activeLine, plan, activeSubtask, currentWorld, state.MarketBoardReadResult, totals.PurchasedQuantity, totals.SpentGil)
             : null;
-        if (state.LiveCandidatePlan != null && TryContinueVisibleListingRead(currentWorld, state.MarketBoardReadResult, state.LiveCandidatePlan))
+        if (state.LiveCandidatePlan != null &&
+            TryContinueVisibleListingRead(
+                currentWorld,
+                state.MarketBoardReadResult,
+                state.LiveCandidatePlan,
+                requireRunningRoute: recordRouteResult))
             return;
 
-        var probeResult = runner.IsRunning && runner.ActiveStop is { Status: "Arrived" } && state.LiveCandidatePlan != null
+        var probeResult = recordRouteResult && runner.IsRunning && runner.ActiveStop is { Status: "Arrived" } && state.LiveCandidatePlan != null
             ? runner.RecordProbe(currentWorld, state.LiveCandidatePlan)
             : null;
         if (probeResult?.Success == true && state.LiveCandidatePlan != null)
@@ -356,19 +415,34 @@ public sealed class MarketAcquisitionRouteEngine
     private bool TryContinueVisibleListingRead(
         string currentWorld,
         MarketBoardReadResult readResult,
-        MarketAcquisitionLiveCandidatePlan candidatePlan)
+        MarketAcquisitionLiveCandidatePlan candidatePlan,
+        bool requireRunningRoute = true)
     {
-        if (!runner.IsRunning || !listingReadAccumulator.TryBeginContinuation(readResult, candidatePlan, out var continuation))
+        if ((requireRunningRoute && !runner.IsRunning) ||
+            !listingReadAccumulator.TryBeginContinuation(readResult, candidatePlan, out var continuation))
             return false;
 
         if (!uiAutomation.TryScrollMarketBoardListingsToRow(continuation.RequestedRow, out var scrollMessage))
         {
             state.AcquisitionStatus = scrollMessage;
-            runner.RecordListingReadPending(currentWorld, readResult with { Message = $"{continuation.Message} {scrollMessage}" });
-            return false;
+            if (requireRunningRoute)
+            {
+                var scrollPending = runner.RecordListingReadPending(
+                    currentWorld,
+                    readResult with { Message = $"{continuation.Message} {scrollMessage}" });
+                state.AcquisitionStatus = scrollPending.Success ? scrollMessage : scrollPending.Message;
+            }
+
+            return true;
         }
 
         var message = $"{continuation.Message} {scrollMessage}";
+        if (!requireRunningRoute)
+        {
+            state.AcquisitionStatus = message;
+            return true;
+        }
+
         var pending = runner.RecordListingReadPending(currentWorld, readResult with { Message = message });
         state.AcquisitionStatus = pending.Success ? message : pending.Message;
         state.NextRouteMonitorUtc = clock.UtcNow.Add(RouteMonitorInterval);
@@ -495,11 +569,8 @@ public sealed class MarketAcquisitionRouteEngine
         state.AcquisitionStatus = $"Purchase: {selection.Status}. {selection.Message}";
     }
 
-    public MarketAcquisitionRouteEngineTickResult MonitorMarketBoardPurchase(bool isRequestBusy)
+    public MarketAcquisitionRouteEngineTickResult MonitorMarketBoardPurchase()
     {
-        if (isRequestBusy)
-            return MarketAcquisitionRouteEngineTickResult.Idle();
-
         var previousSession = purchaseAutomation.PurchaseSession;
         if (previousSession?.IsActive != true)
             return MarketAcquisitionRouteEngineTickResult.Idle();
@@ -609,6 +680,28 @@ public sealed class MarketAcquisitionRouteEngine
         }
 
         ReportRouteProgress();
+        if (result.Success &&
+            runner.LatestWorldCompletionSummary?.WorldName.Equals(currentWorld, StringComparison.OrdinalIgnoreCase) == true)
+        {
+            _ = ReportUniversalisFreshnessAsync(currentWorld, freshnessCancellation.Token);
+        }
+    }
+
+    private async Task ReportUniversalisFreshnessAsync(string worldName, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await Task.Delay(UniversalisFreshnessVerificationDelay, cancellationToken).ConfigureAwait(false);
+            await runner.VerifyWorldFreshnessAsync(worldName, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            if (!cancellationToken.IsCancellationRequested)
+                state.AcquisitionStatus = $"Unable to record Universalis freshness diagnostics: {ex.Message}";
+        }
     }
 
     private void ResetMarketBoardStateForNextRouteItem()
@@ -658,20 +751,43 @@ public sealed class MarketAcquisitionRouteEngine
 
     private void ReportPurchaseAudit(MarketAcquisitionClaimView claimed, string lineId, string? itemName, MarketBoardPurchaseCandidate candidate, string worldName, string message)
     {
-        if (!reporter.CanReport)
+        if (!reportDispatcher.CanReport)
             return;
 
         var sequence = ++state.ProgressReportSequence;
-        _ = reporter.ReportPurchaseAuditAsync(new MarketAcquisitionPurchaseAuditReport(claimed.Id, claimed.ClaimToken, state.ProgressNonce, sequence, lineId, worldName, candidate.ItemId, itemName, candidate, message), default);
+        reportDispatcher.EnqueuePurchaseAudit(
+            new MarketAcquisitionPurchaseAuditReport(
+                claimed.Id,
+                claimed.ClaimToken,
+                state.ProgressNonce,
+                sequence,
+                lineId,
+                worldName,
+                candidate.ItemId,
+                itemName,
+                candidate,
+                message));
     }
 
     private void ReportLineProgress(MarketAcquisitionClaimView claimed, string lineId, string? itemName, string status, uint purchasedQuantity, uint spentGil, string message, string? reason)
     {
-        if (!reporter.CanReport)
+        if (!reportDispatcher.CanReport)
             return;
 
         var sequence = ++state.ProgressReportSequence;
-        _ = reporter.ReportLineProgressAsync(new MarketAcquisitionLineProgressReport(claimed.Id, claimed.ClaimToken, state.ProgressNonce, sequence, lineId, itemName, status, purchasedQuantity, spentGil, message, reason), default);
+        reportDispatcher.EnqueueLineProgress(
+            new MarketAcquisitionLineProgressReport(
+                claimed.Id,
+                claimed.ClaimToken,
+                state.ProgressNonce,
+                sequence,
+                lineId,
+                itemName,
+                status,
+                purchasedQuantity,
+                spentGil,
+                message,
+                reason));
     }
 
     private string GetActiveRouteLineId(MarketAcquisitionClaimView claimed)
@@ -687,19 +803,62 @@ public sealed class MarketAcquisitionRouteEngine
                 ? "SkippedIncompleteListingCoverage"
                 : "SkippedNoLiveStock";
 
-    private static bool ShouldFailWorldPurchaseBatchOnNoCandidate(MarketAcquisitionLiveCandidatePlan? candidatePlan) =>
+    internal static bool ShouldFailWorldPurchaseBatchOnNoCandidate(MarketAcquisitionLiveCandidatePlan? candidatePlan) =>
         MarketAcquisitionLiveCandidateStatuses.IsIncompleteListingCoverage(candidatePlan?.Status);
 
-    private static MarketBoardAutomationSnapshot CreatePurchaseSelectionSnapshot(MarketBoardPurchaseResult result) =>
-        MarketBoardAutomationSnapshot.Create("BuyListing", "Selection", "ClickableMarketBoardListing", result.Status,
-            ClassifyPurchaseSelectionOutcome(result.Status), ChoosePurchaseSelectionNextAction(result.Status),
-            new Dictionary<string, string?> { ["resultMessage"] = result.Message });
+    private static MarketBoardAutomationSnapshot CreatePurchaseSelectionSnapshot(MarketBoardPurchaseResult result)
+    {
+        var details = new Dictionary<string, string?>(StringComparer.Ordinal)
+        {
+            ["resultMessage"] = result.Message,
+        };
+        if (result.Candidate != null)
+        {
+            details["candidateItemId"] = result.Candidate.ItemId.ToString();
+            details["candidateWorld"] = result.Candidate.WorldName;
+            details["candidateListingId"] = result.Candidate.ListingId;
+            details["candidateRetainerId"] = result.Candidate.RetainerId;
+            details["candidateRetainerName"] = result.Candidate.RetainerName;
+            details["candidateQuantity"] = result.Candidate.Quantity.ToString();
+            details["candidateUnitPrice"] = result.Candidate.UnitPrice.ToString();
+            details["candidateTotalGil"] = result.Candidate.TotalGil.ToString();
+        }
+
+        foreach (var pair in result.Diagnostics)
+            details[pair.Key] = pair.Value;
+
+        return MarketBoardAutomationSnapshot.Create(
+            "BuyListing",
+            "Selection",
+            "ClickableMarketBoardListing",
+            result.Status,
+            ClassifyPurchaseSelectionOutcome(result.Status),
+            ChoosePurchaseSelectionNextAction(result.Status),
+            details);
+    }
 
     private static MarketBoardAutomationSnapshot CreatePurchaseConfirmationSnapshot(MarketBoardPurchaseResult result, MarketBoardPurchaseCandidate candidate) =>
         MarketBoardAutomationSnapshot.Create("BuyListing", "Confirmation", "PurchasePrompt", result.Status,
-            result.Status is "ConfirmationSubmitted" or "ConfirmationPending" ? MarketBoardAutomationOutcome.InProgress : MarketBoardAutomationOutcome.Recoverable,
-            result.Status == "ConfirmationSubmitted" ? "VerifyListingRemoval" : "ContinueMonitoring",
-            new Dictionary<string, string?> { ["candidateListingId"] = candidate.ListingId, ["candidateWorld"] = candidate.WorldName });
+            result.Status is "ConfirmationSubmitted" or "ConfirmationPending" ? MarketBoardAutomationOutcome.InProgress : MarketBoardAutomationOutcome.Fatal,
+            result.Status switch
+            {
+                "ConfirmationSubmitted" => "VerifyListingRemoval",
+                "ConfirmationPending" => "ContinueMonitoring",
+                _ => "StopRoute",
+            },
+            new Dictionary<string, string?>
+            {
+                ["candidateItemId"] = candidate.ItemId.ToString(),
+                ["candidateWorld"] = candidate.WorldName,
+                ["candidateListingId"] = candidate.ListingId,
+                ["candidateRetainerId"] = candidate.RetainerId,
+                ["candidateRetainerName"] = candidate.RetainerName,
+                ["candidateQuantity"] = candidate.Quantity.ToString(),
+                ["candidateUnitPrice"] = candidate.UnitPrice.ToString(),
+                ["candidateTotalGil"] = candidate.TotalGil.ToString(),
+                ["confirmationAddon"] = result.ConfirmationAddonName,
+                ["confirmationPromptText"] = result.ConfirmationPromptText,
+            });
 
     private static MarketBoardAutomationOutcome ClassifyPurchaseSelectionOutcome(string status) => status switch
     {
@@ -720,7 +879,7 @@ public sealed class MarketAcquisitionRouteEngine
     public void ReportRouteProgress()
     {
         var claimed = claimedRequest;
-        if (claimed == null || string.IsNullOrWhiteSpace(claimed.ClaimToken) || !reporter.CanReport ||
+        if (claimed == null || string.IsNullOrWhiteSpace(claimed.ClaimToken) || !reportDispatcher.CanReport ||
             string.Equals(runner.State, "Idle", StringComparison.OrdinalIgnoreCase))
             return;
 
@@ -730,11 +889,6 @@ public sealed class MarketAcquisitionRouteEngine
             return;
 
         var message = runner.StatusMessage;
-        var reportKey = $"{claimed.Id}|{routeState}|{message}";
-        if (string.Equals(state.LastProgressReportKey, reportKey, StringComparison.Ordinal))
-            return;
-
-        state.LastProgressReportKey = reportKey;
         var activeStop = runner.ActiveStop;
         var report = new MarketAcquisitionRouteProgressReport(
             claimed.Id,
@@ -746,25 +900,7 @@ public sealed class MarketAcquisitionRouteEngine
             activeStop?.WorldName,
             activeStop?.Status ?? routeState,
             message);
-        _ = ReportRouteProgressAsync(report, claimed, state.ProgressSessionVersion);
-    }
-
-    private async Task ReportRouteProgressAsync(
-        MarketAcquisitionRouteProgressReport report,
-        MarketAcquisitionClaimView claimed,
-        long reportSessionVersion)
-    {
-        try
-        {
-            using var cancellation = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(10));
-            var outcome = await reporter.ReportRouteProgressAsync(report, cancellation.Token).ConfigureAwait(false);
-            claimLifecycle.ApplySuccessfulRouteProgressReport(outcome, claimed, reportSessionVersion, state.ProgressSessionVersion, report.Message);
-        }
-        catch (Exception ex)
-        {
-            if (!claimLifecycle.TryHandleRouteProgressConflict(ex, claimed, reportSessionVersion, state.ProgressSessionVersion))
-                state.AcquisitionStatus = $"Route progress report failed: {ex.Message}";
-        }
+        reportDispatcher.EnqueueRouteProgress(report);
     }
 
     private void ClearExecutionState()
@@ -772,11 +908,24 @@ public sealed class MarketAcquisitionRouteEngine
         state.ResetRouteExecutionState();
         listingReadAccumulator.Clear();
         purchaseAutomation.Clear();
+        reportDispatcher.ResetSession();
+        freshnessCancellation.Cancel();
+        freshnessCancellation.Dispose();
+        freshnessCancellation = new CancellationTokenSource();
     }
 
     private MarketAcquisitionRouteActionResult UpdateStatus(MarketAcquisitionRouteActionResult result)
     {
         state.AcquisitionStatus = result.Message;
         return result;
+    }
+
+    public void Dispose()
+    {
+        purchaseAutomation.Dispose();
+        reportDispatcher.Dispose();
+        freshnessCancellation.Cancel();
+        freshnessCancellation.Dispose();
+        runner.Dispose();
     }
 }

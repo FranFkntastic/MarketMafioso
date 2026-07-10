@@ -10,6 +10,11 @@ using MarketMafioso.Automation.Travel;
 
 namespace MarketMafioso.MarketAcquisition;
 
+public sealed class DalamudMarketAcquisitionRouteCallbackDispatcher : IMarketAcquisitionRouteCallbackDispatcher
+{
+    public Task DispatchAsync(Action callback) => Plugin.Framework.RunOnTick(callback);
+}
+
 public sealed class DalamudMarketAcquisitionRouteContext : IMarketAcquisitionRouteContext
 {
     private readonly IPlayerState playerState;

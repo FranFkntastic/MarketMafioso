@@ -30,6 +30,9 @@ internal sealed class FakeRouteUiAutomation : IMarketAcquisitionRouteUiAutomatio
 {
     public List<string> Commands { get; } = [];
     public bool TravelPreflightCanSend { get; set; } = true;
+    public bool ScrollSucceeds { get; set; } = true;
+    public string ScrollMessage { get; set; } = "Requested deeper listings.";
+    public int? LastRequestedScrollRow { get; private set; }
     public bool ProcessCommand(string command)
     {
         Commands.Add(command);
@@ -45,8 +48,9 @@ internal sealed class FakeRouteUiAutomation : IMarketAcquisitionRouteUiAutomatio
 
     public bool TryScrollMarketBoardListingsToRow(int requestedRow, out string message)
     {
-        message = "Requested deeper listings.";
-        return true;
+        LastRequestedScrollRow = requestedRow;
+        message = ScrollMessage;
+        return ScrollSucceeds;
     }
 }
 
@@ -110,6 +114,15 @@ internal sealed class FakeRouteEvidenceRecorder : IMarketAcquisitionRouteEvidenc
     }
 }
 
+internal sealed class ImmediateRouteCallbackDispatcher : IMarketAcquisitionRouteCallbackDispatcher
+{
+    public Task DispatchAsync(Action callback)
+    {
+        callback();
+        return Task.CompletedTask;
+    }
+}
+
 internal sealed class MarketAcquisitionRouteEngineHarness : IDisposable
 {
     private MarketAcquisitionClaimView? persistedClaim;
@@ -145,12 +158,13 @@ internal sealed class MarketAcquisitionRouteEngineHarness : IDisposable
                 _ => { },
                 () => Runner.StatusMessage,
                 () => { }),
+            new ImmediateRouteCallbackDispatcher(),
             Clock);
     }
 
     public static MarketAcquisitionRouteEngineHarness Create() => new();
 
-    public void Dispose() => Runner.Dispose();
+    public void Dispose() => Engine.Dispose();
 }
 
 internal static class MarketAcquisitionRouteEngineTestData
@@ -196,6 +210,8 @@ internal static class MarketAcquisitionRouteEngineTestData
         Id = "request-1",
         ClaimToken = "claim-token",
         Status = "AcceptedInPlugin",
+        ItemId = 7017,
+        ItemName = "Varnish",
         QuantityMode = "TargetQuantity",
         Quantity = 4,
         HqPolicy = "Either",

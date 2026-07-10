@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using MarketMafioso.Automation.MarketBoard;
 
 namespace MarketMafioso.MarketAcquisition;
@@ -7,6 +8,15 @@ public sealed record MarketAcquisitionRouteEngineSnapshot
     public string StatusMessage { get; init; } = string.Empty;
     public string VisibleAcquisitionStatus { get; init; } = string.Empty;
     public bool IsRouteActive { get; init; }
+    public bool IsRunning { get; init; }
+    public bool IsPaused { get; init; }
+    public bool CanRestart { get; init; }
+    public bool CanFinalizeInputCaptureLog { get; init; }
+    public int CompletedOrProbedStopCount { get; init; }
+    public string RouteState { get; init; } = string.Empty;
+    public MarketAcquisitionGuidedRouteStop? ActiveStop { get; init; }
+    public IReadOnlyList<MarketAcquisitionGuidedRouteStop> Stops { get; init; } = [];
+    public MarketAcquisitionPlan? ActivePlan { get; init; }
     public bool IsProbeRunning { get; init; }
     public MarketBoardReadResult? MarketBoardReadResult { get; init; }
     public MarketBoardListingReconciliation? MarketBoardReconciliation { get; init; }
@@ -22,4 +32,5 @@ public sealed record MarketAcquisitionRouteEngineSnapshot
     public string? LastPurchaseRecordsCsvPath { get; init; }
     public MarketAcquisitionRouteRunSummary? LastRunSummary { get; init; }
     public MarketAcquisitionWorldCompletionSummary? LatestWorldCompletionSummary { get; init; }
+    public MarketAcquisitionRunDiagnosticSummary LastRunDiagnosticSummary { get; init; } = new();
 }

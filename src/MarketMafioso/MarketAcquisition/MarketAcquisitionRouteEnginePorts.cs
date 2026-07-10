@@ -76,6 +76,11 @@ public interface IMarketAcquisitionRouteEvidenceRecorder
         string routeRunId);
 }
 
+public interface IMarketAcquisitionRouteCallbackDispatcher
+{
+    Task DispatchAsync(Action callback);
+}
+
 public sealed record MarketAcquisitionRouteProgressReport(
     string RequestId,
     string ClaimToken,

@@ -8,31 +8,31 @@ namespace MarketMafioso.Windows.MarketAcquisitionPanels;
 
 internal sealed class MarketAcquisitionGuidedRoutePanel
 {
-    private readonly MarketAcquisitionRouteRunner routeRunner;
+    private readonly Func<MarketAcquisitionRouteEngineSnapshot> getRouteSnapshot;
     private readonly Action<bool> startRoute;
     private readonly Action pauseRoute;
     private readonly Action resumeRoute;
     private readonly Action stopRoute;
     private readonly Action restartRoute;
     private readonly Action reprepareRoute;
-    private readonly Action drawPostRunDiagnosticSummary;
-    private readonly Action drawLatestWorldCompletionSummary;
-    private readonly Action drawMarketBoardProbeStatus;
+    private readonly Action<MarketAcquisitionRouteEngineSnapshot> drawPostRunDiagnosticSummary;
+    private readonly Action<MarketAcquisitionRouteEngineSnapshot> drawLatestWorldCompletionSummary;
+    private readonly Action<MarketAcquisitionRouteEngineSnapshot> drawMarketBoardProbeStatus;
     private readonly HashSet<string> expandedStops = new(StringComparer.OrdinalIgnoreCase);
 
     public MarketAcquisitionGuidedRoutePanel(
-        MarketAcquisitionRouteRunner routeRunner,
+        Func<MarketAcquisitionRouteEngineSnapshot> getRouteSnapshot,
         Action<bool> startRoute,
         Action pauseRoute,
         Action resumeRoute,
         Action stopRoute,
         Action restartRoute,
         Action reprepareRoute,
-        Action drawPostRunDiagnosticSummary,
-        Action drawLatestWorldCompletionSummary,
-        Action drawMarketBoardProbeStatus)
+        Action<MarketAcquisitionRouteEngineSnapshot> drawPostRunDiagnosticSummary,
+        Action<MarketAcquisitionRouteEngineSnapshot> drawLatestWorldCompletionSummary,
+        Action<MarketAcquisitionRouteEngineSnapshot> drawMarketBoardProbeStatus)
     {
-        this.routeRunner = routeRunner ?? throw new ArgumentNullException(nameof(routeRunner));
+        this.getRouteSnapshot = getRouteSnapshot ?? throw new ArgumentNullException(nameof(getRouteSnapshot));
         this.startRoute = startRoute ?? throw new ArgumentNullException(nameof(startRoute));
         this.pauseRoute = pauseRoute ?? throw new ArgumentNullException(nameof(pauseRoute));
         this.resumeRoute = resumeRoute ?? throw new ArgumentNullException(nameof(resumeRoute));
@@ -46,34 +46,35 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
 
     public void Draw(MarketAcquisitionPlan? plan, bool isPlanStale)
     {
+        var snapshot = getRouteSnapshot();
         ImGuiUi.SectionHeader("Route", MarketMafiosoUiTheme.Header);
 
         var canStart = plan is { Status: "Ready" } &&
                        !isPlanStale &&
                        plan.WorldBatches.Count > 0 &&
-                       !routeRunner.IsRunning &&
-                       !routeRunner.IsPaused;
+                       !snapshot.IsRunning &&
+                       !snapshot.IsPaused;
         var canReprepare = canStart &&
-                            routeRunner.CanRestart &&
-                            routeRunner.CompletedOrProbedStops.Count > 0;
-        DrawGuidedRouteActionRow(canStart, canReprepare);
+                            snapshot.CanRestart &&
+                            snapshot.CompletedOrProbedStopCount > 0;
+        DrawGuidedRouteActionRow(snapshot, canStart, canReprepare);
 
-        ImGui.TextColored(GetGuidedRouteStatusColor(), routeRunner.StatusMessage);
+        ImGui.TextColored(GetGuidedRouteStatusColor(snapshot), snapshot.StatusMessage);
         if (isPlanStale)
             ImGui.TextColored(MarketMafiosoUiTheme.Error, "Request changed after this plan was prepared. Prepare a fresh plan before starting.");
-        drawPostRunDiagnosticSummary();
-        drawLatestWorldCompletionSummary();
+        drawPostRunDiagnosticSummary(snapshot);
+        drawLatestWorldCompletionSummary(snapshot);
 
-        if (routeRunner.Stops.Count == 0)
+        if (snapshot.Stops.Count == 0)
         {
             ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Start after preparing a plan. Routes travel, validate live listings, and purchase safe rows automatically.");
             return;
         }
 
-        if (routeRunner.LastDiagnosticFilePath != null)
-            ImGui.TextColored(MarketMafiosoUiTheme.Muted, $"Diagnostics: {routeRunner.LastDiagnosticFilePath}");
+        if (snapshot.LastDiagnosticFilePath != null)
+            ImGui.TextColored(MarketMafiosoUiTheme.Muted, $"Diagnostics: {snapshot.LastDiagnosticFilePath}");
 
-        var activeStop = routeRunner.ActiveStop;
+        var activeStop = snapshot.ActiveStop;
         if (activeStop == null)
         {
             ImGui.TextColored(MarketMafiosoUiTheme.Success, "Route is not actively executing.");
@@ -85,11 +86,11 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
             ImGui.TextColored(MarketMafiosoUiTheme.Muted, $"Planned {activeStop.PlannedQuantity:N0} item(s), {FormatGil(activeStop.PlannedGil)}");
         }
 
-        DrawGuidedRouteStops(routeRunner.Stops);
-        drawMarketBoardProbeStatus();
+        DrawGuidedRouteStops(snapshot.Stops);
+        drawMarketBoardProbeStatus(snapshot);
     }
 
-    private void DrawGuidedRouteActionRow(bool canStart, bool canReprepare)
+    private void DrawGuidedRouteActionRow(MarketAcquisitionRouteEngineSnapshot snapshot, bool canStart, bool canReprepare)
     {
         if (!ImGui.BeginTable("MarketAcquisitionGuidedRouteActions", 3, ImGuiTableFlags.SizingStretchProp))
             return;
@@ -109,23 +110,23 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
 
         ImGui.TableNextColumn();
         ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Control");
-        if (routeRunner.IsPaused)
+        if (snapshot.IsPaused)
         {
             if (ImGuiUi.Button("Resume##MarketAcquisitionResumeRoute", true))
                 resumeRoute();
         }
         else
         {
-            if (ImGuiUi.Button("Pause##MarketAcquisitionPauseRoute", routeRunner.IsRunning))
+            if (ImGuiUi.Button("Pause##MarketAcquisitionPauseRoute", snapshot.IsRunning))
                 pauseRoute();
         }
         ImGui.SameLine();
-        if (ImGuiUi.Button("Stop##MarketAcquisitionStopRoute", routeRunner.IsRunning || routeRunner.IsPaused))
+        if (ImGuiUi.Button("Stop##MarketAcquisitionStopRoute", snapshot.IsRunning || snapshot.IsPaused))
             stopRoute();
 
         ImGui.TableNextColumn();
         ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Reset");
-        if (ImGuiUi.Button("Restart##MarketAcquisitionRestartRoute", canStart && routeRunner.CanRestart))
+        if (ImGuiUi.Button("Restart##MarketAcquisitionRestartRoute", canStart && snapshot.CanRestart))
             restartRoute();
         ImGui.SameLine();
         if (ImGuiUi.Button("Refresh Plan##MarketAcquisitionReprepareRoute", canReprepare))
@@ -235,9 +236,9 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
         }
     }
 
-    private System.Numerics.Vector4 GetGuidedRouteStatusColor()
+    private static System.Numerics.Vector4 GetGuidedRouteStatusColor(MarketAcquisitionRouteEngineSnapshot snapshot)
     {
-        var status = routeRunner.StatusMessage;
+        var status = snapshot.StatusMessage;
         if (status.StartsWith("Unable", StringComparison.OrdinalIgnoreCase) ||
             status.Contains("Cannot", StringComparison.OrdinalIgnoreCase) ||
             status.Contains("Failed", StringComparison.OrdinalIgnoreCase))
@@ -246,7 +247,7 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
         if (status.Contains("Waiting", StringComparison.OrdinalIgnoreCase) ||
             status.Contains("Approve", StringComparison.OrdinalIgnoreCase) ||
             status.Contains("Purchasing", StringComparison.OrdinalIgnoreCase) ||
-            routeRunner.IsPaused)
+            snapshot.IsPaused)
             return MarketMafiosoUiTheme.Header;
 
         if (status.Contains("Arrived", StringComparison.OrdinalIgnoreCase) ||
