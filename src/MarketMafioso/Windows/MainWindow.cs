@@ -66,6 +66,7 @@ public class MainWindow : Window, IDisposable
     private readonly MarketAcquisitionRequestPickupPanel marketAcquisitionRequestPickupPanel;
     private readonly MarketAcquisitionAcceptedRequestPanel marketAcquisitionAcceptedRequestPanel;
     private readonly MarketAcquisitionDiagnosticsPanel marketAcquisitionDiagnosticsPanel;
+    private readonly MarketAcquisitionGuidedRoutePanel marketAcquisitionGuidedRoutePanel;
     private readonly MarketAcquisitionRequestBuilderPanel acquisitionRequestBuilder;
     private readonly RetainerRestockBrowserState restockBrowserState = new();
     private readonly RetainerRestockBrowserPanel restockBrowser;
@@ -94,7 +95,6 @@ public class MainWindow : Window, IDisposable
     private long guidedRouteProgressSessionVersion;
     private string guidedRouteProgressNonce = Guid.NewGuid().ToString("N");
     private string? lastGuidedRouteProgressReportKey;
-    private readonly HashSet<string> expandedGuidedRouteStops = new(StringComparer.OrdinalIgnoreCase);
     private bool acquisitionRequestBusy = false;
     private string acquisitionStatus = "No dashboard request has been fetched this session.";
     private CancellationTokenSource? acquisitionRequestCancellation;
@@ -249,6 +249,17 @@ public class MainWindow : Window, IDisposable
             () => AutomationDiagnostics.IsOpen = true,
             CaptureMarketBoardInputState,
             FinalizeMarketBoardInputCaptureLog);
+        marketAcquisitionGuidedRoutePanel = new MarketAcquisitionGuidedRoutePanel(
+            marketAcquisitionRouteRunner,
+            forceDiagnostics => _ = StartGuidedRouteAsync(forceDiagnostics),
+            () => _ = PauseGuidedRouteAsync(),
+            () => _ = ResumeGuidedRouteAsync(),
+            () => _ = StopGuidedRouteAsync(),
+            () => _ = RestartGuidedRouteAsync(),
+            () => _ = ReprepareGuidedRouteAsync(),
+            marketAcquisitionDiagnosticsPanel.DrawPostRunDiagnosticSummary,
+            marketAcquisitionDiagnosticsPanel.DrawLatestWorldCompletionSummary,
+            DrawMarketBoardProbeStatus);
         settingsTab = new SettingsTabPanel(
             config,
             reporter,
@@ -1789,197 +1800,8 @@ public class MainWindow : Window, IDisposable
 
     private void DrawMarketAcquisitionGuidedRoute()
     {
-        ImGuiUi.SectionHeader("Route", ColHeader);
-
-        var canStart = acquisitionPlan is { Status: "Ready" } &&
-                       !IsAcquisitionPlanStale() &&
-                       acquisitionPlan.WorldBatches.Count > 0 &&
-                       !marketAcquisitionRouteRunner.IsRunning &&
-                       !marketAcquisitionRouteRunner.IsPaused;
-        var canReprepare = canStart &&
-                            marketAcquisitionRouteRunner.CanRestart &&
-                            marketAcquisitionRouteRunner.CompletedOrProbedStops.Count > 0;
-        DrawGuidedRouteActionRow(canStart, canReprepare);
-
-        ImGui.TextColored(GetGuidedRouteStatusColor(), marketAcquisitionRouteRunner.StatusMessage);
-        if (IsAcquisitionPlanStale())
-            ImGui.TextColored(ColError, "Request changed after this plan was prepared. Prepare a fresh plan before starting.");
-        marketAcquisitionDiagnosticsPanel.DrawPostRunDiagnosticSummary();
-        marketAcquisitionDiagnosticsPanel.DrawLatestWorldCompletionSummary();
-
-        if (marketAcquisitionRouteRunner.Stops.Count == 0)
-        {
-            ImGui.TextColored(ColMuted, "Start after preparing a plan. Routes travel, validate live listings, and purchase safe rows automatically.");
-            return;
-        }
-
-        if (marketAcquisitionRouteRunner.LastDiagnosticFilePath != null)
-            ImGui.TextColored(ColMuted, $"Diagnostics: {marketAcquisitionRouteRunner.LastDiagnosticFilePath}");
-
-        var activeStop = marketAcquisitionRouteRunner.ActiveStop;
-        if (activeStop == null)
-        {
-            ImGui.TextColored(ColSuccess, "Route is not actively executing.");
-        }
-        else
-        {
-            ImGui.TextColored(ColHeader, $"Next stop: {activeStop.WorldName}");
-            ImGui.SameLine();
-            ImGui.TextColored(ColMuted, $"Planned {activeStop.PlannedQuantity:N0} item(s), {FormatGil(activeStop.PlannedGil)}");
-        }
-
-        DrawGuidedRouteStops(marketAcquisitionRouteRunner.Stops);
-        DrawMarketBoardProbeStatus();
+        marketAcquisitionGuidedRoutePanel.Draw(acquisitionPlan, IsAcquisitionPlanStale());
     }
-
-    private void DrawGuidedRouteActionRow(bool canStart, bool canReprepare)
-    {
-        if (!ImGui.BeginTable("MarketAcquisitionGuidedRouteActions", 3, ImGuiTableFlags.SizingStretchProp))
-            return;
-
-        ImGui.TableSetupColumn("Run", ImGuiTableColumnFlags.WidthStretch);
-        ImGui.TableSetupColumn("Control", ImGuiTableColumnFlags.WidthStretch);
-        ImGui.TableSetupColumn("Reset", ImGuiTableColumnFlags.WidthStretch);
-        ImGui.TableNextRow();
-
-        ImGui.TableNextColumn();
-        ImGui.TextColored(ColMuted, "Run");
-        if (ImGuiUi.Button("Start##MarketAcquisitionStartRoute", canStart))
-            _ = StartGuidedRouteAsync(forceDiagnostics: false);
-        ImGui.SameLine();
-        if (ImGuiUi.Button("Diagnostic Run##MarketAcquisitionStartDiagnostics", canStart))
-            _ = StartGuidedRouteAsync(forceDiagnostics: true);
-
-        ImGui.TableNextColumn();
-        ImGui.TextColored(ColMuted, "Control");
-        if (marketAcquisitionRouteRunner.IsPaused)
-        {
-            if (ImGuiUi.Button("Resume##MarketAcquisitionResumeRoute", true))
-                _ = ResumeGuidedRouteAsync();
-        }
-        else
-        {
-            if (ImGuiUi.Button("Pause##MarketAcquisitionPauseRoute", marketAcquisitionRouteRunner.IsRunning))
-                _ = PauseGuidedRouteAsync();
-        }
-        ImGui.SameLine();
-        if (ImGuiUi.Button("Stop##MarketAcquisitionStopRoute", marketAcquisitionRouteRunner.IsRunning || marketAcquisitionRouteRunner.IsPaused))
-            _ = StopGuidedRouteAsync();
-
-        ImGui.TableNextColumn();
-        ImGui.TextColored(ColMuted, "Reset");
-        if (ImGuiUi.Button("Restart##MarketAcquisitionRestartRoute", canStart && marketAcquisitionRouteRunner.CanRestart))
-            _ = RestartGuidedRouteAsync();
-        ImGui.SameLine();
-        if (ImGuiUi.Button("Refresh Plan##MarketAcquisitionReprepareRoute", canReprepare))
-            _ = ReprepareGuidedRouteAsync();
-
-        ImGui.EndTable();
-    }
-
-    private void DrawGuidedRouteStops(IReadOnlyList<MarketAcquisitionGuidedRouteStop> stops)
-    {
-        var rows = MarketAcquisitionRouteTablePresenter.BuildRows(stops);
-        if (ImGui.BeginTable("MarketAcquisitionGuidedRouteStops", 7, ImGuiUi.InteractiveTableFlags))
-        {
-            ImGui.TableSetupColumn("World", ImGuiTableColumnFlags.WidthFixed, 140);
-            ImGui.TableSetupColumn("Data Center");
-            ImGui.TableSetupColumn("Route Lines");
-            ImGui.TableSetupColumn("State");
-            ImGui.TableSetupColumn("Intent");
-            ImGui.TableSetupColumn("Result");
-            ImGui.TableSetupColumn("Notes");
-            ImGui.TableHeadersRow();
-
-            foreach (var row in rows)
-            {
-                ImGui.TableNextRow();
-                ImGui.TableNextColumn();
-                DrawGuidedRouteStopExpander(row);
-                ImGui.TableNextColumn();
-                ImGui.TextUnformatted(FormatRouteDataCenter(row.DataCenter));
-                ImGui.TableNextColumn();
-                ImGui.TextUnformatted(row.RouteLines);
-                if (!string.IsNullOrWhiteSpace(row.LineMix) && !string.Equals(row.LineMix, "No route lines", StringComparison.Ordinal))
-                {
-                    if (ImGui.IsItemHovered())
-                        ImGui.SetTooltip(row.LineMix);
-                }
-
-                ImGui.TableNextColumn();
-                ImGui.TextColored(GetGuidedRouteStopColor(row.State), row.State);
-                ImGui.TableNextColumn();
-                ImGui.TextUnformatted(row.Intent);
-                ImGui.TableNextColumn();
-                ImGui.TextUnformatted(row.Result);
-                ImGui.TableNextColumn();
-                ImGui.TextColored(row.Aggregate.FailedLineCount > 0 ? ColError : ColMuted, row.Notes);
-
-                if (expandedGuidedRouteStops.Contains(GetGuidedRouteStopKey(row)))
-                    DrawGuidedRouteStopLineRows(row);
-            }
-
-            ImGui.EndTable();
-        }
-    }
-
-    private void DrawGuidedRouteStopExpander(MarketAcquisitionRouteStopRow row)
-    {
-        var key = GetGuidedRouteStopKey(row);
-        var expanded = expandedGuidedRouteStops.Contains(key);
-        var buttonLabel = expanded ? $"v##route-stop-{key}" : $">##route-stop-{key}";
-        if (ImGui.SmallButton(buttonLabel))
-        {
-            if (expanded)
-                expandedGuidedRouteStops.Remove(key);
-            else
-                expandedGuidedRouteStops.Add(key);
-        }
-
-        ImGui.SameLine();
-        ImGui.TextUnformatted(row.WorldName);
-    }
-
-    private void DrawGuidedRouteStopLineRows(MarketAcquisitionRouteStopRow stop)
-    {
-        ImGui.TableNextRow();
-        ImGui.TableNextColumn();
-        ImGui.TextColored(ColMuted, "  Item");
-        ImGui.TableNextColumn();
-        ImGui.TextColored(ColMuted, "Source");
-        ImGui.TableNextColumn();
-        ImGui.TextColored(ColMuted, "State");
-        ImGui.TableNextColumn();
-        ImGui.TextColored(ColMuted, "Planned");
-        ImGui.TableNextColumn();
-        ImGui.TextColored(ColMuted, "Discovered");
-        ImGui.TableNextColumn();
-        ImGui.TextColored(ColMuted, "Bought");
-        ImGui.TableNextColumn();
-        ImGui.TextColored(ColMuted, "Notes");
-
-        foreach (var line in stop.Lines)
-        {
-            ImGui.TableNextRow();
-            ImGui.TableNextColumn();
-            ImGui.TextColored(ColMuted, $"  {line.Item}");
-            ImGui.TableNextColumn();
-            ImGui.TextColored(ColMuted, line.Source);
-            ImGui.TableNextColumn();
-            ImGui.TextColored(GetRouteLineStateColor(line.State), line.State);
-            ImGui.TableNextColumn();
-            ImGui.TextUnformatted(line.Planned);
-            ImGui.TableNextColumn();
-            ImGui.TextUnformatted(line.Discovered);
-            ImGui.TableNextColumn();
-            ImGui.TextUnformatted(line.Bought);
-            ImGui.TableNextColumn();
-            ImGui.TextColored(line.State.Equals("Blocked", StringComparison.OrdinalIgnoreCase) ? ColError : ColMuted, line.Notes);
-        }
-    }
-
-    private static string GetGuidedRouteStopKey(MarketAcquisitionRouteStopRow row) =>
-        $"{row.WorldName}|{row.DataCenter}";
 
     private Task StartGuidedRouteAsync(bool forceDiagnostics)
     {
@@ -2584,49 +2406,6 @@ public class MainWindow : Window, IDisposable
 
         return acquisitionStatus;
     }
-
-    private Vector4 GetGuidedRouteStatusColor()
-    {
-        var status = marketAcquisitionRouteRunner.StatusMessage;
-        if (status.StartsWith("Unable", StringComparison.OrdinalIgnoreCase) ||
-            status.Contains("Cannot", StringComparison.OrdinalIgnoreCase) ||
-            status.Contains("Failed", StringComparison.OrdinalIgnoreCase))
-            return ColError;
-
-        if (status.Contains("Waiting", StringComparison.OrdinalIgnoreCase) ||
-            status.Contains("Approve", StringComparison.OrdinalIgnoreCase) ||
-            status.Contains("Purchasing", StringComparison.OrdinalIgnoreCase) ||
-            marketAcquisitionRouteRunner.IsPaused)
-            return ColHeader;
-
-        if (status.Contains("Arrived", StringComparison.OrdinalIgnoreCase) ||
-            status.Contains("Recorded", StringComparison.OrdinalIgnoreCase) ||
-            status.Contains("complete", StringComparison.OrdinalIgnoreCase) ||
-            status.Contains("started", StringComparison.OrdinalIgnoreCase))
-            return ColSuccess;
-
-        return ColMuted;
-    }
-
-    private static Vector4 GetGuidedRouteStopColor(string state) =>
-        state switch
-        {
-            "Complete" => ColSuccess,
-            "Partial" or "Buying" or "Traveling" or "Arrived" => ColHeader,
-            "Blocked" or "Failed" => ColError,
-            _ => ColMuted,
-        };
-
-    private static Vector4 GetRouteLineStateColor(string state) =>
-        state switch
-        {
-            "Complete" or "Purchasing" or "Buying" => ColSuccess,
-            "Pending" => ColMuted,
-            _ when state.StartsWith("Skipped", StringComparison.OrdinalIgnoreCase) => ColMuted,
-            _ when state.Contains("fail", StringComparison.OrdinalIgnoreCase) ||
-                   state.Equals("Blocked", StringComparison.OrdinalIgnoreCase) => ColError,
-            _ => ColHeader,
-        };
 
     internal static bool CanPrepareAcquisitionPlanForStatus(string status) =>
         string.Equals(status, "AcceptedInPlugin", StringComparison.OrdinalIgnoreCase) ||
