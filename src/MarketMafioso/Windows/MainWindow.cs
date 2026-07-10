@@ -59,6 +59,7 @@ public class MainWindow : Window, IDisposable
     private readonly string marketAcquisitionRouteDiagnosticsDirectory;
     private readonly OverviewTabPanel overviewTab;
     private readonly InventoryReporterTabPanel inventoryReporterTab;
+    private readonly StatusTabPanel statusTab;
     private readonly MarketAcquisitionRequestBuilderPanel acquisitionRequestBuilder;
     private readonly RetainerRestockBrowserState restockBrowserState = new();
     private readonly RetainerRestockBrowserPanel restockBrowser;
@@ -212,6 +213,7 @@ public class MainWindow : Window, IDisposable
             autoRetainerRefresh,
             Plugin.Instance.RestartTimer,
             config.Save);
+        statusTab = new StatusTabPanel(config, reporter, retainerCacheStore, log);
         restockBrowser = new RetainerRestockBrowserPanel(config, restockBrowserState, config.Save);
         ProjectBrowser = new WorkshopProjectBrowserWindow(
             config,
@@ -329,7 +331,7 @@ public class MainWindow : Window, IDisposable
 
             if (ImGui.BeginTabItem("Status"))
             {
-                DrawStatusTab();
+                statusTab.Draw();
                 ImGui.EndTabItem();
             }
 
@@ -3850,14 +3852,6 @@ public class MainWindow : Window, IDisposable
             log.Warning($"[MarketMafioso] {result.Message}");
     }
 
-    private void DrawStatusTab()
-    {
-        ImGui.Spacing();
-        DrawStatusSection();
-        ImGui.Spacing();
-        DrawRetainerCacheSection();
-    }
-
     private void OpenDiagnosticsFolder(string folderPath)
     {
         try
@@ -4263,60 +4257,6 @@ public class MainWindow : Window, IDisposable
         urlBuffer = serverUrl;
         config.ServerUrl = serverUrl;
         config.Save();
-    }
-
-    private void DrawRetainerCacheSection()
-    {
-        ImGui.TextColored(ColHeader, "Retainer Cache");
-        ImGui.Separator();
-
-        if (config.RetainerCache.Count == 0)
-        {
-            ImGui.TextColored(ColMuted, "No retainers cached. Open a retainer inventory to populate.");
-        }
-        else
-        {
-            foreach (var (_, cached) in config.RetainerCache)
-            {
-                var total = cached.Bags.Sum(b => b.Items.Count);
-                ImGui.BulletText(
-                    $"{cached.RetainerName}  -  {total} items  (last seen {cached.LastUpdated:HH:mm:ss UTC})");
-            }
-
-            ImGui.Spacing();
-            if (ImGui.Button("Clear Retainer Cache"))
-            {
-                config.RetainerCache.Clear();
-                try
-                {
-                    retainerCacheStore?.Save(config.RetainerCache);
-                }
-                catch (Exception ex)
-                {
-                    log.Error(ex, "[MarketMafioso] Error saving cleared retainer inventory cache");
-                }
-            }
-        }
-    }
-
-    private void DrawStatusSection()
-    {
-        ImGui.TextColored(ColHeader, "Module Status");
-        ImGui.Separator();
-        ImGui.TextColored(ColMuted, $"Build: {PluginBuildInfo.DisplayVersion}");
-        ImGui.Spacing();
-
-        if (reporter.LastSentAt.HasValue)
-        {
-            var statusOk = reporter.LastStatus.StartsWith("2");
-            ImGui.TextColored(
-                statusOk ? ColSuccess : ColError,
-                $"Last sent: {reporter.LastSentAt:HH:mm:ss}  -  Status: {reporter.LastStatus}");
-        }
-        else
-        {
-            ImGui.TextColored(ColMuted, $"Status: {reporter.LastStatus}");
-        }
     }
 
     public void Dispose()
