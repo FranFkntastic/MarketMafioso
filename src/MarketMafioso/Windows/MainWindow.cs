@@ -57,6 +57,7 @@ public class MainWindow : Window, IDisposable
     private readonly MarketAcquisitionRouteRunner marketAcquisitionRouteRunner;
     private readonly MarketBoardAutomationController marketBoardAutomationController = new();
     private readonly string marketAcquisitionRouteDiagnosticsDirectory;
+    private readonly OverviewTabPanel overviewTab;
     private readonly MarketAcquisitionRequestBuilderPanel acquisitionRequestBuilder;
     private readonly RetainerRestockBrowserState restockBrowserState = new();
     private readonly RetainerRestockBrowserPanel restockBrowser;
@@ -204,6 +205,7 @@ public class MainWindow : Window, IDisposable
 
         urlBuffer = config.ServerUrl;
         apiKeyBuffer = config.ApiKey;
+        overviewTab = new OverviewTabPanel(IsMarketAcquisitionUnlocked);
         restockBrowser = new RetainerRestockBrowserPanel(config, restockBrowserState, config.Save);
         ProjectBrowser = new WorkshopProjectBrowserWindow(
             config,
@@ -279,7 +281,7 @@ public class MainWindow : Window, IDisposable
         {
             if (ImGui.BeginTabItem("Overview"))
             {
-                DrawOverviewTab();
+                overviewTab.Draw();
                 ImGui.EndTabItem();
             }
 
@@ -338,19 +340,6 @@ public class MainWindow : Window, IDisposable
             IsMarketAcquisitionUnlocked()
                 ? "Current modules: Inventory Reporter, Workshop Logistics, Market Acquisition"
                 : "Current modules: Inventory Reporter, Workshop Logistics");
-    }
-
-    private void DrawOverviewTab()
-    {
-        ImGui.Spacing();
-        ImGui.TextColored(ColHeader, "Modules");
-        ImGui.Separator();
-
-        DrawModuleSummary("Inventory Reporter", "Enabled", InventoryModuleSummary);
-        DrawModuleSummary("Workshop Logistics", "Enabled", WorkshopLogisticsModuleSummary);
-        if (IsMarketAcquisitionUnlocked())
-            DrawModuleSummary("Market Acquisition", "Internal", MarketAcquisitionModuleSummary);
-        DrawModuleSummary("General Improvements", "Planned", "Small quality-of-life tools that are useful, but too narrow for their own plugin.");
     }
 
     private void DrawInventoryReporterTab()
@@ -3932,15 +3921,6 @@ public class MainWindow : Window, IDisposable
             ImGui.Spacing();
             DrawMarketAcquisitionSettingsSection();
         }
-    }
-
-    private void DrawModuleSummary(string name, string state, string description)
-    {
-        ImGui.BulletText(name);
-        ImGui.SameLine();
-        ImGui.TextColored(state == "Enabled" ? ColSuccess : ColMuted, $"({state})");
-        ImGui.TextWrapped(description);
-        ImGui.Spacing();
     }
 
     private void DrawServerSection()
