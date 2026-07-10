@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using MarketMafioso.Automation.MarketBoard;
 
 namespace MarketMafioso.MarketAcquisition;
@@ -18,6 +19,7 @@ public sealed class MarketAcquisitionRouteEngine
     private readonly IMarketAcquisitionPurchaseIo purchase;
     private readonly IMarketAcquisitionRouteReporter reporter;
     private readonly IMarketAcquisitionRouteEvidenceRecorder evidence;
+    private readonly MarketAcquisitionClaimLifecycleController claimLifecycle;
     private readonly IMarketAcquisitionRouteClock clock;
     private readonly MarketBoardListingReadAccumulator listingReadAccumulator = new();
     private readonly MarketBoardAutomationController purchaseAutomation = new();
@@ -32,6 +34,7 @@ public sealed class MarketAcquisitionRouteEngine
         IMarketAcquisitionPurchaseIo purchase,
         IMarketAcquisitionRouteReporter reporter,
         IMarketAcquisitionRouteEvidenceRecorder evidence,
+        MarketAcquisitionClaimLifecycleController claimLifecycle,
         IMarketAcquisitionRouteClock clock)
     {
         this.runner = runner ?? throw new ArgumentNullException(nameof(runner));
@@ -41,6 +44,7 @@ public sealed class MarketAcquisitionRouteEngine
         this.purchase = purchase ?? throw new ArgumentNullException(nameof(purchase));
         this.reporter = reporter ?? throw new ArgumentNullException(nameof(reporter));
         this.evidence = evidence ?? throw new ArgumentNullException(nameof(evidence));
+        this.claimLifecycle = claimLifecycle ?? throw new ArgumentNullException(nameof(claimLifecycle));
         this.clock = clock ?? throw new ArgumentNullException(nameof(clock));
     }
 
@@ -713,9 +717,54 @@ public sealed class MarketAcquisitionRouteEngine
         _ => "StopRoute",
     };
 
-    private void ReportRouteProgress()
+    public void ReportRouteProgress()
     {
-        // Reporting is moved after route execution is fully engine-owned.
+        var claimed = claimedRequest;
+        if (claimed == null || string.IsNullOrWhiteSpace(claimed.ClaimToken) || !reporter.CanReport ||
+            string.Equals(runner.State, "Idle", StringComparison.OrdinalIgnoreCase))
+            return;
+
+        var routeState = runner.State;
+        if (!MarketAcquisitionRouteProgressReporter.CanReportForRouteState(routeState) ||
+            !MarketAcquisitionRouteProgressReporter.CanReportForRequestStatus(claimed.Status))
+            return;
+
+        var message = runner.StatusMessage;
+        var reportKey = $"{claimed.Id}|{routeState}|{message}";
+        if (string.Equals(state.LastProgressReportKey, reportKey, StringComparison.Ordinal))
+            return;
+
+        state.LastProgressReportKey = reportKey;
+        var activeStop = runner.ActiveStop;
+        var report = new MarketAcquisitionRouteProgressReport(
+            claimed.Id,
+            claimed.ClaimToken,
+            routeState,
+            state.ProgressNonce,
+            ++state.ProgressReportSequence,
+            activeStop == null ? null : $"{activeStop.DataCenter}:{activeStop.WorldName}",
+            activeStop?.WorldName,
+            activeStop?.Status ?? routeState,
+            message);
+        _ = ReportRouteProgressAsync(report, claimed, state.ProgressSessionVersion);
+    }
+
+    private async Task ReportRouteProgressAsync(
+        MarketAcquisitionRouteProgressReport report,
+        MarketAcquisitionClaimView claimed,
+        long reportSessionVersion)
+    {
+        try
+        {
+            using var cancellation = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(10));
+            var outcome = await reporter.ReportRouteProgressAsync(report, cancellation.Token).ConfigureAwait(false);
+            claimLifecycle.ApplySuccessfulRouteProgressReport(outcome, claimed, reportSessionVersion, state.ProgressSessionVersion, report.Message);
+        }
+        catch (Exception ex)
+        {
+            if (!claimLifecycle.TryHandleRouteProgressConflict(ex, claimed, reportSessionVersion, state.ProgressSessionVersion))
+                state.AcquisitionStatus = $"Route progress report failed: {ex.Message}";
+        }
     }
 
     private void ClearExecutionState()

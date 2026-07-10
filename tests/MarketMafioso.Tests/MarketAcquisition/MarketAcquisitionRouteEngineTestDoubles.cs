@@ -80,11 +80,15 @@ internal sealed class FakePurchaseIo : IMarketAcquisitionPurchaseIo
 
 internal sealed class FakeRouteReporter : IMarketAcquisitionRouteReporter
 {
+    public bool CanReport { get; set; } = true;
+    public List<MarketAcquisitionRouteProgressReport> RouteProgressReports { get; } = [];
     public List<MarketAcquisitionPurchaseAuditReport> PurchaseAuditReports { get; } = [];
-    public bool CanReport => true;
 
-    public Task<MarketAcquisitionRouteProgressReportOutcome> ReportRouteProgressAsync(MarketAcquisitionRouteProgressReport report, CancellationToken cancellationToken) =>
-        Task.FromResult(new MarketAcquisitionRouteProgressReportOutcome("progress", new MarketAcquisitionRequestView()));
+    public Task<MarketAcquisitionRouteProgressReportOutcome> ReportRouteProgressAsync(MarketAcquisitionRouteProgressReport report, CancellationToken cancellationToken)
+    {
+        RouteProgressReports.Add(report);
+        return Task.FromResult(new MarketAcquisitionRouteProgressReportOutcome("progress", new MarketAcquisitionRequestView { Status = "Running" }));
+    }
 
     public Task ReportPurchaseAuditAsync(MarketAcquisitionPurchaseAuditReport report, CancellationToken cancellationToken)
     {
@@ -108,6 +112,7 @@ internal sealed class FakeRouteEvidenceRecorder : IMarketAcquisitionRouteEvidenc
 
 internal sealed class MarketAcquisitionRouteEngineHarness : IDisposable
 {
+    private MarketAcquisitionClaimView? persistedClaim;
     public FakeRouteClock Clock { get; } = new();
     public FakeRouteContext Context { get; } = new();
     public FakeRouteUiAutomation Ui { get; } = new();
@@ -130,6 +135,16 @@ internal sealed class MarketAcquisitionRouteEngineHarness : IDisposable
             Purchase,
             Reporter,
             new FakeRouteEvidenceRecorder(),
+            new MarketAcquisitionClaimLifecycleController(
+                new Configuration(),
+                () => persistedClaim,
+                value => persistedClaim = value,
+                () => null,
+                () => null,
+                () => { },
+                _ => { },
+                () => Runner.StatusMessage,
+                () => { }),
             Clock);
     }
 
