@@ -1,6 +1,6 @@
 # MarketMafioso Documentation
 
-This directory contains public setup/operator docs plus a small amount of tracked implementation history. Local planning notes under `docs/design/` and `docs/superpowers/` are intentionally ignored by Git and are not part of the published documentation set.
+This directory contains public setup and operator documentation.
 
 ## Start Here
 
@@ -30,21 +30,3 @@ This directory contains public setup/operator docs plus a small amount of tracke
 - [Submission preview](pluginmaster/submission-preview.md)
 - [PluginMaster preview JSON](pluginmaster/pluginmaster.preview.json)
 - [Plugin icon](pluginmaster/assets/icon.png)
-
-## Implementation History
-
-Files in [plans/](plans/) are tracked implementation notes or branch-recovery records. They are useful for maintainer context, but they should be reviewed before public release material points at them.
-
-- [Automation Core Shard Restock Status](plans/2026-07-02-automation-core-shard-restock-implementation.md)
-- [CA Appraisal Workbench Reintegration Status](plans/2026-07-06-ca-appraisal-workbench-reintegration-implementation.md)
-- [Pruned Branch Revisit / Todo](plans/2026-07-06-pruned-branch-revisit-todo.md)
-- [Retainer Restock V1 Status](plans/2026-07-07-retainer-restock-v1-implementation.md)
-
-## Local-Only Notes
-
-These folders are ignored by Git and are for private/local planning:
-
-- `docs/design/`
-- `docs/superpowers/`
-
-Do not rely on those folders for public docs, release instructions, or durable cross-thread handoffs. If a handoff must survive cleanup, put it in a tracked public location after checking that it contains no private feature details.
