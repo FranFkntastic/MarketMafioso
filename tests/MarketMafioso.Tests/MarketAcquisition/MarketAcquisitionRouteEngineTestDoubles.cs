@@ -70,26 +70,27 @@ internal sealed class FakeMarketBoardIo : IMarketAcquisitionMarketBoardIo
 
 internal sealed class FakePurchaseIo : IMarketAcquisitionPurchaseIo
 {
-    public MarketBoardPurchaseResult ExecuteFirstCandidate(MarketAcquisitionLiveCandidatePlan candidatePlan, MarketBoardReadResult freshRead) => new()
-    {
-        Status = "NoCandidate",
-    };
-
-    public MarketBoardPurchaseResult TryConfirmPendingPurchase(MarketBoardPurchaseCandidate candidate) => new()
-    {
-        Status = "ConfirmationPending",
-        Candidate = candidate,
-    };
+    public Queue<MarketBoardPurchaseResult> PurchaseResults { get; } = [];
+    public Queue<MarketBoardPurchaseResult> ConfirmationResults { get; } = [];
+    public MarketBoardPurchaseResult ExecuteFirstCandidate(MarketAcquisitionLiveCandidatePlan candidatePlan, MarketBoardReadResult freshRead) =>
+        PurchaseResults.Count == 0 ? new() { Status = "NoCandidate" } : PurchaseResults.Dequeue();
+    public MarketBoardPurchaseResult TryConfirmPendingPurchase(MarketBoardPurchaseCandidate candidate) =>
+        ConfirmationResults.Count == 0 ? new() { Status = "ConfirmationPending", Candidate = candidate } : ConfirmationResults.Dequeue();
 }
 
 internal sealed class FakeRouteReporter : IMarketAcquisitionRouteReporter
 {
+    public List<MarketAcquisitionPurchaseAuditReport> PurchaseAuditReports { get; } = [];
     public bool CanReport => true;
 
     public Task<MarketAcquisitionRouteProgressReportOutcome> ReportRouteProgressAsync(MarketAcquisitionRouteProgressReport report, CancellationToken cancellationToken) =>
         Task.FromResult(new MarketAcquisitionRouteProgressReportOutcome("progress", new MarketAcquisitionRequestView()));
 
-    public Task ReportPurchaseAuditAsync(MarketAcquisitionPurchaseAuditReport report, CancellationToken cancellationToken) => Task.CompletedTask;
+    public Task ReportPurchaseAuditAsync(MarketAcquisitionPurchaseAuditReport report, CancellationToken cancellationToken)
+    {
+        PurchaseAuditReports.Add(report);
+        return Task.CompletedTask;
+    }
 
     public Task ReportLineProgressAsync(MarketAcquisitionLineProgressReport report, CancellationToken cancellationToken) => Task.CompletedTask;
 }
@@ -111,6 +112,8 @@ internal sealed class MarketAcquisitionRouteEngineHarness : IDisposable
     public FakeRouteContext Context { get; } = new();
     public FakeRouteUiAutomation Ui { get; } = new();
     public FakeMarketBoardIo MarketBoard { get; } = new();
+    public FakePurchaseIo Purchase { get; } = new();
+    public FakeRouteReporter Reporter { get; } = new();
     public MarketAcquisitionRouteRunner Runner { get; }
     public MarketAcquisitionRouteEngine Engine { get; }
 
@@ -124,8 +127,8 @@ internal sealed class MarketAcquisitionRouteEngineHarness : IDisposable
             Context,
             Ui,
             MarketBoard,
-            new FakePurchaseIo(),
-            new FakeRouteReporter(),
+            Purchase,
+            Reporter,
             new FakeRouteEvidenceRecorder(),
             Clock);
     }
@@ -142,7 +145,17 @@ internal static class MarketAcquisitionRouteEngineTestData
         RequestId = "request-1",
         Status = "Ready",
         WorldMode = "Recommended",
-        Lines = [new MarketAcquisitionPlanLine { LineId = "line-1", ItemId = 7017, ItemName = "Varnish" }],
+        Lines = [new MarketAcquisitionPlanLine
+        {
+            LineId = "line-1",
+            ItemId = 7017,
+            ItemName = "Varnish",
+            QuantityMode = "TargetQuantity",
+            RequestedQuantity = 4,
+            HqPolicy = "Either",
+            MaxUnitPrice = 1000,
+            GilCap = 4000,
+        }],
         WorldBatches = [new MarketAcquisitionWorldBatch
         {
             WorldName = worldName,
@@ -154,6 +167,11 @@ internal static class MarketAcquisitionRouteEngineTestData
                 ItemName = "Varnish",
                 WorldName = worldName,
                 DataCenter = "Dynamis",
+                QuantityMode = "TargetQuantity",
+                RequestedQuantity = 4,
+                HqPolicy = "Either",
+                MaxUnitPrice = 1000,
+                GilCap = 4000,
             }],
         }],
     };
@@ -163,5 +181,46 @@ internal static class MarketAcquisitionRouteEngineTestData
         Id = "request-1",
         ClaimToken = "claim-token",
         Status = "AcceptedInPlugin",
+        QuantityMode = "TargetQuantity",
+        Quantity = 4,
+        HqPolicy = "Either",
+        MaxUnitPrice = 1000,
+        MaxTotalGil = 4000,
+    };
+
+    public static MarketAcquisitionLiveCandidatePlan ReadyCandidatePlan() => new()
+    {
+        Status = "Ready",
+        Message = "Ready.",
+        RequestedQuantity = 4,
+        WouldBuyQuantity = 4,
+        WouldSpendGil = 3200,
+    };
+
+    public static MarketBoardPurchaseCandidate Candidate(string worldName) => new()
+    {
+        ItemId = 7017,
+        WorldName = worldName,
+        ListingId = "listing-1",
+        RetainerId = "retainer-1",
+        Quantity = 4,
+        UnitPrice = 800,
+    };
+
+    public static MarketBoardReadResult ReadWithSafeListing(string worldName) => new()
+    {
+        Status = "Ready",
+        ReadState = MarketBoardListingReadState.FreshComplete,
+        ItemId = 7017,
+        WorldName = worldName,
+        Listings = [new MarketBoardLiveListing
+        {
+            ItemId = 7017,
+            WorldName = worldName,
+            ListingId = "listing-1",
+            RetainerId = "retainer-1",
+            Quantity = 4,
+            UnitPrice = 800,
+        }],
     };
 }
