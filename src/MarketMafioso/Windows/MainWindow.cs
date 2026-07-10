@@ -22,6 +22,7 @@ using MarketMafioso.Windows.Main;
 using MarketMafioso.Windows.MarketAcquisitionPanels;
 using MarketMafioso.Windows.MarketAcquisitionRequestBuilder;
 using MarketMafioso.Windows.RetainerRestock;
+using MarketMafioso.Windows.WorkshopLogistics;
 using MarketMafioso.WorkshopPrep;
 
 namespace MarketMafioso.Windows;
@@ -71,6 +72,7 @@ public class MainWindow : Window, IDisposable
     private readonly RetainerRestockBrowserState restockBrowserState = new();
     private readonly RetainerRestockBrowserPanel restockBrowser;
     private readonly RetainerRestockControlsPanel restockControls;
+    private readonly WorkshopMaterialPanel workshopMaterials;
 
     private readonly WorkshopProjectSelectionState workshopProjectSelection = new();
     private IReadOnlyList<MarketAcquisitionRequestView> pendingAcquisitionRequests = [];
@@ -204,6 +206,7 @@ public class MainWindow : Window, IDisposable
             () => _ = PrepareMarketAcquisitionPlanAsync());
         restockBrowser = new RetainerRestockBrowserPanel(config, restockBrowserState, config.Save);
         restockControls = new RetainerRestockControlsPanel(config, autoRetainerRefresh, workshopRetainerRestock);
+        workshopMaterials = new WorkshopMaterialPanel(autoRetainerRefresh, workshopRetainerRestock, GetWorkshopAvailability);
         ProjectBrowser = new WorkshopProjectBrowserWindow(
             config,
             workshopCatalog,
@@ -377,7 +380,7 @@ public class MainWindow : Window, IDisposable
 
         DrawWorkshopPrepQueue(projects);
         ImGui.Spacing();
-        DrawWorkshopMaterialSummary();
+        workshopMaterials.Draw();
         ImGui.Spacing();
         DrawWorkshopAssemblyWorkflow();
     }
@@ -2854,99 +2857,10 @@ public class MainWindow : Window, IDisposable
         }
     }
 
-    private void DrawWorkshopMaterialSummary()
-    {
-        ImGuiUi.SectionHeaderWithActions("Materials", ColHeader, DrawWorkshopMaterialHeaderActions, 420);
-
-        var availability = GetWorkshopAvailability();
-        if (ImGui.BeginTable("WorkshopPrepMaterials", 7, ImGuiUi.InteractiveTableFlags))
-        {
-            ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.WidthStretch);
-            ImGui.TableSetupColumn("Required", ImGuiTableColumnFlags.WidthFixed, 80);
-            ImGui.TableSetupColumn("Stock Differential", ImGuiTableColumnFlags.WidthFixed, 128);
-            ImGui.TableSetupColumn("Inventory Missing", ImGuiTableColumnFlags.WidthFixed, 128);
-            ImGui.TableSetupColumn("Player", ImGuiTableColumnFlags.WidthFixed, 72);
-            ImGui.TableSetupColumn("Retainers", ImGuiTableColumnFlags.WidthFixed | ImGuiTableColumnFlags.DefaultHide, 88);
-            ImGui.TableSetupColumn("Candidates", ImGuiTableColumnFlags.WidthStretch | ImGuiTableColumnFlags.DefaultHide);
-            ImGui.TableHeadersRow();
-
-            if (availability.Count == 0)
-            {
-                ImGui.TableNextRow();
-                ImGui.TableNextColumn();
-                ImGui.TextColored(ColMuted, "No workshop materials yet. Add projects to the prep queue.");
-                ImGui.TableNextColumn();
-                ImGui.TextColored(ColMuted, "-");
-                ImGui.TableNextColumn();
-                ImGui.TextColored(ColMuted, "-");
-                ImGui.TableNextColumn();
-                ImGui.TextColored(ColMuted, "-");
-                ImGui.TableNextColumn();
-                ImGui.TextColored(ColMuted, "-");
-                ImGui.TableNextColumn();
-                ImGui.TextColored(ColMuted, "-");
-                ImGui.TableNextColumn();
-                ImGui.TextColored(ColMuted, "-");
-            }
-
-            foreach (var item in availability)
-            {
-                ImGui.TableNextRow();
-                ImGui.TableNextColumn();
-                ImGui.TextUnformatted(item.ItemName);
-                ImGui.TableNextColumn();
-                ImGui.TextUnformatted(item.Required.ToString());
-                ImGui.TableNextColumn();
-                ImGui.TextColored(item.StockDifferential < 0 ? ColError : ColSuccess, FormatSignedQuantity(item.StockDifferential));
-                ImGui.TableNextColumn();
-                ImGui.TextColored(item.Shortage > 0 ? ColError : ColSuccess, item.Shortage.ToString());
-                ImGui.TableNextColumn();
-                ImGui.TextUnformatted(item.PlayerInventory.ToString());
-                ImGui.TableNextColumn();
-                ImGui.TextUnformatted(item.RetainerCache.ToString());
-                ImGui.TableNextColumn();
-                ImGui.TextUnformatted(string.Join(", ", item.CandidateRetainers.Select(x => x.RetainerName)));
-            }
-
-            ImGui.EndTable();
-        }
-    }
-
-    private void DrawWorkshopMaterialHeaderActions()
-    {
-        var canRefreshRetainers = autoRetainerRefresh.CanStartRefresh &&
-                                  !autoRetainerRefresh.IsRefreshing &&
-                                  !autoRetainerRefresh.IsStartQueued;
-
-        if (ImGuiUi.Button("Refresh Retainer Cache", canRefreshRetainers))
-            autoRetainerRefresh.StartFullRefresh();
-
-        ImGui.SameLine();
-        if (ImGuiUi.Button("Restock From Retainers", !workshopRetainerRestock.IsRunning))
-            _ = workshopRetainerRestock.StartAsync(GetWorkshopAvailability());
-
-        ImGui.SameLine();
-        if (ImGuiUi.MenuButton("Columns"))
-            ImGui.OpenPopup("WorkshopMaterialColumnsMenu");
-
-        if (ImGui.BeginPopup("WorkshopMaterialColumnsMenu"))
-        {
-            ImGui.TextColored(ColMuted, "Use table header context menu to hide columns.");
-            ImGui.EndPopup();
-        }
-    }
-
     private void SaveActiveQueueEdit()
     {
         WorkshopQueueService.MarkActiveQueueEdited(config);
         config.Save();
-    }
-
-    private static string FormatSignedQuantity(int value)
-    {
-        return value > 0
-            ? $"+{value}"
-            : value.ToString();
     }
 
     private IReadOnlyList<WorkshopMaterialAvailability> GetWorkshopAvailability()
