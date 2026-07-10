@@ -12,7 +12,6 @@ using Dalamud.Plugin.Services;
 using Dalamud.Bindings.ImGui;
 using FFXIVClientStructs.FFXIV.Client.UI;
 using FFXIVClientStructs.FFXIV.Component.GUI;
-using MarketMafioso.Automation.Diagnostics;
 using MarketMafioso.Automation.Retainers;
 using MarketMafioso.Automation.Travel;
 using MarketMafioso.CraftArchitectCompanion;
@@ -37,9 +36,7 @@ public class MainWindow : Window, IDisposable
     private readonly AutoRetainerRefreshService autoRetainerRefresh;
     private readonly WorkshopProjectCatalog workshopCatalog;
     private readonly VIWIWorkshoppaIpc viwiWorkshoppaIpc;
-    private readonly WorkshopRetainerRestockService workshopRetainerRestock;
     private readonly WorkshopAssemblyRunner workshopAssemblyRunner;
-    private readonly WorkshopMaterialManifestExportService workshopMaterialManifestExport;
     private readonly RetainerCacheFileStore? retainerCacheStore;
     private readonly IPlayerState playerState;
     private readonly IPluginLog log;
@@ -69,9 +66,8 @@ public class MainWindow : Window, IDisposable
     private readonly MarketAcquisitionDiagnosticsPanel marketAcquisitionDiagnosticsPanel;
     private readonly MarketAcquisitionGuidedRoutePanel marketAcquisitionGuidedRoutePanel;
     private readonly MarketAcquisitionRequestBuilderPanel acquisitionRequestBuilder;
-    private readonly RetainerRestockBrowserState restockBrowserState = new();
-    private readonly RetainerRestockBrowserPanel restockBrowser;
-    private readonly RetainerRestockControlsPanel restockControls;
+    private readonly RetainerRestockTabPanel restockTab;
+    private readonly WorkshopPrepQueuePanel workshopPrepQueue;
     private readonly WorkshopMaterialPanel workshopMaterials;
     private readonly WorkshopAssemblyPanel workshopAssembly;
 
@@ -101,11 +97,6 @@ public class MainWindow : Window, IDisposable
     private bool acquisitionRequestBusy = false;
     private string acquisitionStatus = "No dashboard request has been fetched this session.";
     private CancellationTokenSource? acquisitionRequestCancellation;
-    private bool confirmViwiClear = false;
-    private bool confirmNewWorkshopQueue = false;
-    private bool confirmLoadFrozenQueue = false;
-    private Guid? selectedFrozenQueueId;
-    private string frozenQueueNameInput = string.Empty;
     private string workshopStatus = "Workshop prep queue is idle.";
 
     private const string ProductSummary = "Workshop logistics and self-hosted inventory history.";
@@ -147,9 +138,7 @@ public class MainWindow : Window, IDisposable
         this.autoRetainerRefresh = autoRetainerRefresh;
         this.workshopCatalog = workshopCatalog;
         this.viwiWorkshoppaIpc = viwiWorkshoppaIpc;
-        this.workshopRetainerRestock = workshopRetainerRestock;
         this.workshopAssemblyRunner = workshopAssemblyRunner;
-        this.workshopMaterialManifestExport = workshopMaterialManifestExport;
         this.retainerCacheStore = retainerCacheStore;
         this.playerState = playerState;
         this.log = log;
@@ -205,8 +194,26 @@ public class MainWindow : Window, IDisposable
             () => _ = RejectClaimedAcquisitionRequestAsync(),
             ForgetLocalAcquisitionRequest,
             () => _ = PrepareMarketAcquisitionPlanAsync());
-        restockBrowser = new RetainerRestockBrowserPanel(config, restockBrowserState, config.Save);
-        restockControls = new RetainerRestockControlsPanel(config, autoRetainerRefresh, workshopRetainerRestock);
+        restockTab = new RetainerRestockTabPanel(
+            config,
+            scanner,
+            autoRetainerRefresh,
+            workshopRetainerRestock,
+            GetCurrentRetainerOwnerScope);
+        WorkshopProjectBrowserWindow? projectBrowser = null;
+        WorkshopFrozenQueueBrowserWindow? frozenQueueBrowser = null;
+        workshopPrepQueue = new WorkshopPrepQueuePanel(
+            config,
+            workshopCatalog,
+            viwiWorkshoppaIpc,
+            workshopAssemblyRunner,
+            workshopProjectSelection,
+            workshopMaterialManifestExport,
+            GetWorkshopAvailability,
+            status => workshopStatus = status,
+            () => projectBrowser!.IsOpen = true,
+            () => frozenQueueBrowser!.IsOpen = true,
+            log);
         workshopMaterials = new WorkshopMaterialPanel(autoRetainerRefresh, workshopRetainerRestock, GetWorkshopAvailability);
         workshopAssembly = new WorkshopAssemblyPanel(
             workshopAssemblyRunner,
@@ -218,18 +225,20 @@ public class MainWindow : Window, IDisposable
             config,
             workshopCatalog,
             workshopProjectSelection,
-            AddWorkshopProject);
+            workshopPrepQueue.AddWorkshopProject);
+        projectBrowser = ProjectBrowser;
         FrozenQueueBrowser = new WorkshopFrozenQueueBrowserWindow(
             config,
             workshopCatalog,
             new WorkshopFrozenQueueBrowserActions(
-                () => !workshopAssemblyRunner.HasActiveRun,
-                LoadFrozenQueue,
-                OverwriteFrozenQueueWithCurrent,
-                RenameFrozenQueue,
-                DuplicateFrozenQueue,
-                DeleteFrozenQueue,
-                SaveCurrentQueueAsNew));
+                () => workshopPrepQueue.CanEditQueue,
+                workshopPrepQueue.LoadFrozenQueue,
+                workshopPrepQueue.OverwriteFrozenQueueWithCurrent,
+                workshopPrepQueue.RenameFrozenQueue,
+                workshopPrepQueue.DuplicateFrozenQueue,
+                workshopPrepQueue.DeleteFrozenQueue,
+                workshopPrepQueue.SaveCurrentQueueAsNew));
+        frozenQueueBrowser = FrozenQueueBrowser;
         var acquisitionRequestBuilderCraftAppraisal = CreateAcquisitionRequestBuilderCraftAppraisalController();
         acquisitionRequestBuilder = new MarketAcquisitionRequestBuilderPanel(
             config,
@@ -250,7 +259,9 @@ public class MainWindow : Window, IDisposable
             FinalizeMarketBoardInputCaptureLog,
             () => marketAcquisitionRouteRunner.LastDiagnosticFilePath,
             () => acquisitionRequestBuilderCraftAppraisal.State.CreateDiagnosticsSnapshot());
-        AutomationDiagnostics = new AutomationDiagnosticsWindow(CreateAutomationDiagnosticProbes(), IsMarketAcquisitionUnlocked);
+        AutomationDiagnostics = new AutomationDiagnosticsWindow(
+            new AutomationDiagnosticProbeFactory(autoRetainerRefresh, viwiWorkshoppaIpc).Create(),
+            IsMarketAcquisitionUnlocked);
         marketAcquisitionDiagnosticsPanel = new MarketAcquisitionDiagnosticsPanel(
             marketAcquisitionRouteRunner,
             marketAcquisitionRouteDiagnosticsDirectory,
@@ -385,50 +396,17 @@ public class MainWindow : Window, IDisposable
 
         var projects = workshopCatalog.GetProjects();
 
-        DrawWorkshopPrepQueue(projects);
+        workshopPrepQueue.Draw(projects);
         ImGui.Spacing();
         workshopMaterials.Draw();
         ImGui.Spacing();
         workshopAssembly.Draw(config.WorkshopPrepQueue.Count > 0);
-        DrawWorkshopQueueConfirmations();
+        workshopPrepQueue.DrawConfirmations();
     }
 
     private void DrawRetainerRestockTab()
     {
-        ImGui.Spacing();
-        ImGui.TextColored(ColHeader, "Restock");
-        ImGui.TextWrapped("Build a local plan and pull matching items from cached retainers.");
-        ImGui.Spacing();
-
-        var playerBags = scanner.ScanPlayerInventory(config);
-        var plan = GetRetainerRestockPlan(playerBags);
-        var stockRows = RetainerRestockStockCatalog.Build(
-            playerBags,
-            config,
-            DateTime.UtcNow,
-            GetCurrentRetainerOwnerScope());
-
-        restockBrowser.Draw(stockRows, plan, ColHeader, ColSuccess, ColError, ColMuted);
-        ImGui.Spacing();
-        restockControls.Draw(plan, GetCurrentRetainerOwnerScope());
-    }
-
-    private RetainerRestockPlan GetRetainerRestockPlan(IReadOnlyList<InventoryBag>? playerBags = null)
-    {
-        var playerInventory = playerBags is null
-            ? scanner.CountPlayerInventory(config)
-            : playerBags
-                .SelectMany(bag => bag.Items)
-                .Where(item => item.ItemId > 0 && item.Quantity > 0)
-                .GroupBy(item => item.ItemId)
-                .ToDictionary(group => group.Key, group => group.Sum(item => (int)item.Quantity));
-
-        return RetainerRestockPlanner.BuildPlan(
-            config.RetainerRestockPlanItems,
-            playerInventory,
-            config,
-            DateTime.UtcNow,
-            GetCurrentRetainerOwnerScope());
+        restockTab.Draw();
     }
 
     private void DrawMarketAcquisitionTab()
@@ -2536,341 +2514,6 @@ public class MainWindow : Window, IDisposable
         }
     }
 
-    private void DrawWorkshopPrepQueue(IReadOnlyList<WorkshopProjectDefinition> projects)
-    {
-        ImGuiUi.SectionHeaderWithActions("Prep Queue", ColHeader, DrawWorkshopQueueHeaderActions, 180);
-        DrawFrozenQueueToolbar();
-        ImGui.Spacing();
-
-        if (projects.Count == 0)
-        {
-            ImGui.TextColored(ColMuted, "No company workshop projects were found.");
-            return;
-        }
-
-        DrawWorkshopQueueTable(projects);
-    }
-
-    private void AddWorkshopProject(uint workshopItemId)
-    {
-        if (workshopAssemblyRunner.HasActiveRun)
-        {
-            workshopStatus = "Cannot edit prep queue while workshop assembly is active.";
-            return;
-        }
-
-        var existing = config.WorkshopPrepQueue.FirstOrDefault(x => x.WorkshopItemId == workshopItemId);
-        var quantity = Math.Max(1, workshopProjectSelection.Quantity);
-        if (existing != null)
-        {
-            existing.Quantity += quantity;
-        }
-        else
-        {
-            config.WorkshopPrepQueue.Add(new WorkshopPrepQueueItem
-            {
-                WorkshopItemId = workshopItemId,
-                Quantity = quantity,
-            });
-        }
-
-        SaveActiveQueueEdit();
-        workshopStatus = "Added project to workshop prep queue.";
-    }
-
-    private void DrawWorkshopQueueHeaderActions()
-    {
-        var hasPrepQueue = config.WorkshopPrepQueue.Count > 0;
-        var canEditQueue = !workshopAssemblyRunner.HasActiveRun;
-
-        if (ImGuiUi.MenuButton("Handoff"))
-            ImGui.OpenPopup("WorkshopQueueHandoffMenu");
-
-        if (ImGui.BeginPopup("WorkshopQueueHandoffMenu"))
-        {
-            if (ImGuiUi.MenuItem("Send to VIWI", hasPrepQueue && canEditQueue))
-                confirmViwiClear = true;
-
-            ImGui.EndPopup();
-        }
-
-        ImGui.SameLine();
-        if (ImGuiUi.MenuButton("Export"))
-            ImGui.OpenPopup("WorkshopQueueExportMenu");
-
-        if (ImGui.BeginPopup("WorkshopQueueExportMenu"))
-        {
-            if (ImGuiUi.MenuItem("Copy Artisan Manifest", hasPrepQueue))
-                CopyWorkshopArtisanManifest();
-
-            if (ImGuiUi.MenuItem("Copy Craft Architect Plan", hasPrepQueue))
-                CopyWorkshopCraftArchitectPlan();
-
-            ImGui.EndPopup();
-        }
-    }
-
-    private void DrawFrozenQueueToolbar()
-    {
-        var canEditQueue = !workshopAssemblyRunner.HasActiveRun;
-        var activeFrozenQueue = config.ActiveFrozenWorkshopQueueId == null
-            ? null
-            : config.FrozenWorkshopQueues.FirstOrDefault(x => x.Id == config.ActiveFrozenWorkshopQueueId.Value);
-
-        var activeFrozenQueueLabel = activeFrozenQueue == null
-            ? "Active queue: unsaved"
-            : WorkshopQueueService.ActiveQueueMatchesFrozenQueue(config)
-                ? $"Active saved job: {activeFrozenQueue.Name}"
-                : $"Active saved job: {activeFrozenQueue.Name} (modified)";
-        ImGui.TextColored(ColMuted, activeFrozenQueueLabel);
-
-        var commandWidth = 720f;
-        var nameWidth = Math.Max(220f, ImGui.GetContentRegionAvail().X - commandWidth);
-        ImGui.SetNextItemWidth(nameWidth);
-        ImGui.InputText("##workshopFrozenQueueName", ref frozenQueueNameInput, 128);
-
-        ImGui.SameLine();
-        if (ImGuiUi.Button("Save Queue", canEditQueue && config.WorkshopPrepQueue.Count > 0))
-        {
-            var createsFrozenQueue = config.ActiveFrozenWorkshopQueueId == null;
-            ApplyFrozenQueueResult(
-                WorkshopQueueService.SaveActiveQueue(config, frozenQueueNameInput, DateTime.UtcNow),
-                clearName: createsFrozenQueue);
-        }
-
-        ImGui.SameLine();
-        if (ImGuiUi.Button("Save As...", canEditQueue && config.WorkshopPrepQueue.Count > 0))
-            ApplyFrozenQueueResult(WorkshopQueueService.FreezeCurrentQueue(config, frozenQueueNameInput, DateTime.UtcNow), clearName: true);
-
-        ImGui.SameLine();
-        if (ImGuiUi.Button("New Queue", canEditQueue))
-        {
-            if (config.WorkshopPrepQueue.Count > 0)
-                confirmNewWorkshopQueue = true;
-            else
-                StartNewWorkshopQueue();
-        }
-
-        ImGui.SameLine();
-        if (ImGuiUi.Button("Add Project...", canEditQueue))
-            ProjectBrowser.IsOpen = true;
-
-        ImGui.SameLine();
-        DrawFrozenQueueLoadCombo(canEditQueue);
-
-        ImGui.SameLine();
-        if (ImGui.Button("Manage Saved Jobs"))
-            FrozenQueueBrowser.IsOpen = true;
-
-        ImGui.TextColored(ColMuted, "Handoff contains VIWI and future queue targets. Export contains Artisan JSON and Craft Architect .craftplan JSON.");
-
-        DrawFrozenQueueConfirmations(canEditQueue);
-    }
-
-    private void DrawFrozenQueueLoadCombo(bool canEditQueue)
-    {
-        var canLoad = canEditQueue && config.FrozenWorkshopQueues.Count > 0;
-        if (!canLoad)
-            ImGui.BeginDisabled();
-
-        var preview = selectedFrozenQueueId is { } id
-            ? config.FrozenWorkshopQueues.FirstOrDefault(x => x.Id == id)?.Name ?? "Load saved job..."
-            : "Load saved job...";
-        ImGui.SetNextItemWidth(220);
-        if (ImGui.BeginCombo("##workshopFrozenQueueLoad", preview))
-        {
-            foreach (var frozenQueue in config.FrozenWorkshopQueues.OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase))
-            {
-                var isSelected = selectedFrozenQueueId == frozenQueue.Id;
-                if (ImGui.Selectable($"{frozenQueue.Name} ({frozenQueue.Items.Sum(x => x.Quantity)})##load{frozenQueue.Id}", isSelected))
-                {
-                    selectedFrozenQueueId = frozenQueue.Id;
-                    RequestLoadFrozenQueue(frozenQueue.Id);
-                }
-            }
-
-            ImGui.EndCombo();
-        }
-
-        if (!canLoad)
-            ImGui.EndDisabled();
-    }
-
-    private void DrawFrozenQueueConfirmations(bool canEditQueue)
-    {
-        if (confirmNewWorkshopQueue)
-        {
-            ImGui.TextColored(ColMuted, "Start a new queue? Unsaved active queue changes will be discarded.");
-            if (ImGuiUi.Button("Confirm New Queue", canEditQueue))
-                StartNewWorkshopQueue();
-
-            ImGui.SameLine();
-            if (ImGui.Button("Cancel New Queue"))
-                confirmNewWorkshopQueue = false;
-        }
-
-        if (confirmLoadFrozenQueue)
-        {
-            ImGui.TextColored(ColMuted, "Load saved job? Unsaved active queue changes will be discarded.");
-            if (ImGuiUi.Button("Confirm Load Saved Job", canEditQueue && selectedFrozenQueueId != null))
-                LoadSelectedFrozenQueue();
-
-            ImGui.SameLine();
-            if (ImGui.Button("Cancel Load Saved Job"))
-                confirmLoadFrozenQueue = false;
-        }
-
-    }
-
-    private void RequestLoadFrozenQueue(Guid queueId)
-    {
-        selectedFrozenQueueId = queueId;
-        if (config.WorkshopPrepQueue.Count > 0 && config.ActiveFrozenWorkshopQueueId != queueId)
-        {
-            confirmLoadFrozenQueue = true;
-            return;
-        }
-
-        LoadSelectedFrozenQueue();
-    }
-
-    private void LoadSelectedFrozenQueue()
-    {
-        if (selectedFrozenQueueId == null)
-            return;
-
-        LoadFrozenQueue(selectedFrozenQueueId.Value);
-        confirmLoadFrozenQueue = false;
-    }
-
-    private void LoadFrozenQueue(Guid queueId)
-    {
-        selectedFrozenQueueId = queueId;
-        ApplyFrozenQueueResult(WorkshopQueueService.LoadFrozenQueue(config, queueId));
-    }
-
-    private void DeleteFrozenQueue(Guid queueId)
-    {
-        var result = WorkshopQueueService.DeleteFrozenQueue(config, queueId);
-        if (result.Success)
-            selectedFrozenQueueId = config.FrozenWorkshopQueues.FirstOrDefault()?.Id;
-
-        ApplyFrozenQueueResult(result);
-    }
-
-    private void OverwriteFrozenQueueWithCurrent(Guid queueId)
-    {
-        selectedFrozenQueueId = queueId;
-        ApplyFrozenQueueResult(WorkshopQueueService.OverwriteFrozenQueue(config, queueId, DateTime.UtcNow));
-    }
-
-    private void RenameFrozenQueue(Guid queueId, string name)
-    {
-        selectedFrozenQueueId = queueId;
-        ApplyFrozenQueueResult(WorkshopQueueService.RenameFrozenQueue(config, queueId, name, DateTime.UtcNow));
-    }
-
-    private void DuplicateFrozenQueue(Guid queueId, string name)
-    {
-        selectedFrozenQueueId = queueId;
-        ApplyFrozenQueueResult(WorkshopQueueService.DuplicateFrozenQueue(config, queueId, name, DateTime.UtcNow));
-    }
-
-    private void SaveCurrentQueueAsNew(string name)
-    {
-        ApplyFrozenQueueResult(WorkshopQueueService.FreezeCurrentQueue(config, name, DateTime.UtcNow), clearName: false);
-    }
-
-    private void StartNewWorkshopQueue()
-    {
-        WorkshopQueueService.NewActiveQueue(config);
-        config.Save();
-        confirmNewWorkshopQueue = false;
-        workshopStatus = "Started a new workshop prep queue.";
-    }
-
-    private void ApplyFrozenQueueResult(WorkshopQueueOperationResult result, bool clearName = false)
-    {
-        workshopStatus = result.Message;
-        if (!result.Success)
-            return;
-
-        if (result.QueueId != null)
-            selectedFrozenQueueId = result.QueueId;
-
-        if (clearName)
-            frozenQueueNameInput = string.Empty;
-
-        config.Save();
-    }
-
-    private void DrawWorkshopQueueTable(IReadOnlyList<WorkshopProjectDefinition> projects)
-    {
-        var projectNames = projects.ToDictionary(x => x.WorkshopItemId, x => x.Name);
-        var canEditQueue = !workshopAssemblyRunner.HasActiveRun;
-        if (ImGui.BeginTable("WorkshopPrepQueue", 3, ImGuiUi.InteractiveTableFlags))
-        {
-            ImGui.TableSetupColumn("Project", ImGuiTableColumnFlags.WidthStretch);
-            ImGui.TableSetupColumn("Qty", ImGuiTableColumnFlags.WidthFixed, 96);
-            ImGui.TableSetupColumn("Actions", ImGuiTableColumnFlags.WidthFixed, 104);
-            ImGui.TableHeadersRow();
-
-            if (config.WorkshopPrepQueue.Count == 0)
-            {
-                ImGui.TableNextRow();
-                ImGui.TableNextColumn();
-                ImGui.TextColored(ColMuted, "No workshop projects queued.");
-                ImGui.TableNextColumn();
-                ImGui.TextColored(ColMuted, "-");
-                ImGui.TableNextColumn();
-                if (ImGuiUi.Button("Add##workshopQueueEmptyAdd", canEditQueue))
-                    ProjectBrowser.IsOpen = true;
-            }
-
-            for (var index = 0; index < config.WorkshopPrepQueue.Count; index++)
-            {
-                var item = config.WorkshopPrepQueue[index];
-                ImGui.TableNextRow();
-                ImGui.TableNextColumn();
-                ImGui.TextUnformatted(projectNames.TryGetValue(item.WorkshopItemId, out var name)
-                    ? name
-                    : $"Unknown project {item.WorkshopItemId}");
-
-                ImGui.TableNextColumn();
-                var quantity = item.Quantity;
-                ImGui.SetNextItemWidth(80);
-                if (!canEditQueue)
-                    ImGui.BeginDisabled();
-
-                if (ImGui.InputInt($"##workshopQueueQty{index}", ref quantity))
-                {
-                    item.Quantity = Math.Max(1, quantity);
-                    SaveActiveQueueEdit();
-                }
-
-                if (!canEditQueue)
-                    ImGui.EndDisabled();
-
-                ImGui.TableNextColumn();
-                if (ImGuiUi.Button($"Remove##workshopQueueRemove{index}", canEditQueue))
-                {
-                    config.WorkshopPrepQueue.RemoveAt(index);
-                    SaveActiveQueueEdit();
-                    workshopStatus = "Removed project from workshop prep queue.";
-                    index--;
-                }
-            }
-
-            ImGui.EndTable();
-        }
-    }
-
-    private void SaveActiveQueueEdit()
-    {
-        WorkshopQueueService.MarkActiveQueueEdited(config);
-        config.Save();
-    }
-
     private IReadOnlyList<WorkshopMaterialAvailability> GetWorkshopAvailability()
     {
         if (config.WorkshopPrepQueue.Count == 0)
@@ -2883,31 +2526,6 @@ public class MainWindow : Window, IDisposable
             playerInventory,
             config,
             GetCurrentRetainerOwnerScope());
-    }
-
-    private void DrawWorkshopQueueConfirmations()
-    {
-        var hasPrepQueue = config.WorkshopPrepQueue.Count > 0;
-        var canEditQueue = !workshopAssemblyRunner.HasActiveRun;
-
-        if (config.WorkshopPrepQueue.Count == 0)
-            confirmViwiClear = false;
-
-        if (!confirmViwiClear)
-            return;
-
-        ImGui.TextColored(ColMuted, "This will clear VIWI Workshoppa's queue and send the MarketMafioso prep queue.");
-
-        if (ImGuiUi.Button("Confirm VIWI Queue Sync", hasPrepQueue && canEditQueue))
-        {
-            var result = viwiWorkshoppaIpc.SendQueue(config.WorkshopPrepQueue, clearExisting: true);
-            workshopStatus = result.Message;
-            confirmViwiClear = false;
-        }
-
-        ImGui.SameLine();
-        if (ImGui.Button("Cancel VIWI Queue Sync"))
-            confirmViwiClear = false;
     }
 
     private void StartWorkshopAssembly(bool enableDiagnostics)
@@ -2934,36 +2552,6 @@ public class MainWindow : Window, IDisposable
             workshopStatus = $"Unable to start workshop assembly. {ex.Message}";
             log.Warning(ex, "[MarketMafioso] Native workshop assembly preflight failed.");
         }
-    }
-
-    private void CopyWorkshopArtisanManifest()
-    {
-        CopyWorkshopManifest(workshopMaterialManifestExport.ExportArtisanManifest(
-            config.WorkshopPrepQueue,
-            workshopCatalog.GetProjects(),
-            GetWorkshopAvailability(),
-            WorkshopMaterialManifestQuantityMode.InventoryMissing,
-            DateTime.UtcNow));
-    }
-
-    private void CopyWorkshopCraftArchitectPlan()
-    {
-        CopyWorkshopManifest(WorkshopMaterialManifestExportService.ExportCraftArchitectPlan(
-            config.WorkshopPrepQueue,
-            workshopCatalog.GetProjects(),
-            GetWorkshopAvailability(),
-            WorkshopMaterialManifestQuantityMode.InventoryMissing,
-            DateTime.UtcNow));
-    }
-
-    private void CopyWorkshopManifest(WorkshopMaterialManifestExportResult result)
-    {
-        if (result.Success && !string.IsNullOrWhiteSpace(result.Content))
-            ImGui.SetClipboardText(result.Content);
-
-        workshopStatus = result.Message;
-        if (result.Severity is WorkshopMaterialManifestExportSeverity.Error or WorkshopMaterialManifestExportSeverity.Warning)
-            log.Warning($"[MarketMafioso] {result.Message}");
     }
 
     private MarketAcquisitionRouteLinePurchaseTotals ResolveActiveRouteLinePurchaseTotals(MarketAcquisitionWorldItemSubtask? activeSubtask)
@@ -3003,84 +2591,6 @@ public class MainWindow : Window, IDisposable
     }
 
     private bool IsMarketAcquisitionUnlocked() => MarketAcquisitionUnlock.IsUnlocked(config);
-
-    private IReadOnlyList<IAutomationDiagnosticProbe> CreateAutomationDiagnosticProbes()
-    {
-        return
-        [
-            new AutomationDiagnosticProbe("Retainer UI", RunRetainerUiDiagnosticProbe),
-            new AutomationDiagnosticProbe("Market Board UI", RunMarketBoardUiDiagnosticProbe),
-            new AutomationDiagnosticProbe("External Helpers", RunExternalHelperDiagnosticProbe),
-        ];
-    }
-
-    private AutomationDiagnosticProbeResult RunRetainerUiDiagnosticProbe()
-    {
-        var state = new RetainerUiStateReader(Plugin.GameGui).DescribeRetainerUiState(
-            [
-                RetainerInventoryAddonNames.RetainerList,
-                RetainerInventoryAddonNames.SelectString,
-                RetainerInventoryAddonNames.InventoryLarge,
-                RetainerInventoryAddonNames.InventorySmall,
-                RetainerInventoryAddonNames.InputNumeric,
-            ]);
-
-        return new AutomationDiagnosticProbeResult(
-            "Retainer UI",
-            IsSuccess: true,
-            state,
-            new Dictionary<string, string?>
-            {
-                ["retainerList"] = DescribeAddon(RetainerInventoryAddonNames.RetainerList),
-                ["selectString"] = DescribeAddon(RetainerInventoryAddonNames.SelectString),
-                ["inventoryLarge"] = DescribeAddon(RetainerInventoryAddonNames.InventoryLarge),
-                ["inventorySmall"] = DescribeAddon(RetainerInventoryAddonNames.InventorySmall),
-                ["inputNumeric"] = DescribeAddon(RetainerInventoryAddonNames.InputNumeric),
-            });
-    }
-
-    private AutomationDiagnosticProbeResult RunMarketBoardUiDiagnosticProbe()
-    {
-        var details = new Dictionary<string, string?>
-        {
-            ["itemSearch"] = DescribeAddon("ItemSearch"),
-            ["itemSearchResult"] = DescribeAddon("ItemSearchResult"),
-            ["itemDetail"] = DescribeAddon("ItemDetail"),
-        };
-        var isAnyMarketBoardAddonVisible = details.Values.Any(value => value?.Contains("visible", StringComparison.OrdinalIgnoreCase) == true);
-
-        return new AutomationDiagnosticProbeResult(
-            "Market Board UI",
-            isAnyMarketBoardAddonVisible,
-            isAnyMarketBoardAddonVisible
-                ? "At least one tracked market-board addon is visible."
-                : "No tracked market-board addon is visible.",
-            details);
-    }
-
-    private AutomationDiagnosticProbeResult RunExternalHelperDiagnosticProbe()
-    {
-        var autoRetainerAvailable = autoRetainerRefresh.IsLoaded;
-        var viwiAvailable = viwiWorkshoppaIpc.IsAvailable;
-        return new AutomationDiagnosticProbeResult(
-            "External Helpers",
-            autoRetainerAvailable || viwiAvailable,
-            "External helper availability probe completed.",
-            new Dictionary<string, string?>
-            {
-                ["autoRetainer"] = autoRetainerAvailable ? "loaded" : "not loaded",
-                ["viwiWorkshoppa"] = viwiAvailable ? "loaded" : "not loaded",
-            });
-    }
-
-    private static unsafe string DescribeAddon(string addonName)
-    {
-        var addon = Plugin.GameGui.GetAddonByName<AtkUnitBase>(addonName, 1);
-        if (addon == null)
-            return "not present";
-
-        return $"{(addon->IsReady ? "ready" : "not ready")}, {(addon->IsVisible ? "visible" : "hidden")}";
-    }
 
     public void Dispose()
     {
