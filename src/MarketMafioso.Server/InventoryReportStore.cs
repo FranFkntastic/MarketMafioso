@@ -1,6 +1,6 @@
-using System.Globalization;
-using Microsoft.Data.Sqlite;
+using MarketMafioso.Server.Inventory;
 using MarketMafioso.Server.Sqlite;
+using Microsoft.Data.Sqlite;
 
 namespace MarketMafioso.Server;
 
@@ -9,6 +9,9 @@ public sealed class InventoryReportStore
     private readonly SqliteConnectionFactory connectionFactory;
     private readonly IConfiguration configuration;
     private readonly ILogger<InventoryReportStore> log;
+    private readonly InventoryReportWritePersistence writePersistence;
+    private readonly InventoryReportReadQueries readQueries;
+    private readonly InventoryRawJsonRetention rawJsonRetention;
 
     public string ReportDirectory { get; }
 
@@ -20,6 +23,9 @@ public sealed class InventoryReportStore
         this.connectionFactory = connectionFactory;
         this.configuration = configuration;
         this.log = log;
+        writePersistence = new InventoryReportWritePersistence(connectionFactory, configuration);
+        readQueries = new InventoryReportReadQueries(connectionFactory);
+        rawJsonRetention = new InventoryRawJsonRetention(connectionFactory, configuration);
 
         ReportDirectory = Path.GetDirectoryName(connectionFactory.DatabasePath) ?? connectionFactory.DatabasePath;
     }
@@ -59,15 +65,8 @@ public sealed class InventoryReportStore
             cancellationToken);
     }
 
-    public async Task<bool> ExistsAsync(long accountId, string id, CancellationToken cancellationToken)
-    {
-        await using var connection = await connectionFactory.OpenConnectionAsync(cancellationToken);
-        await using var command = connection.CreateCommand();
-        command.CommandText = "SELECT 1 FROM snapshots WHERE account_id = $accountId AND id = $id";
-        command.Parameters.AddWithValue("$accountId", accountId);
-        command.Parameters.AddWithValue("$id", id);
-        return await command.ExecuteScalarAsync(cancellationToken) != null;
-    }
+    public Task<bool> ExistsAsync(long accountId, string id, CancellationToken cancellationToken) =>
+        readQueries.ExistsAsync(accountId, id, cancellationToken);
 
     private async Task<StoredInventoryReport> SaveCoreAsync(
         long accountId,
@@ -84,42 +83,19 @@ public sealed class InventoryReportStore
 
         await using var connection = await connectionFactory.OpenConnectionAsync(cancellationToken);
         await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
-        var characterId = await UpsertCharacterAsync(connection, transaction, accountId, report, receivedAt, cancellationToken);
-
-        await InsertSnapshotAsync(
+        await writePersistence.WriteSnapshotAsync(
             connection,
             transaction,
             accountId,
-            characterId,
             id,
             receivedAt,
-            apiKeyLabel,
-            rawReportJson,
             report,
             metadata,
+            apiKeyLabel,
+            rawReportJson,
             cancellationToken);
-        await InsertOwnerAsync(connection, transaction, id, "player", "Player Inventory", null, null, null, 0, report.PlayerInventory, [], cancellationToken);
-
-        for (var i = 0; i < report.Retainers.Count; i++)
-        {
-            var retainer = report.Retainers[i];
-            await InsertOwnerAsync(
-                connection,
-                transaction,
-                id,
-                "retainer",
-                retainer.RetainerName,
-                retainer.RetainerId,
-                retainer.LastUpdated,
-                retainer.Gil,
-                i + 1,
-                retainer.Bags,
-                retainer.MarketListings,
-                cancellationToken);
-        }
-
-        await PruneRawJsonAsync(connection, transaction, accountId, cancellationToken);
-        await PruneSnapshotsAsync(connection, transaction, accountId, cancellationToken);
+        await rawJsonRetention.PruneAsync(connection, transaction, accountId, cancellationToken);
+        await writePersistence.PruneSnapshotsAsync(connection, transaction, accountId, cancellationToken);
         await transaction.CommitAsync(cancellationToken);
 
         return (await GetAsync(accountId, id, cancellationToken))
@@ -129,134 +105,30 @@ public sealed class InventoryReportStore
     public Task<IReadOnlyList<ReportSummary>> ListSummariesAsync(CancellationToken cancellationToken) =>
         ListSummariesAsync(1, null, cancellationToken);
 
-    public async Task<IReadOnlyList<CharacterSummary>> ListCharactersAsync(
+    public Task<IReadOnlyList<CharacterSummary>> ListCharactersAsync(
         long accountId,
-        CancellationToken cancellationToken)
-    {
-        var characters = new List<CharacterSummary>();
-        await using var connection = await connectionFactory.OpenConnectionAsync(cancellationToken);
-        await using var command = connection.CreateCommand();
-        command.CommandText = """
-            SELECT id, character_name, home_world, last_seen_at_utc
-            FROM characters
-            WHERE account_id = $accountId
-            ORDER BY last_seen_at_utc DESC, character_name COLLATE NOCASE
-            """;
-        command.Parameters.AddWithValue("$accountId", accountId);
+        CancellationToken cancellationToken) =>
+        readQueries.ListCharactersAsync(accountId, cancellationToken);
 
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        while (await reader.ReadAsync(cancellationToken))
-        {
-            characters.Add(new CharacterSummary(
-                reader.GetInt64(0),
-                reader.GetString(1),
-                reader.IsDBNull(2) ? null : reader.GetString(2),
-                DateTimeOffset.Parse(reader.GetString(3), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind)));
-        }
-
-        return characters;
-    }
-
-    public async Task<IReadOnlyList<ReportSummary>> ListSummariesAsync(
+    public Task<IReadOnlyList<ReportSummary>> ListSummariesAsync(
         long accountId,
         long? characterId,
-        CancellationToken cancellationToken)
-    {
-        var summaries = new List<ReportSummary>();
-        await using var connection = await connectionFactory.OpenConnectionAsync(cancellationToken);
-        await using var command = connection.CreateCommand();
-        command.CommandText = characterId == null
-            ? SummaryQuery + Environment.NewLine + """
-              WHERE s.account_id = $accountId
-              ORDER BY s.received_at_utc DESC
-              """
-            : SummaryQuery + Environment.NewLine + """
-              WHERE s.account_id = $accountId AND s.character_id = $characterId
-              ORDER BY s.received_at_utc DESC
-              """;
-        command.Parameters.AddWithValue("$accountId", accountId);
-        if (characterId != null)
-            command.Parameters.AddWithValue("$characterId", characterId.Value);
+        CancellationToken cancellationToken) =>
+        readQueries.ListSummariesAsync(accountId, characterId, cancellationToken);
 
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        while (await reader.ReadAsync(cancellationToken))
-            summaries.Add(ReadSummary(reader));
-
-        return summaries;
-    }
-
-    public async Task<InventoryRetentionSummary> GetRetentionSummaryAsync(
+    public Task<InventoryRetentionSummary> GetRetentionSummaryAsync(
         IReadOnlyList<long> accountIds,
-        CancellationToken cancellationToken)
-    {
-        if (accountIds.Count == 0)
-            return new InventoryRetentionSummary();
-
-        await using var connection = await connectionFactory.OpenConnectionAsync(cancellationToken);
-        await using var command = connection.CreateCommand();
-        var accountParameters = accountIds.Select((_, index) => $"$account{index}").ToArray();
-        command.CommandText = $"""
-            SELECT
-                COUNT(*),
-                COALESCE(SUM(CASE WHEN raw_report_json IS NOT NULL THEN 1 ELSE 0 END), 0),
-                COALESCE(SUM(CASE WHEN raw_report_json IS NULL THEN 1 ELSE 0 END), 0),
-                MAX(received_at_utc),
-                MIN(received_at_utc)
-            FROM snapshots
-            WHERE account_id IN ({string.Join(", ", accountParameters)})
-            """;
-
-        for (var i = 0; i < accountIds.Count; i++)
-            command.Parameters.AddWithValue(accountParameters[i], accountIds[i]);
-
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        if (!await reader.ReadAsync(cancellationToken))
-            return new InventoryRetentionSummary();
-
-        return new InventoryRetentionSummary
-        {
-            SnapshotCount = checked((int)reader.GetInt64(0)),
-            RawJsonRetainedCount = checked((int)reader.GetInt64(1)),
-            RawJsonPrunedCount = checked((int)reader.GetInt64(2)),
-            NewestSnapshotReceivedAtUtc = reader.IsDBNull(3)
-                ? null
-                : DateTimeOffset.Parse(reader.GetString(3), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
-            OldestSnapshotReceivedAtUtc = reader.IsDBNull(4)
-                ? null
-                : DateTimeOffset.Parse(reader.GetString(4), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
-        };
-    }
+        CancellationToken cancellationToken) =>
+        readQueries.GetRetentionSummaryAsync(accountIds, cancellationToken);
 
     public Task<StoredInventoryReport?> GetLatestAsync(CancellationToken cancellationToken) =>
         GetLatestAsync(1, null, cancellationToken);
 
-    public async Task<StoredInventoryReport?> GetLatestAsync(
+    public Task<StoredInventoryReport?> GetLatestAsync(
         long accountId,
         long? characterId,
-        CancellationToken cancellationToken)
-    {
-        await using var connection = await connectionFactory.OpenConnectionAsync(cancellationToken);
-        await using var command = connection.CreateCommand();
-        command.CommandText = characterId == null
-            ? """
-              SELECT id FROM snapshots
-              WHERE account_id = $accountId
-              ORDER BY received_at_utc DESC
-              LIMIT 1
-              """
-            : """
-              SELECT id FROM snapshots
-              WHERE account_id = $accountId AND character_id = $characterId
-              ORDER BY received_at_utc DESC
-              LIMIT 1
-              """;
-        command.Parameters.AddWithValue("$accountId", accountId);
-        if (characterId != null)
-            command.Parameters.AddWithValue("$characterId", characterId.Value);
-
-        var id = await command.ExecuteScalarAsync(cancellationToken) as string;
-        return id == null ? null : await GetAsync(accountId, id, cancellationToken);
-    }
+        CancellationToken cancellationToken) =>
+        readQueries.GetLatestAsync(accountId, characterId, cancellationToken);
 
     public Task<StoredInventoryReport?> GetAsync(string id, CancellationToken cancellationToken) =>
         GetAsync(1, id, cancellationToken);
@@ -264,26 +136,11 @@ public sealed class InventoryReportStore
     public Task<RawInventoryReportJson?> GetRawJsonAsync(string id, CancellationToken cancellationToken) =>
         GetRawJsonAsync(1, id, cancellationToken);
 
-    public async Task<RawInventoryReportJson?> GetRawJsonAsync(
+    public Task<RawInventoryReportJson?> GetRawJsonAsync(
         long accountId,
         string id,
-        CancellationToken cancellationToken)
-    {
-        await using var connection = await connectionFactory.OpenConnectionAsync(cancellationToken);
-        await using var command = connection.CreateCommand();
-        command.CommandText = """
-            SELECT raw_report_json
-            FROM snapshots
-            WHERE account_id = $accountId AND id = $id
-            """;
-        command.Parameters.AddWithValue("$accountId", accountId);
-        command.Parameters.AddWithValue("$id", id);
-        var result = await command.ExecuteScalarAsync(cancellationToken);
-        if (result == null)
-            return null;
-
-        return new RawInventoryReportJson(id, result == DBNull.Value ? null : (string)result);
-    }
+        CancellationToken cancellationToken) =>
+        rawJsonRetention.GetAsync(accountId, id, cancellationToken);
 
     public Task<RawInventoryReportJson?> GetLatestRawJsonAsync(CancellationToken cancellationToken) =>
         GetLatestRawJsonAsync(1, null, cancellationToken);
@@ -299,632 +156,23 @@ public sealed class InventoryReportStore
             : await GetRawJsonAsync(accountId, latest.Id, cancellationToken);
     }
 
-    public async Task<StoredInventoryReport?> GetAsync(
+    public Task<StoredInventoryReport?> GetAsync(
         long accountId,
         string id,
-        CancellationToken cancellationToken)
-    {
-        await using var connection = await connectionFactory.OpenConnectionAsync(cancellationToken);
-        var snapshot = await ReadSnapshotAsync(connection, accountId, id, cancellationToken);
-        if (snapshot == null)
-            return null;
-
-        var playerBags = new List<InventoryBag>();
-        var retainers = new List<RetainerReport>();
-        var owners = new List<InventoryOwnerRow>();
-
-        await using var ownerCommand = connection.CreateCommand();
-        ownerCommand.CommandText = """
-            SELECT id, owner_type, owner_name, retainer_id, last_updated, gil
-            FROM inventory_owners
-            WHERE snapshot_id = $snapshotId
-            ORDER BY sort_order
-            """;
-        ownerCommand.Parameters.AddWithValue("$snapshotId", id);
-        await using (var ownerReader = await ownerCommand.ExecuteReaderAsync(cancellationToken))
-        {
-            while (await ownerReader.ReadAsync(cancellationToken))
-            {
-                owners.Add(new InventoryOwnerRow(
-                    ownerReader.GetInt64(0),
-                    ownerReader.GetString(1),
-                    ownerReader.GetString(2),
-                    ownerReader.IsDBNull(3) ? null : checked((ulong)ownerReader.GetInt64(3)),
-                    ownerReader.IsDBNull(4) ? null : ownerReader.GetString(4),
-                    ownerReader.IsDBNull(5) ? null : checked((ulong)ownerReader.GetInt64(5))));
-            }
-        }
-
-        foreach (var owner in owners)
-        {
-            var bags = await ReadBagsAsync(connection, owner.Id, cancellationToken);
-            if (owner.OwnerType == "player")
-            {
-                playerBags.AddRange(bags);
-                continue;
-            }
-
-            retainers.Add(new RetainerReport
-            {
-                RetainerName = owner.OwnerName,
-                RetainerId = owner.RetainerId ?? 0,
-                OwnerCharacterName = snapshot.CharacterName,
-                OwnerHomeWorld = snapshot.HomeWorld,
-                LastUpdated = owner.LastUpdated ?? string.Empty,
-                Gil = owner.Gil ?? 0,
-                Bags = bags,
-                MarketListings = await ReadMarketListingsAsync(connection, owner.Id, cancellationToken),
-            });
-        }
-
-        var report = new InventoryReport
-        {
-            Metadata = snapshot.Metadata,
-            CharacterName = snapshot.CharacterName,
-            HomeWorld = snapshot.HomeWorld,
-            Timestamp = snapshot.ReportTimestamp,
-            PlayerInventory = playerBags,
-            Retainers = retainers,
-        };
-
-        return new StoredInventoryReport
-        {
-            Id = id,
-            ReceivedAt = snapshot.ReceivedAt,
-            ApiKeyLabel = snapshot.ApiKeyLabel,
-            Report = report,
-            Summary = CreateSummary(id, snapshot.ReceivedAt, report),
-        };
-    }
+        CancellationToken cancellationToken) =>
+        readQueries.GetAsync(accountId, id, cancellationToken);
 
     public Task<bool> DeleteAsync(string id, CancellationToken cancellationToken) =>
         DeleteAsync(1, id, cancellationToken);
 
-    public async Task<bool> DeleteAsync(long accountId, string id, CancellationToken cancellationToken)
-    {
-        await using var connection = await connectionFactory.OpenConnectionAsync(cancellationToken);
-        await using var command = connection.CreateCommand();
-        command.CommandText = "DELETE FROM snapshots WHERE account_id = $accountId AND id = $id";
-        command.Parameters.AddWithValue("$accountId", accountId);
-        command.Parameters.AddWithValue("$id", id);
-        return await command.ExecuteNonQueryAsync(cancellationToken) > 0;
-    }
+    public Task<bool> DeleteAsync(long accountId, string id, CancellationToken cancellationToken) =>
+        writePersistence.DeleteAsync(accountId, id, cancellationToken);
 
     public Task<int> DeleteAllAsync(CancellationToken cancellationToken) =>
         DeleteAllAsync(1, cancellationToken);
 
-    public async Task<int> DeleteAllAsync(long accountId, CancellationToken cancellationToken)
-    {
-        await using var connection = await connectionFactory.OpenConnectionAsync(cancellationToken);
-        await using var command = connection.CreateCommand();
-        command.CommandText = "DELETE FROM snapshots WHERE account_id = $accountId";
-        command.Parameters.AddWithValue("$accountId", accountId);
-        return await command.ExecuteNonQueryAsync(cancellationToken);
-    }
-
-    private static async Task<long?> UpsertCharacterAsync(
-        SqliteConnection connection,
-        SqliteTransaction transaction,
-        long accountId,
-        InventoryReport report,
-        DateTimeOffset seenAt,
-        CancellationToken cancellationToken)
-    {
-        if (string.IsNullOrWhiteSpace(report.CharacterName))
-            return null;
-
-        await using var command = connection.CreateCommand();
-        command.Transaction = transaction;
-        command.CommandText = """
-            INSERT INTO characters (account_id, character_name, home_world, first_seen_at_utc, last_seen_at_utc)
-            VALUES ($accountId, $characterName, $homeWorld, $seenAt, $seenAt)
-            ON CONFLICT(account_id, character_name, home_world)
-            DO UPDATE SET last_seen_at_utc = excluded.last_seen_at_utc
-            RETURNING id;
-            """;
-        command.Parameters.AddWithValue("$accountId", accountId);
-        command.Parameters.AddWithValue("$characterName", report.CharacterName);
-        command.Parameters.AddWithValue("$homeWorld", (object?)report.HomeWorld ?? DBNull.Value);
-        command.Parameters.AddWithValue("$seenAt", seenAt.ToString("O", CultureInfo.InvariantCulture));
-        return (long)(await command.ExecuteScalarAsync(cancellationToken))!;
-    }
-
-    private static async Task InsertSnapshotAsync(
-        SqliteConnection connection,
-        SqliteTransaction transaction,
-        long accountId,
-        long? characterId,
-        string id,
-        DateTimeOffset receivedAt,
-        string? apiKeyLabel,
-        string? rawReportJson,
-        InventoryReport report,
-        InventoryReportMetadata metadata,
-        CancellationToken cancellationToken)
-    {
-        await using var command = connection.CreateCommand();
-        command.Transaction = transaction;
-        command.CommandText = """
-            INSERT INTO snapshots (
-                id,
-                account_id,
-                character_id,
-                received_at_utc,
-                api_key_label,
-                character_name,
-                home_world,
-                report_timestamp,
-                schema_version,
-                source_plugin,
-                plugin_version,
-                generated_at_utc,
-                raw_report_json,
-                raw_json_retained_at_utc)
-            VALUES (
-                $id,
-                $accountId,
-                $characterId,
-                $receivedAt,
-                $apiKeyLabel,
-                $characterName,
-                $homeWorld,
-                $reportTimestamp,
-                $schemaVersion,
-                $sourcePlugin,
-                $pluginVersion,
-                $generatedAtUtc,
-                $rawReportJson,
-                $rawJsonRetainedAt);
-            """;
-        command.Parameters.AddWithValue("$id", id);
-        command.Parameters.AddWithValue("$accountId", accountId);
-        command.Parameters.AddWithValue("$characterId", (object?)characterId ?? DBNull.Value);
-        command.Parameters.AddWithValue("$receivedAt", receivedAt.ToString("O", CultureInfo.InvariantCulture));
-        command.Parameters.AddWithValue("$apiKeyLabel", string.IsNullOrWhiteSpace(apiKeyLabel) ? DBNull.Value : "provided");
-        command.Parameters.AddWithValue("$characterName", (object?)report.CharacterName ?? DBNull.Value);
-        command.Parameters.AddWithValue("$homeWorld", (object?)report.HomeWorld ?? DBNull.Value);
-        command.Parameters.AddWithValue("$reportTimestamp", report.Timestamp);
-        command.Parameters.AddWithValue("$schemaVersion", metadata.SchemaVersion);
-        command.Parameters.AddWithValue("$sourcePlugin", metadata.SourcePlugin);
-        command.Parameters.AddWithValue("$pluginVersion", metadata.PluginVersion);
-        command.Parameters.AddWithValue("$generatedAtUtc", metadata.GeneratedAtUtc);
-        command.Parameters.AddWithValue("$rawReportJson", (object?)rawReportJson ?? DBNull.Value);
-        command.Parameters.AddWithValue("$rawJsonRetainedAt", rawReportJson == null ? DBNull.Value : receivedAt.ToString("O", CultureInfo.InvariantCulture));
-        await command.ExecuteNonQueryAsync(cancellationToken);
-    }
-
-    private static async Task InsertOwnerAsync(
-        SqliteConnection connection,
-        SqliteTransaction transaction,
-        string snapshotId,
-        string ownerType,
-        string ownerName,
-        ulong? retainerId,
-        string? lastUpdated,
-        ulong? gil,
-        int sortOrder,
-        IReadOnlyList<InventoryBag> bags,
-        IReadOnlyList<RetainerMarketListing> marketListings,
-        CancellationToken cancellationToken)
-    {
-        await using var command = connection.CreateCommand();
-        command.Transaction = transaction;
-        command.CommandText = """
-            INSERT INTO inventory_owners (snapshot_id, owner_type, owner_name, retainer_id, last_updated, gil, sort_order)
-            VALUES ($snapshotId, $ownerType, $ownerName, $retainerId, $lastUpdated, $gil, $sortOrder);
-            SELECT last_insert_rowid();
-            """;
-        command.Parameters.AddWithValue("$snapshotId", snapshotId);
-        command.Parameters.AddWithValue("$ownerType", ownerType);
-        command.Parameters.AddWithValue("$ownerName", ownerName);
-        command.Parameters.AddWithValue("$retainerId", retainerId == null ? DBNull.Value : checked((long)retainerId.Value));
-        command.Parameters.AddWithValue("$lastUpdated", string.IsNullOrWhiteSpace(lastUpdated) ? DBNull.Value : lastUpdated);
-        command.Parameters.AddWithValue("$gil", gil == null ? DBNull.Value : checked((long)gil.Value));
-        command.Parameters.AddWithValue("$sortOrder", sortOrder);
-        var ownerId = (long)(await command.ExecuteScalarAsync(cancellationToken))!;
-
-        for (var i = 0; i < bags.Count; i++)
-            await InsertBagAsync(connection, transaction, ownerId, bags[i], i, cancellationToken);
-
-        for (var i = 0; i < marketListings.Count; i++)
-            await InsertMarketListingAsync(connection, transaction, ownerId, marketListings[i], i, cancellationToken);
-    }
-
-    private static async Task InsertBagAsync(
-        SqliteConnection connection,
-        SqliteTransaction transaction,
-        long ownerId,
-        InventoryBag bag,
-        int sortOrder,
-        CancellationToken cancellationToken)
-    {
-        await using var command = connection.CreateCommand();
-        command.Transaction = transaction;
-        command.CommandText = """
-            INSERT INTO inventory_bags (owner_id, bag_name, sort_order)
-            VALUES ($ownerId, $bagName, $sortOrder);
-            SELECT last_insert_rowid();
-            """;
-        command.Parameters.AddWithValue("$ownerId", ownerId);
-        command.Parameters.AddWithValue("$bagName", bag.BagName);
-        command.Parameters.AddWithValue("$sortOrder", sortOrder);
-        var bagId = (long)(await command.ExecuteScalarAsync(cancellationToken))!;
-
-        for (var i = 0; i < bag.Items.Count; i++)
-            await InsertItemAsync(connection, transaction, bagId, bag.Items[i], i, cancellationToken);
-    }
-
-    private static async Task InsertItemAsync(
-        SqliteConnection connection,
-        SqliteTransaction transaction,
-        long bagId,
-        ItemSlot item,
-        int sortOrder,
-        CancellationToken cancellationToken)
-    {
-        await using var command = connection.CreateCommand();
-        command.Transaction = transaction;
-        command.CommandText = """
-            INSERT INTO inventory_items (bag_id, item_id, item_name, item_type, quantity, is_hq, condition, sort_order)
-            VALUES ($bagId, $itemId, $itemName, $itemType, $quantity, $isHq, $condition, $sortOrder);
-            """;
-        command.Parameters.AddWithValue("$bagId", bagId);
-        command.Parameters.AddWithValue("$itemId", checked((long)item.ItemId));
-        command.Parameters.AddWithValue("$itemName", (object?)item.ItemName ?? DBNull.Value);
-        command.Parameters.AddWithValue("$itemType", (object?)item.ItemType ?? DBNull.Value);
-        command.Parameters.AddWithValue("$quantity", checked((long)item.Quantity));
-        command.Parameters.AddWithValue("$isHq", item.IsHQ ? 1 : 0);
-        command.Parameters.AddWithValue("$condition", item.Condition);
-        command.Parameters.AddWithValue("$sortOrder", sortOrder);
-        await command.ExecuteNonQueryAsync(cancellationToken);
-    }
-
-    private static async Task InsertMarketListingAsync(
-        SqliteConnection connection,
-        SqliteTransaction transaction,
-        long ownerId,
-        RetainerMarketListing listing,
-        int sortOrder,
-        CancellationToken cancellationToken)
-    {
-        await using var command = connection.CreateCommand();
-        command.Transaction = transaction;
-        command.CommandText = """
-            INSERT INTO retainer_market_listings (
-                owner_id,
-                item_id,
-                item_name,
-                item_type,
-                quantity,
-                is_hq,
-                condition,
-                unit_price,
-                listed_at,
-                sort_order)
-            VALUES (
-                $ownerId,
-                $itemId,
-                $itemName,
-                $itemType,
-                $quantity,
-                $isHq,
-                $condition,
-                $unitPrice,
-                $listedAt,
-                $sortOrder);
-            """;
-        command.Parameters.AddWithValue("$ownerId", ownerId);
-        command.Parameters.AddWithValue("$itemId", checked((long)listing.ItemId));
-        command.Parameters.AddWithValue("$itemName", (object?)listing.ItemName ?? DBNull.Value);
-        command.Parameters.AddWithValue("$itemType", (object?)listing.ItemType ?? DBNull.Value);
-        command.Parameters.AddWithValue("$quantity", checked((long)listing.Quantity));
-        command.Parameters.AddWithValue("$isHq", listing.IsHQ ? 1 : 0);
-        command.Parameters.AddWithValue("$condition", listing.Condition);
-        command.Parameters.AddWithValue("$unitPrice", listing.UnitPrice == null ? DBNull.Value : checked((long)listing.UnitPrice.Value));
-        command.Parameters.AddWithValue("$listedAt", string.IsNullOrWhiteSpace(listing.ListedAt) ? DBNull.Value : listing.ListedAt);
-        command.Parameters.AddWithValue("$sortOrder", sortOrder);
-        await command.ExecuteNonQueryAsync(cancellationToken);
-    }
-
-    private async Task PruneRawJsonAsync(
-        SqliteConnection connection,
-        SqliteTransaction transaction,
-        long accountId,
-        CancellationToken cancellationToken)
-    {
-        var retentionCount = configuration.GetValue("MarketMafioso:RawJsonRetentionCount", 20);
-        if (retentionCount < 0)
-            throw new InvalidOperationException("MarketMafioso:RawJsonRetentionCount must be zero or greater.");
-
-        await using var command = connection.CreateCommand();
-        command.Transaction = transaction;
-        command.CommandText = """
-            UPDATE snapshots
-            SET raw_report_json = NULL,
-                raw_json_retained_at_utc = NULL
-            WHERE account_id = $accountId
-              AND raw_report_json IS NOT NULL
-              AND id NOT IN (
-                  SELECT id
-                  FROM snapshots
-                  WHERE account_id = $accountId
-                    AND raw_report_json IS NOT NULL
-                  ORDER BY received_at_utc DESC
-                  LIMIT $retentionCount
-              );
-            """;
-        command.Parameters.AddWithValue("$accountId", accountId);
-        command.Parameters.AddWithValue("$retentionCount", retentionCount);
-        await command.ExecuteNonQueryAsync(cancellationToken);
-    }
-
-    private async Task PruneSnapshotsAsync(
-        SqliteConnection connection,
-        SqliteTransaction transaction,
-        long accountId,
-        CancellationToken cancellationToken)
-    {
-        var retentionCount = configuration.GetValue("MarketMafioso:SnapshotRetentionCount", 500);
-        if (retentionCount < 1)
-            throw new InvalidOperationException("MarketMafioso:SnapshotRetentionCount must be one or greater.");
-
-        await using var command = connection.CreateCommand();
-        command.Transaction = transaction;
-        command.CommandText = """
-            DELETE FROM snapshots
-            WHERE account_id = $accountId
-              AND id NOT IN (
-                  SELECT id
-                  FROM snapshots
-                  WHERE account_id = $accountId
-                  ORDER BY received_at_utc DESC
-                  LIMIT $retentionCount
-              );
-            """;
-        command.Parameters.AddWithValue("$accountId", accountId);
-        command.Parameters.AddWithValue("$retentionCount", retentionCount);
-        await command.ExecuteNonQueryAsync(cancellationToken);
-    }
-
-    private static async Task<SnapshotRow?> ReadSnapshotAsync(
-        SqliteConnection connection,
-        long accountId,
-        string id,
-        CancellationToken cancellationToken)
-    {
-        await using var command = connection.CreateCommand();
-        command.CommandText = """
-            SELECT
-                received_at_utc,
-                api_key_label,
-                character_name,
-                home_world,
-                report_timestamp,
-                schema_version,
-                source_plugin,
-                plugin_version,
-                generated_at_utc
-            FROM snapshots
-            WHERE account_id = $accountId AND id = $id
-            """;
-        command.Parameters.AddWithValue("$accountId", accountId);
-        command.Parameters.AddWithValue("$id", id);
-
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        if (!await reader.ReadAsync(cancellationToken))
-            return null;
-
-        return new SnapshotRow(
-            DateTimeOffset.Parse(reader.GetString(0), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
-            reader.IsDBNull(1) ? null : reader.GetString(1),
-            reader.IsDBNull(2) ? null : reader.GetString(2),
-            reader.IsDBNull(3) ? null : reader.GetString(3),
-            reader.GetString(4),
-            new InventoryReportMetadata
-            {
-                SchemaVersion = reader.GetInt32(5),
-                SourcePlugin = reader.GetString(6),
-                PluginVersion = reader.GetString(7),
-                GeneratedAtUtc = reader.GetString(8),
-            });
-    }
-
-    private static async Task<List<InventoryBag>> ReadBagsAsync(
-        SqliteConnection connection,
-        long ownerId,
-        CancellationToken cancellationToken)
-    {
-        var bags = new List<InventoryBag>();
-        await using var command = connection.CreateCommand();
-        command.CommandText = """
-            SELECT id, bag_name
-            FROM inventory_bags
-            WHERE owner_id = $ownerId
-            ORDER BY sort_order
-            """;
-        command.Parameters.AddWithValue("$ownerId", ownerId);
-
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        while (await reader.ReadAsync(cancellationToken))
-        {
-            var bagId = reader.GetInt64(0);
-            bags.Add(new InventoryBag
-            {
-                BagName = reader.GetString(1),
-                Items = await ReadItemsAsync(connection, bagId, cancellationToken),
-            });
-        }
-
-        return bags;
-    }
-
-    private static async Task<List<ItemSlot>> ReadItemsAsync(
-        SqliteConnection connection,
-        long bagId,
-        CancellationToken cancellationToken)
-    {
-        var items = new List<ItemSlot>();
-        await using var command = connection.CreateCommand();
-        command.CommandText = """
-            SELECT item_id, item_name, item_type, quantity, is_hq, condition
-            FROM inventory_items
-            WHERE bag_id = $bagId
-            ORDER BY sort_order
-            """;
-        command.Parameters.AddWithValue("$bagId", bagId);
-
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        while (await reader.ReadAsync(cancellationToken))
-        {
-            items.Add(new ItemSlot
-            {
-                ItemId = checked((uint)reader.GetInt64(0)),
-                ItemName = reader.IsDBNull(1) ? null : reader.GetString(1),
-                ItemType = reader.IsDBNull(2) ? null : reader.GetString(2),
-                Quantity = checked((uint)reader.GetInt64(3)),
-                IsHQ = reader.GetInt32(4) == 1,
-                Condition = reader.GetFloat(5),
-            });
-        }
-
-        return items;
-    }
-
-    private static async Task<List<RetainerMarketListing>> ReadMarketListingsAsync(
-        SqliteConnection connection,
-        long ownerId,
-        CancellationToken cancellationToken)
-    {
-        var listings = new List<RetainerMarketListing>();
-        await using var command = connection.CreateCommand();
-        command.CommandText = """
-            SELECT item_id, item_name, item_type, quantity, is_hq, condition, unit_price, listed_at
-            FROM retainer_market_listings
-            WHERE owner_id = $ownerId
-            ORDER BY sort_order
-            """;
-        command.Parameters.AddWithValue("$ownerId", ownerId);
-
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        while (await reader.ReadAsync(cancellationToken))
-        {
-            listings.Add(new RetainerMarketListing
-            {
-                ItemId = checked((uint)reader.GetInt64(0)),
-                ItemName = reader.IsDBNull(1) ? null : reader.GetString(1),
-                ItemType = reader.IsDBNull(2) ? null : reader.GetString(2),
-                Quantity = checked((uint)reader.GetInt64(3)),
-                IsHQ = reader.GetInt32(4) == 1,
-                Condition = reader.GetFloat(5),
-                UnitPrice = reader.IsDBNull(6) ? null : checked((uint)reader.GetInt64(6)),
-                ListedAt = reader.IsDBNull(7) ? null : reader.GetString(7),
-            });
-        }
-
-        return listings;
-    }
-
-    private static ReportSummary CreateSummary(string id, DateTimeOffset receivedAt, InventoryReport report)
-    {
-        var playerItems = report.PlayerInventory.SelectMany(b => b.Items).ToList();
-        var retainerItems = report.Retainers.SelectMany(r => r.Bags).SelectMany(b => b.Items).ToList();
-
-        return new ReportSummary
-        {
-            Id = id,
-            ReceivedAt = receivedAt,
-            CharacterName = report.CharacterName,
-            HomeWorld = report.HomeWorld,
-            ReportTimestamp = report.Timestamp,
-            PlayerBagCount = report.PlayerInventory.Count,
-            PlayerItemStacks = playerItems.Count,
-            PlayerItemQuantity = checked((int)playerItems.Sum(i => (long)i.Quantity)),
-            RetainerCount = report.Retainers.Count,
-            RetainerItemStacks = retainerItems.Count,
-            RetainerItemQuantity = checked((int)retainerItems.Sum(i => (long)i.Quantity)),
-        };
-    }
-
-    private static ReportSummary ReadSummary(SqliteDataReader reader) =>
-        new()
-        {
-            Id = reader.GetString(0),
-            ReceivedAt = DateTimeOffset.Parse(reader.GetString(1), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
-            CharacterName = reader.IsDBNull(2) ? null : reader.GetString(2),
-            HomeWorld = reader.IsDBNull(3) ? null : reader.GetString(3),
-            ReportTimestamp = reader.GetString(4),
-            PlayerBagCount = checked((int)reader.GetInt64(5)),
-            PlayerItemStacks = checked((int)reader.GetInt64(6)),
-            PlayerItemQuantity = checked((int)reader.GetInt64(7)),
-            RetainerCount = checked((int)reader.GetInt64(8)),
-            RetainerItemStacks = checked((int)reader.GetInt64(9)),
-            RetainerItemQuantity = checked((int)reader.GetInt64(10)),
-        };
-
-    private const string SummaryQuery = """
-        SELECT
-            s.id,
-            s.received_at_utc,
-            s.character_name,
-            s.home_world,
-            s.report_timestamp,
-            (
-                SELECT COUNT(*)
-                FROM inventory_owners o
-                JOIN inventory_bags b ON b.owner_id = o.id
-                WHERE o.snapshot_id = s.id AND o.owner_type = 'player'
-            ) AS player_bag_count,
-            (
-                SELECT COUNT(*)
-                FROM inventory_owners o
-                JOIN inventory_bags b ON b.owner_id = o.id
-                JOIN inventory_items i ON i.bag_id = b.id
-                WHERE o.snapshot_id = s.id AND o.owner_type = 'player'
-            ) AS player_item_stacks,
-            (
-                SELECT COALESCE(SUM(i.quantity), 0)
-                FROM inventory_owners o
-                JOIN inventory_bags b ON b.owner_id = o.id
-                JOIN inventory_items i ON i.bag_id = b.id
-                WHERE o.snapshot_id = s.id AND o.owner_type = 'player'
-            ) AS player_item_quantity,
-            (
-                SELECT COUNT(*)
-                FROM inventory_owners o
-                WHERE o.snapshot_id = s.id AND o.owner_type = 'retainer'
-            ) AS retainer_count,
-            (
-                SELECT COUNT(*)
-                FROM inventory_owners o
-                JOIN inventory_bags b ON b.owner_id = o.id
-                JOIN inventory_items i ON i.bag_id = b.id
-                WHERE o.snapshot_id = s.id AND o.owner_type = 'retainer'
-            ) AS retainer_item_stacks,
-            (
-                SELECT COALESCE(SUM(i.quantity), 0)
-                FROM inventory_owners o
-                JOIN inventory_bags b ON b.owner_id = o.id
-                JOIN inventory_items i ON i.bag_id = b.id
-                WHERE o.snapshot_id = s.id AND o.owner_type = 'retainer'
-            ) AS retainer_item_quantity
-        FROM snapshots s
-        """;
-
-    private sealed record SnapshotRow(
-        DateTimeOffset ReceivedAt,
-        string? ApiKeyLabel,
-        string? CharacterName,
-        string? HomeWorld,
-        string ReportTimestamp,
-        InventoryReportMetadata Metadata);
-
-    private sealed record InventoryOwnerRow(
-        long Id,
-        string OwnerType,
-        string OwnerName,
-        ulong? RetainerId,
-        string? LastUpdated,
-        ulong? Gil);
+    public Task<int> DeleteAllAsync(long accountId, CancellationToken cancellationToken) =>
+        writePersistence.DeleteAllAsync(accountId, cancellationToken);
 }
 
 public sealed record RawInventoryReportJson(string Id, string? RawJson);
