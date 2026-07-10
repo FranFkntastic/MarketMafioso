@@ -138,6 +138,25 @@ public sealed class MarketAcquisitionRouteEngineWorldTravelOperationTests
         Assert.Equal("False", cleanupResult.Details["unresolvedExternalAutomation"]);
     }
 
+    [Fact]
+    public void StopAfterRouteOwnedVnavmeshApproach_StopsOnlyTheRecordedLease()
+    {
+        using var harness = PrepareTravel();
+        harness.Engine.TickRoute(isRequestBusy: false);
+        harness.Context.CurrentWorld = "Coeurl";
+        harness.MarketBoard.ApproachResult = MarketBoardApproachResult.Action(
+            MarketBoardApproachActionKind.NavigationStarted,
+            "vnavmesh is approaching the market board.");
+        Advance(harness, TimeSpan.FromSeconds(2));
+        harness.Engine.TickRoute(isRequestBusy: false);
+
+        harness.Engine.Stop();
+
+        var lease = Assert.Single(harness.MarketBoard.StoppedApproaches);
+        Assert.Equal("VNavmesh", lease.Dependency);
+        Assert.False(string.IsNullOrWhiteSpace(lease.RouteRunId));
+    }
+
     private static MarketAcquisitionRouteEngineHarness PrepareTravel()
     {
         var harness = MarketAcquisitionRouteEngineHarness.Create();

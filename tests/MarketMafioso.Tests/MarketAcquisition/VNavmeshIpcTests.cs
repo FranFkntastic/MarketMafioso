@@ -70,9 +70,10 @@ public sealed class VNavmeshIpcTests
         var adapter = new FakeAdapter(isAvailable: false);
         var ipc = new VNavmeshIpc(adapter);
 
-        ipc.Stop();
+        var result = ipc.Stop();
 
         Assert.False(adapter.StopCalled);
+        Assert.False(result.Success);
     }
 
     private sealed class FakeAdapter : IVNavmeshIpcAdapter
@@ -115,9 +116,10 @@ public sealed class VNavmeshIpcTests
             return moveResult;
         }
 
-        public void Stop()
+        public bool Stop()
         {
             StopCalled = true;
+            return true;
         }
     }
 }

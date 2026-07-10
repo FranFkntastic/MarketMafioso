@@ -105,6 +105,17 @@ public sealed class DalamudMarketAcquisitionMarketBoardIo : IMarketAcquisitionMa
     }
 
     public MarketBoardApproachResult OpenOrApproachMarketBoard() => approachService.OpenOrApproach();
+    public MarketAcquisitionApproachCleanupResult StopOwnedApproach(MarketAcquisitionApproachLease lease)
+    {
+        ArgumentNullException.ThrowIfNull(lease);
+        var result = approachService.StopNavigation();
+        return new MarketAcquisitionApproachCleanupResult
+        {
+            Status = result.Success ? MarketAcquisitionTravelCleanupStatus.Cancelled : MarketAcquisitionTravelCleanupStatus.Failed,
+            Message = result.Message,
+            AdapterCapability = "GlobalPathStopOnly",
+        };
+    }
     public MarketBoardItemSearchResult SearchItem(uint itemId, string? itemName) => searchDriver.Search(itemId, itemName);
     public MarketBoardReadResult ReadCurrentListings(string currentWorld) => listingReader.ReadCurrentListings(currentWorld);
     public MarketBoardInputCapture CaptureInputState() => inputCaptureReader.Capture();

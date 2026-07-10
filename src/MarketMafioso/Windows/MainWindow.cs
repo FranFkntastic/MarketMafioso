@@ -619,7 +619,6 @@ public class MainWindow : Window, IDisposable
 
     private Task PauseGuidedRouteAsync()
     {
-        marketBoardApproachService.StopNavigation();
         routeEngine.Pause();
         routeEngine.ReportRouteProgress();
         return Task.CompletedTask;
@@ -634,7 +633,6 @@ public class MainWindow : Window, IDisposable
 
     private Task StopGuidedRouteAsync()
     {
-        marketBoardApproachService.StopNavigation();
         routeEngine.Stop();
         routeEngine.ReportRouteProgress();
         return Task.CompletedTask;
@@ -645,7 +643,6 @@ public class MainWindow : Window, IDisposable
         return acquisitionWorkspace.RunWithReportableClaimAsync((claimed, _) =>
         {
             var plan = acquisitionWorkspace.RequirePreparedPlan("Prepare a plan before restarting a guided route.");
-            marketBoardApproachService.StopNavigation();
             routeEngine.Restart(plan, claimed);
             routeEngine.ReportRouteProgress();
             return Task.CompletedTask;
@@ -657,7 +654,6 @@ public class MainWindow : Window, IDisposable
         return acquisitionWorkspace.RunWithReportableClaimAsync((claimed, _) =>
         {
             var plan = acquisitionWorkspace.RequirePreparedPlan("Prepare a plan before re-preparing a guided route.");
-            marketBoardApproachService.StopNavigation();
             var result = routeEngine.ReprepareAndRestart(plan, DateTimeOffset.UtcNow, claimed);
             var snapshot = routeEngine.CreateSnapshot();
             if (snapshot.ActivePlan != null)
@@ -701,7 +697,6 @@ public class MainWindow : Window, IDisposable
 
     private void ResetGuidedRoute(string status)
     {
-        marketBoardApproachService.StopNavigation();
         routeEngine.Reset(status);
     }
 

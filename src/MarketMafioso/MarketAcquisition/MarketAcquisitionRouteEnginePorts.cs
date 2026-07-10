@@ -85,9 +85,25 @@ public sealed class UnsupportedMarketAcquisitionRouteTravelCleanup : IMarketAcqu
 public interface IMarketAcquisitionMarketBoardIo
 {
     MarketBoardApproachResult OpenOrApproachMarketBoard();
+    MarketAcquisitionApproachCleanupResult StopOwnedApproach(MarketAcquisitionApproachLease lease);
     MarketBoardItemSearchResult SearchItem(uint itemId, string? itemName);
     MarketBoardReadResult ReadCurrentListings(string currentWorld);
     MarketBoardInputCapture CaptureInputState();
+}
+
+public sealed record MarketAcquisitionApproachLease
+{
+    public required string LeaseId { get; init; }
+    public required string RouteRunId { get; init; }
+    public required string OperationId { get; init; }
+    public required string Dependency { get; init; }
+}
+
+public sealed record MarketAcquisitionApproachCleanupResult
+{
+    public required MarketAcquisitionTravelCleanupStatus Status { get; init; }
+    public required string Message { get; init; }
+    public string? AdapterCapability { get; init; }
 }
 
 public interface IMarketAcquisitionPurchaseIo

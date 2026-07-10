@@ -12,10 +12,11 @@ public interface IVNavmeshIpcAdapter
     bool IsReady();
     bool IsRunning();
     bool MoveCloseTo(Vector3 destination, float range);
-    void Stop();
+    bool Stop();
 }
 
 public sealed record VNavmeshMoveResult(bool Success, string Message);
+public sealed record VNavmeshStopResult(bool Success, string Message);
 
 public sealed class VNavmeshIpc
 {
@@ -42,10 +43,14 @@ public sealed class VNavmeshIpc
             : new(false, "vnavmesh rejected the market board approach request.");
     }
 
-    public void Stop()
+    public VNavmeshStopResult Stop()
     {
-        if (adapter.IsAvailable)
-            adapter.Stop();
+        if (!adapter.IsAvailable)
+            return new(false, "vnavmesh is unavailable; its path could not be stopped.");
+
+        return adapter.Stop()
+            ? new(true, "vnavmesh accepted the route-owned path stop request.")
+            : new(false, "vnavmesh rejected the route-owned path stop request.");
     }
 }
 
@@ -110,15 +115,17 @@ public sealed class DalamudVNavmeshIpcAdapter : IVNavmeshIpcAdapter
         }
     }
 
-    public void Stop()
+    public bool Stop()
     {
         try
         {
             pluginInterface.GetIpcSubscriber<object>(PathStopChannel).InvokeAction();
+            return true;
         }
         catch (Exception ex)
         {
             log.Warning(ex, "[MarketMafioso] vnavmesh stop IPC failed.");
+            return false;
         }
     }
 }

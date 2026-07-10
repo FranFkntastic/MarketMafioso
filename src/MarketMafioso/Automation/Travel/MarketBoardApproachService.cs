@@ -77,10 +77,11 @@ public sealed class MarketBoardApproachService
         };
     }
 
-    public void StopNavigation()
+    public VNavmeshStopResult StopNavigation()
     {
-        vnavmesh.Stop();
+        var result = vnavmesh.Stop();
         lastDirectInteractionUtc = null;
+        return result;
     }
 
     internal static MarketBoardApproachDecision Decide(
@@ -159,7 +160,7 @@ public sealed class MarketBoardApproachService
         float? distance = playerPosition == null
             ? null
             : CalculateHorizontalDistance(playerPosition.Value, board.Position);
-        return MarketBoardApproachResult.Action(
+        return MarketBoardApproachResult.Action(MarketBoardApproachActionKind.DirectInteraction,
             distance == null
                 ? "Attempted to open nearby market board."
                 : $"Attempted to open nearby market board ({distance.Value:0.0}y).",
@@ -186,7 +187,7 @@ public sealed class MarketBoardApproachService
         float? distance = playerPosition == null
             ? null
             : CalculateHorizontalDistance(playerPosition.Value, board.Position);
-        return MarketBoardApproachResult.Action(
+        return MarketBoardApproachResult.Action(MarketBoardApproachActionKind.NavigationStarted,
             distance == null
                 ? "vnavmesh is approaching nearby market board."
                 : $"vnavmesh is approaching nearby market board ({distance.Value:0.0}y).",
@@ -257,10 +258,18 @@ public enum MarketBoardApproachDecisionKind
 
 public sealed record MarketBoardApproachDecision(MarketBoardApproachDecisionKind Kind);
 
+public enum MarketBoardApproachActionKind
+{
+    None,
+    DirectInteraction,
+    NavigationStarted,
+}
+
 public sealed record MarketBoardApproachResult
 {
     public string Status { get; init; } = string.Empty;
     public string Message { get; init; } = string.Empty;
+    public MarketBoardApproachActionKind ActionKind { get; init; }
     public bool ReadyToSearch => string.Equals(Status, "ReadyToSearch", StringComparison.OrdinalIgnoreCase);
     public bool ActionTaken => string.Equals(Status, "ActionTaken", StringComparison.OrdinalIgnoreCase);
     public bool MarketBoardTravelNeeded => string.Equals(Status, "MarketBoardTravelNeeded", StringComparison.OrdinalIgnoreCase);
@@ -271,12 +280,13 @@ public sealed record MarketBoardApproachResult
         return new() { Status = "ReadyToSearch", Message = message };
     }
 
-    public static MarketBoardApproachResult Action(string message, IReadOnlyDictionary<string, string?>? details = null)
+    public static MarketBoardApproachResult Action(MarketBoardApproachActionKind actionKind, string message, IReadOnlyDictionary<string, string?>? details = null)
     {
         return new()
         {
             Status = "ActionTaken",
             Message = message,
+            ActionKind = actionKind,
             Details = details ?? new Dictionary<string, string?>(),
         };
     }

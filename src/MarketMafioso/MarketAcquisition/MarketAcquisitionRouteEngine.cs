@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using MarketMafioso.Automation.MarketBoard;
+using MarketMafioso.Automation.Travel;
 
 namespace MarketMafioso.MarketAcquisition;
 
@@ -34,6 +35,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     private MarketAcquisitionClaimView? claimedRequest;
     private MarketAcquisitionTravelLease? activeTravelLease;
     private MarketAcquisitionTravelLease? unresolvedTravelLease;
+    private MarketAcquisitionApproachLease? activeApproachLease;
     private bool travelInterruptedByCleanup;
     private long operationSequence;
 
@@ -127,6 +129,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     public MarketAcquisitionRouteActionResult Pause()
     {
         travelInterruptedByCleanup = activeTravelLease != null;
+        CleanupOwnedApproach("Pause");
         CleanupOwnedTravel("Pause");
         CancelActiveOperation("Route paused; active operation cancelled.");
         return UpdateStatus(runner.Pause());
@@ -148,6 +151,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
     public MarketAcquisitionRouteActionResult Stop()
     {
+        CleanupOwnedApproach("Stop");
         CleanupOwnedTravel("Stop");
         CancelActiveOperation("Route stopped.");
         var result = runner.Stop();
@@ -164,6 +168,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(claimed);
+        CleanupOwnedApproach("Replacement");
         CleanupOwnedTravel("Replacement");
         if (!TryReconcileUnresolvedTravelLease(out var reconciliationFailure))
             return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(reconciliationFailure));
@@ -180,6 +185,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(claimed);
+        CleanupOwnedApproach("Replacement");
         CleanupOwnedTravel("Replacement");
         if (!TryReconcileUnresolvedTravelLease(out var reconciliationFailure))
             return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(reconciliationFailure));
@@ -191,6 +197,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
     public void Reset(string status)
     {
+        CleanupOwnedApproach("Reset");
         CleanupOwnedTravel("Reset");
         CancelActiveOperation(status);
         runner.Reset(status);
@@ -630,6 +637,30 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         if (!runner.SearchSubmitted)
         {
             var approachResult = marketBoard.OpenOrApproachMarketBoard();
+            if (approachResult.ActionKind == MarketBoardApproachActionKind.NavigationStarted)
+            {
+                activeApproachLease = new MarketAcquisitionApproachLease
+                {
+                    LeaseId = $"{state.ProgressNonce}:vnavmesh:{++operationSequence}",
+                    RouteRunId = state.ProgressNonce,
+                    OperationId = $"{state.ProgressNonce}:market-board-approach:{operationSequence}",
+                    Dependency = "VNavmesh",
+                };
+                runner.RecordRouteCleanup(
+                    "Route-owned vnavmesh approach started.",
+                    new Dictionary<string, string?>
+                    {
+                        ["routeRunId"] = activeApproachLease.RouteRunId,
+                        ["operationId"] = activeApproachLease.OperationId,
+                        ["leaseId"] = activeApproachLease.LeaseId,
+                        ["dependency"] = activeApproachLease.Dependency,
+                        ["adapterCapability"] = "GlobalPathStopOnly",
+                    });
+            }
+            else if (approachResult.ReadyToSearch)
+            {
+                activeApproachLease = null;
+            }
             UpdateStatus(runner.RecordMarketBoardApproach(approachResult));
             if (approachResult.MarketBoardTravelNeeded)
             {
@@ -1303,6 +1334,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
     private void ClearExecutionState()
     {
+        CleanupOwnedApproach("Replacement");
         CleanupOwnedTravel("Replacement");
         travelInterruptedByCleanup = false;
         CancelActiveOperation("Route execution state reset.");
@@ -1323,6 +1355,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
     public void Dispose()
     {
+        CleanupOwnedApproach("Dispose");
         CleanupOwnedTravel("Dispose");
         CancelActiveOperation("Route engine disposed.");
         purchaseAutomation.Dispose();
@@ -1355,9 +1388,46 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
     private MarketAcquisitionRouteActionResult FailRoute(string message, Exception? exception = null)
     {
+        CleanupOwnedApproach("Failure");
         CleanupOwnedTravel("Failure");
         CancelActiveOperation($"Route failed; active operation cancelled. {message}");
         return runner.FailRoute(message, exception);
+    }
+
+    private void CleanupOwnedApproach(string terminalReason)
+    {
+        var lease = activeApproachLease;
+        if (lease == null)
+            return;
+
+        activeApproachLease = null;
+        MarketAcquisitionApproachCleanupResult result;
+        try
+        {
+            result = marketBoard.StopOwnedApproach(lease);
+        }
+        catch (Exception ex)
+        {
+            result = new MarketAcquisitionApproachCleanupResult
+            {
+                Status = MarketAcquisitionTravelCleanupStatus.Failed,
+                Message = $"vnavmesh cleanup adapter threw {ex.GetType().Name}: {ex.Message}",
+                AdapterCapability = "AdapterException",
+            };
+        }
+
+        runner.RecordRouteCleanup(
+            result.Message,
+            new Dictionary<string, string?>
+            {
+                ["routeRunId"] = lease.RouteRunId,
+                ["operationId"] = lease.OperationId,
+                ["leaseId"] = lease.LeaseId,
+                ["dependency"] = lease.Dependency,
+                ["terminalReason"] = terminalReason,
+                ["cleanupStatus"] = result.Status.ToString(),
+                ["adapterCapability"] = result.AdapterCapability,
+            });
     }
 
     private void CleanupOwnedTravel(string terminalReason)

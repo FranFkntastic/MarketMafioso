@@ -77,6 +77,18 @@ internal sealed class FakeMarketBoardIo : IMarketAcquisitionMarketBoardIo
     public List<(uint ItemId, string? ItemName)> SearchRequests { get; } = [];
     public MarketBoardApproachResult ApproachResult { get; set; } = MarketBoardApproachResult.Ready("Market board is ready.");
     public MarketBoardApproachResult OpenOrApproachMarketBoard() => ApproachResult;
+    public List<MarketAcquisitionApproachLease> StoppedApproaches { get; } = [];
+    public MarketAcquisitionApproachCleanupResult ApproachCleanupResult { get; set; } = new()
+    {
+        Status = MarketAcquisitionTravelCleanupStatus.Cancelled,
+        Message = "Owned vnavmesh approach cancelled.",
+        AdapterCapability = "Test",
+    };
+    public MarketAcquisitionApproachCleanupResult StopOwnedApproach(MarketAcquisitionApproachLease lease)
+    {
+        StoppedApproaches.Add(lease);
+        return ApproachCleanupResult;
+    }
     public MarketBoardItemSearchResult SearchItem(uint itemId, string? itemName)
     {
         SearchRequests.Add((itemId, itemName));
