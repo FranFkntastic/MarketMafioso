@@ -19,6 +19,7 @@ using MarketMafioso.CraftArchitectCompanion;
 using MarketMafioso.MarketAcquisition;
 using MarketMafioso.RetainerRestock;
 using MarketMafioso.Windows.Main;
+using MarketMafioso.Windows.MarketAcquisitionPanels;
 using MarketMafioso.Windows.MarketAcquisitionRequestBuilder;
 using MarketMafioso.Windows.RetainerRestock;
 using MarketMafioso.WorkshopPrep;
@@ -60,6 +61,7 @@ public class MainWindow : Window, IDisposable
     private readonly OverviewTabPanel overviewTab;
     private readonly InventoryReporterTabPanel inventoryReporterTab;
     private readonly StatusTabPanel statusTab;
+    private readonly MarketAcquisitionPlanPanel marketAcquisitionPlanPanel = new();
     private readonly MarketAcquisitionRequestBuilderPanel acquisitionRequestBuilder;
     private readonly RetainerRestockBrowserState restockBrowserState = new();
     private readonly RetainerRestockBrowserPanel restockBrowser;
@@ -123,18 +125,6 @@ public class MainWindow : Window, IDisposable
     internal static readonly Vector4 ColSuccess = MarketMafiosoUiTheme.Success;
     internal static readonly Vector4 ColError = MarketMafiosoUiTheme.Error;
     internal static readonly Vector4 ColMuted = MarketMafiosoUiTheme.Muted;
-
-    private sealed record AdvisoryPlanRow(
-        int RouteOrdinal,
-        string Item,
-        string World,
-        string DataCenter,
-        uint Quantity,
-        uint Gil,
-        uint Unit,
-        bool IsHq,
-        string Listing,
-        bool ExceedsRequestedQuantity);
 
     public MainWindow(
         Configuration config,
@@ -710,142 +700,7 @@ public class MainWindow : Window, IDisposable
 
     private void DrawMarketAcquisitionPlan()
     {
-        ImGuiUi.SectionHeader("Plan", ColHeader);
-
-        if (acquisitionPlan == null)
-        {
-            ImGui.TextColored(ColMuted, "No plan prepared.");
-            return;
-        }
-
-        ImGui.TextColored(
-            acquisitionPlan.Status == "Ready" ? ColSuccess : ColMuted,
-            $"Status: {acquisitionPlan.Status}  -  Mode: {FormatWorldMode(acquisitionPlan.WorldMode)}  -  Planned {acquisitionPlan.PlannedQuantity:N0}/{acquisitionPlan.RequestedQuantity:N0} item(s), {FormatGil(acquisitionPlan.PlannedGil)}");
-
-        if (IsAcquisitionPlanStale())
-            ImGui.TextColored(ColError, "Request changed after this plan was prepared. Update the request and prepare a fresh plan before starting.");
-
-        if (acquisitionPlan.WorldBatches.Count == 0)
-            return;
-
-        if (!ImGui.CollapsingHeader("World Listings##MarketAcquisitionPlanWorldListings"))
-        {
-            ImGui.TextColored(ColMuted, "Expand to inspect advisory listings. Live market-board rows remain authoritative.");
-            return;
-        }
-
-        var tableFlags =
-            ImGuiTableFlags.Borders |
-            ImGuiTableFlags.RowBg |
-            ImGuiTableFlags.Resizable |
-            ImGuiTableFlags.ScrollX |
-            ImGuiTableFlags.Sortable;
-        if (ImGui.BeginTable("MarketAcquisitionPlanBatches", 8, tableFlags))
-        {
-            ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.WidthStretch | ImGuiTableColumnFlags.DefaultSort);
-            ImGui.TableSetupColumn("World", ImGuiTableColumnFlags.WidthFixed, 120);
-            ImGui.TableSetupColumn("Data Center", ImGuiTableColumnFlags.WidthFixed, 96);
-            ImGui.TableSetupColumn("Qty", ImGuiTableColumnFlags.WidthFixed, 72);
-            ImGui.TableSetupColumn("Gil", ImGuiTableColumnFlags.WidthFixed, 96);
-            ImGui.TableSetupColumn("Unit", ImGuiTableColumnFlags.WidthFixed, 80);
-            ImGui.TableSetupColumn("HQ", ImGuiTableColumnFlags.WidthFixed, 48);
-            ImGui.TableSetupColumn("Listing", ImGuiTableColumnFlags.WidthStretch);
-            ImGui.TableHeadersRow();
-
-            var rows = SortAdvisoryPlanRows(BuildAdvisoryPlanRows(acquisitionPlan), ImGui.TableGetSortSpecs());
-            foreach (var row in rows)
-            {
-                ImGui.TableNextRow();
-                ImGui.TableNextColumn();
-                ImGui.TextUnformatted(row.Item);
-                ImGui.TableNextColumn();
-                ImGui.TextUnformatted(row.World);
-                if (row.ExceedsRequestedQuantity)
-                {
-                    ImGui.SameLine();
-                    ImGui.TextColored(ColMuted, "(over)");
-                }
-
-                ImGui.TableNextColumn();
-                ImGui.TextUnformatted(FormatRouteDataCenter(row.DataCenter));
-                ImGui.TableNextColumn();
-                ImGui.TextUnformatted(row.Quantity.ToString("N0"));
-                ImGui.TableNextColumn();
-                ImGui.TextUnformatted(FormatGil(row.Gil));
-                ImGui.TableNextColumn();
-                ImGui.TextUnformatted(FormatGil(row.Unit));
-                ImGui.TableNextColumn();
-                ImGui.TextUnformatted(row.IsHq ? "HQ" : "NQ");
-                ImGui.TableNextColumn();
-                ImGui.TextUnformatted(row.Listing);
-            }
-
-            ImGui.EndTable();
-        }
-    }
-
-    private static string FormatPlannedListingItem(MarketAcquisitionPlannedListing listing) =>
-        string.IsNullOrWhiteSpace(listing.ItemName)
-            ? $"Item {listing.ItemId}"
-            : $"{listing.ItemName} ({listing.ItemId})";
-
-    private static IReadOnlyList<AdvisoryPlanRow> BuildAdvisoryPlanRows(MarketAcquisitionPlan plan)
-    {
-        var rows = new List<AdvisoryPlanRow>();
-        var ordinal = 0;
-        foreach (var batch in plan.WorldBatches)
-        {
-            foreach (var listing in batch.Listings)
-            {
-                rows.Add(new AdvisoryPlanRow(
-                    ordinal++,
-                    FormatPlannedListingItem(listing),
-                    batch.WorldName,
-                    batch.DataCenter,
-                    listing.Quantity,
-                    listing.TotalGil,
-                    listing.UnitPrice,
-                    listing.IsHq,
-                    $"{listing.RetainerName} / {listing.ListingId}",
-                    batch.ExceedsRequestedQuantity));
-            }
-        }
-
-        return rows;
-    }
-
-    private static IReadOnlyList<AdvisoryPlanRow> SortAdvisoryPlanRows(
-        IReadOnlyList<AdvisoryPlanRow> rows,
-        ImGuiTableSortSpecsPtr sortSpecs)
-    {
-        if (sortSpecs.SpecsCount == 0)
-            return rows.OrderBy(row => row.RouteOrdinal).ToList();
-
-        var spec = sortSpecs.Specs;
-        return spec.ColumnIndex switch
-        {
-            0 => SortAdvisoryPlanRowsBy(rows, row => row.Item, spec.SortDirection),
-            1 => SortAdvisoryPlanRowsBy(rows, row => row.World, spec.SortDirection),
-            2 => SortAdvisoryPlanRowsBy(rows, row => row.DataCenter, spec.SortDirection),
-            3 => SortAdvisoryPlanRowsBy(rows, row => row.Quantity, spec.SortDirection),
-            4 => SortAdvisoryPlanRowsBy(rows, row => row.Gil, spec.SortDirection),
-            5 => SortAdvisoryPlanRowsBy(rows, row => row.Unit, spec.SortDirection),
-            6 => SortAdvisoryPlanRowsBy(rows, row => row.IsHq, spec.SortDirection),
-            7 => SortAdvisoryPlanRowsBy(rows, row => row.Listing, spec.SortDirection),
-            _ => rows.OrderBy(row => row.RouteOrdinal).ToList(),
-        };
-    }
-
-    private static IReadOnlyList<AdvisoryPlanRow> SortAdvisoryPlanRowsBy<TKey>(
-        IReadOnlyList<AdvisoryPlanRow> rows,
-        Func<AdvisoryPlanRow, TKey> keySelector,
-        ImGuiSortDirection direction)
-    {
-        var ordered = direction == ImGuiSortDirection.Descending
-            ? rows.OrderByDescending(keySelector).ThenBy(row => row.RouteOrdinal)
-            : rows.OrderBy(keySelector).ThenBy(row => row.RouteOrdinal);
-
-        return ordered.ToList();
+        marketAcquisitionPlanPanel.Draw(acquisitionPlan, IsAcquisitionPlanStale());
     }
 
     private bool CanProbeLiveMarketBoard()
