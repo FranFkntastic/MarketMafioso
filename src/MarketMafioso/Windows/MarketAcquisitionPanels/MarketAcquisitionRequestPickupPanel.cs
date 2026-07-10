@@ -1,5 +1,4 @@
 using System;
-using System.Linq;
 using Dalamud.Bindings.ImGui;
 using MarketMafioso.MarketAcquisition;
 using MarketMafioso.Windows.Main;
@@ -133,19 +132,10 @@ internal sealed class MarketAcquisitionRequestPickupPanel
 
     private static string FormatPrimaryAcquisitionItem(MarketAcquisitionRequestView request)
     {
-        var line = request.Lines.OrderBy(line => line.Ordinal).FirstOrDefault();
-        if (line != null)
-        {
-            var name = string.IsNullOrWhiteSpace(line.ItemName)
-                ? $"Item {line.ItemId}"
-                : line.ItemName;
-            return $"{name} ({line.ItemId})";
-        }
-
-        var fallbackName = string.IsNullOrWhiteSpace(request.ItemName)
+        var name = string.IsNullOrWhiteSpace(request.ItemName)
             ? $"Item {request.ItemId}"
             : request.ItemName;
-        return $"{fallbackName} ({request.ItemId})";
+        return $"{name} ({request.ItemId})";
     }
 
     private static string FormatGil(uint gil) => $"{gil:N0} gil";
