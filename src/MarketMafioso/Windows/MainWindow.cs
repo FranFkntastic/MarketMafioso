@@ -73,6 +73,7 @@ public class MainWindow : Window, IDisposable
     private readonly RetainerRestockBrowserPanel restockBrowser;
     private readonly RetainerRestockControlsPanel restockControls;
     private readonly WorkshopMaterialPanel workshopMaterials;
+    private readonly WorkshopAssemblyPanel workshopAssembly;
 
     private readonly WorkshopProjectSelectionState workshopProjectSelection = new();
     private IReadOnlyList<MarketAcquisitionRequestView> pendingAcquisitionRequests = [];
@@ -207,6 +208,12 @@ public class MainWindow : Window, IDisposable
         restockBrowser = new RetainerRestockBrowserPanel(config, restockBrowserState, config.Save);
         restockControls = new RetainerRestockControlsPanel(config, autoRetainerRefresh, workshopRetainerRestock);
         workshopMaterials = new WorkshopMaterialPanel(autoRetainerRefresh, workshopRetainerRestock, GetWorkshopAvailability);
+        workshopAssembly = new WorkshopAssemblyPanel(
+            workshopAssemblyRunner,
+            workshopRetainerRestock,
+            () => workshopStatus,
+            status => workshopStatus = status,
+            StartWorkshopAssembly);
         ProjectBrowser = new WorkshopProjectBrowserWindow(
             config,
             workshopCatalog,
@@ -382,7 +389,8 @@ public class MainWindow : Window, IDisposable
         ImGui.Spacing();
         workshopMaterials.Draw();
         ImGui.Spacing();
-        DrawWorkshopAssemblyWorkflow();
+        workshopAssembly.Draw(config.WorkshopPrepQueue.Count > 0);
+        DrawWorkshopQueueConfirmations();
     }
 
     private void DrawRetainerRestockTab()
@@ -2877,78 +2885,6 @@ public class MainWindow : Window, IDisposable
             GetCurrentRetainerOwnerScope());
     }
 
-    private void DrawWorkshopAssemblyWorkflow()
-    {
-        var hasPrepQueue = config.WorkshopPrepQueue.Count > 0;
-        var actionWidth = workshopAssemblyRunner.HasActiveRun ? 280f : 140f;
-        ImGuiUi.SectionHeaderWithActions(
-            "Assembly Workflow",
-            ColHeader,
-            () => DrawWorkshopAssemblyActions(hasPrepQueue),
-            actionWidth);
-
-        ImGui.TextColored(GetWorkshopStatusColor(), workshopStatus);
-        ImGui.TextColored(workshopRetainerRestock.IsRunning ? ColHeader : ColMuted, workshopRetainerRestock.LastStatus);
-
-        var progress = workshopAssemblyRunner.Progress;
-        ImGui.TextColored(workshopAssemblyRunner.HasActiveRun ? ColHeader : ColMuted, progress.Message);
-        if (progress.TotalProjects > 0)
-        {
-            var completed = Math.Clamp(progress.CompletedProjects, 0, progress.TotalProjects);
-            var fraction = completed / (float)progress.TotalProjects;
-            ImGui.TextColored(ColMuted, $"Assembly progress: {completed}/{progress.TotalProjects}");
-            ImGui.SameLine();
-            ImGui.ProgressBar(fraction, new Vector2(210, 0), string.Empty);
-        }
-
-        DrawWorkshopQueueConfirmations();
-    }
-
-    private void DrawWorkshopAssemblyActions(bool hasPrepQueue)
-    {
-        if (workshopAssemblyRunner.IsPaused)
-        {
-            if (ImGui.Button("Resume"))
-                workshopStatus = workshopAssemblyRunner.Resume().Message;
-
-            ImGui.SameLine();
-            if (ImGui.Button("Stop"))
-            {
-                workshopAssemblyRunner.Stop();
-                workshopStatus = "Workshop assembly stopped.";
-            }
-        }
-        else if (workshopAssemblyRunner.IsRunning)
-        {
-            if (ImGui.Button("Pause"))
-                workshopStatus = workshopAssemblyRunner.Pause().Message;
-
-            ImGui.SameLine();
-            if (ImGui.Button("Stop"))
-            {
-                workshopAssemblyRunner.Stop();
-                workshopStatus = "Workshop assembly stopped.";
-            }
-        }
-
-        if (workshopAssemblyRunner.HasActiveRun)
-            ImGui.SameLine();
-
-        if (ImGuiUi.MenuButton("Start Options", !workshopAssemblyRunner.HasActiveRun && hasPrepQueue))
-            ImGui.OpenPopup("WorkshopAssemblyStartMenu");
-
-        if (ImGui.BeginPopup("WorkshopAssemblyStartMenu"))
-        {
-            if (ImGuiUi.MenuItem("Start Assembly", hasPrepQueue))
-                StartWorkshopAssembly(enableDiagnostics: false);
-
-            if (ImGuiUi.MenuItem("Start With Diagnostics", hasPrepQueue))
-                StartWorkshopAssembly(enableDiagnostics: true);
-
-            ImGui.EndPopup();
-        }
-    }
-
     private void DrawWorkshopQueueConfirmations()
     {
         var hasPrepQueue = config.WorkshopPrepQueue.Count > 0;
@@ -2998,23 +2934,6 @@ public class MainWindow : Window, IDisposable
             workshopStatus = $"Unable to start workshop assembly. {ex.Message}";
             log.Warning(ex, "[MarketMafioso] Native workshop assembly preflight failed.");
         }
-    }
-
-    private Vector4 GetWorkshopStatusColor()
-    {
-        if (workshopStatus.Contains("unable", StringComparison.OrdinalIgnoreCase) ||
-            workshopStatus.Contains("failed", StringComparison.OrdinalIgnoreCase) ||
-            workshopStatus.Contains("not available", StringComparison.OrdinalIgnoreCase))
-            return ColError;
-
-        if (workshopStatus.Contains("copied", StringComparison.OrdinalIgnoreCase) ||
-            workshopStatus.Contains("sent", StringComparison.OrdinalIgnoreCase) ||
-            workshopStatus.Contains("added", StringComparison.OrdinalIgnoreCase) ||
-            workshopStatus.Contains("cleared", StringComparison.OrdinalIgnoreCase) ||
-            workshopStatus.Contains("removed", StringComparison.OrdinalIgnoreCase))
-            return ColSuccess;
-
-        return ColMuted;
     }
 
     private void CopyWorkshopArtisanManifest()
