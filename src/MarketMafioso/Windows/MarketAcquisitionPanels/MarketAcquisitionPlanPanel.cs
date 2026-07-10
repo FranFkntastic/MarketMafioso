@@ -167,5 +167,10 @@ internal sealed class MarketAcquisitionPlanPanel
         string.IsNullOrWhiteSpace(dataCenter) ? "-" : dataCenter;
 
     private static string FormatWorldMode(string worldMode) =>
-        string.Equals(worldMode, "AllWorlds", StringComparison.OrdinalIgnoreCase) ? "All worlds" : worldMode;
+        worldMode switch
+        {
+            "AllWorldSweep" => "All-world sweep",
+            "CurrentWorldOnly" => "Current world only",
+            _ => worldMode,
+        };
 }
