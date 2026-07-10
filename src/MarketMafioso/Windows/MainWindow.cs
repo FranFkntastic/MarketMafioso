@@ -69,6 +69,7 @@ public class MainWindow : Window, IDisposable
     private readonly MarketAcquisitionRequestBuilderPanel acquisitionRequestBuilder;
     private readonly RetainerRestockBrowserState restockBrowserState = new();
     private readonly RetainerRestockBrowserPanel restockBrowser;
+    private readonly RetainerRestockControlsPanel restockControls;
 
     private readonly WorkshopProjectSelectionState workshopProjectSelection = new();
     private IReadOnlyList<MarketAcquisitionRequestView> pendingAcquisitionRequests = [];
@@ -202,6 +203,7 @@ public class MainWindow : Window, IDisposable
             ForgetLocalAcquisitionRequest,
             () => _ = PrepareMarketAcquisitionPlanAsync());
         restockBrowser = new RetainerRestockBrowserPanel(config, restockBrowserState, config.Save);
+        restockControls = new RetainerRestockControlsPanel(config, autoRetainerRefresh, workshopRetainerRestock);
         ProjectBrowser = new WorkshopProjectBrowserWindow(
             config,
             workshopCatalog,
@@ -386,51 +388,7 @@ public class MainWindow : Window, IDisposable
 
         restockBrowser.Draw(stockRows, plan, ColHeader, ColSuccess, ColError, ColMuted);
         ImGui.Spacing();
-        DrawRetainerRestockControls(plan);
-    }
-
-    private void DrawRetainerRestockControls(RetainerRestockPlan plan)
-    {
-        var canRefreshRetainers = autoRetainerRefresh.CanStartRefresh &&
-                                  !autoRetainerRefresh.IsRefreshing &&
-                                  !autoRetainerRefresh.IsStartQueued;
-        var canRun = !workshopRetainerRestock.IsRunning &&
-                     plan.Lines.Any(line => line.NeededQuantity > 0 && line.Candidates.Count > 0);
-
-        ImGui.TextColored(ColHeader, "Run");
-        ImGui.Separator();
-        if (ImGuiUi.Button("Refresh Retainer Cache", canRefreshRetainers))
-            autoRetainerRefresh.StartFullRefresh();
-
-        ImGui.SameLine();
-        if (ImGuiUi.Button("Restock From Retainers", canRun))
-            _ = workshopRetainerRestock.StartRestockAsync(plan.Lines);
-
-        ImGui.Spacing();
-        ImGui.TextColored(workshopRetainerRestock.IsRunning ? ColHeader : ColMuted, workshopRetainerRestock.LastStatus);
-
-        var ownerScope = GetCurrentRetainerOwnerScope();
-        if (!ownerScope.IsAvailable)
-        {
-            ImGui.TextColored(ColError, "Current character and home world are unavailable; retainer restock cannot use cached retainers.");
-            return;
-        }
-
-        var scopedRetainers = config.RetainerCache.Values
-            .Where(retainer => ownerScope.Matches(retainer.OwnerCharacterName, retainer.OwnerHomeWorld))
-            .ToList();
-
-        if (scopedRetainers.Count == 0)
-        {
-            ImGui.TextColored(ColMuted, $"No retainers cached for {ownerScope.CharacterName} @ {ownerScope.HomeWorld} yet.");
-            return;
-        }
-
-        var newest = scopedRetainers.Max(x => x.LastUpdated);
-        var oldest = scopedRetainers.Min(x => x.LastUpdated);
-        ImGui.TextColored(
-            ColMuted,
-            $"Cached retainers for {ownerScope.CharacterName} @ {ownerScope.HomeWorld}: {scopedRetainers.Count}; newest {newest:HH:mm:ss UTC}; oldest {oldest:HH:mm:ss UTC}.");
+        restockControls.Draw(plan, GetCurrentRetainerOwnerScope());
     }
 
     private RetainerRestockPlan GetRetainerRestockPlan(IReadOnlyList<InventoryBag>? playerBags = null)
