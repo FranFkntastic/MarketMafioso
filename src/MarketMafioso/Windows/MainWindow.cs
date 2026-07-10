@@ -130,6 +130,7 @@ public class MainWindow : Window, IDisposable
             marketAcquisitionRouteRunner,
             new DalamudMarketAcquisitionRouteContext(playerState),
             new DalamudMarketAcquisitionRouteUiAutomation(),
+            new UnsupportedMarketAcquisitionRouteTravelCleanup(),
             new DalamudMarketAcquisitionMarketBoardIo(
                 marketBoardApproachService,
                 marketBoardItemSearchDriver,

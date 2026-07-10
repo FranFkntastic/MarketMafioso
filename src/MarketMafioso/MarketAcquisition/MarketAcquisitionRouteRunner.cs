@@ -472,6 +472,15 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         diagnostics.Record("route-operation", snapshot.Message, details);
     }
 
+    public void RecordRouteCleanup(
+        string message,
+        IReadOnlyDictionary<string, string?> details)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(message);
+        ArgumentNullException.ThrowIfNull(details);
+        diagnostics.Record("route-cleanup", message, details);
+    }
+
     public MarketAcquisitionRouteActionResult FinalizeInputCaptureLog()
     {
         if (diagnosticsRequested && IsRunning)

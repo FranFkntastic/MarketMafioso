@@ -48,8 +48,8 @@ public sealed class MarketAcquisitionRouteEngineTravelPreparationOperationTests
 
         var snapshot = harness.Engine.CreateSnapshot();
         Assert.Equal(["/li Coeurl mb"], harness.Ui.Commands);
-        Assert.Equal(MarketAcquisitionRouteOperationDisposition.Succeeded, snapshot.LastOperation?.Disposition);
-        Assert.Null(snapshot.ActiveOperation);
+        Assert.Equal(MarketAcquisitionRouteOperationKind.Travel, snapshot.ActiveOperation?.Kind);
+        Assert.Equal(MarketAcquisitionRouteOperationDisposition.Pending, snapshot.ActiveOperation?.Disposition);
     }
 
     [Fact]
@@ -65,7 +65,7 @@ public sealed class MarketAcquisitionRouteEngineTravelPreparationOperationTests
         harness.Engine.TickRoute(isRequestBusy: false);
 
         Assert.Equal(["/li Coeurl mb"], harness.Ui.Commands);
-        Assert.Equal(MarketAcquisitionRouteOperationDisposition.Succeeded, harness.Engine.CreateSnapshot().LastOperation?.Disposition);
+        Assert.Equal(MarketAcquisitionRouteOperationKind.Travel, harness.Engine.CreateSnapshot().ActiveOperation?.Kind);
     }
 
     [Fact]
@@ -109,7 +109,8 @@ public sealed class MarketAcquisitionRouteEngineTravelPreparationOperationTests
 
         Assert.Equal("Failed", harness.Runner.State);
         Assert.Single(harness.Ui.Commands);
-        Assert.Equal(MarketAcquisitionRouteOperationDisposition.Succeeded, harness.Engine.CreateSnapshot().LastOperation?.Disposition);
+        Assert.Equal(MarketAcquisitionRouteOperationKind.Travel, harness.Engine.CreateSnapshot().LastOperation?.Kind);
+        Assert.Equal(MarketAcquisitionRouteOperationDisposition.Failed, harness.Engine.CreateSnapshot().LastOperation?.Disposition);
         Assert.Contains("not handled", harness.Runner.StatusMessage, StringComparison.OrdinalIgnoreCase);
     }
 

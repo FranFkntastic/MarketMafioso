@@ -150,6 +150,7 @@ internal sealed class MarketAcquisitionRouteEngineHarness : IDisposable
     public FakeRouteClock Clock { get; } = new();
     public FakeRouteContext Context { get; } = new();
     public FakeRouteUiAutomation Ui { get; } = new();
+    public FakeRouteTravelCleanup TravelCleanup { get; } = new();
     public FakeMarketBoardIo MarketBoard { get; } = new();
     public FakePurchaseIo Purchase { get; } = new();
     public FakeRouteReporter Reporter { get; } = new();
@@ -165,6 +166,7 @@ internal sealed class MarketAcquisitionRouteEngineHarness : IDisposable
             Runner,
             Context,
             Ui,
+            TravelCleanup,
             MarketBoard,
             Purchase,
             Reporter,
@@ -186,6 +188,27 @@ internal sealed class MarketAcquisitionRouteEngineHarness : IDisposable
     public static MarketAcquisitionRouteEngineHarness Create() => new();
 
     public void Dispose() => Engine.Dispose();
+}
+
+internal sealed class FakeRouteTravelCleanup : IMarketAcquisitionRouteTravelCleanup
+{
+    public List<MarketAcquisitionTravelLease> CancelledLeases { get; } = [];
+    public MarketAcquisitionTravelCleanupResult Result { get; set; } = new()
+    {
+        Status = MarketAcquisitionTravelCleanupStatus.Cancelled,
+        Message = "Owned Lifestream travel cancelled.",
+        AdapterCapability = "Test",
+    };
+    public Exception? ExceptionToThrow { get; set; }
+
+    public MarketAcquisitionTravelCleanupResult CancelOwnedTravel(MarketAcquisitionTravelLease lease)
+    {
+        CancelledLeases.Add(lease);
+        if (ExceptionToThrow != null)
+            throw ExceptionToThrow;
+
+        return Result;
+    }
 }
 
 internal static class MarketAcquisitionRouteEngineTestData

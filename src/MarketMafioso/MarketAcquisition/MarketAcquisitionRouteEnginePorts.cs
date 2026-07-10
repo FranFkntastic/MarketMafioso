@@ -33,6 +33,55 @@ public interface IMarketAcquisitionRouteUiAutomation
     bool TryScrollMarketBoardListingsToRow(int requestedRow, out string message);
 }
 
+public interface IMarketAcquisitionRouteTravelCleanup
+{
+    MarketAcquisitionTravelCleanupResult CancelOwnedTravel(MarketAcquisitionTravelLease lease);
+}
+
+public enum MarketAcquisitionTravelCleanupStatus
+{
+    Cancelled,
+    AlreadyResolved,
+    NothingOwned,
+    Unsupported,
+    Unavailable,
+    Failed,
+}
+
+public sealed record MarketAcquisitionTravelLease
+{
+    public required string LeaseId { get; init; }
+    public required string RouteRunId { get; init; }
+    public required string OperationId { get; init; }
+    public required string Dependency { get; init; }
+    public required string TargetWorld { get; init; }
+    public required bool IsOwned { get; init; }
+}
+
+public sealed record MarketAcquisitionTravelCleanupResult
+{
+    public required MarketAcquisitionTravelCleanupStatus Status { get; init; }
+    public required string Message { get; init; }
+    public bool UnresolvedExternalAutomation { get; init; }
+    public string? AdapterCapability { get; init; }
+    public string? ExceptionType { get; init; }
+}
+
+public sealed class UnsupportedMarketAcquisitionRouteTravelCleanup : IMarketAcquisitionRouteTravelCleanup
+{
+    public MarketAcquisitionTravelCleanupResult CancelOwnedTravel(MarketAcquisitionTravelLease lease)
+    {
+        ArgumentNullException.ThrowIfNull(lease);
+        return new MarketAcquisitionTravelCleanupResult
+        {
+            Status = MarketAcquisitionTravelCleanupStatus.Unsupported,
+            Message = "Lifestream does not expose a lease-scoped cancellation API; external travel remains unresolved.",
+            UnresolvedExternalAutomation = true,
+            AdapterCapability = "LeaseScopedCancellationUnavailable",
+        };
+    }
+}
+
 public interface IMarketAcquisitionMarketBoardIo
 {
     MarketBoardApproachResult OpenOrApproachMarketBoard();
