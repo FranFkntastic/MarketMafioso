@@ -7,7 +7,7 @@ using CaWorkshop = FFXIV_Craft_Architect.Core.Integrations.WorkshopHost;
 using MarketMafioso.CraftArchitectCompanion;
 using MarketMafioso.Server.WorkshopHost;
 
-namespace MarketMafioso.Tests.CraftArchitectCompanion;
+namespace MarketMafioso.Integration.Tests.CraftArchitectCompanion;
 
 public sealed class WorkshopHostProviderEndToEndTests
 {
