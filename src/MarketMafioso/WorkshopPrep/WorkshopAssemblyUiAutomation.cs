@@ -2,51 +2,21 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Dalamud.Game.ClientState.Conditions;
-using Dalamud.Game.ClientState.Objects.Enums;
-using Dalamud.Game.ClientState.Objects.Types;
 using Dalamud.Game.Addon.Lifecycle;
-using Dalamud.Game.Addon.Lifecycle.AddonArgTypes;
 using Dalamud.Plugin.Services;
-using Dalamud.Utility;
-using FFXIVClientStructs.FFXIV.Client.Game.Control;
-using FFXIVClientStructs.FFXIV.Client.Game;
-using FFXIVClientStructs.FFXIV.Client.UI;
-using FFXIVClientStructs.FFXIV.Component.GUI;
 using MarketMafioso.Automation.Runtime;
-using ClientGameObject = FFXIVClientStructs.FFXIV.Client.Game.Object.GameObject;
 
 namespace MarketMafioso.WorkshopPrep;
 
 public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
 {
-    private const byte MaxFabricationStationDistance = 8;
-    private const string SelectStringAddon = "SelectString";
-    private const string CutSceneSelectStringAddon = "CutSceneSelectString";
-    private const string RequestAddon = "Request";
-    private const string ContextIconMenuAddon = "ContextIconMenu";
-    private const string SelectYesNoAddon = "SelectYesno";
-    private const string CompanyCraftRecipeNoteBookAddon = "CompanyCraftRecipeNoteBook";
-    private const string CompanyCraftMaterialAddon = "CompanyCraftMaterial";
-    private const string SubmarinePartsMenuAddon = "SubmarinePartsMenu";
-    private const string AirshipPartsMenuAddon = "AirshipPartsMenu";
     internal static readonly IReadOnlyList<string> MaterialDeliveryAddonNames =
-    [
-        CompanyCraftMaterialAddon,
-        SubmarinePartsMenuAddon,
-        AirshipPartsMenuAddon,
-    ];
+        WorkshopAssemblyUiDriver.MaterialDeliveryAddonNames;
 
-    private readonly IGameGui gameGui;
-    private readonly IAddonLifecycle addonLifecycle;
-    private readonly IPluginLog log;
-    private readonly IObjectTable objectTable;
-    private readonly ITargetManager targetManager;
-    private readonly ICondition condition;
-    private readonly ExternalAutomationCoordinator externalAutomationCoordinator;
+    private readonly WorkshopAssemblyUiDriver uiDriver;
+    private WorkshopAssemblyDiagnostics diagnostics = WorkshopAssemblyDiagnostics.Disabled;
     private uint? pendingContributionItemId;
     private WorkshopAssemblyPendingConfirmationKind pendingConfirmationKind;
-    private bool requestItemSelectionStarted;
-    private bool requestConfirmed;
 
     public WorkshopAssemblyUiAutomation(
         IGameGui gameGui,
@@ -57,89 +27,70 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
         ICondition condition,
         ExternalAutomationCoordinator externalAutomationCoordinator)
     {
-        this.gameGui = gameGui;
-        this.addonLifecycle = addonLifecycle;
-        this.log = log;
-        this.objectTable = objectTable;
-        this.targetManager = targetManager;
-        this.condition = condition;
-        this.externalAutomationCoordinator = externalAutomationCoordinator;
-
-        addonLifecycle.RegisterListener(AddonEvent.PostSetup, RequestAddon, RequestPostSetup);
-        addonLifecycle.RegisterListener(AddonEvent.PostRefresh, RequestAddon, RequestPostRefresh);
-        addonLifecycle.RegisterListener(AddonEvent.PostReceiveEvent, ContextIconMenuAddon, ContextIconMenuPostReceiveEvent);
+        uiDriver = new WorkshopAssemblyUiDriver(
+            gameGui,
+            addonLifecycle,
+            log,
+            objectTable,
+            targetManager,
+            condition,
+            externalAutomationCoordinator,
+            source => SetPendingConfirmation(WorkshopAssemblyPendingConfirmationKind.MaterialContribution, source));
     }
 
-    public WorkshopAssemblyDiagnostics Diagnostics { get; set; } = WorkshopAssemblyDiagnostics.Disabled;
+    public WorkshopAssemblyDiagnostics Diagnostics
+    {
+        get => diagnostics;
+        set
+        {
+            diagnostics = value;
+            uiDriver.Diagnostics = value;
+        }
+    }
 
     public void ResetState()
     {
         pendingContributionItemId = null;
         pendingConfirmationKind = WorkshopAssemblyPendingConfirmationKind.None;
-        requestItemSelectionStarted = false;
-        requestConfirmed = false;
-        externalAutomationCoordinator.RestoreTextAdvance();
+        uiDriver.ResetRequestState();
     }
 
-    public unsafe bool IsFabricationStationUiReady()
+    public bool IsFabricationStationUiReady()
     {
-        var isReady = IsAddonReady(CompanyCraftRecipeNoteBookAddon) ||
-                      GetMaterialDeliveryAddon() != null ||
-                      IsAddonReady(SelectStringAddon) ||
-                      (pendingConfirmationKind != WorkshopAssemblyPendingConfirmationKind.None && IsAddonReady(SelectYesNoAddon));
+        var isReady = uiDriver.IsFabricationStationUiReady(
+            pendingConfirmationKind != WorkshopAssemblyPendingConfirmationKind.None);
         Diagnostics.Record("ui-ready-check", isReady ? "Fabrication station UI is ready." : "Fabrication station UI is not ready.");
         return isReady;
     }
 
-    public unsafe WorkshopAssemblyActionResult TrySkipCutscene()
+    public WorkshopAssemblyActionResult TrySkipCutscene()
     {
-        var addon = gameGui.GetAddonByName<AddonCutSceneSelectString>(CutSceneSelectStringAddon, 1);
-        if (addon == null || !IsAddonReady(&addon->AtkUnitBase))
+        return uiDriver.TrySkipCutscene() switch
         {
-            if (IsCutsceneActive())
-                return new(false, "Waiting for workshop cutscene skip prompt.", ActionTaken: true, RequiresWorkshopReopen: true);
-
-            return new(false, "No skippable workshop cutscene prompt is visible.");
-        }
-
-        addon->AtkUnitBase.FireCallbackInt(0);
-        Diagnostics.Record("cutscene-skip", "Selected workshop cutscene skip prompt.");
-        log.Verbose("[MarketMafioso] Selected workshop cutscene skip prompt.");
-        return new(false, "Selected workshop cutscene skip prompt.", ActionTaken: true, RequiresWorkshopReopen: true);
+            WorkshopCutsceneSkipState.CutsceneActive =>
+                new(false, "Waiting for workshop cutscene skip prompt.", ActionTaken: true, RequiresWorkshopReopen: true),
+            WorkshopCutsceneSkipState.PromptSelected =>
+                new(false, "Selected workshop cutscene skip prompt.", ActionTaken: true, RequiresWorkshopReopen: true),
+            _ => new(false, "No skippable workshop cutscene prompt is visible."),
+        };
     }
 
-    public unsafe WorkshopAssemblyActionResult TryOpenFabricationStation()
+    public WorkshopAssemblyActionResult TryOpenFabricationStation()
     {
-        var station = FindFabricationStation();
-        if (station == null)
-            return new(false, $"Waiting for fabrication station UI. No nearby fabrication station target was found. {DescribeUiState()}");
-
-        var targetSystem = TargetSystem.Instance();
-        if (targetSystem == null)
-            return new(false, $"Waiting for fabrication station UI. Target system is unavailable. {DescribeUiState()}");
-
-        targetManager.Target = station;
-        var result = targetSystem->InteractWithObject((ClientGameObject*)station.Address, true);
-        Diagnostics.Record(
-            "open-station",
-            "Interacted with nearby fabrication station.",
-            new Dictionary<string, string?>
-            {
-                ["name"] = station.Name.TextValue,
-                ["objectKind"] = station.ObjectKind.ToString(),
-                ["gameObjectId"] = station.GameObjectId.ToString("X"),
-                ["baseId"] = station.BaseId.ToString(),
-                ["distanceX"] = station.YalmDistanceX.ToString(),
-                ["distanceZ"] = station.YalmDistanceZ.ToString(),
-                ["result"] = result.ToString(),
-            });
-        log.Verbose($"[MarketMafioso] Interacted with fabrication station {station.Name.TextValue} ({station.GameObjectId:X}).");
-        return new(false, $"Opened nearby fabrication station {station.Name.TextValue}.", ActionTaken: true);
+        var result = uiDriver.TryOpenFabricationStation();
+        return result.State switch
+        {
+            WorkshopFabricationStationOpenState.TargetSystemUnavailable =>
+                new(false, $"Waiting for fabrication station UI. Target system is unavailable. {DescribeUiState()}"),
+            WorkshopFabricationStationOpenState.Interacted =>
+                new(false, $"Opened nearby fabrication station {result.StationName}.", ActionTaken: true),
+            _ => new(false, $"Waiting for fabrication station UI. No nearby fabrication station target was found. {DescribeUiState()}"),
+        };
     }
 
-    public unsafe WorkshopAssemblyActionResult TryOpenProject(WorkshopAssemblyQueueEntry entry)
+    public WorkshopAssemblyActionResult TryOpenProject(WorkshopAssemblyQueueEntry entry)
     {
-        var activeCraft = ReadCraftState(GetMaterialDeliveryAddon());
+        var activeCraft = uiDriver.ReadMaterialDelivery()?.CraftState;
         if (activeCraft != null)
         {
             Diagnostics.Record(
@@ -172,11 +123,10 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
         if (activeProjectAction != null)
             return activeProjectAction;
 
-        var craftingLog = GetCraftingLogAddon();
+        var craftingLog = uiDriver.ReadCraftingLog();
         if (craftingLog != null)
         {
-            var visibleItems = ReadVisibleCraftingLogItems(craftingLog);
-            if (visibleItems.Any(x => x.WorkshopItemId == entry.WorkshopItemId))
+            if (craftingLog.VisibleItems.Any(x => x.WorkshopItemId == entry.WorkshopItemId))
             {
                 Diagnostics.Record(
                     "select-project",
@@ -186,7 +136,7 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
                         ["project"] = entry.ProjectName,
                         ["workshopItemId"] = entry.WorkshopItemId.ToString(),
                     });
-                SelectCraft(craftingLog, entry);
+                uiDriver.SelectCraft(craftingLog, entry);
                 SetPendingConfirmation(WorkshopAssemblyPendingConfirmationKind.ProjectStart, $"selected workshop project {entry.ProjectName}");
                 return new(false, $"Selected workshop project {entry.ProjectName}.", ActionTaken: true);
             }
@@ -203,11 +153,11 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
                     ["categoryId"] = entry.CategoryId.ToString(),
                     ["typeId"] = entry.TypeId.ToString(),
                 });
-            SelectCraftCategory(craftingLog, entry);
+            uiDriver.SelectCraftCategory(craftingLog, entry);
             return new(false, $"Selected workshop category/type for {entry.ProjectName}.", ActionTaken: true);
         }
 
-        if (TrySelectString(text => text == "View company crafting log."))
+        if (uiDriver.TrySelectString(text => text == "View company crafting log."))
             return new(false, "Selected company crafting log.", ActionTaken: true);
 
         return new(false, $"Workshop project {entry.ProjectName} cannot be opened. {DescribeUiState()}");
@@ -215,16 +165,16 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
 
     private WorkshopAssemblyActionResult? TrySelectActiveProjectAction(WorkshopAssemblyQueueEntry entry)
     {
-        if (TrySelectString(IsContributeMaterialsEntry))
+        if (uiDriver.TrySelectString(WorkshopAssemblyPromptPolicy.IsContributeMaterialsEntry))
             return new(true, $"Selected active workshop material contribution for {entry.ProjectName}.", ActionTaken: true);
 
-        if (TrySelectString(IsAdvancePhaseEntry))
+        if (uiDriver.TrySelectString(WorkshopAssemblyPromptPolicy.IsAdvancePhaseEntry))
             return new(false, $"Advanced workshop project phase for {entry.ProjectName}.", ActionTaken: true, RequiresWorkshopReopen: true);
 
-        if (TrySelectString(IsCompleteConstructionEntry))
+        if (uiDriver.TrySelectString(WorkshopAssemblyPromptPolicy.IsCompleteConstructionEntry))
             return new(false, $"Selected final construction step for {entry.ProjectName}.", ActionTaken: true, RequiresWorkshopReopen: true);
 
-        if (TrySelectString(IsCollectFinishedProductEntry))
+        if (uiDriver.TrySelectString(WorkshopAssemblyPromptPolicy.IsCollectFinishedProductEntry))
         {
             SetPendingConfirmation(WorkshopAssemblyPendingConfirmationKind.ProductRetrieval, $"selected finished product collection for {entry.ProjectName}");
             return new(true, $"Selected finished product collection for {entry.ProjectName}.", ActionTaken: true);
@@ -233,7 +183,7 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
         return null;
     }
 
-    public unsafe WorkshopAssemblyActionResult TrySubmitNextMaterial(WorkshopAssemblyQueueEntry entry)
+    public WorkshopAssemblyActionResult TrySubmitNextMaterial(WorkshopAssemblyQueueEntry entry)
     {
         var confirmation = TryConfirmPendingConfirmation();
         if (confirmation != null)
@@ -242,9 +192,8 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
         if (pendingConfirmationKind != WorkshopAssemblyPendingConfirmationKind.None)
             return new(false, $"Waiting for {pendingConfirmationKind} confirmation. {DescribeUiState()}");
 
-        if (requestConfirmed)
+        if (uiDriver.TryConsumeRequestConfirmed())
         {
-            requestConfirmed = false;
             return new(
                 true,
                 $"Workshop material request confirmed for {entry.ProjectName}.",
@@ -258,25 +207,26 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
                 $"Waiting for request item selection for material {pendingContributionItemId}. {DescribeUiState()}");
         }
 
-        if (TrySelectString(IsCollectFinishedProductEntry))
+        if (uiDriver.TrySelectString(WorkshopAssemblyPromptPolicy.IsCollectFinishedProductEntry))
         {
             SetPendingConfirmation(WorkshopAssemblyPendingConfirmationKind.ProductRetrieval, $"selected finished product collection for {entry.ProjectName}");
             return new(false, $"Selected finished product collection for {entry.ProjectName}.", ActionTaken: true);
         }
 
-        if (TrySelectString(IsCompleteConstructionEntry))
+        if (uiDriver.TrySelectString(WorkshopAssemblyPromptPolicy.IsCompleteConstructionEntry))
             return new(false, $"Selected final construction step for {entry.ProjectName}.", ActionTaken: true, RequiresWorkshopReopen: true);
 
-        if (TrySelectString(IsAdvancePhaseEntry))
+        if (uiDriver.TrySelectString(WorkshopAssemblyPromptPolicy.IsAdvancePhaseEntry))
             return new(false, $"Advanced workshop project phase for {entry.ProjectName}.", ActionTaken: true, RequiresWorkshopReopen: true);
 
-        if (TrySelectString(IsContributeMaterialsEntry))
+        if (uiDriver.TrySelectString(WorkshopAssemblyPromptPolicy.IsContributeMaterialsEntry))
             return new(false, $"Selected material contribution for {entry.ProjectName}.", ActionTaken: true);
 
-        var materialDelivery = GetMaterialDeliveryAddon();
-        var craftState = ReadCraftState(materialDelivery);
-        if (craftState == null)
+        var materialDelivery = uiDriver.ReadMaterialDelivery();
+        if (materialDelivery == null)
             return new(false, $"Workshop material request is not actionable for {entry.ProjectName}. {DescribeUiState()}");
+
+        var craftState = materialDelivery.CraftState;
 
         if (craftState.ResultItem != entry.ResultItemId)
         {
@@ -287,7 +237,7 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
 
         if (craftState.IsPhaseComplete())
         {
-            CloseMaterialDelivery(materialDelivery);
+            uiDriver.CloseMaterialDelivery(materialDelivery);
             return new(false, $"Closed completed material phase for {entry.ProjectName}.", ActionTaken: true);
         }
 
@@ -298,7 +248,7 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
             if (item.Finished || item.StepsComplete >= item.StepsTotal || !requiredMaterialIds.Contains(item.ItemId))
                 continue;
 
-            if (!HasItemInSingleSlot(item.ItemId, item.ItemCountPerStep))
+            if (!WorkshopAssemblyUiDriver.HasItemInSingleSlot(item.ItemId, item.ItemCountPerStep))
             {
                 return new(
                     false,
@@ -319,10 +269,7 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
                     ["stepsTotal"] = item.StepsTotal.ToString(),
                 });
             pendingContributionItemId = item.ItemId;
-            requestItemSelectionStarted = false;
-            requestConfirmed = false;
-            externalAutomationCoordinator.SuppressTextAdvance();
-            ContributeMaterial(materialDelivery, index, item);
+            uiDriver.BeginMaterialContribution(materialDelivery, index, item);
             return new(
                 false,
                 $"Submitted workshop material request for {item.ItemCountPerStep}x {item.ItemName}.",
@@ -348,10 +295,10 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
         if (pendingConfirmationKind == WorkshopAssemblyPendingConfirmationKind.None)
             return null;
 
-        if (!TryGetSelectYesNoPrompt(out var text))
+        if (!uiDriver.TryGetSelectYesNoPrompt(out var text))
             return null;
 
-        if (!IsPromptAllowedForPendingConfirmation(pendingConfirmationKind, text))
+        if (!WorkshopAssemblyPromptPolicy.IsPromptAllowedForPendingConfirmation(pendingConfirmationKind, text))
         {
             return new(
                 false,
@@ -359,7 +306,7 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
         }
 
         var kind = pendingConfirmationKind;
-        TrySelectYesNo(0, text);
+        uiDriver.TrySelectYesNo(0, text, pendingConfirmationKind);
 
         switch (kind)
         {
@@ -367,15 +314,14 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
                 ClearPendingConfirmation();
                 return new(true, "Confirmed workshop project.", ActionTaken: true);
 
-            case WorkshopAssemblyPendingConfirmationKind.MaterialContribution when IsHighQualityHandoffPrompt(text):
+            case WorkshopAssemblyPendingConfirmationKind.MaterialContribution when WorkshopAssemblyPromptPolicy.IsHighQualityHandoffPrompt(text):
                 return new(false, "Confirmed HQ workshop material handoff.", ActionTaken: true);
 
             case WorkshopAssemblyPendingConfirmationKind.MaterialContribution:
                 {
                     var itemId = pendingContributionItemId;
                     pendingContributionItemId = null;
-                    requestItemSelectionStarted = false;
-                    requestConfirmed = false;
+                    uiDriver.ClearMaterialRequest();
                     ClearPendingConfirmation();
                     return new(
                         true,
@@ -394,8 +340,7 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
 
             case WorkshopAssemblyPendingConfirmationKind.ProductRetrieval:
                 pendingContributionItemId = null;
-                requestItemSelectionStarted = false;
-                requestConfirmed = false;
+                uiDriver.ClearMaterialRequest();
                 ClearPendingConfirmation();
                 return new(true, "Retrieved finished workshop project.", IsProjectComplete: true);
 
@@ -404,16 +349,15 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
         }
     }
 
-    public unsafe WorkshopAssemblyActionResult TryWaitForContributionProgress(
+    public WorkshopAssemblyActionResult TryWaitForContributionProgress(
         WorkshopAssemblyQueueEntry entry,
         uint materialItemId,
         uint previousStepsComplete)
     {
-        var materialDelivery = GetMaterialDeliveryAddon();
-        var craftState = ReadCraftState(materialDelivery);
-        if (craftState == null)
+        var materialDelivery = uiDriver.ReadMaterialDelivery();
+        if (materialDelivery == null)
         {
-            if (HasSelectStringEntry(IsPostContributionMenuEntry))
+            if (uiDriver.HasSelectStringEntry(WorkshopAssemblyPromptPolicy.IsPostContributionMenuEntry))
             {
                 return new(
                     true,
@@ -424,6 +368,8 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
 
             return new(false, $"Waiting for workshop material progress for {materialItemId}. {DescribeUiState()}");
         }
+
+        var craftState = materialDelivery.CraftState;
 
         if (craftState.ResultItem != entry.ResultItemId)
         {
@@ -451,286 +397,14 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
             ActiveMaterialStepsComplete: material.StepsComplete);
     }
 
-    public unsafe string DescribeUiState()
+    public string DescribeUiState()
     {
-        var trackedAddons = new[]
-        {
-            SelectStringAddon,
-            RequestAddon,
-            ContextIconMenuAddon,
-            SelectYesNoAddon,
-            CutSceneSelectStringAddon,
-            CompanyCraftRecipeNoteBookAddon,
-        }.Concat(MaterialDeliveryAddonNames);
-
-        var activeAddons = new List<string>();
-        foreach (var addonName in trackedAddons)
-        {
-            var addon = gameGui.GetAddonByName<AtkUnitBase>(addonName, 1);
-            if (addon == null)
-                continue;
-
-            activeAddons.Add($"{addonName}({(addon->IsReady ? "ready" : "not ready")}, {(addon->IsVisible ? "visible" : "hidden")})");
-        }
-
-        var state = activeAddons.Count == 0
-            ? "Workshop UI state: no tracked addons present."
-            : $"Workshop UI state: {string.Join(", ", activeAddons)}.";
-
-        var details = new List<string>();
-        var selectStringEntries = DescribeSelectStringEntries();
-        if (selectStringEntries != null)
-            details.Add($"SelectString entries: {selectStringEntries}");
-
-        var selectYesNoPrompt = DescribeSelectYesNoPrompt();
-        if (selectYesNoPrompt != null)
-            details.Add($"SelectYesno prompt: {selectYesNoPrompt}");
-
-        if (pendingConfirmationKind != WorkshopAssemblyPendingConfirmationKind.None)
-            details.Add($"Pending confirmation: {pendingConfirmationKind}");
-
-        return details.Count == 0
-            ? state
-            : $"{state} {string.Join(" ", details.Select(x => $"{x}."))}";
+        return uiDriver.DescribeUiState(pendingConfirmationKind);
     }
 
     public void Dispose()
     {
-        addonLifecycle.UnregisterListener(AddonEvent.PostReceiveEvent, ContextIconMenuAddon, ContextIconMenuPostReceiveEvent);
-        addonLifecycle.UnregisterListener(AddonEvent.PostRefresh, RequestAddon, RequestPostRefresh);
-        addonLifecycle.UnregisterListener(AddonEvent.PostSetup, RequestAddon, RequestPostSetup);
-        externalAutomationCoordinator.Dispose();
-    }
-
-    internal static bool IsContributeItemsPrompt(string text)
-    {
-        return text.StartsWith("Contribute ", StringComparison.Ordinal) &&
-               text.Contains(" to the company project?", StringComparison.Ordinal);
-    }
-
-    internal static bool IsHighQualityHandoffPrompt(string text)
-    {
-        return text == "You are about to hand over an HQ item. Proceed?" ||
-               text == "Do you really want to trade a high-quality item?";
-    }
-
-    internal static bool IsRetrieveFinishedProjectPrompt(string text)
-    {
-        return text == "Retrieve from the company workshop?" ||
-               (text.StartsWith("Retrieve ", StringComparison.Ordinal) &&
-                text.EndsWith(" from the company workshop?", StringComparison.Ordinal));
-    }
-
-    internal static bool IsPromptAllowedForPendingConfirmation(
-        WorkshopAssemblyPendingConfirmationKind kind,
-        string text)
-    {
-        return kind switch
-        {
-            WorkshopAssemblyPendingConfirmationKind.ProjectStart =>
-                text.StartsWith("Craft ", StringComparison.Ordinal),
-            WorkshopAssemblyPendingConfirmationKind.MaterialContribution =>
-                IsHighQualityHandoffPrompt(text) || IsContributeItemsPrompt(text),
-            WorkshopAssemblyPendingConfirmationKind.PhaseAdvance =>
-                text.StartsWith("Advance to the next phase", StringComparison.Ordinal),
-            WorkshopAssemblyPendingConfirmationKind.FinalConstruction =>
-                text.StartsWith("Complete the construction", StringComparison.Ordinal),
-            WorkshopAssemblyPendingConfirmationKind.ProductRetrieval =>
-                IsRetrieveFinishedProjectPrompt(text),
-            _ => false,
-        };
-    }
-
-    internal static bool IsContributeMaterialsEntry(string text)
-    {
-        return text.StartsWith("Contribute materials.", StringComparison.Ordinal);
-    }
-
-    internal static bool IsPostContributionMenuEntry(string text)
-    {
-        return IsContributeMaterialsEntry(text) ||
-               IsAdvancePhaseEntry(text) ||
-               IsCompleteConstructionEntry(text) ||
-               IsCollectFinishedProductEntry(text);
-    }
-
-    internal static bool IsAdvancePhaseEntry(string text)
-    {
-        return text.StartsWith("Advance to the next phase of production.", StringComparison.Ordinal);
-    }
-
-    internal static bool IsCompleteConstructionEntry(string text)
-    {
-        return text.StartsWith("Complete the construction of", StringComparison.Ordinal);
-    }
-
-    internal static bool IsCollectFinishedProductEntry(string text)
-    {
-        return text.StartsWith("Collect finished product.", StringComparison.Ordinal);
-    }
-
-    private bool IsCutsceneActive()
-    {
-        return condition[ConditionFlag.OccupiedInCutSceneEvent] ||
-               condition[ConditionFlag.WatchingCutscene] ||
-               condition[ConditionFlag.WatchingCutscene78];
-    }
-
-    private IGameObject? FindFabricationStation()
-    {
-        if (IsFabricationStationObject(targetManager.Target))
-            return targetManager.Target;
-
-        return objectTable
-            .Where(IsFabricationStationObject)
-            .OrderBy(x => x.YalmDistanceX + x.YalmDistanceZ)
-            .FirstOrDefault();
-    }
-
-    private static bool IsFabricationStationObject(IGameObject? gameObject)
-    {
-        if (gameObject == null || !gameObject.IsTargetable)
-            return false;
-
-        if (gameObject.YalmDistanceX > MaxFabricationStationDistance ||
-            gameObject.YalmDistanceZ > MaxFabricationStationDistance)
-            return false;
-
-        if (gameObject.ObjectKind is not (ObjectKind.EventObj or ObjectKind.HousingEventObject or ObjectKind.ReactionEventObject))
-            return false;
-
-        return gameObject.Name.TextValue.Contains("Fabrication Station", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private unsafe AtkUnitBase* GetCraftingLogAddon()
-    {
-        var addon = gameGui.GetAddonByName<AtkUnitBase>(CompanyCraftRecipeNoteBookAddon, 1);
-        return IsAddonReady(addon) ? addon : null;
-    }
-
-    private unsafe AtkUnitBase* GetMaterialDeliveryAddon()
-    {
-        foreach (var addonName in MaterialDeliveryAddonNames)
-        {
-            var addon = gameGui.GetAddonByName<AtkUnitBase>(addonName, 1);
-            if (IsAddonReady(addon))
-                return addon;
-        }
-
-        return null;
-    }
-
-    private unsafe bool IsAddonReady(string addonName)
-    {
-        return IsAddonReady(gameGui.GetAddonByName<AtkUnitBase>(addonName, 1));
-    }
-
-    private static unsafe bool IsAddonReady(AtkUnitBase* addon)
-    {
-        return addon != null && addon->IsReady && addon->IsVisible;
-    }
-
-    private unsafe bool TrySelectString(Predicate<string> predicate)
-    {
-        var addon = gameGui.GetAddonByName<AddonSelectString>(SelectStringAddon, 1);
-        if (addon == null || !IsAddonReady(&addon->AtkUnitBase))
-            return false;
-
-        var popup = addon->PopupMenu.PopupMenu;
-        for (var index = 0; index < popup.EntryCount; index++)
-        {
-            var text = popup.EntryNames[index].ToString();
-            if (string.IsNullOrWhiteSpace(text) || !predicate(text))
-                continue;
-
-            addon->AtkUnitBase.FireCallbackInt(index);
-            log.Verbose($"[MarketMafioso] Selected workshop menu entry {index}: {text}");
-            Diagnostics.Record(
-                "select-string",
-                "Selected workshop menu entry.",
-                new Dictionary<string, string?>
-                {
-                    ["index"] = index.ToString(),
-                    ["text"] = text,
-                });
-            return true;
-        }
-
-        return false;
-    }
-
-    private unsafe bool HasSelectStringEntry(Predicate<string> predicate)
-    {
-        var addon = gameGui.GetAddonByName<AddonSelectString>(SelectStringAddon, 1);
-        if (addon == null || !IsAddonReady(&addon->AtkUnitBase))
-            return false;
-
-        var popup = addon->PopupMenu.PopupMenu;
-        for (var index = 0; index < popup.EntryCount; index++)
-        {
-            var text = popup.EntryNames[index].ToString();
-            if (!string.IsNullOrWhiteSpace(text) && predicate(text))
-                return true;
-        }
-
-        return false;
-    }
-
-    private unsafe string? DescribeSelectStringEntries()
-    {
-        var addon = gameGui.GetAddonByName<AddonSelectString>(SelectStringAddon, 1);
-        if (addon == null || !IsAddonReady(&addon->AtkUnitBase))
-            return null;
-
-        var popup = addon->PopupMenu.PopupMenu;
-        var entries = new List<string>();
-        for (var index = 0; index < popup.EntryCount; index++)
-        {
-            var text = popup.EntryNames[index].ToString();
-            if (!string.IsNullOrWhiteSpace(text))
-                entries.Add($"{index}:{text}");
-        }
-
-        return entries.Count == 0 ? null : string.Join(" | ", entries);
-    }
-
-    private unsafe string? DescribeSelectYesNoPrompt()
-    {
-        return TryGetSelectYesNoPrompt(out var text) ? text : null;
-    }
-
-    private unsafe bool TryGetSelectYesNoPrompt(out string text)
-    {
-        text = string.Empty;
-        var addon = gameGui.GetAddonByName<AddonSelectYesno>(SelectYesNoAddon, 1);
-        if (addon == null || !IsAddonReady(&addon->AtkUnitBase))
-            return false;
-
-        text = addon->PromptText->NodeText.ExtractText()
-            .Replace("\n", string.Empty, StringComparison.Ordinal)
-            .Replace("\r", string.Empty, StringComparison.Ordinal);
-
-        return !string.IsNullOrWhiteSpace(text);
-    }
-
-    private unsafe bool TrySelectYesNo(int choice, string text)
-    {
-        var addon = gameGui.GetAddonByName<AddonSelectYesno>(SelectYesNoAddon, 1);
-        if (addon == null || !IsAddonReady(&addon->AtkUnitBase))
-            return false;
-
-        addon->AtkUnitBase.FireCallbackInt(choice);
-        log.Verbose($"[MarketMafioso] Selected workshop confirmation {choice}: {text}");
-        Diagnostics.Record(
-            "select-yesno",
-            "Selected workshop confirmation.",
-            new Dictionary<string, string?>
-            {
-                ["choice"] = choice.ToString(),
-                ["text"] = text,
-                ["pendingConfirmation"] = pendingConfirmationKind.ToString(),
-            });
-        return true;
+        uiDriver.Dispose();
     }
 
     private void SetPendingConfirmation(WorkshopAssemblyPendingConfirmationKind kind, string source)
@@ -750,239 +424,4 @@ public sealed class WorkshopAssemblyUiAutomation : IWorkshopAssemblyUiAutomation
         pendingConfirmationKind = WorkshopAssemblyPendingConfirmationKind.None;
     }
 
-    private static unsafe IReadOnlyList<WorkshopCraftingLogItem> ReadVisibleCraftingLogItems(AtkUnitBase* addon)
-    {
-        var atkValues = addon->AtkValues;
-        if (atkValues == null || addon->AtkValuesCount <= 13)
-            return [];
-
-        var shownItemCount = atkValues[13].UInt;
-        var visibleItems = new List<WorkshopCraftingLogItem>();
-        for (var index = 0; index < shownItemCount; index++)
-        {
-            var baseIndex = 14 + 4 * index;
-            if (baseIndex + 3 >= addon->AtkValuesCount)
-                break;
-
-            visibleItems.Add(new WorkshopCraftingLogItem(
-                atkValues[baseIndex].UInt,
-                atkValues[baseIndex + 3].GetValueAsString()));
-        }
-
-        return visibleItems;
-    }
-
-    private static unsafe void SelectCraftCategory(AtkUnitBase* addon, WorkshopAssemblyQueueEntry entry)
-    {
-        var values = stackalloc AtkValue[]
-        {
-            new() { Type = AtkValueType.Int, Int = 2 },
-            new() { Type = 0, Int = 0 },
-            new() { Type = AtkValueType.UInt, UInt = entry.CategoryId },
-            new() { Type = AtkValueType.UInt, UInt = entry.TypeId },
-            new() { Type = AtkValueType.UInt, Int = 0 },
-            new() { Type = AtkValueType.UInt, Int = 0 },
-            new() { Type = AtkValueType.UInt, Int = 0 },
-            new() { Type = 0, Int = 0 },
-        };
-        addon->FireCallback(8, values, true);
-    }
-
-    private static unsafe void SelectCraft(AtkUnitBase* addon, WorkshopAssemblyQueueEntry entry)
-    {
-        var values = stackalloc AtkValue[]
-        {
-            new() { Type = AtkValueType.Int, Int = 1 },
-            new() { Type = 0, Int = 0 },
-            new() { Type = 0, Int = 0 },
-            new() { Type = 0, Int = 0 },
-            new() { Type = AtkValueType.UInt, UInt = entry.WorkshopItemId },
-            new() { Type = 0, Int = 0 },
-            new() { Type = 0, Int = 0 },
-            new() { Type = 0, Int = 0 },
-        };
-        addon->FireCallback(8, values, true);
-    }
-
-    private static unsafe WorkshopCraftState? ReadCraftState(AtkUnitBase* addon)
-    {
-        if (!IsAddonReady(addon) || addon->AtkValues == null || addon->AtkValuesCount != 157)
-            return null;
-
-        var atkValues = addon->AtkValues;
-        var listItemCount = atkValues[11].UInt;
-        var items = Enumerable.Range(0, (int)listItemCount)
-            .Select(index => new WorkshopCraftMaterialState(
-                atkValues[12 + index].UInt,
-                atkValues[36 + index].GetValueAsString(),
-                atkValues[60 + index].UInt,
-                atkValues[108 + index].UInt,
-                atkValues[120 + index].UInt,
-                atkValues[132 + index].UInt > 0))
-            .ToList();
-
-        return new WorkshopCraftState(
-            atkValues[0].UInt,
-            atkValues[6].UInt,
-            atkValues[7].UInt,
-            items);
-    }
-
-    private static unsafe bool HasItemInSingleSlot(uint itemId, uint count)
-    {
-        var inventoryManager = InventoryManager.Instance();
-        if (inventoryManager == null)
-            return false;
-
-        for (var type = InventoryType.Inventory1; type <= InventoryType.Inventory4; type++)
-        {
-            var container = inventoryManager->GetInventoryContainer(type);
-            if (container == null || !container->IsLoaded)
-                continue;
-
-            for (var slotIndex = 0; slotIndex < container->Size; slotIndex++)
-            {
-                var item = container->GetInventorySlot(slotIndex);
-                if (item != null && item->ItemId == itemId && item->Quantity >= count)
-                    return true;
-            }
-        }
-
-        return false;
-    }
-
-    private static unsafe void ContributeMaterial(
-        AtkUnitBase* addon,
-        int materialIndex,
-        WorkshopCraftMaterialState item)
-    {
-        var values = stackalloc AtkValue[]
-        {
-            new() { Type = AtkValueType.Int, Int = 0 },
-            new() { Type = AtkValueType.UInt, UInt = (uint)materialIndex },
-            new() { Type = AtkValueType.UInt, UInt = item.ItemCountPerStep },
-            new() { Type = 0, Int = 0 },
-        };
-        addon->FireCallback(4, values, true);
-    }
-
-    private static unsafe void CloseMaterialDelivery(AtkUnitBase* addon)
-    {
-        if (!IsAddonReady(addon))
-            return;
-
-        var values = stackalloc AtkValue[]
-        {
-            new() { Type = AtkValueType.Int, Int = -1 },
-        };
-        addon->FireCallback(1, values, true);
-    }
-
-    private unsafe void RequestPostSetup(AddonEvent type, AddonArgs args)
-    {
-        if (pendingContributionItemId == null)
-            return;
-
-        var addon = (AddonRequest*)args.Addon.Address;
-        if (addon == null || addon->EntryCount != 1)
-            return;
-
-        requestItemSelectionStarted = true;
-        var values = stackalloc AtkValue[]
-        {
-            new() { Type = AtkValueType.Int, Int = 2 },
-            new() { Type = AtkValueType.UInt, UInt = 0 },
-            new() { Type = AtkValueType.UInt, UInt = 44 },
-            new() { Type = AtkValueType.UInt, UInt = 0 },
-        };
-        addon->AtkUnitBase.FireCallback(4, values, true);
-        log.Verbose($"[MarketMafioso] Opened request item selector for workshop material {pendingContributionItemId}.");
-        Diagnostics.Record(
-            "request-setup",
-            "Opened request item selector.",
-            new Dictionary<string, string?>
-            {
-                ["itemId"] = pendingContributionItemId.Value.ToString(),
-            });
-    }
-
-    private unsafe void ContextIconMenuPostReceiveEvent(AddonEvent type, AddonArgs args)
-    {
-        if (pendingContributionItemId == null || !requestItemSelectionStarted)
-            return;
-
-        var addon = (AddonContextIconMenu*)args.Addon.Address;
-        if (addon == null)
-            return;
-
-        var values = stackalloc AtkValue[]
-        {
-            new() { Type = AtkValueType.Int, Int = 0 },
-            new() { Type = AtkValueType.Int, Int = 0 },
-            new() { Type = AtkValueType.UInt, UInt = 0 },
-            new() { Type = AtkValueType.UInt, UInt = 0 },
-            new() { Type = 0, Int = 0 },
-        };
-        addon->AtkUnitBase.FireCallback(5, values, true);
-        log.Verbose($"[MarketMafioso] Selected request item icon for workshop material {pendingContributionItemId}.");
-        Diagnostics.Record(
-            "request-icon",
-            "Selected request item icon.",
-            new Dictionary<string, string?>
-            {
-                ["itemId"] = pendingContributionItemId.Value.ToString(),
-            });
-    }
-
-    private unsafe void RequestPostRefresh(AddonEvent type, AddonArgs args)
-    {
-        if (pendingContributionItemId == null || !requestItemSelectionStarted)
-            return;
-
-        var addon = (AddonRequest*)args.Addon.Address;
-        if (addon == null || addon->EntryCount != 1)
-            return;
-
-        var values = stackalloc AtkValue[]
-        {
-            new() { Type = AtkValueType.Int, Int = 0 },
-            new() { Type = AtkValueType.UInt, UInt = 0 },
-            new() { Type = AtkValueType.UInt, UInt = 0 },
-            new() { Type = AtkValueType.UInt, UInt = 0 },
-        };
-        addon->AtkUnitBase.FireCallback(4, values, true);
-        addon->AtkUnitBase.Close(false);
-        requestConfirmed = true;
-        SetPendingConfirmation(
-            WorkshopAssemblyPendingConfirmationKind.MaterialContribution,
-            $"confirmed request item window for material {pendingContributionItemId}");
-        externalAutomationCoordinator.RestoreTextAdvance();
-        log.Verbose($"[MarketMafioso] Confirmed request item window for workshop material {pendingContributionItemId}.");
-        Diagnostics.Record(
-            "request-confirmed",
-            "Confirmed request item window.",
-            new Dictionary<string, string?>
-            {
-                ["itemId"] = pendingContributionItemId.Value.ToString(),
-            });
-    }
 }
-
-internal sealed record WorkshopCraftingLogItem(uint WorkshopItemId, string Name);
-
-internal sealed record WorkshopCraftState(
-    uint ResultItem,
-    uint StepsComplete,
-    uint StepsTotal,
-    IReadOnlyList<WorkshopCraftMaterialState> Items)
-{
-    public bool IsPhaseComplete() => Items.All(x => x.Finished || x.StepsComplete == x.StepsTotal);
-}
-
-internal sealed record WorkshopCraftMaterialState(
-    uint ItemId,
-    string ItemName,
-    uint ItemCountPerStep,
-    uint StepsComplete,
-    uint StepsTotal,
-    bool Finished);

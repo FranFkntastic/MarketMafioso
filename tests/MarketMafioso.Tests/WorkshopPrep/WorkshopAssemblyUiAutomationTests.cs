@@ -17,7 +17,7 @@ public sealed class WorkshopAssemblyUiAutomationTests
     [InlineData("Complete the construction of the Shark-class Bridge.", false)]
     public void IsContributeMaterialsEntry_only_matches_safe_active_project_open_action(string text, bool expected)
     {
-        Assert.Equal(expected, WorkshopAssemblyUiAutomation.IsContributeMaterialsEntry(text));
+        Assert.Equal(expected, WorkshopAssemblyPromptPolicy.IsContributeMaterialsEntry(text));
     }
 
     [Theory]
@@ -27,7 +27,7 @@ public sealed class WorkshopAssemblyUiAutomationTests
     [InlineData("Contribute materials. (Quality: 0/100)", false)]
     public void IsContributeItemsPrompt_matches_workshop_contribution_confirmation(string text, bool expected)
     {
-        Assert.Equal(expected, WorkshopAssemblyUiAutomation.IsContributeItemsPrompt(text));
+        Assert.Equal(expected, WorkshopAssemblyPromptPolicy.IsContributeItemsPrompt(text));
     }
 
     [Theory]
@@ -37,7 +37,7 @@ public sealed class WorkshopAssemblyUiAutomationTests
     [InlineData("Contribute materials. (Quality: 18/100)", false)]
     public void IsHighQualityHandoffPrompt_matches_hq_warning_variants(string text, bool expected)
     {
-        Assert.Equal(expected, WorkshopAssemblyUiAutomation.IsHighQualityHandoffPrompt(text));
+        Assert.Equal(expected, WorkshopAssemblyPromptPolicy.IsHighQualityHandoffPrompt(text));
     }
 
     [Theory]
@@ -47,7 +47,7 @@ public sealed class WorkshopAssemblyUiAutomationTests
     [InlineData("Contribute 7 darksteel nuggets to the company project?", false)]
     public void IsRetrieveFinishedProjectPrompt_matches_product_retrieval_confirmation(string text, bool expected)
     {
-        Assert.Equal(expected, WorkshopAssemblyUiAutomation.IsRetrieveFinishedProjectPrompt(text));
+        Assert.Equal(expected, WorkshopAssemblyPromptPolicy.IsRetrieveFinishedProjectPrompt(text));
     }
 
     [Theory]
@@ -67,7 +67,7 @@ public sealed class WorkshopAssemblyUiAutomationTests
     {
         var kind = Enum.Parse<WorkshopAssemblyPendingConfirmationKind>(kindName);
 
-        Assert.Equal(expected, WorkshopAssemblyUiAutomation.IsPromptAllowedForPendingConfirmation(kind, text));
+        Assert.Equal(expected, WorkshopAssemblyPromptPolicy.IsPromptAllowedForPendingConfirmation(kind, text));
     }
 
     [Theory]
@@ -78,7 +78,7 @@ public sealed class WorkshopAssemblyUiAutomationTests
     [InlineData("View company crafting log.", false)]
     public void IsPostContributionMenuEntry_matches_resume_actions(string text, bool expected)
     {
-        Assert.Equal(expected, WorkshopAssemblyUiAutomation.IsPostContributionMenuEntry(text));
+        Assert.Equal(expected, WorkshopAssemblyPromptPolicy.IsPostContributionMenuEntry(text));
     }
 
     [Theory]
@@ -87,7 +87,7 @@ public sealed class WorkshopAssemblyUiAutomationTests
     [InlineData("Collect finished product.", false)]
     public void IsAdvancePhaseEntry_matches_only_phase_advance(string text, bool expected)
     {
-        Assert.Equal(expected, WorkshopAssemblyUiAutomation.IsAdvancePhaseEntry(text));
+        Assert.Equal(expected, WorkshopAssemblyPromptPolicy.IsAdvancePhaseEntry(text));
     }
 
     [Theory]
@@ -96,7 +96,7 @@ public sealed class WorkshopAssemblyUiAutomationTests
     [InlineData("Collect finished product.", false)]
     public void IsCompleteConstructionEntry_matches_only_final_construction(string text, bool expected)
     {
-        Assert.Equal(expected, WorkshopAssemblyUiAutomation.IsCompleteConstructionEntry(text));
+        Assert.Equal(expected, WorkshopAssemblyPromptPolicy.IsCompleteConstructionEntry(text));
     }
 
     [Theory]
@@ -105,6 +105,6 @@ public sealed class WorkshopAssemblyUiAutomationTests
     [InlineData("Complete the construction of the shark-class bridge.", false)]
     public void IsCollectFinishedProductEntry_matches_finished_product_collection(string text, bool expected)
     {
-        Assert.Equal(expected, WorkshopAssemblyUiAutomation.IsCollectFinishedProductEntry(text));
+        Assert.Equal(expected, WorkshopAssemblyPromptPolicy.IsCollectFinishedProductEntry(text));
     }
 }
