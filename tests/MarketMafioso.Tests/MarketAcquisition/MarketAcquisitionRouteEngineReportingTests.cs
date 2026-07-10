@@ -25,4 +25,38 @@ public sealed class MarketAcquisitionRouteEngineReportingTests
 
         Assert.Empty(harness.Reporter.RouteProgressReports);
     }
+
+    [Fact]
+    public void Restart_ReportsWithCurrentClaimToken()
+    {
+        using var harness = MarketAcquisitionRouteEngineHarness.Create();
+        var plan = MarketAcquisitionRouteEngineTestData.Plan("Maduin");
+        harness.Engine.Start(plan, MarketAcquisitionRouteEngineTestData.AcceptedClaim(), false, false);
+        var refreshedClaim = MarketAcquisitionRouteEngineTestData.AcceptedClaim() with
+        {
+            ClaimToken = "refreshed-claim-token",
+        };
+
+        harness.Engine.Restart(plan, refreshedClaim);
+        harness.Engine.ReportRouteProgress();
+
+        Assert.Equal("refreshed-claim-token", Assert.Single(harness.Reporter.RouteProgressReports).ClaimToken);
+    }
+
+    [Fact]
+    public void ReprepareAndRestart_ReportsWithCurrentClaimToken()
+    {
+        using var harness = MarketAcquisitionRouteEngineHarness.Create();
+        var plan = MarketAcquisitionRouteEngineTestData.Plan("Maduin");
+        harness.Engine.Start(plan, MarketAcquisitionRouteEngineTestData.AcceptedClaim(), false, false);
+        var refreshedClaim = MarketAcquisitionRouteEngineTestData.AcceptedClaim() with
+        {
+            ClaimToken = "refreshed-claim-token",
+        };
+
+        harness.Engine.ReprepareAndRestart(plan, DateTimeOffset.UtcNow, refreshedClaim);
+        harness.Engine.ReportRouteProgress();
+
+        Assert.Equal("refreshed-claim-token", Assert.Single(harness.Reporter.RouteProgressReports).ClaimToken);
+    }
 }

@@ -122,19 +122,28 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         return UpdateStatus(result);
     }
 
-    public MarketAcquisitionRouteActionResult Restart(MarketAcquisitionPlan plan)
+    public MarketAcquisitionRouteActionResult Restart(
+        MarketAcquisitionPlan plan,
+        MarketAcquisitionClaimView claimed)
     {
         ArgumentNullException.ThrowIfNull(plan);
+        ArgumentNullException.ThrowIfNull(claimed);
+        claimedRequest = claimed;
         ClearExecutionState();
-        reportDispatcher.BeginSession(claimedRequest ?? throw new InvalidOperationException("No dashboard request is accepted."));
+        reportDispatcher.BeginSession(claimed);
         return UpdateStatus(runner.Restart(plan));
     }
 
-    public MarketAcquisitionRouteActionResult ReprepareAndRestart(MarketAcquisitionPlan plan, DateTimeOffset preparedAtUtc)
+    public MarketAcquisitionRouteActionResult ReprepareAndRestart(
+        MarketAcquisitionPlan plan,
+        DateTimeOffset preparedAtUtc,
+        MarketAcquisitionClaimView claimed)
     {
         ArgumentNullException.ThrowIfNull(plan);
+        ArgumentNullException.ThrowIfNull(claimed);
+        claimedRequest = claimed;
         ClearExecutionState();
-        reportDispatcher.BeginSession(claimedRequest ?? throw new InvalidOperationException("No dashboard request is accepted."));
+        reportDispatcher.BeginSession(claimed);
         return UpdateStatus(runner.ReprepareAndRestart(plan, preparedAtUtc));
     }
 

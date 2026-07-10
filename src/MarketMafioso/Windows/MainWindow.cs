@@ -5,7 +5,6 @@ using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Numerics;
-using System.Threading;
 using System.Threading.Tasks;
 using Dalamud.Interface.Windowing;
 using Dalamud.Plugin.Services;
@@ -38,10 +37,7 @@ public class MainWindow : Window, IDisposable
     private readonly IPluginLog log;
     private readonly HttpClient acquisitionHttpClient = new();
     private readonly HttpClient craftQuoteHttpClient = new();
-    private readonly MarketAcquisitionRequestClient acquisitionClient;
-    private readonly UniversalisMarketAcquisitionPlanSource acquisitionPlanSource;
-    private readonly MarketAcquisitionWorldVisitCatalog marketAcquisitionWorldVisitCatalog;
-    private readonly MarketAcquisitionPlanPreparationService marketAcquisitionPlanPreparationService;
+    private readonly MarketAcquisitionRequestWorkspace acquisitionWorkspace;
     private readonly MarketBoardApproachService marketBoardApproachService;
     private readonly MarketAcquisitionRouteEngine routeEngine;
     private readonly string marketAcquisitionRouteDiagnosticsDirectory;
@@ -61,16 +57,7 @@ public class MainWindow : Window, IDisposable
     private readonly WorkshopAssemblyPanel workshopAssembly;
 
     private readonly WorkshopProjectSelectionState workshopProjectSelection = new();
-    private IReadOnlyList<MarketAcquisitionRequestView> pendingAcquisitionRequests = [];
-    private MarketAcquisitionClaimView? claimedAcquisitionRequest;
-    private string? claimedAcceptIdempotencyKey;
-    private string? claimedRejectIdempotencyKey;
-    private MarketAcquisitionPlan? acquisitionPlan;
-    private string? currentAcquisitionPlanHash;
     private int marketInputCaptureIndex;
-    private bool acquisitionRequestBusy = false;
-    private string acquisitionStatus = "No dashboard request has been fetched this session.";
-    private CancellationTokenSource? acquisitionRequestCancellation;
     private string workshopStatus = "Workshop prep queue is idle.";
 
     private const string ProductSummary = "Workshop logistics and self-hosted inventory history.";
@@ -111,10 +98,10 @@ public class MainWindow : Window, IDisposable
         this.retainerCacheStore = retainerCacheStore;
         this.playerState = playerState;
         this.log = log;
-        acquisitionClient = new MarketAcquisitionRequestClient(acquisitionHttpClient);
-        acquisitionPlanSource = new UniversalisMarketAcquisitionPlanSource(acquisitionHttpClient);
-        marketAcquisitionWorldVisitCatalog = new MarketAcquisitionWorldVisitCatalog(config);
-        marketAcquisitionPlanPreparationService = new MarketAcquisitionPlanPreparationService(
+        var acquisitionClient = new MarketAcquisitionRequestClient(acquisitionHttpClient);
+        var acquisitionPlanSource = new UniversalisMarketAcquisitionPlanSource(acquisitionHttpClient);
+        var marketAcquisitionWorldVisitCatalog = new MarketAcquisitionWorldVisitCatalog(config);
+        var marketAcquisitionPlanPreparationService = new MarketAcquisitionPlanPreparationService(
             acquisitionPlanSource,
             marketAcquisitionWorldVisitCatalog,
             (ex, worldName, itemId) => log.Warning(
@@ -122,6 +109,12 @@ public class MainWindow : Window, IDisposable
                 "[MarketMafioso] Unable to refresh Universalis evidence for {World} item {ItemId}.",
                 worldName,
                 itemId));
+        acquisitionWorkspace = new MarketAcquisitionRequestWorkspace(
+            config,
+            acquisitionClient,
+            marketAcquisitionPlanPreparationService,
+            config.Save,
+            ex => log.Warning(ex, "[MarketMafioso] Market acquisition request action failed."));
         var universalisFreshnessVerifier = new UniversalisMarketFreshnessVerifier(acquisitionHttpClient);
         var marketBoardListingReader = new MarketBoardListingReader(Plugin.GameGui);
         var marketBoardItemSearchDriver = new MarketBoardItemSearchDriver(Plugin.GameGui);
@@ -145,20 +138,8 @@ public class MainWindow : Window, IDisposable
             new DalamudMarketAcquisitionPurchaseIo(marketBoardPurchaseExecutor, marketBoardPurchaseAdapter),
             new MarketAcquisitionRouteRequestReporter(config, acquisitionClient),
             new MarketAcquisitionWorldVisitEvidenceRecorder(config, marketAcquisitionWorldVisitCatalog),
-            new MarketAcquisitionClaimLifecycleController(
-                config,
-                () => claimedAcquisitionRequest,
-                value => claimedAcquisitionRequest = value,
-                () => claimedAcceptIdempotencyKey,
-                () => claimedRejectIdempotencyKey,
-                () =>
-                {
-                    claimedAcceptIdempotencyKey = null;
-                    claimedRejectIdempotencyKey = null;
-                },
-                value => acquisitionStatus = value,
-                () => marketAcquisitionRouteRunner.StatusMessage,
-                config.Save),
+            acquisitionWorkspace.CreateClaimLifecycleController(
+                () => marketAcquisitionRouteRunner.StatusMessage),
             new DalamudMarketAcquisitionRouteCallbackDispatcher(),
             new SystemMarketAcquisitionRouteClock());
 
@@ -187,9 +168,9 @@ public class MainWindow : Window, IDisposable
             () => _ = FetchDashboardRequestsAsync(),
             requestId => _ = ClaimAcquisitionRequestAsync(requestId));
         marketAcquisitionAcceptedRequestPanel = new MarketAcquisitionAcceptedRequestPanel(
-            () => _ = AcceptClaimedAcquisitionRequestAsync(),
-            () => _ = RejectClaimedAcquisitionRequestAsync(),
-            ForgetLocalAcquisitionRequest,
+            () => _ = acquisitionWorkspace.AcceptAsync(),
+            () => _ = acquisitionWorkspace.RejectAsync(),
+            acquisitionWorkspace.ForgetLocalClaim,
             () => _ = PrepareMarketAcquisitionPlanAsync());
         restockTab = new RetainerRestockTabPanel(
             config,
@@ -243,10 +224,17 @@ public class MainWindow : Window, IDisposable
             acquisitionRequestBuilderCraftAppraisal,
             SyncAcquisitionRequestBuilderAsync,
             RefreshAcquisitionRequestBuilderRemoteAsync,
-            OnAcquisitionRequestBuilderDocumentAdopted);
+            acquisitionWorkspace.OnDocumentAdopted);
+        acquisitionWorkspace.Connect(
+            acquisitionRequestBuilder.AdoptRequest,
+            acquisitionRequestBuilder.AdoptRestoredRequestIfSafe,
+            () => acquisitionRequestBuilder.CurrentIntentHash,
+            acquisitionRequestBuilder.MarkPlanPrepared,
+            () => routeEngine.IsRouteActive,
+            ResetGuidedRoute);
         AcquisitionDiagnostics = new MarketAcquisitionDiagnosticsWindow(
             routeEngine.CreateSnapshot,
-            () => acquisitionPlan,
+            () => acquisitionWorkspace.PreparedPlan,
             CanProbeLiveMarketBoard,
             () => _ = ProbeLiveMarketBoardAsync(),
             CaptureMarketBoardInputState,
@@ -283,17 +271,7 @@ public class MainWindow : Window, IDisposable
             () => AutomationDiagnostics.IsOpen = false,
             () => AutomationDiagnostics.IsOpen = true);
 
-        var restoredAcquisitionClaim = MarketAcquisitionClaimPersistence.Restore(config);
-        if (restoredAcquisitionClaim != null)
-        {
-            claimedAcquisitionRequest = restoredAcquisitionClaim.Value.Claim;
-            claimedAcceptIdempotencyKey = restoredAcquisitionClaim.Value.AcceptIdempotencyKey;
-            claimedRejectIdempotencyKey = restoredAcquisitionClaim.Value.RejectIdempotencyKey;
-            var adopted = acquisitionRequestBuilder.AdoptRestoredRequestIfSafe(claimedAcquisitionRequest);
-            acquisitionStatus = adopted
-                ? "Restored previously claimed dashboard request into the builder."
-                : "Restored previously claimed dashboard request; preserving local builder edits.";
-        }
+        acquisitionWorkspace.RestoreClaimIntoBuilder();
     }
 
     public WorkshopProjectBrowserWindow ProjectBrowser { get; }
@@ -307,7 +285,7 @@ public class MainWindow : Window, IDisposable
             return;
 
         routeEngine.MonitorMarketBoardPurchase();
-        routeEngine.TickRoute(acquisitionRequestBusy);
+        routeEngine.TickRoute(acquisitionWorkspace.IsBusy);
     }
 
     public override void Draw()
@@ -440,11 +418,11 @@ public class MainWindow : Window, IDisposable
             world,
             hasScope,
             IsExpectedCharacterScopeGap(),
-            acquisitionRequestBusy,
+            acquisitionWorkspace.IsBusy,
             IsMarketAcquisitionRouteActive(),
-            claimedAcquisitionRequest,
-            acquisitionPlan,
-            currentAcquisitionPlanHash));
+            acquisitionWorkspace.ClaimedRequest,
+            acquisitionWorkspace.PreparedPlan,
+            acquisitionWorkspace.PreparedPlanHash));
     }
 
     private void DrawMarketAcquisitionExecutionPane()
@@ -464,9 +442,9 @@ public class MainWindow : Window, IDisposable
         marketAcquisitionRequestPickupPanel.Draw(new MarketAcquisitionRequestPickupContext(
             compactWhenClaimed,
             IsMarketAcquisitionRouteActive(),
-            claimedAcquisitionRequest,
-            pendingAcquisitionRequests,
-            acquisitionRequestBusy,
+            acquisitionWorkspace.ClaimedRequest,
+            acquisitionWorkspace.PendingRequests,
+            acquisitionWorkspace.IsBusy,
             !string.IsNullOrWhiteSpace(config.ApiKey),
             hasScope,
             characterName,
@@ -479,45 +457,39 @@ public class MainWindow : Window, IDisposable
     private void DrawClaimedAcquisitionRequest()
     {
         marketAcquisitionAcceptedRequestPanel.Draw(
-            claimedAcquisitionRequest,
-            acquisitionRequestBusy,
-            claimedAcquisitionRequest is not null &&
-            !acquisitionRequestBusy &&
-            MarketAcquisitionPlanPreparationService.CanPrepareForStatus(claimedAcquisitionRequest.Status));
+            acquisitionWorkspace.ClaimedRequest,
+            acquisitionWorkspace.IsBusy,
+            acquisitionWorkspace.ClaimedRequest is not null &&
+            !acquisitionWorkspace.IsBusy &&
+            MarketAcquisitionPlanPreparationService.CanPrepareForStatus(acquisitionWorkspace.ClaimedRequest.Status));
     }
 
     private void DrawMarketAcquisitionPlan()
     {
-        marketAcquisitionPlanPanel.Draw(acquisitionPlan, IsAcquisitionPlanStale());
+        marketAcquisitionPlanPanel.Draw(acquisitionWorkspace.PreparedPlan, acquisitionWorkspace.IsPreparedPlanStale());
     }
 
     private bool CanProbeLiveMarketBoard()
     {
-        return !acquisitionRequestBusy &&
+        return !acquisitionWorkspace.IsBusy &&
                !routeEngine.IsRouteActive &&
-               acquisitionPlan is { Status: "Ready" } &&
-               !IsAcquisitionPlanStale() &&
-               acquisitionPlan.WorldBatches.Count > 0;
+               acquisitionWorkspace.PreparedPlan is { Status: "Ready" } &&
+               !acquisitionWorkspace.IsPreparedPlanStale() &&
+               acquisitionWorkspace.PreparedPlan.WorldBatches.Count > 0;
     }
 
     private Task ProbeLiveMarketBoardAsync()
     {
-        return RunAcquisitionRequestAsync(_ =>
+        return acquisitionWorkspace.RunAsync(_ =>
         {
-            var plan = acquisitionPlan ??
-                       throw new InvalidOperationException("Prepare a live candidate plan before probing live market board listings.");
-            var claimed = claimedAcquisitionRequest ??
-                          throw new InvalidOperationException("No dashboard request is accepted.");
+            var plan = acquisitionWorkspace.RequirePreparedPlan(
+                "Prepare a live candidate plan before probing live market board listings.");
+            var claimed = acquisitionWorkspace.RequireClaimedRequest("No dashboard request is accepted.");
             routeEngine.ProbePreparedPlan(plan, claimed);
-            acquisitionStatus = routeEngine.CreateSnapshot().VisibleAcquisitionStatus;
+            acquisitionWorkspace.SetStatus(routeEngine.CreateSnapshot().VisibleAcquisitionStatus);
             return Task.CompletedTask;
         });
     }
-
-    private bool IsAcquisitionPlanStale() =>
-        acquisitionPlan is not null &&
-        !string.IsNullOrWhiteSpace(currentAcquisitionPlanHash) &&
-        !string.Equals(currentAcquisitionPlanHash, acquisitionRequestBuilder.CurrentIntentHash, StringComparison.Ordinal);
 
     private void DrawMarketBoardProbeStatus(MarketAcquisitionRouteEngineSnapshot snapshot)
     {
@@ -575,275 +547,36 @@ public class MainWindow : Window, IDisposable
         }
     }
 
-    private async Task FetchDashboardRequestsAsync()
+    private Task FetchDashboardRequestsAsync()
     {
-        await RunAcquisitionRequestAsync(async token =>
-        {
-            if (!TryGetAcquisitionScope(out var characterName, out var world))
-                throw new InvalidOperationException("Character scope is unavailable.");
-
-            pendingAcquisitionRequests = await acquisitionClient.FetchPendingAsync(
-                config.ServerUrl,
-                config.ApiKey,
-                characterName,
-                world,
-                token).ConfigureAwait(false);
-
-            acquisitionStatus = pendingAcquisitionRequests.Count == 0
-                ? "No matching dashboard requests."
-                : $"Loaded {pendingAcquisitionRequests.Count} dashboard batch(es).";
-        }).ConfigureAwait(false);
+        TryGetAcquisitionScope(out var characterName, out var world);
+        return acquisitionWorkspace.FetchPendingAsync(characterName, world);
     }
 
-    private async Task<MarketAcquisitionRequestBuilderSyncOutcome> SyncAcquisitionRequestBuilderAsync(
+    private Task<MarketAcquisitionRequestBuilderSyncOutcome> SyncAcquisitionRequestBuilderAsync(
         MarketAcquisitionRequestDocument document)
     {
-        if (IsMarketAcquisitionRouteActive())
-            throw new InvalidOperationException("Stop the guided route before replacing request intent.");
-        if (!TryGetAcquisitionScope(out var characterName, out var world))
-            throw new InvalidOperationException("Character scope is unavailable.");
-
-        MarketAcquisitionRequestSyncResult? syncResult = null;
-        await RunAcquisitionRequestAsync(async token =>
-        {
-            var service = new MarketAcquisitionRequestSyncService(acquisitionClient);
-            syncResult = await service.SyncAsync(
-                new MarketAcquisitionRequestSyncRequest(
-                    config.ServerUrl,
-                    config.ApiKey,
-                    characterName,
-                    world,
-                    config.PluginInstanceId,
-                    document,
-                    claimedAcquisitionRequest),
-                token).ConfigureAwait(false);
-
-            claimedAcquisitionRequest = syncResult.Claim;
-            if (!string.IsNullOrWhiteSpace(syncResult.AcceptIdempotencyKey))
-                claimedAcceptIdempotencyKey = syncResult.AcceptIdempotencyKey;
-            claimedRejectIdempotencyKey ??= Guid.NewGuid().ToString("N");
-            MarketAcquisitionClaimPersistence.Save(
-                config,
-                claimedAcquisitionRequest,
-                claimedAcceptIdempotencyKey,
-                claimedRejectIdempotencyKey);
-            config.Save();
-            ClearPreparedAcquisitionPlan();
-            pendingAcquisitionRequests = pendingAcquisitionRequests
-                .Where(request => !string.Equals(request.Id, claimedAcquisitionRequest.Id, StringComparison.Ordinal))
-                .ToList();
-            acquisitionStatus = syncResult.WasReplacement
-                ? "Request updated. Prepare a fresh advisory plan when ready."
-                : "Request synced, claimed, and accepted. Prepare an advisory plan when ready.";
-        }).ConfigureAwait(false);
-
-        if (syncResult is null)
-            throw new InvalidOperationException("Request sync did not complete.");
-
-        return new MarketAcquisitionRequestBuilderSyncOutcome(syncResult.Document, acquisitionStatus);
+        TryGetAcquisitionScope(out var characterName, out var world);
+        return acquisitionWorkspace.SyncAsync(document, characterName, world);
     }
 
-    private async Task<MarketAcquisitionRequestBuilderRefreshOutcome> RefreshAcquisitionRequestBuilderRemoteAsync(
-        MarketAcquisitionRequestDocument document)
+    private Task<MarketAcquisitionRequestBuilderRefreshOutcome> RefreshAcquisitionRequestBuilderRemoteAsync(
+        MarketAcquisitionRequestDocument document) =>
+        acquisitionWorkspace.RefreshRemoteAsync(document);
+
+    private Task ClaimAcquisitionRequestAsync(string requestId)
     {
-        if (string.IsNullOrWhiteSpace(document.RemoteRequestId))
-            throw new InvalidOperationException("Sync the request before refreshing remote state.");
-
-        MarketAcquisitionRequestView? remote = null;
-        await RunAcquisitionRequestAsync(async token =>
-        {
-            remote = await acquisitionClient.GetBatchAsync(
-                config.ServerUrl,
-                config.ApiKey,
-                document.RemoteRequestId,
-                token).ConfigureAwait(false);
-        }).ConfigureAwait(false);
-
-        if (remote is null)
-            throw new InvalidOperationException("Remote request refresh did not complete.");
-
-        var remoteDocument = MarketAcquisitionRequestDocumentMapper.FromRequestView(remote);
-        var currentHash = MarketAcquisitionRequestDocumentHasher.ComputeIntentHash(document);
-        var hasLocalEdits = !string.Equals(currentHash, document.LastSyncedHash, StringComparison.Ordinal);
-        var remoteHash = MarketAcquisitionRequestDocumentHasher.ComputeIntentHash(remoteDocument);
-        if (!hasLocalEdits)
-        {
-            OnAcquisitionRequestBuilderDocumentAdopted(remoteDocument, remote);
-            acquisitionStatus = "Remote request refreshed and adopted.";
-            return new MarketAcquisitionRequestBuilderRefreshOutcome(
-                remoteDocument,
-                RemoteDocument: null,
-                RemoteRequest: null,
-                acquisitionStatus);
-        }
-
-        var marked = document with
-        {
-            RemoteRevision = remote.Revision,
-            RemoteHash = remoteHash,
-            SyncStatus = "RemoteChanged",
-            UpdatedAtUtc = DateTimeOffset.UtcNow,
-        };
-        acquisitionStatus = "Remote request changed while local edits are present.";
-        return new MarketAcquisitionRequestBuilderRefreshOutcome(
-            marked,
-            remoteDocument,
-            remote,
-            acquisitionStatus);
+        TryGetAcquisitionScope(out var characterName, out var world);
+        return acquisitionWorkspace.ClaimAsync(requestId, characterName, world);
     }
 
-    private void OnAcquisitionRequestBuilderDocumentAdopted(
-        MarketAcquisitionRequestDocument document,
-        MarketAcquisitionRequestView? remoteRequest)
+    private Task PrepareMarketAcquisitionPlanAsync()
     {
-        if (remoteRequest is not null &&
-            claimedAcquisitionRequest is not null &&
-            string.Equals(remoteRequest.Id, claimedAcquisitionRequest.Id, StringComparison.Ordinal))
-        {
-            claimedAcquisitionRequest = MarketAcquisitionRequestDocumentMapper.MergeClaimWithRequest(
-                claimedAcquisitionRequest,
-                remoteRequest);
-            MarketAcquisitionClaimPersistence.Save(
-                config,
-                claimedAcquisitionRequest,
-                claimedAcceptIdempotencyKey,
-                claimedRejectIdempotencyKey);
-            config.Save();
-            ClearPreparedAcquisitionPlan();
-        }
-    }
-
-    private async Task ClaimAcquisitionRequestAsync(string requestId)
-    {
-        await RunAcquisitionRequestAsync(async token =>
-        {
-            if (!TryGetAcquisitionScope(out var characterName, out var world))
-                throw new InvalidOperationException("Character scope is unavailable.");
-
-            claimedAcquisitionRequest = await acquisitionClient.ClaimAsync(
-                config.ServerUrl,
-                config.ApiKey,
-                requestId,
-                characterName,
-                world,
-                config.PluginInstanceId,
-                token).ConfigureAwait(false);
-
-            claimedAcceptIdempotencyKey = Guid.NewGuid().ToString("N");
-            claimedRejectIdempotencyKey = Guid.NewGuid().ToString("N");
-            MarketAcquisitionClaimPersistence.Save(
-                config,
-                claimedAcquisitionRequest,
-                claimedAcceptIdempotencyKey,
-                claimedRejectIdempotencyKey);
-            config.Save();
-            acquisitionRequestBuilder.AdoptRequest(claimedAcquisitionRequest);
-            ClearPreparedAcquisitionPlan();
-            pendingAcquisitionRequests = pendingAcquisitionRequests
-                .Where(request => !string.Equals(request.Id, requestId, StringComparison.Ordinal))
-                .ToList();
-            acquisitionStatus = "Dashboard batch claimed. Review it before accepting.";
-        }).ConfigureAwait(false);
-    }
-
-    private async Task AcceptClaimedAcquisitionRequestAsync()
-    {
-        await RunAcquisitionRequestAsync(async token =>
-        {
-            var claimed = claimedAcquisitionRequest ??
-                          throw new InvalidOperationException("No dashboard request is claimed.");
-            claimedAcceptIdempotencyKey ??= Guid.NewGuid().ToString("N");
-
-            var accepted = await acquisitionClient.AcceptAsync(
-                config.ServerUrl,
-                config.ApiKey,
-                claimed.Id,
-                claimed.ClaimToken,
-                claimedAcceptIdempotencyKey,
-                token).ConfigureAwait(false);
-
-            claimedAcquisitionRequest = MarketAcquisitionRequestDocumentMapper.MergeClaimWithRequest(claimed, accepted);
-            MarketAcquisitionClaimPersistence.Save(
-                config,
-                claimedAcquisitionRequest,
-                claimedAcceptIdempotencyKey,
-                claimedRejectIdempotencyKey);
-            config.Save();
-            acquisitionRequestBuilder.AdoptRequest(claimedAcquisitionRequest);
-            ClearPreparedAcquisitionPlan();
-            acquisitionStatus = "Request accepted locally. Prepare an advisory plan when ready.";
-        }).ConfigureAwait(false);
-    }
-
-    private async Task RejectClaimedAcquisitionRequestAsync()
-    {
-        await RunAcquisitionRequestAsync(async token =>
-        {
-            var claimed = claimedAcquisitionRequest ??
-                          throw new InvalidOperationException("No dashboard request is claimed.");
-            claimedRejectIdempotencyKey ??= Guid.NewGuid().ToString("N");
-
-            var rejected = await acquisitionClient.RejectAsync(
-                config.ServerUrl,
-                config.ApiKey,
-                claimed.Id,
-                claimed.ClaimToken,
-                claimedRejectIdempotencyKey,
-                "Rejected in the MarketMafioso plugin.",
-                token).ConfigureAwait(false);
-
-            claimedAcquisitionRequest = claimed with { Status = rejected.Status };
-            MarketAcquisitionClaimPersistence.Clear(config);
-            config.Save();
-            claimedAcquisitionRequest = null;
-            ClearPreparedAcquisitionPlan();
-            acquisitionStatus = "Request rejected.";
-        }).ConfigureAwait(false);
-    }
-
-    private void ForgetLocalAcquisitionRequest()
-    {
-        MarketAcquisitionClaimPersistence.Clear(config);
-        config.Save();
-        claimedAcquisitionRequest = null;
-        claimedAcceptIdempotencyKey = null;
-        claimedRejectIdempotencyKey = null;
-        ClearPreparedAcquisitionPlan();
-        acquisitionStatus = "Forgot local acquisition claim. Fetch dashboard requests to pick up a pending request.";
-    }
-
-    private void ClearPreparedAcquisitionPlan()
-    {
-        acquisitionPlan = null;
-        currentAcquisitionPlanHash = null;
-        ResetGuidedRoute("No guided route has started.");
-    }
-
-    private async Task PrepareMarketAcquisitionPlanAsync()
-    {
-        await RunAcquisitionRequestAsync(async token =>
-        {
-            var claimed = claimedAcquisitionRequest ??
-                          throw new InvalidOperationException("No dashboard request is accepted.");
-            claimed = await EnsureAcquisitionClaimReadyForPlanningAsync(claimed, token).ConfigureAwait(false);
-            var currentWorld = playerState.CurrentWorld.IsValid ? GetCurrentWorldName() : string.Empty;
-            var result = await marketAcquisitionPlanPreparationService.PrepareAsync(
-                new MarketAcquisitionPlanPreparationRequest
-                {
-                    Claim = claimed,
-                    CurrentWorld = currentWorld,
-                    PreparedAtUtc = DateTimeOffset.UtcNow,
-                    RecentWorldTtl = GetMarketAcquisitionRecentWorldTtl(),
-                    IgnoreRecentWorldVisitsForSweep = config.MarketAcquisitionIgnoreRecentWorldVisitsForSweep,
-                },
-                token).ConfigureAwait(false);
-
-            acquisitionPlan = result.Plan;
-            currentAcquisitionPlanHash = acquisitionRequestBuilder.CurrentIntentHash;
-            acquisitionRequestBuilder.MarkPlanPrepared(currentAcquisitionPlanHash);
-            ResetGuidedRoute("No route has started.");
-            acquisitionStatus = result.StatusMessage;
-        }).ConfigureAwait(false);
+        var currentWorld = playerState.CurrentWorld.IsValid ? GetCurrentWorldName() : string.Empty;
+        return acquisitionWorkspace.PreparePlanAsync(
+            currentWorld,
+            GetMarketAcquisitionRecentWorldTtl(),
+            config.MarketAcquisitionIgnoreRecentWorldVisitsForSweep);
     }
 
     private TimeSpan GetMarketAcquisitionRecentWorldTtl()
@@ -858,66 +591,18 @@ public class MainWindow : Window, IDisposable
         return TimeSpan.FromHours(ttlHours);
     }
 
-    private async Task<MarketAcquisitionClaimView> EnsureAcquisitionClaimReadyForPlanningAsync(
-        MarketAcquisitionClaimView claimed,
-        CancellationToken token)
-    {
-        if (!MarketAcquisitionPlanPreparationService.IsFailedStatus(claimed.Status))
-            return claimed;
-
-        await acquisitionClient.ResendAsync(
-            config.ServerUrl,
-            config.ApiKey,
-            claimed.Id,
-            token).ConfigureAwait(false);
-
-        var reclaimed = await acquisitionClient.ClaimAsync(
-            config.ServerUrl,
-            config.ApiKey,
-            claimed.Id,
-            claimed.TargetCharacterName,
-            claimed.TargetWorld,
-            config.PluginInstanceId,
-            token).ConfigureAwait(false);
-
-        claimedAcceptIdempotencyKey = Guid.NewGuid().ToString("N");
-        claimedRejectIdempotencyKey = Guid.NewGuid().ToString("N");
-        var accepted = await acquisitionClient.AcceptAsync(
-            config.ServerUrl,
-            config.ApiKey,
-            reclaimed.Id,
-            reclaimed.ClaimToken,
-            claimedAcceptIdempotencyKey,
-            token).ConfigureAwait(false);
-
-        claimedAcquisitionRequest = reclaimed with { Status = accepted.Status };
-        MarketAcquisitionClaimPersistence.Save(
-            config,
-            claimedAcquisitionRequest,
-            claimedAcceptIdempotencyKey,
-            claimedRejectIdempotencyKey);
-        config.Save();
-        pendingAcquisitionRequests = pendingAcquisitionRequests
-            .Where(request => !string.Equals(request.Id, reclaimed.Id, StringComparison.Ordinal))
-            .ToList();
-        acquisitionStatus = "Failed request was reopened and accepted locally. Preparing a fresh plan.";
-        return claimedAcquisitionRequest;
-    }
-
     private void DrawMarketAcquisitionGuidedRoute()
     {
-        marketAcquisitionGuidedRoutePanel.Draw(acquisitionPlan, IsAcquisitionPlanStale());
+        marketAcquisitionGuidedRoutePanel.Draw(
+            acquisitionWorkspace.PreparedPlan,
+            acquisitionWorkspace.IsPreparedPlanStale());
     }
 
     private Task StartGuidedRouteAsync(bool forceDiagnostics)
     {
-        return RunAcquisitionRequestAsync(async token =>
+        return acquisitionWorkspace.RunWithReportableClaimAsync((claimed, _) =>
         {
-            var plan = acquisitionPlan ??
-                       throw new InvalidOperationException("Prepare a plan before starting a guided route.");
-            var claimed = claimedAcquisitionRequest ??
-                          throw new InvalidOperationException("No dashboard request is accepted.");
-            await EnsureRouteReportableClaimAsync(claimed, token).ConfigureAwait(false);
+            var plan = acquisitionWorkspace.RequirePreparedPlan("Prepare a plan before starting a guided route.");
             var enableDiagnostics = MarketAcquisitionRouteDiagnosticsPolicy.ShouldCreatePackage(
                 config.CreateMarketAcquisitionRouteDiagnosticPackages,
                 forceDiagnostics);
@@ -927,6 +612,7 @@ public class MainWindow : Window, IDisposable
                 enableDiagnostics,
                 config.EnableOpportunisticWorldChecks);
             routeEngine.ReportRouteProgress();
+            return Task.CompletedTask;
         });
     }
 
@@ -955,35 +641,29 @@ public class MainWindow : Window, IDisposable
 
     private Task RestartGuidedRouteAsync()
     {
-        return RunAcquisitionRequestAsync(async token =>
+        return acquisitionWorkspace.RunWithReportableClaimAsync((claimed, _) =>
         {
-            var plan = acquisitionPlan ??
-                       throw new InvalidOperationException("Prepare a plan before restarting a guided route.");
-            var claimed = claimedAcquisitionRequest ??
-                          throw new InvalidOperationException("No dashboard request is accepted.");
-            await EnsureRouteReportableClaimAsync(claimed, token).ConfigureAwait(false);
+            var plan = acquisitionWorkspace.RequirePreparedPlan("Prepare a plan before restarting a guided route.");
             marketBoardApproachService.StopNavigation();
-            routeEngine.Restart(plan);
+            routeEngine.Restart(plan, claimed);
             routeEngine.ReportRouteProgress();
+            return Task.CompletedTask;
         });
     }
 
     private Task ReprepareGuidedRouteAsync()
     {
-        return RunAcquisitionRequestAsync(async token =>
+        return acquisitionWorkspace.RunWithReportableClaimAsync((claimed, _) =>
         {
-            var plan = acquisitionPlan ??
-                       throw new InvalidOperationException("Prepare a plan before re-preparing a guided route.");
-            var claimed = claimedAcquisitionRequest ??
-                          throw new InvalidOperationException("No dashboard request is accepted.");
-            await EnsureRouteReportableClaimAsync(claimed, token).ConfigureAwait(false);
+            var plan = acquisitionWorkspace.RequirePreparedPlan("Prepare a plan before re-preparing a guided route.");
             marketBoardApproachService.StopNavigation();
-            var result = routeEngine.ReprepareAndRestart(plan, DateTimeOffset.UtcNow);
+            var result = routeEngine.ReprepareAndRestart(plan, DateTimeOffset.UtcNow, claimed);
             var snapshot = routeEngine.CreateSnapshot();
             if (snapshot.ActivePlan != null)
-                acquisitionPlan = snapshot.ActivePlan;
-            acquisitionStatus = result.Message;
+                acquisitionWorkspace.ReplacePreparedPlan(snapshot.ActivePlan);
+            acquisitionWorkspace.SetStatus(result.Message);
             routeEngine.ReportRouteProgress();
+            return Task.CompletedTask;
         });
     }
 
@@ -993,13 +673,13 @@ public class MainWindow : Window, IDisposable
         {
             var label = $"input-capture-{++marketInputCaptureIndex}";
             var result = routeEngine.CaptureInputState(label);
-            acquisitionStatus = result.Success
+            acquisitionWorkspace.SetStatus(result.Success
                 ? $"{result.Message} {routeEngine.CreateSnapshot().LastDiagnosticFilePath}"
-                : result.Message;
+                : result.Message);
         }
         catch (Exception ex)
         {
-            acquisitionStatus = $"Unable to capture market board input state. {ex.Message}";
+            acquisitionWorkspace.SetStatus($"Unable to capture market board input state. {ex.Message}");
             log.Warning(ex, "[MarketMafioso] Unable to capture market board input state.");
         }
     }
@@ -1009,11 +689,11 @@ public class MainWindow : Window, IDisposable
         try
         {
             var result = routeEngine.FinalizeInputCaptureLog();
-            acquisitionStatus = result.Message;
+            acquisitionWorkspace.SetStatus(result.Message);
         }
         catch (Exception ex)
         {
-            acquisitionStatus = $"Unable to finalize market board input capture log. {ex.Message}";
+            acquisitionWorkspace.SetStatus($"Unable to finalize market board input capture log. {ex.Message}");
             log.Warning(ex, "[MarketMafioso] Unable to finalize market board input capture log.");
         }
     }
@@ -1024,53 +704,20 @@ public class MainWindow : Window, IDisposable
         routeEngine.Reset(status);
     }
 
-    private async Task EnsureRouteReportableClaimAsync(MarketAcquisitionClaimView claimed, CancellationToken token)
-    {
-        claimed = await EnsureAcquisitionClaimReadyForPlanningAsync(claimed, token).ConfigureAwait(false);
-        if (!MarketAcquisitionRouteProgressReporter.CanReportForRequestStatus(claimed.Status))
-            throw new InvalidOperationException($"Request status {claimed.Status} cannot start a route. Fetch or accept a dashboard request first.");
-    }
-
     private bool IsMarketAcquisitionRouteActive() =>
         routeEngine.IsRouteActive;
 
     private bool IsExpectedCharacterScopeGap() =>
-        claimedAcquisitionRequest != null &&
+        acquisitionWorkspace.ClaimedRequest != null &&
         routeEngine.CreateSnapshot().ActiveStop?.Status == "TravelCommandSent";
 
     private string GetVisibleAcquisitionStatus()
     {
-        if (acquisitionStatus.StartsWith("Route progress report failed", StringComparison.OrdinalIgnoreCase) &&
+        if (acquisitionWorkspace.Status.StartsWith("Route progress report failed", StringComparison.OrdinalIgnoreCase) &&
             IsMarketAcquisitionRouteActive())
             return routeEngine.CreateSnapshot().StatusMessage;
 
-        return acquisitionStatus;
-    }
-
-    private async Task RunAcquisitionRequestAsync(Func<CancellationToken, Task> action)
-    {
-        if (acquisitionRequestBusy)
-            return;
-
-        acquisitionRequestBusy = true;
-        acquisitionRequestCancellation?.Dispose();
-        acquisitionRequestCancellation = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-
-        try
-        {
-            await action(acquisitionRequestCancellation.Token).ConfigureAwait(false);
-        }
-        catch (Exception ex)
-        {
-            acquisitionStatus = $"Request failed: {ex.Message}";
-            log.Warning(ex, "[MarketMafioso] Market acquisition request action failed.");
-        }
-        finally
-        {
-            acquisitionRequestCancellation?.Dispose();
-            acquisitionRequestCancellation = null;
-            acquisitionRequestBusy = false;
-        }
+        return acquisitionWorkspace.Status;
     }
 
     private bool TryGetAcquisitionScope(out string characterName, out string world)
@@ -1093,41 +740,14 @@ public class MainWindow : Window, IDisposable
         return playerState.CurrentWorld.Value.Name.ToString();
     }
 
-    private static string FormatAcquisitionItem(MarketAcquisitionRequestView request)
-    {
-        if (request.Lines.Count > 1)
-            return $"{request.Lines.Count:N0} item batch ({FormatPrimaryAcquisitionItem(request)})";
-
-        return FormatPrimaryAcquisitionItem(request);
-    }
-
-    private static string FormatPrimaryAcquisitionItem(MarketAcquisitionRequestView request)
-    {
-        var name = string.IsNullOrWhiteSpace(request.ItemName)
-            ? $"Item {request.ItemId}"
-            : request.ItemName;
-        return $"{name} ({request.ItemId})";
-    }
-
     private static string FormatGil(uint gil) => $"{gil:N0} gil";
-
-    private static string FormatRouteDataCenter(string dataCenter) =>
-        string.IsNullOrWhiteSpace(dataCenter) ? "-" : dataCenter;
-
-    private static string FormatWorldMode(string worldMode) =>
-        worldMode switch
-        {
-            "AllWorldSweep" => "All-world sweep",
-            "CurrentWorldOnly" => "Current world only",
-            _ => worldMode,
-        };
 
     private Vector4 GetAcquisitionStatusColor(string? visibleStatus = null)
     {
-        if (acquisitionRequestBusy)
+        if (acquisitionWorkspace.IsBusy)
             return ColHeader;
 
-        var status = visibleStatus ?? acquisitionStatus;
+        var status = visibleStatus ?? acquisitionWorkspace.Status;
         if (status.Contains("failed", StringComparison.OrdinalIgnoreCase) ||
             status.Contains("required", StringComparison.OrdinalIgnoreCase) ||
             status.Contains("unavailable", StringComparison.OrdinalIgnoreCase))
@@ -1152,7 +772,7 @@ public class MainWindow : Window, IDisposable
         }
         catch (Exception ex)
         {
-            acquisitionStatus = $"Unable to open dashboard: {ex.Message}";
+            acquisitionWorkspace.SetStatus($"Unable to open dashboard: {ex.Message}");
             log.Warning(ex, "[MarketMafioso] Unable to open market acquisition dashboard.");
         }
     }
@@ -1226,7 +846,7 @@ public class MainWindow : Window, IDisposable
 
     public void Dispose()
     {
-        acquisitionRequestCancellation?.Dispose();
+        acquisitionWorkspace.Dispose();
         routeEngine.Dispose();
         acquisitionHttpClient.Dispose();
         craftQuoteHttpClient.Dispose();
