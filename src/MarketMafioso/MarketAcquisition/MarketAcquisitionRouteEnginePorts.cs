@@ -9,11 +9,13 @@ namespace MarketMafioso.MarketAcquisition;
 public interface IMarketAcquisitionRouteClock
 {
     DateTimeOffset UtcNow { get; }
+    long MonotonicMilliseconds { get; }
 }
 
 public sealed class SystemMarketAcquisitionRouteClock : IMarketAcquisitionRouteClock
 {
     public DateTimeOffset UtcNow => DateTimeOffset.UtcNow;
+    public long MonotonicMilliseconds => Environment.TickCount64;
 }
 
 public interface IMarketAcquisitionRouteContext

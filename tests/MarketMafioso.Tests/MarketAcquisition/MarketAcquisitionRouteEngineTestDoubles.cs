@@ -7,6 +7,7 @@ namespace MarketMafioso.Tests.MarketAcquisition;
 internal sealed class FakeRouteClock : IMarketAcquisitionRouteClock
 {
     public DateTimeOffset UtcNow { get; set; } = DateTimeOffset.Parse("2026-07-10T12:00:00Z");
+    public long MonotonicMilliseconds { get; set; } = 1_000;
 }
 
 internal sealed class FakeRouteContext : IMarketAcquisitionRouteContext
@@ -29,22 +30,37 @@ internal sealed class FakeRouteContext : IMarketAcquisitionRouteContext
 internal sealed class FakeRouteUiAutomation : IMarketAcquisitionRouteUiAutomation
 {
     public List<string> Commands { get; } = [];
+    public bool ProcessCommandSucceeds { get; set; } = true;
     public bool TravelPreflightCanSend { get; set; } = true;
+    public IReadOnlyList<string> TravelPreflightBlockingAddons { get; set; } = [];
+    public int TravelPreflightCallCount { get; private set; }
+    public Queue<bool> CloseMarketBoardResults { get; } = [];
+    public int CloseMarketBoardCallCount { get; private set; }
     public bool ScrollSucceeds { get; set; } = true;
     public string ScrollMessage { get; set; } = "Requested deeper listings.";
     public int? LastRequestedScrollRow { get; private set; }
     public bool ProcessCommand(string command)
     {
         Commands.Add(command);
-        return true;
+        return ProcessCommandSucceeds;
     }
 
-    public bool TryCloseMarketBoardWindows() => true;
-    public AutomationTravelPreflightResult CheckTravelPreflight() => new()
+    public bool TryCloseMarketBoardWindows()
     {
-        CanSendCommand = TravelPreflightCanSend,
-        Message = TravelPreflightCanSend ? "No blocking UI is open." : "Close blocking UI before travel.",
-    };
+        CloseMarketBoardCallCount++;
+        return CloseMarketBoardResults.Count == 0 || CloseMarketBoardResults.Dequeue();
+    }
+
+    public AutomationTravelPreflightResult CheckTravelPreflight()
+    {
+        TravelPreflightCallCount++;
+        return new AutomationTravelPreflightResult
+        {
+            CanSendCommand = TravelPreflightCanSend,
+            Message = TravelPreflightCanSend ? "No blocking UI is open." : "Close blocking UI before travel.",
+            BlockingAddons = TravelPreflightBlockingAddons,
+        };
+    }
 
     public bool TryScrollMarketBoardListingsToRow(int requestedRow, out string message)
     {
@@ -58,9 +74,14 @@ internal sealed class FakeMarketBoardIo : IMarketAcquisitionMarketBoardIo
 {
     public Queue<MarketBoardReadResult> Reads { get; } = [];
     public Queue<MarketBoardItemSearchResult> Searches { get; } = [];
+    public List<(uint ItemId, string? ItemName)> SearchRequests { get; } = [];
     public MarketBoardApproachResult ApproachResult { get; set; } = MarketBoardApproachResult.Ready("Market board is ready.");
     public MarketBoardApproachResult OpenOrApproachMarketBoard() => ApproachResult;
-    public MarketBoardItemSearchResult SearchItem(uint itemId, string? itemName) => Searches.Count == 0 ? new() { Status = "ListingsReady" } : Searches.Dequeue();
+    public MarketBoardItemSearchResult SearchItem(uint itemId, string? itemName)
+    {
+        SearchRequests.Add((itemId, itemName));
+        return Searches.Count == 0 ? new() { Status = "ListingsReady" } : Searches.Dequeue();
+    }
     public MarketBoardReadResult ReadCurrentListings(string currentWorld) => Reads.Count == 0 ? new()
         {
             Status = "NoListings",

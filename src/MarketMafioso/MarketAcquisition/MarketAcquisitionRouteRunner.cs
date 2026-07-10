@@ -11,7 +11,6 @@ namespace MarketMafioso.MarketAcquisition;
 public sealed class MarketAcquisitionRouteRunner : IDisposable
 {
     private const string LocalMarketBoardCommand = "/li mb";
-    private static readonly TimeSpan MarketBoardSearchWatchdog = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan MarketBoardListingFreshnessWatchdog = TimeSpan.FromSeconds(15);
 
     private readonly string diagnosticsDirectory;
@@ -447,6 +446,32 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         return MarketAcquisitionRouteActionResult.Ok(StatusMessage);
     }
 
+    public void RecordRouteOperationSnapshot(MarketAcquisitionRouteOperationSnapshot snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+
+        var details = new Dictionary<string, string?>
+        {
+            ["operationId"] = snapshot.OperationId,
+            ["kind"] = snapshot.Kind.ToString(),
+            ["phase"] = snapshot.Phase.ToString(),
+            ["disposition"] = snapshot.Disposition.ToString(),
+            ["timeoutDisposition"] = snapshot.TimeoutDisposition.ToString(),
+            ["attempt"] = snapshot.Attempt.ToString(CultureInfo.InvariantCulture),
+            ["startedAtUtc"] = snapshot.StartedAtUtc.ToString("O", CultureInfo.InvariantCulture),
+            ["deadlineUtc"] = snapshot.DeadlineUtc.ToString("O", CultureInfo.InvariantCulture),
+            ["startedAtMonotonicMilliseconds"] = snapshot.StartedAtMonotonicMilliseconds.ToString(CultureInfo.InvariantCulture),
+            ["deadlineMonotonicMilliseconds"] = snapshot.DeadlineMonotonicMilliseconds.ToString(CultureInfo.InvariantCulture),
+            ["updatedAtMonotonicMilliseconds"] = snapshot.UpdatedAtMonotonicMilliseconds.ToString(CultureInfo.InvariantCulture),
+        };
+        foreach (var pair in snapshot.Context)
+            details[$"context.{pair.Key}"] = pair.Value;
+        foreach (var pair in snapshot.Details)
+            details[$"detail.{pair.Key}"] = pair.Value;
+
+        diagnostics.Record("route-operation", snapshot.Message, details);
+    }
+
     public MarketAcquisitionRouteActionResult FinalizeInputCaptureLog()
     {
         if (diagnosticsRequested && IsRunning)
@@ -494,7 +519,6 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         {
             ["automationTaskName"] = "MarketBoardItemSearch",
             ["lastWaitingPredicate"] = searchResult.ReadyForListings ? "ListingsReady" : searchResult.Status,
-            ["watchdogBoundarySeconds"] = MarketBoardSearchWatchdog.TotalSeconds.ToString("F0", CultureInfo.InvariantCulture),
             ["status"] = searchResult.Status,
             ["searchSubmitted"] = SearchSubmitted.ToString(),
             ["subtaskSource"] = session?.ActiveStop?.ActiveItemSubtask?.Source,
@@ -515,17 +539,6 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
 
         var snapshot = CreateSearchAutomationSnapshot(searchResult, "Observed", details);
         diagnostics.RecordAutomationSnapshot(snapshot);
-
-        if (searchResult.IsInProgress &&
-            itemSearchAutomationStartedUtc is { } started &&
-            nowUtc - started > MarketBoardSearchWatchdog)
-        {
-            var timeoutMessage =
-                $"Market board item search automation timed out after {MarketBoardSearchWatchdog.TotalSeconds:N0}s while waiting for listings. Last status: {searchResult.Status}.";
-            details["timeoutBoundary"] = "MarketBoardSearchWatchdog";
-            diagnostics.RecordAutomationSnapshot(CreateSearchAutomationSnapshot(searchResult, "TimedOut", details));
-            return FailRoute(timeoutMessage);
-        }
 
         return searchResult.IsInProgress || searchResult.ReadyForListings
             ? MarketAcquisitionRouteActionResult.Ok(searchResult.Message)

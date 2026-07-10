@@ -9,6 +9,8 @@ namespace MarketMafioso.MarketAcquisition;
 public sealed class MarketAcquisitionRouteEngine : IDisposable
 {
     private static readonly TimeSpan RouteMonitorInterval = TimeSpan.FromMilliseconds(500);
+    private static readonly TimeSpan MarketBoardItemSearchOperationTimeout = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan TravelPreparationOperationTimeout = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan MarketBoardPurchaseConfirmationWatchdog = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan MarketBoardPurchaseInitialMonitorDelay = TimeSpan.FromMilliseconds(250);
     private static readonly TimeSpan MarketBoardPurchaseListingRemovalWatchdog = TimeSpan.FromSeconds(15);
@@ -24,9 +26,11 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     private readonly IMarketAcquisitionRouteClock clock;
     private readonly MarketBoardListingReadAccumulator listingReadAccumulator = new();
     private readonly MarketBoardAutomationController purchaseAutomation = new();
+    private readonly MarketAcquisitionRouteOperationExecutor operationExecutor = new();
     private readonly MarketAcquisitionRouteEngineState state = new();
     private CancellationTokenSource freshnessCancellation = new();
     private MarketAcquisitionClaimView? claimedRequest;
+    private long operationSequence;
 
     public MarketAcquisitionRouteEngine(
         MarketAcquisitionRouteRunner runner,
@@ -57,6 +61,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         runner.IsRunning ||
         runner.IsPaused ||
         state.ProbeRunning ||
+        operationExecutor.ActiveSnapshot != null ||
         purchaseAutomation.PurchaseSession?.IsActive == true;
 
     public MarketAcquisitionRouteEngineSnapshot CreateSnapshot() => new()
@@ -77,6 +82,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         MarketBoardReadResult = state.MarketBoardReadResult,
         MarketBoardReconciliation = state.MarketBoardReconciliation,
         LiveCandidatePlan = state.LiveCandidatePlan,
+        ActiveOperation = operationExecutor.ActiveSnapshot,
+        LastOperation = operationExecutor.LastSnapshot,
         PurchaseSession = purchaseAutomation.PurchaseSession,
         LastPurchaseResult = purchaseAutomation.LastPurchaseResult,
         ActiveWorldPurchasedQuantity = state.ActiveWorldPurchasedQuantity,
@@ -108,12 +115,17 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         return result;
     }
 
-    public MarketAcquisitionRouteActionResult Pause() => UpdateStatus(runner.Pause());
+    public MarketAcquisitionRouteActionResult Pause()
+    {
+        CancelActiveOperation("Route paused; active operation cancelled.");
+        return UpdateStatus(runner.Pause());
+    }
 
     public MarketAcquisitionRouteActionResult Resume() => UpdateStatus(runner.Resume());
 
     public MarketAcquisitionRouteActionResult Stop()
     {
+        CancelActiveOperation("Route stopped.");
         var result = runner.Stop();
         listingReadAccumulator.Clear();
         purchaseAutomation.Clear();
@@ -149,6 +161,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
     public void Reset(string status)
     {
+        CancelActiveOperation(status);
         runner.Reset(status);
         ClearExecutionState();
         state.AcquisitionStatus = status;
@@ -163,6 +176,12 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
     public MarketAcquisitionRouteEngineTickResult TickRoute(bool isRequestBusy)
     {
+        if (TryFailExpiredOperation())
+        {
+            ReportRouteProgress();
+            return MarketAcquisitionRouteEngineTickResult.Worked(state.AcquisitionStatus, state.NextRouteMonitorUtc);
+        }
+
         if (isRequestBusy || state.ProbeRunning || !runner.IsRunning)
             return MarketAcquisitionRouteEngineTickResult.Idle();
 
@@ -195,7 +214,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         }
         catch (Exception ex)
         {
-            var result = runner.FailRoute($"Unable to monitor guided route. {ex.Message}", ex);
+            var result = FailRoute($"Unable to monitor guided route. {ex.Message}", ex);
             state.AcquisitionStatus = result.Message;
             ReportRouteProgress();
             return MarketAcquisitionRouteEngineTickResult.Worked(state.AcquisitionStatus, state.NextRouteMonitorUtc);
@@ -229,7 +248,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             var worldLabel = activeStop?.WorldName ??
                              (context.IsCurrentWorldAvailable ? context.GetCurrentWorldName() : "unknown world");
             var message = $"Live market board probe failed for {itemLabel} on {worldLabel}. {ex.Message}";
-            runner.FailRoute(message, ex);
+            FailRoute(message, ex);
             state.AcquisitionStatus = message;
         }
         finally
@@ -268,33 +287,156 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
     private void HandlePendingStop(MarketAcquisitionGuidedRouteStop activeStop)
     {
+        var currentWorld = context.IsCurrentWorldAvailable ? context.GetCurrentWorldName() : null;
+        var requiresTravelPreparation = runner.MarketBoardCloseRequiredBeforeTravel ||
+            !context.IsCurrentWorldAvailable ||
+            !activeStop.WorldName.Equals(currentWorld, StringComparison.OrdinalIgnoreCase);
+        MarketAcquisitionRouteOperationSnapshot? preparation = null;
+        if (requiresTravelPreparation ||
+            operationExecutor.ActiveSnapshot?.Kind == MarketAcquisitionRouteOperationKind.TravelPreparation)
+        {
+            preparation = EnsureTravelPreparationOperation(activeStop);
+        }
+
         if (runner.MarketBoardCloseRequiredBeforeTravel)
         {
             if (uiAutomation.TryCloseMarketBoardWindows())
             {
+                ObserveTravelPreparationOperation(
+                    preparation!,
+                    MarketAcquisitionRouteOperationDisposition.Pending,
+                    $"Waiting for market board windows to close before traveling to {activeStop.WorldName}.",
+                    new Dictionary<string, string?>
+                    {
+                        ["preparationState"] = "MarketBoardCloseRequested",
+                    });
                 state.NextRouteMonitorUtc = clock.UtcNow.AddMilliseconds(250);
                 return;
             }
 
             UpdateStatus(runner.RecordMarketBoardClosedBeforeTravel());
-            state.NextRouteMonitorUtc = clock.UtcNow.Add(RouteMonitorInterval);
-            return;
         }
 
-        var currentWorld = context.IsCurrentWorldAvailable ? context.GetCurrentWorldName() : null;
-        if (context.IsCurrentWorldAvailable &&
-            !activeStop.WorldName.Equals(currentWorld, StringComparison.OrdinalIgnoreCase) &&
-            !EnsureRouteTravelUiIsClear())
+        if (preparation != null)
         {
-            state.NextRouteMonitorUtc = clock.UtcNow.Add(RouteMonitorInterval);
-            return;
+            if (!context.IsCurrentWorldAvailable)
+            {
+                ObserveTravelPreparationOperation(
+                    preparation,
+                    MarketAcquisitionRouteOperationDisposition.Pending,
+                    "Waiting for current world information before travel preparation.",
+                    new Dictionary<string, string?>
+                    {
+                        ["preparationState"] = "CurrentWorldUnavailable",
+                    });
+                UpdateStatus(runner.RecordCurrentWorldUnavailable());
+                state.NextRouteMonitorUtc = clock.UtcNow.Add(RouteMonitorInterval);
+                return;
+            }
+
+            if (activeStop.WorldName.Equals(currentWorld, StringComparison.OrdinalIgnoreCase))
+            {
+                ObserveTravelPreparationOperation(
+                    preparation,
+                    MarketAcquisitionRouteOperationDisposition.Succeeded,
+                    $"Already on {activeStop.WorldName}; travel preparation complete.",
+                    new Dictionary<string, string?>
+                    {
+                        ["preparationState"] = "TargetWorldReached",
+                    });
+            }
+            else
+            {
+                var preflight = uiAutomation.CheckTravelPreflight();
+                if (!preflight.CanSendCommand)
+                {
+                    UpdateStatus(runner.RecordTravelBlockedByUi(preflight));
+                    ObserveTravelPreparationOperation(
+                        preparation,
+                        MarketAcquisitionRouteOperationDisposition.Pending,
+                        preflight.Message,
+                        new Dictionary<string, string?>
+                        {
+                            ["preparationState"] = "UiBlocked",
+                            ["blockingAddons"] = string.Join(", ", preflight.BlockingAddons),
+                        });
+                    state.NextRouteMonitorUtc = clock.UtcNow.Add(RouteMonitorInterval);
+                    return;
+                }
+
+                ObserveTravelPreparationOperation(
+                    preparation,
+                    MarketAcquisitionRouteOperationDisposition.Succeeded,
+                    $"Travel UI preflight passed for {activeStop.WorldName}.",
+                    new Dictionary<string, string?>
+                    {
+                        ["preparationState"] = "ReadyToTravel",
+                    });
+            }
         }
 
-        UpdateStatus(runner.PreparePendingStopForCurrentWorld(
+        var travelResult = runner.PreparePendingStopForCurrentWorld(
             context.IsCurrentWorldAvailable,
             currentWorld,
-            uiAutomation.ProcessCommand));
+            uiAutomation.ProcessCommand);
+        UpdateStatus(travelResult);
+        if (!travelResult.Success && string.Equals(runner.State, "Failed", StringComparison.OrdinalIgnoreCase))
+            UpdateStatus(FailRoute(travelResult.Message));
         state.NextRouteMonitorUtc = clock.UtcNow.AddSeconds(2);
+    }
+
+    private MarketAcquisitionRouteOperationSnapshot EnsureTravelPreparationOperation(
+        MarketAcquisitionGuidedRouteStop activeStop)
+    {
+        if (operationExecutor.ActiveSnapshot is { } active)
+        {
+            if (active.Kind != MarketAcquisitionRouteOperationKind.TravelPreparation)
+                throw new InvalidOperationException($"Cannot prepare travel while {active.Kind} operation {active.OperationId} is active.");
+
+            return active;
+        }
+
+        var operation = operationExecutor.Begin(new MarketAcquisitionRouteOperationStart
+        {
+            OperationId = $"{state.ProgressNonce}:travel-preparation:{++operationSequence}",
+            Kind = MarketAcquisitionRouteOperationKind.TravelPreparation,
+            StartedAtUtc = clock.UtcNow,
+            StartedAtMonotonicMilliseconds = clock.MonotonicMilliseconds,
+            Timeout = TravelPreparationOperationTimeout,
+            TimeoutDisposition = MarketAcquisitionRouteOperationDisposition.Failed,
+            TimeoutMessage =
+                $"Travel preparation timed out after {TravelPreparationOperationTimeout.TotalSeconds:N0}s while waiting to travel to {activeStop.WorldName}.",
+            Context = new Dictionary<string, string?>
+            {
+                ["world"] = activeStop.WorldName,
+                ["timeoutPolicySource"] = "NightmareToolsDefaultBoundProvisional",
+            },
+        });
+        runner.RecordRouteOperationSnapshot(operation);
+        return operation;
+    }
+
+    private MarketAcquisitionRouteOperationSnapshot ObserveTravelPreparationOperation(
+        MarketAcquisitionRouteOperationSnapshot operation,
+        MarketAcquisitionRouteOperationDisposition disposition,
+        string message,
+        IReadOnlyDictionary<string, string?> details)
+    {
+        var result = operationExecutor.Observe(
+            new MarketAcquisitionRouteOperationObservation
+            {
+                OperationId = operation.OperationId,
+                Disposition = disposition,
+                Message = message,
+                Details = details,
+            },
+            clock.UtcNow,
+            clock.MonotonicMilliseconds);
+        if (!result.Accepted || result.Snapshot == null)
+            throw new InvalidOperationException(result.Message);
+
+        runner.RecordRouteOperationSnapshot(result.Snapshot);
+        return result.Snapshot;
     }
 
     private bool EnsureRouteTravelUiIsClear()
@@ -349,11 +491,27 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             }
 
             var activeLine = GetActiveRouteLine(claimed);
+            var operation = EnsureItemSearchOperation(activeLine, currentWorld);
+            var deadline = operationExecutor.CheckDeadline(clock.UtcNow, clock.MonotonicMilliseconds);
+            if (deadline.Snapshot is { IsTerminal: true } timedOut)
+            {
+                runner.RecordRouteOperationSnapshot(timedOut);
+                UpdateStatus(FailRoute(timedOut.Message));
+                return;
+            }
+
             var searchResult = marketBoard.SearchItem(activeLine.ItemId, activeLine.ItemName);
             UpdateStatus(runner.RecordSearchResult(searchResult, clock.UtcNow));
-            if (!searchResult.ReadyForListings)
+            var operationResult = ObserveItemSearchOperation(operation, searchResult);
+            if (operationResult.Disposition == MarketAcquisitionRouteOperationDisposition.Pending)
             {
                 state.NextRouteMonitorUtc = clock.UtcNow.Add(RouteMonitorInterval);
+                return;
+            }
+
+            if (operationResult.Disposition != MarketAcquisitionRouteOperationDisposition.Succeeded)
+            {
+                UpdateStatus(FailRoute(operationResult.Message));
                 return;
             }
         }
@@ -362,6 +520,77 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         UpdateStatus(runner.BeginProbe($"Arrived on {currentWorld}. Reading live listings for {FormatItem(GetActiveRouteLine(claimed))}."));
         state.ProbeRunning = true;
         ProbeLiveMarketBoard();
+    }
+
+    private MarketAcquisitionRouteOperationSnapshot EnsureItemSearchOperation(
+        MarketAcquisitionRequestView activeLine,
+        string currentWorld)
+    {
+        if (operationExecutor.ActiveSnapshot is { } active)
+        {
+            if (active.Kind != MarketAcquisitionRouteOperationKind.ItemSearch)
+                throw new InvalidOperationException($"Cannot start item search while {active.Kind} operation {active.OperationId} is active.");
+
+            return active;
+        }
+
+        var operation = operationExecutor.Begin(new MarketAcquisitionRouteOperationStart
+        {
+            OperationId = $"{state.ProgressNonce}:item-search:{++operationSequence}",
+            Kind = MarketAcquisitionRouteOperationKind.ItemSearch,
+            StartedAtUtc = clock.UtcNow,
+            StartedAtMonotonicMilliseconds = clock.MonotonicMilliseconds,
+            Timeout = MarketBoardItemSearchOperationTimeout,
+            TimeoutDisposition = MarketAcquisitionRouteOperationDisposition.Failed,
+            TimeoutMessage =
+                $"Market board item search timed out after {MarketBoardItemSearchOperationTimeout.TotalSeconds:N0}s while waiting for listings for {FormatItem(activeLine)}.",
+            Context = new Dictionary<string, string?>
+            {
+                ["world"] = currentWorld,
+                ["lineId"] = runner.ActiveStop?.ActiveItemSubtask?.LineId,
+                ["itemId"] = activeLine.ItemId.ToString(),
+                ["itemName"] = activeLine.ItemName,
+            },
+        });
+        runner.RecordRouteOperationSnapshot(operation);
+        return operation;
+    }
+
+    private MarketAcquisitionRouteOperationSnapshot ObserveItemSearchOperation(
+        MarketAcquisitionRouteOperationSnapshot operation,
+        MarketBoardItemSearchResult searchResult)
+    {
+        var disposition = ClassifyItemSearchResult(searchResult);
+        var message = disposition == MarketAcquisitionRouteOperationDisposition.Failed &&
+                      !string.Equals(searchResult.Status, "SearchSubmitFailed", StringComparison.OrdinalIgnoreCase)
+            ? $"Market board item search returned unsupported terminal status {searchResult.Status}. {searchResult.Message}"
+            : searchResult.Message;
+        var result = operationExecutor.Observe(
+            new MarketAcquisitionRouteOperationObservation
+            {
+                OperationId = operation.OperationId,
+                Disposition = disposition,
+                Message = message,
+                Details = searchResult.Details,
+            },
+            clock.UtcNow,
+            clock.MonotonicMilliseconds);
+        if (!result.Accepted || result.Snapshot == null)
+            throw new InvalidOperationException(result.Message);
+
+        runner.RecordRouteOperationSnapshot(result.Snapshot);
+        return result.Snapshot;
+    }
+
+    internal static MarketAcquisitionRouteOperationDisposition ClassifyItemSearchResult(
+        MarketBoardItemSearchResult searchResult)
+    {
+        ArgumentNullException.ThrowIfNull(searchResult);
+        return searchResult.ReadyForListings
+            ? MarketAcquisitionRouteOperationDisposition.Succeeded
+            : searchResult.IsInProgress
+                ? MarketAcquisitionRouteOperationDisposition.Pending
+                : MarketAcquisitionRouteOperationDisposition.Failed;
     }
 
     private void ProbeLiveMarketBoardCore(
@@ -551,7 +780,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         {
             if (ShouldFailWorldPurchaseBatchOnNoCandidate(state.LiveCandidatePlan))
             {
-                UpdateStatus(runner.FailRoute(state.LiveCandidatePlan.Message));
+                UpdateStatus(FailRoute(state.LiveCandidatePlan.Message));
                 ReportRouteProgress();
                 return;
             }
@@ -569,7 +798,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
         if (!selection.Status.Equals("PurchaseSelectionSent", StringComparison.OrdinalIgnoreCase) || selection.Candidate == null)
         {
-            UpdateStatus(runner.FailRoute($"World purchase batch stopped: {selection.Message}"));
+            UpdateStatus(FailRoute($"World purchase batch stopped: {selection.Message}"));
             ReportRouteProgress();
             return;
         }
@@ -606,7 +835,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         {
             purchaseAutomation.RecordMonitorFailure("PurchaseMonitorFailed", ex.Message);
             state.AcquisitionStatus = $"Purchase monitor failed: {ex.Message}";
-            runner.FailRoute(state.AcquisitionStatus, ex);
+            FailRoute(state.AcquisitionStatus, ex);
             ReportRouteProgress();
             return MarketAcquisitionRouteEngineTickResult.Worked(state.AcquisitionStatus, purchaseAutomation.NextMonitorUtc);
         }
@@ -645,7 +874,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         }
         else if (!session.IsActive)
         {
-            UpdateStatus(runner.FailRoute($"World purchase batch stopped: {session.Message}"));
+            UpdateStatus(FailRoute($"World purchase batch stopped: {session.Message}"));
             ReportRouteProgress();
         }
     }
@@ -914,6 +1143,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
     private void ClearExecutionState()
     {
+        CancelActiveOperation("Route execution state reset.");
         state.ResetRouteExecutionState();
         listingReadAccumulator.Clear();
         purchaseAutomation.Clear();
@@ -931,10 +1161,38 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
     public void Dispose()
     {
+        CancelActiveOperation("Route engine disposed.");
         purchaseAutomation.Dispose();
         reportDispatcher.Dispose();
         freshnessCancellation.Cancel();
         freshnessCancellation.Dispose();
         runner.Dispose();
+    }
+
+    private void CancelActiveOperation(string message)
+    {
+        var cancellation = operationExecutor.Cancel(clock.UtcNow, clock.MonotonicMilliseconds, message);
+        if (cancellation.Accepted && cancellation.Snapshot != null)
+            runner.RecordRouteOperationSnapshot(cancellation.Snapshot);
+    }
+
+    private bool TryFailExpiredOperation()
+    {
+        if (operationExecutor.ActiveSnapshot == null)
+            return false;
+
+        var deadline = operationExecutor.CheckDeadline(clock.UtcNow, clock.MonotonicMilliseconds);
+        if (deadline.Snapshot is not { IsTerminal: true } timedOut)
+            return false;
+
+        runner.RecordRouteOperationSnapshot(timedOut);
+        UpdateStatus(FailRoute(timedOut.Message));
+        return true;
+    }
+
+    private MarketAcquisitionRouteActionResult FailRoute(string message, Exception? exception = null)
+    {
+        CancelActiveOperation($"Route failed; active operation cancelled. {message}");
+        return runner.FailRoute(message, exception);
     }
 }

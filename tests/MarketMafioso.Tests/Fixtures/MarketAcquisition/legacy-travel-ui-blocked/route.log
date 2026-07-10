@@ -1,0 +1,36 @@
+[00:00.000] start
+  Market acquisition route diagnostics started.
+  startedAt: 2026-07-10T09:26:01.9453234-04:00
+  assemblyName: MarketMafioso
+  assemblyVersion: 1.1.2.1
+  informationalVersion: 1.1.2.1+main.b2b73ad.dirty
+  packageDirectoryPath: [redacted]
+  observedListingsCsvPath: [redacted]
+  purchaseRecordsCsvPath: [redacted]
+
+[00:00.000] route-start
+  Route started. Next stop: Coeurl.
+  requestId: [redacted]
+  worldMode: AllWorldSweep
+  lineCount: 1
+  worldCount: 32
+  plannedQuantity: 2500
+  plannedGil: 2901349
+  firstStop: Coeurl
+  firstItem: Electrum Ingot (5066)
+  firstItemSource: Planned
+  sourceListingCount: 100
+  plannedListingCount: 100
+  opportunisticChecks: True
+
+[00:00.017] travel-ui-blocked
+  Close blocking UI before Lifestream travel: ItemSearch, ItemSearchResult.
+  blockingAddons: ItemSearch, ItemSearchResult
+
+[00:06.260] repeat
+  Previous event repeated 12 more time(s).
+  event: travel-ui-blocked
+  message: Close blocking UI before Lifestream travel: ItemSearch, ItemSearchResult.
+
+[00:06.260] stopped
+  Route stopped.

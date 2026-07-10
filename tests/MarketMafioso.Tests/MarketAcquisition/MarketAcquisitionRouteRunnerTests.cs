@@ -73,6 +73,37 @@ public sealed class MarketAcquisitionRouteRunnerTests
     }
 
     [Fact]
+    public void RecordRouteOperationSnapshot_WritesBoundedOperationEvidence()
+    {
+        var directory = CreateTempDirectory();
+        using var runner = new MarketMafioso.MarketAcquisition.MarketAcquisitionRouteRunner(directory);
+        runner.Start(CreatePlan("Maduin"), enableDiagnostics: true);
+        var executor = new MarketMafioso.MarketAcquisition.MarketAcquisitionRouteOperationExecutor();
+        var snapshot = executor.Begin(new MarketMafioso.MarketAcquisition.MarketAcquisitionRouteOperationStart
+        {
+            OperationId = "search-route-1",
+            Kind = MarketMafioso.MarketAcquisition.MarketAcquisitionRouteOperationKind.ItemSearch,
+            StartedAtUtc = DateTimeOffset.UnixEpoch,
+            StartedAtMonotonicMilliseconds = 1_000,
+            Timeout = TimeSpan.FromSeconds(15),
+            TimeoutDisposition = MarketMafioso.MarketAcquisition.MarketAcquisitionRouteOperationDisposition.Failed,
+            TimeoutMessage = "Item search timed out.",
+            Context = new Dictionary<string, string?>
+            {
+                ["itemId"] = "7017",
+            },
+        });
+
+        runner.RecordRouteOperationSnapshot(snapshot);
+
+        var text = ReadLog(runner.LastDiagnosticFilePath!);
+        Assert.Contains("route-operation", text, StringComparison.Ordinal);
+        Assert.Contains("operationId: search-route-1", text, StringComparison.Ordinal);
+        Assert.Contains("deadlineMonotonicMilliseconds: 16000", text, StringComparison.Ordinal);
+        Assert.Contains("context.itemId: 7017", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void RecordLineProgress_WritesLineIdentityToDiagnostics()
     {
         var directory = CreateTempDirectory();
@@ -823,7 +854,7 @@ public sealed class MarketAcquisitionRouteRunnerTests
     }
 
     [Fact]
-    public void RecordSearchResult_FailsWhenItemSearchAutomationExceedsWatchdog()
+    public void RecordSearchResult_DoesNotOwnSearchDeadline()
     {
         using var runner = CreateRunner();
         runner.Start(CreatePlan("Maduin"));
@@ -836,21 +867,21 @@ public sealed class MarketAcquisitionRouteRunnerTests
             Message = "Searching market board for Varnish (7017).",
         }, startedAt);
 
-        var timedOut = runner.RecordSearchResult(new MarketMafioso.Automation.MarketBoard.MarketBoardItemSearchResult
+        var later = runner.RecordSearchResult(new MarketMafioso.Automation.MarketBoard.MarketBoardItemSearchResult
         {
             Status = "SearchSent",
             Message = "Searching market board for Varnish (7017).",
         }, startedAt.AddSeconds(16));
 
         Assert.True(first.Success);
-        Assert.False(timedOut.Success);
-        Assert.Equal("Failed", runner.State);
+        Assert.True(later.Success);
+        Assert.Equal("Running", runner.State);
         Assert.False(runner.SearchSubmitted);
-        Assert.Contains("timed out", runner.StatusMessage, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Waiting", runner.StatusMessage, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
-    public void RecordSearchResult_LogsAutomationSnapshotWhenSearchTimesOut()
+    public void RecordSearchResult_LogsObservedAutomationSnapshotAfterLongWait()
     {
         var directory = CreateTempDirectory();
         using var runner = new MarketMafioso.MarketAcquisition.MarketAcquisitionRouteRunner(directory);
@@ -883,11 +914,11 @@ public sealed class MarketAcquisitionRouteRunnerTests
         var text = ReadLog(runner.LastDiagnosticFilePath!);
         Assert.Contains("automation-snapshot", text, StringComparison.Ordinal);
         Assert.Contains("step: SearchItem", text, StringComparison.Ordinal);
-        Assert.Contains("phase: TimedOut", text, StringComparison.Ordinal);
+        Assert.Contains("phase: Observed", text, StringComparison.Ordinal);
         Assert.Contains("expected: ItemSearchResultReady", text, StringComparison.Ordinal);
         Assert.Contains("observed: SearchSent", text, StringComparison.Ordinal);
-        Assert.Contains("outcome: Fatal", text, StringComparison.Ordinal);
-        Assert.Contains("nextAction: CaptureInputState", text, StringComparison.Ordinal);
+        Assert.Contains("outcome: InProgress", text, StringComparison.Ordinal);
+        Assert.Contains("nextAction: ContinuePolling", text, StringComparison.Ordinal);
         Assert.Contains("searchSource: AutofocusedTextInputRewrite", text, StringComparison.Ordinal);
     }
 

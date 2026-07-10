@@ -1,0 +1,14 @@
+{
+  "fixtureSchemaVersion": 1,
+  "sourceRunFolder": "route-20260710-092601",
+  "sourceArtifact": "route.log",
+  "capturedAtLocal": "2026-07-10T09:26:01.9453234-04:00",
+  "sanitized": true,
+  "sanitizedFields": [
+    "requestId",
+    "packageDirectoryPath",
+    "observedListingsCsvPath",
+    "purchaseRecordsCsvPath"
+  ],
+  "evidenceStatement": "A real AllWorldSweep route was blocked by ItemSearch and ItemSearchResult before Lifestream travel. It remained blocked until manually stopped."
+}

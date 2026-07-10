@@ -14,6 +14,8 @@ public sealed class MarketAcquisitionRouteEngineLifecycleTests
         Assert.Equal("No route has started.", snapshot.VisibleAcquisitionStatus);
         Assert.Null(snapshot.MarketBoardReadResult);
         Assert.Null(snapshot.LiveCandidatePlan);
+        Assert.Null(snapshot.ActiveOperation);
+        Assert.Null(snapshot.LastOperation);
     }
 
     [Fact]

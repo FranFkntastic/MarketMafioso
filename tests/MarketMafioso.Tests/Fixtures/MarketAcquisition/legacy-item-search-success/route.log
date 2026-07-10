@@ -1,0 +1,24 @@
+[00:00.001] start
+  Market acquisition route diagnostics started.
+  startedAt: 2026-07-05T19:24:44.1438464-04:00
+  assemblyName: MarketMafioso
+  assemblyVersion: 1.1.2.1
+  informationalVersion: 1.1.2.1+local-dev.01a76d9.dirty
+  packageDirectoryPath: [redacted]
+
+[00:02.028] item-search
+  Searching market board item list for Varnish (7017).
+  status: SearchSent
+  searchSubmitted: False
+  automationElapsedSeconds: 0.0
+
+[00:02.534] item-search
+  Opening exact market board item result for Varnish (7017); waiting for market listings.
+  status: ItemOpenSent
+  searchSubmitted: False
+  automationElapsedSeconds: 0.5
+
+[00:03.043] item-search
+  Market board listings are open for Varnish (7017).
+  status: ListingsReady
+  searchSubmitted: True

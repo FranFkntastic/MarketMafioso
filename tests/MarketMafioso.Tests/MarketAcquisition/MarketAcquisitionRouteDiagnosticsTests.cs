@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 namespace MarketMafioso.Tests.MarketAcquisition;
 
 public sealed class MarketAcquisitionRouteDiagnosticsTests
@@ -22,6 +24,10 @@ public sealed class MarketAcquisitionRouteDiagnosticsTests
         Assert.True(File.Exists(diagnostics.ObservedListingsCsvPath));
         Assert.EndsWith(Path.Combine("route-20260625-224512", "purchase-records.csv"), diagnostics.PurchaseRecordsCsvPath, StringComparison.Ordinal);
         Assert.True(File.Exists(diagnostics.PurchaseRecordsCsvPath));
+        Assert.EndsWith(Path.Combine("route-20260625-224512", "route-events.jsonl"), diagnostics.RouteEventsJsonlPath, StringComparison.Ordinal);
+        Assert.True(File.Exists(diagnostics.RouteEventsJsonlPath));
+        Assert.EndsWith(Path.Combine("route-20260625-224512", "manifest.json"), diagnostics.ManifestPath, StringComparison.Ordinal);
+        Assert.True(File.Exists(diagnostics.ManifestPath));
     }
 
     [Fact]
@@ -59,6 +65,9 @@ public sealed class MarketAcquisitionRouteDiagnosticsTests
         Assert.True(File.Exists(diagnostics.FilePath));
         Assert.Null(diagnostics.ObservedListingsCsvPath);
         Assert.Null(diagnostics.PurchaseRecordsCsvPath);
+        Assert.EndsWith(Path.Combine("input-capture-20260625-224512", "route-events.jsonl"), diagnostics.RouteEventsJsonlPath, StringComparison.Ordinal);
+        Assert.True(File.Exists(diagnostics.RouteEventsJsonlPath));
+        Assert.True(File.Exists(diagnostics.ManifestPath));
     }
 
     [Fact]
@@ -85,6 +94,62 @@ public sealed class MarketAcquisitionRouteDiagnosticsTests
         Assert.Contains("world: Maduin", text, StringComparison.Ordinal);
         Assert.Contains("command: /li Maduin mb", text, StringComparison.Ordinal);
         Assert.DoesNotContain("empty:", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Record_WritesVersionedOrderedRouteEvents()
+    {
+        var directory = CreateTempDirectory();
+        using var diagnostics = MarketMafioso.MarketAcquisition.MarketAcquisitionRouteDiagnostics.CreateEnabled(
+            directory,
+            DateTimeOffset.UnixEpoch);
+
+        diagnostics.Record(
+            "travel-command",
+            "Sent Lifestream command.",
+            new Dictionary<string, string?>
+            {
+                ["world"] = "Maduin",
+                ["command"] = "/li Maduin mb",
+                ["empty"] = null,
+            });
+
+        var events = ReadLog(diagnostics.RouteEventsJsonlPath!)
+            .Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+        Assert.Equal(2, events.Length);
+
+        using var start = JsonDocument.Parse(events[0]);
+        using var travel = JsonDocument.Parse(events[1]);
+        Assert.Equal(1, start.RootElement.GetProperty("schemaVersion").GetInt32());
+        Assert.Equal(1, start.RootElement.GetProperty("sequence").GetInt64());
+        Assert.Equal("start", start.RootElement.GetProperty("eventName").GetString());
+        Assert.Equal(2, travel.RootElement.GetProperty("sequence").GetInt64());
+        Assert.Equal("travel-command", travel.RootElement.GetProperty("eventName").GetString());
+        Assert.Equal("Maduin", travel.RootElement.GetProperty("details").GetProperty("world").GetString());
+        Assert.False(travel.RootElement.GetProperty("details").TryGetProperty("empty", out _));
+        Assert.True(travel.RootElement.GetProperty("elapsedMilliseconds").GetInt64() >= 0);
+    }
+
+    [Fact]
+    public void CreateEnabled_WritesManifestForReplayConsumers()
+    {
+        var directory = CreateTempDirectory();
+        using var diagnostics = MarketMafioso.MarketAcquisition.MarketAcquisitionRouteDiagnostics.CreateEnabled(
+            directory,
+            DateTimeOffset.UnixEpoch);
+
+        using var manifest = JsonDocument.Parse(File.ReadAllText(diagnostics.ManifestPath!));
+        Assert.Equal(1, manifest.RootElement.GetProperty("schemaVersion").GetInt32());
+        Assert.Equal("route", manifest.RootElement.GetProperty("packageKind").GetString());
+        Assert.Equal("route-events.jsonl", manifest.RootElement
+            .GetProperty("artifacts")
+            .GetProperty("routeEventsJsonl")
+            .GetString());
+        Assert.Equal(Path.GetFileName(diagnostics.PackageDirectoryPath), manifest.RootElement.GetProperty("runId").GetString());
+        Assert.Equal("Active", manifest.RootElement.GetProperty("captureStatus").GetString());
+        Assert.Contains(
+            manifest.RootElement.GetProperty("captureCapabilities").EnumerateArray().Select(value => value.GetString()),
+            capability => string.Equals(capability, "route-events-jsonl-v1", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -194,6 +259,9 @@ public sealed class MarketAcquisitionRouteDiagnosticsTests
         Assert.Contains("True,Complete,0,", csv, StringComparison.Ordinal);
         Assert.Contains("request-1,Coeurl,Crystal,line-1,2,Planned,5121,Darksteel Ore", csv, StringComparison.Ordinal);
         Assert.Contains("WouldBuy,SafeLiveCandidate,Below threshold.,5121,5121,Coeurl,listing-1,retainer-1,Eth,548,55,30140,False,55,30140", csv, StringComparison.Ordinal);
+        var events = ReadLog(diagnostics.RouteEventsJsonlPath!);
+        Assert.Contains("\"eventName\":\"observed-listings\"", events, StringComparison.Ordinal);
+        Assert.Contains("\"coverageStatus\":\"Complete\"", events, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -222,6 +290,8 @@ public sealed class MarketAcquisitionRouteDiagnosticsTests
         Assert.Contains("listingReadFresh,coverageStatus,unreadListings,rawItemIdMismatchCounts", csv, StringComparison.Ordinal);
         Assert.Contains("True,Incomplete,32,", csv, StringComparison.Ordinal);
         Assert.Contains("IncompleteListingCoverage,No safe rows.,0,32,100,True", csv, StringComparison.Ordinal);
+        var events = ReadLog(diagnostics.RouteEventsJsonlPath!);
+        Assert.Contains("\"coverageStatus\":\"Incomplete\"", events, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -250,6 +320,9 @@ public sealed class MarketAcquisitionRouteDiagnosticsTests
         var csv = ReadLog(diagnostics.PurchaseRecordsCsvPath!);
         Assert.Contains("requestId,world,dataCenter,lineId,itemId,itemName,source,sourceCandidateStatus,event,result", csv, StringComparison.Ordinal);
         Assert.Contains("request-1,Coeurl,Crystal,line-1,5121,Darksteel Ore,Planned,Ready,purchase-audit,Purchased,listing-1,retainer-1,55,30140,548", csv, StringComparison.Ordinal);
+        var events = ReadLog(diagnostics.RouteEventsJsonlPath!);
+        Assert.Contains("\"eventName\":\"purchase-audit\"", events, StringComparison.Ordinal);
+        Assert.Contains("\"listingId\":\"listing-1\"", events, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -262,6 +335,8 @@ public sealed class MarketAcquisitionRouteDiagnosticsTests
 
         Assert.False(diagnostics.IsEnabled);
         Assert.Null(diagnostics.FilePath);
+        Assert.Null(diagnostics.RouteEventsJsonlPath);
+        Assert.Null(diagnostics.ManifestPath);
     }
 
     [Fact]
@@ -294,6 +369,10 @@ public sealed class MarketAcquisitionRouteDiagnosticsTests
             "Planned",
             5121,
             "Ready");
+        diagnostics.Record("after-dispose", "Ignored.");
+
+        Assert.Single(ReadLog(diagnostics.RouteEventsJsonlPath!)
+            .Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries));
     }
 
     private static string CreateTempDirectory()

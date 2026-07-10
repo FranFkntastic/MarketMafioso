@@ -21,6 +21,8 @@ public sealed record MarketAcquisitionRouteEngineSnapshot
     public MarketBoardReadResult? MarketBoardReadResult { get; init; }
     public MarketBoardListingReconciliation? MarketBoardReconciliation { get; init; }
     public MarketAcquisitionLiveCandidatePlan? LiveCandidatePlan { get; init; }
+    public MarketAcquisitionRouteOperationSnapshot? ActiveOperation { get; init; }
+    public MarketAcquisitionRouteOperationSnapshot? LastOperation { get; init; }
     public MarketBoardPurchaseSession? PurchaseSession { get; init; }
     public MarketBoardPurchaseResult? LastPurchaseResult { get; init; }
     public uint ActiveWorldPurchasedQuantity { get; init; }
