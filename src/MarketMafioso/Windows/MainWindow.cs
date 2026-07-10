@@ -108,7 +108,6 @@ public class MainWindow : Window, IDisposable
     private string workshopStatus = "Workshop prep queue is idle.";
 
     private const string ProductSummary = "Workshop logistics and self-hosted inventory history.";
-    private const string InventoryModuleSummary = "Inventory Reporter exports character and retainer inventory snapshots as JSON.";
     private const string WorkshopLogisticsModuleSummary = "Workshop Logistics tracks company workshop jobs, materials, retainer restock, handoff, and assembly.";
     private const string MarketAcquisitionModuleSummary = "Build, sync, and monitor acquisition requests from one persistent board.";
     private const string LocalReceiverUrl = "http://localhost:8080/inventory";
