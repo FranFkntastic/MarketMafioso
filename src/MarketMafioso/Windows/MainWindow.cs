@@ -65,11 +65,11 @@ public class MainWindow : Window, IDisposable
     private readonly MarketAcquisitionPlanPanel marketAcquisitionPlanPanel = new();
     private readonly MarketAcquisitionRequestPickupPanel marketAcquisitionRequestPickupPanel;
     private readonly MarketAcquisitionAcceptedRequestPanel marketAcquisitionAcceptedRequestPanel;
+    private readonly MarketAcquisitionDiagnosticsPanel marketAcquisitionDiagnosticsPanel;
     private readonly MarketAcquisitionRequestBuilderPanel acquisitionRequestBuilder;
     private readonly RetainerRestockBrowserState restockBrowserState = new();
     private readonly RetainerRestockBrowserPanel restockBrowser;
 
-    private string diagnosticsFolderStatus = "Route diagnostics folder opens in Explorer.";
     private readonly WorkshopProjectSelectionState workshopProjectSelection = new();
     private IReadOnlyList<MarketAcquisitionRequestView> pendingAcquisitionRequests = [];
     private MarketAcquisitionClaimView? claimedAcquisitionRequest;
@@ -239,6 +239,14 @@ public class MainWindow : Window, IDisposable
             () => marketAcquisitionRouteRunner.LastDiagnosticFilePath,
             () => acquisitionRequestBuilderCraftAppraisal.State.CreateDiagnosticsSnapshot());
         AutomationDiagnostics = new AutomationDiagnosticsWindow(CreateAutomationDiagnosticProbes(), IsMarketAcquisitionUnlocked);
+        marketAcquisitionDiagnosticsPanel = new MarketAcquisitionDiagnosticsPanel(
+            marketAcquisitionRouteRunner,
+            marketAcquisitionRouteDiagnosticsDirectory,
+            log,
+            () => AcquisitionDiagnostics.IsOpen = true,
+            () => AutomationDiagnostics.IsOpen = true,
+            CaptureMarketBoardInputState,
+            FinalizeMarketBoardInputCaptureLog);
         settingsTab = new SettingsTabPanel(
             config,
             reporter,
@@ -314,7 +322,7 @@ public class MainWindow : Window, IDisposable
 
             if (IsMarketAcquisitionUnlocked() && ImGui.BeginTabItem("Diagnostics"))
             {
-                DrawDiagnosticsTab();
+                marketAcquisitionDiagnosticsPanel.Draw();
                 ImGui.EndTabItem();
             }
 
@@ -1838,8 +1846,8 @@ public class MainWindow : Window, IDisposable
         ImGui.TextColored(GetGuidedRouteStatusColor(), marketAcquisitionRouteRunner.StatusMessage);
         if (IsAcquisitionPlanStale())
             ImGui.TextColored(ColError, "Request changed after this plan was prepared. Prepare a fresh plan before starting.");
-        DrawPostRunDiagnosticSummary();
-        DrawLatestWorldCompletionSummary();
+        marketAcquisitionDiagnosticsPanel.DrawPostRunDiagnosticSummary();
+        marketAcquisitionDiagnosticsPanel.DrawLatestWorldCompletionSummary();
 
         if (marketAcquisitionRouteRunner.Stops.Count == 0)
         {
@@ -1909,105 +1917,6 @@ public class MainWindow : Window, IDisposable
             _ = ReprepareGuidedRouteAsync();
 
         ImGui.EndTable();
-    }
-
-    private void DrawDiagnosticsTab()
-    {
-        ImGui.Spacing();
-        ImGuiUi.SectionHeader("Diagnostics", ColHeader);
-
-        if (ImGuiUi.Button("Open Route Diagnostics Folder", true))
-            OpenDiagnosticsFolder(marketAcquisitionRouteDiagnosticsDirectory);
-
-        ImGui.SameLine();
-        if (ImGuiUi.Button("Market Acquisition Diagnostics", true))
-            AcquisitionDiagnostics.IsOpen = true;
-
-        ImGui.SameLine();
-        if (ImGuiUi.Button("Automation Diagnostics", true))
-            AutomationDiagnostics.IsOpen = true;
-
-        ImGui.TextColored(GetDiagnosticsFolderStatusColor(), diagnosticsFolderStatus);
-        ImGui.TextColored(ColMuted, marketAcquisitionRouteDiagnosticsDirectory);
-
-        if (marketAcquisitionRouteRunner.LastDiagnosticFilePath != null)
-            ImGui.TextColored(ColMuted, $"Latest report: {marketAcquisitionRouteRunner.LastDiagnosticFilePath}");
-
-        DrawPostRunDiagnosticSummary();
-        DrawMarketBoardInputCapture();
-    }
-
-    private void DrawLatestWorldCompletionSummary()
-    {
-        var summary = marketAcquisitionRouteRunner.LatestWorldCompletionSummary;
-        if (summary == null)
-            return;
-
-        ImGui.TextColored(
-            ColMuted,
-            $"Latest world: {summary.WorldName} ({FormatRouteDataCenter(summary.DataCenter)}) bought {summary.PurchasedQuantity:N0}, spent {FormatGil(summary.SpentGil)}; {summary.CompletedLineCount:N0} complete / {summary.SkippedLineCount:N0} skipped.");
-    }
-
-    private void DrawPostRunDiagnosticSummary()
-    {
-        var runSummary = marketAcquisitionRouteRunner.LastRunSummary;
-        if (runSummary != null)
-        {
-            ImGui.TextColored(
-                runSummary.FailedWorldCount > 0 || runSummary.Warnings.Count > 0 ? ColHeader : ColSuccess,
-                $"Run rollup: purchased {runSummary.PurchasedQuantity:N0}, spent {FormatGil(runSummary.SpentGil)}; {runSummary.CompletedWorldCount:N0} complete / {runSummary.PartialWorldCount:N0} partial / {runSummary.FailedWorldCount:N0} failed world(s).");
-
-            if (runSummary.OpportunisticPurchasedQuantity > 0 || runSummary.PlannedPurchasedQuantity > 0)
-            {
-                ImGui.TextColored(
-                    ColMuted,
-                    $"Planned buys: {runSummary.PlannedPurchasedQuantity:N0} / {FormatGil(runSummary.PlannedSpentGil)}. Opportunistic buys: {runSummary.OpportunisticPurchasedQuantity:N0} / {FormatGil(runSummary.OpportunisticSpentGil)}.");
-            }
-
-            if (runSummary.TopItemsBySpentGil.Count > 0)
-            {
-                var topItems = string.Join(
-                    "; ",
-                    runSummary.TopItemsBySpentGil
-                        .Take(3)
-                        .Select(item => $"{item.ItemName} {item.PurchasedQuantity:N0} / {FormatGil(item.SpentGil)}"));
-                ImGui.TextColored(ColMuted, $"Top buys: {topItems}");
-            }
-
-            if (runSummary.Warnings.Count > 0)
-            {
-                ImGui.TextColored(
-                    ColError,
-                    $"Post-run diagnostics: {runSummary.Warnings.Count:N0} warning(s). Open Diagnostics for details.");
-            }
-
-            return;
-        }
-
-        var summary = marketAcquisitionRouteRunner.LastRunDiagnosticSummary;
-        if (summary.Warnings.Count > 0)
-        {
-            ImGui.TextColored(
-                ColError,
-                $"Post-run diagnostics: {summary.Warnings.Count:N0} warning(s). Open Diagnostics for details.");
-        }
-    }
-
-    private void DrawMarketBoardInputCapture()
-    {
-        ImGui.Spacing();
-        ImGuiUi.SectionHeader("Input Capture", ColHeader);
-        ImGui.TextColored(ColMuted, "Capture current market-board UI/input state before and after manual purchase clicks or pagination attempts.");
-
-        if (ImGuiUi.Button("Capture Input State", true))
-            CaptureMarketBoardInputState();
-
-        ImGui.SameLine();
-        if (ImGuiUi.Button("Finish Capture Log", marketAcquisitionRouteRunner.CanFinalizeInputCaptureLog))
-            FinalizeMarketBoardInputCaptureLog();
-
-        if (marketAcquisitionRouteRunner.LastDiagnosticFilePath != null)
-            ImGui.TextColored(ColMuted, $"Capture log: {marketAcquisitionRouteRunner.LastDiagnosticFilePath}");
     }
 
     private void DrawGuidedRouteStops(IReadOnlyList<MarketAcquisitionGuidedRouteStop> stops)
@@ -3487,24 +3396,6 @@ public class MainWindow : Window, IDisposable
             log.Warning($"[MarketMafioso] {result.Message}");
     }
 
-    private void OpenDiagnosticsFolder(string folderPath)
-    {
-        try
-        {
-            Directory.CreateDirectory(folderPath);
-            Process.Start(new ProcessStartInfo(folderPath)
-            {
-                UseShellExecute = true,
-            });
-            diagnosticsFolderStatus = "Opened route diagnostics folder.";
-        }
-        catch (Exception ex)
-        {
-            diagnosticsFolderStatus = $"Unable to open route diagnostics folder. {ex.Message}";
-            log.Error(ex, "[MarketMafioso] Unable to open route diagnostics folder.");
-        }
-    }
-
     private MarketAcquisitionRouteLinePurchaseTotals ResolveActiveRouteLinePurchaseTotals(MarketAcquisitionWorldItemSubtask? activeSubtask)
     {
         if (activeSubtask == null)
@@ -3515,11 +3406,6 @@ public class MainWindow : Window, IDisposable
             checked(completedTotals.PurchasedQuantity + activeLinePurchasedQuantity),
             checked(completedTotals.SpentGil + activeLineSpentGil));
     }
-
-    private Vector4 GetDiagnosticsFolderStatusColor() =>
-        diagnosticsFolderStatus.StartsWith("Unable", StringComparison.OrdinalIgnoreCase)
-            ? ColError
-            : ColMuted;
 
     private CraftAppraisalRequestBuilderController CreateAcquisitionRequestBuilderCraftAppraisalController()
     {
