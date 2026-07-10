@@ -18,6 +18,7 @@ using MarketMafioso.Automation.Travel;
 using MarketMafioso.CraftArchitectCompanion;
 using MarketMafioso.MarketAcquisition;
 using MarketMafioso.RetainerRestock;
+using MarketMafioso.Windows.Main;
 using MarketMafioso.Windows.MarketAcquisitionRequestBuilder;
 using MarketMafioso.Windows.RetainerRestock;
 using MarketMafioso.WorkshopPrep;
@@ -117,10 +118,10 @@ public class MainWindow : Window, IDisposable
     private static readonly TimeSpan MarketBoardPurchaseMonitorInterval = TimeSpan.FromMilliseconds(500);
     private const int MarketAcquisitionWorldVisitCatalogMaxRecords = 2_000;
 
-    internal static readonly Vector4 ColHeader = new(0.38f, 0.73f, 1.00f, 1f);
-    internal static readonly Vector4 ColSuccess = new(0.45f, 0.90f, 0.55f, 1f);
-    internal static readonly Vector4 ColError = new(1.00f, 0.40f, 0.40f, 1f);
-    internal static readonly Vector4 ColMuted = new(0.60f, 0.60f, 0.60f, 1f);
+    internal static readonly Vector4 ColHeader = MarketMafiosoUiTheme.Header;
+    internal static readonly Vector4 ColSuccess = MarketMafiosoUiTheme.Success;
+    internal static readonly Vector4 ColError = MarketMafiosoUiTheme.Error;
+    internal static readonly Vector4 ColMuted = MarketMafiosoUiTheme.Muted;
 
     private sealed record AdvisoryPlanRow(
         int RouteOrdinal,
