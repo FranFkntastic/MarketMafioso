@@ -9,6 +9,7 @@ using System.Threading.Tasks;
 using Dalamud.Interface.Windowing;
 using Dalamud.Plugin.Services;
 using Dalamud.Bindings.ImGui;
+using MarketMafioso.AgentBridge;
 using MarketMafioso.Automation.Retainers;
 using MarketMafioso.Automation.Travel;
 using MarketMafioso.CraftArchitectCompanion;
@@ -279,6 +280,46 @@ public class MainWindow : Window, IDisposable
     public WorkshopFrozenQueueBrowserWindow FrozenQueueBrowser { get; }
     public MarketAcquisitionDiagnosticsWindow AcquisitionDiagnostics { get; }
     public AutomationDiagnosticsWindow AutomationDiagnostics { get; }
+
+    public AgentBridgeTruth CreateAgentBridgeTruth()
+    {
+        var snapshot = routeEngine.CreateSnapshot();
+        var activeOperation = snapshot.ActiveOperation;
+        var activeStop = snapshot.ActiveStop;
+        return new AgentBridgeTruth
+        {
+            SchemaVersion = 1,
+            PluginInstanceId = config.PluginInstanceId,
+            ProcessId = Environment.ProcessId,
+            PluginVersion = PluginBuildInfo.DisplayVersion,
+            CharacterName = playerState.CharacterName ?? string.Empty,
+            CurrentWorld = playerState.CurrentWorld.IsValid ? playerState.CurrentWorld.Value.Name.ToString() : string.Empty,
+            HomeWorld = playerState.HomeWorld.IsValid ? playerState.HomeWorld.Value.Name.ToString() : string.Empty,
+            MainWindowOpen = IsOpen,
+            AcquisitionDiagnosticsOpen = AcquisitionDiagnostics.IsOpen,
+            WorkspaceStatus = acquisitionWorkspace.Status,
+            WorkspaceBusy = acquisitionWorkspace.IsBusy,
+            ClaimedRequestId = acquisitionWorkspace.ClaimedRequest?.Id,
+            PreparedPlanStatus = acquisitionWorkspace.PreparedPlan?.Status,
+            Route = new AgentBridgeRouteTruth
+            {
+                State = snapshot.RouteState,
+                StatusMessage = snapshot.StatusMessage,
+                VisibleStatus = snapshot.VisibleAcquisitionStatus,
+                IsActive = snapshot.IsRouteActive,
+                IsRunning = snapshot.IsRunning,
+                IsPaused = snapshot.IsPaused,
+                ActiveWorld = activeStop?.WorldName,
+                ActiveStopStatus = activeStop?.Status,
+                ActiveOperationId = activeOperation?.OperationId,
+                ActiveOperationKind = activeOperation?.Kind.ToString(),
+                ActiveOperationPhase = activeOperation?.Phase.ToString(),
+                ActiveOperationDisposition = activeOperation?.Disposition.ToString(),
+                StopCount = snapshot.Stops.Count,
+                CompletedOrProbedStopCount = snapshot.CompletedOrProbedStopCount,
+            },
+        };
+    }
 
     public void OnFrameworkUpdate(IFramework _)
     {

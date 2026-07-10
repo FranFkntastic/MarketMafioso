@@ -173,6 +173,8 @@ internal sealed class SettingsTabPanel
 
         DrawCraftQuoteSettingsSection();
         ImGui.Spacing();
+        DrawAgentBridgeSettingsSection();
+        ImGui.Spacing();
 
         if (IsMarketAcquisitionUnlocked())
         {
@@ -256,6 +258,21 @@ internal sealed class SettingsTabPanel
         ImGui.TextColored(
             MarketMafiosoUiTheme.Muted,
             "Default off. Workshop Host should be the normal quote path; manual craft cost entry is only for local troubleshooting.");
+    }
+
+    private void DrawAgentBridgeSettingsSection()
+    {
+        ImGui.TextColored(MarketMafiosoUiTheme.Header, "Agent Test Bridge");
+        var enabled = config.EnableAgentBridge;
+        if (ImGui.Checkbox("Enable local agent test bridge", ref enabled))
+        {
+            config.EnableAgentBridge = enabled;
+            config.Save();
+        }
+
+        ImGui.TextColored(
+            MarketMafiosoUiTheme.Muted,
+            "Dev-only named-pipe bridge. It exposes read-only state plus open-window/proof commands; it cannot start routes or make purchases.");
     }
 
     private void DrawDashboardOpenSection()

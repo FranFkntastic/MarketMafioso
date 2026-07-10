@@ -10,6 +10,7 @@ using ECommons;
 using Dalamud.Interface.Windowing;
 using MarketMafioso.Automation.Runtime;
 using MarketMafioso.Automation.Travel;
+using MarketMafioso.AgentBridge;
 using MarketMafioso.MarketAcquisition;
 using MarketMafioso.WorkshopPrep;
 using MarketMafioso.Windows;
@@ -50,6 +51,9 @@ public sealed class Plugin : IDalamudPlugin
     private readonly WorkshopMaterialManifestExportService workshopMaterialManifestExport;
     private readonly WindowSystem windowSystem = new("MarketMafioso");
     private readonly MainWindow mainWindow;
+    private readonly AgentBridgeProofStore agentBridgeProofStore;
+    private readonly AgentBridgeProofWindow agentBridgeProofWindow;
+    private readonly AgentBridgeHost agentBridge;
 
     private CancellationTokenSource? timerCancellation;
 
@@ -129,11 +133,24 @@ public sealed class Plugin : IDalamudPlugin
             retainerCacheStore,
             Log);
 
+        agentBridgeProofStore = new AgentBridgeProofStore();
+        agentBridgeProofWindow = new AgentBridgeProofWindow(agentBridgeProofStore);
+        agentBridge = new AgentBridgeHost(
+            Configuration,
+            PluginInterface.GetPluginConfigDirectory(),
+            action => Framework.RunOnTick(action),
+            mainWindow.CreateAgentBridgeTruth,
+            agentBridgeProofStore,
+            () => mainWindow.IsOpen = true,
+            () => mainWindow.AcquisitionDiagnostics.IsOpen = true,
+            () => agentBridgeProofWindow.IsOpen = true);
+
         windowSystem.AddWindow(mainWindow);
         windowSystem.AddWindow(mainWindow.ProjectBrowser);
         windowSystem.AddWindow(mainWindow.FrozenQueueBrowser);
         windowSystem.AddWindow(mainWindow.AcquisitionDiagnostics);
         windowSystem.AddWindow(mainWindow.AutomationDiagnostics);
+        windowSystem.AddWindow(agentBridgeProofWindow);
 
         CommandManager.AddHandler(CmdMain, new CommandInfo(OnCommand)
         {
@@ -145,7 +162,7 @@ public sealed class Plugin : IDalamudPlugin
         PluginInterface.UiBuilder.Draw += DrawUI;
         PluginInterface.UiBuilder.OpenConfigUi += OpenConfigUi;
         PluginInterface.UiBuilder.OpenMainUi += OpenConfigUi;
-        Framework.Update += mainWindow.OnFrameworkUpdate;
+        Framework.Update += OnFrameworkUpdate;
 
         StartTimer();
 
@@ -164,6 +181,12 @@ public sealed class Plugin : IDalamudPlugin
                 mainWindow.IsOpen = !mainWindow.IsOpen;
                 break;
         }
+    }
+
+    private void OnFrameworkUpdate(IFramework framework)
+    {
+        mainWindow.OnFrameworkUpdate(framework);
+        agentBridge.Tick();
     }
 
     private void DrawUI() => windowSystem.Draw();
@@ -199,11 +222,12 @@ public sealed class Plugin : IDalamudPlugin
     public void Dispose()
     {
         StopTimer();
+        agentBridge.Dispose();
 
         PluginInterface.UiBuilder.Draw -= DrawUI;
         PluginInterface.UiBuilder.OpenConfigUi -= OpenConfigUi;
         PluginInterface.UiBuilder.OpenMainUi -= OpenConfigUi;
-        Framework.Update -= mainWindow.OnFrameworkUpdate;
+        Framework.Update -= OnFrameworkUpdate;
 
         CommandManager.RemoveHandler(CmdMain);
 
