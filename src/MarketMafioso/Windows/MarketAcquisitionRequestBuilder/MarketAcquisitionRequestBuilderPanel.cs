@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using System.Numerics;
 using System.Threading.Tasks;
 using Dalamud.Bindings.ImGui;
@@ -14,28 +13,23 @@ namespace MarketMafioso.Windows.MarketAcquisitionRequestBuilder;
 
 public sealed class MarketAcquisitionRequestBuilderPanel
 {
-    private readonly Configuration config;
     private readonly IReadOnlyList<AcquisitionItemOption> itemOptions;
     private readonly CraftAppraisalRequestBuilderController craftAppraisal;
-    private readonly Func<MarketAcquisitionRequestDocument, Task<MarketAcquisitionRequestBuilderSyncOutcome>> syncRequest;
-    private readonly Func<MarketAcquisitionRequestDocument, Task<MarketAcquisitionRequestBuilderRefreshOutcome>> refreshRequest;
-    private readonly Action<MarketAcquisitionRequestDocument, MarketAcquisitionRequestView?> documentAdopted;
+    private readonly MarketAcquisitionRequestBuilderController controller;
     private readonly ItemAutocompleteState itemAutocomplete = new();
 
-    private MarketAcquisitionRequestDocument document;
-    private MarketAcquisitionRequestDocument? pendingRemoteDocument;
-    private MarketAcquisitionRequestView? pendingRemoteRequest;
-    private int selectedLineIndex = -1;
     private string quantityMode = "AllBelowThreshold";
     private string targetQuantityBuffer = string.Empty;
     private string maxQuantityBuffer = string.Empty;
     private string maxUnitPriceBuffer = string.Empty;
     private string gilCapBuffer = string.Empty;
     private string hqPolicy = "Either";
-    private string status = "Request builder ready.";
-    private bool isSyncing;
-    private bool isRefreshing;
     private bool isAppraising;
+
+    private MarketAcquisitionRequestDocument document => controller.Document;
+    private MarketAcquisitionRequestDocument? pendingRemoteDocument => controller.PendingRemoteDocument;
+    private int selectedLineIndex => controller.SelectedLineIndex;
+    private string status => controller.Status;
 
     public MarketAcquisitionRequestBuilderPanel(
         Configuration config,
@@ -45,51 +39,27 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         Func<MarketAcquisitionRequestDocument, Task<MarketAcquisitionRequestBuilderRefreshOutcome>> refreshRequest,
         Action<MarketAcquisitionRequestDocument, MarketAcquisitionRequestView?> documentAdopted)
     {
-        this.config = config;
         this.craftAppraisal = craftAppraisal;
-        this.syncRequest = syncRequest;
-        this.refreshRequest = refreshRequest;
-        this.documentAdopted = documentAdopted;
+        controller = new MarketAcquisitionRequestBuilderController(
+            config,
+            syncRequest,
+            refreshRequest,
+            documentAdopted);
         itemOptions = ItemAutocompleteControl.LoadItemOptions(dataManager);
-        document = MarketAcquisitionRequestDocumentPersistence.Restore(config);
     }
 
     public MarketAcquisitionRequestDocument CurrentDocument => document;
 
-    public string CurrentIntentHash => MarketAcquisitionRequestDocumentHasher.ComputeIntentHash(document);
+    public string CurrentIntentHash => controller.CurrentIntentHash;
 
     public int LineCount => document.Lines.Count;
 
-    public void MarkPlanPrepared(string planHash)
-    {
-        document = document with { LastPlanHash = planHash, UpdatedAtUtc = DateTimeOffset.UtcNow };
-        SaveDocument();
-    }
+    public void MarkPlanPrepared(string planHash) => controller.MarkPlanPrepared(planHash);
 
-    public void AdoptRequest(MarketAcquisitionRequestView request)
-    {
-        document = MarketAcquisitionRequestDocumentMapper.FromRequestView(request);
-        pendingRemoteDocument = null;
-        pendingRemoteRequest = null;
-        selectedLineIndex = -1;
-        status = "Loaded request into builder.";
-        SaveDocument();
-        documentAdopted(document, request);
-    }
+    public void AdoptRequest(MarketAcquisitionRequestView request) => controller.AdoptRequest(request);
 
-    public bool AdoptRestoredRequestIfSafe(MarketAcquisitionRequestView request)
-    {
-        if (!ShouldAdoptRestoredRequest(request))
-            return false;
-
-        document = MarketAcquisitionRequestDocumentMapper.FromRequestView(request);
-        pendingRemoteDocument = null;
-        pendingRemoteRequest = null;
-        selectedLineIndex = -1;
-        status = "Loaded restored request into builder.";
-        SaveDocument();
-        return true;
-    }
+    public bool AdoptRestoredRequestIfSafe(MarketAcquisitionRequestView request) =>
+        controller.AdoptRestoredRequestIfSafe(request);
 
     public void Draw(MarketAcquisitionRequestBuilderContext context)
     {
@@ -198,46 +168,13 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         !string.IsNullOrWhiteSpace(context.CurrentPlanHash) &&
         !string.Equals(context.CurrentPlanHash, CurrentIntentHash, StringComparison.Ordinal);
 
-    private bool ShouldAdoptRestoredRequest(MarketAcquisitionRequestView request)
-    {
-        if (string.IsNullOrWhiteSpace(request.Id))
-            return false;
-
-        if (string.IsNullOrWhiteSpace(document.RemoteRequestId))
-            return true;
-
-        if (!string.Equals(document.RemoteRequestId, request.Id, StringComparison.Ordinal))
-            return true;
-
-        if (document.SyncStatus.Equals("LocalEdits", StringComparison.OrdinalIgnoreCase) ||
-            document.SyncStatus.Equals("RemoteChanged", StringComparison.OrdinalIgnoreCase))
-        {
-            return false;
-        }
-
-        return document.Lines.Count == 0 ||
-               document.RemoteRevision != request.Revision ||
-               !document.SyncStatus.Equals("SyncedClean", StringComparison.OrdinalIgnoreCase);
-    }
-
     private void DrawRouteScope(MarketAcquisitionRequestBuilderContext context)
     {
         var scope = RequestRouteScope.FromDocument(document);
         RequestRouteScopeSelector.DrawCompact(
             "AcquisitionRequestBuilder",
             scope,
-            updated =>
-            {
-                document = MarkEdited(document with
-                {
-                    Region = updated.Region,
-                    WorldMode = updated.WorldMode,
-                    SweepScope = updated.SweepScope,
-                    SweepDataCenters = updated.SweepDataCenters.ToList(),
-                });
-                pendingRemoteDocument = null;
-                pendingRemoteRequest = null;
-            },
+            controller.UpdateRouteScope,
             MainWindow.ColMuted,
             MainWindow.ColError);
     }
@@ -364,8 +301,7 @@ public sealed class MarketAcquisitionRequestBuilderPanel
             ImGui.TableNextColumn();
             if (ImGui.Selectable($"{FormatLineItem(line)}##AcquisitionRequestBuilderLine{index}", selectedLineIndex == index))
             {
-                selectedLineIndex = index;
-                LoadLineIntoEditor(line);
+                SelectLineForEditing(index, line);
             }
 
             ImGui.TableNextColumn();
@@ -424,7 +360,7 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         if (ImGuiUi.MenuItem("Enter manually", true))
         {
             SelectLineForEditing(index, line);
-            status = "Edit unit cost ceiling directly in the row.";
+            controller.SetStatus("Edit unit cost ceiling directly in the row.");
         }
 
         if (ImGuiUi.MenuItem("Clear unit cost ceiling", line.MaxUnitPrice > 0))
@@ -461,7 +397,7 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         if (ImGuiUi.MenuItem("Enter manually", true))
         {
             SelectLineForEditing(index, line);
-            status = "Edit total spend ceiling directly in the row.";
+            controller.SetStatus("Edit total spend ceiling directly in the row.");
         }
 
         if (ImGuiUi.MenuItem("Clear total spend ceiling", line.GilCap > 0))
@@ -589,7 +525,7 @@ public sealed class MarketAcquisitionRequestBuilderPanel
 
     private void DrawActions(MarketAcquisitionRequestBuilderContext context)
     {
-        var busy = context.IsBusy || isSyncing || isRefreshing || isAppraising;
+        var busy = context.IsBusy || controller.IsSyncing || controller.IsRefreshing || isAppraising;
         var canSync = !busy &&
                       !context.IsRouteActive &&
                       context.HasCharacterScope &&
@@ -616,43 +552,20 @@ public sealed class MarketAcquisitionRequestBuilderPanel
 
     private void SelectLineForEditing(int index, MarketAcquisitionRequestLineDocument line)
     {
-        selectedLineIndex = index;
-        LoadLineIntoEditor(line);
+        if (controller.SelectLine(index))
+            LoadLineIntoEditor(line);
     }
 
     private void SetLineMaxUnitPrice(int index, uint maxUnitPrice, string message)
     {
-        UpdateLine(
-            index,
-            line => line with { MaxUnitPrice = maxUnitPrice },
-            message);
+        if (controller.SetLineMaxUnitPrice(index, maxUnitPrice, message))
+            LoadLineIntoEditor(document.Lines[index]);
     }
 
     private void SetLineGilCap(int index, uint gilCap, string message)
     {
-        UpdateLine(
-            index,
-            line => line with { GilCap = gilCap },
-            message);
-    }
-
-    private void UpdateLine(
-        int index,
-        Func<MarketAcquisitionRequestLineDocument, MarketAcquisitionRequestLineDocument> update,
-        string message)
-    {
-        if (index < 0 || index >= document.Lines.Count)
-            return;
-
-        var lines = document.Lines.ToList();
-        lines[index] = update(lines[index]);
-        document = MarkEdited(document with { Lines = lines });
-        pendingRemoteDocument = null;
-        pendingRemoteRequest = null;
-        selectedLineIndex = index;
-        LoadLineIntoEditor(lines[index]);
-        status = message;
-        SaveDocument();
+        if (controller.SetLineGilCap(index, gilCap, message))
+            LoadLineIntoEditor(document.Lines[index]);
     }
 
     private void ApplyLineEdit(
@@ -666,24 +579,18 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         uint? gilCap = null,
         string message = "Line updated.")
     {
-        if (index < 0 || index >= document.Lines.Count)
-            return;
-
-        document = RequestDocumentMutation.ApplyLineEdit(
-            document,
-            index,
-            quantityMode ?? line.QuantityMode,
-            targetQuantity ?? line.TargetQuantity,
-            maxQuantity ?? line.MaxQuantity,
-            hqPolicy ?? line.HqPolicy,
-            maxUnitPrice ?? line.MaxUnitPrice,
-            gilCap ?? line.GilCap);
-        pendingRemoteDocument = null;
-        pendingRemoteRequest = null;
-        selectedLineIndex = index;
-        LoadLineIntoEditor(document.Lines[index]);
-        status = message;
-        SaveDocument();
+        if (controller.ApplyLineEdit(
+                index,
+                quantityMode ?? line.QuantityMode,
+                targetQuantity ?? line.TargetQuantity,
+                maxQuantity ?? line.MaxQuantity,
+                hqPolicy ?? line.HqPolicy,
+                maxUnitPrice ?? line.MaxUnitPrice,
+                gilCap ?? line.GilCap,
+                message))
+        {
+            LoadLineIntoEditor(document.Lines[index]);
+        }
     }
 
     private static uint GetCapQuantity(MarketAcquisitionRequestLineDocument line) =>
@@ -721,11 +628,11 @@ public sealed class MarketAcquisitionRequestBuilderPanel
                 return;
             }
 
-            status = "Craft Architect did not return a usable unit cost ceiling for this line.";
+            controller.SetStatus("Craft Architect did not return a usable unit cost ceiling for this line.");
         }
         catch (Exception ex)
         {
-            status = $"Craft Architect quote failed: {ex.Message}";
+            controller.SetStatus($"Craft Architect quote failed: {ex.Message}");
         }
         finally
         {
@@ -749,124 +656,28 @@ public sealed class MarketAcquisitionRequestBuilderPanel
             MaxUnitPrice = ParseUInt(maxUnitPriceBuffer),
             GilCap = ParseUInt(gilCapBuffer),
         };
-        var lines = document.Lines.ToList();
-        if (selectedLineIndex >= 0 && selectedLineIndex < lines.Count)
-        {
-            lines[selectedLineIndex] = line;
-        }
-        else
-        {
-            lines.Add(line);
-            selectedLineIndex = lines.Count - 1;
-        }
-
-        document = MarkEdited(document with { Lines = lines });
-        pendingRemoteDocument = null;
-        pendingRemoteRequest = null;
-        status = "Local request updated.";
-        SaveDocument();
+        controller.ApplyEditorLine(line);
     }
 
     private void RemoveLine(int index)
     {
-        if (index < 0 || index >= document.Lines.Count)
-            return;
-
-        var lines = document.Lines.ToList();
-        lines.RemoveAt(index);
-        selectedLineIndex = -1;
-        ClearLineEditor();
-        document = MarkEdited(document with { Lines = lines });
-        pendingRemoteDocument = null;
-        pendingRemoteRequest = null;
-        status = "Line removed.";
-        SaveDocument();
+        if (controller.RemoveLine(index))
+            ClearLineEditor();
     }
 
-    private async Task SyncAsync(MarketAcquisitionRequestBuilderContext context)
-    {
-        if (isSyncing)
-            return;
+    private Task SyncAsync(MarketAcquisitionRequestBuilderContext context) =>
+        controller.SyncAsync(context.CharacterName, context.World);
 
-        isSyncing = true;
-        try
-        {
-            var scopedDocument = document with
-            {
-                TargetCharacterName = context.CharacterName,
-                TargetWorld = context.World,
-            };
-            var outcome = await syncRequest(scopedDocument).ConfigureAwait(false);
-            document = outcome.Document;
-            pendingRemoteDocument = null;
-            pendingRemoteRequest = null;
-            selectedLineIndex = -1;
-            status = outcome.StatusMessage;
-            SaveDocument();
-        }
-        catch (Exception ex)
-        {
-            document = document with { SyncStatus = "SyncFailed", UpdatedAtUtc = DateTimeOffset.UtcNow };
-            status = $"Sync failed: {ex.Message}";
-            SaveDocument();
-        }
-        finally
-        {
-            isSyncing = false;
-        }
-    }
+    private Task RefreshAsync() => controller.RefreshAsync();
 
-    private async Task RefreshAsync()
-    {
-        if (isRefreshing)
-            return;
-
-        isRefreshing = true;
-        try
-        {
-            var outcome = await refreshRequest(document).ConfigureAwait(false);
-            document = outcome.Document;
-            pendingRemoteDocument = outcome.RemoteDocument;
-            pendingRemoteRequest = outcome.RemoteRequest;
-            status = outcome.StatusMessage;
-            SaveDocument();
-        }
-        catch (Exception ex)
-        {
-            status = $"Refresh failed: {ex.Message}";
-        }
-        finally
-        {
-            isRefreshing = false;
-        }
-    }
-
-    private void AdoptRemote()
-    {
-        if (pendingRemoteDocument is null)
-            return;
-
-        document = pendingRemoteDocument;
-        var remote = pendingRemoteRequest;
-        pendingRemoteDocument = null;
-        pendingRemoteRequest = null;
-        selectedLineIndex = -1;
-        status = "Loaded server copy.";
-        SaveDocument();
-        documentAdopted(document, remote);
-    }
+    private void AdoptRemote() => controller.AdoptRemote();
 
     private void ClearDraft(MarketAcquisitionRequestBuilderContext context)
     {
-        document = MarketAcquisitionRequestDocument.CreateDefault(
+        controller.ClearDraft(
             context.HasCharacterScope ? context.CharacterName : string.Empty,
             context.HasCharacterScope ? context.World : string.Empty);
-        pendingRemoteDocument = null;
-        pendingRemoteRequest = null;
-        selectedLineIndex = -1;
         ClearLineEditor();
-        status = "Local request cleared.";
-        SaveDocument();
     }
 
     private void EnsureCharacterScope(MarketAcquisitionRequestBuilderContext context)
@@ -880,30 +691,7 @@ public sealed class MarketAcquisitionRequestBuilderPanel
             return;
         }
 
-        document = document with
-        {
-            TargetCharacterName = context.CharacterName,
-            TargetWorld = context.World,
-            UpdatedAtUtc = DateTimeOffset.UtcNow,
-        };
-        SaveDocument();
-    }
-
-    private MarketAcquisitionRequestDocument MarkEdited(MarketAcquisitionRequestDocument next)
-    {
-        var statusName = string.IsNullOrWhiteSpace(document.RemoteRequestId) ? "NewDraft" : "LocalEdits";
-        return next with
-        {
-            LocalRevision = document.LocalRevision + 1,
-            SyncStatus = statusName,
-            UpdatedAtUtc = DateTimeOffset.UtcNow,
-        };
-    }
-
-    private void SaveDocument()
-    {
-        MarketAcquisitionRequestDocumentPersistence.Save(config, document);
-        config.Save();
+        controller.EnsureCharacterScope(context.CharacterName, context.World);
     }
 
     private void LoadLineIntoEditor(MarketAcquisitionRequestLineDocument line)
@@ -928,7 +716,7 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         maxUnitPriceBuffer = string.Empty;
         gilCapBuffer = string.Empty;
         hqPolicy = "Either";
-        selectedLineIndex = -1;
+        controller.ClearSelection();
     }
 
     private static uint ParseUInt(string value) =>
