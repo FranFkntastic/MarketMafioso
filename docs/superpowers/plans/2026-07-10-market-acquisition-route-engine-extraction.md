@@ -222,7 +222,7 @@ public interface IMarketAcquisitionPurchaseIo
 public interface IMarketAcquisitionRouteReporter
 {
     bool CanReport { get; }
-    Task ReportRouteProgressAsync(MarketAcquisitionRouteProgressReport report, CancellationToken cancellationToken);
+    Task<MarketAcquisitionRouteProgressReportOutcome> ReportRouteProgressAsync(MarketAcquisitionRouteProgressReport report, CancellationToken cancellationToken);
     Task ReportPurchaseAuditAsync(MarketAcquisitionPurchaseAuditReport report, CancellationToken cancellationToken);
     Task ReportLineProgressAsync(MarketAcquisitionLineProgressReport report, CancellationToken cancellationToken);
 }
@@ -260,6 +260,10 @@ public sealed record MarketAcquisitionRouteProgressReport(
     string Phase,
     string Message);
 
+public sealed record MarketAcquisitionRouteProgressReportOutcome(
+    string Action,
+    MarketAcquisitionRequestView Request);
+
 public sealed record MarketAcquisitionPurchaseAuditReport(
     string RequestId,
     string ClaimToken,
@@ -292,6 +296,7 @@ Create `src/MarketMafioso/MarketAcquisition/MarketAcquisitionRouteEngineTickResu
 
 ```csharp
 using System;
+using MarketMafioso.Automation.MarketBoard;
 
 namespace MarketMafioso.MarketAcquisition;
 
@@ -446,10 +451,17 @@ internal sealed class RecordingRouteReporter : IMarketAcquisitionRouteReporter
     public List<MarketAcquisitionPurchaseAuditReport> PurchaseAuditReports { get; } = [];
     public List<MarketAcquisitionLineProgressReport> LineProgressReports { get; } = [];
 
-    public Task ReportRouteProgressAsync(MarketAcquisitionRouteProgressReport report, CancellationToken cancellationToken)
+    public Task<MarketAcquisitionRouteProgressReportOutcome> ReportRouteProgressAsync(MarketAcquisitionRouteProgressReport report, CancellationToken cancellationToken)
     {
         RouteProgressReports.Add(report);
-        return Task.CompletedTask;
+        return Task.FromResult(
+            new MarketAcquisitionRouteProgressReportOutcome(
+                MarketAcquisitionRouteProgressReporter.ResolveAction(report.RouteState),
+                new MarketAcquisitionRequestView
+                {
+                    Id = report.RequestId,
+                    Status = report.RouteState.Equals("Completed", StringComparison.OrdinalIgnoreCase) ? "Complete" : "Running",
+                }));
     }
 
     public Task ReportPurchaseAuditAsync(MarketAcquisitionPurchaseAuditReport report, CancellationToken cancellationToken)
@@ -598,6 +610,8 @@ internal sealed class MarketAcquisitionRouteEngineState
 Create `src/MarketMafioso/MarketAcquisition/MarketAcquisitionRouteEngineSnapshot.cs`:
 
 ```csharp
+using MarketMafioso.Automation.MarketBoard;
+
 namespace MarketMafioso.MarketAcquisition;
 
 public sealed record MarketAcquisitionRouteEngineSnapshot
@@ -1193,6 +1207,7 @@ public sealed class MarketAcquisitionRouteEngineProbeTests
         var snapshot = harness.Engine.CreateSnapshot();
         Assert.NotNull(snapshot.MarketBoardReadResult);
         Assert.Null(snapshot.LiveCandidatePlan);
+        Assert.False(snapshot.IsProbeRunning);
         Assert.Equal("Arrived", harness.Runner.ActiveStop?.Status);
     }
 
@@ -1208,6 +1223,7 @@ public sealed class MarketAcquisitionRouteEngineProbeTests
         harness.Engine.ProbeLiveMarketBoard();
 
         Assert.NotNull(harness.Ui.LastRequestedScrollRow);
+        Assert.False(harness.Engine.CreateSnapshot().IsProbeRunning);
         Assert.Equal("Arrived", harness.Runner.ActiveStop?.Status);
         Assert.Equal("IncompleteListingCoverage", harness.Engine.CreateSnapshot().LiveCandidatePlan?.Status);
     }
@@ -1228,6 +1244,45 @@ Move `ProbeLiveMarketBoardCore()` and `TryContinueVisibleListingRead(...)` into 
 
 ```csharp
 public void ProbeLiveMarketBoard()
+{
+    try
+    {
+        ProbeLiveMarketBoardCore();
+
+        var activeStop = runner.ActiveStop;
+        if (activeStop is { Status: "Arrived" } &&
+            !string.Equals(state.MarketBoardReadResult?.Status, "Ready", StringComparison.OrdinalIgnoreCase))
+        {
+            if (string.Equals(state.MarketBoardReadResult?.Status, "NoSearchItem", StringComparison.OrdinalIgnoreCase))
+                runner.ClearSearchSubmission("Market board results did not expose a searched item id.");
+
+            runner.BeginProbe(
+                $"Arrived on {activeStop.WorldName}; waiting for live listings. {state.MarketBoardReadResult?.Message ?? "Market board read has not completed."}");
+        }
+    }
+    catch (Exception ex)
+    {
+        var activeStop = runner.ActiveStop;
+        var activeLine = claimedRequest == null ? null : GetActiveRouteLine(claimedRequest);
+        var itemLabel = activeLine == null ? "active item" : $"{activeLine.ItemName ?? "item"} ({activeLine.ItemId})";
+        var worldLabel = activeStop?.WorldName ??
+                         (context.IsCurrentWorldAvailable ? context.GetCurrentWorldName() : "unknown world");
+        var message = $"Live market board probe failed for {itemLabel} on {worldLabel}. {ex.Message}";
+        runner.FailRoute(message, ex);
+        state.AcquisitionStatus = message;
+    }
+    finally
+    {
+        if (runner.ActiveStop?.Status != "Arrived")
+            runner.ClearSearchSubmission("Route advanced or stopped before the next live listing read.");
+
+        state.ProbeRunning = false;
+        state.NextRouteMonitorUtc = clock.UtcNow.AddMilliseconds(500);
+        ReportRouteProgress();
+    }
+}
+
+private void ProbeLiveMarketBoardCore()
 {
     var plan = runner.ActivePlan ?? throw new InvalidOperationException("Prepare a live candidate plan before probing live market board listings.");
     var claimed = claimedRequest ?? throw new InvalidOperationException("No dashboard request is accepted.");
@@ -1293,7 +1348,13 @@ public void ProbeLiveMarketBoard()
         ? runner.RecordProbe(currentWorld, state.LiveCandidatePlan)
         : null;
     if (guidedRouteResult?.Success == true && state.LiveCandidatePlan != null)
-        evidence.RecordProbeVisit(currentWorld, activeLine, activeSubtask, state.LiveCandidatePlan);
+        evidence.RecordProbeVisit(
+            currentWorld,
+            activeLine,
+            activeSubtask,
+            state.LiveCandidatePlan,
+            claimed.Id,
+            state.ProgressNonce);
 
     state.AcquisitionStatus = state.MarketBoardReconciliation == null
         ? state.MarketBoardReadResult.Message
@@ -1301,8 +1362,6 @@ public void ProbeLiveMarketBoard()
     if (guidedRouteResult != null)
         state.AcquisitionStatus = $"{state.AcquisitionStatus} Route: {guidedRouteResult.Message}";
 
-    state.ProbeRunning = false;
-    state.NextRouteMonitorUtc = clock.UtcNow.AddMilliseconds(500);
 }
 ```
 
@@ -1523,6 +1582,8 @@ public void MonitorMarketBoardPurchase_CompletedPurchaseIncrementsCounters()
 }
 ```
 
+This test intentionally models both phases that `MarketBoardAutomationController.MonitorPurchase(...)` performs on a due tick: confirmation submission, then a fresh listing-removal read. Do not assert purchase counters after only `ConfirmationSubmitted` without providing the fresh read.
+
 Run:
 
 ```powershell
@@ -1533,7 +1594,7 @@ Expected: compile fails for missing `MonitorMarketBoardPurchase`.
 
 - [ ] **Step 2: Implement purchase monitor**
 
-Move `MonitorMarketBoardPurchase()`, `ReportConfirmedPurchase(...)`, `ReportAcquisitionLineProgress(...)`, `CreatePurchaseConfirmationSnapshot(...)`, `ClassifyPurchaseConfirmationOutcome(...)`, and related helpers into the engine.
+Move `MonitorMarketBoardPurchase()`, `ReportConfirmedPurchase(...)`, `ReportAcquisitionLineProgress(...)`, `CreatePurchaseConfirmationSnapshot(...)`, and related helpers into the engine. Keep the existing `MarketBoardAutomationController.MonitorPurchase(...)` state machine; do not reimplement confirmation/listing-removal state inside the engine.
 
 Add:
 
@@ -1558,49 +1619,69 @@ public MarketAcquisitionRouteEngineTickResult MonitorMarketBoardPurchase(bool is
     if (!purchaseAutomation.IsMonitorDue(now))
         return MarketAcquisitionRouteEngineTickResult.Idle("Waiting for purchase monitor tick.");
 
-    ProcessPurchaseMonitorSession(session, now);
-    return MarketAcquisitionRouteEngineTickResult.Worked(runner.StatusMessage, purchaseAutomation.NextMonitorUtc);
+    try
+    {
+        var tick = purchaseAutomation.MonitorPurchase(
+            now,
+            MarketBoardPurchaseMonitorInterval,
+            MarketBoardPurchaseListingRemovalWatchdog,
+            candidate => purchase.TryConfirmPendingPurchase(candidate),
+            () => marketBoard.ReadCurrentListings(context.GetCurrentWorldName()));
+
+        if (!tick.DidWork)
+            return MarketAcquisitionRouteEngineTickResult.Idle("Purchase monitor had no due work.");
+
+        ApplyPurchaseMonitorTick(tick, session);
+        return MarketAcquisitionRouteEngineTickResult.Worked(state.AcquisitionStatus, purchaseAutomation.NextMonitorUtc);
+    }
+    catch (Exception ex)
+    {
+        purchaseAutomation.RecordMonitorFailure("PurchaseMonitorFailed", ex.Message);
+        state.AcquisitionStatus = $"Purchase monitor failed: {ex.Message}";
+        runner.FailRoute(state.AcquisitionStatus, ex);
+        ReportRouteProgress();
+        return MarketAcquisitionRouteEngineTickResult.Worked(state.AcquisitionStatus, purchaseAutomation.NextMonitorUtc);
+    }
 }
 ```
 
 Use `purchase.TryConfirmPendingPurchase(...)` and `marketBoard.ReadCurrentListings(context.GetCurrentWorldName())`.
 
-Implement `ProcessPurchaseMonitorSession` by moving the existing confirmation branches in this order:
+Implement `ApplyPurchaseMonitorTick` by moving the existing post-monitor branches from `MainWindow.MonitorMarketBoardPurchase()`:
 
 ```csharp
-private void ProcessPurchaseMonitorSession(MarketBoardPurchaseSession session, DateTimeOffset now)
+private void ApplyPurchaseMonitorTick(MarketBoardPurchaseMonitorTick tick, MarketBoardPurchaseSession previousSession)
 {
-    if (session.PendingCandidate == null)
+    if (tick.ConfirmationResult != null)
     {
-        purchaseAutomation.CompleteSession("No pending candidate remains.");
-        return;
+        var candidate = tick.ConfirmationResult.Candidate ?? previousSession.Candidate;
+        runner.RecordAutomationSnapshot(CreatePurchaseConfirmationSnapshot(tick.ConfirmationResult, candidate));
     }
 
-    var confirmation = purchase.TryConfirmPendingPurchase(session.PendingCandidate);
-    purchaseAutomation.RecordPurchaseResult(confirmation, now);
-    if (confirmation.Status is "ConfirmationSubmitted")
+    if (tick.FreshRead != null)
     {
-        purchaseAutomation.ScheduleNextMonitor(now, MarketBoardPurchaseMonitorInterval);
-        return;
+        state.MarketBoardReadResult = tick.FreshRead;
+        if (tick.FreshReadSession != null)
+            runner.RecordAutomationSnapshot(tick.FreshReadSession.CreateFreshReadSnapshot(tick.FreshRead));
     }
 
-    if (confirmation.Status is "Purchased")
+    var session = tick.Session ?? previousSession;
+    state.AcquisitionStatus = $"Purchase: {session.Status}. {session.Message}";
+    if (session.Status.Equals("Completed", StringComparison.OrdinalIgnoreCase))
     {
-        ReportConfirmedPurchase(confirmation);
-        CompleteActiveWorldPurchaseBatch(context.GetCurrentWorldName());
-        return;
+        var completedCandidate = session.Candidate;
+        state.ActiveWorldPurchasedQuantity = checked(state.ActiveWorldPurchasedQuantity + completedCandidate.Quantity);
+        state.ActiveWorldSpentGil = checked(state.ActiveWorldSpentGil + completedCandidate.TotalGil);
+        state.ActiveLinePurchasedQuantity = checked(state.ActiveLinePurchasedQuantity + completedCandidate.Quantity);
+        state.ActiveLineSpentGil = checked(state.ActiveLineSpentGil + completedCandidate.TotalGil);
+        ReportConfirmedPurchase(completedCandidate, state.ActiveLinePurchasedQuantity, state.ActiveLineSpentGil);
+        ClearMarketBoardAutomationState();
+        if (state.MarketBoardReadResult?.Status is "MarketBoardNotOpen" or "NoListings")
+            CompleteActiveWorldPurchaseBatch(context.GetCurrentWorldName());
+        else
+            BeginNextWorldPurchase();
     }
-
-    if (confirmation.Status is "ListingStillVisible")
-    {
-        var freshRead = marketBoard.ReadCurrentListings(context.GetCurrentWorldName());
-        var snapshot = CreatePurchaseConfirmationSnapshot(session.PendingCandidate, freshRead);
-        var outcome = ClassifyPurchaseConfirmationOutcome(session.PendingCandidate, snapshot, now);
-        ApplyPurchaseConfirmationOutcome(outcome, freshRead);
-        return;
-    }
-
-    if (!session.IsActive)
+    else if (!session.IsActive)
     {
         runner.FailRoute($"World purchase batch stopped: {session.Message}");
         state.AcquisitionStatus = runner.StatusMessage;
@@ -1685,6 +1766,14 @@ Expected: compile fails if `ReportRouteProgress` is still private/no-op.
 
 Move route progress idempotency from `MainWindow.ReportGuidedRouteProgress()` into engine `ReportRouteProgress()`.
 
+Before adding `ReportRouteProgress()`, add the `MarketAcquisitionClaimLifecycleController` from Step 3, then add this engine field and constructor dependency:
+
+```csharp
+private readonly MarketAcquisitionClaimLifecycleController claimLifecycle;
+```
+
+Update `MarketAcquisitionRouteEngineHarness` in the same task to pass a test lifecycle controller with in-memory claimed-request setters. Do not leave reporting tests dependent on `MainWindow` fields.
+
 Use the reporter port:
 
 ```csharp
@@ -1713,7 +1802,8 @@ public void ReportRouteProgress()
     var routeStopId = activeStop == null ? null : $"{activeStop.DataCenter}:{activeStop.WorldName}";
     var phase = activeStop?.Status ?? runnerState;
 
-    _ = reporter.ReportRouteProgressAsync(
+    var reportSessionVersion = state.ProgressSessionVersion;
+    _ = ReportRouteProgressAsync(
         new MarketAcquisitionRouteProgressReport(
             claimed.Id,
             claimed.ClaimToken,
@@ -1724,11 +1814,41 @@ public void ReportRouteProgress()
             activeStop?.WorldName,
             phase,
             message),
-        CancellationToken.None);
+        claimed,
+        reportSessionVersion);
+}
+
+private async Task ReportRouteProgressAsync(
+    MarketAcquisitionRouteProgressReport report,
+    MarketAcquisitionClaimView claimed,
+    long reportSessionVersion)
+{
+    try
+    {
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var outcome = await reporter.ReportRouteProgressAsync(report, cancellation.Token).ConfigureAwait(false);
+        claimLifecycle.ApplySuccessfulRouteProgressReport(
+            outcome,
+            claimed,
+            reportSessionVersion,
+            state.ProgressSessionVersion,
+            report.Message);
+    }
+    catch (Exception ex)
+    {
+        if (!claimLifecycle.TryHandleRouteProgressConflict(
+                ex,
+                claimed,
+                reportSessionVersion,
+                state.ProgressSessionVersion))
+        {
+            state.AcquisitionStatus = $"Route progress report failed: {ex.Message}";
+        }
+    }
 }
 ```
 
-For this slice, keep reporter async fire-and-forget behavior equivalent. If tests need synchronous assertions, the fake reporter completes synchronously.
+For this slice, keep the outer call fire-and-forget as it is today, but require the async body to apply successful server outcomes and conflict reconciliation through `MarketAcquisitionClaimLifecycleController`. If tests need synchronous assertions, the fake reporter completes synchronously and the lifecycle controller fake records applied outcomes.
 
 - [ ] **Step 3: Add claim lifecycle controller**
 
@@ -1823,6 +1943,41 @@ public sealed class MarketAcquisitionClaimLifecycleController
 
         saveConfig();
         return true;
+    }
+
+    public void ApplySuccessfulRouteProgressReport(
+        MarketAcquisitionRouteProgressReportOutcome outcome,
+        MarketAcquisitionClaimView claimed,
+        long reportSessionVersion,
+        long currentSessionVersion,
+        string message)
+    {
+        ArgumentNullException.ThrowIfNull(outcome);
+        ArgumentNullException.ThrowIfNull(claimed);
+
+        if (currentSessionVersion != reportSessionVersion ||
+            getClaimedRequest()?.Id != claimed.Id)
+            return;
+
+        if (outcome.Action.Equals(MarketAcquisitionRouteProgressReporter.CompleteAction, StringComparison.OrdinalIgnoreCase))
+        {
+            MarketAcquisitionClaimPersistence.Clear(config);
+            setClaimedRequest(null);
+            clearClaimMetadata();
+            setStatus($"Route complete: {message}");
+        }
+        else
+        {
+            var updated = claimed with { Status = outcome.Request.Status };
+            setClaimedRequest(updated);
+            MarketAcquisitionClaimPersistence.Save(
+                config,
+                updated,
+                getAcceptIdempotencyKey(),
+                getRejectIdempotencyKey());
+        }
+
+        saveConfig();
     }
 
     private static bool TryExtractInvalidTransitionSourceStatus(string? error, out string sourceStatus)
@@ -2011,6 +2166,20 @@ routeEngine = new MarketAcquisitionRouteEngine(
     new MarketAcquisitionWorldVisitEvidenceRecorder(
         config,
         marketAcquisitionWorldVisitCatalog),
+    new MarketAcquisitionClaimLifecycleController(
+        config,
+        () => claimedAcquisitionRequest,
+        value => claimedAcquisitionRequest = value,
+        () => claimedAcceptIdempotencyKey,
+        () => claimedRejectIdempotencyKey,
+        () =>
+        {
+            claimedAcceptIdempotencyKey = null;
+            claimedRejectIdempotencyKey = null;
+        },
+        value => acquisitionStatus = value,
+        () => marketAcquisitionRouteRunner.StatusMessage,
+        config.Save),
     new SystemMarketAcquisitionRouteClock());
 ```
 
