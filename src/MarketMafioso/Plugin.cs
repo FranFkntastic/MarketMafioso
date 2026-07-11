@@ -160,7 +160,8 @@ public sealed class Plugin : IDalamudPlugin
                 },
                 mainWindow.TrySelectAgentBridgeTab,
                 mainWindow.AgentCaptureInputState,
-                mainWindow.AgentStopRoute),
+                mainWindow.AgentStopRoute,
+                mainWindow.AgentReviewRegistry),
             agentBridgeProofStore,
             agentBridgeViewportCapture.CaptureAsync,
             () => Configuration.EnableAgentBridgeScreenshots);

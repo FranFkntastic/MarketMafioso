@@ -7,6 +7,7 @@ using MarketMafioso.Squire.Observation;
 using MarketMafioso.AgentBridge;
 using MarketMafioso.Windows.Main;
 using Newtonsoft.Json;
+using Franthropy.Dalamud.AgentBridge;
 
 namespace MarketMafioso.Windows.Squire;
 
@@ -14,6 +15,7 @@ internal sealed class SquireTabPanel
 {
     private readonly ICharacterEquipmentSnapshotSource snapshotSource;
     private readonly ISquireActionGameAdapter actionAdapter;
+    private readonly AgentBridgeUiReviewRegistry reviewRegistry;
     private readonly Configuration config;
     private readonly SquireCandidateEvaluator evaluator = new();
     private readonly SquireReviewState review = new();
@@ -27,11 +29,13 @@ internal sealed class SquireTabPanel
         Configuration config,
         ICharacterEquipmentSnapshotSource snapshotSource,
         ISquireActionGameAdapter actionAdapter,
+        AgentBridgeUiReviewRegistry reviewRegistry,
         string diagnosticDirectory)
     {
         this.config = config;
         this.snapshotSource = snapshotSource;
         this.actionAdapter = actionAdapter;
+        this.reviewRegistry = reviewRegistry;
         this.diagnosticDirectory = diagnosticDirectory;
         search = config.Squire.Search;
         showProtected = config.Squire.ShowProtected;
@@ -43,6 +47,7 @@ internal sealed class SquireTabPanel
         ImGui.TextWrapped("Squire identifies obsolete leveling gear. Refresh only analyzes; it never disposes of an item.");
         if (ImGui.Button("Refresh##Squire"))
             Refresh();
+        RegisterLastControl("squire.refresh", "Refresh Squire analysis", AgentBridgeUiControlKind.Button, true, false, null, Refresh);
         ImGui.SameLine();
         if (analysis is not null && ImGui.Button("Export diagnostics##Squire"))
             Export();
@@ -209,6 +214,24 @@ internal sealed class SquireTabPanel
                 else
                     review.Remove(fingerprint);
             }
+            if (candidate.IsExecutable)
+            {
+                var controlId = $"squire.select.{fingerprint.Container}.{fingerprint.SlotIndex}";
+                RegisterLastControl(
+                    controlId,
+                    $"Select {candidate.Definition.Name}",
+                    AgentBridgeUiControlKind.Toggle,
+                    true,
+                    selected,
+                    candidate.RecommendedDisposition.ToString(),
+                    () =>
+                    {
+                        if (review.Selections.ContainsKey(fingerprint))
+                            review.Remove(fingerprint);
+                        else
+                            review.TrySelect(value, fingerprint, candidate.RecommendedDisposition);
+                    });
+            }
             if (!candidate.IsExecutable)
                 ImGui.EndDisabled();
             Cell(candidate.Definition.Name);
@@ -257,4 +280,14 @@ internal sealed class SquireTabPanel
         ImGui.TableNextColumn();
         ImGui.TextUnformatted(text);
     }
+
+    private void RegisterLastControl(
+        string id,
+        string label,
+        AgentBridgeUiControlKind kind,
+        bool enabled,
+        bool selected,
+        string? value,
+        Action invoke) =>
+        reviewRegistry.Register(id, label, kind, ImGui.GetItemRectMin(), ImGui.GetItemRectMax(), enabled, selected, value, invoke);
 }

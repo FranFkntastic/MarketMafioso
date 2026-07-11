@@ -1,4 +1,5 @@
 using MarketMafioso.AgentBridge;
+using Franthropy.Dalamud.AgentBridge;
 
 namespace MarketMafioso.Tests.AgentBridge;
 
@@ -16,7 +17,8 @@ public sealed class MarketMafiosoBridgeProviderTests
             _ => { },
             tab => { selected = tab; return tab == "Squire"; },
             () => { },
-            () => { });
+            () => { },
+            new AgentBridgeUiReviewRegistry());
 
         Assert.Equal("test", provider.CreateSnapshot().PluginInstanceId);
         provider.OpenMainWindow();
@@ -59,4 +61,3 @@ public sealed class MarketMafiosoBridgeProviderTests
         },
     };
 }
-

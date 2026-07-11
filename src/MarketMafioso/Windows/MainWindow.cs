@@ -23,6 +23,7 @@ using MarketMafioso.Windows.Squire;
 using MarketMafioso.Windows.WorkshopLogistics;
 using MarketMafioso.Squire.Observation;
 using MarketMafioso.WorkshopPrep;
+using Franthropy.Dalamud.AgentBridge;
 
 namespace MarketMafioso.Windows;
 
@@ -59,6 +60,7 @@ public class MainWindow : Window, IDisposable
     private readonly WorkshopPrepQueuePanel workshopPrepQueue;
     private readonly WorkshopMaterialPanel workshopMaterials;
     private readonly WorkshopAssemblyPanel workshopAssembly;
+    public AgentBridgeUiReviewRegistry AgentReviewRegistry { get; } = new();
 
     private readonly WorkshopProjectSelectionState workshopProjectSelection = new();
     private int marketInputCaptureIndex;
@@ -176,6 +178,7 @@ public class MainWindow : Window, IDisposable
             config,
             squireSnapshotSource,
             new DalamudSquireActionGameAdapter(squireSnapshotSource, playerState, Plugin.Condition),
+            AgentReviewRegistry,
             Path.Combine(Plugin.PluginInterface.GetPluginConfigDirectory(), "squire-logs"));
         statusTab = new StatusTabPanel(config, reporter, retainerCacheStore, log);
         marketAcquisitionRequestPickupPanel = new MarketAcquisitionRequestPickupPanel(
@@ -345,6 +348,9 @@ public class MainWindow : Window, IDisposable
 
     public override void Draw()
     {
+        AgentReviewRegistry.BeginFrame();
+        try
+        {
         var viewport = ImGui.GetWindowViewport();
         var windowPosition = ImGui.GetWindowPos();
         var windowSize = ImGui.GetWindowSize();
@@ -419,6 +425,11 @@ public class MainWindow : Window, IDisposable
 
             ImGui.EndTabBar();
             agentRequestedTab = null;
+        }
+        }
+        finally
+        {
+            AgentReviewRegistry.EndFrame();
         }
     }
 

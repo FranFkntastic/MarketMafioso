@@ -148,6 +148,16 @@ public sealed class AgentBridgeHost : IDisposable
                     Interlocked.Increment(ref revision),
                     challenge: null)).ConfigureAwait(false);
                 return AgentBridgeResponse.Ok("Snapshot captured.", receipt);
+            case "get-control-surface":
+                return AgentBridgeResponse.Ok("Control surface captured.", provider.GetControlSurface());
+            case "invoke-control":
+                if (string.IsNullOrWhiteSpace(request.Target) || request.FrameId is null)
+                    return AgentBridgeResponse.Fail("Control ID and reviewed frame ID are required.");
+                var invocation = provider.InvokeControl(request.Target, request.FrameId.Value);
+                AppendAudit("invoke-control", invocation.Success ? request.Target : "rejected");
+                return invocation.Success
+                    ? AgentBridgeResponse.Ok(invocation.Message, invocation.Frame)
+                    : AgentBridgeResponse.Fail(invocation.Message);
             case "open-main-window":
                 await dispatchOnFramework(provider.OpenMainWindow).ConfigureAwait(false);
                 AppendAudit("open-main-window", "accepted");
@@ -313,6 +323,7 @@ public sealed record AgentBridgeRequest
     public string? Command { get; init; }
     public string? Challenge { get; init; }
     public string? Target { get; init; }
+    public long? FrameId { get; init; }
     public string? ProofId { get; init; }
     public bool FullViewport { get; init; }
 }
