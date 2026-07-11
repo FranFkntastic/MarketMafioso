@@ -95,7 +95,10 @@ internal sealed class SquireTabPanel : IDisposable
         }
         try
         {
-            analysis = evaluator.Evaluate(snapshotSource.Capture(), capabilitySource.Capture());
+            analysis = evaluator.Evaluate(
+                snapshotSource.Capture(),
+                capabilitySource.Capture(),
+                new SquireProtectionPolicy(config.Squire.ProtectPlayerSignedGear));
             review.Adopt(analysis);
             runConfirmed = false;
             var executable = analysis.Candidates.Count(candidate => candidate.IsExecutable);
@@ -197,24 +200,27 @@ internal sealed class SquireTabPanel : IDisposable
 
     private void DrawTable(SquireAnalysis value)
     {
-        var rows = value.Candidates
+        var filteredRows = value.Candidates
             .Where(candidate => showProtected || candidate.Assessment != SquireAssessment.Protected)
             .Where(candidate => string.IsNullOrWhiteSpace(search)
                 || candidate.Definition.Name.Contains(search, StringComparison.OrdinalIgnoreCase)
                 || candidate.Instance.Fingerprint.Container.Contains(search, StringComparison.OrdinalIgnoreCase)
                 || candidate.Reasons.Any(reason => reason.Message.Contains(search, StringComparison.OrdinalIgnoreCase)))
             .ToArray();
-        if (!ImGui.BeginTable("##SquireCandidates", 8, ImGuiTableFlags.RowBg | ImGuiTableFlags.Borders | ImGuiTableFlags.ScrollY | ImGuiTableFlags.Resizable))
+        var tableFlags = ImGuiTableFlags.RowBg | ImGuiTableFlags.Borders | ImGuiTableFlags.ScrollY |
+                         ImGuiTableFlags.Resizable | ImGuiTableFlags.Sortable;
+        if (!ImGui.BeginTable("##SquireCandidates", 8, tableFlags))
             return;
-        ImGui.TableSetupColumn("Select", ImGuiTableColumnFlags.WidthFixed, 55);
-        ImGui.TableSetupColumn("Item");
+        ImGui.TableSetupColumn("Select", ImGuiTableColumnFlags.WidthFixed | ImGuiTableColumnFlags.NoSort, 55);
+        ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.DefaultSort);
         ImGui.TableSetupColumn("Location");
-        ImGui.TableSetupColumn("Equip Lv");
-        ImGui.TableSetupColumn("Item Lv");
+        ImGui.TableSetupColumn("Equip Lv", ImGuiTableColumnFlags.PreferSortDescending);
+        ImGui.TableSetupColumn("Item Lv", ImGuiTableColumnFlags.PreferSortDescending);
         ImGui.TableSetupColumn("Assessment");
         ImGui.TableSetupColumn("Disposition");
         ImGui.TableSetupColumn("Reason");
         ImGui.TableHeadersRow();
+        var rows = SortCandidates(filteredRows, ImGui.TableGetSortSpecs());
         foreach (var candidate in rows)
         {
             ImGui.TableNextRow();
@@ -224,12 +230,7 @@ internal sealed class SquireTabPanel : IDisposable
             if (!candidate.IsExecutable)
                 ImGui.BeginDisabled();
             if (ImGui.Checkbox($"##SquireSelect{fingerprint.Container}{fingerprint.SlotIndex}", ref selected))
-            {
-                if (selected)
-                    review.TrySelect(value, fingerprint, candidate.RecommendedDisposition);
-                else
-                    review.Remove(fingerprint);
-            }
+                ToggleSelection(value, candidate);
             if (candidate.IsExecutable)
             {
                 var controlId = $"squire.select.{fingerprint.Container}.{fingerprint.SlotIndex}";
@@ -250,7 +251,16 @@ internal sealed class SquireTabPanel : IDisposable
             }
             if (!candidate.IsExecutable)
                 ImGui.EndDisabled();
-            Cell(candidate.Definition.Name);
+            ImGui.TableNextColumn();
+            if (!candidate.IsExecutable)
+                ImGui.BeginDisabled();
+            if (ImGui.Selectable(
+                    $"{candidate.Definition.Name}##SquireRow{fingerprint.Container}{fingerprint.SlotIndex}",
+                    selected,
+                    ImGuiSelectableFlags.SpanAllColumns))
+                ToggleSelection(value, candidate);
+            if (!candidate.IsExecutable)
+                ImGui.EndDisabled();
             Cell($"{candidate.Instance.Fingerprint.Container}:{candidate.Instance.Fingerprint.SlotIndex}");
             Cell(candidate.Definition.EquipLevel.ToString());
             Cell(candidate.Definition.ItemLevel.ToString());
@@ -259,6 +269,44 @@ internal sealed class SquireTabPanel : IDisposable
             Cell(candidate.Reasons.FirstOrDefault()?.Message ?? string.Empty);
         }
         ImGui.EndTable();
+    }
+
+    private void ToggleSelection(SquireAnalysis analysis, SquireCandidate candidate)
+    {
+        var fingerprint = candidate.Instance.Fingerprint;
+        if (review.Selections.ContainsKey(fingerprint))
+            review.Remove(fingerprint);
+        else
+            review.TrySelect(analysis, fingerprint, candidate.RecommendedDisposition);
+    }
+
+    internal static SquireCandidate[] SortCandidates(SquireCandidate[] rows, ImGuiTableSortSpecsPtr sortSpecs)
+    {
+        if (sortSpecs.SpecsCount == 0)
+            return rows;
+        var spec = sortSpecs.Specs;
+        return spec.ColumnIndex switch
+        {
+            1 => SortCandidatesBy(rows, candidate => candidate.Definition.Name, spec.SortDirection),
+            2 => SortCandidatesBy(rows, candidate => $"{candidate.Instance.Fingerprint.Container}:{candidate.Instance.Fingerprint.SlotIndex:D3}", spec.SortDirection),
+            3 => SortCandidatesBy(rows, candidate => candidate.Definition.EquipLevel, spec.SortDirection),
+            4 => SortCandidatesBy(rows, candidate => candidate.Definition.ItemLevel, spec.SortDirection),
+            5 => SortCandidatesBy(rows, candidate => candidate.Assessment, spec.SortDirection),
+            6 => SortCandidatesBy(rows, candidate => candidate.RecommendedDisposition, spec.SortDirection),
+            7 => SortCandidatesBy(rows, candidate => candidate.Reasons.FirstOrDefault()?.Message ?? string.Empty, spec.SortDirection),
+            _ => rows,
+        };
+    }
+
+    private static SquireCandidate[] SortCandidatesBy<TKey>(SquireCandidate[] rows, Func<SquireCandidate, TKey> keySelector, ImGuiSortDirection direction)
+    {
+        var ordered = direction == ImGuiSortDirection.Descending
+            ? rows.OrderByDescending(keySelector)
+            : rows.OrderBy(keySelector);
+        return ordered
+            .ThenBy(candidate => candidate.Instance.Fingerprint.Container)
+            .ThenBy(candidate => candidate.Instance.Fingerprint.SlotIndex)
+            .ToArray();
     }
 
     private void DrawRunPanel(SquireAnalysis value)

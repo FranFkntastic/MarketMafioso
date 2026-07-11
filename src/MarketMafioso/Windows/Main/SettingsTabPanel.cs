@@ -49,12 +49,31 @@ internal sealed class SettingsTabPanel
 
         DrawServerSection();
         ImGui.Spacing();
+        DrawSquireSettingsSection();
+        ImGui.Spacing();
         DrawInternalFeatureSettingsSection();
         if (IsMarketAcquisitionUnlocked())
         {
             ImGui.Spacing();
             DrawMarketAcquisitionSettingsSection();
         }
+    }
+
+    private void DrawSquireSettingsSection()
+    {
+        ImGui.TextColored(MarketMafiosoUiTheme.Header, "Squire");
+        ImGui.Separator();
+
+        var protectSignedGear = config.Squire.ProtectPlayerSignedGear;
+        if (ImGui.Checkbox("Protect player-signed gear", ref protectSignedGear))
+        {
+            config.Squire.ProtectPlayerSignedGear = protectSignedGear;
+            config.Save();
+        }
+
+        ImGui.TextColored(
+            MarketMafiosoUiTheme.Muted,
+            "Default off. Enable this only if a player signature should prevent Squire from proposing otherwise-obsolete gear for cleanup.");
     }
 
     private void DrawServerSection()

@@ -8,12 +8,16 @@ public sealed class SquireCandidateEvaluator
 {
     private readonly EquipmentUseAnalyzer useAnalyzer = new();
 
-    public SquireAnalysis Evaluate(CharacterEquipmentSnapshot snapshot, SquireDispositionCapabilities? capabilities = null)
+    public SquireAnalysis Evaluate(
+        CharacterEquipmentSnapshot snapshot,
+        SquireDispositionCapabilities? capabilities = null,
+        SquireProtectionPolicy? protectionPolicy = null)
     {
         capabilities ??= new SquireDispositionCapabilities(null);
+        protectionPolicy ??= new SquireProtectionPolicy();
         var gearsetProtection = GearsetProtectionIndex.Create(snapshot.Gearsets);
         var candidates = snapshot.Instances
-            .Select(instance => EvaluateInstance(snapshot, instance, gearsetProtection, capabilities))
+            .Select(instance => EvaluateInstance(snapshot, instance, gearsetProtection, capabilities, protectionPolicy))
             .ToArray();
         return new SquireAnalysis(snapshot, candidates);
     }
@@ -22,12 +26,13 @@ public sealed class SquireCandidateEvaluator
         CharacterEquipmentSnapshot snapshot,
         EquipmentInstanceSnapshot instance,
         GearsetProtectionIndex gearsetProtection,
-        SquireDispositionCapabilities capabilities)
+        SquireDispositionCapabilities capabilities,
+        SquireProtectionPolicy protectionPolicy)
     {
         if (!snapshot.Definitions.TryGetValue(instance.Fingerprint.ItemId, out var definition))
             return Unsupported(instance, UnknownDefinition(instance.Fingerprint.ItemId));
 
-        var protections = GetProtections(snapshot, instance, definition, gearsetProtection);
+        var protections = GetProtections(snapshot, instance, definition, gearsetProtection, protectionPolicy);
         if (protections.Count > 0)
             return Candidate(instance, definition, SquireAssessment.Protected, SquireDisposition.Keep, new HashSet<SquireDisposition>(), protections, null);
 
@@ -89,7 +94,8 @@ public sealed class SquireCandidateEvaluator
         CharacterEquipmentSnapshot snapshot,
         EquipmentInstanceSnapshot instance,
         EquipmentItemDefinition definition,
-        GearsetProtectionIndex gearsetProtection)
+        GearsetProtectionIndex gearsetProtection,
+        SquireProtectionPolicy protectionPolicy)
     {
         var reasons = new List<SquireReason>();
         if (!snapshot.Diagnostics.IsComplete)
@@ -106,7 +112,7 @@ public sealed class SquireCandidateEvaluator
             reasons.Add(new("ProtectedItemFamily", "The item belongs to an explicitly protected family.", SquireReasonSeverity.Blocking));
         if (instance.Fingerprint.MateriaIds.Count > 0)
             reasons.Add(new("MateriaAttached", "Materia-bearing gear is protected by default.", SquireReasonSeverity.Blocking));
-        if (instance.Fingerprint.CrafterContentId is > 0)
+        if (protectionPolicy.ProtectSignedGear && instance.Fingerprint.CrafterContentId is > 0)
             reasons.Add(new("PlayerSignature", "Player-signed gear is protected by default.", SquireReasonSeverity.Blocking));
         if (definition.IsArmoireEligible is null)
             reasons.Add(new("ArmoireEligibilityUnknown", "Armoire eligibility is unknown.", SquireReasonSeverity.Blocking));

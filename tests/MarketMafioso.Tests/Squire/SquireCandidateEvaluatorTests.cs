@@ -35,7 +35,7 @@ public sealed class SquireCandidateEvaluatorTests
     }
 
     [Fact]
-    public void EquippedGearsetMateriaAndSignedItems_AreProtected()
+    public void EquippedGearsetAndMateriaItems_AreProtected()
     {
         var instance = Instance(100, equipped: true, materia: [500], crafter: 99);
         var snapshot = Snapshot([instance], [Definition(100, 20)], [Job(1, 50, true)], [Gearset(1, 100)]);
@@ -44,6 +44,39 @@ public sealed class SquireCandidateEvaluatorTests
         Assert.Contains(candidate.Reasons, reason => reason.Code == "CurrentlyEquipped");
         Assert.Contains(candidate.Reasons, reason => reason.Code == "ReferencedByGearset");
         Assert.Contains(candidate.Reasons, reason => reason.Code == "MateriaAttached");
+        Assert.DoesNotContain(candidate.Reasons, reason => reason.Code == "PlayerSignature");
+    }
+
+    [Fact]
+    public void SignedGear_IsNotProtectedByDefault()
+    {
+        var snapshot = Snapshot(
+            [Instance(100, crafter: 99)],
+            [Definition(100, 20), Definition(200, 30)],
+            [Job(1, 50, true)],
+            [Gearset(1, 200)]);
+
+        var candidate = Assert.Single(evaluator.Evaluate(snapshot, DesynthesisUnlocked).Candidates);
+
+        Assert.Equal(SquireAssessment.Candidate, candidate.Assessment);
+        Assert.DoesNotContain(candidate.Reasons, reason => reason.Code == "PlayerSignature");
+    }
+
+    [Fact]
+    public void SignedGear_CanBeProtectedByOptInPolicy()
+    {
+        var snapshot = Snapshot(
+            [Instance(100, crafter: 99)],
+            [Definition(100, 20), Definition(200, 30)],
+            [Job(1, 50, true)],
+            [Gearset(1, 200)]);
+
+        var candidate = Assert.Single(evaluator.Evaluate(
+            snapshot,
+            DesynthesisUnlocked,
+            new SquireProtectionPolicy(ProtectSignedGear: true)).Candidates);
+
+        Assert.Equal(SquireAssessment.Protected, candidate.Assessment);
         Assert.Contains(candidate.Reasons, reason => reason.Code == "PlayerSignature");
     }
 
