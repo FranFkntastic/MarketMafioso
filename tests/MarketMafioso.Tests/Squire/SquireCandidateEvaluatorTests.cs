@@ -156,6 +156,22 @@ public sealed class SquireCandidateEvaluatorTests
         Assert.Contains(candidate.Reasons, reason => reason.Code == "DesynthesisNotUnlocked");
     }
 
+    [Fact]
+    public void MissingBaselineReason_ExplainsTheDecisionAndNamesTheJob()
+    {
+        var snapshot = Snapshot(
+            [Instance(100)],
+            [Definition(100, 20)],
+            [Job(1, 50, true)],
+            []);
+
+        var candidate = Assert.Single(evaluator.Evaluate(snapshot, DesynthesisUnlocked).Candidates);
+        var reason = Assert.Single(candidate.Reasons, reason => reason.Code == "MissingTrustedBaseline");
+
+        Assert.Contains("cannot prove this item obsolete", reason.Message);
+        Assert.Contains("JOB", reason.Message);
+    }
+
     private static CharacterEquipmentSnapshot Snapshot(
         IReadOnlyList<EquipmentInstanceSnapshot> instances,
         IReadOnlyList<EquipmentItemDefinition> definitions,

@@ -7,7 +7,10 @@ public sealed class SquireConfigurationTests
     [Fact]
     public void PlayerSignedGearProtection_DefaultsOff()
     {
-        Assert.False(new SquireConfiguration().ProtectPlayerSignedGear);
+        var config = new SquireConfiguration();
+
+        Assert.False(config.ProtectPlayerSignedGear);
+        Assert.False(config.ShowNonEquipment);
     }
 
     [Fact]

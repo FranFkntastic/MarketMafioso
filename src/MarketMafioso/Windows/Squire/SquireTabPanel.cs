@@ -28,6 +28,7 @@ internal sealed class SquireTabPanel : IDisposable
     private SquireAnalysis? analysis;
     private string search = string.Empty;
     private bool showProtected;
+    private bool showNonEquipment;
     private string status = "Refresh to capture a read-only equipment snapshot.";
     private bool runConfirmed;
     private CancellationTokenSource? runCancellation;
@@ -49,6 +50,7 @@ internal sealed class SquireTabPanel : IDisposable
         this.diagnosticDirectory = diagnosticDirectory;
         search = config.Squire.Search;
         showProtected = config.Squire.ShowProtected;
+        showNonEquipment = config.Squire.ShowNonEquipment;
     }
 
     public void Draw()
@@ -80,6 +82,12 @@ internal sealed class SquireTabPanel : IDisposable
         if (ImGui.Checkbox("Show protected", ref showProtected))
         {
             config.Squire.ShowProtected = showProtected;
+            config.Save();
+        }
+        ImGui.SameLine();
+        if (ImGui.Checkbox("Show non-equipment", ref showNonEquipment))
+        {
+            config.Squire.ShowNonEquipment = showNonEquipment;
             config.Save();
         }
         DrawTable(analysis);
@@ -201,6 +209,7 @@ internal sealed class SquireTabPanel : IDisposable
     private void DrawTable(SquireAnalysis value)
     {
         var filteredRows = value.Candidates
+            .Where(candidate => showNonEquipment || candidate.Definition.IsEquipment)
             .Where(candidate => showProtected || candidate.Assessment != SquireAssessment.Protected)
             .Where(candidate => string.IsNullOrWhiteSpace(search)
                 || candidate.Definition.Name.Contains(search, StringComparison.OrdinalIgnoreCase)

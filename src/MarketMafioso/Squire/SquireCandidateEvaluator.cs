@@ -48,7 +48,7 @@ public sealed class SquireCandidateEvaluator
                 assessment,
                 SquireDisposition.Keep,
                 new HashSet<SquireDisposition>(),
-                [UseReason(use.Status)],
+                [UseReason(use)],
                 use);
         }
 
@@ -135,15 +135,29 @@ public sealed class SquireCandidateEvaluator
         return values;
     }
 
-    private static SquireReason UseReason(EquipmentUseStatus status) => status switch
+    private static SquireReason UseReason(EquipmentUseAnalysis analysis) => analysis.Status switch
     {
         EquipmentUseStatus.FutureUse => new("FutureUnlockedJobUse", "A lower-level unlocked job could grow into this item.", SquireReasonSeverity.Blocking),
-        EquipmentUseStatus.MissingBaseline => new("MissingTrustedBaseline", "An unlocked eligible job has no trusted same-slot gearset baseline.", SquireReasonSeverity.Blocking),
+        EquipmentUseStatus.MissingBaseline => new(
+            "MissingTrustedBaseline",
+            $"Squire cannot prove this item obsolete because it found no saved gearset containing usable gear for this slot for: {FormatAffectedJobs(analysis, EquipmentUseStatus.MissingBaseline)}.",
+            SquireReasonSeverity.Blocking),
         EquipmentUseStatus.BaselineNotBetter => new("BaselineNotStrictlyBetter", "An unlocked eligible job's best baseline is tied with or worse than this item.", SquireReasonSeverity.Blocking),
         EquipmentUseStatus.NoUnlockedEligibleJob => new("NoUnlockedEligibleJob", "No unlocked eligible job can be used to prove obsolescence.", SquireReasonSeverity.Warning),
         EquipmentUseStatus.UnknownJobUnlockState => new("JobUnlockStateUnknown", "An eligible job's unlock state is unknown.", SquireReasonSeverity.Blocking),
         _ => new("EquipmentUseUnknown", "Equipment use could not be classified safely.", SquireReasonSeverity.Blocking),
     };
+
+    private static string FormatAffectedJobs(EquipmentUseAnalysis analysis, EquipmentUseStatus status)
+    {
+        var jobs = analysis.Comparisons
+            .Where(comparison => comparison.Status == status)
+            .Select(comparison => comparison.Job.Abbreviation)
+            .Where(abbreviation => !string.IsNullOrWhiteSpace(abbreviation))
+            .Distinct()
+            .ToArray();
+        return jobs.Length == 0 ? "an unlocked job that can equip the item" : string.Join(", ", jobs);
+    }
 
     private static SquireCandidate Unsupported(EquipmentInstanceSnapshot instance, SquireReason reason) =>
         Candidate(
