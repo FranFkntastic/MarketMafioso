@@ -164,7 +164,10 @@ public sealed class Plugin : IDalamudPlugin
                 mainWindow.AgentReviewRegistry),
             agentBridgeProofStore,
             agentBridgeViewportCapture.CaptureAsync,
-            () => Configuration.EnableAgentBridgeScreenshots);
+            () => Configuration.EnableAgentBridgeScreenshots,
+            mainWindow.AgentCaptureTransactions.Begin,
+            mainWindow.AgentCaptureTransactions.Complete,
+            mainWindow.AgentCaptureTransactions.Cancel);
 
         windowSystem.AddWindow(mainWindow);
         windowSystem.AddWindow(mainWindow.ProjectBrowser);

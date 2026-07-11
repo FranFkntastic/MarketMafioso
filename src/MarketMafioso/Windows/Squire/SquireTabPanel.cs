@@ -238,15 +238,15 @@ internal sealed class SquireTabPanel : IDisposable
         var tableFlags = ImGuiTableFlags.RowBg | ImGuiTableFlags.Borders | ImGuiTableFlags.ScrollY |
                          ImGuiTableFlags.Resizable | ImGuiTableFlags.Sortable;
         var tableHeight = Math.Max(260f, ImGui.GetContentRegionAvail().Y * 0.62f);
-        if (!ImGui.BeginTable("##SquireCandidates", 7, tableFlags, new System.Numerics.Vector2(0, tableHeight)))
+        if (!ImGui.BeginTable("##SquireCandidatesV2", 7, tableFlags, new System.Numerics.Vector2(0, tableHeight)))
             return;
-        ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.DefaultSort, 150);
-        ImGui.TableSetupColumn("Location");
-        ImGui.TableSetupColumn("Equip Lv", ImGuiTableColumnFlags.PreferSortDescending);
-        ImGui.TableSetupColumn("Item Lv", ImGuiTableColumnFlags.PreferSortDescending);
-        ImGui.TableSetupColumn("Assessment");
-        ImGui.TableSetupColumn("Disposition");
-        ImGui.TableSetupColumn("Reason");
+        ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.WidthFixed | ImGuiTableColumnFlags.DefaultSort, 180);
+        ImGui.TableSetupColumn("Location", ImGuiTableColumnFlags.WidthFixed, 135);
+        ImGui.TableSetupColumn("Equip Lv", ImGuiTableColumnFlags.WidthFixed | ImGuiTableColumnFlags.PreferSortDescending, 65);
+        ImGui.TableSetupColumn("Item Lv", ImGuiTableColumnFlags.WidthFixed | ImGuiTableColumnFlags.PreferSortDescending, 60);
+        ImGui.TableSetupColumn("Assessment", ImGuiTableColumnFlags.WidthFixed, 90);
+        ImGui.TableSetupColumn("Disposition", ImGuiTableColumnFlags.WidthFixed, 90);
+        ImGui.TableSetupColumn("Reason", ImGuiTableColumnFlags.WidthStretch);
         ImGui.TableHeadersRow();
         var rows = SortCandidates(filteredRows, ImGui.TableGetSortSpecs());
         for (var rowIndex = 0; rowIndex < rows.Length; rowIndex++)

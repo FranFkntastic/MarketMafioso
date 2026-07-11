@@ -70,8 +70,10 @@ public class MainWindow : Window, IDisposable
     private string? agentRequestedTab;
     private bool clearAgentReviewWindowOverride;
     private bool agentReviewWasPinned;
+    private bool capturePresentationWasPinned;
 
     public AgentBridgeCaptureRegion? AgentCaptureRegion { get; private set; }
+    public AgentBridgeUiCaptureTransactionManager AgentCaptureTransactions { get; }
 
     private const string ProductSummary = "Workshop logistics and self-hosted inventory history.";
     private const string WorkshopLogisticsModuleSummary = "Workshop Logistics tracks company workshop jobs, materials, retainer restock, handoff, and assembly.";
@@ -111,6 +113,21 @@ public class MainWindow : Window, IDisposable
         this.retainerCacheStore = retainerCacheStore;
         this.playerState = playerState;
         this.log = log;
+        AgentCaptureTransactions = new AgentBridgeUiCaptureTransactionManager(
+            () => IsOpen,
+            value => IsOpen = value,
+            () => Collapsed == true,
+            value =>
+            {
+                Collapsed = value;
+                CollapsedCondition = ImGuiCond.Always;
+            },
+            beginPresentation: () =>
+            {
+                capturePresentationWasPinned = IsPinned;
+                IsPinned = true;
+            },
+            restorePresentation: () => IsPinned = capturePresentationWasPinned);
         var acquisitionClient = new MarketAcquisitionRequestClient(acquisitionHttpClient);
         var acquisitionPlanSource = new UniversalisMarketAcquisitionPlanSource(acquisitionHttpClient);
         var marketAcquisitionWorldVisitCatalog = new MarketAcquisitionWorldVisitCatalog(config);
@@ -351,9 +368,20 @@ public class MainWindow : Window, IDisposable
         routeEngine.TickRoute(acquisitionWorkspace.IsBusy);
     }
 
+    public override void PreDraw()
+    {
+        if (!AgentCaptureTransactions.ShouldPresentInMainViewport("mmf.main-window"))
+            return;
+        var viewport = ImGui.GetMainViewport();
+        ImGui.SetNextWindowViewport(viewport.ID);
+        ImGui.SetNextWindowPos(viewport.WorkPos + new Vector2(16, 16), ImGuiCond.Always);
+        ImGui.SetNextWindowFocus();
+    }
+
     public override void Draw()
     {
         AgentReviewRegistry.BeginFrame();
+        AgentBridgeUiReviewFrame? reviewFrame = null;
         try
         {
             if (clearAgentReviewWindowOverride)
@@ -442,7 +470,9 @@ public class MainWindow : Window, IDisposable
         }
         finally
         {
-            AgentReviewRegistry.EndFrame();
+            reviewFrame = AgentReviewRegistry.EndFrame();
+            if (AgentCaptureRegion != null && reviewFrame != null && AgentCaptureTransactions.ShouldPresentInMainViewport("mmf.main-window"))
+                AgentCaptureTransactions.MarkRendered("mmf.main-window", reviewFrame.FrameId);
         }
     }
 
@@ -994,6 +1024,7 @@ public class MainWindow : Window, IDisposable
 
     public void Dispose()
     {
+        AgentCaptureTransactions.CancelActive();
         squireTab.Dispose();
         uiStateCapture.Dispose();
         acquisitionWorkspace.Dispose();

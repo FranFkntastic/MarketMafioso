@@ -20,6 +20,9 @@ public sealed class AgentBridgeHost : IDisposable
     private readonly AgentBridgeProofStore proofStore;
     private readonly Func<bool, CancellationToken, Task<AgentBridgeCaptureReceipt>> captureViewport;
     private readonly Func<bool> screenshotsEnabled;
+    private readonly Func<string, AgentBridgeUiCaptureTransactionHandle> beginCapturePresentation;
+    private readonly Func<string, AgentBridgeUiCaptureTransactionResult> completeCapturePresentation;
+    private readonly Func<string, AgentBridgeUiCaptureTransactionResult> cancelCapturePresentation;
     private readonly JsonSerializerOptions jsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
     private CancellationTokenSource? cancellation;
     private Task? listenTask;
@@ -33,7 +36,10 @@ public sealed class AgentBridgeHost : IDisposable
         IMarketMafiosoBridgeProvider provider,
         AgentBridgeProofStore proofStore,
         Func<bool, CancellationToken, Task<AgentBridgeCaptureReceipt>> captureViewport,
-        Func<bool> screenshotsEnabled)
+        Func<bool> screenshotsEnabled,
+        Func<string, AgentBridgeUiCaptureTransactionHandle> beginCapturePresentation,
+        Func<string, AgentBridgeUiCaptureTransactionResult> completeCapturePresentation,
+        Func<string, AgentBridgeUiCaptureTransactionResult> cancelCapturePresentation)
     {
         this.config = config ?? throw new ArgumentNullException(nameof(config));
         this.configDirectory = configDirectory ?? throw new ArgumentNullException(nameof(configDirectory));
@@ -42,6 +48,9 @@ public sealed class AgentBridgeHost : IDisposable
         this.proofStore = proofStore ?? throw new ArgumentNullException(nameof(proofStore));
         this.captureViewport = captureViewport ?? throw new ArgumentNullException(nameof(captureViewport));
         this.screenshotsEnabled = screenshotsEnabled ?? throw new ArgumentNullException(nameof(screenshotsEnabled));
+        this.beginCapturePresentation = beginCapturePresentation ?? throw new ArgumentNullException(nameof(beginCapturePresentation));
+        this.completeCapturePresentation = completeCapturePresentation ?? throw new ArgumentNullException(nameof(completeCapturePresentation));
+        this.cancelCapturePresentation = cancelCapturePresentation ?? throw new ArgumentNullException(nameof(cancelCapturePresentation));
     }
 
     public string PipeName => $"MarketMafioso.AgentBridge.{Environment.ProcessId}";
@@ -166,6 +175,35 @@ public sealed class AgentBridgeHost : IDisposable
                 await dispatchOnFramework(provider.OpenMainWindow).ConfigureAwait(false);
                 AppendAudit("open-main-window", "accepted");
                 return AgentBridgeResponse.Ok("Main window opened.");
+            case "begin-capture-presentation":
+                if (!screenshotsEnabled())
+                    return AgentBridgeResponse.Fail("Agent bridge screenshots are disabled by local configuration.");
+                if (!string.Equals(request.Target, "mmf.main-window", StringComparison.Ordinal))
+                    return AgentBridgeResponse.Fail("The requested capture presentation target is not registered.");
+                AgentBridgeUiCaptureTransactionHandle? handle = null;
+                try
+                {
+                    await dispatchOnFramework(() => handle = beginCapturePresentation(request.Target!)).ConfigureAwait(false);
+                    var ready = await handle!.Ready.WaitAsync(cancellationToken).ConfigureAwait(false);
+                    return AgentBridgeResponse.Ok("Capture presentation rendered and ready.", ready);
+                }
+                catch (Exception ex) when (ex is InvalidOperationException or TimeoutException or OperationCanceledException)
+                {
+                    if (handle != null)
+                        await dispatchOnFramework(() => cancelCapturePresentation(handle.TransactionId)).ConfigureAwait(false);
+                    return AgentBridgeResponse.Fail($"Capture presentation failed: {ex.Message}");
+                }
+            case "complete-capture-presentation":
+            case "cancel-capture-presentation":
+                if (string.IsNullOrWhiteSpace(request.TransactionId))
+                    return AgentBridgeResponse.Fail("A capture transaction identifier is required.");
+                AgentBridgeUiCaptureTransactionResult? transactionResult = null;
+                await dispatchOnFramework(() => transactionResult = string.Equals(request.Command, "complete-capture-presentation", StringComparison.OrdinalIgnoreCase)
+                    ? completeCapturePresentation(request.TransactionId)
+                    : cancelCapturePresentation(request.TransactionId)).ConfigureAwait(false);
+                return transactionResult!.Success
+                    ? AgentBridgeResponse.Ok(transactionResult.Message, transactionResult)
+                    : AgentBridgeResponse.Fail(transactionResult.Message);
             case "open-acquisition-diagnostics":
                 await dispatchOnFramework(provider.OpenAcquisitionDiagnostics).ConfigureAwait(false);
                 AppendAudit("open-acquisition-diagnostics", "accepted");
@@ -330,6 +368,7 @@ public sealed record AgentBridgeRequest
     public long? FrameId { get; init; }
     public string? ProofId { get; init; }
     public bool FullViewport { get; init; }
+    public string? TransactionId { get; init; }
 }
 
 public sealed record AgentBridgeResponse
