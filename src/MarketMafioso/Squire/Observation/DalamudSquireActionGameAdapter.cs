@@ -212,7 +212,8 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
     {
         for (var index = 0; index < labels.Count; index++)
         {
-            if (labels[index].Equals("Desynthesize", StringComparison.OrdinalIgnoreCase))
+            if (labels[index].Equals("Desynthesis", StringComparison.OrdinalIgnoreCase) ||
+                labels[index].Equals("Desynthesize", StringComparison.OrdinalIgnoreCase))
                 return index;
         }
         return -1;

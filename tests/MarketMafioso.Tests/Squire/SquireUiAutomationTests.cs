@@ -8,6 +8,7 @@ public sealed class SquireUiAutomationTests
     public void FindDesynthesizeEntry_FindsExactEntryCaseInsensitively()
     {
         Assert.Equal(1, DalamudSquireActionGameAdapter.FindDesynthesizeEntry(["Try On", "DESYNTHESIZE", "Discard"]));
+        Assert.Equal(1, DalamudSquireActionGameAdapter.FindDesynthesizeEntry(["Try On", "DESYNTHESIS", "Discard"]));
     }
 
     [Fact]
