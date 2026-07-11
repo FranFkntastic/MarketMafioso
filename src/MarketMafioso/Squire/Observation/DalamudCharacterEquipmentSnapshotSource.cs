@@ -89,14 +89,15 @@ public sealed class DalamudCharacterEquipmentSnapshotSource : ICharacterEquipmen
                 {
                     var level = playerState.GetClassJobLevel(job);
                     var soulCrystalId = job.ItemSoulCrystal.RowId;
-                    var isUnlocked = IsJobUnlocked(level, soulCrystalId, ownedItemIds);
+                    uint? parentClassJobId = job.ClassJobParent.RowId == 0 ? null : job.ClassJobParent.RowId;
+                    var isUnlocked = IsJobUnlocked(level, job.RowId, parentClassJobId, soulCrystalId, ownedItemIds);
                     return new CharacterJobSnapshot(
                         job.RowId,
                         job.Abbreviation.ToString(),
                         job.Name.ToString(),
                         checked((uint)Math.Max(0, (int)level)),
                         isUnlocked,
-                        job.ClassJobParent.RowId == 0 ? null : job.ClassJobParent.RowId,
+                        parentClassJobId,
                         job.Role.ToString());
                 })
                 .ToArray();
@@ -111,8 +112,18 @@ public sealed class DalamudCharacterEquipmentSnapshotSource : ICharacterEquipmen
         }
     }
 
-    internal static bool IsJobUnlocked(int level, uint soulCrystalId, IReadOnlySet<uint> ownedItemIds) =>
-        soulCrystalId == 0 ? level > 0 : ownedItemIds.Contains(soulCrystalId);
+    internal static bool IsJobUnlocked(
+        int level,
+        uint classJobId,
+        uint? parentClassJobId,
+        uint soulCrystalId,
+        IReadOnlySet<uint> ownedItemIds)
+    {
+        var isUpgradedJob = parentClassJobId is not null && parentClassJobId != classJobId;
+        return isUpgradedJob
+            ? soulCrystalId != 0 && ownedItemIds.Contains(soulCrystalId)
+            : level > 0;
+    }
 
     private static unsafe IReadOnlyList<GearsetSnapshot> CaptureGearsets(List<SnapshotComponentDiagnostic> diagnostics)
     {

@@ -177,6 +177,23 @@ public sealed class SquireCandidateEvaluatorTests
     }
 
     [Fact]
+    public void NoUnlockedEligibleJobReason_NamesObservedEligibleJobsAndStates()
+    {
+        var snapshot = Snapshot(
+            [Instance(100)],
+            [Definition(100, 20)],
+            [new CharacterJobSnapshot(1, "GSM", "Goldsmith", 49, false, 1, "Crafter")],
+            []);
+
+        var candidate = Assert.Single(evaluator.Evaluate(snapshot, DesynthesisUnlocked).Candidates);
+        var reason = Assert.Single(candidate.Reasons, reason => reason.Code == "NoUnlockedEligibleJob");
+
+        Assert.Contains("GSM", reason.Message);
+        Assert.Contains("level 49", reason.Message);
+        Assert.Contains("marked locked", reason.Message);
+    }
+
+    [Fact]
     public void FutureLevelingGear_IsACandidateByDefault()
     {
         var futureItem = Definition(100, 20) with { EquipLevel = 40 };

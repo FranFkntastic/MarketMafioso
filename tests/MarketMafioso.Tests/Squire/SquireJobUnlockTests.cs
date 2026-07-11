@@ -8,15 +8,21 @@ public sealed class SquireJobUnlockTests
     [Fact]
     public void UpgradedJobRequiresItsSoulCrystalEvenWhenClassLevelIsShared()
     {
-        Assert.False(DalamudCharacterEquipmentSnapshotSource.IsJobUnlocked(50, 4549, new HashSet<uint>()));
-        Assert.True(DalamudCharacterEquipmentSnapshotSource.IsJobUnlocked(50, 4549, new HashSet<uint> { 4549 }));
+        Assert.False(DalamudCharacterEquipmentSnapshotSource.IsJobUnlocked(50, 21, 3, 4549, new HashSet<uint>()));
+        Assert.True(DalamudCharacterEquipmentSnapshotSource.IsJobUnlocked(50, 21, 3, 4549, new HashSet<uint> { 4549 }));
     }
 
     [Fact]
     public void BaseClassUsesObservedLevel()
     {
-        Assert.False(DalamudCharacterEquipmentSnapshotSource.IsJobUnlocked(0, 0, new HashSet<uint>()));
-        Assert.True(DalamudCharacterEquipmentSnapshotSource.IsJobUnlocked(1, 0, new HashSet<uint>()));
+        Assert.False(DalamudCharacterEquipmentSnapshotSource.IsJobUnlocked(0, 3, 3, 0, new HashSet<uint>()));
+        Assert.True(DalamudCharacterEquipmentSnapshotSource.IsJobUnlocked(1, 3, 3, 0, new HashSet<uint>()));
+    }
+
+    [Fact]
+    public void CraftingClassUsesLevelEvenWhenSheetHasSpecialistCrystal()
+    {
+        Assert.True(DalamudCharacterEquipmentSnapshotSource.IsJobUnlocked(49, 11, 11, 9999, new HashSet<uint>()));
     }
 
     [Theory]

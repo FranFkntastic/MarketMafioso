@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Linq;
+using Franthropy.Dalamud.Characters;
 using Franthropy.Dalamud.Equipment;
 
 namespace MarketMafioso.Squire;
@@ -53,7 +54,7 @@ public sealed class SquireCandidateEvaluator
                 assessment,
                 SquireDisposition.Keep,
                 new HashSet<SquireDisposition>(),
-                [UseReason(use)],
+                [UseReason(use, definition, snapshot.Jobs)],
                 use);
         }
 
@@ -126,7 +127,10 @@ public sealed class SquireCandidateEvaluator
         return reasons;
     }
 
-    private static SquireReason UseReason(EquipmentUseAnalysis analysis) => analysis.Status switch
+    private static SquireReason UseReason(
+        EquipmentUseAnalysis analysis,
+        EquipmentItemDefinition definition,
+        IReadOnlyList<CharacterJobSnapshot> jobs) => analysis.Status switch
     {
         EquipmentUseStatus.FutureUse => new("FutureUnlockedJobUse", "A lower-level unlocked job could grow into this item.", SquireReasonSeverity.Blocking),
         EquipmentUseStatus.MissingBaseline => new(
@@ -134,9 +138,30 @@ public sealed class SquireCandidateEvaluator
             $"Squire cannot prove this item obsolete because it found no saved gearset containing usable gear for this slot for: {FormatAffectedJobs(analysis, EquipmentUseStatus.MissingBaseline)}.",
             SquireReasonSeverity.Blocking),
         EquipmentUseStatus.BaselineNotBetter => new("BaselineNotStrictlyBetter", "An unlocked eligible job's best baseline is tied with or worse than this item.", SquireReasonSeverity.Blocking),
-        EquipmentUseStatus.NoUnlockedEligibleJob => new("NoUnlockedEligibleJob", "No unlocked eligible job can be used to prove obsolescence.", SquireReasonSeverity.Warning),
+        EquipmentUseStatus.NoUnlockedEligibleJob => new(
+            "NoUnlockedEligibleJob",
+            $"Squire found no unlocked job that can equip this item. Eligible job observations: {FormatEligibleJobObservations(definition, jobs)}.",
+            SquireReasonSeverity.Warning),
         EquipmentUseStatus.UnknownJobUnlockState => new("JobUnlockStateUnknown", "An eligible job's unlock state is unknown.", SquireReasonSeverity.Blocking),
         _ => new("EquipmentUseUnknown", "Equipment use could not be classified safely.", SquireReasonSeverity.Blocking),
+    };
+
+    private static string FormatEligibleJobObservations(
+        EquipmentItemDefinition definition,
+        IReadOnlyList<CharacterJobSnapshot> jobs)
+    {
+        var observations = jobs
+            .Where(job => definition.EligibleClassJobIds.Contains(job.ClassJobId))
+            .Select(job => $"{job.Abbreviation} (level {job.Level}, {FormatUnlockState(job.IsUnlocked)})")
+            .ToArray();
+        return observations.Length == 0 ? "none were present in the job snapshot" : string.Join(", ", observations);
+    }
+
+    private static string FormatUnlockState(bool? unlocked) => unlocked switch
+    {
+        true => "unlocked",
+        false => "marked locked",
+        null => "unlock state unknown",
     };
 
     private static string FormatAffectedJobs(EquipmentUseAnalysis analysis, EquipmentUseStatus status)
