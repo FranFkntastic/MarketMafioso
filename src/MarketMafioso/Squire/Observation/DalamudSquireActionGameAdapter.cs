@@ -277,6 +277,15 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
         return $"target={agent->TargetInventoryId}:{agent->TargetInventorySlotId}; {string.Join(" | ", entries)}";
     }
 
+    public unsafe string CloseContextMenuProbe()
+    {
+        var addon = gameGui.GetAddonByName<AtkUnitBase>("ContextMenu", 1);
+        if (addon == null || !addon->IsVisible)
+            return "ContextMenu is not visible.";
+        addon->Close(true);
+        return "Closed the visible ContextMenu through its UI addon.";
+    }
+
     public void ReleaseOwnedState()
     {
         if (!ownsDesynthesisUi)
@@ -288,6 +297,9 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
 
     private unsafe void CloseOwnedDesynthesisDialog()
     {
+        var contextMenu = gameGui.GetAddonByName<AtkUnitBase>("ContextMenu", 1);
+        if (contextMenu != null && contextMenu->IsVisible)
+            contextMenu->Close(true);
         var addon = gameGui.GetAddonByName<AddonSalvageDialog>("SalvageDialog", 1);
         if (addon != null && addon->AtkUnitBase.IsReady && addon->AtkUnitBase.IsVisible && addon->CancelButtonNode != null)
             addon->CancelButtonNode->ClickAddonButton(&addon->AtkUnitBase);

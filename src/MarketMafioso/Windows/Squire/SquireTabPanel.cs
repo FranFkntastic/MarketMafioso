@@ -395,6 +395,17 @@ internal sealed class SquireTabPanel : IDisposable
                 false,
                 null,
                 () => status = liveAdapter.DescribeContextMenuProbe());
+            ImGui.SameLine();
+            if (ImGui.Button("Close menu probe##Squire"))
+                status = liveAdapter.CloseContextMenuProbe();
+            RegisterLastControl(
+                "squire.probe.close-context-menu",
+                "Close the visible item context menu",
+                AgentBridgeUiControlKind.Button,
+                true,
+                false,
+                null,
+                () => status = liveAdapter.CloseContextMenuProbe());
         }
     }
 
