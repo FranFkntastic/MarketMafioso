@@ -4,8 +4,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using Dalamud.Game.ClientState.Conditions;
 using Dalamud.Plugin.Services;
-using ECommons.Automation.UIInput;
-using FFXIVClientStructs.FFXIV.Client.UI;
 using Franthropy.Dalamud.Characters;
 using Franthropy.Dalamud.Equipment;
 using Franthropy.Dalamud.Automation.Inventory;
@@ -17,7 +15,6 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
     private readonly ICharacterEquipmentSnapshotSource snapshotSource;
     private readonly IPlayerState playerState;
     private readonly ICondition condition;
-    private readonly IGameGui gameGui;
     private readonly IFramework framework;
     private readonly ISquireDispositionCapabilitySource capabilitySource;
     private readonly Func<bool> hasExternalConflict;
@@ -35,7 +32,6 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
         this.snapshotSource = snapshotSource;
         this.playerState = playerState;
         this.condition = condition;
-        this.gameGui = gameGui;
         this.framework = framework;
         this.capabilitySource = capabilitySource;
         this.hasExternalConflict = hasExternalConflict ?? (() => false);
@@ -138,19 +134,23 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
 
     private unsafe SquireActionResult TryConfirmDesynthesis(EquipmentInstanceFingerprint fingerprint)
     {
+        // Once the context-menu command is submitted, the client reserves the item and the
+        // inventory slot is no longer a valid identity oracle. Revalidate immediately before
+        // that transition; thereafter the owned UI transaction and final slot transition are
+        // the authoritative lifecycle signals.
+        if (!desynthesisUi.MenuSelectionSubmitted)
+        {
+            var validation = Revalidate(fingerprint, SquireDisposition.Desynthesize);
+            if (!validation.Success)
+                return SquireActionResult.Fail(validation.Code, validation.Message);
+        }
+
         var result = desynthesisUi.AdvanceToConfirmation(fingerprint);
         if (!result.Success)
             return result.Code == "Pending"
                 ? SquireActionResult.Fail("ConfirmationPending", result.Message)
                 : SquireActionResult.Fail(result.Code, result.Message);
-        var validation = Revalidate(fingerprint, SquireDisposition.Desynthesize);
-        if (!validation.Success)
-            return SquireActionResult.Fail(validation.Code, validation.Message);
-        var addon = gameGui.GetAddonByName<AddonSalvageDialog>("SalvageDialog", 1);
-        if (addon == null || !addon->AtkUnitBase.IsVisible || addon->DesynthesizeButton == null || !addon->DesynthesizeButton->IsEnabled)
-            return SquireActionResult.Fail("ConfirmationUnavailable", "The verified desynthesis confirmation button is unavailable.");
-        addon->DesynthesizeButton->ClickAddonButton(&addon->AtkUnitBase);
-        return new SquireActionResult(true, "ConfirmationSubmitted", "Clicked the owned desynthesis dialog's normal confirmation button.");
+        return new SquireActionResult(true, result.Code, result.Message);
     }
 
     private SquireActionResult ObserveSlotTransition(EquipmentInstanceFingerprint fingerprint)
