@@ -74,6 +74,17 @@ internal sealed class SettingsTabPanel
         ImGui.TextColored(
             MarketMafiosoUiTheme.Muted,
             "Default off. Enable this only if a player signature should prevent Squire from proposing otherwise-obsolete gear for cleanup.");
+
+        var protectFutureGear = config.Squire.ProtectFutureLevelingGearOptIn;
+        if (ImGui.Checkbox("Protect gear for future job leveling", ref protectFutureGear))
+        {
+            config.Squire.ProtectFutureLevelingGearOptIn = protectFutureGear;
+            config.Save();
+        }
+
+        ImGui.TextColored(
+            MarketMafiosoUiTheme.Muted,
+            "Default off. When enabled, gear above an unlocked job's current level is retained for that job to grow into.");
     }
 
     private void DrawServerSection()

@@ -82,7 +82,7 @@ public sealed class SquireConfiguration
     public bool ProtectMateria { get; set; } = true;
     public bool ProtectPlayerSignedGear { get; set; }
     public bool ProtectArmoireEligible { get; set; } = true;
-    public bool ProtectFutureLevelingGear { get; set; } = true;
+    public bool ProtectFutureLevelingGearOptIn { get; set; }
     public int AuditRetentionDays { get; set; } = 30;
 }
 

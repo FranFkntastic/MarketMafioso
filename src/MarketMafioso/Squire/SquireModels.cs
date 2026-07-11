@@ -31,7 +31,9 @@ public sealed record SquireReason(string Code, string Message, SquireReasonSever
 
 public sealed record SquireDispositionCapabilities(bool? DesynthesisUnlocked);
 
-public sealed record SquireProtectionPolicy(bool ProtectSignedGear = false);
+public sealed record SquireProtectionPolicy(
+    bool ProtectSignedGear = false,
+    bool ProtectFutureLevelingGear = false);
 
 public sealed record SquireCandidate(
     EquipmentInstanceSnapshot Instance,

@@ -1,6 +1,7 @@
 using Franthropy.Dalamud.Characters;
 using Franthropy.Dalamud.Equipment;
 using MarketMafioso.Squire;
+using MarketMafioso.Windows.Squire;
 
 namespace MarketMafioso.Tests.Squire;
 
@@ -154,6 +155,9 @@ public sealed class SquireCandidateEvaluatorTests
         Assert.Equal(SquireDisposition.VendorSell, candidate.RecommendedDisposition);
         Assert.DoesNotContain(SquireDisposition.Desynthesize, candidate.SupportedDispositions);
         Assert.Contains(candidate.Reasons, reason => reason.Code == "DesynthesisNotUnlocked");
+        var displayedReasons = SquireTabPanel.FormatReasons(candidate);
+        Assert.Equal(candidate.Reasons.Count, displayedReasons.Split('\n').Length);
+        Assert.All(candidate.Reasons, reason => Assert.Contains(reason.Message, displayedReasons));
     }
 
     [Fact]
@@ -170,6 +174,33 @@ public sealed class SquireCandidateEvaluatorTests
 
         Assert.Contains("cannot prove this item obsolete", reason.Message);
         Assert.Contains("JOB", reason.Message);
+    }
+
+    [Fact]
+    public void FutureLevelingGear_IsACandidateByDefault()
+    {
+        var futureItem = Definition(100, 20) with { EquipLevel = 40 };
+        var snapshot = Snapshot([Instance(100)], [futureItem], [Job(1, 30, true)], []);
+
+        var candidate = Assert.Single(evaluator.Evaluate(snapshot, DesynthesisUnlocked).Candidates);
+
+        Assert.Equal(SquireAssessment.Candidate, candidate.Assessment);
+        Assert.Contains(candidate.Reasons, reason => reason.Code == "FutureLevelingUseNotProtected");
+    }
+
+    [Fact]
+    public void FutureLevelingGear_CanBeProtectedByOptInPolicy()
+    {
+        var futureItem = Definition(100, 20) with { EquipLevel = 40 };
+        var snapshot = Snapshot([Instance(100)], [futureItem], [Job(1, 30, true)], []);
+
+        var candidate = Assert.Single(evaluator.Evaluate(
+            snapshot,
+            DesynthesisUnlocked,
+            new SquireProtectionPolicy(ProtectFutureLevelingGear: true)).Candidates);
+
+        Assert.Equal(SquireAssessment.Protected, candidate.Assessment);
+        Assert.Contains(candidate.Reasons, reason => reason.Code == "FutureUnlockedJobUse");
     }
 
     private static CharacterEquipmentSnapshot Snapshot(

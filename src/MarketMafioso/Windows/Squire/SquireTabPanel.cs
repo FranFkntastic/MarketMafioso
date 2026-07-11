@@ -106,7 +106,9 @@ internal sealed class SquireTabPanel : IDisposable
             analysis = evaluator.Evaluate(
                 snapshotSource.Capture(),
                 capabilitySource.Capture(),
-                new SquireProtectionPolicy(config.Squire.ProtectPlayerSignedGear));
+                new SquireProtectionPolicy(
+                    config.Squire.ProtectPlayerSignedGear,
+                    config.Squire.ProtectFutureLevelingGearOptIn));
             review.Adopt(analysis);
             runConfirmed = false;
             var executable = analysis.Candidates.Count(candidate => candidate.IsExecutable);
@@ -275,7 +277,8 @@ internal sealed class SquireTabPanel : IDisposable
             Cell(candidate.Definition.ItemLevel.ToString());
             Cell(candidate.Assessment.ToString());
             Cell(candidate.RecommendedDisposition.ToString());
-            Cell(candidate.Reasons.FirstOrDefault()?.Message ?? string.Empty);
+            ImGui.TableNextColumn();
+            ImGui.TextWrapped(FormatReasons(candidate));
         }
         ImGui.EndTable();
     }
@@ -302,10 +305,13 @@ internal sealed class SquireTabPanel : IDisposable
             4 => SortCandidatesBy(rows, candidate => candidate.Definition.ItemLevel, spec.SortDirection),
             5 => SortCandidatesBy(rows, candidate => candidate.Assessment, spec.SortDirection),
             6 => SortCandidatesBy(rows, candidate => candidate.RecommendedDisposition, spec.SortDirection),
-            7 => SortCandidatesBy(rows, candidate => candidate.Reasons.FirstOrDefault()?.Message ?? string.Empty, spec.SortDirection),
+            7 => SortCandidatesBy(rows, FormatReasons, spec.SortDirection),
             _ => rows,
         };
     }
+
+    internal static string FormatReasons(SquireCandidate candidate) =>
+        string.Join("\n", candidate.Reasons.Select(reason => $"• {reason.Message}"));
 
     private static SquireCandidate[] SortCandidatesBy<TKey>(SquireCandidate[] rows, Func<SquireCandidate, TKey> keySelector, ImGuiSortDirection direction)
     {

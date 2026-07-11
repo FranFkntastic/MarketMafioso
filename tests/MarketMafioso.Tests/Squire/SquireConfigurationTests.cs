@@ -10,14 +10,17 @@ public sealed class SquireConfigurationTests
         var config = new SquireConfiguration();
 
         Assert.False(config.ProtectPlayerSignedGear);
+        Assert.False(config.ProtectFutureLevelingGearOptIn);
         Assert.False(config.ShowNonEquipment);
     }
 
     [Fact]
     public void LegacyImplicitSignedGearDefault_DoesNotBecomeAnOptIn()
     {
-        var config = JsonConvert.DeserializeObject<SquireConfiguration>("{\"ProtectSignedGear\":true}")!;
+        var config = JsonConvert.DeserializeObject<SquireConfiguration>(
+            "{\"ProtectSignedGear\":true,\"ProtectFutureLevelingGear\":true}")!;
 
         Assert.False(config.ProtectPlayerSignedGear);
+        Assert.False(config.ProtectFutureLevelingGearOptIn);
     }
 }

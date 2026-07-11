@@ -37,7 +37,11 @@ public sealed class SquireCandidateEvaluator
             return Candidate(instance, definition, SquireAssessment.Protected, SquireDisposition.Keep, new HashSet<SquireDisposition>(), protections, null);
 
         var use = useAnalyzer.Analyze(definition, snapshot.Jobs, snapshot.Gearsets, snapshot.Definitions);
-        if (!use.IsStrictlyObsolete)
+        var isObsoleteUnderPolicy = use.IsStrictlyObsolete ||
+            (!protectionPolicy.ProtectFutureLevelingGear &&
+             use.Comparisons.Count > 0 &&
+             use.Comparisons.All(comparison => comparison.Status is EquipmentUseStatus.Obsolete or EquipmentUseStatus.FutureUse));
+        if (!isObsoleteUnderPolicy)
         {
             var assessment = use.Status == EquipmentUseStatus.NoUnlockedEligibleJob
                 ? SquireAssessment.NeedsReview
@@ -72,7 +76,9 @@ public sealed class SquireCandidateEvaluator
                 : SquireDisposition.Discard;
         var reasons = new List<SquireReason>
         {
-            new("StrictlyWorseForAllUnlockedJobs", "Every unlocked eligible job has a strictly better trusted baseline.", SquireReasonSeverity.Information),
+            use.Comparisons.Any(comparison => comparison.Status == EquipmentUseStatus.FutureUse)
+                ? new("FutureLevelingUseNotProtected", "One or more unlocked jobs are below this item's equip level; future leveling gear protection is off.", SquireReasonSeverity.Information)
+                : new("StrictlyWorseForAllUnlockedJobs", "Every unlocked eligible job has a strictly better trusted baseline.", SquireReasonSeverity.Information),
         };
         if (definition.IsDesynthesizable == true && capabilities.DesynthesisUnlocked != true)
         {

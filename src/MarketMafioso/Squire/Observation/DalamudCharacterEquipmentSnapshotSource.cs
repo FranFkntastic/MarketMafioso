@@ -53,9 +53,9 @@ public sealed class DalamudCharacterEquipmentSnapshotSource : ICharacterEquipmen
         if (identity.Scope is null)
             return Empty(identity, diagnostics);
 
-        var jobs = CaptureJobs(diagnostics);
-        var gearsets = CaptureGearsets(diagnostics);
         var instances = CaptureInventory(identity.Scope, capturedAt, diagnostics);
+        var jobs = CaptureJobs(instances, diagnostics);
+        var gearsets = CaptureGearsets(diagnostics);
         var definitions = CaptureDefinitions(instances, diagnostics);
         return new CharacterEquipmentSnapshot(Guid.NewGuid(), identity, jobs, gearsets, instances, definitions, new(diagnostics));
     }
@@ -73,24 +73,29 @@ public sealed class DalamudCharacterEquipmentSnapshotSource : ICharacterEquipmen
         return new(scope, playerState.CurrentWorld.RowId, playerState.ClassJob.RowId, capturedAt, true, SnapshotComponentStatus.Complete);
     }
 
-    private IReadOnlyList<CharacterJobSnapshot> CaptureJobs(List<SnapshotComponentDiagnostic> diagnostics)
+    private IReadOnlyList<CharacterJobSnapshot> CaptureJobs(
+        IReadOnlyList<EquipmentInstanceSnapshot> instances,
+        List<SnapshotComponentDiagnostic> diagnostics)
     {
         try
         {
             var sheet = dataManager.GetExcelSheet<ClassJob>();
             if (sheet is null)
                 throw new InvalidOperationException("ClassJob sheet is unavailable.");
+            var ownedItemIds = instances.Select(instance => instance.Fingerprint.ItemId).ToHashSet();
             var jobs = sheet
                 .Where(job => job.RowId > 0 && !string.IsNullOrWhiteSpace(job.Abbreviation.ToString()))
                 .Select(job =>
                 {
                     var level = playerState.GetClassJobLevel(job);
+                    var soulCrystalId = job.ItemSoulCrystal.RowId;
+                    var isUnlocked = IsJobUnlocked(level, soulCrystalId, ownedItemIds);
                     return new CharacterJobSnapshot(
                         job.RowId,
                         job.Abbreviation.ToString(),
                         job.Name.ToString(),
                         checked((uint)Math.Max(0, (int)level)),
-                        level > 0,
+                        isUnlocked,
                         job.ClassJobParent.RowId == 0 ? null : job.ClassJobParent.RowId,
                         job.Role.ToString());
                 })
@@ -105,6 +110,9 @@ public sealed class DalamudCharacterEquipmentSnapshotSource : ICharacterEquipmen
             return [];
         }
     }
+
+    internal static bool IsJobUnlocked(int level, uint soulCrystalId, IReadOnlySet<uint> ownedItemIds) =>
+        soulCrystalId == 0 ? level > 0 : ownedItemIds.Contains(soulCrystalId);
 
     private static unsafe IReadOnlyList<GearsetSnapshot> CaptureGearsets(List<SnapshotComponentDiagnostic> diagnostics)
     {
