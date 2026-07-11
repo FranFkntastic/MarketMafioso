@@ -32,6 +32,8 @@ public sealed class Plugin : IDalamudPlugin
     [PluginService] internal static IObjectTable ObjectTable { get; private set; } = null!;
     [PluginService] internal static ITargetManager TargetManager { get; private set; } = null!;
     [PluginService] internal static ICondition Condition { get; private set; } = null!;
+    [PluginService] internal static ITextureProvider TextureProvider { get; private set; } = null!;
+    [PluginService] internal static ITextureReadbackProvider TextureReadbackProvider { get; private set; } = null!;
 
     internal static Plugin Instance { get; private set; } = null!;
 
@@ -54,6 +56,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly AgentBridgeProofStore agentBridgeProofStore;
     private readonly AgentBridgeProofWindow agentBridgeProofWindow;
     private readonly AgentBridgeHost agentBridge;
+    private readonly AgentBridgeViewportCaptureService agentBridgeViewportCapture;
 
     private CancellationTokenSource? timerCancellation;
 
@@ -135,13 +138,18 @@ public sealed class Plugin : IDalamudPlugin
 
         agentBridgeProofStore = new AgentBridgeProofStore();
         agentBridgeProofWindow = new AgentBridgeProofWindow(agentBridgeProofStore);
+        agentBridgeViewportCapture = new AgentBridgeViewportCaptureService(
+            PluginInterface.GetPluginConfigDirectory(),
+            action => Framework.RunOnTick(action),
+            TextureProvider,
+            TextureReadbackProvider);
         agentBridge = new AgentBridgeHost(
             Configuration,
             PluginInterface.GetPluginConfigDirectory(),
             action => Framework.RunOnTick(action),
             mainWindow.CreateAgentBridgeTruth,
             agentBridgeProofStore,
-            () => mainWindow.IsOpen = true,
+            mainWindow.AgentOpenForReview,
             () => mainWindow.AcquisitionDiagnostics.IsOpen = true,
             proofId =>
             {
@@ -150,7 +158,8 @@ public sealed class Plugin : IDalamudPlugin
             },
             mainWindow.TrySelectAgentBridgeTab,
             mainWindow.AgentCaptureInputState,
-            mainWindow.AgentStopRoute);
+            mainWindow.AgentStopRoute,
+            agentBridgeViewportCapture.CaptureAsync);
 
         windowSystem.AddWindow(mainWindow);
         windowSystem.AddWindow(mainWindow.ProjectBrowser);

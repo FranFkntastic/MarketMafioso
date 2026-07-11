@@ -21,6 +21,7 @@ public sealed class AgentBridgeHost : IDisposable
     private readonly Func<string, bool> selectMainTab;
     private readonly Action captureInputState;
     private readonly Action stopRoute;
+    private readonly Func<CancellationToken, Task<AgentBridgeCaptureReceipt>> captureViewport;
     private readonly JsonSerializerOptions jsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
     private CancellationTokenSource? cancellation;
     private Task? listenTask;
@@ -37,7 +38,8 @@ public sealed class AgentBridgeHost : IDisposable
         Action<string> openProofWindow,
         Func<string, bool> selectMainTab,
         Action captureInputState,
-        Action stopRoute)
+        Action stopRoute,
+        Func<CancellationToken, Task<AgentBridgeCaptureReceipt>> captureViewport)
     {
         this.config = config ?? throw new ArgumentNullException(nameof(config));
         this.configDirectory = configDirectory ?? throw new ArgumentNullException(nameof(configDirectory));
@@ -50,6 +52,7 @@ public sealed class AgentBridgeHost : IDisposable
         this.selectMainTab = selectMainTab ?? throw new ArgumentNullException(nameof(selectMainTab));
         this.captureInputState = captureInputState ?? throw new ArgumentNullException(nameof(captureInputState));
         this.stopRoute = stopRoute ?? throw new ArgumentNullException(nameof(stopRoute));
+        this.captureViewport = captureViewport ?? throw new ArgumentNullException(nameof(captureViewport));
     }
 
     public string PipeName => $"MarketMafioso.AgentBridge.{Environment.ProcessId}";
@@ -115,7 +118,7 @@ public sealed class AgentBridgeHost : IDisposable
                 using var reader = new StreamReader(pipe, leaveOpen: true);
                 await using var writer = new StreamWriter(pipe) { AutoFlush = true };
                 var requestJson = await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false);
-                var response = await HandleRequestAsync(requestJson).ConfigureAwait(false);
+                var response = await HandleRequestAsync(requestJson, cancellationToken).ConfigureAwait(false);
                 await writer.WriteLineAsync(JsonSerializer.Serialize(response, jsonOptions)).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -130,7 +133,7 @@ public sealed class AgentBridgeHost : IDisposable
         }
     }
 
-    private async Task<AgentBridgeResponse> HandleRequestAsync(string? requestJson)
+    private async Task<AgentBridgeResponse> HandleRequestAsync(string? requestJson, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(requestJson) || requestJson.Length > MaxRequestCharacters)
             return AgentBridgeResponse.Fail("Invalid bridge request.");
@@ -186,6 +189,27 @@ public sealed class AgentBridgeHost : IDisposable
                 await dispatchOnFramework(stopRoute).ConfigureAwait(false);
                 AppendAudit("stop-route", "accepted");
                 return AgentBridgeResponse.Ok("Route stop requested.");
+            case "capture-screen":
+                using (var captureTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
+                {
+                    captureTimeout.CancelAfter(TimeSpan.FromSeconds(12));
+                    try
+                    {
+                        var capture = await captureViewport(captureTimeout.Token).ConfigureAwait(false);
+                        AppendAudit("capture-screen", capture.CaptureId);
+                        return AgentBridgeResponse.Ok("Rendered viewport captured.", capture);
+                    }
+                    catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+                    {
+                        AppendAudit("capture-screen", "timeout");
+                        return AgentBridgeResponse.Fail("Rendered viewport capture timed out.");
+                    }
+                    catch (Exception ex)
+                    {
+                        AppendAudit("capture-screen", $"failed:{ex.GetType().Name}");
+                        return AgentBridgeResponse.Fail($"Rendered viewport capture failed: {ex.Message}");
+                    }
+                }
             case "get-proof":
                 receipt = string.IsNullOrWhiteSpace(request.ProofId)
                     ? proofStore.GetCurrent()
@@ -252,8 +276,8 @@ public sealed record AgentBridgeResponse
 {
     public required bool Success { get; init; }
     public required string Message { get; init; }
-    public AgentBridgeProofReceipt? Receipt { get; init; }
+    public object? Receipt { get; init; }
 
-    public static AgentBridgeResponse Ok(string message, AgentBridgeProofReceipt? receipt = null) => new() { Success = true, Message = message, Receipt = receipt };
+    public static AgentBridgeResponse Ok(string message, object? receipt = null) => new() { Success = true, Message = message, Receipt = receipt };
     public static AgentBridgeResponse Fail(string message) => new() { Success = false, Message = message };
 }

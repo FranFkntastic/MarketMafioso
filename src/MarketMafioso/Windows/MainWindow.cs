@@ -403,8 +403,15 @@ public class MainWindow : Window, IDisposable
             return false;
 
         agentRequestedTab = tabName;
-        IsOpen = true;
+        AgentOpenForReview();
         return true;
+    }
+
+    public void AgentOpenForReview()
+    {
+        IsOpen = true;
+        Collapsed = false;
+        CollapsedCondition = ImGuiCond.Always;
     }
 
     public void AgentCaptureInputState() => CaptureMarketBoardInputState();
