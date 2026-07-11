@@ -8,11 +8,12 @@ public sealed class SquireCandidateEvaluator
 {
     private readonly EquipmentUseAnalyzer useAnalyzer = new();
 
-    public SquireAnalysis Evaluate(CharacterEquipmentSnapshot snapshot)
+    public SquireAnalysis Evaluate(CharacterEquipmentSnapshot snapshot, SquireDispositionCapabilities? capabilities = null)
     {
+        capabilities ??= new SquireDispositionCapabilities(null);
         var gearsetProtection = GearsetProtectionIndex.Create(snapshot.Gearsets);
         var candidates = snapshot.Instances
-            .Select(instance => EvaluateInstance(snapshot, instance, gearsetProtection))
+            .Select(instance => EvaluateInstance(snapshot, instance, gearsetProtection, capabilities))
             .ToArray();
         return new SquireAnalysis(snapshot, candidates);
     }
@@ -20,7 +21,8 @@ public sealed class SquireCandidateEvaluator
     private SquireCandidate EvaluateInstance(
         CharacterEquipmentSnapshot snapshot,
         EquipmentInstanceSnapshot instance,
-        GearsetProtectionIndex gearsetProtection)
+        GearsetProtectionIndex gearsetProtection,
+        SquireDispositionCapabilities capabilities)
     {
         if (!snapshot.Definitions.TryGetValue(instance.Fingerprint.ItemId, out var definition))
             return Unsupported(instance, UnknownDefinition(instance.Fingerprint.ItemId));
@@ -45,7 +47,7 @@ public sealed class SquireCandidateEvaluator
                 use);
         }
 
-        var dispositions = GetSupportedDispositions(definition);
+        var dispositions = GetSupportedDispositions(definition, capabilities);
         if (dispositions.Count == 0)
         {
             return Candidate(
@@ -63,13 +65,23 @@ public sealed class SquireCandidateEvaluator
             : dispositions.Contains(SquireDisposition.VendorSell)
                 ? SquireDisposition.VendorSell
                 : SquireDisposition.Discard;
+        var reasons = new List<SquireReason>
+        {
+            new("StrictlyWorseForAllUnlockedJobs", "Every unlocked eligible job has a strictly better trusted baseline.", SquireReasonSeverity.Information),
+        };
+        if (definition.IsDesynthesizable == true && capabilities.DesynthesisUnlocked != true)
+        {
+            reasons.Add(capabilities.DesynthesisUnlocked == false
+                ? new("DesynthesisNotUnlocked", "Desynthesis is unavailable until Gone to Pieces is complete.", SquireReasonSeverity.Information)
+                : new("DesynthesisUnlockUnknown", "Desynthesis unlock state could not be proven, so it was not offered.", SquireReasonSeverity.Warning));
+        }
         return Candidate(
             instance,
             definition,
             SquireAssessment.Candidate,
             recommended,
             dispositions,
-            [new("StrictlyWorseForAllUnlockedJobs", "Every unlocked eligible job has a strictly better trusted baseline.", SquireReasonSeverity.Information)],
+            reasons,
             use);
     }
 
@@ -105,10 +117,10 @@ public sealed class SquireCandidateEvaluator
         return reasons;
     }
 
-    private static IReadOnlySet<SquireDisposition> GetSupportedDispositions(EquipmentItemDefinition definition)
+    private static IReadOnlySet<SquireDisposition> GetSupportedDispositions(EquipmentItemDefinition definition, SquireDispositionCapabilities capabilities)
     {
         var values = new HashSet<SquireDisposition>();
-        if (definition.IsDesynthesizable == true)
+        if (definition.IsDesynthesizable == true && capabilities.DesynthesisUnlocked == true)
             values.Add(SquireDisposition.Desynthesize);
         if (definition.IsVendorSellable == true && definition.VendorSellPrice is > 0)
             values.Add(SquireDisposition.VendorSell);

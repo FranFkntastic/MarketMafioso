@@ -29,6 +29,8 @@ public enum SquireReasonSeverity
 
 public sealed record SquireReason(string Code, string Message, SquireReasonSeverity Severity);
 
+public sealed record SquireDispositionCapabilities(bool? DesynthesisUnlocked);
+
 public sealed record SquireCandidate(
     EquipmentInstanceSnapshot Instance,
     EquipmentItemDefinition Definition,

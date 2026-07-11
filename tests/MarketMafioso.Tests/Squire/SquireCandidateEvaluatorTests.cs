@@ -7,6 +7,7 @@ namespace MarketMafioso.Tests.Squire;
 public sealed class SquireCandidateEvaluatorTests
 {
     private static readonly CharacterScope Scope = new(7, "Squire", 21);
+    private static readonly SquireDispositionCapabilities DesynthesisUnlocked = new(true);
     private readonly SquireCandidateEvaluator evaluator = new();
 
     [Fact]
@@ -17,7 +18,7 @@ public sealed class SquireCandidateEvaluatorTests
             definitions: [Definition(100, 20), Definition(200, 30)],
             jobs: [Job(1, 50, true)],
             gearsets: [Gearset(1, 200)]);
-        var candidate = Assert.Single(evaluator.Evaluate(snapshot).Candidates);
+        var candidate = Assert.Single(evaluator.Evaluate(snapshot, DesynthesisUnlocked).Candidates);
         Assert.Equal(SquireAssessment.Candidate, candidate.Assessment);
         Assert.Equal(SquireDisposition.Desynthesize, candidate.RecommendedDisposition);
         Assert.Contains(SquireDisposition.VendorSell, candidate.SupportedDispositions);
@@ -28,7 +29,7 @@ public sealed class SquireCandidateEvaluatorTests
     {
         var snapshot = Snapshot(
             [Instance(100)], [Definition(100, 20), Definition(200, 30)], [Job(1, 50, true)], [Gearset(1, 200)], complete: false);
-        var candidate = Assert.Single(evaluator.Evaluate(snapshot).Candidates);
+        var candidate = Assert.Single(evaluator.Evaluate(snapshot, DesynthesisUnlocked).Candidates);
         Assert.Equal(SquireAssessment.Protected, candidate.Assessment);
         Assert.Contains(candidate.Reasons, reason => reason.Code == "PartialSnapshot");
     }
@@ -38,7 +39,7 @@ public sealed class SquireCandidateEvaluatorTests
     {
         var instance = Instance(100, equipped: true, materia: [500], crafter: 99);
         var snapshot = Snapshot([instance], [Definition(100, 20)], [Job(1, 50, true)], [Gearset(1, 100)]);
-        var candidate = Assert.Single(evaluator.Evaluate(snapshot).Candidates);
+        var candidate = Assert.Single(evaluator.Evaluate(snapshot, DesynthesisUnlocked).Candidates);
         Assert.Equal(SquireAssessment.Protected, candidate.Assessment);
         Assert.Contains(candidate.Reasons, reason => reason.Code == "CurrentlyEquipped");
         Assert.Contains(candidate.Reasons, reason => reason.Code == "ReferencedByGearset");
@@ -51,7 +52,7 @@ public sealed class SquireCandidateEvaluatorTests
     {
         var armoireItem = Definition(100, 20) with { IsArmoireEligible = true };
         var snapshot = Snapshot([Instance(100)], [armoireItem, Definition(200, 30)], [Job(1, 50, true)], [Gearset(1, 200)]);
-        var candidate = Assert.Single(evaluator.Evaluate(snapshot).Candidates);
+        var candidate = Assert.Single(evaluator.Evaluate(snapshot, DesynthesisUnlocked).Candidates);
         Assert.Equal(SquireAssessment.Protected, candidate.Assessment);
         Assert.Contains(candidate.Reasons, reason => reason.Code == "ArmoireEligible");
     }
@@ -60,7 +61,7 @@ public sealed class SquireCandidateEvaluatorTests
     public void UnsupportedDispositionCannotEnterPlan()
     {
         var snapshot = Snapshot([Instance(100)], [Definition(100, 20), Definition(200, 30)], [Job(1, 50, true)], [Gearset(1, 200)]);
-        var analysis = evaluator.Evaluate(snapshot);
+        var analysis = evaluator.Evaluate(snapshot, DesynthesisUnlocked);
         Assert.Throws<InvalidOperationException>(() => new SquireActionPlanner().Create(
             analysis, SquireDisposition.Unsupported, [analysis.Candidates[0].Instance.Fingerprint], DateTimeOffset.UtcNow));
     }
@@ -68,8 +69,8 @@ public sealed class SquireCandidateEvaluatorTests
     [Fact]
     public void RefreshInvalidatesPriorSelectionEvenWhenItemIdMatches()
     {
-        var first = evaluator.Evaluate(Snapshot([Instance(100, slot: 1)], [Definition(100, 20), Definition(200, 30)], [Job(1, 50, true)], [Gearset(1, 200)]));
-        var second = evaluator.Evaluate(Snapshot([Instance(100, slot: 2)], [Definition(100, 20), Definition(200, 30)], [Job(1, 50, true)], [Gearset(1, 200)]));
+        var first = evaluator.Evaluate(Snapshot([Instance(100, slot: 1)], [Definition(100, 20), Definition(200, 30)], [Job(1, 50, true)], [Gearset(1, 200)]), DesynthesisUnlocked);
+        var second = evaluator.Evaluate(Snapshot([Instance(100, slot: 2)], [Definition(100, 20), Definition(200, 30)], [Job(1, 50, true)], [Gearset(1, 200)]), DesynthesisUnlocked);
         var review = new SquireReviewState();
         review.Adopt(first);
         Assert.True(review.TrySelect(first, first.Candidates[0].Instance.Fingerprint, SquireDisposition.Desynthesize));
@@ -82,7 +83,7 @@ public sealed class SquireCandidateEvaluatorTests
     public void PartialSnapshotCannotProduceActionPlan()
     {
         var analysis = evaluator.Evaluate(Snapshot(
-            [Instance(100)], [Definition(100, 20), Definition(200, 30)], [Job(1, 50, true)], [Gearset(1, 200)], complete: false));
+            [Instance(100)], [Definition(100, 20), Definition(200, 30)], [Job(1, 50, true)], [Gearset(1, 200)], complete: false), DesynthesisUnlocked);
         Assert.Throws<InvalidOperationException>(() => new SquireActionPlanner().Create(
             analysis, SquireDisposition.Desynthesize, [analysis.Candidates[0].Instance.Fingerprint], DateTimeOffset.UtcNow));
     }
@@ -102,8 +103,24 @@ public sealed class SquireCandidateEvaluatorTests
             [Definition(100, 20)],
             [Job(1, 50, true)],
             [Gearset(1, 100)]);
-        var analysis = evaluator.Evaluate(snapshot);
+        var analysis = evaluator.Evaluate(snapshot, DesynthesisUnlocked);
         Assert.All(analysis.Candidates, candidate => Assert.Equal(SquireAssessment.Protected, candidate.Assessment));
+    }
+
+    [Fact]
+    public void DesynthesisLocked_FallsBackWithoutOfferingDesynthesis()
+    {
+        var snapshot = Snapshot(
+            [Instance(100)],
+            [Definition(100, 20), Definition(200, 30)],
+            [Job(1, 50, true)],
+            [Gearset(1, 200)]);
+
+        var candidate = Assert.Single(evaluator.Evaluate(snapshot, new SquireDispositionCapabilities(false)).Candidates);
+
+        Assert.Equal(SquireDisposition.VendorSell, candidate.RecommendedDisposition);
+        Assert.DoesNotContain(SquireDisposition.Desynthesize, candidate.SupportedDispositions);
+        Assert.Contains(candidate.Reasons, reason => reason.Code == "DesynthesisNotUnlocked");
     }
 
     private static CharacterEquipmentSnapshot Snapshot(

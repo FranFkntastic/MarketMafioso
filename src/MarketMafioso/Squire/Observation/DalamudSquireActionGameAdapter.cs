@@ -23,6 +23,7 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
     private readonly ICondition condition;
     private readonly IGameGui gameGui;
     private readonly IFramework framework;
+    private readonly ISquireDispositionCapabilitySource capabilitySource;
     private readonly Func<bool> hasExternalConflict;
     private bool ownsDesynthesisUi;
     private bool selectorCategoryRequested;
@@ -34,6 +35,7 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
         ICondition condition,
         IGameGui gameGui,
         IFramework framework,
+        ISquireDispositionCapabilitySource capabilitySource,
         Func<bool>? hasExternalConflict = null)
     {
         this.snapshotSource = snapshotSource;
@@ -41,6 +43,7 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
         this.condition = condition;
         this.gameGui = gameGui;
         this.framework = framework;
+        this.capabilitySource = capabilitySource;
         this.hasExternalConflict = hasExternalConflict ?? (() => false);
     }
 
@@ -76,6 +79,8 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
             return SquireRevalidationResult.Fail("ReferencedByGearset", "A valid gearset now references this item ID.");
         if (!snapshot.Definitions.TryGetValue(fingerprint.ItemId, out var definition))
             return SquireRevalidationResult.Fail("ItemDefinitionMissing", "The item definition is unavailable.");
+        if (disposition == SquireDisposition.Desynthesize && capabilitySource.Capture().DesynthesisUnlocked != true)
+            return SquireRevalidationResult.Fail("DesynthesisNotUnlocked", "Desynthesis is unavailable until Gone to Pieces is complete.");
 
         var supported = disposition switch
         {

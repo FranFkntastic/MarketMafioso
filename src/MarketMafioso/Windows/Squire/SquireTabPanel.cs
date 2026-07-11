@@ -19,6 +19,7 @@ internal sealed class SquireTabPanel : IDisposable
 {
     private readonly ICharacterEquipmentSnapshotSource snapshotSource;
     private readonly ISquireActionGameAdapter actionAdapter;
+    private readonly ISquireDispositionCapabilitySource capabilitySource;
     private readonly AgentBridgeUiReviewRegistry reviewRegistry;
     private readonly Configuration config;
     private readonly SquireCandidateEvaluator evaluator = new();
@@ -36,12 +37,14 @@ internal sealed class SquireTabPanel : IDisposable
         Configuration config,
         ICharacterEquipmentSnapshotSource snapshotSource,
         ISquireActionGameAdapter actionAdapter,
+        ISquireDispositionCapabilitySource capabilitySource,
         AgentBridgeUiReviewRegistry reviewRegistry,
         string diagnosticDirectory)
     {
         this.config = config;
         this.snapshotSource = snapshotSource;
         this.actionAdapter = actionAdapter;
+        this.capabilitySource = capabilitySource;
         this.reviewRegistry = reviewRegistry;
         this.diagnosticDirectory = diagnosticDirectory;
         search = config.Squire.Search;
@@ -92,7 +95,7 @@ internal sealed class SquireTabPanel : IDisposable
         }
         try
         {
-            analysis = evaluator.Evaluate(snapshotSource.Capture());
+            analysis = evaluator.Evaluate(snapshotSource.Capture(), capabilitySource.Capture());
             review.Adopt(analysis);
             runConfirmed = false;
             var executable = analysis.Candidates.Count(candidate => candidate.IsExecutable);

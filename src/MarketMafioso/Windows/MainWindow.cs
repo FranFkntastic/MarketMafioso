@@ -176,10 +176,12 @@ public class MainWindow : Window, IDisposable
             Plugin.Instance.RestartTimer,
             config.Save);
         var squireSnapshotSource = new DalamudCharacterEquipmentSnapshotSource(playerState, dataManager, log);
+        var squireCapabilities = new DalamudSquireDispositionCapabilitySource();
         squireTab = new SquireTabPanel(
             config,
             squireSnapshotSource,
-            new DalamudSquireActionGameAdapter(squireSnapshotSource, playerState, Plugin.Condition, Plugin.GameGui, Plugin.Framework),
+            new DalamudSquireActionGameAdapter(squireSnapshotSource, playerState, Plugin.Condition, Plugin.GameGui, Plugin.Framework, squireCapabilities),
+            squireCapabilities,
             AgentReviewRegistry,
             Path.Combine(Plugin.PluginInterface.GetPluginConfigDirectory(), "squire-logs"));
         statusTab = new StatusTabPanel(config, reporter, retainerCacheStore, log);
