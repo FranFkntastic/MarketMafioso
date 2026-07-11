@@ -2,6 +2,8 @@ using System;
 using System.IO;
 using System.IO.Pipes;
 using System.Text.Json;
+using System.Security.Cryptography;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -22,9 +24,11 @@ public sealed class AgentBridgeHost : IDisposable
     private readonly Action captureInputState;
     private readonly Action stopRoute;
     private readonly Func<CancellationToken, Task<AgentBridgeCaptureReceipt>> captureViewport;
+    private readonly Func<bool> screenshotsEnabled;
     private readonly JsonSerializerOptions jsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
     private CancellationTokenSource? cancellation;
     private Task? listenTask;
+    private string? accessToken;
     private long revision;
 
     public AgentBridgeHost(
@@ -39,7 +43,8 @@ public sealed class AgentBridgeHost : IDisposable
         Func<string, bool> selectMainTab,
         Action captureInputState,
         Action stopRoute,
-        Func<CancellationToken, Task<AgentBridgeCaptureReceipt>> captureViewport)
+        Func<CancellationToken, Task<AgentBridgeCaptureReceipt>> captureViewport,
+        Func<bool> screenshotsEnabled)
     {
         this.config = config ?? throw new ArgumentNullException(nameof(config));
         this.configDirectory = configDirectory ?? throw new ArgumentNullException(nameof(configDirectory));
@@ -53,6 +58,7 @@ public sealed class AgentBridgeHost : IDisposable
         this.captureInputState = captureInputState ?? throw new ArgumentNullException(nameof(captureInputState));
         this.stopRoute = stopRoute ?? throw new ArgumentNullException(nameof(stopRoute));
         this.captureViewport = captureViewport ?? throw new ArgumentNullException(nameof(captureViewport));
+        this.screenshotsEnabled = screenshotsEnabled ?? throw new ArgumentNullException(nameof(screenshotsEnabled));
     }
 
     public string PipeName => $"MarketMafioso.AgentBridge.{Environment.ProcessId}";
@@ -84,13 +90,11 @@ public sealed class AgentBridgeHost : IDisposable
         if (listenTask != null)
             return;
 
-        if (string.IsNullOrWhiteSpace(config.AgentBridgeAccessToken))
-        {
-            config.AgentBridgeAccessToken = Guid.NewGuid().ToString("N");
-            config.Save();
-        }
+        accessToken = GetOrCreateAccessToken();
 
         Directory.CreateDirectory(BridgeDirectory);
+        if (!config.EnableAgentBridgeAudit && File.Exists(AuditPath))
+            File.Delete(AuditPath);
         File.WriteAllText(DiscoveryPath, JsonSerializer.Serialize(new AgentBridgeDiscovery
         {
             SchemaVersion = 1,
@@ -113,7 +117,7 @@ public sealed class AgentBridgeHost : IDisposable
                     PipeDirection.InOut,
                     1,
                     PipeTransmissionMode.Byte,
-                    PipeOptions.Asynchronous);
+                    PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
                 await pipe.WaitForConnectionAsync(cancellationToken).ConfigureAwait(false);
                 using var reader = new StreamReader(pipe, leaveOpen: true);
                 await using var writer = new StreamWriter(pipe) { AutoFlush = true };
@@ -148,7 +152,7 @@ public sealed class AgentBridgeHost : IDisposable
             return AgentBridgeResponse.Fail("Bridge request JSON is invalid.");
         }
 
-        if (request == null || !string.Equals(request.Token, config.AgentBridgeAccessToken, StringComparison.Ordinal))
+        if (request == null || !string.Equals(request.Token, accessToken, StringComparison.Ordinal))
             return AgentBridgeResponse.Fail("Bridge authentication failed.");
 
         AgentBridgeProofReceipt? receipt = null;
@@ -190,6 +194,8 @@ public sealed class AgentBridgeHost : IDisposable
                 AppendAudit("stop-route", "accepted");
                 return AgentBridgeResponse.Ok("Route stop requested.");
             case "capture-screen":
+                if (!screenshotsEnabled())
+                    return AgentBridgeResponse.Fail("Agent bridge screenshots are disabled by local configuration.");
                 if (!string.IsNullOrWhiteSpace(request.Target))
                 {
                     var captureTabSelected = false;
@@ -203,7 +209,6 @@ public sealed class AgentBridgeHost : IDisposable
                     try
                     {
                         var capture = await captureViewport(captureTimeout.Token).ConfigureAwait(false);
-                        AppendAudit("capture-screen", capture.CaptureId);
                         return AgentBridgeResponse.Ok("Rendered viewport captured.", capture);
                     }
                     catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
@@ -247,6 +252,7 @@ public sealed class AgentBridgeHost : IDisposable
         }
 
         listenTask = null;
+        accessToken = null;
         if (File.Exists(DiscoveryPath))
             File.Delete(DiscoveryPath);
     }
@@ -257,8 +263,57 @@ public sealed class AgentBridgeHost : IDisposable
 
     private void AppendAudit(string action, string result)
     {
+        if (!config.EnableAgentBridgeAudit)
+            return;
         Directory.CreateDirectory(BridgeDirectory);
         File.AppendAllText(AuditPath, JsonSerializer.Serialize(new { atUtc = DateTimeOffset.UtcNow, action, result }, jsonOptions) + Environment.NewLine);
+    }
+
+    private string GetOrCreateAccessToken()
+    {
+        var entropy = Encoding.UTF8.GetBytes(config.PluginInstanceId);
+        if (!string.IsNullOrWhiteSpace(config.AgentBridgeProtectedAccessToken))
+        {
+            try
+            {
+                var protectedBytes = Convert.FromBase64String(config.AgentBridgeProtectedAccessToken);
+                try
+                {
+                    return Encoding.UTF8.GetString(ProtectedData.Unprotect(
+                        protectedBytes,
+                        entropy,
+                        DataProtectionScope.CurrentUser));
+                }
+                finally
+                {
+                    CryptographicOperations.ZeroMemory(protectedBytes);
+                }
+            }
+            catch (CryptographicException)
+            {
+                config.AgentBridgeProtectedAccessToken = string.Empty;
+            }
+            catch (FormatException)
+            {
+                config.AgentBridgeProtectedAccessToken = string.Empty;
+            }
+        }
+
+        var token = string.IsNullOrWhiteSpace(config.AgentBridgeAccessToken)
+            ? Guid.NewGuid().ToString("N")
+            : config.AgentBridgeAccessToken;
+        var encrypted = ProtectedData.Protect(Encoding.UTF8.GetBytes(token), entropy, DataProtectionScope.CurrentUser);
+        try
+        {
+            config.AgentBridgeProtectedAccessToken = Convert.ToBase64String(encrypted);
+            config.AgentBridgeAccessToken = string.Empty;
+            config.Save();
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(encrypted);
+        }
+        return token;
     }
 }
 

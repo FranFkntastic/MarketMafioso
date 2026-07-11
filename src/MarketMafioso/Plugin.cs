@@ -140,6 +140,8 @@ public sealed class Plugin : IDalamudPlugin
         agentBridgeProofWindow = new AgentBridgeProofWindow(agentBridgeProofStore);
         agentBridgeViewportCapture = new AgentBridgeViewportCaptureService(
             PluginInterface.GetPluginConfigDirectory(),
+            Configuration.PluginInstanceId,
+            () => mainWindow.AgentCaptureRegion,
             action => Framework.RunOnTick(action),
             TextureProvider,
             TextureReadbackProvider);
@@ -159,7 +161,8 @@ public sealed class Plugin : IDalamudPlugin
             mainWindow.TrySelectAgentBridgeTab,
             mainWindow.AgentCaptureInputState,
             mainWindow.AgentStopRoute,
-            agentBridgeViewportCapture.CaptureAsync);
+            agentBridgeViewportCapture.CaptureAsync,
+            () => Configuration.EnableAgentBridgeScreenshots);
 
         windowSystem.AddWindow(mainWindow);
         windowSystem.AddWindow(mainWindow.ProjectBrowser);

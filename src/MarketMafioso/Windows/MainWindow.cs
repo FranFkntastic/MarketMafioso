@@ -62,6 +62,8 @@ public class MainWindow : Window, IDisposable
     private string workshopStatus = "Workshop prep queue is idle.";
     private string? agentRequestedTab;
 
+    public AgentBridgeCaptureRegion? AgentCaptureRegion { get; private set; }
+
     private const string ProductSummary = "Workshop logistics and self-hosted inventory history.";
     private const string WorkshopLogisticsModuleSummary = "Workshop Logistics tracks company workshop jobs, materials, retainer restock, handoff, and assembly.";
     private const string MarketAcquisitionModuleSummary = "Build, sync, and monitor acquisition requests from one persistent board.";
@@ -333,6 +335,19 @@ public class MainWindow : Window, IDisposable
 
     public override void Draw()
     {
+        var viewport = ImGui.GetWindowViewport();
+        var windowPosition = ImGui.GetWindowPos();
+        var windowSize = ImGui.GetWindowSize();
+        if (windowSize.X > 0f && windowSize.Y > 0f && viewport.Size.X > 0f && viewport.Size.Y > 0f)
+        {
+            AgentCaptureRegion = new AgentBridgeCaptureRegion(
+                windowPosition,
+                windowSize,
+                viewport.Pos,
+                viewport.Size,
+                DateTimeOffset.UtcNow);
+        }
+
         DrawHeader();
         ImGui.Spacing();
 

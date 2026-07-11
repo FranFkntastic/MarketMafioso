@@ -22,8 +22,11 @@ public class Configuration : IPluginConfiguration
     public DateTime? MarketAcquisitionUnlockedAtUtc { get; set; }
     public bool EnableOpportunisticWorldChecks { get; set; } = true;
     public bool CreateMarketAcquisitionRouteDiagnosticPackages { get; set; } = false;
-    public bool EnableAgentBridge { get; set; } = true;
+    public bool EnableAgentBridge { get; set; } = false;
+    public bool EnableAgentBridgeScreenshots { get; set; } = false;
+    public bool EnableAgentBridgeAudit { get; set; } = false;
     public string AgentBridgeAccessToken { get; set; } = string.Empty;
+    public string AgentBridgeProtectedAccessToken { get; set; } = string.Empty;
     public int MarketAcquisitionRecentWorldTtlHours { get; set; } = 18;
     public bool MarketAcquisitionIgnoreRecentWorldVisitsForSweep { get; set; } = false;
     public List<PersistedMarketAcquisitionWorldVisit> MarketAcquisitionWorldVisits { get; set; } = [];
