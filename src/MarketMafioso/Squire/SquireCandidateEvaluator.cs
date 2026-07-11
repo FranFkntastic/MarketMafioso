@@ -7,6 +7,7 @@ namespace MarketMafioso.Squire;
 public sealed class SquireCandidateEvaluator
 {
     private readonly EquipmentUseAnalyzer useAnalyzer = new();
+    private readonly SquireDispositionEligibilityEvaluator dispositionEligibility = new();
 
     public SquireAnalysis Evaluate(
         CharacterEquipmentSnapshot snapshot,
@@ -56,7 +57,8 @@ public sealed class SquireCandidateEvaluator
                 use);
         }
 
-        var dispositions = GetSupportedDispositions(definition, capabilities);
+        var eligibility = dispositionEligibility.Evaluate(definition, capabilities);
+        var dispositions = eligibility.SupportedDispositions;
         if (dispositions.Count == 0)
         {
             return Candidate(
@@ -80,12 +82,7 @@ public sealed class SquireCandidateEvaluator
                 ? new("FutureLevelingUseNotProtected", "One or more unlocked jobs are below this item's equip level; future leveling gear protection is off.", SquireReasonSeverity.Information)
                 : new("StrictlyWorseForAllUnlockedJobs", "Every unlocked eligible job has a strictly better trusted baseline.", SquireReasonSeverity.Information),
         };
-        if (definition.IsDesynthesizable == true && capabilities.DesynthesisUnlocked != true)
-        {
-            reasons.Add(capabilities.DesynthesisUnlocked == false
-                ? new("DesynthesisNotUnlocked", "Desynthesis is unavailable until Gone to Pieces is complete.", SquireReasonSeverity.Information)
-                : new("DesynthesisUnlockUnknown", "Desynthesis unlock state could not be proven, so it was not offered.", SquireReasonSeverity.Warning));
-        }
+        reasons.AddRange(eligibility.Reasons);
         return Candidate(
             instance,
             definition,
@@ -127,18 +124,6 @@ public sealed class SquireCandidateEvaluator
         if (definition.IsRecoverable is null)
             reasons.Add(new("RecoverabilityUnknown", "Recoverability is unknown.", SquireReasonSeverity.Blocking));
         return reasons;
-    }
-
-    private static IReadOnlySet<SquireDisposition> GetSupportedDispositions(EquipmentItemDefinition definition, SquireDispositionCapabilities capabilities)
-    {
-        var values = new HashSet<SquireDisposition>();
-        if (definition.IsDesynthesizable == true && capabilities.DesynthesisUnlocked == true)
-            values.Add(SquireDisposition.Desynthesize);
-        if (definition.IsVendorSellable == true && definition.VendorSellPrice is > 0)
-            values.Add(SquireDisposition.VendorSell);
-        if (definition.IsDiscardable == true)
-            values.Add(SquireDisposition.Discard);
-        return values;
     }
 
     private static SquireReason UseReason(EquipmentUseAnalysis analysis) => analysis.Status switch

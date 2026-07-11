@@ -81,13 +81,9 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
         if (disposition == SquireDisposition.Desynthesize && capabilitySource.Capture().DesynthesisUnlocked != true)
             return SquireRevalidationResult.Fail("DesynthesisNotUnlocked", "Desynthesis is unavailable until Gone to Pieces is complete.");
 
-        var supported = disposition switch
-        {
-            SquireDisposition.Desynthesize => definition.IsDesynthesizable == true,
-            SquireDisposition.VendorSell => definition.IsVendorSellable == true && definition.VendorSellPrice is > 0,
-            SquireDisposition.Discard => definition.IsDiscardable == true,
-            _ => false,
-        };
+        var supported = new SquireDispositionEligibilityEvaluator()
+            .Evaluate(definition, capabilitySource.Capture())
+            .SupportedDispositions.Contains(disposition);
         return supported
             ? SquireRevalidationResult.Valid()
             : SquireRevalidationResult.Fail("DispositionUnavailable", "The approved disposition is no longer supported.");

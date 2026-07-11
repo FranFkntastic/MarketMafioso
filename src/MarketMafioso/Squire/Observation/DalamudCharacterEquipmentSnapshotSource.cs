@@ -231,9 +231,9 @@ public sealed class DalamudCharacterEquipmentSnapshotSource : ICharacterEquipmen
                     slot != EquipmentSlot.Unknown,
                     slot == EquipmentSlot.SoulCrystal,
                     value.Desynth > 0,
-                    value.PriceLow > 0,
+                    value.PriceLow > 0 && !value.IsIndisposable,
                     value.PriceLow,
-                    true,
+                    !value.IsIndisposable,
                     cabinetItemIds.Contains(id),
                     false,
                     value.IsUnique && value.IsUntradable && value.Rarity >= 4);
@@ -258,13 +258,13 @@ public sealed class DalamudCharacterEquipmentSnapshotSource : ICharacterEquipmen
 
     private static uint NormalizeItemId(uint itemId) => itemId >= 1_000_000 ? itemId % 1_000_000 : itemId;
 
-    private static EquipmentSlot MapEquipSlot(uint rowId) => rowId switch
+    internal static EquipmentSlot MapEquipSlot(uint rowId) => rowId switch
     {
-        1 or 2 or 13 or 14 => EquipmentSlot.MainHand,
-        3 => EquipmentSlot.OffHand,
-        4 => EquipmentSlot.Head,
-        5 => EquipmentSlot.Body,
-        6 => EquipmentSlot.Hands,
+        1 or 13 or 14 => EquipmentSlot.MainHand,
+        2 => EquipmentSlot.OffHand,
+        3 => EquipmentSlot.Head,
+        4 => EquipmentSlot.Body,
+        5 => EquipmentSlot.Hands,
         7 => EquipmentSlot.Legs,
         8 => EquipmentSlot.Feet,
         9 => EquipmentSlot.Ears,
