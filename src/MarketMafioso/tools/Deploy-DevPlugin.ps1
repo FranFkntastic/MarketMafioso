@@ -33,6 +33,27 @@ function Resolve-ConfigPath {
     return [System.IO.Path]::GetFullPath((Join-Path -Path $BaseDir -ChildPath $Path))
 }
 
+function Resolve-RegisteredDeployedTarget {
+    $dalamudConfigPath = Join-Path -Path $env:APPDATA -ChildPath "XIVLauncher\dalamudConfig.json"
+    if (-not (Test-Path -LiteralPath $dalamudConfigPath)) {
+        throw "No deploy target was configured and Dalamud config was not found at '$dalamudConfigPath'. Pass -TargetDll or create '$defaultConfigPath'."
+    }
+
+    $dalamudConfig = Get-Content -LiteralPath $dalamudConfigPath -Raw | ConvertFrom-Json
+    $registeredTargets = @(
+        $dalamudConfig.DevPluginSettings.PSObject.Properties.Name |
+            Where-Object { $_ -match '[\\/]_deployed[\\/]MarketMafioso[\\/]MarketMafioso\.dll$' }
+    )
+
+    if ($registeredTargets.Count -ne 1) {
+        $registeredSummary = if ($registeredTargets.Count -eq 0) { "none" } else { $registeredTargets -join "', '" }
+        throw "No deploy target was configured and expected exactly one registered _deployed MarketMafioso DLL, but found $($registeredTargets.Count): '$registeredSummary'. Pass -TargetDll or create '$defaultConfigPath'."
+    }
+
+    Write-Host "Using registered _deployed target: $($registeredTargets[0])"
+    return $registeredTargets[0]
+}
+
 $effectiveConfigPath = if ([string]::IsNullOrWhiteSpace($ConfigPath)) { $defaultConfigPath } else { Resolve-ConfigPath -Path $ConfigPath -BaseDir $repoRoot }
 $localConfig = $null
 if (Test-Path -LiteralPath $effectiveConfigPath) {
@@ -63,7 +84,7 @@ if ([string]::IsNullOrWhiteSpace($configuredTargetDll) -and $null -ne $localConf
 }
 
 if ([string]::IsNullOrWhiteSpace($configuredTargetDll)) {
-    $configuredTargetDll = Join-Path -Path $env:APPDATA -ChildPath "XIVLauncher\devPlugins\MarketMafioso\MarketMafioso.dll"
+    $configuredTargetDll = Resolve-RegisteredDeployedTarget
 }
 
 $sourceDir = Join-Path -Path $projectDir -ChildPath "bin\$effectiveConfiguration"

@@ -49,6 +49,14 @@ internal sealed class MarketAcquisitionAcceptedRequestPanel
     {
         var canMutateClaim = !isBusy &&
                              string.Equals(claimed.Status, "Claimed", StringComparison.OrdinalIgnoreCase);
+        if (ImGuiUi.PrimaryButton("Prepare Plan", canPrepare))
+            preparePlan();
+
+        ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Preparing a plan reads remote market data. Guided routes validate live rows before purchasing.");
+
+        if (!ImGui.TreeNode("Request actions##MarketAcquisitionAcceptedRequestActions"))
+            return;
+
         if (ImGuiUi.Button("Accept Request", canMutateClaim))
             acceptRequest();
 
@@ -60,11 +68,7 @@ internal sealed class MarketAcquisitionAcceptedRequestPanel
         if (ImGuiUi.Button("Remove Local", !isBusy))
             removeLocalRequest();
 
-        ImGui.SameLine();
-        if (ImGuiUi.Button("Prepare Plan", canPrepare))
-            preparePlan();
-
-        ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Preparing a plan reads remote market data. Guided routes validate live rows before purchasing.");
+        ImGui.TreePop();
     }
 
     private static void DrawAcceptedRequestRecoveryHint(MarketAcquisitionClaimView claimed)
@@ -86,7 +90,7 @@ internal sealed class MarketAcquisitionAcceptedRequestPanel
         DrawClaimedRequestRow("Target", $"{claimed.TargetCharacterName} @ {claimed.TargetWorld}");
         DrawClaimedRequestRow("Lines", FormatAcquisitionLineCount(claimed));
         DrawClaimedRequestRow("Routing", FormatClaimedBatchRouting(claimed));
-        DrawClaimedRequestRow("Latest", FormatClaimedBatchLatest(claimed));
+        DrawClaimedRequestRow("Latest recorded activity", FormatClaimedBatchLatest(claimed));
         ImGui.EndTable();
     }
 
@@ -107,7 +111,7 @@ internal sealed class MarketAcquisitionAcceptedRequestPanel
         ImGui.TableSetupColumn("HQ", ImGuiTableColumnFlags.WidthFixed, 64);
         ImGui.TableSetupColumn("Bought", ImGuiTableColumnFlags.WidthFixed, 88);
         ImGui.TableSetupColumn("Spent", ImGuiTableColumnFlags.WidthFixed, 88);
-        ImGui.TableSetupColumn("Status", ImGuiTableColumnFlags.WidthFixed, 128);
+        ImGui.TableSetupColumn("Recorded Status", ImGuiTableColumnFlags.WidthFixed, 128);
         ImGui.TableHeadersRow();
 
         foreach (var line in GetAcquisitionPlanLines(claimed).OrderBy(line => line.Ordinal))

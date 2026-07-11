@@ -92,47 +92,52 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
 
     private void DrawGuidedRouteActionRow(MarketAcquisitionRouteEngineSnapshot snapshot, bool canStart, bool canReprepare)
     {
-        if (!ImGui.BeginTable("MarketAcquisitionGuidedRouteActions", 3, ImGuiTableFlags.SizingStretchProp))
-            return;
-
-        ImGui.TableSetupColumn("Run", ImGuiTableColumnFlags.WidthStretch);
-        ImGui.TableSetupColumn("Control", ImGuiTableColumnFlags.WidthStretch);
-        ImGui.TableSetupColumn("Reset", ImGuiTableColumnFlags.WidthStretch);
-        ImGui.TableNextRow();
-
-        ImGui.TableNextColumn();
-        ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Run");
-        if (ImGuiUi.Button("Start##MarketAcquisitionStartRoute", canStart))
-            startRoute(false);
-        ImGui.SameLine();
-        if (ImGuiUi.Button("Diagnostic Run##MarketAcquisitionStartDiagnostics", canStart))
-            startRoute(true);
-
-        ImGui.TableNextColumn();
-        ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Control");
         if (snapshot.IsPaused)
         {
-            if (ImGuiUi.Button("Resume##MarketAcquisitionResumeRoute", true))
+            if (ImGuiUi.PrimaryButton("Resume Route##MarketAcquisitionResumeRoute", true))
                 resumeRoute();
+            ImGui.SameLine();
+            if (ImGuiUi.Button("Stop##MarketAcquisitionStopRoute", true))
+                stopRoute();
+            return;
+        }
+
+        if (snapshot.IsRunning)
+        {
+            if (ImGuiUi.PrimaryButton("Pause Route##MarketAcquisitionPauseRoute", true))
+                pauseRoute();
+            ImGui.SameLine();
+            if (ImGuiUi.Button("Stop##MarketAcquisitionStopRoute", true))
+                stopRoute();
+            return;
+        }
+
+        if (!canStart)
+        {
+            ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Prepare a current plan to enable route actions.");
         }
         else
         {
-            if (ImGuiUi.Button("Pause##MarketAcquisitionPauseRoute", snapshot.IsRunning))
-                pauseRoute();
-        }
-        ImGui.SameLine();
-        if (ImGuiUi.Button("Stop##MarketAcquisitionStopRoute", snapshot.IsRunning || snapshot.IsPaused))
-            stopRoute();
+            if (ImGuiUi.PrimaryButton("Start Route##MarketAcquisitionStartRoute", true))
+                startRoute(false);
 
-        ImGui.TableNextColumn();
-        ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Reset");
-        if (ImGuiUi.Button("Restart##MarketAcquisitionRestartRoute", canStart && snapshot.CanRestart))
+            ImGui.SameLine();
+            if (ImGuiUi.Button("Diagnostic Run##MarketAcquisitionStartDiagnostics", true))
+                startRoute(true);
+        }
+
+        if (!snapshot.CanRestart && !canReprepare)
+            return;
+
+        if (!ImGui.TreeNode("Previous route actions##MarketAcquisitionPreviousRouteActions"))
+            return;
+
+        if (ImGuiUi.Button("Restart##MarketAcquisitionRestartRoute", snapshot.CanRestart))
             restartRoute();
         ImGui.SameLine();
         if (ImGuiUi.Button("Refresh Plan##MarketAcquisitionReprepareRoute", canReprepare))
             reprepareRoute();
-
-        ImGui.EndTable();
+        ImGui.TreePop();
     }
 
     private void DrawGuidedRouteStops(IReadOnlyList<MarketAcquisitionGuidedRouteStop> stops)
