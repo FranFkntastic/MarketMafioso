@@ -395,17 +395,21 @@ internal sealed class SquireTabPanel : IDisposable
                 false,
                 null,
                 () => status = liveAdapter.DescribeContextMenuProbe());
-            ImGui.SameLine();
-            if (ImGui.Button("Close menu probe##Squire"))
-                status = liveAdapter.CloseContextMenuProbe();
+        }
+        if (actionAdapter is DalamudSquireActionGameAdapter cleanupAdapter)
+        {
+            if (selections.Count == 1)
+                ImGui.SameLine();
+            if (ImGui.Button("Close Squire item UI##Squire"))
+                status = cleanupAdapter.CloseContextMenuProbe();
             RegisterLastControl(
                 "squire.probe.close-context-menu",
-                "Close the visible item context menu",
+                "Close visible Squire item UI",
                 AgentBridgeUiControlKind.Button,
                 true,
                 false,
                 null,
-                () => status = liveAdapter.CloseContextMenuProbe());
+                () => status = cleanupAdapter.CloseContextMenuProbe());
         }
     }
 
