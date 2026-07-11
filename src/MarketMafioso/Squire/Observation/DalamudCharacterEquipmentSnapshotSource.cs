@@ -199,7 +199,9 @@ public sealed class DalamudCharacterEquipmentSnapshotSource : ICharacterEquipmen
         {
             var itemSheet = dataManager.GetExcelSheet<Item>() ?? throw new InvalidOperationException("Item sheet unavailable.");
             var jobSheet = dataManager.GetExcelSheet<ClassJob>() ?? throw new InvalidOperationException("ClassJob sheet unavailable.");
+            var cabinetSheet = dataManager.GetExcelSheet<Cabinet>() ?? throw new InvalidOperationException("Cabinet sheet unavailable.");
             var jobs = jobSheet.Where(job => job.RowId > 0).ToArray();
+            var cabinetItemIds = cabinetSheet.Select(entry => entry.Item.RowId).Where(id => id != 0).ToHashSet();
             var values = new Dictionary<uint, EquipmentItemDefinition>();
             foreach (var id in instances.Select(instance => instance.Fingerprint.ItemId).Distinct())
             {
@@ -224,7 +226,7 @@ public sealed class DalamudCharacterEquipmentSnapshotSource : ICharacterEquipmen
                     value.PriceLow > 0,
                     value.PriceLow,
                     true,
-                    false,
+                    cabinetItemIds.Contains(id),
                     false,
                     value.IsUnique && value.IsUntradable && value.Rarity >= 4);
             }

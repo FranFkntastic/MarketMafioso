@@ -327,6 +327,7 @@ public class MainWindow : Window, IDisposable
                 StopCount = snapshot.Stops.Count,
                 CompletedOrProbedStopCount = snapshot.CompletedOrProbedStopCount,
             },
+            Squire = squireTab.CreateAgentBridgeTruth(),
         };
     }
 
@@ -428,6 +429,9 @@ public class MainWindow : Window, IDisposable
         };
         if (!allowed)
             return false;
+
+        if (string.Equals(tabName, "Squire", StringComparison.Ordinal))
+            squireTab.RefreshForBridge();
 
         agentRequestedTab = tabName;
         AgentOpenForReview();

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -21,6 +22,39 @@ public sealed record AgentBridgeTruth
     public required string? ClaimedRequestId { get; init; }
     public required string? PreparedPlanStatus { get; init; }
     public required AgentBridgeRouteTruth Route { get; init; }
+    public AgentBridgeSquireTruth? Squire { get; init; }
+}
+
+public sealed record AgentBridgeSquireTruth
+{
+    public required bool HasSnapshot { get; init; }
+    public required string Status { get; init; }
+    public required string? CharacterName { get; init; }
+    public required string? HomeWorldId { get; init; }
+    public required DateTimeOffset? CapturedAtUtc { get; init; }
+    public required bool IsComplete { get; init; }
+    public required int UnlockedJobCount { get; init; }
+    public required int ValidGearsetCount { get; init; }
+    public required int InstanceCount { get; init; }
+    public required int CandidateCount { get; init; }
+    public required int ProtectedCount { get; init; }
+    public required int NeedsReviewCount { get; init; }
+    public required int UnsupportedCount { get; init; }
+    public required IReadOnlyList<string> BlockingDiagnostics { get; init; }
+    public required IReadOnlyList<AgentBridgeSquireCandidateTruth> ExecutableCandidates { get; init; }
+}
+
+public sealed record AgentBridgeSquireCandidateTruth
+{
+    public required uint ItemId { get; init; }
+    public required string ItemName { get; init; }
+    public required string Container { get; init; }
+    public required int SlotIndex { get; init; }
+    public required uint EquipLevel { get; init; }
+    public required uint ItemLevel { get; init; }
+    public required string RecommendedDisposition { get; init; }
+    public required IReadOnlyList<string> ReasonCodes { get; init; }
+    public required IReadOnlyList<string> JobComparisons { get; init; }
 }
 
 public sealed record AgentBridgeRouteTruth

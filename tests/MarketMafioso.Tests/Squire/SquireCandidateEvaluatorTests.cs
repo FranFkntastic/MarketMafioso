@@ -47,6 +47,16 @@ public sealed class SquireCandidateEvaluatorTests
     }
 
     [Fact]
+    public void ArmoireEligibleItem_IsProtectedByDefault()
+    {
+        var armoireItem = Definition(100, 20) with { IsArmoireEligible = true };
+        var snapshot = Snapshot([Instance(100)], [armoireItem, Definition(200, 30)], [Job(1, 50, true)], [Gearset(1, 200)]);
+        var candidate = Assert.Single(evaluator.Evaluate(snapshot).Candidates);
+        Assert.Equal(SquireAssessment.Protected, candidate.Assessment);
+        Assert.Contains(candidate.Reasons, reason => reason.Code == "ArmoireEligible");
+    }
+
+    [Fact]
     public void UnsupportedDispositionCannotEnterPlan()
     {
         var snapshot = Snapshot([Instance(100)], [Definition(100, 20), Definition(200, 30)], [Job(1, 50, true)], [Gearset(1, 200)]);

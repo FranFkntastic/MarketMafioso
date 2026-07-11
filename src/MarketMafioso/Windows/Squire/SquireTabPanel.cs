@@ -4,6 +4,7 @@ using System.Linq;
 using Dalamud.Bindings.ImGui;
 using MarketMafioso.Squire;
 using MarketMafioso.Squire.Observation;
+using MarketMafioso.AgentBridge;
 using MarketMafioso.Windows.Main;
 using Newtonsoft.Json;
 
@@ -65,6 +66,69 @@ internal sealed class SquireTabPanel
             analysis = null;
             status = $"Refresh failed: {ex.Message}";
         }
+    }
+
+    public void RefreshForBridge() => Refresh();
+
+    public AgentBridgeSquireTruth CreateAgentBridgeTruth()
+    {
+        if (analysis is null)
+        {
+            return new AgentBridgeSquireTruth
+            {
+                HasSnapshot = false,
+                Status = status,
+                CharacterName = null,
+                HomeWorldId = null,
+                CapturedAtUtc = null,
+                IsComplete = false,
+                UnlockedJobCount = 0,
+                ValidGearsetCount = 0,
+                InstanceCount = 0,
+                CandidateCount = 0,
+                ProtectedCount = 0,
+                NeedsReviewCount = 0,
+                UnsupportedCount = 0,
+                BlockingDiagnostics = [],
+                ExecutableCandidates = [],
+            };
+        }
+
+        var snapshot = analysis.Snapshot;
+        return new AgentBridgeSquireTruth
+        {
+            HasSnapshot = true,
+            Status = status,
+            CharacterName = snapshot.Identity.Scope?.Name,
+            HomeWorldId = snapshot.Identity.Scope?.HomeWorldId.ToString(),
+            CapturedAtUtc = snapshot.Identity.CapturedAt,
+            IsComplete = snapshot.Diagnostics.IsComplete,
+            UnlockedJobCount = snapshot.Jobs.Count(job => job.IsUnlocked == true),
+            ValidGearsetCount = snapshot.Gearsets.Count(gearset => gearset.IsValid),
+            InstanceCount = snapshot.Instances.Count,
+            CandidateCount = analysis.Candidates.Count(candidate => candidate.Assessment == SquireAssessment.Candidate),
+            ProtectedCount = analysis.Candidates.Count(candidate => candidate.Assessment == SquireAssessment.Protected),
+            NeedsReviewCount = analysis.Candidates.Count(candidate => candidate.Assessment == SquireAssessment.NeedsReview),
+            UnsupportedCount = analysis.Candidates.Count(candidate => candidate.Assessment == SquireAssessment.Unsupported),
+            BlockingDiagnostics = snapshot.Diagnostics.Blocking.Select(value => $"{value.Component}:{value.Status}:{value.Message}").ToArray(),
+            ExecutableCandidates = analysis.Candidates
+                .Where(candidate => candidate.IsExecutable)
+                .Select(candidate => new AgentBridgeSquireCandidateTruth
+                {
+                    ItemId = candidate.Definition.ItemId,
+                    ItemName = candidate.Definition.Name,
+                    Container = candidate.Instance.Fingerprint.Container,
+                    SlotIndex = candidate.Instance.Fingerprint.SlotIndex,
+                    EquipLevel = candidate.Definition.EquipLevel,
+                    ItemLevel = candidate.Definition.ItemLevel,
+                    RecommendedDisposition = candidate.RecommendedDisposition.ToString(),
+                    ReasonCodes = candidate.Reasons.Select(reason => reason.Code).ToArray(),
+                    JobComparisons = candidate.UseAnalysis?.Comparisons
+                        .Select(comparison => $"{comparison.Job.Abbreviation}:{comparison.Job.Level}:{comparison.Status}:{comparison.Baseline?.Name ?? "none"}:{comparison.Baseline?.ItemLevel.ToString() ?? "none"}")
+                        .ToArray() ?? [],
+                })
+                .ToArray(),
+        };
     }
 
     private static void DrawSummary(SquireAnalysis value)
