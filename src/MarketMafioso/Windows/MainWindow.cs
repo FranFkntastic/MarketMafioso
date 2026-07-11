@@ -410,6 +410,7 @@ public class MainWindow : Window, IDisposable
     public void AgentOpenForReview()
     {
         IsOpen = true;
+        IsPinned = true;
         Collapsed = false;
         CollapsedCondition = ImGuiCond.Always;
     }

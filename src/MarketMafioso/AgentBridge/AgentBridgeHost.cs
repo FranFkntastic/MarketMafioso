@@ -190,6 +190,13 @@ public sealed class AgentBridgeHost : IDisposable
                 AppendAudit("stop-route", "accepted");
                 return AgentBridgeResponse.Ok("Route stop requested.");
             case "capture-screen":
+                if (!string.IsNullOrWhiteSpace(request.Target))
+                {
+                    var captureTabSelected = false;
+                    await dispatchOnFramework(() => captureTabSelected = selectMainTab(request.Target)).ConfigureAwait(false);
+                    if (!captureTabSelected)
+                        return AgentBridgeResponse.Fail("Requested capture tab is unavailable or not allowed.");
+                }
                 using (var captureTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
                 {
                     captureTimeout.CancelAfter(TimeSpan.FromSeconds(12));
