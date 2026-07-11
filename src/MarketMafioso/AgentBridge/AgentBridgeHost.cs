@@ -23,7 +23,7 @@ public sealed class AgentBridgeHost : IDisposable
     private readonly Func<string, bool> selectMainTab;
     private readonly Action captureInputState;
     private readonly Action stopRoute;
-    private readonly Func<CancellationToken, Task<AgentBridgeCaptureReceipt>> captureViewport;
+    private readonly Func<bool, CancellationToken, Task<AgentBridgeCaptureReceipt>> captureViewport;
     private readonly Func<bool> screenshotsEnabled;
     private readonly JsonSerializerOptions jsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
     private CancellationTokenSource? cancellation;
@@ -43,7 +43,7 @@ public sealed class AgentBridgeHost : IDisposable
         Func<string, bool> selectMainTab,
         Action captureInputState,
         Action stopRoute,
-        Func<CancellationToken, Task<AgentBridgeCaptureReceipt>> captureViewport,
+        Func<bool, CancellationToken, Task<AgentBridgeCaptureReceipt>> captureViewport,
         Func<bool> screenshotsEnabled)
     {
         this.config = config ?? throw new ArgumentNullException(nameof(config));
@@ -208,7 +208,7 @@ public sealed class AgentBridgeHost : IDisposable
                     captureTimeout.CancelAfter(TimeSpan.FromSeconds(12));
                     try
                     {
-                        var capture = await captureViewport(captureTimeout.Token).ConfigureAwait(false);
+                        var capture = await captureViewport(request.FullViewport, captureTimeout.Token).ConfigureAwait(false);
                         return AgentBridgeResponse.Ok("Rendered viewport captured.", capture);
                     }
                     catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
@@ -332,6 +332,7 @@ public sealed record AgentBridgeRequest
     public string? Challenge { get; init; }
     public string? Target { get; init; }
     public string? ProofId { get; init; }
+    public bool FullViewport { get; init; }
 }
 
 public sealed record AgentBridgeResponse

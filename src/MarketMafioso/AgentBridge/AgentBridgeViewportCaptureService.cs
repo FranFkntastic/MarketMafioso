@@ -42,20 +42,20 @@ public sealed class AgentBridgeViewportCaptureService
         protectionEntropy = Encoding.UTF8.GetBytes(pluginInstanceId);
     }
 
-    public async Task<AgentBridgeCaptureReceipt> CaptureAsync(CancellationToken cancellationToken = default)
+    public async Task<AgentBridgeCaptureReceipt> CaptureAsync(bool fullViewport, CancellationToken cancellationToken = default)
     {
         await captureLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             var region = captureRegion();
-            if (region == null || DateTimeOffset.UtcNow - region.RenderedAtUtc > TimeSpan.FromSeconds(5))
+            if (!fullViewport && (region == null || DateTimeOffset.UtcNow - region.RenderedAtUtc > TimeSpan.FromSeconds(5)))
                 throw new InvalidOperationException("MMF is not currently rendered; no screenshot was captured.");
 
             Task<IDalamudTextureWrap>? textureTask = null;
             await dispatchOnFramework(() =>
             {
                 var currentRegion = captureRegion();
-                if (currentRegion == null || DateTimeOffset.UtcNow - currentRegion.RenderedAtUtc > TimeSpan.FromSeconds(5))
+                if (!fullViewport && (currentRegion == null || DateTimeOffset.UtcNow - currentRegion.RenderedAtUtc > TimeSpan.FromSeconds(5)))
                     throw new InvalidOperationException("MMF is not currently rendered; no screenshot was captured.");
 
                 textureTask = textureProvider.CreateFromImGuiViewportAsync(
@@ -65,8 +65,8 @@ public sealed class AgentBridgeViewportCaptureService
                         AutoUpdate = false,
                         TakeBeforeImGuiRender = false,
                         KeepTransparency = false,
-                        Uv0 = currentRegion.GetUv0(),
-                        Uv1 = currentRegion.GetUv1(),
+                        Uv0 = fullViewport ? default : currentRegion!.GetUv0(),
+                        Uv1 = fullViewport ? default : currentRegion!.GetUv1(),
                     },
                     "MarketMafioso agent bridge viewport capture",
                     cancellationToken);
@@ -107,6 +107,7 @@ public sealed class AgentBridgeViewportCaptureService
                 Height = texture.Height,
                 Sha256 = sha256,
                 ProcessId = Environment.ProcessId,
+                Scope = fullViewport ? "FullViewport" : "MmfWindow",
             };
             PruneOldCaptures();
             return receipt;
@@ -163,4 +164,5 @@ public sealed record AgentBridgeCaptureReceipt
     public required int Height { get; init; }
     public required string Sha256 { get; init; }
     public required int ProcessId { get; init; }
+    public required string Scope { get; init; }
 }
