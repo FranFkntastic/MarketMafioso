@@ -15,6 +15,7 @@
     <Description>A practical FFXIV utility plugin for Workshop Logistics and optional receiver-backed inventory history.</Description>
     <Punchline>Workshop logistics and self-hosted inventory history.</Punchline>
     <RepoUrl>https://github.com/FranFkntastic/MarketMafioso</RepoUrl>
+    <FranthropyDalamudProject Condition="'$(FranthropyDalamudProject)' == ''">..\..\..\Franthropy\src\Franthropy.Dalamud\Franthropy.Dalamud.csproj</FranthropyDalamudProject>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(Configuration)' == 'Debug'">
@@ -32,6 +33,15 @@
     <Content Include="MarketMafioso.json">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </Content>
+  </ItemGroup>
+
+  <Target Name="ValidateFranthropyDalamudProject" BeforeTargets="PrepareForBuild"
+          Condition="!Exists('$(FranthropyDalamudProject)')">
+    <Error Text="Franthropy.Dalamud was not found at '$(FranthropyDalamudProject)'. Clone Franthropy beside MarketMafioso or set -p:FranthropyDalamudProject=&quot;path\to\Franthropy.Dalamud.csproj&quot;." />
+  </Target>
+
+  <ItemGroup>
+    <ProjectReference Include="$(FranthropyDalamudProject)" />
   </ItemGroup>
 
   <Target Name="SyncToDevPlugins" AfterTargets="Build" Condition="'$(Configuration)' == 'Debug'">

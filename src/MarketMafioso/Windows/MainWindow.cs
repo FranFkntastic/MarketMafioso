@@ -19,7 +19,9 @@ using MarketMafioso.Windows.Main;
 using MarketMafioso.Windows.MarketAcquisitionPanels;
 using MarketMafioso.Windows.MarketAcquisitionRequestBuilder;
 using MarketMafioso.Windows.RetainerRestock;
+using MarketMafioso.Windows.Squire;
 using MarketMafioso.Windows.WorkshopLogistics;
+using MarketMafioso.Squire.Observation;
 using MarketMafioso.WorkshopPrep;
 
 namespace MarketMafioso.Windows;
@@ -44,6 +46,7 @@ public class MainWindow : Window, IDisposable
     private readonly string marketAcquisitionRouteDiagnosticsDirectory;
     private readonly OverviewTabPanel overviewTab;
     private readonly InventoryReporterTabPanel inventoryReporterTab;
+    private readonly SquireTabPanel squireTab;
     private readonly StatusTabPanel statusTab;
     private readonly SettingsTabPanel settingsTab;
     private readonly MarketAcquisitionPlanPanel marketAcquisitionPlanPanel = new();
@@ -168,6 +171,9 @@ public class MainWindow : Window, IDisposable
             autoRetainerRefresh,
             Plugin.Instance.RestartTimer,
             config.Save);
+        squireTab = new SquireTabPanel(
+            new DalamudCharacterEquipmentSnapshotSource(playerState, dataManager, log),
+            Path.Combine(Plugin.PluginInterface.GetPluginConfigDirectory(), "squire-logs"));
         statusTab = new StatusTabPanel(config, reporter, retainerCacheStore, log);
         marketAcquisitionRequestPickupPanel = new MarketAcquisitionRequestPickupPanel(
             () => _ = FetchDashboardRequestsAsync(),
@@ -365,6 +371,12 @@ public class MainWindow : Window, IDisposable
                 ImGui.EndTabItem();
             }
 
+            if (ImGui.BeginTabItem("Squire", GetAgentTabFlags("Squire")))
+            {
+                squireTab.Draw();
+                ImGui.EndTabItem();
+            }
+
             if (ImGui.BeginTabItem("Workshop Logistics", GetAgentTabFlags("Workshop Logistics")))
             {
                 DrawWorkshopPrepTab();
@@ -410,7 +422,7 @@ public class MainWindow : Window, IDisposable
     {
         var allowed = tabName switch
         {
-            "Overview" or "Inventory Reporter" or "Workshop Logistics" or "Restock" or "Settings" or "Status" => true,
+            "Overview" or "Inventory Reporter" or "Squire" or "Workshop Logistics" or "Restock" or "Settings" or "Status" => true,
             "Market Acquisition" or "Diagnostics" => IsMarketAcquisitionUnlocked(),
             _ => false,
         };

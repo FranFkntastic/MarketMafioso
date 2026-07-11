@@ -1,0 +1,81 @@
+using Franthropy.Dalamud.Characters;
+using Franthropy.Dalamud.Equipment;
+using MarketMafioso.Squire;
+
+namespace MarketMafioso.Tests.Squire;
+
+public sealed class SquireRunnerTests
+{
+    private static readonly CharacterScope Scope = new(1, "Runner", 21);
+
+    [Fact]
+    public async Task ExactSlotMismatch_StopsWithoutExecutingOrSearching()
+    {
+        var adapter = new FakeAdapter { Validation = SquireRevalidationResult.Fail("ExactSlotMismatch", "Moved") };
+        var result = await new SquireRunner(adapter).RunAsync(Plan(), true, CancellationToken.None);
+        Assert.False(result.Success);
+        Assert.Equal("ExactSlotMismatch", result.Code);
+        Assert.Equal(0, adapter.ExecuteCount);
+        Assert.True(adapter.Released);
+    }
+
+    [Fact]
+    public async Task MissingConfirmation_NeverTouchesGameAdapter()
+    {
+        var adapter = new FakeAdapter();
+        var result = await new SquireRunner(adapter).RunAsync(Plan(SquireDisposition.Discard), false, CancellationToken.None);
+        Assert.Equal("ConfirmationRequired", result.Code);
+        Assert.Equal(0, adapter.RevalidateCount);
+        Assert.Equal(0, adapter.ExecuteCount);
+    }
+
+    [Fact]
+    public async Task CharacterChange_StopsPlan()
+    {
+        var adapter = new FakeAdapter { ActiveScope = new CharacterScope(2, "Other", 21) };
+        var result = await new SquireRunner(adapter).RunAsync(Plan(), true, CancellationToken.None);
+        Assert.Equal("CharacterScopeChanged", result.Code);
+        Assert.Equal(0, adapter.ExecuteCount);
+    }
+
+    [Fact]
+    public async Task Cancellation_ReleasesOwnedState()
+    {
+        var adapter = new FakeAdapter();
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        var result = await new SquireRunner(adapter).RunAsync(Plan(), true, cancellation.Token);
+        Assert.Equal("Cancelled", result.Code);
+        Assert.True(adapter.Released);
+    }
+
+    private static SquireActionPlan Plan(SquireDisposition disposition = SquireDisposition.VendorSell)
+    {
+        var fingerprint = new EquipmentInstanceFingerprint(Scope, "Inventory1", 2, 100, false, 1, 30000, 0, null, [], null, []);
+        return new SquireActionPlan(Guid.NewGuid(), Scope, disposition, DateTimeOffset.UtcNow,
+            [new SquireReviewedSelection(fingerprint, disposition, ["StrictlyWorseForAllUnlockedJobs"])]);
+    }
+
+    private sealed class FakeAdapter : ISquireActionGameAdapter
+    {
+        public CharacterScope? ActiveScope { get; set; } = Scope;
+        public SquireRevalidationResult Validation { get; set; } = SquireRevalidationResult.Valid();
+        public int RevalidateCount { get; private set; }
+        public int ExecuteCount { get; private set; }
+        public bool Released { get; private set; }
+        public CharacterScope? GetActiveCharacter() => ActiveScope;
+        public bool HasConflictingAutomation() => false;
+        public SquireRevalidationResult Revalidate(EquipmentInstanceFingerprint fingerprint, SquireDisposition disposition)
+        {
+            RevalidateCount++;
+            return Validation;
+        }
+        public Task<SquireActionResult> ExecuteAsync(EquipmentInstanceFingerprint fingerprint, SquireDisposition disposition, CancellationToken cancellationToken)
+        {
+            ExecuteCount++;
+            return Task.FromResult(SquireActionResult.Completed());
+        }
+        public void ReleaseOwnedState() => Released = true;
+    }
+}
+
