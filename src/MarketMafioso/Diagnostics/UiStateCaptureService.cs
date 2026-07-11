@@ -12,11 +12,19 @@ using Franthropy.Dalamud.Diagnostics;
 using FFXIVClientStructs.FFXIV.Client.Game;
 using FFXIVClientStructs.FFXIV.Client.UI.Agent;
 using FFXIVClientStructs.FFXIV.Component.GUI;
+using DalamudAddonEventType = Dalamud.Game.Addon.Events.AddonEventType;
 
 namespace MarketMafioso.Diagnostics;
 
 public sealed class UiStateCaptureService : IDisposable
 {
+    private static readonly InventoryType[] CapturedInventories =
+    [
+        InventoryType.Inventory1, InventoryType.Inventory2, InventoryType.Inventory3, InventoryType.Inventory4,
+        InventoryType.ArmoryMainHand, InventoryType.ArmoryOffHand, InventoryType.ArmoryHead, InventoryType.ArmoryBody,
+        InventoryType.ArmoryHands, InventoryType.ArmoryLegs, InventoryType.ArmoryFeets, InventoryType.ArmoryEar,
+        InventoryType.ArmoryNeck, InventoryType.ArmoryWrist, InventoryType.ArmoryRings, InventoryType.ArmorySoulCrystal,
+    ];
     private static readonly AddonEvent[] CapturedAddonEvents =
     [
         AddonEvent.PostSetup,
@@ -86,6 +94,8 @@ public sealed class UiStateCaptureService : IDisposable
     private unsafe void OnAddonEvent(AddonEvent type, AddonArgs args)
     {
         observedAddons.Add(args.AddonName);
+        if (args is AddonReceiveEventArgs noisy && IsNoisyReceiveEvent(noisy.AtkEventType))
+            return;
         var details = new Dictionary<string, string?>(StringComparer.Ordinal)
         {
             ["addon"] = args.AddonName,
@@ -148,8 +158,38 @@ public sealed class UiStateCaptureService : IDisposable
             }
             state["agents.active"] = string.Join(",", activeAgents);
         }
+        var inventoryManager = InventoryManager.Instance();
+        if (inventoryManager != null)
+        {
+            foreach (var inventoryType in CapturedInventories)
+            {
+                var container = inventoryManager->GetInventoryContainer(inventoryType);
+                if (container == null || !container->IsLoaded)
+                {
+                    state[$"inventory.{inventoryType}"] = "unavailable";
+                    continue;
+                }
+                state[$"inventory.{inventoryType}"] = $"loaded,size={container->Size}";
+                for (var slotIndex = 0; slotIndex < container->Size; slotIndex++)
+                {
+                    var item = container->GetInventorySlot(slotIndex);
+                    if (item == null || item->ItemId == 0)
+                        continue;
+                    state[$"inventory.{inventoryType}.{slotIndex}"] =
+                        $"item={item->ItemId},quantity={item->Quantity},flags={(uint)item->Flags},condition={item->Condition},spiritbond={item->SpiritbondOrCollectability}";
+                }
+            }
+        }
         return state;
     }
+
+    internal static bool IsNoisyReceiveEvent(DalamudAddonEventType eventType) => eventType is
+        DalamudAddonEventType.MouseMove or
+        DalamudAddonEventType.MouseOver or
+        DalamudAddonEventType.MouseOut or
+        DalamudAddonEventType.TimerTick or
+        DalamudAddonEventType.TimelineActiveLabelChanged or
+        DalamudAddonEventType.DragDropRollOver;
 
     private static unsafe string DescribeAtkValues(AtkValue* values, uint count)
     {
