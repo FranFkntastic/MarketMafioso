@@ -171,8 +171,11 @@ public class MainWindow : Window, IDisposable
             autoRetainerRefresh,
             Plugin.Instance.RestartTimer,
             config.Save);
+        var squireSnapshotSource = new DalamudCharacterEquipmentSnapshotSource(playerState, dataManager, log);
         squireTab = new SquireTabPanel(
-            new DalamudCharacterEquipmentSnapshotSource(playerState, dataManager, log),
+            config,
+            squireSnapshotSource,
+            new DalamudSquireActionGameAdapter(squireSnapshotSource, playerState, Plugin.Condition),
             Path.Combine(Plugin.PluginInterface.GetPluginConfigDirectory(), "squire-logs"));
         statusTab = new StatusTabPanel(config, reporter, retainerCacheStore, log);
         marketAcquisitionRequestPickupPanel = new MarketAcquisitionRequestPickupPanel(

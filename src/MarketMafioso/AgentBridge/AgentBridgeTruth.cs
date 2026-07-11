@@ -55,6 +55,8 @@ public sealed record AgentBridgeSquireCandidateTruth
     public required string RecommendedDisposition { get; init; }
     public required IReadOnlyList<string> ReasonCodes { get; init; }
     public required IReadOnlyList<string> JobComparisons { get; init; }
+    public required string RevalidationCode { get; init; }
+    public required bool RevalidationSucceeded { get; init; }
 }
 
 public sealed record AgentBridgeRouteTruth

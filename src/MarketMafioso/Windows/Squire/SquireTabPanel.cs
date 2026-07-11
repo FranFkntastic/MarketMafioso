@@ -13,17 +13,28 @@ namespace MarketMafioso.Windows.Squire;
 internal sealed class SquireTabPanel
 {
     private readonly ICharacterEquipmentSnapshotSource snapshotSource;
+    private readonly ISquireActionGameAdapter actionAdapter;
+    private readonly Configuration config;
     private readonly SquireCandidateEvaluator evaluator = new();
+    private readonly SquireReviewState review = new();
     private readonly string diagnosticDirectory;
     private SquireAnalysis? analysis;
     private string search = string.Empty;
     private bool showProtected;
     private string status = "Refresh to capture a read-only equipment snapshot.";
 
-    public SquireTabPanel(ICharacterEquipmentSnapshotSource snapshotSource, string diagnosticDirectory)
+    public SquireTabPanel(
+        Configuration config,
+        ICharacterEquipmentSnapshotSource snapshotSource,
+        ISquireActionGameAdapter actionAdapter,
+        string diagnosticDirectory)
     {
+        this.config = config;
         this.snapshotSource = snapshotSource;
+        this.actionAdapter = actionAdapter;
         this.diagnosticDirectory = diagnosticDirectory;
+        search = config.Squire.Search;
+        showProtected = config.Squire.ShowProtected;
     }
 
     public void Draw()
@@ -45,10 +56,19 @@ internal sealed class SquireTabPanel
         DrawDiagnostics(analysis);
         ImGui.Separator();
         ImGui.SetNextItemWidth(280);
-        ImGui.InputTextWithHint("##SquireSearch", "Search item, location, or reason", ref search, 160);
+        if (ImGui.InputTextWithHint("##SquireSearch", "Search item, location, or reason", ref search, 160))
+        {
+            config.Squire.Search = search;
+            config.Save();
+        }
         ImGui.SameLine();
-        ImGui.Checkbox("Show protected", ref showProtected);
+        if (ImGui.Checkbox("Show protected", ref showProtected))
+        {
+            config.Squire.ShowProtected = showProtected;
+            config.Save();
+        }
         DrawTable(analysis);
+        DrawRunPanel(analysis);
     }
 
     private void Refresh()
@@ -56,6 +76,7 @@ internal sealed class SquireTabPanel
         try
         {
             analysis = evaluator.Evaluate(snapshotSource.Capture());
+            review.Adopt(analysis);
             var executable = analysis.Candidates.Count(candidate => candidate.IsExecutable);
             status = analysis.IsActionable
                 ? $"Complete snapshot; {executable} executable candidate(s)."
@@ -64,6 +85,7 @@ internal sealed class SquireTabPanel
         catch (Exception ex)
         {
             analysis = null;
+            review.Invalidate();
             status = $"Refresh failed: {ex.Message}";
         }
     }
@@ -113,8 +135,11 @@ internal sealed class SquireTabPanel
             BlockingDiagnostics = snapshot.Diagnostics.Blocking.Select(value => $"{value.Component}:{value.Status}:{value.Message}").ToArray(),
             ExecutableCandidates = analysis.Candidates
                 .Where(candidate => candidate.IsExecutable)
-                .Select(candidate => new AgentBridgeSquireCandidateTruth
+                .Select(candidate =>
                 {
+                    var revalidation = actionAdapter.Revalidate(candidate.Instance.Fingerprint, candidate.RecommendedDisposition);
+                    return new AgentBridgeSquireCandidateTruth
+                    {
                     ItemId = candidate.Definition.ItemId,
                     ItemName = candidate.Definition.Name,
                     Container = candidate.Instance.Fingerprint.Container,
@@ -126,6 +151,9 @@ internal sealed class SquireTabPanel
                     JobComparisons = candidate.UseAnalysis?.Comparisons
                         .Select(comparison => $"{comparison.Job.Abbreviation}:{comparison.Job.Level}:{comparison.Status}:{comparison.Baseline?.Name ?? "none"}:{comparison.Baseline?.ItemLevel.ToString() ?? "none"}")
                         .ToArray() ?? [],
+                    RevalidationCode = revalidation.Code,
+                    RevalidationSucceeded = revalidation.Success,
+                    };
                 })
                 .ToArray(),
         };
@@ -155,8 +183,9 @@ internal sealed class SquireTabPanel
                 || candidate.Instance.Fingerprint.Container.Contains(search, StringComparison.OrdinalIgnoreCase)
                 || candidate.Reasons.Any(reason => reason.Message.Contains(search, StringComparison.OrdinalIgnoreCase)))
             .ToArray();
-        if (!ImGui.BeginTable("##SquireCandidates", 7, ImGuiTableFlags.RowBg | ImGuiTableFlags.Borders | ImGuiTableFlags.ScrollY | ImGuiTableFlags.Resizable))
+        if (!ImGui.BeginTable("##SquireCandidates", 8, ImGuiTableFlags.RowBg | ImGuiTableFlags.Borders | ImGuiTableFlags.ScrollY | ImGuiTableFlags.Resizable))
             return;
+        ImGui.TableSetupColumn("Select", ImGuiTableColumnFlags.WidthFixed, 55);
         ImGui.TableSetupColumn("Item");
         ImGui.TableSetupColumn("Location");
         ImGui.TableSetupColumn("Equip Lv");
@@ -168,6 +197,20 @@ internal sealed class SquireTabPanel
         foreach (var candidate in rows)
         {
             ImGui.TableNextRow();
+            ImGui.TableNextColumn();
+            var fingerprint = candidate.Instance.Fingerprint;
+            var selected = review.Selections.ContainsKey(fingerprint);
+            if (!candidate.IsExecutable)
+                ImGui.BeginDisabled();
+            if (ImGui.Checkbox($"##SquireSelect{fingerprint.Container}{fingerprint.SlotIndex}", ref selected))
+            {
+                if (selected)
+                    review.TrySelect(value, fingerprint, candidate.RecommendedDisposition);
+                else
+                    review.Remove(fingerprint);
+            }
+            if (!candidate.IsExecutable)
+                ImGui.EndDisabled();
             Cell(candidate.Definition.Name);
             Cell($"{candidate.Instance.Fingerprint.Container}:{candidate.Instance.Fingerprint.SlotIndex}");
             Cell(candidate.Definition.EquipLevel.ToString());
@@ -177,6 +220,21 @@ internal sealed class SquireTabPanel
             Cell(candidate.Reasons.FirstOrDefault()?.Message ?? string.Empty);
         }
         ImGui.EndTable();
+    }
+
+    private void DrawRunPanel(SquireAnalysis value)
+    {
+        ImGui.Separator();
+        var selections = review.Selections;
+        ImGui.TextColored(MarketMafiosoUiTheme.Header, "Reviewed batch");
+        ImGui.TextUnformatted($"Selected: {selections.Count} | Desynthesize: {selections.Count(pair => pair.Value == SquireDisposition.Desynthesize)} | Vendor: {selections.Count(pair => pair.Value == SquireDisposition.VendorSell)} | Discard: {selections.Count(pair => pair.Value == SquireDisposition.Discard)}");
+        if (!value.Snapshot.Diagnostics.IsComplete)
+            ImGui.TextColored(MarketMafiosoUiTheme.Error, "Execution blocked: snapshot is incomplete.");
+        ImGui.BeginDisabled();
+        ImGui.Button("Run selected disposition##Squire");
+        ImGui.EndDisabled();
+        ImGui.SameLine();
+        ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Execution remains disabled until exact-slot action adapters pass live validation.");
     }
 
     private void Export()

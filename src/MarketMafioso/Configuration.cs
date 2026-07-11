@@ -67,8 +67,22 @@ public class Configuration : IPluginConfiguration
     public List<RetainerRestockPlanItem> RetainerRestockPlanItems { get; set; } = new();
     public Guid? ActiveFrozenWorkshopQueueId { get; set; }
     public List<uint> FavoriteWorkshopProjectIds { get; set; } = new();
+    public SquireConfiguration Squire { get; set; } = new();
 
     public void Save() => Plugin.PluginInterface.SavePluginConfig(this);
+}
+
+[Serializable]
+public sealed class SquireConfiguration
+{
+    public bool ShowProtected { get; set; }
+    public string Search { get; set; } = string.Empty;
+    public Dictionary<string, List<uint>> ExcludedItemIdsByCharacter { get; set; } = new();
+    public bool ProtectMateria { get; set; } = true;
+    public bool ProtectSignedGear { get; set; } = true;
+    public bool ProtectArmoireEligible { get; set; } = true;
+    public bool ProtectFutureLevelingGear { get; set; } = true;
+    public int AuditRetentionDays { get; set; } = 30;
 }
 
 [Serializable]

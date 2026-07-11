@@ -32,6 +32,8 @@ public sealed class SquireReviewState
 
     public void Clear() => selections.Clear();
 
+    public bool Remove(EquipmentInstanceFingerprint fingerprint) => selections.Remove(fingerprint);
+
     public void Invalidate()
     {
         generationId = null;
