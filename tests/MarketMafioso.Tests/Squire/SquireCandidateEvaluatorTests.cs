@@ -173,14 +173,15 @@ public sealed class SquireCandidateEvaluatorTests
             []);
 
         var candidate = Assert.Single(evaluator.Evaluate(snapshot, DesynthesisUnlocked).Candidates);
-        var reason = Assert.Single(candidate.Reasons, reason => reason.Code == "MissingTrustedBaseline");
+        var reason = Assert.Single(candidate.Reasons, reason => reason.Code == "JobComparisonFailed");
 
-        Assert.Contains("cannot prove this item obsolete", reason.Message);
+        Assert.Equal(SquireAssessment.EvaluationFailure, candidate.Assessment);
+        Assert.Contains("No trusted Body baseline", reason.Message);
         Assert.Contains("JOB", reason.Message);
     }
 
     [Fact]
-    public void NoUnlockedEligibleJobReason_NamesObservedEligibleJobsAndStates()
+    public void UnobtainedEligibleJob_DoesNotProtectItem()
     {
         var snapshot = Snapshot(
             [Instance(100)],
@@ -189,11 +190,10 @@ public sealed class SquireCandidateEvaluatorTests
             []);
 
         var candidate = Assert.Single(evaluator.Evaluate(snapshot, DesynthesisUnlocked).Candidates);
-        var reason = Assert.Single(candidate.Reasons, reason => reason.Code == "NoUnlockedEligibleJob");
+        var reason = Assert.Single(candidate.Reasons, reason => reason.Code == "NoObtainedEligibleJob");
 
-        Assert.Contains("GSM", reason.Message);
-        Assert.Contains("level 49", reason.Message);
-        Assert.Contains("marked locked", reason.Message);
+        Assert.Equal(SquireAssessment.Candidate, candidate.Assessment);
+        Assert.DoesNotContain("locked", reason.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -206,6 +206,35 @@ public sealed class SquireCandidateEvaluatorTests
 
         Assert.Equal(SquireAssessment.Candidate, candidate.Assessment);
         Assert.Contains(candidate.Reasons, reason => reason.Code == "FutureLevelingUseNotProtected");
+    }
+
+    [Theory]
+    [InlineData(EquipmentRarity.Rare)]
+    [InlineData(EquipmentRarity.Relic)]
+    public void HighRarityEquipment_IsProtectedUntilExplicitlyOverridden(EquipmentRarity rarity)
+    {
+        var item = Definition(100, 20) with { NormalizedRarity = rarity, Rarity = rarity == EquipmentRarity.Rare ? (byte)3 : (byte)4 };
+        var baseline = Definition(200, 30);
+        var snapshot = Snapshot([Instance(100)], [item, baseline], [Job(1, 50, true)], [Gearset(1, 200)]);
+
+        var protectedCandidate = Assert.Single(evaluator.Evaluate(snapshot, DesynthesisUnlocked).Candidates);
+        Assert.Equal(SquireAssessment.Protected, protectedCandidate.Assessment);
+        Assert.Contains(protectedCandidate.Reasons, reason => reason.Code == "HighRarityEquipment");
+
+        var overridden = Assert.Single(evaluator.Evaluate(snapshot, DesynthesisUnlocked,
+            new SquireProtectionPolicy(HighRarityCleanupOverrides: new HashSet<uint> { 100 })).Candidates);
+        Assert.Equal(SquireAssessment.Candidate, overridden.Assessment);
+        Assert.Contains(overridden.Reasons, reason => reason.Code == "HighRarityCleanupOverride");
+    }
+
+    [Fact]
+    public void UncommonEquipment_WithUnknownExpertDeliveryEligibility_IsProtected()
+    {
+        var item = Definition(100, 20) with { NormalizedRarity = EquipmentRarity.Uncommon, Rarity = 2 };
+        var snapshot = Snapshot([Instance(100)], [item], [Job(1, 50, false)], []);
+        var candidate = Assert.Single(evaluator.Evaluate(snapshot, DesynthesisUnlocked).Candidates);
+        Assert.Equal(SquireAssessment.Protected, candidate.Assessment);
+        Assert.Contains(candidate.Reasons, reason => reason.Code == "ExpertDeliveryEligibilityUnknown");
     }
 
     [Fact]
@@ -256,10 +285,12 @@ public sealed class SquireCandidateEvaluatorTests
         new(new EquipmentInstanceFingerprint(Scope, "Inventory1", slot, itemId, false, 1, 30000, 0, crafter, materia ?? [], null, []), DateTimeOffset.UtcNow, equipped);
 
     private static EquipmentItemDefinition Definition(uint itemId, uint itemLevel) =>
-        new(itemId, $"Item {itemId}", 1, itemLevel, EquipmentSlot.Body, new HashSet<uint> { 1 }, 1, true, false, true, true, 1, true, false, true, false);
+        new(itemId, $"Item {itemId}", 1, itemLevel, EquipmentSlot.Body, new HashSet<uint> { 1 }, 1, true, false, true, true, 1, true, false, true, false,
+            new EquipmentStatProfile([new(1, EquipmentStatSemantic.Strength, checked((int)itemLevel), false)], 0, 0, checked((int)itemLevel), checked((int)itemLevel), true),
+            EquipmentRarity.Normal);
 
     private static CharacterJobSnapshot Job(uint id, uint level, bool? unlocked) =>
-        new(id, "JOB", "Job", level, unlocked, null, "Tank");
+        new(id, "JOB", "Job", level, unlocked, null, "Tank", EquipmentStatSemantic.Strength, EquipmentDiscipline.Combat);
 
     private static GearsetSnapshot Gearset(int id, uint itemId) =>
         new(id, "Set", 1, [new GearsetItemReference(EquipmentSlot.Body, itemId)], true);

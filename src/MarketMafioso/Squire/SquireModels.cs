@@ -7,7 +7,7 @@ public enum SquireAssessment
 {
     Protected,
     Candidate,
-    NeedsReview,
+    EvaluationFailure,
     Unsupported,
 }
 
@@ -33,7 +33,8 @@ public sealed record SquireDispositionCapabilities(bool? DesynthesisUnlocked);
 
 public sealed record SquireProtectionPolicy(
     bool ProtectSignedGear = false,
-    bool ProtectFutureLevelingGear = false);
+    bool ProtectFutureLevelingGear = false,
+    IReadOnlySet<uint>? HighRarityCleanupOverrides = null);
 
 public sealed record SquireCandidate(
     EquipmentInstanceSnapshot Instance,

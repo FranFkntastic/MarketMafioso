@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -33,6 +34,7 @@ internal sealed class SquireTabPanel : IDisposable
     private int selectionDragStart = -1;
     private bool selectionDragValue;
     private EquipmentInstanceFingerprint? focusedItem;
+    private uint? pendingHighRarityOverrideItemId;
     private string status = "Refresh to capture a read-only equipment snapshot.";
     private bool runConfirmed;
     private CancellationTokenSource? runCancellation;
@@ -118,12 +120,15 @@ internal sealed class SquireTabPanel : IDisposable
         }
         try
         {
+            var snapshot = snapshotSource.Capture();
+            var overrides = GetHighRarityOverrides(snapshot.Identity.Scope?.LocalContentId);
             analysis = evaluator.Evaluate(
-                snapshotSource.Capture(),
+                snapshot,
                 capabilitySource.Capture(),
                 new SquireProtectionPolicy(
                     config.Squire.ProtectPlayerSignedGear,
-                    config.Squire.ProtectFutureLevelingGearOptIn));
+                    config.Squire.ProtectFutureLevelingGearOptIn,
+                    overrides));
             review.Adopt(analysis);
             focusedItem = null;
             selectionDragStart = -1;
@@ -160,9 +165,11 @@ internal sealed class SquireTabPanel : IDisposable
                 InstanceCount = 0,
                 CandidateCount = 0,
                 ProtectedCount = 0,
-                NeedsReviewCount = 0,
+                EvaluationFailureCount = 0,
                 UnsupportedCount = 0,
                 BlockingDiagnostics = [],
+                EvaluationFailureGroups = [],
+                ProtectionGroups = [],
                 ExecutableCandidates = [],
             };
         }
@@ -181,9 +188,23 @@ internal sealed class SquireTabPanel : IDisposable
             InstanceCount = snapshot.Instances.Count,
             CandidateCount = analysis.Candidates.Count(candidate => candidate.Assessment == SquireAssessment.Candidate),
             ProtectedCount = analysis.Candidates.Count(candidate => candidate.Assessment == SquireAssessment.Protected),
-            NeedsReviewCount = analysis.Candidates.Count(candidate => candidate.Assessment == SquireAssessment.NeedsReview),
+            EvaluationFailureCount = analysis.Candidates.Count(candidate => candidate.Assessment == SquireAssessment.EvaluationFailure),
             UnsupportedCount = analysis.Candidates.Count(candidate => candidate.Assessment == SquireAssessment.Unsupported),
             BlockingDiagnostics = snapshot.Diagnostics.Blocking.Select(value => $"{value.Component}:{value.Status}:{value.Message}").ToArray(),
+            EvaluationFailureGroups = analysis.Candidates
+                .Where(candidate => candidate.Assessment == SquireAssessment.EvaluationFailure)
+                .SelectMany(candidate => candidate.Reasons.Select(reason => new { candidate.Definition.Name, reason.Code, reason.Message }))
+                .GroupBy(value => new { value.Code, value.Message })
+                .OrderByDescending(group => group.Count())
+                .Select(group => $"{group.Key.Code}:{group.Count()}:{group.First().Name}:{group.Key.Message}")
+                .ToArray(),
+            ProtectionGroups = analysis.Candidates
+                .Where(candidate => candidate.Assessment == SquireAssessment.Protected)
+                .SelectMany(candidate => candidate.Reasons.Select(reason => new { reason.Code, candidate.Definition.NormalizedRarity }))
+                .GroupBy(value => new { value.Code, value.NormalizedRarity })
+                .OrderByDescending(group => group.Count())
+                .Select(group => $"{group.Key.Code}:{group.Key.NormalizedRarity}:{group.Count()}")
+                .ToArray(),
             ExecutableCandidates = analysis.Candidates
                 .Where(candidate => candidate.IsExecutable)
                 .Select(candidate =>
@@ -353,6 +374,56 @@ internal sealed class SquireTabPanel : IDisposable
             ImGui.SameLine();
             ImGui.TextWrapped(reason.Message);
         }
+        if (candidate.Definition.NormalizedRarity is EquipmentRarity.Rare or EquipmentRarity.Relic)
+        {
+            var itemId = candidate.Definition.ItemId;
+            var contentId = analysis.Snapshot.Identity.Scope?.LocalContentId;
+            var overridden = GetHighRarityOverrides(contentId).Contains(itemId);
+            if (!overridden)
+            {
+                if (ImGui.Button($"Review high-rarity cleanup override##SquireRarity{itemId}"))
+                    pendingHighRarityOverrideItemId = itemId;
+                if (ImGui.IsItemHovered())
+                    ImGui.SetTooltip("Persistently removes only Squire's rarity protection for this character and item ID. Every other safety rule still applies.");
+                if (pendingHighRarityOverrideItemId == itemId)
+                {
+                    ImGui.TextWrapped($"Confirm that {candidate.Definition.Name} ({candidate.Definition.NormalizedRarity}) may be evaluated as a cleanup candidate for this character. Other protections remain active.");
+                    if (ImGui.Button($"Confirm cleanup override##SquireRarityConfirm{itemId}"))
+                    {
+                        SetHighRarityOverride(contentId, itemId, true);
+                        pendingHighRarityOverrideItemId = null;
+                        Refresh();
+                    }
+                    ImGui.SameLine();
+                    if (ImGui.Button($"Cancel##SquireRarityCancel{itemId}"))
+                        pendingHighRarityOverrideItemId = null;
+                }
+            }
+            else if (ImGui.Button($"Restore high-rarity protection##SquireRarity{itemId}"))
+            {
+                SetHighRarityOverride(contentId, itemId, false);
+                Refresh();
+            }
+        }
+    }
+
+    private IReadOnlySet<uint> GetHighRarityOverrides(ulong? contentId)
+    {
+        if (contentId is null || !config.Squire.HighRarityCleanupItemIdsByCharacter.TryGetValue(contentId.Value.ToString(), out var values))
+            return new HashSet<uint>();
+        return values.ToHashSet();
+    }
+
+    private void SetHighRarityOverride(ulong? contentId, uint itemId, bool enabled)
+    {
+        if (contentId is null)
+            return;
+        var key = contentId.Value.ToString();
+        if (!config.Squire.HighRarityCleanupItemIdsByCharacter.TryGetValue(key, out var values))
+            config.Squire.HighRarityCleanupItemIdsByCharacter[key] = values = [];
+        if (enabled && !values.Contains(itemId)) values.Add(itemId);
+        if (!enabled) values.Remove(itemId);
+        config.Save();
     }
 
     private void ToggleSelection(SquireAnalysis analysis, SquireCandidate candidate)

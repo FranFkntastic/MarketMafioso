@@ -43,20 +43,25 @@ public sealed class SquireCandidateEvaluator
             (!protectionPolicy.ProtectFutureLevelingGear &&
              use.Comparisons.Count > 0 &&
              use.Comparisons.All(comparison => comparison.Status is EquipmentUseStatus.Obsolete or EquipmentUseStatus.FutureUse));
-        if (!isObsoleteUnderPolicy)
+        if (use.Status == EquipmentUseStatus.EvaluationFailure)
         {
-            var assessment = use.Status == EquipmentUseStatus.NoUnlockedEligibleJob
-                ? SquireAssessment.NeedsReview
-                : SquireAssessment.Protected;
             return Candidate(
                 instance,
                 definition,
-                assessment,
+                SquireAssessment.EvaluationFailure,
                 SquireDisposition.Keep,
                 new HashSet<SquireDisposition>(),
-                [UseReason(use, definition, snapshot.Jobs)],
+                [UseReason(use)],
                 use);
         }
+        if (use.Status == EquipmentUseStatus.LikelyCosmetic)
+            return Candidate(instance, definition, SquireAssessment.Protected, SquireDisposition.Keep, new HashSet<SquireDisposition>(),
+                [new("StatlessAllClassesEquipment", "All Classes equipment has no functional stats and is protected as likely cosmetic.", SquireReasonSeverity.Blocking)], use);
+
+        var noObtainedConsumer = use.Status == EquipmentUseStatus.NoObtainedEligibleJob;
+        if (!isObsoleteUnderPolicy && !noObtainedConsumer)
+            return Candidate(instance, definition, SquireAssessment.Protected, SquireDisposition.Keep, new HashSet<SquireDisposition>(),
+                [UseReason(use)], use);
 
         var eligibility = dispositionEligibility.Evaluate(definition, capabilities);
         var dispositions = eligibility.SupportedDispositions;
@@ -79,10 +84,15 @@ public sealed class SquireCandidateEvaluator
                 : SquireDisposition.Discard;
         var reasons = new List<SquireReason>
         {
-            use.Comparisons.Any(comparison => comparison.Status == EquipmentUseStatus.FutureUse)
+            noObtainedConsumer
+                ? new("NoObtainedEligibleJob", "No job obtained by this character can use this item.", SquireReasonSeverity.Information)
+                : use.Comparisons.Any(comparison => comparison.Status == EquipmentUseStatus.FutureUse)
                 ? new("FutureLevelingUseNotProtected", "One or more unlocked jobs are below this item's equip level; future leveling gear protection is off.", SquireReasonSeverity.Information)
                 : new("StrictlyWorseForAllUnlockedJobs", "Every unlocked eligible job has a strictly better trusted baseline.", SquireReasonSeverity.Information),
         };
+        if (protectionPolicy.HighRarityCleanupOverrides?.Contains(definition.ItemId) == true &&
+            definition.NormalizedRarity is EquipmentRarity.Uncommon or EquipmentRarity.Rare or EquipmentRarity.Relic)
+            reasons.Add(new("HighRarityCleanupOverride", "A character-scoped item override removed only Squire's rarity protection.", SquireReasonSeverity.Warning));
         reasons.AddRange(eligibility.Reasons);
         return Candidate(
             instance,
@@ -114,6 +124,21 @@ public sealed class SquireCandidateEvaluator
             reasons.Add(new("SoulCrystal", "Soul crystals are always protected.", SquireReasonSeverity.Blocking));
         if (definition.IsExplicitlyProtectedFamily)
             reasons.Add(new("ProtectedItemFamily", "The item belongs to an explicitly protected family.", SquireReasonSeverity.Blocking));
+        var rarityOverride = protectionPolicy.HighRarityCleanupOverrides?.Contains(definition.ItemId) == true;
+        if (definition.NormalizedRarity == EquipmentRarity.Unknown)
+            reasons.Add(new("UnknownItemRarity", $"Item rarity value {definition.Rarity} is not mapped.", SquireReasonSeverity.Blocking));
+        else if (definition.NormalizedRarity is EquipmentRarity.Rare or EquipmentRarity.Relic)
+        {
+            if (!rarityOverride)
+                reasons.Add(new("HighRarityEquipment", $"{definition.NormalizedRarity} equipment is protected unless explicitly approved for cleanup.", SquireReasonSeverity.Blocking));
+        }
+        else if (definition.NormalizedRarity == EquipmentRarity.Uncommon && !rarityOverride)
+        {
+            if (definition.ExpertDeliveryEligibility == ExpertDeliveryEligibility.Eligible)
+                reasons.Add(new("ExpertDeliveryPreferred", "Grand Company Expert Delivery is preferred over destructive cleanup for this item.", SquireReasonSeverity.Blocking));
+            else if (definition.ExpertDeliveryEligibility == ExpertDeliveryEligibility.Unknown)
+                reasons.Add(new("ExpertDeliveryEligibilityUnknown", "Expert Delivery eligibility is unknown for this uncommon item.", SquireReasonSeverity.Blocking));
+        }
         if (instance.Fingerprint.MateriaIds.Count > 0)
             reasons.Add(new("MateriaAttached", "Materia-bearing gear is protected by default.", SquireReasonSeverity.Blocking));
         if (protectionPolicy.ProtectSignedGear && instance.Fingerprint.CrafterContentId is > 0)
@@ -127,53 +152,15 @@ public sealed class SquireCandidateEvaluator
         return reasons;
     }
 
-    private static SquireReason UseReason(
-        EquipmentUseAnalysis analysis,
-        EquipmentItemDefinition definition,
-        IReadOnlyList<CharacterJobSnapshot> jobs) => analysis.Status switch
+    private static SquireReason UseReason(EquipmentUseAnalysis analysis) => analysis.Status switch
     {
         EquipmentUseStatus.FutureUse => new("FutureUnlockedJobUse", "A lower-level unlocked job could grow into this item.", SquireReasonSeverity.Blocking),
-        EquipmentUseStatus.MissingBaseline => new(
-            "MissingTrustedBaseline",
-            $"Squire cannot prove this item obsolete because it found no saved gearset containing usable gear for this slot for: {FormatAffectedJobs(analysis, EquipmentUseStatus.MissingBaseline)}.",
-            SquireReasonSeverity.Blocking),
         EquipmentUseStatus.BaselineNotBetter => new("BaselineNotStrictlyBetter", "An unlocked eligible job's best baseline is tied with or worse than this item.", SquireReasonSeverity.Blocking),
-        EquipmentUseStatus.NoUnlockedEligibleJob => new(
-            "NoUnlockedEligibleJob",
-            $"Squire found no unlocked job that can equip this item. Eligible job observations: {FormatEligibleJobObservations(definition, jobs)}.",
-            SquireReasonSeverity.Warning),
-        EquipmentUseStatus.UnknownJobUnlockState => new("JobUnlockStateUnknown", "An eligible job's unlock state is unknown.", SquireReasonSeverity.Blocking),
+        EquipmentUseStatus.NoObtainedEligibleJob => new("NoObtainedEligibleJob", "No job obtained by this character can use this item.", SquireReasonSeverity.Information),
+        EquipmentUseStatus.LikelyCosmetic => new("StatlessAllClassesEquipment", "All Classes equipment has no functional stats and is likely cosmetic.", SquireReasonSeverity.Blocking),
+        EquipmentUseStatus.EvaluationFailure => new(analysis.FailureCode ?? "EquipmentEvaluationFailure", analysis.Diagnostic ?? "Equipment use evaluation failed.", SquireReasonSeverity.Blocking),
         _ => new("EquipmentUseUnknown", "Equipment use could not be classified safely.", SquireReasonSeverity.Blocking),
     };
-
-    private static string FormatEligibleJobObservations(
-        EquipmentItemDefinition definition,
-        IReadOnlyList<CharacterJobSnapshot> jobs)
-    {
-        var observations = jobs
-            .Where(job => definition.EligibleClassJobIds.Contains(job.ClassJobId))
-            .Select(job => $"{job.Abbreviation} (level {job.Level}, {FormatUnlockState(job.IsUnlocked)})")
-            .ToArray();
-        return observations.Length == 0 ? "none were present in the job snapshot" : string.Join(", ", observations);
-    }
-
-    private static string FormatUnlockState(bool? unlocked) => unlocked switch
-    {
-        true => "unlocked",
-        false => "marked locked",
-        null => "unlock state unknown",
-    };
-
-    private static string FormatAffectedJobs(EquipmentUseAnalysis analysis, EquipmentUseStatus status)
-    {
-        var jobs = analysis.Comparisons
-            .Where(comparison => comparison.Status == status)
-            .Select(comparison => comparison.Job.Abbreviation)
-            .Where(abbreviation => !string.IsNullOrWhiteSpace(abbreviation))
-            .Distinct()
-            .ToArray();
-        return jobs.Length == 0 ? "an unlocked job that can equip the item" : string.Join(", ", jobs);
-    }
 
     private static SquireCandidate Unsupported(EquipmentInstanceSnapshot instance, SquireReason reason) =>
         Candidate(

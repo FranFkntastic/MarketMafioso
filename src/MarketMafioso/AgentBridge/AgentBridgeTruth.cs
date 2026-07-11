@@ -38,9 +38,11 @@ public sealed record AgentBridgeSquireTruth
     public required int InstanceCount { get; init; }
     public required int CandidateCount { get; init; }
     public required int ProtectedCount { get; init; }
-    public required int NeedsReviewCount { get; init; }
+    public required int EvaluationFailureCount { get; init; }
     public required int UnsupportedCount { get; init; }
     public required IReadOnlyList<string> BlockingDiagnostics { get; init; }
+    public required IReadOnlyList<string> EvaluationFailureGroups { get; init; }
+    public required IReadOnlyList<string> ProtectionGroups { get; init; }
     public required IReadOnlyList<AgentBridgeSquireCandidateTruth> ExecutableCandidates { get; init; }
 }
 

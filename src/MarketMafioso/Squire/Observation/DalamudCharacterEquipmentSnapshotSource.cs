@@ -82,6 +82,7 @@ public sealed class DalamudCharacterEquipmentSnapshotSource : ICharacterEquipmen
             var sheet = dataManager.GetExcelSheet<ClassJob>();
             if (sheet is null)
                 throw new InvalidOperationException("ClassJob sheet is unavailable.");
+            var baseParams = dataManager.GetExcelSheet<BaseParam>() ?? throw new InvalidOperationException("BaseParam sheet is unavailable.");
             var ownedItemIds = instances.Select(instance => instance.Fingerprint.ItemId).ToHashSet();
             var jobs = sheet
                 .Where(job => job.RowId > 0 && !string.IsNullOrWhiteSpace(job.Abbreviation.ToString()))
@@ -98,7 +99,9 @@ public sealed class DalamudCharacterEquipmentSnapshotSource : ICharacterEquipmen
                         checked((uint)Math.Max(0, (int)level)),
                         isUnlocked,
                         parentClassJobId,
-                        job.Role.ToString());
+                        FormatRole(job.Role),
+                        MapStatSemantic(job.PrimaryStat, baseParams.GetRowOrDefault(job.PrimaryStat)?.Name.ToString()),
+                        MapDiscipline(job.Abbreviation.ToString()));
                 })
                 .ToArray();
             diagnostics.Add(new("jobs", SnapshotComponentStatus.Complete));
@@ -219,6 +222,7 @@ public sealed class DalamudCharacterEquipmentSnapshotSource : ICharacterEquipmen
             var itemSheet = dataManager.GetExcelSheet<Item>() ?? throw new InvalidOperationException("Item sheet unavailable.");
             var jobSheet = dataManager.GetExcelSheet<ClassJob>() ?? throw new InvalidOperationException("ClassJob sheet unavailable.");
             var cabinetSheet = dataManager.GetExcelSheet<Cabinet>() ?? throw new InvalidOperationException("Cabinet sheet unavailable.");
+            var baseParamSheet = dataManager.GetExcelSheet<BaseParam>() ?? throw new InvalidOperationException("BaseParam sheet unavailable.");
             var jobs = jobSheet.Where(job => job.RowId > 0).ToArray();
             var cabinetItemIds = cabinetSheet.Select(entry => entry.Item.RowId).Where(id => id != 0).ToHashSet();
             var values = new Dictionary<uint, EquipmentItemDefinition>();
@@ -231,6 +235,22 @@ public sealed class DalamudCharacterEquipmentSnapshotSource : ICharacterEquipmen
                 var slot = MapEquipSlot(value.EquipSlotCategory.RowId);
                 var category = value.ClassJobCategory.Value;
                 var eligible = jobs.Where(job => IsEligible(category, job.Abbreviation.ToString())).Select(job => job.RowId).ToHashSet();
+                var parameters = new List<EquipmentStatValue>();
+                var profileComplete = true;
+                for (var index = 0; index < value.BaseParam.Count; index++)
+                {
+                    AddParameter(value.BaseParam[index].RowId, value.BaseParamValue[index], false);
+                    AddParameter(value.BaseParamSpecial[index].RowId, value.BaseParamValueSpecial[index], true);
+                }
+                void AddParameter(uint baseParamId, short amount, bool special)
+                {
+                    if (baseParamId == 0 || amount <= 0)
+                        return;
+                    var name = baseParamSheet.GetRowOrDefault(baseParamId)?.Name.ToString();
+                    var semantic = MapStatSemantic(baseParamId, name);
+                    profileComplete &= semantic != EquipmentStatSemantic.Unknown;
+                    parameters.Add(new(baseParamId, semantic, amount, special, name));
+                }
                 values[id] = new(
                     id,
                     value.Name.ToString(),
@@ -247,7 +267,11 @@ public sealed class DalamudCharacterEquipmentSnapshotSource : ICharacterEquipmen
                     !value.IsIndisposable,
                     cabinetItemIds.Contains(id),
                     false,
-                    value.IsUnique && value.IsUntradable && value.Rarity >= 4);
+                    value.IsUnique && value.IsUntradable && value.Rarity >= 4,
+                    new EquipmentStatProfile(parameters, value.DamagePhys, value.DamageMag, value.DefensePhys, value.DefenseMag, profileComplete),
+                    MapRarity(value.Rarity),
+                    ExpertDeliveryEligibility.Unknown,
+                    "No proven Expert Delivery signal is available from the current item-definition adapter.");
             }
             var complete = values.Count == instances.Select(instance => instance.Fingerprint.ItemId).Distinct().Count();
             diagnostics.Add(new("definitions", complete ? SnapshotComponentStatus.Complete : SnapshotComponentStatus.Partial, complete ? null : "One or more item definitions were unavailable."));
@@ -265,6 +289,65 @@ public sealed class DalamudCharacterEquipmentSnapshotSource : ICharacterEquipmen
     {
         var property = typeof(ClassJobCategory).GetProperty(abbreviation);
         return property?.PropertyType == typeof(bool) && property.GetValue(category) is true;
+    }
+
+    internal static EquipmentRarity MapRarity(byte rarity) => rarity switch
+    {
+        1 => EquipmentRarity.Normal,
+        2 => EquipmentRarity.Uncommon,
+        3 => EquipmentRarity.Rare,
+        4 => EquipmentRarity.Relic,
+        _ => EquipmentRarity.Unknown,
+    };
+
+    internal static EquipmentDiscipline MapDiscipline(string abbreviation) => abbreviation switch
+    {
+        "CRP" or "BSM" or "ARM" or "GSM" or "LTW" or "WVR" or "ALC" or "CUL" => EquipmentDiscipline.Crafter,
+        "MIN" or "BTN" or "FSH" => EquipmentDiscipline.Gatherer,
+        "ADV" => EquipmentDiscipline.Unknown,
+        _ => EquipmentDiscipline.Combat,
+    };
+
+    internal static string FormatRole(byte role) => role switch
+    {
+        1 => "Tank",
+        2 => "Melee DPS",
+        3 => "Physical Ranged DPS",
+        4 => "Healer",
+        5 => "Magical Ranged DPS",
+        _ => $"Role {role}",
+    };
+
+    internal static EquipmentStatSemantic MapStatSemantic(uint baseParamId, string? name)
+    {
+        var normalized = new string((name ?? string.Empty).Where(char.IsLetterOrDigit).Select(char.ToLowerInvariant).ToArray());
+        return normalized switch
+        {
+            "strength" => EquipmentStatSemantic.Strength,
+            "dexterity" => EquipmentStatSemantic.Dexterity,
+            "vitality" => EquipmentStatSemantic.Vitality,
+            "intelligence" => EquipmentStatSemantic.Intelligence,
+            "mind" => EquipmentStatSemantic.Mind,
+            "criticalhit" or "criticalhitrate" => EquipmentStatSemantic.CriticalHit,
+            "determination" => EquipmentStatSemantic.Determination,
+            "directhit" or "directhitrate" => EquipmentStatSemantic.DirectHit,
+            "skillspeed" => EquipmentStatSemantic.SkillSpeed,
+            "spellspeed" => EquipmentStatSemantic.SpellSpeed,
+            "tenacity" => EquipmentStatSemantic.Tenacity,
+            "piety" => EquipmentStatSemantic.Piety,
+            "craftsmanship" => EquipmentStatSemantic.Craftsmanship,
+            "control" => EquipmentStatSemantic.Control,
+            "cp" or "craftingpoints" => EquipmentStatSemantic.CraftingPoints,
+            "gathering" => EquipmentStatSemantic.Gathering,
+            "perception" => EquipmentStatSemantic.Perception,
+            "gp" or "gatheringpoints" => EquipmentStatSemantic.GatheringPoints,
+            "physicaldamage" => EquipmentStatSemantic.PhysicalDamage,
+            "magicdamage" or "magicaldamage" => EquipmentStatSemantic.MagicalDamage,
+            "defense" or "physicaldefense" => EquipmentStatSemantic.PhysicalDefense,
+            "magicdefense" or "magicaldefense" => EquipmentStatSemantic.MagicalDefense,
+            "piercingresistance" => EquipmentStatSemantic.PiercingResistance,
+            _ => EquipmentStatSemantic.Unknown,
+        };
     }
 
     private static uint NormalizeItemId(uint itemId) => itemId >= 1_000_000 ? itemId % 1_000_000 : itemId;

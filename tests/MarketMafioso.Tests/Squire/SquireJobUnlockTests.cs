@@ -5,6 +5,23 @@ namespace MarketMafioso.Tests.Squire;
 
 public sealed class SquireJobUnlockTests
 {
+    [Theory]
+    [InlineData(1, EquipmentRarity.Normal)]
+    [InlineData(2, EquipmentRarity.Uncommon)]
+    [InlineData(3, EquipmentRarity.Rare)]
+    [InlineData(4, EquipmentRarity.Relic)]
+    [InlineData(5, EquipmentRarity.Unknown)]
+    public void RarityMapping_IsExplicit(byte raw, EquipmentRarity expected) =>
+        Assert.Equal(expected, DalamudCharacterEquipmentSnapshotSource.MapRarity(raw));
+
+    [Theory]
+    [InlineData("Strength", EquipmentStatSemantic.Strength)]
+    [InlineData("Critical Hit", EquipmentStatSemantic.CriticalHit)]
+    [InlineData("Craftsmanship", EquipmentStatSemantic.Craftsmanship)]
+    [InlineData("Gathering Points", EquipmentStatSemantic.GatheringPoints)]
+    [InlineData("Future Stat", EquipmentStatSemantic.Unknown)]
+    public void BaseParameterMapping_FailsClosedForUnknownNames(string name, EquipmentStatSemantic expected) =>
+        Assert.Equal(expected, DalamudCharacterEquipmentSnapshotSource.MapStatSemantic(999, name));
     [Fact]
     public void UpgradedJobRequiresItsSoulCrystalEvenWhenClassLevelIsShared()
     {

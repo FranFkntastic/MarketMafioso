@@ -79,6 +79,7 @@ public sealed class SquireConfiguration
     public bool ShowNonEquipment { get; set; }
     public string Search { get; set; } = string.Empty;
     public Dictionary<string, List<uint>> ExcludedItemIdsByCharacter { get; set; } = new();
+    public Dictionary<string, List<uint>> HighRarityCleanupItemIdsByCharacter { get; set; } = new();
     public bool ProtectMateria { get; set; } = true;
     public bool ProtectPlayerSignedGear { get; set; }
     public bool ProtectArmoireEligible { get; set; } = true;
