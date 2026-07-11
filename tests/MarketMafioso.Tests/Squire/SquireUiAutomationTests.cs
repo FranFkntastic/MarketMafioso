@@ -8,13 +8,15 @@ public sealed class SquireUiAutomationTests
     [Fact]
     public void FindDesynthesizeEntry_FindsExactEntryCaseInsensitively()
     {
-        Assert.Equal(1, DalamudDesynthesisUiTransaction.FindDesynthesisEntry(["Try On", "DESYNTHESIZE", "Discard"]));
-        Assert.Equal(1, DalamudDesynthesisUiTransaction.FindDesynthesisEntry(["Try On", "DESYNTHESIS", "Discard"]));
+        var option = new DalamudContextMenuOptionSpec("Desynthesis", new HashSet<string> { "Desynthesis", "Desynthesize" });
+        Assert.Equal(1, DalamudContextMenuOptionParser.Find(["Try On", "DESYNTHESIZE", "Discard"], option).Index);
+        Assert.Equal(1, DalamudContextMenuOptionParser.Find(["Try On", "DESYNTHESIS", "Discard"], option).Index);
     }
 
     [Fact]
     public void FindDesynthesizeEntry_DoesNotAcceptSimilarDestructiveLabels()
     {
-        Assert.Equal(-1, DalamudDesynthesisUiTransaction.FindDesynthesisEntry(["Discard", "Search for Item"]));
+        var option = new DalamudContextMenuOptionSpec("Desynthesis", new HashSet<string> { "Desynthesis", "Desynthesize" });
+        Assert.False(DalamudContextMenuOptionParser.Find(["Discard", "Search for Item"], option).Success);
     }
 }
