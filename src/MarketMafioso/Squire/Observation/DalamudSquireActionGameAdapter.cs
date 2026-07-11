@@ -26,8 +26,7 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
     private readonly ISquireDispositionCapabilitySource capabilitySource;
     private readonly Func<bool> hasExternalConflict;
     private bool ownsDesynthesisUi;
-    private bool selectorCategoryRequested;
-    private bool selectorItemActivated;
+    private bool contextMenuSelectionSubmitted;
 
     public DalamudSquireActionGameAdapter(
         ICharacterEquipmentSnapshotSource snapshotSource,
@@ -126,8 +125,7 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
             if (transition.Success)
             {
                 ownsDesynthesisUi = false;
-                selectorCategoryRequested = false;
-                selectorItemActivated = false;
+                contextMenuSelectionSubmitted = false;
                 return transition;
             }
             if (transition.Code != "TransitionPending")
@@ -143,20 +141,18 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
         var validation = Revalidate(fingerprint, SquireDisposition.Desynthesize);
         if (!validation.Success)
             return SquireActionResult.Fail(validation.Code, validation.Message);
-        var salvage = AgentSalvage.Instance();
-        if (salvage == null || !salvage->IsActivatable())
-            return SquireActionResult.Fail("DesynthesisUnavailable", "The game's Desynthesis UI is not currently available.");
         var existingDialog = gameGui.GetAddonByName<AddonSalvageDialog>("SalvageDialog", 1);
-        var existingSelector = gameGui.GetAddonByName<AddonSalvageItemSelector>("SalvageItemSelector", 1);
+        var existingContextMenu = gameGui.GetAddonByName<AtkUnitBase>("ContextMenu", 1);
         if ((existingDialog != null && existingDialog->AtkUnitBase.IsVisible) ||
-            (existingSelector != null && existingSelector->AtkUnitBase.IsVisible))
+            (existingContextMenu != null && existingContextMenu->IsVisible))
             return SquireActionResult.Fail("ConflictingUi", "A Desynthesis UI was already open and is not owned by Squire.");
 
-        salvage->Show();
+        var opened = OpenExactSlotContextMenu(fingerprint);
+        if (!opened.Success)
+            return opened;
         ownsDesynthesisUi = true;
-        selectorCategoryRequested = false;
-        selectorItemActivated = false;
-        return new SquireActionResult(true, "DesynthesisUiRequested", "Opened the game's normal Desynthesis selector.");
+        contextMenuSelectionSubmitted = false;
+        return new SquireActionResult(true, "DesynthesisContextMenuRequested", "Opened the approved exact slot's normal item context menu.");
     }
 
     private unsafe SquireActionResult TryConfirmDesynthesis(EquipmentInstanceFingerprint fingerprint)
@@ -165,9 +161,9 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
             return SquireActionResult.Fail("PromptOwnershipLost", "Squire no longer owns the Desynthesis UI.");
         var addon = gameGui.GetAddonByName<AddonSalvageDialog>("SalvageDialog", 1);
         if (addon == null || !addon->AtkUnitBase.IsReady || !addon->AtkUnitBase.IsVisible)
-            return selectorItemActivated
+            return contextMenuSelectionSubmitted
                 ? SquireActionResult.Fail("ConfirmationPending", "Waiting for the owned desynthesis dialog.")
-                : ActivateSelectorItem(fingerprint);
+                : SelectDesynthesizeContextMenuEntry(fingerprint);
 
         var salvage = AgentSalvage.Instance();
         if (salvage == null || salvage->DesynthItemId != fingerprint.ItemId || salvage->DesynthItemSlot.ItemId != fingerprint.ItemId)
@@ -182,64 +178,59 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
         return new SquireActionResult(true, "ConfirmationSubmitted", "Clicked the owned desynthesis dialog's normal confirmation button.");
     }
 
-    private unsafe SquireActionResult ActivateSelectorItem(EquipmentInstanceFingerprint fingerprint)
+    private unsafe SquireActionResult SelectDesynthesizeContextMenuEntry(EquipmentInstanceFingerprint fingerprint)
     {
-        var selector = gameGui.GetAddonByName<AddonSalvageItemSelector>("SalvageItemSelector", 1);
-        if (selector == null || !selector->AtkUnitBase.IsReady || !selector->AtkUnitBase.IsVisible)
-            return SquireActionResult.Fail("ConfirmationPending", "Waiting for the owned Desynthesis selector.");
+        var contextMenu = gameGui.GetAddonByName<AtkUnitBase>("ContextMenu", 1);
+        if (contextMenu == null || !contextMenu->IsReady || !contextMenu->IsVisible)
+            return SquireActionResult.Fail("ConfirmationPending", "Waiting for the approved exact slot's item context menu.");
         if (!Enum.TryParse<InventoryType>(fingerprint.Container, out var inventoryType))
             return SquireActionResult.Fail("UnsupportedContainer", $"Inventory container {fingerprint.Container} is not recognized.");
 
-        var itemIndex = -1;
-        for (var index = 0; index < selector->ItemCount; index++)
-        {
-            var item = selector->Items[index];
-            if (item.Inventory == inventoryType && item.Slot == fingerprint.SlotIndex)
-            {
-                itemIndex = index;
-                break;
-            }
-        }
-
-        if (itemIndex < 0 && !selectorCategoryRequested && inventoryType.ToString().StartsWith("Armory", StringComparison.Ordinal))
-        {
-            for (uint componentId = 1; componentId <= 100; componentId++)
-            {
-                var button = selector->AtkUnitBase.GetComponentButtonById(componentId);
-                var text = button == null || button->ButtonTextNode == null
-                    ? string.Empty
-                    : button->ButtonTextNode->NodeText.ExtractText();
-                if (!text.Contains("Main Hand", StringComparison.OrdinalIgnoreCase) || !text.Contains("Off Hand", StringComparison.OrdinalIgnoreCase))
-                    continue;
-                button->ClickAddonButton(&selector->AtkUnitBase);
-                selectorCategoryRequested = true;
-                return SquireActionResult.Fail("ConfirmationPending", "Selected the normal Main Hand/Off Hand category in the Desynthesis UI.");
-            }
-        }
-
-        if (itemIndex < 0)
-            return SquireActionResult.Fail("DesynthesisItemUnavailable", "The visible Desynthesis selector does not contain the approved exact slot.");
+        var agent = AgentInventoryContext.Instance();
+        if (agent == null || agent->TargetInventoryId != inventoryType || agent->TargetInventorySlotId != fingerprint.SlotIndex)
+            return SquireActionResult.Fail("UnexpectedContextMenu", "The visible item context menu does not target the approved exact slot.");
         var validation = Revalidate(fingerprint, SquireDisposition.Desynthesize);
         if (!validation.Success)
             return SquireActionResult.Fail(validation.Code, validation.Message);
 
-        AtkComponentList* list = null;
-        for (uint componentId = 1; componentId <= 100; componentId++)
-        {
-            var candidate = selector->AtkUnitBase.GetComponentListById(componentId);
-            if (candidate == null || candidate->GetItemCount() <= itemIndex || (!candidate->IsItemInteractionEnabled && !candidate->IsItemClickEnabled))
-                continue;
-            if (list == null || candidate->GetItemCount() > list->GetItemCount())
-                list = candidate;
-        }
-        if (list == null)
-            return SquireActionResult.Fail("DesynthesisListUnavailable", "The visible Desynthesis item list is not interactive.");
+        var itemIndex = FindDesynthesizeEntry(ReadContextMenuLabels(agent));
+        if (itemIndex < 0 || itemIndex >= agent->ContextItemCount)
+            return SquireActionResult.Fail("DesynthesisEntryUnavailable", "The approved exact slot's context menu does not offer Desynthesize.");
+        if (agent->IsContextItemDisabled(itemIndex))
+            return SquireActionResult.Fail("DesynthesisEntryDisabled", "The approved exact slot's Desynthesize context-menu entry is disabled.");
 
-        list->ScrollToItem((short)itemIndex);
-        list->SelectItem(itemIndex, true);
-        list->DispatchItemEvent(itemIndex, AtkEventType.ListItemClick);
-        selectorItemActivated = true;
-        return SquireActionResult.Fail("ConfirmationPending", "Clicked the approved exact slot in the visible Desynthesis list.");
+        var values = stackalloc AtkValue[5];
+        values[0] = new AtkValue { Type = AtkValueType.Int, Int = 0 };
+        values[1] = new AtkValue { Type = AtkValueType.Int, Int = itemIndex };
+        values[2] = new AtkValue { Type = AtkValueType.Int, Int = 0 };
+        values[3] = new AtkValue { Type = AtkValueType.Int, Int = 0 };
+        values[4] = new AtkValue { Type = AtkValueType.Int, Int = 0 };
+        if (!contextMenu->FireCallback(5, values, true))
+            return SquireActionResult.Fail("DesynthesisSelectionRejected", "The normal item context menu rejected the Desynthesize selection.");
+
+        contextMenuSelectionSubmitted = true;
+        return SquireActionResult.Fail("ConfirmationPending", "Selected Desynthesize from the approved exact slot's normal item context menu.");
+    }
+
+    internal static int FindDesynthesizeEntry(IReadOnlyList<string> labels)
+    {
+        for (var index = 0; index < labels.Count; index++)
+        {
+            if (labels[index].Equals("Desynthesize", StringComparison.OrdinalIgnoreCase))
+                return index;
+        }
+        return -1;
+    }
+
+    private static unsafe IReadOnlyList<string> ReadContextMenuLabels(AgentInventoryContext* agent)
+    {
+        var labels = new List<string>();
+        foreach (var parameter in agent->EventParams)
+        {
+            if (parameter.Type is AtkValueType.String or AtkValueType.ManagedString or AtkValueType.WideString or AtkValueType.ConstString)
+                labels.Add(parameter.GetValueAsString());
+        }
+        return labels;
     }
 
     private SquireActionResult ObserveSlotTransition(EquipmentInstanceFingerprint fingerprint)
@@ -261,27 +252,7 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
             instance.Fingerprint.Container == fingerprint.Container && instance.Fingerprint.SlotIndex == fingerprint.SlotIndex);
         if (!snapshot.Diagnostics.IsComplete || observed is null || !SquireFingerprintMatcher.ExactMatch(fingerprint, observed.Fingerprint))
             return SquireActionResult.Fail("ExactSlotMismatch", "The approved exact slot identity changed before the UI probe.");
-        if (!Enum.TryParse<InventoryType>(fingerprint.Container, out var inventoryType))
-            return SquireActionResult.Fail("UnsupportedContainer", $"Inventory container {fingerprint.Container} is not recognized.");
-
-        var agent = AgentInventoryContext.Instance();
-        if (agent == null)
-            return SquireActionResult.Fail("InventoryContextUnavailable", "The inventory context agent is unavailable.");
-
-        var ownerId = inventoryType.ToString().StartsWith("Armory", StringComparison.Ordinal)
-            ? AgentId.ArmouryBoard
-            : AgentId.Inventory;
-        var owner = AgentModule.Instance()->GetAgentByInternalId(ownerId);
-        if (owner == null)
-            return SquireActionResult.Fail("InventoryOwnerUnavailable", $"The normal {ownerId} UI agent is unavailable.");
-        if (!owner->IsAgentActive())
-            owner->Show();
-        var ownerAddonId = owner->GetAddonId();
-        if (ownerAddonId == 0)
-            return SquireActionResult.Fail("InventoryOwnerPending", $"Opened the normal {ownerId} UI; retry after it is ready.");
-
-        agent->OpenForItemSlot(inventoryType, fingerprint.SlotIndex, 0, ownerAddonId);
-        return new SquireActionResult(true, "ContextMenuRequested", $"Requested the normal item context menu for {fingerprint.Container}:{fingerprint.SlotIndex}.");
+        return OpenExactSlotContextMenu(fingerprint);
     }
 
     public unsafe string DescribeContextMenuProbe()
@@ -314,8 +285,7 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
         if (!ownsDesynthesisUi)
             return;
         ownsDesynthesisUi = false;
-        selectorCategoryRequested = false;
-        selectorItemActivated = false;
+        contextMenuSelectionSubmitted = false;
         _ = framework.RunOnTick(CloseOwnedDesynthesisDialog);
     }
 
@@ -324,8 +294,25 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
         var addon = gameGui.GetAddonByName<AddonSalvageDialog>("SalvageDialog", 1);
         if (addon != null && addon->AtkUnitBase.IsReady && addon->AtkUnitBase.IsVisible && addon->CancelButtonNode != null)
             addon->CancelButtonNode->ClickAddonButton(&addon->AtkUnitBase);
-        var salvage = AgentSalvage.Instance();
-        if (salvage != null && salvage->IsAgentActive())
-            salvage->Hide();
+    }
+
+    private unsafe SquireActionResult OpenExactSlotContextMenu(EquipmentInstanceFingerprint fingerprint)
+    {
+        if (!Enum.TryParse<InventoryType>(fingerprint.Container, out var inventoryType))
+            return SquireActionResult.Fail("UnsupportedContainer", $"Inventory container {fingerprint.Container} is not recognized.");
+        var agent = AgentInventoryContext.Instance();
+        if (agent == null)
+            return SquireActionResult.Fail("InventoryContextUnavailable", "The inventory context UI is unavailable.");
+        var ownerId = inventoryType.ToString().StartsWith("Armory", StringComparison.Ordinal) ? AgentId.ArmouryBoard : AgentId.Inventory;
+        var owner = AgentModule.Instance()->GetAgentByInternalId(ownerId);
+        if (owner == null)
+            return SquireActionResult.Fail("InventoryOwnerUnavailable", $"The normal {ownerId} UI is unavailable.");
+        if (!owner->IsAgentActive())
+            owner->Show();
+        var ownerAddonId = owner->GetAddonId();
+        if (ownerAddonId == 0)
+            return SquireActionResult.Fail("InventoryOwnerPending", $"Opened the normal {ownerId} UI; retry after it is ready.");
+        agent->OpenForItemSlot(inventoryType, fingerprint.SlotIndex, 0, ownerAddonId);
+        return new SquireActionResult(true, "ContextMenuRequested", $"Requested the normal item context menu for {fingerprint.Container}:{fingerprint.SlotIndex}.");
     }
 }
