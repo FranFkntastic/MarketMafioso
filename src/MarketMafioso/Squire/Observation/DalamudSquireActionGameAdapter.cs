@@ -156,7 +156,7 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
         if (!ownsDesynthesisUi)
             return SquireActionResult.Fail("PromptOwnershipLost", "Squire no longer owns the Desynthesis UI.");
         var addon = gameGui.GetAddonByName<AddonSalvageDialog>("SalvageDialog", 1);
-        if (addon == null || !addon->AtkUnitBase.IsReady || !addon->AtkUnitBase.IsVisible)
+        if (addon == null || !addon->AtkUnitBase.IsVisible)
             return contextMenuSelectionSubmitted
                 ? SquireActionResult.Fail("ConfirmationPending", "Waiting for the owned desynthesis dialog.")
                 : SelectDesynthesizeContextMenuEntry(fingerprint);
@@ -280,10 +280,12 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
     public unsafe string CloseContextMenuProbe()
     {
         var addon = gameGui.GetAddonByName<AtkUnitBase>("ContextMenu", 1);
-        if (addon == null || !addon->IsVisible)
-            return "ContextMenu is not visible.";
-        addon->Close(true);
-        return "Closed the visible ContextMenu through its UI addon.";
+        if (addon != null && addon->IsVisible)
+            addon->Close(true);
+        var salvage = gameGui.GetAddonByName<AddonSalvageDialog>("SalvageDialog", 1);
+        if (salvage != null && salvage->AtkUnitBase.IsVisible && salvage->CancelButtonNode != null)
+            salvage->CancelButtonNode->ClickAddonButton(&salvage->AtkUnitBase);
+        return "Closed visible Squire diagnostic item UI through its addon controls.";
     }
 
     public void ReleaseOwnedState()
@@ -301,7 +303,7 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
         if (contextMenu != null && contextMenu->IsVisible)
             contextMenu->Close(true);
         var addon = gameGui.GetAddonByName<AddonSalvageDialog>("SalvageDialog", 1);
-        if (addon != null && addon->AtkUnitBase.IsReady && addon->AtkUnitBase.IsVisible && addon->CancelButtonNode != null)
+        if (addon != null && addon->AtkUnitBase.IsVisible && addon->CancelButtonNode != null)
             addon->CancelButtonNode->ClickAddonButton(&addon->AtkUnitBase);
     }
 
