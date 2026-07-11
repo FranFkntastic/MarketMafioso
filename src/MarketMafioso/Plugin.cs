@@ -149,18 +149,19 @@ public sealed class Plugin : IDalamudPlugin
             Configuration,
             PluginInterface.GetPluginConfigDirectory(),
             action => Framework.RunOnTick(action),
-            mainWindow.CreateAgentBridgeTruth,
+            new MarketMafiosoBridgeProvider(
+                mainWindow.CreateAgentBridgeTruth,
+                mainWindow.AgentOpenForReview,
+                () => mainWindow.AcquisitionDiagnostics.IsOpen = true,
+                proofId =>
+                {
+                    agentBridgeProofWindow.RequestedProofId = proofId;
+                    agentBridgeProofWindow.IsOpen = true;
+                },
+                mainWindow.TrySelectAgentBridgeTab,
+                mainWindow.AgentCaptureInputState,
+                mainWindow.AgentStopRoute),
             agentBridgeProofStore,
-            mainWindow.AgentOpenForReview,
-            () => mainWindow.AcquisitionDiagnostics.IsOpen = true,
-            proofId =>
-            {
-                agentBridgeProofWindow.RequestedProofId = proofId;
-                agentBridgeProofWindow.IsOpen = true;
-            },
-            mainWindow.TrySelectAgentBridgeTab,
-            mainWindow.AgentCaptureInputState,
-            mainWindow.AgentStopRoute,
             agentBridgeViewportCapture.CaptureAsync,
             () => Configuration.EnableAgentBridgeScreenshots);
 
