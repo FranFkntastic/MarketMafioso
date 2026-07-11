@@ -158,6 +158,9 @@ public sealed class SquireCandidateEvaluatorTests
         var displayedReasons = SquireTabPanel.FormatReasons(candidate);
         Assert.Equal(candidate.Reasons.Count, displayedReasons.Split('\n').Length);
         Assert.All(candidate.Reasons, reason => Assert.Contains(reason.Message, displayedReasons));
+        var summary = SquireTabPanel.FormatReasonSummary(candidate);
+        Assert.StartsWith(candidate.Reasons[0].Message, summary);
+        Assert.Contains($"(+{candidate.Reasons.Count - 1} more)", summary);
     }
 
     [Fact]
