@@ -299,7 +299,7 @@ internal sealed class SquireTabPanel : IDisposable
             ImGui.TableNextColumn();
             ImGui.TextUnformatted(FormatReasonSummary(candidate));
             if (ImGui.IsItemHovered())
-                ImGui.SetTooltip(FormatReasons(candidate));
+                DrawReasonTooltip(candidate);
         }
         if (selectionDragStart >= 0 && ImGui.IsMouseReleased(ImGuiMouseButton.Left))
             selectionDragStart = -1;
@@ -391,6 +391,16 @@ internal sealed class SquireTabPanel : IDisposable
         1 => candidate.Reasons[0].Message,
         _ => $"{candidate.Reasons[0].Message} (+{candidate.Reasons.Count - 1} more)",
     };
+
+    private static void DrawReasonTooltip(SquireCandidate candidate)
+    {
+        var maximumWidth = Math.Max(1f, ImGui.GetMainViewport().Size.X * 0.5f);
+        ImGui.BeginTooltip();
+        ImGui.PushTextWrapPos(ImGui.GetCursorPosX() + maximumWidth);
+        ImGui.TextWrapped(FormatReasons(candidate));
+        ImGui.PopTextWrapPos();
+        ImGui.EndTooltip();
+    }
 
     private static SquireCandidate[] SortCandidatesBy<TKey>(SquireCandidate[] rows, Func<SquireCandidate, TKey> keySelector, ImGuiSortDirection direction)
     {
