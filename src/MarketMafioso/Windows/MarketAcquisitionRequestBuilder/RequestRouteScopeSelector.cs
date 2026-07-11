@@ -57,11 +57,11 @@ public static class RequestRouteScopeSelector
         ArgumentNullException.ThrowIfNull(scope);
         ArgumentNullException.ThrowIfNull(onChanged);
 
-        if (ImGui.BeginTable($"##{id}RouteScopeCompact", 3, ImGuiTableFlags.SizingStretchProp))
+        if (ImGui.BeginTable($"##{id}RouteScopeCompact", 3, ImGuiTableFlags.SizingFixedFit))
         {
-            ImGui.TableSetupColumn("Region", ImGuiTableColumnFlags.WidthStretch, 1f);
-            ImGui.TableSetupColumn("Mode", ImGuiTableColumnFlags.WidthStretch, 1f);
-            ImGui.TableSetupColumn("Sweep", ImGuiTableColumnFlags.WidthStretch, 1f);
+            ImGui.TableSetupColumn("Region", ImGuiTableColumnFlags.WidthFixed, 150f);
+            ImGui.TableSetupColumn("Mode", ImGuiTableColumnFlags.WidthFixed, 210f);
+            ImGui.TableSetupColumn("Sweep", ImGuiTableColumnFlags.WidthFixed, 170f);
             ImGui.TableNextRow();
 
             ImGui.TableNextColumn();
@@ -149,13 +149,13 @@ public static class RequestRouteScopeSelector
     {
         ImGui.TextColored(mutedColor, label.Split('#')[0]);
         ImGui.SetNextItemWidth(-1);
-        if (!ImGui.BeginCombo(label, string.IsNullOrWhiteSpace(current) ? "-" : current))
+        if (!ImGui.BeginCombo(label, FormatOption(current)))
             return;
 
         foreach (var option in options)
         {
             var isSelected = option.Equals(current, StringComparison.OrdinalIgnoreCase);
-            if (ImGui.Selectable(option, isSelected) && !isSelected)
+            if (ImGui.Selectable(FormatOption(option), isSelected) && !isSelected)
                 onChanged(option);
             if (isSelected)
                 ImGui.SetItemDefaultFocus();
@@ -163,4 +163,14 @@ public static class RequestRouteScopeSelector
 
         ImGui.EndCombo();
     }
+
+    private static string FormatOption(string value) =>
+        value switch
+        {
+            "Recommended" => "Recommended worlds",
+            "AllWorldSweep" => "All-world sweep",
+            "CurrentDataCenter" => "Current data center",
+            "DataCenters" => "Selected data centers",
+            _ => string.IsNullOrWhiteSpace(value) ? "-" : value,
+        };
 }

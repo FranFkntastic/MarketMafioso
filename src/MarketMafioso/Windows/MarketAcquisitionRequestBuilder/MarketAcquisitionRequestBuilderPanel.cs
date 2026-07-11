@@ -181,16 +181,16 @@ public sealed class MarketAcquisitionRequestBuilderPanel
 
     private void DrawLineEditor(MarketAcquisitionRequestBuilderContext context)
     {
-        ImGui.TextColored(MainWindow.ColHeader, selectedLineIndex >= 0 ? "Edit Line" : "Add Line");
+        var isEditing = selectedLineIndex >= 0;
+        ImGui.TextColored(MainWindow.ColHeader, isEditing ? "Edit request item" : "Add an item");
+        if (!isEditing)
+            ImGui.TextColored(MainWindow.ColMuted, "Choose an item and its buying limits, then add it to the request.");
 
-        if (ImGui.BeginTable("AcquisitionRequestBuilderLineEditor", 6, ImGuiTableFlags.SizingStretchProp))
+        if (ImGui.BeginTable("AcquisitionRequestBuilderLineEditorPrimary", 3, ImGuiTableFlags.SizingStretchProp))
         {
-            ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.WidthStretch, 2.3f);
-            ImGui.TableSetupColumn("Mode", ImGuiTableColumnFlags.WidthStretch, 1.1f);
-            ImGui.TableSetupColumn("HQ", ImGuiTableColumnFlags.WidthStretch, 0.8f);
-            ImGui.TableSetupColumn("Qty", ImGuiTableColumnFlags.WidthStretch, 0.9f);
-            ImGui.TableSetupColumn("Unit Cost Ceiling", ImGuiTableColumnFlags.WidthStretch, 0.9f);
-            ImGui.TableSetupColumn("Total Spend Ceiling", ImGuiTableColumnFlags.WidthStretch, 0.9f);
+            ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.WidthStretch);
+            ImGui.TableSetupColumn("Buying rule", ImGuiTableColumnFlags.WidthFixed, 180f);
+            ImGui.TableSetupColumn("Quality", ImGuiTableColumnFlags.WidthFixed, 110f);
             ImGui.TableNextRow();
 
             ImGui.TableNextColumn();
@@ -204,9 +204,20 @@ public sealed class MarketAcquisitionRequestBuilderPanel
                 MainWindow.ColError);
 
             ImGui.TableNextColumn();
-            DrawCombo("Mode##AcquisitionRequestBuilderMode", ["AllBelowThreshold", "TargetQuantity"], ref quantityMode);
+            DrawCombo("Buying rule##AcquisitionRequestBuilderMode", ["AllBelowThreshold", "TargetQuantity"], ref quantityMode);
             ImGui.TableNextColumn();
-            DrawCombo("HQ##AcquisitionRequestBuilderHq", ["Either", "HQOnly", "NQOnly"], ref hqPolicy);
+            DrawCombo("Quality##AcquisitionRequestBuilderHq", ["Either", "HQOnly", "NQOnly"], ref hqPolicy);
+
+            ImGui.EndTable();
+        }
+
+        if (ImGui.BeginTable("AcquisitionRequestBuilderLineEditorLimits", 3, ImGuiTableFlags.SizingStretchProp))
+        {
+            ImGui.TableSetupColumn("Quantity", ImGuiTableColumnFlags.WidthStretch, 1f);
+            ImGui.TableSetupColumn("Unit Cost Ceiling", ImGuiTableColumnFlags.WidthStretch, 1f);
+            ImGui.TableSetupColumn("Total Spend Ceiling", ImGuiTableColumnFlags.WidthStretch, 1f);
+            ImGui.TableNextRow();
+
             ImGui.TableNextColumn();
             if (quantityMode == "TargetQuantity")
                 DrawInput("Target Qty", "##AcquisitionRequestBuilderTargetQty", ref targetQuantityBuffer);
@@ -229,13 +240,19 @@ public sealed class MarketAcquisitionRequestBuilderPanel
                            maxQuantityBuffer,
                            maxUnitPriceBuffer,
                            gilCapBuffer);
-        var actionLabel = selectedLineIndex >= 0 ? "Update Line" : "Add Line";
-        if (ImGuiUi.Button($"{actionLabel}##AcquisitionRequestBuilderApplyLine", canApply))
+        var actionLabel = isEditing ? "Save item changes" : "Add item to request";
+        if (ImGuiUi.PrimaryButton($"{actionLabel}##AcquisitionRequestBuilderApplyLine", canApply))
+        {
             ApplyEditorLine();
-
-        ImGui.SameLine();
-        if (ImGuiUi.Button("New Line##AcquisitionRequestBuilderNewLine", true))
             ClearLineEditor();
+        }
+
+        if (isEditing)
+        {
+            ImGui.SameLine();
+            if (ImGuiUi.Button("Cancel editing##AcquisitionRequestBuilderCancelEdit", true))
+                ClearLineEditor();
+        }
     }
 
     private static void DrawInput(string label, string id, ref string buffer)
@@ -249,13 +266,13 @@ public sealed class MarketAcquisitionRequestBuilderPanel
     {
         ImGui.TextColored(MainWindow.ColMuted, label.Split('#')[0]);
         ImGui.SetNextItemWidth(-1);
-        if (!ImGui.BeginCombo(label, current))
+        if (!ImGui.BeginCombo(label, FormatEditorOption(current)))
             return;
 
         foreach (var value in values)
         {
             var selected = string.Equals(value, current, StringComparison.Ordinal);
-            if (ImGui.Selectable(value, selected))
+            if (ImGui.Selectable(FormatEditorOption(value), selected))
                 current = value;
             if (selected)
                 ImGui.SetItemDefaultFocus();
@@ -263,6 +280,17 @@ public sealed class MarketAcquisitionRequestBuilderPanel
 
         ImGui.EndCombo();
     }
+
+    private static string FormatEditorOption(string value) =>
+        value switch
+        {
+            "AllBelowThreshold" => "Buy below ceiling",
+            "TargetQuantity" => "Buy target quantity",
+            "Either" => "Any",
+            "HQOnly" => "HQ only",
+            "NQOnly" => "NQ only",
+            _ => value,
+        };
 
     private void DrawLineTable()
     {
@@ -532,20 +560,24 @@ public sealed class MarketAcquisitionRequestBuilderPanel
                       document.Lines.Count > 0;
         var syncLabel = string.IsNullOrWhiteSpace(document.RemoteRequestId) ? "Save Request" : "Save Changes";
 
-        ImGui.TextColored(MainWindow.ColHeader, "Request");
-        if (ImGuiUi.Button($"{syncLabel}##AcquisitionRequestBuilderSync", canSync))
+        ImGui.TextColored(MainWindow.ColHeader, "Save Request");
+        if (ImGuiUi.PrimaryButton($"{syncLabel}##AcquisitionRequestBuilderSync", canSync))
             _ = SyncAsync(context);
 
         ImGui.SameLine();
         if (ImGuiUi.Button("Check Server##AcquisitionRequestBuilderRefresh", !busy && !string.IsNullOrWhiteSpace(document.RemoteRequestId)))
             _ = RefreshAsync();
 
-        if (ImGuiUi.Button("Load Server Copy##AcquisitionRequestBuilderAdoptRemote", !busy && pendingRemoteDocument is not null))
-            AdoptRemote();
+        if (ImGui.TreeNode("Server and local recovery##AcquisitionRequestBuilderRecovery"))
+        {
+            if (ImGuiUi.Button("Load Server Copy##AcquisitionRequestBuilderAdoptRemote", !busy && pendingRemoteDocument is not null))
+                AdoptRemote();
 
-        ImGui.SameLine();
-        if (ImGuiUi.Button("Clear Local##AcquisitionRequestBuilderClear", !busy && !context.IsRouteActive))
-            ClearDraft(context);
+            ImGui.SameLine();
+            if (ImGuiUi.Button("Clear Local##AcquisitionRequestBuilderClear", !busy && !context.IsRouteActive))
+                ClearDraft(context);
+            ImGui.TreePop();
+        }
 
         ImGui.TextColored(MainWindow.ColMuted, "Right-click unit or spend ceiling cells for Craft Architect evidence and pricing shortcuts.");
     }

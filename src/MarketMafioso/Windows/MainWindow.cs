@@ -68,6 +68,8 @@ public class MainWindow : Window, IDisposable
     private int marketInputCaptureIndex;
     private string workshopStatus = "Workshop prep queue is idle.";
     private string? agentRequestedTab;
+    private bool clearAgentReviewWindowOverride;
+    private bool agentReviewWasPinned;
 
     public AgentBridgeCaptureRegion? AgentCaptureRegion { get; private set; }
 
@@ -160,7 +162,6 @@ public class MainWindow : Window, IDisposable
             MinimumSize = new Vector2(980, 560),
             MaximumSize = new Vector2(float.MaxValue, float.MaxValue),
         };
-
         if (string.IsNullOrWhiteSpace(config.ApiKey) &&
             !string.IsNullOrWhiteSpace(config.CommandPickupApiKey))
         {
@@ -355,6 +356,14 @@ public class MainWindow : Window, IDisposable
         AgentReviewRegistry.BeginFrame();
         try
         {
+            if (clearAgentReviewWindowOverride)
+            {
+                IsPinned = agentReviewWasPinned;
+                Collapsed = null;
+                CollapsedCondition = ImGuiCond.None;
+                clearAgentReviewWindowOverride = false;
+            }
+
         var viewport = ImGui.GetWindowViewport();
         var windowPosition = ImGui.GetWindowPos();
         var windowSize = ImGui.GetWindowSize();
@@ -459,10 +468,14 @@ public class MainWindow : Window, IDisposable
 
     public void AgentOpenForReview()
     {
+        if (!clearAgentReviewWindowOverride)
+            agentReviewWasPinned = IsPinned;
+
         IsOpen = true;
         IsPinned = true;
         Collapsed = false;
         CollapsedCondition = ImGuiCond.Always;
+        clearAgentReviewWindowOverride = true;
     }
 
     public void AgentCaptureInputState()

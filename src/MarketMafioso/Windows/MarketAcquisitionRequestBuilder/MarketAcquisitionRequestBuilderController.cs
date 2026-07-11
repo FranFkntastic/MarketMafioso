@@ -176,7 +176,7 @@ public sealed class MarketAcquisitionRequestBuilderController
         }
 
         Document = RequestDocumentMutation.AddLine(Document, line);
-        SelectedLineIndex = Document.Lines.Count - 1;
+        SelectedLineIndex = -1;
         FinishLocalEdit("Local request updated.");
     }
 

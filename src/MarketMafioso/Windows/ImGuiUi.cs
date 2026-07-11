@@ -3,6 +3,7 @@ using System;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
 using Dalamud.Interface.Components;
+using MarketMafioso.Windows.Main;
 
 namespace MarketMafioso.Windows;
 
@@ -59,6 +60,17 @@ internal static class ImGuiUi
         if (!enabled)
             ImGui.EndDisabled();
 
+        return clicked;
+    }
+
+    public static bool PrimaryButton(string label, bool enabled)
+    {
+        var color = MarketMafiosoUiTheme.Header;
+        ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(color.X * 0.65f, color.Y * 0.65f, color.Z * 0.65f, 1f));
+        ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(color.X * 0.82f, color.Y * 0.82f, color.Z * 0.82f, 1f));
+        ImGui.PushStyleColor(ImGuiCol.ButtonActive, color);
+        var clicked = Button(label, enabled);
+        ImGui.PopStyleColor(3);
         return clicked;
     }
 
