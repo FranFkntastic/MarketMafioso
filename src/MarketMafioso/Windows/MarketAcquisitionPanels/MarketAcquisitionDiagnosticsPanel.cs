@@ -2,8 +2,11 @@ using System;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Globalization;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Plugin.Services;
+using MarketMafioso.Diagnostics;
+using Franthropy.Dalamud.AgentBridge;
 using MarketMafioso.MarketAcquisition;
 using MarketMafioso.Windows.Main;
 
@@ -14,10 +17,10 @@ internal sealed class MarketAcquisitionDiagnosticsPanel
     private readonly Func<MarketAcquisitionRouteEngineSnapshot> getRouteSnapshot;
     private readonly string diagnosticsDirectory;
     private readonly IPluginLog log;
-    private readonly Action openMarketAcquisitionDiagnostics;
-    private readonly Action openAutomationDiagnostics;
-    private readonly Action captureMarketBoardInputState;
-    private readonly Action finalizeMarketBoardInputCaptureLog;
+    private readonly Action drawMarketAcquisitionDiagnostics;
+    private readonly Action drawAutomationDiagnostics;
+    private readonly UiStateCaptureService uiStateCapture;
+    private readonly AgentBridgeUiReviewRegistry reviewRegistry;
 
     private string diagnosticsFolderStatus = "Route diagnostics folder opens in Explorer.";
 
@@ -25,18 +28,18 @@ internal sealed class MarketAcquisitionDiagnosticsPanel
         Func<MarketAcquisitionRouteEngineSnapshot> getRouteSnapshot,
         string diagnosticsDirectory,
         IPluginLog log,
-        Action openMarketAcquisitionDiagnostics,
-        Action openAutomationDiagnostics,
-        Action captureMarketBoardInputState,
-        Action finalizeMarketBoardInputCaptureLog)
+        Action drawMarketAcquisitionDiagnostics,
+        Action drawAutomationDiagnostics,
+        UiStateCaptureService uiStateCapture,
+        AgentBridgeUiReviewRegistry reviewRegistry)
     {
         this.getRouteSnapshot = getRouteSnapshot ?? throw new ArgumentNullException(nameof(getRouteSnapshot));
         this.diagnosticsDirectory = diagnosticsDirectory ?? throw new ArgumentNullException(nameof(diagnosticsDirectory));
         this.log = log ?? throw new ArgumentNullException(nameof(log));
-        this.openMarketAcquisitionDiagnostics = openMarketAcquisitionDiagnostics ?? throw new ArgumentNullException(nameof(openMarketAcquisitionDiagnostics));
-        this.openAutomationDiagnostics = openAutomationDiagnostics ?? throw new ArgumentNullException(nameof(openAutomationDiagnostics));
-        this.captureMarketBoardInputState = captureMarketBoardInputState ?? throw new ArgumentNullException(nameof(captureMarketBoardInputState));
-        this.finalizeMarketBoardInputCaptureLog = finalizeMarketBoardInputCaptureLog ?? throw new ArgumentNullException(nameof(finalizeMarketBoardInputCaptureLog));
+        this.drawMarketAcquisitionDiagnostics = drawMarketAcquisitionDiagnostics ?? throw new ArgumentNullException(nameof(drawMarketAcquisitionDiagnostics));
+        this.drawAutomationDiagnostics = drawAutomationDiagnostics ?? throw new ArgumentNullException(nameof(drawAutomationDiagnostics));
+        this.uiStateCapture = uiStateCapture ?? throw new ArgumentNullException(nameof(uiStateCapture));
+        this.reviewRegistry = reviewRegistry ?? throw new ArgumentNullException(nameof(reviewRegistry));
     }
 
     public void Draw()
@@ -48,14 +51,6 @@ internal sealed class MarketAcquisitionDiagnosticsPanel
         if (ImGuiUi.Button("Open Route Diagnostics Folder", true))
             OpenDiagnosticsFolder(diagnosticsDirectory);
 
-        ImGui.SameLine();
-        if (ImGuiUi.Button("Market Acquisition Diagnostics", true))
-            openMarketAcquisitionDiagnostics();
-
-        ImGui.SameLine();
-        if (ImGuiUi.Button("Automation Diagnostics", true))
-            openAutomationDiagnostics();
-
         ImGui.TextColored(GetDiagnosticsFolderStatusColor(), diagnosticsFolderStatus);
         ImGui.TextColored(MarketMafiosoUiTheme.Muted, diagnosticsDirectory);
 
@@ -63,7 +58,12 @@ internal sealed class MarketAcquisitionDiagnosticsPanel
             ImGui.TextColored(MarketMafiosoUiTheme.Muted, $"Latest report: {snapshot.LastDiagnosticFilePath}");
 
         DrawPostRunDiagnosticSummary(snapshot);
-        DrawMarketBoardInputCapture(snapshot);
+        DrawUiStateCapture();
+
+        if (ImGui.CollapsingHeader("Market Acquisition Diagnostics", ImGuiTreeNodeFlags.DefaultOpen))
+            drawMarketAcquisitionDiagnostics();
+        if (ImGui.CollapsingHeader("Automation Diagnostics", ImGuiTreeNodeFlags.DefaultOpen))
+            drawAutomationDiagnostics();
     }
 
     public void DrawLatestWorldCompletionSummary(MarketAcquisitionRouteEngineSnapshot snapshot)
@@ -122,22 +122,42 @@ internal sealed class MarketAcquisitionDiagnosticsPanel
         }
     }
 
-    private void DrawMarketBoardInputCapture(MarketAcquisitionRouteEngineSnapshot snapshot)
+    private void DrawUiStateCapture()
     {
         ImGui.Spacing();
-        ImGuiUi.SectionHeader("Input Capture", MarketMafiosoUiTheme.Header);
-        ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Capture current market-board UI/input state before and after manual purchase clicks or pagination attempts.");
+        ImGuiUi.SectionHeader("Catchall UI-State Recorder", MarketMafiosoUiTheme.Header);
+        ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Event-driven capture of addon lifecycle, receive events, focus, active agents, conditions, animation lock, and state diffs. Text payloads are redacted.");
 
-        if (ImGuiUi.Button("Capture Input State", true))
-            captureMarketBoardInputState();
+        if (ImGuiUi.Button("Start UI Capture", !uiStateCapture.IsRecording))
+            uiStateCapture.Start();
+        RegisterLastControl("diagnostics.ui-capture.start", "Start catchall UI-state capture", !uiStateCapture.IsRecording, () => uiStateCapture.Start());
 
         ImGui.SameLine();
-        if (ImGuiUi.Button("Finish Capture Log", snapshot.CanFinalizeInputCaptureLog))
-            finalizeMarketBoardInputCaptureLog();
+        if (ImGuiUi.Button("Add Marker", uiStateCapture.IsRecording))
+            uiStateCapture.Mark("manual-marker");
+        RegisterLastControl("diagnostics.ui-capture.marker", "Add a marker to the active UI-state capture", uiStateCapture.IsRecording, () => uiStateCapture.Mark("agent-marker"));
 
-        if (snapshot.LastDiagnosticFilePath != null)
-            ImGui.TextColored(MarketMafiosoUiTheme.Muted, $"Capture log: {snapshot.LastDiagnosticFilePath}");
+        ImGui.SameLine();
+        if (ImGuiUi.Button("Finish UI Capture", uiStateCapture.IsRecording))
+            uiStateCapture.Stop();
+        RegisterLastControl("diagnostics.ui-capture.finish", "Finish and export catchall UI-state capture", uiStateCapture.IsRecording, () => uiStateCapture.Stop());
+
+        ImGui.TextColored(MarketMafiosoUiTheme.Muted, $"{uiStateCapture.Status} Events: {uiStateCapture.EventCount:N0}");
+        if (uiStateCapture.LastCapturePath != null)
+            ImGui.TextColored(MarketMafiosoUiTheme.Muted, uiStateCapture.LastCapturePath);
     }
+
+    private void RegisterLastControl(string id, string label, bool enabled, Action invoke) =>
+        reviewRegistry.Register(
+            id,
+            label,
+            AgentBridgeUiControlKind.Button,
+            ImGui.GetItemRectMin(),
+            ImGui.GetItemRectMax(),
+            enabled,
+            false,
+            uiStateCapture.EventCount.ToString(CultureInfo.InvariantCulture),
+            invoke);
 
     private void OpenDiagnosticsFolder(string folderPath)
     {

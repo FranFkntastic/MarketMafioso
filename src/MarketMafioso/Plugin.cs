@@ -152,7 +152,7 @@ public sealed class Plugin : IDalamudPlugin
             new MarketMafiosoBridgeProvider(
                 mainWindow.CreateAgentBridgeTruth,
                 mainWindow.AgentOpenForReview,
-                () => mainWindow.AcquisitionDiagnostics.IsOpen = true,
+                () => mainWindow.TrySelectAgentBridgeTab("Diagnostics"),
                 proofId =>
                 {
                     agentBridgeProofWindow.RequestedProofId = proofId;
@@ -169,8 +169,6 @@ public sealed class Plugin : IDalamudPlugin
         windowSystem.AddWindow(mainWindow);
         windowSystem.AddWindow(mainWindow.ProjectBrowser);
         windowSystem.AddWindow(mainWindow.FrozenQueueBrowser);
-        windowSystem.AddWindow(mainWindow.AcquisitionDiagnostics);
-        windowSystem.AddWindow(mainWindow.AutomationDiagnostics);
         windowSystem.AddWindow(agentBridgeProofWindow);
 
         CommandManager.AddHandler(CmdMain, new CommandInfo(OnCommand)

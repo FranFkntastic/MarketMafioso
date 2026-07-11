@@ -6,6 +6,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using Franthropy.Dalamud.AgentBridge;
 
 namespace MarketMafioso.AgentBridge;
 
@@ -153,7 +154,10 @@ public sealed class AgentBridgeHost : IDisposable
             case "invoke-control":
                 if (string.IsNullOrWhiteSpace(request.Target) || request.FrameId is null)
                     return AgentBridgeResponse.Fail("Control ID and reviewed frame ID are required.");
-                var invocation = provider.InvokeControl(request.Target, request.FrameId.Value);
+                AgentBridgeUiControlInvocation? invocation = null;
+                await dispatchOnFramework(() => invocation = provider.InvokeControl(request.Target, request.FrameId.Value)).ConfigureAwait(false);
+                if (invocation == null)
+                    return AgentBridgeResponse.Fail("Control invocation did not complete on the framework thread.");
                 AppendAudit("invoke-control", invocation.Success ? request.Target : "rejected");
                 return invocation.Success
                     ? AgentBridgeResponse.Ok(invocation.Message, invocation.Frame)

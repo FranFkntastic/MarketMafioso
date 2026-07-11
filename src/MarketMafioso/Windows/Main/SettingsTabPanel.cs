@@ -16,9 +16,6 @@ internal sealed class SettingsTabPanel
     private readonly HttpReporter reporter;
     private readonly IPluginLog log;
     private readonly Action stopMarketAcquisitionRoute;
-    private readonly Action closeAcquisitionDiagnostics;
-    private readonly Action closeAutomationDiagnostics;
-    private readonly Action openAutomationDiagnostics;
 
     private string urlBuffer;
     private string apiKeyBuffer;
@@ -33,18 +30,12 @@ internal sealed class SettingsTabPanel
         Configuration config,
         HttpReporter reporter,
         IPluginLog log,
-        Action stopMarketAcquisitionRoute,
-        Action closeAcquisitionDiagnostics,
-        Action closeAutomationDiagnostics,
-        Action openAutomationDiagnostics)
+        Action stopMarketAcquisitionRoute)
     {
         this.config = config ?? throw new ArgumentNullException(nameof(config));
         this.reporter = reporter ?? throw new ArgumentNullException(nameof(reporter));
         this.log = log ?? throw new ArgumentNullException(nameof(log));
         this.stopMarketAcquisitionRoute = stopMarketAcquisitionRoute ?? throw new ArgumentNullException(nameof(stopMarketAcquisitionRoute));
-        this.closeAcquisitionDiagnostics = closeAcquisitionDiagnostics ?? throw new ArgumentNullException(nameof(closeAcquisitionDiagnostics));
-        this.closeAutomationDiagnostics = closeAutomationDiagnostics ?? throw new ArgumentNullException(nameof(closeAutomationDiagnostics));
-        this.openAutomationDiagnostics = openAutomationDiagnostics ?? throw new ArgumentNullException(nameof(openAutomationDiagnostics));
         urlBuffer = config.ServerUrl;
         apiKeyBuffer = config.ApiKey;
     }
@@ -186,8 +177,6 @@ internal sealed class SettingsTabPanel
             if (ImGui.Button("Lock Market Acquisition"))
             {
                 stopMarketAcquisitionRoute();
-                closeAcquisitionDiagnostics();
-                closeAutomationDiagnostics();
                 MarketAcquisitionUnlock.Lock(config);
                 config.Save();
                 marketAcquisitionUnlockKeyBuffer = string.Empty;
@@ -195,12 +184,8 @@ internal sealed class SettingsTabPanel
             }
 
             ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Locking hides the UI only. Existing local request state and server data are left untouched.");
-            if (ImGui.Button("Automation Diagnostics"))
-                openAutomationDiagnostics();
             return;
         }
-
-        closeAutomationDiagnostics();
 
         ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Private/internal modules are hidden by default.");
         ImGui.Text("Unlock key:");

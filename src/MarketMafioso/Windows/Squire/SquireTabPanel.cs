@@ -1,6 +1,9 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Reflection;
+using System.Threading;
+using System.Threading.Tasks;
 using Dalamud.Bindings.ImGui;
 using MarketMafioso.Squire;
 using MarketMafioso.Squire.Observation;
@@ -8,10 +11,11 @@ using MarketMafioso.AgentBridge;
 using MarketMafioso.Windows.Main;
 using Newtonsoft.Json;
 using Franthropy.Dalamud.AgentBridge;
+using Franthropy.Dalamud.Equipment;
 
 namespace MarketMafioso.Windows.Squire;
 
-internal sealed class SquireTabPanel
+internal sealed class SquireTabPanel : IDisposable
 {
     private readonly ICharacterEquipmentSnapshotSource snapshotSource;
     private readonly ISquireActionGameAdapter actionAdapter;
@@ -24,6 +28,9 @@ internal sealed class SquireTabPanel
     private string search = string.Empty;
     private bool showProtected;
     private string status = "Refresh to capture a read-only equipment snapshot.";
+    private bool runConfirmed;
+    private CancellationTokenSource? runCancellation;
+    private Task? activeRun;
 
     public SquireTabPanel(
         Configuration config,
@@ -78,10 +85,16 @@ internal sealed class SquireTabPanel
 
     private void Refresh()
     {
+        if (activeRun is { IsCompleted: false })
+        {
+            status = "Refresh is blocked while Squire owns an active run.";
+            return;
+        }
         try
         {
             analysis = evaluator.Evaluate(snapshotSource.Capture());
             review.Adopt(analysis);
+            runConfirmed = false;
             var executable = analysis.Candidates.Count(candidate => candidate.IsExecutable);
             status = analysis.IsActionable
                 ? $"Complete snapshot; {executable} executable candidate(s)."
@@ -253,11 +266,107 @@ internal sealed class SquireTabPanel
         ImGui.TextUnformatted($"Selected: {selections.Count} | Desynthesize: {selections.Count(pair => pair.Value == SquireDisposition.Desynthesize)} | Vendor: {selections.Count(pair => pair.Value == SquireDisposition.VendorSell)} | Discard: {selections.Count(pair => pair.Value == SquireDisposition.Discard)}");
         if (!value.Snapshot.Diagnostics.IsComplete)
             ImGui.TextColored(MarketMafiosoUiTheme.Error, "Execution blocked: snapshot is incomplete.");
-        ImGui.BeginDisabled();
-        ImGui.Button("Run selected disposition##Squire");
-        ImGui.EndDisabled();
-        ImGui.SameLine();
-        ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Execution remains disabled until exact-slot action adapters pass live validation.");
+        var selectedDesynthesis = selections.Where(pair => pair.Value == SquireDisposition.Desynthesize).Select(pair => pair.Key).ToArray();
+        var running = activeRun is { IsCompleted: false };
+        var canRunDesynthesis = value.Snapshot.Diagnostics.IsComplete && selectedDesynthesis.Length > 0 && selectedDesynthesis.Length == selections.Count && !running;
+        if (!canRunDesynthesis)
+            ImGui.BeginDisabled();
+        ImGui.Checkbox("I confirm this reviewed desynthesis batch", ref runConfirmed);
+        RegisterLastControl(
+            "squire.run.desynthesize.confirm",
+            "Confirm the reviewed desynthesis batch",
+            AgentBridgeUiControlKind.Toggle,
+            canRunDesynthesis,
+            runConfirmed,
+            selectedDesynthesis.Length.ToString(),
+            () => runConfirmed = !runConfirmed);
+        if (!canRunDesynthesis)
+            ImGui.EndDisabled();
+
+        var runEnabled = canRunDesynthesis && runConfirmed;
+        if (!runEnabled)
+            ImGui.BeginDisabled();
+        if (ImGui.Button("Run selected desynthesis##Squire"))
+            StartRun(value, SquireDisposition.Desynthesize, selectedDesynthesis);
+        RegisterLastControl(
+            "squire.run.desynthesize",
+            "Run the explicitly confirmed desynthesis batch",
+            AgentBridgeUiControlKind.Button,
+            runEnabled,
+            false,
+            selectedDesynthesis.Length.ToString(),
+            () => StartRun(value, SquireDisposition.Desynthesize, selectedDesynthesis));
+        if (!runEnabled)
+            ImGui.EndDisabled();
+        if (running)
+        {
+            ImGui.SameLine();
+            if (ImGui.Button("Cancel active Squire run##Squire"))
+                runCancellation?.Cancel();
+        }
+
+        if (actionAdapter is DalamudSquireActionGameAdapter liveAdapter && selections.Count == 1)
+        {
+            var fingerprint = selections.Keys.Single();
+            if (ImGui.Button("Probe normal item menu##Squire"))
+                status = liveAdapter.OpenContextMenuProbe(fingerprint).Message;
+            RegisterLastControl(
+                "squire.probe.open-context-menu",
+                "Open the selected item's normal context menu",
+                AgentBridgeUiControlKind.Button,
+                true,
+                false,
+                null,
+                () => status = liveAdapter.OpenContextMenuProbe(fingerprint).Message);
+            ImGui.SameLine();
+            if (ImGui.Button("Read menu probe##Squire"))
+                status = liveAdapter.DescribeContextMenuProbe();
+            RegisterLastControl(
+                "squire.probe.read-context-menu",
+                "Read the open item context menu",
+                AgentBridgeUiControlKind.Button,
+                true,
+                false,
+                null,
+                () => status = liveAdapter.DescribeContextMenuProbe());
+        }
+    }
+
+    private void StartRun(SquireAnalysis value, SquireDisposition disposition, EquipmentInstanceFingerprint[] selected)
+    {
+        if (!runConfirmed || activeRun is { IsCompleted: false })
+            return;
+        try
+        {
+            var plan = new SquireActionPlanner().Create(value, disposition, selected, DateTimeOffset.UtcNow);
+            runConfirmed = false;
+            runCancellation = new CancellationTokenSource();
+            activeRun = RunAsync(plan, runCancellation.Token);
+            status = $"Started explicitly confirmed {disposition} run for {plan.Actions.Count} item(s).";
+        }
+        catch (Exception ex)
+        {
+            status = $"Run blocked: {ex.Message}";
+        }
+    }
+
+    private async Task RunAsync(SquireActionPlan plan, CancellationToken cancellationToken)
+    {
+        var result = await new SquireRunner(actionAdapter).RunAsync(plan, explicitlyConfirmed: true, cancellationToken);
+        var version = Assembly.GetExecutingAssembly().GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
+            ?? Assembly.GetExecutingAssembly().GetName().Version?.ToString()
+            ?? "unknown";
+        var auditPath = new SquireAuditLog(Path.Combine(diagnosticDirectory, "runs")).Write(plan, result, version);
+        status = result.Success
+            ? $"Run completed. Audit: {Path.GetFileName(auditPath)}"
+            : $"Run stopped ({result.Code}). Audit: {Path.GetFileName(auditPath)}";
+    }
+
+    public void Dispose()
+    {
+        runCancellation?.Cancel();
+        actionAdapter.ReleaseOwnedState();
+        runCancellation?.Dispose();
     }
 
     private void Export()

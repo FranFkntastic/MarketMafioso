@@ -23,6 +23,7 @@ using MarketMafioso.Windows.Squire;
 using MarketMafioso.Windows.WorkshopLogistics;
 using MarketMafioso.Squire.Observation;
 using MarketMafioso.WorkshopPrep;
+using MarketMafioso.Diagnostics;
 using Franthropy.Dalamud.AgentBridge;
 
 namespace MarketMafioso.Windows;
@@ -54,6 +55,7 @@ public class MainWindow : Window, IDisposable
     private readonly MarketAcquisitionRequestPickupPanel marketAcquisitionRequestPickupPanel;
     private readonly MarketAcquisitionAcceptedRequestPanel marketAcquisitionAcceptedRequestPanel;
     private readonly MarketAcquisitionDiagnosticsPanel marketAcquisitionDiagnosticsPanel;
+    private readonly UiStateCaptureService uiStateCapture;
     private readonly MarketAcquisitionGuidedRoutePanel marketAcquisitionGuidedRoutePanel;
     private readonly MarketAcquisitionRequestBuilderPanel acquisitionRequestBuilder;
     private readonly RetainerRestockTabPanel restockTab;
@@ -177,7 +179,7 @@ public class MainWindow : Window, IDisposable
         squireTab = new SquireTabPanel(
             config,
             squireSnapshotSource,
-            new DalamudSquireActionGameAdapter(squireSnapshotSource, playerState, Plugin.Condition),
+            new DalamudSquireActionGameAdapter(squireSnapshotSource, playerState, Plugin.Condition, Plugin.GameGui, Plugin.Framework),
             AgentReviewRegistry,
             Path.Combine(Plugin.PluginInterface.GetPluginConfigDirectory(), "squire-logs"));
         statusTab = new StatusTabPanel(config, reporter, retainerCacheStore, log);
@@ -254,20 +256,23 @@ public class MainWindow : Window, IDisposable
             () => acquisitionWorkspace.PreparedPlan,
             CanProbeLiveMarketBoard,
             () => _ = ProbeLiveMarketBoardAsync(),
-            CaptureMarketBoardInputState,
-            FinalizeMarketBoardInputCaptureLog,
             () => acquisitionRequestBuilderCraftAppraisal.State.CreateDiagnosticsSnapshot());
         AutomationDiagnostics = new AutomationDiagnosticsWindow(
             new AutomationDiagnosticProbeFactory(autoRetainerRefresh, viwiWorkshoppaIpc).Create(),
-            IsMarketAcquisitionUnlocked);
+            () => true);
+        uiStateCapture = new UiStateCaptureService(
+            Plugin.AddonLifecycle,
+            Plugin.Framework,
+            Plugin.Condition,
+            Path.Combine(Plugin.PluginInterface.GetPluginConfigDirectory(), "ui-state-captures"));
         marketAcquisitionDiagnosticsPanel = new MarketAcquisitionDiagnosticsPanel(
             routeEngine.CreateSnapshot,
             marketAcquisitionRouteDiagnosticsDirectory,
             log,
-            () => AcquisitionDiagnostics.IsOpen = true,
-            () => AutomationDiagnostics.IsOpen = true,
-            CaptureMarketBoardInputState,
-            FinalizeMarketBoardInputCaptureLog);
+            AcquisitionDiagnostics.Draw,
+            AutomationDiagnostics.Draw,
+            uiStateCapture,
+            AgentReviewRegistry);
         marketAcquisitionGuidedRoutePanel = new MarketAcquisitionGuidedRoutePanel(
             routeEngine.CreateSnapshot,
             forceDiagnostics => _ = StartGuidedRouteAsync(forceDiagnostics),
@@ -283,10 +288,7 @@ public class MainWindow : Window, IDisposable
             config,
             reporter,
             log,
-            () => _ = routeEngine.Stop(),
-            () => AcquisitionDiagnostics.IsOpen = false,
-            () => AutomationDiagnostics.IsOpen = false,
-            () => AutomationDiagnostics.IsOpen = true);
+            () => _ = routeEngine.Stop());
 
         acquisitionWorkspace.RestoreClaimIntoBuilder();
     }
@@ -405,7 +407,7 @@ public class MainWindow : Window, IDisposable
                 ImGui.EndTabItem();
             }
 
-            if (IsMarketAcquisitionUnlocked() && ImGui.BeginTabItem("Diagnostics", GetAgentTabFlags("Diagnostics")))
+            if (ImGui.BeginTabItem("Diagnostics", GetAgentTabFlags("Diagnostics")))
             {
                 marketAcquisitionDiagnosticsPanel.Draw();
                 ImGui.EndTabItem();
@@ -438,7 +440,8 @@ public class MainWindow : Window, IDisposable
         var allowed = tabName switch
         {
             "Overview" or "Inventory Reporter" or "Squire" or "Workshop Logistics" or "Restock" or "Settings" or "Status" => true,
-            "Market Acquisition" or "Diagnostics" => IsMarketAcquisitionUnlocked(),
+            "Diagnostics" => true,
+            "Market Acquisition" => IsMarketAcquisitionUnlocked(),
             _ => false,
         };
         if (!allowed)
@@ -460,7 +463,13 @@ public class MainWindow : Window, IDisposable
         CollapsedCondition = ImGuiCond.Always;
     }
 
-    public void AgentCaptureInputState() => CaptureMarketBoardInputState();
+    public void AgentCaptureInputState()
+    {
+        if (!uiStateCapture.IsRecording)
+            uiStateCapture.Start("agent-bridge-ui-transaction");
+        else
+            uiStateCapture.Mark("agent-bridge-capture-input-state");
+    }
 
     public void AgentStopRoute()
     {
@@ -625,7 +634,7 @@ public class MainWindow : Window, IDisposable
         DrawLiveCandidatePlanResult(snapshot);
 
         if (ImGuiUi.Button("Open Diagnostics", true))
-            AcquisitionDiagnostics.IsOpen = true;
+            agentRequestedTab = "Diagnostics";
     }
 
     private void DrawLiveCandidatePlanResult(MarketAcquisitionRouteEngineSnapshot snapshot)
@@ -970,6 +979,8 @@ public class MainWindow : Window, IDisposable
 
     public void Dispose()
     {
+        squireTab.Dispose();
+        uiStateCapture.Dispose();
         acquisitionWorkspace.Dispose();
         routeEngine.Dispose();
         acquisitionHttpClient.Dispose();

@@ -13,8 +13,6 @@ public sealed class MarketAcquisitionDiagnosticsWindow : Window
     private readonly Func<MarketAcquisitionPlan?> getAcquisitionPlan;
     private readonly Func<bool> canProbeLiveListings;
     private readonly Action probeLiveListings;
-    private readonly Action captureInputState;
-    private readonly Action finalizeInputCaptureLog;
     private readonly Func<CraftAppraisalDiagnosticsSnapshot> getCraftAppraisalDiagnostics;
 
     private static readonly Vector4 ColHeader = new(0.38f, 0.73f, 1.00f, 1f);
@@ -27,8 +25,6 @@ public sealed class MarketAcquisitionDiagnosticsWindow : Window
         Func<MarketAcquisitionPlan?> getAcquisitionPlan,
         Func<bool> canProbeLiveListings,
         Action probeLiveListings,
-        Action captureInputState,
-        Action finalizeInputCaptureLog,
         Func<CraftAppraisalDiagnosticsSnapshot> getCraftAppraisalDiagnostics)
         : base("Market Acquisition Diagnostics##MarketAcquisitionDiagnostics")
     {
@@ -36,8 +32,6 @@ public sealed class MarketAcquisitionDiagnosticsWindow : Window
         this.getAcquisitionPlan = getAcquisitionPlan;
         this.canProbeLiveListings = canProbeLiveListings;
         this.probeLiveListings = probeLiveListings;
-        this.captureInputState = captureInputState;
-        this.finalizeInputCaptureLog = finalizeInputCaptureLog;
         this.getCraftAppraisalDiagnostics = getCraftAppraisalDiagnostics;
 
         SizeConstraints = new WindowSizeConstraints
@@ -83,14 +77,6 @@ public sealed class MarketAcquisitionDiagnosticsWindow : Window
     {
         if (ImGuiUi.Button("Read Live Listings", canProbeLiveListings()))
             probeLiveListings();
-
-        ImGui.SameLine();
-        if (ImGuiUi.Button("Capture Input State", true))
-            captureInputState();
-
-        ImGui.SameLine();
-        if (ImGuiUi.Button("Finish Capture Log", routeSnapshot.CanFinalizeInputCaptureLog))
-            finalizeInputCaptureLog();
 
         var diagnosticFilePath = routeSnapshot.LastDiagnosticFilePath;
         if (!string.IsNullOrWhiteSpace(diagnosticFilePath))
