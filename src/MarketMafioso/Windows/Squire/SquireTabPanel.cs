@@ -308,7 +308,11 @@ internal sealed class SquireTabPanel : IDisposable
                     true,
                     selected,
                     candidate.RecommendedDisposition.ToString(),
-                    () => SetSelection(value, candidate, !tableSelection.Contains(fingerprint)));
+                    () =>
+                    {
+                        focusedItem = fingerprint;
+                        SetSelection(value, candidate, !tableSelection.Contains(fingerprint));
+                    });
             }
             ImGui.SetCursorPos(itemCursor);
             ImGui.PushTextWrapPos(itemCursor.X + itemWidth);
@@ -486,12 +490,9 @@ internal sealed class SquireTabPanel : IDisposable
         ImGui.TextColored(MarketMafiosoUiTheme.Header, candidate.Definition.Name);
         ImGui.SameLine();
         ImGui.TextColored(MarketMafiosoUiTheme.Muted, $"{fingerprint.Container}:{fingerprint.SlotIndex} | {candidate.Assessment} | {candidate.RecommendedDisposition}");
-        foreach (var reason in candidate.Reasons)
-        {
-            ImGui.Bullet();
-            ImGui.SameLine();
-            ImGui.TextWrapped(reason.Message);
-        }
+        DrawItemEvidence(candidate);
+        DrawRuleEvidence(analysis, candidate);
+        DrawJobComparisonEvidence(candidate);
         if (candidate.Definition.NormalizedRarity is EquipmentRarity.Rare or EquipmentRarity.Relic)
         {
             var itemId = candidate.Definition.ItemId;
@@ -523,6 +524,132 @@ internal sealed class SquireTabPanel : IDisposable
                 Refresh();
             }
         }
+    }
+
+    private static void DrawItemEvidence(SquireCandidate candidate)
+    {
+        var fingerprint = candidate.Instance.Fingerprint;
+        ImGui.TextColored(MarketMafiosoUiTheme.Header, "Item and cleanup route");
+        if (!ImGui.BeginTable("##SquireItemEvidence", 4, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.SizingStretchProp))
+            return;
+        ImGui.TableSetupColumn("Location");
+        ImGui.TableSetupColumn("Item facts");
+        ImGui.TableSetupColumn("Assessment");
+        ImGui.TableSetupColumn("Authorized route");
+        ImGui.TableHeadersRow();
+        ImGui.TableNextRow();
+        EvidenceCell($"{fingerprint.Container}:{fingerprint.SlotIndex}");
+        EvidenceCell($"{candidate.Definition.NormalizedRarity}, {(fingerprint.IsHighQuality ? "HQ" : "NQ")}, equip {candidate.Definition.EquipLevel}, iLv {candidate.Definition.ItemLevel}, materia {fingerprint.MateriaIds.Count}");
+        EvidenceCell(candidate.Assessment.ToString());
+        EvidenceCell(candidate.SupportedDispositions.Count == 0
+            ? "Keep"
+            : $"{candidate.RecommendedDisposition} (supported: {string.Join(", ", candidate.SupportedDispositions.Order())})");
+        ImGui.EndTable();
+    }
+
+    private static void DrawRuleEvidence(SquireAnalysis analysis, SquireCandidate candidate)
+    {
+        ImGui.TextColored(MarketMafiosoUiTheme.Header, "Evaluation rules");
+        if (!ImGui.BeginTable("##SquireRuleEvidence", 3, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.SizingStretchProp))
+            return;
+        ImGui.TableSetupColumn("Rule", ImGuiTableColumnFlags.WidthFixed, 190);
+        ImGui.TableSetupColumn("Effect", ImGuiTableColumnFlags.WidthFixed, 90);
+        ImGui.TableSetupColumn("Observed evidence");
+        ImGui.TableHeadersRow();
+        foreach (var reason in candidate.Reasons)
+        {
+            ImGui.TableNextRow();
+            EvidenceCell(ReasonLabel(reason.Code));
+            EvidenceCell(reason.Severity switch
+            {
+                SquireReasonSeverity.Blocking => "Protects",
+                SquireReasonSeverity.Warning => "Caution",
+                _ => "Supports",
+            });
+            EvidenceCell(DescribeReasonEvidence(analysis, candidate, reason));
+        }
+        ImGui.EndTable();
+    }
+
+    private static void DrawJobComparisonEvidence(SquireCandidate candidate)
+    {
+        if (candidate.UseAnalysis is not { Comparisons.Count: > 0 } use)
+            return;
+        ImGui.TextColored(MarketMafiosoUiTheme.Header, "Job-by-job equipment proof");
+        if (!ImGui.BeginTable("##SquireJobEvidence", 4, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.SizingStretchProp))
+            return;
+        ImGui.TableSetupColumn("Job", ImGuiTableColumnFlags.WidthFixed, 65);
+        ImGui.TableSetupColumn("Result", ImGuiTableColumnFlags.WidthFixed, 125);
+        ImGui.TableSetupColumn("Trusted baseline");
+        ImGui.TableSetupColumn("Source");
+        ImGui.TableHeadersRow();
+        foreach (var comparison in use.Comparisons)
+        {
+            ImGui.TableNextRow();
+            EvidenceCell($"{comparison.Job.Abbreviation} {comparison.Job.Level}");
+            EvidenceCell(comparison.Status.ToString());
+            EvidenceCell(comparison.Baseline is null
+                ? "None"
+                : $"{comparison.Baseline.Name} (iLv {comparison.Baseline.ItemLevel})");
+            var witnesses = comparison.WitnessRequirement?.ViableWitnesses ?? [];
+            EvidenceCell(witnesses.Count > 0
+                ? string.Join("; ", witnesses.Select(value => $"{value.Fingerprint.Container}:{value.Fingerprint.SlotIndex}{(value.Fingerprint.IsHighQuality ? " HQ" : string.Empty)}"))
+                : comparison.ContributingGearsets.Count > 0
+                    ? string.Join(", ", comparison.ContributingGearsets.Select(value => value.Name).Distinct())
+                    : comparison.Diagnostic ?? "No trusted source");
+        }
+        ImGui.EndTable();
+    }
+
+    private static string DescribeReasonEvidence(SquireAnalysis analysis, SquireCandidate candidate, SquireReason reason)
+    {
+        var fingerprint = candidate.Instance.Fingerprint;
+        var comparisons = candidate.UseAnalysis?.Comparisons ?? [];
+        return reason.Code switch
+        {
+            "StrictlyWorseForAllUnlockedJobs" => $"{comparisons.Count} relevant obtained job(s) checked; every comparison has a strictly better owned or saved baseline. See the proof table below.",
+            "BaselineNotStrictlyBetter" => $"{comparisons.Count(value => value.Status == EquipmentUseStatus.BaselineNotBetter)} job comparison(s) found no baseline that dominates this item. See the proof table below.",
+            "FutureUnlockedJobUse" => string.Join(", ", comparisons.Where(value => value.Status == EquipmentUseStatus.FutureUse).Select(value => $"{value.Job.Abbreviation} {value.Job.Level} < equip {candidate.Definition.EquipLevel}")),
+            "FutureLevelingUseNotProtected" => $"Future-use protection is disabled; {comparisons.Count(value => value.Status == EquipmentUseStatus.FutureUse)} lower-level obtained job comparison(s) do not block cleanup.",
+            "NoObtainedEligibleJob" => DescribeEligibleJobs(analysis, candidate),
+            "MateriaRetrievalRequired" => $"Exact slot currently contains {fingerprint.MateriaIds.Count} materia. Squire will retrieve and revalidate each one before {candidate.RecommendedDisposition}.",
+            "CurrentlyEquipped" => $"The exact {fingerprint.Container}:{fingerprint.SlotIndex} instance is equipped in the live snapshot.",
+            "ReferencedByGearset" => DescribeGearsetReferences(analysis, candidate),
+            "HighRarityEquipment" => $"The item is {candidate.Definition.NormalizedRarity}; no character-scoped cleanup override exists for item {candidate.Definition.ItemId}.",
+            "HighRarityCleanupOverride" => $"A character-scoped override exists for item {candidate.Definition.ItemId}; all non-rarity protections still apply.",
+            "DesynthesisNotUnlocked" => $"Desynthesis is absent from the supported routes; current authorized routes: {string.Join(", ", candidate.SupportedDispositions.Order())}.",
+            "StatlessAllClassesEquipment" => "The resolved item profile contains no functional damage, defense, or class-relevant attributes, so it is treated as likely cosmetic.",
+            "NoSupportedDisposition" => "The eligibility evaluator produced no authorized cleanup route; execution remains disabled.",
+            _ when candidate.UseAnalysis?.Diagnostic is { Length: > 0 } diagnostic => diagnostic,
+            _ => reason.Message,
+        };
+    }
+
+    private static string DescribeEligibleJobs(SquireAnalysis analysis, SquireCandidate candidate)
+    {
+        var eligible = analysis.Snapshot.Jobs
+            .Where(job => candidate.Definition.EligibleClassJobIds.Contains(job.ClassJobId))
+            .Select(job => $"{job.Abbreviation}: {(job.IsUnlocked == true ? $"obtained, level {job.Level}" : "unobtained")}")
+            .Distinct().Order().ToArray();
+        return eligible.Length == 0
+            ? "The item definition exposes no class/job-specific consumer; its all-classes stat evaluation supplies the verdict."
+            : $"Eligible jobs observed: {string.Join("; ", eligible)}. None of the eligible jobs are obtained by this character.";
+    }
+
+    private static string DescribeGearsetReferences(SquireAnalysis analysis, SquireCandidate candidate)
+    {
+        var sets = analysis.Snapshot.Gearsets
+            .Where(set => set.IsValid && set.Items.Any(item => item.ItemId == candidate.Definition.ItemId))
+            .Select(set => set.Name).Distinct().Order().ToArray();
+        return sets.Length == 0
+            ? $"Item {candidate.Definition.ItemId} was marked gearset-referenced, but no named valid set was available in this presentation snapshot."
+            : $"Referenced by valid gearset(s): {string.Join(", ", sets)}.";
+    }
+
+    private static void EvidenceCell(string value)
+    {
+        ImGui.TableNextColumn();
+        ImGui.TextWrapped(string.IsNullOrWhiteSpace(value) ? "—" : value);
     }
 
     private IReadOnlySet<uint> GetHighRarityOverrides(ulong? contentId)
@@ -572,17 +699,65 @@ internal sealed class SquireTabPanel : IDisposable
 
     internal static string FormatReasonSummary(SquireCandidate candidate) => candidate.Reasons.Count switch
     {
-        0 => "No reason recorded",
-        1 => candidate.Reasons[0].Message,
-        _ => $"{candidate.Reasons[0].Message} (+{candidate.Reasons.Count - 1} more)",
+        0 => "No evaluation result",
+        1 => ReasonLabel(candidate.Reasons[0].Code),
+        _ => $"{ReasonLabel(candidate.Reasons[0].Code)} (+{candidate.Reasons.Count - 1} rule{(candidate.Reasons.Count == 2 ? string.Empty : "s")})",
     };
+
+    internal static string ReasonLabel(string code) => code switch
+    {
+        "StrictlyWorseForAllUnlockedJobs" => "Better baseline for every relevant job",
+        "BaselineNotStrictlyBetter" => "No strictly better baseline",
+        "FutureUnlockedJobUse" => "Potential future use",
+        "FutureLevelingUseNotProtected" => "Future-use protection disabled",
+        "NoObtainedEligibleJob" => "No obtained eligible job",
+        "MateriaRetrievalRequired" => "Materia retrieval required",
+        "CurrentlyEquipped" => "Currently equipped",
+        "ReferencedByGearset" => "Referenced by a gearset",
+        "NotEquipment" => "Not equipment",
+        "SoulCrystal" => "Soul crystal",
+        "ProtectedItemFamily" => "Protected item family",
+        "UnknownItemRarity" => "Unknown rarity",
+        "HighRarityEquipment" => "High-rarity protection",
+        "HighRarityCleanupOverride" => "High-rarity override",
+        "ExpertDeliveryEligibilityUnknown" => "Expert Delivery eligibility unknown",
+        "PlayerSignature" => "Player signature protection",
+        "ArmoireEligibilityUnknown" => "Armoire eligibility unknown",
+        "ArmoireEligible" => "Armoire eligible",
+        "RecoverabilityUnknown" => "Recoverability unknown",
+        "StatlessAllClassesEquipment" => "Likely cosmetic",
+        "DesynthesisNotUnlocked" => "Desynthesis unavailable",
+        "NoSupportedDisposition" => "No authorized cleanup route",
+        "PartialSnapshot" => "Incomplete snapshot",
+        _ => SplitReasonCode(code),
+    };
+
+    private static string SplitReasonCode(string code)
+    {
+        if (string.IsNullOrWhiteSpace(code))
+            return "Unclassified rule";
+        var result = new System.Text.StringBuilder(code.Length + 8);
+        for (var index = 0; index < code.Length; index++)
+        {
+            var character = code[index];
+            if (index > 0 && char.IsUpper(character) && !char.IsUpper(code[index - 1]))
+                result.Append(' ');
+            result.Append(character);
+        }
+        return result.ToString();
+    }
 
     private static void DrawReasonTooltip(SquireCandidate candidate)
     {
         var maximumWidth = Math.Max(1f, ImGui.GetMainViewport().Size.X * 0.5f);
         ImGui.BeginTooltip();
         ImGui.PushTextWrapPos(ImGui.GetCursorPosX() + maximumWidth);
-        ImGui.TextWrapped(FormatReasons(candidate));
+        ImGui.TextColored(MarketMafiosoUiTheme.Header, "Rule outcomes");
+        foreach (var reason in candidate.Reasons)
+        {
+            ImGui.BulletText($"{ReasonLabel(reason.Code)} — {reason.Severity}");
+        }
+        ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Select the row for the supporting evidence.");
         ImGui.PopTextWrapPos();
         ImGui.EndTooltip();
     }
