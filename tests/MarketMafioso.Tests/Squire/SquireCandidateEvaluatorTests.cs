@@ -285,6 +285,23 @@ public sealed class SquireCandidateEvaluatorTests
     }
 
     [Fact]
+    public void ObsoleteReason_NamesTrustedBaselineAndExactOwnedLocation()
+    {
+        var snapshot = Snapshot(
+            [Instance(100, slot: 1), Instance(200, slot: 7)],
+            [Definition(100, 20), Definition(200, 30)],
+            [Job(1, 50, true)],
+            []);
+
+        var candidate = evaluator.Evaluate(snapshot, DesynthesisUnlocked).Candidates.Single(value => value.Definition.ItemId == 100);
+        var reason = Assert.Single(candidate.Reasons, value => value.Code == "StrictlyWorseForAllUnlockedJobs");
+
+        Assert.Contains("JOB: Item 200", reason.Message);
+        Assert.Contains("iLvl 30", reason.Message);
+        Assert.Contains("Inventory1 slot 7, NQ", reason.Message);
+    }
+
+    [Fact]
     public void ActionPlanRejectsRemovingFinalLooseWitness()
     {
         var snapshot = Snapshot(

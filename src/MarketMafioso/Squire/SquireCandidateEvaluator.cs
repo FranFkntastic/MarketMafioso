@@ -90,7 +90,7 @@ public sealed class SquireCandidateEvaluator
                 ? new("NoObtainedEligibleJob", "No job obtained by this character can use this item.", SquireReasonSeverity.Information)
                 : use.Comparisons.Any(comparison => comparison.Status == EquipmentUseStatus.FutureUse)
                 ? new("FutureLevelingUseNotProtected", "One or more unlocked jobs are below this item's equip level; future leveling gear protection is off.", SquireReasonSeverity.Information)
-                : new("StrictlyWorseForAllUnlockedJobs", "Every unlocked eligible job has a strictly better trusted baseline.", SquireReasonSeverity.Information),
+                : new("StrictlyWorseForAllUnlockedJobs", DescribeTrustedBaselines(use), SquireReasonSeverity.Information),
         };
         if (protectionPolicy.HighRarityCleanupOverrides?.Contains(definition.ItemId) == true &&
             definition.NormalizedRarity is EquipmentRarity.Uncommon or EquipmentRarity.Rare or EquipmentRarity.Relic)
@@ -104,6 +104,26 @@ public sealed class SquireCandidateEvaluator
             dispositions,
             reasons,
             use);
+    }
+
+    private static string DescribeTrustedBaselines(EquipmentUseAnalysis use)
+    {
+        var comparisons = use.Comparisons
+            .Where(comparison => comparison.Status == EquipmentUseStatus.Obsolete && comparison.Baseline is not null)
+            .Select(comparison =>
+            {
+                var baseline = comparison.Baseline!;
+                var witness = comparison.WitnessRequirement?.ViableWitnesses
+                    .FirstOrDefault(value => value.ItemId == baseline.ItemId);
+                var location = witness is null
+                    ? "saved gearset"
+                    : $"{witness.Fingerprint.Container} slot {witness.Fingerprint.SlotIndex}, {(witness.Fingerprint.IsHighQuality ? "HQ" : "NQ")}";
+                return $"{comparison.Job.Abbreviation}: {baseline.Name} (iLvl {baseline.ItemLevel}, {location})";
+            })
+            .ToArray();
+        return comparisons.Length == 0
+            ? "Every unlocked eligible job has a strictly better trusted baseline."
+            : $"Strictly better trusted baseline(s): {string.Join("; ", comparisons)}.";
     }
 
     private static List<SquireReason> GetProtections(
