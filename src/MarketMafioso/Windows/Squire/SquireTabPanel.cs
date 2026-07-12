@@ -128,14 +128,11 @@ internal sealed class SquireTabPanel : IDisposable
         try
         {
             var snapshot = snapshotSource.Capture();
-            var overrides = GetHighRarityOverrides(snapshot.Identity.Scope?.LocalContentId);
+            var policy = CreateProtectionPolicy(snapshot.Identity.Scope?.LocalContentId);
             analysis = evaluator.Evaluate(
                 snapshot,
                 capabilitySource.Capture(),
-                new SquireProtectionPolicy(
-                    config.Squire.ProtectPlayerSignedGear,
-                    config.Squire.ProtectFutureLevelingGearOptIn,
-                    overrides));
+                policy);
             review.Adopt(analysis);
             tableSelection.Clear();
             selectionAnchor = null;
@@ -230,7 +227,7 @@ internal sealed class SquireTabPanel : IDisposable
                     RecommendedDisposition = candidate.RecommendedDisposition.ToString(),
                     ReasonCodes = candidate.Reasons.Select(reason => reason.Code).ToArray(),
                     JobComparisons = candidate.UseAnalysis?.Comparisons
-                        .Select(comparison => $"{comparison.Job.Abbreviation}:{comparison.Job.Level}:{comparison.Status}:{comparison.Baseline?.Name ?? "none"}:{comparison.Baseline?.ItemLevel.ToString() ?? "none"}")
+                        .Select(comparison => $"{comparison.Job.Abbreviation}:{comparison.Job.Level}:{comparison.Status}:{comparison.Baseline?.Name ?? "none"}:{comparison.Baseline?.ItemLevel.ToString() ?? "none"}:witnesses={string.Join(",", comparison.WitnessRequirement?.ViableWitnesses.Select(witness => $"{witness.ItemName}@{witness.Fingerprint.Container}:{witness.Fingerprint.SlotIndex}{(witness.Fingerprint.IsHighQuality ? ":HQ" : string.Empty)}") ?? [])}")
                         .ToArray() ?? [],
                     RevalidationCode = revalidation.Code,
                     RevalidationSucceeded = revalidation.Success,
@@ -400,12 +397,13 @@ internal sealed class SquireTabPanel : IDisposable
             .Where(job => job.IsUnlocked == true && definition.EligibleClassJobIds.Contains(job.ClassJobId))
             .Select(job => $"{job.Abbreviation} Lv. {job.Level}")
             .Distinct().Order().ToArray();
-        var stats = definition.StatProfile?.Parameters
+        var effectiveProfile = EquipmentInstanceStats.Resolve(candidate.Instance, definition);
+        var stats = effectiveProfile?.Parameters
             .Where(stat => stat.Value != 0)
             .GroupBy(stat => stat.Semantic)
             .Select(group => $"{group.Key} +{group.Max(stat => stat.Value)}")
             .ToList() ?? [];
-        if (definition.StatProfile is { } profile)
+        if (effectiveProfile is { } profile)
         {
             if (profile.PhysicalDamage > 0) stats.Add($"Physical Damage {profile.PhysicalDamage}");
             if (profile.MagicalDamage > 0) stats.Add($"Magical Damage {profile.MagicalDamage}");
@@ -434,6 +432,9 @@ internal sealed class SquireTabPanel : IDisposable
                     ? "no baseline"
                     : $"{comparison.Baseline.Name} (iLv {comparison.Baseline.ItemLevel})";
                 ImGui.BulletText($"{comparison.Job.Abbreviation}: {comparison.Status}; {baseline}; from {sets}");
+                if (comparison.WitnessRequirement is { } requirement)
+                    foreach (var witness in requirement.ViableWitnesses)
+                        ImGui.BulletText($"  {(witness.IsGearsetReferenced ? "Saved-gearset" : "Owned loose-item")} witness: {witness.ItemName} at {witness.Fingerprint.Container}:{witness.Fingerprint.SlotIndex}{(witness.Fingerprint.IsHighQuality ? " HQ" : string.Empty)}");
             }
         }
         ImGui.PopTextWrapPos();
@@ -526,6 +527,11 @@ internal sealed class SquireTabPanel : IDisposable
             return new HashSet<uint>();
         return values.ToHashSet();
     }
+
+    private SquireProtectionPolicy CreateProtectionPolicy(ulong? contentId) => new(
+        config.Squire.ProtectPlayerSignedGear,
+        config.Squire.ProtectFutureLevelingGearOptIn,
+        GetHighRarityOverrides(contentId));
 
     private void SetHighRarityOverride(ulong? contentId, uint itemId, bool enabled)
     {
@@ -707,7 +713,8 @@ internal sealed class SquireTabPanel : IDisposable
             return;
         try
         {
-            var plan = new SquireActionPlanner().Create(value, disposition, selected, DateTimeOffset.UtcNow);
+            var plan = new SquireActionPlanner().Create(value, disposition, selected, DateTimeOffset.UtcNow,
+                CreateProtectionPolicy(value.Snapshot.Identity.Scope?.LocalContentId));
             runConfirmed = false;
             runCancellation = new CancellationTokenSource();
             activeRun = RunAsync(plan, runCancellation.Token);

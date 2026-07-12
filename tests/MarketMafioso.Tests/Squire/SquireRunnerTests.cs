@@ -70,6 +70,7 @@ public sealed class SquireRunnerTests
             RevalidateCount++;
             return Validation;
         }
+        public SquireRevalidationResult RevalidateEvidence(SquireReviewedSelection selection) => Validation;
         public Task<SquireActionResult> ExecuteAsync(EquipmentInstanceFingerprint fingerprint, SquireDisposition disposition, CancellationToken cancellationToken)
         {
             ExecuteCount++;

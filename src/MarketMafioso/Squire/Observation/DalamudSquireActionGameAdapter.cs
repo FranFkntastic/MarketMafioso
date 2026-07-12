@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -87,6 +88,60 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
         return supported
             ? SquireRevalidationResult.Valid()
             : SquireRevalidationResult.Fail("DispositionUnavailable", "The approved disposition is no longer supported.");
+    }
+
+    public SquireRevalidationResult RevalidateEvidence(SquireReviewedSelection selection)
+    {
+        if (selection.Witnesses is not { Count: > 0 })
+            return SquireRevalidationResult.Valid();
+        var snapshot = snapshotSource.Capture();
+        if (!snapshot.Diagnostics.IsComplete)
+            return SquireRevalidationResult.Fail("EvidenceSnapshotIncomplete", "The fresh witness snapshot is incomplete.");
+        var target = snapshot.Instances.FirstOrDefault(instance =>
+            instance.Fingerprint.Container == selection.Fingerprint.Container && instance.Fingerprint.SlotIndex == selection.Fingerprint.SlotIndex);
+        if (target is null || !SquireFingerprintMatcher.ExactMatch(selection.Fingerprint, target.Fingerprint) ||
+            !snapshot.Definitions.TryGetValue(target.Fingerprint.ItemId, out var targetDefinition))
+            return SquireRevalidationResult.Fail("EvidenceTargetChanged", "The target changed before witness revalidation.");
+        var targetStats = EquipmentInstanceStats.Resolve(target, targetDefinition);
+        if (targetStats is not { IsComplete: true })
+            return SquireRevalidationResult.Fail("EvidenceTargetStatsIncomplete", "The target's quality-adjusted stat profile is incomplete.");
+
+        foreach (var proof in selection.Witnesses)
+        {
+            var job = snapshot.Jobs.FirstOrDefault(value => value.ClassJobId == proof.ClassJobId && value.IsUnlocked == true);
+            if (job is null)
+                return SquireRevalidationResult.Fail("EvidenceJobChanged", $"The obtained-state observation for {proof.JobAbbreviation} changed.");
+            if (proof.Fingerprints.Count != (proof.Slot == EquipmentSlot.Ring ? 2 : 1))
+                return SquireRevalidationResult.Fail("EvidenceCapacityInvalid", $"The retained witness count for {proof.JobAbbreviation} is invalid.");
+            var observedWitnesses = new List<(EquipmentInstanceSnapshot Instance, EquipmentItemDefinition Definition)>();
+            foreach (var fingerprint in proof.Fingerprints)
+            {
+                var observed = snapshot.Instances.FirstOrDefault(instance =>
+                    instance.Fingerprint.Container == fingerprint.Container && instance.Fingerprint.SlotIndex == fingerprint.SlotIndex);
+                if (observed is null || !SquireFingerprintMatcher.ExactMatch(fingerprint, observed.Fingerprint) ||
+                    !snapshot.Definitions.TryGetValue(fingerprint.ItemId, out var definition))
+                    return SquireRevalidationResult.Fail("EvidenceWitnessChanged", $"A retained {proof.JobAbbreviation} witness changed or disappeared.");
+                if (observed.Fingerprint.MateriaIds.Count > 0 || definition.Slot != proof.Slot || definition.EquipLevel > job.Level ||
+                    !definition.EligibleClassJobIds.Contains(job.ClassJobId))
+                    return SquireRevalidationResult.Fail("EvidenceWitnessIneligible", $"A retained witness is no longer safely usable by {proof.JobAbbreviation}.");
+                if (proof.Slot == EquipmentSlot.MainHand &&
+                    (targetDefinition.MainHandOccupancy != definition.MainHandOccupancy ||
+                     targetDefinition.OffHandOccupancy != definition.OffHandOccupancy))
+                    return SquireRevalidationResult.Fail("EvidenceWeaponConfigurationChanged", $"A retained {proof.JobAbbreviation} weapon no longer matches the target's hand occupancy.");
+                if (proof.Slot == EquipmentSlot.OffHand && definition.OffHandOccupancy != 1)
+                    return SquireRevalidationResult.Fail("EvidenceOffHandConfigurationChanged", $"A retained {proof.JobAbbreviation} off-hand is no longer a proven off-hand configuration.");
+                if (proof.Slot == EquipmentSlot.Ring && (!definition.FitsLeftRing || !definition.FitsRightRing))
+                    return SquireRevalidationResult.Fail("EvidenceRingCompatibilityChanged", $"A retained {proof.JobAbbreviation} ring no longer has proven two-slot compatibility.");
+                var stats = EquipmentInstanceStats.Resolve(observed, definition);
+                if (stats is not { IsComplete: true } || !EquipmentUseAnalyzer.Dominates(stats, targetStats, EquipmentUseAnalyzer.RelevantStats(job)))
+                    return SquireRevalidationResult.Fail("EvidenceDominanceChanged", $"A retained witness no longer directly dominates the target for {proof.JobAbbreviation}.");
+                observedWitnesses.Add((observed, definition));
+            }
+            if (proof.Slot == EquipmentSlot.Ring && observedWitnesses[0].Definition.ItemId == observedWitnesses[1].Definition.ItemId &&
+                observedWitnesses[0].Definition.IsUnique)
+                return SquireRevalidationResult.Fail("EvidenceRingPairInvalid", $"The retained ring pair for {proof.JobAbbreviation} is not jointly equippable.");
+        }
+        return SquireRevalidationResult.Valid();
     }
 
     public async Task<SquireActionResult> ExecuteAsync(

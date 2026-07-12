@@ -38,7 +38,7 @@ public sealed class SquireCandidateEvaluator
         if (protections.Count > 0)
             return Candidate(instance, definition, SquireAssessment.Protected, SquireDisposition.Keep, new HashSet<SquireDisposition>(), protections, null);
 
-        var use = useAnalyzer.Analyze(definition, snapshot.Jobs, snapshot.Gearsets, snapshot.Definitions);
+        var use = useAnalyzer.Analyze(instance, definition, snapshot.Jobs, snapshot.Gearsets, snapshot.Instances, snapshot.Definitions);
         var isObsoleteUnderPolicy = use.IsStrictlyObsolete ||
             (!protectionPolicy.ProtectFutureLevelingGear &&
              use.Comparisons.Count > 0 &&

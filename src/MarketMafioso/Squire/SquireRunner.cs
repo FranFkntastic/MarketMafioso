@@ -24,6 +24,7 @@ public interface ISquireActionGameAdapter
     CharacterScope? GetActiveCharacter();
     bool HasConflictingAutomation(SquireDisposition disposition);
     SquireRevalidationResult Revalidate(EquipmentInstanceFingerprint fingerprint, SquireDisposition disposition);
+    SquireRevalidationResult RevalidateEvidence(SquireReviewedSelection selection);
     Task<SquireActionResult> ExecuteAsync(EquipmentInstanceFingerprint fingerprint, SquireDisposition disposition, CancellationToken cancellationToken);
     void ReleaseOwnedState();
 }
@@ -77,6 +78,11 @@ public sealed class SquireRunner
                 Record("Revalidation", validation.Code, validation.Message, action.Fingerprint);
                 if (!validation.Success)
                     return Stop(validation.Code, validation.Message, action.Fingerprint);
+
+                var evidence = adapter.RevalidateEvidence(action);
+                Record("EvidenceRevalidation", evidence.Code, evidence.Message, action.Fingerprint);
+                if (!evidence.Success)
+                    return Stop(evidence.Code, evidence.Message, action.Fingerprint);
 
                 Record("ActionStart", action.Disposition.ToString(), "Starting validated action.", action.Fingerprint);
                 var result = await adapter.ExecuteAsync(action.Fingerprint, action.Disposition, cancellationToken).ConfigureAwait(false);

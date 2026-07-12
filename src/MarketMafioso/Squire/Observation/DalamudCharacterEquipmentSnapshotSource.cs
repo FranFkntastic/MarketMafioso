@@ -233,24 +233,45 @@ public sealed class DalamudCharacterEquipmentSnapshotSource : ICharacterEquipmen
                     continue;
                 var value = item.Value;
                 var slot = MapEquipSlot(value.EquipSlotCategory.RowId);
+                var slotCategory = value.EquipSlotCategory.Value;
                 var category = value.ClassJobCategory.Value;
                 var eligible = jobs.Where(job => IsEligible(category, job.Abbreviation.ToString())).Select(job => job.RowId).ToHashSet();
-                var parameters = new List<EquipmentStatValue>();
-                var profileComplete = true;
-                for (var index = 0; index < value.BaseParam.Count; index++)
+                EquipmentStatProfile BuildProfile(bool highQuality)
                 {
-                    AddParameter(value.BaseParam[index].RowId, value.BaseParamValue[index], false);
-                    AddParameter(value.BaseParamSpecial[index].RowId, value.BaseParamValueSpecial[index], true);
+                    var bySemantic = new Dictionary<EquipmentStatSemantic, EquipmentStatValue>();
+                    var profileComplete = true;
+                    void Apply(uint baseParamId, short amount, bool special)
+                    {
+                        if (baseParamId == 0 || amount <= 0)
+                            return;
+                        var name = baseParamSheet.GetRowOrDefault(baseParamId)?.Name.ToString();
+                        var semantic = MapStatSemantic(baseParamId, name);
+                        if (semantic == EquipmentStatSemantic.Unknown)
+                            profileComplete = false;
+                        if (bySemantic.TryGetValue(semantic, out var existing) && existing.BaseParamId != baseParamId)
+                            profileComplete = false;
+                        bySemantic[semantic] = new(baseParamId, semantic, amount, special, name);
+                    }
+                    for (var index = 0; index < value.BaseParam.Count; index++)
+                        Apply(value.BaseParam[index].RowId, value.BaseParamValue[index], false);
+                    if (highQuality)
+                        for (var index = 0; index < value.BaseParamSpecial.Count; index++)
+                            Apply(value.BaseParamSpecial[index].RowId, value.BaseParamValueSpecial[index], true);
+
+                    var physicalDamage = ExtractScalar(EquipmentStatSemantic.PhysicalDamage, value.DamagePhys);
+                    var magicalDamage = ExtractScalar(EquipmentStatSemantic.MagicalDamage, value.DamageMag);
+                    var physicalDefense = ExtractScalar(EquipmentStatSemantic.PhysicalDefense, value.DefensePhys);
+                    var magicalDefense = ExtractScalar(EquipmentStatSemantic.MagicalDefense, value.DefenseMag);
+                    int ExtractScalar(EquipmentStatSemantic semantic, int fallback)
+                    {
+                        if (!bySemantic.Remove(semantic, out var parameter))
+                            return fallback;
+                        return parameter.Value;
+                    }
+                    return new(bySemantic.Values.ToArray(), physicalDamage, magicalDamage, physicalDefense, magicalDefense, profileComplete);
                 }
-                void AddParameter(uint baseParamId, short amount, bool special)
-                {
-                    if (baseParamId == 0 || amount <= 0)
-                        return;
-                    var name = baseParamSheet.GetRowOrDefault(baseParamId)?.Name.ToString();
-                    var semantic = MapStatSemantic(baseParamId, name);
-                    profileComplete &= semantic != EquipmentStatSemantic.Unknown;
-                    parameters.Add(new(baseParamId, semantic, amount, special, name));
-                }
+                var normalProfile = BuildProfile(false);
+                var highQualityProfile = BuildProfile(true);
                 values[id] = new(
                     id,
                     value.Name.ToString(),
@@ -268,12 +289,19 @@ public sealed class DalamudCharacterEquipmentSnapshotSource : ICharacterEquipmen
                     cabinetItemIds.Contains(id),
                     false,
                     value.IsUnique && value.IsUntradable && value.Rarity >= 4,
-                    new EquipmentStatProfile(parameters, value.DamagePhys, value.DamageMag, value.DefensePhys, value.DefenseMag, profileComplete),
+                    normalProfile,
                     MapRarity(value.Rarity),
                     MapExpertDeliveryEligibility(value.Rarity),
                     value.Rarity >= 2
                         ? "FFXIV equipment rarity rule: green and higher equipment is accepted by Grand Company Expert Delivery."
-                        : "FFXIV equipment rarity rule: normal equipment is not an Expert Delivery item.");
+                        : "FFXIV equipment rarity rule: normal equipment is not an Expert Delivery item.",
+                    highQualityProfile,
+                    value.IsUnique,
+                    value.EquipSlotCategory.RowId,
+                    slotCategory.MainHand,
+                    slotCategory.OffHand,
+                    slotCategory.FingerL != 0,
+                    slotCategory.FingerR != 0);
             }
             var complete = values.Count == instances.Select(instance => instance.Fingerprint.ItemId).Distinct().Count();
             diagnostics.Add(new("definitions", complete ? SnapshotComponentStatus.Complete : SnapshotComponentStatus.Partial, complete ? null : "One or more item definitions were unavailable."));
