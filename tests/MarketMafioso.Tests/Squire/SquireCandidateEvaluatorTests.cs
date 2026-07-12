@@ -36,7 +36,7 @@ public sealed class SquireCandidateEvaluatorTests
     }
 
     [Fact]
-    public void EquippedGearsetAndMateriaItems_AreProtected()
+    public void EquippedGearsetAndMateriaItems_ReportRetrievalWithoutAddingProtection()
     {
         var instance = Instance(100, equipped: true, materia: [500], crafter: 99);
         var snapshot = Snapshot([instance], [Definition(100, 20)], [Job(1, 50, true)], [Gearset(1, 100)]);
@@ -44,7 +44,7 @@ public sealed class SquireCandidateEvaluatorTests
         Assert.Equal(SquireAssessment.Protected, candidate.Assessment);
         Assert.Contains(candidate.Reasons, reason => reason.Code == "CurrentlyEquipped");
         Assert.Contains(candidate.Reasons, reason => reason.Code == "ReferencedByGearset");
-        Assert.Contains(candidate.Reasons, reason => reason.Code == "MateriaAttached");
+        Assert.Contains(candidate.Reasons, reason => reason.Code == "MateriaRetrievalRequired" && reason.Severity == SquireReasonSeverity.Information);
         Assert.DoesNotContain(candidate.Reasons, reason => reason.Code == "PlayerSignature");
     }
 
@@ -207,6 +207,21 @@ public sealed class SquireCandidateEvaluatorTests
 
         Assert.Equal(SquireAssessment.Candidate, candidate.Assessment);
         Assert.Contains(candidate.Reasons, reason => reason.Code == "FutureLevelingUseNotProtected");
+    }
+
+    [Fact]
+    public void MateriaBearingObsoleteGear_RemainsExecutableWithRetrievalReason()
+    {
+        var snapshot = Snapshot(
+            [Instance(100, materia: [500]), Instance(200, equipped: true, slot: 99)],
+            [Definition(100, 20), Definition(200, 30)],
+            [Job(1, 50, true)],
+            [Gearset(1, 200)]);
+
+        var candidate = Assert.Single(evaluator.Evaluate(snapshot, DesynthesisUnlocked).Candidates, value => value.Definition.ItemId == 100);
+
+        Assert.Equal(SquireAssessment.Candidate, candidate.Assessment);
+        Assert.Contains(candidate.Reasons, reason => reason.Code == "MateriaRetrievalRequired");
     }
 
     [Theory]

@@ -35,7 +35,7 @@ public sealed class SquireCandidateEvaluator
             return Unsupported(instance, UnknownDefinition(instance.Fingerprint.ItemId));
 
         var protections = GetProtections(snapshot, instance, definition, gearsetProtection, protectionPolicy);
-        if (protections.Count > 0)
+        if (protections.Any(reason => reason.Severity == SquireReasonSeverity.Blocking))
             return Candidate(instance, definition, SquireAssessment.Protected, SquireDisposition.Keep, new HashSet<SquireDisposition>(), protections, null);
 
         var use = useAnalyzer.Analyze(instance, definition, snapshot.Jobs, snapshot.Gearsets, snapshot.Instances, snapshot.Definitions);
@@ -95,6 +95,7 @@ public sealed class SquireCandidateEvaluator
         if (protectionPolicy.HighRarityCleanupOverrides?.Contains(definition.ItemId) == true &&
             definition.NormalizedRarity is EquipmentRarity.Uncommon or EquipmentRarity.Rare or EquipmentRarity.Relic)
             reasons.Add(new("HighRarityCleanupOverride", "A character-scoped item override removed only Squire's rarity protection.", SquireReasonSeverity.Warning));
+        reasons.AddRange(protections.Where(reason => reason.Severity != SquireReasonSeverity.Blocking));
         reasons.AddRange(eligibility.Reasons);
         return Candidate(
             instance,
@@ -158,7 +159,7 @@ public sealed class SquireCandidateEvaluator
                  definition.ExpertDeliveryEligibility == ExpertDeliveryEligibility.Unknown)
             reasons.Add(new("ExpertDeliveryEligibilityUnknown", "Expert Delivery eligibility is unknown for this uncommon item.", SquireReasonSeverity.Blocking));
         if (instance.Fingerprint.MateriaIds.Count > 0)
-            reasons.Add(new("MateriaAttached", "Materia-bearing gear is protected by default.", SquireReasonSeverity.Blocking));
+            reasons.Add(new("MateriaRetrievalRequired", $"Squire will retrieve {instance.Fingerprint.MateriaIds.Count} attached materia before cleanup.", SquireReasonSeverity.Information));
         if (protectionPolicy.ProtectSignedGear && instance.Fingerprint.CrafterContentId is > 0)
             reasons.Add(new("PlayerSignature", "Player-signed gear is protected by default.", SquireReasonSeverity.Blocking));
         if (definition.IsArmoireEligible is null)

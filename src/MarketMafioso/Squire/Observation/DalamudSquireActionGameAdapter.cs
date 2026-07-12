@@ -23,6 +23,7 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
     private readonly ISquireDispositionCapabilitySource capabilitySource;
     private readonly Func<bool> hasExternalConflict;
     private readonly DalamudDesynthesisUiTransaction desynthesisUi;
+    private readonly DalamudMateriaRetrievalUiTransaction materiaRetrievalUi;
     private readonly DalamudExpertDeliveryUiTransaction expertDeliveryUi;
     private readonly DalamudExpertDeliveryPreparation expertDeliveryPreparation;
 
@@ -48,6 +49,7 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
         this.capabilitySource = capabilitySource;
         this.hasExternalConflict = hasExternalConflict ?? (() => false);
         desynthesisUi = new DalamudDesynthesisUiTransaction(gameGui);
+        materiaRetrievalUi = new DalamudMateriaRetrievalUiTransaction(gameGui);
         var hqPrompt = dataManager.GetExcelSheet<Addon>().GetRow(102434).Text.ExtractText().Trim();
         expertDeliveryUi = new DalamudExpertDeliveryUiTransaction(
             gameGui,
@@ -165,11 +167,16 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
         SquireDisposition disposition,
         CancellationToken cancellationToken)
     {
-        if (disposition == SquireDisposition.ExpertDelivery)
-            return await ExecuteExpertDeliveryAsync(fingerprint, cancellationToken).ConfigureAwait(false);
-        if (disposition != SquireDisposition.Desynthesize)
+        if (disposition is not (SquireDisposition.Desynthesize or SquireDisposition.ExpertDelivery))
             return SquireActionResult.Fail("AdapterNotEnabled", $"The {disposition} UI adapter is not enabled.");
 
+        var prepared = await RetrieveAllMateriaAsync(fingerprint, disposition, cancellationToken).ConfigureAwait(false);
+        if (!prepared.Result.Success)
+            return prepared.Result;
+        fingerprint = prepared.Fingerprint;
+
+        if (disposition == SquireDisposition.ExpertDelivery)
+            return await ExecuteExpertDeliveryAsync(fingerprint, cancellationToken).ConfigureAwait(false);
         var started = await framework.RunOnTick(() => BeginDesynthesis(fingerprint)).ConfigureAwait(false);
         if (!started.Success)
             return started;
@@ -288,6 +295,117 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
         }
         throw new InvalidOperationException("Desynthesis UI did not settle after the completed inventory transition.");
     }
+
+    private async Task<(SquireActionResult Result, EquipmentInstanceFingerprint Fingerprint)> RetrieveAllMateriaAsync(
+        EquipmentInstanceFingerprint fingerprint,
+        SquireDisposition disposition,
+        CancellationToken cancellationToken)
+    {
+        while (fingerprint.MateriaIds.Count > 0)
+        {
+            var validation = Revalidate(fingerprint, disposition);
+            if (!validation.Success)
+                return (SquireActionResult.Fail(validation.Code, validation.Message), fingerprint);
+
+            var started = await framework.RunOnTick(() => materiaRetrievalUi.Begin(fingerprint)).ConfigureAwait(false);
+            if (!started.Success)
+                return (SquireActionResult.Fail(started.Code, started.Message), fingerprint);
+
+            var submitted = false;
+            EquipmentInstanceFingerprint? updated = null;
+            for (var attempt = 0; attempt < 120; attempt++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var earlyObservation = await framework.RunOnTick(() => ObserveMateriaRemoval(fingerprint)).ConfigureAwait(false);
+                if (earlyObservation.Result.Success)
+                {
+                    updated = earlyObservation.Fingerprint;
+                    break;
+                }
+                if (earlyObservation.Result.Code != "MateriaTransitionPending")
+                    return (earlyObservation.Result, fingerprint);
+                var advanced = await framework.RunOnTick(() => materiaRetrievalUi.Advance(fingerprint)).ConfigureAwait(false);
+                if (advanced.Code == "RetrievalSubmitted")
+                {
+                    submitted = true;
+                    break;
+                }
+                if (!advanced.Success && advanced.Code != "Pending")
+                    return (SquireActionResult.Fail(advanced.Code, advanced.Message), fingerprint);
+                await framework.DelayTicks(1).ConfigureAwait(false);
+            }
+            if (!submitted && updated is null)
+                return (SquireActionResult.Fail("MateriaRetrievalDialogTimeout", "The owned materia retrieval dialog did not become ready."), fingerprint);
+
+            for (var attempt = 0; updated is null && attempt < 240; attempt++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var observation = await framework.RunOnTick(() => ObserveMateriaRemoval(fingerprint)).ConfigureAwait(false);
+                if (observation.Result.Success)
+                {
+                    updated = observation.Fingerprint;
+                    break;
+                }
+                if (observation.Result.Code != "MateriaTransitionPending")
+                    return (observation.Result, fingerprint);
+                await framework.DelayTicks(1).ConfigureAwait(false);
+            }
+            if (updated is null)
+                return (SquireActionResult.Fail("MateriaRetrievalTransitionTimeout", "The exact slot did not lose one attached materia after confirmation."), fingerprint);
+
+            materiaRetrievalUi.Complete();
+            await WaitForMateriaRetrievalUiSettledAsync(cancellationToken).ConfigureAwait(false);
+            fingerprint = updated;
+        }
+
+        return (new SquireActionResult(true, "MateriaReady", "The exact item has no attached materia."), fingerprint);
+    }
+
+    private (SquireActionResult Result, EquipmentInstanceFingerprint? Fingerprint) ObserveMateriaRemoval(EquipmentInstanceFingerprint expected)
+    {
+        var snapshot = snapshotSource.Capture();
+        if (!snapshot.Diagnostics.IsComplete)
+            return (SquireActionResult.Fail("PartialSnapshot", "The materia retrieval observation snapshot is incomplete."), null);
+        if (snapshot.Identity.Scope != expected.Character)
+            return (SquireActionResult.Fail("CharacterScopeChanged", "The active character changed during materia retrieval."), null);
+        var observed = snapshot.Instances.FirstOrDefault(instance =>
+            instance.Fingerprint.Container == expected.Container && instance.Fingerprint.SlotIndex == expected.SlotIndex)?.Fingerprint;
+        if (observed is null || !SameIdentityExceptMateria(expected, observed))
+            return (SquireActionResult.Fail("MateriaTargetChanged", "The exact slot changed identity during materia retrieval."), null);
+        if (observed.MateriaIds.Count == expected.MateriaIds.Count)
+            return (SquireActionResult.Fail("MateriaTransitionPending", "The exact item still has the previous materia count."), null);
+        if (observed.MateriaIds.Count != expected.MateriaIds.Count - 1)
+            return (SquireActionResult.Fail("UnexpectedMateriaTransition", "Materia retrieval changed the attached materia count by more than one."), null);
+        return (new SquireActionResult(true, "MateriaRetrieved", "One attached materia was removed through the normal item UI."), observed);
+    }
+
+    private async Task WaitForMateriaRetrievalUiSettledAsync(CancellationToken cancellationToken)
+    {
+        var stableFrames = 0;
+        for (var attempt = 0; attempt < 180; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var settled = await framework.RunOnTick(materiaRetrievalUi.IsUiSettled).ConfigureAwait(false);
+            stableFrames = settled ? stableFrames + 1 : 0;
+            if (stableFrames >= 6)
+                return;
+            await framework.DelayTicks(1).ConfigureAwait(false);
+        }
+        throw new InvalidOperationException("Materia retrieval UI did not settle after the observed inventory transition.");
+    }
+
+    private static bool SameIdentityExceptMateria(EquipmentInstanceFingerprint expected, EquipmentInstanceFingerprint observed) =>
+        expected.Character == observed.Character &&
+        expected.Container == observed.Container &&
+        expected.SlotIndex == observed.SlotIndex &&
+        expected.ItemId == observed.ItemId &&
+        expected.IsHighQuality == observed.IsHighQuality &&
+        expected.Quantity == observed.Quantity &&
+        expected.Condition == observed.Condition &&
+        expected.Spiritbond == observed.Spiritbond &&
+        expected.CrafterContentId == observed.CrafterContentId &&
+        expected.GlamourId == observed.GlamourId &&
+        expected.Stains.SequenceEqual(observed.Stains);
 
     private async Task<SquireActionResult> ExecuteExpertDeliveryAsync(
         EquipmentInstanceFingerprint fingerprint,
@@ -408,6 +526,7 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
     public void ReleaseOwnedState()
     {
         _ = framework.RunOnTick(desynthesisUi.CloseOwnedUi);
+        _ = framework.RunOnTick(materiaRetrievalUi.CloseOwnedUi);
         _ = framework.RunOnTick(expertDeliveryUi.CloseOwnedUi);
     }
 }
