@@ -49,6 +49,24 @@ public sealed class SquireRunnerTests
         Assert.True(adapter.Released);
     }
 
+    [Fact]
+    public async Task MixedDispositionPlan_RoutesEachActionByItsOwnDisposition()
+    {
+        var first = new EquipmentInstanceFingerprint(Scope, "Inventory1", 2, 100, false, 1, 30000, 0, null, [], null, []);
+        var second = new EquipmentInstanceFingerprint(Scope, "Inventory1", 3, 200, false, 1, 30000, 0, null, [], null, []);
+        var plan = new SquireActionPlan(Guid.NewGuid(), Scope, SquireDisposition.Unsupported, DateTimeOffset.UtcNow,
+        [
+            new(first, SquireDisposition.ExpertDelivery, ["StrictlyWorseForAllUnlockedJobs"]),
+            new(second, SquireDisposition.Desynthesize, ["StrictlyWorseForAllUnlockedJobs"]),
+        ]);
+        var adapter = new FakeAdapter();
+
+        var result = await new SquireRunner(adapter).RunAsync(plan, true, CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Equal([SquireDisposition.ExpertDelivery, SquireDisposition.Desynthesize], adapter.ExecutedDispositions);
+    }
+
     private static SquireActionPlan Plan(SquireDisposition disposition = SquireDisposition.VendorSell)
     {
         var fingerprint = new EquipmentInstanceFingerprint(Scope, "Inventory1", 2, 100, false, 1, 30000, 0, null, [], null, []);
@@ -63,6 +81,7 @@ public sealed class SquireRunnerTests
         public int RevalidateCount { get; private set; }
         public int ExecuteCount { get; private set; }
         public bool Released { get; private set; }
+        public List<SquireDisposition> ExecutedDispositions { get; } = [];
         public CharacterScope? GetActiveCharacter() => ActiveScope;
         public bool HasConflictingAutomation(SquireDisposition disposition) => false;
         public SquireRevalidationResult Revalidate(EquipmentInstanceFingerprint fingerprint, SquireDisposition disposition)
@@ -74,6 +93,7 @@ public sealed class SquireRunnerTests
         public Task<SquireActionResult> ExecuteAsync(EquipmentInstanceFingerprint fingerprint, SquireDisposition disposition, CancellationToken cancellationToken)
         {
             ExecuteCount++;
+            ExecutedDispositions.Add(disposition);
             return Task.FromResult(SquireActionResult.Completed());
         }
         public void ReleaseOwnedState() => Released = true;

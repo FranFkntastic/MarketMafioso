@@ -31,21 +31,43 @@ public sealed class SquireActionPlanner
 {
     public SquireActionPlan Create(
         SquireAnalysis analysis,
+        IReadOnlyDictionary<EquipmentInstanceFingerprint, SquireDisposition> selected,
+        DateTimeOffset approvedAt,
+        SquireProtectionPolicy? policy = null)
+    {
+        var dispositions = selected.Values.Distinct().ToArray();
+        var planDisposition = dispositions.Length == 1 ? dispositions[0] : SquireDisposition.Unsupported;
+        return CreateCore(analysis, selected, planDisposition, approvedAt, policy);
+    }
+
+    public SquireActionPlan Create(
+        SquireAnalysis analysis,
         SquireDisposition disposition,
         IReadOnlyCollection<EquipmentInstanceFingerprint> selected,
         DateTimeOffset approvedAt,
         SquireProtectionPolicy? policy = null)
+        => CreateCore(analysis, selected.ToDictionary(value => value, _ => disposition), disposition, approvedAt, policy);
+
+    private static SquireActionPlan CreateCore(
+        SquireAnalysis analysis,
+        IReadOnlyDictionary<EquipmentInstanceFingerprint, SquireDisposition> selected,
+        SquireDisposition planDisposition,
+        DateTimeOffset approvedAt,
+        SquireProtectionPolicy? policy)
     {
         if (!analysis.Snapshot.Diagnostics.IsComplete)
             throw new InvalidOperationException("A partial snapshot cannot produce an action plan.");
-        if (disposition is SquireDisposition.Keep or SquireDisposition.Unsupported)
-            throw new InvalidOperationException("The requested disposition is not executable.");
+        if (selected.Count == 0 || selected.Values.Any(value => value is SquireDisposition.Keep or SquireDisposition.Unsupported))
+            throw new InvalidOperationException("Every selected item must have an executable disposition.");
         var scope = analysis.Snapshot.Identity.Scope
             ?? throw new InvalidOperationException("Character scope is unavailable.");
 
         var byFingerprint = analysis.Candidates.ToDictionary(candidate => candidate.Instance.Fingerprint);
-        var actions = selected.Select(fingerprint =>
+        var selectedFingerprints = selected.Keys.ToHashSet();
+        var actions = selected.Select(selection =>
         {
+            var fingerprint = selection.Key;
+            var disposition = selection.Value;
             if (!byFingerprint.TryGetValue(fingerprint, out var candidate) || !candidate.IsExecutable)
                 throw new InvalidOperationException("A selected item is not an executable candidate.");
             if (!candidate.SupportedDispositions.Contains(disposition))
@@ -56,7 +78,7 @@ public sealed class SquireActionPlanner
                 if (comparison.WitnessRequirement is not { } requirement)
                     continue;
                 var retained = requirement.ViableWitnesses
-                    .Where(witness => !selected.Contains(witness.Fingerprint))
+                    .Where(witness => !selectedFingerprints.Contains(witness.Fingerprint))
                     .ToArray();
                 EquipmentDominanceWitness[] chosen;
                 if (requirement.RequiredCount == 2)
@@ -78,7 +100,7 @@ public sealed class SquireActionPlanner
 
         if (actions.Length == 0)
             throw new InvalidOperationException("At least one reviewed item is required.");
-        return new SquireActionPlan(analysis.Snapshot.GenerationId, scope, disposition, approvedAt, actions,
+        return new SquireActionPlan(analysis.Snapshot.GenerationId, scope, planDisposition, approvedAt, actions,
             Policy: policy);
     }
 

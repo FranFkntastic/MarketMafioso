@@ -256,7 +256,7 @@ internal sealed class SquireTabPanel : IDisposable
     {
         var baseRows = value.Candidates
             .Where(candidate => showNonEquipment || candidate.Definition.IsEquipment)
-            .Where(candidate => showProtected || candidate.Assessment != SquireAssessment.Protected)
+            .Where(candidate => showProtected || candidate.Assessment is not (SquireAssessment.Protected or SquireAssessment.EvaluationFailure))
             .Where(candidate => string.IsNullOrWhiteSpace(search)
                 || candidate.Definition.Name.Contains(search, StringComparison.OrdinalIgnoreCase)
                 || candidate.Instance.Fingerprint.Container.Contains(search, StringComparison.OrdinalIgnoreCase)
@@ -602,62 +602,42 @@ internal sealed class SquireTabPanel : IDisposable
         ImGui.TextUnformatted($"Selected: {selections.Count} | GC Delivery: {selections.Count(pair => pair.Value == SquireDisposition.ExpertDelivery)} | Desynthesize: {selections.Count(pair => pair.Value == SquireDisposition.Desynthesize)} | Vendor: {selections.Count(pair => pair.Value == SquireDisposition.VendorSell)} | Discard: {selections.Count(pair => pair.Value == SquireDisposition.Discard)}");
         if (!value.Snapshot.Diagnostics.IsComplete)
             ImGui.TextColored(MarketMafiosoUiTheme.Error, "Execution blocked: snapshot is incomplete.");
-        var selectedDesynthesis = selections.Where(pair => pair.Value == SquireDisposition.Desynthesize).Select(pair => pair.Key).ToArray();
-        var selectedExpertDelivery = selections.Where(pair => pair.Value == SquireDisposition.ExpertDelivery).Select(pair => pair.Key).ToArray();
         var running = activeRun is { IsCompleted: false };
-        var canRunExpertDelivery = value.Snapshot.Diagnostics.IsComplete && selectedExpertDelivery.Length > 0 && selectedExpertDelivery.Length == selections.Count && !running;
-        if (!canRunExpertDelivery)
+        var supportedBatch = selections.Values.All(disposition => disposition is SquireDisposition.ExpertDelivery or SquireDisposition.Desynthesize);
+        var canRun = value.Snapshot.Diagnostics.IsComplete && selections.Count > 0 && supportedBatch && !running;
+        if (!canRun)
             ImGui.BeginDisabled();
-        ImGui.Checkbox("I confirm this reviewed Expert Delivery batch", ref runConfirmed);
-        if (!canRunExpertDelivery)
-            ImGui.EndDisabled();
-        var expertDeliveryEnabled = canRunExpertDelivery && runConfirmed;
-        if (!expertDeliveryEnabled)
-            ImGui.BeginDisabled();
-        if (ImGui.Button("Run selected Expert Delivery##Squire"))
-            StartRun(value, SquireDisposition.ExpertDelivery, selectedExpertDelivery);
+        ImGui.Checkbox("I confirm this reviewed cleanup batch", ref runConfirmed);
         RegisterLastControl(
-            "squire.run.expert-delivery",
-            "Run the explicitly confirmed Grand Company Expert Delivery batch",
-            AgentBridgeUiControlKind.Button,
-            expertDeliveryEnabled,
-            false,
-            selectedExpertDelivery.Length.ToString(),
-            () => StartRun(value, SquireDisposition.ExpertDelivery, selectedExpertDelivery));
-        if (!expertDeliveryEnabled)
-            ImGui.EndDisabled();
-        ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Open the Grand Company Expert Delivery list before starting this batch.");
-
-        var canRunDesynthesis = value.Snapshot.Diagnostics.IsComplete && selectedDesynthesis.Length > 0 && selectedDesynthesis.Length == selections.Count && !running;
-        if (!canRunDesynthesis)
-            ImGui.BeginDisabled();
-        ImGui.Checkbox("I confirm this reviewed desynthesis batch", ref runConfirmed);
-        RegisterLastControl(
-            "squire.run.desynthesize.confirm",
-            "Confirm the reviewed desynthesis batch",
+            "squire.run.confirm",
+            "Confirm the reviewed cleanup batch",
             AgentBridgeUiControlKind.Toggle,
-            canRunDesynthesis,
+            canRun,
             runConfirmed,
-            selectedDesynthesis.Length.ToString(),
+            selections.Count.ToString(),
             () => runConfirmed = !runConfirmed);
-        if (!canRunDesynthesis)
+        if (!canRun)
             ImGui.EndDisabled();
 
-        var runEnabled = canRunDesynthesis && runConfirmed;
+        var runEnabled = canRun && runConfirmed;
         if (!runEnabled)
             ImGui.BeginDisabled();
-        if (ImGui.Button("Run selected desynthesis##Squire"))
-            StartRun(value, SquireDisposition.Desynthesize, selectedDesynthesis);
+        if (ImGui.Button("Run selected cleanup##Squire"))
+            StartRun(value);
         RegisterLastControl(
-            "squire.run.desynthesize",
-            "Run the explicitly confirmed desynthesis batch",
+            "squire.run.cleanup",
+            "Run the explicitly confirmed cleanup batch using each item's disposition",
             AgentBridgeUiControlKind.Button,
             runEnabled,
             false,
-            selectedDesynthesis.Length.ToString(),
-            () => StartRun(value, SquireDisposition.Desynthesize, selectedDesynthesis));
+            selections.Count.ToString(),
+            () => StartRun(value));
         if (!runEnabled)
             ImGui.EndDisabled();
+        if (!supportedBatch && selections.Count > 0)
+            ImGui.TextColored(MarketMafiosoUiTheme.Error, "Execution is not implemented for one or more selected dispositions.");
+        if (selections.Values.Contains(SquireDisposition.ExpertDelivery))
+            ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Open the Grand Company Expert Delivery list before starting this batch.");
         if (running)
         {
             ImGui.SameLine();
@@ -707,18 +687,18 @@ internal sealed class SquireTabPanel : IDisposable
         }
     }
 
-    private void StartRun(SquireAnalysis value, SquireDisposition disposition, EquipmentInstanceFingerprint[] selected)
+    private void StartRun(SquireAnalysis value)
     {
         if (!runConfirmed || activeRun is { IsCompleted: false })
             return;
         try
         {
-            var plan = new SquireActionPlanner().Create(value, disposition, selected, DateTimeOffset.UtcNow,
+            var plan = new SquireActionPlanner().Create(value, review.Selections, DateTimeOffset.UtcNow,
                 CreateProtectionPolicy(value.Snapshot.Identity.Scope?.LocalContentId));
             runConfirmed = false;
             runCancellation = new CancellationTokenSource();
             activeRun = RunAsync(plan, runCancellation.Token);
-            status = $"Started explicitly confirmed {disposition} run for {plan.Actions.Count} item(s).";
+            status = $"Started explicitly confirmed cleanup run for {plan.Actions.Count} item(s).";
         }
         catch (Exception ex)
         {

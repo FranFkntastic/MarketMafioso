@@ -71,9 +71,6 @@ public sealed class SquireRunner
                     return Stop("CharacterScopeChanged", "The active character no longer matches the approved plan.", action.Fingerprint);
                 if (adapter.HasConflictingAutomation(action.Disposition))
                     return Stop("ConflictingAutomation", "Another automation owns the required game state.", action.Fingerprint);
-                if (action.Disposition != plan.Disposition)
-                    return Stop("MixedDispositionPlan", "A V1 run may contain only one disposition.", action.Fingerprint);
-
                 var validation = adapter.Revalidate(action.Fingerprint, action.Disposition);
                 Record("Revalidation", validation.Code, validation.Message, action.Fingerprint);
                 if (!validation.Success)
