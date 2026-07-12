@@ -228,13 +228,19 @@ public sealed class SquireCandidateEvaluatorTests
     }
 
     [Fact]
-    public void UncommonEquipment_WithUnknownExpertDeliveryEligibility_IsProtected()
+    public void UncommonEquipment_EligibleForExpertDelivery_IsProtected()
     {
-        var item = Definition(100, 20) with { NormalizedRarity = EquipmentRarity.Uncommon, Rarity = 2 };
+        var item = Definition(100, 20) with
+        {
+            NormalizedRarity = EquipmentRarity.Uncommon,
+            Rarity = 2,
+            ExpertDeliveryEligibility = ExpertDeliveryEligibility.Eligible,
+            ExpertDeliveryProvenance = "rarity rule",
+        };
         var snapshot = Snapshot([Instance(100)], [item], [Job(1, 50, false)], []);
         var candidate = Assert.Single(evaluator.Evaluate(snapshot, DesynthesisUnlocked).Candidates);
         Assert.Equal(SquireAssessment.Protected, candidate.Assessment);
-        Assert.Contains(candidate.Reasons, reason => reason.Code == "ExpertDeliveryEligibilityUnknown");
+        Assert.Contains(candidate.Reasons, reason => reason.Code == "ExpertDeliveryPreferred");
     }
 
     [Fact]

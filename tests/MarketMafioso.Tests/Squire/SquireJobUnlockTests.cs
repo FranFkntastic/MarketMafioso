@@ -15,6 +15,15 @@ public sealed class SquireJobUnlockTests
         Assert.Equal(expected, DalamudCharacterEquipmentSnapshotSource.MapRarity(raw));
 
     [Theory]
+    [InlineData(1, ExpertDeliveryEligibility.Ineligible)]
+    [InlineData(2, ExpertDeliveryEligibility.Eligible)]
+    [InlineData(3, ExpertDeliveryEligibility.Eligible)]
+    [InlineData(4, ExpertDeliveryEligibility.Eligible)]
+    [InlineData(5, ExpertDeliveryEligibility.Unknown)]
+    public void ExpertDeliveryEligibility_FollowsEquipmentRarityRule(byte raw, ExpertDeliveryEligibility expected) =>
+        Assert.Equal(expected, DalamudCharacterEquipmentSnapshotSource.MapExpertDeliveryEligibility(raw));
+
+    [Theory]
     [InlineData("Strength", EquipmentStatSemantic.Strength)]
     [InlineData("Critical Hit", EquipmentStatSemantic.CriticalHit)]
     [InlineData("Craftsmanship", EquipmentStatSemantic.Craftsmanship)]

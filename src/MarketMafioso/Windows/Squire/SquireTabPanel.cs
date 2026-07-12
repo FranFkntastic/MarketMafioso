@@ -30,7 +30,10 @@ internal sealed class SquireTabPanel : IDisposable
     private string search = string.Empty;
     private bool showProtected;
     private bool showNonEquipment;
-    private bool reviewMode;
+    private bool selectionMode;
+    private readonly HashSet<EquipmentInstanceFingerprint> tableSelection = [];
+    private EquipmentInstanceFingerprint? selectionAnchor;
+    private readonly string[] columnFilters = new string[7];
     private int selectionDragStart = -1;
     private bool selectionDragValue;
     private EquipmentInstanceFingerprint? focusedItem;
@@ -61,7 +64,7 @@ internal sealed class SquireTabPanel : IDisposable
 
     public void Draw()
     {
-        ImGui.TextColored(MarketMafiosoUiTheme.Header, "Squire V1 - read-only review");
+        ImGui.TextColored(MarketMafiosoUiTheme.Header, "Squire V1 - cleanup selection");
         ImGui.TextWrapped("Squire identifies obsolete leveling gear. Refresh only analyzes; it never disposes of an item.");
         if (ImGui.Button("Refresh##Squire"))
             Refresh();
@@ -97,14 +100,18 @@ internal sealed class SquireTabPanel : IDisposable
             config.Save();
         }
         ImGui.SameLine();
-        ImGui.Checkbox("Review mode", ref reviewMode);
+        ImGui.Checkbox("Selection mode", ref selectionMode);
         if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("Click or drag rows to add or remove cleanup actions. Outside review mode, a row opens its decision details.");
-        if (reviewMode && review.Selections.Count > 0)
+            ImGui.SetTooltip("Select any rows for inspection. Ctrl-click toggles rows; Shift-click selects the range from the anchor. Only executable candidates enter the action batch.");
+        if (selectionMode && tableSelection.Count > 0)
         {
             ImGui.SameLine();
-            if (ImGui.SmallButton("Clear reviewed"))
+            if (ImGui.SmallButton("Clear selection"))
+            {
+                tableSelection.Clear();
+                selectionAnchor = null;
                 review.Clear();
+            }
         }
         DrawTable(analysis);
         DrawFocusedItem(analysis);
@@ -130,6 +137,8 @@ internal sealed class SquireTabPanel : IDisposable
                     config.Squire.ProtectFutureLevelingGearOptIn,
                     overrides));
             review.Adopt(analysis);
+            tableSelection.Clear();
+            selectionAnchor = null;
             focusedItem = null;
             selectionDragStart = -1;
             runConfirmed = false;
@@ -248,7 +257,7 @@ internal sealed class SquireTabPanel : IDisposable
 
     private void DrawTable(SquireAnalysis value)
     {
-        var filteredRows = value.Candidates
+        var baseRows = value.Candidates
             .Where(candidate => showNonEquipment || candidate.Definition.IsEquipment)
             .Where(candidate => showProtected || candidate.Assessment != SquireAssessment.Protected)
             .Where(candidate => string.IsNullOrWhiteSpace(search)
@@ -269,6 +278,8 @@ internal sealed class SquireTabPanel : IDisposable
         ImGui.TableSetupColumn("Disposition", ImGuiTableColumnFlags.WidthFixed, 90);
         ImGui.TableSetupColumn("Reason", ImGuiTableColumnFlags.WidthStretch);
         ImGui.TableHeadersRow();
+        DrawColumnFilters();
+        var filteredRows = ApplyColumnFilters(baseRows, columnFilters);
         var rows = SortCandidates(filteredRows, ImGui.TableGetSortSpecs());
         for (var rowIndex = 0; rowIndex < rows.Length; rowIndex++)
         {
@@ -276,12 +287,10 @@ internal sealed class SquireTabPanel : IDisposable
             ImGui.TableNextRow();
             ImGui.TableNextColumn();
             var fingerprint = candidate.Instance.Fingerprint;
-            var selected = review.Selections.ContainsKey(fingerprint);
+            var selected = tableSelection.Contains(fingerprint);
             var itemCursor = ImGui.GetCursorPos();
             var itemWidth = Math.Max(1f, ImGui.GetContentRegionAvail().X);
             var itemHeight = Math.Max(ImGui.GetTextLineHeightWithSpacing(), ImGui.CalcTextSize(candidate.Definition.Name, false, itemWidth).Y);
-            if (!candidate.IsExecutable)
-                ImGui.BeginDisabled();
             ImGui.Selectable(
                 $"##SquireRow{fingerprint.Container}{fingerprint.SlotIndex}",
                 selected,
@@ -298,16 +307,8 @@ internal sealed class SquireTabPanel : IDisposable
                     true,
                     selected,
                     candidate.RecommendedDisposition.ToString(),
-                    () =>
-                    {
-                        if (review.Selections.ContainsKey(fingerprint))
-                            review.Remove(fingerprint);
-                        else
-                            review.TrySelect(value, fingerprint, candidate.RecommendedDisposition);
-                    });
+                    () => SetSelection(value, candidate, !tableSelection.Contains(fingerprint)));
             }
-            if (!candidate.IsExecutable)
-                ImGui.EndDisabled();
             ImGui.SetCursorPos(itemCursor);
             ImGui.PushTextWrapPos(itemCursor.X + itemWidth);
             ImGui.TextWrapped(candidate.Definition.Name);
@@ -332,30 +333,87 @@ internal sealed class SquireTabPanel : IDisposable
         if (ImGui.IsItemClicked(ImGuiMouseButton.Left))
         {
             focusedItem = candidate.Instance.Fingerprint;
-            if (reviewMode && candidate.IsExecutable)
+            if (selectionMode)
             {
+                var io = ImGui.GetIO();
+                if (io.KeyShift && selectionAnchor is { } anchor)
+                {
+                    var anchorIndex = Array.FindIndex(rows, row => row.Instance.Fingerprint == anchor);
+                    if (anchorIndex >= 0)
+                    {
+                        if (!io.KeyCtrl)
+                            ClearSelectionOnly();
+                        var rangeFirst = Math.Min(anchorIndex, rowIndex);
+                        var rangeLast = Math.Max(anchorIndex, rowIndex);
+                        for (var index = rangeFirst; index <= rangeLast; index++)
+                            SetSelection(analysis, rows[index], true);
+                    }
+                }
+                else if (io.KeyCtrl)
+                {
+                    SetSelection(analysis, candidate, !tableSelection.Contains(candidate.Instance.Fingerprint));
+                    selectionAnchor = candidate.Instance.Fingerprint;
+                }
+                else
+                {
+                    ClearSelectionOnly();
+                    SetSelection(analysis, candidate, true);
+                    selectionAnchor = candidate.Instance.Fingerprint;
+                }
                 selectionDragStart = rowIndex;
-                selectionDragValue = !review.Selections.ContainsKey(candidate.Instance.Fingerprint);
-                SetSelection(analysis, candidate, selectionDragValue);
+                selectionDragValue = true;
             }
         }
-        if (!reviewMode || selectionDragStart < 0 || !ImGui.IsItemHovered() || !ImGui.IsMouseDragging(ImGuiMouseButton.Left))
+        if (!selectionMode || selectionDragStart < 0 || !ImGui.IsItemHovered() || !ImGui.IsMouseDragging(ImGuiMouseButton.Left))
             return;
         var first = Math.Min(selectionDragStart, rowIndex);
         var last = Math.Max(selectionDragStart, rowIndex);
         for (var index = first; index <= last; index++)
-            if (rows[index].IsExecutable)
-                SetSelection(analysis, rows[index], selectionDragValue);
+            SetSelection(analysis, rows[index], selectionDragValue);
     }
 
     private void SetSelection(SquireAnalysis analysis, SquireCandidate candidate, bool selected)
     {
         var fingerprint = candidate.Instance.Fingerprint;
-        if (selected && !review.Selections.ContainsKey(fingerprint))
+        if (selected)
+            tableSelection.Add(fingerprint);
+        else
+            tableSelection.Remove(fingerprint);
+        if (selected && candidate.IsExecutable && !review.Selections.ContainsKey(fingerprint))
             review.TrySelect(analysis, fingerprint, candidate.RecommendedDisposition);
-        else if (!selected && review.Selections.ContainsKey(fingerprint))
+        else if ((!selected || !candidate.IsExecutable) && review.Selections.ContainsKey(fingerprint))
             review.Remove(fingerprint);
     }
+
+    private void ClearSelectionOnly()
+    {
+        tableSelection.Clear();
+        review.Clear();
+    }
+
+    private void DrawColumnFilters()
+    {
+        ImGui.TableNextRow();
+        for (var column = 0; column < columnFilters.Length; column++)
+        {
+            ImGui.TableSetColumnIndex(column);
+            ImGui.SetNextItemWidth(-1);
+            ImGui.InputTextWithHint($"##SquireColumnFilter{column}", "Filter...", ref columnFilters[column], 96);
+        }
+    }
+
+    internal static SquireCandidate[] ApplyColumnFilters(IEnumerable<SquireCandidate> rows, IReadOnlyList<string> filters) =>
+        rows.Where(candidate =>
+            MatchesFilter(candidate.Definition.Name, filters[0]) &&
+            MatchesFilter($"{candidate.Instance.Fingerprint.Container}:{candidate.Instance.Fingerprint.SlotIndex}", filters[1]) &&
+            MatchesFilter(candidate.Definition.EquipLevel.ToString(), filters[2]) &&
+            MatchesFilter(candidate.Definition.ItemLevel.ToString(), filters[3]) &&
+            MatchesFilter(candidate.Assessment.ToString(), filters[4]) &&
+            MatchesFilter(candidate.RecommendedDisposition.ToString(), filters[5]) &&
+            MatchesFilter(FormatReasons(candidate), filters[6])).ToArray();
+
+    private static bool MatchesFilter(string value, string filter) =>
+        string.IsNullOrWhiteSpace(filter) || value.Contains(filter.Trim(), StringComparison.OrdinalIgnoreCase);
 
     private void DrawFocusedItem(SquireAnalysis analysis)
     {
@@ -424,15 +482,6 @@ internal sealed class SquireTabPanel : IDisposable
         if (enabled && !values.Contains(itemId)) values.Add(itemId);
         if (!enabled) values.Remove(itemId);
         config.Save();
-    }
-
-    private void ToggleSelection(SquireAnalysis analysis, SquireCandidate candidate)
-    {
-        var fingerprint = candidate.Instance.Fingerprint;
-        if (review.Selections.ContainsKey(fingerprint))
-            review.Remove(fingerprint);
-        else
-            review.TrySelect(analysis, fingerprint, candidate.RecommendedDisposition);
     }
 
     internal static SquireCandidate[] SortCandidates(SquireCandidate[] rows, ImGuiTableSortSpecsPtr sortSpecs)

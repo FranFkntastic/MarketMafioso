@@ -270,8 +270,10 @@ public sealed class DalamudCharacterEquipmentSnapshotSource : ICharacterEquipmen
                     value.IsUnique && value.IsUntradable && value.Rarity >= 4,
                     new EquipmentStatProfile(parameters, value.DamagePhys, value.DamageMag, value.DefensePhys, value.DefenseMag, profileComplete),
                     MapRarity(value.Rarity),
-                    ExpertDeliveryEligibility.Unknown,
-                    "No proven Expert Delivery signal is available from the current item-definition adapter.");
+                    MapExpertDeliveryEligibility(value.Rarity),
+                    value.Rarity >= 2
+                        ? "FFXIV equipment rarity rule: green and higher equipment is accepted by Grand Company Expert Delivery."
+                        : "FFXIV equipment rarity rule: normal equipment is not an Expert Delivery item.");
             }
             var complete = values.Count == instances.Select(instance => instance.Fingerprint.ItemId).Distinct().Count();
             diagnostics.Add(new("definitions", complete ? SnapshotComponentStatus.Complete : SnapshotComponentStatus.Partial, complete ? null : "One or more item definitions were unavailable."));
@@ -298,6 +300,13 @@ public sealed class DalamudCharacterEquipmentSnapshotSource : ICharacterEquipmen
         3 => EquipmentRarity.Rare,
         4 => EquipmentRarity.Relic,
         _ => EquipmentRarity.Unknown,
+    };
+
+    internal static ExpertDeliveryEligibility MapExpertDeliveryEligibility(byte rarity) => rarity switch
+    {
+        0 or 1 => ExpertDeliveryEligibility.Ineligible,
+        >= 2 and <= 4 => ExpertDeliveryEligibility.Eligible,
+        _ => ExpertDeliveryEligibility.Unknown,
     };
 
     internal static EquipmentDiscipline MapDiscipline(string abbreviation) => abbreviation switch
