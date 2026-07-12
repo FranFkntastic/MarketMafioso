@@ -311,7 +311,7 @@ internal sealed class SquireTabPanel : IDisposable
             }
             ImGui.SetCursorPos(itemCursor);
             ImGui.PushTextWrapPos(itemCursor.X + itemWidth);
-            ImGui.TextWrapped(candidate.Definition.Name);
+            DrawItemLink(value, candidate);
             ImGui.PopTextWrapPos();
             Cell($"{candidate.Instance.Fingerprint.Container}:{candidate.Instance.Fingerprint.SlotIndex}");
             Cell(candidate.Definition.EquipLevel.ToString());
@@ -383,6 +383,61 @@ internal sealed class SquireTabPanel : IDisposable
             review.TrySelect(analysis, fingerprint, candidate.RecommendedDisposition);
         else if ((!selected || !candidate.IsExecutable) && review.Selections.ContainsKey(fingerprint))
             review.Remove(fingerprint);
+    }
+
+    private static void DrawItemLink(SquireAnalysis analysis, SquireCandidate candidate)
+    {
+        var start = ImGui.GetCursorScreenPos();
+        ImGui.TextColored(MarketMafiosoUiTheme.Link, candidate.Definition.Name);
+        var end = new System.Numerics.Vector2(start.X + ImGui.GetItemRectSize().X, ImGui.GetItemRectMax().Y);
+        ImGui.GetWindowDrawList().AddLine(new(start.X, end.Y), end, ImGui.GetColorU32(MarketMafiosoUiTheme.Link));
+        if (!ImGui.IsItemHovered())
+            return;
+
+        var definition = candidate.Definition;
+        var fingerprint = candidate.Instance.Fingerprint;
+        var eligibleJobs = analysis.Snapshot.Jobs
+            .Where(job => job.IsUnlocked == true && definition.EligibleClassJobIds.Contains(job.ClassJobId))
+            .Select(job => $"{job.Abbreviation} Lv. {job.Level}")
+            .Distinct().Order().ToArray();
+        var stats = definition.StatProfile?.Parameters
+            .Where(stat => stat.Value != 0)
+            .GroupBy(stat => stat.Semantic)
+            .Select(group => $"{group.Key} +{group.Max(stat => stat.Value)}")
+            .ToList() ?? [];
+        if (definition.StatProfile is { } profile)
+        {
+            if (profile.PhysicalDamage > 0) stats.Add($"Physical Damage {profile.PhysicalDamage}");
+            if (profile.MagicalDamage > 0) stats.Add($"Magical Damage {profile.MagicalDamage}");
+            if (profile.PhysicalDefense > 0) stats.Add($"Physical Defense {profile.PhysicalDefense}");
+            if (profile.MagicalDefense > 0) stats.Add($"Magical Defense {profile.MagicalDefense}");
+        }
+
+        ImGui.BeginTooltip();
+        ImGui.PushTextWrapPos(ImGui.GetCursorPosX() + Math.Max(360f, ImGui.GetMainViewport().Size.X * 0.4f));
+        ImGui.TextColored(MarketMafiosoUiTheme.Header, definition.Name);
+        ImGui.TextUnformatted($"Item {definition.ItemId} | {definition.NormalizedRarity} | {definition.Slot} | Equip Lv. {definition.EquipLevel} | Item Lv. {definition.ItemLevel}");
+        ImGui.TextUnformatted($"Location: {fingerprint.Container}:{fingerprint.SlotIndex}{(fingerprint.IsHighQuality ? " | HQ" : string.Empty)}");
+        ImGui.Separator();
+        ImGui.TextUnformatted($"Eligible obtained jobs: {(eligibleJobs.Length == 0 ? "none" : string.Join(", ", eligibleJobs))}");
+        ImGui.TextWrapped($"Stats: {(stats.Count == 0 ? "none" : string.Join(", ", stats))}");
+        if (candidate.UseAnalysis is { Comparisons.Count: > 0 } use)
+        {
+            ImGui.Separator();
+            ImGui.TextColored(MarketMafiosoUiTheme.Header, "Saved-gearset comparisons");
+            foreach (var comparison in use.Comparisons)
+            {
+                var sets = comparison.ContributingGearsets.Count == 0
+                    ? "no contributing gearset"
+                    : string.Join(", ", comparison.ContributingGearsets.Select(set => set.Name).Distinct());
+                var baseline = comparison.Baseline is null
+                    ? "no baseline"
+                    : $"{comparison.Baseline.Name} (iLv {comparison.Baseline.ItemLevel})";
+                ImGui.BulletText($"{comparison.Job.Abbreviation}: {comparison.Status}; {baseline}; from {sets}");
+            }
+        }
+        ImGui.PopTextWrapPos();
+        ImGui.EndTooltip();
     }
 
     private void ClearSelectionOnly()
