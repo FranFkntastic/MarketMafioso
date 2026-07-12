@@ -14,6 +14,7 @@ public enum SquireAssessment
 public enum SquireDisposition
 {
     Keep,
+    ExpertDelivery,
     Desynthesize,
     VendorSell,
     Discard,

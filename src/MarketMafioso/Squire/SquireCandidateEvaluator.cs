@@ -77,7 +77,9 @@ public sealed class SquireCandidateEvaluator
                 use);
         }
 
-        var recommended = dispositions.Contains(SquireDisposition.Desynthesize)
+        var recommended = dispositions.Contains(SquireDisposition.ExpertDelivery)
+            ? SquireDisposition.ExpertDelivery
+            : dispositions.Contains(SquireDisposition.Desynthesize)
             ? SquireDisposition.Desynthesize
             : dispositions.Contains(SquireDisposition.VendorSell)
                 ? SquireDisposition.VendorSell
@@ -132,13 +134,9 @@ public sealed class SquireCandidateEvaluator
             if (!rarityOverride)
                 reasons.Add(new("HighRarityEquipment", $"{definition.NormalizedRarity} equipment is protected unless explicitly approved for cleanup.", SquireReasonSeverity.Blocking));
         }
-        else if (definition.NormalizedRarity == EquipmentRarity.Uncommon && !rarityOverride)
-        {
-            if (definition.ExpertDeliveryEligibility == ExpertDeliveryEligibility.Eligible)
-                reasons.Add(new("ExpertDeliveryPreferred", "Grand Company Expert Delivery is preferred over destructive cleanup for this item.", SquireReasonSeverity.Blocking));
-            else if (definition.ExpertDeliveryEligibility == ExpertDeliveryEligibility.Unknown)
-                reasons.Add(new("ExpertDeliveryEligibilityUnknown", "Expert Delivery eligibility is unknown for this uncommon item.", SquireReasonSeverity.Blocking));
-        }
+        else if (definition.NormalizedRarity == EquipmentRarity.Uncommon && !rarityOverride &&
+                 definition.ExpertDeliveryEligibility == ExpertDeliveryEligibility.Unknown)
+            reasons.Add(new("ExpertDeliveryEligibilityUnknown", "Expert Delivery eligibility is unknown for this uncommon item.", SquireReasonSeverity.Blocking));
         if (instance.Fingerprint.MateriaIds.Count > 0)
             reasons.Add(new("MateriaAttached", "Materia-bearing gear is protected by default.", SquireReasonSeverity.Blocking));
         if (protectionPolicy.ProtectSignedGear && instance.Fingerprint.CrafterContentId is > 0)

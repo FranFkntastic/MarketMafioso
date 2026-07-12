@@ -538,11 +538,35 @@ internal sealed class SquireTabPanel : IDisposable
         ImGui.Separator();
         var selections = review.Selections;
         ImGui.TextColored(MarketMafiosoUiTheme.Header, "Reviewed batch");
-        ImGui.TextUnformatted($"Selected: {selections.Count} | Desynthesize: {selections.Count(pair => pair.Value == SquireDisposition.Desynthesize)} | Vendor: {selections.Count(pair => pair.Value == SquireDisposition.VendorSell)} | Discard: {selections.Count(pair => pair.Value == SquireDisposition.Discard)}");
+        ImGui.TextUnformatted($"Selected: {selections.Count} | GC Delivery: {selections.Count(pair => pair.Value == SquireDisposition.ExpertDelivery)} | Desynthesize: {selections.Count(pair => pair.Value == SquireDisposition.Desynthesize)} | Vendor: {selections.Count(pair => pair.Value == SquireDisposition.VendorSell)} | Discard: {selections.Count(pair => pair.Value == SquireDisposition.Discard)}");
         if (!value.Snapshot.Diagnostics.IsComplete)
             ImGui.TextColored(MarketMafiosoUiTheme.Error, "Execution blocked: snapshot is incomplete.");
         var selectedDesynthesis = selections.Where(pair => pair.Value == SquireDisposition.Desynthesize).Select(pair => pair.Key).ToArray();
+        var selectedExpertDelivery = selections.Where(pair => pair.Value == SquireDisposition.ExpertDelivery).Select(pair => pair.Key).ToArray();
         var running = activeRun is { IsCompleted: false };
+        var canRunExpertDelivery = value.Snapshot.Diagnostics.IsComplete && selectedExpertDelivery.Length > 0 && selectedExpertDelivery.Length == selections.Count && !running;
+        if (!canRunExpertDelivery)
+            ImGui.BeginDisabled();
+        ImGui.Checkbox("I confirm this reviewed Expert Delivery batch", ref runConfirmed);
+        if (!canRunExpertDelivery)
+            ImGui.EndDisabled();
+        var expertDeliveryEnabled = canRunExpertDelivery && runConfirmed;
+        if (!expertDeliveryEnabled)
+            ImGui.BeginDisabled();
+        if (ImGui.Button("Run selected Expert Delivery##Squire"))
+            StartRun(value, SquireDisposition.ExpertDelivery, selectedExpertDelivery);
+        RegisterLastControl(
+            "squire.run.expert-delivery",
+            "Run the explicitly confirmed Grand Company Expert Delivery batch",
+            AgentBridgeUiControlKind.Button,
+            expertDeliveryEnabled,
+            false,
+            selectedExpertDelivery.Length.ToString(),
+            () => StartRun(value, SquireDisposition.ExpertDelivery, selectedExpertDelivery));
+        if (!expertDeliveryEnabled)
+            ImGui.EndDisabled();
+        ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Open the Grand Company Expert Delivery list before starting this batch.");
+
         var canRunDesynthesis = value.Snapshot.Diagnostics.IsComplete && selectedDesynthesis.Length > 0 && selectedDesynthesis.Length == selections.Count && !running;
         if (!canRunDesynthesis)
             ImGui.BeginDisabled();

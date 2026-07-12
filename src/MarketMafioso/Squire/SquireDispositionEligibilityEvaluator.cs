@@ -16,6 +16,9 @@ public sealed class SquireDispositionEligibilityEvaluator
         var supported = new HashSet<SquireDisposition>();
         var reasons = new List<SquireReason>();
 
+        if (definition.ExpertDeliveryEligibility == ExpertDeliveryEligibility.Eligible)
+            supported.Add(SquireDisposition.ExpertDelivery);
+
         if (definition.IsDesynthesizable == true)
         {
             if (capabilities.DesynthesisUnlocked == true)

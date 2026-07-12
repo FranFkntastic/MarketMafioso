@@ -4,9 +4,11 @@ using System.Threading;
 using System.Threading.Tasks;
 using Dalamud.Game.ClientState.Conditions;
 using Dalamud.Plugin.Services;
+using Dalamud.Utility;
 using Franthropy.Dalamud.Characters;
 using Franthropy.Dalamud.Equipment;
 using Franthropy.Dalamud.Automation.Inventory;
+using Lumina.Excel.Sheets;
 
 namespace MarketMafioso.Squire.Observation;
 
@@ -19,6 +21,7 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
     private readonly ISquireDispositionCapabilitySource capabilitySource;
     private readonly Func<bool> hasExternalConflict;
     private readonly DalamudDesynthesisUiTransaction desynthesisUi;
+    private readonly DalamudExpertDeliveryUiTransaction expertDeliveryUi;
 
     public DalamudSquireActionGameAdapter(
         ICharacterEquipmentSnapshotSource snapshotSource,
@@ -26,6 +29,7 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
         ICondition condition,
         IGameGui gameGui,
         IFramework framework,
+        IDataManager dataManager,
         ISquireDispositionCapabilitySource capabilitySource,
         Func<bool>? hasExternalConflict = null)
     {
@@ -36,6 +40,10 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
         this.capabilitySource = capabilitySource;
         this.hasExternalConflict = hasExternalConflict ?? (() => false);
         desynthesisUi = new DalamudDesynthesisUiTransaction(gameGui);
+        var hqPrompt = dataManager.GetExcelSheet<Addon>().GetRow(102434).Text.ExtractText().Trim();
+        expertDeliveryUi = new DalamudExpertDeliveryUiTransaction(
+            gameGui,
+            observed => string.Equals(observed, hqPrompt, StringComparison.Ordinal));
     }
 
     public CharacterScope? GetActiveCharacter() =>
@@ -43,13 +51,13 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
             ? new CharacterScope(playerState.ContentId, playerState.CharacterName.ToString(), playerState.HomeWorld.RowId)
             : null;
 
-    public bool HasConflictingAutomation() =>
+    public bool HasConflictingAutomation(SquireDisposition disposition) =>
         hasExternalConflict() ||
         condition[ConditionFlag.BetweenAreas] ||
         condition[ConditionFlag.BetweenAreas51] ||
         condition[ConditionFlag.WatchingCutscene] ||
         condition[ConditionFlag.WatchingCutscene78] ||
-        condition[ConditionFlag.OccupiedInQuestEvent] ||
+        (disposition != SquireDisposition.ExpertDelivery && condition[ConditionFlag.OccupiedInQuestEvent]) ||
         condition[ConditionFlag.BeingMoved];
 
     public SquireRevalidationResult Revalidate(EquipmentInstanceFingerprint fingerprint, SquireDisposition disposition)
@@ -86,6 +94,8 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
         SquireDisposition disposition,
         CancellationToken cancellationToken)
     {
+        if (disposition == SquireDisposition.ExpertDelivery)
+            return await ExecuteExpertDeliveryAsync(fingerprint, cancellationToken).ConfigureAwait(false);
         if (disposition != SquireDisposition.Desynthesize)
             return SquireActionResult.Fail("AdapterNotEnabled", $"The {disposition} UI adapter is not enabled.");
 
@@ -121,6 +131,54 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
         }
 
         return SquireActionResult.Fail("TransitionTimeout", "The exact slot did not transition after desynthesis confirmation.");
+    }
+
+    private async Task<SquireActionResult> ExecuteExpertDeliveryAsync(
+        EquipmentInstanceFingerprint fingerprint,
+        CancellationToken cancellationToken)
+    {
+        SquireActionResult? started = null;
+        for (var attempt = 0; attempt < 90; attempt++)
+        {
+            started = await framework.RunOnTick(() => BeginExpertDelivery(fingerprint)).ConfigureAwait(false);
+            if (started.Success)
+                break;
+            if (started.Code != "ExpertDeliveryListUnavailable")
+                return started;
+            await framework.DelayTicks(1).ConfigureAwait(false);
+        }
+        if (started is not { Success: true })
+            return SquireActionResult.Fail("ExpertDeliveryListTimeout", "The visible Expert Delivery list did not become ready.");
+        for (var attempt = 0; attempt < 360; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var transition = await framework.RunOnTick(() => ObserveSlotTransition(fingerprint)).ConfigureAwait(false);
+            if (transition.Success)
+            {
+                expertDeliveryUi.Complete();
+                return transition;
+            }
+            if (transition.Code != "TransitionPending")
+                return transition;
+            var advanced = await framework.RunOnTick(expertDeliveryUi.Advance).ConfigureAwait(false);
+            if (!advanced.Success && advanced.Code != "Pending")
+                return SquireActionResult.Fail(advanced.Code, advanced.Message);
+            await framework.DelayTicks(1).ConfigureAwait(false);
+        }
+        return SquireActionResult.Fail("TransitionTimeout", "The exact slot did not transition after Expert Delivery confirmation.");
+    }
+
+    private unsafe SquireActionResult BeginExpertDelivery(EquipmentInstanceFingerprint fingerprint)
+    {
+        var validation = Revalidate(fingerprint, SquireDisposition.ExpertDelivery);
+        if (!validation.Success)
+            return SquireActionResult.Fail(validation.Code, validation.Message);
+        var gc = FFXIVClientStructs.FFXIV.Client.Game.UI.PlayerState.Instance()->GrandCompany;
+        if (gc == 0)
+            return SquireActionResult.Fail("GrandCompanyUnavailable", "The active character is not employed by a Grand Company.");
+        var inventory = FFXIVClientStructs.FFXIV.Client.Game.InventoryManager.Instance();
+        var result = expertDeliveryUi.Begin(fingerprint, inventory->GetCompanySeals(gc), inventory->GetMaxCompanySeals(gc));
+        return new SquireActionResult(result.Success, result.Code, result.Message);
     }
 
     private unsafe SquireActionResult BeginDesynthesis(EquipmentInstanceFingerprint fingerprint)
@@ -190,5 +248,6 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
     public void ReleaseOwnedState()
     {
         _ = framework.RunOnTick(desynthesisUi.CloseOwnedUi);
+        _ = framework.RunOnTick(expertDeliveryUi.CloseOwnedUi);
     }
 }

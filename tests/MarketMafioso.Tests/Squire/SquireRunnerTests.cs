@@ -64,7 +64,7 @@ public sealed class SquireRunnerTests
         public int ExecuteCount { get; private set; }
         public bool Released { get; private set; }
         public CharacterScope? GetActiveCharacter() => ActiveScope;
-        public bool HasConflictingAutomation() => false;
+        public bool HasConflictingAutomation(SquireDisposition disposition) => false;
         public SquireRevalidationResult Revalidate(EquipmentInstanceFingerprint fingerprint, SquireDisposition disposition)
         {
             RevalidateCount++;
@@ -78,4 +78,3 @@ public sealed class SquireRunnerTests
         public void ReleaseOwnedState() => Released = true;
     }
 }
-

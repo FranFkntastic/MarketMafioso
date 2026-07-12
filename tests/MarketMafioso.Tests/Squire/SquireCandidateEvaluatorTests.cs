@@ -213,7 +213,12 @@ public sealed class SquireCandidateEvaluatorTests
     [InlineData(EquipmentRarity.Relic)]
     public void HighRarityEquipment_IsProtectedUntilExplicitlyOverridden(EquipmentRarity rarity)
     {
-        var item = Definition(100, 20) with { NormalizedRarity = rarity, Rarity = rarity == EquipmentRarity.Rare ? (byte)3 : (byte)4 };
+        var item = Definition(100, 20) with
+        {
+            NormalizedRarity = rarity,
+            Rarity = rarity == EquipmentRarity.Rare ? (byte)3 : (byte)4,
+            ExpertDeliveryEligibility = ExpertDeliveryEligibility.Eligible,
+        };
         var baseline = Definition(200, 30);
         var snapshot = Snapshot([Instance(100)], [item, baseline], [Job(1, 50, true)], [Gearset(1, 200)]);
 
@@ -224,11 +229,12 @@ public sealed class SquireCandidateEvaluatorTests
         var overridden = Assert.Single(evaluator.Evaluate(snapshot, DesynthesisUnlocked,
             new SquireProtectionPolicy(HighRarityCleanupOverrides: new HashSet<uint> { 100 })).Candidates);
         Assert.Equal(SquireAssessment.Candidate, overridden.Assessment);
+        Assert.Equal(SquireDisposition.ExpertDelivery, overridden.RecommendedDisposition);
         Assert.Contains(overridden.Reasons, reason => reason.Code == "HighRarityCleanupOverride");
     }
 
     [Fact]
-    public void UncommonEquipment_EligibleForExpertDelivery_IsProtected()
+    public void UncommonEquipment_EligibleForExpertDelivery_BecomesDeliveryCandidate()
     {
         var item = Definition(100, 20) with
         {
@@ -239,8 +245,9 @@ public sealed class SquireCandidateEvaluatorTests
         };
         var snapshot = Snapshot([Instance(100)], [item], [Job(1, 50, false)], []);
         var candidate = Assert.Single(evaluator.Evaluate(snapshot, DesynthesisUnlocked).Candidates);
-        Assert.Equal(SquireAssessment.Protected, candidate.Assessment);
-        Assert.Contains(candidate.Reasons, reason => reason.Code == "ExpertDeliveryPreferred");
+        Assert.Equal(SquireAssessment.Candidate, candidate.Assessment);
+        Assert.Equal(SquireDisposition.ExpertDelivery, candidate.RecommendedDisposition);
+        Assert.Contains(SquireDisposition.ExpertDelivery, candidate.SupportedDispositions);
     }
 
     [Fact]

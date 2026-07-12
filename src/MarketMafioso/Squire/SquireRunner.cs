@@ -22,7 +22,7 @@ public sealed record SquireActionResult(bool Success, string Code, string Messag
 public interface ISquireActionGameAdapter
 {
     CharacterScope? GetActiveCharacter();
-    bool HasConflictingAutomation();
+    bool HasConflictingAutomation(SquireDisposition disposition);
     SquireRevalidationResult Revalidate(EquipmentInstanceFingerprint fingerprint, SquireDisposition disposition);
     Task<SquireActionResult> ExecuteAsync(EquipmentInstanceFingerprint fingerprint, SquireDisposition disposition, CancellationToken cancellationToken);
     void ReleaseOwnedState();
@@ -68,7 +68,7 @@ public sealed class SquireRunner
                 cancellationToken.ThrowIfCancellationRequested();
                 if (adapter.GetActiveCharacter() != plan.Character)
                     return Stop("CharacterScopeChanged", "The active character no longer matches the approved plan.", action.Fingerprint);
-                if (adapter.HasConflictingAutomation())
+                if (adapter.HasConflictingAutomation(action.Disposition))
                     return Stop("ConflictingAutomation", "Another automation owns the required game state.", action.Fingerprint);
                 if (action.Disposition != plan.Disposition)
                     return Stop("MixedDispositionPlan", "A V1 run may contain only one disposition.", action.Fingerprint);
@@ -108,4 +108,3 @@ public sealed class SquireRunner
         }
     }
 }
-

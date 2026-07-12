@@ -27,6 +27,20 @@ public sealed class SquireDispositionEligibilityEvaluatorTests
     }
 
     [Fact]
+    public void ExpertDeliveryRequiresProvenEligibility()
+    {
+        var eligible = evaluator.Evaluate(
+            Definition() with { ExpertDeliveryEligibility = ExpertDeliveryEligibility.Eligible },
+            new SquireDispositionCapabilities(true));
+        var ineligible = evaluator.Evaluate(
+            Definition() with { ExpertDeliveryEligibility = ExpertDeliveryEligibility.Ineligible },
+            new SquireDispositionCapabilities(true));
+
+        Assert.Contains(SquireDisposition.ExpertDelivery, eligible.SupportedDispositions);
+        Assert.DoesNotContain(SquireDisposition.ExpertDelivery, ineligible.SupportedDispositions);
+    }
+
+    [Fact]
     public void UnknownSignalsFailClosedWithReasons()
     {
         var definition = Definition() with
