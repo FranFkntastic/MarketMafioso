@@ -227,7 +227,7 @@ internal sealed class SquireTabPanel : IDisposable
                     RecommendedDisposition = candidate.RecommendedDisposition.ToString(),
                     ReasonCodes = candidate.Reasons.Select(reason => reason.Code).ToArray(),
                     JobComparisons = candidate.UseAnalysis?.Comparisons
-                        .Select(comparison => $"{comparison.Job.Abbreviation}:{comparison.Job.Level}:{comparison.Status}:{comparison.Baseline?.Name ?? "none"}:{comparison.Baseline?.ItemLevel.ToString() ?? "none"}:witnesses={string.Join(",", comparison.WitnessRequirement?.ViableWitnesses.Select(witness => $"{witness.ItemName}@{witness.Fingerprint.Container}:{witness.Fingerprint.SlotIndex}{(witness.Fingerprint.IsHighQuality ? ":HQ" : string.Empty)}") ?? [])}")
+                        .Select(comparison => $"{comparison.Job.Abbreviation}:{comparison.Job.Level}:{comparison.Status}:{comparison.Baseline?.Name ?? "none"}:{comparison.Baseline?.ItemLevel.ToString() ?? "none"}:witnesses={string.Join(",", comparison.WitnessRequirement?.ViableWitnesses.Select(witness => $"{witness.ItemName}@{witness.Fingerprint.Container}:{witness.Fingerprint.SlotIndex}:{(witness.IsGearsetReferenced ? "saved" : "loose")}{(witness.Fingerprint.IsHighQuality ? ":HQ" : string.Empty)}") ?? [])}")
                         .ToArray() ?? [],
                     RevalidationCode = revalidation.Code,
                     RevalidationSucceeded = revalidation.Success,
