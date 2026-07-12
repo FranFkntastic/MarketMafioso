@@ -1,6 +1,6 @@
 <Project Sdk="Dalamud.NET.Sdk/15.0.0">
   <PropertyGroup>
-    <Version>1.1.2.1</Version>
+    <Version>1.2.0.0</Version>
     <LangVersion>12</LangVersion>
     <Nullable>enable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
@@ -12,8 +12,8 @@
     <DisableFastUpToDateCheck>true</DisableFastUpToDateCheck>
     <Name>MarketMafioso</Name>
     <Author>FranFkntastic</Author>
-    <Description>A practical FFXIV utility plugin for Workshop Logistics and optional receiver-backed inventory history.</Description>
-    <Punchline>Workshop logistics and self-hosted inventory history.</Punchline>
+    <Description>FFXIV workshop logistics, reviewed gear cleanup, and optional receiver-backed inventory history.</Description>
+    <Punchline>Workshop logistics, reviewed gear cleanup, and inventory history.</Punchline>
     <RepoUrl>https://github.com/FranFkntastic/MarketMafioso</RepoUrl>
     <FranthropyDalamudProject Condition="'$(FranthropyDalamudProject)' == ''">..\..\..\Franthropy\src\Franthropy.Dalamud\Franthropy.Dalamud.csproj</FranthropyDalamudProject>
   </PropertyGroup>

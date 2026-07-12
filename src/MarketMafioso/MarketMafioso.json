@@ -1,10 +1,10 @@
 {
   "Author": "FranFkntastic",
   "Name": "MarketMafioso",
-  "Punchline": "Workshop logistics and self-hosted inventory history.",
-  "Description": "A practical FFXIV utility plugin for Workshop Logistics and optional receiver-backed inventory history. Use /mmf to open settings.",
+  "Punchline": "Workshop logistics, reviewed gear cleanup, and inventory history.",
+  "Description": "FFXIV workshop logistics, reviewed gear cleanup through Squire, and optional receiver-backed inventory history. Use /mmf to open settings.",
   "InternalName": "MarketMafioso",
-  "AssemblyVersion": "1.1.2.1",
+  "AssemblyVersion": "1.2.0.0",
   "DalamudApiLevel": 15,
   "ApplicableVersion": "any",
   "Tags": [
@@ -15,10 +15,11 @@
     "utility",
     "qol",
     "export",
-    "json"
+    "json",
+    "gear"
   ],
   "CategoryTags": [
     "utility"
   ],
-  "Changelog": "Adds the Blazor receiver dashboard, structured inventory browsing, persistent diagnostics, self-hosted receiver packaging, Workshop Logistics improvements, and cleaner public install documentation."
+  "Changelog": "Adds Squire V1: reviewed equipment evaluation with trusted owned-gear baselines, sortable and filterable selection, materia retrieval, desynthesis, and automatic Grand Company Expert Delivery."
 }
