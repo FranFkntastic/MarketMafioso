@@ -637,7 +637,7 @@ internal sealed class SquireTabPanel : IDisposable
         if (!supportedBatch && selections.Count > 0)
             ImGui.TextColored(MarketMafiosoUiTheme.Error, "Execution is not implemented for one or more selected dispositions.");
         if (selections.Values.Contains(SquireDisposition.ExpertDelivery))
-            ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Open the Grand Company Expert Delivery list before starting this batch.");
+            ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Expert deliveries travel to your Grand Company through Lifestream, then open the delivery desk automatically.");
         if (running)
         {
             ImGui.SameLine();

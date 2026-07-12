@@ -23,6 +23,7 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
     private readonly Func<bool> hasExternalConflict;
     private readonly DalamudDesynthesisUiTransaction desynthesisUi;
     private readonly DalamudExpertDeliveryUiTransaction expertDeliveryUi;
+    private readonly DalamudExpertDeliveryPreparation expertDeliveryPreparation;
 
     public DalamudSquireActionGameAdapter(
         ICharacterEquipmentSnapshotSource snapshotSource,
@@ -32,6 +33,9 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
         IFramework framework,
         IDataManager dataManager,
         ISquireDispositionCapabilitySource capabilitySource,
+        ICommandManager commandManager,
+        IObjectTable objectTable,
+        ITargetManager targetManager,
         Func<bool>? hasExternalConflict = null)
     {
         this.snapshotSource = snapshotSource;
@@ -45,6 +49,13 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
         expertDeliveryUi = new DalamudExpertDeliveryUiTransaction(
             gameGui,
             observed => string.Equals(observed, hqPrompt, StringComparison.Ordinal));
+        expertDeliveryPreparation = new DalamudExpertDeliveryPreparation(
+            commandManager,
+            objectTable,
+            targetManager,
+            gameGui,
+            framework,
+            dataManager);
     }
 
     public CharacterScope? GetActiveCharacter() =>
@@ -192,6 +203,10 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
         EquipmentInstanceFingerprint fingerprint,
         CancellationToken cancellationToken)
     {
+        var preparation = await expertDeliveryPreparation.EnsureReadyAsync(cancellationToken).ConfigureAwait(false);
+        if (!preparation.Success)
+            return preparation;
+
         SquireActionResult? started = null;
         for (var attempt = 0; attempt < 90; attempt++)
         {

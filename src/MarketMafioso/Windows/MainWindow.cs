@@ -198,7 +198,17 @@ public class MainWindow : Window, IDisposable
         squireTab = new SquireTabPanel(
             config,
             squireSnapshotSource,
-            new DalamudSquireActionGameAdapter(squireSnapshotSource, playerState, Plugin.Condition, Plugin.GameGui, Plugin.Framework, dataManager, squireCapabilities),
+            new DalamudSquireActionGameAdapter(
+                squireSnapshotSource,
+                playerState,
+                Plugin.Condition,
+                Plugin.GameGui,
+                Plugin.Framework,
+                dataManager,
+                squireCapabilities,
+                Plugin.CommandManager,
+                Plugin.ObjectTable,
+                Plugin.TargetManager),
             squireCapabilities,
             AgentReviewRegistry,
             Path.Combine(Plugin.PluginInterface.GetPluginConfigDirectory(), "squire-logs"));
