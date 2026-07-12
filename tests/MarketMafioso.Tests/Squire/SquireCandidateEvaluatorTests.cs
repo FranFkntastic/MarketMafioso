@@ -210,6 +210,17 @@ public sealed class SquireCandidateEvaluatorTests
     }
 
     [Fact]
+    public void UserFacingFields_HideInternalEnumAndContainerNames()
+    {
+        var fingerprint = Instance(100, slot: 6).Fingerprint with { Container = "ArmoryWrist" };
+
+        Assert.Equal("Armory Chest: Wrists, Slot 6", SquireTabPanel.FormatLocation(fingerprint));
+        Assert.Equal("Expert Delivery", SquireTabPanel.FormatDisposition(SquireDisposition.ExpertDelivery));
+        Assert.Equal("Vendor Sale", SquireTabPanel.FormatDisposition(SquireDisposition.VendorSell));
+        Assert.Equal("Evaluation Failure", SquireTabPanel.FormatAssessment(SquireAssessment.EvaluationFailure));
+    }
+
+    [Fact]
     public void MateriaBearingObsoleteGear_RemainsExecutableWithRetrievalReason()
     {
         var snapshot = Snapshot(

@@ -264,6 +264,7 @@ internal sealed class SquireTabPanel : IDisposable
             .Where(candidate => string.IsNullOrWhiteSpace(search)
                 || candidate.Definition.Name.Contains(search, StringComparison.OrdinalIgnoreCase)
                 || candidate.Instance.Fingerprint.Container.Contains(search, StringComparison.OrdinalIgnoreCase)
+                || FormatLocation(candidate.Instance.Fingerprint).Contains(search, StringComparison.OrdinalIgnoreCase)
                 || candidate.Reasons.Any(reason => reason.Message.Contains(search, StringComparison.OrdinalIgnoreCase)))
             .ToArray();
         var tableFlags = ImGuiTableFlags.RowBg | ImGuiTableFlags.Borders | ImGuiTableFlags.ScrollY |
@@ -318,11 +319,11 @@ internal sealed class SquireTabPanel : IDisposable
             ImGui.PushTextWrapPos(itemCursor.X + itemWidth);
             DrawItemLink(value, candidate);
             ImGui.PopTextWrapPos();
-            Cell($"{candidate.Instance.Fingerprint.Container}:{candidate.Instance.Fingerprint.SlotIndex}");
+            Cell(FormatLocation(candidate.Instance.Fingerprint));
             Cell(candidate.Definition.EquipLevel.ToString());
             Cell(candidate.Definition.ItemLevel.ToString());
-            Cell(candidate.Assessment.ToString());
-            Cell(candidate.RecommendedDisposition.ToString());
+            Cell(FormatAssessment(candidate.Assessment));
+            Cell(FormatDisposition(candidate.RecommendedDisposition));
             ImGui.TableNextColumn();
             ImGui.TextUnformatted(FormatReasonSummary(candidate));
             if (ImGui.IsItemHovered())
@@ -423,7 +424,7 @@ internal sealed class SquireTabPanel : IDisposable
         ImGui.PushTextWrapPos(ImGui.GetCursorPosX() + Math.Max(360f, ImGui.GetMainViewport().Size.X * 0.4f));
         ImGui.TextColored(MarketMafiosoUiTheme.Header, definition.Name);
         ImGui.TextUnformatted($"Item {definition.ItemId} | {definition.NormalizedRarity} | {definition.Slot} | Equip Lv. {definition.EquipLevel} | Item Lv. {definition.ItemLevel}");
-        ImGui.TextUnformatted($"Location: {fingerprint.Container}:{fingerprint.SlotIndex}{(fingerprint.IsHighQuality ? " | HQ" : string.Empty)}");
+        ImGui.TextUnformatted($"Location: {FormatLocation(fingerprint)}{(fingerprint.IsHighQuality ? " | HQ" : string.Empty)}");
         ImGui.Separator();
         ImGui.TextUnformatted($"Eligible obtained jobs: {(eligibleJobs.Length == 0 ? "none" : string.Join(", ", eligibleJobs))}");
         ImGui.TextWrapped($"Stats: {(stats.Count == 0 ? "none" : string.Join(", ", stats))}");
@@ -442,7 +443,7 @@ internal sealed class SquireTabPanel : IDisposable
                 ImGui.BulletText($"{comparison.Job.Abbreviation}: {comparison.Status}; {baseline}; from {sets}");
                 if (comparison.WitnessRequirement is { } requirement)
                     foreach (var witness in requirement.ViableWitnesses)
-                        ImGui.BulletText($"  {(witness.IsGearsetReferenced ? "Saved-gearset" : "Owned loose-item")} witness: {witness.ItemName} at {witness.Fingerprint.Container}:{witness.Fingerprint.SlotIndex}{(witness.Fingerprint.IsHighQuality ? " HQ" : string.Empty)}");
+                        ImGui.BulletText($"  {(witness.IsGearsetReferenced ? "Saved-gearset" : "Owned loose-item")} witness: {witness.ItemName} at {FormatLocation(witness.Fingerprint)}{(witness.Fingerprint.IsHighQuality ? " HQ" : string.Empty)}");
             }
         }
         ImGui.PopTextWrapPos();
@@ -469,11 +470,11 @@ internal sealed class SquireTabPanel : IDisposable
     internal static SquireCandidate[] ApplyColumnFilters(IEnumerable<SquireCandidate> rows, IReadOnlyList<string> filters) =>
         rows.Where(candidate =>
             MatchesFilter(candidate.Definition.Name, filters[0]) &&
-            MatchesFilter($"{candidate.Instance.Fingerprint.Container}:{candidate.Instance.Fingerprint.SlotIndex}", filters[1]) &&
+            MatchesFilter(FormatLocation(candidate.Instance.Fingerprint), filters[1]) &&
             MatchesFilter(candidate.Definition.EquipLevel.ToString(), filters[2]) &&
             MatchesFilter(candidate.Definition.ItemLevel.ToString(), filters[3]) &&
-            MatchesFilter(candidate.Assessment.ToString(), filters[4]) &&
-            MatchesFilter(candidate.RecommendedDisposition.ToString(), filters[5]) &&
+            MatchesFilter(FormatAssessment(candidate.Assessment), filters[4]) &&
+            MatchesFilter(FormatDisposition(candidate.RecommendedDisposition), filters[5]) &&
             MatchesFilter(FormatReasons(candidate), filters[6])).ToArray();
 
     private static bool MatchesFilter(string value, string filter) =>
@@ -489,7 +490,7 @@ internal sealed class SquireTabPanel : IDisposable
         ImGui.Spacing();
         ImGui.TextColored(MarketMafiosoUiTheme.Header, candidate.Definition.Name);
         ImGui.SameLine();
-        ImGui.TextColored(MarketMafiosoUiTheme.Muted, $"{fingerprint.Container}:{fingerprint.SlotIndex} | {candidate.Assessment} | {candidate.RecommendedDisposition}");
+        ImGui.TextColored(MarketMafiosoUiTheme.Muted, $"{FormatLocation(fingerprint)} | {FormatAssessment(candidate.Assessment)} | {FormatDisposition(candidate.RecommendedDisposition)}");
         DrawItemEvidence(candidate);
         DrawRuleEvidence(analysis, candidate);
         DrawJobComparisonEvidence(candidate);
@@ -538,12 +539,12 @@ internal sealed class SquireTabPanel : IDisposable
         ImGui.TableSetupColumn("Authorized route");
         ImGui.TableHeadersRow();
         ImGui.TableNextRow();
-        EvidenceCell($"{fingerprint.Container}:{fingerprint.SlotIndex}");
+        EvidenceCell(FormatLocation(fingerprint));
         EvidenceCell($"{candidate.Definition.NormalizedRarity}, {(fingerprint.IsHighQuality ? "HQ" : "NQ")}, equip {candidate.Definition.EquipLevel}, iLv {candidate.Definition.ItemLevel}, materia {fingerprint.MateriaIds.Count}");
-        EvidenceCell(candidate.Assessment.ToString());
+        EvidenceCell(FormatAssessment(candidate.Assessment));
         EvidenceCell(candidate.SupportedDispositions.Count == 0
             ? "Keep"
-            : $"{candidate.RecommendedDisposition} (supported: {string.Join(", ", candidate.SupportedDispositions.Order())})");
+            : $"{FormatDisposition(candidate.RecommendedDisposition)} (supported: {string.Join(", ", candidate.SupportedDispositions.Order().Select(FormatDisposition))})");
         ImGui.EndTable();
     }
 
@@ -560,12 +561,7 @@ internal sealed class SquireTabPanel : IDisposable
         {
             ImGui.TableNextRow();
             EvidenceCell(ReasonLabel(reason.Code));
-            EvidenceCell(reason.Severity switch
-            {
-                SquireReasonSeverity.Blocking => "Protects",
-                SquireReasonSeverity.Warning => "Caution",
-                _ => "Supports",
-            });
+            EvidenceCell(DescribeReasonEffect(reason));
             EvidenceCell(DescribeReasonEvidence(analysis, candidate, reason));
         }
         ImGui.EndTable();
@@ -575,31 +571,69 @@ internal sealed class SquireTabPanel : IDisposable
     {
         if (candidate.UseAnalysis is not { Comparisons.Count: > 0 } use)
             return;
-        ImGui.TextColored(MarketMafiosoUiTheme.Header, "Job-by-job equipment proof");
+        ImGui.TextColored(MarketMafiosoUiTheme.Header, "Trusted baseline proof");
         if (!ImGui.BeginTable("##SquireJobEvidence", 4, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.SizingStretchProp))
             return;
-        ImGui.TableSetupColumn("Job", ImGuiTableColumnFlags.WidthFixed, 65);
-        ImGui.TableSetupColumn("Result", ImGuiTableColumnFlags.WidthFixed, 125);
         ImGui.TableSetupColumn("Trusted baseline");
-        ImGui.TableSetupColumn("Source");
+        ImGui.TableSetupColumn("Evidence source");
+        ImGui.TableSetupColumn("Covers jobs");
+        ImGui.TableSetupColumn("Result", ImGuiTableColumnFlags.WidthFixed, 135);
         ImGui.TableHeadersRow();
-        foreach (var comparison in use.Comparisons)
+        var groups = use.Comparisons.GroupBy(comparison => new
+        {
+            BaselineItemId = comparison.Baseline?.ItemId ?? 0,
+            BaselineName = comparison.Baseline?.Name ?? "No trusted baseline",
+            BaselineLevel = comparison.Baseline?.ItemLevel,
+            comparison.Status,
+            Source = DescribeComparisonSource(comparison),
+            comparison.Diagnostic,
+        });
+        foreach (var group in groups)
         {
             ImGui.TableNextRow();
-            EvidenceCell($"{comparison.Job.Abbreviation} {comparison.Job.Level}");
-            EvidenceCell(comparison.Status.ToString());
-            EvidenceCell(comparison.Baseline is null
-                ? "None"
-                : $"{comparison.Baseline.Name} (iLv {comparison.Baseline.ItemLevel})");
-            var witnesses = comparison.WitnessRequirement?.ViableWitnesses ?? [];
-            EvidenceCell(witnesses.Count > 0
-                ? string.Join("; ", witnesses.Select(value => $"{value.Fingerprint.Container}:{value.Fingerprint.SlotIndex}{(value.Fingerprint.IsHighQuality ? " HQ" : string.Empty)}"))
-                : comparison.ContributingGearsets.Count > 0
-                    ? string.Join(", ", comparison.ContributingGearsets.Select(value => value.Name).Distinct())
-                    : comparison.Diagnostic ?? "No trusted source");
+            EvidenceCell(group.Key.BaselineLevel is { } itemLevel
+                ? $"{group.Key.BaselineName} (iLv {itemLevel})"
+                : group.Key.BaselineName);
+            EvidenceCell(group.Key.Source);
+            EvidenceCell(string.Join(", ", group.Select(value => $"{value.Job.Abbreviation} {value.Job.Level}").Distinct().Order()));
+            EvidenceCell(FormatComparisonStatus(group.Key.Status));
         }
         ImGui.EndTable();
     }
+
+    private static string DescribeComparisonSource(EquipmentJobComparison comparison)
+    {
+        var witnesses = comparison.WitnessRequirement?.ViableWitnesses ?? [];
+        if (witnesses.Count > 0)
+            return string.Join("; ", witnesses.Select(value => $"{FormatLocation(value.Fingerprint)}{(value.Fingerprint.IsHighQuality ? " HQ" : string.Empty)}").Distinct().Order());
+        if (comparison.ContributingGearsets.Count > 0)
+            return $"Saved gearset: {string.Join(", ", comparison.ContributingGearsets.Select(value => value.Name).Distinct().Order())}";
+        return comparison.Diagnostic ?? "No trusted source";
+    }
+
+    private static string FormatComparisonStatus(EquipmentUseStatus status) => status switch
+    {
+        EquipmentUseStatus.Obsolete => "Strictly better",
+        EquipmentUseStatus.FutureUse => "Future-use check",
+        EquipmentUseStatus.BaselineNotBetter => "Does not dominate",
+        EquipmentUseStatus.NoObtainedEligibleJob => "No obtained job",
+        EquipmentUseStatus.LikelyCosmetic => "Likely cosmetic",
+        EquipmentUseStatus.EvaluationFailure => "Evaluation failed",
+        _ => status.ToString(),
+    };
+
+    private static string DescribeReasonEffect(SquireReason reason) => reason.Code switch
+    {
+        "MateriaRetrievalRequired" => "Pre-cleanup note",
+        "DesynthesisNotUnlocked" => "Limits route",
+        "HighRarityCleanupOverride" => "Policy note",
+        _ => reason.Severity switch
+        {
+            SquireReasonSeverity.Blocking => "Protects item",
+            SquireReasonSeverity.Warning => "Caution",
+            _ => "Supports verdict",
+        },
+    };
 
     private static string DescribeReasonEvidence(SquireAnalysis analysis, SquireCandidate candidate, SquireReason reason)
     {
@@ -612,12 +646,12 @@ internal sealed class SquireTabPanel : IDisposable
             "FutureUnlockedJobUse" => string.Join(", ", comparisons.Where(value => value.Status == EquipmentUseStatus.FutureUse).Select(value => $"{value.Job.Abbreviation} {value.Job.Level} < equip {candidate.Definition.EquipLevel}")),
             "FutureLevelingUseNotProtected" => $"Future-use protection is disabled; {comparisons.Count(value => value.Status == EquipmentUseStatus.FutureUse)} lower-level obtained job comparison(s) do not block cleanup.",
             "NoObtainedEligibleJob" => DescribeEligibleJobs(analysis, candidate),
-            "MateriaRetrievalRequired" => $"Exact slot currently contains {fingerprint.MateriaIds.Count} materia. Squire will retrieve and revalidate each one before {candidate.RecommendedDisposition}.",
-            "CurrentlyEquipped" => $"The exact {fingerprint.Container}:{fingerprint.SlotIndex} instance is equipped in the live snapshot.",
+            "MateriaRetrievalRequired" => $"Exact slot currently contains {fingerprint.MateriaIds.Count} materia. Squire will retrieve and revalidate each one before {FormatDisposition(candidate.RecommendedDisposition)}.",
+            "CurrentlyEquipped" => $"The exact {FormatLocation(fingerprint)} instance is equipped in the live snapshot.",
             "ReferencedByGearset" => DescribeGearsetReferences(analysis, candidate),
             "HighRarityEquipment" => $"The item is {candidate.Definition.NormalizedRarity}; no character-scoped cleanup override exists for item {candidate.Definition.ItemId}.",
             "HighRarityCleanupOverride" => $"A character-scoped override exists for item {candidate.Definition.ItemId}; all non-rarity protections still apply.",
-            "DesynthesisNotUnlocked" => $"Desynthesis is absent from the supported routes; current authorized routes: {string.Join(", ", candidate.SupportedDispositions.Order())}.",
+            "DesynthesisNotUnlocked" => $"Desynthesis is absent from the supported routes; current authorized routes: {string.Join(", ", candidate.SupportedDispositions.Order().Select(FormatDisposition))}.",
             "StatlessAllClassesEquipment" => "The resolved item profile contains no functional damage, defense, or class-relevant attributes, so it is treated as likely cosmetic.",
             "NoSupportedDisposition" => "The eligibility evaluator produced no authorized cleanup route; execution remains disabled.",
             _ when candidate.UseAnalysis?.Diagnostic is { Length: > 0 } diagnostic => diagnostic,
@@ -684,11 +718,11 @@ internal sealed class SquireTabPanel : IDisposable
         return spec.ColumnIndex switch
         {
             0 => SortCandidatesBy(rows, candidate => candidate.Definition.Name, spec.SortDirection),
-            1 => SortCandidatesBy(rows, candidate => $"{candidate.Instance.Fingerprint.Container}:{candidate.Instance.Fingerprint.SlotIndex:D3}", spec.SortDirection),
+            1 => SortCandidatesBy(rows, candidate => $"{FormatContainer(candidate.Instance.Fingerprint.Container)}:{candidate.Instance.Fingerprint.SlotIndex:D3}", spec.SortDirection),
             2 => SortCandidatesBy(rows, candidate => candidate.Definition.EquipLevel, spec.SortDirection),
             3 => SortCandidatesBy(rows, candidate => candidate.Definition.ItemLevel, spec.SortDirection),
-            4 => SortCandidatesBy(rows, candidate => candidate.Assessment, spec.SortDirection),
-            5 => SortCandidatesBy(rows, candidate => candidate.RecommendedDisposition, spec.SortDirection),
+            4 => SortCandidatesBy(rows, candidate => FormatAssessment(candidate.Assessment), spec.SortDirection),
+            5 => SortCandidatesBy(rows, candidate => FormatDisposition(candidate.RecommendedDisposition), spec.SortDirection),
             6 => SortCandidatesBy(rows, FormatReasons, spec.SortDirection),
             _ => rows,
         };
@@ -696,6 +730,50 @@ internal sealed class SquireTabPanel : IDisposable
 
     internal static string FormatReasons(SquireCandidate candidate) =>
         string.Join("\n", candidate.Reasons.Select(reason => $"• {reason.Message}"));
+
+    internal static string FormatLocation(EquipmentInstanceFingerprint fingerprint) =>
+        $"{FormatContainer(fingerprint.Container)}, Slot {fingerprint.SlotIndex}";
+
+    internal static string FormatContainer(string container) => container switch
+    {
+        "Inventory1" => "Inventory Bag 1",
+        "Inventory2" => "Inventory Bag 2",
+        "Inventory3" => "Inventory Bag 3",
+        "Inventory4" => "Inventory Bag 4",
+        "ArmoryMainHand" => "Armory Chest: Main Hand",
+        "ArmoryOffHand" => "Armory Chest: Off Hand",
+        "ArmoryHead" => "Armory Chest: Head",
+        "ArmoryBody" => "Armory Chest: Body",
+        "ArmoryHands" => "Armory Chest: Hands",
+        "ArmoryLegs" => "Armory Chest: Legs",
+        "ArmoryFeet" => "Armory Chest: Feet",
+        "ArmoryEar" => "Armory Chest: Earrings",
+        "ArmoryNeck" => "Armory Chest: Necklaces",
+        "ArmoryWrist" => "Armory Chest: Wrists",
+        "ArmoryRings" => "Armory Chest: Rings",
+        "ArmorySoulCrystal" => "Armory Chest: Soul Crystals",
+        _ => SplitReasonCode(container),
+    };
+
+    internal static string FormatDisposition(SquireDisposition disposition) => disposition switch
+    {
+        SquireDisposition.ExpertDelivery => "Expert Delivery",
+        SquireDisposition.VendorSell => "Vendor Sale",
+        SquireDisposition.Desynthesize => "Desynthesize",
+        SquireDisposition.Discard => "Discard",
+        SquireDisposition.Keep => "Keep",
+        SquireDisposition.Unsupported => "No supported route",
+        _ => disposition.ToString(),
+    };
+
+    internal static string FormatAssessment(SquireAssessment assessment) => assessment switch
+    {
+        SquireAssessment.EvaluationFailure => "Evaluation Failure",
+        SquireAssessment.Protected => "Protected",
+        SquireAssessment.Candidate => "Candidate",
+        SquireAssessment.Unsupported => "Unsupported",
+        _ => assessment.ToString(),
+    };
 
     internal static string FormatReasonSummary(SquireCandidate candidate) => candidate.Reasons.Count switch
     {
