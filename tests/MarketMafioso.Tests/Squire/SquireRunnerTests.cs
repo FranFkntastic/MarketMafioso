@@ -68,6 +68,19 @@ public sealed class SquireRunnerTests
     }
 
     [Fact]
+    public async Task DiagnosticRun_ProbesEveryActionWithoutExecuting()
+    {
+        var adapter = new FakeAdapter();
+        var result = await new SquireRunner(adapter).RunDiagnosticAsync(Plan(SquireDisposition.Desynthesize), CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Equal("DiagnosticCompleted", result.Code);
+        Assert.Equal(1, adapter.ProbeCount);
+        Assert.Equal(0, adapter.ExecuteCount);
+        Assert.Contains(result.Events, value => value.Kind == "DiagnosticProbe");
+    }
+
+    [Fact]
     public void DispositionBatching_GroupsActionsInExecutionOrderAndPreservesOrderWithinGroup()
     {
         var actions = new[]
@@ -101,6 +114,7 @@ public sealed class SquireRunnerTests
         public SquireRevalidationResult Validation { get; set; } = SquireRevalidationResult.Valid();
         public int RevalidateCount { get; private set; }
         public int ExecuteCount { get; private set; }
+        public int ProbeCount { get; private set; }
         public bool Released { get; private set; }
         public List<SquireDisposition> ExecutedDispositions { get; } = [];
         public CharacterScope? GetActiveCharacter() => ActiveScope;
@@ -116,6 +130,11 @@ public sealed class SquireRunnerTests
             ExecuteCount++;
             ExecutedDispositions.Add(disposition);
             return Task.FromResult(SquireActionResult.Completed());
+        }
+        public Task<SquireActionResult> ProbeAsync(EquipmentInstanceFingerprint fingerprint, SquireDisposition disposition, CancellationToken cancellationToken)
+        {
+            ProbeCount++;
+            return Task.FromResult(new SquireActionResult(true, "DiagnosticProbePassed", "Passed."));
         }
         public void ReleaseOwnedState() => Released = true;
     }

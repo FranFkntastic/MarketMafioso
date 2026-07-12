@@ -607,6 +607,21 @@ internal sealed class SquireTabPanel : IDisposable
         var canRun = value.Snapshot.Diagnostics.IsComplete && selections.Count > 0 && supportedBatch && !running;
         if (!canRun)
             ImGui.BeginDisabled();
+        if (ImGui.Button("Run diagnostic##Squire"))
+            StartDiagnosticRun(value);
+        RegisterLastControl(
+            "squire.run.diagnostic",
+            "Run the selected batch through non-destructive disposition probes",
+            AgentBridgeUiControlKind.Button,
+            canRun,
+            false,
+            selections.Count.ToString(),
+            () => StartDiagnosticRun(value));
+        if (!canRun)
+            ImGui.EndDisabled();
+        ImGui.SameLine();
+        if (!canRun)
+            ImGui.BeginDisabled();
         ImGui.Checkbox("I confirm this reviewed cleanup batch", ref runConfirmed);
         RegisterLastControl(
             "squire.run.confirm",
@@ -704,6 +719,40 @@ internal sealed class SquireTabPanel : IDisposable
         {
             status = $"Run blocked: {ex.Message}";
         }
+    }
+
+    private void StartDiagnosticRun(SquireAnalysis value)
+    {
+        if (activeRun is { IsCompleted: false })
+            return;
+        try
+        {
+            var plan = new SquireActionPlanner().Create(value, review.Selections, DateTimeOffset.UtcNow,
+                CreateProtectionPolicy(value.Snapshot.Identity.Scope?.LocalContentId));
+            runCancellation = new CancellationTokenSource();
+            activeRun = DiagnosticRunAsync(plan, runCancellation.Token);
+            status = $"Started non-destructive diagnostic run for {plan.Actions.Count} item(s).";
+        }
+        catch (Exception ex)
+        {
+            status = $"Diagnostic run blocked: {ex.Message}";
+        }
+    }
+
+    private async Task DiagnosticRunAsync(SquireActionPlan plan, CancellationToken cancellationToken)
+    {
+        var result = await new SquireRunner(actionAdapter, runEvent =>
+        {
+            if (runEvent.Kind is "DispositionGroupStart" or "DiagnosticProbeStart")
+                status = runEvent.Message;
+        }).RunDiagnosticAsync(plan, cancellationToken);
+        var version = Assembly.GetExecutingAssembly().GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
+            ?? Assembly.GetExecutingAssembly().GetName().Version?.ToString()
+            ?? "unknown";
+        var auditPath = new SquireAuditLog(Path.Combine(diagnosticDirectory, "runs")).Write(plan, result, version);
+        status = result.Success
+            ? $"Diagnostic run passed. Audit: {Path.GetFileName(auditPath)}"
+            : $"Diagnostic run stopped ({result.Code}). Audit: {Path.GetFileName(auditPath)}";
     }
 
     private async Task RunAsync(SquireActionPlan plan, CancellationToken cancellationToken)

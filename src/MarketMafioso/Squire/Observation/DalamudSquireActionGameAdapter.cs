@@ -205,6 +205,75 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
         return SquireActionResult.Fail("TransitionTimeout", "The exact slot did not transition after desynthesis confirmation.");
     }
 
+    public async Task<SquireActionResult> ProbeAsync(
+        EquipmentInstanceFingerprint fingerprint,
+        SquireDisposition disposition,
+        CancellationToken cancellationToken)
+    {
+        if (disposition == SquireDisposition.ExpertDelivery)
+        {
+            var preparation = await expertDeliveryPreparation.EnsureReadyAsync(cancellationToken).ConfigureAwait(false);
+            if (!preparation.Success)
+                return preparation;
+            return await framework.RunOnTick(() => ProbeExpertDelivery(fingerprint)).ConfigureAwait(false);
+        }
+        if (disposition != SquireDisposition.Desynthesize)
+            return SquireActionResult.Fail("DiagnosticAdapterNotEnabled", $"A non-destructive {disposition} probe is not enabled.");
+
+        var opened = await framework.RunOnTick(() => BeginDesynthesisProbe(fingerprint)).ConfigureAwait(false);
+        if (!opened.Success)
+            return opened;
+        for (var attempt = 0; attempt < 90; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var probe = await framework.RunOnTick(() => ProbeDesynthesisMenu(fingerprint)).ConfigureAwait(false);
+            if (probe.Success)
+            {
+                await framework.RunOnTick(desynthesisUi.CloseVisibleUi).ConfigureAwait(false);
+                await WaitForDesynthesisUiSettledAsync(cancellationToken).ConfigureAwait(false);
+                return probe;
+            }
+            if (probe.Code != "Pending")
+            {
+                await framework.RunOnTick(desynthesisUi.CloseVisibleUi).ConfigureAwait(false);
+                await WaitForDesynthesisUiSettledAsync(cancellationToken).ConfigureAwait(false);
+                return probe;
+            }
+            await framework.DelayTicks(1).ConfigureAwait(false);
+        }
+        await framework.RunOnTick(desynthesisUi.CloseVisibleUi).ConfigureAwait(false);
+        await WaitForDesynthesisUiSettledAsync(cancellationToken).ConfigureAwait(false);
+        return SquireActionResult.Fail("DiagnosticProbeTimeout", "The Desynthesis context menu did not become stable for inspection.");
+    }
+
+    private unsafe SquireActionResult BeginDesynthesisProbe(EquipmentInstanceFingerprint fingerprint)
+    {
+        var validation = Revalidate(fingerprint, SquireDisposition.Desynthesize);
+        if (!validation.Success)
+            return SquireActionResult.Fail(validation.Code, validation.Message);
+        var result = desynthesisUi.OpenExactSlotContextMenu(fingerprint);
+        return new(result.Success, result.Code, result.Message);
+    }
+
+    private unsafe SquireActionResult ProbeDesynthesisMenu(EquipmentInstanceFingerprint fingerprint)
+    {
+        var result = desynthesisUi.ProbeContextMenu(fingerprint);
+        return new(result.Success, result.Code, result.Message);
+    }
+
+    private unsafe SquireActionResult ProbeExpertDelivery(EquipmentInstanceFingerprint fingerprint)
+    {
+        var validation = Revalidate(fingerprint, SquireDisposition.ExpertDelivery);
+        if (!validation.Success)
+            return SquireActionResult.Fail(validation.Code, validation.Message);
+        var gc = FFXIVClientStructs.FFXIV.Client.Game.UI.PlayerState.Instance()->GrandCompany;
+        if (gc == 0)
+            return SquireActionResult.Fail("GrandCompanyUnavailable", "The active character is not employed by a Grand Company.");
+        var inventory = FFXIVClientStructs.FFXIV.Client.Game.InventoryManager.Instance();
+        var result = expertDeliveryUi.Probe(fingerprint, inventory->GetCompanySeals(gc), inventory->GetMaxCompanySeals(gc));
+        return new(result.Success, result.Code, result.Message);
+    }
+
     private async Task WaitForDesynthesisUiSettledAsync(CancellationToken cancellationToken)
     {
         var stableFrames = 0;

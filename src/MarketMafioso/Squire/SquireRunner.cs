@@ -26,6 +26,7 @@ public interface ISquireActionGameAdapter
     bool HasConflictingAutomation(SquireDisposition disposition);
     SquireRevalidationResult Revalidate(EquipmentInstanceFingerprint fingerprint, SquireDisposition disposition);
     SquireRevalidationResult RevalidateEvidence(SquireReviewedSelection selection);
+    Task<SquireActionResult> ProbeAsync(EquipmentInstanceFingerprint fingerprint, SquireDisposition disposition, CancellationToken cancellationToken);
     Task<SquireActionResult> ExecuteAsync(EquipmentInstanceFingerprint fingerprint, SquireDisposition disposition, CancellationToken cancellationToken);
     void ReleaseOwnedState();
 }
@@ -51,6 +52,12 @@ public sealed class SquireRunner
     }
 
     public async Task<SquireRunResult> RunAsync(SquireActionPlan plan, bool explicitlyConfirmed, CancellationToken cancellationToken)
+        => await RunCoreAsync(plan, explicitlyConfirmed, diagnostic: false, cancellationToken).ConfigureAwait(false);
+
+    public async Task<SquireRunResult> RunDiagnosticAsync(SquireActionPlan plan, CancellationToken cancellationToken)
+        => await RunCoreAsync(plan, explicitlyConfirmed: true, diagnostic: true, cancellationToken).ConfigureAwait(false);
+
+    private async Task<SquireRunResult> RunCoreAsync(SquireActionPlan plan, bool explicitlyConfirmed, bool diagnostic, CancellationToken cancellationToken)
     {
         var events = new List<SquireRunEvent>();
         void Record(string kind, string code, string message, EquipmentInstanceFingerprint? item = null)
@@ -91,15 +98,18 @@ public sealed class SquireRunner
                 if (!evidence.Success)
                     return Stop(evidence.Code, evidence.Message, action.Fingerprint);
 
-                Record("ActionStart", action.Disposition.ToString(), $"Starting validated action {actionIndex + 1} of {orderedActions.Count}.", action.Fingerprint);
-                var result = await adapter.ExecuteAsync(action.Fingerprint, action.Disposition, cancellationToken).ConfigureAwait(false);
-                Record("ActionResult", result.Code, result.Message, action.Fingerprint);
+                Record(diagnostic ? "DiagnosticProbeStart" : "ActionStart", action.Disposition.ToString(), $"Starting validated {(diagnostic ? "diagnostic probe" : "action")} {actionIndex + 1} of {orderedActions.Count}.", action.Fingerprint);
+                var result = diagnostic
+                    ? await adapter.ProbeAsync(action.Fingerprint, action.Disposition, cancellationToken).ConfigureAwait(false)
+                    : await adapter.ExecuteAsync(action.Fingerprint, action.Disposition, cancellationToken).ConfigureAwait(false);
+                Record(diagnostic ? "DiagnosticProbe" : "ActionResult", result.Code, result.Message, action.Fingerprint);
                 if (!result.Success)
                     return Stop(result.Code, result.Message, action.Fingerprint);
             }
 
-            Record("RunComplete", "Completed", "Every approved action completed.");
-            return new SquireRunResult(true, "Completed", events);
+            var completedCode = diagnostic ? "DiagnosticCompleted" : "Completed";
+            Record("RunComplete", completedCode, diagnostic ? "Every approved action passed its non-destructive diagnostic probe." : "Every approved action completed.");
+            return new SquireRunResult(true, completedCode, events);
         }
         catch (OperationCanceledException)
         {
