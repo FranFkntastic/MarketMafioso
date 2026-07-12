@@ -68,16 +68,25 @@ public sealed class SquireRunnerTests
     }
 
     [Fact]
-    public async Task DiagnosticRun_ProbesEveryActionWithoutExecuting()
+    public async Task DiagnosticRun_ExecutesEveryActionAndUsesDiagnosticEvents()
     {
         var adapter = new FakeAdapter();
-        var result = await new SquireRunner(adapter).RunDiagnosticAsync(Plan(SquireDisposition.Desynthesize), CancellationToken.None);
+        var result = await new SquireRunner(adapter).RunDiagnosticAsync(Plan(SquireDisposition.Desynthesize), true, CancellationToken.None);
 
         Assert.True(result.Success);
         Assert.Equal("DiagnosticCompleted", result.Code);
-        Assert.Equal(1, adapter.ProbeCount);
+        Assert.Equal(1, adapter.ExecuteCount);
+        Assert.Contains(result.Events, value => value.Kind == "DiagnosticActionResult");
+    }
+
+    [Fact]
+    public async Task DiagnosticRun_StillRequiresDestructiveConfirmation()
+    {
+        var adapter = new FakeAdapter();
+        var result = await new SquireRunner(adapter).RunDiagnosticAsync(Plan(SquireDisposition.Desynthesize), false, CancellationToken.None);
+
+        Assert.Equal("ConfirmationRequired", result.Code);
         Assert.Equal(0, adapter.ExecuteCount);
-        Assert.Contains(result.Events, value => value.Kind == "DiagnosticProbe");
     }
 
     [Fact]

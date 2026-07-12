@@ -13,6 +13,7 @@ using MarketMafioso.Windows.Main;
 using Newtonsoft.Json;
 using Franthropy.Dalamud.AgentBridge;
 using Franthropy.Dalamud.Equipment;
+using MarketMafioso.Diagnostics;
 
 namespace MarketMafioso.Windows.Squire;
 
@@ -26,6 +27,7 @@ internal sealed class SquireTabPanel : IDisposable
     private readonly SquireCandidateEvaluator evaluator = new();
     private readonly SquireReviewState review = new();
     private readonly string diagnosticDirectory;
+    private readonly UiStateCaptureService uiStateCapture;
     private SquireAnalysis? analysis;
     private string search = string.Empty;
     private bool showProtected;
@@ -49,7 +51,8 @@ internal sealed class SquireTabPanel : IDisposable
         ISquireActionGameAdapter actionAdapter,
         ISquireDispositionCapabilitySource capabilitySource,
         AgentBridgeUiReviewRegistry reviewRegistry,
-        string diagnosticDirectory)
+        string diagnosticDirectory,
+        UiStateCaptureService uiStateCapture)
     {
         this.config = config;
         this.snapshotSource = snapshotSource;
@@ -57,6 +60,7 @@ internal sealed class SquireTabPanel : IDisposable
         this.capabilitySource = capabilitySource;
         this.reviewRegistry = reviewRegistry;
         this.diagnosticDirectory = diagnosticDirectory;
+        this.uiStateCapture = uiStateCapture;
         search = config.Squire.Search;
         showProtected = config.Squire.ShowProtected;
         showNonEquipment = config.Squire.ShowNonEquipment;
@@ -607,21 +611,6 @@ internal sealed class SquireTabPanel : IDisposable
         var canRun = value.Snapshot.Diagnostics.IsComplete && selections.Count > 0 && supportedBatch && !running;
         if (!canRun)
             ImGui.BeginDisabled();
-        if (ImGui.Button("Run diagnostic##Squire"))
-            StartDiagnosticRun(value);
-        RegisterLastControl(
-            "squire.run.diagnostic",
-            "Run the selected batch through non-destructive disposition probes",
-            AgentBridgeUiControlKind.Button,
-            canRun,
-            false,
-            selections.Count.ToString(),
-            () => StartDiagnosticRun(value));
-        if (!canRun)
-            ImGui.EndDisabled();
-        ImGui.SameLine();
-        if (!canRun)
-            ImGui.BeginDisabled();
         ImGui.Checkbox("I confirm this reviewed cleanup batch", ref runConfirmed);
         RegisterLastControl(
             "squire.run.confirm",
@@ -635,6 +624,21 @@ internal sealed class SquireTabPanel : IDisposable
             ImGui.EndDisabled();
 
         var runEnabled = canRun && runConfirmed;
+        if (!runEnabled)
+            ImGui.BeginDisabled();
+        if (ImGui.Button("Run cleanup with diagnostics##Squire"))
+            StartDiagnosticRun(value);
+        RegisterLastControl(
+            "squire.run.diagnostic",
+            "Run the explicitly confirmed cleanup batch with catchall UI-state recording enabled",
+            AgentBridgeUiControlKind.Button,
+            runEnabled,
+            false,
+            selections.Count.ToString(),
+            () => StartDiagnosticRun(value));
+        if (!runEnabled)
+            ImGui.EndDisabled();
+        ImGui.SameLine();
         if (!runEnabled)
             ImGui.BeginDisabled();
         if (ImGui.Button("Run selected cleanup##Squire"))
@@ -723,15 +727,27 @@ internal sealed class SquireTabPanel : IDisposable
 
     private void StartDiagnosticRun(SquireAnalysis value)
     {
-        if (activeRun is { IsCompleted: false })
+        if (!runConfirmed || activeRun is { IsCompleted: false })
             return;
+        if (uiStateCapture.IsRecording)
+        {
+            status = "Diagnostic run blocked: the catchall UI-state recorder is already active.";
+            return;
+        }
         try
         {
             var plan = new SquireActionPlanner().Create(value, review.Selections, DateTimeOffset.UtcNow,
                 CreateProtectionPolicy(value.Snapshot.Identity.Scope?.LocalContentId));
+            runConfirmed = false;
             runCancellation = new CancellationTokenSource();
+            uiStateCapture.Start("squire-cleanup-diagnostic");
+            uiStateCapture.Mark("squire-diagnostic-start", new Dictionary<string, string?>
+            {
+                ["actionCount"] = plan.Actions.Count.ToString(),
+                ["snapshotGenerationId"] = plan.SnapshotGenerationId.ToString(),
+            });
             activeRun = DiagnosticRunAsync(plan, runCancellation.Token);
-            status = $"Started non-destructive diagnostic run for {plan.Actions.Count} item(s).";
+            status = $"Started destructive cleanup run with diagnostics for {plan.Actions.Count} item(s).";
         }
         catch (Exception ex)
         {
@@ -741,18 +757,35 @@ internal sealed class SquireTabPanel : IDisposable
 
     private async Task DiagnosticRunAsync(SquireActionPlan plan, CancellationToken cancellationToken)
     {
-        var result = await new SquireRunner(actionAdapter, runEvent =>
+        SquireRunResult result;
+        try
         {
-            if (runEvent.Kind is "DispositionGroupStart" or "DiagnosticProbeStart")
-                status = runEvent.Message;
-        }).RunDiagnosticAsync(plan, cancellationToken);
+            result = await new SquireRunner(actionAdapter, runEvent =>
+            {
+                uiStateCapture.Mark($"squire-{runEvent.Kind}", new Dictionary<string, string?>
+                {
+                    ["code"] = runEvent.Code,
+                    ["message"] = runEvent.Message,
+                    ["container"] = runEvent.Item?.Container,
+                    ["slotIndex"] = runEvent.Item?.SlotIndex.ToString(),
+                    ["itemId"] = runEvent.Item?.ItemId.ToString(),
+                });
+                if (runEvent.Kind is "DispositionGroupStart" or "DiagnosticActionStart")
+                    status = runEvent.Message;
+            }).RunDiagnosticAsync(plan, explicitlyConfirmed: true, cancellationToken);
+        }
+        finally
+        {
+            uiStateCapture.Stop();
+        }
         var version = Assembly.GetExecutingAssembly().GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
             ?? Assembly.GetExecutingAssembly().GetName().Version?.ToString()
             ?? "unknown";
         var auditPath = new SquireAuditLog(Path.Combine(diagnosticDirectory, "runs")).Write(plan, result, version);
+        var captureName = Path.GetFileName(uiStateCapture.LastCapturePath);
         status = result.Success
-            ? $"Diagnostic run passed. Audit: {Path.GetFileName(auditPath)}"
-            : $"Diagnostic run stopped ({result.Code}). Audit: {Path.GetFileName(auditPath)}";
+            ? $"Diagnostic cleanup completed. Audit: {Path.GetFileName(auditPath)} | UI capture: {captureName}"
+            : $"Diagnostic cleanup stopped ({result.Code}). Audit: {Path.GetFileName(auditPath)} | UI capture: {captureName}";
     }
 
     private async Task RunAsync(SquireActionPlan plan, CancellationToken cancellationToken)

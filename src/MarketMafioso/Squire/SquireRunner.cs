@@ -54,8 +54,8 @@ public sealed class SquireRunner
     public async Task<SquireRunResult> RunAsync(SquireActionPlan plan, bool explicitlyConfirmed, CancellationToken cancellationToken)
         => await RunCoreAsync(plan, explicitlyConfirmed, diagnostic: false, cancellationToken).ConfigureAwait(false);
 
-    public async Task<SquireRunResult> RunDiagnosticAsync(SquireActionPlan plan, CancellationToken cancellationToken)
-        => await RunCoreAsync(plan, explicitlyConfirmed: true, diagnostic: true, cancellationToken).ConfigureAwait(false);
+    public async Task<SquireRunResult> RunDiagnosticAsync(SquireActionPlan plan, bool explicitlyConfirmed, CancellationToken cancellationToken)
+        => await RunCoreAsync(plan, explicitlyConfirmed, diagnostic: true, cancellationToken).ConfigureAwait(false);
 
     private async Task<SquireRunResult> RunCoreAsync(SquireActionPlan plan, bool explicitlyConfirmed, bool diagnostic, CancellationToken cancellationToken)
     {
@@ -98,17 +98,15 @@ public sealed class SquireRunner
                 if (!evidence.Success)
                     return Stop(evidence.Code, evidence.Message, action.Fingerprint);
 
-                Record(diagnostic ? "DiagnosticProbeStart" : "ActionStart", action.Disposition.ToString(), $"Starting validated {(diagnostic ? "diagnostic probe" : "action")} {actionIndex + 1} of {orderedActions.Count}.", action.Fingerprint);
-                var result = diagnostic
-                    ? await adapter.ProbeAsync(action.Fingerprint, action.Disposition, cancellationToken).ConfigureAwait(false)
-                    : await adapter.ExecuteAsync(action.Fingerprint, action.Disposition, cancellationToken).ConfigureAwait(false);
-                Record(diagnostic ? "DiagnosticProbe" : "ActionResult", result.Code, result.Message, action.Fingerprint);
+                Record(diagnostic ? "DiagnosticActionStart" : "ActionStart", action.Disposition.ToString(), $"Starting validated action {actionIndex + 1} of {orderedActions.Count}{(diagnostic ? " with diagnostics enabled" : string.Empty)}.", action.Fingerprint);
+                var result = await adapter.ExecuteAsync(action.Fingerprint, action.Disposition, cancellationToken).ConfigureAwait(false);
+                Record(diagnostic ? "DiagnosticActionResult" : "ActionResult", result.Code, result.Message, action.Fingerprint);
                 if (!result.Success)
                     return Stop(result.Code, result.Message, action.Fingerprint);
             }
 
             var completedCode = diagnostic ? "DiagnosticCompleted" : "Completed";
-            Record("RunComplete", completedCode, diagnostic ? "Every approved action passed its non-destructive diagnostic probe." : "Every approved action completed.");
+            Record("RunComplete", completedCode, diagnostic ? "Every approved action completed with diagnostic capture enabled." : "Every approved action completed.");
             return new SquireRunResult(true, completedCode, events);
         }
         catch (OperationCanceledException)

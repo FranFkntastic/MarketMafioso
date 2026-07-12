@@ -195,6 +195,11 @@ public class MainWindow : Window, IDisposable
             config.Save);
         var squireSnapshotSource = new DalamudCharacterEquipmentSnapshotSource(playerState, dataManager, log);
         var squireCapabilities = new DalamudSquireDispositionCapabilitySource();
+        uiStateCapture = new UiStateCaptureService(
+            Plugin.AddonLifecycle,
+            Plugin.Framework,
+            Plugin.Condition,
+            Path.Combine(Plugin.PluginInterface.GetPluginConfigDirectory(), "ui-state-captures"));
         squireTab = new SquireTabPanel(
             config,
             squireSnapshotSource,
@@ -213,7 +218,8 @@ public class MainWindow : Window, IDisposable
                 Plugin.Log),
             squireCapabilities,
             AgentReviewRegistry,
-            Path.Combine(Plugin.PluginInterface.GetPluginConfigDirectory(), "squire-logs"));
+            Path.Combine(Plugin.PluginInterface.GetPluginConfigDirectory(), "squire-logs"),
+            uiStateCapture);
         statusTab = new StatusTabPanel(config, reporter, retainerCacheStore, log);
         marketAcquisitionRequestPickupPanel = new MarketAcquisitionRequestPickupPanel(
             () => _ = FetchDashboardRequestsAsync(),
@@ -292,11 +298,6 @@ public class MainWindow : Window, IDisposable
         AutomationDiagnostics = new AutomationDiagnosticsWindow(
             new AutomationDiagnosticProbeFactory(autoRetainerRefresh, viwiWorkshoppaIpc).Create(),
             () => true);
-        uiStateCapture = new UiStateCaptureService(
-            Plugin.AddonLifecycle,
-            Plugin.Framework,
-            Plugin.Condition,
-            Path.Combine(Plugin.PluginInterface.GetPluginConfigDirectory(), "ui-state-captures"));
         marketAcquisitionDiagnosticsPanel = new MarketAcquisitionDiagnosticsPanel(
             routeEngine.CreateSnapshot,
             marketAcquisitionRouteDiagnosticsDirectory,
