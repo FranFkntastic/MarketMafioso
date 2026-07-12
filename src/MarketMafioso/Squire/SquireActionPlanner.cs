@@ -27,6 +27,21 @@ public sealed record SquireActionPlan(
     string EvaluatorVersion = "owned-equipment-v1",
     SquireProtectionPolicy? Policy = null);
 
+public static class SquireDispositionBatching
+{
+    public static int ExecutionOrder(SquireDisposition disposition) => disposition switch
+    {
+        SquireDisposition.Desynthesize => 0,
+        SquireDisposition.ExpertDelivery => 1,
+        SquireDisposition.VendorSell => 2,
+        SquireDisposition.Discard => 3,
+        _ => 4,
+    };
+
+    public static IReadOnlyList<SquireReviewedSelection> Order(IEnumerable<SquireReviewedSelection> actions) =>
+        actions.OrderBy(action => ExecutionOrder(action.Disposition)).ToArray();
+}
+
 public sealed class SquireActionPlanner
 {
     public SquireActionPlan Create(
@@ -100,7 +115,7 @@ public sealed class SquireActionPlanner
 
         if (actions.Length == 0)
             throw new InvalidOperationException("At least one reviewed item is required.");
-        return new SquireActionPlan(analysis.Snapshot.GenerationId, scope, planDisposition, approvedAt, actions,
+        return new SquireActionPlan(analysis.Snapshot.GenerationId, scope, planDisposition, approvedAt, SquireDispositionBatching.Order(actions),
             Policy: policy);
     }
 

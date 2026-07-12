@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Franthropy.Dalamud.Characters;
@@ -64,9 +65,17 @@ public sealed class SquireRunner
 
         try
         {
-            for (var actionIndex = 0; actionIndex < plan.Actions.Count; actionIndex++)
+            var orderedActions = SquireDispositionBatching.Order(plan.Actions);
+            SquireDisposition? activeGroup = null;
+            for (var actionIndex = 0; actionIndex < orderedActions.Count; actionIndex++)
             {
-                var action = plan.Actions[actionIndex];
+                var action = orderedActions[actionIndex];
+                if (activeGroup != action.Disposition)
+                {
+                    activeGroup = action.Disposition;
+                    var groupCount = orderedActions.Count(value => value.Disposition == activeGroup);
+                    Record("DispositionGroupStart", activeGroup.ToString()!, $"Starting {activeGroup} batch containing {groupCount} item(s).");
+                }
                 cancellationToken.ThrowIfCancellationRequested();
                 if (adapter.GetActiveCharacter() != plan.Character)
                     return Stop("CharacterScopeChanged", "The active character no longer matches the approved plan.", action.Fingerprint);
@@ -82,7 +91,7 @@ public sealed class SquireRunner
                 if (!evidence.Success)
                     return Stop(evidence.Code, evidence.Message, action.Fingerprint);
 
-                Record("ActionStart", action.Disposition.ToString(), $"Starting validated action {actionIndex + 1} of {plan.Actions.Count}.", action.Fingerprint);
+                Record("ActionStart", action.Disposition.ToString(), $"Starting validated action {actionIndex + 1} of {orderedActions.Count}.", action.Fingerprint);
                 var result = await adapter.ExecuteAsync(action.Fingerprint, action.Disposition, cancellationToken).ConfigureAwait(false);
                 Record("ActionResult", result.Code, result.Message, action.Fingerprint);
                 if (!result.Success)

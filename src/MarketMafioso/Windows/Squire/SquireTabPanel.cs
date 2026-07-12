@@ -70,7 +70,7 @@ internal sealed class SquireTabPanel : IDisposable
             Refresh();
         RegisterLastControl("squire.refresh", "Refresh Squire analysis", AgentBridgeUiControlKind.Button, true, false, null, Refresh);
         ImGui.SameLine();
-        if (analysis is not null && ImGui.Button("Export diagnostics##Squire"))
+        if (analysis is not null && ImGui.Button("Export evaluation snapshot##Squire"))
             Export();
         ImGui.SameLine();
         ImGui.TextColored(MarketMafiosoUiTheme.Muted, status);
@@ -710,7 +710,7 @@ internal sealed class SquireTabPanel : IDisposable
     {
         var result = await new SquireRunner(actionAdapter, runEvent =>
         {
-            if (runEvent.Kind == "ActionStart")
+            if (runEvent.Kind is "DispositionGroupStart" or "ActionStart")
                 status = runEvent.Message;
         }).RunAsync(plan, explicitlyConfirmed: true, cancellationToken);
         var version = Assembly.GetExecutingAssembly().GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion

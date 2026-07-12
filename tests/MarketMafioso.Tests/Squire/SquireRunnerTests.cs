@@ -64,8 +64,29 @@ public sealed class SquireRunnerTests
         var result = await new SquireRunner(adapter).RunAsync(plan, true, CancellationToken.None);
 
         Assert.True(result.Success);
-        Assert.Equal([SquireDisposition.ExpertDelivery, SquireDisposition.Desynthesize], adapter.ExecutedDispositions);
+        Assert.Equal([SquireDisposition.Desynthesize, SquireDisposition.ExpertDelivery], adapter.ExecutedDispositions);
     }
+
+    [Fact]
+    public void DispositionBatching_GroupsActionsInExecutionOrderAndPreservesOrderWithinGroup()
+    {
+        var actions = new[]
+        {
+            Selection(1, SquireDisposition.ExpertDelivery),
+            Selection(2, SquireDisposition.Desynthesize),
+            Selection(3, SquireDisposition.ExpertDelivery),
+            Selection(4, SquireDisposition.Discard),
+            Selection(5, SquireDisposition.VendorSell),
+            Selection(6, SquireDisposition.Desynthesize),
+        };
+
+        var ordered = SquireDispositionBatching.Order(actions);
+
+        Assert.Equal([2, 6, 1, 3, 5, 4], ordered.Select(value => value.Fingerprint.SlotIndex));
+    }
+
+    private static SquireReviewedSelection Selection(int slot, SquireDisposition disposition) =>
+        new(new EquipmentInstanceFingerprint(Scope, "Inventory1", slot, (uint)(100 + slot), false, 1, 30000, 0, null, [], null, []), disposition, []);
 
     private static SquireActionPlan Plan(SquireDisposition disposition = SquireDisposition.VendorSell)
     {
