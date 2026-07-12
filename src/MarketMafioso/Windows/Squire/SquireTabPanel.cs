@@ -708,7 +708,11 @@ internal sealed class SquireTabPanel : IDisposable
 
     private async Task RunAsync(SquireActionPlan plan, CancellationToken cancellationToken)
     {
-        var result = await new SquireRunner(actionAdapter).RunAsync(plan, explicitlyConfirmed: true, cancellationToken);
+        var result = await new SquireRunner(actionAdapter, runEvent =>
+        {
+            if (runEvent.Kind == "ActionStart")
+                status = runEvent.Message;
+        }).RunAsync(plan, explicitlyConfirmed: true, cancellationToken);
         var version = Assembly.GetExecutingAssembly().GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
             ?? Assembly.GetExecutingAssembly().GetName().Version?.ToString()
             ?? "unknown";

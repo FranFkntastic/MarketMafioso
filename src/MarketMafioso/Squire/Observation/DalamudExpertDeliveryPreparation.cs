@@ -4,6 +4,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Dalamud.Game.ClientState.Objects.Types;
+using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
 using Dalamud.Utility;
 using ECommons.Automation.UIInput;
@@ -11,6 +12,7 @@ using ECommons.ExcelServices.Sheets;
 using FFXIVClientStructs.FFXIV.Client.Game.Control;
 using FFXIVClientStructs.FFXIV.Client.UI;
 using FFXIVClientStructs.FFXIV.Component.GUI;
+using MarketMafioso.Automation.Travel;
 using ClientGameObject = FFXIVClientStructs.FFXIV.Client.Game.Object.GameObject;
 
 namespace MarketMafioso.Squire.Observation;
@@ -26,6 +28,7 @@ internal sealed class DalamudExpertDeliveryPreparation
     private readonly IGameGui gameGui;
     private readonly IFramework framework;
     private readonly IDataManager dataManager;
+    private readonly LifestreamIpc lifestream;
 
     public DalamudExpertDeliveryPreparation(
         ICommandManager commandManager,
@@ -33,7 +36,9 @@ internal sealed class DalamudExpertDeliveryPreparation
         ITargetManager targetManager,
         IGameGui gameGui,
         IFramework framework,
-        IDataManager dataManager)
+        IDataManager dataManager,
+        IDalamudPluginInterface pluginInterface,
+        IPluginLog log)
     {
         this.commandManager = commandManager;
         this.objectTable = objectTable;
@@ -41,6 +46,7 @@ internal sealed class DalamudExpertDeliveryPreparation
         this.gameGui = gameGui;
         this.framework = framework;
         this.dataManager = dataManager;
+        lifestream = new LifestreamIpc(pluginInterface, log);
     }
 
     public async Task<SquireActionResult> EnsureReadyAsync(CancellationToken cancellationToken)
@@ -57,15 +63,28 @@ internal sealed class DalamudExpertDeliveryPreparation
 
         if (!await framework.RunOnTick(() => IsOfficerInRange(officerDataId)).ConfigureAwait(false))
         {
+            if (!lifestream.IsAvailable)
+                return SquireActionResult.Fail("LifestreamUnavailable", "Lifestream is not loaded, so Squire could not travel to the Grand Company.");
             if (!commandManager.ProcessCommand("/li gc"))
                 return SquireActionResult.Fail("LifestreamUnavailable", "Lifestream did not accept /li gc, so Squire could not travel to the Grand Company.");
 
+            var ipcFailed = false;
             var arrived = await WaitUntilAsync(
-                () => IsOfficerInRange(officerDataId),
+                () =>
+                {
+                    if (!lifestream.TryIsBusy(out var isBusy))
+                    {
+                        ipcFailed = true;
+                        return false;
+                    }
+                    return !isBusy && IsOfficerInRange(officerDataId);
+                },
                 TravelTimeout,
                 cancellationToken).ConfigureAwait(false);
+            if (ipcFailed)
+                return SquireActionResult.Fail("LifestreamStateUnavailable", "Lifestream accepted travel, but its busy-state IPC could not be observed safely.");
             if (!arrived)
-                return SquireActionResult.Fail("GrandCompanyTravelTimeout", "Lifestream did not bring the character within interaction range of the Grand Company delivery officer.");
+                return SquireActionResult.Fail("GrandCompanyTravelTimeout", "Lifestream did not finish navigation within interaction range of the Grand Company delivery officer.");
         }
 
         var interactionStarted = await framework.RunOnTick(() => TryInteract(officerDataId)).ConfigureAwait(false);

@@ -4,6 +4,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Dalamud.Game.ClientState.Conditions;
+using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
 using Dalamud.Utility;
 using Franthropy.Dalamud.Characters;
@@ -36,6 +37,8 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
         ICommandManager commandManager,
         IObjectTable objectTable,
         ITargetManager targetManager,
+        IDalamudPluginInterface pluginInterface,
+        IPluginLog log,
         Func<bool>? hasExternalConflict = null)
     {
         this.snapshotSource = snapshotSource;
@@ -55,7 +58,9 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
             targetManager,
             gameGui,
             framework,
-            dataManager);
+            dataManager,
+            pluginInterface,
+            log);
     }
 
     public CharacterScope? GetActiveCharacter() =>
@@ -189,6 +194,7 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
             if (transition.Success)
             {
                 desynthesisUi.Complete();
+                await WaitForDesynthesisUiSettledAsync(cancellationToken).ConfigureAwait(false);
                 return transition;
             }
             if (transition.Code != "TransitionPending")
@@ -197,6 +203,21 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
         }
 
         return SquireActionResult.Fail("TransitionTimeout", "The exact slot did not transition after desynthesis confirmation.");
+    }
+
+    private async Task WaitForDesynthesisUiSettledAsync(CancellationToken cancellationToken)
+    {
+        var stableFrames = 0;
+        for (var attempt = 0; attempt < 180; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var settled = await framework.RunOnTick(desynthesisUi.IsUiSettled).ConfigureAwait(false);
+            stableFrames = settled ? stableFrames + 1 : 0;
+            if (stableFrames >= 12)
+                return;
+            await framework.DelayTicks(1).ConfigureAwait(false);
+        }
+        throw new InvalidOperationException("Desynthesis UI did not settle after the completed inventory transition.");
     }
 
     private async Task<SquireActionResult> ExecuteExpertDeliveryAsync(

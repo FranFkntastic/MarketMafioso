@@ -208,7 +208,9 @@ public class MainWindow : Window, IDisposable
                 squireCapabilities,
                 Plugin.CommandManager,
                 Plugin.ObjectTable,
-                Plugin.TargetManager),
+                Plugin.TargetManager,
+                Plugin.PluginInterface,
+                Plugin.Log),
             squireCapabilities,
             AgentReviewRegistry,
             Path.Combine(Plugin.PluginInterface.GetPluginConfigDirectory(), "squire-logs"));

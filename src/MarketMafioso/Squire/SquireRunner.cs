@@ -64,8 +64,9 @@ public sealed class SquireRunner
 
         try
         {
-            foreach (var action in plan.Actions)
+            for (var actionIndex = 0; actionIndex < plan.Actions.Count; actionIndex++)
             {
+                var action = plan.Actions[actionIndex];
                 cancellationToken.ThrowIfCancellationRequested();
                 if (adapter.GetActiveCharacter() != plan.Character)
                     return Stop("CharacterScopeChanged", "The active character no longer matches the approved plan.", action.Fingerprint);
@@ -81,7 +82,7 @@ public sealed class SquireRunner
                 if (!evidence.Success)
                     return Stop(evidence.Code, evidence.Message, action.Fingerprint);
 
-                Record("ActionStart", action.Disposition.ToString(), "Starting validated action.", action.Fingerprint);
+                Record("ActionStart", action.Disposition.ToString(), $"Starting validated action {actionIndex + 1} of {plan.Actions.Count}.", action.Fingerprint);
                 var result = await adapter.ExecuteAsync(action.Fingerprint, action.Disposition, cancellationToken).ConfigureAwait(false);
                 Record("ActionResult", result.Code, result.Message, action.Fingerprint);
                 if (!result.Success)
