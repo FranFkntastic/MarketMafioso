@@ -7,6 +7,7 @@ using Dalamud.Game.ClientState.Conditions;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
 using Dalamud.Utility;
+using Franthropy.Dalamud.Automation.Coordination;
 using Franthropy.Dalamud.Characters;
 using Franthropy.Dalamud.Equipment;
 using Franthropy.Dalamud.Automation.Inventory;
@@ -29,6 +30,7 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
     private readonly ISquireDispositionCapabilitySource capabilitySource;
     private readonly Func<SquireProtectionPolicy> currentPolicy;
     private readonly Func<string?> describeExternalConflict;
+    private readonly ExternalAutomationInterlock gatherBuddyInterlock;
     private readonly DalamudDesynthesisUiTransaction desynthesisUi;
     private readonly DalamudMateriaRetrievalUiTransaction materiaRetrievalUi;
     private readonly DalamudExpertDeliveryUiTransaction expertDeliveryUi;
@@ -65,6 +67,8 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
         this.capabilitySource = capabilitySource;
         this.currentPolicy = currentPolicy;
         this.describeExternalConflict = describeExternalConflict ?? (() => null);
+        gatherBuddyInterlock = new ExternalAutomationInterlock(
+            new DalamudGatherBuddyRebornAutomationAdapter(pluginInterface, log));
         desynthesisUi = new DalamudDesynthesisUiTransaction(gameGui);
         materiaRetrievalUi = new DalamudMateriaRetrievalUiTransaction(gameGui, IsExactFingerprintCurrent);
         var hqPrompt = dataManager.GetExcelSheet<Addon>().GetRow(102434).Text.ExtractText().Trim();
@@ -109,8 +113,13 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
             ? new CharacterScope(playerState.ContentId, playerState.CharacterName.ToString(), playerState.HomeWorld.RowId)
             : null;
 
-    public Task<SquireActionResult> BeginDispositionGroupAsync(SquireDisposition disposition, CancellationToken cancellationToken) =>
-        Task.FromResult(SquireActionResult.Completed($"{disposition} requires no shared batch preparation; item-level readiness will be verified before each action."));
+    public Task<SquireActionResult> BeginDispositionGroupAsync(SquireDisposition disposition, CancellationToken cancellationToken)
+    {
+        var interruption = gatherBuddyInterlock.InterruptIfRunning();
+        return Task.FromResult(interruption.Success
+            ? SquireActionResult.Completed($"{interruption.Message} {disposition} item-level readiness will be verified before each action.")
+            : SquireActionResult.Fail($"ExternalAutomation{interruption.Code}", interruption.Message));
+    }
 
     public async Task EndDispositionGroupAsync(SquireDisposition disposition, CancellationToken cancellationToken)
     {
