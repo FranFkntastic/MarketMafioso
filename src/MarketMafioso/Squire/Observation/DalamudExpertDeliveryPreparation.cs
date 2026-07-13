@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Dalamud.Game.ClientState.Conditions;
 using Dalamud.Game.ClientState.Objects.Types;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
@@ -20,10 +21,12 @@ namespace MarketMafioso.Squire.Observation;
 internal sealed class DalamudExpertDeliveryPreparation
 {
     private static readonly TimeSpan TravelTimeout = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan TravelIdleFailureDelay = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan MovementTimeout = TimeSpan.FromMinutes(2);
     private static readonly TimeSpan InteractionTimeout = TimeSpan.FromSeconds(30);
 
     private readonly ICommandManager commandManager;
+    private readonly ICondition condition;
     private readonly IObjectTable objectTable;
     private readonly ITargetManager targetManager;
     private readonly IGameGui gameGui;
@@ -38,6 +41,7 @@ internal sealed class DalamudExpertDeliveryPreparation
 
     public DalamudExpertDeliveryPreparation(
         ICommandManager commandManager,
+        ICondition condition,
         IObjectTable objectTable,
         ITargetManager targetManager,
         IGameGui gameGui,
@@ -47,6 +51,7 @@ internal sealed class DalamudExpertDeliveryPreparation
         IPluginLog log)
     {
         this.commandManager = commandManager;
+        this.condition = condition;
         this.objectTable = objectTable;
         this.targetManager = targetManager;
         this.gameGui = gameGui;
@@ -65,6 +70,9 @@ internal sealed class DalamudExpertDeliveryPreparation
         if (await framework.RunOnTick(IsSupplyListReady).ConfigureAwait(false))
             return await SelectExpertDeliveryTabAsync(cancellationToken).ConfigureAwait(false);
 
+        if (condition[ConditionFlag.Unconscious])
+            return SquireActionResult.Fail("PlayerUnconscious", "The character is unconscious, so Squire cannot begin Grand Company travel safely.");
+
         var company = await framework.RunOnTick(GetGrandCompany).ConfigureAwait(false);
         if (!TryGetOfficerDataId(company, out var officerDataId))
             return SquireActionResult.Fail("GrandCompanyUnavailable", "The active character is not employed by a Grand Company.");
@@ -79,6 +87,8 @@ internal sealed class DalamudExpertDeliveryPreparation
                 return SquireActionResult.Fail("LifestreamUnavailable", "Lifestream did not accept /li gc, so Squire could not travel to the Grand Company.");
 
             var ipcFailed = false;
+            var travelEndedWithoutArrival = false;
+            Stopwatch? idleStopwatch = null;
             var arrived = await WaitUntilAsync(
                 () =>
                 {
@@ -92,12 +102,25 @@ internal sealed class DalamudExpertDeliveryPreparation
                         ? "not loaded"
                         : $"distance X={observedOfficer.YalmDistanceX:0.0}, Z={observedOfficer.YalmDistanceZ:0.0}";
                     Status = $"Waiting for /li gc to finish: Lifestream busy={isBusy}; officer {observed}.";
-                    return !isBusy && observedOfficer is not null;
+                    if (isBusy)
+                    {
+                        idleStopwatch = null;
+                        return false;
+                    }
+                    if (observedOfficer is not null)
+                        return true;
+                    idleStopwatch ??= Stopwatch.StartNew();
+                    if (idleStopwatch.Elapsed < TravelIdleFailureDelay)
+                        return false;
+                    travelEndedWithoutArrival = true;
+                    return true;
                 },
                 TravelTimeout,
                 cancellationToken).ConfigureAwait(false);
             if (ipcFailed)
                 return SquireActionResult.Fail("LifestreamStateUnavailable", "Lifestream accepted travel, but its busy-state IPC could not be observed safely.");
+            if (travelEndedWithoutArrival)
+                return SquireActionResult.Fail("GrandCompanyTravelFailed", "Lifestream stopped before the Grand Company delivery officer became available.");
             if (!arrived)
                 return SquireActionResult.Fail("GrandCompanyTravelTimeout", "Lifestream did not finish where the Grand Company delivery officer could be discovered.");
             officer = await framework.RunOnTick(() => FindOfficer(officerDataId)).ConfigureAwait(false);

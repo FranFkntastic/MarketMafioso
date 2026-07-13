@@ -74,6 +74,7 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
             IsExactFingerprintCurrent);
         expertDeliveryPreparation = new DalamudExpertDeliveryPreparation(
             commandManager,
+            condition,
             objectTable,
             targetManager,
             gameGui,
