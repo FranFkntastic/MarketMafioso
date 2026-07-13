@@ -28,7 +28,12 @@ internal sealed class DalamudSquireRecoveryCoordinator
         "MateriaRetrieve", "MateriaRetrieveDialog", "SalvageDialog", "GrandCompanySupplyList",
         "RetainerList", "Inventory", "InventoryLarge", "InventoryExpansion", "ArmouryBoard", "Character",
         "RecipeNote", "GatheringNote", "Teleport", "Map", "ContentsFinder", "ContentsFinderMenu", "Journal",
-        "ItemSearch",
+        "ItemSearch", "ItemSearchResult", "ContextMenu", "InputNumeric",
+    ];
+    private static readonly string[] UnknownModalAddons =
+    [
+        "SelectYesno", "Talk", "RetainerTaskAsk", "RetainerTaskResult", "InventoryRetainer",
+        "InventoryRetainerLarge", "InventoryRetainerSmall",
     ];
 
     private readonly ICondition condition;
@@ -113,6 +118,14 @@ internal sealed class DalamudSquireRecoveryCoordinator
             return SquireActionResult.Fail("CutsceneOwnsUi", "A cutscene owns the game UI; Squire did not dismiss or skip it.");
         if (condition[ConditionFlag.OccupiedInQuestEvent])
             return SquireActionResult.Fail("UnknownUiOwner", "A quest or NPC interaction still owns the game UI after compatible menus were closed.");
+        var occupied = GetBlockingOccupiedConditions();
+        if (occupied.Count > 0)
+            return SquireActionResult.Fail("UnknownUiOwner", $"The game still reports an occupied UI state after compatible menus were closed: {string.Join(", ", occupied)}.");
+        var unknownModals = await framework.RunOnTick(GetVisibleUnknownModals).ConfigureAwait(false);
+        if (unknownModals.Count > 0)
+            return SquireActionResult.Fail(
+                "UnknownModalOpen",
+                $"Squire left unrelated confirmation, dialogue, or retainer UI untouched: {string.Join(", ", unknownModals)}.");
         if (condition[ConditionFlag.Crafting] ||
             condition[ConditionFlag.PreparingToCraft] ||
             condition[ConditionFlag.ExecutingCraftingAction])
@@ -327,6 +340,30 @@ internal sealed class DalamudSquireRecoveryCoordinator
             }
         }
         return visible.OrderBy(value => value, StringComparer.Ordinal).ToArray();
+    }
+
+    private unsafe IReadOnlyList<string> GetVisibleUnknownModals() => UnknownModalAddons
+        .Where(addonName =>
+        {
+            var addon = gameGui.GetAddonByName<AtkUnitBase>(addonName, 1);
+            return addon != null && addon->RootNode != null && addon->RootNode->IsVisible();
+        })
+        .OrderBy(value => value, StringComparer.Ordinal)
+        .ToArray();
+
+    private IReadOnlyList<ConditionFlag> GetBlockingOccupiedConditions()
+    {
+        var flags = new[]
+        {
+            ConditionFlag.Occupied,
+            ConditionFlag.Occupied30,
+            ConditionFlag.Occupied33,
+            ConditionFlag.Occupied38,
+            ConditionFlag.Occupied39,
+            ConditionFlag.OccupiedInEvent,
+            ConditionFlag.OccupiedSummoningBell,
+        };
+        return flags.Where(flag => condition[flag]).ToArray();
     }
 
     private bool IsInDuty() => condition[ConditionFlag.BoundByDuty] || condition[ConditionFlag.BoundByDuty56];
