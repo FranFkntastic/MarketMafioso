@@ -171,7 +171,7 @@ internal sealed class SquireTabPanel : IDisposable
 
     private void MaybeRefreshAutomatically()
     {
-        if (activeRun is { IsCompleted: false })
+        if (activeRun is { IsCompleted: false } || runConfirmed)
             return;
         var now = DateTimeOffset.UtcNow;
         if (!automaticRefreshRequested && now < nextAutomaticRefreshAt)
@@ -757,6 +757,9 @@ internal sealed class SquireTabPanel : IDisposable
         }
         finally
         {
+            // Preserve at least one complete game/UI state sample even when recovery rejects the
+            // run before the next ordinary framework update.
+            await Plugin.Framework.DelayTicks(1).ConfigureAwait(false);
             uiStateCapture.Stop();
             automaticRefreshRequested = true;
         }
