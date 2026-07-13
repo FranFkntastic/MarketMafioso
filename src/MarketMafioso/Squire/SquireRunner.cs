@@ -16,7 +16,7 @@ public sealed record SquireRevalidationResult(bool Success, string Code, string 
 
 public sealed record SquireActionResult(bool Success, string Code, string Message)
 {
-    public static SquireActionResult Completed() => new(true, "Completed", "Expected slot transition was observed.");
+    public static SquireActionResult Completed(string message) => new(true, "Completed", message);
     public static SquireActionResult Fail(string code, string message) => new(false, code, message);
 }
 
@@ -30,7 +30,7 @@ public interface ISquireActionGameAdapter
     Task<SquireActionResult> ProbeAsync(EquipmentInstanceFingerprint fingerprint, SquireDisposition disposition, CancellationToken cancellationToken);
     Task<SquireActionResult> ExecuteAsync(SquireActionPlan plan, IReadOnlyList<SquireReviewedSelection> remainingActions, SquireReviewedSelection action, CancellationToken cancellationToken);
     Task<SquireActionResult> BeginDispositionGroupAsync(SquireDisposition disposition, CancellationToken cancellationToken) =>
-        Task.FromResult(SquireActionResult.Completed());
+        Task.FromResult(SquireActionResult.Completed($"{disposition} requires no shared batch preparation."));
     Task EndDispositionGroupAsync(SquireDisposition disposition, CancellationToken cancellationToken) => Task.CompletedTask;
     void ReleaseOwnedState();
     void CloseDiagnosticUi() => ReleaseOwnedState();

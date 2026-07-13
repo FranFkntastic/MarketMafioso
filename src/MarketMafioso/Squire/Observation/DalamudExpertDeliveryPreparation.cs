@@ -60,7 +60,7 @@ internal sealed class DalamudExpertDeliveryPreparation
     {
         Status = "Checking for an already-open Expert Delivery list.";
         if (await framework.RunOnTick(IsExpertDeliveryListReady).ConfigureAwait(false))
-            return SquireActionResult.Completed();
+            return SquireActionResult.Completed("The Expert Delivery item list is ready.");
 
         if (await framework.RunOnTick(IsSupplyListReady).ConfigureAwait(false))
             return await SelectExpertDeliveryTabAsync(cancellationToken).ConfigureAwait(false);
@@ -216,7 +216,7 @@ internal sealed class DalamudExpertDeliveryPreparation
         var ready = await WaitUntilAsync(IsExpertDeliveryListReady, InteractionTimeout, cancellationToken).ConfigureAwait(false);
         Status = ready ? "The Expert Delivery list is ready." : "The Expert Delivery list did not become ready.";
         return ready
-            ? SquireActionResult.Completed()
+            ? SquireActionResult.Completed("The Expert Delivery item list is ready.")
             : SquireActionResult.Fail("ExpertDeliveryListTimeout", "The Expert Delivery item list did not become ready after selecting its tab.");
     }
 

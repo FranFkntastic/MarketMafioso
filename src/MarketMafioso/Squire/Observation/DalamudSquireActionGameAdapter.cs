@@ -109,7 +109,7 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
             : null;
 
     public Task<SquireActionResult> BeginDispositionGroupAsync(SquireDisposition disposition, CancellationToken cancellationToken) =>
-        Task.FromResult(SquireActionResult.Completed());
+        Task.FromResult(SquireActionResult.Completed($"{disposition} requires no shared batch preparation; item-level readiness will be verified before each action."));
 
     public async Task EndDispositionGroupAsync(SquireDisposition disposition, CancellationToken cancellationToken)
     {
@@ -855,7 +855,7 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
         var observed = snapshot.Instances.FirstOrDefault(instance =>
             instance.Fingerprint.Container == fingerprint.Container && instance.Fingerprint.SlotIndex == fingerprint.SlotIndex);
         return observed is null || !SquireFingerprintMatcher.ExactMatch(fingerprint, observed.Fingerprint)
-            ? SquireActionResult.Completed()
+            ? SquireActionResult.Completed("Expected slot transition was observed.")
             : SquireActionResult.Fail("TransitionPending", "The exact item remains in its approved slot.");
     }
 

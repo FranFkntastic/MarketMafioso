@@ -74,7 +74,7 @@ internal sealed class DalamudVendorSalePreparation
     public async Task<SquireActionResult> EnsureReadyAsync(CancellationToken cancellationToken)
     {
         if (await framework.RunOnTick(IsShopReady).ConfigureAwait(false))
-            return SquireActionResult.Completed();
+            return SquireActionResult.Completed("The vendor shop is ready.");
 
         var vendor = await framework.RunOnTick(FindNearestVendor).ConfigureAwait(false);
         if (vendor is null)
@@ -135,7 +135,7 @@ internal sealed class DalamudVendorSalePreparation
             return false;
         }, InteractionTimeout, cancellationToken).ConfigureAwait(false);
         return ready
-            ? SquireActionResult.Completed()
+            ? SquireActionResult.Completed("The vendor shop is ready.")
             : SquireActionResult.Fail("VendorShopTimeout", "The selected vendor's normal Shop UI did not become ready.");
     }
 

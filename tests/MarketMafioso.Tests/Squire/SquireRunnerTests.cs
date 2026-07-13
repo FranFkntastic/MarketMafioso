@@ -67,6 +67,9 @@ public sealed class SquireRunnerTests
         Assert.Equal([SquireDisposition.Desynthesize, SquireDisposition.ExpertDelivery], adapter.ExecutedDispositions);
         Assert.Equal([SquireDisposition.Desynthesize, SquireDisposition.ExpertDelivery], adapter.BegunGroups);
         Assert.Equal([SquireDisposition.Desynthesize, SquireDisposition.ExpertDelivery], adapter.EndedGroups);
+        Assert.All(
+            result.Events.Where(value => value.Kind == "DispositionGroupPreparation"),
+            value => Assert.DoesNotContain("slot transition", value.Message, StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
@@ -143,7 +146,7 @@ public sealed class SquireRunnerTests
         {
             ExecuteCount++;
             ExecutedDispositions.Add(action.Disposition);
-            return Task.FromResult(SquireActionResult.Completed());
+            return Task.FromResult(SquireActionResult.Completed("Expected slot transition was observed."));
         }
         public Task<SquireActionResult> ProbeAsync(EquipmentInstanceFingerprint fingerprint, SquireDisposition disposition, CancellationToken cancellationToken)
         {
@@ -153,7 +156,7 @@ public sealed class SquireRunnerTests
         public Task<SquireActionResult> BeginDispositionGroupAsync(SquireDisposition disposition, CancellationToken cancellationToken)
         {
             BegunGroups.Add(disposition);
-            return Task.FromResult(SquireActionResult.Completed());
+            return Task.FromResult(SquireActionResult.Completed($"{disposition} test batch is ready."));
         }
         public Task EndDispositionGroupAsync(SquireDisposition disposition, CancellationToken cancellationToken)
         {
