@@ -239,6 +239,7 @@ public class MainWindow : Window, IDisposable
                         exclusions,
                         config.Squire.AllowRiskyMateriaRetrieval);
                 },
+                () => SquireExecutionRecoveryPolicy.From(config.Squire),
                 () =>
                 {
                     if (routeEngine.IsRouteActive)

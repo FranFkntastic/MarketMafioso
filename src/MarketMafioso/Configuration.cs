@@ -90,6 +90,14 @@ public sealed class SquireConfiguration
     public bool ProtectArmoireEligible { get; set; } = true;
     public bool ProtectFutureLevelingGearOptIn { get; set; }
     public int AuditRetentionDays { get; set; } = 30;
+    public bool RecoverFromKnockout { get; set; } = true;
+    public bool WaitForCombatToEnd { get; set; } = true;
+    public int CombatRecoveryTimeoutSeconds { get; set; } = 90;
+    public bool LeaveDutyToExecute { get; set; }
+    public bool PauseGatherBuddyReborn { get; set; } = true;
+    public bool PauseQuestionable { get; set; } = true;
+    public bool PauseArtisan { get; set; } = true;
+    public bool CloseSafeUserMenus { get; set; } = true;
 }
 
 [Serializable]

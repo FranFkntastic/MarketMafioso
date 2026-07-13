@@ -26,6 +26,8 @@ internal sealed class SquireSettingsPages
                 searchTerms: ["player-signed", "future job leveling", "blue purple rarity", "materia retrieval risk"]),
             new("squire.exclusions", "Squire / Cleanup Exclusions", DrawExclusions, 21,
                 searchTerms: ["blacklist", "whitelist", "excluded items", "character protection", "allow cleanup"]),
+            new("squire.recovery", "Squire / Execution Recovery", DrawRecovery, 22,
+                searchTerms: ["knocked out", "combat", "duty", "GatherBuddy", "Questionable", "Artisan", "menus", "pause automation"]),
         ];
     }
 
@@ -86,6 +88,42 @@ internal sealed class SquireSettingsPages
             }
             ImGui.PopID();
         }
+    }
+
+    private void DrawRecovery(SettingsPageContext context)
+    {
+        DrawCheckbox(context, "Return after being knocked out",
+            "Default on. Squire confirms the normal Return prompt, waits for the new area to settle, and then revalidates the batch before continuing.",
+            () => config.Squire.RecoverFromKnockout, value => config.Squire.RecoverFromKnockout = value);
+        DrawCheckbox(context, "Wait for combat to end",
+            "Default on. Squire waits without attempting to control combat; when disabled, combat stops the run immediately.",
+            () => config.Squire.WaitForCombatToEnd, value => config.Squire.WaitForCombatToEnd = value);
+
+        var timeout = Math.Clamp(config.Squire.CombatRecoveryTimeoutSeconds, 10, 600);
+        ImGui.SetNextItemWidth(ImGui.GetFontSize() * 12);
+        if (ImGui.InputInt("Combat wait timeout (seconds)", ref timeout, 10, 30))
+        {
+            config.Squire.CombatRecoveryTimeoutSeconds = Math.Clamp(timeout, 10, 600);
+            config.Save();
+        }
+        ImGui.TextWrapped("Squire stops explicitly when combat outlasts this limit; it never attacks, flees, or changes jobs to recover.");
+        ImGui.Spacing();
+
+        DrawCheckbox(context, "Leave a duty to execute cleanup",
+            "Default off. This is an extreme recovery policy. When disabled, any active duty blocks cleanup without changing the duty state.",
+            () => config.Squire.LeaveDutyToExecute, value => config.Squire.LeaveDutyToExecute = value);
+        DrawCheckbox(context, "Pause GatherBuddy Reborn",
+            "Default on. Squire requests a cooperative pause and later releases only its own request; it never disables AutoGather or clears its plan. When disabled, active AutoGather blocks cleanup.",
+            () => config.Squire.PauseGatherBuddyReborn, value => config.Squire.PauseGatherBuddyReborn = value);
+        DrawCheckbox(context, "Pause Questionable",
+            "Default on. Squire waits for Questionable to reach a safe task boundary and later releases only its own pause request. When disabled, active quest execution blocks cleanup.",
+            () => config.Squire.PauseQuestionable, value => config.Squire.PauseQuestionable = value);
+        DrawCheckbox(context, "Pause Artisan processing",
+            "Default on. Squire uses Artisan's stop-request contract and resumes it only when Squire created the request. When disabled, active processing blocks cleanup.",
+            () => config.Squire.PauseArtisan, value => config.Squire.PauseArtisan = value);
+        DrawCheckbox(context, "Close compatible user menus",
+            "Default on. Squire closes known ordinary menus through their normal UI callbacks, but never accepts an unrelated confirmation or dismisses an unknown modal.",
+            () => config.Squire.CloseSafeUserMenus, value => config.Squire.CloseSafeUserMenus = value);
     }
 
     private string ResolveItemName(uint itemId)

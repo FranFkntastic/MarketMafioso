@@ -31,6 +31,8 @@ public interface ISquireActionGameAdapter
     Task<SquireActionResult> ExecuteAsync(SquireActionPlan plan, IReadOnlyList<SquireReviewedSelection> remainingActions, SquireReviewedSelection action, CancellationToken cancellationToken);
     Task<SquireActionResult> BeginDispositionGroupAsync(SquireDisposition disposition, CancellationToken cancellationToken) =>
         Task.FromResult(SquireActionResult.Completed($"{disposition} requires no shared batch preparation."));
+    Task<SquireActionResult> RecoverExecutionStateAsync(CancellationToken cancellationToken) =>
+        Task.FromResult(SquireActionResult.Completed("No execution recovery was required."));
     Task EndDispositionGroupAsync(SquireDisposition disposition, CancellationToken cancellationToken) => Task.CompletedTask;
     void ReleaseOwnedState();
     void CloseDiagnosticUi() => ReleaseOwnedState();
@@ -89,7 +91,12 @@ public sealed class SquireRunner
                     {
                         await adapter.EndDispositionGroupAsync(completedGroup, cancellationToken).ConfigureAwait(false);
                         Record("DispositionGroupEnd", completedGroup.ToString(), $"Finished {completedGroup} batch.");
+                        activeGroup = null;
                     }
+                    var groupRecovery = await adapter.RecoverExecutionStateAsync(cancellationToken).ConfigureAwait(false);
+                    Record("ExecutionRecovery", groupRecovery.Code, groupRecovery.Message, action.Fingerprint);
+                    if (!groupRecovery.Success)
+                        return Stop(groupRecovery.Code, groupRecovery.Message, action.Fingerprint);
                     activeGroup = action.Disposition;
                     var groupPreparation = await adapter.BeginDispositionGroupAsync(activeGroup.Value, cancellationToken).ConfigureAwait(false);
                     Record("DispositionGroupPreparation", groupPreparation.Code, groupPreparation.Message);
@@ -101,8 +108,12 @@ public sealed class SquireRunner
                 cancellationToken.ThrowIfCancellationRequested();
                 if (adapter.GetActiveCharacter() != plan.Character)
                     return Stop("CharacterScopeChanged", "The active character no longer matches the approved plan.", action.Fingerprint);
+                var actionRecovery = await adapter.RecoverExecutionStateAsync(cancellationToken).ConfigureAwait(false);
+                Record("ExecutionRecovery", actionRecovery.Code, actionRecovery.Message, action.Fingerprint);
+                if (!actionRecovery.Success)
+                    return Stop(actionRecovery.Code, actionRecovery.Message, action.Fingerprint);
                 if (adapter.HasConflictingAutomation(action.Disposition))
-                    return Stop("ConflictingAutomation", "Another automation owns the required game state.", action.Fingerprint);
+                    return Stop("ConflictingAutomation", "Another automation or an unrecoverable game state owns the required game state.", action.Fingerprint);
                 var remaining = orderedActions.Skip(actionIndex).ToArray();
                 var batchValidation = adapter.RevalidateBatch(plan, remaining);
                 Record("BatchRevalidation", batchValidation.Code, batchValidation.Message, action.Fingerprint);

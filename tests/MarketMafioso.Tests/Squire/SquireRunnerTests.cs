@@ -95,6 +95,53 @@ public sealed class SquireRunnerTests
     }
 
     [Fact]
+    public async Task RecoveryFailure_StopsBeforeGroupPreparationOrExecution()
+    {
+        var adapter = new FakeAdapter
+        {
+            Recovery = SquireActionResult.Fail("PlayerInCombat", "Combat did not settle."),
+        };
+
+        var result = await new SquireRunner(adapter).RunAsync(Plan(), true, CancellationToken.None);
+
+        Assert.Equal("PlayerInCombat", result.Code);
+        Assert.Equal(1, adapter.RecoveryCount);
+        Assert.Empty(adapter.BegunGroups);
+        Assert.Equal(0, adapter.ExecuteCount);
+        Assert.True(adapter.Released);
+    }
+
+    [Fact]
+    public async Task Recovery_IsRecheckedAfterGroupPreparation()
+    {
+        var adapter = new FakeAdapter();
+
+        var result = await new SquireRunner(adapter).RunAsync(Plan(), true, CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Equal(2, adapter.RecoveryCount);
+        Assert.Equal(2, result.Events.Count(value => value.Kind == "ExecutionRecovery"));
+    }
+
+    [Fact]
+    public async Task RecoveryFailureBetweenGroups_DoesNotCloseCompletedGroupTwice()
+    {
+        var first = Selection(1, SquireDisposition.Desynthesize);
+        var second = Selection(2, SquireDisposition.ExpertDelivery);
+        var adapter = new FakeAdapter();
+        adapter.RecoveryResults.Enqueue(SquireActionResult.Completed("Ready for first group."));
+        adapter.RecoveryResults.Enqueue(SquireActionResult.Completed("Ready for first action."));
+        adapter.RecoveryResults.Enqueue(SquireActionResult.Fail("PlayerInCombat", "Combat began between groups."));
+        var plan = new SquireActionPlan(Guid.NewGuid(), Scope, SquireDisposition.Unsupported, DateTimeOffset.UtcNow, [first, second]);
+
+        var result = await new SquireRunner(adapter).RunAsync(plan, true, CancellationToken.None);
+
+        Assert.Equal("PlayerInCombat", result.Code);
+        Assert.Equal([SquireDisposition.Desynthesize], adapter.EndedGroups);
+        Assert.Equal([SquireDisposition.Desynthesize], adapter.ExecutedDispositions);
+    }
+
+    [Fact]
     public void DispositionBatching_GroupsActionsInExecutionOrderAndPreservesOrderWithinGroup()
     {
         var actions = new[]
@@ -126,6 +173,9 @@ public sealed class SquireRunnerTests
     {
         public CharacterScope? ActiveScope { get; set; } = Scope;
         public SquireRevalidationResult Validation { get; set; } = SquireRevalidationResult.Valid();
+        public SquireActionResult Recovery { get; set; } = SquireActionResult.Completed("Ready.");
+        public Queue<SquireActionResult> RecoveryResults { get; } = new();
+        public int RecoveryCount { get; private set; }
         public int RevalidateCount { get; private set; }
         public int ExecuteCount { get; private set; }
         public int ProbeCount { get; private set; }
@@ -157,6 +207,11 @@ public sealed class SquireRunnerTests
         {
             BegunGroups.Add(disposition);
             return Task.FromResult(SquireActionResult.Completed($"{disposition} test batch is ready."));
+        }
+        public Task<SquireActionResult> RecoverExecutionStateAsync(CancellationToken cancellationToken)
+        {
+            RecoveryCount++;
+            return Task.FromResult(RecoveryResults.TryDequeue(out var result) ? result : Recovery);
         }
         public Task EndDispositionGroupAsync(SquireDisposition disposition, CancellationToken cancellationToken)
         {
