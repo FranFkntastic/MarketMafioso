@@ -12,6 +12,8 @@ public sealed class SquireConfigurationTests
         Assert.False(config.ProtectPlayerSignedGear);
         Assert.False(config.ProtectFutureLevelingGearOptIn);
         Assert.False(config.ShowNonEquipment);
+        Assert.True(config.ProtectBlueAndPurpleGear);
+        Assert.False(config.AllowRiskyMateriaRetrieval);
     }
 
     [Fact]

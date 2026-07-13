@@ -30,12 +30,16 @@ public enum SquireReasonSeverity
 
 public sealed record SquireReason(string Code, string Message, SquireReasonSeverity Severity);
 
-public sealed record SquireDispositionCapabilities(bool? DesynthesisUnlocked);
+public sealed record SquireDispositionCapabilities(
+    bool? DesynthesisUnlocked,
+    bool? MateriaRetrievalUnlocked = null);
 
 public sealed record SquireProtectionPolicy(
     bool ProtectSignedGear = false,
     bool ProtectFutureLevelingGear = false,
-    IReadOnlySet<uint>? HighRarityCleanupOverrides = null);
+    bool ProtectBlueAndPurpleGear = true,
+    IReadOnlySet<uint>? CleanupExcludedItemIds = null,
+    bool AllowRiskyMateriaRetrieval = false);
 
 public sealed record SquireCandidate(
     EquipmentInstanceSnapshot Instance,

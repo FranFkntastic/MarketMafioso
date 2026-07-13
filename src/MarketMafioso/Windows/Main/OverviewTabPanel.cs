@@ -23,7 +23,7 @@ internal sealed class OverviewTabPanel
         ImGui.Separator();
 
         DrawModuleSummary("Inventory Reporter", "Enabled", InventoryModuleSummary);
-        DrawModuleSummary("Squire", "Read-only V1", "Review evidence-backed obsolete leveling-gear candidates; disposal remains disabled until live validation is complete.");
+        DrawModuleSummary("Squire", "Available", "Analyze owned equipment, review evidence-backed cleanup candidates, and run explicitly confirmed batches through Expert Delivery, desynthesis, vendor sale, or discard.");
         DrawModuleSummary("Workshop Logistics", "Enabled", WorkshopLogisticsModuleSummary);
         if (isMarketAcquisitionUnlocked())
             DrawModuleSummary("Market Acquisition", "Internal", MarketAcquisitionModuleSummary);

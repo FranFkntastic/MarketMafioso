@@ -8,26 +8,17 @@ internal sealed class InventoryReporterTabPanel
 {
     private const string InventoryModuleSummary = "Inventory Reporter exports character and retainer inventory snapshots as JSON.";
 
-    private readonly Configuration config;
     private readonly HttpReporter reporter;
     private readonly AutoRetainerRefreshService autoRetainerRefresh;
-    private readonly Action restartTimer;
-    private readonly Action saveConfig;
 
     private bool showPreview;
 
     public InventoryReporterTabPanel(
-        Configuration config,
         HttpReporter reporter,
-        AutoRetainerRefreshService autoRetainerRefresh,
-        Action restartTimer,
-        Action saveConfig)
+        AutoRetainerRefreshService autoRetainerRefresh)
     {
-        this.config = config ?? throw new ArgumentNullException(nameof(config));
         this.reporter = reporter ?? throw new ArgumentNullException(nameof(reporter));
         this.autoRetainerRefresh = autoRetainerRefresh ?? throw new ArgumentNullException(nameof(autoRetainerRefresh));
-        this.restartTimer = restartTimer ?? throw new ArgumentNullException(nameof(restartTimer));
-        this.saveConfig = saveConfig ?? throw new ArgumentNullException(nameof(saveConfig));
     }
 
     public void Draw()
@@ -37,9 +28,7 @@ internal sealed class InventoryReporterTabPanel
         ImGui.TextWrapped(InventoryModuleSummary);
         ImGui.Spacing();
 
-        DrawInventoryOptionsSection();
-        ImGui.Spacing();
-        DrawBehaviourSection();
+        ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Capture scope and automatic sending are configured under Settings / Inventory Reporter.");
         ImGui.Spacing();
         DrawActionsSection();
 
@@ -47,58 +36,6 @@ internal sealed class InventoryReporterTabPanel
         {
             ImGui.Separator();
             DrawJsonPreview();
-        }
-    }
-
-    private void DrawInventoryOptionsSection()
-    {
-        ImGui.TextColored(MarketMafiosoUiTheme.Header, "Included Data");
-        ImGui.Separator();
-
-        ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Player inventory (4 bags) is always included.");
-        ImGui.Spacing();
-
-        DrawCheckbox("Armoury Chest", v => config.IncludeArmoury = v, config.IncludeArmoury);
-        DrawCheckbox("Crystal bag", v => config.IncludeCrystals = v, config.IncludeCrystals);
-        DrawCheckbox("Equipped gear", v => config.IncludeEquipped = v, config.IncludeEquipped);
-        DrawCheckbox("Saddlebag (if subscribed)", v => config.IncludeSaddlebag = v, config.IncludeSaddlebag);
-        ImGui.Spacing();
-        DrawCheckbox("Resolve item names via Lumina", v => config.IncludeItemNames = v, config.IncludeItemNames);
-        DrawCheckbox("Include character name & world", v => config.IncludeCharacterInfo = v, config.IncludeCharacterInfo);
-    }
-
-    private void DrawBehaviourSection()
-    {
-        ImGui.TextColored(MarketMafiosoUiTheme.Header, "Automation");
-        ImGui.Separator();
-
-        DrawCheckbox("Auto-send on retainer window close", v => config.AutoSendOnRetainerClose = v, config.AutoSendOnRetainerClose);
-        ImGui.TextColored(MarketMafiosoUiTheme.Muted,
-            "  Retainer data is cached each time you close a retainer window.\n" +
-            "  Visit each retainer once per session to populate the cache.");
-
-        ImGui.Spacing();
-
-        DrawCheckbox("Enable automatic periodic sending", v =>
-        {
-            config.EnableAutoSendTimer = v;
-            restartTimer();
-        }, config.EnableAutoSendTimer);
-
-        if (config.EnableAutoSendTimer)
-        {
-            var interval = config.AutoSendIntervalMinutes;
-            ImGui.SetNextItemWidth(100);
-            if (ImGui.InputInt("Send Interval (minutes)##interval", ref interval, 1, 5))
-            {
-                if (interval < 1) interval = 1;
-                if (interval != config.AutoSendIntervalMinutes)
-                {
-                    config.AutoSendIntervalMinutes = interval;
-                    saveConfig();
-                    restartTimer();
-                }
-            }
         }
     }
 
@@ -168,13 +105,4 @@ internal sealed class InventoryReporterTabPanel
             (ImGui.ImGuiInputTextCallbackDelegate?)null);
     }
 
-    private void DrawCheckbox(string label, Action<bool> setter, bool currentValue)
-    {
-        var v = currentValue;
-        if (ImGui.Checkbox(label, ref v))
-        {
-            setter(v);
-            saveConfig();
-        }
-    }
 }

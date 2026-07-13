@@ -33,6 +33,8 @@ public class Configuration : IPluginConfiguration
     public bool EnableWorkshopHostCraftQuotes { get; set; } = false;
     public bool EnableCraftArchitectManualFallback { get; set; } = false;
     public string CraftArchitectQuoteFilePath { get; set; } = string.Empty;
+    public string SettingsSelectedPageId { get; set; } = "general.server";
+    public List<string> SettingsExpandedFolderPaths { get; set; } = ["General", "Inventory Reporter", "Squire", "Market Acquisition", "Advanced"];
 
     public bool IncludeArmoury { get; set; } = false;
     public bool IncludeCrystals { get; set; } = true;
@@ -79,8 +81,11 @@ public sealed class SquireConfiguration
     public bool ShowNonEquipment { get; set; }
     public string Search { get; set; } = string.Empty;
     public Dictionary<string, List<uint>> ExcludedItemIdsByCharacter { get; set; } = new();
+    [Obsolete("Per-item high-rarity cleanup authorization has been replaced by the blue/purple protection toggle and cleanup exclusions.")]
     public Dictionary<string, List<uint>> HighRarityCleanupItemIdsByCharacter { get; set; } = new();
+    public bool ProtectBlueAndPurpleGear { get; set; } = true;
     public bool ProtectMateria { get; set; } = true;
+    public bool AllowRiskyMateriaRetrieval { get; set; }
     public bool ProtectPlayerSignedGear { get; set; }
     public bool ProtectArmoireEligible { get; set; } = true;
     public bool ProtectFutureLevelingGearOptIn { get; set; }

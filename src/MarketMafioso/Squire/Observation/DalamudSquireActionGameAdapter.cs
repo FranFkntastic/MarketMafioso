@@ -16,16 +16,31 @@ namespace MarketMafioso.Squire.Observation;
 
 public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
 {
+    private static readonly DalamudContextMenuOptionSpec DiscardOption = new("Discard", new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        { "Discard", "捨てる", "Wegwerfen", "Jeter", "丢弃", "捨棄" });
+    private static readonly DalamudContextMenuOptionSpec SellOption = new("Sell", new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        { "Sell", "売却する", "Verkaufen", "Vendre", "出售", "出售" });
+    private static readonly string[] DiscardPromptTerms = ["Discard", "捨て", "wegwerfen", "Jeter", "丢弃", "捨棄"];
+    private static readonly string[] SellPromptTerms = ["Sell", "売却", "verkaufen", "Vendre", "出售"];
     private readonly ICharacterEquipmentSnapshotSource snapshotSource;
     private readonly IPlayerState playerState;
     private readonly ICondition condition;
     private readonly IFramework framework;
     private readonly ISquireDispositionCapabilitySource capabilitySource;
-    private readonly Func<bool> hasExternalConflict;
+    private readonly Func<SquireProtectionPolicy> currentPolicy;
+    private readonly Func<string?> describeExternalConflict;
     private readonly DalamudDesynthesisUiTransaction desynthesisUi;
     private readonly DalamudMateriaRetrievalUiTransaction materiaRetrievalUi;
     private readonly DalamudExpertDeliveryUiTransaction expertDeliveryUi;
     private readonly DalamudExpertDeliveryPreparation expertDeliveryPreparation;
+    private readonly DalamudItemContextActionUiTransaction discardUi;
+    private readonly DalamudItemContextActionUiTransaction vendorSaleUi;
+    private readonly DalamudVendorSalePreparation vendorSalePreparation;
+    private SquireDisposition? diagnosticDisposition;
+
+    public string DiagnosticStatus => diagnosticDisposition == SquireDisposition.ExpertDelivery
+        ? expertDeliveryPreparation.Status
+        : string.Empty;
 
     public DalamudSquireActionGameAdapter(
         ICharacterEquipmentSnapshotSource snapshotSource,
@@ -40,21 +55,44 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
         ITargetManager targetManager,
         IDalamudPluginInterface pluginInterface,
         IPluginLog log,
-        Func<bool>? hasExternalConflict = null)
+        Func<SquireProtectionPolicy> currentPolicy,
+        Func<string?>? describeExternalConflict = null)
     {
         this.snapshotSource = snapshotSource;
         this.playerState = playerState;
         this.condition = condition;
         this.framework = framework;
         this.capabilitySource = capabilitySource;
-        this.hasExternalConflict = hasExternalConflict ?? (() => false);
+        this.currentPolicy = currentPolicy;
+        this.describeExternalConflict = describeExternalConflict ?? (() => null);
         desynthesisUi = new DalamudDesynthesisUiTransaction(gameGui);
-        materiaRetrievalUi = new DalamudMateriaRetrievalUiTransaction(gameGui);
+        materiaRetrievalUi = new DalamudMateriaRetrievalUiTransaction(gameGui, IsExactFingerprintCurrent);
         var hqPrompt = dataManager.GetExcelSheet<Addon>().GetRow(102434).Text.ExtractText().Trim();
         expertDeliveryUi = new DalamudExpertDeliveryUiTransaction(
             gameGui,
-            observed => string.Equals(observed, hqPrompt, StringComparison.Ordinal));
+            observed => string.Equals(observed, hqPrompt, StringComparison.Ordinal),
+            IsExactFingerprintCurrent);
         expertDeliveryPreparation = new DalamudExpertDeliveryPreparation(
+            commandManager,
+            objectTable,
+            targetManager,
+            gameGui,
+            framework,
+            dataManager,
+            pluginInterface,
+            log);
+        discardUi = new DalamudItemContextActionUiTransaction(
+            gameGui,
+            DiscardOption,
+            IsExactFingerprintCurrent,
+            expectedConfirmation: (fingerprint, prompt) => IsExpectedItemConfirmation(fingerprint, prompt, DiscardPromptTerms));
+        vendorSaleUi = new DalamudItemContextActionUiTransaction(
+            gameGui,
+            SellOption,
+            IsExactFingerprintCurrent,
+            requiredVisibleAddon: "Shop",
+            expectedConfirmation: (fingerprint, prompt) => IsExpectedItemConfirmation(fingerprint, prompt, SellPromptTerms));
+        vendorSalePreparation = new DalamudVendorSalePreparation(
             commandManager,
             objectTable,
             targetManager,
@@ -70,14 +108,51 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
             ? new CharacterScope(playerState.ContentId, playerState.CharacterName.ToString(), playerState.HomeWorld.RowId)
             : null;
 
+    public Task<SquireActionResult> BeginDispositionGroupAsync(SquireDisposition disposition, CancellationToken cancellationToken) =>
+        Task.FromResult(SquireActionResult.Completed());
+
+    public async Task EndDispositionGroupAsync(SquireDisposition disposition, CancellationToken cancellationToken)
+    {
+        var ownedNpcUi = disposition switch
+        {
+            SquireDisposition.ExpertDelivery => expertDeliveryPreparation.OwnsUi,
+            SquireDisposition.VendorSell => vendorSalePreparation.OwnsUi,
+            _ => false,
+        };
+        if (disposition == SquireDisposition.ExpertDelivery)
+        {
+            if (ownedNpcUi)
+                await CloseOwnedExpertPreparationAsync(cancellationToken).ConfigureAwait(false);
+        }
+        if (disposition == SquireDisposition.VendorSell)
+            await framework.RunOnTick(vendorSalePreparation.CloseOwnedUi).ConfigureAwait(false);
+        if (ownedNpcUi && disposition == SquireDisposition.VendorSell)
+            await WaitForNpcInteractionSettledAsync(cancellationToken).ConfigureAwait(false);
+    }
+
     public bool HasConflictingAutomation(SquireDisposition disposition) =>
-        hasExternalConflict() ||
+        describeExternalConflict() is not null ||
         condition[ConditionFlag.BetweenAreas] ||
         condition[ConditionFlag.BetweenAreas51] ||
         condition[ConditionFlag.WatchingCutscene] ||
         condition[ConditionFlag.WatchingCutscene78] ||
-        (disposition != SquireDisposition.ExpertDelivery && condition[ConditionFlag.OccupiedInQuestEvent]) ||
+        (disposition is not (SquireDisposition.ExpertDelivery or SquireDisposition.VendorSell) && condition[ConditionFlag.OccupiedInQuestEvent]) ||
         condition[ConditionFlag.BeingMoved];
+
+    private string DescribeConflictingAutomation(SquireDisposition disposition)
+    {
+        if (condition[ConditionFlag.BetweenAreas] || condition[ConditionFlag.BetweenAreas51])
+            return "The character is between areas.";
+        if (condition[ConditionFlag.WatchingCutscene] || condition[ConditionFlag.WatchingCutscene78])
+            return "A cutscene owns the game UI.";
+        if (condition[ConditionFlag.BeingMoved])
+            return "The character is still being moved.";
+        if (disposition is not (SquireDisposition.ExpertDelivery or SquireDisposition.VendorSell) && condition[ConditionFlag.OccupiedInQuestEvent])
+            return "A normal NPC or quest-event interaction is still active.";
+        if (describeExternalConflict() is { } externalConflict)
+            return externalConflict;
+        return "Another automation or movement state owns the required game state.";
+    }
 
     public SquireRevalidationResult Revalidate(EquipmentInstanceFingerprint fingerprint, SquireDisposition disposition)
     {
@@ -93,7 +168,10 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
             return SquireRevalidationResult.Fail("ExactSlotMismatch", "The approved exact slot identity changed.");
         if (observed.IsEquipped)
             return SquireRevalidationResult.Fail("CurrentlyEquipped", "The item is currently equipped.");
-        if (GearsetProtectionIndex.Create(snapshot.Gearsets).IsProtected(fingerprint.ItemId))
+        var exactQualityCount = snapshot.Instances.Count(value =>
+            value.Fingerprint.ItemId == fingerprint.ItemId &&
+            value.Fingerprint.IsHighQuality == fingerprint.IsHighQuality);
+        if (GearsetProtectionIndex.Create(snapshot.Gearsets).IsProtected(fingerprint.ItemId, fingerprint.IsHighQuality, exactQualityCount))
             return SquireRevalidationResult.Fail("ReferencedByGearset", "A valid gearset now references this item ID.");
         if (!snapshot.Definitions.TryGetValue(fingerprint.ItemId, out var definition))
             return SquireRevalidationResult.Fail("ItemDefinitionMissing", "The item definition is unavailable.");
@@ -106,6 +184,32 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
         return supported
             ? SquireRevalidationResult.Valid()
             : SquireRevalidationResult.Fail("DispositionUnavailable", "The approved disposition is no longer supported.");
+    }
+
+    public SquireRevalidationResult RevalidateBatch(SquireActionPlan plan, IReadOnlyList<SquireReviewedSelection> remainingActions)
+    {
+        var snapshot = snapshotSource.Capture();
+        if (snapshot.Identity.Scope != plan.Character)
+            return SquireRevalidationResult.Fail("CharacterScopeChanged", "The active character changed before batch revalidation.");
+        var removals = remainingActions.ToDictionary(action => action.Fingerprint, action => action.Disposition, EquipmentInstanceFingerprintComparer.Instance);
+        var approvedPolicy = plan.Policy ?? new SquireProtectionPolicy();
+        var livePolicy = currentPolicy();
+        var mergedPolicy = new SquireProtectionPolicy(
+            approvedPolicy.ProtectSignedGear || livePolicy.ProtectSignedGear,
+            approvedPolicy.ProtectFutureLevelingGear || livePolicy.ProtectFutureLevelingGear,
+            approvedPolicy.ProtectBlueAndPurpleGear || livePolicy.ProtectBlueAndPurpleGear,
+            (approvedPolicy.CleanupExcludedItemIds ?? new HashSet<uint>())
+                .Union(livePolicy.CleanupExcludedItemIds ?? new HashSet<uint>())
+                .ToHashSet(),
+            approvedPolicy.AllowRiskyMateriaRetrieval && livePolicy.AllowRiskyMateriaRetrieval);
+        var result = new SquireCounterfactualBatchValidator().Validate(
+            snapshot,
+            removals,
+            capabilitySource.Capture(),
+            mergedPolicy);
+        return result.Success
+            ? SquireRevalidationResult.Valid() with { Message = result.Message }
+            : SquireRevalidationResult.Fail(result.Code, result.Message);
     }
 
     public SquireRevalidationResult RevalidateEvidence(SquireReviewedSelection selection)
@@ -139,8 +243,9 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
                 if (observed is null || !SquireFingerprintMatcher.ExactMatch(fingerprint, observed.Fingerprint) ||
                     !snapshot.Definitions.TryGetValue(fingerprint.ItemId, out var definition))
                     return SquireRevalidationResult.Fail("EvidenceWitnessChanged", $"A retained {proof.JobAbbreviation} witness changed or disappeared.");
-                if (observed.Fingerprint.MateriaIds.Count > 0 || definition.Slot != proof.Slot || definition.EquipLevel > job.Level ||
-                    !definition.EligibleClassJobIds.Contains(job.ClassJobId))
+                if (definition.Slot != proof.Slot || definition.EquipLevel > job.Level ||
+                    !definition.EligibleClassJobIds.Contains(job.ClassJobId) ||
+                    !EquipmentWearerInference.MatchesIntendedWearer(definition, job, snapshot.Jobs))
                     return SquireRevalidationResult.Fail("EvidenceWitnessIneligible", $"A retained witness is no longer safely usable by {proof.JobAbbreviation}.");
                 if (proof.Slot == EquipmentSlot.MainHand &&
                     (targetDefinition.MainHandOccupancy != definition.MainHandOccupancy ||
@@ -151,8 +256,9 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
                 if (proof.Slot == EquipmentSlot.Ring && (!definition.FitsLeftRing || !definition.FitsRightRing))
                     return SquireRevalidationResult.Fail("EvidenceRingCompatibilityChanged", $"A retained {proof.JobAbbreviation} ring no longer has proven two-slot compatibility.");
                 var stats = EquipmentInstanceStats.Resolve(observed, definition);
-                if (stats is not { IsComplete: true } || !EquipmentUseAnalyzer.Dominates(stats, targetStats, EquipmentUseAnalyzer.RelevantStats(job)))
-                    return SquireRevalidationResult.Fail("EvidenceDominanceChanged", $"A retained witness no longer directly dominates the target for {proof.JobAbbreviation}.");
+                if (stats is not { IsComplete: true } ||
+                    EquipmentUseAnalyzer.EvaluateCoverage(definition, stats, targetDefinition, targetStats, job) == EquipmentCoverageKind.None)
+                    return SquireRevalidationResult.Fail("EvidenceCoverageChanged", $"A retained witness no longer covers the target without relevant-stat loss for {proof.JobAbbreviation}.");
                 observedWitnesses.Add((observed, definition));
             }
             if (proof.Slot == EquipmentSlot.Ring && observedWitnesses[0].Definition.ItemId == observedWitnesses[1].Definition.ItemId &&
@@ -163,20 +269,35 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
     }
 
     public async Task<SquireActionResult> ExecuteAsync(
-        EquipmentInstanceFingerprint fingerprint,
-        SquireDisposition disposition,
+        SquireActionPlan plan,
+        IReadOnlyList<SquireReviewedSelection> remainingActions,
+        SquireReviewedSelection action,
         CancellationToken cancellationToken)
     {
-        if (disposition is not (SquireDisposition.Desynthesize or SquireDisposition.ExpertDelivery))
+        var fingerprint = action.Fingerprint;
+        var disposition = action.Disposition;
+        if (disposition is not (SquireDisposition.Desynthesize or SquireDisposition.ExpertDelivery or SquireDisposition.VendorSell or SquireDisposition.Discard))
             return SquireActionResult.Fail("AdapterNotEnabled", $"The {disposition} UI adapter is not enabled.");
 
-        var prepared = await RetrieveAllMateriaAsync(fingerprint, disposition, cancellationToken).ConfigureAwait(false);
+        var prepared = await RetrieveAllMateriaAsync(plan, remainingActions, action.Fingerprint, fingerprint, disposition, cancellationToken).ConfigureAwait(false);
         if (!prepared.Result.Success)
             return prepared.Result;
         fingerprint = prepared.Fingerprint;
 
         if (disposition == SquireDisposition.ExpertDelivery)
-            return await ExecuteExpertDeliveryAsync(fingerprint, cancellationToken).ConfigureAwait(false);
+            return await ExecuteExpertDeliveryAsync(plan, remainingActions, action.Fingerprint, fingerprint, cancellationToken).ConfigureAwait(false);
+        if (disposition == SquireDisposition.VendorSell)
+        {
+            var preparation = await vendorSalePreparation.EnsureReadyAsync(cancellationToken).ConfigureAwait(false);
+            if (!preparation.Success)
+                return preparation;
+            return await ExecuteContextActionAsync(plan, remainingActions, action.Fingerprint, fingerprint, disposition, vendorSaleUi, cancellationToken).ConfigureAwait(false);
+        }
+        if (disposition == SquireDisposition.Discard)
+            return await ExecuteContextActionAsync(plan, remainingActions, action.Fingerprint, fingerprint, disposition, discardUi, cancellationToken).ConfigureAwait(false);
+        var preparedBatch = RevalidatePreparedBatch(plan, remainingActions, action.Fingerprint, fingerprint);
+        if (!preparedBatch.Success)
+            return SquireActionResult.Fail(preparedBatch.Code, preparedBatch.Message);
         var started = await framework.RunOnTick(() => BeginDesynthesis(fingerprint)).ConfigureAwait(false);
         if (!started.Success)
             return started;
@@ -184,14 +305,15 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
         for (var attempt = 0; attempt < 90; attempt++)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var confirmation = await framework.RunOnTick(() => TryConfirmDesynthesis(fingerprint)).ConfigureAwait(false);
+            var confirmation = await framework.RunOnTick(() => TryConfirmDesynthesis(
+                plan, remainingActions, action.Fingerprint, fingerprint)).ConfigureAwait(false);
             if (confirmation.Code == "ConfirmationSubmitted")
                 break;
             if (confirmation.Code != "ConfirmationPending")
                 return confirmation;
             await framework.DelayTicks(1).ConfigureAwait(false);
             if (attempt == 89)
-                return SquireActionResult.Fail("ConfirmationTimeout", "The owned desynthesis dialog did not become ready.");
+                return SquireActionResult.Fail("ConfirmationTimeout", $"The owned desynthesis dialog did not become ready. Last UI observation: {desynthesisUi.Status}");
         }
 
         for (var attempt = 0; attempt < 360; attempt++)
@@ -217,12 +339,49 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
         SquireDisposition disposition,
         CancellationToken cancellationToken)
     {
+        diagnosticDisposition = disposition;
+        if (HasConflictingAutomation(disposition))
+            return SquireActionResult.Fail("ConflictingAutomation", DescribeConflictingAutomation(disposition));
         if (disposition == SquireDisposition.ExpertDelivery)
         {
-            var preparation = await expertDeliveryPreparation.EnsureReadyAsync(cancellationToken).ConfigureAwait(false);
-            if (!preparation.Success)
-                return preparation;
-            return await framework.RunOnTick(() => ProbeExpertDelivery(fingerprint)).ConfigureAwait(false);
+            var ownedUi = false;
+            try
+            {
+                var preparation = await expertDeliveryPreparation.EnsureReadyAsync(cancellationToken).ConfigureAwait(false);
+                if (!preparation.Success)
+                    return preparation;
+                ownedUi = expertDeliveryPreparation.OwnsUi;
+                return await framework.RunOnTick(() => ProbeExpertDelivery(fingerprint)).ConfigureAwait(false);
+            }
+            finally
+            {
+                ownedUi = expertDeliveryPreparation.OwnsUi;
+                if (ownedUi)
+                    await CloseOwnedExpertPreparationAsync(CancellationToken.None).ConfigureAwait(false);
+            }
+        }
+        if (disposition is SquireDisposition.VendorSell or SquireDisposition.Discard)
+        {
+            if (disposition == SquireDisposition.VendorSell)
+            {
+                var ownedUi = false;
+                try
+                {
+                    var preparation = await vendorSalePreparation.EnsureReadyAsync(cancellationToken).ConfigureAwait(false);
+                    if (!preparation.Success)
+                        return preparation;
+                    ownedUi = vendorSalePreparation.OwnsUi;
+                    return await ProbeContextActionAsync(fingerprint, disposition, vendorSaleUi, cancellationToken).ConfigureAwait(false);
+                }
+                finally
+                {
+                    await framework.RunOnTick(vendorSalePreparation.CloseOwnedUi).ConfigureAwait(false);
+                    if (ownedUi)
+                        await WaitForNpcInteractionSettledAsync(cancellationToken).ConfigureAwait(false);
+                }
+            }
+            return await ProbeContextActionAsync(fingerprint, disposition,
+                discardUi, cancellationToken).ConfigureAwait(false);
         }
         if (disposition != SquireDisposition.Desynthesize)
             return SquireActionResult.Fail("DiagnosticAdapterNotEnabled", $"A non-destructive {disposition} probe is not enabled.");
@@ -250,7 +409,9 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
         }
         await framework.RunOnTick(desynthesisUi.CloseVisibleUi).ConfigureAwait(false);
         await WaitForDesynthesisUiSettledAsync(cancellationToken).ConfigureAwait(false);
-        return SquireActionResult.Fail("DiagnosticProbeTimeout", "The Desynthesis context menu did not become stable for inspection.");
+        return SquireActionResult.Fail(
+            "DiagnosticProbeTimeout",
+            $"The Desynthesis context menu did not become stable for inspection. Last UI observation: {desynthesisUi.Status}");
     }
 
     private unsafe SquireActionResult BeginDesynthesisProbe(EquipmentInstanceFingerprint fingerprint)
@@ -265,7 +426,10 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
     private unsafe SquireActionResult ProbeDesynthesisMenu(EquipmentInstanceFingerprint fingerprint)
     {
         var result = desynthesisUi.ProbeContextMenu(fingerprint);
-        return new(result.Success, result.Code, result.Message);
+        var message = result.Code == "Pending"
+            ? result.Message
+            : $"{result.Message} Observed context menu: {desynthesisUi.DescribeContextMenu()}";
+        return new(result.Success, result.Code, message);
     }
 
     private unsafe SquireActionResult ProbeExpertDelivery(EquipmentInstanceFingerprint fingerprint)
@@ -296,13 +460,49 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
         throw new InvalidOperationException("Desynthesis UI did not settle after the completed inventory transition.");
     }
 
+    private async Task WaitForNpcInteractionSettledAsync(CancellationToken cancellationToken)
+    {
+        for (var attempt = 0; attempt < 180; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!condition[ConditionFlag.OccupiedInQuestEvent])
+                return;
+            await framework.DelayTicks(1).ConfigureAwait(false);
+        }
+        throw new InvalidOperationException("The normal NPC interaction did not settle after Squire closed its route UI.");
+    }
+
+    private async Task CloseOwnedExpertPreparationAsync(CancellationToken cancellationToken)
+    {
+        for (var attempt = 0; attempt < 300; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            await framework.RunOnTick(expertDeliveryPreparation.CloseOwnedUi).ConfigureAwait(false);
+            if (!condition[ConditionFlag.OccupiedInQuestEvent])
+            {
+                await framework.RunOnTick(expertDeliveryPreparation.CompleteOwnedUiClose).ConfigureAwait(false);
+                return;
+            }
+            await framework.DelayTicks(1).ConfigureAwait(false);
+        }
+        throw new InvalidOperationException("The normal Expert Delivery interaction did not settle after Squire closed its owned UI stack.");
+    }
+
     private async Task<(SquireActionResult Result, EquipmentInstanceFingerprint Fingerprint)> RetrieveAllMateriaAsync(
+        SquireActionPlan plan,
+        IReadOnlyList<SquireReviewedSelection> remainingActions,
+        EquipmentInstanceFingerprint originalFingerprint,
         EquipmentInstanceFingerprint fingerprint,
         SquireDisposition disposition,
         CancellationToken cancellationToken)
     {
         while (fingerprint.MateriaIds.Count > 0)
         {
+            if (HasConflictingAutomation(disposition))
+                return (SquireActionResult.Fail("ConflictingAutomation", "Another automation or movement state became active before materia retrieval."), fingerprint);
+            var batchValidation = RevalidatePreparedBatch(plan, remainingActions, originalFingerprint, fingerprint);
+            if (!batchValidation.Success)
+                return (SquireActionResult.Fail(batchValidation.Code, batchValidation.Message), fingerprint);
             var validation = Revalidate(fingerprint, disposition);
             if (!validation.Success)
                 return (SquireActionResult.Fail(validation.Code, validation.Message), fingerprint);
@@ -311,51 +511,64 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
             if (!started.Success)
                 return (SquireActionResult.Fail(started.Code, started.Message), fingerprint);
 
-            var submitted = false;
-            EquipmentInstanceFingerprint? updated = null;
-            for (var attempt = 0; attempt < 120; attempt++)
+            var transactionCompleted = false;
+            try
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                var earlyObservation = await framework.RunOnTick(() => ObserveMateriaRemoval(fingerprint)).ConfigureAwait(false);
-                if (earlyObservation.Result.Success)
+                var submitted = false;
+                EquipmentInstanceFingerprint? updated = null;
+                for (var attempt = 0; attempt < 120; attempt++)
                 {
-                    updated = earlyObservation.Fingerprint;
-                    break;
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var earlyObservation = await framework.RunOnTick(() => ObserveMateriaRemoval(fingerprint)).ConfigureAwait(false);
+                    if (earlyObservation.Result.Success)
+                    {
+                        updated = earlyObservation.Fingerprint;
+                        break;
+                    }
+                    if (earlyObservation.Result.Code != "MateriaTransitionPending")
+                        return (earlyObservation.Result, fingerprint);
+                    var advanced = await framework.RunOnTick(() => materiaRetrievalUi.Advance(
+                        fingerprint,
+                        () => !HasConflictingAutomation(disposition) &&
+                            RevalidatePreparedBatch(plan, remainingActions, originalFingerprint, fingerprint).Success)).ConfigureAwait(false);
+                    if (advanced.Code == "RetrievalSubmitted")
+                    {
+                        submitted = true;
+                        break;
+                    }
+                    if (!advanced.Success && advanced.Code != "Pending")
+                        return (SquireActionResult.Fail(advanced.Code, advanced.Message), fingerprint);
+                    await framework.DelayTicks(1).ConfigureAwait(false);
                 }
-                if (earlyObservation.Result.Code != "MateriaTransitionPending")
-                    return (earlyObservation.Result, fingerprint);
-                var advanced = await framework.RunOnTick(() => materiaRetrievalUi.Advance(fingerprint)).ConfigureAwait(false);
-                if (advanced.Code == "RetrievalSubmitted")
-                {
-                    submitted = true;
-                    break;
-                }
-                if (!advanced.Success && advanced.Code != "Pending")
-                    return (SquireActionResult.Fail(advanced.Code, advanced.Message), fingerprint);
-                await framework.DelayTicks(1).ConfigureAwait(false);
-            }
-            if (!submitted && updated is null)
-                return (SquireActionResult.Fail("MateriaRetrievalDialogTimeout", "The owned materia retrieval dialog did not become ready."), fingerprint);
+                if (!submitted && updated is null)
+                    return (SquireActionResult.Fail("MateriaRetrievalDialogTimeout", "The owned materia retrieval dialog did not become ready."), fingerprint);
 
-            for (var attempt = 0; updated is null && attempt < 240; attempt++)
+                for (var attempt = 0; updated is null && attempt < 240; attempt++)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var observation = await framework.RunOnTick(() => ObserveMateriaRemoval(fingerprint)).ConfigureAwait(false);
+                    if (observation.Result.Success)
+                    {
+                        updated = observation.Fingerprint;
+                        break;
+                    }
+                    if (observation.Result.Code != "MateriaTransitionPending")
+                        return (observation.Result, fingerprint);
+                    await framework.DelayTicks(1).ConfigureAwait(false);
+                }
+                if (updated is null)
+                    return (SquireActionResult.Fail("MateriaRetrievalTransitionTimeout", "The exact slot did not lose one attached materia after confirmation."), fingerprint);
+
+                await WaitForMateriaRetrievalUiSettledAsync(cancellationToken).ConfigureAwait(false);
+                materiaRetrievalUi.Complete();
+                transactionCompleted = true;
+                fingerprint = updated;
+            }
+            finally
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                var observation = await framework.RunOnTick(() => ObserveMateriaRemoval(fingerprint)).ConfigureAwait(false);
-                if (observation.Result.Success)
-                {
-                    updated = observation.Fingerprint;
-                    break;
-                }
-                if (observation.Result.Code != "MateriaTransitionPending")
-                    return (observation.Result, fingerprint);
-                await framework.DelayTicks(1).ConfigureAwait(false);
+                if (!transactionCompleted)
+                    await CloseOwnedUiUntilSettledAsync(materiaRetrievalUi.CloseOwnedUi, materiaRetrievalUi.IsUiSettled).ConfigureAwait(false);
             }
-            if (updated is null)
-                return (SquireActionResult.Fail("MateriaRetrievalTransitionTimeout", "The exact slot did not lose one attached materia after confirmation."), fingerprint);
-
-            materiaRetrievalUi.Complete();
-            await WaitForMateriaRetrievalUiSettledAsync(cancellationToken).ConfigureAwait(false);
-            fingerprint = updated;
         }
 
         return (new SquireActionResult(true, "MateriaReady", "The exact item has no attached materia."), fingerprint);
@@ -377,6 +590,16 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
         if (observed.MateriaIds.Count != expected.MateriaIds.Count - 1)
             return (SquireActionResult.Fail("UnexpectedMateriaTransition", "Materia retrieval changed the attached materia count by more than one."), null);
         return (new SquireActionResult(true, "MateriaRetrieved", "One attached materia was removed through the normal item UI."), observed);
+    }
+
+    private bool IsExactFingerprintCurrent(EquipmentInstanceFingerprint expected)
+    {
+        var snapshot = snapshotSource.Capture();
+        if (!snapshot.Diagnostics.IsComplete || snapshot.Identity.Scope != expected.Character)
+            return false;
+        var observed = snapshot.Instances.FirstOrDefault(instance =>
+            instance.Fingerprint.Container == expected.Container && instance.Fingerprint.SlotIndex == expected.SlotIndex);
+        return observed is not null && SquireFingerprintMatcher.ExactMatch(expected, observed.Fingerprint);
     }
 
     private async Task WaitForMateriaRetrievalUiSettledAsync(CancellationToken cancellationToken)
@@ -408,12 +631,19 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
         expected.Stains.SequenceEqual(observed.Stains);
 
     private async Task<SquireActionResult> ExecuteExpertDeliveryAsync(
+        SquireActionPlan plan,
+        IReadOnlyList<SquireReviewedSelection> remainingActions,
+        EquipmentInstanceFingerprint approvedFingerprint,
         EquipmentInstanceFingerprint fingerprint,
         CancellationToken cancellationToken)
     {
         var preparation = await expertDeliveryPreparation.EnsureReadyAsync(cancellationToken).ConfigureAwait(false);
         if (!preparation.Success)
             return preparation;
+
+        var preparedBatch = RevalidatePreparedBatch(plan, remainingActions, approvedFingerprint, fingerprint);
+        if (!preparedBatch.Success)
+            return SquireActionResult.Fail(preparedBatch.Code, preparedBatch.Message);
 
         SquireActionResult? started = null;
         for (var attempt = 0; attempt < 90; attempt++)
@@ -438,12 +668,133 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
             }
             if (transition.Code != "TransitionPending")
                 return transition;
-            var advanced = await framework.RunOnTick(expertDeliveryUi.Advance).ConfigureAwait(false);
+            var advanced = await framework.RunOnTick(() => expertDeliveryUi.Advance(() =>
+                !HasConflictingAutomation(SquireDisposition.ExpertDelivery) &&
+                RevalidatePreparedBatch(plan, remainingActions, approvedFingerprint, fingerprint).Success)).ConfigureAwait(false);
             if (!advanced.Success && advanced.Code != "Pending")
                 return SquireActionResult.Fail(advanced.Code, advanced.Message);
             await framework.DelayTicks(1).ConfigureAwait(false);
         }
         return SquireActionResult.Fail("TransitionTimeout", "The exact slot did not transition after Expert Delivery confirmation.");
+    }
+
+    private async Task<SquireActionResult> ExecuteContextActionAsync(
+        SquireActionPlan plan,
+        IReadOnlyList<SquireReviewedSelection> remainingActions,
+        EquipmentInstanceFingerprint approvedFingerprint,
+        EquipmentInstanceFingerprint fingerprint,
+        SquireDisposition disposition,
+        DalamudItemContextActionUiTransaction transaction,
+        CancellationToken cancellationToken)
+    {
+        var preparedBatch = RevalidatePreparedBatch(plan, remainingActions, approvedFingerprint, fingerprint);
+        if (!preparedBatch.Success)
+            return SquireActionResult.Fail(preparedBatch.Code, preparedBatch.Message);
+
+        DalamudUiTransactionResult? started = null;
+        for (var attempt = 0; attempt < 60; attempt++)
+        {
+            started = await framework.RunOnTick(() => transaction.Begin(fingerprint)).ConfigureAwait(false);
+            if (started.Success)
+                break;
+            if (started.Code != "InventoryOwnerPending")
+                return SquireActionResult.Fail(started.Code, started.Message);
+            await framework.DelayTicks(1).ConfigureAwait(false);
+        }
+        if (started is not { Success: true })
+            return SquireActionResult.Fail("ContextActionStartTimeout", $"The normal inventory UI did not become ready for {disposition}.");
+
+        for (var attempt = 0; attempt < 360; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var transition = await framework.RunOnTick(() => ObserveSlotTransition(fingerprint)).ConfigureAwait(false);
+            if (transition.Success)
+            {
+                await WaitForContextActionUiSettledAsync(transaction, cancellationToken).ConfigureAwait(false);
+                transaction.Complete();
+                return transition;
+            }
+            if (transition.Code != "TransitionPending")
+                return transition;
+            var advanced = await framework.RunOnTick(() => transaction.Advance(fingerprint, () =>
+                !HasConflictingAutomation(disposition) &&
+                RevalidatePreparedBatch(plan, remainingActions, approvedFingerprint, fingerprint).Success)).ConfigureAwait(false);
+            if (!advanced.Success && advanced.Code != "Pending")
+                return SquireActionResult.Fail(advanced.Code, advanced.Message);
+            await framework.DelayTicks(1).ConfigureAwait(false);
+        }
+        return SquireActionResult.Fail("TransitionTimeout", $"The exact slot did not transition after {disposition}.");
+    }
+
+    private async Task WaitForContextActionUiSettledAsync(
+        DalamudItemContextActionUiTransaction transaction,
+        CancellationToken cancellationToken)
+    {
+        var stableFrames = 0;
+        for (var attempt = 0; attempt < 180; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var settled = await framework.RunOnTick(transaction.IsUiSettled).ConfigureAwait(false);
+            stableFrames = settled ? stableFrames + 1 : 0;
+            if (stableFrames >= 6)
+                return;
+            await framework.DelayTicks(1).ConfigureAwait(false);
+        }
+        throw new InvalidOperationException("The owned item context UI did not settle after the inventory transition.");
+    }
+
+    private async Task<SquireActionResult> ProbeContextActionAsync(
+        EquipmentInstanceFingerprint fingerprint,
+        SquireDisposition disposition,
+        DalamudItemContextActionUiTransaction transaction,
+        CancellationToken cancellationToken)
+    {
+        var validation = Revalidate(fingerprint, disposition);
+        if (!validation.Success)
+            return SquireActionResult.Fail(validation.Code, validation.Message);
+        DalamudUiTransactionResult? started = null;
+        for (var attempt = 0; attempt < 60; attempt++)
+        {
+            started = await framework.RunOnTick(() => transaction.Begin(fingerprint)).ConfigureAwait(false);
+            if (started.Success)
+                break;
+            if (started.Code != "InventoryOwnerPending")
+                return SquireActionResult.Fail(started.Code, started.Message);
+            await framework.DelayTicks(1).ConfigureAwait(false);
+        }
+        if (started is not { Success: true })
+            return SquireActionResult.Fail("ContextActionStartTimeout", $"The normal inventory UI did not become ready for {disposition} probe.");
+        try
+        {
+            for (var attempt = 0; attempt < 90; attempt++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var result = await framework.RunOnTick(() => transaction.Probe(fingerprint)).ConfigureAwait(false);
+                if (result.Success)
+                    return new SquireActionResult(true, result.Code, result.Message);
+                if (result.Code != "Pending")
+                    return SquireActionResult.Fail(result.Code, result.Message);
+                await framework.DelayTicks(1).ConfigureAwait(false);
+            }
+            return SquireActionResult.Fail("DiagnosticProbeTimeout", $"The {disposition} context menu did not become stable for inspection.");
+        }
+        finally
+        {
+            await CloseOwnedUiUntilSettledAsync(transaction.CloseOwnedUi, transaction.IsUiSettled).ConfigureAwait(false);
+        }
+    }
+
+    private SquireRevalidationResult RevalidatePreparedBatch(
+        SquireActionPlan plan,
+        IReadOnlyList<SquireReviewedSelection> remainingActions,
+        EquipmentInstanceFingerprint approvedFingerprint,
+        EquipmentInstanceFingerprint preparedFingerprint)
+    {
+        var preparedActions = remainingActions.Select(action =>
+            EquipmentInstanceFingerprintComparer.Instance.Equals(action.Fingerprint, approvedFingerprint)
+                ? action with { Fingerprint = preparedFingerprint }
+                : action).ToArray();
+        return RevalidateBatch(plan, preparedActions);
     }
 
     private unsafe SquireActionResult BeginExpertDelivery(EquipmentInstanceFingerprint fingerprint)
@@ -468,7 +819,11 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
         return new SquireActionResult(result.Success, result.Code, result.Message);
     }
 
-    private unsafe SquireActionResult TryConfirmDesynthesis(EquipmentInstanceFingerprint fingerprint)
+    private unsafe SquireActionResult TryConfirmDesynthesis(
+        SquireActionPlan plan,
+        IReadOnlyList<SquireReviewedSelection> remainingActions,
+        EquipmentInstanceFingerprint approvedFingerprint,
+        EquipmentInstanceFingerprint fingerprint)
     {
         // Once the context-menu command is submitted, the client reserves the item and the
         // inventory slot is no longer a valid identity oracle. Revalidate immediately before
@@ -481,7 +836,10 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
                 return SquireActionResult.Fail(validation.Code, validation.Message);
         }
 
-        var result = desynthesisUi.AdvanceToConfirmation(fingerprint);
+        var result = desynthesisUi.AdvanceToConfirmation(fingerprint, () =>
+            !HasConflictingAutomation(SquireDisposition.Desynthesize) &&
+            (desynthesisUi.MenuSelectionSubmitted ||
+             RevalidatePreparedBatch(plan, remainingActions, approvedFingerprint, fingerprint).Success));
         if (!result.Success)
             return result.Code == "Pending"
                 ? SquireActionResult.Fail("ConfirmationPending", result.Message)
@@ -525,8 +883,67 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
 
     public void ReleaseOwnedState()
     {
-        _ = framework.RunOnTick(desynthesisUi.CloseOwnedUi);
-        _ = framework.RunOnTick(materiaRetrievalUi.CloseOwnedUi);
-        _ = framework.RunOnTick(expertDeliveryUi.CloseOwnedUi);
+        _ = ReleaseOwnedStateAsync();
+    }
+
+    private async Task ReleaseOwnedStateAsync()
+    {
+        for (var attempt = 0; attempt < 120; attempt++)
+        {
+            var settled = await framework.RunOnTick(() =>
+            {
+                desynthesisUi.CloseOwnedUi();
+                materiaRetrievalUi.CloseOwnedUi();
+                expertDeliveryUi.CloseOwnedUi();
+                discardUi.CloseOwnedUi();
+                vendorSaleUi.CloseOwnedUi();
+                return desynthesisUi.IsUiSettled() && materiaRetrievalUi.IsUiSettled() &&
+                       expertDeliveryUi.IsUiSettled() && discardUi.IsUiSettled() && vendorSaleUi.IsUiSettled();
+            }).ConfigureAwait(false);
+            if (settled)
+                break;
+            await framework.DelayTicks(1).ConfigureAwait(false);
+        }
+        if (expertDeliveryPreparation.OwnsUi)
+            await CloseOwnedExpertPreparationAsync(CancellationToken.None).ConfigureAwait(false);
+        await framework.RunOnTick(vendorSalePreparation.CloseOwnedUi).ConfigureAwait(false);
+    }
+
+    private async Task CloseOwnedUiUntilSettledAsync(System.Action close, Func<bool> isSettled)
+    {
+        for (var attempt = 0; attempt < 120; attempt++)
+        {
+            await framework.RunOnTick(close).ConfigureAwait(false);
+            if (await framework.RunOnTick(isSettled).ConfigureAwait(false))
+                return;
+            await framework.DelayTicks(1).ConfigureAwait(false);
+        }
+    }
+
+    public void CloseDiagnosticUi()
+    {
+        _ = framework.RunOnTick(() =>
+        {
+            desynthesisUi.CloseVisibleUi();
+            materiaRetrievalUi.CloseOwnedUi();
+            expertDeliveryUi.CloseOwnedUi();
+            expertDeliveryPreparation.RecoverDiagnosticUi();
+            discardUi.CloseOwnedUi();
+            vendorSaleUi.CloseOwnedUi();
+            vendorSalePreparation.RecoverDiagnosticUi();
+        });
+    }
+
+    private bool IsExpectedItemConfirmation(
+        EquipmentInstanceFingerprint fingerprint,
+        string prompt,
+        IReadOnlyList<string> semanticTerms)
+    {
+        var snapshot = snapshotSource.Capture();
+        return snapshot.Diagnostics.IsComplete &&
+               snapshot.Identity.Scope == fingerprint.Character &&
+               snapshot.Definitions.TryGetValue(fingerprint.ItemId, out var definition) &&
+               prompt.Contains(definition.Name, StringComparison.CurrentCultureIgnoreCase) &&
+               semanticTerms.Any(term => prompt.Contains(term, StringComparison.CurrentCultureIgnoreCase));
     }
 }

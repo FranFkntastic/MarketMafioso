@@ -141,7 +141,7 @@ try {
     Write-Host "Verified Dalamud target DLL: $destDll"
     Write-Host "SHA256: $destHash"
     Write-Host "Last write: $($destInfo.LastWriteTime)"
-    Write-Host "Reload MarketMafioso in Dalamud if it is already loaded."
+    Write-Host "Dalamud will automatically reload MarketMafioso from the watched DLL."
 }
 finally {
     Pop-Location

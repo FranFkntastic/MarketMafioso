@@ -24,7 +24,7 @@ public sealed record SquireActionPlan(
     SquireDisposition Disposition,
     DateTimeOffset ApprovedAt,
     IReadOnlyList<SquireReviewedSelection> Actions,
-    string EvaluatorVersion = "owned-equipment-v1",
+    string EvaluatorVersion = "retained-loadout-v3",
     SquireProtectionPolicy? Policy = null);
 
 public static class SquireDispositionBatching
@@ -48,11 +48,12 @@ public sealed class SquireActionPlanner
         SquireAnalysis analysis,
         IReadOnlyDictionary<EquipmentInstanceFingerprint, SquireDisposition> selected,
         DateTimeOffset approvedAt,
-        SquireProtectionPolicy? policy = null)
+        SquireProtectionPolicy policy,
+        SquireDispositionCapabilities capabilities)
     {
         var dispositions = selected.Values.Distinct().ToArray();
         var planDisposition = dispositions.Length == 1 ? dispositions[0] : SquireDisposition.Unsupported;
-        return CreateCore(analysis, selected, planDisposition, approvedAt, policy);
+        return CreateCore(analysis, selected, planDisposition, approvedAt, policy, capabilities);
     }
 
     public SquireActionPlan Create(
@@ -60,15 +61,17 @@ public sealed class SquireActionPlanner
         SquireDisposition disposition,
         IReadOnlyCollection<EquipmentInstanceFingerprint> selected,
         DateTimeOffset approvedAt,
-        SquireProtectionPolicy? policy = null)
-        => CreateCore(analysis, selected.ToDictionary(value => value, _ => disposition), disposition, approvedAt, policy);
+        SquireProtectionPolicy policy,
+        SquireDispositionCapabilities capabilities)
+        => CreateCore(analysis, selected.ToDictionary(value => value, _ => disposition), disposition, approvedAt, policy, capabilities);
 
     private static SquireActionPlan CreateCore(
         SquireAnalysis analysis,
         IReadOnlyDictionary<EquipmentInstanceFingerprint, SquireDisposition> selected,
         SquireDisposition planDisposition,
         DateTimeOffset approvedAt,
-        SquireProtectionPolicy? policy)
+        SquireProtectionPolicy policy,
+        SquireDispositionCapabilities capabilities)
     {
         if (!analysis.Snapshot.Diagnostics.IsComplete)
             throw new InvalidOperationException("A partial snapshot cannot produce an action plan.");
@@ -77,8 +80,16 @@ public sealed class SquireActionPlanner
         var scope = analysis.Snapshot.Identity.Scope
             ?? throw new InvalidOperationException("Character scope is unavailable.");
 
-        var byFingerprint = analysis.Candidates.ToDictionary(candidate => candidate.Instance.Fingerprint);
-        var selectedFingerprints = selected.Keys.ToHashSet();
+        var byFingerprint = analysis.Candidates.ToDictionary(candidate => candidate.Instance.Fingerprint, EquipmentInstanceFingerprintComparer.Instance);
+        var selectedFingerprints = selected.Keys.ToHashSet(EquipmentInstanceFingerprintComparer.Instance);
+        var effectivePolicy = policy;
+        var counterfactual = new SquireCounterfactualBatchValidator().Validate(
+            analysis.Snapshot,
+            selected,
+            capabilities,
+            effectivePolicy);
+        if (!counterfactual.Success)
+            throw new InvalidOperationException(counterfactual.Message);
         var actions = selected.Select(selection =>
         {
             var fingerprint = selection.Key;
@@ -88,7 +99,7 @@ public sealed class SquireActionPlanner
             if (!candidate.SupportedDispositions.Contains(disposition))
                 throw new InvalidOperationException("The selected disposition is unsupported for an item.");
             var witnessProofs = new List<SquireWitnessProof>();
-            foreach (var comparison in candidate.UseAnalysis?.Comparisons ?? [])
+            foreach (var comparison in counterfactual.UseAnalyses[fingerprint].Comparisons)
             {
                 if (comparison.WitnessRequirement is not { } requirement)
                     continue;
@@ -116,7 +127,7 @@ public sealed class SquireActionPlanner
         if (actions.Length == 0)
             throw new InvalidOperationException("At least one reviewed item is required.");
         return new SquireActionPlan(analysis.Snapshot.GenerationId, scope, planDisposition, approvedAt, SquireDispositionBatching.Order(actions),
-            Policy: policy);
+            Policy: effectivePolicy);
     }
 
     private static EquipmentDominanceWitness[]? FindRingPair(

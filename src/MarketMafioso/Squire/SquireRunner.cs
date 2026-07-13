@@ -25,10 +25,16 @@ public interface ISquireActionGameAdapter
     CharacterScope? GetActiveCharacter();
     bool HasConflictingAutomation(SquireDisposition disposition);
     SquireRevalidationResult Revalidate(EquipmentInstanceFingerprint fingerprint, SquireDisposition disposition);
+    SquireRevalidationResult RevalidateBatch(SquireActionPlan plan, IReadOnlyList<SquireReviewedSelection> remainingActions);
     SquireRevalidationResult RevalidateEvidence(SquireReviewedSelection selection);
     Task<SquireActionResult> ProbeAsync(EquipmentInstanceFingerprint fingerprint, SquireDisposition disposition, CancellationToken cancellationToken);
-    Task<SquireActionResult> ExecuteAsync(EquipmentInstanceFingerprint fingerprint, SquireDisposition disposition, CancellationToken cancellationToken);
+    Task<SquireActionResult> ExecuteAsync(SquireActionPlan plan, IReadOnlyList<SquireReviewedSelection> remainingActions, SquireReviewedSelection action, CancellationToken cancellationToken);
+    Task<SquireActionResult> BeginDispositionGroupAsync(SquireDisposition disposition, CancellationToken cancellationToken) =>
+        Task.FromResult(SquireActionResult.Completed());
+    Task EndDispositionGroupAsync(SquireDisposition disposition, CancellationToken cancellationToken) => Task.CompletedTask;
     void ReleaseOwnedState();
+    void CloseDiagnosticUi() => ReleaseOwnedState();
+    string DiagnosticStatus => string.Empty;
 }
 
 public sealed record SquireRunEvent(
@@ -70,16 +76,25 @@ public sealed class SquireRunner
         if (!explicitlyConfirmed)
             return Stop("ConfirmationRequired", "The reviewed run was not explicitly confirmed.");
 
+        SquireDisposition? activeGroup = null;
         try
         {
             var orderedActions = SquireDispositionBatching.Order(plan.Actions);
-            SquireDisposition? activeGroup = null;
             for (var actionIndex = 0; actionIndex < orderedActions.Count; actionIndex++)
             {
                 var action = orderedActions[actionIndex];
                 if (activeGroup != action.Disposition)
                 {
+                    if (activeGroup is { } completedGroup)
+                    {
+                        await adapter.EndDispositionGroupAsync(completedGroup, cancellationToken).ConfigureAwait(false);
+                        Record("DispositionGroupEnd", completedGroup.ToString(), $"Finished {completedGroup} batch.");
+                    }
                     activeGroup = action.Disposition;
+                    var groupPreparation = await adapter.BeginDispositionGroupAsync(activeGroup.Value, cancellationToken).ConfigureAwait(false);
+                    Record("DispositionGroupPreparation", groupPreparation.Code, groupPreparation.Message);
+                    if (!groupPreparation.Success)
+                        return Stop(groupPreparation.Code, groupPreparation.Message, action.Fingerprint);
                     var groupCount = orderedActions.Count(value => value.Disposition == activeGroup);
                     Record("DispositionGroupStart", activeGroup.ToString()!, $"Starting {activeGroup} batch containing {groupCount} item(s).");
                 }
@@ -88,6 +103,11 @@ public sealed class SquireRunner
                     return Stop("CharacterScopeChanged", "The active character no longer matches the approved plan.", action.Fingerprint);
                 if (adapter.HasConflictingAutomation(action.Disposition))
                     return Stop("ConflictingAutomation", "Another automation owns the required game state.", action.Fingerprint);
+                var remaining = orderedActions.Skip(actionIndex).ToArray();
+                var batchValidation = adapter.RevalidateBatch(plan, remaining);
+                Record("BatchRevalidation", batchValidation.Code, batchValidation.Message, action.Fingerprint);
+                if (!batchValidation.Success)
+                    return Stop(batchValidation.Code, batchValidation.Message, action.Fingerprint);
                 var validation = adapter.Revalidate(action.Fingerprint, action.Disposition);
                 Record("Revalidation", validation.Code, validation.Message, action.Fingerprint);
                 if (!validation.Success)
@@ -99,10 +119,17 @@ public sealed class SquireRunner
                     return Stop(evidence.Code, evidence.Message, action.Fingerprint);
 
                 Record(diagnostic ? "DiagnosticActionStart" : "ActionStart", action.Disposition.ToString(), $"Starting validated action {actionIndex + 1} of {orderedActions.Count}{(diagnostic ? " with diagnostics enabled" : string.Empty)}.", action.Fingerprint);
-                var result = await adapter.ExecuteAsync(action.Fingerprint, action.Disposition, cancellationToken).ConfigureAwait(false);
+                var result = await adapter.ExecuteAsync(plan, remaining, action, cancellationToken).ConfigureAwait(false);
                 Record(diagnostic ? "DiagnosticActionResult" : "ActionResult", result.Code, result.Message, action.Fingerprint);
                 if (!result.Success)
                     return Stop(result.Code, result.Message, action.Fingerprint);
+            }
+
+            if (activeGroup is { } finalGroup)
+            {
+                await adapter.EndDispositionGroupAsync(finalGroup, cancellationToken).ConfigureAwait(false);
+                Record("DispositionGroupEnd", finalGroup.ToString(), $"Finished {finalGroup} batch.");
+                activeGroup = null;
             }
 
             var completedCode = diagnostic ? "DiagnosticCompleted" : "Completed";
@@ -119,6 +146,11 @@ public sealed class SquireRunner
         }
         finally
         {
+            if (activeGroup is { } unfinishedGroup)
+            {
+                try { await adapter.EndDispositionGroupAsync(unfinishedGroup, CancellationToken.None).ConfigureAwait(false); }
+                catch { }
+            }
             adapter.ReleaseOwnedState();
         }
 

@@ -92,6 +92,7 @@ public sealed class DalamudCharacterEquipmentSnapshotSource : ICharacterEquipmen
                     var soulCrystalId = job.ItemSoulCrystal.RowId;
                     uint? parentClassJobId = job.ClassJobParent.RowId == 0 ? null : job.ClassJobParent.RowId;
                     var isUnlocked = IsJobUnlocked(level, job.RowId, parentClassJobId, soulCrystalId, ownedItemIds);
+                    var primaryStat = MapStatSemantic(job.PrimaryStat, baseParams.GetRowOrDefault(job.PrimaryStat)?.Name.ToString());
                     return new CharacterJobSnapshot(
                         job.RowId,
                         job.Abbreviation.ToString(),
@@ -99,8 +100,8 @@ public sealed class DalamudCharacterEquipmentSnapshotSource : ICharacterEquipmen
                         checked((uint)Math.Max(0, (int)level)),
                         isUnlocked,
                         parentClassJobId,
-                        FormatRole(job.Role),
-                        MapStatSemantic(job.PrimaryStat, baseParams.GetRowOrDefault(job.PrimaryStat)?.Name.ToString()),
+                        FormatRole(job.Role, primaryStat),
+                        primaryStat,
                         MapDiscipline(job.Abbreviation.ToString()));
                 })
                 .ToArray();
@@ -148,7 +149,10 @@ public sealed class DalamudCharacterEquipmentSnapshotSource : ICharacterEquipmen
                 {
                     var item = entry->Items[itemIndex];
                     if (item.ItemId != 0)
-                        items.Add(new(MapGearsetSlot((RaptureGearsetModule.GearsetItemIndex)itemIndex), NormalizeItemId(item.ItemId)));
+                        items.Add(new(
+                            MapGearsetSlot((RaptureGearsetModule.GearsetItemIndex)itemIndex),
+                            NormalizeItemId(item.ItemId),
+                            item.ItemId >= 1_000_000));
                 }
                 values.Add(new(index, entry->NameString, entry->ClassJob, items, true));
             }
@@ -236,9 +240,17 @@ public sealed class DalamudCharacterEquipmentSnapshotSource : ICharacterEquipmen
                 var slotCategory = value.EquipSlotCategory.Value;
                 var category = value.ClassJobCategory.Value;
                 var eligible = jobs.Where(job => IsEligible(category, job.Abbreviation.ToString())).Select(job => job.RowId).ToHashSet();
+                var itemSpecialBonusId = ReadRowId(value, "ItemSpecialBonus");
+                var itemSpecialBonusParam = ReadInt(value, "ItemSpecialBonusParam");
+                var itemActionId = ReadRowId(value, "ItemAction");
+                var equipRestrictionId = ReadRowId(value, "EquipRestriction");
+                var grandCompanyId = ReadRowId(value, "GrandCompany");
+                var requiredPvpRank = checked((uint)Math.Max(0, ReadInt(value, "RequiredPvpRank")));
+                var classJobUseId = ReadRowId(value, "ClassJobUse");
                 EquipmentStatProfile BuildProfile(bool highQuality)
                 {
                     var bySemantic = new Dictionary<EquipmentStatSemantic, EquipmentStatValue>();
+                    var normalSemantics = new HashSet<EquipmentStatSemantic>();
                     var profileComplete = true;
                     void Apply(uint baseParamId, short amount, bool special)
                     {
@@ -246,10 +258,20 @@ public sealed class DalamudCharacterEquipmentSnapshotSource : ICharacterEquipmen
                             return;
                         var name = baseParamSheet.GetRowOrDefault(baseParamId)?.Name.ToString();
                         var semantic = MapStatSemantic(baseParamId, name);
+                        if (!special)
+                            normalSemantics.Add(semantic);
                         if (semantic == EquipmentStatSemantic.Unknown)
                             profileComplete = false;
-                        if (bySemantic.TryGetValue(semantic, out var existing) && existing.BaseParamId != baseParamId)
-                            profileComplete = false;
+                        if (bySemantic.TryGetValue(semantic, out var existing))
+                        {
+                            if (existing.BaseParamId != baseParamId)
+                                profileComplete = false;
+                            else if (special)
+                            {
+                                bySemantic[semantic] = existing with { Value = existing.Value + amount, IsSpecial = true };
+                                return;
+                            }
+                        }
                         bySemantic[semantic] = new(baseParamId, semantic, amount, special, name);
                     }
                     for (var index = 0; index < value.BaseParam.Count; index++)
@@ -262,13 +284,19 @@ public sealed class DalamudCharacterEquipmentSnapshotSource : ICharacterEquipmen
                     var magicalDamage = ExtractScalar(EquipmentStatSemantic.MagicalDamage, value.DamageMag);
                     var physicalDefense = ExtractScalar(EquipmentStatSemantic.PhysicalDefense, value.DefensePhys);
                     var magicalDefense = ExtractScalar(EquipmentStatSemantic.MagicalDefense, value.DefenseMag);
+                    var blockStrength = ReadInt(value, "Block");
+                    var blockRate = ReadInt(value, "BlockRate");
+                    var delayMilliseconds = ReadInt(value, "Delayms");
+                    if (delayMilliseconds == 0)
+                        delayMilliseconds = ReadInt(value, "DelayMs");
                     int ExtractScalar(EquipmentStatSemantic semantic, int fallback)
                     {
                         if (!bySemantic.Remove(semantic, out var parameter))
                             return fallback;
-                        return parameter.Value;
+                        return ResolveScalar(fallback, parameter.Value, highQuality, parameter.IsSpecial, normalSemantics.Contains(semantic));
                     }
-                    return new(bySemantic.Values.ToArray(), physicalDamage, magicalDamage, physicalDefense, magicalDefense, profileComplete);
+                    return new(bySemantic.Values.ToArray(), physicalDamage, magicalDamage, physicalDefense, magicalDefense, profileComplete,
+                        blockStrength, blockRate, delayMilliseconds);
                 }
                 var normalProfile = BuildProfile(false);
                 var highQualityProfile = BuildProfile(true);
@@ -301,7 +329,23 @@ public sealed class DalamudCharacterEquipmentSnapshotSource : ICharacterEquipmen
                     slotCategory.MainHand,
                     slotCategory.OffHand,
                     slotCategory.FingerL != 0,
-                    slotCategory.FingerR != 0);
+                    slotCategory.FingerR != 0,
+                    value.ClassJobCategory.RowId == 1,
+                    value.ClassJobCategory.RowId,
+                    category.Name.ToString(),
+                    value.ItemUICategory.RowId,
+                    value.ItemUICategory.Value.Name.ToString(),
+                    value.ItemSearchCategory.RowId,
+                    value.ItemSearchCategory.Value.Name.ToString(),
+                    normalProfile.Parameters.Any(parameter => parameter.Semantic == EquipmentStatSemantic.Unknown && parameter.Value > 0) ||
+                    itemSpecialBonusId > 1 || itemActionId != 0 || id is 8567 or 8568 or 14043,
+                    itemSpecialBonusId,
+                    itemSpecialBonusParam,
+                    itemActionId,
+                    equipRestrictionId,
+                    grandCompanyId,
+                    requiredPvpRank,
+                    classJobUseId);
             }
             var complete = values.Count == instances.Select(instance => instance.Fingerprint.ItemId).Distinct().Count();
             diagnostics.Add(new("definitions", complete ? SnapshotComponentStatus.Complete : SnapshotComponentStatus.Partial, complete ? null : "One or more item definitions were unavailable."));
@@ -321,6 +365,22 @@ public sealed class DalamudCharacterEquipmentSnapshotSource : ICharacterEquipmen
         return property?.PropertyType == typeof(bool) && property.GetValue(category) is true;
     }
 
+    private static uint ReadRowId(object source, string propertyName)
+    {
+        var value = source.GetType().GetProperty(propertyName)?.GetValue(source);
+        if (value is null) return 0;
+        if (value is IConvertible convertible && value.GetType().IsPrimitive)
+            return Convert.ToUInt32(convertible);
+        var rowId = value.GetType().GetProperty("RowId")?.GetValue(value);
+        return rowId is null ? 0 : Convert.ToUInt32(rowId);
+    }
+
+    private static int ReadInt(object source, string propertyName)
+    {
+        var value = source.GetType().GetProperty(propertyName)?.GetValue(source);
+        return value is null ? 0 : Convert.ToInt32(value);
+    }
+
     internal static EquipmentRarity MapRarity(byte rarity) => rarity switch
     {
         1 => EquipmentRarity.Normal,
@@ -337,6 +397,11 @@ public sealed class DalamudCharacterEquipmentSnapshotSource : ICharacterEquipmen
         _ => ExpertDeliveryEligibility.Unknown,
     };
 
+    internal static int ResolveScalar(int baseValue, int parameterValue, bool highQuality, bool parameterIsSpecial, bool normalProfileContainsSemantic) =>
+        highQuality && parameterIsSpecial && !normalProfileContainsSemantic
+            ? baseValue + parameterValue
+            : parameterValue;
+
     internal static EquipmentDiscipline MapDiscipline(string abbreviation) => abbreviation switch
     {
         "CRP" or "BSM" or "ARM" or "GSM" or "LTW" or "WVR" or "ALC" or "CUL" => EquipmentDiscipline.Crafter,
@@ -345,11 +410,13 @@ public sealed class DalamudCharacterEquipmentSnapshotSource : ICharacterEquipmen
         _ => EquipmentDiscipline.Combat,
     };
 
-    internal static string FormatRole(byte role) => role switch
+    internal static string FormatRole(byte role, EquipmentStatSemantic primaryStat = EquipmentStatSemantic.Unknown) => role switch
     {
         1 => "Tank",
         2 => "Melee DPS",
-        3 => "Physical Ranged DPS",
+        3 when primaryStat == EquipmentStatSemantic.Intelligence => "Magical Ranged DPS",
+        3 when primaryStat == EquipmentStatSemantic.Dexterity => "Physical Ranged DPS",
+        3 => "Ranged DPS",
         4 => "Healer",
         5 => "Magical Ranged DPS",
         _ => $"Role {role}",

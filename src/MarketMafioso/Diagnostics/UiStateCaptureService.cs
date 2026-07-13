@@ -18,6 +18,12 @@ namespace MarketMafioso.Diagnostics;
 
 public sealed class UiStateCaptureService : IDisposable
 {
+    private static readonly HashSet<string> SquireAutomationAddons = new(StringComparer.Ordinal)
+    {
+        "ContextMenu", "SalvageDialog", "MateriaRetrieveDialog", "SelectYesno", "Shop",
+        "GrandCompanySupplyList", "GrandCompanySupplyReward", "Inventory", "InventoryLarge",
+        "ArmouryBoard", "SelectString", "SelectIconString", "Talk",
+    };
     private static readonly InventoryType[] CapturedInventories =
     [
         InventoryType.Inventory1, InventoryType.Inventory2, InventoryType.Inventory3, InventoryType.Inventory4,
@@ -41,6 +47,7 @@ public sealed class UiStateCaptureService : IDisposable
     private readonly string directory;
     private readonly UiStateRecorder recorder = new();
     private readonly HashSet<string> observedAddons = new(StringComparer.Ordinal);
+    private CaptureScope captureScope = CaptureScope.Catchall;
     private DateTimeOffset nextStateSampleUtc;
 
     public UiStateCaptureService(IAddonLifecycle addonLifecycle, IFramework framework, ICondition condition, string directory)
@@ -57,9 +64,23 @@ public sealed class UiStateCaptureService : IDisposable
     public int EventCount => recorder.Snapshot().Events.Count;
 
     public void Start(string name = "manual-ui-transaction")
+        => StartCore(name, CaptureScope.Catchall);
+
+    public bool StartSquireProbe(string container, int slotIndex)
+    {
+        if (IsRecording)
+            return false;
+        if (!Enum.TryParse<InventoryType>(container, out var inventoryType) || slotIndex < 0)
+            throw new ArgumentException($"Squire probe inventory target {container}:{slotIndex} is invalid.");
+        StartCore($"squire-probe-{container}-{slotIndex}", new CaptureScope(SquireAutomationAddons, inventoryType, slotIndex));
+        return true;
+    }
+
+    private void StartCore(string name, CaptureScope scope)
     {
         if (IsRecording)
             return;
+        captureScope = scope;
         observedAddons.Clear();
         recorder.Start(name, DateTimeOffset.UtcNow);
         foreach (var addonEvent in CapturedAddonEvents)
@@ -93,6 +114,8 @@ public sealed class UiStateCaptureService : IDisposable
 
     private unsafe void OnAddonEvent(AddonEvent type, AddonArgs args)
     {
+        if (captureScope.AddonNames is { } addonNames && !addonNames.Contains(args.AddonName))
+            return;
         observedAddons.Add(args.AddonName);
         if (args is AddonReceiveEventArgs noisy && IsNoisyReceiveEvent(noisy.AtkEventType))
             return;
@@ -131,7 +154,8 @@ public sealed class UiStateCaptureService : IDisposable
     private unsafe IReadOnlyDictionary<string, string?> CaptureState()
     {
         var state = new Dictionary<string, string?>(StringComparer.Ordinal);
-        foreach (var addonName in observedAddons.Order(StringComparer.Ordinal))
+        var addonsToCapture = captureScope.AddonNames ?? observedAddons;
+        foreach (var addonName in addonsToCapture.Order(StringComparer.Ordinal))
         {
             var addon = Plugin.GameGui.GetAddonByName<AtkUnitBase>(addonName, 1);
             state[$"addon.{addonName}"] = addon == null
@@ -141,6 +165,16 @@ public sealed class UiStateCaptureService : IDisposable
 
         var activeConditions = Enum.GetValues<ConditionFlag>().Where(flag => condition[flag]).Select(flag => flag.ToString());
         state["conditions.active"] = string.Join(",", activeConditions);
+        state["client.loggedIn"] = Plugin.ClientState.IsLoggedIn.ToString();
+        state["client.territory"] = Plugin.ClientState.TerritoryType.ToString(CultureInfo.InvariantCulture);
+        var localPlayer = Plugin.ObjectTable.LocalPlayer;
+        state["player.local"] = localPlayer is null
+            ? "missing"
+            : $"object={localPlayer.GameObjectId},position={FormatVector(localPlayer.Position)},rotation={localPlayer.Rotation.ToString("R", CultureInfo.InvariantCulture)}";
+        var target = Plugin.TargetManager.Target;
+        state["target.current"] = target is null
+            ? "none"
+            : $"object={target.GameObjectId},kind={target.ObjectKind},position={FormatVector(target.Position)}";
         var actionManager = ActionManager.Instance();
         state["animationLock"] = actionManager == null ? "unavailable" : actionManager->AnimationLock.ToString("R", CultureInfo.InvariantCulture);
 
@@ -161,26 +195,44 @@ public sealed class UiStateCaptureService : IDisposable
         var inventoryManager = InventoryManager.Instance();
         if (inventoryManager != null)
         {
-            foreach (var inventoryType in CapturedInventories)
+            if (captureScope.InventoryType is { } focusedInventory && captureScope.SlotIndex is { } focusedSlot)
+                CaptureInventory(state, inventoryManager, focusedInventory, focusedSlot);
+            else
             {
-                var container = inventoryManager->GetInventoryContainer(inventoryType);
-                if (container == null || !container->IsLoaded)
-                {
-                    state[$"inventory.{inventoryType}"] = "unavailable";
-                    continue;
-                }
-                state[$"inventory.{inventoryType}"] = $"loaded,size={container->Size}";
-                for (var slotIndex = 0; slotIndex < container->Size; slotIndex++)
-                {
-                    var item = container->GetInventorySlot(slotIndex);
-                    if (item == null || item->ItemId == 0)
-                        continue;
-                    state[$"inventory.{inventoryType}.{slotIndex}"] =
-                        $"item={item->ItemId},quantity={item->Quantity},flags={(uint)item->Flags},condition={item->Condition},spiritbond={item->SpiritbondOrCollectability}";
-                }
+                foreach (var inventoryType in CapturedInventories)
+                    CaptureInventory(state, inventoryManager, inventoryType, null);
             }
         }
         return state;
+    }
+
+    private static unsafe void CaptureInventory(
+        IDictionary<string, string?> state,
+        InventoryManager* inventoryManager,
+        InventoryType inventoryType,
+        int? focusedSlot)
+    {
+        var container = inventoryManager->GetInventoryContainer(inventoryType);
+        if (container == null || !container->IsLoaded)
+        {
+            state[$"inventory.{inventoryType}"] = "unavailable";
+            return;
+        }
+        state[$"inventory.{inventoryType}"] = $"loaded,size={container->Size}";
+        var start = focusedSlot ?? 0;
+        var end = focusedSlot is null ? container->Size : Math.Min(container->Size, focusedSlot.Value + 1);
+        if (start >= container->Size)
+        {
+            state[$"inventory.{inventoryType}.{start}"] = "out-of-range";
+            return;
+        }
+        for (var slotIndex = start; slotIndex < end; slotIndex++)
+        {
+            var item = container->GetInventorySlot(slotIndex);
+            state[$"inventory.{inventoryType}.{slotIndex}"] = item == null || item->ItemId == 0
+                ? "empty"
+                : $"item={item->ItemId},quantity={item->Quantity},flags={(uint)item->Flags},condition={item->Condition},spiritbond={item->SpiritbondOrCollectability}";
+        }
     }
 
     internal static bool IsNoisyReceiveEvent(DalamudAddonEventType eventType) => eventType is
@@ -229,4 +281,11 @@ public sealed class UiStateCaptureService : IDisposable
 
     private static string FormatPointer(nint value) => value == 0 ? "null" : $"0x{value:X}";
     private static unsafe string FormatPointer(void* value) => value == null ? "null" : $"0x{(nuint)value:X}";
+    private static string FormatVector(System.Numerics.Vector3 value) =>
+        $"{value.X.ToString("R", CultureInfo.InvariantCulture)},{value.Y.ToString("R", CultureInfo.InvariantCulture)},{value.Z.ToString("R", CultureInfo.InvariantCulture)}";
+
+    private sealed record CaptureScope(IReadOnlySet<string>? AddonNames, InventoryType? InventoryType, int? SlotIndex)
+    {
+        public static CaptureScope Catchall { get; } = new(null, null, null);
+    }
 }

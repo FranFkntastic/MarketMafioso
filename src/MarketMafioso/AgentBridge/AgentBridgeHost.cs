@@ -160,6 +160,15 @@ public sealed class AgentBridgeHost : IDisposable
                 return AgentBridgeResponse.Ok("Snapshot captured.", receipt);
             case "get-control-surface":
                 return AgentBridgeResponse.Ok("Control surface captured.", provider.GetControlSurface());
+            case "get-control":
+                if (string.IsNullOrWhiteSpace(request.Target))
+                    return AgentBridgeResponse.Fail("A control ID is required.");
+                var controlReview = provider.ReviewControl(request.Target);
+                return controlReview.Control == null
+                    ? new AgentBridgeResponse { Success = false, Message = "The requested control is not rendered.", Receipt = controlReview }
+                    : AgentBridgeResponse.Ok("Reviewed control captured.", controlReview);
+            case "get-review-surfaces":
+                return AgentBridgeResponse.Ok("Review surfaces captured.", provider.GetReviewSurfaces());
             case "invoke-control":
                 if (string.IsNullOrWhiteSpace(request.Target) || request.FrameId is null)
                     return AgentBridgeResponse.Fail("Control ID and reviewed frame ID are required.");
@@ -175,6 +184,10 @@ public sealed class AgentBridgeHost : IDisposable
                 await dispatchOnFramework(provider.OpenMainWindow).ConfigureAwait(false);
                 AppendAudit("open-main-window", "accepted");
                 return AgentBridgeResponse.Ok("Main window opened.");
+            case "close-main-window":
+                await dispatchOnFramework(provider.CloseMainWindow).ConfigureAwait(false);
+                AppendAudit("close-main-window", "accepted");
+                return AgentBridgeResponse.Ok("Main window closed.");
             case "begin-capture-presentation":
                 if (!screenshotsEnabled())
                     return AgentBridgeResponse.Fail("Agent bridge screenshots are disabled by local configuration.");

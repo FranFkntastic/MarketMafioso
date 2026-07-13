@@ -152,6 +152,7 @@ public sealed class Plugin : IDalamudPlugin
             new MarketMafiosoBridgeProvider(
                 mainWindow.CreateAgentBridgeTruth,
                 mainWindow.AgentOpenForReview,
+                mainWindow.AgentCloseAfterReview,
                 () => mainWindow.TrySelectAgentBridgeTab("Diagnostics"),
                 proofId =>
                 {

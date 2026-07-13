@@ -5,6 +5,13 @@ namespace MarketMafioso.Tests.Squire;
 
 public sealed class SquireJobUnlockTests
 {
+    [Fact]
+    public void HighQualityScalarBonus_IsAddedToBaseInsteadOfReplacingIt()
+    {
+        Assert.Equal(535, DalamudCharacterEquipmentSnapshotSource.ResolveScalar(481, 54, true, true, false));
+        Assert.Equal(481, DalamudCharacterEquipmentSnapshotSource.ResolveScalar(481, 481, false, false, true));
+    }
+
     [Theory]
     [InlineData(1, EquipmentRarity.Normal)]
     [InlineData(2, EquipmentRarity.Uncommon)]
@@ -31,6 +38,13 @@ public sealed class SquireJobUnlockTests
     [InlineData("Future Stat", EquipmentStatSemantic.Unknown)]
     public void BaseParameterMapping_FailsClosedForUnknownNames(string name, EquipmentStatSemantic expected) =>
         Assert.Equal(expected, DalamudCharacterEquipmentSnapshotSource.MapStatSemantic(999, name));
+
+    [Theory]
+    [InlineData(3, EquipmentStatSemantic.Dexterity, "Physical Ranged DPS")]
+    [InlineData(3, EquipmentStatSemantic.Intelligence, "Magical Ranged DPS")]
+    [InlineData(3, EquipmentStatSemantic.Unknown, "Ranged DPS")]
+    public void AmbiguousRangedRole_UsesPrimaryStat(byte rawRole, EquipmentStatSemantic primaryStat, string expected) =>
+        Assert.Equal(expected, DalamudCharacterEquipmentSnapshotSource.FormatRole(rawRole, primaryStat));
     [Fact]
     public void UpgradedJobRequiresItsSoulCrystalEvenWhenClassLevelIsShared()
     {

@@ -10,7 +10,9 @@ public interface ISquireDispositionCapabilitySource
 public sealed class DalamudSquireDispositionCapabilitySource : ISquireDispositionCapabilitySource
 {
     public const uint GoneToPiecesQuestId = 65688;
+    public const uint ForgingTheSpiritQuestId = 66174;
 
-    public SquireDispositionCapabilities Capture() =>
-        new(QuestManager.IsQuestComplete(GoneToPiecesQuestId));
+    public SquireDispositionCapabilities Capture() => new(
+        QuestManager.IsQuestComplete(GoneToPiecesQuestId),
+        QuestManager.IsQuestComplete(ForgingTheSpiritQuestId));
 }

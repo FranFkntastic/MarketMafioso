@@ -44,7 +44,7 @@
     <ProjectReference Include="$(FranthropyDalamudProject)" />
   </ItemGroup>
 
-  <Target Name="SyncToDevPlugins" AfterTargets="Build" Condition="'$(Configuration)' == 'Debug'">
+  <Target Name="SyncToDevPlugins" AfterTargets="Build" Condition="'$(Configuration)' == 'Debug' and '$(SkipDevPluginSync)' != 'true'">
     <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\tools\Sync-DevPlugin.ps1&quot; -SourceDir &quot;$(TargetDir).&quot; -DestDir &quot;$(DevPluginDeployDir)&quot; -PluginName &quot;$(AssemblyName)&quot;" />
   </Target>
 
@@ -78,7 +78,8 @@
     <WriteLinesToFile
       File="$(GeneratedBuildInfoPath)"
       Lines="@(_GeneratedBuildInfoLine)"
-      Overwrite="true" />
+      Overwrite="true"
+      WriteOnlyWhenDifferent="true" />
 
     <ItemGroup>
       <Compile Include="$(GeneratedBuildInfoPath)" />

@@ -15,6 +15,7 @@ using MarketMafioso.Automation.Travel;
 using MarketMafioso.CraftArchitectCompanion;
 using MarketMafioso.MarketAcquisition;
 using MarketMafioso.RetainerRestock;
+using MarketMafioso.Squire;
 using MarketMafioso.Windows.Main;
 using MarketMafioso.Windows.MarketAcquisitionPanels;
 using MarketMafioso.Windows.MarketAcquisitionRequestBuilder;
@@ -71,6 +72,8 @@ public class MainWindow : Window, IDisposable
     private bool clearAgentReviewWindowOverride;
     private bool agentReviewWasPinned;
     private bool capturePresentationWasPinned;
+    private Vector2? capturePresentationPreviousSize;
+    private Vector2? capturePresentationRestoreSize;
 
     public AgentBridgeCaptureRegion? AgentCaptureRegion { get; private set; }
     public AgentBridgeUiCaptureTransactionManager AgentCaptureTransactions { get; }
@@ -125,9 +128,15 @@ public class MainWindow : Window, IDisposable
             beginPresentation: () =>
             {
                 capturePresentationWasPinned = IsPinned;
+                capturePresentationPreviousSize = AgentCaptureRegion?.WindowSize;
                 IsPinned = true;
             },
-            restorePresentation: () => IsPinned = capturePresentationWasPinned);
+            restorePresentation: () =>
+            {
+                IsPinned = capturePresentationWasPinned;
+                capturePresentationRestoreSize = capturePresentationPreviousSize;
+                capturePresentationPreviousSize = null;
+            });
         var acquisitionClient = new MarketAcquisitionRequestClient(acquisitionHttpClient);
         var acquisitionPlanSource = new UniversalisMarketAcquisitionPlanSource(acquisitionHttpClient);
         var marketAcquisitionWorldVisitCatalog = new MarketAcquisitionWorldVisitCatalog(config);
@@ -188,13 +197,12 @@ public class MainWindow : Window, IDisposable
 
         overviewTab = new OverviewTabPanel(IsMarketAcquisitionUnlocked);
         inventoryReporterTab = new InventoryReporterTabPanel(
-            config,
             reporter,
-            autoRetainerRefresh,
-            Plugin.Instance.RestartTimer,
-            config.Save);
+            autoRetainerRefresh);
         var squireSnapshotSource = new DalamudCharacterEquipmentSnapshotSource(playerState, dataManager, log);
         var squireCapabilities = new DalamudSquireDispositionCapabilitySource();
+        var squireVnavmesh = new VNavmeshIpc(new DalamudVNavmeshIpcAdapter(Plugin.PluginInterface, log));
+        var squireLifestream = new LifestreamIpc(Plugin.PluginInterface, log);
         uiStateCapture = new UiStateCaptureService(
             Plugin.AddonLifecycle,
             Plugin.Framework,
@@ -215,7 +223,40 @@ public class MainWindow : Window, IDisposable
                 Plugin.ObjectTable,
                 Plugin.TargetManager,
                 Plugin.PluginInterface,
-                Plugin.Log),
+                Plugin.Log,
+                () =>
+                {
+                    var contentId = playerState.IsLoaded && playerState.ContentId != 0
+                        ? playerState.ContentId.ToString()
+                        : null;
+                    var exclusions = contentId is not null && config.Squire.ExcludedItemIdsByCharacter.TryGetValue(contentId, out var values)
+                        ? values.ToHashSet()
+                        : new HashSet<uint>();
+                    return new SquireProtectionPolicy(
+                        config.Squire.ProtectPlayerSignedGear,
+                        config.Squire.ProtectFutureLevelingGearOptIn,
+                        config.Squire.ProtectBlueAndPurpleGear,
+                        exclusions,
+                        config.Squire.AllowRiskyMateriaRetrieval);
+                },
+                () =>
+                {
+                    if (routeEngine.IsRouteActive)
+                        return "The Market Acquisition route currently owns MMF automation.";
+                    if (acquisitionWorkspace.IsBusy)
+                        return "The Market Acquisition request workspace is busy.";
+                    if (autoRetainerRefresh.IsRefreshing)
+                        return "The AutoRetainer inventory refresh is running.";
+                    if (autoRetainerRefresh.IsStartQueued)
+                        return "The AutoRetainer inventory refresh is queued to start.";
+                    if (workshopAssemblyRunner.HasActiveRun)
+                        return "The Workshop Assembly runner currently owns MMF automation.";
+                    if (squireVnavmesh.IsRunning)
+                        return "vnavmesh is currently moving the character.";
+                    if (squireLifestream.IsAvailable && squireLifestream.TryIsBusy(out var lifestreamBusy) && lifestreamBusy)
+                        return "Lifestream is currently handling travel.";
+                    return null;
+                }),
             squireCapabilities,
             AgentReviewRegistry,
             Path.Combine(Plugin.PluginInterface.GetPluginConfigDirectory(), "squire-logs"),
@@ -304,6 +345,7 @@ public class MainWindow : Window, IDisposable
             log,
             AcquisitionDiagnostics.Draw,
             AutomationDiagnostics.Draw,
+            squireTab.DrawDiagnosticTools,
             uiStateCapture,
             AgentReviewRegistry);
         marketAcquisitionGuidedRoutePanel = new MarketAcquisitionGuidedRoutePanel(
@@ -321,7 +363,11 @@ public class MainWindow : Window, IDisposable
             config,
             reporter,
             log,
-            () => _ = routeEngine.Stop());
+            () => _ = routeEngine.Stop(),
+            Plugin.Instance.RestartTimer,
+            playerState,
+            dataManager,
+            AgentReviewRegistry);
 
         acquisitionWorkspace.RestoreClaimIntoBuilder();
     }
@@ -384,10 +430,18 @@ public class MainWindow : Window, IDisposable
     public override void PreDraw()
     {
         if (!AgentCaptureTransactions.ShouldPresentInMainViewport("mmf.main-window"))
+        {
+            if (capturePresentationRestoreSize is { } restoreSize)
+            {
+                ImGui.SetNextWindowSize(restoreSize, ImGuiCond.Always);
+                capturePresentationRestoreSize = null;
+            }
             return;
+        }
         var viewport = ImGui.GetMainViewport();
         ImGui.SetNextWindowViewport(viewport.ID);
         ImGui.SetNextWindowPos(viewport.WorkPos + new Vector2(16, 16), ImGuiCond.Always);
+        ImGui.SetNextWindowSize(viewport.WorkSize * 0.5f, ImGuiCond.Always);
         ImGui.SetNextWindowFocus();
     }
 
@@ -519,6 +573,18 @@ public class MainWindow : Window, IDisposable
         Collapsed = false;
         CollapsedCondition = ImGuiCond.Always;
         clearAgentReviewWindowOverride = true;
+    }
+
+    public void AgentCloseAfterReview()
+    {
+        if (clearAgentReviewWindowOverride)
+        {
+            IsPinned = agentReviewWasPinned;
+            Collapsed = null;
+            CollapsedCondition = ImGuiCond.None;
+            clearAgentReviewWindowOverride = false;
+        }
+        IsOpen = false;
     }
 
     public void AgentCaptureInputState()

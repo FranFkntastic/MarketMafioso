@@ -56,8 +56,8 @@ public sealed class SquireRunnerTests
         var second = new EquipmentInstanceFingerprint(Scope, "Inventory1", 3, 200, false, 1, 30000, 0, null, [], null, []);
         var plan = new SquireActionPlan(Guid.NewGuid(), Scope, SquireDisposition.Unsupported, DateTimeOffset.UtcNow,
         [
-            new(first, SquireDisposition.ExpertDelivery, ["StrictlyWorseForAllUnlockedJobs"]),
-            new(second, SquireDisposition.Desynthesize, ["StrictlyWorseForAllUnlockedJobs"]),
+            new(first, SquireDisposition.ExpertDelivery, ["RetainedCoverageForAllUnlockedJobs"]),
+            new(second, SquireDisposition.Desynthesize, ["RetainedCoverageForAllUnlockedJobs"]),
         ]);
         var adapter = new FakeAdapter();
 
@@ -65,6 +65,8 @@ public sealed class SquireRunnerTests
 
         Assert.True(result.Success);
         Assert.Equal([SquireDisposition.Desynthesize, SquireDisposition.ExpertDelivery], adapter.ExecutedDispositions);
+        Assert.Equal([SquireDisposition.Desynthesize, SquireDisposition.ExpertDelivery], adapter.BegunGroups);
+        Assert.Equal([SquireDisposition.Desynthesize, SquireDisposition.ExpertDelivery], adapter.EndedGroups);
     }
 
     [Fact]
@@ -114,7 +116,7 @@ public sealed class SquireRunnerTests
     {
         var fingerprint = new EquipmentInstanceFingerprint(Scope, "Inventory1", 2, 100, false, 1, 30000, 0, null, [], null, []);
         return new SquireActionPlan(Guid.NewGuid(), Scope, disposition, DateTimeOffset.UtcNow,
-            [new SquireReviewedSelection(fingerprint, disposition, ["StrictlyWorseForAllUnlockedJobs"])]);
+            [new SquireReviewedSelection(fingerprint, disposition, ["RetainedCoverageForAllUnlockedJobs"])]);
     }
 
     private sealed class FakeAdapter : ISquireActionGameAdapter
@@ -126,6 +128,8 @@ public sealed class SquireRunnerTests
         public int ProbeCount { get; private set; }
         public bool Released { get; private set; }
         public List<SquireDisposition> ExecutedDispositions { get; } = [];
+        public List<SquireDisposition> BegunGroups { get; } = [];
+        public List<SquireDisposition> EndedGroups { get; } = [];
         public CharacterScope? GetActiveCharacter() => ActiveScope;
         public bool HasConflictingAutomation(SquireDisposition disposition) => false;
         public SquireRevalidationResult Revalidate(EquipmentInstanceFingerprint fingerprint, SquireDisposition disposition)
@@ -133,17 +137,28 @@ public sealed class SquireRunnerTests
             RevalidateCount++;
             return Validation;
         }
+        public SquireRevalidationResult RevalidateBatch(SquireActionPlan plan, IReadOnlyList<SquireReviewedSelection> remainingActions) => Validation;
         public SquireRevalidationResult RevalidateEvidence(SquireReviewedSelection selection) => Validation;
-        public Task<SquireActionResult> ExecuteAsync(EquipmentInstanceFingerprint fingerprint, SquireDisposition disposition, CancellationToken cancellationToken)
+        public Task<SquireActionResult> ExecuteAsync(SquireActionPlan plan, IReadOnlyList<SquireReviewedSelection> remainingActions, SquireReviewedSelection action, CancellationToken cancellationToken)
         {
             ExecuteCount++;
-            ExecutedDispositions.Add(disposition);
+            ExecutedDispositions.Add(action.Disposition);
             return Task.FromResult(SquireActionResult.Completed());
         }
         public Task<SquireActionResult> ProbeAsync(EquipmentInstanceFingerprint fingerprint, SquireDisposition disposition, CancellationToken cancellationToken)
         {
             ProbeCount++;
             return Task.FromResult(new SquireActionResult(true, "DiagnosticProbePassed", "Passed."));
+        }
+        public Task<SquireActionResult> BeginDispositionGroupAsync(SquireDisposition disposition, CancellationToken cancellationToken)
+        {
+            BegunGroups.Add(disposition);
+            return Task.FromResult(SquireActionResult.Completed());
+        }
+        public Task EndDispositionGroupAsync(SquireDisposition disposition, CancellationToken cancellationToken)
+        {
+            EndedGroups.Add(disposition);
+            return Task.CompletedTask;
         }
         public void ReleaseOwnedState() => Released = true;
     }

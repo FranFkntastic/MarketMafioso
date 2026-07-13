@@ -19,6 +19,7 @@ internal sealed class MarketAcquisitionDiagnosticsPanel
     private readonly IPluginLog log;
     private readonly Action drawMarketAcquisitionDiagnostics;
     private readonly Action drawAutomationDiagnostics;
+    private readonly Action drawSquireDiagnostics;
     private readonly UiStateCaptureService uiStateCapture;
     private readonly AgentBridgeUiReviewRegistry reviewRegistry;
 
@@ -30,6 +31,7 @@ internal sealed class MarketAcquisitionDiagnosticsPanel
         IPluginLog log,
         Action drawMarketAcquisitionDiagnostics,
         Action drawAutomationDiagnostics,
+        Action drawSquireDiagnostics,
         UiStateCaptureService uiStateCapture,
         AgentBridgeUiReviewRegistry reviewRegistry)
     {
@@ -38,6 +40,7 @@ internal sealed class MarketAcquisitionDiagnosticsPanel
         this.log = log ?? throw new ArgumentNullException(nameof(log));
         this.drawMarketAcquisitionDiagnostics = drawMarketAcquisitionDiagnostics ?? throw new ArgumentNullException(nameof(drawMarketAcquisitionDiagnostics));
         this.drawAutomationDiagnostics = drawAutomationDiagnostics ?? throw new ArgumentNullException(nameof(drawAutomationDiagnostics));
+        this.drawSquireDiagnostics = drawSquireDiagnostics ?? throw new ArgumentNullException(nameof(drawSquireDiagnostics));
         this.uiStateCapture = uiStateCapture ?? throw new ArgumentNullException(nameof(uiStateCapture));
         this.reviewRegistry = reviewRegistry ?? throw new ArgumentNullException(nameof(reviewRegistry));
     }
@@ -64,6 +67,8 @@ internal sealed class MarketAcquisitionDiagnosticsPanel
             drawMarketAcquisitionDiagnostics();
         if (ImGui.CollapsingHeader("Automation Diagnostics", ImGuiTreeNodeFlags.DefaultOpen))
             drawAutomationDiagnostics();
+        if (ImGui.CollapsingHeader("Squire Route Diagnostics", ImGuiTreeNodeFlags.DefaultOpen))
+            drawSquireDiagnostics();
     }
 
     public void DrawLatestWorldCompletionSummary(MarketAcquisitionRouteEngineSnapshot snapshot)
