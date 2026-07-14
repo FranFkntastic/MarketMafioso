@@ -165,7 +165,25 @@ internal sealed class SquireRouteDiagnosticsPanel(
                 ["materiaIds"] = string.Join(",", fingerprint.MateriaIds),
                 ["glamourId"] = fingerprint.GlamourId?.ToString(),
             });
-        probe = actionAdapter.ProbeAsync(fingerprint, disposition, cancellation.Token);
+        probe = RunProbeAsync(fingerprint, disposition, cancellation.Token);
+    }
+
+    private async Task<SquireActionResult> RunProbeAsync(
+        EquipmentInstanceFingerprint fingerprint,
+        SquireDisposition disposition,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var recovery = await actionAdapter.RecoverExecutionStateAsync(cancellationToken).ConfigureAwait(false);
+            if (!recovery.Success)
+                return recovery;
+            return await actionAdapter.ProbeAsync(fingerprint, disposition, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            actionAdapter.ReleaseOwnedState();
+        }
     }
 
     private void CloseVisibleUi()
