@@ -24,6 +24,10 @@ This matters because Workshop Host uses it when returning dashboard links to the
 
 Blank for normal local installs. Advanced path-mounted hosting can set this to a path such as `/marketmafioso`.
 
+### `MarketMafioso__AllowedOrigins__0`
+
+Set this to the Craft Architect browser origin when CA and Workshop Host use different schemes, hosts, or ports. Add `__1`, `__2`, and so on for additional CA origins. Browser access remains protected by the client API key.
+
 ### `MarketMafioso__StorageLabel`
 
 A friendly label for this Workshop Host storage. Useful if you run more than one host.

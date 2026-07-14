@@ -11,6 +11,15 @@ using MarketMafioso.Server.Sqlite;
 using MarketMafioso.Server.WorkshopHost;
 
 var builder = WebApplication.CreateBuilder(args);
+const string workshopHostBrowserCorsPolicy = "WorkshopHostBrowserClients";
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy(workshopHostBrowserCorsPolicy, policy =>
+        policy
+            .SetIsOriginAllowed(origin => IsAllowedWorkshopHostBrowserOrigin(builder.Configuration, origin))
+            .AllowAnyHeader()
+            .AllowAnyMethod());
+});
 builder.Services.AddSingleton<SqliteConnectionFactory>();
 builder.Services.AddSingleton<SqliteSchemaMigrator>();
 builder.Services.AddSingleton<DashboardPasswordHasher>();
@@ -63,6 +72,8 @@ if (configuredBasePath.HasValue)
 
 app.UseDashboardStaticAssets();
 app.UseStaticFiles();
+app.UseRouting();
+app.UseCors(workshopHostBrowserCorsPolicy);
 
 app.Use(async (context, next) =>
 {
@@ -101,6 +112,16 @@ app.MapXivDataProxyEndpoints(xivDataBaseUrl);
 app.MapDashboardShellEndpoints(enableMarketAcquisition);
 
 app.Run();
+
+static bool IsAllowedWorkshopHostBrowserOrigin(IConfiguration configuration, string origin)
+{
+    var normalizedOrigin = origin.Trim().TrimEnd('/');
+    return configuration
+        .GetSection("MarketMafioso:AllowedOrigins")
+        .GetChildren()
+        .Select(entry => entry.Value?.Trim().TrimEnd('/'))
+        .Any(allowed => string.Equals(allowed, normalizedOrigin, StringComparison.OrdinalIgnoreCase));
+}
 
 static PathString NormalizeConfiguredBasePath(string? value)
 {

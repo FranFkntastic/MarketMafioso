@@ -54,6 +54,18 @@ This is a friendly label shown in server-generated output.
 
 Why it matters: it helps identify which Workshop Host stored a report when you run more than one environment.
 
+### `MarketMafioso__AllowedOrigins__0`
+
+Example:
+
+```text
+MarketMafioso__AllowedOrigins__0=https://dev.xivcraftarchitect.com
+```
+
+Set this to the Craft Architect browser origin when CA and Workshop Host use different schemes, hosts, or ports. Add `__1`, `__2`, and so on for additional trusted CA installations. Leave it blank when both applications share an origin.
+
+Why it matters: browsers block CA from calling a separately hosted Workshop Host unless the receiver explicitly allows CA's origin. This setting grants browser access only; every protected request still requires the client API key.
+
 ## Plugin API Key Settings
 
 ### `MarketMafioso__RequireApiKey`
