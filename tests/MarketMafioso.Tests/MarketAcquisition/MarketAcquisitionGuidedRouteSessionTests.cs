@@ -204,6 +204,23 @@ public sealed class MarketAcquisitionGuidedRouteSessionTests
     }
 
     [Fact]
+    public void RecordProbe_EvidenceRefreshCompletesWithoutEnteringPurchaseState()
+    {
+        var session = MarketMafioso.MarketAcquisition.MarketAcquisitionGuidedRouteSession.Start(CreatePlan("Zalera"));
+
+        var result = session.RecordProbe(
+            "Zalera",
+            CreateCandidatePlan(status: "Ready", quantity: 20, gil: 1_000),
+            allowPurchases: false);
+
+        Assert.True(result.Success);
+        Assert.Equal("Complete", session.Status);
+        Assert.Equal("Complete", session.Stops[0].Status);
+        Assert.Equal(0u, session.Stops[0].PurchasedQuantity);
+        Assert.Contains("No purchases", result.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void RecordProbe_WithNoSafeListingsAdvancesToNextItemSubtaskOnSameWorld()
     {
         var session = MarketMafioso.MarketAcquisition.MarketAcquisitionGuidedRouteSession.Start(CreateMultiItemWorldPlan());

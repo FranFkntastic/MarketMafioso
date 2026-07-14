@@ -343,6 +343,7 @@ public class MainWindow : Window, IDisposable
         marketAcquisitionGuidedRoutePanel = new MarketAcquisitionGuidedRoutePanel(
             routeEngine.CreateSnapshot,
             forceDiagnostics => _ = StartGuidedRouteAsync(forceDiagnostics),
+            () => _ = StartEvidenceRefreshAsync(),
             CanProbeLiveMarketBoard,
             () => _ = ProbeLiveMarketBoardAsync(),
             () => _ = PauseGuidedRouteAsync(),
@@ -855,7 +856,20 @@ public class MainWindow : Window, IDisposable
     {
         marketAcquisitionGuidedRoutePanel.Draw(
             acquisitionWorkspace.PreparedPlan,
-            acquisitionWorkspace.IsPreparedPlanStale());
+            acquisitionWorkspace.IsPreparedPlanStale(),
+            CanStartEvidenceRefresh());
+    }
+
+    private bool CanStartEvidenceRefresh()
+    {
+        var claim = acquisitionWorkspace.ClaimedRequest;
+        if (claim == null || acquisitionWorkspace.IsBusy || routeEngine.IsRouteActive)
+            return false;
+
+        return claim.WorldMode.Equals("Selected", StringComparison.OrdinalIgnoreCase)
+            ? claim.SelectedWorlds.Count > 0
+            : claim.WorldMode.Equals("CurrentWorldOnly", StringComparison.OrdinalIgnoreCase) &&
+              playerState.CurrentWorld.IsValid;
     }
 
     private Task StartGuidedRouteAsync(bool forceDiagnostics)
@@ -872,6 +886,18 @@ public class MainWindow : Window, IDisposable
                 enableDiagnostics,
                 config.EnableOpportunisticWorldChecks);
             routeEngine.ReportRouteProgress();
+            return Task.CompletedTask;
+        });
+    }
+
+    private Task StartEvidenceRefreshAsync()
+    {
+        return acquisitionWorkspace.RunWithReportableClaimAsync((claimed, _) =>
+        {
+            var currentWorld = playerState.CurrentWorld.IsValid ? GetCurrentWorldName() : string.Empty;
+            var plan = MarketAcquisitionEvidenceRefreshPlanBuilder.Build(claimed, currentWorld, DateTimeOffset.UtcNow);
+            var enableDiagnostics = config.CreateMarketAcquisitionRouteDiagnosticPackages;
+            routeEngine.StartEvidenceRefresh(plan, claimed, enableDiagnostics);
             return Task.CompletedTask;
         });
     }

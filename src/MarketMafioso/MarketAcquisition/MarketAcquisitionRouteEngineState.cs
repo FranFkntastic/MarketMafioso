@@ -15,6 +15,7 @@ internal sealed class MarketAcquisitionRouteEngineState
     public uint ActiveLinePurchasedQuantity { get; set; }
     public uint ActiveLineSpentGil { get; set; }
     public bool ProbeRunning { get; set; }
+    public bool EvidenceRefreshOnly { get; set; }
     public DateTimeOffset NextRouteMonitorUtc { get; set; } = DateTimeOffset.MinValue;
     public long ProgressReportSequence { get; set; }
     public string ProgressNonce { get; set; } = Guid.NewGuid().ToString("N");
@@ -32,6 +33,7 @@ internal sealed class MarketAcquisitionRouteEngineState
         ActiveLinePurchasedQuantity = 0;
         ActiveLineSpentGil = 0;
         ProbeRunning = false;
+        EvidenceRefreshOnly = false;
         NextRouteMonitorUtc = DateTimeOffset.MinValue;
         ProgressReportSequence = 0;
         ProgressNonce = Guid.NewGuid().ToString("N");

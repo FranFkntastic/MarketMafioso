@@ -180,7 +180,10 @@ public sealed class MarketAcquisitionGuidedRouteSession
         return MarketAcquisitionGuidedRouteResult.Ok($"Sent {stop.LifestreamCommand}. Waiting for arrival on {stop.WorldName}.");
     }
 
-    public MarketAcquisitionGuidedRouteResult RecordProbe(string currentWorld, MarketAcquisitionLiveCandidatePlan candidatePlan)
+    public MarketAcquisitionGuidedRouteResult RecordProbe(
+        string currentWorld,
+        MarketAcquisitionLiveCandidatePlan candidatePlan,
+        bool allowPurchases = true)
     {
         ArgumentNullException.ThrowIfNull(candidatePlan);
 
@@ -196,7 +199,7 @@ public sealed class MarketAcquisitionGuidedRouteSession
         stop.WouldSpendGil = candidatePlan.WouldSpendGil;
         UpdateActiveLineProbe(stop, candidatePlan);
 
-        if (candidatePlan.WouldBuyQuantity > 0)
+        if (allowPurchases && candidatePlan.WouldBuyQuantity > 0)
         {
             stop.Status = "Purchasing";
             UpdateActiveLine(
@@ -207,6 +210,25 @@ public sealed class MarketAcquisitionGuidedRouteSession
                 $"Purchasing {candidatePlan.WouldBuyQuantity:N0} safe live item(s), {candidatePlan.WouldSpendGil:N0} gil.");
             return MarketAcquisitionGuidedRouteResult.Ok(
                 $"Purchasing {FormatActiveItem(stop)} on {stop.WorldName}: {candidatePlan.WouldBuyQuantity:N0} safe live item(s), {candidatePlan.WouldSpendGil:N0} gil.");
+        }
+
+        if (!allowPurchases)
+        {
+            const string observedMessage = "Fresh market evidence was recorded without purchasing.";
+            if (TryAdvanceActiveItemSubtask(
+                    stop,
+                    zeroPurchaseStatus: "Observed",
+                    zeroPurchaseMessage: observedMessage))
+            {
+                return MarketAcquisitionGuidedRouteResult.Ok(
+                    $"Recorded fresh evidence for {FormatPreviousItem(stop)} on {currentWorld}. Next item: {FormatActiveItem(stop)}.");
+            }
+
+            CompleteActiveStop(stop.PurchasedQuantity, stop.SpentGil);
+            return Status == "Complete"
+                ? MarketAcquisitionGuidedRouteResult.Ok("Evidence refresh complete. No purchases were attempted.")
+                : MarketAcquisitionGuidedRouteResult.Ok(
+                    $"Recorded fresh evidence for {FormatPreviousItem(stop)} on {currentWorld}. Next stop: {ActiveStop?.WorldName}.");
         }
 
         if (TryAdvanceActiveItemSubtask(

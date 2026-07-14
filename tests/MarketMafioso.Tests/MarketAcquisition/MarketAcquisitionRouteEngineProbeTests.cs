@@ -164,4 +164,25 @@ public sealed class MarketAcquisitionRouteEngineProbeTests
         Assert.Equal(MarketBoardListingReadState.FreshComplete, observation.ReadResult.ReadState);
         Assert.NotEmpty(observation.ReadResult.Listings);
     }
+
+    [Fact]
+    public void EvidenceRefresh_FreshSafeListingsPublishesWithoutRouteProgressOrPurchasing()
+    {
+        using var harness = MarketAcquisitionRouteEngineHarness.Create();
+        harness.Context.CurrentWorld = "Maduin";
+        var claim = MarketAcquisitionRouteEngineTestData.AcceptedClaim();
+        harness.Engine.StartEvidenceRefresh(
+            MarketAcquisitionRouteEngineTestData.Plan("Maduin"),
+            claim,
+            enableDiagnostics: false);
+        harness.Runner.RecordCurrentWorld("Maduin");
+        harness.MarketBoard.Reads.Enqueue(MarketAcquisitionRouteEngineTestData.ReadWithSafeListing("Maduin"));
+
+        harness.Engine.ProbeLiveMarketBoard();
+
+        Assert.True(SpinWait.SpinUntil(() => harness.Reporter.MarketObservationReports.Count == 1, TimeSpan.FromSeconds(2)));
+        Assert.Equal("Completed", harness.Runner.State);
+        Assert.Empty(harness.Reporter.RouteProgressReports);
+        Assert.Equal(0u, harness.Runner.Stops[0].PurchasedQuantity);
+    }
 }

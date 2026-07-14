@@ -706,7 +706,10 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         return MarketAcquisitionRouteActionResult.Ok(readResult.Message);
     }
 
-    public MarketAcquisitionRouteActionResult RecordProbe(string currentWorld, MarketAcquisitionLiveCandidatePlan candidatePlan)
+    public MarketAcquisitionRouteActionResult RecordProbe(
+        string currentWorld,
+        MarketAcquisitionLiveCandidatePlan candidatePlan,
+        bool allowPurchases = true)
     {
         ArgumentNullException.ThrowIfNull(candidatePlan);
 
@@ -717,7 +720,7 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         var activeStop = session?.ActiveStop;
         var observedQuantity = SumObservedQuantity(candidatePlan);
         var observedGil = SumObservedGil(candidatePlan);
-        var result = session?.RecordProbe(currentWorld, candidatePlan) ??
+        var result = session?.RecordProbe(currentWorld, candidatePlan, allowPurchases) ??
                      MarketAcquisitionGuidedRouteResult.Fail("No route has started.");
         StatusMessage = result.Message;
         SearchSubmitted = false;
@@ -749,6 +752,7 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
                 ["wouldSpendGil"] = candidatePlan.WouldSpendGil.ToString(),
                 ["wouldBuyRows"] = candidatePlan.Rows.Count(row =>
                     row.Decision.Equals("WouldBuy", StringComparison.OrdinalIgnoreCase)).ToString(),
+                ["allowPurchases"] = allowPurchases.ToString(),
                 ["skippedRows"] = candidatePlan.Rows.Count(row =>
                     !row.Decision.Equals("WouldBuy", StringComparison.OrdinalIgnoreCase)).ToString(),
                 ["skipReasons"] = SummarizeSkipReasons(candidatePlan),

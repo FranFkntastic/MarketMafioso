@@ -126,6 +126,27 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         return result;
     }
 
+    public MarketAcquisitionRouteActionResult StartEvidenceRefresh(
+        MarketAcquisitionPlan plan,
+        MarketAcquisitionClaimView claimed,
+        bool enableDiagnostics)
+    {
+        ArgumentNullException.ThrowIfNull(plan);
+        ArgumentNullException.ThrowIfNull(claimed);
+        if (!TryReconcileUnresolvedTravelLease(out var reconciliationFailure))
+            return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(reconciliationFailure));
+
+        claimedRequest = claimed;
+        ClearExecutionState();
+        state.EvidenceRefreshOnly = true;
+        reportDispatcher.BeginSession(claimed);
+        var result = runner.Start(plan, enableDiagnostics, includeOpportunisticChecks: false);
+        state.AcquisitionStatus = result.Success
+            ? $"Evidence refresh started. {result.Message}"
+            : result.Message;
+        return result;
+    }
+
     public MarketAcquisitionRouteActionResult Pause()
     {
         travelInterruptedByCleanup = activeTravelLease != null;
@@ -832,7 +853,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             ReportMarketObservation(claimed, activeLine, activeSubtask, currentWorld, state.MarketBoardReadResult);
 
         var probeResult = recordRouteResult && runner.IsRunning && runner.ActiveStop is { Status: "Arrived" } && state.LiveCandidatePlan != null
-            ? runner.RecordProbe(currentWorld, state.LiveCandidatePlan)
+            ? runner.RecordProbe(currentWorld, state.LiveCandidatePlan, allowPurchases: !state.EvidenceRefreshOnly)
             : null;
         if (probeResult?.Success == true && state.LiveCandidatePlan != null)
             evidence.RecordProbeVisit(currentWorld, activeLine, activeSubtask, state.LiveCandidatePlan, claimed.Id, state.ProgressNonce);
@@ -1342,6 +1363,9 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
     public void ReportRouteProgress()
     {
+        if (state.EvidenceRefreshOnly)
+            return;
+
         var claimed = claimedRequest;
         if (claimed == null || string.IsNullOrWhiteSpace(claimed.ClaimToken) || !reportDispatcher.CanReport ||
             string.Equals(runner.State, "Idle", StringComparison.OrdinalIgnoreCase))

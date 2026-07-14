@@ -11,6 +11,7 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
 {
     private readonly Func<MarketAcquisitionRouteEngineSnapshot> getRouteSnapshot;
     private readonly Action<bool> startRoute;
+    private readonly Action startEvidenceRefresh;
     private readonly Func<bool> canObserveCurrentBoard;
     private readonly Action observeCurrentBoard;
     private readonly Action pauseRoute;
@@ -27,6 +28,7 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
     public MarketAcquisitionGuidedRoutePanel(
         Func<MarketAcquisitionRouteEngineSnapshot> getRouteSnapshot,
         Action<bool> startRoute,
+        Action startEvidenceRefresh,
         Func<bool> canObserveCurrentBoard,
         Action observeCurrentBoard,
         Action pauseRoute,
@@ -41,6 +43,7 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
     {
         this.getRouteSnapshot = getRouteSnapshot ?? throw new ArgumentNullException(nameof(getRouteSnapshot));
         this.startRoute = startRoute ?? throw new ArgumentNullException(nameof(startRoute));
+        this.startEvidenceRefresh = startEvidenceRefresh ?? throw new ArgumentNullException(nameof(startEvidenceRefresh));
         this.canObserveCurrentBoard = canObserveCurrentBoard ?? throw new ArgumentNullException(nameof(canObserveCurrentBoard));
         this.observeCurrentBoard = observeCurrentBoard ?? throw new ArgumentNullException(nameof(observeCurrentBoard));
         this.pauseRoute = pauseRoute ?? throw new ArgumentNullException(nameof(pauseRoute));
@@ -54,7 +57,7 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
         this.reviewRegistry = reviewRegistry ?? throw new ArgumentNullException(nameof(reviewRegistry));
     }
 
-    public void Draw(MarketAcquisitionPlan? plan, bool isPlanStale)
+    public void Draw(MarketAcquisitionPlan? plan, bool isPlanStale, bool canRefreshEvidence)
     {
         var snapshot = getRouteSnapshot();
         ImGuiUi.SectionHeader("Route", MarketMafiosoUiTheme.Header);
@@ -67,7 +70,7 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
         var canReprepare = canStart &&
                             snapshot.CanRestart &&
                             snapshot.CompletedOrProbedStopCount > 0;
-        DrawGuidedRouteActionRow(snapshot, canStart, canReprepare);
+        DrawGuidedRouteActionRow(snapshot, canStart, canReprepare, canRefreshEvidence);
 
         ImGui.TextColored(GetGuidedRouteStatusColor(snapshot), snapshot.StatusMessage);
         if (isPlanStale)
@@ -100,7 +103,11 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
         drawMarketBoardProbeStatus(snapshot);
     }
 
-    private void DrawGuidedRouteActionRow(MarketAcquisitionRouteEngineSnapshot snapshot, bool canStart, bool canReprepare)
+    private void DrawGuidedRouteActionRow(
+        MarketAcquisitionRouteEngineSnapshot snapshot,
+        bool canStart,
+        bool canReprepare,
+        bool canRefreshEvidence)
     {
         if (snapshot.IsPaused)
         {
@@ -126,20 +133,33 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
             return;
         }
 
-        if (!canStart)
+        if (!canStart && !canRefreshEvidence)
         {
             ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Prepare a current plan to enable route actions.");
         }
         else
         {
-            if (ImGuiUi.PrimaryButton("Start Route##MarketAcquisitionStartRoute", true))
-                startRoute(false);
-            RegisterLastControl("acquisition.route.start", "Start the Market Acquisition route", true, () => startRoute(false));
+            if (canStart)
+            {
+                if (ImGuiUi.PrimaryButton("Start Route##MarketAcquisitionStartRoute", true))
+                    startRoute(false);
+                RegisterLastControl("acquisition.route.start", "Start the Market Acquisition route", true, () => startRoute(false));
 
-            ImGui.SameLine();
-            if (ImGuiUi.Button("Diagnostic Run##MarketAcquisitionStartDiagnostics", true))
-                startRoute(true);
-            RegisterLastControl("acquisition.route.start-diagnostics", "Start the Market Acquisition route with diagnostics", true, () => startRoute(true));
+                ImGui.SameLine();
+                if (ImGuiUi.Button("Diagnostic Run##MarketAcquisitionStartDiagnostics", true))
+                    startRoute(true);
+                RegisterLastControl("acquisition.route.start-diagnostics", "Start the Market Acquisition route with diagnostics", true, () => startRoute(true));
+
+                ImGui.SameLine();
+            }
+
+            if (ImGuiUi.Button("Refresh Evidence##MarketAcquisitionRefreshEvidence", canRefreshEvidence))
+                startEvidenceRefresh();
+            RegisterLastControl(
+                "acquisition.route.refresh-evidence",
+                "Visit the selected worlds and publish fresh market evidence without purchasing",
+                canRefreshEvidence,
+                startEvidenceRefresh);
 
             var canObserve = canObserveCurrentBoard();
             ImGui.SameLine();
