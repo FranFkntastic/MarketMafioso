@@ -54,6 +54,9 @@ public record MarketAcquisitionRequestView
     [JsonPropertyName("worldMode")]
     public string WorldMode { get; init; } = string.Empty;
 
+    [JsonPropertyName("selectedWorlds")]
+    public List<string> SelectedWorlds { get; init; } = new();
+
     [JsonPropertyName("sweepScope")]
     public string SweepScope { get; init; } = "Region";
 
@@ -129,6 +132,9 @@ public sealed record MarketAcquisitionBatchCreateRequest
     [JsonPropertyName("worldMode")]
     public string WorldMode { get; init; } = string.Empty;
 
+    [JsonPropertyName("selectedWorlds")]
+    public List<string> SelectedWorlds { get; init; } = new();
+
     [JsonPropertyName("sweepScope")]
     public string SweepScope { get; init; } = "Region";
 
@@ -152,6 +158,9 @@ public sealed record MarketAcquisitionBatchReplaceRequest
 
     [JsonPropertyName("worldMode")]
     public string WorldMode { get; init; } = string.Empty;
+
+    [JsonPropertyName("selectedWorlds")]
+    public List<string> SelectedWorlds { get; init; } = new();
 
     [JsonPropertyName("sweepScope")]
     public string SweepScope { get; init; } = "Region";
@@ -252,6 +261,7 @@ public static class MarketAcquisitionOrigins
     public const string DashboardCreated = "DashboardCreated";
     public const string PluginBuilder = "PluginBuilder";
     public const string ClientQuickShop = "ClientQuickShop";
+    public const string CraftArchitect = "CraftArchitect";
 }
 
 public sealed record MarketAcquisitionClaimRequest
@@ -432,6 +442,87 @@ public sealed record MarketAcquisitionPurchaseAuditView
 
     [JsonPropertyName("createdAtUtc")]
     public DateTimeOffset CreatedAtUtc { get; init; }
+}
+
+public sealed record MarketAcquisitionMarketObservationRequest
+{
+    [JsonPropertyName("schemaVersion")]
+    public int SchemaVersion { get; init; } = 1;
+
+    [JsonPropertyName("claimToken")]
+    public string ClaimToken { get; init; } = string.Empty;
+
+    [JsonPropertyName("idempotencyKey")]
+    public string IdempotencyKey { get; init; } = string.Empty;
+
+    [JsonPropertyName("attemptId")]
+    public string AttemptId { get; init; } = string.Empty;
+
+    [JsonPropertyName("sequence")]
+    public long Sequence { get; init; }
+
+    [JsonPropertyName("lineId")]
+    public string LineId { get; init; } = string.Empty;
+
+    [JsonPropertyName("itemId")]
+    public uint ItemId { get; init; }
+
+    [JsonPropertyName("itemName")]
+    public string? ItemName { get; init; }
+
+    [JsonPropertyName("dataCenter")]
+    public string DataCenter { get; init; } = string.Empty;
+
+    [JsonPropertyName("worldName")]
+    public string WorldName { get; init; } = string.Empty;
+
+    [JsonPropertyName("readState")]
+    public string ReadState { get; init; } = string.Empty;
+
+    [JsonPropertyName("reportedListingCount")]
+    public int ReportedListingCount { get; init; }
+
+    [JsonPropertyName("listingCapacity")]
+    public int ListingCapacity { get; init; }
+
+    [JsonPropertyName("isTruncated")]
+    public bool IsTruncated { get; init; }
+
+    [JsonPropertyName("observedAtUtc")]
+    public DateTimeOffset ObservedAtUtc { get; init; }
+
+    [JsonPropertyName("listings")]
+    public List<MarketAcquisitionMarketObservationListing> Listings { get; init; } = new();
+}
+
+public sealed record MarketAcquisitionMarketObservationListing
+{
+    [JsonPropertyName("listingId")]
+    public string ListingId { get; init; } = string.Empty;
+
+    [JsonPropertyName("retainerId")]
+    public string RetainerId { get; init; } = string.Empty;
+
+    [JsonPropertyName("retainerName")]
+    public string RetainerName { get; init; } = string.Empty;
+
+    [JsonPropertyName("quantity")]
+    public uint Quantity { get; init; }
+
+    [JsonPropertyName("unitPrice")]
+    public uint UnitPrice { get; init; }
+
+    [JsonPropertyName("isHq")]
+    public bool IsHq { get; init; }
+}
+
+public sealed record MarketAcquisitionMarketObservationView
+{
+    [JsonPropertyName("observationId")]
+    public string ObservationId { get; init; } = string.Empty;
+
+    [JsonPropertyName("requestId")]
+    public string RequestId { get; init; } = string.Empty;
 }
 
 public sealed record MarketAcquisitionAttemptEventRequest

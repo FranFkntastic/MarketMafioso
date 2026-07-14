@@ -292,6 +292,7 @@ public sealed class MarketAcquisitionRequestStore
             ExpiresAtUtc = expiresAtUtc,
             Region = NormalizeSupportedRegion(request.Region, nameof(request)),
             WorldMode = request.WorldMode.Trim(),
+            SelectedWorlds = NormalizeSelectedWorlds(request.SelectedWorlds),
             SweepScope = string.IsNullOrWhiteSpace(request.SweepScope) ? "Region" : request.SweepScope.Trim(),
             SweepDataCenters = NormalizeSweepDataCenters(request.Region, request.SweepDataCenters),
             Lines = lines.OrderBy(line => line.Ordinal).ToList(),
@@ -479,12 +480,18 @@ public sealed class MarketAcquisitionRequestStore
             transaction,
             id,
             cancellationToken).ConfigureAwait(false);
+        var marketObservations = await ListMarketObservationsAsync(
+            connection,
+            transaction,
+            id,
+            cancellationToken).ConfigureAwait(false);
 
         return new MarketAcquisitionRequestTimelineView
         {
             Request = request,
             LifecycleEvents = lifecycleEvents,
             AttemptEvents = attemptEvents,
+            MarketObservations = marketObservations,
         };
     }
 
@@ -882,6 +889,233 @@ public sealed class MarketAcquisitionRequestStore
         var audit = await GetPurchaseAuditByIdAsync(connection, transaction, auditId, cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return audit;
+    }
+
+    public async Task<MarketAcquisitionMarketObservationView?> RecordMarketObservationAsync(
+        string requestId,
+        MarketAcquisitionMarketObservationRequest request,
+        CancellationToken cancellationToken)
+    {
+        ValidateMarketObservationRequest(request);
+        await ExpireClaimedAsync(cancellationToken).ConfigureAwait(false);
+
+        var payloadJson = JsonSerializer.Serialize(request, JsonOptions);
+        var payloadHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(payloadJson)));
+        var listingsJson = JsonSerializer.Serialize(request.Listings, JsonOptions);
+        var createdAtUtc = DateTimeOffset.UtcNow;
+
+        await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        var current = await GetByIdAsync(connection, transaction, requestId, cancellationToken).ConfigureAwait(false);
+        if (current == null)
+            return null;
+
+        var storedClaimToken = await GetClaimTokenAsync(connection, transaction, requestId, cancellationToken).ConfigureAwait(false);
+        if (!MatchesSecret(request.ClaimToken, storedClaimToken))
+            throw new UnauthorizedAccessException("Claim token does not match.");
+
+        await EnsureLineBelongsToRequestAsync(connection, transaction, requestId, request.LineId, cancellationToken).ConfigureAwait(false);
+
+        var existingByKey = await GetMarketObservationAsync(
+            connection,
+            transaction,
+            "idempotency_key = $value",
+            request.IdempotencyKey,
+            cancellationToken).ConfigureAwait(false);
+        if (existingByKey != null)
+        {
+            if (!string.Equals(existingByKey.RequestId, requestId, StringComparison.Ordinal) ||
+                !string.Equals(existingByKey.PayloadJson, payloadJson, StringComparison.Ordinal))
+                throw new MarketAcquisitionIdempotencyConflictException();
+
+            return existingByKey.View;
+        }
+
+        var existingBySequence = await GetMarketObservationBySequenceAsync(
+            connection,
+            transaction,
+            requestId,
+            request.AttemptId,
+            request.Sequence,
+            cancellationToken).ConfigureAwait(false);
+        if (existingBySequence != null)
+        {
+            if (!string.Equals(existingBySequence.IdempotencyKey, request.IdempotencyKey, StringComparison.Ordinal) ||
+                !string.Equals(existingBySequence.PayloadJson, payloadJson, StringComparison.Ordinal))
+                throw new MarketAcquisitionAttemptSequenceConflictException();
+
+            return existingBySequence.View;
+        }
+
+        var observationId = $"{createdAtUtc:yyyyMMddHHmmssfff}-{Guid.NewGuid():N}"[..26];
+        await using (var command = connection.CreateCommand())
+        {
+            command.Transaction = (SqliteTransaction)transaction;
+            command.CommandText =
+                """
+                INSERT INTO acquisition_market_observations (
+                    observation_id, request_id, line_id, attempt_id, sequence, idempotency_key,
+                    item_id, item_name, data_center, world_name, read_state,
+                    reported_listing_count, listing_capacity, is_truncated,
+                    observed_at_utc, listings_json, payload_json, payload_hash, created_at_utc)
+                VALUES (
+                    $observationId, $requestId, $lineId, $attemptId, $sequence, $idempotencyKey,
+                    $itemId, $itemName, $dataCenter, $worldName, $readState,
+                    $reportedListingCount, $listingCapacity, $isTruncated,
+                    $observedAtUtc, $listingsJson, $payloadJson, $payloadHash, $createdAtUtc);
+                """;
+            command.Parameters.AddWithValue("$observationId", observationId);
+            command.Parameters.AddWithValue("$requestId", requestId);
+            command.Parameters.AddWithValue("$lineId", request.LineId);
+            command.Parameters.AddWithValue("$attemptId", request.AttemptId);
+            command.Parameters.AddWithValue("$sequence", request.Sequence);
+            command.Parameters.AddWithValue("$idempotencyKey", request.IdempotencyKey);
+            command.Parameters.AddWithValue("$itemId", checked((long)request.ItemId));
+            command.Parameters.AddWithValue("$itemName", (object?)request.ItemName ?? DBNull.Value);
+            command.Parameters.AddWithValue("$dataCenter", request.DataCenter.Trim());
+            command.Parameters.AddWithValue("$worldName", request.WorldName.Trim());
+            command.Parameters.AddWithValue("$readState", request.ReadState);
+            command.Parameters.AddWithValue("$reportedListingCount", request.ReportedListingCount);
+            command.Parameters.AddWithValue("$listingCapacity", request.ListingCapacity);
+            command.Parameters.AddWithValue("$isTruncated", request.IsTruncated ? 1 : 0);
+            command.Parameters.AddWithValue("$observedAtUtc", request.ObservedAtUtc.ToUniversalTime().ToString("O"));
+            command.Parameters.AddWithValue("$listingsJson", listingsJson);
+            command.Parameters.AddWithValue("$payloadJson", payloadJson);
+            command.Parameters.AddWithValue("$payloadHash", payloadHash);
+            command.Parameters.AddWithValue("$createdAtUtc", createdAtUtc.ToString("O"));
+            await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        var stored = await GetMarketObservationAsync(
+            connection,
+            transaction,
+            "observation_id = $value",
+            observationId,
+            cancellationToken).ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return stored?.View;
+    }
+
+    private static void ValidateMarketObservationRequest(MarketAcquisitionMarketObservationRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (request.SchemaVersion != 1)
+            throw new ArgumentException("Market observation schema version 1 is required.", nameof(request));
+        if (string.IsNullOrWhiteSpace(request.ClaimToken) ||
+            string.IsNullOrWhiteSpace(request.IdempotencyKey) ||
+            string.IsNullOrWhiteSpace(request.AttemptId) ||
+            string.IsNullOrWhiteSpace(request.LineId))
+            throw new ArgumentException("Market observation claim, idempotency, attempt, and line identity are required.", nameof(request));
+        if (request.Sequence <= 0 || request.ItemId == 0)
+            throw new ArgumentException("Market observation sequence and item id must be positive.", nameof(request));
+        if (string.IsNullOrWhiteSpace(request.DataCenter) || string.IsNullOrWhiteSpace(request.WorldName))
+            throw new ArgumentException("Market observation data center and world are required.", nameof(request));
+        if (request.ReadState is not ("Complete" or "Partial" or "Unavailable"))
+            throw new ArgumentException("Market observation read state must be Complete, Partial, or Unavailable.", nameof(request));
+        if (request.ReportedListingCount < 0 || request.ListingCapacity < 0 ||
+            request.ReportedListingCount < request.Listings.Count)
+            throw new ArgumentException("Market observation listing counts are inconsistent.", nameof(request));
+        if (request.ObservedAtUtc == default)
+            throw new ArgumentException("Market observation timestamp is required.", nameof(request));
+        if (request.Listings.Any(listing => listing.Quantity == 0 || listing.UnitPrice == 0))
+            throw new ArgumentException("Market observation listings require positive quantity and unit price.", nameof(request));
+    }
+
+    private static async Task<IReadOnlyList<MarketAcquisitionMarketObservationView>> ListMarketObservationsAsync(
+        SqliteConnection connection,
+        System.Data.Common.DbTransaction transaction,
+        string requestId,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = (SqliteTransaction)transaction;
+        command.CommandText = $"{MarketObservationSelectSql} WHERE request_id = $requestId ORDER BY created_at_utc, sequence;";
+        command.Parameters.AddWithValue("$requestId", requestId);
+        var observations = new List<MarketAcquisitionMarketObservationView>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            observations.Add(ReadMarketObservation(reader).View);
+        return observations;
+    }
+
+    private static async Task<StoredMarketObservation?> GetMarketObservationAsync(
+        SqliteConnection connection,
+        System.Data.Common.DbTransaction transaction,
+        string predicate,
+        string value,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = (SqliteTransaction)transaction;
+        command.CommandText = $"{MarketObservationSelectSql} WHERE {predicate} LIMIT 1;";
+        command.Parameters.AddWithValue("$value", value);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        return await reader.ReadAsync(cancellationToken).ConfigureAwait(false)
+            ? ReadMarketObservation(reader)
+            : null;
+    }
+
+    private static async Task<StoredMarketObservation?> GetMarketObservationBySequenceAsync(
+        SqliteConnection connection,
+        System.Data.Common.DbTransaction transaction,
+        string requestId,
+        string attemptId,
+        long sequence,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = (SqliteTransaction)transaction;
+        command.CommandText = $"{MarketObservationSelectSql} WHERE request_id = $requestId AND attempt_id = $attemptId AND sequence = $sequence LIMIT 1;";
+        command.Parameters.AddWithValue("$requestId", requestId);
+        command.Parameters.AddWithValue("$attemptId", attemptId);
+        command.Parameters.AddWithValue("$sequence", sequence);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        return await reader.ReadAsync(cancellationToken).ConfigureAwait(false)
+            ? ReadMarketObservation(reader)
+            : null;
+    }
+
+    private static StoredMarketObservation ReadMarketObservation(SqliteDataReader reader)
+    {
+        var listings = JsonSerializer.Deserialize<List<MarketAcquisitionMarketObservationListing>>(
+            reader.GetString(15), JsonOptions) ?? [];
+        var view = new MarketAcquisitionMarketObservationView
+        {
+            ObservationId = reader.GetString(0),
+            RequestId = reader.GetString(1),
+            LineId = reader.GetString(2),
+            AttemptId = reader.GetString(3),
+            Sequence = reader.GetInt64(4),
+            ItemId = checked((uint)reader.GetInt64(6)),
+            ItemName = reader.IsDBNull(7) ? null : reader.GetString(7),
+            DataCenter = reader.GetString(8),
+            WorldName = reader.GetString(9),
+            ReadState = reader.GetString(10),
+            ReportedListingCount = reader.GetInt32(11),
+            ListingCapacity = reader.GetInt32(12),
+            IsTruncated = reader.GetInt32(13) != 0,
+            ObservedAtUtc = DateTimeOffset.Parse(reader.GetString(14)),
+            Listings = listings,
+            CreatedAtUtc = DateTimeOffset.Parse(reader.GetString(18)),
+        };
+        return new StoredMarketObservation(view, reader.GetString(5), reader.GetString(16));
+    }
+
+    private const string MarketObservationSelectSql =
+        """
+        SELECT observation_id, request_id, line_id, attempt_id, sequence, idempotency_key,
+               item_id, item_name, data_center, world_name, read_state,
+               reported_listing_count, listing_capacity, is_truncated,
+               observed_at_utc, listings_json, payload_json, payload_hash, created_at_utc
+        FROM acquisition_market_observations
+        """;
+
+    private sealed record StoredMarketObservation(
+        MarketAcquisitionMarketObservationView View,
+        string IdempotencyKey,
+        string PayloadJson)
+    {
+        public string RequestId => View.RequestId;
     }
 
     public async Task<MarketAcquisitionRequestView?> CancelAsync(

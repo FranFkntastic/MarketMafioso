@@ -120,6 +120,7 @@ internal sealed class FakeRouteReporter : IMarketAcquisitionRouteReporter
     public bool CanReport { get; set; } = true;
     public List<MarketAcquisitionRouteProgressReport> RouteProgressReports { get; } = [];
     public List<MarketAcquisitionPurchaseAuditReport> PurchaseAuditReports { get; } = [];
+    public List<MarketAcquisitionMarketObservationReport> MarketObservationReports { get; } = [];
 
     public Task<MarketAcquisitionRouteProgressReportOutcome> ReportRouteProgressAsync(MarketAcquisitionRouteProgressReport report, CancellationToken cancellationToken)
     {
@@ -134,6 +135,12 @@ internal sealed class FakeRouteReporter : IMarketAcquisitionRouteReporter
     }
 
     public Task ReportLineProgressAsync(MarketAcquisitionLineProgressReport report, CancellationToken cancellationToken) => Task.CompletedTask;
+
+    public Task ReportMarketObservationAsync(MarketAcquisitionMarketObservationReport report, CancellationToken cancellationToken)
+    {
+        MarketObservationReports.Add(report);
+        return Task.CompletedTask;
+    }
 }
 
 internal sealed class FakeRouteEvidenceRecorder : IMarketAcquisitionRouteEvidenceRecorder

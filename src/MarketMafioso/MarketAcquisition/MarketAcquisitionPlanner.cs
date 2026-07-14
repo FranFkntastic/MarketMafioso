@@ -438,6 +438,10 @@ public static class MarketAcquisitionPlanner
             !listing.WorldName.Equals(request.TargetWorld, StringComparison.OrdinalIgnoreCase))
             return false;
 
+        if (request.WorldMode.Equals("Selected", StringComparison.OrdinalIgnoreCase) &&
+            !request.SelectedWorlds.Contains(listing.WorldName, StringComparer.OrdinalIgnoreCase))
+            return false;
+
         return true;
     }
 
@@ -460,8 +464,8 @@ public static class MarketAcquisitionPlanner
         if (request.WorldMode is not ("Recommended" or "CurrentWorldOnly" or "Selected" or "AllWorldSweep"))
             throw new InvalidOperationException($"Unknown world mode {request.WorldMode}.");
 
-        if (request.WorldMode == "Selected")
-            throw new InvalidOperationException("Selected world mode requires selected worlds in the request payload before it can be planned.");
+        if (request.WorldMode == "Selected" && request.SelectedWorlds.Count == 0)
+            throw new InvalidOperationException("Selected world mode requires selected worlds in the request payload.");
     }
 
     private static IReadOnlyList<MarketAcquisitionWorldItemSubtask> BuildExecutableLinePlan(

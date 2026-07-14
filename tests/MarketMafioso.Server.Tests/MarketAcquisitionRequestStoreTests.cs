@@ -381,6 +381,51 @@ public sealed class MarketAcquisitionRequestStoreTests
         Assert.Equal(first.AuditId, second.AuditId);
     }
 
+    [Fact]
+    public async Task RecordMarketObservationAsyncPersistsCompleteEvidenceAndReplaysIdempotently()
+    {
+        using var fixture = await MarketAcquisitionStoreFixture.CreateAsync();
+        var claimed = await fixture.CreateAcceptedBatchAsync("market-observation-idempotent", lineCount: 1);
+        var request = new MarketAcquisitionMarketObservationRequest
+        {
+            ClaimToken = claimed.ClaimToken,
+            IdempotencyKey = "market-observation-key",
+            AttemptId = "attempt-1",
+            Sequence = 2,
+            LineId = claimed.Lines[0].LineId,
+            ItemId = claimed.Lines[0].ItemId,
+            ItemName = claimed.Lines[0].ItemName,
+            DataCenter = "Aether",
+            WorldName = "Siren",
+            ReadState = "Complete",
+            ReportedListingCount = 1,
+            ListingCapacity = 100,
+            ObservedAtUtc = DateTimeOffset.UtcNow,
+            Listings =
+            [
+                new MarketAcquisitionMarketObservationListing
+                {
+                    ListingId = "listing-1",
+                    RetainerId = "retainer-1",
+                    RetainerName = "Seller",
+                    Quantity = 10,
+                    UnitPrice = 50,
+                },
+            ],
+        };
+
+        var first = await fixture.Store.RecordMarketObservationAsync(claimed.Id, request, CancellationToken.None);
+        var second = await fixture.Store.RecordMarketObservationAsync(claimed.Id, request, CancellationToken.None);
+        var timeline = await fixture.Store.GetTimelineAsync(claimed.Id, CancellationToken.None);
+
+        Assert.NotNull(first);
+        Assert.NotNull(second);
+        Assert.Equal(first.ObservationId, second.ObservationId);
+        var observed = Assert.Single(timeline!.MarketObservations);
+        Assert.Equal("Complete", observed.ReadState);
+        Assert.Equal("listing-1", Assert.Single(observed.Listings).ListingId);
+    }
+
     private static MarketAcquisitionBatchCreateRequest CreateBatchRequest(
         string idempotencyKey,
         int expiresInSeconds = 300) =>

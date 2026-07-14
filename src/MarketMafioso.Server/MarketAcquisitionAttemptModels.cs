@@ -30,6 +30,7 @@ public sealed record MarketAcquisitionRequestTimelineView
     public MarketAcquisitionRequestView Request { get; init; } = new();
     public IReadOnlyList<MarketAcquisitionLifecycleEventView> LifecycleEvents { get; init; } = [];
     public IReadOnlyList<MarketAcquisitionAttemptEventView> AttemptEvents { get; init; } = [];
+    public IReadOnlyList<MarketAcquisitionMarketObservationView> MarketObservations { get; init; } = [];
 }
 
 public sealed record MarketAcquisitionLifecycleEventView

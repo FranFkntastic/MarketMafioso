@@ -595,6 +595,58 @@ public sealed class MarketAcquisitionRequestClientTests
         Assert.Equal((uint)500, body.RootElement.GetProperty("totalGil").GetUInt32());
     }
 
+    [Fact]
+    public async Task PostMarketObservationAsync_UsesCanonicalObservationEndpointAndPreservesCoverage()
+    {
+        using var handler = new CapturingHandler("""{ "observationId": "observation-1", "requestId": "batch-1" }""");
+        using var httpClient = new HttpClient(handler);
+        var client = new MarketMafioso.MarketAcquisition.MarketAcquisitionRequestClient(httpClient);
+
+        var observation = await client.PostMarketObservationAsync(
+            "https://dev.xivcraftarchitect.com/marketmafioso/api/inventory",
+            "client-secret",
+            "batch-1",
+            new MarketMafioso.MarketAcquisition.MarketAcquisitionMarketObservationRequest
+            {
+                ClaimToken = "claim-token",
+                IdempotencyKey = "observation-key",
+                AttemptId = "attempt-1",
+                Sequence = 3,
+                LineId = "line-1",
+                ItemId = 5064,
+                ItemName = "Silver Ingot",
+                DataCenter = "Aether",
+                WorldName = "Siren",
+                ReadState = "Partial",
+                ReportedListingCount = 5,
+                ListingCapacity = 2,
+                IsTruncated = true,
+                ObservedAtUtc = DateTimeOffset.UtcNow,
+                Listings =
+                [
+                    new()
+                    {
+                        ListingId = "listing-1",
+                        RetainerId = "retainer-1",
+                        RetainerName = "Seller",
+                        Quantity = 10,
+                        UnitPrice = 50,
+                    },
+                ],
+            },
+            CancellationToken.None);
+
+        Assert.Equal("observation-1", observation.ObservationId);
+        Assert.Equal(
+            "https://dev.xivcraftarchitect.com/marketmafioso/api/acquisition/batches/batch-1/observations",
+            handler.LastRequest?.RequestUri?.ToString());
+        var body = JsonDocument.Parse(handler.LastBody!);
+        Assert.Equal("Partial", body.RootElement.GetProperty("readState").GetString());
+        Assert.True(body.RootElement.GetProperty("isTruncated").GetBoolean());
+        Assert.Equal(5, body.RootElement.GetProperty("reportedListingCount").GetInt32());
+        Assert.Equal("listing-1", body.RootElement.GetProperty("listings")[0].GetProperty("listingId").GetString());
+    }
+
     private sealed class CapturingHandler(string responseJson, HttpStatusCode statusCode = HttpStatusCode.OK) : HttpMessageHandler
     {
         public HttpRequestMessage? LastRequest { get; private set; }

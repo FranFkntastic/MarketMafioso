@@ -437,6 +437,21 @@ public sealed class MarketAcquisitionRequestClient : IMarketAcquisitionRequestCl
             "purchase audit",
             cancellationToken);
 
+    public Task<MarketAcquisitionMarketObservationView> PostMarketObservationAsync(
+        string serverUrl,
+        string clientApiKey,
+        string requestId,
+        MarketAcquisitionMarketObservationRequest request,
+        CancellationToken cancellationToken) =>
+        PostBatchResourceAsync<MarketAcquisitionMarketObservationView>(
+            serverUrl,
+            clientApiKey,
+            requestId,
+            "observations",
+            request,
+            "market observation",
+            cancellationToken);
+
     public Task<MarketAcquisitionRequestView> ResendAsync(
         string serverUrl,
         string clientApiKey,

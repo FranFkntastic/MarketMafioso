@@ -96,7 +96,7 @@ public sealed class MarketAcquisitionRequestEndpointTests
             HttpMethod.Post,
             "/marketmafioso/api/acquisition/batches",
             "client-secret",
-            CreateBatchRequest("batch-1"));
+            CreateBatchRequest("batch-1", "Selected", ["Faerie"]));
 
         Assert.Equal(HttpStatusCode.Created, created.StatusCode);
         using var createdJson = JsonDocument.Parse(await created.Content.ReadAsStringAsync());
@@ -108,6 +108,8 @@ public sealed class MarketAcquisitionRequestEndpointTests
         Assert.Equal(4u, createdLines[1].GetProperty("itemId").GetUInt32());
         Assert.Equal("AllBelowThreshold", createdLines[1].GetProperty("quantityMode").GetString());
         Assert.Equal(999u, createdLines[1].GetProperty("maxQuantity").GetUInt32());
+        Assert.Equal("Selected", createdJson.RootElement.GetProperty("worldMode").GetString());
+        Assert.Equal("Faerie", createdJson.RootElement.GetProperty("selectedWorlds")[0].GetString());
 
         var pending = await SendWithKeyAsync(
             client,
@@ -1897,14 +1899,18 @@ public sealed class MarketAcquisitionRequestEndpointTests
             expiresInSeconds,
         };
 
-    private static object CreateBatchRequest(string idempotencyKey) => new
+    private static object CreateBatchRequest(
+        string idempotencyKey,
+        string worldMode = "Recommended",
+        IReadOnlyList<string>? selectedWorlds = null) => new
     {
         schemaVersion = 1,
         idempotencyKey,
         targetCharacterName = "Wei Ning",
         targetWorld = "Gilgamesh",
         region = "North America",
-        worldMode = "Recommended",
+        worldMode,
+        selectedWorlds = selectedWorlds ?? [],
         expiresInSeconds = 90,
         lines = new object[]
         {

@@ -203,6 +203,42 @@ public sealed class MarketAcquisitionRouteRequestReporter : IMarketAcquisitionRo
             Reason = report.Reason,
         }, cancellationToken).ConfigureAwait(false);
     }
+
+    public async Task ReportMarketObservationAsync(MarketAcquisitionMarketObservationReport report, CancellationToken cancellationToken)
+    {
+        var readState = report.ReadResult.ReadState switch
+        {
+            MarketBoardListingReadState.FreshComplete => "Complete",
+            MarketBoardListingReadState.FreshPartial => "Partial",
+            _ => "Unavailable",
+        };
+        await client.PostMarketObservationAsync(config.ServerUrl, config.ApiKey, report.RequestId, new MarketAcquisitionMarketObservationRequest
+        {
+            ClaimToken = report.ClaimToken,
+            IdempotencyKey = $"{config.PluginInstanceId}:{report.AttemptId}:observation:{report.Sequence}",
+            AttemptId = report.AttemptId,
+            Sequence = report.Sequence,
+            LineId = report.LineId,
+            ItemId = report.ItemId,
+            ItemName = report.ItemName,
+            DataCenter = report.DataCenter,
+            WorldName = report.WorldName,
+            ReadState = readState,
+            ReportedListingCount = Math.Max(report.ReadResult.ReportedListingCount, report.ReadResult.Listings.Count),
+            ListingCapacity = report.ReadResult.ListingCapacity,
+            IsTruncated = report.ReadResult.IsListingCountTruncated || report.ReadResult.HasIncompleteCoverage,
+            ObservedAtUtc = report.ObservedAtUtc,
+            Listings = report.ReadResult.Listings.Select(listing => new MarketAcquisitionMarketObservationListing
+            {
+                ListingId = listing.ListingId,
+                RetainerId = listing.RetainerId,
+                RetainerName = listing.RetainerName,
+                Quantity = listing.Quantity,
+                UnitPrice = listing.UnitPrice,
+                IsHq = listing.IsHq,
+            }).ToList(),
+        }, cancellationToken).ConfigureAwait(false);
+    }
 }
 
 public sealed class MarketAcquisitionWorldVisitEvidenceRecorder : IMarketAcquisitionRouteEvidenceRecorder

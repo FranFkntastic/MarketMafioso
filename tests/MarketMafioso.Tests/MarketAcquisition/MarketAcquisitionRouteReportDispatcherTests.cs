@@ -181,5 +181,9 @@ public sealed class MarketAcquisitionRouteReportDispatcherTests
         public Task ReportLineProgressAsync(
             MarketAcquisitionLineProgressReport report,
             CancellationToken cancellationToken) => OnLineProgress(report, cancellationToken);
+
+        public Task ReportMarketObservationAsync(
+            MarketAcquisitionMarketObservationReport report,
+            CancellationToken cancellationToken) => Task.CompletedTask;
     }
 }

@@ -144,6 +144,11 @@ public sealed class MarketAcquisitionRouteReportDispatcher : IDisposable
             token => reporter.ReportLineProgressAsync(report, token),
             $"Line progress report failed after {MaxAttempts} attempts");
 
+    public void EnqueueMarketObservation(MarketAcquisitionMarketObservationReport report) =>
+        EnqueueReport(
+            token => reporter.ReportMarketObservationAsync(report, token),
+            $"Market observation report failed after {MaxAttempts} attempts");
+
     private long CurrentSessionVersion
     {
         get

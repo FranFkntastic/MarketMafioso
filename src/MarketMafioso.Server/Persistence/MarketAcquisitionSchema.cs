@@ -146,6 +146,33 @@ internal static class MarketAcquisitionSchema
                 UNIQUE(request_id, attempt_id, sequence),
                 FOREIGN KEY(line_id) REFERENCES acquisition_batch_lines(line_id)
             );
+
+            CREATE TABLE IF NOT EXISTS acquisition_market_observations (
+                observation_id TEXT PRIMARY KEY,
+                request_id TEXT NOT NULL,
+                line_id TEXT NOT NULL,
+                attempt_id TEXT NOT NULL,
+                sequence INTEGER NOT NULL,
+                idempotency_key TEXT NOT NULL UNIQUE,
+                item_id INTEGER NOT NULL,
+                item_name TEXT NULL,
+                data_center TEXT NOT NULL,
+                world_name TEXT NOT NULL,
+                read_state TEXT NOT NULL,
+                reported_listing_count INTEGER NOT NULL,
+                listing_capacity INTEGER NOT NULL,
+                is_truncated INTEGER NOT NULL,
+                observed_at_utc TEXT NOT NULL,
+                listings_json TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                payload_hash TEXT NOT NULL,
+                created_at_utc TEXT NOT NULL,
+                UNIQUE(request_id, attempt_id, sequence),
+                FOREIGN KEY(line_id) REFERENCES acquisition_batch_lines(line_id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_acquisition_market_observations_request
+                ON acquisition_market_observations(request_id, created_at_utc);
             """;
         command.ExecuteNonQuery();
         EnsureColumn(connection, "acquisition_requests", "revision", "INTEGER NOT NULL DEFAULT 1");

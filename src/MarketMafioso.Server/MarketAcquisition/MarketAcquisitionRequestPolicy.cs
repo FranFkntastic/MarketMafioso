@@ -41,6 +41,7 @@ internal static class MarketAcquisitionRequestPolicy
         if (request.QuantityMode == "TargetQuantity" && request.Quantity == 0)
             throw new ArgumentException("Target quantity is required.", nameof(request));
         ValidateSweepScope(region, request.WorldMode, request.SweepScope, request.SweepDataCenters, nameof(request));
+        ValidateSelectedWorlds(request.WorldMode, request.SelectedWorlds, nameof(request));
     }
 
     public static void ValidateBatchCreateRequest(MarketAcquisitionBatchCreateRequest request)
@@ -62,6 +63,7 @@ internal static class MarketAcquisitionRequestPolicy
         if (request.Lines.Count == 0)
             throw new ArgumentException("At least one acquisition line is required.", nameof(request));
         ValidateSweepScope(region, request.WorldMode, request.SweepScope, request.SweepDataCenters, nameof(request));
+        ValidateSelectedWorlds(request.WorldMode, request.SelectedWorlds, nameof(request));
 
         foreach (var line in request.Lines)
             ValidateBatchLineCreateRequest(line);
@@ -95,6 +97,7 @@ internal static class MarketAcquisitionRequestPolicy
         if (request.Lines.Count == 0)
             throw new ArgumentException("At least one acquisition line is required.", nameof(request));
         ValidateSweepScope(region, request.WorldMode, request.SweepScope, request.SweepDataCenters, nameof(request));
+        ValidateSelectedWorlds(request.WorldMode, request.SelectedWorlds, nameof(request));
 
         foreach (var line in request.Lines)
             ValidateBatchLineCreateRequest(line);
@@ -147,6 +150,13 @@ internal static class MarketAcquisitionRequestPolicy
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
     }
+
+    public static IReadOnlyList<string> NormalizeSelectedWorlds(IReadOnlyList<string> selectedWorlds) =>
+        selectedWorlds
+            .Where(world => !string.IsNullOrWhiteSpace(world))
+            .Select(world => world.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
 
     public static void ValidateAttemptEventRequest(MarketAcquisitionAttemptEventRequest request)
     {
@@ -231,7 +241,7 @@ internal static class MarketAcquisitionRequestPolicy
     private static void ValidateOrigin(string? origin, string argumentName)
     {
         var normalized = NormalizeOrigin(origin);
-        if (normalized is not (MarketAcquisitionOrigins.DashboardCreated or MarketAcquisitionOrigins.PluginBuilder or MarketAcquisitionOrigins.ClientQuickShop))
+        if (normalized is not (MarketAcquisitionOrigins.DashboardCreated or MarketAcquisitionOrigins.PluginBuilder or MarketAcquisitionOrigins.ClientQuickShop or MarketAcquisitionOrigins.CraftArchitect))
             throw new ArgumentException($"{normalized} is not a supported market acquisition origin.", argumentName);
     }
 
@@ -259,6 +269,18 @@ internal static class MarketAcquisitionRequestPolicy
             .FirstOrDefault(dataCenter => !supportedDataCenters.Contains(dataCenter, StringComparer.OrdinalIgnoreCase));
         if (unsupported != null)
             throw new ArgumentException($"{unsupported} is not a {region} data center.", argumentName);
+    }
+
+    private static void ValidateSelectedWorlds(
+        string worldMode,
+        IReadOnlyList<string> selectedWorlds,
+        string argumentName)
+    {
+        if (worldMode.Equals("Selected", StringComparison.OrdinalIgnoreCase) &&
+            NormalizeSelectedWorlds(selectedWorlds).Count == 0)
+        {
+            throw new ArgumentException("At least one selected world is required for selected world mode.", argumentName);
+        }
     }
 
     private static void ValidateBatchLineCreateRequest(MarketAcquisitionBatchLineCreateRequest line)

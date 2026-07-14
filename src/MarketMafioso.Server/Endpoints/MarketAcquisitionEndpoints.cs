@@ -38,6 +38,8 @@ internal static class MarketAcquisitionEndpoints
         app.MapPost("/api/acquisition/batches/{id}/lines/{lineId}/progress", ReportLineProgress);
         app.MapPost("/acquisition/batches/{id}/purchases", RecordPurchase);
         app.MapPost("/api/acquisition/batches/{id}/purchases", RecordPurchase);
+        app.MapPost("/acquisition/batches/{id}/observations", RecordMarketObservation);
+        app.MapPost("/api/acquisition/batches/{id}/observations", RecordMarketObservation);
         app.MapPost("/acquisition/requests/{id}/complete", CompleteRequest);
         app.MapPost("/api/acquisition/requests/{id}/complete", CompleteRequest);
         app.MapPost("/acquisition/requests/{id}/fail", FailRequest);
@@ -390,6 +392,39 @@ internal static class MarketAcquisitionEndpoints
         {
             var audit = await store.RecordPurchaseAuditAsync(id, purchaseRequest, token);
             return audit == null ? Results.NotFound() : Results.Ok(audit);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return InvalidApiKey();
+        }
+        catch (ArgumentException ex)
+        {
+            return Results.BadRequest(new { error = ex.Message });
+        }
+        catch (MarketAcquisitionInvalidLineException)
+        {
+            return Results.NotFound();
+        }
+        catch (MarketAcquisitionIdempotencyConflictException ex)
+        {
+            return Results.Conflict(new { error = ex.Message });
+        }
+        catch (MarketAcquisitionAttemptSequenceConflictException ex)
+        {
+            return Results.Conflict(new { error = ex.Message });
+        }
+    }
+
+    private static async Task<IResult> RecordMarketObservation(
+        string id,
+        MarketAcquisitionMarketObservationRequest observationRequest,
+        MarketAcquisitionRequestStore store,
+        CancellationToken token)
+    {
+        try
+        {
+            var observation = await store.RecordMarketObservationAsync(id, observationRequest, token);
+            return observation == null ? Results.NotFound() : Results.Ok(observation);
         }
         catch (UnauthorizedAccessException)
         {

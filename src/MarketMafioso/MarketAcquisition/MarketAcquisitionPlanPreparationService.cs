@@ -51,9 +51,6 @@ public sealed class MarketAcquisitionPlanPreparationService
     {
         ArgumentNullException.ThrowIfNull(request);
         var claimed = request.Claim ?? throw new InvalidOperationException("No dashboard request is accepted.");
-        if (string.Equals(claimed.WorldMode, "Selected", StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException("Selected world mode cannot be planned until selected worlds are carried in the dashboard request payload.");
-
         var planLines = GetPlanLines(claimed);
         var listings = new List<MarketAcquisitionListing>();
         var sweepWorldExclusions = new List<MarketAcquisitionSweepWorldExclusion>();

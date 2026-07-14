@@ -828,6 +828,9 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
                 requireRunningRoute: recordRouteResult))
             return;
 
+        if (recordRouteResult && state.MarketBoardReadResult.IsFresh)
+            ReportMarketObservation(claimed, activeLine, activeSubtask, currentWorld, state.MarketBoardReadResult);
+
         var probeResult = recordRouteResult && runner.IsRunning && runner.ActiveStop is { Status: "Arrived" } && state.LiveCandidatePlan != null
             ? runner.RecordProbe(currentWorld, state.LiveCandidatePlan)
             : null;
@@ -1217,6 +1220,38 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
                 spentGil,
                 message,
                 reason));
+    }
+
+    private void ReportMarketObservation(
+        MarketAcquisitionClaimView claimed,
+        MarketAcquisitionRequestView activeLine,
+        MarketAcquisitionWorldItemSubtask? activeSubtask,
+        string worldName,
+        MarketBoardReadResult readResult)
+    {
+        if (!reportDispatcher.CanReport || string.IsNullOrWhiteSpace(claimed.ClaimToken))
+            return;
+
+        var lineId = !string.IsNullOrWhiteSpace(activeSubtask?.LineId)
+            ? activeSubtask.LineId
+            : GetActiveRouteLineId(claimed);
+        var itemId = activeSubtask?.ItemId ?? activeLine.ItemId;
+        var itemName = activeSubtask?.ItemName ?? activeLine.ItemName;
+        var dataCenter = !string.IsNullOrWhiteSpace(activeSubtask?.DataCenter)
+            ? activeSubtask.DataCenter
+            : MarketAcquisitionWorldCatalog.ResolveDataCenter(worldName);
+        reportDispatcher.EnqueueMarketObservation(new MarketAcquisitionMarketObservationReport(
+            claimed.Id,
+            claimed.ClaimToken,
+            state.ProgressNonce,
+            ++state.ProgressReportSequence,
+            lineId,
+            itemId,
+            itemName,
+            dataCenter,
+            worldName,
+            clock.UtcNow,
+            readResult));
     }
 
     private string GetActiveRouteLineId(MarketAcquisitionClaimView claimed)

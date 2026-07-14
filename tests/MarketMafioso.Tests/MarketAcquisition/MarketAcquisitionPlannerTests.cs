@@ -31,6 +31,29 @@ public sealed class MarketAcquisitionPlannerTests
     }
 
     [Fact]
+    public void BuildPlan_SelectedModeKeepsOnlyExplicitRouteWorlds()
+    {
+        var request = CreateRequest(
+            quantity: 4,
+            worldMode: "Selected",
+            selectedWorlds: ["Faerie"]);
+        var listings = new[]
+        {
+            CreateListing("Gilgamesh", quantity: 4, unitPrice: 50, listingId: "cheaper-wrong-world"),
+            CreateListing("Faerie", quantity: 4, unitPrice: 80, listingId: "selected-world"),
+        };
+
+        var plan = MarketMafioso.MarketAcquisition.MarketAcquisitionPlanner.BuildPlan(
+            request,
+            listings,
+            DateTimeOffset.UnixEpoch);
+
+        var batch = Assert.Single(plan.WorldBatches);
+        Assert.Equal("Faerie", batch.WorldName);
+        Assert.Equal("selected-world", Assert.Single(batch.Listings).ListingId);
+    }
+
+    [Fact]
     public void BuildPlan_RespectsHqOnlyPolicyAndGilCap()
     {
         var request = CreateRequest(quantity: 10, maxUnitPrice: 100, maxTotalGil: 550, hqPolicy: "HqOnly");
@@ -603,7 +626,8 @@ public sealed class MarketAcquisitionPlannerTests
         uint maxTotalGil = 1_000,
         string hqPolicy = "Either",
         string quantityMode = "TargetQuantity",
-        string region = "North-America") =>
+        string region = "North-America",
+        IReadOnlyList<string>? selectedWorlds = null) =>
         new()
         {
             Id = "request-1",
@@ -619,6 +643,7 @@ public sealed class MarketAcquisitionPlannerTests
             MaxUnitPrice = maxUnitPrice,
             MaxTotalGil = maxTotalGil,
             WorldMode = worldMode,
+            SelectedWorlds = selectedWorlds?.ToList() ?? [],
         };
 
     private static MarketMafioso.MarketAcquisition.MarketAcquisitionListing CreateListing(

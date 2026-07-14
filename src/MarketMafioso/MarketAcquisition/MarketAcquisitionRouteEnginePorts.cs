@@ -123,6 +123,7 @@ public interface IMarketAcquisitionRouteReporter
         CancellationToken cancellationToken);
     Task ReportPurchaseAuditAsync(MarketAcquisitionPurchaseAuditReport report, CancellationToken cancellationToken);
     Task ReportLineProgressAsync(MarketAcquisitionLineProgressReport report, CancellationToken cancellationToken);
+    Task ReportMarketObservationAsync(MarketAcquisitionMarketObservationReport report, CancellationToken cancellationToken);
 }
 
 public interface IMarketAcquisitionRouteEvidenceRecorder
@@ -187,3 +188,16 @@ public sealed record MarketAcquisitionLineProgressReport(
     uint SpentGil,
     string Message,
     string? Reason);
+
+public sealed record MarketAcquisitionMarketObservationReport(
+    string RequestId,
+    string ClaimToken,
+    string AttemptId,
+    long Sequence,
+    string LineId,
+    uint ItemId,
+    string? ItemName,
+    string DataCenter,
+    string WorldName,
+    DateTimeOffset ObservedAtUtc,
+    MarketBoardReadResult ReadResult);

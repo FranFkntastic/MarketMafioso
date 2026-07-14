@@ -17,6 +17,7 @@ public sealed record MarketAcquisitionCreateRequest
     public uint MaxUnitPrice { get; init; }
     public uint MaxTotalGil { get; init; }
     public string WorldMode { get; init; } = string.Empty;
+    public IReadOnlyList<string> SelectedWorlds { get; init; } = [];
     public string SweepScope { get; init; } = "Region";
     public IReadOnlyList<string> SweepDataCenters { get; init; } = [];
     public int ExpiresInSeconds { get; init; } = 90;
@@ -32,6 +33,7 @@ public sealed record MarketAcquisitionBatchCreateRequest
     public string TargetWorld { get; init; } = string.Empty;
     public string Region { get; init; } = string.Empty;
     public string WorldMode { get; init; } = string.Empty;
+    public IReadOnlyList<string> SelectedWorlds { get; init; } = [];
     public string SweepScope { get; init; } = "Region";
     public IReadOnlyList<string> SweepDataCenters { get; init; } = [];
     public int ExpiresInSeconds { get; init; } = 90;
@@ -50,6 +52,7 @@ public sealed record MarketAcquisitionBatchReplaceRequest
     public int ExpectedRevision { get; init; }
     public string Region { get; init; } = string.Empty;
     public string WorldMode { get; init; } = string.Empty;
+    public IReadOnlyList<string> SelectedWorlds { get; init; } = [];
     public string SweepScope { get; init; } = "Region";
     public IReadOnlyList<string> SweepDataCenters { get; init; } = [];
     public int ExpiresInSeconds { get; init; } = 90;
@@ -167,6 +170,57 @@ public sealed record MarketAcquisitionPurchaseAuditView
     public DateTimeOffset CreatedAtUtc { get; init; }
 }
 
+public sealed record MarketAcquisitionMarketObservationRequest
+{
+    public int SchemaVersion { get; init; } = 1;
+    public string ClaimToken { get; init; } = string.Empty;
+    public string IdempotencyKey { get; init; } = string.Empty;
+    public string AttemptId { get; init; } = string.Empty;
+    public long Sequence { get; init; }
+    public string LineId { get; init; } = string.Empty;
+    public uint ItemId { get; init; }
+    public string? ItemName { get; init; }
+    public string DataCenter { get; init; } = string.Empty;
+    public string WorldName { get; init; } = string.Empty;
+    public string ReadState { get; init; } = string.Empty;
+    public int ReportedListingCount { get; init; }
+    public int ListingCapacity { get; init; }
+    public bool IsTruncated { get; init; }
+    public DateTimeOffset ObservedAtUtc { get; init; }
+    public IReadOnlyList<MarketAcquisitionMarketObservationListing> Listings { get; init; } = [];
+}
+
+public sealed record MarketAcquisitionMarketObservationListing
+{
+    public string ListingId { get; init; } = string.Empty;
+    public string RetainerId { get; init; } = string.Empty;
+    public string RetainerName { get; init; } = string.Empty;
+    public uint Quantity { get; init; }
+    public uint UnitPrice { get; init; }
+    public bool IsHq { get; init; }
+}
+
+public sealed record MarketAcquisitionMarketObservationView
+{
+    public string ObservationId { get; init; } = string.Empty;
+    public string RequestId { get; init; } = string.Empty;
+    public string AttemptId { get; init; } = string.Empty;
+    public long Sequence { get; init; }
+    public string LineId { get; init; } = string.Empty;
+    public uint ItemId { get; init; }
+    public string? ItemName { get; init; }
+    public string DataCenter { get; init; } = string.Empty;
+    public string WorldName { get; init; } = string.Empty;
+    public string ReadState { get; init; } = string.Empty;
+    public int ReportedListingCount { get; init; }
+    public int ReadableListingCount => Listings.Count;
+    public int ListingCapacity { get; init; }
+    public bool IsTruncated { get; init; }
+    public DateTimeOffset ObservedAtUtc { get; init; }
+    public DateTimeOffset CreatedAtUtc { get; init; }
+    public IReadOnlyList<MarketAcquisitionMarketObservationListing> Listings { get; init; } = [];
+}
+
 public sealed record MarketAcquisitionRequestView
 {
     public string Id { get; init; } = string.Empty;
@@ -189,6 +243,7 @@ public sealed record MarketAcquisitionRequestView
     public uint MaxUnitPrice { get; init; }
     public uint MaxTotalGil { get; init; }
     public string WorldMode { get; init; } = string.Empty;
+    public IReadOnlyList<string> SelectedWorlds { get; init; } = [];
     public string SweepScope { get; init; } = "Region";
     public IReadOnlyList<string> SweepDataCenters { get; init; } = [];
     public string? LatestEventType { get; init; }
@@ -228,6 +283,7 @@ public sealed record MarketAcquisitionClaimView
     public uint MaxUnitPrice { get; init; }
     public uint MaxTotalGil { get; init; }
     public string WorldMode { get; init; } = string.Empty;
+    public IReadOnlyList<string> SelectedWorlds { get; init; } = [];
     public string SweepScope { get; init; } = "Region";
     public IReadOnlyList<string> SweepDataCenters { get; init; } = [];
     public string? LatestEventType { get; init; }
@@ -263,6 +319,7 @@ public static class MarketAcquisitionOrigins
     public const string DashboardCreated = "DashboardCreated";
     public const string PluginBuilder = "PluginBuilder";
     public const string ClientQuickShop = "ClientQuickShop";
+    public const string CraftArchitect = "CraftArchitect";
 }
 
 public static class MarketAcquisitionStatuses
