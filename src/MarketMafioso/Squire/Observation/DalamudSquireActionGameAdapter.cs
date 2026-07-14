@@ -254,9 +254,8 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
                 if (observed is null || !SquireFingerprintMatcher.ExactMatch(fingerprint, observed.Fingerprint) ||
                     !snapshot.Definitions.TryGetValue(fingerprint.ItemId, out var definition))
                     return SquireRevalidationResult.Fail("EvidenceWitnessChanged", $"A retained {proof.JobAbbreviation} witness changed or disappeared.");
-                if (definition.Slot != proof.Slot || definition.EquipLevel > job.Level ||
-                    !definition.EligibleClassJobIds.Contains(job.ClassJobId) ||
-                    !EquipmentWearerInference.MatchesIntendedWearer(definition, job, snapshot.Jobs))
+                if (definition.Slot != proof.Slot ||
+                    !EquipmentUseAnalyzer.IsEligibleWitness(targetDefinition, definition, job, snapshot.Jobs))
                     return SquireRevalidationResult.Fail("EvidenceWitnessIneligible", $"A retained witness is no longer safely usable by {proof.JobAbbreviation}.");
                 if (proof.Slot == EquipmentSlot.MainHand &&
                     (targetDefinition.MainHandOccupancy != definition.MainHandOccupancy ||
