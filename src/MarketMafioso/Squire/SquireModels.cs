@@ -101,7 +101,9 @@ public sealed record SquireProtectionPolicy(
     bool ProtectFutureLevelingGear = false,
     bool ProtectBlueAndPurpleGear = true,
     bool AllowRiskyMateriaRetrieval = false,
-    IReadOnlyList<SquireRule>? Rules = null)
+    IReadOnlyList<SquireRule>? Rules = null,
+    ulong CharacterContentId = 0,
+    IReadOnlyList<SquireCleanupRule>? CleanupRules = null)
 {
     public IReadOnlyList<SquireRule> MatchingRules(uint itemId, bool isHighQuality) => Rules?
         .Where(rule => rule.Matches(itemId, isHighQuality))
@@ -116,12 +118,17 @@ public sealed record SquireProtectionPolicy(
         .DefaultIfEmpty(0)
         .Max();
 
-    public IReadOnlyList<string> ValidationErrors => Rules?
-        .Where(rule => rule.Enabled)
-        .Select(rule => rule.IsValid(out var error) ? null : error)
-        .Where(error => error is not null)
-        .Select(error => error!)
-        .ToArray() ?? [];
+    public IReadOnlyList<string> ValidationErrors =>
+    [
+        .. Rules?
+            .Where(rule => rule.Enabled)
+            .Select(rule => rule.IsValid(out var error) ? null : error)
+            .Where(error => error is not null)
+            .Select(error => error!) ?? [],
+        .. CleanupRules?
+            .Where(rule => rule.Enabled)
+            .SelectMany(rule => rule.Validate()) ?? [],
+    ];
 }
 
 public sealed record SquireCandidate(
@@ -132,7 +139,8 @@ public sealed record SquireCandidate(
     IReadOnlySet<SquireDisposition> SupportedDispositions,
     IReadOnlyList<SquireReason> Reasons,
     EquipmentUseAnalysis? UseAnalysis,
-    SquireDuplicateStatus? DuplicateStatus = null)
+    SquireDuplicateStatus? DuplicateStatus = null,
+    SquireCleanupRuleEvaluation? RuleEvaluation = null)
 {
     public bool IsExecutable => Assessment == SquireAssessment.Candidate && SupportedDispositions.Count > 0;
 }

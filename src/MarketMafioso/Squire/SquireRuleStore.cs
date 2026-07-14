@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 
+#pragma warning disable CS0618 // Kept only to migrate schema-v1 configuration into configurable cleanup rules.
+
 namespace MarketMafioso.Squire;
 
 public sealed class SquireRuleStore
@@ -152,7 +154,6 @@ public static class SquireRuleMigration
     {
         var changed = false;
         config.RulesByCharacter ??= new();
-#pragma warning disable CS0618
         config.ExcludedItemIdsByCharacter ??= new();
         config.DuplicateRetentionByCharacter ??= new();
         foreach (var pair in config.ExcludedItemIdsByCharacter)
@@ -199,8 +200,7 @@ public static class SquireRuleMigration
             config.DuplicateRetentionByCharacter.Clear();
             changed = true;
         }
-#pragma warning restore CS0618
-        config.RuleSchemaVersion = 1;
+        config.RuleSchemaVersion = Math.Max(config.RuleSchemaVersion, 1);
         return changed;
     }
 
@@ -211,3 +211,5 @@ public static class SquireRuleMigration
         return target;
     }
 }
+
+#pragma warning restore CS0618

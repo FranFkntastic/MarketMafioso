@@ -300,6 +300,38 @@ public sealed class SquireCandidateEvaluatorTests
     }
 
     [Fact]
+    public void CounterfactualBatch_ReevaluatesDynamicRetentionRules()
+    {
+        var snapshot = Snapshot(
+            [Instance(100, slot: 1), Instance(100, slot: 2), Instance(100, slot: 3), Instance(200, slot: 4)],
+            [Definition(100, 20), Definition(200, 30)],
+            [Job(1, 50, true)],
+            []);
+        var dynamicRetention = CleanupRule(
+            "user.retain-obsolete",
+            900,
+            new(
+                ItemIds: new HashSet<uint> { 100 },
+                UseStatuses: new HashSet<EquipmentUseStatus> { EquipmentUseStatus.Obsolete }),
+            new(MinimumCopies: 2));
+        var policy = new SquireProtectionPolicy(
+            CharacterContentId: Scope.LocalContentId,
+            CleanupRules: [.. SquireBuiltInCleanupRules.CreateDefaults(), dynamicRetention]);
+        var removal = snapshot.Instances.First(instance => instance.Fingerprint.ItemId == 100).Fingerprint;
+
+        var result = new SquireCounterfactualBatchValidator().Validate(
+            snapshot,
+            new Dictionary<EquipmentInstanceFingerprint, SquireDisposition>(EquipmentInstanceFingerprintComparer.Instance)
+            {
+                [removal] = SquireDisposition.Desynthesize,
+            },
+            DesynthesisUnlocked,
+            policy);
+
+        Assert.True(result.Success, result.Message);
+    }
+
+    [Fact]
     public void CounterfactualBatch_DoesNotRequireRepairingAnUnrelatedPreexistingGearsetDeficit()
     {
         var snapshot = Snapshot(
@@ -533,8 +565,57 @@ public sealed class SquireCandidateEvaluatorTests
         var candidate = Assert.Single(evaluator.Evaluate(snapshot, DesynthesisUnlocked,
             new SquireProtectionPolicy(Rules: [invalid])).Candidates);
 
-        Assert.Equal(SquireAssessment.Protected, candidate.Assessment);
+        Assert.Equal(SquireAssessment.EvaluationFailure, candidate.Assessment);
         Assert.Contains(candidate.Reasons, reason => reason.Code == "InvalidRuleConfiguration");
+    }
+
+    [Fact]
+    public void ConfigurableAllowRule_CanAuthorizeHighRarityCleanupAndKeepsTrace()
+    {
+        var item = Definition(100, 20) with
+        {
+            NormalizedRarity = EquipmentRarity.Rare,
+            Rarity = 3,
+            ExpertDeliveryEligibility = ExpertDeliveryEligibility.Eligible,
+        };
+        var baseline = Definition(200, 30);
+        var snapshot = Snapshot([Instance(100), Instance(200, equipped: true, slot: 99)], [item, baseline], [Job(1, 50, true)], [Gearset(1, 200)]);
+        var allow = CleanupRule(
+            "user.allow-rare-100",
+            1_000,
+            new(ItemIds: new HashSet<uint> { 100 }),
+            new(SquireCleanupDecision.AllowCleanup, Authorizations: SquireCleanupAuthorization.HighRarity));
+        var policy = new SquireProtectionPolicy(
+            CharacterContentId: Scope.LocalContentId,
+            CleanupRules: [.. SquireBuiltInCleanupRules.CreateDefaults(), allow]);
+
+        var candidate = Assert.Single(evaluator.Evaluate(snapshot, DesynthesisUnlocked, policy).Candidates, value => value.Definition.ItemId == 100);
+
+        Assert.Equal(SquireAssessment.Candidate, candidate.Assessment);
+        Assert.Equal(SquireDisposition.ExpertDelivery, candidate.RecommendedDisposition);
+        Assert.Contains(candidate.Reasons, reason => reason.Code == "CleanupRuleAuthorized");
+        Assert.Contains(candidate.RuleEvaluation!.MatchedRules, trace => trace.RuleId == allow.Id && trace.WonDecision);
+        Assert.Contains(candidate.RuleEvaluation.MatchedRules, trace => trace.RuleId == "builtin.route-expert-delivery" && trace.WonDisposition);
+    }
+
+    [Fact]
+    public void InvalidConfigurableRule_ProducesEvaluationFailureForEveryObservedItem()
+    {
+        var snapshot = Snapshot([Instance(100)], [Definition(100, 20)], [Job(1, 50, false)], []);
+        var invalid = CleanupRule(
+            "user.invalid",
+            900,
+            new(ItemIds: new HashSet<uint>()),
+            new(Decision: SquireCleanupDecision.Protect));
+        var policy = new SquireProtectionPolicy(
+            CharacterContentId: Scope.LocalContentId,
+            CleanupRules: [.. SquireBuiltInCleanupRules.CreateDefaults(), invalid]);
+
+        var candidate = Assert.Single(evaluator.Evaluate(snapshot, DesynthesisUnlocked, policy).Candidates);
+
+        Assert.Equal(SquireAssessment.EvaluationFailure, candidate.Assessment);
+        Assert.Contains(candidate.Reasons, reason => reason.Code == "InvalidRuleConfiguration");
+        Assert.Contains(candidate.RuleEvaluation!.Errors, error => error.Contains("present but empty", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -725,6 +806,21 @@ public sealed class SquireCandidateEvaluatorTests
         new(Guid.NewGuid(), SquireRuleKind.RetainCopies, itemId,
             isHighQuality ? SquireRuleQuality.HighQuality : SquireRuleQuality.NormalQuality,
             minimumCopies, true, "Test retention");
+
+    private static SquireCleanupRule CleanupRule(
+        string id,
+        int priority,
+        SquireCleanupRuleCondition condition,
+        SquireCleanupRuleEffect effect) => new(
+        id,
+        id,
+        SquireCleanupRuleOrigin.User,
+        SquireCleanupRuleScope.Character,
+        Scope.LocalContentId,
+        true,
+        priority,
+        condition,
+        effect);
 
     private static GearsetSnapshot Gearset(int id, uint itemId) =>
         new(id, "Set", 1, [new GearsetItemReference(EquipmentSlot.Body, itemId)], true);

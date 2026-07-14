@@ -29,7 +29,7 @@ internal sealed class SquireTabPanel : IDisposable
     private readonly SquireCandidateEvaluator evaluator = new();
     private readonly SquireCounterfactualBatchValidator batchValidator = new();
     private readonly SquireReviewState review = new();
-    private readonly SquireRuleStore ruleStore;
+    private readonly SquireCleanupRuleStore ruleStore;
     private readonly SquireEvidencePanel evidencePanel;
     private readonly SquireRouteDiagnosticsPanel routeDiagnosticsPanel;
     private readonly SquireRunResultPanel runResultPanel = new();
@@ -85,7 +85,7 @@ internal sealed class SquireTabPanel : IDisposable
             gameInventory,
             dataManager,
             () => RequestAutomaticRefresh("Equipment changed", TimeSpan.FromMilliseconds(150)));
-        ruleStore = new SquireRuleStore(config);
+        ruleStore = new SquireCleanupRuleStore(config);
         evidencePanel = new SquireEvidencePanel(ruleStore, reviewRegistry, Refresh);
         routeDiagnosticsPanel = new SquireRouteDiagnosticsPanel(actionAdapter, reviewRegistry, uiStateCapture);
         search = config.Squire.Search;
@@ -198,6 +198,8 @@ internal sealed class SquireTabPanel : IDisposable
 
     internal SquireAnalysis? CurrentAnalysis => analysis;
 
+    internal void RequestPolicyRefresh() => RequestAutomaticRefresh("Cleanup rules changed", TimeSpan.Zero);
+
     public void OnFrameworkUpdate()
     {
         if (automaticRefreshRequested)
@@ -206,11 +208,14 @@ internal sealed class SquireTabPanel : IDisposable
 
     private void RequestAutomaticRefresh(string trigger, TimeSpan delay)
     {
-        if (automaticRefreshRequested)
-            return;
-        automaticRefreshTrigger = trigger;
+        var requestedAt = DateTimeOffset.UtcNow.Add(delay);
+        if (!automaticRefreshRequested || requestedAt < nextAutomaticRefreshAt)
+            nextAutomaticRefreshAt = requestedAt;
+        if (!automaticRefreshRequested ||
+            string.Equals(trigger, "Equipment changed", StringComparison.Ordinal) ||
+            !string.Equals(automaticRefreshTrigger, "Equipment changed", StringComparison.Ordinal))
+            automaticRefreshTrigger = trigger;
         automaticRefreshRequested = true;
-        nextAutomaticRefreshAt = DateTimeOffset.UtcNow.Add(delay);
     }
 
     private void Refresh(bool reconcileSelections, string trigger, bool allowDuringRun = false)
@@ -732,10 +737,7 @@ internal sealed class SquireTabPanel : IDisposable
             return null;
         var policy = CreateProtectionPolicy(value.Snapshot.Identity.Scope?.LocalContentId);
         var capabilities = capabilitySource.Capture();
-        var ruleKey = string.Join(",", policy.Rules?
-            .OrderBy(rule => rule.Id)
-            .Select(rule => $"{rule.Id:N}:{rule.Kind}:{rule.ItemId}:{rule.Quality}:{rule.MinimumCopies}:{rule.Enabled}:{rule.Note}") ?? []);
-        var key = $"{value.Snapshot.GenerationId}|signed={policy.ProtectSignedGear}|future={policy.ProtectFutureLevelingGear}|rarity={policy.ProtectBlueAndPurpleGear}|materiaRisk={policy.AllowRiskyMateriaRetrieval}|rules={ruleKey}|desynth={capabilities.DesynthesisUnlocked}|materiaUnlock={capabilities.MateriaRetrievalUnlocked}|" + string.Join(";", selections
+        var key = SquireAnalysisInputSignature.Create(value.Snapshot, capabilities, policy) + "|selections=" + string.Join(";", selections
             .OrderBy(pair => pair.Key.Container, StringComparer.Ordinal)
             .ThenBy(pair => pair.Key.SlotIndex)
             .Select(pair => $"{pair.Key.Container}:{pair.Key.SlotIndex}:{pair.Key.ItemId}:{pair.Value}"));

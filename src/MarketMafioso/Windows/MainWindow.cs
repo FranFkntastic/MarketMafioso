@@ -199,7 +199,7 @@ public class MainWindow : Window, IDisposable
         overviewTab = new OverviewTabPanel(IsMarketAcquisitionUnlocked);
         var squireSnapshotSource = new DalamudCharacterEquipmentSnapshotSource(playerState, dataManager, log);
         var squireCapabilities = new DalamudSquireDispositionCapabilitySource();
-        var squireRuleStore = new SquireRuleStore(config);
+        var squireRuleStore = new SquireCleanupRuleStore(config);
         var squireVnavmesh = new VNavmeshIpc(new DalamudVNavmeshIpcAdapter(Plugin.PluginInterface, log));
         var squireLifestream = new LifestreamIpc(Plugin.PluginInterface, log);
         uiStateCapture = new UiStateCaptureService(
@@ -363,6 +363,7 @@ public class MainWindow : Window, IDisposable
             playerState,
             dataManager,
             () => squireTab.CurrentAnalysis,
+            squireTab.RequestPolicyRefresh,
             AgentReviewRegistry);
 
         acquisitionWorkspace.RestoreClaimIntoBuilder();
