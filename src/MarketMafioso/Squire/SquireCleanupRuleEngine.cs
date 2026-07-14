@@ -290,19 +290,19 @@ public static class SquireBuiltInCleanupRules
     public static IReadOnlyList<SquireCleanupRule> CreateDefaults() =>
     [
         Protect("builtin.protect-high-rarity", "Protect blue and purple gear", 600,
-            new(Rarities: new HashSet<EquipmentRarity> { EquipmentRarity.Rare, EquipmentRarity.Relic })),
+            new(Rarities: new HashSet<EquipmentRarity> { EquipmentRarity.Rare, EquipmentRarity.Relic }, IsEquipment: true)),
         Protect("builtin.protect-player-signed", "Protect player-signed gear", 600,
-            new(IsPlayerSigned: true), enabled: false),
+            new(IsEquipment: true, IsPlayerSigned: true), enabled: false),
         Protect("builtin.protect-future-leveling", "Protect future-leveling gear", 600,
-            new(HasFutureLevelingUse: true), enabled: false),
+            new(IsEquipment: true, HasFutureLevelingUse: true), enabled: false),
         Protect("builtin.protect-armoire", "Protect Armoire-eligible gear", 600,
-            new(IsArmoireEligible: true)),
+            new(IsEquipment: true, IsArmoireEligible: true)),
         Protect("builtin.protect-materia-risk", "Protect gear with materia", 600,
-            new(HasMateria: true)),
+            new(IsEquipment: true, HasMateria: true)),
         Protect("builtin.protect-cosmetic", "Protect likely cosmetic gear", 600,
-            new(UseStatuses: new HashSet<EquipmentUseStatus> { EquipmentUseStatus.LikelyCosmetic })),
+            new(UseStatuses: new HashSet<EquipmentUseStatus> { EquipmentUseStatus.LikelyCosmetic }, IsEquipment: true)),
         Protect("builtin.protect-special-purpose", "Protect special-purpose gear", 600,
-            new(UseStatuses: new HashSet<EquipmentUseStatus> { EquipmentUseStatus.SpecialPurpose })),
+            new(UseStatuses: new HashSet<EquipmentUseStatus> { EquipmentUseStatus.SpecialPurpose }, IsEquipment: true)),
         Route("builtin.route-expert-delivery", "Prefer Expert Delivery", 400, SquireDisposition.ExpertDelivery),
         Route("builtin.route-desynthesis", "Prefer desynthesis", 300, SquireDisposition.Desynthesize),
         Route("builtin.route-vendor", "Prefer vendor sale", 200, SquireDisposition.VendorSell),
@@ -339,4 +339,35 @@ public static class SquireBuiltInCleanupRules
         priority,
         new(SupportedDispositions: new HashSet<SquireDisposition> { disposition }),
         new(PreferredDisposition: disposition));
+}
+
+public static class SquireLegacyCleanupRuleAdapter
+{
+    public static IReadOnlyList<SquireCleanupRule> Create(SquireProtectionPolicy policy)
+    {
+        var builtIns = SquireBuiltInCleanupRules.CreateDefaults().Select(rule => rule.Id switch
+        {
+            "builtin.protect-high-rarity" => rule with { Enabled = policy.ProtectBlueAndPurpleGear },
+            "builtin.protect-player-signed" => rule with { Enabled = policy.ProtectSignedGear },
+            "builtin.protect-future-leveling" => rule with { Enabled = policy.ProtectFutureLevelingGear },
+            "builtin.protect-materia-risk" => rule with { Enabled = !policy.AllowRiskyMateriaRetrieval },
+            _ => rule,
+        });
+        var itemRules = (policy.Rules ?? []).Select(rule => new SquireCleanupRule(
+            $"legacy.{rule.Id:N}",
+            string.IsNullOrWhiteSpace(rule.Note) ? $"Legacy {rule.Kind} rule" : rule.Note,
+            SquireCleanupRuleOrigin.User,
+            SquireCleanupRuleScope.Global,
+            null,
+            rule.Enabled,
+            1_000,
+            new(
+                ItemIds: new HashSet<uint> { rule.ItemId },
+                Quality: rule.Quality),
+            rule.Kind == SquireRuleKind.ProtectItem
+                ? new(Decision: SquireCleanupDecision.Protect)
+                : new(MinimumCopies: rule.MinimumCopies),
+            rule.Note));
+        return builtIns.Concat(itemRules).ToArray();
+    }
 }

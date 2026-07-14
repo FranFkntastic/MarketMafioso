@@ -12,7 +12,7 @@ using MarketMafioso.Windows.Main;
 namespace MarketMafioso.Windows.Squire;
 
 internal sealed class SquireEvidencePanel(
-    SquireRuleStore ruleStore,
+    SquireCleanupRuleStore ruleStore,
     AgentBridgeUiReviewRegistry reviewRegistry,
     Action refresh)
 {
@@ -102,8 +102,7 @@ internal sealed class SquireEvidencePanel(
     {
         var itemId = candidate.Definition.ItemId;
         var contentId = analysis.Snapshot.Identity.Scope?.LocalContentId;
-        var excluded = ruleStore.Get(contentId).Any(rule =>
-            rule.Enabled && rule.Kind == SquireRuleKind.ProtectItem && rule.ItemId == itemId);
+        var excluded = ruleStore.IsItemProtected(contentId, itemId);
         if (!excluded)
         {
             var protect = ImGui.Button($"Protect every copy of this item##SquireExclude{itemId}");
@@ -233,7 +232,7 @@ internal sealed class SquireEvidencePanel(
             ImGui.EndTable();
         }
 
-        var minimum = ruleStore.CreatePolicy(contentId).MinimumCopiesToKeep(itemId, isHighQuality);
+        var minimum = ruleStore.MinimumCopiesToKeep(contentId, itemId, isHighQuality);
         ImGui.SetNextItemWidth(ImGui.GetFontSize() * 8);
         if (ImGui.InputInt($"Minimum copies to keep##SquireDuplicateMinimum{itemId}{isHighQuality}", ref minimum))
         {
@@ -367,6 +366,56 @@ internal sealed class SquireEvidencePanel(
             Cell(DescribeReasonEvidence(analysis, candidate, reason));
         }
         ImGui.EndTable();
+
+        DrawCleanupRuleTrace(candidate);
+    }
+
+    private static void DrawCleanupRuleTrace(SquireCandidate candidate)
+    {
+        if (candidate.RuleEvaluation is not { } evaluation)
+            return;
+        ImGui.TextColored(MarketMafiosoUiTheme.Header, "Cleanup rule proof");
+        if (evaluation.Errors.Count > 0)
+            ImGui.TextColored(MarketMafiosoUiTheme.Warning, string.Join(" ", evaluation.Errors));
+        if (evaluation.MatchedRules.Count == 0)
+        {
+            ImGui.TextColored(MarketMafiosoUiTheme.Muted, "No configurable cleanup rule matched this item.");
+            return;
+        }
+        if (!ImGui.BeginTable("##SquireCleanupRuleTrace", 4, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.SizingStretchProp))
+            return;
+        ImGui.TableSetupColumn("Priority", ImGuiTableColumnFlags.WidthFixed, 70);
+        ImGui.TableSetupColumn("Matched rule");
+        ImGui.TableSetupColumn("Effect");
+        ImGui.TableSetupColumn("Outcome", ImGuiTableColumnFlags.WidthFixed, 150);
+        ImGui.TableHeadersRow();
+        foreach (var trace in evaluation.MatchedRules)
+        {
+            ImGui.TableNextRow();
+            Cell(trace.Priority.ToString());
+            Cell(trace.RuleName);
+            Cell(DescribeCleanupRuleEffect(trace.Effect));
+            Cell(trace.WonDecision && trace.WonDisposition
+                ? "Won decision and route"
+                : trace.WonDecision
+                    ? "Won decision"
+                    : trace.WonDisposition
+                        ? "Won route"
+                        : trace.Effect.MinimumCopies > 0 || trace.Effect.Authorizations != SquireCleanupAuthorization.None
+                            ? "Contributed constraint"
+                            : "Lower priority");
+        }
+        ImGui.EndTable();
+    }
+
+    private static string DescribeCleanupRuleEffect(SquireCleanupRuleEffect effect)
+    {
+        var values = new List<string>();
+        if (effect.Decision != SquireCleanupDecision.NoChange) values.Add(effect.Decision.ToString());
+        if (effect.PreferredDisposition is { } route) values.Add($"route: {SquirePresentation.FormatDisposition(route)}");
+        if (effect.MinimumCopies > 0) values.Add($"retain at least {effect.MinimumCopies}");
+        if (effect.Authorizations != SquireCleanupAuthorization.None) values.Add($"authorize {effect.Authorizations}");
+        return values.Count == 0 ? "No effect" : string.Join("; ", values);
     }
 
     private static void DrawJobComparisonEvidence(SquireCandidate candidate)

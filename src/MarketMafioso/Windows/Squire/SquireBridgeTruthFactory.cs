@@ -33,6 +33,9 @@ internal static class SquireBridgeTruthFactory
                 EvaluationFailureGroups = [],
                 ProtectionGroups = [],
                 ExecutableCandidates = [],
+                ApplicableRuleCount = 0,
+                EnabledRuleCount = 0,
+                RuleValidationErrors = [],
             };
         }
 
@@ -67,6 +70,9 @@ internal static class SquireBridgeTruthFactory
                 .OrderByDescending(group => group.Count())
                 .Select(group => $"{group.Key.Code}:{group.Key.NormalizedRarity}:{group.Count()}")
                 .ToArray(),
+            ApplicableRuleCount = analysis.Policy.CleanupRules?.Count ?? 0,
+            EnabledRuleCount = analysis.Policy.CleanupRules?.Count(rule => rule.Enabled) ?? 0,
+            RuleValidationErrors = analysis.Policy.ValidationErrors,
             ExecutableCandidates = analysis.Candidates
                 .Where(candidate => candidate.IsExecutable)
                 .Select(candidate =>
@@ -90,6 +96,9 @@ internal static class SquireBridgeTruthFactory
                             .ToArray() ?? [],
                         RevalidationCode = revalidation.Code,
                         RevalidationSucceeded = revalidation.Success,
+                        RuleTrace = candidate.RuleEvaluation?.MatchedRules
+                            .Select(trace => $"{trace.Priority}:{trace.RuleId}:{trace.RuleName}:decision={trace.Effect.Decision}:route={trace.Effect.PreferredDisposition?.ToString() ?? "none"}:minimum={trace.Effect.MinimumCopies}:authorizations={trace.Effect.Authorizations}:wonDecision={trace.WonDecision}:wonRoute={trace.WonDisposition}")
+                            .ToArray() ?? [],
                     };
                 })
                 .ToArray(),
