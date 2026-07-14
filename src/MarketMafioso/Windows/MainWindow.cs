@@ -248,7 +248,8 @@ public class MainWindow : Window, IDisposable
             Path.Combine(Plugin.PluginInterface.GetPluginConfigDirectory(), "squire-logs"),
             uiStateCapture,
             Plugin.GameInventory,
-            dataManager);
+            dataManager,
+            acquisitionPlanSource);
         statusTab = new StatusTabPanel(config, reporter, retainerCacheStore, log);
         marketAcquisitionRequestPickupPanel = new MarketAcquisitionRequestPickupPanel(
             () => _ = FetchDashboardRequestsAsync(),
@@ -313,6 +314,11 @@ public class MainWindow : Window, IDisposable
             SyncAcquisitionRequestBuilderAsync,
             RefreshAcquisitionRequestBuilderRemoteAsync,
             acquisitionWorkspace.OnDocumentAdopted);
+        squireTab.ConnectMarketAcquisition(lines =>
+        {
+            acquisitionRequestBuilder.StageLines(lines);
+            agentRequestedTab = "Market Acquisition";
+        });
         acquisitionWorkspace.Connect(
             acquisitionRequestBuilder.AdoptRequest,
             acquisitionRequestBuilder.AdoptRestoredRequestIfSafe,

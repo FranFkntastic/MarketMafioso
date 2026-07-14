@@ -9,7 +9,9 @@ using System.Threading.Tasks;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Plugin.Services;
 using MarketMafioso.Squire;
+using MarketMafioso.Squire.Outfitter;
 using MarketMafioso.Squire.Observation;
+using MarketMafioso.MarketAcquisition;
 using MarketMafioso.AgentBridge;
 using MarketMafioso.Windows.Main;
 using Newtonsoft.Json;
@@ -36,6 +38,8 @@ internal sealed class SquireTabPanel : IDisposable
     private readonly string diagnosticDirectory;
     private readonly UiStateCaptureService uiStateCapture;
     private readonly SquireInventoryChangeMonitor inventoryChangeMonitor;
+    private readonly OutfitterPanel outfitterPanel;
+    private string selectedWorkspace;
     private SquireAnalysis? analysis;
     private SquireRunPresentation? lastRun;
     private string search = string.Empty;
@@ -72,7 +76,8 @@ internal sealed class SquireTabPanel : IDisposable
         string diagnosticDirectory,
         UiStateCaptureService uiStateCapture,
         IGameInventory gameInventory,
-        IDataManager dataManager)
+        IDataManager dataManager,
+        IMarketAcquisitionListingSource marketListingSource)
     {
         this.config = config;
         this.snapshotSource = snapshotSource;
@@ -85,6 +90,14 @@ internal sealed class SquireTabPanel : IDisposable
             gameInventory,
             dataManager,
             () => RequestAutomaticRefresh("Equipment changed", TimeSpan.FromMilliseconds(150)));
+        outfitterPanel = new OutfitterPanel(
+            config,
+            new OutfitterCandidateCatalog(dataManager),
+            new OutfitterMarketQuoteService(marketListingSource),
+            reviewRegistry);
+        selectedWorkspace = string.Equals(config.Squire.SelectedWorkspace, "Cleanup", StringComparison.OrdinalIgnoreCase)
+            ? "Cleanup"
+            : "Outfitter";
         ruleStore = new SquireCleanupRuleStore(config);
         evidencePanel = new SquireEvidencePanel(ruleStore, reviewRegistry, Refresh);
         routeDiagnosticsPanel = new SquireRouteDiagnosticsPanel(actionAdapter, reviewRegistry, uiStateCapture);
@@ -96,6 +109,79 @@ internal sealed class SquireTabPanel : IDisposable
     public void Draw()
     {
         MaybeRefreshAutomatically();
+        DrawWorkspaceSelector();
+        ImGui.Separator();
+        if (selectedWorkspace == "Outfitter")
+        {
+            DrawOutfitter();
+            return;
+        }
+
+        DrawCleanup();
+    }
+
+    public void ConnectMarketAcquisition(Action<IReadOnlyList<MarketAcquisitionRequestLineDocument>> stageLines) =>
+        outfitterPanel.ConnectMarketAcquisition(stageLines);
+
+    private void DrawWorkspaceSelector()
+    {
+        ImGui.TextColored(MarketMafiosoUiTheme.Header, "Squire");
+        ImGui.SameLine();
+        DrawWorkspaceButton("Outfitter", "Plan complete job and retainer loadouts");
+        ImGui.SameLine();
+        DrawWorkspaceButton("Cleanup", "Review and execute equipment cleanup");
+        ImGui.SameLine();
+        ImGui.TextColored(
+            MarketMafiosoUiTheme.Muted,
+            selectedWorkspace == "Outfitter" ? "Target → loadout → acquisition" : "Review → confirm → execute");
+    }
+
+    private void DrawWorkspaceButton(string workspace, string label)
+    {
+        var selected = selectedWorkspace == workspace;
+        if (ImGui.Selectable($"{workspace}##SquireWorkspace{workspace}", selected, ImGuiSelectableFlags.None, new(92f, 0)))
+            SelectWorkspace(workspace);
+        RegisterLastControl(
+            $"squire.workspace.{workspace.ToLowerInvariant()}",
+            label,
+            AgentBridgeUiControlKind.Select,
+            true,
+            selected,
+            workspace,
+            () => SelectWorkspace(workspace));
+    }
+
+    private void SelectWorkspace(string workspace)
+    {
+        selectedWorkspace = workspace;
+        config.Squire.SelectedWorkspace = workspace;
+        config.Save();
+    }
+
+    private void DrawOutfitter()
+    {
+        ImGui.TextColored(MarketMafiosoUiTheme.Header, "Outfitter — loadout planner");
+        ImGui.TextWrapped("Choose a target, compare its current set with the best accessible loadout, then hand market purchases to Market Acquisition.");
+        if (ImGui.Button("Refresh equipment##Outfitter"))
+            Refresh();
+        RegisterLastControl(
+            "squire.outfitter.refresh-equipment",
+            "Refresh Outfitter equipment",
+            AgentBridgeUiControlKind.Button,
+            true,
+            false,
+            null,
+            Refresh);
+        ImGui.SameLine();
+        ImGui.TextColored(MarketMafiosoUiTheme.Muted, status);
+        ImGui.Separator();
+        if (analysis is null)
+            return;
+        outfitterPanel.Draw(analysis.Snapshot);
+    }
+
+    private void DrawCleanup()
+    {
         ImGui.TextColored(MarketMafiosoUiTheme.Header, "Squire — cleanup selection");
         ImGui.TextWrapped("Squire keeps its equipment analysis current automatically. Cleanup happens only through an explicitly selected and confirmed batch.");
         if (ImGui.Button("Refresh##Squire"))
@@ -844,6 +930,7 @@ internal sealed class SquireTabPanel : IDisposable
     public void Dispose()
     {
         runCancellation?.Cancel();
+        outfitterPanel.Dispose();
         inventoryChangeMonitor.Dispose();
         routeDiagnosticsPanel.Dispose();
         actionAdapter.ReleaseOwnedState();

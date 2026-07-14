@@ -61,6 +61,9 @@ public sealed class MarketAcquisitionRequestBuilderPanel
     public bool AdoptRestoredRequestIfSafe(MarketAcquisitionRequestView request) =>
         controller.AdoptRestoredRequestIfSafe(request);
 
+    public int StageLines(IEnumerable<MarketAcquisitionRequestLineDocument> lines) =>
+        controller.AddLines(lines);
+
     public void Draw(MarketAcquisitionRequestBuilderContext context, bool showLifecycleSummary = true)
     {
         EnsureCharacterScope(context);

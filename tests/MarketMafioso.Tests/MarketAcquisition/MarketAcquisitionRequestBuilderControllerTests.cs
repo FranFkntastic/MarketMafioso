@@ -257,6 +257,25 @@ public sealed class MarketAcquisitionRequestBuilderControllerTests
         Assert.Equal(3, persisted.Count);
     }
 
+    [Fact]
+    public void AddLines_DeduplicatesExistingAndIncomingItemsInOnePersistedEdit()
+    {
+        var persisted = new List<MarketAcquisitionRequestDocument>();
+        var controller = CreateController(CreateDocument(), persist: persisted.Add);
+
+        var added = controller.AddLines([
+            new() { ItemId = 19951, ItemName = "Koppranickel Ore" },
+            new() { ItemId = 100, ItemName = "Bronze Sallet", ItemKind = "Equipment" },
+            new() { ItemId = 100, ItemName = "Bronze Sallet duplicate", ItemKind = "Equipment" },
+        ]);
+
+        Assert.Equal(1, added);
+        Assert.Equal(2, controller.Document.Lines.Count);
+        Assert.Equal("Bronze Sallet", controller.Document.Lines[1].ItemName);
+        Assert.Equal("Added 1 Outfitter line.", controller.Status);
+        Assert.Single(persisted);
+    }
+
     private static MarketAcquisitionRequestBuilderController CreateController(
         MarketAcquisitionRequestDocument document,
         Func<MarketAcquisitionRequestDocument, Task<MarketAcquisitionRequestBuilderSyncOutcome>>? sync = null,

@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Threading.Tasks;
 using MarketMafioso.MarketAcquisition;
 
@@ -178,6 +180,27 @@ public sealed class MarketAcquisitionRequestBuilderController
         Document = RequestDocumentMutation.AddLine(Document, line);
         SelectedLineIndex = -1;
         FinishLocalEdit("Local request updated.");
+    }
+
+    public int AddLines(IEnumerable<MarketAcquisitionRequestLineDocument> lines)
+    {
+        ArgumentNullException.ThrowIfNull(lines);
+        var added = 0;
+        foreach (var line in lines)
+        {
+            if (line.ItemId == 0 || Document.Lines.Any(existing => existing.ItemId == line.ItemId))
+                continue;
+            Document = RequestDocumentMutation.AddLine(Document, line);
+            added++;
+        }
+        if (added == 0)
+        {
+            Status = "Outfitter items are already present in the local request.";
+            return 0;
+        }
+        SelectedLineIndex = -1;
+        FinishLocalEdit($"Added {added:N0} Outfitter line{(added == 1 ? string.Empty : "s")}.");
+        return added;
     }
 
     public bool RemoveLine(int index)

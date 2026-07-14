@@ -80,6 +80,11 @@ public class Configuration : IPluginConfiguration
 [Serializable]
 public sealed class SquireConfiguration
 {
+    public string SelectedWorkspace { get; set; } = "Outfitter";
+    public string OutfitterSelectedTargetKey { get; set; } = string.Empty;
+    public string OutfitterSearch { get; set; } = string.Empty;
+    public string OutfitterStrategy { get; set; } = "HighestItemLevel";
+    public int OutfitterTargetLevel { get; set; }
     public bool ShowProtected { get; set; }
     public bool ShowNonEquipment { get; set; }
     public string Search { get; set; } = string.Empty;

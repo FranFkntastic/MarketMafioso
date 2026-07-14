@@ -359,7 +359,7 @@ public sealed class DalamudCharacterEquipmentSnapshotSource : ICharacterEquipmen
         }
     }
 
-    private static bool IsEligible(ClassJobCategory category, string abbreviation)
+    internal static bool IsEligible(ClassJobCategory category, string abbreviation)
     {
         var property = typeof(ClassJobCategory).GetProperty(abbreviation);
         return property?.PropertyType == typeof(bool) && property.GetValue(category) is true;
