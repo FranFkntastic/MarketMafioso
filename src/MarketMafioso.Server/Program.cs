@@ -237,6 +237,7 @@ static bool IsKnownAcquisitionPluginRoute(HttpRequest request)
            ((path.StartsWith("/acquisition/batches/", StringComparison.OrdinalIgnoreCase) ||
              path.StartsWith("/api/acquisition/batches/", StringComparison.OrdinalIgnoreCase)) &&
             (path.EndsWith("/purchases", StringComparison.OrdinalIgnoreCase) ||
+             path.EndsWith("/observations", StringComparison.OrdinalIgnoreCase) ||
              (path.Contains("/lines/", StringComparison.OrdinalIgnoreCase) &&
               path.EndsWith("/progress", StringComparison.OrdinalIgnoreCase))));
 }

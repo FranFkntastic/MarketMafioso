@@ -289,6 +289,54 @@ public sealed class DashboardAccountAuthTests
     }
 
     [Fact]
+    public async Task DashboardSession_AllowsPluginMarketObservationWithApiKeyUnderBasePath()
+    {
+        await using var application = CreateApplication(
+            new KeyValuePair<string, string?>("MarketMafioso:RequireApiKey", "true"),
+            new KeyValuePair<string, string?>("MarketMafioso:ClientApiKey", "client-secret"),
+            new KeyValuePair<string, string?>("MarketMafioso:BasePath", "/marketmafioso"));
+        using var client = application.CreateClient();
+        var accepted = await application.CreateAcceptedBatchAsync(client, "dashboard-session-market-observation");
+        var line = Assert.Single(accepted.Lines);
+
+        var response = await MarketAcquisitionTestApp.SendWithKeyAsync(
+            client,
+            HttpMethod.Post,
+            $"/marketmafioso/api/acquisition/batches/{accepted.Id}/observations",
+            new
+            {
+                claimToken = accepted.ClaimToken,
+                idempotencyKey = "dashboard-session-market-observation-1",
+                attemptId = "attempt-1",
+                sequence = 1,
+                lineId = line.LineId,
+                itemId = line.ItemId,
+                itemName = line.ItemName,
+                dataCenter = "Aether",
+                worldName = "Gilgamesh",
+                readState = "Complete",
+                reportedListingCount = 1,
+                listingCapacity = 100,
+                isTruncated = false,
+                observedAtUtc = DateTimeOffset.UtcNow,
+                listings = new[]
+                {
+                    new
+                    {
+                        listingId = "listing-1",
+                        retainerId = "retainer-1",
+                        retainerName = "Retainer",
+                        quantity = 10,
+                        unitPrice = 99,
+                        isHq = false,
+                    },
+                },
+            });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
     public async Task DashboardSession_StopsWorkingWhenUserIsDisabled()
     {
         var values = CreateApplicationValues();

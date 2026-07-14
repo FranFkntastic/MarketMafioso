@@ -118,6 +118,7 @@ public sealed class DashboardSessionAuthMiddleware
         {
             return request.Headers.ContainsKey("X-Api-Key") &&
                    (path.EndsWith("/purchases", StringComparison.OrdinalIgnoreCase) ||
+                    path.EndsWith("/observations", StringComparison.OrdinalIgnoreCase) ||
                     (path.Contains("/lines/", StringComparison.OrdinalIgnoreCase) &&
                      path.EndsWith("/progress", StringComparison.OrdinalIgnoreCase)));
         }
