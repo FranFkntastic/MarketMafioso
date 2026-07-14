@@ -189,6 +189,7 @@ public sealed class PersistedMarketAcquisitionClaim
     public uint MaxUnitPrice { get; set; }
     public uint MaxTotalGil { get; set; }
     public string WorldMode { get; set; } = string.Empty;
+    public List<string> SelectedWorlds { get; set; } = [];
     public string ClaimToken { get; set; } = string.Empty;
     public string? AcceptIdempotencyKey { get; set; }
     public string? RejectIdempotencyKey { get; set; }

@@ -866,10 +866,11 @@ public class MainWindow : Window, IDisposable
         if (claim == null || acquisitionWorkspace.IsBusy || routeEngine.IsRouteActive)
             return false;
 
-        return claim.WorldMode.Equals("Selected", StringComparison.OrdinalIgnoreCase)
-            ? claim.SelectedWorlds.Count > 0
-            : claim.WorldMode.Equals("CurrentWorldOnly", StringComparison.OrdinalIgnoreCase) &&
-              playerState.CurrentWorld.IsValid;
+        if (claim.WorldMode.Equals("Selected", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        return claim.WorldMode.Equals("CurrentWorldOnly", StringComparison.OrdinalIgnoreCase) &&
+               playerState.CurrentWorld.IsValid;
     }
 
     private Task StartGuidedRouteAsync(bool forceDiagnostics)

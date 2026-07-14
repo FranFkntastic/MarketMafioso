@@ -36,6 +36,7 @@ internal static class MarketAcquisitionClaimPersistence
                 MaxUnitPrice = stored.MaxUnitPrice,
                 MaxTotalGil = stored.MaxTotalGil,
                 WorldMode = stored.WorldMode,
+                SelectedWorlds = stored.SelectedWorlds.ToList(),
                 ClaimToken = stored.ClaimToken,
                 Lines = stored.Lines.Count == 0
                     ? [CreateFallbackLine(stored)]
@@ -89,6 +90,7 @@ internal static class MarketAcquisitionClaimPersistence
             MaxUnitPrice = claim.MaxUnitPrice,
             MaxTotalGil = claim.MaxTotalGil,
             WorldMode = claim.WorldMode,
+            SelectedWorlds = claim.SelectedWorlds.ToList(),
             ClaimToken = claim.ClaimToken,
             AcceptIdempotencyKey = acceptIdempotencyKey,
             RejectIdempotencyKey = rejectIdempotencyKey,

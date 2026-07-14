@@ -412,6 +412,20 @@ public sealed class MarketAcquisitionRequestWorkspace : IDisposable
         MarketAcquisitionClaimView claimed,
         CancellationToken token)
     {
+        if (claimed.WorldMode.Equals("Selected", StringComparison.OrdinalIgnoreCase) &&
+            claimed.SelectedWorlds.Count == 0)
+        {
+            var remote = await client.GetBatchAsync(
+                config.ServerUrl,
+                config.ApiKey,
+                claimed.Id,
+                token).ConfigureAwait(false);
+            claimed = MarketAcquisitionRequestDocumentMapper.MergeClaimWithRequest(claimed, remote);
+            ClaimedRequest = claimed;
+            PersistClaim();
+            Status = "Restored the selected-world scope from Workshop Host.";
+        }
+
         if (!MarketAcquisitionPlanPreparationService.IsFailedStatus(claimed.Status))
             return claimed;
 

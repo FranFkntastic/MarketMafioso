@@ -22,7 +22,8 @@ public sealed class MarketAcquisitionClaimPersistenceTests
             HqPolicy = "Either",
             MaxUnitPrice = 70,
             MaxTotalGil = 0,
-            WorldMode = "Recommended",
+            WorldMode = "Selected",
+            SelectedWorlds = ["Gilgamesh", "Siren"],
             ClaimToken = "claim-token",
         };
 
@@ -40,6 +41,7 @@ public sealed class MarketAcquisitionClaimPersistenceTests
         Assert.Equal("Darksteel Nugget", restored.Value.Claim.ItemName);
         Assert.Equal(MarketMafioso.MarketAcquisition.MarketAcquisitionOrigins.ClientQuickShop, restored.Value.Claim.Origin);
         Assert.Equal("plugin-instance", restored.Value.Claim.CreatedByPluginInstanceId);
+        Assert.Equal(["Gilgamesh", "Siren"], restored.Value.Claim.SelectedWorlds);
         Assert.Equal("accept-key", restored.Value.AcceptIdempotencyKey);
         Assert.Equal("reject-key", restored.Value.RejectIdempotencyKey);
     }

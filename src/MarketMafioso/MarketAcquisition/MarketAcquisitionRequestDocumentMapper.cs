@@ -121,6 +121,7 @@ public static class MarketAcquisitionRequestDocumentMapper
             MaxUnitPrice = request.MaxUnitPrice,
             MaxTotalGil = request.MaxTotalGil,
             WorldMode = request.WorldMode,
+            SelectedWorlds = request.SelectedWorlds,
             SweepScope = request.SweepScope,
             SweepDataCenters = request.SweepDataCenters,
             Lines = request.Lines,

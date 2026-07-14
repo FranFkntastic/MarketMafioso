@@ -153,6 +153,42 @@ public sealed class MarketAcquisitionRequestWorkspaceTests
         Assert.NotEqual("old-reject-key", config.ActiveMarketAcquisitionClaim?.RejectIdempotencyKey);
     }
 
+    [Fact]
+    public async Task RestoredSelectedClaimRecoversMissingWorldScopeBeforeRouteAction()
+    {
+        var config = new Configuration
+        {
+            ServerUrl = "https://example.test/inventory",
+            ApiKey = "client-key",
+        };
+        var restored = CreateClaim() with
+        {
+            Status = "AcceptedInPlugin",
+            WorldMode = "Selected",
+            SelectedWorlds = [],
+        };
+        MarketAcquisitionClaimPersistence.Save(config, restored, "accept-key", "reject-key");
+        var remote = CreateRequest() with
+        {
+            Status = "AcceptedInPlugin",
+            WorldMode = "Selected",
+            SelectedWorlds = ["Siren"],
+        };
+        using var httpClient = new HttpClient(new SequenceHttpMessageHandler(remote));
+        using var workspace = CreateWorkspace(config, () => { }, httpClient);
+        MarketAcquisitionClaimView? routeClaim = null;
+
+        await workspace.RunWithReportableClaimAsync((claim, _) =>
+        {
+            routeClaim = claim;
+            return Task.CompletedTask;
+        });
+
+        Assert.Equal(["Siren"], routeClaim?.SelectedWorlds);
+        Assert.Equal(["Siren"], config.ActiveMarketAcquisitionClaim?.SelectedWorlds);
+        Assert.Contains("selected-world scope", workspace.Status, StringComparison.OrdinalIgnoreCase);
+    }
+
     private static MarketAcquisitionRequestWorkspace CreateWorkspace(
         Configuration config,
         Action saveConfig,

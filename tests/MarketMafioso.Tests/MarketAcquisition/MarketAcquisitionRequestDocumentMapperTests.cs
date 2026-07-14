@@ -67,6 +67,28 @@ public sealed class MarketAcquisitionRequestDocumentMapperTests
         Assert.Equal((uint)276, line.MaxUnitPrice);
     }
 
+    [Fact]
+    public void MergeClaimWithRequestPreservesSelectedWorldRouting()
+    {
+        var claim = new MarketAcquisitionClaimView
+        {
+            Id = "batch-1",
+            ClaimToken = "claim-token",
+            WorldMode = "Selected",
+        };
+        var remote = new MarketAcquisitionRequestView
+        {
+            Id = "batch-1",
+            WorldMode = "Selected",
+            SelectedWorlds = ["Siren", "Gilgamesh"],
+        };
+
+        var merged = MarketAcquisitionRequestDocumentMapper.MergeClaimWithRequest(claim, remote);
+
+        Assert.Equal(["Siren", "Gilgamesh"], merged.SelectedWorlds);
+        Assert.Equal("claim-token", merged.ClaimToken);
+    }
+
     private static MarketAcquisitionRequestDocument CreateDocument() => new()
     {
         LocalRequestId = "local-1",
