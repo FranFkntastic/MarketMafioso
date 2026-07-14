@@ -300,7 +300,7 @@ public sealed class MarketAcquisitionRequestEndpointTests
     }
 
     [Fact]
-    public async Task HostedMode_ReplaceBatchRejectsStaleRevision()
+    public async Task HostedMode_ReplaceBatchLetsMostRecentWriteSupersedeStaleRevision()
     {
         await using var application = CreateHostedApplication();
         using var client = application.CreateClient();
@@ -315,6 +315,35 @@ public sealed class MarketAcquisitionRequestEndpointTests
         using var createdJson = JsonDocument.Parse(await created.Content.ReadAsStringAsync());
         var requestId = createdJson.RootElement.GetProperty("id").GetString();
         var revision = createdJson.RootElement.GetProperty("revision").GetInt32();
+        var firstReplacement = await SendWithKeyAsync(
+            client,
+            HttpMethod.Put,
+            $"/marketmafioso/api/acquisition/batches/{requestId}",
+            "client-secret",
+            new
+            {
+                expectedRevision = revision,
+                region = "North America",
+                worldMode = "Recommended",
+                sweepScope = "Region",
+                expiresInSeconds = 300,
+                lines = new object[]
+                {
+                    new
+                    {
+                        itemId = 19951,
+                        itemName = "Koppranickel Ore",
+                        itemKind = "Stone",
+                        quantityMode = "AllBelowThreshold",
+                        targetQuantity = 0,
+                        maxQuantity = 10,
+                        hqPolicy = "Either",
+                        maxUnitPrice = 276,
+                        gilCap = 0,
+                    },
+                },
+            });
+        firstReplacement.EnsureSuccessStatusCode();
 
         var replaced = await SendWithKeyAsync(
             client,
@@ -323,7 +352,7 @@ public sealed class MarketAcquisitionRequestEndpointTests
             "client-secret",
             new
             {
-                expectedRevision = revision + 1,
+                expectedRevision = revision,
                 region = "North America",
                 worldMode = "Recommended",
                 sweepScope = "Region",
@@ -345,10 +374,10 @@ public sealed class MarketAcquisitionRequestEndpointTests
                 },
             });
 
-        Assert.Equal(HttpStatusCode.Conflict, replaced.StatusCode);
-        using var conflictJson = JsonDocument.Parse(await replaced.Content.ReadAsStringAsync());
-        Assert.Equal(revision + 1, conflictJson.RootElement.GetProperty("expectedRevision").GetInt32());
-        Assert.Equal(revision, conflictJson.RootElement.GetProperty("actualRevision").GetInt32());
+        replaced.EnsureSuccessStatusCode();
+        using var replacedJson = JsonDocument.Parse(await replaced.Content.ReadAsStringAsync());
+        Assert.Equal(revision + 2, replacedJson.RootElement.GetProperty("revision").GetInt32());
+        Assert.Equal(25u, Assert.Single(replacedJson.RootElement.GetProperty("lines").EnumerateArray()).GetProperty("maxQuantity").GetUInt32());
     }
 
     [Fact]
@@ -1903,16 +1932,16 @@ public sealed class MarketAcquisitionRequestEndpointTests
         string idempotencyKey,
         string worldMode = "Recommended",
         IReadOnlyList<string>? selectedWorlds = null) => new
-    {
-        schemaVersion = 1,
-        idempotencyKey,
-        targetCharacterName = "Wei Ning",
-        targetWorld = "Gilgamesh",
-        region = "North America",
-        worldMode,
-        selectedWorlds = selectedWorlds ?? [],
-        expiresInSeconds = 90,
-        lines = new object[]
+        {
+            schemaVersion = 1,
+            idempotencyKey,
+            targetCharacterName = "Wei Ning",
+            targetWorld = "Gilgamesh",
+            region = "North America",
+            worldMode,
+            selectedWorlds = selectedWorlds ?? [],
+            expiresInSeconds = 90,
+            lines = new object[]
         {
             new
             {
@@ -1939,7 +1968,7 @@ public sealed class MarketAcquisitionRequestEndpointTests
                 gilCap = 0,
             },
         },
-    };
+        };
 
     private static Dictionary<string, string> CreateFormFields(string idempotencyKey) => new()
     {

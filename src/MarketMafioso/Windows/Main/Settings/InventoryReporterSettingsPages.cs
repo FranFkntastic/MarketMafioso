@@ -10,12 +10,17 @@ internal sealed class InventoryReporterSettingsPages
     private readonly Configuration config;
     private readonly Action restartTimer;
 
-    public InventoryReporterSettingsPages(Configuration config, Action restartTimer)
+    public InventoryReporterSettingsPages(
+        Configuration config,
+        Action restartTimer,
+        HttpReporter reporter,
+        AutoRetainerRefreshService autoRetainerRefresh)
     {
         this.config = config ?? throw new ArgumentNullException(nameof(config));
         this.restartTimer = restartTimer ?? throw new ArgumentNullException(nameof(restartTimer));
         Descriptors =
         [
+            new InventoryReporterActionsSettingsPage(reporter, autoRetainerRefresh).Descriptor,
             new("inventory.capture", "Inventory Reporter / Capture", DrawCapture, 10,
                 searchTerms: ["armoury chest", "crystal bag", "equipped gear", "saddlebag", "item names", "character world"]),
             new("inventory.scheduling", "Inventory Reporter / Scheduling", DrawScheduling, 11,

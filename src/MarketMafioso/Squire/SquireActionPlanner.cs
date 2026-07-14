@@ -24,7 +24,7 @@ public sealed record SquireActionPlan(
     SquireDisposition Disposition,
     DateTimeOffset ApprovedAt,
     IReadOnlyList<SquireReviewedSelection> Actions,
-    string EvaluatorVersion = "retained-loadout-v4-rules-v1",
+    string EvaluatorVersion = "retained-loadout-v5-configurable-rules",
     SquireProtectionPolicy? Policy = null);
 
 public static class SquireDispositionBatching

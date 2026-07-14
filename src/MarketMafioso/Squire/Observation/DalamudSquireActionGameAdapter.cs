@@ -177,34 +177,27 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
             instance.Fingerprint.Container == fingerprint.Container && instance.Fingerprint.SlotIndex == fingerprint.SlotIndex);
         if (observed is null || !SquireFingerprintMatcher.ExactMatch(fingerprint, observed.Fingerprint))
             return SquireRevalidationResult.Fail("ExactSlotMismatch", "The approved exact slot identity changed.");
-        if (observed.IsEquipped)
-            return SquireRevalidationResult.Fail("CurrentlyEquipped", "The item is currently equipped.");
-        var exactQualityCount = snapshot.Instances.Count(value =>
-            value.Fingerprint.ItemId == fingerprint.ItemId &&
-            value.Fingerprint.IsHighQuality == fingerprint.IsHighQuality);
-        if (GearsetProtectionIndex.Create(snapshot.Gearsets).IsProtected(fingerprint.ItemId, fingerprint.IsHighQuality, exactQualityCount))
-            return SquireRevalidationResult.Fail(
-                "ReferencedByGearset",
-                "The current item-ID and quality multiplicity is required by a valid saved gearset. Squire does not yet replace saved gearset assignments with better owned equipment.");
         var livePolicy = currentPolicy();
-        if (livePolicy.ValidationErrors.Count > 0)
-            return SquireRevalidationResult.Fail("InvalidRuleConfiguration", string.Join(" ", livePolicy.ValidationErrors));
-        if (livePolicy.IsItemProtected(fingerprint.ItemId))
-            return SquireRevalidationResult.Fail("ItemProtectionRule", "A current character rule protects every copy of this item.");
-        var duplicateMinimum = livePolicy.MinimumCopiesToKeep(fingerprint.ItemId, fingerprint.IsHighQuality);
-        if (duplicateMinimum > 0 && exactQualityCount <= duplicateMinimum)
-            return SquireRevalidationResult.Fail("DuplicateRetentionFloor", $"Removing this copy would cross the character's minimum of {duplicateMinimum} retained copies.");
-        if (!snapshot.Definitions.TryGetValue(fingerprint.ItemId, out var definition))
-            return SquireRevalidationResult.Fail("ItemDefinitionMissing", "The item definition is unavailable.");
-        if (disposition == SquireDisposition.Desynthesize && capabilitySource.Capture().DesynthesisUnlocked != true)
-            return SquireRevalidationResult.Fail("DesynthesisNotUnlocked", "Desynthesis is unavailable until Gone to Pieces is complete.");
-
-        var supported = new SquireDispositionEligibilityEvaluator()
-            .Evaluate(definition, capabilitySource.Capture())
-            .SupportedDispositions.Contains(disposition);
-        return supported
-            ? SquireRevalidationResult.Valid()
-            : SquireRevalidationResult.Fail("DispositionUnavailable", "The approved disposition is no longer supported.");
+        var analysis = new SquireCandidateEvaluator().Evaluate(snapshot, capabilitySource.Capture(), livePolicy);
+        var candidate = analysis.Candidates.FirstOrDefault(value =>
+            EquipmentInstanceFingerprintComparer.Instance.Equals(value.Instance.Fingerprint, observed.Fingerprint));
+        if (candidate is null)
+            return SquireRevalidationResult.Fail("CandidateMissing", "The exact item is absent from the fresh rule evaluation.");
+        if (!candidate.IsExecutable)
+        {
+            var reason = candidate.Reasons.FirstOrDefault(value => value.Severity == SquireReasonSeverity.Blocking)
+                         ?? candidate.Reasons.FirstOrDefault();
+            return SquireRevalidationResult.Fail(
+                reason?.Code ?? "CandidateNoLongerExecutable",
+                reason?.Message ?? "The exact item is no longer an executable cleanup candidate.");
+        }
+        if (!candidate.SupportedDispositions.Contains(disposition))
+            return SquireRevalidationResult.Fail("DispositionUnavailable", "The approved disposition is no longer supported.");
+        if (candidate.RecommendedDisposition != disposition)
+            return SquireRevalidationResult.Fail(
+                "DispositionPolicyChanged",
+                $"Current cleanup rules select {candidate.RecommendedDisposition} instead of the approved {disposition} route.");
+        return SquireRevalidationResult.Valid();
     }
 
     public SquireRevalidationResult RevalidateBatch(SquireActionPlan plan, IReadOnlyList<SquireReviewedSelection> remainingActions)
@@ -215,20 +208,18 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
         var removals = remainingActions.ToDictionary(action => action.Fingerprint, action => action.Disposition, EquipmentInstanceFingerprintComparer.Instance);
         var approvedPolicy = plan.Policy ?? new SquireProtectionPolicy();
         var livePolicy = currentPolicy();
-        var mergedPolicy = new SquireProtectionPolicy(
-            approvedPolicy.ProtectSignedGear || livePolicy.ProtectSignedGear,
-            approvedPolicy.ProtectFutureLevelingGear || livePolicy.ProtectFutureLevelingGear,
-            approvedPolicy.ProtectBlueAndPurpleGear || livePolicy.ProtectBlueAndPurpleGear,
-            approvedPolicy.AllowRiskyMateriaRetrieval && livePolicy.AllowRiskyMateriaRetrieval,
-            SquireDuplicateRetention.Merge(approvedPolicy.Rules, livePolicy.Rules));
-        var result = new SquireCounterfactualBatchValidator().Validate(
+        var validator = new SquireCounterfactualBatchValidator();
+        var approvedResult = validator.Validate(
             snapshot,
             removals,
             capabilitySource.Capture(),
-            mergedPolicy);
-        return result.Success
-            ? SquireRevalidationResult.Valid() with { Message = result.Message }
-            : SquireRevalidationResult.Fail(result.Code, result.Message);
+            approvedPolicy);
+        if (!approvedResult.Success)
+            return SquireRevalidationResult.Fail(approvedResult.Code, $"Approved policy no longer validates the batch: {approvedResult.Message}");
+        var liveResult = validator.Validate(snapshot, removals, capabilitySource.Capture(), livePolicy);
+        return liveResult.Success
+            ? SquireRevalidationResult.Valid() with { Message = liveResult.Message }
+            : SquireRevalidationResult.Fail(liveResult.Code, $"Current policy no longer validates the batch: {liveResult.Message}");
     }
 
     public SquireRevalidationResult RevalidateEvidence(SquireReviewedSelection selection)

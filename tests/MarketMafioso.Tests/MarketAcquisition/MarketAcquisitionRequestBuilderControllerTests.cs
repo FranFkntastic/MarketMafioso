@@ -6,7 +6,7 @@ namespace MarketMafioso.Tests.MarketAcquisition;
 public sealed class MarketAcquisitionRequestBuilderControllerTests
 {
     [Fact]
-    public async Task SelectedLineMutation_ClearsPendingRemoteAndPersistsLocalEdit()
+    public async Task SelectedLineMutation_UsesLatestServerCopyAndPersistsLocalEdit()
     {
         var initial = CreateDocument() with
         {
@@ -15,19 +15,18 @@ public sealed class MarketAcquisitionRequestBuilderControllerTests
             RemoteRevision = 2,
             SyncStatus = "SyncedClean",
         };
-        var remote = initial with { RemoteRevision = 3, RemoteHash = "remote-3" };
+        var remote = initial with { RemoteRevision = 3, RemoteHash = "remote-3", SyncStatus = "SyncedClean" };
         var persisted = new List<MarketAcquisitionRequestDocument>();
         var controller = CreateController(
             initial,
             refresh: document => Task.FromResult(new MarketAcquisitionRequestBuilderRefreshOutcome(
-                document with { SyncStatus = "RemoteChanged" },
                 remote,
                 null,
                 "Server changed.")),
             persist: persisted.Add);
 
         await controller.RefreshAsync();
-        Assert.NotNull(controller.PendingRemoteDocument);
+        Assert.Same(remote, controller.Document);
 
         Assert.True(controller.SetLineMaxUnitPrice(0, 450, "Unit cost ceiling updated."));
 
@@ -35,8 +34,6 @@ public sealed class MarketAcquisitionRequestBuilderControllerTests
         Assert.Equal(5, controller.Document.LocalRevision);
         Assert.Equal("LocalEdits", controller.Document.SyncStatus);
         Assert.Equal(0, controller.SelectedLineIndex);
-        Assert.Null(controller.PendingRemoteDocument);
-        Assert.Null(controller.PendingRemoteRequest);
         Assert.Equal("Unit cost ceiling updated.", controller.Status);
         Assert.Same(controller.Document, persisted[^1]);
     }
@@ -69,7 +66,7 @@ public sealed class MarketAcquisitionRequestBuilderControllerTests
         Assert.Equal("Eriana Ning", submitted.TargetCharacterName);
         Assert.Equal("Siren", submitted.TargetWorld);
         Assert.Same(synced, controller.Document);
-        Assert.Equal(-1, controller.SelectedLineIndex);
+        Assert.Equal(0, controller.SelectedLineIndex);
         Assert.Equal("Request saved.", controller.Status);
         Assert.False(controller.IsSyncing);
         Assert.Same(synced, persisted[^1]);
@@ -105,11 +102,11 @@ public sealed class MarketAcquisitionRequestBuilderControllerTests
         Assert.Equal("synced-hash", controller.Document.LastSyncedHash);
         Assert.Equal("LocalEdits", controller.Document.SyncStatus);
         Assert.Equal(0, controller.SelectedLineIndex);
-        Assert.Equal("Request saved. Local edits made during sync were preserved.", controller.Status);
+        Assert.Equal("Request saved. A newer local edit is queued for synchronization.", controller.Status);
     }
 
     [Fact]
-    public async Task RefreshThenAdoptRemote_PersistsAndNotifiesWorkspace()
+    public async Task Refresh_AdoptsMostRecentServerCopyAndNotifiesWorkspace()
     {
         var initial = CreateDocument() with { RemoteRequestId = "request-1", RemoteRevision = 1 };
         var remoteRequest = CreateRequestView(revision: 2);
@@ -119,7 +116,6 @@ public sealed class MarketAcquisitionRequestBuilderControllerTests
         var controller = CreateController(
             initial,
             refresh: document => Task.FromResult(new MarketAcquisitionRequestBuilderRefreshOutcome(
-                document with { SyncStatus = "RemoteChanged" },
                 remoteDocument,
                 remoteRequest,
                 "Server changed.")),
@@ -127,12 +123,10 @@ public sealed class MarketAcquisitionRequestBuilderControllerTests
             persist: persisted.Add);
 
         await controller.RefreshAsync();
-        Assert.True(controller.AdoptRemote());
 
         Assert.Same(remoteDocument, controller.Document);
-        Assert.Null(controller.PendingRemoteDocument);
         Assert.Equal(-1, controller.SelectedLineIndex);
-        Assert.Equal("Loaded server copy.", controller.Status);
+        Assert.Equal("Server changed.", controller.Status);
         Assert.NotNull(adopted);
         Assert.Same(remoteDocument, adopted.Value.Document);
         Assert.Same(remoteRequest, adopted.Value.Request);
@@ -154,16 +148,78 @@ public sealed class MarketAcquisitionRequestBuilderControllerTests
         completion.SetResult(new MarketAcquisitionRequestBuilderRefreshOutcome(
             remoteDocument,
             null,
-            null,
             "Remote request refreshed and adopted."));
 
         await refreshTask;
 
         Assert.Equal(450u, controller.Document.Lines[0].MaxUnitPrice);
+        Assert.Equal(1, controller.Document.RemoteRevision);
+        Assert.Equal("LocalEdits", controller.Document.SyncStatus);
+        Assert.Equal("A newer local edit superseded the server refresh and is queued for synchronization.", controller.Status);
+    }
+
+    [Fact]
+    public async Task CommittedEdit_IsAutomaticallySynchronizedByPump()
+    {
+        var initial = CreateDocument() with
+        {
+            RemoteRequestId = "request-1",
+            RemoteRevision = 1,
+            SyncStatus = "SyncedClean",
+        };
+        MarketAcquisitionRequestDocument? submitted = null;
+        var controller = CreateController(
+            initial,
+            sync: document =>
+            {
+                submitted = document;
+                return Task.FromResult(new MarketAcquisitionRequestBuilderSyncOutcome(
+                    document with { RemoteRevision = 2, SyncStatus = "SyncedClean" },
+                    "Request synchronized."));
+            });
+
+        Assert.True(controller.SetLineMaxUnitPrice(0, 450, "Unit cost ceiling updated."));
+        controller.PumpAutomaticSynchronization(
+            "Eriana Ning",
+            "Siren",
+            canSynchronize: true,
+            DateTimeOffset.UtcNow.AddMinutes(1));
+        await Task.Yield();
+
+        Assert.NotNull(submitted);
+        Assert.Equal(450u, submitted.Lines[0].MaxUnitPrice);
         Assert.Equal(2, controller.Document.RemoteRevision);
-        Assert.Equal("RemoteChanged", controller.Document.SyncStatus);
-        Assert.Same(remoteDocument, controller.PendingRemoteDocument);
-        Assert.Equal("Remote request refreshed and adopted. Local edits made during refresh were preserved.", controller.Status);
+        Assert.Equal("SyncedClean", controller.Document.SyncStatus);
+    }
+
+    [Fact]
+    public async Task CleanRequest_PollsAndAdoptsMostRecentServerRevision()
+    {
+        var initial = CreateDocument() with
+        {
+            RemoteRequestId = "request-1",
+            RemoteRevision = 1,
+            SyncStatus = "SyncedClean",
+        };
+        var remoteRequest = CreateRequestView(revision: 2);
+        var remoteDocument = MarketAcquisitionRequestDocumentMapper.FromRequestView(remoteRequest);
+        var controller = CreateController(
+            initial,
+            refresh: _ => Task.FromResult(new MarketAcquisitionRequestBuilderRefreshOutcome(
+                remoteDocument,
+                remoteRequest,
+                "Request synchronized from the server.")));
+
+        controller.PumpAutomaticSynchronization(
+            "Eriana Ning",
+            "Siren",
+            canSynchronize: true,
+            DateTimeOffset.UtcNow.AddMinutes(1));
+        await Task.Yield();
+
+        Assert.Equal(2, controller.Document.RemoteRevision);
+        Assert.Equal(300u, controller.Document.Lines[0].MaxUnitPrice);
+        Assert.Equal("SyncedClean", controller.Document.SyncStatus);
     }
 
     [Fact]
@@ -257,6 +313,25 @@ public sealed class MarketAcquisitionRequestBuilderControllerTests
         Assert.Equal(3, persisted.Count);
     }
 
+    [Fact]
+    public void AddLines_DeduplicatesExistingAndIncomingItemsInOnePersistedEdit()
+    {
+        var persisted = new List<MarketAcquisitionRequestDocument>();
+        var controller = CreateController(CreateDocument(), persist: persisted.Add);
+
+        var added = controller.AddLines([
+            new() { ItemId = 19951, ItemName = "Koppranickel Ore" },
+            new() { ItemId = 100, ItemName = "Bronze Sallet", ItemKind = "Equipment" },
+            new() { ItemId = 100, ItemName = "Bronze Sallet duplicate", ItemKind = "Equipment" },
+        ]);
+
+        Assert.Equal(1, added);
+        Assert.Equal(2, controller.Document.Lines.Count);
+        Assert.Equal("Bronze Sallet", controller.Document.Lines[1].ItemName);
+        Assert.Equal("Added 1 Outfitter line.", controller.Status);
+        Assert.Single(persisted);
+    }
+
     private static MarketAcquisitionRequestBuilderController CreateController(
         MarketAcquisitionRequestDocument document,
         Func<MarketAcquisitionRequestDocument, Task<MarketAcquisitionRequestBuilderSyncOutcome>>? sync = null,
@@ -268,7 +343,6 @@ public sealed class MarketAcquisitionRequestBuilderControllerTests
             sync ?? (current => Task.FromResult(new MarketAcquisitionRequestBuilderSyncOutcome(current, string.Empty))),
             refresh ?? (current => Task.FromResult(new MarketAcquisitionRequestBuilderRefreshOutcome(
                 current,
-                null,
                 null,
                 string.Empty))),
             adopted ?? ((_, _) => { }),

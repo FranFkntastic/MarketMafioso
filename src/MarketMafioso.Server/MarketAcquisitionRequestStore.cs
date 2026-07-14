@@ -245,8 +245,6 @@ public sealed class MarketAcquisitionRequestStore
             return null;
 
         EnsureCanReplaceBatch(current);
-        if (current.Revision != request.ExpectedRevision)
-            throw new MarketAcquisitionRevisionConflictException(request.ExpectedRevision, current.Revision);
 
         await DeleteBatchLinesAsync(connection, transaction, id, cancellationToken).ConfigureAwait(false);
         var lines = await InsertBatchLinesAsync(
@@ -269,18 +267,16 @@ public sealed class MarketAcquisitionRequestStore
             SET revision = $revision,
                 expires_at_utc = $expiresAtUtc,
                 payload_json = $payloadJson
-            WHERE id = $id
-              AND revision = $expectedRevision;
+            WHERE id = $id;
             """;
         update.Parameters.AddWithValue("$revision", nextRevision);
         update.Parameters.AddWithValue("$expiresAtUtc", expiresAtUtc.ToString("O"));
         update.Parameters.AddWithValue("$payloadJson", replacementPayload);
         update.Parameters.AddWithValue("$id", id);
-        update.Parameters.AddWithValue("$expectedRevision", request.ExpectedRevision);
 
         var affected = await update.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         if (affected != 1)
-            throw new MarketAcquisitionRevisionConflictException(request.ExpectedRevision, current.Revision);
+            return null;
 
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return current with

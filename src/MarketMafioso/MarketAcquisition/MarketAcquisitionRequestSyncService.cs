@@ -1,4 +1,5 @@
 using System;
+using System.Net;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -93,12 +94,22 @@ public sealed class MarketAcquisitionRequestSyncService
             request.Document,
             expectedRevision);
 
-        var updated = await client.ReplaceBatchAsync(
-            request.ServerUrl,
-            request.ClientApiKey,
-            requestId,
-            replaceRequest,
-            cancellationToken).ConfigureAwait(false);
+        MarketAcquisitionRequestView updated;
+        try
+        {
+            updated = await client.ReplaceBatchAsync(
+                request.ServerUrl,
+                request.ClientApiKey,
+                requestId,
+                replaceRequest,
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (MarketAcquisitionLifecycleHttpException ex) when (ex.StatusCode == HttpStatusCode.NotFound)
+        {
+            // The local document is authoritative. If the receiver has no corresponding row,
+            // publish the current document instead of exposing the missing synchronization detail.
+            return await CreateClaimAndAcceptAsync(request, cancellationToken).ConfigureAwait(false);
+        }
 
         var mergedClaim = MarketAcquisitionRequestDocumentMapper.MergeClaimWithRequest(existingClaim, updated);
         var syncedDocument = MarkSynced(request.Document, updated);

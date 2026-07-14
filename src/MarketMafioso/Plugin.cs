@@ -69,7 +69,9 @@ public sealed class Plugin : IDalamudPlugin
         ECommonsMain.Init(PluginInterface, this);
 
         Configuration = PluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
-        if (SquireRuleMigration.Migrate(Configuration))
+        var squireConfigurationChanged = SquireRuleMigration.Migrate(Configuration);
+        squireConfigurationChanged |= SquireCleanupRuleMigration.Migrate(Configuration);
+        if (squireConfigurationChanged)
             Configuration.Save();
         retainerCacheStore = new RetainerCacheFileStore(
             Path.Combine(PluginInterface.GetPluginConfigDirectory(), "retainer-cache.json"));

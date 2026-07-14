@@ -1,4 +1,5 @@
 using MarketMafioso.MarketAcquisition;
+using System.Net;
 
 namespace MarketMafioso.Tests.MarketAcquisition;
 
@@ -72,6 +73,44 @@ public sealed class MarketAcquisitionRequestSyncServiceTests
         Assert.Equal("SyncedClean", result.Document.SyncStatus);
     }
 
+    [Fact]
+    public async Task SyncAsync_RecreatesCurrentDocumentWhenRemoteCopyIsMissing()
+    {
+        var client = new FakeClient { ReplaceNotFound = true };
+        var service = new MarketAcquisitionRequestSyncService(client);
+        var document = CreateDocument() with
+        {
+            RemoteRequestId = "missing-batch",
+            RemoteRevision = 5,
+        };
+        var claim = new MarketAcquisitionClaimView
+        {
+            Id = "missing-batch",
+            Revision = 5,
+            Status = "AcceptedInPlugin",
+            ClaimToken = "old-claim-token",
+            TargetCharacterName = "Eriana Ning",
+            TargetWorld = "Siren",
+            Region = "North America",
+        };
+
+        var result = await service.SyncAsync(
+            new MarketAcquisitionRequestSyncRequest(
+                "server",
+                "client-secret",
+                "Eriana Ning",
+                "Siren",
+                "plugin-instance",
+                document,
+                claim),
+            CancellationToken.None);
+
+        Assert.Equal(["replace", "create", "claim", "accept"], client.Calls);
+        Assert.Equal("batch-1", result.Document.RemoteRequestId);
+        Assert.Equal("AcceptedInPlugin", result.Claim.Status);
+        Assert.Equal("SyncedClean", result.Document.SyncStatus);
+    }
+
     private static MarketAcquisitionRequestDocument CreateDocument() => new()
     {
         LocalRequestId = "local-1",
@@ -99,6 +138,7 @@ public sealed class MarketAcquisitionRequestSyncServiceTests
     {
         public List<string> Calls { get; } = [];
         public MarketAcquisitionBatchReplaceRequest? LastReplaceRequest { get; private set; }
+        public bool ReplaceNotFound { get; init; }
 
         public Task<MarketAcquisitionRequestView> GetBatchAsync(
             string serverUrl,
@@ -151,6 +191,15 @@ public sealed class MarketAcquisitionRequestSyncServiceTests
         {
             Calls.Add("replace");
             LastReplaceRequest = replaceRequest;
+            if (ReplaceNotFound)
+            {
+                throw new MarketAcquisitionLifecycleHttpException(
+                    HttpStatusCode.NotFound,
+                    "replace",
+                    error: null,
+                    responseBody: null);
+            }
+
             return Task.FromResult(new MarketAcquisitionRequestView
             {
                 Id = requestId,

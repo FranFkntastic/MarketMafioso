@@ -191,7 +191,7 @@ public sealed class AgentBridgeHost : IDisposable
             case "begin-capture-presentation":
                 if (!screenshotsEnabled())
                     return AgentBridgeResponse.Fail("Agent bridge screenshots are disabled by local configuration.");
-                if (!string.Equals(request.Target, "mmf.main-window", StringComparison.Ordinal))
+                if (request.Target is not ("mmf.main-window" or "mmf.main-window.compact"))
                     return AgentBridgeResponse.Fail("The requested capture presentation target is not registered.");
                 AgentBridgeUiCaptureTransactionHandle? handle = null;
                 try

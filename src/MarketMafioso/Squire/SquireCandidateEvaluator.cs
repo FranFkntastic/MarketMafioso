@@ -8,8 +8,10 @@ namespace MarketMafioso.Squire;
 
 public sealed class SquireCandidateEvaluator
 {
+    private static readonly IReadOnlySet<SquireDisposition> EmptyDispositions = new HashSet<SquireDisposition>();
     private readonly EquipmentUseAnalyzer useAnalyzer = new();
     private readonly SquireDispositionEligibilityEvaluator dispositionEligibility = new();
+    private readonly SquireCleanupRuleEngine ruleEngine = new();
 
     public SquireAnalysis Evaluate(
         CharacterEquipmentSnapshot snapshot,
@@ -18,14 +20,13 @@ public sealed class SquireCandidateEvaluator
     {
         capabilities ??= new SquireDispositionCapabilities(null);
         protectionPolicy ??= new SquireProtectionPolicy();
+        var effectiveRules = protectionPolicy.CleanupRules ?? SquireLegacyCleanupRuleAdapter.Create(protectionPolicy);
+        var effectivePolicy = protectionPolicy with { CleanupRules = effectiveRules };
         var gearsetProtection = GearsetProtectionIndex.Create(snapshot.Gearsets);
         var candidates = snapshot.Instances
-            .Select(instance => EvaluateInstance(snapshot, instance, gearsetProtection, capabilities, protectionPolicy) with
-            {
-                DuplicateStatus = CreateDuplicateStatus(snapshot, instance, gearsetProtection, protectionPolicy),
-            })
+            .Select(instance => EvaluateInstance(snapshot, instance, gearsetProtection, capabilities, effectivePolicy))
             .ToArray();
-        return new SquireAnalysis(snapshot, candidates, protectionPolicy);
+        return new SquireAnalysis(snapshot, candidates, effectivePolicy);
     }
 
     private SquireCandidate EvaluateInstance(
@@ -33,20 +34,65 @@ public sealed class SquireCandidateEvaluator
         EquipmentInstanceSnapshot instance,
         GearsetProtectionIndex gearsetProtection,
         SquireDispositionCapabilities capabilities,
-        SquireProtectionPolicy protectionPolicy)
+        SquireProtectionPolicy policy)
     {
         if (!snapshot.Definitions.TryGetValue(instance.Fingerprint.ItemId, out var definition))
             return Unsupported(instance, UnknownDefinition(instance.Fingerprint.ItemId));
 
-        var protections = GetProtections(snapshot, instance, definition, gearsetProtection, capabilities, protectionPolicy);
-        if (protections.Any(reason => reason.Severity == SquireReasonSeverity.Blocking))
-            return Candidate(instance, definition, SquireAssessment.Protected, SquireDisposition.Keep, new HashSet<SquireDisposition>(), protections, null);
-
+        var hardProtections = GetHardProtections(snapshot, instance, definition, gearsetProtection, capabilities);
         var use = useAnalyzer.Analyze(instance, definition, snapshot.Jobs, snapshot.Gearsets, snapshot.Instances, snapshot.Definitions);
-        var isObsoleteUnderPolicy = use.IsStrictlyObsolete ||
-            (!protectionPolicy.ProtectFutureLevelingGear &&
-             use.Comparisons.Count > 0 &&
-             use.Comparisons.All(comparison => comparison.Status is EquipmentUseStatus.Obsolete or EquipmentUseStatus.FutureUse));
+        var eligibility = dispositionEligibility.Evaluate(definition, capabilities);
+        var ruleContext = CreateRuleContext(policy.CharacterContentId, instance, definition, use, eligibility.SupportedDispositions);
+        var ruleEvaluation = ruleEngine.Evaluate(ruleContext, policy.CleanupRules ?? []);
+        if (!ruleEvaluation.IsValid)
+        {
+            return Candidate(
+                instance,
+                definition,
+                SquireAssessment.EvaluationFailure,
+                SquireDisposition.Keep,
+                EmptyDispositions,
+                ruleEvaluation.Errors.Select(error => new SquireReason(
+                    "InvalidRuleConfiguration",
+                    error,
+                    SquireReasonSeverity.Blocking)).ToArray(),
+                use,
+                ruleEvaluation: ruleEvaluation);
+        }
+
+        var exactQualityCount = snapshot.Instances.Count(value =>
+            value.Fingerprint.ItemId == definition.ItemId &&
+            value.Fingerprint.IsHighQuality == instance.Fingerprint.IsHighQuality);
+        var gearsetRequired = gearsetProtection.RequiredCount(definition.ItemId, instance.Fingerprint.IsHighQuality);
+        var duplicateStatus = new SquireDuplicateStatus(exactQualityCount, ruleEvaluation.MinimumCopies, gearsetRequired);
+        var reasons = new List<SquireReason>(hardProtections);
+        if (ruleEvaluation.Decision == SquireCleanupDecision.Protect)
+        {
+            reasons.AddRange(ruleEvaluation.MatchedRules
+                .Where(rule => rule.WonDecision)
+                .Select(ProtectionReason));
+        }
+        if (exactQualityCount <= duplicateStatus.EffectiveMinimumCopies && duplicateStatus.EffectiveMinimumCopies > 0)
+        {
+            reasons.Add(new(
+                "DuplicateRetentionFloor",
+                $"Matching rules and saved gearsets retain at least {duplicateStatus.EffectiveMinimumCopies} copies of this quality; {exactQualityCount} are owned.",
+                SquireReasonSeverity.Blocking));
+        }
+        if (reasons.Any(reason => reason.Severity == SquireReasonSeverity.Blocking))
+        {
+            return Candidate(
+                instance,
+                definition,
+                SquireAssessment.Protected,
+                SquireDisposition.Keep,
+                EmptyDispositions,
+                reasons,
+                use,
+                duplicateStatus,
+                ruleEvaluation);
+        }
+
         if (use.Status == EquipmentUseStatus.EvaluationFailure)
         {
             return Candidate(
@@ -54,64 +100,162 @@ public sealed class SquireCandidateEvaluator
                 definition,
                 SquireAssessment.EvaluationFailure,
                 SquireDisposition.Keep,
-                new HashSet<SquireDisposition>(),
+                EmptyDispositions,
                 [UseReason(use)],
-                use);
+                use,
+                duplicateStatus,
+                ruleEvaluation);
         }
-        if (use.Status == EquipmentUseStatus.LikelyCosmetic)
-            return Candidate(instance, definition, SquireAssessment.Protected, SquireDisposition.Keep, new HashSet<SquireDisposition>(),
-                [new("StatlessAllClassesEquipment", "All Classes equipment has no wearer-defining stats and is protected as likely cosmetic or appearance gear.", SquireReasonSeverity.Blocking)], use);
-        if (use.Status == EquipmentUseStatus.SpecialPurpose)
-            return Candidate(instance, definition, SquireAssessment.Protected, SquireDisposition.Keep, new HashSet<SquireDisposition>(),
-                [new("SpecialPurposeEquipment", use.Diagnostic ?? "Special-purpose equipment is protected independently of stat dominance.", SquireReasonSeverity.Blocking)], use);
 
-        var noObtainedConsumer = use.Status == EquipmentUseStatus.NoObtainedEligibleJob;
-        if (!isObsoleteUnderPolicy && !noObtainedConsumer)
-            return Candidate(instance, definition, SquireAssessment.Protected, SquireDisposition.Keep, new HashSet<SquireDisposition>(),
-                [UseReason(use)], use);
+        var semanticallyEligible = use.IsStrictlyObsolete ||
+                                   use.Status is EquipmentUseStatus.NoObtainedEligibleJob or
+                                       EquipmentUseStatus.LikelyCosmetic or EquipmentUseStatus.SpecialPurpose ||
+                                   use.Comparisons.Count > 0 && use.Comparisons.All(comparison =>
+                                       comparison.Status is EquipmentUseStatus.Obsolete or EquipmentUseStatus.FutureUse);
+        if (!semanticallyEligible)
+        {
+            return Candidate(
+                instance,
+                definition,
+                SquireAssessment.Protected,
+                SquireDisposition.Keep,
+                EmptyDispositions,
+                [UseReason(use)],
+                use,
+                duplicateStatus,
+                ruleEvaluation);
+        }
 
-        var eligibility = dispositionEligibility.Evaluate(definition, capabilities);
-        var dispositions = eligibility.SupportedDispositions;
-        if (dispositions.Count == 0)
+        if (eligibility.SupportedDispositions.Count == 0)
         {
             return Candidate(
                 instance,
                 definition,
                 SquireAssessment.Unsupported,
                 SquireDisposition.Unsupported,
-                dispositions,
-                [new("NoSupportedDisposition", "No safe V1 disposition can be proven for this item.", SquireReasonSeverity.Blocking)],
-                use);
+                EmptyDispositions,
+                [new("NoSupportedDisposition", "No safe cleanup disposition can be proven for this item.", SquireReasonSeverity.Blocking)],
+                use,
+                duplicateStatus,
+                ruleEvaluation);
+        }
+        if (ruleEvaluation.PreferredDisposition is not { } recommended)
+        {
+            return Candidate(
+                instance,
+                definition,
+                SquireAssessment.EvaluationFailure,
+                SquireDisposition.Keep,
+                EmptyDispositions,
+                [new("NoDispositionRuleMatched", "No enabled cleanup rule selected a supported disposition for this item.", SquireReasonSeverity.Blocking)],
+                use,
+                duplicateStatus,
+                ruleEvaluation);
         }
 
-        var recommended = dispositions.Contains(SquireDisposition.ExpertDelivery)
-            ? SquireDisposition.ExpertDelivery
-            : dispositions.Contains(SquireDisposition.Desynthesize)
-            ? SquireDisposition.Desynthesize
-            : dispositions.Contains(SquireDisposition.VendorSell)
-                ? SquireDisposition.VendorSell
-                : SquireDisposition.Discard;
-        var reasons = new List<SquireReason>
+        reasons.Add(SemanticCleanupReason(use));
+        if (ruleEvaluation.Decision == SquireCleanupDecision.AllowCleanup)
         {
-            noObtainedConsumer
-                ? new("NoObtainedEligibleJob", "No job obtained by this character can use this item.", SquireReasonSeverity.Information)
-                : use.Comparisons.Any(comparison => comparison.Status == EquipmentUseStatus.FutureUse)
-                ? new("FutureLevelingUseNotProtected", "One or more unlocked jobs are below this item's equip level; future leveling gear protection is off.", SquireReasonSeverity.Information)
-                : new("RetainedCoverageForAllUnlockedJobs", DescribeTrustedBaselines(use), SquireReasonSeverity.Information),
-        };
-        if (!protectionPolicy.ProtectBlueAndPurpleGear &&
-            definition.NormalizedRarity is EquipmentRarity.Rare or EquipmentRarity.Relic)
-            reasons.Add(new("HighRarityProtectionDisabled", "Blue and purple gear protection is disabled; all other safety rules still apply.", SquireReasonSeverity.Warning));
-        reasons.AddRange(protections.Where(reason => reason.Severity != SquireReasonSeverity.Blocking));
+            reasons.AddRange(ruleEvaluation.MatchedRules
+                .Where(rule => rule.WonDecision)
+                .Select(rule => new SquireReason(
+                    "CleanupRuleAuthorized",
+                    $"Rule '{rule.RuleName}' ({rule.RuleId}) authorizes cleanup at priority {rule.Priority}.",
+                    SquireReasonSeverity.Information)));
+        }
+        if (duplicateStatus.UserMinimumCopies > 0)
+        {
+            reasons.Add(new(
+                "DuplicateRetentionSurplus",
+                $"Rules retain {duplicateStatus.UserMinimumCopies} copies of this quality; {exactQualityCount} are owned, leaving {Math.Max(0, exactQualityCount - duplicateStatus.EffectiveMinimumCopies)} removable.",
+                SquireReasonSeverity.Information));
+        }
+        reasons.Add(new(
+            "CleanupRuleDisposition",
+            DescribeWinningDispositionRule(ruleEvaluation, recommended),
+            SquireReasonSeverity.Information));
+        if (definition.NormalizedRarity is EquipmentRarity.Rare or EquipmentRarity.Relic &&
+            policy.CleanupRules?.Any(rule => rule.Id == "builtin.protect-high-rarity" && !rule.Enabled) == true)
+        {
+            reasons.Add(new(
+                "HighRarityProtectionDisabled",
+                "The built-in blue and purple gear protection rule is disabled; all hard safeguards still apply.",
+                SquireReasonSeverity.Warning));
+        }
         reasons.AddRange(eligibility.Reasons);
         return Candidate(
             instance,
             definition,
             SquireAssessment.Candidate,
             recommended,
-            dispositions,
+            eligibility.SupportedDispositions,
             reasons,
-            use);
+            use,
+            duplicateStatus,
+            ruleEvaluation);
+    }
+
+    internal static SquireCleanupRuleContext CreateRuleContext(
+        ulong characterContentId,
+        EquipmentInstanceSnapshot instance,
+        EquipmentItemDefinition definition,
+        EquipmentUseAnalysis use,
+        IReadOnlySet<SquireDisposition> supportedDispositions) => new(
+        characterContentId,
+        definition.ItemId,
+        instance.Fingerprint.IsHighQuality,
+        definition.NormalizedRarity,
+        use.Status,
+        definition.IsEquipment,
+        instance.Fingerprint.CrafterContentId is > 0,
+        definition.IsArmoireEligible,
+        instance.Fingerprint.MateriaIds.Count > 0,
+        use.Status == EquipmentUseStatus.FutureUse ||
+        use.Comparisons.Any(comparison => comparison.Status == EquipmentUseStatus.FutureUse),
+        checked((int)definition.EquipLevel),
+        supportedDispositions);
+
+    private static string DescribeWinningDispositionRule(
+        SquireCleanupRuleEvaluation evaluation,
+        SquireDisposition disposition)
+    {
+        var winners = evaluation.MatchedRules.Where(rule => rule.WonDisposition).ToArray();
+        return winners.Length == 0
+            ? $"Cleanup route is {disposition}."
+            : $"Rule {string.Join(", ", winners.Select(rule => $"'{rule.RuleName}' ({rule.RuleId})"))} selects {disposition}.";
+    }
+
+    private static SquireReason ProtectionReason(SquireCleanupRuleTrace rule)
+    {
+        var code = rule.RuleId switch
+        {
+            "builtin.protect-high-rarity" => "HighRarityEquipment",
+            "builtin.protect-player-signed" => "PlayerSignature",
+            "builtin.protect-future-leveling" => "FutureUnlockedJobUse",
+            "builtin.protect-armoire" => "ArmoireEligible",
+            "builtin.protect-materia-risk" => "MateriaRetrievalRiskNotAuthorized",
+            "builtin.protect-cosmetic" => "StatlessAllClassesEquipment",
+            "builtin.protect-special-purpose" => "SpecialPurposeEquipment",
+            _ when rule.RuleId.StartsWith("legacy.", StringComparison.Ordinal) => "ItemProtectionRule",
+            _ => "CleanupRuleProtected",
+        };
+        return new SquireReason(
+            code,
+            $"Rule '{rule.RuleName}' ({rule.RuleId}) protects this item at priority {rule.Priority}.",
+            SquireReasonSeverity.Blocking);
+    }
+
+    private static SquireReason SemanticCleanupReason(EquipmentUseAnalysis use)
+    {
+        if (use.Status == EquipmentUseStatus.NoObtainedEligibleJob)
+            return new("NoObtainedEligibleJob", "No job obtained by this character can use this item.", SquireReasonSeverity.Information);
+        if (use.Status == EquipmentUseStatus.LikelyCosmetic)
+            return new("CosmeticCleanupAuthorized", "The item appears cosmetic and policy permits cleanup.", SquireReasonSeverity.Warning);
+        if (use.Status == EquipmentUseStatus.SpecialPurpose)
+            return new("SpecialPurposeCleanupAuthorized", use.Diagnostic ?? "Policy permits cleanup of this special-purpose item.", SquireReasonSeverity.Warning);
+        if (use.Comparisons.Any(comparison => comparison.Status == EquipmentUseStatus.FutureUse))
+            return new("FutureLevelingUseNotProtected", "One or more unlocked jobs are below this item's equip level; matching policy permits cleanup.", SquireReasonSeverity.Information);
+        return new("RetainedCoverageForAllUnlockedJobs", DescribeTrustedBaselines(use), SquireReasonSeverity.Information);
     }
 
     private static string DescribeTrustedBaselines(EquipmentUseAnalysis use)
@@ -134,23 +278,14 @@ public sealed class SquireCandidateEvaluator
             : $"Trusted retained coverage: {string.Join("; ", comparisons)}.";
     }
 
-    private static List<SquireReason> GetProtections(
+    private static List<SquireReason> GetHardProtections(
         CharacterEquipmentSnapshot snapshot,
         EquipmentInstanceSnapshot instance,
         EquipmentItemDefinition definition,
         GearsetProtectionIndex gearsetProtection,
-        SquireDispositionCapabilities capabilities,
-        SquireProtectionPolicy protectionPolicy)
+        SquireDispositionCapabilities capabilities)
     {
         var reasons = new List<SquireReason>();
-        foreach (var error in protectionPolicy.ValidationErrors)
-            reasons.Add(new("InvalidRuleConfiguration", error, SquireReasonSeverity.Blocking));
-        var matchingRules = protectionPolicy.MatchingRules(definition.ItemId, instance.Fingerprint.IsHighQuality);
-        foreach (var rule in matchingRules.Where(rule => rule.Kind == SquireRuleKind.ProtectItem))
-            reasons.Add(new(
-                "ItemProtectionRule",
-                $"Protection rule {FormatRuleIdentity(rule)} protects every copy of this item for this character.",
-                SquireReasonSeverity.Blocking));
         if (!snapshot.Diagnostics.IsComplete)
             reasons.Add(new("PartialSnapshot", "The equipment snapshot is incomplete.", SquireReasonSeverity.Blocking));
         if (instance.IsEquipped)
@@ -158,26 +293,6 @@ public sealed class SquireCandidateEvaluator
         var exactQualityCount = snapshot.Instances.Count(value =>
             value.Fingerprint.ItemId == definition.ItemId &&
             value.Fingerprint.IsHighQuality == instance.Fingerprint.IsHighQuality);
-        var duplicateMinimum = protectionPolicy.MinimumCopiesToKeep(definition.ItemId, instance.Fingerprint.IsHighQuality);
-        if (duplicateMinimum > 0)
-        {
-            var ruleSummary = string.Join(", ", matchingRules
-                .Where(rule => rule.Kind == SquireRuleKind.RetainCopies)
-                .Select(FormatRuleIdentity));
-            var quality = instance.Fingerprint.IsHighQuality ? "HQ" : "normal-quality";
-            if (exactQualityCount <= duplicateMinimum)
-                reasons.Add(new(
-                    "DuplicateRetentionFloor",
-                    $"Retention rule(s) {ruleSummary} keep at least {duplicateMinimum} {quality} copies; this character owns {exactQualityCount}.",
-                    SquireReasonSeverity.Blocking));
-            else
-            {
-                reasons.Add(new(
-                    "DuplicateRetentionSurplus",
-                    $"Retention rule(s) {ruleSummary} keep at least {duplicateMinimum} {quality} copies; {exactQualityCount} are owned, so at most {exactQualityCount - duplicateMinimum} may be removed from the complete batch.",
-                    SquireReasonSeverity.Information));
-            }
-        }
         if (gearsetProtection.IsProtected(definition.ItemId, instance.Fingerprint.IsHighQuality, exactQualityCount))
             reasons.Add(new(
                 "ReferencedByGearset",
@@ -188,56 +303,36 @@ public sealed class SquireCandidateEvaluator
         if (definition.IsSoulCrystal || definition.Slot == EquipmentSlot.SoulCrystal)
             reasons.Add(new("SoulCrystal", "Soul crystals are always protected.", SquireReasonSeverity.Blocking));
         if (definition.IsExplicitlyProtectedFamily)
-            reasons.Add(new("ProtectedItemFamily", "The item belongs to an explicitly protected family.", SquireReasonSeverity.Blocking));
+            reasons.Add(new("ProtectedItemFamily", "The item belongs to a non-configurable protected family.", SquireReasonSeverity.Blocking));
         if (definition.NormalizedRarity == EquipmentRarity.Unknown)
             reasons.Add(new("UnknownItemRarity", $"Item rarity value {definition.Rarity} is not mapped.", SquireReasonSeverity.Blocking));
-        else if (protectionPolicy.ProtectBlueAndPurpleGear && definition.NormalizedRarity is EquipmentRarity.Rare or EquipmentRarity.Relic)
-            reasons.Add(new("HighRarityEquipment", $"{definition.NormalizedRarity} equipment is protected by the blue and purple gear setting.", SquireReasonSeverity.Blocking));
         else if (definition.NormalizedRarity == EquipmentRarity.Uncommon &&
                  definition.ExpertDeliveryEligibility == ExpertDeliveryEligibility.Unknown)
             reasons.Add(new("ExpertDeliveryEligibilityUnknown", "Expert Delivery eligibility is unknown for this uncommon item.", SquireReasonSeverity.Blocking));
         if (definition.IsEquipment && instance.Fingerprint.MateriaIds.Count > 0)
         {
             if (capabilities.MateriaRetrievalUnlocked != true)
+            {
                 reasons.Add(new(
                     capabilities.MateriaRetrievalUnlocked == false ? "MateriaRetrievalNotUnlocked" : "MateriaRetrievalUnlockUnknown",
                     capabilities.MateriaRetrievalUnlocked == false
                         ? "Attached materia cannot be handled until Forging the Spirit is complete."
                         : "The Forging the Spirit completion required for materia retrieval could not be proven.",
                     SquireReasonSeverity.Blocking));
-            else if (!protectionPolicy.AllowRiskyMateriaRetrieval)
-                reasons.Add(new("MateriaRetrievalRiskNotAuthorized", "Retrieving materia can fail and destroy the materia; explicit risk authorization is required before this item can be cleaned up.", SquireReasonSeverity.Blocking));
+            }
             else
-                reasons.Add(new("MateriaRetrievalRequired", $"Squire will attempt to retrieve {instance.Fingerprint.MateriaIds.Count} attached materia before cleanup; failed retrieval can destroy materia.", SquireReasonSeverity.Warning));
+            {
+                reasons.Add(new(
+                    "MateriaRetrievalRequired",
+                    $"Squire will attempt to retrieve {instance.Fingerprint.MateriaIds.Count} attached materia before cleanup; failed retrieval can destroy materia.",
+                    SquireReasonSeverity.Warning));
+            }
         }
-        if (protectionPolicy.ProtectSignedGear && instance.Fingerprint.CrafterContentId is > 0)
-            reasons.Add(new("PlayerSignature", "Player-signed gear is protected by default.", SquireReasonSeverity.Blocking));
         if (definition.IsArmoireEligible is null)
             reasons.Add(new("ArmoireEligibilityUnknown", "Armoire eligibility is unknown.", SquireReasonSeverity.Blocking));
-        else if (definition.IsArmoireEligible == true)
-            reasons.Add(new("ArmoireEligible", "Armoire-eligible gear is protected by default.", SquireReasonSeverity.Blocking));
         if (definition.IsRecoverable is null)
             reasons.Add(new("RecoverabilityUnknown", "Recoverability is unknown.", SquireReasonSeverity.Blocking));
         return reasons;
-    }
-
-    private static string FormatRuleIdentity(SquireRule rule) => string.IsNullOrWhiteSpace(rule.Note)
-        ? $"{rule.Id:N}"
-        : $"'{rule.Note}' ({rule.Id:N})";
-
-    private static SquireDuplicateStatus CreateDuplicateStatus(
-        CharacterEquipmentSnapshot snapshot,
-        EquipmentInstanceSnapshot instance,
-        GearsetProtectionIndex gearsetProtection,
-        SquireProtectionPolicy protectionPolicy)
-    {
-        var owned = snapshot.Instances.Count(value =>
-            value.Fingerprint.ItemId == instance.Fingerprint.ItemId &&
-            value.Fingerprint.IsHighQuality == instance.Fingerprint.IsHighQuality);
-        return new SquireDuplicateStatus(
-            owned,
-            protectionPolicy.MinimumCopiesToKeep(instance.Fingerprint.ItemId, instance.Fingerprint.IsHighQuality),
-            gearsetProtection.RequiredCount(instance.Fingerprint.ItemId, instance.Fingerprint.IsHighQuality));
     }
 
     private static SquireReason UseReason(EquipmentUseAnalysis analysis) => analysis.Status switch
@@ -257,7 +352,7 @@ public sealed class SquireCandidateEvaluator
             new EquipmentItemDefinition(instance.Fingerprint.ItemId, $"Item {instance.Fingerprint.ItemId}", 0, 0, EquipmentSlot.Unknown, new HashSet<uint>(), 0, false, false, null, null, null, null, null, null, false),
             SquireAssessment.Unsupported,
             SquireDisposition.Unsupported,
-            new HashSet<SquireDisposition>(),
+            EmptyDispositions,
             [reason],
             null);
 
@@ -271,6 +366,8 @@ public sealed class SquireCandidateEvaluator
         SquireDisposition recommendation,
         IReadOnlySet<SquireDisposition> supported,
         IReadOnlyList<SquireReason> reasons,
-        EquipmentUseAnalysis? use) =>
-        new(instance, definition, assessment, recommendation, supported, reasons, use);
+        EquipmentUseAnalysis? use,
+        SquireDuplicateStatus? duplicateStatus = null,
+        SquireCleanupRuleEvaluation? ruleEvaluation = null) =>
+        new(instance, definition, assessment, recommendation, supported, reasons, use, duplicateStatus, ruleEvaluation);
 }

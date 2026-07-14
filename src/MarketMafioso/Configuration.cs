@@ -1,4 +1,5 @@
 using Dalamud.Configuration;
+using Franthropy.Dalamud.Equipment;
 using MarketMafioso.RetainerRestock;
 using MarketMafioso.Squire;
 using MarketMafioso.WorkshopPrep;
@@ -67,6 +68,7 @@ public class Configuration : IPluginConfiguration
 
     public List<WorkshopPrepQueueItem> WorkshopPrepQueue { get; set; } = new();
     public List<WorkshopFrozenQueue> FrozenWorkshopQueues { get; set; } = new();
+    public bool SplitWorkshopQueueAndMaterials { get; set; }
     public List<RetainerRestockPlanItem> RetainerRestockPlanItems { get; set; } = new();
     public Guid? ActiveFrozenWorkshopQueueId { get; set; }
     public List<uint> FavoriteWorkshopProjectIds { get; set; } = new();
@@ -78,10 +80,18 @@ public class Configuration : IPluginConfiguration
 [Serializable]
 public sealed class SquireConfiguration
 {
+    public string SelectedWorkspace { get; set; } = "Outfitter";
+    public string OutfitterSelectedTargetKey { get; set; } = string.Empty;
+    public string OutfitterSearch { get; set; } = string.Empty;
+    public string OutfitterStrategy { get; set; } = "HighestItemLevel";
+    public int OutfitterTargetLevel { get; set; }
     public bool ShowProtected { get; set; }
     public bool ShowNonEquipment { get; set; }
     public string Search { get; set; } = string.Empty;
-    public int RuleSchemaVersion { get; set; } = 1;
+    public int RuleSchemaVersion { get; set; } = 2;
+    public List<SquireCleanupRuleConfiguration> CleanupRules { get; set; } = [];
+    public Dictionary<string, SquireBuiltInRuleOverrideConfiguration> BuiltInRuleOverrides { get; set; } = new();
+    [Obsolete("Migrated to CleanupRules by SquireCleanupRuleMigration.")]
     public Dictionary<string, List<SquireRuleConfiguration>> RulesByCharacter { get; set; } = new();
     [Obsolete("Migrated to RulesByCharacter by SquireRuleMigration.")]
     public Dictionary<string, List<uint>> ExcludedItemIdsByCharacter { get; set; } = new();
@@ -116,6 +126,53 @@ public sealed class SquireRuleConfiguration
     public int MinimumCopies { get; set; }
     public bool Enabled { get; set; } = true;
     public string Note { get; set; } = string.Empty;
+}
+
+[Serializable]
+public sealed class SquireCleanupRuleConfiguration
+{
+    public string Id { get; set; } = $"user.{Guid.NewGuid():N}";
+    public string Name { get; set; } = "New cleanup rule";
+    public SquireCleanupRuleScope Scope { get; set; } = SquireCleanupRuleScope.Global;
+    public ulong? CharacterContentId { get; set; }
+    public bool Enabled { get; set; } = true;
+    public int Priority { get; set; } = 700;
+    public SquireCleanupRuleConditionConfiguration Condition { get; set; } = new();
+    public SquireCleanupRuleEffectConfiguration Effect { get; set; } = new();
+    public string Note { get; set; } = string.Empty;
+}
+
+[Serializable]
+public sealed class SquireCleanupRuleConditionConfiguration
+{
+    public List<uint>? ItemIds { get; set; }
+    public SquireRuleQuality Quality { get; set; } = SquireRuleQuality.Any;
+    public List<EquipmentRarity>? Rarities { get; set; }
+    public List<EquipmentUseStatus>? UseStatuses { get; set; }
+    public bool? IsEquipment { get; set; }
+    public bool? IsPlayerSigned { get; set; }
+    public bool? IsArmoireEligible { get; set; }
+    public bool? HasMateria { get; set; }
+    public bool? HasFutureLevelingUse { get; set; }
+    public int? MinimumEquipLevel { get; set; }
+    public int? MaximumEquipLevel { get; set; }
+    public List<SquireDisposition>? SupportedDispositions { get; set; }
+}
+
+[Serializable]
+public sealed class SquireCleanupRuleEffectConfiguration
+{
+    public SquireCleanupDecision Decision { get; set; }
+    public SquireDisposition? PreferredDisposition { get; set; }
+    public int MinimumCopies { get; set; }
+    public SquireCleanupAuthorization Authorizations { get; set; }
+}
+
+[Serializable]
+public sealed class SquireBuiltInRuleOverrideConfiguration
+{
+    public bool? Enabled { get; set; }
+    public int? Priority { get; set; }
 }
 
 [Serializable]

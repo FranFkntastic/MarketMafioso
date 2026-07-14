@@ -33,12 +33,16 @@ internal static class SquireAnalysisInputSignature
             Capabilities = capabilities,
             Policy = new
             {
+                policy.CharacterContentId,
                 policy.ProtectSignedGear,
                 policy.ProtectFutureLevelingGear,
                 policy.ProtectBlueAndPurpleGear,
                 policy.AllowRiskyMateriaRetrieval,
-                Rules = policy.Rules?
+                LegacyRules = policy.Rules?
                     .OrderBy(rule => rule.Id)
+                    .ToArray() ?? [],
+                CleanupRules = policy.CleanupRules?
+                    .OrderBy(rule => rule.Id, System.StringComparer.Ordinal)
                     .ToArray() ?? [],
             },
         }, Formatting.None);

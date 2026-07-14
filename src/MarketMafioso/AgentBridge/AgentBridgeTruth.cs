@@ -44,6 +44,9 @@ public sealed record AgentBridgeSquireTruth
     public required IReadOnlyList<string> EvaluationFailureGroups { get; init; }
     public required IReadOnlyList<string> ProtectionGroups { get; init; }
     public required IReadOnlyList<AgentBridgeSquireCandidateTruth> ExecutableCandidates { get; init; }
+    public int ApplicableRuleCount { get; init; }
+    public int EnabledRuleCount { get; init; }
+    public IReadOnlyList<string> RuleValidationErrors { get; init; } = [];
 }
 
 public sealed record AgentBridgeSquireCandidateTruth
@@ -62,6 +65,7 @@ public sealed record AgentBridgeSquireCandidateTruth
     public required IReadOnlyList<string> JobComparisons { get; init; }
     public required string RevalidationCode { get; init; }
     public required bool RevalidationSucceeded { get; init; }
+    public IReadOnlyList<string> RuleTrace { get; init; } = [];
 }
 
 public sealed record AgentBridgeRouteTruth

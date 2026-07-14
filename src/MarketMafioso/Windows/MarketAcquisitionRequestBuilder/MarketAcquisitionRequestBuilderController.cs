@@ -1,4 +1,8 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Net;
+using System.Net.Http;
 using System.Threading.Tasks;
 using MarketMafioso.MarketAcquisition;
 
@@ -6,10 +10,16 @@ namespace MarketMafioso.Windows.MarketAcquisitionRequestBuilder;
 
 public sealed class MarketAcquisitionRequestBuilderController
 {
+    private static readonly TimeSpan AutomaticSyncDelay = TimeSpan.FromMilliseconds(350);
+    private static readonly TimeSpan AutomaticRetryDelay = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan RemotePollInterval = TimeSpan.FromSeconds(2);
     private readonly Func<MarketAcquisitionRequestDocument, Task<MarketAcquisitionRequestBuilderSyncOutcome>> syncRequest;
     private readonly Func<MarketAcquisitionRequestDocument, Task<MarketAcquisitionRequestBuilderRefreshOutcome>> refreshRequest;
     private readonly Action<MarketAcquisitionRequestDocument, MarketAcquisitionRequestView?> documentAdopted;
     private readonly Action<MarketAcquisitionRequestDocument> persistDocument;
+    private bool syncRequested;
+    private DateTimeOffset syncDueAtUtc = DateTimeOffset.MaxValue;
+    private DateTimeOffset nextRemotePollAtUtc = DateTimeOffset.UtcNow;
 
     public MarketAcquisitionRequestBuilderController(
         Configuration config,
@@ -37,13 +47,14 @@ public sealed class MarketAcquisitionRequestBuilderController
         this.refreshRequest = refreshRequest ?? throw new ArgumentNullException(nameof(refreshRequest));
         this.documentAdopted = documentAdopted ?? throw new ArgumentNullException(nameof(documentAdopted));
         this.persistDocument = persistDocument ?? throw new ArgumentNullException(nameof(persistDocument));
+        if (Document.Lines.Count > 0 &&
+            !Document.SyncStatus.Equals("SyncedClean", StringComparison.OrdinalIgnoreCase))
+        {
+            RequestAutomaticSync();
+        }
     }
 
     public MarketAcquisitionRequestDocument Document { get; private set; }
-
-    public MarketAcquisitionRequestDocument? PendingRemoteDocument { get; private set; }
-
-    public MarketAcquisitionRequestView? PendingRemoteRequest { get; private set; }
 
     public int SelectedLineIndex { get; private set; } = -1;
 
@@ -67,7 +78,7 @@ public sealed class MarketAcquisitionRequestBuilderController
     {
         ArgumentNullException.ThrowIfNull(request);
         Document = MarketAcquisitionRequestDocumentMapper.FromRequestView(request);
-        ResetRemoteAndSelection();
+        ResetSelection();
         Status = "Loaded request into builder.";
         SaveDocument();
         documentAdopted(Document, request);
@@ -80,7 +91,7 @@ public sealed class MarketAcquisitionRequestBuilderController
             return false;
 
         Document = MarketAcquisitionRequestDocumentMapper.FromRequestView(request);
-        ResetRemoteAndSelection();
+        ResetSelection();
         Status = "Loaded restored request into builder.";
         SaveDocument();
         return true;
@@ -94,13 +105,50 @@ public sealed class MarketAcquisitionRequestBuilderController
             return;
         }
 
+        var targetChanged = !string.IsNullOrWhiteSpace(Document.TargetCharacterName) &&
+                            (!string.Equals(Document.TargetCharacterName, characterName, StringComparison.Ordinal) ||
+                             !string.Equals(Document.TargetWorld, world, StringComparison.Ordinal));
         Document = Document with
         {
             TargetCharacterName = characterName,
             TargetWorld = world,
+            RemoteRequestId = targetChanged ? null : Document.RemoteRequestId,
+            RemoteRevision = targetChanged ? 0 : Document.RemoteRevision,
+            RemoteOrigin = targetChanged ? null : Document.RemoteOrigin,
+            LastSyncedHash = targetChanged ? null : Document.LastSyncedHash,
+            RemoteHash = targetChanged ? null : Document.RemoteHash,
+            SyncStatus = targetChanged ? "NewDraft" : Document.SyncStatus,
             UpdatedAtUtc = DateTimeOffset.UtcNow,
         };
         SaveDocument();
+        RequestAutomaticSync();
+    }
+
+    public void PumpAutomaticSynchronization(
+        string characterName,
+        string world,
+        bool canSynchronize,
+        DateTimeOffset? nowUtc = null)
+    {
+        if (!canSynchronize || IsSyncing || IsRefreshing || Document.Lines.Count == 0)
+            return;
+
+        var now = nowUtc ?? DateTimeOffset.UtcNow;
+        if (syncRequested && now >= syncDueAtUtc)
+        {
+            syncRequested = false;
+            _ = SyncAsync(characterName, world);
+            return;
+        }
+
+        if (!syncRequested &&
+            !string.IsNullOrWhiteSpace(Document.RemoteRequestId) &&
+            Document.SyncStatus.Equals("SyncedClean", StringComparison.OrdinalIgnoreCase) &&
+            now >= nextRemotePollAtUtc)
+        {
+            nextRemotePollAtUtc = now.Add(RemotePollInterval);
+            _ = RefreshAsync();
+        }
     }
 
     public void UpdateRouteScope(RequestRouteScope scope)
@@ -180,6 +228,27 @@ public sealed class MarketAcquisitionRequestBuilderController
         FinishLocalEdit("Local request updated.");
     }
 
+    public int AddLines(IEnumerable<MarketAcquisitionRequestLineDocument> lines)
+    {
+        ArgumentNullException.ThrowIfNull(lines);
+        var added = 0;
+        foreach (var line in lines)
+        {
+            if (line.ItemId == 0 || Document.Lines.Any(existing => existing.ItemId == line.ItemId))
+                continue;
+            Document = RequestDocumentMutation.AddLine(Document, line);
+            added++;
+        }
+        if (added == 0)
+        {
+            Status = "Outfitter items are already present in the local request.";
+            return 0;
+        }
+        SelectedLineIndex = -1;
+        FinishLocalEdit($"Added {added:N0} Outfitter line{(added == 1 ? string.Empty : "s")}.");
+        return added;
+    }
+
     public bool RemoveLine(int index)
     {
         if (index < 0 || index >= Document.Lines.Count)
@@ -209,23 +278,24 @@ public sealed class MarketAcquisitionRequestBuilderController
             if (ReferenceEquals(Document, operationDocument))
             {
                 Document = outcome.Document;
-                ResetRemoteAndSelection();
                 Status = outcome.StatusMessage;
+                syncRequested = false;
             }
             else
             {
                 Document = MergeSyncMetadata(Document, outcome.Document);
-                PendingRemoteDocument = null;
-                PendingRemoteRequest = null;
-                Status = $"{outcome.StatusMessage} Local edits made during sync were preserved.";
+                Status = $"{outcome.StatusMessage} A newer local edit is queued for synchronization.";
+                RequestAutomaticSync();
             }
 
+            nextRemotePollAtUtc = DateTimeOffset.UtcNow.Add(RemotePollInterval);
             SaveDocument();
         }
         catch (Exception ex)
         {
             Document = Document with { SyncStatus = "SyncFailed", UpdatedAtUtc = DateTimeOffset.UtcNow };
-            Status = $"Sync failed: {ex.Message}";
+            Status = $"Synchronization failed; retrying automatically. {ex.Message}";
+            RequestAutomaticSync(AutomaticRetryDelay);
             SaveDocument();
         }
         finally
@@ -247,24 +317,26 @@ public sealed class MarketAcquisitionRequestBuilderController
             if (ReferenceEquals(Document, operationDocument))
             {
                 Document = outcome.Document;
-                PendingRemoteDocument = outcome.RemoteDocument;
-                PendingRemoteRequest = outcome.RemoteRequest;
                 Status = outcome.StatusMessage;
+                documentAdopted(Document, outcome.RemoteRequest);
             }
             else
             {
-                var remoteDocument = outcome.RemoteDocument ?? outcome.Document;
-                Document = MergeRemoteMetadata(Document, remoteDocument);
-                PendingRemoteDocument = remoteDocument;
-                PendingRemoteRequest = outcome.RemoteRequest;
-                Status = $"{outcome.StatusMessage} Local edits made during refresh were preserved.";
+                Status = "A newer local edit superseded the server refresh and is queued for synchronization.";
+                RequestAutomaticSync();
             }
 
             SaveDocument();
         }
+        catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.NotFound)
+        {
+            Status = "The server copy is missing; republishing the current local request automatically.";
+            RequestAutomaticSync(TimeSpan.Zero);
+        }
         catch (Exception ex)
         {
-            Status = $"Refresh failed: {ex.Message}";
+            Status = $"Server refresh failed; the local request remains available. {ex.Message}";
+            RequestAutomaticSync(AutomaticRetryDelay);
         }
         finally
         {
@@ -272,24 +344,10 @@ public sealed class MarketAcquisitionRequestBuilderController
         }
     }
 
-    public bool AdoptRemote()
-    {
-        if (PendingRemoteDocument is null)
-            return false;
-
-        Document = PendingRemoteDocument;
-        var remote = PendingRemoteRequest;
-        ResetRemoteAndSelection();
-        Status = "Loaded server copy.";
-        SaveDocument();
-        documentAdopted(Document, remote);
-        return true;
-    }
-
     public void ClearDraft(string characterName, string world)
     {
         Document = MarketAcquisitionRequestDocument.CreateDefault(characterName, world);
-        ResetRemoteAndSelection();
+        ResetSelection();
         Status = "Local request cleared.";
         SaveDocument();
     }
@@ -302,19 +360,22 @@ public sealed class MarketAcquisitionRequestBuilderController
 
     private void FinishLocalEdit(string? message)
     {
-        PendingRemoteDocument = null;
-        PendingRemoteRequest = null;
         if (message is not null)
             Status = message;
         SaveDocument();
+        RequestAutomaticSync();
     }
 
-    private void ResetRemoteAndSelection()
+    private void RequestAutomaticSync(TimeSpan? delay = null)
     {
-        PendingRemoteDocument = null;
-        PendingRemoteRequest = null;
-        SelectedLineIndex = -1;
+        if (Document.Lines.Count == 0)
+            return;
+
+        syncRequested = true;
+        syncDueAtUtc = DateTimeOffset.UtcNow.Add(delay ?? AutomaticSyncDelay);
     }
+
+    private void ResetSelection() => SelectedLineIndex = -1;
 
     private bool ShouldAdoptRestoredRequest(MarketAcquisitionRequestView request)
     {
@@ -351,19 +412,6 @@ public sealed class MarketAcquisitionRequestBuilderController
             LastSyncedHash = synced.LastSyncedHash,
             RemoteHash = synced.RemoteHash,
             SyncStatus = "LocalEdits",
-            UpdatedAtUtc = DateTimeOffset.UtcNow,
-        };
-
-    private static MarketAcquisitionRequestDocument MergeRemoteMetadata(
-        MarketAcquisitionRequestDocument current,
-        MarketAcquisitionRequestDocument remote) =>
-        current with
-        {
-            RemoteRequestId = remote.RemoteRequestId,
-            RemoteRevision = remote.RemoteRevision,
-            RemoteOrigin = remote.RemoteOrigin,
-            RemoteHash = remote.RemoteHash,
-            SyncStatus = "RemoteChanged",
             UpdatedAtUtc = DateTimeOffset.UtcNow,
         };
 

@@ -204,8 +204,8 @@ internal sealed class WorkshopPrepQueuePanel
                 : $"Active saved job: {activeFrozenQueue.Name} (modified)";
         ImGui.TextColored(MarketMafiosoUiTheme.Muted, activeFrozenQueueLabel);
 
-        var commandWidth = 720f;
-        var nameWidth = Math.Max(220f, ImGui.GetContentRegionAvail().X - commandWidth);
+        var saveWidth = ImGui.CalcTextSize("Save As...").X + ImGui.GetStyle().FramePadding.X * 2f;
+        var nameWidth = Math.Max(180f, ImGui.GetContentRegionAvail().X - saveWidth - 110f - ImGui.GetStyle().ItemSpacing.X * 2f);
         ImGui.SetNextItemWidth(nameWidth);
         ImGui.InputText("##workshopFrozenQueueName", ref frozenQueueNameInput, 128);
 
@@ -222,7 +222,6 @@ internal sealed class WorkshopPrepQueuePanel
         if (ImGuiUi.Button("Save As...", CanEditQueue && config.WorkshopPrepQueue.Count > 0))
             ApplyFrozenQueueResult(WorkshopQueueService.FreezeCurrentQueue(config, frozenQueueNameInput, DateTime.UtcNow), clearName: true);
 
-        ImGui.SameLine();
         if (ImGuiUi.Button("New Queue", CanEditQueue))
         {
             if (config.WorkshopPrepQueue.Count > 0)
@@ -241,8 +240,6 @@ internal sealed class WorkshopPrepQueuePanel
         ImGui.SameLine();
         if (ImGui.Button("Manage Saved Jobs"))
             openFrozenQueueBrowser();
-
-        ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Handoff contains VIWI and future queue targets. Export contains Artisan JSON and Craft Architect .craftplan JSON.");
 
         DrawFrozenQueueConfirmations();
     }
