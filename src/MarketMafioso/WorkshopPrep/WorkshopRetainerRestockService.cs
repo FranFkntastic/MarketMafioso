@@ -235,19 +235,10 @@ public sealed class WorkshopRetainerRestockService
         return new(false, false, $"No matching live retainer stacks were found for the workshop material shortages: {remainingText}.");
     }
 
-    internal static string? GetAutomatedRestockStartError(bool isRetainerListReady, bool isRetainerInventoryReady)
-    {
-        if (isRetainerInventoryReady && isRetainerListReady)
-            return "Close the current retainer inventory before starting automated workshop material restock.";
-
-        if (isRetainerInventoryReady)
-            return "Close the current retainer inventory and open the retainer list before starting automated workshop material restock.";
-
-        if (!isRetainerListReady)
-            return "Open the retainer list before starting automated workshop material restock.";
-
-        return null;
-    }
+    internal static string? GetAutomatedRestockStartError(bool isRetainerInventoryReady) =>
+        isRetainerInventoryReady
+            ? "Close the current retainer inventory before starting automated workshop material restock."
+            : null;
 
     private async Task<int> WithdrawFromOpenRetainerAsync(Dictionary<uint, int> remaining)
     {

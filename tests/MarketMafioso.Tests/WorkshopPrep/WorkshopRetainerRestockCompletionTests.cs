@@ -34,16 +34,13 @@ public sealed class WorkshopRetainerRestockCompletionTests
     }
 
     [Theory]
-    [InlineData(true, false, null)]
-    [InlineData(true, true, "Close the current retainer inventory before starting automated workshop material restock.")]
-    [InlineData(false, true, "Close the current retainer inventory and open the retainer list before starting automated workshop material restock.")]
-    [InlineData(false, false, "Open the retainer list before starting automated workshop material restock.")]
-    public void GetAutomatedRestockStartError_RequiresRetainerList(
-        bool isRetainerListReady,
+    [InlineData(true, "Close the current retainer inventory before starting automated workshop material restock.")]
+    [InlineData(false, null)]
+    public void GetAutomatedRestockStartError_AllowsOpeningNearbyBell(
         bool isRetainerInventoryReady,
         string? expected)
     {
-        Assert.Equal(expected, WorkshopRetainerRestockService.GetAutomatedRestockStartError(isRetainerListReady, isRetainerInventoryReady));
+        Assert.Equal(expected, WorkshopRetainerRestockService.GetAutomatedRestockStartError(isRetainerInventoryReady));
     }
 
     [Fact]

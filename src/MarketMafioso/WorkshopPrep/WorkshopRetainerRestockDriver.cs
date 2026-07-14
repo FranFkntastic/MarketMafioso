@@ -8,6 +8,7 @@ using FFXIVClientStructs.FFXIV.Client.Game;
 using FFXIVClientStructs.FFXIV.Client.UI;
 using FFXIVClientStructs.FFXIV.Client.UI.Agent;
 using FFXIVClientStructs.FFXIV.Component.GUI;
+using Franthropy.Dalamud.Automation.Retainers;
 using Lumina.Excel.Sheets;
 using MarketMafioso.Automation.Retainers;
 using MarketMafioso.Automation.Safety;
@@ -60,10 +61,15 @@ internal sealed class WorkshopRetainerRestockDriver : IWorkshopRetainerRestockDr
 
     private readonly IPluginLog log;
     private readonly RetainerLiveInventoryScanner liveInventoryScanner = new();
+    private readonly DalamudSummoningBellInteractor summoningBellInteractor;
 
     public WorkshopRetainerRestockDriver(IPluginLog log)
     {
         this.log = log;
+        summoningBellInteractor = new(
+            Plugin.ObjectTable,
+            Plugin.TargetManager,
+            Plugin.DataManager);
     }
 
     public unsafe IReadOnlyList<LiveRetainerStack> ScanLiveRetainerStacks(IReadOnlySet<uint> itemIds)
@@ -73,12 +79,37 @@ internal sealed class WorkshopRetainerRestockDriver : IWorkshopRetainerRestockDr
 
     public async Task WaitForRetainerListAsync()
     {
-        var startError = await Plugin.Framework.RunOnTick(() =>
-            WorkshopRetainerRestockService.GetAutomatedRestockStartError(
-                IsRetainerListReady(),
-                IsRetainerInventoryReady())).ConfigureAwait(false);
+        var initialState = await Plugin.Framework.RunOnTick(() => new
+        {
+            RetainerListReady = IsRetainerListReady(),
+            RetainerInventoryReady = IsRetainerInventoryReady(),
+        }).ConfigureAwait(false);
+        var startError = WorkshopRetainerRestockService.GetAutomatedRestockStartError(initialState.RetainerInventoryReady);
         if (startError != null)
             throw new InvalidOperationException(startError);
+        if (initialState.RetainerListReady)
+            return;
+
+        SummoningBellInteractionResult? interaction = null;
+        for (var attempt = 0; attempt < 120; attempt++)
+        {
+            if (await Plugin.Framework.RunOnTick(IsRetainerListReady).ConfigureAwait(false))
+                return;
+
+            if (interaction?.Submitted != true)
+            {
+                interaction = await Plugin.Framework.RunOnTick(summoningBellInteractor.TryInteract).ConfigureAwait(false);
+                if (interaction.State == SummoningBellInteractionState.Unavailable)
+                    throw new InvalidOperationException(interaction.Message);
+                if (interaction.Submitted)
+                    log.Information($"[MarketMafioso] {interaction.Message}");
+            }
+
+            await Plugin.Framework.DelayTicks(1).ConfigureAwait(false);
+        }
+
+        throw new InvalidOperationException(
+            $"Timed out waiting for the retainer list after summoning-bell interaction. {interaction?.Message ?? "No interaction was submitted."}");
     }
 
     public async Task OpenRetainerAsync(RetainerMaterialCandidate candidate)
