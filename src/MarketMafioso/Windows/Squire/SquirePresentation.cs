@@ -73,7 +73,7 @@ internal static class SquirePresentation
         "MateriaRetrievalUnlockUnknown" => "Materia retrieval unlock unknown",
         "MateriaRetrievalRiskNotAuthorized" => "Materia retrieval risk not authorized",
         "CurrentlyEquipped" => "Currently equipped",
-        "ReferencedByGearset" => "Referenced by a gearset",
+        "ReferencedByGearset" => "Required by a saved gearset",
         "NotEquipment" => "Not equipment",
         "SoulCrystal" => "Soul crystal",
         "ProtectedItemFamily" => "Protected item family",

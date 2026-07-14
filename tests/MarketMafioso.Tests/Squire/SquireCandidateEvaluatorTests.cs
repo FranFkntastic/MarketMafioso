@@ -44,6 +44,9 @@ public sealed class SquireCandidateEvaluatorTests
         Assert.Equal(SquireAssessment.Protected, candidate.Assessment);
         Assert.Contains(candidate.Reasons, reason => reason.Code == "CurrentlyEquipped");
         Assert.Contains(candidate.Reasons, reason => reason.Code == "ReferencedByGearset");
+        Assert.Contains(candidate.Reasons, reason =>
+            reason.Code == "ReferencedByGearset" &&
+            reason.Message.Contains("does not yet replace saved gearset assignments", StringComparison.Ordinal));
         Assert.Contains(candidate.Reasons, reason => reason.Code == "MateriaRetrievalRiskNotAuthorized" && reason.Severity == SquireReasonSeverity.Blocking);
         Assert.DoesNotContain(candidate.Reasons, reason => reason.Code == "PlayerSignature");
     }

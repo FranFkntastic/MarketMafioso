@@ -453,8 +453,8 @@ internal sealed class SquireEvidencePanel(
             .Where(set => set.IsValid && set.Items.Any(item => item.ItemId == candidate.Definition.ItemId))
             .Select(set => set.Name).Distinct().Order().ToArray();
         return sets.Length == 0
-            ? $"Item {candidate.Definition.ItemId} was marked gearset-referenced, but no named valid set was available in this presentation snapshot."
-            : $"Referenced by valid gearset(s): {string.Join(", ", sets)}.";
+            ? $"Item {candidate.Definition.ItemId} is required to preserve saved-gearset multiplicity, but no named valid set was available in this presentation snapshot. Better owned equipment does not release this protection automatically."
+            : $"Required by valid saved gearset(s): {string.Join(", ", sets)}. This protection follows the saved assignment; better owned equipment does not release it automatically.";
     }
 
     private static void Cell(string value)

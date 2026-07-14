@@ -168,7 +168,10 @@ public sealed class SquireCandidateEvaluator
                     SquireReasonSeverity.Information));
         }
         if (gearsetProtection.IsProtected(definition.ItemId, instance.Fingerprint.IsHighQuality, exactQualityCount))
-            reasons.Add(new("ReferencedByGearset", "An existing valid gearset references this item ID.", SquireReasonSeverity.Blocking));
+            reasons.Add(new(
+                "ReferencedByGearset",
+                "The current item-ID and quality multiplicity is required by an existing valid saved gearset. Squire does not yet replace saved gearset assignments with better owned equipment.",
+                SquireReasonSeverity.Blocking));
         if (!definition.IsEquipment)
             reasons.Add(new("NotEquipment", "The item is not equipment.", SquireReasonSeverity.Blocking));
         if (definition.IsSoulCrystal || definition.Slot == EquipmentSlot.SoulCrystal)

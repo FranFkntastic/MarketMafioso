@@ -183,7 +183,9 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
             value.Fingerprint.ItemId == fingerprint.ItemId &&
             value.Fingerprint.IsHighQuality == fingerprint.IsHighQuality);
         if (GearsetProtectionIndex.Create(snapshot.Gearsets).IsProtected(fingerprint.ItemId, fingerprint.IsHighQuality, exactQualityCount))
-            return SquireRevalidationResult.Fail("ReferencedByGearset", "A valid gearset now references this item ID.");
+            return SquireRevalidationResult.Fail(
+                "ReferencedByGearset",
+                "The current item-ID and quality multiplicity is required by a valid saved gearset. Squire does not yet replace saved gearset assignments with better owned equipment.");
         var duplicateMinimum = currentPolicy().MinimumCopiesToKeep(fingerprint.ItemId, fingerprint.IsHighQuality);
         if (duplicateMinimum > 0 && exactQualityCount <= duplicateMinimum)
             return SquireRevalidationResult.Fail("DuplicateRetentionFloor", $"Removing this copy would cross the character's minimum of {duplicateMinimum} retained copies.");
