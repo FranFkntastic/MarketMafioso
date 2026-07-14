@@ -25,34 +25,24 @@ public sealed class RetainerRestockBrowserPanel
         this.saveConfig = saveConfig ?? throw new ArgumentNullException(nameof(saveConfig));
     }
 
-    public void Draw(
+    public void DrawBrowse(
         IReadOnlyList<RetainerRestockStockRow> stockRows,
+        Vector4 headerColor,
+        Vector4 mutedColor)
+    {
+        ArgumentNullException.ThrowIfNull(stockRows);
+        DrawAccessibleStock(stockRows, headerColor, mutedColor);
+    }
+
+    public void DrawPlan(
         RetainerRestockPlan plan,
         Vector4 headerColor,
         Vector4 successColor,
         Vector4 errorColor,
         Vector4 mutedColor)
     {
-        ArgumentNullException.ThrowIfNull(stockRows);
         ArgumentNullException.ThrowIfNull(plan);
-
-        var layoutFlags = ImGuiTableFlags.Resizable |
-                          ImGuiTableFlags.SizingStretchProp |
-                          ImGuiTableFlags.NoSavedSettings;
-        if (!ImGui.BeginTable("RetainerRestockBrowserLayout", 2, layoutFlags, new Vector2(0, 0)))
-            return;
-
-        ImGui.TableSetupColumn("Accessible Stock", ImGuiTableColumnFlags.WidthStretch, 1.15f);
-        ImGui.TableSetupColumn("Plan Queue", ImGuiTableColumnFlags.WidthStretch, 0.85f);
-        ImGui.TableNextRow();
-
-        ImGui.TableNextColumn();
-        DrawAccessibleStock(stockRows, headerColor, mutedColor);
-
-        ImGui.TableNextColumn();
         DrawPlanQueue(plan, headerColor, successColor, errorColor, mutedColor);
-
-        ImGui.EndTable();
     }
 
     private void DrawAccessibleStock(
@@ -85,6 +75,9 @@ public sealed class RetainerRestockBrowserPanel
             mutedColor,
             $"{filteredRows.Count.ToString("N0", CultureInfo.InvariantCulture)} / {stockRows.Count.ToString("N0", CultureInfo.InvariantCulture)} items");
 
+        DrawStagedItem(MarketMafioso.Windows.Main.MarketMafiosoUiTheme.Success, MarketMafioso.Windows.Main.MarketMafiosoUiTheme.Error, mutedColor);
+        ImGui.Spacing();
+
         if (filteredRows.Count == 0)
         {
             ImGui.TextColored(mutedColor, "No accessible stock matches this filter.");
@@ -95,16 +88,16 @@ public sealed class RetainerRestockBrowserPanel
                     ImGuiTableFlags.ScrollY |
                     ImGuiTableFlags.ScrollX |
                     ImGuiTableFlags.SizingStretchProp;
-        var tableHeight = Math.Max(220f, ImGui.GetContentRegionAvail().Y);
+        var tableHeight = Math.Max(180f, ImGui.GetContentRegionAvail().Y);
         if (!ImGui.BeginTable("RetainerRestockAccessibleStockRows", 6, flags, new Vector2(0, tableHeight)))
             return;
 
-        ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.WidthFixed, 180);
-        ImGui.TableSetupColumn("Total", ImGuiTableColumnFlags.WidthFixed, 64);
-        ImGui.TableSetupColumn("Player", ImGuiTableColumnFlags.WidthFixed, 64);
-        ImGui.TableSetupColumn("Retainers", ImGuiTableColumnFlags.WidthFixed, 76);
-        ImGui.TableSetupColumn("Cache", ImGuiTableColumnFlags.WidthFixed, 78);
-        ImGui.TableSetupColumn("Sources", ImGuiTableColumnFlags.WidthFixed, 220);
+        ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.WidthStretch, 2.5f);
+        ImGui.TableSetupColumn("Total", ImGuiTableColumnFlags.WidthFixed, 72);
+        ImGui.TableSetupColumn("Player", ImGuiTableColumnFlags.WidthFixed, 72);
+        ImGui.TableSetupColumn("Retainers", ImGuiTableColumnFlags.WidthFixed, 84);
+        ImGui.TableSetupColumn("Cache", ImGuiTableColumnFlags.WidthFixed | ImGuiTableColumnFlags.DefaultHide, 84);
+        ImGui.TableSetupColumn("Sources", ImGuiTableColumnFlags.WidthStretch | ImGuiTableColumnFlags.DefaultHide, 2f);
         ImGui.TableHeadersRow();
 
         foreach (var row in filteredRows)
@@ -162,9 +155,6 @@ public sealed class RetainerRestockBrowserPanel
         Vector4 mutedColor)
     {
         ImGuiUi.SectionHeader("Plan Queue", headerColor);
-        DrawStagedItem(successColor, errorColor, mutedColor);
-
-        ImGui.Spacing();
         if (config.RetainerRestockPlanItems.Count == 0)
         {
             ImGui.TextColored(mutedColor, "No restock rows queued.");
@@ -176,20 +166,19 @@ public sealed class RetainerRestockBrowserPanel
                     ImGuiTableFlags.ScrollY |
                     ImGuiTableFlags.ScrollX |
                     ImGuiTableFlags.SizingStretchProp;
-        var tableHeight = Math.Max(240f, ImGui.GetContentRegionAvail().Y);
-        if (!ImGui.BeginTable("RetainerRestockPlanQueueRows", 11, flags, new Vector2(0, tableHeight)))
+        var availableHeight = ImGui.GetContentRegionAvail().Y;
+        var tableHeight = state.SelectedPlanItemId is null
+            ? Math.Max(240f, availableHeight)
+            : Math.Max(220f, availableHeight - 116f);
+        if (!ImGui.BeginTable("RetainerRestockPlanQueueRows", 7, flags, new Vector2(0, tableHeight)))
             return;
 
         ImGui.TableSetupColumn("On", ImGuiTableColumnFlags.WidthFixed, 44);
-        ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.WidthFixed, 170);
-        ImGui.TableSetupColumn("Desired", ImGuiTableColumnFlags.WidthFixed, 76);
-        ImGui.TableSetupColumn("Player", ImGuiTableColumnFlags.WidthFixed, 64);
-        ImGui.TableSetupColumn("Need", ImGuiTableColumnFlags.WidthFixed, 64);
-        ImGui.TableSetupColumn("Retainers", ImGuiTableColumnFlags.WidthFixed, 76);
-        ImGui.TableSetupColumn("Missing", ImGuiTableColumnFlags.WidthFixed, 72);
-        ImGui.TableSetupColumn("Cache", ImGuiTableColumnFlags.WidthFixed, 78);
-        ImGui.TableSetupColumn("Status", ImGuiTableColumnFlags.WidthFixed, 104);
-        ImGui.TableSetupColumn("Candidates / Note", ImGuiTableColumnFlags.WidthFixed, 220);
+        ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.WidthStretch, 2.5f);
+        ImGui.TableSetupColumn("Desired", ImGuiTableColumnFlags.WidthFixed, 82);
+        ImGui.TableSetupColumn("Need", ImGuiTableColumnFlags.WidthFixed, 70);
+        ImGui.TableSetupColumn("Available", ImGuiTableColumnFlags.WidthFixed, 82);
+        ImGui.TableSetupColumn("Status", ImGuiTableColumnFlags.WidthFixed, 116);
         ImGui.TableSetupColumn("", ImGuiTableColumnFlags.WidthFixed, 84);
         ImGui.TableHeadersRow();
 
@@ -210,7 +199,8 @@ public sealed class RetainerRestockBrowserPanel
             }
 
             ImGui.TableNextColumn();
-            ImGui.TextUnformatted(FormatItemName(item));
+            if (ImGui.Selectable($"{FormatItemName(item)}##RetainerRestockPlanRow{rowId}", state.SelectedPlanItemId == item.Id))
+                state.SelectedPlanItemId = item.Id;
 
             ImGui.TableNextColumn();
             var desired = item.DesiredPlayerQuantity;
@@ -220,9 +210,6 @@ public sealed class RetainerRestockBrowserPanel
                 item.DesiredPlayerQuantity = Math.Max(1, desired);
                 saveConfig();
             }
-
-            ImGui.TableNextColumn();
-            ImGui.TextUnformatted(FormatPreviewNumber(preview?.PlayerQuantity));
 
             ImGui.TableNextColumn();
             var needed = preview?.NeededQuantity;
@@ -235,27 +222,12 @@ public sealed class RetainerRestockBrowserPanel
             ImGui.TextUnformatted(FormatPreviewNumber(preview?.CachedRetainerQuantity));
 
             ImGui.TableNextColumn();
-            var missing = preview?.MissingQuantity;
-            if (missing is null)
-                ImGui.TextColored(mutedColor, "-");
-            else
-                ImGui.TextColored(missing.Value > 0 ? errorColor : successColor, missing.Value.ToString());
-
-            ImGui.TableNextColumn();
-            ImGui.TextColored(
-                preview?.OldestRelevantCacheAge is null ? mutedColor : headerColor,
-                FormatCacheAge(preview?.OldestRelevantCacheAge));
-
-            ImGui.TableNextColumn();
             if (preview is null)
                 ImGui.TextColored(mutedColor, item.Enabled ? "No preview" : "Disabled");
             else
                 ImGui.TextColored(
                     GetStatusColor(preview.Status, headerColor, successColor, errorColor, mutedColor),
                     FormatStatus(preview.Status));
-
-            ImGui.TableNextColumn();
-            DrawCandidatesAndNote(item, preview, mutedColor, rowId);
 
             ImGui.TableNextColumn();
             if (ImGuiUi.Button($"Remove##RetainerRestockPlanRemove{rowId}", true))
@@ -267,6 +239,40 @@ public sealed class RetainerRestockBrowserPanel
         }
 
         ImGui.EndTable();
+        DrawSelectedPlanDetails(plan, mutedColor);
+    }
+
+    private void DrawSelectedPlanDetails(RetainerRestockPlan plan, Vector4 mutedColor)
+    {
+        if (state.SelectedPlanItemId is not { } selectedId)
+            return;
+
+        var item = config.RetainerRestockPlanItems.FirstOrDefault(candidate => candidate.Id == selectedId);
+        if (item is null)
+        {
+            state.SelectedPlanItemId = null;
+            return;
+        }
+
+        var preview = plan.Lines.FirstOrDefault(line => line.PlanItemId == selectedId);
+        ImGui.Spacing();
+        ImGuiUi.SectionHeader("Selected plan row", MarketMafioso.Windows.Main.MarketMafiosoUiTheme.Header);
+        ImGui.TextUnformatted(FormatItemName(item));
+        ImGui.SameLine();
+        ImGui.TextColored(
+            mutedColor,
+            preview is null
+                ? "No current preview."
+                : $"Player {preview.PlayerQuantity}; need {preview.NeededQuantity}; retainers {preview.CachedRetainerQuantity}; missing {preview.MissingQuantity}; cache {FormatCacheAge(preview.OldestRelevantCacheAge)}.");
+
+        ImGui.TextColored(mutedColor, $"Candidate retainers: {(preview is null ? "-" : FormatCandidates(preview.Candidates))}");
+        var note = item.Note ?? string.Empty;
+        ImGui.SetNextItemWidth(-1);
+        if (ImGui.InputText("Note##RetainerRestockSelectedPlanNote", ref note, 160))
+        {
+            item.Note = string.IsNullOrWhiteSpace(note) ? string.Empty : note;
+            saveConfig();
+        }
     }
 
     private void DrawStagedItem(
@@ -277,18 +283,20 @@ public sealed class RetainerRestockBrowserPanel
         if (state.SelectedStockRow is null)
         {
             stagedInputFocusItemId = null;
-            ImGui.TextColored(mutedColor, "Select stock to stage a plan row.");
+            ImGui.TextColored(mutedColor, "Select an item below to add it to the plan.");
         }
         else
         {
-            ImGui.TextColored(mutedColor, "Staged item");
             ImGui.TextUnformatted(state.SelectedStockRow.ItemName);
+            ImGui.SameLine();
             ImGui.TextColored(
                 mutedColor,
                 $"Accessible {state.SelectedStockRow.TotalQuantity}; player {state.SelectedStockRow.PlayerQuantity}; retainers {state.SelectedStockRow.RetainerQuantity}; cache {FormatCacheAge(state.SelectedStockRow)}");
         }
 
         var desiredQuantityText = state.StagedDesiredQuantityText;
+        ImGui.TextColored(mutedColor, "Desired quantity");
+        ImGui.SameLine();
         ImGui.SetNextItemWidth(140);
         if (state.SelectedStockRow is not null && stagedInputFocusItemId != state.SelectedStockRow.ItemId)
         {
@@ -296,11 +304,15 @@ public sealed class RetainerRestockBrowserPanel
             stagedInputFocusItemId = state.SelectedStockRow.ItemId;
         }
 
-        if (ImGui.InputText("Desired##RetainerRestockStagedDesired", ref desiredQuantityText, 32, ImGuiInputTextFlags.CharsDecimal))
+        if (state.SelectedStockRow is null)
+            ImGui.BeginDisabled();
+        if (ImGui.InputText("##RetainerRestockStagedDesired", ref desiredQuantityText, 32, ImGuiInputTextFlags.CharsDecimal))
             state.StagedDesiredQuantityText = desiredQuantityText;
+        if (state.SelectedStockRow is null)
+            ImGui.EndDisabled();
 
         ImGui.SameLine();
-        if (ImGuiUi.Button("Save To Plan##RetainerRestockSaveStaged", state.CanSaveStagedItem))
+        if (ImGuiUi.PrimaryButton("Add to plan##RetainerRestockSaveStaged", state.CanSaveStagedItem))
         {
             if (state.ApplyStagedItem(config.RetainerRestockPlanItems))
                 saveConfig();
@@ -313,7 +325,10 @@ public sealed class RetainerRestockBrowserPanel
             stagedInputFocusItemId = null;
         }
 
-        ImGui.TextColored(state.CanSaveStagedItem ? successColor : errorColor, state.StagedValidationMessage);
+        var validationColor = state.SelectedStockRow is null
+            ? mutedColor
+            : state.CanSaveStagedItem ? successColor : errorColor;
+        ImGui.TextColored(validationColor, state.StagedValidationMessage);
     }
 
     private static string FormatStockSources(RetainerRestockStockRow row)
@@ -330,26 +345,6 @@ public sealed class RetainerRestockBrowserPanel
         return row.PlayerQuantity > 0
             ? $"Player x{row.PlayerQuantity}"
             : "-";
-    }
-
-    private void DrawCandidatesAndNote(
-        RetainerRestockPlanItem item,
-        RetainerRestockPlanLine? preview,
-        Vector4 mutedColor,
-        string rowId)
-    {
-        var summary = preview is null
-            ? "-"
-            : FormatCandidates(preview.Candidates);
-        ImGui.TextColored(preview is null || preview.Candidates.Count == 0 ? mutedColor : Vector4.One, summary);
-
-        var note = item.Note ?? string.Empty;
-        ImGui.SetNextItemWidth(-1);
-        if (ImGui.InputText($"##RetainerRestockPlanNote{rowId}", ref note, 160))
-        {
-            item.Note = string.IsNullOrWhiteSpace(note) ? string.Empty : note;
-            saveConfig();
-        }
     }
 
     private static string FormatItemName(RetainerRestockPlanItem item) =>
