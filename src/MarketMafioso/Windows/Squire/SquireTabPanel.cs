@@ -7,6 +7,7 @@ using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 using Dalamud.Bindings.ImGui;
+using Dalamud.Plugin.Services;
 using MarketMafioso.Squire;
 using MarketMafioso.Squire.Observation;
 using MarketMafioso.AgentBridge;
@@ -35,6 +36,7 @@ internal sealed class SquireTabPanel : IDisposable
     private readonly SquireRunResultPanel runResultPanel = new();
     private readonly string diagnosticDirectory;
     private readonly UiStateCaptureService uiStateCapture;
+    private readonly SquireInventoryChangeMonitor inventoryChangeMonitor;
     private SquireAnalysis? analysis;
     private SquireRunPresentation? lastRun;
     private string search = string.Empty;
@@ -51,6 +53,7 @@ internal sealed class SquireTabPanel : IDisposable
     private int hiddenBatchCount;
     private DateTimeOffset nextAutomaticRefreshAt = DateTimeOffset.MinValue;
     private volatile bool automaticRefreshRequested;
+    private string automaticRefreshTrigger = "Automatic refresh";
     private string? reconciliationNotice;
     private string? lastAnalysisInputSignature;
     private string status = "Waiting for the first automatic equipment analysis.";
@@ -68,7 +71,9 @@ internal sealed class SquireTabPanel : IDisposable
         ISquireDispositionCapabilitySource capabilitySource,
         AgentBridgeUiReviewRegistry reviewRegistry,
         string diagnosticDirectory,
-        UiStateCaptureService uiStateCapture)
+        UiStateCaptureService uiStateCapture,
+        IGameInventory gameInventory,
+        IDataManager dataManager)
     {
         this.config = config;
         this.snapshotSource = snapshotSource;
@@ -77,6 +82,10 @@ internal sealed class SquireTabPanel : IDisposable
         this.reviewRegistry = reviewRegistry;
         this.diagnosticDirectory = diagnosticDirectory;
         this.uiStateCapture = uiStateCapture;
+        inventoryChangeMonitor = new SquireInventoryChangeMonitor(
+            gameInventory,
+            dataManager,
+            () => RequestAutomaticRefresh("Equipment changed", TimeSpan.FromMilliseconds(150)));
         exclusionStore = new SquireCleanupExclusionStore(config);
         duplicateRetentionStore = new SquireDuplicateRetentionStore(config);
         evidencePanel = new SquireEvidencePanel(exclusionStore, duplicateRetentionStore, reviewRegistry, Refresh);
@@ -173,17 +182,41 @@ internal sealed class SquireTabPanel : IDisposable
 
     private void MaybeRefreshAutomatically()
     {
-        if (activeRun is { IsCompleted: false } || runConfirmed)
+        var runActive = activeRun is { IsCompleted: false };
+        var refreshDuringRun = runActive && automaticRefreshRequested && automaticRefreshTrigger == "Equipment changed";
+        if ((runActive && !refreshDuringRun) || runConfirmed)
             return;
         var now = DateTimeOffset.UtcNow;
-        if (!automaticRefreshRequested && now < nextAutomaticRefreshAt)
+        if (automaticRefreshRequested)
+        {
+            if (now < nextAutomaticRefreshAt)
+                return;
+            Refresh(reconcileSelections: analysis is not null, automaticRefreshTrigger, allowDuringRun: refreshDuringRun);
             return;
-        Refresh(reconcileSelections: analysis is not null, automaticRefreshRequested ? "Post-run refresh" : "Automatic refresh");
+        }
+        if (now >= nextAutomaticRefreshAt)
+            Refresh(reconcileSelections: analysis is not null, "Automatic refresh");
     }
 
-    private void Refresh(bool reconcileSelections, string trigger)
+    public void OnFrameworkUpdate()
     {
-        if (activeRun is { IsCompleted: false })
+        if (automaticRefreshRequested)
+            MaybeRefreshAutomatically();
+    }
+
+    private void RequestAutomaticRefresh(string trigger, TimeSpan delay)
+    {
+        if (automaticRefreshRequested)
+            return;
+        automaticRefreshTrigger = trigger;
+        automaticRefreshRequested = true;
+        nextAutomaticRefreshAt = DateTimeOffset.UtcNow.Add(delay);
+    }
+
+    private void Refresh(bool reconcileSelections, string trigger, bool allowDuringRun = false)
+    {
+        var runActive = activeRun is { IsCompleted: false };
+        if (runActive && !allowDuringRun)
         {
             status = "Refresh is blocked while Squire owns an active run.";
             return;
@@ -198,6 +231,7 @@ internal sealed class SquireTabPanel : IDisposable
             if (trigger == "Automatic refresh" && string.Equals(lastAnalysisInputSignature, inputSignature, StringComparison.Ordinal))
             {
                 automaticRefreshRequested = false;
+                automaticRefreshTrigger = "Automatic refresh";
                 nextAutomaticRefreshAt = DateTimeOffset.UtcNow.AddSeconds(2);
                 return;
             }
@@ -235,11 +269,15 @@ internal sealed class SquireTabPanel : IDisposable
             InvalidateRunAuthorization();
             hiddenBatchCount = 0;
             automaticRefreshRequested = false;
+            automaticRefreshTrigger = "Automatic refresh";
             nextAutomaticRefreshAt = DateTimeOffset.UtcNow.AddSeconds(2);
             var executable = analysis.Candidates.Count(candidate => candidate.IsExecutable);
-            status = analysis.IsActionable
-                ? $"Complete snapshot; {executable} executable candidate(s)."
-                : "Snapshot is incomplete; actions are blocked.";
+            if (!runActive)
+            {
+                status = analysis.IsActionable
+                    ? $"Complete snapshot; {executable} executable candidate(s)."
+                    : "Snapshot is incomplete; actions are blocked.";
+            }
             reconciliationNotice = reconciliation?.RemovedReasons.Count > 0
                 ? $"{trigger} removed {reconciliation.RemovedReasons.Count} stale cleanup-batch item(s): {string.Join(" ", reconciliation.RemovedReasons.Take(3))}"
                 : reconciliation is { PreservedCount: > 0 }
@@ -252,6 +290,7 @@ internal sealed class SquireTabPanel : IDisposable
                 review.Invalidate();
             status = $"{trigger} failed: {ex.Message}";
             automaticRefreshRequested = false;
+            automaticRefreshTrigger = "Automatic refresh";
             nextAutomaticRefreshAt = DateTimeOffset.UtcNow.AddSeconds(5);
         }
     }
@@ -773,7 +812,7 @@ internal sealed class SquireTabPanel : IDisposable
             // run before the next ordinary framework update.
             await Plugin.Framework.DelayTicks(1).ConfigureAwait(false);
             uiStateCapture.Stop();
-            automaticRefreshRequested = true;
+            RequestAutomaticRefresh("Post-run equipment refresh", TimeSpan.Zero);
         }
         var version = Assembly.GetExecutingAssembly().GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
             ?? Assembly.GetExecutingAssembly().GetName().Version?.ToString()
@@ -806,13 +845,14 @@ internal sealed class SquireTabPanel : IDisposable
         }
         finally
         {
-            automaticRefreshRequested = true;
+            RequestAutomaticRefresh("Post-run equipment refresh", TimeSpan.Zero);
         }
     }
 
     public void Dispose()
     {
         runCancellation?.Cancel();
+        inventoryChangeMonitor.Dispose();
         routeDiagnosticsPanel.Dispose();
         actionAdapter.ReleaseOwnedState();
         runCancellation?.Dispose();

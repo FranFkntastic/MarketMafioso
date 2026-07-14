@@ -268,7 +268,9 @@ public class MainWindow : Window, IDisposable
             squireCapabilities,
             AgentReviewRegistry,
             Path.Combine(Plugin.PluginInterface.GetPluginConfigDirectory(), "squire-logs"),
-            uiStateCapture);
+            uiStateCapture,
+            Plugin.GameInventory,
+            dataManager);
         statusTab = new StatusTabPanel(config, reporter, retainerCacheStore, log);
         marketAcquisitionRequestPickupPanel = new MarketAcquisitionRequestPickupPanel(
             () => _ = FetchDashboardRequestsAsync(),
@@ -428,6 +430,8 @@ public class MainWindow : Window, IDisposable
 
     public void OnFrameworkUpdate(IFramework _)
     {
+        squireTab.OnFrameworkUpdate();
+
         if (!IsMarketAcquisitionUnlocked())
             return;
 
