@@ -234,32 +234,48 @@ public sealed class MarketAcquisitionRequestStoreTests
     }
 
     [Fact]
-    public async Task ReplaceBatchAsyncRejectsStaleRevision()
+    public async Task ReplaceBatchAsyncLetsMostRecentReplacementSupersedeStaleRevision()
     {
         using var fixture = await MarketAcquisitionStoreFixture.CreateAsync();
         var created = await fixture.Store.CreateBatchAsync(
             CreateBatchRequest("replace-stale-revision"),
             CancellationToken.None);
+        var firstReplacement = await fixture.Store.ReplaceBatchAsync(
+            created.Request.Id,
+            new MarketAcquisitionBatchReplaceRequest
+            {
+                ExpectedRevision = created.Request.Revision,
+                Region = "North America",
+                WorldMode = "Recommended",
+                SweepScope = "Region",
+                ExpiresInSeconds = 300,
+                Lines =
+                [
+                    CreateLine(19951, "Koppranickel Ore", "Stone", maxQuantity: 10, maxUnitPrice: 276),
+                ],
+            },
+            CancellationToken.None);
+        Assert.NotNull(firstReplacement);
 
-        var ex = await Assert.ThrowsAsync<MarketAcquisitionRevisionConflictException>(() =>
-            fixture.Store.ReplaceBatchAsync(
-                created.Request.Id,
-                new MarketAcquisitionBatchReplaceRequest
-                {
-                    ExpectedRevision = created.Request.Revision + 1,
-                    Region = "North America",
-                    WorldMode = "Recommended",
-                    SweepScope = "Region",
-                    ExpiresInSeconds = 300,
-                    Lines =
-                    [
-                        CreateLine(19951, "Koppranickel Ore", "Stone", maxQuantity: 11, maxUnitPrice: 276),
-                    ],
-                },
-                CancellationToken.None));
+        var replaced = await fixture.Store.ReplaceBatchAsync(
+            created.Request.Id,
+            new MarketAcquisitionBatchReplaceRequest
+            {
+                ExpectedRevision = created.Request.Revision,
+                Region = "North America",
+                WorldMode = "Recommended",
+                SweepScope = "Region",
+                ExpiresInSeconds = 300,
+                Lines =
+                [
+                    CreateLine(19951, "Koppranickel Ore", "Stone", maxQuantity: 11, maxUnitPrice: 276),
+                ],
+            },
+            CancellationToken.None);
 
-        Assert.Equal(created.Request.Revision + 1, ex.ExpectedRevision);
-        Assert.Equal(created.Request.Revision, ex.ActualRevision);
+        Assert.NotNull(replaced);
+        Assert.Equal(created.Request.Revision + 2, replaced.Revision);
+        Assert.Equal(11u, Assert.Single(replaced.Lines).MaxQuantity);
     }
 
     [Fact]

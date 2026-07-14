@@ -28,7 +28,7 @@ public static class MarketAcquisitionRequestDocumentMapper
             TargetCharacterName = characterName.Trim(),
             TargetWorld = world.Trim(),
             Region = region,
-            WorldMode = NormalizeWorldMode(document.WorldMode),
+            WorldMode = NormalizeBuilderWorldMode(document.WorldMode),
             SweepScope = NormalizeSweepScope(document.SweepScope),
             SweepDataCenters = NormalizeSweepDataCenters(region, document.SweepDataCenters),
             ExpiresInSeconds = DefaultExpiresInSeconds,
@@ -46,7 +46,7 @@ public static class MarketAcquisitionRequestDocumentMapper
         {
             ExpectedRevision = expectedRevision,
             Region = region,
-            WorldMode = NormalizeWorldMode(document.WorldMode),
+            WorldMode = NormalizeBuilderWorldMode(document.WorldMode),
             SweepScope = NormalizeSweepScope(document.SweepScope),
             SweepDataCenters = NormalizeSweepDataCenters(region, document.SweepDataCenters),
             ExpiresInSeconds = DefaultExpiresInSeconds,
@@ -63,7 +63,7 @@ public static class MarketAcquisitionRequestDocumentMapper
             TargetCharacterName = request.TargetCharacterName,
             TargetWorld = request.TargetWorld,
             Region = request.Region,
-            WorldMode = string.IsNullOrWhiteSpace(request.WorldMode) ? "Recommended" : request.WorldMode,
+            WorldMode = NormalizeBuilderWorldMode(request.WorldMode),
             SweepScope = string.IsNullOrWhiteSpace(request.SweepScope) ? "Region" : request.SweepScope,
             SweepDataCenters = request.SweepDataCenters.ToList(),
             RemoteRequestId = request.Id,
@@ -180,8 +180,10 @@ public static class MarketAcquisitionRequestDocumentMapper
             Status = request.Status,
         };
 
-    private static string NormalizeWorldMode(string worldMode) =>
-        string.IsNullOrWhiteSpace(worldMode) ? "Recommended" : worldMode.Trim();
+    public static string NormalizeBuilderWorldMode(string? worldMode) =>
+        string.Equals(worldMode?.Trim(), "AllWorldSweep", StringComparison.OrdinalIgnoreCase)
+            ? "AllWorldSweep"
+            : "Recommended";
 
     private static string NormalizeSweepScope(string sweepScope) =>
         string.IsNullOrWhiteSpace(sweepScope) ? "Region" : sweepScope.Trim();

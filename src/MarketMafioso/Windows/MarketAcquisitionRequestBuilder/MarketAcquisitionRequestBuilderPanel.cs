@@ -27,7 +27,6 @@ public sealed class MarketAcquisitionRequestBuilderPanel
     private bool isAppraising;
 
     private MarketAcquisitionRequestDocument document => controller.Document;
-    private MarketAcquisitionRequestDocument? pendingRemoteDocument => controller.PendingRemoteDocument;
     private int selectedLineIndex => controller.SelectedLineIndex;
     private string status => controller.Status;
 
@@ -67,6 +66,10 @@ public sealed class MarketAcquisitionRequestBuilderPanel
     public void Draw(MarketAcquisitionRequestBuilderContext context, bool showLifecycleSummary = true)
     {
         EnsureCharacterScope(context);
+        controller.PumpAutomaticSynchronization(
+            context.CharacterName,
+            context.World,
+            context.HasCharacterScope && !context.IsBusy && !context.IsRouteActive);
 
         ImGuiUi.SectionHeader("Local Request", MainWindow.ColHeader);
         if (showLifecycleSummary)
@@ -77,8 +80,6 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         else
         {
             ImGui.TextColored(GetSyncStatusColor(), FormatBuilderStatus(context));
-            if (pendingRemoteDocument is not null)
-                ImGui.TextColored(MainWindow.ColHeader, "Server copy changed. Review local lines, then load the server copy or save your local edits.");
         }
         DrawRouteScope(context);
         ImGui.Spacing();
@@ -131,10 +132,8 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         }
 
         ImGui.TextColored(GetSyncStatusColor(), FormatBuilderStatus(context));
-        if (pendingRemoteDocument is not null)
-            ImGui.TextColored(MainWindow.ColHeader, "Server copy changed. Review local lines, then load the server copy or save your local edits.");
         if (context.IsRouteActive)
-            ImGui.TextColored(MainWindow.ColMuted, "Request replacement is disabled while a guided route is active.");
+            ImGui.TextColored(MainWindow.ColMuted, "Synchronization is paused while a guided route is active.");
     }
 
     private string FormatRequestStatus()
@@ -148,8 +147,8 @@ public sealed class MarketAcquisitionRequestBuilderPanel
     private string FormatBuilderStatus(MarketAcquisitionRequestBuilderContext context)
     {
         var remote = string.IsNullOrWhiteSpace(document.RemoteRequestId)
-            ? "not saved"
-            : $"saved r{document.RemoteRevision}";
+            ? "not yet published"
+            : $"server r{document.RemoteRevision}";
         var plan = IsPlanStale(context)
             ? ", plan stale"
             : context.CurrentPlan is null ? string.Empty : ", plan current";
@@ -159,11 +158,11 @@ public sealed class MarketAcquisitionRequestBuilderPanel
     private static string FormatSyncStatus(string syncStatus) =>
         syncStatus switch
         {
-            "NewDraft" => "Draft",
-            "LocalEdits" => "Edited locally",
-            "SyncedClean" => "Saved",
-            "RemoteChanged" => "Server changed",
-            "SyncFailed" => "Save failed",
+            "NewDraft" => "Sync pending",
+            "LocalEdits" => "Sync pending",
+            "SyncedClean" => "Synced",
+            "RemoteChanged" => "Synchronizing",
+            "SyncFailed" => "Retrying sync",
             _ => string.IsNullOrWhiteSpace(syncStatus) ? "Draft" : syncStatus,
         };
 
@@ -566,27 +565,16 @@ public sealed class MarketAcquisitionRequestBuilderPanel
     private void DrawActions(MarketAcquisitionRequestBuilderContext context)
     {
         var busy = context.IsBusy || controller.IsSyncing || controller.IsRefreshing || isAppraising;
-        var canSync = !busy &&
-                      !context.IsRouteActive &&
-                      context.HasCharacterScope &&
-                      document.Lines.Count > 0;
-        var syncLabel = string.IsNullOrWhiteSpace(document.RemoteRequestId) ? "Save Request" : "Save Changes";
+        ImGui.TextColored(MainWindow.ColHeader, "Synchronization");
+        ImGui.TextColored(
+            MainWindow.ColMuted,
+            context.IsRouteActive
+                ? "Paused until the active route finishes. Local edits remain safe."
+                : "Automatic. The most recently committed request change supersedes the prior version.");
 
-        ImGui.TextColored(MainWindow.ColHeader, "Save Request");
-        if (ImGuiUi.PrimaryButton($"{syncLabel}##AcquisitionRequestBuilderSync", canSync))
-            _ = SyncAsync(context);
-
-        ImGui.SameLine();
-        if (ImGuiUi.Button("Check Server##AcquisitionRequestBuilderRefresh", !busy && !string.IsNullOrWhiteSpace(document.RemoteRequestId)))
-            _ = RefreshAsync();
-
-        if (ImGui.TreeNode("Server and local recovery##AcquisitionRequestBuilderRecovery"))
+        if (ImGui.TreeNode("Start over##AcquisitionRequestBuilderRecovery"))
         {
-            if (ImGuiUi.Button("Load Server Copy##AcquisitionRequestBuilderAdoptRemote", !busy && pendingRemoteDocument is not null))
-                AdoptRemote();
-
-            ImGui.SameLine();
-            if (ImGuiUi.Button("Clear Local##AcquisitionRequestBuilderClear", !busy && !context.IsRouteActive))
+            if (ImGuiUi.Button("Clear local request##AcquisitionRequestBuilderClear", !busy && !context.IsRouteActive))
                 ClearDraft(context);
             ImGui.TreePop();
         }
@@ -708,13 +696,6 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         if (controller.RemoveLine(index))
             ClearLineEditor();
     }
-
-    private Task SyncAsync(MarketAcquisitionRequestBuilderContext context) =>
-        controller.SyncAsync(context.CharacterName, context.World);
-
-    private Task RefreshAsync() => controller.RefreshAsync();
-
-    private void AdoptRemote() => controller.AdoptRemote();
 
     private void ClearDraft(MarketAcquisitionRequestBuilderContext context)
     {

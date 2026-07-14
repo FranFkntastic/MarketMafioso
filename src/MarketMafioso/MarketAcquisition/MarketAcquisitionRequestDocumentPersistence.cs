@@ -25,7 +25,7 @@ internal static class MarketAcquisitionRequestDocumentPersistence
                 ? world
                 : stored.TargetWorld,
             Region = string.IsNullOrWhiteSpace(stored.Region) ? "North America" : stored.Region,
-            WorldMode = string.IsNullOrWhiteSpace(stored.WorldMode) ? "Recommended" : stored.WorldMode,
+            WorldMode = MarketAcquisitionRequestDocumentMapper.NormalizeBuilderWorldMode(stored.WorldMode),
             SweepScope = string.IsNullOrWhiteSpace(stored.SweepScope) ? "Region" : stored.SweepScope,
             SweepDataCenters = stored.SweepDataCenters ?? [],
             Lines = stored.Lines

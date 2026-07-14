@@ -12,7 +12,6 @@ public sealed record MarketAcquisitionRequestBuilderSyncOutcome(
 
 public sealed record MarketAcquisitionRequestBuilderRefreshOutcome(
     MarketAcquisitionRequestDocument Document,
-    MarketAcquisitionRequestDocument? RemoteDocument,
     MarketAcquisitionRequestView? RemoteRequest,
     string StatusMessage);
 
@@ -191,29 +190,11 @@ public sealed class MarketAcquisitionRequestWorkspace : IDisposable
             throw new InvalidOperationException("Remote request refresh did not complete.");
 
         var remoteDocument = MarketAcquisitionRequestDocumentMapper.FromRequestView(remote);
-        var currentHash = MarketAcquisitionRequestDocumentHasher.ComputeIntentHash(document);
-        var hasLocalEdits = !string.Equals(currentHash, document.LastSyncedHash, StringComparison.Ordinal);
-        var remoteHash = MarketAcquisitionRequestDocumentHasher.ComputeIntentHash(remoteDocument);
-        if (!hasLocalEdits)
-        {
-            OnDocumentAdopted(remoteDocument, remote);
-            Status = "Remote request refreshed and adopted.";
-            return new MarketAcquisitionRequestBuilderRefreshOutcome(
-                remoteDocument,
-                RemoteDocument: null,
-                RemoteRequest: null,
-                Status);
-        }
-
-        var marked = document with
-        {
-            RemoteRevision = remote.Revision,
-            RemoteHash = remoteHash,
-            SyncStatus = "RemoteChanged",
-            UpdatedAtUtc = DateTimeOffset.UtcNow,
-        };
-        Status = "Remote request changed while local edits are present.";
-        return new MarketAcquisitionRequestBuilderRefreshOutcome(marked, remoteDocument, remote, Status);
+        Status = "Request synchronized from the server.";
+        return new MarketAcquisitionRequestBuilderRefreshOutcome(
+            remoteDocument,
+            RemoteRequest: remote,
+            Status);
     }
 
     public void OnDocumentAdopted(

@@ -89,6 +89,46 @@ public sealed class MarketAcquisitionRequestDocumentMapperTests
         Assert.Equal("claim-token", merged.ClaimToken);
     }
 
+    [Theory]
+    [InlineData("Selected")]
+    [InlineData("CurrentWorldOnly")]
+    [InlineData("")]
+    public void FromRequestView_NormalizesLegacyBuilderWorldModes(string worldMode)
+    {
+        var request = new MarketAcquisitionRequestView
+        {
+            Id = "batch-legacy",
+            Revision = 1,
+            TargetCharacterName = "Eriana Ning",
+            TargetWorld = "Siren",
+            Region = "North America",
+            WorldMode = worldMode,
+        };
+
+        var document = MarketAcquisitionRequestDocumentMapper.FromRequestView(request);
+
+        Assert.Equal("Recommended", document.WorldMode);
+    }
+
+    [Fact]
+    public void Restore_NormalizesLegacyBuilderWorldModeBeforeAutomaticSync()
+    {
+        var config = new Configuration
+        {
+            ActiveMarketAcquisitionRequestDocument = new PersistedMarketAcquisitionRequestDocument
+            {
+                LocalRequestId = "local-legacy",
+                LocalRevision = 4,
+                Region = "North America",
+                WorldMode = "Selected",
+            },
+        };
+
+        var document = MarketAcquisitionRequestDocumentPersistence.Restore(config);
+
+        Assert.Equal("Recommended", document.WorldMode);
+    }
+
     private static MarketAcquisitionRequestDocument CreateDocument() => new()
     {
         LocalRequestId = "local-1",
