@@ -358,6 +358,7 @@ public class MainWindow : Window, IDisposable
             playerState,
             dataManager,
             () => squireTab.CurrentAnalysis,
+            squireTab.RequestPolicyRefresh,
             AgentReviewRegistry);
 
         acquisitionWorkspace.RestoreClaimIntoBuilder();
@@ -422,7 +423,8 @@ public class MainWindow : Window, IDisposable
 
     public override void PreDraw()
     {
-        if (!AgentCaptureTransactions.ShouldPresentInMainViewport("mmf.main-window"))
+        var captureTarget = ActiveCapturePresentationTarget();
+        if (captureTarget is null)
         {
             if (capturePresentationRestoreSize is { } restoreSize)
             {
@@ -434,8 +436,21 @@ public class MainWindow : Window, IDisposable
         var viewport = ImGui.GetMainViewport();
         ImGui.SetNextWindowViewport(viewport.ID);
         ImGui.SetNextWindowPos(viewport.WorkPos + new Vector2(16, 16), ImGuiCond.Always);
-        ImGui.SetNextWindowSize(viewport.WorkSize * 0.5f, ImGuiCond.Always);
+        ImGui.SetNextWindowSize(
+            captureTarget == "mmf.main-window.compact"
+                ? new Vector2(980, 560)
+                : viewport.WorkSize * 0.5f,
+            ImGuiCond.Always);
         ImGui.SetNextWindowFocus();
+    }
+
+    private string? ActiveCapturePresentationTarget()
+    {
+        if (AgentCaptureTransactions.ShouldPresentInMainViewport("mmf.main-window.compact"))
+            return "mmf.main-window.compact";
+        return AgentCaptureTransactions.ShouldPresentInMainViewport("mmf.main-window")
+            ? "mmf.main-window"
+            : null;
     }
 
     public override void Draw()
@@ -531,8 +546,9 @@ public class MainWindow : Window, IDisposable
         finally
         {
             reviewFrame = AgentReviewRegistry.EndFrame();
-            if (AgentCaptureRegion != null && reviewFrame != null && AgentCaptureTransactions.ShouldPresentInMainViewport("mmf.main-window"))
-                AgentCaptureTransactions.MarkRendered("mmf.main-window", reviewFrame.FrameId);
+            var captureTarget = ActiveCapturePresentationTarget();
+            if (AgentCaptureRegion != null && reviewFrame != null && captureTarget is not null)
+                AgentCaptureTransactions.MarkRendered(captureTarget, reviewFrame.FrameId);
         }
     }
 

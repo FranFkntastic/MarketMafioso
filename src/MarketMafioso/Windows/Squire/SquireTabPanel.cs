@@ -198,6 +198,8 @@ internal sealed class SquireTabPanel : IDisposable
 
     internal SquireAnalysis? CurrentAnalysis => analysis;
 
+    internal void RequestPolicyRefresh() => RequestAutomaticRefresh("Cleanup rules changed", TimeSpan.Zero);
+
     public void OnFrameworkUpdate()
     {
         if (automaticRefreshRequested)
@@ -206,11 +208,14 @@ internal sealed class SquireTabPanel : IDisposable
 
     private void RequestAutomaticRefresh(string trigger, TimeSpan delay)
     {
-        if (automaticRefreshRequested)
-            return;
-        automaticRefreshTrigger = trigger;
+        var requestedAt = DateTimeOffset.UtcNow.Add(delay);
+        if (!automaticRefreshRequested || requestedAt < nextAutomaticRefreshAt)
+            nextAutomaticRefreshAt = requestedAt;
+        if (!automaticRefreshRequested ||
+            string.Equals(trigger, "Equipment changed", StringComparison.Ordinal) ||
+            !string.Equals(automaticRefreshTrigger, "Equipment changed", StringComparison.Ordinal))
+            automaticRefreshTrigger = trigger;
         automaticRefreshRequested = true;
-        nextAutomaticRefreshAt = DateTimeOffset.UtcNow.Add(delay);
     }
 
     private void Refresh(bool reconcileSelections, string trigger, bool allowDuringRun = false)

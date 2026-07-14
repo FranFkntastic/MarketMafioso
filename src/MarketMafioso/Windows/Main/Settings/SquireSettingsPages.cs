@@ -17,10 +17,11 @@ internal sealed class SquireSettingsPages
         IPlayerState playerState,
         IDataManager dataManager,
         Func<SquireAnalysis?> currentAnalysis,
+        Action requestAnalysisRefresh,
         AgentBridgeUiReviewRegistry reviewRegistry)
     {
         this.config = config ?? throw new ArgumentNullException(nameof(config));
-        ruleManager = new SquireRuleManagerPanel(config, playerState, dataManager, currentAnalysis, reviewRegistry);
+        ruleManager = new SquireRuleManagerPanel(config, playerState, dataManager, currentAnalysis, requestAnalysisRefresh, reviewRegistry);
         Descriptors =
         [
             new("squire.rules", "Squire / Cleanup Rules", ruleManager.Draw, 20,
