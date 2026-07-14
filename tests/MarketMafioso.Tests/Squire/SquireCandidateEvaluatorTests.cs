@@ -197,7 +197,7 @@ public sealed class SquireCandidateEvaluatorTests
             [Definition(100, 20), Definition(200, 30)],
             [Job(1, 50, true)],
             []);
-        var policy = new SquireProtectionPolicy(DuplicateRetentionRules: [new(100, false, 2)]);
+        var policy = new SquireProtectionPolicy(Rules: [RetentionRule(100, false, 2)]);
 
         var copies = evaluator.Evaluate(snapshot, DesynthesisUnlocked, policy).Candidates
             .Where(candidate => candidate.Definition.ItemId == 100)
@@ -220,7 +220,7 @@ public sealed class SquireCandidateEvaluatorTests
             [Definition(100, 20), Definition(200, 30)],
             [Job(1, 50, true)],
             []);
-        var policy = new SquireProtectionPolicy(DuplicateRetentionRules: [new(100, false, 2)]);
+        var policy = new SquireProtectionPolicy(Rules: [RetentionRule(100, false, 2)]);
         var analysis = evaluator.Evaluate(snapshot, DesynthesisUnlocked, policy);
         var copies = analysis.Candidates.Where(candidate => candidate.Definition.ItemId == 100).ToArray();
         Assert.All(copies, candidate =>
@@ -254,7 +254,7 @@ public sealed class SquireCandidateEvaluatorTests
             [Definition(100, 20), Definition(200, 30)],
             [Job(1, 50, true)],
             []);
-        var policy = new SquireProtectionPolicy(DuplicateRetentionRules: [new(100, true, 2)]);
+        var policy = new SquireProtectionPolicy(Rules: [RetentionRule(100, true, 2)]);
 
         var copies = evaluator.Evaluate(snapshot, DesynthesisUnlocked, policy).Candidates
             .Where(candidate => candidate.Definition.ItemId == 100)
@@ -269,18 +269,30 @@ public sealed class SquireCandidateEvaluatorTests
     public void DuplicateRetentionMerge_UsesTheConservativeMinimumPerQuality()
     {
         var merged = SquireDuplicateRetention.Merge(
-            [new(100, false, 1), new(100, true, 4)],
-            [new(100, false, 3), new(100, true, 2)]);
+            [RetentionRule(100, false, 1), RetentionRule(100, true, 4)],
+            [RetentionRule(100, false, 3), RetentionRule(100, true, 2)]);
 
-        Assert.Equal(3, Assert.Single(merged, rule => rule is { ItemId: 100, IsHighQuality: false }).MinimumCopies);
-        Assert.Equal(4, Assert.Single(merged, rule => rule is { ItemId: 100, IsHighQuality: true }).MinimumCopies);
+        Assert.Equal(3, Assert.Single(merged, rule => rule is { ItemId: 100, Quality: SquireRuleQuality.NormalQuality }).MinimumCopies);
+        Assert.Equal(4, Assert.Single(merged, rule => rule is { ItemId: 100, Quality: SquireRuleQuality.HighQuality }).MinimumCopies);
+    }
+
+    [Fact]
+    public void RuleMerge_PreservesInvalidEnabledRulesForExplicitRevalidationFailure()
+    {
+        var invalid = new SquireRule(Guid.Empty, SquireRuleKind.RetainCopies, 0,
+            SquireRuleQuality.Any, 0, true, "Corrupt rule");
+
+        var merged = SquireDuplicateRetention.Merge([invalid], []);
+
+        Assert.Equal(invalid, Assert.Single(merged));
+        Assert.NotEmpty(new SquireProtectionPolicy(Rules: merged).ValidationErrors);
     }
 
     [Fact]
     public void DuplicateRetentionFloor_DoesNotRequireRepairingAPreexistingDeficit()
     {
         var before = new[] { Instance(100, slot: 1), Instance(100, slot: 2) };
-        var policy = new SquireProtectionPolicy(DuplicateRetentionRules: [new(100, false, 3)]);
+        var policy = new SquireProtectionPolicy(Rules: [RetentionRule(100, false, 3)]);
 
         Assert.True(SquireDuplicateRetention.DoesNotReduceRequiredMultiplicity(before, before, policy, out _));
         Assert.False(SquireDuplicateRetention.DoesNotReduceRequiredMultiplicity(before, before.Take(1), policy, out var message));
@@ -490,7 +502,7 @@ public sealed class SquireCandidateEvaluatorTests
     }
 
     [Fact]
-    public void CharacterCleanupExclusion_AlwaysWinsWhenHighRarityProtectionIsDisabled()
+    public void CharacterItemProtectionRule_AlwaysWinsWhenHighRarityProtectionIsDisabled()
     {
         var item = Definition(100, 20) with
         {
@@ -500,11 +512,29 @@ public sealed class SquireCandidateEvaluatorTests
         };
         var snapshot = Snapshot([Instance(100)], [item], [Job(1, 50, false)], []);
 
-        var candidate = Assert.Single(evaluator.Evaluate(snapshot, DesynthesisUnlocked,
-            new SquireProtectionPolicy(ProtectBlueAndPurpleGear: false, CleanupExcludedItemIds: new HashSet<uint> { 100 })).Candidates);
+        var rule = new SquireRule(Guid.NewGuid(), SquireRuleKind.ProtectItem, 100, SquireRuleQuality.Any, 0, true, "Test protection");
+        var analysis = evaluator.Evaluate(snapshot, DesynthesisUnlocked,
+            new SquireProtectionPolicy(ProtectBlueAndPurpleGear: false, Rules: [rule]));
+        var candidate = Assert.Single(analysis.Candidates);
 
         Assert.Equal(SquireAssessment.Protected, candidate.Assessment);
-        Assert.Contains(candidate.Reasons, reason => reason.Code == "CleanupExcluded");
+        var reason = Assert.Single(candidate.Reasons, reason => reason.Code == "ItemProtectionRule");
+        Assert.Contains(rule.Id.ToString("N"), reason.Message);
+        Assert.Equal(rule, Assert.Single(analysis.Policy.Rules!));
+    }
+
+    [Fact]
+    public void InvalidEnabledRule_BlocksEvaluationInsteadOfFallingBack()
+    {
+        var snapshot = Snapshot([Instance(100)], [Definition(100, 20)], [Job(1, 50, false)], []);
+        var invalid = new SquireRule(Guid.Empty, SquireRuleKind.RetainCopies, 0,
+            SquireRuleQuality.Any, 0, true, "Corrupt rule");
+
+        var candidate = Assert.Single(evaluator.Evaluate(snapshot, DesynthesisUnlocked,
+            new SquireProtectionPolicy(Rules: [invalid])).Candidates);
+
+        Assert.Equal(SquireAssessment.Protected, candidate.Assessment);
+        Assert.Contains(candidate.Reasons, reason => reason.Code == "InvalidRuleConfiguration");
     }
 
     [Fact]
@@ -690,6 +720,11 @@ public sealed class SquireCandidateEvaluatorTests
 
     private static CharacterJobSnapshot Job(uint id, uint level, bool? unlocked) =>
         new(id, "JOB", "Job", level, unlocked, null, "Tank", EquipmentStatSemantic.Strength, EquipmentDiscipline.Combat);
+
+    private static SquireRule RetentionRule(uint itemId, bool isHighQuality, int minimumCopies) =>
+        new(Guid.NewGuid(), SquireRuleKind.RetainCopies, itemId,
+            isHighQuality ? SquireRuleQuality.HighQuality : SquireRuleQuality.NormalQuality,
+            minimumCopies, true, "Test retention");
 
     private static GearsetSnapshot Gearset(int id, uint itemId) =>
         new(id, "Set", 1, [new GearsetItemReference(EquipmentSlot.Body, itemId)], true);

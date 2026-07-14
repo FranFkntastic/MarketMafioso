@@ -12,8 +12,7 @@ using MarketMafioso.Windows.Main;
 namespace MarketMafioso.Windows.Squire;
 
 internal sealed class SquireEvidencePanel(
-    SquireCleanupExclusionStore exclusionStore,
-    SquireDuplicateRetentionStore duplicateRetentionStore,
+    SquireRuleStore ruleStore,
     AgentBridgeUiReviewRegistry reviewRegistry,
     Action refresh)
 {
@@ -103,12 +102,24 @@ internal sealed class SquireEvidencePanel(
     {
         var itemId = candidate.Definition.ItemId;
         var contentId = analysis.Snapshot.Identity.Scope?.LocalContentId;
-        var excluded = exclusionStore.Get(contentId).Contains(itemId);
+        var excluded = ruleStore.Get(contentId).Any(rule =>
+            rule.Enabled && rule.Kind == SquireRuleKind.ProtectItem && rule.ItemId == itemId);
         if (!excluded)
         {
-            if (ImGui.Button($"Protect every copy of this item##SquireExclude{itemId}"))
+            var protect = ImGui.Button($"Protect every copy of this item##SquireExclude{itemId}");
+            RegisterLastControl(
+                "squire.rule.protect-item",
+                $"Protect every copy of {candidate.Definition.Name}",
+                true,
+                null,
+                () =>
+                {
+                    ruleStore.SetItemProtection(contentId, itemId, true);
+                    refresh();
+                });
+            if (protect)
             {
-                exclusionStore.Set(contentId, itemId, true);
+                ruleStore.SetItemProtection(contentId, itemId, true);
                 refresh();
             }
             if (ImGui.IsItemHovered())
@@ -116,19 +127,45 @@ internal sealed class SquireEvidencePanel(
             return;
         }
 
-        if (ImGui.Button($"Stop protecting every copy##SquireExclude{itemId}"))
+        var requestRemoval = ImGui.Button($"Stop protecting every copy##SquireExclude{itemId}");
+        RegisterLastControl(
+            "squire.rule.unprotect-item",
+            $"Request removal of the protection rule for {candidate.Definition.Name}",
+            true,
+            null,
+            () => pendingExclusionRemovalItemId = itemId);
+        if (requestRemoval)
             pendingExclusionRemovalItemId = itemId;
         if (pendingExclusionRemovalItemId != itemId)
             return;
-        ImGui.TextWrapped($"Remove {candidate.Definition.Name} from this character's cleanup exclusion list? All remaining protection rules will still be evaluated.");
-        if (ImGui.Button($"Confirm removal##SquireExcludeConfirm{itemId}"))
+        ImGui.TextWrapped($"Remove the item protection rule for {candidate.Definition.Name}? All remaining protection rules will still be evaluated.");
+        var confirmRemoval = ImGui.Button($"Confirm removal##SquireExcludeConfirm{itemId}");
+        RegisterLastControl(
+            "squire.rule.unprotect-item-confirm",
+            $"Confirm removal of the protection rule for {candidate.Definition.Name}",
+            true,
+            null,
+            () =>
+            {
+                ruleStore.SetItemProtection(contentId, itemId, false);
+                pendingExclusionRemovalItemId = null;
+                refresh();
+            });
+        if (confirmRemoval)
         {
-            exclusionStore.Set(contentId, itemId, false);
+            ruleStore.SetItemProtection(contentId, itemId, false);
             pendingExclusionRemovalItemId = null;
             refresh();
         }
         ImGui.SameLine();
-        if (ImGui.Button($"Cancel##SquireExcludeCancel{itemId}"))
+        var cancelRemoval = ImGui.Button($"Cancel##SquireExcludeCancel{itemId}");
+        RegisterLastControl(
+            "squire.rule.unprotect-item-cancel",
+            $"Cancel removal of the protection rule for {candidate.Definition.Name}",
+            true,
+            null,
+            () => pendingExclusionRemovalItemId = null);
+        if (cancelRemoval)
             pendingExclusionRemovalItemId = null;
     }
 
@@ -196,17 +233,17 @@ internal sealed class SquireEvidencePanel(
             ImGui.EndTable();
         }
 
-        var minimum = duplicateRetentionStore.Get(contentId, itemId, isHighQuality);
+        var minimum = ruleStore.CreatePolicy(contentId).MinimumCopiesToKeep(itemId, isHighQuality);
         ImGui.SetNextItemWidth(ImGui.GetFontSize() * 8);
         if (ImGui.InputInt($"Minimum copies to keep##SquireDuplicateMinimum{itemId}{isHighQuality}", ref minimum))
         {
-            duplicateRetentionStore.Set(contentId, itemId, isHighQuality, Math.Clamp(minimum, 0, 99));
+            ruleStore.SetRetention(contentId, itemId, isHighQuality, Math.Clamp(minimum, 0, 99));
             refresh();
         }
         ImGui.SameLine();
         if (ImGui.Button($"-##SquireDuplicateDecrease{itemId}{isHighQuality}"))
         {
-            duplicateRetentionStore.Set(contentId, itemId, isHighQuality, Math.Max(0, minimum - 1));
+            ruleStore.SetRetention(contentId, itemId, isHighQuality, Math.Max(0, minimum - 1));
             refresh();
         }
         RegisterLastControl(
@@ -216,13 +253,13 @@ internal sealed class SquireEvidencePanel(
             minimum.ToString(),
             () =>
             {
-                duplicateRetentionStore.Set(contentId, itemId, isHighQuality, Math.Max(0, minimum - 1));
+                ruleStore.SetRetention(contentId, itemId, isHighQuality, Math.Max(0, minimum - 1));
                 refresh();
             });
         ImGui.SameLine();
         if (ImGui.Button($"+##SquireDuplicateIncrease{itemId}{isHighQuality}"))
         {
-            duplicateRetentionStore.Set(contentId, itemId, isHighQuality, Math.Min(99, minimum + 1));
+            ruleStore.SetRetention(contentId, itemId, isHighQuality, Math.Min(99, minimum + 1));
             refresh();
         }
         RegisterLastControl(
@@ -232,12 +269,12 @@ internal sealed class SquireEvidencePanel(
             minimum.ToString(),
             () =>
             {
-                duplicateRetentionStore.Set(contentId, itemId, isHighQuality, Math.Min(99, minimum + 1));
+                ruleStore.SetRetention(contentId, itemId, isHighQuality, Math.Min(99, minimum + 1));
                 refresh();
             });
         if (ImGui.Button($"Keep all {status.OwnedCopies} current copies##SquireDuplicateKeepAll{itemId}{isHighQuality}"))
         {
-            duplicateRetentionStore.Set(contentId, itemId, isHighQuality, status.OwnedCopies);
+            ruleStore.SetRetention(contentId, itemId, isHighQuality, status.OwnedCopies);
             refresh();
         }
         RegisterLastControl(
@@ -247,7 +284,7 @@ internal sealed class SquireEvidencePanel(
             status.OwnedCopies.ToString(),
             () =>
             {
-                duplicateRetentionStore.Set(contentId, itemId, isHighQuality, status.OwnedCopies);
+                ruleStore.SetRetention(contentId, itemId, isHighQuality, status.OwnedCopies);
                 refresh();
             });
         if (minimum > 0)
@@ -255,7 +292,7 @@ internal sealed class SquireEvidencePanel(
             ImGui.SameLine();
             if (ImGui.Button($"Clear explicit minimum##SquireDuplicateClear{itemId}{isHighQuality}"))
             {
-                duplicateRetentionStore.Set(contentId, itemId, isHighQuality, 0);
+                ruleStore.SetRetention(contentId, itemId, isHighQuality, 0);
                 refresh();
             }
             RegisterLastControl(
@@ -265,7 +302,7 @@ internal sealed class SquireEvidencePanel(
                 minimum.ToString(),
                 () =>
                 {
-                    duplicateRetentionStore.Set(contentId, itemId, isHighQuality, 0);
+                    ruleStore.SetRetention(contentId, itemId, isHighQuality, 0);
                     refresh();
                 });
         }
@@ -423,8 +460,8 @@ internal sealed class SquireEvidencePanel(
             "CurrentlyEquipped" => $"The exact {SquirePresentation.FormatLocation(fingerprint)} instance is equipped in the live snapshot.",
             "ReferencedByGearset" => DescribeGearsetReferences(analysis, candidate),
             "HighRarityEquipment" => $"The item is {candidate.Definition.NormalizedRarity}, and the default-on blue and purple gear protection setting is enabled.",
-            "HighRarityProtectionDisabled" => $"The item is {candidate.Definition.NormalizedRarity}, but blue and purple gear protection is disabled. Other protections and the cleanup exclusion list still apply.",
-            "CleanupExcluded" => $"Item {candidate.Definition.ItemId} is persistently excluded from cleanup for this character.",
+            "HighRarityProtectionDisabled" => $"The item is {candidate.Definition.NormalizedRarity}, but blue and purple gear protection is disabled. Other protections and explicit character rules still apply.",
+            "ItemProtectionRule" or "InvalidRuleConfiguration" => reason.Message,
             "DuplicateRetentionFloor" or "DuplicateRetentionSurplus" when candidate.DuplicateStatus is { } duplicate =>
                 $"Owned {duplicate.OwnedCopies}; explicit minimum {duplicate.UserMinimumCopies}; saved-gearset minimum {duplicate.GearsetRequiredCopies}; effective floor {duplicate.EffectiveMinimumCopies}; copies above floor {duplicate.CopiesAboveFloor}.",
             "DesynthesisNotUnlocked" => $"Desynthesis is absent from the supported routes; current authorized routes: {string.Join(", ", candidate.SupportedDispositions.Order().Select(SquirePresentation.FormatDisposition))}.",

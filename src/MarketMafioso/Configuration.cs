@@ -1,5 +1,6 @@
 using Dalamud.Configuration;
 using MarketMafioso.RetainerRestock;
+using MarketMafioso.Squire;
 using MarketMafioso.WorkshopPrep;
 using Newtonsoft.Json;
 using System;
@@ -80,9 +81,13 @@ public sealed class SquireConfiguration
     public bool ShowProtected { get; set; }
     public bool ShowNonEquipment { get; set; }
     public string Search { get; set; } = string.Empty;
+    public int RuleSchemaVersion { get; set; } = 1;
+    public Dictionary<string, List<SquireRuleConfiguration>> RulesByCharacter { get; set; } = new();
+    [Obsolete("Migrated to RulesByCharacter by SquireRuleMigration.")]
     public Dictionary<string, List<uint>> ExcludedItemIdsByCharacter { get; set; } = new();
+    [Obsolete("Migrated to RulesByCharacter by SquireRuleMigration.")]
     public Dictionary<string, List<SquireDuplicateRetentionConfiguration>> DuplicateRetentionByCharacter { get; set; } = new();
-    [Obsolete("Per-item high-rarity cleanup authorization has been replaced by the blue/purple protection toggle and cleanup exclusions.")]
+    [Obsolete("Per-item high-rarity cleanup authorization has been replaced by the blue/purple protection toggle and character rules.")]
     public Dictionary<string, List<uint>> HighRarityCleanupItemIdsByCharacter { get; set; } = new();
     public bool ProtectBlueAndPurpleGear { get; set; } = true;
     public bool ProtectMateria { get; set; } = true;
@@ -99,6 +104,18 @@ public sealed class SquireConfiguration
     public bool PauseQuestionable { get; set; } = true;
     public bool PauseArtisan { get; set; } = true;
     public bool CloseSafeUserMenus { get; set; } = true;
+}
+
+[Serializable]
+public sealed class SquireRuleConfiguration
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public SquireRuleKind Kind { get; set; }
+    public uint ItemId { get; set; }
+    public SquireRuleQuality Quality { get; set; } = SquireRuleQuality.Any;
+    public int MinimumCopies { get; set; }
+    public bool Enabled { get; set; } = true;
+    public string Note { get; set; } = string.Empty;
 }
 
 [Serializable]

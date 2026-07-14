@@ -7,17 +7,24 @@ namespace MarketMafioso.Squire;
 
 public static class SquireDuplicateRetention
 {
-    public static IReadOnlyList<SquireDuplicateRetentionRule> Merge(
-        IReadOnlyList<SquireDuplicateRetentionRule>? approved,
-        IReadOnlyList<SquireDuplicateRetentionRule>? current) =>
-        (approved ?? []).Concat(current ?? [])
-            .Where(rule => rule.ItemId != 0 && rule.MinimumCopies > 0)
-            .GroupBy(rule => new { rule.ItemId, rule.IsHighQuality })
-            .Select(group => new SquireDuplicateRetentionRule(
-                group.Key.ItemId,
-                group.Key.IsHighQuality,
-                group.Max(rule => rule.MinimumCopies)))
+    public static IReadOnlyList<SquireRule> Merge(
+        IReadOnlyList<SquireRule>? approved,
+        IReadOnlyList<SquireRule>? current)
+    {
+        var active = (approved ?? []).Concat(current ?? [])
+            .Where(rule => rule.Enabled)
             .ToArray();
+        var invalid = active.Where(rule => !rule.IsValid(out _));
+        var protections = active
+            .Where(rule => rule.IsValid(out _) && rule.Kind == SquireRuleKind.ProtectItem)
+            .GroupBy(rule => rule.ItemId)
+            .Select(group => group.First());
+        var retention = active
+            .Where(rule => rule.IsValid(out _) && rule.Kind == SquireRuleKind.RetainCopies)
+            .GroupBy(rule => new { rule.ItemId, rule.Quality })
+            .Select(group => group.OrderByDescending(rule => rule.MinimumCopies).First());
+        return invalid.Concat(protections).Concat(retention).ToArray();
+    }
 
     public static bool DoesNotReduceRequiredMultiplicity(
         IEnumerable<EquipmentInstanceSnapshot> before,
@@ -27,15 +34,16 @@ public static class SquireDuplicateRetention
     {
         var beforeArray = before.ToArray();
         var afterArray = after.ToArray();
-        foreach (var rule in Merge(policy.DuplicateRetentionRules, null))
+        foreach (var rule in Merge(policy.Rules, null).Where(rule => rule.Kind == SquireRuleKind.RetainCopies))
         {
             var beforeCount = Count(beforeArray, rule);
             var afterCount = Count(afterArray, rule);
             var required = Math.Min(beforeCount, rule.MinimumCopies);
             if (afterCount >= required)
                 continue;
-            var quality = rule.IsHighQuality ? "HQ" : "normal-quality";
-            message = $"The selected batch would leave {afterCount} {quality} copies of item {rule.ItemId}; this character's duplicate rule retains at least {required}.";
+            var quality = rule.Quality == SquireRuleQuality.HighQuality ? "HQ" : "normal-quality";
+            var identity = string.IsNullOrWhiteSpace(rule.Note) ? rule.Id.ToString("N") : $"'{rule.Note}' ({rule.Id:N})";
+            message = $"The selected batch would leave {afterCount} {quality} copies of item {rule.ItemId}; retention rule {identity} retains at least {required}.";
             return false;
         }
 
@@ -43,8 +51,8 @@ public static class SquireDuplicateRetention
         return true;
     }
 
-    private static int Count(IEnumerable<EquipmentInstanceSnapshot> instances, SquireDuplicateRetentionRule rule) =>
+    private static int Count(IEnumerable<EquipmentInstanceSnapshot> instances, SquireRule rule) =>
         instances.Count(instance =>
             instance.Fingerprint.ItemId == rule.ItemId &&
-            instance.Fingerprint.IsHighQuality == rule.IsHighQuality);
+            instance.Fingerprint.IsHighQuality == (rule.Quality == SquireRuleQuality.HighQuality));
 }

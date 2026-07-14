@@ -5,6 +5,7 @@ using Dalamud.Plugin.Services;
 using Franthropy.Dalamud.AgentBridge;
 using Franthropy.Dalamud.UI.Settings;
 using MarketMafioso.Windows.Main.Settings;
+using MarketMafioso.Squire;
 
 namespace MarketMafioso.Windows.Main;
 
@@ -25,6 +26,7 @@ internal sealed class SettingsTabPanel
         Action restartTimer,
         IPlayerState playerState,
         IDataManager dataManager,
+        Func<SquireAnalysis?> currentSquireAnalysis,
         AgentBridgeUiReviewRegistry reviewRegistry)
     {
         this.config = config ?? throw new ArgumentNullException(nameof(config));
@@ -38,7 +40,7 @@ internal sealed class SettingsTabPanel
             new ServerConnectionSettingsPage(config, reporter, log).Descriptor,
         };
         pages.AddRange(new InventoryReporterSettingsPages(config, restartTimer).Descriptors);
-        pages.AddRange(new SquireSettingsPages(config, playerState, dataManager).Descriptors);
+        pages.AddRange(new SquireSettingsPages(config, playerState, dataManager, currentSquireAnalysis, reviewRegistry).Descriptors);
         pages.AddRange(new MarketAcquisitionSettingsPages(config).Descriptors);
         pages.AddRange(new AdvancedSettingsPages(config, stopMarketAcquisitionRoute).Descriptors);
         navigationCatalog = new SettingsNavigationCatalog(pages);

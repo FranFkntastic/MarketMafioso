@@ -25,7 +25,7 @@ public sealed class SquireCandidateEvaluator
                 DuplicateStatus = CreateDuplicateStatus(snapshot, instance, gearsetProtection, protectionPolicy),
             })
             .ToArray();
-        return new SquireAnalysis(snapshot, candidates);
+        return new SquireAnalysis(snapshot, candidates, protectionPolicy);
     }
 
     private SquireCandidate EvaluateInstance(
@@ -143,8 +143,14 @@ public sealed class SquireCandidateEvaluator
         SquireProtectionPolicy protectionPolicy)
     {
         var reasons = new List<SquireReason>();
-        if (protectionPolicy.CleanupExcludedItemIds?.Contains(definition.ItemId) == true)
-            reasons.Add(new("CleanupExcluded", "This item is on this character's cleanup exclusion list.", SquireReasonSeverity.Blocking));
+        foreach (var error in protectionPolicy.ValidationErrors)
+            reasons.Add(new("InvalidRuleConfiguration", error, SquireReasonSeverity.Blocking));
+        var matchingRules = protectionPolicy.MatchingRules(definition.ItemId, instance.Fingerprint.IsHighQuality);
+        foreach (var rule in matchingRules.Where(rule => rule.Kind == SquireRuleKind.ProtectItem))
+            reasons.Add(new(
+                "ItemProtectionRule",
+                $"Protection rule {FormatRuleIdentity(rule)} protects every copy of this item for this character.",
+                SquireReasonSeverity.Blocking));
         if (!snapshot.Diagnostics.IsComplete)
             reasons.Add(new("PartialSnapshot", "The equipment snapshot is incomplete.", SquireReasonSeverity.Blocking));
         if (instance.IsEquipped)
@@ -155,17 +161,22 @@ public sealed class SquireCandidateEvaluator
         var duplicateMinimum = protectionPolicy.MinimumCopiesToKeep(definition.ItemId, instance.Fingerprint.IsHighQuality);
         if (duplicateMinimum > 0)
         {
+            var ruleSummary = string.Join(", ", matchingRules
+                .Where(rule => rule.Kind == SquireRuleKind.RetainCopies)
+                .Select(FormatRuleIdentity));
             var quality = instance.Fingerprint.IsHighQuality ? "HQ" : "normal-quality";
             if (exactQualityCount <= duplicateMinimum)
                 reasons.Add(new(
                     "DuplicateRetentionFloor",
-                    $"This character owns {exactQualityCount} {quality} cop{(exactQualityCount == 1 ? "y" : "ies")}; the explicit duplicate rule keeps at least {duplicateMinimum}.",
+                    $"Retention rule(s) {ruleSummary} keep at least {duplicateMinimum} {quality} copies; this character owns {exactQualityCount}.",
                     SquireReasonSeverity.Blocking));
             else
+            {
                 reasons.Add(new(
                     "DuplicateRetentionSurplus",
-                    $"This character owns {exactQualityCount} {quality} copies and keeps at least {duplicateMinimum}; at most {exactQualityCount - duplicateMinimum} may be removed from the complete batch.",
+                    $"Retention rule(s) {ruleSummary} keep at least {duplicateMinimum} {quality} copies; {exactQualityCount} are owned, so at most {exactQualityCount - duplicateMinimum} may be removed from the complete batch.",
                     SquireReasonSeverity.Information));
+            }
         }
         if (gearsetProtection.IsProtected(definition.ItemId, instance.Fingerprint.IsHighQuality, exactQualityCount))
             reasons.Add(new(
@@ -209,6 +220,10 @@ public sealed class SquireCandidateEvaluator
             reasons.Add(new("RecoverabilityUnknown", "Recoverability is unknown.", SquireReasonSeverity.Blocking));
         return reasons;
     }
+
+    private static string FormatRuleIdentity(SquireRule rule) => string.IsNullOrWhiteSpace(rule.Note)
+        ? $"{rule.Id:N}"
+        : $"'{rule.Note}' ({rule.Id:N})";
 
     private static SquireDuplicateStatus CreateDuplicateStatus(
         CharacterEquipmentSnapshot snapshot,

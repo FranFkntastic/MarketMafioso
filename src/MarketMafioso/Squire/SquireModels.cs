@@ -36,10 +36,56 @@ public sealed record SquireDispositionCapabilities(
     bool? DesynthesisUnlocked,
     bool? MateriaRetrievalUnlocked = null);
 
-public sealed record SquireDuplicateRetentionRule(
+public enum SquireRuleKind
+{
+    ProtectItem,
+    RetainCopies,
+}
+
+public enum SquireRuleQuality
+{
+    Any,
+    NormalQuality,
+    HighQuality,
+}
+
+public sealed record SquireRule(
+    Guid Id,
+    SquireRuleKind Kind,
     uint ItemId,
-    bool IsHighQuality,
-    int MinimumCopies);
+    SquireRuleQuality Quality,
+    int MinimumCopies,
+    bool Enabled,
+    string Note)
+{
+    public bool Matches(uint itemId, bool isHighQuality) =>
+        Enabled && ItemId == itemId && (Quality == SquireRuleQuality.Any ||
+            Quality == (isHighQuality ? SquireRuleQuality.HighQuality : SquireRuleQuality.NormalQuality));
+
+    public bool IsValid(out string error)
+    {
+        if (Id == Guid.Empty)
+            error = "The rule has no stable ID.";
+        else if (!Enum.IsDefined(Kind))
+            error = $"Rule {Id} has unknown kind {(int)Kind}.";
+        else if (!Enum.IsDefined(Quality))
+            error = $"Rule {Id} has unknown quality scope {(int)Quality}.";
+        else if (ItemId == 0)
+            error = $"Rule {Id} has no item ID.";
+        else if (Kind == SquireRuleKind.ProtectItem && Quality != SquireRuleQuality.Any)
+            error = $"Protection rule {Id} must cover every quality.";
+        else if (Kind == SquireRuleKind.RetainCopies && Quality == SquireRuleQuality.Any)
+            error = $"Retention rule {Id} must select normal or high quality.";
+        else if (Kind == SquireRuleKind.RetainCopies && MinimumCopies <= 0)
+            error = $"Retention rule {Id} must keep at least one copy.";
+        else
+        {
+            error = string.Empty;
+            return true;
+        }
+        return false;
+    }
+}
 
 public sealed record SquireDuplicateStatus(
     int OwnedCopies,
@@ -54,15 +100,28 @@ public sealed record SquireProtectionPolicy(
     bool ProtectSignedGear = false,
     bool ProtectFutureLevelingGear = false,
     bool ProtectBlueAndPurpleGear = true,
-    IReadOnlySet<uint>? CleanupExcludedItemIds = null,
     bool AllowRiskyMateriaRetrieval = false,
-    IReadOnlyList<SquireDuplicateRetentionRule>? DuplicateRetentionRules = null)
+    IReadOnlyList<SquireRule>? Rules = null)
 {
-    public int MinimumCopiesToKeep(uint itemId, bool isHighQuality) => DuplicateRetentionRules?
-        .Where(rule => rule.ItemId == itemId && rule.IsHighQuality == isHighQuality)
+    public IReadOnlyList<SquireRule> MatchingRules(uint itemId, bool isHighQuality) => Rules?
+        .Where(rule => rule.Matches(itemId, isHighQuality))
+        .ToArray() ?? [];
+
+    public bool IsItemProtected(uint itemId) => Rules?.Any(rule =>
+        rule.Enabled && rule.Kind == SquireRuleKind.ProtectItem && rule.ItemId == itemId) == true;
+
+    public int MinimumCopiesToKeep(uint itemId, bool isHighQuality) => MatchingRules(itemId, isHighQuality)
+        .Where(rule => rule.Kind == SquireRuleKind.RetainCopies)
         .Select(rule => Math.Max(0, rule.MinimumCopies))
         .DefaultIfEmpty(0)
-        .Max() ?? 0;
+        .Max();
+
+    public IReadOnlyList<string> ValidationErrors => Rules?
+        .Where(rule => rule.Enabled)
+        .Select(rule => rule.IsValid(out var error) ? null : error)
+        .Where(error => error is not null)
+        .Select(error => error!)
+        .ToArray() ?? [];
 }
 
 public sealed record SquireCandidate(
@@ -80,7 +139,8 @@ public sealed record SquireCandidate(
 
 public sealed record SquireAnalysis(
     CharacterEquipmentSnapshot Snapshot,
-    IReadOnlyList<SquireCandidate> Candidates)
+    IReadOnlyList<SquireCandidate> Candidates,
+    SquireProtectionPolicy Policy)
 {
     public bool IsActionable => Snapshot.Diagnostics.IsComplete;
 }

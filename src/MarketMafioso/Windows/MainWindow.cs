@@ -201,6 +201,7 @@ public class MainWindow : Window, IDisposable
             autoRetainerRefresh);
         var squireSnapshotSource = new DalamudCharacterEquipmentSnapshotSource(playerState, dataManager, log);
         var squireCapabilities = new DalamudSquireDispositionCapabilitySource();
+        var squireRuleStore = new SquireRuleStore(config);
         var squireVnavmesh = new VNavmeshIpc(new DalamudVNavmeshIpcAdapter(Plugin.PluginInterface, log));
         var squireLifestream = new LifestreamIpc(Plugin.PluginInterface, log);
         uiStateCapture = new UiStateCaptureService(
@@ -224,28 +225,7 @@ public class MainWindow : Window, IDisposable
                 Plugin.TargetManager,
                 Plugin.PluginInterface,
                 Plugin.Log,
-                () =>
-                {
-                    var contentId = playerState.IsLoaded && playerState.ContentId != 0
-                        ? playerState.ContentId.ToString()
-                        : null;
-                    var exclusions = contentId is not null && config.Squire.ExcludedItemIdsByCharacter.TryGetValue(contentId, out var values)
-                        ? values.ToHashSet()
-                        : new HashSet<uint>();
-                    var duplicateRules = contentId is not null && config.Squire.DuplicateRetentionByCharacter.TryGetValue(contentId, out var configuredDuplicates)
-                        ? configuredDuplicates
-                            .Where(value => value.ItemId != 0 && value.MinimumCopies > 0)
-                            .Select(value => new SquireDuplicateRetentionRule(value.ItemId, value.IsHighQuality, value.MinimumCopies))
-                            .ToArray()
-                        : [];
-                    return new SquireProtectionPolicy(
-                        config.Squire.ProtectPlayerSignedGear,
-                        config.Squire.ProtectFutureLevelingGearOptIn,
-                        config.Squire.ProtectBlueAndPurpleGear,
-                        exclusions,
-                        config.Squire.AllowRiskyMateriaRetrieval,
-                        duplicateRules);
-                },
+                () => squireRuleStore.CreatePolicy(playerState.IsLoaded && playerState.ContentId != 0 ? playerState.ContentId : null),
                 () => SquireExecutionRecoveryPolicy.From(config.Squire),
                 () =>
                 {
@@ -377,6 +357,7 @@ public class MainWindow : Window, IDisposable
             Plugin.Instance.RestartTimer,
             playerState,
             dataManager,
+            () => squireTab.CurrentAnalysis,
             AgentReviewRegistry);
 
         acquisitionWorkspace.RestoreClaimIntoBuilder();

@@ -29,8 +29,7 @@ internal sealed class SquireTabPanel : IDisposable
     private readonly SquireCandidateEvaluator evaluator = new();
     private readonly SquireCounterfactualBatchValidator batchValidator = new();
     private readonly SquireReviewState review = new();
-    private readonly SquireCleanupExclusionStore exclusionStore;
-    private readonly SquireDuplicateRetentionStore duplicateRetentionStore;
+    private readonly SquireRuleStore ruleStore;
     private readonly SquireEvidencePanel evidencePanel;
     private readonly SquireRouteDiagnosticsPanel routeDiagnosticsPanel;
     private readonly SquireRunResultPanel runResultPanel = new();
@@ -86,9 +85,8 @@ internal sealed class SquireTabPanel : IDisposable
             gameInventory,
             dataManager,
             () => RequestAutomaticRefresh("Equipment changed", TimeSpan.FromMilliseconds(150)));
-        exclusionStore = new SquireCleanupExclusionStore(config);
-        duplicateRetentionStore = new SquireDuplicateRetentionStore(config);
-        evidencePanel = new SquireEvidencePanel(exclusionStore, duplicateRetentionStore, reviewRegistry, Refresh);
+        ruleStore = new SquireRuleStore(config);
+        evidencePanel = new SquireEvidencePanel(ruleStore, reviewRegistry, Refresh);
         routeDiagnosticsPanel = new SquireRouteDiagnosticsPanel(actionAdapter, reviewRegistry, uiStateCapture);
         search = config.Squire.Search;
         showProtected = config.Squire.ShowProtected;
@@ -197,6 +195,8 @@ internal sealed class SquireTabPanel : IDisposable
         if (now >= nextAutomaticRefreshAt)
             Refresh(reconcileSelections: analysis is not null, "Automatic refresh");
     }
+
+    internal SquireAnalysis? CurrentAnalysis => analysis;
 
     public void OnFrameworkUpdate()
     {
@@ -583,13 +583,7 @@ internal sealed class SquireTabPanel : IDisposable
     internal static SquireCandidate[] ApplyColumnFilters(IEnumerable<SquireCandidate> rows, IReadOnlyList<string> filters) =>
         SquireCandidateTableProjection.Filter(rows, filters);
 
-    private SquireProtectionPolicy CreateProtectionPolicy(ulong? contentId) => new(
-        config.Squire.ProtectPlayerSignedGear,
-        config.Squire.ProtectFutureLevelingGearOptIn,
-        config.Squire.ProtectBlueAndPurpleGear,
-        exclusionStore.Get(contentId),
-        config.Squire.AllowRiskyMateriaRetrieval,
-        duplicateRetentionStore.Get(contentId));
+    private SquireProtectionPolicy CreateProtectionPolicy(ulong? contentId) => ruleStore.CreatePolicy(contentId);
 
     internal static SquireCandidate[] SortCandidates(SquireCandidate[] rows, ImGuiTableSortSpecsPtr sortSpecs) =>
         SquireCandidateTableProjection.Sort(rows, sortSpecs);
@@ -738,14 +732,10 @@ internal sealed class SquireTabPanel : IDisposable
             return null;
         var policy = CreateProtectionPolicy(value.Snapshot.Identity.Scope?.LocalContentId);
         var capabilities = capabilitySource.Capture();
-        var exclusionKey = policy.CleanupExcludedItemIds is { } excluded
-            ? string.Join(",", excluded.Order())
-            : string.Empty;
-        var duplicateKey = string.Join(",", policy.DuplicateRetentionRules?
-            .OrderBy(rule => rule.ItemId)
-            .ThenBy(rule => rule.IsHighQuality)
-            .Select(rule => $"{rule.ItemId}:{rule.IsHighQuality}:{rule.MinimumCopies}") ?? []);
-        var key = $"{value.Snapshot.GenerationId}|signed={policy.ProtectSignedGear}|future={policy.ProtectFutureLevelingGear}|rarity={policy.ProtectBlueAndPurpleGear}|materiaRisk={policy.AllowRiskyMateriaRetrieval}|excluded={exclusionKey}|duplicates={duplicateKey}|desynth={capabilities.DesynthesisUnlocked}|materiaUnlock={capabilities.MateriaRetrievalUnlocked}|" + string.Join(";", selections
+        var ruleKey = string.Join(",", policy.Rules?
+            .OrderBy(rule => rule.Id)
+            .Select(rule => $"{rule.Id:N}:{rule.Kind}:{rule.ItemId}:{rule.Quality}:{rule.MinimumCopies}:{rule.Enabled}:{rule.Note}") ?? []);
+        var key = $"{value.Snapshot.GenerationId}|signed={policy.ProtectSignedGear}|future={policy.ProtectFutureLevelingGear}|rarity={policy.ProtectBlueAndPurpleGear}|materiaRisk={policy.AllowRiskyMateriaRetrieval}|rules={ruleKey}|desynth={capabilities.DesynthesisUnlocked}|materiaUnlock={capabilities.MateriaRetrievalUnlocked}|" + string.Join(";", selections
             .OrderBy(pair => pair.Key.Container, StringComparer.Ordinal)
             .ThenBy(pair => pair.Key.SlotIndex)
             .Select(pair => $"{pair.Key.Container}:{pair.Key.SlotIndex}:{pair.Key.ItemId}:{pair.Value}"));

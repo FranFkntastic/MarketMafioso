@@ -186,7 +186,12 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
             return SquireRevalidationResult.Fail(
                 "ReferencedByGearset",
                 "The current item-ID and quality multiplicity is required by a valid saved gearset. Squire does not yet replace saved gearset assignments with better owned equipment.");
-        var duplicateMinimum = currentPolicy().MinimumCopiesToKeep(fingerprint.ItemId, fingerprint.IsHighQuality);
+        var livePolicy = currentPolicy();
+        if (livePolicy.ValidationErrors.Count > 0)
+            return SquireRevalidationResult.Fail("InvalidRuleConfiguration", string.Join(" ", livePolicy.ValidationErrors));
+        if (livePolicy.IsItemProtected(fingerprint.ItemId))
+            return SquireRevalidationResult.Fail("ItemProtectionRule", "A current character rule protects every copy of this item.");
+        var duplicateMinimum = livePolicy.MinimumCopiesToKeep(fingerprint.ItemId, fingerprint.IsHighQuality);
         if (duplicateMinimum > 0 && exactQualityCount <= duplicateMinimum)
             return SquireRevalidationResult.Fail("DuplicateRetentionFloor", $"Removing this copy would cross the character's minimum of {duplicateMinimum} retained copies.");
         if (!snapshot.Definitions.TryGetValue(fingerprint.ItemId, out var definition))
@@ -214,11 +219,8 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
             approvedPolicy.ProtectSignedGear || livePolicy.ProtectSignedGear,
             approvedPolicy.ProtectFutureLevelingGear || livePolicy.ProtectFutureLevelingGear,
             approvedPolicy.ProtectBlueAndPurpleGear || livePolicy.ProtectBlueAndPurpleGear,
-            (approvedPolicy.CleanupExcludedItemIds ?? new HashSet<uint>())
-                .Union(livePolicy.CleanupExcludedItemIds ?? new HashSet<uint>())
-                .ToHashSet(),
             approvedPolicy.AllowRiskyMateriaRetrieval && livePolicy.AllowRiskyMateriaRetrieval,
-            SquireDuplicateRetention.Merge(approvedPolicy.DuplicateRetentionRules, livePolicy.DuplicateRetentionRules));
+            SquireDuplicateRetention.Merge(approvedPolicy.Rules, livePolicy.Rules));
         var result = new SquireCounterfactualBatchValidator().Validate(
             snapshot,
             removals,

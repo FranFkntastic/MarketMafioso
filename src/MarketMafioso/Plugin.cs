@@ -13,6 +13,7 @@ using MarketMafioso.Automation.Travel;
 using MarketMafioso.AgentBridge;
 using MarketMafioso.MarketAcquisition;
 using MarketMafioso.WorkshopPrep;
+using MarketMafioso.Squire;
 using MarketMafioso.Windows;
 
 namespace MarketMafioso;
@@ -68,6 +69,8 @@ public sealed class Plugin : IDalamudPlugin
         ECommonsMain.Init(PluginInterface, this);
 
         Configuration = PluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
+        if (SquireRuleMigration.Migrate(Configuration))
+            Configuration.Save();
         retainerCacheStore = new RetainerCacheFileStore(
             Path.Combine(PluginInterface.GetPluginConfigDirectory(), "retainer-cache.json"));
         LoadRetainerCache();
