@@ -20,6 +20,10 @@ public sealed class MarketAcquisitionRouteEngineProbeTests
         Assert.False(snapshot.IsProbeRunning);
         Assert.Equal("Ready", snapshot.MarketBoardReadResult?.Status);
         Assert.Equal("Ready", snapshot.LiveCandidatePlan?.Status);
+        Assert.True(SpinWait.SpinUntil(() => harness.Reporter.MarketObservationReports.Count == 1, TimeSpan.FromSeconds(2)));
+        var observation = Assert.Single(harness.Reporter.MarketObservationReports);
+        Assert.Equal("Maduin", observation.WorldName);
+        Assert.Equal(7017u, observation.ItemId);
     }
 
     [Fact]

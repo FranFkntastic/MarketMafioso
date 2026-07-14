@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Dalamud.Bindings.ImGui;
+using Franthropy.Dalamud.AgentBridge;
 using MarketMafioso.MarketAcquisition;
 using MarketMafioso.Windows.Main;
 using MarketMafioso.Windows.MarketAcquisitionRequestBuilder;
@@ -14,17 +15,20 @@ internal sealed class MarketAcquisitionAcceptedRequestPanel
     private readonly Action rejectRequest;
     private readonly Action removeLocalRequest;
     private readonly Action preparePlan;
+    private readonly AgentBridgeUiReviewRegistry reviewRegistry;
 
     public MarketAcquisitionAcceptedRequestPanel(
         Action acceptRequest,
         Action rejectRequest,
         Action removeLocalRequest,
-        Action preparePlan)
+        Action preparePlan,
+        AgentBridgeUiReviewRegistry reviewRegistry)
     {
         this.acceptRequest = acceptRequest ?? throw new ArgumentNullException(nameof(acceptRequest));
         this.rejectRequest = rejectRequest ?? throw new ArgumentNullException(nameof(rejectRequest));
         this.removeLocalRequest = removeLocalRequest ?? throw new ArgumentNullException(nameof(removeLocalRequest));
         this.preparePlan = preparePlan ?? throw new ArgumentNullException(nameof(preparePlan));
+        this.reviewRegistry = reviewRegistry ?? throw new ArgumentNullException(nameof(reviewRegistry));
     }
 
     public void Draw(MarketAcquisitionClaimView? claimedRequest, bool isBusy, bool canPrepare)
@@ -49,26 +53,31 @@ internal sealed class MarketAcquisitionAcceptedRequestPanel
     {
         var canMutateClaim = !isBusy &&
                              string.Equals(claimed.Status, "Claimed", StringComparison.OrdinalIgnoreCase);
-        if (ImGuiUi.PrimaryButton("Prepare Plan", canPrepare))
-            preparePlan();
+        if (canMutateClaim)
+        {
+            if (ImGuiUi.PrimaryButton("Accept Request", true))
+                acceptRequest();
+            RegisterLastControl("acquisition.accept", "Accept the claimed Market Acquisition request", true, claimed.Id, acceptRequest);
 
-        ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Preparing a plan reads remote market data. Guided routes validate live rows before purchasing.");
+            ImGui.SameLine();
+            if (ImGuiUi.Button("Reject Request", true))
+                rejectRequest();
+            RegisterLastControl("acquisition.reject", "Reject the claimed Market Acquisition request", true, claimed.Id, rejectRequest);
 
-        if (!ImGui.TreeNode("Request actions##MarketAcquisitionAcceptedRequestActions"))
-            return;
+            ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Accept this request before preparing its market plan.");
+        }
+        else
+        {
+            if (ImGuiUi.PrimaryButton("Prepare Plan", canPrepare))
+                preparePlan();
+            RegisterLastControl("acquisition.prepare", "Prepare the accepted Market Acquisition request", canPrepare, claimed.Id, preparePlan);
 
-        if (ImGuiUi.Button("Accept Request", canMutateClaim))
-            acceptRequest();
+            ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Preparing a plan reads remote market data. Guided routes validate live rows before purchasing.");
+        }
 
-        ImGui.SameLine();
-        if (ImGuiUi.Button("Reject Request", canMutateClaim))
-            rejectRequest();
-
-        ImGui.SameLine();
         if (ImGuiUi.Button("Remove Local", !isBusy))
             removeLocalRequest();
-
-        ImGui.TreePop();
+        RegisterLastControl("acquisition.remove-local", "Remove the local Market Acquisition claim", !isBusy, claimed.Id, removeLocalRequest);
     }
 
     private static void DrawAcceptedRequestRecoveryHint(MarketAcquisitionClaimView claimed)
@@ -200,4 +209,16 @@ internal sealed class MarketAcquisitionAcceptedRequestPanel
             "CurrentWorldOnly" => "Current world only",
             _ => worldMode,
         };
+
+    private void RegisterLastControl(string id, string label, bool enabled, string? value, Action invoke) =>
+        reviewRegistry.Register(
+            id,
+            label,
+            AgentBridgeUiControlKind.Button,
+            ImGui.GetItemRectMin(),
+            ImGui.GetItemRectMax(),
+            enabled,
+            false,
+            value,
+            invoke);
 }

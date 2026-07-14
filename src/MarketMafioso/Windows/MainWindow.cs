@@ -254,12 +254,14 @@ public class MainWindow : Window, IDisposable
         statusTab = new StatusTabPanel(config, reporter, retainerCacheStore, log);
         marketAcquisitionRequestPickupPanel = new MarketAcquisitionRequestPickupPanel(
             () => _ = FetchDashboardRequestsAsync(),
-            requestId => _ = ClaimAcquisitionRequestAsync(requestId));
+            requestId => _ = ClaimAcquisitionRequestAsync(requestId),
+            AgentReviewRegistry);
         marketAcquisitionAcceptedRequestPanel = new MarketAcquisitionAcceptedRequestPanel(
             () => _ = acquisitionWorkspace.AcceptAsync(),
             () => _ = acquisitionWorkspace.RejectAsync(),
             acquisitionWorkspace.ForgetLocalClaim,
-            () => _ = PrepareMarketAcquisitionPlanAsync());
+            () => _ = PrepareMarketAcquisitionPlanAsync(),
+            AgentReviewRegistry);
         restockTab = new RetainerRestockTabPanel(
             config,
             scanner,
@@ -341,6 +343,8 @@ public class MainWindow : Window, IDisposable
         marketAcquisitionGuidedRoutePanel = new MarketAcquisitionGuidedRoutePanel(
             routeEngine.CreateSnapshot,
             forceDiagnostics => _ = StartGuidedRouteAsync(forceDiagnostics),
+            CanProbeLiveMarketBoard,
+            () => _ = ProbeLiveMarketBoardAsync(),
             () => _ = PauseGuidedRouteAsync(),
             () => _ = ResumeGuidedRouteAsync(),
             () => _ = StopGuidedRouteAsync(),
@@ -348,7 +352,8 @@ public class MainWindow : Window, IDisposable
             () => _ = ReprepareGuidedRouteAsync(),
             marketAcquisitionDiagnosticsPanel.DrawPostRunDiagnosticSummary,
             marketAcquisitionDiagnosticsPanel.DrawLatestWorldCompletionSummary,
-            DrawMarketBoardProbeStatus);
+            DrawMarketBoardProbeStatus,
+            AgentReviewRegistry);
         settingsTab = new SettingsTabPanel(
             config,
             reporter,

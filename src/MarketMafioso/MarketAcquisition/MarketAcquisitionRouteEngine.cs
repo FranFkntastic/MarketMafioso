@@ -828,7 +828,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
                 requireRunningRoute: recordRouteResult))
             return;
 
-        if (recordRouteResult && state.MarketBoardReadResult.IsFresh)
+        if (state.MarketBoardReadResult.IsFresh)
             ReportMarketObservation(claimed, activeLine, activeSubtask, currentWorld, state.MarketBoardReadResult);
 
         var probeResult = recordRouteResult && runner.IsRunning && runner.ActiveStop is { Status: "Arrived" } && state.LiveCandidatePlan != null

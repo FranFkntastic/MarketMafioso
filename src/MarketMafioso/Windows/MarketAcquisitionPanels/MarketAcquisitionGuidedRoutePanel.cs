@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Dalamud.Bindings.ImGui;
+using Franthropy.Dalamud.AgentBridge;
 using MarketMafioso.MarketAcquisition;
 using MarketMafioso.Windows.Main;
 
@@ -10,6 +11,8 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
 {
     private readonly Func<MarketAcquisitionRouteEngineSnapshot> getRouteSnapshot;
     private readonly Action<bool> startRoute;
+    private readonly Func<bool> canObserveCurrentBoard;
+    private readonly Action observeCurrentBoard;
     private readonly Action pauseRoute;
     private readonly Action resumeRoute;
     private readonly Action stopRoute;
@@ -18,11 +21,14 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
     private readonly Action<MarketAcquisitionRouteEngineSnapshot> drawPostRunDiagnosticSummary;
     private readonly Action<MarketAcquisitionRouteEngineSnapshot> drawLatestWorldCompletionSummary;
     private readonly Action<MarketAcquisitionRouteEngineSnapshot> drawMarketBoardProbeStatus;
+    private readonly AgentBridgeUiReviewRegistry reviewRegistry;
     private readonly HashSet<string> expandedStops = new(StringComparer.OrdinalIgnoreCase);
 
     public MarketAcquisitionGuidedRoutePanel(
         Func<MarketAcquisitionRouteEngineSnapshot> getRouteSnapshot,
         Action<bool> startRoute,
+        Func<bool> canObserveCurrentBoard,
+        Action observeCurrentBoard,
         Action pauseRoute,
         Action resumeRoute,
         Action stopRoute,
@@ -30,10 +36,13 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
         Action reprepareRoute,
         Action<MarketAcquisitionRouteEngineSnapshot> drawPostRunDiagnosticSummary,
         Action<MarketAcquisitionRouteEngineSnapshot> drawLatestWorldCompletionSummary,
-        Action<MarketAcquisitionRouteEngineSnapshot> drawMarketBoardProbeStatus)
+        Action<MarketAcquisitionRouteEngineSnapshot> drawMarketBoardProbeStatus,
+        AgentBridgeUiReviewRegistry reviewRegistry)
     {
         this.getRouteSnapshot = getRouteSnapshot ?? throw new ArgumentNullException(nameof(getRouteSnapshot));
         this.startRoute = startRoute ?? throw new ArgumentNullException(nameof(startRoute));
+        this.canObserveCurrentBoard = canObserveCurrentBoard ?? throw new ArgumentNullException(nameof(canObserveCurrentBoard));
+        this.observeCurrentBoard = observeCurrentBoard ?? throw new ArgumentNullException(nameof(observeCurrentBoard));
         this.pauseRoute = pauseRoute ?? throw new ArgumentNullException(nameof(pauseRoute));
         this.resumeRoute = resumeRoute ?? throw new ArgumentNullException(nameof(resumeRoute));
         this.stopRoute = stopRoute ?? throw new ArgumentNullException(nameof(stopRoute));
@@ -42,6 +51,7 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
         this.drawPostRunDiagnosticSummary = drawPostRunDiagnosticSummary ?? throw new ArgumentNullException(nameof(drawPostRunDiagnosticSummary));
         this.drawLatestWorldCompletionSummary = drawLatestWorldCompletionSummary ?? throw new ArgumentNullException(nameof(drawLatestWorldCompletionSummary));
         this.drawMarketBoardProbeStatus = drawMarketBoardProbeStatus ?? throw new ArgumentNullException(nameof(drawMarketBoardProbeStatus));
+        this.reviewRegistry = reviewRegistry ?? throw new ArgumentNullException(nameof(reviewRegistry));
     }
 
     public void Draw(MarketAcquisitionPlan? plan, bool isPlanStale)
@@ -96,9 +106,11 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
         {
             if (ImGuiUi.PrimaryButton("Resume Route##MarketAcquisitionResumeRoute", true))
                 resumeRoute();
+            RegisterLastControl("acquisition.route.resume", "Resume the Market Acquisition route", true, resumeRoute);
             ImGui.SameLine();
             if (ImGuiUi.Button("Stop##MarketAcquisitionStopRoute", true))
                 stopRoute();
+            RegisterLastControl("acquisition.route.stop", "Stop the Market Acquisition route", true, stopRoute);
             return;
         }
 
@@ -106,9 +118,11 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
         {
             if (ImGuiUi.PrimaryButton("Pause Route##MarketAcquisitionPauseRoute", true))
                 pauseRoute();
+            RegisterLastControl("acquisition.route.pause", "Pause the Market Acquisition route", true, pauseRoute);
             ImGui.SameLine();
             if (ImGuiUi.Button("Stop##MarketAcquisitionStopRoute", true))
                 stopRoute();
+            RegisterLastControl("acquisition.route.stop", "Stop the Market Acquisition route", true, stopRoute);
             return;
         }
 
@@ -120,10 +134,22 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
         {
             if (ImGuiUi.PrimaryButton("Start Route##MarketAcquisitionStartRoute", true))
                 startRoute(false);
+            RegisterLastControl("acquisition.route.start", "Start the Market Acquisition route", true, () => startRoute(false));
 
             ImGui.SameLine();
             if (ImGuiUi.Button("Diagnostic Run##MarketAcquisitionStartDiagnostics", true))
                 startRoute(true);
+            RegisterLastControl("acquisition.route.start-diagnostics", "Start the Market Acquisition route with diagnostics", true, () => startRoute(true));
+
+            var canObserve = canObserveCurrentBoard();
+            ImGui.SameLine();
+            if (ImGuiUi.Button("Observe Current Board##MarketAcquisitionObserveCurrentBoard", canObserve))
+                observeCurrentBoard();
+            RegisterLastControl(
+                "acquisition.observe-current-board",
+                "Read and publish the current market-board item without purchasing",
+                canObserve,
+                observeCurrentBoard);
         }
 
         if (!snapshot.CanRestart && !canReprepare)
@@ -134,9 +160,11 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
 
         if (ImGuiUi.Button("Restart##MarketAcquisitionRestartRoute", snapshot.CanRestart))
             restartRoute();
+        RegisterLastControl("acquisition.route.restart", "Restart the Market Acquisition route", snapshot.CanRestart, restartRoute);
         ImGui.SameLine();
         if (ImGuiUi.Button("Refresh Plan##MarketAcquisitionReprepareRoute", canReprepare))
             reprepareRoute();
+        RegisterLastControl("acquisition.route.refresh-plan", "Refresh the Market Acquisition plan", canReprepare, reprepareRoute);
         ImGui.TreePop();
     }
 
@@ -291,4 +319,16 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
 
     private static string FormatRouteDataCenter(string dataCenter) =>
         string.IsNullOrWhiteSpace(dataCenter) ? "-" : dataCenter;
+
+    private void RegisterLastControl(string id, string label, bool enabled, Action invoke) =>
+        reviewRegistry.Register(
+            id,
+            label,
+            AgentBridgeUiControlKind.Button,
+            ImGui.GetItemRectMin(),
+            ImGui.GetItemRectMax(),
+            enabled,
+            false,
+            null,
+            invoke);
 }

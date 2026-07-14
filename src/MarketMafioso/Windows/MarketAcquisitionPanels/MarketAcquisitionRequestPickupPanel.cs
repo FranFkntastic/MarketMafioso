@@ -1,5 +1,6 @@
 using System;
 using Dalamud.Bindings.ImGui;
+using Franthropy.Dalamud.AgentBridge;
 using MarketMafioso.MarketAcquisition;
 using MarketMafioso.Windows.Main;
 
@@ -9,13 +10,16 @@ internal sealed class MarketAcquisitionRequestPickupPanel
 {
     private readonly Action fetchDashboardRequests;
     private readonly Action<string> claimRequest;
+    private readonly AgentBridgeUiReviewRegistry reviewRegistry;
 
     public MarketAcquisitionRequestPickupPanel(
         Action fetchDashboardRequests,
-        Action<string> claimRequest)
+        Action<string> claimRequest,
+        AgentBridgeUiReviewRegistry reviewRegistry)
     {
         this.fetchDashboardRequests = fetchDashboardRequests ?? throw new ArgumentNullException(nameof(fetchDashboardRequests));
         this.claimRequest = claimRequest ?? throw new ArgumentNullException(nameof(claimRequest));
+        this.reviewRegistry = reviewRegistry ?? throw new ArgumentNullException(nameof(reviewRegistry));
     }
 
     public void Draw(MarketAcquisitionRequestPickupContext context)
@@ -41,6 +45,12 @@ internal sealed class MarketAcquisitionRequestPickupPanel
                                   context.HasCharacterScope;
             if (ImGuiUi.Button("Check Dashboard##MarketAcquisitionFetchCompact", canFetchCompact))
                 fetchDashboardRequests();
+            RegisterLastControl(
+                "acquisition.fetch",
+                "Check Workshop Host for Market Acquisition requests",
+                canFetchCompact,
+                null,
+                fetchDashboardRequests);
 
             ImGui.SameLine();
             ImGui.TextColored(context.VisibleStatusColor, context.VisibleStatus);
@@ -54,6 +64,12 @@ internal sealed class MarketAcquisitionRequestPickupPanel
                        context.HasCharacterScope;
         if (ImGuiUi.Button("Check Dashboard##MarketAcquisitionFetch", canFetch))
             fetchDashboardRequests();
+        RegisterLastControl(
+            "acquisition.fetch",
+            "Check Workshop Host for Market Acquisition requests",
+            canFetch,
+            null,
+            fetchDashboardRequests);
 
         ImGui.SameLine();
         ImGui.TextColored(context.VisibleStatusColor, context.VisibleStatus);
@@ -116,6 +132,12 @@ internal sealed class MarketAcquisitionRequestPickupPanel
                 ImGui.TableNextColumn();
                 if (ImGuiUi.Button($"Claim##marketAcquisitionClaim{request.Id}", !context.IsBusy))
                     claimRequest(request.Id);
+                RegisterLastControl(
+                    $"acquisition.claim.{request.Id}",
+                    $"Claim Market Acquisition request {request.Id}",
+                    !context.IsBusy,
+                    request.Id,
+                    () => claimRequest(request.Id));
             }
 
             ImGui.EndTable();
@@ -139,4 +161,16 @@ internal sealed class MarketAcquisitionRequestPickupPanel
     }
 
     private static string FormatGil(uint gil) => $"{gil:N0} gil";
+
+    private void RegisterLastControl(string id, string label, bool enabled, string? value, Action invoke) =>
+        reviewRegistry.Register(
+            id,
+            label,
+            AgentBridgeUiControlKind.Button,
+            ImGui.GetItemRectMin(),
+            ImGui.GetItemRectMax(),
+            enabled,
+            false,
+            value,
+            invoke);
 }
