@@ -5,7 +5,7 @@
     "Punchline": "Workshop logistics, reviewed gear cleanup, and inventory history.",
     "Description": "FFXIV workshop logistics, reviewed gear cleanup through Squire, and optional receiver-backed inventory history.",
     "InternalName": "MarketMafioso",
-    "AssemblyVersion": "1.2.0.0",
+    "AssemblyVersion": "1.2.1.0",
     "RepoUrl": "https://github.com/FranFkntastic/MarketMafioso",
     "ApplicableVersion": "any",
     "DalamudApiLevel": 15,
@@ -25,8 +25,8 @@
     ],
     "IsHide": false,
     "IsTestingExclusive": false,
-    "DownloadLinkInstall": "https://github.com/FranFkntastic/MarketMafioso/releases/download/v1.2.0.0/MarketMafioso.zip",
-    "DownloadLinkUpdate": "https://github.com/FranFkntastic/MarketMafioso/releases/download/v1.2.0.0/MarketMafioso.zip",
+    "DownloadLinkInstall": "https://github.com/FranFkntastic/MarketMafioso/releases/download/v1.2.1.0/MarketMafioso.zip",
+    "DownloadLinkUpdate": "https://github.com/FranFkntastic/MarketMafioso/releases/download/v1.2.1.0/MarketMafioso.zip",
     "IconUrl": "https://raw.githubusercontent.com/FranFkntastic/MarketMafioso/main/docs/pluginmaster/assets/icon.png"
   }
 ]

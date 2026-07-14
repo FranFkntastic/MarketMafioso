@@ -2,10 +2,10 @@
   {
     "Author": "FranFkntastic",
     "Name": "MarketMafioso",
-    "Punchline": "Workshop logistics and self-hosted inventory history.",
-    "Description": "A practical FFXIV utility plugin for Workshop Logistics and optional receiver-backed inventory history.",
+    "Punchline": "Workshop logistics, reviewed gear cleanup, and inventory history.",
+    "Description": "FFXIV workshop logistics, reviewed gear cleanup through Squire, and optional receiver-backed inventory history.",
     "InternalName": "MarketMafioso",
-    "AssemblyVersion": "1.1.2.1",
+    "AssemblyVersion": "1.2.1.0",
     "RepoUrl": "https://github.com/FranFkntastic/MarketMafioso",
     "ApplicableVersion": "any",
     "DalamudApiLevel": 15,
@@ -17,15 +17,16 @@
       "utility",
       "qol",
       "export",
-      "json"
+      "json",
+      "gear"
     ],
     "CategoryTags": [
       "utility"
     ],
     "IsHide": false,
     "IsTestingExclusive": false,
-    "DownloadLinkInstall": "https://github.com/FranFkntastic/MarketMafioso/releases/download/v1.1.2.1/MarketMafioso.zip",
-    "DownloadLinkUpdate": "https://github.com/FranFkntastic/MarketMafioso/releases/download/v1.1.2.1/MarketMafioso.zip",
+    "DownloadLinkInstall": "https://github.com/FranFkntastic/MarketMafioso/releases/download/v1.2.1.0/MarketMafioso.zip",
+    "DownloadLinkUpdate": "https://github.com/FranFkntastic/MarketMafioso/releases/download/v1.2.1.0/MarketMafioso.zip",
     "IconUrl": "https://raw.githubusercontent.com/FranFkntastic/MarketMafioso/main/docs/pluginmaster/assets/icon.png"
   }
 ]

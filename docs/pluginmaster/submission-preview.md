@@ -53,8 +53,8 @@ F:\Everything (HDD)\Misc\Gooseworks (Projects)\FFXIV-Development\DalamudPlugins\
     ],
     "IsHide": false,
     "IsTestingExclusive": false,
-    "DownloadLinkInstall": "https://github.com/FranFkntastic/MarketMafioso/releases/download/v1.2.0.0/MarketMafioso.zip",
-    "DownloadLinkUpdate": "https://github.com/FranFkntastic/MarketMafioso/releases/download/v1.2.0.0/MarketMafioso.zip",
+    "DownloadLinkInstall": "https://github.com/FranFkntastic/MarketMafioso/releases/download/v1.2.1.0/MarketMafioso.zip",
+    "DownloadLinkUpdate": "https://github.com/FranFkntastic/MarketMafioso/releases/download/v1.2.1.0/MarketMafioso.zip",
     "IconUrl": "https://raw.githubusercontent.com/FranFkntastic/MarketMafioso/main/docs/pluginmaster/assets/icon.png"
   }
 ]
