@@ -211,6 +211,7 @@ static bool IsKnownAcquisitionPluginRoute(HttpRequest request)
                request.Path.Equals("/api/acquisition/requests/pending", StringComparison.OrdinalIgnoreCase) ||
                request.Path.Equals("/acquisition/batches/pending", StringComparison.OrdinalIgnoreCase) ||
                request.Path.Equals("/api/acquisition/batches/pending", StringComparison.OrdinalIgnoreCase) ||
+               IsAcquisitionTimelinePath(request.Path) ||
                IsAcquisitionBatchDetailPath(request.Path);
     }
 
@@ -240,6 +241,18 @@ static bool IsKnownAcquisitionPluginRoute(HttpRequest request)
              path.EndsWith("/observations", StringComparison.OrdinalIgnoreCase) ||
              (path.Contains("/lines/", StringComparison.OrdinalIgnoreCase) &&
               path.EndsWith("/progress", StringComparison.OrdinalIgnoreCase))));
+}
+
+static bool IsAcquisitionTimelinePath(PathString requestPath)
+{
+    var path = requestPath.Value ?? string.Empty;
+    if (!path.StartsWith("/api/acquisition/requests/", StringComparison.OrdinalIgnoreCase) ||
+        !path.EndsWith("/timeline", StringComparison.OrdinalIgnoreCase))
+    {
+        return false;
+    }
+
+    return path.Split('/', StringSplitOptions.RemoveEmptyEntries).Length == 5;
 }
 
 static bool IsAcquisitionBatchDetailPath(PathString requestPath)

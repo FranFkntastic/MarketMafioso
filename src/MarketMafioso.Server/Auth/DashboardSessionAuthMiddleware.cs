@@ -98,7 +98,7 @@ public sealed class DashboardSessionAuthMiddleware
 
         if (HttpMethods.IsGet(request.Method) &&
             request.Headers.ContainsKey("X-Api-Key") &&
-            IsApiBatchDetailPath(request.Path))
+            (IsApiBatchDetailPath(request.Path) || IsApiRequestTimelinePath(request.Path)))
         {
             return true;
         }
@@ -141,5 +141,17 @@ public sealed class DashboardSessionAuthMiddleware
             return false;
 
         return value.Split('/', StringSplitOptions.RemoveEmptyEntries).Length == 4;
+    }
+
+    private static bool IsApiRequestTimelinePath(PathString path)
+    {
+        var value = path.Value ?? string.Empty;
+        if (!value.StartsWith("/api/acquisition/requests/", StringComparison.OrdinalIgnoreCase) ||
+            !value.EndsWith("/timeline", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return value.Split('/', StringSplitOptions.RemoveEmptyEntries).Length == 5;
     }
 }
