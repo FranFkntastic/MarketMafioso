@@ -31,12 +31,9 @@ internal sealed class RetainerRestockTabPanel
         controls = new RetainerRestockControlsPanel(config, autoRetainerRefresh, workshopRetainerRestock);
     }
 
-    public void Draw()
+    public void Draw(string? requestedView = null)
     {
-        ImGui.Spacing();
-        ImGui.TextColored(MarketMafiosoUiTheme.Header, "Restock");
-        ImGui.TextWrapped("Build a local plan and pull matching items from cached retainers.");
-        ImGui.Spacing();
+        UtilityWorkspaceUi.DrawModuleHeader("Restock", "Build a local plan and pull matching items from cached retainers.");
 
         var ownerScope = getOwnerScope();
         var playerBags = scanner.ScanPlayerInventory(config);
@@ -47,16 +44,50 @@ internal sealed class RetainerRestockTabPanel
             DateTime.UtcNow,
             ownerScope);
 
-        browser.Draw(
-            stockRows,
-            plan,
-            MarketMafiosoUiTheme.Header,
-            MarketMafiosoUiTheme.Success,
-            MarketMafiosoUiTheme.Error,
-            MarketMafiosoUiTheme.Muted);
+        var summary = RetainerRestockWorkspaceSummary.Build(plan, ownerScope, config.RetainerCache.Values);
+        UtilityWorkspaceUi.DrawStatusStrip(
+            "##retainerRestockStatus",
+            [
+                new("Character", summary.Owner),
+                new("Plan", $"{summary.ReadyLineCount}/{summary.PlanLineCount} lines ready", summary.ReadyLineCount > 0 ? MarketMafiosoUiTheme.Success : MarketMafiosoUiTheme.Muted),
+                new("Retrieve", $"{summary.UnitsToRetrieve:N0} units"),
+                new("Unresolved", $"{summary.MissingUnits:N0} units", summary.MissingUnits > 0 ? MarketMafiosoUiTheme.Warning : MarketMafiosoUiTheme.Success),
+                new("Retainer cache", summary.CachedRetainerCount == 0 ? "No cached retainers" : $"{summary.CachedRetainerCount} retainers; newest {summary.NewestCacheUtc:HH:mm} UTC", summary.CachedRetainerCount > 0 ? MarketMafiosoUiTheme.Header : MarketMafiosoUiTheme.Muted),
+            ]);
         ImGui.Spacing();
         controls.Draw(plan, ownerScope);
+        ImGui.Spacing();
+
+        if (!ImGui.BeginTabBar("##retainerRestockWorkspace"))
+            return;
+
+        if (ImGui.BeginTabItem("Browse stock", GetRequestedViewFlags("Browse stock", requestedView)))
+        {
+            browser.DrawBrowse(stockRows, MarketMafiosoUiTheme.Header, MarketMafiosoUiTheme.Muted);
+            ImGui.EndTabItem();
+        }
+
+        var planLabel = config.RetainerRestockPlanItems.Count == 0
+            ? "Plan and run"
+            : $"Plan and run ({config.RetainerRestockPlanItems.Count})";
+        if (ImGui.BeginTabItem(planLabel, GetRequestedViewFlags("Plan and run", requestedView)))
+        {
+            browser.DrawPlan(
+                plan,
+                MarketMafiosoUiTheme.Header,
+                MarketMafiosoUiTheme.Success,
+                MarketMafiosoUiTheme.Error,
+                MarketMafiosoUiTheme.Muted);
+            ImGui.EndTabItem();
+        }
+
+        ImGui.EndTabBar();
     }
+
+    private static ImGuiTabItemFlags GetRequestedViewFlags(string viewName, string? requestedView) =>
+        string.Equals(viewName, requestedView, StringComparison.Ordinal)
+            ? ImGuiTabItemFlags.SetSelected
+            : ImGuiTabItemFlags.None;
 
     private RetainerRestockPlan BuildPlan(IReadOnlyList<InventoryBag> playerBags, RetainerOwnerScope ownerScope)
     {

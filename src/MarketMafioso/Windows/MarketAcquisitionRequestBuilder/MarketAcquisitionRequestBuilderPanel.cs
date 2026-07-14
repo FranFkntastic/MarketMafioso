@@ -61,13 +61,22 @@ public sealed class MarketAcquisitionRequestBuilderPanel
     public bool AdoptRestoredRequestIfSafe(MarketAcquisitionRequestView request) =>
         controller.AdoptRestoredRequestIfSafe(request);
 
-    public void Draw(MarketAcquisitionRequestBuilderContext context)
+    public void Draw(MarketAcquisitionRequestBuilderContext context, bool showLifecycleSummary = true)
     {
         EnsureCharacterScope(context);
 
         ImGuiUi.SectionHeader("Local Request", MainWindow.ColHeader);
-        DrawStatusSummary(context);
-        ImGui.Spacing();
+        if (showLifecycleSummary)
+        {
+            DrawStatusSummary(context);
+            ImGui.Spacing();
+        }
+        else
+        {
+            ImGui.TextColored(GetSyncStatusColor(), FormatBuilderStatus(context));
+            if (pendingRemoteDocument is not null)
+                ImGui.TextColored(MainWindow.ColHeader, "Server copy changed. Review local lines, then load the server copy or save your local edits.");
+        }
         DrawRouteScope(context);
         ImGui.Spacing();
         DrawLineEditor(context);

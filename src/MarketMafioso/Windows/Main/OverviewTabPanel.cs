@@ -5,7 +5,7 @@ namespace MarketMafioso.Windows.Main;
 
 internal sealed class OverviewTabPanel
 {
-    private const string InventoryModuleSummary = "Inventory Reporter exports character and retainer inventory snapshots as JSON.";
+    private const string InventoryModuleSummary = "Inventory Reporter exports character and retainer inventory snapshots as JSON. Manual actions, capture scope, and scheduling live under Settings / Inventory Reporter.";
     private const string WorkshopLogisticsModuleSummary = "Workshop Logistics tracks company workshop jobs, materials, retainer restock, handoff, and assembly.";
     private const string MarketAcquisitionModuleSummary = "Build, sync, and monitor acquisition requests from one persistent board.";
 

@@ -12,6 +12,8 @@ internal sealed class WorkshopMaterialPanel
     private readonly AutoRetainerRefreshService autoRetainerRefresh;
     private readonly WorkshopRetainerRestockService workshopRetainerRestock;
     private readonly Func<IReadOnlyList<WorkshopMaterialAvailability>> getAvailability;
+    private string searchText = string.Empty;
+    private bool shortagesOnly;
 
     public WorkshopMaterialPanel(
         AutoRetainerRefreshService autoRetainerRefresh,
@@ -23,11 +25,22 @@ internal sealed class WorkshopMaterialPanel
         this.getAvailability = getAvailability ?? throw new ArgumentNullException(nameof(getAvailability));
     }
 
-    public void Draw()
+    public void Draw(IReadOnlyList<WorkshopMaterialAvailability>? availability = null)
     {
-        ImGuiUi.SectionHeaderWithActions("Materials", MarketMafiosoUiTheme.Header, DrawHeaderActions, 420);
+        ImGuiUi.SectionHeaderWithActions("Materials", MarketMafiosoUiTheme.Header, DrawHeaderActions, 332);
 
-        var availability = getAvailability();
+        availability ??= getAvailability();
+        ImGui.SetNextItemWidth(Math.Max(220f, ImGui.GetContentRegionAvail().X - 260f));
+        ImGui.InputTextWithHint("##workshopMaterialSearch", "Filter materials...", ref searchText, 128);
+        ImGui.SameLine();
+        ImGui.Checkbox("Shortages only", ref shortagesOnly);
+        var filtered = availability
+            .Where(item => (!shortagesOnly || item.Shortage > 0) &&
+                           (string.IsNullOrWhiteSpace(searchText) || item.ItemName.Contains(searchText.Trim(), StringComparison.OrdinalIgnoreCase)))
+            .ToList();
+        ImGui.SameLine();
+        ImGui.TextColored(MarketMafiosoUiTheme.Muted, $"{filtered.Count:N0} / {availability.Count:N0}");
+
         if (ImGui.BeginTable("WorkshopPrepMaterials", 7, ImGuiUi.InteractiveTableFlags))
         {
             ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.WidthStretch);
@@ -39,11 +52,15 @@ internal sealed class WorkshopMaterialPanel
             ImGui.TableSetupColumn("Candidates", ImGuiTableColumnFlags.WidthStretch | ImGuiTableColumnFlags.DefaultHide);
             ImGui.TableHeadersRow();
 
-            if (availability.Count == 0)
+            if (filtered.Count == 0)
             {
                 ImGui.TableNextRow();
                 ImGui.TableNextColumn();
-                ImGui.TextColored(MarketMafiosoUiTheme.Muted, "No workshop materials yet. Add projects to the prep queue.");
+                ImGui.TextColored(
+                    MarketMafiosoUiTheme.Muted,
+                    availability.Count == 0
+                        ? "No workshop materials yet. Add projects to the prep queue."
+                        : "No materials match the current filter.");
                 ImGui.TableNextColumn();
                 ImGui.TextColored(MarketMafiosoUiTheme.Muted, "-");
                 ImGui.TableNextColumn();
@@ -58,7 +75,7 @@ internal sealed class WorkshopMaterialPanel
                 ImGui.TextColored(MarketMafiosoUiTheme.Muted, "-");
             }
 
-            foreach (var item in availability)
+            foreach (var item in filtered)
             {
                 ImGui.TableNextRow();
                 ImGui.TableNextColumn();
@@ -94,15 +111,6 @@ internal sealed class WorkshopMaterialPanel
         if (ImGuiUi.Button("Restock From Retainers", !workshopRetainerRestock.IsRunning))
             _ = workshopRetainerRestock.StartAsync(getAvailability());
 
-        ImGui.SameLine();
-        if (ImGuiUi.MenuButton("Columns"))
-            ImGui.OpenPopup("WorkshopMaterialColumnsMenu");
-
-        if (ImGui.BeginPopup("WorkshopMaterialColumnsMenu"))
-        {
-            ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Use table header context menu to hide columns.");
-            ImGui.EndPopup();
-        }
     }
 
     private static string FormatSignedQuantity(int value)

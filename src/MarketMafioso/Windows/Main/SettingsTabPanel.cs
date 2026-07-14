@@ -21,6 +21,7 @@ internal sealed class SettingsTabPanel
     public SettingsTabPanel(
         Configuration config,
         HttpReporter reporter,
+        AutoRetainerRefreshService autoRetainerRefresh,
         IPluginLog log,
         Action stopMarketAcquisitionRoute,
         Action restartTimer,
@@ -39,7 +40,7 @@ internal sealed class SettingsTabPanel
         {
             new ServerConnectionSettingsPage(config, reporter, log).Descriptor,
         };
-        pages.AddRange(new InventoryReporterSettingsPages(config, restartTimer).Descriptors);
+        pages.AddRange(new InventoryReporterSettingsPages(config, restartTimer, reporter, autoRetainerRefresh).Descriptors);
         pages.AddRange(new SquireSettingsPages(config, playerState, dataManager, currentSquireAnalysis, reviewRegistry).Descriptors);
         pages.AddRange(new MarketAcquisitionSettingsPages(config).Descriptors);
         pages.AddRange(new AdvancedSettingsPages(config, stopMarketAcquisitionRoute).Descriptors);
