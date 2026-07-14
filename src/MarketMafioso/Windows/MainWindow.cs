@@ -572,7 +572,7 @@ public class MainWindow : Window, IDisposable
     private static bool IsAllowedWorkspaceView(string mainTab, string? workspaceView) =>
         workspaceView is null || (mainTab, workspaceView) switch
         {
-            ("Workshop Logistics", "Queue" or "Materials" or "Assembly") => true,
+            ("Workshop Logistics", "Combined" or "Queue" or "Materials" or "Assembly") => true,
             ("Restock", "Browse stock" or "Plan and run") => true,
             ("Market Acquisition", "Request" or "Plan" or "Route") => true,
             _ => false,
@@ -655,19 +655,50 @@ public class MainWindow : Window, IDisposable
                 new("Assembly", workshopAssemblyRunner.HasActiveRun ? progress.Message : "Idle", workshopAssemblyRunner.HasActiveRun ? ColHeader : ColMuted),
             ]);
         ImGui.TextColored(GetWorkshopStatusColor(), workshopStatus);
+        var splitWorkshopViews = config.SplitWorkshopQueueAndMaterials;
+        if (ImGui.Checkbox("Split queue and materials into separate tabs", ref splitWorkshopViews))
+            SetSplitWorkshopViews(splitWorkshopViews);
+        AgentReviewRegistry.Register(
+            "workshop-logistics.split-views",
+            "Split queue and materials into separate tabs",
+            AgentBridgeUiControlKind.Toggle,
+            ImGui.GetItemRectMin(),
+            ImGui.GetItemRectMax(),
+            true,
+            config.SplitWorkshopQueueAndMaterials,
+            config.SplitWorkshopQueueAndMaterials ? "Split" : "Combined",
+            () => SetSplitWorkshopViews(!config.SplitWorkshopQueueAndMaterials));
         ImGui.Spacing();
 
         if (!ImGui.BeginTabBar("##workshopLogisticsWorkspace"))
             return;
 
-        if (ImGui.BeginTabItem($"Queue ({config.WorkshopPrepQueue.Count})", GetAgentWorkspaceTabFlags("Queue")))
+        var useSplitViews = agentRequestedWorkspaceView switch
+        {
+            "Combined" => false,
+            "Queue" or "Materials" => true,
+            _ => config.SplitWorkshopQueueAndMaterials,
+        };
+
+        if (!useSplitViews && ImGui.BeginTabItem("Queue + Materials", GetAgentWorkspaceTabFlags("Combined")))
+        {
+            workshopPrepQueue.Draw(projects);
+            workshopPrepQueue.DrawConfirmations();
+            ImGui.Spacing();
+            ImGui.Separator();
+            ImGui.Spacing();
+            workshopMaterials.Draw(availability);
+            ImGui.EndTabItem();
+        }
+
+        if (useSplitViews && ImGui.BeginTabItem($"Queue ({config.WorkshopPrepQueue.Count})", GetAgentWorkspaceTabFlags("Queue")))
         {
             workshopPrepQueue.Draw(projects);
             workshopPrepQueue.DrawConfirmations();
             ImGui.EndTabItem();
         }
 
-        if (ImGui.BeginTabItem($"Materials ({availability.Count})", GetAgentWorkspaceTabFlags("Materials")))
+        if (useSplitViews && ImGui.BeginTabItem($"Materials ({availability.Count})", GetAgentWorkspaceTabFlags("Materials")))
         {
             workshopMaterials.Draw(availability);
             ImGui.EndTabItem();
@@ -680,6 +711,14 @@ public class MainWindow : Window, IDisposable
         }
 
         ImGui.EndTabBar();
+    }
+
+    private void SetSplitWorkshopViews(bool split)
+    {
+        if (config.SplitWorkshopQueueAndMaterials == split)
+            return;
+        config.SplitWorkshopQueueAndMaterials = split;
+        config.Save();
     }
 
     private void DrawRetainerRestockTab()

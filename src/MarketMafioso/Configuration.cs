@@ -67,6 +67,7 @@ public class Configuration : IPluginConfiguration
 
     public List<WorkshopPrepQueueItem> WorkshopPrepQueue { get; set; } = new();
     public List<WorkshopFrozenQueue> FrozenWorkshopQueues { get; set; } = new();
+    public bool SplitWorkshopQueueAndMaterials { get; set; }
     public List<RetainerRestockPlanItem> RetainerRestockPlanItems { get; set; } = new();
     public Guid? ActiveFrozenWorkshopQueueId { get; set; }
     public List<uint> FavoriteWorkshopProjectIds { get; set; } = new();
