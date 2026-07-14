@@ -80,6 +80,9 @@ internal static class SquireBridgeTruthFactory
                         SlotIndex = candidate.Instance.Fingerprint.SlotIndex,
                         EquipLevel = candidate.Definition.EquipLevel,
                         ItemLevel = candidate.Definition.ItemLevel,
+                        OwnedCopies = candidate.DuplicateStatus?.OwnedCopies ?? 1,
+                        ExplicitMinimumCopies = candidate.DuplicateStatus?.UserMinimumCopies ?? 0,
+                        EffectiveMinimumCopies = candidate.DuplicateStatus?.EffectiveMinimumCopies ?? 0,
                         RecommendedDisposition = candidate.RecommendedDisposition.ToString(),
                         ReasonCodes = candidate.Reasons.Select(reason => reason.Code).ToArray(),
                         JobComparisons = candidate.UseAnalysis?.Comparisons

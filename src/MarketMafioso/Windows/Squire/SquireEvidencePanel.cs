@@ -3,13 +3,19 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
+using Franthropy.Dalamud.AgentBridge;
 using Franthropy.Dalamud.Equipment;
+using MarketMafioso.AgentBridge;
 using MarketMafioso.Squire;
 using MarketMafioso.Windows.Main;
 
 namespace MarketMafioso.Windows.Squire;
 
-internal sealed class SquireEvidencePanel(SquireCleanupExclusionStore exclusionStore, Action refresh)
+internal sealed class SquireEvidencePanel(
+    SquireCleanupExclusionStore exclusionStore,
+    SquireDuplicateRetentionStore duplicateRetentionStore,
+    AgentBridgeUiReviewRegistry reviewRegistry,
+    Action refresh)
 {
     private uint? pendingExclusionRemovalItemId;
 
@@ -17,7 +23,8 @@ internal sealed class SquireEvidencePanel(SquireCleanupExclusionStore exclusionS
     {
         if (focusedItem is not { } fingerprint)
             return;
-        var candidate = analysis.Candidates.FirstOrDefault(value => value.Instance.Fingerprint == fingerprint);
+        var candidate = analysis.Candidates.FirstOrDefault(value =>
+            EquipmentInstanceFingerprintComparer.Instance.Equals(value.Instance.Fingerprint, fingerprint));
         if (candidate is null)
             return;
 
@@ -29,6 +36,7 @@ internal sealed class SquireEvidencePanel(SquireCleanupExclusionStore exclusionS
         DrawItemEvidence(candidate);
         DrawRuleEvidence(analysis, candidate);
         DrawJobComparisonEvidence(candidate);
+        DrawDuplicateRetentionControl(analysis, candidate);
         DrawExclusionControl(analysis, candidate);
     }
 
@@ -98,7 +106,7 @@ internal sealed class SquireEvidencePanel(SquireCleanupExclusionStore exclusionS
         var excluded = exclusionStore.Get(contentId).Contains(itemId);
         if (!excluded)
         {
-            if (ImGui.Button($"Exclude this item from cleanup##SquireExclude{itemId}"))
+            if (ImGui.Button($"Protect every copy of this item##SquireExclude{itemId}"))
             {
                 exclusionStore.Set(contentId, itemId, true);
                 refresh();
@@ -108,7 +116,7 @@ internal sealed class SquireEvidencePanel(SquireCleanupExclusionStore exclusionS
             return;
         }
 
-        if (ImGui.Button($"Allow this item in cleanup evaluation##SquireExclude{itemId}"))
+        if (ImGui.Button($"Stop protecting every copy##SquireExclude{itemId}"))
             pendingExclusionRemovalItemId = itemId;
         if (pendingExclusionRemovalItemId != itemId)
             return;
@@ -130,11 +138,12 @@ internal sealed class SquireEvidencePanel(SquireCleanupExclusionStore exclusionS
         var definition = candidate.Definition;
         var wearer = EquipmentWearerInference.Infer(definition);
         ImGui.TextColored(MarketMafiosoUiTheme.Header, "Item and cleanup route");
-        if (!ImGui.BeginTable("##SquireItemEvidence", 10, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.SizingStretchProp))
+        if (!ImGui.BeginTable("##SquireItemEvidence", 11, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.SizingStretchProp))
             return;
         ImGui.TableSetupColumn("Location");
         ImGui.TableSetupColumn("Rarity", ImGuiTableColumnFlags.WidthFixed, 75);
         ImGui.TableSetupColumn("Quality", ImGuiTableColumnFlags.WidthFixed, 55);
+        ImGui.TableSetupColumn("Copies", ImGuiTableColumnFlags.WidthFixed, 125);
         ImGui.TableSetupColumn("Equip Lv.", ImGuiTableColumnFlags.WidthFixed, 60);
         ImGui.TableSetupColumn("Item Lv.", ImGuiTableColumnFlags.WidthFixed, 60);
         ImGui.TableSetupColumn("Stats", ImGuiTableColumnFlags.WidthStretch, 1.5f);
@@ -147,6 +156,7 @@ internal sealed class SquireEvidencePanel(SquireCleanupExclusionStore exclusionS
         Cell(SquirePresentation.FormatLocation(fingerprint));
         Cell(definition.NormalizedRarity.ToString());
         Cell(fingerprint.IsHighQuality ? "HQ" : "NQ");
+        Cell(SquireCandidateTableProjection.FormatCopies(candidate));
         Cell(definition.EquipLevel.ToString());
         Cell(definition.ItemLevel.ToString());
         Cell(FormatEffectiveStats(candidate));
@@ -158,6 +168,122 @@ internal sealed class SquireEvidencePanel(SquireCleanupExclusionStore exclusionS
             : $"{SquirePresentation.FormatDisposition(candidate.RecommendedDisposition)} (supported: {string.Join(", ", candidate.SupportedDispositions.Order().Select(SquirePresentation.FormatDisposition))})");
         ImGui.EndTable();
     }
+
+    private void DrawDuplicateRetentionControl(SquireAnalysis analysis, SquireCandidate candidate)
+    {
+        if (candidate.DuplicateStatus is not { } status)
+            return;
+        var contentId = analysis.Snapshot.Identity.Scope?.LocalContentId;
+        var itemId = candidate.Definition.ItemId;
+        var isHighQuality = candidate.Instance.Fingerprint.IsHighQuality;
+        var quality = isHighQuality ? "HQ" : "normal quality";
+        ImGui.TextColored(MarketMafiosoUiTheme.Header, "Duplicate retention");
+        ImGui.TextWrapped($"This character owns {status.OwnedCopies} {quality} cop{(status.OwnedCopies == 1 ? "y" : "ies")}. The minimum is scoped to this character, item ID, and quality, so it survives inventory movement.");
+        if (ImGui.BeginTable("##SquireDuplicateRetentionEvidence", 5, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.SizingStretchProp))
+        {
+            ImGui.TableSetupColumn("Owned");
+            ImGui.TableSetupColumn("Explicit minimum");
+            ImGui.TableSetupColumn("Gearset minimum");
+            ImGui.TableSetupColumn("Effective floor");
+            ImGui.TableSetupColumn("Above floor");
+            ImGui.TableHeadersRow();
+            ImGui.TableNextRow();
+            Cell(status.OwnedCopies.ToString());
+            Cell(status.UserMinimumCopies.ToString());
+            Cell(status.GearsetRequiredCopies.ToString());
+            Cell(status.EffectiveMinimumCopies.ToString());
+            Cell(status.CopiesAboveFloor.ToString());
+            ImGui.EndTable();
+        }
+
+        var minimum = duplicateRetentionStore.Get(contentId, itemId, isHighQuality);
+        ImGui.SetNextItemWidth(ImGui.GetFontSize() * 8);
+        if (ImGui.InputInt($"Minimum copies to keep##SquireDuplicateMinimum{itemId}{isHighQuality}", ref minimum))
+        {
+            duplicateRetentionStore.Set(contentId, itemId, isHighQuality, Math.Clamp(minimum, 0, 99));
+            refresh();
+        }
+        ImGui.SameLine();
+        if (ImGui.Button($"-##SquireDuplicateDecrease{itemId}{isHighQuality}"))
+        {
+            duplicateRetentionStore.Set(contentId, itemId, isHighQuality, Math.Max(0, minimum - 1));
+            refresh();
+        }
+        RegisterLastControl(
+            "squire.duplicate.decrease",
+            $"Decrease the retained-copy minimum for {candidate.Definition.Name}",
+            minimum > 0,
+            minimum.ToString(),
+            () =>
+            {
+                duplicateRetentionStore.Set(contentId, itemId, isHighQuality, Math.Max(0, minimum - 1));
+                refresh();
+            });
+        ImGui.SameLine();
+        if (ImGui.Button($"+##SquireDuplicateIncrease{itemId}{isHighQuality}"))
+        {
+            duplicateRetentionStore.Set(contentId, itemId, isHighQuality, Math.Min(99, minimum + 1));
+            refresh();
+        }
+        RegisterLastControl(
+            "squire.duplicate.increase",
+            $"Increase the retained-copy minimum for {candidate.Definition.Name}",
+            minimum < 99,
+            minimum.ToString(),
+            () =>
+            {
+                duplicateRetentionStore.Set(contentId, itemId, isHighQuality, Math.Min(99, minimum + 1));
+                refresh();
+            });
+        if (ImGui.Button($"Keep all {status.OwnedCopies} current copies##SquireDuplicateKeepAll{itemId}{isHighQuality}"))
+        {
+            duplicateRetentionStore.Set(contentId, itemId, isHighQuality, status.OwnedCopies);
+            refresh();
+        }
+        RegisterLastControl(
+            "squire.duplicate.keep-all",
+            $"Keep all current {quality} copies of {candidate.Definition.Name}",
+            true,
+            status.OwnedCopies.ToString(),
+            () =>
+            {
+                duplicateRetentionStore.Set(contentId, itemId, isHighQuality, status.OwnedCopies);
+                refresh();
+            });
+        if (minimum > 0)
+        {
+            ImGui.SameLine();
+            if (ImGui.Button($"Clear explicit minimum##SquireDuplicateClear{itemId}{isHighQuality}"))
+            {
+                duplicateRetentionStore.Set(contentId, itemId, isHighQuality, 0);
+                refresh();
+            }
+            RegisterLastControl(
+                "squire.duplicate.clear",
+                $"Clear the retained-copy minimum for {candidate.Definition.Name}",
+                true,
+                minimum.ToString(),
+                () =>
+                {
+                    duplicateRetentionStore.Set(contentId, itemId, isHighQuality, 0);
+                    refresh();
+                });
+        }
+        ImGui.TextColored(MarketMafiosoUiTheme.Muted,
+            "Saved gearsets and other protections still apply. Squire counts copies currently owned by this character; copies already transferred to retainers are outside this floor.");
+    }
+
+    private void RegisterLastControl(string id, string label, bool enabled, string? value, Action invoke) =>
+        reviewRegistry.Register(
+            id,
+            label,
+            AgentBridgeUiControlKind.Button,
+            ImGui.GetItemRectMin(),
+            ImGui.GetItemRectMax(),
+            enabled,
+            false,
+            value,
+            invoke);
 
     private static string FormatEffectiveStats(SquireCandidate candidate)
     {
@@ -272,6 +398,7 @@ internal sealed class SquireEvidencePanel(SquireCleanupExclusionStore exclusionS
         "MateriaRetrievalNotUnlocked" or "MateriaRetrievalUnlockUnknown" or "MateriaRetrievalRiskNotAuthorized" => "Materia protection",
         "DesynthesisNotUnlocked" => "Limits route",
         "HighRarityProtectionDisabled" => "Policy note",
+        "DuplicateRetentionSurplus" => "Policy note",
         _ => reason.Severity switch
         {
             SquireReasonSeverity.Blocking => "Protects item",
@@ -298,6 +425,8 @@ internal sealed class SquireEvidencePanel(SquireCleanupExclusionStore exclusionS
             "HighRarityEquipment" => $"The item is {candidate.Definition.NormalizedRarity}, and the default-on blue and purple gear protection setting is enabled.",
             "HighRarityProtectionDisabled" => $"The item is {candidate.Definition.NormalizedRarity}, but blue and purple gear protection is disabled. Other protections and the cleanup exclusion list still apply.",
             "CleanupExcluded" => $"Item {candidate.Definition.ItemId} is persistently excluded from cleanup for this character.",
+            "DuplicateRetentionFloor" or "DuplicateRetentionSurplus" when candidate.DuplicateStatus is { } duplicate =>
+                $"Owned {duplicate.OwnedCopies}; explicit minimum {duplicate.UserMinimumCopies}; saved-gearset minimum {duplicate.GearsetRequiredCopies}; effective floor {duplicate.EffectiveMinimumCopies}; copies above floor {duplicate.CopiesAboveFloor}.",
             "DesynthesisNotUnlocked" => $"Desynthesis is absent from the supported routes; current authorized routes: {string.Join(", ", candidate.SupportedDispositions.Order().Select(SquirePresentation.FormatDisposition))}.",
             "StatlessAllClassesEquipment" => "The all-class item has no primary, crafting, or gathering attributes that identify a functional wearer; incidental defense does not make it leveling gear.",
             "SpecialPurposeEquipment" => "The item carries a game-defined special bonus, action, or otherwise non-comparable utility attribute, so ordinary stat dominance cannot authorize cleanup.",

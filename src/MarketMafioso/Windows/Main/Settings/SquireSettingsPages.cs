@@ -26,7 +26,9 @@ internal sealed class SquireSettingsPages
                 searchTerms: ["player-signed", "future job leveling", "blue purple rarity", "materia retrieval risk"]),
             new("squire.exclusions", "Squire / Cleanup Exclusions", DrawExclusions, 21,
                 searchTerms: ["blacklist", "whitelist", "excluded items", "character protection", "allow cleanup"]),
-            new("squire.recovery", "Squire / Execution Recovery", DrawRecovery, 22,
+            new("squire.duplicates", "Squire / Duplicate Retention", DrawDuplicateRetention, 22,
+                searchTerms: ["duplicates", "copies", "minimum", "retainers", "hand me down", "reserve"]),
+            new("squire.recovery", "Squire / Execution Recovery", DrawRecovery, 23,
                 searchTerms: ["knocked out", "combat", "duty", "GatherBuddy", "Questionable", "Artisan", "menus", "pause automation"]),
         ];
     }
@@ -124,6 +126,53 @@ internal sealed class SquireSettingsPages
         DrawCheckbox(context, "Close compatible user menus",
             "Default on. Squire closes known ordinary menus through their normal UI callbacks, but never accepts an unrelated confirmation or dismisses an unknown modal.",
             () => config.Squire.CloseSafeUserMenus, value => config.Squire.CloseSafeUserMenus = value);
+    }
+
+    private void DrawDuplicateRetention(SettingsPageContext context)
+    {
+        if (!playerState.IsLoaded || playerState.ContentId == 0)
+        {
+            ImGui.TextColored(MarketMafiosoUiTheme.Warning, "Log into a character to review that character's duplicate retention rules.");
+            return;
+        }
+
+        var key = playerState.ContentId.ToString();
+        if (!config.Squire.DuplicateRetentionByCharacter.TryGetValue(key, out var rules) || rules.Count == 0)
+        {
+            ImGui.TextColored(MarketMafiosoUiTheme.Muted, $"{playerState.CharacterName} has no explicit duplicate retention rules.");
+            ImGui.TextWrapped("Set a minimum from an item's Squire detail panel when copies are being held for later retainer hand-me-downs.");
+            return;
+        }
+
+        ImGui.TextWrapped("Each rule keeps a minimum number of copies on this character for one item ID and quality. Saved gearsets and all other Squire protections remain independent.");
+        foreach (var rule in rules
+                     .Where(value => value.ItemId != 0 && value.MinimumCopies > 0)
+                     .OrderBy(value => ResolveItemName(value.ItemId), StringComparer.OrdinalIgnoreCase)
+                     .ThenBy(value => value.IsHighQuality)
+                     .ToArray())
+        {
+            ImGui.PushID($"{rule.ItemId}:{rule.IsHighQuality}");
+            ImGui.TextUnformatted($"{ResolveItemName(rule.ItemId)} ({(rule.IsHighQuality ? "HQ" : "normal quality")})");
+            ImGui.SameLine();
+            var minimum = rule.MinimumCopies;
+            ImGui.SetNextItemWidth(ImGui.GetFontSize() * 6);
+            if (ImGui.InputInt("Minimum", ref minimum))
+            {
+                minimum = Math.Clamp(minimum, 0, 99);
+                if (minimum == 0)
+                    rules.Remove(rule);
+                else
+                    rule.MinimumCopies = minimum;
+                config.Save();
+            }
+            ImGui.SameLine();
+            if (ImGui.Button("Remove"))
+            {
+                rules.Remove(rule);
+                config.Save();
+            }
+            ImGui.PopID();
+        }
     }
 
     private string ResolveItemName(uint itemId)

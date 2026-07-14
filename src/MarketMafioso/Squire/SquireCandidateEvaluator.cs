@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using Franthropy.Dalamud.Characters;
@@ -19,7 +20,10 @@ public sealed class SquireCandidateEvaluator
         protectionPolicy ??= new SquireProtectionPolicy();
         var gearsetProtection = GearsetProtectionIndex.Create(snapshot.Gearsets);
         var candidates = snapshot.Instances
-            .Select(instance => EvaluateInstance(snapshot, instance, gearsetProtection, capabilities, protectionPolicy))
+            .Select(instance => EvaluateInstance(snapshot, instance, gearsetProtection, capabilities, protectionPolicy) with
+            {
+                DuplicateStatus = CreateDuplicateStatus(snapshot, instance, gearsetProtection, protectionPolicy),
+            })
             .ToArray();
         return new SquireAnalysis(snapshot, candidates);
     }
@@ -148,6 +152,21 @@ public sealed class SquireCandidateEvaluator
         var exactQualityCount = snapshot.Instances.Count(value =>
             value.Fingerprint.ItemId == definition.ItemId &&
             value.Fingerprint.IsHighQuality == instance.Fingerprint.IsHighQuality);
+        var duplicateMinimum = protectionPolicy.MinimumCopiesToKeep(definition.ItemId, instance.Fingerprint.IsHighQuality);
+        if (duplicateMinimum > 0)
+        {
+            var quality = instance.Fingerprint.IsHighQuality ? "HQ" : "normal-quality";
+            if (exactQualityCount <= duplicateMinimum)
+                reasons.Add(new(
+                    "DuplicateRetentionFloor",
+                    $"This character owns {exactQualityCount} {quality} cop{(exactQualityCount == 1 ? "y" : "ies")}; the explicit duplicate rule keeps at least {duplicateMinimum}.",
+                    SquireReasonSeverity.Blocking));
+            else
+                reasons.Add(new(
+                    "DuplicateRetentionSurplus",
+                    $"This character owns {exactQualityCount} {quality} copies and keeps at least {duplicateMinimum}; at most {exactQualityCount - duplicateMinimum} may be removed from the complete batch.",
+                    SquireReasonSeverity.Information));
+        }
         if (gearsetProtection.IsProtected(definition.ItemId, instance.Fingerprint.IsHighQuality, exactQualityCount))
             reasons.Add(new("ReferencedByGearset", "An existing valid gearset references this item ID.", SquireReasonSeverity.Blocking));
         if (!definition.IsEquipment)
@@ -186,6 +205,21 @@ public sealed class SquireCandidateEvaluator
         if (definition.IsRecoverable is null)
             reasons.Add(new("RecoverabilityUnknown", "Recoverability is unknown.", SquireReasonSeverity.Blocking));
         return reasons;
+    }
+
+    private static SquireDuplicateStatus CreateDuplicateStatus(
+        CharacterEquipmentSnapshot snapshot,
+        EquipmentInstanceSnapshot instance,
+        GearsetProtectionIndex gearsetProtection,
+        SquireProtectionPolicy protectionPolicy)
+    {
+        var owned = snapshot.Instances.Count(value =>
+            value.Fingerprint.ItemId == instance.Fingerprint.ItemId &&
+            value.Fingerprint.IsHighQuality == instance.Fingerprint.IsHighQuality);
+        return new SquireDuplicateStatus(
+            owned,
+            protectionPolicy.MinimumCopiesToKeep(instance.Fingerprint.ItemId, instance.Fingerprint.IsHighQuality),
+            gearsetProtection.RequiredCount(instance.Fingerprint.ItemId, instance.Fingerprint.IsHighQuality));
     }
 
     private static SquireReason UseReason(EquipmentUseAnalysis analysis) => analysis.Status switch

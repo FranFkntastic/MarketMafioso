@@ -9,7 +9,7 @@ namespace MarketMafioso.Windows.Squire;
 
 internal static class SquireCandidateTableProjection
 {
-    public const int ColumnCount = 14;
+    public const int ColumnCount = 15;
 
     public static SquireCandidate[] Filter(IEnumerable<SquireCandidate> rows, IReadOnlyList<string> filters) =>
         Filter(rows, filters, null);
@@ -29,14 +29,15 @@ internal static class SquireCandidateTableProjection
             Matches(candidate.Definition.ItemLevel.ToString(), filters[3]) &&
             Matches(FormatRarity(candidate.Definition.NormalizedRarity), filters[4]) &&
             Matches(candidate.Instance.Fingerprint.IsHighQuality ? "HQ" : "Normal", filters[5]) &&
-            Matches(candidate.Instance.Fingerprint.MateriaIds.Count.ToString(), filters[6]) &&
-            Matches(FormatCondition(candidate.Instance.Fingerprint.Condition), filters[7]) &&
-            Matches(EquipmentWearerInference.Infer(candidate.Definition).Label, filters[8]) &&
-            Matches(SquirePresentation.FormatAssessment(candidate.Assessment), filters[9]) &&
-            Matches(SquirePresentation.FormatDisposition(candidate.RecommendedDisposition), filters[10]) &&
-            Matches(rowState?.Invoke(candidate) ?? string.Empty, filters[11]) &&
-            Matches(SquirePresentation.FormatReasons(candidate), filters[12]) &&
-            Matches(candidate.Definition.ItemId.ToString(), filters[13])).ToArray();
+            Matches(FormatCopies(candidate), filters[6]) &&
+            Matches(candidate.Instance.Fingerprint.MateriaIds.Count.ToString(), filters[7]) &&
+            Matches(FormatCondition(candidate.Instance.Fingerprint.Condition), filters[8]) &&
+            Matches(EquipmentWearerInference.Infer(candidate.Definition).Label, filters[9]) &&
+            Matches(SquirePresentation.FormatAssessment(candidate.Assessment), filters[10]) &&
+            Matches(SquirePresentation.FormatDisposition(candidate.RecommendedDisposition), filters[11]) &&
+            Matches(rowState?.Invoke(candidate) ?? string.Empty, filters[12]) &&
+            Matches(SquirePresentation.FormatReasons(candidate), filters[13]) &&
+            Matches(candidate.Definition.ItemId.ToString(), filters[14])).ToArray();
     }
 
     public static SquireCandidate[] Sort(SquireCandidate[] rows, ImGuiTableSortSpecsPtr sortSpecs)
@@ -58,15 +59,16 @@ internal static class SquireCandidateTableProjection
             3 => SortBy(rows, candidate => candidate.Definition.ItemLevel, spec.SortDirection),
             4 => SortBy(rows, candidate => candidate.Definition.NormalizedRarity, spec.SortDirection),
             5 => SortBy(rows, candidate => candidate.Instance.Fingerprint.IsHighQuality, spec.SortDirection),
-            6 => SortBy(rows, candidate => candidate.Instance.Fingerprint.MateriaIds.Count, spec.SortDirection),
-            7 => SortBy(rows, candidate => candidate.Instance.Fingerprint.Condition, spec.SortDirection),
-            8 => SortBy(rows, candidate => EquipmentWearerInference.Infer(candidate.Definition).Label, spec.SortDirection),
-            9 => SortBy(rows, candidate => SquirePresentation.FormatAssessment(candidate.Assessment), spec.SortDirection),
-            10 => SortBy(rows, candidate => SquirePresentation.FormatDisposition(candidate.RecommendedDisposition), spec.SortDirection),
-            11 when rowState is not null => SortBy(rows, rowState, spec.SortDirection),
-            11 => rows,
-            12 => SortBy(rows, SquirePresentation.FormatReasons, spec.SortDirection),
-            13 => SortBy(rows, candidate => candidate.Definition.ItemId, spec.SortDirection),
+            6 => SortBy(rows, candidate => candidate.DuplicateStatus?.OwnedCopies ?? 1, spec.SortDirection),
+            7 => SortBy(rows, candidate => candidate.Instance.Fingerprint.MateriaIds.Count, spec.SortDirection),
+            8 => SortBy(rows, candidate => candidate.Instance.Fingerprint.Condition, spec.SortDirection),
+            9 => SortBy(rows, candidate => EquipmentWearerInference.Infer(candidate.Definition).Label, spec.SortDirection),
+            10 => SortBy(rows, candidate => SquirePresentation.FormatAssessment(candidate.Assessment), spec.SortDirection),
+            11 => SortBy(rows, candidate => SquirePresentation.FormatDisposition(candidate.RecommendedDisposition), spec.SortDirection),
+            12 when rowState is not null => SortBy(rows, rowState, spec.SortDirection),
+            12 => rows,
+            13 => SortBy(rows, SquirePresentation.FormatReasons, spec.SortDirection),
+            14 => SortBy(rows, candidate => candidate.Definition.ItemId, spec.SortDirection),
             _ => rows,
         };
     }
@@ -81,6 +83,14 @@ internal static class SquireCandidateTableProjection
     };
 
     public static string FormatCondition(ushort condition) => $"{condition / 300f:0.#}%";
+
+    public static string FormatCopies(SquireCandidate candidate)
+    {
+        var status = candidate.DuplicateStatus;
+        return status is null
+            ? "1 owned"
+            : $"{status.OwnedCopies} owned / keep {status.EffectiveMinimumCopies}";
+    }
 
     private static bool Matches(string value, string filter) =>
         string.IsNullOrWhiteSpace(filter) || value.Contains(filter.Trim(), StringComparison.OrdinalIgnoreCase);

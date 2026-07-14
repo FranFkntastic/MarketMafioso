@@ -232,12 +232,19 @@ public class MainWindow : Window, IDisposable
                     var exclusions = contentId is not null && config.Squire.ExcludedItemIdsByCharacter.TryGetValue(contentId, out var values)
                         ? values.ToHashSet()
                         : new HashSet<uint>();
+                    var duplicateRules = contentId is not null && config.Squire.DuplicateRetentionByCharacter.TryGetValue(contentId, out var configuredDuplicates)
+                        ? configuredDuplicates
+                            .Where(value => value.ItemId != 0 && value.MinimumCopies > 0)
+                            .Select(value => new SquireDuplicateRetentionRule(value.ItemId, value.IsHighQuality, value.MinimumCopies))
+                            .ToArray()
+                        : [];
                     return new SquireProtectionPolicy(
                         config.Squire.ProtectPlayerSignedGear,
                         config.Squire.ProtectFutureLevelingGearOptIn,
                         config.Squire.ProtectBlueAndPurpleGear,
                         exclusions,
-                        config.Squire.AllowRiskyMateriaRetrieval);
+                        config.Squire.AllowRiskyMateriaRetrieval,
+                        duplicateRules);
                 },
                 () => SquireExecutionRecoveryPolicy.From(config.Squire),
                 () =>

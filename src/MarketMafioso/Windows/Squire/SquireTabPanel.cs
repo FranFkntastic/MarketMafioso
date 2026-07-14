@@ -29,6 +29,7 @@ internal sealed class SquireTabPanel : IDisposable
     private readonly SquireCounterfactualBatchValidator batchValidator = new();
     private readonly SquireReviewState review = new();
     private readonly SquireCleanupExclusionStore exclusionStore;
+    private readonly SquireDuplicateRetentionStore duplicateRetentionStore;
     private readonly SquireEvidencePanel evidencePanel;
     private readonly SquireRouteDiagnosticsPanel routeDiagnosticsPanel;
     private readonly SquireRunResultPanel runResultPanel = new();
@@ -77,7 +78,8 @@ internal sealed class SquireTabPanel : IDisposable
         this.diagnosticDirectory = diagnosticDirectory;
         this.uiStateCapture = uiStateCapture;
         exclusionStore = new SquireCleanupExclusionStore(config);
-        evidencePanel = new SquireEvidencePanel(exclusionStore, Refresh);
+        duplicateRetentionStore = new SquireDuplicateRetentionStore(config);
+        evidencePanel = new SquireEvidencePanel(exclusionStore, duplicateRetentionStore, reviewRegistry, Refresh);
         routeDiagnosticsPanel = new SquireRouteDiagnosticsPanel(actionAdapter, reviewRegistry, uiStateCapture);
         search = config.Squire.Search;
         showProtected = config.Squire.ShowProtected;
@@ -298,6 +300,7 @@ internal sealed class SquireTabPanel : IDisposable
         ImGui.TableSetupColumn("Item Lv", ImGuiTableColumnFlags.WidthFixed | ImGuiTableColumnFlags.PreferSortDescending, 60);
         ImGui.TableSetupColumn("Rarity", ImGuiTableColumnFlags.WidthFixed | ImGuiTableColumnFlags.DefaultHide, 105);
         ImGui.TableSetupColumn("Quality", ImGuiTableColumnFlags.WidthFixed | ImGuiTableColumnFlags.DefaultHide, 65);
+        ImGui.TableSetupColumn("Copies", ImGuiTableColumnFlags.WidthFixed, 125);
         ImGui.TableSetupColumn("Materia", ImGuiTableColumnFlags.WidthFixed | ImGuiTableColumnFlags.DefaultHide, 65);
         ImGui.TableSetupColumn("Condition", ImGuiTableColumnFlags.WidthFixed | ImGuiTableColumnFlags.DefaultHide, 75);
         ImGui.TableSetupColumn("Inferred wearer", ImGuiTableColumnFlags.WidthFixed, 110);
@@ -341,7 +344,7 @@ internal sealed class SquireTabPanel : IDisposable
                 $"Inspect {candidate.Definition.Name}",
                 AgentBridgeUiControlKind.Button,
                 true,
-                focusedItem == fingerprint,
+                focusedItem is { } focused && EquipmentInstanceFingerprintComparer.Instance.Equals(focused, fingerprint),
                 FormatAssessment(candidate.Assessment),
                 () => focusedItem = fingerprint);
             if (candidate.IsExecutable)
@@ -384,6 +387,9 @@ internal sealed class SquireTabPanel : IDisposable
             Cell(candidate.Definition.ItemLevel.ToString());
             Cell(SquireCandidateTableProjection.FormatRarity(candidate.Definition.NormalizedRarity));
             Cell(candidate.Instance.Fingerprint.IsHighQuality ? "HQ" : "Normal");
+            Cell(SquireCandidateTableProjection.FormatCopies(candidate));
+            if (ImGui.IsItemHovered() && candidate.DuplicateStatus is { } duplicate)
+                ImGui.SetTooltip($"Owned: {duplicate.OwnedCopies}\nExplicit minimum: {duplicate.UserMinimumCopies}\nSaved-gearset minimum: {duplicate.GearsetRequiredCopies}\nEffective minimum: {duplicate.EffectiveMinimumCopies}\nCopies above this floor: {duplicate.CopiesAboveFloor}");
             Cell(candidate.Instance.Fingerprint.MateriaIds.Count.ToString());
             Cell(SquireCandidateTableProjection.FormatCondition(candidate.Instance.Fingerprint.Condition));
             var wearer = EquipmentWearerInference.Infer(candidate.Definition);
@@ -442,7 +448,7 @@ internal sealed class SquireTabPanel : IDisposable
             return "Cleanup batch";
         if (tableSelection.Contains(fingerprint))
             return candidate.IsExecutable ? "Inspected" : "Inspection only";
-        return focusedItem == fingerprint ? "Focused" : "—";
+        return focusedItem is { } focused && EquipmentInstanceFingerprintComparer.Instance.Equals(focused, fingerprint) ? "Focused" : "—";
     }
 
     private void HandleRowInteraction(SquireAnalysis analysis, SquireCandidate[] rows, int rowIndex, SquireCandidate candidate)
@@ -455,7 +461,8 @@ internal sealed class SquireTabPanel : IDisposable
                 var io = ImGui.GetIO();
                 if (io.KeyShift && selectionAnchor is { } anchor)
                 {
-                    var anchorIndex = Array.FindIndex(rows, row => row.Instance.Fingerprint == anchor);
+                    var anchorIndex = Array.FindIndex(rows, row =>
+                        EquipmentInstanceFingerprintComparer.Instance.Equals(row.Instance.Fingerprint, anchor));
                     if (anchorIndex >= 0)
                     {
                         if (!io.KeyCtrl)
@@ -542,7 +549,8 @@ internal sealed class SquireTabPanel : IDisposable
         config.Squire.ProtectFutureLevelingGearOptIn,
         config.Squire.ProtectBlueAndPurpleGear,
         exclusionStore.Get(contentId),
-        config.Squire.AllowRiskyMateriaRetrieval);
+        config.Squire.AllowRiskyMateriaRetrieval,
+        duplicateRetentionStore.Get(contentId));
 
     internal static SquireCandidate[] SortCandidates(SquireCandidate[] rows, ImGuiTableSortSpecsPtr sortSpecs) =>
         SquireCandidateTableProjection.Sort(rows, sortSpecs);
@@ -694,7 +702,11 @@ internal sealed class SquireTabPanel : IDisposable
         var exclusionKey = policy.CleanupExcludedItemIds is { } excluded
             ? string.Join(",", excluded.Order())
             : string.Empty;
-        var key = $"{value.Snapshot.GenerationId}|signed={policy.ProtectSignedGear}|future={policy.ProtectFutureLevelingGear}|rarity={policy.ProtectBlueAndPurpleGear}|materiaRisk={policy.AllowRiskyMateriaRetrieval}|excluded={exclusionKey}|desynth={capabilities.DesynthesisUnlocked}|materiaUnlock={capabilities.MateriaRetrievalUnlocked}|" + string.Join(";", selections
+        var duplicateKey = string.Join(",", policy.DuplicateRetentionRules?
+            .OrderBy(rule => rule.ItemId)
+            .ThenBy(rule => rule.IsHighQuality)
+            .Select(rule => $"{rule.ItemId}:{rule.IsHighQuality}:{rule.MinimumCopies}") ?? []);
+        var key = $"{value.Snapshot.GenerationId}|signed={policy.ProtectSignedGear}|future={policy.ProtectFutureLevelingGear}|rarity={policy.ProtectBlueAndPurpleGear}|materiaRisk={policy.AllowRiskyMateriaRetrieval}|excluded={exclusionKey}|duplicates={duplicateKey}|desynth={capabilities.DesynthesisUnlocked}|materiaUnlock={capabilities.MateriaRetrievalUnlocked}|" + string.Join(";", selections
             .OrderBy(pair => pair.Key.Container, StringComparer.Ordinal)
             .ThenBy(pair => pair.Key.SlotIndex)
             .Select(pair => $"{pair.Key.Container}:{pair.Key.SlotIndex}:{pair.Key.ItemId}:{pair.Value}"));

@@ -81,6 +81,7 @@ public sealed class SquireConfiguration
     public bool ShowNonEquipment { get; set; }
     public string Search { get; set; } = string.Empty;
     public Dictionary<string, List<uint>> ExcludedItemIdsByCharacter { get; set; } = new();
+    public Dictionary<string, List<SquireDuplicateRetentionConfiguration>> DuplicateRetentionByCharacter { get; set; } = new();
     [Obsolete("Per-item high-rarity cleanup authorization has been replaced by the blue/purple protection toggle and cleanup exclusions.")]
     public Dictionary<string, List<uint>> HighRarityCleanupItemIdsByCharacter { get; set; } = new();
     public bool ProtectBlueAndPurpleGear { get; set; } = true;
@@ -98,6 +99,14 @@ public sealed class SquireConfiguration
     public bool PauseQuestionable { get; set; } = true;
     public bool PauseArtisan { get; set; } = true;
     public bool CloseSafeUserMenus { get; set; } = true;
+}
+
+[Serializable]
+public sealed class SquireDuplicateRetentionConfiguration
+{
+    public uint ItemId { get; set; }
+    public bool IsHighQuality { get; set; }
+    public int MinimumCopies { get; set; }
 }
 
 [Serializable]

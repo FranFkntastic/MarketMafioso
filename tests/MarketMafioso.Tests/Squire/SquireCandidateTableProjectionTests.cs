@@ -23,9 +23,10 @@ public sealed class SquireCandidateTableProjectionTests
         var filters = new string[SquireCandidateTableProjection.ColumnCount];
         filters[4] = "blue";
         filters[5] = "HQ";
-        filters[6] = "2";
-        filters[7] = "50%";
-        filters[13] = "12345";
+        filters[6] = "3 owned";
+        filters[7] = "2";
+        filters[8] = "50%";
+        filters[14] = "12345";
 
         Assert.Single(SquireCandidateTableProjection.Filter([candidate], filters, _ => "Cleanup batch"));
 
@@ -75,6 +76,7 @@ public sealed class SquireCandidateTableProjectionTests
             SquireDisposition.Desynthesize,
             new HashSet<SquireDisposition> { SquireDisposition.Desynthesize },
             [new SquireReason("StrictlyWorseForAllUnlockedJobs", "A trusted baseline dominates this item.", SquireReasonSeverity.Information)],
-            null);
+            null,
+            new SquireDuplicateStatus(3, 2, 1));
     }
 }

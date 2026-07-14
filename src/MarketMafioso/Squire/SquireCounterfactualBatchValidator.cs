@@ -45,6 +45,8 @@ public sealed class SquireCounterfactualBatchValidator
         var retained = snapshot.Instances.Where(instance => !removed.Contains(instance.Fingerprint)).ToArray();
         if (!GearsetProtectionIndex.Create(snapshot.Gearsets).DoesNotReduceRequiredMultiplicity(snapshot.Instances, retained))
             return SquireBatchValidationResult.Fail("GearsetMultiplicityLost", "The selected batch would remove an item instance required by a valid saved gearset.");
+        if (!SquireDuplicateRetention.DoesNotReduceRequiredMultiplicity(snapshot.Instances, retained, policy, out var duplicateMessage))
+            return SquireBatchValidationResult.Fail("DuplicateRetentionFloorLost", duplicateMessage);
         var analyses = new Dictionary<EquipmentInstanceFingerprint, EquipmentUseAnalysis>(EquipmentInstanceFingerprintComparer.Instance);
         foreach (var removal in removals)
         {

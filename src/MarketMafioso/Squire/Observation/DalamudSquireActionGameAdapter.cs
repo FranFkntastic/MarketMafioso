@@ -184,6 +184,9 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
             value.Fingerprint.IsHighQuality == fingerprint.IsHighQuality);
         if (GearsetProtectionIndex.Create(snapshot.Gearsets).IsProtected(fingerprint.ItemId, fingerprint.IsHighQuality, exactQualityCount))
             return SquireRevalidationResult.Fail("ReferencedByGearset", "A valid gearset now references this item ID.");
+        var duplicateMinimum = currentPolicy().MinimumCopiesToKeep(fingerprint.ItemId, fingerprint.IsHighQuality);
+        if (duplicateMinimum > 0 && exactQualityCount <= duplicateMinimum)
+            return SquireRevalidationResult.Fail("DuplicateRetentionFloor", $"Removing this copy would cross the character's minimum of {duplicateMinimum} retained copies.");
         if (!snapshot.Definitions.TryGetValue(fingerprint.ItemId, out var definition))
             return SquireRevalidationResult.Fail("ItemDefinitionMissing", "The item definition is unavailable.");
         if (disposition == SquireDisposition.Desynthesize && capabilitySource.Capture().DesynthesisUnlocked != true)
@@ -212,7 +215,8 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
             (approvedPolicy.CleanupExcludedItemIds ?? new HashSet<uint>())
                 .Union(livePolicy.CleanupExcludedItemIds ?? new HashSet<uint>())
                 .ToHashSet(),
-            approvedPolicy.AllowRiskyMateriaRetrieval && livePolicy.AllowRiskyMateriaRetrieval);
+            approvedPolicy.AllowRiskyMateriaRetrieval && livePolicy.AllowRiskyMateriaRetrieval,
+            SquireDuplicateRetention.Merge(approvedPolicy.DuplicateRetentionRules, livePolicy.DuplicateRetentionRules));
         var result = new SquireCounterfactualBatchValidator().Validate(
             snapshot,
             removals,

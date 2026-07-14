@@ -54,6 +54,9 @@ public sealed record AgentBridgeSquireCandidateTruth
     public required int SlotIndex { get; init; }
     public required uint EquipLevel { get; init; }
     public required uint ItemLevel { get; init; }
+    public required int OwnedCopies { get; init; }
+    public required int ExplicitMinimumCopies { get; init; }
+    public required int EffectiveMinimumCopies { get; init; }
     public required string RecommendedDisposition { get; init; }
     public required IReadOnlyList<string> ReasonCodes { get; init; }
     public required IReadOnlyList<string> JobComparisons { get; init; }

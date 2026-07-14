@@ -187,6 +187,104 @@ public sealed class SquireCandidateEvaluatorTests
     }
 
     [Fact]
+    public void ExplicitDuplicateMinimum_ProtectsCopiesAtTheConfiguredFloor()
+    {
+        var snapshot = Snapshot(
+            [Instance(100, slot: 1), Instance(100, slot: 2), Instance(200, slot: 3)],
+            [Definition(100, 20), Definition(200, 30)],
+            [Job(1, 50, true)],
+            []);
+        var policy = new SquireProtectionPolicy(DuplicateRetentionRules: [new(100, false, 2)]);
+
+        var copies = evaluator.Evaluate(snapshot, DesynthesisUnlocked, policy).Candidates
+            .Where(candidate => candidate.Definition.ItemId == 100)
+            .ToArray();
+
+        Assert.Equal(2, copies.Length);
+        Assert.All(copies, candidate =>
+        {
+            Assert.Equal(SquireAssessment.Protected, candidate.Assessment);
+            Assert.Contains(candidate.Reasons, reason => reason.Code == "DuplicateRetentionFloor");
+            Assert.Equal(new SquireDuplicateStatus(2, 2, 0), candidate.DuplicateStatus);
+        });
+    }
+
+    [Fact]
+    public void ExplicitDuplicateMinimum_AllowsOnlyCopiesAboveTheFloorInOneBatch()
+    {
+        var snapshot = Snapshot(
+            [Instance(100, slot: 1), Instance(100, slot: 2), Instance(100, slot: 3), Instance(200, slot: 4)],
+            [Definition(100, 20), Definition(200, 30)],
+            [Job(1, 50, true)],
+            []);
+        var policy = new SquireProtectionPolicy(DuplicateRetentionRules: [new(100, false, 2)]);
+        var analysis = evaluator.Evaluate(snapshot, DesynthesisUnlocked, policy);
+        var copies = analysis.Candidates.Where(candidate => candidate.Definition.ItemId == 100).ToArray();
+        Assert.All(copies, candidate =>
+        {
+            Assert.Equal(SquireAssessment.Candidate, candidate.Assessment);
+            Assert.Contains(candidate.Reasons, reason => reason.Code == "DuplicateRetentionSurplus");
+            Assert.Equal(1, candidate.DuplicateStatus!.CopiesAboveFloor);
+        });
+
+        var oneRemoval = new Dictionary<EquipmentInstanceFingerprint, SquireDisposition>(EquipmentInstanceFingerprintComparer.Instance)
+        {
+            [copies[0].Instance.Fingerprint] = SquireDisposition.Desynthesize,
+        };
+        Assert.True(new SquireCounterfactualBatchValidator().Validate(snapshot, oneRemoval, DesynthesisUnlocked, policy).Success);
+
+        var twoRemovals = copies.Take(2).ToDictionary(
+            candidate => candidate.Instance.Fingerprint,
+            _ => SquireDisposition.Desynthesize,
+            EquipmentInstanceFingerprintComparer.Instance);
+        var rejected = new SquireCounterfactualBatchValidator().Validate(snapshot, twoRemovals, DesynthesisUnlocked, policy);
+        Assert.False(rejected.Success);
+        Assert.Equal("DuplicateRetentionFloorLost", rejected.Code);
+        Assert.Contains("retains at least 2", rejected.Message);
+    }
+
+    [Fact]
+    public void ExplicitDuplicateMinimum_IsQualityAware()
+    {
+        var snapshot = Snapshot(
+            [Instance(100, slot: 1, highQuality: true), Instance(100, slot: 2, highQuality: true), Instance(100, slot: 3), Instance(200, slot: 4)],
+            [Definition(100, 20), Definition(200, 30)],
+            [Job(1, 50, true)],
+            []);
+        var policy = new SquireProtectionPolicy(DuplicateRetentionRules: [new(100, true, 2)]);
+
+        var copies = evaluator.Evaluate(snapshot, DesynthesisUnlocked, policy).Candidates
+            .Where(candidate => candidate.Definition.ItemId == 100)
+            .ToArray();
+
+        Assert.All(copies.Where(candidate => candidate.Instance.Fingerprint.IsHighQuality), candidate =>
+            Assert.Contains(candidate.Reasons, reason => reason.Code == "DuplicateRetentionFloor"));
+        Assert.Equal(SquireAssessment.Candidate, Assert.Single(copies, candidate => !candidate.Instance.Fingerprint.IsHighQuality).Assessment);
+    }
+
+    [Fact]
+    public void DuplicateRetentionMerge_UsesTheConservativeMinimumPerQuality()
+    {
+        var merged = SquireDuplicateRetention.Merge(
+            [new(100, false, 1), new(100, true, 4)],
+            [new(100, false, 3), new(100, true, 2)]);
+
+        Assert.Equal(3, Assert.Single(merged, rule => rule is { ItemId: 100, IsHighQuality: false }).MinimumCopies);
+        Assert.Equal(4, Assert.Single(merged, rule => rule is { ItemId: 100, IsHighQuality: true }).MinimumCopies);
+    }
+
+    [Fact]
+    public void DuplicateRetentionFloor_DoesNotRequireRepairingAPreexistingDeficit()
+    {
+        var before = new[] { Instance(100, slot: 1), Instance(100, slot: 2) };
+        var policy = new SquireProtectionPolicy(DuplicateRetentionRules: [new(100, false, 3)]);
+
+        Assert.True(SquireDuplicateRetention.DoesNotReduceRequiredMultiplicity(before, before, policy, out _));
+        Assert.False(SquireDuplicateRetention.DoesNotReduceRequiredMultiplicity(before, before.Take(1), policy, out var message));
+        Assert.Contains("retains at least 2", message);
+    }
+
+    [Fact]
     public void CounterfactualBatch_DoesNotRequireRepairingAnUnrelatedPreexistingGearsetDeficit()
     {
         var snapshot = Snapshot(
@@ -578,8 +676,9 @@ public sealed class SquireCandidateEvaluatorTests
         bool equipped = false,
         IReadOnlyList<uint>? materia = null,
         ulong? crafter = null,
-        int slot = 1) =>
-        new(new EquipmentInstanceFingerprint(Scope, "Inventory1", slot, itemId, false, 1, 30000, 0, crafter, materia ?? [], null, []), DateTimeOffset.UtcNow, equipped);
+        int slot = 1,
+        bool highQuality = false) =>
+        new(new EquipmentInstanceFingerprint(Scope, "Inventory1", slot, itemId, highQuality, 1, 30000, 0, crafter, materia ?? [], null, []), DateTimeOffset.UtcNow, equipped);
 
     private static EquipmentItemDefinition Definition(uint itemId, uint itemLevel) =>
         new(itemId, $"Item {itemId}", 1, itemLevel, EquipmentSlot.Body, new HashSet<uint> { 1 }, 1, true, false, true, true, 1, true, false, true, false,

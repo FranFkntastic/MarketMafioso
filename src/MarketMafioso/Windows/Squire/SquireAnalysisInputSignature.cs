@@ -38,6 +38,11 @@ internal static class SquireAnalysisInputSignature
                 policy.ProtectBlueAndPurpleGear,
                 policy.AllowRiskyMateriaRetrieval,
                 CleanupExcludedItemIds = policy.CleanupExcludedItemIds?.Order().ToArray() ?? [],
+                DuplicateRetentionRules = policy.DuplicateRetentionRules?
+                    .OrderBy(rule => rule.ItemId)
+                    .ThenBy(rule => rule.IsHighQuality)
+                    .ThenBy(rule => rule.MinimumCopies)
+                    .ToArray() ?? [],
             },
         }, Formatting.None);
 }
