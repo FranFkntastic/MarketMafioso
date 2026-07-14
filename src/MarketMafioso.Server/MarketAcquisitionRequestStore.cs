@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using MarketMafioso.Server.Persistence;
+using MarketMafioso.Server.Sqlite;
 using Microsoft.Data.Sqlite;
 using static MarketMafioso.Server.MarketAcquisition.MarketAcquisitionRequestPolicy;
 using static MarketMafioso.Server.Persistence.MarketAcquisitionEventPersistence;
@@ -14,20 +15,16 @@ namespace MarketMafioso.Server;
 public sealed class MarketAcquisitionRequestStore
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
-    private readonly string connectionString;
+    private readonly SqliteConnectionFactory connectionFactory;
     private readonly int minimumExpirySeconds;
     private readonly int maximumExpirySeconds;
     private readonly int claimExpirySeconds;
 
-    public MarketAcquisitionRequestStore(IHostEnvironment environment, IConfiguration configuration)
+    public MarketAcquisitionRequestStore(
+        SqliteConnectionFactory connectionFactory,
+        IConfiguration configuration)
     {
-        var dataDirectory = Path.Combine(environment.ContentRootPath, "data");
-        Directory.CreateDirectory(dataDirectory);
-        var databasePath = Path.Combine(dataDirectory, "marketmafioso.db");
-        connectionString = new SqliteConnectionStringBuilder
-        {
-            DataSource = databasePath,
-        }.ToString();
+        this.connectionFactory = connectionFactory;
         minimumExpirySeconds = Math.Max(
             1,
             configuration.GetValue("MarketMafioso:AcquisitionMinimumExpirySeconds", 30));
@@ -38,7 +35,7 @@ public sealed class MarketAcquisitionRequestStore
             1,
             configuration.GetValue("MarketMafioso:AcquisitionClaimExpirySeconds", 300));
 
-        MarketAcquisitionSchema.Initialize(connectionString);
+        MarketAcquisitionSchema.Initialize(connectionFactory.DatabasePath);
     }
 
     public async Task<MarketAcquisitionCreateResult> CreateAsync(
@@ -1507,9 +1504,7 @@ public sealed class MarketAcquisitionRequestStore
 
     private async Task<SqliteConnection> OpenConnectionAsync(CancellationToken cancellationToken)
     {
-        var connection = new SqliteConnection(connectionString);
-        await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
-        return connection;
+        return await connectionFactory.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
     }
 
 }

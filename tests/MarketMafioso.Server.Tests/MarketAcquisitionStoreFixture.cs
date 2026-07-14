@@ -2,6 +2,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Hosting;
 using MarketMafioso.Server;
+using MarketMafioso.Server.Sqlite;
 
 namespace MarketMafioso.Server.Tests;
 
@@ -9,24 +10,32 @@ internal sealed class MarketAcquisitionStoreFixture : IDisposable
 {
     private readonly string contentRoot;
 
-    private MarketAcquisitionStoreFixture(string contentRoot, MarketAcquisitionRequestStore store)
+    private MarketAcquisitionStoreFixture(
+        string contentRoot,
+        string databasePath,
+        MarketAcquisitionRequestStore store)
     {
         this.contentRoot = contentRoot;
+        DatabasePath = databasePath;
         Store = store;
     }
 
     public MarketAcquisitionRequestStore Store { get; }
+    public string DatabasePath { get; }
+    public string ReleaseLocalDatabasePath => Path.Combine(contentRoot, "data", "marketmafioso.db");
 
     public static Task<MarketAcquisitionStoreFixture> CreateAsync(
         params KeyValuePair<string, string?>[] extraConfiguration)
     {
         var contentRoot = Path.Combine(Path.GetTempPath(), "MarketMafioso.Server.StoreTests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(contentRoot);
+        var databasePath = Path.Combine(contentRoot, "persistent-data", "marketmafioso.db");
 
         var values = new Dictionary<string, string?>
         {
             ["MarketMafioso:AcquisitionMinimumExpirySeconds"] = "1",
             ["MarketMafioso:AcquisitionClaimExpirySeconds"] = "300",
+            ["MarketMafioso:DatabasePath"] = databasePath,
         };
         foreach (var item in extraConfiguration)
             values[item.Key] = item.Value;
@@ -35,9 +44,10 @@ internal sealed class MarketAcquisitionStoreFixture : IDisposable
             .AddInMemoryCollection(values)
             .Build();
         var environment = new TestHostEnvironment(contentRoot);
-        var store = new MarketAcquisitionRequestStore(environment, configuration);
+        var connectionFactory = new SqliteConnectionFactory(configuration, environment);
+        var store = new MarketAcquisitionRequestStore(connectionFactory, configuration);
 
-        return Task.FromResult(new MarketAcquisitionStoreFixture(contentRoot, store));
+        return Task.FromResult(new MarketAcquisitionStoreFixture(contentRoot, databasePath, store));
     }
 
     public async Task<MarketAcquisitionTestBatch> CreateClaimedBatchAsync(

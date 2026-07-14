@@ -3,6 +3,19 @@ namespace MarketMafioso.Server.Tests;
 public sealed class MarketAcquisitionRequestStoreTests
 {
     [Fact]
+    public async Task CreateBatchAsyncUsesConfiguredPersistentDatabase()
+    {
+        using var fixture = await MarketAcquisitionStoreFixture.CreateAsync();
+
+        await fixture.Store.CreateBatchAsync(
+            CreateBatchRequest("configured-database"),
+            CancellationToken.None);
+
+        Assert.True(File.Exists(fixture.DatabasePath));
+        Assert.False(File.Exists(fixture.ReleaseLocalDatabasePath));
+    }
+
+    [Fact]
     public async Task CreateBatchAsyncAllowsConfiguredLongPickupExpiry()
     {
         using var fixture = await MarketAcquisitionStoreFixture.CreateAsync(

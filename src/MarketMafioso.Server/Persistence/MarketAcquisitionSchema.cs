@@ -4,9 +4,16 @@ namespace MarketMafioso.Server.Persistence;
 
 internal static class MarketAcquisitionSchema
 {
-    public static void Initialize(string connectionString)
+    public static void Initialize(string databasePath)
     {
-        using var connection = new SqliteConnection(connectionString);
+        var directory = Path.GetDirectoryName(databasePath);
+        if (!string.IsNullOrWhiteSpace(directory))
+            Directory.CreateDirectory(directory);
+
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = databasePath,
+        }.ToString());
         connection.Open();
         using var command = connection.CreateCommand();
         command.CommandText =
