@@ -16,6 +16,9 @@ public sealed class MarketAcquisitionWorkbenchCompositionPanel
     private readonly AgentBridgeUiReviewRegistry reviewRegistry;
     private string nameBuffer = string.Empty;
     private string? nameBufferCompositionId;
+    private bool nameBufferInitialized;
+    private bool openDeleteConfirmation;
+    private bool closeDeleteConfirmation;
 
     public MarketAcquisitionWorkbenchCompositionPanel(
         MarketAcquisitionWorkbenchCompositionCatalog catalog,
@@ -45,6 +48,11 @@ public sealed class MarketAcquisitionWorkbenchCompositionPanel
         DrawSelectionRow(context);
         DrawSaveAndManageRow(context);
         ImGui.TextColored(catalog.Status.StartsWith("Deleted", StringComparison.Ordinal) ? MainWindow.ColWarning : MainWindow.ColMuted, catalog.Status);
+        if (openDeleteConfirmation)
+        {
+            ImGui.OpenPopup("Delete saved composition?##AcquisitionCompositionDeleteConfirmation");
+            openDeleteConfirmation = false;
+        }
         DrawDeleteConfirmation();
         ImGui.Spacing();
     }
@@ -155,14 +163,36 @@ public sealed class MarketAcquisitionWorkbenchCompositionPanel
             if (result.Success)
                 nameBufferCompositionId = null;
         }
+        RegisterLastControl(
+            "acquisition.composition.duplicate",
+            "Duplicate the selected composition",
+            selected is not null,
+            selected?.Id,
+            () =>
+            {
+                var result = catalog.DuplicateSelected();
+                if (result.Success)
+                    nameBufferCompositionId = null;
+            });
 
         ImGui.SameLine();
         if (ImGuiUi.Button("Delete...##AcquisitionCompositionDelete", selected is not null))
-            ImGui.OpenPopup("Delete saved composition?##AcquisitionCompositionDeleteConfirmation");
+            openDeleteConfirmation = true;
+        RegisterLastControl(
+            "acquisition.composition.delete.open",
+            "Open the selected composition deletion confirmation",
+            selected is not null,
+            selected?.Id,
+            () => openDeleteConfirmation = true);
     }
 
     private void DrawDeleteConfirmation()
     {
+        var viewport = ImGui.GetMainViewport();
+        ImGui.SetNextWindowPos(
+            viewport.WorkPos + (viewport.WorkSize * 0.5f),
+            ImGuiCond.Always,
+            new Vector2(0.5f, 0.5f));
         if (!ImGui.BeginPopupModal(
                 "Delete saved composition?##AcquisitionCompositionDeleteConfirmation",
                 ImGuiWindowFlags.AlwaysAutoResize))
@@ -171,6 +201,13 @@ public sealed class MarketAcquisitionWorkbenchCompositionPanel
         }
 
         var selected = catalog.SelectedComposition;
+        if (closeDeleteConfirmation)
+        {
+            closeDeleteConfirmation = false;
+            ImGui.CloseCurrentPopup();
+            ImGui.EndPopup();
+            return;
+        }
         ImGui.TextWrapped(selected is null
             ? "This composition is no longer available."
             : $"Delete {selected.Name}? This does not change the current Workbench.");
@@ -183,15 +220,27 @@ public sealed class MarketAcquisitionWorkbenchCompositionPanel
             nameBufferCompositionId = null;
             ImGui.CloseCurrentPopup();
         }
+        RegisterLastControl(
+            "acquisition.composition.delete.confirm",
+            "Delete the selected saved composition",
+            selected is not null,
+            selected?.Id,
+            () =>
+            {
+                catalog.DeleteSelected();
+                nameBufferCompositionId = null;
+                closeDeleteConfirmation = true;
+            });
         ImGui.EndPopup();
     }
 
     private void SyncNameBuffer()
     {
-        if (nameBufferCompositionId == catalog.SelectedCompositionId)
+        if (nameBufferInitialized && nameBufferCompositionId == catalog.SelectedCompositionId)
             return;
+        nameBufferInitialized = true;
         nameBufferCompositionId = catalog.SelectedCompositionId;
-        nameBuffer = catalog.SelectedComposition?.Name ?? string.Empty;
+        nameBuffer = catalog.SelectedComposition?.Name ?? "New composition";
     }
 
     private static string FormatRoute(MarketAcquisitionWorkbenchComposition composition) =>
