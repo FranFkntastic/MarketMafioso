@@ -26,6 +26,9 @@ public sealed class SqliteSchemaMigrator
 
         await AddColumnIfMissingAsync(connection, transaction, "inventory_owners", "gil", "INTEGER NULL", cancellationToken);
         await AddColumnIfMissingAsync(connection, transaction, "inventory_items", "item_type", "TEXT NULL", cancellationToken);
+        await AddColumnIfMissingAsync(connection, transaction, "ingest_keys", "purpose", "TEXT NOT NULL DEFAULT 'LegacyClient'", cancellationToken);
+        await AddColumnIfMissingAsync(connection, transaction, "ingest_keys", "key_prefix", "TEXT NULL", cancellationToken);
+        await AddColumnIfMissingAsync(connection, transaction, "ingest_keys", "last_used_at_utc", "TEXT NULL", cancellationToken);
 
         await transaction.CommitAsync(cancellationToken);
 
@@ -159,9 +162,15 @@ public sealed class SqliteSchemaMigrator
             account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
             label TEXT NOT NULL,
             key_hash TEXT NOT NULL,
+            purpose TEXT NOT NULL DEFAULT 'LegacyClient',
+            key_prefix TEXT NULL,
             created_at_utc TEXT NOT NULL,
+            last_used_at_utc TEXT NULL,
             disabled_at_utc TEXT NULL
         );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS ix_ingest_keys_key_hash
+            ON ingest_keys (key_hash);
 
         CREATE TABLE IF NOT EXISTS characters (
             id INTEGER PRIMARY KEY AUTOINCREMENT,

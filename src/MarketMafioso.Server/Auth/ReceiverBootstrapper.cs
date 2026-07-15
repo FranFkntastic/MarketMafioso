@@ -1,5 +1,3 @@
-using System.Security.Cryptography;
-using System.Text;
 using System.Globalization;
 using Microsoft.Data.Sqlite;
 using MarketMafioso.Server.Sqlite;
@@ -133,7 +131,7 @@ public sealed class ReceiverBootstrapper
             VALUES ($accountId, 'default', $keyHash, $createdAt);
             """;
         command.Parameters.AddWithValue("$accountId", accountId);
-        command.Parameters.AddWithValue("$keyHash", HashIngestKey(ingestKey));
+        command.Parameters.AddWithValue("$keyHash", WorkshopHostCredentialStore.HashKey(ingestKey));
         command.Parameters.AddWithValue("$createdAt", DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture));
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
@@ -161,12 +159,6 @@ public sealed class ReceiverBootstrapper
         command.CommandText = sql;
         var result = await command.ExecuteScalarAsync(cancellationToken);
         return result is long value ? value : null;
-    }
-
-    public static string HashIngestKey(string ingestKey)
-    {
-        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(ingestKey));
-        return Convert.ToHexString(bytes);
     }
 
     private static string? FirstConfigured(params string?[] values) =>

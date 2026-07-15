@@ -240,6 +240,37 @@ public sealed class DashboardApiClient
             ?? throw new InvalidOperationException("Dashboard settings response was empty.");
     }
 
+    public async Task<IReadOnlyList<ClientCredentialView>> GetClientCredentialsAsync(
+        CancellationToken cancellationToken = default)
+    {
+        return await GetJsonAsync(
+            "api/settings/client-keys",
+            Array.Empty<ClientCredentialView>(),
+            cancellationToken);
+    }
+
+    public async Task<ClientCredentialCreatedView> CreateClientCredentialAsync(
+        ClientCredentialCreateRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await http.PostAsJsonAsync(
+            "api/settings/client-keys",
+            request,
+            JsonOptions,
+            cancellationToken);
+        EnsureAuthorizedSuccess(response);
+        return await response.Content.ReadFromJsonAsync<ClientCredentialCreatedView>(JsonOptions, cancellationToken)
+            ?? throw new InvalidOperationException("Client key response was empty.");
+    }
+
+    public async Task RevokeClientCredentialAsync(
+        long id,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await http.DeleteAsync($"api/settings/client-keys/{id}", cancellationToken);
+        EnsureAuthorizedSuccess(response);
+    }
+
     public async Task<IReadOnlyList<DiagnosticEventView>> GetDiagnosticsAsync(
         CancellationToken cancellationToken = default)
     {

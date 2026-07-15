@@ -46,6 +46,10 @@ The shared key pasted into the plugin's Client API Key setting. Treat it like a 
 
 Optional old key accepted during key rotation. Leave it blank unless you are changing keys.
 
+### Dashboard-managed client keys
+
+Use **Settings > Authentication** in the dashboard to issue a separate key for Craft Architect or the MarketMafioso plugin. Secrets are shown once and stored only as hashes; the dashboard can show last use and revoke a key immediately without an environment edit or server restart. Keep `MarketMafioso__ClientApiKey` as the bootstrap/recovery key, then prefer managed keys for day-to-day clients.
+
 ### Scoped Machine Keys
 
 Optional narrow keys for specific Workshop Host scopes:

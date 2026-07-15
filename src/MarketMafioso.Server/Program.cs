@@ -1,7 +1,4 @@
-using System.Security.Cryptography;
-using System.Text;
 using FFXIV_Craft_Architect.Core.Integrations.WorkshopHost;
-using Microsoft.Extensions.Primitives;
 using MarketMafioso.Server;
 using MarketMafioso.Server.Auth;
 using MarketMafioso.Server.Dashboard;
@@ -26,6 +23,7 @@ builder.Services.AddSingleton<DashboardPasswordHasher>();
 builder.Services.AddSingleton<DashboardSessionStore>();
 builder.Services.AddSingleton<ReceiverBootstrapper>();
 builder.Services.AddSingleton<IngestKeyAccountResolver>();
+builder.Services.AddSingleton<WorkshopHostCredentialStore>();
 builder.Services.AddSingleton<InventoryReportStore>();
 builder.Services.AddSingleton<JsonSnapshotImporter>();
 builder.Services.AddSingleton<MarketAcquisitionRequestStore>();
@@ -43,14 +41,6 @@ var clientApiKey = FirstConfigured(
     app.Configuration["MarketMafioso:ApiKey"],
     app.Configuration["MarketMafioso:IngestApiKey"],
     app.Configuration["MarketMafioso:CommandPickupApiKey"]);
-var previousClientApiKey = FirstConfigured(
-    app.Configuration["MarketMafioso:PreviousClientApiKey"],
-    app.Configuration["MarketMafioso:PreviousIngestApiKey"],
-    app.Configuration["MarketMafioso:PreviousReadApiKey"]);
-var workshopHostApiKeys = WorkshopHostApiKeys.FromConfiguration(
-    app.Configuration,
-    clientApiKey,
-    previousClientApiKey);
 var requireApiKey = app.Configuration.GetValue<bool>("MarketMafioso:RequireApiKey") ||
                     !string.IsNullOrWhiteSpace(clientApiKey);
 var basePath = app.Configuration["MarketMafioso:BasePath"];
@@ -61,9 +51,6 @@ var enableMarketAcquisition = app.Configuration.GetValue<bool>("MarketMafioso:En
 var xivDataBaseUrl = NormalizeXivDataBaseUrl(FirstConfigured(
     app.Configuration["MarketMafioso:XivDataBaseUrl"],
     DefaultXivDataBaseUrl(publicOrigin)));
-
-if (requireApiKey && string.IsNullOrWhiteSpace(clientApiKey))
-    throw new InvalidOperationException("MarketMafioso:ClientApiKey is required when API key authentication is enabled.");
 
 if (configuredBasePath.HasValue)
 {
@@ -78,11 +65,13 @@ app.UseCors(workshopHostBrowserCorsPolicy);
 app.Use(async (context, next) =>
 {
     var scope = RequiredWorkshopHostScope(context.Request, requireApiKey);
-    if (scope != WorkshopHostScope.None &&
-        !HasValidApiKey(
-            context.Request,
-            scope,
-            workshopHostApiKeys))
+    if (scope is not null &&
+        !await context.RequestServices
+            .GetRequiredService<WorkshopHostCredentialStore>()
+            .IsAuthorizedAsync(
+                GetSingleApiKeyHeader(context.Request.Headers["X-Api-Key"]),
+                scope.Value,
+                context.RequestAborted))
     {
         await WriteUnauthorizedAsync(context);
         return;
@@ -105,8 +94,9 @@ app.MapMarketAcquisitionEndpoints();
 app.MapDiagnosticEndpoints();
 
 app.MapDashboardDataEndpoints(enableMarketAcquisition);
+app.MapDashboardClientCredentialEndpoints();
 
-app.MapInventoryReportEndpoints(requireApiKey, workshopHostApiKeys, publicOrigin);
+app.MapInventoryReportEndpoints(requireApiKey, publicOrigin);
 app.MapXivDataProxyEndpoints(xivDataBaseUrl);
 
 app.MapDashboardShellEndpoints(enableMarketAcquisition);
@@ -137,39 +127,39 @@ static PathString NormalizeConfiguredBasePath(string? value)
         : new PathString($"/{trimmed}");
 }
 
-static WorkshopHostScope RequiredWorkshopHostScope(HttpRequest request, bool requireApiKey)
+static WorkshopHostCredentialScope? RequiredWorkshopHostScope(HttpRequest request, bool requireApiKey)
 {
     if (!requireApiKey)
-        return WorkshopHostScope.None;
+        return null;
 
     if (IsAcquisitionBrowserCreate(request))
-        return WorkshopHostScope.None;
+        return null;
 
     if (IsAcquisitionBrowserControl(request))
-        return WorkshopHostScope.None;
+        return null;
 
     if (IsAcquisitionBrowserRead(request))
-        return WorkshopHostScope.None;
+        return null;
 
     if (IsApiKeyAcquisitionCreate(request))
-        return WorkshopHostScope.AcquisitionQueue;
+        return WorkshopHostCredentialScope.AcquisitionQueue;
 
     if (IsAcquisitionPluginRoute(request))
-        return WorkshopHostScope.AcquisitionQueue;
+        return WorkshopHostCredentialScope.AcquisitionQueue;
 
     if (IsReportsApiRead(request))
-        return WorkshopHostScope.InventoryRead;
+        return WorkshopHostCredentialScope.InventoryRead;
 
     if (IsWorkshopHostCapabilitiesRead(request))
-        return WorkshopHostScope.CapabilitiesRead;
+        return WorkshopHostCredentialScope.CapabilitiesRead;
 
     if (IsWorkshopHostCraftQuote(request))
-        return WorkshopHostScope.CraftQuote;
+        return WorkshopHostCredentialScope.CraftQuote;
 
     if (IsInventoryPost(request))
-        return WorkshopHostScope.InventoryWrite;
+        return WorkshopHostCredentialScope.InventoryWrite;
 
-    return WorkshopHostScope.None;
+    return null;
 }
 
 static bool IsInventoryPost(HttpRequest request) =>
@@ -288,19 +278,7 @@ static bool IsAcquisitionBatchDetailPath(PathString requestPath)
     return path.Split('/', StringSplitOptions.RemoveEmptyEntries).Length is 3 or 4;
 }
 
-static bool HasValidApiKey(
-    HttpRequest request,
-    WorkshopHostScope scope,
-    WorkshopHostApiKeys apiKeys)
-{
-    var supplied = GetSingleApiKeyHeader(request.Headers["X-Api-Key"]);
-    if (string.IsNullOrWhiteSpace(supplied))
-        return false;
-
-    return apiKeys.HasKeyForScope(supplied, scope);
-}
-
-static string? GetSingleApiKeyHeader(StringValues values)
+static string? GetSingleApiKeyHeader(Microsoft.Extensions.Primitives.StringValues values)
 {
     if (values.Count != 1)
         return null;
@@ -332,87 +310,3 @@ static string DefaultXivDataBaseUrl(string? publicOrigin)
 }
 
 public partial class Program;
-
-sealed record WorkshopHostApiKeys(
-    string? Client,
-    string? PreviousClient,
-    string? InventoryWrite,
-    string? InventoryRead,
-    string? CraftQuote,
-    string? AcquisitionQueue,
-    string? DiagnosticsRead,
-    string? AutomationRun)
-{
-    public static WorkshopHostApiKeys FromConfiguration(
-        IConfiguration configuration,
-        string? clientApiKey,
-        string? previousClientApiKey) => new(
-            clientApiKey,
-            previousClientApiKey,
-            FirstNonBlank(
-                configuration["MarketMafioso:InventoryWriteApiKey"],
-                configuration["MarketMafioso:IngestWriteApiKey"]),
-            FirstNonBlank(
-                configuration["MarketMafioso:InventoryReadApiKey"],
-                configuration["MarketMafioso:ReportReadApiKey"]),
-            configuration["MarketMafioso:CraftQuoteApiKey"],
-            FirstNonBlank(
-                configuration["MarketMafioso:AcquisitionQueueApiKey"],
-                configuration["MarketMafioso:CommandPickupScopedApiKey"]),
-            configuration["MarketMafioso:DiagnosticsReadApiKey"],
-            configuration["MarketMafioso:AutomationRunApiKey"]);
-
-    public bool HasKeyForScope(string supplied, WorkshopHostScope scope)
-    {
-        if (MatchesConfiguredKey(supplied, Client) ||
-            MatchesConfiguredKey(supplied, PreviousClient))
-        {
-            return true;
-        }
-
-        return scope switch
-        {
-            WorkshopHostScope.CapabilitiesRead =>
-                MatchesConfiguredKey(supplied, InventoryWrite) ||
-                MatchesConfiguredKey(supplied, InventoryRead) ||
-                MatchesConfiguredKey(supplied, CraftQuote) ||
-                MatchesConfiguredKey(supplied, AcquisitionQueue) ||
-                MatchesConfiguredKey(supplied, DiagnosticsRead) ||
-                MatchesConfiguredKey(supplied, AutomationRun),
-            WorkshopHostScope.InventoryWrite => MatchesConfiguredKey(supplied, InventoryWrite),
-            WorkshopHostScope.InventoryRead => MatchesConfiguredKey(supplied, InventoryRead),
-            WorkshopHostScope.CraftQuote => MatchesConfiguredKey(supplied, CraftQuote),
-            WorkshopHostScope.AcquisitionQueue => MatchesConfiguredKey(supplied, AcquisitionQueue),
-            WorkshopHostScope.DiagnosticsRead => MatchesConfiguredKey(supplied, DiagnosticsRead),
-            WorkshopHostScope.AutomationRun => MatchesConfiguredKey(supplied, AutomationRun),
-            _ => false,
-        };
-    }
-
-    private static string? FirstNonBlank(params string?[] values) =>
-        values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
-
-    private static bool MatchesConfiguredKey(string supplied, string? configured)
-    {
-        if (string.IsNullOrWhiteSpace(configured))
-            return false;
-
-        var suppliedBytes = Encoding.UTF8.GetBytes(supplied);
-        var configuredBytes = Encoding.UTF8.GetBytes(configured);
-
-        return suppliedBytes.Length == configuredBytes.Length &&
-               CryptographicOperations.FixedTimeEquals(suppliedBytes, configuredBytes);
-    }
-}
-
-enum WorkshopHostScope
-{
-    None,
-    CapabilitiesRead,
-    InventoryWrite,
-    InventoryRead,
-    CraftQuote,
-    AcquisitionQueue,
-    DiagnosticsRead,
-    AutomationRun,
-}

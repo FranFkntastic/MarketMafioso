@@ -559,7 +559,7 @@ public sealed class MarketAcquisitionRequestEndpointTests
     }
 
     [Fact]
-    public async Task HostedMode_RequiresClientApiKeyAtStartup()
+    public async Task HostedMode_CanStartLockedWithoutBootstrapClientApiKey()
     {
         await using var application = CreateHostedApplication(
             extraConfiguration: [
@@ -568,8 +568,10 @@ public sealed class MarketAcquisitionRequestEndpointTests
                 new KeyValuePair<string, string?>("MarketMafioso:IngestApiKey", string.Empty),
             ]);
 
-        var ex = Assert.Throws<InvalidOperationException>(() => application.CreateClient());
-        Assert.Contains("MarketMafioso:ClientApiKey", ex.Message, StringComparison.Ordinal);
+        using var client = application.CreateClient();
+        var response = await client.GetAsync("/marketmafioso/api/capabilities");
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 
     [Fact]

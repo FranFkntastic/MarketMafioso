@@ -26,7 +26,7 @@ The plugin settings window has endpoint preset buttons:
 
 The URL remains editable. The plugin does not change existing saved URLs automatically.
 
-Hosted Workshop Host environments require a client API key for plugin-to-server traffic. Set the same value in the plugin-wide `Settings` tab's `Client API Key` field and in `MarketMafioso__ClientApiKey` on the server. This one key is used for inventory ingest and machine-read report routes unless narrower scoped keys are configured.
+Hosted Workshop Host environments require a client API key for plugin-to-server traffic. `MarketMafioso__ClientApiKey` bootstraps the receiver; after sign-in, use dashboard **Settings > Authentication** to issue a managed plugin key or a narrower Craft Architect key. Managed keys can be revoked independently without editing server configuration or restarting the receiver.
 
 ## Server Configuration
 
@@ -129,7 +129,7 @@ Set-Content -LiteralPath "$env:USERPROFILE\.ssh\marketmafioso_dashboard_password
 gh secret set MARKETMAFIOSO_DEV_BASIC_AUTH_PASSWORD --repo FranFkntastic/MarketMafioso --body $dashboardPassword
 ```
 
-Paste only the client API key into the plugin-wide `Settings` tab's `Client API Key` field.
+Sign in to the dashboard and generate a MarketMafioso plugin key under **Settings > Authentication**, then paste that one-time secret into the plugin-wide `Settings` tab's `Client API Key` field. Keep the environment key as a recovery credential instead of copying it into every client.
 
 ## Caddy Shape
 

@@ -10,31 +10,32 @@ internal static class InventoryReportEndpoints
     public static void MapInventoryReportEndpoints(
         this WebApplication app,
         bool requireApiKey,
-        WorkshopHostApiKeys workshopHostApiKeys,
         string? publicOrigin)
     {
         app.MapPost("/inventory", (
             HttpRequest request,
             InventoryReportStore store,
             IngestKeyAccountResolver accountResolver,
+            WorkshopHostCredentialStore credentialStore,
             CancellationToken token) => SaveInventoryReport(
                 request,
                 store,
                 accountResolver,
+                credentialStore,
                 requireApiKey,
-                workshopHostApiKeys,
                 publicOrigin,
                 token));
         app.MapPost("/api/inventory", (
             HttpRequest request,
             InventoryReportStore store,
             IngestKeyAccountResolver accountResolver,
+            WorkshopHostCredentialStore credentialStore,
             CancellationToken token) => SaveInventoryReport(
                 request,
                 store,
                 accountResolver,
+                credentialStore,
                 requireApiKey,
-                workshopHostApiKeys,
                 publicOrigin,
                 token));
 
@@ -134,16 +135,19 @@ internal static class InventoryReportEndpoints
         HttpRequest request,
         InventoryReportStore store,
         IngestKeyAccountResolver accountResolver,
+        WorkshopHostCredentialStore credentialStore,
         bool requireApiKey,
-        WorkshopHostApiKeys workshopHostApiKeys,
         string? publicOrigin,
         CancellationToken token)
     {
+        var suppliedApiKey = request.Headers["X-Api-Key"].Count == 1
+            ? request.Headers["X-Api-Key"][0]
+            : null;
         if (requireApiKey &&
-            !HasValidApiKey(
-                request,
-                WorkshopHostScope.InventoryWrite,
-                workshopHostApiKeys))
+            !await credentialStore.IsAuthorizedAsync(
+                suppliedApiKey,
+                WorkshopHostCredentialScope.InventoryWrite,
+                token))
         {
             return InvalidApiKey();
         }
@@ -169,9 +173,8 @@ internal static class InventoryReportEndpoints
         if (report.PlayerInventory.Count == 0 && report.Retainers.Count == 0)
             return Results.BadRequest(new { error = "Report must include at least one player inventory bag or retainer." });
 
-        var suppliedApiKey = request.Headers["X-Api-Key"].ToString();
         var accountId = await accountResolver.ResolveAccountIdAsync(suppliedApiKey, token) ?? 1;
-        var stored = await store.SaveAsync(accountId, report, suppliedApiKey, rawJson, token);
+        var stored = await store.SaveAsync(accountId, report, suppliedApiKey ?? string.Empty, rawJson, token);
         return Results.Created(
             AppUrl(request.PathBase, $"/api/reports/{stored.Id}"),
             CreateInventoryReportResponse(request, publicOrigin, stored));
@@ -207,23 +210,6 @@ internal static class InventoryReportEndpoints
             return Results.Json(new { error = "raw_json_pruned" }, statusCode: StatusCodes.Status410Gone);
 
         return Results.Text(report.RawJson, "application/json; charset=utf-8", Encoding.UTF8);
-    }
-
-    private static bool HasValidApiKey(
-        HttpRequest request,
-        WorkshopHostScope scope,
-        WorkshopHostApiKeys apiKeys)
-    {
-        var supplied = GetSingleApiKeyHeader(request.Headers["X-Api-Key"]);
-        return !string.IsNullOrWhiteSpace(supplied) && apiKeys.HasKeyForScope(supplied, scope);
-    }
-
-    private static string? GetSingleApiKeyHeader(StringValues values)
-    {
-        if (values.Count != 1)
-            return null;
-
-        return values[0];
     }
 
     private static IResult InvalidApiKey() =>

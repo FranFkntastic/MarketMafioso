@@ -26,7 +26,7 @@ public sealed class IngestKeyAccountResolver
             ORDER BY id
             LIMIT 1
             """;
-        command.Parameters.AddWithValue("$keyHash", ReceiverBootstrapper.HashIngestKey(ingestKey));
+        command.Parameters.AddWithValue("$keyHash", WorkshopHostCredentialStore.HashKey(ingestKey));
         var result = await command.ExecuteScalarAsync(cancellationToken);
         return result is long accountId ? accountId : null;
     }

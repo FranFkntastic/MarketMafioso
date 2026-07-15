@@ -33,3 +33,25 @@ public sealed record DashboardFeatureFlagsView
 {
     public bool EnableMarketAcquisition { get; init; }
 }
+
+public record ClientCredentialView
+{
+    public long Id { get; init; }
+    public string Label { get; init; } = string.Empty;
+    public string Purpose { get; init; } = string.Empty;
+    public string KeyPrefix { get; init; } = string.Empty;
+    public DateTimeOffset CreatedAtUtc { get; init; }
+    public DateTimeOffset? LastUsedAtUtc { get; init; }
+    public DateTimeOffset? RevokedAtUtc { get; init; }
+}
+
+public sealed record ClientCredentialCreatedView : ClientCredentialView
+{
+    public string Secret { get; init; } = string.Empty;
+}
+
+public sealed record ClientCredentialCreateRequest
+{
+    public string Label { get; init; } = string.Empty;
+    public string Purpose { get; init; } = string.Empty;
+}

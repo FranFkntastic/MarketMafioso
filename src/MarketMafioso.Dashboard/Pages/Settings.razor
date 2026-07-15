@@ -1,6 +1,8 @@
 @page "/settings"
 @inject DashboardApiClient Api
 @inject DashboardStatusService Status
+@inject IJSRuntime JS
+@inject IDialogService Dialog
 
 <PageTitle>MarketMafioso Settings</PageTitle>
 
@@ -165,10 +167,110 @@ else
             </MudPaper>
         </MudTabPanel>
         <MudTabPanel Text="Authentication">
-            <MudPaper Class="compact-card" Elevation="0">
-                <MudText Typo="Typo.h6">Authentication</MudText>
-                <MudText Class="muted">Dashboard sessions are cookie-backed. Plugin ingest and pickup still use the configured client API key.</MudText>
-            </MudPaper>
+            <MudStack Spacing="2">
+                <MudPaper Class="compact-card" Elevation="0">
+                    <MudStack Spacing="2" Class="settings-section">
+                        <div>
+                            <MudText Typo="Typo.h6">Client keys</MudText>
+                            <MudText Class="muted">Issue a separate key for each client, then revoke it here without changing receiver configuration or restarting the server.</MudText>
+                        </div>
+                        <MudGrid Spacing="2">
+                            <MudItem xs="12" md="5">
+                                <MudTextField @bind-Value="_newClientKeyLabel"
+                                              Label="Key label"
+                                              Placeholder="Craft Architect on Firefox"
+                                              Variant="Variant.Outlined"
+                                              Margin="Margin.Dense"
+                                              MaxLength="80" />
+                            </MudItem>
+                            <MudItem xs="12" md="4">
+                                <MudSelect T="string" @bind-Value="_newClientKeyPurpose" Label="Client" Variant="Variant.Outlined" Margin="Margin.Dense">
+                                    <MudSelectItem Value="@("CraftArchitect")">Craft Architect</MudSelectItem>
+                                    <MudSelectItem Value="@("MarketMafiosoClient")">MarketMafioso plugin</MudSelectItem>
+                                </MudSelect>
+                            </MudItem>
+                            <MudItem xs="12" md="3" Class="d-flex align-center">
+                                <MudButton Variant="Variant.Filled"
+                                           Color="Color.Primary"
+                                           FullWidth="true"
+                                           Disabled="@(_creatingClientKey || _createdClientKey is not null)"
+                                           OnClick="CreateClientKeyAsync">
+                                    Generate key
+                                </MudButton>
+                            </MudItem>
+                        </MudGrid>
+                        <MudText Typo="Typo.caption" Class="muted">Craft Architect keys can only inspect capabilities and use the acquisition queue. Plugin keys retain full client compatibility.</MudText>
+                    </MudStack>
+                </MudPaper>
+
+                @if (_createdClientKey is not null)
+                {
+                    <MudAlert Severity="Severity.Warning" Variant="Variant.Outlined">
+                        <MudStack Spacing="1">
+                            <MudText><strong>Copy this key now.</strong> The receiver stores only its hash, so it cannot show the secret again.</MudText>
+                            <MudTextField Value="_createdClientKey.Secret"
+                                          ReadOnly="true"
+                                          Variant="Variant.Outlined"
+                                          Margin="Margin.Dense"
+                                          InputType="InputType.Password"
+                                          Adornment="Adornment.End"
+                                          AdornmentIcon="@Icons.Material.Filled.ContentCopy"
+                                          OnAdornmentClick="CopyCreatedClientKeyAsync" />
+                            <MudStack Row="true" AlignItems="AlignItems.Center">
+                                <MudText Typo="Typo.caption">@_clientKeyCopyStatus</MudText>
+                                <MudSpacer />
+                                <MudButton Variant="Variant.Text" Size="Size.Small" OnClick="DismissCreatedClientKey">I've saved it</MudButton>
+                            </MudStack>
+                        </MudStack>
+                    </MudAlert>
+                }
+
+                <MudPaper Class="compact-card" Elevation="0">
+                    <MudDataGrid T="ClientCredentialView"
+                                 Items="_clientKeys"
+                                 Dense="true"
+                                 Hover="true"
+                                 ReadOnly="true"
+                                 Class="queue-table">
+                        <Columns>
+                            <PropertyColumn Property="key => key.Label" Title="Label" />
+                            <TemplateColumn Title="Client">
+                                <CellTemplate>@ClientPurposeLabel(context.Item.Purpose)</CellTemplate>
+                            </TemplateColumn>
+                            <TemplateColumn Title="Key">
+                                <CellTemplate><code>@context.Item.KeyPrefix...</code></CellTemplate>
+                            </TemplateColumn>
+                            <TemplateColumn Title="Last used">
+                                <CellTemplate>@TimestampLabel(context.Item.LastUsedAtUtc)</CellTemplate>
+                            </TemplateColumn>
+                            <TemplateColumn Title="Status">
+                                <CellTemplate>
+                                    <MudChip T="string"
+                                             Size="Size.Small"
+                                             Color="@(context.Item.RevokedAtUtc is null ? Color.Success : Color.Default)"
+                                             Variant="Variant.Outlined">
+                                        @(context.Item.RevokedAtUtc is null ? "Active" : "Revoked")
+                                    </MudChip>
+                                </CellTemplate>
+                            </TemplateColumn>
+                            <TemplateColumn Title="">
+                                <CellTemplate>
+                                    <MudButton Variant="Variant.Text"
+                                               Color="Color.Error"
+                                               Size="Size.Small"
+                                               Disabled="@(context.Item.RevokedAtUtc is not null || _revokingClientKeyId == context.Item.Id)"
+                                               OnClick="@(() => RevokeClientKeyAsync(context.Item.Id))">
+                                        Revoke
+                                    </MudButton>
+                                </CellTemplate>
+                            </TemplateColumn>
+                        </Columns>
+                        <NoRecordsContent>
+                            <MudText Class="muted">No managed client keys yet. Environment-configured fallback keys are intentionally not shown here.</MudText>
+                        </NoRecordsContent>
+                    </MudDataGrid>
+                </MudPaper>
+            </MudStack>
         </MudTabPanel>
     </MudTabs>
 </MudStack>
@@ -191,6 +293,13 @@ else
     private bool _saving;
     private string _settingsStatus = string.Empty;
     private string _snapshotStatus = string.Empty;
+    private IReadOnlyList<ClientCredentialView> _clientKeys = [];
+    private ClientCredentialCreatedView? _createdClientKey;
+    private string _newClientKeyLabel = "Craft Architect";
+    private string _newClientKeyPurpose = "CraftArchitect";
+    private string _clientKeyCopyStatus = string.Empty;
+    private bool _creatingClientKey;
+    private long? _revokingClientKeyId;
 
     private static readonly string[] SupportedRegions =
     [
@@ -244,6 +353,7 @@ else
                 return;
 
             await LoadSnapshotsAsync();
+            await LoadClientKeysAsync();
         }
         catch (DashboardUnauthorizedException)
         {
@@ -355,6 +465,109 @@ else
     {
         _storage = await Api.GetStorageSummaryAsync();
     }
+
+    private async Task LoadClientKeysAsync()
+    {
+        _clientKeys = await Api.GetClientCredentialsAsync();
+    }
+
+    private async Task CreateClientKeyAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_newClientKeyLabel))
+        {
+            Status.Error("Enter a label for the client key.");
+            return;
+        }
+
+        try
+        {
+            _creatingClientKey = true;
+            _createdClientKey = await Api.CreateClientCredentialAsync(new ClientCredentialCreateRequest
+            {
+                Label = _newClientKeyLabel.Trim(),
+                Purpose = _newClientKeyPurpose,
+            });
+            _clientKeyCopyStatus = "Not copied yet.";
+            await LoadClientKeysAsync();
+        }
+        catch (DashboardUnauthorizedException)
+        {
+            ExpireSession();
+        }
+        catch (Exception ex)
+        {
+            Status.Error($"Key generation failed: {ex.Message}");
+        }
+        finally
+        {
+            _creatingClientKey = false;
+        }
+    }
+
+    private async Task CopyCreatedClientKeyAsync()
+    {
+        if (_createdClientKey is null)
+            return;
+
+        try
+        {
+            await JS.InvokeVoidAsync("navigator.clipboard.writeText", _createdClientKey.Secret);
+            _clientKeyCopyStatus = "Copied to clipboard.";
+        }
+        catch (JSException)
+        {
+            _clientKeyCopyStatus = "Clipboard access was blocked. Select and copy the key manually.";
+        }
+    }
+
+    private void DismissCreatedClientKey()
+    {
+        _createdClientKey = null;
+        _clientKeyCopyStatus = string.Empty;
+    }
+
+    private async Task RevokeClientKeyAsync(long id)
+    {
+        var key = _clientKeys.FirstOrDefault(candidate => candidate.Id == id);
+        var confirmed = await Dialog.ShowMessageBox(
+            "Revoke client key?",
+            $"{key?.Label ?? "This client"} will stop connecting immediately. This cannot be undone.",
+            yesText: "Revoke key",
+            cancelText: "Keep key");
+        if (confirmed != true)
+            return;
+
+        try
+        {
+            _revokingClientKeyId = id;
+            await Api.RevokeClientCredentialAsync(id);
+            if (_createdClientKey?.Id == id)
+                _createdClientKey = null;
+            await LoadClientKeysAsync();
+        }
+        catch (DashboardUnauthorizedException)
+        {
+            ExpireSession();
+        }
+        catch (Exception ex)
+        {
+            Status.Error($"Key revocation failed: {ex.Message}");
+        }
+        finally
+        {
+            _revokingClientKeyId = null;
+        }
+    }
+
+    private static string ClientPurposeLabel(string purpose) => purpose switch
+    {
+        "CraftArchitect" => "Craft Architect",
+        "MarketMafiosoClient" => "MarketMafioso plugin",
+        _ => purpose,
+    };
+
+    private static string TimestampLabel(DateTimeOffset? timestamp) =>
+        timestamp is null ? "Never" : timestamp.Value.ToLocalTime().ToString("yyyy-MM-dd HH:mm");
 
     private void ExpireSession()
     {

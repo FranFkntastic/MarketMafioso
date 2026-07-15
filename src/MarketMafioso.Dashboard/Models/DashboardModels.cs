@@ -321,6 +321,28 @@ public sealed record DashboardSettingsUpdate
     public int DefaultPickupExpiresSeconds { get; init; } = 300;
 }
 
+public record ClientCredentialView
+{
+    public long Id { get; init; }
+    public string Label { get; init; } = string.Empty;
+    public string Purpose { get; init; } = string.Empty;
+    public string KeyPrefix { get; init; } = string.Empty;
+    public DateTimeOffset CreatedAtUtc { get; init; }
+    public DateTimeOffset? LastUsedAtUtc { get; init; }
+    public DateTimeOffset? RevokedAtUtc { get; init; }
+}
+
+public sealed record ClientCredentialCreatedView : ClientCredentialView
+{
+    public string Secret { get; init; } = string.Empty;
+}
+
+public sealed record ClientCredentialCreateRequest
+{
+    public string Label { get; init; } = string.Empty;
+    public string Purpose { get; init; } = string.Empty;
+}
+
 public sealed record DiagnosticEventView
 {
     public long Id { get; init; }

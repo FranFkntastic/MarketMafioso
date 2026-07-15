@@ -104,6 +104,12 @@ This optional value lets you temporarily accept an older key while rotating to a
 
 Why it matters: it prevents lockouts during key rotation. Leave it blank unless you are deliberately changing keys.
 
+### Dashboard-managed client keys
+
+After the receiver is running, open **Settings > Authentication** in the MarketMafioso dashboard to issue and revoke client keys without editing the environment file or restarting the server. Craft Architect keys are restricted to capability discovery and the acquisition queue; MarketMafioso plugin keys retain full client compatibility. The generated secret is shown once, while SQLite stores only its hash, display prefix, purpose, and last-use time.
+
+`MarketMafioso__ClientApiKey` remains a bootstrap and recovery key. It is still accepted for compatibility, but new integrations should receive their own dashboard-managed key so one client can be rotated or revoked without disrupting the others.
+
 ### Scoped Machine Keys
 
 Examples:
