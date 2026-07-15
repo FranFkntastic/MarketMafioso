@@ -65,7 +65,14 @@ public class HttpReporter : IDisposable
         if (endpoint.RequiresApiKey && string.IsNullOrWhiteSpace(config.ApiKey))
         {
             LastStatus = "API key required";
-            chatGui.PrintError("[MarketMafioso] This hosted receiver requires an API key. Open /mmf and set the API Key field.");
+            chatGui.PrintError("[MarketMafioso] This hosted receiver requires a MarketMafioso Client Key. Open /mmf and set it under Server Connection.");
+            return;
+        }
+
+        if (endpoint.RequiresApiKey && WorkshopHostApiKeyRouting.IsCraftArchitectKey(config.ApiKey))
+        {
+            LastStatus = "Wrong API key type";
+            chatGui.PrintError("[MarketMafioso] A Craft Architect key cannot upload inventory. Move it to the Acquisition Key field and add a MarketMafioso Client Key.");
             return;
         }
 
@@ -144,7 +151,7 @@ public class HttpReporter : IDisposable
                 var body = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
                 if (endpoint.RequiresApiKey && response.StatusCode == System.Net.HttpStatusCode.Unauthorized)
                 {
-                    chatGui.PrintError("[MarketMafioso] The hosted receiver rejected the API key. Check the saved API Key for this endpoint.");
+                    chatGui.PrintError("[MarketMafioso] The hosted receiver rejected the MarketMafioso Client Key. Check the saved key for this endpoint.");
                     log.Warning($"[MarketMafioso] Hosted receiver rejected API key - {LastStatus}: {body}");
                     return;
                 }

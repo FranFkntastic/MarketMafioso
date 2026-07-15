@@ -70,8 +70,6 @@ public class MainWindow : Window, IDisposable
     private string? agentRequestedTab;
     private string? agentRequestedWorkspaceView;
     private bool clearAgentReviewWindowOverride;
-    private bool agentReviewWasPinned;
-    private bool capturePresentationWasPinned;
     private Vector2? capturePresentationPreviousSize;
     private Vector2? capturePresentationRestoreSize;
 
@@ -128,13 +126,10 @@ public class MainWindow : Window, IDisposable
             },
             beginPresentation: () =>
             {
-                capturePresentationWasPinned = IsPinned;
                 capturePresentationPreviousSize = AgentCaptureRegion?.WindowSize;
-                IsPinned = true;
             },
             restorePresentation: () =>
             {
-                IsPinned = capturePresentationWasPinned;
                 capturePresentationRestoreSize = capturePresentationPreviousSize;
                 capturePresentationPreviousSize = null;
             });
@@ -192,12 +187,8 @@ public class MainWindow : Window, IDisposable
             MinimumSize = new Vector2(980, 560),
             MaximumSize = new Vector2(float.MaxValue, float.MaxValue),
         };
-        if (string.IsNullOrWhiteSpace(config.ApiKey) &&
-            !string.IsNullOrWhiteSpace(config.CommandPickupApiKey))
-        {
-            config.ApiKey = config.CommandPickupApiKey;
+        if (WorkshopHostApiKeyRouting.NormalizeConfiguredKeys(config))
             config.Save();
-        }
 
         overviewTab = new OverviewTabPanel(IsMarketAcquisitionUnlocked);
         var squireSnapshotSource = new DalamudCharacterEquipmentSnapshotSource(playerState, dataManager, log);
@@ -398,6 +389,7 @@ public class MainWindow : Window, IDisposable
             CurrentWorld = playerState.CurrentWorld.IsValid ? playerState.CurrentWorld.Value.Name.ToString() : string.Empty,
             HomeWorld = playerState.HomeWorld.IsValid ? playerState.HomeWorld.Value.Name.ToString() : string.Empty,
             MainWindowOpen = IsOpen,
+            MainWindowPinned = IsPinned,
             AcquisitionDiagnosticsOpen = AcquisitionDiagnostics.IsOpen,
             WorkspaceStatus = acquisitionWorkspace.Status,
             WorkspaceBusy = acquisitionWorkspace.IsBusy,
@@ -473,13 +465,7 @@ public class MainWindow : Window, IDisposable
         AgentBridgeUiReviewFrame? reviewFrame = null;
         try
         {
-            if (clearAgentReviewWindowOverride)
-            {
-                IsPinned = agentReviewWasPinned;
-                Collapsed = null;
-                CollapsedCondition = ImGuiCond.None;
-                clearAgentReviewWindowOverride = false;
-            }
+            ClearAgentReviewWindowOverride();
 
         var viewport = ImGui.GetWindowViewport();
         var windowPosition = ImGui.GetWindowPos();
@@ -600,11 +586,7 @@ public class MainWindow : Window, IDisposable
 
     public void AgentOpenForReview()
     {
-        if (!clearAgentReviewWindowOverride)
-            agentReviewWasPinned = IsPinned;
-
         IsOpen = true;
-        IsPinned = true;
         Collapsed = false;
         CollapsedCondition = ImGuiCond.Always;
         clearAgentReviewWindowOverride = true;
@@ -612,14 +594,26 @@ public class MainWindow : Window, IDisposable
 
     public void AgentCloseAfterReview()
     {
-        if (clearAgentReviewWindowOverride)
-        {
-            IsPinned = agentReviewWasPinned;
-            Collapsed = null;
-            CollapsedCondition = ImGuiCond.None;
-            clearAgentReviewWindowOverride = false;
-        }
+        AgentCaptureTransactions.CancelActive();
+        ClearAgentReviewWindowOverride();
         IsOpen = false;
+    }
+
+    public override void OnClose()
+    {
+        AgentCaptureTransactions.CancelActive();
+        ClearAgentReviewWindowOverride();
+        IsOpen = false;
+    }
+
+    private void ClearAgentReviewWindowOverride()
+    {
+        if (!clearAgentReviewWindowOverride)
+            return;
+
+        Collapsed = null;
+        CollapsedCondition = ImGuiCond.None;
+        clearAgentReviewWindowOverride = false;
     }
 
     public void AgentCaptureInputState()
@@ -837,7 +831,7 @@ public class MainWindow : Window, IDisposable
             acquisitionWorkspace.ClaimedRequest,
             acquisitionWorkspace.PendingRequests,
             acquisitionWorkspace.IsBusy,
-            !string.IsNullOrWhiteSpace(config.ApiKey),
+            !string.IsNullOrWhiteSpace(WorkshopHostApiKeyRouting.ResolveAcquisitionKey(config)),
             hasScope,
             characterName,
             world,

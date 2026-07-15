@@ -60,6 +60,7 @@ public sealed class MarketMafiosoBridgeProviderTests
         CurrentWorld = string.Empty,
         HomeWorld = string.Empty,
         MainWindowOpen = false,
+        MainWindowPinned = false,
         AcquisitionDiagnosticsOpen = false,
         WorkspaceStatus = string.Empty,
         WorkspaceBusy = false,

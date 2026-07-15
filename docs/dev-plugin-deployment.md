@@ -1,43 +1,34 @@
 # Dev Plugin Deployment
 
-MarketMafioso development uses a dedicated deployed DLL as the Dalamud watched target. Do not point Dalamud at `src/MarketMafioso/bin/Debug/MarketMafioso.dll` or `src/MarketMafioso/bin/Release/MarketMafioso.dll`.
+MarketMafioso live testing uses profile-local watched DLLs selected by exclusive machine-local lanes. Do not point Dalamud at a worktree `bin` directory or the historical shared `_deployed\MarketMafioso` target.
 
 The `bin` directories are compiler outputs. Any worktree can rewrite them during a normal build, which makes them a poor place for the live plugin DLL when multiple branches or Codex worktrees are active.
 
-## Active Target
+## Active targets
 
-Configure the live dev-plugin target in `src/MarketMafioso/dev-plugin.local.json`. This file is gitignored and should point to a stable deploy folder outside every repository and worktree `bin` directory.
+The machine-local lane registry owns the active targets:
 
-Example:
+- Primary: `%APPDATA%\XIVLauncher\devPlugins\MarketMafioso\MarketMafioso.dll`
+- Secondary: `%APPDATA%\XIVLauncher-Multibox-2\devPlugins\MarketMafioso\MarketMafioso.dll`
 
-```json
-{
-  "Configuration": "Release",
-  "TargetDll": "F:\\Everything (HDD)\\Misc\\Gooseworks (Projects)\\FFXIV-Development\\_deployed\\MarketMafioso\\MarketMafioso.dll"
-}
-```
-
-The exact folder can vary by machine, but the target should be a deployment artifact, not build output.
+Each Dalamud profile must contain one matching MMF settings entry and one matching enabled load location. The machine-local registration normalizer maintains that invariant while both profiles are stopped.
 
 ## Deploy Workflow
 
-Run the deploy script from the worktree that should own the in-game plugin state:
+Claim and deploy through the lane controller from the worktree that should own the in-game plugin state:
 
 ```powershell
-.\src\MarketMafioso\tools\Deploy-DevPlugin.ps1
+$lanes = 'F:\Everything (HDD)\Misc\Gooseworks (Projects)\FFXIV-Development\scripts\mmf-dev-lanes\MMF-DevLane.ps1'
+& $lanes -Action Status
+& $lanes -Action Claim -Lane Primary -Worktree $PWD
+& $lanes -Action Deploy -Lane Primary -Worktree $PWD
 ```
 
-The script builds the requested configuration, copies the DLL to `TargetDll`, and prints source/target verification details. Treat that deploy output as the proof that Dalamud's watched DLL was refreshed.
+The controller rejects foreign worktrees, invokes `Deploy-DevPlugin.ps1` with the selected lane's explicit target, and then verifies the expected branch and commit through that lane's persistent Agent Bridge identity. A copied DLL without matching bridge evidence is a failed deployment.
 
 After a successful deploy, reload MarketMafioso in game.
 
-For day-to-day use, prefer the client-specific wrapper:
-
-```powershell
-.\src\MarketMafioso\tools\Deploy-PluginDev.ps1
-```
-
-It delegates to `Deploy-DevPlugin.ps1`, verifies that the deployed manifest version remains parseable by Dalamud, and prints the reload reminder. This wrapper updates only the local plugin DLL; it does not deploy the VPS receiver.
+`Deploy-DevPlugin.ps1` and `Deploy-PluginDev.ps1` are low-level maintenance helpers, not parallel-agent entry points. Do not call them directly while lanes are configured.
 
 When you intentionally need both sides refreshed, run the explicit combined helper:
 
@@ -63,5 +54,6 @@ It looks at changed files since `origin/local-dev`, plus staged, unstaged, and u
 
 - Normal `dotnet build` output is not deployment.
 - Debug appdata sync is not proof that the loaded DLL changed.
-- Side/client worktrees may build and test freely, but should not share the active `TargetDll` unless they are intentionally taking over the in-game plugin.
-- If `TargetDll` points inside any worktree's `bin/Debug` or `bin/Release` folder, change it before continuing plugin testing.
+- Worktrees may build and test freely, but a watched DLL may only be changed by the worktree holding that lane's claim.
+- Deleted worktrees produce orphaned claims that the controller marks reclaimable instead of leaving a permanent lock.
+- Release the lane when live testing is complete; do not deploy to both lanes as a convenience smoke test.

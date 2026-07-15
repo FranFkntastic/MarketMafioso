@@ -44,6 +44,7 @@ public sealed class AgentBridgeProofFactoryTests
         CurrentWorld = "Siren",
         HomeWorld = "Siren",
         MainWindowOpen = true,
+        MainWindowPinned = false,
         AcquisitionDiagnosticsOpen = false,
         WorkspaceStatus = "Ready",
         WorkspaceBusy = false,

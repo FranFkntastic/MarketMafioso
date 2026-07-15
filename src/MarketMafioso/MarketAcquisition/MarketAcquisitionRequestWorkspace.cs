@@ -116,7 +116,7 @@ public sealed class MarketAcquisitionRequestWorkspace : IDisposable
             ValidateScope(characterName, world);
             PendingRequests = await client.FetchPendingAsync(
                 config.ServerUrl,
-                config.ApiKey,
+                WorkshopHostApiKeyRouting.ResolveAcquisitionKey(config),
                 characterName,
                 world,
                 token).ConfigureAwait(false);
@@ -142,7 +142,7 @@ public sealed class MarketAcquisitionRequestWorkspace : IDisposable
             result = await syncService.SyncAsync(
                 new MarketAcquisitionRequestSyncRequest(
                     config.ServerUrl,
-                    config.ApiKey,
+                    WorkshopHostApiKeyRouting.ResolveAcquisitionKey(config),
                     characterName,
                     world,
                     config.PluginInstanceId,
@@ -181,7 +181,7 @@ public sealed class MarketAcquisitionRequestWorkspace : IDisposable
         {
             remote = await client.GetBatchAsync(
                 config.ServerUrl,
-                config.ApiKey,
+                WorkshopHostApiKeyRouting.ResolveAcquisitionKey(config),
                 document.RemoteRequestId,
                 token).ConfigureAwait(false);
         }).ConfigureAwait(false);
@@ -221,7 +221,7 @@ public sealed class MarketAcquisitionRequestWorkspace : IDisposable
             ValidateScope(characterName, world);
             ClaimedRequest = await client.ClaimAsync(
                 config.ServerUrl,
-                config.ApiKey,
+                WorkshopHostApiKeyRouting.ResolveAcquisitionKey(config),
                 requestId,
                 characterName,
                 world,
@@ -247,7 +247,7 @@ public sealed class MarketAcquisitionRequestWorkspace : IDisposable
             acceptIdempotencyKey ??= NewIdempotencyKey();
             var accepted = await client.AcceptAsync(
                 config.ServerUrl,
-                config.ApiKey,
+                WorkshopHostApiKeyRouting.ResolveAcquisitionKey(config),
                 claimed.Id,
                 claimed.ClaimToken,
                 acceptIdempotencyKey,
@@ -267,7 +267,7 @@ public sealed class MarketAcquisitionRequestWorkspace : IDisposable
             rejectIdempotencyKey ??= NewIdempotencyKey();
             await client.RejectAsync(
                 config.ServerUrl,
-                config.ApiKey,
+                WorkshopHostApiKeyRouting.ResolveAcquisitionKey(config),
                 claimed.Id,
                 claimed.ClaimToken,
                 rejectIdempotencyKey,
@@ -398,7 +398,7 @@ public sealed class MarketAcquisitionRequestWorkspace : IDisposable
         {
             var remote = await client.GetBatchAsync(
                 config.ServerUrl,
-                config.ApiKey,
+                WorkshopHostApiKeyRouting.ResolveAcquisitionKey(config),
                 claimed.Id,
                 token).ConfigureAwait(false);
             claimed = MarketAcquisitionRequestDocumentMapper.MergeClaimWithRequest(claimed, remote);
@@ -410,10 +410,10 @@ public sealed class MarketAcquisitionRequestWorkspace : IDisposable
         if (!MarketAcquisitionPlanPreparationService.IsFailedStatus(claimed.Status))
             return claimed;
 
-        await client.ResendAsync(config.ServerUrl, config.ApiKey, claimed.Id, token).ConfigureAwait(false);
+        await client.ResendAsync(config.ServerUrl, WorkshopHostApiKeyRouting.ResolveAcquisitionKey(config), claimed.Id, token).ConfigureAwait(false);
         var reclaimed = await client.ClaimAsync(
             config.ServerUrl,
-            config.ApiKey,
+            WorkshopHostApiKeyRouting.ResolveAcquisitionKey(config),
             claimed.Id,
             claimed.TargetCharacterName,
             claimed.TargetWorld,
@@ -424,7 +424,7 @@ public sealed class MarketAcquisitionRequestWorkspace : IDisposable
         rejectIdempotencyKey = NewIdempotencyKey();
         var accepted = await client.AcceptAsync(
             config.ServerUrl,
-            config.ApiKey,
+            WorkshopHostApiKeyRouting.ResolveAcquisitionKey(config),
             reclaimed.Id,
             reclaimed.ClaimToken,
             acceptIdempotencyKey,
