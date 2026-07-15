@@ -1,6 +1,9 @@
 using System.Reflection;
 using Dalamud.Plugin.Services;
-using MarketMafioso.Automation.Retainers;
+using FFXIVClientStructs.FFXIV.Client.Game;
+using Franthropy.Dalamud.Automation.Inventory;
+using Franthropy.Dalamud.Automation.Retainers;
+using MarketMafioso.RetainerRestock;
 using MarketMafioso.WorkshopPrep;
 
 namespace MarketMafioso.Tests.WorkshopPrep;
@@ -128,6 +131,64 @@ public sealed class WorkshopRetainerRestockOrchestrationTests
             service.LastStatus);
     }
 
+    [Fact]
+    public async Task StartElementalDepositAsync_UsesRetainersUntilAllCarriedCrystalsAreDeposited()
+    {
+        var driver = new FakeWorkshopRetainerRestockDriver
+        {
+            PlayerCrystals = [new DalamudInventoryStack(InventoryType.Crystals, 0, 2, 1_500)],
+        };
+        driver.DepositCapacityByRetainer["Alpha"] = 500;
+        driver.DepositCapacityByRetainer["Beta"] = 1_000;
+        var service = CreateService(driver);
+        var plan = new ElementalDepositPlan(
+            DateTime.UtcNow,
+            [new ElementalDepositPlanLine(2, "Fire Shard", 1_500, 1_500, 1_500, 0)],
+            [
+                DepositCandidate(1, "Alpha", 500),
+                DepositCandidate(2, "Beta", 1_000),
+            ],
+            2,
+            0);
+
+        await service.StartElementalDepositAsync(plan);
+
+        Assert.Contains("deposit:Alpha:2:500", driver.Calls);
+        Assert.Contains("deposit:Beta:2:1000", driver.Calls);
+        Assert.Equal(WorkshopRetainerRestockState.Complete, service.State);
+        Assert.Equal("Quick deposit complete. Deposited 1,500 elemental shard/crystal units.", service.LastStatus);
+    }
+
+    [Fact]
+    public async Task StartElementalDepositAsync_ContinuesPastRetainersWithNoLiveCapacity()
+    {
+        var driver = new FakeWorkshopRetainerRestockDriver
+        {
+            PlayerCrystals = [new DalamudInventoryStack(InventoryType.Crystals, 0, 2, 100)],
+        };
+        driver.DepositCapacityByRetainer["Full one"] = 0;
+        driver.DepositCapacityByRetainer["Full two"] = 0;
+        driver.DepositCapacityByRetainer["Available"] = 100;
+        var service = CreateService(driver);
+        var plan = new ElementalDepositPlan(
+            DateTime.UtcNow,
+            [new ElementalDepositPlanLine(2, "Fire Shard", 100, 29_997, 100, 0)],
+            [
+                DepositCandidate(1, "Full one", 9_999),
+                DepositCandidate(2, "Full two", 9_999),
+                DepositCandidate(3, "Available", 9_999),
+            ],
+            3,
+            3);
+
+        await service.StartElementalDepositAsync(plan);
+
+        Assert.Contains("deposit:Full one:2:0", driver.Calls);
+        Assert.Contains("deposit:Full two:2:0", driver.Calls);
+        Assert.Contains("deposit:Available:2:100", driver.Calls);
+        Assert.Equal(WorkshopRetainerRestockState.Complete, service.State);
+    }
+
     private static WorkshopRetainerRestockService CreateService(IWorkshopRetainerRestockDriver driver) =>
         new(TestPluginLog.Create(), driver);
 
@@ -140,25 +201,24 @@ public sealed class WorkshopRetainerRestockOrchestrationTests
     private static RetainerMaterialCandidate Candidate(ulong id, string name) =>
         new(id, name, DateTime.UnixEpoch, 99);
 
-    private static LiveRetainerStack Stack(uint itemId, int quantity, int slotIndex) =>
-        (LiveRetainerStack)typeof(LiveRetainerStack).GetConstructors().Single().Invoke(
-        [
-            Enum.ToObject(typeof(LiveRetainerStack).GetProperty("Page")!.PropertyType, 0),
-            slotIndex,
-            itemId,
-            quantity,
-        ]);
+    private static ElementalDepositRetainerCandidate DepositCandidate(ulong id, string name, int capacity) =>
+        new(id, name, DateTime.UnixEpoch, new Dictionary<uint, int> { [2] = capacity }, capacity, true);
+
+    private static DalamudInventoryStack Stack(uint itemId, int quantity, int slotIndex) =>
+        new(InventoryType.RetainerPage1, slotIndex, itemId, quantity);
 
     private sealed class FakeWorkshopRetainerRestockDriver : IWorkshopRetainerRestockDriver
     {
         private string? openRetainer;
 
-        public Dictionary<string, IReadOnlyList<LiveRetainerStack>> StacksByRetainer { get; } = [];
+        public Dictionary<string, IReadOnlyList<DalamudInventoryStack>> StacksByRetainer { get; } = [];
         public List<string> Calls { get; } = [];
         public Exception? WaitForRetainerListException { get; init; }
         public Exception? RetrieveException { get; init; }
+        public List<DalamudInventoryStack> PlayerCrystals { get; init; } = [];
+        public Dictionary<string, int> DepositCapacityByRetainer { get; } = [];
 
-        public IReadOnlyList<LiveRetainerStack> ScanLiveRetainerStacks(IReadOnlySet<uint> itemIds) =>
+        public IReadOnlyList<DalamudInventoryStack> ScanLiveRetainerStacks(IReadOnlySet<uint> itemIds) =>
             GetCurrentStacks(itemIds);
 
         public Task WaitForRetainerListAsync()
@@ -182,18 +242,44 @@ public sealed class WorkshopRetainerRestockOrchestrationTests
             return Task.CompletedTask;
         }
 
-        public Task<IReadOnlyList<LiveRetainerStack>> ScanLiveRetainerStacksAsync(IReadOnlySet<uint> itemIds)
+        public Task<IReadOnlyList<DalamudInventoryStack>> ScanLiveRetainerStacksAsync(IReadOnlySet<uint> itemIds)
         {
             Calls.Add($"scan:{openRetainer}:{string.Join(',', itemIds.OrderBy(x => x))}");
             return Task.FromResult(GetCurrentStacks(itemIds));
         }
 
-        public Task<RetainerRetrievalResult> RetrieveFromLiveStackAsync(LiveRetainerStack stack, int quantity)
+        public Task<RetainerRetrievalResult> RetrieveFromLiveStackAsync(DalamudInventoryStack stack, int quantity)
         {
             Calls.Add($"retrieve:{openRetainer}:{stack.ItemId}:{quantity}");
             return RetrieveException == null
                 ? Task.FromResult(new RetainerRetrievalResult(true, quantity, "Retrieved."))
                 : Task.FromException<RetainerRetrievalResult>(RetrieveException);
+        }
+
+        public Task<IReadOnlyList<DalamudInventoryStack>> ScanLivePlayerCrystalStacksAsync(IReadOnlySet<uint> itemIds)
+        {
+            Calls.Add($"scan-player-crystals:{openRetainer}:{string.Join(',', itemIds.OrderBy(x => x))}");
+            return Task.FromResult<IReadOnlyList<DalamudInventoryStack>>(
+                PlayerCrystals.Where(stack => itemIds.Contains(stack.ItemId) && stack.Quantity > 0).ToList());
+        }
+
+        public Task<RetainerCrystalTransferResult> DepositCrystalStackAsync(DalamudInventoryStack stack, int quantity)
+        {
+            var capacity = openRetainer != null && DepositCapacityByRetainer.TryGetValue(openRetainer, out var available)
+                ? available
+                : 0;
+            var deposited = Math.Min(quantity, capacity);
+            if (openRetainer != null)
+                DepositCapacityByRetainer[openRetainer] = capacity - deposited;
+            var index = PlayerCrystals.IndexOf(stack);
+            if (index >= 0)
+                PlayerCrystals[index] = stack with { Quantity = stack.Quantity - deposited };
+            Calls.Add($"deposit:{openRetainer}:{stack.ItemId}:{deposited}");
+            return Task.FromResult(new RetainerCrystalTransferResult(
+                true,
+                deposited,
+                "TransferVerified",
+                "Deposited."));
         }
 
         public Task CloseRetainerAsync()
@@ -203,7 +289,7 @@ public sealed class WorkshopRetainerRestockOrchestrationTests
             return Task.CompletedTask;
         }
 
-        private IReadOnlyList<LiveRetainerStack> GetCurrentStacks(IReadOnlySet<uint> itemIds) =>
+        private IReadOnlyList<DalamudInventoryStack> GetCurrentStacks(IReadOnlySet<uint> itemIds) =>
             openRetainer != null && StacksByRetainer.TryGetValue(openRetainer, out var stacks)
                 ? stacks.Where(stack => itemIds.Contains(stack.ItemId)).ToList()
                 : [];

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using Dalamud.Plugin.Services;
+using Franthropy.Dalamud.Automation.Inventory;
 using MarketMafioso.Automation.Retainers;
 using MarketMafioso.RetainerRestock;
 
@@ -16,6 +17,7 @@ public enum WorkshopRetainerRestockState
     OpeningRetainer,
     OpeningInventory,
     WithdrawingItems,
+    DepositingItems,
     ClosingRetainer,
     Complete,
     Failed,
@@ -26,7 +28,7 @@ public sealed class WorkshopRetainerRestockService
     private readonly IPluginLog log;
     private readonly IWorkshopRetainerRestockDriver driver;
     private bool isRunning;
-    private string lastStatus = "Workshop material restock has not run.";
+    private string lastStatus = "No retainer transfer has run.";
 
     public WorkshopRetainerRestockService(IPluginLog log)
         : this(log, new WorkshopRetainerRestockDriver(log))
@@ -109,6 +111,94 @@ public sealed class WorkshopRetainerRestockService
                 return new RestockRunCompletion(summary.IsSuccess, summary.Message);
             },
             "Workshop material restock").ConfigureAwait(false);
+    }
+
+    public async Task StartElementalDepositAsync(ElementalDepositPlan plan)
+    {
+        ArgumentNullException.ThrowIfNull(plan);
+        if (isRunning)
+        {
+            lastStatus = "A retainer transfer is already running.";
+            return;
+        }
+
+        if (!plan.CanRun)
+        {
+            lastStatus = plan.PlayerQuantity == 0
+                ? "No elemental shards or crystals are currently carried."
+                : "No cached retainer crystal capacity is available. Refresh the retainer cache first.";
+            return;
+        }
+
+        var remaining = plan.Lines.ToDictionary(line => line.ItemId, line => line.PlayerQuantity);
+        var candidates = plan.Candidates.Select(candidate => new RetainerMaterialCandidate(
+            candidate.RetainerId,
+            candidate.RetainerName,
+            candidate.LastUpdatedUtc,
+            candidate.UsableCapacity)).ToList();
+
+        isRunning = true;
+        State = WorkshopRetainerRestockState.Planning;
+        var retainerOpen = false;
+        try
+        {
+            var totalDeposited = 0;
+            State = WorkshopRetainerRestockState.WaitingForRetainerList;
+            await driver.WaitForRetainerListAsync().ConfigureAwait(false);
+
+            foreach (var candidate in candidates)
+            {
+                State = WorkshopRetainerRestockState.OpeningRetainer;
+                await driver.OpenRetainerAsync(candidate).ConfigureAwait(false);
+                retainerOpen = true;
+
+                State = WorkshopRetainerRestockState.OpeningInventory;
+                await driver.OpenRetainerInventoryAsync().ConfigureAwait(false);
+
+                State = WorkshopRetainerRestockState.DepositingItems;
+                totalDeposited += await DepositIntoOpenRetainerAsync(remaining).ConfigureAwait(false);
+
+                State = WorkshopRetainerRestockState.ClosingRetainer;
+                await driver.CloseRetainerAsync().ConfigureAwait(false);
+                retainerOpen = false;
+
+                if (remaining.Values.All(quantity => quantity <= 0))
+                    break;
+            }
+
+            var remainingTotal = remaining.Values.Where(quantity => quantity > 0).Sum();
+            if (totalDeposited == 0)
+                throw new InvalidOperationException("No live retainer crystal capacity was available.");
+
+            State = WorkshopRetainerRestockState.Complete;
+            lastStatus = remainingTotal == 0
+                ? $"Quick deposit complete. Deposited {totalDeposited:N0} elemental shard/crystal units."
+                : $"Quick deposit partially complete. Deposited {totalDeposited:N0}; {remainingTotal:N0} remain on the character.";
+            log.Information($"[MarketMafioso] {lastStatus}");
+        }
+        catch (Exception ex)
+        {
+            var failedState = State;
+            if (retainerOpen)
+            {
+                try
+                {
+                    await driver.CloseRetainerAsync().ConfigureAwait(false);
+                }
+                catch (Exception cleanupException)
+                {
+                    log.Warning(cleanupException, "[MarketMafioso] Unable to close the retainer after quick deposit failed.");
+                }
+            }
+
+            State = WorkshopRetainerRestockState.Failed;
+            lastStatus = $"Quick deposit failed during {failedState}. {ex.Message}";
+            log.Error(ex, "[MarketMafioso] Quick deposit failed.");
+        }
+        finally
+        {
+            isRunning = false;
+        }
     }
 
     public static RetainerRestockRunRequest BuildRestockRunRequest(IReadOnlyList<RetainerRestockPlanLine> planLines)
@@ -216,7 +306,7 @@ public sealed class WorkshopRetainerRestockService
         }
     }
 
-    public unsafe IReadOnlyList<LiveRetainerStack> ScanLiveRetainerStacks(IReadOnlySet<uint> itemIds)
+    public IReadOnlyList<DalamudInventoryStack> ScanLiveRetainerStacks(IReadOnlySet<uint> itemIds)
     {
         return driver.ScanLiveRetainerStacks(itemIds);
     }
@@ -243,7 +333,7 @@ public sealed class WorkshopRetainerRestockService
     private async Task<int> WithdrawFromOpenRetainerAsync(Dictionary<uint, int> remaining)
     {
         var retrievedTotal = 0;
-        var plannedStacks = new HashSet<LiveRetainerStack>();
+        var plannedStacks = new HashSet<DalamudInventoryStack>();
         var itemIds = remaining.Where(x => x.Value > 0).Select(x => x.Key).ToHashSet();
         var liveStacks = await driver.ScanLiveRetainerStacksAsync(itemIds).ConfigureAwait(false);
         foreach (var stack in liveStacks)
@@ -262,10 +352,32 @@ public sealed class WorkshopRetainerRestockService
             remaining[stack.ItemId] -= result.Retrieved;
             retrievedTotal += result.Retrieved;
             plannedStacks.Add(stack);
-            log.Information($"[MarketMafioso] Retrieved {result.Retrieved}x item {stack.ItemId} from {stack.Page}/{stack.SlotIndex}.");
+            log.Information($"[MarketMafioso] Retrieved {result.Retrieved}x item {stack.ItemId} from {stack.Container}/{stack.SlotIndex}.");
         }
 
         return retrievedTotal;
+    }
+
+    private async Task<int> DepositIntoOpenRetainerAsync(Dictionary<uint, int> remaining)
+    {
+        var depositedTotal = 0;
+        var itemIds = remaining.Where(entry => entry.Value > 0).Select(entry => entry.Key).ToHashSet();
+        var liveStacks = await driver.ScanLivePlayerCrystalStacksAsync(itemIds).ConfigureAwait(false);
+        foreach (var stack in liveStacks)
+        {
+            if (!remaining.TryGetValue(stack.ItemId, out var quantity) || quantity <= 0)
+                continue;
+
+            var result = await driver.DepositCrystalStackAsync(stack, Math.Min(quantity, stack.Quantity)).ConfigureAwait(false);
+            if (!result.Success)
+                throw new InvalidOperationException(result.Message);
+
+            remaining[stack.ItemId] -= result.Transferred;
+            depositedTotal += result.Transferred;
+            log.Information($"[MarketMafioso] Deposited {result.Transferred}x item {stack.ItemId} from crystal slot {stack.SlotIndex}.");
+        }
+
+        return depositedTotal;
     }
 
     private static string FormatRemainingShortages(IReadOnlyDictionary<uint, int> remaining)

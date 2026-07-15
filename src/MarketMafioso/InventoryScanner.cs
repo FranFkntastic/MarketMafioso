@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using Dalamud.Plugin.Services;
 using FFXIVClientStructs.FFXIV.Client.Game;
+using Franthropy.Dalamud.Automation.Retainers;
 using MarketMafioso.Automation.Inventory;
 using MarketMafioso.Automation.Items;
 
@@ -47,6 +48,7 @@ public class InventoryScanner
         InventoryType.RetainerPage5,
         InventoryType.RetainerPage6,
         InventoryType.RetainerPage7,
+        InventoryType.RetainerCrystals,
     ];
 
     public InventoryScanner(IDataManager dataManager, IPluginLog log)
@@ -89,6 +91,17 @@ public class InventoryScanner
             .SelectMany(bag => bag.Items)
             .GroupBy(item => item.ItemId)
             .ToDictionary(group => group.Key, group => group.Sum(item => (int)item.Quantity));
+    }
+
+    public IReadOnlyDictionary<uint, int> CountPlayerCrystals()
+    {
+        return InventoryPayloadMapper.MapInventoryBags(
+                containerScanner.ScanLoadedContainers([InventoryType.Crystals]),
+                includeItemNames: false,
+                ResolveItemName)
+            .SelectMany(bag => bag.Items)
+            .Where(item => ElementalCurrencyCatalog.IsShardOrCrystal(item.ItemId))
+            .ToDictionary(item => item.ItemId, item => (int)item.Quantity);
     }
 
     public List<InventoryBag> ScanCurrentRetainer(Configuration config)
