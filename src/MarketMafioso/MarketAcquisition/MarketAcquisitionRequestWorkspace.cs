@@ -252,7 +252,6 @@ public sealed class MarketAcquisitionRequestWorkspace : IDisposable
         MarketAcquisitionRequestDocument document,
         MarketAcquisitionRequestView? remoteRequest)
     {
-        _ = document;
         if (remoteRequest is null ||
             ClaimedRequest is null ||
             !string.Equals(remoteRequest.Id, ClaimedRequest.Id, StringComparison.Ordinal))
@@ -260,9 +259,15 @@ public sealed class MarketAcquisitionRequestWorkspace : IDisposable
             return;
         }
 
+        var priorDocument = MarketAcquisitionRequestDocumentMapper.FromRequestView(ClaimedRequest);
+        var intentChanged = !string.Equals(
+            MarketAcquisitionRequestDocumentHasher.ComputeIntentHash(priorDocument),
+            MarketAcquisitionRequestDocumentHasher.ComputeIntentHash(document),
+            StringComparison.Ordinal);
         ClaimedRequest = MarketAcquisitionRequestDocumentMapper.MergeClaimWithRequest(ClaimedRequest, remoteRequest);
         PersistClaim();
-        ClearPreparedPlan();
+        if (intentChanged)
+            ClearPreparedPlan();
     }
 
     public Task ClaimAsync(string requestId, string characterName, string world) =>

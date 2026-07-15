@@ -56,7 +56,7 @@ public sealed class MarketAcquisitionRequestWorkspaceTests
             ItemName = "Updated Darksteel Ore",
         };
 
-        workspace.OnDocumentAdopted(new MarketAcquisitionRequestDocument(), remote);
+        workspace.OnDocumentAdopted(MarketAcquisitionRequestDocumentMapper.FromRequestView(remote), remote);
 
         Assert.Equal(7, workspace.ClaimedRequest?.Revision);
         Assert.Equal("Updated Darksteel Ore", workspace.ClaimedRequest?.ItemName);
@@ -66,6 +66,30 @@ public sealed class MarketAcquisitionRequestWorkspaceTests
         Assert.Equal("reject-key", config.ActiveMarketAcquisitionClaim?.RejectIdempotencyKey);
         Assert.Equal(1, saveCount);
         Assert.Equal(1, resetCount);
+    }
+
+    [Fact]
+    public void AdoptingRemoteStatusRefreshPreservesPreparedPlanWhenIntentIsUnchanged()
+    {
+        var config = new Configuration();
+        MarketAcquisitionClaimPersistence.Save(config, CreateClaim(), "accept-key", "reject-key");
+        var resetCount = 0;
+        using var workspace = CreateWorkspace(config, () => { });
+        Connect(workspace, _ => { }, _ => true, _ => resetCount++);
+        var plan = new MarketAcquisitionPlan { RequestId = "request-1", Status = "Ready" };
+        workspace.ReplacePreparedPlan(plan);
+        var remote = CreateRequest() with
+        {
+            Revision = 7,
+            Status = "AcceptedInPlugin",
+        };
+
+        workspace.OnDocumentAdopted(MarketAcquisitionRequestDocumentMapper.FromRequestView(remote), remote);
+
+        Assert.Same(plan, workspace.PreparedPlan);
+        Assert.Equal(7, workspace.ClaimedRequest?.Revision);
+        Assert.Equal("AcceptedInPlugin", workspace.ClaimedRequest?.Status);
+        Assert.Equal(0, resetCount);
     }
 
     [Fact]

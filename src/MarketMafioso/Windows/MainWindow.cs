@@ -69,6 +69,7 @@ public class MainWindow : Window, IDisposable
     private string workshopStatus = "Workshop prep queue is idle.";
     private string? agentRequestedTab;
     private string? agentRequestedWorkspaceView;
+    private DateTimeOffset agentSelectionHoldUntilUtc;
     private bool clearAgentReviewWindowOverride;
     private Vector2? capturePresentationPreviousSize;
     private Vector2? capturePresentationRestoreSize;
@@ -311,7 +312,7 @@ public class MainWindow : Window, IDisposable
         squireTab.ConnectMarketAcquisition(lines =>
         {
             acquisitionRequestBuilder.StageLines(lines);
-            agentRequestedTab = "Market Acquisition";
+            QueueAgentTabSelection("Market Acquisition", "Compose");
         });
         acquisitionWorkspace.Connect(
             acquisitionRequestBuilder.AdoptRequest,
@@ -541,8 +542,12 @@ public class MainWindow : Window, IDisposable
             }
 
             ImGui.EndTabBar();
-            agentRequestedTab = null;
-            agentRequestedWorkspaceView = null;
+            if (agentSelectionHoldUntilUtc != default && DateTimeOffset.UtcNow >= agentSelectionHoldUntilUtc)
+            {
+                agentRequestedTab = null;
+                agentRequestedWorkspaceView = null;
+                agentSelectionHoldUntilUtc = default;
+            }
         }
         }
         finally
@@ -576,10 +581,18 @@ public class MainWindow : Window, IDisposable
         if (string.Equals(mainTab, "Squire", StringComparison.Ordinal))
             squireTab.RefreshForBridge();
 
-        agentRequestedTab = mainTab;
-        agentRequestedWorkspaceView = workspaceView;
+        QueueAgentTabSelection(mainTab, workspaceView);
         AgentOpenForReview();
         return true;
+    }
+
+    private void QueueAgentTabSelection(string mainTab, string? workspaceView = null)
+    {
+        agentRequestedTab = mainTab;
+        agentRequestedWorkspaceView = workspaceView;
+        // ImGui commits SetSelected at the end of a tab bar. Hold the semantic request long enough for
+        // both a parent and nested tab bar to render, independent of the client's current frame rate.
+        agentSelectionHoldUntilUtc = DateTimeOffset.UtcNow.AddSeconds(2);
     }
 
     private static bool IsAllowedWorkspaceView(string mainTab, string? workspaceView) =>
@@ -793,10 +806,13 @@ public class MainWindow : Window, IDisposable
     }
 
     private ImGuiTabItemFlags GetAgentWorkspaceTabFlags(string viewName, string? legacyViewName = null) =>
-        string.Equals(agentRequestedWorkspaceView, viewName, StringComparison.Ordinal) ||
-        string.Equals(agentRequestedWorkspaceView, legacyViewName, StringComparison.Ordinal)
+        ShouldSelectAgentWorkspaceTab(agentRequestedWorkspaceView, viewName, legacyViewName)
             ? ImGuiTabItemFlags.SetSelected
             : ImGuiTabItemFlags.None;
+
+    internal static bool ShouldSelectAgentWorkspaceTab(string? requestedView, string viewName, string? legacyViewName = null) =>
+        string.Equals(requestedView, viewName, StringComparison.Ordinal) ||
+        (legacyViewName is not null && string.Equals(requestedView, legacyViewName, StringComparison.Ordinal));
 
     private void DrawMarketAcquisitionWorkspaceStatus()
     {
@@ -896,7 +912,7 @@ public class MainWindow : Window, IDisposable
         DrawLiveCandidatePlanResult(snapshot);
 
         if (ImGuiUi.Button("Open Diagnostics", true))
-            agentRequestedTab = "Diagnostics";
+            QueueAgentTabSelection("Diagnostics");
     }
 
     private void DrawLiveCandidatePlanResult(MarketAcquisitionRouteEngineSnapshot snapshot)
