@@ -11,7 +11,6 @@ using Dalamud.Plugin.Services;
 using Dalamud.Utility;
 using ECommons.ExcelServices.Sheets;
 using FFXIVClientStructs.FFXIV.Client.Game.Control;
-using FFXIVClientStructs.FFXIV.Client.UI;
 using FFXIVClientStructs.FFXIV.Component.GUI;
 using Lumina.Excel.Sheets;
 using MarketMafioso.Automation.Travel;
@@ -22,6 +21,7 @@ namespace MarketMafioso.Squire.Observation;
 internal sealed class DalamudVendorSalePreparation
 {
     private static readonly TimeSpan TravelTimeout = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan TravelIdleFailureDelay = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan MovementTimeout = TimeSpan.FromMinutes(2);
     private static readonly TimeSpan InteractionTimeout = TimeSpan.FromSeconds(30);
     private readonly ICommandManager commandManager;
@@ -37,6 +37,7 @@ internal sealed class DalamudVendorSalePreparation
     private bool ownsNavigation;
 
     public bool OwnsUi => ownsShop;
+    public string Status { get; private set; } = "Vendor preparation is idle.";
 
     public DalamudVendorSalePreparation(
         ICommandManager commandManager,
@@ -73,17 +74,21 @@ internal sealed class DalamudVendorSalePreparation
 
     public async Task<SquireActionResult> EnsureReadyAsync(CancellationToken cancellationToken)
     {
+        Status = "Checking for an already-open vendor shop.";
         if (await framework.RunOnTick(IsShopReady).ConfigureAwait(false))
             return SquireActionResult.Completed("The vendor shop is ready.");
 
         var vendor = await framework.RunOnTick(FindNearestVendor).ConfigureAwait(false);
         if (vendor is null)
         {
+            Status = "No gil vendor is loaded; requesting Lifestream travel to the local market board.";
             if (!lifestream.IsAvailable)
                 return SquireActionResult.Fail("LifestreamUnavailable", "Lifestream is not loaded, so Squire could not travel to a general vendor.");
-            if (!commandManager.ProcessCommand("/li gc"))
-                return SquireActionResult.Fail("VendorTravelUnavailable", "Lifestream did not accept /li gc for vendor travel.");
+            if (!commandManager.ProcessCommand("/li mb"))
+                return SquireActionResult.Fail("VendorTravelUnavailable", "Lifestream did not accept /li mb for vendor travel.");
             var stateFailed = false;
+            var travelEndedWithoutVendor = false;
+            Stopwatch? idleStopwatch = null;
             var arrived = await WaitUntilAsync(() =>
             {
                 if (!lifestream.TryIsBusy(out var busy))
@@ -91,12 +96,27 @@ internal sealed class DalamudVendorSalePreparation
                     stateFailed = true;
                     return false;
                 }
-                return !busy && FindNearestVendor() is not null;
+                var observed = FindNearestVendor();
+                Status = $"Waiting for /li mb: Lifestream busy={busy}; gil vendor {(observed is null ? "not loaded" : "loaded")}.";
+                if (busy)
+                {
+                    idleStopwatch = null;
+                    return false;
+                }
+                if (observed is not null)
+                    return true;
+                idleStopwatch ??= Stopwatch.StartNew();
+                if (idleStopwatch.Elapsed < TravelIdleFailureDelay)
+                    return false;
+                travelEndedWithoutVendor = true;
+                return true;
             }, TravelTimeout, cancellationToken).ConfigureAwait(false);
             if (stateFailed)
                 return SquireActionResult.Fail("LifestreamStateUnavailable", "Vendor travel began, but Lifestream busy state could not be observed safely.");
+            if (travelEndedWithoutVendor)
+                return SquireActionResult.Fail("VendorTravelEndedWithoutVendor", "Lifestream finished /li mb, but no sheet-classified gil vendor became visible near the market board.");
             if (!arrived)
-                return SquireActionResult.Fail("VendorTravelTimeout", "Lifestream did not finish where a general vendor could be discovered.");
+                return SquireActionResult.Fail("VendorTravelTimeout", "Lifestream did not finish /li mb within five minutes.");
             vendor = await framework.RunOnTick(FindNearestVendor).ConfigureAwait(false);
         }
         if (vendor is null)
@@ -104,6 +124,7 @@ internal sealed class DalamudVendorSalePreparation
 
         if (!IsInInteractionRange(vendor))
         {
+            Status = $"Approaching gil vendor {vendor.BaseId} with vnavmesh.";
             var move = vnavmesh.MoveCloseTo(vendor.Position, 4f);
             if (!move.Success)
                 return SquireActionResult.Fail("VendorNavigationUnavailable", move.Message.Replace("market board", "vendor", StringComparison.OrdinalIgnoreCase));
@@ -124,16 +145,16 @@ internal sealed class DalamudVendorSalePreparation
         if (vendor is null || !await framework.RunOnTick(() => TryInteract(vendor)).ConfigureAwait(false))
             return SquireActionResult.Fail("VendorInteractionUnavailable", "The selected general vendor could not be targeted and interacted with.");
 
+        Status = $"Opening the normal Shop UI from gil vendor {vendor.BaseId}.";
         ownsShop = true;
-        var shopEntrySubmitted = false;
         var ready = await WaitUntilAsync(() =>
         {
             if (IsShopReady())
                 return true;
-            if (!shopEntrySubmitted && TrySelectShopEntry())
-                shopEntrySubmitted = true;
+            TrySelectShopEntry();
             return false;
         }, InteractionTimeout, cancellationToken).ConfigureAwait(false);
+        Status = ready ? "The vendor shop is ready." : "The vendor shop did not become ready.";
         return ready
             ? SquireActionResult.Completed("The vendor shop is ready.")
             : SquireActionResult.Fail("VendorShopTimeout", "The selected vendor's normal Shop UI did not become ready.");
@@ -211,23 +232,32 @@ internal sealed class DalamudVendorSalePreparation
 
     private unsafe bool TrySelectShopEntry()
     {
-        var stringAddon = gameGui.GetAddonByName<AddonSelectString>("SelectString", 1);
-        if (stringAddon != null && stringAddon->AtkUnitBase.IsReady && stringAddon->AtkUnitBase.IsVisible &&
-            TrySelectPopup(&stringAddon->AtkUnitBase, stringAddon->PopupMenu.PopupMenu))
+        if (TrySelectRenderedMenuEntry("SelectString", entryStride: 1))
             return true;
-        var iconAddon = gameGui.GetAddonByName<AddonSelectIconString>("SelectIconString", 1);
-        return iconAddon != null && iconAddon->AtkUnitBase.IsReady && iconAddon->AtkUnitBase.IsVisible &&
-               TrySelectPopup(&iconAddon->AtkUnitBase, iconAddon->PopupMenu.PopupMenu);
+        return TrySelectRenderedMenuEntry("SelectIconString", entryStride: 3);
     }
 
-    private unsafe bool TrySelectPopup(AtkUnitBase* addon, PopupMenu popup)
+    private unsafe bool TrySelectRenderedMenuEntry(string addonName, int entryStride)
     {
-        for (var index = 0; index < popup.EntryCount; index++)
+        var addon = gameGui.GetAddonByName<AtkUnitBase>(addonName, 1);
+        if (!IsPresented(addon) || addon->AtkValues == null || addon->AtkValuesCount <= 7 ||
+            addon->AtkValues[5].Type != AtkValueType.Int)
+            return false;
+
+        var entryCount = Math.Max(0, addon->AtkValues[5].Int);
+        for (var index = 0; index < entryCount; index++)
         {
-            var observed = popup.EntryNames[index].ToString().Trim();
+            var valueIndex = 7 + (index * entryStride);
+            if (valueIndex >= addon->AtkValuesCount)
+                break;
+            var value = addon->AtkValues + valueIndex;
+            if (value->Type is not (AtkValueType.String or AtkValueType.ManagedString or AtkValueType.WideString or AtkValueType.ConstString))
+                continue;
+            var observed = value->GetValueAsString().Trim();
             if (!shopEntryNames.Any(target => Automation.Retainers.RetainerUiAutomationText.IsSelectStringEntryMatch(observed, target)))
                 continue;
             addon->FireCallbackInt(index);
+            Status = $"Selected the rendered {addonName} shop entry '{observed}'.";
             return true;
         }
         return false;
