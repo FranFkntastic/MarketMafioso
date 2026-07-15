@@ -777,8 +777,6 @@ public class MainWindow : Window, IDisposable
     private void DrawMarketAcquisitionTab()
     {
         UtilityWorkspaceUi.DrawModuleHeader("Market Acquisition", MarketAcquisitionModuleSummary);
-        DrawMarketAcquisitionWorkspaceStatus();
-        ImGui.Spacing();
 
         if (!ImGui.BeginTabBar("##marketAcquisitionWorkspace"))
             return;
@@ -831,27 +829,6 @@ public class MainWindow : Window, IDisposable
     internal static bool ShouldSelectAgentWorkspaceTab(string? requestedView, string viewName, params string[] legacyViewNames) =>
         string.Equals(requestedView, viewName, StringComparison.Ordinal) ||
         legacyViewNames.Any(legacyViewName => string.Equals(requestedView, legacyViewName, StringComparison.Ordinal));
-
-    private void DrawMarketAcquisitionWorkspaceStatus()
-    {
-        var snapshot = routeEngine.CreateSnapshot();
-        var planState = acquisitionWorkspace.PreparedPlan is null
-            ? "Not prepared"
-            : acquisitionWorkspace.IsPreparedPlanStale() ? "Stale" : "Current";
-        var requestState = acquisitionWorkspace.ClaimedRequest is null
-            ? "Empty"
-            : $"{acquisitionWorkspace.ClaimedRequest.Status} / {planState}";
-        var routeState = string.IsNullOrWhiteSpace(snapshot.RouteState) ? "Idle" : snapshot.RouteState;
-        UtilityWorkspaceUi.DrawStatusStrip(
-            "##marketAcquisitionWorkspaceStatus",
-            [
-                new("Workbench", $"{acquisitionRequestBuilder.LineCount:N0} line(s)", acquisitionRequestBuilder.LineCount > 0 ? ColSuccess : ColMuted),
-                new("Inbox", $"{acquisitionWorkspace.PendingRequests.Count:N0} loaded", acquisitionWorkspace.PendingRequests.Count > 0 ? ColHeader : ColMuted),
-                new("Active order", requestState, acquisitionWorkspace.ClaimedRequest is null ? ColMuted : planState == "Stale" ? ColError : ColHeader),
-                new("Route", routeState, snapshot.IsRouteActive ? ColHeader : ColMuted),
-            ]);
-        ImGui.TextColored(GetAcquisitionStatusColor(GetVisibleAcquisitionStatus()), GetVisibleAcquisitionStatus());
-    }
 
     private void DrawMarketAcquisitionRequestBuilder()
     {

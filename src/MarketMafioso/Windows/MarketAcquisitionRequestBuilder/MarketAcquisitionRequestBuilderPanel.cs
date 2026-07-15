@@ -84,7 +84,6 @@ public sealed class MarketAcquisitionRequestBuilderPanel
             context.HasCharacterScope && !context.IsBusy && !context.IsRouteActive);
 
         ImGuiUi.SectionHeader("Editable buy list", MainWindow.ColHeader);
-        ImGui.TextColored(MainWindow.ColMuted, "Inbox lines and locally added items meet here. Edit the combined list before preparing its route.");
         if (showLifecycleSummary)
         {
             DrawStatusSummary(context);
@@ -207,12 +206,10 @@ public sealed class MarketAcquisitionRequestBuilderPanel
     {
         var isEditing = selectedLineIndex >= 0;
         ImGui.TextColored(MainWindow.ColHeader, isEditing ? "Edit request item" : "Add an item");
-        if (!isEditing)
-            ImGui.TextColored(MainWindow.ColMuted, "Choose an item and its buying limits, then add it to the request.");
 
-        if (ImGui.BeginTable("AcquisitionRequestBuilderLineEditorPrimary", 3, ImGuiTableFlags.SizingStretchProp))
+        if (ImGui.BeginTable("AcquisitionRequestBuilderLineEditorPrimary", 3, ImGuiTableFlags.SizingFixedFit))
         {
-            ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.WidthStretch);
+            ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.WidthFixed, 440f);
             ImGui.TableSetupColumn("Buying rule", ImGuiTableColumnFlags.WidthFixed, 180f);
             ImGui.TableSetupColumn("Quality", ImGuiTableColumnFlags.WidthFixed, 110f);
             ImGui.TableNextRow();
@@ -225,7 +222,8 @@ public sealed class MarketAcquisitionRequestBuilderPanel
                 null,
                 MainWindow.ColMuted,
                 MainWindow.ColSuccess,
-                MainWindow.ColError);
+                MainWindow.ColError,
+                showMinimumCharacterHint: false);
 
             ImGui.TableNextColumn();
             DrawCombo("Buying rule##AcquisitionRequestBuilderMode", ["AllBelowThreshold", "TargetQuantity"], ref quantityMode);
@@ -235,11 +233,11 @@ public sealed class MarketAcquisitionRequestBuilderPanel
             ImGui.EndTable();
         }
 
-        if (ImGui.BeginTable("AcquisitionRequestBuilderLineEditorLimits", 3, ImGuiTableFlags.SizingStretchProp))
+        if (ImGui.BeginTable("AcquisitionRequestBuilderLineEditorLimits", 3, ImGuiTableFlags.SizingFixedFit))
         {
-            ImGui.TableSetupColumn("Quantity", ImGuiTableColumnFlags.WidthStretch, 1f);
-            ImGui.TableSetupColumn("Unit Cost Ceiling", ImGuiTableColumnFlags.WidthStretch, 1f);
-            ImGui.TableSetupColumn("Total Spend Ceiling", ImGuiTableColumnFlags.WidthStretch, 1f);
+            ImGui.TableSetupColumn("Quantity", ImGuiTableColumnFlags.WidthFixed, 150f);
+            ImGui.TableSetupColumn("Unit Cost Ceiling", ImGuiTableColumnFlags.WidthFixed, 180f);
+            ImGui.TableSetupColumn("Total Spend Ceiling", ImGuiTableColumnFlags.WidthFixed, 190f);
             ImGui.TableNextRow();
 
             ImGui.TableNextColumn();
@@ -578,12 +576,8 @@ public sealed class MarketAcquisitionRequestBuilderPanel
     private void DrawActions(MarketAcquisitionRequestBuilderContext context)
     {
         var busy = context.IsBusy || controller.IsSyncing || controller.IsRefreshing || isAppraising;
-        ImGui.TextColored(MainWindow.ColHeader, "Synchronization");
-        ImGui.TextColored(
-            MainWindow.ColMuted,
-            context.IsRouteActive
-                ? "Paused until the active route finishes. Local edits remain safe."
-                : "Automatic. The most recently committed request change supersedes the prior version.");
+        if (context.IsRouteActive)
+            ImGui.TextColored(MainWindow.ColMuted, "Editing is paused while the active route finishes.");
 
         if (ImGui.TreeNode("Start over##AcquisitionRequestBuilderRecovery"))
         {
@@ -591,8 +585,6 @@ public sealed class MarketAcquisitionRequestBuilderPanel
                 ClearDraft(context);
             ImGui.TreePop();
         }
-
-        ImGui.TextColored(MainWindow.ColMuted, "Right-click unit or spend ceiling cells for Craft Architect evidence and pricing shortcuts.");
     }
 
     private void SelectLineForEditing(int index, MarketAcquisitionRequestLineDocument line)

@@ -17,7 +17,8 @@ public static class ItemAutocompleteControl
         Action? onSelectionChanged,
         Vector4 mutedColor,
         Vector4 successColor,
-        Vector4 errorColor)
+        Vector4 errorColor,
+        bool showMinimumCharacterHint = true)
     {
         ArgumentNullException.ThrowIfNull(itemOptions);
         ArgumentNullException.ThrowIfNull(state);
@@ -62,7 +63,8 @@ public static class ItemAutocompleteControl
 
         if (state.SearchBuffer.Trim().Length < 2)
         {
-            ImGui.TextColored(mutedColor, "Type at least 2 characters.");
+            if (showMinimumCharacterHint)
+                ImGui.TextColored(mutedColor, "Type at least 2 characters.");
             return;
         }
 
