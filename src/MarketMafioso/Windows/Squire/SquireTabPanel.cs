@@ -7,6 +7,7 @@ using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 using Dalamud.Bindings.ImGui;
+using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
 using MarketMafioso.Squire;
 using MarketMafioso.Squire.Outfitter;
@@ -77,6 +78,7 @@ internal sealed class SquireTabPanel : IDisposable
         UiStateCaptureService uiStateCapture,
         IGameInventory gameInventory,
         IDataManager dataManager,
+        IDalamudPluginInterface pluginInterface,
         IMarketAcquisitionListingSource marketListingSource)
     {
         this.config = config;
@@ -94,6 +96,7 @@ internal sealed class SquireTabPanel : IDisposable
             config,
             new OutfitterCandidateCatalog(dataManager),
             new OutfitterMarketQuoteService(marketListingSource),
+            new AutoRetainerOutfitterMetadataSource(pluginInterface, Plugin.Log),
             reviewRegistry);
         selectedWorkspace = string.Equals(config.Squire.SelectedWorkspace, "Cleanup", StringComparison.OrdinalIgnoreCase)
             ? "Cleanup"

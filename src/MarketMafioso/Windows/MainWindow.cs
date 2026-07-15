@@ -249,6 +249,7 @@ public class MainWindow : Window, IDisposable
             uiStateCapture,
             Plugin.GameInventory,
             dataManager,
+            Plugin.PluginInterface,
             acquisitionPlanSource);
         statusTab = new StatusTabPanel(config, reporter, retainerCacheStore, log);
         marketAcquisitionRequestPickupPanel = new MarketAcquisitionRequestPickupPanel(

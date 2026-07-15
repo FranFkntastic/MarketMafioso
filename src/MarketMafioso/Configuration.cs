@@ -82,9 +82,12 @@ public sealed class SquireConfiguration
 {
     public string SelectedWorkspace { get; set; } = "Outfitter";
     public string OutfitterSelectedTargetKey { get; set; } = string.Empty;
+    public string OutfitterTargetView { get; set; } = "Jobs";
     public string OutfitterSearch { get; set; } = string.Empty;
     public string OutfitterStrategy { get; set; } = "HighestItemLevel";
     public int OutfitterTargetLevel { get; set; }
+    public Dictionary<string, int> OutfitterTargetLevels { get; set; } = new();
+    public Dictionary<uint, string> OutfitterSelectedGearsetByJob { get; set; } = new();
     public bool ShowProtected { get; set; }
     public bool ShowNonEquipment { get; set; }
     public string Search { get; set; } = string.Empty;
