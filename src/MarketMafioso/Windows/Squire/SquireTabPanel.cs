@@ -783,7 +783,7 @@ internal sealed class SquireTabPanel : IDisposable
         if (selections.Values.Contains(SquireDisposition.ExpertDelivery))
             ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Expert deliveries travel to your Grand Company through Lifestream, then open the delivery desk automatically.");
         if (selections.Values.Contains(SquireDisposition.VendorSell))
-            ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Vendor sales travel to your Grand Company, approach a sheet-classified general merchant, and sell through the normal Shop item menu.");
+            ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Vendor sales travel to the local market board, approach a sheet-classified gil vendor, and sell through the normal Shop item menu.");
         if (selections.Values.Contains(SquireDisposition.Discard))
             ImGui.TextColored(MarketMafiosoUiTheme.Warning, "Discard is irreversible. Squire confirms the exact item and visible discard prompt immediately before each removal.");
         if (running)

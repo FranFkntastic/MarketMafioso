@@ -40,9 +40,12 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
     private readonly DalamudVendorSalePreparation vendorSalePreparation;
     private SquireDisposition? diagnosticDisposition;
 
-    public string DiagnosticStatus => diagnosticDisposition == SquireDisposition.ExpertDelivery
-        ? expertDeliveryPreparation.Status
-        : string.Empty;
+    public string DiagnosticStatus => diagnosticDisposition switch
+    {
+        SquireDisposition.ExpertDelivery => expertDeliveryPreparation.Status,
+        SquireDisposition.VendorSell => vendorSalePreparation.Status,
+        _ => string.Empty,
+    };
 
     public DalamudSquireActionGameAdapter(
         ICharacterEquipmentSnapshotSource snapshotSource,
@@ -98,7 +101,8 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
             SellOption,
             IsExactFingerprintCurrent,
             requiredVisibleAddon: "Shop",
-            expectedConfirmation: (fingerprint, prompt) => IsExpectedItemConfirmation(fingerprint, prompt, SellPromptTerms));
+            expectedConfirmation: (fingerprint, prompt) => IsExpectedItemConfirmation(fingerprint, prompt, SellPromptTerms),
+            requiredStableFrames: 2);
         vendorSalePreparation = new DalamudVendorSalePreparation(
             commandManager,
             objectTable,
@@ -283,6 +287,7 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
         SquireReviewedSelection action,
         CancellationToken cancellationToken)
     {
+        diagnosticDisposition = action.Disposition;
         var fingerprint = action.Fingerprint;
         var disposition = action.Disposition;
         if (disposition is not (SquireDisposition.Desynthesize or SquireDisposition.ExpertDelivery or SquireDisposition.VendorSell or SquireDisposition.Discard))
@@ -474,7 +479,7 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
         for (var attempt = 0; attempt < 180; attempt++)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (!condition[ConditionFlag.OccupiedInQuestEvent])
+            if (!IsNpcInteractionOccupied())
                 return;
             await framework.DelayTicks(1).ConfigureAwait(false);
         }
@@ -487,7 +492,7 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
         {
             cancellationToken.ThrowIfCancellationRequested();
             await framework.RunOnTick(expertDeliveryPreparation.CloseOwnedUi).ConfigureAwait(false);
-            if (!condition[ConditionFlag.OccupiedInQuestEvent])
+            if (!IsNpcInteractionOccupied())
             {
                 await framework.RunOnTick(expertDeliveryPreparation.CompleteOwnedUiClose).ConfigureAwait(false);
                 return;
@@ -496,6 +501,9 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
         }
         throw new InvalidOperationException("The normal Expert Delivery interaction did not settle after Squire closed its owned UI stack.");
     }
+
+    private bool IsNpcInteractionOccupied() =>
+        condition[ConditionFlag.OccupiedInQuestEvent] || condition[ConditionFlag.OccupiedInEvent];
 
     private async Task<(SquireActionResult Result, EquipmentInstanceFingerprint Fingerprint)> RetrieveAllMateriaAsync(
         SquireActionPlan plan,
@@ -673,7 +681,10 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
             if (transition.Success)
             {
                 expertDeliveryUi.Complete();
-                return transition;
+                var listReturn = await expertDeliveryPreparation.WaitForListReturnAsync(cancellationToken).ConfigureAwait(false);
+                return listReturn.Success
+                    ? transition
+                    : listReturn;
             }
             if (transition.Code != "TransitionPending")
                 return transition;
@@ -745,7 +756,7 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
             cancellationToken.ThrowIfCancellationRequested();
             var settled = await framework.RunOnTick(transaction.IsUiSettled).ConfigureAwait(false);
             stableFrames = settled ? stableFrames + 1 : 0;
-            if (stableFrames >= 6)
+            if (stableFrames >= 2)
                 return;
             await framework.DelayTicks(1).ConfigureAwait(false);
         }
