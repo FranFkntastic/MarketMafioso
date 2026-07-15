@@ -154,7 +154,11 @@ public sealed class MarketBoardApproachService
             return MarketBoardApproachResult.Wait("Target system is unavailable; open the market board manually.");
 
         targetManager.Target = board;
-        var result = targetSystem->InteractWithObject((ClientGameObject*)board.Address, true);
+        // Market boards are large event objects whose collision geometry can reject a valid
+        // interaction as "Cannot see target" even when the player is already in range.
+        // Distance and targetability are checked above, so do not ask the client for a second,
+        // geometry-sensitive line-of-sight check here.
+        var result = targetSystem->InteractWithObject((ClientGameObject*)board.Address, false);
         lastDirectInteractionUtc = DateTimeOffset.UtcNow;
         log.Verbose($"[MarketMafioso] Attempted market board interaction {board.Name.TextValue} ({board.GameObjectId:X}).");
         float? distance = playerPosition == null

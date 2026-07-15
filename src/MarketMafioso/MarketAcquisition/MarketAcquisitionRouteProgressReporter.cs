@@ -11,7 +11,8 @@ public static class MarketAcquisitionRouteProgressReporter
     public static bool CanReportForRequestStatus(string? requestStatus) =>
         requestStatus != null &&
         (requestStatus.Equals("AcceptedInPlugin", StringComparison.OrdinalIgnoreCase) ||
-         requestStatus.Equals("Running", StringComparison.OrdinalIgnoreCase));
+         requestStatus.Equals("Running", StringComparison.OrdinalIgnoreCase) ||
+         requestStatus.Equals("RecoveryRequired", StringComparison.OrdinalIgnoreCase));
 
     public static bool CanReportForRouteState(string? routeState) =>
         routeState != null &&

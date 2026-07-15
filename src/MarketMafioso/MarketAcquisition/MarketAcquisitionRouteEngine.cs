@@ -50,7 +50,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         IMarketAcquisitionRouteEvidenceRecorder evidence,
         MarketAcquisitionClaimLifecycleController claimLifecycle,
         IMarketAcquisitionRouteCallbackDispatcher callbackDispatcher,
-        IMarketAcquisitionRouteClock clock)
+        IMarketAcquisitionRouteClock clock,
+        IMarketAcquisitionReportOutbox? reportOutbox = null)
     {
         this.runner = runner ?? throw new ArgumentNullException(nameof(runner));
         this.context = context ?? throw new ArgumentNullException(nameof(context));
@@ -62,7 +63,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         reportDispatcher = new MarketAcquisitionRouteReportDispatcher(
             reporter ?? throw new ArgumentNullException(nameof(reporter)),
             claimLifecycle ?? throw new ArgumentNullException(nameof(claimLifecycle)),
-            callbackDispatcher ?? throw new ArgumentNullException(nameof(callbackDispatcher)));
+            callbackDispatcher ?? throw new ArgumentNullException(nameof(callbackDispatcher)),
+            reportOutbox);
         this.clock = clock ?? throw new ArgumentNullException(nameof(clock));
     }
 
@@ -856,7 +858,11 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             ? runner.RecordProbe(currentWorld, state.LiveCandidatePlan, allowPurchases: !state.EvidenceRefreshOnly)
             : null;
         if (probeResult?.Success == true && state.LiveCandidatePlan != null)
+        {
             evidence.RecordProbeVisit(currentWorld, activeLine, activeSubtask, state.LiveCandidatePlan, claimed.Id, state.ProgressNonce);
+            if (state.EvidenceRefreshOnly && runner.State.Equals("Completed", StringComparison.OrdinalIgnoreCase))
+                ReportRouteProgress(includeEvidenceRefresh: true);
+        }
 
         state.AcquisitionStatus = state.MarketBoardReconciliation == null
             ? state.MarketBoardReadResult.Message
@@ -1361,9 +1367,9 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         _ => "StopRoute",
     };
 
-    public void ReportRouteProgress()
+    public void ReportRouteProgress(bool includeEvidenceRefresh = false)
     {
-        if (state.EvidenceRefreshOnly)
+        if (state.EvidenceRefreshOnly && !includeEvidenceRefresh)
             return;
 
         var claimed = claimedRequest;

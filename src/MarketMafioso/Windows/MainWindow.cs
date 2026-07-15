@@ -182,7 +182,10 @@ public class MainWindow : Window, IDisposable
             acquisitionWorkspace.CreateClaimLifecycleController(
                 () => marketAcquisitionRouteRunner.StatusMessage),
             new DalamudMarketAcquisitionRouteCallbackDispatcher(),
-            new SystemMarketAcquisitionRouteClock());
+            new SystemMarketAcquisitionRouteClock(),
+            new FileMarketAcquisitionReportOutbox(Path.Combine(
+                Plugin.PluginInterface.GetPluginConfigDirectory(),
+                "market-acquisition-report-outbox.json")));
 
         SizeConstraints = new WindowSizeConstraints
         {
@@ -762,6 +765,8 @@ public class MainWindow : Window, IDisposable
             DrawClaimedAcquisitionRequest();
             ImGui.Spacing();
             DrawMarketAcquisitionPlan();
+            if (string.Equals(agentRequestedWorkspaceView, "Plan", StringComparison.Ordinal))
+                ImGui.SetScrollHereY(1f);
             ImGui.EndTabItem();
         }
 

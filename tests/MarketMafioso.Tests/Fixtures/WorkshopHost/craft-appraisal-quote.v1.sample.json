@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "itemId": 2,
+  "itemName": "Fire Shard",
+  "requestedQuantity": 10,
+  "outputQuantity": 1,
+  "estimatedUnitCost": 80,
+  "estimatedTotalCost": 800,
+  "currency": "gil",
+  "quotedAtUtc": "2026-07-05T14:30:00+00:00",
+  "source": "CraftArchitectLocal",
+  "confidence": "Medium",
+  "isComplete": true,
+  "appraisalStatus": "Complete",
+  "materials": [],
+  "warnings": ["Quote is advisory evidence."]
+}

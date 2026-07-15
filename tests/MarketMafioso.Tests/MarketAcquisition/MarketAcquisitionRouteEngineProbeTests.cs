@@ -166,7 +166,7 @@ public sealed class MarketAcquisitionRouteEngineProbeTests
     }
 
     [Fact]
-    public void EvidenceRefresh_FreshSafeListingsPublishesWithoutRouteProgressOrPurchasing()
+    public void EvidenceRefresh_FreshSafeListingsPublishesObservationAndCompletionWithoutPurchasing()
     {
         using var harness = MarketAcquisitionRouteEngineHarness.Create();
         harness.Context.CurrentWorld = "Maduin";
@@ -181,8 +181,9 @@ public sealed class MarketAcquisitionRouteEngineProbeTests
         harness.Engine.ProbeLiveMarketBoard();
 
         Assert.True(SpinWait.SpinUntil(() => harness.Reporter.MarketObservationReports.Count == 1, TimeSpan.FromSeconds(2)));
+        Assert.True(SpinWait.SpinUntil(() => harness.Reporter.RouteProgressReports.Count == 1, TimeSpan.FromSeconds(2)));
         Assert.Equal("Completed", harness.Runner.State);
-        Assert.Empty(harness.Reporter.RouteProgressReports);
+        Assert.Equal("Completed", Assert.Single(harness.Reporter.RouteProgressReports).RouteState);
         Assert.Equal(0u, harness.Runner.Stops[0].PurchasedQuantity);
     }
 }
