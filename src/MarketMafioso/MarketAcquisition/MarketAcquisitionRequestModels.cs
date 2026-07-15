@@ -285,6 +285,20 @@ public sealed record MarketAcquisitionClaimTokenRequest
     public string IdempotencyKey { get; init; } = string.Empty;
 }
 
+public sealed record MarketAcquisitionLeaseRenewRequest
+{
+    public string ClaimToken { get; init; } = string.Empty;
+    public string PluginInstanceId { get; init; } = string.Empty;
+}
+
+public sealed record MarketAcquisitionExecutionLeaseView
+{
+    public string WorkOrderId { get; init; } = string.Empty;
+    public string PluginInstanceId { get; init; } = string.Empty;
+    public DateTimeOffset RenewedAtUtc { get; init; }
+    public DateTimeOffset ExpiresAtUtc { get; init; }
+}
+
 public sealed record MarketAcquisitionLifecycleRequest
 {
     [JsonPropertyName("claimToken")]

@@ -180,9 +180,87 @@ internal static class MarketAcquisitionSchema
 
             CREATE INDEX IF NOT EXISTS idx_acquisition_market_observations_request
                 ON acquisition_market_observations(request_id, created_at_utc);
+
+            CREATE TABLE IF NOT EXISTS acquisition_work_order_metadata (
+                work_order_id TEXT NOT NULL PRIMARY KEY,
+                title TEXT NOT NULL,
+                priority INTEGER NOT NULL DEFAULT 0,
+                updated_at_utc TEXT NOT NULL,
+                shelved_at_utc TEXT NULL,
+                archived_at_utc TEXT NULL,
+                parent_work_order_id TEXT NULL,
+                merge_source_work_order_id TEXT NULL,
+                FOREIGN KEY(work_order_id) REFERENCES acquisition_requests(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS acquisition_work_order_revisions (
+                work_order_id TEXT NOT NULL,
+                revision INTEGER NOT NULL,
+                change_kind TEXT NOT NULL,
+                snapshot_json TEXT NOT NULL,
+                created_at_utc TEXT NOT NULL,
+                PRIMARY KEY(work_order_id, revision),
+                FOREIGN KEY(work_order_id) REFERENCES acquisition_requests(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS acquisition_execution_leases (
+                work_order_id TEXT NOT NULL PRIMARY KEY,
+                plugin_instance_id TEXT NOT NULL,
+                renewed_at_utc TEXT NOT NULL,
+                expires_at_utc TEXT NOT NULL,
+                FOREIGN KEY(work_order_id) REFERENCES acquisition_requests(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS acquisition_execution_snapshots (
+                snapshot_id TEXT NOT NULL PRIMARY KEY,
+                work_order_id TEXT NOT NULL,
+                revision INTEGER NOT NULL,
+                request_json TEXT NOT NULL,
+                created_at_utc TEXT NOT NULL,
+                UNIQUE(work_order_id, revision),
+                FOREIGN KEY(work_order_id) REFERENCES acquisition_requests(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS acquisition_run_receipts (
+                receipt_id TEXT NOT NULL PRIMARY KEY,
+                work_order_id TEXT NOT NULL,
+                outcome TEXT NOT NULL,
+                purchased_quantity INTEGER NOT NULL,
+                spent_gil INTEGER NOT NULL,
+                message TEXT NULL,
+                created_at_utc TEXT NOT NULL,
+                UNIQUE(work_order_id, outcome, created_at_utc),
+                FOREIGN KEY(work_order_id) REFERENCES acquisition_requests(id)
+            );
             """;
         command.ExecuteNonQuery();
         EnsureColumn(connection, "acquisition_requests", "revision", "INTEGER NOT NULL DEFAULT 1");
+
+        using var migrate = connection.CreateCommand();
+        migrate.CommandText =
+            """
+            UPDATE acquisition_requests
+            SET status = 'PendingPickup',
+                claimed_at_utc = NULL,
+                claim_expires_at_utc = NULL,
+                claim_token = NULL,
+                claimed_by = NULL
+            WHERE status = 'Expired';
+
+            INSERT OR IGNORE INTO acquisition_work_order_metadata (
+                work_order_id,
+                title,
+                priority,
+                updated_at_utc
+            )
+            SELECT
+                id,
+                'Acquisition work order',
+                0,
+                created_at_utc
+            FROM acquisition_requests;
+            """;
+        migrate.ExecuteNonQuery();
     }
 
     private static void EnsureColumn(

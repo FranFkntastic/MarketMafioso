@@ -334,6 +334,8 @@ public static class MarketAcquisitionStatuses
     public const string Rejected = "Rejected";
     public const string Expired = "Expired";
     public const string Cancelled = "Cancelled";
+    public const string Shelved = "Shelved";
+    public const string Archived = "Archived";
 }
 
 public sealed class MarketAcquisitionIdempotencyConflictException : Exception

@@ -12,7 +12,7 @@ using static MarketMafioso.Server.Persistence.MarketAcquisitionRequestQueries;
 
 namespace MarketMafioso.Server;
 
-public sealed class MarketAcquisitionRequestStore
+public sealed partial class MarketAcquisitionRequestStore
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private readonly SqliteConnectionFactory connectionFactory;
@@ -134,8 +134,15 @@ public sealed class MarketAcquisitionRequestStore
             now,
             cancellationToken).ConfigureAwait(false);
 
+        var createdView = view with { Lines = lines };
+        await EnsureWorkOrderRecordsAsync(
+            connection,
+            (SqliteTransaction)transaction,
+            createdView,
+            "created",
+            cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-        return new MarketAcquisitionCreateResult(view with { Lines = lines }, false);
+        return new MarketAcquisitionCreateResult(createdView, false);
     }
 
     public async Task<MarketAcquisitionRequestView?> AppendLinesAsync(
@@ -223,13 +230,20 @@ public sealed class MarketAcquisitionRequestStore
         if (affected != 1)
             throw new MarketAcquisitionRevisionConflictException(request.ExpectedRevision, current.Revision);
 
-        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-        return current with
+        var appendedView = current with
         {
             Revision = nextRevision,
             ExpiresAtUtc = expiresAtUtc,
             Lines = lines.OrderBy(line => line.Ordinal).ToList(),
         };
+        await EnsureWorkOrderRecordsAsync(
+            connection,
+            (SqliteTransaction)transaction,
+            appendedView,
+            "lines-appended",
+            cancellationToken).ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return appendedView;
     }
 
     public async Task<MarketAcquisitionRequestView?> ReplaceBatchAsync(
@@ -286,8 +300,7 @@ public sealed class MarketAcquisitionRequestStore
         if (affected != 1)
             return null;
 
-        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-        return current with
+        var replacedView = current with
         {
             Revision = nextRevision,
             ExpiresAtUtc = expiresAtUtc,
@@ -298,6 +311,14 @@ public sealed class MarketAcquisitionRequestStore
             SweepDataCenters = NormalizeSweepDataCenters(request.Region, request.SweepDataCenters),
             Lines = lines.OrderBy(line => line.Ordinal).ToList(),
         };
+        await EnsureWorkOrderRecordsAsync(
+            connection,
+            (SqliteTransaction)transaction,
+            replacedView,
+            "intent-replaced",
+            cancellationToken).ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return replacedView;
     }
 
     public async Task<MarketAcquisitionRequestView?> GetAsync(
@@ -434,7 +455,7 @@ public sealed class MarketAcquisitionRequestStore
                 LIMIT 1
               )
             WHERE $includeTerminal = 1
-               OR requests.status NOT IN ($completeStatus, $failedStatus, $cancelledStatus, $rejectedStatus, $expiredStatus)
+               OR requests.status NOT IN ($completeStatus, $failedStatus, $cancelledStatus, $rejectedStatus, $expiredStatus, $archivedStatus)
             ORDER BY requests.created_at_utc DESC
             LIMIT $limit;
             """;
@@ -445,6 +466,7 @@ public sealed class MarketAcquisitionRequestStore
         command.Parameters.AddWithValue("$cancelledStatus", MarketAcquisitionStatuses.Cancelled);
         command.Parameters.AddWithValue("$rejectedStatus", MarketAcquisitionStatuses.Rejected);
         command.Parameters.AddWithValue("$expiredStatus", MarketAcquisitionStatuses.Expired);
+        command.Parameters.AddWithValue("$archivedStatus", MarketAcquisitionStatuses.Archived);
 
         var requests = new List<MarketAcquisitionRequestView>();
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
@@ -550,6 +572,23 @@ public sealed class MarketAcquisitionRequestStore
         var affected = await update.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         if (affected != 1)
             return null;
+
+        await using var lease = connection.CreateCommand();
+        lease.Transaction = (SqliteTransaction)transaction;
+        lease.CommandText =
+            """
+            INSERT INTO acquisition_execution_leases (work_order_id, plugin_instance_id, renewed_at_utc, expires_at_utc)
+            VALUES ($id, $pluginInstanceId, $renewedAtUtc, $expiresAtUtc)
+            ON CONFLICT(work_order_id) DO UPDATE SET
+                plugin_instance_id = excluded.plugin_instance_id,
+                renewed_at_utc = excluded.renewed_at_utc,
+                expires_at_utc = excluded.expires_at_utc;
+            """;
+        lease.Parameters.AddWithValue("$id", id);
+        lease.Parameters.AddWithValue("$pluginInstanceId", request.PluginInstanceId.Trim());
+        lease.Parameters.AddWithValue("$renewedAtUtc", now.ToString("O"));
+        lease.Parameters.AddWithValue("$expiresAtUtc", claimExpiresAtUtc.ToString("O"));
+        await lease.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
 
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return ToClaimView(view with
@@ -1179,7 +1218,9 @@ public sealed class MarketAcquisitionRequestStore
             return null;
 
         if (current.Status is MarketAcquisitionStatuses.Complete
-            or MarketAcquisitionStatuses.Running)
+            or MarketAcquisitionStatuses.Running
+            or MarketAcquisitionStatuses.Shelved
+            or MarketAcquisitionStatuses.Archived)
             throw new MarketAcquisitionInvalidTransitionException(current.Status, MarketAcquisitionStatuses.PendingPickup);
 
         var expiresAtUtc = DateTimeOffset.UtcNow.AddSeconds(ClampPickupExpirySeconds((int)current.ExpiresAtUtc.Subtract(current.CreatedAtUtc).TotalSeconds));
@@ -1308,8 +1349,17 @@ public sealed class MarketAcquisitionRequestStore
         insertEvent.Parameters.AddWithValue("$createdAtUtc", eventCreatedAtUtc.ToString("O"));
         await insertEvent.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
 
+        var lifecycleView = ApplyLatestLifecycleEvent(current, targetStatus, eventType, payloadJson, eventCreatedAtUtc);
+        await RecordExecutionArtifactsAsync(
+            connection,
+            (SqliteTransaction)transaction,
+            lifecycleView,
+            eventType,
+            request.Message,
+            eventCreatedAtUtc,
+            cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-        return ApplyLatestLifecycleEvent(current, targetStatus, eventType, payloadJson, eventCreatedAtUtc);
+        return lifecycleView;
     }
 
     private async Task<MarketAcquisitionAttemptEventResult?> ApplyAttemptLifecycleAsync(
@@ -1477,18 +1527,9 @@ public sealed class MarketAcquisitionRequestStore
 
     private async Task ExpirePendingAsync(CancellationToken cancellationToken)
     {
-        await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
-        await using var command = connection.CreateCommand();
-        command.CommandText =
-            """
-            UPDATE acquisition_requests
-            SET status = 'Expired'
-            WHERE status = $status
-              AND expires_at_utc <= $now;
-            """;
-        command.Parameters.AddWithValue("$status", MarketAcquisitionStatuses.PendingPickup);
-        command.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToString("O"));
-        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        // Work orders are durable. The legacy pickup deadline remains on the wire for
+        // older clients, but it no longer destroys unclaimed intent.
+        await Task.CompletedTask.ConfigureAwait(false);
     }
 
     private async Task ExpireClaimedAsync(CancellationToken cancellationToken)
@@ -1577,6 +1618,14 @@ public sealed class MarketAcquisitionRequestStore
             quarantine.Parameters.AddWithValue("$runningStatus", MarketAcquisitionStatuses.Running);
             quarantine.Parameters.AddWithValue("$staleCutoff", staleExecutionCutoff);
             await quarantine.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        await using (var clearExpiredLeases = connection.CreateCommand())
+        {
+            clearExpiredLeases.Transaction = (SqliteTransaction)transaction;
+            clearExpiredLeases.CommandText = "DELETE FROM acquisition_execution_leases WHERE expires_at_utc <= $now;";
+            clearExpiredLeases.Parameters.AddWithValue("$now", now.ToString("O"));
+            await clearExpiredLeases.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
 
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);

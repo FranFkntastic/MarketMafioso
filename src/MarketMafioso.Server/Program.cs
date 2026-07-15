@@ -91,6 +91,7 @@ app.MapGet("/health", () => Results.Ok(new
 }));
 app.MapWorkshopHostEndpoints(enableMarketAcquisition, requireApiKey);
 app.MapMarketAcquisitionEndpoints();
+app.MapMarketAcquisitionWorkOrderEndpoints();
 app.MapDiagnosticEndpoints();
 
 app.MapDashboardDataEndpoints(enableMarketAcquisition);

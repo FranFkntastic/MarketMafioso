@@ -26,11 +26,12 @@ internal sealed class MarketAcquisitionRequestPickupPanel
     {
         ArgumentNullException.ThrowIfNull(context);
 
-        ImGuiUi.SectionHeader("Dashboard Requests", MarketMafiosoUiTheme.Header);
+        ImGuiUi.SectionHeader("Work Order Inbox", MarketMafiosoUiTheme.Header);
+        ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Durable work waits here until it is claimed, shelved, completed, or archived.");
 
         if (context.RouteOwnsUi)
         {
-            ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Request pickup is hidden while a guided route is active.");
+            ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Inbox controls are paused while a guided route owns acquisition automation.");
             if (context.ClaimedRequest != null)
                 ImGui.TextColored(MarketMafiosoUiTheme.Muted, $"Active request: {FormatAcquisitionItem(context.ClaimedRequest)}");
             ImGui.SameLine();
@@ -43,7 +44,7 @@ internal sealed class MarketAcquisitionRequestPickupPanel
             var canFetchCompact = !context.IsBusy &&
                                   context.HasApiKey &&
                                   context.HasCharacterScope;
-            if (ImGuiUi.Button("Check Dashboard##MarketAcquisitionFetchCompact", canFetchCompact))
+            if (ImGuiUi.Button("Refresh inbox##MarketAcquisitionFetchCompact", canFetchCompact))
                 fetchDashboardRequests();
             RegisterLastControl(
                 "acquisition.fetch",
@@ -62,7 +63,7 @@ internal sealed class MarketAcquisitionRequestPickupPanel
         var canFetch = !context.IsBusy &&
                        context.HasApiKey &&
                        context.HasCharacterScope;
-        if (ImGuiUi.Button("Check Dashboard##MarketAcquisitionFetch", canFetch))
+        if (ImGuiUi.Button("Refresh inbox##MarketAcquisitionFetch", canFetch))
             fetchDashboardRequests();
         RegisterLastControl(
             "acquisition.fetch",
@@ -79,8 +80,8 @@ internal sealed class MarketAcquisitionRequestPickupPanel
             ImGui.TextColored(
                 context.HasApiKey ? MarketMafiosoUiTheme.Muted : MarketMafiosoUiTheme.Error,
                 context.HasApiKey
-                    ? "No pending dashboard requests are loaded."
-                    : "Set the client API key in Settings before fetching dashboard requests.");
+                    ? "No actionable work orders are loaded for this character. Shelved work remains on the dashboard."
+                    : "Set an acquisition-capable key in Settings before refreshing the inbox.");
             return;
         }
 
@@ -130,11 +131,11 @@ internal sealed class MarketAcquisitionRequestPickupPanel
                 ImGui.TableNextColumn();
                 ImGui.TextUnformatted(MarketAcquisitionQuantityModePresenter.FormatMode(request.QuantityMode));
                 ImGui.TableNextColumn();
-                if (ImGuiUi.Button($"Claim##marketAcquisitionClaim{request.Id}", !context.IsBusy))
+                if (ImGuiUi.Button($"Work on it##marketAcquisitionClaim{request.Id}", !context.IsBusy))
                     claimRequest(request.Id);
                 RegisterLastControl(
                     $"acquisition.claim.{request.Id}",
-                    $"Claim Market Acquisition request {request.Id}",
+                    $"Add work order {request.Id} to the working set",
                     !context.IsBusy,
                     request.Id,
                     () => claimRequest(request.Id));

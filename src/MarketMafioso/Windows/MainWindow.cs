@@ -78,7 +78,7 @@ public class MainWindow : Window, IDisposable
 
     private const string ProductSummary = "Workshop logistics and self-hosted inventory history.";
     private const string WorkshopLogisticsModuleSummary = "Workshop Logistics tracks company workshop jobs, materials, retainer restock, handoff, and assembly.";
-    private const string MarketAcquisitionModuleSummary = "Build, sync, and monitor acquisition requests from one persistent board.";
+    private const string MarketAcquisitionModuleSummary = "Capture durable buying work, compose a working set, and execute it when the character is ready.";
 
     internal static readonly Vector4 ColHeader = MarketMafiosoUiTheme.Header;
     internal static readonly Vector4 ColSuccess = MarketMafiosoUiTheme.Success;
@@ -416,12 +416,19 @@ public class MainWindow : Window, IDisposable
         };
     }
 
-    public void OnFrameworkUpdate(IFramework _)
+    public void OnFrameworkUpdate(IFramework _framework)
     {
         squireTab.OnFrameworkUpdate();
 
         if (!IsMarketAcquisitionUnlocked())
             return;
+
+        _ = acquisitionWorkspace.RenewLeaseIfDueAsync();
+        if (acquisitionWorkspace.ConsumeLeaseLossSignal())
+        {
+            routeEngine.Stop();
+            return;
+        }
 
         routeEngine.MonitorMarketBoardPurchase();
         routeEngine.TickRoute(acquisitionWorkspace.IsBusy);
@@ -580,7 +587,7 @@ public class MainWindow : Window, IDisposable
         {
             ("Workshop Logistics", "Combined" or "Queue" or "Materials" or "Assembly") => true,
             ("Retainers", "Quick deposit" or "Browse stock" or "Withdrawal plan") => true,
-            ("Market Acquisition", "Request" or "Plan" or "Route") => true,
+            ("Market Acquisition", "Compose" or "Inbox" or "Working Set" or "Route" or "Request" or "Plan") => true,
             _ => false,
         };
 
@@ -749,17 +756,23 @@ public class MainWindow : Window, IDisposable
         if (!ImGui.BeginTabBar("##marketAcquisitionWorkspace"))
             return;
 
-        if (ImGui.BeginTabItem($"Request ({acquisitionRequestBuilder.LineCount})", GetAgentWorkspaceTabFlags("Request")))
+        if (ImGui.BeginTabItem($"Compose ({acquisitionRequestBuilder.LineCount})", GetAgentWorkspaceTabFlags("Compose", "Request")))
         {
             DrawMarketAcquisitionRequestBuilder();
             ImGui.EndTabItem();
         }
 
-        if (ImGui.BeginTabItem("Plan", GetAgentWorkspaceTabFlags("Plan")))
+        if (ImGui.BeginTabItem($"Inbox ({acquisitionWorkspace.PendingRequests.Count})", GetAgentWorkspaceTabFlags("Inbox")))
         {
             DrawMarketAcquisitionPickupSection();
+            ImGui.EndTabItem();
+        }
+
+        if (ImGui.BeginTabItem("Working Set", GetAgentWorkspaceTabFlags("Working Set", "Plan")))
+        {
+            ImGuiUi.SectionHeader("Working set", ColHeader);
+            ImGui.TextColored(ColMuted, "One leased work order feeds the prepared plan. The rest stay safely in the inbox.");
             ImGui.Spacing();
-            ImGuiUi.SectionHeader("Accepted request", ColHeader);
             DrawClaimedAcquisitionRequest();
             ImGui.Spacing();
             DrawMarketAcquisitionPlan();
@@ -779,27 +792,28 @@ public class MainWindow : Window, IDisposable
         ImGui.EndTabBar();
     }
 
-    private ImGuiTabItemFlags GetAgentWorkspaceTabFlags(string viewName) =>
-        string.Equals(agentRequestedWorkspaceView, viewName, StringComparison.Ordinal)
+    private ImGuiTabItemFlags GetAgentWorkspaceTabFlags(string viewName, string? legacyViewName = null) =>
+        string.Equals(agentRequestedWorkspaceView, viewName, StringComparison.Ordinal) ||
+        string.Equals(agentRequestedWorkspaceView, legacyViewName, StringComparison.Ordinal)
             ? ImGuiTabItemFlags.SetSelected
             : ImGuiTabItemFlags.None;
 
     private void DrawMarketAcquisitionWorkspaceStatus()
     {
         var snapshot = routeEngine.CreateSnapshot();
-        var requestState = acquisitionWorkspace.ClaimedRequest is null
-            ? "No accepted request"
-            : acquisitionWorkspace.ClaimedRequest.Status.ToString();
         var planState = acquisitionWorkspace.PreparedPlan is null
             ? "Not prepared"
             : acquisitionWorkspace.IsPreparedPlanStale() ? "Stale" : "Current";
+        var requestState = acquisitionWorkspace.ClaimedRequest is null
+            ? "Empty"
+            : $"{acquisitionWorkspace.ClaimedRequest.Status} / {planState}";
         var routeState = string.IsNullOrWhiteSpace(snapshot.RouteState) ? "Idle" : snapshot.RouteState;
         UtilityWorkspaceUi.DrawStatusStrip(
             "##marketAcquisitionWorkspaceStatus",
             [
-                new("Local request", $"{acquisitionRequestBuilder.LineCount:N0} line(s)", acquisitionRequestBuilder.LineCount > 0 ? ColSuccess : ColMuted),
-                new("Accepted request", requestState, acquisitionWorkspace.ClaimedRequest is null ? ColMuted : ColHeader),
-                new("Plan", planState, planState == "Current" ? ColSuccess : planState == "Stale" ? ColError : ColMuted),
+                new("Draft", $"{acquisitionRequestBuilder.LineCount:N0} line(s)", acquisitionRequestBuilder.LineCount > 0 ? ColSuccess : ColMuted),
+                new("Inbox", $"{acquisitionWorkspace.PendingRequests.Count:N0} loaded", acquisitionWorkspace.PendingRequests.Count > 0 ? ColHeader : ColMuted),
+                new("Working set", requestState, acquisitionWorkspace.ClaimedRequest is null ? ColMuted : planState == "Stale" ? ColError : ColHeader),
                 new("Route", routeState, snapshot.IsRouteActive ? ColHeader : ColMuted),
             ]);
         ImGui.TextColored(GetAcquisitionStatusColor(GetVisibleAcquisitionStatus()), GetVisibleAcquisitionStatus());

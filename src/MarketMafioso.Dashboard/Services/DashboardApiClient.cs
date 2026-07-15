@@ -147,6 +147,68 @@ public sealed class DashboardApiClient
         EnsureAuthorizedSuccess(response);
     }
 
+    public async Task ApplyAcquisitionWorkOrderCommandAsync(
+        string id,
+        string action,
+        int expectedRevision,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await http.PostAsJsonAsync(
+            $"api/acquisition/work-orders/{Uri.EscapeDataString(id)}/{Uri.EscapeDataString(action)}",
+            new { expectedRevision },
+            JsonOptions,
+            cancellationToken);
+        EnsureAuthorizedSuccess(response);
+    }
+
+    public async Task CloneAcquisitionWorkOrderAsync(
+        string id,
+        int expectedRevision,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await http.PostAsJsonAsync(
+            $"api/acquisition/work-orders/{Uri.EscapeDataString(id)}/clone",
+            new
+            {
+                expectedRevision,
+                idempotencyKey = $"dashboard-clone-{id}-{Guid.NewGuid():N}",
+            },
+            JsonOptions,
+            cancellationToken);
+        EnsureAuthorizedSuccess(response);
+    }
+
+    public async Task<MarketAcquisitionWorkOrderMergePreview> PreviewAcquisitionWorkOrderMergeAsync(
+        string targetId,
+        string sourceId,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await http.GetAsync(
+            $"api/acquisition/work-orders/{Uri.EscapeDataString(targetId)}/merge-preview/{Uri.EscapeDataString(sourceId)}",
+            cancellationToken);
+        EnsureAuthorizedSuccess(response);
+        return await response.Content.ReadFromJsonAsync<MarketAcquisitionWorkOrderMergePreview>(JsonOptions, cancellationToken)
+            ?? throw new InvalidOperationException("Work-order merge preview was empty.");
+    }
+
+    public async Task MergeAcquisitionWorkOrdersAsync(
+        MarketAcquisitionRequestView target,
+        MarketAcquisitionRequestView source,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await http.PostAsJsonAsync(
+            $"api/acquisition/work-orders/{Uri.EscapeDataString(target.Id)}/merge",
+            new
+            {
+                sourceWorkOrderId = source.Id,
+                expectedTargetRevision = target.Revision,
+                expectedSourceRevision = source.Revision,
+            },
+            JsonOptions,
+            cancellationToken);
+        EnsureAuthorizedSuccess(response);
+    }
+
     public async Task<IReadOnlyList<XivItemSearchResult>> SearchItemsAsync(
         string query,
         CancellationToken cancellationToken = default)

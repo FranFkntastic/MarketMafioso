@@ -218,6 +218,35 @@ public sealed class MarketAcquisitionRequestClient : IMarketAcquisitionRequestCl
             },
             cancellationToken);
 
+    public async Task<MarketAcquisitionExecutionLeaseView> RenewLeaseAsync(
+        string serverUrl,
+        string clientApiKey,
+        string requestId,
+        string claimToken,
+        string pluginInstanceId,
+        CancellationToken cancellationToken)
+    {
+        var acquisitionBaseUrl = ResolveAcquisitionBaseUrl(serverUrl);
+        if (string.IsNullOrWhiteSpace(clientApiKey))
+            throw new InvalidOperationException("Client API key is required.");
+
+        using var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            $"{acquisitionBaseUrl}/work-orders/{Uri.EscapeDataString(requestId)}/lease/renew")
+        {
+            Content = JsonContent.Create(new MarketAcquisitionLeaseRenewRequest
+            {
+                ClaimToken = claimToken,
+                PluginInstanceId = pluginInstanceId,
+            }, options: JsonOptions),
+        };
+        request.Headers.Add("X-Api-Key", clientApiKey);
+        using var response = await httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadFromJsonAsync<MarketAcquisitionExecutionLeaseView>(JsonOptions, cancellationToken).ConfigureAwait(false)
+            ?? throw new InvalidOperationException("Lease renewal response was empty.");
+    }
+
     public Task<MarketAcquisitionRequestView> RejectAsync(
         string serverUrl,
         string clientApiKey,

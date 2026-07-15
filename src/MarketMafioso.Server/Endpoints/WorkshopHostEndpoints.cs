@@ -79,6 +79,12 @@ internal static class WorkshopHostEndpoints
                 SupportedSchemaVersions = [1],
                 RequiredScopes = ["acquisition:queue"],
             });
+            capabilities.Add(new WorkshopHostCapability
+            {
+                Id = "acquisition.work-orders",
+                SupportedSchemaVersions = [1],
+                RequiredScopes = ["acquisition:queue"],
+            });
         }
 
         if (craftQuoteService.IsAvailable && await AllowsAsync(WorkshopHostCredentialScope.CraftQuote))

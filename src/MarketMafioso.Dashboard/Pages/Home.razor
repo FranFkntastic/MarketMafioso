@@ -18,8 +18,8 @@ else if (_session is null)
         <MudStack Spacing="2">
             <MudText Typo="Typo.h5">Sign in</MudText>
             <MudText Typo="Typo.body2" Class="muted">Use the dashboard account configured for this receiver.</MudText>
-            <MudTextField @bind-Value="_loginUsername" Label="Username" Variant="Variant.Outlined" Margin="Margin.Dense" />
-            <MudTextField @bind-Value="_loginPassword" Label="Password" InputType="InputType.Password" Variant="Variant.Outlined" Margin="Margin.Dense" />
+            <MudTextField @bind-Value="_loginUsername" Label="Username" Immediate="true" Variant="Variant.Outlined" Margin="Margin.Dense" />
+            <MudTextField @bind-Value="_loginPassword" Label="Password" Immediate="true" InputType="InputType.Password" Variant="Variant.Outlined" Margin="Margin.Dense" />
             <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="_busy" OnClick="LoginAsync">Login</MudButton>
             <DashboardStatusHost />
         </MudStack>
@@ -30,8 +30,8 @@ else
     <MudStack Spacing="2" Class="dashboard-page acquisition-page">
         <MudStack Row="true" AlignItems="AlignItems.Center" Class="page-title-row">
             <div>
-                <MudText Typo="Typo.h5">Acquisition</MudText>
-                <MudText Typo="Typo.body2" Class="muted">Stage purchase intent here; the plugin validates live market rows before buying.</MudText>
+                <MudText Typo="Typo.h5">Acquisition Work Orders</MudText>
+                <MudText Typo="Typo.body2" Class="muted">Capture buying work from anywhere, organize it here, and let the plugin lease one working set when you are ready.</MudText>
             </div>
             <MudSpacer />
             <MudButton Variant="Variant.Outlined" Class="quiet-button" OnClick="LogoutAsync">Logout @_session.User.Username</MudButton>
@@ -61,6 +61,11 @@ else
                                IncludeTerminalChanged="SetIncludeTerminalAsync"
                                CancelRequested="CancelRequestAsync"
                                ResendRequested="ResendRequestAsync"
+                               ShelfRequested="ShelfRequestAsync"
+                               RestoreRequested="RestoreRequestAsync"
+                               ArchiveRequested="ArchiveRequestAsync"
+                               CloneRequested="CloneRequestAsync"
+                               MergeRequested="MergeIntoSelectedAsync"
                                EditRequested="EditRequestAsync"
                                TemplateRequested="UseRequestAsTemplateAsync" />
         </div>
@@ -230,6 +235,17 @@ else
     private Task CancelRequestAsync(string id) => State.CancelAsync(id);
 
     private Task ResendRequestAsync(string id) => State.ResendAsync(id);
+
+    private Task ShelfRequestAsync(MarketAcquisitionRequestView request) => State.ShelfAsync(request);
+
+    private Task RestoreRequestAsync(MarketAcquisitionRequestView request) => State.RestoreAsync(request);
+
+    private Task ArchiveRequestAsync(MarketAcquisitionRequestView request) => State.ArchiveAsync(request);
+
+    private Task CloneRequestAsync(MarketAcquisitionRequestView request) => State.CloneAsync(request);
+
+    private Task MergeIntoSelectedAsync(MarketAcquisitionMergeSelection selection) =>
+        State.MergeAsync(selection.Target, selection.Source);
 
     private Task UseRequestAsTemplateAsync(MarketAcquisitionRequestView request)
     {

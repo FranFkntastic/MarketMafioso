@@ -9,12 +9,13 @@ internal static class MarketAcquisitionEndpointClassifier
 
     public static bool IsBrowserControl(HttpRequest request) =>
         !HasApiKey(request) &&
-        ((HttpMethods.IsPost(request.Method) && IsCancelOrResend(request.Path)) ||
+        ((HttpMethods.IsPost(request.Method) && (IsCancelOrResend(request.Path) || IsWorkOrderCommand(request.Path))) ||
          (HttpMethods.IsPut(request.Method) && IsBatchResource(request.Path)));
 
     public static bool IsBrowserListRead(HttpRequest request) =>
         HttpMethods.IsGet(request.Method) &&
-        request.Path.Equals("/api/acquisition/requests", StringComparison.OrdinalIgnoreCase);
+        (request.Path.Equals("/api/acquisition/requests", StringComparison.OrdinalIgnoreCase) ||
+         request.Path.StartsWithSegments("/api/acquisition/work-orders", StringComparison.OrdinalIgnoreCase));
 
     public static bool RequiresPluginCredential(HttpRequest request)
     {
@@ -27,6 +28,8 @@ internal static class MarketAcquisitionEndpointClassifier
         {
             if (IsPending(request.Path))
                 return true;
+            if (IsWorkOrderCommand(request.Path))
+                return HasApiKey(request);
             if (IsTimeline(request.Path) || IsBatchDetail(request.Path))
                 return HasApiKey(request);
             return false;
@@ -37,6 +40,9 @@ internal static class MarketAcquisitionEndpointClassifier
 
         if (!HttpMethods.IsPost(request.Method))
             return false;
+
+        if (IsWorkOrderCommand(request.Path))
+            return HasApiKey(request) || (request.Path.Value ?? string.Empty).EndsWith("/lease/renew", StringComparison.OrdinalIgnoreCase);
 
         if (IsCancelOrResend(request.Path))
             return HasApiKey(request);
@@ -100,6 +106,9 @@ internal static class MarketAcquisitionEndpointClassifier
                (path.EndsWith("/cancel", StringComparison.OrdinalIgnoreCase) ||
                 path.EndsWith("/resend", StringComparison.OrdinalIgnoreCase));
     }
+
+    private static bool IsWorkOrderCommand(PathString requestPath) =>
+        requestPath.StartsWithSegments("/api/acquisition/work-orders", StringComparison.OrdinalIgnoreCase);
 
     private static bool HasApiKey(HttpRequest request) => request.Headers.ContainsKey("X-Api-Key");
 }

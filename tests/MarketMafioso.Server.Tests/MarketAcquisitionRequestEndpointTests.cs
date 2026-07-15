@@ -1144,7 +1144,42 @@ public sealed class MarketAcquisitionRequestEndpointTests
     }
 
     [Fact]
-    public async Task ExpiredRequestCannotBeListedOrClaimed()
+    public async Task WorkOrderEndpointsShelfRestoreAndCloneDurableIntent()
+    {
+        await using var application = CreateHostedApplication();
+        using var client = application.CreateClient();
+        var created = await SendWithKeyAsync(client, HttpMethod.Post, "/marketmafioso/api/acquisition/requests", "client-secret", CreateRequest("work-order-commands"));
+        created.EnsureSuccessStatusCode();
+        using var createdJson = JsonDocument.Parse(await created.Content.ReadAsStringAsync());
+        var id = createdJson.RootElement.GetProperty("id").GetString()!;
+
+        var shelf = await SendWithKeyAsync(client, HttpMethod.Post, $"/marketmafioso/api/acquisition/work-orders/{id}/shelf", "client-secret", new { expectedRevision = 1 });
+        shelf.EnsureSuccessStatusCode();
+        using var shelfJson = JsonDocument.Parse(await shelf.Content.ReadAsStringAsync());
+        Assert.Equal("Shelved", shelfJson.RootElement.GetProperty("state").GetString());
+
+        var restore = await SendWithKeyAsync(client, HttpMethod.Post, $"/marketmafioso/api/acquisition/work-orders/{id}/restore", "client-secret", new { expectedRevision = 2 });
+        restore.EnsureSuccessStatusCode();
+
+        var clone = await SendWithKeyAsync(client, HttpMethod.Post, $"/marketmafioso/api/acquisition/work-orders/{id}/clone", "client-secret", new
+        {
+            expectedRevision = 3,
+            idempotencyKey = "work-order-clone-command",
+            title = "Endpoint clone",
+        });
+        clone.EnsureSuccessStatusCode();
+        using var cloneJson = JsonDocument.Parse(await clone.Content.ReadAsStringAsync());
+        Assert.Equal(id, cloneJson.RootElement.GetProperty("parentWorkOrderId").GetString());
+        Assert.Equal("Endpoint clone", cloneJson.RootElement.GetProperty("title").GetString());
+
+        var list = await SendWithKeyAsync(client, HttpMethod.Get, "/marketmafioso/api/acquisition/work-orders?characterName=Wei%20Ning&world=Gilgamesh", "client-secret");
+        list.EnsureSuccessStatusCode();
+        using var listJson = JsonDocument.Parse(await list.Content.ReadAsStringAsync());
+        Assert.Equal(2, listJson.RootElement.GetArrayLength());
+    }
+
+    [Fact]
+    public async Task LegacyPickupDeadlineDoesNotExpireDurableWorkOrder()
     {
         await using var application = CreateHostedApplication(
             extraConfiguration: new KeyValuePair<string, string?>("MarketMafioso:AcquisitionMinimumExpirySeconds", "1"));
@@ -1169,7 +1204,7 @@ public sealed class MarketAcquisitionRequestEndpointTests
             "client-secret");
         pending.EnsureSuccessStatusCode();
         using var pendingJson = JsonDocument.Parse(await pending.Content.ReadAsStringAsync());
-        Assert.Empty(pendingJson.RootElement.GetProperty("requests").EnumerateArray());
+        Assert.Single(pendingJson.RootElement.GetProperty("requests").EnumerateArray());
 
         var claim = await SendWithKeyAsync(
             client,
@@ -1182,7 +1217,7 @@ public sealed class MarketAcquisitionRequestEndpointTests
                 world = "Gilgamesh",
                 pluginInstanceId = "plugin-test-instance",
             });
-        Assert.Equal(HttpStatusCode.NotFound, claim.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, claim.StatusCode);
     }
 
     [Fact]

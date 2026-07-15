@@ -194,6 +194,27 @@ public sealed record MarketAcquisitionBatchLineView
     public string? LatestMessage { get; init; }
 }
 
+public sealed record MarketAcquisitionWorkOrderMergePreview
+{
+    public string TargetWorkOrderId { get; init; } = string.Empty;
+    public string SourceWorkOrderId { get; init; } = string.Empty;
+    public bool CanMerge { get; init; }
+    public int ResultLineCount { get; init; }
+    public IReadOnlyList<MarketAcquisitionWorkOrderMergeConflict> Conflicts { get; init; } = [];
+}
+
+public sealed record MarketAcquisitionWorkOrderMergeConflict
+{
+    public string Field { get; init; } = string.Empty;
+    public string TargetValue { get; init; } = string.Empty;
+    public string SourceValue { get; init; } = string.Empty;
+    public string Message { get; init; } = string.Empty;
+}
+
+public sealed record MarketAcquisitionMergeSelection(
+    MarketAcquisitionRequestView Target,
+    MarketAcquisitionRequestView Source);
+
 public static class MarketAcquisitionOrigins
 {
     public const string DashboardCreated = "DashboardCreated";

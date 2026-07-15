@@ -62,7 +62,7 @@ internal sealed class AdvancedSettingsPages
                 unlockKeyBuffer = string.Empty;
                 unlockStatus = "Private module locked.";
             }
-            ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Locking hides the module and its settings. Existing local request state and server data are left untouched.");
+            ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Locking hides the module and its settings. Existing drafts, inbox work, and execution history remain untouched.");
             return;
         }
 

@@ -71,7 +71,8 @@ public sealed class MarketAcquisitionRequestBuilderPanel
             context.World,
             context.HasCharacterScope && !context.IsBusy && !context.IsRouteActive);
 
-        ImGuiUi.SectionHeader("Local Request", MainWindow.ColHeader);
+        ImGuiUi.SectionHeader("Work Order Draft", MainWindow.ColHeader);
+        ImGui.TextColored(MainWindow.ColMuted, "Draft locally, publish to the durable inbox, then execute whenever the target character is ready.");
         if (showLifecycleSummary)
         {
             DrawStatusSummary(context);
@@ -574,7 +575,7 @@ public sealed class MarketAcquisitionRequestBuilderPanel
 
         if (ImGui.TreeNode("Start over##AcquisitionRequestBuilderRecovery"))
         {
-            if (ImGuiUi.Button("Clear local request##AcquisitionRequestBuilderClear", !busy && !context.IsRouteActive))
+            if (ImGuiUi.Button("Clear draft##AcquisitionRequestBuilderClear", !busy && !context.IsRouteActive))
                 ClearDraft(context);
             ImGui.TreePop();
         }

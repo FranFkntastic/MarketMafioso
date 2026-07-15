@@ -33,11 +33,11 @@ internal sealed class MarketAcquisitionAcceptedRequestPanel
 
     public void Draw(MarketAcquisitionClaimView? claimedRequest, bool isBusy, bool canPrepare)
     {
-        ImGuiUi.SectionHeader("Accepted Request", MarketMafiosoUiTheme.Header);
+        ImGuiUi.SectionHeader("Leased Work Order", MarketMafiosoUiTheme.Header);
 
         if (claimedRequest == null)
         {
-            ImGui.TextColored(MarketMafiosoUiTheme.Muted, "No accepted request is loaded in this plugin session.");
+            ImGui.TextColored(MarketMafiosoUiTheme.Muted, "The working set is empty. Add one inbox item when you are ready to plan or buy it.");
             return;
         }
 
@@ -55,16 +55,16 @@ internal sealed class MarketAcquisitionAcceptedRequestPanel
                              string.Equals(claimed.Status, "Claimed", StringComparison.OrdinalIgnoreCase);
         if (canMutateClaim)
         {
-            if (ImGuiUi.PrimaryButton("Accept Request", true))
+            if (ImGuiUi.PrimaryButton("Accept into working set", true))
                 acceptRequest();
             RegisterLastControl("acquisition.accept", "Accept the claimed Market Acquisition request", true, claimed.Id, acceptRequest);
 
             ImGui.SameLine();
-            if (ImGuiUi.Button("Reject Request", true))
+            if (ImGuiUi.Button("Return to sender", true))
                 rejectRequest();
             RegisterLastControl("acquisition.reject", "Reject the claimed Market Acquisition request", true, claimed.Id, rejectRequest);
 
-            ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Accept this request before preparing its market plan.");
+            ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Acceptance freezes this revision into an execution snapshot before planning.");
         }
         else
         {
@@ -75,7 +75,7 @@ internal sealed class MarketAcquisitionAcceptedRequestPanel
             ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Preparing a plan reads remote market data. Guided routes validate live rows before purchasing.");
         }
 
-        if (ImGuiUi.Button("Remove Local", !isBusy))
+        if (ImGuiUi.Button("Clear local working set", !isBusy))
             removeLocalRequest();
         RegisterLastControl("acquisition.remove-local", "Remove the local Market Acquisition claim", !isBusy, claimed.Id, removeLocalRequest);
     }
@@ -87,7 +87,7 @@ internal sealed class MarketAcquisitionAcceptedRequestPanel
 
         ImGui.TextColored(
             MarketMafiosoUiTheme.Error,
-            "This accepted request is failed. Remove local state, check the dashboard, or prepare a fresh plan before retrying.");
+            "This work order needs recovery. Clear the local working set, inspect its receipt, or prepare a fresh plan before retrying.");
     }
 
     private static void DrawClaimedBatchSummary(MarketAcquisitionClaimView claimed)

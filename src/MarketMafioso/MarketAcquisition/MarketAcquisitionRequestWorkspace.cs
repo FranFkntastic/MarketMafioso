@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Net;
+using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -33,6 +35,10 @@ public sealed class MarketAcquisitionRequestWorkspace : IDisposable
     private CancellationTokenSource? requestCancellation;
     private string? acceptIdempotencyKey;
     private string? rejectIdempotencyKey;
+    private long nextLeaseRenewalUtcTicks = DateTimeOffset.MinValue.UtcTicks;
+    private long leaseExpiresUtcTicks = DateTimeOffset.MinValue.UtcTicks;
+    private int leaseRenewalInFlight;
+    private int leaseLossSignaled;
 
     public MarketAcquisitionRequestWorkspace(
         Configuration config,
@@ -55,6 +61,7 @@ public sealed class MarketAcquisitionRequestWorkspace : IDisposable
         ClaimedRequest = restored.Value.Claim;
         acceptIdempotencyKey = restored.Value.AcceptIdempotencyKey;
         rejectIdempotencyKey = restored.Value.RejectIdempotencyKey;
+        BeginLeaseTracking();
     }
 
     public IReadOnlyList<MarketAcquisitionRequestView> PendingRequests { get; private set; } = [];
@@ -67,7 +74,51 @@ public sealed class MarketAcquisitionRequestWorkspace : IDisposable
 
     public bool IsBusy { get; private set; }
 
-    public string Status { get; private set; } = "No dashboard request has been fetched this session.";
+    public string Status { get; private set; } = "The work-order inbox has not been refreshed this session.";
+
+    public async Task RenewLeaseIfDueAsync()
+    {
+        var claimed = ClaimedRequest;
+        if (claimed is null ||
+            !IsRenewableLeaseStatus(claimed.Status) ||
+            DateTimeOffset.UtcNow.UtcTicks < Interlocked.Read(ref nextLeaseRenewalUtcTicks) ||
+            Interlocked.Exchange(ref leaseRenewalInFlight, 1) != 0)
+            return;
+
+        try
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+            var lease = await client.RenewLeaseAsync(
+                config.ServerUrl,
+                WorkshopHostApiKeyRouting.ResolveAcquisitionKey(config),
+                claimed.Id,
+                claimed.ClaimToken,
+                config.PluginInstanceId,
+                timeout.Token).ConfigureAwait(false);
+            Interlocked.Exchange(ref nextLeaseRenewalUtcTicks, lease.RenewedAtUtc.AddSeconds(60).UtcTicks);
+            Interlocked.Exchange(ref leaseExpiresUtcTicks, lease.ExpiresAtUtc.UtcTicks);
+        }
+        catch (HttpRequestException ex) when (ex.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.NotFound or HttpStatusCode.Conflict)
+        {
+            SignalLeaseLoss();
+            logFailure(ex);
+        }
+        catch (Exception ex)
+        {
+            var now = DateTimeOffset.UtcNow;
+            if (now.UtcTicks >= Interlocked.Read(ref leaseExpiresUtcTicks))
+                SignalLeaseLoss();
+            else
+                Interlocked.Exchange(ref nextLeaseRenewalUtcTicks, now.AddSeconds(15).UtcTicks);
+            logFailure(ex);
+        }
+        finally
+        {
+            Interlocked.Exchange(ref leaseRenewalInFlight, 0);
+        }
+    }
+
+    public bool ConsumeLeaseLossSignal() => Interlocked.Exchange(ref leaseLossSignaled, 0) == 1;
 
     public void Connect(
         Action<MarketAcquisitionClaimView> adoptRequest,
@@ -93,8 +144,8 @@ public sealed class MarketAcquisitionRequestWorkspace : IDisposable
         EnsureConnected();
         var adopted = adoptRestoredRequest!(ClaimedRequest);
         Status = adopted
-            ? "Restored previously claimed dashboard request into the builder."
-            : "Restored previously claimed dashboard request; preserving local builder edits.";
+            ? "Restored the leased work order into the working set."
+            : "Restored the leased work order while preserving newer draft edits.";
         return true;
     }
 
@@ -122,8 +173,8 @@ public sealed class MarketAcquisitionRequestWorkspace : IDisposable
                 token).ConfigureAwait(false);
 
             Status = PendingRequests.Count == 0
-                ? "No matching dashboard requests."
-                : $"Loaded {PendingRequests.Count} dashboard batch(es).";
+                ? "No actionable work orders match this character."
+                : $"Loaded {PendingRequests.Count} inbox work order(s).";
         });
 
     public async Task<MarketAcquisitionRequestBuilderSyncOutcome> SyncAsync(
@@ -227,6 +278,7 @@ public sealed class MarketAcquisitionRequestWorkspace : IDisposable
                 world,
                 config.PluginInstanceId,
                 token).ConfigureAwait(false);
+            BeginLeaseTracking();
 
             acceptIdempotencyKey = NewIdempotencyKey();
             rejectIdempotencyKey = NewIdempotencyKey();
@@ -289,7 +341,7 @@ public sealed class MarketAcquisitionRequestWorkspace : IDisposable
         ClaimedRequest = null;
         ClearClaimMetadata();
         ClearPreparedPlan();
-        Status = "Forgot local acquisition claim. Fetch dashboard requests to pick up a pending request.";
+        Status = "Cleared the local working set. Refresh the inbox to lease another work order.";
     }
 
     public Task PreparePlanAsync(
@@ -389,6 +441,9 @@ public sealed class MarketAcquisitionRequestWorkspace : IDisposable
         requestCancellation = null;
     }
 
+    private static bool IsRenewableLeaseStatus(string status) => status is
+        "Claimed" or "AcceptedInPlugin" or "Running" or "RecoveryRequired";
+
     private async Task<MarketAcquisitionClaimView> EnsureClaimReadyAsync(
         MarketAcquisitionClaimView claimed,
         CancellationToken token)
@@ -431,6 +486,7 @@ public sealed class MarketAcquisitionRequestWorkspace : IDisposable
             token).ConfigureAwait(false);
 
         ClaimedRequest = reclaimed with { Status = accepted.Status };
+        BeginLeaseTracking();
         PersistClaim();
         PendingRequests = PendingRequests
             .Where(request => !string.Equals(request.Id, reclaimed.Id, StringComparison.Ordinal))
@@ -457,6 +513,31 @@ public sealed class MarketAcquisitionRequestWorkspace : IDisposable
     {
         acceptIdempotencyKey = null;
         rejectIdempotencyKey = null;
+        ClearLeaseTracking();
+    }
+
+    private void BeginLeaseTracking()
+    {
+        Interlocked.Exchange(ref nextLeaseRenewalUtcTicks, DateTimeOffset.MinValue.UtcTicks);
+        // The first renewal is immediate. This conservative local deadline prevents
+        // a network outage from leaving a route active indefinitely before the
+        // server has confirmed the authoritative lease expiry.
+        Interlocked.Exchange(ref leaseExpiresUtcTicks, DateTimeOffset.UtcNow.AddMinutes(2).UtcTicks);
+        Interlocked.Exchange(ref leaseLossSignaled, 0);
+    }
+
+    private void ClearLeaseTracking()
+    {
+        Interlocked.Exchange(ref nextLeaseRenewalUtcTicks, long.MaxValue);
+        Interlocked.Exchange(ref leaseExpiresUtcTicks, DateTimeOffset.MinValue.UtcTicks);
+        Interlocked.Exchange(ref leaseLossSignaled, 0);
+    }
+
+    private void SignalLeaseLoss()
+    {
+        Interlocked.Exchange(ref nextLeaseRenewalUtcTicks, long.MaxValue);
+        Interlocked.Exchange(ref leaseLossSignaled, 1);
+        Status = "Execution lease lost; the active route will stop before any further market action.";
     }
 
     private void EnsureConnected()

@@ -219,13 +219,13 @@ public sealed class MarketAcquisitionRequestBuilderController
         ArgumentNullException.ThrowIfNull(line);
         if (SelectedLineIndex >= 0 && SelectedLineIndex < Document.Lines.Count)
         {
-            CommitLocalEdit(RequestDocumentMutation.ReplaceLine(Document, SelectedLineIndex, line), "Local request updated.");
+            CommitLocalEdit(RequestDocumentMutation.ReplaceLine(Document, SelectedLineIndex, line), "Work-order draft updated.");
             return;
         }
 
         Document = RequestDocumentMutation.AddLine(Document, line);
         SelectedLineIndex = -1;
-        FinishLocalEdit("Local request updated.");
+        FinishLocalEdit("Work-order draft updated.");
     }
 
     public int AddLines(IEnumerable<MarketAcquisitionRequestLineDocument> lines)
@@ -241,7 +241,7 @@ public sealed class MarketAcquisitionRequestBuilderController
         }
         if (added == 0)
         {
-            Status = "Outfitter items are already present in the local request.";
+            Status = "Outfitter items are already present in the work-order draft.";
             return 0;
         }
         SelectedLineIndex = -1;
@@ -330,12 +330,12 @@ public sealed class MarketAcquisitionRequestBuilderController
         }
         catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.NotFound)
         {
-            Status = "The server copy is missing; republishing the current local request automatically.";
+            Status = "The server copy is missing; republishing the current work-order draft automatically.";
             RequestAutomaticSync(TimeSpan.Zero);
         }
         catch (Exception ex)
         {
-            Status = $"Server refresh failed; the local request remains available. {ex.Message}";
+            Status = $"Server refresh failed; the local draft remains available. {ex.Message}";
             RequestAutomaticSync(AutomaticRetryDelay);
         }
         finally
@@ -348,7 +348,7 @@ public sealed class MarketAcquisitionRequestBuilderController
     {
         Document = MarketAcquisitionRequestDocument.CreateDefault(characterName, world);
         ResetSelection();
-        Status = "Local request cleared.";
+        Status = "Work-order draft cleared.";
         SaveDocument();
     }
 

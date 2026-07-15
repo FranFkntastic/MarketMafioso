@@ -455,6 +455,131 @@ public sealed class MarketAcquisitionRequestStoreTests
         Assert.Equal("listing-1", Assert.Single(observed.Listings).ListingId);
     }
 
+    [Fact]
+    public async Task UnclaimedWorkOrderRemainsInInboxAfterLegacyPickupDeadline()
+    {
+        using var fixture = await MarketAcquisitionStoreFixture.CreateAsync();
+        var created = await fixture.Store.CreateBatchAsync(CreateBatchRequest("durable-inbox", expiresInSeconds: 1), CancellationToken.None);
+
+        await Task.Delay(1200);
+
+        var pending = await fixture.Store.ListPendingAsync(MarketAcquisitionTestApp.CharacterName, MarketAcquisitionTestApp.WorldName, CancellationToken.None);
+        Assert.Contains(pending, request => request.Id == created.Request.Id);
+        var workOrder = await fixture.Store.GetWorkOrderAsync(created.Request.Id, CancellationToken.None);
+        Assert.Equal(MarketAcquisitionWorkOrderStates.Inbox, workOrder!.State);
+    }
+
+    [Fact]
+    public async Task ShelfAndRestorePreserveIntentAndAdvanceRevision()
+    {
+        using var fixture = await MarketAcquisitionStoreFixture.CreateAsync();
+        var created = await fixture.Store.CreateBatchAsync(CreateBatchRequest("shelf-restore"), CancellationToken.None);
+
+        var shelved = await fixture.Store.ShelfWorkOrderAsync(created.Request.Id, new() { ExpectedRevision = 1 }, CancellationToken.None);
+        Assert.Equal(MarketAcquisitionWorkOrderStates.Shelved, shelved!.State);
+        Assert.Equal(2, shelved.Revision);
+        Assert.Empty(await fixture.Store.ListPendingAsync(MarketAcquisitionTestApp.CharacterName, MarketAcquisitionTestApp.WorldName, CancellationToken.None));
+
+        var restored = await fixture.Store.RestoreWorkOrderAsync(created.Request.Id, new() { ExpectedRevision = 2 }, CancellationToken.None);
+        Assert.Equal(MarketAcquisitionWorkOrderStates.Inbox, restored!.State);
+        Assert.Equal(3, restored.Revision);
+        Assert.Single(restored.Request.Lines);
+    }
+
+    [Fact]
+    public async Task CloneCreatesFreshInboxWorkWithLineage()
+    {
+        using var fixture = await MarketAcquisitionStoreFixture.CreateAsync();
+        var created = await fixture.Store.CreateBatchAsync(CreateBatchRequest("clone-source"), CancellationToken.None);
+
+        var clone = await fixture.Store.CloneWorkOrderAsync(created.Request.Id, new()
+        {
+            ExpectedRevision = created.Request.Revision,
+            IdempotencyKey = "clone-copy",
+            Title = "Reusable shard order",
+        }, CancellationToken.None);
+
+        Assert.NotNull(clone);
+        Assert.NotEqual(created.Request.Id, clone.Id);
+        Assert.Equal(created.Request.Id, clone.ParentWorkOrderId);
+        Assert.Equal("Reusable shard order", clone.Title);
+        Assert.Equal(MarketAcquisitionWorkOrderStates.Inbox, clone.State);
+        Assert.Single(clone.Request.Lines);
+    }
+
+    [Fact]
+    public async Task MergePreviewExposesDangerousPriceConflict()
+    {
+        using var fixture = await MarketAcquisitionStoreFixture.CreateAsync();
+        var target = await fixture.Store.CreateBatchAsync(CreateBatchRequest("merge-price-target"), CancellationToken.None);
+        var sourceRequest = CreateBatchRequest("merge-price-source") with
+        {
+            Lines = [CreateLine(2, "Fire Shard", "Crystal", maxUnitPrice: 120, maxQuantity: 500)],
+        };
+        var source = await fixture.Store.CreateBatchAsync(sourceRequest, CancellationToken.None);
+
+        var preview = await fixture.Store.PreviewWorkOrderMergeAsync(target.Request.Id, source.Request.Id, CancellationToken.None);
+
+        Assert.NotNull(preview);
+        Assert.False(preview.CanMerge);
+        Assert.Contains(preview.Conflicts, conflict => conflict.Field == "item.2.maxUnitPrice");
+    }
+
+    [Fact]
+    public async Task MergeAtomicallyAddsCompatibleLinesAndArchivesSource()
+    {
+        using var fixture = await MarketAcquisitionStoreFixture.CreateAsync();
+        var target = await fixture.Store.CreateBatchAsync(CreateBatchRequest("merge-target"), CancellationToken.None);
+        var sourceRequest = CreateBatchRequest("merge-source") with
+        {
+            Lines = [CreateLine(4, "Lightning Shard", "Crystal", maxUnitPrice: 25, maxQuantity: 200)],
+        };
+        var source = await fixture.Store.CreateBatchAsync(sourceRequest, CancellationToken.None);
+
+        var merged = await fixture.Store.MergeWorkOrdersAsync(target.Request.Id, new()
+        {
+            SourceWorkOrderId = source.Request.Id,
+            ExpectedTargetRevision = target.Request.Revision,
+            ExpectedSourceRevision = source.Request.Revision,
+        }, CancellationToken.None);
+
+        Assert.NotNull(merged);
+        Assert.Equal(2, merged.Request.Lines.Count);
+        Assert.Equal(2, merged.Revision);
+        var archived = await fixture.Store.GetWorkOrderAsync(source.Request.Id, CancellationToken.None);
+        Assert.Equal(MarketAcquisitionWorkOrderStates.Archived, archived!.State);
+        Assert.Equal(2, archived.Revision);
+    }
+
+    [Fact]
+    public async Task AcceptedExecutionHasRenewableLeaseSnapshotAndTerminalReceipt()
+    {
+        using var fixture = await MarketAcquisitionStoreFixture.CreateAsync();
+        var accepted = await fixture.CreateAcceptedBatchAsync("execution-artifacts");
+
+        var renewed = await fixture.Store.RenewLeaseAsync(accepted.Id, new()
+        {
+            ClaimToken = accepted.ClaimToken,
+            PluginInstanceId = MarketAcquisitionTestApp.PluginInstanceId,
+        }, CancellationToken.None);
+        Assert.NotNull(renewed);
+        Assert.True(renewed.ExpiresAtUtc > renewed.RenewedAtUtc);
+
+        await fixture.Store.CompleteAsync(accepted.Id, new()
+        {
+            ClaimToken = accepted.ClaimToken,
+            IdempotencyKey = "execution-artifacts-complete",
+            Message = "Nothing remained to buy.",
+        }, CancellationToken.None);
+
+        var history = await fixture.Store.GetWorkOrderHistoryAsync(accepted.Id, CancellationToken.None);
+        Assert.NotNull(history);
+        Assert.Single(history.ExecutionSnapshots);
+        var receipt = Assert.Single(history.Receipts);
+        Assert.Equal("Completed", receipt.Outcome);
+        Assert.Equal("Nothing remained to buy.", receipt.Message);
+    }
+
     private static MarketAcquisitionBatchCreateRequest CreateBatchRequest(
         string idempotencyKey,
         int expiresInSeconds = 300) =>

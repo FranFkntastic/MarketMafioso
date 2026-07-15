@@ -72,6 +72,45 @@ public sealed class AcquisitionDashboardState
         }, "Resend failed.");
     }
 
+    public Task ShelfAsync(MarketAcquisitionRequestView workOrder, CancellationToken cancellationToken = default) =>
+        ApplyWorkOrderCommandAsync(workOrder, "shelf", "Work order shelved.", cancellationToken);
+
+    public Task RestoreAsync(MarketAcquisitionRequestView workOrder, CancellationToken cancellationToken = default) =>
+        ApplyWorkOrderCommandAsync(workOrder, "restore", "Work order returned to the inbox.", cancellationToken);
+
+    public Task ArchiveAsync(MarketAcquisitionRequestView workOrder, CancellationToken cancellationToken = default) =>
+        ApplyWorkOrderCommandAsync(workOrder, "archive", "Work order archived.", cancellationToken);
+
+    public async Task CloneAsync(MarketAcquisitionRequestView workOrder, CancellationToken cancellationToken = default)
+    {
+        await RunAsync(async () =>
+        {
+            await api.CloneAcquisitionWorkOrderAsync(workOrder.Id, workOrder.Revision, cancellationToken);
+            await RefreshCoreAsync(cancellationToken);
+            status.Info("Reusable copy added to the inbox.");
+        }, "Clone failed.");
+    }
+
+    public async Task MergeAsync(
+        MarketAcquisitionRequestView target,
+        MarketAcquisitionRequestView source,
+        CancellationToken cancellationToken = default)
+    {
+        await RunAsync(async () =>
+        {
+            var preview = await api.PreviewAcquisitionWorkOrderMergeAsync(target.Id, source.Id, cancellationToken);
+            if (!preview.CanMerge)
+            {
+                var conflicts = string.Join("; ", preview.Conflicts.Select(conflict => conflict.Message));
+                throw new InvalidOperationException($"Merge blocked: {conflicts}");
+            }
+
+            await api.MergeAcquisitionWorkOrdersAsync(target, source, cancellationToken);
+            await RefreshCoreAsync(cancellationToken);
+            status.Info($"Merged work orders into {preview.ResultLineCount:N0} inbox line(s); the source was archived.");
+        }, "Merge failed.");
+    }
+
     public async Task<bool> StageAsync(
         MarketAcquisitionBatchCreateRequest request,
         CancellationToken cancellationToken = default)
@@ -80,8 +119,8 @@ public sealed class AcquisitionDashboardState
         {
             await api.CreateAcquisitionBatchAsync(request, cancellationToken);
             await RefreshCoreAsync(cancellationToken);
-            status.Info($"Staged acquisition batch with {request.Lines.Count:N0} line(s).");
-        }, "Stage queue failed.");
+            status.Info($"Published work order with {request.Lines.Count:N0} line(s) to the inbox.");
+        }, "Publish failed.");
     }
 
     public async Task<bool> AppendAsync(
@@ -132,6 +171,20 @@ public sealed class AcquisitionDashboardState
         ReconcileSelectedRequest();
     }
 
+    private async Task ApplyWorkOrderCommandAsync(
+        MarketAcquisitionRequestView workOrder,
+        string action,
+        string successMessage,
+        CancellationToken cancellationToken)
+    {
+        await RunAsync(async () =>
+        {
+            await api.ApplyAcquisitionWorkOrderCommandAsync(workOrder.Id, action, workOrder.Revision, cancellationToken);
+            await RefreshCoreAsync(cancellationToken);
+            status.Info(successMessage);
+        }, $"{action} failed.");
+    }
+
     private async Task<bool> RunAsync(Func<Task> action, string failurePrefix)
     {
         try
@@ -162,5 +215,5 @@ public sealed class AcquisitionDashboardState
     }
 
     private static bool IsTerminalRequest(MarketAcquisitionRequestView request) =>
-        request.Status is "Complete" or "Failed" or "Cancelled" or "Rejected" or "Expired";
+        request.Status is "Complete" or "Failed" or "Cancelled" or "Rejected" or "Expired" or "Archived";
 }
