@@ -20,6 +20,7 @@ internal sealed class OutfitterPanel : IDisposable
     private readonly AgentBridgeUiReviewRegistry reviewRegistry;
     private readonly OutfitterTargetCatalog targetCatalog = new();
     private readonly OutfitterCandidateCatalog candidateCatalog;
+    private readonly IOutfitterRetainerMetadataSource retainerMetadataSource;
     private readonly EquipmentLoadoutSolver solver = new();
     private readonly OutfitterMarketQuoteService quoteService;
     private IReadOnlyDictionary<uint, OutfitterMarketQuote> marketQuotes = new Dictionary<uint, OutfitterMarketQuote>();
@@ -30,8 +31,10 @@ internal sealed class OutfitterPanel : IDisposable
     private string search;
     private EquipmentLoadoutStrategy strategy;
     private int targetLevel;
+    private OutfitterTargetView targetView;
     private string status = "Choose a target to begin.";
     private string planSignature = string.Empty;
+    private string retainerMetadataSignature = string.Empty;
     private bool quoteRefreshRunning;
     private CancellationTokenSource? quoteCancellation;
     private Action<IReadOnlyList<MarketAcquisitionRequestLineDocument>>? stageMarketLines;
@@ -40,17 +43,22 @@ internal sealed class OutfitterPanel : IDisposable
         Configuration config,
         OutfitterCandidateCatalog candidateCatalog,
         OutfitterMarketQuoteService quoteService,
+        IOutfitterRetainerMetadataSource retainerMetadataSource,
         AgentBridgeUiReviewRegistry reviewRegistry)
     {
         this.config = config ?? throw new ArgumentNullException(nameof(config));
         this.candidateCatalog = candidateCatalog ?? throw new ArgumentNullException(nameof(candidateCatalog));
         this.quoteService = quoteService ?? throw new ArgumentNullException(nameof(quoteService));
+        this.retainerMetadataSource = retainerMetadataSource ?? throw new ArgumentNullException(nameof(retainerMetadataSource));
         this.reviewRegistry = reviewRegistry ?? throw new ArgumentNullException(nameof(reviewRegistry));
         search = config.Squire.OutfitterSearch;
         strategy = Enum.TryParse<EquipmentLoadoutStrategy>(config.Squire.OutfitterStrategy, out var storedStrategy)
             ? storedStrategy
             : EquipmentLoadoutStrategy.HighestItemLevel;
         targetLevel = config.Squire.OutfitterTargetLevel;
+        targetView = Enum.TryParse<OutfitterTargetView>(config.Squire.OutfitterTargetView, out var storedView)
+            ? storedView
+            : OutfitterTargetView.Jobs;
     }
 
     public void ConnectMarketAcquisition(Action<IReadOnlyList<MarketAcquisitionRequestLineDocument>> stageLines) =>
@@ -66,7 +74,7 @@ internal sealed class OutfitterPanel : IDisposable
                 new Vector2(0, Math.Max(360f, ImGui.GetContentRegionAvail().Y))))
             return;
 
-        ImGui.TableSetupColumn("Targets", ImGuiTableColumnFlags.WidthFixed, 235f);
+        ImGui.TableSetupColumn("Targets", ImGuiTableColumnFlags.WidthFixed, 310f);
         ImGui.TableSetupColumn("Loadout", ImGuiTableColumnFlags.WidthStretch, 1f);
         ImGui.TableNextRow();
         ImGui.TableNextColumn();
@@ -78,18 +86,26 @@ internal sealed class OutfitterPanel : IDisposable
 
     private void RefreshTargets(CharacterEquipmentSnapshot snapshot)
     {
-        if (lastSnapshot?.GenerationId == snapshot.GenerationId)
+        var retainerMetadata = retainerMetadataSource.ReadAll();
+        var metadataSignature = string.Join('|', retainerMetadata
+            .OrderBy(value => value.RetainerId)
+            .Select(value => $"{value.OwnerContentId}:{value.RetainerId}:{value.ClassJobId}:{value.Level}"));
+        if (lastSnapshot?.GenerationId == snapshot.GenerationId &&
+            string.Equals(retainerMetadataSignature, metadataSignature, StringComparison.Ordinal))
             return;
 
         lastSnapshot = snapshot;
-        targets = targetCatalog.Build(snapshot, config.RetainerCache);
+        retainerMetadataSignature = metadataSignature;
+        targets = targetCatalog.Build(snapshot, config.RetainerCache, retainerMetadata);
         selectedTarget = targets.FirstOrDefault(target =>
                              string.Equals(target.Key, config.Squire.OutfitterSelectedTargetKey, StringComparison.Ordinal))
+                         ?? TargetsForView(targetView).FirstOrDefault()
                          ?? targets.FirstOrDefault(target => target.Kind == OutfitterTargetKind.Job)
                          ?? targets.FirstOrDefault();
         if (selectedTarget is not null)
         {
             config.Squire.OutfitterSelectedTargetKey = selectedTarget.Key;
+            targetView = selectedTarget.Kind == OutfitterTargetKind.Retainer ? OutfitterTargetView.Retainers : OutfitterTargetView.Jobs;
             targetLevel = ResolveTargetLevel(selectedTarget);
         }
         planSignature = string.Empty;
@@ -97,31 +113,42 @@ internal sealed class OutfitterPanel : IDisposable
 
     private void DrawTargets()
     {
-        ImGui.TextColored(MarketMafiosoUiTheme.Header, "Targets");
-        ImGui.SameLine();
         var jobCount = targets.Count(target => target.Kind == OutfitterTargetKind.Job);
         var retainerCount = targets.Count(target => target.Kind == OutfitterTargetKind.Retainer);
-        ImGui.TextColored(MarketMafiosoUiTheme.Muted, $"{jobCount:N0} job{(jobCount == 1 ? string.Empty : "s")} · {retainerCount:N0} retainers");
+        DrawTargetViewButton(OutfitterTargetView.Jobs, $"Jobs  {jobCount:N0}");
+        ImGui.SameLine();
+        DrawTargetViewButton(OutfitterTargetView.Retainers, $"Retainers  {retainerCount:N0}");
         ImGui.SetNextItemWidth(-1);
-        if (ImGui.InputTextWithHint("##OutfitterTargetSearch", "Search jobs or retainers", ref search, 128))
+        var searchHint = targetView == OutfitterTargetView.Jobs ? "Search jobs or roles" : "Search retainers or owners";
+        if (ImGui.InputTextWithHint("##OutfitterTargetSearch", searchHint, ref search, 128))
         {
             config.Squire.OutfitterSearch = search;
             config.Save();
         }
-        var visible = targets.Where(MatchesSearch).ToArray();
+        var visible = TargetsForView(targetView).Where(MatchesSearch).ToArray();
         ImGui.BeginChild("##OutfitterTargets", new Vector2(0, -1), true);
-        var lastKind = (OutfitterTargetKind?)null;
-        foreach (var target in visible)
+        if (targetView == OutfitterTargetView.Retainers && visible.Length > 0 && visible.All(target => !target.IsCurrentCharacter))
         {
-            var groupKind = target.Kind == OutfitterTargetKind.Gearset ? OutfitterTargetKind.Job : target.Kind;
-            if (groupKind != lastKind)
+            var currentName = lastSnapshot?.Identity.Scope?.Name ?? "the current character";
+            ImGui.PushStyleColor(ImGuiCol.Text, MarketMafiosoUiTheme.Warning);
+            ImGui.TextWrapped($"No retainers registered for {currentName}.");
+            ImGui.PopStyleColor();
+            ImGui.TextWrapped("Showing other AutoRetainer characters and legacy MMF caches.");
+            ImGui.Separator();
+        }
+        string? lastGroup = null;
+        foreach (var target in visible
+                     .OrderByDescending(value => value.IsCurrentCharacter)
+                     .ThenBy(TargetGroupSort)
+                     .ThenBy(value => value.Name, StringComparer.OrdinalIgnoreCase))
+        {
+            var group = TargetGroup(target);
+            if (!string.Equals(group, lastGroup, StringComparison.Ordinal))
             {
-                if (lastKind is not null)
+                if (lastGroup is not null)
                     ImGui.Spacing();
-                ImGui.TextColored(
-                    MarketMafiosoUiTheme.Muted,
-                    groupKind == OutfitterTargetKind.Retainer ? "RETAINERS" : "PLAYER JOBS");
-                lastKind = groupKind;
+                ImGui.TextColored(MarketMafiosoUiTheme.Muted, group.ToUpperInvariant());
+                lastGroup = group;
             }
             DrawTargetRow(target);
         }
@@ -132,16 +159,17 @@ internal sealed class OutfitterPanel : IDisposable
 
     private void DrawTargetRow(OutfitterTarget target)
     {
-        var selected = selectedTarget?.Key == target.Key;
+        var selected = target.Kind == OutfitterTargetKind.Job
+            ? selectedTarget?.Kind != OutfitterTargetKind.Retainer && selectedTarget?.Job?.ClassJobId == target.Job?.ClassJobId
+            : selectedTarget?.Key == target.Key;
         if (!ImGui.BeginTable($"##OutfitterTargetRow{target.Key}", 2, ImGuiTableFlags.SizingFixedFit | ImGuiTableFlags.NoSavedSettings))
             return;
         ImGui.TableSetupColumn("Name", ImGuiTableColumnFlags.WidthStretch);
         ImGui.TableSetupColumn("Badge", ImGuiTableColumnFlags.WidthFixed, 42f);
         ImGui.TableNextRow();
         ImGui.TableNextColumn();
-        var prefix = target.Kind == OutfitterTargetKind.Gearset ? "  " : string.Empty;
-        if (ImGui.Selectable($"{prefix}{target.Name}##OutfitterTarget{target.Key}", selected, ImGuiSelectableFlags.SpanAllColumns))
-            SelectTarget(target);
+        if (ImGui.Selectable($"{target.Name}##OutfitterTarget{target.Key}", selected, ImGuiSelectableFlags.SpanAllColumns))
+            SelectPrimaryTarget(target);
         RegisterLastControl(
             $"squire.outfitter.target.{target.Key}",
             $"Select {target.Name}",
@@ -149,7 +177,7 @@ internal sealed class OutfitterPanel : IDisposable
             true,
             selected,
             target.Subtitle,
-            () => SelectTarget(target));
+            () => SelectPrimaryTarget(target));
         var rowHovered = ImGui.IsItemHovered();
         ImGui.TableNextColumn();
         ImGui.TextColored(target.IsReady ? MarketMafiosoUiTheme.Muted : MarketMafiosoUiTheme.Warning, FormatTargetBadge(target));
@@ -164,6 +192,44 @@ internal sealed class OutfitterPanel : IDisposable
         ImGui.EndTable();
     }
 
+    private void DrawTargetViewButton(OutfitterTargetView view, string label)
+    {
+        var selected = targetView == view;
+        if (ImGui.Selectable($"{label}##OutfitterView{view}", selected, ImGuiSelectableFlags.None, new Vector2(145f, 0)))
+            SetTargetView(view);
+        RegisterLastControl(
+            $"squire.outfitter.view.{view.ToString().ToLowerInvariant()}",
+            $"Show Outfitter {view.ToString().ToLowerInvariant()}",
+            AgentBridgeUiControlKind.Select,
+            true,
+            selected,
+            view.ToString(),
+            () => SetTargetView(view));
+    }
+
+    private void SetTargetView(OutfitterTargetView view)
+    {
+        targetView = view;
+        config.Squire.OutfitterTargetView = view.ToString();
+        if (selectedTarget is null || (view == OutfitterTargetView.Retainers) != (selectedTarget.Kind == OutfitterTargetKind.Retainer))
+        {
+            var first = TargetsForView(view).FirstOrDefault();
+            if (first is not null)
+                SelectPrimaryTarget(first);
+        }
+        config.Save();
+    }
+
+    private void SelectPrimaryTarget(OutfitterTarget target)
+    {
+        if (target.Kind == OutfitterTargetKind.Job && target.Job is { } job &&
+            config.Squire.OutfitterSelectedGearsetByJob.TryGetValue(job.ClassJobId, out var preferredKey))
+        {
+            target = targets.FirstOrDefault(value => string.Equals(value.Key, preferredKey, StringComparison.Ordinal)) ?? target;
+        }
+        SelectTarget(target);
+    }
+
     private void SelectTarget(OutfitterTarget target)
     {
         selectedTarget = target;
@@ -171,7 +237,9 @@ internal sealed class OutfitterPanel : IDisposable
         if (target.Job is not null)
         {
             targetLevel = ResolveTargetLevel(target);
-            config.Squire.OutfitterTargetLevel = targetLevel;
+            config.Squire.OutfitterTargetLevels[TargetLevelKey(target)] = targetLevel;
+            if (target.Kind != OutfitterTargetKind.Retainer)
+                config.Squire.OutfitterSelectedGearsetByJob[target.Job.ClassJobId] = target.Key;
         }
         marketQuotes = new Dictionary<uint, OutfitterMarketQuote>();
         planSignature = string.Empty;
@@ -190,6 +258,8 @@ internal sealed class OutfitterPanel : IDisposable
         ImGui.TextColored(MarketMafiosoUiTheme.Header, selectedTarget.Name);
         ImGui.SameLine();
         ImGui.TextColored(MarketMafiosoUiTheme.Muted, selectedTarget.Subtitle);
+        if (selectedTarget.Kind == OutfitterTargetKind.Retainer)
+            DrawRetainerOverview(selectedTarget);
         if (!selectedTarget.IsReady || selectedTarget.Job is null)
         {
             ImGui.Separator();
@@ -199,6 +269,7 @@ internal sealed class OutfitterPanel : IDisposable
             return;
         }
 
+        DrawGearsetPicker();
         DrawPolicyBar();
         EnsurePlan(snapshot);
         if (plan is null)
@@ -206,6 +277,49 @@ internal sealed class OutfitterPanel : IDisposable
         DrawSummary(plan);
         DrawLoadoutTable(plan);
         DrawAcquisitionBar(plan);
+    }
+
+    private void DrawRetainerOverview(OutfitterTarget target)
+    {
+        ImGui.Separator();
+        if (!ImGui.BeginTable("##OutfitterRetainerSummary", 4, ImGuiTableFlags.BordersInnerV | ImGuiTableFlags.SizingStretchProp))
+            return;
+        SummaryCell("Owner", FormatOwner(target), MarketMafiosoUiTheme.Header);
+        SummaryCell("Job", target.Job?.Abbreviation ?? "Unknown", target.Job is null ? MarketMafiosoUiTheme.Warning : MarketMafiosoUiTheme.Header);
+        SummaryCell("Level", target.RetainerMetadata?.Level > 0 ? target.RetainerMetadata.Level.ToString() : "Unknown", MarketMafiosoUiTheme.Muted);
+        SummaryCell("Inventory", target.Retainer is null ? "Not cached" : FormatAge(target.Retainer.LastUpdated), target.Retainer is null ? MarketMafiosoUiTheme.Warning : MarketMafiosoUiTheme.Success);
+        ImGui.EndTable();
+    }
+
+    private void DrawGearsetPicker()
+    {
+        if (selectedTarget?.Kind == OutfitterTargetKind.Retainer || selectedTarget?.Job is null)
+            return;
+        var gearsets = targets
+            .Where(value => value.Kind == OutfitterTargetKind.Gearset && value.Job?.ClassJobId == selectedTarget.Job.ClassJobId)
+            .ToArray();
+        if (gearsets.Length == 0)
+        {
+            ImGui.TextColored(MarketMafiosoUiTheme.Warning, "No saved gearset is available for this job; current-slot comparison is unavailable.");
+            return;
+        }
+        ImGui.SetNextItemWidth(260f);
+        var preview = selectedTarget.Gearset?.Name ?? gearsets[0].Name;
+        if (ImGui.BeginCombo("Gearset baseline##OutfitterGearset", preview))
+        {
+            foreach (var gearset in gearsets)
+            {
+                var selected = gearset.Gearset?.GearsetId == selectedTarget.Gearset?.GearsetId;
+                if (ImGui.Selectable($"{gearset.Name}##OutfitterGearset{gearset.Key}", selected))
+                    SelectTarget(gearset);
+            }
+            ImGui.EndCombo();
+        }
+        if (gearsets.Length > 1)
+        {
+            ImGui.SameLine();
+            ImGui.TextColored(MarketMafiosoUiTheme.Muted, $"{gearsets.Length:N0} saved gearsets for {selectedTarget.Job.Abbreviation}");
+        }
     }
 
     private void DrawPolicyBar()
@@ -286,6 +400,8 @@ internal sealed class OutfitterPanel : IDisposable
     {
         targetLevel = Math.Clamp(value, 1, checked((int)(selectedTarget?.Job?.Level ?? 1)));
         config.Squire.OutfitterTargetLevel = targetLevel;
+        if (selectedTarget is not null)
+            config.Squire.OutfitterTargetLevels[TargetLevelKey(selectedTarget)] = targetLevel;
         planSignature = string.Empty;
         config.Save();
     }
@@ -461,13 +577,17 @@ internal sealed class OutfitterPanel : IDisposable
 
     private bool MatchesSearch(OutfitterTarget target) => string.IsNullOrWhiteSpace(search) ||
         target.Name.Contains(search, StringComparison.OrdinalIgnoreCase) ||
-        target.Subtitle.Contains(search, StringComparison.OrdinalIgnoreCase);
+        target.Subtitle.Contains(search, StringComparison.OrdinalIgnoreCase) ||
+        (target.Job?.Abbreviation.Contains(search, StringComparison.OrdinalIgnoreCase) ?? false) ||
+        (target.Job?.Role?.Contains(search, StringComparison.OrdinalIgnoreCase) ?? false) ||
+        (target.OwnerCharacterName?.Contains(search, StringComparison.OrdinalIgnoreCase) ?? false) ||
+        (target.OwnerHomeWorld?.Contains(search, StringComparison.OrdinalIgnoreCase) ?? false);
 
     private int ResolveTargetLevel(OutfitterTarget target)
     {
         var jobLevel = checked((int)(target.Job?.Level ?? 1));
-        return config.Squire.OutfitterTargetLevel > 0
-            ? Math.Clamp(config.Squire.OutfitterTargetLevel, 1, jobLevel)
+        return config.Squire.OutfitterTargetLevels.TryGetValue(TargetLevelKey(target), out var storedLevel) && storedLevel > 0
+            ? Math.Clamp(storedLevel, 1, jobLevel)
             : jobLevel;
     }
 
@@ -498,8 +618,9 @@ internal sealed class OutfitterPanel : IDisposable
 
     private static string FormatTargetBadge(OutfitterTarget target) => target.Kind switch
     {
-        OutfitterTargetKind.Job => $"Lv {target.Job?.Level ?? 0:N0}",
+        OutfitterTargetKind.Job => $"{target.Job?.Abbreviation} {target.Job?.Level ?? 0:N0}",
         OutfitterTargetKind.Gearset => $"#{(target.Gearset?.GearsetId ?? 0) + 1:N0}",
+        OutfitterTargetKind.Retainer when target.Job is not null => $"{target.Job.Abbreviation} {target.RetainerMetadata?.Level ?? 0:N0}",
         OutfitterTargetKind.Retainer => FormatAge(target.Retainer?.LastUpdated),
         _ => string.Empty,
     };
@@ -515,6 +636,45 @@ internal sealed class OutfitterPanel : IDisposable
             return $"{Math.Max(1, (int)age.TotalHours):N0}h";
         return $"{Math.Max(1, (int)age.TotalDays):N0}d";
     }
+
+    private IEnumerable<OutfitterTarget> TargetsForView(OutfitterTargetView view) => view switch
+    {
+        OutfitterTargetView.Jobs => targets.Where(value => value.Kind == OutfitterTargetKind.Job),
+        OutfitterTargetView.Retainers => targets.Where(value => value.Kind == OutfitterTargetKind.Retainer),
+        _ => [],
+    };
+
+    private static string TargetGroup(OutfitterTarget target) => target.Kind == OutfitterTargetKind.Retainer
+        ? $"{FormatOwner(target)}{(target.IsCurrentCharacter ? " · current" : string.Empty)}"
+        : target.Job?.Discipline switch
+        {
+            EquipmentDiscipline.Crafter => "Crafters",
+            EquipmentDiscipline.Gatherer => "Gatherers",
+            _ => target.Job?.Role ?? "Combat jobs",
+        };
+
+    private static string TargetGroupSort(OutfitterTarget target) => target.Kind == OutfitterTargetKind.Retainer
+        ? FormatOwner(target)
+        : target.Job?.Discipline switch
+        {
+            EquipmentDiscipline.Combat => $"0:{target.Job.Role}",
+            EquipmentDiscipline.Crafter => "1:Crafters",
+            EquipmentDiscipline.Gatherer => "2:Gatherers",
+            _ => "3:Other",
+        };
+
+    private static string FormatOwner(OutfitterTarget target)
+    {
+        if (string.IsNullOrWhiteSpace(target.OwnerCharacterName))
+            return "Legacy unscoped cache";
+        return string.IsNullOrWhiteSpace(target.OwnerHomeWorld)
+            ? target.OwnerCharacterName
+            : $"{target.OwnerCharacterName} @ {target.OwnerHomeWorld}";
+    }
+
+    private static string TargetLevelKey(OutfitterTarget target) => target.Kind == OutfitterTargetKind.Retainer
+        ? target.Key
+        : $"job:{target.Job?.ClassJobId ?? 0}";
 
     private static Vector4 SourceColor(EquipmentLoadoutOffer? offer) => offer?.SourceKind switch
     {
@@ -558,4 +718,10 @@ internal sealed class OutfitterPanel : IDisposable
         quoteCancellation?.Cancel();
         quoteCancellation?.Dispose();
     }
+}
+
+internal enum OutfitterTargetView
+{
+    Jobs,
+    Retainers,
 }
