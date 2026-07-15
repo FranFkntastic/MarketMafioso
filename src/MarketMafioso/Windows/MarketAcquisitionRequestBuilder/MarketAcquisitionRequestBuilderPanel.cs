@@ -63,6 +63,9 @@ public sealed class MarketAcquisitionRequestBuilderPanel
     public int StageLines(IEnumerable<MarketAcquisitionRequestLineDocument> lines) =>
         controller.AddLines(lines);
 
+    public int ReturnLines(IEnumerable<uint> itemIds) =>
+        controller.RemoveLinesByItemId(itemIds);
+
     public void Draw(MarketAcquisitionRequestBuilderContext context, bool showLifecycleSummary = true)
     {
         EnsureCharacterScope(context);
@@ -71,8 +74,8 @@ public sealed class MarketAcquisitionRequestBuilderPanel
             context.World,
             context.HasCharacterScope && !context.IsBusy && !context.IsRouteActive);
 
-        ImGuiUi.SectionHeader("Work Order Draft", MainWindow.ColHeader);
-        ImGui.TextColored(MainWindow.ColMuted, "Draft locally, publish to the durable inbox, then execute whenever the target character is ready.");
+        ImGuiUi.SectionHeader("Editable buy list", MainWindow.ColHeader);
+        ImGui.TextColored(MainWindow.ColMuted, "Inbox lines and locally added items meet here. Edit the combined list before preparing its route.");
         if (showLifecycleSummary)
         {
             DrawStatusSummary(context);

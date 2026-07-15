@@ -7,7 +7,7 @@ internal sealed class OverviewTabPanel
 {
     private const string InventoryModuleSummary = "Inventory Reporter exports character and retainer inventory snapshots as JSON. Manual actions, capture scope, and scheduling live under Settings / Inventory Reporter.";
     private const string WorkshopLogisticsModuleSummary = "Workshop Logistics tracks company workshop jobs, materials, retainer restock, handoff, and assembly.";
-    private const string MarketAcquisitionModuleSummary = "Capture durable buying work, compose a working set, and execute it when the character is ready.";
+    private const string MarketAcquisitionModuleSummary = "Collect durable buying work, shape it in the Workbench, and execute it when the character is ready.";
 
     private readonly Func<bool> isMarketAcquisitionUnlocked;
 

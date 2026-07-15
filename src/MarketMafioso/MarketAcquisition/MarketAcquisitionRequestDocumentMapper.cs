@@ -81,6 +81,20 @@ public static class MarketAcquisitionRequestDocumentMapper
         };
     }
 
+    public static IReadOnlyList<MarketAcquisitionBatchLineView> GetRequestLines(
+        MarketAcquisitionRequestView request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        return GetLines(request);
+    }
+
+    public static MarketAcquisitionRequestLineDocument FromRequestLine(
+        MarketAcquisitionBatchLineView line)
+    {
+        ArgumentNullException.ThrowIfNull(line);
+        return ToDocumentLine(line);
+    }
+
     public static string BuildCreateIdempotencyKey(
         string pluginInstanceId,
         MarketAcquisitionRequestDocument document)

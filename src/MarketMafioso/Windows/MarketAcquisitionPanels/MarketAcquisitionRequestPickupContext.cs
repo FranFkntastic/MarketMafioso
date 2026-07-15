@@ -9,6 +9,7 @@ internal sealed record MarketAcquisitionRequestPickupContext(
     bool RouteOwnsUi,
     MarketAcquisitionClaimView? ClaimedRequest,
     IReadOnlyList<MarketAcquisitionRequestView> PendingRequests,
+    IReadOnlySet<uint> WorkbenchItemIds,
     bool IsBusy,
     bool HasApiKey,
     bool HasCharacterScope,

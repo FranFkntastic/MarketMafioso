@@ -12,15 +12,16 @@ public sealed class MainWindowAgentSelectionTests
     }
 
     [Theory]
-    [InlineData("Compose", "Compose", "Request")]
-    [InlineData("Request", "Compose", "Request")]
-    [InlineData("Working Set", "Working Set", "Plan")]
-    [InlineData("Plan", "Working Set", "Plan")]
+    [InlineData("Workbench", "Workbench", "Compose", "Working Set")]
+    [InlineData("Compose", "Workbench", "Compose", "Working Set")]
+    [InlineData("Working Set", "Workbench", "Compose", "Working Set")]
+    [InlineData("Plan", "Workbench", "Plan", "Request")]
     public void PendingSelection_SelectsCurrentAndLegacyWorkspaceNames(
         string requestedView,
         string viewName,
-        string legacyViewName)
+        string firstLegacyViewName,
+        string secondLegacyViewName)
     {
-        Assert.True(MainWindow.ShouldSelectAgentWorkspaceTab(requestedView, viewName, legacyViewName));
+        Assert.True(MainWindow.ShouldSelectAgentWorkspaceTab(requestedView, viewName, firstLegacyViewName, secondLegacyViewName));
     }
 }

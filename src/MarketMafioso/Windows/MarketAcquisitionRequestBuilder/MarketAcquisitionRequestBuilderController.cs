@@ -260,6 +260,27 @@ public sealed class MarketAcquisitionRequestBuilderController
         return true;
     }
 
+    public int RemoveLinesByItemId(IEnumerable<uint> itemIds)
+    {
+        ArgumentNullException.ThrowIfNull(itemIds);
+        var removedIds = itemIds.Where(itemId => itemId != 0).ToHashSet();
+        if (removedIds.Count == 0)
+            return 0;
+
+        var remaining = Document.Lines.Where(line => !removedIds.Contains(line.ItemId)).ToList();
+        var removed = Document.Lines.Count - remaining.Count;
+        if (removed == 0)
+        {
+            Status = "The selected inbox items are not in the Workbench.";
+            return 0;
+        }
+
+        Document = Document with { Lines = remaining };
+        SelectedLineIndex = -1;
+        FinishLocalEdit($"Returned {removed:N0} item{(removed == 1 ? string.Empty : "s")} to the inbox selection.");
+        return removed;
+    }
+
     public async Task SyncAsync(string characterName, string world)
     {
         if (IsSyncing || IsRefreshing)

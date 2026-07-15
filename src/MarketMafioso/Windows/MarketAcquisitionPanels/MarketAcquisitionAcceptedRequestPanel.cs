@@ -37,7 +37,7 @@ internal sealed class MarketAcquisitionAcceptedRequestPanel
 
         if (claimedRequest == null)
         {
-            ImGui.TextColored(MarketMafiosoUiTheme.Muted, "The working set is empty. Add one inbox item when you are ready to plan or buy it.");
+            ImGui.TextColored(MarketMafiosoUiTheme.Muted, "No work order is active. Take inbox lines into the Workbench or use a request as-is.");
             return;
         }
 
@@ -55,7 +55,7 @@ internal sealed class MarketAcquisitionAcceptedRequestPanel
                              string.Equals(claimed.Status, "Claimed", StringComparison.OrdinalIgnoreCase);
         if (canMutateClaim)
         {
-            if (ImGuiUi.PrimaryButton("Accept into working set", true))
+            if (ImGuiUi.PrimaryButton("Accept active work order", true))
                 acceptRequest();
             RegisterLastControl("acquisition.accept", "Accept the claimed Market Acquisition request", true, claimed.Id, acceptRequest);
 
@@ -75,7 +75,7 @@ internal sealed class MarketAcquisitionAcceptedRequestPanel
             ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Preparing a plan reads remote market data. Guided routes validate live rows before purchasing.");
         }
 
-        if (ImGuiUi.Button("Clear local working set", !isBusy))
+        if (ImGuiUi.Button("Clear active work order", !isBusy))
             removeLocalRequest();
         RegisterLastControl("acquisition.remove-local", "Remove the local Market Acquisition claim", !isBusy, claimed.Id, removeLocalRequest);
     }
@@ -87,7 +87,7 @@ internal sealed class MarketAcquisitionAcceptedRequestPanel
 
         ImGui.TextColored(
             MarketMafiosoUiTheme.Error,
-            "This work order needs recovery. Clear the local working set, inspect its receipt, or prepare a fresh plan before retrying.");
+            "This work order needs recovery. Clear the active order, inspect its receipt, or prepare a fresh plan before retrying.");
     }
 
     private static void DrawClaimedBatchSummary(MarketAcquisitionClaimView claimed)

@@ -35,9 +35,8 @@ public sealed class MarketMafiosoBridgeProviderTests
         Assert.Contains(surfaces, surface => surface.Id == "retainers.plan" && surface.Target == "Retainers/Withdrawal plan");
         Assert.Contains(surfaces, surface => surface.Id == "workshop-logistics.combined" && surface.Target == "Workshop Logistics/Combined");
         Assert.Contains(surfaces, surface => surface.Id == "workshop-logistics.materials" && surface.Target == "Workshop Logistics/Materials");
-        Assert.Contains(surfaces, surface => surface.Id == "market-acquisition.compose" && surface.Target == "Market Acquisition/Compose");
         Assert.Contains(surfaces, surface => surface.Id == "market-acquisition.inbox" && surface.Target == "Market Acquisition/Inbox");
-        Assert.Contains(surfaces, surface => surface.Id == "market-acquisition.working-set" && surface.Target == "Market Acquisition/Working Set");
+        Assert.Contains(surfaces, surface => surface.Id == "market-acquisition.workbench" && surface.Target == "Market Acquisition/Workbench");
         Assert.Contains(surfaces, surface => surface.Id == "market-acquisition.route" && surface.Target == "Market Acquisition/Route");
         Assert.DoesNotContain(surfaces, surface => surface.Id == "inventory-reporter");
         Assert.Equal(surfaces.OrderBy(surface => surface.Order), surfaces);

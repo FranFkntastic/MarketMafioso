@@ -332,6 +332,28 @@ public sealed class MarketAcquisitionRequestBuilderControllerTests
         Assert.Single(persisted);
     }
 
+    [Fact]
+    public void RemoveLinesByItemId_ReturnsOnlySelectedWorkbenchItemsInOnePersistedEdit()
+    {
+        var persisted = new List<MarketAcquisitionRequestDocument>();
+        var controller = CreateController(CreateDocument() with
+        {
+            Lines =
+            [
+                new() { ItemId = 1, ItemName = "Fire Shard" },
+                new() { ItemId = 2, ItemName = "Ice Shard" },
+                new() { ItemId = 3, ItemName = "Wind Shard" },
+            ],
+        }, persist: persisted.Add);
+
+        var removed = controller.RemoveLinesByItemId([1, 3, 999]);
+
+        Assert.Equal(2, removed);
+        Assert.Equal([2u], controller.Document.Lines.Select(line => line.ItemId));
+        Assert.Equal("Returned 2 items to the inbox selection.", controller.Status);
+        Assert.Single(persisted);
+    }
+
     private static MarketAcquisitionRequestBuilderController CreateController(
         MarketAcquisitionRequestDocument document,
         Func<MarketAcquisitionRequestDocument, Task<MarketAcquisitionRequestBuilderSyncOutcome>>? sync = null,

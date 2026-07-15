@@ -144,7 +144,7 @@ public sealed class MarketAcquisitionRequestWorkspace : IDisposable
         EnsureConnected();
         var adopted = adoptRestoredRequest!(ClaimedRequest);
         Status = adopted
-            ? "Restored the leased work order into the working set."
+            ? "Restored the leased work order into the Workbench."
             : "Restored the leased work order while preserving newer draft edits.";
         return true;
     }
@@ -346,7 +346,7 @@ public sealed class MarketAcquisitionRequestWorkspace : IDisposable
         ClaimedRequest = null;
         ClearClaimMetadata();
         ClearPreparedPlan();
-        Status = "Cleared the local working set. Refresh the inbox to lease another work order.";
+        Status = "Cleared the active work order. The Workbench draft remains available.";
     }
 
     public Task PreparePlanAsync(
