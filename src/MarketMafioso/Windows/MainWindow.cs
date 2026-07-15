@@ -514,7 +514,7 @@ public class MainWindow : Window, IDisposable
                 ImGui.EndTabItem();
             }
 
-            if (ImGui.BeginTabItem("Restock", GetAgentTabFlags("Restock")))
+            if (ImGui.BeginTabItem("Retainers", GetAgentTabFlags("Retainers")))
             {
                 DrawRetainerRestockTab();
                 ImGui.EndTabItem();
@@ -563,9 +563,13 @@ public class MainWindow : Window, IDisposable
         var separatorIndex = tabName.IndexOf('/');
         var mainTab = separatorIndex < 0 ? tabName : tabName[..separatorIndex];
         var workspaceView = separatorIndex < 0 ? null : tabName[(separatorIndex + 1)..];
+        if (string.Equals(mainTab, "Restock", StringComparison.Ordinal))
+            mainTab = "Retainers";
+        if (string.Equals(workspaceView, "Plan and run", StringComparison.Ordinal))
+            workspaceView = "Withdrawal plan";
         var allowed = mainTab switch
         {
-            "Overview" or "Squire" or "Workshop Logistics" or "Restock" or "Settings" or "Status" => true,
+            "Overview" or "Squire" or "Workshop Logistics" or "Retainers" or "Settings" or "Status" => true,
             "Diagnostics" => true,
             "Market Acquisition" => IsMarketAcquisitionUnlocked(),
             _ => false,
@@ -586,7 +590,7 @@ public class MainWindow : Window, IDisposable
         workspaceView is null || (mainTab, workspaceView) switch
         {
             ("Workshop Logistics", "Combined" or "Queue" or "Materials" or "Assembly") => true,
-            ("Restock", "Browse stock" or "Plan and run") => true,
+            ("Retainers", "Quick deposit" or "Browse stock" or "Withdrawal plan") => true,
             ("Market Acquisition", "Request" or "Plan" or "Route") => true,
             _ => false,
         };
@@ -644,8 +648,8 @@ public class MainWindow : Window, IDisposable
         ImGui.TextColored(
             ColMuted,
             IsMarketAcquisitionUnlocked()
-                ? "Utilities: Squire, Workshop Logistics, Restock, Market Acquisition. Inventory reporting lives under Settings."
-                : "Utilities: Squire, Workshop Logistics, Restock. Inventory reporting lives under Settings.");
+                ? "Utilities: Squire, Workshop Logistics, Retainers, Market Acquisition. Inventory reporting lives under Settings."
+                : "Utilities: Squire, Workshop Logistics, Retainers. Inventory reporting lives under Settings.");
     }
 
     private void DrawWorkshopPrepTab()

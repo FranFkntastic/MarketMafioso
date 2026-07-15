@@ -22,7 +22,7 @@ public sealed class RetainerRestockControlsPanel
         this.workshopRetainerRestock = workshopRetainerRestock ?? throw new ArgumentNullException(nameof(workshopRetainerRestock));
     }
 
-    public void Draw(RetainerRestockPlan plan, RetainerOwnerScope ownerScope)
+    public void Draw(RetainerRestockPlan plan, ElementalDepositPlan depositPlan, RetainerOwnerScope ownerScope)
     {
         ArgumentNullException.ThrowIfNull(plan);
 
@@ -31,12 +31,17 @@ public sealed class RetainerRestockControlsPanel
                                   !autoRetainerRefresh.IsStartQueued;
         var canRun = !workshopRetainerRestock.IsRunning &&
                      plan.Lines.Any(line => line.NeededQuantity > 0 && line.Candidates.Count > 0);
+        var canDeposit = !workshopRetainerRestock.IsRunning && depositPlan.CanRun;
 
         if (ImGuiUi.Button("Refresh retainer cache", canRefreshRetainers))
             autoRetainerRefresh.StartFullRefresh();
 
         ImGui.SameLine();
-        if (ImGuiUi.PrimaryButton("Run restock plan", canRun))
+        if (ImGuiUi.PrimaryButton("Quick deposit", canDeposit))
+            _ = workshopRetainerRestock.StartElementalDepositAsync(depositPlan);
+
+        ImGui.SameLine();
+        if (ImGuiUi.Button("Run withdrawal plan", canRun))
             _ = workshopRetainerRestock.StartRestockAsync(plan.Lines);
 
         ImGui.SameLine();
@@ -49,11 +54,5 @@ public sealed class RetainerRestockControlsPanel
             ImGui.TextColored(MarketMafiosoUiTheme.Error, "Current character and home world are unavailable; retainer restock cannot use cached retainers.");
             return;
         }
-        if (!canRun && !workshopRetainerRestock.IsRunning)
-            ImGui.TextColored(
-                MarketMafiosoUiTheme.Muted,
-                plan.Lines.Any(line => line.NeededQuantity > 0)
-                    ? "The plan has no retrievable cached stock yet. Refresh the cache or adjust the plan."
-                    : "Add a plan row whose desired quantity exceeds current player stock.");
     }
 }

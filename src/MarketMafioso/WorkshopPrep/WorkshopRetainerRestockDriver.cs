@@ -8,16 +8,17 @@ using FFXIVClientStructs.FFXIV.Client.Game;
 using FFXIVClientStructs.FFXIV.Client.UI;
 using FFXIVClientStructs.FFXIV.Client.UI.Agent;
 using FFXIVClientStructs.FFXIV.Component.GUI;
+using Franthropy.Dalamud.Automation.Inventory;
 using Franthropy.Dalamud.Automation.Retainers;
-using Lumina.Excel.Sheets;
 using MarketMafioso.Automation.Retainers;
+using Lumina.Excel.Sheets;
 using MarketMafioso.Automation.Safety;
 
 namespace MarketMafioso.WorkshopPrep;
 
 internal interface IWorkshopRetainerRestockDriver
 {
-    IReadOnlyList<LiveRetainerStack> ScanLiveRetainerStacks(IReadOnlySet<uint> itemIds);
+    IReadOnlyList<DalamudInventoryStack> ScanLiveRetainerStacks(IReadOnlySet<uint> itemIds);
 
     Task WaitForRetainerListAsync();
 
@@ -25,9 +26,13 @@ internal interface IWorkshopRetainerRestockDriver
 
     Task OpenRetainerInventoryAsync();
 
-    Task<IReadOnlyList<LiveRetainerStack>> ScanLiveRetainerStacksAsync(IReadOnlySet<uint> itemIds);
+    Task<IReadOnlyList<DalamudInventoryStack>> ScanLiveRetainerStacksAsync(IReadOnlySet<uint> itemIds);
 
-    Task<RetainerRetrievalResult> RetrieveFromLiveStackAsync(LiveRetainerStack stack, int quantity);
+    Task<RetainerRetrievalResult> RetrieveFromLiveStackAsync(DalamudInventoryStack stack, int quantity);
+
+    Task<IReadOnlyList<DalamudInventoryStack>> ScanLivePlayerCrystalStacksAsync(IReadOnlySet<uint> itemIds);
+
+    Task<RetainerCrystalTransferResult> DepositCrystalStackAsync(DalamudInventoryStack stack, int quantity);
 
     Task CloseRetainerAsync();
 }
@@ -60,8 +65,8 @@ internal sealed class WorkshopRetainerRestockDriver : IWorkshopRetainerRestockDr
     ];
 
     private readonly IPluginLog log;
-    private readonly RetainerLiveInventoryScanner liveInventoryScanner = new();
     private readonly DalamudSummoningBellInteractor summoningBellInteractor;
+    private readonly DalamudRetainerCrystalTransfer crystalTransfer;
 
     public WorkshopRetainerRestockDriver(IPluginLog log)
     {
@@ -70,11 +75,16 @@ internal sealed class WorkshopRetainerRestockDriver : IWorkshopRetainerRestockDr
             Plugin.ObjectTable,
             Plugin.TargetManager,
             Plugin.DataManager);
+        crystalTransfer = new(
+            Plugin.SigScanner,
+            Plugin.GameGui,
+            Plugin.Framework,
+            log);
     }
 
-    public unsafe IReadOnlyList<LiveRetainerStack> ScanLiveRetainerStacks(IReadOnlySet<uint> itemIds)
+    public IReadOnlyList<DalamudInventoryStack> ScanLiveRetainerStacks(IReadOnlySet<uint> itemIds)
     {
-        return liveInventoryScanner.ScanLiveRetainerStacks(itemIds);
+        return DalamudRetainerInventory.ScanLoadedStacks(itemIds);
     }
 
     public async Task WaitForRetainerListAsync()
@@ -119,7 +129,7 @@ internal sealed class WorkshopRetainerRestockDriver : IWorkshopRetainerRestockDr
             throw new InvalidOperationException(selected.Message);
 
         await WaitForRetainerCommandMenuAsync(candidate.RetainerName).ConfigureAwait(false);
-        log.Information($"[MarketMafioso] Selected candidate retainer {candidate.RetainerName} ({candidate.RetainerId}) for workshop material retrieval.");
+        log.Information($"[MarketMafioso] Selected candidate retainer {candidate.RetainerName} ({candidate.RetainerId}) for retainer transfer.");
     }
 
     public async Task OpenRetainerInventoryAsync()
@@ -131,12 +141,12 @@ internal sealed class WorkshopRetainerRestockDriver : IWorkshopRetainerRestockDr
         await WaitForRetainerInventoryAsync().ConfigureAwait(false);
     }
 
-    public async Task<IReadOnlyList<LiveRetainerStack>> ScanLiveRetainerStacksAsync(IReadOnlySet<uint> itemIds)
+    public async Task<IReadOnlyList<DalamudInventoryStack>> ScanLiveRetainerStacksAsync(IReadOnlySet<uint> itemIds)
     {
         return await Plugin.Framework.RunOnTick(() => ScanLiveRetainerStacks(itemIds)).ConfigureAwait(false);
     }
 
-    public async Task<RetainerRetrievalResult> RetrieveFromLiveStackAsync(LiveRetainerStack stack, int quantity)
+    public async Task<RetainerRetrievalResult> RetrieveFromLiveStackAsync(DalamudInventoryStack stack, int quantity)
     {
         var pending = await Plugin.Framework.RunOnTick(() => OpenRetainerStackContextMenu(stack, quantity)).ConfigureAwait(false);
         if (!pending.Success)
@@ -157,6 +167,17 @@ internal sealed class WorkshopRetainerRestockDriver : IWorkshopRetainerRestockDr
 
         log.Information($"[MarketMafioso] {selected.Message}");
         return await WaitForRetrievalCompletionAsync(stack, pending.Retrieved, pending.PlayerQuantityBefore).ConfigureAwait(false);
+    }
+
+    public async Task<IReadOnlyList<DalamudInventoryStack>> ScanLivePlayerCrystalStacksAsync(IReadOnlySet<uint> itemIds)
+    {
+        return await Plugin.Framework.RunOnTick(() =>
+            DalamudInventoryStackScanner.ScanLoadedStacks([InventoryType.Crystals], itemIds)).ConfigureAwait(false);
+    }
+
+    public Task<RetainerCrystalTransferResult> DepositCrystalStackAsync(DalamudInventoryStack stack, int quantity)
+    {
+        return crystalTransfer.DepositAsync(stack, quantity);
     }
 
     public async Task CloseRetainerAsync()
@@ -208,7 +229,7 @@ internal sealed class WorkshopRetainerRestockDriver : IWorkshopRetainerRestockDr
         throw new InvalidOperationException($"Timed out waiting for retainer inventory to open. {uiState}");
     }
 
-    private unsafe PendingRetainerRetrieval OpenRetainerStackContextMenu(LiveRetainerStack stack, int quantity)
+    private unsafe PendingRetainerRetrieval OpenRetainerStackContextMenu(DalamudInventoryStack stack, int quantity)
     {
         if (quantity <= 0)
             return new(false, 0, false, string.Empty, 0, $"Invalid retrieval quantity {quantity} for item {stack.ItemId}.");
@@ -217,13 +238,13 @@ internal sealed class WorkshopRetainerRestockDriver : IWorkshopRetainerRestockDr
         if (inventoryManager == null)
             return new(false, 0, false, string.Empty, 0, "Inventory manager is unavailable.");
 
-        var container = inventoryManager->GetInventoryContainer(stack.Page);
+        var container = inventoryManager->GetInventoryContainer(stack.Container);
         if (container == null || !container->IsLoaded)
-            return new(false, 0, false, string.Empty, 0, $"Retainer inventory page {stack.Page} is not loaded.");
+            return new(false, 0, false, string.Empty, 0, $"Retainer inventory page {stack.Container} is not loaded.");
 
         var slot = container->GetInventorySlot(stack.SlotIndex);
         if (slot == null || slot->ItemId != stack.ItemId || slot->Quantity != stack.Quantity)
-            return new(false, 0, false, string.Empty, 0, $"Expected {stack.Quantity}x item {stack.ItemId} was not found at {stack.Page}/{stack.SlotIndex}.");
+            return new(false, 0, false, string.Empty, 0, $"Expected {stack.Quantity}x item {stack.ItemId} was not found at {stack.Container}/{stack.SlotIndex}.");
 
         var retrieveQuantity = Math.Min(quantity, slot->Quantity);
         var agent = AgentInventoryContext.Instance();
@@ -231,14 +252,14 @@ internal sealed class WorkshopRetainerRestockDriver : IWorkshopRetainerRestockDr
         if (retainerAgent == null)
             return new(false, 0, false, string.Empty, 0, "Retainer agent is unavailable.");
 
-        agent->OpenForItemSlot(stack.Page, stack.SlotIndex, 0, retainerAgent->GetAddonId());
+        agent->OpenForItemSlot(stack.Container, stack.SlotIndex, 0, retainerAgent->GetAddonId());
 
         var needsQuantityInput = retrieveQuantity < slot->Quantity;
         var targetText = GetAddonText(needsQuantityInput ? RetrieveQuantityAddonRow : RetrieveFromRetainerAddonRow);
         var playerQuantityBefore = CountPlayerItem(stack.ItemId);
         log.Verbose(
             $"[MarketMafioso] Opening retainer context menu for item {stack.ItemId}: " +
-            $"retainerSlot={stack.Page}/{stack.SlotIndex}, slotQuantity={slot->Quantity}, requested={quantity}, retrieving={retrieveQuantity}, " +
+            $"retainerSlot={stack.Container}/{stack.SlotIndex}, slotQuantity={slot->Quantity}, requested={quantity}, retrieving={retrieveQuantity}, " +
             $"playerBefore={playerQuantityBefore}, action=\"{targetText}\", " +
             $"agentTarget={agent->TargetInventoryId}/{agent->TargetInventorySlotId}, ownerAddon={agent->OwnerAddonId}, retainerAddon={retainerAgent->GetAddonId()}.");
         return new(true, retrieveQuantity, needsQuantityInput, targetText, playerQuantityBefore, $"Opened retainer context menu for item {stack.ItemId}.");
@@ -262,7 +283,7 @@ internal sealed class WorkshopRetainerRestockDriver : IWorkshopRetainerRestockDr
     }
 
     private static async Task<RetainerRetrievalResult> WaitForRetrievalCompletionAsync(
-        LiveRetainerStack stack,
+        DalamudInventoryStack stack,
         int retrieved,
         int playerQuantityBefore)
     {
@@ -305,7 +326,7 @@ internal sealed class WorkshopRetainerRestockDriver : IWorkshopRetainerRestockDr
     }
 
     private static unsafe RetainerRetrievalResult VerifyRetrievalCompleted(
-        LiveRetainerStack stack,
+        DalamudInventoryStack stack,
         int retrieved,
         int playerQuantityBefore)
     {
@@ -313,13 +334,13 @@ internal sealed class WorkshopRetainerRestockDriver : IWorkshopRetainerRestockDr
         if (inventoryManager == null)
             return new(false, 0, "Inventory manager is unavailable after retrieval.");
 
-        var container = inventoryManager->GetInventoryContainer(stack.Page);
+        var container = inventoryManager->GetInventoryContainer(stack.Container);
         if (container == null || !container->IsLoaded)
-            return new(false, 0, $"Retainer inventory page {stack.Page} is not loaded after retrieval.");
+            return new(false, 0, $"Retainer inventory page {stack.Container} is not loaded after retrieval.");
 
         var slot = container->GetInventorySlot(stack.SlotIndex);
         if (slot == null)
-            return new(false, 0, $"Retainer inventory slot {stack.Page}/{stack.SlotIndex} is unavailable after retrieval.");
+            return new(false, 0, $"Retainer inventory slot {stack.Container}/{stack.SlotIndex} is unavailable after retrieval.");
 
         var playerQuantityAfter = CountPlayerItem(stack.ItemId);
         var expectedRemaining = stack.Quantity - retrieved;
@@ -499,7 +520,7 @@ internal sealed class WorkshopRetainerRestockDriver : IWorkshopRetainerRestockDr
     }
 
     private static string BuildRetrievalFailureMessage(
-        LiveRetainerStack stack,
+        DalamudInventoryStack stack,
         int retrieved,
         int expectedRemaining,
         uint actualItemId,
@@ -509,7 +530,7 @@ internal sealed class WorkshopRetainerRestockDriver : IWorkshopRetainerRestockDr
     {
         return
             $"Retainer retrieval did not change the expected slot for item {stack.ItemId}: " +
-            $"retainerSlot={stack.Page}/{stack.SlotIndex}, originalRetainerQuantity={stack.Quantity}, requestedRetrieved={retrieved}, " +
+            $"retainerSlot={stack.Container}/{stack.SlotIndex}, originalRetainerQuantity={stack.Quantity}, requestedRetrieved={retrieved}, " +
             $"expectedRemaining={Math.Max(expectedRemaining, 0)}, actualSlotItem={actualItemId}, actualSlotQuantity={actualQuantity}, " +
             $"playerQuantity={playerQuantityBefore}->{playerQuantityAfter}. {DescribeRetainerUiState()}";
     }
