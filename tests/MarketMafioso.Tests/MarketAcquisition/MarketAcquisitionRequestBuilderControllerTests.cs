@@ -354,6 +354,65 @@ public sealed class MarketAcquisitionRequestBuilderControllerTests
         Assert.Single(persisted);
     }
 
+    [Fact]
+    public void LoadComposition_ReplacesWorkbenchWithFreshLocalDraft()
+    {
+        var persisted = new List<MarketAcquisitionRequestDocument>();
+        var controller = CreateController(CreateDocument() with
+        {
+            RemoteRequestId = "remote-1",
+            RemoteRevision = 9,
+            LastPlanHash = "old-plan",
+        }, persist: persisted.Add);
+        var composition = MarketAcquisitionWorkbenchComposition.FromDocument(
+            "Shard restock",
+            MarketAcquisitionRequestDocument.CreateDefault() with
+            {
+                Region = "Europe",
+                Lines = [new() { ItemId = 2, ItemName = "Fire Shard", TargetQuantity = 99 }],
+            },
+            DateTimeOffset.UtcNow);
+
+        controller.LoadComposition(composition, "Wei Ning", "Siren");
+
+        Assert.Equal("Wei Ning", controller.Document.TargetCharacterName);
+        Assert.Equal("Siren", controller.Document.TargetWorld);
+        Assert.Equal("Europe", controller.Document.Region);
+        Assert.Equal([2u], controller.Document.Lines.Select(line => line.ItemId));
+        Assert.Null(controller.Document.RemoteRequestId);
+        Assert.Equal(0, controller.Document.RemoteRevision);
+        Assert.Null(controller.Document.LastPlanHash);
+        Assert.Equal("NewDraft", controller.Document.SyncStatus);
+        Assert.Equal("Loaded Shard restock as a new Workbench draft.", controller.Status);
+        Assert.Single(persisted);
+    }
+
+    [Fact]
+    public void MergeComposition_PreservesWorkbenchLinesAndAddsOnlyMissingItems()
+    {
+        var persisted = new List<MarketAcquisitionRequestDocument>();
+        var controller = CreateController(CreateDocument(), persist: persisted.Add);
+        var composition = MarketAcquisitionWorkbenchComposition.FromDocument(
+            "Daily supplies",
+            MarketAcquisitionRequestDocument.CreateDefault() with
+            {
+                Lines =
+                [
+                    new() { ItemId = 19951, ItemName = "Do not overwrite" },
+                    new() { ItemId = 2, ItemName = "Fire Shard" },
+                ],
+            },
+            DateTimeOffset.UtcNow);
+
+        var added = controller.MergeComposition(composition);
+
+        Assert.Equal(1, added);
+        Assert.Equal([19951u, 2u], controller.Document.Lines.Select(line => line.ItemId));
+        Assert.Equal("Koppranickel Ore", controller.Document.Lines[0].ItemName);
+        Assert.Equal("Added 1 Daily supplies line.", controller.Status);
+        Assert.Single(persisted);
+    }
+
     private static MarketAcquisitionRequestBuilderController CreateController(
         MarketAcquisitionRequestDocument document,
         Func<MarketAcquisitionRequestDocument, Task<MarketAcquisitionRequestBuilderSyncOutcome>>? sync = null,

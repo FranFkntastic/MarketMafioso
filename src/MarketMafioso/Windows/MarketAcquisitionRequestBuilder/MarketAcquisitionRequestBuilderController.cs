@@ -228,7 +228,29 @@ public sealed class MarketAcquisitionRequestBuilderController
         FinishLocalEdit("Work-order draft updated.");
     }
 
-    public int AddLines(IEnumerable<MarketAcquisitionRequestLineDocument> lines)
+    public int AddLines(IEnumerable<MarketAcquisitionRequestLineDocument> lines) =>
+        AddLines(lines, "Outfitter");
+
+    public int MergeComposition(MarketAcquisitionWorkbenchComposition composition)
+    {
+        ArgumentNullException.ThrowIfNull(composition);
+        return AddLines(composition.Lines, composition.Name);
+    }
+
+    public void LoadComposition(
+        MarketAcquisitionWorkbenchComposition composition,
+        string characterName,
+        string world)
+    {
+        ArgumentNullException.ThrowIfNull(composition);
+        Document = composition.CreateDocument(characterName, world);
+        ResetSelection();
+        Status = $"Loaded {composition.Name} as a new Workbench draft.";
+        SaveDocument();
+        RequestAutomaticSync();
+    }
+
+    private int AddLines(IEnumerable<MarketAcquisitionRequestLineDocument> lines, string sourceLabel)
     {
         ArgumentNullException.ThrowIfNull(lines);
         var added = 0;
@@ -241,11 +263,11 @@ public sealed class MarketAcquisitionRequestBuilderController
         }
         if (added == 0)
         {
-            Status = "Outfitter items are already present in the work-order draft.";
+            Status = $"All {sourceLabel} items are already present in the Workbench.";
             return 0;
         }
         SelectedLineIndex = -1;
-        FinishLocalEdit($"Added {added:N0} Outfitter line{(added == 1 ? string.Empty : "s")}.");
+        FinishLocalEdit($"Added {added:N0} {sourceLabel} line{(added == 1 ? string.Empty : "s")}.");
         return added;
     }
 

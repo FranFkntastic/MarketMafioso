@@ -58,6 +58,7 @@ public class MainWindow : Window, IDisposable
     private readonly UiStateCaptureService uiStateCapture;
     private readonly MarketAcquisitionGuidedRoutePanel marketAcquisitionGuidedRoutePanel;
     private readonly MarketAcquisitionRequestBuilderPanel acquisitionRequestBuilder;
+    private readonly MarketAcquisitionWorkbenchCompositionPanel acquisitionWorkbenchCompositions;
     private readonly RetainerRestockTabPanel restockTab;
     private readonly WorkshopPrepQueuePanel workshopPrepQueue;
     private readonly WorkshopMaterialPanel workshopMaterials;
@@ -316,6 +317,12 @@ public class MainWindow : Window, IDisposable
             SyncAcquisitionRequestBuilderAsync,
             RefreshAcquisitionRequestBuilderRemoteAsync,
             acquisitionWorkspace.OnDocumentAdopted);
+        acquisitionWorkbenchCompositions = new MarketAcquisitionWorkbenchCompositionPanel(
+            new MarketAcquisitionWorkbenchCompositionCatalog(
+                new ConfigurationMarketAcquisitionWorkbenchCompositionStore(config, config.Save)),
+            acquisitionRequestBuilder.LoadComposition,
+            composition => acquisitionRequestBuilder.MergeComposition(composition),
+            AgentReviewRegistry);
         squireTab.ConnectMarketAcquisition(lines =>
         {
             acquisitionRequestBuilder.StageLines(lines);
@@ -787,6 +794,8 @@ public class MainWindow : Window, IDisposable
             ImGuiUi.SectionHeader("Acquisition Workbench", ColHeader);
             ImGui.TextColored(ColMuted, "Take work from the Inbox, combine or trim its lines here, then prepare the current request for execution.");
             ImGui.Spacing();
+            DrawMarketAcquisitionWorkbenchCompositions();
+            ImGui.Spacing();
             DrawMarketAcquisitionRequestBuilder();
             ImGui.Spacing();
             if (acquisitionWorkspace.ClaimedRequest is not null)
@@ -858,6 +867,18 @@ public class MainWindow : Window, IDisposable
             acquisitionWorkspace.PreparedPlan,
             acquisitionWorkspace.PreparedPlanHash),
             showLifecycleSummary: false);
+    }
+
+    private void DrawMarketAcquisitionWorkbenchCompositions()
+    {
+        var hasScope = TryGetAcquisitionScope(out var characterName, out var world);
+        acquisitionWorkbenchCompositions.Draw(new MarketAcquisitionWorkbenchCompositionContext(
+            acquisitionRequestBuilder.CurrentDocument,
+            characterName,
+            world,
+            hasScope,
+            acquisitionWorkspace.IsBusy,
+            IsMarketAcquisitionRouteActive()));
     }
 
     private void DrawMarketAcquisitionPickupSection()

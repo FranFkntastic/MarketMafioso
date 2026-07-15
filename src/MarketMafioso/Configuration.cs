@@ -20,6 +20,8 @@ public class Configuration : IPluginConfiguration
     public string PluginInstanceId { get; set; } = Guid.NewGuid().ToString("N");
     public PersistedMarketAcquisitionClaim? ActiveMarketAcquisitionClaim { get; set; }
     public PersistedMarketAcquisitionRequestDocument? ActiveMarketAcquisitionRequestDocument { get; set; }
+    public List<PersistedMarketAcquisitionWorkbenchComposition> MarketAcquisitionWorkbenchCompositions { get; set; } = [];
+    public string? SelectedMarketAcquisitionWorkbenchCompositionId { get; set; }
     public bool EnableMarketAcquisition { get; set; } = false;
     public DateTime? MarketAcquisitionUnlockedAtUtc { get; set; }
     public bool EnableOpportunisticWorldChecks { get; set; } = true;
@@ -308,6 +310,20 @@ public sealed class PersistedMarketAcquisitionRequestLineDocument
     public string HqPolicy { get; set; } = string.Empty;
     public uint MaxUnitPrice { get; set; }
     public uint GilCap { get; set; }
+}
+
+[Serializable]
+public sealed class PersistedMarketAcquisitionWorkbenchComposition
+{
+    public string Id { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public string Region { get; set; } = string.Empty;
+    public string WorldMode { get; set; } = string.Empty;
+    public string SweepScope { get; set; } = string.Empty;
+    public List<string> SweepDataCenters { get; set; } = [];
+    public List<PersistedMarketAcquisitionRequestLineDocument> Lines { get; set; } = [];
+    public DateTime CreatedAtUtc { get; set; }
+    public DateTime UpdatedAtUtc { get; set; }
 }
 
 [Serializable]

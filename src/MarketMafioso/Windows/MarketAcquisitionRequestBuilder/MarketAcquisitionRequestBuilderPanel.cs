@@ -66,6 +66,15 @@ public sealed class MarketAcquisitionRequestBuilderPanel
     public int ReturnLines(IEnumerable<uint> itemIds) =>
         controller.RemoveLinesByItemId(itemIds);
 
+    public int MergeComposition(MarketAcquisitionWorkbenchComposition composition) =>
+        controller.MergeComposition(composition);
+
+    public void LoadComposition(
+        MarketAcquisitionWorkbenchComposition composition,
+        string characterName,
+        string world) =>
+        controller.LoadComposition(composition, characterName, world);
+
     public void Draw(MarketAcquisitionRequestBuilderContext context, bool showLifecycleSummary = true)
     {
         EnsureCharacterScope(context);
