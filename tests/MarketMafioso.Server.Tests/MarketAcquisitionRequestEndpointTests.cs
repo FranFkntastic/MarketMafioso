@@ -1229,7 +1229,7 @@ public sealed class MarketAcquisitionRequestEndpointTests
     }
 
     [Fact]
-    public async Task ClaimedRequestExpiresBeforeAcceptance()
+    public async Task ExpiredClaimIsReleasedForAnotherPlugin()
     {
         await using var application = CreateHostedApplication(
             extraConfiguration: new KeyValuePair<string, string?>("MarketMafioso:AcquisitionClaimExpirySeconds", "1"));
@@ -1249,7 +1249,85 @@ public sealed class MarketAcquisitionRequestEndpointTests
                 idempotencyKey = "expired-accept",
             });
 
-        Assert.Equal(HttpStatusCode.Conflict, accept.StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, accept.StatusCode);
+
+        var reclaimed = await SendWithKeyAsync(
+            client,
+            HttpMethod.Post,
+            $"/marketmafioso/api/acquisition/requests/{requestId}/claim",
+            "client-secret",
+            new
+            {
+                characterName = "Wei Ning",
+                world = "Gilgamesh",
+                pluginInstanceId = "plugin-recovery",
+            });
+        reclaimed.EnsureSuccessStatusCode();
+    }
+
+    [Fact]
+    public async Task StaleAcceptedRequestWithoutExecutionEvidenceReturnsToPendingPickup()
+    {
+        await using var application = CreateHostedApplication(
+            extraConfiguration: new KeyValuePair<string, string?>("MarketMafioso:AcquisitionExecutionLeaseSeconds", "1"));
+        using var client = application.CreateClient();
+        var claimed = await CreateAcceptedRequestAsync(client, "accepted-lease-expires");
+
+        await Task.Delay(TimeSpan.FromSeconds(2));
+
+        var pending = await SendWithKeyAsync(
+            client,
+            HttpMethod.Get,
+            "/marketmafioso/api/acquisition/requests/pending?characterName=Wei%20Ning&world=Gilgamesh",
+            "client-secret");
+        pending.EnsureSuccessStatusCode();
+        using var json = JsonDocument.Parse(await pending.Content.ReadAsStringAsync());
+        var request = Assert.Single(json.RootElement.GetProperty("requests").EnumerateArray());
+        Assert.Equal(claimed.RequestId, request.GetProperty("id").GetString());
+        Assert.Equal("PendingPickup", request.GetProperty("status").GetString());
+    }
+
+    [Fact]
+    public async Task StaleRunningRequestRequiresRecoveryAndCanBeResent()
+    {
+        await using var application = CreateHostedApplication(
+            extraConfiguration: new KeyValuePair<string, string?>("MarketMafioso:AcquisitionExecutionLeaseSeconds", "1"));
+        using var client = application.CreateClient();
+        var claimed = await CreateAcceptedRequestAsync(client, "running-lease-expires");
+        var progress = await SendWithKeyAsync(
+            client,
+            HttpMethod.Post,
+            $"/marketmafioso/api/acquisition/requests/{claimed.RequestId}/progress",
+            "client-secret",
+            new
+            {
+                claimToken = claimed.ClaimToken,
+                idempotencyKey = "running-lease-progress",
+                runnerState = "Running",
+                message = "Execution started.",
+            });
+        progress.EnsureSuccessStatusCode();
+
+        await Task.Delay(TimeSpan.FromSeconds(2));
+
+        var timeline = await SendWithKeyAsync(
+            client,
+            HttpMethod.Get,
+            $"/marketmafioso/api/acquisition/requests/{claimed.RequestId}/timeline",
+            "client-secret");
+        timeline.EnsureSuccessStatusCode();
+        using var timelineJson = JsonDocument.Parse(await timeline.Content.ReadAsStringAsync());
+        Assert.Equal("RecoveryRequired", timelineJson.RootElement.GetProperty("request").GetProperty("status").GetString());
+
+        var resent = await SendWithKeyAsync(
+            client,
+            HttpMethod.Post,
+            $"/marketmafioso/api/acquisition/requests/{claimed.RequestId}/resend",
+            "client-secret",
+            new { });
+        resent.EnsureSuccessStatusCode();
+        using var resentJson = JsonDocument.Parse(await resent.Content.ReadAsStringAsync());
+        Assert.Equal("PendingPickup", resentJson.RootElement.GetProperty("status").GetString());
     }
 
     [Fact]

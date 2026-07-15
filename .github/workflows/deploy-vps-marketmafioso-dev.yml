@@ -8,6 +8,7 @@ on:
       - 'src/MarketMafioso.Server/**'
       - 'tests/MarketMafioso.Server.Tests/**'
       - 'MarketMafioso.sln'
+      - 'eng/craft-architect-core.ref'
       - '.github/workflows/deploy-vps-marketmafioso-dev.yml'
   workflow_dispatch:
 
@@ -33,11 +34,17 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v4
 
+      - name: Read pinned Craft Architect Core revision
+        id: craft-architect-ref
+        shell: bash
+        run: echo "ref=$(tr -d '[:space:]' < eng/craft-architect-core.ref)" >> "$GITHUB_OUTPUT"
+
       - name: Checkout Craft Architect Core
         uses: actions/checkout@v4
         with:
           repository: FranFkntastic/XIV-Craft-Architect
           path: craft-architect
+          ref: ${{ steps.craft-architect-ref.outputs.ref }}
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
@@ -78,6 +85,10 @@ jobs:
           MarketMafioso__PublicOrigin=https://dev.xivcraftarchitect.com
           MarketMafioso__StorageLabel=dev receiver storage
           MarketMafioso__EnableMarketAcquisition=true
+          MarketMafioso__AllowedOrigins__0=https://dev.xivcraftarchitect.com
+          MarketMafioso__AllowedOrigins__1=https://xivcraftarchitect.com
+          MarketMafioso__AcquisitionExecutionLeaseSeconds=900
+          MarketMafioso__AcquisitionRecoveryPickupExpirySeconds=3600
           MarketMafioso__DatabasePath=/srv/craftarchitect/data/marketmafioso/dev/marketmafioso.db
           MarketMafioso__RawJsonRetentionCount=20
           MarketMafioso__SnapshotRetentionCount=500
@@ -117,12 +128,58 @@ jobs:
           data_root="/srv/craftarchitect/data/marketmafioso/dev"
           release_dir="$root/releases/$release"
           executable="$release_dir/MarketMafioso.Server"
-          trap 'rm -rf "$remote_tmp"' EXIT
+          caddy_target="/etc/caddy/conf.d/dev.xivcraftarchitect.com/marketmafioso.caddy"
+          rollback_env="$root/marketmafioso-dev.env.rollback"
+          rollback_caddy="$root/marketmafioso-dev.caddy.rollback"
+          previous_release="$(readlink -f "$root/current" 2>/dev/null || true)"
+
+          rollback() {
+            set +e
+            echo "Activation failed; restoring the previous MarketMafioso release."
+            if [[ -n "$previous_release" && -d "$previous_release" ]]; then
+              sudo ln -sfn "$previous_release" "$root/current"
+            fi
+            if [[ -f "$rollback_env" ]]; then
+              sudo cp -p "$rollback_env" "$root/marketmafioso-dev.env"
+            fi
+            if [[ -f "$rollback_caddy" ]]; then
+              sudo install -m 644 -o root -g root "$rollback_caddy" "$caddy_target"
+            else
+              sudo rm -f "$caddy_target"
+            fi
+            sudo systemctl daemon-reload
+            sudo systemctl restart "$service_name"
+            sudo caddy validate --config /etc/caddy/Caddyfile && sudo systemctl reload caddy
+          }
+
+          finish() {
+            status=$?
+            if [[ "$status" != "0" ]]; then
+              rollback
+            fi
+            rm -rf "$remote_tmp"
+            exit "$status"
+          }
+          trap finish EXIT
 
           sudo mkdir -p "$release_dir" "$data_root"
           sudo tar -xzf "$archive" -C "$release_dir"
           sudo chown -R "$USER:$USER" "$release_dir" "$data_root"
           sudo chmod +x "$executable"
+
+          if [[ -f "$root/marketmafioso-dev.env" ]]; then
+            sudo cp -p "$root/marketmafioso-dev.env" "$rollback_env"
+          else
+            sudo rm -f "$rollback_env"
+          fi
+          if [[ -f "$caddy_target" ]]; then
+            sudo cp -p "$caddy_target" "$rollback_caddy"
+          else
+            sudo rm -f "$rollback_caddy"
+          fi
+          if [[ -n "$previous_release" && -d "$previous_release" ]]; then
+            sudo ln -sfn "$previous_release" "$root/previous"
+          fi
 
           sudo install -m 600 -o "$USER" -g "$USER" "$env_file" "$root/marketmafioso-dev.env"
 
@@ -150,7 +207,7 @@ jobs:
           systemctl is-active "$service_name"
 
           sudo mkdir -p /etc/caddy/conf.d/dev.xivcraftarchitect.com
-          sudo install -m 644 -o root -g root "$caddy_file" /etc/caddy/conf.d/dev.xivcraftarchitect.com/marketmafioso.caddy
+          sudo install -m 644 -o root -g root "$caddy_file" "$caddy_target"
 
           sudo python3 - <<'PY'
           from pathlib import Path
@@ -223,6 +280,7 @@ jobs:
           "$VPS_USER@$VPS_HOST:${{ steps.remote-temp.outputs.path }}/"
 
       - name: Activate receiver release
+        id: activate
         run: >
           ssh -p "$VPS_SSH_PORT"
           -i ~/.ssh/craftarchitect_vps
@@ -307,6 +365,11 @@ jobs:
             "https://dev.xivcraftarchitect.com/marketmafioso/api/diagnostics/events?limit=1")"
           expect_status diagnostics-with-session "$diagnostics_with_session" 200
 
+          timeline_with_session="$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            --cookie "$cookie_jar" \
+            "https://dev.xivcraftarchitect.com/marketmafioso/api/acquisition/requests/smoke-missing/timeline")"
+          expect_status timeline-with-dashboard-session "$timeline_with_session" 404
+
           acquisition_without_key="$(curl --silent --output /dev/null --write-out '%{http_code}' \
             "https://dev.xivcraftarchitect.com/marketmafioso/api/acquisition/requests/pending?characterName=Smoke&world=Gilgamesh")"
           expect_status acquisition-pending-without-key "$acquisition_without_key" 401
@@ -345,6 +408,22 @@ jobs:
             "https://dev.xivcraftarchitect.com/marketmafioso/api/capabilities")"
           printf '%s' "$capabilities_body" | grep -F "craft.appraise" > /dev/null
 
+          check_cors_preflight() {
+            local origin="$1"
+            local headers
+            headers="$(curl --silent --show-error --dump-header - --output /dev/null \
+              --request OPTIONS \
+              --header "Origin: $origin" \
+              --header 'Access-Control-Request-Method: GET' \
+              --header 'Access-Control-Request-Headers: X-Api-Key' \
+              "https://dev.xivcraftarchitect.com/marketmafioso/api/capabilities")"
+            printf '%s' "$headers" | tr -d '\r' | grep -i -F "access-control-allow-origin: $origin" > /dev/null
+            printf '%s' "$headers" | tr -d '\r' | grep -i -F 'access-control-allow-headers:' | grep -i -F 'x-api-key' > /dev/null
+          }
+
+          check_cors_preflight "https://dev.xivcraftarchitect.com"
+          check_cors_preflight "https://xivcraftarchitect.com"
+
           quote_without_key="$(curl --silent --output /dev/null --write-out '%{http_code}' \
             --request POST \
             --header 'Content-Type: application/json' \
@@ -370,3 +449,29 @@ jobs:
             "https://dev.xivcraftarchitect.com/api/marketmafioso/acquisition/requests/pending?characterName=Smoke&world=Gilgamesh")"
           echo "retired-plugin returned HTTP $retired_plugin_status"
           test "$retired_plugin_status" != "200"
+
+      - name: Roll back failed public receiver verification
+        if: ${{ failure() && steps.activate.outcome == 'success' }}
+        shell: bash
+        run: |
+          ssh -p "$VPS_SSH_PORT" -i ~/.ssh/craftarchitect_vps "$VPS_USER@$VPS_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          service_name="marketmafioso-dev"
+          root="/srv/craftarchitect/services/marketmafioso/dev"
+          caddy_target="/etc/caddy/conf.d/dev.xivcraftarchitect.com/marketmafioso.caddy"
+          previous_release="$(readlink -f "$root/previous" 2>/dev/null || true)"
+          test -n "$previous_release"
+          test -d "$previous_release"
+          sudo ln -sfn "$previous_release" "$root/current"
+          if [[ -f "$root/marketmafioso-dev.env.rollback" ]]; then
+            sudo cp -p "$root/marketmafioso-dev.env.rollback" "$root/marketmafioso-dev.env"
+          fi
+          if [[ -f "$root/marketmafioso-dev.caddy.rollback" ]]; then
+            sudo install -m 644 -o root -g root "$root/marketmafioso-dev.caddy.rollback" "$caddy_target"
+          fi
+          sudo systemctl daemon-reload
+          sudo systemctl restart "$service_name"
+          sudo caddy validate --config /etc/caddy/Caddyfile
+          sudo systemctl reload caddy
+          curl --fail --silent --show-error http://127.0.0.1:5088/health > /dev/null
+          REMOTE

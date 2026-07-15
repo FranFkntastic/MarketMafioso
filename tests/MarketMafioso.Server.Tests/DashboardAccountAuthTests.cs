@@ -307,6 +307,28 @@ public sealed class DashboardAccountAuthTests
     }
 
     [Fact]
+    public async Task DashboardSession_AllowsTimelineReadWithCookieAndNoApiKeyUnderBasePath()
+    {
+        await using var application = CreateApplication(
+            new KeyValuePair<string, string?>("MarketMafioso:RequireApiKey", "true"),
+            new KeyValuePair<string, string?>("MarketMafioso:ClientApiKey", "client-secret"),
+            new KeyValuePair<string, string?>("MarketMafioso:BasePath", "/marketmafioso"));
+        using var client = application.CreateClient();
+        var accepted = await application.CreateAcceptedBatchAsync(client, "dashboard-cookie-timeline-read");
+        var login = await client.PostAsJsonAsync("/marketmafioso/auth/login", new
+        {
+            username = "admin",
+            password = "secret-password",
+        });
+        login.EnsureSuccessStatusCode();
+
+        var response = await client.GetAsync(
+            $"/marketmafioso/api/acquisition/requests/{accepted.Id}/timeline");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
     public async Task DashboardSession_AllowsPluginMarketObservationWithApiKeyUnderBasePath()
     {
         await using var application = CreateApplication(

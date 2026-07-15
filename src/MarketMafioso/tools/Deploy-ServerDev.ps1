@@ -139,6 +139,14 @@ function Invoke-PublicSmoke {
         if ($response.StatusCode -ne 200) {
             throw "Authenticated dashboard API smoke check failed."
         }
+
+        $timelineStatus = Get-HttpStatusCode -Request @{
+            Uri = "$($dashboardUrl)api/acquisition/requests/smoke-missing/timeline"
+            WebSession = $dashboardSession
+        }
+        if ($timelineStatus -ne 404) {
+            throw "Dashboard timeline auth smoke returned HTTP $timelineStatus; expected 404."
+        }
     }
     else {
         Write-Warning "Skipping authenticated dashboard smoke; missing $dashboardPasswordPath"
@@ -161,6 +169,24 @@ function Invoke-PublicSmoke {
         $capabilityIds = @($capabilities.capabilities | ForEach-Object { $_.id })
         if ($capabilityIds -notcontains "craft.appraise") {
             throw "Capabilities smoke did not include craft.appraise."
+        }
+
+        foreach ($origin in @("https://dev.xivcraftarchitect.com", "https://xivcraftarchitect.com")) {
+            $preflight = Invoke-WebRequest `
+                -Method Options `
+                -Uri $capabilitiesUrl `
+                -Headers @{
+                    Origin = $origin
+                    "Access-Control-Request-Method" = "GET"
+                    "Access-Control-Request-Headers" = "X-Api-Key"
+                } `
+                -UseBasicParsing
+            if ($preflight.Headers["Access-Control-Allow-Origin"] -ne $origin) {
+                throw "CORS preflight did not grant origin $origin."
+            }
+            if ($preflight.Headers["Access-Control-Allow-Headers"] -notmatch "(?i)x-api-key") {
+                throw "CORS preflight did not grant X-Api-Key for $origin."
+            }
         }
 
         $quoteWithoutKeyStatus = Get-HttpStatusCode -Request @{

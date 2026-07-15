@@ -115,6 +115,9 @@ public sealed class WorkshopHostQuoteEndpointTests
             CreateRequest());
 
         Assert.Equal(HttpStatusCode.OK, capabilities.StatusCode);
+        var advertised = await capabilities.Content.ReadFromJsonAsync<WorkshopHostCapabilitiesResponse>();
+        Assert.NotNull(advertised);
+        Assert.Equal(["craft.appraise"], advertised.Capabilities.Select(capability => capability.Id));
         Assert.Equal(HttpStatusCode.OK, quote.StatusCode);
     }
 

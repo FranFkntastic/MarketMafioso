@@ -106,6 +106,7 @@ internal static class MarketAcquisitionRequestPolicy
     public static void EnsureCanReplaceBatch(MarketAcquisitionRequestView current)
     {
         if (current.Status is MarketAcquisitionStatuses.Running
+            or MarketAcquisitionStatuses.RecoveryRequired
             or MarketAcquisitionStatuses.Complete
             or MarketAcquisitionStatuses.Failed
             or MarketAcquisitionStatuses.Rejected

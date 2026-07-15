@@ -48,7 +48,7 @@ public sealed class DashboardSessionAuthMiddleware
         if (IsPluginInventoryIngestRoute(request))
             return false;
 
-        if (IsPluginAcquisitionApiRoute(request))
+        if (MarketAcquisitionEndpointClassifier.RequiresPluginCredential(request))
             return false;
 
         if (request.Path.StartsWithSegments("/api/acquisition", StringComparison.OrdinalIgnoreCase) ||
@@ -76,82 +76,4 @@ public sealed class DashboardSessionAuthMiddleware
         (request.Path.Equals("/inventory", StringComparison.OrdinalIgnoreCase) ||
          request.Path.Equals("/api/inventory", StringComparison.OrdinalIgnoreCase));
 
-    private static bool IsPluginAcquisitionApiRoute(HttpRequest request)
-    {
-        if (!request.Path.StartsWithSegments("/api/acquisition/requests", StringComparison.OrdinalIgnoreCase) &&
-            !request.Path.StartsWithSegments("/api/acquisition/batches", StringComparison.OrdinalIgnoreCase))
-            return false;
-
-        if (HttpMethods.IsPost(request.Method) &&
-            (request.Path.Equals("/api/acquisition/requests", StringComparison.OrdinalIgnoreCase) ||
-             request.Path.Equals("/api/acquisition/batches", StringComparison.OrdinalIgnoreCase)))
-        {
-            return request.Headers.ContainsKey("X-Api-Key");
-        }
-
-        if (HttpMethods.IsGet(request.Method) &&
-            (request.Path.Equals("/api/acquisition/requests/pending", StringComparison.OrdinalIgnoreCase) ||
-             request.Path.Equals("/api/acquisition/batches/pending", StringComparison.OrdinalIgnoreCase)))
-        {
-            return true;
-        }
-
-        if (HttpMethods.IsGet(request.Method) &&
-            request.Headers.ContainsKey("X-Api-Key") &&
-            (IsApiBatchDetailPath(request.Path) || IsApiRequestTimelinePath(request.Path)))
-        {
-            return true;
-        }
-
-        if (HttpMethods.IsPut(request.Method) &&
-            request.Headers.ContainsKey("X-Api-Key") &&
-            request.Path.StartsWithSegments("/api/acquisition/batches", StringComparison.OrdinalIgnoreCase))
-        {
-            return true;
-        }
-
-        if (!HttpMethods.IsPost(request.Method))
-            return false;
-
-        var path = request.Path.Value ?? string.Empty;
-        if (path.StartsWith("/api/acquisition/batches/", StringComparison.OrdinalIgnoreCase))
-        {
-            return request.Headers.ContainsKey("X-Api-Key") &&
-                   (path.EndsWith("/purchases", StringComparison.OrdinalIgnoreCase) ||
-                    path.EndsWith("/observations", StringComparison.OrdinalIgnoreCase) ||
-                    (path.Contains("/lines/", StringComparison.OrdinalIgnoreCase) &&
-                     path.EndsWith("/progress", StringComparison.OrdinalIgnoreCase)));
-        }
-
-        return path.Contains("/claim", StringComparison.OrdinalIgnoreCase) ||
-               path.Contains("/accept", StringComparison.OrdinalIgnoreCase) ||
-               path.Contains("/reject", StringComparison.OrdinalIgnoreCase) ||
-               path.Contains("/progress", StringComparison.OrdinalIgnoreCase) ||
-               path.Contains("/complete", StringComparison.OrdinalIgnoreCase) ||
-               path.Contains("/fail", StringComparison.OrdinalIgnoreCase) ||
-               (request.Headers.ContainsKey("X-Api-Key") &&
-                (path.Contains("/cancel", StringComparison.OrdinalIgnoreCase) ||
-                 path.Contains("/resend", StringComparison.OrdinalIgnoreCase)));
-    }
-
-    private static bool IsApiBatchDetailPath(PathString path)
-    {
-        var value = path.Value ?? string.Empty;
-        if (!value.StartsWith("/api/acquisition/batches/", StringComparison.OrdinalIgnoreCase))
-            return false;
-
-        return value.Split('/', StringSplitOptions.RemoveEmptyEntries).Length == 4;
-    }
-
-    private static bool IsApiRequestTimelinePath(PathString path)
-    {
-        var value = path.Value ?? string.Empty;
-        if (!value.StartsWith("/api/acquisition/requests/", StringComparison.OrdinalIgnoreCase) ||
-            !value.EndsWith("/timeline", StringComparison.OrdinalIgnoreCase))
-        {
-            return false;
-        }
-
-        return value.Split('/', StringSplitOptions.RemoveEmptyEntries).Length == 5;
-    }
 }

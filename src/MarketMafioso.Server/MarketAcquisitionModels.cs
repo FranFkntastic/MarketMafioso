@@ -328,6 +328,7 @@ public static class MarketAcquisitionStatuses
     public const string Claimed = "Claimed";
     public const string AcceptedInPlugin = "AcceptedInPlugin";
     public const string Running = "Running";
+    public const string RecoveryRequired = "RecoveryRequired";
     public const string Complete = "Complete";
     public const string Failed = "Failed";
     public const string Rejected = "Rejected";
