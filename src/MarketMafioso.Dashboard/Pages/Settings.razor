@@ -19,7 +19,7 @@ else
 <MudStack Spacing="2">
     <MudText Typo="Typo.h5">Settings</MudText>
     <DashboardStatusHost />
-    <MudTabs Rounded="true" Elevation="0" PanelClass="pt-4">
+    <MudTabs @bind-ActivePanelIndex="_activeTabIndex" Rounded="true" Elevation="0" PanelClass="pt-4">
         @if (_features.EnableMarketAcquisition)
         {
             <MudTabPanel Text="General">
@@ -300,6 +300,10 @@ else
     private string _clientKeyCopyStatus = string.Empty;
     private bool _creatingClientKey;
     private long? _revokingClientKeyId;
+    private int _activeTabIndex;
+
+    [SupplyParameterFromQuery(Name = "tab")]
+    public string? RequestedTab { get; set; }
 
     private static readonly string[] SupportedRegions =
     [
@@ -328,6 +332,8 @@ else
     protected override async Task OnInitializedAsync()
     {
         _features = await Api.GetFeatureFlagsAsync();
+        if (string.Equals(RequestedTab, "authentication", StringComparison.OrdinalIgnoreCase))
+            _activeTabIndex = _features.EnableMarketAcquisition ? 3 : 2;
         _session = await Api.GetSessionAsync();
         _checkingSession = false;
         if (_session is null)

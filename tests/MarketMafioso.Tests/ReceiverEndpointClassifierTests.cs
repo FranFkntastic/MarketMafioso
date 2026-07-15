@@ -15,6 +15,9 @@ public sealed class ReceiverEndpointClassifierTests
             "https://dev.xivcraftarchitect.com/marketmafioso/",
             ReceiverEndpointClassifier.BuildDashboardUrl(serverUrl));
         Assert.Equal(
+            "https://dev.xivcraftarchitect.com/marketmafioso/settings?tab=authentication",
+            ReceiverEndpointClassifier.BuildClientKeyManagerUrl(serverUrl));
+        Assert.Equal(
             "https://dev.xivcraftarchitect.com/marketmafioso/api/acquisition",
             ReceiverEndpointClassifier.BuildAcquisitionBaseUrl(serverUrl));
     }
@@ -28,6 +31,7 @@ public sealed class ReceiverEndpointClassifierTests
 
         Assert.Equal(ReceiverEndpointKind.Invalid, endpoint.Kind);
         Assert.Null(ReceiverEndpointClassifier.BuildDashboardUrl(serverUrl));
+        Assert.Null(ReceiverEndpointClassifier.BuildClientKeyManagerUrl(serverUrl));
         Assert.Null(ReceiverEndpointClassifier.BuildAcquisitionBaseUrl(serverUrl));
     }
 
@@ -39,6 +43,9 @@ public sealed class ReceiverEndpointClassifierTests
         Assert.Equal(
             "http://localhost:8080/",
             ReceiverEndpointClassifier.BuildDashboardUrl(serverUrl));
+        Assert.Equal(
+            "http://localhost:8080/settings?tab=authentication",
+            ReceiverEndpointClassifier.BuildClientKeyManagerUrl(serverUrl));
         Assert.Equal(
             "http://localhost:8080/acquisition",
             ReceiverEndpointClassifier.BuildAcquisitionBaseUrl(serverUrl));

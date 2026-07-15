@@ -81,6 +81,13 @@ internal sealed class ServerConnectionSettingsPage
                 ImGui.TextColored(MarketMafiosoUiTheme.Error, "This endpoint requires a client API key before plugin requests can be sent.");
             else if (endpoint.Kind == ReceiverEndpointKind.CustomRemote)
                 ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Custom remote endpoint. Client API key is required by default.");
+
+            var keyManagerUrl = ReceiverEndpointClassifier.BuildClientKeyManagerUrl(urlBuffer);
+            if (endpoint.RequiresApiKey && !string.IsNullOrWhiteSpace(keyManagerUrl))
+            {
+                ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Keys are issued and revoked in the authenticated server dashboard.");
+                if (ImGui.Button("Manage Client Keys")) OpenExternalUrl(keyManagerUrl, "client key manager");
+            }
             ImGui.Spacing();
         }
 
@@ -97,32 +104,32 @@ internal sealed class ServerConnectionSettingsPage
         ImGui.SetNextItemWidth(Math.Max(120f, ImGui.GetContentRegionAvail().X - buttonWidth - ImGui.GetStyle().ItemSpacing.X));
         ImGui.InputText("##dashboardUrl", ref dashboardUrlBuffer, 1024, ImGuiInputTextFlags.ReadOnly);
         ImGui.SameLine();
-        if (ImGuiUi.Button("Open Dashboard", new Vector2(buttonWidth, 0), !string.IsNullOrWhiteSpace(dashboardUrl))) OpenDashboardUrl(dashboardUrl);
+        if (ImGuiUi.Button("Open Dashboard", new Vector2(buttonWidth, 0), !string.IsNullOrWhiteSpace(dashboardUrl))) OpenExternalUrl(dashboardUrl, "dashboard");
         var status = string.IsNullOrWhiteSpace(dashboardUrl)
             ? dashboardOpenStatus
             : string.IsNullOrWhiteSpace(reporter.LastDashboardUrl) ? "Dashboard link derived from endpoint." : dashboardOpenStatus;
         ImGui.TextColored(GetDashboardStatusColor(status), status);
     }
 
-    private void OpenDashboardUrl(string dashboardUrl)
+    private void OpenExternalUrl(string url, string destination)
     {
-        if (!Uri.TryCreate(dashboardUrl, UriKind.Absolute, out var uri) ||
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) ||
             (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
         {
-            dashboardOpenStatus = "Dashboard URL is not a valid HTTP or HTTPS link.";
-            log.Warning($"[MarketMafioso] Refusing to open invalid dashboard URL: {dashboardUrl}");
+            dashboardOpenStatus = $"The {destination} URL is not a valid HTTP or HTTPS link.";
+            log.Warning($"[MarketMafioso] Refusing to open invalid {destination} URL: {url}");
             return;
         }
 
         try
         {
             Process.Start(new ProcessStartInfo(uri.ToString()) { UseShellExecute = true });
-            dashboardOpenStatus = "Opened dashboard in external browser.";
+            dashboardOpenStatus = $"Opened {destination} in external browser.";
         }
         catch (Exception ex)
         {
-            dashboardOpenStatus = $"Unable to open dashboard. {ex.Message}";
-            log.Error(ex, "[MarketMafioso] Unable to open dashboard URL.");
+            dashboardOpenStatus = $"Unable to open {destination}. {ex.Message}";
+            log.Error(ex, $"[MarketMafioso] Unable to open {destination} URL.");
         }
     }
 

@@ -93,6 +93,14 @@ public static class ReceiverEndpointClassifier
             : $"{endpoint.DashboardBaseUrl}/";
     }
 
+    public static string? BuildClientKeyManagerUrl(string? serverUrl)
+    {
+        var endpoint = Classify(serverUrl);
+        return string.IsNullOrWhiteSpace(endpoint.DashboardBaseUrl)
+            ? null
+            : $"{endpoint.DashboardBaseUrl}/settings?tab=authentication";
+    }
+
     private static bool IsLocalHost(string host) =>
         host.Equals("localhost", StringComparison.OrdinalIgnoreCase) ||
         host.Equals("127.0.0.1", StringComparison.OrdinalIgnoreCase) ||
