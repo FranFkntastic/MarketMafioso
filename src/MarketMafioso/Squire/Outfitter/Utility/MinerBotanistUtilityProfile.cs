@@ -40,9 +40,9 @@ public sealed class MinerBotanistUtilityProfile : IEquipmentExactSolverUtilityMo
     public const string ProfileId = "squire.min-btn.level-100";
     public const string ProfileVersion = "7.51-v2";
     public const string LegendaryContextId = "legendary-node-general-yield";
-    public const string CollectableContextId = "collectable-efficiency";
+    public const string CollectableContextId = "collectable-i730-efficiency";
     public const string OrdinaryResourceBenchmarkContextId = "research-only:ordinary-resource";
-    public const MinerBotanistCalibrationState CalibrationState = MinerBotanistCalibrationState.Experimental;
+    public const MinerBotanistCalibrationState CalibrationState = MinerBotanistCalibrationState.Supported;
 
     private const string GatheringKey = "gathering";
     private const string PerceptionKey = "perception";
@@ -277,7 +277,7 @@ public sealed class MinerBotanistUtilityProfile : IEquipmentExactSolverUtilityMo
     private static string Scenario(MinerBotanistUtilityContextKind contextKind) => contextKind switch
     {
         MinerBotanistUtilityContextKind.LegendaryNodeGeneralYield => "Patch 7.51 general legendary-node yield",
-        MinerBotanistUtilityContextKind.CollectableEfficiency => "Patch 7.51 collectable efficiency",
+        MinerBotanistUtilityContextKind.CollectableEfficiency => "Patch 7.51 i730 collectable action and proc efficiency",
         _ => "Research-only regular non-legendary resource-node benchmark",
     };
 }

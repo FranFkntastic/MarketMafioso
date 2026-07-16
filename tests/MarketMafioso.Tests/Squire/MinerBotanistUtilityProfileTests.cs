@@ -124,16 +124,28 @@ public sealed class MinerBotanistUtilityProfileTests
     }
 
     [Fact]
-    public void OracleApprovedProfileStillRequiresExplicitRuntimePromotionAfterReview()
+    public void SupportedProfileCanGrantRuntimeAuthorityAfterEvidenceAndCapabilityChecksPass()
     {
         var profile = Legendary(new(5_399, 5_200, 950));
         var candidate = profile.Evaluate(new MinerBotanistUtilityStats(5_400, 5_200, 950));
 
         var authority = profile.AssessAuthority(candidate, additionalCostGil: 0);
 
-        Assert.Equal(MinerBotanistCalibrationState.Experimental, MinerBotanistUtilityProfile.CalibrationState);
-        Assert.False(authority.AdvisorMayConsider);
-        Assert.Contains(authority.Reasons, reason => reason.Contains("experimental", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(MinerBotanistCalibrationState.Supported, MinerBotanistUtilityProfile.CalibrationState);
+        Assert.True(authority.AdvisorMayConsider);
+        Assert.Empty(authority.Reasons);
+    }
+
+    [Fact]
+    public void CollectableContextIsExplicitlyBoundedToI730Mechanics()
+    {
+        var profile = Collectable(new(5_172, 5_172, 950));
+
+        Assert.Equal("collectable-i730-efficiency", profile.BaselineEvaluation.Context.ContextId);
+        Assert.Contains("i730", profile.BaselineEvaluation.Context.Scenario, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(
+            profile.BaselineEvaluation.Diagnostics,
+            diagnostic => diagnostic.Contains("1000-GP", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
