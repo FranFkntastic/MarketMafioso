@@ -71,6 +71,19 @@ public sealed class MarketMafiosoBridgeProviderTests
         Assert.False(provider.GetUiAutomationCapabilities().ActivatesGameWindow);
     }
 
+    [Fact]
+    public void Provider_exposes_debug_synthetic_review_as_an_explicit_action()
+    {
+        var invoked = false;
+        var provider = new MarketMafiosoBridgeProvider(
+            CreateTruth, () => { }, () => { }, () => { }, _ => { }, _ => true, () => { }, () => { },
+            new AgentBridgeUiReviewRegistry(),
+            tryOpenSyntheticAdvisorReview: () => invoked = true);
+
+        Assert.True(provider.TryOpenSyntheticAdvisorReview());
+        Assert.True(invoked);
+    }
+
     private static AgentBridgeTruth CreateTruth() => new()
     {
         SchemaVersion = 1,

@@ -16,7 +16,8 @@ namespace MarketMafioso.Squire.Observation;
 public interface IRenderedCharacterAdvisorProbe
 {
     void PrepareAdvisorObservation();
-    void Open();
+    bool Open();
+    bool TryCloseCharacterUi();
     RenderedGatheringStatsObservation CaptureGatheringStats();
     RenderedEquipmentScanProgress BeginEquipmentScan();
     RenderedEquipmentScanStepResult AdvanceEquipmentScan();
@@ -54,12 +55,13 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
         SupportsDeterministicReplay: true,
         "Equipment slots are traversed by dispatching their registered drag/drop rollover UI events. Character and Item Detail rendered output remains the only runtime authority.");
 
-    public unsafe void Open()
+    public unsafe bool Open()
     {
         var addon = gameGui.GetAddonByName<AtkUnitBase>("Character", 1);
         if (addon != null && addon->RootNode != null && addon->RootNode->IsVisible())
-            return;
+            return false;
         Chat.ExecuteCommand("/character");
+        return true;
     }
 
     public unsafe bool TryCloseCharacterUi()

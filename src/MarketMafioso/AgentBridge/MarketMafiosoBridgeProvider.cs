@@ -33,6 +33,7 @@ public interface IMarketMafiosoBridgeProvider
     RenderedEquipmentScanStepResult AdvanceCharacterEquipmentScanUi();
     RenderedEquipmentScanProgress CancelCharacterEquipmentScanUi();
     AgentBridgeUiAutomationCapabilities GetUiAutomationCapabilities();
+    bool TryOpenSyntheticAdvisorReview();
     IReadOnlyList<AgentBridgeReviewSurfaceDescriptor> GetReviewSurfaces();
     AgentBridgeUiReviewFrame GetControlSurface();
     AgentBridgeUiControlReview ReviewControl(string controlId);
@@ -82,6 +83,7 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
     private readonly Func<AgentBridgeUiAutomationCapabilities> getUiAutomationCapabilities;
     private readonly Func<AgentBridgeRenderedUiSnapshot> captureCharacterUi;
     private readonly Func<RenderedGatheringStatsObservation> captureGatheringStatsUi;
+    private readonly Func<bool> tryOpenSyntheticAdvisorReview;
     private readonly AgentBridgeUiReviewRegistry reviewRegistry;
 
     public MarketMafiosoBridgeProvider(
@@ -105,7 +107,8 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
         Func<RenderedEquipmentScanProgress>? beginCharacterEquipmentScanUi = null,
         Func<RenderedEquipmentScanStepResult>? advanceCharacterEquipmentScanUi = null,
         Func<RenderedEquipmentScanProgress>? cancelCharacterEquipmentScanUi = null,
-        Func<AgentBridgeUiAutomationCapabilities>? getUiAutomationCapabilities = null)
+        Func<AgentBridgeUiAutomationCapabilities>? getUiAutomationCapabilities = null,
+        Func<bool>? tryOpenSyntheticAdvisorReview = null)
     {
         this.createSnapshot = createSnapshot ?? throw new ArgumentNullException(nameof(createSnapshot));
         this.openMainWindow = openMainWindow ?? throw new ArgumentNullException(nameof(openMainWindow));
@@ -130,6 +133,7 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
         this.getUiAutomationCapabilities = getUiAutomationCapabilities ?? (() => new(
             "unavailable", false, false, false, true, true, true,
             "Rendered UI automation capabilities were not registered."));
+        this.tryOpenSyntheticAdvisorReview = tryOpenSyntheticAdvisorReview ?? (() => false);
     }
 
     public AgentBridgeTruth CreateSnapshot() => createSnapshot();
@@ -156,6 +160,7 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
     public RenderedEquipmentScanStepResult AdvanceCharacterEquipmentScanUi() => advanceCharacterEquipmentScanUi();
     public RenderedEquipmentScanProgress CancelCharacterEquipmentScanUi() => cancelCharacterEquipmentScanUi();
     public AgentBridgeUiAutomationCapabilities GetUiAutomationCapabilities() => getUiAutomationCapabilities();
+    public bool TryOpenSyntheticAdvisorReview() => tryOpenSyntheticAdvisorReview();
     public IReadOnlyList<AgentBridgeReviewSurfaceDescriptor> GetReviewSurfaces() => ReviewSurfaces;
     public AgentBridgeUiReviewFrame GetControlSurface() => reviewRegistry.Snapshot();
     public AgentBridgeUiControlReview ReviewControl(string controlId) => reviewRegistry.Review(controlId);

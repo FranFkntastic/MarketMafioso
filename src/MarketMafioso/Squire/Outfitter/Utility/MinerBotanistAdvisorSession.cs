@@ -55,6 +55,9 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
     private RenderedEquipmentResolution? resolution;
     private MinerBotanistAdvisorCatalogResult? offers;
     private DateTimeOffset stageDeadlineUtc;
+    private bool characterUiOpenedBySession;
+    private bool characterUiRestoreRequested;
+    private DateTimeOffset characterUiRestoreDeadlineUtc;
 
     public MinerBotanistAdvisorSession(
         IRenderedCharacterAdvisorProbe probe,
@@ -81,6 +84,7 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
     public void Begin(MinerBotanistUtilityContextKind context, string region)
     {
         CancelCore(MinerBotanistAdvisorSessionStage.Cancelled, "Superseded by a new advisor refresh.");
+        var retainedOwnedCharacterUi = characterUiOpenedBySession;
         cancellation = new();
         discoveryTask = null;
         discoveryRequest = null;
@@ -90,7 +94,9 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
         resolution = null;
         offers = null;
         probe.PrepareAdvisorObservation();
-        probe.Open();
+        characterUiOpenedBySession = retainedOwnedCharacterUi || probe.Open();
+        characterUiRestoreRequested = false;
+        characterUiRestoreDeadlineUtc = DateTimeOffset.UtcNow.AddSeconds(5);
         stageDeadlineUtc = DateTimeOffset.UtcNow.AddSeconds(15);
         State = new(
             MinerBotanistAdvisorSessionStage.ObservingStats,
@@ -108,6 +114,7 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
 
     public void Tick()
     {
+        TryRestoreCharacterUi();
         if (!State.IsBusy)
             return;
         try
@@ -186,6 +193,8 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
         }
         if (renderedEquipment.Status != RenderedEquipmentScanStatus.Complete)
             return;
+
+        RequestCharacterUiRestore();
 
         baseline = RenderedMinerBotanistBaselineAssembler.Assemble(renderedStats!, renderedEquipment);
         if (baseline.Status != RenderedMinerBotanistBaselineStatus.Complete || baseline.ClassJobId is not { } classJobId)
@@ -268,7 +277,7 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
 
     private void Abstain(string message)
     {
-        probe.CancelEquipmentScan();
+        RequestCharacterUiRestore();
         State = State with
         {
             Stage = MinerBotanistAdvisorSessionStage.Abstained,
@@ -284,7 +293,7 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
         if (cancellation is null && !State.IsBusy)
             return;
         cancellation?.Cancel();
-        probe.CancelEquipmentScan();
+        RequestCharacterUiRestore();
         State = State with
         {
             Stage = terminalStage,
@@ -300,9 +309,27 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
         cancellation = null;
     }
 
+    private void RequestCharacterUiRestore()
+    {
+        probe.CancelEquipmentScan();
+        characterUiRestoreRequested = characterUiOpenedBySession;
+        TryRestoreCharacterUi();
+    }
+
+    private void TryRestoreCharacterUi()
+    {
+        if (!characterUiRestoreRequested)
+            return;
+        if (probe.TryCloseCharacterUi() || DateTimeOffset.UtcNow >= characterUiRestoreDeadlineUtc)
+        {
+            characterUiOpenedBySession = false;
+            characterUiRestoreRequested = false;
+        }
+    }
+
     private static MinerBotanistAdvisorSessionState Idle(MinerBotanistUtilityContextKind context) => new(
         MinerBotanistAdvisorSessionStage.Idle,
-        "Refresh when FFXIV is already in the foreground to build read-only advice.",
+        "Refresh to build read-only advice from rendered Character UI without activating FFXIV.",
         "Coverage has not been observed yet.",
         0,
         null,

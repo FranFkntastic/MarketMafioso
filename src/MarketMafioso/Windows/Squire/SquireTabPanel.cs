@@ -136,6 +136,16 @@ internal sealed class SquireTabPanel : IDisposable
     public void ConnectMarketAcquisition(Action<IReadOnlyList<MarketAcquisitionRequestLineDocument>> stageLines) =>
         outfitterPanel.ConnectMarketAcquisition(stageLines);
 
+#if DEBUG
+    public void OpenSyntheticAdvisorReview()
+    {
+        config.Squire.EnableOutfitterAdvisor = true;
+        config.Save();
+        SelectWorkspace("Outfitter");
+        advisorPanel.LoadSyntheticReview();
+    }
+#endif
+
     private void DrawWorkspaceSelector()
     {
         ImGui.TextColored(MarketMafiosoUiTheme.Header, "Squire");

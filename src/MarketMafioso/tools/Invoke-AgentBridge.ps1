@@ -7,6 +7,7 @@ param(
         "get-control",
         "get-review-surfaces",
         "get-ui-automation-capabilities",
+        "open-synthetic-advisor-review",
         "invoke-control",
         "open-main-window",
         "close-main-window",

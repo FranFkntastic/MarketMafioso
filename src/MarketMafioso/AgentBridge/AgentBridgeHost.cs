@@ -171,6 +171,12 @@ public sealed class AgentBridgeHost : IDisposable
                 return AgentBridgeResponse.Ok("Review surfaces captured.", provider.GetReviewSurfaces());
             case "get-ui-automation-capabilities":
                 return AgentBridgeResponse.Ok("Rendered UI automation capabilities captured.", provider.GetUiAutomationCapabilities());
+            case "open-synthetic-advisor-review":
+                var syntheticAdvisorOpened = false;
+                await dispatchOnFramework(() => syntheticAdvisorOpened = provider.TryOpenSyntheticAdvisorReview()).ConfigureAwait(false);
+                return syntheticAdvisorOpened
+                    ? AgentBridgeResponse.Ok("Debug-only synthetic advisor review opened.")
+                    : AgentBridgeResponse.Fail("Synthetic advisor review is unavailable in this build.");
             case "invoke-control":
                 if (string.IsNullOrWhiteSpace(request.Target) || request.FrameId is null)
                     return AgentBridgeResponse.Fail("Control ID and reviewed frame ID are required.");

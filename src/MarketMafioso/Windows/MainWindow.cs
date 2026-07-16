@@ -585,6 +585,19 @@ public class MainWindow : Window, IDisposable
         return true;
     }
 
+    public bool TryOpenSyntheticAdvisorReview()
+    {
+#if DEBUG
+        squireTab.OpenSyntheticAdvisorReview();
+        agentRequestedTab = "Squire";
+        agentRequestedWorkspaceView = null;
+        AgentOpenForReview();
+        return true;
+#else
+        return false;
+#endif
+    }
+
     private static bool IsAllowedWorkspaceView(string mainTab, string? workspaceView) =>
         workspaceView is null || (mainTab, workspaceView) switch
         {

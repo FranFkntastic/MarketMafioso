@@ -22,6 +22,9 @@ internal sealed class MinerBotanistAdvisorPanel
     private MinerBotanistUtilityContextKind context = MinerBotanistUtilityContextKind.LegendaryNodeGeneralYield;
     private MinerBotanistReadOnlyAdvice? lastAdvice;
     private string? selectedSolutionId;
+#if DEBUG
+    private MinerBotanistReadOnlyAdvice? syntheticReviewAdvice;
+#endif
 
     public MinerBotanistAdvisorPanel(
         Configuration config,
@@ -38,21 +41,38 @@ internal sealed class MinerBotanistAdvisorPanel
     public void Draw()
     {
         var state = session.State;
+        MinerBotanistReadOnlyAdvice? displayedAdvice = state.Advice;
+#if DEBUG
+        var syntheticReviewActive = syntheticReviewAdvice is not null;
+        displayedAdvice = syntheticReviewAdvice ?? displayedAdvice;
+#endif
         ImGui.TextColored(MarketMafiosoUiTheme.Header, "Outfitter — cost / utility advisor");
         ImGui.TextWrapped(MinerBotanistReadOnlyAdvisor.AdvisoryRule);
         DrawControls(state);
-        ImGui.TextColored(MarketMafiosoUiTheme.Muted, state.CoverageLabel);
-        if (state.IsBusy)
+#if DEBUG
+        if (syntheticReviewActive)
         {
-            var fraction = state.Total is > 0 ? Math.Clamp((float)state.Completed / state.Total.Value, 0f, 1f) : 0f;
-            ImGui.ProgressBar(fraction, new Vector2(-1, 0), state.Total is > 0
-                ? $"{state.Completed:N0} / {state.Total:N0}"
-                : state.Stage.ToString());
+            ImGui.TextColored(MarketMafiosoUiTheme.Warning, "DEBUG REPLAY — synthetic inputs and illustrative costs");
+            ImGui.TextColored(MarketMafiosoUiTheme.Muted,
+                "No live character, market listing, source identity, or expected oracle answer is used by this review.");
+            ImGui.TextColored(MarketMafiosoUiTheme.Success, displayedAdvice!.Diagnostic);
         }
-        ImGui.TextColored(StatusColor(state.Stage), state.Message);
+        else
+#endif
+        {
+            ImGui.TextColored(MarketMafiosoUiTheme.Muted, state.CoverageLabel);
+            if (state.IsBusy)
+            {
+                var fraction = state.Total is > 0 ? Math.Clamp((float)state.Completed / state.Total.Value, 0f, 1f) : 0f;
+                ImGui.ProgressBar(fraction, new Vector2(-1, 0), state.Total is > 0
+                    ? $"{state.Completed:N0} / {state.Total:N0}"
+                    : state.Stage.ToString());
+            }
+            ImGui.TextColored(StatusColor(state.Stage), state.Message);
+        }
         ImGui.Separator();
 
-        if (state.Advice is not { Frontier: { } frontier } advice || frontier.Pareto.Frontier.Count == 0)
+        if (displayedAdvice is not { Frontier: { } frontier } advice || frontier.Pareto.Frontier.Count == 0)
         {
             DrawEmptyState(state);
             return;
@@ -61,6 +81,13 @@ internal sealed class MinerBotanistAdvisorPanel
         var selected = frontier.Pareto.Frontier.FirstOrDefault(value => value.Candidate.SolutionId == selectedSolutionId)
             ?? advice.Nomination
             ?? frontier.Pareto.Frontier[0];
+#if DEBUG
+        if (syntheticReviewActive)
+        {
+            ImGui.TextColored(MarketMafiosoUiTheme.Header, selected.VariantLabels.FirstOrDefault() ?? selected.Candidate.SolutionId);
+            ImGui.TextColored(MarketMafiosoUiTheme.Muted, string.Join(" · ", selected.VariantLabels.Skip(2)));
+        }
+#endif
         DrawDecisionSummary(advice, selected);
         DrawFrontier(advice, selected);
         DrawSolutionRail(advice, selected);
@@ -124,10 +151,32 @@ internal sealed class MinerBotanistAdvisorPanel
                 null,
                 session.Cancel);
         }
+#if DEBUG
+        if (!state.IsBusy)
+        {
+            ImGui.SameLine();
+            var label = syntheticReviewAdvice is null
+                ? "Load synthetic review##SquireAdvisorSynthetic"
+                : "Return to live view##SquireAdvisorSynthetic";
+            if (ImGui.Button(label))
+                ToggleSyntheticReview();
+            RegisterLastControl(
+                "squire.outfitter.advisor.synthetic-review",
+                syntheticReviewAdvice is null ? "Load synthetic advisor review" : "Return to live advisor view",
+                AgentBridgeUiControlKind.Button,
+                true,
+                syntheticReviewAdvice is not null,
+                syntheticReviewAdvice is null ? "live" : "synthetic",
+                ToggleSyntheticReview);
+        }
+#endif
     }
 
     private void Begin()
     {
+#if DEBUG
+        syntheticReviewAdvice = null;
+#endif
         var region = config.ActiveMarketAcquisitionRequestDocument?.Region;
         if (string.IsNullOrWhiteSpace(region))
             region = config.ActiveMarketAcquisitionClaim?.Region;
@@ -141,7 +190,29 @@ internal sealed class MinerBotanistAdvisorPanel
         context = value;
         config.Squire.OutfitterAdvisorContext = value.ToString();
         config.Save();
+#if DEBUG
+        if (syntheticReviewAdvice is not null)
+            syntheticReviewAdvice = MinerBotanistAdvisorSyntheticReview.Build(context);
+#endif
     }
+
+#if DEBUG
+    private void ToggleSyntheticReview()
+    {
+        syntheticReviewAdvice = syntheticReviewAdvice is null
+            ? MinerBotanistAdvisorSyntheticReview.Build(context)
+            : null;
+        lastAdvice = null;
+        selectedSolutionId = null;
+    }
+
+    public void LoadSyntheticReview()
+    {
+        syntheticReviewAdvice = MinerBotanistAdvisorSyntheticReview.Build(context);
+        lastAdvice = null;
+        selectedSolutionId = null;
+    }
+#endif
 
     private void EnsureSelection(MinerBotanistReadOnlyAdvice advice)
     {
@@ -182,6 +253,8 @@ internal sealed class MinerBotanistAdvisorPanel
         if (result.HoveredDatumId is { } hovered && model.SolutionsByDatumId.TryGetValue(hovered, out var solution))
         {
             ImGui.BeginTooltip();
+            ImGui.TextColored(MarketMafiosoUiTheme.Header,
+                solution.VariantLabels.FirstOrDefault() ?? solution.Candidate.SolutionId);
             ImGui.TextUnformatted($"{FormatCost(solution.AcquisitionCostGil)} · utility {solution.Utility.UtilityScore:N1}");
             ImGui.TextColored(MarketMafiosoUiTheme.Muted,
                 $"{solution.Burden.PurchaseTransactions:N0} purchase(s), {solution.Burden.WorldVisits:N0} world visit(s)");
