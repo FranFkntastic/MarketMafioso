@@ -127,7 +127,7 @@ public static class InventoryPayloadMapper
                 ItemType = metadata?.ItemType,
                 Quantity = checked((uint)slot.Quantity),
                 IsHQ = slot.IsHighQuality,
-                Condition = slot.Condition,
+                Condition = metadata is { SupportsCondition: false } ? 0 : slot.Condition,
                 ContainerKey = containerName,
                 SlotIndex = slot.SlotIndex,
                 ConditionPercent = metadata is { SupportsCondition: false } ? null : slot.ConditionPercent,

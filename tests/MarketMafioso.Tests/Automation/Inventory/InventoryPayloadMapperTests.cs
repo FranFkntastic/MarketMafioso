@@ -66,6 +66,7 @@ public sealed class InventoryPayloadMapperTests
 
         Assert.Equal("Cobalt Ingot", item.ItemName);
         Assert.Equal("Metal", item.ItemType);
+        Assert.Equal(0, item.Condition);
         Assert.Null(item.ConditionPercent);
     }
 

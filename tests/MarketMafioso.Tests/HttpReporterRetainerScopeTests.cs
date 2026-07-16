@@ -66,6 +66,7 @@ public sealed class HttpReporterRetainerScopeTests
             }));
 
         Assert.Equal("Resolved category", report.Bags[0].Items[0].ItemType);
+        Assert.Equal(0, report.Bags[0].Items[0].Condition);
         Assert.Null(report.Bags[0].Items[0].ConditionPercent);
         Assert.Equal("Existing category", report.Bags[0].Items[1].ItemType);
         Assert.Equal([100u], resolvedIds);
