@@ -347,12 +347,9 @@ else
 
     private void PersistUrlState()
     {
-        var query = new List<string> { $"mode={Uri.EscapeDataString(_mode.ToString())}", $"scope={Uri.EscapeDataString(_scope)}" };
-        if (!string.IsNullOrWhiteSpace(_filterText))
-            query.Add($"filter={Uri.EscapeDataString(_filterText)}");
-        if (_selectedCharacterId is { } characterId)
-            query.Add($"characterId={characterId}");
-        Navigation.NavigateTo($"/inventory?{string.Join("&", query)}", replace: true);
+        Navigation.NavigateTo(
+            InventoryNavigation.BuildPath(_mode, _scope, _filterText, _selectedCharacterId),
+            replace: true);
     }
 
     private void ExpireSession() { _session = null; Status.Info("Dashboard session expired. Sign in again."); }
