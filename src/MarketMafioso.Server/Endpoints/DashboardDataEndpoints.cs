@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text.Json;
 using MarketMafioso.Server.Auth;
 using MarketMafioso.Server.Sqlite;
+using MarketMafioso.Contracts.Inventory;
 
 namespace MarketMafioso.Server.Endpoints;
 
@@ -52,8 +53,10 @@ internal static class DashboardDataEndpoints
         SqliteConnectionFactory connectionFactory,
         InventoryReportStore store,
         long? characterId,
+        string? filter,
         string? search,
         string? scope,
+        InventoryBrowserMode? mode,
         CancellationToken token)
     {
         if (characterId != null &&
@@ -66,10 +69,10 @@ internal static class DashboardDataEndpoints
         {
             var report = await store.GetLatestAsync(accountId, characterId, token);
             if (report != null)
-                return Results.Ok(InventoryBrowserViewBuilder.Build(report, search, scope));
+                return Results.Ok(InventoryBrowserViewBuilder.Build(report, filter ?? search, scope, mode ?? InventoryBrowserMode.Items));
         }
 
-        return Results.Ok(InventoryBrowserViewBuilder.Build(null, search, scope));
+        return Results.Ok(InventoryBrowserViewBuilder.Build(null, filter ?? search, scope, mode ?? InventoryBrowserMode.Items));
     }
 
     private static async Task<IResult> ListSnapshots(

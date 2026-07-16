@@ -4,4 +4,13 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
+  <PropertyGroup>
+    <FranthropyFilteringProject Condition="'$(FranthropyFilteringProject)' == ''">..\..\..\Franthropy\src\Franthropy.Filtering\Franthropy.Filtering.csproj</FranthropyFilteringProject>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="$(FranthropyFilteringProject)" />
+  </ItemGroup>
+  <Target Name="ValidateFranthropyFilteringProject" BeforeTargets="PrepareForBuild" Condition="!Exists('$(FranthropyFilteringProject)')">
+    <Error Text="Franthropy.Filtering was not found at '$(FranthropyFilteringProject)'. Clone Franthropy beside MarketMafioso or set FranthropyFilteringProject." />
+  </Target>
 </Project>

@@ -348,9 +348,11 @@ public sealed class InventoryReportViewEndpointTests
         Assert.Equal("Metal", item.ItemType);
         Assert.Equal(111, item.TotalQuantity);
         Assert.Equal(12, item.HqQuantity);
-        Assert.Equal(2, view.MarketListings.Count);
-        Assert.Contains(view.MarketListings, x => x.OwnerName == "Scrongle" && x.UnitPrice == 1_800 && x.Quantity == 20);
-        Assert.Contains(view.MarketListings, x => x.OwnerName == "Scrongle" && x.UnitPrice == 2_150 && x.Quantity == 79);
+        Assert.Empty(view.MarketListings);
+        var listings = InventoryBrowserViewBuilder.Build(stored, "darksteel", mode: InventoryBrowserMode.Listings);
+        Assert.Equal(2, listings.MarketListings.Count);
+        Assert.Contains(listings.MarketListings, x => x.OwnerName == "Scrongle" && x.UnitPrice == 1_800 && x.Quantity == 20);
+        Assert.Contains(listings.MarketListings, x => x.OwnerName == "Scrongle" && x.UnitPrice == 2_150 && x.Quantity == 79);
     }
 
     [Fact]
@@ -439,7 +441,10 @@ public sealed class InventoryReportViewEndpointTests
         Assert.Equal("Metal", item.ItemType);
         Assert.Equal(111, item.TotalQuantity);
         Assert.Equal(12, item.HqQuantity);
-        Assert.Single(view.MarketListings);
+        Assert.Empty(view.MarketListings);
+        var listings = await client.GetFromJsonAsync<InventoryBrowserView>("/api/inventory/browser?search=darksteel&mode=Listings");
+        Assert.NotNull(listings);
+        Assert.Single(listings.MarketListings);
         Assert.Contains(view.Scopes, x => x.DisplayName == "Api Retainer" && x.Gil == 55_000 && x.MarketListingCount == 1);
     }
 

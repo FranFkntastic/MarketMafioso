@@ -4,6 +4,7 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <CraftArchitectCoreProject Condition="'$(CraftArchitectCoreProject)' == ''">..\..\..\FFXIV Craft Architect C# Edition\src\FFXIV Craft Architect.Core\FFXIV Craft Architect.Core.csproj</CraftArchitectCoreProject>
+    <FranthropyFfxivProject Condition="'$(FranthropyFfxivProject)' == ''">..\..\..\Franthropy\src\Franthropy.FFXIV\Franthropy.FFXIV.csproj</FranthropyFfxivProject>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly.Server" Version="10.0.0" />
@@ -14,6 +15,7 @@
     <ProjectReference Include="$(CraftArchitectCoreProject)" />
     <ProjectReference Include="..\MarketMafioso.Contracts\MarketMafioso.Contracts.csproj" />
     <ProjectReference Include="..\MarketMafioso.Dashboard\MarketMafioso.Dashboard.csproj" />
+    <ProjectReference Include="$(FranthropyFfxivProject)" />
   </ItemGroup>
 
   <Target Name="RejectDebugProjectReferencesInRelease"
@@ -29,6 +31,9 @@
 
   <Target Name="ValidateCraftArchitectCoreProject" BeforeTargets="PrepareForBuild" Condition="!Exists('$(CraftArchitectCoreProject)')">
     <Error Text="Craft Architect Core was not found at '$(CraftArchitectCoreProject)'. Check out the sibling 'FFXIV Craft Architect C# Edition' repository or set /p:CraftArchitectCoreProject=&quot;path/to/FFXIV Craft Architect.Core.csproj&quot;." />
+  </Target>
+  <Target Name="ValidateFranthropyFfxivProject" BeforeTargets="PrepareForBuild" Condition="!Exists('$(FranthropyFfxivProject)')">
+    <Error Text="Franthropy.FFXIV was not found at '$(FranthropyFfxivProject)'. Clone Franthropy beside MarketMafioso or set FranthropyFfxivProject." />
   </Target>
 
   <Target Name="CopyDashboardSourceMapsToPublish" AfterTargets="Publish">

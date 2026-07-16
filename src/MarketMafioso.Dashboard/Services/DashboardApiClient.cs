@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using MarketMafioso.Dashboard.Models;
+using MarketMafioso.Contracts.Inventory;
 
 namespace MarketMafioso.Dashboard.Services;
 
@@ -247,17 +248,19 @@ public sealed class DashboardApiClient
 
     public async Task<InventoryBrowserView> GetInventoryBrowserAsync(
         long? characterId,
-        string? search,
+        string? filter,
         string? scope,
+        InventoryBrowserMode mode = InventoryBrowserMode.Items,
         CancellationToken cancellationToken = default)
     {
         var query = new List<string>();
         if (characterId != null)
             query.Add($"characterId={characterId.Value}");
-        if (!string.IsNullOrWhiteSpace(search))
-            query.Add($"search={Uri.EscapeDataString(search)}");
+        if (!string.IsNullOrWhiteSpace(filter))
+            query.Add($"filter={Uri.EscapeDataString(filter)}");
         if (!string.IsNullOrWhiteSpace(scope))
             query.Add($"scope={Uri.EscapeDataString(scope)}");
+        query.Add($"mode={mode}");
 
         var path = query.Count == 0
             ? "api/inventory/browser"
