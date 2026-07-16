@@ -14,6 +14,7 @@ using MarketMafioso.AgentBridge;
 using MarketMafioso.MarketAcquisition;
 using MarketMafioso.WorkshopPrep;
 using MarketMafioso.Squire;
+using MarketMafioso.Squire.Observation;
 using MarketMafioso.Windows;
 
 namespace MarketMafioso;
@@ -59,6 +60,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly AgentBridgeProofWindow agentBridgeProofWindow;
     private readonly AgentBridgeHost agentBridge;
     private readonly AgentBridgeViewportCaptureService agentBridgeViewportCapture;
+    private readonly DalamudRenderedCharacterUiProbe renderedCharacterUiProbe;
 
     private CancellationTokenSource? timerCancellation;
 
@@ -144,6 +146,7 @@ public sealed class Plugin : IDalamudPlugin
 
         agentBridgeProofStore = new AgentBridgeProofStore();
         agentBridgeProofWindow = new AgentBridgeProofWindow(agentBridgeProofStore);
+        renderedCharacterUiProbe = new DalamudRenderedCharacterUiProbe(GameGui);
         agentBridgeViewportCapture = new AgentBridgeViewportCaptureService(
             PluginInterface.GetPluginConfigDirectory(),
             Configuration.PluginInstanceId,
@@ -168,7 +171,12 @@ public sealed class Plugin : IDalamudPlugin
                 mainWindow.TrySelectAgentBridgeTab,
                 mainWindow.AgentCaptureInputState,
                 mainWindow.AgentStopRoute,
-                mainWindow.AgentReviewRegistry),
+                mainWindow.AgentReviewRegistry,
+                renderedCharacterUiProbe.Open,
+                renderedCharacterUiProbe.Capture,
+                renderedCharacterUiProbe.TryCloseBlockingSelectString,
+                renderedCharacterUiProbe.TrySwitchCalibrationJob,
+                renderedCharacterUiProbe.CaptureGatheringStats),
             agentBridgeProofStore,
             agentBridgeViewportCapture.CaptureAsync,
             () => Configuration.EnableAgentBridgeScreenshots,

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Franthropy.Dalamud.AgentBridge;
+using MarketMafioso.Squire.Observation;
 
 namespace MarketMafioso.AgentBridge;
 
@@ -18,6 +19,11 @@ public interface IMarketMafiosoBridgeProvider
     bool TrySelectMainTab(string tabName);
     void CaptureInputState();
     void StopRoute();
+    void OpenCharacterUi();
+    bool TryCloseBlockingSelectStringUi();
+    bool TrySwitchCalibrationJobUi(string target);
+    AgentBridgeRenderedUiSnapshot CaptureCharacterUi();
+    RenderedGatheringStatsObservation CaptureGatheringStatsUi();
     IReadOnlyList<AgentBridgeReviewSurfaceDescriptor> GetReviewSurfaces();
     AgentBridgeUiReviewFrame GetControlSurface();
     AgentBridgeUiControlReview ReviewControl(string controlId);
@@ -55,6 +61,11 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
     private readonly Func<string, bool> trySelectMainTab;
     private readonly Action captureInputState;
     private readonly Action stopRoute;
+    private readonly Action openCharacterUi;
+    private readonly Func<bool> tryCloseBlockingSelectStringUi;
+    private readonly Func<string, bool> trySwitchCalibrationJobUi;
+    private readonly Func<AgentBridgeRenderedUiSnapshot> captureCharacterUi;
+    private readonly Func<RenderedGatheringStatsObservation> captureGatheringStatsUi;
     private readonly AgentBridgeUiReviewRegistry reviewRegistry;
 
     public MarketMafiosoBridgeProvider(
@@ -66,7 +77,12 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
         Func<string, bool> trySelectMainTab,
         Action captureInputState,
         Action stopRoute,
-        AgentBridgeUiReviewRegistry reviewRegistry)
+        AgentBridgeUiReviewRegistry reviewRegistry,
+        Action? openCharacterUi = null,
+        Func<AgentBridgeRenderedUiSnapshot>? captureCharacterUi = null,
+        Func<bool>? tryCloseBlockingSelectStringUi = null,
+        Func<string, bool>? trySwitchCalibrationJobUi = null,
+        Func<RenderedGatheringStatsObservation>? captureGatheringStatsUi = null)
     {
         this.createSnapshot = createSnapshot ?? throw new ArgumentNullException(nameof(createSnapshot));
         this.openMainWindow = openMainWindow ?? throw new ArgumentNullException(nameof(openMainWindow));
@@ -77,6 +93,11 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
         this.captureInputState = captureInputState ?? throw new ArgumentNullException(nameof(captureInputState));
         this.stopRoute = stopRoute ?? throw new ArgumentNullException(nameof(stopRoute));
         this.reviewRegistry = reviewRegistry ?? throw new ArgumentNullException(nameof(reviewRegistry));
+        this.openCharacterUi = openCharacterUi ?? (() => { });
+        this.captureCharacterUi = captureCharacterUi ?? (() => new(DateTimeOffset.UtcNow, []));
+        this.tryCloseBlockingSelectStringUi = tryCloseBlockingSelectStringUi ?? (() => false);
+        this.trySwitchCalibrationJobUi = trySwitchCalibrationJobUi ?? (_ => false);
+        this.captureGatheringStatsUi = captureGatheringStatsUi ?? (() => new(Guid.NewGuid(), DateTimeOffset.UtcNow, RenderedCharacterObservationStatus.Unavailable, null, null, null, null, null, [], "Rendered gathering observation is unavailable."));
     }
 
     public AgentBridgeTruth CreateSnapshot() => createSnapshot();
@@ -87,6 +108,11 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
     public bool TrySelectMainTab(string tabName) => trySelectMainTab(tabName);
     public void CaptureInputState() => captureInputState();
     public void StopRoute() => stopRoute();
+    public void OpenCharacterUi() => openCharacterUi();
+    public bool TryCloseBlockingSelectStringUi() => tryCloseBlockingSelectStringUi();
+    public bool TrySwitchCalibrationJobUi(string target) => trySwitchCalibrationJobUi(target);
+    public AgentBridgeRenderedUiSnapshot CaptureCharacterUi() => captureCharacterUi();
+    public RenderedGatheringStatsObservation CaptureGatheringStatsUi() => captureGatheringStatsUi();
     public IReadOnlyList<AgentBridgeReviewSurfaceDescriptor> GetReviewSurfaces() => ReviewSurfaces;
     public AgentBridgeUiReviewFrame GetControlSurface() => reviewRegistry.Snapshot();
     public AgentBridgeUiControlReview ReviewControl(string controlId) => reviewRegistry.Review(controlId);

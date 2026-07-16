@@ -236,6 +236,32 @@ public sealed class AgentBridgeHost : IDisposable
                 await dispatchOnFramework(provider.CaptureInputState).ConfigureAwait(false);
                 AppendAudit("capture-input-state", "accepted");
                 return AgentBridgeResponse.Ok("Market-board input state capture requested.");
+            case "open-character-ui":
+                await dispatchOnFramework(provider.OpenCharacterUi).ConfigureAwait(false);
+                AppendAudit("open-character-ui", "accepted");
+                return AgentBridgeResponse.Ok("Character UI open requested.");
+            case "close-blocking-select-string-ui":
+                var selectStringClosed = false;
+                await dispatchOnFramework(() => selectStringClosed = provider.TryCloseBlockingSelectStringUi()).ConfigureAwait(false);
+                return selectStringClosed
+                    ? AgentBridgeResponse.Ok("Visible SelectString UI closed through its rendered addon.")
+                    : AgentBridgeResponse.Fail("No visible SelectString UI was available to close.");
+            case "switch-calibration-job-ui":
+                var calibrationJobSwitched = false;
+                await dispatchOnFramework(() => calibrationJobSwitched = provider.TrySwitchCalibrationJobUi(request.Target ?? string.Empty)).ConfigureAwait(false);
+                return calibrationJobSwitched
+                    ? AgentBridgeResponse.Ok($"Calibration job switch requested through the rendered command UI: {request.Target}.")
+                    : AgentBridgeResponse.Fail("Target must be Miner, Botanist, or Blacksmith.");
+            case "get-character-ui":
+                AgentBridgeRenderedUiSnapshot? characterUi = null;
+                await dispatchOnFramework(() => characterUi = provider.CaptureCharacterUi()).ConfigureAwait(false);
+                return AgentBridgeResponse.Ok("Rendered Character UI captured.", characterUi);
+            case "get-gathering-stats-ui":
+                Squire.Observation.RenderedGatheringStatsObservation? gatheringStats = null;
+                await dispatchOnFramework(() => gatheringStats = provider.CaptureGatheringStatsUi()).ConfigureAwait(false);
+                return gatheringStats!.Status == Squire.Observation.RenderedCharacterObservationStatus.Complete
+                    ? AgentBridgeResponse.Ok("Rendered gathering stats captured.", gatheringStats)
+                    : new AgentBridgeResponse { Success = false, Message = gatheringStats.Diagnostic, Receipt = gatheringStats };
             case "stop-route":
                 await dispatchOnFramework(provider.StopRoute).ConfigureAwait(false);
                 AppendAudit("stop-route", "accepted");
