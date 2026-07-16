@@ -22,7 +22,6 @@ $dashboardUrl = "https://dev.xivcraftarchitect.com/marketmafioso/"
 $retiredDashboardUrl = "https://dev.xivcraftarchitect.com/api/marketmafioso/"
 $ingestKeyPath = Join-Path -Path $env:USERPROFILE -ChildPath ".ssh\marketmafioso_dev_api_key.txt"
 $dashboardPasswordPath = Join-Path -Path $env:USERPROFILE -ChildPath ".ssh\marketmafioso_dashboard_password.txt"
-$sampleReportPath = Join-Path -Path $repoRoot -ChildPath "docs\samples\inventory-report.sample.json"
 
 function Assert-CommandAvailable {
     param(
@@ -152,17 +151,17 @@ function Invoke-PublicSmoke {
         Write-Warning "Skipping authenticated dashboard smoke; missing $dashboardPasswordPath"
     }
 
-    if ((Test-Path -LiteralPath $ingestKeyPath) -and (Test-Path -LiteralPath $sampleReportPath)) {
+    if (Test-Path -LiteralPath $ingestKeyPath) {
         $key = (Get-Content -LiteralPath $ingestKeyPath -Raw).Trim()
-        $response = Invoke-RestMethod `
-            -Method Post `
-            -Uri $inventoryUrl `
-            -Headers @{ "X-Api-Key" = $key } `
-            -ContentType "application/json" `
-            -Body (Get-Content -LiteralPath $sampleReportPath -Raw)
-
-        if ([string]::IsNullOrWhiteSpace($response.dashboardUrl)) {
-            throw "Ingest smoke succeeded without a dashboardUrl in the response."
+        $invalidIngestStatus = Get-HttpStatusCode -Request @{
+            Method = "Post"
+            Uri = $inventoryUrl
+            Headers = @{ "X-Api-Key" = $key }
+            ContentType = "application/json"
+            Body = "{}"
+        }
+        if ($invalidIngestStatus -ne 400) {
+            throw "Authenticated invalid-ingest smoke returned HTTP $invalidIngestStatus; expected 400."
         }
 
         $capabilities = Invoke-RestMethod -Uri $capabilitiesUrl -Headers @{ "X-Api-Key" = $key }
@@ -210,10 +209,9 @@ function Invoke-PublicSmoke {
             throw "Invalid-schema quote smoke returned HTTP $invalidQuoteStatus; expected 400."
         }
 
-        Write-Host "Ingest smoke report: $($response.id)"
     }
     else {
-        Write-Warning "Skipping ingest smoke; missing local ingest key or sample report."
+        Write-Warning "Skipping ingest smoke; missing local ingest key."
     }
 
     Write-Host "Public server smoke checks passed."
