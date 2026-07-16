@@ -9,6 +9,7 @@ on:
       - 'tests/MarketMafioso.Server.Tests/**'
       - 'MarketMafioso.sln'
       - 'eng/craft-architect-core.ref'
+      - 'eng/franthropy.ref'
       - '.github/workflows/deploy-vps-marketmafioso-dev.yml'
   workflow_dispatch:
 
@@ -46,6 +47,18 @@ jobs:
           path: craft-architect
           ref: ${{ steps.craft-architect-ref.outputs.ref }}
 
+      - name: Read pinned Franthropy revision
+        id: franthropy-ref
+        shell: bash
+        run: echo "ref=$(tr -d '[:space:]' < eng/franthropy.ref)" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout Franthropy
+        uses: actions/checkout@v4
+        with:
+          repository: FranFkntastic/Franthropy
+          path: franthropy
+          ref: ${{ steps.franthropy-ref.outputs.ref }}
+
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
@@ -58,6 +71,8 @@ jobs:
           -r linux-x64
           --self-contained true
           -p:CraftArchitectCoreProject="${GITHUB_WORKSPACE}/craft-architect/src/FFXIV Craft Architect.Core/FFXIV Craft Architect.Core.csproj"
+          -p:FranthropyFfxivProject="${GITHUB_WORKSPACE}/franthropy/src/Franthropy.FFXIV/Franthropy.FFXIV.csproj"
+          -p:FranthropyFilteringProject="${GITHUB_WORKSPACE}/franthropy/src/Franthropy.Filtering/Franthropy.Filtering.csproj"
           -o dist/marketmafioso-server
 
       - name: Package receiver files
