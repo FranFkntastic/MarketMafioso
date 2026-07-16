@@ -436,9 +436,14 @@ body,
 }
 
 .mud-select .mud-input-slot {
+    align-items: center;
+    display: flex;
     min-width: 0;
+    overflow: hidden;
     padding-bottom: 0 !important;
     padding-top: 0 !important;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .mud-input-adornment {

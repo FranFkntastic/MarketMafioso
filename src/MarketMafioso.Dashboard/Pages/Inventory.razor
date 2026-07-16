@@ -29,7 +29,7 @@ else
     <section class="inventory-shell">
         <aside class="inventory-scope-pane">
             <div class="inventory-character-select">
-                <MudSelect T="long?" Value="_selectedCharacterId" ValueChanged="OnCharacterChanged" Label="Character" Variant="Variant.Outlined" Margin="Margin.Dense">
+                <MudSelect T="long?" Value="_selectedCharacterId" ValueChanged="OnCharacterChanged" Placeholder="Choose character" aria-label="Character" Variant="Variant.Outlined" Margin="Margin.Dense" FullWidth="true">
                     <MudSelectItem T="long?" Value="@null">Latest available</MudSelectItem>
                     @foreach (var character in _characters)
                     {
