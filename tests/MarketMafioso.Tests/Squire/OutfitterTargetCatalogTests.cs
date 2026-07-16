@@ -60,4 +60,90 @@ public sealed class OutfitterTargetCatalogTests
                 Assert.Contains("worn equipment slots", target.Diagnostic);
             });
     }
+
+    [Fact]
+    public void Build_MergesAutoRetainerIdentityAndKeepsOwnerScopeExplicit()
+    {
+        var miner = new CharacterJobSnapshot(
+            16,
+            "MIN",
+            "miner",
+            5,
+            false,
+            null,
+            "Gatherer",
+            EquipmentStatSemantic.Gathering,
+            EquipmentDiscipline.Gatherer);
+        var snapshot = new CharacterEquipmentSnapshot(
+            Guid.NewGuid(),
+            new(new(10, "Current Character", 57), 57, 16, DateTimeOffset.UtcNow, true, SnapshotComponentStatus.Complete),
+            [miner],
+            [],
+            [],
+            new Dictionary<uint, EquipmentItemDefinition>(),
+            new([new("jobs", SnapshotComponentStatus.Complete)]));
+        var cache = new Dictionary<ulong, CachedRetainer>
+        {
+            [101] = new()
+            {
+                RetainerId = 101,
+                RetainerName = "Current Retainer",
+                OwnerCharacterName = "Current Character",
+                OwnerHomeWorld = "Siren",
+                LastUpdated = DateTime.UtcNow,
+            },
+            [303] = new()
+            {
+                RetainerId = 303,
+                RetainerName = "Legacy Retainer",
+                LastUpdated = DateTime.UtcNow.AddDays(-2),
+            },
+        };
+        OutfitterRetainerMetadata[] metadata =
+        [
+            new(10, "Current Character", "Siren", 101, "Current Retainer", 16, 72),
+            new(20, "Other Character", "Midgardsormr", 202, "Other Retainer", 16, 55),
+        ];
+
+        var targets = new OutfitterTargetCatalog().Build(snapshot, cache, metadata);
+
+        var current = Assert.Single(targets, value => value.Key == "retainer:101");
+        Assert.True(current.IsCurrentCharacter);
+        Assert.Equal("MIN", current.Job?.Abbreviation);
+        Assert.Equal((uint)72, current.Job?.Level);
+        Assert.NotNull(current.Retainer);
+        Assert.NotNull(current.RetainerMetadata);
+
+        var other = Assert.Single(targets, value => value.Key == "retainer:202");
+        Assert.False(other.IsCurrentCharacter);
+        Assert.Equal("Other Character", other.OwnerCharacterName);
+        Assert.Null(other.Retainer);
+        Assert.Contains("no inventory snapshot", other.Diagnostic);
+
+        var legacy = Assert.Single(targets, value => value.Key == "retainer:303");
+        Assert.Null(legacy.OwnerCharacterName);
+        Assert.Null(legacy.RetainerMetadata);
+    }
+
+    [Fact]
+    public void Build_CollapsesUnlockedBaseClassIntoUpgradedJob()
+    {
+        var marauder = new CharacterJobSnapshot(
+            3, "MRD", "marauder", 91, true, null, "Tank", EquipmentStatSemantic.Strength, EquipmentDiscipline.Combat);
+        var warrior = new CharacterJobSnapshot(
+            21, "WAR", "warrior", 91, true, 3, "Tank", EquipmentStatSemantic.Strength, EquipmentDiscipline.Combat);
+        var snapshot = new CharacterEquipmentSnapshot(
+            Guid.NewGuid(),
+            new(new(10, "Current Character", 57), 57, 21, DateTimeOffset.UtcNow, true, SnapshotComponentStatus.Complete),
+            [marauder, warrior],
+            [],
+            [],
+            new Dictionary<uint, EquipmentItemDefinition>(),
+            new([new("jobs", SnapshotComponentStatus.Complete)]));
+
+        var targets = new OutfitterTargetCatalog().Build(snapshot, new Dictionary<ulong, CachedRetainer>());
+
+        var job = Assert.Single(targets, target => target.Kind == OutfitterTargetKind.Job);
+        Assert.Equal("WAR", job.Job?.Abbreviation);
+    }
 }

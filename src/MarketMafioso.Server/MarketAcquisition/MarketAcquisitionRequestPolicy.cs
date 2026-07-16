@@ -106,11 +106,14 @@ internal static class MarketAcquisitionRequestPolicy
     public static void EnsureCanReplaceBatch(MarketAcquisitionRequestView current)
     {
         if (current.Status is MarketAcquisitionStatuses.Running
+            or MarketAcquisitionStatuses.RecoveryRequired
             or MarketAcquisitionStatuses.Complete
             or MarketAcquisitionStatuses.Failed
             or MarketAcquisitionStatuses.Rejected
             or MarketAcquisitionStatuses.Expired
-            or MarketAcquisitionStatuses.Cancelled)
+            or MarketAcquisitionStatuses.Cancelled
+            or MarketAcquisitionStatuses.Shelved
+            or MarketAcquisitionStatuses.Archived)
         {
             throw new MarketAcquisitionInvalidTransitionException(current.Status, "editable request intent");
         }

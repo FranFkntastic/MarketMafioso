@@ -26,7 +26,10 @@ public sealed class MarketAcquisitionRequestBuilderControllerTests
             persist: persisted.Add);
 
         await controller.RefreshAsync();
-        Assert.Same(remote, controller.Document);
+        Assert.Equal(remote.RemoteRevision, controller.Document.RemoteRevision);
+        Assert.Equal(remote.RemoteHash, controller.Document.RemoteHash);
+        Assert.Equal(initial.LocalRequestId, controller.Document.LocalRequestId);
+        Assert.Equal(initial.LocalRevision, controller.Document.LocalRevision);
 
         Assert.True(controller.SetLineMaxUnitPrice(0, 450, "Unit cost ceiling updated."));
 
@@ -124,13 +127,48 @@ public sealed class MarketAcquisitionRequestBuilderControllerTests
 
         await controller.RefreshAsync();
 
-        Assert.Same(remoteDocument, controller.Document);
+        Assert.Equal(remoteDocument.RemoteRevision, controller.Document.RemoteRevision);
+        Assert.Equal(remoteDocument.RemoteHash, controller.Document.RemoteHash);
+        Assert.Equal(initial.LocalRequestId, controller.Document.LocalRequestId);
+        Assert.Equal(initial.LocalRevision, controller.Document.LocalRevision);
         Assert.Equal(-1, controller.SelectedLineIndex);
         Assert.Equal("Server changed.", controller.Status);
         Assert.NotNull(adopted);
-        Assert.Same(remoteDocument, adopted.Value.Document);
+        Assert.Same(controller.Document, adopted.Value.Document);
         Assert.Same(remoteRequest, adopted.Value.Request);
-        Assert.Same(remoteDocument, persisted[^1]);
+        Assert.Same(controller.Document, persisted[^1]);
+    }
+
+    [Fact]
+    public async Task Refresh_UnchangedRemoteSnapshot_IsACompletePersistenceNoOp()
+    {
+        var remoteRequest = CreateRequestView(revision: 2);
+        var initial = MarketAcquisitionRequestDocumentMapper.FromRequestView(remoteRequest) with
+        {
+            LocalRequestId = "stable-local-id",
+            LocalRevision = 8,
+            UpdatedAtUtc = DateTimeOffset.UtcNow.AddMinutes(-5),
+        };
+        var reconstructed = MarketAcquisitionRequestDocumentMapper.FromRequestView(remoteRequest);
+        var persisted = new List<MarketAcquisitionRequestDocument>();
+        var adoptionCount = 0;
+        var controller = CreateController(
+            initial,
+            refresh: _ => Task.FromResult(new MarketAcquisitionRequestBuilderRefreshOutcome(
+                reconstructed,
+                remoteRequest,
+                "Request synchronized from the server.")),
+            adopted: (_, _) => adoptionCount++,
+            persist: persisted.Add);
+
+        await controller.RefreshAsync();
+
+        Assert.Same(initial, controller.Document);
+        Assert.Equal("stable-local-id", controller.Document.LocalRequestId);
+        Assert.Equal(8, controller.Document.LocalRevision);
+        Assert.Empty(persisted);
+        Assert.Equal(0, adoptionCount);
+        Assert.Equal("Request synchronized from the server.", controller.Status);
     }
 
     [Fact]
@@ -220,6 +258,79 @@ public sealed class MarketAcquisitionRequestBuilderControllerTests
         Assert.Equal(2, controller.Document.RemoteRevision);
         Assert.Equal(300u, controller.Document.Lines[0].MaxUnitPrice);
         Assert.Equal("SyncedClean", controller.Document.SyncStatus);
+    }
+
+    [Fact]
+    public async Task IncompleteDraft_WaitsForRequiredCeilingBeforeAutomaticSync()
+    {
+        var initial = CreateDocument() with
+        {
+            Lines = [CreateDocument().Lines[0] with { MaxUnitPrice = 0 }],
+            SyncStatus = "LocalEdits",
+        };
+        var syncCount = 0;
+        var controller = CreateController(
+            initial,
+            sync: document =>
+            {
+                syncCount++;
+                return Task.FromResult(new MarketAcquisitionRequestBuilderSyncOutcome(
+                    document with { SyncStatus = "SyncedClean" },
+                    "Request synchronized."));
+            });
+
+        controller.PumpAutomaticSynchronization(
+            "Eriana Ning",
+            "Siren",
+            canSynchronize: true,
+            DateTimeOffset.UtcNow.AddMinutes(1));
+        await Task.Yield();
+
+        Assert.Equal(0, syncCount);
+        Assert.False(controller.DraftValidation.IsValid);
+
+        Assert.True(controller.SetLineMaxUnitPrice(0, 450, "Unit cost ceiling updated."));
+        controller.PumpAutomaticSynchronization(
+            "Eriana Ning",
+            "Siren",
+            canSynchronize: true,
+            DateTimeOffset.UtcNow.AddMinutes(1));
+        await Task.Yield();
+
+        Assert.Equal(1, syncCount);
+        Assert.True(controller.DraftValidation.IsValid);
+        Assert.Equal("SyncedClean", controller.Document.SyncStatus);
+    }
+
+    [Fact]
+    public async Task AutomaticPoll_ExposesRefreshTaskForForegroundActionsToAwait()
+    {
+        var initial = CreateDocument() with
+        {
+            RemoteRequestId = "request-1",
+            RemoteRevision = 1,
+            SyncStatus = "SyncedClean",
+        };
+        var completion = new TaskCompletionSource<MarketAcquisitionRequestBuilderRefreshOutcome>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var controller = CreateController(initial, refresh: _ => completion.Task);
+
+        controller.PumpAutomaticSynchronization(
+            "Eriana Ning",
+            "Siren",
+            canSynchronize: true,
+            DateTimeOffset.UtcNow.AddMinutes(1));
+
+        Assert.True(controller.IsRefreshing);
+        Assert.False(controller.WaitForRefreshAsync().IsCompleted);
+
+        completion.SetResult(new MarketAcquisitionRequestBuilderRefreshOutcome(
+            initial,
+            null,
+            "Request synchronized from the server."));
+        await controller.WaitForRefreshAsync();
+
+        Assert.False(controller.IsRefreshing);
     }
 
     [Fact]
@@ -329,6 +440,87 @@ public sealed class MarketAcquisitionRequestBuilderControllerTests
         Assert.Equal(2, controller.Document.Lines.Count);
         Assert.Equal("Bronze Sallet", controller.Document.Lines[1].ItemName);
         Assert.Equal("Added 1 Outfitter line.", controller.Status);
+        Assert.Single(persisted);
+    }
+
+    [Fact]
+    public void RemoveLinesByItemId_ReturnsOnlySelectedWorkbenchItemsInOnePersistedEdit()
+    {
+        var persisted = new List<MarketAcquisitionRequestDocument>();
+        var controller = CreateController(CreateDocument() with
+        {
+            Lines =
+            [
+                new() { ItemId = 1, ItemName = "Fire Shard" },
+                new() { ItemId = 2, ItemName = "Ice Shard" },
+                new() { ItemId = 3, ItemName = "Wind Shard" },
+            ],
+        }, persist: persisted.Add);
+
+        var removed = controller.RemoveLinesByItemId([1, 3, 999]);
+
+        Assert.Equal(2, removed);
+        Assert.Equal([2u], controller.Document.Lines.Select(line => line.ItemId));
+        Assert.Equal("Returned 2 items to the inbox selection.", controller.Status);
+        Assert.Single(persisted);
+    }
+
+    [Fact]
+    public void LoadComposition_ReplacesWorkbenchWithFreshLocalDraft()
+    {
+        var persisted = new List<MarketAcquisitionRequestDocument>();
+        var controller = CreateController(CreateDocument() with
+        {
+            RemoteRequestId = "remote-1",
+            RemoteRevision = 9,
+            LastPlanHash = "old-plan",
+        }, persist: persisted.Add);
+        var composition = MarketAcquisitionWorkbenchComposition.FromDocument(
+            "Shard restock",
+            MarketAcquisitionRequestDocument.CreateDefault() with
+            {
+                Region = "Europe",
+                Lines = [new() { ItemId = 2, ItemName = "Fire Shard", TargetQuantity = 99 }],
+            },
+            DateTimeOffset.UtcNow);
+
+        controller.LoadComposition(composition, "Wei Ning", "Siren");
+
+        Assert.Equal("Wei Ning", controller.Document.TargetCharacterName);
+        Assert.Equal("Siren", controller.Document.TargetWorld);
+        Assert.Equal("Europe", controller.Document.Region);
+        Assert.Equal([2u], controller.Document.Lines.Select(line => line.ItemId));
+        Assert.Null(controller.Document.RemoteRequestId);
+        Assert.Equal(0, controller.Document.RemoteRevision);
+        Assert.Null(controller.Document.LastPlanHash);
+        Assert.Equal("NewDraft", controller.Document.SyncStatus);
+        Assert.Equal("Loaded Shard restock as a new Workbench draft.", controller.Status);
+        Assert.Single(persisted);
+    }
+
+    [Fact]
+    public void MergeComposition_PreservesWorkbenchLinesAndAddsOnlyMissingItems()
+    {
+        var persisted = new List<MarketAcquisitionRequestDocument>();
+        var controller = CreateController(CreateDocument(), persist: persisted.Add);
+        var composition = MarketAcquisitionWorkbenchComposition.FromDocument(
+            "Daily supplies",
+            MarketAcquisitionRequestDocument.CreateDefault() with
+            {
+                Lines =
+                [
+                    new() { ItemId = 19951, ItemName = "Do not overwrite" },
+                    new() { ItemId = 2, ItemName = "Fire Shard" },
+                ],
+            },
+            DateTimeOffset.UtcNow);
+
+        var added = controller.MergeComposition(composition);
+
+        Assert.Equal(1, added);
+        Assert.Equal([19951u, 2u], controller.Document.Lines.Select(line => line.ItemId));
+        Assert.Equal("Koppranickel Ore", controller.Document.Lines[0].ItemName);
+        Assert.Equal("Added 1 Daily supplies line.", controller.Status);
         Assert.Single(persisted);
     }
 

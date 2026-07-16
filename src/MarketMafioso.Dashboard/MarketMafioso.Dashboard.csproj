@@ -13,4 +13,8 @@
     <PackageReference Include="MudBlazor" Version="8.14.0" />
   </ItemGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\MarketMafioso.Contracts\MarketMafioso.Contracts.csproj" />
+  </ItemGroup>
+
 </Project>

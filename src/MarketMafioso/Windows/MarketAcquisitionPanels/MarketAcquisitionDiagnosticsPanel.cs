@@ -20,6 +20,7 @@ internal sealed class MarketAcquisitionDiagnosticsPanel
     private readonly Action drawMarketAcquisitionDiagnostics;
     private readonly Action drawAutomationDiagnostics;
     private readonly Action drawSquireDiagnostics;
+    private readonly Func<bool> isMarketAcquisitionUnlocked;
     private readonly UiStateCaptureService uiStateCapture;
     private readonly AgentBridgeUiReviewRegistry reviewRegistry;
 
@@ -32,6 +33,7 @@ internal sealed class MarketAcquisitionDiagnosticsPanel
         Action drawMarketAcquisitionDiagnostics,
         Action drawAutomationDiagnostics,
         Action drawSquireDiagnostics,
+        Func<bool> isMarketAcquisitionUnlocked,
         UiStateCaptureService uiStateCapture,
         AgentBridgeUiReviewRegistry reviewRegistry)
     {
@@ -41,29 +43,33 @@ internal sealed class MarketAcquisitionDiagnosticsPanel
         this.drawMarketAcquisitionDiagnostics = drawMarketAcquisitionDiagnostics ?? throw new ArgumentNullException(nameof(drawMarketAcquisitionDiagnostics));
         this.drawAutomationDiagnostics = drawAutomationDiagnostics ?? throw new ArgumentNullException(nameof(drawAutomationDiagnostics));
         this.drawSquireDiagnostics = drawSquireDiagnostics ?? throw new ArgumentNullException(nameof(drawSquireDiagnostics));
+        this.isMarketAcquisitionUnlocked = isMarketAcquisitionUnlocked ?? throw new ArgumentNullException(nameof(isMarketAcquisitionUnlocked));
         this.uiStateCapture = uiStateCapture ?? throw new ArgumentNullException(nameof(uiStateCapture));
         this.reviewRegistry = reviewRegistry ?? throw new ArgumentNullException(nameof(reviewRegistry));
     }
 
     public void Draw()
     {
-        var snapshot = getRouteSnapshot();
         ImGui.Spacing();
         ImGuiUi.SectionHeader("Diagnostics", MarketMafiosoUiTheme.Header);
 
-        if (ImGuiUi.Button("Open Route Diagnostics Folder", true))
-            OpenDiagnosticsFolder(diagnosticsDirectory);
+        if (isMarketAcquisitionUnlocked())
+        {
+            var snapshot = getRouteSnapshot();
+            if (ImGuiUi.Button("Open Route Diagnostics Folder", true))
+                OpenDiagnosticsFolder(diagnosticsDirectory);
 
-        ImGui.TextColored(GetDiagnosticsFolderStatusColor(), diagnosticsFolderStatus);
-        ImGui.TextColored(MarketMafiosoUiTheme.Muted, diagnosticsDirectory);
+            ImGui.TextColored(GetDiagnosticsFolderStatusColor(), diagnosticsFolderStatus);
+            ImGui.TextColored(MarketMafiosoUiTheme.Muted, diagnosticsDirectory);
 
-        if (snapshot.LastDiagnosticFilePath != null)
-            ImGui.TextColored(MarketMafiosoUiTheme.Muted, $"Latest report: {snapshot.LastDiagnosticFilePath}");
+            if (snapshot.LastDiagnosticFilePath != null)
+                ImGui.TextColored(MarketMafiosoUiTheme.Muted, $"Latest report: {snapshot.LastDiagnosticFilePath}");
 
-        DrawPostRunDiagnosticSummary(snapshot);
+            DrawPostRunDiagnosticSummary(snapshot);
+        }
         DrawUiStateCapture();
 
-        if (ImGui.CollapsingHeader("Market Acquisition Diagnostics", ImGuiTreeNodeFlags.DefaultOpen))
+        if (isMarketAcquisitionUnlocked() && ImGui.CollapsingHeader("Market Acquisition Diagnostics", ImGuiTreeNodeFlags.DefaultOpen))
             drawMarketAcquisitionDiagnostics();
         if (ImGui.CollapsingHeader("Automation Diagnostics", ImGuiTreeNodeFlags.DefaultOpen))
             drawAutomationDiagnostics();
@@ -153,16 +159,12 @@ internal sealed class MarketAcquisitionDiagnosticsPanel
     }
 
     private void RegisterLastControl(string id, string label, bool enabled, Action invoke) =>
-        reviewRegistry.Register(
+        reviewRegistry.RegisterLastButton(
             id,
             label,
-            AgentBridgeUiControlKind.Button,
-            ImGui.GetItemRectMin(),
-            ImGui.GetItemRectMax(),
             enabled,
-            false,
-            uiStateCapture.EventCount.ToString(CultureInfo.InvariantCulture),
-            invoke);
+            invoke,
+            uiStateCapture.EventCount.ToString(CultureInfo.InvariantCulture));
 
     private void OpenDiagnosticsFolder(string folderPath)
     {

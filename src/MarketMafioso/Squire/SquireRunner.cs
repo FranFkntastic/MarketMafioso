@@ -108,10 +108,6 @@ public sealed class SquireRunner
                 cancellationToken.ThrowIfCancellationRequested();
                 if (adapter.GetActiveCharacter() != plan.Character)
                     return Stop("CharacterScopeChanged", "The active character no longer matches the approved plan.", action.Fingerprint);
-                var actionRecovery = await adapter.RecoverExecutionStateAsync(cancellationToken).ConfigureAwait(false);
-                Record("ExecutionRecovery", actionRecovery.Code, actionRecovery.Message, action.Fingerprint);
-                if (!actionRecovery.Success)
-                    return Stop(actionRecovery.Code, actionRecovery.Message, action.Fingerprint);
                 if (adapter.HasConflictingAutomation(action.Disposition))
                     return Stop("ConflictingAutomation", "Another automation or an unrecoverable game state owns the required game state.", action.Fingerprint);
                 var remaining = orderedActions.Skip(actionIndex).ToArray();

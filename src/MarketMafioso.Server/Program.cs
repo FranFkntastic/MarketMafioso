@@ -89,8 +89,9 @@ app.MapGet("/health", () => Results.Ok(new
     ok = true,
     utc = DateTimeOffset.UtcNow,
 }));
-app.MapWorkshopHostEndpoints(enableMarketAcquisition);
+app.MapWorkshopHostEndpoints(enableMarketAcquisition, requireApiKey);
 app.MapMarketAcquisitionEndpoints();
+app.MapMarketAcquisitionWorkOrderEndpoints();
 app.MapDiagnosticEndpoints();
 
 app.MapDashboardDataEndpoints(enableMarketAcquisition);
@@ -132,19 +133,16 @@ static WorkshopHostCredentialScope? RequiredWorkshopHostScope(HttpRequest reques
     if (!requireApiKey)
         return null;
 
-    if (IsAcquisitionBrowserCreate(request))
+    if (MarketAcquisitionEndpointClassifier.IsBrowserCreate(request))
         return null;
 
-    if (IsAcquisitionBrowserControl(request))
+    if (MarketAcquisitionEndpointClassifier.IsBrowserControl(request))
         return null;
 
-    if (IsAcquisitionBrowserRead(request))
+    if (MarketAcquisitionEndpointClassifier.IsBrowserListRead(request))
         return null;
 
-    if (IsApiKeyAcquisitionCreate(request))
-        return WorkshopHostCredentialScope.AcquisitionQueue;
-
-    if (IsAcquisitionPluginRoute(request))
+    if (MarketAcquisitionEndpointClassifier.RequiresPluginCredential(request))
         return WorkshopHostCredentialScope.AcquisitionQueue;
 
     if (IsReportsApiRead(request))
@@ -178,105 +176,6 @@ static bool IsWorkshopHostCapabilitiesRead(HttpRequest request) =>
 static bool IsWorkshopHostCraftQuote(HttpRequest request) =>
     HttpMethods.IsPost(request.Method) &&
     request.Path.Equals("/api/craft/appraise", StringComparison.OrdinalIgnoreCase);
-
-static bool IsAcquisitionCreate(HttpRequest request) =>
-    HttpMethods.IsPost(request.Method) &&
-    (request.Path.Equals("/acquisition/requests", StringComparison.OrdinalIgnoreCase) ||
-     request.Path.Equals("/api/acquisition/requests", StringComparison.OrdinalIgnoreCase) ||
-     request.Path.Equals("/acquisition/batches", StringComparison.OrdinalIgnoreCase) ||
-     request.Path.Equals("/api/acquisition/batches", StringComparison.OrdinalIgnoreCase));
-
-static bool IsApiKeyAcquisitionCreate(HttpRequest request) =>
-    IsAcquisitionCreate(request) &&
-    request.Headers.ContainsKey("X-Api-Key");
-
-static bool IsAcquisitionBrowserCreate(HttpRequest request) =>
-    IsAcquisitionCreate(request) &&
-    request.HasFormContentType;
-
-static bool IsAcquisitionBrowserControl(HttpRequest request) =>
-    !request.Headers.ContainsKey("X-Api-Key") &&
-    ((HttpMethods.IsPost(request.Method) &&
-      (request.Path.StartsWithSegments("/acquisition/requests") ||
-       request.Path.StartsWithSegments("/api/acquisition/requests")) &&
-      (request.Path.Value?.EndsWith("/cancel", StringComparison.OrdinalIgnoreCase) == true ||
-       request.Path.Value?.EndsWith("/resend", StringComparison.OrdinalIgnoreCase) == true)) ||
-     (HttpMethods.IsPut(request.Method) &&
-      (request.Path.StartsWithSegments("/acquisition/batches/") ||
-       request.Path.StartsWithSegments("/api/acquisition/batches/"))));
-
-static bool IsAcquisitionBrowserRead(HttpRequest request) =>
-    HttpMethods.IsGet(request.Method) &&
-    request.Path.Equals("/api/acquisition/requests", StringComparison.OrdinalIgnoreCase);
-
-static bool IsAcquisitionPluginRoute(HttpRequest request) =>
-    IsKnownAcquisitionPluginRoute(request) &&
-    !IsAcquisitionCreate(request) &&
-    !IsAcquisitionBrowserControl(request);
-
-static bool IsKnownAcquisitionPluginRoute(HttpRequest request)
-{
-    if (HttpMethods.IsGet(request.Method))
-    {
-        return request.Path.Equals("/acquisition/requests/pending", StringComparison.OrdinalIgnoreCase) ||
-               request.Path.Equals("/api/acquisition/requests/pending", StringComparison.OrdinalIgnoreCase) ||
-               request.Path.Equals("/acquisition/batches/pending", StringComparison.OrdinalIgnoreCase) ||
-               request.Path.Equals("/api/acquisition/batches/pending", StringComparison.OrdinalIgnoreCase) ||
-               IsAcquisitionTimelinePath(request.Path) ||
-               IsAcquisitionBatchDetailPath(request.Path);
-    }
-
-    var path = request.Path.Value ?? string.Empty;
-    if (HttpMethods.IsPut(request.Method))
-    {
-        return path.StartsWith("/acquisition/batches/", StringComparison.OrdinalIgnoreCase) ||
-               path.StartsWith("/api/acquisition/batches/", StringComparison.OrdinalIgnoreCase);
-    }
-
-    if (!HttpMethods.IsPost(request.Method))
-        return false;
-
-    return (path.StartsWith("/acquisition/requests/", StringComparison.OrdinalIgnoreCase) ||
-            path.StartsWith("/api/acquisition/requests/", StringComparison.OrdinalIgnoreCase)) &&
-           (path.EndsWith("/claim", StringComparison.OrdinalIgnoreCase) ||
-            path.EndsWith("/accept", StringComparison.OrdinalIgnoreCase) ||
-            path.EndsWith("/reject", StringComparison.OrdinalIgnoreCase) ||
-            path.EndsWith("/cancel", StringComparison.OrdinalIgnoreCase) ||
-            path.EndsWith("/resend", StringComparison.OrdinalIgnoreCase) ||
-            path.EndsWith("/progress", StringComparison.OrdinalIgnoreCase) ||
-            path.EndsWith("/complete", StringComparison.OrdinalIgnoreCase) ||
-            path.EndsWith("/fail", StringComparison.OrdinalIgnoreCase)) ||
-           ((path.StartsWith("/acquisition/batches/", StringComparison.OrdinalIgnoreCase) ||
-             path.StartsWith("/api/acquisition/batches/", StringComparison.OrdinalIgnoreCase)) &&
-            (path.EndsWith("/purchases", StringComparison.OrdinalIgnoreCase) ||
-             path.EndsWith("/observations", StringComparison.OrdinalIgnoreCase) ||
-             (path.Contains("/lines/", StringComparison.OrdinalIgnoreCase) &&
-              path.EndsWith("/progress", StringComparison.OrdinalIgnoreCase))));
-}
-
-static bool IsAcquisitionTimelinePath(PathString requestPath)
-{
-    var path = requestPath.Value ?? string.Empty;
-    if (!path.StartsWith("/api/acquisition/requests/", StringComparison.OrdinalIgnoreCase) ||
-        !path.EndsWith("/timeline", StringComparison.OrdinalIgnoreCase))
-    {
-        return false;
-    }
-
-    return path.Split('/', StringSplitOptions.RemoveEmptyEntries).Length == 5;
-}
-
-static bool IsAcquisitionBatchDetailPath(PathString requestPath)
-{
-    var path = requestPath.Value ?? string.Empty;
-    if (!path.StartsWith("/acquisition/batches/", StringComparison.OrdinalIgnoreCase) &&
-        !path.StartsWith("/api/acquisition/batches/", StringComparison.OrdinalIgnoreCase))
-    {
-        return false;
-    }
-
-    return path.Split('/', StringSplitOptions.RemoveEmptyEntries).Length is 3 or 4;
-}
 
 static string? GetSingleApiKeyHeader(Microsoft.Extensions.Primitives.StringValues values)
 {

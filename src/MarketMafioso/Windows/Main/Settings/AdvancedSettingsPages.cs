@@ -26,7 +26,7 @@ internal sealed class AdvancedSettingsPages
             new("advanced.agent-bridge", "Advanced / Agent Bridge", DrawAgentBridge, 81,
                 searchTerms: ["local agent test bridge", "named pipe", "review capture"]),
             new("advanced.private-features", "Advanced / Private Features", DrawPrivateFeatures, 82,
-                searchTerms: ["unlock Market Acquisition", "private module", "lock feature"]),
+                searchTerms: ["unlock private module", "feature key", "lock feature"]),
         ];
     }
 
@@ -62,7 +62,7 @@ internal sealed class AdvancedSettingsPages
                 unlockKeyBuffer = string.Empty;
                 unlockStatus = "Private module locked.";
             }
-            ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Locking hides the module and its settings. Existing local request state and server data are left untouched.");
+            ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Locking hides the module and its settings. Existing drafts, inbox work, and execution history remain untouched.");
             return;
         }
 

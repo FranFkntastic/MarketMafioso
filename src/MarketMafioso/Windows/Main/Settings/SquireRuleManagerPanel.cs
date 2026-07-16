@@ -179,10 +179,13 @@ internal sealed class SquireRuleManagerPanel
 
     private void DrawEditor(ulong? contentId)
     {
-        if (draft is null)
+        var activeDraft = draft;
+        if (activeDraft is null)
             return;
 
-        DrawEditorToolbar();
+        DrawEditorToolbar(activeDraft);
+        if (draft is null)
+            return;
         if (confirmDiscard)
         {
             ImGui.TextColored(MarketMafiosoUiTheme.Warning, "Discard your unsaved changes and return to the rule list?");
@@ -275,39 +278,45 @@ internal sealed class SquireRuleManagerPanel
         ImGui.EndChild();
     }
 
-    private void DrawEditorToolbar()
+    private void DrawEditorToolbar(SquireCleanupRule activeDraft)
     {
         if (ImGui.Button("< Rule list"))
+        {
             RequestCloseEditor();
-        RegisterLast("squire.rules.back", "Return to the cleanup rule list", AgentBridgeUiControlKind.Button, true, false, draft?.Id, RequestCloseEditor);
+            if (draft is null)
+                return;
+        }
+        RegisterLast("squire.rules.back", "Return to the cleanup rule list", AgentBridgeUiControlKind.Button, true, false, activeDraft.Id, RequestCloseEditor);
         ImGui.SameLine();
-        ImGui.TextColored(MarketMafiosoUiTheme.Header, draft!.Origin == SquireCleanupRuleOrigin.BuiltIn ? "Built-in rule" : "Edit cleanup rule");
+        ImGui.TextColored(MarketMafiosoUiTheme.Header, activeDraft.Origin == SquireCleanupRuleOrigin.BuiltIn ? "Built-in rule" : "Edit cleanup rule");
         ImGui.SameLine();
         if (ImGui.Button("Live impact"))
             scrollToImpact = true;
-        RegisterLast("squire.rules.live-impact", "Jump to the cleanup rule's live impact", AgentBridgeUiControlKind.Button, true, false, draft.Id, () => scrollToImpact = true);
+        RegisterLast("squire.rules.live-impact", "Jump to the cleanup rule's live impact", AgentBridgeUiControlKind.Button, true, false, activeDraft.Id, () => scrollToImpact = true);
 
-        if (draft.Origin == SquireCleanupRuleOrigin.BuiltIn)
+        if (activeDraft.Origin == SquireCleanupRuleOrigin.BuiltIn)
             return;
 
         ImGui.SameLine();
-        var errors = draft.Validate();
+        var errors = activeDraft.Validate();
         var canSave = errors.Count == 0;
         if (!canSave)
             ImGui.BeginDisabled();
         if (ImGui.Button("Save"))
             SaveDraft();
-        RegisterLast("squire.rules.save", "Save the edited cleanup rule", AgentBridgeUiControlKind.Button, canSave, false, draft.Id, SaveDraft);
+        RegisterLast("squire.rules.save", "Save the edited cleanup rule", AgentBridgeUiControlKind.Button, canSave, false, activeDraft.Id, SaveDraft);
         if (!canSave)
             ImGui.EndDisabled();
         ImGui.SameLine();
         if (ImGui.Button("Duplicate"))
             DuplicateDraft();
-        RegisterLast("squire.rules.duplicate", "Duplicate the edited cleanup rule", AgentBridgeUiControlKind.Button, true, false, draft.Id, DuplicateDraft);
-        if (store.GetAll().Any(rule => rule.Origin == SquireCleanupRuleOrigin.User && rule.Id == draft.Id))
+        RegisterLast("squire.rules.duplicate", "Duplicate the edited cleanup rule", AgentBridgeUiControlKind.Button, true, false, activeDraft.Id, DuplicateDraft);
+        if (store.GetAll().Any(rule => rule.Origin == SquireCleanupRuleOrigin.User && rule.Id == activeDraft.Id))
         {
             ImGui.SameLine();
-            DrawDelete(draft);
+            DrawDelete(activeDraft);
+            if (draft is null)
+                return;
         }
         if (!string.IsNullOrWhiteSpace(status))
             ImGui.TextColored(MarketMafiosoUiTheme.Success, status);
@@ -552,12 +561,14 @@ internal sealed class SquireRuleManagerPanel
             store.Remove(rule.Id);
             NotifyRulesChanged();
             ClearSelection();
+            status = $"Deleted {rule.Name}.";
         }
         RegisterLast("squire.rules.confirm-delete", "Permanently delete this cleanup rule", AgentBridgeUiControlKind.Button, true, false, rule.Id, () =>
         {
             store.Remove(rule.Id);
             NotifyRulesChanged();
             ClearSelection();
+            status = $"Deleted {rule.Name}.";
         });
         ImGui.SameLine();
         if (ImGui.Button("Keep rule"))

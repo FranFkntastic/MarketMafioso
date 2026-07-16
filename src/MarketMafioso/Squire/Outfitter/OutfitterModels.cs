@@ -20,8 +20,21 @@ public sealed record OutfitterTarget(
     CharacterJobSnapshot? Job = null,
     GearsetSnapshot? Gearset = null,
     CachedRetainer? Retainer = null,
+    OutfitterRetainerMetadata? RetainerMetadata = null,
+    string? OwnerCharacterName = null,
+    string? OwnerHomeWorld = null,
+    bool IsCurrentCharacter = false,
     bool IsReady = true,
     string? Diagnostic = null);
+
+public sealed record OutfitterRetainerMetadata(
+    ulong OwnerContentId,
+    string OwnerCharacterName,
+    string OwnerHomeWorld,
+    ulong RetainerId,
+    string RetainerName,
+    uint ClassJobId,
+    uint Level);
 
 public sealed record OutfitterMarketQuote(
     uint ItemId,

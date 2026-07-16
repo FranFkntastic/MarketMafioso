@@ -21,6 +21,13 @@
   </ItemGroup>
 
   <ItemGroup>
+    <None Include="..\MarketMafioso.Tests\Fixtures\WorkshopHost\craft-appraisal-quote.v1.sample.json"
+          Link="Fixtures\WorkshopHost\craft-appraisal-quote.v1.sample.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="$(CraftArchitectCoreProject)" />
     <ProjectReference Include="..\..\src\MarketMafioso\MarketMafioso.csproj" />
     <ProjectReference Include="..\..\src\MarketMafioso.Server\MarketMafioso.Server.csproj" />

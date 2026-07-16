@@ -87,6 +87,24 @@ public sealed class InventoryPayloadMapperTests
     }
 
     [Fact]
+    public void MapRetainerInventoryBags_preserves_empty_loaded_crystal_container()
+    {
+        var crystals = new AutomationInventoryContainerSnapshot(
+            "RetainerCrystals",
+            IsLoaded: true,
+            SlotCount: 18,
+            Slots: []);
+
+        var bag = Assert.Single(InventoryPayloadMapper.MapRetainerInventoryBags(
+            [crystals],
+            includeItemNames: true,
+            ResolveItemName));
+
+        Assert.Equal("RetainerCrystals", bag.BagName);
+        Assert.Empty(bag.Items);
+    }
+
+    [Fact]
     public void MapRetainerMarketListings_keeps_condition_and_listed_time()
     {
         var listedAt = new DateTime(2026, 7, 2, 12, 0, 0, DateTimeKind.Utc);

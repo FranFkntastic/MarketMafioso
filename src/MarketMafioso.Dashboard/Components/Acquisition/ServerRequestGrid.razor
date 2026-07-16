@@ -3,8 +3,8 @@
 <MudPaper Class="compact-card dashboard-panel queue-panel" Elevation="0">
     <div class="queue-shell">
         <header class="panel-heading">
-            <h2>Request Board</h2>
-            <span class="target-chip">@ActiveRequestCount active</span>
+            <h2>Work Order Inbox</h2>
+            <span class="target-chip">@ActiveRequestCount actionable</span>
         </header>
 
         <div class="queue-toolbar">
@@ -12,16 +12,23 @@
                 <span class="status-dot"></span>
                 <span>@LiveStatusText</span>
             </span>
-            <span class="status-pill">@Requests.Count total request(s)</span>
+            <span class="status-pill">@Requests.Count work order(s)</span>
+            @if (MergeTarget is not null)
+            {
+                <span class="status-pill merge-target-pill" title="@MarketAcquisitionRequestDisplay.TitleFor(MergeTarget)">
+                    Merge target: @MarketAcquisitionRequestDisplay.TitleFor(MergeTarget)
+                </span>
+                <MudButton Size="Size.Small" Variant="Variant.Text" Class="quiet-button" OnClick="ClearMergeTarget">Clear</MudButton>
+            }
             <div class="request-view-toggle">
                 <MudButton Size="Size.Small"
                            Variant="@(!IncludeTerminal ? Variant.Filled : Variant.Outlined)"
                            Class="quiet-button"
-                           OnClick="@(() => IncludeTerminalChanged.InvokeAsync(false))">Active</MudButton>
+                           OnClick="@(() => IncludeTerminalChanged.InvokeAsync(false))">Inbox</MudButton>
                 <MudButton Size="Size.Small"
                            Variant="@(IncludeTerminal ? Variant.Filled : Variant.Outlined)"
                            Class="quiet-button"
-                           OnClick="@(() => IncludeTerminalChanged.InvokeAsync(true))">Archive</MudButton>
+                           OnClick="@(() => IncludeTerminalChanged.InvokeAsync(true))">All history</MudButton>
             </div>
             <span class="toolbar-spacer"></span>
             <MudButton Variant="Variant.Outlined" Class="quiet-button" OnClick="RefreshRequested">Refresh</MudButton>
@@ -101,7 +108,7 @@
                         </TemplateColumn>
                         <TemplateColumn Title="Status" Resizable="true">
                             <CellTemplate>
-                                <MudChip T="string" Size="Size.Small" Color="@StatusColor(context.Item.Status)">@context.Item.Status</MudChip>
+                                <MudChip T="string" Size="Size.Small" Color="@StatusColor(context.Item.Status)">@MarketAcquisitionRequestDisplay.StatusLabel(context.Item.Status)</MudChip>
                             </CellTemplate>
                         </TemplateColumn>
                         <TemplateColumn Title="Latest" Resizable="true">
@@ -118,7 +125,24 @@
                                         {
                                             <MudMenuItem OnClick="@(() => CancelRequested.InvokeAsync(context.Item.Id))">Cancel</MudMenuItem>
                                         }
-                                        <MudMenuItem OnClick="@(() => ResendRequested.InvokeAsync(context.Item.Id))">Resend</MudMenuItem>
+                                        @if (context.Item.Status == "PendingPickup")
+                                        {
+                                            <MudMenuItem OnClick="@(() => ShelfRequested.InvokeAsync(context.Item))">Shelf</MudMenuItem>
+                                            <MudMenuItem OnClick="@(() => SetMergeTarget(context.Item))">Merge others into this</MudMenuItem>
+                                        }
+                                        @if (context.Item.Status == "Shelved")
+                                        {
+                                            <MudMenuItem OnClick="@(() => RestoreRequested.InvokeAsync(context.Item))">Return to inbox</MudMenuItem>
+                                        }
+                                        @if (CanMergeIntoSelected(context.Item))
+                                        {
+                                            <MudMenuItem OnClick="@(() => MergeRequested.InvokeAsync(new MarketAcquisitionMergeSelection(MergeTarget!, context.Item)))">Merge into selected target</MudMenuItem>
+                                        }
+                                        <MudMenuItem OnClick="@(() => CloneRequested.InvokeAsync(context.Item))">Clone for reuse</MudMenuItem>
+                                        @if (CanArchive(context.Item))
+                                        {
+                                            <MudMenuItem OnClick="@(() => ArchiveRequested.InvokeAsync(context.Item))">Archive</MudMenuItem>
+                                        }
                                         <MudMenuItem OnClick="@(() => BuilderActionRequestedAsync(context.Item))">@BuilderActionText(context.Item)</MudMenuItem>
                                     </ChildContent>
                                 </MudMenu>
@@ -142,18 +166,30 @@
     [Parameter] public EventCallback<bool> IncludeTerminalChanged { get; set; }
     [Parameter] public EventCallback<string> CancelRequested { get; set; }
     [Parameter] public EventCallback<string> ResendRequested { get; set; }
+    [Parameter] public EventCallback<MarketAcquisitionRequestView> ShelfRequested { get; set; }
+    [Parameter] public EventCallback<MarketAcquisitionRequestView> RestoreRequested { get; set; }
+    [Parameter] public EventCallback<MarketAcquisitionRequestView> ArchiveRequested { get; set; }
+    [Parameter] public EventCallback<MarketAcquisitionRequestView> CloneRequested { get; set; }
+    [Parameter] public EventCallback<MarketAcquisitionMergeSelection> MergeRequested { get; set; }
     [Parameter] public EventCallback<MarketAcquisitionRequestView> EditRequested { get; set; }
     [Parameter] public EventCallback<MarketAcquisitionRequestView> TemplateRequested { get; set; }
 
     private int ActiveRequestCount => Requests.Count(IsActiveRequest);
 
+    private MarketAcquisitionRequestView? MergeTarget =>
+        _mergeTargetId is null
+            ? null
+            : Requests.FirstOrDefault(request => request.Id == _mergeTargetId && request.Status == "PendingPickup");
+
+    private string? _mergeTargetId;
+
     private string EmptyTitle => IncludeTerminal
-        ? "No archived requests yet"
-        : "No acquisition requests yet";
+        ? "No work-order history yet"
+        : "The inbox is clear";
 
     private string EmptyMessage => IncludeTerminal
-        ? "Completed, failed, cancelled, and rejected requests will appear here for inspection and reuse."
-        : "Create a request on the left. Waiting and running requests will appear here.";
+        ? "Completed, failed, cancelled, shelved, and archived work remains inspectable and reusable here."
+        : "Compose a work order on the left or send one from Craft Architect, Squire, or another MMF surface.";
 
     private async Task OnRowClicked(DataGridRowClickEventArgs<MarketAcquisitionRequestView> args)
     {
@@ -167,6 +203,7 @@
     {
         "Complete" => Color.Success,
         "Failed" or "Cancelled" or "Rejected" => Color.Error,
+        "Shelved" or "Archived" => Color.Default,
         "Running" or "AcceptedInPlugin" => Color.Warning,
         _ => Color.Info,
     };
@@ -186,10 +223,22 @@
         request.Origin.Equals(MarketAcquisitionOrigins.ClientQuickShop, StringComparison.OrdinalIgnoreCase);
 
     private static bool IsActiveRequest(MarketAcquisitionRequestView request) =>
-        !IsTerminalRequest(request);
+        !IsTerminalRequest(request) && request.Status != "Shelved";
 
     private static bool IsTerminalRequest(MarketAcquisitionRequestView request) =>
-        request.Status is "Complete" or "Failed" or "Cancelled" or "Rejected" or "Expired";
+        request.Status is "Complete" or "Failed" or "Cancelled" or "Rejected" or "Expired" or "Archived";
+
+    private static bool CanArchive(MarketAcquisitionRequestView request) =>
+        request.Status is "PendingPickup" or "Shelved" or "Complete" or "Failed" or "Cancelled" or "Rejected";
+
+    private bool CanMergeIntoSelected(MarketAcquisitionRequestView source) =>
+        MergeTarget is { Status: "PendingPickup" } target &&
+        source.Status == "PendingPickup" &&
+        source.Id != target.Id;
+
+    private void SetMergeTarget(MarketAcquisitionRequestView target) => _mergeTargetId = target.Id;
+
+    private void ClearMergeTarget() => _mergeTargetId = null;
 
     private async Task BuilderActionRequestedAsync(MarketAcquisitionRequestView request)
     {

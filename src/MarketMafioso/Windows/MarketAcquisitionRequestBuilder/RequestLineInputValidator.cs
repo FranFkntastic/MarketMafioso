@@ -1,12 +1,12 @@
 using System;
-using MarketMafioso.Windows.ItemAutocomplete;
+using Franthropy.Dalamud.UI.Items;
 
 namespace MarketMafioso.Windows.MarketAcquisitionRequestBuilder;
 
 public static class RequestLineInputValidator
 {
     public static bool CanAddIntentLine(
-        AcquisitionItemOption? selectedItem,
+        DalamudItemOption? selectedItem,
         string quantityMode,
         string targetQuantityBuffer,
         string maxQuantityBuffer,

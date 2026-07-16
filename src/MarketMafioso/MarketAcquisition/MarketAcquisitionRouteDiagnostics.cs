@@ -6,6 +6,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Text.Json;
+using Franthropy.Dalamud.Persistence;
 using MarketMafioso.Automation.Diagnostics;
 
 namespace MarketMafioso.MarketAcquisition;
@@ -596,9 +597,7 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
             CaptureCapabilities = BuildCaptureCapabilities(),
         };
 
-        var temporaryPath = $"{ManifestPath}.tmp";
-        File.WriteAllText(temporaryPath, JsonSerializer.Serialize(manifest, JsonOptions));
-        File.Move(temporaryPath, ManifestPath, overwrite: true);
+        AtomicJsonFile.Write(ManifestPath, manifest, JsonOptions);
     }
 
     private IReadOnlyList<string> BuildCaptureCapabilities()

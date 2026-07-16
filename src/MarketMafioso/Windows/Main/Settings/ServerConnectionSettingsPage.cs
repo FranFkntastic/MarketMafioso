@@ -4,6 +4,7 @@ using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Plugin.Services;
 using Franthropy.Dalamud.UI.Settings;
+using MarketMafioso.MarketAcquisition;
 
 namespace MarketMafioso.Windows.Main.Settings;
 
@@ -16,9 +17,11 @@ internal sealed class ServerConnectionSettingsPage
     private readonly IPluginLog log;
     private string urlBuffer;
     private string apiKeyBuffer;
+    private string acquisitionApiKeyBuffer;
     private string dashboardUrlBuffer = string.Empty;
     private string dashboardOpenStatus = "Dashboard link appears after a successful send.";
     private bool showApiKey;
+    private bool showAcquisitionApiKey;
 
     public ServerConnectionSettingsPage(Configuration config, HttpReporter reporter, IPluginLog log)
     {
@@ -27,18 +30,20 @@ internal sealed class ServerConnectionSettingsPage
         this.log = log ?? throw new ArgumentNullException(nameof(log));
         urlBuffer = config.ServerUrl;
         apiKeyBuffer = config.ApiKey;
+        acquisitionApiKeyBuffer = config.CommandPickupApiKey;
         Descriptor = new SettingsPageDescriptor(
             "general.server",
             "General / Server Connection",
             Draw,
             0,
-            searchTerms: ["receiver URL", "API key", "dashboard", "local receiver", "development server"]);
+            searchTerms: ["receiver URL", "API key", "MMF client key", "Craft Architect key", "dashboard", "local receiver", "development server"]);
     }
 
     public SettingsPageDescriptor Descriptor { get; }
 
     private void Draw(SettingsPageContext context)
     {
+        var marketAcquisitionUnlocked = MarketAcquisitionUnlock.IsUnlocked(config);
         if (context.Matches("Server URL", "receiver endpoint", "local receiver", "development server"))
         {
             ImGui.Text("Server URL:");
@@ -60,11 +65,11 @@ internal sealed class ServerConnectionSettingsPage
         }
 
         var endpoint = ReceiverEndpointClassifier.Classify(urlBuffer);
-        if (context.Matches("Client API key", "X-Api-Key", "authentication", "receiver endpoint"))
+        if (context.Matches("Client API key", "MMF client key", "Craft Architect key", "acquisition key", "X-Api-Key", "authentication", "receiver endpoint"))
         {
             ImGui.Text(endpoint.RequiresApiKey
-                ? "Client API Key (required for this endpoint):"
-                : "Client API Key (optional - sent as X-Api-Key header):");
+                ? "MarketMafioso Client Key (required for inventory uploads):"
+                : "MarketMafioso Client Key (optional for this endpoint):");
             ImGui.SetNextItemWidth(ImGui.GetContentRegionAvail().X - 70);
             var flags = showApiKey ? ImGuiInputTextFlags.None : ImGuiInputTextFlags.Password;
             if (ImGui.InputText("##apikey", ref apiKeyBuffer, 256, flags))
@@ -77,15 +82,66 @@ internal sealed class ServerConnectionSettingsPage
 
             if (endpoint.Kind == ReceiverEndpointKind.Invalid)
                 ImGui.TextColored(MarketMafiosoUiTheme.Error, "Enter a valid HTTP or HTTPS receiver URL.");
+            else if (WorkshopHostApiKeyRouting.IsCraftArchitectKey(apiKeyBuffer))
+                ImGui.TextColored(
+                    MarketMafiosoUiTheme.Error,
+                    marketAcquisitionUnlocked
+                        ? "This is a Craft Architect key. It cannot upload inventory and belongs in the Acquisition Key field below."
+                        : "This is a Craft Architect key and cannot upload inventory.");
             else if (endpoint.RequiresApiKey && string.IsNullOrWhiteSpace(apiKeyBuffer))
-                ImGui.TextColored(MarketMafiosoUiTheme.Error, "This endpoint requires a client API key before plugin requests can be sent.");
+                ImGui.TextColored(MarketMafiosoUiTheme.Error, "This endpoint requires a MarketMafioso Client Key before inventory can be sent.");
             else if (endpoint.Kind == ReceiverEndpointKind.CustomRemote)
-                ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Custom remote endpoint. Client API key is required by default.");
+                ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Custom remote endpoint. A client key is required by default.");
+
+            if (marketAcquisitionUnlocked && WorkshopHostApiKeyRouting.IsCraftArchitectKey(apiKeyBuffer))
+            {
+                var canMove = string.IsNullOrWhiteSpace(acquisitionApiKeyBuffer);
+                if (ImGuiUi.Button("Move to Acquisition Key", new Vector2(190, 0), canMove))
+                {
+                    acquisitionApiKeyBuffer = apiKeyBuffer;
+                    apiKeyBuffer = string.Empty;
+                    config.CommandPickupApiKey = acquisitionApiKeyBuffer;
+                    config.ApiKey = string.Empty;
+                    config.Save();
+                }
+
+                if (!canMove)
+                {
+                    ImGui.SameLine();
+                    ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Clear the existing Acquisition Key before moving this one.");
+                }
+            }
+
+            if (marketAcquisitionUnlocked)
+            {
+                ImGui.Spacing();
+                ImGui.Text("Craft Architect Acquisition Key (optional):");
+                ImGui.SetNextItemWidth(ImGui.GetContentRegionAvail().X - 70);
+                var acquisitionFlags = showAcquisitionApiKey ? ImGuiInputTextFlags.None : ImGuiInputTextFlags.Password;
+                if (ImGui.InputText("##acquisitionApiKey", ref acquisitionApiKeyBuffer, 256, acquisitionFlags))
+                {
+                    config.CommandPickupApiKey = acquisitionApiKeyBuffer;
+                    config.Save();
+                }
+                ImGui.SameLine();
+                if (ImGui.Button(showAcquisitionApiKey ? "Hide##ak" : "Show##ak", new Vector2(60, 0))) showAcquisitionApiKey = !showAcquisitionApiKey;
+
+                if (string.IsNullOrWhiteSpace(acquisitionApiKeyBuffer))
+                    ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Market Acquisition will use the full MarketMafioso Client Key above.");
+                else if (WorkshopHostApiKeyRouting.IsMarketMafiosoClientKey(acquisitionApiKeyBuffer))
+                    ImGui.TextColored(MarketMafiosoUiTheme.Muted, "A full MarketMafioso Client Key is valid here, but leaving this blank uses the key above automatically.");
+                else
+                    ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Used only for Market Acquisition queue, claim, progress, and audit requests.");
+            }
 
             var keyManagerUrl = ReceiverEndpointClassifier.BuildClientKeyManagerUrl(urlBuffer);
             if (endpoint.RequiresApiKey && !string.IsNullOrWhiteSpace(keyManagerUrl))
             {
-                ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Keys are issued and revoked in the authenticated server dashboard.");
+                ImGui.TextColored(
+                    MarketMafiosoUiTheme.Muted,
+                    marketAcquisitionUnlocked
+                        ? "Both key types are issued and revoked in the authenticated server dashboard."
+                        : "Client keys are issued and revoked in the authenticated server dashboard.");
                 if (ImGui.Button("Manage Client Keys")) OpenExternalUrl(keyManagerUrl, "client key manager");
             }
             ImGui.Spacing();

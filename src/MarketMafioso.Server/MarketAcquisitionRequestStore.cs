@@ -12,13 +12,15 @@ using static MarketMafioso.Server.Persistence.MarketAcquisitionRequestQueries;
 
 namespace MarketMafioso.Server;
 
-public sealed class MarketAcquisitionRequestStore
+public sealed partial class MarketAcquisitionRequestStore
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private readonly SqliteConnectionFactory connectionFactory;
     private readonly int minimumExpirySeconds;
     private readonly int maximumExpirySeconds;
     private readonly int claimExpirySeconds;
+    private readonly int executionLeaseSeconds;
+    private readonly int recoveryPickupExpirySeconds;
 
     public MarketAcquisitionRequestStore(
         SqliteConnectionFactory connectionFactory,
@@ -34,6 +36,12 @@ public sealed class MarketAcquisitionRequestStore
         claimExpirySeconds = Math.Max(
             1,
             configuration.GetValue("MarketMafioso:AcquisitionClaimExpirySeconds", 300));
+        executionLeaseSeconds = Math.Max(
+            1,
+            configuration.GetValue("MarketMafioso:AcquisitionExecutionLeaseSeconds", 900));
+        recoveryPickupExpirySeconds = Math.Max(
+            minimumExpirySeconds,
+            configuration.GetValue("MarketMafioso:AcquisitionRecoveryPickupExpirySeconds", 3600));
 
         MarketAcquisitionSchema.Initialize(connectionFactory.DatabasePath);
     }
@@ -126,8 +134,15 @@ public sealed class MarketAcquisitionRequestStore
             now,
             cancellationToken).ConfigureAwait(false);
 
+        var createdView = view with { Lines = lines };
+        await EnsureWorkOrderRecordsAsync(
+            connection,
+            (SqliteTransaction)transaction,
+            createdView,
+            "created",
+            cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-        return new MarketAcquisitionCreateResult(view with { Lines = lines }, false);
+        return new MarketAcquisitionCreateResult(createdView, false);
     }
 
     public async Task<MarketAcquisitionRequestView?> AppendLinesAsync(
@@ -215,13 +230,20 @@ public sealed class MarketAcquisitionRequestStore
         if (affected != 1)
             throw new MarketAcquisitionRevisionConflictException(request.ExpectedRevision, current.Revision);
 
-        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-        return current with
+        var appendedView = current with
         {
             Revision = nextRevision,
             ExpiresAtUtc = expiresAtUtc,
             Lines = lines.OrderBy(line => line.Ordinal).ToList(),
         };
+        await EnsureWorkOrderRecordsAsync(
+            connection,
+            (SqliteTransaction)transaction,
+            appendedView,
+            "lines-appended",
+            cancellationToken).ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return appendedView;
     }
 
     public async Task<MarketAcquisitionRequestView?> ReplaceBatchAsync(
@@ -278,8 +300,7 @@ public sealed class MarketAcquisitionRequestStore
         if (affected != 1)
             return null;
 
-        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-        return current with
+        var replacedView = current with
         {
             Revision = nextRevision,
             ExpiresAtUtc = expiresAtUtc,
@@ -290,6 +311,14 @@ public sealed class MarketAcquisitionRequestStore
             SweepDataCenters = NormalizeSweepDataCenters(request.Region, request.SweepDataCenters),
             Lines = lines.OrderBy(line => line.Ordinal).ToList(),
         };
+        await EnsureWorkOrderRecordsAsync(
+            connection,
+            (SqliteTransaction)transaction,
+            replacedView,
+            "intent-replaced",
+            cancellationToken).ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return replacedView;
     }
 
     public async Task<MarketAcquisitionRequestView?> GetAsync(
@@ -314,6 +343,7 @@ public sealed class MarketAcquisitionRequestStore
             throw new ArgumentException("World is required.", nameof(world));
 
         await ExpirePendingAsync(cancellationToken).ConfigureAwait(false);
+        await ExpireClaimedAsync(cancellationToken).ConfigureAwait(false);
 
         await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
@@ -425,7 +455,7 @@ public sealed class MarketAcquisitionRequestStore
                 LIMIT 1
               )
             WHERE $includeTerminal = 1
-               OR requests.status NOT IN ($completeStatus, $failedStatus, $cancelledStatus, $rejectedStatus, $expiredStatus)
+               OR requests.status NOT IN ($completeStatus, $failedStatus, $cancelledStatus, $rejectedStatus, $expiredStatus, $archivedStatus)
             ORDER BY requests.created_at_utc DESC
             LIMIT $limit;
             """;
@@ -436,6 +466,7 @@ public sealed class MarketAcquisitionRequestStore
         command.Parameters.AddWithValue("$cancelledStatus", MarketAcquisitionStatuses.Cancelled);
         command.Parameters.AddWithValue("$rejectedStatus", MarketAcquisitionStatuses.Rejected);
         command.Parameters.AddWithValue("$expiredStatus", MarketAcquisitionStatuses.Expired);
+        command.Parameters.AddWithValue("$archivedStatus", MarketAcquisitionStatuses.Archived);
 
         var requests = new List<MarketAcquisitionRequestView>();
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
@@ -542,6 +573,23 @@ public sealed class MarketAcquisitionRequestStore
         if (affected != 1)
             return null;
 
+        await using var lease = connection.CreateCommand();
+        lease.Transaction = (SqliteTransaction)transaction;
+        lease.CommandText =
+            """
+            INSERT INTO acquisition_execution_leases (work_order_id, plugin_instance_id, renewed_at_utc, expires_at_utc)
+            VALUES ($id, $pluginInstanceId, $renewedAtUtc, $expiresAtUtc)
+            ON CONFLICT(work_order_id) DO UPDATE SET
+                plugin_instance_id = excluded.plugin_instance_id,
+                renewed_at_utc = excluded.renewed_at_utc,
+                expires_at_utc = excluded.expires_at_utc;
+            """;
+        lease.Parameters.AddWithValue("$id", id);
+        lease.Parameters.AddWithValue("$pluginInstanceId", request.PluginInstanceId.Trim());
+        lease.Parameters.AddWithValue("$renewedAtUtc", now.ToString("O"));
+        lease.Parameters.AddWithValue("$expiresAtUtc", claimExpiresAtUtc.ToString("O"));
+        await lease.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return ToClaimView(view with
         {
@@ -587,7 +635,7 @@ public sealed class MarketAcquisitionRequestStore
             id,
             "progress",
             MarketAcquisitionStatuses.Running,
-            [MarketAcquisitionStatuses.AcceptedInPlugin, MarketAcquisitionStatuses.Running],
+            [MarketAcquisitionStatuses.AcceptedInPlugin, MarketAcquisitionStatuses.Running, MarketAcquisitionStatuses.RecoveryRequired],
             request,
             cancellationToken);
 
@@ -599,7 +647,7 @@ public sealed class MarketAcquisitionRequestStore
             id,
             "complete",
             MarketAcquisitionStatuses.Complete,
-            [MarketAcquisitionStatuses.AcceptedInPlugin, MarketAcquisitionStatuses.Running],
+            [MarketAcquisitionStatuses.AcceptedInPlugin, MarketAcquisitionStatuses.Running, MarketAcquisitionStatuses.RecoveryRequired],
             request,
             cancellationToken);
 
@@ -611,7 +659,7 @@ public sealed class MarketAcquisitionRequestStore
             id,
             "fail",
             MarketAcquisitionStatuses.Failed,
-            [MarketAcquisitionStatuses.AcceptedInPlugin, MarketAcquisitionStatuses.Running],
+            [MarketAcquisitionStatuses.AcceptedInPlugin, MarketAcquisitionStatuses.Running, MarketAcquisitionStatuses.RecoveryRequired],
             request,
             cancellationToken);
 
@@ -622,7 +670,7 @@ public sealed class MarketAcquisitionRequestStore
         ApplyAttemptLifecycleAsync(
             id,
             MarketAcquisitionStatuses.Running,
-            [MarketAcquisitionStatuses.AcceptedInPlugin, MarketAcquisitionStatuses.Running],
+            [MarketAcquisitionStatuses.AcceptedInPlugin, MarketAcquisitionStatuses.Running, MarketAcquisitionStatuses.RecoveryRequired],
             request,
             cancellationToken);
 
@@ -633,7 +681,7 @@ public sealed class MarketAcquisitionRequestStore
         ApplyAttemptLifecycleAsync(
             id,
             MarketAcquisitionStatuses.Complete,
-            [MarketAcquisitionStatuses.AcceptedInPlugin, MarketAcquisitionStatuses.Running],
+            [MarketAcquisitionStatuses.AcceptedInPlugin, MarketAcquisitionStatuses.Running, MarketAcquisitionStatuses.RecoveryRequired],
             request,
             cancellationToken);
 
@@ -644,7 +692,7 @@ public sealed class MarketAcquisitionRequestStore
         ApplyAttemptLifecycleAsync(
             id,
             MarketAcquisitionStatuses.Failed,
-            [MarketAcquisitionStatuses.AcceptedInPlugin, MarketAcquisitionStatuses.Running],
+            [MarketAcquisitionStatuses.AcceptedInPlugin, MarketAcquisitionStatuses.Running, MarketAcquisitionStatuses.RecoveryRequired],
             request,
             cancellationToken);
 
@@ -709,7 +757,7 @@ public sealed class MarketAcquisitionRequestStore
             return await LoadLineByIdAsync(connection, transaction, lineId, cancellationToken).ConfigureAwait(false);
         }
 
-        if (current.Status is not (MarketAcquisitionStatuses.AcceptedInPlugin or MarketAcquisitionStatuses.Running))
+        if (current.Status is not (MarketAcquisitionStatuses.AcceptedInPlugin or MarketAcquisitionStatuses.Running or MarketAcquisitionStatuses.RecoveryRequired))
             throw new MarketAcquisitionInvalidTransitionException(current.Status, MarketAcquisitionStatuses.Running);
 
         await using (var updateRequest = connection.CreateCommand())
@@ -1170,7 +1218,9 @@ public sealed class MarketAcquisitionRequestStore
             return null;
 
         if (current.Status is MarketAcquisitionStatuses.Complete
-            or MarketAcquisitionStatuses.Running)
+            or MarketAcquisitionStatuses.Running
+            or MarketAcquisitionStatuses.Shelved
+            or MarketAcquisitionStatuses.Archived)
             throw new MarketAcquisitionInvalidTransitionException(current.Status, MarketAcquisitionStatuses.PendingPickup);
 
         var expiresAtUtc = DateTimeOffset.UtcNow.AddSeconds(ClampPickupExpirySeconds((int)current.ExpiresAtUtc.Subtract(current.CreatedAtUtc).TotalSeconds));
@@ -1299,8 +1349,17 @@ public sealed class MarketAcquisitionRequestStore
         insertEvent.Parameters.AddWithValue("$createdAtUtc", eventCreatedAtUtc.ToString("O"));
         await insertEvent.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
 
+        var lifecycleView = ApplyLatestLifecycleEvent(current, targetStatus, eventType, payloadJson, eventCreatedAtUtc);
+        await RecordExecutionArtifactsAsync(
+            connection,
+            (SqliteTransaction)transaction,
+            lifecycleView,
+            eventType,
+            request.Message,
+            eventCreatedAtUtc,
+            cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-        return ApplyLatestLifecycleEvent(current, targetStatus, eventType, payloadJson, eventCreatedAtUtc);
+        return lifecycleView;
     }
 
     private async Task<MarketAcquisitionAttemptEventResult?> ApplyAttemptLifecycleAsync(
@@ -1468,34 +1527,108 @@ public sealed class MarketAcquisitionRequestStore
 
     private async Task ExpirePendingAsync(CancellationToken cancellationToken)
     {
-        await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
-        await using var command = connection.CreateCommand();
-        command.CommandText =
-            """
-            UPDATE acquisition_requests
-            SET status = 'Expired'
-            WHERE status = $status
-              AND expires_at_utc <= $now;
-            """;
-        command.Parameters.AddWithValue("$status", MarketAcquisitionStatuses.PendingPickup);
-        command.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToString("O"));
-        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        // Work orders are durable. The legacy pickup deadline remains on the wire for
+        // older clients, but it no longer destroys unclaimed intent.
+        await Task.CompletedTask.ConfigureAwait(false);
     }
 
     private async Task ExpireClaimedAsync(CancellationToken cancellationToken)
     {
+        var now = DateTimeOffset.UtcNow;
+        var staleExecutionCutoff = now.AddSeconds(-executionLeaseSeconds).ToString("O");
+        var recoveryExpiresAt = now.AddSeconds(recoveryPickupExpirySeconds).ToString("O");
         await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
-        await using var command = connection.CreateCommand();
-        command.CommandText =
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+
+        await using (var command = connection.CreateCommand())
+        {
+            command.Transaction = (SqliteTransaction)transaction;
+            command.CommandText =
             """
             UPDATE acquisition_requests
-            SET status = 'Expired'
+            SET status = $pendingStatus,
+                expires_at_utc = $recoveryExpiresAt,
+                claimed_at_utc = NULL,
+                claim_expires_at_utc = NULL,
+                claim_token = NULL,
+                claimed_by = NULL
             WHERE status = $status
               AND claim_expires_at_utc <= $now;
             """;
-        command.Parameters.AddWithValue("$status", MarketAcquisitionStatuses.Claimed);
-        command.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToString("O"));
-        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            command.Parameters.AddWithValue("$pendingStatus", MarketAcquisitionStatuses.PendingPickup);
+            command.Parameters.AddWithValue("$recoveryExpiresAt", recoveryExpiresAt);
+            command.Parameters.AddWithValue("$status", MarketAcquisitionStatuses.Claimed);
+            command.Parameters.AddWithValue("$now", now.ToString("O"));
+            await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        const string stalePredicate =
+            """
+            claimed_at_utc <= $staleCutoff
+            AND NOT EXISTS (SELECT 1 FROM acquisition_request_events e WHERE e.request_id = acquisition_requests.id AND e.created_at_utc > $staleCutoff)
+            AND NOT EXISTS (SELECT 1 FROM acquisition_attempt_events e WHERE e.request_id = acquisition_requests.id AND e.created_at_utc > $staleCutoff)
+            AND NOT EXISTS (SELECT 1 FROM acquisition_line_progress_events e WHERE e.request_id = acquisition_requests.id AND e.created_at_utc > $staleCutoff)
+            AND NOT EXISTS (SELECT 1 FROM acquisition_purchase_audit e WHERE e.request_id = acquisition_requests.id AND e.created_at_utc > $staleCutoff)
+            AND NOT EXISTS (SELECT 1 FROM acquisition_market_observations e WHERE e.request_id = acquisition_requests.id AND e.created_at_utc > $staleCutoff)
+            """;
+        const string noExecutionEvidence =
+            """
+            NOT EXISTS (SELECT 1 FROM acquisition_request_events e WHERE e.request_id = acquisition_requests.id AND e.event_type <> 'accept')
+            AND NOT EXISTS (SELECT 1 FROM acquisition_attempt_events e WHERE e.request_id = acquisition_requests.id)
+            AND NOT EXISTS (SELECT 1 FROM acquisition_line_progress_events e WHERE e.request_id = acquisition_requests.id)
+            AND NOT EXISTS (SELECT 1 FROM acquisition_purchase_audit e WHERE e.request_id = acquisition_requests.id)
+            AND NOT EXISTS (SELECT 1 FROM acquisition_market_observations e WHERE e.request_id = acquisition_requests.id)
+            """;
+
+        await using (var requeue = connection.CreateCommand())
+        {
+            requeue.Transaction = (SqliteTransaction)transaction;
+            requeue.CommandText =
+                $"""
+                UPDATE acquisition_requests
+                SET status = $pendingStatus,
+                    expires_at_utc = $recoveryExpiresAt,
+                    claimed_at_utc = NULL,
+                    claim_expires_at_utc = NULL,
+                    claim_token = NULL,
+                    claimed_by = NULL
+                WHERE status = $acceptedStatus
+                  AND {stalePredicate}
+                  AND {noExecutionEvidence};
+                """;
+            requeue.Parameters.AddWithValue("$pendingStatus", MarketAcquisitionStatuses.PendingPickup);
+            requeue.Parameters.AddWithValue("$acceptedStatus", MarketAcquisitionStatuses.AcceptedInPlugin);
+            requeue.Parameters.AddWithValue("$recoveryExpiresAt", recoveryExpiresAt);
+            requeue.Parameters.AddWithValue("$staleCutoff", staleExecutionCutoff);
+            await requeue.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        await using (var quarantine = connection.CreateCommand())
+        {
+            quarantine.Transaction = (SqliteTransaction)transaction;
+            quarantine.CommandText =
+                $"""
+                UPDATE acquisition_requests
+                SET status = $recoveryStatus
+                WHERE status IN ($acceptedStatus, $runningStatus)
+                  AND {stalePredicate};
+                """;
+            quarantine.Parameters.AddWithValue("$recoveryStatus", MarketAcquisitionStatuses.RecoveryRequired);
+            quarantine.Parameters.AddWithValue("$acceptedStatus", MarketAcquisitionStatuses.AcceptedInPlugin);
+            quarantine.Parameters.AddWithValue("$runningStatus", MarketAcquisitionStatuses.Running);
+            quarantine.Parameters.AddWithValue("$staleCutoff", staleExecutionCutoff);
+            await quarantine.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        await using (var clearExpiredLeases = connection.CreateCommand())
+        {
+            clearExpiredLeases.Transaction = (SqliteTransaction)transaction;
+            clearExpiredLeases.CommandText = "DELETE FROM acquisition_execution_leases WHERE expires_at_utc <= $now;";
+            clearExpiredLeases.Parameters.AddWithValue("$now", now.ToString("O"));
+            await clearExpiredLeases.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }
 
     private async Task<SqliteConnection> OpenConnectionAsync(CancellationToken cancellationToken)

@@ -47,13 +47,11 @@ public class MainWindow : Window, IDisposable
     private readonly MarketBoardApproachService marketBoardApproachService;
     private readonly MarketAcquisitionRouteEngine routeEngine;
     private readonly string marketAcquisitionRouteDiagnosticsDirectory;
-    private readonly OverviewTabPanel overviewTab;
     private readonly SquireTabPanel squireTab;
     private readonly StatusTabPanel statusTab;
     private readonly SettingsTabPanel settingsTab;
     private readonly MarketAcquisitionPlanPanel marketAcquisitionPlanPanel = new();
     private readonly MarketAcquisitionRequestPickupPanel marketAcquisitionRequestPickupPanel;
-    private readonly MarketAcquisitionAcceptedRequestPanel marketAcquisitionAcceptedRequestPanel;
     private readonly MarketAcquisitionDiagnosticsPanel marketAcquisitionDiagnosticsPanel;
     private readonly UiStateCaptureService uiStateCapture;
     private readonly MarketAcquisitionGuidedRoutePanel marketAcquisitionGuidedRoutePanel;
@@ -69,9 +67,8 @@ public class MainWindow : Window, IDisposable
     private string workshopStatus = "Workshop prep queue is idle.";
     private string? agentRequestedTab;
     private string? agentRequestedWorkspaceView;
+    private DateTimeOffset agentSelectionHoldUntilUtc;
     private bool clearAgentReviewWindowOverride;
-    private bool agentReviewWasPinned;
-    private bool capturePresentationWasPinned;
     private Vector2? capturePresentationPreviousSize;
     private Vector2? capturePresentationRestoreSize;
 
@@ -80,7 +77,6 @@ public class MainWindow : Window, IDisposable
 
     private const string ProductSummary = "Workshop logistics and self-hosted inventory history.";
     private const string WorkshopLogisticsModuleSummary = "Workshop Logistics tracks company workshop jobs, materials, retainer restock, handoff, and assembly.";
-    private const string MarketAcquisitionModuleSummary = "Build, sync, and monitor acquisition requests from one persistent board.";
 
     internal static readonly Vector4 ColHeader = MarketMafiosoUiTheme.Header;
     internal static readonly Vector4 ColSuccess = MarketMafiosoUiTheme.Success;
@@ -128,13 +124,10 @@ public class MainWindow : Window, IDisposable
             },
             beginPresentation: () =>
             {
-                capturePresentationWasPinned = IsPinned;
                 capturePresentationPreviousSize = AgentCaptureRegion?.WindowSize;
-                IsPinned = true;
             },
             restorePresentation: () =>
             {
-                IsPinned = capturePresentationWasPinned;
                 capturePresentationRestoreSize = capturePresentationPreviousSize;
                 capturePresentationPreviousSize = null;
             });
@@ -182,21 +175,19 @@ public class MainWindow : Window, IDisposable
             acquisitionWorkspace.CreateClaimLifecycleController(
                 () => marketAcquisitionRouteRunner.StatusMessage),
             new DalamudMarketAcquisitionRouteCallbackDispatcher(),
-            new SystemMarketAcquisitionRouteClock());
+            new SystemMarketAcquisitionRouteClock(),
+            new FileMarketAcquisitionReportOutbox(Path.Combine(
+                Plugin.PluginInterface.GetPluginConfigDirectory(),
+                "market-acquisition-report-outbox.json")));
 
         SizeConstraints = new WindowSizeConstraints
         {
             MinimumSize = new Vector2(980, 560),
             MaximumSize = new Vector2(float.MaxValue, float.MaxValue),
         };
-        if (string.IsNullOrWhiteSpace(config.ApiKey) &&
-            !string.IsNullOrWhiteSpace(config.CommandPickupApiKey))
-        {
-            config.ApiKey = config.CommandPickupApiKey;
+        if (WorkshopHostApiKeyRouting.NormalizeConfiguredKeys(config))
             config.Save();
-        }
 
-        overviewTab = new OverviewTabPanel(IsMarketAcquisitionUnlocked);
         var squireSnapshotSource = new DalamudCharacterEquipmentSnapshotSource(playerState, dataManager, log);
         var squireCapabilities = new DalamudSquireDispositionCapabilitySource();
         var squireRuleStore = new SquireCleanupRuleStore(config);
@@ -228,9 +219,9 @@ public class MainWindow : Window, IDisposable
                 () =>
                 {
                     if (routeEngine.IsRouteActive)
-                        return "The Market Acquisition route currently owns MMF automation.";
+                        return "The purchase route currently owns MMF automation.";
                     if (acquisitionWorkspace.IsBusy)
-                        return "The Market Acquisition request workspace is busy.";
+                        return "The purchase workspace is busy.";
                     if (autoRetainerRefresh.IsRefreshing)
                         return "The AutoRetainer inventory refresh is running.";
                     if (autoRetainerRefresh.IsStartQueued)
@@ -249,17 +240,20 @@ public class MainWindow : Window, IDisposable
             uiStateCapture,
             Plugin.GameInventory,
             dataManager,
-            acquisitionPlanSource);
+            Plugin.PluginInterface,
+            acquisitionPlanSource,
+            IsMarketAcquisitionUnlocked);
         statusTab = new StatusTabPanel(config, reporter, retainerCacheStore, log);
         marketAcquisitionRequestPickupPanel = new MarketAcquisitionRequestPickupPanel(
             () => _ = FetchDashboardRequestsAsync(),
-            requestId => _ = ClaimAcquisitionRequestAsync(requestId),
-            AgentReviewRegistry);
-        marketAcquisitionAcceptedRequestPanel = new MarketAcquisitionAcceptedRequestPanel(
-            () => _ = acquisitionWorkspace.AcceptAsync(),
-            () => _ = acquisitionWorkspace.RejectAsync(),
-            acquisitionWorkspace.ForgetLocalClaim,
-            () => _ = PrepareMarketAcquisitionPlanAsync(),
+            requestId =>
+            {
+                QueueAgentTabSelection("Market Acquisition", "Workbench");
+                _ = ClaimAcquisitionRequestAsync(requestId);
+            },
+            AddAcquisitionLinesToWorkbench,
+            ReturnAcquisitionLinesToInbox,
+            () => QueueAgentTabSelection("Market Acquisition", "Workbench"),
             AgentReviewRegistry);
         restockTab = new RetainerRestockTabPanel(
             config,
@@ -313,11 +307,21 @@ public class MainWindow : Window, IDisposable
             acquisitionRequestBuilderCraftAppraisal,
             SyncAcquisitionRequestBuilderAsync,
             RefreshAcquisitionRequestBuilderRemoteAsync,
-            acquisitionWorkspace.OnDocumentAdopted);
+            acquisitionWorkspace.OnDocumentAdopted,
+            AgentReviewRegistry);
+        var acquisitionWorkbenchCompositions = new MarketAcquisitionWorkbenchCompositionPanel(
+            new MarketAcquisitionWorkbenchCompositionCatalog(
+            new ConfigurationMarketAcquisitionWorkbenchCompositionStore(config, config.Save)),
+            acquisitionRequestBuilder.LoadComposition,
+            composition => acquisitionRequestBuilder.MergeComposition(composition),
+            AgentReviewRegistry);
+        AcquisitionCompositionWindow = new MarketAcquisitionWorkbenchCompositionWindow(
+            acquisitionWorkbenchCompositions,
+            CreateMarketAcquisitionCompositionContext);
         squireTab.ConnectMarketAcquisition(lines =>
         {
             acquisitionRequestBuilder.StageLines(lines);
-            agentRequestedTab = "Market Acquisition";
+            QueueAgentTabSelection("Market Acquisition", "Workbench");
         });
         acquisitionWorkspace.Connect(
             acquisitionRequestBuilder.AdoptRequest,
@@ -342,6 +346,7 @@ public class MainWindow : Window, IDisposable
             AcquisitionDiagnostics.Draw,
             AutomationDiagnostics.Draw,
             squireTab.DrawDiagnosticTools,
+            IsMarketAcquisitionUnlocked,
             uiStateCapture,
             AgentReviewRegistry);
         marketAcquisitionGuidedRoutePanel = new MarketAcquisitionGuidedRoutePanel(
@@ -377,6 +382,7 @@ public class MainWindow : Window, IDisposable
 
     public WorkshopProjectBrowserWindow ProjectBrowser { get; }
     public WorkshopFrozenQueueBrowserWindow FrozenQueueBrowser { get; }
+    public MarketAcquisitionWorkbenchCompositionWindow AcquisitionCompositionWindow { get; }
     public MarketAcquisitionDiagnosticsWindow AcquisitionDiagnostics { get; }
     public AutomationDiagnosticsWindow AutomationDiagnostics { get; }
 
@@ -395,6 +401,7 @@ public class MainWindow : Window, IDisposable
             CurrentWorld = playerState.CurrentWorld.IsValid ? playerState.CurrentWorld.Value.Name.ToString() : string.Empty,
             HomeWorld = playerState.HomeWorld.IsValid ? playerState.HomeWorld.Value.Name.ToString() : string.Empty,
             MainWindowOpen = IsOpen,
+            MainWindowPinned = IsPinned,
             AcquisitionDiagnosticsOpen = AcquisitionDiagnostics.IsOpen,
             WorkspaceStatus = acquisitionWorkspace.Status,
             WorkspaceBusy = acquisitionWorkspace.IsBusy,
@@ -421,12 +428,19 @@ public class MainWindow : Window, IDisposable
         };
     }
 
-    public void OnFrameworkUpdate(IFramework _)
+    public void OnFrameworkUpdate(IFramework _framework)
     {
         squireTab.OnFrameworkUpdate();
 
         if (!IsMarketAcquisitionUnlocked())
             return;
+
+        _ = acquisitionWorkspace.RenewLeaseIfDueAsync();
+        if (acquisitionWorkspace.ConsumeLeaseLossSignal())
+        {
+            routeEngine.Stop();
+            return;
+        }
 
         routeEngine.MonitorMarketBoardPurchase();
         routeEngine.TickRoute(acquisitionWorkspace.IsBusy);
@@ -466,96 +480,90 @@ public class MainWindow : Window, IDisposable
 
     public override void Draw()
     {
-        AgentReviewRegistry.BeginFrame();
-        AgentBridgeUiReviewFrame? reviewFrame = null;
-        try
-        {
-            if (clearAgentReviewWindowOverride)
+        ClearAgentReviewWindowOverride();
+
+            if (!IsMarketAcquisitionUnlocked())
+                AcquisitionCompositionWindow.IsOpen = false;
+
+            var viewport = ImGui.GetWindowViewport();
+            var windowPosition = ImGui.GetWindowPos();
+            var windowSize = ImGui.GetWindowSize();
+            AcquisitionCompositionWindow.AnchorTo(windowPosition, windowSize);
+            if (windowSize.X > 0f && windowSize.Y > 0f && viewport.Size.X > 0f && viewport.Size.Y > 0f)
             {
-                IsPinned = agentReviewWasPinned;
-                Collapsed = null;
-                CollapsedCondition = ImGuiCond.None;
-                clearAgentReviewWindowOverride = false;
+                AgentCaptureRegion = new AgentBridgeCaptureRegion(
+                    windowPosition,
+                    windowSize,
+                    viewport.Pos,
+                    viewport.Size,
+                    DateTimeOffset.UtcNow);
             }
 
-        var viewport = ImGui.GetWindowViewport();
-        var windowPosition = ImGui.GetWindowPos();
-        var windowSize = ImGui.GetWindowSize();
-        if (windowSize.X > 0f && windowSize.Y > 0f && viewport.Size.X > 0f && viewport.Size.Y > 0f)
-        {
-            AgentCaptureRegion = new AgentBridgeCaptureRegion(
-                windowPosition,
-                windowSize,
-                viewport.Pos,
-                viewport.Size,
-                DateTimeOffset.UtcNow);
-        }
+            DrawHeader();
+            ImGui.Spacing();
 
-        DrawHeader();
-        ImGui.Spacing();
-
-        if (ImGui.BeginTabBar("##MarketMafiosoTabs"))
-        {
-            if (ImGui.BeginTabItem("Overview", GetAgentTabFlags("Overview")))
+            if (ImGui.BeginTabBar("##MarketMafiosoTabs"))
             {
-                overviewTab.Draw();
-                ImGui.EndTabItem();
-            }
+                if (ImGui.BeginTabItem("Squire", GetAgentTabFlags("Squire")))
+                {
+                    squireTab.Draw();
+                    ImGui.EndTabItem();
+                }
 
-            if (ImGui.BeginTabItem("Squire", GetAgentTabFlags("Squire")))
-            {
-                squireTab.Draw();
-                ImGui.EndTabItem();
-            }
+                if (ImGui.BeginTabItem("Workshop Logistics", GetAgentTabFlags("Workshop Logistics")))
+                {
+                    DrawWorkshopPrepTab();
+                    ImGui.EndTabItem();
+                }
 
-            if (ImGui.BeginTabItem("Workshop Logistics", GetAgentTabFlags("Workshop Logistics")))
-            {
-                DrawWorkshopPrepTab();
-                ImGui.EndTabItem();
-            }
+                if (ImGui.BeginTabItem("Retainers", GetAgentTabFlags("Retainers")))
+                {
+                    DrawRetainerRestockTab();
+                    ImGui.EndTabItem();
+                }
 
-            if (ImGui.BeginTabItem("Restock", GetAgentTabFlags("Restock")))
-            {
-                DrawRetainerRestockTab();
-                ImGui.EndTabItem();
-            }
+                if (IsMarketAcquisitionUnlocked() && ImGui.BeginTabItem("Market Acquisition", GetAgentTabFlags("Market Acquisition")))
+                {
+                    DrawMarketAcquisitionTab();
+                    ImGui.EndTabItem();
+                }
 
-            if (IsMarketAcquisitionUnlocked() && ImGui.BeginTabItem("Market Acquisition", GetAgentTabFlags("Market Acquisition")))
-            {
-                DrawMarketAcquisitionTab();
-                ImGui.EndTabItem();
-            }
+                if (ImGui.BeginTabItem("Diagnostics", GetAgentTabFlags("Diagnostics")))
+                {
+                    marketAcquisitionDiagnosticsPanel.Draw();
+                    ImGui.EndTabItem();
+                }
 
-            if (ImGui.BeginTabItem("Diagnostics", GetAgentTabFlags("Diagnostics")))
-            {
-                marketAcquisitionDiagnosticsPanel.Draw();
-                ImGui.EndTabItem();
-            }
+                if (ImGui.BeginTabItem("Settings", GetAgentTabFlags("Settings")))
+                {
+                    settingsTab.Draw();
+                    ImGui.EndTabItem();
+                }
 
-            if (ImGui.BeginTabItem("Settings", GetAgentTabFlags("Settings")))
-            {
-                settingsTab.Draw();
-                ImGui.EndTabItem();
-            }
+                if (ImGui.BeginTabItem("Status", GetAgentTabFlags("Status")))
+                {
+                    statusTab.Draw();
+                    ImGui.EndTabItem();
+                }
 
-            if (ImGui.BeginTabItem("Status", GetAgentTabFlags("Status")))
-            {
-                statusTab.Draw();
-                ImGui.EndTabItem();
+                ImGui.EndTabBar();
+                if (agentSelectionHoldUntilUtc != default && DateTimeOffset.UtcNow >= agentSelectionHoldUntilUtc)
+                {
+                    agentRequestedTab = null;
+                    agentRequestedWorkspaceView = null;
+                    agentSelectionHoldUntilUtc = default;
+                }
             }
+    }
 
-            ImGui.EndTabBar();
-            agentRequestedTab = null;
-            agentRequestedWorkspaceView = null;
-        }
-        }
-        finally
-        {
-            reviewFrame = AgentReviewRegistry.EndFrame();
-            var captureTarget = ActiveCapturePresentationTarget();
-            if (AgentCaptureRegion != null && reviewFrame != null && captureTarget is not null)
-                AgentCaptureTransactions.MarkRendered(captureTarget, reviewFrame.FrameId);
-        }
+    public void BeginAgentReviewFrame() => AgentReviewRegistry.BeginFrame();
+
+    public void EndAgentReviewFrame()
+    {
+        var reviewFrame = AgentReviewRegistry.EndFrame();
+        var captureTarget = ActiveCapturePresentationTarget();
+        if (AgentCaptureRegion != null && captureTarget is not null)
+            AgentCaptureTransactions.MarkRendered(captureTarget, reviewFrame.FrameId);
     }
 
     public bool TrySelectAgentBridgeTab(string tabName)
@@ -563,9 +571,13 @@ public class MainWindow : Window, IDisposable
         var separatorIndex = tabName.IndexOf('/');
         var mainTab = separatorIndex < 0 ? tabName : tabName[..separatorIndex];
         var workspaceView = separatorIndex < 0 ? null : tabName[(separatorIndex + 1)..];
+        if (string.Equals(mainTab, "Restock", StringComparison.Ordinal))
+            mainTab = "Retainers";
+        if (string.Equals(workspaceView, "Plan and run", StringComparison.Ordinal))
+            workspaceView = "Withdrawal plan";
         var allowed = mainTab switch
         {
-            "Overview" or "Squire" or "Workshop Logistics" or "Restock" or "Settings" or "Status" => true,
+            "Squire" or "Workshop Logistics" or "Retainers" or "Settings" or "Status" => true,
             "Diagnostics" => true,
             "Market Acquisition" => IsMarketAcquisitionUnlocked(),
             _ => false,
@@ -576,28 +588,32 @@ public class MainWindow : Window, IDisposable
         if (string.Equals(mainTab, "Squire", StringComparison.Ordinal))
             squireTab.RefreshForBridge();
 
-        agentRequestedTab = mainTab;
-        agentRequestedWorkspaceView = workspaceView;
+        QueueAgentTabSelection(mainTab, workspaceView);
         AgentOpenForReview();
         return true;
+    }
+
+    private void QueueAgentTabSelection(string mainTab, string? workspaceView = null)
+    {
+        agentRequestedTab = mainTab;
+        agentRequestedWorkspaceView = workspaceView;
+        // ImGui commits SetSelected at the end of a tab bar. Hold the semantic request long enough for
+        // both a parent and nested tab bar to render, independent of the client's current frame rate.
+        agentSelectionHoldUntilUtc = DateTimeOffset.UtcNow.AddSeconds(2);
     }
 
     private static bool IsAllowedWorkspaceView(string mainTab, string? workspaceView) =>
         workspaceView is null || (mainTab, workspaceView) switch
         {
             ("Workshop Logistics", "Combined" or "Queue" or "Materials" or "Assembly") => true,
-            ("Restock", "Browse stock" or "Plan and run") => true,
-            ("Market Acquisition", "Request" or "Plan" or "Route") => true,
+            ("Retainers", "Quick deposit" or "Browse stock" or "Withdrawal plan") => true,
+            ("Market Acquisition", "Workbench" or "Inbox" or "Route" or "Compose" or "Working Set" or "Request" or "Plan") => true,
             _ => false,
         };
 
     public void AgentOpenForReview()
     {
-        if (!clearAgentReviewWindowOverride)
-            agentReviewWasPinned = IsPinned;
-
         IsOpen = true;
-        IsPinned = true;
         Collapsed = false;
         CollapsedCondition = ImGuiCond.Always;
         clearAgentReviewWindowOverride = true;
@@ -605,14 +621,26 @@ public class MainWindow : Window, IDisposable
 
     public void AgentCloseAfterReview()
     {
-        if (clearAgentReviewWindowOverride)
-        {
-            IsPinned = agentReviewWasPinned;
-            Collapsed = null;
-            CollapsedCondition = ImGuiCond.None;
-            clearAgentReviewWindowOverride = false;
-        }
+        AgentCaptureTransactions.CancelActive();
+        ClearAgentReviewWindowOverride();
         IsOpen = false;
+    }
+
+    public override void OnClose()
+    {
+        AgentCaptureTransactions.CancelActive();
+        ClearAgentReviewWindowOverride();
+        IsOpen = false;
+    }
+
+    private void ClearAgentReviewWindowOverride()
+    {
+        if (!clearAgentReviewWindowOverride)
+            return;
+
+        Collapsed = null;
+        CollapsedCondition = ImGuiCond.None;
+        clearAgentReviewWindowOverride = false;
     }
 
     public void AgentCaptureInputState()
@@ -644,8 +672,8 @@ public class MainWindow : Window, IDisposable
         ImGui.TextColored(
             ColMuted,
             IsMarketAcquisitionUnlocked()
-                ? "Utilities: Squire, Workshop Logistics, Restock, Market Acquisition. Inventory reporting lives under Settings."
-                : "Utilities: Squire, Workshop Logistics, Restock. Inventory reporting lives under Settings.");
+                ? "Utilities: Squire, Workshop Logistics, Retainers, Market Acquisition. Inventory reporting lives under Settings."
+                : "Utilities: Squire, Workshop Logistics, Retainers. Inventory reporting lives under Settings.");
     }
 
     private void DrawWorkshopPrepTab()
@@ -741,34 +769,31 @@ public class MainWindow : Window, IDisposable
 
     private void DrawMarketAcquisitionTab()
     {
-        UtilityWorkspaceUi.DrawModuleHeader("Market Acquisition", MarketAcquisitionModuleSummary);
-        DrawMarketAcquisitionWorkspaceStatus();
+        ImGui.Spacing();
+        ImGui.TextColored(ColHeader, "Market Acquisition");
         ImGui.Spacing();
 
         if (!ImGui.BeginTabBar("##marketAcquisitionWorkspace"))
             return;
 
-        if (ImGui.BeginTabItem($"Request ({acquisitionRequestBuilder.LineCount})", GetAgentWorkspaceTabFlags("Request")))
+        if (ImGui.BeginTabItem($"Inbox ({acquisitionWorkspace.PendingRequests.Count})", GetAgentWorkspaceTabFlags("Inbox")))
         {
-            DrawMarketAcquisitionRequestBuilder();
+            DrawMarketAcquisitionPickupSection();
             ImGui.EndTabItem();
         }
 
-        if (ImGui.BeginTabItem("Plan", GetAgentWorkspaceTabFlags("Plan")))
+        if (ImGui.BeginTabItem($"Workbench ({acquisitionRequestBuilder.LineCount})", GetAgentWorkspaceTabFlags("Workbench", "Compose", "Working Set", "Request", "Plan")))
         {
-            DrawMarketAcquisitionPickupSection();
-            ImGui.Spacing();
-            ImGuiUi.SectionHeader("Accepted request", ColHeader);
-            DrawClaimedAcquisitionRequest();
-            ImGui.Spacing();
-            DrawMarketAcquisitionPlan();
+            DrawMarketAcquisitionWorkbench();
             ImGui.EndTabItem();
         }
 
         if (ImGui.BeginTabItem("Route", GetAgentWorkspaceTabFlags("Route")))
         {
             if (acquisitionWorkspace.PreparedPlan is null)
-                ImGui.TextColored(ColMuted, "Prepare a current plan before starting a route. Route status remains visible above.");
+                ImGui.TextColored(ColMuted, "Finalize the Workbench before starting a route.");
+            DrawMarketAcquisitionPlan();
+            ImGui.Spacing();
             DrawMarketAcquisitionGuidedRoute();
             ImGui.EndTabItem();
         }
@@ -776,46 +801,162 @@ public class MainWindow : Window, IDisposable
         ImGui.EndTabBar();
     }
 
-    private ImGuiTabItemFlags GetAgentWorkspaceTabFlags(string viewName) =>
-        string.Equals(agentRequestedWorkspaceView, viewName, StringComparison.Ordinal)
+    private ImGuiTabItemFlags GetAgentWorkspaceTabFlags(string viewName, params string[] legacyViewNames) =>
+        ShouldSelectAgentWorkspaceTab(agentRequestedWorkspaceView, viewName, legacyViewNames)
             ? ImGuiTabItemFlags.SetSelected
             : ImGuiTabItemFlags.None;
 
-    private void DrawMarketAcquisitionWorkspaceStatus()
+    internal static bool ShouldSelectAgentWorkspaceTab(string? requestedView, string viewName, params string[] legacyViewNames) =>
+        string.Equals(requestedView, viewName, StringComparison.Ordinal) ||
+        legacyViewNames.Any(legacyViewName => string.Equals(requestedView, legacyViewName, StringComparison.Ordinal));
+
+    private void DrawMarketAcquisitionWorkbench()
     {
-        var snapshot = routeEngine.CreateSnapshot();
-        var requestState = acquisitionWorkspace.ClaimedRequest is null
-            ? "No accepted request"
-            : acquisitionWorkspace.ClaimedRequest.Status.ToString();
-        var planState = acquisitionWorkspace.PreparedPlan is null
-            ? "Not prepared"
-            : acquisitionWorkspace.IsPreparedPlanStale() ? "Stale" : "Current";
-        var routeState = string.IsNullOrWhiteSpace(snapshot.RouteState) ? "Idle" : snapshot.RouteState;
-        UtilityWorkspaceUi.DrawStatusStrip(
-            "##marketAcquisitionWorkspaceStatus",
-            [
-                new("Local request", $"{acquisitionRequestBuilder.LineCount:N0} line(s)", acquisitionRequestBuilder.LineCount > 0 ? ColSuccess : ColMuted),
-                new("Accepted request", requestState, acquisitionWorkspace.ClaimedRequest is null ? ColMuted : ColHeader),
-                new("Plan", planState, planState == "Current" ? ColSuccess : planState == "Stale" ? ColError : ColMuted),
-                new("Route", routeState, snapshot.IsRouteActive ? ColHeader : ColMuted),
-            ]);
-        ImGui.TextColored(GetAcquisitionStatusColor(GetVisibleAcquisitionStatus()), GetVisibleAcquisitionStatus());
+        var context = CreateMarketAcquisitionRequestBuilderContext();
+        DrawMarketAcquisitionWorkbenchToolbar(context);
+        acquisitionRequestBuilder.Draw(context, reservedFooterHeight: 54f);
+        DrawMarketAcquisitionFinalizationBar(context);
     }
 
-    private void DrawMarketAcquisitionRequestBuilder()
+    private MarketAcquisitionRequestBuilderContext CreateMarketAcquisitionRequestBuilderContext()
     {
         var hasScope = TryGetAcquisitionScope(out var characterName, out var world);
-        acquisitionRequestBuilder.Draw(new MarketAcquisitionRequestBuilderContext(
+        var foregroundBusy = acquisitionWorkspace.IsBusy && !acquisitionRequestBuilder.IsRefreshing;
+        return new MarketAcquisitionRequestBuilderContext(
             characterName,
             world,
             hasScope,
             IsExpectedCharacterScopeGap(),
-            acquisitionWorkspace.IsBusy,
+            foregroundBusy,
             IsMarketAcquisitionRouteActive(),
             acquisitionWorkspace.ClaimedRequest,
             acquisitionWorkspace.PreparedPlan,
-            acquisitionWorkspace.PreparedPlanHash),
-            showLifecycleSummary: false);
+            acquisitionWorkspace.PreparedPlanHash);
+    }
+
+    private MarketAcquisitionWorkbenchCompositionContext CreateMarketAcquisitionCompositionContext()
+    {
+        var hasScope = TryGetAcquisitionScope(out var characterName, out var world);
+        var foregroundBusy = acquisitionWorkspace.IsBusy && !acquisitionRequestBuilder.IsRefreshing;
+        return new MarketAcquisitionWorkbenchCompositionContext(
+            acquisitionRequestBuilder.CurrentDocument,
+            characterName,
+            world,
+            hasScope,
+            foregroundBusy,
+            IsMarketAcquisitionRouteActive());
+    }
+
+    private void DrawMarketAcquisitionWorkbenchToolbar(MarketAcquisitionRequestBuilderContext context)
+    {
+        const float actionWidth = 212f;
+        var startX = ImGui.GetCursorPosX();
+        ImGui.SetCursorPosX(startX + Math.Max(0, ImGui.GetContentRegionAvail().X - actionWidth));
+
+        if (ImGui.Button($"Compositions ({AcquisitionCompositionWindow.Count:N0})"))
+            AcquisitionCompositionWindow.IsOpen = !AcquisitionCompositionWindow.IsOpen;
+        AgentReviewRegistry.Register(
+            "acquisition.compositions.open",
+            AcquisitionCompositionWindow.IsOpen
+                ? "Close saved Market Acquisition compositions"
+                : "Open saved Market Acquisition compositions",
+            AgentBridgeUiControlKind.Button,
+            ImGui.GetItemRectMin(),
+            ImGui.GetItemRectMax(),
+            true,
+            AcquisitionCompositionWindow.IsOpen,
+            AcquisitionCompositionWindow.Count.ToString(),
+            () => AcquisitionCompositionWindow.IsOpen = !AcquisitionCompositionWindow.IsOpen);
+
+        ImGui.SameLine();
+        if (ImGui.Button("Recovery"))
+            ImGui.OpenPopup("AcquisitionWorkbenchRecovery");
+
+        if (!ImGui.BeginPopup("AcquisitionWorkbenchRecovery"))
+            return;
+
+        var canMutate = !context.IsBusy && !context.IsRouteActive && !acquisitionRequestBuilder.IsSynchronizing;
+        if (ImGuiUi.MenuItem("Clear Workbench", canMutate && acquisitionRequestBuilder.LineCount > 0))
+            acquisitionRequestBuilder.ClearWorkbench(context);
+        if (ImGuiUi.MenuItem("Clear active work order", canMutate && acquisitionWorkspace.ClaimedRequest is not null))
+            acquisitionWorkspace.ForgetLocalClaim();
+        if (ImGuiUi.MenuItem(
+                "Return active work order to sender",
+                canMutate && acquisitionWorkspace.ClaimedRequest is { Status: "Claimed" }))
+        {
+            _ = ReturnActiveWorkOrderAsync();
+        }
+
+        ImGui.EndPopup();
+    }
+
+    private void DrawMarketAcquisitionFinalizationBar(MarketAcquisitionRequestBuilderContext context)
+    {
+        ImGui.Separator();
+        var validation = acquisitionRequestBuilder.DraftValidation;
+        var presentation = MarketAcquisitionWorkbenchFinalizationPresenter.Build(new(
+            acquisitionRequestBuilder.LineCount,
+            validation.IsValid,
+            validation.Errors.FirstOrDefault(),
+            context.HasCharacterScope,
+            context.IsBusy,
+            context.IsRouteActive,
+            acquisitionRequestBuilder.IsSynchronizing,
+            acquisitionRequestBuilder.SyncStatus,
+            acquisitionRequestBuilder.VisibleStatus,
+            acquisitionWorkspace.ClaimedRequest?.Status,
+            acquisitionWorkspace.ClaimedRequest is not null,
+            acquisitionWorkspace.PreparedPlan is not null,
+            acquisitionWorkspace.IsPreparedPlanStale(),
+            acquisitionWorkspace.Status,
+            acquisitionRequestBuilder.TotalSpendCeiling,
+            acquisitionRequestBuilder.TargetQuantityTotal));
+
+        ImGui.BeginGroup();
+        ImGui.TextColored(presentation.CanFinalize ? ColSuccess : ColMuted, presentation.Title);
+        ImGui.TextColored(ColMuted, presentation.Detail);
+        ImGui.EndGroup();
+
+        const float buttonWidth = 148f;
+        ImGui.SameLine();
+        ImGui.SetCursorPosX(Math.Max(ImGui.GetCursorPosX(), ImGui.GetWindowContentRegionMax().X - buttonWidth));
+        if (ImGuiUi.PrimaryButton("Finalize Plan", presentation.CanFinalize))
+            _ = FinalizeMarketAcquisitionPlanAsync();
+        AgentReviewRegistry.Register(
+            "acquisition.finalize",
+            "Finalize the Market Acquisition Workbench for execution",
+            AgentBridgeUiControlKind.Button,
+            ImGui.GetItemRectMin(),
+            ImGui.GetItemRectMax(),
+            presentation.CanFinalize,
+            false,
+            acquisitionWorkspace.ClaimedRequest?.Id,
+            () => _ = FinalizeMarketAcquisitionPlanAsync());
+    }
+
+    private async Task FinalizeMarketAcquisitionPlanAsync()
+    {
+        await acquisitionRequestBuilder.WaitForRefreshAsync().ConfigureAwait(false);
+        var claimed = acquisitionWorkspace.ClaimedRequest;
+        if (claimed is { Status: "Claimed" })
+        {
+            await acquisitionWorkspace.AcceptAsync().ConfigureAwait(false);
+            claimed = acquisitionWorkspace.ClaimedRequest;
+        }
+
+        if (claimed is null ||
+            !MarketAcquisitionPlanPreparationService.CanPrepareForStatus(claimed.Status))
+        {
+            return;
+        }
+
+        await PrepareMarketAcquisitionPlanAsync().ConfigureAwait(false);
+    }
+
+    private async Task ReturnActiveWorkOrderAsync()
+    {
+        await acquisitionRequestBuilder.WaitForRefreshAsync().ConfigureAwait(false);
+        await acquisitionWorkspace.RejectAsync().ConfigureAwait(false);
     }
 
     private void DrawMarketAcquisitionPickupSection()
@@ -827,24 +968,15 @@ public class MainWindow : Window, IDisposable
             IsMarketAcquisitionRouteActive(),
             acquisitionWorkspace.ClaimedRequest,
             acquisitionWorkspace.PendingRequests,
+            acquisitionRequestBuilder.CurrentDocument.Lines.Select(line => line.ItemId).ToHashSet(),
             acquisitionWorkspace.IsBusy,
-            !string.IsNullOrWhiteSpace(config.ApiKey),
+            !string.IsNullOrWhiteSpace(WorkshopHostApiKeyRouting.ResolveAcquisitionKey(config)),
             hasScope,
             characterName,
             world,
             IsExpectedCharacterScopeGap(),
             visibleStatus,
             GetAcquisitionStatusColor(visibleStatus)));
-    }
-
-    private void DrawClaimedAcquisitionRequest()
-    {
-        marketAcquisitionAcceptedRequestPanel.Draw(
-            acquisitionWorkspace.ClaimedRequest,
-            acquisitionWorkspace.IsBusy,
-            acquisitionWorkspace.ClaimedRequest is not null &&
-            !acquisitionWorkspace.IsBusy &&
-            MarketAcquisitionPlanPreparationService.CanPrepareForStatus(acquisitionWorkspace.ClaimedRequest.Status));
     }
 
     private void DrawMarketAcquisitionPlan()
@@ -879,7 +1011,7 @@ public class MainWindow : Window, IDisposable
         DrawLiveCandidatePlanResult(snapshot);
 
         if (ImGuiUi.Button("Open Diagnostics", true))
-            agentRequestedTab = "Diagnostics";
+            QueueAgentTabSelection("Diagnostics");
     }
 
     private void DrawLiveCandidatePlanResult(MarketAcquisitionRouteEngineSnapshot snapshot)
@@ -952,6 +1084,12 @@ public class MainWindow : Window, IDisposable
         TryGetAcquisitionScope(out var characterName, out var world);
         return acquisitionWorkspace.ClaimAsync(requestId, characterName, world);
     }
+
+    private void AddAcquisitionLinesToWorkbench(IReadOnlyList<MarketAcquisitionRequestLineDocument> lines) =>
+        acquisitionRequestBuilder.StageLines(lines);
+
+    private void ReturnAcquisitionLinesToInbox(IReadOnlyList<uint> itemIds) =>
+        acquisitionRequestBuilder.ReturnLines(itemIds);
 
     private Task PrepareMarketAcquisitionPlanAsync()
     {

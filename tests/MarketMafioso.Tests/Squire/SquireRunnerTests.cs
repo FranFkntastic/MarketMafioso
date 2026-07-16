@@ -112,15 +112,35 @@ public sealed class SquireRunnerTests
     }
 
     [Fact]
-    public async Task Recovery_IsRecheckedAfterGroupPreparation()
+    public async Task Recovery_IsPerformedOnceAtTheDispositionOwnershipBoundary()
     {
         var adapter = new FakeAdapter();
 
         var result = await new SquireRunner(adapter).RunAsync(Plan(), true, CancellationToken.None);
 
         Assert.True(result.Success);
-        Assert.Equal(2, adapter.RecoveryCount);
-        Assert.Equal(2, result.Events.Count(value => value.Kind == "ExecutionRecovery"));
+        Assert.Equal(1, adapter.RecoveryCount);
+        Assert.Single(result.Events, value => value.Kind == "ExecutionRecovery");
+    }
+
+    [Fact]
+    public async Task Recovery_DoesNotInterruptAnOwnedMultiItemDispositionBatch()
+    {
+        var adapter = new FakeAdapter();
+        var plan = new SquireActionPlan(
+            Guid.NewGuid(),
+            Scope,
+            SquireDisposition.ExpertDelivery,
+            DateTimeOffset.UtcNow,
+            [Selection(1, SquireDisposition.ExpertDelivery), Selection(2, SquireDisposition.ExpertDelivery)]);
+
+        var result = await new SquireRunner(adapter).RunAsync(plan, true, CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Equal(1, adapter.RecoveryCount);
+        Assert.Equal(2, adapter.ExecuteCount);
+        Assert.Equal([SquireDisposition.ExpertDelivery], adapter.BegunGroups);
+        Assert.Equal([SquireDisposition.ExpertDelivery], adapter.EndedGroups);
     }
 
     [Fact]
@@ -130,7 +150,6 @@ public sealed class SquireRunnerTests
         var second = Selection(2, SquireDisposition.ExpertDelivery);
         var adapter = new FakeAdapter();
         adapter.RecoveryResults.Enqueue(SquireActionResult.Completed("Ready for first group."));
-        adapter.RecoveryResults.Enqueue(SquireActionResult.Completed("Ready for first action."));
         adapter.RecoveryResults.Enqueue(SquireActionResult.Fail("PlayerInCombat", "Combat began between groups."));
         var plan = new SquireActionPlan(Guid.NewGuid(), Scope, SquireDisposition.Unsupported, DateTimeOffset.UtcNow, [first, second]);
 

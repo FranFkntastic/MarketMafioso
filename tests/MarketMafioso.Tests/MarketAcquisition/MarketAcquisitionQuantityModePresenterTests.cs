@@ -3,6 +3,17 @@ namespace MarketMafioso.Tests.MarketAcquisition;
 public sealed class MarketAcquisitionQuantityModePresenterTests
 {
     [Fact]
+    public void FormatMode_UsesWorkbenchBuyingRuleLanguage()
+    {
+        Assert.Equal(
+            "Buy below ceiling",
+            MarketMafioso.MarketAcquisition.MarketAcquisitionQuantityModePresenter.FormatMode("AllBelowThreshold"));
+        Assert.Equal(
+            "Target quantity",
+            MarketMafioso.MarketAcquisition.MarketAcquisitionQuantityModePresenter.FormatMode("TargetQuantity"));
+    }
+
+    [Fact]
     public void FormatQuantity_ShowsNoCapForUnboundedAllBelowThreshold()
     {
         var text = MarketMafioso.MarketAcquisition.MarketAcquisitionQuantityModePresenter.FormatQuantity(

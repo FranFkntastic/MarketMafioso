@@ -1,5 +1,6 @@
 using MarketMafioso.MarketAcquisition;
 using System.Net;
+using System.Net.Http.Json;
 using System.Text.Json;
 
 namespace MarketMafioso.Tests.MarketAcquisition;
@@ -55,7 +56,7 @@ public sealed class MarketAcquisitionRequestWorkspaceTests
             ItemName = "Updated Darksteel Ore",
         };
 
-        workspace.OnDocumentAdopted(new MarketAcquisitionRequestDocument(), remote);
+        workspace.OnDocumentAdopted(MarketAcquisitionRequestDocumentMapper.FromRequestView(remote), remote);
 
         Assert.Equal(7, workspace.ClaimedRequest?.Revision);
         Assert.Equal("Updated Darksteel Ore", workspace.ClaimedRequest?.ItemName);
@@ -65,6 +66,30 @@ public sealed class MarketAcquisitionRequestWorkspaceTests
         Assert.Equal("reject-key", config.ActiveMarketAcquisitionClaim?.RejectIdempotencyKey);
         Assert.Equal(1, saveCount);
         Assert.Equal(1, resetCount);
+    }
+
+    [Fact]
+    public void AdoptingRemoteStatusRefreshPreservesPreparedPlanWhenIntentIsUnchanged()
+    {
+        var config = new Configuration();
+        MarketAcquisitionClaimPersistence.Save(config, CreateClaim(), "accept-key", "reject-key");
+        var resetCount = 0;
+        using var workspace = CreateWorkspace(config, () => { });
+        Connect(workspace, _ => { }, _ => true, _ => resetCount++);
+        var plan = new MarketAcquisitionPlan { RequestId = "request-1", Status = "Ready" };
+        workspace.ReplacePreparedPlan(plan);
+        var remote = CreateRequest() with
+        {
+            Revision = 7,
+            Status = "AcceptedInPlugin",
+        };
+
+        workspace.OnDocumentAdopted(MarketAcquisitionRequestDocumentMapper.FromRequestView(remote), remote);
+
+        Assert.Same(plan, workspace.PreparedPlan);
+        Assert.Equal(7, workspace.ClaimedRequest?.Revision);
+        Assert.Equal("AcceptedInPlugin", workspace.ClaimedRequest?.Status);
+        Assert.Equal(0, resetCount);
     }
 
     [Fact]
@@ -189,6 +214,47 @@ public sealed class MarketAcquisitionRequestWorkspaceTests
         Assert.Contains("selected-world scope", workspace.Status, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public async Task ExplicitLeaseLossSignalsRouteStop()
+    {
+        var config = new Configuration
+        {
+            ServerUrl = "https://example.test/inventory",
+            ApiKey = "client-key",
+            PluginInstanceId = "plugin-instance",
+        };
+        MarketAcquisitionClaimPersistence.Save(config, CreateClaim() with { Status = "Running" }, "accept-key", "reject-key");
+        using var httpClient = new HttpClient(new LeaseHttpMessageHandler(HttpStatusCode.Unauthorized));
+        using var workspace = CreateWorkspace(config, () => { }, httpClient);
+
+        await workspace.RenewLeaseIfDueAsync();
+
+        Assert.True(workspace.ConsumeLeaseLossSignal());
+        Assert.False(workspace.ConsumeLeaseLossSignal());
+        Assert.Contains("route will stop", workspace.Status, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task SuccessfulLeaseRenewalIsNotRepeatedEveryFrameworkTick()
+    {
+        var config = new Configuration
+        {
+            ServerUrl = "https://example.test/inventory",
+            ApiKey = "client-key",
+            PluginInstanceId = "plugin-instance",
+        };
+        MarketAcquisitionClaimPersistence.Save(config, CreateClaim() with { Status = "Running" }, "accept-key", "reject-key");
+        var handler = new LeaseHttpMessageHandler(HttpStatusCode.OK);
+        using var httpClient = new HttpClient(handler);
+        using var workspace = CreateWorkspace(config, () => { }, httpClient);
+
+        await workspace.RenewLeaseIfDueAsync();
+        await workspace.RenewLeaseIfDueAsync();
+
+        Assert.Equal(1, handler.RequestCount);
+        Assert.False(workspace.ConsumeLeaseLossSignal());
+    }
+
     private static MarketAcquisitionRequestWorkspace CreateWorkspace(
         Configuration config,
         Action saveConfig,
@@ -267,6 +333,29 @@ public sealed class MarketAcquisitionRequestWorkspaceTests
             {
                 Content = new StringContent(JsonSerializer.Serialize(response, response.GetType())),
             });
+        }
+    }
+
+    private sealed class LeaseHttpMessageHandler(HttpStatusCode statusCode) : HttpMessageHandler
+    {
+        public int RequestCount { get; private set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            RequestCount++;
+            var response = new HttpResponseMessage(statusCode);
+            if (statusCode == HttpStatusCode.OK)
+            {
+                response.Content = JsonContent.Create(new MarketAcquisitionExecutionLeaseView
+                {
+                    WorkOrderId = "request-1",
+                    PluginInstanceId = "plugin-instance",
+                    RenewedAtUtc = DateTimeOffset.UtcNow,
+                    ExpiresAtUtc = DateTimeOffset.UtcNow.AddMinutes(2),
+                });
+            }
+
+            return Task.FromResult(response);
         }
     }
 }

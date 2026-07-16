@@ -150,23 +150,26 @@ public sealed class MarketAcquisitionRouteRequestReporter : IMarketAcquisitionRo
         this.client = client;
     }
 
-    public bool CanReport => !string.IsNullOrWhiteSpace(config.ServerUrl) && !string.IsNullOrWhiteSpace(config.ApiKey);
+    public bool CanReport =>
+        !string.IsNullOrWhiteSpace(config.ServerUrl) &&
+        !string.IsNullOrWhiteSpace(WorkshopHostApiKeyRouting.ResolveAcquisitionKey(config));
 
     public async Task<MarketAcquisitionRouteProgressReportOutcome> ReportRouteProgressAsync(MarketAcquisitionRouteProgressReport report, CancellationToken cancellationToken)
     {
         var action = MarketAcquisitionRouteProgressReporter.ResolveAction(report.RouteState);
+        var apiKey = WorkshopHostApiKeyRouting.ResolveAcquisitionKey(config);
         var result = action switch
         {
-            MarketAcquisitionRouteProgressReporter.FailAction => await client.FailAttemptAsync(config.ServerUrl, config.ApiKey, report.RequestId, report.ClaimToken, config.PluginInstanceId, report.AttemptId, report.Sequence, report.RouteStopId, report.ActiveWorld, report.Phase, report.Message, PluginBuildInfo.DisplayVersion, cancellationToken).ConfigureAwait(false),
-            MarketAcquisitionRouteProgressReporter.CompleteAction => await client.CompleteAttemptAsync(config.ServerUrl, config.ApiKey, report.RequestId, report.ClaimToken, config.PluginInstanceId, report.AttemptId, report.Sequence, report.RouteStopId, report.ActiveWorld, report.Phase, report.Message, PluginBuildInfo.DisplayVersion, cancellationToken).ConfigureAwait(false),
-            _ => await client.ReportAttemptProgressAsync(config.ServerUrl, config.ApiKey, report.RequestId, report.ClaimToken, config.PluginInstanceId, report.AttemptId, report.Sequence, report.RouteStopId, report.ActiveWorld, report.Phase, report.Message, PluginBuildInfo.DisplayVersion, cancellationToken).ConfigureAwait(false),
+            MarketAcquisitionRouteProgressReporter.FailAction => await client.FailAttemptAsync(config.ServerUrl, apiKey, report.RequestId, report.ClaimToken, config.PluginInstanceId, report.AttemptId, report.Sequence, report.RouteStopId, report.ActiveWorld, report.Phase, report.Message, PluginBuildInfo.DisplayVersion, cancellationToken).ConfigureAwait(false),
+            MarketAcquisitionRouteProgressReporter.CompleteAction => await client.CompleteAttemptAsync(config.ServerUrl, apiKey, report.RequestId, report.ClaimToken, config.PluginInstanceId, report.AttemptId, report.Sequence, report.RouteStopId, report.ActiveWorld, report.Phase, report.Message, PluginBuildInfo.DisplayVersion, cancellationToken).ConfigureAwait(false),
+            _ => await client.ReportAttemptProgressAsync(config.ServerUrl, apiKey, report.RequestId, report.ClaimToken, config.PluginInstanceId, report.AttemptId, report.Sequence, report.RouteStopId, report.ActiveWorld, report.Phase, report.Message, PluginBuildInfo.DisplayVersion, cancellationToken).ConfigureAwait(false),
         };
         return new MarketAcquisitionRouteProgressReportOutcome(action, result.Request);
     }
 
     public async Task ReportPurchaseAuditAsync(MarketAcquisitionPurchaseAuditReport report, CancellationToken cancellationToken)
     {
-        await client.PostPurchaseAuditAsync(config.ServerUrl, config.ApiKey, report.RequestId, new MarketAcquisitionPurchaseAuditRequest
+        await client.PostPurchaseAuditAsync(config.ServerUrl, WorkshopHostApiKeyRouting.ResolveAcquisitionKey(config), report.RequestId, new MarketAcquisitionPurchaseAuditRequest
         {
             ClaimToken = report.ClaimToken,
             IdempotencyKey = $"{config.PluginInstanceId}:{report.AttemptId}:purchase:{report.Sequence}",
@@ -190,7 +193,7 @@ public sealed class MarketAcquisitionRouteRequestReporter : IMarketAcquisitionRo
 
     public async Task ReportLineProgressAsync(MarketAcquisitionLineProgressReport report, CancellationToken cancellationToken)
     {
-        await client.PostLineProgressAsync(config.ServerUrl, config.ApiKey, report.RequestId, report.LineId, new MarketAcquisitionLineProgressRequest
+        await client.PostLineProgressAsync(config.ServerUrl, WorkshopHostApiKeyRouting.ResolveAcquisitionKey(config), report.RequestId, report.LineId, new MarketAcquisitionLineProgressRequest
         {
             ClaimToken = report.ClaimToken,
             IdempotencyKey = $"{config.PluginInstanceId}:{report.AttemptId}:line:{report.LineId}:{report.Sequence}",
@@ -212,7 +215,7 @@ public sealed class MarketAcquisitionRouteRequestReporter : IMarketAcquisitionRo
             MarketBoardListingReadState.FreshPartial => "Partial",
             _ => "Unavailable",
         };
-        await client.PostMarketObservationAsync(config.ServerUrl, config.ApiKey, report.RequestId, new MarketAcquisitionMarketObservationRequest
+        await client.PostMarketObservationAsync(config.ServerUrl, WorkshopHostApiKeyRouting.ResolveAcquisitionKey(config), report.RequestId, new MarketAcquisitionMarketObservationRequest
         {
             ClaimToken = report.ClaimToken,
             IdempotencyKey = $"{config.PluginInstanceId}:{report.AttemptId}:observation:{report.Sequence}",

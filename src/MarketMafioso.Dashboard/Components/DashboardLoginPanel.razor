@@ -5,8 +5,8 @@
     <MudStack Spacing="2">
         <MudText Typo="Typo.h5">Sign in</MudText>
         <MudText Typo="Typo.body2" Class="muted">Use the dashboard account configured for this receiver.</MudText>
-        <MudTextField @bind-Value="_loginUsername" Label="Username" Variant="Variant.Outlined" Margin="Margin.Dense" />
-        <MudTextField @bind-Value="_loginPassword" Label="Password" InputType="InputType.Password" Variant="Variant.Outlined" Margin="Margin.Dense" />
+        <MudTextField @bind-Value="_loginUsername" Label="Username" Immediate="true" Variant="Variant.Outlined" Margin="Margin.Dense" />
+        <MudTextField @bind-Value="_loginPassword" Label="Password" Immediate="true" InputType="InputType.Password" Variant="Variant.Outlined" Margin="Margin.Dense" />
         <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="_busy" OnClick="LoginAsync">Login</MudButton>
         <DashboardStatusHost />
     </MudStack>

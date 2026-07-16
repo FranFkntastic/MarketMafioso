@@ -5,6 +5,30 @@ namespace MarketMafioso.Tests.MarketAcquisition;
 public sealed class MarketAcquisitionRequestDocumentMapperTests
 {
     [Fact]
+    public void GetRequestLines_ExposesLegacySingleLineAsWorkbenchInput()
+    {
+        var request = new MarketAcquisitionRequestView
+        {
+            Id = "legacy-request",
+            ItemId = 2,
+            ItemName = "Fire Shard",
+            QuantityMode = "TargetQuantity",
+            Quantity = 50,
+            HqPolicy = "Either",
+            MaxUnitPrice = 80,
+            MaxTotalGil = 4_000,
+        };
+
+        var line = Assert.Single(MarketAcquisitionRequestDocumentMapper.GetRequestLines(request));
+        var documentLine = MarketAcquisitionRequestDocumentMapper.FromRequestLine(line);
+
+        Assert.Equal("legacy-request-line-1", line.LineId);
+        Assert.Equal(2u, documentLine.ItemId);
+        Assert.Equal(50u, documentLine.TargetQuantity);
+        Assert.Equal(4_000u, documentLine.GilCap);
+    }
+
+    [Fact]
     public void BuildCreateRequest_UsesPluginBuilderOriginAndPreservesLines()
     {
         var document = CreateDocument();

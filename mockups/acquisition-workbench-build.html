@@ -3,411 +3,766 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>MarketMafioso Acquisition Workbench - Build</title>
+  <title>MarketMafioso — Acquisition Workbench</title>
   <style>
     :root {
-      --bg: #0e1012;
-      --panel: rgba(19, 22, 24, 0.92);
-      --panel-2: rgba(31, 35, 38, 0.92);
-      --line: #3f484d;
-      --line-soft: #2a3034;
-      --text: #e7e0d2;
-      --muted: #aaa195;
-      --blue: #65b9e8;
-      --green: #7bd88f;
-      --red: #ed6f68;
-      --amber: #e4c36a;
-      --button: #4b5257;
-      --button-hot: #8b3434;
-      --field: #303437;
-      --shadow: rgba(0, 0, 0, 0.55);
+      color-scheme: dark;
+      --bg: #090a0b;
+      --surface: #101112;
+      --surface-raised: #17191b;
+      --surface-input: #292b2e;
+      --surface-hover: #32353a;
+      --line: #35383d;
+      --line-soft: #26292d;
+      --text: #eeeeee;
+      --muted: #9a9a9a;
+      --blue: #61baff;
+      --green: #72e68c;
+      --amber: #ffc05a;
+      --red: #ff6666;
+      --chrome: #621b1d;
+      --chrome-dark: #3d1113;
+      --button: #45484d;
+      --button-hover: #555960;
+      --primary: #2876a6;
+      --primary-hover: #358bc0;
       font-family: "Segoe UI", Arial, sans-serif;
-      color: var(--text);
-      background: var(--bg);
+      font-size: 13px;
     }
 
     * { box-sizing: border-box; }
 
+    html, body { width: 100%; height: 100%; }
+
     body {
       margin: 0;
-      min-height: 100vh;
-      background:
-        linear-gradient(90deg, rgba(0, 0, 0, 0.76), rgba(0, 0, 0, 0.42)),
-        repeating-linear-gradient(90deg, #16191b 0, #16191b 1px, #0d0f11 1px, #0d0f11 108px);
-      font-size: 14px;
-      letter-spacing: 0;
+      overflow: hidden;
+      color: var(--text);
+      background: #050606;
     }
 
-    .window {
-      width: min(1180px, 100vw);
-      height: min(760px, 100vh);
-      min-height: 560px;
+    button, input, select { font: inherit; }
+
+    button, select, input {
+      min-height: 28px;
+      border: 1px solid #3a3d42;
+      border-radius: 3px;
+      color: var(--text);
+      background: var(--surface-input);
+    }
+
+    button {
+      padding: 4px 10px;
+      background: var(--button);
+      font-weight: 650;
+      cursor: pointer;
+    }
+
+    button:hover { background: var(--button-hover); }
+    button:focus-visible, input:focus-visible, select:focus-visible {
+      outline: 2px solid var(--blue);
+      outline-offset: 1px;
+    }
+
+    button.primary {
+      min-width: 132px;
+      background: var(--primary);
+      border-color: #4c9ed0;
+    }
+
+    button.primary:hover { background: var(--primary-hover); }
+
+    button.quiet {
+      color: #c7c7c7;
+      background: transparent;
+      border-color: transparent;
+    }
+
+    button.danger { color: #ffaaaa; }
+
+    input, select {
+      width: 100%;
+      padding: 4px 7px;
+    }
+
+    input::placeholder { color: #747474; }
+
+    .app {
+      position: relative;
+      width: 100vw;
+      height: 100vh;
       display: grid;
-      grid-template-rows: 34px 58px 1fr 32px;
-      background: rgba(12, 14, 15, 0.88);
-      box-shadow: 0 18px 40px var(--shadow);
-      border-right: 1px solid #15191c;
-      border-bottom: 1px solid #15191c;
+      grid-template-rows: 26px 58px 31px minmax(0, 1fr);
+      background: rgba(8, 9, 10, 0.98);
     }
 
     .titlebar {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 0 10px;
-      background: linear-gradient(90deg, #6f1717, #3d1717);
+      padding-left: 9px;
+      background: linear-gradient(90deg, var(--chrome), var(--chrome-dark));
+      color: white;
       font-weight: 700;
+      user-select: none;
     }
 
-    .chrome {
+    .window-actions { display: flex; height: 100%; }
+    .window-actions button {
+      min-width: 34px;
+      min-height: 0;
+      padding: 0;
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+      font-weight: 400;
+    }
+    .window-actions button:hover { background: rgba(255,255,255,.12); }
+
+    .product-header {
       display: flex;
-      gap: 12px;
-      color: #f1ddd7;
-      font-size: 16px;
-    }
-
-    .summary {
-      display: grid;
-      grid-template-columns: 1fr auto;
-      gap: 16px;
       align-items: center;
-      padding: 8px 12px;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 7px 12px 6px;
       border-bottom: 1px solid var(--line-soft);
     }
 
-    .summary h1 {
-      margin: 0;
-      font-size: 15px;
-      color: var(--blue);
-    }
+    .product-name { color: var(--blue); font-weight: 750; }
+    .product-context { margin-top: 4px; color: var(--muted); font-size: 12px; }
 
-    .metrics {
-      display: grid;
-      grid-template-columns: repeat(5, minmax(92px, 1fr));
-      gap: 14px;
-      min-width: min(760px, 72vw);
-    }
-
-    .metric span {
-      display: block;
-      color: var(--muted);
-      font-size: 12px;
-    }
-
-    .metric strong {
-      display: block;
-      margin-top: 4px;
-      color: var(--green);
-      font-size: 13px;
+    .character {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: #cfcfcf;
       white-space: nowrap;
     }
 
-    .body {
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 0 2px rgba(114,230,140,.12);
+    }
+
+    .global-tabs {
+      display: flex;
+      align-items: end;
+      gap: 2px;
+      padding: 0 10px;
+      border-bottom: 1px solid #6c2022;
+      overflow-x: auto;
+      background: #0c0d0e;
+    }
+
+    .global-tabs button {
+      min-height: 25px;
+      padding: 3px 8px;
+      border: 0;
+      border-radius: 3px 3px 0 0;
+      background: #3a3b3d;
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .global-tabs button.active { background: #713033; }
+
+    .acquisition {
+      min-height: 0;
       display: grid;
-      grid-template-columns: minmax(420px, 1fr) minmax(380px, 0.82fr);
-      min-height: 0;
+      grid-template-rows: 44px 43px minmax(0, 1fr) 49px;
     }
 
-    .pane {
-      min-width: 0;
-      min-height: 0;
-      overflow: auto;
-      padding: 10px;
-      border-right: 1px solid var(--line-soft);
+    .module-nav {
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 0 12px;
+      border-bottom: 1px solid var(--line);
     }
 
-    .pane:last-child { border-right: 0; }
+    .module-left { display: flex; align-items: end; gap: 16px; min-width: 0; }
+    .module-title { padding-bottom: 9px; color: var(--blue); font-weight: 750; white-space: nowrap; }
+    .subtabs { display: flex; gap: 3px; }
+    .subtabs button {
+      min-height: 29px;
+      padding: 4px 10px;
+      border-color: transparent;
+      border-bottom: 2px solid transparent;
+      background: transparent;
+      color: #c3c3c3;
+    }
+    .subtabs button.active { color: white; border-bottom-color: #a83e42; }
 
-    .section {
-      margin-bottom: 12px;
-      border: 1px solid var(--line);
-      background: var(--panel);
+    .module-actions {
+      display: flex;
+      gap: 6px;
+      padding-bottom: 6px;
+      white-space: nowrap;
     }
 
-    .section header {
+    .scopebar {
       display: flex;
       align-items: center;
-      justify-content: space-between;
-      min-height: 31px;
-      padding: 6px 8px;
-      color: var(--blue);
+      gap: 12px;
+      padding: 7px 12px;
       border-bottom: 1px solid var(--line-soft);
-      font-weight: 700;
+      background: #0d0f10;
     }
 
-    .content { padding: 8px; }
+    .scope-control { display: flex; align-items: center; gap: 6px; }
+    .scope-control label { color: var(--muted); font-size: 12px; }
+    .scope-control select { width: auto; min-width: 130px; }
+    .scope-control.world select { min-width: 172px; }
 
-    .grid2 {
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 8px;
+    .scope-summary {
+      margin-left: auto;
+      color: #c8c8c8;
+      white-space: nowrap;
+    }
+    .scope-summary strong { color: white; }
+
+    .work-area {
+      min-height: 0;
+      overflow: auto;
+      padding: 10px 12px 0;
     }
 
-    label {
-      display: block;
-      color: var(--muted);
-      font-size: 12px;
-      margin-bottom: 4px;
-    }
-
-    .field, select {
-      width: 100%;
-      min-height: 28px;
-      padding: 5px 7px;
-      border: 1px solid #24282b;
-      background: var(--field);
-      color: var(--text);
-      border-radius: 3px;
-      font: inherit;
-    }
-
-    .field.good { color: var(--green); }
-
-    .line-list {
-      display: grid;
-      gap: 7px;
-    }
-
-    .line-card {
-      border: 1px solid var(--line-soft);
-      background: rgba(38, 43, 46, 0.72);
-      padding: 8px;
-    }
-
-    .line-card.active { border-color: var(--blue); }
-
-    .line-title {
+    .list-header {
       display: flex;
+      align-items: baseline;
       justify-content: space-between;
-      gap: 8px;
-      margin-bottom: 8px;
+      gap: 12px;
+      margin-bottom: 6px;
     }
+    .list-header h1 { margin: 0; font-size: 13px; color: var(--blue); }
+    .list-meta { color: var(--muted); font-size: 12px; }
 
-    .line-title strong { color: var(--text); }
-    .line-title span { color: var(--muted); font-size: 12px; }
+    .table-frame {
+      min-width: 1020px;
+      border: 1px solid var(--line);
+      background: var(--surface);
+    }
 
     table {
       width: 100%;
       border-collapse: collapse;
-      font-size: 12px;
+      table-layout: fixed;
     }
 
-    th, td {
-      border-bottom: 1px solid var(--line-soft);
-      padding: 6px;
-      text-align: left;
-      vertical-align: top;
-    }
+    col.item { width: 25%; }
+    col.rule { width: 16%; }
+    col.quantity { width: 10%; }
+    col.unit { width: 12%; }
+    col.spend { width: 13%; }
+    col.quality { width: 9%; }
+    col.evidence { width: 9%; }
+    col.action { width: 78px; }
 
     th {
-      color: var(--muted);
-      font-weight: 600;
-      background: rgba(255, 255, 255, 0.03);
+      height: 27px;
+      padding: 4px 7px;
+      color: #c8c8c8;
+      background: #303236;
+      border-right: 1px solid #414449;
+      text-align: left;
+      font-size: 12px;
+      font-weight: 650;
     }
 
-    .pill {
+    th:last-child, td:last-child { border-right: 0; }
+
+    td {
+      height: 38px;
+      padding: 4px;
+      border-right: 1px solid var(--line-soft);
+      border-bottom: 1px solid var(--line-soft);
+      vertical-align: middle;
+    }
+
+    tbody tr.data-row:hover td { background: rgba(255,255,255,.025); }
+
+    td input, td select { min-height: 29px; }
+
+    .item-editor { display: grid; grid-template-columns: 1fr auto; gap: 4px; }
+    .details-button { min-width: 58px; padding-inline: 7px; }
+
+    .evidence-state {
       display: inline-flex;
       align-items: center;
-      min-height: 20px;
+      min-height: 24px;
       padding: 2px 7px;
-      border: 1px solid var(--line);
+      border: 1px solid #456373;
       border-radius: 3px;
-      color: var(--text);
-      background: rgba(255, 255, 255, 0.05);
+      color: #a9ddff;
+      background: rgba(97,186,255,.08);
       white-space: nowrap;
     }
 
-    .pill.green { color: var(--green); border-color: rgba(123, 216, 143, 0.45); }
-    .pill.amber { color: var(--amber); border-color: rgba(228, 195, 106, 0.45); }
-    .pill.red { color: var(--red); border-color: rgba(237, 111, 104, 0.45); }
+    .evidence-state.muted { color: var(--muted); border-color: var(--line); background: transparent; }
 
-    .actions {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 7px;
-      align-items: center;
+    .detail-row { display: none; }
+    .detail-row.open { display: table-row; }
+    .detail-row td {
+      height: auto;
+      padding: 0;
+      border-right: 0;
+      background: #121619;
     }
 
-    button {
-      min-height: 28px;
-      padding: 5px 10px;
-      border: 1px solid #5d666b;
-      border-radius: 3px;
-      background: var(--button);
-      color: var(--text);
-      font: inherit;
-      font-weight: 600;
-    }
-
-    button.primary {
-      background: var(--button-hot);
-      border-color: #a64a4a;
-    }
-
-    button:disabled {
-      color: #8c8c8c;
-      border-color: #3a3d40;
-      background: #2f3336;
-    }
-
-    .statusbar {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding: 0 10px;
-      color: var(--muted);
-      border-top: 1px solid var(--line-soft);
-      background: rgba(6, 7, 8, 0.72);
-      font-size: 12px;
-    }
-
-    .split-summary {
+    .detail-grid {
       display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
+      grid-template-columns: 1.3fr 1fr 1fr auto;
+      align-items: center;
+      gap: 16px;
+      min-height: 48px;
+      padding: 7px 10px 7px 16px;
+      border-left: 3px solid #4c90b9;
+    }
+
+    .detail-block span { display: block; color: var(--muted); font-size: 11px; }
+    .detail-block strong { display: block; margin-top: 3px; font-size: 12px; }
+    .detail-block strong.good { color: var(--green); }
+
+    .add-row td { background: #151719; }
+    .add-row td:first-child { box-shadow: inset 3px 0 0 #4f9ac6; }
+    .add-row input, .add-row select { background: #24272a; }
+    .add-row .add-button { width: 100%; color: #d9f2ff; border-color: #477c9a; background: #285d7b; }
+    .quantity-not-applicable { display: block; padding: 6px 8px; color: var(--muted); }
+
+    .bottom-bar {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 7px 12px;
+      border-top: 1px solid var(--line);
+      background: #121416;
+      box-shadow: 0 -5px 12px rgba(0,0,0,.24);
+    }
+
+    .readiness { min-width: 0; flex: 1; }
+    .readiness strong { display: block; color: white; }
+    .readiness span { display: block; margin-top: 2px; color: var(--muted); font-size: 11px; }
+    .budget { color: #cfcfcf; white-space: nowrap; }
+    .budget strong { color: white; }
+
+    .drawer-backdrop {
+      position: absolute;
+      inset: 0;
+      z-index: 4;
+      display: none;
+      background: rgba(0,0,0,.38);
+    }
+    .drawer-backdrop.open { display: block; }
+
+    .drawer {
+      position: absolute;
+      z-index: 5;
+      top: 26px;
+      right: 0;
+      bottom: 0;
+      width: min(430px, 90vw);
+      display: grid;
+      grid-template-rows: 45px minmax(0, 1fr) auto;
+      transform: translateX(102%);
+      transition: transform 140ms ease-out;
+      border-left: 1px solid #55595f;
+      background: #101214;
+      box-shadow: -14px 0 32px rgba(0,0,0,.55);
+    }
+    .drawer.open { transform: translateX(0); }
+
+    .drawer-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 10px 8px 12px;
+      border-bottom: 1px solid var(--line);
+    }
+    .drawer-header strong { color: var(--blue); }
+    .drawer-list { overflow: auto; padding: 8px; }
+
+    .composition-row {
+      display: grid;
+      grid-template-columns: 1fr auto;
       gap: 8px;
-      margin-bottom: 8px;
+      padding: 9px;
+      border-bottom: 1px solid var(--line-soft);
+    }
+    .composition-row:hover { background: rgba(255,255,255,.025); }
+    .composition-name { font-weight: 700; }
+    .composition-meta { margin-top: 4px; color: var(--muted); font-size: 11px; }
+    .composition-actions { display: flex; gap: 5px; align-items: center; }
+    .composition-actions button { min-height: 26px; padding: 3px 7px; }
+
+    .save-composition {
+      padding: 10px;
+      border-top: 1px solid var(--line);
+      background: #151719;
+    }
+    .save-composition label { display: block; margin-bottom: 5px; color: var(--muted); font-size: 12px; }
+    .save-row { display: grid; grid-template-columns: 1fr auto; gap: 7px; }
+
+    .toast {
+      position: absolute;
+      z-index: 8;
+      right: 14px;
+      bottom: 61px;
+      display: none;
+      padding: 8px 11px;
+      border: 1px solid #4c8058;
+      border-radius: 3px;
+      color: #caffd4;
+      background: #193320;
+      box-shadow: 0 8px 22px rgba(0,0,0,.4);
+    }
+    .toast.open { display: block; }
+
+    @media (max-width: 1050px) {
+      .product-context, .character { display: none; }
+      .scope-summary { display: none; }
+      .scopebar { overflow-x: auto; }
+      .budget { display: none; }
     }
 
-    .mini {
-      border: 1px solid var(--line-soft);
-      padding: 7px;
-      background: rgba(255, 255, 255, 0.03);
-    }
-
-    .mini span { display: block; color: var(--muted); font-size: 12px; }
-    .mini strong { display: block; margin-top: 4px; color: var(--text); }
-
-    @media (max-width: 920px) {
-      .window { height: auto; min-height: 100vh; }
-      .summary { grid-template-columns: 1fr; }
-      .metrics { min-width: 0; grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      .body { grid-template-columns: 1fr; }
-      .pane { border-right: 0; border-bottom: 1px solid var(--line-soft); }
-      .grid2, .split-summary { grid-template-columns: 1fr; }
+    @media (max-height: 640px) {
+      .app { grid-template-rows: 26px 31px minmax(0, 1fr); }
+      .product-header { display: none; }
     }
   </style>
 </head>
 <body>
-  <main class="window">
-    <div class="titlebar">
-      <span>Acquisition Workbench</span>
-      <div class="chrome"><span>-</span><span>x</span></div>
-    </div>
+  <main class="app">
+    <header class="titlebar">
+      <span>MarketMafioso</span>
+      <div class="window-actions" aria-label="Window controls">
+        <button aria-label="Minimize">—</button>
+        <button aria-label="Maximize">□</button>
+        <button aria-label="Close">×</button>
+      </div>
+    </header>
 
-    <section class="summary">
+    <section class="product-header">
       <div>
-        <h1>Build Route</h1>
-        <div class="muted">Wei Ning @ Siren - client-created route, dashboard sync pending</div>
+        <div class="product-name">MarketMafioso</div>
+        <div class="product-context">Squire · Workshop Logistics · Retainers · Market Acquisition</div>
       </div>
-      <div class="metrics">
-        <div class="metric"><span>Draft</span><strong>3 lines</strong></div>
-        <div class="metric"><span>Scope</span><strong>NA / Smart skip</strong></div>
-        <div class="metric"><span>Craft Evidence</span><strong>2 quoted</strong></div>
-        <div class="metric"><span>Eligible Stock</span><strong>196 under price</strong></div>
-        <div class="metric"><span>Ready</span><strong>Needs 1 price</strong></div>
-      </div>
+      <div class="character"><span class="status-dot"></span>Wei Ning @ Siren</div>
     </section>
 
-    <section class="body">
-      <section class="pane">
-        <div class="section">
-          <header><span>Route Settings</span><span class="pill green">Character scope ready</span></header>
-          <div class="content grid2">
-            <div><label>Region</label><select><option>North America</option></select></div>
-            <div><label>World Policy</label><select><option>Recommended</option><option>All-world sweep</option></select></div>
-            <div><label>Recent Worlds</label><select><option>Smart skip</option><option>Full resweep</option></select></div>
-            <div><label>Gil Budget</label><div class="field">1,200,000</div></div>
-          </div>
+    <nav class="global-tabs" aria-label="MarketMafioso modules">
+      <button>Overview</button>
+      <button>Squire</button>
+      <button>Workshop Logistics</button>
+      <button>Retainers</button>
+      <button class="active">Market Acquisition</button>
+      <button>Diagnostics</button>
+      <button>Settings</button>
+      <button>Status</button>
+    </nav>
+
+    <section class="acquisition">
+      <div class="module-nav">
+        <div class="module-left">
+          <div class="module-title">Market Acquisition</div>
+          <nav class="subtabs" aria-label="Market Acquisition views">
+            <button>Inbox <span id="inboxCount">2</span></button>
+            <button class="active">Workbench <span id="lineCount">3</span></button>
+            <button>Route</button>
+          </nav>
+        </div>
+        <div class="module-actions">
+          <button id="openCompositions">Compositions <span>2</span></button>
+          <button class="quiet">Recovery</button>
+        </div>
+      </div>
+
+      <div class="scopebar">
+        <div class="scope-control">
+          <label for="region">Region</label>
+          <select id="region"><option>North America</option></select>
+        </div>
+        <div class="scope-control world">
+          <label for="worldMode">Worlds</label>
+          <select id="worldMode"><option>Recommended worlds</option><option>All worlds</option></select>
+        </div>
+        <div class="scope-control">
+          <label for="sweep">Sweep</label>
+          <select id="sweep"><option>Smart skip</option><option>Full resweep</option></select>
+        </div>
+        <div class="scope-summary"><strong id="scopeLines">3 lines</strong> · <span id="scopeUnits">25,017 target units</span></div>
+      </div>
+
+      <section class="work-area">
+        <div class="list-header">
+          <h1>Buy list</h1>
+          <div class="list-meta">Select Details only when pricing evidence needs attention.</div>
         </div>
 
-        <div class="section">
-          <header><span>Acquisition Lines</span><button>Add Line</button></header>
-          <div class="content line-list">
-            <div class="line-card active">
-              <div class="line-title"><strong>Grade 8 Dark Matter</strong><span>Item 33916</span></div>
-              <div class="grid2">
-                <div><label>Quantity Policy</label><select><option>Buy all below threshold</option></select></div>
-                <div><label>Purchase Cap</label><div class="field">No cap</div></div>
-                <div><label>HQ</label><select><option>Either</option></select></div>
-                <div><label>Max Unit Price</label><div class="field good">920</div></div>
-              </div>
-            </div>
-            <div class="line-card">
-              <div class="line-title"><strong>Maghemite</strong><span>Item 44012</span></div>
-              <div class="grid2">
-                <div><label>Quantity Policy</label><select><option>Buy up to quantity</option></select></div>
-                <div><label>Target Quantity</label><div class="field">42</div></div>
-                <div><label>HQ</label><select><option>NQ only</option></select></div>
-                <div><label>Max Unit Price</label><div class="field good">3,100</div></div>
-              </div>
-            </div>
-            <div class="line-card">
-              <div class="line-title"><strong>Ra'Kaznar Ingot</strong><span>Item inferred</span></div>
-              <div class="grid2">
-                <div><label>Quantity Policy</label><select><option>Buy all below threshold</option></select></div>
-                <div><label>Purchase Cap</label><div class="field">12</div></div>
-                <div><label>HQ</label><select><option>Either</option></select></div>
-                <div><label>Max Unit Price</label><div class="field">Needs price</div></div>
-              </div>
-            </div>
-          </div>
+        <div class="table-frame">
+          <table aria-label="Acquisition buy list">
+            <colgroup>
+              <col class="item"><col class="rule"><col class="quantity"><col class="unit">
+              <col class="spend"><col class="quality"><col class="evidence"><col class="action">
+            </colgroup>
+            <thead>
+              <tr>
+                <th>Item</th><th>Buying rule</th><th>Quantity</th><th>Unit ceiling</th>
+                <th>Spend ceiling</th><th>Quality</th><th>Evidence</th><th></th>
+              </tr>
+            </thead>
+            <tbody id="lineRows">
+              <tr class="data-row" data-item="Fire Shard">
+                <td><div class="item-editor"><input value="Fire Shard"><button class="details-button" data-details="detail-fire">Details</button></div></td>
+                <td><select><option>Target quantity</option><option>Buy below ceiling</option></select></td>
+                <td><input value="24975" inputmode="numeric"></td>
+                <td><input value="54" inputmode="numeric"></td>
+                <td><input value="1400000" inputmode="numeric"></td>
+                <td><select><option>Either</option><option>HQ only</option><option>NQ only</option></select></td>
+                <td><span class="evidence-state">Depth ready</span></td>
+                <td><button class="quiet danger remove-line">Remove</button></td>
+              </tr>
+              <tr class="detail-row" id="detail-fire">
+                <td colspan="8">
+                  <div class="detail-grid">
+                    <div class="detail-block"><span>Selected line</span><strong>Fire Shard</strong></div>
+                    <div class="detail-block"><span>Observed at or below 54 gil</span><strong class="good">31,420 units</strong></div>
+                    <div class="detail-block"><span>Estimated spend for target</span><strong>1,087,300 gil</strong></div>
+                    <button>Refresh evidence</button>
+                  </div>
+                </td>
+              </tr>
+
+              <tr class="data-row" data-item="Grade 8 Dark Matter">
+                <td><div class="item-editor"><input value="Grade 8 Dark Matter"><button class="details-button" data-details="detail-matter">Details</button></div></td>
+                <td><select><option>Buy below ceiling</option><option>Target quantity</option></select></td>
+                <td><span class="quantity-not-applicable">—</span></td>
+                <td><input value="920" inputmode="numeric"></td>
+                <td><input value="180000" inputmode="numeric"></td>
+                <td><select><option>Either</option><option>HQ only</option><option>NQ only</option></select></td>
+                <td><span class="evidence-state">Quote + depth</span></td>
+                <td><button class="quiet danger remove-line">Remove</button></td>
+              </tr>
+              <tr class="detail-row" id="detail-matter">
+                <td colspan="8">
+                  <div class="detail-grid">
+                    <div class="detail-block"><span>Craft Architect unit cost</span><strong>812 gil</strong></div>
+                    <div class="detail-block"><span>Current acquisition ceiling</span><strong class="good">920 gil</strong></div>
+                    <div class="detail-block"><span>Observed below ceiling</span><strong>196 units</strong></div>
+                    <button>Use craft cost</button>
+                  </div>
+                </td>
+              </tr>
+
+              <tr class="data-row" data-item="Maghemite">
+                <td><div class="item-editor"><input value="Maghemite"><button class="details-button" data-details="detail-maghemite">Details</button></div></td>
+                <td><select><option>Target quantity</option><option>Buy below ceiling</option></select></td>
+                <td><input value="42" inputmode="numeric"></td>
+                <td><input value="3100" inputmode="numeric"></td>
+                <td><input value="130200" inputmode="numeric"></td>
+                <td><select><option>NQ only</option><option>Either</option><option>HQ only</option></select></td>
+                <td><span class="evidence-state muted">Manual</span></td>
+                <td><button class="quiet danger remove-line">Remove</button></td>
+              </tr>
+              <tr class="detail-row" id="detail-maghemite">
+                <td colspan="8">
+                  <div class="detail-grid">
+                    <div class="detail-block"><span>Pricing source</span><strong>Manual ceiling</strong></div>
+                    <div class="detail-block"><span>Observed below ceiling</span><strong>58 units</strong></div>
+                    <div class="detail-block"><span>Target coverage</span><strong class="good">Enough observed</strong></div>
+                    <button>Request quote</button>
+                  </div>
+                </td>
+              </tr>
+
+              <tr class="add-row">
+                <td><input id="newItem" placeholder="Search item…" aria-label="New item"></td>
+                <td><select id="newRule" aria-label="New item buying rule"><option>Target quantity</option><option>Buy below ceiling</option></select></td>
+                <td><input id="newQuantity" placeholder="Required" inputmode="numeric" aria-label="New item quantity"></td>
+                <td><input id="newUnit" placeholder="Unset" inputmode="numeric" aria-label="New item unit ceiling"></td>
+                <td><input id="newSpend" placeholder="Optional" inputmode="numeric" aria-label="New item spend ceiling"></td>
+                <td><select id="newQuality" aria-label="New item quality"><option>Either</option><option>HQ only</option><option>NQ only</option></select></td>
+                <td><span class="evidence-state muted">After add</span></td>
+                <td><button class="add-button" id="addLine">Add</button></td>
+              </tr>
+            </tbody>
+          </table>
         </div>
       </section>
 
-      <section class="pane">
-        <div class="section">
-          <header><span>Craft Evidence</span><span class="pill amber">Advisory</span></header>
-          <div class="content">
-            <div class="split-summary">
-              <div class="mini"><span>Selected Line</span><strong>Grade 8 Dark Matter</strong></div>
-              <div class="mini"><span>CA Unit Cost</span><strong>812 gil</strong></div>
-              <div class="mini"><span>Threshold</span><strong>920 gil</strong></div>
-            </div>
-            <div class="actions">
-              <button>Quote Line</button>
-              <button>Use Craft Cost</button>
-              <button>Set Manually</button>
-            </div>
-          </div>
+      <footer class="bottom-bar">
+        <div class="readiness">
+          <strong id="readyTitle">Ready to finalize</strong>
+          <span id="readyDetail">Current ceilings permit up to 1,710,200 gil across 3 lines.</span>
         </div>
-
-        <div class="section">
-          <header><span>Stock Availability</span><span class="pill green">Cached observations</span></header>
-          <div class="content">
-            <div class="split-summary">
-              <div class="mini"><span>Selected Line</span><strong>Open-ended</strong></div>
-              <div class="mini"><span>Under Threshold</span><strong>196 units</strong></div>
-              <div class="mini"><span>Estimated Spend</span><strong>88,430 gil</strong></div>
-            </div>
-            <table>
-              <thead><tr><th>Line</th><th>Need/Cap</th><th>At Or Below Price</th><th>Availability</th></tr></thead>
-              <tbody>
-                <tr><td>Grade 8 Dark Matter</td><td>Open-ended</td><td>196</td><td><span class="pill green">Depth observed</span></td></tr>
-                <tr><td>Maghemite</td><td>42</td><td>58</td><td><span class="pill green">Enough</span></td></tr>
-                <tr><td>Ra'Kaznar Ingot</td><td>12</td><td>0</td><td><span class="pill red">Needs price</span></td></tr>
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        <div class="section">
-          <header><span>Submit</span><span class="pill red">1 line incomplete</span></header>
-          <div class="content">
-            <div class="actions">
-              <button>Check Stock</button>
-              <button>Refresh Stock</button>
-              <button class="primary" disabled>Sync Route</button>
-              <button>Save Draft</button>
-            </div>
-          </div>
-        </div>
-      </section>
+        <div class="budget">Character gil: <strong>560,530,934</strong></div>
+        <button class="primary" id="finalizePlan">Finalize Plan</button>
+      </footer>
     </section>
 
-    <footer class="statusbar">
-      <span>Build active - Appraise ready - Prepare pending - Run pending - Review pending</span>
-      <span>Stock check reused cached Universalis observations; refresh bypasses cache.</span>
-    </footer>
+    <div class="drawer-backdrop" id="drawerBackdrop"></div>
+    <aside class="drawer" id="compositionDrawer" aria-label="Saved compositions">
+      <div class="drawer-header">
+        <strong>Compositions</strong>
+        <button class="quiet" id="closeCompositions">Close</button>
+      </div>
+      <div class="drawer-list">
+        <div class="composition-row">
+          <div><div class="composition-name">Crystal restock</div><div class="composition-meta">6 lines · Recommended worlds · updated yesterday</div></div>
+          <div class="composition-actions"><button>Merge</button><button>Load</button></div>
+        </div>
+        <div class="composition-row">
+          <div><div class="composition-name">Workshop consumables</div><div class="composition-meta">11 lines · North America · updated Jul 12</div></div>
+          <div class="composition-actions"><button>Merge</button><button>Load</button></div>
+        </div>
+      </div>
+      <div class="save-composition">
+        <label for="compositionName">Save the current buy list</label>
+        <div class="save-row"><input id="compositionName" placeholder="Composition name"><button>Save new</button></div>
+      </div>
+    </aside>
+
+    <div class="toast" id="toast" role="status"></div>
   </main>
+
+  <script>
+    const drawer = document.getElementById('compositionDrawer');
+    const backdrop = document.getElementById('drawerBackdrop');
+    const toast = document.getElementById('toast');
+    let addedLineSequence = 0;
+
+    function setDrawer(open) {
+      drawer.classList.toggle('open', open);
+      backdrop.classList.toggle('open', open);
+    }
+
+    function showToast(message) {
+      toast.textContent = message;
+      toast.classList.add('open');
+      window.clearTimeout(showToast.timeout);
+      showToast.timeout = window.setTimeout(() => toast.classList.remove('open'), 1800);
+    }
+
+    function updateLineCount() {
+      const rows = [...document.querySelectorAll('#lineRows > .data-row')];
+      const count = rows.length;
+      const targetUnits = rows.reduce((sum, row) => {
+        const rule = row.querySelector('td:nth-child(2) select')?.value;
+        const quantity = Number(row.querySelector('td:nth-child(3) input')?.value.replace(/,/g, ''));
+        return rule === 'Target quantity' && Number.isFinite(quantity) ? sum + quantity : sum;
+      }, 0);
+      const spendCeiling = rows.reduce((sum, row) => {
+        const spend = Number(row.querySelector('td:nth-child(5) input')?.value.replace(/,/g, ''));
+        return Number.isFinite(spend) ? sum + spend : sum;
+      }, 0);
+      document.getElementById('lineCount').textContent = count;
+      document.getElementById('scopeLines').textContent = `${count} ${count === 1 ? 'line' : 'lines'}`;
+      document.getElementById('scopeUnits').textContent = `${targetUnits.toLocaleString()} target units`;
+      document.getElementById('readyTitle').textContent = count ? 'Ready to finalize' : 'Add at least one item';
+      document.getElementById('readyDetail').textContent = count
+        ? `Current ceilings permit up to ${spendCeiling.toLocaleString()} gil across ${count} ${count === 1 ? 'line' : 'lines'}.`
+        : 'The Workbench is empty.';
+      document.getElementById('finalizePlan').disabled = count === 0;
+    }
+
+    function escapeHtml(value) {
+      const element = document.createElement('span');
+      element.textContent = value;
+      return element.innerHTML;
+    }
+
+    document.getElementById('openCompositions').addEventListener('click', () => setDrawer(true));
+    document.getElementById('closeCompositions').addEventListener('click', () => setDrawer(false));
+    backdrop.addEventListener('click', () => setDrawer(false));
+
+    document.addEventListener('click', event => {
+      const details = event.target.closest('.details-button');
+      if (details) {
+        const row = document.getElementById(details.dataset.details);
+        const open = row.classList.toggle('open');
+        details.textContent = open ? 'Hide' : 'Details';
+      }
+
+      const remove = event.target.closest('.remove-line');
+      if (remove) {
+        const row = remove.closest('.data-row');
+        const detail = row.nextElementSibling?.classList.contains('detail-row') ? row.nextElementSibling : null;
+        const name = row.dataset.item;
+        detail?.remove();
+        row.remove();
+        updateLineCount();
+        showToast(`${name} removed`);
+      }
+    });
+
+    document.getElementById('addLine').addEventListener('click', () => {
+      const item = document.getElementById('newItem');
+      if (!item.value.trim()) {
+        item.focus();
+        showToast('Choose an item first');
+        return;
+      }
+
+      const name = item.value.trim();
+      const safeName = escapeHtml(name);
+      const rule = document.getElementById('newRule').value;
+      const quantity = escapeHtml(document.getElementById('newQuantity').value.trim());
+      const unit = escapeHtml(document.getElementById('newUnit').value.trim());
+      const spend = escapeHtml(document.getElementById('newSpend').value.trim());
+      const quality = document.getElementById('newQuality').value;
+      const quantityCell = rule === 'Target quantity'
+        ? `<input value="${quantity}" inputmode="numeric">`
+        : '<span class="quantity-not-applicable">—</span>';
+      const detailId = `detail-added-${++addedLineSequence}`;
+      const addRow = document.querySelector('.add-row');
+      const dataRow = document.createElement('tr');
+      const detailRow = document.createElement('tr');
+
+      dataRow.className = 'data-row';
+      dataRow.dataset.item = name;
+      dataRow.innerHTML = `
+        <td><div class="item-editor"><input value="${safeName}"><button class="details-button" data-details="${detailId}">Details</button></div></td>
+        <td><select><option${rule === 'Target quantity' ? ' selected' : ''}>Target quantity</option><option${rule === 'Buy below ceiling' ? ' selected' : ''}>Buy below ceiling</option></select></td>
+        <td>${quantityCell}</td>
+        <td><input value="${unit}" inputmode="numeric"></td>
+        <td><input value="${spend}" inputmode="numeric"></td>
+        <td><select><option${quality === 'Either' ? ' selected' : ''}>Either</option><option${quality === 'HQ only' ? ' selected' : ''}>HQ only</option><option${quality === 'NQ only' ? ' selected' : ''}>NQ only</option></select></td>
+        <td><span class="evidence-state muted">Not priced</span></td>
+        <td><button class="quiet danger remove-line">Remove</button></td>`;
+
+      detailRow.className = 'detail-row';
+      detailRow.id = detailId;
+      detailRow.innerHTML = `<td colspan="8"><div class="detail-grid">
+        <div class="detail-block"><span>Selected line</span><strong>${safeName}</strong></div>
+        <div class="detail-block"><span>Pricing evidence</span><strong>None yet</strong></div>
+        <div class="detail-block"><span>Route state</span><strong>Not finalized</strong></div>
+        <button>Request quote</button>
+      </div></td>`;
+
+      addRow.before(dataRow, detailRow);
+      updateLineCount();
+      showToast(`${name} added to the buy list`);
+      item.value = '';
+      document.getElementById('newQuantity').value = '';
+      document.getElementById('newUnit').value = '';
+      document.getElementById('newSpend').value = '';
+    });
+
+    document.getElementById('lineRows').addEventListener('input', updateLineCount);
+    document.getElementById('lineRows').addEventListener('change', updateLineCount);
+    document.getElementById('newRule').addEventListener('change', event => {
+      const targetQuantity = event.target.value === 'Target quantity';
+      const quantity = document.getElementById('newQuantity');
+      quantity.disabled = !targetQuantity;
+      quantity.placeholder = targetQuantity ? 'Required' : '—';
+      if (!targetQuantity)
+        quantity.value = '';
+    });
+
+    document.getElementById('finalizePlan').addEventListener('click', () => showToast('Plan finalized and ready for execution'));
+  </script>
 </body>
 </html>

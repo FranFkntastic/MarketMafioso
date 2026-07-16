@@ -20,6 +20,11 @@ public sealed class MarketAcquisitionRequestBuilderController
     private bool syncRequested;
     private DateTimeOffset syncDueAtUtc = DateTimeOffset.MaxValue;
     private DateTimeOffset nextRemotePollAtUtc = DateTimeOffset.UtcNow;
+    private Task refreshTask = Task.CompletedTask;
+    private MarketAcquisitionRequestDocument? cachedIntentHashDocument;
+    private string? cachedIntentHash;
+    private MarketAcquisitionRequestDocument? cachedValidationDocument;
+    private MarketAcquisitionRequestValidationResult? cachedValidation;
 
     public MarketAcquisitionRequestBuilderController(
         Configuration config,
@@ -64,7 +69,33 @@ public sealed class MarketAcquisitionRequestBuilderController
 
     public bool IsRefreshing { get; private set; }
 
-    public string CurrentIntentHash => MarketAcquisitionRequestDocumentHasher.ComputeIntentHash(Document);
+    public string CurrentIntentHash
+    {
+        get
+        {
+            if (!ReferenceEquals(cachedIntentHashDocument, Document))
+            {
+                cachedIntentHashDocument = Document;
+                cachedIntentHash = MarketAcquisitionRequestDocumentHasher.ComputeIntentHash(Document);
+            }
+
+            return cachedIntentHash!;
+        }
+    }
+
+    public MarketAcquisitionRequestValidationResult DraftValidation
+    {
+        get
+        {
+            if (!ReferenceEquals(cachedValidationDocument, Document))
+            {
+                cachedValidationDocument = Document;
+                cachedValidation = MarketAcquisitionRequestDocumentValidator.ValidateDraft(Document);
+            }
+
+            return cachedValidation!;
+        }
+    }
 
     public void SetStatus(string status) => Status = status;
 
@@ -147,9 +178,11 @@ public sealed class MarketAcquisitionRequestBuilderController
             now >= nextRemotePollAtUtc)
         {
             nextRemotePollAtUtc = now.Add(RemotePollInterval);
-            _ = RefreshAsync();
+            refreshTask = RefreshAsync();
         }
     }
+
+    public Task WaitForRefreshAsync() => refreshTask;
 
     public void UpdateRouteScope(RequestRouteScope scope)
     {
@@ -219,16 +252,38 @@ public sealed class MarketAcquisitionRequestBuilderController
         ArgumentNullException.ThrowIfNull(line);
         if (SelectedLineIndex >= 0 && SelectedLineIndex < Document.Lines.Count)
         {
-            CommitLocalEdit(RequestDocumentMutation.ReplaceLine(Document, SelectedLineIndex, line), "Local request updated.");
+            CommitLocalEdit(RequestDocumentMutation.ReplaceLine(Document, SelectedLineIndex, line), "Work-order draft updated.");
             return;
         }
 
         Document = RequestDocumentMutation.AddLine(Document, line);
         SelectedLineIndex = -1;
-        FinishLocalEdit("Local request updated.");
+        FinishLocalEdit("Work-order draft updated.");
     }
 
-    public int AddLines(IEnumerable<MarketAcquisitionRequestLineDocument> lines)
+    public int AddLines(IEnumerable<MarketAcquisitionRequestLineDocument> lines) =>
+        AddLines(lines, "Outfitter");
+
+    public int MergeComposition(MarketAcquisitionWorkbenchComposition composition)
+    {
+        ArgumentNullException.ThrowIfNull(composition);
+        return AddLines(composition.Lines, composition.Name);
+    }
+
+    public void LoadComposition(
+        MarketAcquisitionWorkbenchComposition composition,
+        string characterName,
+        string world)
+    {
+        ArgumentNullException.ThrowIfNull(composition);
+        Document = composition.CreateDocument(characterName, world);
+        ResetSelection();
+        Status = $"Loaded {composition.Name} as a new Workbench draft.";
+        SaveDocument();
+        RequestAutomaticSync();
+    }
+
+    private int AddLines(IEnumerable<MarketAcquisitionRequestLineDocument> lines, string sourceLabel)
     {
         ArgumentNullException.ThrowIfNull(lines);
         var added = 0;
@@ -241,11 +296,11 @@ public sealed class MarketAcquisitionRequestBuilderController
         }
         if (added == 0)
         {
-            Status = "Outfitter items are already present in the local request.";
+            Status = $"All {sourceLabel} items are already present in the Workbench.";
             return 0;
         }
         SelectedLineIndex = -1;
-        FinishLocalEdit($"Added {added:N0} Outfitter line{(added == 1 ? string.Empty : "s")}.");
+        FinishLocalEdit($"Added {added:N0} {sourceLabel} line{(added == 1 ? string.Empty : "s")}.");
         return added;
     }
 
@@ -260,10 +315,38 @@ public sealed class MarketAcquisitionRequestBuilderController
         return true;
     }
 
+    public int RemoveLinesByItemId(IEnumerable<uint> itemIds)
+    {
+        ArgumentNullException.ThrowIfNull(itemIds);
+        var removedIds = itemIds.Where(itemId => itemId != 0).ToHashSet();
+        if (removedIds.Count == 0)
+            return 0;
+
+        var remaining = Document.Lines.Where(line => !removedIds.Contains(line.ItemId)).ToList();
+        var removed = Document.Lines.Count - remaining.Count;
+        if (removed == 0)
+        {
+            Status = "The selected inbox items are not in the Workbench.";
+            return 0;
+        }
+
+        Document = Document with { Lines = remaining };
+        SelectedLineIndex = -1;
+        FinishLocalEdit($"Returned {removed:N0} item{(removed == 1 ? string.Empty : "s")} to the inbox selection.");
+        return removed;
+    }
+
     public async Task SyncAsync(string characterName, string world)
     {
         if (IsSyncing || IsRefreshing)
             return;
+
+        if (!DraftValidation.IsValid)
+        {
+            syncRequested = false;
+            syncDueAtUtc = DateTimeOffset.MaxValue;
+            return;
+        }
 
         IsSyncing = true;
         try
@@ -316,26 +399,29 @@ public sealed class MarketAcquisitionRequestBuilderController
             var outcome = await refreshRequest(operationDocument).ConfigureAwait(false);
             if (ReferenceEquals(Document, operationDocument))
             {
-                Document = outcome.Document;
                 Status = outcome.StatusMessage;
-                documentAdopted(Document, outcome.RemoteRequest);
+                if (!HasSameRemoteState(operationDocument, outcome.Document))
+                {
+                    Document = PreserveLocalIdentity(operationDocument, outcome.Document);
+                    ResetSelection();
+                    documentAdopted(Document, outcome.RemoteRequest);
+                    SaveDocument();
+                }
             }
             else
             {
                 Status = "A newer local edit superseded the server refresh and is queued for synchronization.";
                 RequestAutomaticSync();
             }
-
-            SaveDocument();
         }
         catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.NotFound)
         {
-            Status = "The server copy is missing; republishing the current local request automatically.";
+            Status = "The server copy is missing; republishing the current work-order draft automatically.";
             RequestAutomaticSync(TimeSpan.Zero);
         }
         catch (Exception ex)
         {
-            Status = $"Server refresh failed; the local request remains available. {ex.Message}";
+            Status = $"Server refresh failed; the local draft remains available. {ex.Message}";
             RequestAutomaticSync(AutomaticRetryDelay);
         }
         finally
@@ -348,7 +434,7 @@ public sealed class MarketAcquisitionRequestBuilderController
     {
         Document = MarketAcquisitionRequestDocument.CreateDefault(characterName, world);
         ResetSelection();
-        Status = "Local request cleared.";
+        Status = "Work-order draft cleared.";
         SaveDocument();
     }
 
@@ -368,8 +454,12 @@ public sealed class MarketAcquisitionRequestBuilderController
 
     private void RequestAutomaticSync(TimeSpan? delay = null)
     {
-        if (Document.Lines.Count == 0)
+        if (!DraftValidation.IsValid)
+        {
+            syncRequested = false;
+            syncDueAtUtc = DateTimeOffset.MaxValue;
             return;
+        }
 
         syncRequested = true;
         syncDueAtUtc = DateTimeOffset.UtcNow.Add(delay ?? AutomaticSyncDelay);
@@ -400,6 +490,34 @@ public sealed class MarketAcquisitionRequestBuilderController
     }
 
     private void SaveDocument() => persistDocument(Document);
+
+    private static bool HasSameRemoteState(
+        MarketAcquisitionRequestDocument current,
+        MarketAcquisitionRequestDocument refreshed)
+    {
+        if (!string.Equals(current.RemoteRequestId, refreshed.RemoteRequestId, StringComparison.Ordinal) ||
+            current.RemoteRevision != refreshed.RemoteRevision)
+        {
+            return false;
+        }
+
+        var currentHash = string.IsNullOrWhiteSpace(current.RemoteHash)
+            ? MarketAcquisitionRequestDocumentHasher.ComputeIntentHash(current)
+            : current.RemoteHash;
+        var refreshedHash = string.IsNullOrWhiteSpace(refreshed.RemoteHash)
+            ? MarketAcquisitionRequestDocumentHasher.ComputeIntentHash(refreshed)
+            : refreshed.RemoteHash;
+        return string.Equals(currentHash, refreshedHash, StringComparison.Ordinal);
+    }
+
+    private static MarketAcquisitionRequestDocument PreserveLocalIdentity(
+        MarketAcquisitionRequestDocument current,
+        MarketAcquisitionRequestDocument refreshed) =>
+        refreshed with
+        {
+            LocalRequestId = current.LocalRequestId,
+            LocalRevision = current.LocalRevision,
+        };
 
     private static MarketAcquisitionRequestDocument MergeSyncMetadata(
         MarketAcquisitionRequestDocument current,

@@ -17,6 +17,7 @@ public sealed class MarketAcquisitionRouteProgressReporterTests
     [Theory]
     [InlineData("AcceptedInPlugin")]
     [InlineData("Running")]
+    [InlineData("RecoveryRequired")]
     public void CanReportForRequestStatus_AllowsServerLifecycleSourceStates(string requestStatus)
     {
         Assert.True(MarketMafioso.MarketAcquisition.MarketAcquisitionRouteProgressReporter.CanReportForRequestStatus(requestStatus));

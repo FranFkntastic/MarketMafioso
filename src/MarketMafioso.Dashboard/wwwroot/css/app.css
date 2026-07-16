@@ -47,7 +47,7 @@ body,
 .brand {
     font-size: 16px;
     font-weight: 700;
-    margin-right: 6px;
+    margin-right: 10px;
     letter-spacing: 0;
 }
 
@@ -122,7 +122,7 @@ body,
 .acquisition-grid {
     align-items: start;
     gap: 14px;
-    grid-template-columns: minmax(400px, 470px) minmax(620px, 1fr);
+    grid-template-columns: minmax(380px, 430px) minmax(660px, 1fr);
     min-height: calc(100vh - 138px);
 }
 
@@ -313,6 +313,18 @@ body,
 
 .builder-panel .mud-input > input.mud-input-root {
     line-height: 42px;
+}
+
+.durability-value {
+    align-items: center;
+    background: var(--mmf-field-bg);
+    border: 1px solid var(--mmf-border);
+    border-radius: 4px;
+    color: var(--mmf-text-muted);
+    display: flex;
+    font-size: 12px;
+    min-height: 42px;
+    padding: 0 12px;
 }
 
 .item-section .mud-input-control {
@@ -532,6 +544,16 @@ body,
     padding: 0 12px;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+.composer-actions > .mud-button:last-child {
+    grid-column: 1 / -1;
+    width: 100%;
+}
+
+.merge-target-pill {
+    color: var(--mmf-accent);
+    max-width: 220px;
 }
 
 .status-dot {

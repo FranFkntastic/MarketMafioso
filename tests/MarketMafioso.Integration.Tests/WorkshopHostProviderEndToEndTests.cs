@@ -133,28 +133,10 @@ public sealed class WorkshopHostProviderEndToEndTests
 
     private static string ResolveSharedFixture(string fileName)
     {
-        var root = AppContext.BaseDirectory;
-        for (var i = 0; i < 12; i++)
-        {
-            var candidate = Path.Combine(
-                root,
-                "FFXIV Craft Architect C# Edition",
-                "docs",
-                "superpowers",
-                "fixtures",
-                "workshop-host",
-                fileName);
-            if (File.Exists(candidate))
-                return candidate;
-
-            var parent = Directory.GetParent(root);
-            if (parent is null)
-                break;
-
-            root = parent.FullName;
-        }
-
-        throw new FileNotFoundException($"Could not find shared fixture '{fileName}'.");
+        var candidate = Path.Combine(AppContext.BaseDirectory, "Fixtures", "WorkshopHost", fileName);
+        return File.Exists(candidate)
+            ? candidate
+            : throw new FileNotFoundException($"Could not find packaged contract fixture '{fileName}'.", candidate);
     }
 
     private sealed class StaticWorkshopHostCraftQuoteService(

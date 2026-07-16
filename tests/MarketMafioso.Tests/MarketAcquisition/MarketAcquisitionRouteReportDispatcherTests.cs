@@ -66,28 +66,16 @@ public sealed class MarketAcquisitionRouteReportDispatcherTests
     }
 
     [Fact]
-    public async Task ResetSession_CancelsOldReportsAndKeepsQueueUsable()
+    public async Task ResetSession_DoesNotDiscardAnInFlightDurableReport()
     {
         var firstStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var firstCancelled = false;
-        var completed = 0;
+        var releaseLine = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var reporter = new ScriptedReporter
         {
             OnLineProgress = async (_, token) =>
             {
-                if (completed > 0)
-                    return;
-
                 firstStarted.SetResult();
-                try
-                {
-                    await Task.Delay(Timeout.InfiniteTimeSpan, token);
-                }
-                catch (OperationCanceledException) when (token.IsCancellationRequested)
-                {
-                    firstCancelled = true;
-                    throw;
-                }
+                await releaseLine.Task.WaitAsync(token);
             },
         };
         using var dispatcher = CreateDispatcher(reporter, out var claim);
@@ -96,10 +84,9 @@ public sealed class MarketAcquisitionRouteReportDispatcherTests
         await firstStarted.Task;
 
         dispatcher.ResetSession();
+        releaseLine.SetResult();
         await dispatcher.DrainAsync();
-        Assert.True(firstCancelled);
 
-        completed = 1;
         dispatcher.BeginSession(claim);
         dispatcher.EnqueueLineProgress(LineReport());
         await dispatcher.DrainAsync();
@@ -133,10 +120,58 @@ public sealed class MarketAcquisitionRouteReportDispatcherTests
         Assert.Empty(statuses);
     }
 
+    [Fact]
+    public async Task FailedReport_IsReplayedFromFileOutboxAfterDispatcherRestart()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"mmf-outbox-{Guid.NewGuid():N}");
+        var path = Path.Combine(directory, "outbox.json");
+        try
+        {
+            var failingReporter = new ScriptedReporter
+            {
+                OnLineProgress = (_, _) => Task.FromException(new IOException("offline")),
+            };
+            var firstOutbox = new FileMarketAcquisitionReportOutbox(path);
+            using (var dispatcher = CreateDispatcher(failingReporter, out var claim, outbox: firstOutbox))
+            {
+                dispatcher.BeginSession(claim);
+                dispatcher.EnqueueLineProgress(LineReport());
+                await dispatcher.DrainAsync();
+            }
+
+            Assert.Single(new FileMarketAcquisitionReportOutbox(path).Snapshot());
+
+            var replayed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var recoveredReporter = new ScriptedReporter
+            {
+                OnLineProgress = (_, _) =>
+                {
+                    replayed.TrySetResult();
+                    return Task.CompletedTask;
+                },
+            };
+            var recoveredOutbox = new FileMarketAcquisitionReportOutbox(path);
+            using (var dispatcher = CreateDispatcher(recoveredReporter, out var claim, outbox: recoveredOutbox))
+            {
+                dispatcher.BeginSession(claim);
+                await replayed.Task.WaitAsync(TimeSpan.FromSeconds(2));
+                await dispatcher.DrainAsync();
+            }
+
+            Assert.Empty(new FileMarketAcquisitionReportOutbox(path).Snapshot());
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+    }
+
     private static MarketAcquisitionRouteReportDispatcher CreateDispatcher(
         IMarketAcquisitionRouteReporter reporter,
         out MarketAcquisitionClaimView claim,
-        Action<string>? setStatus = null)
+        Action<string>? setStatus = null,
+        IMarketAcquisitionReportOutbox? outbox = null)
     {
         claim = MarketAcquisitionRouteEngineTestData.AcceptedClaim();
         MarketAcquisitionClaimView? currentClaim = claim;
@@ -150,7 +185,7 @@ public sealed class MarketAcquisitionRouteReportDispatcherTests
             setStatus ?? (_ => { }),
             () => string.Empty,
             () => { });
-        return new MarketAcquisitionRouteReportDispatcher(reporter, lifecycle, new ImmediateRouteCallbackDispatcher());
+        return new MarketAcquisitionRouteReportDispatcher(reporter, lifecycle, new ImmediateRouteCallbackDispatcher(), outbox);
     }
 
     private static MarketAcquisitionRouteProgressReport RouteReport() =>

@@ -20,7 +20,7 @@
                 <MudIconButton Icon="@Icons.Material.Filled.Close" OnClick="CloseAsync" />
             </MudStack>
 
-            <MudChip T="string" Size="Size.Small" Color="@StatusColor(Request.Status)">@Request.Status</MudChip>
+            <MudChip T="string" Size="Size.Small" Color="@StatusColor(Request.Status)">@MarketAcquisitionRequestDisplay.StatusLabel(Request.Status)</MudChip>
 
             <MudSimpleTable Dense="true" Class="details-table request-summary-table">
                 <tbody>

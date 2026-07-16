@@ -200,7 +200,7 @@ internal sealed class SquireRouteDiagnosticsPanel(
         bool selected,
         string? value,
         Action invoke) =>
-        reviewRegistry.Register(id, label, kind, ImGui.GetItemRectMin(), ImGui.GetItemRectMax(), enabled, selected, value, invoke);
+        reviewRegistry.RegisterLastItem(id, label, kind, enabled, selected, value, invoke);
 
     public void Dispose()
     {

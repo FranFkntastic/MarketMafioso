@@ -341,14 +341,5 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
         string.IsNullOrWhiteSpace(dataCenter) ? "-" : dataCenter;
 
     private void RegisterLastControl(string id, string label, bool enabled, Action invoke) =>
-        reviewRegistry.Register(
-            id,
-            label,
-            AgentBridgeUiControlKind.Button,
-            ImGui.GetItemRectMin(),
-            ImGui.GetItemRectMax(),
-            enabled,
-            false,
-            null,
-            invoke);
+        reviewRegistry.RegisterLastButton(id, label, enabled, invoke);
 }

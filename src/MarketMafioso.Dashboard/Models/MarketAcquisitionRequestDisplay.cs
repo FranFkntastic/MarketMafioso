@@ -2,6 +2,14 @@ namespace MarketMafioso.Dashboard.Models;
 
 public static class MarketAcquisitionRequestDisplay
 {
+    public static string StatusLabel(string status) => status switch
+    {
+        "PendingPickup" => "Inbox",
+        "AcceptedInPlugin" => "Working set",
+        "Complete" => "Completed",
+        _ => status,
+    };
+
     public static IReadOnlyList<MarketAcquisitionBatchLineView> LinesFor(MarketAcquisitionRequestView request)
     {
         if (request.Lines.Count > 0)

@@ -45,7 +45,10 @@ public static class InventoryPayloadMapper
                 BagName = container.ContainerName,
                 Items = MapGroupedItems(container.Slots, includeItemNames, resolveItemName),
             })
-            .Where(bag => bag.Items.Count > 0)
+            // RetainerCrystals is a fixed-capacity inventory. Preserve an empty loaded
+            // container so callers can distinguish "scanned and empty" from legacy
+            // cache entries that never included crystal capacity.
+            .Where(bag => bag.Items.Count > 0 || bag.BagName == "RetainerCrystals")
             .ToList();
 
         var retainerItems = MapGroupedItems(retainerPageSlots, includeItemNames, resolveItemName);

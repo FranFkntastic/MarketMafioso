@@ -57,14 +57,12 @@ internal static class MarketAcquisitionRequestQueries
             WHERE requests.id = $id
               AND requests.status = $status
               AND lower(requests.target_character_name) = lower($targetCharacterName)
-              AND lower(requests.target_world) = lower($targetWorld)
-              AND requests.expires_at_utc > $now;
+              AND lower(requests.target_world) = lower($targetWorld);
             """;
         command.Parameters.AddWithValue("$id", id);
         command.Parameters.AddWithValue("$status", MarketAcquisitionStatuses.PendingPickup);
         command.Parameters.AddWithValue("$targetCharacterName", characterName.Trim());
         command.Parameters.AddWithValue("$targetWorld", world.Trim());
-        command.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToString("O"));
 
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))

@@ -20,6 +20,8 @@ public class Configuration : IPluginConfiguration
     public string PluginInstanceId { get; set; } = Guid.NewGuid().ToString("N");
     public PersistedMarketAcquisitionClaim? ActiveMarketAcquisitionClaim { get; set; }
     public PersistedMarketAcquisitionRequestDocument? ActiveMarketAcquisitionRequestDocument { get; set; }
+    public List<PersistedMarketAcquisitionWorkbenchComposition> MarketAcquisitionWorkbenchCompositions { get; set; } = [];
+    public string? SelectedMarketAcquisitionWorkbenchCompositionId { get; set; }
     public bool EnableMarketAcquisition { get; set; } = false;
     public DateTime? MarketAcquisitionUnlockedAtUtc { get; set; }
     public bool EnableOpportunisticWorldChecks { get; set; } = true;
@@ -36,7 +38,7 @@ public class Configuration : IPluginConfiguration
     public bool EnableCraftArchitectManualFallback { get; set; } = false;
     public string CraftArchitectQuoteFilePath { get; set; } = string.Empty;
     public string SettingsSelectedPageId { get; set; } = "general.server";
-    public List<string> SettingsExpandedFolderPaths { get; set; } = ["General", "Inventory Reporter", "Squire", "Market Acquisition", "Advanced"];
+    public List<string> SettingsExpandedFolderPaths { get; set; } = ["General", "Inventory Reporter", "Squire", "Advanced"];
 
     public bool IncludeArmoury { get; set; } = false;
     public bool IncludeCrystals { get; set; } = true;
@@ -82,9 +84,12 @@ public sealed class SquireConfiguration
 {
     public string SelectedWorkspace { get; set; } = "Outfitter";
     public string OutfitterSelectedTargetKey { get; set; } = string.Empty;
+    public string OutfitterTargetView { get; set; } = "Jobs";
     public string OutfitterSearch { get; set; } = string.Empty;
     public string OutfitterStrategy { get; set; } = "HighestItemLevel";
     public int OutfitterTargetLevel { get; set; }
+    public Dictionary<string, int> OutfitterTargetLevels { get; set; } = new();
+    public Dictionary<uint, string> OutfitterSelectedGearsetByJob { get; set; } = new();
     public bool ShowProtected { get; set; }
     public bool ShowNonEquipment { get; set; }
     public string Search { get; set; } = string.Empty;
@@ -308,6 +313,20 @@ public sealed class PersistedMarketAcquisitionRequestLineDocument
     public string HqPolicy { get; set; } = string.Empty;
     public uint MaxUnitPrice { get; set; }
     public uint GilCap { get; set; }
+}
+
+[Serializable]
+public sealed class PersistedMarketAcquisitionWorkbenchComposition
+{
+    public string Id { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public string Region { get; set; } = string.Empty;
+    public string WorldMode { get; set; } = string.Empty;
+    public string SweepScope { get; set; } = string.Empty;
+    public List<string> SweepDataCenters { get; set; } = [];
+    public List<PersistedMarketAcquisitionRequestLineDocument> Lines { get; set; } = [];
+    public DateTime CreatedAtUtc { get; set; }
+    public DateTime UpdatedAtUtc { get; set; }
 }
 
 [Serializable]

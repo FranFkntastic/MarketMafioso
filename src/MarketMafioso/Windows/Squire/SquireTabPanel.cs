@@ -7,6 +7,7 @@ using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 using Dalamud.Bindings.ImGui;
+using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
 using MarketMafioso.Squire;
 using MarketMafioso.Squire.Outfitter;
@@ -77,7 +78,9 @@ internal sealed class SquireTabPanel : IDisposable
         UiStateCaptureService uiStateCapture,
         IGameInventory gameInventory,
         IDataManager dataManager,
-        IMarketAcquisitionListingSource marketListingSource)
+        IDalamudPluginInterface pluginInterface,
+        IMarketAcquisitionListingSource marketListingSource,
+        Func<bool> isMarketAcquisitionUnlocked)
     {
         this.config = config;
         this.snapshotSource = snapshotSource;
@@ -94,6 +97,8 @@ internal sealed class SquireTabPanel : IDisposable
             config,
             new OutfitterCandidateCatalog(dataManager),
             new OutfitterMarketQuoteService(marketListingSource),
+            new AutoRetainerOutfitterMetadataSource(pluginInterface, Plugin.Log),
+            isMarketAcquisitionUnlocked,
             reviewRegistry);
         selectedWorkspace = string.Equals(config.Squire.SelectedWorkspace, "Cleanup", StringComparison.OrdinalIgnoreCase)
             ? "Cleanup"
@@ -161,7 +166,7 @@ internal sealed class SquireTabPanel : IDisposable
     private void DrawOutfitter()
     {
         ImGui.TextColored(MarketMafiosoUiTheme.Header, "Outfitter — loadout planner");
-        ImGui.TextWrapped("Choose a target, compare its current set with the best accessible loadout, then hand market purchases to Market Acquisition.");
+        ImGui.TextWrapped("Choose a target, compare its current set with the best accessible loadout, then stage any purchases for execution.");
         if (ImGui.Button("Refresh equipment##Outfitter"))
             Refresh();
         RegisterLastControl(
@@ -172,8 +177,6 @@ internal sealed class SquireTabPanel : IDisposable
             false,
             null,
             Refresh);
-        ImGui.SameLine();
-        ImGui.TextColored(MarketMafiosoUiTheme.Muted, status);
         ImGui.Separator();
         if (analysis is null)
             return;
@@ -783,7 +786,7 @@ internal sealed class SquireTabPanel : IDisposable
         if (selections.Values.Contains(SquireDisposition.ExpertDelivery))
             ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Expert deliveries travel to your Grand Company through Lifestream, then open the delivery desk automatically.");
         if (selections.Values.Contains(SquireDisposition.VendorSell))
-            ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Vendor sales travel to your Grand Company, approach a sheet-classified general merchant, and sell through the normal Shop item menu.");
+            ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Vendor sales travel to the local market board, approach a sheet-classified gil vendor, and sell through the normal Shop item menu.");
         if (selections.Values.Contains(SquireDisposition.Discard))
             ImGui.TextColored(MarketMafiosoUiTheme.Warning, "Discard is irreversible. Squire confirms the exact item and visible discard prompt immediately before each removal.");
         if (running)
@@ -1011,5 +1014,5 @@ internal sealed class SquireTabPanel : IDisposable
         bool selected,
         string? value,
         Action invoke) =>
-        reviewRegistry.Register(id, label, kind, ImGui.GetItemRectMin(), ImGui.GetItemRectMax(), enabled, selected, value, invoke);
+        reviewRegistry.RegisterLastItem(id, label, kind, enabled, selected, value, invoke);
 }

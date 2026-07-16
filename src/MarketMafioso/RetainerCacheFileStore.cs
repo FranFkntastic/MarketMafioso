@@ -1,7 +1,7 @@
 using System.Collections.Generic;
 using System.IO;
-using System.Text;
 using System.Text.Json;
+using Franthropy.Dalamud.Persistence;
 
 namespace MarketMafioso;
 
@@ -26,20 +26,12 @@ public sealed class RetainerCacheFileStore
         if (!File.Exists(path))
             return new Dictionary<ulong, CachedRetainer>();
 
-        var json = File.ReadAllText(path, Encoding.UTF8);
-        return JsonSerializer.Deserialize<Dictionary<ulong, CachedRetainer>>(json, JsonOptions)
+        return AtomicJsonFile.Read<Dictionary<ulong, CachedRetainer>>(path, JsonOptions)
             ?? new Dictionary<ulong, CachedRetainer>();
     }
 
     public void Save(IReadOnlyDictionary<ulong, CachedRetainer> cache)
     {
-        var directory = Path.GetDirectoryName(path);
-        if (!string.IsNullOrWhiteSpace(directory))
-            Directory.CreateDirectory(directory);
-
-        var tempPath = path + ".tmp";
-        var json = JsonSerializer.Serialize(cache, JsonOptions);
-        File.WriteAllText(tempPath, json, Encoding.UTF8);
-        File.Move(tempPath, path, overwrite: true);
+        AtomicJsonFile.Write(path, cache, JsonOptions);
     }
 }

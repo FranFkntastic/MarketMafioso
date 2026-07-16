@@ -34,6 +34,7 @@ internal sealed class DalamudExpertDeliveryPreparation
     private readonly IDataManager dataManager;
     private readonly LifestreamIpc lifestream;
     private readonly VNavmeshIpc vnavmesh;
+    private readonly string showAllItemsText;
     private bool ownsSupplyUi;
     private bool ownsNavigation;
     public string Status { get; private set; } = "Expert Delivery preparation is idle.";
@@ -57,6 +58,7 @@ internal sealed class DalamudExpertDeliveryPreparation
         this.gameGui = gameGui;
         this.framework = framework;
         this.dataManager = dataManager;
+        showAllItemsText = dataManager.GetExcelSheet<Lumina.Excel.Sheets.Addon>().GetRow(4617).Text.ExtractText().Trim();
         lifestream = new LifestreamIpc(pluginInterface, log);
         vnavmesh = new VNavmeshIpc(new DalamudVNavmeshIpcAdapter(pluginInterface, log));
     }
@@ -65,7 +67,7 @@ internal sealed class DalamudExpertDeliveryPreparation
     {
         Status = "Checking for an already-open Expert Delivery list.";
         if (await framework.RunOnTick(IsExpertDeliveryListReady).ConfigureAwait(false))
-            return SquireActionResult.Completed("The Expert Delivery item list is ready.");
+            return await EnsureShowAllItemsAsync(cancellationToken).ConfigureAwait(false);
 
         if (await framework.RunOnTick(IsSupplyListReady).ConfigureAwait(false))
             return await SelectExpertDeliveryTabAsync(cancellationToken).ConfigureAwait(false);
@@ -180,6 +182,21 @@ internal sealed class DalamudExpertDeliveryPreparation
         return await SelectExpertDeliveryTabAsync(cancellationToken).ConfigureAwait(false);
     }
 
+    public async Task<SquireActionResult> WaitForListReturnAsync(CancellationToken cancellationToken)
+    {
+        Status = "Waiting for the Expert Delivery list to return after confirmation.";
+        var returned = await WaitUntilAsync(IsExpertDeliveryListReady, InteractionTimeout, cancellationToken).ConfigureAwait(false);
+        if (!returned)
+        {
+            Status = "The Expert Delivery list did not return after confirmation.";
+            return SquireActionResult.Fail(
+                "ExpertDeliveryListReturnTimeout",
+                "The confirmed item left its exact slot, but the Expert Delivery list did not return within 30 seconds.");
+        }
+
+        return await EnsureShowAllItemsAsync(cancellationToken).ConfigureAwait(false);
+    }
+
     public unsafe void CloseOwnedUi()
     {
         if (ownsNavigation)
@@ -238,9 +255,45 @@ internal sealed class DalamudExpertDeliveryPreparation
 
         var ready = await WaitUntilAsync(IsExpertDeliveryListReady, InteractionTimeout, cancellationToken).ConfigureAwait(false);
         Status = ready ? "The Expert Delivery list is ready." : "The Expert Delivery list did not become ready.";
+        if (!ready)
+            return SquireActionResult.Fail("ExpertDeliveryListTimeout", "The Expert Delivery item list did not become ready after selecting its tab.");
+        return await EnsureShowAllItemsAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<SquireActionResult> EnsureShowAllItemsAsync(CancellationToken cancellationToken)
+    {
+        Status = "Checking the Expert Delivery item-visibility filter.";
+        var selectedFilter = await framework.RunOnTick(ReadExpertDeliveryFilter).ConfigureAwait(false);
+        if (IsShowAllItemsLabel(selectedFilter))
+        {
+            Status = "The Expert Delivery list is ready with Show All Items selected.";
+            return SquireActionResult.Completed("The Expert Delivery item list is ready with Show All Items selected.");
+        }
+        if (string.IsNullOrWhiteSpace(showAllItemsText))
+            return SquireActionResult.Fail(
+                "ExpertDeliveryShowAllTextUnavailable",
+                "Squire could not resolve the localized Show All Items label and will not guess which Expert Delivery filter is selected.");
+        if (string.IsNullOrWhiteSpace(selectedFilter))
+            return SquireActionResult.Fail(
+                "ExpertDeliveryFilterUnavailable",
+                "Squire could not read the visible Expert Delivery item-filter label. Select Show All Items in the Expert Delivery window and retry.");
+
+        Status = $"Switching the Expert Delivery item-visibility filter from '{selectedFilter}' to Show All Items.";
+        var submitted = await framework.RunOnTick(TrySelectShowAllItems).ConfigureAwait(false);
+        if (!submitted)
+            return SquireActionResult.Fail(
+                "ExpertDeliveryShowAllRejected",
+                "The Expert Delivery window did not accept the Show All Items visibility setting. Select Show All Items manually and retry.");
+
+        var ready = await WaitUntilAsync(IsShowAllExpertDeliveryListReady, InteractionTimeout, cancellationToken).ConfigureAwait(false);
+        Status = ready
+            ? "The Expert Delivery list is ready with Show All Items selected."
+            : "The Expert Delivery list did not settle with Show All Items selected.";
         return ready
-            ? SquireActionResult.Completed("The Expert Delivery item list is ready.")
-            : SquireActionResult.Fail("ExpertDeliveryListTimeout", "The Expert Delivery item list did not become ready after selecting its tab.");
+            ? SquireActionResult.Completed("The Expert Delivery item list is ready with Show All Items selected.")
+            : SquireActionResult.Fail(
+                "ExpertDeliveryShowAllTimeout",
+                "Squire selected Show All Items, but the Expert Delivery list did not reload with that visibility setting. Select Show All Items manually and retry.");
     }
 
     private async Task<bool> WaitUntilAsync(Func<bool> predicate, TimeSpan timeout, CancellationToken cancellationToken)
@@ -341,12 +394,57 @@ internal sealed class DalamudExpertDeliveryPreparation
     private unsafe bool IsExpertDeliveryListReady()
     {
         var addon = gameGui.GetAddonByName<AtkUnitBase>("GrandCompanySupplyList", 1);
-        if (addon == null || !addon->IsReady || !addon->IsVisible)
-            return false;
-        if (addon->UldManager.NodeListCount <= 24)
+        if (addon == null || !addon->IsReady || !addon->IsVisible || addon->UldManager.NodeListCount <= 24)
             return false;
         var listNode = addon->UldManager.SearchNodeById(24);
         return listNode != null && listNode->IsVisible();
     }
+
+    private unsafe string? ReadExpertDeliveryFilter()
+    {
+        // The rendered label is the UI truth. Do not infer the active option from
+        // AddonGrandCompanySupplyList fields; those can be stale while the list reloads.
+        var addon = gameGui.GetAddonByName<AtkUnitBase>("GrandCompanySupplyList", 1);
+        if (addon == null || !addon->IsReady || !addon->IsVisible)
+            return null;
+        var filterNode = addon->UldManager.SearchNodeById(14);
+        if (filterNode == null)
+            return null;
+        var filterComponentNode = filterNode->GetAsAtkComponentNode();
+        if (filterComponentNode == null || filterComponentNode->Component == null ||
+            filterComponentNode->Component->UldManager.NodeListCount <= 1)
+            return null;
+        var labelComponentRoot = filterComponentNode->Component->UldManager.NodeList[1];
+        var labelComponentNode = labelComponentRoot == null ? null : labelComponentRoot->GetAsAtkComponentNode();
+        if (labelComponentNode == null || labelComponentNode->Component == null ||
+            labelComponentNode->Component->UldManager.NodeListCount <= 2)
+            return null;
+        var labelRoot = labelComponentNode->Component->UldManager.NodeList[2];
+        var labelNode = labelRoot == null ? null : labelRoot->GetAsAtkTextNode();
+        return labelNode == null ? null : labelNode->NodeText.ExtractText().Trim();
+    }
+
+    private unsafe bool TrySelectShowAllItems()
+    {
+        var addon = gameGui.GetAddonByName<AtkUnitBase>("GrandCompanySupplyList", 1);
+        if (addon == null || !addon->IsReady || !addon->IsVisible)
+            return false;
+        if (IsShowAllItemsLabel(ReadExpertDeliveryFilter()))
+            return true;
+
+        var values = stackalloc AtkValue[3];
+        values[0] = new() { Type = AtkValueType.Int, Int = 5 };
+        values[1] = new() { Type = AtkValueType.Int, Int = 0 };
+        values[2] = new() { Type = AtkValueType.Int, Int = 0 };
+        return addon->FireCallback(3, values, true);
+    }
+
+    private bool IsShowAllExpertDeliveryListReady() =>
+        IsExpertDeliveryListReady() && IsShowAllItemsLabel(ReadExpertDeliveryFilter());
+
+    private bool IsShowAllItemsLabel(string? observed) =>
+        !string.IsNullOrWhiteSpace(showAllItemsText) &&
+        !string.IsNullOrWhiteSpace(observed) &&
+        Automation.Retainers.RetainerUiAutomationText.IsSelectStringEntryMatch(observed, showAllItemsText);
 
 }

@@ -162,9 +162,9 @@
                                 <MudSelectItem Value="@("HqOnly")">HQ only</MudSelectItem>
                             </MudSelect>
                         </div>
-                        <div class="field-block">
-                            <div class="field-label-row"><span>Pickup expires</span></div>
-                            <MudNumericField T="int" @bind-Value="_expiresInMinutes" Placeholder="Minutes" Variant="Variant.Outlined" Margin="Margin.Dense" FullWidth="true" Min="1" Max="1440" />
+                        <div class="field-block durability-field">
+                            <div class="field-label-row"><span>Inbox lifetime</span></div>
+                            <div class="durability-value">Until completed or archived</div>
                         </div>
                     </div>
                 </section>
@@ -173,7 +173,7 @@
                 {
                     <section class="builder-section local-queue-section">
                         <div class="section-label-row">
-                            <h3>Local Queue</h3>
+                            <h3>Draft Lines</h3>
                             <span>Not staged yet</span>
                         </div>
                         <MudTable Items="_queue" Dense="true" Hover="true" Class="queue-table local-queue-table">
@@ -199,7 +199,7 @@
             <div class="composer-actions">
                 <MudButton Variant="Variant.Outlined" Class="quiet-button" OnClick="ClearBuilder">Clear</MudButton>
                 <span class="muted local-queue-count">@LocalQueueDisplay</span>
-                <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="@(!CanAddRequest)" OnClick="AddToQueue">Add Request</MudButton>
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="@(!CanAddRequest)" OnClick="AddToQueue">Add Line</MudButton>
                 <MudButton Variant="Variant.Outlined" Color="Color.Primary" Disabled="@(!CanAppendToPending)" OnClick="AppendToPendingAsync">@AppendButtonText</MudButton>
                 <MudButton Variant="Variant.Filled" Color="Color.Primary" Disabled="Busy || _queue.Count == 0" OnClick="SubmitQueueAsync">@SubmitButtonText</MudButton>
             </div>
@@ -247,7 +247,7 @@
 
     private bool IsEditMode => !string.IsNullOrWhiteSpace(_editRequestId);
 
-    private string BuilderTitle => IsEditMode ? "Request Editor" : "Purchase Composer";
+    private string BuilderTitle => IsEditMode ? "Work Order Editor" : "Work Order Composer";
 
     private string EditTargetDisplay => string.IsNullOrWhiteSpace(_editTargetCharacterName)
         ? "Unknown target"
@@ -262,21 +262,23 @@
     private string QuantityRequirementLabel => _quantityMode == "AllBelowThreshold" ? "Optional" : "Required";
 
     private string LocalQueueDisplay => _queue.Count == 0
-        ? IsEditMode ? "No request lines" : "No queued items"
+        ? IsEditMode ? "No work-order lines" : "No draft lines"
         : _queue.Count == 1
-            ? IsEditMode ? "1 request line" : "1 queued item"
-            : IsEditMode ? $"{_queue.Count} request lines" : $"{_queue.Count} queued items";
+            ? IsEditMode ? "1 work-order line" : "1 draft line"
+            : IsEditMode ? $"{_queue.Count} work-order lines" : $"{_queue.Count} draft lines";
 
-    private string StageButtonText => _queue.Count > 1 ? $"Stage {_queue.Count} Items" : "Stage Queue";
+    private string StageButtonText => _queue.Count > 1 ? $"Publish {_queue.Count} Lines" : "Publish to Inbox";
 
-    private string SubmitButtonText => IsEditMode ? "Update Request" : StageButtonText;
+    private string SubmitButtonText => IsEditMode ? "Update Work Order" : StageButtonText;
 
-    private string AppendButtonText => CompatiblePendingBatches.Count switch
-    {
-        0 => "Add To Pending",
-        1 => "Add To Pending",
-        _ => "Multiple Pending Matches",
-    };
+    private string AppendButtonText => _queue.Count == 0
+        ? "Add to Existing"
+        : CompatiblePendingBatches.Count switch
+        {
+            0 => "Add to Existing",
+            1 => "Add to Existing",
+            _ => "Choose via Inbox",
+        };
 
     private bool CanAddRequest => (IsEditMode || SelectedCharacter is not null) && _selectedItem is not null && _maxUnitPrice is > 0;
 

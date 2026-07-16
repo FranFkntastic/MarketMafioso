@@ -1,44 +1,77 @@
 using FFXIV_Craft_Architect.Core.Integrations.WorkshopHost;
+using MarketMafioso.Server.Auth;
 using MarketMafioso.Server.WorkshopHost;
 
 namespace MarketMafioso.Server.Endpoints;
 
 internal static class WorkshopHostEndpoints
 {
-    public static void MapWorkshopHostEndpoints(this WebApplication app, bool enableMarketAcquisition)
+    public static void MapWorkshopHostEndpoints(
+        this WebApplication app,
+        bool enableMarketAcquisition,
+        bool requireApiKey)
     {
-        app.MapGet("/api/capabilities", (IWorkshopHostCraftQuoteService craftQuoteService) =>
-            GetCapabilities(craftQuoteService, enableMarketAcquisition));
+        app.MapGet("/api/capabilities", (
+            HttpRequest request,
+            IWorkshopHostCraftQuoteService craftQuoteService,
+            WorkshopHostCredentialStore credentialStore,
+            CancellationToken token) =>
+            GetCapabilitiesAsync(
+                request,
+                craftQuoteService,
+                credentialStore,
+                enableMarketAcquisition,
+                requireApiKey,
+                token));
         app.MapPost("/api/craft/appraise", AppraiseCraft);
     }
 
-    private static IResult GetCapabilities(
+    private static async Task<IResult> GetCapabilitiesAsync(
+        HttpRequest request,
         IWorkshopHostCraftQuoteService craftQuoteService,
-        bool enableMarketAcquisition)
+        WorkshopHostCredentialStore credentialStore,
+        bool enableMarketAcquisition,
+        bool requireApiKey,
+        CancellationToken cancellationToken)
     {
-        var capabilities = new List<WorkshopHostCapability>
+        var suppliedKey = request.Headers["X-Api-Key"].Count == 1
+            ? request.Headers["X-Api-Key"][0]
+            : null;
+        async Task<bool> AllowsAsync(WorkshopHostCredentialScope scope) =>
+            !requireApiKey || await credentialStore
+                .IsAuthorizedAsync(suppliedKey, scope, cancellationToken)
+                .ConfigureAwait(false);
+
+        var capabilities = new List<WorkshopHostCapability>();
+        if (await AllowsAsync(WorkshopHostCredentialScope.InventoryWrite))
         {
-            new()
+            capabilities.Add(new WorkshopHostCapability
             {
                 Id = "inventory.write",
                 SupportedSchemaVersions = [1],
                 RequiredScopes = ["inventory:write"],
-            },
-            new()
+            });
+        }
+        if (await AllowsAsync(WorkshopHostCredentialScope.InventoryRead))
+        {
+            capabilities.Add(new WorkshopHostCapability
             {
                 Id = "inventory.read",
                 SupportedSchemaVersions = [1],
                 RequiredScopes = ["inventory:read"],
-            },
-            new()
+            });
+        }
+        if (await AllowsAsync(WorkshopHostCredentialScope.DiagnosticsRead))
+        {
+            capabilities.Add(new WorkshopHostCapability
             {
                 Id = "diagnostics.read",
                 SupportedSchemaVersions = [1],
                 RequiredScopes = ["diagnostics:read"],
-            },
-        };
+            });
+        }
 
-        if (enableMarketAcquisition)
+        if (enableMarketAcquisition && await AllowsAsync(WorkshopHostCredentialScope.AcquisitionQueue))
         {
             capabilities.Add(new WorkshopHostCapability
             {
@@ -46,9 +79,15 @@ internal static class WorkshopHostEndpoints
                 SupportedSchemaVersions = [1],
                 RequiredScopes = ["acquisition:queue"],
             });
+            capabilities.Add(new WorkshopHostCapability
+            {
+                Id = "acquisition.work-orders",
+                SupportedSchemaVersions = [1],
+                RequiredScopes = ["acquisition:queue"],
+            });
         }
 
-        if (craftQuoteService.IsAvailable)
+        if (craftQuoteService.IsAvailable && await AllowsAsync(WorkshopHostCredentialScope.CraftQuote))
         {
             capabilities.Add(new WorkshopHostCapability
             {
