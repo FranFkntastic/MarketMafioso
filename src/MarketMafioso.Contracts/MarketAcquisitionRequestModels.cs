@@ -21,6 +21,18 @@ public record MarketAcquisitionRequestView
     [JsonPropertyName("createdByPluginInstanceId")]
     public string? CreatedByPluginInstanceId { get; init; }
 
+    [JsonPropertyName("createdAtUtc")]
+    public DateTimeOffset CreatedAtUtc { get; init; }
+
+    [JsonPropertyName("expiresAtUtc")]
+    public DateTimeOffset ExpiresAtUtc { get; init; }
+
+    [JsonPropertyName("claimedAtUtc")]
+    public DateTimeOffset? ClaimedAtUtc { get; init; }
+
+    [JsonPropertyName("claimExpiresAtUtc")]
+    public DateTimeOffset? ClaimExpiresAtUtc { get; init; }
+
     [JsonPropertyName("targetCharacterName")]
     public string TargetCharacterName { get; init; } = string.Empty;
 
@@ -55,13 +67,28 @@ public record MarketAcquisitionRequestView
     public string WorldMode { get; init; } = string.Empty;
 
     [JsonPropertyName("selectedWorlds")]
-    public List<string> SelectedWorlds { get; init; } = new();
+    public IReadOnlyList<string> SelectedWorlds { get; init; } = [];
 
     [JsonPropertyName("sweepScope")]
     public string SweepScope { get; init; } = "Region";
 
     [JsonPropertyName("sweepDataCenters")]
-    public List<string> SweepDataCenters { get; init; } = new();
+    public IReadOnlyList<string> SweepDataCenters { get; init; } = [];
+
+    [JsonPropertyName("latestEventType")]
+    public string? LatestEventType { get; init; }
+
+    [JsonPropertyName("latestRunnerState")]
+    public string? LatestRunnerState { get; init; }
+
+    [JsonPropertyName("latestMessage")]
+    public string? LatestMessage { get; init; }
+
+    [JsonPropertyName("latestReason")]
+    public string? LatestReason { get; init; }
+
+    [JsonPropertyName("latestEventAtUtc")]
+    public DateTimeOffset? LatestEventAtUtc { get; init; }
 
     [JsonPropertyName("latestAttemptId")]
     public string? LatestAttemptId { get; init; }
@@ -85,7 +112,7 @@ public record MarketAcquisitionRequestView
     public string? LatestAttemptPluginVersion { get; init; }
 
     [JsonPropertyName("lines")]
-    public List<MarketAcquisitionBatchLineView> Lines { get; init; } = new();
+    public IReadOnlyList<MarketAcquisitionBatchLineView> Lines { get; init; } = [];
 }
 
 public sealed record MarketAcquisitionClaimView : MarketAcquisitionRequestView
@@ -97,13 +124,13 @@ public sealed record MarketAcquisitionClaimView : MarketAcquisitionRequestView
 public sealed record MarketAcquisitionPendingResponse
 {
     [JsonPropertyName("requests")]
-    public List<MarketAcquisitionRequestView> Requests { get; init; } = new();
+    public IReadOnlyList<MarketAcquisitionRequestView> Requests { get; init; } = [];
 }
 
 public sealed record MarketAcquisitionBatchPendingResponse
 {
     [JsonPropertyName("batches")]
-    public List<MarketAcquisitionRequestView> Batches { get; init; } = new();
+    public IReadOnlyList<MarketAcquisitionRequestView> Batches { get; init; } = [];
 }
 
 public sealed record MarketAcquisitionBatchCreateRequest
@@ -133,19 +160,19 @@ public sealed record MarketAcquisitionBatchCreateRequest
     public string WorldMode { get; init; } = string.Empty;
 
     [JsonPropertyName("selectedWorlds")]
-    public List<string> SelectedWorlds { get; init; } = new();
+    public IReadOnlyList<string> SelectedWorlds { get; init; } = [];
 
     [JsonPropertyName("sweepScope")]
     public string SweepScope { get; init; } = "Region";
 
     [JsonPropertyName("sweepDataCenters")]
-    public List<string> SweepDataCenters { get; init; } = new();
+    public IReadOnlyList<string> SweepDataCenters { get; init; } = [];
 
     [JsonPropertyName("expiresInSeconds")]
     public int ExpiresInSeconds { get; init; } = 300;
 
     [JsonPropertyName("lines")]
-    public List<MarketAcquisitionBatchLineCreateRequest> Lines { get; init; } = new();
+    public IReadOnlyList<MarketAcquisitionBatchLineCreateRequest> Lines { get; init; } = [];
 }
 
 public sealed record MarketAcquisitionBatchReplaceRequest
@@ -160,19 +187,19 @@ public sealed record MarketAcquisitionBatchReplaceRequest
     public string WorldMode { get; init; } = string.Empty;
 
     [JsonPropertyName("selectedWorlds")]
-    public List<string> SelectedWorlds { get; init; } = new();
+    public IReadOnlyList<string> SelectedWorlds { get; init; } = [];
 
     [JsonPropertyName("sweepScope")]
     public string SweepScope { get; init; } = "Region";
 
     [JsonPropertyName("sweepDataCenters")]
-    public List<string> SweepDataCenters { get; init; } = new();
+    public IReadOnlyList<string> SweepDataCenters { get; init; } = [];
 
     [JsonPropertyName("expiresInSeconds")]
     public int ExpiresInSeconds { get; init; } = 300;
 
     [JsonPropertyName("lines")]
-    public List<MarketAcquisitionBatchLineCreateRequest> Lines { get; init; } = new();
+    public IReadOnlyList<MarketAcquisitionBatchLineCreateRequest> Lines { get; init; } = [];
 }
 
 public sealed record MarketAcquisitionBatchLineCreateRequest
@@ -506,7 +533,7 @@ public sealed record MarketAcquisitionMarketObservationRequest
     public DateTimeOffset ObservedAtUtc { get; init; }
 
     [JsonPropertyName("listings")]
-    public List<MarketAcquisitionMarketObservationListing> Listings { get; init; } = new();
+    public IReadOnlyList<MarketAcquisitionMarketObservationListing> Listings { get; init; } = [];
 }
 
 public sealed record MarketAcquisitionMarketObservationListing
@@ -537,6 +564,51 @@ public sealed record MarketAcquisitionMarketObservationView
 
     [JsonPropertyName("requestId")]
     public string RequestId { get; init; } = string.Empty;
+
+    [JsonPropertyName("attemptId")]
+    public string AttemptId { get; init; } = string.Empty;
+
+    [JsonPropertyName("sequence")]
+    public long Sequence { get; init; }
+
+    [JsonPropertyName("lineId")]
+    public string LineId { get; init; } = string.Empty;
+
+    [JsonPropertyName("itemId")]
+    public uint ItemId { get; init; }
+
+    [JsonPropertyName("itemName")]
+    public string? ItemName { get; init; }
+
+    [JsonPropertyName("dataCenter")]
+    public string DataCenter { get; init; } = string.Empty;
+
+    [JsonPropertyName("worldName")]
+    public string WorldName { get; init; } = string.Empty;
+
+    [JsonPropertyName("readState")]
+    public string ReadState { get; init; } = string.Empty;
+
+    [JsonPropertyName("reportedListingCount")]
+    public int ReportedListingCount { get; init; }
+
+    [JsonIgnore]
+    public int ReadableListingCount => Listings.Count;
+
+    [JsonPropertyName("listingCapacity")]
+    public int ListingCapacity { get; init; }
+
+    [JsonPropertyName("isTruncated")]
+    public bool IsTruncated { get; init; }
+
+    [JsonPropertyName("observedAtUtc")]
+    public DateTimeOffset ObservedAtUtc { get; init; }
+
+    [JsonPropertyName("createdAtUtc")]
+    public DateTimeOffset CreatedAtUtc { get; init; }
+
+    [JsonPropertyName("listings")]
+    public IReadOnlyList<MarketAcquisitionMarketObservationListing> Listings { get; init; } = [];
 }
 
 public sealed record MarketAcquisitionAttemptEventRequest
@@ -594,4 +666,47 @@ public sealed record MarketAcquisitionAttemptEventResult
 
     [JsonPropertyName("reason")]
     public string? Reason { get; init; }
+}
+
+public sealed record MarketAcquisitionRequestTimelineView
+{
+    public MarketAcquisitionRequestView Request { get; init; } = new();
+    public IReadOnlyList<MarketAcquisitionLifecycleEventView> LifecycleEvents { get; init; } = [];
+    public IReadOnlyList<MarketAcquisitionAttemptEventView> AttemptEvents { get; init; } = [];
+    public IReadOnlyList<MarketAcquisitionMarketObservationView> MarketObservations { get; init; } = [];
+}
+
+public sealed record MarketAcquisitionLifecycleEventView
+{
+    public string EventType { get; init; } = string.Empty;
+    public string ResultStatus { get; init; } = string.Empty;
+    public string? RunnerState { get; init; }
+    public string? Message { get; init; }
+    public string? Reason { get; init; }
+    public DateTimeOffset CreatedAtUtc { get; init; }
+}
+
+public sealed record MarketAcquisitionAttemptEventView
+{
+    public string AttemptId { get; init; } = string.Empty;
+    public long Sequence { get; init; }
+    public string EventType { get; init; } = string.Empty;
+    public string Phase { get; init; } = string.Empty;
+    public string? RouteStopId { get; init; }
+    public string? WorldName { get; init; }
+    public string Result { get; init; } = string.Empty;
+    public string? RunnerState { get; init; }
+    public string? Message { get; init; }
+    public string? Reason { get; init; }
+    public string? PluginVersion { get; init; }
+    public DateTimeOffset? ClientTimestampUtc { get; init; }
+    public DateTimeOffset CreatedAtUtc { get; init; }
+}
+
+public static class MarketAcquisitionAttemptEventResults
+{
+    public const string Accepted = "accepted";
+    public const string Replayed = "replayed";
+    public const string StaleAttempt = "stale_attempt";
+    public const string RequestTerminal = "request_terminal";
 }

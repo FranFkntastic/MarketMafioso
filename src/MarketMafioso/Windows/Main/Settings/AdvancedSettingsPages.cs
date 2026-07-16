@@ -26,7 +26,7 @@ internal sealed class AdvancedSettingsPages
             new("advanced.agent-bridge", "Advanced / Agent Bridge", DrawAgentBridge, 81,
                 searchTerms: ["local agent test bridge", "named pipe", "review capture"]),
             new("advanced.private-features", "Advanced / Private Features", DrawPrivateFeatures, 82,
-                searchTerms: ["unlock Market Acquisition", "private module", "lock feature"]),
+                searchTerms: ["unlock private module", "feature key", "lock feature"]),
         ];
     }
 

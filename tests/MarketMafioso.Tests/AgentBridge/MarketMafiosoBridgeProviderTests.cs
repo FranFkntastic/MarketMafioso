@@ -20,6 +20,7 @@ public sealed class MarketMafiosoBridgeProviderTests
             tab => { selected = tab; return tab == "Squire"; },
             () => { },
             () => { },
+            () => true,
             new AgentBridgeUiReviewRegistry());
 
         Assert.Equal("test", provider.CreateSnapshot().PluginInstanceId);
@@ -38,14 +39,22 @@ public sealed class MarketMafiosoBridgeProviderTests
         Assert.Contains(surfaces, surface => surface.Id == "market-acquisition.inbox" && surface.Target == "Market Acquisition/Inbox");
         Assert.Contains(surfaces, surface => surface.Id == "market-acquisition.workbench" && surface.Target == "Market Acquisition/Workbench");
         Assert.Contains(surfaces, surface => surface.Id == "market-acquisition.route" && surface.Target == "Market Acquisition/Route");
+        Assert.DoesNotContain(surfaces, surface => surface.Id == "overview");
         Assert.DoesNotContain(surfaces, surface => surface.Id == "inventory-reporter");
         Assert.Equal(surfaces.OrderBy(surface => surface.Order), surfaces);
+
+        var lockedProvider = new MarketMafiosoBridgeProvider(
+            CreateTruth, () => { }, () => { }, () => { }, _ => { }, _ => true, () => { }, () => { }, () => false, new AgentBridgeUiReviewRegistry());
+        Assert.DoesNotContain(
+            lockedProvider.GetReviewSurfaces(),
+            surface => surface.Id.StartsWith("market-acquisition", StringComparison.Ordinal) ||
+                       surface.Label.Contains("Market Acquisition", StringComparison.Ordinal));
 
         var registry = new AgentBridgeUiReviewRegistry();
         registry.BeginFrame();
         registry.Register("squire.probe", "Probe", AgentBridgeUiControlKind.Button, default, new(100, 20), true, false, "Ready", () => { });
         var registeredProvider = new MarketMafiosoBridgeProvider(
-            CreateTruth, () => { }, () => { }, () => { }, _ => { }, _ => true, () => { }, () => { }, registry);
+            CreateTruth, () => { }, () => { }, () => { }, _ => { }, _ => true, () => { }, () => { }, () => false, registry);
         registry.EndFrame();
         var review = registeredProvider.ReviewControl("squire.probe");
         Assert.Equal("squire.probe", Assert.IsType<AgentBridgeUiControl>(review.Control).Id);

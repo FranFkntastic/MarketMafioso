@@ -38,7 +38,7 @@ public class Configuration : IPluginConfiguration
     public bool EnableCraftArchitectManualFallback { get; set; } = false;
     public string CraftArchitectQuoteFilePath { get; set; } = string.Empty;
     public string SettingsSelectedPageId { get; set; } = "general.server";
-    public List<string> SettingsExpandedFolderPaths { get; set; } = ["General", "Inventory Reporter", "Squire", "Market Acquisition", "Advanced"];
+    public List<string> SettingsExpandedFolderPaths { get; set; } = ["General", "Inventory Reporter", "Squire", "Advanced"];
 
     public bool IncludeArmoury { get; set; } = false;
     public bool IncludeCrystals { get; set; } = true;

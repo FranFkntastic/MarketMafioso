@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Franthropy.Dalamud.AgentBridge;
 
 namespace MarketMafioso.AgentBridge;
@@ -26,9 +27,8 @@ public interface IMarketMafiosoBridgeProvider
 
 public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
 {
-    private static readonly IReadOnlyList<AgentBridgeReviewSurfaceDescriptor> ReviewSurfaces =
+    private static readonly IReadOnlyList<AgentBridgeReviewSurfaceDescriptor> PublicReviewSurfaces =
     [
-        new("overview", "Overview", "select-main-tab", "Overview", 10),
         new("squire", "Squire", "select-main-tab", "Squire", 30),
         new("workshop-logistics", "Workshop Logistics", "select-main-tab", "Workshop Logistics", 40),
         new("workshop-logistics.combined", "Workshop Logistics - Queue and Materials", "select-main-tab", "Workshop Logistics/Combined", 41),
@@ -39,13 +39,17 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
         new("retainers.deposit", "Retainers - Quick deposit", "select-main-tab", "Retainers/Quick deposit", 51),
         new("retainers.stock", "Retainers - Browse stock", "select-main-tab", "Retainers/Browse stock", 52),
         new("retainers.plan", "Retainers - Withdrawal plan", "select-main-tab", "Retainers/Withdrawal plan", 53),
+        new("diagnostics", "Diagnostics", "select-main-tab", "Diagnostics", 70),
+        new("settings", "Settings", "select-main-tab", "Settings", 80),
+        new("status", "Status", "select-main-tab", "Status", 90),
+    ];
+
+    private static readonly IReadOnlyList<AgentBridgeReviewSurfaceDescriptor> MarketAcquisitionReviewSurfaces =
+    [
         new("market-acquisition", "Market Acquisition", "select-main-tab", "Market Acquisition", 60),
         new("market-acquisition.inbox", "Market Acquisition - Inbox", "select-main-tab", "Market Acquisition/Inbox", 62),
         new("market-acquisition.workbench", "Market Acquisition - Workbench", "select-main-tab", "Market Acquisition/Workbench", 63),
         new("market-acquisition.route", "Market Acquisition - Route", "select-main-tab", "Market Acquisition/Route", 64),
-        new("diagnostics", "Diagnostics", "select-main-tab", "Diagnostics", 70),
-        new("settings", "Settings", "select-main-tab", "Settings", 80),
-        new("status", "Status", "select-main-tab", "Status", 90),
     ];
 
     private readonly Func<AgentBridgeTruth> createSnapshot;
@@ -56,6 +60,7 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
     private readonly Func<string, bool> trySelectMainTab;
     private readonly Action captureInputState;
     private readonly Action stopRoute;
+    private readonly Func<bool> isMarketAcquisitionUnlocked;
     private readonly AgentBridgeUiReviewRegistry reviewRegistry;
 
     public MarketMafiosoBridgeProvider(
@@ -67,6 +72,7 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
         Func<string, bool> trySelectMainTab,
         Action captureInputState,
         Action stopRoute,
+        Func<bool> isMarketAcquisitionUnlocked,
         AgentBridgeUiReviewRegistry reviewRegistry)
     {
         this.createSnapshot = createSnapshot ?? throw new ArgumentNullException(nameof(createSnapshot));
@@ -77,6 +83,7 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
         this.trySelectMainTab = trySelectMainTab ?? throw new ArgumentNullException(nameof(trySelectMainTab));
         this.captureInputState = captureInputState ?? throw new ArgumentNullException(nameof(captureInputState));
         this.stopRoute = stopRoute ?? throw new ArgumentNullException(nameof(stopRoute));
+        this.isMarketAcquisitionUnlocked = isMarketAcquisitionUnlocked ?? throw new ArgumentNullException(nameof(isMarketAcquisitionUnlocked));
         this.reviewRegistry = reviewRegistry ?? throw new ArgumentNullException(nameof(reviewRegistry));
     }
 
@@ -88,7 +95,9 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
     public bool TrySelectMainTab(string tabName) => trySelectMainTab(tabName);
     public void CaptureInputState() => captureInputState();
     public void StopRoute() => stopRoute();
-    public IReadOnlyList<AgentBridgeReviewSurfaceDescriptor> GetReviewSurfaces() => ReviewSurfaces;
+    public IReadOnlyList<AgentBridgeReviewSurfaceDescriptor> GetReviewSurfaces() => isMarketAcquisitionUnlocked()
+        ? PublicReviewSurfaces.Concat(MarketAcquisitionReviewSurfaces).OrderBy(surface => surface.Order).ToArray()
+        : PublicReviewSurfaces;
     public AgentBridgeUiReviewFrame GetControlSurface() => reviewRegistry.Snapshot();
     public AgentBridgeUiControlReview ReviewControl(string controlId) => reviewRegistry.Review(controlId);
     public AgentBridgeUiControlInvocation InvokeControl(string controlId, long frameId) => reviewRegistry.Invoke(controlId, frameId);

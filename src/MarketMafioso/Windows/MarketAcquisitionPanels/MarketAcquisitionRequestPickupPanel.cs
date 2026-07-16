@@ -278,14 +278,5 @@ internal sealed class MarketAcquisitionRequestPickupPanel
             : "Recommended route";
 
     private void RegisterLastControl(string id, string label, bool enabled, string? value, Action invoke) =>
-        reviewRegistry.Register(
-            id,
-            label,
-            AgentBridgeUiControlKind.Button,
-            ImGui.GetItemRectMin(),
-            ImGui.GetItemRectMax(),
-            enabled,
-            false,
-            value,
-            invoke);
+        reviewRegistry.RegisterLastButton(id, label, enabled, invoke, value);
 }

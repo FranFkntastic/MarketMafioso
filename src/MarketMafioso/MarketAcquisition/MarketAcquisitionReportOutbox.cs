@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using Franthropy.Dalamud.Persistence;
 
 namespace MarketMafioso.MarketAcquisition;
 
@@ -116,9 +117,7 @@ public sealed class FileMarketAcquisitionReportOutbox : IMarketAcquisitionReport
 
         try
         {
-            return JsonSerializer.Deserialize<List<MarketAcquisitionReportOutboxEntry>>(
-                File.ReadAllText(candidatePath),
-                JsonOptions);
+            return AtomicJsonFile.Read<List<MarketAcquisitionReportOutboxEntry>>(candidatePath, JsonOptions);
         }
         catch (JsonException)
         {
@@ -128,15 +127,9 @@ public sealed class FileMarketAcquisitionReportOutbox : IMarketAcquisitionReport
 
     private void Persist()
     {
-        var directory = Path.GetDirectoryName(path);
-        if (!string.IsNullOrWhiteSpace(directory))
-            Directory.CreateDirectory(directory);
-
-        var temporaryPath = path + ".tmp";
-        File.WriteAllText(temporaryPath, JsonSerializer.Serialize(entries, JsonOptions));
         if (File.Exists(path))
             File.Copy(path, backupPath, overwrite: true);
-        File.Move(temporaryPath, path, overwrite: true);
+        AtomicJsonFile.Write(path, entries, JsonOptions);
     }
 }
 

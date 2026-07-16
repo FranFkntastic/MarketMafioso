@@ -169,6 +169,7 @@ public sealed class Plugin : IDalamudPlugin
                 mainWindow.TrySelectAgentBridgeTab,
                 mainWindow.AgentCaptureInputState,
                 mainWindow.AgentStopRoute,
+                () => MarketAcquisitionUnlock.IsUnlocked(Configuration),
                 mainWindow.AgentReviewRegistry),
             agentBridgeProofStore,
             agentBridgeViewportCapture.CaptureAsync,
@@ -180,6 +181,7 @@ public sealed class Plugin : IDalamudPlugin
         windowSystem.AddWindow(mainWindow);
         windowSystem.AddWindow(mainWindow.ProjectBrowser);
         windowSystem.AddWindow(mainWindow.FrozenQueueBrowser);
+        windowSystem.AddWindow(mainWindow.AcquisitionCompositionWindow);
         windowSystem.AddWindow(agentBridgeProofWindow);
 
         CommandManager.AddHandler(CmdMain, new CommandInfo(OnCommand)
@@ -219,7 +221,21 @@ public sealed class Plugin : IDalamudPlugin
         agentBridge.Tick();
     }
 
-    private void DrawUI() => windowSystem.Draw();
+    private void DrawUI()
+    {
+        if (!mainWindow.IsOpen)
+            mainWindow.AcquisitionCompositionWindow.IsOpen = false;
+
+        mainWindow.BeginAgentReviewFrame();
+        try
+        {
+            windowSystem.Draw();
+        }
+        finally
+        {
+            mainWindow.EndAgentReviewFrame();
+        }
+    }
     private void OpenConfigUi() => mainWindow.IsOpen = true;
 
     private void LoadRetainerCache()
@@ -268,6 +284,7 @@ public sealed class Plugin : IDalamudPlugin
 
         windowSystem.RemoveAllWindows();
         mainWindow.ProjectBrowser.Dispose();
+        mainWindow.AcquisitionCompositionWindow.Dispose();
         mainWindow.Dispose();
         ECommonsMain.Dispose();
     }

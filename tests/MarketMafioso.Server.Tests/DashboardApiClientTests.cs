@@ -2,8 +2,8 @@ using System.Net;
 using System.Text.Json;
 using MarketMafioso.Dashboard.Models;
 using MarketMafioso.Dashboard.Services;
-using DashboardBatchLineCreateRequest = MarketMafioso.Dashboard.Models.MarketAcquisitionBatchLineCreateRequest;
-using DashboardBatchReplaceRequest = MarketMafioso.Dashboard.Models.MarketAcquisitionBatchReplaceRequest;
+using DashboardBatchLineCreateRequest = MarketMafioso.MarketAcquisition.MarketAcquisitionBatchLineCreateRequest;
+using DashboardBatchReplaceRequest = MarketMafioso.MarketAcquisition.MarketAcquisitionBatchReplaceRequest;
 
 namespace MarketMafioso.Server.Tests;
 

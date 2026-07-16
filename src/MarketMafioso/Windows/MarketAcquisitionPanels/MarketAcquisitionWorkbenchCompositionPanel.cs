@@ -15,6 +15,8 @@ public sealed class MarketAcquisitionWorkbenchCompositionPanel
     private readonly Action<MarketAcquisitionWorkbenchComposition> mergeComposition;
     private readonly AgentBridgeUiReviewRegistry reviewRegistry;
     private string nameBuffer = string.Empty;
+    private string saveNameBuffer = "New composition";
+    private string searchBuffer = string.Empty;
     private string? nameBufferCompositionId;
     private bool nameBufferInitialized;
     private bool openDeleteConfirmation;
@@ -39,15 +41,11 @@ public sealed class MarketAcquisitionWorkbenchCompositionPanel
         ArgumentNullException.ThrowIfNull(context);
         SyncNameBuffer();
 
-        if (!ImGui.CollapsingHeader(
-                $"Saved compositions ({catalog.Compositions.Count:N0})##AcquisitionSavedCompositions",
-                ImGuiTreeNodeFlags.DefaultOpen))
-            return;
-
-        ImGui.TextColored(MainWindow.ColMuted, "Reusable local purchase loadouts. Load replaces the Workbench; Merge only adds missing items.");
-        DrawSelectionRow(context);
-        DrawSaveAndManageRow(context);
-        ImGui.TextColored(catalog.Status.StartsWith("Deleted", StringComparison.Ordinal) ? MainWindow.ColWarning : MainWindow.ColMuted, catalog.Status);
+        DrawCreateRow(context);
+        ImGui.Spacing();
+        DrawManagerLayout(context);
+        if (!catalog.Status.Equals("Saved compositions are ready.", StringComparison.Ordinal))
+            ImGui.TextColored(catalog.Status.StartsWith("Deleted", StringComparison.Ordinal) ? MainWindow.ColWarning : MainWindow.ColMuted, catalog.Status);
         if (openDeleteConfirmation)
         {
             ImGui.OpenPopup("Delete saved composition?##AcquisitionCompositionDeleteConfirmation");
@@ -57,38 +55,130 @@ public sealed class MarketAcquisitionWorkbenchCompositionPanel
         ImGui.Spacing();
     }
 
-    private void DrawSelectionRow(MarketAcquisitionWorkbenchCompositionContext context)
+    private void DrawCreateRow(MarketAcquisitionWorkbenchCompositionContext context)
     {
-        var selected = catalog.SelectedComposition;
-        ImGui.TextColored(MainWindow.ColMuted, "Saved composition");
-        ImGui.SetNextItemWidth(360f);
-        if (catalog.Compositions.Count == 0)
-            ImGui.BeginDisabled();
-        if (ImGui.BeginCombo("##AcquisitionCompositionSelect", selected?.Name ?? "No saved compositions yet"))
-        {
-            foreach (var composition in catalog.Compositions.OrderBy(value => value.Name, StringComparer.OrdinalIgnoreCase))
-            {
-                var isSelected = composition.Id == catalog.SelectedCompositionId;
-                if (ImGui.Selectable($"{composition.Name}##AcquisitionComposition{composition.Id}", isSelected))
-                {
-                    catalog.Select(composition.Id);
-                    nameBufferCompositionId = null;
-                    SyncNameBuffer();
-                }
-                if (isSelected)
-                    ImGui.SetItemDefaultFocus();
-            }
-            ImGui.EndCombo();
-        }
-        if (catalog.Compositions.Count == 0)
-            ImGui.EndDisabled();
+        ImGui.SetNextItemWidth(Math.Max(220f, ImGui.GetContentRegionAvail().X - 150f));
+        ImGui.InputTextWithHint("##AcquisitionCompositionCreateName", "Save current Workbench as...", ref saveNameBuffer, 80);
+        ImGui.SameLine();
+        var canSave = context.Document.Lines.Count > 0 && !string.IsNullOrWhiteSpace(saveNameBuffer);
+        if (ImGuiUi.PrimaryButton("Save new", canSave))
+            SaveNew(context.Document);
+        RegisterLastControl(
+            "acquisition.composition.save-new",
+            "Save the current Workbench as a new named composition",
+            canSave,
+            saveNameBuffer,
+            () => SaveNew(context.Document));
+    }
 
-        if (selected is null)
+    private void DrawManagerLayout(MarketAcquisitionWorkbenchCompositionContext context)
+    {
+        var flags = ImGuiTableFlags.Resizable |
+                    ImGuiTableFlags.SizingStretchProp |
+                    ImGuiTableFlags.NoSavedSettings;
+        if (!ImGui.BeginTable("AcquisitionCompositionManagerLayout", 2, flags, new Vector2(0, 0)))
             return;
 
-        ImGui.SameLine();
+        ImGui.TableSetupColumn("Compositions", ImGuiTableColumnFlags.WidthStretch, 0.9f);
+        ImGui.TableSetupColumn("Selected composition", ImGuiTableColumnFlags.WidthStretch, 1.1f);
+        ImGui.TableNextRow();
+        ImGui.TableNextColumn();
+        DrawCompositionList();
+        ImGui.TableNextColumn();
+        DrawSelectedComposition(context);
+        ImGui.EndTable();
+    }
+
+    private void DrawCompositionList()
+    {
+        ImGui.SetNextItemWidth(-1);
+        ImGui.InputTextWithHint("##AcquisitionCompositionSearch", "Search compositions...", ref searchBuffer, 128);
+        ImGui.Spacing();
+
+        var search = searchBuffer.Trim();
+        var compositions = catalog.Compositions
+            .Where(composition => search.Length == 0 || composition.Name.Contains(search, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(composition => composition.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        if (compositions.Count == 0)
+        {
+            ImGui.TextColored(MainWindow.ColMuted, catalog.Compositions.Count == 0
+                ? "No compositions saved."
+                : "No compositions match this search.");
+            return;
+        }
+
+        var flags = ImGuiUi.InteractiveTableFlags | ImGuiTableFlags.ScrollY | ImGuiTableFlags.SizingFixedFit;
+        if (!ImGui.BeginTable("AcquisitionCompositionList", 3, flags, new Vector2(0, 300f)))
+            return;
+
+        ImGui.TableSetupColumn("Name", ImGuiTableColumnFlags.WidthStretch);
+        ImGui.TableSetupColumn("Lines", ImGuiTableColumnFlags.WidthFixed, 48f);
+        ImGui.TableSetupColumn("Updated", ImGuiTableColumnFlags.WidthFixed, 105f);
+        ImGui.TableHeadersRow();
+        foreach (var composition in compositions)
+        {
+            ImGui.TableNextRow();
+            ImGui.TableNextColumn();
+            var selected = composition.Id == catalog.SelectedCompositionId;
+            if (ImGui.Selectable($"{composition.Name}##AcquisitionCompositionList{composition.Id}", selected, ImGuiSelectableFlags.SpanAllColumns))
+                SelectComposition(composition.Id);
+            RegisterLastControl(
+                $"acquisition.composition.select.{composition.Id}",
+                $"Select saved composition {composition.Name}",
+                true,
+                composition.Id,
+                () => SelectComposition(composition.Id),
+                AgentBridgeUiControlKind.Select,
+                selected);
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(composition.Lines.Count.ToString("N0"));
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(composition.UpdatedAtUtc.ToLocalTime().ToString("g"));
+        }
+
+        ImGui.EndTable();
+    }
+
+    private void DrawSelectedComposition(MarketAcquisitionWorkbenchCompositionContext context)
+    {
+        var selected = catalog.SelectedComposition;
+        if (selected is null)
+        {
+            ImGui.TextColored(MainWindow.ColMuted, "Select a composition to preview or manage it.");
+            return;
+        }
+
+        ImGui.TextColored(MainWindow.ColHeader, selected.Name);
+        ImGui.TextColored(
+            MainWindow.ColMuted,
+            $"{selected.Lines.Count:N0} line(s)  |  {FormatRoute(selected)}  |  updated {selected.UpdatedAtUtc.ToLocalTime():g}");
+        ImGui.Spacing();
+
+        if (ImGui.BeginTable("AcquisitionCompositionPreview", 4, ImGuiUi.InteractiveTableFlags, new Vector2(0, 190f)))
+        {
+            ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.WidthStretch);
+            ImGui.TableSetupColumn("Rule", ImGuiTableColumnFlags.WidthFixed, 110f);
+            ImGui.TableSetupColumn("Qty", ImGuiTableColumnFlags.WidthFixed, 58f);
+            ImGui.TableSetupColumn("Unit", ImGuiTableColumnFlags.WidthFixed, 72f);
+            ImGui.TableHeadersRow();
+            foreach (var line in selected.Lines)
+            {
+                ImGui.TableNextRow();
+                ImGui.TableNextColumn();
+                ImGui.TextUnformatted(string.IsNullOrWhiteSpace(line.ItemName) ? $"Item {line.ItemId}" : line.ItemName);
+                ImGui.TableNextColumn();
+                ImGui.TextUnformatted(MarketAcquisitionQuantityModePresenter.FormatMode(line.QuantityMode));
+                ImGui.TableNextColumn();
+                ImGui.TextUnformatted(line.QuantityMode == "TargetQuantity" ? line.TargetQuantity.ToString("N0") : "-");
+                ImGui.TableNextColumn();
+                ImGui.TextUnformatted(line.MaxUnitPrice == 0 ? "-" : line.MaxUnitPrice.ToString("N0"));
+            }
+            ImGui.EndTable();
+        }
+
         var canLoad = !context.IsBusy && !context.IsRouteActive && context.HasCharacterScope;
-        if (ImGuiUi.PrimaryButton("Load (replace)##AcquisitionCompositionLoad", canLoad))
+        if (ImGuiUi.PrimaryButton("Load (replace)", canLoad))
             loadComposition(selected, context.CharacterName, context.World);
         RegisterLastControl(
             "acquisition.composition.load",
@@ -99,7 +189,7 @@ public sealed class MarketAcquisitionWorkbenchCompositionPanel
 
         ImGui.SameLine();
         var canMerge = !context.IsBusy && !context.IsRouteActive;
-        if (ImGuiUi.Button("Merge##AcquisitionCompositionMerge", canMerge))
+        if (ImGuiUi.Button("Merge", canMerge))
             mergeComposition(selected);
         RegisterLastControl(
             "acquisition.composition.merge",
@@ -108,81 +198,45 @@ public sealed class MarketAcquisitionWorkbenchCompositionPanel
             selected.Id,
             () => mergeComposition(selected));
 
-        ImGui.TextColored(
-            MainWindow.ColMuted,
-            $"{selected.Lines.Count:N0} line(s)  |  {FormatRoute(selected)}  |  updated {selected.UpdatedAtUtc.ToLocalTime():g}");
-    }
+        ImGui.Spacing();
+        ImGui.SetNextItemWidth(-1);
+        ImGui.InputTextWithHint("##AcquisitionCompositionManageName", "Composition name", ref nameBuffer, 80);
 
-    private void DrawSaveAndManageRow(MarketAcquisitionWorkbenchCompositionContext context)
-    {
-        ImGui.SetNextItemWidth(360f);
-        ImGui.InputTextWithHint("##AcquisitionCompositionName", "Composition name", ref nameBuffer, 80);
-
-        ImGui.SameLine();
-        var canSaveNew = context.Document.Lines.Count > 0 && !string.IsNullOrWhiteSpace(nameBuffer);
-        if (ImGuiUi.Button("Save new##AcquisitionCompositionSaveNew", canSaveNew))
-        {
-            var result = catalog.SaveNew(nameBuffer, context.Document);
-            if (result.Success)
-                nameBufferCompositionId = result.Composition?.Id;
-        }
-        RegisterLastControl(
-            "acquisition.composition.save-new",
-            "Save the current Workbench as a new named composition",
-            canSaveNew,
-            nameBuffer,
-            () => catalog.SaveNew(nameBuffer, context.Document));
-
-        var selected = catalog.SelectedComposition;
-        ImGui.SameLine();
-        var canUpdate = selected is not null && context.Document.Lines.Count > 0;
-        if (ImGuiUi.Button("Update##AcquisitionCompositionUpdate", canUpdate))
+        var canUpdate = context.Document.Lines.Count > 0;
+        if (ImGuiUi.Button("Update from Workbench", canUpdate))
             catalog.UpdateSelected(context.Document);
         RegisterLastControl(
             "acquisition.composition.update",
-            "Update the selected composition from the current Workbench",
+            $"Update {selected.Name} from the current Workbench",
             canUpdate,
-            selected?.Id,
+            selected.Id,
             () => catalog.UpdateSelected(context.Document));
-
         ImGui.SameLine();
-        var canRename = selected is not null && !string.IsNullOrWhiteSpace(nameBuffer);
-        if (ImGuiUi.Button("Rename##AcquisitionCompositionRename", canRename))
+        if (ImGuiUi.Button("Rename", !string.IsNullOrWhiteSpace(nameBuffer)))
             catalog.RenameSelected(nameBuffer);
         RegisterLastControl(
             "acquisition.composition.rename",
-            "Rename the selected composition",
-            canRename,
+            $"Rename {selected.Name}",
+            !string.IsNullOrWhiteSpace(nameBuffer),
             nameBuffer,
             () => catalog.RenameSelected(nameBuffer));
-
         ImGui.SameLine();
-        if (ImGuiUi.Button("Duplicate##AcquisitionCompositionDuplicate", selected is not null))
-        {
-            var result = catalog.DuplicateSelected();
-            if (result.Success)
-                nameBufferCompositionId = null;
-        }
+        if (ImGui.Button("Duplicate"))
+            DuplicateSelected();
         RegisterLastControl(
             "acquisition.composition.duplicate",
-            "Duplicate the selected composition",
-            selected is not null,
-            selected?.Id,
-            () =>
-            {
-                var result = catalog.DuplicateSelected();
-                if (result.Success)
-                    nameBufferCompositionId = null;
-            });
-
+            $"Duplicate {selected.Name}",
+            true,
+            selected.Id,
+            DuplicateSelected);
         ImGui.SameLine();
-        if (ImGuiUi.Button("Delete...##AcquisitionCompositionDelete", selected is not null))
+        if (ImGui.Button("Delete..."))
             openDeleteConfirmation = true;
         RegisterLastControl(
             "acquisition.composition.delete.open",
-            "Open the selected composition deletion confirmation",
-            selected is not null,
-            selected?.Id,
+            $"Open deletion confirmation for {selected.Name}",
+            true,
+            selected.Id,
             () => openDeleteConfirmation = true);
     }
 
@@ -213,6 +267,12 @@ public sealed class MarketAcquisitionWorkbenchCompositionPanel
             : $"Delete {selected.Name}? This does not change the current Workbench.");
         if (ImGuiUi.Button("Cancel##AcquisitionCompositionDeleteCancel", true))
             ImGui.CloseCurrentPopup();
+        RegisterLastControl(
+            "acquisition.composition.delete.cancel",
+            "Cancel saved composition deletion",
+            true,
+            selected?.Id,
+            () => closeDeleteConfirmation = true);
         ImGui.SameLine();
         if (ImGuiUi.Button("Delete saved composition##AcquisitionCompositionDeleteConfirm", selected is not null))
         {
@@ -248,15 +308,35 @@ public sealed class MarketAcquisitionWorkbenchCompositionPanel
             ? $"Sweep {composition.SweepScope}"
             : "Recommended route";
 
-    private void RegisterLastControl(string id, string label, bool enabled, string? value, Action invoke) =>
-        reviewRegistry.Register(
-            id,
-            label,
-            AgentBridgeUiControlKind.Button,
-            ImGui.GetItemRectMin(),
-            ImGui.GetItemRectMax(),
-            enabled,
-            false,
-            value,
-            invoke);
+    private void SaveNew(MarketAcquisitionRequestDocument document)
+    {
+        var result = catalog.SaveNew(saveNameBuffer, document);
+        if (!result.Success)
+            return;
+        nameBufferCompositionId = result.Composition?.Id;
+        saveNameBuffer = "New composition";
+    }
+
+    private void SelectComposition(string id)
+    {
+        catalog.Select(id);
+        nameBufferCompositionId = null;
+        SyncNameBuffer();
+    }
+
+    private void DuplicateSelected()
+    {
+        if (catalog.DuplicateSelected().Success)
+            nameBufferCompositionId = null;
+    }
+
+    private void RegisterLastControl(
+        string id,
+        string label,
+        bool enabled,
+        string? value,
+        Action invoke,
+        AgentBridgeUiControlKind kind = AgentBridgeUiControlKind.Button,
+        bool selected = false) =>
+        reviewRegistry.RegisterLastItem(id, label, kind, enabled, selected, value, invoke);
 }

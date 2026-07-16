@@ -6,7 +6,7 @@ public static class MarketAcquisitionQuantityModePresenter
         quantityMode switch
         {
             "TargetQuantity" => "Target quantity",
-            "AllBelowThreshold" => "All below max unit",
+            "AllBelowThreshold" => "Buy below ceiling",
             _ => quantityMode,
         };
 

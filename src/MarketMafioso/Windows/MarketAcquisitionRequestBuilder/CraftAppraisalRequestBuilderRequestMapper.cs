@@ -46,6 +46,22 @@ public static class CraftAppraisalRequestMapper
             request.Region);
     }
 
+    public static int FindMatchingLineIndex(
+        MarketAcquisitionRequestDocument document,
+        CraftAppraisalLineIdentity identity)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        ArgumentNullException.ThrowIfNull(identity);
+        for (var index = 0; index < document.Lines.Count; index++)
+        {
+            var line = document.Lines[index];
+            if (line.ItemId == identity.ItemId && BuildLineIdentity(document, line) == identity)
+                return index;
+        }
+
+        return -1;
+    }
+
     private static uint ResolveQuoteQuantity(MarketAcquisitionRequestLineDocument line)
     {
         if (line.QuantityMode.Equals("TargetQuantity", StringComparison.OrdinalIgnoreCase))

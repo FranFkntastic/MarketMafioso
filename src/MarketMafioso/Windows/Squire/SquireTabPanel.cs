@@ -79,7 +79,8 @@ internal sealed class SquireTabPanel : IDisposable
         IGameInventory gameInventory,
         IDataManager dataManager,
         IDalamudPluginInterface pluginInterface,
-        IMarketAcquisitionListingSource marketListingSource)
+        IMarketAcquisitionListingSource marketListingSource,
+        Func<bool> isMarketAcquisitionUnlocked)
     {
         this.config = config;
         this.snapshotSource = snapshotSource;
@@ -97,6 +98,7 @@ internal sealed class SquireTabPanel : IDisposable
             new OutfitterCandidateCatalog(dataManager),
             new OutfitterMarketQuoteService(marketListingSource),
             new AutoRetainerOutfitterMetadataSource(pluginInterface, Plugin.Log),
+            isMarketAcquisitionUnlocked,
             reviewRegistry);
         selectedWorkspace = string.Equals(config.Squire.SelectedWorkspace, "Cleanup", StringComparison.OrdinalIgnoreCase)
             ? "Cleanup"
@@ -164,7 +166,7 @@ internal sealed class SquireTabPanel : IDisposable
     private void DrawOutfitter()
     {
         ImGui.TextColored(MarketMafiosoUiTheme.Header, "Outfitter — loadout planner");
-        ImGui.TextWrapped("Choose a target, compare its current set with the best accessible loadout, then hand market purchases to Market Acquisition.");
+        ImGui.TextWrapped("Choose a target, compare its current set with the best accessible loadout, then stage any purchases for execution.");
         if (ImGui.Button("Refresh equipment##Outfitter"))
             Refresh();
         RegisterLastControl(
@@ -175,8 +177,6 @@ internal sealed class SquireTabPanel : IDisposable
             false,
             null,
             Refresh);
-        ImGui.SameLine();
-        ImGui.TextColored(MarketMafiosoUiTheme.Muted, status);
         ImGui.Separator();
         if (analysis is null)
             return;
@@ -1014,5 +1014,5 @@ internal sealed class SquireTabPanel : IDisposable
         bool selected,
         string? value,
         Action invoke) =>
-        reviewRegistry.Register(id, label, kind, ImGui.GetItemRectMin(), ImGui.GetItemRectMax(), enabled, selected, value, invoke);
+        reviewRegistry.RegisterLastItem(id, label, kind, enabled, selected, value, invoke);
 }

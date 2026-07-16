@@ -32,6 +32,9 @@
           "ECommons": "[3.2.1.15, )",
           "System.Security.Cryptography.ProtectedData": "[9.0.0, )"
         }
+      },
+      "marketmafioso.contracts": {
+        "type": "Project"
       }
     }
   }

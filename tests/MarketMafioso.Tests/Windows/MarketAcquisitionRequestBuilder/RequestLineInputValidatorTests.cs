@@ -1,4 +1,4 @@
-using MarketMafioso.Windows.ItemAutocomplete;
+using Franthropy.Dalamud.UI.Items;
 using MarketMafioso.Windows.MarketAcquisitionRequestBuilder;
 
 namespace MarketMafioso.Tests.Windows.MarketAcquisitionRequestBuilder;
@@ -9,7 +9,7 @@ public sealed class RequestLineInputValidatorTests
     public void CanAddIntentLine_AllowsBlankMaxUnitPrice()
     {
         var result = RequestLineInputValidator.CanAddIntentLine(
-            selectedItem: new AcquisitionItemOption(5060, "Darksteel Ingot"),
+            selectedItem: new DalamudItemOption(5060, "Darksteel Ingot"),
             quantityMode: "TargetQuantity",
             targetQuantityBuffer: "3",
             maxQuantityBuffer: "",
@@ -23,7 +23,7 @@ public sealed class RequestLineInputValidatorTests
     public void CanAddIntentLine_RejectsNonNumericMaxUnitPrice()
     {
         var result = RequestLineInputValidator.CanAddIntentLine(
-            selectedItem: new AcquisitionItemOption(5060, "Darksteel Ingot"),
+            selectedItem: new DalamudItemOption(5060, "Darksteel Ingot"),
             quantityMode: "TargetQuantity",
             targetQuantityBuffer: "3",
             maxQuantityBuffer: "",
@@ -37,7 +37,7 @@ public sealed class RequestLineInputValidatorTests
     public void CanAddIntentLine_RequiresTargetQuantityForTargetMode()
     {
         var result = RequestLineInputValidator.CanAddIntentLine(
-            selectedItem: new AcquisitionItemOption(5060, "Darksteel Ingot"),
+            selectedItem: new DalamudItemOption(5060, "Darksteel Ingot"),
             quantityMode: "TargetQuantity",
             targetQuantityBuffer: "",
             maxQuantityBuffer: "",
@@ -51,7 +51,7 @@ public sealed class RequestLineInputValidatorTests
     public void CanAddIntentLine_AllowsBlankMaxQuantityForAllBelowThreshold()
     {
         var result = RequestLineInputValidator.CanAddIntentLine(
-            selectedItem: new AcquisitionItemOption(5060, "Darksteel Ingot"),
+            selectedItem: new DalamudItemOption(5060, "Darksteel Ingot"),
             quantityMode: "AllBelowThreshold",
             targetQuantityBuffer: "",
             maxQuantityBuffer: "",

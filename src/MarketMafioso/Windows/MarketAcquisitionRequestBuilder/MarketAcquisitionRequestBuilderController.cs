@@ -20,6 +20,11 @@ public sealed class MarketAcquisitionRequestBuilderController
     private bool syncRequested;
     private DateTimeOffset syncDueAtUtc = DateTimeOffset.MaxValue;
     private DateTimeOffset nextRemotePollAtUtc = DateTimeOffset.UtcNow;
+    private Task refreshTask = Task.CompletedTask;
+    private MarketAcquisitionRequestDocument? cachedIntentHashDocument;
+    private string? cachedIntentHash;
+    private MarketAcquisitionRequestDocument? cachedValidationDocument;
+    private MarketAcquisitionRequestValidationResult? cachedValidation;
 
     public MarketAcquisitionRequestBuilderController(
         Configuration config,
@@ -64,7 +69,33 @@ public sealed class MarketAcquisitionRequestBuilderController
 
     public bool IsRefreshing { get; private set; }
 
-    public string CurrentIntentHash => MarketAcquisitionRequestDocumentHasher.ComputeIntentHash(Document);
+    public string CurrentIntentHash
+    {
+        get
+        {
+            if (!ReferenceEquals(cachedIntentHashDocument, Document))
+            {
+                cachedIntentHashDocument = Document;
+                cachedIntentHash = MarketAcquisitionRequestDocumentHasher.ComputeIntentHash(Document);
+            }
+
+            return cachedIntentHash!;
+        }
+    }
+
+    public MarketAcquisitionRequestValidationResult DraftValidation
+    {
+        get
+        {
+            if (!ReferenceEquals(cachedValidationDocument, Document))
+            {
+                cachedValidationDocument = Document;
+                cachedValidation = MarketAcquisitionRequestDocumentValidator.ValidateDraft(Document);
+            }
+
+            return cachedValidation!;
+        }
+    }
 
     public void SetStatus(string status) => Status = status;
 
@@ -147,9 +178,11 @@ public sealed class MarketAcquisitionRequestBuilderController
             now >= nextRemotePollAtUtc)
         {
             nextRemotePollAtUtc = now.Add(RemotePollInterval);
-            _ = RefreshAsync();
+            refreshTask = RefreshAsync();
         }
     }
+
+    public Task WaitForRefreshAsync() => refreshTask;
 
     public void UpdateRouteScope(RequestRouteScope scope)
     {
@@ -308,6 +341,13 @@ public sealed class MarketAcquisitionRequestBuilderController
         if (IsSyncing || IsRefreshing)
             return;
 
+        if (!DraftValidation.IsValid)
+        {
+            syncRequested = false;
+            syncDueAtUtc = DateTimeOffset.MaxValue;
+            return;
+        }
+
         IsSyncing = true;
         try
         {
@@ -359,17 +399,20 @@ public sealed class MarketAcquisitionRequestBuilderController
             var outcome = await refreshRequest(operationDocument).ConfigureAwait(false);
             if (ReferenceEquals(Document, operationDocument))
             {
-                Document = outcome.Document;
                 Status = outcome.StatusMessage;
-                documentAdopted(Document, outcome.RemoteRequest);
+                if (!HasSameRemoteState(operationDocument, outcome.Document))
+                {
+                    Document = PreserveLocalIdentity(operationDocument, outcome.Document);
+                    ResetSelection();
+                    documentAdopted(Document, outcome.RemoteRequest);
+                    SaveDocument();
+                }
             }
             else
             {
                 Status = "A newer local edit superseded the server refresh and is queued for synchronization.";
                 RequestAutomaticSync();
             }
-
-            SaveDocument();
         }
         catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.NotFound)
         {
@@ -411,8 +454,12 @@ public sealed class MarketAcquisitionRequestBuilderController
 
     private void RequestAutomaticSync(TimeSpan? delay = null)
     {
-        if (Document.Lines.Count == 0)
+        if (!DraftValidation.IsValid)
+        {
+            syncRequested = false;
+            syncDueAtUtc = DateTimeOffset.MaxValue;
             return;
+        }
 
         syncRequested = true;
         syncDueAtUtc = DateTimeOffset.UtcNow.Add(delay ?? AutomaticSyncDelay);
@@ -443,6 +490,34 @@ public sealed class MarketAcquisitionRequestBuilderController
     }
 
     private void SaveDocument() => persistDocument(Document);
+
+    private static bool HasSameRemoteState(
+        MarketAcquisitionRequestDocument current,
+        MarketAcquisitionRequestDocument refreshed)
+    {
+        if (!string.Equals(current.RemoteRequestId, refreshed.RemoteRequestId, StringComparison.Ordinal) ||
+            current.RemoteRevision != refreshed.RemoteRevision)
+        {
+            return false;
+        }
+
+        var currentHash = string.IsNullOrWhiteSpace(current.RemoteHash)
+            ? MarketAcquisitionRequestDocumentHasher.ComputeIntentHash(current)
+            : current.RemoteHash;
+        var refreshedHash = string.IsNullOrWhiteSpace(refreshed.RemoteHash)
+            ? MarketAcquisitionRequestDocumentHasher.ComputeIntentHash(refreshed)
+            : refreshed.RemoteHash;
+        return string.Equals(currentHash, refreshedHash, StringComparison.Ordinal);
+    }
+
+    private static MarketAcquisitionRequestDocument PreserveLocalIdentity(
+        MarketAcquisitionRequestDocument current,
+        MarketAcquisitionRequestDocument refreshed) =>
+        refreshed with
+        {
+            LocalRequestId = current.LocalRequestId,
+            LocalRevision = current.LocalRevision,
+        };
 
     private static MarketAcquisitionRequestDocument MergeSyncMetadata(
         MarketAcquisitionRequestDocument current,

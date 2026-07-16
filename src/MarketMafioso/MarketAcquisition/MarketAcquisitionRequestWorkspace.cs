@@ -240,8 +240,17 @@ public sealed class MarketAcquisitionRequestWorkspace : IDisposable
         if (remote is null)
             throw new InvalidOperationException("Remote request refresh did not complete.");
 
-        var remoteDocument = MarketAcquisitionRequestDocumentMapper.FromRequestView(remote);
         Status = "Request synchronized from the server.";
+        if (string.Equals(remote.Id, document.RemoteRequestId, StringComparison.Ordinal) &&
+            remote.Revision == document.RemoteRevision)
+        {
+            return new MarketAcquisitionRequestBuilderRefreshOutcome(
+                document,
+                RemoteRequest: remote,
+                Status);
+        }
+
+        var remoteDocument = MarketAcquisitionRequestDocumentMapper.FromRequestView(remote);
         return new MarketAcquisitionRequestBuilderRefreshOutcome(
             remoteDocument,
             RemoteRequest: remote,

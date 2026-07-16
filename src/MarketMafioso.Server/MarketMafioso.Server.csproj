@@ -12,8 +12,20 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="$(CraftArchitectCoreProject)" />
+    <ProjectReference Include="..\MarketMafioso.Contracts\MarketMafioso.Contracts.csproj" />
     <ProjectReference Include="..\MarketMafioso.Dashboard\MarketMafioso.Dashboard.csproj" />
   </ItemGroup>
+
+  <Target Name="RejectDebugProjectReferencesInRelease"
+          AfterTargets="ResolveProjectReferences"
+          Condition="'$(Configuration)' == 'Release'">
+    <ItemGroup>
+      <_DebugProjectReference Include="@(_ResolvedProjectReferencePaths)"
+                              Condition="$([System.String]::Copy('%(FullPath)').Contains('\bin\Debug\'))" />
+    </ItemGroup>
+    <Error Condition="'@(_DebugProjectReference)' != ''"
+           Text="Release build resolved Debug project output: @(_DebugProjectReference). Publish the server project directly with tools\Publish-ServerRelease.ps1." />
+  </Target>
 
   <Target Name="ValidateCraftArchitectCoreProject" BeforeTargets="PrepareForBuild" Condition="!Exists('$(CraftArchitectCoreProject)')">
     <Error Text="Craft Architect Core was not found at '$(CraftArchitectCoreProject)'. Check out the sibling 'FFXIV Craft Architect C# Edition' repository or set /p:CraftArchitectCoreProject=&quot;path/to/FFXIV Craft Architect.Core.csproj&quot;." />

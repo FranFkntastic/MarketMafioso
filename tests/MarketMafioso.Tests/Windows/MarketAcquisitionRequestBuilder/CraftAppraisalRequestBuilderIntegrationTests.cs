@@ -92,6 +92,53 @@ public sealed class CraftAppraisalRequestBuilderIntegrationTests
     }
 
     [Fact]
+    public void FindMatchingLineIndex_FollowsExactLineAcrossReordering()
+    {
+        var quoted = new MarketAcquisitionRequestLineDocument
+        {
+            ItemId = 5060,
+            ItemName = "Darksteel Ingot",
+            QuantityMode = "TargetQuantity",
+            TargetQuantity = 3,
+            HqPolicy = "Either",
+        };
+        var original = TestDocument.WithLines(
+            quoted,
+            new MarketAcquisitionRequestLineDocument
+            {
+                ItemId = 2,
+                ItemName = "Fire Shard",
+                QuantityMode = "TargetQuantity",
+                TargetQuantity = 10,
+                HqPolicy = "Either",
+            });
+        var identity = CraftAppraisalRequestMapper.BuildLineIdentity(original, quoted);
+        var reordered = original with { Lines = [original.Lines[1], original.Lines[0]] };
+
+        Assert.Equal(1, CraftAppraisalRequestMapper.FindMatchingLineIndex(reordered, identity));
+    }
+
+    [Fact]
+    public void FindMatchingLineIndex_RejectsLineChangedWhileQuoteWasInFlight()
+    {
+        var original = TestDocument.WithLine(new MarketAcquisitionRequestLineDocument
+        {
+            ItemId = 5060,
+            ItemName = "Darksteel Ingot",
+            QuantityMode = "TargetQuantity",
+            TargetQuantity = 3,
+            HqPolicy = "Either",
+        });
+        var identity = CraftAppraisalRequestMapper.BuildLineIdentity(original, original.Lines[0]);
+        var changed = original with
+        {
+            Lines = [original.Lines[0] with { TargetQuantity = 99 }],
+        };
+
+        Assert.Equal(-1, CraftAppraisalRequestMapper.FindMatchingLineIndex(changed, identity));
+    }
+
+    [Fact]
     public void ApplyMaxUnitPrice_UpdatesOnlySelectedLineAndAdvancesRevision()
     {
         var document = TestDocument.WithLines(

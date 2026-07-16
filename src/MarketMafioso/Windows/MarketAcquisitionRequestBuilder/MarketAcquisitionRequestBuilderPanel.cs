@@ -1,33 +1,35 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Numerics;
 using System.Threading.Tasks;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Plugin.Services;
+using Franthropy.Dalamud.AgentBridge;
+using Franthropy.Dalamud.UI.Items;
 using MarketMafioso.CraftArchitectCompanion;
 using MarketMafioso.MarketAcquisition;
 using MarketMafioso.Windows;
-using MarketMafioso.Windows.ItemAutocomplete;
 
 namespace MarketMafioso.Windows.MarketAcquisitionRequestBuilder;
 
 public sealed class MarketAcquisitionRequestBuilderPanel
 {
-    private readonly IReadOnlyList<AcquisitionItemOption> itemOptions;
+    private readonly IReadOnlyList<DalamudItemOption> itemOptions;
     private readonly CraftAppraisalRequestBuilderController craftAppraisal;
     private readonly MarketAcquisitionRequestBuilderController controller;
-    private readonly ItemAutocompleteState itemAutocomplete = new();
+    private readonly AgentBridgeUiReviewRegistry reviewRegistry;
+    private readonly DalamudItemAutocompleteState itemAutocomplete = new();
+    private readonly HashSet<uint> expandedEvidenceItems = [];
 
     private string quantityMode = "AllBelowThreshold";
     private string targetQuantityBuffer = string.Empty;
-    private string maxQuantityBuffer = string.Empty;
     private string maxUnitPriceBuffer = string.Empty;
     private string gilCapBuffer = string.Empty;
     private string hqPolicy = "Either";
     private bool isAppraising;
 
     private MarketAcquisitionRequestDocument document => controller.Document;
-    private int selectedLineIndex => controller.SelectedLineIndex;
     private string status => controller.Status;
 
     public MarketAcquisitionRequestBuilderPanel(
@@ -36,15 +38,17 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         CraftAppraisalRequestBuilderController craftAppraisal,
         Func<MarketAcquisitionRequestDocument, Task<MarketAcquisitionRequestBuilderSyncOutcome>> syncRequest,
         Func<MarketAcquisitionRequestDocument, Task<MarketAcquisitionRequestBuilderRefreshOutcome>> refreshRequest,
-        Action<MarketAcquisitionRequestDocument, MarketAcquisitionRequestView?> documentAdopted)
+        Action<MarketAcquisitionRequestDocument, MarketAcquisitionRequestView?> documentAdopted,
+        AgentBridgeUiReviewRegistry reviewRegistry)
     {
         this.craftAppraisal = craftAppraisal;
+        this.reviewRegistry = reviewRegistry ?? throw new ArgumentNullException(nameof(reviewRegistry));
         controller = new MarketAcquisitionRequestBuilderController(
             config,
             syncRequest,
             refreshRequest,
             documentAdopted);
-        itemOptions = ItemAutocompleteControl.LoadItemOptions(dataManager);
+        itemOptions = DalamudItemAutocompleteRenderer.LoadItemOptions(dataManager);
     }
 
     public MarketAcquisitionRequestDocument CurrentDocument => document;
@@ -75,7 +79,7 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         string world) =>
         controller.LoadComposition(composition, characterName, world);
 
-    public void Draw(MarketAcquisitionRequestBuilderContext context, bool showLifecycleSummary = true)
+    public void Draw(MarketAcquisitionRequestBuilderContext context, float reservedFooterHeight = 0)
     {
         EnsureCharacterScope(context);
         controller.PumpAutomaticSynchronization(
@@ -83,108 +87,418 @@ public sealed class MarketAcquisitionRequestBuilderPanel
             context.World,
             context.HasCharacterScope && !context.IsBusy && !context.IsRouteActive);
 
-        ImGuiUi.SectionHeader("Editable buy list", MainWindow.ColHeader);
-        if (showLifecycleSummary)
+        DrawRouteScope(context);
+        ImGui.Spacing();
+        DrawExceptionalStatus(context);
+        ImGuiUi.SectionHeader("Buy list", MainWindow.ColHeader);
+        DrawCompactLineTable(context, reservedFooterHeight);
+    }
+
+    public bool IsSynchronizing => controller.IsSyncing;
+
+    public bool IsRefreshing => controller.IsRefreshing;
+
+    public Task WaitForRefreshAsync() => controller.WaitForRefreshAsync();
+
+    public string SyncStatus => document.SyncStatus;
+
+    public string VisibleStatus => status;
+
+    public MarketAcquisitionRequestValidationResult DraftValidation => controller.DraftValidation;
+
+    public ulong TotalSpendCeiling => document.Lines.Aggregate(
+        0ul,
+        (total, line) => total + line.GilCap);
+
+    public uint TargetQuantityTotal => document.Lines
+        .Where(line => line.QuantityMode.Equals("TargetQuantity", StringComparison.OrdinalIgnoreCase))
+        .Aggregate(0u, (total, line) =>
         {
-            DrawStatusSummary(context);
+            var sum = (ulong)total + line.TargetQuantity;
+            return sum > uint.MaxValue ? uint.MaxValue : (uint)sum;
+        });
+
+    public void ClearWorkbench(MarketAcquisitionRequestBuilderContext context) => ClearDraft(context);
+
+    private void DrawExceptionalStatus(MarketAcquisitionRequestBuilderContext context)
+    {
+        if (context.IsRouteActive)
+        {
+            ImGui.TextColored(MainWindow.ColMuted, "Editing is paused while the active route finishes.");
             ImGui.Spacing();
+            return;
+        }
+
+        if (!context.HasCharacterScope && !context.CharacterScopeTemporarilyUnavailable)
+        {
+            ImGui.TextColored(MainWindow.ColError, "Character scope is unavailable; the Workbench cannot synchronize or finalize.");
+            ImGui.Spacing();
+            return;
+        }
+
+        if (document.SyncStatus.Equals("SyncFailed", StringComparison.OrdinalIgnoreCase))
+        {
+            ImGui.TextColored(MainWindow.ColError, status);
+            ImGui.Spacing();
+            return;
+        }
+
+        if (IsPlanStale(context))
+        {
+            ImGui.TextColored(MainWindow.ColWarning, "The finalized plan is stale because the buy list changed.");
+            ImGui.Spacing();
+        }
+    }
+
+    private void DrawCompactLineTable(MarketAcquisitionRequestBuilderContext context, float reservedFooterHeight)
+    {
+        var tableHeight = Math.Max(150f, ImGui.GetContentRegionAvail().Y - Math.Max(0, reservedFooterHeight));
+        var flags = AcquisitionRequestTableStyle.LineTableFlags |
+                    ImGuiTableFlags.SizingStretchProp |
+                    ImGuiTableFlags.NoSavedSettings;
+        if (!ImGui.BeginTable("AcquisitionWorkbenchLinesV2", 8, flags, new Vector2(0, tableHeight)))
+            return;
+
+        ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.WidthStretch, 2.4f);
+        ImGui.TableSetupColumn("Buying rule", ImGuiTableColumnFlags.WidthStretch, 1.5f);
+        ImGui.TableSetupColumn("Quantity", ImGuiTableColumnFlags.WidthStretch, 0.9f);
+        ImGui.TableSetupColumn("Unit ceiling", ImGuiTableColumnFlags.WidthStretch, 1.1f);
+        ImGui.TableSetupColumn("Spend ceiling", ImGuiTableColumnFlags.WidthStretch, 1.2f);
+        ImGui.TableSetupColumn("Quality", ImGuiTableColumnFlags.WidthStretch, 0.8f);
+        ImGui.TableSetupColumn("Evidence", ImGuiTableColumnFlags.WidthStretch, 1f);
+        ImGui.TableSetupColumn(string.Empty, ImGuiTableColumnFlags.WidthFixed, 72f);
+        ImGui.TableHeadersRow();
+
+        for (var index = 0; index < document.Lines.Count; index++)
+        {
+            var line = document.Lines[index];
+            DrawCompactLineRow(context, line, index);
+            if (expandedEvidenceItems.Contains(line.ItemId))
+                DrawCompactEvidenceRow(context, line, index);
+        }
+
+        DrawCompactAddRow(context);
+        ImGui.EndTable();
+    }
+
+    private void DrawCompactLineRow(
+        MarketAcquisitionRequestBuilderContext context,
+        MarketAcquisitionRequestLineDocument line,
+        int index)
+    {
+        var canEdit = !context.IsBusy && !context.IsRouteActive && !IsSynchronizing;
+        ImGui.PushID($"AcquisitionWorkbenchLine{line.ItemId}_{index}");
+        ImGui.TableNextRow();
+
+        ImGui.TableNextColumn();
+        ImGui.AlignTextToFramePadding();
+        ImGui.TextUnformatted(FormatLineItemName(line));
+        ImGui.SameLine();
+        var detailsOpen = expandedEvidenceItems.Contains(line.ItemId);
+        void ToggleDetails()
+        {
+            if (expandedEvidenceItems.Contains(line.ItemId))
+                expandedEvidenceItems.Remove(line.ItemId);
+            else
+                expandedEvidenceItems.Add(line.ItemId);
+        }
+        if (ImGuiUi.Button(detailsOpen ? "Hide" : "Details", true))
+            ToggleDetails();
+        RegisterLastControl(
+            $"acquisition.workbench.line.{line.ItemId}.details",
+            $"{(detailsOpen ? "Hide" : "Show")} pricing evidence for {FormatLineItemName(line)}",
+            true,
+            detailsOpen,
+            line.ItemId.ToString(),
+            ToggleDetails);
+
+        if (!canEdit)
+            ImGui.BeginDisabled();
+
+        ImGui.TableNextColumn();
+        DrawCompactModeCell(line, index);
+
+        ImGui.TableNextColumn();
+        DrawCompactQuantityCell(line, index);
+
+        ImGui.TableNextColumn();
+        DrawCompactUnitCell(line, index);
+
+        ImGui.TableNextColumn();
+        DrawCompactSpendCell(line, index);
+
+        ImGui.TableNextColumn();
+        DrawCompactHqCell(line, index);
+
+        ImGui.TableNextColumn();
+        DrawCompactEvidenceState(line);
+
+        ImGui.TableNextColumn();
+        if (ImGuiUi.Button("Remove", canEdit))
+            RemoveLine(index);
+        RegisterLastControl(
+            $"acquisition.workbench.line.{line.ItemId}.remove",
+            $"Remove {FormatLineItemName(line)} from the Workbench",
+            canEdit,
+            false,
+            line.ItemId.ToString(),
+            () => RemoveLineByItemId(line.ItemId));
+
+        if (!canEdit)
+            ImGui.EndDisabled();
+        ImGui.PopID();
+    }
+
+    private void DrawCompactModeCell(MarketAcquisitionRequestLineDocument line, int index)
+    {
+        var current = string.IsNullOrWhiteSpace(line.QuantityMode) ? "AllBelowThreshold" : line.QuantityMode;
+        ImGui.SetNextItemWidth(-1);
+        if (!ImGui.BeginCombo("##Mode", FormatEditorOption(current)))
+            return;
+
+        foreach (var mode in new[] { "AllBelowThreshold", "TargetQuantity" })
+        {
+            var selected = string.Equals(mode, current, StringComparison.Ordinal);
+            if (ImGui.Selectable(FormatEditorOption(mode), selected))
+            {
+                ApplyLineEdit(
+                    index,
+                    line,
+                    quantityMode: mode,
+                    targetQuantity: mode == "TargetQuantity" ? Math.Max(1u, line.TargetQuantity) : 0,
+                    maxQuantity: 0,
+                    message: "Buying rule updated.");
+            }
+
+            if (selected)
+                ImGui.SetItemDefaultFocus();
+        }
+
+        ImGui.EndCombo();
+    }
+
+    private void DrawCompactQuantityCell(MarketAcquisitionRequestLineDocument line, int index)
+    {
+        if (!line.QuantityMode.Equals("TargetQuantity", StringComparison.OrdinalIgnoreCase))
+        {
+            if (line.MaxQuantity == 0)
+            {
+                ImGui.AlignTextToFramePadding();
+                ImGui.TextColored(MainWindow.ColMuted, "-");
+                return;
+            }
+
+            ImGui.PushStyleColor(ImGuiCol.Text, MainWindow.ColWarning);
+            if (ImGui.Button($"Clear cap {line.MaxQuantity:N0}"))
+                ApplyLineEdit(index, line, maxQuantity: 0, message: "Legacy quantity cap cleared.");
+            ImGui.PopStyleColor();
+            return;
+        }
+
+        var quantity = ClampToInt(line.TargetQuantity);
+        ImGui.SetNextItemWidth(-1);
+        if (!ImGui.InputInt("##Quantity", ref quantity))
+            return;
+
+        ApplyLineEdit(
+            index,
+            line,
+            targetQuantity: Math.Max(1u, ClampToUInt(quantity)),
+            maxQuantity: 0,
+            message: "Target quantity updated.");
+    }
+
+    private void DrawCompactUnitCell(MarketAcquisitionRequestLineDocument line, int index)
+    {
+        var maxUnit = ClampToInt(line.MaxUnitPrice);
+        ImGui.SetNextItemWidth(-1);
+        if (ImGui.InputInt("##Unit", ref maxUnit))
+            ApplyLineEdit(index, line, maxUnitPrice: ClampToUInt(maxUnit), message: "Unit ceiling updated.");
+    }
+
+    private void DrawCompactSpendCell(MarketAcquisitionRequestLineDocument line, int index)
+    {
+        var gilCap = ClampToInt(line.GilCap);
+        ImGui.SetNextItemWidth(-1);
+        if (ImGui.InputInt("##Spend", ref gilCap))
+            ApplyLineEdit(index, line, gilCap: ClampToUInt(gilCap), message: "Spend ceiling updated.");
+    }
+
+    private void DrawCompactHqCell(MarketAcquisitionRequestLineDocument line, int index)
+    {
+        var current = string.IsNullOrWhiteSpace(line.HqPolicy) ? "Either" : line.HqPolicy;
+        ImGui.SetNextItemWidth(-1);
+        if (!ImGui.BeginCombo("##Quality", FormatEditorOption(current)))
+            return;
+
+        foreach (var policy in new[] { "Either", "HQOnly", "NQOnly" })
+        {
+            var selected = string.Equals(policy, current, StringComparison.Ordinal);
+            if (ImGui.Selectable(FormatEditorOption(policy), selected))
+                ApplyLineEdit(index, line, hqPolicy: policy, message: "Quality updated.");
+            if (selected)
+                ImGui.SetItemDefaultFocus();
+        }
+
+        ImGui.EndCombo();
+    }
+
+    private void DrawCompactEvidenceState(MarketAcquisitionRequestLineDocument line)
+    {
+        var identity = CraftAppraisalRequestMapper.BuildLineIdentity(document, line);
+        var threshold = craftAppraisal.State.TryGetLineQuoteThreshold(identity);
+        if (threshold is > 0)
+            ImGui.TextColored(MainWindow.ColSuccess, "Quote ready");
+        else if (line.MaxUnitPrice > 0)
+            ImGui.TextColored(MainWindow.ColMuted, "Manual");
+        else
+            ImGui.TextColored(MainWindow.ColWarning, "Missing");
+    }
+
+    private void DrawCompactEvidenceRow(
+        MarketAcquisitionRequestBuilderContext context,
+        MarketAcquisitionRequestLineDocument line,
+        int index)
+    {
+        var identity = CraftAppraisalRequestMapper.BuildLineIdentity(document, line);
+        var threshold = craftAppraisal.State.TryGetLineQuoteThreshold(identity);
+        ImGui.TableNextRow();
+
+        ImGui.TableNextColumn();
+        ImGui.TextColored(MainWindow.ColHeader, "Pricing evidence");
+        ImGui.SameLine();
+        ImGui.TextColored(MainWindow.ColMuted, FormatLineItemName(line));
+
+        ImGui.TableNextColumn();
+        ImGui.TextColored(MainWindow.ColMuted, "Craft Architect");
+
+        ImGui.TableNextColumn();
+        ImGui.TextColored(MainWindow.ColMuted, line.QuantityMode == "TargetQuantity" ? $"{line.TargetQuantity:N0} target" : "Unbounded");
+
+        ImGui.TableNextColumn();
+        if (threshold is > 0)
+            ImGui.TextColored(MainWindow.ColSuccess, $"{threshold.Value:N0} gil");
+        else
+            ImGui.TextColored(MainWindow.ColMuted, "No quote");
+
+        ImGui.TableNextColumn();
+        ImGui.TextColored(
+            IsPlanStale(context) ? MainWindow.ColWarning : MainWindow.ColMuted,
+            IsPlanStale(context) ? "Plan stale" : context.CurrentPlan is null ? "Not finalized" : "Plan current");
+
+        ImGui.TableNextColumn();
+        ImGui.TextColored(MainWindow.ColMuted, FormatEditorOption(line.HqPolicy));
+
+        ImGui.TableNextColumn();
+        var canQuote = craftAppraisal.State.WorkshopHostEnabled && !isAppraising && line.ItemId != 0;
+        if (threshold is > 0)
+        {
+            if (ImGuiUi.Button("Use quote", canQuote && line.MaxUnitPrice != threshold.Value))
+                SetLineMaxUnitPrice(index, threshold.Value, "Unit ceiling set from Craft Architect quote.");
+        }
+        else if (ImGuiUi.Button("Get quote", canQuote))
+        {
+            _ = CalculateMaxUnitFromCraftAsync(index);
+        }
+
+        ImGui.TableNextColumn();
+        ImGui.TextUnformatted(string.Empty);
+    }
+
+    private void DrawCompactAddRow(MarketAcquisitionRequestBuilderContext context)
+    {
+        var canEdit = !context.IsBusy && !context.IsRouteActive && !IsSynchronizing;
+        ImGui.PushID("AcquisitionWorkbenchAddRow");
+        ImGui.TableNextRow();
+
+        if (!canEdit)
+            ImGui.BeginDisabled();
+
+        ImGui.TableNextColumn();
+        DalamudItemAutocompleteRenderer.DrawInline(
+            "AcquisitionWorkbenchAdd",
+            itemOptions,
+            itemAutocomplete,
+            MainWindow.ColMuted,
+            MainWindow.ColSuccess,
+            MainWindow.ColError);
+
+        ImGui.TableNextColumn();
+        DrawInlineCombo("##NewRule", ["AllBelowThreshold", "TargetQuantity"], ref quantityMode);
+
+        ImGui.TableNextColumn();
+        if (quantityMode == "TargetQuantity")
+        {
+            ImGui.SetNextItemWidth(-1);
+            ImGui.InputTextWithHint("##NewQuantity", "Required", ref targetQuantityBuffer, 32);
         }
         else
         {
-            ImGui.TextColored(GetSyncStatusColor(), FormatBuilderStatus(context));
-        }
-        DrawRouteScope(context);
-        ImGui.Spacing();
-        DrawLineEditor(context);
-        ImGui.Spacing();
-        DrawLineTable();
-        ImGui.Spacing();
-        DrawSelectedLineInspector(context);
-        ImGui.Spacing();
-        DrawActions(context);
-    }
-
-    private void DrawStatusSummary(MarketAcquisitionRequestBuilderContext context)
-    {
-        if (ImGui.BeginTable("AcquisitionRequestBuilderStatusStrip", 4, ImGuiTableFlags.BordersInnerV | ImGuiTableFlags.SizingStretchProp))
-        {
-            ImGui.TableSetupColumn("Target", ImGuiTableColumnFlags.WidthStretch, 1f);
-            ImGui.TableSetupColumn("Request", ImGuiTableColumnFlags.WidthStretch, 1f);
-            ImGui.TableSetupColumn("Lines", ImGuiTableColumnFlags.WidthStretch, 0.75f);
-            ImGui.TableSetupColumn("Plan", ImGuiTableColumnFlags.WidthStretch, 0.75f);
-            ImGui.TableNextRow();
-
-            ImGui.TableNextColumn();
-            ImGui.TextColored(MainWindow.ColMuted, "Target");
-            if (context.HasCharacterScope)
-                ImGui.TextColored(MainWindow.ColSuccess, $"{context.CharacterName} @ {context.World}");
-            else if (context.CharacterScopeTemporarilyUnavailable)
-                ImGui.TextColored(MainWindow.ColMuted, "Temporarily unavailable");
-            else
-                ImGui.TextColored(MainWindow.ColError, "No character scope");
-
-            ImGui.TableNextColumn();
-            ImGui.TextColored(MainWindow.ColMuted, "Request");
-            ImGui.TextColored(GetSyncStatusColor(), FormatRequestStatus());
-
-            ImGui.TableNextColumn();
-            ImGui.TextColored(MainWindow.ColMuted, "Lines");
-            ImGui.TextColored(document.Lines.Count == 0 ? MainWindow.ColError : MainWindow.ColSuccess, $"{document.Lines.Count:N0} local");
-
-            ImGui.TableNextColumn();
-            ImGui.TextColored(MainWindow.ColMuted, "Plan");
-            if (IsPlanStale(context))
-                ImGui.TextColored(MainWindow.ColError, "Stale");
-            else if (context.CurrentPlan is not null)
-                ImGui.TextColored(MainWindow.ColSuccess, "Current");
-            else
-                ImGui.TextColored(MainWindow.ColMuted, "Not prepared");
-
-            ImGui.EndTable();
+            ImGui.AlignTextToFramePadding();
+            ImGui.TextColored(MainWindow.ColMuted, "-");
         }
 
-        ImGui.TextColored(GetSyncStatusColor(), FormatBuilderStatus(context));
-        if (context.IsRouteActive)
-            ImGui.TextColored(MainWindow.ColMuted, "Synchronization is paused while a guided route is active.");
-    }
+        ImGui.TableNextColumn();
+        ImGui.SetNextItemWidth(-1);
+        ImGui.InputTextWithHint("##NewUnit", "Unset", ref maxUnitPriceBuffer, 32);
 
-    private string FormatRequestStatus()
-    {
-        if (string.IsNullOrWhiteSpace(document.RemoteRequestId))
-            return FormatSyncStatus(document.SyncStatus);
+        ImGui.TableNextColumn();
+        ImGui.SetNextItemWidth(-1);
+        ImGui.InputTextWithHint("##NewSpend", "Optional", ref gilCapBuffer, 32);
 
-        return $"{FormatSyncStatus(document.SyncStatus)} r{document.RemoteRevision}";
-    }
+        ImGui.TableNextColumn();
+        DrawInlineCombo("##NewQuality", ["Either", "HQOnly", "NQOnly"], ref hqPolicy);
 
-    private string FormatBuilderStatus(MarketAcquisitionRequestBuilderContext context)
-    {
-        var remote = string.IsNullOrWhiteSpace(document.RemoteRequestId)
-            ? "not yet published"
-            : $"server r{document.RemoteRevision}";
-        var plan = IsPlanStale(context)
-            ? ", plan stale"
-            : context.CurrentPlan is null ? string.Empty : ", plan current";
-        return $"{FormatSyncStatus(document.SyncStatus)}: {document.Lines.Count:N0} line(s), {remote}{plan}. {status}";
-    }
+        ImGui.TableNextColumn();
+        ImGui.TextColored(MainWindow.ColMuted, "After add");
 
-    private static string FormatSyncStatus(string syncStatus) =>
-        syncStatus switch
+        ImGui.TableNextColumn();
+        var canAdd = canEdit && RequestLineInputValidator.CanAddIntentLine(
+            itemAutocomplete.SelectedItem,
+            quantityMode,
+            targetQuantityBuffer,
+            string.Empty,
+            maxUnitPriceBuffer,
+            gilCapBuffer);
+        if (ImGuiUi.PrimaryButton("Add", canAdd))
         {
-            "NewDraft" => "Sync pending",
-            "LocalEdits" => "Sync pending",
-            "SyncedClean" => "Synced",
-            "RemoteChanged" => "Synchronizing",
-            "SyncFailed" => "Retrying sync",
-            _ => string.IsNullOrWhiteSpace(syncStatus) ? "Draft" : syncStatus,
-        };
+            ApplyEditorLine();
+            ClearLineEditor();
+        }
+        RegisterLastControl(
+            "acquisition.workbench.add",
+            "Add the inline item to the Workbench",
+            canAdd,
+            false,
+            itemAutocomplete.SelectedItem?.ItemId.ToString(),
+            () =>
+            {
+                ApplyEditorLine();
+                ClearLineEditor();
+            });
 
-    private Vector4 GetSyncStatusColor() =>
-        document.SyncStatus switch
+        if (!canEdit)
+            ImGui.EndDisabled();
+        ImGui.PopID();
+    }
+
+    private static void DrawInlineCombo(string id, IReadOnlyList<string> values, ref string current)
+    {
+        ImGui.SetNextItemWidth(-1);
+        if (!ImGui.BeginCombo(id, FormatEditorOption(current)))
+            return;
+
+        foreach (var value in values)
         {
-            "SyncedClean" => MainWindow.ColSuccess,
-            "RemoteChanged" or "SyncFailed" => MainWindow.ColError,
-            _ => MainWindow.ColMuted,
-        };
+            var selected = string.Equals(value, current, StringComparison.Ordinal);
+            if (ImGui.Selectable(FormatEditorOption(value), selected))
+                current = value;
+            if (selected)
+                ImGui.SetItemDefaultFocus();
+        }
+
+        ImGui.EndCombo();
+    }
 
     private bool IsPlanStale(MarketAcquisitionRequestBuilderContext context) =>
         context.CurrentPlan is not null &&
@@ -202,407 +516,20 @@ public sealed class MarketAcquisitionRequestBuilderPanel
             MainWindow.ColError);
     }
 
-    private void DrawLineEditor(MarketAcquisitionRequestBuilderContext context)
-    {
-        var isEditing = selectedLineIndex >= 0;
-        ImGui.TextColored(MainWindow.ColHeader, isEditing ? "Edit request item" : "Add an item");
-
-        if (ImGui.BeginTable("AcquisitionRequestBuilderLineEditorPrimary", 3, ImGuiTableFlags.SizingFixedFit))
-        {
-            ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.WidthFixed, 440f);
-            ImGui.TableSetupColumn("Buying rule", ImGuiTableColumnFlags.WidthFixed, 180f);
-            ImGui.TableSetupColumn("Quality", ImGuiTableColumnFlags.WidthFixed, 110f);
-            ImGui.TableNextRow();
-
-            ImGui.TableNextColumn();
-            ItemAutocompleteControl.Draw(
-                "AcquisitionRequestBuilder",
-                itemOptions,
-                itemAutocomplete,
-                null,
-                MainWindow.ColMuted,
-                MainWindow.ColSuccess,
-                MainWindow.ColError,
-                showMinimumCharacterHint: false);
-
-            ImGui.TableNextColumn();
-            DrawCombo("Buying rule##AcquisitionRequestBuilderMode", ["AllBelowThreshold", "TargetQuantity"], ref quantityMode);
-            ImGui.TableNextColumn();
-            DrawCombo("Quality##AcquisitionRequestBuilderHq", ["Either", "HQOnly", "NQOnly"], ref hqPolicy);
-
-            ImGui.EndTable();
-        }
-
-        if (ImGui.BeginTable("AcquisitionRequestBuilderLineEditorLimits", 3, ImGuiTableFlags.SizingFixedFit))
-        {
-            ImGui.TableSetupColumn("Quantity", ImGuiTableColumnFlags.WidthFixed, 150f);
-            ImGui.TableSetupColumn("Unit Cost Ceiling", ImGuiTableColumnFlags.WidthFixed, 180f);
-            ImGui.TableSetupColumn("Total Spend Ceiling", ImGuiTableColumnFlags.WidthFixed, 190f);
-            ImGui.TableNextRow();
-
-            ImGui.TableNextColumn();
-            if (quantityMode == "TargetQuantity")
-                DrawInput("Target Qty", "##AcquisitionRequestBuilderTargetQty", ref targetQuantityBuffer);
-            else
-                DrawInput("Max Qty", "##AcquisitionRequestBuilderMaxQty", ref maxQuantityBuffer);
-            ImGui.TableNextColumn();
-            DrawInput("Unit Cost Ceiling", "##AcquisitionRequestBuilderMaxUnit", ref maxUnitPriceBuffer);
-            ImGui.TableNextColumn();
-            DrawInput("Total Spend Ceiling", "##AcquisitionRequestBuilderGilCap", ref gilCapBuffer);
-
-            ImGui.EndTable();
-        }
-
-        var canApply = !context.IsBusy &&
-                       !context.IsRouteActive &&
-                       RequestLineInputValidator.CanAddIntentLine(
-                           itemAutocomplete.SelectedItem,
-                           quantityMode,
-                           targetQuantityBuffer,
-                           maxQuantityBuffer,
-                           maxUnitPriceBuffer,
-                           gilCapBuffer);
-        var actionLabel = isEditing ? "Save item changes" : "Add item to request";
-        if (ImGuiUi.PrimaryButton($"{actionLabel}##AcquisitionRequestBuilderApplyLine", canApply))
-        {
-            ApplyEditorLine();
-            ClearLineEditor();
-        }
-
-        if (isEditing)
-        {
-            ImGui.SameLine();
-            if (ImGuiUi.Button("Cancel editing##AcquisitionRequestBuilderCancelEdit", true))
-                ClearLineEditor();
-        }
-    }
-
-    private static void DrawInput(string label, string id, ref string buffer)
-    {
-        ImGui.TextColored(MainWindow.ColMuted, label);
-        ImGui.SetNextItemWidth(-1);
-        ImGui.InputText(id, ref buffer, 32);
-    }
-
-    private static void DrawCombo(string label, IReadOnlyList<string> values, ref string current)
-    {
-        ImGui.TextColored(MainWindow.ColMuted, label.Split('#')[0]);
-        ImGui.SetNextItemWidth(-1);
-        if (!ImGui.BeginCombo(label, FormatEditorOption(current)))
-            return;
-
-        foreach (var value in values)
-        {
-            var selected = string.Equals(value, current, StringComparison.Ordinal);
-            if (ImGui.Selectable(FormatEditorOption(value), selected))
-                current = value;
-            if (selected)
-                ImGui.SetItemDefaultFocus();
-        }
-
-        ImGui.EndCombo();
-    }
-
     private static string FormatEditorOption(string value) =>
         value switch
         {
             "AllBelowThreshold" => "Buy below ceiling",
-            "TargetQuantity" => "Buy target quantity",
+            "TargetQuantity" => "Target quantity",
             "Either" => "Any",
             "HQOnly" => "HQ only",
             "NQOnly" => "NQ only",
             _ => value,
         };
 
-    private void DrawLineTable()
-    {
-        var tableHeight = (ImGui.GetTextLineHeightWithSpacing() * 6.5f) + 8f;
-        if (!ImGui.BeginTable("AcquisitionRequestBuilderLines", 7, AcquisitionRequestTableStyle.LineTableFlags, new Vector2(0, tableHeight)))
-            return;
-
-        ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.WidthStretch);
-        ImGui.TableSetupColumn("Mode", ImGuiTableColumnFlags.WidthFixed, 150);
-        ImGui.TableSetupColumn("Qty", ImGuiTableColumnFlags.WidthFixed, 88);
-        ImGui.TableSetupColumn("Unit Ceiling", ImGuiTableColumnFlags.WidthFixed, 112);
-        ImGui.TableSetupColumn("Spend Ceiling", ImGuiTableColumnFlags.WidthFixed, 112);
-        ImGui.TableSetupColumn("HQ", ImGuiTableColumnFlags.WidthFixed, 88);
-        ImGui.TableSetupColumn("", ImGuiTableColumnFlags.WidthFixed, 88);
-        ImGui.TableHeadersRow();
-
-        if (document.Lines.Count == 0)
-        {
-            ImGui.TableNextRow();
-            ImGui.TableNextColumn();
-            ImGui.TextColored(MainWindow.ColMuted, "No acquisition lines queued.");
-            ImGui.TableNextColumn();
-            ImGui.TableNextColumn();
-            ImGui.TableNextColumn();
-            ImGui.TableNextColumn();
-            ImGui.TableNextColumn();
-            ImGui.TableNextColumn();
-            ImGui.EndTable();
-            return;
-        }
-
-        for (var index = 0; index < document.Lines.Count; index++)
-        {
-            var line = document.Lines[index];
-            ImGui.TableNextRow();
-            ImGui.TableNextColumn();
-            if (ImGui.Selectable($"{FormatLineItem(line)}##AcquisitionRequestBuilderLine{index}", selectedLineIndex == index))
-            {
-                SelectLineForEditing(index, line);
-            }
-
-            ImGui.TableNextColumn();
-            DrawLineModeCell(line, index);
-            ImGui.TableNextColumn();
-            DrawLineQuantityCell(line, index);
-            ImGui.TableNextColumn();
-            DrawMaxUnitCell(line, index);
-            ImGui.TableNextColumn();
-            DrawGilCapCell(line, index);
-            ImGui.TableNextColumn();
-            DrawLineHqCell(line, index);
-            ImGui.TableNextColumn();
-            if (ImGuiUi.Button($"Remove##AcquisitionRequestBuilderRemove{index}", true))
-                RemoveLine(index);
-        }
-
-        ImGui.EndTable();
-    }
-
-    private void DrawMaxUnitCell(MarketAcquisitionRequestLineDocument line, int index)
-    {
-        var maxUnit = ClampToInt(line.MaxUnitPrice);
-        ImGui.SetNextItemWidth(-1);
-        if (ImGui.InputInt($"##AcquisitionRequestBuilderMaxUnitCell{index}", ref maxUnit))
-            ApplyLineEdit(
-                index,
-                line,
-                maxUnitPrice: ClampToUInt(maxUnit),
-                message: "Unit cost ceiling updated.");
-
-        if (!ImGui.BeginPopupContextItem($"AcquisitionRequestBuilderMaxUnitMenu{index}"))
-            return;
-
-        SelectLineForEditing(index, line);
-        var identity = CraftAppraisalRequestMapper.BuildLineIdentity(document, line);
-        var threshold = craftAppraisal.State.TryGetLineQuoteThreshold(identity);
-        if (threshold is > 0)
-        {
-            if (ImGuiUi.MenuItem("Use Craft Architect Quote", true))
-                SetLineMaxUnitPrice(index, threshold.Value, "Unit cost ceiling set from Craft Architect quote.");
-        }
-        else
-        {
-            if (ImGuiUi.MenuItem(
-                    "Get Craft Architect Quote",
-                    craftAppraisal.State.WorkshopHostEnabled && !isAppraising && line.ItemId != 0))
-            {
-                _ = CalculateMaxUnitFromCraftAsync(index);
-            }
-
-            if (!craftAppraisal.State.WorkshopHostEnabled)
-                ImGui.TextColored(MainWindow.ColMuted, "Craft Architect quotes are not available.");
-        }
-
-        if (ImGuiUi.MenuItem("Enter manually", true))
-        {
-            SelectLineForEditing(index, line);
-            controller.SetStatus("Edit unit cost ceiling directly in the row.");
-        }
-
-        if (ImGuiUi.MenuItem("Clear unit cost ceiling", line.MaxUnitPrice > 0))
-            SetLineMaxUnitPrice(index, 0, "Unit cost ceiling cleared.");
-
-        ImGui.EndPopup();
-    }
-
-    private void DrawGilCapCell(MarketAcquisitionRequestLineDocument line, int index)
-    {
-        var gilCap = ClampToInt(line.GilCap);
-        ImGui.SetNextItemWidth(-1);
-        if (ImGui.InputInt($"##AcquisitionRequestBuilderGilCapCell{index}", ref gilCap))
-            ApplyLineEdit(
-                index,
-                line,
-                gilCap: ClampToUInt(gilCap),
-                message: "Total spend ceiling updated.");
-
-        if (!ImGui.BeginPopupContextItem($"AcquisitionRequestBuilderGilCapMenu{index}"))
-            return;
-
-        SelectLineForEditing(index, line);
-        var capQuantity = GetCapQuantity(line);
-        var canCalculateCap = line.MaxUnitPrice > 0 && capQuantity > 0;
-        if (ImGuiUi.MenuItem("Set from unit ceiling x quantity", canCalculateCap))
-            SetLineGilCap(
-                index,
-                CalculateGilCap(line.MaxUnitPrice, capQuantity),
-                "Total spend ceiling set from unit ceiling and quantity.");
-        if (!canCalculateCap)
-            ImGui.TextColored(MainWindow.ColMuted, "Set unit ceiling and a finite quantity before calculating a spend ceiling.");
-
-        if (ImGuiUi.MenuItem("Enter manually", true))
-        {
-            SelectLineForEditing(index, line);
-            controller.SetStatus("Edit total spend ceiling directly in the row.");
-        }
-
-        if (ImGuiUi.MenuItem("Clear total spend ceiling", line.GilCap > 0))
-            SetLineGilCap(index, 0, "Total spend ceiling cleared.");
-
-        ImGui.EndPopup();
-    }
-
-    private void DrawLineModeCell(MarketAcquisitionRequestLineDocument line, int index)
-    {
-        var current = string.IsNullOrWhiteSpace(line.QuantityMode) ? "AllBelowThreshold" : line.QuantityMode;
-        ImGui.SetNextItemWidth(-1);
-        if (!ImGui.BeginCombo($"##AcquisitionRequestBuilderModeCell{index}", MarketAcquisitionQuantityModePresenter.FormatMode(current)))
-            return;
-
-        foreach (var mode in new[] { "AllBelowThreshold", "TargetQuantity" })
-        {
-            var selected = string.Equals(mode, current, StringComparison.Ordinal);
-            if (ImGui.Selectable(MarketAcquisitionQuantityModePresenter.FormatMode(mode), selected))
-            {
-                ApplyLineEdit(
-                    index,
-                    line,
-                    quantityMode: mode,
-                    targetQuantity: mode == "TargetQuantity" ? Math.Max(1u, line.TargetQuantity) : line.TargetQuantity,
-                    message: "Quantity mode updated.");
-            }
-
-            if (selected)
-                ImGui.SetItemDefaultFocus();
-        }
-
-        ImGui.EndCombo();
-    }
-
-    private void DrawLineQuantityCell(MarketAcquisitionRequestLineDocument line, int index)
-    {
-        var isTargetQuantity = line.QuantityMode.Equals("TargetQuantity", StringComparison.OrdinalIgnoreCase);
-        var quantity = ClampToInt(isTargetQuantity ? line.TargetQuantity : line.MaxQuantity);
-        ImGui.SetNextItemWidth(-1);
-        if (!ImGui.InputInt($"##AcquisitionRequestBuilderQuantityCell{index}", ref quantity))
-            return;
-
-        var updated = ClampToUInt(quantity);
-        ApplyLineEdit(
-            index,
-            line,
-            targetQuantity: isTargetQuantity ? Math.Max(1u, updated) : line.TargetQuantity,
-            maxQuantity: isTargetQuantity ? line.MaxQuantity : updated,
-            message: isTargetQuantity ? "Target quantity updated." : "Maximum quantity updated.");
-    }
-
-    private void DrawLineHqCell(MarketAcquisitionRequestLineDocument line, int index)
-    {
-        var current = string.IsNullOrWhiteSpace(line.HqPolicy) ? "Either" : line.HqPolicy;
-        ImGui.SetNextItemWidth(-1);
-        if (!ImGui.BeginCombo($"##AcquisitionRequestBuilderHqCell{index}", current))
-            return;
-
-        foreach (var hq in new[] { "Either", "HQOnly", "NQOnly" })
-        {
-            var selected = string.Equals(hq, current, StringComparison.Ordinal);
-            if (ImGui.Selectable(hq, selected))
-                ApplyLineEdit(index, line, hqPolicy: hq, message: "HQ policy updated.");
-
-            if (selected)
-                ImGui.SetItemDefaultFocus();
-        }
-
-        ImGui.EndCombo();
-    }
-
-    private void DrawSelectedLineInspector(MarketAcquisitionRequestBuilderContext context)
-    {
-        ImGui.TextColored(MainWindow.ColHeader, "Selected Line");
-        var selectedLine = selectedLineIndex >= 0 && selectedLineIndex < document.Lines.Count
-            ? document.Lines[selectedLineIndex]
-            : null;
-
-        if (!ImGui.BeginTable("AcquisitionRequestBuilderSelectedLine", 2, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg))
-            return;
-
-        ImGui.TableSetupColumn("Evidence", ImGuiTableColumnFlags.WidthStretch);
-        ImGui.TableSetupColumn("State", ImGuiTableColumnFlags.WidthStretch);
-        ImGui.TableHeadersRow();
-        ImGui.TableNextRow();
-
-        ImGui.TableNextColumn();
-        ImGui.TextColored(MainWindow.ColMuted, "Craft Architect quote");
-        if (selectedLine is null)
-        {
-            ImGui.TextColored(MainWindow.ColMuted, document.Lines.Count == 0
-                ? "Add an acquisition line to begin."
-                : "Select a line to inspect pricing evidence.");
-            ImGui.TableNextColumn();
-            ImGui.TextColored(MainWindow.ColMuted, "Request state");
-            ImGui.TextColored(MainWindow.ColMuted, "No line selected.");
-            ImGui.EndTable();
-            return;
-        }
-
-        var identity = CraftAppraisalRequestMapper.BuildLineIdentity(document, selectedLine);
-        var threshold = craftAppraisal.State.TryGetLineQuoteThreshold(identity);
-        if (threshold is > 0)
-            ImGui.TextColored(MainWindow.ColSuccess, $"{threshold.Value:N0} gil recommended threshold");
-        else
-            ImGui.TextColored(MainWindow.ColMuted, "No Craft Architect quote yet.");
-        ImGui.TextColored(MainWindow.ColMuted, craftAppraisal.State.CraftQuoteStatus);
-
-        ImGui.TableNextColumn();
-        ImGui.TextColored(MainWindow.ColMuted, "Request state");
-        ImGui.TextUnformatted($"{FormatLineItem(selectedLine)}");
-        ImGui.TextUnformatted($"{MarketAcquisitionQuantityModePresenter.FormatMode(selectedLine.QuantityMode)} / {FormatLineQuantity(selectedLine)}");
-        ImGui.TextUnformatted($"Unit ceiling: {RequestPricingFormatter.FormatOptionalGil(selectedLine.MaxUnitPrice)}");
-        ImGui.TextUnformatted($"Spend ceiling: {RequestPricingFormatter.FormatOptionalGil(selectedLine.GilCap)}");
-        if (IsPlanStale(context))
-            ImGui.TextColored(MainWindow.ColError, "Plan is stale until the request is updated and prepared again.");
-        else if (context.CurrentPlan is not null)
-            ImGui.TextColored(MainWindow.ColSuccess, "Plan matches current request.");
-        else
-            ImGui.TextColored(MainWindow.ColMuted, "No prepared plan yet.");
-
-        ImGui.EndTable();
-    }
-
-    private void DrawActions(MarketAcquisitionRequestBuilderContext context)
-    {
-        var busy = context.IsBusy || controller.IsSyncing || controller.IsRefreshing || isAppraising;
-        if (context.IsRouteActive)
-            ImGui.TextColored(MainWindow.ColMuted, "Editing is paused while the active route finishes.");
-
-        if (ImGui.TreeNode("Start over##AcquisitionRequestBuilderRecovery"))
-        {
-            if (ImGuiUi.Button("Clear draft##AcquisitionRequestBuilderClear", !busy && !context.IsRouteActive))
-                ClearDraft(context);
-            ImGui.TreePop();
-        }
-    }
-
-    private void SelectLineForEditing(int index, MarketAcquisitionRequestLineDocument line)
-    {
-        if (controller.SelectLine(index))
-            LoadLineIntoEditor(line);
-    }
-
     private void SetLineMaxUnitPrice(int index, uint maxUnitPrice, string message)
     {
-        if (controller.SetLineMaxUnitPrice(index, maxUnitPrice, message))
-            LoadLineIntoEditor(document.Lines[index]);
-    }
-
-    private void SetLineGilCap(int index, uint gilCap, string message)
-    {
-        if (controller.SetLineGilCap(index, gilCap, message))
-            LoadLineIntoEditor(document.Lines[index]);
+        controller.SetLineMaxUnitPrice(index, maxUnitPrice, message);
     }
 
     private void ApplyLineEdit(
@@ -616,29 +543,15 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         uint? gilCap = null,
         string message = "Line updated.")
     {
-        if (controller.ApplyLineEdit(
-                index,
-                quantityMode ?? line.QuantityMode,
-                targetQuantity ?? line.TargetQuantity,
-                maxQuantity ?? line.MaxQuantity,
-                hqPolicy ?? line.HqPolicy,
-                maxUnitPrice ?? line.MaxUnitPrice,
-                gilCap ?? line.GilCap,
-                message))
-        {
-            LoadLineIntoEditor(document.Lines[index]);
-        }
-    }
-
-    private static uint GetCapQuantity(MarketAcquisitionRequestLineDocument line) =>
-        line.QuantityMode == "TargetQuantity"
-            ? line.TargetQuantity
-            : line.MaxQuantity;
-
-    private static uint CalculateGilCap(uint maxUnitPrice, uint quantity)
-    {
-        var cap = (ulong)maxUnitPrice * quantity;
-        return cap > uint.MaxValue ? uint.MaxValue : (uint)cap;
+        controller.ApplyLineEdit(
+            index,
+            quantityMode ?? line.QuantityMode,
+            targetQuantity ?? line.TargetQuantity,
+            maxQuantity ?? line.MaxQuantity,
+            hqPolicy ?? line.HqPolicy,
+            maxUnitPrice ?? line.MaxUnitPrice,
+            gilCap ?? line.GilCap,
+            message);
     }
 
     private async Task CalculateMaxUnitFromCraftAsync(int index)
@@ -661,7 +574,14 @@ public sealed class MarketAcquisitionRequestBuilderPanel
             var threshold = craftAppraisal.State.TryGetLineQuoteThreshold(identity);
             if (threshold is > 0)
             {
-                SetLineMaxUnitPrice(index, threshold.Value, "Unit cost ceiling set from Craft Architect quote.");
+                var currentIndex = CraftAppraisalRequestMapper.FindMatchingLineIndex(document, identity);
+                if (currentIndex < 0)
+                {
+                    controller.SetStatus("Craft Architect quote was kept as evidence but not applied because the Workbench line changed.");
+                    return;
+                }
+
+                SetLineMaxUnitPrice(currentIndex, threshold.Value, "Unit cost ceiling set from Craft Architect quote.");
                 return;
             }
 
@@ -688,7 +608,7 @@ public sealed class MarketAcquisitionRequestBuilderPanel
             ItemName = item.Name,
             QuantityMode = quantityMode,
             TargetQuantity = quantityMode == "TargetQuantity" ? ParseUInt(targetQuantityBuffer) : 0,
-            MaxQuantity = quantityMode == "AllBelowThreshold" ? ParseUInt(maxQuantityBuffer) : 0,
+            MaxQuantity = 0,
             HqPolicy = hqPolicy,
             MaxUnitPrice = ParseUInt(maxUnitPriceBuffer),
             GilCap = ParseUInt(gilCapBuffer),
@@ -698,8 +618,17 @@ public sealed class MarketAcquisitionRequestBuilderPanel
 
     private void RemoveLine(int index)
     {
+        if (index >= 0 && index < document.Lines.Count)
+            expandedEvidenceItems.Remove(document.Lines[index].ItemId);
         if (controller.RemoveLine(index))
             ClearLineEditor();
+    }
+
+    private void RemoveLineByItemId(uint itemId)
+    {
+        var index = document.Lines.FindIndex(line => line.ItemId == itemId);
+        if (index >= 0)
+            RemoveLine(index);
     }
 
     private void ClearDraft(MarketAcquisitionRequestBuilderContext context)
@@ -724,25 +653,12 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         controller.EnsureCharacterScope(context.CharacterName, context.World);
     }
 
-    private void LoadLineIntoEditor(MarketAcquisitionRequestLineDocument line)
-    {
-        itemAutocomplete.SelectedItem = new AcquisitionItemOption(line.ItemId, line.ItemName);
-        itemAutocomplete.SearchBuffer = line.ItemName;
-        quantityMode = string.IsNullOrWhiteSpace(line.QuantityMode) ? "AllBelowThreshold" : line.QuantityMode;
-        targetQuantityBuffer = line.TargetQuantity == 0 ? string.Empty : line.TargetQuantity.ToString();
-        maxQuantityBuffer = line.MaxQuantity == 0 ? string.Empty : line.MaxQuantity.ToString();
-        maxUnitPriceBuffer = line.MaxUnitPrice == 0 ? string.Empty : line.MaxUnitPrice.ToString();
-        gilCapBuffer = line.GilCap == 0 ? string.Empty : line.GilCap.ToString();
-        hqPolicy = string.IsNullOrWhiteSpace(line.HqPolicy) ? "Either" : line.HqPolicy;
-    }
-
     private void ClearLineEditor()
     {
         itemAutocomplete.SelectedItem = null;
         itemAutocomplete.SearchBuffer = string.Empty;
         quantityMode = "AllBelowThreshold";
         targetQuantityBuffer = string.Empty;
-        maxQuantityBuffer = string.Empty;
         maxUnitPriceBuffer = string.Empty;
         gilCapBuffer = string.Empty;
         hqPolicy = "Either";
@@ -758,13 +674,25 @@ public sealed class MarketAcquisitionRequestBuilderPanel
     private static uint ClampToUInt(int value) =>
         value <= 0 ? 0u : (uint)value;
 
-    private static string FormatLineItem(MarketAcquisitionRequestLineDocument line) =>
+    private static string FormatLineItemName(MarketAcquisitionRequestLineDocument line) =>
         string.IsNullOrWhiteSpace(line.ItemName)
             ? $"Item {line.ItemId}"
-            : $"{line.ItemName} ({line.ItemId})";
+            : line.ItemName;
 
-    private static string FormatLineQuantity(MarketAcquisitionRequestLineDocument line) =>
-        line.QuantityMode == "TargetQuantity"
-            ? line.TargetQuantity.ToString("N0")
-            : line.MaxQuantity == 0 ? "No cap" : line.MaxQuantity.ToString("N0");
+    private void RegisterLastControl(
+        string id,
+        string label,
+        bool enabled,
+        bool selected,
+        string? value,
+        Action invoke) =>
+        reviewRegistry.RegisterLastItem(
+            id,
+            label,
+            AgentBridgeUiControlKind.Button,
+            enabled,
+            selected,
+            value,
+            invoke);
+
 }

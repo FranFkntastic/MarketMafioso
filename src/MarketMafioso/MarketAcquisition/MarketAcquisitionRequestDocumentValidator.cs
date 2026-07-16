@@ -22,6 +22,16 @@ public static class MarketAcquisitionRequestDocumentValidator
         if (string.IsNullOrWhiteSpace(world))
             errors.Add("Current world is required.");
 
+        errors.AddRange(ValidateDraft(document).Errors);
+
+        return new MarketAcquisitionRequestValidationResult(errors);
+    }
+
+    public static MarketAcquisitionRequestValidationResult ValidateDraft(
+        MarketAcquisitionRequestDocument document)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        var errors = new List<string>();
         ValidateRoute(document, errors);
 
         if (document.Lines.Count == 0)
