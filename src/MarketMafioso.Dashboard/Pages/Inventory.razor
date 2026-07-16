@@ -64,7 +64,7 @@ else
                         @foreach (var mode in Enum.GetValues<InventoryBrowserMode>())
                         {
                             <button class="@ModeButtonClass(mode)"
-                                    aria-pressed="@(_mode == mode)"
+                                    aria-pressed="@AriaBoolean(_mode == mode)"
                                     @onclick="@(() => SetModeAsync(mode))">@ModeLabel(mode)</button>
                         }
                     </div>
@@ -140,7 +140,7 @@ else
                 <div><strong>@_view.TotalQuantity.ToString("N0")</strong><span>total quantity</span></div>
                 <div><strong>@_view.HqQuantity.ToString("N0")</strong><span>HQ</span></div>
                 <div><strong>@_view.OwnerCount.ToString("N0")</strong><span>owners</span></div>
-                @if (_mode == InventoryBrowserMode.Listings)
+                @if (_mode == InventoryBrowserMode.Listings && _view.MatchingRecordCount > 0)
                 {
                     <div class="inventory-evidence-summary"><strong>@_view.ListingPriceKnownCount.ToString("N0")/@_view.MatchingRecordCount.ToString("N0")</strong><span>with price evidence</span></div>
                 }
@@ -381,6 +381,7 @@ else
     private void ExpireSession() { _session = null; Status.Info("Dashboard session expired. Sign in again."); }
     private string ScopeButtonClass(string scope) => string.Equals(_scope, scope, StringComparison.OrdinalIgnoreCase) ? "inventory-scope active" : "inventory-scope";
     private string ModeButtonClass(InventoryBrowserMode mode) => _mode == mode ? "inventory-mode active" : "inventory-mode";
+    private static string AriaBoolean(bool value) => value ? "true" : "false";
     private static string ModeLabel(InventoryBrowserMode mode) => mode switch { InventoryBrowserMode.Items => "Items", InventoryBrowserMode.Stacks => "Stacks", _ => "Listings" };
 
     private static string ScopeSummary(InventoryBrowserScopeView scope)

@@ -18,7 +18,7 @@
                 role="button"
                 tabindex="0"
                 aria-label="@($"Inspect {item.DisplayName}")"
-                aria-pressed="@(SelectedItemId == item.ItemId)"
+                aria-pressed="@(SelectedItemId == item.ItemId ? "true" : "false")"
                 @onclick="@(() => ItemSelected.InvokeAsync(item))"
                 @onkeydown="@(args => HandleKeyDownAsync(args, item))">
                 <td><strong>@item.DisplayName</strong></td>
