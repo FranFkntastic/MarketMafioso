@@ -1,4 +1,5 @@
 using MarketMafioso.RetainerRestock;
+using MarketMafioso.Automation.Items;
 
 namespace MarketMafioso.Tests;
 
@@ -32,6 +33,40 @@ public sealed class HttpReporterRetainerScopeTests
         Assert.Equal("Current Owner", report.RetainerName);
         Assert.Equal("Wei Ning", report.OwnerCharacterName);
         Assert.Equal("Maduin", report.OwnerHomeWorld);
+    }
+
+    [Fact]
+    public void BuildRetainerReports_RehydratesMissingCachedItemTypesWithoutOverwritingKnownEvidence()
+    {
+        var retainer = BuildRetainer(10, "Current Owner", 100, 25);
+        retainer.OwnerCharacterName = "Wei Ning";
+        retainer.OwnerHomeWorld = "Maduin";
+        retainer.Bags[0].Items.Add(new CachedItem
+        {
+            ItemId = 200,
+            ItemName = "Known Item",
+            ItemType = "Existing category",
+            Quantity = 1,
+        });
+        var config = new Configuration { RetainerCache = { [10] = retainer } };
+        var resolvedIds = new List<uint>();
+
+        var report = Assert.Single(HttpReporter.BuildRetainerReports(
+            config,
+            new RetainerOwnerScope("Wei Ning", "Maduin"),
+            includeOwnerFields: true,
+            itemId =>
+            {
+                resolvedIds.Add(itemId);
+                return new AutomationItemMetadata(
+                    new AutomationItemIdentity(itemId, "Resolved Item", false),
+                    999,
+                    "Resolved category");
+            }));
+
+        Assert.Equal("Resolved category", report.Bags[0].Items[0].ItemType);
+        Assert.Equal("Existing category", report.Bags[0].Items[1].ItemType);
+        Assert.Equal([100u], resolvedIds);
     }
 
     private static CachedRetainer BuildRetainer(ulong id, string name, uint itemId, uint quantity) =>

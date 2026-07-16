@@ -136,6 +136,11 @@ public class InventoryScanner
         return itemCatalog.ResolveItemName(itemId);
     }
 
+    public AutomationItemMetadata ResolveItemMetadata(uint itemId)
+    {
+        return itemCatalog.Resolve(itemId);
+    }
+
     private unsafe List<InventoryBag> ScanContainers(InventoryType[] types, Configuration config)
     {
         return InventoryPayloadMapper.MapInventoryBags(

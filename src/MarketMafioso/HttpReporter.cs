@@ -7,6 +7,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading.Tasks;
 using Dalamud.Plugin.Services;
+using MarketMafioso.Automation.Items;
 using MarketMafioso.RetainerRestock;
 
 namespace MarketMafioso;
@@ -91,7 +92,11 @@ public class HttpReporter : IDisposable
             }
 
             var playerInventory = scanner.ScanPlayerInventory(config);
-            var retainers = BuildRetainerReports(config, ownerScope, config.IncludeCharacterInfo);
+            var retainers = BuildRetainerReports(
+                config,
+                ownerScope,
+                config.IncludeCharacterInfo,
+                scanner.ResolveItemMetadata);
 
             var generatedAtUtc = DateTime.UtcNow.ToString("o");
             var report = new InventoryReport
@@ -173,7 +178,8 @@ public class HttpReporter : IDisposable
     public static List<RetainerReport> BuildRetainerReports(
         Configuration config,
         RetainerOwnerScope ownerScope,
-        bool includeOwnerFields)
+        bool includeOwnerFields,
+        Func<uint, AutomationItemMetadata>? resolveItemMetadata = null)
     {
         ArgumentNullException.ThrowIfNull(config);
         ArgumentNullException.ThrowIfNull(ownerScope);
@@ -194,40 +200,60 @@ public class HttpReporter : IDisposable
                         BagName = b.BagName,
                         Location = b.Location,
                         Items = b.Items
-                            .Select(i => new ItemSlot
-                            {
-                                ItemId = i.ItemId,
-                                ItemName = i.ItemName,
-                                ItemType = i.ItemType,
-                                Quantity = i.Quantity,
-                                IsHQ = i.IsHQ,
-                                Condition = i.Condition,
-                                ContainerKey = i.ContainerKey,
-                                SlotIndex = i.SlotIndex,
-                                ConditionPercent = i.ConditionPercent,
-                                Equipped = i.Equipped,
-                            })
+                            .Select(i => MapCachedItem(i, resolveItemMetadata))
                             .ToList(),
                     })
                     .ToList(),
                 MarketListings = r.MarketListings
-                    .Select(i => new RetainerMarketListing
-                    {
-                        ItemId = i.ItemId,
-                        ItemName = i.ItemName,
-                        ItemType = i.ItemType,
-                        Quantity = i.Quantity,
-                        IsHQ = i.IsHQ,
-                        Condition = i.Condition,
-                        ContainerKey = i.ContainerKey,
-                        SlotIndex = i.SlotIndex,
-                        ConditionPercent = i.ConditionPercent,
-                        UnitPrice = i.UnitPrice,
-                        ListedAt = i.ListedAt,
-                    })
+                    .Select(i => MapCachedListing(i, resolveItemMetadata))
                     .ToList(),
             })
             .ToList();
+    }
+
+    private static ItemSlot MapCachedItem(
+        CachedItem item,
+        Func<uint, AutomationItemMetadata>? resolveItemMetadata)
+    {
+        var metadata = string.IsNullOrWhiteSpace(item.ItemType)
+            ? resolveItemMetadata?.Invoke(item.ItemId)
+            : null;
+        return new ItemSlot
+        {
+            ItemId = item.ItemId,
+            ItemName = item.ItemName,
+            ItemType = string.IsNullOrWhiteSpace(item.ItemType) ? metadata?.ItemType : item.ItemType,
+            Quantity = item.Quantity,
+            IsHQ = item.IsHQ,
+            Condition = item.Condition,
+            ContainerKey = item.ContainerKey,
+            SlotIndex = item.SlotIndex,
+            ConditionPercent = item.ConditionPercent,
+            Equipped = item.Equipped,
+        };
+    }
+
+    private static RetainerMarketListing MapCachedListing(
+        CachedMarketListing item,
+        Func<uint, AutomationItemMetadata>? resolveItemMetadata)
+    {
+        var metadata = string.IsNullOrWhiteSpace(item.ItemType)
+            ? resolveItemMetadata?.Invoke(item.ItemId)
+            : null;
+        return new RetainerMarketListing
+        {
+            ItemId = item.ItemId,
+            ItemName = item.ItemName,
+            ItemType = string.IsNullOrWhiteSpace(item.ItemType) ? metadata?.ItemType : item.ItemType,
+            Quantity = item.Quantity,
+            IsHQ = item.IsHQ,
+            Condition = item.Condition,
+            ContainerKey = item.ContainerKey,
+            SlotIndex = item.SlotIndex,
+            ConditionPercent = item.ConditionPercent,
+            UnitPrice = item.UnitPrice,
+            ListedAt = item.ListedAt,
+        };
     }
 
     public static HttpReportResponse ParseReportResponse(string body)
