@@ -36,6 +36,18 @@ public sealed class RenderedCharacterEquipmentLayoutParserTests
     }
 
     [Fact]
+    public void Parse_accepts_current_layout_when_optional_facewear_control_is_absent()
+    {
+        var nodes = CharacterNodes().Where(value => value.NodePath != "Character/62/5").ToArray();
+
+        var result = RenderedCharacterEquipmentLayoutParser.Parse(Snapshot(nodes));
+
+        Assert.Equal(RenderedEquipmentLayoutStatus.Complete, result.Status);
+        Assert.Equal(13, result.Slots.Count);
+        Assert.DoesNotContain(result.Slots, value => value.NodePath == "Character/62/5");
+    }
+
+    [Fact]
     public void Parse_abstains_when_column_topology_is_incomplete()
     {
         var nodes = CharacterNodes().Where(value => value.NodePath != "Character/57/5").ToArray();

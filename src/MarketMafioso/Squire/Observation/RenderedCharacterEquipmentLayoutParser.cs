@@ -43,24 +43,25 @@ public static class RenderedCharacterEquipmentLayoutParser
             .Where(IsEquipmentDragDrop)
             .GroupBy(value => (value.Left + value.Right) / 2)
             .Select(group => group.OrderBy(value => value.Top).ToArray())
-            .Where(IsRegularSevenSlotColumn)
+            .Where(IsRegularEquipmentColumn)
             .OrderBy(column => (column[0].Left + column[0].Right) / 2)
             .ToArray();
 
         if (candidates.Length != 2)
-            return Ambiguous($"Expected two rendered seven-slot equipment columns; observed {candidates.Length}.");
+            return Ambiguous($"Expected two rendered equipment columns; observed {candidates.Length}.");
 
         var left = candidates[0];
         var right = candidates[1];
         var horizontalGap = CenterX(right[0]) - CenterX(left[0]);
-        if (horizontalGap is < 140 or > 420 ||
+        if (left.Length is not (6 or 7) || right.Length != 7 ||
+            horizontalGap is < 140 or > 420 ||
             left[0].Top >= right[0].Top ||
             !Aligned(left[1], right[0]) ||
-            !Aligned(left[6], right[5]) ||
-            right[6].Top <= left[6].Top)
+            !Aligned(left[5], right[4]) ||
+            right[6].Top <= left[5].Top)
             return Ambiguous("Rendered Character slot columns do not match the supported equipment-pane topology.");
 
-        // Left[6] is facewear: it is a visible Character control, but not a stat-bearing equipment slot.
+        // When present, Left[6] is facewear: it is a cosmetic Character control, not a stat-bearing equipment slot.
         var mapped = new[]
         {
             Target("main-hand", EquipmentSlot.MainHand, left[0]),
@@ -90,9 +91,9 @@ public static class RenderedCharacterEquipmentLayoutParser
                width is >= 36 and <= 60 && height is >= 36 and <= 60;
     }
 
-    private static bool IsRegularSevenSlotColumn(AgentBridgeRenderedNodeSnapshot[] column)
+    private static bool IsRegularEquipmentColumn(AgentBridgeRenderedNodeSnapshot[] column)
     {
-        if (column.Length != 7)
+        if (column.Length is not (6 or 7))
             return false;
         for (var index = 1; index < column.Length; index++)
         {
