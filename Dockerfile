@@ -4,6 +4,7 @@ ARG CRAFT_ARCHITECT_CORE_PROJECT="/src/craft-architect/src/FFXIV Craft Architect
 
 COPY MarketMafioso.sln ./
 COPY ["craft-architect/src/FFXIV Craft Architect.Core/FFXIV Craft Architect.Core.csproj", "craft-architect/src/FFXIV Craft Architect.Core/"]
+COPY src/MarketMafioso.Contracts/MarketMafioso.Contracts.csproj src/MarketMafioso.Contracts/
 COPY src/MarketMafioso/MarketMafioso.csproj src/MarketMafioso/
 COPY src/MarketMafioso.Dashboard/MarketMafioso.Dashboard.csproj src/MarketMafioso.Dashboard/
 COPY src/MarketMafioso.Server/MarketMafioso.Server.csproj src/MarketMafioso.Server/
