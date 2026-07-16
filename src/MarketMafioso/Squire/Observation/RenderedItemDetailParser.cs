@@ -28,6 +28,7 @@ public sealed record RenderedItemDetailObservation(
     int? EquipLevel,
     string? JobCategory,
     IReadOnlyDictionary<string, int> Stats,
+    IReadOnlyDictionary<string, int> MateriaStats,
     string Diagnostic);
 
 /// <summary>
@@ -72,6 +73,15 @@ public static partial class RenderedItemDetailParser
                 continue;
             stats[match.Groups[1].Value] = value;
         }
+        var materiaStats = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (path, text) in texts.Where(value => MateriaValuePathPattern().IsMatch(value.Key)))
+        {
+            _ = path;
+            var match = StatPattern().Match(text);
+            if (!match.Success || !int.TryParse(match.Groups[2].Value, NumberStyles.AllowThousands, CultureInfo.InvariantCulture, out var value))
+                continue;
+            materiaStats[match.Groups[1].Value] = materiaStats.GetValueOrDefault(match.Groups[1].Value) + value;
+        }
 
         return new(
             RenderedItemDetailStatus.Complete,
@@ -81,6 +91,7 @@ public static partial class RenderedItemDetailParser
             equipLevel,
             jobCategory.Trim(),
             stats,
+            materiaStats,
             "Rendered Item Detail observation is complete.");
     }
 
@@ -96,10 +107,10 @@ public static partial class RenderedItemDetailParser
     }
 
     private static RenderedItemDetailObservation Unavailable(string diagnostic) =>
-        new(RenderedItemDetailStatus.Unavailable, null, null, null, null, null, new Dictionary<string, int>(), diagnostic);
+        new(RenderedItemDetailStatus.Unavailable, null, null, null, null, null, new Dictionary<string, int>(), new Dictionary<string, int>(), diagnostic);
 
     private static RenderedItemDetailObservation Incomplete(string diagnostic) =>
-        new(RenderedItemDetailStatus.Incomplete, null, null, null, null, null, new Dictionary<string, int>(), diagnostic);
+        new(RenderedItemDetailStatus.Incomplete, null, null, null, null, null, new Dictionary<string, int>(), new Dictionary<string, int>(), diagnostic);
 
     [GeneratedRegex(@"^Item Level\s+(\d+)$", RegexOptions.CultureInvariant)]
     private static partial Regex ItemLevelPattern();
@@ -109,4 +120,7 @@ public static partial class RenderedItemDetailParser
 
     [GeneratedRegex(@"^(.+?)\s+\+([\d,]+)$", RegexOptions.CultureInvariant)]
     private static partial Regex StatPattern();
+
+    [GeneratedRegex(@"^ItemDetail/(?:96|960\d+)/6$", RegexOptions.CultureInvariant)]
+    private static partial Regex MateriaValuePathPattern();
 }

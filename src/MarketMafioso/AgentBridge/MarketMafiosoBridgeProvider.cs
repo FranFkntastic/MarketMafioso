@@ -28,6 +28,9 @@ public interface IMarketMafiosoBridgeProvider
     RenderedGatheringStatsObservation CaptureGatheringStatsUi();
     RenderedCharacterEquipmentLayout CaptureCharacterEquipmentLayoutUi();
     RenderedItemDetailObservation CaptureItemDetailUi();
+    RenderedEquipmentScanProgress BeginCharacterEquipmentScanUi();
+    RenderedEquipmentScanStepResult AdvanceCharacterEquipmentScanUi();
+    RenderedEquipmentScanProgress CancelCharacterEquipmentScanUi();
     IReadOnlyList<AgentBridgeReviewSurfaceDescriptor> GetReviewSurfaces();
     AgentBridgeUiReviewFrame GetControlSurface();
     AgentBridgeUiControlReview ReviewControl(string controlId);
@@ -70,6 +73,9 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
     private readonly Func<string, bool> trySwitchCalibrationJobUi;
     private readonly Func<string, bool> tryHoverCharacterNodeUi;
     private readonly Func<bool> restoreCharacterUiCursor;
+    private readonly Func<RenderedEquipmentScanProgress> beginCharacterEquipmentScanUi;
+    private readonly Func<RenderedEquipmentScanStepResult> advanceCharacterEquipmentScanUi;
+    private readonly Func<RenderedEquipmentScanProgress> cancelCharacterEquipmentScanUi;
     private readonly Func<AgentBridgeRenderedUiSnapshot> captureCharacterUi;
     private readonly Func<RenderedGatheringStatsObservation> captureGatheringStatsUi;
     private readonly AgentBridgeUiReviewRegistry reviewRegistry;
@@ -90,7 +96,10 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
         Func<string, bool>? trySwitchCalibrationJobUi = null,
         Func<RenderedGatheringStatsObservation>? captureGatheringStatsUi = null,
         Func<string, bool>? tryHoverCharacterNodeUi = null,
-        Func<bool>? restoreCharacterUiCursor = null)
+        Func<bool>? restoreCharacterUiCursor = null,
+        Func<RenderedEquipmentScanProgress>? beginCharacterEquipmentScanUi = null,
+        Func<RenderedEquipmentScanStepResult>? advanceCharacterEquipmentScanUi = null,
+        Func<RenderedEquipmentScanProgress>? cancelCharacterEquipmentScanUi = null)
     {
         this.createSnapshot = createSnapshot ?? throw new ArgumentNullException(nameof(createSnapshot));
         this.openMainWindow = openMainWindow ?? throw new ArgumentNullException(nameof(openMainWindow));
@@ -108,6 +117,9 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
         this.captureGatheringStatsUi = captureGatheringStatsUi ?? (() => new(Guid.NewGuid(), DateTimeOffset.UtcNow, RenderedCharacterObservationStatus.Unavailable, null, null, null, null, null, [], "Rendered gathering observation is unavailable."));
         this.tryHoverCharacterNodeUi = tryHoverCharacterNodeUi ?? (_ => false);
         this.restoreCharacterUiCursor = restoreCharacterUiCursor ?? (() => false);
+        this.beginCharacterEquipmentScanUi = beginCharacterEquipmentScanUi ?? (() => new(RenderedEquipmentScanStatus.Failed, 0, 0, null, [], "Rendered equipment scanning is unavailable."));
+        this.advanceCharacterEquipmentScanUi = advanceCharacterEquipmentScanUi ?? (() => new(false, this.beginCharacterEquipmentScanUi(), "Rendered equipment scanning is unavailable."));
+        this.cancelCharacterEquipmentScanUi = cancelCharacterEquipmentScanUi ?? (() => new(RenderedEquipmentScanStatus.Cancelled, 0, 0, null, [], "Rendered equipment scanning is unavailable."));
     }
 
     public AgentBridgeTruth CreateSnapshot() => createSnapshot();
@@ -129,6 +141,9 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
         RenderedCharacterEquipmentLayoutParser.Parse(captureCharacterUi());
     public RenderedItemDetailObservation CaptureItemDetailUi() =>
         RenderedItemDetailParser.Parse(captureCharacterUi());
+    public RenderedEquipmentScanProgress BeginCharacterEquipmentScanUi() => beginCharacterEquipmentScanUi();
+    public RenderedEquipmentScanStepResult AdvanceCharacterEquipmentScanUi() => advanceCharacterEquipmentScanUi();
+    public RenderedEquipmentScanProgress CancelCharacterEquipmentScanUi() => cancelCharacterEquipmentScanUi();
     public IReadOnlyList<AgentBridgeReviewSurfaceDescriptor> GetReviewSurfaces() => ReviewSurfaces;
     public AgentBridgeUiReviewFrame GetControlSurface() => reviewRegistry.Snapshot();
     public AgentBridgeUiControlReview ReviewControl(string controlId) => reviewRegistry.Review(controlId);

@@ -28,6 +28,7 @@ public sealed class DalamudRenderedCharacterUiProbe
 
     private readonly IGameGui gameGui;
     private readonly RenderedGatheringStatsStabilizer gatheringStatsStabilizer = new(TimeSpan.FromSeconds(3));
+    private readonly RenderedCharacterEquipmentScanCoordinator equipmentScan = new();
     private readonly object cursorSync = new();
     private NativePoint? cursorRestorePosition;
 
@@ -96,6 +97,38 @@ public sealed class DalamudRenderedCharacterUiProbe
 
     public RenderedGatheringStatsObservation CaptureGatheringStats() =>
         gatheringStatsStabilizer.Observe(RenderedCharacterStatsParser.Parse(Capture()));
+
+    public RenderedEquipmentScanProgress BeginEquipmentScan()
+    {
+        RestoreCursor();
+        return equipmentScan.Begin(Capture());
+    }
+
+    public RenderedEquipmentScanStepResult AdvanceEquipmentScan()
+    {
+        var progress = equipmentScan.Snapshot();
+        if (progress.Status == RenderedEquipmentScanStatus.ReadyToHover && progress.CurrentTarget is { } target)
+        {
+            if (!TryHoverCharacterNode(target.NodePath))
+                return new(false, progress, "FFXIV must already be foreground and the rendered equipment slot must still be available.");
+            progress = equipmentScan.MarkHoverStarted(target.NodePath, DateTimeOffset.UtcNow);
+            return new(true, progress, progress.Diagnostic);
+        }
+        if (progress.Status == RenderedEquipmentScanStatus.Observing)
+        {
+            progress = equipmentScan.Observe(Capture(), DateTimeOffset.UtcNow);
+            if (progress.Status is RenderedEquipmentScanStatus.Complete or RenderedEquipmentScanStatus.Failed)
+                RestoreCursor();
+            return new(true, progress, progress.Diagnostic);
+        }
+        return new(false, progress, "The rendered equipment scan is not waiting for an advance step.");
+    }
+
+    public RenderedEquipmentScanProgress CancelEquipmentScan()
+    {
+        RestoreCursor();
+        return equipmentScan.Cancel();
+    }
 
     /// <summary>
     /// Moves the real cursor over a currently rendered Character node so the game itself renders

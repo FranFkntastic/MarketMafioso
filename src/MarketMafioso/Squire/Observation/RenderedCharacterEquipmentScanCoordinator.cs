@@ -35,6 +35,11 @@ public sealed record RenderedEquipmentScanProgress(
     IReadOnlyList<RenderedEquipmentSlotObservation> Observations,
     string Diagnostic);
 
+public sealed record RenderedEquipmentScanStepResult(
+    bool ActionAccepted,
+    RenderedEquipmentScanProgress Progress,
+    string Message);
+
 /// <summary>
 /// Pure scan state machine. A UI adapter performs the requested hover and feeds rendered snapshots
 /// back in; this coordinator never reads inventory, character, agent, or gearset structs.
@@ -103,7 +108,7 @@ public sealed class RenderedCharacterEquipmentScanCoordinator
         var item = RenderedItemDetailParser.Parse(snapshot);
         string signature;
         if (item.Status == RenderedItemDetailStatus.Complete)
-            signature = $"item:{item.Name}:{item.Quality}:{item.ItemLevel}:{item.EquipLevel}:{item.JobCategory}:{string.Join(',', item.Stats.OrderBy(value => value.Key).Select(value => $"{value.Key}={value.Value}"))}";
+            signature = $"item:{item.Name}:{item.Quality}:{item.ItemLevel}:{item.EquipLevel}:{item.JobCategory}:{string.Join(',', item.Stats.OrderBy(value => value.Key).Select(value => $"{value.Key}={value.Value}"))}:melds={string.Join(',', item.MateriaStats.OrderBy(value => value.Key).Select(value => $"{value.Key}={value.Value}"))}";
         else if (nowUtc - hoverStartedAt >= observationTimeout)
             return Fail($"Rendered Item Detail was not complete for {target.PositionKey}: {item.Diagnostic} The observer will not infer an empty slot from a missing tooltip.");
         else

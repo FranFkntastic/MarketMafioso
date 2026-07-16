@@ -17,7 +17,10 @@ public sealed class RenderedItemDetailParserTests
             Text("ItemDetail/66/2", "Lv. 100\rOwned: 1"),
             Text("ItemDetail/100/2", "Gathering +1,720"),
             Text("ItemDetail/100/3", "Perception +983"),
-            Text("ItemDetail/100/4", "GP +9")));
+            Text("ItemDetail/100/4", "GP +9"),
+            Text("ItemDetail/96/6", "Gathering +25"),
+            Text("ItemDetail/960101/6", "Gathering +25"),
+            Text("ItemDetail/960102/6", "GP +9")));
 
         Assert.Equal(RenderedItemDetailStatus.Complete, result.Status);
         Assert.Equal("Ceremonial Pickaxe", result.Name);
@@ -28,6 +31,8 @@ public sealed class RenderedItemDetailParserTests
         Assert.Equal(1720, result.Stats["Gathering"]);
         Assert.Equal(983, result.Stats["Perception"]);
         Assert.Equal(9, result.Stats["GP"]);
+        Assert.Equal(50, result.MateriaStats["Gathering"]);
+        Assert.Equal(9, result.MateriaStats["GP"]);
     }
 
     [Fact]
@@ -46,6 +51,7 @@ public sealed class RenderedItemDetailParserTests
         Assert.Equal(RenderedItemQuality.Normal, result.Quality);
         Assert.Equal(1720, result.Stats["Gathering"]);
         Assert.Single(result.Stats);
+        Assert.Equal(25, result.MateriaStats["Gathering"]);
     }
 
     [Fact]

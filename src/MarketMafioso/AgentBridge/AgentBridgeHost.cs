@@ -286,6 +286,22 @@ public sealed class AgentBridgeHost : IDisposable
                 return itemDetail!.Status == Squire.Observation.RenderedItemDetailStatus.Complete
                     ? AgentBridgeResponse.Ok("Rendered Item Detail captured.", itemDetail)
                     : new AgentBridgeResponse { Success = false, Message = itemDetail.Diagnostic, Receipt = itemDetail };
+            case "begin-character-equipment-scan-ui":
+                Squire.Observation.RenderedEquipmentScanProgress? begunEquipmentScan = null;
+                await dispatchOnFramework(() => begunEquipmentScan = provider.BeginCharacterEquipmentScanUi()).ConfigureAwait(false);
+                return begunEquipmentScan!.Status == Squire.Observation.RenderedEquipmentScanStatus.ReadyToHover
+                    ? AgentBridgeResponse.Ok(begunEquipmentScan.Diagnostic, begunEquipmentScan)
+                    : new AgentBridgeResponse { Success = false, Message = begunEquipmentScan.Diagnostic, Receipt = begunEquipmentScan };
+            case "advance-character-equipment-scan-ui":
+                Squire.Observation.RenderedEquipmentScanStepResult? advancedEquipmentScan = null;
+                await dispatchOnFramework(() => advancedEquipmentScan = provider.AdvanceCharacterEquipmentScanUi()).ConfigureAwait(false);
+                return advancedEquipmentScan!.ActionAccepted
+                    ? AgentBridgeResponse.Ok(advancedEquipmentScan.Message, advancedEquipmentScan.Progress)
+                    : new AgentBridgeResponse { Success = false, Message = advancedEquipmentScan.Message, Receipt = advancedEquipmentScan.Progress };
+            case "cancel-character-equipment-scan-ui":
+                Squire.Observation.RenderedEquipmentScanProgress? cancelledEquipmentScan = null;
+                await dispatchOnFramework(() => cancelledEquipmentScan = provider.CancelCharacterEquipmentScanUi()).ConfigureAwait(false);
+                return AgentBridgeResponse.Ok(cancelledEquipmentScan!.Diagnostic, cancelledEquipmentScan);
             case "stop-route":
                 await dispatchOnFramework(provider.StopRoute).ConfigureAwait(false);
                 AppendAudit("stop-route", "accepted");
