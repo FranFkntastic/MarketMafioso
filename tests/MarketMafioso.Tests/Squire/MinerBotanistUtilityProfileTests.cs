@@ -124,7 +124,7 @@ public sealed class MinerBotanistUtilityProfileTests
     }
 
     [Fact]
-    public void ExperimentalProfileCannotGrantRuntimeAuthority()
+    public void OracleApprovedProfileStillRequiresExplicitRuntimePromotionAfterReview()
     {
         var profile = Legendary(new(5_399, 5_200, 950));
         var candidate = profile.Evaluate(new MinerBotanistUtilityStats(5_400, 5_200, 950));

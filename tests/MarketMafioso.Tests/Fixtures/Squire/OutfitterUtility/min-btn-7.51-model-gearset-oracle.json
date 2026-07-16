@@ -1,0 +1,183 @@
+{
+  "schemaVersion": "squire-min-btn-model-gearset-oracle/v1",
+  "oracleVersion": "2026-07-16.1",
+  "profileVersion": "7.51-v2",
+  "researchedAtUtc": "2026-07-16T10:00:00Z",
+  "runtimePolicy": "Research-only frozen oracle. The plugin runtime must not load source URLs, model loadouts, burden ranks, or expected answers.",
+  "sources": [
+    {
+      "sourceId": "shikhu-icy-7.51",
+      "lineage": "shikhu-teamcraft-icy",
+      "role": "Published model family, stated tradeoffs, and breakpoint definitions",
+      "url": "https://www.icy-veins.com/ffxiv/gathering-dol-endgame-melding-stat-priority",
+      "locator": "Patch 7.51 Dawntrail Gathering Meldsets"
+    },
+    {
+      "sourceId": "etro-high-7.51",
+      "lineage": "shikhu-teamcraft-icy",
+      "role": "Recoverable item and materia composition for the published high-tier aggregate stats",
+      "url": "https://etro.gg/embed/gearset/9c2594c8-7496-4844-8689-121d752956b3",
+      "locator": "7.51 High Tier 5700/5504/995"
+    },
+    {
+      "sourceId": "etro-budget-7.5",
+      "lineage": "shikhu-teamcraft-icy",
+      "role": "Recoverable item, materia, food, raw-stat, and effective-stat budget composition",
+      "url": "https://etro.gg/embed/gearset/ff1c33cd-d0dd-43cb-9ed3-ec51f93742fa",
+      "locator": "7.5 Budget Set 4879/5444/884; 4970/5620/884 with Cloudsail Meuniere"
+    },
+    {
+      "sourceId": "lodestone-7.4-items",
+      "lineage": "square-enix-official",
+      "role": "Patch envelope and Star Tech gathering item-family existence",
+      "url": "https://na.finalfantasyxiv.com/lodestone/topics/detail/06944d892fd98cc00b2a28ff77edbafa4f7eef54/",
+      "locator": "Star Tech gathering equipment, item level 750"
+    }
+  ],
+  "loadouts": [
+    {
+      "loadoutId": "published-budget-raw",
+      "label": "Published budget set, no food",
+      "origin": "published-model",
+      "sourceId": "etro-budget-7.5",
+      "acquisitionBurdenRank": 0,
+      "stats": { "gathering": 4879, "perception": 5444, "gatheringPoints": 884 },
+      "assumptions": [ "No food", "Budget stopping point" ]
+    },
+    {
+      "loadoutId": "published-budget-cloudsail",
+      "label": "Published budget set with Cloudsail Meuniere",
+      "origin": "published-model",
+      "sourceId": "etro-budget-7.5",
+      "acquisitionBurdenRank": 1,
+      "stats": { "gathering": 4970, "perception": 5620, "gatheringPoints": 884 },
+      "assumptions": [ "Cloudsail Meuniere active", "Recurring consumable burden remains outside JobUtilityScore" ]
+    },
+    {
+      "loadoutId": "published-mid-raw",
+      "label": "Published 7.51 mid-tier set",
+      "origin": "published-model",
+      "sourceId": "shikhu-icy-7.51",
+      "acquisitionBurdenRank": 2,
+      "stats": { "gathering": 5510, "perception": 5470, "gatheringPoints": 904 },
+      "assumptions": [ "No food", "Cheaper and easier melding than high tier" ]
+    },
+    {
+      "loadoutId": "published-high-raw",
+      "label": "Published 7.51 high-tier set",
+      "origin": "published-model",
+      "sourceId": "etro-high-7.51",
+      "acquisitionBurdenRank": 3,
+      "stats": { "gathering": 5700, "perception": 5504, "gatheringPoints": 995 },
+      "assumptions": [ "No food", "Higher meld burden", "Cosmic tool effect is relevant only in collectable comparisons" ]
+    },
+    {
+      "loadoutId": "derived-high-regression",
+      "label": "Adversarial weaker and dearer high-tier variant",
+      "origin": "derived-adversarial",
+      "derivedFromLoadoutId": "published-high-raw",
+      "acquisitionBurdenRank": 4,
+      "stats": { "gathering": 5690, "perception": 5494, "gatheringPoints": 985 },
+      "assumptions": [ "Synthetic dominated witness; not a published recommendation" ]
+    },
+    {
+      "loadoutId": "derived-high-cost-only",
+      "label": "Adversarial identical-stat dearer high-tier variant",
+      "origin": "derived-adversarial",
+      "derivedFromLoadoutId": "published-high-raw",
+      "acquisitionBurdenRank": 4,
+      "stats": { "gathering": 5700, "perception": 5504, "gatheringPoints": 995 },
+      "assumptions": [ "Synthetic cost-only domination witness; not a published recommendation" ]
+    }
+  ],
+  "comparisons": [
+    {
+      "caseId": "published-mid-over-budget-raw",
+      "context": "LegendaryNodeGeneralYield",
+      "baselineLoadoutId": "published-budget-raw",
+      "candidateLoadoutId": "published-mid-raw",
+      "candidateHasAdditionalAcquisitionCost": true,
+      "expectedAssessment": "ClearImprovement",
+      "expectedAdvisorMayConsider": true,
+      "expectedGainedCapabilityIds": [ "bountiful-yield-plus-two", "node-yield-plus-one" ]
+    },
+    {
+      "caseId": "published-high-over-mid",
+      "context": "LegendaryNodeGeneralYield",
+      "baselineLoadoutId": "published-mid-raw",
+      "candidateLoadoutId": "published-high-raw",
+      "candidateHasAdditionalAcquisitionCost": true,
+      "expectedAssessment": "ClearImprovement",
+      "expectedAdvisorMayConsider": true,
+      "expectedGainedCapabilityIds": [ "integrity-plus-one", "integrity-plus-two", "node-yield-plus-two" ]
+    },
+    {
+      "caseId": "explicit-food-crosses-boon-but-cannot-self-nominate",
+      "context": "LegendaryNodeGeneralYield",
+      "baselineLoadoutId": "published-budget-raw",
+      "candidateLoadoutId": "published-budget-cloudsail",
+      "candidateHasAdditionalAcquisitionCost": true,
+      "hasUnmodeledRelevantEffect": true,
+      "expectedAssessment": "ClearImprovement",
+      "expectedAdvisorMayConsider": false,
+      "expectedGainedCapabilityIds": [ "boon-plus-thirty-percent" ]
+    },
+    {
+      "caseId": "high-versus-fooded-budget-preserves-context-trade",
+      "context": "LegendaryNodeGeneralYield",
+      "baselineLoadoutId": "published-budget-cloudsail",
+      "candidateLoadoutId": "published-high-raw",
+      "candidateHasAdditionalAcquisitionCost": true,
+      "expectedAssessment": "ContextDependent",
+      "expectedAdvisorMayConsider": false,
+      "expectedGainedCapabilityIds": [ "bountiful-yield-plus-two", "integrity-plus-one", "integrity-plus-two", "node-yield-plus-one", "node-yield-plus-two" ]
+    },
+    {
+      "caseId": "high-over-mid-collectable-is-paid-empty-space",
+      "context": "CollectableEfficiency",
+      "baselineLoadoutId": "published-mid-raw",
+      "candidateLoadoutId": "published-high-raw",
+      "candidateHasAdditionalAcquisitionCost": true,
+      "hasUnmodeledRelevantEffect": true,
+      "expectedAssessment": "ClearImprovement",
+      "expectedAdvisorMayConsider": false,
+      "expectedGainedCapabilityIds": []
+    },
+    {
+      "caseId": "ordinary-budget-to-high-does-not-borrow-legendary-steps",
+      "context": "OrdinaryResourceBenchmark",
+      "baselineLoadoutId": "published-budget-raw",
+      "candidateLoadoutId": "published-high-raw",
+      "candidateHasAdditionalAcquisitionCost": true,
+      "expectedAssessment": "Unsupported",
+      "expectedAdvisorMayConsider": false,
+      "expectedGainedCapabilityIds": []
+    },
+    {
+      "caseId": "derived-weaker-dearer-set-regresses",
+      "context": "LegendaryNodeGeneralYield",
+      "baselineLoadoutId": "published-high-raw",
+      "candidateLoadoutId": "derived-high-regression",
+      "candidateHasAdditionalAcquisitionCost": true,
+      "expectedAssessment": "ClearRegression",
+      "expectedAdvisorMayConsider": false,
+      "expectedGainedCapabilityIds": []
+    },
+    {
+      "caseId": "derived-identical-dearer-set-is-equivalent",
+      "context": "LegendaryNodeGeneralYield",
+      "baselineLoadoutId": "published-high-raw",
+      "candidateLoadoutId": "derived-high-cost-only",
+      "candidateHasAdditionalAcquisitionCost": true,
+      "expectedAssessment": "Equivalent",
+      "expectedAdvisorMayConsider": false,
+      "expectedGainedCapabilityIds": []
+    }
+  ],
+  "expectedLegendaryFrontierLoadoutIds": [
+    "published-budget-raw",
+    "published-budget-cloudsail",
+    "published-mid-raw",
+    "published-high-raw"
+  ]
+}

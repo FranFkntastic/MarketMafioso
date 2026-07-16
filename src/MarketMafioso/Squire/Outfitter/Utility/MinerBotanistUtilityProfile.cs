@@ -38,7 +38,7 @@ public sealed class MinerBotanistUtilityProfile : IEquipmentExactSolverUtilityMo
     public const uint MinerClassJobId = 16;
     public const uint BotanistClassJobId = 17;
     public const string ProfileId = "squire.min-btn.level-100";
-    public const string ProfileVersion = "7.5-v1";
+    public const string ProfileVersion = "7.51-v2";
     public const string LegendaryContextId = "legendary-node-general-yield";
     public const string CollectableContextId = "collectable-efficiency";
     public const string OrdinaryResourceBenchmarkContextId = "research-only:ordinary-resource";
@@ -62,7 +62,7 @@ public sealed class MinerBotanistUtilityProfile : IEquipmentExactSolverUtilityMo
             new("gp", EquipmentStatSemantic.GatheringPoints, EquipmentUtilityRuleKind.PreferMore, 1d / 11d, null,
                 "GP contributes bounded monotonic progress; only explicitly modeled action or integrity thresholds provide a material step."),
         ],
-        "Patch 7.5 pilot. Capability steps dominate a maximum of 300 monotonic tie-break points. The score orders supported loadouts but does not price gil or grant its own recommendation authority.");
+        "Patch 7.51 pilot. Capability steps dominate a maximum of 300 monotonic tie-break points. The score orders supported loadouts but does not price gil or grant its own recommendation authority.");
 
     private static readonly EquipmentUtilityComponentDefinition[] Components =
     [
@@ -107,7 +107,7 @@ public sealed class MinerBotanistUtilityProfile : IEquipmentExactSolverUtilityMo
             Scenario(contextKind),
             contextKind == MinerBotanistUtilityContextKind.OrdinaryResourceBenchmark
                 ? ["research-only", "ordinary-resource-node"]
-                : ["patch:7.5", "current-player", contextKind == MinerBotanistUtilityContextKind.CollectableEfficiency ? "collectable" : "legendary-node"]);
+                : ["patch:7.51", "current-player", contextKind == MinerBotanistUtilityContextKind.CollectableEfficiency ? "collectable" : "legendary-node"]);
         model = new(new(
             Profile,
             context,
@@ -276,8 +276,8 @@ public sealed class MinerBotanistUtilityProfile : IEquipmentExactSolverUtilityMo
 
     private static string Scenario(MinerBotanistUtilityContextKind contextKind) => contextKind switch
     {
-        MinerBotanistUtilityContextKind.LegendaryNodeGeneralYield => "Patch 7.5 general legendary-node yield",
-        MinerBotanistUtilityContextKind.CollectableEfficiency => "Patch 7.5 collectable efficiency",
+        MinerBotanistUtilityContextKind.LegendaryNodeGeneralYield => "Patch 7.51 general legendary-node yield",
+        MinerBotanistUtilityContextKind.CollectableEfficiency => "Patch 7.51 collectable efficiency",
         _ => "Research-only regular non-legendary resource-node benchmark",
     };
 }
