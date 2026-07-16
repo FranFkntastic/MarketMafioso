@@ -37,3 +37,13 @@ public sealed record AgentBridgeRenderedTextNode(
     float Y,
     ushort Width,
     ushort Height);
+
+public sealed record AgentBridgeUiAutomationCapabilities(
+    string EquipmentObservationMode,
+    bool MovesOperatingSystemCursor,
+    bool ActivatesGameWindow,
+    bool RequiresGameForeground,
+    bool RequiresVisibleCharacterAddon,
+    bool UsesRenderedTooltipAsAuthority,
+    bool SupportsDeterministicReplay,
+    string Diagnostic);

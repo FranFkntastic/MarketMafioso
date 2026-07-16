@@ -1,8 +1,6 @@
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Linq;
-using System.Runtime.InteropServices;
 using Dalamud.Plugin.Services;
 using Dalamud.Utility;
 using ECommons.Automation;
@@ -39,13 +37,22 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
     private readonly IGameGui gameGui;
     private readonly RenderedGatheringStatsStabilizer gatheringStatsStabilizer = new(TimeSpan.FromSeconds(3));
     private readonly RenderedCharacterEquipmentScanCoordinator equipmentScan = new();
-    private readonly object cursorSync = new();
-    private NativePoint? cursorRestorePosition;
+    private string? hoveredCharacterNodePath;
 
     public DalamudRenderedCharacterUiProbe(IGameGui gameGui)
     {
         this.gameGui = gameGui ?? throw new ArgumentNullException(nameof(gameGui));
     }
+
+    public AgentBridgeUiAutomationCapabilities Capabilities => new(
+        "registered-node-ui-events",
+        MovesOperatingSystemCursor: false,
+        ActivatesGameWindow: false,
+        RequiresGameForeground: false,
+        RequiresVisibleCharacterAddon: true,
+        UsesRenderedTooltipAsAuthority: true,
+        SupportsDeterministicReplay: true,
+        "Equipment slots are traversed by dispatching their registered MouseOver and MouseOut UI events. Character and Item Detail rendered output remains the only runtime authority.");
 
     public unsafe void Open()
     {
@@ -126,7 +133,7 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
         if (progress.Status == RenderedEquipmentScanStatus.ReadyToHover && progress.CurrentTarget is { } target)
         {
             if (!TryHoverCharacterNode(target.NodePath))
-                return new(false, progress, "FFXIV must already be foreground and the rendered equipment slot must still be available.");
+                return new(false, progress, "The rendered equipment slot did not accept a virtual UI mouseover event.");
             progress = equipmentScan.MarkHoverStarted(target.NodePath, DateTimeOffset.UtcNow);
             return new(true, progress, progress.Diagnostic);
         }
@@ -147,8 +154,8 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
     }
 
     /// <summary>
-    /// Moves the real cursor over a currently rendered Character node so the game itself renders
-    /// the authoritative ItemDetail tooltip. The caller must subsequently call <see cref="RestoreCursor"/>.
+    /// Dispatches the node's registered UI mouseover event so the game itself renders the
+    /// authoritative ItemDetail tooltip. This never moves the OS cursor or activates FFXIV.
     /// </summary>
     public bool TryHoverCharacterNode(string nodePath)
     {
@@ -168,78 +175,86 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
             target.Right <= target.Left || target.Bottom <= target.Top)
             return false;
 
-        lock (cursorSync)
-        {
-            var gameWindow = Process.GetCurrentProcess().MainWindowHandle;
-            if (gameWindow == nint.Zero || GetForegroundWindow() != gameWindow)
-                return false;
-
-            if (cursorRestorePosition == null)
-            {
-                if (!GetCursorPos(out var original))
-                    return false;
-                cursorRestorePosition = original;
-            }
-
-            var origin = GetGameClientOrigin(gameWindow);
-            var x = origin.X + target.Left + ((target.Right - target.Left) / 2);
-            var y = origin.Y + target.Top + ((target.Bottom - target.Top) / 2);
-            var moved = SetCursorPos(x, y);
-            var clientX = x - origin.X;
-            var clientY = y - origin.Y;
-            PostMessage(gameWindow, 0x0200, nint.Zero, (nint)((clientY << 16) | (clientX & 0xffff)));
-            return moved;
-        }
+        RestoreCursor();
+        if (!DispatchCharacterNodeEvent(nodePath, AtkEventType.MouseOver, target))
+            return false;
+        hoveredCharacterNodePath = nodePath;
+        return true;
     }
 
     public bool RestoreCursor()
     {
-        lock (cursorSync)
-        {
-            if (cursorRestorePosition is not { } position)
-                return false;
-            cursorRestorePosition = null;
-            return SetCursorPos(position.X, position.Y);
-        }
+        if (hoveredCharacterNodePath is not { } nodePath)
+            return false;
+        hoveredCharacterNodePath = null;
+        return DispatchCharacterNodeEvent(nodePath, AtkEventType.MouseOut, null);
     }
 
     private unsafe AgentBridgeRenderedAddonSnapshot CaptureAddon(string addonName)
         => CaptureAddon(addonName, gameGui.GetAddonByName<AtkUnitBase>(addonName, 1));
 
-    private static NativePoint GetGameClientOrigin(nint handle)
+    private unsafe bool DispatchCharacterNodeEvent(
+        string nodePath,
+        AtkEventType eventType,
+        RenderedEquipmentSlotTarget? target)
     {
-        if (handle == nint.Zero)
-            return default;
-        var origin = new NativePoint();
-        return ClientToScreen(handle, ref origin) ? origin : default;
+        var addon = gameGui.GetAddonByName<AtkUnitBase>("Character", 1);
+        if (addon == null || addon->RootNode == null || !addon->RootNode->IsVisible() || !addon->IsReady)
+            return false;
+        var node = FindNodeByPath(addon, nodePath);
+        if (node == null || !IsEffectivelyVisible(node) || !node->IsEventRegistered(eventType))
+            return false;
+
+        var centerX = target is null ? 0 : Math.Clamp((target.Left + target.Right) / 2, short.MinValue, short.MaxValue);
+        var centerY = target is null ? 0 : Math.Clamp((target.Top + target.Bottom) / 2, short.MinValue, short.MaxValue);
+        var evt = new AtkEventDispatcher.Event
+        {
+            State = new AtkEventState { EventType = eventType },
+            EventData = new AtkEventData
+            {
+                MouseData = new AtkEventData.AtkMouseData
+                {
+                    PosX = (short)centerX,
+                    PosY = (short)centerY,
+                },
+            },
+        };
+        return node->DispatchEvent(&evt);
     }
 
-    [StructLayout(LayoutKind.Sequential)]
-    private struct NativePoint
+    private static unsafe AtkResNode* FindNodeByPath(AtkUnitBase* addon, string nodePath)
     {
-        public int X;
-        public int Y;
+        var segments = nodePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (segments.Length < 2 || !string.Equals(segments[0], "Character", StringComparison.Ordinal))
+            return null;
+        var manager = &addon->UldManager;
+        AtkResNode* node = null;
+        for (var segmentIndex = 1; segmentIndex < segments.Length; segmentIndex++)
+        {
+            if (!uint.TryParse(segments[segmentIndex], out var nodeId) || manager == null || manager->NodeList == null)
+                return null;
+            node = null;
+            for (var index = 0u; index < manager->NodeListCount; index++)
+            {
+                var candidate = manager->NodeList[index];
+                if (candidate != null && candidate->NodeId == nodeId)
+                {
+                    node = candidate;
+                    break;
+                }
+            }
+            if (node == null)
+                return null;
+            if (segmentIndex + 1 < segments.Length)
+            {
+                var componentNode = node->GetAsAtkComponentNode();
+                if (componentNode == null || componentNode->Component == null)
+                    return null;
+                manager = &componentNode->Component->UldManager;
+            }
+        }
+        return node;
     }
-
-    [DllImport("user32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool GetCursorPos(out NativePoint point);
-
-    [DllImport("user32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool SetCursorPos(int x, int y);
-
-    [DllImport("user32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool ClientToScreen(nint windowHandle, ref NativePoint point);
-
-    [DllImport("user32.dll")]
-    private static extern nint GetForegroundWindow();
-
-    [DllImport("user32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool PostMessage(nint windowHandle, uint message, nint wParam, nint lParam);
-
 
     private static unsafe AgentBridgeRenderedAddonSnapshot CaptureAddon(string addonName, AtkUnitBase* addon)
     {

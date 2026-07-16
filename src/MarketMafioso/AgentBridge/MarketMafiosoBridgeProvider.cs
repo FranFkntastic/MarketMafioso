@@ -31,6 +31,7 @@ public interface IMarketMafiosoBridgeProvider
     RenderedEquipmentScanProgress BeginCharacterEquipmentScanUi();
     RenderedEquipmentScanStepResult AdvanceCharacterEquipmentScanUi();
     RenderedEquipmentScanProgress CancelCharacterEquipmentScanUi();
+    AgentBridgeUiAutomationCapabilities GetUiAutomationCapabilities();
     IReadOnlyList<AgentBridgeReviewSurfaceDescriptor> GetReviewSurfaces();
     AgentBridgeUiReviewFrame GetControlSurface();
     AgentBridgeUiControlReview ReviewControl(string controlId);
@@ -76,6 +77,7 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
     private readonly Func<RenderedEquipmentScanProgress> beginCharacterEquipmentScanUi;
     private readonly Func<RenderedEquipmentScanStepResult> advanceCharacterEquipmentScanUi;
     private readonly Func<RenderedEquipmentScanProgress> cancelCharacterEquipmentScanUi;
+    private readonly Func<AgentBridgeUiAutomationCapabilities> getUiAutomationCapabilities;
     private readonly Func<AgentBridgeRenderedUiSnapshot> captureCharacterUi;
     private readonly Func<RenderedGatheringStatsObservation> captureGatheringStatsUi;
     private readonly AgentBridgeUiReviewRegistry reviewRegistry;
@@ -99,7 +101,8 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
         Func<bool>? restoreCharacterUiCursor = null,
         Func<RenderedEquipmentScanProgress>? beginCharacterEquipmentScanUi = null,
         Func<RenderedEquipmentScanStepResult>? advanceCharacterEquipmentScanUi = null,
-        Func<RenderedEquipmentScanProgress>? cancelCharacterEquipmentScanUi = null)
+        Func<RenderedEquipmentScanProgress>? cancelCharacterEquipmentScanUi = null,
+        Func<AgentBridgeUiAutomationCapabilities>? getUiAutomationCapabilities = null)
     {
         this.createSnapshot = createSnapshot ?? throw new ArgumentNullException(nameof(createSnapshot));
         this.openMainWindow = openMainWindow ?? throw new ArgumentNullException(nameof(openMainWindow));
@@ -120,6 +123,9 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
         this.beginCharacterEquipmentScanUi = beginCharacterEquipmentScanUi ?? (() => new(RenderedEquipmentScanStatus.Failed, 0, 0, null, [], "Rendered equipment scanning is unavailable."));
         this.advanceCharacterEquipmentScanUi = advanceCharacterEquipmentScanUi ?? (() => new(false, this.beginCharacterEquipmentScanUi(), "Rendered equipment scanning is unavailable."));
         this.cancelCharacterEquipmentScanUi = cancelCharacterEquipmentScanUi ?? (() => new(RenderedEquipmentScanStatus.Cancelled, 0, 0, null, [], "Rendered equipment scanning is unavailable."));
+        this.getUiAutomationCapabilities = getUiAutomationCapabilities ?? (() => new(
+            "unavailable", false, false, false, true, true, true,
+            "Rendered UI automation capabilities were not registered."));
     }
 
     public AgentBridgeTruth CreateSnapshot() => createSnapshot();
@@ -144,6 +150,7 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
     public RenderedEquipmentScanProgress BeginCharacterEquipmentScanUi() => beginCharacterEquipmentScanUi();
     public RenderedEquipmentScanStepResult AdvanceCharacterEquipmentScanUi() => advanceCharacterEquipmentScanUi();
     public RenderedEquipmentScanProgress CancelCharacterEquipmentScanUi() => cancelCharacterEquipmentScanUi();
+    public AgentBridgeUiAutomationCapabilities GetUiAutomationCapabilities() => getUiAutomationCapabilities();
     public IReadOnlyList<AgentBridgeReviewSurfaceDescriptor> GetReviewSurfaces() => ReviewSurfaces;
     public AgentBridgeUiReviewFrame GetControlSurface() => reviewRegistry.Snapshot();
     public AgentBridgeUiControlReview ReviewControl(string controlId) => reviewRegistry.Review(controlId);

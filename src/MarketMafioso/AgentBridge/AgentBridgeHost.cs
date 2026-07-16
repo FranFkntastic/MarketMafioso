@@ -169,6 +169,8 @@ public sealed class AgentBridgeHost : IDisposable
                     : AgentBridgeResponse.Ok("Reviewed control captured.", controlReview);
             case "get-review-surfaces":
                 return AgentBridgeResponse.Ok("Review surfaces captured.", provider.GetReviewSurfaces());
+            case "get-ui-automation-capabilities":
+                return AgentBridgeResponse.Ok("Rendered UI automation capabilities captured.", provider.GetUiAutomationCapabilities());
             case "invoke-control":
                 if (string.IsNullOrWhiteSpace(request.Target) || request.FrameId is null)
                     return AgentBridgeResponse.Fail("Control ID and reviewed frame ID are required.");
@@ -260,14 +262,15 @@ public sealed class AgentBridgeHost : IDisposable
                 var characterNodeHovered = false;
                 await dispatchOnFramework(() => characterNodeHovered = provider.TryHoverCharacterNodeUi(request.Target ?? string.Empty)).ConfigureAwait(false);
                 return characterNodeHovered
-                    ? AgentBridgeResponse.Ok($"Cursor moved over rendered Character node {request.Target}.")
-                    : AgentBridgeResponse.Fail("The requested rendered Character drag/drop node is unavailable.");
+                    ? AgentBridgeResponse.Ok($"Virtual UI mouseover dispatched to rendered Character node {request.Target}; the OS cursor and window focus were not changed.")
+                    : AgentBridgeResponse.Fail("The requested rendered Character drag/drop node is unavailable or has no registered mouseover event.");
+            case "release-character-node-ui":
             case "restore-character-ui-cursor":
                 var characterCursorRestored = false;
                 await dispatchOnFramework(() => characterCursorRestored = provider.RestoreCharacterUiCursor()).ConfigureAwait(false);
                 return characterCursorRestored
-                    ? AgentBridgeResponse.Ok("Cursor restored after Character UI observation.")
-                    : AgentBridgeResponse.Fail("No Character UI cursor observation was active.");
+                    ? AgentBridgeResponse.Ok("Virtual Character-node mouseover released; the OS cursor was never changed.")
+                    : AgentBridgeResponse.Fail("No virtual Character-node mouseover was active.");
             case "get-gathering-stats-ui":
                 Squire.Observation.RenderedGatheringStatsObservation? gatheringStats = null;
                 await dispatchOnFramework(() => gatheringStats = provider.CaptureGatheringStatsUi()).ConfigureAwait(false);
