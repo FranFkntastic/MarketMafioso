@@ -1,10 +1,10 @@
 {
   "Author": "FranFkntastic",
   "Name": "MarketMafioso",
-  "Punchline": "Workshop logistics, reviewed gear cleanup, and inventory history.",
-  "Description": "FFXIV workshop logistics, reviewed gear cleanup through Squire, and optional receiver-backed inventory history. Use /mmf to open settings.",
+  "Punchline": "Workshop logistics, gear planning and cleanup, and inventory history.",
+  "Description": "FFXIV workshop logistics, gear planning and reviewed cleanup through Squire, and optional receiver-backed inventory history. Use /mmf to open settings.",
   "InternalName": "MarketMafioso",
-  "AssemblyVersion": "1.2.1.0",
+  "AssemblyVersion": "1.3.0.0",
   "DalamudApiLevel": 15,
   "ApplicableVersion": "any",
   "Tags": [
@@ -21,5 +21,5 @@
   "CategoryTags": [
     "utility"
   ],
-  "Changelog": "Hardens Squire cleanup with recovery-aware execution, live inventory refresh, retained-witness revalidation, explicit item-protection and copy-retention rules, and nearby-bell discovery for retainer restock."
+  "Changelog": "Adds Squire Outfitter loadout planning for jobs and retainers, improves gearset freshness and cleanup-rule reliability, and streamlines the main interface."
 }
