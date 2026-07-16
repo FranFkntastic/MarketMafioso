@@ -20,6 +20,7 @@ public interface IMarketMafiosoBridgeProvider
     void CaptureInputState();
     void StopRoute();
     void OpenCharacterUi();
+    bool TryCloseCharacterUi();
     bool TryCloseBlockingSelectStringUi();
     bool TrySwitchCalibrationJobUi(string target);
     bool TryHoverCharacterNodeUi(string target);
@@ -70,6 +71,7 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
     private readonly Action captureInputState;
     private readonly Action stopRoute;
     private readonly Action openCharacterUi;
+    private readonly Func<bool> tryCloseCharacterUi;
     private readonly Func<bool> tryCloseBlockingSelectStringUi;
     private readonly Func<string, bool> trySwitchCalibrationJobUi;
     private readonly Func<string, bool> tryHoverCharacterNodeUi;
@@ -93,6 +95,7 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
         Action stopRoute,
         AgentBridgeUiReviewRegistry reviewRegistry,
         Action? openCharacterUi = null,
+        Func<bool>? tryCloseCharacterUi = null,
         Func<AgentBridgeRenderedUiSnapshot>? captureCharacterUi = null,
         Func<bool>? tryCloseBlockingSelectStringUi = null,
         Func<string, bool>? trySwitchCalibrationJobUi = null,
@@ -114,6 +117,7 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
         this.stopRoute = stopRoute ?? throw new ArgumentNullException(nameof(stopRoute));
         this.reviewRegistry = reviewRegistry ?? throw new ArgumentNullException(nameof(reviewRegistry));
         this.openCharacterUi = openCharacterUi ?? (() => { });
+        this.tryCloseCharacterUi = tryCloseCharacterUi ?? (() => false);
         this.captureCharacterUi = captureCharacterUi ?? (() => new(DateTimeOffset.UtcNow, []));
         this.tryCloseBlockingSelectStringUi = tryCloseBlockingSelectStringUi ?? (() => false);
         this.trySwitchCalibrationJobUi = trySwitchCalibrationJobUi ?? (_ => false);
@@ -137,6 +141,7 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
     public void CaptureInputState() => captureInputState();
     public void StopRoute() => stopRoute();
     public void OpenCharacterUi() => openCharacterUi();
+    public bool TryCloseCharacterUi() => tryCloseCharacterUi();
     public bool TryCloseBlockingSelectStringUi() => tryCloseBlockingSelectStringUi();
     public bool TrySwitchCalibrationJobUi(string target) => trySwitchCalibrationJobUi(target);
     public bool TryHoverCharacterNodeUi(string target) => tryHoverCharacterNodeUi(target);

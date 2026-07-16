@@ -174,6 +174,7 @@ public sealed class Plugin : IDalamudPlugin
                 mainWindow.AgentStopRoute,
                 mainWindow.AgentReviewRegistry,
                 renderedCharacterUiProbe.Open,
+                renderedCharacterUiProbe.TryCloseCharacterUi,
                 renderedCharacterUiProbe.Capture,
                 renderedCharacterUiProbe.TryCloseBlockingSelectString,
                 renderedCharacterUiProbe.TrySwitchCalibrationJob,

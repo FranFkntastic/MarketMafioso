@@ -62,6 +62,16 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
         Chat.ExecuteCommand("/character");
     }
 
+    public unsafe bool TryCloseCharacterUi()
+    {
+        RestoreCursor();
+        var addon = gameGui.GetAddonByName<AtkUnitBase>("Character", 1);
+        if (addon == null || addon->RootNode == null || !addon->RootNode->IsVisible())
+            return false;
+        addon->Close(true);
+        return true;
+    }
+
     public void PrepareAdvisorObservation()
     {
         gatheringStatsStabilizer.Reset();

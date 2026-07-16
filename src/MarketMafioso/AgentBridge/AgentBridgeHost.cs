@@ -242,6 +242,12 @@ public sealed class AgentBridgeHost : IDisposable
                 await dispatchOnFramework(provider.OpenCharacterUi).ConfigureAwait(false);
                 AppendAudit("open-character-ui", "accepted");
                 return AgentBridgeResponse.Ok("Character UI open requested.");
+            case "close-character-ui":
+                var characterUiClosed = false;
+                await dispatchOnFramework(() => characterUiClosed = provider.TryCloseCharacterUi()).ConfigureAwait(false);
+                return characterUiClosed
+                    ? AgentBridgeResponse.Ok("Visible Character UI closed through its rendered addon.")
+                    : AgentBridgeResponse.Fail("No visible Character UI was available to close.");
             case "close-blocking-select-string-ui":
                 var selectStringClosed = false;
                 await dispatchOnFramework(() => selectStringClosed = provider.TryCloseBlockingSelectStringUi()).ConfigureAwait(false);
