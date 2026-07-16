@@ -26,12 +26,22 @@ internal sealed class SquireSettingsPages
         [
             new("squire.rules", "Squire / Cleanup Rules", ruleManager.Draw, 20,
                 searchTerms: ["policy", "rules", "rarity", "signed", "future leveling", "materia", "Armoire", "duplicates", "disposition", "Expert Delivery", "desynthesis"]),
+            new("squire.outfitter-advisor", "Squire / Outfitter Advisor", DrawOutfitterAdvisor, 21,
+                searchTerms: ["MIN", "BTN", "cost utility", "Pareto", "NQ", "HQ", "market listings", "read only"]),
             new("squire.recovery", "Squire / Execution Recovery", DrawRecovery, 23,
                 searchTerms: ["knocked out", "combat", "duty", "GatherBuddy", "Questionable", "Artisan", "menus", "pause automation"]),
         ];
     }
 
     public IReadOnlyList<SettingsPageDescriptor> Descriptors { get; }
+
+    private void DrawOutfitterAdvisor(SettingsPageContext context)
+    {
+        DrawCheckbox(context, "Enable the read-only MIN/BTN advisor",
+            "Experimental surface, disabled by default. When enabled it replaces the legacy Outfitter view, observes the active level-100 MIN/BTN through rendered Character UI, and compares exact NQ/HQ market and vendor offers without purchasing or equipping.",
+            () => config.Squire.EnableOutfitterAdvisor, value => config.Squire.EnableOutfitterAdvisor = value);
+        Dalamud.Bindings.ImGui.ImGui.TextWrapped("Current coverage: equipped UI evidence plus level 90-100 market and gil-vendor equipment. Armoury inventory and retainers remain outside this release and are stated explicitly in the workbench.");
+    }
 
     private void DrawRecovery(SettingsPageContext context)
     {

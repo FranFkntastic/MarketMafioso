@@ -89,6 +89,35 @@ public sealed class MinerBotanistReadOnlyAdvisorTests
         Assert.Contains(advice.Nomination.Candidate.Selections, value => value.OfferKey.SourceKind == EquipmentAcquisitionSourceKind.GilVendor);
     }
 
+    [Fact]
+    public void Build_prunes_higher_priced_duplicate_listings_but_keeps_two_units_for_rings()
+    {
+        var fixture = Fixture();
+        var ring = Definition(4_000, "Threshold Ring", EquipmentSlot.Ring, 0, 1);
+        var now = fixture.Evidence.CreatedAtUtc;
+        var listings = new[]
+        {
+            new OutfitterMarketListingEvidence(ring.ItemId, EquipmentQuality.High, "first", "Siren", 1, "A", "1", 1, 10_000, now, now, "r1"),
+            new OutfitterMarketListingEvidence(ring.ItemId, EquipmentQuality.High, "second", "Siren", 1, "B", "2", 1, 11_000, now, now, "r1"),
+            new OutfitterMarketListingEvidence(ring.ItemId, EquipmentQuality.High, "dominated", "Siren", 1, "C", "3", 1, 99_000, now, now, "r1"),
+        };
+        var evidence = fixture.Evidence with
+        {
+            Coverage = new(OutfitterMarketCoverageMode.ExhaustiveWithinScope, 1, 1, 100, [ring.ItemId]),
+            Items = [new(ring.ItemId, OutfitterMarketEvidenceItemStatus.Fresh, listings, now, "r1")],
+        };
+
+        var advice = new MinerBotanistReadOnlyAdvisor().Build(
+            fixture.Baseline,
+            fixture.Resolution,
+            evidence,
+            _ => [ring],
+            MinerBotanistUtilityContextKind.LegendaryNodeGeneralYield);
+
+        Assert.Equal(2, advice.OffersByAllocation.Values.Count(value => value.Offer.Definition.ItemId == ring.ItemId));
+        Assert.DoesNotContain(advice.OffersByAllocation.Keys, value => value.ObservationId == "dominated");
+    }
+
     private static FixtureData Fixture()
     {
         var positions = new[]

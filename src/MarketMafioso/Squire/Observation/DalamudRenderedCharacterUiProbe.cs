@@ -15,7 +15,17 @@ namespace MarketMafioso.Squire.Observation;
 /// Opens and inspects only the rendered Character UI. It intentionally does not
 /// consult PlayerState, InventoryManager, agents, or gearset modules.
 /// </summary>
-public sealed class DalamudRenderedCharacterUiProbe
+public interface IRenderedCharacterAdvisorProbe
+{
+    void PrepareAdvisorObservation();
+    void Open();
+    RenderedGatheringStatsObservation CaptureGatheringStats();
+    RenderedEquipmentScanProgress BeginEquipmentScan();
+    RenderedEquipmentScanStepResult AdvanceEquipmentScan();
+    RenderedEquipmentScanProgress CancelEquipmentScan();
+}
+
+public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorProbe
 {
     private static readonly string[] AddonNames =
     [
@@ -43,6 +53,12 @@ public sealed class DalamudRenderedCharacterUiProbe
         if (addon != null && addon->RootNode != null && addon->RootNode->IsVisible())
             return;
         Chat.ExecuteCommand("/character");
+    }
+
+    public void PrepareAdvisorObservation()
+    {
+        gatheringStatsStabilizer.Reset();
+        CancelEquipmentScan();
     }
 
     public unsafe bool TryCloseBlockingSelectString()

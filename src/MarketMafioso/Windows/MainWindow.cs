@@ -103,7 +103,8 @@ public class MainWindow : Window, IDisposable
         MarketBoardApproachService marketBoardApproachService,
         string marketAcquisitionRouteDiagnosticsDirectory,
         RetainerCacheFileStore? retainerCacheStore,
-        IPluginLog log)
+        IPluginLog log,
+        IRenderedCharacterAdvisorProbe renderedCharacterAdvisorProbe)
         : base("MarketMafioso##MarketMafiosoMainWindow",
                ImGuiWindowFlags.None)
     {
@@ -250,7 +251,8 @@ public class MainWindow : Window, IDisposable
             Plugin.GameInventory,
             dataManager,
             Plugin.PluginInterface,
-            acquisitionPlanSource);
+            acquisitionPlanSource,
+            renderedCharacterAdvisorProbe);
         statusTab = new StatusTabPanel(config, reporter, retainerCacheStore, log);
         marketAcquisitionRequestPickupPanel = new MarketAcquisitionRequestPickupPanel(
             () => _ = FetchDashboardRequestsAsync(),

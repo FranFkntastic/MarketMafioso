@@ -122,6 +122,7 @@ public sealed class Plugin : IDalamudPlugin
             });
         workshopMaterialManifestExport = new WorkshopMaterialManifestExportService(
             new LuminaWorkshopMaterialCraftRecipeResolver(DataManager));
+        renderedCharacterUiProbe = new DalamudRenderedCharacterUiProbe(GameGui);
         mainWindow = new MainWindow(
             Configuration,
             reporter,
@@ -142,11 +143,11 @@ public sealed class Plugin : IDalamudPlugin
                 Log),
             Path.Combine(PluginInterface.GetPluginConfigDirectory(), "market-acquisition-route-logs"),
             retainerCacheStore,
-            Log);
+            Log,
+            renderedCharacterUiProbe);
 
         agentBridgeProofStore = new AgentBridgeProofStore();
         agentBridgeProofWindow = new AgentBridgeProofWindow(agentBridgeProofStore);
-        renderedCharacterUiProbe = new DalamudRenderedCharacterUiProbe(GameGui);
         agentBridgeViewportCapture = new AgentBridgeViewportCaptureService(
             PluginInterface.GetPluginConfigDirectory(),
             Configuration.PluginInstanceId,

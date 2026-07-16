@@ -15,6 +15,7 @@ namespace MarketMafioso.Squire.Observation;
 public sealed class LuminaRenderedEquipmentDefinitionLookup
 {
     private readonly IDataManager dataManager;
+    private readonly Dictionary<uint, EquipmentItemDefinition?> byItemId = [];
 
     public LuminaRenderedEquipmentDefinitionLookup(IDataManager dataManager)
     {
@@ -34,6 +35,26 @@ public sealed class LuminaRenderedEquipmentDefinitionLookup
             .Where(value => value is not null)
             .Cast<EquipmentItemDefinition>()
             .ToArray();
+    }
+
+    public IReadOnlyList<EquipmentItemDefinition> FindByItemId(uint itemId)
+    {
+        if (itemId == 0)
+            return [];
+        if (byItemId.TryGetValue(itemId, out var cached))
+            return cached is null ? [] : [cached];
+        var items = dataManager.GetExcelSheet<Item>() ?? throw new InvalidOperationException("Item sheet is unavailable.");
+        var value = items.GetRowOrDefault(itemId);
+        if (value is null)
+        {
+            byItemId[itemId] = null;
+            return [];
+        }
+        var baseParams = dataManager.GetExcelSheet<BaseParam>() ?? throw new InvalidOperationException("BaseParam sheet is unavailable.");
+        var jobs = dataManager.GetExcelSheet<ClassJob>() ?? throw new InvalidOperationException("ClassJob sheet is unavailable.");
+        var definition = Build(value.Value, baseParams, jobs);
+        byItemId[itemId] = definition;
+        return definition is null ? [] : [definition];
     }
 
     private static EquipmentItemDefinition? Build(

@@ -19,6 +19,7 @@ using Newtonsoft.Json;
 using Franthropy.Dalamud.AgentBridge;
 using Franthropy.Dalamud.Equipment;
 using MarketMafioso.Diagnostics;
+using MarketMafioso.Squire.Outfitter.Utility;
 
 namespace MarketMafioso.Windows.Squire;
 
@@ -40,6 +41,8 @@ internal sealed class SquireTabPanel : IDisposable
     private readonly UiStateCaptureService uiStateCapture;
     private readonly SquireInventoryChangeMonitor inventoryChangeMonitor;
     private readonly OutfitterPanel outfitterPanel;
+    private readonly MinerBotanistAdvisorSession advisorSession;
+    private readonly MinerBotanistAdvisorPanel advisorPanel;
     private string selectedWorkspace;
     private SquireAnalysis? analysis;
     private SquireRunPresentation? lastRun;
@@ -79,7 +82,8 @@ internal sealed class SquireTabPanel : IDisposable
         IGameInventory gameInventory,
         IDataManager dataManager,
         IDalamudPluginInterface pluginInterface,
-        IMarketAcquisitionListingSource marketListingSource)
+        IMarketAcquisitionListingSource marketListingSource,
+        IRenderedCharacterAdvisorProbe renderedCharacterAdvisorProbe)
     {
         this.config = config;
         this.snapshotSource = snapshotSource;
@@ -98,6 +102,12 @@ internal sealed class SquireTabPanel : IDisposable
             new OutfitterMarketQuoteService(marketListingSource),
             new AutoRetainerOutfitterMetadataSource(pluginInterface, Plugin.Log),
             reviewRegistry);
+        advisorSession = new(
+            renderedCharacterAdvisorProbe,
+            dataManager,
+            marketListingSource,
+            Path.Combine(diagnosticDirectory, "outfitter-market-evidence.json"));
+        advisorPanel = new(config, advisorSession, reviewRegistry);
         selectedWorkspace = string.Equals(config.Squire.SelectedWorkspace, "Cleanup", StringComparison.OrdinalIgnoreCase)
             ? "Cleanup"
             : "Outfitter";
@@ -163,6 +173,11 @@ internal sealed class SquireTabPanel : IDisposable
 
     private void DrawOutfitter()
     {
+        if (config.Squire.EnableOutfitterAdvisor)
+        {
+            advisorPanel.Draw();
+            return;
+        }
         ImGui.TextColored(MarketMafiosoUiTheme.Header, "Outfitter — loadout planner");
         ImGui.TextWrapped("Choose a target, compare its current set with the best accessible loadout, then hand market purchases to Market Acquisition.");
         if (ImGui.Button("Refresh equipment##Outfitter"))
@@ -291,6 +306,7 @@ internal sealed class SquireTabPanel : IDisposable
 
     public void OnFrameworkUpdate()
     {
+        advisorSession.Tick();
         if (automaticRefreshRequested)
             MaybeRefreshAutomatically();
     }
@@ -933,6 +949,7 @@ internal sealed class SquireTabPanel : IDisposable
     public void Dispose()
     {
         runCancellation?.Cancel();
+        advisorSession.Dispose();
         outfitterPanel.Dispose();
         inventoryChangeMonitor.Dispose();
         routeDiagnosticsPanel.Dispose();

@@ -19,6 +19,7 @@ public sealed record MinerBotanistReadOnlyAdvice(
     EquipmentExactFrontierResult? Frontier,
     EquipmentDecisionSolution? Nomination,
     IReadOnlyDictionary<string, MinerBotanistAuthorityAssessment> AuthorityBySolutionId,
+    IReadOnlyDictionary<EquipmentOfferAllocationKey, EquipmentExactSolverOffer> OffersByAllocation,
     string Diagnostic);
 
 /// <summary>
@@ -93,7 +94,7 @@ public sealed class MinerBotanistReadOnlyAdvisor
             var definition = definitions[0];
             if (HasUnmodeledEffectOrRestriction(definition))
                 return Abstain($"{definition.Name} has an unmodeled effect or equip restriction.");
-            foreach (var listing in itemEvidence.Listings)
+            foreach (var listing in RelevantListings(itemEvidence.Listings))
             {
                 var profileForQuality = definition.ResolveStatProfile(listing.Quality);
                 if (profileForQuality is not { IsComplete: true })
@@ -201,6 +202,7 @@ public sealed class MinerBotanistReadOnlyAdvisor
             frontier,
             nomination,
             authority,
+            offers.ToDictionary(value => value.AllocationKey),
             nomination is null
                 ? "Frontier is complete, but the advisor abstains under the displayed rule."
                 : $"Advisor nominates {nomination.Candidate.SolutionId} under the displayed rule.");
@@ -260,7 +262,30 @@ public sealed class MinerBotanistReadOnlyAdvisor
     private static bool HasUnmodeledEffectOrRestriction(EquipmentItemDefinition definition) =>
         definition.ItemSpecialBonusId != 0 || definition.ItemActionId != 0 || definition.HasUnmodeledEquipRestriction;
 
+    private static IEnumerable<OutfitterMarketListingEvidence> RelevantListings(
+        IReadOnlyList<OutfitterMarketListingEvidence> listings)
+    {
+        foreach (var qualityGroup in listings
+                     .Where(value => value.Quantity > 0)
+                     .GroupBy(value => value.Quality))
+        {
+            uint coveredUnits = 0;
+            foreach (var listing in qualityGroup
+                         .OrderBy(value => value.UnitPriceGil)
+                         .ThenByDescending(value => value.ListingReviewedAtUtc)
+                         .ThenBy(value => value.ListingId, StringComparer.Ordinal))
+            {
+                yield return listing;
+                coveredUnits = checked(coveredUnits + listing.Quantity);
+                if (coveredUnits >= 2)
+                    break;
+            }
+        }
+    }
+
     private static MinerBotanistReadOnlyAdvice Abstain(string diagnostic) =>
         new(MinerBotanistAdvisorStatus.Abstained, AdvisoryRule, null, null,
-            new Dictionary<string, MinerBotanistAuthorityAssessment>(), diagnostic);
+            new Dictionary<string, MinerBotanistAuthorityAssessment>(),
+            new Dictionary<EquipmentOfferAllocationKey, EquipmentExactSolverOffer>(),
+            diagnostic);
 }
