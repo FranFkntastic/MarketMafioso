@@ -43,6 +43,21 @@ public sealed class DashboardAccountAuthTests
     }
 
     [Fact]
+    public async Task DashboardSession_WhenAuthenticationIsDisabled_ProvidesLocalSession()
+    {
+        await using var application = CreateApplication(
+            new KeyValuePair<string, string?>("MarketMafioso:RequireDashboardAuth", "false"));
+        using var client = application.CreateClient();
+
+        var session = await client.GetAsync("/auth/session");
+        var inventory = await client.GetAsync("/api/inventory/characters");
+
+        Assert.Equal(HttpStatusCode.OK, session.StatusCode);
+        Assert.Contains("Local dashboard", await session.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+        Assert.Equal(HttpStatusCode.OK, inventory.StatusCode);
+    }
+
+    [Fact]
     public async Task DashboardSession_RejectsInvalidCredentials()
     {
         await using var application = CreateApplication();

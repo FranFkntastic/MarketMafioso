@@ -54,8 +54,18 @@ internal static class DashboardAuthEndpoints
     private static async Task<IResult> GetSession(
         HttpRequest request,
         DashboardSessionStore sessions,
+        IConfiguration configuration,
         CancellationToken token)
     {
+        if (!configuration.GetValue<bool>("MarketMafioso:RequireDashboardAuth"))
+        {
+            return Results.Ok(new
+            {
+                user = new { userId = 0L, username = "Local dashboard" },
+                expiresAtUtc = DateTimeOffset.UtcNow.AddYears(100),
+            });
+        }
+
         var session = await sessions.GetAsync(request.Cookies[DashboardSessionStore.CookieName], token);
         if (session == null)
             return Results.Unauthorized();
