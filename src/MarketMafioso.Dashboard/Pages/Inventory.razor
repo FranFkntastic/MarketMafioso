@@ -29,13 +29,7 @@ else
     <section class="inventory-shell">
         <aside class="inventory-scope-pane">
             <div class="inventory-character-select">
-                <MudSelect T="long?" Value="_selectedCharacterId" ValueChanged="OnCharacterChanged" Placeholder="Choose character" aria-label="Character" Variant="Variant.Outlined" Margin="Margin.Dense" FullWidth="true">
-                    <MudSelectItem T="long?" Value="@null">Latest available</MudSelectItem>
-                    @foreach (var character in _characters)
-                    {
-                        <MudSelectItem T="long?" Value="@character.Id">@character.DisplayName</MudSelectItem>
-                    }
-                </MudSelect>
+                <InventoryCharacterSelect Characters="_characters" Value="_selectedCharacterId" ValueChanged="OnCharacterChanged" />
             </div>
             <div class="inventory-scope-heading">Inventory scope</div>
             <div class="inventory-scope-list">
@@ -60,12 +54,18 @@ else
         </aside>
 
         <div class="inventory-workspace">
+            <div class="inventory-mobile-controls">
+                <InventoryCharacterSelect Characters="_characters" Value="_selectedCharacterId" ValueChanged="OnCharacterChanged" />
+                <InventoryScopeSelect Scopes="_view.Scopes" Value="_scope" ValueChanged="SetScopeAsync" />
+            </div>
             <div class="inventory-filter-editor">
                 <div class="inventory-commandbar">
                     <div class="inventory-mode-switch" role="group" aria-label="Inventory view">
                         @foreach (var mode in Enum.GetValues<InventoryBrowserMode>())
                         {
-                            <button class="@ModeButtonClass(mode)" @onclick="@(() => SetModeAsync(mode))">@ModeLabel(mode)</button>
+                            <button class="@ModeButtonClass(mode)"
+                                    aria-pressed="@(_mode == mode)"
+                                    @onclick="@(() => SetModeAsync(mode))">@ModeLabel(mode)</button>
                         }
                     </div>
                     <MudTextField T="string"
@@ -78,30 +78,45 @@ else
                                   DebounceInterval="250"
                                   Class="inventory-filter" />
                     <MudTooltip Text="Filter reference">
-                        <MudIconButton Icon="@Icons.Material.Filled.HelpOutline" Size="Size.Small" OnClick="ToggleFilterReference" />
+                        <MudIconButton Icon="@Icons.Material.Filled.HelpOutline"
+                                       Size="Size.Small"
+                                       aria-label="Filter reference"
+                                       OnClick="ToggleFilterReference" />
                     </MudTooltip>
                 </div>
 
                 @if (_showCompletions && !string.IsNullOrWhiteSpace(_filterText) && _view.FilterCompletions.Count > 0)
                 {
-                    <div class="inventory-filter-completions">
+                    <div class="inventory-filter-completions" role="listbox" aria-label="Filter suggestions">
+                        @if (SharedCompletionDescription is { } completionDescription)
+                        {
+                            <div class="inventory-filter-completion-context">@completionDescription</div>
+                        }
                         @foreach (var completion in _view.FilterCompletions.Take(8))
                         {
-                            <button @onclick="@(() => ApplyCompletionAsync(completion))">
+                            <button role="option" @onclick="@(() => ApplyCompletionAsync(completion))">
                                 <strong>@completion.Label</strong>
-                                <span>@completion.Description</span>
-                                <small>@completion.Kind</small>
+                                @if (SharedCompletionDescription is null && !string.IsNullOrWhiteSpace(completion.Description))
+                                {
+                                    <span>@completion.Description</span>
+                                }
                             </button>
                         }
                     </div>
                 }
 
-                @if (!_view.FilterValid && _view.FilterDiagnostics.Count > 0)
+                @if (ShowFilterErrors)
                 {
                     <div class="inventory-filter-error">
-                        @foreach (var diagnostic in _view.FilterDiagnostics.Take(2))
+                        <div>
+                            @foreach (var diagnostic in _view.FilterDiagnostics.Take(2))
+                            {
+                                <span>@diagnostic.Message</span>
+                            }
+                        </div>
+                        @if (SuggestedFilterMode is { } suggestedMode)
                         {
-                            <span>@diagnostic.Message</span>
+                            <button @onclick="@(() => UseSuggestedModeAsync(suggestedMode))">Use in @ModeLabel(suggestedMode)</button>
                         }
                     </div>
                 }
@@ -125,60 +140,33 @@ else
                 <div><strong>@_view.TotalQuantity.ToString("N0")</strong><span>total quantity</span></div>
                 <div><strong>@_view.HqQuantity.ToString("N0")</strong><span>HQ</span></div>
                 <div><strong>@_view.OwnerCount.ToString("N0")</strong><span>owners</span></div>
+                @if (_mode == InventoryBrowserMode.Listings)
+                {
+                    <div class="inventory-evidence-summary"><strong>@_view.ListingPriceKnownCount.ToString("N0")/@_view.MatchingRecordCount.ToString("N0")</strong><span>with price evidence</span></div>
+                }
             </div>
+
+            @if (_mode == InventoryBrowserMode.Listings && _view.MatchingRecordCount > 0 && !HasListingPrices)
+            {
+                <div class="inventory-evidence-note">This snapshot records retainer listing quantities, but not their sale prices.</div>
+            }
 
             <div class="@ContentClass">
                 <div class="inventory-table-scroll">
                     @if (_mode == InventoryBrowserMode.Items)
                     {
-                        <table class="inventory-native-table">
-                            <thead><tr><th>Item</th><th>Category</th><th class="number">Owned</th><th class="number">HQ</th><th>Primary location</th><th class="number">Owners</th></tr></thead>
-                            <tbody>
-                            @foreach (var item in _view.Items)
-                            {
-                                <tr class="@ItemRowClass(item)" @onclick="@(() => SelectItem(item))">
-                                    <td><strong>@item.DisplayName</strong></td>
-                                    <td>@(item.ItemType ?? "Unknown")</td>
-                                    <td class="number">@item.TotalQuantity.ToString("N0")</td>
-                                    <td class="number hq-value">@item.HqQuantity.ToString("N0")</td>
-                                    <td>@FormatLocations(item)</td>
-                                    <td class="number">@item.OwnerCount.ToString("N0")</td>
-                                </tr>
-                            }
-                            </tbody>
-                        </table>
+                        <InventoryItemTable Items="_view.Items"
+                                            ShowCategory="HasItemTypes"
+                                            SelectedItemId="_selectedItem?.ItemId"
+                                            ItemSelected="SelectItem" />
                     }
                     else if (_mode == InventoryBrowserMode.Stacks)
                     {
-                        <table class="inventory-native-table stacks-table">
-                            <thead><tr><th>Item</th><th>Owner</th><th>Location</th><th>Container</th><th class="number">Qty</th><th>Quality</th><th class="number">Condition</th></tr></thead>
-                            <tbody>
-                            @foreach (var stack in _view.Stacks)
-                            {
-                                <tr>
-                                    <td><strong>@stack.DisplayName</strong></td><td>@stack.OwnerName</td><td>@stack.Location</td><td>@FormatContainer(stack)</td>
-                                    <td class="number">@stack.Quantity.ToString("N0")</td><td><span class="quality-pill @(stack.IsHq ? "hq" : null)">@(stack.IsHq ? "HQ" : "NQ")</span></td>
-                                    <td class="number">@FormatPercent(stack.ConditionPercent)</td>
-                                </tr>
-                            }
-                            </tbody>
-                        </table>
+                        <InventoryStackTable Stacks="_view.Stacks" />
                     }
                     else
                     {
-                        <table class="inventory-native-table listings-table">
-                            <thead><tr><th>Item</th><th>Retainer</th><th class="number">Qty</th><th>Quality</th><th class="number">Unit price</th><th class="number">Total</th><th class="number">Age</th></tr></thead>
-                            <tbody>
-                            @foreach (var listing in _view.MarketListings)
-                            {
-                                <tr>
-                                    <td><strong>@listing.DisplayName</strong></td><td>@listing.OwnerName</td><td class="number">@listing.Quantity.ToString("N0")</td>
-                                    <td><span class="quality-pill @(listing.HqQuantity > 0 ? "hq" : null)">@(listing.HqQuantity > 0 ? "HQ" : "NQ")</span></td>
-                                    <td class="number price-value">@FormatUnitPrice(listing.UnitPrice)</td><td class="number">@FormatTotalPrice(listing.TotalPrice)</td><td class="number">@FormatAge(listing.EvidenceAgeSeconds)</td>
-                                </tr>
-                            }
-                            </tbody>
-                        </table>
+                        <InventoryListingTable Listings="_view.MarketListings" ShowPrices="HasListingPrices" />
                     }
 
                     @if (_view.FilterValid && _view.MatchingRecordCount == 0)
@@ -189,16 +177,16 @@ else
 
                 @if (_mode == InventoryBrowserMode.Items && _selectedItem is not null)
                 {
-                    <aside class="inventory-inspector">
-                        <div class="inventory-inspector-heading"><strong>Selected item</strong><button @onclick="CloseInspector">×</button></div>
+                    <aside class="inventory-inspector" aria-label="Selected item details">
+                        <div class="inventory-inspector-heading"><strong>Selected item</strong><button aria-label="Close selected item" @onclick="CloseInspector">×</button></div>
                         <div class="inventory-inspector-summary">
-                            <h3>@_selectedItem.DisplayName</h3><span>@(_selectedItem.ItemType ?? "Unknown") · observed in @_selectedItem.Locations.Count locations</span>
+                            <h3>@_selectedItem.DisplayName</h3><span>@InspectorSummary</span>
                             <div class="inventory-inspector-facts"><div><small>Owned</small><b>@_selectedItem.TotalQuantity.ToString("N0")</b></div><div><small>HQ</small><b class="hq-value">@_selectedItem.HqQuantity.ToString("N0")</b></div></div>
                         </div>
                         <div class="inventory-location-heading">Locations</div>
                         @foreach (var location in _selectedItem.Locations)
                         {
-                            <div class="inventory-location-row"><span>@location.Quantity.ToString("N0") total · @location.HqQuantity.ToString("N0") HQ</span><strong>@location.OwnerName</strong><small>@location.Location · @location.BagName</small></div>
+                            <div class="inventory-location-row"><span>@location.Quantity.ToString("N0") total · @location.HqQuantity.ToString("N0") HQ</span><strong>@location.OwnerName</strong><small>@InventoryDisplayFormatter.FormatStorage(location.Location, location.BagName)</small></div>
                         }
                     </aside>
                 }
@@ -229,6 +217,27 @@ else
     private string CharacterLabel => string.IsNullOrWhiteSpace(_view.CharacterName) ? "No character selected" : $"{_view.CharacterName} @ {_view.HomeWorld}";
     private string FilterPlaceholder => $"Filter {ModeLabel(_mode).ToLowerInvariant()}…";
     private string ContentClass => _mode == InventoryBrowserMode.Items && _selectedItem is not null ? "inventory-content has-inspector" : "inventory-content";
+    private bool HasItemTypes => _view.ItemTypeKnownCount > 0;
+    private bool HasListingPrices => _view.ListingPriceKnownCount > 0;
+    private bool ShowFilterErrors => !_view.FilterValid && _view.FilterDiagnostics.Count > 0 && !InventoryFilterPresentation.IsIncomplete(_filterText);
+    private InventoryBrowserMode? SuggestedFilterMode => ShowFilterErrors ? InventoryFilterPresentation.SuggestedMode(_filterText, _mode) : null;
+    private string InspectorSummary => _selectedItem is null
+        ? string.Empty
+        : string.IsNullOrWhiteSpace(_selectedItem.ItemType)
+            ? $"Observed in {_selectedItem.Locations.Count:N0} locations"
+            : $"{_selectedItem.ItemType} · observed in {_selectedItem.Locations.Count:N0} locations";
+    private string? SharedCompletionDescription
+    {
+        get
+        {
+            var descriptions = _view.FilterCompletions.Take(8)
+                .Select(completion => completion.Description?.Trim())
+                .Where(description => !string.IsNullOrWhiteSpace(description))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            return descriptions.Length == 1 ? descriptions[0] : null;
+        }
+    }
     private IEnumerable<Franthropy.Filtering.Documentation.FilterFieldReference> AvailableReferenceFields =>
         _view.FilterReference?.Fields.Where(entry => entry.IsAvailable && !entry.IsDefaultText) ?? [];
 
@@ -268,6 +277,21 @@ else
     private async Task OnFilterChanged(string value) { _filterText = value; _filters[_mode] = value; _selectedItem = null; _showCompletions = true; await LoadInventoryAsync(); PersistUrlState(); }
     private async Task SetScopeAsync(string scope) { _scope = string.IsNullOrWhiteSpace(scope) ? "all" : scope; _selectedItem = null; _lastValidView = null; await LoadInventoryAsync(); PersistUrlState(); }
     private async Task SetModeAsync(InventoryBrowserMode mode) { if (_mode == mode) return; _filters[_mode] = _filterText; _mode = mode; _filterText = _filters[mode]; _selectedItem = null; _lastValidView = null; _showFilterReference = false; _showCompletions = false; await LoadInventoryAsync(); PersistUrlState(); }
+    private async Task UseSuggestedModeAsync(InventoryBrowserMode mode)
+    {
+        if (_mode == mode)
+            return;
+
+        _filters[_mode] = _filterText;
+        _mode = mode;
+        _filters[mode] = _filterText;
+        _selectedItem = null;
+        _lastValidView = null;
+        _showFilterReference = false;
+        _showCompletions = false;
+        await LoadInventoryAsync();
+        PersistUrlState();
+    }
     private void ToggleFilterReference() => _showFilterReference = !_showFilterReference;
     private void SelectItem(InventoryBrowserItemView item) => _selectedItem = item;
     private void CloseInspector() => _selectedItem = null;
@@ -309,6 +333,8 @@ else
                     TotalQuantity = last.TotalQuantity,
                     HqQuantity = last.HqQuantity,
                     OwnerCount = last.OwnerCount,
+                    ItemTypeKnownCount = last.ItemTypeKnownCount,
+                    ListingPriceKnownCount = last.ListingPriceKnownCount,
                 };
             }
             else
@@ -355,7 +381,6 @@ else
     private void ExpireSession() { _session = null; Status.Info("Dashboard session expired. Sign in again."); }
     private string ScopeButtonClass(string scope) => string.Equals(_scope, scope, StringComparison.OrdinalIgnoreCase) ? "inventory-scope active" : "inventory-scope";
     private string ModeButtonClass(InventoryBrowserMode mode) => _mode == mode ? "inventory-mode active" : "inventory-mode";
-    private string ItemRowClass(InventoryBrowserItemView item) => _selectedItem?.ItemId == item.ItemId ? "selected" : string.Empty;
     private static string ModeLabel(InventoryBrowserMode mode) => mode switch { InventoryBrowserMode.Items => "Items", InventoryBrowserMode.Stacks => "Stacks", _ => "Listings" };
 
     private static string ScopeSummary(InventoryBrowserScopeView scope)
@@ -366,20 +391,7 @@ else
         return parts.Count == 0 ? scope.Description : string.Join(" · ", parts);
     }
 
-    private static string FormatLocations(InventoryBrowserItemView item)
-    {
-        var first = item.Locations.FirstOrDefault(); if (first is null) return "—";
-        return item.Locations.Count > 1 ? $"{first.OwnerName} · {first.Location} +{item.Locations.Count - 1}" : $"{first.OwnerName} · {first.Location}";
-    }
-
     private static string FormatGil(ulong gil) => $"{gil:N0} gil";
-    private static string FormatUnitPrice(uint? value) => value is null ? "—" : $"{value:N0} gil";
-    private static string FormatTotalPrice(ulong? value) => value is null ? "—" : $"{value:N0} gil";
-    private static string FormatPercent(decimal? value) => value is null ? "—" : $"{value:0.#}%";
-
-    private static string FormatContainer(InventoryBrowserStackView stack) =>
-        stack.SlotIndex is { } slotIndex ? $"{stack.BagName} · {slotIndex + 1}" : stack.BagName;
-    private static string FormatAge(double? seconds) => seconds switch { null => "—", < 60 => "<1m", < 3600 => $"{seconds / 60:0}m", < 86400 => $"{seconds / 3600:0.#}h", _ => $"{seconds / 86400:0.#}d" };
 
     public void Dispose() { _loadCts?.Cancel(); _loadCts?.Dispose(); }
 }

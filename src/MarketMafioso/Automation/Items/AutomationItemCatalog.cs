@@ -22,7 +22,7 @@ public sealed class AutomationItemCatalog
             var item = dataManager.GetExcelSheet<Item>()?.GetRowOrDefault(itemId);
             var name = item?.Name.ToString();
             var luminaStackSize = item?.StackSize ?? 0;
-            var itemType = item?.ItemUICategory.Value.Name.ToString();
+            var itemType = item is { } resolvedItem ? ResolveItemType(resolvedItem) : null;
             var supportsCondition = item?.ClassJobRepair.RowId != 0;
 
             return new AutomationItemMetadata(
@@ -37,6 +37,23 @@ public sealed class AutomationItemCatalog
             return new AutomationItemMetadata(
                 new AutomationItemIdentity(itemId, null, isHighQuality),
                 ItemStackRules.ResolveMaxStack(itemId, 0));
+        }
+    }
+
+    private string? ResolveItemType(Item item)
+    {
+        if (item.ItemUICategory.RowId == 0)
+            return null;
+
+        try
+        {
+            var itemType = item.ItemUICategory.Value.Name.ToString();
+            return string.IsNullOrWhiteSpace(itemType) ? null : itemType;
+        }
+        catch (Exception ex)
+        {
+            log.Verbose(ex, $"[MarketMafioso] Could not resolve UI category for item {item.RowId}");
+            return null;
         }
     }
 

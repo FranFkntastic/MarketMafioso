@@ -35,6 +35,8 @@ public sealed record InventoryBrowserView
     public int TotalQuantity { get; init; }
     public int HqQuantity { get; init; }
     public int OwnerCount { get; init; }
+    public int ItemTypeKnownCount { get; init; }
+    public int ListingPriceKnownCount { get; init; }
     public ulong RetainerGil { get; init; }
 }
 
@@ -64,6 +66,7 @@ public sealed record InventoryBrowserStackView
     public string? IconUrl { get; init; }
     public int Quantity { get; init; }
     public bool IsHq { get; init; }
+    public bool? Equipped { get; init; }
     public decimal? ConditionPercent { get; init; }
 }
 

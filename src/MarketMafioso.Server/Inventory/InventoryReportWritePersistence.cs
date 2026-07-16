@@ -40,7 +40,14 @@ internal sealed class InventoryReportWritePersistence(
             report,
             metadata,
             cancellationToken);
-        await InsertOwnerAsync(connection, transaction, id, "player", "Player Inventory", null, null, null, 0, report.PlayerInventory, [], cancellationToken);
+        await UpsertItemMetadataCatalogAsync(
+            connection,
+            transaction,
+            accountId,
+            receivedAt,
+            report,
+            cancellationToken);
+        await InsertOwnerAsync(connection, transaction, accountId, id, "player", "Player Inventory", null, null, null, 0, report.PlayerInventory, [], cancellationToken);
 
         for (var i = 0; i < report.Retainers.Count; i++)
         {
@@ -48,6 +55,7 @@ internal sealed class InventoryReportWritePersistence(
             await InsertOwnerAsync(
                 connection,
                 transaction,
+                accountId,
                 id,
                 "retainer",
                 retainer.RetainerName,
@@ -202,6 +210,7 @@ internal sealed class InventoryReportWritePersistence(
     private static async Task InsertOwnerAsync(
         SqliteConnection connection,
         SqliteTransaction transaction,
+        long accountId,
         string snapshotId,
         string ownerType,
         string ownerName,
@@ -230,15 +239,16 @@ internal sealed class InventoryReportWritePersistence(
         var ownerId = (long)(await command.ExecuteScalarAsync(cancellationToken))!;
 
         for (var i = 0; i < bags.Count; i++)
-            await InsertBagAsync(connection, transaction, ownerId, bags[i], i, cancellationToken);
+            await InsertBagAsync(connection, transaction, accountId, ownerId, bags[i], i, cancellationToken);
 
         for (var i = 0; i < marketListings.Count; i++)
-            await InsertMarketListingAsync(connection, transaction, ownerId, marketListings[i], i, cancellationToken);
+            await InsertMarketListingAsync(connection, transaction, accountId, ownerId, marketListings[i], i, cancellationToken);
     }
 
     private static async Task InsertBagAsync(
         SqliteConnection connection,
         SqliteTransaction transaction,
+        long accountId,
         long ownerId,
         InventoryBag bag,
         int sortOrder,
@@ -258,12 +268,13 @@ internal sealed class InventoryReportWritePersistence(
         var bagId = (long)(await command.ExecuteScalarAsync(cancellationToken))!;
 
         for (var i = 0; i < bag.Items.Count; i++)
-            await InsertItemAsync(connection, transaction, bagId, bag.Items[i], i, cancellationToken);
+            await InsertItemAsync(connection, transaction, accountId, bagId, bag.Items[i], i, cancellationToken);
     }
 
     private static async Task InsertItemAsync(
         SqliteConnection connection,
         SqliteTransaction transaction,
+        long accountId,
         long bagId,
         ItemSlot item,
         int sortOrder,
@@ -276,9 +287,13 @@ internal sealed class InventoryReportWritePersistence(
                 bag_id, item_id, item_name, item_type, quantity, is_hq, condition,
                 container_key, slot_index, condition_percent, equipped, sort_order)
             VALUES (
-                $bagId, $itemId, $itemName, $itemType, $quantity, $isHq, $condition,
+                $bagId, $itemId,
+                COALESCE(NULLIF($itemName, ''), (SELECT item_name FROM item_metadata_catalog WHERE account_id = $accountId AND item_id = $itemId)),
+                COALESCE(NULLIF($itemType, ''), (SELECT item_type FROM item_metadata_catalog WHERE account_id = $accountId AND item_id = $itemId)),
+                $quantity, $isHq, $condition,
                 $containerKey, $slotIndex, $conditionPercent, $equipped, $sortOrder);
             """;
+        command.Parameters.AddWithValue("$accountId", accountId);
         command.Parameters.AddWithValue("$bagId", bagId);
         command.Parameters.AddWithValue("$itemId", checked((long)item.ItemId));
         command.Parameters.AddWithValue("$itemName", (object?)item.ItemName ?? DBNull.Value);
@@ -297,6 +312,7 @@ internal sealed class InventoryReportWritePersistence(
     private static async Task InsertMarketListingAsync(
         SqliteConnection connection,
         SqliteTransaction transaction,
+        long accountId,
         long ownerId,
         RetainerMarketListing listing,
         int sortOrder,
@@ -322,8 +338,8 @@ internal sealed class InventoryReportWritePersistence(
             VALUES (
                 $ownerId,
                 $itemId,
-                $itemName,
-                $itemType,
+                COALESCE(NULLIF($itemName, ''), (SELECT item_name FROM item_metadata_catalog WHERE account_id = $accountId AND item_id = $itemId)),
+                COALESCE(NULLIF($itemType, ''), (SELECT item_type FROM item_metadata_catalog WHERE account_id = $accountId AND item_id = $itemId)),
                 $quantity,
                 $isHq,
                 $condition,
@@ -334,6 +350,7 @@ internal sealed class InventoryReportWritePersistence(
                 $listedAt,
                 $sortOrder);
             """;
+        command.Parameters.AddWithValue("$accountId", accountId);
         command.Parameters.AddWithValue("$ownerId", ownerId);
         command.Parameters.AddWithValue("$itemId", checked((long)listing.ItemId));
         command.Parameters.AddWithValue("$itemName", (object?)listing.ItemName ?? DBNull.Value);
@@ -348,5 +365,58 @@ internal sealed class InventoryReportWritePersistence(
         command.Parameters.AddWithValue("$listedAt", string.IsNullOrWhiteSpace(listing.ListedAt) ? DBNull.Value : listing.ListedAt);
         command.Parameters.AddWithValue("$sortOrder", sortOrder);
         await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static async Task UpsertItemMetadataCatalogAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        long accountId,
+        DateTimeOffset receivedAt,
+        InventoryReport report,
+        CancellationToken cancellationToken)
+    {
+        var metadata = report.PlayerInventory
+            .SelectMany(bag => bag.Items)
+            .Select(item => (item.ItemId, item.ItemName, item.ItemType))
+            .Concat(report.Retainers.SelectMany(retainer => retainer.Bags)
+                .SelectMany(bag => bag.Items)
+                .Select(item => (item.ItemId, item.ItemName, item.ItemType)))
+            .Concat(report.Retainers.SelectMany(retainer => retainer.MarketListings)
+                .Select(item => (item.ItemId, item.ItemName, item.ItemType)))
+            .Where(item => item.ItemId != 0 &&
+                           (!string.IsNullOrWhiteSpace(item.ItemName) || !string.IsNullOrWhiteSpace(item.ItemType)))
+            .GroupBy(item => item.ItemId)
+            .Select(group => (
+                ItemId: group.Key,
+                ItemName: group.Select(item => item.ItemName).FirstOrDefault(value => !string.IsNullOrWhiteSpace(value)),
+                ItemType: group.Select(item => item.ItemType).FirstOrDefault(value => !string.IsNullOrWhiteSpace(value))))
+            .ToArray();
+
+        if (metadata.Length == 0)
+            return;
+
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            INSERT INTO item_metadata_catalog (account_id, item_id, item_name, item_type, last_seen_at_utc)
+            VALUES ($accountId, $itemId, NULLIF($itemName, ''), NULLIF($itemType, ''), $lastSeenAt)
+            ON CONFLICT(account_id, item_id) DO UPDATE SET
+                item_name = COALESCE(NULLIF(excluded.item_name, ''), item_metadata_catalog.item_name),
+                item_type = COALESCE(NULLIF(excluded.item_type, ''), item_metadata_catalog.item_type),
+                last_seen_at_utc = excluded.last_seen_at_utc;
+            """;
+        command.Parameters.AddWithValue("$accountId", accountId);
+        var itemIdParameter = command.Parameters.Add("$itemId", SqliteType.Integer);
+        var itemNameParameter = command.Parameters.Add("$itemName", SqliteType.Text);
+        var itemTypeParameter = command.Parameters.Add("$itemType", SqliteType.Text);
+        command.Parameters.AddWithValue("$lastSeenAt", receivedAt.ToString("O", CultureInfo.InvariantCulture));
+
+        foreach (var item in metadata)
+        {
+            itemIdParameter.Value = checked((long)item.ItemId);
+            itemNameParameter.Value = item.ItemName ?? string.Empty;
+            itemTypeParameter.Value = item.ItemType ?? string.Empty;
+            await command.ExecuteNonQueryAsync(cancellationToken);
+        }
     }
 }

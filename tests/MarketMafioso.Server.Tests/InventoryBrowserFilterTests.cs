@@ -74,6 +74,7 @@ public sealed class InventoryBrowserFilterTests
 
         Assert.Single(hq.Stacks);
         Assert.True(hq.Stacks[0].IsHq);
+        Assert.False(hq.Stacks[0].Equipped);
         Assert.Single(unknown.Stacks);
         Assert.Equal("Iron Ore", unknown.Stacks[0].DisplayName);
         Assert.Null(unknown.Stacks[0].ConditionPercent);
@@ -120,6 +121,7 @@ public sealed class InventoryBrowserFilterTests
         Assert.Equal("Equipped", stack.Location);
         Assert.Equal("EquippedItems", stack.BagName);
         Assert.Equal(4, stack.SlotIndex);
+        Assert.True(stack.Equipped);
         Assert.Equal(0, stack.ConditionPercent);
     }
 
@@ -135,6 +137,7 @@ public sealed class InventoryBrowserFilterTests
         Assert.Equal((uint)1_800, listing.UnitPrice);
         Assert.Equal((ulong)36_000, listing.TotalPrice);
         Assert.Equal(420, listing.EvidenceAgeSeconds);
+        Assert.Equal(1, view.ListingPriceKnownCount);
     }
 
     [Fact]

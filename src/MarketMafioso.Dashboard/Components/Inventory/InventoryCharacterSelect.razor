@@ -1,0 +1,27 @@
+<label class="inventory-select-field">
+    <span class="visually-hidden">Character</span>
+    <select class="inventory-native-select"
+            value="@CurrentValue"
+            @onchange="HandleChangedAsync"
+            aria-label="Character">
+        <option value="">Latest available</option>
+        @foreach (var character in Characters)
+        {
+            <option value="@character.Id">@character.DisplayName</option>
+        }
+    </select>
+</label>
+
+@code {
+    [Parameter] public IReadOnlyList<DashboardCharacterOption> Characters { get; set; } = [];
+    [Parameter] public long? Value { get; set; }
+    [Parameter] public EventCallback<long?> ValueChanged { get; set; }
+
+    private string CurrentValue => Value?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty;
+
+    private Task HandleChangedAsync(ChangeEventArgs args)
+    {
+        var value = args.Value?.ToString();
+        return ValueChanged.InvokeAsync(long.TryParse(value, out var characterId) ? characterId : null);
+    }
+}

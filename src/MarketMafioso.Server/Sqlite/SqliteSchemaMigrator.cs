@@ -242,6 +242,15 @@ public sealed class SqliteSchemaMigrator
             sort_order INTEGER NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS item_metadata_catalog (
+            account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+            item_id INTEGER NOT NULL,
+            item_name TEXT NULL,
+            item_type TEXT NULL,
+            last_seen_at_utc TEXT NOT NULL,
+            PRIMARY KEY (account_id, item_id)
+        );
+
         CREATE TABLE IF NOT EXISTS retainer_market_listings (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             owner_id INTEGER NOT NULL REFERENCES inventory_owners(id) ON DELETE CASCADE,
@@ -265,6 +274,7 @@ public sealed class SqliteSchemaMigrator
         CREATE INDEX IF NOT EXISTS idx_inventory_bags_owner ON inventory_bags(owner_id, sort_order);
         CREATE INDEX IF NOT EXISTS idx_inventory_items_bag ON inventory_items(bag_id, sort_order);
         CREATE INDEX IF NOT EXISTS idx_inventory_items_item ON inventory_items(item_id);
+        CREATE INDEX IF NOT EXISTS idx_item_metadata_catalog_type ON item_metadata_catalog(account_id, item_type);
         CREATE INDEX IF NOT EXISTS idx_retainer_market_listings_owner ON retainer_market_listings(owner_id, sort_order);
         CREATE INDEX IF NOT EXISTS idx_diagnostic_events_occurred ON diagnostic_events(occurred_at_utc DESC);
         CREATE INDEX IF NOT EXISTS idx_diagnostic_events_category ON diagnostic_events(category, occurred_at_utc DESC);

@@ -154,7 +154,7 @@ internal sealed class InventoryReportReadQueries(SqliteConnectionFactory connect
 
         foreach (var owner in owners)
         {
-            var bags = await ReadBagsAsync(connection, owner.Id, cancellationToken);
+            var bags = await ReadBagsAsync(connection, accountId, owner.Id, cancellationToken);
             if (owner.OwnerType == "player")
             {
                 playerBags.AddRange(bags);
@@ -170,7 +170,7 @@ internal sealed class InventoryReportReadQueries(SqliteConnectionFactory connect
                 LastUpdated = owner.LastUpdated ?? string.Empty,
                 Gil = owner.Gil ?? 0,
                 Bags = bags,
-                MarketListings = await ReadMarketListingsAsync(connection, owner.Id, cancellationToken),
+                MarketListings = await ReadMarketListingsAsync(connection, accountId, owner.Id, cancellationToken),
             });
         }
 
@@ -227,6 +227,7 @@ internal sealed class InventoryReportReadQueries(SqliteConnectionFactory connect
 
     private static async Task<List<InventoryBag>> ReadBagsAsync(
         SqliteConnection connection,
+        long accountId,
         long ownerId,
         CancellationToken cancellationToken)
     {
@@ -248,7 +249,7 @@ internal sealed class InventoryReportReadQueries(SqliteConnectionFactory connect
             {
                 BagName = reader.GetString(1),
                 Location = reader.IsDBNull(2) ? null : reader.GetString(2),
-                Items = await ReadItemsAsync(connection, bagId, cancellationToken),
+                Items = await ReadItemsAsync(connection, accountId, bagId, cancellationToken),
             });
         }
 
@@ -257,18 +258,30 @@ internal sealed class InventoryReportReadQueries(SqliteConnectionFactory connect
 
     private static async Task<List<ItemSlot>> ReadItemsAsync(
         SqliteConnection connection,
+        long accountId,
         long bagId,
         CancellationToken cancellationToken)
     {
         var items = new List<ItemSlot>();
         await using var command = connection.CreateCommand();
         command.CommandText = """
-            SELECT item_id, item_name, item_type, quantity, is_hq, condition,
-                   container_key, slot_index, condition_percent, equipped
-            FROM inventory_items
-            WHERE bag_id = $bagId
-            ORDER BY sort_order
+            SELECT
+                i.item_id,
+                COALESCE(NULLIF(i.item_name, ''), m.item_name),
+                COALESCE(NULLIF(i.item_type, ''), m.item_type),
+                i.quantity,
+                i.is_hq,
+                i.condition,
+                i.container_key,
+                i.slot_index,
+                i.condition_percent,
+                i.equipped
+            FROM inventory_items i
+            LEFT JOIN item_metadata_catalog m ON m.account_id = $accountId AND m.item_id = i.item_id
+            WHERE i.bag_id = $bagId
+            ORDER BY i.sort_order
             """;
+        command.Parameters.AddWithValue("$accountId", accountId);
         command.Parameters.AddWithValue("$bagId", bagId);
 
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
@@ -280,18 +293,31 @@ internal sealed class InventoryReportReadQueries(SqliteConnectionFactory connect
 
     private static async Task<List<RetainerMarketListing>> ReadMarketListingsAsync(
         SqliteConnection connection,
+        long accountId,
         long ownerId,
         CancellationToken cancellationToken)
     {
         var listings = new List<RetainerMarketListing>();
         await using var command = connection.CreateCommand();
         command.CommandText = """
-            SELECT item_id, item_name, item_type, quantity, is_hq, condition,
-                   unit_price, listed_at, container_key, slot_index, condition_percent
-            FROM retainer_market_listings
-            WHERE owner_id = $ownerId
-            ORDER BY sort_order
+            SELECT
+                l.item_id,
+                COALESCE(NULLIF(l.item_name, ''), m.item_name),
+                COALESCE(NULLIF(l.item_type, ''), m.item_type),
+                l.quantity,
+                l.is_hq,
+                l.condition,
+                l.unit_price,
+                l.listed_at,
+                l.container_key,
+                l.slot_index,
+                l.condition_percent
+            FROM retainer_market_listings l
+            LEFT JOIN item_metadata_catalog m ON m.account_id = $accountId AND m.item_id = l.item_id
+            WHERE l.owner_id = $ownerId
+            ORDER BY l.sort_order
             """;
+        command.Parameters.AddWithValue("$accountId", accountId);
         command.Parameters.AddWithValue("$ownerId", ownerId);
 
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);

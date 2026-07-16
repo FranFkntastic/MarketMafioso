@@ -1,0 +1,47 @@
+<table class="inventory-native-table items-table @(ShowCategory ? null : "without-category")">
+    <thead>
+        <tr>
+            <th>Item</th>
+            @if (ShowCategory)
+            {
+                <th>Category</th>
+            }
+            <th class="number">Owned</th>
+            <th class="number">HQ</th>
+            <th>Primary location</th>
+            <th class="number">Owners</th>
+        </tr>
+    </thead>
+    <tbody>
+        <Virtualize TItem="InventoryBrowserItemView" Items="VirtualizedItems" Context="item" ItemSize="34" SpacerElement="tr">
+            <tr class="@(SelectedItemId == item.ItemId ? "selected" : null)"
+                role="button"
+                tabindex="0"
+                aria-label="@($"Inspect {item.DisplayName}")"
+                aria-pressed="@(SelectedItemId == item.ItemId)"
+                @onclick="@(() => ItemSelected.InvokeAsync(item))"
+                @onkeydown="@(args => HandleKeyDownAsync(args, item))">
+                <td><strong>@item.DisplayName</strong></td>
+                @if (ShowCategory)
+                {
+                    <td>@(string.IsNullOrWhiteSpace(item.ItemType) ? "—" : item.ItemType)</td>
+                }
+                <td class="number">@item.TotalQuantity.ToString("N0")</td>
+                <td class="number hq-value">@item.HqQuantity.ToString("N0")</td>
+                <td>@InventoryDisplayFormatter.FormatItemLocations(item)</td>
+                <td class="number">@item.OwnerCount.ToString("N0")</td>
+            </tr>
+        </Virtualize>
+    </tbody>
+</table>
+
+@code {
+    [Parameter] public IReadOnlyList<InventoryBrowserItemView> Items { get; set; } = [];
+    [Parameter] public bool ShowCategory { get; set; }
+    [Parameter] public uint? SelectedItemId { get; set; }
+    [Parameter] public EventCallback<InventoryBrowserItemView> ItemSelected { get; set; }
+    private ICollection<InventoryBrowserItemView> VirtualizedItems => Items as ICollection<InventoryBrowserItemView> ?? Items.ToArray();
+
+    private Task HandleKeyDownAsync(KeyboardEventArgs args, InventoryBrowserItemView item) =>
+        args.Key is "Enter" or " " ? ItemSelected.InvokeAsync(item) : Task.CompletedTask;
+}

@@ -346,11 +346,13 @@ public sealed class InventoryReportViewEndpointTests
         Assert.Equal("Siren", scope.OwnerHomeWorld);
         var item = Assert.Single(view.Items);
         Assert.Equal("Metal", item.ItemType);
+        Assert.Equal(1, view.ItemTypeKnownCount);
         Assert.Equal(111, item.TotalQuantity);
         Assert.Equal(12, item.HqQuantity);
         Assert.Empty(view.MarketListings);
         var listings = InventoryBrowserViewBuilder.Build(stored, "darksteel", mode: InventoryBrowserMode.Listings);
         Assert.Equal(2, listings.MarketListings.Count);
+        Assert.Equal(2, listings.ListingPriceKnownCount);
         Assert.Contains(listings.MarketListings, x => x.OwnerName == "Scrongle" && x.UnitPrice == 1_800 && x.Quantity == 20);
         Assert.Contains(listings.MarketListings, x => x.OwnerName == "Scrongle" && x.UnitPrice == 2_150 && x.Quantity == 79);
     }

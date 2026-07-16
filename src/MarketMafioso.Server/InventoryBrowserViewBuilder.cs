@@ -65,6 +65,7 @@ public static class InventoryBrowserViewBuilder
             HqQuantity = checked((int)items.Sum(row => (long)row.HqQuantity)),
             OwnerCount = items.SelectMany(row => row.Locations).Select(row => row.OwnerName)
                 .Distinct(StringComparer.OrdinalIgnoreCase).Count(),
+            ItemTypeKnownCount = items.Count(row => !string.IsNullOrWhiteSpace(row.ItemType)),
         };
     }
 
@@ -96,6 +97,7 @@ public static class InventoryBrowserViewBuilder
             TotalQuantity = checked((int)stacks.Sum(row => (long)row.Quantity)),
             HqQuantity = checked((int)stacks.Where(row => row.IsHq).Sum(row => (long)row.Quantity)),
             OwnerCount = stacks.Select(row => row.OwnerName).Distinct(StringComparer.OrdinalIgnoreCase).Count(),
+            ItemTypeKnownCount = stacks.Count(row => !string.IsNullOrWhiteSpace(row.ItemType)),
         };
     }
 
@@ -129,6 +131,8 @@ public static class InventoryBrowserViewBuilder
             TotalQuantity = checked((int)listings.Sum(row => (long)row.Quantity)),
             HqQuantity = checked((int)listings.Sum(row => (long)row.HqQuantity)),
             OwnerCount = listings.Select(row => row.OwnerName).Distinct(StringComparer.OrdinalIgnoreCase).Count(),
+            ItemTypeKnownCount = listings.Count(row => !string.IsNullOrWhiteSpace(row.ItemType)),
+            ListingPriceKnownCount = listings.Count(row => row.UnitPrice is not null),
         };
     }
 
@@ -139,24 +143,24 @@ public static class InventoryBrowserViewBuilder
         InventoryBrowserMode mode,
         FilterCompilation<TRecord> compilation,
         FilterContext<TRecord> context) => new()
-    {
-        SnapshotId = stored.Id,
-        ReceivedAt = stored.ReceivedAt,
-        CharacterName = stored.Report.CharacterName,
-        HomeWorld = stored.Report.HomeWorld,
-        Filter = filter,
-        NormalizedFilter = compilation.NormalizedExpression,
-        FilterValid = compilation.IsValid,
-        FilterDiagnostics = compilation.Diagnostics,
-        FilterReference = CreateContextReference(context),
-        FilterCompletions = FilterCompletionService.Complete(
+        {
+            SnapshotId = stored.Id,
+            ReceivedAt = stored.ReceivedAt,
+            CharacterName = stored.Report.CharacterName,
+            HomeWorld = stored.Report.HomeWorld,
+            Filter = filter,
+            NormalizedFilter = compilation.NormalizedExpression,
+            FilterValid = compilation.IsValid,
+            FilterDiagnostics = compilation.Diagnostics,
+            FilterReference = CreateContextReference(context),
+            FilterCompletions = FilterCompletionService.Complete(
             context,
             new FilterCompletionRequest(context.ContextId, filter, filter.Length)).Items,
-        Mode = mode,
-        Scope = scope,
-        Scopes = BuildScopes(stored.Report),
-        RetainerGil = GetRetainerGil(stored.Report, scope),
-    };
+            Mode = mode,
+            Scope = scope,
+            Scopes = BuildScopes(stored.Report),
+            RetainerGil = GetRetainerGil(stored.Report, scope),
+        };
 
     private static FilterReferenceModel CreateContextReference<TRecord>(FilterContext<TRecord> context)
     {
@@ -205,7 +209,7 @@ public static class InventoryBrowserViewBuilder
             return new ItemRecord(
                 group.Key,
                 first.DisplayName,
-                first.ItemType,
+                group.Select(row => row.ItemType).FirstOrDefault(itemType => !string.IsNullOrWhiteSpace(itemType)),
                 checked((int)group.Sum(row => (long)row.Quantity)),
                 checked((int)group.Where(row => row.Quality == FfxivItemQuality.HQ).Sum(row => (long)row.Quantity)),
                 group.GroupBy(row => new { row.OwnerName, row.OwnerCharacterName, row.OwnerHomeWorld, row.Location, row.BagName })
@@ -230,13 +234,13 @@ public static class InventoryBrowserViewBuilder
     private static IEnumerable<StackRecord> EnumerateStacks(InventoryReport report)
     {
         foreach (var bag in report.PlayerInventory)
-        foreach (var item in bag.Items)
-            yield return CreateStack(report, null, bag, item);
+            foreach (var item in bag.Items)
+                yield return CreateStack(report, null, bag, item);
 
         foreach (var retainer in report.Retainers)
-        foreach (var bag in retainer.Bags.Where(bag => !IsNonInventoryRetainerBag(bag.BagName)))
-        foreach (var item in bag.Items)
-            yield return CreateStack(report, retainer, bag, item);
+            foreach (var bag in retainer.Bags.Where(bag => !IsNonInventoryRetainerBag(bag.BagName)))
+                foreach (var item in bag.Items)
+                    yield return CreateStack(report, retainer, bag, item);
     }
 
     private static StackRecord CreateStack(InventoryReport report, RetainerReport? retainer, InventoryBag bag, ItemSlot item)
@@ -269,35 +273,35 @@ public static class InventoryBrowserViewBuilder
     private static IEnumerable<ListingRecord> EnumerateListings(StoredInventoryReport stored)
     {
         foreach (var retainer in stored.Report.Retainers)
-        foreach (var listing in retainer.MarketListings)
-        {
-            var listedAtText = listing.ListedAt ?? retainer.LastUpdated;
-            var age = DateTimeOffset.TryParse(listedAtText, out var listedAt)
-                ? Evidence.Known(stored.ReceivedAt > listedAt ? stored.ReceivedAt - listedAt : TimeSpan.Zero)
-                : Evidence.Unknown<TimeSpan>("The listing observation time was not recorded.");
-            var price = listing.UnitPrice is { } unitPrice
-                ? Evidence.Known((decimal)unitPrice)
-                : Evidence.Unknown<decimal>("The listing unit price was not recorded.");
-            var total = listing.UnitPrice is { } priceValue
-                ? Evidence.Known((decimal)((ulong)priceValue * listing.Quantity))
-                : Evidence.Unknown<decimal>("The listing total cannot be calculated without a unit price.");
-            var condition = ResolveCondition(listing.ConditionPercent, listing.Condition);
-            yield return new ListingRecord(
-                new FfxivItemKey(listing.ItemId),
-                DisplayName(listing.ItemId, listing.ItemName),
-                listing.ItemType,
-                retainer.RetainerName,
-                ResolveRetainerOwnerCharacterName(stored.Report, retainer),
-                ResolveRetainerOwnerHomeWorld(stored.Report, retainer),
-                new FfxivRetainerKey(retainer.RetainerId),
-                checked((int)listing.Quantity),
-                listing.IsHQ ? FfxivItemQuality.HQ : FfxivItemQuality.NQ,
-                condition,
-                price,
-                total,
-                age,
-                listedAtText);
-        }
+            foreach (var listing in retainer.MarketListings)
+            {
+                var listedAtText = listing.ListedAt ?? retainer.LastUpdated;
+                var age = DateTimeOffset.TryParse(listedAtText, out var listedAt)
+                    ? Evidence.Known(stored.ReceivedAt > listedAt ? stored.ReceivedAt - listedAt : TimeSpan.Zero)
+                    : Evidence.Unknown<TimeSpan>("The listing observation time was not recorded.");
+                var price = listing.UnitPrice is { } unitPrice
+                    ? Evidence.Known((decimal)unitPrice)
+                    : Evidence.Unknown<decimal>("The listing unit price was not recorded.");
+                var total = listing.UnitPrice is { } priceValue
+                    ? Evidence.Known((decimal)((ulong)priceValue * listing.Quantity))
+                    : Evidence.Unknown<decimal>("The listing total cannot be calculated without a unit price.");
+                var condition = ResolveCondition(listing.ConditionPercent, listing.Condition);
+                yield return new ListingRecord(
+                    new FfxivItemKey(listing.ItemId),
+                    DisplayName(listing.ItemId, listing.ItemName),
+                    listing.ItemType,
+                    retainer.RetainerName,
+                    ResolveRetainerOwnerCharacterName(stored.Report, retainer),
+                    ResolveRetainerOwnerHomeWorld(stored.Report, retainer),
+                    new FfxivRetainerKey(retainer.RetainerId),
+                    checked((int)listing.Quantity),
+                    listing.IsHQ ? FfxivItemQuality.HQ : FfxivItemQuality.NQ,
+                    condition,
+                    price,
+                    total,
+                    age,
+                    listedAtText);
+            }
     }
 
     private static InventoryBrowserItemView ToItemView(ItemRecord row) => new()
@@ -333,6 +337,7 @@ public static class InventoryBrowserViewBuilder
         Location = row.Location.ToString(),
         Quantity = row.Quantity,
         IsHq = row.Quality == FfxivItemQuality.HQ,
+        Equipped = row.Equipped.IsKnown ? row.Equipped.Value : null,
         ConditionPercent = row.Condition.IsKnown ? row.Condition.Value : null,
     };
 

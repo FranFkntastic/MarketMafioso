@@ -1,0 +1,22 @@
+<label class="inventory-select-field">
+    <span class="visually-hidden">Inventory scope</span>
+    <select class="inventory-native-select"
+            value="@Value"
+            @onchange="HandleChangedAsync"
+            aria-label="Inventory scope">
+        <option value="all">Everything (@Scopes.Sum(scope => scope.StackCount).ToString("N0"))</option>
+        @foreach (var scope in Scopes)
+        {
+            <option value="@scope.ScopeKey">@scope.DisplayName (@scope.StackCount.ToString("N0"))</option>
+        }
+    </select>
+</label>
+
+@code {
+    [Parameter] public IReadOnlyList<InventoryBrowserScopeView> Scopes { get; set; } = [];
+    [Parameter] public string Value { get; set; } = "all";
+    [Parameter] public EventCallback<string> ValueChanged { get; set; }
+
+    private Task HandleChangedAsync(ChangeEventArgs args) =>
+        ValueChanged.InvokeAsync(args.Value?.ToString() ?? "all");
+}

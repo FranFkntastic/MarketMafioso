@@ -1,0 +1,27 @@
+<table class="inventory-native-table stacks-table">
+    <thead><tr><th>Item</th><th>Stored by</th><th>Storage</th><th class="number">Qty</th><th>Quality</th><th class="number">Condition</th></tr></thead>
+    <tbody>
+        <Virtualize TItem="InventoryBrowserStackView" Items="VirtualizedStacks" Context="stack" ItemSize="34" SpacerElement="tr">
+            <tr>
+                <td><strong>@stack.DisplayName</strong></td>
+                <td>@stack.OwnerName</td>
+                <td>
+                    <span>@InventoryDisplayFormatter.FormatStackStorage(stack)</span>
+                    @if (stack.Equipped == true)
+                    {
+                        <span class="storage-pill equipped">Equipped</span>
+                    }
+                </td>
+                <td class="number">@stack.Quantity.ToString("N0")</td>
+                <td><span class="quality-pill @(stack.IsHq ? "hq" : null)">@(stack.IsHq ? "HQ" : "NQ")</span></td>
+                <td class="number">@FormatPercent(stack.ConditionPercent)</td>
+            </tr>
+        </Virtualize>
+    </tbody>
+</table>
+
+@code {
+    [Parameter] public IReadOnlyList<InventoryBrowserStackView> Stacks { get; set; } = [];
+    private ICollection<InventoryBrowserStackView> VirtualizedStacks => Stacks as ICollection<InventoryBrowserStackView> ?? Stacks.ToArray();
+    private static string FormatPercent(decimal? value) => value is null ? "—" : $"{value:0.#}%";
+}

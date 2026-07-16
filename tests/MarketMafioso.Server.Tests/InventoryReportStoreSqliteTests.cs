@@ -221,6 +221,57 @@ public sealed class InventoryReportStoreSqliteTests
         Assert.Equal(20, summary.RetainerItemQuantity);
     }
 
+    [Fact]
+    public async Task ItemMetadataCatalog_SelfHealsOlderSnapshotsWithoutCrossingAccountBoundaries()
+    {
+        var fixture = await StoreFixture.CreateAsync();
+        var otherAccountId = await fixture.CreateAccountAsync("Other");
+        var missingTypeReport = WithoutItemType(CreateReport("Catalog Character", "Siren", 5057));
+
+        var older = await fixture.Store.SaveAsync(
+            fixture.AccountId,
+            missingTypeReport,
+            null,
+            "{}",
+            CancellationToken.None);
+        var known = await fixture.Store.SaveAsync(
+            fixture.AccountId,
+            CreateReport("Catalog Character", "Siren", 5057),
+            null,
+            "{}",
+            CancellationToken.None);
+
+        var otherReport = WithItemType(CreateReport("Other Character", "Siren", 5057), "Other Account Type");
+        var other = await fixture.Store.SaveAsync(
+            otherAccountId,
+            otherReport,
+            null,
+            "{}",
+            CancellationToken.None);
+
+        var reloadedOlder = await fixture.Store.GetAsync(fixture.AccountId, older.Id, CancellationToken.None);
+        var reloadedKnown = await fixture.Store.GetAsync(fixture.AccountId, known.Id, CancellationToken.None);
+        var reloadedOther = await fixture.Store.GetAsync(otherAccountId, other.Id, CancellationToken.None);
+
+        Assert.Equal("Test Item Type", reloadedOlder!.Report.PlayerInventory[0].Items[0].ItemType);
+        Assert.Equal("Test Item Type", reloadedKnown!.Report.PlayerInventory[0].Items[0].ItemType);
+        Assert.Equal("Other Account Type", reloadedOther!.Report.PlayerInventory[0].Items[0].ItemType);
+        Assert.Equal(2, await fixture.CountAsync("item_metadata_catalog"));
+    }
+
+    private static InventoryReport WithoutItemType(InventoryReport report) => WithItemType(report, null);
+
+    private static InventoryReport WithItemType(InventoryReport report, string? itemType) => report with
+    {
+        PlayerInventory =
+        [
+            report.PlayerInventory[0] with
+            {
+                Items = [report.PlayerInventory[0].Items[0] with { ItemType = itemType }],
+            },
+        ],
+    };
+
     private static InventoryReport CreateReport(string characterName, string homeWorld, uint itemId) =>
         new()
         {

@@ -1,0 +1,34 @@
+<table class="inventory-native-table listings-table @(ShowPrices ? null : "without-prices")">
+    <thead>
+        <tr>
+            <th>Item</th><th>Retainer</th><th class="number">Qty</th><th>Quality</th>
+            @if (ShowPrices)
+            {
+                <th class="number">Unit price</th><th class="number">Total</th>
+            }
+            <th class="number">Observed</th>
+        </tr>
+    </thead>
+    <tbody>
+        <Virtualize TItem="InventoryBrowserMarketListingView" Items="VirtualizedListings" Context="listing" ItemSize="34" SpacerElement="tr">
+            <tr>
+                <td><strong>@listing.DisplayName</strong></td><td>@listing.OwnerName</td><td class="number">@listing.Quantity.ToString("N0")</td>
+                <td><span class="quality-pill @(listing.HqQuantity > 0 ? "hq" : null)">@(listing.HqQuantity > 0 ? "HQ" : "NQ")</span></td>
+                @if (ShowPrices)
+                {
+                    <td class="number price-value">@FormatUnitPrice(listing.UnitPrice)</td><td class="number">@FormatTotalPrice(listing.TotalPrice)</td>
+                }
+                <td class="number">@FormatAge(listing.EvidenceAgeSeconds)</td>
+            </tr>
+        </Virtualize>
+    </tbody>
+</table>
+
+@code {
+    [Parameter] public IReadOnlyList<InventoryBrowserMarketListingView> Listings { get; set; } = [];
+    [Parameter] public bool ShowPrices { get; set; }
+    private ICollection<InventoryBrowserMarketListingView> VirtualizedListings => Listings as ICollection<InventoryBrowserMarketListingView> ?? Listings.ToArray();
+    private static string FormatUnitPrice(uint? value) => value is null ? "Not recorded" : $"{value:N0} gil";
+    private static string FormatTotalPrice(ulong? value) => value is null ? "Not recorded" : $"{value:N0} gil";
+    private static string FormatAge(double? seconds) => seconds switch { null => "—", < 60 => "<1m", < 3600 => $"{seconds / 60:0}m", < 86400 => $"{seconds / 3600:0.#}h", _ => $"{seconds / 86400:0.#}d" };
+}

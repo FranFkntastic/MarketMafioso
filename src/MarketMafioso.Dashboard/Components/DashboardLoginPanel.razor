@@ -33,7 +33,7 @@
                 return;
             }
 
-            Status.Info("Logged in.");
+            Status.Clear();
             await LoggedIn.InvokeAsync(session);
         }
         catch (Exception ex)
