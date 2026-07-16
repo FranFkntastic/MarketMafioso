@@ -1,5 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.Linq;
+using System.Runtime.InteropServices;
 using Dalamud.Plugin.Services;
 using Dalamud.Utility;
 using ECommons.Automation;
@@ -20,10 +23,13 @@ public sealed class DalamudRenderedCharacterUiProbe
         "CharacterProfile",
         "CharacterClass",
         "CharacterRepute",
+        "ItemDetail",
     ];
 
     private readonly IGameGui gameGui;
     private readonly RenderedGatheringStatsStabilizer gatheringStatsStabilizer = new(TimeSpan.FromSeconds(3));
+    private readonly object cursorSync = new();
+    private NativePoint? cursorRestorePosition;
 
     public DalamudRenderedCharacterUiProbe(IGameGui gameGui)
     {
@@ -91,8 +97,100 @@ public sealed class DalamudRenderedCharacterUiProbe
     public RenderedGatheringStatsObservation CaptureGatheringStats() =>
         gatheringStatsStabilizer.Observe(RenderedCharacterStatsParser.Parse(Capture()));
 
+    /// <summary>
+    /// Moves the real cursor over a currently rendered Character node so the game itself renders
+    /// the authoritative ItemDetail tooltip. The caller must subsequently call <see cref="RestoreCursor"/>.
+    /// </summary>
+    public bool TryHoverCharacterNode(string nodePath)
+    {
+        if (string.IsNullOrWhiteSpace(nodePath) ||
+            !nodePath.StartsWith("Character/", StringComparison.Ordinal) ||
+            nodePath.Length > 128)
+            return false;
+
+        var character = CaptureAddon("Character");
+        if (!character.Present || !character.Ready || !character.Visible || character.Nodes == null)
+            return false;
+
+        var layout = RenderedCharacterEquipmentLayoutParser.Parse(
+            new AgentBridgeRenderedUiSnapshot(DateTimeOffset.UtcNow, [character]));
+        var target = layout.Slots.FirstOrDefault(value => string.Equals(value.NodePath, nodePath, StringComparison.Ordinal));
+        if (layout.Status != RenderedEquipmentLayoutStatus.Complete || target == null ||
+            target.Right <= target.Left || target.Bottom <= target.Top)
+            return false;
+
+        lock (cursorSync)
+        {
+            var gameWindow = Process.GetCurrentProcess().MainWindowHandle;
+            if (gameWindow == nint.Zero || GetForegroundWindow() != gameWindow)
+                return false;
+
+            if (cursorRestorePosition == null)
+            {
+                if (!GetCursorPos(out var original))
+                    return false;
+                cursorRestorePosition = original;
+            }
+
+            var origin = GetGameClientOrigin(gameWindow);
+            var x = origin.X + target.Left + ((target.Right - target.Left) / 2);
+            var y = origin.Y + target.Top + ((target.Bottom - target.Top) / 2);
+            var moved = SetCursorPos(x, y);
+            var clientX = x - origin.X;
+            var clientY = y - origin.Y;
+            PostMessage(gameWindow, 0x0200, nint.Zero, (nint)((clientY << 16) | (clientX & 0xffff)));
+            return moved;
+        }
+    }
+
+    public bool RestoreCursor()
+    {
+        lock (cursorSync)
+        {
+            if (cursorRestorePosition is not { } position)
+                return false;
+            cursorRestorePosition = null;
+            return SetCursorPos(position.X, position.Y);
+        }
+    }
+
     private unsafe AgentBridgeRenderedAddonSnapshot CaptureAddon(string addonName)
         => CaptureAddon(addonName, gameGui.GetAddonByName<AtkUnitBase>(addonName, 1));
+
+    private static NativePoint GetGameClientOrigin(nint handle)
+    {
+        if (handle == nint.Zero)
+            return default;
+        var origin = new NativePoint();
+        return ClientToScreen(handle, ref origin) ? origin : default;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativePoint
+    {
+        public int X;
+        public int Y;
+    }
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetCursorPos(out NativePoint point);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetCursorPos(int x, int y);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool ClientToScreen(nint windowHandle, ref NativePoint point);
+
+    [DllImport("user32.dll")]
+    private static extern nint GetForegroundWindow();
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool PostMessage(nint windowHandle, uint message, nint wParam, nint lParam);
+
 
     private static unsafe AgentBridgeRenderedAddonSnapshot CaptureAddon(string addonName, AtkUnitBase* addon)
     {
@@ -104,10 +202,11 @@ public sealed class DalamudRenderedCharacterUiProbe
             var visible = addon->RootNode != null && addon->RootNode->IsVisible();
             var nodeCount = addon->UldManager.NodeListCount;
             var textNodes = new List<AgentBridgeRenderedTextNode>();
+            var nodes = new List<AgentBridgeRenderedNodeSnapshot>();
             if (visible && addon->UldManager.NodeList != null)
-                CaptureManager(&addon->UldManager, addonName, textNodes, new HashSet<nint>());
+                CaptureManager(&addon->UldManager, addonName, textNodes, nodes, new HashSet<nint>());
 
-            return new(addonName, true, addon->IsReady, visible, nodeCount, textNodes);
+            return new(addonName, true, addon->IsReady, visible, nodeCount, textNodes, Nodes: nodes);
         }
         catch (Exception ex)
         {
@@ -119,6 +218,7 @@ public sealed class DalamudRenderedCharacterUiProbe
         AtkUldManager* manager,
         string path,
         ICollection<AgentBridgeRenderedTextNode> textNodes,
+        ICollection<AgentBridgeRenderedNodeSnapshot> nodes,
         ISet<nint> visitedManagers)
     {
         if (manager == null || manager->NodeList == null || textNodes.Count >= 512 ||
@@ -128,13 +228,30 @@ public sealed class DalamudRenderedCharacterUiProbe
         for (var index = 0u; index < manager->NodeListCount && textNodes.Count < 512; index++)
         {
             var node = manager->NodeList[index];
-            if (node == null || !node->IsVisible())
+            if (node == null || !IsEffectivelyVisible(node))
                 continue;
 
             var nodePath = $"{path}/{node->NodeId}";
             var componentNode = node->GetAsAtkComponentNode();
+            ushort? componentType = null;
             if (componentNode != null && componentNode->Component != null)
-                CaptureManager(&componentNode->Component->UldManager, nodePath, textNodes, visitedManagers);
+            {
+                componentType = (ushort)componentNode->Component->GetComponentType();
+                CaptureManager(&componentNode->Component->UldManager, nodePath, textNodes, nodes, visitedManagers);
+            }
+
+            FFXIVClientStructs.FFXIV.Common.Math.Bounds bounds;
+            node->GetBounds(&bounds);
+            nodes.Add(new(
+                nodePath,
+                node->NodeId,
+                (ushort)node->Type,
+                componentType,
+                bounds.Pos1.X,
+                bounds.Pos1.Y,
+                bounds.Pos2.X,
+                bounds.Pos2.Y,
+                (node->NodeFlags & NodeFlags.RespondToMouse) != 0));
 
             var textNode = node->GetAsAtkTextNode();
             if (textNode != null)
@@ -158,5 +275,16 @@ public sealed class DalamudRenderedCharacterUiProbe
             }
 
         }
+    }
+
+    private static unsafe bool IsEffectivelyVisible(AtkResNode* node)
+    {
+        var current = node;
+        for (var depth = 0; current != null && depth < 64; depth++, current = current->ParentNode)
+        {
+            if (!current->IsVisible())
+                return false;
+        }
+        return current == null;
     }
 }

@@ -14,7 +14,19 @@ public sealed record AgentBridgeRenderedAddonSnapshot(
     bool Visible,
     uint NodeCount,
     IReadOnlyList<AgentBridgeRenderedTextNode> TextNodes,
-    string? Diagnostic = null);
+    string? Diagnostic = null,
+    IReadOnlyList<AgentBridgeRenderedNodeSnapshot>? Nodes = null);
+
+public sealed record AgentBridgeRenderedNodeSnapshot(
+    string NodePath,
+    uint NodeId,
+    ushort NodeType,
+    ushort? ComponentType,
+    int Left,
+    int Top,
+    int Right,
+    int Bottom,
+    bool RespondsToMouse);
 
 public sealed record AgentBridgeRenderedTextNode(
     string NodePath,

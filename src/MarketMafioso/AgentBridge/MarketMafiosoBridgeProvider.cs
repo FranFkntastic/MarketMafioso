@@ -22,8 +22,12 @@ public interface IMarketMafiosoBridgeProvider
     void OpenCharacterUi();
     bool TryCloseBlockingSelectStringUi();
     bool TrySwitchCalibrationJobUi(string target);
+    bool TryHoverCharacterNodeUi(string target);
+    bool RestoreCharacterUiCursor();
     AgentBridgeRenderedUiSnapshot CaptureCharacterUi();
     RenderedGatheringStatsObservation CaptureGatheringStatsUi();
+    RenderedCharacterEquipmentLayout CaptureCharacterEquipmentLayoutUi();
+    RenderedItemDetailObservation CaptureItemDetailUi();
     IReadOnlyList<AgentBridgeReviewSurfaceDescriptor> GetReviewSurfaces();
     AgentBridgeUiReviewFrame GetControlSurface();
     AgentBridgeUiControlReview ReviewControl(string controlId);
@@ -64,6 +68,8 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
     private readonly Action openCharacterUi;
     private readonly Func<bool> tryCloseBlockingSelectStringUi;
     private readonly Func<string, bool> trySwitchCalibrationJobUi;
+    private readonly Func<string, bool> tryHoverCharacterNodeUi;
+    private readonly Func<bool> restoreCharacterUiCursor;
     private readonly Func<AgentBridgeRenderedUiSnapshot> captureCharacterUi;
     private readonly Func<RenderedGatheringStatsObservation> captureGatheringStatsUi;
     private readonly AgentBridgeUiReviewRegistry reviewRegistry;
@@ -82,7 +88,9 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
         Func<AgentBridgeRenderedUiSnapshot>? captureCharacterUi = null,
         Func<bool>? tryCloseBlockingSelectStringUi = null,
         Func<string, bool>? trySwitchCalibrationJobUi = null,
-        Func<RenderedGatheringStatsObservation>? captureGatheringStatsUi = null)
+        Func<RenderedGatheringStatsObservation>? captureGatheringStatsUi = null,
+        Func<string, bool>? tryHoverCharacterNodeUi = null,
+        Func<bool>? restoreCharacterUiCursor = null)
     {
         this.createSnapshot = createSnapshot ?? throw new ArgumentNullException(nameof(createSnapshot));
         this.openMainWindow = openMainWindow ?? throw new ArgumentNullException(nameof(openMainWindow));
@@ -98,6 +106,8 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
         this.tryCloseBlockingSelectStringUi = tryCloseBlockingSelectStringUi ?? (() => false);
         this.trySwitchCalibrationJobUi = trySwitchCalibrationJobUi ?? (_ => false);
         this.captureGatheringStatsUi = captureGatheringStatsUi ?? (() => new(Guid.NewGuid(), DateTimeOffset.UtcNow, RenderedCharacterObservationStatus.Unavailable, null, null, null, null, null, [], "Rendered gathering observation is unavailable."));
+        this.tryHoverCharacterNodeUi = tryHoverCharacterNodeUi ?? (_ => false);
+        this.restoreCharacterUiCursor = restoreCharacterUiCursor ?? (() => false);
     }
 
     public AgentBridgeTruth CreateSnapshot() => createSnapshot();
@@ -111,8 +121,14 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
     public void OpenCharacterUi() => openCharacterUi();
     public bool TryCloseBlockingSelectStringUi() => tryCloseBlockingSelectStringUi();
     public bool TrySwitchCalibrationJobUi(string target) => trySwitchCalibrationJobUi(target);
+    public bool TryHoverCharacterNodeUi(string target) => tryHoverCharacterNodeUi(target);
+    public bool RestoreCharacterUiCursor() => restoreCharacterUiCursor();
     public AgentBridgeRenderedUiSnapshot CaptureCharacterUi() => captureCharacterUi();
     public RenderedGatheringStatsObservation CaptureGatheringStatsUi() => captureGatheringStatsUi();
+    public RenderedCharacterEquipmentLayout CaptureCharacterEquipmentLayoutUi() =>
+        RenderedCharacterEquipmentLayoutParser.Parse(captureCharacterUi());
+    public RenderedItemDetailObservation CaptureItemDetailUi() =>
+        RenderedItemDetailParser.Parse(captureCharacterUi());
     public IReadOnlyList<AgentBridgeReviewSurfaceDescriptor> GetReviewSurfaces() => ReviewSurfaces;
     public AgentBridgeUiReviewFrame GetControlSurface() => reviewRegistry.Snapshot();
     public AgentBridgeUiControlReview ReviewControl(string controlId) => reviewRegistry.Review(controlId);

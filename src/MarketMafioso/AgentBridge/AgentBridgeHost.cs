@@ -256,12 +256,36 @@ public sealed class AgentBridgeHost : IDisposable
                 AgentBridgeRenderedUiSnapshot? characterUi = null;
                 await dispatchOnFramework(() => characterUi = provider.CaptureCharacterUi()).ConfigureAwait(false);
                 return AgentBridgeResponse.Ok("Rendered Character UI captured.", characterUi);
+            case "hover-character-node-ui":
+                var characterNodeHovered = false;
+                await dispatchOnFramework(() => characterNodeHovered = provider.TryHoverCharacterNodeUi(request.Target ?? string.Empty)).ConfigureAwait(false);
+                return characterNodeHovered
+                    ? AgentBridgeResponse.Ok($"Cursor moved over rendered Character node {request.Target}.")
+                    : AgentBridgeResponse.Fail("The requested rendered Character drag/drop node is unavailable.");
+            case "restore-character-ui-cursor":
+                var characterCursorRestored = false;
+                await dispatchOnFramework(() => characterCursorRestored = provider.RestoreCharacterUiCursor()).ConfigureAwait(false);
+                return characterCursorRestored
+                    ? AgentBridgeResponse.Ok("Cursor restored after Character UI observation.")
+                    : AgentBridgeResponse.Fail("No Character UI cursor observation was active.");
             case "get-gathering-stats-ui":
                 Squire.Observation.RenderedGatheringStatsObservation? gatheringStats = null;
                 await dispatchOnFramework(() => gatheringStats = provider.CaptureGatheringStatsUi()).ConfigureAwait(false);
                 return gatheringStats!.Status == Squire.Observation.RenderedCharacterObservationStatus.Complete
                     ? AgentBridgeResponse.Ok("Rendered gathering stats captured.", gatheringStats)
                     : new AgentBridgeResponse { Success = false, Message = gatheringStats.Diagnostic, Receipt = gatheringStats };
+            case "get-character-equipment-layout-ui":
+                Squire.Observation.RenderedCharacterEquipmentLayout? equipmentLayout = null;
+                await dispatchOnFramework(() => equipmentLayout = provider.CaptureCharacterEquipmentLayoutUi()).ConfigureAwait(false);
+                return equipmentLayout!.Status == Squire.Observation.RenderedEquipmentLayoutStatus.Complete
+                    ? AgentBridgeResponse.Ok("Rendered Character equipment layout captured.", equipmentLayout)
+                    : new AgentBridgeResponse { Success = false, Message = equipmentLayout.Diagnostic, Receipt = equipmentLayout };
+            case "get-item-detail-ui":
+                Squire.Observation.RenderedItemDetailObservation? itemDetail = null;
+                await dispatchOnFramework(() => itemDetail = provider.CaptureItemDetailUi()).ConfigureAwait(false);
+                return itemDetail!.Status == Squire.Observation.RenderedItemDetailStatus.Complete
+                    ? AgentBridgeResponse.Ok("Rendered Item Detail captured.", itemDetail)
+                    : new AgentBridgeResponse { Success = false, Message = itemDetail.Diagnostic, Receipt = itemDetail };
             case "stop-route":
                 await dispatchOnFramework(provider.StopRoute).ConfigureAwait(false);
                 AppendAudit("stop-route", "accepted");
