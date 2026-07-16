@@ -211,8 +211,8 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
         var addon = gameGui.GetAddonByName<AtkUnitBase>("Character", 1);
         if (addon == null || addon->RootNode == null || !addon->RootNode->IsVisible() || !addon->IsReady)
             return false;
-        var node = FindNodeByPath(addon, nodePath);
-        if (node == null || !IsEffectivelyVisible(node) || !node->IsEventRegistered(eventType))
+        var node = FindRegisteredEventNode(addon, nodePath, eventType);
+        if (node == null || !IsEffectivelyVisible(node))
             return false;
 
         var centerX = target is null ? 0 : Math.Clamp((target.Left + target.Right) / 2, short.MinValue, short.MaxValue);
@@ -230,6 +230,25 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
             },
         };
         return node->DispatchEvent(&evt);
+    }
+
+    private static unsafe AtkResNode* FindRegisteredEventNode(
+        AtkUnitBase* addon,
+        string nodePath,
+        AtkEventType eventType)
+    {
+        var separator = nodePath.Length;
+        while (separator > "Character".Length)
+        {
+            var candidatePath = nodePath[..separator];
+            var candidate = FindNodeByPath(addon, candidatePath);
+            if (candidate != null && candidate->IsEventRegistered(eventType))
+                return candidate;
+            separator = nodePath.LastIndexOf('/', separator - 1);
+            if (separator < 0)
+                break;
+        }
+        return null;
     }
 
     private static unsafe AtkResNode* FindNodeByPath(AtkUnitBase* addon, string nodePath)
