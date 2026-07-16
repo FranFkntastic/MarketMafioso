@@ -268,15 +268,15 @@ public sealed class AgentBridgeHost : IDisposable
                 var characterNodeHovered = false;
                 await dispatchOnFramework(() => characterNodeHovered = provider.TryHoverCharacterNodeUi(request.Target ?? string.Empty)).ConfigureAwait(false);
                 return characterNodeHovered
-                    ? AgentBridgeResponse.Ok($"Virtual UI mouseover dispatched to rendered Character node {request.Target}; the OS cursor and window focus were not changed.")
-                    : AgentBridgeResponse.Fail("The requested rendered Character drag/drop node is unavailable or has no registered mouseover event.");
+                    ? AgentBridgeResponse.Ok($"Virtual UI rollover dispatched to rendered Character node {request.Target}; the OS cursor and window focus were not changed.")
+                    : AgentBridgeResponse.Fail("The requested rendered Character drag/drop node is unavailable or has no registered rollover event.");
             case "release-character-node-ui":
             case "restore-character-ui-cursor":
                 var characterCursorRestored = false;
                 await dispatchOnFramework(() => characterCursorRestored = provider.RestoreCharacterUiCursor()).ConfigureAwait(false);
                 return characterCursorRestored
-                    ? AgentBridgeResponse.Ok("Virtual Character-node mouseover released; the OS cursor was never changed.")
-                    : AgentBridgeResponse.Fail("No virtual Character-node mouseover was active.");
+                    ? AgentBridgeResponse.Ok("Virtual Character-node rollover released; the OS cursor was never changed.")
+                    : AgentBridgeResponse.Fail("No virtual Character-node rollover was active.");
             case "get-gathering-stats-ui":
                 Squire.Observation.RenderedGatheringStatsObservation? gatheringStats = null;
                 await dispatchOnFramework(() => gatheringStats = provider.CaptureGatheringStatsUi()).ConfigureAwait(false);

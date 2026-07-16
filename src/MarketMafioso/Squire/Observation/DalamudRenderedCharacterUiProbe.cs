@@ -52,7 +52,7 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
         RequiresVisibleCharacterAddon: true,
         UsesRenderedTooltipAsAuthority: true,
         SupportsDeterministicReplay: true,
-        "Equipment slots are traversed by dispatching their registered MouseOver and MouseOut UI events. Character and Item Detail rendered output remains the only runtime authority.");
+        "Equipment slots are traversed by dispatching their registered drag/drop rollover UI events. Character and Item Detail rendered output remains the only runtime authority.");
 
     public unsafe void Open()
     {
@@ -143,7 +143,7 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
         if (progress.Status == RenderedEquipmentScanStatus.ReadyToHover && progress.CurrentTarget is { } target)
         {
             if (!TryHoverCharacterNode(target.NodePath))
-                return new(false, progress, "The rendered equipment slot did not accept a virtual UI mouseover event.");
+                return new(false, progress, "The rendered equipment slot did not accept a virtual UI rollover event.");
             progress = equipmentScan.MarkHoverStarted(target.NodePath, DateTimeOffset.UtcNow);
             return new(true, progress, progress.Diagnostic);
         }
@@ -164,7 +164,7 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
     }
 
     /// <summary>
-    /// Dispatches the node's registered UI mouseover event so the game itself renders the
+    /// Dispatches the drag/drop component's registered rollover event so the game itself renders the
     /// authoritative ItemDetail tooltip. This never moves the OS cursor or activates FFXIV.
     /// </summary>
     public bool TryHoverCharacterNode(string nodePath)
@@ -186,7 +186,7 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
             return false;
 
         RestoreCursor();
-        if (!DispatchCharacterNodeEvent(nodePath, AtkEventType.MouseOver, target))
+        if (!DispatchCharacterNodeEvent(nodePath, AtkEventType.DragDropRollOver, target))
             return false;
         hoveredCharacterNodePath = nodePath;
         return true;
@@ -197,7 +197,7 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
         if (hoveredCharacterNodePath is not { } nodePath)
             return false;
         hoveredCharacterNodePath = null;
-        return DispatchCharacterNodeEvent(nodePath, AtkEventType.MouseOut, null);
+        return DispatchCharacterNodeEvent(nodePath, AtkEventType.DragDropRollOut, null);
     }
 
     private unsafe AgentBridgeRenderedAddonSnapshot CaptureAddon(string addonName)
