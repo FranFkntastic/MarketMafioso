@@ -33,8 +33,14 @@
           "System.Security.Cryptography.ProtectedData": "[9.0.0, )"
         }
       },
-      "marketmafioso.contracts": {
+      "franthropy.filtering": {
         "type": "Project"
+      },
+      "marketmafioso.contracts": {
+        "type": "Project",
+        "dependencies": {
+          "Franthropy.Filtering": "[0.1.0, )"
+        }
       }
     }
   }

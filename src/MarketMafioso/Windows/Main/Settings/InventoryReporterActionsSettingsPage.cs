@@ -1,6 +1,7 @@
 using System;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
+using Franthropy.Dalamud.AgentBridge;
 using Franthropy.Dalamud.UI.Settings;
 
 namespace MarketMafioso.Windows.Main.Settings;
@@ -9,14 +10,17 @@ internal sealed class InventoryReporterActionsSettingsPage
 {
     private readonly HttpReporter reporter;
     private readonly AutoRetainerRefreshService autoRetainerRefresh;
+    private readonly AgentBridgeUiReviewRegistry reviewRegistry;
     private bool showPreview;
 
     public InventoryReporterActionsSettingsPage(
         HttpReporter reporter,
-        AutoRetainerRefreshService autoRetainerRefresh)
+        AutoRetainerRefreshService autoRetainerRefresh,
+        AgentBridgeUiReviewRegistry reviewRegistry)
     {
         this.reporter = reporter ?? throw new ArgumentNullException(nameof(reporter));
         this.autoRetainerRefresh = autoRetainerRefresh ?? throw new ArgumentNullException(nameof(autoRetainerRefresh));
+        this.reviewRegistry = reviewRegistry ?? throw new ArgumentNullException(nameof(reviewRegistry));
     }
 
     public SettingsPageDescriptor Descriptor => new(
@@ -81,6 +85,12 @@ internal sealed class InventoryReporterActionsSettingsPage
     {
         if (ImGuiUi.PrimaryButton("Send report now", true))
             _ = reporter.SendReportAsync();
+        reviewRegistry.RegisterLastButton(
+            "inventory.report.send",
+            "Send an inventory report now",
+            true,
+            () => _ = reporter.SendReportAsync(),
+            reporter.LastStatus);
 
         ImGui.SameLine();
         var canRefreshRetainers = autoRetainerRefresh.CanStartRefresh &&
@@ -88,11 +98,23 @@ internal sealed class InventoryReporterActionsSettingsPage
                                   !autoRetainerRefresh.IsStartQueued;
         if (ImGuiUi.Button("Refresh retainer cache", canRefreshRetainers))
             autoRetainerRefresh.StartFullRefresh();
+        reviewRegistry.RegisterLastButton(
+            "inventory.report.refresh-retainers",
+            "Refresh the retainer inventory cache",
+            canRefreshRetainers,
+            autoRetainerRefresh.StartFullRefresh,
+            autoRetainerRefresh.LastStatus);
 
         ImGui.SameLine();
         var previewLabel = showPreview ? "Hide payload" : "Preview payload";
         if (ImGui.Button(previewLabel))
             showPreview = !showPreview;
+        reviewRegistry.RegisterLastButton(
+            "inventory.report.toggle-preview",
+            previewLabel,
+            true,
+            () => showPreview = !showPreview,
+            showPreview ? "Visible" : "Hidden");
     }
 
     private Vector4 GetReporterStatusColor()
