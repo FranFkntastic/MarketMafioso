@@ -41,6 +41,7 @@ public sealed class HttpReporterRetainerScopeTests
         var retainer = BuildRetainer(10, "Current Owner", 100, 25);
         retainer.OwnerCharacterName = "Wei Ning";
         retainer.OwnerHomeWorld = "Maduin";
+        retainer.Bags[0].Items[0].ConditionPercent = 100;
         retainer.Bags[0].Items.Add(new CachedItem
         {
             ItemId = 200,
@@ -65,6 +66,7 @@ public sealed class HttpReporterRetainerScopeTests
             }));
 
         Assert.Equal("Resolved category", report.Bags[0].Items[0].ItemType);
+        Assert.Null(report.Bags[0].Items[0].ConditionPercent);
         Assert.Equal("Existing category", report.Bags[0].Items[1].ItemType);
         Assert.Equal([100u], resolvedIds);
     }

@@ -23,7 +23,7 @@ public sealed class AutomationItemCatalog
             var name = item?.Name.ToString();
             var luminaStackSize = item?.StackSize ?? 0;
             var itemType = item is { } resolvedItem ? ResolveItemType(resolvedItem) : null;
-            var supportsCondition = item?.ClassJobRepair.RowId != 0;
+            var supportsCondition = item?.EquipSlotCategory.RowId != 0;
 
             return new AutomationItemMetadata(
                 new AutomationItemIdentity(itemId, name, isHighQuality),

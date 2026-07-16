@@ -228,7 +228,7 @@ public class HttpReporter : IDisposable
             Condition = item.Condition,
             ContainerKey = item.ContainerKey,
             SlotIndex = item.SlotIndex,
-            ConditionPercent = item.ConditionPercent,
+            ConditionPercent = metadata is { SupportsCondition: false } ? null : item.ConditionPercent,
             Equipped = item.Equipped,
         };
     }
@@ -250,7 +250,7 @@ public class HttpReporter : IDisposable
             Condition = item.Condition,
             ContainerKey = item.ContainerKey,
             SlotIndex = item.SlotIndex,
-            ConditionPercent = item.ConditionPercent,
+            ConditionPercent = metadata is { SupportsCondition: false } ? null : item.ConditionPercent,
             UnitPrice = item.UnitPrice,
             ListedAt = item.ListedAt,
         };
