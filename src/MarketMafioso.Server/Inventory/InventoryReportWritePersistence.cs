@@ -247,12 +247,13 @@ internal sealed class InventoryReportWritePersistence(
         await using var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = """
-            INSERT INTO inventory_bags (owner_id, bag_name, sort_order)
-            VALUES ($ownerId, $bagName, $sortOrder);
+            INSERT INTO inventory_bags (owner_id, bag_name, location, sort_order)
+            VALUES ($ownerId, $bagName, $location, $sortOrder);
             SELECT last_insert_rowid();
             """;
         command.Parameters.AddWithValue("$ownerId", ownerId);
         command.Parameters.AddWithValue("$bagName", bag.BagName);
+        command.Parameters.AddWithValue("$location", (object?)bag.Location ?? DBNull.Value);
         command.Parameters.AddWithValue("$sortOrder", sortOrder);
         var bagId = (long)(await command.ExecuteScalarAsync(cancellationToken))!;
 
@@ -271,8 +272,12 @@ internal sealed class InventoryReportWritePersistence(
         await using var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = """
-            INSERT INTO inventory_items (bag_id, item_id, item_name, item_type, quantity, is_hq, condition, sort_order)
-            VALUES ($bagId, $itemId, $itemName, $itemType, $quantity, $isHq, $condition, $sortOrder);
+            INSERT INTO inventory_items (
+                bag_id, item_id, item_name, item_type, quantity, is_hq, condition,
+                container_key, slot_index, condition_percent, equipped, sort_order)
+            VALUES (
+                $bagId, $itemId, $itemName, $itemType, $quantity, $isHq, $condition,
+                $containerKey, $slotIndex, $conditionPercent, $equipped, $sortOrder);
             """;
         command.Parameters.AddWithValue("$bagId", bagId);
         command.Parameters.AddWithValue("$itemId", checked((long)item.ItemId));
@@ -281,6 +286,10 @@ internal sealed class InventoryReportWritePersistence(
         command.Parameters.AddWithValue("$quantity", checked((long)item.Quantity));
         command.Parameters.AddWithValue("$isHq", item.IsHQ ? 1 : 0);
         command.Parameters.AddWithValue("$condition", item.Condition);
+        command.Parameters.AddWithValue("$containerKey", (object?)item.ContainerKey ?? DBNull.Value);
+        command.Parameters.AddWithValue("$slotIndex", item.SlotIndex is { } slotIndex ? slotIndex : DBNull.Value);
+        command.Parameters.AddWithValue("$conditionPercent", item.ConditionPercent is { } conditionPercent ? conditionPercent : DBNull.Value);
+        command.Parameters.AddWithValue("$equipped", item.Equipped is { } equipped ? equipped ? 1 : 0 : DBNull.Value);
         command.Parameters.AddWithValue("$sortOrder", sortOrder);
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
@@ -304,6 +313,9 @@ internal sealed class InventoryReportWritePersistence(
                 quantity,
                 is_hq,
                 condition,
+                container_key,
+                slot_index,
+                condition_percent,
                 unit_price,
                 listed_at,
                 sort_order)
@@ -315,6 +327,9 @@ internal sealed class InventoryReportWritePersistence(
                 $quantity,
                 $isHq,
                 $condition,
+                $containerKey,
+                $slotIndex,
+                $conditionPercent,
                 $unitPrice,
                 $listedAt,
                 $sortOrder);
@@ -326,6 +341,9 @@ internal sealed class InventoryReportWritePersistence(
         command.Parameters.AddWithValue("$quantity", checked((long)listing.Quantity));
         command.Parameters.AddWithValue("$isHq", listing.IsHQ ? 1 : 0);
         command.Parameters.AddWithValue("$condition", listing.Condition);
+        command.Parameters.AddWithValue("$containerKey", (object?)listing.ContainerKey ?? DBNull.Value);
+        command.Parameters.AddWithValue("$slotIndex", listing.SlotIndex is { } slotIndex ? slotIndex : DBNull.Value);
+        command.Parameters.AddWithValue("$conditionPercent", listing.ConditionPercent is { } conditionPercent ? conditionPercent : DBNull.Value);
         command.Parameters.AddWithValue("$unitPrice", listing.UnitPrice == null ? DBNull.Value : checked((long)listing.UnitPrice.Value));
         command.Parameters.AddWithValue("$listedAt", string.IsNullOrWhiteSpace(listing.ListedAt) ? DBNull.Value : listing.ListedAt);
         command.Parameters.AddWithValue("$sortOrder", sortOrder);

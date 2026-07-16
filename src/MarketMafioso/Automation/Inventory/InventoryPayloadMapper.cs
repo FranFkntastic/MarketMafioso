@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using MarketMafioso.Automation.Items;
 
 namespace MarketMafioso.Automation.Inventory;
 
@@ -9,19 +10,26 @@ public static class InventoryPayloadMapper
     public static List<InventoryBag> MapInventoryBags(
         IReadOnlyList<AutomationInventoryContainerSnapshot> containers,
         bool includeItemNames,
-        Func<uint, string?> resolveItemName)
+        Func<uint, string?> resolveItemName,
+        Func<uint, AutomationItemMetadata>? resolveItemMetadata = null)
     {
         var bags = new List<InventoryBag>();
 
         foreach (var container in containers.Where(container => container.IsLoaded))
         {
-            var items = MapGroupedItems(container.Slots, includeItemNames, resolveItemName);
+            var items = MapPhysicalItems(
+                container.ContainerName,
+                container.Slots,
+                includeItemNames,
+                resolveItemName,
+                resolveItemMetadata);
             if (items.Count == 0)
                 continue;
 
             bags.Add(new InventoryBag
             {
                 BagName = container.ContainerName,
+                Location = ResolveLocation(container.ContainerName, isRetainer: false),
                 Items = items,
             });
         }
@@ -32,18 +40,30 @@ public static class InventoryPayloadMapper
     public static List<InventoryBag> MapRetainerInventoryBags(
         IReadOnlyList<AutomationInventoryContainerSnapshot> containers,
         bool includeItemNames,
-        Func<uint, string?> resolveItemName)
+        Func<uint, string?> resolveItemName,
+        Func<uint, AutomationItemMetadata>? resolveItemMetadata = null)
     {
-        var retainerPageSlots = containers
+        var retainerPageItems = containers
             .Where(container => container.IsLoaded && container.ContainerName.StartsWith("RetainerPage", StringComparison.Ordinal))
-            .SelectMany(container => container.Slots)
+            .SelectMany(container => MapPhysicalItems(
+                container.ContainerName,
+                container.Slots,
+                includeItemNames,
+                resolveItemName,
+                resolveItemMetadata))
             .ToList();
         var mergedBags = containers
             .Where(container => container.IsLoaded && !container.ContainerName.StartsWith("RetainerPage", StringComparison.Ordinal))
             .Select(container => new InventoryBag
             {
                 BagName = container.ContainerName,
-                Items = MapGroupedItems(container.Slots, includeItemNames, resolveItemName),
+                Location = "Retainer",
+                Items = MapPhysicalItems(
+                    container.ContainerName,
+                    container.Slots,
+                    includeItemNames,
+                    resolveItemName,
+                    resolveItemMetadata),
             })
             // RetainerCrystals is a fixed-capacity inventory. Preserve an empty loaded
             // container so callers can distinguish "scanned and empty" from legacy
@@ -51,13 +71,13 @@ public static class InventoryPayloadMapper
             .Where(bag => bag.Items.Count > 0 || bag.BagName == "RetainerCrystals")
             .ToList();
 
-        var retainerItems = MapGroupedItems(retainerPageSlots, includeItemNames, resolveItemName);
-        if (retainerItems.Count > 0)
+        if (retainerPageItems.Count > 0)
         {
             mergedBags.Insert(0, new InventoryBag
             {
                 BagName = "RetainerInventory",
-                Items = retainerItems,
+                Location = "Retainer",
+                Items = retainerPageItems,
             });
         }
 
@@ -68,9 +88,10 @@ public static class InventoryPayloadMapper
         IReadOnlyList<AutomationInventoryContainerSnapshot> containers,
         bool includeItemNames,
         Func<uint, string?> resolveItemName,
-        DateTime listedAtUtc)
+        DateTime listedAtUtc,
+        Func<uint, AutomationItemMetadata>? resolveItemMetadata = null)
     {
-        return MapInventoryBags(containers, includeItemNames, resolveItemName)
+        return MapInventoryBags(containers, includeItemNames, resolveItemName, resolveItemMetadata)
             .SelectMany(bag => bag.Items)
             .Select(item => new RetainerMarketListing
             {
@@ -80,31 +101,52 @@ public static class InventoryPayloadMapper
                 Quantity = item.Quantity,
                 IsHQ = item.IsHQ,
                 Condition = item.Condition,
+                ContainerKey = item.ContainerKey,
+                SlotIndex = item.SlotIndex,
+                ConditionPercent = item.ConditionPercent,
                 ListedAt = listedAtUtc.ToString("o"),
             })
             .ToList();
     }
 
-    private static List<ItemSlot> MapGroupedItems(
+    private static List<ItemSlot> MapPhysicalItems(
+        string containerName,
         IReadOnlyList<AutomationInventorySlot> slots,
         bool includeItemNames,
-        Func<uint, string?> resolveItemName)
+        Func<uint, string?> resolveItemName,
+        Func<uint, AutomationItemMetadata>? resolveItemMetadata)
     {
-        return slots
-            .GroupBy(slot => slot.ItemId)
-            .Select(group =>
+        var equipped = containerName.Equals("EquippedItems", StringComparison.Ordinal);
+        return slots.Select(slot =>
+        {
+            var metadata = resolveItemMetadata?.Invoke(slot.ItemId);
+            return new ItemSlot
             {
-                var first = group.First();
-                return new ItemSlot
-                {
-                    ItemId = first.ItemId,
-                    ItemName = includeItemNames ? resolveItemName(first.ItemId) : null,
-                    ItemType = null,
-                    Quantity = checked((uint)group.Sum(slot => slot.Quantity)),
-                    IsHQ = false,
-                    Condition = group.Max(slot => slot.Condition),
-                };
-            })
+                ItemId = slot.ItemId,
+                ItemName = includeItemNames ? metadata?.Identity.Name ?? resolveItemName(slot.ItemId) : null,
+                ItemType = metadata?.ItemType,
+                Quantity = checked((uint)slot.Quantity),
+                IsHQ = slot.IsHighQuality,
+                Condition = slot.Condition,
+                ContainerKey = containerName,
+                SlotIndex = slot.SlotIndex,
+                ConditionPercent = metadata is { SupportsCondition: false } ? null : slot.ConditionPercent,
+                Equipped = equipped,
+            };
+        })
             .ToList();
+    }
+
+    private static string ResolveLocation(string containerName, bool isRetainer)
+    {
+        if (isRetainer || containerName.StartsWith("Retainer", StringComparison.Ordinal))
+            return "Retainer";
+        if (containerName.Equals("EquippedItems", StringComparison.Ordinal))
+            return "Equipped";
+        if (containerName.StartsWith("Armory", StringComparison.Ordinal))
+            return "Armoury";
+        if (containerName.Contains("SaddleBag", StringComparison.Ordinal))
+            return "Saddlebag";
+        return "Inventory";
     }
 }

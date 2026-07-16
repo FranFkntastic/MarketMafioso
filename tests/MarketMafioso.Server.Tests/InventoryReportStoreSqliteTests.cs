@@ -134,6 +134,7 @@ public sealed class InventoryReportStoreSqliteTests
                         new InventoryBag
                         {
                             BagName = "RetainerInventory",
+                            Location = "Retainer",
                             Items =
                             [
                                 new ItemSlot
@@ -144,6 +145,10 @@ public sealed class InventoryReportStoreSqliteTests
                                     Quantity = 20,
                                     IsHQ = false,
                                     Condition = 100,
+                                    ContainerKey = "RetainerPage3",
+                                    SlotIndex = 11,
+                                    ConditionPercent = 0,
+                                    Equipped = false,
                                 },
                             ],
                         },
@@ -158,6 +163,9 @@ public sealed class InventoryReportStoreSqliteTests
                             Quantity = 20,
                             IsHQ = false,
                             Condition = 100,
+                            ContainerKey = "RetainerMarket",
+                            SlotIndex = 4,
+                            ConditionPercent = 0,
                             UnitPrice = 1_800,
                             ListedAt = "2026-06-24T12:00:00.0000000Z",
                         },
@@ -191,12 +199,20 @@ public sealed class InventoryReportStoreSqliteTests
         var retainer = Assert.Single(loaded.Report.Retainers);
         Assert.Equal((ulong)1_242_888, retainer.Gil);
         Assert.Equal("Metal", retainer.Bags[0].Items[0].ItemType);
+        Assert.Equal("Retainer", retainer.Bags[0].Location);
+        Assert.Equal("RetainerPage3", retainer.Bags[0].Items[0].ContainerKey);
+        Assert.Equal(11, retainer.Bags[0].Items[0].SlotIndex);
+        Assert.Equal(0, retainer.Bags[0].Items[0].ConditionPercent);
+        Assert.False(retainer.Bags[0].Items[0].Equipped);
         Assert.Equal("Semantic Character", retainer.OwnerCharacterName);
         Assert.Equal("Siren", retainer.OwnerHomeWorld);
         Assert.Equal(2, retainer.MarketListings.Count);
         Assert.Equal((uint)1_800, retainer.MarketListings[0].UnitPrice);
         Assert.Equal((uint)2_150, retainer.MarketListings[1].UnitPrice);
         Assert.Equal("Metal", retainer.MarketListings[0].ItemType);
+        Assert.Equal("RetainerMarket", retainer.MarketListings[0].ContainerKey);
+        Assert.Equal(4, retainer.MarketListings[0].SlotIndex);
+        Assert.Equal(0, retainer.MarketListings[0].ConditionPercent);
         Assert.Equal(1, stored.Summary.RetainerItemStacks);
         Assert.Equal(20, stored.Summary.RetainerItemQuantity);
         var summary = Assert.Single(summaries);

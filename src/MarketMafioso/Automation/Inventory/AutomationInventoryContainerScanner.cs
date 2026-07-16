@@ -45,7 +45,8 @@ public sealed class AutomationInventoryContainerScanner
                         slot->ItemId,
                         checked((int)slot->Quantity),
                         slot->Flags.HasFlag(InventoryItem.ItemFlags.HighQuality),
-                        slot->Condition / 30000f));
+                        slot->Condition / 30000f,
+                        slot->Condition / 300f));
                 }
 
                 snapshots.Add(new AutomationInventoryContainerSnapshot(

@@ -25,7 +25,15 @@ public sealed class SqliteSchemaMigrator
         await command.ExecuteNonQueryAsync(cancellationToken);
 
         await AddColumnIfMissingAsync(connection, transaction, "inventory_owners", "gil", "INTEGER NULL", cancellationToken);
+        await AddColumnIfMissingAsync(connection, transaction, "inventory_bags", "location", "TEXT NULL", cancellationToken);
         await AddColumnIfMissingAsync(connection, transaction, "inventory_items", "item_type", "TEXT NULL", cancellationToken);
+        await AddColumnIfMissingAsync(connection, transaction, "inventory_items", "container_key", "TEXT NULL", cancellationToken);
+        await AddColumnIfMissingAsync(connection, transaction, "inventory_items", "slot_index", "INTEGER NULL", cancellationToken);
+        await AddColumnIfMissingAsync(connection, transaction, "inventory_items", "condition_percent", "REAL NULL", cancellationToken);
+        await AddColumnIfMissingAsync(connection, transaction, "inventory_items", "equipped", "INTEGER NULL", cancellationToken);
+        await AddColumnIfMissingAsync(connection, transaction, "retainer_market_listings", "container_key", "TEXT NULL", cancellationToken);
+        await AddColumnIfMissingAsync(connection, transaction, "retainer_market_listings", "slot_index", "INTEGER NULL", cancellationToken);
+        await AddColumnIfMissingAsync(connection, transaction, "retainer_market_listings", "condition_percent", "REAL NULL", cancellationToken);
         await AddColumnIfMissingAsync(connection, transaction, "ingest_keys", "purpose", "TEXT NOT NULL DEFAULT 'LegacyClient'", cancellationToken);
         await AddColumnIfMissingAsync(connection, transaction, "ingest_keys", "key_prefix", "TEXT NULL", cancellationToken);
         await AddColumnIfMissingAsync(connection, transaction, "ingest_keys", "last_used_at_utc", "TEXT NULL", cancellationToken);
@@ -214,6 +222,7 @@ public sealed class SqliteSchemaMigrator
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             owner_id INTEGER NOT NULL REFERENCES inventory_owners(id) ON DELETE CASCADE,
             bag_name TEXT NOT NULL,
+            location TEXT NULL,
             sort_order INTEGER NOT NULL
         );
 
@@ -226,6 +235,10 @@ public sealed class SqliteSchemaMigrator
             quantity INTEGER NOT NULL,
             is_hq INTEGER NOT NULL,
             condition REAL NOT NULL,
+            container_key TEXT NULL,
+            slot_index INTEGER NULL,
+            condition_percent REAL NULL,
+            equipped INTEGER NULL,
             sort_order INTEGER NOT NULL
         );
 
@@ -238,6 +251,9 @@ public sealed class SqliteSchemaMigrator
             quantity INTEGER NOT NULL,
             is_hq INTEGER NOT NULL,
             condition REAL NOT NULL,
+            container_key TEXT NULL,
+            slot_index INTEGER NULL,
+            condition_percent REAL NULL,
             unit_price INTEGER NULL,
             listed_at TEXT NULL,
             sort_order INTEGER NOT NULL

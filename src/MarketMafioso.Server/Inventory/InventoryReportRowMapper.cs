@@ -45,6 +45,10 @@ internal static class InventoryReportRowMapper
             Quantity = checked((uint)reader.GetInt64(3)),
             IsHQ = reader.GetInt32(4) == 1,
             Condition = reader.GetFloat(5),
+            ContainerKey = reader.IsDBNull(6) ? null : reader.GetString(6),
+            SlotIndex = reader.IsDBNull(7) ? null : reader.GetInt32(7),
+            ConditionPercent = reader.IsDBNull(8) ? null : reader.GetFloat(8),
+            Equipped = reader.IsDBNull(9) ? null : reader.GetInt32(9) == 1,
         };
 
     public static RetainerMarketListing ReadMarketListing(SqliteDataReader reader) =>
@@ -58,6 +62,9 @@ internal static class InventoryReportRowMapper
             Condition = reader.GetFloat(5),
             UnitPrice = reader.IsDBNull(6) ? null : checked((uint)reader.GetInt64(6)),
             ListedAt = reader.IsDBNull(7) ? null : reader.GetString(7),
+            ContainerKey = reader.IsDBNull(8) ? null : reader.GetString(8),
+            SlotIndex = reader.IsDBNull(9) ? null : reader.GetInt32(9),
+            ConditionPercent = reader.IsDBNull(10) ? null : reader.GetFloat(10),
         };
 
     public static ReportSummary CreateSummary(string id, DateTimeOffset receivedAt, InventoryReport report)

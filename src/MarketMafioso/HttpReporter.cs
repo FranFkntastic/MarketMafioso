@@ -98,7 +98,7 @@ public class HttpReporter : IDisposable
             {
                 Metadata = new InventoryReportMetadata
                 {
-                    SchemaVersion = 1,
+                    SchemaVersion = 2,
                     SourcePlugin = "MarketMafioso",
                     PluginVersion = PluginBuildInfo.DisplayVersion,
                     GeneratedAtUtc = generatedAtUtc,
@@ -192,6 +192,7 @@ public class HttpReporter : IDisposable
                     .Select(b => new InventoryBag
                     {
                         BagName = b.BagName,
+                        Location = b.Location,
                         Items = b.Items
                             .Select(i => new ItemSlot
                             {
@@ -201,6 +202,10 @@ public class HttpReporter : IDisposable
                                 Quantity = i.Quantity,
                                 IsHQ = i.IsHQ,
                                 Condition = i.Condition,
+                                ContainerKey = i.ContainerKey,
+                                SlotIndex = i.SlotIndex,
+                                ConditionPercent = i.ConditionPercent,
+                                Equipped = i.Equipped,
                             })
                             .ToList(),
                     })
@@ -214,6 +219,9 @@ public class HttpReporter : IDisposable
                         Quantity = i.Quantity,
                         IsHQ = i.IsHQ,
                         Condition = i.Condition,
+                        ContainerKey = i.ContainerKey,
+                        SlotIndex = i.SlotIndex,
+                        ConditionPercent = i.ConditionPercent,
                         UnitPrice = i.UnitPrice,
                         ListedAt = i.ListedAt,
                     })

@@ -98,10 +98,12 @@ public class InventoryScanner
         return InventoryPayloadMapper.MapInventoryBags(
                 containerScanner.ScanLoadedContainers([InventoryType.Crystals]),
                 includeItemNames: false,
-                ResolveItemName)
+                ResolveItemName,
+                itemId => itemCatalog.Resolve(itemId))
             .SelectMany(bag => bag.Items)
             .Where(item => ElementalCurrencyCatalog.IsShardOrCrystal(item.ItemId))
-            .ToDictionary(item => item.ItemId, item => (int)item.Quantity);
+            .GroupBy(item => item.ItemId)
+            .ToDictionary(group => group.Key, group => group.Sum(item => checked((int)item.Quantity)));
     }
 
     public List<InventoryBag> ScanCurrentRetainer(Configuration config)
@@ -109,7 +111,8 @@ public class InventoryScanner
         return InventoryPayloadMapper.MapRetainerInventoryBags(
             containerScanner.ScanLoadedContainers(RetainerContainers),
             config.IncludeItemNames,
-            ResolveItemName);
+            ResolveItemName,
+            itemId => itemCatalog.Resolve(itemId));
     }
 
     public ulong ScanCurrentRetainerGil()
@@ -124,7 +127,8 @@ public class InventoryScanner
             containerScanner.ScanLoadedContainers([InventoryType.RetainerMarket]),
             config.IncludeItemNames,
             ResolveItemName,
-            DateTime.UtcNow);
+            DateTime.UtcNow,
+            itemId => itemCatalog.Resolve(itemId));
     }
 
     public string? ResolveItemName(uint itemId)
@@ -137,7 +141,8 @@ public class InventoryScanner
         return InventoryPayloadMapper.MapInventoryBags(
             containerScanner.ScanLoadedContainers(types),
             config.IncludeItemNames,
-            ResolveItemName);
+            ResolveItemName,
+            itemId => itemCatalog.Resolve(itemId));
     }
 
     private unsafe List<ulong> ScanContainerRawQuantities(InventoryType type)

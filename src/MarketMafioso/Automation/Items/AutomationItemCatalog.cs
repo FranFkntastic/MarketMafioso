@@ -22,10 +22,14 @@ public sealed class AutomationItemCatalog
             var item = dataManager.GetExcelSheet<Item>()?.GetRowOrDefault(itemId);
             var name = item?.Name.ToString();
             var luminaStackSize = item?.StackSize ?? 0;
+            var itemType = item?.ItemUICategory.Value.Name.ToString();
+            var supportsCondition = item?.ClassJobRepair.RowId != 0;
 
             return new AutomationItemMetadata(
                 new AutomationItemIdentity(itemId, name, isHighQuality),
-                ItemStackRules.ResolveMaxStack(itemId, luminaStackSize));
+                ItemStackRules.ResolveMaxStack(itemId, luminaStackSize),
+                itemType,
+                supportsCondition);
         }
         catch (Exception ex)
         {

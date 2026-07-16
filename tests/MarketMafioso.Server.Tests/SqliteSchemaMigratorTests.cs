@@ -34,6 +34,14 @@ public sealed class SqliteSchemaMigratorTests
         Assert.True(await TableExistsAsync(connection, "retainer_market_listings"));
         Assert.True(await ColumnExistsAsync(connection, "inventory_owners", "gil"));
         Assert.True(await ColumnExistsAsync(connection, "inventory_items", "item_type"));
+        Assert.True(await ColumnExistsAsync(connection, "inventory_bags", "location"));
+        Assert.True(await ColumnExistsAsync(connection, "inventory_items", "container_key"));
+        Assert.True(await ColumnExistsAsync(connection, "inventory_items", "slot_index"));
+        Assert.True(await ColumnExistsAsync(connection, "inventory_items", "condition_percent"));
+        Assert.True(await ColumnExistsAsync(connection, "inventory_items", "equipped"));
+        Assert.True(await ColumnExistsAsync(connection, "retainer_market_listings", "container_key"));
+        Assert.True(await ColumnExistsAsync(connection, "retainer_market_listings", "slot_index"));
+        Assert.True(await ColumnExistsAsync(connection, "retainer_market_listings", "condition_percent"));
         Assert.True(await ColumnExistsAsync(connection, "ingest_keys", "purpose"));
         Assert.True(await ColumnExistsAsync(connection, "ingest_keys", "key_prefix"));
         Assert.True(await ColumnExistsAsync(connection, "ingest_keys", "last_used_at_utc"));
@@ -52,6 +60,8 @@ public sealed class SqliteSchemaMigratorTests
         await using var connection = await factory.OpenConnectionAsync(CancellationToken.None);
         Assert.True(await ColumnExistsAsync(connection, "inventory_owners", "gil"));
         Assert.True(await ColumnExistsAsync(connection, "inventory_items", "item_type"));
+        Assert.True(await ColumnExistsAsync(connection, "inventory_bags", "location"));
+        Assert.True(await ColumnExistsAsync(connection, "inventory_items", "condition_percent"));
         Assert.True(await ColumnExistsAsync(connection, "ingest_keys", "purpose"));
         Assert.True(await ColumnExistsAsync(connection, "ingest_keys", "key_prefix"));
         Assert.True(await ColumnExistsAsync(connection, "ingest_keys", "last_used_at_utc"));

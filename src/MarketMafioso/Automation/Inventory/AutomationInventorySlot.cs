@@ -5,4 +5,5 @@ public sealed record AutomationInventorySlot(
     uint ItemId,
     int Quantity,
     bool IsHighQuality,
-    float Condition = 0);
+    float Condition = 0,
+    float? ConditionPercent = null);

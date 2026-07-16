@@ -109,6 +109,7 @@ public class RetainerCacheManager : IDisposable
                 .Select(b => new CachedBag
                 {
                     BagName = b.BagName,
+                    Location = b.Location,
                     Items = b.Items
                         .Select(i => new CachedItem
                         {
@@ -118,6 +119,10 @@ public class RetainerCacheManager : IDisposable
                             Quantity = i.Quantity,
                             IsHQ = i.IsHQ,
                             Condition = i.Condition,
+                            ContainerKey = i.ContainerKey,
+                            SlotIndex = i.SlotIndex,
+                            ConditionPercent = i.ConditionPercent,
+                            Equipped = i.Equipped,
                         })
                         .ToList(),
                 })
@@ -144,6 +149,9 @@ public class RetainerCacheManager : IDisposable
                         Quantity = i.Quantity,
                         IsHQ = i.IsHQ,
                         Condition = i.Condition,
+                        ContainerKey = i.ContainerKey,
+                        SlotIndex = i.SlotIndex,
+                        ConditionPercent = i.ConditionPercent,
                         UnitPrice = i.UnitPrice,
                         ListedAt = i.ListedAt,
                     })

@@ -44,6 +44,10 @@ public sealed record InventoryBag
     [JsonPropertyName("bagName")]
     public string BagName { get; init; } = string.Empty;
 
+    [JsonPropertyName("location")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Location { get; init; }
+
     [JsonPropertyName("items")]
     public List<ItemSlot> Items { get; init; } = new();
 }
@@ -98,6 +102,22 @@ public sealed record ItemSlot
 
     [JsonPropertyName("condition")]
     public float Condition { get; init; }
+
+    [JsonPropertyName("containerKey")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ContainerKey { get; init; }
+
+    [JsonPropertyName("slotIndex")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? SlotIndex { get; init; }
+
+    [JsonPropertyName("conditionPercent")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public float? ConditionPercent { get; init; }
+
+    [JsonPropertyName("equipped")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? Equipped { get; init; }
 }
 
 public sealed record RetainerMarketListing
@@ -121,6 +141,18 @@ public sealed record RetainerMarketListing
 
     [JsonPropertyName("condition")]
     public float Condition { get; init; }
+
+    [JsonPropertyName("containerKey")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ContainerKey { get; init; }
+
+    [JsonPropertyName("slotIndex")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? SlotIndex { get; init; }
+
+    [JsonPropertyName("conditionPercent")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public float? ConditionPercent { get; init; }
 
     [JsonPropertyName("unitPrice")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]

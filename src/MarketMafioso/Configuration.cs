@@ -205,6 +205,7 @@ public class CachedRetainer
 public class CachedBag
 {
     public string BagName { get; set; } = string.Empty;
+    public string? Location { get; set; }
     public List<CachedItem> Items { get; set; } = new();
 }
 
@@ -217,6 +218,10 @@ public class CachedItem
     public uint Quantity { get; set; }
     public bool IsHQ { get; set; }
     public float Condition { get; set; }
+    public string? ContainerKey { get; set; }
+    public int? SlotIndex { get; set; }
+    public float? ConditionPercent { get; set; }
+    public bool? Equipped { get; set; }
 }
 
 [Serializable]
@@ -228,6 +233,9 @@ public class CachedMarketListing
     public uint Quantity { get; set; }
     public bool IsHQ { get; set; }
     public float Condition { get; set; }
+    public string? ContainerKey { get; set; }
+    public int? SlotIndex { get; set; }
+    public float? ConditionPercent { get; set; }
     public uint? UnitPrice { get; set; }
     public string? ListedAt { get; set; }
 }

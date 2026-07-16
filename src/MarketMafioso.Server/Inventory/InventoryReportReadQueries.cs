@@ -233,7 +233,7 @@ internal sealed class InventoryReportReadQueries(SqliteConnectionFactory connect
         var bags = new List<InventoryBag>();
         await using var command = connection.CreateCommand();
         command.CommandText = """
-            SELECT id, bag_name
+            SELECT id, bag_name, location
             FROM inventory_bags
             WHERE owner_id = $ownerId
             ORDER BY sort_order
@@ -247,6 +247,7 @@ internal sealed class InventoryReportReadQueries(SqliteConnectionFactory connect
             bags.Add(new InventoryBag
             {
                 BagName = reader.GetString(1),
+                Location = reader.IsDBNull(2) ? null : reader.GetString(2),
                 Items = await ReadItemsAsync(connection, bagId, cancellationToken),
             });
         }
@@ -262,7 +263,8 @@ internal sealed class InventoryReportReadQueries(SqliteConnectionFactory connect
         var items = new List<ItemSlot>();
         await using var command = connection.CreateCommand();
         command.CommandText = """
-            SELECT item_id, item_name, item_type, quantity, is_hq, condition
+            SELECT item_id, item_name, item_type, quantity, is_hq, condition,
+                   container_key, slot_index, condition_percent, equipped
             FROM inventory_items
             WHERE bag_id = $bagId
             ORDER BY sort_order
@@ -284,7 +286,8 @@ internal sealed class InventoryReportReadQueries(SqliteConnectionFactory connect
         var listings = new List<RetainerMarketListing>();
         await using var command = connection.CreateCommand();
         command.CommandText = """
-            SELECT item_id, item_name, item_type, quantity, is_hq, condition, unit_price, listed_at
+            SELECT item_id, item_name, item_type, quantity, is_hq, condition,
+                   unit_price, listed_at, container_key, slot_index, condition_percent
             FROM retainer_market_listings
             WHERE owner_id = $ownerId
             ORDER BY sort_order
