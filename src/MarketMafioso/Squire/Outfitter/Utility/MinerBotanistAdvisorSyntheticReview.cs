@@ -20,10 +20,13 @@ internal static class MinerBotanistAdvisorSyntheticReview
         string Label,
         MinerBotanistUtilityStats Stats,
         string[] Assumptions,
-        ulong SupplementalCostGil = 0,
-        bool UsesFood = false,
         bool IsDerivedAdversarial = false,
         int PriceScalePermille = 1000);
+
+    private sealed record MateriaEvidence(
+        uint ItemId,
+        int Tier,
+        ulong UnitPriceGil);
 
     private sealed record ItemEvidence(
         EquipmentLoadoutPosition Position,
@@ -32,32 +35,28 @@ internal static class MinerBotanistAdvisorSyntheticReview
         uint ItemLevel,
         EquipmentQuality Quality,
         EquipmentAcquisitionSourceKind SourceKind,
-        ulong AcquisitionCostGil,
-        string SourceLabel);
+        ulong GearCostGil,
+        int GuaranteedMateriaSlots,
+        IReadOnlyList<MateriaEvidence> Materia);
 
     private static readonly Benchmark[] Benchmarks =
     [
-        new("published-budget-raw", "Budget stopping point",
-            new(4_879, 5_444, 884),
-            ["No food", "Owned Star Tech baseline; unavailable as a procurement candidate"]),
-        new("published-budget-cloudsail", "Budget set with Cloudsail Meuniere HQ",
-            new(4_970, 5_620, 884),
-            ["Cloudsail Meuniere HQ · 10,800 gil/meal", "Recurring consumable remains outside JobUtilityScore"],
-            SupplementalCostGil: 10_800,
-            UsesFood: true),
-        new("published-mid-raw", "Mid-tier Crested meld set",
-            new(5_510, 5_470, 904),
-            ["No food", "HQ Crested gear and assigned materia priced from sale history"]),
-        new("published-high-raw", "High-tier Crested meld set",
-            new(5_700, 5_504, 995),
-            ["No food", "HQ Crested gear and heavier meld package priced from sale history"]),
+        new("crafted-unmelded", "Unmelded HQ crafted set",
+            new(4_879, 4_880, 884),
+            ["No food", "Every equipment piece is marketable and gil-acquirable"]),
+        new("published-mid-crafted", "Mid-tier crafted-tool meld set",
+            new(5_403, 5_408, 905),
+            ["No food", "Published mid-tier meld map projected onto the marketable Gold Thumb's Pickaxe"]),
+        new("published-high-crafted", "High-tier crafted-tool meld set",
+            new(5_593, 5_574, 985),
+            ["No food", "Published high-tier meld map projected onto the marketable Gold Thumb's Pickaxe"]),
         new("derived-high-regression", "Weaker, dearer adversarial set",
-            new(5_690, 5_494, 985),
+            new(5_583, 5_564, 975),
             ["Derived witness · 10% quote premium over the high-tier snapshot"],
             IsDerivedAdversarial: true,
             PriceScalePermille: 1100),
         new("derived-high-cost-only", "Identical-stat dearer adversarial set",
-            new(5_700, 5_504, 995),
+            new(5_593, 5_574, 985),
             ["Derived witness · 20% quote premium over the high-tier snapshot"],
             IsDerivedAdversarial: true,
             PriceScalePermille: 1200),
@@ -77,10 +76,7 @@ internal static class MinerBotanistAdvisorSyntheticReview
             solution => solution.Candidate.SolutionId,
             solution => profile.AssessAuthority(
                 solution.Utility,
-                solution.AcquisitionCostGil,
-                hasUnmodeledRelevantEffect: Benchmarks.First(value => value.Id == solution.Candidate.SolutionId).UsesFood ||
-                    context == MinerBotanistUtilityContextKind.CollectableEfficiency &&
-                    solution.Candidate.SolutionId == "published-high-raw"),
+                solution.AcquisitionCostGil),
             StringComparer.Ordinal);
         var nomination = pareto.Frontier
             .Where(solution => authority[solution.Candidate.SolutionId].AdvisorMayConsider)
@@ -122,6 +118,8 @@ internal static class MinerBotanistAdvisorSyntheticReview
         var selections = new List<EquipmentLoadoutSelection>(evidence.Length);
         foreach (var item in evidence)
         {
+            var itemMeldCost = EstimateMelds([item]);
+            var acquisitionCost = checked(item.GearCostGil + itemMeldCost.ExpectedCostGil);
             var definition = new EquipmentItemDefinition(
                 ItemId: item.ItemId,
                 Name: item.Name,
@@ -140,11 +138,14 @@ internal static class MinerBotanistAdvisorSyntheticReview
                 IsRecoverable: null,
                 IsExplicitlyProtectedFamily: false);
             var sourceCatalogKey = $"synthetic-review:{benchmark.Id}:{item.Position}";
+            var sourceLabel = item.Materia.Count == 0
+                ? "Market history · HQ gear median"
+                : "Market history · HQ gear median + expected meld failures";
             var offer = new EquipmentLoadoutOffer(
                 definition,
                 item.SourceKind,
-                item.SourceLabel,
-                UnitPriceGil: checked((uint)item.AcquisitionCostGil),
+                sourceLabel,
+                UnitPriceGil: checked((uint)acquisitionCost),
                 PriceIsEstimate: true,
                 Quality: item.Quality,
                 SourceCatalogKey: sourceCatalogKey);
@@ -154,20 +155,22 @@ internal static class MinerBotanistAdvisorSyntheticReview
                 Positions: new HashSet<EquipmentLoadoutPosition> { item.Position },
                 AvailableQuantity: 1,
                 Utility: EquipmentSolverUtilityVector.Empty,
-                AcquisitionCostGil: item.AcquisitionCostGil,
-                WorldVisitKey: item.SourceKind == EquipmentAcquisitionSourceKind.MarketBoard ? "aether-history-snapshot" : null,
-                VendorStopKey: item.SourceKind == EquipmentAcquisitionSourceKind.GilVendor ? "purple-scrip-exchange" : null,
-                PurchaseTransactions: item.AcquisitionCostGil > 0 ? 1 : 0,
+                AcquisitionCostGil: acquisitionCost,
+                WorldVisitKey: "aether-history-snapshot",
+                VendorStopKey: null,
+                PurchaseTransactions: 1,
                 EvidenceRisk: new(0, 0, 0),
                 VariantLabels: [item.Quality == EquipmentQuality.High ? "HQ" : "NQ", PriceEvidenceLabel]);
             offers.Add(exact.AllocationKey, exact);
             selections.Add(new(item.Position, offer.Key, ObservationId: exact.ObservationId));
         }
 
-        var itemCost = evidence.Aggregate(0UL, (total, item) => checked(total + item.AcquisitionCostGil));
-        var totalCost = checked(itemCost + benchmark.SupplementalCostGil);
-        var marketPurchases = evidence.Count(item => item.SourceKind == EquipmentAcquisitionSourceKind.MarketBoard);
-        var pricedPackages = evidence.Count(item => item.AcquisitionCostGil > 0);
+        var gearCost = evidence.Aggregate(0UL, (total, item) => checked(total + item.GearCostGil));
+        var meldCost = EstimateMelds(evidence);
+        var totalCost = selections.Aggregate(0UL, (total, selection) =>
+            checked(total + offers[selection.AllocationKey].AcquisitionCostGil));
+        var expectedMateriaCost = checked(totalCost - gearCost);
+        var planningCost = checked(gearCost + meldCost.PlanningCostGil);
         var labels = new List<string>
         {
             benchmark.Label,
@@ -175,6 +178,12 @@ internal static class MinerBotanistAdvisorSyntheticReview
             $"Stats {benchmark.Stats.Gathering}/{benchmark.Stats.Perception}/{benchmark.Stats.GatheringPoints}",
         };
         labels.AddRange(benchmark.Assumptions);
+        if (meldCost.Lines.Count > 0)
+        {
+            labels.Add($"Materia if every meld succeeds first try: {meldCost.OneCopyCostGil:N0} gil");
+            labels.Add($"Expected materia spend with failures: {expectedMateriaCost:N0} gil");
+            labels.Add($"90% whole-set stocking ceiling: {meldCost.PlanningCostGil:N0} gil materia · {planningCost:N0} gil total");
+        }
         if (benchmark.IsDerivedAdversarial)
             labels.Add("Adversarial witness; not a published recommendation");
         return new(
@@ -182,105 +191,129 @@ internal static class MinerBotanistAdvisorSyntheticReview
             profile.Evaluate(benchmark.Stats),
             totalCost,
             new(
-                WorldVisits: marketPurchases == 0 ? 0 : 1,
+                WorldVisits: 1,
                 VendorStops: 0,
-                PurchaseTransactions: pricedPackages + (benchmark.UsesFood ? 1 : 0)),
+                PurchaseTransactions: evidence.Length + evidence.SelectMany(item => item.Materia).Select(materia => materia.ItemId).Distinct().Count()),
             new(0, 0, 0),
-            labels);
+            labels,
+            new(
+                OptimisticCostGil: checked(gearCost + meldCost.OneCopyCostGil),
+                ExpectedCostGil: totalCost,
+                PlanningCostGil: planningCost,
+                PlanningConfidence: meldCost.PlanningConfidence,
+                Reasons: meldCost.Lines.Count == 0
+                    ? ["The loadout contains no materia, so optimistic, expected, and planning costs are identical."]
+                    :
+                    [
+                        "Expected cost includes geometric materia loss at each advanced-meld success rate.",
+                        "The planning ceiling stocks every risky meld so the whole set completes within that stock at least 90% of the time.",
+                    ]));
     }
 
     private static IEnumerable<ItemEvidence> Items(Benchmark benchmark)
     {
-        if (benchmark.Id is "published-budget-raw" or "published-budget-cloudsail")
-            return BudgetItems();
-
-        var items = benchmark.Id == "published-mid-raw" ? MidTierItems() : HighTierItems();
+        var items = benchmark.Id switch
+        {
+            "crafted-unmelded" => BaseCraftedItems(),
+            "published-mid-crafted" => MidTierItems(),
+            _ => HighTierItems(),
+        };
         if (benchmark.PriceScalePermille == 1000)
             return items;
         return items.Select(item => item with
         {
-            AcquisitionCostGil = checked(item.AcquisitionCostGil * (ulong)benchmark.PriceScalePermille / 1000UL),
-            SourceLabel = $"{item.SourceLabel} · {benchmark.PriceScalePermille / 10}% adversarial quote",
+            GearCostGil = Scale(item.GearCostGil, benchmark.PriceScalePermille),
+            Materia = item.Materia.Select(materia => materia with
+            {
+                UnitPriceGil = Scale(materia.UnitPriceGil, benchmark.PriceScalePermille),
+            }).ToArray(),
         });
     }
 
-    private static ItemEvidence[] BudgetItems() =>
+    private static ItemEvidence[] BaseCraftedItems() =>
     [
-        OwnedBaseline(EquipmentLoadoutPosition.MainHand, 49334, "Star Tech Pickaxe"),
-        OwnedBaseline(EquipmentLoadoutPosition.OffHand, 49345, "Star Tech Sledgehammer"),
-        OwnedBaseline(EquipmentLoadoutPosition.Head, 49352, "Star Tech Goggles of Gathering"),
-        OwnedBaseline(EquipmentLoadoutPosition.Body, 49353, "Star Tech Coat of Gathering"),
-        OwnedBaseline(EquipmentLoadoutPosition.Hands, 49354, "Star Tech Work Gloves of Gathering"),
-        OwnedBaseline(EquipmentLoadoutPosition.Legs, 49355, "Star Tech Kecks of Gathering"),
-        OwnedBaseline(EquipmentLoadoutPosition.Feet, 49356, "Star Tech Shoes of Gathering"),
-        OwnedBaseline(EquipmentLoadoutPosition.Ears, 49361, "Star Tech Ear Cuff of Gathering"),
-        OwnedBaseline(EquipmentLoadoutPosition.Neck, 49362, "Star Tech Choker of Gathering"),
-        OwnedBaseline(EquipmentLoadoutPosition.Wrists, 49363, "Star Tech Bracelet of Gathering"),
-        OwnedBaseline(EquipmentLoadoutPosition.LeftRing, 49364, "Star Tech Ring of Gathering"),
-        OwnedBaseline(EquipmentLoadoutPosition.RightRing, 49364, "Star Tech Ring of Gathering"),
+        Market(EquipmentLoadoutPosition.MainHand, 47171, "Gold Thumb's Pickaxe", 300_767, 1),
+        Market(EquipmentLoadoutPosition.OffHand, 47182, "Gold Thumb's Sledgehammer", 349_975, 1),
+        Market(EquipmentLoadoutPosition.Head, 47189, "Crested Hood of Gathering", 258_926, 2),
+        Market(EquipmentLoadoutPosition.Body, 47190, "Crested Coat of Gathering", 319_980, 2),
+        Market(EquipmentLoadoutPosition.Hands, 47191, "Crested Gloves of Gathering", 296_897, 2),
+        Market(EquipmentLoadoutPosition.Legs, 47192, "Crested Slops of Gathering", 299_868, 2),
+        Market(EquipmentLoadoutPosition.Feet, 47193, "Crested Boots of Gathering", 259_445, 2),
+        Market(EquipmentLoadoutPosition.Ears, 47198, "Crested Earrings of Gathering", 125_000, 1),
+        Market(EquipmentLoadoutPosition.Neck, 47199, "Crested Necklace of Gathering", 130_327, 1),
+        Market(EquipmentLoadoutPosition.Wrists, 47200, "Crested Bracelet of Gathering", 120_000, 1),
+        Market(EquipmentLoadoutPosition.LeftRing, 47201, "Crested Ring of Gathering", 129_997, 1),
+        Market(EquipmentLoadoutPosition.RightRing, 47201, "Crested Ring of Gathering", 129_997, 1),
     ];
 
-    private static ItemEvidence[] MidTierItems() =>
-    [
-        Relic(EquipmentLoadoutPosition.MainHand, "Pickaxe of Stars"),
-        Market(EquipmentLoadoutPosition.OffHand, 47182, "Gold Thumb's Sledgehammer", 351_713),
-        Market(EquipmentLoadoutPosition.Head, 47189, "Crested Hood of Gathering", 263_439),
-        Market(EquipmentLoadoutPosition.Body, 47190, "Crested Coat of Gathering", 323_330),
-        Market(EquipmentLoadoutPosition.Hands, 47191, "Crested Gloves of Gathering", 300_247),
-        Market(EquipmentLoadoutPosition.Legs, 47192, "Crested Slops of Gathering", 304_698),
-        Market(EquipmentLoadoutPosition.Feet, 47193, "Crested Boots of Gathering", 262_910),
-        Market(EquipmentLoadoutPosition.Ears, 47198, "Crested Earrings of Gathering", 129_193),
-        Market(EquipmentLoadoutPosition.Neck, 47199, "Crested Necklace of Gathering", 134_520),
-        Market(EquipmentLoadoutPosition.Wrists, 47200, "Crested Bracelet of Gathering", 124_193),
-        Market(EquipmentLoadoutPosition.LeftRing, 47201, "Crested Ring of Gathering", 134_190),
-        Market(EquipmentLoadoutPosition.RightRing, 47201, "Crested Ring of Gathering", 134_190),
-    ];
+    private static ItemEvidence[] MidTierItems() => ApplyMelds(BaseCraftedItems(), new Dictionary<EquipmentLoadoutPosition, MateriaEvidence[]>
+    {
+        [EquipmentLoadoutPosition.MainHand] = [M(41777, 12, 600)],
+        [EquipmentLoadoutPosition.OffHand] = [M(41776, 12, 999), M(33936, 10, 739)],
+        [EquipmentLoadoutPosition.Head] = [M(41775, 12, 977), M(41776, 12, 999), M(33936, 10, 739), M(33922, 9, 1_798)],
+        [EquipmentLoadoutPosition.Body] = [M(41775, 12, 977), M(41775, 12, 977), M(33935, 10, 746), M(33923, 9, 650)],
+        [EquipmentLoadoutPosition.Hands] = [M(41775, 12, 977), M(41775, 12, 977), M(33935, 10, 746), M(33923, 9, 650)],
+        [EquipmentLoadoutPosition.Legs] = [M(41775, 12, 977), M(41776, 12, 999), M(33935, 10, 746), M(33922, 9, 1_798), M(5688, 5, 310)],
+        [EquipmentLoadoutPosition.Feet] = [M(41776, 12, 999), M(41776, 12, 999), M(33937, 10, 317), M(41763, 11, 1_150)],
+        [EquipmentLoadoutPosition.Ears] = [M(41776, 12, 999), M(33935, 10, 746), M(33923, 9, 650), M(33922, 9, 1_798)],
+        [EquipmentLoadoutPosition.Neck] = [M(41776, 12, 999), M(33935, 10, 746), M(33923, 9, 650), M(33922, 9, 1_798)],
+        [EquipmentLoadoutPosition.Wrists] = [M(41776, 12, 999), M(33935, 10, 746), M(33923, 9, 650), M(33922, 9, 1_798)],
+        [EquipmentLoadoutPosition.LeftRing] = [M(41776, 12, 999), M(33935, 10, 746), M(33923, 9, 650), M(33922, 9, 1_798)],
+        [EquipmentLoadoutPosition.RightRing] = [M(41776, 12, 999), M(33935, 10, 746), M(33923, 9, 650), M(33922, 9, 1_798)],
+    });
 
-    private static ItemEvidence[] HighTierItems() =>
-    [
-        Relic(EquipmentLoadoutPosition.MainHand, "Pickaxe of Stars"),
-        Market(EquipmentLoadoutPosition.OffHand, 47182, "Gold Thumb's Sledgehammer", 355_273),
-        Market(EquipmentLoadoutPosition.Head, 47189, "Crested Hood of Gathering", 264_095),
-        Market(EquipmentLoadoutPosition.Body, 47190, "Crested Coat of Gathering", 325_083),
-        Market(EquipmentLoadoutPosition.Hands, 47191, "Crested Gloves of Gathering", 301_978),
-        Market(EquipmentLoadoutPosition.Legs, 47192, "Crested Slops of Gathering", 306_517),
-        Market(EquipmentLoadoutPosition.Feet, 47193, "Crested Boots of Gathering", 264_281),
-        Market(EquipmentLoadoutPosition.Ears, 47198, "Crested Earrings of Gathering", 130_152),
-        Market(EquipmentLoadoutPosition.Neck, 47199, "Crested Necklace of Gathering", 135_479),
-        Market(EquipmentLoadoutPosition.Wrists, 47200, "Crested Bracelet of Gathering", 125_152),
-        Market(EquipmentLoadoutPosition.LeftRing, 47201, "Crested Ring of Gathering", 135_211),
-        Market(EquipmentLoadoutPosition.RightRing, 47201, "Crested Ring of Gathering", 135_211),
-    ];
+    private static ItemEvidence[] HighTierItems() => ApplyMelds(BaseCraftedItems(), new Dictionary<EquipmentLoadoutPosition, MateriaEvidence[]>
+    {
+        [EquipmentLoadoutPosition.MainHand] = [M(41776, 12, 999), M(41776, 12, 999), M(41763, 11, 1_150), M(41763, 11, 1_150), M(41763, 11, 1_150)],
+        [EquipmentLoadoutPosition.OffHand] = [M(41776, 12, 999), M(41776, 12, 999), M(41763, 11, 1_150), M(41763, 11, 1_150), M(41762, 11, 1_000)],
+        [EquipmentLoadoutPosition.Head] = [M(41775, 12, 977), M(41775, 12, 977), M(41775, 12, 977), M(41763, 11, 1_150), M(41764, 11, 1_088)],
+        [EquipmentLoadoutPosition.Body] = [M(41775, 12, 977), M(41775, 12, 977), M(41776, 12, 999), M(41763, 11, 1_150), M(41762, 11, 1_000)],
+        [EquipmentLoadoutPosition.Hands] = [M(41775, 12, 977), M(41775, 12, 977), M(41775, 12, 977), M(41762, 11, 1_000), M(41763, 11, 1_150)],
+        [EquipmentLoadoutPosition.Legs] = [M(41775, 12, 977), M(41775, 12, 977), M(41776, 12, 999), M(33922, 9, 1_798), M(5692, 4, 1_898)],
+        [EquipmentLoadoutPosition.Feet] = [M(41776, 12, 999), M(41776, 12, 999), M(41777, 12, 600), M(41764, 11, 1_088), M(41763, 11, 1_150)],
+        [EquipmentLoadoutPosition.Ears] = [M(41775, 12, 977), M(41776, 12, 999), M(41764, 11, 1_088), M(41762, 11, 1_000), M(41764, 11, 1_088)],
+        [EquipmentLoadoutPosition.Neck] = [M(41775, 12, 977), M(41776, 12, 999), M(41764, 11, 1_088), M(41762, 11, 1_000), M(41764, 11, 1_088)],
+        [EquipmentLoadoutPosition.Wrists] = [M(41775, 12, 977), M(41776, 12, 999), M(41764, 11, 1_088), M(41762, 11, 1_000), M(41764, 11, 1_088)],
+        [EquipmentLoadoutPosition.LeftRing] = [M(41775, 12, 977), M(41776, 12, 999), M(41764, 11, 1_088), M(41762, 11, 1_000), M(41763, 11, 1_150)],
+        [EquipmentLoadoutPosition.RightRing] = [M(41775, 12, 977), M(41776, 12, 999), M(41764, 11, 1_088), M(41762, 11, 1_000), M(41763, 11, 1_150)],
+    });
 
-    private static ItemEvidence OwnedBaseline(EquipmentLoadoutPosition position, uint itemId, string name) => new(
-        position,
-        itemId,
-        name,
-        750,
-        EquipmentQuality.Normal,
-        EquipmentAcquisitionSourceKind.Owned,
-        0,
-        "Owned baseline premise · not procured");
-
-    private static ItemEvidence Relic(EquipmentLoadoutPosition position, string name) => new(
-        position,
-        51786,
-        name,
-        780,
-        EquipmentQuality.Normal,
-        EquipmentAcquisitionSourceKind.Owned,
-        0,
-        "Model-set relic · no gil acquisition price");
-
-    private static ItemEvidence Market(EquipmentLoadoutPosition position, uint itemId, string name, ulong cost) => new(
+    private static ItemEvidence Market(
+        EquipmentLoadoutPosition position,
+        uint itemId,
+        string name,
+        ulong gearCost,
+        int guaranteedMateriaSlots) => new(
         position,
         itemId,
         name,
         750,
         EquipmentQuality.High,
         EquipmentAcquisitionSourceKind.MarketBoard,
-        cost,
-        "Market history · HQ gear plus assigned melds");
+        gearCost,
+        guaranteedMateriaSlots,
+        []);
+
+    private static MateriaEvidence M(uint itemId, int tier, ulong unitPriceGil) => new(itemId, tier, unitPriceGil);
+
+    private static ItemEvidence[] ApplyMelds(
+        IEnumerable<ItemEvidence> items,
+        IReadOnlyDictionary<EquipmentLoadoutPosition, MateriaEvidence[]> melds) => items
+        .Select(item => item with { Materia = melds.GetValueOrDefault(item.Position) ?? [] })
+        .ToArray();
+
+    private static MateriaMeldCostEstimate EstimateMelds(IEnumerable<ItemEvidence> items) =>
+        MateriaMeldCostEstimator.Estimate(items.SelectMany(item => item.Materia.Select((materia, index) =>
+            new MateriaMeldCostInput(
+                $"{item.Position}:{index + 1}",
+                materia.UnitPriceGil,
+                index < item.GuaranteedMateriaSlots
+                    ? 1d
+                    : DohDolMateriaMeldingRates.Resolve(true, materia.Tier, index - item.GuaranteedMateriaSlots))))
+            .ToArray());
+
+    private static ulong Scale(ulong value, int permille) =>
+        checked(value * (ulong)permille / 1000UL);
 
     private static EquipmentSlot Slot(EquipmentLoadoutPosition position) => position switch
     {

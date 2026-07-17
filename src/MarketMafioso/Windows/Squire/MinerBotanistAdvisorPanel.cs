@@ -287,12 +287,15 @@ internal sealed class MinerBotanistAdvisorPanel
 
     private void DrawDecisionSummary(MinerBotanistReadOnlyAdvice advice, EquipmentDecisionSolution selected)
     {
-        if (!ImGui.BeginTable("##SquireAdvisorSummary", 4, ImGuiTableFlags.BordersInnerV | ImGuiTableFlags.SizingStretchProp))
+        var columnCount = selected.AcquisitionCostEstimate is null ? 4 : 5;
+        if (!ImGui.BeginTable("##SquireAdvisorSummary", columnCount, ImGuiTableFlags.BordersInnerV | ImGuiTableFlags.SizingStretchProp))
             return;
         SummaryCell("Profile", $"{MinerBotanistUtilityProfile.ProfileVersion} · {ContextLabel(context)}", MarketMafiosoUiTheme.Header);
         SummaryCell("Advisor", advice.Nomination is null ? "Abstained" : FormatCost(advice.Nomination.AcquisitionCostGil),
             advice.Nomination is null ? MarketMafiosoUiTheme.Warning : MarketMafiosoUiTheme.Success);
-        SummaryCell("Selected", FormatCost(selected.AcquisitionCostGil), MarketMafiosoUiTheme.Link);
+        SummaryCell(selected.AcquisitionCostEstimate is null ? "Selected" : "Selected expected", FormatCost(selected.AcquisitionCostGil), MarketMafiosoUiTheme.Link);
+        if (selected.AcquisitionCostEstimate is { } estimate)
+            SummaryCell($"Selected {estimate.PlanningConfidence:P0} plan", FormatCost(estimate.PlanningCostGil), MarketMafiosoUiTheme.Warning);
         SummaryCell("Utility", selected.Utility.UtilityScore.ToString("N1"), MarketMafiosoUiTheme.Header);
         ImGui.EndTable();
     }
@@ -324,7 +327,8 @@ internal sealed class MinerBotanistAdvisorPanel
             ImGui.BeginTooltip();
             ImGui.TextColored(MarketMafiosoUiTheme.Header,
                 solution.VariantLabels.FirstOrDefault() ?? solution.Candidate.SolutionId);
-            ImGui.TextUnformatted($"{FormatCost(solution.AcquisitionCostGil)} · utility {solution.Utility.UtilityScore:N1}");
+            ImGui.TextUnformatted($"{FormatCost(solution.AcquisitionCostGil)}{(solution.AcquisitionCostEstimate is null ? "" : " expected")} · utility {solution.Utility.UtilityScore:N1}");
+            DrawPlanningCost(solution);
             ImGui.TextColored(MarketMafiosoUiTheme.Muted,
                 $"{solution.Burden.PurchaseTransactions:N0} purchase(s), {solution.Burden.WorldVisits:N0} world visit(s)");
             ImGui.EndTooltip();
@@ -384,7 +388,8 @@ internal sealed class MinerBotanistAdvisorPanel
                 ImGui.TextColored(MarketMafiosoUiTheme.Header,
                     solution.VariantLabels.FirstOrDefault() ?? solution.Candidate.SolutionId);
                 ImGui.TextColored(MarketMafiosoUiTheme.Muted, ContextLabel(hoveredContext));
-                ImGui.TextUnformatted($"{FormatCost(solution.AcquisitionCostGil)} · utility {solution.Utility.UtilityScore:N1}");
+                ImGui.TextUnformatted($"{FormatCost(solution.AcquisitionCostGil)}{(solution.AcquisitionCostEstimate is null ? "" : " expected")} · utility {solution.Utility.UtilityScore:N1}");
+                DrawPlanningCost(solution);
                 ImGui.TextColored(MarketMafiosoUiTheme.Muted,
                     $"{solution.Burden.PurchaseTransactions:N0} purchase(s), {solution.Burden.WorldVisits:N0} world visit(s)");
                 ImGui.EndTooltip();
@@ -430,7 +435,7 @@ internal sealed class MinerBotanistAdvisorPanel
                 ImGuiTableFlags.RowBg | ImGuiTableFlags.BordersInnerH | ImGuiTableFlags.SizingStretchProp,
                 new Vector2(0, Math.Min(150f, 30f + advice.Frontier!.Pareto.Frontier.Count * 25f))))
             return;
-        ImGui.TableSetupColumn("Cost", ImGuiTableColumnFlags.WidthFixed, 105f);
+        ImGui.TableSetupColumn(selected.AcquisitionCostEstimate is null ? "Cost" : "Expected cost", ImGuiTableColumnFlags.WidthFixed, 105f);
         ImGui.TableSetupColumn("Utility", ImGuiTableColumnFlags.WidthFixed, 75f);
         ImGui.TableSetupColumn("Authority", ImGuiTableColumnFlags.WidthStretch);
         ImGui.TableSetupColumn("Burden", ImGuiTableColumnFlags.WidthFixed, 120f);
@@ -481,7 +486,7 @@ internal sealed class MinerBotanistAdvisorPanel
         ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.WidthStretch, 1.5f);
         ImGui.TableSetupColumn("Quality", ImGuiTableColumnFlags.WidthFixed, 65f);
         ImGui.TableSetupColumn("Source", ImGuiTableColumnFlags.WidthStretch);
-        ImGui.TableSetupColumn("Cost", ImGuiTableColumnFlags.WidthFixed, 95f);
+        ImGui.TableSetupColumn(selected.AcquisitionCostEstimate is null ? "Cost" : "Expected cost", ImGuiTableColumnFlags.WidthFixed, 95f);
         ImGui.TableHeadersRow();
         foreach (var selection in selected.Candidate.Selections.OrderBy(value => value.Position))
         {
@@ -547,6 +552,14 @@ internal sealed class MinerBotanistAdvisorPanel
         _ => "same cost",
     };
     private static string FormatQuality(EquipmentQuality value) => value == EquipmentQuality.High ? "HQ" : "NQ";
+
+    private static void DrawPlanningCost(EquipmentDecisionSolution solution)
+    {
+        if (solution.AcquisitionCostEstimate is not { } estimate || estimate.PlanningCostGil <= estimate.ExpectedCostGil)
+            return;
+        ImGui.TextColored(MarketMafiosoUiTheme.Muted,
+            $"{estimate.PlanningConfidence:P0} whole-set stock: {FormatCost(estimate.PlanningCostGil)}");
+    }
 
     private static void SummaryCell(string label, string value, Vector4 color)
     {

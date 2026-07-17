@@ -17,31 +17,30 @@ public sealed class MinerBotanistAdvisorSyntheticReviewTests
         Assert.Equal(MinerBotanistAdvisorStatus.Complete, advice.Status);
         Assert.NotNull(advice.Frontier);
         Assert.Equal(
-            ["published-budget-raw", "published-budget-cloudsail", "published-mid-raw", "published-high-raw"],
+            ["crafted-unmelded", "published-mid-crafted", "published-high-crafted"],
             advice.Frontier.Pareto.Frontier
                 .OrderBy(solution => solution.AcquisitionCostGil)
                 .Select(solution => solution.Candidate.SolutionId));
         Assert.DoesNotContain(
             advice.Frontier.Pareto.Frontier,
             solution => solution.Candidate.SolutionId.StartsWith("derived-", StringComparison.Ordinal));
-        Assert.Equal("published-mid-raw", advice.Nomination?.Candidate.SolutionId);
-        Assert.Contains(advice.OffersByAllocation.Values, offer => offer.Offer.ResolvedQuality == EquipmentQuality.Normal);
-        Assert.Contains(advice.OffersByAllocation.Values, offer => offer.Offer.ResolvedQuality == EquipmentQuality.High);
-        Assert.Contains(advice.OffersByAllocation.Values, offer => offer.Offer.Definition.Name == "Star Tech Pickaxe");
+        Assert.Equal("published-mid-crafted", advice.Nomination?.Candidate.SolutionId);
+        Assert.All(advice.OffersByAllocation.Values, offer => Assert.Equal(EquipmentQuality.High, offer.Offer.ResolvedQuality));
+        Assert.Contains(advice.OffersByAllocation.Values, offer => offer.Offer.Definition.Name == "Gold Thumb's Pickaxe");
         Assert.Contains(advice.OffersByAllocation.Values, offer => offer.Offer.Definition.Name == "Crested Coat of Gathering");
         Assert.All(advice.OffersByAllocation.Values, offer => Assert.InRange(offer.Offer.Definition.ItemId, 1u, 100_000u));
         Assert.All(advice.OffersByAllocation.Values, offer => Assert.DoesNotContain("illustrative", offer.Offer.SourceLabel, StringComparison.OrdinalIgnoreCase));
-        Assert.Equal(0UL, Solution(advice, "published-budget-raw").AcquisitionCostGil);
-        Assert.Equal(10_800UL, Solution(advice, "published-budget-cloudsail").AcquisitionCostGil);
-        Assert.Equal(2_462_623UL, Solution(advice, "published-mid-raw").AcquisitionCostGil);
-        Assert.Equal(2_478_432UL, Solution(advice, "published-high-raw").AcquisitionCostGil);
-        Assert.All(
-            advice.OffersByAllocation.Values.Where(offer => offer.Offer.Definition.Name.StartsWith("Star Tech", StringComparison.Ordinal)),
-            offer =>
-            {
-                Assert.Equal(EquipmentAcquisitionSourceKind.Owned, offer.Offer.SourceKind);
-                Assert.Equal(0UL, offer.AcquisitionCostGil);
-            });
+        Assert.DoesNotContain(advice.OffersByAllocation.Values, offer => offer.Offer.SourceKind != EquipmentAcquisitionSourceKind.MarketBoard);
+        Assert.DoesNotContain(advice.OffersByAllocation.Values, offer => offer.Offer.Definition.ItemId is 49334 or 49345 or 49352 or 49353 or 49354 or 49355 or 49356 or 49361 or 49362 or 49363 or 49364 or 51786);
+        Assert.Equal(2_721_179UL, Solution(advice, "crafted-unmelded").AcquisitionCostGil);
+        Assert.Equal(3_009_117UL, Solution(advice, "published-mid-crafted").AcquisitionCostGil);
+        Assert.Equal(3_275_797UL, Solution(advice, "published-high-crafted").AcquisitionCostGil);
+        Assert.Contains(Solution(advice, "published-high-crafted").VariantLabels, label => label.Contains("3,136,992 gil materia", StringComparison.Ordinal));
+        Assert.Contains(Solution(advice, "published-high-crafted").VariantLabels, label => label.Contains("5,858,171 gil total", StringComparison.Ordinal));
+        Assert.All(advice.Frontier.Pareto.Frontier, solution => Assert.Equal(
+            solution.AcquisitionCostGil,
+            solution.Candidate.Selections.Aggregate(0UL, (total, selection) =>
+                checked(total + advice.OffersByAllocation[selection.AllocationKey].AcquisitionCostGil))));
     }
 
     [Fact]
@@ -71,11 +70,12 @@ public sealed class MinerBotanistAdvisorSyntheticReviewTests
             new("collectables", builder.Build(collectables.Frontier!.Pareto).Spec),
         ]);
 
-        Assert.Contains("ordinary/published-budget-raw", overlay.DatumIdentities.Keys);
-        Assert.Contains("legendary/published-high-raw", overlay.DatumIdentities.Keys);
-        Assert.Contains("collectables/published-mid-raw", overlay.DatumIdentities.Keys);
+        Assert.Contains("ordinary/crafted-unmelded", overlay.DatumIdentities.Keys);
+        Assert.Contains("legendary/published-high-crafted", overlay.DatumIdentities.Keys);
+        Assert.Contains("collectables/published-mid-crafted", overlay.DatumIdentities.Keys);
         Assert.Equal("Acquisition cost", overlay.Spec.XAxis.Label);
         Assert.Equal("Job utility", overlay.Spec.YAxis.Label);
+        Assert.InRange(overlay.Spec.YDomain.Maximum, 0d, 110d);
     }
 
     private static EquipmentDecisionSolution Solution(MinerBotanistReadOnlyAdvice advice, string id) =>

@@ -38,7 +38,7 @@ public sealed class MinerBotanistUtilityProfile : IEquipmentExactSolverUtilityMo
     public const uint MinerClassJobId = 16;
     public const uint BotanistClassJobId = 17;
     public const string ProfileId = "squire.min-btn.level-100";
-    public const string ProfileVersion = "7.51-v2";
+    public const string ProfileVersion = "7.51-v3";
     public const string LegendaryContextId = "legendary-node-general-yield";
     public const string CollectableContextId = "collectable-i730-efficiency";
     public const string OrdinaryResourceBenchmarkContextId = "research-only:ordinary-resource";
@@ -62,7 +62,7 @@ public sealed class MinerBotanistUtilityProfile : IEquipmentExactSolverUtilityMo
             new("gp", EquipmentStatSemantic.GatheringPoints, EquipmentUtilityRuleKind.PreferMore, 1d / 11d, null,
                 "GP contributes bounded monotonic progress; only explicitly modeled action or integrity thresholds provide a material step."),
         ],
-        "Patch 7.51 pilot. Capability steps dominate a maximum of 300 monotonic tie-break points. The score orders supported loadouts but does not price gil or grant its own recommendation authority.");
+        "Patch 7.51 pilot. Each task normalizes its capability steps and bounded monotonic tie-breaks onto a stable 0-100 envelope. The score orders supported loadouts but does not price gil or grant its own recommendation authority.");
 
     private static readonly EquipmentUtilityComponentDefinition[] Components =
     [
@@ -122,7 +122,9 @@ public sealed class MinerBotanistUtilityProfile : IEquipmentExactSolverUtilityMo
             ],
             IsSupported: supported,
             Diagnostics: diagnostics,
-            FixedComponents: fixedStats is null ? null : ToVector(fixedStats)));
+            FixedComponents: fixedStats is null ? null : ToVector(fixedStats),
+            RawScoreMaximum: MaximumRawScore(contextKind),
+            NormalizedScoreMaximum: 100d));
         baselineEvaluation = model.Evaluate(ToVector(baseline));
     }
 
@@ -280,4 +282,8 @@ public sealed class MinerBotanistUtilityProfile : IEquipmentExactSolverUtilityMo
         MinerBotanistUtilityContextKind.CollectableEfficiency => "Patch 7.51 i730 collectable action and proc efficiency",
         _ => "Research-only regular non-legendary resource-node benchmark",
     };
+
+    private static double MaximumRawScore(MinerBotanistUtilityContextKind contextKind) =>
+        Components.Sum(component => component.MaximumContribution) +
+        Capabilities(contextKind).Sum(capability => capability.ScoreContribution);
 }

@@ -66,7 +66,7 @@ public sealed class MinerBotanistUtilityProfileTests
 
         Assert.DoesNotContain(gatheringOnly.Thresholds, threshold => threshold.ThresholdId == "collectable-actions-i730" && threshold.Satisfied);
         Assert.Contains(both.Thresholds, threshold => threshold.ThresholdId == "collectable-actions-i730" && threshold.Satisfied);
-        Assert.True(both.UtilityScore - gatheringOnly.UtilityScore > 900);
+        Assert.True(both.UtilityScore - gatheringOnly.UtilityScore > 25);
     }
 
     [Theory]
@@ -106,6 +106,22 @@ public sealed class MinerBotanistUtilityProfileTests
         Assert.Empty(candidate.Thresholds);
         Assert.Equal(UpgradeAssessment.Unsupported, candidate.Assessment);
         Assert.False(authority.AdvisorMayConsider);
+    }
+
+    [Fact]
+    public void TaskSpecificCapabilityCountsShareAStablePlotScale()
+    {
+        var stats = new MinerBotanistUtilityStats(5_700, 5_504, 995);
+        var ordinary = new MinerBotanistUtilityProfile(
+            MinerBotanistUtilityContextKind.OrdinaryResourceBenchmark,
+            stats,
+            MinerBotanistUtilityProfile.MinerClassJobId).Evaluate(stats);
+        var legendary = Legendary(stats).Evaluate(stats);
+        var collectable = Collectable(stats).Evaluate(stats);
+
+        Assert.All([ordinary, legendary, collectable], evaluation => Assert.InRange(evaluation.UtilityScore, 0d, 100d));
+        Assert.True(legendary.UtilityScore < ordinary.UtilityScore * 2d);
+        Assert.True(collectable.UtilityScore < ordinary.UtilityScore * 2d);
     }
 
     [Fact]
