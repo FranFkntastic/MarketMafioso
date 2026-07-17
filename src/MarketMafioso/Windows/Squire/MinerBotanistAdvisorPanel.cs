@@ -30,7 +30,16 @@ internal sealed class MinerBotanistAdvisorPanel
     private MinerBotanistReadOnlyAdvice? lastAdvice;
     private string? selectedSolutionId;
 #if DEBUG
+    private static readonly MinerBotanistAdvisorSyntheticScenarioKind[] SyntheticScenarioOrder =
+    [
+        MinerBotanistAdvisorSyntheticScenarioKind.Success,
+        MinerBotanistAdvisorSyntheticScenarioKind.Refreshing,
+        MinerBotanistAdvisorSyntheticScenarioKind.StaleEvidence,
+        MinerBotanistAdvisorSyntheticScenarioKind.IncompleteEvidence,
+        MinerBotanistAdvisorSyntheticScenarioKind.Abstention,
+    ];
     private MinerBotanistReadOnlyAdvice? syntheticReviewAdvice;
+    private MinerBotanistAdvisorSyntheticScenarioKind syntheticScenarioKind;
     private readonly HashSet<MinerBotanistUtilityContextKind> visibleSyntheticContexts =
         [MinerBotanistUtilityContextKind.OrdinaryResourceBenchmark];
 #endif
@@ -53,7 +62,12 @@ internal sealed class MinerBotanistAdvisorPanel
         MinerBotanistReadOnlyAdvice? displayedAdvice = state.Advice;
 #if DEBUG
         var syntheticReviewActive = syntheticReviewAdvice is not null;
-        displayedAdvice = syntheticReviewAdvice ?? displayedAdvice;
+        var syntheticPresentation = syntheticReviewAdvice is null
+            ? null
+            : MinerBotanistAdvisorSyntheticReview.Present(syntheticScenarioKind, syntheticReviewAdvice);
+        displayedAdvice = syntheticPresentation is { ShowPriorFrontier: true }
+            ? syntheticReviewAdvice
+            : syntheticReviewActive ? null : displayedAdvice;
 #endif
         ImGui.TextColored(MarketMafiosoUiTheme.Header, "Outfitter — cost / utility advisor");
         ImGui.TextWrapped(MinerBotanistReadOnlyAdvisor.AdvisoryRule);
@@ -65,12 +79,22 @@ internal sealed class MinerBotanistAdvisorPanel
             ImGui.TextColored(MarketMafiosoUiTheme.Muted,
                 "Item names are game data; only marketable components use Aether sale-history medians. No live character or live listing is used.");
             ImGui.TextColored(MarketMafiosoUiTheme.Muted, MinerBotanistAdvisorSyntheticReview.PriceEvidenceLabel);
-            ImGui.TextColored(MarketMafiosoUiTheme.Success, displayedAdvice!.Diagnostic);
+            ImGui.TextColored(syntheticPresentation!.AdviceIsRetained ? MarketMafiosoUiTheme.Warning : StatusColor(syntheticPresentation.Stage),
+                syntheticPresentation.AdviceIsRetained
+                    ? $"LAST VALID FRONTIER · {syntheticPresentation.Label}"
+                    : syntheticPresentation.Label);
+            if (syntheticPresentation.ShowProgress)
+                ImGui.ProgressBar((float)syntheticPresentation.Completed / syntheticPresentation.Total, new Vector2(-1, 0),
+                    $"{syntheticPresentation.Completed:N0} / {syntheticPresentation.Total:N0}");
+            ImGui.TextColored(StatusColor(syntheticPresentation.Stage), syntheticPresentation.Message);
         }
         else
 #endif
         {
             ImGui.TextColored(MarketMafiosoUiTheme.Muted, state.CoverageLabel);
+            if (state.AdviceIsRetained)
+                ImGui.TextColored(MarketMafiosoUiTheme.Warning,
+                    RetainedAdviceLabel(state.Stage));
             if (state.IsBusy)
             {
                 var fraction = state.Total is > 0 ? Math.Clamp((float)state.Completed / state.Total.Value, 0f, 1f) : 0f;
@@ -84,6 +108,13 @@ internal sealed class MinerBotanistAdvisorPanel
 
         if (displayedAdvice is not { Frontier: { } frontier } advice || frontier.Pareto.Frontier.Count == 0)
         {
+#if DEBUG
+            if (syntheticReviewActive)
+            {
+                ImGui.TextWrapped("No recommendation was produced; the advisor stopped at the displayed abstention boundary.");
+                return;
+            }
+#endif
             DrawEmptyState(state);
             return;
         }
@@ -181,6 +212,9 @@ internal sealed class MinerBotanistAdvisorPanel
         }
         if (syntheticReviewAdvice is not null)
         {
+            DrawSyntheticScenarioControl();
+            if (syntheticScenarioKind == MinerBotanistAdvisorSyntheticScenarioKind.Abstention)
+                return;
             ImGui.TextColored(MarketMafiosoUiTheme.Muted, "PLOT SERIES");
             ImGui.SameLine();
             foreach (var candidate in ContextOrder)
@@ -245,6 +279,7 @@ internal sealed class MinerBotanistAdvisorPanel
             ? MinerBotanistAdvisorSyntheticReview.Build(context)
             : null;
         ResetVisibleSyntheticContexts();
+        syntheticScenarioKind = MinerBotanistAdvisorSyntheticScenarioKind.Success;
         lastAdvice = null;
         selectedSolutionId = null;
     }
@@ -253,6 +288,7 @@ internal sealed class MinerBotanistAdvisorPanel
     {
         syntheticReviewAdvice = MinerBotanistAdvisorSyntheticReview.Build(context);
         ResetVisibleSyntheticContexts();
+        syntheticScenarioKind = MinerBotanistAdvisorSyntheticScenarioKind.Success;
         lastAdvice = null;
         selectedSolutionId = null;
     }
@@ -262,6 +298,61 @@ internal sealed class MinerBotanistAdvisorPanel
         visibleSyntheticContexts.Clear();
         visibleSyntheticContexts.Add(context);
     }
+
+    private void DrawSyntheticScenarioControl()
+    {
+        ImGui.SetNextItemWidth(230f);
+        if (ImGui.BeginCombo("Evidence state##SquireAdvisorSyntheticScenario", SyntheticScenarioLabel(syntheticScenarioKind)))
+        {
+            foreach (var candidate in SyntheticScenarioOrder)
+            {
+                if (ImGui.Selectable(SyntheticScenarioLabel(candidate), candidate == syntheticScenarioKind))
+                    SetSyntheticScenario(candidate);
+            }
+            ImGui.EndCombo();
+        }
+        var minimum = ImGui.GetItemRectMin();
+        var maximum = ImGui.GetItemRectMax();
+        foreach (var candidate in SyntheticScenarioOrder)
+        {
+            var captured = candidate;
+            reviewRegistry.Register(
+                $"squire.outfitter.advisor.synthetic-scenario.{SyntheticScenarioId(candidate)}",
+                $"Show {SyntheticScenarioLabel(candidate)} advisor evidence state",
+                AgentBridgeUiControlKind.Select,
+                minimum,
+                maximum,
+                true,
+                candidate == syntheticScenarioKind,
+                SyntheticScenarioLabel(candidate),
+                () => SetSyntheticScenario(captured));
+        }
+    }
+
+    private void SetSyntheticScenario(MinerBotanistAdvisorSyntheticScenarioKind value)
+    {
+        syntheticScenarioKind = value;
+        lastAdvice = null;
+        selectedSolutionId = null;
+    }
+
+    private static string SyntheticScenarioLabel(MinerBotanistAdvisorSyntheticScenarioKind value) => value switch
+    {
+        MinerBotanistAdvisorSyntheticScenarioKind.Refreshing => "Refreshing with prior frontier",
+        MinerBotanistAdvisorSyntheticScenarioKind.StaleEvidence => "Stale evidence rejected",
+        MinerBotanistAdvisorSyntheticScenarioKind.IncompleteEvidence => "Incomplete generation",
+        MinerBotanistAdvisorSyntheticScenarioKind.Abstention => "Advisor abstention",
+        _ => "Complete generation",
+    };
+
+    private static string SyntheticScenarioId(MinerBotanistAdvisorSyntheticScenarioKind value) => value switch
+    {
+        MinerBotanistAdvisorSyntheticScenarioKind.Refreshing => "refreshing",
+        MinerBotanistAdvisorSyntheticScenarioKind.StaleEvidence => "stale",
+        MinerBotanistAdvisorSyntheticScenarioKind.IncompleteEvidence => "incomplete",
+        MinerBotanistAdvisorSyntheticScenarioKind.Abstention => "abstention",
+        _ => "success",
+    };
 
     private void ToggleSyntheticSeries(MinerBotanistUtilityContextKind value) =>
         SetSyntheticSeriesVisible(value, !visibleSyntheticContexts.Contains(value));
@@ -544,6 +635,16 @@ internal sealed class MinerBotanistAdvisorPanel
         MinerBotanistAdvisorSessionStage.Abstained => MarketMafiosoUiTheme.Warning,
         MinerBotanistAdvisorSessionStage.Failed => MarketMafiosoUiTheme.Error,
         _ => MarketMafiosoUiTheme.Muted,
+    };
+
+    private static string RetainedAdviceLabel(MinerBotanistAdvisorSessionStage stage) => stage switch
+    {
+        MinerBotanistAdvisorSessionStage.ObservingStats or
+        MinerBotanistAdvisorSessionStage.ObservingEquipment or
+        MinerBotanistAdvisorSessionStage.DiscoveringMarket => "LAST VALID FRONTIER · refresh in progress",
+        MinerBotanistAdvisorSessionStage.Cancelled => "LAST VALID FRONTIER · refresh cancelled",
+        MinerBotanistAdvisorSessionStage.Failed => "LAST VALID FRONTIER · refresh failed",
+        _ => "LAST VALID FRONTIER · refresh abstained",
     };
 
     private static string FormatCost(ulong value) => value == 0 ? "No gil" : $"{value:N0} gil";

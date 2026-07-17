@@ -2,6 +2,7 @@ using System.Net;
 using Franthropy.Dalamud.Equipment;
 using MarketMafioso.MarketAcquisition;
 using MarketMafioso.Squire.Outfitter.MarketEvidence;
+using MarketMafioso.Squire.Outfitter.Utility;
 
 namespace MarketMafioso.Tests.Squire;
 
@@ -125,6 +126,54 @@ public sealed class OutfitterMarketEvidenceDiscoveryServiceTests
         var deferred = await service.DiscoverAsync(request, CancellationToken.None);
         Assert.Single(source.Requests);
         Assert.Equal(OutfitterMarketEvidenceGenerationStatus.Partial, deferred.WorkingBook.Status);
+    }
+
+    [Fact]
+    public async Task PreviousPublishedGeneration_IsNotExposedAcrossDifferentRequestScope()
+    {
+        var previous = PublishedBook(ItemEvidence(10, Now.AddMinutes(-15), Listing(10, "published", false, 600)));
+        var source = new StubListingSource((itemId, _) => Task.FromResult<IReadOnlyList<MarketAcquisitionListing>>(
+            [Listing(itemId, "fresh", false, 700)]));
+        var service = new OutfitterMarketEvidenceDiscoveryService(source, Cache(), utcNow: () => Now, initialPublishedBook: previous);
+        var request = Request([10, 11]);
+
+        var result = await service.DiscoverAsync(request, CancellationToken.None);
+
+        Assert.Null(result.PreviousPublishedBook);
+        Assert.Equal(2, result.PublishedBook?.Coverage.CatalogItemCount);
+    }
+
+    [Fact]
+    public void PublishedGeneration_MatchesOnlyExactSourceRegionCoverageAndListingDepth()
+    {
+        var book = PublishedBook(ItemEvidence(10, Now, Listing(10, "published", false, 600)));
+
+        Assert.True(book.Matches(Request([10])));
+        Assert.False(book.Matches(Request([10]) with { Region = "Europe" }));
+        Assert.False(book.Matches(Request([10]) with { ListingLimit = 50 }));
+        Assert.False(book.Matches(Request([10, 11])));
+        Assert.False(book.Matches(Request([10], OutfitterMarketCoverageMode.Sampled, 1)));
+    }
+
+    [Fact]
+    public void AdvisorSession_PromotesOnlyACompleteNewGeneration()
+    {
+        var published = PublishedBook(ItemEvidence(10, Now, Listing(10, "published", false, 600)));
+        var partial = published with
+        {
+            GenerationId = Guid.NewGuid(),
+            PublishedAtUtc = null,
+            Status = OutfitterMarketEvidenceGenerationStatus.Partial,
+            Items = [Assert.Single(published.Items) with { Status = OutfitterMarketEvidenceItemStatus.StaleUsable }],
+        };
+        var request = Request([10]);
+
+        Assert.Null(MinerBotanistAdvisorSessionEvidencePolicy.SelectCurrent(
+            new(published, partial, published, false),
+            request));
+        Assert.Same(published, MinerBotanistAdvisorSessionEvidencePolicy.SelectCurrent(
+            new(null, published, published, true),
+            request));
     }
 
     [Fact]

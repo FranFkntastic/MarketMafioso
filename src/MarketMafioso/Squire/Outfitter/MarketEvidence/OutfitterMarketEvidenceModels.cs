@@ -107,6 +107,27 @@ public sealed record OutfitterMarketEvidenceBook(
     public bool IsPublishable => Status == OutfitterMarketEvidenceGenerationStatus.Complete &&
         Coverage.QueriedItemCount > 0 &&
         Items.All(item => item.Status is OutfitterMarketEvidenceItemStatus.Fresh or OutfitterMarketEvidenceItemStatus.Missing);
+
+    public bool Matches(OutfitterMarketEvidenceRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var requestedIds = request.ItemIds
+            .Where(itemId => itemId != 0)
+            .Distinct()
+            .Order()
+            .ToArray();
+        if (request.CoverageMode == OutfitterMarketCoverageMode.Sampled)
+            requestedIds = requestedIds
+                .Take(Math.Clamp(request.SampleSize ?? 1, 1, Math.Max(1, requestedIds.Length)))
+                .ToArray();
+        return IsPublishable &&
+               string.Equals(SourceKey, request.SourceKey.Trim(), StringComparison.OrdinalIgnoreCase) &&
+               string.Equals(Region, request.Region.Trim(), StringComparison.OrdinalIgnoreCase) &&
+               Coverage.Mode == request.CoverageMode &&
+               Coverage.CatalogItemCount == request.ItemIds.Where(itemId => itemId != 0).Distinct().Count() &&
+               Coverage.ListingLimit == Math.Clamp(request.ListingLimit, 1, 100) &&
+               Coverage.QueriedItemIds.Order().SequenceEqual(requestedIds);
+    }
 }
 
 public sealed record OutfitterMarketDiscoveryProgress(

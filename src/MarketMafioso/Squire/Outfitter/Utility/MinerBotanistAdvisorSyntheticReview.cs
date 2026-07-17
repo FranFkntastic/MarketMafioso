@@ -6,6 +6,26 @@ using Franthropy.Dalamud.Equipment;
 
 namespace MarketMafioso.Squire.Outfitter.Utility;
 
+public enum MinerBotanistAdvisorSyntheticScenarioKind
+{
+    Success,
+    Refreshing,
+    StaleEvidence,
+    IncompleteEvidence,
+    Abstention,
+}
+
+internal sealed record MinerBotanistAdvisorSyntheticPresentation(
+    MinerBotanistAdvisorSyntheticScenarioKind Kind,
+    string Label,
+    MinerBotanistAdvisorSessionStage Stage,
+    string Message,
+    bool ShowPriorFrontier,
+    bool ShowProgress,
+    int Completed,
+    int Total,
+    bool AdviceIsRetained);
+
 /// <summary>
 /// Privacy-minimized debug replay derived from the frozen model-gearset challenge family.
 /// Runtime builds never load the research oracle. Item identities are stable game data; gil
@@ -13,6 +33,62 @@ namespace MarketMafioso.Squire.Outfitter.Utility;
 /// </summary>
 internal static class MinerBotanistAdvisorSyntheticReview
 {
+    public static MinerBotanistAdvisorSyntheticPresentation Present(
+        MinerBotanistAdvisorSyntheticScenarioKind kind,
+        MinerBotanistReadOnlyAdvice advice) => kind switch
+    {
+        MinerBotanistAdvisorSyntheticScenarioKind.Refreshing => new(
+            kind,
+            "Refreshing with prior frontier",
+            MinerBotanistAdvisorSessionStage.DiscoveringMarket,
+            "Fetched 18 of 48 missing or stale market entries. The last valid frontier remains visible until a complete generation publishes.",
+            true,
+            true,
+            18,
+            48,
+            true),
+        MinerBotanistAdvisorSyntheticScenarioKind.StaleEvidence => new(
+            kind,
+            "Stale evidence rejected",
+            MinerBotanistAdvisorSessionStage.Abstained,
+            "Refresh abstained: 7 exact-quality rows are stale and their retry window has not elapsed. The last valid frontier remains visible.",
+            true,
+            false,
+            41,
+            48,
+            true),
+        MinerBotanistAdvisorSyntheticScenarioKind.IncompleteEvidence => new(
+            kind,
+            "Incomplete generation",
+            MinerBotanistAdvisorSessionStage.Abstained,
+            "Refresh abstained: 5 of 48 scoped items failed exact-quality discovery. The incomplete generation was not published; the last valid frontier remains visible.",
+            true,
+            false,
+            43,
+            48,
+            true),
+        MinerBotanistAdvisorSyntheticScenarioKind.Abstention => new(
+            kind,
+            "No authoritative recommendation",
+            MinerBotanistAdvisorSessionStage.Abstained,
+            "The rendered baseline contains an unresolved equipment slot, so the advisor stopped before market discovery and produced no frontier.",
+            false,
+            false,
+            11,
+            12,
+            false),
+        _ => new(
+            kind,
+            "Complete generation",
+            MinerBotanistAdvisorSessionStage.Complete,
+            advice.Diagnostic,
+            true,
+            false,
+            48,
+            48,
+            false),
+    };
+
     internal const string PriceEvidenceLabel = "Aether sale-history median · 2026-07-16";
 
     private sealed record Benchmark(
