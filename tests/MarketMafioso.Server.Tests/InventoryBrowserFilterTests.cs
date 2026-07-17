@@ -240,12 +240,30 @@ public sealed class InventoryBrowserFilterTests
 
 
     [Fact]
-    public void NameQualifier_UsesIntentionalFuzzyMatching()
+    public void NameQualifier_MatchesEveryRecordContainingTheSearchText()
     {
-        var view = InventoryBrowserViewBuilder.Build(Snapshot, "name:darksteel", mode: InventoryBrowserMode.Items);
+        var report = Snapshot.Report with
+        {
+            PlayerInventory =
+            [
+                new InventoryBag
+                {
+                    BagName = "Inventory1",
+                    Items =
+                    [
+                        new ItemSlot { ItemId = 1, ItemName = "Darksteel Ingot", Quantity = 12 },
+                        new ItemSlot { ItemId = 3, ItemName = "Darksteel Ore", Quantity = 8 },
+                        new ItemSlot { ItemId = 2, ItemName = "Iron Ore", Quantity = 4 },
+                    ],
+                },
+            ],
+            Retainers = [],
+        };
+
+        var view = InventoryBrowserViewBuilder.Build(Snapshot with { Report = report }, "name:darksteel", mode: InventoryBrowserMode.Items);
 
         Assert.True(view.FilterValid);
-        Assert.Equal("Darksteel Ingot", Assert.Single(view.Items).DisplayName);
+        Assert.Equal(["Darksteel Ingot", "Darksteel Ore"], view.Items.Select(item => item.DisplayName).Order());
     }
     [Fact]
     public void FriendlyPredicatesAndExactOperators_AreCompletedAtTheCaret()
