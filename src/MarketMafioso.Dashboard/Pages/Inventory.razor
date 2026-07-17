@@ -68,7 +68,7 @@ else
                                     @onclick="@(() => SetModeAsync(mode))">@ModeLabel(mode)</button>
                         }
                     </div>
-                    <WebFilterAutocomplete Value="_filterText"
+                    <WebFilterAutocomplete Value="@_filterText"
                                            Items="_view.FilterCompletions"
                                            Edited="OnFilterEdited"
                                            ShowSuggestions="@(_showCompletions && !string.IsNullOrWhiteSpace(_filterText))"
