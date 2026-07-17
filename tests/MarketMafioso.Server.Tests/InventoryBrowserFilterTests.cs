@@ -51,18 +51,45 @@ public sealed class InventoryBrowserFilterTests
     };
 
     [Fact]
-    public void ItemsMode_FiltersOwnershipSummariesByNameAndQuantity()
+    public void ItemsMode_FiltersStacksBeforeRegroupingTheirSummaries()
     {
-        var view = InventoryBrowserViewBuilder.Build(Snapshot, "darksteel quantity>=100", mode: InventoryBrowserMode.Items);
+        var view = InventoryBrowserViewBuilder.Build(Snapshot, "darksteel quantity>=90", mode: InventoryBrowserMode.Items);
 
         Assert.True(view.FilterValid);
         var item = Assert.Single(view.Items);
         Assert.Equal("Darksteel Ingot", item.DisplayName);
-        Assert.Equal(111, item.TotalQuantity);
-        Assert.Contains(item.Locations, location => location.Location == "Inventory");
+        Assert.Equal(99, item.TotalQuantity);
         Assert.Contains(item.Locations, location => location.Location == "Retainer");
         Assert.Equal(1, view.MatchingRecordCount);
-        Assert.Empty(view.Stacks);
+        Assert.Single(view.Stacks);
+        Assert.Equal(99, view.TotalQuantity);
+    }
+
+    [Fact]
+    public void ItemsMode_LocationExclusionsRemoveStacksAndRecomputeTotals()
+    {
+        var report = Snapshot.Report with
+        {
+            Retainers = [],
+            PlayerInventory =
+            [
+                new InventoryBag { BagName = "Inventory1", Items = [new ItemSlot { ItemId = 1, ItemName = "Darksteel Ingot", Quantity = 12 }] },
+                new InventoryBag { BagName = "SaddleBag1", Items = [new ItemSlot { ItemId = 1, ItemName = "Darksteel Ingot", Quantity = 20 }] },
+                new InventoryBag { BagName = "ArmoryMainHand", Items = [new ItemSlot { ItemId = 1, ItemName = "Darksteel Ingot", Quantity = 1 }] },
+            ],
+        };
+
+        var view = InventoryBrowserViewBuilder.Build(
+            Snapshot with { Report = report },
+            "-location:saddlebag -location:armoury",
+            mode: InventoryBrowserMode.Items);
+
+        Assert.True(view.FilterValid);
+        var item = Assert.Single(view.Items);
+        Assert.Equal(12, item.TotalQuantity);
+        var stack = Assert.Single(view.Stacks);
+        Assert.Equal("Inventory", stack.Location);
+        Assert.Equal(12, view.TotalQuantity);
         Assert.Empty(view.MarketListings);
     }
 

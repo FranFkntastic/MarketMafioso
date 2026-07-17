@@ -25,10 +25,10 @@ public sealed class InventoryPresentationTests
     }
 
     [Theory]
-    [InlineData("quality:hq", InventoryBrowserMode.Items, InventoryBrowserMode.Stacks)]
-    [InlineData("condition<50", InventoryBrowserMode.Items, InventoryBrowserMode.Stacks)]
+    [InlineData("quality:hq", InventoryBrowserMode.Listings, InventoryBrowserMode.Items)]
+    [InlineData("condition<50", InventoryBrowserMode.Listings, InventoryBrowserMode.Items)]
     [InlineData("price<2000", InventoryBrowserMode.Items, InventoryBrowserMode.Listings)]
-    [InlineData("age<10m", InventoryBrowserMode.Stacks, InventoryBrowserMode.Listings)]
+    [InlineData("age<10m", InventoryBrowserMode.Items, InventoryBrowserMode.Listings)]
     public void SuggestedMode_PreservesTheUsersFilterIntent(
         string filter,
         InventoryBrowserMode current,

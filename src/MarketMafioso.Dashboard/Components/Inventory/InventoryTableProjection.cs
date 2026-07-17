@@ -1,4 +1,5 @@
 using System.Globalization;
+using Franthropy.Web.Tables;
 using MarketMafioso.Contracts.Inventory;
 
 namespace MarketMafioso.Dashboard.Components.Inventory;
@@ -35,52 +36,89 @@ public sealed class InventoryTableQueryState
 
 public sealed record InventoryColumnFilterChange(string Column, string Value);
 
+public enum InventoryGroupedColumn
+{
+    Item,
+    Owner,
+    Quantity,
+    Quality,
+    Location,
+    Condition,
+}
+
+public sealed record InventoryGroupedItemRow(
+    uint ItemId,
+    string DisplayName,
+    string? ItemType,
+    int TotalQuantity,
+    int HqQuantity,
+    int OwnerCount,
+    InventoryBrowserStackView PrimaryStack,
+    IReadOnlyList<InventoryBrowserStackView> Stacks)
+{
+    public decimal? LowestCondition => Stacks
+        .Where(stack => stack.ConditionPercent is not null)
+        .Select(stack => stack.ConditionPercent)
+        .Min();
+}
+
 public static class InventoryTableProjection
 {
-    public static IReadOnlyList<InventoryBrowserItemView> Items(
-        IReadOnlyList<InventoryBrowserItemView> source,
-        InventoryTableQueryState query)
-    {
-        var filtered = source.Where(item =>
-            Text(item.DisplayName, query.Filter("item")) &&
-            Text(item.ItemType, query.Filter("category")) &&
-            Number(item.TotalQuantity, query.Filter("owned")) &&
-            Number(item.HqQuantity, query.Filter("hq")) &&
-            Text(InventoryDisplayFormatter.FormatItemLocations(item), query.Filter("location")) &&
-            Number(item.OwnerCount, query.Filter("owners")));
-
-        return Sort(filtered, query, item => item.DisplayName, column => column switch
-        {
-            "category" => item => item.ItemType ?? string.Empty,
-            "owned" => item => item.TotalQuantity,
-            "hq" => item => item.HqQuantity,
-            "location" => item => InventoryDisplayFormatter.FormatItemLocations(item),
-            "owners" => item => item.OwnerCount,
-            _ => item => item.DisplayName,
-        });
-    }
-
-    public static IReadOnlyList<InventoryBrowserStackView> Stacks(
+    public static IReadOnlyList<InventoryGroupedItemRow> GroupedInventory(
         IReadOnlyList<InventoryBrowserStackView> source,
         InventoryTableQueryState query)
     {
         var filtered = source.Where(stack =>
-            Text(stack.DisplayName, query.Filter("item")) &&
+            Text($"{stack.DisplayName} {stack.ItemType}", query.Filter("item")) &&
             Text(stack.OwnerName, query.Filter("owner")) &&
-            Text(InventoryDisplayFormatter.FormatStackStorage(stack), query.Filter("storage")) &&
             Number(stack.Quantity, query.Filter("quantity")) &&
             Text(stack.IsHq ? "HQ" : "NQ", query.Filter("quality")) &&
+            Text(InventoryDisplayFormatter.FormatStackStorage(stack), query.Filter("location")) &&
             Number(stack.ConditionPercent, query.Filter("condition")));
 
-        return Sort(filtered, query, stack => stack.DisplayName, column => column switch
+        var groups = filtered
+            .GroupBy(stack => stack.ItemId)
+            .Select(group =>
+            {
+                var stacks = group
+                    .OrderBy(stack => stack.OwnerName, StringComparer.OrdinalIgnoreCase)
+                    .ThenBy(stack => InventoryDisplayFormatter.FormatStackStorage(stack), StringComparer.OrdinalIgnoreCase)
+                    .ThenBy(stack => stack.SlotIndex ?? int.MaxValue)
+                    .ToArray();
+                var first = stacks[0];
+                var primary = stacks
+                    .OrderByDescending(stack => stack.Quantity)
+                    .ThenBy(stack => stack.OwnerName, StringComparer.OrdinalIgnoreCase)
+                    .First();
+                return new InventoryGroupedItemRow(
+                    group.Key,
+                    first.DisplayName,
+                    stacks.Select(stack => stack.ItemType).FirstOrDefault(value => !string.IsNullOrWhiteSpace(value)),
+                    checked((int)stacks.Sum(stack => (long)stack.Quantity)),
+                    checked((int)stacks.Where(stack => stack.IsHq).Sum(stack => (long)stack.Quantity)),
+                    stacks.Select(stack => stack.OwnerName).Distinct(StringComparer.OrdinalIgnoreCase).Count(),
+                    primary,
+                    stacks);
+            })
+            .ToArray();
+
+        var sortState = Enum.TryParse<InventoryGroupedColumn>(query.SortColumn, ignoreCase: true, out var column)
+            ? new WebTableSortState<InventoryGroupedColumn>(column, query.SortDescending)
+            : WebTableSortState<InventoryGroupedColumn>.Unsorted;
+        var rules = new[]
         {
-            "owner" => stack => stack.OwnerName,
-            "storage" => stack => InventoryDisplayFormatter.FormatStackStorage(stack),
-            "quantity" => stack => stack.Quantity,
-            "quality" => stack => stack.IsHq ? 1 : 0,
-            "condition" => stack => stack.ConditionPercent ?? -1,
-            _ => stack => stack.DisplayName,
-        });
+            WebTableSortRule<InventoryGroupedItemRow, InventoryGroupedColumn>.Create(InventoryGroupedColumn.Item, row => row.DisplayName, StringComparer.OrdinalIgnoreCase),
+            WebTableSortRule<InventoryGroupedItemRow, InventoryGroupedColumn>.Create(InventoryGroupedColumn.Owner, row => row.PrimaryStack.OwnerName, StringComparer.OrdinalIgnoreCase),
+            WebTableSortRule<InventoryGroupedItemRow, InventoryGroupedColumn>.Create(InventoryGroupedColumn.Quantity, row => row.TotalQuantity),
+            WebTableSortRule<InventoryGroupedItemRow, InventoryGroupedColumn>.Create(InventoryGroupedColumn.Quality, row => row.HqQuantity),
+            WebTableSortRule<InventoryGroupedItemRow, InventoryGroupedColumn>.Create(InventoryGroupedColumn.Location, row => InventoryDisplayFormatter.FormatStackStorage(row.PrimaryStack), StringComparer.OrdinalIgnoreCase),
+            WebTableSortRule<InventoryGroupedItemRow, InventoryGroupedColumn>.Create(InventoryGroupedColumn.Condition, row => row.LowestCondition ?? decimal.MaxValue),
+        };
+        return WebTableOrdering.Apply(
+            groups,
+            sortState,
+            rules,
+            rows => rows.OrderBy(row => row.DisplayName, StringComparer.OrdinalIgnoreCase).ThenBy(row => row.ItemId));
     }
 
     public static IReadOnlyList<InventoryBrowserMarketListingView> Listings(

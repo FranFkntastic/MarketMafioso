@@ -6,37 +6,37 @@ namespace MarketMafioso.Server.Tests;
 public sealed class InventoryTableProjectionTests
 {
     [Fact]
-    public void Items_CombinesColumnFiltersAndNumericRanges()
+    public void GroupedInventory_FiltersStacksThenRecomputesGroups()
     {
         var query = new InventoryTableQueryState();
         query.SetFilter("item", "darksteel");
-        query.SetFilter("owned", "20..99");
-        query.SetFilter("location", "scrongle");
+        query.SetFilter("quantity", "20..99");
+        query.SetFilter("owner", "scrongle");
         var rows = new[]
         {
-            Item("Darksteel Nugget", 42, "Scrongle"),
-            Item("Darksteel Ingot", 120, "Scrongle"),
-            Item("Iron Nugget", 42, "Scrongle"),
-            Item("Darksteel Plate", 42, "Player Inventory"),
+            Stack(1, "Darksteel Nugget", 42, "Scrongle"),
+            Stack(2, "Darksteel Ingot", 120, "Scrongle"),
+            Stack(3, "Iron Nugget", 42, "Scrongle"),
+            Stack(4, "Darksteel Plate", 42, "Player Inventory"),
         };
 
-        var visible = InventoryTableProjection.Items(rows, query);
+        var visible = InventoryTableProjection.GroupedInventory(rows, query);
 
         Assert.Equal("Darksteel Nugget", Assert.Single(visible).DisplayName);
     }
 
     [Fact]
-    public void Items_HeaderSortTogglesAscendingThenDescending()
+    public void GroupedInventory_HeaderSortTogglesAscendingThenDescending()
     {
         var query = new InventoryTableQueryState();
-        query.ToggleSort("owned");
-        var rows = new[] { Item("Many", 99, "Player"), Item("Few", 3, "Player") };
+        query.ToggleSort("quantity");
+        var rows = new[] { Stack(1, "Many", 99, "Player"), Stack(2, "Few", 3, "Player") };
 
-        Assert.Equal(["Few", "Many"], InventoryTableProjection.Items(rows, query).Select(item => item.DisplayName));
+        Assert.Equal(["Few", "Many"], InventoryTableProjection.GroupedInventory(rows, query).Select(item => item.DisplayName));
 
-        query.ToggleSort("owned");
+        query.ToggleSort("quantity");
 
-        Assert.Equal(["Many", "Few"], InventoryTableProjection.Items(rows, query).Select(item => item.DisplayName));
+        Assert.Equal(["Many", "Few"], InventoryTableProjection.GroupedInventory(rows, query).Select(item => item.DisplayName));
     }
 
     [Fact]
@@ -56,20 +56,13 @@ public sealed class InventoryTableProjectionTests
         Assert.Equal("Known", Assert.Single(visible).DisplayName);
     }
 
-    private static InventoryBrowserItemView Item(string name, int quantity, string owner) => new()
+    private static InventoryBrowserStackView Stack(uint itemId, string name, int quantity, string owner) => new()
     {
+        ItemId = itemId,
         DisplayName = name,
-        TotalQuantity = quantity,
-        Locations =
-        [
-            new InventoryBrowserLocationView
-            {
-                OwnerName = owner,
-                Location = owner,
-                BagName = "Inventory1",
-                Quantity = quantity,
-            },
-        ],
-        OwnerCount = 1,
+        Quantity = quantity,
+        OwnerName = owner,
+        Location = owner,
+        BagName = "Inventory1",
     };
 }

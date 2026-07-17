@@ -4,16 +4,6 @@ using MarketMafioso.Contracts.Inventory;
 
 public static class InventoryDisplayFormatter
 {
-    public static string FormatItemLocations(InventoryBrowserItemView item)
-    {
-        var first = item.Locations.FirstOrDefault();
-        if (first is null)
-            return "—";
-
-        var primary = $"{first.OwnerName} · {FormatStorage(first.Location, first.BagName)}";
-        return item.Locations.Count > 1 ? $"{primary} +{item.Locations.Count - 1}" : primary;
-    }
-
     public static string FormatStackStorage(InventoryBrowserStackView stack)
     {
         var storage = FormatStorage(stack.Location, stack.BagName);

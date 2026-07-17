@@ -29,14 +29,13 @@ public static class InventoryBrowserViewBuilder
                 normalizedScope.Equals("all", StringComparison.OrdinalIgnoreCase) ||
                 row.OwnerName.Equals(normalizedScope, StringComparison.OrdinalIgnoreCase))
             .ToArray();
-        var items = AggregateItems(stacks);
         var vocabulary = FfxivFilterCatalog.Create(BuildResolvers(stacks, listings, stored.Report));
 
         return mode switch
         {
             InventoryBrowserMode.Stacks => BuildStacksView(stored, normalizedFilter, normalizedScope, vocabulary, stacks),
             InventoryBrowserMode.Listings => BuildListingsView(stored, normalizedFilter, normalizedScope, vocabulary, listings),
-            _ => BuildItemsView(stored, normalizedFilter, normalizedScope, vocabulary, items),
+            _ => BuildItemsView(stored, normalizedFilter, normalizedScope, vocabulary, stacks),
         };
     }
 
@@ -45,26 +44,31 @@ public static class InventoryBrowserViewBuilder
         string filter,
         string scope,
         FfxivFilterCatalog vocabulary,
-        IReadOnlyList<ItemRecord> source)
+        IReadOnlyList<StackRecord> source)
     {
-        var context = new FilterContextBuilder<ItemRecord>(vocabulary.Catalog)
+        var context = new FilterContextBuilder<StackRecord>(vocabulary.Catalog)
             .Bind(vocabulary.ItemName, row => Evidence.Known(row.ItemKey))
-            .Bind(vocabulary.OwnershipQuantity, row => Evidence.Known((long)row.TotalQuantity))
-            .BindSet(vocabulary.OwnershipRetainers, row => Evidence.Known(row.Retainers))
+            .Bind(vocabulary.InstanceQuality, row => Evidence.Known(row.Quality))
+            .Bind(vocabulary.InstanceQuantity, row => Evidence.Known((long)row.Quantity))
+            .Bind(vocabulary.InstanceLocation, row => Evidence.Known(row.Location))
+            .Bind(vocabulary.InstanceEquipped, row => row.Equipped)
+            .Bind(vocabulary.InstanceCondition, row => row.Condition)
+            .BindSet(vocabulary.OwnershipRetainers, row => Evidence.Known(row.RetainerKeys))
             .UseDefaultText(vocabulary.ItemName, row => Evidence.Known(row.DisplayName))
-            .Build("ffxiv.ownership-summaries", "1");
+            .Build("ffxiv.grouped-inventory", "2");
         var compilation = FilterCompiler.Compile(filter, context);
-        var records = compilation.IsValid ? source.Where(compilation.Matches).ToArray() : [];
-        var items = records.Select(ToItemView).ToArray();
+        var matchingStacks = compilation.IsValid ? source.Where(compilation.Matches).ToArray() : [];
+        var items = AggregateItems(matchingStacks).Select(ToItemView).ToArray();
+        var stacks = matchingStacks.Select(ToStackView).ToArray();
 
         return CreateBase(stored, filter, scope, InventoryBrowserMode.Items, compilation, context) with
         {
             Items = items,
+            Stacks = stacks,
             MatchingRecordCount = items.Length,
-            TotalQuantity = checked((int)items.Sum(row => (long)row.TotalQuantity)),
-            HqQuantity = checked((int)items.Sum(row => (long)row.HqQuantity)),
-            OwnerCount = items.SelectMany(row => row.Locations).Select(row => row.OwnerName)
-                .Distinct(StringComparer.OrdinalIgnoreCase).Count(),
+            TotalQuantity = checked((int)stacks.Sum(row => (long)row.Quantity)),
+            HqQuantity = checked((int)stacks.Where(row => row.IsHq).Sum(row => (long)row.Quantity)),
+            OwnerCount = stacks.Select(row => row.OwnerName).Distinct(StringComparer.OrdinalIgnoreCase).Count(),
             ItemTypeKnownCount = items.Count(row => !string.IsNullOrWhiteSpace(row.ItemType)),
         };
     }

@@ -4,7 +4,7 @@ using MarketMafioso.Contracts.Inventory;
 
 public static class InventoryFilterPresentation
 {
-    private static readonly string[] StackFields = ["quality", "condition", "location", "equipped", "slot"];
+    private static readonly string[] InventoryFields = ["quality", "condition", "location", "equipped", "slot"];
     private static readonly string[] ListingFields = ["price", "total", "age", "offer"];
 
     public static bool IsIncomplete(string? filter)
@@ -39,8 +39,8 @@ public static class InventoryFilterPresentation
     public static InventoryBrowserMode? SuggestedMode(string? filter, InventoryBrowserMode currentMode)
     {
         var value = filter ?? string.Empty;
-        if (currentMode != InventoryBrowserMode.Stacks && StackFields.Any(field => ContainsField(value, field)))
-            return InventoryBrowserMode.Stacks;
+        if (currentMode != InventoryBrowserMode.Items && InventoryFields.Any(field => ContainsField(value, field)))
+            return InventoryBrowserMode.Items;
         if (currentMode != InventoryBrowserMode.Listings && ListingFields.Any(field => ContainsField(value, field)))
             return InventoryBrowserMode.Listings;
         return null;

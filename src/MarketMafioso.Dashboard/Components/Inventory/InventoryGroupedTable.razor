@@ -1,0 +1,136 @@
+<WebGroupedTable TGroup="InventoryGroupedItemRow"
+                 TChild="InventoryBrowserStackView"
+                 TGroupKey="uint"
+                 TColumnId="InventoryGroupedColumn"
+                 Groups="TableGroups"
+                 Columns="Columns"
+                 GroupKey="GroupKey"
+                 ChildKey="ChildKey"
+                 IsGroupExpanded="IsExpanded"
+                 GroupToggled="ToggleGroup"
+                 SortState="CurrentSortState"
+                 SortChanged="ChangeSort"
+                 FilterCell="FilterCell"
+                 StorageKey="mmf.inventory.column-widths.v3.grouped"
+                 ScrollClass="inventory-table-scroll"
+                 CssClass="inventory-grouped-table"
+                 AccentColor="var(--mmf-accent)"
+                 BoundaryColor="var(--mmf-border)"
+                 AriaLabel="Inventory grouped by item">
+    <EmptyContent>No matching inventory.</EmptyContent>
+</WebGroupedTable>
+
+@code {
+    private readonly HashSet<uint> expandedItemIds = [];
+    private IReadOnlyList<WebTableGroup<InventoryGroupedItemRow, InventoryBrowserStackView>> TableGroups { get; set; } = [];
+
+    [Parameter] public IReadOnlyList<InventoryGroupedItemRow> Groups { get; set; } = [];
+    [Parameter, EditorRequired] public InventoryTableQueryState Query { get; set; } = new();
+    [Parameter] public EventCallback<string> SortChanged { get; set; }
+    [Parameter] public EventCallback<InventoryColumnFilterChange> FilterChanged { get; set; }
+
+    private IReadOnlyList<WebGroupedTableColumn<InventoryGroupedItemRow, InventoryBrowserStackView, InventoryGroupedColumn>> Columns =>
+    [
+        new()
+        {
+            Id = InventoryGroupedColumn.Item, Key = "item", Label = "Item", DefaultWidthPx = 325, MinWidthPx = 170,
+            GroupCell = GroupItemCell, ChildCell = ChildItemCell,
+        },
+        new()
+        {
+            Id = InventoryGroupedColumn.Owner, Key = "owner", Label = "Owner(s)", DefaultWidthPx = 160, MinWidthPx = 105,
+            GroupCell = GroupOwnerCell, ChildCell = ChildOwnerCell,
+        },
+        new()
+        {
+            Id = InventoryGroupedColumn.Quantity, Key = "quantity", Label = "Quantity", DefaultWidthPx = 90, MinWidthPx = 70,
+            HeaderCssClass = "numeric", GroupCellCssClass = "numeric", ChildCellCssClass = "numeric",
+            GroupCell = GroupQuantityCell, ChildCell = ChildQuantityCell,
+        },
+        new()
+        {
+            Id = InventoryGroupedColumn.Quality, Key = "quality", Label = "Quality", DefaultWidthPx = 90, MinWidthPx = 68,
+            HeaderCssClass = "numeric", GroupCellCssClass = "numeric", ChildCellCssClass = "numeric",
+            GroupCell = GroupQualityCell, ChildCell = ChildQualityCell,
+        },
+        new()
+        {
+            Id = InventoryGroupedColumn.Location, Key = "location", Label = "Location", DefaultWidthPx = 280, MinWidthPx = 150,
+            GroupCell = GroupLocationCell, ChildCell = ChildLocationCell,
+            GroupCellTitle = row => InventoryDisplayFormatter.FormatStackStorage(row.PrimaryStack),
+            ChildCellTitle = InventoryDisplayFormatter.FormatStackStorage,
+        },
+        new()
+        {
+            Id = InventoryGroupedColumn.Condition, Key = "condition", Label = "Condition", DefaultWidthPx = 95, MinWidthPx = 72,
+            HeaderCssClass = "numeric", GroupCellCssClass = "numeric", ChildCellCssClass = "numeric",
+            GroupCell = GroupConditionCell, ChildCell = ChildConditionCell,
+        },
+    ];
+
+    private WebTableSortState<InventoryGroupedColumn> CurrentSortState =>
+        Enum.TryParse<InventoryGroupedColumn>(Query.SortColumn, ignoreCase: true, out var column)
+            ? new(column, Query.SortDescending)
+            : WebTableSortState<InventoryGroupedColumn>.Unsorted;
+
+    protected override void OnParametersSet()
+    {
+        TableGroups = Groups.Select(group => new WebTableGroup<InventoryGroupedItemRow, InventoryBrowserStackView>(group, group.Stacks)).ToArray();
+        expandedItemIds.RemoveWhere(itemId => Groups.All(group => group.ItemId != itemId));
+    }
+
+    private uint GroupKey(InventoryGroupedItemRow row) => row.ItemId;
+    private static object ChildKey(InventoryBrowserStackView stack) =>
+        $"{stack.ItemId}:{stack.OwnerName}:{stack.BagName}:{stack.SlotIndex}:{stack.IsHq}";
+    private bool IsExpanded(InventoryGroupedItemRow row) => expandedItemIds.Contains(row.ItemId);
+
+    private void ToggleGroup(InventoryGroupedItemRow row)
+    {
+        if (!expandedItemIds.Add(row.ItemId))
+            expandedItemIds.Remove(row.ItemId);
+    }
+
+    private Task ChangeSort(WebTableSortState<InventoryGroupedColumn> state) =>
+        state.Column is { } column ? SortChanged.InvokeAsync(column.ToString()) : Task.CompletedTask;
+
+    private RenderFragment<InventoryGroupedColumn> FilterCell => column => builder =>
+    {
+        var sequence = 0;
+        builder.OpenElement(sequence++, "input");
+        builder.AddAttribute(sequence++, "class", "inventory-column-filter");
+        builder.AddAttribute(sequence++, "value", Query.Filter(column.ToString()));
+        builder.AddAttribute(sequence++, "placeholder", FilterPlaceholder(column));
+        builder.AddAttribute(sequence++, "aria-label", $"Filter {column.ToString().ToLowerInvariant()}");
+        builder.AddAttribute(sequence++, "oninput", EventCallback.Factory.Create<ChangeEventArgs>(this, args =>
+            FilterChanged.InvokeAsync(new InventoryColumnFilterChange(column.ToString(), args.Value?.ToString() ?? string.Empty))));
+        builder.CloseElement();
+    };
+
+    private static string FilterPlaceholder(InventoryGroupedColumn column) => column switch
+    {
+        InventoryGroupedColumn.Item => "Item or category",
+        InventoryGroupedColumn.Owner => "Owner",
+        InventoryGroupedColumn.Quantity => "Qty",
+        InventoryGroupedColumn.Quality => "NQ / HQ",
+        InventoryGroupedColumn.Location => "Location",
+        InventoryGroupedColumn.Condition => "Condition",
+        _ => "Filter",
+    };
+
+    private RenderFragment GroupItemCell(InventoryGroupedItemRow row) => @<div class="inventory-group-item">
+        <span class="inventory-group-chevron" aria-hidden="true">@(IsExpanded(row) ? "▼" : "▶")</span>
+        <span class="inventory-group-item-copy"><strong>@row.DisplayName</strong>@if (!string.IsNullOrWhiteSpace(row.ItemType)) { <small>@row.ItemType</small> }</span>
+    </div>;
+
+    private static RenderFragment ChildItemCell(InventoryBrowserStackView _) => @<span class="inventory-stack-marker">↳ physical stack</span>;
+    private static RenderFragment GroupOwnerCell(InventoryGroupedItemRow row) => @<span class="inventory-owner-summary"><b>@row.OwnerCount</b> @(row.OwnerCount == 1 ? "owner" : "owners")</span>;
+    private static RenderFragment ChildOwnerCell(InventoryBrowserStackView stack) => @<strong class="inventory-stack-owner">@stack.OwnerName</strong>;
+    private static RenderFragment GroupQuantityCell(InventoryGroupedItemRow row) => @<strong>@row.TotalQuantity.ToString("N0")</strong>;
+    private static RenderFragment ChildQuantityCell(InventoryBrowserStackView stack) => @<span>@stack.Quantity.ToString("N0")</span>;
+    private static RenderFragment GroupQualityCell(InventoryGroupedItemRow row) => @<span class="hq-value">@row.HqQuantity.ToString("N0") HQ</span>;
+    private static RenderFragment ChildQualityCell(InventoryBrowserStackView stack) => @<span class="inventory-quality @(stack.IsHq ? "hq" : "nq")">@(stack.IsHq ? "HQ" : "NQ")</span>;
+    private static RenderFragment GroupLocationCell(InventoryGroupedItemRow row) => @<span>@row.PrimaryStack.OwnerName · @InventoryDisplayFormatter.FormatStackStorage(row.PrimaryStack)</span>;
+    private static RenderFragment ChildLocationCell(InventoryBrowserStackView stack) => @<span>@InventoryDisplayFormatter.FormatStackStorage(stack)</span>;
+    private static RenderFragment GroupConditionCell(InventoryGroupedItemRow row) => @<span class="muted">@(row.LowestCondition is { } condition ? $"{condition:0.#}% min" : "—")</span>;
+    private static RenderFragment ChildConditionCell(InventoryBrowserStackView stack) => @<span class="muted">@(stack.ConditionPercent is { } condition ? $"{condition:0.#}%" : "—")</span>;
+}

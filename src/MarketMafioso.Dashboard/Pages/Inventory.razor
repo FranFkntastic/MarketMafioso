@@ -61,7 +61,7 @@ else
             <div class="inventory-filter-editor">
                 <div class="inventory-commandbar">
                     <div class="inventory-mode-switch" role="group" aria-label="Inventory view">
-                        @foreach (var mode in Enum.GetValues<InventoryBrowserMode>())
+                        @foreach (var mode in AvailableModes)
                         {
                             <button class="@ModeButtonClass(mode)"
                                     aria-pressed="@AriaBoolean(_mode == mode)"
@@ -136,7 +136,7 @@ else
             </div>
 
             <div class="inventory-summary-strip">
-                <div><strong>@_visibleMatchingRecordCount.ToString("N0")</strong><span>@ModeLabel(_mode).ToLowerInvariant()</span></div>
+                <div><strong>@_visibleMatchingRecordCount.ToString("N0")</strong><span>@RecordLabel(_mode)</span></div>
                 <div><strong>@_visibleTotalQuantity.ToString("N0")</strong><span>total quantity</span></div>
                 <div><strong>@_visibleHqQuantity.ToString("N0")</strong><span>HQ</span></div>
                 <div><strong>@_visibleOwnerCount.ToString("N0")</strong><span>owners</span></div>
@@ -151,48 +151,26 @@ else
                 <div class="inventory-evidence-note">This snapshot records retainer listing quantities, but not their sale prices.</div>
             }
 
-            <div class="@ContentClass">
+            <div class="inventory-content">
                 <div class="inventory-table-host">
                     @if (_mode == InventoryBrowserMode.Items)
                     {
-                        <InventoryItemTable Items="_visibleItems"
-                                            Query="CurrentTableQuery"
-                                            ShowCategory="HasItemTypes"
-                                            SelectedItemId="_selectedItem?.ItemId"
-                                            ItemSelected="SelectItem"
-                                            SortChanged="SortTable"
-                                            FilterChanged="FilterTable" />
-                    }
-                    else if (_mode == InventoryBrowserMode.Stacks)
-                    {
-                        <InventoryStackTable Stacks="_visibleStacks" Query="CurrentTableQuery" SortChanged="SortTable" FilterChanged="FilterTable" />
+                        <InventoryGroupedTable Groups="_visibleInventoryGroups"
+                                               Query="CurrentTableQuery"
+                                               SortChanged="SortTable"
+                                               FilterChanged="FilterTable" />
                     }
                     else
                     {
                         <InventoryListingTable Listings="_visibleListings" Query="CurrentTableQuery" ShowPrices="HasListingPrices" SortChanged="SortTable" FilterChanged="FilterTable" />
                     }
 
-                    @if (_view.FilterValid && _visibleMatchingRecordCount == 0)
+                    @if (_mode == InventoryBrowserMode.Listings && _view.FilterValid && _visibleMatchingRecordCount == 0)
                     {
                         <div class="inventory-empty">No matching @ModeLabel(_mode).ToLowerInvariant().</div>
                     }
                 </div>
 
-                @if (_mode == InventoryBrowserMode.Items && _selectedItem is not null)
-                {
-                    <aside class="inventory-inspector" aria-label="Selected item details">
-                        <div class="inventory-inspector-heading"><strong>Selected item</strong><button aria-label="Close selected item" @onclick="CloseInspector">×</button></div>
-                        <div class="inventory-inspector-summary">
-                            <h3>@_selectedItem.DisplayName</h3><span>@InspectorSummary</span>
-                            <div class="inventory-inspector-facts"><div><small>Owned</small><b>@_selectedItem.TotalQuantity.ToString("N0")</b></div><div><small>HQ</small><b class="hq-value">@_selectedItem.HqQuantity.ToString("N0")</b></div></div>
-                        </div>
-                        <div class="inventory-location-heading">Locations</div>
-                        @foreach (var location in _selectedItem.Locations)
-                        {
-                            <div class="inventory-location-row"><span>@location.Quantity.ToString("N0") total · @location.HqQuantity.ToString("N0") HQ</span><strong>@location.OwnerName</strong><small>@InventoryDisplayFormatter.FormatStorage(location.Location, location.BagName)</small></div>
-                        }
-                    </aside>
-                }
             </div>
         </div>
     </section>
@@ -204,9 +182,9 @@ else
     private IReadOnlyList<DashboardCharacterOption> _characters = [];
     private readonly Dictionary<InventoryBrowserMode, string> _filters = Enum.GetValues<InventoryBrowserMode>().ToDictionary(mode => mode, _ => string.Empty);
     private readonly Dictionary<InventoryBrowserMode, InventoryTableQueryState> _tableQueries = Enum.GetValues<InventoryBrowserMode>().ToDictionary(mode => mode, _ => new InventoryTableQueryState());
+    private static readonly InventoryBrowserMode[] AvailableModes = [InventoryBrowserMode.Items, InventoryBrowserMode.Listings];
     private InventoryBrowserView _view = new();
     private InventoryBrowserView? _lastValidView;
-    private InventoryBrowserItemView? _selectedItem;
     private long? _selectedCharacterId;
     private string _filterText = string.Empty;
     private string _scope = "all";
@@ -216,8 +194,7 @@ else
     private bool _checkingSession = true;
     private bool _loading;
     private CancellationTokenSource? _loadCts;
-    private IReadOnlyList<InventoryBrowserItemView> _visibleItems = [];
-    private IReadOnlyList<InventoryBrowserStackView> _visibleStacks = [];
+    private IReadOnlyList<InventoryGroupedItemRow> _visibleInventoryGroups = [];
     private IReadOnlyList<InventoryBrowserMarketListingView> _visibleListings = [];
     private int _visibleMatchingRecordCount;
     private int _visibleTotalQuantity;
@@ -228,8 +205,6 @@ else
     private string SnapshotLabel => _view.ReceivedAt == null ? "No snapshot loaded" : $"{CharacterLabel} · captured {_view.ReceivedAt.Value.ToLocalTime():g}";
     private string CharacterLabel => string.IsNullOrWhiteSpace(_view.CharacterName) ? "No character selected" : $"{_view.CharacterName} @ {_view.HomeWorld}";
     private string FilterPlaceholder => $"Filter {ModeLabel(_mode).ToLowerInvariant()}…";
-    private string ContentClass => _mode == InventoryBrowserMode.Items && _selectedItem is not null ? "inventory-content has-inspector" : "inventory-content";
-    private bool HasItemTypes => _view.ItemTypeKnownCount > 0;
     private bool HasListingPrices => _view.ListingPriceKnownCount > 0;
     private InventoryTableQueryState CurrentTableQuery => _tableQueries[_mode];
     private string GilSummary => _view.PlayerGil is { } playerGil
@@ -239,11 +214,6 @@ else
             : "Gil not recorded";
     private bool ShowFilterErrors => !_view.FilterValid && _view.FilterDiagnostics.Count > 0 && !InventoryFilterPresentation.IsIncomplete(_filterText);
     private InventoryBrowserMode? SuggestedFilterMode => ShowFilterErrors ? InventoryFilterPresentation.SuggestedMode(_filterText, _mode) : null;
-    private string InspectorSummary => _selectedItem is null
-        ? string.Empty
-        : string.IsNullOrWhiteSpace(_selectedItem.ItemType)
-            ? $"Observed in {_selectedItem.Locations.Count:N0} locations"
-            : $"{_selectedItem.ItemType} · observed in {_selectedItem.Locations.Count:N0} locations";
     private string? SharedCompletionDescription
     {
         get
@@ -291,10 +261,10 @@ else
         catch (Exception ex) { Status.Error($"Inventory load failed: {ex.Message}"); }
     }
 
-    private async Task OnCharacterChanged(long? value) { _selectedCharacterId = value; _scope = "all"; _selectedItem = null; _lastValidView = null; await LoadInventoryAsync(); PersistUrlState(); }
-    private async Task OnFilterChanged(string value) { _filterText = value; _filters[_mode] = value; _selectedItem = null; _showCompletions = true; await LoadInventoryAsync(); PersistUrlState(); }
-    private async Task SetScopeAsync(string scope) { _scope = string.IsNullOrWhiteSpace(scope) ? "all" : scope; _selectedItem = null; _lastValidView = null; await LoadInventoryAsync(); PersistUrlState(); }
-    private async Task SetModeAsync(InventoryBrowserMode mode) { if (_mode == mode) return; _filters[_mode] = _filterText; _mode = mode; _filterText = _filters[mode]; _selectedItem = null; _lastValidView = null; _showFilterReference = false; _showCompletions = false; await LoadInventoryAsync(); PersistUrlState(); }
+    private async Task OnCharacterChanged(long? value) { _selectedCharacterId = value; _scope = "all"; _lastValidView = null; await LoadInventoryAsync(); PersistUrlState(); }
+    private async Task OnFilterChanged(string value) { _filterText = value; _filters[_mode] = value; _showCompletions = true; await LoadInventoryAsync(); PersistUrlState(); }
+    private async Task SetScopeAsync(string scope) { _scope = string.IsNullOrWhiteSpace(scope) ? "all" : scope; _lastValidView = null; await LoadInventoryAsync(); PersistUrlState(); }
+    private async Task SetModeAsync(InventoryBrowserMode mode) { if (_mode == mode) return; _filters[_mode] = _filterText; _mode = mode == InventoryBrowserMode.Stacks ? InventoryBrowserMode.Items : mode; _filterText = _filters[_mode]; _lastValidView = null; _showFilterReference = false; _showCompletions = false; await LoadInventoryAsync(); PersistUrlState(); }
     private async Task UseSuggestedModeAsync(InventoryBrowserMode mode)
     {
         if (_mode == mode)
@@ -303,7 +273,6 @@ else
         _filters[_mode] = _filterText;
         _mode = mode;
         _filters[mode] = _filterText;
-        _selectedItem = null;
         _lastValidView = null;
         _showFilterReference = false;
         _showCompletions = false;
@@ -311,8 +280,6 @@ else
         PersistUrlState();
     }
     private void ToggleFilterReference() => _showFilterReference = !_showFilterReference;
-    private void SelectItem(InventoryBrowserItemView item) => _selectedItem = item;
-    private void CloseInspector() => _selectedItem = null;
     private void SortTable(string column) { CurrentTableQuery.ToggleSort(column); RebuildVisibleRows(); }
     private void FilterTable(InventoryColumnFilterChange change) { CurrentTableQuery.SetFilter(change.Column, change.Value); RebuildVisibleRows(); }
 
@@ -361,8 +328,6 @@ else
             {
                 _view = response;
             }
-            if (_selectedItem is not null)
-                _selectedItem = _view.Items.FirstOrDefault(item => item.ItemId == _selectedItem.ItemId);
             RebuildVisibleRows();
         }
         catch (OperationCanceledException) { }
@@ -380,7 +345,7 @@ else
             values[Uri.UnescapeDataString(part[0])] = part.Length == 2 ? Uri.UnescapeDataString(part[1]) : string.Empty;
         }
         if (values.TryGetValue("mode", out var mode) && Enum.TryParse<InventoryBrowserMode>(mode, true, out var parsedMode))
-            _mode = parsedMode;
+            _mode = parsedMode == InventoryBrowserMode.Stacks ? InventoryBrowserMode.Items : parsedMode;
         if (values.TryGetValue("scope", out var scope) && !string.IsNullOrWhiteSpace(scope))
             _scope = scope;
         if (values.TryGetValue("filter", out var filter))
@@ -403,7 +368,8 @@ else
     private string ScopeButtonClass(string scope) => string.Equals(_scope, scope, StringComparison.OrdinalIgnoreCase) ? "inventory-scope active" : "inventory-scope";
     private string ModeButtonClass(InventoryBrowserMode mode) => _mode == mode ? "inventory-mode active" : "inventory-mode";
     private static string AriaBoolean(bool value) => value ? "true" : "false";
-    private static string ModeLabel(InventoryBrowserMode mode) => mode switch { InventoryBrowserMode.Items => "Items", InventoryBrowserMode.Stacks => "Stacks", _ => "Listings" };
+    private static string ModeLabel(InventoryBrowserMode mode) => mode == InventoryBrowserMode.Listings ? "Listings" : "Inventory";
+    private static string RecordLabel(InventoryBrowserMode mode) => mode == InventoryBrowserMode.Listings ? "listings" : "items";
 
     private static string ScopeSummary(InventoryBrowserScopeView scope)
     {
@@ -415,24 +381,16 @@ else
 
     private void RebuildVisibleRows()
     {
-        _visibleItems = InventoryTableProjection.Items(_view.Items, _tableQueries[InventoryBrowserMode.Items]);
-        _visibleStacks = InventoryTableProjection.Stacks(_view.Stacks, _tableQueries[InventoryBrowserMode.Stacks]);
+        _visibleInventoryGroups = InventoryTableProjection.GroupedInventory(_view.Stacks, _tableQueries[InventoryBrowserMode.Items]);
         _visibleListings = InventoryTableProjection.Listings(_view.MarketListings, _tableQueries[InventoryBrowserMode.Listings]);
 
         switch (_mode)
         {
             case InventoryBrowserMode.Items:
-                _visibleMatchingRecordCount = _visibleItems.Count;
-                _visibleTotalQuantity = checked((int)_visibleItems.Sum(item => (long)item.TotalQuantity));
-                _visibleHqQuantity = checked((int)_visibleItems.Sum(item => (long)item.HqQuantity));
-                _visibleOwnerCount = _visibleItems.SelectMany(item => item.Locations).Select(location => location.OwnerName).Distinct(StringComparer.OrdinalIgnoreCase).Count();
-                _visibleListingPriceKnownCount = 0;
-                break;
-            case InventoryBrowserMode.Stacks:
-                _visibleMatchingRecordCount = _visibleStacks.Count;
-                _visibleTotalQuantity = checked((int)_visibleStacks.Sum(stack => (long)stack.Quantity));
-                _visibleHqQuantity = checked((int)_visibleStacks.Where(stack => stack.IsHq).Sum(stack => (long)stack.Quantity));
-                _visibleOwnerCount = _visibleStacks.Select(stack => stack.OwnerName).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+                _visibleMatchingRecordCount = _visibleInventoryGroups.Count;
+                _visibleTotalQuantity = checked((int)_visibleInventoryGroups.Sum(item => (long)item.TotalQuantity));
+                _visibleHqQuantity = checked((int)_visibleInventoryGroups.Sum(item => (long)item.HqQuantity));
+                _visibleOwnerCount = _visibleInventoryGroups.SelectMany(item => item.Stacks).Select(stack => stack.OwnerName).Distinct(StringComparer.OrdinalIgnoreCase).Count();
                 _visibleListingPriceKnownCount = 0;
                 break;
             default:
@@ -444,8 +402,6 @@ else
                 break;
         }
 
-        if (_selectedItem is not null && _visibleItems.All(item => item.ItemId != _selectedItem.ItemId))
-            _selectedItem = null;
     }
 
     public void Dispose() { _loadCts?.Cancel(); _loadCts?.Dispose(); }
