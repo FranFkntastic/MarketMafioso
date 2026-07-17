@@ -80,6 +80,25 @@ public sealed class OutfitterRouteAuthorityTests
     }
 
     [Fact]
+    public void FailedRestartPreflight_PreservesPersistedSunkPurchases()
+    {
+        var fixture = Fixture();
+        var session = Active(fixture);
+        session.RecordPurchase("line-1", Purchase(1, 100, true));
+
+        Assert.Throws<InvalidOperationException>(() => OutfitterRouteAuthoritySession.Consume(
+            fixture.Contract,
+            fixture.Document,
+            fixture.Plan with { Status = "Incomplete" },
+            fixture.Claim,
+            fixture.Store));
+
+        Assert.Equal(OutfitterRouteAuthorityPhase.Paused, fixture.Store.State!.Phase);
+        Assert.Equal(1u, fixture.Store.State.Lines[0].PurchasedQuantity);
+        Assert.Equal(100ul, fixture.Store.State.TotalSpentGil);
+    }
+
+    [Fact]
     public void Consume_RejectsChangedWorkbenchAndOutOfScopeWorld()
     {
         var fixture = Fixture();
@@ -93,6 +112,32 @@ public sealed class OutfitterRouteAuthorityTests
         };
         Assert.Throws<InvalidOperationException>(() => OutfitterRouteAuthoritySession.Consume(
             fixture.Contract, fixture.Document, badPlan, fixture.Claim));
+    }
+
+    [Fact]
+    public void FinalizedSweepScope_EnforcesRegionCurrentDataCenterAndExplicitDataCenters()
+    {
+        var region = Fixture("Region");
+        var primalPlan = WithWorld(region.Plan, "Behemoth", "Primal");
+        Assert.NotNull(OutfitterRouteAuthoritySession.Consume(
+            region.Contract, region.Document, primalPlan, region.Claim));
+
+        var currentDataCenter = Fixture("CurrentDataCenter");
+        Assert.Contains("Siren", currentDataCenter.Contract.AuthorizedWorlds);
+        Assert.DoesNotContain("Behemoth", currentDataCenter.Contract.AuthorizedWorlds);
+        Assert.Throws<InvalidOperationException>(() => OutfitterRouteAuthoritySession.Consume(
+            currentDataCenter.Contract, currentDataCenter.Document, primalPlan, currentDataCenter.Claim));
+
+        var explicitDataCenters = Fixture("DataCenters", ["Crystal"]);
+        Assert.Contains("Balmung", explicitDataCenters.Contract.AuthorizedWorlds);
+        Assert.DoesNotContain("Behemoth", explicitDataCenters.Contract.AuthorizedWorlds);
+        Assert.Throws<InvalidOperationException>(() => OutfitterRouteAuthoritySession.Consume(
+            explicitDataCenters.Contract, explicitDataCenters.Document, primalPlan, explicitDataCenters.Claim));
+        Assert.NotNull(OutfitterRouteAuthoritySession.Consume(
+            explicitDataCenters.Contract,
+            explicitDataCenters.Document,
+            WithWorld(explicitDataCenters.Plan, "Balmung", "Crystal"),
+            explicitDataCenters.Claim));
     }
 
     [Fact]
@@ -121,12 +166,14 @@ public sealed class OutfitterRouteAuthorityTests
         return session;
     }
 
-    private static FixtureData Fixture()
+    private static FixtureData Fixture(string sweepScope = "Region", IReadOnlyList<string>? sweepDataCenters = null)
     {
         var document = MarketAcquisitionRequestDocument.CreateDefault("Fran", "Siren") with
         {
             Region = "North America",
-            SweepDataCenters = ["Aether"],
+            WorldMode = "AllWorldSweep",
+            SweepScope = sweepScope,
+            SweepDataCenters = (sweepDataCenters ?? []).ToList(),
         };
         document = OutfitterWorkbenchAuthorityService.Stage(document, OutfitterWorkbenchAuthorityTests.Transfer());
         document = OutfitterWorkbenchAuthorityService.Finalize(document);
@@ -219,6 +266,16 @@ public sealed class OutfitterRouteAuthorityTests
             ],
         };
         return new(document, contract, claim, plan, new MemoryStore());
+    }
+
+    private static MarketAcquisitionPlan WithWorld(MarketAcquisitionPlan plan, string world, string dataCenter)
+    {
+        var batch = plan.WorldBatches[0];
+        var subtask = batch.ItemSubtasks[0] with { WorldName = world, DataCenter = dataCenter };
+        return plan with
+        {
+            WorldBatches = [batch with { WorldName = world, DataCenter = dataCenter, ItemSubtasks = [subtask] }],
+        };
     }
 
     private static MarketAcquisitionLiveCandidatePlan Candidate(

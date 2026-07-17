@@ -38,12 +38,13 @@ public sealed record OutfitterExecutionContract(
     string WorldMode,
     string SweepScope,
     IReadOnlyList<string> SweepDataCenters,
+    IReadOnlyList<string> AuthorizedWorlds,
     ulong SquirePlanCapGil,
     OutfitterWorkbenchTransfer Transfer,
     IReadOnlyList<OutfitterWorkbenchLineEnvelope> Lines,
     DateTimeOffset ConfirmedAtUtc)
 {
-    public const string CurrentSchemaVersion = "marketmafioso-squire-outfitter-execution-contract/v1";
+    public const string CurrentSchemaVersion = "marketmafioso-squire-outfitter-execution-contract/v2";
 }
 
 public sealed record OutfitterWorkbenchAuthority(
@@ -195,6 +196,8 @@ public static class OutfitterWorkbenchAuthorityService
 
         var intentHash = ComputeCanonicalIntentHash(document);
         if (authority.FinalizedContract is { } existing &&
+            existing.SchemaVersion == OutfitterExecutionContract.CurrentSchemaVersion &&
+            existing.AuthorizedWorlds is { Count: > 0 } &&
             existing.WorkbenchRevision == document.LocalRevision &&
             string.Equals(existing.CanonicalIntentHash, intentHash, StringComparison.Ordinal))
         {
@@ -214,6 +217,7 @@ public static class OutfitterWorkbenchAuthorityService
             document.WorldMode,
             document.SweepScope,
             document.SweepDataCenters.OrderBy(value => value, StringComparer.OrdinalIgnoreCase).ToArray(),
+            ResolveAuthorizedWorlds(document),
             authority.SquirePlanCapGil,
             authority.Transfer,
             authority.Lines,
@@ -325,6 +329,28 @@ public static class OutfitterWorkbenchAuthorityService
 
     private static string QualityLabel(EquipmentQuality quality) =>
         quality == EquipmentQuality.High ? "HQ" : "NQ";
+
+    private static IReadOnlyList<string> ResolveAuthorizedWorlds(MarketAcquisitionRequestDocument document)
+    {
+        var dataCenters = MarketAcquisitionWorldCatalog.ResolveDataCenters(document.Region);
+        IEnumerable<string> worlds = document.WorldMode == "AllWorldSweep"
+            ? document.SweepScope switch
+            {
+                "Region" => dataCenters.Values.SelectMany(value => value),
+                "CurrentDataCenter" => MarketAcquisitionWorldCatalog.ResolveWorldsForDataCenters(
+                    document.Region,
+                    [MarketAcquisitionWorldCatalog.ResolveDataCenter(document.TargetWorld)]),
+                "DataCenters" => MarketAcquisitionWorldCatalog.ResolveWorldsForDataCenters(
+                    document.Region,
+                    document.SweepDataCenters),
+                _ => throw new InvalidOperationException($"Unknown all-world sweep scope {document.SweepScope}."),
+            }
+            : dataCenters.Values.SelectMany(value => value);
+        return worlds
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(value => value, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
 
     private static MarketAcquisitionRequestDocument MarkEdited(
         MarketAcquisitionRequestDocument previous,

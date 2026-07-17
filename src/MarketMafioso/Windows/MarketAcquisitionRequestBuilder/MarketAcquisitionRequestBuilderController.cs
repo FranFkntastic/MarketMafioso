@@ -147,7 +147,7 @@ public sealed class MarketAcquisitionRequestBuilderController
                             (!string.Equals(Document.TargetCharacterName, characterName, StringComparison.Ordinal) ||
                              !string.Equals(Document.TargetWorld, world, StringComparison.Ordinal));
         var previous = Document;
-        Document = Document with
+        Document = (Document with
         {
             TargetCharacterName = characterName,
             TargetWorld = world,
@@ -158,7 +158,7 @@ public sealed class MarketAcquisitionRequestBuilderController
             RemoteHash = targetChanged ? null : Document.RemoteHash,
             SyncStatus = targetChanged ? "NewDraft" : Document.SyncStatus,
             UpdatedAtUtc = DateTimeOffset.UtcNow,
-        };
+        }).WithNextRevision(targetChanged || string.IsNullOrWhiteSpace(Document.RemoteRequestId) ? "NewDraft" : "LocalEdits");
         Document = OutfitterWorkbenchAuthorityService.ReconcileEdit(previous, Document);
         SaveDocument();
         RequestAutomaticSync();

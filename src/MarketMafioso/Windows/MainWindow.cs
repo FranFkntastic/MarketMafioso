@@ -1252,11 +1252,22 @@ public class MainWindow : Window, IDisposable
         {
             var remainingClaim = routeEngine.CreateOutfitterRecoveryClaim(claimed);
             var currentWorld = playerState.CurrentWorld.IsValid ? GetCurrentWorldName() : string.Empty;
-            var result = await acquisitionWorkspace.PrepareRecoveryPlanAsync(
-                remainingClaim,
-                currentWorld,
-                GetMarketAcquisitionRecentWorldTtl(),
-                token).ConfigureAwait(false);
+            MarketAcquisitionPlanPreparationResult result;
+            try
+            {
+                result = await acquisitionWorkspace.PrepareRecoveryPlanAsync(
+                    remainingClaim,
+                    currentWorld,
+                    GetMarketAcquisitionRecentWorldTtl(),
+                    token).ConfigureAwait(false);
+            }
+            catch (Exception exception)
+            {
+                routeEngine.PauseOutfitterRecovery(
+                    $"Recovery preparation failed safely: {exception.Message} Retry when market evidence is available or return to Advisor.");
+                routeEngine.ReportRouteProgress();
+                return;
+            }
             if (result.Plan.Status != "Ready" || result.Plan.WorldBatches.Count == 0)
             {
                 routeEngine.PauseOutfitterRecovery(
@@ -1278,12 +1289,21 @@ public class MainWindow : Window, IDisposable
 
     private void MaybeAutoResumeOutfitterRoute()
     {
-        if (routeEngine.IsRouteActive || acquisitionWorkspace.IsBusy || DateTimeOffset.UtcNow < nextOutfitterAutoResumeAtUtc ||
+        if (acquisitionWorkspace.IsBusy || DateTimeOffset.UtcNow < nextOutfitterAutoResumeAtUtc ||
             outfitterAutoResumeTask is { IsCompleted: false })
             return;
+        var live = routeEngine.CreateSnapshot();
+        if (live.OutfitterExecution?.Phase == OutfitterRouteAuthorityPhase.RecoveryNeeded &&
+            !live.IsRunning && !live.IsPaused)
+        {
+            nextOutfitterAutoResumeAtUtc = DateTimeOffset.UtcNow.AddSeconds(30);
+            outfitterAutoResumeTask = RecoverOutfitterRouteAsync();
+            return;
+        }
+        if (routeEngine.IsRouteActive)
+            return;
         var persisted = outfitterRouteStateStore.Restore();
-        if (persisted?.Phase is not (OutfitterRouteAuthorityPhase.Active or
-            OutfitterRouteAuthorityPhase.Preparing or OutfitterRouteAuthorityPhase.RecoveryNeeded))
+        if (persisted is null || !OutfitterRouteRecoveryLifecycle.CanAutoResume(persisted))
             return;
         var contract = acquisitionRequestBuilder.CurrentDocument.OutfitterAuthority?.FinalizedContract;
         if (contract is null || contract.ContractId != persisted.ContractId)
@@ -1315,13 +1335,29 @@ public class MainWindow : Window, IDisposable
                 return;
             }
             var currentWorld = playerState.CurrentWorld.IsValid ? GetCurrentWorldName() : string.Empty;
-            var result = await acquisitionWorkspace.PrepareRecoveryPlanAsync(
-                remainingClaim,
-                currentWorld,
-                GetMarketAcquisitionRecentWorldTtl(),
-                token).ConfigureAwait(false);
-            if (result.Plan.Status != "Ready" || result.Plan.WorldBatches.Count == 0)
+            MarketAcquisitionPlanPreparationResult result;
+            try
+            {
+                result = await acquisitionWorkspace.PrepareRecoveryPlanAsync(
+                    remainingClaim,
+                    currentWorld,
+                    GetMarketAcquisitionRecentWorldTtl(),
+                    token).ConfigureAwait(false);
+            }
+            catch (Exception exception)
+            {
+                outfitterRouteStateStore.Save(OutfitterRouteRecoveryLifecycle.PauseUnavailable(
+                    persisted,
+                    $"Recovery preparation failed safely: {exception.Message} Retry when market evidence is available or return to Advisor."));
                 return;
+            }
+            if (result.Plan.Status != "Ready" || result.Plan.WorldBatches.Count == 0)
+            {
+                outfitterRouteStateStore.Save(OutfitterRouteRecoveryLifecycle.PauseUnavailable(
+                    persisted,
+                    "No viable exact-quality route remains inside the confirmed caps. Wait for listings, retry recovery, or return to Advisor."));
+                return;
+            }
             var start = routeEngine.Start(
                 result.Plan,
                 remainingClaim,
@@ -1333,6 +1369,7 @@ public class MainWindow : Window, IDisposable
                 acquisitionWorkspace.ReplacePreparedPlan(result.Plan);
             else
                 acquisitionWorkspace.SetStatus(start.Message);
+            routeEngine.ReportRouteProgress();
         });
     }
 

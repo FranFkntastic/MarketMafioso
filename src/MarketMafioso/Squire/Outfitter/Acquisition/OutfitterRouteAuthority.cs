@@ -123,8 +123,6 @@ public sealed class OutfitterRouteAuthoritySession
         ArgumentNullException.ThrowIfNull(claim);
         ValidateContractBinding(contract, document, claim);
         var bindings = BindLines(contract, claim);
-        ValidatePlan(contract, plan, bindings);
-
         var restored = store?.Restore();
         var state = restored is not null &&
                     restored.ContractId == contract.ContractId &&
@@ -148,6 +146,20 @@ public sealed class OutfitterRouteAuthoritySession
                 0,
                 "Contract consumed; validating the exact-quality route before spending.",
                 DateTimeOffset.UtcNow);
+        try
+        {
+            ValidatePlan(contract, plan, state.Lines);
+        }
+        catch (Exception exception)
+        {
+            store?.Save(state with
+            {
+                Phase = OutfitterRouteAuthorityPhase.Paused,
+                Message = $"Squire preflight stopped before travel or purchase: {exception.Message}",
+                UpdatedAtUtc = DateTimeOffset.UtcNow,
+            });
+            throw;
+        }
         var session = new OutfitterRouteAuthoritySession(contract, state, store);
         session.Persist();
         return session;
@@ -312,10 +324,10 @@ public sealed class OutfitterRouteAuthoritySession
         UpdatedAtUtc = DateTimeOffset.UtcNow,
     });
 
-    public void RequestRecovery() => SetState(State with
+    public void RequestRecovery(string? message = null) => SetState(State with
     {
         Phase = OutfitterRouteAuthorityPhase.RecoveryNeeded,
-        Message = "Refreshing the complete remaining exact-quality route.",
+        Message = message ?? "Refreshing the complete remaining exact-quality route.",
         UpdatedAtUtc = DateTimeOffset.UtcNow,
     });
 
@@ -395,14 +407,15 @@ public sealed class OutfitterRouteAuthoritySession
 
     private static HashSet<string> ResolveAllowedWorlds(OutfitterExecutionContract contract)
     {
-        var dataCenters = MarketAcquisitionWorldCatalog.ResolveDataCenters(contract.Region);
-        var selected = contract.WorldMode == "AllWorldSweep" && contract.SweepDataCenters.Count > 0
-            ? contract.SweepDataCenters
-            : dataCenters.Keys;
-        return dataCenters
-            .Where(pair => selected.Contains(pair.Key, StringComparer.OrdinalIgnoreCase))
-            .SelectMany(pair => pair.Value)
+        if (contract.AuthorizedWorlds.Count == 0)
+            throw new InvalidOperationException("The finalized Squire contract contains no authorized worlds.");
+        var regionalWorlds = MarketAcquisitionWorldCatalog.ResolveDataCenters(contract.Region)
+            .Values
+            .SelectMany(value => value)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (contract.AuthorizedWorlds.Any(world => !regionalWorlds.Contains(world)))
+            throw new InvalidOperationException("The finalized Squire contract contains a world outside its region.");
+        return contract.AuthorizedWorlds.ToHashSet(StringComparer.OrdinalIgnoreCase);
     }
 
     private static bool IsRestoredStateSane(

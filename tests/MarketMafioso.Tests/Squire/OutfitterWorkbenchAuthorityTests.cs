@@ -107,6 +107,31 @@ public sealed class OutfitterWorkbenchAuthorityTests
     }
 
     [Fact]
+    public void Finalize_ReplacesLegacyContractThatLacksExplicitWorldAuthority()
+    {
+        var finalized = OutfitterWorkbenchAuthorityService.Finalize(
+            OutfitterWorkbenchAuthorityService.Stage(
+                MarketAcquisitionRequestDocument.CreateDefault("Fran", "Siren"), Transfer()));
+        var current = finalized.OutfitterAuthority!.FinalizedContract!;
+        var legacy = current with
+        {
+            SchemaVersion = "marketmafioso-squire-outfitter-execution-contract/v1",
+            AuthorizedWorlds = [],
+        };
+        finalized = finalized with
+        {
+            OutfitterAuthority = finalized.OutfitterAuthority with { FinalizedContract = legacy },
+        };
+
+        var upgraded = OutfitterWorkbenchAuthorityService.Finalize(finalized);
+        var contract = upgraded.OutfitterAuthority!.FinalizedContract!;
+
+        Assert.Equal(OutfitterExecutionContract.CurrentSchemaVersion, contract.SchemaVersion);
+        Assert.NotEqual(legacy.ContractId, contract.ContractId);
+        Assert.NotEmpty(contract.AuthorizedWorlds);
+    }
+
+    [Fact]
     public void Persistence_RoundTripsAuthorityWhileServerIntentHashRemainsBuyListOnly()
     {
         var staged = OutfitterWorkbenchAuthorityService.Finalize(

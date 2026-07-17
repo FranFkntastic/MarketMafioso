@@ -115,7 +115,8 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
         bool canReprepare,
         bool canRefreshEvidence)
     {
-        if (snapshot.OutfitterExecution?.Phase == OutfitterRouteAuthorityPhase.Paused && !snapshot.IsPaused)
+        var primaryAction = MarketAcquisitionGuidedRouteActionPresenter.Resolve(snapshot);
+        if (primaryAction == MarketAcquisitionGuidedRoutePrimaryAction.RetryOutfitterRecovery)
         {
             if (ImGuiUi.PrimaryButton("Retry Squire Recovery##OutfitterRecovery", true))
                 retryOutfitterRecovery();
@@ -126,7 +127,7 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
                 retryOutfitterRecovery);
             return;
         }
-        if (snapshot.IsPaused)
+        if (primaryAction == MarketAcquisitionGuidedRoutePrimaryAction.ResumeManualPause)
         {
             if (ImGuiUi.PrimaryButton("Resume Route##MarketAcquisitionResumeRoute", true))
                 resumeRoute();
@@ -138,7 +139,7 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
             return;
         }
 
-        if (snapshot.IsRunning)
+        if (primaryAction == MarketAcquisitionGuidedRoutePrimaryAction.PauseActiveRoute)
         {
             if (ImGuiUi.PrimaryButton("Pause Route##MarketAcquisitionPauseRoute", true))
                 pauseRoute();

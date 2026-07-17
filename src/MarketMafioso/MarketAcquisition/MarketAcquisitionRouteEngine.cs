@@ -138,18 +138,19 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
                 return UpdateStatus(MarketAcquisitionRouteActionResult.Fail("Squire Route start requires its finalized Workbench document."));
             try
             {
-                var nextAuthority = OutfitterRouteAuthoritySession.Consume(
+                outfitterAuthority = OutfitterRouteAuthoritySession.Consume(
                     outfitterContract,
                     workbenchDocument,
                     plan,
                     claimed,
                     outfitterStateStore);
-                nextAuthority.CompletePreflight(plan);
-                outfitterAuthority = nextAuthority;
+                outfitterAuthority.CompletePreflight(plan);
             }
             catch (Exception exception)
             {
-                return UpdateStatus(MarketAcquisitionRouteActionResult.Fail($"Squire preflight stopped before travel or purchase: {exception.Message}"));
+                var message = $"Squire preflight stopped before travel or purchase: {exception.Message}";
+                outfitterAuthority?.Pause(message);
+                return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(message));
             }
         }
         else
@@ -165,6 +166,11 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         catch (Exception exception) when (outfitterAuthority is not null)
         {
             outfitterAuthority.Pause($"Squire Route start failed before travel: {exception.Message}");
+            return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(outfitterAuthority.State.Message));
+        }
+        if (!result.Success && outfitterAuthority is not null)
+        {
+            outfitterAuthority.Pause($"Squire Route start stopped safely: {result.Message}");
             return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(outfitterAuthority.State.Message));
         }
         state.AcquisitionStatus = result.Message;
@@ -191,7 +197,13 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             claimedRequest = remainingClaim;
             ClearExecutionState();
             reportDispatcher.BeginSession(remainingClaim);
-            return UpdateStatus(runner.Start(plan, enableDiagnostics: false, includeOpportunisticChecks: false));
+            var result = runner.Start(plan, enableDiagnostics: false, includeOpportunisticChecks: false);
+            if (!result.Success)
+            {
+                outfitterAuthority.Pause($"Recovery start stopped safely: {result.Message}");
+                return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(outfitterAuthority.State.Message));
+            }
+            return UpdateStatus(result);
         }
         catch (Exception exception)
         {
@@ -220,6 +232,34 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             outfitterAuthority.Pause(exception.Message);
         }
         state.AcquisitionStatus = outfitterAuthority.State.Message;
+    }
+
+    private MarketAcquisitionRouteActionResult TransitionToOutfitterRecovery(string reason)
+    {
+        if (outfitterAuthority is null)
+            return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(reason));
+
+        CleanupOwnedApproach("Squire recovery");
+        CleanupOwnedTravel("Squire recovery");
+        CancelActiveOperation("Visible market rows changed; preparing Squire recovery.");
+        if (runner.IsRunning || runner.IsPaused)
+            runner.Stop();
+        outfitterAuthority.RequestRecovery($"{reason} Refreshing and optimizing the complete remaining exact-quality route.");
+        state.AcquisitionStatus = outfitterAuthority.State.Message;
+        return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(outfitterAuthority.State.Message));
+    }
+
+    internal MarketAcquisitionRouteActionResult? EnforceOutfitterCandidateAuthority(
+        MarketAcquisitionWorldItemSubtask subtask,
+        MarketAcquisitionLiveCandidatePlan candidatePlan)
+    {
+        if (outfitterAuthority is null)
+            return null;
+        var authorization = outfitterAuthority.AuthorizeCandidate(subtask, candidatePlan);
+        return authorization.IsValid
+            ? null
+            : TransitionToOutfitterRecovery(
+                authorization.Error ?? "Visible market rows exceeded Squire authority.");
     }
 
     public MarketAcquisitionRouteActionResult StartEvidenceRefresh(
@@ -319,7 +359,13 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             }
         }
         reportDispatcher.BeginSession(claimed);
-        return UpdateStatus(runner.Restart(plan));
+        var result = runner.Restart(plan);
+        if (!result.Success && outfitterAuthority is not null)
+        {
+            outfitterAuthority.Pause($"Squire restart stopped safely: {result.Message}");
+            return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(outfitterAuthority.State.Message));
+        }
+        return UpdateStatus(result);
     }
 
     public MarketAcquisitionRouteActionResult ReprepareAndRestart(
@@ -347,7 +393,13 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             }
         }
         reportDispatcher.BeginSession(claimed);
-        return UpdateStatus(runner.ReprepareAndRestart(plan, preparedAtUtc));
+        var result = runner.ReprepareAndRestart(plan, preparedAtUtc);
+        if (!result.Success && outfitterAuthority is not null)
+        {
+            outfitterAuthority.Pause($"Squire restart stopped safely: {result.Message}");
+            return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(outfitterAuthority.State.Message));
+        }
+        return UpdateStatus(result);
     }
 
     public void Reset(string status)
@@ -989,13 +1041,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         MarketAcquisitionRouteActionResult? authorityFailure = null;
         if (recordRouteResult && !state.EvidenceRefreshOnly && activeSubtask is not null && state.LiveCandidatePlan is not null && outfitterAuthority is not null)
         {
-            var authorization = outfitterAuthority.AuthorizeCandidate(activeSubtask, state.LiveCandidatePlan);
-            if (!authorization.IsValid)
-            {
-                outfitterAuthority.Pause(authorization.Error ?? "Visible market rows exceeded Squire authority.");
-                authorityFailure = runner.Pause();
-                state.AcquisitionStatus = outfitterAuthority.State.Message;
-            }
+            authorityFailure = EnforceOutfitterCandidateAuthority(activeSubtask, state.LiveCandidatePlan);
         }
         var probeResult = authorityFailure is null && recordRouteResult && runner.IsRunning && runner.ActiveStop is { Status: "Arrived" } && state.LiveCandidatePlan != null
             ? runner.RecordProbe(currentWorld, state.LiveCandidatePlan, allowPurchases: !state.EvidenceRefreshOnly)
@@ -1138,12 +1184,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
         if (outfitterAuthority is not null && activeStop.ActiveItemSubtask is { } authoritySubtask)
         {
-            var authorization = outfitterAuthority.AuthorizeCandidate(authoritySubtask, state.LiveCandidatePlan);
-            if (!authorization.IsValid)
+            if (EnforceOutfitterCandidateAuthority(authoritySubtask, state.LiveCandidatePlan) is not null)
             {
-                outfitterAuthority.Pause(authorization.Error ?? "Visible market rows exceeded Squire authority.");
-                UpdateStatus(runner.Pause());
-                state.AcquisitionStatus = outfitterAuthority.State.Message;
                 return;
             }
         }
