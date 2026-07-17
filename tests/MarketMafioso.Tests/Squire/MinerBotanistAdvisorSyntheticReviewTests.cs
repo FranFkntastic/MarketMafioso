@@ -31,10 +31,17 @@ public sealed class MinerBotanistAdvisorSyntheticReviewTests
         Assert.Contains(advice.OffersByAllocation.Values, offer => offer.Offer.Definition.Name == "Crested Coat of Gathering");
         Assert.All(advice.OffersByAllocation.Values, offer => Assert.InRange(offer.Offer.Definition.ItemId, 1u, 100_000u));
         Assert.All(advice.OffersByAllocation.Values, offer => Assert.DoesNotContain("illustrative", offer.Offer.SourceLabel, StringComparison.OrdinalIgnoreCase));
-        Assert.Equal(15_481UL, Solution(advice, "published-budget-raw").AcquisitionCostGil);
-        Assert.Equal(26_281UL, Solution(advice, "published-budget-cloudsail").AcquisitionCostGil);
+        Assert.Equal(0UL, Solution(advice, "published-budget-raw").AcquisitionCostGil);
+        Assert.Equal(10_800UL, Solution(advice, "published-budget-cloudsail").AcquisitionCostGil);
         Assert.Equal(2_462_623UL, Solution(advice, "published-mid-raw").AcquisitionCostGil);
         Assert.Equal(2_478_432UL, Solution(advice, "published-high-raw").AcquisitionCostGil);
+        Assert.All(
+            advice.OffersByAllocation.Values.Where(offer => offer.Offer.Definition.Name.StartsWith("Star Tech", StringComparison.Ordinal)),
+            offer =>
+            {
+                Assert.Equal(EquipmentAcquisitionSourceKind.Owned, offer.Offer.SourceKind);
+                Assert.Equal(0UL, offer.AcquisitionCostGil);
+            });
     }
 
     [Fact]

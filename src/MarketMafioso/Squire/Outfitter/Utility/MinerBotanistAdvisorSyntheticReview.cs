@@ -22,7 +22,6 @@ internal static class MinerBotanistAdvisorSyntheticReview
         string[] Assumptions,
         ulong SupplementalCostGil = 0,
         bool UsesFood = false,
-        bool UsesScripExchange = false,
         bool IsDerivedAdversarial = false,
         int PriceScalePermille = 1000);
 
@@ -40,14 +39,12 @@ internal static class MinerBotanistAdvisorSyntheticReview
     [
         new("published-budget-raw", "Budget stopping point",
             new(4_879, 5_444, 884),
-            ["No food", "Star Tech scrip gear; gil axis prices its meld package"],
-            UsesScripExchange: true),
+            ["No food", "Owned Star Tech baseline; unavailable as a procurement candidate"]),
         new("published-budget-cloudsail", "Budget set with Cloudsail Meuniere HQ",
             new(4_970, 5_620, 884),
             ["Cloudsail Meuniere HQ · 10,800 gil/meal", "Recurring consumable remains outside JobUtilityScore"],
             SupplementalCostGil: 10_800,
-            UsesFood: true,
-            UsesScripExchange: true),
+            UsesFood: true),
         new("published-mid-raw", "Mid-tier Crested meld set",
             new(5_510, 5_470, 904),
             ["No food", "HQ Crested gear and assigned materia priced from sale history"]),
@@ -186,7 +183,7 @@ internal static class MinerBotanistAdvisorSyntheticReview
             totalCost,
             new(
                 WorldVisits: marketPurchases == 0 ? 0 : 1,
-                VendorStops: benchmark.UsesScripExchange ? 1 : 0,
+                VendorStops: 0,
                 PurchaseTransactions: pricedPackages + (benchmark.UsesFood ? 1 : 0)),
             new(0, 0, 0),
             labels);
@@ -209,18 +206,18 @@ internal static class MinerBotanistAdvisorSyntheticReview
 
     private static ItemEvidence[] BudgetItems() =>
     [
-        Scrip(EquipmentLoadoutPosition.MainHand, 49334, "Star Tech Pickaxe", 999),
-        Scrip(EquipmentLoadoutPosition.OffHand, 49345, "Star Tech Sledgehammer", 999),
-        Scrip(EquipmentLoadoutPosition.Head, 49352, "Star Tech Goggles of Gathering", 1_998),
-        Scrip(EquipmentLoadoutPosition.Body, 49353, "Star Tech Coat of Gathering", 1_998),
-        Scrip(EquipmentLoadoutPosition.Hands, 49354, "Star Tech Work Gloves of Gathering", 1_495),
-        Scrip(EquipmentLoadoutPosition.Legs, 49355, "Star Tech Kecks of Gathering", 999),
-        Scrip(EquipmentLoadoutPosition.Feet, 49356, "Star Tech Shoes of Gathering", 1_998),
-        Scrip(EquipmentLoadoutPosition.Ears, 49361, "Star Tech Ear Cuff of Gathering", 999),
-        Scrip(EquipmentLoadoutPosition.Neck, 49362, "Star Tech Choker of Gathering", 999),
-        Scrip(EquipmentLoadoutPosition.Wrists, 49363, "Star Tech Bracelet of Gathering", 999),
-        Scrip(EquipmentLoadoutPosition.LeftRing, 49364, "Star Tech Ring of Gathering", 999),
-        Scrip(EquipmentLoadoutPosition.RightRing, 49364, "Star Tech Ring of Gathering", 999),
+        OwnedBaseline(EquipmentLoadoutPosition.MainHand, 49334, "Star Tech Pickaxe"),
+        OwnedBaseline(EquipmentLoadoutPosition.OffHand, 49345, "Star Tech Sledgehammer"),
+        OwnedBaseline(EquipmentLoadoutPosition.Head, 49352, "Star Tech Goggles of Gathering"),
+        OwnedBaseline(EquipmentLoadoutPosition.Body, 49353, "Star Tech Coat of Gathering"),
+        OwnedBaseline(EquipmentLoadoutPosition.Hands, 49354, "Star Tech Work Gloves of Gathering"),
+        OwnedBaseline(EquipmentLoadoutPosition.Legs, 49355, "Star Tech Kecks of Gathering"),
+        OwnedBaseline(EquipmentLoadoutPosition.Feet, 49356, "Star Tech Shoes of Gathering"),
+        OwnedBaseline(EquipmentLoadoutPosition.Ears, 49361, "Star Tech Ear Cuff of Gathering"),
+        OwnedBaseline(EquipmentLoadoutPosition.Neck, 49362, "Star Tech Choker of Gathering"),
+        OwnedBaseline(EquipmentLoadoutPosition.Wrists, 49363, "Star Tech Bracelet of Gathering"),
+        OwnedBaseline(EquipmentLoadoutPosition.LeftRing, 49364, "Star Tech Ring of Gathering"),
+        OwnedBaseline(EquipmentLoadoutPosition.RightRing, 49364, "Star Tech Ring of Gathering"),
     ];
 
     private static ItemEvidence[] MidTierItems() =>
@@ -255,15 +252,15 @@ internal static class MinerBotanistAdvisorSyntheticReview
         Market(EquipmentLoadoutPosition.RightRing, 47201, "Crested Ring of Gathering", 135_211),
     ];
 
-    private static ItemEvidence Scrip(EquipmentLoadoutPosition position, uint itemId, string name, ulong meldCost) => new(
+    private static ItemEvidence OwnedBaseline(EquipmentLoadoutPosition position, uint itemId, string name) => new(
         position,
         itemId,
         name,
         750,
         EquipmentQuality.Normal,
-        EquipmentAcquisitionSourceKind.GilVendor,
-        meldCost,
-        "Purple scrip exchange · meld estimate only");
+        EquipmentAcquisitionSourceKind.Owned,
+        0,
+        "Owned baseline premise · not procured");
 
     private static ItemEvidence Relic(EquipmentLoadoutPosition position, string name) => new(
         position,

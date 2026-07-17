@@ -73,7 +73,7 @@
       "family": "Star Tech gathering gear",
       "source": "Purple scrip exchange",
       "gilPrice": null,
-      "treatment": "The plot prices only the assigned meld package; it does not invent a gil conversion for scrips."
+      "treatment": "Excluded from procurement. It may appear only as an already-owned baseline, with zero acquisition cost and no invented gil conversion."
     }
   },
   "loadouts": [
