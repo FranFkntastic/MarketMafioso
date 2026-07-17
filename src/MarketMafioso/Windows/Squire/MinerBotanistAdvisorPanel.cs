@@ -320,6 +320,7 @@ internal sealed class MinerBotanistAdvisorPanel
             warningIds,
             new HashSet<string>(StringComparer.Ordinal));
         var result = plotContainer.Draw("SquireAdvisorFrontier", model.Spec, new Vector2(0, 285f), interaction);
+        RegisterPlotControls(result.Controls);
         if (result.ClickedDatumId is { } clicked && model.SolutionsByDatumId.ContainsKey(clicked))
             selectedSolutionId = clicked;
         if (result.HoveredDatumId is { } hovered && model.SolutionsByDatumId.TryGetValue(hovered, out var solution))
@@ -372,6 +373,7 @@ internal sealed class MinerBotanistAdvisorPanel
 
         ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Shape identifies context · point color remains NQ/HQ mix");
         var result = plotContainer.Draw("SquireAdvisorFrontierOverlay", overlay.Spec, new Vector2(0, 285f), interaction);
+        RegisterPlotControls(result.Controls);
         if (result.ClickedDatumId is { } clicked && overlay.DatumIdentities.TryGetValue(clicked, out var clickedIdentity))
         {
             var clickedContext = ContextFromSeriesId(clickedIdentity.SeriesId);
@@ -593,5 +595,22 @@ internal sealed class MinerBotanistAdvisorPanel
             selected,
             value,
             invoke);
+    }
+
+    private void RegisterPlotControls(IReadOnlyList<DalamudPlotContainerControl> controls)
+    {
+        foreach (var control in controls)
+        {
+            reviewRegistry.Register(
+                $"squire.outfitter.advisor.plot.{control.Id}",
+                control.Label,
+                AgentBridgeUiControlKind.Button,
+                control.Bounds.Minimum,
+                control.Bounds.Maximum,
+                control.Enabled,
+                control.Selected,
+                control.Value,
+                control.Invoke);
+        }
     }
 }
