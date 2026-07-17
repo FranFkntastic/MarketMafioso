@@ -1,4 +1,18 @@
-<table class="inventory-native-table listings-table @(ShowPrices ? null : "without-prices")" data-inventory-table="listings">
+<WebTableResizeSurface Columns="Columns"
+                       StorageKey="@StorageKey"
+                       ScrollClass="inventory-table-scroll"
+                       AccentColor="var(--mmf-accent)"
+                       BoundaryColor="var(--mmf-border)">
+<table class="inventory-native-table listings-table @(ShowPrices ? null : "without-prices")" data-franthropy-resizable-table>
+    <colgroup>
+        @foreach (var column in Columns)
+        {
+            <col data-column-id="@column.Id"
+                 data-default-width="@column.SafeDefaultWidthPx"
+                 data-min-width="@column.SafeMinWidthPx"
+                 style="width: @(column.SafeDefaultWidthPx)px" />
+        }
+    </colgroup>
     <thead>
         <tr class="inventory-column-row">
             <InventorySortHeader Label="Item" Column="item" SortColumn="Query.SortColumn" Descending="Query.SortDescending" SortChanged="SortChanged" />
@@ -39,13 +53,36 @@
         </Virtualize>
     </tbody>
 </table>
+</WebTableResizeSurface>
 
 @code {
+    private static readonly IReadOnlyList<WebTableResizeColumn> PriceColumns =
+    [
+        new("item", "Item", 260, 140),
+        new("retainer", "Retainer", 160, 100),
+        new("quantity", "Qty", 80, 60),
+        new("quality", "Quality", 80, 64),
+        new("unit-price", "Unit price", 120, 90),
+        new("total", "Total", 120, 90),
+        new("observed", "Observed", 100, 76),
+    ];
+
+    private static readonly IReadOnlyList<WebTableResizeColumn> QuantityColumns =
+    [
+        new("item", "Item", 360, 140),
+        new("retainer", "Retainer", 240, 100),
+        new("quantity", "Qty", 110, 60),
+        new("quality", "Quality", 110, 64),
+        new("observed", "Observed", 120, 76),
+    ];
+
     [Parameter] public IReadOnlyList<InventoryBrowserMarketListingView> Listings { get; set; } = [];
     [Parameter, EditorRequired] public InventoryTableQueryState Query { get; set; } = new();
     [Parameter] public bool ShowPrices { get; set; }
     [Parameter] public EventCallback<string> SortChanged { get; set; }
     [Parameter] public EventCallback<InventoryColumnFilterChange> FilterChanged { get; set; }
+    private IReadOnlyList<WebTableResizeColumn> Columns => ShowPrices ? PriceColumns : QuantityColumns;
+    private string StorageKey => $"mmf.inventory.column-widths.v2.listings.{(ShowPrices ? "priced" : "quantity")}";
     private ICollection<InventoryBrowserMarketListingView> VirtualizedListings => Listings as ICollection<InventoryBrowserMarketListingView> ?? Listings.ToArray();
     private static string FormatUnitPrice(uint? value) => value is null ? "Not recorded" : $"{value:N0} gil";
     private static string FormatTotalPrice(ulong? value) => value is null ? "Not recorded" : $"{value:N0} gil";

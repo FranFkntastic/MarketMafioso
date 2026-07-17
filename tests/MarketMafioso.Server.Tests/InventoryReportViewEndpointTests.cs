@@ -657,10 +657,14 @@ public sealed class InventoryReportViewEndpointTests
         Assert.False(string.IsNullOrWhiteSpace(bootScript));
 
         var appCss = await client.GetAsync("/marketmafioso/css/app.css");
+        var tableResizeCss = await client.GetAsync("/marketmafioso/_content/Franthropy.Web/table-resize.css");
+        var tableResizeJs = await client.GetAsync("/marketmafioso/_content/Franthropy.Web/table-resize.js");
         var dotnetJs = await client.GetAsync("/marketmafioso/_framework/dotnet.js");
         var bootJs = await client.GetAsync($"/marketmafioso/{bootScript}");
 
         Assert.Equal(HttpStatusCode.OK, appCss.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, tableResizeCss.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, tableResizeJs.StatusCode);
         Assert.Equal(HttpStatusCode.OK, dotnetJs.StatusCode);
         Assert.Equal(HttpStatusCode.OK, bootJs.StatusCode);
     }

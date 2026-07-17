@@ -5,6 +5,7 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <OverrideHtmlAssetPlaceholders>true</OverrideHtmlAssetPlaceholders>
+    <FranthropyWebProject Condition="'$(FranthropyWebProject)' == ''">..\..\..\Franthropy\src\Franthropy.Web\Franthropy.Web.csproj</FranthropyWebProject>
   </PropertyGroup>
 
   <ItemGroup>
@@ -15,6 +16,11 @@
 
   <ItemGroup>
     <ProjectReference Include="..\MarketMafioso.Contracts\MarketMafioso.Contracts.csproj" />
+    <ProjectReference Include="$(FranthropyWebProject)" />
   </ItemGroup>
+
+  <Target Name="ValidateFranthropyWebProject" BeforeTargets="PrepareForBuild" Condition="!Exists('$(FranthropyWebProject)')">
+    <Error Text="Franthropy.Web was not found at '$(FranthropyWebProject)'. Clone Franthropy beside MarketMafioso or set FranthropyWebProject." />
+  </Target>
 
 </Project>

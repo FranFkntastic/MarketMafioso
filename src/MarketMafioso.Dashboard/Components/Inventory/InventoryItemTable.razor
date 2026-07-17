@@ -1,4 +1,18 @@
-<table class="inventory-native-table items-table @(ShowCategory ? null : "without-category")" data-inventory-table="items">
+<WebTableResizeSurface Columns="Columns"
+                       StorageKey="@StorageKey"
+                       ScrollClass="inventory-table-scroll"
+                       AccentColor="var(--mmf-accent)"
+                       BoundaryColor="var(--mmf-border)">
+<table class="inventory-native-table items-table @(ShowCategory ? null : "without-category")" data-franthropy-resizable-table>
+    <colgroup>
+        @foreach (var column in Columns)
+        {
+            <col data-column-id="@column.Id"
+                 data-default-width="@column.SafeDefaultWidthPx"
+                 data-min-width="@column.SafeMinWidthPx"
+                 style="width: @(column.SafeDefaultWidthPx)px" />
+        }
+    </colgroup>
     <thead>
         <tr class="inventory-column-row">
             <InventorySortHeader Label="Item" Column="item" SortColumn="Query.SortColumn" Descending="Query.SortDescending" SortChanged="SortChanged" />
@@ -45,8 +59,28 @@
         </Virtualize>
     </tbody>
 </table>
+</WebTableResizeSurface>
 
 @code {
+    private static readonly IReadOnlyList<WebTableResizeColumn> FullColumns =
+    [
+        new("item", "Item", 320, 140),
+        new("category", "Category", 140, 90),
+        new("owned", "Owned", 90, 64),
+        new("hq", "HQ", 80, 56),
+        new("location", "Primary location", 240, 130),
+        new("owners", "Owners", 90, 64),
+    ];
+
+    private static readonly IReadOnlyList<WebTableResizeColumn> CompactColumns =
+    [
+        new("item", "Item", 340, 140),
+        new("owned", "Owned", 100, 64),
+        new("hq", "HQ", 90, 56),
+        new("location", "Primary location", 330, 130),
+        new("owners", "Owners", 100, 64),
+    ];
+
     [Parameter] public IReadOnlyList<InventoryBrowserItemView> Items { get; set; } = [];
     [Parameter, EditorRequired] public InventoryTableQueryState Query { get; set; } = new();
     [Parameter] public bool ShowCategory { get; set; }
@@ -54,6 +88,8 @@
     [Parameter] public EventCallback<InventoryBrowserItemView> ItemSelected { get; set; }
     [Parameter] public EventCallback<string> SortChanged { get; set; }
     [Parameter] public EventCallback<InventoryColumnFilterChange> FilterChanged { get; set; }
+    private IReadOnlyList<WebTableResizeColumn> Columns => ShowCategory ? FullColumns : CompactColumns;
+    private string StorageKey => $"mmf.inventory.column-widths.v2.items.{(ShowCategory ? "typed" : "compact")}";
     private ICollection<InventoryBrowserItemView> VirtualizedItems => Items as ICollection<InventoryBrowserItemView> ?? Items.ToArray();
 
     private Task HandleKeyDownAsync(KeyboardEventArgs args, InventoryBrowserItemView item) =>

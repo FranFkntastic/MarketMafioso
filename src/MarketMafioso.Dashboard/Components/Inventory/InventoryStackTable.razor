@@ -1,4 +1,18 @@
-<table class="inventory-native-table stacks-table" data-inventory-table="stacks">
+<WebTableResizeSurface Columns="Columns"
+                       StorageKey="mmf.inventory.column-widths.v2.stacks"
+                       ScrollClass="inventory-table-scroll"
+                       AccentColor="var(--mmf-accent)"
+                       BoundaryColor="var(--mmf-border)">
+<table class="inventory-native-table stacks-table" data-franthropy-resizable-table>
+    <colgroup>
+        @foreach (var column in Columns)
+        {
+            <col data-column-id="@column.Id"
+                 data-default-width="@column.SafeDefaultWidthPx"
+                 data-min-width="@column.SafeMinWidthPx"
+                 style="width: @(column.SafeDefaultWidthPx)px" />
+        }
+    </colgroup>
     <thead>
         <tr class="inventory-column-row">
             <InventorySortHeader Label="Item" Column="item" SortColumn="Query.SortColumn" Descending="Query.SortDescending" SortChanged="SortChanged" />
@@ -36,8 +50,19 @@
         </Virtualize>
     </tbody>
 </table>
+</WebTableResizeSurface>
 
 @code {
+    private static readonly IReadOnlyList<WebTableResizeColumn> Columns =
+    [
+        new("item", "Item", 280, 140),
+        new("owner", "Stored by", 170, 100),
+        new("storage", "Storage", 250, 130),
+        new("quantity", "Qty", 80, 60),
+        new("quality", "Quality", 80, 64),
+        new("condition", "Condition", 100, 72),
+    ];
+
     [Parameter] public IReadOnlyList<InventoryBrowserStackView> Stacks { get; set; } = [];
     [Parameter, EditorRequired] public InventoryTableQueryState Query { get; set; } = new();
     [Parameter] public EventCallback<string> SortChanged { get; set; }

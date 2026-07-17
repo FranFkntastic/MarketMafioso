@@ -73,6 +73,7 @@ jobs:
           -p:CraftArchitectCoreProject="${GITHUB_WORKSPACE}/craft-architect/src/FFXIV Craft Architect.Core/FFXIV Craft Architect.Core.csproj"
           -p:FranthropyFfxivProject="${GITHUB_WORKSPACE}/franthropy/src/Franthropy.FFXIV/Franthropy.FFXIV.csproj"
           -p:FranthropyFilteringProject="${GITHUB_WORKSPACE}/franthropy/src/Franthropy.Filtering/Franthropy.Filtering.csproj"
+          -p:FranthropyWebProject="${GITHUB_WORKSPACE}/franthropy/src/Franthropy.Web/Franthropy.Web.csproj"
           -o dist/marketmafioso-server
 
       - name: Package receiver files
