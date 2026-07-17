@@ -11,7 +11,7 @@
                  SortState="CurrentSortState"
                  SortChanged="ChangeSort"
                  FilterCell="FilterCell"
-                 StorageKey="mmf.inventory.column-widths.v3.grouped"
+                 StorageKey="mmf.inventory.column-widths.v4.grouped"
                  ScrollClass="inventory-table-scroll"
                  CssClass="inventory-grouped-table"
                  AccentColor="var(--mmf-accent)"
@@ -33,12 +33,12 @@
     [
         new()
         {
-            Id = InventoryGroupedColumn.Item, Key = "item", Label = "Item", DefaultWidthPx = 325, MinWidthPx = 170,
+            Id = InventoryGroupedColumn.Item, Key = "item", Label = "Item", DefaultWidthPx = 290, MinWidthPx = 170,
             GroupCell = GroupItemCell, ChildCell = ChildItemCell,
         },
         new()
         {
-            Id = InventoryGroupedColumn.Owner, Key = "owner", Label = "Owner(s)", DefaultWidthPx = 160, MinWidthPx = 105,
+            Id = InventoryGroupedColumn.Owner, Key = "owner", Label = "Owner(s)", DefaultWidthPx = 125, MinWidthPx = 105,
             GroupCell = GroupOwnerCell, ChildCell = ChildOwnerCell,
         },
         new()
@@ -49,20 +49,20 @@
         },
         new()
         {
-            Id = InventoryGroupedColumn.Quality, Key = "quality", Label = "Quality", DefaultWidthPx = 90, MinWidthPx = 68,
+            Id = InventoryGroupedColumn.Quality, Key = "quality", Label = "Quality", DefaultWidthPx = 80, MinWidthPx = 68,
             HeaderCssClass = "numeric", GroupCellCssClass = "numeric", ChildCellCssClass = "numeric",
             GroupCell = GroupQualityCell, ChildCell = ChildQualityCell,
         },
         new()
         {
-            Id = InventoryGroupedColumn.Location, Key = "location", Label = "Location", DefaultWidthPx = 280, MinWidthPx = 150,
+            Id = InventoryGroupedColumn.Location, Key = "location", Label = "Location", DefaultWidthPx = 255, MinWidthPx = 150,
             GroupCell = GroupLocationCell, ChildCell = ChildLocationCell,
             GroupCellTitle = row => InventoryDisplayFormatter.FormatStackStorage(row.PrimaryStack),
             ChildCellTitle = InventoryDisplayFormatter.FormatStackStorage,
         },
         new()
         {
-            Id = InventoryGroupedColumn.Condition, Key = "condition", Label = "Condition", DefaultWidthPx = 95, MinWidthPx = 72,
+            Id = InventoryGroupedColumn.Condition, Key = "condition", Label = "Condition", DefaultWidthPx = 90, MinWidthPx = 72,
             HeaderCssClass = "numeric", GroupCellCssClass = "numeric", ChildCellCssClass = "numeric",
             GroupCell = GroupConditionCell, ChildCell = ChildConditionCell,
         },
