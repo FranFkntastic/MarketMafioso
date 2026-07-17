@@ -29,6 +29,30 @@ public sealed class SquireRunPresentationTests
         Assert.Equal([failed], presentation.Failed);
         Assert.Equal([remaining], presentation.Remaining);
         Assert.Equal([failed, remaining], presentation.Retryable);
+
+        var checkpoint = presentation.CreateCheckpointPlan();
+        Assert.Equal(plan.SnapshotGenerationId, checkpoint.SnapshotGenerationId);
+        Assert.Equal(plan.ApprovedAt, checkpoint.ApprovedAt);
+        Assert.Equal([failed, remaining], checkpoint.Actions);
+    }
+
+    [Fact]
+    public void CompletedActionsWithTeardownFailureRequireInteractionRecoveryNotItemRetry()
+    {
+        var scope = new CharacterScope(1, "Squire", 57);
+        var completed = Action(scope, 1, 100);
+        var plan = new SquireActionPlan(Guid.NewGuid(), scope, SquireDisposition.VendorSell, DateTimeOffset.UtcNow, [completed]);
+        var result = new SquireRunResult(false, "UnclassifiedFailure",
+        [
+            new(DateTimeOffset.UtcNow, "ActionResult", "Completed", "Sold", completed.Fingerprint),
+            new(DateTimeOffset.UtcNow, "RunStopped", "UnclassifiedFailure", "Vendor interaction did not settle."),
+        ]);
+
+        var presentation = SquireRunPresentation.Create(plan, result, "audit.jsonl");
+
+        Assert.True(presentation.NeedsInteractionRecovery);
+        Assert.Single(presentation.Completed);
+        Assert.Empty(presentation.Retryable);
     }
 
     private static SquireReviewedSelection Action(CharacterScope scope, int slot, uint itemId) => new(

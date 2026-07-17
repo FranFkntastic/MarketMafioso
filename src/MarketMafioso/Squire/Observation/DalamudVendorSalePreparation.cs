@@ -177,14 +177,17 @@ internal sealed class DalamudVendorSalePreparation
         FirePresentedCloseCallbacks("Shop");
         FirePresentedCloseCallbacks("SelectString");
         FirePresentedCloseCallbacks("SelectIconString");
-        ownsShop = false;
+        FirePresentedCloseCallbacks("Talk");
     }
+
+    public void CompleteOwnedUiClose() => ownsShop = false;
 
     public unsafe void RecoverDiagnosticUi()
     {
         FireAllCloseCallbacks("Shop");
         FireAllCloseCallbacks("SelectString");
         FireAllCloseCallbacks("SelectIconString");
+        FireAllCloseCallbacks("Talk");
         ownsShop = false;
     }
 

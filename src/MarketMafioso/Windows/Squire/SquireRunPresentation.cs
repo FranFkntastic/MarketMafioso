@@ -40,59 +40,86 @@ internal sealed record SquireRunPresentation(
     }
 
     public IReadOnlyList<SquireReviewedSelection> Retryable => Failed.Concat(Remaining).ToArray();
+    public bool NeedsInteractionRecovery => !Result.Success && Completed.Count == Plan.Actions.Count && Retryable.Count == 0;
+    public bool WasDiagnostic => Result.Events.Any(value => value.Kind.StartsWith("Diagnostic", StringComparison.Ordinal));
+    public SquireActionPlan CreateCheckpointPlan() => Plan with { Actions = Retryable };
 }
 
 internal sealed class SquireRunResultPanel
 {
     public void Draw(
         SquireRunPresentation presentation,
-        Action refreshAndReview,
-        Action prepareRetry,
+        Func<uint, string> resolveItemName,
+        Action recoverInteraction,
+        bool recoveryActive,
+        Action retryFromCheckpoint,
+        bool retryActive,
+        Action dismiss,
         Action openAuditLocation)
     {
         ImGui.Separator();
         ImGui.TextColored(MarketMafiosoUiTheme.Header,
-            presentation.Result.Success ? "Last cleanup run completed" : "Last cleanup run stopped");
+            presentation.Result.Success
+                ? "Last cleanup run completed"
+                : presentation.NeedsInteractionRecovery
+                    ? "Cleanup completed; interaction recovery needed"
+                    : "Last cleanup run stopped");
         ImGui.TextUnformatted(
             $"Completed {presentation.Completed.Count} | Failed {presentation.Failed.Count} | Remaining {presentation.Remaining.Count} | Audit {Path.GetFileName(presentation.AuditPath)}");
-        if (!string.IsNullOrWhiteSpace(presentation.FailureMessage))
-            ImGui.TextColored(MarketMafiosoUiTheme.Error, presentation.FailureMessage);
+        if (presentation.NeedsInteractionRecovery)
+            ImGui.TextColored(MarketMafiosoUiTheme.Error, "Squire handled every item but could not confirm that the game released its NPC interaction.");
+        else if (!string.IsNullOrWhiteSpace(presentation.FailureMessage))
+            ImGui.TextColored(MarketMafiosoUiTheme.Error, presentation.FailureMessage.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)[0]);
 
         if (presentation.Retryable.Count > 0 &&
             ImGui.BeginTable("##SquireRunRecovery", 4, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.SizingStretchProp))
         {
             ImGui.TableSetupColumn("State", ImGuiTableColumnFlags.WidthFixed, 75);
-            ImGui.TableSetupColumn("Item ID", ImGuiTableColumnFlags.WidthFixed, 70);
+            ImGui.TableSetupColumn("Item");
             ImGui.TableSetupColumn("Location");
             ImGui.TableSetupColumn("Disposition");
             ImGui.TableHeadersRow();
             foreach (var action in presentation.Failed)
-                DrawAction("Failed", action);
+                DrawAction("Failed", action, resolveItemName);
             foreach (var action in presentation.Remaining)
-                DrawAction("Remaining", action);
+                DrawAction("Remaining", action, resolveItemName);
             ImGui.EndTable();
         }
 
-        if (presentation.Retryable.Count > 0)
+        if (presentation.NeedsInteractionRecovery)
         {
-            if (ImGui.Button("Refresh and review remaining"))
-                refreshAndReview();
+            if (recoveryActive)
+                ImGui.BeginDisabled();
+            if (ImGui.Button(recoveryActive ? "Recovering interaction..." : "Recover interaction"))
+                recoverInteraction();
+            if (recoveryActive)
+                ImGui.EndDisabled();
             ImGui.SameLine();
-            if (ImGui.Button("Prepare retry from fresh analysis"))
-                prepareRetry();
-            if (ImGui.IsItemHovered())
-                ImGui.SetTooltip("Re-evaluates every remaining exact item and builds a new unconfirmed cleanup batch. It never replays the old plan.");
+        }
+        else if (presentation.Retryable.Count > 0)
+        {
+            if (retryActive)
+                ImGui.BeginDisabled();
+            if (ImGui.Button(retryActive
+                    ? "Retrying from checkpoint..."
+                    : $"Retry from checkpoint ({presentation.Retryable.Count} item(s))"))
+                retryFromCheckpoint();
+            if (retryActive)
+                ImGui.EndDisabled();
             ImGui.SameLine();
         }
         if (ImGui.Button("Open audit location"))
             openAuditLocation();
+        ImGui.SameLine();
+        if (ImGui.Button("Dismiss"))
+            dismiss();
     }
 
-    private static void DrawAction(string state, SquireReviewedSelection action)
+    private static void DrawAction(string state, SquireReviewedSelection action, Func<uint, string> resolveItemName)
     {
         ImGui.TableNextRow();
         Cell(state);
-        Cell(action.Fingerprint.ItemId.ToString());
+        Cell(resolveItemName(action.Fingerprint.ItemId));
         Cell(SquirePresentation.FormatLocation(action.Fingerprint));
         Cell(SquirePresentation.FormatDisposition(action.Disposition));
     }

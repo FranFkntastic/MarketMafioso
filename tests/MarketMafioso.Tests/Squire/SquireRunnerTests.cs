@@ -144,6 +144,27 @@ public sealed class SquireRunnerTests
     }
 
     [Fact]
+    public async Task CheckpointResume_AuditsResumeAndExecutesOnlyCheckpointSuffix()
+    {
+        var checkpoint = new SquireActionPlan(
+            Guid.NewGuid(),
+            Scope,
+            SquireDisposition.VendorSell,
+            DateTimeOffset.UtcNow,
+            [Selection(2, SquireDisposition.VendorSell)]);
+        var adapter = new FakeAdapter();
+
+        var result = await new SquireRunner(adapter).ResumeFromCheckpointAsync(
+            checkpoint,
+            diagnostic: false,
+            cancellationToken: CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Single(adapter.ExecutedDispositions);
+        Assert.Contains(result.Events, value => value.Kind == "CheckpointResume" && value.Message.Contains("1 unfinished action"));
+    }
+
+    [Fact]
     public async Task RecoveryFailureBetweenGroups_DoesNotCloseCompletedGroupTwice()
     {
         var first = Selection(1, SquireDisposition.Desynthesize);

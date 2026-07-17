@@ -20,6 +20,7 @@ using Franthropy.Dalamud.AgentBridge;
 using Franthropy.Dalamud.Equipment;
 using MarketMafioso.Diagnostics;
 using MarketMafioso.Squire.Outfitter.Utility;
+using LuminaItem = Lumina.Excel.Sheets.Item;
 
 namespace MarketMafioso.Windows.Squire;
 
@@ -43,6 +44,7 @@ internal sealed class SquireTabPanel : IDisposable
     private readonly OutfitterPanel outfitterPanel;
     private readonly MinerBotanistAdvisorSession advisorSession;
     private readonly MinerBotanistAdvisorPanel advisorPanel;
+    private readonly Func<uint, string> resolveItemName;
     private string selectedWorkspace;
     private SquireAnalysis? analysis;
     private SquireRunPresentation? lastRun;
@@ -68,6 +70,7 @@ internal sealed class SquireTabPanel : IDisposable
     private string? confirmedBatchKey;
     private CancellationTokenSource? runCancellation;
     private Task? activeRun;
+    private Task? activeRunRecovery;
     private string? batchValidationKey;
     private SquireBatchValidationResult? cachedBatchValidation;
 
@@ -93,6 +96,11 @@ internal sealed class SquireTabPanel : IDisposable
         this.reviewRegistry = reviewRegistry;
         this.diagnosticDirectory = diagnosticDirectory;
         this.uiStateCapture = uiStateCapture;
+        resolveItemName = itemId =>
+        {
+            var name = dataManager.GetExcelSheet<LuminaItem>()?.GetRowOrDefault(itemId)?.Name.ToString();
+            return string.IsNullOrWhiteSpace(name) ? "Unavailable item" : name;
+        };
         inventoryChangeMonitor = new SquireInventoryChangeMonitor(
             gameInventory,
             dataManager,
@@ -287,7 +295,15 @@ internal sealed class SquireTabPanel : IDisposable
         evidencePanel.Draw(analysis, focusedItem);
         DrawRunPanel(analysis);
         if (lastRun is { } runPresentation)
-            runResultPanel.Draw(runPresentation, RefreshAndReviewRemaining, PrepareRetryFromFreshAnalysis, OpenLastRunAuditLocation);
+            runResultPanel.Draw(
+                runPresentation,
+                resolveItemName,
+                RecoverLastRunInteraction,
+                activeRunRecovery is { IsCompleted: false },
+                RetryLastRunFromCheckpoint,
+                activeRun is { IsCompleted: false },
+                () => lastRun = null,
+                OpenLastRunAuditLocation);
     }
 
     private void Refresh() => Refresh(reconcileSelections: analysis is not null, "Manual refresh");
@@ -894,12 +910,12 @@ internal sealed class SquireTabPanel : IDisposable
         }
     }
 
-    private async Task DiagnosticRunAsync(SquireActionPlan plan, CancellationToken cancellationToken)
+    private async Task DiagnosticRunAsync(SquireActionPlan plan, CancellationToken cancellationToken, bool checkpointResume = false)
     {
         SquireRunResult result;
         try
         {
-            result = await new SquireRunner(actionAdapter, runEvent =>
+            var runner = new SquireRunner(actionAdapter, runEvent =>
             {
                 uiStateCapture.Mark($"squire-{runEvent.Kind}", new Dictionary<string, string?>
                 {
@@ -911,7 +927,10 @@ internal sealed class SquireTabPanel : IDisposable
                 });
                 if (runEvent.Kind is "DispositionGroupStart" or "DiagnosticActionStart")
                     status = runEvent.Message;
-            }).RunDiagnosticAsync(plan, explicitlyConfirmed: true, cancellationToken);
+            });
+            result = checkpointResume
+                ? await runner.ResumeFromCheckpointAsync(plan, diagnostic: true, cancellationToken: cancellationToken)
+                : await runner.RunDiagnosticAsync(plan, explicitlyConfirmed: true, cancellationToken);
         }
         finally
         {
@@ -932,15 +951,18 @@ internal sealed class SquireTabPanel : IDisposable
             : $"Diagnostic cleanup stopped ({result.Code}). Audit: {Path.GetFileName(auditPath)} | UI capture: {captureName}";
     }
 
-    private async Task RunAsync(SquireActionPlan plan, CancellationToken cancellationToken)
+    private async Task RunAsync(SquireActionPlan plan, CancellationToken cancellationToken, bool checkpointResume = false)
     {
         try
         {
-            var result = await new SquireRunner(actionAdapter, runEvent =>
+            var runner = new SquireRunner(actionAdapter, runEvent =>
             {
                 if (runEvent.Kind is "DispositionGroupStart" or "ActionStart")
                     status = runEvent.Message;
-            }).RunAsync(plan, explicitlyConfirmed: true, cancellationToken);
+            });
+            var result = checkpointResume
+                ? await runner.ResumeFromCheckpointAsync(plan, diagnostic: false, cancellationToken: cancellationToken)
+                : await runner.RunAsync(plan, explicitlyConfirmed: true, cancellationToken);
             var version = Assembly.GetExecutingAssembly().GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
                 ?? Assembly.GetExecutingAssembly().GetName().Version?.ToString()
                 ?? "unknown";
@@ -967,35 +989,55 @@ internal sealed class SquireTabPanel : IDisposable
         runCancellation?.Dispose();
     }
 
-    private void RefreshAndReviewRemaining()
+    private void RetryLastRunFromCheckpoint()
     {
-        Refresh(reconcileSelections: true, "Run recovery refresh");
-        showBatchOnly = true;
+        if (lastRun is not { Retryable.Count: > 0 } run || activeRun is { IsCompleted: false })
+            return;
+
+        var checkpointPlan = run.CreateCheckpointPlan();
+        if (run.WasDiagnostic && uiStateCapture.IsRecording)
+        {
+            status = "Checkpoint retry blocked: the catchall UI-state recorder is already active.";
+            return;
+        }
+
+        runCancellation?.Dispose();
+        runCancellation = new CancellationTokenSource();
+        lastRun = null;
+        if (run.WasDiagnostic)
+        {
+            uiStateCapture.Start("squire-cleanup-checkpoint-retry");
+            uiStateCapture.Mark("squire-checkpoint-retry", new Dictionary<string, string?>
+            {
+                ["actionCount"] = checkpointPlan.Actions.Count.ToString(),
+                ["snapshotGenerationId"] = checkpointPlan.SnapshotGenerationId.ToString(),
+            });
+            activeRun = DiagnosticRunAsync(checkpointPlan, runCancellation.Token, checkpointResume: true);
+        }
+        else
+        {
+            activeRun = RunAsync(checkpointPlan, runCancellation.Token, checkpointResume: true);
+        }
+        status = $"Retrying {checkpointPlan.Actions.Count} item(s) from the last approved checkpoint. Completed actions will not repeat.";
     }
 
-    private void PrepareRetryFromFreshAnalysis()
+    private void RecoverLastRunInteraction()
     {
-        if (lastRun is not { } run)
+        if (activeRunRecovery is { IsCompleted: false })
             return;
-        Refresh(reconcileSelections: false, "Retry preparation refresh");
-        if (analysis is null)
-            return;
-        review.Clear();
-        tableSelection.Clear();
-        var selected = 0;
-        foreach (var priorAction in run.Retryable)
+        activeRunRecovery = RecoverLastRunInteractionAsync();
+    }
+
+    private async Task RecoverLastRunInteractionAsync()
+    {
+        status = "Recovering Squire's owned interaction...";
+        var result = await actionAdapter.RecoverOwnedStateAsync(CancellationToken.None).ConfigureAwait(false);
+        status = result.Message;
+        if (result.Success)
         {
-            var candidate = analysis.Candidates.FirstOrDefault(value =>
-                EquipmentInstanceFingerprintComparer.Instance.Equals(value.Instance.Fingerprint, priorAction.Fingerprint));
-            if (candidate is null || !candidate.IsExecutable || candidate.RecommendedDisposition != priorAction.Disposition)
-                continue;
-            tableSelection.Add(candidate.Instance.Fingerprint);
-            if (review.TrySelect(analysis, candidate.Instance.Fingerprint, candidate.RecommendedDisposition))
-                selected++;
+            lastRun = null;
+            RequestAutomaticRefresh("Interaction recovery", TimeSpan.Zero);
         }
-        InvalidateRunAuthorization();
-        showBatchOnly = true;
-        status = $"Prepared a fresh, unconfirmed retry batch containing {selected} of {run.Retryable.Count} previously failed or remaining item(s). Review before confirming.";
     }
 
     private void OpenLastRunAuditLocation()

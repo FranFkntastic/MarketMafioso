@@ -38,6 +38,7 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
     private readonly DalamudItemContextActionUiTransaction discardUi;
     private readonly DalamudItemContextActionUiTransaction vendorSaleUi;
     private readonly DalamudVendorSalePreparation vendorSalePreparation;
+    private readonly SemaphoreSlim ownedStateRecoveryGate = new(1, 1);
     private SquireDisposition? diagnosticDisposition;
 
     public string DiagnosticStatus => diagnosticDisposition switch
@@ -139,10 +140,8 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
             if (ownedNpcUi)
                 await CloseOwnedExpertPreparationAsync(cancellationToken).ConfigureAwait(false);
         }
-        if (disposition == SquireDisposition.VendorSell)
-            await framework.RunOnTick(vendorSalePreparation.CloseOwnedUi).ConfigureAwait(false);
         if (ownedNpcUi && disposition == SquireDisposition.VendorSell)
-            await WaitForNpcInteractionSettledAsync(cancellationToken).ConfigureAwait(false);
+            await CloseOwnedVendorPreparationAsync(cancellationToken).ConfigureAwait(false);
     }
 
     public bool HasConflictingAutomation(SquireDisposition disposition) =>
@@ -389,9 +388,8 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
                 }
                 finally
                 {
-                    await framework.RunOnTick(vendorSalePreparation.CloseOwnedUi).ConfigureAwait(false);
                     if (ownedUi)
-                        await WaitForNpcInteractionSettledAsync(cancellationToken).ConfigureAwait(false);
+                        await CloseOwnedVendorPreparationAsync(cancellationToken).ConfigureAwait(false);
                 }
             }
             return await ProbeContextActionAsync(fingerprint, disposition,
@@ -474,18 +472,6 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
         throw new InvalidOperationException("Desynthesis UI did not settle after the completed inventory transition.");
     }
 
-    private async Task WaitForNpcInteractionSettledAsync(CancellationToken cancellationToken)
-    {
-        for (var attempt = 0; attempt < 180; attempt++)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (!IsNpcInteractionOccupied())
-                return;
-            await framework.DelayTicks(1).ConfigureAwait(false);
-        }
-        throw new InvalidOperationException("The normal NPC interaction did not settle after Squire closed its route UI.");
-    }
-
     private async Task CloseOwnedExpertPreparationAsync(CancellationToken cancellationToken)
     {
         for (var attempt = 0; attempt < 300; attempt++)
@@ -500,6 +486,22 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
             await framework.DelayTicks(1).ConfigureAwait(false);
         }
         throw new InvalidOperationException("The normal Expert Delivery interaction did not settle after Squire closed its owned UI stack.");
+    }
+
+    private async Task CloseOwnedVendorPreparationAsync(CancellationToken cancellationToken)
+    {
+        for (var attempt = 0; attempt < 300; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            await framework.RunOnTick(vendorSalePreparation.CloseOwnedUi).ConfigureAwait(false);
+            if (!IsNpcInteractionOccupied())
+            {
+                await framework.RunOnTick(vendorSalePreparation.CompleteOwnedUiClose).ConfigureAwait(false);
+                return;
+            }
+            await framework.DelayTicks(1).ConfigureAwait(false);
+        }
+        throw new InvalidOperationException("The normal vendor interaction did not settle after Squire closed its owned UI stack.");
     }
 
     private bool IsNpcInteractionOccupied() =>
@@ -904,13 +906,45 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
     public void ReleaseOwnedState()
     {
         recoveryCoordinator.ReleaseOwnedState();
-        _ = ReleaseOwnedStateAsync();
+        _ = ReleaseOwnedStateSafelyAsync();
     }
 
-    private async Task ReleaseOwnedStateAsync()
+    public async Task<SquireActionResult> RecoverOwnedStateAsync(CancellationToken cancellationToken)
+    {
+        recoveryCoordinator.ReleaseOwnedState();
+        try
+        {
+            await ReleaseOwnedStateSerializedAsync(cancellationToken).ConfigureAwait(false);
+            return SquireActionResult.Completed("Squire closed its owned interaction and released its automation state.");
+        }
+        catch (OperationCanceledException)
+        {
+            return SquireActionResult.Fail("RecoveryCancelled", "Interaction recovery was cancelled.");
+        }
+        catch (Exception ex)
+        {
+            return SquireActionResult.Fail("RecoveryFailed", ex.Message);
+        }
+    }
+
+    private async Task ReleaseOwnedStateSafelyAsync()
+    {
+        try { await ReleaseOwnedStateSerializedAsync(CancellationToken.None).ConfigureAwait(false); }
+        catch { }
+    }
+
+    private async Task ReleaseOwnedStateSerializedAsync(CancellationToken cancellationToken)
+    {
+        await ownedStateRecoveryGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try { await ReleaseOwnedStateAsync(cancellationToken).ConfigureAwait(false); }
+        finally { ownedStateRecoveryGate.Release(); }
+    }
+
+    private async Task ReleaseOwnedStateAsync(CancellationToken cancellationToken)
     {
         for (var attempt = 0; attempt < 120; attempt++)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var settled = await framework.RunOnTick(() =>
             {
                 desynthesisUi.CloseOwnedUi();
@@ -926,8 +960,9 @@ public sealed class DalamudSquireActionGameAdapter : ISquireActionGameAdapter
             await framework.DelayTicks(1).ConfigureAwait(false);
         }
         if (expertDeliveryPreparation.OwnsUi)
-            await CloseOwnedExpertPreparationAsync(CancellationToken.None).ConfigureAwait(false);
-        await framework.RunOnTick(vendorSalePreparation.CloseOwnedUi).ConfigureAwait(false);
+            await CloseOwnedExpertPreparationAsync(cancellationToken).ConfigureAwait(false);
+        if (vendorSalePreparation.OwnsUi)
+            await CloseOwnedVendorPreparationAsync(cancellationToken).ConfigureAwait(false);
     }
 
     private async Task CloseOwnedUiUntilSettledAsync(System.Action close, Func<bool> isSettled)

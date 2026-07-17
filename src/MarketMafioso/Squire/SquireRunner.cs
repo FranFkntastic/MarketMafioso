@@ -33,6 +33,11 @@ public interface ISquireActionGameAdapter
         Task.FromResult(SquireActionResult.Completed($"{disposition} requires no shared batch preparation."));
     Task<SquireActionResult> RecoverExecutionStateAsync(CancellationToken cancellationToken) =>
         Task.FromResult(SquireActionResult.Completed("No execution recovery was required."));
+    Task<SquireActionResult> RecoverOwnedStateAsync(CancellationToken cancellationToken)
+    {
+        ReleaseOwnedState();
+        return Task.FromResult(SquireActionResult.Completed("Owned Squire state was released."));
+    }
     Task EndDispositionGroupAsync(SquireDisposition disposition, CancellationToken cancellationToken) => Task.CompletedTask;
     void ReleaseOwnedState();
     void CloseDiagnosticUi() => ReleaseOwnedState();
@@ -60,12 +65,25 @@ public sealed class SquireRunner
     }
 
     public async Task<SquireRunResult> RunAsync(SquireActionPlan plan, bool explicitlyConfirmed, CancellationToken cancellationToken)
-        => await RunCoreAsync(plan, explicitlyConfirmed, diagnostic: false, cancellationToken).ConfigureAwait(false);
+        => await RunCoreAsync(plan, explicitlyConfirmed, diagnostic: false, checkpointResume: false, cancellationToken).ConfigureAwait(false);
 
     public async Task<SquireRunResult> RunDiagnosticAsync(SquireActionPlan plan, bool explicitlyConfirmed, CancellationToken cancellationToken)
-        => await RunCoreAsync(plan, explicitlyConfirmed, diagnostic: true, cancellationToken).ConfigureAwait(false);
+        => await RunCoreAsync(plan, explicitlyConfirmed, diagnostic: true, checkpointResume: false, cancellationToken).ConfigureAwait(false);
 
-    private async Task<SquireRunResult> RunCoreAsync(SquireActionPlan plan, bool explicitlyConfirmed, bool diagnostic, CancellationToken cancellationToken)
+    public async Task<SquireRunResult> ResumeFromCheckpointAsync(SquireActionPlan checkpointPlan, bool diagnostic, CancellationToken cancellationToken)
+        => await RunCoreAsync(
+            checkpointPlan,
+            explicitlyConfirmed: true,
+            diagnostic: diagnostic,
+            checkpointResume: true,
+            cancellationToken: cancellationToken).ConfigureAwait(false);
+
+    private async Task<SquireRunResult> RunCoreAsync(
+        SquireActionPlan plan,
+        bool explicitlyConfirmed,
+        bool diagnostic,
+        bool checkpointResume,
+        CancellationToken cancellationToken)
     {
         var events = new List<SquireRunEvent>();
         void Record(string kind, string code, string message, EquipmentInstanceFingerprint? item = null)
@@ -77,6 +95,8 @@ public sealed class SquireRunner
 
         if (!explicitlyConfirmed)
             return Stop("ConfirmationRequired", "The reviewed run was not explicitly confirmed.");
+        if (checkpointResume)
+            Record("CheckpointResume", "CheckpointResume", $"Resuming {plan.Actions.Count} unfinished action(s) from the last approved plan checkpoint.");
 
         SquireDisposition? activeGroup = null;
         try
