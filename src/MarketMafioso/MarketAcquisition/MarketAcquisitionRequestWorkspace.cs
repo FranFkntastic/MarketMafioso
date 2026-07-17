@@ -386,6 +386,25 @@ public sealed class MarketAcquisitionRequestWorkspace : IDisposable
             Status = result.StatusMessage;
         });
 
+    public Task<MarketAcquisitionPlanPreparationResult> PrepareRecoveryPlanAsync(
+        MarketAcquisitionClaimView remainingClaim,
+        string currentWorld,
+        TimeSpan recentWorldTtl,
+        CancellationToken token)
+    {
+        ArgumentNullException.ThrowIfNull(remainingClaim);
+        return planPreparationService.PrepareAsync(
+            new MarketAcquisitionPlanPreparationRequest
+            {
+                Claim = remainingClaim,
+                CurrentWorld = currentWorld,
+                PreparedAtUtc = DateTimeOffset.UtcNow,
+                RecentWorldTtl = recentWorldTtl,
+                IgnoreRecentWorldVisitsForSweep = false,
+            },
+            token);
+    }
+
     public Task RunWithReportableClaimAsync(
         Func<MarketAcquisitionClaimView, CancellationToken, Task> action) =>
         RunAsync(async token =>

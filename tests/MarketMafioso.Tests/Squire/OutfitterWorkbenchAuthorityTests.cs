@@ -171,7 +171,7 @@ public sealed class OutfitterWorkbenchAuthorityTests
         Assert.Null(authority.FinalizedContract);
     }
 
-    private static OutfitterWorkbenchTransfer Transfer()
+    internal static OutfitterWorkbenchTransfer Transfer()
     {
         var now = new DateTimeOffset(2026, 7, 17, 12, 0, 0, TimeSpan.Zero);
         var offerKey = new EquipmentOfferKey(
