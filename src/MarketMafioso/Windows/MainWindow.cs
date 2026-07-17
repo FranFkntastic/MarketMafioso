@@ -320,11 +320,17 @@ public class MainWindow : Window, IDisposable
         AcquisitionCompositionWindow = new MarketAcquisitionWorkbenchCompositionWindow(
             acquisitionWorkbenchCompositions,
             CreateMarketAcquisitionCompositionContext);
-        squireTab.ConnectMarketAcquisition(lines =>
-        {
-            acquisitionRequestBuilder.StageLines(lines);
-            QueueAgentTabSelection("Market Acquisition", "Workbench");
-        });
+        squireTab.ConnectMarketAcquisition(
+            lines =>
+            {
+                acquisitionRequestBuilder.StageLines(lines);
+                QueueAgentTabSelection("Market Acquisition", "Workbench");
+            },
+            transfer =>
+            {
+                acquisitionRequestBuilder.StageOutfitterTransfer(transfer);
+                QueueAgentTabSelection("Market Acquisition", "Workbench");
+            });
         acquisitionWorkspace.Connect(
             acquisitionRequestBuilder.AdoptRequest,
             acquisitionRequestBuilder.AdoptRestoredRequestIfSafe,
@@ -908,10 +914,11 @@ public class MainWindow : Window, IDisposable
     {
         ImGui.Separator();
         var validation = acquisitionRequestBuilder.DraftValidation;
+        var outfitterValidation = acquisitionRequestBuilder.OutfitterFinalizationValidation;
         var presentation = MarketAcquisitionWorkbenchFinalizationPresenter.Build(new(
             acquisitionRequestBuilder.LineCount,
-            validation.IsValid,
-            validation.Errors.FirstOrDefault(),
+            validation.IsValid && outfitterValidation.IsValid,
+            validation.Errors.FirstOrDefault() ?? outfitterValidation.Error,
             context.HasCharacterScope,
             context.IsBusy,
             context.IsRouteActive,
@@ -951,6 +958,8 @@ public class MainWindow : Window, IDisposable
     private async Task FinalizeMarketAcquisitionPlanAsync()
     {
         await acquisitionRequestBuilder.WaitForRefreshAsync().ConfigureAwait(false);
+        if (!acquisitionRequestBuilder.FinalizeOutfitterAuthority())
+            return;
         var claimed = acquisitionWorkspace.ClaimedRequest;
         if (claimed is { Status: "Claimed" })
         {

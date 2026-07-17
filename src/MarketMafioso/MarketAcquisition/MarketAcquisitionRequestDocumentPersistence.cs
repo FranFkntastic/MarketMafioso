@@ -1,5 +1,6 @@
 using System;
 using System.Linq;
+using MarketMafioso.Squire.Outfitter.Acquisition;
 
 namespace MarketMafioso.MarketAcquisition;
 
@@ -44,6 +45,7 @@ internal static class MarketAcquisitionRequestDocumentPersistence
                     GilCap = line.GilCap,
                 })
                 .ToList(),
+            OutfitterAuthority = OutfitterWorkbenchAuthorityPersistence.Restore(stored.OutfitterAuthorityJson),
             RemoteRequestId = stored.RemoteRequestId,
             RemoteRevision = stored.RemoteRevision,
             RemoteOrigin = stored.RemoteOrigin,
@@ -83,6 +85,7 @@ internal static class MarketAcquisitionRequestDocumentPersistence
                     GilCap = line.GilCap,
                 })
                 .ToList(),
+            OutfitterAuthorityJson = OutfitterWorkbenchAuthorityPersistence.Serialize(document.OutfitterAuthority),
             RemoteRequestId = document.RemoteRequestId,
             RemoteRevision = document.RemoteRevision,
             RemoteOrigin = document.RemoteOrigin,

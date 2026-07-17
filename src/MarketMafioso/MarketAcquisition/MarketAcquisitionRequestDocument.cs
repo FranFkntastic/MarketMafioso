@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using MarketMafioso.Squire.Outfitter.Acquisition;
 
 namespace MarketMafioso.MarketAcquisition;
 
@@ -14,6 +15,7 @@ public sealed record MarketAcquisitionRequestDocument
     public string SweepScope { get; init; } = "Region";
     public List<string> SweepDataCenters { get; init; } = [];
     public List<MarketAcquisitionRequestLineDocument> Lines { get; init; } = [];
+    public OutfitterWorkbenchAuthority? OutfitterAuthority { get; init; }
     public string? RemoteRequestId { get; init; }
     public int RemoteRevision { get; init; }
     public string? RemoteOrigin { get; init; }
@@ -51,6 +53,9 @@ public sealed record MarketAcquisitionRequestDocument
             LastSyncedHash = null,
             RemoteHash = null,
             LastPlanHash = null,
+            OutfitterAuthority = OutfitterAuthority is null
+                ? null
+                : OutfitterAuthority with { FinalizedContract = null },
             SyncStatus = "NewDraft",
             UpdatedAtUtc = DateTimeOffset.UtcNow,
         };

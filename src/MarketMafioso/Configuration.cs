@@ -302,6 +302,7 @@ public sealed class PersistedMarketAcquisitionRequestDocument
     public string SweepScope { get; set; } = string.Empty;
     public List<string> SweepDataCenters { get; set; } = [];
     public List<PersistedMarketAcquisitionRequestLineDocument> Lines { get; set; } = [];
+    public string? OutfitterAuthorityJson { get; set; }
     public string? RemoteRequestId { get; set; }
     public int RemoteRevision { get; set; }
     public string? RemoteOrigin { get; set; }
