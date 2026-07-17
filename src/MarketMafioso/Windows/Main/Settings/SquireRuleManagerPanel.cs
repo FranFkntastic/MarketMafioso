@@ -5,6 +5,7 @@ using Dalamud.Bindings.ImGui;
 using Dalamud.Plugin.Services;
 using Franthropy.Dalamud.AgentBridge;
 using Franthropy.Dalamud.Equipment;
+using Franthropy.Dalamud.UI.Items;
 using Franthropy.Dalamud.UI.Settings;
 using MarketMafioso.Squire;
 using Newtonsoft.Json;
@@ -24,7 +25,8 @@ internal sealed class SquireRuleManagerPanel
     private string? selectedRuleId;
     private SquireCleanupRule? draft;
     private SquireCleanupRule? original;
-    private string itemIdsText = string.Empty;
+    private readonly IReadOnlyList<DalamudItemOption> itemOptions;
+    private readonly DalamudItemAutocompleteState itemSearch = new();
     private string? pendingDeleteId;
     private bool confirmDiscard;
     private bool scrollToImpact;
@@ -44,6 +46,7 @@ internal sealed class SquireRuleManagerPanel
         this.currentAnalysis = currentAnalysis;
         this.requestAnalysisRefresh = requestAnalysisRefresh;
         this.reviewRegistry = reviewRegistry;
+        itemOptions = DalamudItemAutocompleteRenderer.LoadItemOptions(dataManager);
         store = new SquireCleanupRuleStore(config);
     }
 
@@ -398,10 +401,18 @@ internal sealed class SquireRuleManagerPanel
             ImGui.TableNextColumn();
             ImGui.TextColored(MarketMafiosoUiTheme.Header, "Item identity");
             DrawFieldLabel("Specific items");
-            ImGui.SetNextItemWidth(-1);
-            if (ImGui.InputTextWithHint("##ItemIds", "Any item, or enter item IDs separated by commas", ref itemIdsText, 400))
-                condition = condition with { ItemIds = ParseItemIds(itemIdsText) };
-            DrawResolvedItemNames(condition.ItemIds);
+            if (DalamudItemAutocompleteRenderer.DrawMultiSelect(
+                    "SquireRuleItems",
+                    itemOptions,
+                    itemSearch,
+                    condition.ItemIds,
+                    MarketMafiosoUiTheme.Muted,
+                    MarketMafiosoUiTheme.Success,
+                    MarketMafiosoUiTheme.Error,
+                    out var selectedItemIds))
+            {
+                condition = condition with { ItemIds = selectedItemIds };
+            }
 
             DrawFieldLabel("Quality");
             ImGui.SetNextItemWidth(-1);
@@ -595,7 +606,8 @@ internal sealed class SquireRuleManagerPanel
         selectedRuleId = rule.Id;
         draft = rule;
         original = isNew ? null : rule;
-        itemIdsText = rule.Condition.ItemIds is null ? string.Empty : string.Join(", ", rule.Condition.ItemIds.Order());
+        itemSearch.SearchBuffer = string.Empty;
+        itemSearch.SelectedItem = null;
         pendingDeleteId = null;
         confirmDiscard = false;
         scrollToImpact = false;
@@ -608,7 +620,8 @@ internal sealed class SquireRuleManagerPanel
         selectedRuleId = null;
         draft = null;
         original = null;
-        itemIdsText = string.Empty;
+        itemSearch.SearchBuffer = string.Empty;
+        itemSearch.SelectedItem = null;
         pendingDeleteId = null;
         confirmDiscard = false;
         scrollToImpact = false;
@@ -663,7 +676,7 @@ internal sealed class SquireRuleManagerPanel
     {
         var values = new List<string>();
         if (condition.ItemIds is { Count: > 0 })
-            values.Add(string.Join(" or ", condition.ItemIds.Select(id => $"{ResolveItemName(id)} ({id})")));
+            values.Add(string.Join(" or ", condition.ItemIds.Select(ResolveItemName)));
         if (condition.Quality != SquireRuleQuality.Any) values.Add(FormatEnum(condition.Quality));
         if (condition.Rarities is { Count: > 0 }) values.Add($"rarity {string.Join(" or ", condition.Rarities.Select(FormatEnum))}");
         if (condition.UseStatuses is { Count: > 0 }) values.Add($"evaluation {string.Join(" or ", condition.UseStatuses.Select(FormatEnum))}");
@@ -730,8 +743,8 @@ internal sealed class SquireRuleManagerPanel
     {
         if (itemIds is not { Count: > 0 })
             return;
-        var names = itemIds.Order().Select(id => $"{ResolveItemName(id)} ({id})").ToArray();
-        DrawWrappedColored(itemIds.Contains(0) ? MarketMafiosoUiTheme.Warning : MarketMafiosoUiTheme.Muted, string.Join(", ", names));
+        var names = itemIds.Order().Select(ResolveItemName).ToArray();
+        DrawWrappedColored(MarketMafiosoUiTheme.Muted, string.Join(", ", names));
     }
 
     private static void DrawSectionHeading(string label)
@@ -753,16 +766,6 @@ internal sealed class SquireRuleManagerPanel
     {
         var name = playerState.CharacterName.ToString();
         return string.IsNullOrWhiteSpace(name) ? "Current character" : name;
-    }
-
-    private static IReadOnlySet<uint>? ParseItemIds(string text)
-    {
-        if (string.IsNullOrWhiteSpace(text))
-            return null;
-        var values = text.Split([',', ';', ' '], StringSplitOptions.RemoveEmptyEntries)
-            .Select(value => uint.TryParse(value, out var parsed) ? parsed : 0)
-            .ToHashSet();
-        return values;
     }
 
     private static T EnumCombo<T>(string label, T value) where T : struct, Enum
