@@ -18,6 +18,7 @@ public sealed class OutfitterWorkbenchTransferBuilderTests
             fixture.Evidence);
 
         Assert.Equal(OutfitterWorkbenchTransfer.SquireOutfitterOrigin, transfer.Origin);
+        Assert.Equal(OutfitterWorkbenchTransfer.CurrentSchemaVersion, transfer.SchemaVersion);
         Assert.Equal("user-selected", transfer.SelectedSolutionId);
         Assert.Equal("advisor-nomination", transfer.AdvisorNominationSolutionId);
         Assert.Equal(fixture.GenerationId, transfer.Evidence.GenerationId);

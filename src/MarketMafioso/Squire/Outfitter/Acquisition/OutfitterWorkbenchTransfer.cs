@@ -42,6 +42,7 @@ public sealed record OutfitterWorkbenchSelectionLineage(
 /// lineage through Workbench finalization before Route may consume it.
 /// </summary>
 public sealed record OutfitterWorkbenchTransfer(
+    string SchemaVersion,
     string Origin,
     string SelectedSolutionId,
     string? AdvisorNominationSolutionId,
@@ -125,6 +126,7 @@ public static class OutfitterWorkbenchTransferBuilder
             .ToArray();
         var total = orderedLots.Aggregate(0ul, (sum, lot) => checked(sum + lot.ObservedTotalPriceGil));
         return new(
+            OutfitterWorkbenchTransfer.CurrentSchemaVersion,
             OutfitterWorkbenchTransfer.SquireOutfitterOrigin,
             selected.Candidate.SolutionId,
             advice.Nomination?.Candidate.SolutionId,
