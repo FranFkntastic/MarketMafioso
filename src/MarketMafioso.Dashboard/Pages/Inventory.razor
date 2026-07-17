@@ -205,7 +205,9 @@ else
         : _view.RetainerGil > 0
             ? $"{_view.RetainerGil:N0} retainer gil · wallet not recorded"
             : "Gil not recorded";
-    private bool ShowFilterErrors => !_view.FilterValid && _view.FilterDiagnostics.Count > 0 && !InventoryFilterPresentation.IsIncomplete(_filterText);
+    private bool ShowFilterErrors => !_view.FilterValid && _view.FilterDiagnostics.Count > 0 &&
+                                     !InventoryFilterPresentation.IsIncomplete(_filterText) &&
+                                     !InventoryFilterPresentation.HasValueCompletion(_view.FilterCompletions);
     private InventoryBrowserMode? SuggestedFilterMode => ShowFilterErrors ? InventoryFilterPresentation.SuggestedMode(_filterText, _mode) : null;
     private IEnumerable<Franthropy.Filtering.Documentation.FilterFieldReference> AvailableReferenceFields =>
         _view.FilterReference?.Fields.Where(entry => entry.IsAvailable && !entry.IsDefaultText) ?? [];
@@ -282,7 +284,11 @@ else
         try
         {
             await Task.Delay(250, token);
-            await InvokeAsync(LoadFilterEditAsync);
+            await InvokeAsync(async () =>
+            {
+                await LoadFilterEditAsync();
+                StateHasChanged();
+            });
         }
         catch (OperationCanceledException) { }
     }

@@ -2,6 +2,9 @@ using MarketMafioso.Dashboard.Components.Inventory;
 
 namespace MarketMafioso.Server.Tests;
 
+using Franthropy.Filtering.Completion;
+using Franthropy.Filtering.Syntax;
+
 public sealed class InventoryPresentationTests
 {
     [Theory]
@@ -22,6 +25,21 @@ public sealed class InventoryPresentationTests
     public void CompleteFilter_CanPresentDiagnostics(string filter)
     {
         Assert.False(InventoryFilterPresentation.IsIncomplete(filter));
+    }
+
+    [Fact]
+    public void PartialPredicate_WithAValueCompletion_RemainsAnActiveEdit()
+    {
+        var completions = new[]
+        {
+            new FilterCompletionItem(
+                "hq",
+                "hq",
+                FilterCompletionKind.Value,
+                new TextSpan(3, 1)),
+        };
+
+        Assert.True(InventoryFilterPresentation.HasValueCompletion(completions));
     }
 
     [Theory]

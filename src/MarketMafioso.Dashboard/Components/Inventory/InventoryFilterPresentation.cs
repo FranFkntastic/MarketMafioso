@@ -1,5 +1,6 @@
 namespace MarketMafioso.Dashboard.Components.Inventory;
 
+using Franthropy.Filtering.Completion;
 using MarketMafioso.Contracts.Inventory;
 
 public static class InventoryFilterPresentation
@@ -35,6 +36,9 @@ public static class InventoryFilterPresentation
 
         return parenthesisDepth > 0;
     }
+
+    public static bool HasValueCompletion(IReadOnlyList<FilterCompletionItem> completions) =>
+        completions.Any(completion => completion.Kind == FilterCompletionKind.Value);
 
     public static InventoryBrowserMode? SuggestedMode(string? filter, InventoryBrowserMode currentMode)
     {
