@@ -154,7 +154,7 @@ public sealed class InventoryBrowserFilterTests
 
         var view = InventoryBrowserViewBuilder.Build(
             Snapshot with { Report = report },
-            "equipped and condition = 0",
+            "is:equipped and condition:0",
             mode: InventoryBrowserMode.Stacks);
 
         Assert.True(view.FilterValid);
@@ -229,13 +229,45 @@ public sealed class InventoryBrowserFilterTests
             mode: InventoryBrowserMode.Items,
             caretPosition: 8);
 
-        Assert.Equal([":", "=", "!=", "<", "<=", ">", ">="],
+        Assert.Equal([":", "=", "!=", "==", "!==", "<", "<=", ">", ">="],
             view.FilterCompletions.Select(completion => completion.Label));
         Assert.All(view.FilterCompletions, completion =>
         {
             Assert.Equal(Franthropy.Filtering.Completion.FilterCompletionKind.Operator, completion.Kind);
             Assert.Equal(new Franthropy.Filtering.Syntax.TextSpan(8, 0), completion.ReplacementSpan);
         });
+    }
+
+
+    [Fact]
+    public void NameQualifier_UsesIntentionalFuzzyMatching()
+    {
+        var view = InventoryBrowserViewBuilder.Build(Snapshot, "name:darksteel", mode: InventoryBrowserMode.Items);
+
+        Assert.True(view.FilterValid);
+        Assert.Equal("Darksteel Ingot", Assert.Single(view.Items).DisplayName);
+    }
+    [Fact]
+    public void FriendlyPredicatesAndExactOperators_AreCompletedAtTheCaret()
+    {
+        var predicate = InventoryBrowserViewBuilder.Build(Snapshot, "is:h", mode: InventoryBrowserMode.Items, caretPosition: 4);
+        var exact = InventoryBrowserViewBuilder.Build(Snapshot, "quantity==", mode: InventoryBrowserMode.Items, caretPosition: 10);
+
+        Assert.Contains(predicate.FilterCompletions, completion => completion.InsertionText == "hq");
+        Assert.DoesNotContain(predicate.FilterCompletions, completion => completion.InsertionText == "nq");
+        Assert.All(predicate.FilterCompletions, completion => Assert.Equal(new Franthropy.Filtering.Syntax.TextSpan(3, 1), completion.ReplacementSpan));
+        Assert.DoesNotContain(exact.FilterCompletions, completion => completion.Kind == Franthropy.Filtering.Completion.FilterCompletionKind.Operator);
+    }
+
+    [Fact]
+    public void ViewPreservesAuthoredFilterAndExposesSeparateSemanticForm()
+    {
+        var friendly = InventoryBrowserViewBuilder.Build(Snapshot, "  quality:hq   -location:retainer  ", mode: InventoryBrowserMode.Items);
+        var canonical = InventoryBrowserViewBuilder.Build(Snapshot, "instance.quality==HQ AND !instance.location==Retainer", mode: InventoryBrowserMode.Items);
+
+        Assert.Equal("  quality:hq   -location:retainer  ", friendly.Filter);
+        Assert.Equal("quality:hq -location:retainer", friendly.NormalizedFilter);
+        Assert.Equal(canonical.SemanticFilter, friendly.SemanticFilter);
     }
 
     [Fact]

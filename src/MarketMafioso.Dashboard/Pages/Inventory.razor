@@ -110,8 +110,18 @@ else
                                 <code title="@ReferenceDetail(field)">@field.PreferredName</code>
                             }
                         </span>
-                        <span><b>Examples</b> <code>location:Armoire</code> <code>-equipped</code> <code>quantity:&gt;20</code></span>
-                        <span><b>Logic</b> spaces mean AND; use OR, NOT, parentheses, and ranges such as 20..99</span>
+                        @if (_view.FilterReference?.Predicates.Count > 0)
+                        {
+                            <span class="inventory-filter-fields"><b>States</b>
+                                @foreach (var predicate in _view.FilterReference.Predicates)
+                                {
+                                    <code title="@predicate.Description">@predicate.Qualifier:@predicate.Specifier</code>
+                                }
+                            </span>
+                        }
+                        <span><b>Examples</b> <code>-darksteel</code> <code>location:armoury</code> <code>quantity:20</code> <code>is:hq</code></span>
+                        <span><b>Matching</b> <code>:</code> uses the field's natural meaning; <code>=</code> is fuzzy; <code>==</code> is exact</span>
+                        <span><b>Logic</b> spaces mean AND; use OR, <code>-</code>, parentheses, and ranges such as 20..99</span>
                     </div>
                 }
             </div>

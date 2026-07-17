@@ -21,6 +21,7 @@ public sealed record InventoryBrowserView
     public string? HomeWorld { get; init; }
     public string Filter { get; init; } = string.Empty;
     public string NormalizedFilter { get; init; } = string.Empty;
+    public string SemanticFilter { get; init; } = string.Empty;
     public bool FilterValid { get; init; } = true;
     public IReadOnlyList<FilterDiagnostic> FilterDiagnostics { get; init; } = [];
     public FilterReferenceModel? FilterReference { get; init; }

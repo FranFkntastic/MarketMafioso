@@ -18,10 +18,9 @@ public static class InventoryBrowserViewBuilder
         int? caretPosition = null)
     {
         var completionExpression = filter ?? string.Empty;
-        var normalizedFilter = completionExpression.Trim();
         var normalizedScope = string.IsNullOrWhiteSpace(scope) ? "all" : scope.Trim();
         if (stored is null)
-            return new InventoryBrowserView { Filter = normalizedFilter, Scope = normalizedScope, Mode = mode };
+            return new InventoryBrowserView { Filter = completionExpression, Scope = normalizedScope, Mode = mode };
 
         var stacks = EnumerateStacks(stored.Report)
             .Where(row => normalizedScope.Equals("all", StringComparison.OrdinalIgnoreCase) ||
@@ -35,9 +34,9 @@ public static class InventoryBrowserViewBuilder
 
         return mode switch
         {
-            InventoryBrowserMode.Stacks => BuildStacksView(stored, normalizedFilter, completionExpression, caretPosition, normalizedScope, vocabulary, stacks),
-            InventoryBrowserMode.Listings => BuildListingsView(stored, normalizedFilter, completionExpression, caretPosition, normalizedScope, vocabulary, listings),
-            _ => BuildItemsView(stored, normalizedFilter, completionExpression, caretPosition, normalizedScope, vocabulary, stacks),
+            InventoryBrowserMode.Stacks => BuildStacksView(stored, completionExpression, completionExpression, caretPosition, normalizedScope, vocabulary, stacks),
+            InventoryBrowserMode.Listings => BuildListingsView(stored, completionExpression, completionExpression, caretPosition, normalizedScope, vocabulary, listings),
+            _ => BuildItemsView(stored, completionExpression, completionExpression, caretPosition, normalizedScope, vocabulary, stacks),
         };
     }
 
@@ -164,6 +163,7 @@ public static class InventoryBrowserViewBuilder
             HomeWorld = stored.Report.HomeWorld,
             Filter = filter,
             NormalizedFilter = compilation.NormalizedExpression,
+            SemanticFilter = compilation.SemanticExpression,
             FilterValid = compilation.IsValid,
             FilterDiagnostics = compilation.Diagnostics,
             FilterReference = CreateContextReference(context),
