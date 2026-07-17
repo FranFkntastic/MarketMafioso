@@ -56,6 +56,7 @@ internal sealed class MinerBotanistAdvisorPanel
             ImGui.TextColored(MarketMafiosoUiTheme.Warning, "DEBUG REPLAY — model decisions with frozen evidence prices");
             ImGui.TextColored(MarketMafiosoUiTheme.Muted,
                 "Item names are game data; gil estimates are Aether sale-history medians. No live character or live listing is used.");
+            ImGui.TextColored(MarketMafiosoUiTheme.Muted, MinerBotanistAdvisorSyntheticReview.PriceEvidenceLabel);
             ImGui.TextColored(MarketMafiosoUiTheme.Success, displayedAdvice!.Diagnostic);
         }
         else

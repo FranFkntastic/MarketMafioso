@@ -159,8 +159,8 @@ internal static class MinerBotanistAdvisorSyntheticReview
                 Utility: EquipmentSolverUtilityVector.Empty,
                 AcquisitionCostGil: item.AcquisitionCostGil,
                 WorldVisitKey: item.SourceKind == EquipmentAcquisitionSourceKind.MarketBoard ? "aether-history-snapshot" : null,
-                VendorStopKey: null,
-                PurchaseTransactions: item.SourceKind == EquipmentAcquisitionSourceKind.MarketBoard ? 1 : 0,
+                VendorStopKey: item.SourceKind == EquipmentAcquisitionSourceKind.GilVendor ? "purple-scrip-exchange" : null,
+                PurchaseTransactions: item.AcquisitionCostGil > 0 ? 1 : 0,
                 EvidenceRisk: new(0, 0, 0),
                 VariantLabels: [item.Quality == EquipmentQuality.High ? "HQ" : "NQ", PriceEvidenceLabel]);
             offers.Add(exact.AllocationKey, exact);
@@ -170,6 +170,7 @@ internal static class MinerBotanistAdvisorSyntheticReview
         var itemCost = evidence.Aggregate(0UL, (total, item) => checked(total + item.AcquisitionCostGil));
         var totalCost = checked(itemCost + benchmark.SupplementalCostGil);
         var marketPurchases = evidence.Count(item => item.SourceKind == EquipmentAcquisitionSourceKind.MarketBoard);
+        var pricedPackages = evidence.Count(item => item.AcquisitionCostGil > 0);
         var labels = new List<string>
         {
             benchmark.Label,
@@ -186,7 +187,7 @@ internal static class MinerBotanistAdvisorSyntheticReview
             new(
                 WorldVisits: marketPurchases == 0 ? 0 : 1,
                 VendorStops: benchmark.UsesScripExchange ? 1 : 0,
-                PurchaseTransactions: marketPurchases + (benchmark.UsesFood ? 1 : 0)),
+                PurchaseTransactions: pricedPackages + (benchmark.UsesFood ? 1 : 0)),
             new(0, 0, 0),
             labels);
     }
@@ -260,9 +261,9 @@ internal static class MinerBotanistAdvisorSyntheticReview
         name,
         750,
         EquipmentQuality.Normal,
-        EquipmentAcquisitionSourceKind.Owned,
+        EquipmentAcquisitionSourceKind.GilVendor,
         meldCost,
-        $"Purple scrip exchange · gil estimate covers melds only · {PriceEvidenceLabel}");
+        "Purple scrip exchange · meld estimate only");
 
     private static ItemEvidence Relic(EquipmentLoadoutPosition position, string name) => new(
         position,
@@ -282,7 +283,7 @@ internal static class MinerBotanistAdvisorSyntheticReview
         EquipmentQuality.High,
         EquipmentAcquisitionSourceKind.MarketBoard,
         cost,
-        $"HQ gear plus assigned melds · {PriceEvidenceLabel}");
+        "Market history · HQ gear plus assigned melds");
 
     private static EquipmentSlot Slot(EquipmentLoadoutPosition position) => position switch
     {
