@@ -14,6 +14,7 @@ using MarketMafioso.AgentBridge;
 using MarketMafioso.MarketAcquisition;
 using MarketMafioso.WorkshopPrep;
 using MarketMafioso.Squire;
+using MarketMafioso.Squire.Observation;
 using MarketMafioso.Windows;
 
 namespace MarketMafioso;
@@ -60,6 +61,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly AgentBridgeProofWindow agentBridgeProofWindow;
     private readonly AgentBridgeHost agentBridge;
     private readonly AgentBridgeViewportCaptureService agentBridgeViewportCapture;
+    private readonly DalamudRenderedCharacterUiProbe renderedCharacterUiProbe;
 
     private CancellationTokenSource? timerCancellation;
 
@@ -72,6 +74,7 @@ public sealed class Plugin : IDalamudPlugin
         Configuration = PluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
         var squireConfigurationChanged = SquireRuleMigration.Migrate(Configuration);
         squireConfigurationChanged |= SquireCleanupRuleMigration.Migrate(Configuration);
+        squireConfigurationChanged |= SquireAdvisorConfigurationMigration.Migrate(Configuration);
         if (squireConfigurationChanged)
             Configuration.Save();
         retainerCacheStore = new RetainerCacheFileStore(
@@ -122,6 +125,7 @@ public sealed class Plugin : IDalamudPlugin
             });
         workshopMaterialManifestExport = new WorkshopMaterialManifestExportService(
             new LuminaWorkshopMaterialCraftRecipeResolver(DataManager));
+        renderedCharacterUiProbe = new DalamudRenderedCharacterUiProbe(GameGui);
         mainWindow = new MainWindow(
             Configuration,
             reporter,
@@ -142,7 +146,8 @@ public sealed class Plugin : IDalamudPlugin
                 Log),
             Path.Combine(PluginInterface.GetPluginConfigDirectory(), "market-acquisition-route-logs"),
             retainerCacheStore,
-            Log);
+            Log,
+            renderedCharacterUiProbe);
 
         agentBridgeProofStore = new AgentBridgeProofStore();
         agentBridgeProofWindow = new AgentBridgeProofWindow(agentBridgeProofStore);
@@ -171,7 +176,20 @@ public sealed class Plugin : IDalamudPlugin
                 mainWindow.AgentCaptureInputState,
                 mainWindow.AgentStopRoute,
                 () => MarketAcquisitionUnlock.IsUnlocked(Configuration),
-                mainWindow.AgentReviewRegistry),
+                mainWindow.AgentReviewRegistry,
+                () => renderedCharacterUiProbe.Open(),
+                renderedCharacterUiProbe.TryCloseCharacterUi,
+                renderedCharacterUiProbe.Capture,
+                renderedCharacterUiProbe.TryCloseBlockingSelectString,
+                renderedCharacterUiProbe.TrySwitchCalibrationJob,
+                renderedCharacterUiProbe.CaptureGatheringStats,
+                renderedCharacterUiProbe.TryHoverCharacterNode,
+                renderedCharacterUiProbe.RestoreCursor,
+                renderedCharacterUiProbe.BeginEquipmentScan,
+                renderedCharacterUiProbe.AdvanceEquipmentScan,
+                renderedCharacterUiProbe.CancelEquipmentScan,
+                () => renderedCharacterUiProbe.Capabilities,
+                mainWindow.TryOpenSyntheticAdvisorReview),
             agentBridgeProofStore,
             agentBridgeViewportCapture.CaptureAsync,
             () => Configuration.EnableAgentBridgeScreenshots,

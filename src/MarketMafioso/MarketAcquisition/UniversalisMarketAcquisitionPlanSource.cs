@@ -116,7 +116,9 @@ public sealed class UniversalisMarketAcquisitionPlanSource : IMarketAcquisitionL
         var body = response.Content == null
             ? null
             : await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-        return new UniversalisMarketListingsHttpException(response.StatusCode, requestUri, body);
+        var retryAfterUtc = response.Headers.RetryAfter?.Date ??
+            (response.Headers.RetryAfter?.Delta is { } delta ? DateTimeOffset.UtcNow.Add(delta) : null);
+        return new UniversalisMarketListingsHttpException(response.StatusCode, requestUri, body, retryAfterUtc);
     }
 
     private static string RequiredString(JsonElement element, string propertyName)
@@ -164,16 +166,20 @@ public sealed class UniversalisMarketListingsHttpException : HttpRequestExceptio
     public UniversalisMarketListingsHttpException(
         HttpStatusCode statusCode,
         Uri requestUri,
-        string? responseBody)
+        string? responseBody,
+        DateTimeOffset? retryAfterUtc = null)
         : base(BuildMessage(statusCode, requestUri), null, statusCode)
     {
         RequestUri = requestUri;
         ResponseBody = responseBody;
+        RetryAfterUtc = retryAfterUtc;
     }
 
     public Uri RequestUri { get; }
 
     public string? ResponseBody { get; }
+
+    public DateTimeOffset? RetryAfterUtc { get; }
 
     private static string BuildMessage(HttpStatusCode statusCode, Uri requestUri) =>
         $"Universalis listings failed with {(int)statusCode} {statusCode} at {requestUri}.";

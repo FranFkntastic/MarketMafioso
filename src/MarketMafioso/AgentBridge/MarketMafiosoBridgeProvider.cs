@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Franthropy.Dalamud.AgentBridge;
+using MarketMafioso.Squire.Observation;
 
 namespace MarketMafioso.AgentBridge;
 
@@ -19,6 +20,21 @@ public interface IMarketMafiosoBridgeProvider
     bool TrySelectMainTab(string tabName);
     void CaptureInputState();
     void StopRoute();
+    void OpenCharacterUi();
+    bool TryCloseCharacterUi();
+    bool TryCloseBlockingSelectStringUi();
+    bool TrySwitchCalibrationJobUi(string target);
+    bool TryHoverCharacterNodeUi(string target);
+    bool RestoreCharacterUiCursor();
+    AgentBridgeRenderedUiSnapshot CaptureCharacterUi();
+    RenderedGatheringStatsObservation CaptureGatheringStatsUi();
+    RenderedCharacterEquipmentLayout CaptureCharacterEquipmentLayoutUi();
+    RenderedItemDetailObservation CaptureItemDetailUi();
+    RenderedEquipmentScanProgress BeginCharacterEquipmentScanUi();
+    RenderedEquipmentScanStepResult AdvanceCharacterEquipmentScanUi();
+    RenderedEquipmentScanProgress CancelCharacterEquipmentScanUi();
+    AgentBridgeUiAutomationCapabilities GetUiAutomationCapabilities();
+    bool TryOpenSyntheticAdvisorReview();
     IReadOnlyList<AgentBridgeReviewSurfaceDescriptor> GetReviewSurfaces();
     AgentBridgeUiReviewFrame GetControlSurface();
     AgentBridgeUiControlReview ReviewControl(string controlId);
@@ -61,6 +77,19 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
     private readonly Action captureInputState;
     private readonly Action stopRoute;
     private readonly Func<bool> isMarketAcquisitionUnlocked;
+    private readonly Action openCharacterUi;
+    private readonly Func<bool> tryCloseCharacterUi;
+    private readonly Func<bool> tryCloseBlockingSelectStringUi;
+    private readonly Func<string, bool> trySwitchCalibrationJobUi;
+    private readonly Func<string, bool> tryHoverCharacterNodeUi;
+    private readonly Func<bool> restoreCharacterUiCursor;
+    private readonly Func<RenderedEquipmentScanProgress> beginCharacterEquipmentScanUi;
+    private readonly Func<RenderedEquipmentScanStepResult> advanceCharacterEquipmentScanUi;
+    private readonly Func<RenderedEquipmentScanProgress> cancelCharacterEquipmentScanUi;
+    private readonly Func<AgentBridgeUiAutomationCapabilities> getUiAutomationCapabilities;
+    private readonly Func<AgentBridgeRenderedUiSnapshot> captureCharacterUi;
+    private readonly Func<RenderedGatheringStatsObservation> captureGatheringStatsUi;
+    private readonly Func<bool> tryOpenSyntheticAdvisorReview;
     private readonly AgentBridgeUiReviewRegistry reviewRegistry;
 
     public MarketMafiosoBridgeProvider(
@@ -73,7 +102,20 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
         Action captureInputState,
         Action stopRoute,
         Func<bool> isMarketAcquisitionUnlocked,
-        AgentBridgeUiReviewRegistry reviewRegistry)
+        AgentBridgeUiReviewRegistry reviewRegistry,
+        Action? openCharacterUi = null,
+        Func<bool>? tryCloseCharacterUi = null,
+        Func<AgentBridgeRenderedUiSnapshot>? captureCharacterUi = null,
+        Func<bool>? tryCloseBlockingSelectStringUi = null,
+        Func<string, bool>? trySwitchCalibrationJobUi = null,
+        Func<RenderedGatheringStatsObservation>? captureGatheringStatsUi = null,
+        Func<string, bool>? tryHoverCharacterNodeUi = null,
+        Func<bool>? restoreCharacterUiCursor = null,
+        Func<RenderedEquipmentScanProgress>? beginCharacterEquipmentScanUi = null,
+        Func<RenderedEquipmentScanStepResult>? advanceCharacterEquipmentScanUi = null,
+        Func<RenderedEquipmentScanProgress>? cancelCharacterEquipmentScanUi = null,
+        Func<AgentBridgeUiAutomationCapabilities>? getUiAutomationCapabilities = null,
+        Func<bool>? tryOpenSyntheticAdvisorReview = null)
     {
         this.createSnapshot = createSnapshot ?? throw new ArgumentNullException(nameof(createSnapshot));
         this.openMainWindow = openMainWindow ?? throw new ArgumentNullException(nameof(openMainWindow));
@@ -85,6 +127,21 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
         this.stopRoute = stopRoute ?? throw new ArgumentNullException(nameof(stopRoute));
         this.isMarketAcquisitionUnlocked = isMarketAcquisitionUnlocked ?? throw new ArgumentNullException(nameof(isMarketAcquisitionUnlocked));
         this.reviewRegistry = reviewRegistry ?? throw new ArgumentNullException(nameof(reviewRegistry));
+        this.openCharacterUi = openCharacterUi ?? (() => { });
+        this.tryCloseCharacterUi = tryCloseCharacterUi ?? (() => false);
+        this.captureCharacterUi = captureCharacterUi ?? (() => new(DateTimeOffset.UtcNow, []));
+        this.tryCloseBlockingSelectStringUi = tryCloseBlockingSelectStringUi ?? (() => false);
+        this.trySwitchCalibrationJobUi = trySwitchCalibrationJobUi ?? (_ => false);
+        this.captureGatheringStatsUi = captureGatheringStatsUi ?? (() => new(Guid.NewGuid(), DateTimeOffset.UtcNow, RenderedCharacterObservationStatus.Unavailable, null, null, null, null, null, [], "Rendered gathering observation is unavailable."));
+        this.tryHoverCharacterNodeUi = tryHoverCharacterNodeUi ?? (_ => false);
+        this.restoreCharacterUiCursor = restoreCharacterUiCursor ?? (() => false);
+        this.beginCharacterEquipmentScanUi = beginCharacterEquipmentScanUi ?? (() => new(RenderedEquipmentScanStatus.Failed, 0, 0, null, [], "Rendered equipment scanning is unavailable."));
+        this.advanceCharacterEquipmentScanUi = advanceCharacterEquipmentScanUi ?? (() => new(false, this.beginCharacterEquipmentScanUi(), "Rendered equipment scanning is unavailable."));
+        this.cancelCharacterEquipmentScanUi = cancelCharacterEquipmentScanUi ?? (() => new(RenderedEquipmentScanStatus.Cancelled, 0, 0, null, [], "Rendered equipment scanning is unavailable."));
+        this.getUiAutomationCapabilities = getUiAutomationCapabilities ?? (() => new(
+            "unavailable", false, false, false, true, true, true,
+            "Rendered UI automation capabilities were not registered."));
+        this.tryOpenSyntheticAdvisorReview = tryOpenSyntheticAdvisorReview ?? (() => false);
     }
 
     public AgentBridgeTruth CreateSnapshot() => createSnapshot();
@@ -95,6 +152,23 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
     public bool TrySelectMainTab(string tabName) => trySelectMainTab(tabName);
     public void CaptureInputState() => captureInputState();
     public void StopRoute() => stopRoute();
+    public void OpenCharacterUi() => openCharacterUi();
+    public bool TryCloseCharacterUi() => tryCloseCharacterUi();
+    public bool TryCloseBlockingSelectStringUi() => tryCloseBlockingSelectStringUi();
+    public bool TrySwitchCalibrationJobUi(string target) => trySwitchCalibrationJobUi(target);
+    public bool TryHoverCharacterNodeUi(string target) => tryHoverCharacterNodeUi(target);
+    public bool RestoreCharacterUiCursor() => restoreCharacterUiCursor();
+    public AgentBridgeRenderedUiSnapshot CaptureCharacterUi() => captureCharacterUi();
+    public RenderedGatheringStatsObservation CaptureGatheringStatsUi() => captureGatheringStatsUi();
+    public RenderedCharacterEquipmentLayout CaptureCharacterEquipmentLayoutUi() =>
+        RenderedCharacterEquipmentLayoutParser.Parse(captureCharacterUi());
+    public RenderedItemDetailObservation CaptureItemDetailUi() =>
+        RenderedItemDetailParser.Parse(captureCharacterUi());
+    public RenderedEquipmentScanProgress BeginCharacterEquipmentScanUi() => beginCharacterEquipmentScanUi();
+    public RenderedEquipmentScanStepResult AdvanceCharacterEquipmentScanUi() => advanceCharacterEquipmentScanUi();
+    public RenderedEquipmentScanProgress CancelCharacterEquipmentScanUi() => cancelCharacterEquipmentScanUi();
+    public AgentBridgeUiAutomationCapabilities GetUiAutomationCapabilities() => getUiAutomationCapabilities();
+    public bool TryOpenSyntheticAdvisorReview() => tryOpenSyntheticAdvisorReview();
     public IReadOnlyList<AgentBridgeReviewSurfaceDescriptor> GetReviewSurfaces() => isMarketAcquisitionUnlocked()
         ? PublicReviewSurfaces.Concat(MarketAcquisitionReviewSurfaces).OrderBy(surface => surface.Order).ToArray()
         : PublicReviewSurfaces;

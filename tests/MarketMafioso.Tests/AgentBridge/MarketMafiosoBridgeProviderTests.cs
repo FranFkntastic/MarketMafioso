@@ -61,6 +61,43 @@ public sealed class MarketMafiosoBridgeProviderTests
         Assert.Null(registeredProvider.ReviewControl("missing").Control);
     }
 
+    [Fact]
+    public void Provider_reports_non_obtrusive_rendered_ui_automation_capabilities()
+    {
+        var expected = new AgentBridgeUiAutomationCapabilities(
+            "registered-node-ui-events",
+            MovesOperatingSystemCursor: false,
+            ActivatesGameWindow: false,
+            RequiresGameForeground: false,
+            RequiresVisibleCharacterAddon: true,
+            UsesRenderedTooltipAsAuthority: true,
+            SupportsDeterministicReplay: true,
+            "fixture");
+        var provider = new MarketMafiosoBridgeProvider(
+            CreateTruth, () => { }, () => { }, () => { }, _ => { }, _ => true, () => { }, () => { },
+            () => true,
+            new AgentBridgeUiReviewRegistry(),
+            getUiAutomationCapabilities: () => expected);
+
+        Assert.Same(expected, provider.GetUiAutomationCapabilities());
+        Assert.False(provider.GetUiAutomationCapabilities().MovesOperatingSystemCursor);
+        Assert.False(provider.GetUiAutomationCapabilities().ActivatesGameWindow);
+    }
+
+    [Fact]
+    public void Provider_exposes_debug_synthetic_review_as_an_explicit_action()
+    {
+        var invoked = false;
+        var provider = new MarketMafiosoBridgeProvider(
+            CreateTruth, () => { }, () => { }, () => { }, _ => { }, _ => true, () => { }, () => { },
+            () => true,
+            new AgentBridgeUiReviewRegistry(),
+            tryOpenSyntheticAdvisorReview: () => invoked = true);
+
+        Assert.True(provider.TryOpenSyntheticAdvisorReview());
+        Assert.True(invoked);
+    }
+
     private static AgentBridgeTruth CreateTruth() => new()
     {
         SchemaVersion = 1,

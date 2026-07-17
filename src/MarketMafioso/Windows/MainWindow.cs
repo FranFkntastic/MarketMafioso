@@ -99,7 +99,8 @@ public class MainWindow : Window, IDisposable
         MarketBoardApproachService marketBoardApproachService,
         string marketAcquisitionRouteDiagnosticsDirectory,
         RetainerCacheFileStore? retainerCacheStore,
-        IPluginLog log)
+        IPluginLog log,
+        IRenderedCharacterAdvisorProbe renderedCharacterAdvisorProbe)
         : base("MarketMafioso##MarketMafiosoMainWindow",
                ImGuiWindowFlags.None)
     {
@@ -242,7 +243,8 @@ public class MainWindow : Window, IDisposable
             dataManager,
             Plugin.PluginInterface,
             acquisitionPlanSource,
-            IsMarketAcquisitionUnlocked);
+            IsMarketAcquisitionUnlocked,
+            renderedCharacterAdvisorProbe);
         statusTab = new StatusTabPanel(config, reporter, retainerCacheStore, log);
         marketAcquisitionRequestPickupPanel = new MarketAcquisitionRequestPickupPanel(
             () => _ = FetchDashboardRequestsAsync(),
@@ -591,6 +593,18 @@ public class MainWindow : Window, IDisposable
         QueueAgentTabSelection(mainTab, workspaceView);
         AgentOpenForReview();
         return true;
+    }
+
+    public bool TryOpenSyntheticAdvisorReview()
+    {
+#if DEBUG
+        squireTab.OpenSyntheticAdvisorReview();
+        QueueAgentTabSelection("Squire");
+        AgentOpenForReview();
+        return true;
+#else
+        return false;
+#endif
     }
 
     private void QueueAgentTabSelection(string mainTab, string? workspaceView = null)

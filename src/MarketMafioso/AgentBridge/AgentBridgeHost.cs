@@ -169,6 +169,14 @@ public sealed class AgentBridgeHost : IDisposable
                     : AgentBridgeResponse.Ok("Reviewed control captured.", controlReview);
             case "get-review-surfaces":
                 return AgentBridgeResponse.Ok("Review surfaces captured.", provider.GetReviewSurfaces());
+            case "get-ui-automation-capabilities":
+                return AgentBridgeResponse.Ok("Rendered UI automation capabilities captured.", provider.GetUiAutomationCapabilities());
+            case "open-synthetic-advisor-review":
+                var syntheticAdvisorOpened = false;
+                await dispatchOnFramework(() => syntheticAdvisorOpened = provider.TryOpenSyntheticAdvisorReview()).ConfigureAwait(false);
+                return syntheticAdvisorOpened
+                    ? AgentBridgeResponse.Ok("Debug-only synthetic advisor review opened.")
+                    : AgentBridgeResponse.Fail("Synthetic advisor review is unavailable in this build.");
             case "invoke-control":
                 if (string.IsNullOrWhiteSpace(request.Target) || request.FrameId is null)
                     return AgentBridgeResponse.Fail("Control ID and reviewed frame ID are required.");
@@ -236,6 +244,79 @@ public sealed class AgentBridgeHost : IDisposable
                 await dispatchOnFramework(provider.CaptureInputState).ConfigureAwait(false);
                 AppendAudit("capture-input-state", "accepted");
                 return AgentBridgeResponse.Ok("Market-board input state capture requested.");
+            case "open-character-ui":
+                await dispatchOnFramework(provider.OpenCharacterUi).ConfigureAwait(false);
+                AppendAudit("open-character-ui", "accepted");
+                return AgentBridgeResponse.Ok("Character UI open requested.");
+            case "close-character-ui":
+                var characterUiClosed = false;
+                await dispatchOnFramework(() => characterUiClosed = provider.TryCloseCharacterUi()).ConfigureAwait(false);
+                return characterUiClosed
+                    ? AgentBridgeResponse.Ok("Visible Character UI closed through its rendered addon.")
+                    : AgentBridgeResponse.Fail("No visible Character UI was available to close.");
+            case "close-blocking-select-string-ui":
+                var selectStringClosed = false;
+                await dispatchOnFramework(() => selectStringClosed = provider.TryCloseBlockingSelectStringUi()).ConfigureAwait(false);
+                return selectStringClosed
+                    ? AgentBridgeResponse.Ok("Visible SelectString UI closed through its rendered addon.")
+                    : AgentBridgeResponse.Fail("No visible SelectString UI was available to close.");
+            case "switch-calibration-job-ui":
+                var calibrationJobSwitched = false;
+                await dispatchOnFramework(() => calibrationJobSwitched = provider.TrySwitchCalibrationJobUi(request.Target ?? string.Empty)).ConfigureAwait(false);
+                return calibrationJobSwitched
+                    ? AgentBridgeResponse.Ok($"Calibration job switch requested through the rendered command UI: {request.Target}.")
+                    : AgentBridgeResponse.Fail("Target must be Miner, Botanist, or Blacksmith.");
+            case "get-character-ui":
+                AgentBridgeRenderedUiSnapshot? characterUi = null;
+                await dispatchOnFramework(() => characterUi = provider.CaptureCharacterUi()).ConfigureAwait(false);
+                return AgentBridgeResponse.Ok("Rendered Character UI captured.", characterUi);
+            case "hover-character-node-ui":
+                var characterNodeHovered = false;
+                await dispatchOnFramework(() => characterNodeHovered = provider.TryHoverCharacterNodeUi(request.Target ?? string.Empty)).ConfigureAwait(false);
+                return characterNodeHovered
+                    ? AgentBridgeResponse.Ok($"Virtual UI rollover dispatched to rendered Character node {request.Target}; the OS cursor and window focus were not changed.")
+                    : AgentBridgeResponse.Fail("The requested rendered Character drag/drop node is unavailable or has no registered rollover event.");
+            case "release-character-node-ui":
+            case "restore-character-ui-cursor":
+                var characterCursorRestored = false;
+                await dispatchOnFramework(() => characterCursorRestored = provider.RestoreCharacterUiCursor()).ConfigureAwait(false);
+                return characterCursorRestored
+                    ? AgentBridgeResponse.Ok("Virtual Character-node rollover released; the OS cursor was never changed.")
+                    : AgentBridgeResponse.Fail("No virtual Character-node rollover was active.");
+            case "get-gathering-stats-ui":
+                Squire.Observation.RenderedGatheringStatsObservation? gatheringStats = null;
+                await dispatchOnFramework(() => gatheringStats = provider.CaptureGatheringStatsUi()).ConfigureAwait(false);
+                return gatheringStats!.Status == Squire.Observation.RenderedCharacterObservationStatus.Complete
+                    ? AgentBridgeResponse.Ok("Rendered gathering stats captured.", gatheringStats)
+                    : new AgentBridgeResponse { Success = false, Message = gatheringStats.Diagnostic, Receipt = gatheringStats };
+            case "get-character-equipment-layout-ui":
+                Squire.Observation.RenderedCharacterEquipmentLayout? equipmentLayout = null;
+                await dispatchOnFramework(() => equipmentLayout = provider.CaptureCharacterEquipmentLayoutUi()).ConfigureAwait(false);
+                return equipmentLayout!.Status == Squire.Observation.RenderedEquipmentLayoutStatus.Complete
+                    ? AgentBridgeResponse.Ok("Rendered Character equipment layout captured.", equipmentLayout)
+                    : new AgentBridgeResponse { Success = false, Message = equipmentLayout.Diagnostic, Receipt = equipmentLayout };
+            case "get-item-detail-ui":
+                Squire.Observation.RenderedItemDetailObservation? itemDetail = null;
+                await dispatchOnFramework(() => itemDetail = provider.CaptureItemDetailUi()).ConfigureAwait(false);
+                return itemDetail!.Status == Squire.Observation.RenderedItemDetailStatus.Complete
+                    ? AgentBridgeResponse.Ok("Rendered Item Detail captured.", itemDetail)
+                    : new AgentBridgeResponse { Success = false, Message = itemDetail.Diagnostic, Receipt = itemDetail };
+            case "begin-character-equipment-scan-ui":
+                Squire.Observation.RenderedEquipmentScanProgress? begunEquipmentScan = null;
+                await dispatchOnFramework(() => begunEquipmentScan = provider.BeginCharacterEquipmentScanUi()).ConfigureAwait(false);
+                return begunEquipmentScan!.Status == Squire.Observation.RenderedEquipmentScanStatus.ReadyToHover
+                    ? AgentBridgeResponse.Ok(begunEquipmentScan.Diagnostic, begunEquipmentScan)
+                    : new AgentBridgeResponse { Success = false, Message = begunEquipmentScan.Diagnostic, Receipt = begunEquipmentScan };
+            case "advance-character-equipment-scan-ui":
+                Squire.Observation.RenderedEquipmentScanStepResult? advancedEquipmentScan = null;
+                await dispatchOnFramework(() => advancedEquipmentScan = provider.AdvanceCharacterEquipmentScanUi()).ConfigureAwait(false);
+                return advancedEquipmentScan!.ActionAccepted
+                    ? AgentBridgeResponse.Ok(advancedEquipmentScan.Message, advancedEquipmentScan.Progress)
+                    : new AgentBridgeResponse { Success = false, Message = advancedEquipmentScan.Message, Receipt = advancedEquipmentScan.Progress };
+            case "cancel-character-equipment-scan-ui":
+                Squire.Observation.RenderedEquipmentScanProgress? cancelledEquipmentScan = null;
+                await dispatchOnFramework(() => cancelledEquipmentScan = provider.CancelCharacterEquipmentScanUi()).ConfigureAwait(false);
+                return AgentBridgeResponse.Ok(cancelledEquipmentScan!.Diagnostic, cancelledEquipmentScan);
             case "stop-route":
                 await dispatchOnFramework(provider.StopRoute).ConfigureAwait(false);
                 AppendAudit("stop-route", "accepted");
