@@ -513,17 +513,20 @@ internal sealed class OutfitterPanel : IDisposable
         if (!isMarketAcquisitionUnlocked())
             return;
 
-        var canStage = marketEntries.Length > 0 && stageMarketLines is not null;
+        var readiness = OutfitterLegacyAcquisitionPolicy.Evaluate(value);
+        var canStage = readiness.CanStage && stageMarketLines is not null;
         ImGui.SameLine();
-        if (ImGuiUi.Button($"Stage {marketEntries.Length:N0} market item{(marketEntries.Length == 1 ? string.Empty : "s")}##OutfitterStage", canStage))
+        if (ImGuiUi.Button($"Send {marketEntries.Length:N0} market item{(marketEntries.Length == 1 ? string.Empty : "s")} to Workbench##OutfitterStage", canStage))
             StageMarketLines(marketEntries);
+        if (!canStage && ImGui.IsItemHovered())
+            ImGui.SetTooltip(readiness.Message);
         RegisterLastControl(
             "squire.outfitter.stage-market",
-            "Stage Outfitter purchases for execution",
+            "Send exact-quality Outfitter purchases to the Market Acquisition Workbench",
             AgentBridgeUiControlKind.Button,
             canStage,
             false,
-            marketEntries.Length.ToString(),
+            $"{readiness.Code}:{marketEntries.Length}",
             () => StageMarketLines(marketEntries));
     }
 
@@ -588,13 +591,8 @@ internal sealed class OutfitterPanel : IDisposable
 
     private void StageMarketLines(IReadOnlyList<EquipmentLoadoutPlanEntry> entries)
     {
-        if (stageMarketLines is null || entries.Count == 0)
-            return;
-        var result = OutfitterMarketStaging.Build(entries);
-        stageMarketLines(result.Lines);
-        status = $"Staged {result.Lines.Count:N0} purchase line{(result.Lines.Count == 1 ? string.Empty : "s")} for execution.";
-        if (result.WasClamped)
-            status += " Values above supported request limits were capped.";
+        _ = entries;
+        status = "Workbench handoff is blocked until the replacement Outfitter preserves exact NQ/HQ offer identity.";
     }
 
     private bool MatchesSearch(OutfitterTarget target) => string.IsNullOrWhiteSpace(search) ||

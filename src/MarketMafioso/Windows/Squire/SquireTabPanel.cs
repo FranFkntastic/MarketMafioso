@@ -193,13 +193,15 @@ internal sealed class SquireTabPanel : IDisposable
 
     private void DrawOutfitter()
     {
+        DrawOutfitterViewSelector();
+        ImGui.Separator();
         if (config.Squire.EnableOutfitterAdvisor)
         {
             advisorPanel.Draw();
             return;
         }
         ImGui.TextColored(MarketMafiosoUiTheme.Header, "Outfitter — loadout planner");
-        ImGui.TextWrapped("Choose a target, compare its current set with the best accessible loadout, then stage any purchases for execution.");
+        ImGui.TextWrapped("Choose a target and compare its current set with the best accessible loadout. Market purchases enter the existing Workbench only after exact NQ/HQ identity is preserved.");
         if (ImGui.Button("Refresh equipment##Outfitter"))
             Refresh();
         RegisterLastControl(
@@ -214,6 +216,41 @@ internal sealed class SquireTabPanel : IDisposable
         if (analysis is null)
             return;
         outfitterPanel.Draw(analysis.Snapshot);
+    }
+
+    private void DrawOutfitterViewSelector()
+    {
+        var options = OutfitterWorkspaceViewPresenter.Build(config.Squire.EnableOutfitterAdvisor);
+        ImGui.TextColored(MarketMafiosoUiTheme.Muted, "VIEW");
+        ImGui.SameLine();
+        for (var index = 0; index < options.Count; index++)
+        {
+            var option = options[index];
+            if (ImGui.Selectable(
+                    $"{option.Label}##SquireOutfitterView{option.View}",
+                    option.Selected,
+                    ImGuiSelectableFlags.None,
+                    new System.Numerics.Vector2(option.View == OutfitterWorkspaceView.Planner ? 126f : 158f, 0)))
+            {
+                SelectOutfitterView(option.View);
+            }
+            RegisterLastControl(
+                $"squire.outfitter.view.{option.View.ToString().ToLowerInvariant()}",
+                option.Description,
+                AgentBridgeUiControlKind.Select,
+                true,
+                option.Selected,
+                option.View.ToString(),
+                () => SelectOutfitterView(option.View));
+            if (index < options.Count - 1)
+                ImGui.SameLine();
+        }
+    }
+
+    private void SelectOutfitterView(OutfitterWorkspaceView view)
+    {
+        config.Squire.EnableOutfitterAdvisor = view == OutfitterWorkspaceView.Advisor;
+        config.Save();
     }
 
     private void DrawCleanup()
