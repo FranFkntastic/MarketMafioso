@@ -66,6 +66,20 @@ public sealed class InventoryBrowserFilterTests
     }
 
     [Fact]
+    public void ItemsMode_AcceptsFriendlyNegationAndColonComparisons()
+    {
+        var view = InventoryBrowserViewBuilder.Build(
+            Snapshot,
+            "darksteel -location:inventory quantity:>20",
+            mode: InventoryBrowserMode.Items);
+
+        Assert.True(view.FilterValid);
+        var item = Assert.Single(view.Items);
+        Assert.Equal(99, item.TotalQuantity);
+        Assert.Equal("Retainer", Assert.Single(view.Stacks).Location);
+    }
+
+    [Fact]
     public void ItemsMode_LocationExclusionsRemoveStacksAndRecomputeTotals()
     {
         var report = Snapshot.Report with
@@ -201,6 +215,8 @@ public sealed class InventoryBrowserFilterTests
         Assert.Contains(stacks.FilterCompletions, completion => completion.Label == "HQ");
         Assert.True(stacks.FilterCompletions.Count <= 24);
         Assert.Contains(stacks.FilterReference!.Fields, field => field.Key == "instance.quality" && field.IsAvailable);
+        Assert.Equal("quality", stacks.FilterReference.Fields.Single(field => field.Key == "instance.quality").PreferredName);
+        Assert.Equal("quantity", stacks.FilterReference.Fields.Single(field => field.Key == "instance.quantity").PreferredName);
         Assert.Empty(stacks.FilterReference.Fields.Single(field => field.Key == "item.name").Values);
     }
 
@@ -220,5 +236,24 @@ public sealed class InventoryBrowserFilterTests
             Assert.Equal(Franthropy.Filtering.Completion.FilterCompletionKind.Operator, completion.Kind);
             Assert.Equal(new Franthropy.Filtering.Syntax.TextSpan(8, 0), completion.ReplacementSpan);
         });
+    }
+
+    [Fact]
+    public void CompletionUsesFriendlyShortFieldsAndColonComparators()
+    {
+        var field = InventoryBrowserViewBuilder.Build(
+            Snapshot,
+            "-loc",
+            mode: InventoryBrowserMode.Items,
+            caretPosition: 4);
+        var comparison = InventoryBrowserViewBuilder.Build(
+            Snapshot,
+            "quantity:>",
+            mode: InventoryBrowserMode.Items,
+            caretPosition: 10);
+
+        var location = Assert.Single(field.FilterCompletions, completion => completion.InsertionText == "location");
+        Assert.Equal(new Franthropy.Filtering.Syntax.TextSpan(1, 3), location.ReplacementSpan);
+        Assert.Equal([">", ">="], comparison.FilterCompletions.Select(completion => completion.Label));
     }
 }

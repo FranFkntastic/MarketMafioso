@@ -107,9 +107,10 @@ else
                         <span class="inventory-filter-fields"><b>Fields</b>
                             @foreach (var field in AvailableReferenceFields)
                             {
-                                <code title="@ReferenceDetail(field)">@ReferenceLabel(field)</code>
+                                <code title="@ReferenceDetail(field)">@field.PreferredName</code>
                             }
                         </span>
+                        <span><b>Examples</b> <code>location:Armoire</code> <code>-equipped</code> <code>quantity:&gt;20</code></span>
                         <span><b>Logic</b> spaces mean AND; use OR, NOT, parentheses, and ranges such as 20..99</span>
                     </div>
                 }
@@ -198,9 +199,6 @@ else
     private InventoryBrowserMode? SuggestedFilterMode => ShowFilterErrors ? InventoryFilterPresentation.SuggestedMode(_filterText, _mode) : null;
     private IEnumerable<Franthropy.Filtering.Documentation.FilterFieldReference> AvailableReferenceFields =>
         _view.FilterReference?.Fields.Where(entry => entry.IsAvailable && !entry.IsDefaultText) ?? [];
-
-    private static string ReferenceLabel(Franthropy.Filtering.Documentation.FilterFieldReference field) =>
-        field.Aliases.OrderBy(alias => alias.Length).FirstOrDefault() ?? field.Key;
 
     private static string ReferenceDetail(Franthropy.Filtering.Documentation.FilterFieldReference field) =>
         $"{field.Description} Operators: {string.Join(", ", field.Operators)}";
