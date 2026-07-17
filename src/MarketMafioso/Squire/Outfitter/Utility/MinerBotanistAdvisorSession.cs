@@ -76,7 +76,7 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
             listingSource,
             new(TimeSpan.FromMinutes(15), TimeSpan.FromHours(6), maxEntries: 4096),
             new OutfitterMarketEvidenceFileStore(evidencePath));
-        State = Idle(MinerBotanistUtilityContextKind.LegendaryNodeGeneralYield);
+        State = Idle(MinerBotanistUtilityContextKind.OrdinaryResourceBenchmark);
     }
 
     public MinerBotanistAdvisorSessionState State { get; private set; }

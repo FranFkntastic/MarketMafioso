@@ -19,11 +19,12 @@ internal sealed class MinerBotanistAdvisorPanel
     private readonly AgentBridgeUiReviewRegistry reviewRegistry;
     private readonly ParetoFrontierPlotBuilder plotBuilder = new();
     private readonly DalamudPlotRenderer plotRenderer = new();
-    private MinerBotanistUtilityContextKind context = MinerBotanistUtilityContextKind.LegendaryNodeGeneralYield;
+    private MinerBotanistUtilityContextKind context = MinerBotanistUtilityContextKind.OrdinaryResourceBenchmark;
     private MinerBotanistReadOnlyAdvice? lastAdvice;
     private string? selectedSolutionId;
 #if DEBUG
     private MinerBotanistReadOnlyAdvice? syntheticReviewAdvice;
+    private bool overlaySyntheticContexts = true;
 #endif
 
     public MinerBotanistAdvisorPanel(
@@ -52,9 +53,9 @@ internal sealed class MinerBotanistAdvisorPanel
 #if DEBUG
         if (syntheticReviewActive)
         {
-            ImGui.TextColored(MarketMafiosoUiTheme.Warning, "DEBUG REPLAY — synthetic inputs and illustrative costs");
+            ImGui.TextColored(MarketMafiosoUiTheme.Warning, "DEBUG REPLAY — model decisions with frozen evidence prices");
             ImGui.TextColored(MarketMafiosoUiTheme.Muted,
-                "No live character, market listing, source identity, or expected oracle answer is used by this review.");
+                "Item names are game data; gil estimates are Aether sale-history medians. No live character or live listing is used.");
             ImGui.TextColored(MarketMafiosoUiTheme.Success, displayedAdvice!.Diagnostic);
         }
         else
@@ -169,6 +170,20 @@ internal sealed class MinerBotanistAdvisorPanel
                 syntheticReviewAdvice is null ? "live" : "synthetic",
                 ToggleSyntheticReview);
         }
+        if (syntheticReviewAdvice is not null)
+        {
+            ImGui.SameLine();
+            if (ImGui.Checkbox("Overlay contexts##SquireAdvisorSyntheticOverlay", ref overlaySyntheticContexts))
+                selectedSolutionId = null;
+            RegisterLastControl(
+                "squire.outfitter.advisor.synthetic-overlay",
+                "Overlay compatible advisor contexts",
+                AgentBridgeUiControlKind.Toggle,
+                true,
+                overlaySyntheticContexts,
+                overlaySyntheticContexts ? "overlay" : "single",
+                ToggleSyntheticOverlay);
+        }
 #endif
     }
 
@@ -190,6 +205,8 @@ internal sealed class MinerBotanistAdvisorPanel
         context = value;
         config.Squire.OutfitterAdvisorContext = value.ToString();
         config.Save();
+        lastAdvice = null;
+        selectedSolutionId = null;
 #if DEBUG
         if (syntheticReviewAdvice is not null)
             syntheticReviewAdvice = MinerBotanistAdvisorSyntheticReview.Build(context);
@@ -210,6 +227,12 @@ internal sealed class MinerBotanistAdvisorPanel
     {
         syntheticReviewAdvice = MinerBotanistAdvisorSyntheticReview.Build(context);
         lastAdvice = null;
+        selectedSolutionId = null;
+    }
+
+    private void ToggleSyntheticOverlay()
+    {
+        overlaySyntheticContexts = !overlaySyntheticContexts;
         selectedSolutionId = null;
     }
 #endif
@@ -237,6 +260,13 @@ internal sealed class MinerBotanistAdvisorPanel
 
     private void DrawFrontier(MinerBotanistReadOnlyAdvice advice, EquipmentDecisionSolution selected)
     {
+#if DEBUG
+        if (syntheticReviewAdvice is not null && overlaySyntheticContexts)
+        {
+            DrawSyntheticOverlay(selected);
+            return;
+        }
+#endif
         var model = plotBuilder.Build(advice.Frontier!.Pareto, "squire-min-btn-frontier");
         var warningIds = advice.AuthorityBySolutionId
             .Where(value => !value.Value.AdvisorMayConsider)
@@ -261,6 +291,88 @@ internal sealed class MinerBotanistAdvisorPanel
             ImGui.EndTooltip();
         }
     }
+
+#if DEBUG
+    private void DrawSyntheticOverlay(EquipmentDecisionSolution selected)
+    {
+        var contexts = Enum.GetValues<MinerBotanistUtilityContextKind>();
+        var adviceByContext = contexts.ToDictionary(
+            value => value,
+            value => value == context ? syntheticReviewAdvice! : MinerBotanistAdvisorSyntheticReview.Build(value));
+        var models = adviceByContext.ToDictionary(
+            value => value.Key,
+            value => plotBuilder.Build(value.Value.Frontier!.Pareto, $"squire-min-btn-{ContextSeriesId(value.Key)}"));
+        var overlay = PlotOverlayComposer.Compose(
+            "squire-min-btn-context-overlay",
+            contexts.Select(value => new PlotOverlaySeries(
+                ContextSeriesId(value),
+                models[value].Spec,
+                OverlayStyle(value))).ToArray(),
+            "Cost / utility frontiers by gathering context");
+        var warningIds = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var value in adviceByContext)
+        foreach (var authority in value.Value.AuthorityBySolutionId.Where(authority => !authority.Value.AdvisorMayConsider))
+            warningIds.Add(PlotOverlayComposer.DatumId(ContextSeriesId(value.Key), authority.Key));
+        var selectedDatumId = PlotOverlayComposer.DatumId(ContextSeriesId(context), selected.Candidate.SolutionId);
+        var nominatedDatumId = adviceByContext[context].Nomination is { } nomination
+            ? PlotOverlayComposer.DatumId(ContextSeriesId(context), nomination.Candidate.SolutionId)
+            : null;
+        var interaction = new PlotInteractionState(
+            new HashSet<string>(StringComparer.Ordinal) { selectedDatumId },
+            nominatedDatumId,
+            warningIds,
+            new HashSet<string>(StringComparer.Ordinal));
+
+        ImGui.TextColored(MarketMafiosoUiTheme.Muted,
+            "Circle Ordinary  ·  Diamond Legendary  ·  Triangle Collectables  ·  point color remains NQ/HQ mix");
+        var result = plotRenderer.Draw("SquireAdvisorFrontierOverlay", overlay.Spec, new Vector2(0, 285f), interaction);
+        if (result.ClickedDatumId is { } clicked && overlay.DatumIdentities.TryGetValue(clicked, out var clickedIdentity))
+        {
+            var clickedContext = ContextFromSeriesId(clickedIdentity.SeriesId);
+            SetContext(clickedContext);
+            selectedSolutionId = clickedIdentity.SourceDatumId;
+            lastAdvice = syntheticReviewAdvice;
+        }
+        if (result.HoveredDatumId is { } hovered && overlay.DatumIdentities.TryGetValue(hovered, out var hoveredIdentity))
+        {
+            var hoveredContext = ContextFromSeriesId(hoveredIdentity.SeriesId);
+            if (models[hoveredContext].SolutionsByDatumId.TryGetValue(hoveredIdentity.SourceDatumId, out var solution))
+            {
+                ImGui.BeginTooltip();
+                ImGui.TextColored(MarketMafiosoUiTheme.Header,
+                    solution.VariantLabels.FirstOrDefault() ?? solution.Candidate.SolutionId);
+                ImGui.TextColored(MarketMafiosoUiTheme.Muted, ContextLabel(hoveredContext));
+                ImGui.TextUnformatted($"{FormatCost(solution.AcquisitionCostGil)} · utility {solution.Utility.UtilityScore:N1}");
+                ImGui.TextColored(MarketMafiosoUiTheme.Muted,
+                    $"{solution.Burden.PurchaseTransactions:N0} purchase(s), {solution.Burden.WorldVisits:N0} world visit(s)");
+                ImGui.EndTooltip();
+            }
+        }
+    }
+
+    private static PlotOverlayStyle OverlayStyle(MinerBotanistUtilityContextKind value) => value switch
+    {
+        MinerBotanistUtilityContextKind.LegendaryNodeGeneralYield =>
+            new(new(.92f, .57f, .20f, .78f), PlotPointShape.Diamond),
+        MinerBotanistUtilityContextKind.CollectableEfficiency =>
+            new(new(.67f, .45f, .94f, .78f), PlotPointShape.Triangle),
+        _ => new(new(.35f, .67f, .98f, .78f), PlotPointShape.Circle),
+    };
+
+    private static string ContextSeriesId(MinerBotanistUtilityContextKind value) => value switch
+    {
+        MinerBotanistUtilityContextKind.LegendaryNodeGeneralYield => "legendary",
+        MinerBotanistUtilityContextKind.CollectableEfficiency => "collectables",
+        _ => "ordinary",
+    };
+
+    private static MinerBotanistUtilityContextKind ContextFromSeriesId(string value) => value switch
+    {
+        "legendary" => MinerBotanistUtilityContextKind.LegendaryNodeGeneralYield,
+        "collectables" => MinerBotanistUtilityContextKind.CollectableEfficiency,
+        _ => MinerBotanistUtilityContextKind.OrdinaryResourceBenchmark,
+    };
+#endif
 
     private void DrawSolutionRail(MinerBotanistReadOnlyAdvice advice, EquipmentDecisionSolution selected)
     {

@@ -23,6 +23,19 @@ public sealed class SquireConfigurationTests
         Assert.True(config.PauseQuestionable);
         Assert.True(config.PauseArtisan);
         Assert.True(config.CloseSafeUserMenus);
+        Assert.Equal("OrdinaryResourceBenchmark", config.OutfitterAdvisorContext);
+    }
+
+    [Fact]
+    public void AdvisorContextMigration_MovesExistingInstallsToOrdinaryNodesOnce()
+    {
+        var config = new Configuration();
+        config.Squire.OutfitterAdvisorContext = "LegendaryNodeGeneralYield";
+
+        Assert.True(SquireAdvisorConfigurationMigration.Migrate(config));
+        Assert.Equal("OrdinaryResourceBenchmark", config.Squire.OutfitterAdvisorContext);
+        Assert.Equal(1, config.Squire.OutfitterAdvisorContextDefaultVersion);
+        Assert.False(SquireAdvisorConfigurationMigration.Migrate(config));
     }
 
     [Fact]

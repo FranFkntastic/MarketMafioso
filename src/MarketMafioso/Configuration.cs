@@ -89,7 +89,8 @@ public sealed class SquireConfiguration
     public Dictionary<string, int> OutfitterTargetLevels { get; set; } = new();
     public Dictionary<uint, string> OutfitterSelectedGearsetByJob { get; set; } = new();
     public bool EnableOutfitterAdvisor { get; set; }
-    public string OutfitterAdvisorContext { get; set; } = "LegendaryNodeGeneralYield";
+    public string OutfitterAdvisorContext { get; set; } = "OrdinaryResourceBenchmark";
+    public int OutfitterAdvisorContextDefaultVersion { get; set; }
     public bool ShowProtected { get; set; }
     public bool ShowNonEquipment { get; set; }
     public string Search { get; set; } = string.Empty;

@@ -34,6 +34,48 @@
       "locator": "Star Tech gathering equipment, item level 750"
     }
   ],
+  "pricingSnapshot": {
+    "observedAtUtc": "2026-07-16T16:30:00Z",
+    "market": "Aether",
+    "method": "Median unit price from the Universalis history response, excluding mannequin transactions; HQ is used for crafted model-set equipment and food.",
+    "endpoint": "https://universalis.app/api/v2/history/Aether/{itemIds}?entries=100",
+    "equipment": [
+      { "itemId": 47182, "name": "Gold Thumb's Sledgehammer", "quality": "HQ", "medianGil": 349975 },
+      { "itemId": 47189, "name": "Crested Hood of Gathering", "quality": "HQ", "medianGil": 258926 },
+      { "itemId": 47190, "name": "Crested Coat of Gathering", "quality": "HQ", "medianGil": 319980 },
+      { "itemId": 47191, "name": "Crested Gloves of Gathering", "quality": "HQ", "medianGil": 296897 },
+      { "itemId": 47192, "name": "Crested Slops of Gathering", "quality": "HQ", "medianGil": 299868 },
+      { "itemId": 47193, "name": "Crested Boots of Gathering", "quality": "HQ", "medianGil": 259445 },
+      { "itemId": 47198, "name": "Crested Earrings of Gathering", "quality": "HQ", "medianGil": 125000 },
+      { "itemId": 47199, "name": "Crested Necklace of Gathering", "quality": "HQ", "medianGil": 130327 },
+      { "itemId": 47200, "name": "Crested Bracelet of Gathering", "quality": "HQ", "medianGil": 120000 },
+      { "itemId": 47201, "name": "Crested Ring of Gathering", "quality": "HQ", "medianGil": 129997 },
+      { "itemId": 44843, "name": "Cloudsail Meuniere", "quality": "HQ", "medianGil": 10800 }
+    ],
+    "materiaUnitMediansGil": {
+      "5688": 310,
+      "5692": 1898,
+      "18023": 260,
+      "26733": 496,
+      "33922": 1798,
+      "33923": 650,
+      "33935": 746,
+      "33936": 739,
+      "33937": 317,
+      "41762": 1000,
+      "41763": 1150,
+      "41764": 1088,
+      "41775": 977,
+      "41776": 999,
+      "41777": 600
+    },
+    "nonGilEquipment": {
+      "family": "Star Tech gathering gear",
+      "source": "Purple scrip exchange",
+      "gilPrice": null,
+      "treatment": "The plot prices only the assigned meld package; it does not invent a gil conversion for scrips."
+    }
+  },
   "loadouts": [
     {
       "loadoutId": "published-budget-raw",
