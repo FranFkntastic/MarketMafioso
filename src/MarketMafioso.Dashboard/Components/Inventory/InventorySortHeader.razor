@@ -1,0 +1,29 @@
+<th class="@CssClass"
+    data-column-id="@Column"
+    aria-sort="@AriaSort">
+    <button class="inventory-sort-button"
+            type="button"
+            aria-label="@SortLabel"
+            @onclick="@(() => SortChanged.InvokeAsync(Column))">
+        <span>@Label</span>
+        @if (IsSorted)
+        {
+            <span class="inventory-sort-indicator" aria-hidden="true">@(Descending ? "▼" : "▲")</span>
+        }
+    </button>
+    <span class="inventory-column-resizer" aria-hidden="true"></span>
+</th>
+
+@code {
+    [Parameter, EditorRequired] public string Label { get; set; } = string.Empty;
+    [Parameter, EditorRequired] public string Column { get; set; } = string.Empty;
+    [Parameter] public string? SortColumn { get; set; }
+    [Parameter] public bool Descending { get; set; }
+    [Parameter] public bool Number { get; set; }
+    [Parameter] public EventCallback<string> SortChanged { get; set; }
+
+    private bool IsSorted => string.Equals(SortColumn, Column, StringComparison.OrdinalIgnoreCase);
+    private string CssClass => Number ? "number" : string.Empty;
+    private string AriaSort => IsSorted ? (Descending ? "descending" : "ascending") : "none";
+    private string SortLabel => $"Sort by {Label}{(IsSorted ? Descending ? ", descending" : ", ascending" : string.Empty)}";
+}

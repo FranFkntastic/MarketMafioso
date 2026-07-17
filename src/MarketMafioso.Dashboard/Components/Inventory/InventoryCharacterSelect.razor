@@ -5,11 +5,22 @@
             @onchange="HandleChangedAsync"
             aria-label="Character">
         <option value="">Latest available</option>
-        @foreach (var character in Characters)
+        @foreach (var group in Characters
+            .GroupBy(character => character.ServiceAccountGroup)
+            .OrderBy(group => GroupOrder(group.Key)))
         {
-            <option value="@character.Id">@character.DisplayName</option>
+            <optgroup label="@group.Key">
+                @foreach (var character in group.OrderBy(character => character.CharacterName, StringComparer.OrdinalIgnoreCase))
+                {
+                    <option value="@character.Id">@character.CharacterName</option>
+                }
+            </optgroup>
         }
     </select>
+    @if (SelectedCharacter is { } selected)
+    {
+        <span class="inventory-character-context">@selected.HomeWorld · @selected.ServiceAccountGroup</span>
+    }
 </label>
 
 @code {
@@ -18,6 +29,8 @@
     [Parameter] public EventCallback<long?> ValueChanged { get; set; }
 
     private string CurrentValue => Value?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty;
+    private DashboardCharacterOption? SelectedCharacter => Value is { } id ? Characters.FirstOrDefault(character => character.Id == id) : null;
+    private static int GroupOrder(string group) => group.StartsWith("Service Account ", StringComparison.Ordinal) ? 0 : 1;
 
     private Task HandleChangedAsync(ChangeEventArgs args)
     {

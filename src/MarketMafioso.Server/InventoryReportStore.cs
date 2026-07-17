@@ -177,7 +177,12 @@ public sealed class InventoryReportStore
 
 public sealed record RawInventoryReportJson(string Id, string? RawJson);
 
-public sealed record CharacterSummary(long Id, string CharacterName, string? HomeWorld, DateTimeOffset LastSeenAt);
+public sealed record CharacterSummary(
+    long Id,
+    string CharacterName,
+    string? HomeWorld,
+    DateTimeOffset LastSeenAt,
+    string? ServiceAccountKey = null);
 
 public sealed record InventoryRetentionSummary
 {

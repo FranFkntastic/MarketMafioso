@@ -24,6 +24,7 @@ public sealed class DashboardSettingsEndpointTests
         Assert.Equal("Wei Ning", character.CharacterName);
         Assert.Equal("Siren", character.HomeWorld);
         Assert.Equal("Wei Ning @ Siren", character.DisplayName);
+        Assert.Equal("Service Account 1", character.ServiceAccountGroup);
     }
 
     [Fact]
@@ -51,6 +52,29 @@ public sealed class DashboardSettingsEndpointTests
         Assert.Equal(characterId, loaded.DefaultCharacterId);
         Assert.Equal("Recommended", loaded.DefaultWorldMode);
         Assert.Equal(900, loaded.DefaultPickupExpiresSeconds);
+    }
+
+    [Fact]
+    public async Task CharactersApi_SeparatesDistinctServiceAccountEvidence()
+    {
+        await using var application = CreateApplication();
+        using var client = application.CreateClient();
+        await LoginAsync(client);
+        (await client.PostAsJsonAsync("/inventory", CreateReport("Wei Ning", "Siren", 5064) with
+        {
+            ServiceAccountKey = "primary-service-account",
+        })).EnsureSuccessStatusCode();
+        (await client.PostAsJsonAsync("/inventory", CreateReport("Octavio Agosto", "Midgardsormr", 5057) with
+        {
+            ServiceAccountKey = "secondary-service-account",
+        })).EnsureSuccessStatusCode();
+
+        var characters = await client.GetFromJsonAsync<IReadOnlyList<DashboardCharacterOption>>("/api/inventory/characters");
+
+        Assert.NotNull(characters);
+        Assert.Equal(2, characters.Select(character => character.ServiceAccountGroup).Distinct().Count());
+        Assert.Contains(characters, character => character.CharacterName == "Wei Ning" && character.ServiceAccountGroup == "Service Account 1");
+        Assert.Contains(characters, character => character.CharacterName == "Octavio Agosto" && character.ServiceAccountGroup == "Service Account 2");
     }
 
     [Fact]
@@ -162,6 +186,7 @@ public sealed class DashboardSettingsEndpointTests
         {
             CharacterName = characterName,
             HomeWorld = homeWorld,
+            ServiceAccountKey = "test-profile-service-account-0",
             Timestamp = "2026-06-23T12:00:00.0000000Z",
             PlayerInventory =
             [

@@ -159,7 +159,11 @@ public static class InventoryBrowserViewBuilder
             Mode = mode,
             Scope = scope,
             Scopes = BuildScopes(stored.Report),
-            RetainerGil = GetRetainerGil(stored.Report, scope),
+            PlayerGil = stored.Report.PlayerGil,
+            RetainerGil = GetRetainerGil(stored.Report),
+            TotalGil = stored.Report.PlayerGil is { } playerGil
+                ? checked(playerGil + GetRetainerGil(stored.Report))
+                : null,
         };
 
     private static FilterReferenceModel CreateContextReference<TRecord>(FilterContext<TRecord> context)
@@ -399,7 +403,7 @@ public static class InventoryBrowserViewBuilder
             {
                 ScopeKey = "Player Inventory", DisplayName = "Player Inventory",
                 Description = "Player bags and configured inventory sections",
-                StackCount = report.PlayerInventory.SelectMany(bag => bag.Items).Count(), LastUpdated = report.Timestamp,
+                StackCount = report.PlayerInventory.SelectMany(bag => bag.Items).Count(), Gil = report.PlayerGil, LastUpdated = report.Timestamp,
             },
         };
         scopes.AddRange(report.Retainers.Select(retainer => new InventoryBrowserScopeView
@@ -417,11 +421,8 @@ public static class InventoryBrowserViewBuilder
         return scopes;
     }
 
-    private static ulong GetRetainerGil(InventoryReport report, string scope) =>
-        scope.Equals("all", StringComparison.OrdinalIgnoreCase)
-            ? report.Retainers.Aggregate(0UL, (sum, retainer) => sum + retainer.Gil)
-            : report.Retainers.Where(retainer => retainer.RetainerName.Equals(scope, StringComparison.OrdinalIgnoreCase))
-                .Aggregate(0UL, (sum, retainer) => sum + retainer.Gil);
+    private static ulong GetRetainerGil(InventoryReport report) =>
+        report.Retainers.Aggregate(0UL, (sum, retainer) => sum + retainer.Gil);
 
     private static bool IsNonInventoryRetainerBag(string bagName) =>
         bagName.Equals("RetainerGil", StringComparison.OrdinalIgnoreCase) ||

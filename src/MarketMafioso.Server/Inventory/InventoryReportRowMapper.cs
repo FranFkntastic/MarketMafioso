@@ -10,7 +10,8 @@ internal static class InventoryReportRowMapper
             reader.GetInt64(0),
             reader.GetString(1),
             reader.IsDBNull(2) ? null : reader.GetString(2),
-            ParseDateTimeOffset(reader.GetString(3)));
+            ParseDateTimeOffset(reader.GetString(3)),
+            reader.IsDBNull(4) ? null : reader.GetString(4));
 
     public static InventorySnapshotRow ReadSnapshot(SqliteDataReader reader) =>
         new(
@@ -18,13 +19,15 @@ internal static class InventoryReportRowMapper
             reader.IsDBNull(1) ? null : reader.GetString(1),
             reader.IsDBNull(2) ? null : reader.GetString(2),
             reader.IsDBNull(3) ? null : reader.GetString(3),
-            reader.GetString(4),
+            reader.IsDBNull(4) ? null : reader.GetString(4),
+            reader.IsDBNull(5) ? null : checked((ulong)reader.GetInt64(5)),
+            reader.GetString(6),
             new InventoryReportMetadata
             {
-                SchemaVersion = reader.GetInt32(5),
-                SourcePlugin = reader.GetString(6),
-                PluginVersion = reader.GetString(7),
-                GeneratedAtUtc = reader.GetString(8),
+                SchemaVersion = reader.GetInt32(7),
+                SourcePlugin = reader.GetString(8),
+                PluginVersion = reader.GetString(9),
+                GeneratedAtUtc = reader.GetString(10),
             });
 
     public static InventoryOwnerRow ReadOwner(SqliteDataReader reader) =>
@@ -127,6 +130,8 @@ internal sealed record InventorySnapshotRow(
     string? ApiKeyLabel,
     string? CharacterName,
     string? HomeWorld,
+    string? ServiceAccountKey,
+    ulong? PlayerGil,
     string ReportTimestamp,
     InventoryReportMetadata Metadata);
 

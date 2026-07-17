@@ -367,6 +367,7 @@ public sealed class InventoryReportViewEndpointTests
         {
             CharacterName = "Api Browser",
             HomeWorld = "Siren",
+            PlayerGil = 560_530_934,
             Timestamp = "2026-06-24T12:00:00.0000000Z",
             PlayerInventory =
             [
@@ -439,6 +440,8 @@ public sealed class InventoryReportViewEndpointTests
         Assert.Equal("Api Browser", view.CharacterName);
         Assert.Equal("Siren", view.HomeWorld);
         Assert.Equal((ulong)55_000, view.RetainerGil);
+        Assert.Equal((ulong)560_530_934, view.PlayerGil);
+        Assert.Equal((ulong)560_585_934, view.TotalGil);
         var item = Assert.Single(view.Items);
         Assert.Equal("Metal", item.ItemType);
         Assert.Equal(111, item.TotalQuantity);

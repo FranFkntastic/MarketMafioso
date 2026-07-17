@@ -20,6 +20,7 @@ public class HttpReporter : IDisposable
     private readonly IPluginLog log;
     private readonly IChatGui chatGui;
     private readonly InventoryScanner scanner;
+    private readonly DalamudServiceAccountIdentitySource serviceAccountIdentity;
 
     private static readonly JsonSerializerOptions SerialiserOptions = new()
     {
@@ -38,13 +39,15 @@ public class HttpReporter : IDisposable
         IPlayerState playerState,
         IPluginLog log,
         IChatGui chatGui,
-        InventoryScanner scanner)
+        InventoryScanner scanner,
+        DalamudServiceAccountIdentitySource serviceAccountIdentity)
     {
         this.config = config;
         this.playerState = playerState;
         this.log = log;
         this.chatGui = chatGui;
         this.scanner = scanner;
+        this.serviceAccountIdentity = serviceAccountIdentity;
     }
 
     public async Task SendReportAsync()
@@ -92,6 +95,7 @@ public class HttpReporter : IDisposable
             }
 
             var playerInventory = scanner.ScanPlayerInventory(config);
+            var playerGil = scanner.ScanPlayerGil();
             var retainers = BuildRetainerReports(
                 config,
                 ownerScope,
@@ -103,13 +107,17 @@ public class HttpReporter : IDisposable
             {
                 Metadata = new InventoryReportMetadata
                 {
-                    SchemaVersion = 2,
+                    SchemaVersion = 3,
                     SourcePlugin = "MarketMafioso",
                     PluginVersion = PluginBuildInfo.DisplayVersion,
                     GeneratedAtUtc = generatedAtUtc,
                 },
                 CharacterName = charName,
                 HomeWorld = homeWorld,
+                ServiceAccountKey = config.IncludeCharacterInfo
+                    ? serviceAccountIdentity.Resolve(playerState.ContentId)
+                    : null,
+                PlayerGil = playerGil,
                 Timestamp = generatedAtUtc,
                 PlayerInventory = playerInventory,
                 Retainers = retainers,

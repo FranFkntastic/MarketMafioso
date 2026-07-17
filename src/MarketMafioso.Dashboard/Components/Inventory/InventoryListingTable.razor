@@ -1,12 +1,28 @@
-<table class="inventory-native-table listings-table @(ShowPrices ? null : "without-prices")">
+<table class="inventory-native-table listings-table @(ShowPrices ? null : "without-prices")" data-inventory-table="listings">
     <thead>
-        <tr>
-            <th>Item</th><th>Retainer</th><th class="number">Qty</th><th>Quality</th>
+        <tr class="inventory-column-row">
+            <InventorySortHeader Label="Item" Column="item" SortColumn="Query.SortColumn" Descending="Query.SortDescending" SortChanged="SortChanged" />
+            <InventorySortHeader Label="Retainer" Column="retainer" SortColumn="Query.SortColumn" Descending="Query.SortDescending" SortChanged="SortChanged" />
+            <InventorySortHeader Label="Qty" Column="quantity" Number="true" SortColumn="Query.SortColumn" Descending="Query.SortDescending" SortChanged="SortChanged" />
+            <InventorySortHeader Label="Quality" Column="quality" SortColumn="Query.SortColumn" Descending="Query.SortDescending" SortChanged="SortChanged" />
             @if (ShowPrices)
             {
-                <th class="number">Unit price</th><th class="number">Total</th>
+                <InventorySortHeader Label="Unit price" Column="unit-price" Number="true" SortColumn="Query.SortColumn" Descending="Query.SortDescending" SortChanged="SortChanged" />
+                <InventorySortHeader Label="Total" Column="total" Number="true" SortColumn="Query.SortColumn" Descending="Query.SortDescending" SortChanged="SortChanged" />
             }
-            <th class="number">Observed</th>
+            <InventorySortHeader Label="Observed" Column="observed" Number="true" SortColumn="Query.SortColumn" Descending="Query.SortDescending" SortChanged="SortChanged" />
+        </tr>
+        <tr class="inventory-filter-row">
+            <InventoryColumnFilter Label="Item" Column="item" Value="Query.Filter("item")" FilterChanged="FilterChanged" />
+            <InventoryColumnFilter Label="Retainer" Column="retainer" Value="Query.Filter("retainer")" FilterChanged="FilterChanged" />
+            <InventoryColumnFilter Label="Qty" Column="quantity" Number="true" Value="Query.Filter("quantity")" FilterChanged="FilterChanged" />
+            <InventoryColumnFilter Label="Quality" Column="quality" Value="Query.Filter("quality")" FilterChanged="FilterChanged" />
+            @if (ShowPrices)
+            {
+                <InventoryColumnFilter Label="Unit price" Column="unit-price" Number="true" Value="Query.Filter("unit-price")" FilterChanged="FilterChanged" />
+                <InventoryColumnFilter Label="Total" Column="total" Number="true" Value="Query.Filter("total")" FilterChanged="FilterChanged" />
+            }
+            <InventoryColumnFilter Label="Observed" Column="observed" Value="Query.Filter("observed")" FilterChanged="FilterChanged" />
         </tr>
     </thead>
     <tbody>
@@ -26,7 +42,10 @@
 
 @code {
     [Parameter] public IReadOnlyList<InventoryBrowserMarketListingView> Listings { get; set; } = [];
+    [Parameter, EditorRequired] public InventoryTableQueryState Query { get; set; } = new();
     [Parameter] public bool ShowPrices { get; set; }
+    [Parameter] public EventCallback<string> SortChanged { get; set; }
+    [Parameter] public EventCallback<InventoryColumnFilterChange> FilterChanged { get; set; }
     private ICollection<InventoryBrowserMarketListingView> VirtualizedListings => Listings as ICollection<InventoryBrowserMarketListingView> ?? Listings.ToArray();
     private static string FormatUnitPrice(uint? value) => value is null ? "Not recorded" : $"{value:N0} gil";
     private static string FormatTotalPrice(ulong? value) => value is null ? "Not recorded" : $"{value:N0} gil";

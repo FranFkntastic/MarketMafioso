@@ -14,6 +14,12 @@ public sealed record InventoryReport
     [JsonPropertyName("homeWorld")]
     public string? HomeWorld { get; init; }
 
+    [JsonPropertyName("serviceAccountKey")]
+    public string? ServiceAccountKey { get; init; }
+
+    [JsonPropertyName("playerGil")]
+    public ulong? PlayerGil { get; init; }
+
     [JsonPropertyName("timestamp")]
     public string Timestamp { get; init; } = string.Empty;
 

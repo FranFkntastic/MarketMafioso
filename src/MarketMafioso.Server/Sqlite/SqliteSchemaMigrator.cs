@@ -25,6 +25,9 @@ public sealed class SqliteSchemaMigrator
         await command.ExecuteNonQueryAsync(cancellationToken);
 
         await AddColumnIfMissingAsync(connection, transaction, "inventory_owners", "gil", "INTEGER NULL", cancellationToken);
+        await AddColumnIfMissingAsync(connection, transaction, "characters", "service_account_key", "TEXT NULL", cancellationToken);
+        await AddColumnIfMissingAsync(connection, transaction, "snapshots", "service_account_key", "TEXT NULL", cancellationToken);
+        await AddColumnIfMissingAsync(connection, transaction, "snapshots", "player_gil", "INTEGER NULL", cancellationToken);
         await AddColumnIfMissingAsync(connection, transaction, "inventory_bags", "location", "TEXT NULL", cancellationToken);
         await AddColumnIfMissingAsync(connection, transaction, "inventory_items", "item_type", "TEXT NULL", cancellationToken);
         await AddColumnIfMissingAsync(connection, transaction, "inventory_items", "container_key", "TEXT NULL", cancellationToken);
@@ -185,6 +188,7 @@ public sealed class SqliteSchemaMigrator
             account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
             character_name TEXT NOT NULL,
             home_world TEXT NULL,
+            service_account_key TEXT NULL,
             first_seen_at_utc TEXT NOT NULL,
             last_seen_at_utc TEXT NOT NULL,
             UNIQUE(account_id, character_name, home_world)
@@ -198,6 +202,8 @@ public sealed class SqliteSchemaMigrator
             api_key_label TEXT NULL,
             character_name TEXT NULL,
             home_world TEXT NULL,
+            service_account_key TEXT NULL,
+            player_gil INTEGER NULL,
             report_timestamp TEXT NOT NULL,
             schema_version INTEGER NOT NULL,
             source_plugin TEXT NOT NULL,

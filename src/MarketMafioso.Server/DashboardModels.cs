@@ -4,7 +4,8 @@ public sealed record DashboardCharacterOption(
     long Id,
     string CharacterName,
     string? HomeWorld,
-    DateTimeOffset LastSeenAt)
+    DateTimeOffset LastSeenAt,
+    string ServiceAccountGroup)
 {
     public string DisplayName => string.IsNullOrWhiteSpace(HomeWorld)
         ? CharacterName

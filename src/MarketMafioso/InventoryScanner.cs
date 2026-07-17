@@ -121,6 +121,26 @@ public class InventoryScanner
         return quantities.Aggregate(0UL, (sum, quantity) => sum + quantity);
     }
 
+    public unsafe ulong? ScanPlayerGil()
+    {
+        var inventoryManager = InventoryManager.Instance();
+        if (inventoryManager == null)
+        {
+            log.Warning("[MarketMafioso] Player gil was not captured because InventoryManager.Instance() returned null");
+            return null;
+        }
+
+        try
+        {
+            return inventoryManager->GetGil();
+        }
+        catch (Exception ex)
+        {
+            log.Warning(ex, "[MarketMafioso] Player gil could not be captured");
+            return null;
+        }
+    }
+
     public List<RetainerMarketListing> ScanCurrentRetainerMarketListings(Configuration config)
     {
         return InventoryPayloadMapper.MapRetainerMarketListings(

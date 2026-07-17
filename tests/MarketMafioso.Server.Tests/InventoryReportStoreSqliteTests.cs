@@ -121,6 +121,8 @@ public sealed class InventoryReportStoreSqliteTests
         var fixture = await StoreFixture.CreateAsync();
         var report = CreateReport("Semantic Character", "Siren", 5057) with
         {
+            ServiceAccountKey = "profile-a-service-account-0",
+            PlayerGil = 560_530_934,
             Retainers =
             [
                 new RetainerReport
@@ -193,6 +195,10 @@ public sealed class InventoryReportStoreSqliteTests
             CancellationToken.None);
 
         var loaded = await fixture.Store.GetAsync(fixture.AccountId, stored.Id, CancellationToken.None);
+
+        Assert.NotNull(loaded);
+        Assert.Equal("profile-a-service-account-0", loaded.Report.ServiceAccountKey);
+        Assert.Equal((ulong)560_530_934, loaded.Report.PlayerGil);
         var summaries = await fixture.Store.ListSummariesAsync(fixture.AccountId, characterId: null, CancellationToken.None);
 
         Assert.NotNull(loaded);

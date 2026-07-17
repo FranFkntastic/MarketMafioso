@@ -15,6 +15,14 @@ public record InventoryReport
     [JsonPropertyName("homeWorld")]
     public string? HomeWorld { get; init; }
 
+    [JsonPropertyName("serviceAccountKey")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ServiceAccountKey { get; init; }
+
+    [JsonPropertyName("playerGil")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ulong? PlayerGil { get; init; }
+
     [JsonPropertyName("timestamp")]
     public string Timestamp { get; init; } = DateTime.UtcNow.ToString("o");
 

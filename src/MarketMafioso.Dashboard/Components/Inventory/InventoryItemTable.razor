@@ -1,15 +1,26 @@
-<table class="inventory-native-table items-table @(ShowCategory ? null : "without-category")">
+<table class="inventory-native-table items-table @(ShowCategory ? null : "without-category")" data-inventory-table="items">
     <thead>
-        <tr>
-            <th>Item</th>
+        <tr class="inventory-column-row">
+            <InventorySortHeader Label="Item" Column="item" SortColumn="Query.SortColumn" Descending="Query.SortDescending" SortChanged="SortChanged" />
             @if (ShowCategory)
             {
-                <th>Category</th>
+                <InventorySortHeader Label="Category" Column="category" SortColumn="Query.SortColumn" Descending="Query.SortDescending" SortChanged="SortChanged" />
             }
-            <th class="number">Owned</th>
-            <th class="number">HQ</th>
-            <th>Primary location</th>
-            <th class="number">Owners</th>
+            <InventorySortHeader Label="Owned" Column="owned" Number="true" SortColumn="Query.SortColumn" Descending="Query.SortDescending" SortChanged="SortChanged" />
+            <InventorySortHeader Label="HQ" Column="hq" Number="true" SortColumn="Query.SortColumn" Descending="Query.SortDescending" SortChanged="SortChanged" />
+            <InventorySortHeader Label="Primary location" Column="location" SortColumn="Query.SortColumn" Descending="Query.SortDescending" SortChanged="SortChanged" />
+            <InventorySortHeader Label="Owners" Column="owners" Number="true" SortColumn="Query.SortColumn" Descending="Query.SortDescending" SortChanged="SortChanged" />
+        </tr>
+        <tr class="inventory-filter-row">
+            <InventoryColumnFilter Label="Item" Column="item" Value="Query.Filter("item")" FilterChanged="FilterChanged" />
+            @if (ShowCategory)
+            {
+                <InventoryColumnFilter Label="Category" Column="category" Value="Query.Filter("category")" FilterChanged="FilterChanged" />
+            }
+            <InventoryColumnFilter Label="Owned" Column="owned" Number="true" Value="Query.Filter("owned")" FilterChanged="FilterChanged" />
+            <InventoryColumnFilter Label="HQ" Column="hq" Number="true" Value="Query.Filter("hq")" FilterChanged="FilterChanged" />
+            <InventoryColumnFilter Label="Primary location" Column="location" Value="Query.Filter("location")" FilterChanged="FilterChanged" />
+            <InventoryColumnFilter Label="Owners" Column="owners" Number="true" Value="Query.Filter("owners")" FilterChanged="FilterChanged" />
         </tr>
     </thead>
     <tbody>
@@ -37,9 +48,12 @@
 
 @code {
     [Parameter] public IReadOnlyList<InventoryBrowserItemView> Items { get; set; } = [];
+    [Parameter, EditorRequired] public InventoryTableQueryState Query { get; set; } = new();
     [Parameter] public bool ShowCategory { get; set; }
     [Parameter] public uint? SelectedItemId { get; set; }
     [Parameter] public EventCallback<InventoryBrowserItemView> ItemSelected { get; set; }
+    [Parameter] public EventCallback<string> SortChanged { get; set; }
+    [Parameter] public EventCallback<InventoryColumnFilterChange> FilterChanged { get; set; }
     private ICollection<InventoryBrowserItemView> VirtualizedItems => Items as ICollection<InventoryBrowserItemView> ?? Items.ToArray();
 
     private Task HandleKeyDownAsync(KeyboardEventArgs args, InventoryBrowserItemView item) =>

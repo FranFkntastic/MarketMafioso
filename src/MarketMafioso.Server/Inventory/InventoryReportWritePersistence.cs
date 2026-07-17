@@ -130,15 +130,18 @@ internal sealed class InventoryReportWritePersistence(
         await using var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = """
-            INSERT INTO characters (account_id, character_name, home_world, first_seen_at_utc, last_seen_at_utc)
-            VALUES ($accountId, $characterName, $homeWorld, $seenAt, $seenAt)
+            INSERT INTO characters (account_id, character_name, home_world, service_account_key, first_seen_at_utc, last_seen_at_utc)
+            VALUES ($accountId, $characterName, $homeWorld, $serviceAccountKey, $seenAt, $seenAt)
             ON CONFLICT(account_id, character_name, home_world)
-            DO UPDATE SET last_seen_at_utc = excluded.last_seen_at_utc
+            DO UPDATE SET
+                service_account_key = COALESCE(excluded.service_account_key, characters.service_account_key),
+                last_seen_at_utc = excluded.last_seen_at_utc
             RETURNING id;
             """;
         command.Parameters.AddWithValue("$accountId", accountId);
         command.Parameters.AddWithValue("$characterName", report.CharacterName);
         command.Parameters.AddWithValue("$homeWorld", (object?)report.HomeWorld ?? DBNull.Value);
+        command.Parameters.AddWithValue("$serviceAccountKey", (object?)report.ServiceAccountKey ?? DBNull.Value);
         command.Parameters.AddWithValue("$seenAt", seenAt.ToString("O", CultureInfo.InvariantCulture));
         return (long)(await command.ExecuteScalarAsync(cancellationToken))!;
     }
@@ -167,6 +170,8 @@ internal sealed class InventoryReportWritePersistence(
                 api_key_label,
                 character_name,
                 home_world,
+                service_account_key,
+                player_gil,
                 report_timestamp,
                 schema_version,
                 source_plugin,
@@ -182,6 +187,8 @@ internal sealed class InventoryReportWritePersistence(
                 $apiKeyLabel,
                 $characterName,
                 $homeWorld,
+                $serviceAccountKey,
+                $playerGil,
                 $reportTimestamp,
                 $schemaVersion,
                 $sourcePlugin,
@@ -197,6 +204,8 @@ internal sealed class InventoryReportWritePersistence(
         command.Parameters.AddWithValue("$apiKeyLabel", string.IsNullOrWhiteSpace(apiKeyLabel) ? DBNull.Value : "provided");
         command.Parameters.AddWithValue("$characterName", (object?)report.CharacterName ?? DBNull.Value);
         command.Parameters.AddWithValue("$homeWorld", (object?)report.HomeWorld ?? DBNull.Value);
+        command.Parameters.AddWithValue("$serviceAccountKey", (object?)report.ServiceAccountKey ?? DBNull.Value);
+        command.Parameters.AddWithValue("$playerGil", report.PlayerGil is { } playerGil ? checked((long)playerGil) : DBNull.Value);
         command.Parameters.AddWithValue("$reportTimestamp", report.Timestamp);
         command.Parameters.AddWithValue("$schemaVersion", metadata.SchemaVersion);
         command.Parameters.AddWithValue("$sourcePlugin", metadata.SourcePlugin);

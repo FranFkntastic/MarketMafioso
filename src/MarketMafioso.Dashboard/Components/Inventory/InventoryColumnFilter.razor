@@ -1,0 +1,18 @@
+<th class="@(Number ? "number" : null)">
+    <input value="@Value"
+           @oninput="HandleInputAsync"
+           inputmode="@(Number ? "decimal" : null)"
+           aria-label="@($"Filter {Label}")"
+           placeholder="Filter" />
+</th>
+
+@code {
+    [Parameter, EditorRequired] public string Label { get; set; } = string.Empty;
+    [Parameter, EditorRequired] public string Column { get; set; } = string.Empty;
+    [Parameter] public string Value { get; set; } = string.Empty;
+    [Parameter] public bool Number { get; set; }
+    [Parameter] public EventCallback<InventoryColumnFilterChange> FilterChanged { get; set; }
+
+    private Task HandleInputAsync(ChangeEventArgs args) =>
+        FilterChanged.InvokeAsync(new InventoryColumnFilterChange(Column, args.Value?.ToString() ?? string.Empty));
+}

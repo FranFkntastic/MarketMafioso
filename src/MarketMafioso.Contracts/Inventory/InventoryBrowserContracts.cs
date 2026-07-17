@@ -37,7 +37,9 @@ public sealed record InventoryBrowserView
     public int OwnerCount { get; init; }
     public int ItemTypeKnownCount { get; init; }
     public int ListingPriceKnownCount { get; init; }
+    public ulong? PlayerGil { get; init; }
     public ulong RetainerGil { get; init; }
+    public ulong? TotalGil { get; init; }
 }
 
 public sealed record InventoryBrowserItemView
@@ -89,7 +91,7 @@ public sealed record InventoryBrowserScopeView
     public string? OwnerCharacterName { get; init; }
     public string? OwnerHomeWorld { get; init; }
     public int StackCount { get; init; }
-    public ulong Gil { get; init; }
+    public ulong? Gil { get; init; }
     public int MarketListingCount { get; init; }
     public string? LastUpdated { get; init; }
 }

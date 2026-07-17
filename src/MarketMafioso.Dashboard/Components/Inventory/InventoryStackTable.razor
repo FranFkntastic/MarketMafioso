@@ -1,5 +1,22 @@
-<table class="inventory-native-table stacks-table">
-    <thead><tr><th>Item</th><th>Stored by</th><th>Storage</th><th class="number">Qty</th><th>Quality</th><th class="number">Condition</th></tr></thead>
+<table class="inventory-native-table stacks-table" data-inventory-table="stacks">
+    <thead>
+        <tr class="inventory-column-row">
+            <InventorySortHeader Label="Item" Column="item" SortColumn="Query.SortColumn" Descending="Query.SortDescending" SortChanged="SortChanged" />
+            <InventorySortHeader Label="Stored by" Column="owner" SortColumn="Query.SortColumn" Descending="Query.SortDescending" SortChanged="SortChanged" />
+            <InventorySortHeader Label="Storage" Column="storage" SortColumn="Query.SortColumn" Descending="Query.SortDescending" SortChanged="SortChanged" />
+            <InventorySortHeader Label="Qty" Column="quantity" Number="true" SortColumn="Query.SortColumn" Descending="Query.SortDescending" SortChanged="SortChanged" />
+            <InventorySortHeader Label="Quality" Column="quality" SortColumn="Query.SortColumn" Descending="Query.SortDescending" SortChanged="SortChanged" />
+            <InventorySortHeader Label="Condition" Column="condition" Number="true" SortColumn="Query.SortColumn" Descending="Query.SortDescending" SortChanged="SortChanged" />
+        </tr>
+        <tr class="inventory-filter-row">
+            <InventoryColumnFilter Label="Item" Column="item" Value="Query.Filter("item")" FilterChanged="FilterChanged" />
+            <InventoryColumnFilter Label="Stored by" Column="owner" Value="Query.Filter("owner")" FilterChanged="FilterChanged" />
+            <InventoryColumnFilter Label="Storage" Column="storage" Value="Query.Filter("storage")" FilterChanged="FilterChanged" />
+            <InventoryColumnFilter Label="Qty" Column="quantity" Number="true" Value="Query.Filter("quantity")" FilterChanged="FilterChanged" />
+            <InventoryColumnFilter Label="Quality" Column="quality" Value="Query.Filter("quality")" FilterChanged="FilterChanged" />
+            <InventoryColumnFilter Label="Condition" Column="condition" Number="true" Value="Query.Filter("condition")" FilterChanged="FilterChanged" />
+        </tr>
+    </thead>
     <tbody>
         <Virtualize TItem="InventoryBrowserStackView" Items="VirtualizedStacks" Context="stack" ItemSize="34" SpacerElement="tr">
             <tr>
@@ -22,6 +39,9 @@
 
 @code {
     [Parameter] public IReadOnlyList<InventoryBrowserStackView> Stacks { get; set; } = [];
+    [Parameter, EditorRequired] public InventoryTableQueryState Query { get; set; } = new();
+    [Parameter] public EventCallback<string> SortChanged { get; set; }
+    [Parameter] public EventCallback<InventoryColumnFilterChange> FilterChanged { get; set; }
     private ICollection<InventoryBrowserStackView> VirtualizedStacks => Stacks as ICollection<InventoryBrowserStackView> ?? Stacks.ToArray();
     private static string FormatPercent(decimal? value) => value is null ? "—" : $"{value:0.#}%";
 }

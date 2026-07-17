@@ -29,22 +29,33 @@ internal static class DashboardDataEndpoints
         CancellationToken token)
     {
         var accountIds = await GetAccountIdsAsync(context, connectionFactory, token);
-        var characters = new List<DashboardCharacterOption>();
+        var characters = new List<CharacterSummary>();
         foreach (var accountId in accountIds)
         {
             var accountCharacters = await store.ListCharactersAsync(accountId, token);
-            characters.AddRange(accountCharacters.Select(character => new DashboardCharacterOption(
-                character.Id,
-                character.CharacterName,
-                character.HomeWorld,
-                character.LastSeenAt)));
+            characters.AddRange(accountCharacters);
         }
+
+        var serviceAccountLabels = characters
+            .Where(character => !string.IsNullOrWhiteSpace(character.ServiceAccountKey))
+            .GroupBy(character => character.ServiceAccountKey!, StringComparer.Ordinal)
+            .OrderBy(group => group.Min(character => character.Id))
+            .Select((group, index) => (group.Key, Label: $"Service Account {index + 1}"))
+            .ToDictionary(entry => entry.Key, entry => entry.Label, StringComparer.Ordinal);
 
         return Results.Ok(characters
             .GroupBy(character => character.Id)
             .Select(group => group.First())
             .OrderByDescending(character => character.LastSeenAt)
             .ThenBy(character => character.CharacterName, StringComparer.OrdinalIgnoreCase)
+            .Select(character => new DashboardCharacterOption(
+                character.Id,
+                character.CharacterName,
+                character.HomeWorld,
+                character.LastSeenAt,
+                character.ServiceAccountKey is { Length: > 0 } key && serviceAccountLabels.TryGetValue(key, out var label)
+                    ? label
+                    : "Awaiting account evidence"))
             .ToArray());
     }
 

@@ -79,7 +79,8 @@ public sealed class Plugin : IDalamudPlugin
         LoadRetainerCache();
 
         scanner = new InventoryScanner(DataManager, Log);
-        reporter = new HttpReporter(Configuration, PlayerState, Log, ChatGui, scanner);
+        var serviceAccountIdentity = new DalamudServiceAccountIdentitySource(PluginInterface, Log);
+        reporter = new HttpReporter(Configuration, PlayerState, Log, ChatGui, scanner, serviceAccountIdentity);
         retainerCache = new RetainerCacheManager(
             AddonLifecycle,
             Log,
