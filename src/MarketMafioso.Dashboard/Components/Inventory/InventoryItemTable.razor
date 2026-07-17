@@ -12,15 +12,15 @@
             <InventorySortHeader Label="Owners" Column="owners" Number="true" SortColumn="Query.SortColumn" Descending="Query.SortDescending" SortChanged="SortChanged" />
         </tr>
         <tr class="inventory-filter-row">
-            <InventoryColumnFilter Label="Item" Column="item" Value="Query.Filter("item")" FilterChanged="FilterChanged" />
+            <InventoryColumnFilter Label="Item" Column="item" Query="Query" FilterChanged="FilterChanged" />
             @if (ShowCategory)
             {
-                <InventoryColumnFilter Label="Category" Column="category" Value="Query.Filter("category")" FilterChanged="FilterChanged" />
+                <InventoryColumnFilter Label="Category" Column="category" Query="Query" FilterChanged="FilterChanged" />
             }
-            <InventoryColumnFilter Label="Owned" Column="owned" Number="true" Value="Query.Filter("owned")" FilterChanged="FilterChanged" />
-            <InventoryColumnFilter Label="HQ" Column="hq" Number="true" Value="Query.Filter("hq")" FilterChanged="FilterChanged" />
-            <InventoryColumnFilter Label="Primary location" Column="location" Value="Query.Filter("location")" FilterChanged="FilterChanged" />
-            <InventoryColumnFilter Label="Owners" Column="owners" Number="true" Value="Query.Filter("owners")" FilterChanged="FilterChanged" />
+            <InventoryColumnFilter Label="Owned" Column="owned" Number="true" Query="Query" FilterChanged="FilterChanged" />
+            <InventoryColumnFilter Label="HQ" Column="hq" Number="true" Query="Query" FilterChanged="FilterChanged" />
+            <InventoryColumnFilter Label="Primary location" Column="location" Query="Query" FilterChanged="FilterChanged" />
+            <InventoryColumnFilter Label="Owners" Column="owners" Number="true" Query="Query" FilterChanged="FilterChanged" />
         </tr>
     </thead>
     <tbody>

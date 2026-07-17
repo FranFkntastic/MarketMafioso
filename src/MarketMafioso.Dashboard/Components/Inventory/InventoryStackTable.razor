@@ -9,12 +9,12 @@
             <InventorySortHeader Label="Condition" Column="condition" Number="true" SortColumn="Query.SortColumn" Descending="Query.SortDescending" SortChanged="SortChanged" />
         </tr>
         <tr class="inventory-filter-row">
-            <InventoryColumnFilter Label="Item" Column="item" Value="Query.Filter("item")" FilterChanged="FilterChanged" />
-            <InventoryColumnFilter Label="Stored by" Column="owner" Value="Query.Filter("owner")" FilterChanged="FilterChanged" />
-            <InventoryColumnFilter Label="Storage" Column="storage" Value="Query.Filter("storage")" FilterChanged="FilterChanged" />
-            <InventoryColumnFilter Label="Qty" Column="quantity" Number="true" Value="Query.Filter("quantity")" FilterChanged="FilterChanged" />
-            <InventoryColumnFilter Label="Quality" Column="quality" Value="Query.Filter("quality")" FilterChanged="FilterChanged" />
-            <InventoryColumnFilter Label="Condition" Column="condition" Number="true" Value="Query.Filter("condition")" FilterChanged="FilterChanged" />
+            <InventoryColumnFilter Label="Item" Column="item" Query="Query" FilterChanged="FilterChanged" />
+            <InventoryColumnFilter Label="Stored by" Column="owner" Query="Query" FilterChanged="FilterChanged" />
+            <InventoryColumnFilter Label="Storage" Column="storage" Query="Query" FilterChanged="FilterChanged" />
+            <InventoryColumnFilter Label="Qty" Column="quantity" Number="true" Query="Query" FilterChanged="FilterChanged" />
+            <InventoryColumnFilter Label="Quality" Column="quality" Query="Query" FilterChanged="FilterChanged" />
+            <InventoryColumnFilter Label="Condition" Column="condition" Number="true" Query="Query" FilterChanged="FilterChanged" />
         </tr>
     </thead>
     <tbody>

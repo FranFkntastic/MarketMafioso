@@ -1,5 +1,5 @@
 <th class="@(Number ? "number" : null)">
-    <input value="@Value"
+    <input value="@Query.Filter(Column)"
            @oninput="HandleInputAsync"
            inputmode="@(Number ? "decimal" : null)"
            aria-label="@($"Filter {Label}")"
@@ -9,7 +9,7 @@
 @code {
     [Parameter, EditorRequired] public string Label { get; set; } = string.Empty;
     [Parameter, EditorRequired] public string Column { get; set; } = string.Empty;
-    [Parameter] public string Value { get; set; } = string.Empty;
+    [Parameter, EditorRequired] public InventoryTableQueryState Query { get; set; } = new();
     [Parameter] public bool Number { get; set; }
     [Parameter] public EventCallback<InventoryColumnFilterChange> FilterChanged { get; set; }
 
