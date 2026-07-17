@@ -25,7 +25,7 @@ internal sealed class MinerBotanistAdvisorPanel
     private readonly MinerBotanistAdvisorSession session;
     private readonly AgentBridgeUiReviewRegistry reviewRegistry;
     private readonly ParetoFrontierPlotBuilder plotBuilder = new();
-    private readonly DalamudPlotRenderer plotRenderer = new();
+    private readonly DalamudPlotContainer plotContainer = new();
     private MinerBotanistUtilityContextKind context = MinerBotanistUtilityContextKind.OrdinaryResourceBenchmark;
     private MinerBotanistReadOnlyAdvice? lastAdvice;
     private string? selectedSolutionId;
@@ -319,7 +319,7 @@ internal sealed class MinerBotanistAdvisorPanel
             advice.Nomination?.Candidate.SolutionId,
             warningIds,
             new HashSet<string>(StringComparer.Ordinal));
-        var result = plotRenderer.Draw("SquireAdvisorFrontier", model.Spec, new Vector2(0, 285f), interaction);
+        var result = plotContainer.Draw("SquireAdvisorFrontier", model.Spec, new Vector2(0, 285f), interaction);
         if (result.ClickedDatumId is { } clicked && model.SolutionsByDatumId.ContainsKey(clicked))
             selectedSolutionId = clicked;
         if (result.HoveredDatumId is { } hovered && model.SolutionsByDatumId.TryGetValue(hovered, out var solution))
@@ -371,7 +371,7 @@ internal sealed class MinerBotanistAdvisorPanel
             new HashSet<string>(StringComparer.Ordinal));
 
         ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Shape identifies context · point color remains NQ/HQ mix");
-        var result = plotRenderer.Draw("SquireAdvisorFrontierOverlay", overlay.Spec, new Vector2(0, 285f), interaction);
+        var result = plotContainer.Draw("SquireAdvisorFrontierOverlay", overlay.Spec, new Vector2(0, 285f), interaction);
         if (result.ClickedDatumId is { } clicked && overlay.DatumIdentities.TryGetValue(clicked, out var clickedIdentity))
         {
             var clickedContext = ContextFromSeriesId(clickedIdentity.SeriesId);
