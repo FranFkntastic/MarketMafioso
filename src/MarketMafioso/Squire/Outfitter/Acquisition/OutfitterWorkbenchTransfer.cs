@@ -1,0 +1,197 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using Franthropy.Dalamud.Equipment;
+using MarketMafioso.Squire.Outfitter.MarketEvidence;
+using MarketMafioso.Squire.Outfitter.Utility;
+
+namespace MarketMafioso.Squire.Outfitter.Acquisition;
+
+public sealed record OutfitterWorkbenchEvidenceLineage(
+    Guid GenerationId,
+    long Revision,
+    string SchemaVersion,
+    string SourceKey,
+    string Region,
+    OutfitterMarketCoverageMode CoverageMode,
+    DateTimeOffset PublishedAtUtc);
+
+public sealed record OutfitterWorkbenchMarketLot(
+    EquipmentOfferKey OfferKey,
+    string ItemName,
+    uint RequiredQuantity,
+    uint ObservedAvailableQuantity,
+    string WorldName,
+    uint ObservedUnitPriceGil,
+    ulong ObservedTotalPriceGil,
+    string DiscoveryObservationId,
+    string SourceRevision,
+    DateTimeOffset ReviewedAtUtc);
+
+public sealed record OutfitterWorkbenchSelectionLineage(
+    EquipmentLoadoutPosition Position,
+    EquipmentOfferKey OfferKey,
+    uint Quantity,
+    string? ObservationId,
+    string SourceLabel);
+
+/// <summary>
+/// Immutable, non-persisted input for the existing Market Acquisition Workbench. It is not an
+/// execution manifest, lease, request editor, or purchase authorization. In particular, observed
+/// prices are evidence and do not imply a permitted deviation. A later M8 slice must persist this
+/// lineage through Workbench finalization before Route may consume it.
+/// </summary>
+public sealed record OutfitterWorkbenchTransfer(
+    string Origin,
+    string SelectedSolutionId,
+    string? AdvisorNominationSolutionId,
+    EquipmentUtilityProfileKey Profile,
+    EquipmentUtilityContext Context,
+    OutfitterWorkbenchEvidenceLineage Evidence,
+    IReadOnlyList<OutfitterWorkbenchSelectionLineage> SelectedLoadout,
+    IReadOnlyList<OutfitterWorkbenchMarketLot> MarketLots,
+    ulong ObservedMarketTotalGil)
+{
+    public const string CurrentSchemaVersion = "marketmafioso-squire-outfitter-workbench-transfer/v1";
+    public const string SquireOutfitterOrigin = "SquireOutfitter";
+}
+
+public static class OutfitterWorkbenchTransferBuilder
+{
+    public static OutfitterWorkbenchTransfer Build(
+        MinerBotanistReadOnlyAdvice advice,
+        string selectedSolutionId,
+        OutfitterMarketEvidenceBook evidence)
+    {
+        ArgumentNullException.ThrowIfNull(advice);
+        ArgumentException.ThrowIfNullOrWhiteSpace(selectedSolutionId);
+        ArgumentNullException.ThrowIfNull(evidence);
+
+        if (advice is not { Status: MinerBotanistAdvisorStatus.Complete, Frontier: { } frontier })
+            throw new InvalidOperationException("Workbench transfer requires complete read-only advisor evidence.");
+        if (!evidence.IsPublishable || evidence.PublishedAtUtc is null || evidence.GenerationId == Guid.Empty || evidence.Revision <= 0)
+            throw new InvalidOperationException("Workbench transfer requires a published, complete market evidence generation.");
+
+        var selected = frontier.Pareto.Frontier.SingleOrDefault(solution =>
+            string.Equals(solution.Candidate.SolutionId, selectedSolutionId, StringComparison.Ordinal));
+        if (selected is null)
+            throw new InvalidOperationException("The selected solution is not present in the authoritative frontier.");
+
+        var marketLots = new List<OutfitterWorkbenchMarketLot>();
+        var selectedLoadout = new List<OutfitterWorkbenchSelectionLineage>();
+        foreach (var group in selected.Candidate.Selections.GroupBy(selection => selection.AllocationKey))
+        {
+            if (!advice.OffersByAllocation.TryGetValue(group.Key, out var offer))
+                throw new InvalidOperationException("The selected solution references an offer outside its authoritative offer book.");
+            var requiredQuantity = SumQuantity(group);
+            if (requiredQuantity == 0 || requiredQuantity > offer.AvailableQuantity)
+                throw new InvalidOperationException("The selected solution requires an unavailable offer quantity.");
+
+            selectedLoadout.AddRange(group.Select(selection => new OutfitterWorkbenchSelectionLineage(
+                selection.Position,
+                selection.OfferKey,
+                selection.Quantity,
+                selection.ObservationId,
+                offer.Offer.SourceLabel)));
+
+            switch (offer.Offer.SourceKind)
+            {
+                case EquipmentAcquisitionSourceKind.Owned:
+                case EquipmentAcquisitionSourceKind.GilVendor:
+                    break;
+                case EquipmentAcquisitionSourceKind.MarketBoard:
+                    marketLots.Add(BuildMarketLot(offer, requiredQuantity, evidence));
+                    break;
+                default:
+                    throw new InvalidOperationException("The selected solution contains an unsupported acquisition source.");
+            }
+        }
+
+        if (marketLots.Count == 0)
+            throw new InvalidOperationException("The selected solution has no market acquisition to transfer to the Workbench.");
+
+        var orderedSelections = selectedLoadout
+            .OrderBy(selection => selection.Position)
+            .ThenBy(selection => selection.OfferKey.ItemId)
+            .ThenBy(selection => selection.OfferKey.Quality)
+            .ThenBy(selection => selection.ObservationId, StringComparer.Ordinal)
+            .ToArray();
+        var orderedLots = marketLots
+            .OrderBy(lot => lot.ItemName, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(lot => lot.OfferKey.ItemId)
+            .ThenBy(lot => lot.OfferKey.Quality)
+            .ThenBy(lot => lot.WorldName, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(lot => lot.DiscoveryObservationId, StringComparer.Ordinal)
+            .ToArray();
+        var total = orderedLots.Aggregate(0ul, (sum, lot) => checked(sum + lot.ObservedTotalPriceGil));
+        return new(
+            OutfitterWorkbenchTransfer.SquireOutfitterOrigin,
+            selected.Candidate.SolutionId,
+            advice.Nomination?.Candidate.SolutionId,
+            selected.Utility.Profile,
+            selected.Utility.Context,
+            new(
+                evidence.GenerationId,
+                evidence.Revision,
+                evidence.SchemaVersion,
+                evidence.SourceKey,
+                evidence.Region,
+                evidence.Coverage.Mode,
+                evidence.PublishedAtUtc.Value),
+            orderedSelections,
+            orderedLots,
+            total);
+    }
+
+    private static OutfitterWorkbenchMarketLot BuildMarketLot(
+        EquipmentExactSolverOffer offer,
+        uint requiredQuantity,
+        OutfitterMarketEvidenceBook evidence)
+    {
+        var observation = offer.Offer.GetValidatedObservation()
+            ?? throw new InvalidOperationException("A selected market offer has no exact observation lineage.");
+        var row = observation.ObservableMarketRow
+            ?? throw new InvalidOperationException("A selected market offer has no observable market-row evidence.");
+        if (observation.EvidenceGenerationId != evidence.GenerationId ||
+            !string.Equals(observation.ObservationId, offer.ObservationId, StringComparison.Ordinal) ||
+            string.IsNullOrWhiteSpace(observation.World) ||
+            requiredQuantity > row.Quantity)
+        {
+            throw new InvalidOperationException("A selected market offer does not match the accepted evidence generation or quantity.");
+        }
+
+        var itemEvidence = evidence.Items.SingleOrDefault(item =>
+            item.ItemId == offer.Offer.Definition.ItemId &&
+            item.Status == OutfitterMarketEvidenceItemStatus.Fresh)
+            ?? throw new InvalidOperationException("A selected market offer is absent from fresh published item evidence.");
+        var listing = itemEvidence.Listings.SingleOrDefault(candidate =>
+            string.Equals(candidate.ListingId, row.RowId, StringComparison.Ordinal) &&
+            candidate.ItemId == row.ItemId &&
+            candidate.Quality == row.Quality &&
+            candidate.Quantity == row.Quantity &&
+            candidate.UnitPriceGil == row.UnitPriceGil &&
+            string.Equals(candidate.WorldName, observation.World, StringComparison.OrdinalIgnoreCase));
+        if (listing is null)
+            throw new InvalidOperationException("A selected market offer tuple is absent from its published evidence generation.");
+
+        return new(
+            offer.Offer.Key,
+            offer.Offer.Definition.Name,
+            requiredQuantity,
+            row.Quantity,
+            listing.WorldName,
+            row.UnitPriceGil,
+            checked((ulong)row.UnitPriceGil * requiredQuantity),
+            observation.ObservationId,
+            listing.SourceRevision,
+            listing.ListingReviewedAtUtc);
+    }
+
+    private static uint SumQuantity(IEnumerable<EquipmentLoadoutSelection> selections)
+    {
+        var total = 0u;
+        foreach (var selection in selections)
+            total = checked(total + selection.Quantity);
+        return total;
+    }
+}
