@@ -78,6 +78,28 @@ public sealed class MinerBotanistAdvisorSyntheticReviewTests
         Assert.InRange(overlay.Spec.YDomain.Maximum, 0d, 110d);
     }
 
+    [Theory]
+    [InlineData(MinerBotanistAdvisorSyntheticScenarioKind.Success, true, false, false)]
+    [InlineData(MinerBotanistAdvisorSyntheticScenarioKind.Refreshing, true, true, true)]
+    [InlineData(MinerBotanistAdvisorSyntheticScenarioKind.StaleEvidence, true, false, true)]
+    [InlineData(MinerBotanistAdvisorSyntheticScenarioKind.IncompleteEvidence, true, false, true)]
+    [InlineData(MinerBotanistAdvisorSyntheticScenarioKind.Abstention, false, false, false)]
+    public void EvidenceStateReplaysPreserveOnlyTheLastAuthoritativeFrontier(
+        MinerBotanistAdvisorSyntheticScenarioKind kind,
+        bool showPriorFrontier,
+        bool showProgress,
+        bool retained)
+    {
+        var advice = MinerBotanistAdvisorSyntheticReview.Build(MinerBotanistUtilityContextKind.OrdinaryResourceBenchmark);
+
+        var presentation = MinerBotanistAdvisorSyntheticReview.Present(kind, advice);
+
+        Assert.Equal(showPriorFrontier, presentation.ShowPriorFrontier);
+        Assert.Equal(showProgress, presentation.ShowProgress);
+        Assert.Equal(retained, presentation.AdviceIsRetained);
+        Assert.True(presentation.Total >= presentation.Completed);
+    }
+
     private static EquipmentDecisionSolution Solution(MinerBotanistReadOnlyAdvice advice, string id) =>
         advice.Frontier!.Pareto.Frontier
             .Concat(advice.Frontier.Pareto.Dominated.Select(value => value.Solution))

@@ -80,7 +80,9 @@ public sealed class OutfitterMarketEvidenceDiscoveryService
         CancellationToken cancellationToken)
     {
         await EnsurePublishedLoadedAsync(cancellationToken).ConfigureAwait(false);
-        var previous = latestPublished;
+        var previous = latestPublished is { } publishedCandidate && publishedCandidate.Matches(request)
+            ? publishedCandidate
+            : null;
         var now = utcNow();
         var catalog = request.ItemIds.Where(itemId => itemId != 0).Distinct().Order().ToArray();
         var selected = request.CoverageMode == OutfitterMarketCoverageMode.Sampled

@@ -29,10 +29,22 @@ public sealed record MinerBotanistAdvisorSessionState(
     int? Total,
     MinerBotanistUtilityContextKind Context,
     MinerBotanistReadOnlyAdvice? Advice,
+    bool AdviceIsRetained,
     DateTimeOffset UpdatedAtUtc)
 {
     public bool IsBusy => Stage is MinerBotanistAdvisorSessionStage.ObservingStats or
         MinerBotanistAdvisorSessionStage.ObservingEquipment or MinerBotanistAdvisorSessionStage.DiscoveringMarket;
+}
+
+internal static class MinerBotanistAdvisorSessionEvidencePolicy
+{
+    public static OutfitterMarketEvidenceBook? SelectCurrent(
+        OutfitterMarketDiscoveryResult result,
+        OutfitterMarketEvidenceRequest request) =>
+        result.WorkingBook.IsPublishable &&
+        result.PublishedBook is { } published && published.Matches(request)
+            ? published
+            : null;
 }
 
 /// <summary>
@@ -85,6 +97,12 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
     {
         CancelCore(MinerBotanistAdvisorSessionStage.Cancelled, "Superseded by a new advisor refresh.");
         var retainedOwnedCharacterUi = characterUiOpenedBySession;
+        var retainedAdvice = State.Context == context && State.Advice is { Frontier: not null }
+            ? State.Advice
+            : null;
+        var retainedCoverage = retainedAdvice is null
+            ? "Coverage is declared after the rendered job is known."
+            : State.CoverageLabel;
         cancellation = new();
         discoveryTask = null;
         discoveryRequest = null;
@@ -101,11 +119,12 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
         State = new(
             MinerBotanistAdvisorSessionStage.ObservingStats,
             "Reading a stable MIN/BTN level and stat tuple from the Character window.",
-            "Coverage is declared after the rendered job is known.",
+            retainedCoverage,
             0,
             null,
             context,
-            null,
+            retainedAdvice,
+            retainedAdvice is not null,
             DateTimeOffset.UtcNow);
         Region = string.IsNullOrWhiteSpace(region) ? "North America" : region.Trim();
     }
@@ -241,39 +260,60 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
     {
         if (discoveryRequest is not null && marketDiscovery.GetLiveState(discoveryRequest) is { } live)
         {
+            var retainedAdvice = State.Advice;
+            if (retainedAdvice is null && live.PreviousPublishedBook is { } previous)
+                retainedAdvice = BuildAdvice(previous);
             State = State with
             {
                 Message = live.Progress.Message,
                 Completed = live.Progress.Completed,
                 Total = live.Progress.Total,
+                Advice = retainedAdvice is { Frontier: not null } ? retainedAdvice : State.Advice,
+                AdviceIsRetained = retainedAdvice is { Frontier: not null },
                 UpdatedAtUtc = live.Progress.UpdatedAtUtc,
             };
         }
         if (discoveryTask is not { IsCompleted: true })
             return;
 
-        var evidence = discoveryTask.GetAwaiter().GetResult().WorkingBook;
-        var advice = advisor.Build(
-            baseline!,
-            resolution!,
-            evidence,
-            itemId => offers!.Definitions.TryGetValue(itemId, out var definition) ? [definition] : [],
-            State.Context,
-            offers!.VendorOffers);
+        var result = discoveryTask.GetAwaiter().GetResult();
+        var evidence = result.WorkingBook;
+        var currentEvidence = MinerBotanistAdvisorSessionEvidencePolicy.SelectCurrent(result, discoveryRequest!);
+        var advice = currentEvidence is not null
+            ? BuildAdvice(currentEvidence)
+            : advisor.Build(
+                baseline!,
+                resolution!,
+                evidence,
+                itemId => offers!.Definitions.TryGetValue(itemId, out var definition) ? [definition] : [],
+                State.Context,
+                offers!.VendorOffers);
         var stage = advice.Status == MinerBotanistAdvisorStatus.Complete
             ? MinerBotanistAdvisorSessionStage.Complete
             : MinerBotanistAdvisorSessionStage.Abstained;
+        var retainPrevious = advice.Status != MinerBotanistAdvisorStatus.Complete && State.Advice is { Frontier: not null };
         State = State with
         {
             Stage = stage,
-            Message = advice.Diagnostic,
+            Message = retainPrevious
+                ? $"Refresh abstained: {advice.Diagnostic} The last valid frontier remains visible."
+                : advice.Diagnostic,
             Completed = evidence.Coverage.QueriedItemCount,
             Total = evidence.Coverage.CatalogItemCount,
-            Advice = advice,
+            Advice = retainPrevious ? State.Advice : advice,
+            AdviceIsRetained = retainPrevious,
             UpdatedAtUtc = DateTimeOffset.UtcNow,
         };
         DisposeCancellation();
     }
+
+    private MinerBotanistReadOnlyAdvice BuildAdvice(OutfitterMarketEvidenceBook evidence) => advisor.Build(
+        baseline!,
+        resolution!,
+        evidence,
+        itemId => offers!.Definitions.TryGetValue(itemId, out var definition) ? [definition] : [],
+        State.Context,
+        offers!.VendorOffers);
 
     private void Abstain(string message)
     {
@@ -282,7 +322,7 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
         {
             Stage = MinerBotanistAdvisorSessionStage.Abstained,
             Message = message,
-            Advice = null,
+            AdviceIsRetained = State.Advice is { Frontier: not null },
             UpdatedAtUtc = DateTimeOffset.UtcNow,
         };
         DisposeCancellation();
@@ -335,6 +375,7 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
         null,
         context,
         null,
+        false,
         DateTimeOffset.UtcNow);
 
     public void Dispose()
