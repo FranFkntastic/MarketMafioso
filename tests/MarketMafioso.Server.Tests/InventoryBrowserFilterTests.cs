@@ -203,4 +203,22 @@ public sealed class InventoryBrowserFilterTests
         Assert.Contains(stacks.FilterReference!.Fields, field => field.Key == "instance.quality" && field.IsAvailable);
         Assert.Empty(stacks.FilterReference.Fields.Single(field => field.Key == "item.name").Values);
     }
+
+    [Fact]
+    public void CompletionUsesTheSuppliedCaretAndOffersFieldOperators()
+    {
+        var view = InventoryBrowserViewBuilder.Build(
+            Snapshot,
+            "quantity darksteel",
+            mode: InventoryBrowserMode.Items,
+            caretPosition: 8);
+
+        Assert.Equal([":", "=", "!=", "<", "<=", ">", ">="],
+            view.FilterCompletions.Select(completion => completion.Label));
+        Assert.All(view.FilterCompletions, completion =>
+        {
+            Assert.Equal(Franthropy.Filtering.Completion.FilterCompletionKind.Operator, completion.Kind);
+            Assert.Equal(new Franthropy.Filtering.Syntax.TextSpan(8, 0), completion.ReplacementSpan);
+        });
+    }
 }

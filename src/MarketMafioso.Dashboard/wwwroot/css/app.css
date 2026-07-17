@@ -854,12 +854,20 @@ body,
 }
 
 .inventory-filter {
+    --franthropy-filter-accent: var(--mmf-accent);
+    --franthropy-filter-border: var(--mmf-border-strong);
+    --franthropy-filter-divider: var(--mmf-border);
+    --franthropy-filter-field-bg: var(--mmf-field-bg);
+    --franthropy-filter-muted: var(--mmf-text-muted);
+    --franthropy-filter-popup-bg: var(--mmf-surface);
+    --franthropy-filter-selected-bg: var(--mmf-surface-hover);
     flex: 1;
     min-width: 240px;
 }
 
-.inventory-filter .mud-input-control-input-container {
-    margin-top: 0;
+.inventory-filter .franthropy-filter-autocomplete-input {
+    border-color: var(--mmf-border);
+    color: var(--mmf-text);
 }
 
 .inventory-filter-error,
@@ -917,51 +925,6 @@ body,
     color: var(--mmf-text);
     cursor: help;
     padding: 0 4px;
-}
-
-.inventory-filter-completions {
-    align-self: center;
-    background: var(--mmf-surface);
-    border: 1px solid var(--mmf-border-strong);
-    box-shadow: 0 8px 22px rgb(0 0 0 / 28%);
-    display: grid;
-    max-height: 250px;
-    overflow-y: auto;
-    position: absolute;
-    right: 38px;
-    top: 43px;
-    width: min(440px, calc(100% - 54px));
-    z-index: 8;
-}
-
-.inventory-filter-completion-context {
-    background: var(--mmf-surface-muted);
-    border-bottom: 1px solid var(--mmf-border);
-    color: var(--mmf-text-subtle);
-    font-size: 11px;
-    padding: 5px 9px;
-}
-
-.inventory-filter-completions button {
-    align-items: center;
-    background: transparent;
-    border: 0;
-    border-bottom: 1px solid var(--mmf-border);
-    color: var(--mmf-text);
-    display: grid;
-    gap: 10px;
-    grid-template-columns: minmax(110px, auto) 1fr;
-    padding: 6px 9px;
-    text-align: left;
-}
-
-.inventory-filter-completions button:hover {
-    background: var(--mmf-surface-hover);
-}
-
-.inventory-filter-completions span {
-    color: var(--mmf-text-muted);
-    font-size: 11px;
 }
 
 .inventory-summary-strip {
@@ -1426,11 +1389,6 @@ body,
         min-width: 0;
     }
 
-    .inventory-filter-completions {
-        left: 10px;
-        right: 10px;
-        width: auto;
-    }
 }
 
 .overview-metrics,

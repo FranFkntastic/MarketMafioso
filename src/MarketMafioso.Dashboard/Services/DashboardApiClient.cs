@@ -251,6 +251,7 @@ public sealed class DashboardApiClient
         string? filter,
         string? scope,
         InventoryBrowserMode mode = InventoryBrowserMode.Items,
+        int? caretPosition = null,
         CancellationToken cancellationToken = default)
     {
         var query = new List<string>();
@@ -260,6 +261,8 @@ public sealed class DashboardApiClient
             query.Add($"filter={Uri.EscapeDataString(filter)}");
         if (!string.IsNullOrWhiteSpace(scope))
             query.Add($"scope={Uri.EscapeDataString(scope)}");
+        if (caretPosition is { } caret)
+            query.Add($"caret={caret}");
         query.Add($"mode={mode}");
 
         var path = query.Count == 0

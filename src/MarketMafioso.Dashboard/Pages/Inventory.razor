@@ -68,15 +68,15 @@ else
                                     @onclick="@(() => SetModeAsync(mode))">@ModeLabel(mode)</button>
                         }
                     </div>
-                    <MudTextField T="string"
-                                  Value="_filterText"
-                                  ValueChanged="OnFilterChanged"
-                                  Placeholder="@FilterPlaceholder"
-                                  Variant="Variant.Outlined"
-                                  Margin="Margin.Dense"
-                                  Immediate="true"
-                                  DebounceInterval="250"
-                                  Class="inventory-filter" />
+                    <WebFilterAutocomplete Value="_filterText"
+                                           Items="_view.FilterCompletions"
+                                           Edited="OnFilterEdited"
+                                           ShowSuggestions="@(_showCompletions && !string.IsNullOrWhiteSpace(_filterText))"
+                                           Placeholder="@FilterPlaceholder"
+                                           AriaLabel="@FilterPlaceholder"
+                                           SuggestionsLabel="Filter suggestions"
+                                           MaximumItems="8"
+                                           CssClass="inventory-filter" />
                     <MudTooltip Text="Filter reference">
                         <MudIconButton Icon="@Icons.Material.Filled.HelpOutline"
                                        Size="Size.Small"
@@ -84,26 +84,6 @@ else
                                        OnClick="ToggleFilterReference" />
                     </MudTooltip>
                 </div>
-
-                @if (_showCompletions && !string.IsNullOrWhiteSpace(_filterText) && _view.FilterCompletions.Count > 0)
-                {
-                    <div class="inventory-filter-completions" role="listbox" aria-label="Filter suggestions">
-                        @if (SharedCompletionDescription is { } completionDescription)
-                        {
-                            <div class="inventory-filter-completion-context">@completionDescription</div>
-                        }
-                        @foreach (var completion in _view.FilterCompletions.Take(8))
-                        {
-                            <button role="option" @onclick="@(() => ApplyCompletionAsync(completion))">
-                                <strong>@completion.Label</strong>
-                                @if (SharedCompletionDescription is null && !string.IsNullOrWhiteSpace(completion.Description))
-                                {
-                                    <span>@completion.Description</span>
-                                }
-                            </button>
-                        }
-                    </div>
-                }
 
                 @if (ShowFilterErrors)
                 {
@@ -194,6 +174,8 @@ else
     private bool _checkingSession = true;
     private bool _loading;
     private CancellationTokenSource? _loadCts;
+    private CancellationTokenSource? _filterDebounceCts;
+    private int _filterCaret;
     private IReadOnlyList<InventoryGroupedItemRow> _visibleInventoryGroups = [];
     private IReadOnlyList<InventoryBrowserMarketListingView> _visibleListings = [];
     private int _visibleMatchingRecordCount;
@@ -214,18 +196,6 @@ else
             : "Gil not recorded";
     private bool ShowFilterErrors => !_view.FilterValid && _view.FilterDiagnostics.Count > 0 && !InventoryFilterPresentation.IsIncomplete(_filterText);
     private InventoryBrowserMode? SuggestedFilterMode => ShowFilterErrors ? InventoryFilterPresentation.SuggestedMode(_filterText, _mode) : null;
-    private string? SharedCompletionDescription
-    {
-        get
-        {
-            var descriptions = _view.FilterCompletions.Take(8)
-                .Select(completion => completion.Description?.Trim())
-                .Where(description => !string.IsNullOrWhiteSpace(description))
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToArray();
-            return descriptions.Length == 1 ? descriptions[0] : null;
-        }
-    }
     private IEnumerable<Franthropy.Filtering.Documentation.FilterFieldReference> AvailableReferenceFields =>
         _view.FilterReference?.Fields.Where(entry => entry.IsAvailable && !entry.IsDefaultText) ?? [];
 
@@ -261,18 +231,34 @@ else
         catch (Exception ex) { Status.Error($"Inventory load failed: {ex.Message}"); }
     }
 
-    private async Task OnCharacterChanged(long? value) { _selectedCharacterId = value; _scope = "all"; _lastValidView = null; await LoadInventoryAsync(); PersistUrlState(); }
-    private async Task OnFilterChanged(string value) { _filterText = value; _filters[_mode] = value; _showCompletions = true; await LoadInventoryAsync(); PersistUrlState(); }
-    private async Task SetScopeAsync(string scope) { _scope = string.IsNullOrWhiteSpace(scope) ? "all" : scope; _lastValidView = null; await LoadInventoryAsync(); PersistUrlState(); }
-    private async Task SetModeAsync(InventoryBrowserMode mode) { if (_mode == mode) return; _filters[_mode] = _filterText; _mode = mode == InventoryBrowserMode.Stacks ? InventoryBrowserMode.Items : mode; _filterText = _filters[_mode]; _lastValidView = null; _showFilterReference = false; _showCompletions = false; await LoadInventoryAsync(); PersistUrlState(); }
+    private async Task OnCharacterChanged(long? value) { CancelFilterDebounce(); _selectedCharacterId = value; _scope = "all"; _lastValidView = null; await LoadInventoryAsync(); PersistUrlState(); }
+    private Task OnFilterEdited(WebFilterAutocompleteEdit edit)
+    {
+        _filterText = edit.Value;
+        _filterCaret = Math.Clamp(edit.CaretPosition, 0, _filterText.Length);
+        _filters[_mode] = _filterText;
+        _showCompletions = true;
+        CancelFilterDebounce();
+
+        if (edit.IsCompletion)
+            return LoadFilterEditAsync();
+
+        _filterDebounceCts = new CancellationTokenSource();
+        _ = CompleteDebouncedFilterEditAsync(_filterDebounceCts.Token);
+        return Task.CompletedTask;
+    }
+    private async Task SetScopeAsync(string scope) { CancelFilterDebounce(); _scope = string.IsNullOrWhiteSpace(scope) ? "all" : scope; _lastValidView = null; await LoadInventoryAsync(); PersistUrlState(); }
+    private async Task SetModeAsync(InventoryBrowserMode mode) { if (_mode == mode) return; CancelFilterDebounce(); _filters[_mode] = _filterText; _mode = mode == InventoryBrowserMode.Stacks ? InventoryBrowserMode.Items : mode; _filterText = _filters[_mode]; _filterCaret = _filterText.Length; _lastValidView = null; _showFilterReference = false; _showCompletions = false; await LoadInventoryAsync(); PersistUrlState(); }
     private async Task UseSuggestedModeAsync(InventoryBrowserMode mode)
     {
         if (_mode == mode)
             return;
 
+        CancelFilterDebounce();
         _filters[_mode] = _filterText;
         _mode = mode;
         _filters[mode] = _filterText;
+        _filterCaret = _filterText.Length;
         _lastValidView = null;
         _showFilterReference = false;
         _showCompletions = false;
@@ -283,16 +269,27 @@ else
     private void SortTable(string column) { CurrentTableQuery.ToggleSort(column); RebuildVisibleRows(); }
     private void FilterTable(InventoryColumnFilterChange change) { CurrentTableQuery.SetFilter(change.Column, change.Value); RebuildVisibleRows(); }
 
-    private async Task ApplyCompletionAsync(Franthropy.Filtering.Completion.FilterCompletionItem completion)
+    private async Task CompleteDebouncedFilterEditAsync(CancellationToken token)
     {
-        var span = completion.ReplacementSpan;
-        if (span.Start < 0 || span.End > _filterText.Length)
-            return;
-        _filterText = string.Concat(_filterText.AsSpan(0, span.Start), completion.InsertionText, _filterText.AsSpan(span.End));
-        _filters[_mode] = _filterText;
-        _showCompletions = false;
+        try
+        {
+            await Task.Delay(250, token);
+            await InvokeAsync(LoadFilterEditAsync);
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    private async Task LoadFilterEditAsync()
+    {
         await LoadInventoryAsync();
         PersistUrlState();
+    }
+
+    private void CancelFilterDebounce()
+    {
+        _filterDebounceCts?.Cancel();
+        _filterDebounceCts?.Dispose();
+        _filterDebounceCts = null;
     }
 
     private async Task LoadInventoryAsync()
@@ -301,7 +298,13 @@ else
         try
         {
             _loading = true;
-            var response = await Api.GetInventoryBrowserAsync(_selectedCharacterId, _filterText, _scope, _mode, token);
+            var response = await Api.GetInventoryBrowserAsync(
+                _selectedCharacterId,
+                _filterText,
+                _scope,
+                _mode,
+                _filterCaret,
+                token);
             if (response.FilterValid)
             {
                 _view = response;
@@ -352,6 +355,7 @@ else
         {
             _filterText = filter;
             _filters[_mode] = filter;
+            _filterCaret = filter.Length;
         }
         if (values.TryGetValue("characterId", out var characterId) && long.TryParse(characterId, out var parsedCharacterId))
             _selectedCharacterId = parsedCharacterId;
@@ -404,5 +408,5 @@ else
 
     }
 
-    public void Dispose() { _loadCts?.Cancel(); _loadCts?.Dispose(); }
+    public void Dispose() { CancelFilterDebounce(); _loadCts?.Cancel(); _loadCts?.Dispose(); }
 }

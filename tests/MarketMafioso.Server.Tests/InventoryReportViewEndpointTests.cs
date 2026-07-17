@@ -447,6 +447,10 @@ public sealed class InventoryReportViewEndpointTests
         Assert.Equal(111, item.TotalQuantity);
         Assert.Equal(12, item.HqQuantity);
         Assert.Empty(view.MarketListings);
+        var operators = await client.GetFromJsonAsync<InventoryBrowserView>("/api/inventory/browser?filter=quantity&caret=8");
+        Assert.NotNull(operators);
+        Assert.Contains(operators.FilterCompletions, completion =>
+            completion.Kind == Franthropy.Filtering.Completion.FilterCompletionKind.Operator && completion.Label == ">=");
         var listings = await client.GetFromJsonAsync<InventoryBrowserView>("/api/inventory/browser?search=darksteel&mode=Listings");
         Assert.NotNull(listings);
         Assert.Single(listings.MarketListings);
@@ -659,14 +663,18 @@ public sealed class InventoryReportViewEndpointTests
         var appCss = await client.GetAsync("/marketmafioso/css/app.css");
         var tableResizeCss = await client.GetAsync("/marketmafioso/_content/Franthropy.Web/table-resize.css");
         var groupedTableCss = await client.GetAsync("/marketmafioso/_content/Franthropy.Web/grouped-table.css");
+        var filterAutocompleteCss = await client.GetAsync("/marketmafioso/_content/Franthropy.Web/filter-autocomplete.css");
         var tableResizeJs = await client.GetAsync("/marketmafioso/_content/Franthropy.Web/table-resize.js");
+        var filterAutocompleteJs = await client.GetAsync("/marketmafioso/_content/Franthropy.Web/filter-autocomplete.js");
         var dotnetJs = await client.GetAsync("/marketmafioso/_framework/dotnet.js");
         var bootJs = await client.GetAsync($"/marketmafioso/{bootScript}");
 
         Assert.Equal(HttpStatusCode.OK, appCss.StatusCode);
         Assert.Equal(HttpStatusCode.OK, tableResizeCss.StatusCode);
         Assert.Equal(HttpStatusCode.OK, groupedTableCss.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, filterAutocompleteCss.StatusCode);
         Assert.Equal(HttpStatusCode.OK, tableResizeJs.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, filterAutocompleteJs.StatusCode);
         Assert.Equal(HttpStatusCode.OK, dotnetJs.StatusCode);
         Assert.Equal(HttpStatusCode.OK, bootJs.StatusCode);
     }

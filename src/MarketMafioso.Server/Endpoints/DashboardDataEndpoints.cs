@@ -68,6 +68,7 @@ internal static class DashboardDataEndpoints
         string? search,
         string? scope,
         InventoryBrowserMode? mode,
+        int? caret,
         CancellationToken token)
     {
         if (characterId != null &&
@@ -80,10 +81,10 @@ internal static class DashboardDataEndpoints
         {
             var report = await store.GetLatestAsync(accountId, characterId, token);
             if (report != null)
-                return Results.Ok(InventoryBrowserViewBuilder.Build(report, filter ?? search, scope, mode ?? InventoryBrowserMode.Items));
+                return Results.Ok(InventoryBrowserViewBuilder.Build(report, filter ?? search, scope, mode ?? InventoryBrowserMode.Items, caret));
         }
 
-        return Results.Ok(InventoryBrowserViewBuilder.Build(null, filter ?? search, scope, mode ?? InventoryBrowserMode.Items));
+        return Results.Ok(InventoryBrowserViewBuilder.Build(null, filter ?? search, scope, mode ?? InventoryBrowserMode.Items, caret));
     }
 
     private static async Task<IResult> ListSnapshots(

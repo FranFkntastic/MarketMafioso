@@ -2,6 +2,7 @@ using System.Net;
 using System.Text.Json;
 using MarketMafioso.Dashboard.Models;
 using MarketMafioso.Dashboard.Services;
+using MarketMafioso.Contracts.Inventory;
 using DashboardBatchLineCreateRequest = MarketMafioso.MarketAcquisition.MarketAcquisitionBatchLineCreateRequest;
 using DashboardBatchReplaceRequest = MarketMafioso.MarketAcquisition.MarketAcquisitionBatchReplaceRequest;
 
@@ -83,6 +84,28 @@ public sealed class DashboardApiClientTests
         Assert.Equal("North America", body.RootElement.GetProperty("region").GetString());
         Assert.Equal("Recommended", body.RootElement.GetProperty("worldMode").GetString());
         Assert.Single(body.RootElement.GetProperty("lines").EnumerateArray());
+    }
+
+    [Fact]
+    public async Task GetInventoryBrowserAsync_SendsTheEditorCaret()
+    {
+        var handler = new CapturingResponseHandler(HttpStatusCode.OK, "{}");
+        using var http = new HttpClient(handler)
+        {
+            BaseAddress = new Uri("https://dashboard.test/"),
+        };
+        var client = new DashboardApiClient(http);
+
+        await client.GetInventoryBrowserAsync(
+            null,
+            "quantity darksteel",
+            "all",
+            InventoryBrowserMode.Items,
+            caretPosition: 8);
+
+        Assert.Equal(
+            "https://dashboard.test/api/inventory/browser?filter=quantity darksteel&scope=all&caret=8&mode=Items",
+            handler.LastRequest?.RequestUri?.ToString());
     }
 
     private sealed class StaticResponseHandler(HttpStatusCode statusCode, string responseBody) : HttpMessageHandler

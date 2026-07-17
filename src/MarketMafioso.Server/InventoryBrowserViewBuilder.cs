@@ -14,9 +14,11 @@ public static class InventoryBrowserViewBuilder
         StoredInventoryReport? stored,
         string? filter,
         string? scope = null,
-        InventoryBrowserMode mode = InventoryBrowserMode.Items)
+        InventoryBrowserMode mode = InventoryBrowserMode.Items,
+        int? caretPosition = null)
     {
-        var normalizedFilter = filter?.Trim() ?? string.Empty;
+        var completionExpression = filter ?? string.Empty;
+        var normalizedFilter = completionExpression.Trim();
         var normalizedScope = string.IsNullOrWhiteSpace(scope) ? "all" : scope.Trim();
         if (stored is null)
             return new InventoryBrowserView { Filter = normalizedFilter, Scope = normalizedScope, Mode = mode };
@@ -33,15 +35,17 @@ public static class InventoryBrowserViewBuilder
 
         return mode switch
         {
-            InventoryBrowserMode.Stacks => BuildStacksView(stored, normalizedFilter, normalizedScope, vocabulary, stacks),
-            InventoryBrowserMode.Listings => BuildListingsView(stored, normalizedFilter, normalizedScope, vocabulary, listings),
-            _ => BuildItemsView(stored, normalizedFilter, normalizedScope, vocabulary, stacks),
+            InventoryBrowserMode.Stacks => BuildStacksView(stored, normalizedFilter, completionExpression, caretPosition, normalizedScope, vocabulary, stacks),
+            InventoryBrowserMode.Listings => BuildListingsView(stored, normalizedFilter, completionExpression, caretPosition, normalizedScope, vocabulary, listings),
+            _ => BuildItemsView(stored, normalizedFilter, completionExpression, caretPosition, normalizedScope, vocabulary, stacks),
         };
     }
 
     private static InventoryBrowserView BuildItemsView(
         StoredInventoryReport stored,
         string filter,
+        string completionExpression,
+        int? caretPosition,
         string scope,
         FfxivFilterCatalog vocabulary,
         IReadOnlyList<StackRecord> source)
@@ -61,7 +65,7 @@ public static class InventoryBrowserViewBuilder
         var items = AggregateItems(matchingStacks).Select(ToItemView).ToArray();
         var stacks = matchingStacks.Select(ToStackView).ToArray();
 
-        return CreateBase(stored, filter, scope, InventoryBrowserMode.Items, compilation, context) with
+        return CreateBase(stored, filter, completionExpression, caretPosition, scope, InventoryBrowserMode.Items, compilation, context) with
         {
             Items = items,
             Stacks = stacks,
@@ -76,6 +80,8 @@ public static class InventoryBrowserViewBuilder
     private static InventoryBrowserView BuildStacksView(
         StoredInventoryReport stored,
         string filter,
+        string completionExpression,
+        int? caretPosition,
         string scope,
         FfxivFilterCatalog vocabulary,
         IReadOnlyList<StackRecord> source)
@@ -94,7 +100,7 @@ public static class InventoryBrowserViewBuilder
         var records = compilation.IsValid ? source.Where(compilation.Matches).ToArray() : [];
         var stacks = records.Select(ToStackView).ToArray();
 
-        return CreateBase(stored, filter, scope, InventoryBrowserMode.Stacks, compilation, context) with
+        return CreateBase(stored, filter, completionExpression, caretPosition, scope, InventoryBrowserMode.Stacks, compilation, context) with
         {
             Stacks = stacks,
             MatchingRecordCount = stacks.Length,
@@ -108,6 +114,8 @@ public static class InventoryBrowserViewBuilder
     private static InventoryBrowserView BuildListingsView(
         StoredInventoryReport stored,
         string filter,
+        string completionExpression,
+        int? caretPosition,
         string scope,
         FfxivFilterCatalog vocabulary,
         IReadOnlyList<ListingRecord> source)
@@ -128,7 +136,7 @@ public static class InventoryBrowserViewBuilder
         var records = compilation.IsValid ? source.Where(compilation.Matches).ToArray() : [];
         var listings = records.Select(ToListingView).ToArray();
 
-        return CreateBase(stored, filter, scope, InventoryBrowserMode.Listings, compilation, context) with
+        return CreateBase(stored, filter, completionExpression, caretPosition, scope, InventoryBrowserMode.Listings, compilation, context) with
         {
             MarketListings = listings,
             MatchingRecordCount = listings.Length,
@@ -143,6 +151,8 @@ public static class InventoryBrowserViewBuilder
     private static InventoryBrowserView CreateBase<TRecord>(
         StoredInventoryReport stored,
         string filter,
+        string completionExpression,
+        int? caretPosition,
         string scope,
         InventoryBrowserMode mode,
         FilterCompilation<TRecord> compilation,
@@ -158,8 +168,11 @@ public static class InventoryBrowserViewBuilder
             FilterDiagnostics = compilation.Diagnostics,
             FilterReference = CreateContextReference(context),
             FilterCompletions = FilterCompletionService.Complete(
-            context,
-            new FilterCompletionRequest(context.ContextId, filter, filter.Length)).Items,
+                context,
+                new FilterCompletionRequest(
+                    context.ContextId,
+                    completionExpression,
+                    Math.Clamp(caretPosition ?? completionExpression.Length, 0, completionExpression.Length))).Items,
             Mode = mode,
             Scope = scope,
             Scopes = BuildScopes(stored.Report),
