@@ -145,7 +145,7 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
     {
         if (!GearsetChangeCommand.TryCreate(target, out var command))
             return new(false, "InvalidCalibrationJob", "Target must be Miner, Botanist, or Blacksmith.", "GearSetList", null);
-        var selected = renderedTextActions.TryActivateUniqueText("GearSetList", command.JobName);
+        var selected = renderedTextActions.TrySelectUniqueListRowText("GearSetList", command.JobName);
         if (!selected.Success)
             return selected;
         var addon = gameGui.GetAddonByName<AtkUnitBase>("GearSetList", 1);
