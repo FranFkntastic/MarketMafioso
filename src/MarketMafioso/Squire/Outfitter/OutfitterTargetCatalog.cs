@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using Franthropy.Dalamud.Equipment;
+using MarketMafioso.Squire.Observation;
 
 namespace MarketMafioso.Squire.Outfitter;
 
@@ -11,7 +12,8 @@ public sealed class OutfitterTargetCatalog
     public IReadOnlyList<OutfitterTarget> Build(
         CharacterEquipmentSnapshot snapshot,
         IReadOnlyDictionary<ulong, CachedRetainer> retainers,
-        IReadOnlyList<OutfitterRetainerMetadata>? autoRetainerMetadata = null)
+        IReadOnlyList<OutfitterRetainerMetadata>? autoRetainerMetadata = null,
+        IReadOnlyDictionary<string, RenderedRetainerEquipmentEvidence>? renderedRetainerEquipment = null)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         ArgumentNullException.ThrowIfNull(retainers);
@@ -71,14 +73,19 @@ public sealed class OutfitterTargetCatalog
             var jobSummary = job is not null && metadata is { Level: > 0 }
                 ? $"{job.Abbreviation} · Lv. {metadata.Level:N0}"
                 : "Job unavailable";
-            var diagnostic = (retainer, metadata) switch
+            var targetKey = $"retainer:{retainerId}";
+            RenderedRetainerEquipmentEvidence? renderedEvidence = null;
+            renderedRetainerEquipment?.TryGetValue(targetKey, out renderedEvidence);
+            var diagnostic = renderedEvidence?.Status == RenderedRetainerEquipmentEvidenceStatus.Complete
+                ? "The rendered equipment baseline is proven. Squire still needs a supported retainer outcome profile before this target can be advised."
+                : (retainer, metadata) switch
             {
                 (null, not null) => "AutoRetainer knows this retainer's job and level, but Squire has no inventory snapshot. Visit the retainer or run a retainer refresh to cache its bags.",
                 (not null, not null) => "The retainer's inventory, job, and level are known, but AutoRetainer does not expose worn equipment slots. Squire will not claim a complete loadout until that baseline can be proven.",
                 _ => "The retainer inventory is cached, but its job, level, and worn equipment slots are unavailable. Load the owner in AutoRetainer to refresh this identity.",
             };
             targets.Add(new(
-                $"retainer:{retainerId}",
+                targetKey,
                 OutfitterTargetKind.Retainer,
                 metadata?.RetainerName ?? retainer?.RetainerName ?? $"Retainer {retainerId}",
                 $"{jobSummary} · {freshness}",
@@ -89,7 +96,8 @@ public sealed class OutfitterTargetCatalog
                 OwnerHomeWorld: ownerWorld,
                 IsCurrentCharacter: isCurrentCharacter,
                 IsReady: false,
-                Diagnostic: diagnostic));
+                Diagnostic: diagnostic,
+                RetainerEquipmentEvidence: renderedEvidence));
         }
 
         return targets;

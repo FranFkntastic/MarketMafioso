@@ -1,5 +1,6 @@
 using Franthropy.Dalamud.Characters;
 using Franthropy.Dalamud.Equipment;
+using MarketMafioso.Squire.Observation;
 using MarketMafioso.Squire.Outfitter;
 
 namespace MarketMafioso.Tests.Squire;
@@ -113,6 +114,8 @@ public sealed class OutfitterTargetCatalogTests
         Assert.Equal((uint)72, current.Job?.Level);
         Assert.NotNull(current.Retainer);
         Assert.NotNull(current.RetainerMetadata);
+        Assert.False(current.IsReady);
+        Assert.Null(current.RetainerEquipmentEvidence);
 
         var other = Assert.Single(targets, value => value.Key == "retainer:202");
         Assert.False(other.IsCurrentCharacter);
@@ -123,6 +126,30 @@ public sealed class OutfitterTargetCatalogTests
         var legacy = Assert.Single(targets, value => value.Key == "retainer:303");
         Assert.Null(legacy.OwnerCharacterName);
         Assert.Null(legacy.RetainerMetadata);
+
+        var renderedEvidence = new RenderedRetainerEquipmentEvidence(
+            RenderedRetainerEquipmentEvidenceStatus.Complete,
+            "retainer:101",
+            DateTimeOffset.UtcNow,
+            "Current Character",
+            "Siren",
+            "Current Retainer",
+            16,
+            72,
+            [],
+            "synthetic complete evidence");
+        var withBaseline = new OutfitterTargetCatalog().Build(
+            snapshot,
+            cache,
+            metadata,
+            new Dictionary<string, RenderedRetainerEquipmentEvidence>
+            {
+                [renderedEvidence.TargetKey] = renderedEvidence,
+            });
+        var observed = Assert.Single(withBaseline, value => value.Key == "retainer:101");
+        Assert.Same(renderedEvidence, observed.RetainerEquipmentEvidence);
+        Assert.False(observed.IsReady);
+        Assert.Contains("outcome profile", observed.Diagnostic);
     }
 
     [Fact]
