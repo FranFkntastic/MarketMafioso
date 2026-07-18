@@ -435,7 +435,8 @@ public sealed class OutfitterRouteAuthoritySession
     }
 
     private static bool PolicyMatches(EquipmentQuality quality, string policy) =>
-        quality == EquipmentQuality.High ? policy == "HQOnly" : policy == "NQOnly";
+        MarketAcquisitionPolicy.NormalizeHqPolicy(policy) ==
+        (quality == EquipmentQuality.High ? "HqOnly" : "NqOnly");
 
     private static string ComputePlanSignature(MarketAcquisitionPlan plan)
     {

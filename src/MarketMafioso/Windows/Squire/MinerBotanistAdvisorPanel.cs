@@ -93,7 +93,7 @@ internal sealed class MinerBotanistAdvisorPanel
         {
             ImGui.TextColored(MarketMafiosoUiTheme.Warning, dryRunFixture is null
                 ? "DEBUG REPLAY — model decisions with frozen evidence prices"
-                : "DEBUG INTEGRATION FIXTURE — current listing, permanently dry-run-only");
+                : "ROUTE INTEGRATION PROBE — NOT A GEAR RECOMMENDATION");
             ImGui.TextColored(MarketMafiosoUiTheme.Muted, dryRunFixture?.Diagnostic ??
                 "Item names are game data; only marketable components use Aether sale-history medians. No live character or live listing is used.");
             if (dryRunFixture is null)

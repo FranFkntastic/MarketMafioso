@@ -139,7 +139,7 @@ internal static class MinerBotanistAdvisorSyntheticReview
             advice,
             evidence,
             solutionId,
-            $"Current {selected.Quality} listing: {marketItem.Name} on {selected.WorldName} at {selected.UnitPriceGil:N0} gil. The resulting contract is dry-run-only.");
+            $"This level-100 calibration item is intentionally unrelated to the logged-in character's equip level. It tests Route integration only: current {selected.Quality} listing for {marketItem.Name} on {selected.WorldName} at {selected.UnitPriceGil:N0} gil; permanently dry-run-only.");
     }
 
     private sealed record Benchmark(

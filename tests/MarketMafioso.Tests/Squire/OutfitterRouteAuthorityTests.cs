@@ -26,6 +26,30 @@ public sealed class OutfitterRouteAuthorityTests
     }
 
     [Fact]
+    public void ConsumeAndPreflight_AcceptsServerCanonicalExactQualityPolicy()
+    {
+        var fixture = Fixture();
+        var canonicalClaim = fixture.Claim with
+        {
+            Lines = fixture.Claim.Lines.Select(line => line with { HqPolicy = "HqOnly" }).ToArray(),
+        };
+        var canonicalPlan = fixture.Plan with
+        {
+            Lines = fixture.Plan.Lines.Select(line => line with { HqPolicy = "HqOnly" }).ToArray(),
+            WorldBatches = fixture.Plan.WorldBatches.Select(batch => batch with
+            {
+                ItemSubtasks = batch.ItemSubtasks.Select(subtask => subtask with { HqPolicy = "HqOnly" }).ToArray(),
+            }).ToArray(),
+        };
+
+        var session = OutfitterRouteAuthoritySession.Consume(
+            fixture.Contract, fixture.Document, canonicalPlan, canonicalClaim, fixture.Store);
+        session.CompletePreflight(canonicalPlan);
+
+        Assert.Equal(OutfitterRouteAuthorityPhase.Active, session.State.Phase);
+    }
+
+    [Fact]
     public void CandidateGuard_EnforcesExactQualityQuantityAndLayeredCaps()
     {
         var fixture = Fixture();
