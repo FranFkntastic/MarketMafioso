@@ -3,6 +3,7 @@ using System.Linq;
 using Dalamud.Game.Command;
 using Dalamud.Plugin.Services;
 using ECommons.Automation;
+using FFXIVClientStructs.FFXIV.Component.GUI;
 using Lumina.Excel.Sheets;
 using MarketMafioso.Automation.Travel;
 
@@ -37,21 +38,43 @@ public sealed class DalamudRetainerUiPreparation
 
     public RenderedRetainerUiPreparationProgress Advance()
     {
+        var renderedUi = captureRetainerUi();
+        var marketBoardUiVisible = AddonVisible(renderedUi, "ItemSearch") ||
+                                   AddonVisible(renderedUi, "ItemSearchResult");
+        if (marketBoardUiVisible)
+            CloseRenderedMarketBoardUi();
         var stateAvailable = lifestream.TryIsBusy(out var busy);
         return coordinator.Advance(
             DateTimeOffset.UtcNow,
-            RetainerListVisible(),
+            AddonVisible(renderedUi, "RetainerList"),
             stateAvailable,
             busy,
+            marketBoardUiVisible,
             ResolveBellName(),
             ProcessSemanticCommand);
     }
 
     public RenderedRetainerUiPreparationProgress Cancel() => coordinator.Cancel();
 
-    private bool RetainerListVisible() => captureRetainerUi().Addons.Any(value =>
-        string.Equals(value.Name, "RetainerList", StringComparison.Ordinal) &&
+    private bool RetainerListVisible() => AddonVisible(captureRetainerUi(), "RetainerList");
+
+    private static bool AddonVisible(AgentBridge.AgentBridgeRenderedUiSnapshot snapshot, string name) =>
+        snapshot.Addons.Any(value =>
+        string.Equals(value.Name, name, StringComparison.Ordinal) &&
         value is { Present: true, Ready: true, Visible: true });
+
+    private static unsafe void CloseRenderedMarketBoardUi()
+    {
+        CloseRenderedAddon("ItemSearchResult");
+        CloseRenderedAddon("ItemSearch");
+    }
+
+    private static unsafe void CloseRenderedAddon(string addonName)
+    {
+        var addon = Plugin.GameGui.GetAddonByName<AtkUnitBase>(addonName, 1);
+        if (addon != null && addon->IsReady && addon->IsVisible)
+            addon->Close(true);
+    }
 
     private string ResolveBellName()
     {

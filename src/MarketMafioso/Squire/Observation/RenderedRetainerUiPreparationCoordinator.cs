@@ -60,6 +60,7 @@ public sealed class RenderedRetainerUiPreparationCoordinator
         bool retainerListVisible,
         bool lifestreamStateAvailable,
         bool lifestreamBusy,
+        bool marketBoardUiVisible,
         string localizedBellName,
         Func<string, bool> processCommand)
     {
@@ -76,7 +77,9 @@ public sealed class RenderedRetainerUiPreparationCoordinator
                     return Fail("Lifestream travel began, but its bounded busy state is unavailable.");
                 if (nowUtc - phaseStartedAt > TravelTimeout)
                     return Fail("Lifestream did not finish market-board travel within five minutes.");
-                if (lifestreamBusy || nowUtc - phaseStartedAt < TravelSettleWindow)
+                // Lifestream remains busy while the market-board addon it opened is visible.
+                // That rendered addon is stronger arrival evidence than the plugin's busy flag.
+                if ((lifestreamBusy && !marketBoardUiVisible) || nowUtc - phaseStartedAt < TravelSettleWindow)
                     return Snapshot();
                 if (string.IsNullOrWhiteSpace(localizedBellName) ||
                     !processCommand($"/target \"{localizedBellName.Replace("\"", string.Empty, StringComparison.Ordinal)}\""))

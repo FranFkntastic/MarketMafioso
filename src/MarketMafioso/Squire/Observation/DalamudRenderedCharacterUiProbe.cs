@@ -39,6 +39,8 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
     [
         "RetainerList",
         "RetainerCharacter",
+        "ItemSearch",
+        "ItemSearchResult",
         "ItemDetail",
     ];
 
