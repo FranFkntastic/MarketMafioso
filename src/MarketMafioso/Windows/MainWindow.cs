@@ -365,6 +365,7 @@ public class MainWindow : Window, IDisposable
             uiStateCapture,
             AgentReviewRegistry,
             () => config.EnableMarketAcquisitionDryRunTools,
+            CanStartPreparedRouteDryRun,
             () => _ = StartPreparedRouteDryRunAsync());
         marketAcquisitionGuidedRoutePanel = new MarketAcquisitionGuidedRoutePanel(
             routeEngine.CreateSnapshot,
@@ -1269,6 +1270,14 @@ public class MainWindow : Window, IDisposable
             return Task.CompletedTask;
         });
     }
+
+    private bool CanStartPreparedRouteDryRun() =>
+        config.EnableMarketAcquisitionDryRunTools &&
+        !acquisitionWorkspace.IsBusy &&
+        !routeEngine.IsRouteActive &&
+        acquisitionWorkspace.ClaimedRequest is not null &&
+        acquisitionWorkspace.PreparedPlan?.Status == "Ready" &&
+        !acquisitionWorkspace.IsPreparedPlanStale();
 
     private Task RecoverOutfitterRouteAsync()
     {

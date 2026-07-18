@@ -24,6 +24,7 @@ internal sealed class MarketAcquisitionDiagnosticsPanel
     private readonly UiStateCaptureService uiStateCapture;
     private readonly AgentBridgeUiReviewRegistry reviewRegistry;
     private readonly Func<bool> areDryRunToolsEnabled;
+    private readonly Func<bool> canStartPreparedRouteDryRun;
     private readonly Action startPreparedRouteDryRun;
 
     private string diagnosticsFolderStatus = "Route diagnostics folder opens in Explorer.";
@@ -39,6 +40,7 @@ internal sealed class MarketAcquisitionDiagnosticsPanel
         UiStateCaptureService uiStateCapture,
         AgentBridgeUiReviewRegistry reviewRegistry,
         Func<bool> areDryRunToolsEnabled,
+        Func<bool> canStartPreparedRouteDryRun,
         Action startPreparedRouteDryRun)
     {
         this.getRouteSnapshot = getRouteSnapshot ?? throw new ArgumentNullException(nameof(getRouteSnapshot));
@@ -51,6 +53,7 @@ internal sealed class MarketAcquisitionDiagnosticsPanel
         this.uiStateCapture = uiStateCapture ?? throw new ArgumentNullException(nameof(uiStateCapture));
         this.reviewRegistry = reviewRegistry ?? throw new ArgumentNullException(nameof(reviewRegistry));
         this.areDryRunToolsEnabled = areDryRunToolsEnabled ?? throw new ArgumentNullException(nameof(areDryRunToolsEnabled));
+        this.canStartPreparedRouteDryRun = canStartPreparedRouteDryRun ?? throw new ArgumentNullException(nameof(canStartPreparedRouteDryRun));
         this.startPreparedRouteDryRun = startPreparedRouteDryRun ?? throw new ArgumentNullException(nameof(startPreparedRouteDryRun));
     }
 
@@ -94,7 +97,7 @@ internal sealed class MarketAcquisitionDiagnosticsPanel
         ImGui.TextColored(
             MarketMafiosoUiTheme.Muted,
             "Runs the prepared route through live rendered-UI travel, listing reads, authority checks, and recovery. Purchase selection and confirmation are unreachable; simulated allocations are written only to the diagnostic package.");
-        var enabled = !snapshot.IsRouteActive;
+        var enabled = canStartPreparedRouteDryRun();
         if (ImGuiUi.Button("Dry Run Prepared Route", enabled))
             startPreparedRouteDryRun();
         RegisterLastControl(
