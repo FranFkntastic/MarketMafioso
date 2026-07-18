@@ -26,6 +26,8 @@ internal sealed class MarketAcquisitionDiagnosticsPanel
     private readonly Func<bool> areDryRunToolsEnabled;
     private readonly Func<bool> canStartPreparedRouteDryRun;
     private readonly Action startPreparedRouteDryRun;
+    private readonly Func<OutfitterDryRunScenario> getOutfitterDryRunScenario;
+    private readonly Func<OutfitterDryRunScenario, bool> armOutfitterDryRunScenario;
 
     private string diagnosticsFolderStatus = "Route diagnostics folder opens in Explorer.";
 
@@ -41,7 +43,9 @@ internal sealed class MarketAcquisitionDiagnosticsPanel
         AgentBridgeUiReviewRegistry reviewRegistry,
         Func<bool> areDryRunToolsEnabled,
         Func<bool> canStartPreparedRouteDryRun,
-        Action startPreparedRouteDryRun)
+        Action startPreparedRouteDryRun,
+        Func<OutfitterDryRunScenario> getOutfitterDryRunScenario,
+        Func<OutfitterDryRunScenario, bool> armOutfitterDryRunScenario)
     {
         this.getRouteSnapshot = getRouteSnapshot ?? throw new ArgumentNullException(nameof(getRouteSnapshot));
         this.diagnosticsDirectory = diagnosticsDirectory ?? throw new ArgumentNullException(nameof(diagnosticsDirectory));
@@ -55,6 +59,8 @@ internal sealed class MarketAcquisitionDiagnosticsPanel
         this.areDryRunToolsEnabled = areDryRunToolsEnabled ?? throw new ArgumentNullException(nameof(areDryRunToolsEnabled));
         this.canStartPreparedRouteDryRun = canStartPreparedRouteDryRun ?? throw new ArgumentNullException(nameof(canStartPreparedRouteDryRun));
         this.startPreparedRouteDryRun = startPreparedRouteDryRun ?? throw new ArgumentNullException(nameof(startPreparedRouteDryRun));
+        this.getOutfitterDryRunScenario = getOutfitterDryRunScenario ?? throw new ArgumentNullException(nameof(getOutfitterDryRunScenario));
+        this.armOutfitterDryRunScenario = armOutfitterDryRunScenario ?? throw new ArgumentNullException(nameof(armOutfitterDryRunScenario));
     }
 
     public void Draw()
@@ -97,6 +103,13 @@ internal sealed class MarketAcquisitionDiagnosticsPanel
         ImGui.TextColored(
             MarketMafiosoUiTheme.Muted,
             "Runs the prepared route through live rendered-UI travel, listing reads, authority checks, and recovery. Purchase selection and confirmation are unreachable; simulated allocations are written only to the diagnostic package.");
+        ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Scenario");
+        ImGui.SameLine();
+        DrawDryRunScenario("Ordinary", OutfitterDryRunScenario.Ordinary);
+        ImGui.SameLine();
+        DrawDryRunScenario("Changed row", OutfitterDryRunScenario.ChangedListingRecovery);
+        ImGui.SameLine();
+        DrawDryRunScenario("No viable row", OutfitterDryRunScenario.NoViableRecovery);
         var enabled = canStartPreparedRouteDryRun();
         if (ImGuiUi.Button("Dry Run Prepared Route", enabled))
             startPreparedRouteDryRun();
@@ -107,6 +120,19 @@ internal sealed class MarketAcquisitionDiagnosticsPanel
             startPreparedRouteDryRun);
         if (snapshot.ExecutionMode == MarketAcquisitionExecutionMode.DryRun)
             ImGui.TextColored(MarketMafiosoUiTheme.Warning, $"Dry run active: {snapshot.VisibleAcquisitionStatus}");
+    }
+
+    private void DrawDryRunScenario(string label, OutfitterDryRunScenario scenario)
+    {
+        var selected = getOutfitterDryRunScenario() == scenario;
+        var enabled = !getRouteSnapshot().IsRouteActive;
+        if (ImGui.RadioButton($"{label}##OutfitterDryRun{scenario}", selected) && enabled)
+            armOutfitterDryRunScenario(scenario);
+        RegisterLastControl(
+            $"diagnostics.market-acquisition.dry-run-scenario.{scenario.ToString().ToLowerInvariant()}",
+            $"Use {label} Squire dry-run scenario",
+            enabled,
+            () => armOutfitterDryRunScenario(scenario));
     }
 
     public void DrawLatestWorldCompletionSummary(MarketAcquisitionRouteEngineSnapshot snapshot)

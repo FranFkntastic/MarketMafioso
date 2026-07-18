@@ -366,7 +366,9 @@ public class MainWindow : Window, IDisposable
             AgentReviewRegistry,
             () => config.EnableMarketAcquisitionDryRunTools,
             CanStartPreparedRouteDryRun,
-            () => _ = StartPreparedRouteDryRunAsync());
+            () => _ = StartPreparedRouteDryRunAsync(),
+            () => routeEngine.ArmedOutfitterDryRunScenario,
+            scenario => routeEngine.ArmOutfitterDryRunScenario(scenario));
         marketAcquisitionGuidedRoutePanel = new MarketAcquisitionGuidedRoutePanel(
             routeEngine.CreateSnapshot,
             forceDiagnostics => _ = StartGuidedRouteAsync(forceDiagnostics),
@@ -1302,6 +1304,13 @@ public class MainWindow : Window, IDisposable
     {
         return acquisitionWorkspace.RunWithReportableClaimAsync(async (claimed, token) =>
         {
+            if (routeEngine.ConsumeNoViableOutfitterDryRunScenario())
+            {
+                routeEngine.PauseOutfitterRecovery(
+                    "Diagnostic no-viable recovery: no exact-quality row remains inside the confirmed caps. Retry or return to Advisor.");
+                routeEngine.ReportRouteProgress();
+                return;
+            }
             var remainingClaim = routeEngine.CreateOutfitterRecoveryClaim(claimed);
             var currentWorld = playerState.CurrentWorld.IsValid ? GetCurrentWorldName() : string.Empty;
             MarketAcquisitionPlanPreparationResult result;

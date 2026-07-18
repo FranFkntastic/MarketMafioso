@@ -41,6 +41,10 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     private long operationSequence;
     private readonly IOutfitterRouteExecutionStateStore? outfitterStateStore;
     private OutfitterRouteAuthoritySession? outfitterAuthority;
+    private OutfitterDryRunScenario outfitterDryRunScenario;
+    private bool outfitterDryRunFaultEligible;
+    private bool outfitterDryRunFaultInjected;
+    private bool outfitterDryRunNoViableConsumed;
 
     public MarketAcquisitionRouteEngine(
         MarketAcquisitionRouteRunner runner,
@@ -81,6 +85,27 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         state.ProbeRunning ||
         operationExecutor.ActiveSnapshot != null ||
         purchaseAutomation.PurchaseSession?.IsActive == true;
+
+    public OutfitterDryRunScenario ArmedOutfitterDryRunScenario => outfitterDryRunScenario;
+
+    public bool ArmOutfitterDryRunScenario(OutfitterDryRunScenario scenario)
+    {
+        if (IsRouteActive)
+            return false;
+        outfitterDryRunScenario = scenario;
+        outfitterDryRunFaultInjected = false;
+        outfitterDryRunNoViableConsumed = false;
+        return true;
+    }
+
+    public bool ConsumeNoViableOutfitterDryRunScenario()
+    {
+        if (!outfitterDryRunFaultEligible || !outfitterDryRunFaultInjected || outfitterDryRunNoViableConsumed ||
+            outfitterDryRunScenario != OutfitterDryRunScenario.NoViableRecovery || !NeedsOutfitterRecovery)
+            return false;
+        outfitterDryRunNoViableConsumed = true;
+        return true;
+    }
 
     public MarketAcquisitionRouteEngineSnapshot CreateSnapshot() => new()
     {
@@ -135,6 +160,10 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         claimedRequest = claimed;
         ClearExecutionState();
         state.ExecutionMode = executionMode;
+        outfitterDryRunFaultEligible = executionMode == MarketAcquisitionExecutionMode.DryRun &&
+                                       outfitterContract?.Transfer.DryRunOnly == true;
+        outfitterDryRunFaultInjected = false;
+        outfitterDryRunNoViableConsumed = false;
         if (outfitterContract is not null)
         {
             if (outfitterContract.Transfer.DryRunOnly && executionMode != MarketAcquisitionExecutionMode.DryRun)
@@ -269,6 +298,15 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     {
         if (outfitterAuthority is null)
             return null;
+        if (outfitterDryRunFaultEligible && !outfitterDryRunFaultInjected &&
+            outfitterDryRunScenario is OutfitterDryRunScenario.ChangedListingRecovery or OutfitterDryRunScenario.NoViableRecovery)
+        {
+            outfitterDryRunFaultInjected = true;
+            return TransitionToOutfitterRecovery(
+                outfitterDryRunScenario == OutfitterDryRunScenario.ChangedListingRecovery
+                    ? "Diagnostic dry run substituted a changed visible row after preflight."
+                    : "Diagnostic dry run removed every in-envelope visible row after preflight.");
+        }
         var authorization = outfitterAuthority.AuthorizeCandidate(subtask, candidatePlan);
         return authorization.IsValid
             ? null

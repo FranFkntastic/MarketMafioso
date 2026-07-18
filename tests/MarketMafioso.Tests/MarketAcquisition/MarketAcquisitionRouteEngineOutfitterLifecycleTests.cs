@@ -156,6 +156,58 @@ public sealed class MarketAcquisitionRouteEngineOutfitterLifecycleTests
     }
 
     [Fact]
+    public void DiagnosticChangedRowScenario_EntersRecoveryOnceAndCanResumeRecoveredPlan()
+    {
+        var fixture = Fixture(dryRunOnly: true);
+        using var harness = MarketAcquisitionRouteEngineHarness.Create(new MemoryStore());
+        Assert.True(harness.Engine.ArmOutfitterDryRunScenario(OutfitterDryRunScenario.ChangedListingRecovery));
+        Assert.True(harness.Engine.Start(
+            fixture.Plan,
+            fixture.Claim,
+            false,
+            false,
+            fixture.Contract,
+            fixture.Document,
+            MarketAcquisitionExecutionMode.DryRun).Success);
+
+        var injected = harness.Engine.EnforceOutfitterCandidateAuthority(
+            fixture.Plan.WorldBatches[0].ItemSubtasks[0],
+            CandidatePlan());
+
+        Assert.NotNull(injected);
+        Assert.Equal(OutfitterRouteAuthorityPhase.RecoveryNeeded, harness.Engine.CreateSnapshot().OutfitterExecution!.Phase);
+        var remaining = harness.Engine.CreateOutfitterRecoveryClaim(fixture.Claim);
+        Assert.True(harness.Engine.StartOutfitterRecovery(fixture.Plan, remaining, fixture.Document).Success);
+        Assert.Null(harness.Engine.EnforceOutfitterCandidateAuthority(
+            fixture.Plan.WorldBatches[0].ItemSubtasks[0],
+            CandidatePlan()));
+    }
+
+    [Fact]
+    public void DiagnosticNoViableScenario_IsConsumedOnceOnlyAfterRecoveryIsNeeded()
+    {
+        var fixture = Fixture(dryRunOnly: true);
+        using var harness = MarketAcquisitionRouteEngineHarness.Create(new MemoryStore());
+        Assert.True(harness.Engine.ArmOutfitterDryRunScenario(OutfitterDryRunScenario.NoViableRecovery));
+        Assert.True(harness.Engine.Start(
+            fixture.Plan,
+            fixture.Claim,
+            false,
+            false,
+            fixture.Contract,
+            fixture.Document,
+            MarketAcquisitionExecutionMode.DryRun).Success);
+        Assert.False(harness.Engine.ConsumeNoViableOutfitterDryRunScenario());
+
+        Assert.NotNull(harness.Engine.EnforceOutfitterCandidateAuthority(
+            fixture.Plan.WorldBatches[0].ItemSubtasks[0],
+            CandidatePlan()));
+
+        Assert.True(harness.Engine.ConsumeNoViableOutfitterDryRunScenario());
+        Assert.False(harness.Engine.ConsumeNoViableOutfitterDryRunScenario());
+    }
+
+    [Fact]
     public void FailedRecoveryPreflight_PausesInsteadOfRemainingRecoveryEligible()
     {
         var fixture = Fixture();

@@ -3,6 +3,13 @@ using MarketMafioso.Automation.MarketBoard;
 
 namespace MarketMafioso.MarketAcquisition;
 
+public enum OutfitterDryRunScenario
+{
+    Ordinary,
+    ChangedListingRecovery,
+    NoViableRecovery,
+}
+
 internal sealed class MarketAcquisitionRouteEngineState
 {
     public MarketAcquisitionExecutionMode ExecutionMode { get; set; } = MarketAcquisitionExecutionMode.Live;
