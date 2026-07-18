@@ -36,6 +36,8 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
         "CharacterRepute",
         "GearSetList",
         "ItemDetail",
+        "_TextError",
+        "SelectYesno",
     ];
 
     private static readonly string[] RetainerAddonNames =
