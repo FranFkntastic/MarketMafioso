@@ -1,0 +1,6 @@
+flowchart TD
+    T0["T0: Finalize contract"] --> T1["T1: Route-start handshake"]
+    T1 --> T2["T2-T3: Preparing and preflight"]
+    T2 --> T3["T4-T5: Open and revalidate visible row"]
+    T3 --> T4["T6-T7: Purchase, verify, update sunk state"]
+    T4 --> T5["T8: Next row, pause, or complete"]

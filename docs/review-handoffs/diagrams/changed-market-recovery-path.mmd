@@ -1,0 +1,17 @@
+flowchart TD
+    A["Enumerate exact-quality alternatives"] --> B{"Remaining plan inside contract?"}
+    B -- "No" --> C["Show failed constraint"]
+    B -- "Yes" --> D{"Confirmed policy version"}
+    D -- "NoRecovery" --> C
+    D -- "ReviewEveryChange" --> E["Present revised plan for confirmation"]
+    D -- "SameWorldExactQuality" --> F["Replan same-world rows"]
+    D -- "CrossWorldExactQuality" --> G["Replan remaining route"]
+    E --> H{"User reconfirms?"}
+    H -- "No" --> C
+    H -- "Yes" --> I["Revalidate replacement"]
+    F --> I
+    G --> I
+    I --> J["Purchase and verify visible result"]
+    J --> K{"Result proved?"}
+    K -- "No" --> L["Stop and reconcile"]
+    K -- "Yes" --> M["Record sunk state"]

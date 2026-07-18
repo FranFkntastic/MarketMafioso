@@ -1,0 +1,6 @@
+flowchart TD
+    A["Route consumes exact contract"] --> B["Enter Preparing: spending disabled"]
+    B --> C["Refresh evidence and reconcile state"]
+    C --> D{"Preflight passes?"}
+    D -- "No" --> E["Pause before travel or purchase"]
+    D -- "Yes" --> F["Enter Active Route"]

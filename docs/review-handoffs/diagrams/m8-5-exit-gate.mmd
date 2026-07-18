@@ -1,0 +1,6 @@
+flowchart TD
+    A["Handshake; enter Preparing"] --> B["Pass preflight before activation"]
+    B --> C["Revalidate visible UI state"]
+    C --> D["Classify changes and recover within policy"]
+    D --> E["Purchase, verify, and update sunk state"]
+    E --> F["Pause, resume, return, or complete"]

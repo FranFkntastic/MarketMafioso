@@ -1,0 +1,12 @@
+flowchart TD
+    A["Plugin or game restarts"] --> B{"Contract and audit state readable?"}
+    B -- "No" --> C["Do not resume"]
+    B -- "Yes" --> D["Resume handshake; enter Preparing; reconcile"]
+    D --> E{"Contract revision current?"}
+    E -- "No" --> F["Return to Workbench"]
+    E -- "Yes" --> G{"Stale-intent rule satisfied?"}
+    G -- "No" --> H["Require new confirmation"]
+    G -- "Yes" --> I["Refresh evidence and run preflight"]
+    I --> J{"Preflight succeeds?"}
+    J -- "No" --> K["Pause"]
+    J -- "Yes" --> L["Apply approved resume policy; enter Active"]

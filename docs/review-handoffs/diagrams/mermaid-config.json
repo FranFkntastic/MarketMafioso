@@ -1,0 +1,19 @@
+{
+  "theme": "neutral",
+  "securityLevel": "strict",
+  "fontFamily": "Arial, sans-serif",
+  "deterministicIds": true,
+  "deterministicIDSeed": "outfitter-m8-m8-5-policy-rev2",
+  "flowchart": {
+    "curve": "linear",
+    "htmlLabels": false,
+    "useMaxWidth": false
+  },
+  "sequence": {
+    "useMaxWidth": false,
+    "wrap": true
+  },
+  "state": {
+    "useMaxWidth": false
+  }
+}

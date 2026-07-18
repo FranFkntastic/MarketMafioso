@@ -1,0 +1,10 @@
+flowchart TD
+    A["Open next required row in visible UI"] --> B{"Can UI prove exact row?"}
+    B -- "No" --> C["Do not purchase; classify failure"]
+    B -- "Yes" --> D{"Accepted row still legal?"}
+    D -- "Yes" --> E["Purchase and verify"]
+    D -- "No" --> F["Classify divergence"]
+    C --> F
+    F --> G{"Exact-quality alternatives?"}
+    G -- "No" --> H["Pause, wait, or return"]
+    G -- "Yes" --> I["Enumerate full and partial rows"]

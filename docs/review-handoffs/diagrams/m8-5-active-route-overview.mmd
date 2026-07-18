@@ -1,0 +1,7 @@
+flowchart TD
+    A["Active Route: revalidate visible row"] --> B{"Row satisfies contract?"}
+    B -- "No" --> C["Recover, pause, or return"]
+    B -- "Yes" --> D["Purchase, verify, and update sunk state"]
+    D --> E{"Rows remain?"}
+    E -- "Yes" --> A
+    E -- "No" --> F["Complete and audit"]
