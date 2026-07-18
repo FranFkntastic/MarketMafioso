@@ -243,7 +243,7 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
         offers = catalog.Build(classJobId, checked((uint)baseline.Level!.Value));
         if (offers.MarketItemIds.Count == 0)
         {
-            Abstain("The declared market scope contains no eligible items in this game-data version.");
+            Abstain($"The declared market scope contains no eligible items in this game-data version. {offers.Diagnostic}");
             return;
         }
         discoveryRequest = new(

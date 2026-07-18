@@ -12,7 +12,8 @@ public sealed record MinerBotanistAdvisorCatalogResult(
     string CoverageLabel,
     IReadOnlyList<uint> MarketItemIds,
     IReadOnlyList<EquipmentLoadoutOffer> VendorOffers,
-    IReadOnlyDictionary<uint, EquipmentItemDefinition> Definitions);
+    IReadOnlyDictionary<uint, EquipmentItemDefinition> Definitions,
+    string Diagnostic);
 
 /// <summary>
 /// Static, patch-matched discovery for the first advisor release. It declares a bounded level
@@ -49,16 +50,39 @@ public sealed class MinerBotanistAdvisorCatalog
         var found = new Dictionary<uint, EquipmentItemDefinition>();
         var marketItemIds = new List<uint>();
         var vendorOffers = new List<EquipmentLoadoutOffer>();
+        var scanned = 0;
+        var unresolved = 0;
+        var wrongJob = 0;
+        var incompleteProfile = 0;
+        var unmodeled = 0;
         foreach (var item in itemSheet.Where(value =>
                      value.RowId > 0 &&
                      value.LevelEquip >= minimumEquipLevel &&
                      value.LevelEquip <= characterLevel &&
                      value.EquipSlotCategory.RowId != 0))
         {
+            scanned++;
             var definition = definitions.FindByItemId(item.RowId).SingleOrDefault();
-            if (definition is null || !definition.EligibleClassJobIds.Contains(classJobId) ||
-                !HasRelevantCompleteProfile(definition) || HasUnmodeledEffectOrRestriction(definition))
+            if (definition is null)
+            {
+                unresolved++;
                 continue;
+            }
+            if (!definition.EligibleClassJobIds.Contains(classJobId))
+            {
+                wrongJob++;
+                continue;
+            }
+            if (!HasRelevantCompleteProfile(definition))
+            {
+                incompleteProfile++;
+                continue;
+            }
+            if (HasUnmodeledEffectOrRestriction(definition))
+            {
+                unmodeled++;
+                continue;
+            }
             found[definition.ItemId] = definition;
 
             if (!item.IsUntradable && item.ItemSearchCategory.RowId != 0)
@@ -78,11 +102,16 @@ public sealed class MinerBotanistAdvisorCatalog
                     SourceCatalogKey: $"vendor:{vendor.ShopId}:{vendor.VendorId}:{vendor.TerritoryId}:{definition.ItemId}"));
         }
 
+        var diagnostic =
+            $"Catalog {minimumEquipLevel}-{characterLevel}: scanned {scanned:N0}; accepted {found.Count:N0}; " +
+            $"market {marketItemIds.Distinct().Count():N0}; gil vendor {vendorOffers.Count:N0}; " +
+            $"unresolved {unresolved:N0}; wrong job {wrongJob:N0}; incomplete relevant stats {incompleteProfile:N0}; unmodeled effect/restriction {unmodeled:N0}.";
         var result = new MinerBotanistAdvisorCatalogResult(
             $"Equipped UI evidence plus level {minimumEquipLevel}-{characterLevel} MIN/BTN market and gil-vendor equipment; armoury inventory is not yet observed.",
             marketItemIds.Distinct().Order().ToArray(),
             vendorOffers,
-            found);
+            found,
+            diagnostic);
         byTarget[(classJobId, characterLevel)] = result;
         return result;
     }
