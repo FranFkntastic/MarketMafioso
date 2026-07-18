@@ -87,9 +87,16 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
     public unsafe bool TryCloseCharacterUi()
     {
         RestoreCursor();
+        var closed = false;
+        var gearSetList = gameGui.GetAddonByName<AtkUnitBase>("GearSetList", 1);
+        if (gearSetList != null && gearSetList->RootNode != null && gearSetList->RootNode->IsVisible())
+        {
+            gearSetList->Close(true);
+            closed = true;
+        }
         var addon = gameGui.GetAddonByName<AtkUnitBase>("Character", 1);
         if (addon == null || addon->RootNode == null || !addon->RootNode->IsVisible())
-            return false;
+            return closed;
         addon->Close(true);
         return true;
     }
