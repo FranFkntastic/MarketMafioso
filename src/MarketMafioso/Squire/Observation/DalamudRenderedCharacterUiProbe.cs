@@ -57,6 +57,7 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
     private readonly RenderedGatheringStatsStabilizer gatheringStatsStabilizer = new(TimeSpan.FromSeconds(3));
     private readonly RenderedCharacterEquipmentScanCoordinator equipmentScan = new();
     private string? hoveredCharacterNodePath;
+    private string? lastGearsetSelectionDiagnostic;
 
     public DalamudRenderedCharacterUiProbe(IGameGui gameGui)
     {
@@ -147,7 +148,9 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
     {
         if (!GearsetChangeCommand.TryCreate(target, out var command))
             return new(false, "InvalidCalibrationJob", "Target must be Miner, Botanist, or Blacksmith.", "GearSetList", null);
-        return renderedTextActions.TrySelectUniqueListRowText("GearSetList", command.JobName);
+        var selected = renderedTextActions.TrySelectUniqueListRowText("GearSetList", command.JobName);
+        lastGearsetSelectionDiagnostic = selected.Message;
+        return selected;
     }
 
     public unsafe Franthropy.Dalamud.AgentBridge.RenderedUiTextActionResult TryEquipSelectedGearset()
@@ -155,7 +158,10 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
         var addon = gameGui.GetAddonByName<AtkUnitBase>("GearSetList", 1);
         if (addon == null || addon->RootNode == null || !addon->RootNode->IsVisible() || !addon->IsReady)
             return new(false, "RenderedAddonUnavailable", "The rendered Gear Set list changed before equipping.", "GearSetList", null);
-        new AddonMaster.GearSetList(addon).EquipSet();
+        var gearSetList = new AddonMaster.GearSetList(addon);
+        if (!gearSetList.EquipSetButton->IsEnabled)
+            return new(false, "RenderedEquipSetDisabled", $"The rendered Gear Set list has not enabled Equip Set. Selection evidence: {lastGearsetSelectionDiagnostic ?? "unavailable"}", "GearSetList", null);
+        gearSetList.EquipSet();
         gatheringStatsStabilizer.Reset();
         return new(true, "RenderedGearsetEquipDispatched", "The Gear Set list's rendered Equip Set control was activated.", "GearSetList", null);
     }
