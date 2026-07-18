@@ -20,6 +20,7 @@ public sealed class DalamudRetainerUiPreparation
     private readonly DalamudRenderedUiTextActionDispatcher renderedUiActions;
     private readonly Func<AgentBridge.AgentBridgeRenderedUiSnapshot> captureRetainerUi;
     private readonly RenderedRetainerUiPreparationCoordinator coordinator = new();
+    private string? lastSemanticActionDiagnostic;
 
     public DalamudRetainerUiPreparation(
         ICommandManager commandManager,
@@ -57,7 +58,7 @@ public sealed class DalamudRetainerUiPreparation
         if (marketBoardUiVisible)
             CloseRenderedMarketBoardUi();
         var stateAvailable = lifestream.TryIsBusy(out var busy);
-        return coordinator.Advance(
+        var progress = coordinator.Advance(
             DateTimeOffset.UtcNow,
             AddonVisible(renderedUi, "RetainerList"),
             stateAvailable,
@@ -68,6 +69,10 @@ public sealed class DalamudRetainerUiPreparation
             vnavmesh.IsRunning,
             localizedBellName,
             ProcessSemanticCommand);
+        return progress.Status == RenderedRetainerUiPreparationStatus.Failed &&
+               !string.IsNullOrWhiteSpace(lastSemanticActionDiagnostic)
+            ? progress with { Diagnostic = $"{progress.Diagnostic} {lastSemanticActionDiagnostic}" }
+            : progress;
     }
 
     public RenderedRetainerUiPreparationProgress Cancel() => coordinator.Cancel();
@@ -102,13 +107,19 @@ public sealed class DalamudRetainerUiPreparation
 
     private bool ProcessSemanticCommand(string command)
     {
+        lastSemanticActionDiagnostic = null;
         if (string.Equals(command, "/li mb", StringComparison.Ordinal))
             return commandManager.ProcessCommand(command);
         if (string.Equals(command, "/vnav movetarget", StringComparison.Ordinal))
             return commandManager.ProcessCommand(command);
         const string nameplatePrefix = "rendered-ui:click-nameplate:";
         if (command.StartsWith(nameplatePrefix, StringComparison.Ordinal))
-            return renderedUiActions.TryClickUniqueText("NamePlate", command[nameplatePrefix.Length..]).Success;
+        {
+            var result = renderedUiActions.TryClickUniqueText("NamePlate", command[nameplatePrefix.Length..]);
+            if (!result.Success)
+                lastSemanticActionDiagnostic = $"Rendered UI action {result.Code}: {result.Message}";
+            return result.Success;
+        }
         if (!string.Equals(command, "/confirm", StringComparison.Ordinal))
             return false;
         try
@@ -118,6 +129,7 @@ public sealed class DalamudRetainerUiPreparation
         }
         catch (Exception)
         {
+            lastSemanticActionDiagnostic = "The native confirm UI command threw before dispatch.";
             return false;
         }
     }
