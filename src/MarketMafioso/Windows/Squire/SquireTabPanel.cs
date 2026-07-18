@@ -18,6 +18,7 @@ using MarketMafioso.Windows.Main;
 using Newtonsoft.Json;
 using Franthropy.Dalamud.AgentBridge;
 using Franthropy.Dalamud.Equipment;
+using Franthropy.Dalamud.UI.Filtering;
 using MarketMafioso.Diagnostics;
 using MarketMafioso.Squire.Outfitter.Utility;
 using MarketMafioso.Squire.Outfitter.Acquisition;
@@ -51,6 +52,9 @@ internal sealed class SquireTabPanel : IDisposable
     private SquireAnalysis? analysis;
     private SquireRunPresentation? lastRun;
     private string search = string.Empty;
+    private readonly DalamudFilterAutocompleteState filterEditor = new();
+    private readonly SquireCandidateFilter candidateFilter = new();
+    private bool filterReferenceRequested;
     private bool showProtected;
     private bool showNonEquipment;
     private bool selectionMode;
@@ -127,6 +131,7 @@ internal sealed class SquireTabPanel : IDisposable
         evidencePanel = new SquireEvidencePanel(ruleStore, reviewRegistry, Refresh);
         routeDiagnosticsPanel = new SquireRouteDiagnosticsPanel(actionAdapter, reviewRegistry, uiStateCapture);
         search = config.Squire.Search;
+        filterEditor.SetExpression(search);
         showProtected = config.Squire.ShowProtected;
         showNonEquipment = config.Squire.ShowNonEquipment;
     }
@@ -280,12 +285,36 @@ internal sealed class SquireTabPanel : IDisposable
         DrawSummary(analysis);
         DrawDiagnostics(analysis);
         ImGui.Separator();
-        ImGui.SetNextItemWidth(280);
-        if (ImGui.InputTextWithHint("##SquireSearch", "Search item, location, or reason", ref search, 160))
+        if (DalamudFilterAutocompleteRenderer.Draw(
+                "SquireCandidates",
+                "Filter items...",
+                SquireCandidateFilter.Context,
+                filterEditor,
+                360))
         {
+            search = filterEditor.Expression;
             config.Squire.Search = search;
             config.Save();
         }
+        ImGui.SameLine();
+        if (ImGui.SmallButton("?##SquireFilterReference"))
+            filterReferenceRequested = true;
+        RegisterLastControl(
+            "squire.filter-reference",
+            "Open Squire filter reference",
+            AgentBridgeUiControlKind.Button,
+            true,
+            false,
+            null,
+            () => filterReferenceRequested = true);
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Filter reference");
+        if (filterReferenceRequested)
+        {
+            ImGui.OpenPopup("##SquireFilterReferencePopup");
+            filterReferenceRequested = false;
+        }
+        DrawFilterReference();
         ImGui.SameLine();
         if (ImGui.Checkbox("Show protected", ref showProtected))
         {
@@ -332,8 +361,8 @@ internal sealed class SquireTabPanel : IDisposable
                 selectionAnchor = null;
             }
         }
-        ImGui.SameLine();
-        ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Right-click a table header to choose columns.");
+        if (!string.IsNullOrWhiteSpace(candidateFilter.Error))
+            ImGui.TextColored(MarketMafiosoUiTheme.Error, candidateFilter.Error);
         DrawBatchBar();
         DrawTable(analysis);
         evidencePanel.Draw(analysis, focusedItem);
@@ -498,15 +527,10 @@ internal sealed class SquireTabPanel : IDisposable
     {
         var baseRows = showBatchOnly
             ? value.Candidates.Where(candidate => review.Selections.ContainsKey(candidate.Instance.Fingerprint)).ToArray()
-            : value.Candidates
+            : candidateFilter.Apply(value.Candidates
                 .Where(candidate => showNonEquipment || candidate.Definition.IsEquipment)
-                .Where(candidate => showProtected || candidate.Assessment is not (SquireAssessment.Protected or SquireAssessment.EvaluationFailure))
-                .Where(candidate => string.IsNullOrWhiteSpace(search)
-                    || candidate.Definition.Name.Contains(search, StringComparison.OrdinalIgnoreCase)
-                    || candidate.Instance.Fingerprint.Container.Contains(search, StringComparison.OrdinalIgnoreCase)
-                    || FormatLocation(candidate.Instance.Fingerprint).Contains(search, StringComparison.OrdinalIgnoreCase)
-                    || candidate.Reasons.Any(reason => reason.Message.Contains(search, StringComparison.OrdinalIgnoreCase)))
-                .ToArray();
+                .Where(candidate => showProtected || candidate.Assessment is not (SquireAssessment.Protected or SquireAssessment.EvaluationFailure)),
+                search);
         var tableFlags = ImGuiTableFlags.RowBg | ImGuiTableFlags.Borders | ImGuiTableFlags.ScrollY |
                          ImGuiTableFlags.ScrollX | ImGuiTableFlags.Resizable | ImGuiTableFlags.Reorderable |
                          ImGuiTableFlags.Hideable | ImGuiTableFlags.Sortable;
@@ -629,6 +653,38 @@ internal sealed class SquireTabPanel : IDisposable
         if (selectionDragStart >= 0 && ImGui.IsMouseReleased(ImGuiMouseButton.Left))
             selectionDragStart = -1;
         ImGui.EndTable();
+    }
+
+    private static void DrawFilterReference()
+    {
+        ImGui.SetNextWindowSizeConstraints(new System.Numerics.Vector2(390, 0), new System.Numerics.Vector2(560, 420));
+        if (!ImGui.BeginPopup("##SquireFilterReferencePopup"))
+            return;
+
+        ImGui.TextColored(MarketMafiosoUiTheme.Header, "Filter cleanup candidates");
+        ImGui.Separator();
+        ImGui.TextUnformatted("darksteel    -darksteel    location:armoury");
+        ImGui.TextUnformatted("quality:hq    is:equipped    itemlevel>=660");
+        ImGui.Spacing();
+        if (ImGui.BeginTable("##SquireFilterFields", 2, ImGuiTableFlags.SizingStretchProp | ImGuiTableFlags.RowBg))
+        {
+            ImGui.TableSetupColumn("Field", ImGuiTableColumnFlags.WidthFixed, 115);
+            ImGui.TableSetupColumn("Matches", ImGuiTableColumnFlags.WidthStretch);
+            ImGui.TableHeadersRow();
+            foreach (var field in SquireCandidateFilter.Reference.Fields.Where(field => field.IsAvailable))
+                FilterReferenceRow(field.PreferredName, field.Description);
+            ImGui.EndTable();
+        }
+        ImGui.EndPopup();
+    }
+
+    private static void FilterReferenceRow(string field, string meaning)
+    {
+        ImGui.TableNextRow();
+        ImGui.TableNextColumn();
+        ImGui.TextUnformatted(field);
+        ImGui.TableNextColumn();
+        ImGui.TextUnformatted(meaning);
     }
 
     private void DrawBatchBar()
