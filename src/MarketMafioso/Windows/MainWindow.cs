@@ -447,6 +447,7 @@ public class MainWindow : Window, IDisposable
                 StopCount = snapshot.Stops.Count,
                 CompletedOrProbedStopCount = snapshot.CompletedOrProbedStopCount,
                 ExecutionMode = snapshot.ExecutionMode.ToString(),
+                ArmedOutfitterDryRunScenario = routeEngine.ArmedOutfitterDryRunScenario.ToString(),
                 OutfitterPhase = snapshot.OutfitterExecution?.Phase.ToString(),
                 OutfitterMessage = snapshot.OutfitterExecution?.Message,
             },
