@@ -313,7 +313,7 @@ internal sealed class SquireTabPanel : IDisposable
         RegisterFilterReviewControl("complete-hq", "Open HQ filter completion", "is:h");
         RegisterFilterReviewControl("apply-hq", "Apply HQ candidate filter", "is:hq");
         RegisterFilterReviewControl("apply-armoury", "Apply Armoury candidate filter", "location:armoury");
-        RegisterFilterReviewControl("invalid", "Apply invalid candidate filter", "quality:");
+        RegisterFilterReviewControl("invalid", "Apply invalid candidate filter", "quality:banana");
         RegisterFilterReviewControl("clear", "Clear candidate filter", string.Empty);
 #endif
         if (ImGui.IsItemHovered())
