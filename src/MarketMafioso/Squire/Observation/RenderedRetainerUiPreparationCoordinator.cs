@@ -6,9 +6,8 @@ public enum RenderedRetainerUiPreparationStatus
 {
     Idle,
     Traveling,
-    TargetingBell,
-    ApproachingBell,
-    WaitingForRetainerList,
+    ClearingMarketBoardUi,
+    OpeningRetainerList,
     Complete,
     Failed,
     Cancelled,
@@ -27,11 +26,9 @@ public sealed class RenderedRetainerUiPreparationCoordinator
 {
     private static readonly TimeSpan TravelTimeout = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan TravelSettleWindow = TimeSpan.FromSeconds(2);
-    private static readonly TimeSpan RetainerListWait = TimeSpan.FromSeconds(3);
-    private static readonly TimeSpan BellApproachTimeout = TimeSpan.FromSeconds(30);
-    private static readonly TimeSpan BellApproachSettleWindow = TimeSpan.FromSeconds(1);
-    private static readonly TimeSpan BellTargetWait = TimeSpan.FromSeconds(2);
-    private const int MaxInteractionAttempts = 3;
+    private static readonly TimeSpan MarketBoardCloseTimeout = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan BellInteractionTimeout = TimeSpan.FromSeconds(45);
+    private static readonly TimeSpan RetainerListSettleWindow = TimeSpan.FromSeconds(3);
 
     private RenderedRetainerUiPreparationStatus status = RenderedRetainerUiPreparationStatus.Idle;
     private DateTimeOffset phaseStartedAt;
@@ -65,10 +62,6 @@ public sealed class RenderedRetainerUiPreparationCoordinator
         bool lifestreamStateAvailable,
         bool lifestreamBusy,
         bool marketBoardUiVisible,
-        bool bellTargetVisible,
-        bool vnavmeshReady,
-        bool vnavmeshRunning,
-        string localizedBellName,
         Func<string, bool> processCommand)
     {
         ArgumentNullException.ThrowIfNull(processCommand);
@@ -84,59 +77,39 @@ public sealed class RenderedRetainerUiPreparationCoordinator
                     return Fail("Lifestream travel began, but its bounded busy state is unavailable.");
                 if (nowUtc - phaseStartedAt > TravelTimeout)
                     return Fail("Lifestream did not finish market-board travel within five minutes.");
+                if (nowUtc - phaseStartedAt < TravelSettleWindow)
+                    return Snapshot();
                 // Lifestream remains busy while the market-board addon it opened is visible.
-                // That rendered addon is stronger arrival evidence than the plugin's busy flag.
-                if ((lifestreamBusy && !marketBoardUiVisible) || nowUtc - phaseStartedAt < TravelSettleWindow)
-                    return Snapshot();
-                if (string.IsNullOrWhiteSpace(localizedBellName) ||
-                    !processCommand($"rendered-ui:activate-nameplate:{localizedBellName.Replace(":", string.Empty, StringComparison.Ordinal)}"))
-                    return Fail("The localized Summoning Bell rendered nameplate action was unavailable.");
-                status = RenderedRetainerUiPreparationStatus.TargetingBell;
-                phaseStartedAt = nowUtc;
-                diagnostic = "Summoning Bell target requested through the normal command UI.";
-                return Snapshot();
-
-            case RenderedRetainerUiPreparationStatus.TargetingBell:
-                if (!bellTargetVisible)
+                // Treat the addon as arrival proof, but never target through the UI being closed
+                // in this same framework turn.
+                if (marketBoardUiVisible)
                 {
-                    if (nowUtc - phaseStartedAt < BellTargetWait)
-                        return Snapshot();
-                    return Fail("The rendered target bar did not confirm the localized Summoning Bell target.");
+                    status = RenderedRetainerUiPreparationStatus.ClearingMarketBoardUi;
+                    phaseStartedAt = nowUtc;
+                    diagnostic = "Market-board arrival confirmed; waiting for its rendered UI to close before targeting the bell.";
+                    return Snapshot();
                 }
-                if (!vnavmeshReady)
-                    return Fail("vnavmesh is unavailable, so the bridge cannot approach the UI-targeted Summoning Bell without foreground control.");
-                if (!processCommand("/vnav movetarget"))
-                    return Fail("vnavmesh did not accept movement toward the UI-targeted Summoning Bell.");
-                status = RenderedRetainerUiPreparationStatus.ApproachingBell;
-                phaseStartedAt = nowUtc;
-                diagnostic = "Approaching the UI-targeted Summoning Bell without taking window focus.";
-                return Snapshot();
-
-            case RenderedRetainerUiPreparationStatus.ApproachingBell:
-                if (nowUtc - phaseStartedAt > BellApproachTimeout)
-                    return Fail("vnavmesh did not finish approaching the UI-targeted Summoning Bell within thirty seconds.");
-                if (vnavmeshRunning || nowUtc - phaseStartedAt < BellApproachSettleWindow)
+                if (lifestreamBusy)
                     return Snapshot();
-                if (!processCommand("/confirm"))
-                    return Fail("The normal confirm command was unavailable after approaching the targeted Summoning Bell.");
-                interactionAttempts++;
-                status = RenderedRetainerUiPreparationStatus.WaitingForRetainerList;
-                phaseStartedAt = nowUtc;
-                diagnostic = "Summoning Bell interaction requested; waiting for the rendered Retainer List.";
-                return Snapshot();
+                return BeginBellInteraction(nowUtc, processCommand);
 
-            case RenderedRetainerUiPreparationStatus.WaitingForRetainerList:
-                if (nowUtc - phaseStartedAt < RetainerListWait)
+            case RenderedRetainerUiPreparationStatus.ClearingMarketBoardUi:
+                if (!lifestreamStateAvailable)
+                    return Fail("The market board closed, but Lifestream's bounded busy state became unavailable.");
+                if (nowUtc - phaseStartedAt > MarketBoardCloseTimeout)
+                    return Fail("The market-board UI did not finish closing within ten seconds.");
+                if (marketBoardUiVisible || lifestreamBusy)
                     return Snapshot();
-                if (interactionAttempts >= MaxInteractionAttempts)
-                    return Fail("The rendered Retainer List did not appear after three bounded Summoning Bell interactions.");
-                if (string.IsNullOrWhiteSpace(localizedBellName) ||
-                    !processCommand($"rendered-ui:activate-nameplate:{localizedBellName.Replace(":", string.Empty, StringComparison.Ordinal)}"))
-                    return Fail("The bridge could not reacquire the localized Summoning Bell through its rendered nameplate.");
-                status = RenderedRetainerUiPreparationStatus.TargetingBell;
-                phaseStartedAt = nowUtc;
-                diagnostic = "Retrying the bounded Summoning Bell interaction because no rendered Retainer List appeared.";
-                return Snapshot();
+                return BeginBellInteraction(nowUtc, processCommand);
+
+            case RenderedRetainerUiPreparationStatus.OpeningRetainerList:
+                if (!lifestreamStateAvailable)
+                    return Fail("Lifestream began opening the Summoning Bell, but its bounded busy state became unavailable.");
+                if (nowUtc - phaseStartedAt > BellInteractionTimeout)
+                    return Fail("Lifestream did not open the rendered Retainer List within forty-five seconds.");
+                if (lifestreamBusy || nowUtc - phaseStartedAt < RetainerListSettleWindow)
+                    return Snapshot();
+                return Fail("Lifestream finished the Summoning Bell interaction, but no rendered Retainer List appeared.");
 
             default:
                 return Fail("Retainer UI preparation is not active.");
@@ -153,6 +126,19 @@ public sealed class RenderedRetainerUiPreparationCoordinator
     }
 
     public RenderedRetainerUiPreparationProgress Snapshot() => new(status, interactionAttempts, diagnostic);
+
+    private RenderedRetainerUiPreparationProgress BeginBellInteraction(
+        DateTimeOffset nowUtc,
+        Func<string, bool> processCommand)
+    {
+        if (!processCommand("lifestream:interact-object:2000401"))
+            return Fail("Lifestream did not accept the semantic Summoning Bell interaction.");
+        interactionAttempts++;
+        status = RenderedRetainerUiPreparationStatus.OpeningRetainerList;
+        phaseStartedAt = nowUtc;
+        diagnostic = "Summoning Bell interaction requested through Lifestream; waiting for the rendered Retainer List.";
+        return Snapshot();
+    }
 
     private RenderedRetainerUiPreparationProgress Complete(string message)
     {

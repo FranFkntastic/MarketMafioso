@@ -129,10 +129,7 @@ public sealed class Plugin : IDalamudPlugin
         renderedCharacterUiProbe = new DalamudRenderedCharacterUiProbe(GameGui);
         retainerUiPreparation = new(
             CommandManager,
-            DataManager,
             new LifestreamIpc(PluginInterface, Log),
-            new VNavmeshIpc(new DalamudVNavmeshIpcAdapter(PluginInterface, Log)),
-            new Franthropy.Dalamud.AgentBridge.DalamudRenderedUiTextActionDispatcher(GameGui),
             renderedCharacterUiProbe.CaptureRetainerUi);
         mainWindow = new MainWindow(
             Configuration,

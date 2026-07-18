@@ -18,20 +18,20 @@ public sealed class RenderedRetainerUiPreparationCoordinatorTests
     }
 
     [Fact]
-    public void Workflow_travels_targets_interacts_and_completes_only_from_rendered_ui()
+    public void Workflow_travels_interacts_and_completes_only_from_rendered_ui()
     {
         var commands = new List<string>();
         bool Process(string command) { commands.Add(command); return true; }
         var coordinator = new RenderedRetainerUiPreparationCoordinator();
 
         Assert.Equal(RenderedRetainerUiPreparationStatus.Traveling, coordinator.Begin(Start, false, true, Process).Status);
-        Assert.Equal(RenderedRetainerUiPreparationStatus.Traveling, coordinator.Advance(Start.AddSeconds(1), false, true, false, false, false, true, false, "Summoning Bell", Process).Status);
-        Assert.Equal(RenderedRetainerUiPreparationStatus.TargetingBell, coordinator.Advance(Start.AddSeconds(3), false, true, false, false, false, true, false, "Summoning Bell", Process).Status);
-        Assert.Equal(RenderedRetainerUiPreparationStatus.ApproachingBell, coordinator.Advance(Start.AddSeconds(4), false, true, false, false, true, true, false, "Summoning Bell", Process).Status);
-        Assert.Equal(RenderedRetainerUiPreparationStatus.ApproachingBell, coordinator.Advance(Start.AddSeconds(5), false, true, false, false, true, true, true, "Summoning Bell", Process).Status);
-        Assert.Equal(RenderedRetainerUiPreparationStatus.WaitingForRetainerList, coordinator.Advance(Start.AddSeconds(6), false, true, false, false, true, true, false, "Summoning Bell", Process).Status);
-        Assert.Equal(RenderedRetainerUiPreparationStatus.Complete, coordinator.Advance(Start.AddSeconds(7), true, true, false, false, true, true, false, "Summoning Bell", Process).Status);
-        Assert.Equal(["/li mb", "rendered-ui:activate-nameplate:Summoning Bell", "/vnav movetarget", "/confirm"], commands);
+        Assert.Equal(RenderedRetainerUiPreparationStatus.Traveling, coordinator.Advance(Start.AddSeconds(1), false, true, false, false, Process).Status);
+        Assert.Equal(RenderedRetainerUiPreparationStatus.ClearingMarketBoardUi, coordinator.Advance(Start.AddSeconds(3), false, true, true, true, Process).Status);
+        Assert.Equal(RenderedRetainerUiPreparationStatus.OpeningRetainerList, coordinator.Advance(Start.AddSeconds(4), false, true, false, false, Process).Status);
+        Assert.Equal(RenderedRetainerUiPreparationStatus.OpeningRetainerList, coordinator.Advance(Start.AddSeconds(5), false, true, true, false, Process).Status);
+        Assert.Equal(RenderedRetainerUiPreparationStatus.Complete, coordinator.Advance(Start.AddSeconds(6), true, true, false, false, Process).Status);
+        Assert.Equal(1, coordinator.Snapshot().InteractionAttempts);
+        Assert.Equal(["/li mb", "lifestream:interact-object:2000401"], commands);
     }
 
     [Fact]
@@ -40,66 +40,54 @@ public sealed class RenderedRetainerUiPreparationCoordinatorTests
         var coordinator = new RenderedRetainerUiPreparationCoordinator();
         coordinator.Begin(Start, false, true, _ => true);
 
-        var result = coordinator.Advance(Start.AddSeconds(3), false, false, false, false, false, true, false, "Summoning Bell", _ => true);
+        var result = coordinator.Advance(Start.AddSeconds(3), false, false, false, false, _ => true);
 
         Assert.Equal(RenderedRetainerUiPreparationStatus.Failed, result.Status);
     }
 
     [Fact]
-    public void Workflow_bounds_bell_retries_when_no_rendered_list_appears()
+    public void Workflow_fails_when_interaction_finishes_without_rendered_list()
     {
         var coordinator = new RenderedRetainerUiPreparationCoordinator();
         coordinator.Begin(Start, false, true, _ => true);
-        coordinator.Advance(Start.AddSeconds(3), false, true, false, false, false, true, false, "Summoning Bell", _ => true);
-        coordinator.Advance(Start.AddSeconds(4), false, true, false, false, true, true, false, "Summoning Bell", _ => true);
-        coordinator.Advance(Start.AddSeconds(6), false, true, false, false, true, true, false, "Summoning Bell", _ => true);
-        coordinator.Advance(Start.AddSeconds(10), false, true, false, false, true, true, false, "Summoning Bell", _ => true);
-        coordinator.Advance(Start.AddSeconds(11), false, true, false, false, true, true, false, "Summoning Bell", _ => true);
-        coordinator.Advance(Start.AddSeconds(13), false, true, false, false, true, true, false, "Summoning Bell", _ => true);
-        coordinator.Advance(Start.AddSeconds(17), false, true, false, false, true, true, false, "Summoning Bell", _ => true);
-        coordinator.Advance(Start.AddSeconds(18), false, true, false, false, true, true, false, "Summoning Bell", _ => true);
-        coordinator.Advance(Start.AddSeconds(20), false, true, false, false, true, true, false, "Summoning Bell", _ => true);
-        coordinator.Advance(Start.AddSeconds(24), false, true, false, false, true, true, false, "Summoning Bell", _ => true);
+        coordinator.Advance(Start.AddSeconds(3), false, true, false, false, _ => true);
 
-        var result = coordinator.Advance(Start.AddSeconds(25), false, true, false, false, true, true, false, "Summoning Bell", _ => true);
+        var result = coordinator.Advance(Start.AddSeconds(7), false, true, false, false, _ => true);
 
         Assert.Equal(RenderedRetainerUiPreparationStatus.Failed, result.Status);
-        Assert.Equal(3, result.InteractionAttempts);
+        Assert.Contains("no rendered Retainer List", result.Diagnostic, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
-    public void Rendered_market_board_arrival_overrides_lifestream_busy_state()
+    public void Rendered_market_board_arrival_waits_for_close_before_interaction()
     {
         var commands = new List<string>();
         var coordinator = new RenderedRetainerUiPreparationCoordinator();
         coordinator.Begin(Start, false, true, command => { commands.Add(command); return true; });
 
-        var result = coordinator.Advance(
-            Start.AddSeconds(3),
-            false,
-            true,
-            true,
-            true,
-            false,
-            true,
-            false,
-            "Summoning Bell",
+        var result = coordinator.Advance(Start.AddSeconds(3), false, true, true, true,
             command => { commands.Add(command); return true; });
 
-        Assert.Equal(RenderedRetainerUiPreparationStatus.TargetingBell, result.Status);
-        Assert.Equal(["/li mb", "rendered-ui:activate-nameplate:Summoning Bell"], commands);
+        Assert.Equal(RenderedRetainerUiPreparationStatus.ClearingMarketBoardUi, result.Status);
+        Assert.Equal(["/li mb"], commands);
+
+        result = coordinator.Advance(Start.AddSeconds(4), false, true, false, false,
+            command => { commands.Add(command); return true; });
+
+        Assert.Equal(RenderedRetainerUiPreparationStatus.OpeningRetainerList, result.Status);
+        Assert.Equal(["/li mb", "lifestream:interact-object:2000401"], commands);
     }
 
     [Fact]
-    public void Workflow_fails_closed_when_rendered_target_does_not_confirm_bell()
+    public void Workflow_fails_when_semantic_interaction_is_rejected()
     {
         var coordinator = new RenderedRetainerUiPreparationCoordinator();
         coordinator.Begin(Start, false, true, _ => true);
-        coordinator.Advance(Start.AddSeconds(3), false, true, false, true, false, true, false, "Summoning Bell", _ => true);
 
-        var result = coordinator.Advance(Start.AddSeconds(6), false, true, false, false, false, true, false, "Summoning Bell", _ => true);
+        var result = coordinator.Advance(Start.AddSeconds(3), false, true, false, false,
+            command => command != "lifestream:interact-object:2000401");
 
         Assert.Equal(RenderedRetainerUiPreparationStatus.Failed, result.Status);
-        Assert.Contains("rendered target bar", result.Diagnostic, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("did not accept", result.Diagnostic, StringComparison.OrdinalIgnoreCase);
     }
 }

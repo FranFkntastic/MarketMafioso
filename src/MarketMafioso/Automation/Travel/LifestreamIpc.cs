@@ -2,6 +2,7 @@ using System;
 using System.Linq;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
+using Franthropy.Dalamud.Travel;
 
 namespace MarketMafioso.Automation.Travel;
 
@@ -11,11 +12,13 @@ public sealed class LifestreamIpc
     private const string IsBusyChannel = "Lifestream.IsBusy";
     private readonly IDalamudPluginInterface pluginInterface;
     private readonly IPluginLog log;
+    private readonly DalamudLifestreamObjectInteractor objectInteractor;
 
     public LifestreamIpc(IDalamudPluginInterface pluginInterface, IPluginLog log)
     {
         this.pluginInterface = pluginInterface;
         this.log = log;
+        objectInteractor = new(pluginInterface);
     }
 
     public bool IsAvailable => pluginInterface.InstalledPlugins.Any(plugin =>
@@ -34,5 +37,17 @@ public sealed class LifestreamIpc
             isBusy = false;
             return false;
         }
+    }
+
+    public bool TryEnqueueObjectInteraction(uint dataId)
+    {
+        var result = objectInteractor.TryEnqueue(
+            dataId,
+            exportedName: "MarketMafioso bridge object interaction");
+        if (result.Success)
+            return true;
+
+        log.Warning($"[MarketMafioso] Lifestream object-interaction IPC failed ({result.Code}): {result.Message}");
+        return false;
     }
 }
