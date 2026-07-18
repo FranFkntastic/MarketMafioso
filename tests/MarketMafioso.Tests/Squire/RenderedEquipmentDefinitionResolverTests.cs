@@ -35,6 +35,7 @@ public sealed class RenderedEquipmentDefinitionResolverTests
 
         Assert.Equal(RenderedEquipmentResolutionStatus.Unresolved, result.Status);
         Assert.Empty(result.Slots);
+        Assert.Contains("profile=missing", result.Diagnostic, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -59,6 +60,8 @@ public sealed class RenderedEquipmentDefinitionResolverTests
 
         Assert.Equal(RenderedEquipmentResolutionStatus.Unresolved, result.Status);
         Assert.Empty(result.Slots);
+        Assert.Contains("stats=G100/P0/GP0", result.Diagnostic, StringComparison.Ordinal);
+        Assert.Contains("rendered=G99/P0/GP0", result.Diagnostic, StringComparison.Ordinal);
     }
 
     private static RenderedEquipmentSlotObservation Observation(
