@@ -252,12 +252,7 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
         => renderedTextActions.TryConfirmUniqueText("_TargetInfoMainTarget", "Summoning Bell").Success;
 
     public Franthropy.Dalamud.AgentBridge.RenderedUiTextActionResult TryOpenRenderedRetainer(string retainerName)
-    {
-        var selected = renderedTextActions.TrySelectUniqueListRowText("RetainerList", retainerName);
-        return selected.Success
-            ? renderedTextActions.TryConfirmUniqueText("RetainerList", retainerName)
-            : selected;
-    }
+        => renderedTextActions.TryActivateUniqueRetainerListRowText(retainerName);
 
     public RenderedGatheringStatsObservation CaptureGatheringStats() =>
         gatheringStatsStabilizer.Observe(RenderedCharacterStatsParser.Parse(Capture()));
