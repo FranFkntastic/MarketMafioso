@@ -38,6 +38,15 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
         "ItemDetail",
         "_TextError",
         "SelectYesno",
+        "SelectString",
+        "SelectIconString",
+        "Talk",
+        "ItemSearch",
+        "ItemSearchResult",
+        "MarketBoard",
+        "Shop",
+        "RetainerSell",
+        "ContextMenu",
     ];
 
     private static readonly string[] RetainerAddonNames =
