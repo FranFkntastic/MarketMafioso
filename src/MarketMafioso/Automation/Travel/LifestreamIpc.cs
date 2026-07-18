@@ -43,6 +43,7 @@ public sealed class LifestreamIpc
     {
         var result = objectInteractor.TryEnqueue(
             dataId,
+            approachDistance: 3.5f,
             exportedName: "MarketMafioso bridge object interaction");
         if (result.Success)
             return true;
