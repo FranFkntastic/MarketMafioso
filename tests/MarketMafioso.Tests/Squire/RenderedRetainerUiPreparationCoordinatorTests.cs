@@ -57,7 +57,7 @@ public sealed class RenderedRetainerUiPreparationCoordinatorTests
         Assert.Equal(RenderedRetainerUiPreparationStatus.OpeningRetainerList, result.Status);
         Assert.Equal(2, result.InteractionAttempts);
 
-        result = coordinator.Advance(Start.AddSeconds(11), false, true, false, false, _ => true);
+        result = coordinator.Advance(Start.AddSeconds(53), false, true, false, false, _ => true);
 
         Assert.Equal(RenderedRetainerUiPreparationStatus.Failed, result.Status);
         Assert.Contains("no rendered Retainer List", result.Diagnostic, StringComparison.OrdinalIgnoreCase);
@@ -115,6 +115,22 @@ public sealed class RenderedRetainerUiPreparationCoordinatorTests
             "lifestream:interact-object:2000401",
             "rendered-ui:activate-summoning-bell",
         ], commands);
+    }
+
+    [Fact]
+    public void Workflow_waits_for_external_retainer_automation_after_bell_activation()
+    {
+        var coordinator = new RenderedRetainerUiPreparationCoordinator();
+        coordinator.Begin(Start, false, true, "Siren", _ => true);
+        coordinator.Advance(Start.AddSeconds(3), false, true, false, false, _ => true);
+        coordinator.Advance(Start.AddSeconds(7), false, true, false, false, _ => true);
+
+        var waiting = coordinator.Advance(Start.AddSeconds(20), false, true, false, false, _ => true);
+        var complete = coordinator.Advance(Start.AddSeconds(30), true, true, false, false, _ => true);
+
+        Assert.Equal(RenderedRetainerUiPreparationStatus.OpeningRetainerList, waiting.Status);
+        Assert.Contains("external retainer automation", waiting.Diagnostic, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(RenderedRetainerUiPreparationStatus.Complete, complete.Status);
     }
 
     [Fact]

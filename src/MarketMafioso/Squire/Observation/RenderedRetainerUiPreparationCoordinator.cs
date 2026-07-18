@@ -120,10 +120,10 @@ public sealed class RenderedRetainerUiPreparationCoordinator
                         return Fail("Lifestream finished the Summoning Bell interaction without opening the Retainer List, and the rendered bell target rejected the bounded fallback activation.");
                     interactionAttempts++;
                     phaseStartedAt = nowUtc;
-                    diagnostic = "Lifestream did not open the Retainer List; activated the already-rendered Summoning Bell target and is waiting for rendered confirmation.";
+                    diagnostic = "Lifestream did not open the Retainer List; activated the already-rendered Summoning Bell target and is waiting for rendered confirmation or brief external retainer automation to finish.";
                     return Snapshot();
                 }
-                return Fail("Lifestream finished the Summoning Bell interaction, but no rendered Retainer List appeared.");
+                return Snapshot();
 
             default:
                 return Fail("Retainer UI preparation is not active.");
