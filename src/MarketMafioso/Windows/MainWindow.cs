@@ -23,6 +23,7 @@ using MarketMafioso.Windows.RetainerRestock;
 using MarketMafioso.Windows.Squire;
 using MarketMafioso.Windows.WorkshopLogistics;
 using MarketMafioso.Squire.Observation;
+using MarketMafioso.Squire.Outfitter.Acquisition;
 using MarketMafioso.WorkshopPrep;
 using MarketMafioso.Diagnostics;
 using Franthropy.Dalamud.AgentBridge;
@@ -46,6 +47,7 @@ public class MainWindow : Window, IDisposable
     private readonly MarketAcquisitionRequestWorkspace acquisitionWorkspace;
     private readonly MarketBoardApproachService marketBoardApproachService;
     private readonly MarketAcquisitionRouteEngine routeEngine;
+    private readonly ConfigurationOutfitterRouteExecutionStateStore outfitterRouteStateStore;
     private readonly string marketAcquisitionRouteDiagnosticsDirectory;
     private readonly SquireTabPanel squireTab;
     private readonly StatusTabPanel statusTab;
@@ -64,6 +66,9 @@ public class MainWindow : Window, IDisposable
 
     private readonly WorkshopProjectSelectionState workshopProjectSelection = new();
     private int marketInputCaptureIndex;
+    private Task? outfitterRecoveryTask;
+    private Task? outfitterAutoResumeTask;
+    private DateTimeOffset nextOutfitterAutoResumeAtUtc;
     private string workshopStatus = "Workshop prep queue is idle.";
     private string? agentRequestedTab;
     private string? agentRequestedWorkspaceView;
@@ -160,6 +165,7 @@ public class MainWindow : Window, IDisposable
         var marketAcquisitionRouteRunner = new MarketAcquisitionRouteRunner(
             marketAcquisitionRouteDiagnosticsDirectory,
             universalisFreshnessVerifier.VerifyAsync);
+        outfitterRouteStateStore = new ConfigurationOutfitterRouteExecutionStateStore(config);
         routeEngine = new MarketAcquisitionRouteEngine(
             marketAcquisitionRouteRunner,
             new DalamudMarketAcquisitionRouteContext(playerState),
@@ -179,7 +185,8 @@ public class MainWindow : Window, IDisposable
             new SystemMarketAcquisitionRouteClock(),
             new FileMarketAcquisitionReportOutbox(Path.Combine(
                 Plugin.PluginInterface.GetPluginConfigDirectory(),
-                "market-acquisition-report-outbox.json")));
+                "market-acquisition-report-outbox.json")),
+            outfitterRouteStateStore);
 
         SizeConstraints = new WindowSizeConstraints
         {
@@ -320,11 +327,17 @@ public class MainWindow : Window, IDisposable
         AcquisitionCompositionWindow = new MarketAcquisitionWorkbenchCompositionWindow(
             acquisitionWorkbenchCompositions,
             CreateMarketAcquisitionCompositionContext);
-        squireTab.ConnectMarketAcquisition(lines =>
-        {
-            acquisitionRequestBuilder.StageLines(lines);
-            QueueAgentTabSelection("Market Acquisition", "Workbench");
-        });
+        squireTab.ConnectMarketAcquisition(
+            lines =>
+            {
+                acquisitionRequestBuilder.StageLines(lines);
+                QueueAgentTabSelection("Market Acquisition", "Workbench");
+            },
+            transfer =>
+            {
+                acquisitionRequestBuilder.StageOutfitterTransfer(transfer);
+                QueueAgentTabSelection("Market Acquisition", "Workbench");
+            });
         acquisitionWorkspace.Connect(
             acquisitionRequestBuilder.AdoptRequest,
             acquisitionRequestBuilder.AdoptRestoredRequestIfSafe,
@@ -362,6 +375,7 @@ public class MainWindow : Window, IDisposable
             () => _ = StopGuidedRouteAsync(),
             () => _ = RestartGuidedRouteAsync(),
             () => _ = ReprepareGuidedRouteAsync(),
+            () => routeEngine.RequestOutfitterRecovery(acquisitionRequestBuilder.CurrentDocument),
             marketAcquisitionDiagnosticsPanel.DrawPostRunDiagnosticSummary,
             marketAcquisitionDiagnosticsPanel.DrawLatestWorldCompletionSummary,
             DrawMarketBoardProbeStatus,
@@ -446,6 +460,9 @@ public class MainWindow : Window, IDisposable
 
         routeEngine.MonitorMarketBoardPurchase();
         routeEngine.TickRoute(acquisitionWorkspace.IsBusy);
+        MaybeAutoResumeOutfitterRoute();
+        if (routeEngine.NeedsOutfitterRecovery && (outfitterRecoveryTask is null || outfitterRecoveryTask.IsCompleted))
+            outfitterRecoveryTask = RecoverOutfitterRouteAsync();
     }
 
     public override void PreDraw()
@@ -908,10 +925,11 @@ public class MainWindow : Window, IDisposable
     {
         ImGui.Separator();
         var validation = acquisitionRequestBuilder.DraftValidation;
+        var outfitterValidation = acquisitionRequestBuilder.OutfitterFinalizationValidation;
         var presentation = MarketAcquisitionWorkbenchFinalizationPresenter.Build(new(
             acquisitionRequestBuilder.LineCount,
-            validation.IsValid,
-            validation.Errors.FirstOrDefault(),
+            validation.IsValid && outfitterValidation.IsValid,
+            validation.Errors.FirstOrDefault() ?? outfitterValidation.Error,
             context.HasCharacterScope,
             context.IsBusy,
             context.IsRouteActive,
@@ -951,6 +969,8 @@ public class MainWindow : Window, IDisposable
     private async Task FinalizeMarketAcquisitionPlanAsync()
     {
         await acquisitionRequestBuilder.WaitForRefreshAsync().ConfigureAwait(false);
+        if (!acquisitionRequestBuilder.FinalizeOutfitterAuthority())
+            return;
         var claimed = acquisitionWorkspace.ClaimedRequest;
         if (claimed is { Status: "Claimed" })
         {
@@ -1159,7 +1179,9 @@ public class MainWindow : Window, IDisposable
                 plan,
                 claimed,
                 enableDiagnostics,
-                config.EnableOpportunisticWorldChecks);
+                config.EnableOpportunisticWorldChecks,
+                acquisitionRequestBuilder.CurrentDocument.OutfitterAuthority?.FinalizedContract,
+                acquisitionRequestBuilder.CurrentDocument);
             routeEngine.ReportRouteProgress();
             return Task.CompletedTask;
         });
@@ -1221,6 +1243,133 @@ public class MainWindow : Window, IDisposable
             acquisitionWorkspace.SetStatus(result.Message);
             routeEngine.ReportRouteProgress();
             return Task.CompletedTask;
+        });
+    }
+
+    private Task RecoverOutfitterRouteAsync()
+    {
+        return acquisitionWorkspace.RunWithReportableClaimAsync(async (claimed, token) =>
+        {
+            var remainingClaim = routeEngine.CreateOutfitterRecoveryClaim(claimed);
+            var currentWorld = playerState.CurrentWorld.IsValid ? GetCurrentWorldName() : string.Empty;
+            MarketAcquisitionPlanPreparationResult result;
+            try
+            {
+                result = await acquisitionWorkspace.PrepareRecoveryPlanAsync(
+                    remainingClaim,
+                    currentWorld,
+                    GetMarketAcquisitionRecentWorldTtl(),
+                    token).ConfigureAwait(false);
+            }
+            catch (Exception exception)
+            {
+                routeEngine.PauseOutfitterRecovery(
+                    $"Recovery preparation failed safely: {exception.Message} Retry when market evidence is available or return to Advisor.");
+                routeEngine.ReportRouteProgress();
+                return;
+            }
+            if (result.Plan.Status != "Ready" || result.Plan.WorldBatches.Count == 0)
+            {
+                routeEngine.PauseOutfitterRecovery(
+                    "No viable exact-quality route remains inside the confirmed caps. Wait for listings or return to Advisor.");
+                return;
+            }
+
+            var start = routeEngine.StartOutfitterRecovery(
+                result.Plan,
+                remainingClaim,
+                acquisitionRequestBuilder.CurrentDocument);
+            if (start.Success)
+                acquisitionWorkspace.ReplacePreparedPlan(result.Plan);
+            else
+                acquisitionWorkspace.SetStatus(start.Message);
+            routeEngine.ReportRouteProgress();
+        });
+    }
+
+    private void MaybeAutoResumeOutfitterRoute()
+    {
+        if (acquisitionWorkspace.IsBusy || DateTimeOffset.UtcNow < nextOutfitterAutoResumeAtUtc ||
+            outfitterAutoResumeTask is { IsCompleted: false })
+            return;
+        var live = routeEngine.CreateSnapshot();
+        if (live.OutfitterExecution?.Phase == OutfitterRouteAuthorityPhase.RecoveryNeeded &&
+            !live.IsRunning && !live.IsPaused)
+        {
+            nextOutfitterAutoResumeAtUtc = DateTimeOffset.UtcNow.AddSeconds(30);
+            outfitterAutoResumeTask = RecoverOutfitterRouteAsync();
+            return;
+        }
+        if (routeEngine.IsRouteActive)
+            return;
+        var persisted = outfitterRouteStateStore.Restore();
+        if (persisted is null || !OutfitterRouteRecoveryLifecycle.CanAutoResume(persisted))
+            return;
+        var contract = acquisitionRequestBuilder.CurrentDocument.OutfitterAuthority?.FinalizedContract;
+        if (contract is null || contract.ContractId != persisted.ContractId)
+        {
+            outfitterRouteStateStore.Clear();
+            return;
+        }
+        if (acquisitionWorkspace.ClaimedRequest is null)
+            return;
+        nextOutfitterAutoResumeAtUtc = DateTimeOffset.UtcNow.AddSeconds(30);
+        outfitterAutoResumeTask = AutoResumeOutfitterRouteAsync(persisted, contract);
+    }
+
+    private Task AutoResumeOutfitterRouteAsync(
+        OutfitterRouteExecutionState persisted,
+        OutfitterExecutionContract contract)
+    {
+        return acquisitionWorkspace.RunWithReportableClaimAsync(async (claimed, token) =>
+        {
+            var remainingClaim = OutfitterRouteAuthoritySession.CreateRecoveryClaim(claimed, persisted);
+            if (remainingClaim.Lines.Count == 0)
+            {
+                outfitterRouteStateStore.Save(persisted with
+                {
+                    Phase = OutfitterRouteAuthorityPhase.Complete,
+                    Message = "Persisted Squire purchases already satisfy the finalized solution.",
+                    UpdatedAtUtc = DateTimeOffset.UtcNow,
+                });
+                return;
+            }
+            var currentWorld = playerState.CurrentWorld.IsValid ? GetCurrentWorldName() : string.Empty;
+            MarketAcquisitionPlanPreparationResult result;
+            try
+            {
+                result = await acquisitionWorkspace.PrepareRecoveryPlanAsync(
+                    remainingClaim,
+                    currentWorld,
+                    GetMarketAcquisitionRecentWorldTtl(),
+                    token).ConfigureAwait(false);
+            }
+            catch (Exception exception)
+            {
+                outfitterRouteStateStore.Save(OutfitterRouteRecoveryLifecycle.PauseUnavailable(
+                    persisted,
+                    $"Recovery preparation failed safely: {exception.Message} Retry when market evidence is available or return to Advisor."));
+                return;
+            }
+            if (result.Plan.Status != "Ready" || result.Plan.WorldBatches.Count == 0)
+            {
+                outfitterRouteStateStore.Save(OutfitterRouteRecoveryLifecycle.PauseUnavailable(
+                    persisted,
+                    "No viable exact-quality route remains inside the confirmed caps. Wait for listings, retry recovery, or return to Advisor."));
+                return;
+            }
+            var start = routeEngine.Start(
+                result.Plan,
+                remainingClaim,
+                enableDiagnostics: false,
+                includeOpportunisticChecks: false,
+                contract,
+                acquisitionRequestBuilder.CurrentDocument);
+            if (start.Success)
+                acquisitionWorkspace.ReplacePreparedPlan(result.Plan);
+            else
+                acquisitionWorkspace.SetStatus(start.Message);
+            routeEngine.ReportRouteProgress();
         });
     }
 

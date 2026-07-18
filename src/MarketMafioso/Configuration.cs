@@ -20,6 +20,7 @@ public class Configuration : IPluginConfiguration
     public string PluginInstanceId { get; set; } = Guid.NewGuid().ToString("N");
     public PersistedMarketAcquisitionClaim? ActiveMarketAcquisitionClaim { get; set; }
     public PersistedMarketAcquisitionRequestDocument? ActiveMarketAcquisitionRequestDocument { get; set; }
+    public string? OutfitterRouteExecutionStateJson { get; set; }
     public List<PersistedMarketAcquisitionWorkbenchComposition> MarketAcquisitionWorkbenchCompositions { get; set; } = [];
     public string? SelectedMarketAcquisitionWorkbenchCompositionId { get; set; }
     public bool EnableMarketAcquisition { get; set; } = false;
@@ -302,6 +303,7 @@ public sealed class PersistedMarketAcquisitionRequestDocument
     public string SweepScope { get; set; } = string.Empty;
     public List<string> SweepDataCenters { get; set; } = [];
     public List<PersistedMarketAcquisitionRequestLineDocument> Lines { get; set; } = [];
+    public string? OutfitterAuthorityJson { get; set; }
     public string? RemoteRequestId { get; set; }
     public int RemoteRevision { get; set; }
     public string? RemoteOrigin { get; set; }

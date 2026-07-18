@@ -20,6 +20,7 @@ using Franthropy.Dalamud.AgentBridge;
 using Franthropy.Dalamud.Equipment;
 using MarketMafioso.Diagnostics;
 using MarketMafioso.Squire.Outfitter.Utility;
+using MarketMafioso.Squire.Outfitter.Acquisition;
 using LuminaItem = Lumina.Excel.Sheets.Item;
 
 namespace MarketMafioso.Windows.Squire;
@@ -44,6 +45,7 @@ internal sealed class SquireTabPanel : IDisposable
     private readonly OutfitterPanel outfitterPanel;
     private readonly MinerBotanistAdvisorSession advisorSession;
     private readonly MinerBotanistAdvisorPanel advisorPanel;
+    private Action<OutfitterWorkbenchTransfer>? stageOutfitterTransfer;
     private readonly Func<uint, string> resolveItemName;
     private string selectedWorkspace;
     private SquireAnalysis? analysis;
@@ -117,7 +119,7 @@ internal sealed class SquireTabPanel : IDisposable
             dataManager,
             marketListingSource,
             Path.Combine(diagnosticDirectory, "outfitter-market-evidence.json"));
-        advisorPanel = new(config, advisorSession, reviewRegistry);
+        advisorPanel = new(config, advisorSession, reviewRegistry, transfer => stageOutfitterTransfer?.Invoke(transfer));
         selectedWorkspace = string.Equals(config.Squire.SelectedWorkspace, "Cleanup", StringComparison.OrdinalIgnoreCase)
             ? "Cleanup"
             : "Outfitter";
@@ -143,8 +145,13 @@ internal sealed class SquireTabPanel : IDisposable
         DrawCleanup();
     }
 
-    public void ConnectMarketAcquisition(Action<IReadOnlyList<MarketAcquisitionRequestLineDocument>> stageLines) =>
+    public void ConnectMarketAcquisition(
+        Action<IReadOnlyList<MarketAcquisitionRequestLineDocument>> stageLines,
+        Action<OutfitterWorkbenchTransfer> stageExactOutfitterTransfer)
+    {
         outfitterPanel.ConnectMarketAcquisition(stageLines);
+        stageOutfitterTransfer = stageExactOutfitterTransfer ?? throw new ArgumentNullException(nameof(stageExactOutfitterTransfer));
+    }
 
 #if DEBUG
     public void OpenSyntheticAdvisorReview()

@@ -4,6 +4,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using MarketMafioso.Automation.MarketBoard;
 using MarketMafioso.Automation.Travel;
+using MarketMafioso.Squire.Outfitter.Acquisition;
 
 namespace MarketMafioso.MarketAcquisition;
 
@@ -38,6 +39,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     private MarketAcquisitionApproachLease? activeApproachLease;
     private bool travelInterruptedByCleanup;
     private long operationSequence;
+    private readonly IOutfitterRouteExecutionStateStore? outfitterStateStore;
+    private OutfitterRouteAuthoritySession? outfitterAuthority;
 
     public MarketAcquisitionRouteEngine(
         MarketAcquisitionRouteRunner runner,
@@ -51,7 +54,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         MarketAcquisitionClaimLifecycleController claimLifecycle,
         IMarketAcquisitionRouteCallbackDispatcher callbackDispatcher,
         IMarketAcquisitionRouteClock clock,
-        IMarketAcquisitionReportOutbox? reportOutbox = null)
+        IMarketAcquisitionReportOutbox? reportOutbox = null,
+        IOutfitterRouteExecutionStateStore? outfitterStateStore = null)
     {
         this.runner = runner ?? throw new ArgumentNullException(nameof(runner));
         this.context = context ?? throw new ArgumentNullException(nameof(context));
@@ -66,11 +70,14 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             callbackDispatcher ?? throw new ArgumentNullException(nameof(callbackDispatcher)),
             reportOutbox);
         this.clock = clock ?? throw new ArgumentNullException(nameof(clock));
+        this.outfitterStateStore = outfitterStateStore;
     }
 
     public bool IsRouteActive =>
         runner.IsRunning ||
         runner.IsPaused ||
+        outfitterAuthority?.State.Phase is OutfitterRouteAuthorityPhase.Preparing or
+            OutfitterRouteAuthorityPhase.Active or OutfitterRouteAuthorityPhase.RecoveryNeeded ||
         state.ProbeRunning ||
         operationExecutor.ActiveSnapshot != null ||
         purchaseAutomation.PurchaseSession?.IsActive == true;
@@ -107,13 +114,16 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         LastRunSummary = runner.LastRunSummary,
         LatestWorldCompletionSummary = runner.LatestWorldCompletionSummary,
         LastRunDiagnosticSummary = runner.LastRunDiagnosticSummary,
+        OutfitterExecution = outfitterAuthority?.State,
     };
 
     public MarketAcquisitionRouteActionResult Start(
         MarketAcquisitionPlan plan,
         MarketAcquisitionClaimView claimed,
         bool enableDiagnostics,
-        bool includeOpportunisticChecks)
+        bool includeOpportunisticChecks,
+        OutfitterExecutionContract? outfitterContract = null,
+        MarketAcquisitionRequestDocument? workbenchDocument = null)
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(claimed);
@@ -122,10 +132,134 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
         claimedRequest = claimed;
         ClearExecutionState();
+        if (outfitterContract is not null)
+        {
+            if (workbenchDocument is null)
+                return UpdateStatus(MarketAcquisitionRouteActionResult.Fail("Squire Route start requires its finalized Workbench document."));
+            try
+            {
+                outfitterAuthority = OutfitterRouteAuthoritySession.Consume(
+                    outfitterContract,
+                    workbenchDocument,
+                    plan,
+                    claimed,
+                    outfitterStateStore);
+                outfitterAuthority.CompletePreflight(plan);
+            }
+            catch (Exception exception)
+            {
+                var message = $"Squire preflight stopped before travel or purchase: {exception.Message}";
+                outfitterAuthority?.Pause(message);
+                return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(message));
+            }
+        }
+        else
+        {
+            outfitterAuthority = null;
+        }
         reportDispatcher.BeginSession(claimed);
-        var result = runner.Start(plan, enableDiagnostics, includeOpportunisticChecks);
+        MarketAcquisitionRouteActionResult result;
+        try
+        {
+            result = runner.Start(plan, enableDiagnostics, includeOpportunisticChecks);
+        }
+        catch (Exception exception) when (outfitterAuthority is not null)
+        {
+            outfitterAuthority.Pause($"Squire Route start failed before travel: {exception.Message}");
+            return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(outfitterAuthority.State.Message));
+        }
+        if (!result.Success && outfitterAuthority is not null)
+        {
+            outfitterAuthority.Pause($"Squire Route start stopped safely: {result.Message}");
+            return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(outfitterAuthority.State.Message));
+        }
         state.AcquisitionStatus = result.Message;
         return result;
+    }
+
+    public bool NeedsOutfitterRecovery => outfitterAuthority?.State.NeedsRecovery == true;
+
+    public MarketAcquisitionClaimView CreateOutfitterRecoveryClaim(MarketAcquisitionClaimView claim) =>
+        outfitterAuthority?.CreateRecoveryClaim(claim) ??
+        throw new InvalidOperationException("No Squire recovery is pending.");
+
+    public MarketAcquisitionRouteActionResult StartOutfitterRecovery(
+        MarketAcquisitionPlan plan,
+        MarketAcquisitionClaimView remainingClaim,
+        MarketAcquisitionRequestDocument workbenchDocument)
+    {
+        if (outfitterAuthority is null || !outfitterAuthority.State.NeedsRecovery)
+            return UpdateStatus(MarketAcquisitionRouteActionResult.Fail("No Squire recovery is pending."));
+        try
+        {
+            outfitterAuthority.ValidateCurrentDocument(workbenchDocument);
+            outfitterAuthority.BeginRecovery(plan);
+            claimedRequest = remainingClaim;
+            ClearExecutionState();
+            reportDispatcher.BeginSession(remainingClaim);
+            var result = runner.Start(plan, enableDiagnostics: false, includeOpportunisticChecks: false);
+            if (!result.Success)
+            {
+                outfitterAuthority.Pause($"Recovery start stopped safely: {result.Message}");
+                return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(outfitterAuthority.State.Message));
+            }
+            return UpdateStatus(result);
+        }
+        catch (Exception exception)
+        {
+            outfitterAuthority.Pause($"Recovery preflight stopped safely: {exception.Message}");
+            return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(outfitterAuthority.State.Message));
+        }
+    }
+
+    public void PauseOutfitterRecovery(string message)
+    {
+        outfitterAuthority?.Pause(message);
+        state.AcquisitionStatus = message;
+    }
+
+    public void RequestOutfitterRecovery(MarketAcquisitionRequestDocument workbenchDocument)
+    {
+        if (outfitterAuthority?.State.Phase != OutfitterRouteAuthorityPhase.Paused)
+            return;
+        try
+        {
+            outfitterAuthority.ValidateCurrentDocument(workbenchDocument);
+            outfitterAuthority.RequestRecovery();
+        }
+        catch (Exception exception)
+        {
+            outfitterAuthority.Pause(exception.Message);
+        }
+        state.AcquisitionStatus = outfitterAuthority.State.Message;
+    }
+
+    private MarketAcquisitionRouteActionResult TransitionToOutfitterRecovery(string reason)
+    {
+        if (outfitterAuthority is null)
+            return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(reason));
+
+        CleanupOwnedApproach("Squire recovery");
+        CleanupOwnedTravel("Squire recovery");
+        CancelActiveOperation("Visible market rows changed; preparing Squire recovery.");
+        if (runner.IsRunning || runner.IsPaused)
+            runner.Stop();
+        outfitterAuthority.RequestRecovery($"{reason} Refreshing and optimizing the complete remaining exact-quality route.");
+        state.AcquisitionStatus = outfitterAuthority.State.Message;
+        return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(outfitterAuthority.State.Message));
+    }
+
+    internal MarketAcquisitionRouteActionResult? EnforceOutfitterCandidateAuthority(
+        MarketAcquisitionWorldItemSubtask subtask,
+        MarketAcquisitionLiveCandidatePlan candidatePlan)
+    {
+        if (outfitterAuthority is null)
+            return null;
+        var authorization = outfitterAuthority.AuthorizeCandidate(subtask, candidatePlan);
+        return authorization.IsValid
+            ? null
+            : TransitionToOutfitterRecovery(
+                authorization.Error ?? "Visible market rows exceeded Squire authority.");
     }
 
     public MarketAcquisitionRouteActionResult StartEvidenceRefresh(
@@ -155,7 +289,10 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         CleanupOwnedApproach("Pause");
         CleanupOwnedTravel("Pause");
         CancelActiveOperation("Route paused; active operation cancelled.");
-        return UpdateStatus(runner.Pause());
+        var result = runner.Pause();
+        if (result.Success)
+            outfitterAuthority?.Pause("Squire route paused; no purchase authority is active.");
+        return UpdateStatus(result);
     }
 
     public MarketAcquisitionRouteActionResult Resume()
@@ -169,6 +306,17 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         if (!TryReconcileUnresolvedTravelLease(out var reconciliationFailure))
             return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(reconciliationFailure));
 
+        if (outfitterAuthority is not null && runner.ActivePlan is { } plan)
+        {
+            try
+            {
+                outfitterAuthority.CompletePreflight(plan);
+            }
+            catch (Exception exception)
+            {
+                return UpdateStatus(MarketAcquisitionRouteActionResult.Fail($"Squire resume preflight failed: {exception.Message}"));
+            }
+        }
         return UpdateStatus(runner.Resume());
     }
 
@@ -178,6 +326,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         CleanupOwnedTravel("Stop");
         CancelActiveOperation("Route stopped.");
         var result = runner.Stop();
+        if (result.Success)
+            outfitterAuthority?.Pause("Squire route stopped; persisted purchases remain reconciled for a later restart.");
         listingReadAccumulator.Clear();
         purchaseAutomation.Clear();
         reportDispatcher.ResetSession();
@@ -197,8 +347,25 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(reconciliationFailure));
         claimedRequest = claimed;
         ClearExecutionState();
+        if (outfitterAuthority is not null)
+        {
+            try
+            {
+                outfitterAuthority.BeginRecovery(plan);
+            }
+            catch (Exception exception)
+            {
+                return UpdateStatus(MarketAcquisitionRouteActionResult.Fail($"Squire restart preflight failed: {exception.Message}"));
+            }
+        }
         reportDispatcher.BeginSession(claimed);
-        return UpdateStatus(runner.Restart(plan));
+        var result = runner.Restart(plan);
+        if (!result.Success && outfitterAuthority is not null)
+        {
+            outfitterAuthority.Pause($"Squire restart stopped safely: {result.Message}");
+            return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(outfitterAuthority.State.Message));
+        }
+        return UpdateStatus(result);
     }
 
     public MarketAcquisitionRouteActionResult ReprepareAndRestart(
@@ -214,8 +381,25 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(reconciliationFailure));
         claimedRequest = claimed;
         ClearExecutionState();
+        if (outfitterAuthority is not null)
+        {
+            try
+            {
+                outfitterAuthority.BeginRecovery(plan);
+            }
+            catch (Exception exception)
+            {
+                return UpdateStatus(MarketAcquisitionRouteActionResult.Fail($"Squire restart preflight failed: {exception.Message}"));
+            }
+        }
         reportDispatcher.BeginSession(claimed);
-        return UpdateStatus(runner.ReprepareAndRestart(plan, preparedAtUtc));
+        var result = runner.ReprepareAndRestart(plan, preparedAtUtc);
+        if (!result.Success && outfitterAuthority is not null)
+        {
+            outfitterAuthority.Pause($"Squire restart stopped safely: {result.Message}");
+            return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(outfitterAuthority.State.Message));
+        }
+        return UpdateStatus(result);
     }
 
     public void Reset(string status)
@@ -854,7 +1038,12 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         if (state.MarketBoardReadResult.IsFresh)
             ReportMarketObservation(claimed, activeLine, activeSubtask, currentWorld, state.MarketBoardReadResult);
 
-        var probeResult = recordRouteResult && runner.IsRunning && runner.ActiveStop is { Status: "Arrived" } && state.LiveCandidatePlan != null
+        MarketAcquisitionRouteActionResult? authorityFailure = null;
+        if (recordRouteResult && !state.EvidenceRefreshOnly && activeSubtask is not null && state.LiveCandidatePlan is not null && outfitterAuthority is not null)
+        {
+            authorityFailure = EnforceOutfitterCandidateAuthority(activeSubtask, state.LiveCandidatePlan);
+        }
+        var probeResult = authorityFailure is null && recordRouteResult && runner.IsRunning && runner.ActiveStop is { Status: "Arrived" } && state.LiveCandidatePlan != null
             ? runner.RecordProbe(currentWorld, state.LiveCandidatePlan, allowPurchases: !state.EvidenceRefreshOnly)
             : null;
         if (probeResult?.Success == true && state.LiveCandidatePlan != null)
@@ -863,6 +1052,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             if (state.EvidenceRefreshOnly && runner.State.Equals("Completed", StringComparison.OrdinalIgnoreCase))
                 ReportRouteProgress(includeEvidenceRefresh: true);
         }
+        EvaluateOutfitterRouteCompletion();
 
         state.AcquisitionStatus = state.MarketBoardReconciliation == null
             ? state.MarketBoardReadResult.Message
@@ -992,6 +1182,14 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         if (TryContinueVisibleListingRead(currentWorld, freshRead, state.LiveCandidatePlan))
             return;
 
+        if (outfitterAuthority is not null && activeStop.ActiveItemSubtask is { } authoritySubtask)
+        {
+            if (EnforceOutfitterCandidateAuthority(authoritySubtask, state.LiveCandidatePlan) is not null)
+            {
+                return;
+            }
+        }
+
         var selection = purchase.ExecuteFirstCandidate(state.LiveCandidatePlan, freshRead);
         var now = clock.UtcNow;
         purchaseAutomation.RecordPurchaseSelection(selection, now, MarketBoardPurchaseConfirmationWatchdog);
@@ -1086,6 +1284,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             state.ActiveWorldSpentGil = checked(state.ActiveWorldSpentGil + candidate.TotalGil);
             state.ActiveLinePurchasedQuantity = checked(state.ActiveLinePurchasedQuantity + candidate.Quantity);
             state.ActiveLineSpentGil = checked(state.ActiveLineSpentGil + candidate.TotalGil);
+            outfitterAuthority?.RecordPurchase(GetActiveRouteLineId(claimedRequest!), candidate);
             ReportConfirmedPurchase(candidate, state.ActiveLinePurchasedQuantity, state.ActiveLineSpentGil);
             ClearMarketBoardAutomationState();
             if (state.MarketBoardReadResult?.Status is "MarketBoardNotOpen" or "NoListings")
@@ -1139,6 +1338,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         }
 
         ReportRouteProgress();
+        EvaluateOutfitterRouteCompletion();
         if (result.Success &&
             runner.LatestWorldCompletionSummary?.WorldName.Equals(currentWorld, StringComparison.OrdinalIgnoreCase) == true)
         {
@@ -1178,6 +1378,14 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     {
         listingReadAccumulator.Clear();
         purchaseAutomation.Clear();
+    }
+
+    private void EvaluateOutfitterRouteCompletion()
+    {
+        if (runner.ActiveStop is not null || outfitterAuthority is null || runner.ActivePlan is not { } completedPlan)
+            return;
+        outfitterAuthority.EvaluateRouteEnd(completedPlan);
+        state.AcquisitionStatus = outfitterAuthority.State.Message;
     }
 
     private void ReportConfirmedPurchase(MarketBoardPurchaseCandidate candidate, uint linePurchasedQuantity, uint lineSpentGil)

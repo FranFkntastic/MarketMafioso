@@ -93,6 +93,8 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
 
     public MinerBotanistAdvisorSessionState State { get; private set; }
 
+    public OutfitterMarketEvidenceBook? CurrentEvidence { get; private set; }
+
     public void Begin(MinerBotanistUtilityContextKind context, string region)
     {
         CancelCore(MinerBotanistAdvisorSessionStage.Cancelled, "Superseded by a new advisor refresh.");
@@ -100,6 +102,8 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
         var retainedAdvice = State.Context == context && State.Advice is { Frontier: not null }
             ? State.Advice
             : null;
+        if (retainedAdvice is null)
+            CurrentEvidence = null;
         var retainedCoverage = retainedAdvice is null
             ? "Coverage is declared after the rendered job is known."
             : State.CoverageLabel;
@@ -292,6 +296,8 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
             ? MinerBotanistAdvisorSessionStage.Complete
             : MinerBotanistAdvisorSessionStage.Abstained;
         var retainPrevious = advice.Status != MinerBotanistAdvisorStatus.Complete && State.Advice is { Frontier: not null };
+        if (advice.Status == MinerBotanistAdvisorStatus.Complete)
+            CurrentEvidence = currentEvidence;
         State = State with
         {
             Stage = stage,

@@ -8,6 +8,7 @@ using Franthropy.Dalamud.Equipment;
 using Franthropy.Dalamud.UI.Plots;
 using MarketMafioso.AgentBridge;
 using MarketMafioso.Squire.Outfitter.Utility;
+using MarketMafioso.Squire.Outfitter.Acquisition;
 using MarketMafioso.Windows.Main;
 
 namespace MarketMafioso.Windows.Squire;
@@ -24,11 +25,13 @@ internal sealed class MinerBotanistAdvisorPanel
     private readonly Configuration config;
     private readonly MinerBotanistAdvisorSession session;
     private readonly AgentBridgeUiReviewRegistry reviewRegistry;
+    private readonly Action<OutfitterWorkbenchTransfer> stageTransfer;
     private readonly ParetoFrontierPlotBuilder plotBuilder = new();
     private readonly DalamudPlotContainer plotContainer = new();
     private MinerBotanistUtilityContextKind context = MinerBotanistUtilityContextKind.OrdinaryResourceBenchmark;
     private MinerBotanistReadOnlyAdvice? lastAdvice;
     private string? selectedSolutionId;
+    private string? handoffStatus;
 #if DEBUG
     private static readonly MinerBotanistAdvisorSyntheticScenarioKind[] SyntheticScenarioOrder =
     [
@@ -47,11 +50,13 @@ internal sealed class MinerBotanistAdvisorPanel
     public MinerBotanistAdvisorPanel(
         Configuration config,
         MinerBotanistAdvisorSession session,
-        AgentBridgeUiReviewRegistry reviewRegistry)
+        AgentBridgeUiReviewRegistry reviewRegistry,
+        Action<OutfitterWorkbenchTransfer> stageTransfer)
     {
         this.config = config ?? throw new ArgumentNullException(nameof(config));
         this.session = session ?? throw new ArgumentNullException(nameof(session));
         this.reviewRegistry = reviewRegistry ?? throw new ArgumentNullException(nameof(reviewRegistry));
+        this.stageTransfer = stageTransfer ?? throw new ArgumentNullException(nameof(stageTransfer));
         if (Enum.TryParse<MinerBotanistUtilityContextKind>(config.Squire.OutfitterAdvisorContext, out var stored))
             context = stored;
     }
@@ -595,7 +600,7 @@ internal sealed class MinerBotanistAdvisorPanel
         ImGui.EndTable();
     }
 
-    private static void DrawAcquisitionChecklist(MinerBotanistReadOnlyAdvice advice, EquipmentDecisionSolution selected)
+    private void DrawAcquisitionChecklist(MinerBotanistReadOnlyAdvice advice, EquipmentDecisionSolution selected)
     {
         var acquisitions = selected.Candidate.Selections
             .Select(value => advice.OffersByAllocation.GetValueOrDefault(value.AllocationKey))
@@ -611,7 +616,44 @@ internal sealed class MinerBotanistAdvisorPanel
         }
         foreach (var offer in acquisitions)
             ImGui.BulletText($"{offer.Offer.Definition.Name} {FormatQuality(offer.Offer.ResolvedQuality)} · {offer.Offer.SourceLabel} · {offer.AcquisitionCostGil:N0} gil");
-        ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Read-only release: selection does not purchase, equip, or stage anything.");
+        var canStage = session.State.Stage == MinerBotanistAdvisorSessionStage.Complete &&
+                       !session.State.AdviceIsRetained &&
+                       ReferenceEquals(advice, session.State.Advice) &&
+                       session.CurrentEvidence is not null &&
+                       acquisitions.Any(offer => offer.Offer.SourceKind == EquipmentAcquisitionSourceKind.MarketBoard);
+#if DEBUG
+        if (syntheticReviewAdvice is not null)
+            canStage = false;
+#endif
+        void Stage()
+        {
+            if (!canStage || session.CurrentEvidence is not { } evidence)
+                return;
+            try
+            {
+                var transfer = OutfitterWorkbenchTransferBuilder.Build(advice, selected.Candidate.SolutionId, evidence);
+                stageTransfer(transfer);
+                handoffStatus = "Exact-quality solution added to the Market Acquisition Workbench for review.";
+            }
+            catch (Exception exception)
+            {
+                handoffStatus = $"Workbench handoff stopped safely: {exception.Message}";
+            }
+        }
+        if (ImGuiUi.PrimaryButton("Review in Workbench", canStage))
+            Stage();
+        RegisterLastControl(
+            "squire.outfitter.advisor.stage-workbench",
+            "Add the selected exact-quality solution to the Market Acquisition Workbench",
+            AgentBridgeUiControlKind.Button,
+            canStage,
+            false,
+            selected.Candidate.SolutionId,
+            Stage);
+        if (!string.IsNullOrWhiteSpace(handoffStatus))
+            ImGui.TextColored(handoffStatus.StartsWith("Workbench handoff stopped", StringComparison.Ordinal)
+                ? MarketMafiosoUiTheme.Error
+                : MarketMafiosoUiTheme.Success, handoffStatus);
     }
 
     private static void DrawEmptyState(MinerBotanistAdvisorSessionState state)

@@ -1,9 +1,11 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Dalamud.Bindings.ImGui;
 using Franthropy.Dalamud.AgentBridge;
 using MarketMafioso.MarketAcquisition;
 using MarketMafioso.Windows.Main;
+using MarketMafioso.Squire.Outfitter.Acquisition;
 
 namespace MarketMafioso.Windows.MarketAcquisitionPanels;
 
@@ -19,6 +21,7 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
     private readonly Action stopRoute;
     private readonly Action restartRoute;
     private readonly Action reprepareRoute;
+    private readonly Action retryOutfitterRecovery;
     private readonly Action<MarketAcquisitionRouteEngineSnapshot> drawPostRunDiagnosticSummary;
     private readonly Action<MarketAcquisitionRouteEngineSnapshot> drawLatestWorldCompletionSummary;
     private readonly Action<MarketAcquisitionRouteEngineSnapshot> drawMarketBoardProbeStatus;
@@ -36,6 +39,7 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
         Action stopRoute,
         Action restartRoute,
         Action reprepareRoute,
+        Action retryOutfitterRecovery,
         Action<MarketAcquisitionRouteEngineSnapshot> drawPostRunDiagnosticSummary,
         Action<MarketAcquisitionRouteEngineSnapshot> drawLatestWorldCompletionSummary,
         Action<MarketAcquisitionRouteEngineSnapshot> drawMarketBoardProbeStatus,
@@ -51,6 +55,7 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
         this.stopRoute = stopRoute ?? throw new ArgumentNullException(nameof(stopRoute));
         this.restartRoute = restartRoute ?? throw new ArgumentNullException(nameof(restartRoute));
         this.reprepareRoute = reprepareRoute ?? throw new ArgumentNullException(nameof(reprepareRoute));
+        this.retryOutfitterRecovery = retryOutfitterRecovery ?? throw new ArgumentNullException(nameof(retryOutfitterRecovery));
         this.drawPostRunDiagnosticSummary = drawPostRunDiagnosticSummary ?? throw new ArgumentNullException(nameof(drawPostRunDiagnosticSummary));
         this.drawLatestWorldCompletionSummary = drawLatestWorldCompletionSummary ?? throw new ArgumentNullException(nameof(drawLatestWorldCompletionSummary));
         this.drawMarketBoardProbeStatus = drawMarketBoardProbeStatus ?? throw new ArgumentNullException(nameof(drawMarketBoardProbeStatus));
@@ -70,6 +75,7 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
         var canReprepare = canStart &&
                             snapshot.CanRestart &&
                             snapshot.CompletedOrProbedStopCount > 0;
+        DrawOutfitterExecution(snapshot);
         DrawGuidedRouteActionRow(snapshot, canStart, canReprepare, canRefreshEvidence);
 
         ImGui.TextColored(GetGuidedRouteStatusColor(snapshot), snapshot.StatusMessage);
@@ -109,7 +115,19 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
         bool canReprepare,
         bool canRefreshEvidence)
     {
-        if (snapshot.IsPaused)
+        var primaryAction = MarketAcquisitionGuidedRouteActionPresenter.Resolve(snapshot);
+        if (primaryAction == MarketAcquisitionGuidedRoutePrimaryAction.RetryOutfitterRecovery)
+        {
+            if (ImGuiUi.PrimaryButton("Retry Squire Recovery##OutfitterRecovery", true))
+                retryOutfitterRecovery();
+            RegisterLastControl(
+                "acquisition.route.outfitter.retry-recovery",
+                "Refresh and optimize the remaining exact-quality Squire route",
+                true,
+                retryOutfitterRecovery);
+            return;
+        }
+        if (primaryAction == MarketAcquisitionGuidedRoutePrimaryAction.ResumeManualPause)
         {
             if (ImGuiUi.PrimaryButton("Resume Route##MarketAcquisitionResumeRoute", true))
                 resumeRoute();
@@ -121,7 +139,7 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
             return;
         }
 
-        if (snapshot.IsRunning)
+        if (primaryAction == MarketAcquisitionGuidedRoutePrimaryAction.PauseActiveRoute)
         {
             if (ImGuiUi.PrimaryButton("Pause Route##MarketAcquisitionPauseRoute", true))
                 pauseRoute();
@@ -186,6 +204,18 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
             reprepareRoute();
         RegisterLastControl("acquisition.route.refresh-plan", "Refresh the Market Acquisition plan", canReprepare, reprepareRoute);
         ImGui.TreePop();
+    }
+
+    private static void DrawOutfitterExecution(MarketAcquisitionRouteEngineSnapshot snapshot)
+    {
+        if (snapshot.OutfitterExecution is not { } execution)
+            return;
+        var remaining = execution.Lines.Aggregate(0u, (sum, line) =>
+            checked(sum + (line.RequiredQuantity - line.PurchasedQuantity)));
+        ImGui.TextColored(
+            execution.Phase is OutfitterRouteAuthorityPhase.Paused ? MarketMafiosoUiTheme.Warning : MarketMafiosoUiTheme.Muted,
+            $"Squire {execution.Phase} · {remaining:N0} remaining · {execution.TotalSpentGil:N0} gil spent");
+        ImGui.TextColored(MarketMafiosoUiTheme.Muted, execution.Message);
     }
 
     private void DrawGuidedRouteStops(IReadOnlyList<MarketAcquisitionGuidedRouteStop> stops)
