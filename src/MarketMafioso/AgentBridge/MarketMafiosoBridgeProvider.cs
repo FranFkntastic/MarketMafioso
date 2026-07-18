@@ -28,6 +28,9 @@ public interface IMarketMafiosoBridgeProvider
     bool RestoreCharacterUiCursor();
     AgentBridgeRenderedUiSnapshot CaptureCharacterUi();
     AgentBridgeRenderedUiSnapshot CaptureRetainerUi();
+    RenderedRetainerUiPreparationProgress BeginRetainerObservationUi();
+    RenderedRetainerUiPreparationProgress AdvanceRetainerObservationUi();
+    RenderedRetainerUiPreparationProgress CancelRetainerObservationUi();
     RenderedGatheringStatsObservation CaptureGatheringStatsUi();
     RenderedCharacterEquipmentLayout CaptureCharacterEquipmentLayoutUi();
     RenderedItemDetailObservation CaptureItemDetailUi();
@@ -90,6 +93,9 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
     private readonly Func<AgentBridgeUiAutomationCapabilities> getUiAutomationCapabilities;
     private readonly Func<AgentBridgeRenderedUiSnapshot> captureCharacterUi;
     private readonly Func<AgentBridgeRenderedUiSnapshot> captureRetainerUi;
+    private readonly Func<RenderedRetainerUiPreparationProgress> beginRetainerObservationUi;
+    private readonly Func<RenderedRetainerUiPreparationProgress> advanceRetainerObservationUi;
+    private readonly Func<RenderedRetainerUiPreparationProgress> cancelRetainerObservationUi;
     private readonly Func<RenderedGatheringStatsObservation> captureGatheringStatsUi;
     private readonly Func<bool> tryOpenSyntheticAdvisorReview;
     private readonly AgentBridgeUiReviewRegistry reviewRegistry;
@@ -118,7 +124,10 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
         Func<RenderedEquipmentScanProgress>? cancelCharacterEquipmentScanUi = null,
         Func<AgentBridgeUiAutomationCapabilities>? getUiAutomationCapabilities = null,
         Func<bool>? tryOpenSyntheticAdvisorReview = null,
-        Func<AgentBridgeRenderedUiSnapshot>? captureRetainerUi = null)
+        Func<AgentBridgeRenderedUiSnapshot>? captureRetainerUi = null,
+        Func<RenderedRetainerUiPreparationProgress>? beginRetainerObservationUi = null,
+        Func<RenderedRetainerUiPreparationProgress>? advanceRetainerObservationUi = null,
+        Func<RenderedRetainerUiPreparationProgress>? cancelRetainerObservationUi = null)
     {
         this.createSnapshot = createSnapshot ?? throw new ArgumentNullException(nameof(createSnapshot));
         this.openMainWindow = openMainWindow ?? throw new ArgumentNullException(nameof(openMainWindow));
@@ -134,6 +143,9 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
         this.tryCloseCharacterUi = tryCloseCharacterUi ?? (() => false);
         this.captureCharacterUi = captureCharacterUi ?? (() => new(DateTimeOffset.UtcNow, []));
         this.captureRetainerUi = captureRetainerUi ?? (() => new(DateTimeOffset.UtcNow, []));
+        this.beginRetainerObservationUi = beginRetainerObservationUi ?? (() => new(RenderedRetainerUiPreparationStatus.Failed, 0, "Retainer UI preparation is unavailable."));
+        this.advanceRetainerObservationUi = advanceRetainerObservationUi ?? this.beginRetainerObservationUi;
+        this.cancelRetainerObservationUi = cancelRetainerObservationUi ?? (() => new(RenderedRetainerUiPreparationStatus.Cancelled, 0, "Retainer UI preparation is unavailable."));
         this.tryCloseBlockingSelectStringUi = tryCloseBlockingSelectStringUi ?? (() => false);
         this.trySwitchCalibrationJobUi = trySwitchCalibrationJobUi ?? (_ => false);
         this.captureGatheringStatsUi = captureGatheringStatsUi ?? (() => new(Guid.NewGuid(), DateTimeOffset.UtcNow, RenderedCharacterObservationStatus.Unavailable, null, null, null, null, null, [], "Rendered gathering observation is unavailable."));
@@ -164,6 +176,9 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
     public bool RestoreCharacterUiCursor() => restoreCharacterUiCursor();
     public AgentBridgeRenderedUiSnapshot CaptureCharacterUi() => captureCharacterUi();
     public AgentBridgeRenderedUiSnapshot CaptureRetainerUi() => captureRetainerUi();
+    public RenderedRetainerUiPreparationProgress BeginRetainerObservationUi() => beginRetainerObservationUi();
+    public RenderedRetainerUiPreparationProgress AdvanceRetainerObservationUi() => advanceRetainerObservationUi();
+    public RenderedRetainerUiPreparationProgress CancelRetainerObservationUi() => cancelRetainerObservationUi();
     public RenderedGatheringStatsObservation CaptureGatheringStatsUi() => captureGatheringStatsUi();
     public RenderedCharacterEquipmentLayout CaptureCharacterEquipmentLayoutUi() =>
         RenderedCharacterEquipmentLayoutParser.Parse(captureCharacterUi());

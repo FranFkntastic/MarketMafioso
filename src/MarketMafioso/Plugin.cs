@@ -62,6 +62,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly AgentBridgeHost agentBridge;
     private readonly AgentBridgeViewportCaptureService agentBridgeViewportCapture;
     private readonly DalamudRenderedCharacterUiProbe renderedCharacterUiProbe;
+    private readonly DalamudRetainerUiPreparation retainerUiPreparation;
 
     private CancellationTokenSource? timerCancellation;
 
@@ -126,6 +127,11 @@ public sealed class Plugin : IDalamudPlugin
         workshopMaterialManifestExport = new WorkshopMaterialManifestExportService(
             new LuminaWorkshopMaterialCraftRecipeResolver(DataManager));
         renderedCharacterUiProbe = new DalamudRenderedCharacterUiProbe(GameGui);
+        retainerUiPreparation = new(
+            CommandManager,
+            DataManager,
+            new LifestreamIpc(PluginInterface, Log),
+            renderedCharacterUiProbe.CaptureRetainerUi);
         mainWindow = new MainWindow(
             Configuration,
             reporter,
@@ -190,7 +196,10 @@ public sealed class Plugin : IDalamudPlugin
                 renderedCharacterUiProbe.CancelEquipmentScan,
                 () => renderedCharacterUiProbe.Capabilities,
                 mainWindow.TryOpenSyntheticAdvisorReview,
-                captureRetainerUi: renderedCharacterUiProbe.CaptureRetainerUi),
+                captureRetainerUi: renderedCharacterUiProbe.CaptureRetainerUi,
+                beginRetainerObservationUi: retainerUiPreparation.Begin,
+                advanceRetainerObservationUi: retainerUiPreparation.Advance,
+                cancelRetainerObservationUi: retainerUiPreparation.Cancel),
             agentBridgeProofStore,
             agentBridgeViewportCapture.CaptureAsync,
             () => Configuration.EnableAgentBridgeScreenshots,

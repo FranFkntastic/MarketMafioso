@@ -274,6 +274,22 @@ public sealed class AgentBridgeHost : IDisposable
                 AgentBridgeRenderedUiSnapshot? retainerUi = null;
                 await dispatchOnFramework(() => retainerUi = provider.CaptureRetainerUi()).ConfigureAwait(false);
                 return AgentBridgeResponse.Ok("Already-visible rendered retainer UI captured without changing window focus or UI state.", retainerUi);
+            case "begin-retainer-observation-ui":
+                Squire.Observation.RenderedRetainerUiPreparationProgress? begunRetainerPreparation = null;
+                await dispatchOnFramework(() => begunRetainerPreparation = provider.BeginRetainerObservationUi()).ConfigureAwait(false);
+                return begunRetainerPreparation!.Status is Squire.Observation.RenderedRetainerUiPreparationStatus.Traveling or Squire.Observation.RenderedRetainerUiPreparationStatus.Complete
+                    ? AgentBridgeResponse.Ok(begunRetainerPreparation.Diagnostic, begunRetainerPreparation)
+                    : new AgentBridgeResponse { Success = false, Message = begunRetainerPreparation.Diagnostic, Receipt = begunRetainerPreparation };
+            case "advance-retainer-observation-ui":
+                Squire.Observation.RenderedRetainerUiPreparationProgress? advancedRetainerPreparation = null;
+                await dispatchOnFramework(() => advancedRetainerPreparation = provider.AdvanceRetainerObservationUi()).ConfigureAwait(false);
+                return advancedRetainerPreparation!.Status != Squire.Observation.RenderedRetainerUiPreparationStatus.Failed
+                    ? AgentBridgeResponse.Ok(advancedRetainerPreparation.Diagnostic, advancedRetainerPreparation)
+                    : new AgentBridgeResponse { Success = false, Message = advancedRetainerPreparation.Diagnostic, Receipt = advancedRetainerPreparation };
+            case "cancel-retainer-observation-ui":
+                Squire.Observation.RenderedRetainerUiPreparationProgress? cancelledRetainerPreparation = null;
+                await dispatchOnFramework(() => cancelledRetainerPreparation = provider.CancelRetainerObservationUi()).ConfigureAwait(false);
+                return AgentBridgeResponse.Ok(cancelledRetainerPreparation!.Diagnostic, cancelledRetainerPreparation);
             case "hover-character-node-ui":
                 var characterNodeHovered = false;
                 await dispatchOnFramework(() => characterNodeHovered = provider.TryHoverCharacterNodeUi(request.Target ?? string.Empty)).ConfigureAwait(false);
