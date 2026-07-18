@@ -7,6 +7,7 @@ public enum RenderedRetainerUiPreparationStatus
     Idle,
     Traveling,
     TargetingBell,
+    ApproachingBell,
     WaitingForRetainerList,
     Complete,
     Failed,
@@ -27,6 +28,8 @@ public sealed class RenderedRetainerUiPreparationCoordinator
     private static readonly TimeSpan TravelTimeout = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan TravelSettleWindow = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan RetainerListWait = TimeSpan.FromSeconds(3);
+    private static readonly TimeSpan BellApproachTimeout = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan BellApproachSettleWindow = TimeSpan.FromSeconds(1);
     private const int MaxInteractionAttempts = 3;
 
     private RenderedRetainerUiPreparationStatus status = RenderedRetainerUiPreparationStatus.Idle;
@@ -61,6 +64,8 @@ public sealed class RenderedRetainerUiPreparationCoordinator
         bool lifestreamStateAvailable,
         bool lifestreamBusy,
         bool marketBoardUiVisible,
+        bool vnavmeshReady,
+        bool vnavmeshRunning,
         string localizedBellName,
         Func<string, bool> processCommand)
     {
@@ -90,8 +95,22 @@ public sealed class RenderedRetainerUiPreparationCoordinator
                 return Snapshot();
 
             case RenderedRetainerUiPreparationStatus.TargetingBell:
+                if (!vnavmeshReady)
+                    return Fail("vnavmesh is unavailable, so the bridge cannot approach the UI-targeted Summoning Bell without foreground control.");
+                if (!processCommand("/vnav movetarget"))
+                    return Fail("vnavmesh did not accept movement toward the UI-targeted Summoning Bell.");
+                status = RenderedRetainerUiPreparationStatus.ApproachingBell;
+                phaseStartedAt = nowUtc;
+                diagnostic = "Approaching the UI-targeted Summoning Bell without taking window focus.";
+                return Snapshot();
+
+            case RenderedRetainerUiPreparationStatus.ApproachingBell:
+                if (nowUtc - phaseStartedAt > BellApproachTimeout)
+                    return Fail("vnavmesh did not finish approaching the UI-targeted Summoning Bell within thirty seconds.");
+                if (vnavmeshRunning || nowUtc - phaseStartedAt < BellApproachSettleWindow)
+                    return Snapshot();
                 if (!processCommand("/interact"))
-                    return Fail("The normal interact command was unavailable for the targeted Summoning Bell.");
+                    return Fail("The normal interact command was unavailable after approaching the targeted Summoning Bell.");
                 interactionAttempts++;
                 status = RenderedRetainerUiPreparationStatus.WaitingForRetainerList;
                 phaseStartedAt = nowUtc;

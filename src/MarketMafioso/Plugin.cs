@@ -131,6 +131,7 @@ public sealed class Plugin : IDalamudPlugin
             CommandManager,
             DataManager,
             new LifestreamIpc(PluginInterface, Log),
+            new VNavmeshIpc(new DalamudVNavmeshIpcAdapter(PluginInterface, Log)),
             renderedCharacterUiProbe.CaptureRetainerUi);
         mainWindow = new MainWindow(
             Configuration,

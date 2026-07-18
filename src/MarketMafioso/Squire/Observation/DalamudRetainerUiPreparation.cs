@@ -15,6 +15,7 @@ public sealed class DalamudRetainerUiPreparation
     private readonly ICommandManager commandManager;
     private readonly IDataManager dataManager;
     private readonly LifestreamIpc lifestream;
+    private readonly VNavmeshIpc vnavmesh;
     private readonly Func<AgentBridge.AgentBridgeRenderedUiSnapshot> captureRetainerUi;
     private readonly RenderedRetainerUiPreparationCoordinator coordinator = new();
 
@@ -22,11 +23,13 @@ public sealed class DalamudRetainerUiPreparation
         ICommandManager commandManager,
         IDataManager dataManager,
         LifestreamIpc lifestream,
+        VNavmeshIpc vnavmesh,
         Func<AgentBridge.AgentBridgeRenderedUiSnapshot> captureRetainerUi)
     {
         this.commandManager = commandManager ?? throw new ArgumentNullException(nameof(commandManager));
         this.dataManager = dataManager ?? throw new ArgumentNullException(nameof(dataManager));
         this.lifestream = lifestream ?? throw new ArgumentNullException(nameof(lifestream));
+        this.vnavmesh = vnavmesh ?? throw new ArgumentNullException(nameof(vnavmesh));
         this.captureRetainerUi = captureRetainerUi ?? throw new ArgumentNullException(nameof(captureRetainerUi));
     }
 
@@ -50,6 +53,8 @@ public sealed class DalamudRetainerUiPreparation
             stateAvailable,
             busy,
             marketBoardUiVisible,
+            vnavmesh.IsReady,
+            vnavmesh.IsRunning,
             ResolveBellName(),
             ProcessSemanticCommand);
     }
@@ -87,6 +92,8 @@ public sealed class DalamudRetainerUiPreparation
     private bool ProcessSemanticCommand(string command)
     {
         if (string.Equals(command, "/li mb", StringComparison.Ordinal))
+            return commandManager.ProcessCommand(command);
+        if (string.Equals(command, "/vnav movetarget", StringComparison.Ordinal))
             return commandManager.ProcessCommand(command);
         if (!string.Equals(command, "/interact", StringComparison.Ordinal) &&
             !command.StartsWith("/target \"", StringComparison.Ordinal))
