@@ -87,6 +87,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         purchaseAutomation.PurchaseSession?.IsActive == true;
 
     public OutfitterDryRunScenario ArmedOutfitterDryRunScenario => outfitterDryRunScenario;
+    public bool IsOutfitterDryRunFaultEligible => outfitterDryRunFaultEligible;
+    public bool WasOutfitterDryRunFaultInjected => outfitterDryRunFaultInjected;
 
     public bool ArmOutfitterDryRunScenario(OutfitterDryRunScenario scenario)
     {

@@ -87,6 +87,8 @@ public sealed record AgentBridgeRouteTruth
     public required int CompletedOrProbedStopCount { get; init; }
     public string? ExecutionMode { get; init; }
     public string? ArmedOutfitterDryRunScenario { get; init; }
+    public bool OutfitterDryRunFaultEligible { get; init; }
+    public bool OutfitterDryRunFaultInjected { get; init; }
     public string? OutfitterPhase { get; init; }
     public string? OutfitterMessage { get; init; }
 }

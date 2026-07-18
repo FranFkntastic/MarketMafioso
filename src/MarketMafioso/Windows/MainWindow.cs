@@ -448,6 +448,8 @@ public class MainWindow : Window, IDisposable
                 CompletedOrProbedStopCount = snapshot.CompletedOrProbedStopCount,
                 ExecutionMode = snapshot.ExecutionMode.ToString(),
                 ArmedOutfitterDryRunScenario = routeEngine.ArmedOutfitterDryRunScenario.ToString(),
+                OutfitterDryRunFaultEligible = routeEngine.IsOutfitterDryRunFaultEligible,
+                OutfitterDryRunFaultInjected = routeEngine.WasOutfitterDryRunFaultInjected,
                 OutfitterPhase = snapshot.OutfitterExecution?.Phase.ToString(),
                 OutfitterMessage = snapshot.OutfitterExecution?.Message,
             },
