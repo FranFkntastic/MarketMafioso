@@ -252,7 +252,25 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
         => renderedTextActions.TryConfirmUniqueText("_TargetInfoMainTarget", "Summoning Bell").Success;
 
     public Franthropy.Dalamud.AgentBridge.RenderedUiTextActionResult TryOpenRenderedRetainer(string retainerName)
-        => renderedTextActions.TryActivateUniqueRetainerListRowText(retainerName);
+    {
+        if (string.IsNullOrWhiteSpace(retainerName))
+            return new(false, "InvalidRenderedRetainer", "A retainer name is required.", null, null);
+
+        var gear = renderedTextActions.CaptureVisibleText("RetainerCharacter");
+        if (gear.Available)
+            return new(true, "RenderedRetainerGearVisible", "The rendered retainer attributes and gear surface is already visible.", "RetainerCharacter", null);
+
+        var menu = renderedTextActions.CaptureVisibleText("SelectString");
+        if (menu.Available)
+        {
+            var expectedIdentity = $"Retainer: {retainerName.Trim()}";
+            if (!menu.TextNodes.Any(value => value.Text.Contains(expectedIdentity, StringComparison.OrdinalIgnoreCase)))
+                return new(false, "RenderedRetainerIdentityMismatch", "The visible retainer menu does not identify the requested retainer.", "SelectString", null);
+            return renderedTextActions.TryActivateUniqueSelectStringText("View retainer attributes and gear.");
+        }
+
+        return renderedTextActions.TryActivateUniqueRetainerListRowText(retainerName);
+    }
 
     public RenderedGatheringStatsObservation CaptureGatheringStats() =>
         gatheringStatsStabilizer.Observe(RenderedCharacterStatsParser.Parse(Capture()));
