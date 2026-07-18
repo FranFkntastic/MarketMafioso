@@ -161,9 +161,10 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
         var gearSetList = new AddonMaster.GearSetList(addon);
         if (!gearSetList.EquipSetButton->IsEnabled)
             return new(false, "RenderedEquipSetDisabled", $"The rendered Gear Set list has not enabled Equip Set. Selection evidence: {lastGearsetSelectionDiagnostic ?? "unavailable"}", "GearSetList", null);
-        gearSetList.EquipSet();
-        gatheringStatsStabilizer.Reset();
-        return new(true, "RenderedGearsetEquipDispatched", "The Gear Set list's rendered Equip Set control was activated.", "GearSetList", null);
+        var equipped = renderedTextActions.TryActivateUniqueText("GearSetList", "Equip Set");
+        if (equipped.Success)
+            gatheringStatsStabilizer.Reset();
+        return equipped;
     }
 
     public unsafe AgentBridgeRenderedUiSnapshot Capture()
