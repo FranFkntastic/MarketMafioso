@@ -254,7 +254,8 @@ public sealed class MarketAcquisitionGuidedRouteSession
         uint purchasedQuantity,
         uint spentGil,
         string? zeroPurchaseStatus = null,
-        string? zeroPurchaseMessage = null)
+        string? zeroPurchaseMessage = null,
+        bool dryRun = false)
     {
         var stop = ActiveStop;
         if (stop == null)
@@ -270,10 +271,12 @@ public sealed class MarketAcquisitionGuidedRouteSession
         {
             CompleteActiveStop(purchasedQuantity, spentGil);
         }
-        else if (TryAdvanceActiveItemSubtask(stop, purchasedQuantity, spentGil, zeroPurchaseStatus, zeroPurchaseMessage))
+        else if (TryAdvanceActiveItemSubtask(stop, purchasedQuantity, spentGil, zeroPurchaseStatus, zeroPurchaseMessage, dryRun))
         {
             return MarketAcquisitionGuidedRouteResult.Ok(
-                $"Completed {FormatPreviousItem(stop)} on {currentWorld}: purchased {purchasedQuantity:N0} item(s), spent {spentGil:N0} gil. Next item: {FormatActiveItem(stop)}.");
+                dryRun
+                    ? $"Completed dry-run check for {FormatPreviousItem(stop)} on {currentWorld}: would purchase {purchasedQuantity:N0} item(s), would spend {spentGil:N0} gil. Next item: {FormatActiveItem(stop)}."
+                    : $"Completed {FormatPreviousItem(stop)} on {currentWorld}: purchased {purchasedQuantity:N0} item(s), spent {spentGil:N0} gil. Next item: {FormatActiveItem(stop)}.");
         }
         else
         {
@@ -283,11 +286,15 @@ public sealed class MarketAcquisitionGuidedRouteSession
         {
             var routeTotals = BuildRouteTotals();
             return MarketAcquisitionGuidedRouteResult.Ok(
-                $"Guided route complete. Purchased {routeTotals.PurchasedQuantity:N0} item(s), spent {routeTotals.SpentGil:N0} gil.");
+                dryRun
+                    ? $"Dry run complete. Would purchase {routeTotals.PurchasedQuantity:N0} item(s), would spend {routeTotals.SpentGil:N0} gil."
+                    : $"Guided route complete. Purchased {routeTotals.PurchasedQuantity:N0} item(s), spent {routeTotals.SpentGil:N0} gil.");
         }
 
         return MarketAcquisitionGuidedRouteResult.Ok(
-            $"Completed {currentWorld}: purchased {stop.PurchasedQuantity:N0} item(s), spent {stop.SpentGil:N0} gil. Next stop: {ActiveStop?.WorldName}.");
+            dryRun
+                ? $"Completed dry-run check for {currentWorld}: would purchase {stop.PurchasedQuantity:N0} item(s), would spend {stop.SpentGil:N0} gil. Next stop: {ActiveStop?.WorldName}."
+                : $"Completed {currentWorld}: purchased {stop.PurchasedQuantity:N0} item(s), spent {stop.SpentGil:N0} gil. Next stop: {ActiveStop?.WorldName}.");
     }
 
     private void CompleteActiveStop(uint purchasedQuantity, uint spentGil)
@@ -312,7 +319,8 @@ public sealed class MarketAcquisitionGuidedRouteSession
         uint purchasedQuantity = 0,
         uint spentGil = 0,
         string? zeroPurchaseStatus = null,
-        string? zeroPurchaseMessage = null)
+        string? zeroPurchaseMessage = null,
+        bool dryRun = false)
     {
         if (stop.ItemSubtasks.Count == 0)
             return false;
@@ -327,7 +335,9 @@ public sealed class MarketAcquisitionGuidedRouteSession
             spentGil,
             !didPurchase
                 ? zeroPurchaseMessage ?? "No safe live candidates remained."
-                : $"Purchased {purchasedQuantity:N0} item(s), spent {spentGil:N0} gil.");
+                : dryRun
+                    ? $"Would purchase {purchasedQuantity:N0} item(s), would spend {spentGil:N0} gil."
+                    : $"Purchased {purchasedQuantity:N0} item(s), spent {spentGil:N0} gil.");
         stop.CompletedItemSubtaskCount++;
         if (stop.CompletedItemSubtaskCount >= stop.ItemSubtasks.Count)
             return false;

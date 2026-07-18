@@ -222,7 +222,7 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
             WriteRouteEventUnsafe(eventName, message, details);
             if (IsTerminalEvent(eventName))
             {
-                captureStatus = "Complete";
+                captureStatus = "Finalizing";
                 WriteManifest();
             }
         }
@@ -231,6 +231,7 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
     public void Complete(string message)
     {
         Record("complete", message);
+        Dispose();
     }
 
     public void RecordAutomationSnapshot(MarketBoardAutomationSnapshot snapshot)
@@ -390,6 +391,7 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
                     ["exceptionType"] = exception.GetType().FullName,
                     ["exceptionMessage"] = exception.Message,
                 });
+        Dispose();
     }
 
     public void Dispose()
@@ -399,21 +401,19 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
             if (disposed)
                 return;
 
+            var terminalCapture = string.Equals(captureStatus, "Finalizing", StringComparison.Ordinal);
             try
             {
-                if (string.Equals(captureStatus, "Active", StringComparison.Ordinal))
-                {
-                    captureStatus = "Incomplete";
-                    WriteManifest();
-                }
-            }
-            finally
-            {
-                disposed = true;
                 observedListingsCsv?.Dispose();
                 purchaseRecordsCsv?.Dispose();
                 routeEventsWriter?.Dispose();
                 log.Dispose();
+            }
+            finally
+            {
+                captureStatus = terminalCapture ? "Complete" : "Incomplete";
+                WriteManifest();
+                disposed = true;
             }
         }
     }

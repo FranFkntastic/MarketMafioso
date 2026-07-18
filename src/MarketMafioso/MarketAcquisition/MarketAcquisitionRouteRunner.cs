@@ -932,6 +932,16 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
     {
         ArgumentNullException.ThrowIfNull(summary);
 
+        if (executionMode == MarketAcquisitionExecutionMode.DryRun)
+        {
+            summary = summary with
+            {
+                Message = summary.Message
+                    .Replace("bought", "would buy", StringComparison.OrdinalIgnoreCase)
+                    .Replace("spent", "would spend", StringComparison.OrdinalIgnoreCase),
+            };
+        }
+
         LatestWorldCompletionSummary = summary;
         diagnostics.Record(
             "world-summary",
@@ -964,7 +974,8 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
             purchasedQuantity,
             spentGil,
             zeroPurchaseStatus,
-            zeroPurchaseMessage) ??
+            zeroPurchaseMessage,
+            executionMode == MarketAcquisitionExecutionMode.DryRun) ??
                       MarketAcquisitionGuidedRouteResult.Fail("No route has started.");
         StatusMessage = result.Message;
         SearchSubmitted = false;
@@ -1030,56 +1041,69 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         if (string.IsNullOrWhiteSpace(worldName))
             throw new ArgumentException("World name is required.", nameof(worldName));
 
-        var observations = freshnessObservations
-            .Where(pair => pair.Key.WorldName.Equals(worldName, StringComparison.OrdinalIgnoreCase))
-            .Where(pair => !verifiedFreshnessObservations.Contains(pair.Key))
-            .Select(pair => pair.Value)
-            .ToList();
-
-        if (observations.Count == 0)
-            return MarketAcquisitionRouteActionResult.Ok($"No purchased listings require Universalis freshness verification for {worldName}.");
-
-        foreach (var observation in observations)
+        var verificationFinished = false;
+        try
         {
-            cancellationToken.ThrowIfCancellationRequested();
+            var observations = freshnessObservations
+                .Where(pair => pair.Key.WorldName.Equals(worldName, StringComparison.OrdinalIgnoreCase))
+                .Where(pair => !verifiedFreshnessObservations.Contains(pair.Key))
+                .Select(pair => pair.Value)
+                .ToList();
 
-            UniversalisFreshnessResult result;
-            try
+            if (observations.Count == 0)
             {
-                result = await universalisFreshnessVerifier(
-                    observation.WorldName,
-                    observation.ItemId,
-                    observation.ObservedAtUtc,
-                    observation.ListingIds,
-                    cancellationToken).ConfigureAwait(false);
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException && !cancellationToken.IsCancellationRequested)
-            {
-                result = UniversalisFreshnessResult.Unavailable(ex.Message);
+                verificationFinished = true;
+                return MarketAcquisitionRouteActionResult.Ok($"No purchased listings require Universalis freshness verification for {worldName}.");
             }
 
-            cancellationToken.ThrowIfCancellationRequested();
+            foreach (var observation in observations)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
 
-            diagnostics.Record(
-                "universalis-freshness",
-                $"{result.Status}: {FormatFreshnessItem(observation)} on {observation.WorldName}. {result.Message}",
-                new Dictionary<string, string?>
+                UniversalisFreshnessResult result;
+                try
                 {
-                    ["world"] = observation.WorldName,
-                    ["itemId"] = observation.ItemId.ToString(),
-                    ["itemName"] = observation.ItemName,
-                    ["status"] = result.Status,
-                    ["message"] = result.Message,
-                    ["observedAtUtc"] = observation.ObservedAtUtc.ToString("O"),
-                    ["listingIds"] = string.Join(", ", observation.ListingIds),
-                });
-            RecordFreshnessDiagnosticResult(observation, result);
-            verifiedFreshnessObservations.Add(new FreshnessObservationKey(observation.WorldName, observation.ItemId));
-        }
+                    result = await universalisFreshnessVerifier(
+                        observation.WorldName,
+                        observation.ItemId,
+                        observation.ObservedAtUtc,
+                        observation.ListingIds,
+                        cancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException && !cancellationToken.IsCancellationRequested)
+                {
+                    result = UniversalisFreshnessResult.Unavailable(ex.Message);
+                }
 
-        RefreshLastRunSummary();
-        return MarketAcquisitionRouteActionResult.Ok(
-            $"Recorded Universalis freshness for {observations.Count:N0} item(s) on {worldName}.");
+                cancellationToken.ThrowIfCancellationRequested();
+
+                diagnostics.Record(
+                    "universalis-freshness",
+                    $"{result.Status}: {FormatFreshnessItem(observation)} on {observation.WorldName}. {result.Message}",
+                    new Dictionary<string, string?>
+                    {
+                        ["world"] = observation.WorldName,
+                        ["itemId"] = observation.ItemId.ToString(),
+                        ["itemName"] = observation.ItemName,
+                        ["status"] = result.Status,
+                        ["message"] = result.Message,
+                        ["observedAtUtc"] = observation.ObservedAtUtc.ToString("O"),
+                        ["listingIds"] = string.Join(", ", observation.ListingIds),
+                    });
+                RecordFreshnessDiagnosticResult(observation, result);
+                verifiedFreshnessObservations.Add(new FreshnessObservationKey(observation.WorldName, observation.ItemId));
+            }
+
+            RefreshLastRunSummary();
+            verificationFinished = true;
+            return MarketAcquisitionRouteActionResult.Ok(
+                $"Recorded Universalis freshness for {observations.Count:N0} item(s) on {worldName}.");
+        }
+        finally
+        {
+            if (verificationFinished && State == "Completed")
+                FinalizeCompletedDiagnostics();
+        }
     }
 
     public MarketAcquisitionRouteActionResult FailRoute(string message, Exception? exception = null)
@@ -1118,15 +1142,22 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
 
     private MarketAcquisitionRouteActionResult Complete(string message)
     {
-        State = "Completed";
         StatusMessage = message;
         SearchSubmitted = false;
         MarketBoardCloseRequiredBeforeTravel = false;
         standaloneInputCaptureLogOpen = false;
         itemSearchAutomationStartedUtc = null;
-        diagnostics.Complete(message);
         RefreshLastRunSummary();
+        State = "Completed";
+        if (universalisFreshnessVerifier == null)
+            FinalizeCompletedDiagnostics();
         return MarketAcquisitionRouteActionResult.Ok(message);
+    }
+
+    private void FinalizeCompletedDiagnostics()
+    {
+        diagnostics.Complete(StatusMessage);
+        CloseDiagnostics();
     }
 
     private static bool IsCompletedOrProbed(MarketAcquisitionGuidedRouteStop stop)

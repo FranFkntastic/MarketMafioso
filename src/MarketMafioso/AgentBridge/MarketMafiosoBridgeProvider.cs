@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Franthropy.Dalamud.AgentBridge;
+using Franthropy.Dalamud.Automation.Ui;
 using MarketMafioso.Squire.Observation;
 
 namespace MarketMafioso.AgentBridge;
@@ -23,7 +24,7 @@ public interface IMarketMafiosoBridgeProvider
     void OpenCharacterUi();
     bool TryCloseCharacterUi();
     bool TryCloseBlockingSelectStringUi();
-    bool TrySwitchCalibrationJobUi(string target);
+    GearsetChangeCommand? TrySwitchCalibrationJobUi(string target);
     bool TryHoverCharacterNodeUi(string target);
     bool RestoreCharacterUiCursor();
     AgentBridgeRenderedUiSnapshot CaptureCharacterUi();
@@ -84,7 +85,7 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
     private readonly Action openCharacterUi;
     private readonly Func<bool> tryCloseCharacterUi;
     private readonly Func<bool> tryCloseBlockingSelectStringUi;
-    private readonly Func<string, bool> trySwitchCalibrationJobUi;
+    private readonly Func<string, GearsetChangeCommand?> trySwitchCalibrationJobUi;
     private readonly Func<string, bool> tryHoverCharacterNodeUi;
     private readonly Func<bool> restoreCharacterUiCursor;
     private readonly Func<RenderedEquipmentScanProgress> beginCharacterEquipmentScanUi;
@@ -115,7 +116,7 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
         Func<bool>? tryCloseCharacterUi = null,
         Func<AgentBridgeRenderedUiSnapshot>? captureCharacterUi = null,
         Func<bool>? tryCloseBlockingSelectStringUi = null,
-        Func<string, bool>? trySwitchCalibrationJobUi = null,
+        Func<string, GearsetChangeCommand?>? trySwitchCalibrationJobUi = null,
         Func<RenderedGatheringStatsObservation>? captureGatheringStatsUi = null,
         Func<string, bool>? tryHoverCharacterNodeUi = null,
         Func<bool>? restoreCharacterUiCursor = null,
@@ -147,7 +148,7 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
         this.advanceRetainerObservationUi = advanceRetainerObservationUi ?? this.beginRetainerObservationUi;
         this.cancelRetainerObservationUi = cancelRetainerObservationUi ?? (() => new(RenderedRetainerUiPreparationStatus.Cancelled, 0, "Retainer UI preparation is unavailable."));
         this.tryCloseBlockingSelectStringUi = tryCloseBlockingSelectStringUi ?? (() => false);
-        this.trySwitchCalibrationJobUi = trySwitchCalibrationJobUi ?? (_ => false);
+        this.trySwitchCalibrationJobUi = trySwitchCalibrationJobUi ?? (_ => null);
         this.captureGatheringStatsUi = captureGatheringStatsUi ?? (() => new(Guid.NewGuid(), DateTimeOffset.UtcNow, RenderedCharacterObservationStatus.Unavailable, null, null, null, null, null, [], "Rendered gathering observation is unavailable."));
         this.tryHoverCharacterNodeUi = tryHoverCharacterNodeUi ?? (_ => false);
         this.restoreCharacterUiCursor = restoreCharacterUiCursor ?? (() => false);
@@ -171,7 +172,7 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
     public void OpenCharacterUi() => openCharacterUi();
     public bool TryCloseCharacterUi() => tryCloseCharacterUi();
     public bool TryCloseBlockingSelectStringUi() => tryCloseBlockingSelectStringUi();
-    public bool TrySwitchCalibrationJobUi(string target) => trySwitchCalibrationJobUi(target);
+    public GearsetChangeCommand? TrySwitchCalibrationJobUi(string target) => trySwitchCalibrationJobUi(target);
     public bool TryHoverCharacterNodeUi(string target) => tryHoverCharacterNodeUi(target);
     public bool RestoreCharacterUiCursor() => restoreCharacterUiCursor();
     public AgentBridgeRenderedUiSnapshot CaptureCharacterUi() => captureCharacterUi();

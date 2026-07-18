@@ -30,12 +30,16 @@ public sealed class MarketAcquisitionRouteEnginePurchaseTests
         Assert.Empty(harness.Reporter.RouteProgressReports);
         Assert.Equal(4u, harness.Runner.LastRunSummary?.PurchasedQuantity);
         Assert.Equal(3200u, harness.Runner.LastRunSummary?.SpentGil);
-        harness.Engine.Dispose();
+        Assert.Equal("Completed", harness.Runner.State);
+        Assert.Contains("Would purchase", harness.Runner.StatusMessage, StringComparison.Ordinal);
+        Assert.DoesNotContain("Purchased", harness.Runner.StatusMessage, StringComparison.Ordinal);
         var packageDirectory = Path.GetDirectoryName(Assert.IsType<string>(harness.Runner.LastDiagnosticFilePath));
         var manifest = File.ReadAllText(Path.Combine(Assert.IsType<string>(packageDirectory), "manifest.json"));
         var purchases = File.ReadAllText(Assert.IsType<string>(harness.Runner.LastPurchaseRecordsCsvPath));
         Assert.Contains("\"packageKind\":\"dry-run\"", manifest, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("\"captureStatus\":\"Complete\"", manifest, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("DryRunWouldPurchase", purchases, StringComparison.Ordinal);
+        harness.Engine.Dispose();
     }
 
     [Fact]

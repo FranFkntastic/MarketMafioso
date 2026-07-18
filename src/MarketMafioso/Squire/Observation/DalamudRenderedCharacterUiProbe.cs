@@ -5,6 +5,7 @@ using Dalamud.Plugin.Services;
 using Dalamud.Utility;
 using ECommons.Automation;
 using FFXIVClientStructs.FFXIV.Component.GUI;
+using Franthropy.Dalamud.Automation.Ui;
 using MarketMafioso.AgentBridge;
 
 namespace MarketMafioso.Squire.Observation;
@@ -101,13 +102,13 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
         return true;
     }
 
-    public bool TrySwitchCalibrationJob(string target)
+    public GearsetChangeCommand? TrySwitchCalibrationJob(string target)
     {
-        if (target is not ("Miner" or "Botanist" or "Blacksmith"))
-            return false;
+        if (!GearsetChangeCommand.TryCreate(target, out var command))
+            return null;
         gatheringStatsStabilizer.Reset();
-        Chat.ExecuteCommand($"/gearset change \"{target}\"");
-        return true;
+        Chat.ExecuteCommand(command.Command);
+        return command;
     }
 
     public unsafe AgentBridgeRenderedUiSnapshot Capture()

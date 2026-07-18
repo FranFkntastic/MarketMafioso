@@ -1,5 +1,6 @@
 using MarketMafioso.AgentBridge;
 using Franthropy.Dalamud.AgentBridge;
+using Franthropy.Dalamud.Automation.Ui;
 
 namespace MarketMafioso.Tests.AgentBridge;
 
@@ -96,6 +97,23 @@ public sealed class MarketMafiosoBridgeProviderTests
 
         Assert.True(provider.TryOpenSyntheticAdvisorReview());
         Assert.True(invoked);
+    }
+
+    [Fact]
+    public void Provider_returns_submitted_gearset_change_for_rendered_verification()
+    {
+        Assert.True(GearsetChangeCommand.TryCreate("Miner", out var expected));
+        var provider = new MarketMafiosoBridgeProvider(
+            CreateTruth, () => { }, () => { }, () => { }, _ => { }, _ => true, () => { }, () => { },
+            () => true,
+            new AgentBridgeUiReviewRegistry(),
+            trySwitchCalibrationJobUi: _ => expected);
+
+        var submitted = Assert.IsType<GearsetChangeCommand>(provider.TrySwitchCalibrationJobUi("Miner"));
+
+        Assert.Same(expected, submitted);
+        Assert.Equal("MIN", submitted.GearsetName);
+        Assert.Equal("/gearset change \"MIN\"", submitted.Command);
     }
 
     [Fact]

@@ -165,6 +165,11 @@ public sealed class MarketAcquisitionRouteDiagnosticsTests
         var text = ReadLog(diagnostics.FilePath!);
         Assert.Contains("complete", text, StringComparison.Ordinal);
         Assert.Contains("Route complete.", text, StringComparison.Ordinal);
+        Assert.True(new FileInfo(diagnostics.RouteEventsJsonlPath!).Length > 0);
+        Assert.True(new FileInfo(diagnostics.ObservedListingsCsvPath!).Length > 0);
+        Assert.True(new FileInfo(diagnostics.PurchaseRecordsCsvPath!).Length > 0);
+        using var manifest = JsonDocument.Parse(File.ReadAllText(diagnostics.ManifestPath!));
+        Assert.Equal("Complete", manifest.RootElement.GetProperty("captureStatus").GetString());
     }
 
     [Fact]

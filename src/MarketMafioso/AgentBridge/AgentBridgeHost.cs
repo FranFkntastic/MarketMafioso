@@ -261,10 +261,19 @@ public sealed class AgentBridgeHost : IDisposable
                     ? AgentBridgeResponse.Ok("Visible SelectString UI closed through its rendered addon.")
                     : AgentBridgeResponse.Fail("No visible SelectString UI was available to close.");
             case "switch-calibration-job-ui":
-                var calibrationJobSwitched = false;
-                await dispatchOnFramework(() => calibrationJobSwitched = provider.TrySwitchCalibrationJobUi(request.Target ?? string.Empty)).ConfigureAwait(false);
-                return calibrationJobSwitched
-                    ? AgentBridgeResponse.Ok($"Calibration job switch requested through the rendered command UI: {request.Target}.")
+                Franthropy.Dalamud.Automation.Ui.GearsetChangeCommand? calibrationJobSwitch = null;
+                await dispatchOnFramework(() => calibrationJobSwitch = provider.TrySwitchCalibrationJobUi(request.Target ?? string.Empty)).ConfigureAwait(false);
+                return calibrationJobSwitch is not null
+                    ? AgentBridgeResponse.Ok(
+                        $"Submitted the {calibrationJobSwitch.JobName} gearset change through the command UI; rendered verification is still required.",
+                        new
+                        {
+                            status = "SubmittedNotVerified",
+                            calibrationJobSwitch.JobName,
+                            calibrationJobSwitch.GearsetName,
+                            calibrationJobSwitch.Command,
+                            verification = "Run the Advisor observation or get-gathering-stats-ui and require the rendered active job to match.",
+                        })
                     : AgentBridgeResponse.Fail("Target must be Miner, Botanist, or Blacksmith.");
             case "get-character-ui":
                 AgentBridgeRenderedUiSnapshot? characterUi = null;
