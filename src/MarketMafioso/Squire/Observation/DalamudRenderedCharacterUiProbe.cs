@@ -116,7 +116,7 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
 
     public Franthropy.Dalamud.AgentBridge.RenderedUiTextActionResult TryOpenGearsetList()
     {
-        var result = renderedTextActions.TryActivateUniqueControlImmediatelyLeftOfText("Character", "Gear Set");
+        var result = renderedTextActions.TryClickUniqueControlImmediatelyLeftOfText("Character", "Gear Set");
         return result.Success
             ? result
             : result with
