@@ -44,7 +44,7 @@ internal sealed class SettingsTabPanel
         pages.AddRange(new InventoryReporterSettingsPages(config, restartTimer, reporter, autoRetainerRefresh, reviewRegistry).Descriptors);
         pages.AddRange(new SquireSettingsPages(config, playerState, dataManager, currentSquireAnalysis, requestSquirePolicyRefresh, reviewRegistry).Descriptors);
         pages.AddRange(new MarketAcquisitionSettingsPages(config).Descriptors);
-        pages.AddRange(new AdvancedSettingsPages(config, stopMarketAcquisitionRoute).Descriptors);
+        pages.AddRange(new AdvancedSettingsPages(config, stopMarketAcquisitionRoute, reviewRegistry).Descriptors);
         navigationCatalog = new SettingsNavigationCatalog(pages);
     }
 

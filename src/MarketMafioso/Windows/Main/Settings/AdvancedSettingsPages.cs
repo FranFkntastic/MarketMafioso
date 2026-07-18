@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
+using Franthropy.Dalamud.AgentBridge;
 using Franthropy.Dalamud.UI.Settings;
 using MarketMafioso.MarketAcquisition;
 
@@ -11,14 +12,19 @@ internal sealed class AdvancedSettingsPages
 {
     private readonly Configuration config;
     private readonly Action stopMarketAcquisitionRoute;
+    private readonly AgentBridgeUiReviewRegistry reviewRegistry;
     private string unlockKeyBuffer = string.Empty;
     private string unlockStatus = "Private module is hidden until unlocked.";
     private bool showUnlockKey;
 
-    public AdvancedSettingsPages(Configuration config, Action stopMarketAcquisitionRoute)
+    public AdvancedSettingsPages(
+        Configuration config,
+        Action stopMarketAcquisitionRoute,
+        AgentBridgeUiReviewRegistry? reviewRegistry = null)
     {
         this.config = config ?? throw new ArgumentNullException(nameof(config));
         this.stopMarketAcquisitionRoute = stopMarketAcquisitionRoute ?? throw new ArgumentNullException(nameof(stopMarketAcquisitionRoute));
+        this.reviewRegistry = reviewRegistry ?? new AgentBridgeUiReviewRegistry();
         Descriptors =
         [
             new("advanced.craft-quotes", "Advanced / Craft Quote Evidence", DrawCraftQuotes, 80,
@@ -48,12 +54,37 @@ internal sealed class AdvancedSettingsPages
         "Dev-only named-pipe bridge. It exposes reviewed state and semantic UI controls without directly controlling the game client.",
         () => config.EnableAgentBridge, value => config.EnableAgentBridge = value);
 
-    private void DrawTesting(SettingsPageContext context) => DrawCheckbox(
-        context,
-        "Enable Market Acquisition dry-run tools",
-        "Exposes a diagnostics-only route action that travels, searches, revalidates, and replans against rendered UI without opening purchase or confirmation controls. Every run creates a diagnostic package.",
-        () => config.EnableMarketAcquisitionDryRunTools,
-        value => config.EnableMarketAcquisitionDryRunTools = value);
+    private void DrawTesting(SettingsPageContext context)
+    {
+        const string label = "Enable Market Acquisition dry-run tools";
+        const string description = "Exposes a diagnostics-only route action that travels, searches, revalidates, and replans against rendered UI without opening purchase or confirmation controls. Every run creates a diagnostic package.";
+        if (!context.Matches(label, description))
+            return;
+
+        var enabled = config.EnableMarketAcquisitionDryRunTools;
+        if (ImGui.Checkbox(label, ref enabled))
+            SetDryRunToolsEnabled(enabled);
+        var min = ImGui.GetItemRectMin();
+        var max = ImGui.GetItemRectMax();
+        reviewRegistry.Register(
+            "settings.advanced.testing.market-acquisition-dry-run",
+            $"{(enabled ? "Disable" : "Enable")} Market Acquisition dry-run tools",
+            AgentBridgeUiControlKind.Toggle,
+            min,
+            max,
+            true,
+            enabled,
+            enabled ? "Enabled" : "Disabled",
+            () => SetDryRunToolsEnabled(!config.EnableMarketAcquisitionDryRunTools));
+        ImGui.TextColored(MarketMafiosoUiTheme.Muted, description);
+        ImGui.Spacing();
+    }
+
+    private void SetDryRunToolsEnabled(bool enabled)
+    {
+        config.EnableMarketAcquisitionDryRunTools = enabled;
+        config.Save();
+    }
 
     private void DrawPrivateFeatures(SettingsPageContext context)
     {
