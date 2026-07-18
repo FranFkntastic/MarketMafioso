@@ -315,6 +315,10 @@ public sealed class AgentBridgeHost : IDisposable
                 AgentBridgeRenderedUiSnapshot? retainerUi = null;
                 await dispatchOnFramework(() => retainerUi = provider.CaptureRetainerUi()).ConfigureAwait(false);
                 return AgentBridgeResponse.Ok("Already-visible rendered retainer UI captured without changing window focus or UI state.", retainerUi);
+            case "get-advisor-state":
+                Squire.Outfitter.Utility.MinerBotanistAdvisorSessionState? advisorState = null;
+                await dispatchOnFramework(() => advisorState = provider.CaptureAdvisorStateUi()).ConfigureAwait(false);
+                return AgentBridgeResponse.Ok("Current player Advisor session state captured.", advisorState);
             case "begin-retainer-observation-ui":
                 Squire.Observation.RenderedRetainerUiPreparationProgress? begunRetainerPreparation = null;
                 await dispatchOnFramework(() => begunRetainerPreparation = provider.BeginRetainerObservationUi(request.Target ?? string.Empty)).ConfigureAwait(false);

@@ -24,6 +24,7 @@ using MarketMafioso.Windows.Squire;
 using MarketMafioso.Windows.WorkshopLogistics;
 using MarketMafioso.Squire.Observation;
 using MarketMafioso.Squire.Outfitter.Acquisition;
+using MarketMafioso.Squire.Outfitter.Utility;
 using MarketMafioso.WorkshopPrep;
 using MarketMafioso.Diagnostics;
 using Franthropy.Dalamud.AgentBridge;
@@ -1351,6 +1352,8 @@ public class MainWindow : Window, IDisposable
             routeEngine.ReportRouteProgress();
         });
     }
+
+    public MinerBotanistAdvisorSessionState CreateAgentAdvisorState() => squireTab.AdvisorState;
 
     private void ReturnToOutfitterAdvisor()
     {

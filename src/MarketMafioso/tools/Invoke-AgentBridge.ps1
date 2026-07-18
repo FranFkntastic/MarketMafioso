@@ -27,6 +27,7 @@ param(
         "equip-calibration-gearset-ui",
         "get-character-ui",
         "get-retainer-ui",
+        "get-advisor-state",
         "begin-retainer-observation-ui",
         "advance-retainer-observation-ui",
         "cancel-retainer-observation-ui",

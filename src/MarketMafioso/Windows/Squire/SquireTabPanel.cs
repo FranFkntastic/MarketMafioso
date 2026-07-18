@@ -81,6 +81,8 @@ internal sealed class SquireTabPanel : IDisposable
     private string? batchValidationKey;
     private SquireBatchValidationResult? cachedBatchValidation;
 
+    public MinerBotanistAdvisorSessionState AdvisorState => advisorSession.State;
+
     public SquireTabPanel(
         Configuration config,
         ICharacterEquipmentSnapshotSource snapshotSource,

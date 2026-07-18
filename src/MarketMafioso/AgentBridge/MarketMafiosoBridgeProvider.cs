@@ -4,6 +4,7 @@ using System.Linq;
 using Franthropy.Dalamud.AgentBridge;
 using Franthropy.Dalamud.Automation.Ui;
 using MarketMafioso.Squire.Observation;
+using MarketMafioso.Squire.Outfitter.Utility;
 
 namespace MarketMafioso.AgentBridge;
 
@@ -38,6 +39,7 @@ public interface IMarketMafiosoBridgeProvider
     RenderedRetainerUiPreparationProgress AdvanceRetainerObservationUi();
     RenderedRetainerUiPreparationProgress CancelRetainerObservationUi();
     RenderedUiTextActionResult TryOpenRenderedRetainerUi(string retainerName);
+    MinerBotanistAdvisorSessionState CaptureAdvisorStateUi();
     RenderedGatheringStatsObservation CaptureGatheringStatsUi();
     RenderedCharacterEquipmentLayout CaptureCharacterEquipmentLayoutUi();
     RenderedItemDetailObservation CaptureItemDetailUi();
@@ -109,6 +111,7 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
     private readonly Func<RenderedRetainerUiPreparationProgress> advanceRetainerObservationUi;
     private readonly Func<RenderedRetainerUiPreparationProgress> cancelRetainerObservationUi;
     private readonly Func<string, RenderedUiTextActionResult> tryOpenRenderedRetainerUi;
+    private readonly Func<MinerBotanistAdvisorSessionState> captureAdvisorStateUi;
     private readonly Func<RenderedGatheringStatsObservation> captureGatheringStatsUi;
     private readonly Func<bool> tryOpenSyntheticAdvisorReview;
     private readonly AgentBridgeUiReviewRegistry reviewRegistry;
@@ -146,7 +149,8 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
         Func<RenderedUiTextActionResult>? tryOpenGearsetListUi = null,
         Func<string, RenderedUiTextActionResult>? trySelectCalibrationGearsetUi = null,
         Func<RenderedUiTextActionResult>? tryEquipSelectedGearsetUi = null,
-        Func<bool>? tryCloseRetainerUi = null)
+        Func<bool>? tryCloseRetainerUi = null,
+        Func<MinerBotanistAdvisorSessionState>? captureAdvisorStateUi = null)
     {
         this.createSnapshot = createSnapshot ?? throw new ArgumentNullException(nameof(createSnapshot));
         this.openMainWindow = openMainWindow ?? throw new ArgumentNullException(nameof(openMainWindow));
@@ -166,6 +170,16 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
         this.advanceRetainerObservationUi = advanceRetainerObservationUi ?? (() => this.beginRetainerObservationUi(string.Empty));
         this.cancelRetainerObservationUi = cancelRetainerObservationUi ?? (() => new(RenderedRetainerUiPreparationStatus.Cancelled, 0, "Retainer UI preparation is unavailable."));
         this.tryOpenRenderedRetainerUi = tryOpenRenderedRetainerUi ?? (_ => new(false, "Unavailable", "Rendered retainer selection is unavailable.", "RetainerList", null));
+        this.captureAdvisorStateUi = captureAdvisorStateUi ?? (() => new(
+            MinerBotanistAdvisorSessionStage.Failed,
+            "Advisor session state is unavailable.",
+            "Coverage unavailable.",
+            0,
+            null,
+            MinerBotanistUtilityContextKind.OrdinaryResourceBenchmark,
+            null,
+            false,
+            DateTimeOffset.UtcNow));
         this.tryCloseBlockingSelectStringUi = tryCloseBlockingSelectStringUi ?? (() => false);
         this.tryCloseRetainerUi = tryCloseRetainerUi ?? (() => false);
         this.trySwitchCalibrationJobUi = trySwitchCalibrationJobUi ?? (_ => null);
@@ -210,6 +224,7 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
     public RenderedRetainerUiPreparationProgress AdvanceRetainerObservationUi() => advanceRetainerObservationUi();
     public RenderedRetainerUiPreparationProgress CancelRetainerObservationUi() => cancelRetainerObservationUi();
     public RenderedUiTextActionResult TryOpenRenderedRetainerUi(string retainerName) => tryOpenRenderedRetainerUi(retainerName);
+    public MinerBotanistAdvisorSessionState CaptureAdvisorStateUi() => captureAdvisorStateUi();
     public RenderedGatheringStatsObservation CaptureGatheringStatsUi() => captureGatheringStatsUi();
     public RenderedCharacterEquipmentLayout CaptureCharacterEquipmentLayoutUi() =>
         RenderedCharacterEquipmentLayoutParser.Parse(captureCharacterUi());
