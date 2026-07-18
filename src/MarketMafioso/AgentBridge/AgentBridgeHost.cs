@@ -270,6 +270,10 @@ public sealed class AgentBridgeHost : IDisposable
                 AgentBridgeRenderedUiSnapshot? characterUi = null;
                 await dispatchOnFramework(() => characterUi = provider.CaptureCharacterUi()).ConfigureAwait(false);
                 return AgentBridgeResponse.Ok("Rendered Character UI captured.", characterUi);
+            case "get-retainer-ui":
+                AgentBridgeRenderedUiSnapshot? retainerUi = null;
+                await dispatchOnFramework(() => retainerUi = provider.CaptureRetainerUi()).ConfigureAwait(false);
+                return AgentBridgeResponse.Ok("Already-visible rendered retainer UI captured without changing window focus or UI state.", retainerUi);
             case "hover-character-node-ui":
                 var characterNodeHovered = false;
                 await dispatchOnFramework(() => characterNodeHovered = provider.TryHoverCharacterNodeUi(request.Target ?? string.Empty)).ConfigureAwait(false);

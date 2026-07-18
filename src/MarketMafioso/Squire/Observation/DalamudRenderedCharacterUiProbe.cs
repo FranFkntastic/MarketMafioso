@@ -35,6 +35,13 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
         "ItemDetail",
     ];
 
+    private static readonly string[] RetainerAddonNames =
+    [
+        "RetainerList",
+        "RetainerCharacter",
+        "ItemDetail",
+    ];
+
     private readonly IGameGui gameGui;
     private readonly RenderedGatheringStatsStabilizer gatheringStatsStabilizer = new(TimeSpan.FromSeconds(3));
     private readonly RenderedCharacterEquipmentScanCoordinator equipmentScan = new();
@@ -129,6 +136,13 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
         }
         return new AgentBridgeRenderedUiSnapshot(DateTimeOffset.UtcNow, addons);
     }
+
+    /// <summary>
+    /// Captures already-rendered retainer surfaces without opening, closing, selecting, or focusing
+    /// anything. This is fixture discovery only; node values are not interpreted here.
+    /// </summary>
+    public AgentBridgeRenderedUiSnapshot CaptureRetainerUi() =>
+        new(DateTimeOffset.UtcNow, RetainerAddonNames.Select(CaptureAddon).ToArray());
 
     public RenderedGatheringStatsObservation CaptureGatheringStats() =>
         gatheringStatsStabilizer.Observe(RenderedCharacterStatsParser.Parse(Capture()));

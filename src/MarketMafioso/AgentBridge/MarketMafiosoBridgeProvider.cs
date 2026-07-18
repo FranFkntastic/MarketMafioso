@@ -27,6 +27,7 @@ public interface IMarketMafiosoBridgeProvider
     bool TryHoverCharacterNodeUi(string target);
     bool RestoreCharacterUiCursor();
     AgentBridgeRenderedUiSnapshot CaptureCharacterUi();
+    AgentBridgeRenderedUiSnapshot CaptureRetainerUi();
     RenderedGatheringStatsObservation CaptureGatheringStatsUi();
     RenderedCharacterEquipmentLayout CaptureCharacterEquipmentLayoutUi();
     RenderedItemDetailObservation CaptureItemDetailUi();
@@ -88,6 +89,7 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
     private readonly Func<RenderedEquipmentScanProgress> cancelCharacterEquipmentScanUi;
     private readonly Func<AgentBridgeUiAutomationCapabilities> getUiAutomationCapabilities;
     private readonly Func<AgentBridgeRenderedUiSnapshot> captureCharacterUi;
+    private readonly Func<AgentBridgeRenderedUiSnapshot> captureRetainerUi;
     private readonly Func<RenderedGatheringStatsObservation> captureGatheringStatsUi;
     private readonly Func<bool> tryOpenSyntheticAdvisorReview;
     private readonly AgentBridgeUiReviewRegistry reviewRegistry;
@@ -115,7 +117,8 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
         Func<RenderedEquipmentScanStepResult>? advanceCharacterEquipmentScanUi = null,
         Func<RenderedEquipmentScanProgress>? cancelCharacterEquipmentScanUi = null,
         Func<AgentBridgeUiAutomationCapabilities>? getUiAutomationCapabilities = null,
-        Func<bool>? tryOpenSyntheticAdvisorReview = null)
+        Func<bool>? tryOpenSyntheticAdvisorReview = null,
+        Func<AgentBridgeRenderedUiSnapshot>? captureRetainerUi = null)
     {
         this.createSnapshot = createSnapshot ?? throw new ArgumentNullException(nameof(createSnapshot));
         this.openMainWindow = openMainWindow ?? throw new ArgumentNullException(nameof(openMainWindow));
@@ -130,6 +133,7 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
         this.openCharacterUi = openCharacterUi ?? (() => { });
         this.tryCloseCharacterUi = tryCloseCharacterUi ?? (() => false);
         this.captureCharacterUi = captureCharacterUi ?? (() => new(DateTimeOffset.UtcNow, []));
+        this.captureRetainerUi = captureRetainerUi ?? (() => new(DateTimeOffset.UtcNow, []));
         this.tryCloseBlockingSelectStringUi = tryCloseBlockingSelectStringUi ?? (() => false);
         this.trySwitchCalibrationJobUi = trySwitchCalibrationJobUi ?? (_ => false);
         this.captureGatheringStatsUi = captureGatheringStatsUi ?? (() => new(Guid.NewGuid(), DateTimeOffset.UtcNow, RenderedCharacterObservationStatus.Unavailable, null, null, null, null, null, [], "Rendered gathering observation is unavailable."));
@@ -159,6 +163,7 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
     public bool TryHoverCharacterNodeUi(string target) => tryHoverCharacterNodeUi(target);
     public bool RestoreCharacterUiCursor() => restoreCharacterUiCursor();
     public AgentBridgeRenderedUiSnapshot CaptureCharacterUi() => captureCharacterUi();
+    public AgentBridgeRenderedUiSnapshot CaptureRetainerUi() => captureRetainerUi();
     public RenderedGatheringStatsObservation CaptureGatheringStatsUi() => captureGatheringStatsUi();
     public RenderedCharacterEquipmentLayout CaptureCharacterEquipmentLayoutUi() =>
         RenderedCharacterEquipmentLayoutParser.Parse(captureCharacterUi());

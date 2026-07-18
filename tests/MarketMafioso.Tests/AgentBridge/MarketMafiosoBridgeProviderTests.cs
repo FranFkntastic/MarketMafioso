@@ -98,6 +98,22 @@ public sealed class MarketMafiosoBridgeProviderTests
         Assert.True(invoked);
     }
 
+    [Fact]
+    public void Provider_exposes_read_only_rendered_retainer_capture()
+    {
+        var expected = new AgentBridgeRenderedUiSnapshot(DateTimeOffset.UtcNow,
+        [
+            new("RetainerCharacter", true, true, true, 42, []),
+        ]);
+        var provider = new MarketMafiosoBridgeProvider(
+            CreateTruth, () => { }, () => { }, () => { }, _ => { }, _ => true, () => { }, () => { },
+            () => true,
+            new AgentBridgeUiReviewRegistry(),
+            captureRetainerUi: () => expected);
+
+        Assert.Same(expected, provider.CaptureRetainerUi());
+    }
+
     private static AgentBridgeTruth CreateTruth() => new()
     {
         SchemaVersion = 1,
