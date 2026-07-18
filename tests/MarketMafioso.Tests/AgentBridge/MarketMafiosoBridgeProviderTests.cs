@@ -112,8 +112,8 @@ public sealed class MarketMafiosoBridgeProviderTests
         var submitted = Assert.IsType<GearsetChangeCommand>(provider.TrySwitchCalibrationJobUi("Miner"));
 
         Assert.Same(expected, submitted);
-        Assert.Equal("MIN", submitted.GearsetName);
-        Assert.Equal("/gearset change \"MIN\"", submitted.Command);
+        Assert.Equal("Miner", submitted.GearsetName);
+        Assert.Equal("/gearset change \"Miner\"", submitted.Command);
     }
 
     [Fact]
