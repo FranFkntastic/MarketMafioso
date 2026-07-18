@@ -146,8 +146,31 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
     /// Captures already-rendered retainer surfaces without opening, closing, selecting, or focusing
     /// anything. This is fixture discovery only; node values are not interpreted here.
     /// </summary>
-    public AgentBridgeRenderedUiSnapshot CaptureRetainerUi() =>
-        new(DateTimeOffset.UtcNow, RetainerAddonNames.Select(CaptureAddon).ToArray());
+    public unsafe AgentBridgeRenderedUiSnapshot CaptureRetainerUi()
+    {
+        var addons = RetainerAddonNames.Select(CaptureAddon).ToList();
+        var capturedNames = addons.Select(value => value.Name).ToHashSet(StringComparer.Ordinal);
+        var stage = AtkStage.Instance();
+        var unitManager = stage == null ? null : (AtkUnitManager*)stage->RaptureAtkUnitManager;
+        if (unitManager != null)
+        {
+            var loaded = &unitManager->AllLoadedUnitsList;
+            for (var index = 0; index < loaded->Count; index++)
+            {
+                AtkUnitBase* addon = loaded->Entries[index];
+                if (addon == null || addon->RootNode == null || !addon->RootNode->IsVisible())
+                    continue;
+                var name = addon->NameString;
+                if (string.IsNullOrWhiteSpace(name) || capturedNames.Contains(name) ||
+                    (!name.Contains("NamePlate", StringComparison.OrdinalIgnoreCase) &&
+                     !name.Contains("TargetInfo", StringComparison.OrdinalIgnoreCase)))
+                    continue;
+                addons.Add(CaptureAddon(name, addon));
+                capturedNames.Add(name);
+            }
+        }
+        return new(DateTimeOffset.UtcNow, addons);
+    }
 
     public RenderedGatheringStatsObservation CaptureGatheringStats() =>
         gatheringStatsStabilizer.Observe(RenderedCharacterStatsParser.Parse(Capture()));
