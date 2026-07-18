@@ -30,6 +30,7 @@ public sealed class RenderedRetainerUiPreparationCoordinator
     private static readonly TimeSpan RetainerListWait = TimeSpan.FromSeconds(3);
     private static readonly TimeSpan BellApproachTimeout = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan BellApproachSettleWindow = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan BellTargetWait = TimeSpan.FromSeconds(2);
     private const int MaxInteractionAttempts = 3;
 
     private RenderedRetainerUiPreparationStatus status = RenderedRetainerUiPreparationStatus.Idle;
@@ -64,6 +65,7 @@ public sealed class RenderedRetainerUiPreparationCoordinator
         bool lifestreamStateAvailable,
         bool lifestreamBusy,
         bool marketBoardUiVisible,
+        bool bellTargetVisible,
         bool vnavmeshReady,
         bool vnavmeshRunning,
         string localizedBellName,
@@ -95,6 +97,12 @@ public sealed class RenderedRetainerUiPreparationCoordinator
                 return Snapshot();
 
             case RenderedRetainerUiPreparationStatus.TargetingBell:
+                if (!bellTargetVisible)
+                {
+                    if (nowUtc - phaseStartedAt < BellTargetWait)
+                        return Snapshot();
+                    return Fail("The rendered target bar did not confirm the localized Summoning Bell target.");
+                }
                 if (!vnavmeshReady)
                     return Fail("vnavmesh is unavailable, so the bridge cannot approach the UI-targeted Summoning Bell without foreground control.");
                 if (!processCommand("/vnav movetarget"))
@@ -109,8 +117,8 @@ public sealed class RenderedRetainerUiPreparationCoordinator
                     return Fail("vnavmesh did not finish approaching the UI-targeted Summoning Bell within thirty seconds.");
                 if (vnavmeshRunning || nowUtc - phaseStartedAt < BellApproachSettleWindow)
                     return Snapshot();
-                if (!processCommand("/interact"))
-                    return Fail("The normal interact command was unavailable after approaching the targeted Summoning Bell.");
+                if (!processCommand("/confirm"))
+                    return Fail("The normal confirm command was unavailable after approaching the targeted Summoning Bell.");
                 interactionAttempts++;
                 status = RenderedRetainerUiPreparationStatus.WaitingForRetainerList;
                 phaseStartedAt = nowUtc;

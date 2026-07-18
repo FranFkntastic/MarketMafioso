@@ -44,6 +44,12 @@ public sealed class DalamudRetainerUiPreparation
         var renderedUi = captureRetainerUi();
         var marketBoardUiVisible = AddonVisible(renderedUi, "ItemSearch") ||
                                    AddonVisible(renderedUi, "ItemSearchResult");
+        var localizedBellName = ResolveBellName();
+        var bellTargetVisible = renderedUi.Addons
+            .Where(value => value is { Present: true, Ready: true, Visible: true } &&
+                            value.Name.StartsWith("_TargetInfo", StringComparison.Ordinal))
+            .SelectMany(value => value.TextNodes)
+            .Any(value => string.Equals(value.Text.Trim(), localizedBellName, StringComparison.OrdinalIgnoreCase));
         if (marketBoardUiVisible)
             CloseRenderedMarketBoardUi();
         var stateAvailable = lifestream.TryIsBusy(out var busy);
@@ -53,9 +59,10 @@ public sealed class DalamudRetainerUiPreparation
             stateAvailable,
             busy,
             marketBoardUiVisible,
+            bellTargetVisible,
             vnavmesh.IsReady,
             vnavmesh.IsRunning,
-            ResolveBellName(),
+            localizedBellName,
             ProcessSemanticCommand);
     }
 
@@ -95,7 +102,7 @@ public sealed class DalamudRetainerUiPreparation
             return commandManager.ProcessCommand(command);
         if (string.Equals(command, "/vnav movetarget", StringComparison.Ordinal))
             return commandManager.ProcessCommand(command);
-        if (!string.Equals(command, "/interact", StringComparison.Ordinal) &&
+        if (!string.Equals(command, "/confirm", StringComparison.Ordinal) &&
             !command.StartsWith("/target \"", StringComparison.Ordinal))
             return false;
         try
