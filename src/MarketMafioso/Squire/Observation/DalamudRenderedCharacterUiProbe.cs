@@ -43,6 +43,7 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
         "ItemSearchResult",
         "_TargetInfo",
         "_TargetInfoMainTarget",
+        "_NamePlate",
         "ItemDetail",
     ];
 
