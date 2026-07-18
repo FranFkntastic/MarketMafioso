@@ -117,6 +117,24 @@ public sealed class MarketMafiosoBridgeProviderTests
     }
 
     [Fact]
+    public void Provider_exposes_rendered_gearset_list_action_without_generic_click_authority()
+    {
+        var expected = new RenderedUiTextActionResult(
+            true,
+            "RenderedTextClickDispatched",
+            "Clicked Gear Set.",
+            "Character",
+            "Character/1");
+        var provider = new MarketMafiosoBridgeProvider(
+            CreateTruth, () => { }, () => { }, () => { }, _ => { }, _ => true, () => { }, () => { },
+            () => true,
+            new AgentBridgeUiReviewRegistry(),
+            tryOpenGearsetListUi: () => expected);
+
+        Assert.Same(expected, provider.TryOpenGearsetListUi());
+    }
+
+    [Fact]
     public void Provider_exposes_read_only_rendered_retainer_capture()
     {
         var expected = new AgentBridgeRenderedUiSnapshot(DateTimeOffset.UtcNow,

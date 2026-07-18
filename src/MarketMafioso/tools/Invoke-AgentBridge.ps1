@@ -22,6 +22,7 @@ param(
         "close-character-ui",
         "close-blocking-select-string-ui",
         "switch-calibration-job-ui",
+        "open-gearset-list-ui",
         "get-character-ui",
         "get-retainer-ui",
         "begin-retainer-observation-ui",

@@ -33,6 +33,7 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
         "CharacterProfile",
         "CharacterClass",
         "CharacterRepute",
+        "GearSetList",
         "ItemDetail",
     ];
 
@@ -49,6 +50,7 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
     ];
 
     private readonly IGameGui gameGui;
+    private readonly Franthropy.Dalamud.AgentBridge.DalamudRenderedUiTextActionDispatcher renderedTextActions;
     private readonly RenderedGatheringStatsStabilizer gatheringStatsStabilizer = new(TimeSpan.FromSeconds(3));
     private readonly RenderedCharacterEquipmentScanCoordinator equipmentScan = new();
     private string? hoveredCharacterNodePath;
@@ -56,6 +58,7 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
     public DalamudRenderedCharacterUiProbe(IGameGui gameGui)
     {
         this.gameGui = gameGui ?? throw new ArgumentNullException(nameof(gameGui));
+        renderedTextActions = new(gameGui);
     }
 
     public AgentBridgeUiAutomationCapabilities Capabilities => new(
@@ -109,6 +112,17 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
         gatheringStatsStabilizer.Reset();
         Chat.ExecuteCommand(command.Command);
         return command;
+    }
+
+    public Franthropy.Dalamud.AgentBridge.RenderedUiTextActionResult TryOpenGearsetList()
+    {
+        var result = renderedTextActions.TryClickUniqueText("Character", "Gear Set");
+        return result.Success
+            ? result
+            : result with
+            {
+                Message = $"{result.Message} Open the rendered Character UI first, then retry.",
+            };
     }
 
     public unsafe AgentBridgeRenderedUiSnapshot Capture()

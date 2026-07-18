@@ -275,6 +275,12 @@ public sealed class AgentBridgeHost : IDisposable
                             verification = "Run the Advisor observation or get-gathering-stats-ui and require the rendered active job to match.",
                         })
                     : AgentBridgeResponse.Fail("Target must be Miner, Botanist, or Blacksmith.");
+            case "open-gearset-list-ui":
+                RenderedUiTextActionResult? gearsetListOpen = null;
+                await dispatchOnFramework(() => gearsetListOpen = provider.TryOpenGearsetListUi()).ConfigureAwait(false);
+                return gearsetListOpen!.Success
+                    ? AgentBridgeResponse.Ok("Rendered Character Gear Set action dispatched.", gearsetListOpen)
+                    : new AgentBridgeResponse { Success = false, Message = gearsetListOpen.Message, Receipt = gearsetListOpen };
             case "get-character-ui":
                 AgentBridgeRenderedUiSnapshot? characterUi = null;
                 await dispatchOnFramework(() => characterUi = provider.CaptureCharacterUi()).ConfigureAwait(false);
