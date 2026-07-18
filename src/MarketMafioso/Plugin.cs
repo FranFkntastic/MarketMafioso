@@ -202,6 +202,7 @@ public sealed class Plugin : IDalamudPlugin
                 advanceRetainerObservationUi: retainerUiPreparation.Advance,
                 cancelRetainerObservationUi: retainerUiPreparation.Cancel,
                 tryOpenRenderedRetainerUi: renderedCharacterUiProbe.TryOpenRenderedRetainer,
+                tryCloseRetainerUi: renderedCharacterUiProbe.TryCloseRetainerUi,
                 tryOpenGearsetListUi: renderedCharacterUiProbe.TryOpenGearsetList,
                 trySelectCalibrationGearsetUi: renderedCharacterUiProbe.TrySelectCalibrationGearset,
                 tryEquipSelectedGearsetUi: renderedCharacterUiProbe.TryEquipSelectedGearset),

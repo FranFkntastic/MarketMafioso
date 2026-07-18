@@ -337,6 +337,12 @@ public sealed class AgentBridgeHost : IDisposable
                 return openedRetainer!.Success
                     ? AgentBridgeResponse.Ok("Unique rendered retainer row activation dispatched; rendered identity verification is still required.", openedRetainer)
                     : new AgentBridgeResponse { Success = false, Message = openedRetainer.Message, Receipt = openedRetainer };
+            case "close-retainer-ui":
+                var retainerUiClosed = false;
+                await dispatchOnFramework(() => retainerUiClosed = provider.TryCloseRetainerUi()).ConfigureAwait(false);
+                return retainerUiClosed
+                    ? AgentBridgeResponse.Ok("The topmost rendered retainer surface was closed without changing window focus.")
+                    : AgentBridgeResponse.Fail("No rendered retainer surface was available to close.");
             case "hover-character-node-ui":
                 var characterNodeHovered = false;
                 await dispatchOnFramework(() => characterNodeHovered = provider.TryHoverCharacterNodeUi(request.Target ?? string.Empty)).ConfigureAwait(false);

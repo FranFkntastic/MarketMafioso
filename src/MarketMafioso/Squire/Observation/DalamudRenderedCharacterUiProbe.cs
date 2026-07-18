@@ -128,6 +128,20 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
         return true;
     }
 
+    public unsafe bool TryCloseRetainerUi()
+    {
+        RestoreCursor();
+        foreach (var addonName in new[] { "RetainerCharacter", "SelectString", "RetainerList" })
+        {
+            var addon = gameGui.GetAddonByName<AtkUnitBase>(addonName, 1);
+            if (addon == null || addon->RootNode == null || !addon->RootNode->IsVisible())
+                continue;
+            addon->Close(true);
+            return true;
+        }
+        return false;
+    }
+
     public GearsetChangeCommand? TrySwitchCalibrationJob(string target)
     {
         if (!GearsetChangeCommand.TryCreate(target, out var command))

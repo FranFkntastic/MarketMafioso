@@ -24,6 +24,7 @@ public interface IMarketMafiosoBridgeProvider
     void OpenCharacterUi();
     bool TryCloseCharacterUi();
     bool TryCloseBlockingSelectStringUi();
+    bool TryCloseRetainerUi();
     GearsetChangeCommand? TrySwitchCalibrationJobUi(string target);
     GearsetChangeCommand? TrySwitchGearsetSlotUi(string target);
     RenderedUiTextActionResult TryOpenGearsetListUi();
@@ -90,6 +91,7 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
     private readonly Action openCharacterUi;
     private readonly Func<bool> tryCloseCharacterUi;
     private readonly Func<bool> tryCloseBlockingSelectStringUi;
+    private readonly Func<bool> tryCloseRetainerUi;
     private readonly Func<string, GearsetChangeCommand?> trySwitchCalibrationJobUi;
     private readonly Func<string, GearsetChangeCommand?> trySwitchGearsetSlotUi;
     private readonly Func<RenderedUiTextActionResult> tryOpenGearsetListUi;
@@ -143,7 +145,8 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
         Func<string, RenderedUiTextActionResult>? tryOpenRenderedRetainerUi = null,
         Func<RenderedUiTextActionResult>? tryOpenGearsetListUi = null,
         Func<string, RenderedUiTextActionResult>? trySelectCalibrationGearsetUi = null,
-        Func<RenderedUiTextActionResult>? tryEquipSelectedGearsetUi = null)
+        Func<RenderedUiTextActionResult>? tryEquipSelectedGearsetUi = null,
+        Func<bool>? tryCloseRetainerUi = null)
     {
         this.createSnapshot = createSnapshot ?? throw new ArgumentNullException(nameof(createSnapshot));
         this.openMainWindow = openMainWindow ?? throw new ArgumentNullException(nameof(openMainWindow));
@@ -164,6 +167,7 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
         this.cancelRetainerObservationUi = cancelRetainerObservationUi ?? (() => new(RenderedRetainerUiPreparationStatus.Cancelled, 0, "Retainer UI preparation is unavailable."));
         this.tryOpenRenderedRetainerUi = tryOpenRenderedRetainerUi ?? (_ => new(false, "Unavailable", "Rendered retainer selection is unavailable.", "RetainerList", null));
         this.tryCloseBlockingSelectStringUi = tryCloseBlockingSelectStringUi ?? (() => false);
+        this.tryCloseRetainerUi = tryCloseRetainerUi ?? (() => false);
         this.trySwitchCalibrationJobUi = trySwitchCalibrationJobUi ?? (_ => null);
         this.trySwitchGearsetSlotUi = trySwitchGearsetSlotUi ?? (_ => null);
         this.tryOpenGearsetListUi = tryOpenGearsetListUi ?? (() => new(false, "Unavailable", "Rendered gearset-list automation is unavailable.", "Character", null));
@@ -192,6 +196,7 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
     public void OpenCharacterUi() => openCharacterUi();
     public bool TryCloseCharacterUi() => tryCloseCharacterUi();
     public bool TryCloseBlockingSelectStringUi() => tryCloseBlockingSelectStringUi();
+    public bool TryCloseRetainerUi() => tryCloseRetainerUi();
     public GearsetChangeCommand? TrySwitchCalibrationJobUi(string target) => trySwitchCalibrationJobUi(target);
     public GearsetChangeCommand? TrySwitchGearsetSlotUi(string target) => trySwitchGearsetSlotUi(target);
     public RenderedUiTextActionResult TryOpenGearsetListUi() => tryOpenGearsetListUi();
