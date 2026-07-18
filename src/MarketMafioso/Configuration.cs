@@ -27,6 +27,7 @@ public class Configuration : IPluginConfiguration
     public DateTime? MarketAcquisitionUnlockedAtUtc { get; set; }
     public bool EnableOpportunisticWorldChecks { get; set; } = true;
     public bool CreateMarketAcquisitionRouteDiagnosticPackages { get; set; } = false;
+    public bool EnableMarketAcquisitionDryRunTools { get; set; } = false;
     public bool EnableAgentBridge { get; set; } = false;
     public bool EnableAgentBridgeScreenshots { get; set; } = false;
     public bool EnableAgentBridgeAudit { get; set; } = false;

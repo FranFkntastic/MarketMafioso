@@ -6,6 +6,55 @@ namespace MarketMafioso.Tests.MarketAcquisition;
 public sealed class MarketAcquisitionRouteEnginePurchaseTests
 {
     [Fact]
+    public void BeginNextWorldPurchase_DryRunRecordsSimulationWithoutCallingPurchaseOrReporter()
+    {
+        var harness = MarketAcquisitionRouteEngineHarness.Create();
+        harness.Context.CurrentWorld = "Maduin";
+        harness.Engine.Start(
+            MarketAcquisitionRouteEngineTestData.Plan("Maduin"),
+            MarketAcquisitionRouteEngineTestData.AcceptedClaim(),
+            enableDiagnostics: false,
+            includeOpportunisticChecks: false,
+            executionMode: MarketAcquisitionExecutionMode.DryRun);
+        harness.Runner.RecordCurrentWorld("Maduin");
+        harness.Runner.RecordProbe("Maduin", MarketAcquisitionRouteEngineTestData.ReadyCandidatePlan());
+        harness.MarketBoard.Reads.Enqueue(MarketAcquisitionRouteEngineTestData.ReadWithSafeListing("Maduin"));
+
+        harness.Engine.BeginNextWorldPurchase();
+
+        var snapshot = harness.Engine.CreateSnapshot();
+        Assert.Equal(MarketAcquisitionExecutionMode.DryRun, snapshot.ExecutionMode);
+        Assert.Equal(0, harness.Purchase.ExecuteCallCount);
+        Assert.Equal(0, harness.Purchase.ConfirmCallCount);
+        Assert.Empty(harness.Reporter.PurchaseAuditReports);
+        Assert.Empty(harness.Reporter.RouteProgressReports);
+        Assert.Equal(4u, harness.Runner.LastRunSummary?.PurchasedQuantity);
+        Assert.Equal(3200u, harness.Runner.LastRunSummary?.SpentGil);
+        harness.Engine.Dispose();
+        var packageDirectory = Path.GetDirectoryName(Assert.IsType<string>(harness.Runner.LastDiagnosticFilePath));
+        var manifest = File.ReadAllText(Path.Combine(Assert.IsType<string>(packageDirectory), "manifest.json"));
+        var purchases = File.ReadAllText(Assert.IsType<string>(harness.Runner.LastPurchaseRecordsCsvPath));
+        Assert.Contains("\"packageKind\":\"dry-run\"", manifest, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("DryRunWouldPurchase", purchases, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Restart_DryRunPreservesNonSpendingExecutionMode()
+    {
+        using var harness = MarketAcquisitionRouteEngineHarness.Create();
+        var plan = MarketAcquisitionRouteEngineTestData.Plan("Maduin");
+        var claim = MarketAcquisitionRouteEngineTestData.AcceptedClaim();
+        harness.Engine.Start(plan, claim, true, false, executionMode: MarketAcquisitionExecutionMode.DryRun);
+
+        var result = harness.Engine.Restart(plan, claim);
+
+        Assert.True(result.Success);
+        Assert.Equal(MarketAcquisitionExecutionMode.DryRun, harness.Engine.CreateSnapshot().ExecutionMode);
+        Assert.Equal(0, harness.Purchase.ExecuteCallCount);
+        Assert.Empty(harness.Reporter.RouteProgressReports);
+    }
+
+    [Fact]
     public void BeginNextWorldPurchase_SelectionSentStartsPurchaseSession()
     {
         using var harness = MarketAcquisitionRouteEngineHarness.Create();

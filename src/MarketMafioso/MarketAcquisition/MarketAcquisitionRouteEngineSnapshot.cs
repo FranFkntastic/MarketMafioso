@@ -6,6 +6,7 @@ namespace MarketMafioso.MarketAcquisition;
 
 public sealed record MarketAcquisitionRouteEngineSnapshot
 {
+    public MarketAcquisitionExecutionMode ExecutionMode { get; init; }
     public string StatusMessage { get; init; } = string.Empty;
     public string VisibleAcquisitionStatus { get; init; } = string.Empty;
     public bool IsRouteActive { get; init; }

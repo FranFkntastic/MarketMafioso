@@ -31,6 +31,7 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
     private string? listingReadPendingSignature;
     private string? lastWorldSummarySignature;
     private string? currentRequestId;
+    private MarketAcquisitionExecutionMode executionMode = MarketAcquisitionExecutionMode.Live;
 
     public MarketAcquisitionRouteRunner(string diagnosticsDirectory)
         : this(diagnosticsDirectory, null)
@@ -104,15 +105,20 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
     public MarketAcquisitionRouteActionResult Start(
         MarketAcquisitionPlan plan,
         bool enableDiagnostics = false,
-        bool includeOpportunisticChecks = false)
+        bool includeOpportunisticChecks = false,
+        MarketAcquisitionExecutionMode executionMode = MarketAcquisitionExecutionMode.Live)
     {
         ArgumentNullException.ThrowIfNull(plan);
 
         CloseDiagnostics();
         diagnosticsRequested = enableDiagnostics;
         includeOpportunisticChecksRequested = includeOpportunisticChecks;
+        this.executionMode = executionMode;
         diagnostics = diagnosticsRequested
-            ? MarketAcquisitionRouteDiagnostics.CreateEnabled(diagnosticsDirectory, DateTimeOffset.Now)
+            ? MarketAcquisitionRouteDiagnostics.CreateEnabled(
+                diagnosticsDirectory,
+                DateTimeOffset.Now,
+                executionMode == MarketAcquisitionExecutionMode.DryRun ? "dry-run" : "route")
             : MarketAcquisitionRouteDiagnostics.Disabled;
         LastDiagnosticFilePath = diagnostics.FilePath;
         LastObservedListingsCsvPath = diagnostics.ObservedListingsCsvPath;
@@ -150,6 +156,7 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
                 ["sourceListingCount"] = plan.Diagnostics.SourceListingCount.ToString(),
                 ["plannedListingCount"] = plan.Diagnostics.PlannedListingCount.ToString(),
                 ["opportunisticChecks"] = includeOpportunisticChecks.ToString(),
+                ["executionMode"] = executionMode.ToString(),
             });
         return MarketAcquisitionRouteActionResult.Ok(StatusMessage);
     }
@@ -159,7 +166,7 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         ArgumentNullException.ThrowIfNull(plan);
 
         diagnostics.Record("route-restart", "Restarting market acquisition route.");
-        return Start(plan, diagnosticsRequested, includeOpportunisticChecksRequested);
+        return Start(plan, diagnosticsRequested, includeOpportunisticChecksRequested, executionMode);
     }
 
     public MarketAcquisitionRouteActionResult ReprepareAndRestart(
@@ -187,7 +194,7 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
                 ["skippedWorlds"] = string.Join(", ", reprepare.SkippedWorlds),
                 ["remainingWorldCount"] = reprepare.Plan.WorldBatches.Count.ToString(),
             });
-        var startResult = Start(reprepare.Plan, diagnosticsRequested, includeOpportunisticChecksRequested);
+        var startResult = Start(reprepare.Plan, diagnosticsRequested, includeOpportunisticChecksRequested, executionMode);
         if (!startResult.Success)
             return startResult;
 

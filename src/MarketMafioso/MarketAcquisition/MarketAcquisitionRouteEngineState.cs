@@ -5,6 +5,7 @@ namespace MarketMafioso.MarketAcquisition;
 
 internal sealed class MarketAcquisitionRouteEngineState
 {
+    public MarketAcquisitionExecutionMode ExecutionMode { get; set; } = MarketAcquisitionExecutionMode.Live;
     public MarketBoardReadResult? MarketBoardReadResult { get; set; }
     public MarketBoardListingReconciliation? MarketBoardReconciliation { get; set; }
     public MarketAcquisitionLiveCandidatePlan? LiveCandidatePlan { get; set; }
@@ -21,8 +22,10 @@ internal sealed class MarketAcquisitionRouteEngineState
     public string ProgressNonce { get; set; } = Guid.NewGuid().ToString("N");
     public string AcquisitionStatus { get; set; } = "No route has started.";
 
-    public void ResetRouteExecutionState()
+    public void ResetRouteExecutionState(bool preserveExecutionMode = false)
     {
+        if (!preserveExecutionMode)
+            ExecutionMode = MarketAcquisitionExecutionMode.Live;
         MarketBoardReadResult = null;
         MarketBoardReconciliation = null;
         LiveCandidatePlan = null;

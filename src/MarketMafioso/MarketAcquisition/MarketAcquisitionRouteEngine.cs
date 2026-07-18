@@ -84,6 +84,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
     public MarketAcquisitionRouteEngineSnapshot CreateSnapshot() => new()
     {
+        ExecutionMode = state.ExecutionMode,
         StatusMessage = runner.StatusMessage,
         VisibleAcquisitionStatus = state.AcquisitionStatus,
         IsRouteActive = IsRouteActive,
@@ -123,7 +124,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         bool enableDiagnostics,
         bool includeOpportunisticChecks,
         OutfitterExecutionContract? outfitterContract = null,
-        MarketAcquisitionRequestDocument? workbenchDocument = null)
+        MarketAcquisitionRequestDocument? workbenchDocument = null,
+        MarketAcquisitionExecutionMode executionMode = MarketAcquisitionExecutionMode.Live)
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(claimed);
@@ -132,6 +134,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
         claimedRequest = claimed;
         ClearExecutionState();
+        state.ExecutionMode = executionMode;
         if (outfitterContract is not null)
         {
             if (workbenchDocument is null)
@@ -143,7 +146,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
                     workbenchDocument,
                     plan,
                     claimed,
-                    outfitterStateStore);
+                    executionMode == MarketAcquisitionExecutionMode.DryRun ? null : outfitterStateStore);
                 outfitterAuthority.CompletePreflight(plan);
             }
             catch (Exception exception)
@@ -157,11 +160,12 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         {
             outfitterAuthority = null;
         }
-        reportDispatcher.BeginSession(claimed);
+        if (executionMode == MarketAcquisitionExecutionMode.Live)
+            reportDispatcher.BeginSession(claimed);
         MarketAcquisitionRouteActionResult result;
         try
         {
-            result = runner.Start(plan, enableDiagnostics, includeOpportunisticChecks);
+            result = runner.Start(plan, enableDiagnostics || executionMode == MarketAcquisitionExecutionMode.DryRun, includeOpportunisticChecks, executionMode);
         }
         catch (Exception exception) when (outfitterAuthority is not null)
         {
@@ -195,9 +199,14 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             outfitterAuthority.ValidateCurrentDocument(workbenchDocument);
             outfitterAuthority.BeginRecovery(plan);
             claimedRequest = remainingClaim;
-            ClearExecutionState();
-            reportDispatcher.BeginSession(remainingClaim);
-            var result = runner.Start(plan, enableDiagnostics: false, includeOpportunisticChecks: false);
+            ClearExecutionState(preserveExecutionMode: true);
+            if (state.ExecutionMode == MarketAcquisitionExecutionMode.Live)
+                reportDispatcher.BeginSession(remainingClaim);
+            var result = runner.Start(
+                plan,
+                enableDiagnostics: state.ExecutionMode == MarketAcquisitionExecutionMode.DryRun,
+                includeOpportunisticChecks: false,
+                state.ExecutionMode);
             if (!result.Success)
             {
                 outfitterAuthority.Pause($"Recovery start stopped safely: {result.Message}");
@@ -346,7 +355,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         if (!TryReconcileUnresolvedTravelLease(out var reconciliationFailure))
             return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(reconciliationFailure));
         claimedRequest = claimed;
-        ClearExecutionState();
+        ClearExecutionState(preserveExecutionMode: true);
         if (outfitterAuthority is not null)
         {
             try
@@ -358,7 +367,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
                 return UpdateStatus(MarketAcquisitionRouteActionResult.Fail($"Squire restart preflight failed: {exception.Message}"));
             }
         }
-        reportDispatcher.BeginSession(claimed);
+        if (state.ExecutionMode == MarketAcquisitionExecutionMode.Live)
+            reportDispatcher.BeginSession(claimed);
         var result = runner.Restart(plan);
         if (!result.Success && outfitterAuthority is not null)
         {
@@ -380,7 +390,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         if (!TryReconcileUnresolvedTravelLease(out var reconciliationFailure))
             return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(reconciliationFailure));
         claimedRequest = claimed;
-        ClearExecutionState();
+        ClearExecutionState(preserveExecutionMode: true);
         if (outfitterAuthority is not null)
         {
             try
@@ -392,7 +402,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
                 return UpdateStatus(MarketAcquisitionRouteActionResult.Fail($"Squire restart preflight failed: {exception.Message}"));
             }
         }
-        reportDispatcher.BeginSession(claimed);
+        if (state.ExecutionMode == MarketAcquisitionExecutionMode.Live)
+            reportDispatcher.BeginSession(claimed);
         var result = runner.ReprepareAndRestart(plan, preparedAtUtc);
         if (!result.Success && outfitterAuthority is not null)
         {
@@ -1190,6 +1201,12 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             }
         }
 
+        if (state.ExecutionMode == MarketAcquisitionExecutionMode.DryRun)
+        {
+            SimulateDryRunPurchase(currentWorld);
+            return;
+        }
+
         var selection = purchase.ExecuteFirstCandidate(state.LiveCandidatePlan, freshRead);
         var now = clock.UtcNow;
         purchaseAutomation.RecordPurchaseSelection(selection, now, MarketBoardPurchaseConfirmationWatchdog);
@@ -1378,6 +1395,53 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     {
         listingReadAccumulator.Clear();
         purchaseAutomation.Clear();
+    }
+
+    private void SimulateDryRunPurchase(string currentWorld)
+    {
+        var candidates = new List<MarketBoardPurchaseCandidate>();
+        foreach (var row in state.LiveCandidatePlan!.Rows)
+        {
+            if (row.Decision.Equals("WouldBuy", StringComparison.OrdinalIgnoreCase) &&
+                MarketBoardListingIntegrity.IsRealListing(row.LiveListing))
+                candidates.Add(MarketBoardPurchaseCandidate.FromLiveListing(row.LiveListing));
+        }
+
+        if (candidates.Count == 0)
+        {
+            if (ShouldFailWorldPurchaseBatchOnNoCandidate(state.LiveCandidatePlan!))
+            {
+                UpdateStatus(FailRoute(state.LiveCandidatePlan!.Message));
+                return;
+            }
+
+            CompleteActiveWorldPurchaseBatch(currentWorld);
+            return;
+        }
+
+        var activeSubtask = runner.ActiveStop?.ActiveItemSubtask;
+        var lineId = activeSubtask?.LineId ?? GetActiveRouteLineId(claimedRequest!);
+        foreach (var candidate in candidates)
+        {
+            state.ActiveWorldPurchasedQuantity = checked(state.ActiveWorldPurchasedQuantity + candidate.Quantity);
+            state.ActiveWorldSpentGil = checked(state.ActiveWorldSpentGil + candidate.TotalGil);
+            state.ActiveLinePurchasedQuantity = checked(state.ActiveLinePurchasedQuantity + candidate.Quantity);
+            state.ActiveLineSpentGil = checked(state.ActiveLineSpentGil + candidate.TotalGil);
+            outfitterAuthority?.RecordPurchase(lineId, candidate);
+            runner.RecordPurchaseAudit(
+                lineId,
+                activeSubtask?.ItemName,
+                currentWorld,
+                candidate.ListingId,
+                candidate.RetainerId,
+                candidate.Quantity,
+                candidate.TotalGil,
+                "DryRunWouldPurchase",
+                activeSubtask?.Source);
+        }
+
+        state.AcquisitionStatus = $"Dry run: would purchase {state.ActiveLinePurchasedQuantity:N0} for {state.ActiveLineSpentGil:N0} gil; no purchase UI was invoked.";
+        CompleteActiveWorldPurchaseBatch(currentWorld);
     }
 
     private void EvaluateOutfitterRouteCompletion()
@@ -1605,13 +1669,13 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         reportDispatcher.EnqueueRouteProgress(report);
     }
 
-    private void ClearExecutionState()
+    private void ClearExecutionState(bool preserveExecutionMode = false)
     {
         CleanupOwnedApproach("Replacement");
         CleanupOwnedTravel("Replacement");
         travelInterruptedByCleanup = false;
         CancelActiveOperation("Route execution state reset.");
-        state.ResetRouteExecutionState();
+        state.ResetRouteExecutionState(preserveExecutionMode);
         listingReadAccumulator.Clear();
         purchaseAutomation.Clear();
         reportDispatcher.ResetSession();

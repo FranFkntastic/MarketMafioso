@@ -110,10 +110,18 @@ internal sealed class FakePurchaseIo : IMarketAcquisitionPurchaseIo
 {
     public Queue<MarketBoardPurchaseResult> PurchaseResults { get; } = [];
     public Queue<MarketBoardPurchaseResult> ConfirmationResults { get; } = [];
-    public MarketBoardPurchaseResult ExecuteFirstCandidate(MarketAcquisitionLiveCandidatePlan candidatePlan, MarketBoardReadResult freshRead) =>
-        PurchaseResults.Count == 0 ? new() { Status = "NoCandidate" } : PurchaseResults.Dequeue();
-    public MarketBoardPurchaseResult TryConfirmPendingPurchase(MarketBoardPurchaseCandidate candidate) =>
-        ConfirmationResults.Count == 0 ? new() { Status = "ConfirmationPending", Candidate = candidate } : ConfirmationResults.Dequeue();
+    public int ExecuteCallCount { get; private set; }
+    public int ConfirmCallCount { get; private set; }
+    public MarketBoardPurchaseResult ExecuteFirstCandidate(MarketAcquisitionLiveCandidatePlan candidatePlan, MarketBoardReadResult freshRead)
+    {
+        ExecuteCallCount++;
+        return PurchaseResults.Count == 0 ? new() { Status = "NoCandidate" } : PurchaseResults.Dequeue();
+    }
+    public MarketBoardPurchaseResult TryConfirmPendingPurchase(MarketBoardPurchaseCandidate candidate)
+    {
+        ConfirmCallCount++;
+        return ConfirmationResults.Count == 0 ? new() { Status = "ConfirmationPending", Candidate = candidate } : ConfirmationResults.Dequeue();
+    }
 }
 
 internal sealed class FakeRouteReporter : IMarketAcquisitionRouteReporter

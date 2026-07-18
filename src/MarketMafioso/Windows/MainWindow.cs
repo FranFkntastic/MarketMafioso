@@ -363,7 +363,9 @@ public class MainWindow : Window, IDisposable
             squireTab.DrawDiagnosticTools,
             IsMarketAcquisitionUnlocked,
             uiStateCapture,
-            AgentReviewRegistry);
+            AgentReviewRegistry,
+            () => config.EnableMarketAcquisitionDryRunTools,
+            () => _ = StartPreparedRouteDryRunAsync());
         marketAcquisitionGuidedRoutePanel = new MarketAcquisitionGuidedRoutePanel(
             routeEngine.CreateSnapshot,
             forceDiagnostics => _ = StartGuidedRouteAsync(forceDiagnostics),
@@ -1242,6 +1244,28 @@ public class MainWindow : Window, IDisposable
                 acquisitionWorkspace.ReplacePreparedPlan(snapshot.ActivePlan);
             acquisitionWorkspace.SetStatus(result.Message);
             routeEngine.ReportRouteProgress();
+            return Task.CompletedTask;
+        });
+    }
+
+    private Task StartPreparedRouteDryRunAsync()
+    {
+        return acquisitionWorkspace.RunAsync(_ =>
+        {
+            if (!config.EnableMarketAcquisitionDryRunTools)
+                throw new InvalidOperationException("Enable Market Acquisition dry-run tools in Advanced / Testing first.");
+            var claimed = acquisitionWorkspace.ClaimedRequest ??
+                          throw new InvalidOperationException("Accept or restore a Workbench request before starting a dry run.");
+            var plan = acquisitionWorkspace.RequirePreparedPlan("Prepare a plan before starting a dry run.");
+            var result = routeEngine.Start(
+                plan,
+                claimed,
+                enableDiagnostics: true,
+                config.EnableOpportunisticWorldChecks,
+                acquisitionRequestBuilder.CurrentDocument.OutfitterAuthority?.FinalizedContract,
+                acquisitionRequestBuilder.CurrentDocument,
+                MarketAcquisitionExecutionMode.DryRun);
+            acquisitionWorkspace.SetStatus(result.Message);
             return Task.CompletedTask;
         });
     }

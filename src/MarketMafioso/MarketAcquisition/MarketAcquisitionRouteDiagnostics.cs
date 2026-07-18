@@ -82,20 +82,33 @@ public sealed class MarketAcquisitionRouteDiagnostics : IDisposable
 
     public static MarketAcquisitionRouteDiagnostics CreateEnabled(string directory, DateTimeOffset startedAt)
     {
-        return CreateEnabled(directory, startedAt, "route");
+        return CreatePackage(directory, startedAt, "route");
+    }
+
+    public static MarketAcquisitionRouteDiagnostics CreateEnabled(
+        string directory,
+        DateTimeOffset startedAt,
+        string packageKind)
+    {
+        if (!packageKind.Equals("route", StringComparison.OrdinalIgnoreCase) &&
+            !packageKind.Equals("dry-run", StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("Package kind must be route or dry-run.", nameof(packageKind));
+        return CreatePackage(directory, startedAt, packageKind);
     }
 
     public static MarketAcquisitionRouteDiagnostics CreateInputCapture(string directory, DateTimeOffset startedAt)
     {
-        return CreateEnabled(directory, startedAt, "input-capture");
+        return CreatePackage(directory, startedAt, "input-capture");
     }
 
-    private static MarketAcquisitionRouteDiagnostics CreateEnabled(
+    private static MarketAcquisitionRouteDiagnostics CreatePackage(
         string directory,
         DateTimeOffset startedAt,
         string filePrefix)
     {
-        var createCompanionCsvs = filePrefix.Equals("route", StringComparison.OrdinalIgnoreCase);
+        var createCompanionCsvs =
+            filePrefix.Equals("route", StringComparison.OrdinalIgnoreCase) ||
+            filePrefix.Equals("dry-run", StringComparison.OrdinalIgnoreCase);
         var packageDirectory = CreatePackageDirectory(directory, startedAt, filePrefix);
         AutomationCsvLog? observedListingsCsv = null;
         AutomationCsvLog? purchaseRecordsCsv = null;

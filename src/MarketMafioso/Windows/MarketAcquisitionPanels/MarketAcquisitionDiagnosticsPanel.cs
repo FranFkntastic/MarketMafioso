@@ -23,6 +23,8 @@ internal sealed class MarketAcquisitionDiagnosticsPanel
     private readonly Func<bool> isMarketAcquisitionUnlocked;
     private readonly UiStateCaptureService uiStateCapture;
     private readonly AgentBridgeUiReviewRegistry reviewRegistry;
+    private readonly Func<bool> areDryRunToolsEnabled;
+    private readonly Action startPreparedRouteDryRun;
 
     private string diagnosticsFolderStatus = "Route diagnostics folder opens in Explorer.";
 
@@ -35,7 +37,9 @@ internal sealed class MarketAcquisitionDiagnosticsPanel
         Action drawSquireDiagnostics,
         Func<bool> isMarketAcquisitionUnlocked,
         UiStateCaptureService uiStateCapture,
-        AgentBridgeUiReviewRegistry reviewRegistry)
+        AgentBridgeUiReviewRegistry reviewRegistry,
+        Func<bool> areDryRunToolsEnabled,
+        Action startPreparedRouteDryRun)
     {
         this.getRouteSnapshot = getRouteSnapshot ?? throw new ArgumentNullException(nameof(getRouteSnapshot));
         this.diagnosticsDirectory = diagnosticsDirectory ?? throw new ArgumentNullException(nameof(diagnosticsDirectory));
@@ -46,6 +50,8 @@ internal sealed class MarketAcquisitionDiagnosticsPanel
         this.isMarketAcquisitionUnlocked = isMarketAcquisitionUnlocked ?? throw new ArgumentNullException(nameof(isMarketAcquisitionUnlocked));
         this.uiStateCapture = uiStateCapture ?? throw new ArgumentNullException(nameof(uiStateCapture));
         this.reviewRegistry = reviewRegistry ?? throw new ArgumentNullException(nameof(reviewRegistry));
+        this.areDryRunToolsEnabled = areDryRunToolsEnabled ?? throw new ArgumentNullException(nameof(areDryRunToolsEnabled));
+        this.startPreparedRouteDryRun = startPreparedRouteDryRun ?? throw new ArgumentNullException(nameof(startPreparedRouteDryRun));
     }
 
     public void Draw()
@@ -66,6 +72,7 @@ internal sealed class MarketAcquisitionDiagnosticsPanel
                 ImGui.TextColored(MarketMafiosoUiTheme.Muted, $"Latest report: {snapshot.LastDiagnosticFilePath}");
 
             DrawPostRunDiagnosticSummary(snapshot);
+            DrawDryRunTools(snapshot);
         }
         DrawUiStateCapture();
 
@@ -75,6 +82,28 @@ internal sealed class MarketAcquisitionDiagnosticsPanel
             drawAutomationDiagnostics();
         if (ImGui.CollapsingHeader("Squire Route Diagnostics", ImGuiTreeNodeFlags.DefaultOpen))
             drawSquireDiagnostics();
+    }
+
+    private void DrawDryRunTools(MarketAcquisitionRouteEngineSnapshot snapshot)
+    {
+        if (!areDryRunToolsEnabled())
+            return;
+
+        ImGui.Spacing();
+        ImGuiUi.SectionHeader("Non-spending Route Dry Run", MarketMafiosoUiTheme.Header);
+        ImGui.TextColored(
+            MarketMafiosoUiTheme.Muted,
+            "Runs the prepared route through live rendered-UI travel, listing reads, authority checks, and recovery. Purchase selection and confirmation are unreachable; simulated allocations are written only to the diagnostic package.");
+        var enabled = !snapshot.IsRouteActive;
+        if (ImGuiUi.Button("Dry Run Prepared Route", enabled))
+            startPreparedRouteDryRun();
+        RegisterLastControl(
+            "diagnostics.market-acquisition.dry-run-prepared",
+            "Dry run the prepared Market Acquisition route without purchases",
+            enabled,
+            startPreparedRouteDryRun);
+        if (snapshot.ExecutionMode == MarketAcquisitionExecutionMode.DryRun)
+            ImGui.TextColored(MarketMafiosoUiTheme.Warning, $"Dry run active: {snapshot.VisibleAcquisitionStatus}");
     }
 
     public void DrawLatestWorldCompletionSummary(MarketAcquisitionRouteEngineSnapshot snapshot)
@@ -93,9 +122,15 @@ internal sealed class MarketAcquisitionDiagnosticsPanel
         var runSummary = snapshot.LastRunSummary;
         if (runSummary != null)
         {
+            var purchaseVerb = snapshot.ExecutionMode == MarketAcquisitionExecutionMode.DryRun
+                ? "would purchase"
+                : "purchased";
+            var spendVerb = snapshot.ExecutionMode == MarketAcquisitionExecutionMode.DryRun
+                ? "would spend"
+                : "spent";
             ImGui.TextColored(
                 runSummary.FailedWorldCount > 0 || runSummary.Warnings.Count > 0 ? MarketMafiosoUiTheme.Header : MarketMafiosoUiTheme.Success,
-                $"Run rollup: purchased {runSummary.PurchasedQuantity:N0}, spent {FormatGil(runSummary.SpentGil)}; {runSummary.CompletedWorldCount:N0} complete / {runSummary.PartialWorldCount:N0} partial / {runSummary.FailedWorldCount:N0} failed world(s).");
+                $"Run rollup: {purchaseVerb} {runSummary.PurchasedQuantity:N0}, {spendVerb} {FormatGil(runSummary.SpentGil)}; {runSummary.CompletedWorldCount:N0} complete / {runSummary.PartialWorldCount:N0} partial / {runSummary.FailedWorldCount:N0} failed world(s).");
 
             if (runSummary.OpportunisticPurchasedQuantity > 0 || runSummary.PlannedPurchasedQuantity > 0)
             {

@@ -25,7 +25,9 @@ internal sealed class AdvancedSettingsPages
                 searchTerms: ["Workshop Host", "manual fallback", "craft cost", "appraisal"]),
             new("advanced.agent-bridge", "Advanced / Agent Bridge", DrawAgentBridge, 81,
                 searchTerms: ["local agent test bridge", "named pipe", "review capture"]),
-            new("advanced.private-features", "Advanced / Private Features", DrawPrivateFeatures, 82,
+            new("advanced.testing", "Advanced / Testing", DrawTesting, 82,
+                searchTerms: ["dry run", "market acquisition", "diagnostic package", "no purchase"]),
+            new("advanced.private-features", "Advanced / Private Features", DrawPrivateFeatures, 83,
                 searchTerms: ["unlock private module", "feature key", "lock feature"]),
         ];
     }
@@ -45,6 +47,13 @@ internal sealed class AdvancedSettingsPages
     private void DrawAgentBridge(SettingsPageContext context) => DrawCheckbox(context, "Enable local agent test bridge",
         "Dev-only named-pipe bridge. It exposes reviewed state and semantic UI controls without directly controlling the game client.",
         () => config.EnableAgentBridge, value => config.EnableAgentBridge = value);
+
+    private void DrawTesting(SettingsPageContext context) => DrawCheckbox(
+        context,
+        "Enable Market Acquisition dry-run tools",
+        "Exposes a diagnostics-only route action that travels, searches, revalidates, and replans against rendered UI without opening purchase or confirmation controls. Every run creates a diagnostic package.",
+        () => config.EnableMarketAcquisitionDryRunTools,
+        value => config.EnableMarketAcquisitionDryRunTools = value);
 
     private void DrawPrivateFeatures(SettingsPageContext context)
     {
