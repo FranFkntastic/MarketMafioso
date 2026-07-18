@@ -245,8 +245,14 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
         return new(DateTimeOffset.UtcNow, addons);
     }
 
-    public bool TryActivateRenderedSummoningBell() =>
-        renderedTextActions.TryActivateUniqueText("_TargetInfoMainTarget", "Summoning Bell").Success;
+    public bool TryActivateRenderedSummoningBell()
+    {
+        // The first standard activation selects the rendered world target; the second is the
+        // normal double-activation gesture that asks the game to interact with that same target.
+        // Both are posted to the client window without moving the physical cursor or foregrounding it.
+        return renderedTextActions.TryActivateUniqueText("_TargetInfoMainTarget", "Summoning Bell").Success &&
+               renderedTextActions.TryActivateUniqueText("_TargetInfoMainTarget", "Summoning Bell").Success;
+    }
 
     public RenderedGatheringStatsObservation CaptureGatheringStats() =>
         gatheringStatsStabilizer.Observe(RenderedCharacterStatsParser.Parse(Capture()));
