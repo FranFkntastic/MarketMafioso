@@ -26,7 +26,8 @@ public sealed record AgentBridgeRenderedNodeSnapshot(
     int Top,
     int Right,
     int Bottom,
-    bool RespondsToMouse);
+    bool RespondsToMouse,
+    IReadOnlyList<string>? RegisteredEvents = null);
 
 public sealed record AgentBridgeRenderedTextNode(
     string NodePath,

@@ -388,7 +388,8 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
                 bounds.Pos1.Y,
                 bounds.Pos2.X,
                 bounds.Pos2.Y,
-                (node->NodeFlags & NodeFlags.RespondToMouse) != 0));
+                (node->NodeFlags & NodeFlags.RespondToMouse) != 0,
+                RegisteredEvents: GetRegisteredEvents(node)));
 
             var textNode = node->GetAsAtkTextNode();
             if (textNode != null)
@@ -412,6 +413,16 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
             }
 
         }
+    }
+
+    private static unsafe IReadOnlyList<string>? GetRegisteredEvents(AtkResNode* node)
+    {
+        if ((node->NodeFlags & NodeFlags.RespondToMouse) == 0)
+            return null;
+        return Enum.GetValues<AtkEventType>()
+            .Where(node->IsEventRegistered)
+            .Select(value => value.ToString())
+            .ToArray();
     }
 
     private static unsafe bool IsEffectivelyVisible(AtkResNode* node)
