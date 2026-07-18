@@ -1,7 +1,7 @@
 {
   "schemaVersion": "squire-min-btn-model-gearset-oracle/v1",
   "oracleVersion": "2026-07-16.2",
-  "profileVersion": "7.51-v3",
+  "profileVersion": "7.51-v4",
   "researchedAtUtc": "2026-07-16T10:00:00Z",
   "runtimePolicy": "Research-only frozen oracle. The plugin runtime must not load source URLs, model loadouts, burden ranks, or expected answers.",
   "sources": [
@@ -164,9 +164,9 @@
       "baselineLoadoutId": "crafted-unmelded",
       "candidateLoadoutId": "published-high-crafted",
       "candidateHasAdditionalAcquisitionCost": true,
-      "expectedAssessment": "Unsupported",
-      "expectedAdvisorMayConsider": false,
-      "expectedGainedCapabilityIds": []
+      "expectedAssessment": "ClearImprovement",
+      "expectedAdvisorMayConsider": true,
+      "expectedGainedCapabilityIds": [ "ordinary-balanced-stat-dominance" ]
     },
     {
       "caseId": "derived-weaker-dearer-set-regresses",

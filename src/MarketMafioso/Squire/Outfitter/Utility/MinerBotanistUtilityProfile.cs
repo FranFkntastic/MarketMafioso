@@ -37,23 +37,24 @@ public sealed class MinerBotanistUtilityProfile : IEquipmentExactSolverUtilityMo
 {
     public const uint MinerClassJobId = 16;
     public const uint BotanistClassJobId = 17;
-    public const string ProfileId = "squire.min-btn.level-100";
-    public const string ProfileVersion = "7.51-v3";
+    public const string ProfileId = "squire.min-btn.player";
+    public const string ProfileVersion = "7.51-v4";
     public const string LegendaryContextId = "legendary-node-general-yield";
     public const string CollectableContextId = "collectable-i730-efficiency";
-    public const string OrdinaryResourceBenchmarkContextId = "research-only:ordinary-resource";
+    public const string OrdinaryResourceBenchmarkContextId = "ordinary-resource-general-yield";
     public const MinerBotanistCalibrationState CalibrationState = MinerBotanistCalibrationState.Supported;
 
     private const string GatheringKey = "gathering";
     private const string PerceptionKey = "perception";
     private const string GatheringPointsKey = "gathering-points";
     private const double CapabilityStep = 1_000;
+    private const double OrdinaryDominanceStep = 100;
 
     private static readonly JobUtilityProfile Profile = new(
         new(ProfileId, ProfileVersion),
-        "Level 100 Miner / Botanist",
+        "Player Miner / Botanist",
         new HashSet<uint> { MinerClassJobId, BotanistClassJobId },
-        new HashSet<string>(StringComparer.Ordinal) { LegendaryContextId, CollectableContextId },
+        new HashSet<string>(StringComparer.Ordinal) { LegendaryContextId, CollectableContextId, OrdinaryResourceBenchmarkContextId },
         [
             new("gathering", EquipmentStatSemantic.Gathering, EquipmentUtilityRuleKind.PreferMore, 1d / 65d, null,
                 "Gathering contributes bounded monotonic progress; named capability thresholds provide the material steps."),
@@ -62,16 +63,16 @@ public sealed class MinerBotanistUtilityProfile : IEquipmentExactSolverUtilityMo
             new("gp", EquipmentStatSemantic.GatheringPoints, EquipmentUtilityRuleKind.PreferMore, 1d / 11d, null,
                 "GP contributes bounded monotonic progress; only explicitly modeled action or integrity thresholds provide a material step."),
         ],
-        "Patch 7.51 pilot. Each task normalizes its capability steps and bounded monotonic tie-breaks onto a stable 0-100 envelope. The score orders supported loadouts but does not price gil or grant its own recommendation authority.");
+        "Patch 7.51 player profile. Each task normalizes its capability steps and bounded monotonic tie-breaks onto a stable 0-100 envelope. The score orders supported loadouts but does not price gil or grant its own recommendation authority.");
 
     private static readonly EquipmentUtilityComponentDefinition[] Components =
     [
         new(GatheringKey, EquipmentStatSemantic.Gathering, 65, 100,
-            "Bounded Gathering progress inside the supported level-100 profile."),
+            "Bounded Gathering progress inside the supported player profile."),
         new(PerceptionKey, EquipmentStatSemantic.Perception, 65, 100,
-            "Bounded Perception progress inside the supported level-100 profile."),
+            "Bounded Perception progress inside the supported player profile."),
         new(GatheringPointsKey, EquipmentStatSemantic.GatheringPoints, 11, 100,
-            "Bounded GP progress inside the supported level-100 profile."),
+            "Bounded GP progress inside the supported player profile."),
     ];
 
     private readonly EquipmentThresholdUtilityModel model;
@@ -86,17 +87,19 @@ public sealed class MinerBotanistUtilityProfile : IEquipmentExactSolverUtilityMo
     {
         ContextKind = contextKind;
         var contextId = ContextId(contextKind);
-        var supported = contextKind != MinerBotanistUtilityContextKind.OrdinaryResourceBenchmark &&
-            Profile.SupportedContextIds.Contains(contextId) &&
+        var supportedLevel = contextKind == MinerBotanistUtilityContextKind.OrdinaryResourceBenchmark
+            ? characterLevel is >= 1 and <= 100
+            : characterLevel == 100;
+        var supported = Profile.SupportedContextIds.Contains(contextId) &&
             Profile.SupportedClassJobIds.Contains(classJobId) &&
-            characterLevel == 100;
+            supportedLevel;
         var diagnostics = new List<string>();
-        if (contextKind == MinerBotanistUtilityContextKind.OrdinaryResourceBenchmark)
-            diagnostics.Add("Ordinary resource nodes are a required oracle stratum, not yet a user-facing supported context.");
         if (!Profile.SupportedClassJobIds.Contains(classJobId))
             diagnostics.Add("The pilot supports Miner and Botanist only; Fisher requires a separate profile.");
-        if (characterLevel != 100)
-            diagnostics.Add("The pilot is calibrated only for level 100.");
+        if (!supportedLevel)
+            diagnostics.Add(contextKind == MinerBotanistUtilityContextKind.OrdinaryResourceBenchmark
+                ? "The ordinary-node player profile supports levels 1 through 100."
+                : "Legendary and collectable calibration is currently level 100 only.");
         if (contextKind == MinerBotanistUtilityContextKind.CollectableEfficiency)
             diagnostics.Add("The 1000-GP collectable rotation is excluded until its node-return and food assumptions are explicit.");
 
@@ -106,14 +109,21 @@ public sealed class MinerBotanistUtilityProfile : IEquipmentExactSolverUtilityMo
             characterLevel,
             Scenario(contextKind),
             contextKind == MinerBotanistUtilityContextKind.OrdinaryResourceBenchmark
-                ? ["research-only", "ordinary-resource-node"]
+                ? ["patch:7.51", "current-player", "ordinary-resource-node"]
                 : ["patch:7.51", "current-player", contextKind == MinerBotanistUtilityContextKind.CollectableEfficiency ? "collectable" : "legendary-node"]);
+        var totalBaseline = fixedStats is null
+            ? baseline
+            : new(
+                baseline.Gathering + fixedStats.Gathering,
+                baseline.Perception + fixedStats.Perception,
+                baseline.GatheringPoints + fixedStats.GatheringPoints);
+        var capabilities = Capabilities(contextKind, totalBaseline);
         model = new(new(
             Profile,
             context,
             ToVector(baseline),
             Components,
-            Capabilities(contextKind),
+            capabilities,
             UncertaintyRadius: 300,
             UncertaintyReasons:
             [
@@ -123,7 +133,7 @@ public sealed class MinerBotanistUtilityProfile : IEquipmentExactSolverUtilityMo
             IsSupported: supported,
             Diagnostics: diagnostics,
             FixedComponents: fixedStats is null ? null : ToVector(fixedStats),
-            RawScoreMaximum: MaximumRawScore(contextKind),
+            RawScoreMaximum: MaximumRawScore(capabilities),
             NormalizedScoreMaximum: 100d));
         baselineEvaluation = model.Evaluate(ToVector(baseline));
     }
@@ -230,7 +240,8 @@ public sealed class MinerBotanistUtilityProfile : IEquipmentExactSolverUtilityMo
     }
 
     private static IReadOnlyList<EquipmentUtilityCapabilityDefinition> Capabilities(
-        MinerBotanistUtilityContextKind contextKind) => contextKind switch
+        MinerBotanistUtilityContextKind contextKind,
+        MinerBotanistUtilityStats baseline) => contextKind switch
     {
         MinerBotanistUtilityContextKind.LegendaryNodeGeneralYield =>
         [
@@ -254,6 +265,19 @@ public sealed class MinerBotanistUtilityProfile : IEquipmentExactSolverUtilityMo
                 "Both Gathering and Perception are required; partial satisfaction is not a capability."),
             Capability("meticulous-proc-cap-i730", "i730 Meticulous proc cap", GatheringKey, 5_445),
             Capability("intuition-proc-cap-i730", "i730 Intuition proc cap", PerceptionKey, 5_445),
+        ],
+        MinerBotanistUtilityContextKind.OrdinaryResourceBenchmark =>
+        [
+            new(
+                "ordinary-balanced-stat-dominance",
+                "Balanced ordinary-node stat improvement",
+                [
+                    new(GatheringKey, checked(baseline.Gathering + 1)),
+                    new(PerceptionKey, checked(baseline.Perception + 1)),
+                    new(GatheringPointsKey, baseline.GatheringPoints),
+                ],
+                OrdinaryDominanceStep,
+                "The candidate improves both Gathering and Perception without surrendering GP. This is a conservative dominance rule, not a claim about a node-specific breakpoint."),
         ],
         _ => [],
     };
@@ -280,10 +304,10 @@ public sealed class MinerBotanistUtilityProfile : IEquipmentExactSolverUtilityMo
     {
         MinerBotanistUtilityContextKind.LegendaryNodeGeneralYield => "Patch 7.51 general legendary-node yield",
         MinerBotanistUtilityContextKind.CollectableEfficiency => "Patch 7.51 i730 collectable action and proc efficiency",
-        _ => "Research-only regular non-legendary resource-node benchmark",
+        _ => "General regular non-legendary resource-node yield",
     };
 
-    private static double MaximumRawScore(MinerBotanistUtilityContextKind contextKind) =>
+    private static double MaximumRawScore(IReadOnlyList<EquipmentUtilityCapabilityDefinition> capabilities) =>
         Components.Sum(component => component.MaximumContribution) +
-        Capabilities(contextKind).Sum(capability => capability.ScoreContribution);
+        capabilities.Sum(capability => capability.ScoreContribution);
 }

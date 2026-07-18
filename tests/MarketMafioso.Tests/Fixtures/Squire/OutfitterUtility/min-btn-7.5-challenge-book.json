@@ -1,6 +1,6 @@
 {
   "schemaVersion": "squire-min-btn-challenge/v1",
-  "profileVersion": "7.51-v3",
+  "profileVersion": "7.51-v4",
   "cases": [
     {
       "caseId": "legendary-minimum-access",
@@ -128,8 +128,8 @@
       "baseline": { "gathering": 5399, "perception": 5200, "gatheringPoints": 950 },
       "candidate": { "gathering": 5400, "perception": 5200, "gatheringPoints": 950 },
       "additionalCostGil": 0,
-      "expectedAssessment": "Unsupported",
-      "expectedAdvisorMayConsider": false,
+      "expectedAssessment": "ClearImprovement",
+      "expectedAdvisorMayConsider": true,
       "expectedGainedCapabilityIds": [],
       "maximumUtilityDelta": 1.0
     },
@@ -142,8 +142,8 @@
       "baseline": { "gathering": 5885, "perception": 5600, "gatheringPoints": 990 },
       "candidate": { "gathering": 5886, "perception": 5600, "gatheringPoints": 990 },
       "additionalCostGil": 0,
-      "expectedAssessment": "Unsupported",
-      "expectedAdvisorMayConsider": false,
+      "expectedAssessment": "ClearImprovement",
+      "expectedAdvisorMayConsider": true,
       "expectedGainedCapabilityIds": [],
       "maximumUtilityDelta": 1.0
     },
@@ -156,10 +156,10 @@
       "baseline": { "gathering": 5700, "perception": 5504, "gatheringPoints": 995 },
       "candidate": { "gathering": 5710, "perception": 5514, "gatheringPoints": 995 },
       "additionalCostGil": 50000,
-      "expectedAssessment": "Unsupported",
-      "expectedAdvisorMayConsider": false,
-      "expectedGainedCapabilityIds": [],
-      "maximumUtilityDelta": 1.0
+      "expectedAssessment": "ClearImprovement",
+      "expectedAdvisorMayConsider": true,
+      "expectedGainedCapabilityIds": [ "ordinary-balanced-stat-dominance" ],
+      "maximumUtilityDelta": 30.0
     },
     {
       "caseId": "authority-incomplete-ui-evidence",

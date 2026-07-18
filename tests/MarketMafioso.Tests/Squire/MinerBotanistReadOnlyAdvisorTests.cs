@@ -90,6 +90,28 @@ public sealed class MinerBotanistReadOnlyAdvisorTests
     }
 
     [Fact]
+    public void Build_supports_level85_player_in_default_ordinary_context()
+    {
+        var fixture = Fixture(characterLevel: 85, candidatePerception: 1);
+
+        var advice = new MinerBotanistReadOnlyAdvisor().Build(
+            fixture.Baseline,
+            fixture.Resolution,
+            fixture.Evidence,
+            itemId => itemId == fixture.Candidate.ItemId ? [fixture.Candidate] : [],
+            MinerBotanistUtilityContextKind.OrdinaryResourceBenchmark);
+
+        Assert.Equal(MinerBotanistAdvisorStatus.Complete, advice.Status);
+        Assert.NotNull(advice.Nomination);
+        Assert.Contains(
+            advice.Nomination!.Candidate.Selections,
+            value => value.Position == EquipmentLoadoutPosition.MainHand && value.OfferKey.Quality == EquipmentQuality.High);
+        Assert.Contains(
+            advice.AuthorityBySolutionId[advice.Nomination.Candidate.SolutionId].GainedCapabilityIds,
+            value => value == "ordinary-balanced-stat-dominance");
+    }
+
+    [Fact]
     public void Build_prunes_higher_priced_duplicate_listings_but_keeps_two_units_for_rings()
     {
         var fixture = Fixture();
@@ -118,7 +140,7 @@ public sealed class MinerBotanistReadOnlyAdvisorTests
         Assert.DoesNotContain(advice.OffersByAllocation.Keys, value => value.ObservationId == "dominated");
     }
 
-    private static FixtureData Fixture()
+    private static FixtureData Fixture(uint characterLevel = 100, int candidatePerception = 0)
     {
         var positions = new[]
         {
@@ -148,13 +170,13 @@ public sealed class MinerBotanistReadOnlyAdvisorTests
                 $"Current {key}",
                 RenderedItemQuality.Normal,
                 700,
-                100,
+                checked((int)characterLevel),
                 "MIN BTN",
                 stats,
                 new Dictionary<string, int>(),
                 "Complete");
             observed.Add(new(key, slot, RenderedEquipmentSlotObservationStatus.Equipped, item));
-            var definition = Definition(itemId++, item.Name!, slot, 399, 399);
+            var definition = Definition(itemId++, item.Name!, slot, 399, 399, equipLevel: characterLevel);
             var offer = new EquipmentLoadoutOffer(
                 definition,
                 EquipmentAcquisitionSourceKind.Owned,
@@ -168,7 +190,7 @@ public sealed class MinerBotanistReadOnlyAdvisorTests
         var baseline = new RenderedMinerBotanistBaseline(
             RenderedMinerBotanistBaselineStatus.Complete,
             16,
-            100,
+            checked((int)characterLevel),
             new(5_399, 5_200, 950),
             new(5_000, 5_200, 950),
             observed,
@@ -177,7 +199,14 @@ public sealed class MinerBotanistReadOnlyAdvisorTests
             RenderedEquipmentResolutionStatus.Complete,
             resolved,
             "Complete");
-        var candidate = Definition(2_000, "Threshold Pickaxe", EquipmentSlot.MainHand, 399, 400);
+        var candidate = Definition(
+            2_000,
+            "Threshold Pickaxe",
+            EquipmentSlot.MainHand,
+            399,
+            400,
+            highPerception: candidatePerception,
+            equipLevel: characterLevel);
         var now = new DateTimeOffset(2026, 7, 16, 20, 0, 0, TimeSpan.Zero);
         var evidence = new OutfitterMarketEvidenceBook(
             Guid.NewGuid(),
@@ -204,15 +233,21 @@ public sealed class MinerBotanistReadOnlyAdvisorTests
         string name,
         EquipmentSlot slot,
         int normalGathering,
-        int highGathering)
+        int highGathering,
+        int normalPerception = 0,
+        int highPerception = 0,
+        uint equipLevel = 100)
     {
-        EquipmentStatProfile Profile(int value) => new(
-            value == 0 ? [] : [new(72, EquipmentStatSemantic.Gathering, value, false, "Gathering")],
+        EquipmentStatProfile Profile(int gathering, int perception) => new(
+            [
+                ..gathering == 0 ? [] : new EquipmentStatValue[] { new(72, EquipmentStatSemantic.Gathering, gathering, false, "Gathering") },
+                ..perception == 0 ? [] : new EquipmentStatValue[] { new(73, EquipmentStatSemantic.Perception, perception, false, "Perception") },
+            ],
             0, 0, 0, 0, true);
         return new(
             itemId,
             name,
-            100,
+            equipLevel,
             700,
             slot,
             new HashSet<uint> { 16, 17 },
@@ -226,8 +261,8 @@ public sealed class MinerBotanistReadOnlyAdvisorTests
             null,
             null,
             false,
-            StatProfile: Profile(normalGathering),
-            HighQualityStatProfile: Profile(highGathering));
+            StatProfile: Profile(normalGathering, normalPerception),
+            HighQualityStatProfile: Profile(highGathering, highPerception));
     }
 
     private sealed record FixtureData(

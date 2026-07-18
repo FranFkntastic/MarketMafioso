@@ -20,13 +20,12 @@ public sealed record MinerBotanistAdvisorCatalogResult(
 /// </summary>
 public sealed class MinerBotanistAdvisorCatalog
 {
-    public const uint MinimumEquipLevel = 90;
     public const uint MaximumEquipLevel = 100;
 
     private readonly IDataManager dataManager;
     private readonly LuminaRenderedEquipmentDefinitionLookup definitions;
     private readonly OutfitterGilVendorCatalog vendors;
-    private readonly Dictionary<uint, MinerBotanistAdvisorCatalogResult> byClassJobId = [];
+    private readonly Dictionary<(uint ClassJobId, uint CharacterLevel), MinerBotanistAdvisorCatalogResult> byTarget = [];
 
     public MinerBotanistAdvisorCatalog(IDataManager dataManager)
     {
@@ -35,12 +34,16 @@ public sealed class MinerBotanistAdvisorCatalog
         vendors = new(dataManager);
     }
 
-    public MinerBotanistAdvisorCatalogResult Build(uint classJobId)
+    public MinerBotanistAdvisorCatalogResult Build(uint classJobId, uint characterLevel = MaximumEquipLevel)
     {
         if (classJobId is not (MinerBotanistUtilityProfile.MinerClassJobId or MinerBotanistUtilityProfile.BotanistClassJobId))
             throw new ArgumentOutOfRangeException(nameof(classJobId), "The first advisor catalog supports MIN and BTN only.");
-        if (byClassJobId.TryGetValue(classJobId, out var cached))
+        if (characterLevel is < 1 or > MaximumEquipLevel)
+            throw new ArgumentOutOfRangeException(nameof(characterLevel), "The player advisor supports levels 1 through 100.");
+        if (byTarget.TryGetValue((classJobId, characterLevel), out var cached))
             return cached;
+
+        var minimumEquipLevel = MinimumEquipLevel(characterLevel);
 
         var itemSheet = dataManager.GetExcelSheet<Item>() ?? throw new InvalidOperationException("Item sheet is unavailable.");
         var found = new Dictionary<uint, EquipmentItemDefinition>();
@@ -48,8 +51,8 @@ public sealed class MinerBotanistAdvisorCatalog
         var vendorOffers = new List<EquipmentLoadoutOffer>();
         foreach (var item in itemSheet.Where(value =>
                      value.RowId > 0 &&
-                     value.LevelEquip >= MinimumEquipLevel &&
-                     value.LevelEquip <= MaximumEquipLevel &&
+                     value.LevelEquip >= minimumEquipLevel &&
+                     value.LevelEquip <= characterLevel &&
                      value.EquipSlotCategory.RowId != 0))
         {
             var definition = definitions.FindByItemId(item.RowId).SingleOrDefault();
@@ -76,13 +79,19 @@ public sealed class MinerBotanistAdvisorCatalog
         }
 
         var result = new MinerBotanistAdvisorCatalogResult(
-            $"Equipped UI evidence plus level {MinimumEquipLevel}-{MaximumEquipLevel} MIN/BTN market and gil-vendor equipment; armoury inventory is not yet observed.",
+            $"Equipped UI evidence plus level {minimumEquipLevel}-{characterLevel} MIN/BTN market and gil-vendor equipment; armoury inventory is not yet observed.",
             marketItemIds.Distinct().Order().ToArray(),
             vendorOffers,
             found);
-        byClassJobId[classJobId] = result;
+        byTarget[(classJobId, characterLevel)] = result;
         return result;
     }
+
+    internal static uint MinimumEquipLevel(uint characterLevel) => characterLevel switch
+    {
+        <= 10 => 1,
+        _ => Math.Max(1u, characterLevel - 10),
+    };
 
     private static bool HasRelevantCompleteProfile(EquipmentItemDefinition definition) =>
         Relevant(definition.StatProfile) || Relevant(definition.HighQualityStatProfile);

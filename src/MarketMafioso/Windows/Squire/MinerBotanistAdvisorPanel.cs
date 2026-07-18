@@ -763,7 +763,7 @@ internal sealed class MinerBotanistAdvisorPanel
     {
         MinerBotanistUtilityContextKind.LegendaryNodeGeneralYield => "Legendary nodes · general yield",
         MinerBotanistUtilityContextKind.CollectableEfficiency => "Collectables · i730 efficiency",
-        _ => "Ordinary nodes · research benchmark",
+        _ => "Ordinary nodes · general yield",
     };
 
     private static Vector4 StatusColor(MinerBotanistAdvisorSessionStage stage) => stage switch

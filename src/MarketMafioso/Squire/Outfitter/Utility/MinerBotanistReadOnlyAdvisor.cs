@@ -45,9 +45,10 @@ public sealed class MinerBotanistReadOnlyAdvisor
         ArgumentNullException.ThrowIfNull(marketEvidence);
         ArgumentNullException.ThrowIfNull(findDefinitionsByItemId);
         if (baseline is not { Status: RenderedMinerBotanistBaselineStatus.Complete, ClassJobId: { } classJobId,
-                Level: 100, TotalStats: { } total, FixedStats: { } fixedStats } ||
+                Level: { } characterLevel, TotalStats: { } total, FixedStats: { } fixedStats } ||
+            characterLevel is < 1 or > 100 ||
             currentEquipment.Status != RenderedEquipmentResolutionStatus.Complete || currentEquipment.Slots.Count != 12)
-            return Abstain("A complete rendered level-100 MIN/BTN baseline and twelve uniquely resolved slots are required.");
+            return Abstain("A complete rendered level 1-100 MIN/BTN baseline and twelve uniquely resolved slots are required.");
         if (!marketEvidence.IsPublishable)
             return Abstain("The exact-quality market evidence generation is incomplete or stale; the advisor will not nominate from it.");
         var unsupportedCurrent = currentEquipment.Slots.FirstOrDefault(value => HasUnmodeledEffectOrRestriction(value.Definition));
@@ -58,7 +59,7 @@ public sealed class MinerBotanistReadOnlyAdvisor
             total.Gathering - fixedStats.Gathering,
             total.Perception - fixedStats.Perception,
             total.GatheringPoints - fixedStats.GatheringPoints);
-        var profile = new MinerBotanistUtilityProfile(contextKind, offerStats, classJobId, 100, fixedStats);
+        var profile = new MinerBotanistUtilityProfile(contextKind, offerStats, classJobId, checked((uint)characterLevel), fixedStats);
         var offers = new List<EquipmentExactSolverOffer>();
         var required = currentEquipment.Slots.Select(value => value.Position).ToHashSet();
         var baselineKeys = required.ToDictionary(position => position, _ => (EquipmentOfferAllocationKey?)null);
@@ -87,7 +88,7 @@ public sealed class MinerBotanistReadOnlyAdvisor
         foreach (var itemEvidence in marketEvidence.Items.Where(value => value.Status == OutfitterMarketEvidenceItemStatus.Fresh))
         {
             var definitions = findDefinitionsByItemId(itemEvidence.ItemId)
-                .Where(value => value.ItemId == itemEvidence.ItemId && value.EquipLevel <= 100 && value.EligibleClassJobIds.Contains(classJobId))
+                .Where(value => value.ItemId == itemEvidence.ItemId && value.EquipLevel <= characterLevel && value.EligibleClassJobIds.Contains(classJobId))
                 .ToArray();
             if (definitions.Length != 1)
                 return Abstain($"Market item {itemEvidence.ItemId} did not resolve to exactly one eligible static equipment definition.");
@@ -147,8 +148,8 @@ public sealed class MinerBotanistReadOnlyAdvisor
         foreach (var vendor in vendorOffers ?? [])
         {
             if (vendor.SourceKind != EquipmentAcquisitionSourceKind.GilVendor || vendor.UnitPriceGil is not { } price ||
-                !vendor.Definition.EligibleClassJobIds.Contains(classJobId) || vendor.Definition.EquipLevel > 100)
-                return Abstain("Vendor offer evidence did not match the supported level-100 MIN/BTN target.");
+                !vendor.Definition.EligibleClassJobIds.Contains(classJobId) || vendor.Definition.EquipLevel > characterLevel)
+                return Abstain("Vendor offer evidence did not match the supported rendered MIN/BTN target.");
             if (HasUnmodeledEffectOrRestriction(vendor.Definition))
                 return Abstain($"{vendor.Definition.Name} has an unmodeled effect or equip restriction.");
             var statProfile = vendor.ResolveStatProfile();

@@ -5,6 +5,16 @@ namespace MarketMafioso.Tests.Squire;
 
 public sealed class MinerBotanistUtilityProfileTests
 {
+    [Theory]
+    [InlineData(1u, 1u)]
+    [InlineData(10u, 1u)]
+    [InlineData(85u, 75u)]
+    [InlineData(100u, 90u)]
+    public void PlayerCatalogUsesBoundedTenLevelHorizon(uint characterLevel, uint expectedMinimum)
+    {
+        Assert.Equal(expectedMinimum, MinerBotanistAdvisorCatalog.MinimumEquipLevel(characterLevel));
+    }
+
     [Fact]
     public void HqCrossingLegendaryYieldThresholdEarnsCapabilityAuthority()
     {
@@ -92,7 +102,7 @@ public sealed class MinerBotanistUtilityProfileTests
     }
 
     [Fact]
-    public void OrdinaryResourceBenchmarkDoesNotLeakLegendaryThresholdStep()
+    public void OrdinaryResourceContextDoesNotLeakLegendaryThresholdStep()
     {
         var profile = new MinerBotanistUtilityProfile(
             MinerBotanistUtilityContextKind.OrdinaryResourceBenchmark,
@@ -103,9 +113,30 @@ public sealed class MinerBotanistUtilityProfileTests
         var authority = profile.AssessAuthorityForCalibration(candidate, 0);
 
         Assert.InRange(candidate.UtilityScore - profile.BaselineEvaluation.UtilityScore, 0.001, 1);
-        Assert.Empty(candidate.Thresholds);
-        Assert.Equal(UpgradeAssessment.Unsupported, candidate.Assessment);
-        Assert.False(authority.AdvisorMayConsider);
+        Assert.DoesNotContain(candidate.Thresholds, threshold => threshold.ThresholdId == "node-yield-plus-one");
+        Assert.DoesNotContain(candidate.Thresholds, threshold => threshold.ThresholdId == "ordinary-balanced-stat-dominance" && threshold.Satisfied);
+        Assert.Equal(UpgradeAssessment.ClearImprovement, candidate.Assessment);
+        Assert.True(authority.AdvisorMayConsider);
+    }
+
+    [Fact]
+    public void Level85BalancedOrdinaryUpgradeMayBeConsideredWithoutPretendingAtNodeBreakpoint()
+    {
+        var profile = new MinerBotanistUtilityProfile(
+            MinerBotanistUtilityContextKind.OrdinaryResourceBenchmark,
+            new(2_577, 2_577, 764),
+            MinerBotanistUtilityProfile.MinerClassJobId,
+            characterLevel: 85);
+
+        var candidate = profile.Evaluate(new MinerBotanistUtilityStats(2_600, 2_600, 764));
+        var authority = profile.AssessAuthority(candidate, 25_000);
+
+        Assert.Equal(UpgradeAssessment.ClearImprovement, candidate.Assessment);
+        Assert.True(authority.AdvisorMayConsider);
+        Assert.Equal(["ordinary-balanced-stat-dominance"], authority.GainedCapabilityIds);
+        Assert.Contains(candidate.Thresholds, threshold =>
+            threshold.ThresholdId == "ordinary-balanced-stat-dominance" &&
+            threshold.Rationale.Contains("not a claim", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]

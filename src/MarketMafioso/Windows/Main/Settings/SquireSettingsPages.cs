@@ -38,9 +38,9 @@ internal sealed class SquireSettingsPages
     private void DrawOutfitterAdvisor(SettingsPageContext context)
     {
         DrawCheckbox(context, "Open the read-only MIN/BTN advisor by default",
-            "Experimental surface. The Outfitter always keeps both its complete loadout planner and this advisor available; this setting chooses the initially visible view. The advisor observes the active level-100 MIN/BTN through rendered Character UI and compares exact NQ/HQ market and vendor offers without purchasing or equipping.",
+            "Experimental surface. The Outfitter always keeps both its complete loadout planner and this advisor available; this setting chooses the initially visible view. The advisor observes the active level 1-100 MIN/BTN through rendered Character UI and compares exact NQ/HQ market and vendor offers without purchasing or equipping.",
             () => config.Squire.EnableOutfitterAdvisor, value => config.Squire.EnableOutfitterAdvisor = value);
-        Dalamud.Bindings.ImGui.ImGui.TextWrapped("Current coverage: equipped UI evidence plus level 90-100 market and gil-vendor equipment. Armoury inventory and retainers remain outside this release and are stated explicitly in the workbench.");
+        Dalamud.Bindings.ImGui.ImGui.TextWrapped("Current coverage: equipped UI evidence plus a bounded ten-level market and gil-vendor horizon up to the rendered player level. Armoury inventory and retainers remain outside this release and are stated explicitly in the workbench.");
     }
 
     private void DrawRecovery(SettingsPageContext context)

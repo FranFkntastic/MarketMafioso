@@ -44,15 +44,17 @@ public sealed class MinerBotanistAdvisorSyntheticReviewTests
     }
 
     [Fact]
-    public void OrdinaryNodeReplayDisplaysFrontierButCannotNominate()
+    public void OrdinaryNodeReplayDisplaysFrontierAndConservativeDominanceNomination()
     {
         var advice = MinerBotanistAdvisorSyntheticReview.Build(
             MinerBotanistUtilityContextKind.OrdinaryResourceBenchmark);
 
         Assert.NotNull(advice.Frontier);
         Assert.NotEmpty(advice.Frontier.Pareto.Frontier);
-        Assert.Null(advice.Nomination);
-        Assert.All(advice.AuthorityBySolutionId.Values, authority => Assert.False(authority.AdvisorMayConsider));
+        Assert.Equal("published-mid-crafted", advice.Nomination?.Candidate.SolutionId);
+        Assert.Contains(
+            advice.AuthorityBySolutionId[advice.Nomination!.Candidate.SolutionId].GainedCapabilityIds,
+            value => value == "ordinary-balanced-stat-dominance");
     }
 
     [Fact]

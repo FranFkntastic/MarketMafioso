@@ -177,9 +177,9 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
                 Abstain($"Rendered Character observation did not become complete within 15 seconds: {renderedStats.Diagnostic}");
             return;
         }
-        if (renderedStats.Level != 100)
+        if (renderedStats.Level is not (>= 1 and <= 100))
         {
-            Abstain("The first advisor release supports only a rendered level-100 Miner or Botanist.");
+            Abstain("The player advisor supports rendered Miner or Botanist levels 1 through 100.");
             return;
         }
         renderedEquipment = probe.BeginEquipmentScan();
@@ -225,6 +225,11 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
             Abstain(baseline.Diagnostic);
             return;
         }
+        if (classJobId is not (MinerBotanistUtilityProfile.MinerClassJobId or MinerBotanistUtilityProfile.BotanistClassJobId))
+        {
+            Abstain("The current player profile supports rendered Miner and Botanist; other player jobs remain visible but unsupported.");
+            return;
+        }
         resolution = RenderedEquipmentDefinitionResolver.Resolve(
             renderedEquipment.Observations,
             classJobId,
@@ -235,7 +240,7 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
             return;
         }
 
-        offers = catalog.Build(classJobId);
+        offers = catalog.Build(classJobId, checked((uint)baseline.Level!.Value));
         if (offers.MarketItemIds.Count == 0)
         {
             Abstain("The declared market scope contains no eligible items in this game-data version.");
