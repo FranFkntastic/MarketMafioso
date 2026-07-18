@@ -55,6 +55,7 @@ internal sealed class SquireTabPanel : IDisposable
     private readonly DalamudFilterAutocompleteState filterEditor = new();
     private readonly SquireCandidateFilter candidateFilter = new();
     private bool filterReferenceRequested;
+    private System.Numerics.Vector2 filterReferenceAnchor;
     private bool showProtected;
     private bool showNonEquipment;
     private bool selectionMode;
@@ -299,6 +300,7 @@ internal sealed class SquireTabPanel : IDisposable
         ImGui.SameLine();
         if (ImGui.SmallButton("?##SquireFilterReference"))
             filterReferenceRequested = true;
+        filterReferenceAnchor = new System.Numerics.Vector2(ImGui.GetItemRectMax().X, ImGui.GetItemRectMax().Y + 4);
         RegisterLastControl(
             "squire.filter-reference",
             "Open Squire filter reference",
@@ -655,8 +657,9 @@ internal sealed class SquireTabPanel : IDisposable
         ImGui.EndTable();
     }
 
-    private static void DrawFilterReference()
+    private void DrawFilterReference()
     {
+        ImGui.SetNextWindowPos(filterReferenceAnchor, ImGuiCond.Appearing, new System.Numerics.Vector2(1, 0));
         ImGui.SetNextWindowSizeConstraints(new System.Numerics.Vector2(390, 0), new System.Numerics.Vector2(560, 420));
         if (!ImGui.BeginPopup("##SquireFilterReferencePopup"))
             return;
