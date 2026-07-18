@@ -51,7 +51,7 @@ public sealed class MinerBotanistReadOnlyAdvisor
             return Abstain("A complete rendered level 1-100 MIN/BTN baseline and twelve uniquely resolved slots are required.");
         if (!marketEvidence.IsPublishable)
             return Abstain("The exact-quality market evidence generation is incomplete or stale; the advisor will not nominate from it.");
-        var unsupportedCurrent = currentEquipment.Slots.FirstOrDefault(value => HasUnmodeledEffectOrRestriction(value.Definition));
+        var unsupportedCurrent = currentEquipment.Slots.FirstOrDefault(value => MinerBotanistEquipmentSupportPolicy.HasUnmodeledEffectOrRestriction(value.Definition));
         if (unsupportedCurrent is not null)
             return Abstain($"Currently equipped {unsupportedCurrent.Definition.Name} has an unmodeled effect or equip restriction.");
 
@@ -93,7 +93,7 @@ public sealed class MinerBotanistReadOnlyAdvisor
             if (definitions.Length != 1)
                 return Abstain($"Market item {itemEvidence.ItemId} did not resolve to exactly one eligible static equipment definition.");
             var definition = definitions[0];
-            if (HasUnmodeledEffectOrRestriction(definition))
+            if (MinerBotanistEquipmentSupportPolicy.HasUnmodeledEffectOrRestriction(definition))
                 return Abstain($"{definition.Name} has an unmodeled effect or equip restriction.");
             foreach (var listing in RelevantListings(itemEvidence.Listings))
             {
@@ -150,7 +150,7 @@ public sealed class MinerBotanistReadOnlyAdvisor
             if (vendor.SourceKind != EquipmentAcquisitionSourceKind.GilVendor || vendor.UnitPriceGil is not { } price ||
                 !vendor.Definition.EligibleClassJobIds.Contains(classJobId) || vendor.Definition.EquipLevel > characterLevel)
                 return Abstain("Vendor offer evidence did not match the supported rendered MIN/BTN target.");
-            if (HasUnmodeledEffectOrRestriction(vendor.Definition))
+            if (MinerBotanistEquipmentSupportPolicy.HasUnmodeledEffectOrRestriction(vendor.Definition))
                 return Abstain($"{vendor.Definition.Name} has an unmodeled effect or equip restriction.");
             var statProfile = vendor.ResolveStatProfile();
             if (statProfile is not { IsComplete: true })
@@ -259,9 +259,6 @@ public sealed class MinerBotanistReadOnlyAdvisor
         "ring-right" => EquipmentLoadoutPosition.RightRing,
         _ => throw new ArgumentOutOfRangeException(nameof(key), key, "Unsupported rendered equipment position."),
     };
-
-    private static bool HasUnmodeledEffectOrRestriction(EquipmentItemDefinition definition) =>
-        definition.ItemSpecialBonusId != 0 || definition.ItemActionId != 0 || definition.HasUnmodeledEquipRestriction;
 
     private static IEnumerable<OutfitterMarketListingEvidence> RelevantListings(
         IReadOnlyList<OutfitterMarketListingEvidence> listings)

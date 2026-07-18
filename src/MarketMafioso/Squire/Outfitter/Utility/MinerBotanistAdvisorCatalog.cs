@@ -81,7 +81,7 @@ public sealed class MinerBotanistAdvisorCatalog
                 incompleteProfile++;
                 continue;
             }
-            if (HasUnmodeledEffectOrRestriction(definition))
+            if (MinerBotanistEquipmentSupportPolicy.HasUnmodeledEffectOrRestriction(definition))
             {
                 unmodeled++;
                 if (unmodeledSamples.Count < 4)
@@ -142,6 +142,4 @@ public sealed class MinerBotanistAdvisorCatalog
         profile is { IsComplete: true } && profile.Parameters.Any(value => value.Value > 0 && value.Semantic is
             EquipmentStatSemantic.Gathering or EquipmentStatSemantic.Perception or EquipmentStatSemantic.GatheringPoints);
 
-    private static bool HasUnmodeledEffectOrRestriction(EquipmentItemDefinition definition) =>
-        definition.ItemSpecialBonusId != 0 || definition.ItemActionId != 0 || definition.HasUnmodeledEquipRestriction;
 }

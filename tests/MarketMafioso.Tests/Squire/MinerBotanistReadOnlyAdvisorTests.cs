@@ -65,6 +65,32 @@ public sealed class MinerBotanistReadOnlyAdvisorTests
     }
 
     [Fact]
+    public void Build_accepts_empty_row1_crafted_gatherer_marker_but_not_a_parameterized_bonus()
+    {
+        var fixture = Fixture();
+        var modeled = fixture.Candidate with { ItemSpecialBonusId = 1, ItemSpecialBonusParam = 0 };
+        var unmodeled = modeled with { ItemSpecialBonusParam = 1 };
+
+        var accepted = new MinerBotanistReadOnlyAdvisor().Build(
+            fixture.Baseline,
+            fixture.Resolution,
+            fixture.Evidence,
+            _ => [modeled],
+            MinerBotanistUtilityContextKind.LegendaryNodeGeneralYield);
+        var rejected = new MinerBotanistReadOnlyAdvisor().Build(
+            fixture.Baseline,
+            fixture.Resolution,
+            fixture.Evidence,
+            _ => [unmodeled],
+            MinerBotanistUtilityContextKind.LegendaryNodeGeneralYield);
+
+        Assert.Equal(MinerBotanistAdvisorStatus.Complete, accepted.Status);
+        Assert.NotNull(accepted.Nomination);
+        Assert.Equal(MinerBotanistAdvisorStatus.Abstained, rejected.Status);
+        Assert.Contains("unmodeled effect", rejected.Diagnostic, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Build_considers_vendor_and_market_costs_on_the_same_frontier()
     {
         var fixture = Fixture();
