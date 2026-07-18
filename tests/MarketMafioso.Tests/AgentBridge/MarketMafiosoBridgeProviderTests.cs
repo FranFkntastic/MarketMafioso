@@ -159,9 +159,11 @@ public sealed class MarketMafiosoBridgeProviderTests
             CreateTruth, () => { }, () => { }, () => { }, _ => { }, _ => true, () => { }, () => { },
             () => true,
             new AgentBridgeUiReviewRegistry(),
-            tryEquipCalibrationGearsetUi: _ => expected);
+            trySelectCalibrationGearsetUi: _ => expected,
+            tryEquipSelectedGearsetUi: () => expected);
 
-        Assert.Same(expected, provider.TryEquipCalibrationGearsetUi("Miner"));
+        Assert.Same(expected, provider.TrySelectCalibrationGearsetUi("Miner"));
+        Assert.Same(expected, provider.TryEquipSelectedGearsetUi());
     }
 
     [Fact]

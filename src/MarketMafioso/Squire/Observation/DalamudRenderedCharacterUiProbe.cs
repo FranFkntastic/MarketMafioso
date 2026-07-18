@@ -143,23 +143,21 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
             };
     }
 
-    public unsafe Franthropy.Dalamud.AgentBridge.RenderedUiTextActionResult TryEquipCalibrationGearset(string target)
+    public Franthropy.Dalamud.AgentBridge.RenderedUiTextActionResult TrySelectCalibrationGearset(string target)
     {
         if (!GearsetChangeCommand.TryCreate(target, out var command))
             return new(false, "InvalidCalibrationJob", "Target must be Miner, Botanist, or Blacksmith.", "GearSetList", null);
-        var selected = renderedTextActions.TrySelectUniqueListRowText("GearSetList", command.JobName);
-        if (!selected.Success)
-            return selected;
+        return renderedTextActions.TrySelectUniqueListRowText("GearSetList", command.JobName);
+    }
+
+    public unsafe Franthropy.Dalamud.AgentBridge.RenderedUiTextActionResult TryEquipSelectedGearset()
+    {
         var addon = gameGui.GetAddonByName<AtkUnitBase>("GearSetList", 1);
         if (addon == null || addon->RootNode == null || !addon->RootNode->IsVisible() || !addon->IsReady)
             return new(false, "RenderedAddonUnavailable", "The rendered Gear Set list changed before equipping.", "GearSetList", null);
         new AddonMaster.GearSetList(addon).EquipSet();
         gatheringStatsStabilizer.Reset();
-        return selected with
-        {
-            Code = "RenderedGearsetEquipDispatched",
-            Message = "The rendered row was selected and the Gear Set list's Equip Set control was activated.",
-        };
+        return new(true, "RenderedGearsetEquipDispatched", "The Gear Set list's rendered Equip Set control was activated.", "GearSetList", null);
     }
 
     public unsafe AgentBridgeRenderedUiSnapshot Capture()

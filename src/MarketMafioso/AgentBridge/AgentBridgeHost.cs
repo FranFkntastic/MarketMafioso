@@ -297,8 +297,13 @@ public sealed class AgentBridgeHost : IDisposable
                     ? AgentBridgeResponse.Ok("Rendered Character Gear Set action dispatched.", gearsetListOpen)
                     : new AgentBridgeResponse { Success = false, Message = gearsetListOpen.Message, Receipt = gearsetListOpen };
             case "equip-calibration-gearset-ui":
+                RenderedUiTextActionResult? calibrationGearsetSelect = null;
+                await dispatchOnFramework(() => calibrationGearsetSelect = provider.TrySelectCalibrationGearsetUi(request.Target ?? string.Empty)).ConfigureAwait(false);
+                if (!calibrationGearsetSelect!.Success)
+                    return new AgentBridgeResponse { Success = false, Message = calibrationGearsetSelect.Message, Receipt = calibrationGearsetSelect };
+                await Task.Delay(150).ConfigureAwait(false);
                 RenderedUiTextActionResult? calibrationGearsetEquip = null;
-                await dispatchOnFramework(() => calibrationGearsetEquip = provider.TryEquipCalibrationGearsetUi(request.Target ?? string.Empty)).ConfigureAwait(false);
+                await dispatchOnFramework(() => calibrationGearsetEquip = provider.TryEquipSelectedGearsetUi()).ConfigureAwait(false);
                 return calibrationGearsetEquip!.Success
                     ? AgentBridgeResponse.Ok("Rendered gearset row and Equip Set actions dispatched; rendered job verification is still required.", calibrationGearsetEquip)
                     : new AgentBridgeResponse { Success = false, Message = calibrationGearsetEquip.Message, Receipt = calibrationGearsetEquip };
