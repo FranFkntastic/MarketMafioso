@@ -47,6 +47,7 @@ public sealed class MinerBotanistAdvisorCatalog
         var minimumEquipLevel = MinimumEquipLevel(characterLevel);
 
         var itemSheet = dataManager.GetExcelSheet<Item>() ?? throw new InvalidOperationException("Item sheet is unavailable.");
+        var specialBonusSheet = dataManager.GetExcelSheet<ItemSpecialBonus>() ?? throw new InvalidOperationException("ItemSpecialBonus sheet is unavailable.");
         var found = new Dictionary<uint, EquipmentItemDefinition>();
         var marketItemIds = new List<uint>();
         var vendorOffers = new List<EquipmentLoadoutOffer>();
@@ -84,8 +85,11 @@ public sealed class MinerBotanistAdvisorCatalog
             {
                 unmodeled++;
                 if (unmodeledSamples.Count < 4)
+                {
+                    var specialBonus = specialBonusSheet.GetRowOrDefault(definition.ItemSpecialBonusId);
                     unmodeledSamples.Add(
-                        $"{definition.Name}({definition.ItemId}:bonus={definition.ItemSpecialBonusId},action={definition.ItemActionId},restriction={definition.EquipRestrictionId},gc={definition.GrandCompanyId},pvp={definition.RequiredPvpRank})");
+                        $"{definition.Name}({definition.ItemId}:bonus={definition.ItemSpecialBonusId}:{specialBonus?.Name}:{specialBonus?.RequirementText},action={definition.ItemActionId},restriction={definition.EquipRestrictionId},gc={definition.GrandCompanyId},pvp={definition.RequiredPvpRank})");
+                }
                 continue;
             }
             found[definition.ItemId] = definition;
