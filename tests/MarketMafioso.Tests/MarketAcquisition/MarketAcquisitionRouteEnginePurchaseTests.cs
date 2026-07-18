@@ -33,6 +33,7 @@ public sealed class MarketAcquisitionRouteEnginePurchaseTests
         Assert.Equal("Completed", harness.Runner.State);
         Assert.Contains("Would purchase", harness.Runner.StatusMessage, StringComparison.Ordinal);
         Assert.DoesNotContain("Purchased", harness.Runner.StatusMessage, StringComparison.Ordinal);
+        Assert.True(harness.Ui.CloseMarketBoardCallCount > 0);
         var packageDirectory = Path.GetDirectoryName(Assert.IsType<string>(harness.Runner.LastDiagnosticFilePath));
         var manifest = File.ReadAllText(Path.Combine(Assert.IsType<string>(packageDirectory), "manifest.json"));
         var purchases = File.ReadAllText(Assert.IsType<string>(harness.Runner.LastPurchaseRecordsCsvPath));

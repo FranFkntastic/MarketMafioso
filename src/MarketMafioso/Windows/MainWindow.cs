@@ -687,9 +687,6 @@ public class MainWindow : Window, IDisposable
 
     public void AgentStopRoute()
     {
-        if (!routeEngine.IsRouteActive)
-            return;
-
         routeEngine.Stop();
         routeEngine.ReportRouteProgress();
     }

@@ -331,6 +331,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
     public MarketAcquisitionRouteActionResult Stop()
     {
+        uiAutomation.TryCloseMarketBoardWindows();
         CleanupOwnedApproach("Stop");
         CleanupOwnedTravel("Stop");
         CancelActiveOperation("Route stopped.");
@@ -1340,6 +1341,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         ClearMarketBoardAutomationState();
 
         var nextStop = runner.ActiveStop;
+        if (nextStop == null || !nextStop.WorldName.Equals(currentWorld, StringComparison.OrdinalIgnoreCase))
+            uiAutomation.TryCloseMarketBoardWindows();
         if (nextStop == null || !nextStop.WorldName.Equals(currentWorld, StringComparison.OrdinalIgnoreCase))
         {
             state.ActiveWorldPurchasedQuantity = 0;
