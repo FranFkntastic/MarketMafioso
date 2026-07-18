@@ -35,11 +35,11 @@ public sealed class OutfitterMarketEvidenceDiscoveryService
         this.cache = cache ?? throw new ArgumentNullException(nameof(cache));
         this.bookStore = bookStore;
         this.utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
-        latestPublished = initialPublishedBook;
+        latestPublished = initialPublishedBook is null ? null : NormalizeBook(initialPublishedBook);
         loaded = initialPublishedBook is not null || bookStore is null;
-        revision = initialPublishedBook?.Revision ?? 0;
-        if (initialPublishedBook is not null)
-            SeedCache(initialPublishedBook);
+        revision = latestPublished?.Revision ?? 0;
+        if (latestPublished is not null)
+            SeedCache(latestPublished);
     }
 
     public event Action<OutfitterMarketDiscoveryLiveState>? StateChanged;
@@ -330,6 +330,8 @@ public sealed class OutfitterMarketEvidenceDiscoveryService
                 return;
             latestPublished = await bookStore!.LoadAsync(cancellationToken).ConfigureAwait(false);
             if (latestPublished is not null)
+                latestPublished = NormalizeBook(latestPublished);
+            if (latestPublished is not null)
             {
                 revision = Math.Max(revision, latestPublished.Revision);
                 SeedCache(latestPublished);
@@ -413,6 +415,32 @@ public sealed class OutfitterMarketEvidenceDiscoveryService
         left.Quantity == right.Quantity &&
         left.UnitPrice == right.UnitPrice &&
         left.LastReviewTimeUtc == right.LastReviewTimeUtc;
+
+    private static OutfitterMarketEvidenceBook NormalizeBook(OutfitterMarketEvidenceBook book)
+    {
+        var changed = false;
+        var items = book.Items.Select(item =>
+        {
+            var listings = NormalizeEvidenceListings(item.Listings);
+            if (ReferenceEquals(listings, item.Listings))
+                return item;
+            changed = true;
+            return item with { Listings = listings };
+        }).ToArray();
+        return changed ? book with { Items = items } : book;
+    }
+
+    private static IReadOnlyList<OutfitterMarketListingEvidence> NormalizeEvidenceListings(
+        IReadOnlyList<OutfitterMarketListingEvidence> listings)
+    {
+        var groups = listings.GroupBy(listing => listing.ListingId, StringComparer.Ordinal).ToArray();
+        if (groups.All(group => group.Count() == 1))
+            return listings;
+        return groups.SelectMany(group => group.Skip(1).All(candidate => candidate == group.First())
+            ? group.Take(1)
+            : group)
+        .ToArray();
+    }
 
     private static bool EquivalentEvidence(OutfitterMarketEvidenceBook? left, OutfitterMarketEvidenceBook right)
     {

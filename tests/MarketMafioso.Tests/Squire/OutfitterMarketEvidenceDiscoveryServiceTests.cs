@@ -76,6 +76,25 @@ public sealed class OutfitterMarketEvidenceDiscoveryServiceTests
     }
 
     [Fact]
+    public async Task PersistedExactDuplicates_AreRepairedBeforeWarmCacheUse()
+    {
+        var evidence = ItemEvidence(10, Now, Listing(10, "persisted-duplicate", false, 500));
+        var duplicate = evidence with { Listings = [evidence.Listings[0], evidence.Listings[0] with { }] };
+        var source = new StubListingSource((_, _) => throw new InvalidOperationException("Repaired warm cache must not fetch."));
+        var service = new OutfitterMarketEvidenceDiscoveryService(
+            source,
+            Cache(),
+            utcNow: () => Now,
+            initialPublishedBook: PublishedBook(duplicate));
+
+        var result = await service.DiscoverAsync(Request([10]), CancellationToken.None);
+
+        Assert.Empty(source.Requests);
+        Assert.Single(Assert.Single(result.WorkingBook.Items).Listings);
+        Assert.Single(Assert.Single(result.PublishedBook!.Items).Listings);
+    }
+
+    [Fact]
     public async Task DuplicateDiscovery_IsCoalescedIntoOneProviderFetch()
     {
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
