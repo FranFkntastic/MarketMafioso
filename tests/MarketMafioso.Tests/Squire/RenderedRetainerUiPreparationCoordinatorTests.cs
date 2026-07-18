@@ -11,7 +11,7 @@ public sealed class RenderedRetainerUiPreparationCoordinatorTests
     public void Begin_completes_without_commands_when_rendered_retainer_list_is_visible()
     {
         var commands = new List<string>();
-        var result = new RenderedRetainerUiPreparationCoordinator().Begin(Start, true, true, command => { commands.Add(command); return true; });
+        var result = new RenderedRetainerUiPreparationCoordinator().Begin(Start, true, true, "Siren", command => { commands.Add(command); return true; });
 
         Assert.Equal(RenderedRetainerUiPreparationStatus.Complete, result.Status);
         Assert.Empty(commands);
@@ -24,21 +24,21 @@ public sealed class RenderedRetainerUiPreparationCoordinatorTests
         bool Process(string command) { commands.Add(command); return true; }
         var coordinator = new RenderedRetainerUiPreparationCoordinator();
 
-        Assert.Equal(RenderedRetainerUiPreparationStatus.Traveling, coordinator.Begin(Start, false, true, Process).Status);
+        Assert.Equal(RenderedRetainerUiPreparationStatus.Traveling, coordinator.Begin(Start, false, true, "Siren", Process).Status);
         Assert.Equal(RenderedRetainerUiPreparationStatus.Traveling, coordinator.Advance(Start.AddSeconds(1), false, true, false, false, Process).Status);
         Assert.Equal(RenderedRetainerUiPreparationStatus.ClearingMarketBoardUi, coordinator.Advance(Start.AddSeconds(3), false, true, true, true, Process).Status);
         Assert.Equal(RenderedRetainerUiPreparationStatus.OpeningRetainerList, coordinator.Advance(Start.AddSeconds(4), false, true, false, false, Process).Status);
         Assert.Equal(RenderedRetainerUiPreparationStatus.OpeningRetainerList, coordinator.Advance(Start.AddSeconds(5), false, true, true, false, Process).Status);
         Assert.Equal(RenderedRetainerUiPreparationStatus.Complete, coordinator.Advance(Start.AddSeconds(6), true, true, false, false, Process).Status);
         Assert.Equal(1, coordinator.Snapshot().InteractionAttempts);
-        Assert.Equal(["/li mb", "lifestream:interact-object:2000401"], commands);
+        Assert.Equal(["/li Siren mb", "lifestream:interact-object:2000401"], commands);
     }
 
     [Fact]
     public void Workflow_fails_closed_when_lifestream_state_is_unavailable()
     {
         var coordinator = new RenderedRetainerUiPreparationCoordinator();
-        coordinator.Begin(Start, false, true, _ => true);
+        coordinator.Begin(Start, false, true, "Siren", _ => true);
 
         var result = coordinator.Advance(Start.AddSeconds(3), false, false, false, false, _ => true);
 
@@ -49,7 +49,7 @@ public sealed class RenderedRetainerUiPreparationCoordinatorTests
     public void Workflow_fails_when_interaction_finishes_without_rendered_list()
     {
         var coordinator = new RenderedRetainerUiPreparationCoordinator();
-        coordinator.Begin(Start, false, true, _ => true);
+        coordinator.Begin(Start, false, true, "Siren", _ => true);
         coordinator.Advance(Start.AddSeconds(3), false, true, false, false, _ => true);
 
         var result = coordinator.Advance(Start.AddSeconds(7), false, true, false, false, _ => true);
@@ -68,26 +68,26 @@ public sealed class RenderedRetainerUiPreparationCoordinatorTests
     {
         var commands = new List<string>();
         var coordinator = new RenderedRetainerUiPreparationCoordinator();
-        coordinator.Begin(Start, false, true, command => { commands.Add(command); return true; });
+        coordinator.Begin(Start, false, true, "Siren", command => { commands.Add(command); return true; });
 
         var result = coordinator.Advance(Start.AddSeconds(3), false, true, true, true,
             command => { commands.Add(command); return true; });
 
         Assert.Equal(RenderedRetainerUiPreparationStatus.ClearingMarketBoardUi, result.Status);
-        Assert.Equal(["/li mb"], commands);
+        Assert.Equal(["/li Siren mb"], commands);
 
         result = coordinator.Advance(Start.AddSeconds(4), false, true, false, false,
             command => { commands.Add(command); return true; });
 
         Assert.Equal(RenderedRetainerUiPreparationStatus.OpeningRetainerList, result.Status);
-        Assert.Equal(["/li mb", "lifestream:interact-object:2000401"], commands);
+        Assert.Equal(["/li Siren mb", "lifestream:interact-object:2000401"], commands);
     }
 
     [Fact]
     public void Workflow_fails_when_semantic_interaction_is_rejected()
     {
         var coordinator = new RenderedRetainerUiPreparationCoordinator();
-        coordinator.Begin(Start, false, true, _ => true);
+        coordinator.Begin(Start, false, true, "Siren", _ => true);
 
         var result = coordinator.Advance(Start.AddSeconds(3), false, true, false, false,
             command => command != "lifestream:interact-object:2000401");
@@ -102,7 +102,7 @@ public sealed class RenderedRetainerUiPreparationCoordinatorTests
         var commands = new List<string>();
         bool Process(string command) { commands.Add(command); return true; }
         var coordinator = new RenderedRetainerUiPreparationCoordinator();
-        coordinator.Begin(Start, false, true, Process);
+        coordinator.Begin(Start, false, true, "Siren", Process);
         coordinator.Advance(Start.AddSeconds(3), false, true, false, false, Process);
 
         var fallback = coordinator.Advance(Start.AddSeconds(7), false, true, false, false, Process);
@@ -111,9 +111,23 @@ public sealed class RenderedRetainerUiPreparationCoordinatorTests
         Assert.Equal(RenderedRetainerUiPreparationStatus.OpeningRetainerList, fallback.Status);
         Assert.Equal(RenderedRetainerUiPreparationStatus.Complete, complete.Status);
         Assert.Equal([
-            "/li mb",
+            "/li Siren mb",
             "lifestream:interact-object:2000401",
             "rendered-ui:activate-summoning-bell",
         ], commands);
+    }
+
+    [Fact]
+    public void Begin_rejects_missing_or_unsafe_home_world_without_commands()
+    {
+        var commands = new List<string>();
+        var coordinator = new RenderedRetainerUiPreparationCoordinator();
+
+        var missing = coordinator.Begin(Start, false, true, string.Empty, command => { commands.Add(command); return true; });
+        var unsafeName = coordinator.Begin(Start, false, true, "Siren; /shutdown", command => { commands.Add(command); return true; });
+
+        Assert.Equal(RenderedRetainerUiPreparationStatus.Failed, missing.Status);
+        Assert.Equal(RenderedRetainerUiPreparationStatus.Failed, unsafeName.Status);
+        Assert.Empty(commands);
     }
 }

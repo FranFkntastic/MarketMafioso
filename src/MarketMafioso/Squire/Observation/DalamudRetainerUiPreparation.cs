@@ -28,10 +28,11 @@ public sealed class DalamudRetainerUiPreparation
         this.activateRenderedSummoningBell = activateRenderedSummoningBell ?? throw new ArgumentNullException(nameof(activateRenderedSummoningBell));
     }
 
-    public RenderedRetainerUiPreparationProgress Begin() => coordinator.Begin(
+    public RenderedRetainerUiPreparationProgress Begin(string ownerHomeWorld) => coordinator.Begin(
         DateTimeOffset.UtcNow,
         RetainerListVisible(),
         lifestream.IsAvailable,
+        ownerHomeWorld,
         ProcessSemanticCommand);
 
     public RenderedRetainerUiPreparationProgress Advance()
@@ -80,7 +81,7 @@ public sealed class DalamudRetainerUiPreparation
     private bool ProcessSemanticCommand(string command)
     {
         lastSemanticActionDiagnostic = null;
-        if (string.Equals(command, "/li mb", StringComparison.Ordinal))
+        if (command.StartsWith("/li ", StringComparison.Ordinal))
             return commandManager.ProcessCommand(command);
         const string lifestreamObjectPrefix = "lifestream:interact-object:";
         if (command.StartsWith(lifestreamObjectPrefix, StringComparison.Ordinal) &&

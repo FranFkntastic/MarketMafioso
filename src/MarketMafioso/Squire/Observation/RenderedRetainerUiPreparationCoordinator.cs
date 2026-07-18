@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 
 namespace MarketMafioso.Squire.Observation;
 
@@ -39,6 +40,7 @@ public sealed class RenderedRetainerUiPreparationCoordinator
         DateTimeOffset nowUtc,
         bool retainerListVisible,
         bool lifestreamAvailable,
+        string ownerHomeWorld,
         Func<string, bool> processCommand)
     {
         ArgumentNullException.ThrowIfNull(processCommand);
@@ -47,12 +49,15 @@ public sealed class RenderedRetainerUiPreparationCoordinator
             return Complete("The rendered Retainer List is already visible.");
         if (!lifestreamAvailable)
             return Fail("Lifestream is unavailable, so the bridge cannot prepare retainer observation without foreground control.");
-        if (!processCommand("/li mb"))
-            return Fail("Lifestream did not accept the semantic market-board travel command.");
+        var destination = ownerHomeWorld?.Trim() ?? string.Empty;
+        if (destination.Length is < 2 or > 32 || destination.Any(value => !char.IsLetter(value) && value is not (' ' or '-' or '\'')))
+            return Fail("A valid owner home-world name is required before retainer observation can travel.");
+        if (!processCommand($"/li {destination} mb"))
+            return Fail("Lifestream did not accept the semantic owner-home-world market-board travel command.");
 
         status = RenderedRetainerUiPreparationStatus.Traveling;
         phaseStartedAt = nowUtc;
-        diagnostic = "Lifestream market-board travel requested; waiting without taking window focus.";
+        diagnostic = $"Lifestream travel to {destination}'s market board requested; waiting without taking window focus.";
         return Snapshot();
     }
 

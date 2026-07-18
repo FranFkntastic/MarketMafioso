@@ -317,7 +317,7 @@ public sealed class AgentBridgeHost : IDisposable
                 return AgentBridgeResponse.Ok("Already-visible rendered retainer UI captured without changing window focus or UI state.", retainerUi);
             case "begin-retainer-observation-ui":
                 Squire.Observation.RenderedRetainerUiPreparationProgress? begunRetainerPreparation = null;
-                await dispatchOnFramework(() => begunRetainerPreparation = provider.BeginRetainerObservationUi()).ConfigureAwait(false);
+                await dispatchOnFramework(() => begunRetainerPreparation = provider.BeginRetainerObservationUi(request.Target ?? string.Empty)).ConfigureAwait(false);
                 return begunRetainerPreparation!.Status is Squire.Observation.RenderedRetainerUiPreparationStatus.Traveling or Squire.Observation.RenderedRetainerUiPreparationStatus.Complete
                     ? AgentBridgeResponse.Ok(begunRetainerPreparation.Diagnostic, begunRetainerPreparation)
                     : new AgentBridgeResponse { Success = false, Message = begunRetainerPreparation.Diagnostic, Receipt = begunRetainerPreparation };
