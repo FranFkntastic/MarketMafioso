@@ -1,6 +1,6 @@
 # Dev Plugin Deployment
 
-MarketMafioso live testing uses profile-local watched DLLs selected by exclusive machine-local lanes. Do not point Dalamud at a worktree `bin` directory or the historical shared `_deployed\MarketMafioso` target.
+MarketMafioso live testing uses profile-local watched DLLs selected by exclusive machine-local lanes. Do not point Dalamud at a worktree `bin` directory or the historical shared `local\deployed\MarketMafioso` target.
 
 The `bin` directories are compiler outputs. Any worktree can rewrite them during a normal build, which makes them a poor place for the live plugin DLL when multiple branches or Codex worktrees are active.
 
@@ -18,7 +18,7 @@ Each Dalamud profile must contain one matching MMF settings entry and one matchi
 Claim and deploy through the lane controller from the worktree that should own the in-game plugin state:
 
 ```powershell
-$lanes = 'F:\Everything (HDD)\Misc\Gooseworks (Projects)\FFXIV-Development\scripts\mmf-dev-lanes\MMF-DevLane.ps1'
+$lanes = 'F:\Everything (HDD)\Misc\Gooseworks (Projects)\FFXIV-Development\tools\mmf-dev-lanes\MMF-DevLane.ps1'
 & $lanes -Action Status
 & $lanes -Action Claim -Lane Primary -Worktree $PWD
 & $lanes -Action Deploy -Lane Primary -Worktree $PWD

@@ -91,15 +91,15 @@ function Resolve-RegisteredDeployedTarget {
     $dalamudConfig = Get-Content -LiteralPath $dalamudConfigPath -Raw | ConvertFrom-Json
     $registeredTargets = @(
         $dalamudConfig.DevPluginSettings.PSObject.Properties.Name |
-            Where-Object { $_ -match '[\\/]_deployed[\\/]MarketMafioso[\\/]MarketMafioso\.dll$' }
+            Where-Object { $_ -match '[\\/]local[\\/]deployed[\\/]MarketMafioso[\\/]MarketMafioso\.dll$' }
     )
 
     if ($registeredTargets.Count -ne 1) {
         $registeredSummary = if ($registeredTargets.Count -eq 0) { "none" } else { $registeredTargets -join "', '" }
-        throw "No deploy target was configured and expected exactly one registered _deployed MarketMafioso DLL, but found $($registeredTargets.Count): '$registeredSummary'. Pass -TargetDll or create '$defaultConfigPath'."
+        throw "No deploy target was configured and expected exactly one registered local/deployed MarketMafioso DLL, but found $($registeredTargets.Count): '$registeredSummary'. Pass -TargetDll or create '$defaultConfigPath'."
     }
 
-    Write-Host "Using registered _deployed target: $($registeredTargets[0])"
+    Write-Host "Using registered local/deployed target: $($registeredTargets[0])"
     return $registeredTargets[0]
 }
 
