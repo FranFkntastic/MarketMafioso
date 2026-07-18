@@ -60,7 +60,7 @@ public sealed class RenderedRetainerUiPreparationCoordinatorTests
         result = coordinator.Advance(Start.AddSeconds(53), false, true, false, false, _ => true);
 
         Assert.Equal(RenderedRetainerUiPreparationStatus.Failed, result.Status);
-        Assert.Contains("no rendered Retainer List", result.Diagnostic, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("within forty-five seconds", result.Diagnostic, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
