@@ -262,13 +262,13 @@ public sealed class OutfitterMarketEvidenceDiscoveryService
                 Math.Clamp(request.ListingLimit, 1, 100),
                 cancellationToken).ConfigureAwait(false);
             var capturedAt = utcNow();
-            var valid = listings
+            var valid = NormalizeListings(listings
                 .Where(listing => listing.ItemId == target.ItemId && listing.Quantity > 0 && listing.UnitPrice > 0)
                 .OrderBy(listing => listing.UnitPrice)
                 .ThenBy(listing => listing.IsHq)
                 .ThenBy(listing => listing.WorldName, StringComparer.Ordinal)
                 .ThenBy(listing => listing.ListingId, StringComparer.Ordinal)
-                .ToArray();
+                .ToArray());
             var sourceRevision = Revision(valid);
             var evidenceListings = valid.Select(listing => new OutfitterMarketListingEvidence(
                 target.ItemId,
@@ -387,6 +387,32 @@ public sealed class OutfitterMarketEvidenceDiscoveryService
             $"{listing.ItemId}|{listing.ListingId}|{listing.IsHq}|{listing.WorldId}|{listing.Quantity}|{listing.UnitPrice}|{listing.LastReviewTimeUtc:O}"));
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text)));
     }
+
+    private static IReadOnlyList<MarketAcquisitionListing> NormalizeListings(
+        IReadOnlyList<MarketAcquisitionListing> listings)
+    {
+        var normalized = new List<MarketAcquisitionListing>(listings.Count);
+        foreach (var group in listings.GroupBy(listing => listing.ListingId, StringComparer.Ordinal))
+        {
+            var first = group.First();
+            if (group.Skip(1).Any(candidate => !SameObservableRow(first, candidate)))
+                throw new InvalidOperationException($"Listing '{group.Key}' appeared with conflicting observable market rows.");
+            normalized.Add(first);
+        }
+
+        return normalized;
+    }
+
+    private static bool SameObservableRow(MarketAcquisitionListing left, MarketAcquisitionListing right) =>
+        left.ItemId == right.ItemId &&
+        left.IsHq == right.IsHq &&
+        left.WorldId == right.WorldId &&
+        string.Equals(left.WorldName, right.WorldName, StringComparison.Ordinal) &&
+        string.Equals(left.RetainerId, right.RetainerId, StringComparison.Ordinal) &&
+        string.Equals(left.RetainerName, right.RetainerName, StringComparison.Ordinal) &&
+        left.Quantity == right.Quantity &&
+        left.UnitPrice == right.UnitPrice &&
+        left.LastReviewTimeUtc == right.LastReviewTimeUtc;
 
     private static bool EquivalentEvidence(OutfitterMarketEvidenceBook? left, OutfitterMarketEvidenceBook right)
     {

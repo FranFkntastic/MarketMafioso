@@ -45,6 +45,37 @@ public sealed class OutfitterMarketEvidenceDiscoveryServiceTests
     }
 
     [Fact]
+    public async Task Discovery_CoalescesExactDuplicateProviderRows()
+    {
+        var duplicate = Listing(10, "duplicate", false, 500);
+        var source = new StubListingSource((_, _) => Task.FromResult<IReadOnlyList<MarketAcquisitionListing>>(
+            [duplicate, duplicate with { }]));
+        var service = new OutfitterMarketEvidenceDiscoveryService(source, Cache(), utcNow: () => Now);
+
+        var result = await service.DiscoverAsync(Request([10]), CancellationToken.None);
+
+        var item = Assert.Single(result.WorkingBook.Items);
+        Assert.Equal(OutfitterMarketEvidenceItemStatus.Fresh, item.Status);
+        Assert.Equal("duplicate", Assert.Single(item.Listings).ListingId);
+    }
+
+    [Fact]
+    public async Task Discovery_RejectsConflictingRowsWithTheSameListingIdentity()
+    {
+        var first = Listing(10, "collision", false, 500);
+        var source = new StubListingSource((_, _) => Task.FromResult<IReadOnlyList<MarketAcquisitionListing>>(
+            [first, first with { UnitPrice = 501 }]));
+        var service = new OutfitterMarketEvidenceDiscoveryService(source, Cache(), utcNow: () => Now);
+
+        var result = await service.DiscoverAsync(Request([10]), CancellationToken.None);
+
+        var item = Assert.Single(result.WorkingBook.Items);
+        Assert.Equal(OutfitterMarketEvidenceItemStatus.Failed, item.Status);
+        Assert.Contains("conflicting observable market rows", item.Diagnostic, StringComparison.Ordinal);
+        Assert.Null(result.PublishedBook);
+    }
+
+    [Fact]
     public async Task DuplicateDiscovery_IsCoalescedIntoOneProviderFetch()
     {
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
