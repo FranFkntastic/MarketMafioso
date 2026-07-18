@@ -24,6 +24,7 @@ param(
         "switch-calibration-job-ui",
         "switch-gearset-slot-ui",
         "open-gearset-list-ui",
+        "equip-calibration-gearset-ui",
         "get-character-ui",
         "get-retainer-ui",
         "begin-retainer-observation-ui",

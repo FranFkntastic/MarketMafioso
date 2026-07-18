@@ -152,6 +152,19 @@ public sealed class MarketMafiosoBridgeProviderTests
     }
 
     [Fact]
+    public void Provider_exposes_semantic_rendered_gearset_equip_without_generic_click_authority()
+    {
+        var expected = new RenderedUiTextActionResult(true, "RenderedTextClickDispatched", "Equipped Miner.", "GearSetList", "GearSetList/7/5/16");
+        var provider = new MarketMafiosoBridgeProvider(
+            CreateTruth, () => { }, () => { }, () => { }, _ => { }, _ => true, () => { }, () => { },
+            () => true,
+            new AgentBridgeUiReviewRegistry(),
+            tryEquipCalibrationGearsetUi: _ => expected);
+
+        Assert.Same(expected, provider.TryEquipCalibrationGearsetUi("Miner"));
+    }
+
+    [Fact]
     public void Provider_exposes_read_only_rendered_retainer_capture()
     {
         var expected = new AgentBridgeRenderedUiSnapshot(DateTimeOffset.UtcNow,
