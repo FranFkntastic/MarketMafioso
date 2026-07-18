@@ -309,6 +309,13 @@ internal sealed class SquireTabPanel : IDisposable
             false,
             null,
             () => filterReferenceRequested = true);
+#if DEBUG
+        RegisterFilterReviewControl("complete-hq", "Open HQ filter completion", "is:h");
+        RegisterFilterReviewControl("apply-hq", "Apply HQ candidate filter", "is:hq");
+        RegisterFilterReviewControl("apply-armoury", "Apply Armoury candidate filter", "location:armoury");
+        RegisterFilterReviewControl("invalid", "Apply invalid candidate filter", "quality:");
+        RegisterFilterReviewControl("clear", "Clear candidate filter", string.Empty);
+#endif
         if (ImGui.IsItemHovered())
             ImGui.SetTooltip("Filter reference");
         if (filterReferenceRequested)
@@ -689,6 +696,25 @@ internal sealed class SquireTabPanel : IDisposable
         ImGui.TableNextColumn();
         ImGui.TextUnformatted(meaning);
     }
+
+#if DEBUG
+    private void RegisterFilterReviewControl(string suffix, string label, string expression) =>
+        RegisterLastControl(
+            $"squire.filter-review.{suffix}",
+            label,
+            AgentBridgeUiControlKind.Input,
+            true,
+            string.Equals(search, expression, StringComparison.Ordinal),
+            expression,
+            () =>
+            {
+                search = expression;
+                filterEditor.SetExpression(expression);
+                filterEditor.RequestFocus();
+                config.Squire.Search = expression;
+                config.Save();
+            });
+#endif
 
     private void DrawBatchBar()
     {
