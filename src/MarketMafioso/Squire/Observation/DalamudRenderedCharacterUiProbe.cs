@@ -125,6 +125,12 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
 
     public Franthropy.Dalamud.AgentBridge.RenderedUiTextActionResult TryOpenGearsetList()
     {
+        unsafe
+        {
+            var existing = gameGui.GetAddonByName<AtkUnitBase>("GearSetList", 1);
+            if (existing != null && existing->RootNode != null && existing->RootNode->IsVisible() && existing->IsReady)
+                return new(true, "RenderedAddonAlreadyOpen", "The rendered Gear Set list is already open.", "GearSetList", null);
+        }
         var result = renderedTextActions.TryClickUniqueControlImmediatelyLeftOfText("Character", "Gear Set");
         return result.Success
             ? result
