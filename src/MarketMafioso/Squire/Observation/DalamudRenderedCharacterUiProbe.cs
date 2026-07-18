@@ -4,6 +4,7 @@ using System.Linq;
 using Dalamud.Plugin.Services;
 using Dalamud.Utility;
 using ECommons.Automation;
+using ECommons.UIHelpers.AddonMasterImplementations;
 using FFXIVClientStructs.FFXIV.Component.GUI;
 using Franthropy.Dalamud.Automation.Ui;
 using MarketMafioso.AgentBridge;
@@ -140,17 +141,23 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
             };
     }
 
-    public Franthropy.Dalamud.AgentBridge.RenderedUiTextActionResult TryEquipCalibrationGearset(string target)
+    public unsafe Franthropy.Dalamud.AgentBridge.RenderedUiTextActionResult TryEquipCalibrationGearset(string target)
     {
         if (!GearsetChangeCommand.TryCreate(target, out var command))
             return new(false, "InvalidCalibrationJob", "Target must be Miner, Botanist, or Blacksmith.", "GearSetList", null);
         var selected = renderedTextActions.TrySelectUniqueListRowText("GearSetList", command.JobName);
         if (!selected.Success)
             return selected;
-        var equipped = renderedTextActions.TryClickUniqueText("GearSetList", "Equip Set");
-        if (equipped.Success)
-            gatheringStatsStabilizer.Reset();
-        return equipped;
+        var addon = gameGui.GetAddonByName<AtkUnitBase>("GearSetList", 1);
+        if (addon == null || addon->RootNode == null || !addon->RootNode->IsVisible() || !addon->IsReady)
+            return new(false, "RenderedAddonUnavailable", "The rendered Gear Set list changed before equipping.", "GearSetList", null);
+        new AddonMaster.GearSetList(addon).EquipSet();
+        gatheringStatsStabilizer.Reset();
+        return selected with
+        {
+            Code = "RenderedGearsetEquipDispatched",
+            Message = "The rendered row was selected and the Gear Set list's Equip Set control was activated.",
+        };
     }
 
     public unsafe AgentBridgeRenderedUiSnapshot Capture()
