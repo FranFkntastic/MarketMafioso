@@ -137,6 +137,11 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         state.ExecutionMode = executionMode;
         if (outfitterContract is not null)
         {
+            if (outfitterContract.Transfer.DryRunOnly && executionMode != MarketAcquisitionExecutionMode.DryRun)
+            {
+                return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(
+                    "This diagnostic Squire contract is permanently restricted to non-spending dry runs."));
+            }
             if (workbenchDocument is null)
                 return UpdateStatus(MarketAcquisitionRouteActionResult.Fail("Squire Route start requires its finalized Workbench document."));
             try

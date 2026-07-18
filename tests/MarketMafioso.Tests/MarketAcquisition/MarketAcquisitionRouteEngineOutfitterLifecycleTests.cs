@@ -123,6 +123,39 @@ public sealed class MarketAcquisitionRouteEngineOutfitterLifecycleTests
     }
 
     [Fact]
+    public void DiagnosticContract_RejectsLiveExecutionButAllowsDryRun()
+    {
+        var fixture = Fixture(dryRunOnly: true);
+        using var liveHarness = MarketAcquisitionRouteEngineHarness.Create(new MemoryStore());
+
+        var live = liveHarness.Engine.Start(
+            fixture.Plan,
+            fixture.Claim,
+            false,
+            false,
+            fixture.Contract,
+            fixture.Document,
+            MarketAcquisitionExecutionMode.Live);
+
+        Assert.False(live.Success);
+        Assert.Contains("dry runs", live.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("Idle", liveHarness.Runner.State);
+
+        using var dryRunHarness = MarketAcquisitionRouteEngineHarness.Create(new MemoryStore());
+        var dryRun = dryRunHarness.Engine.Start(
+            fixture.Plan,
+            fixture.Claim,
+            false,
+            false,
+            fixture.Contract,
+            fixture.Document,
+            MarketAcquisitionExecutionMode.DryRun);
+
+        Assert.True(dryRun.Success);
+        Assert.Equal("Running", dryRunHarness.Runner.State);
+    }
+
+    [Fact]
     public void FailedRecoveryPreflight_PausesInsteadOfRemainingRecoveryEligible()
     {
         var fixture = Fixture();
@@ -150,10 +183,11 @@ public sealed class MarketAcquisitionRouteEngineOutfitterLifecycleTests
         Assert.False(OutfitterRouteRecoveryLifecycle.CanAutoResume(store.Restore()));
     }
 
-    private static FixtureData Fixture()
+    private static FixtureData Fixture(bool dryRunOnly = false)
     {
         var document = MarketAcquisitionRequestDocument.CreateDefault("Fran", "Siren");
-        document = OutfitterWorkbenchAuthorityService.Stage(document, OutfitterWorkbenchAuthorityTests.Transfer());
+        var transfer = OutfitterWorkbenchAuthorityTests.Transfer() with { DryRunOnly = dryRunOnly };
+        document = OutfitterWorkbenchAuthorityService.Stage(document, transfer);
         document = OutfitterWorkbenchAuthorityService.Finalize(document);
         var claim = new MarketAcquisitionClaimView
         {

@@ -124,7 +124,7 @@ internal sealed class SquireTabPanel : IDisposable
             dataManager,
             marketListingSource,
             Path.Combine(diagnosticDirectory, "outfitter-market-evidence.json"));
-        advisorPanel = new(config, advisorSession, reviewRegistry, transfer => stageOutfitterTransfer?.Invoke(transfer));
+        advisorPanel = new(config, advisorSession, reviewRegistry, marketListingSource, transfer => stageOutfitterTransfer?.Invoke(transfer));
         selectedWorkspace = string.Equals(config.Squire.SelectedWorkspace, "Cleanup", StringComparison.OrdinalIgnoreCase)
             ? "Cleanup"
             : "Outfitter";

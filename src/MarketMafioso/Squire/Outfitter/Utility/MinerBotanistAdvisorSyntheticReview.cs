@@ -2,7 +2,11 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using Franthropy.Dalamud.Equipment;
+using MarketMafioso.MarketAcquisition;
+using MarketMafioso.Squire.Outfitter.MarketEvidence;
 
 namespace MarketMafioso.Squire.Outfitter.Utility;
 
@@ -25,6 +29,12 @@ internal sealed record MinerBotanistAdvisorSyntheticPresentation(
     int Completed,
     int Total,
     bool AdviceIsRetained);
+
+internal sealed record MinerBotanistAdvisorDryRunFixture(
+    MinerBotanistReadOnlyAdvice Advice,
+    OutfitterMarketEvidenceBook Evidence,
+    string SelectedSolutionId,
+    string Diagnostic);
 
 /// <summary>
 /// Privacy-minimized debug replay derived from the frozen model-gearset challenge family.
@@ -90,6 +100,47 @@ internal static class MinerBotanistAdvisorSyntheticReview
     };
 
     internal const string PriceEvidenceLabel = "Aether sale-history median · 2026-07-16";
+
+    public static async Task<MinerBotanistAdvisorDryRunFixture> BuildDryRunFixtureAsync(
+        IMarketAcquisitionListingSource listingSource,
+        string region,
+        MinerBotanistUtilityContextKind context,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(listingSource);
+        var items = BaseCraftedItems();
+        var request = new OutfitterMarketEvidenceRequest(
+            "universalis",
+            string.IsNullOrWhiteSpace(region) ? "North America" : region.Trim(),
+            items.Select(item => item.ItemId).Distinct().ToArray(),
+            ListingLimit: 100,
+            CoverageMode: OutfitterMarketCoverageMode.ExhaustiveWithinScope,
+            MaxConcurrency: 4);
+        var discovery = new OutfitterMarketEvidenceDiscoveryService(
+            listingSource,
+            new(TimeSpan.FromMinutes(15), TimeSpan.FromHours(6), maxEntries: 64));
+        var result = await discovery.DiscoverAsync(request, cancellationToken).ConfigureAwait(false);
+        var evidence = MinerBotanistAdvisorSessionEvidencePolicy.SelectCurrent(result, request)
+            ?? throw new InvalidOperationException("Live diagnostic evidence did not publish as one complete generation.");
+        var selected = evidence.Items
+            .Where(item => item.Status == OutfitterMarketEvidenceItemStatus.Fresh && item.ItemId != 47201)
+            .SelectMany(item => item.Listings)
+            .Where(listing => listing.Quantity > 0 && listing.UnitPriceGil > 0)
+            .OrderByDescending(listing => listing.Quality == EquipmentQuality.High)
+            .ThenBy(listing => listing.UnitPriceGil)
+            .ThenBy(listing => listing.WorldName, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(listing => listing.ListingId, StringComparer.Ordinal)
+            .FirstOrDefault()
+            ?? throw new InvalidOperationException("No current market row exists for the diagnostic gathering set.");
+        var marketItem = items.Single(item => item.ItemId == selected.ItemId);
+        var advice = BuildDryRunAdvice(context, items, marketItem, selected, evidence);
+        var solutionId = advice.Frontier!.Pareto.Frontier.Single().Candidate.SolutionId;
+        return new(
+            advice,
+            evidence,
+            solutionId,
+            $"Current {selected.Quality} listing: {marketItem.Name} on {selected.WorldName} at {selected.UnitPriceGil:N0} gil. The resulting contract is dry-run-only.");
+    }
 
     private sealed record Benchmark(
         string Id,
@@ -285,6 +336,144 @@ internal static class MinerBotanistAdvisorSyntheticReview
                         "The planning ceiling stocks every risky meld so the whole set completes within that stock at least 90% of the time.",
                     ]));
     }
+
+    private static MinerBotanistReadOnlyAdvice BuildDryRunAdvice(
+        MinerBotanistUtilityContextKind context,
+        IReadOnlyList<ItemEvidence> items,
+        ItemEvidence marketItem,
+        OutfitterMarketListingEvidence listing,
+        OutfitterMarketEvidenceBook evidence)
+    {
+        const string solutionId = "diagnostic-live-listing-dry-run";
+        var profile = new MinerBotanistUtilityProfile(
+            context,
+            Benchmarks[0].Stats,
+            MinerBotanistUtilityProfile.MinerClassJobId);
+        var offers = new Dictionary<EquipmentOfferAllocationKey, EquipmentExactSolverOffer>();
+        var selections = new List<EquipmentLoadoutSelection>(items.Count);
+        foreach (var item in items)
+        {
+            var definition = Definition(item);
+            EquipmentExactSolverOffer exact;
+            if (item.Position == marketItem.Position)
+            {
+                var sourceCatalogKey = $"diagnostic-live:{evidence.GenerationId:N}:{item.ItemId}:{listing.Quality}";
+                var key = new EquipmentOfferKey(
+                    item.ItemId,
+                    listing.Quality,
+                    EquipmentAcquisitionSourceKind.MarketBoard,
+                    sourceCatalogKey);
+                var observation = new EquipmentOfferObservation(
+                    key,
+                    evidence.GenerationId,
+                    listing.ListingId,
+                    listing.ListingReviewedAtUtc,
+                    ObservableMarketRow: new(
+                        listing.ListingId,
+                        listing.ItemId,
+                        listing.Quality,
+                        listing.Quantity,
+                        listing.UnitPriceGil,
+                        listing.WorldName,
+                        listing.RetainerName),
+                    World: listing.WorldName,
+                    AvailableQuantity: listing.Quantity,
+                    UnitPriceGil: listing.UnitPriceGil);
+                var offer = new EquipmentLoadoutOffer(
+                    definition,
+                    EquipmentAcquisitionSourceKind.MarketBoard,
+                    $"Live diagnostic listing - {listing.WorldName}",
+                    listing.UnitPriceGil,
+                    PriceIsEstimate: false,
+                    Quality: listing.Quality,
+                    SourceCatalogKey: sourceCatalogKey,
+                    Observation: observation);
+                exact = new(
+                    offer,
+                    listing.ListingId,
+                    new HashSet<EquipmentLoadoutPosition> { item.Position },
+                    listing.Quantity,
+                    EquipmentSolverUtilityVector.Empty,
+                    listing.UnitPriceGil,
+                    listing.WorldName,
+                    null,
+                    1,
+                    new(0, 0, 0),
+                    [listing.Quality == EquipmentQuality.High ? "HQ" : "NQ", listing.WorldName, "dry-run-only"]);
+            }
+            else
+            {
+                var sourceCatalogKey = $"diagnostic-owned-placeholder:{item.Position}";
+                var offer = new EquipmentLoadoutOffer(
+                    definition,
+                    EquipmentAcquisitionSourceKind.Owned,
+                    "Diagnostic owned baseline placeholder",
+                    Quality: item.Quality,
+                    SourceCatalogKey: sourceCatalogKey);
+                exact = new(
+                    offer,
+                    sourceCatalogKey,
+                    new HashSet<EquipmentLoadoutPosition> { item.Position },
+                    1,
+                    EquipmentSolverUtilityVector.Empty,
+                    0,
+                    null,
+                    null,
+                    0,
+                    new(0, 0, 0),
+                    ["Diagnostic baseline", "dry-run-only"]);
+            }
+            offers.Add(exact.AllocationKey, exact);
+            selections.Add(new(item.Position, exact.Offer.Key, ObservationId: exact.ObservationId));
+        }
+
+        var utility = profile.Evaluate(Benchmarks[1].Stats);
+        var solution = new EquipmentDecisionSolution(
+            new(solutionId, selections),
+            utility,
+            listing.UnitPriceGil,
+            new(1, 0, 1),
+            new(0, 0, 0),
+            ["Live exact-quality diagnostic fixture", marketItem.Name, listing.WorldName, "dry-run-only"]);
+        var pareto = new EquipmentParetoFrontierBuilder().Build([solution]);
+        var frontier = new EquipmentExactFrontierResult(
+            pareto,
+            new(0, 0, 0, 0, 1, 1, 1, 16, solutionId, TimeSpan.Zero),
+            []);
+        return new(
+            MinerBotanistAdvisorStatus.Complete,
+            MinerBotanistReadOnlyAdvisor.AdvisoryRule,
+            frontier,
+            solution,
+            new Dictionary<string, MinerBotanistAuthorityAssessment>(StringComparer.Ordinal)
+            {
+                [solutionId] = profile.AssessAuthority(utility, listing.UnitPriceGil),
+            },
+            offers,
+            $"Diagnostic Advisor solution binds one current exact-quality listing for {marketItem.Name}; execution is permanently dry-run-only.");
+    }
+
+    private static EquipmentItemDefinition Definition(ItemEvidence item) => new(
+        ItemId: item.ItemId,
+        Name: item.Name,
+        EquipLevel: 100,
+        ItemLevel: item.ItemLevel,
+        Slot: Slot(item.Position),
+        EligibleClassJobIds: new HashSet<uint>
+        {
+            MinerBotanistUtilityProfile.MinerClassJobId,
+            MinerBotanistUtilityProfile.BotanistClassJobId,
+        },
+        Rarity: 3,
+        IsEquipment: true,
+        IsSoulCrystal: false,
+        IsDesynthesizable: null,
+        IsVendorSellable: null,
+        VendorSellPrice: null,
+        IsDiscardable: null,
+        IsArmoireEligible: null,
+        IsRecoverable: null,
+        IsExplicitlyProtectedFamily: false);
 
     private static IEnumerable<ItemEvidence> Items(Benchmark benchmark)
     {

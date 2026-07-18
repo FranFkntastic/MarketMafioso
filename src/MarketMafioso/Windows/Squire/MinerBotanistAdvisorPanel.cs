@@ -2,11 +2,13 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
+using System.Threading.Tasks;
 using Dalamud.Bindings.ImGui;
 using Franthropy.Dalamud.AgentBridge;
 using Franthropy.Dalamud.Equipment;
 using Franthropy.Dalamud.UI.Plots;
 using MarketMafioso.AgentBridge;
+using MarketMafioso.MarketAcquisition;
 using MarketMafioso.Squire.Outfitter.Utility;
 using MarketMafioso.Squire.Outfitter.Acquisition;
 using MarketMafioso.Windows.Main;
@@ -26,6 +28,7 @@ internal sealed class MinerBotanistAdvisorPanel
     private readonly MinerBotanistAdvisorSession session;
     private readonly AgentBridgeUiReviewRegistry reviewRegistry;
     private readonly Action<OutfitterWorkbenchTransfer> stageTransfer;
+    private readonly IMarketAcquisitionListingSource listingSource;
     private readonly ParetoFrontierPlotBuilder plotBuilder = new();
     private readonly DalamudPlotContainer plotContainer = new();
     private MinerBotanistUtilityContextKind context = MinerBotanistUtilityContextKind.OrdinaryResourceBenchmark;
@@ -42,6 +45,9 @@ internal sealed class MinerBotanistAdvisorPanel
         MinerBotanistAdvisorSyntheticScenarioKind.Abstention,
     ];
     private MinerBotanistReadOnlyAdvice? syntheticReviewAdvice;
+    private MinerBotanistAdvisorDryRunFixture? dryRunFixture;
+    private Task<MinerBotanistAdvisorDryRunFixture>? dryRunFixtureTask;
+    private string? dryRunFixtureStatus;
     private MinerBotanistAdvisorSyntheticScenarioKind syntheticScenarioKind;
     private readonly HashSet<MinerBotanistUtilityContextKind> visibleSyntheticContexts =
         [MinerBotanistUtilityContextKind.OrdinaryResourceBenchmark];
@@ -51,11 +57,13 @@ internal sealed class MinerBotanistAdvisorPanel
         Configuration config,
         MinerBotanistAdvisorSession session,
         AgentBridgeUiReviewRegistry reviewRegistry,
+        IMarketAcquisitionListingSource listingSource,
         Action<OutfitterWorkbenchTransfer> stageTransfer)
     {
         this.config = config ?? throw new ArgumentNullException(nameof(config));
         this.session = session ?? throw new ArgumentNullException(nameof(session));
         this.reviewRegistry = reviewRegistry ?? throw new ArgumentNullException(nameof(reviewRegistry));
+        this.listingSource = listingSource ?? throw new ArgumentNullException(nameof(listingSource));
         this.stageTransfer = stageTransfer ?? throw new ArgumentNullException(nameof(stageTransfer));
         if (Enum.TryParse<MinerBotanistUtilityContextKind>(config.Squire.OutfitterAdvisorContext, out var stored))
             context = stored;
@@ -63,6 +71,9 @@ internal sealed class MinerBotanistAdvisorPanel
 
     public void Draw()
     {
+#if DEBUG
+        PumpDryRunFixture();
+#endif
         var state = session.State;
         MinerBotanistReadOnlyAdvice? displayedAdvice = state.Advice;
 #if DEBUG
@@ -80,10 +91,13 @@ internal sealed class MinerBotanistAdvisorPanel
 #if DEBUG
         if (syntheticReviewActive)
         {
-            ImGui.TextColored(MarketMafiosoUiTheme.Warning, "DEBUG REPLAY — model decisions with frozen evidence prices");
-            ImGui.TextColored(MarketMafiosoUiTheme.Muted,
+            ImGui.TextColored(MarketMafiosoUiTheme.Warning, dryRunFixture is null
+                ? "DEBUG REPLAY — model decisions with frozen evidence prices"
+                : "DEBUG INTEGRATION FIXTURE — current listing, permanently dry-run-only");
+            ImGui.TextColored(MarketMafiosoUiTheme.Muted, dryRunFixture?.Diagnostic ??
                 "Item names are game data; only marketable components use Aether sale-history medians. No live character or live listing is used.");
-            ImGui.TextColored(MarketMafiosoUiTheme.Muted, MinerBotanistAdvisorSyntheticReview.PriceEvidenceLabel);
+            if (dryRunFixture is null)
+                ImGui.TextColored(MarketMafiosoUiTheme.Muted, MinerBotanistAdvisorSyntheticReview.PriceEvidenceLabel);
             ImGui.TextColored(syntheticPresentation!.AdviceIsRetained ? MarketMafiosoUiTheme.Warning : StatusColor(syntheticPresentation.Stage),
                 syntheticPresentation.AdviceIsRetained
                     ? $"LAST VALID FRONTIER · {syntheticPresentation.Label}"
@@ -218,6 +232,19 @@ internal sealed class MinerBotanistAdvisorPanel
         if (syntheticReviewAdvice is not null)
         {
             DrawSyntheticScenarioControl();
+            var canBuildDryRunFixture = config.EnableMarketAcquisitionDryRunTools && dryRunFixtureTask is null;
+            if (ImGuiUi.Button("Build live dry-run fixture", canBuildDryRunFixture))
+                BeginDryRunFixture();
+            RegisterLastControl(
+                "squire.outfitter.advisor.build-dry-run-fixture",
+                "Build a current-listing Squire integration fixture restricted to dry-run execution",
+                AgentBridgeUiControlKind.Button,
+                canBuildDryRunFixture,
+                dryRunFixtureTask is not null,
+                dryRunFixture is null ? "not-built" : "ready",
+                BeginDryRunFixture);
+            if (!string.IsNullOrWhiteSpace(dryRunFixtureStatus))
+                ImGui.TextColored(dryRunFixture is null ? MarketMafiosoUiTheme.Warning : MarketMafiosoUiTheme.Success, dryRunFixtureStatus);
             if (syntheticScenarioKind == MinerBotanistAdvisorSyntheticScenarioKind.Abstention)
                 return;
             ImGui.TextColored(MarketMafiosoUiTheme.Muted, "PLOT SERIES");
@@ -263,6 +290,10 @@ internal sealed class MinerBotanistAdvisorPanel
     {
         if (session.State.IsBusy)
             return;
+#if DEBUG
+        if (dryRunFixtureTask is not null)
+            return;
+#endif
         context = value;
         config.Squire.OutfitterAdvisorContext = value.ToString();
         config.Save();
@@ -271,6 +302,8 @@ internal sealed class MinerBotanistAdvisorPanel
 #if DEBUG
         if (syntheticReviewAdvice is not null)
         {
+            dryRunFixture = null;
+            dryRunFixtureStatus = null;
             syntheticReviewAdvice = MinerBotanistAdvisorSyntheticReview.Build(context);
             visibleSyntheticContexts.Add(context);
         }
@@ -280,6 +313,9 @@ internal sealed class MinerBotanistAdvisorPanel
 #if DEBUG
     private void ToggleSyntheticReview()
     {
+        dryRunFixture = null;
+        dryRunFixtureTask = null;
+        dryRunFixtureStatus = null;
         syntheticReviewAdvice = syntheticReviewAdvice is null
             ? MinerBotanistAdvisorSyntheticReview.Build(context)
             : null;
@@ -291,11 +327,50 @@ internal sealed class MinerBotanistAdvisorPanel
 
     public void LoadSyntheticReview()
     {
+        dryRunFixture = null;
+        dryRunFixtureTask = null;
+        dryRunFixtureStatus = null;
         syntheticReviewAdvice = MinerBotanistAdvisorSyntheticReview.Build(context);
         ResetVisibleSyntheticContexts();
         syntheticScenarioKind = MinerBotanistAdvisorSyntheticScenarioKind.Success;
         lastAdvice = null;
         selectedSolutionId = null;
+    }
+
+    private void BeginDryRunFixture()
+    {
+        if (!config.EnableMarketAcquisitionDryRunTools || dryRunFixtureTask is not null)
+            return;
+        var region = config.ActiveMarketAcquisitionRequestDocument?.Region;
+        if (string.IsNullOrWhiteSpace(region))
+            region = config.ActiveMarketAcquisitionClaim?.Region;
+        dryRunFixture = null;
+        dryRunFixtureStatus = "Fetching one complete current listing generation for the marketable gathering set...";
+        dryRunFixtureTask = MinerBotanistAdvisorSyntheticReview.BuildDryRunFixtureAsync(
+            listingSource,
+            string.IsNullOrWhiteSpace(region) ? "North America" : region,
+            context);
+    }
+
+    private void PumpDryRunFixture()
+    {
+        if (dryRunFixtureTask is not { IsCompleted: true } completed)
+            return;
+        dryRunFixtureTask = null;
+        try
+        {
+            dryRunFixture = completed.GetAwaiter().GetResult();
+            syntheticReviewAdvice = dryRunFixture.Advice;
+            syntheticScenarioKind = MinerBotanistAdvisorSyntheticScenarioKind.Success;
+            lastAdvice = null;
+            selectedSolutionId = dryRunFixture.SelectedSolutionId;
+            dryRunFixtureStatus = dryRunFixture.Diagnostic;
+        }
+        catch (Exception exception)
+        {
+            dryRunFixture = null;
+            dryRunFixtureStatus = $"Live dry-run fixture stopped safely: {exception.Message}";
+        }
     }
 
     private void ResetVisibleSyntheticContexts()
@@ -399,7 +474,7 @@ internal sealed class MinerBotanistAdvisorPanel
     private void DrawFrontier(MinerBotanistReadOnlyAdvice advice, EquipmentDecisionSolution selected)
     {
 #if DEBUG
-        if (syntheticReviewAdvice is not null)
+        if (syntheticReviewAdvice is not null && dryRunFixture is null)
         {
             DrawSyntheticOverlay(selected);
             return;
@@ -616,22 +691,42 @@ internal sealed class MinerBotanistAdvisorPanel
         }
         foreach (var offer in acquisitions)
             ImGui.BulletText($"{offer.Offer.Definition.Name} {FormatQuality(offer.Offer.ResolvedQuality)} · {offer.Offer.SourceLabel} · {offer.AcquisitionCostGil:N0} gil");
+        var evidence = session.CurrentEvidence;
         var canStage = session.State.Stage == MinerBotanistAdvisorSessionStage.Complete &&
                        !session.State.AdviceIsRetained &&
                        ReferenceEquals(advice, session.State.Advice) &&
-                       session.CurrentEvidence is not null &&
+                       evidence is not null &&
                        acquisitions.Any(offer => offer.Offer.SourceKind == EquipmentAcquisitionSourceKind.MarketBoard);
 #if DEBUG
-        if (syntheticReviewAdvice is not null)
+        if (dryRunFixture is not null &&
+            ReferenceEquals(advice, dryRunFixture.Advice) &&
+            syntheticScenarioKind == MinerBotanistAdvisorSyntheticScenarioKind.Success &&
+            config.EnableMarketAcquisitionDryRunTools)
+        {
+            evidence = dryRunFixture.Evidence;
+            canStage = true;
+        }
+        else if (syntheticReviewAdvice is not null)
+        {
             canStage = false;
+        }
 #endif
         void Stage()
         {
-            if (!canStage || session.CurrentEvidence is not { } evidence)
+            if (!canStage || evidence is null)
                 return;
             try
             {
-                var transfer = OutfitterWorkbenchTransferBuilder.Build(advice, selected.Candidate.SolutionId, evidence);
+                var transfer = OutfitterWorkbenchTransferBuilder.Build(
+                    advice,
+                    selected.Candidate.SolutionId,
+                    evidence,
+#if DEBUG
+                    dryRunOnly: dryRunFixture is not null
+#else
+                    dryRunOnly: false
+#endif
+                );
                 stageTransfer(transfer);
                 handoffStatus = "Exact-quality solution added to the Market Acquisition Workbench for review.";
             }

@@ -146,6 +146,8 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         ImGui.SameLine();
         ImGui.TextColored(MainWindow.ColMuted,
             $"{authority.Lines.Count:N0} exact-quality line(s) · observed {authority.Transfer.ObservedMarketTotalGil:N0} gil");
+        if (authority.Transfer.DryRunOnly)
+            ImGui.TextColored(MainWindow.ColWarning, "DIAGNOSTIC CONTRACT - permanently restricted to non-spending dry runs");
         var flex = authority.PriceFlexPercent;
         ImGui.SetNextItemWidth(105f);
         var canEdit = !context.IsBusy && !context.IsRouteActive && !IsSynchronizing;

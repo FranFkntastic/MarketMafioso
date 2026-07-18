@@ -223,7 +223,9 @@ public sealed class MarketAcquisitionRequestBuilderController
         }
 
         Document = OutfitterWorkbenchAuthorityService.Finalize(Document);
-        Status = "Squire execution contract confirmed for this Workbench revision.";
+        Status = Document.OutfitterAuthority?.Transfer.DryRunOnly == true
+            ? "Diagnostic Squire contract confirmed for this Workbench revision; dry-run execution only."
+            : "Squire execution contract confirmed for this Workbench revision.";
         SaveDocument();
         return true;
     }

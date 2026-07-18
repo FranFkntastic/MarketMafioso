@@ -51,7 +51,8 @@ public sealed record OutfitterWorkbenchTransfer(
     OutfitterWorkbenchEvidenceLineage Evidence,
     IReadOnlyList<OutfitterWorkbenchSelectionLineage> SelectedLoadout,
     IReadOnlyList<OutfitterWorkbenchMarketLot> MarketLots,
-    ulong ObservedMarketTotalGil)
+    ulong ObservedMarketTotalGil,
+    bool DryRunOnly = false)
 {
     public const string CurrentSchemaVersion = "marketmafioso-squire-outfitter-workbench-transfer/v1";
     public const string SquireOutfitterOrigin = "SquireOutfitter";
@@ -62,7 +63,8 @@ public static class OutfitterWorkbenchTransferBuilder
     public static OutfitterWorkbenchTransfer Build(
         MinerBotanistReadOnlyAdvice advice,
         string selectedSolutionId,
-        OutfitterMarketEvidenceBook evidence)
+        OutfitterMarketEvidenceBook evidence,
+        bool dryRunOnly = false)
     {
         ArgumentNullException.ThrowIfNull(advice);
         ArgumentException.ThrowIfNullOrWhiteSpace(selectedSolutionId);
@@ -142,7 +144,8 @@ public static class OutfitterWorkbenchTransferBuilder
                 evidence.PublishedAtUtc.Value),
             orderedSelections,
             orderedLots,
-            total);
+            total,
+            dryRunOnly);
     }
 
     private static OutfitterWorkbenchMarketLot BuildMarketLot(

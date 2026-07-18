@@ -51,6 +51,20 @@ public sealed class OutfitterWorkbenchTransferBuilderTests
     }
 
     [Fact]
+    public void Build_PreservesPermanentDryRunRestriction()
+    {
+        var fixture = Fixture();
+
+        var transfer = OutfitterWorkbenchTransferBuilder.Build(
+            fixture.Advice,
+            fixture.Selected.Candidate.SolutionId,
+            fixture.Evidence,
+            dryRunOnly: true);
+
+        Assert.True(transfer.DryRunOnly);
+    }
+
+    [Fact]
     public void Build_RejectsSolutionOutsideAuthoritativeFrontier()
     {
         var fixture = Fixture();
