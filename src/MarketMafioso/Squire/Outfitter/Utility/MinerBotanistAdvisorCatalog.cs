@@ -55,6 +55,8 @@ public sealed class MinerBotanistAdvisorCatalog
         var wrongJob = 0;
         var incompleteProfile = 0;
         var unmodeled = 0;
+        var acceptedSamples = new List<string>();
+        var unmodeledSamples = new List<string>();
         foreach (var item in itemSheet.Where(value =>
                      value.RowId > 0 &&
                      value.LevelEquip >= minimumEquipLevel &&
@@ -81,9 +83,15 @@ public sealed class MinerBotanistAdvisorCatalog
             if (HasUnmodeledEffectOrRestriction(definition))
             {
                 unmodeled++;
+                if (unmodeledSamples.Count < 4)
+                    unmodeledSamples.Add(
+                        $"{definition.Name}({definition.ItemId}:bonus={definition.ItemSpecialBonusId},action={definition.ItemActionId},restriction={definition.EquipRestrictionId},gc={definition.GrandCompanyId},pvp={definition.RequiredPvpRank})");
                 continue;
             }
             found[definition.ItemId] = definition;
+            if (acceptedSamples.Count < 4)
+                acceptedSamples.Add(
+                    $"{definition.Name}({definition.ItemId}:untradable={item.IsUntradable},search={item.ItemSearchCategory.RowId})");
 
             if (!item.IsUntradable && item.ItemSearchCategory.RowId != 0)
                 marketItemIds.Add(definition.ItemId);
@@ -105,7 +113,8 @@ public sealed class MinerBotanistAdvisorCatalog
         var diagnostic =
             $"Catalog {minimumEquipLevel}-{characterLevel}: scanned {scanned:N0}; accepted {found.Count:N0}; " +
             $"market {marketItemIds.Distinct().Count():N0}; gil vendor {vendorOffers.Count:N0}; " +
-            $"unresolved {unresolved:N0}; wrong job {wrongJob:N0}; incomplete relevant stats {incompleteProfile:N0}; unmodeled effect/restriction {unmodeled:N0}.";
+            $"unresolved {unresolved:N0}; wrong job {wrongJob:N0}; incomplete relevant stats {incompleteProfile:N0}; unmodeled effect/restriction {unmodeled:N0}. " +
+            $"Accepted samples [{string.Join("; ", acceptedSamples)}]. Rejected samples [{string.Join("; ", unmodeledSamples)}].";
         var result = new MinerBotanistAdvisorCatalogResult(
             $"Equipped UI evidence plus level {minimumEquipLevel}-{characterLevel} MIN/BTN market and gil-vendor equipment; armoury inventory is not yet observed.",
             marketItemIds.Distinct().Order().ToArray(),
