@@ -56,6 +56,19 @@ public sealed class InventoryPresentationTests
     }
 
     [Theory]
+    [InlineData("name:\"quality\"", InventoryBrowserMode.Listings, null)]
+    [InlineData("priceless", InventoryBrowserMode.Items, null)]
+    [InlineData("not (price<2000)", InventoryBrowserMode.Items, InventoryBrowserMode.Listings)]
+    [InlineData("(location:inventory)", InventoryBrowserMode.Listings, InventoryBrowserMode.Items)]
+    public void SuggestedMode_UsesParsedFieldReferences(
+        string filter,
+        InventoryBrowserMode current,
+        InventoryBrowserMode? expected)
+    {
+        Assert.Equal(expected, InventoryFilterPresentation.SuggestedMode(filter, current));
+    }
+
+    [Theory]
     [InlineData("Inventory1", "Inventory · bag 1")]
     [InlineData("RetainerInventory", "Retainer inventory")]
     [InlineData("RetainerPage3", "Retainer inventory · bag 3")]

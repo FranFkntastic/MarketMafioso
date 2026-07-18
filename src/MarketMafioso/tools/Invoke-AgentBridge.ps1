@@ -46,15 +46,15 @@ param(
     [string]$TransactionId,
     [string]$Challenge,
     [switch]$FullViewport,
-    [int]$ProcessId
+    [int]$ProcessId,
+    [string]$ConfigRoot = (Join-Path $env:APPDATA "XIVLauncher\pluginConfigs")
 )
 
 $ErrorActionPreference = "Stop"
 Add-Type -AssemblyName System.Security
 
-$configRoot = Join-Path $env:APPDATA "XIVLauncher\pluginConfigs"
-$configPath = Join-Path $configRoot "MarketMafioso.json"
-$bridgeDirectory = Join-Path $configRoot "MarketMafioso\agent-bridge"
+$configPath = Join-Path $ConfigRoot "MarketMafioso.json"
+$bridgeDirectory = Join-Path $ConfigRoot "MarketMafioso\agent-bridge"
 
 if (-not (Test-Path -LiteralPath $configPath)) {
     throw "MarketMafioso configuration was not found at '$configPath'."
@@ -68,7 +68,12 @@ if (-not $config.EnableAgentBridge) {
 $discoveries = @(
     Get-ChildItem -LiteralPath $bridgeDirectory -Filter "discovery-*.json" -File -ErrorAction SilentlyContinue |
         ForEach-Object {
-            $discovery = Get-Content -LiteralPath $_.FullName -Raw | ConvertFrom-Json
+            try {
+                $discovery = Get-Content -LiteralPath $_.FullName -Raw | ConvertFrom-Json
+            }
+            catch {
+                return
+            }
             $process = Get-Process -Id $discovery.processId -ErrorAction SilentlyContinue
             if ($null -ne $process -and ($ProcessId -eq 0 -or $discovery.processId -eq $ProcessId)) {
                 [pscustomobject]@{
