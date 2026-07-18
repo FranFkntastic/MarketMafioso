@@ -245,6 +245,9 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
         return new(DateTimeOffset.UtcNow, addons);
     }
 
+    public bool TryActivateRenderedSummoningBell() =>
+        renderedTextActions.TryActivateUniqueText("_TargetInfoMainTarget", "Summoning Bell").Success;
+
     public RenderedGatheringStatsObservation CaptureGatheringStats() =>
         gatheringStatsStabilizer.Observe(RenderedCharacterStatsParser.Parse(Capture()));
 

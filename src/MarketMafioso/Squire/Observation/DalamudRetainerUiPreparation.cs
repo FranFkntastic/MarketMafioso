@@ -12,17 +12,20 @@ public sealed class DalamudRetainerUiPreparation
     private readonly ICommandManager commandManager;
     private readonly LifestreamIpc lifestream;
     private readonly Func<AgentBridge.AgentBridgeRenderedUiSnapshot> captureRetainerUi;
+    private readonly Func<bool> activateRenderedSummoningBell;
     private readonly RenderedRetainerUiPreparationCoordinator coordinator = new();
     private string? lastSemanticActionDiagnostic;
 
     public DalamudRetainerUiPreparation(
         ICommandManager commandManager,
         LifestreamIpc lifestream,
-        Func<AgentBridge.AgentBridgeRenderedUiSnapshot> captureRetainerUi)
+        Func<AgentBridge.AgentBridgeRenderedUiSnapshot> captureRetainerUi,
+        Func<bool> activateRenderedSummoningBell)
     {
         this.commandManager = commandManager ?? throw new ArgumentNullException(nameof(commandManager));
         this.lifestream = lifestream ?? throw new ArgumentNullException(nameof(lifestream));
         this.captureRetainerUi = captureRetainerUi ?? throw new ArgumentNullException(nameof(captureRetainerUi));
+        this.activateRenderedSummoningBell = activateRenderedSummoningBell ?? throw new ArgumentNullException(nameof(activateRenderedSummoningBell));
     }
 
     public RenderedRetainerUiPreparationProgress Begin() => coordinator.Begin(
@@ -83,6 +86,8 @@ public sealed class DalamudRetainerUiPreparation
         if (command.StartsWith(lifestreamObjectPrefix, StringComparison.Ordinal) &&
             uint.TryParse(command[lifestreamObjectPrefix.Length..], out var dataId))
             return lifestream.TryEnqueueObjectInteraction(dataId);
+        if (string.Equals(command, "rendered-ui:activate-summoning-bell", StringComparison.Ordinal))
+            return activateRenderedSummoningBell();
         return false;
     }
 }

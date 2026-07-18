@@ -130,7 +130,8 @@ public sealed class Plugin : IDalamudPlugin
         retainerUiPreparation = new(
             CommandManager,
             new LifestreamIpc(PluginInterface, Log),
-            renderedCharacterUiProbe.CaptureRetainerUi);
+            renderedCharacterUiProbe.CaptureRetainerUi,
+            renderedCharacterUiProbe.TryActivateRenderedSummoningBell);
         mainWindow = new MainWindow(
             Configuration,
             reporter,

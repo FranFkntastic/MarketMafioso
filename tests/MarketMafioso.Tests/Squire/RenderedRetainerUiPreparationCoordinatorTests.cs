@@ -54,6 +54,11 @@ public sealed class RenderedRetainerUiPreparationCoordinatorTests
 
         var result = coordinator.Advance(Start.AddSeconds(7), false, true, false, false, _ => true);
 
+        Assert.Equal(RenderedRetainerUiPreparationStatus.OpeningRetainerList, result.Status);
+        Assert.Equal(2, result.InteractionAttempts);
+
+        result = coordinator.Advance(Start.AddSeconds(11), false, true, false, false, _ => true);
+
         Assert.Equal(RenderedRetainerUiPreparationStatus.Failed, result.Status);
         Assert.Contains("no rendered Retainer List", result.Diagnostic, StringComparison.OrdinalIgnoreCase);
     }
@@ -89,5 +94,26 @@ public sealed class RenderedRetainerUiPreparationCoordinatorTests
 
         Assert.Equal(RenderedRetainerUiPreparationStatus.Failed, result.Status);
         Assert.Contains("did not accept", result.Diagnostic, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Workflow_uses_rendered_bell_activation_once_when_lifestream_does_not_open_list()
+    {
+        var commands = new List<string>();
+        bool Process(string command) { commands.Add(command); return true; }
+        var coordinator = new RenderedRetainerUiPreparationCoordinator();
+        coordinator.Begin(Start, false, true, Process);
+        coordinator.Advance(Start.AddSeconds(3), false, true, false, false, Process);
+
+        var fallback = coordinator.Advance(Start.AddSeconds(7), false, true, false, false, Process);
+        var complete = coordinator.Advance(Start.AddSeconds(8), true, true, false, false, Process);
+
+        Assert.Equal(RenderedRetainerUiPreparationStatus.OpeningRetainerList, fallback.Status);
+        Assert.Equal(RenderedRetainerUiPreparationStatus.Complete, complete.Status);
+        Assert.Equal([
+            "/li mb",
+            "lifestream:interact-object:2000401",
+            "rendered-ui:activate-summoning-bell",
+        ], commands);
     }
 }

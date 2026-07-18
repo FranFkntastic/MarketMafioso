@@ -109,6 +109,15 @@ public sealed class RenderedRetainerUiPreparationCoordinator
                     return Fail("Lifestream did not open the rendered Retainer List within forty-five seconds.");
                 if (lifestreamBusy || nowUtc - phaseStartedAt < RetainerListSettleWindow)
                     return Snapshot();
+                if (interactionAttempts == 1)
+                {
+                    if (!processCommand("rendered-ui:activate-summoning-bell"))
+                        return Fail("Lifestream finished the Summoning Bell interaction without opening the Retainer List, and the rendered bell target rejected the bounded fallback activation.");
+                    interactionAttempts++;
+                    phaseStartedAt = nowUtc;
+                    diagnostic = "Lifestream did not open the Retainer List; activated the already-rendered Summoning Bell target and is waiting for rendered confirmation.";
+                    return Snapshot();
+                }
                 return Fail("Lifestream finished the Summoning Bell interaction, but no rendered Retainer List appeared.");
 
             default:
