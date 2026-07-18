@@ -36,6 +36,7 @@ public interface IMarketMafiosoBridgeProvider
     RenderedRetainerUiPreparationProgress BeginRetainerObservationUi(string ownerHomeWorld);
     RenderedRetainerUiPreparationProgress AdvanceRetainerObservationUi();
     RenderedRetainerUiPreparationProgress CancelRetainerObservationUi();
+    RenderedUiTextActionResult TryOpenRenderedRetainerUi(string retainerName);
     RenderedGatheringStatsObservation CaptureGatheringStatsUi();
     RenderedCharacterEquipmentLayout CaptureCharacterEquipmentLayoutUi();
     RenderedItemDetailObservation CaptureItemDetailUi();
@@ -105,6 +106,7 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
     private readonly Func<string, RenderedRetainerUiPreparationProgress> beginRetainerObservationUi;
     private readonly Func<RenderedRetainerUiPreparationProgress> advanceRetainerObservationUi;
     private readonly Func<RenderedRetainerUiPreparationProgress> cancelRetainerObservationUi;
+    private readonly Func<string, RenderedUiTextActionResult> tryOpenRenderedRetainerUi;
     private readonly Func<RenderedGatheringStatsObservation> captureGatheringStatsUi;
     private readonly Func<bool> tryOpenSyntheticAdvisorReview;
     private readonly AgentBridgeUiReviewRegistry reviewRegistry;
@@ -138,6 +140,7 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
         Func<string, RenderedRetainerUiPreparationProgress>? beginRetainerObservationUi = null,
         Func<RenderedRetainerUiPreparationProgress>? advanceRetainerObservationUi = null,
         Func<RenderedRetainerUiPreparationProgress>? cancelRetainerObservationUi = null,
+        Func<string, RenderedUiTextActionResult>? tryOpenRenderedRetainerUi = null,
         Func<RenderedUiTextActionResult>? tryOpenGearsetListUi = null,
         Func<string, RenderedUiTextActionResult>? trySelectCalibrationGearsetUi = null,
         Func<RenderedUiTextActionResult>? tryEquipSelectedGearsetUi = null)
@@ -159,6 +162,7 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
         this.beginRetainerObservationUi = beginRetainerObservationUi ?? (_ => new(RenderedRetainerUiPreparationStatus.Failed, 0, "Retainer UI preparation is unavailable."));
         this.advanceRetainerObservationUi = advanceRetainerObservationUi ?? (() => this.beginRetainerObservationUi(string.Empty));
         this.cancelRetainerObservationUi = cancelRetainerObservationUi ?? (() => new(RenderedRetainerUiPreparationStatus.Cancelled, 0, "Retainer UI preparation is unavailable."));
+        this.tryOpenRenderedRetainerUi = tryOpenRenderedRetainerUi ?? (_ => new(false, "Unavailable", "Rendered retainer selection is unavailable.", "RetainerList", null));
         this.tryCloseBlockingSelectStringUi = tryCloseBlockingSelectStringUi ?? (() => false);
         this.trySwitchCalibrationJobUi = trySwitchCalibrationJobUi ?? (_ => null);
         this.trySwitchGearsetSlotUi = trySwitchGearsetSlotUi ?? (_ => null);
@@ -200,6 +204,7 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
     public RenderedRetainerUiPreparationProgress BeginRetainerObservationUi(string ownerHomeWorld) => beginRetainerObservationUi(ownerHomeWorld);
     public RenderedRetainerUiPreparationProgress AdvanceRetainerObservationUi() => advanceRetainerObservationUi();
     public RenderedRetainerUiPreparationProgress CancelRetainerObservationUi() => cancelRetainerObservationUi();
+    public RenderedUiTextActionResult TryOpenRenderedRetainerUi(string retainerName) => tryOpenRenderedRetainerUi(retainerName);
     public RenderedGatheringStatsObservation CaptureGatheringStatsUi() => captureGatheringStatsUi();
     public RenderedCharacterEquipmentLayout CaptureCharacterEquipmentLayoutUi() =>
         RenderedCharacterEquipmentLayoutParser.Parse(captureCharacterUi());

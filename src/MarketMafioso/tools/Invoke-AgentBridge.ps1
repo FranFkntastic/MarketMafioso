@@ -30,6 +30,7 @@ param(
         "begin-retainer-observation-ui",
         "advance-retainer-observation-ui",
         "cancel-retainer-observation-ui",
+        "open-retainer-ui",
         "hover-character-node-ui",
         "release-character-node-ui",
         "get-gathering-stats-ui",

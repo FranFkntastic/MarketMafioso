@@ -331,6 +331,12 @@ public sealed class AgentBridgeHost : IDisposable
                 Squire.Observation.RenderedRetainerUiPreparationProgress? cancelledRetainerPreparation = null;
                 await dispatchOnFramework(() => cancelledRetainerPreparation = provider.CancelRetainerObservationUi()).ConfigureAwait(false);
                 return AgentBridgeResponse.Ok(cancelledRetainerPreparation!.Diagnostic, cancelledRetainerPreparation);
+            case "open-retainer-ui":
+                RenderedUiTextActionResult? openedRetainer = null;
+                await dispatchOnFramework(() => openedRetainer = provider.TryOpenRenderedRetainerUi(request.Target ?? string.Empty)).ConfigureAwait(false);
+                return openedRetainer!.Success
+                    ? AgentBridgeResponse.Ok("Unique rendered retainer row activation dispatched; rendered identity verification is still required.", openedRetainer)
+                    : new AgentBridgeResponse { Success = false, Message = openedRetainer.Message, Receipt = openedRetainer };
             case "hover-character-node-ui":
                 var characterNodeHovered = false;
                 await dispatchOnFramework(() => characterNodeHovered = provider.TryHoverCharacterNodeUi(request.Target ?? string.Empty)).ConfigureAwait(false);

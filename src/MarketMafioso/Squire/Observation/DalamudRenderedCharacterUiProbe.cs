@@ -53,6 +53,9 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
     [
         "RetainerList",
         "RetainerCharacter",
+        "SelectString",
+        "SelectIconString",
+        "Talk",
         "ItemSearch",
         "ItemSearchResult",
         "_TargetInfo",
@@ -247,6 +250,9 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
 
     public bool TryActivateRenderedSummoningBell()
         => renderedTextActions.TryConfirmUniqueText("_TargetInfoMainTarget", "Summoning Bell").Success;
+
+    public Franthropy.Dalamud.AgentBridge.RenderedUiTextActionResult TryOpenRenderedRetainer(string retainerName) =>
+        renderedTextActions.TryDoubleClickUniqueText("RetainerList", retainerName);
 
     public RenderedGatheringStatsObservation CaptureGatheringStats() =>
         gatheringStatsStabilizer.Observe(RenderedCharacterStatsParser.Parse(Capture()));
