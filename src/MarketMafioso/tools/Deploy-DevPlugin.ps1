@@ -13,9 +13,58 @@ $ErrorActionPreference = "Stop"
 
 $projectDir = Split-Path -Parent $PSScriptRoot
 $repoRoot = Split-Path -Parent $projectDir
+$workspaceRoot = Split-Path -Parent $repoRoot
 $projectPath = Join-Path -Path $projectDir -ChildPath "MarketMafioso.csproj"
 $syncScript = Join-Path -Path $PSScriptRoot -ChildPath "Sync-DevPlugin.ps1"
 $defaultConfigPath = Join-Path -Path $projectDir -ChildPath "dev-plugin.local.json"
+
+function Resolve-PinnedFranthropyRoot {
+    $refPath = Join-Path -Path $workspaceRoot -ChildPath "eng\franthropy.ref"
+    if (-not (Test-Path -LiteralPath $refPath)) {
+        throw "Pinned Franthropy revision was not found: $refPath"
+    }
+
+    $expectedRevision = (Get-Content -LiteralPath $refPath -Raw).Trim()
+    if ($expectedRevision -notmatch '^[0-9a-fA-F]{40}$') {
+        throw "Pinned Franthropy revision is invalid: '$expectedRevision'."
+    }
+
+    $sibling = [System.IO.Path]::GetFullPath((Join-Path -Path $workspaceRoot -ChildPath "..\Franthropy"))
+    if (-not (Test-Path -LiteralPath (Join-Path -Path $sibling -ChildPath ".git"))) {
+        throw "Franthropy was not found beside MarketMafioso at '$sibling'."
+    }
+
+    $worktreeLines = @(& git -C $sibling worktree list --porcelain)
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not enumerate Franthropy worktrees."
+    }
+
+    $candidates = New-Object System.Collections.Generic.List[string]
+    $currentPath = $null
+    $currentHead = $null
+    foreach ($line in @($worktreeLines + '')) {
+        if ([string]::IsNullOrWhiteSpace($line)) {
+            if (-not [string]::IsNullOrWhiteSpace($currentPath) -and $currentHead -eq $expectedRevision) {
+                $candidates.Add([System.IO.Path]::GetFullPath($currentPath))
+            }
+            $currentPath = $null
+            $currentHead = $null
+            continue
+        }
+        if ($line.StartsWith('worktree ')) { $currentPath = $line.Substring('worktree '.Length) }
+        elseif ($line.StartsWith('HEAD ')) { $currentHead = $line.Substring('HEAD '.Length) }
+    }
+
+    foreach ($candidate in $candidates) {
+        $dirty = @(& git -C $candidate status --porcelain --untracked-files=normal)
+        if ($LASTEXITCODE -eq 0 -and $dirty.Count -eq 0) {
+            Write-Host "Using pinned Franthropy worktree: $candidate@$expectedRevision"
+            return $candidate
+        }
+    }
+
+    throw "No clean Franthropy worktree is checked out at pinned revision '$expectedRevision'. Create a detached worktree at that revision before deploying."
+}
 
 function Resolve-ConfigPath {
     param(
@@ -107,7 +156,17 @@ try {
     Write-Host "Deploying MarketMafioso dev plugin from $branch@$commit"
 
     if (-not $SkipBuild) {
-        dotnet build $projectPath -c $effectiveConfiguration -p:UseSharedCompilation=false
+        $franthropyRoot = Resolve-PinnedFranthropyRoot
+        $franthropySource = Join-Path -Path $franthropyRoot -ChildPath "src"
+        $buildArguments = @(
+            'build',
+            $projectPath,
+            '-c', $effectiveConfiguration,
+            '-p:UseSharedCompilation=false',
+            "-p:FranthropyDalamudProject=$(Join-Path -Path $franthropySource -ChildPath 'Franthropy.Dalamud\Franthropy.Dalamud.csproj')",
+            "-p:FranthropyFilteringProject=$(Join-Path -Path $franthropySource -ChildPath 'Franthropy.Filtering\Franthropy.Filtering.csproj')"
+        )
+        & dotnet @buildArguments
         if ($LASTEXITCODE -ne 0) {
             throw "$effectiveConfiguration build failed with exit code $LASTEXITCODE."
         }
