@@ -26,6 +26,7 @@ AGENTS.md
 .githooks/
 docs/design/
 docs/superpowers/
+docs/review-handoffs/
 
 # OS noise
 .DS_Store
