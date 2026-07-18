@@ -902,11 +902,33 @@ public class MainWindow : Window, IDisposable
         ImGui.SameLine();
         if (ImGui.Button("Recovery"))
             ImGui.OpenPopup("AcquisitionWorkbenchRecovery");
+        var recoveryMinimum = ImGui.GetItemRectMin();
+        var recoveryMaximum = ImGui.GetItemRectMax();
+        var canMutate = !context.IsBusy && !context.IsRouteActive && !acquisitionRequestBuilder.IsSynchronizing;
+        AgentReviewRegistry.Register(
+            "acquisition.recovery.clear-workbench",
+            "Clear the local Market Acquisition Workbench",
+            AgentBridgeUiControlKind.Button,
+            recoveryMinimum,
+            recoveryMaximum,
+            canMutate && acquisitionRequestBuilder.LineCount > 0,
+            false,
+            acquisitionRequestBuilder.LineCount.ToString(),
+            () => acquisitionRequestBuilder.ClearWorkbench(context));
+        AgentReviewRegistry.Register(
+            "acquisition.recovery.clear-active-work-order",
+            "Forget the stale local Market Acquisition work-order claim",
+            AgentBridgeUiControlKind.Button,
+            recoveryMinimum,
+            recoveryMaximum,
+            canMutate && acquisitionWorkspace.ClaimedRequest is not null,
+            false,
+            acquisitionWorkspace.ClaimedRequest?.Id,
+            acquisitionWorkspace.ForgetLocalClaim);
 
         if (!ImGui.BeginPopup("AcquisitionWorkbenchRecovery"))
             return;
 
-        var canMutate = !context.IsBusy && !context.IsRouteActive && !acquisitionRequestBuilder.IsSynchronizing;
         if (ImGuiUi.MenuItem("Clear Workbench", canMutate && acquisitionRequestBuilder.LineCount > 0))
             acquisitionRequestBuilder.ClearWorkbench(context);
         if (ImGuiUi.MenuItem("Clear active work order", canMutate && acquisitionWorkspace.ClaimedRequest is not null))
