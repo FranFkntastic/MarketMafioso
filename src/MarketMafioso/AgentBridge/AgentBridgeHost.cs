@@ -7,6 +7,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Franthropy.Dalamud.AgentBridge;
+using Franthropy.Dalamud.Automation.Ui;
 
 namespace MarketMafioso.AgentBridge;
 
@@ -275,6 +276,20 @@ public sealed class AgentBridgeHost : IDisposable
                             verification = "Run the Advisor observation or get-gathering-stats-ui and require the rendered active job to match.",
                         })
                     : AgentBridgeResponse.Fail("Target must be Miner, Botanist, or Blacksmith.");
+            case "switch-gearset-slot-ui":
+                GearsetChangeCommand? gearsetSlotSwitch = null;
+                await dispatchOnFramework(() => gearsetSlotSwitch = provider.TrySwitchGearsetSlotUi(request.Target ?? string.Empty)).ConfigureAwait(false);
+                return gearsetSlotSwitch is not null
+                    ? AgentBridgeResponse.Ok(
+                        $"Submitted gearset slot {gearsetSlotSwitch.GearsetName} through the command UI; rendered verification is still required.",
+                        new
+                        {
+                            status = "SubmittedNotVerified",
+                            gearsetSlotSwitch.GearsetName,
+                            gearsetSlotSwitch.Command,
+                            verification = "Capture the rendered Character UI and require the active job to match the intended target.",
+                        })
+                    : AgentBridgeResponse.Fail("Target must be a gearset slot from 1 through 100.");
             case "open-gearset-list-ui":
                 RenderedUiTextActionResult? gearsetListOpen = null;
                 await dispatchOnFramework(() => gearsetListOpen = provider.TryOpenGearsetListUi()).ConfigureAwait(false);

@@ -187,6 +187,7 @@ public sealed class Plugin : IDalamudPlugin
                 renderedCharacterUiProbe.Capture,
                 renderedCharacterUiProbe.TryCloseBlockingSelectString,
                 renderedCharacterUiProbe.TrySwitchCalibrationJob,
+                renderedCharacterUiProbe.TrySwitchGearsetSlot,
                 renderedCharacterUiProbe.CaptureGatheringStats,
                 renderedCharacterUiProbe.TryHoverCharacterNode,
                 renderedCharacterUiProbe.RestoreCursor,

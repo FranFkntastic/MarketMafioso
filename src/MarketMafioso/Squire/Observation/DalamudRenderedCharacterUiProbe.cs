@@ -114,6 +114,15 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
         return command;
     }
 
+    public GearsetChangeCommand? TrySwitchGearsetSlot(string target)
+    {
+        if (!GearsetChangeCommand.TryCreateSlot(target, out var command))
+            return null;
+        gatheringStatsStabilizer.Reset();
+        Chat.ExecuteCommand(command.Command);
+        return command;
+    }
+
     public Franthropy.Dalamud.AgentBridge.RenderedUiTextActionResult TryOpenGearsetList()
     {
         var result = renderedTextActions.TryClickUniqueControlImmediatelyLeftOfText("Character", "Gear Set");

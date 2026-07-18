@@ -117,6 +117,23 @@ public sealed class MarketMafiosoBridgeProviderTests
     }
 
     [Fact]
+    public void Provider_returns_submitted_gearset_slot_for_rendered_verification()
+    {
+        Assert.True(GearsetChangeCommand.TryCreateSlot("17", out var expected));
+        var provider = new MarketMafiosoBridgeProvider(
+            CreateTruth, () => { }, () => { }, () => { }, _ => { }, _ => true, () => { }, () => { },
+            () => true,
+            new AgentBridgeUiReviewRegistry(),
+            trySwitchGearsetSlotUi: _ => expected);
+
+        var submitted = Assert.IsType<GearsetChangeCommand>(provider.TrySwitchGearsetSlotUi("17"));
+
+        Assert.Same(expected, submitted);
+        Assert.Equal("17", submitted.GearsetName);
+        Assert.Equal("/gearset change 17", submitted.Command);
+    }
+
+    [Fact]
     public void Provider_exposes_rendered_gearset_list_action_without_generic_click_authority()
     {
         var expected = new RenderedUiTextActionResult(
