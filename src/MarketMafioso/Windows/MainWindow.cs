@@ -381,6 +381,7 @@ public class MainWindow : Window, IDisposable
             () => _ = RestartGuidedRouteAsync(),
             () => _ = ReprepareGuidedRouteAsync(),
             () => routeEngine.RequestOutfitterRecovery(acquisitionRequestBuilder.CurrentDocument),
+            ReturnToOutfitterAdvisor,
             marketAcquisitionDiagnosticsPanel.DrawPostRunDiagnosticSummary,
             marketAcquisitionDiagnosticsPanel.DrawLatestWorldCompletionSummary,
             DrawMarketBoardProbeStatus,
@@ -444,6 +445,9 @@ public class MainWindow : Window, IDisposable
                 ActiveOperationDisposition = activeOperation?.Disposition.ToString(),
                 StopCount = snapshot.Stops.Count,
                 CompletedOrProbedStopCount = snapshot.CompletedOrProbedStopCount,
+                ExecutionMode = snapshot.ExecutionMode.ToString(),
+                OutfitterPhase = snapshot.OutfitterExecution?.Phase.ToString(),
+                OutfitterMessage = snapshot.OutfitterExecution?.Message,
             },
             Squire = squireTab.CreateAgentBridgeTruth(),
         };
@@ -1346,6 +1350,12 @@ public class MainWindow : Window, IDisposable
                 acquisitionWorkspace.SetStatus(start.Message);
             routeEngine.ReportRouteProgress();
         });
+    }
+
+    private void ReturnToOutfitterAdvisor()
+    {
+        squireTab.OpenOutfitterAdvisor();
+        QueueAgentTabSelection("Squire");
     }
 
     private void MaybeAutoResumeOutfitterRoute()

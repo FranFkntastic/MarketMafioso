@@ -22,6 +22,7 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
     private readonly Action restartRoute;
     private readonly Action reprepareRoute;
     private readonly Action retryOutfitterRecovery;
+    private readonly Action returnToOutfitterAdvisor;
     private readonly Action<MarketAcquisitionRouteEngineSnapshot> drawPostRunDiagnosticSummary;
     private readonly Action<MarketAcquisitionRouteEngineSnapshot> drawLatestWorldCompletionSummary;
     private readonly Action<MarketAcquisitionRouteEngineSnapshot> drawMarketBoardProbeStatus;
@@ -40,6 +41,7 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
         Action restartRoute,
         Action reprepareRoute,
         Action retryOutfitterRecovery,
+        Action returnToOutfitterAdvisor,
         Action<MarketAcquisitionRouteEngineSnapshot> drawPostRunDiagnosticSummary,
         Action<MarketAcquisitionRouteEngineSnapshot> drawLatestWorldCompletionSummary,
         Action<MarketAcquisitionRouteEngineSnapshot> drawMarketBoardProbeStatus,
@@ -56,6 +58,7 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
         this.restartRoute = restartRoute ?? throw new ArgumentNullException(nameof(restartRoute));
         this.reprepareRoute = reprepareRoute ?? throw new ArgumentNullException(nameof(reprepareRoute));
         this.retryOutfitterRecovery = retryOutfitterRecovery ?? throw new ArgumentNullException(nameof(retryOutfitterRecovery));
+        this.returnToOutfitterAdvisor = returnToOutfitterAdvisor ?? throw new ArgumentNullException(nameof(returnToOutfitterAdvisor));
         this.drawPostRunDiagnosticSummary = drawPostRunDiagnosticSummary ?? throw new ArgumentNullException(nameof(drawPostRunDiagnosticSummary));
         this.drawLatestWorldCompletionSummary = drawLatestWorldCompletionSummary ?? throw new ArgumentNullException(nameof(drawLatestWorldCompletionSummary));
         this.drawMarketBoardProbeStatus = drawMarketBoardProbeStatus ?? throw new ArgumentNullException(nameof(drawMarketBoardProbeStatus));
@@ -125,6 +128,14 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
                 "Refresh and optimize the remaining exact-quality Squire route",
                 true,
                 retryOutfitterRecovery);
+            ImGui.SameLine();
+            if (ImGuiUi.Button("Return to Advisor##OutfitterReturnToAdvisor", true))
+                returnToOutfitterAdvisor();
+            RegisterLastControl(
+                "acquisition.route.outfitter.return-to-advisor",
+                "Return to the Squire Advisor without broadening the paused contract",
+                true,
+                returnToOutfitterAdvisor);
             return;
         }
         if (primaryAction == MarketAcquisitionGuidedRoutePrimaryAction.ResumeManualPause)

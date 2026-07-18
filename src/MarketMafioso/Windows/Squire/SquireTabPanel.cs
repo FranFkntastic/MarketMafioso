@@ -159,6 +159,13 @@ internal sealed class SquireTabPanel : IDisposable
         stageOutfitterTransfer = stageExactOutfitterTransfer ?? throw new ArgumentNullException(nameof(stageExactOutfitterTransfer));
     }
 
+    public void OpenOutfitterAdvisor()
+    {
+        config.Squire.EnableOutfitterAdvisor = true;
+        config.Save();
+        SelectWorkspace("Outfitter");
+    }
+
 #if DEBUG
     public void OpenSyntheticAdvisorReview()
     {

@@ -85,6 +85,9 @@ public sealed record AgentBridgeRouteTruth
     public required string? ActiveOperationDisposition { get; init; }
     public required int StopCount { get; init; }
     public required int CompletedOrProbedStopCount { get; init; }
+    public string? ExecutionMode { get; init; }
+    public string? OutfitterPhase { get; init; }
+    public string? OutfitterMessage { get; init; }
 }
 
 public sealed record AgentBridgeProofReceipt
