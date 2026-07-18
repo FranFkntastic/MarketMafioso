@@ -65,7 +65,7 @@ public static partial class RenderedItemDetailParser
             return Incomplete("Rendered item name, item level, equip level, and job category did not form a complete tuple.");
 
         var stats = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-        foreach (var (path, text) in texts.Where(value => value.Key.StartsWith("ItemDetail/100/", StringComparison.Ordinal)))
+        foreach (var (path, text) in texts.Where(value => BaseStatValuePathPattern().IsMatch(value.Key)))
         {
             _ = path;
             var match = StatPattern().Match(text);
@@ -123,4 +123,7 @@ public static partial class RenderedItemDetailParser
 
     [GeneratedRegex(@"^ItemDetail/(?:96|960\d+)/6$", RegexOptions.CultureInvariant)]
     private static partial Regex MateriaValuePathPattern();
+
+    [GeneratedRegex(@"^ItemDetail/(?:100|100\d+)/[234]$", RegexOptions.CultureInvariant)]
+    private static partial Regex BaseStatValuePathPattern();
 }
