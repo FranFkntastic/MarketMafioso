@@ -89,7 +89,7 @@ public sealed class RenderedRetainerUiPreparationCoordinator
                 if ((lifestreamBusy && !marketBoardUiVisible) || nowUtc - phaseStartedAt < TravelSettleWindow)
                     return Snapshot();
                 if (string.IsNullOrWhiteSpace(localizedBellName) ||
-                    !processCommand($"rendered-ui:click-nameplate:{localizedBellName.Replace(":", string.Empty, StringComparison.Ordinal)}"))
+                    !processCommand($"rendered-ui:rollover-nameplate:{localizedBellName.Replace(":", string.Empty, StringComparison.Ordinal)}"))
                     return Fail("The localized Summoning Bell rendered nameplate action was unavailable.");
                 status = RenderedRetainerUiPreparationStatus.TargetingBell;
                 phaseStartedAt = nowUtc;
@@ -131,7 +131,7 @@ public sealed class RenderedRetainerUiPreparationCoordinator
                 if (interactionAttempts >= MaxInteractionAttempts)
                     return Fail("The rendered Retainer List did not appear after three bounded Summoning Bell interactions.");
                 if (string.IsNullOrWhiteSpace(localizedBellName) ||
-                    !processCommand($"rendered-ui:click-nameplate:{localizedBellName.Replace(":", string.Empty, StringComparison.Ordinal)}"))
+                    !processCommand($"rendered-ui:rollover-nameplate:{localizedBellName.Replace(":", string.Empty, StringComparison.Ordinal)}"))
                     return Fail("The bridge could not reacquire the localized Summoning Bell through its rendered nameplate.");
                 status = RenderedRetainerUiPreparationStatus.TargetingBell;
                 phaseStartedAt = nowUtc;

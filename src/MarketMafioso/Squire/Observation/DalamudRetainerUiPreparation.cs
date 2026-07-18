@@ -112,10 +112,10 @@ public sealed class DalamudRetainerUiPreparation
             return commandManager.ProcessCommand(command);
         if (string.Equals(command, "/vnav movetarget", StringComparison.Ordinal))
             return commandManager.ProcessCommand(command);
-        const string nameplatePrefix = "rendered-ui:click-nameplate:";
+        const string nameplatePrefix = "rendered-ui:rollover-nameplate:";
         if (command.StartsWith(nameplatePrefix, StringComparison.Ordinal))
         {
-            var result = renderedUiActions.TryClickUniqueText("NamePlate", command[nameplatePrefix.Length..]);
+            var result = renderedUiActions.TryRollOverUniqueText("NamePlate", command[nameplatePrefix.Length..]);
             if (!result.Success)
                 lastSemanticActionDiagnostic = $"Rendered UI action {result.Code}: {result.Message}";
             return result.Success;
