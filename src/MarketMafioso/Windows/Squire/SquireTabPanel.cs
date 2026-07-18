@@ -370,7 +370,7 @@ internal sealed class SquireTabPanel : IDisposable
                 selectionAnchor = null;
             }
         }
-        if (!string.IsNullOrWhiteSpace(candidateFilter.Error))
+        if (!filterEditor.IsEditingWithSuggestions && !string.IsNullOrWhiteSpace(candidateFilter.Error))
             ImGui.TextColored(MarketMafiosoUiTheme.Error, candidateFilter.Error);
         DrawBatchBar();
         DrawTable(analysis);
