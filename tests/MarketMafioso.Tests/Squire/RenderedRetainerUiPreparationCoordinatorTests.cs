@@ -31,7 +31,7 @@ public sealed class RenderedRetainerUiPreparationCoordinatorTests
         Assert.Equal(RenderedRetainerUiPreparationStatus.ApproachingBell, coordinator.Advance(Start.AddSeconds(5), false, true, false, false, true, true, true, "Summoning Bell", Process).Status);
         Assert.Equal(RenderedRetainerUiPreparationStatus.WaitingForRetainerList, coordinator.Advance(Start.AddSeconds(6), false, true, false, false, true, true, false, "Summoning Bell", Process).Status);
         Assert.Equal(RenderedRetainerUiPreparationStatus.Complete, coordinator.Advance(Start.AddSeconds(7), true, true, false, false, true, true, false, "Summoning Bell", Process).Status);
-        Assert.Equal(["/li mb", "/target \"Summoning Bell\"", "/vnav movetarget", "/confirm"], commands);
+        Assert.Equal(["/li mb", "rendered-ui:click-nameplate:Summoning Bell", "/vnav movetarget", "/confirm"], commands);
     }
 
     [Fact]
@@ -87,7 +87,7 @@ public sealed class RenderedRetainerUiPreparationCoordinatorTests
             command => { commands.Add(command); return true; });
 
         Assert.Equal(RenderedRetainerUiPreparationStatus.TargetingBell, result.Status);
-        Assert.Equal(["/li mb", "/target \"Summoning Bell\""], commands);
+        Assert.Equal(["/li mb", "rendered-ui:click-nameplate:Summoning Bell"], commands);
     }
 
     [Fact]

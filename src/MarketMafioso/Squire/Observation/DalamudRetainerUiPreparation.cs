@@ -3,6 +3,7 @@ using System.Linq;
 using Dalamud.Game.Command;
 using Dalamud.Plugin.Services;
 using ECommons.Automation;
+using Franthropy.Dalamud.AgentBridge;
 using FFXIVClientStructs.FFXIV.Component.GUI;
 using Lumina.Excel.Sheets;
 using MarketMafioso.Automation.Travel;
@@ -16,6 +17,7 @@ public sealed class DalamudRetainerUiPreparation
     private readonly IDataManager dataManager;
     private readonly LifestreamIpc lifestream;
     private readonly VNavmeshIpc vnavmesh;
+    private readonly DalamudRenderedUiTextActionDispatcher renderedUiActions;
     private readonly Func<AgentBridge.AgentBridgeRenderedUiSnapshot> captureRetainerUi;
     private readonly RenderedRetainerUiPreparationCoordinator coordinator = new();
 
@@ -24,12 +26,14 @@ public sealed class DalamudRetainerUiPreparation
         IDataManager dataManager,
         LifestreamIpc lifestream,
         VNavmeshIpc vnavmesh,
+        DalamudRenderedUiTextActionDispatcher renderedUiActions,
         Func<AgentBridge.AgentBridgeRenderedUiSnapshot> captureRetainerUi)
     {
         this.commandManager = commandManager ?? throw new ArgumentNullException(nameof(commandManager));
         this.dataManager = dataManager ?? throw new ArgumentNullException(nameof(dataManager));
         this.lifestream = lifestream ?? throw new ArgumentNullException(nameof(lifestream));
         this.vnavmesh = vnavmesh ?? throw new ArgumentNullException(nameof(vnavmesh));
+        this.renderedUiActions = renderedUiActions ?? throw new ArgumentNullException(nameof(renderedUiActions));
         this.captureRetainerUi = captureRetainerUi ?? throw new ArgumentNullException(nameof(captureRetainerUi));
     }
 
@@ -102,8 +106,10 @@ public sealed class DalamudRetainerUiPreparation
             return commandManager.ProcessCommand(command);
         if (string.Equals(command, "/vnav movetarget", StringComparison.Ordinal))
             return commandManager.ProcessCommand(command);
-        if (!string.Equals(command, "/confirm", StringComparison.Ordinal) &&
-            !command.StartsWith("/target \"", StringComparison.Ordinal))
+        const string nameplatePrefix = "rendered-ui:click-nameplate:";
+        if (command.StartsWith(nameplatePrefix, StringComparison.Ordinal))
+            return renderedUiActions.TryClickUniqueText("NamePlate", command[nameplatePrefix.Length..]).Success;
+        if (!string.Equals(command, "/confirm", StringComparison.Ordinal))
             return false;
         try
         {

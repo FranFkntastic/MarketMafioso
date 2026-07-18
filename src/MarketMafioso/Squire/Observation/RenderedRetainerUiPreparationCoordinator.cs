@@ -89,8 +89,8 @@ public sealed class RenderedRetainerUiPreparationCoordinator
                 if ((lifestreamBusy && !marketBoardUiVisible) || nowUtc - phaseStartedAt < TravelSettleWindow)
                     return Snapshot();
                 if (string.IsNullOrWhiteSpace(localizedBellName) ||
-                    !processCommand($"/target \"{localizedBellName.Replace("\"", string.Empty, StringComparison.Ordinal)}\""))
-                    return Fail("The localized Summoning Bell target command was unavailable.");
+                    !processCommand($"rendered-ui:click-nameplate:{localizedBellName.Replace(":", string.Empty, StringComparison.Ordinal)}"))
+                    return Fail("The localized Summoning Bell rendered nameplate action was unavailable.");
                 status = RenderedRetainerUiPreparationStatus.TargetingBell;
                 phaseStartedAt = nowUtc;
                 diagnostic = "Summoning Bell target requested through the normal command UI.";
@@ -131,8 +131,8 @@ public sealed class RenderedRetainerUiPreparationCoordinator
                 if (interactionAttempts >= MaxInteractionAttempts)
                     return Fail("The rendered Retainer List did not appear after three bounded Summoning Bell interactions.");
                 if (string.IsNullOrWhiteSpace(localizedBellName) ||
-                    !processCommand($"/target \"{localizedBellName.Replace("\"", string.Empty, StringComparison.Ordinal)}\""))
-                    return Fail("The bridge could not reacquire the localized Summoning Bell through the command UI.");
+                    !processCommand($"rendered-ui:click-nameplate:{localizedBellName.Replace(":", string.Empty, StringComparison.Ordinal)}"))
+                    return Fail("The bridge could not reacquire the localized Summoning Bell through its rendered nameplate.");
                 status = RenderedRetainerUiPreparationStatus.TargetingBell;
                 phaseStartedAt = nowUtc;
                 diagnostic = "Retrying the bounded Summoning Bell interaction because no rendered Retainer List appeared.";
