@@ -16,6 +16,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\MarketMafioso.Contracts\MarketMafioso.Contracts.csproj" />
+    <ProjectReference Include="..\..\..\Franthropy\src\Franthropy.FFXIV\Franthropy.FFXIV.csproj" />
     <ProjectReference Include="$(FranthropyWebProject)" />
   </ItemGroup>
 

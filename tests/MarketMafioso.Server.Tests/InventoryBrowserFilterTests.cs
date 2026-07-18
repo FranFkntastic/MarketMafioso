@@ -51,36 +51,53 @@ public sealed class InventoryBrowserFilterTests
     };
 
     [Fact]
-    public void ItemsMode_FiltersStacksBeforeRegroupingTheirSummaries()
+    public void ItemsMode_FiltersOwnershipSummariesByTotalQuantity()
     {
         var view = InventoryBrowserViewBuilder.Build(Snapshot, "darksteel quantity>=90", mode: InventoryBrowserMode.Items);
 
         Assert.True(view.FilterValid);
         var item = Assert.Single(view.Items);
         Assert.Equal("Darksteel Ingot", item.DisplayName);
-        Assert.Equal(99, item.TotalQuantity);
+        Assert.Equal(111, item.TotalQuantity);
         Assert.Contains(item.Locations, location => location.Location == "Retainer");
+        Assert.Contains(item.Locations, location => location.Location == "Inventory");
         Assert.Equal(1, view.MatchingRecordCount);
-        Assert.Single(view.Stacks);
-        Assert.Equal(99, view.TotalQuantity);
+        Assert.Equal(2, view.Stacks.Count);
+        Assert.Equal(111, view.TotalQuantity);
     }
 
     [Fact]
-    public void ItemsMode_AcceptsFriendlyNegationAndColonComparisons()
+    public void ItemsMode_BindsOwnershipSummaryFields()
     {
         var view = InventoryBrowserViewBuilder.Build(
             Snapshot,
-            "darksteel -location:inventory quantity:>20",
+            "darksteel owned:true retainer:Belladonna quantity:>100",
             mode: InventoryBrowserMode.Items);
 
         Assert.True(view.FilterValid);
         var item = Assert.Single(view.Items);
-        Assert.Equal(99, item.TotalQuantity);
-        Assert.Equal("Retainer", Assert.Single(view.Stacks).Location);
+        Assert.Equal("Darksteel Ingot", item.DisplayName);
+        Assert.Equal(111, item.TotalQuantity);
+        Assert.Equal(2, view.Stacks.Count);
     }
 
     [Fact]
-    public void ItemsMode_LocationExclusionsRemoveStacksAndRecomputeTotals()
+    public void StacksMode_AcceptsFriendlyNegationAndColonComparisons()
+    {
+        var view = InventoryBrowserViewBuilder.Build(
+            Snapshot,
+            "darksteel -location:inventory quantity:>20",
+            mode: InventoryBrowserMode.Stacks);
+
+        Assert.True(view.FilterValid);
+        var stack = Assert.Single(view.Stacks);
+        Assert.Equal("Darksteel Ingot", stack.DisplayName);
+        Assert.Equal(99, stack.Quantity);
+        Assert.Equal("Retainer", stack.Location);
+    }
+
+    [Fact]
+    public void StacksMode_LocationExclusionsRemoveStacksAndRecomputeTotals()
     {
         var report = Snapshot.Report with
         {
@@ -96,12 +113,11 @@ public sealed class InventoryBrowserFilterTests
         var view = InventoryBrowserViewBuilder.Build(
             Snapshot with { Report = report },
             "-location:saddlebag -location:armoury",
-            mode: InventoryBrowserMode.Items);
+            mode: InventoryBrowserMode.Stacks);
 
         Assert.True(view.FilterValid);
-        var item = Assert.Single(view.Items);
-        Assert.Equal(12, item.TotalQuantity);
         var stack = Assert.Single(view.Stacks);
+        Assert.Equal(12, stack.Quantity);
         Assert.Equal("Inventory", stack.Location);
         Assert.Equal(12, view.TotalQuantity);
         Assert.Empty(view.MarketListings);
@@ -268,8 +284,8 @@ public sealed class InventoryBrowserFilterTests
     [Fact]
     public void FriendlyPredicatesAndExactOperators_AreCompletedAtTheCaret()
     {
-        var predicate = InventoryBrowserViewBuilder.Build(Snapshot, "is:h", mode: InventoryBrowserMode.Items, caretPosition: 4);
-        var exact = InventoryBrowserViewBuilder.Build(Snapshot, "quantity==", mode: InventoryBrowserMode.Items, caretPosition: 10);
+        var predicate = InventoryBrowserViewBuilder.Build(Snapshot, "is:h", mode: InventoryBrowserMode.Stacks, caretPosition: 4);
+        var exact = InventoryBrowserViewBuilder.Build(Snapshot, "quantity==", mode: InventoryBrowserMode.Stacks, caretPosition: 10);
 
         Assert.Contains(predicate.FilterCompletions, completion => completion.InsertionText == "hq");
         Assert.DoesNotContain(predicate.FilterCompletions, completion => completion.InsertionText == "nq");
@@ -280,8 +296,8 @@ public sealed class InventoryBrowserFilterTests
     [Fact]
     public void ViewPreservesAuthoredFilterAndExposesSeparateSemanticForm()
     {
-        var friendly = InventoryBrowserViewBuilder.Build(Snapshot, "  quality:hq   -location:retainer  ", mode: InventoryBrowserMode.Items);
-        var canonical = InventoryBrowserViewBuilder.Build(Snapshot, "instance.quality==HQ AND !instance.location==Retainer", mode: InventoryBrowserMode.Items);
+        var friendly = InventoryBrowserViewBuilder.Build(Snapshot, "  quality:hq   -location:retainer  ", mode: InventoryBrowserMode.Stacks);
+        var canonical = InventoryBrowserViewBuilder.Build(Snapshot, "instance.quality==HQ AND !instance.location==Retainer", mode: InventoryBrowserMode.Stacks);
 
         Assert.Equal("  quality:hq   -location:retainer  ", friendly.Filter);
         Assert.Equal("quality:hq -location:retainer", friendly.NormalizedFilter);
@@ -294,12 +310,12 @@ public sealed class InventoryBrowserFilterTests
         var field = InventoryBrowserViewBuilder.Build(
             Snapshot,
             "-loc",
-            mode: InventoryBrowserMode.Items,
+            mode: InventoryBrowserMode.Stacks,
             caretPosition: 4);
         var comparison = InventoryBrowserViewBuilder.Build(
             Snapshot,
             "quantity:>",
-            mode: InventoryBrowserMode.Items,
+            mode: InventoryBrowserMode.Stacks,
             caretPosition: 10);
 
         var location = Assert.Single(field.FilterCompletions, completion => completion.InsertionText == "location");

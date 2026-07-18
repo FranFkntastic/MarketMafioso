@@ -1,12 +1,42 @@
 namespace MarketMafioso.Dashboard.Components.Inventory;
 
+using Franthropy.FFXIV.Filtering;
 using Franthropy.Filtering.Completion;
+using Franthropy.Filtering.Semantics;
+using Franthropy.Filtering.Syntax;
 using MarketMafioso.Contracts.Inventory;
 
 public static class InventoryFilterPresentation
 {
-    private static readonly string[] InventoryFields = ["quality", "condition", "location", "equipped", "slot"];
-    private static readonly string[] ListingFields = ["price", "total", "age", "offer"];
+    private static readonly FfxivFilterCatalog Catalog = FfxivFilterCatalog.Create(new FfxivFilterResolvers(
+        new FilterNamedValueCatalog<FfxivItemKey>([]),
+        new FilterNamedValueCatalog<FfxivJobKey>([]),
+        new FilterNamedValueCatalog<FfxivUiCategoryKey>([]),
+        new FilterNamedValueCatalog<FfxivCharacterKey>([]),
+        new FilterNamedValueCatalog<FfxivRetainerKey>([]),
+        new FilterNamedValueCatalog<FfxivWorldKey>([]),
+        new FilterNamedValueCatalog<FfxivDataCenterKey>([])));
+
+    private static readonly HashSet<string> InventoryFieldKeys = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "instance.quality",
+        "instance.condition",
+        "instance.location",
+        "instance.equipped",
+        "instance.quantity",
+        "item.slot",
+        "ownership.owned",
+        "ownership.quantity",
+    };
+
+    private static readonly HashSet<string> ListingFieldKeys = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "offer.price",
+        "offer.totalPrice",
+        "offer.quantity",
+        "offer.age",
+        "offer.source",
+    };
 
     public static bool IsIncomplete(string? filter)
     {
@@ -42,31 +72,59 @@ public static class InventoryFilterPresentation
 
     public static InventoryBrowserMode? SuggestedMode(string? filter, InventoryBrowserMode currentMode)
     {
-        var value = filter ?? string.Empty;
-        if (currentMode != InventoryBrowserMode.Items && InventoryFields.Any(field => ContainsField(value, field)))
+        var referencedKeys = CollectReferencedKeys(filter);
+        if (currentMode != InventoryBrowserMode.Items && referencedKeys.Overlaps(InventoryFieldKeys))
             return InventoryBrowserMode.Items;
-        if (currentMode != InventoryBrowserMode.Listings && ListingFields.Any(field => ContainsField(value, field)))
+        if (currentMode != InventoryBrowserMode.Listings && referencedKeys.Overlaps(ListingFieldKeys))
             return InventoryBrowserMode.Listings;
         return null;
+    }
+
+    private static HashSet<string> CollectReferencedKeys(string? filter)
+    {
+        var tree = FilterSyntaxTree.Parse(filter);
+        var keys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        CollectReferencedKeys(tree.Root.Expression, keys);
+        return keys;
+    }
+
+    private static void CollectReferencedKeys(FilterExpressionSyntax? node, HashSet<string> keys)
+    {
+        switch (node)
+        {
+            case null:
+            case FilterMissingExpressionSyntax:
+            case FilterFreeTextSyntax:
+                return;
+            case FilterFieldExpressionSyntax fieldExpression:
+                AddResolvedFieldKey(fieldExpression.Field.Value, keys);
+                return;
+            case FilterFunctionCallSyntax functionCall:
+                AddResolvedFieldKey(functionCall.Field.Value, keys);
+                return;
+            case FilterUnaryExpressionSyntax unary:
+                CollectReferencedKeys(unary.Operand, keys);
+                return;
+            case FilterBinaryExpressionSyntax binary:
+                CollectReferencedKeys(binary.Left, keys);
+                CollectReferencedKeys(binary.Right, keys);
+                return;
+            case FilterParenthesizedExpressionSyntax parenthesized:
+                CollectReferencedKeys(parenthesized.Expression, keys);
+                return;
+            case FilterReservedNestedQualifierSyntax:
+                return;
+        }
+    }
+
+    private static void AddResolvedFieldKey(string text, HashSet<string> keys)
+    {
+        var resolution = Catalog.Catalog.Resolve(text);
+        if (resolution.Kind == FilterFieldResolutionKind.Success && resolution.Field is not null)
+            keys.Add(resolution.Field.Key);
     }
 
     private static bool EndsWithKeyword(string value, string keyword) =>
         value.Equals(keyword, StringComparison.OrdinalIgnoreCase) ||
         value.EndsWith($" {keyword}", StringComparison.OrdinalIgnoreCase);
-
-    private static bool ContainsField(string value, string field)
-    {
-        var index = value.IndexOf(field, StringComparison.OrdinalIgnoreCase);
-        while (index >= 0)
-        {
-            var beforeIsBoundary = index == 0 || !char.IsLetterOrDigit(value[index - 1]);
-            var afterIndex = index + field.Length;
-            var afterIsOperator = afterIndex < value.Length && value[afterIndex] is ':' or '=' or '<' or '>';
-            if (beforeIsBoundary && afterIsOperator)
-                return true;
-            index = value.IndexOf(field, index + field.Length, StringComparison.OrdinalIgnoreCase);
-        }
-
-        return false;
-    }
 }

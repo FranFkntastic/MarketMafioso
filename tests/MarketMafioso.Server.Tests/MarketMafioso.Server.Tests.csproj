@@ -5,6 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
+    <CraftArchitectCoreProject Condition="'$(CraftArchitectCoreProject)' == ''">..\..\..\FFXIV Craft Architect C# Edition\src\FFXIV Craft Architect.Core\FFXIV Craft Architect.Core.csproj</CraftArchitectCoreProject>
   </PropertyGroup>
 
   <ItemGroup>
@@ -20,6 +21,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="$(CraftArchitectCoreProject)" />
     <ProjectReference Include="..\..\src\MarketMafioso.Dashboard\MarketMafioso.Dashboard.csproj" />
     <ProjectReference Include="..\..\src\MarketMafioso.Server\MarketMafioso.Server.csproj" />
   </ItemGroup>
