@@ -23,6 +23,7 @@ param(
         "close-blocking-select-string-ui",
         "switch-calibration-job-ui",
         "get-character-ui",
+        "get-retainer-ui",
         "hover-character-node-ui",
         "release-character-node-ui",
         "get-gathering-stats-ui",
