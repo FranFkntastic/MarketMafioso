@@ -2,6 +2,7 @@ using System;
 using System.Linq;
 using Dalamud.Game.Command;
 using Dalamud.Plugin.Services;
+using ECommons.Automation;
 using Lumina.Excel.Sheets;
 using MarketMafioso.Automation.Travel;
 
@@ -32,7 +33,7 @@ public sealed class DalamudRetainerUiPreparation
         DateTimeOffset.UtcNow,
         RetainerListVisible(),
         lifestream.IsAvailable,
-        commandManager.ProcessCommand);
+        ProcessSemanticCommand);
 
     public RenderedRetainerUiPreparationProgress Advance()
     {
@@ -43,7 +44,7 @@ public sealed class DalamudRetainerUiPreparation
             stateAvailable,
             busy,
             ResolveBellName(),
-            commandManager.ProcessCommand);
+            ProcessSemanticCommand);
     }
 
     public RenderedRetainerUiPreparationProgress Cancel() => coordinator.Cancel();
@@ -58,5 +59,23 @@ public sealed class DalamudRetainerUiPreparation
             .GetRowOrDefault(SummoningBellNameRowId)?
             .Singular.ToString();
         return string.IsNullOrWhiteSpace(localized) ? "Summoning Bell" : localized;
+    }
+
+    private bool ProcessSemanticCommand(string command)
+    {
+        if (string.Equals(command, "/li mb", StringComparison.Ordinal))
+            return commandManager.ProcessCommand(command);
+        if (!string.Equals(command, "/interact", StringComparison.Ordinal) &&
+            !command.StartsWith("/target \"", StringComparison.Ordinal))
+            return false;
+        try
+        {
+            Chat.ExecuteCommand(command);
+            return true;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
     }
 }
