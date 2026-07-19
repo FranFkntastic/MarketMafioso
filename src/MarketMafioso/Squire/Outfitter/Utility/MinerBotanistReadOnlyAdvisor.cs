@@ -23,9 +23,15 @@ public sealed record MinerBotanistReadOnlyAdvice(
     IReadOnlyDictionary<EquipmentOfferAllocationKey, EquipmentExactSolverOffer> OffersByAllocation,
     string Diagnostic);
 
+public sealed record MinerBotanistOwnedItemEvidence(
+    uint ItemId,
+    bool IsHighQuality,
+    string ContainerLabel);
+
 /// <summary>
 /// First read-only MIN/BTN advisor slice. It consumes only reconciled rendered baseline evidence,
-/// exact-quality market evidence, and version-matched static item definitions.
+/// exact-quality market evidence, version-matched static item definitions, and owned-inventory
+/// evidence whose container reads have passed the rendered differential proof.
 /// </summary>
 public sealed class MinerBotanistReadOnlyAdvisor
 {
@@ -40,6 +46,7 @@ public sealed class MinerBotanistReadOnlyAdvisor
         Func<uint, IReadOnlyList<EquipmentItemDefinition>> findDefinitionsByItemId,
         MinerBotanistUtilityContextKind contextKind,
         IReadOnlyList<EquipmentLoadoutOffer>? vendorOffers = null,
+        IReadOnlyList<MinerBotanistOwnedItemEvidence>? ownedItems = null,
         CancellationToken cancellationToken = default,
         Action<EquipmentExactFrontierProgress>? reportProgress = null,
         Action<MinerBotanistSolverReplay>? captureReplay = null)
@@ -102,6 +109,47 @@ public sealed class MinerBotanistReadOnlyAdvisor
                 ["Currently equipped", slot.Quality == EquipmentQuality.High ? "HQ" : "NQ"]);
             offers.Add(exact);
             baselineKeys[slot.Position] = exact.AllocationKey;
+        }
+
+        foreach (var owned in ownedItems ?? [])
+        {
+            // Owned items span every job the target plays; anything not eligible for the
+            // current target is skipped silently rather than treated as an evidence fault.
+            var ownedDefinitions = findDefinitionsByItemId(owned.ItemId)
+                .Where(value => value.ItemId == owned.ItemId && value.EquipLevel <= characterLevel && value.EligibleClassJobIds.Contains(classJobId))
+                .ToArray();
+            if (ownedDefinitions.Length != 1)
+                continue;
+            var ownedDefinition = ownedDefinitions[0];
+            if (MinerBotanistEquipmentSupportPolicy.HasUnmodeledEffectOrRestriction(ownedDefinition) ||
+                !MinerBotanistAdvisorCatalog.HasRelevantCompleteProfile(ownedDefinition))
+                continue;
+            var ownedQuality = owned.IsHighQuality ? EquipmentQuality.High : EquipmentQuality.Normal;
+            var ownedProfile = ownedDefinition.ResolveStatProfile(ownedQuality);
+            if (ownedProfile is not { IsComplete: true })
+                continue;
+            var ownedPositions = Positions(ownedDefinition);
+            if (ownedPositions.Count == 0 || !ownedPositions.Overlaps(required))
+                continue;
+            var ownedOffer = new EquipmentLoadoutOffer(
+                ownedDefinition,
+                EquipmentAcquisitionSourceKind.Owned,
+                $"Owned · {owned.ContainerLabel}",
+                0,
+                PriceIsEstimate: false,
+                Quality: ownedQuality);
+            offers.Add(new(
+                ownedOffer,
+                null,
+                ownedPositions,
+                1,
+                Vector(ownedProfile),
+                0,
+                null,
+                null,
+                0,
+                new(0, 0, 0),
+                [ownedQuality == EquipmentQuality.High ? "HQ" : "NQ", "Owned"]));
         }
 
         foreach (var itemEvidence in marketEvidence.Items.Where(value => value.Status == OutfitterMarketEvidenceItemStatus.Fresh))

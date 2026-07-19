@@ -166,6 +166,103 @@ public sealed class MinerBotanistReadOnlyAdvisorTests
         Assert.DoesNotContain(advice.OffersByAllocation.Keys, value => value.ObservationId == "dominated");
     }
 
+    [Fact]
+    public void Build_prefers_a_capable_owned_item_over_any_paid_alternative()
+    {
+        var fixture = Fixture();
+        var ownedDefinition = Definition(4_000, "Owned Hatchet", EquipmentSlot.MainHand, 399, 420, equipLevel: 100);
+        var advice = new MinerBotanistReadOnlyAdvisor().Build(
+            fixture.Baseline,
+            fixture.Resolution,
+            fixture.Evidence,
+            itemId => itemId == fixture.Candidate.ItemId ? [fixture.Candidate] : itemId == ownedDefinition.ItemId ? [ownedDefinition] : [],
+            MinerBotanistUtilityContextKind.LegendaryNodeGeneralYield,
+            vendorOffers: null,
+            ownedItems: [new(ownedDefinition.ItemId, true, "Armoury")]);
+
+        Assert.True(advice.Status == MinerBotanistAdvisorStatus.Complete, advice.Diagnostic);
+        Assert.NotNull(advice.Nomination);
+        Assert.Equal(0UL, advice.Nomination!.AcquisitionCostGil);
+        Assert.Contains(
+            advice.Nomination.Candidate.Selections,
+            value => value.Position == EquipmentLoadoutPosition.MainHand &&
+                     value.OfferKey.SourceKind == EquipmentAcquisitionSourceKind.Owned &&
+                     value.OfferKey.Quality == EquipmentQuality.High);
+    }
+
+    [Fact]
+    public void Build_skips_owned_cross_discipline_poison()
+    {
+        var fixture = Fixture();
+        var craftingOnly = Definition(4_001, "Crafting Vest", EquipmentSlot.Body, 0, 0, equipLevel: 100);
+        var advice = new MinerBotanistReadOnlyAdvisor().Build(
+            fixture.Baseline,
+            fixture.Resolution,
+            fixture.Evidence,
+            itemId => itemId == fixture.Candidate.ItemId ? [fixture.Candidate] : itemId == craftingOnly.ItemId ? [craftingOnly] : [],
+            MinerBotanistUtilityContextKind.LegendaryNodeGeneralYield,
+            vendorOffers: null,
+            ownedItems: [new(craftingOnly.ItemId, true, "Armoury")]);
+
+        Assert.True(advice.Status == MinerBotanistAdvisorStatus.Complete, advice.Diagnostic);
+        Assert.DoesNotContain(advice.OffersByAllocation.Values, value => value.Offer.Definition.ItemId == craftingOnly.ItemId);
+        Assert.Equal((ulong)25_000, advice.Nomination!.AcquisitionCostGil);
+    }
+
+    [Fact]
+    public void Build_skips_owned_items_ineligible_for_the_current_job_without_abstaining()
+    {
+        var fixture = Fixture();
+        var wrongJob = Definition(4_002, "Other Job Tool", EquipmentSlot.MainHand, 399, 900, equipLevel: 100) with
+        {
+            EligibleClassJobIds = new HashSet<uint> { 99 },
+        };
+        var advice = new MinerBotanistReadOnlyAdvisor().Build(
+            fixture.Baseline,
+            fixture.Resolution,
+            fixture.Evidence,
+            itemId => itemId == fixture.Candidate.ItemId ? [fixture.Candidate] : itemId == wrongJob.ItemId ? [wrongJob] : [],
+            MinerBotanistUtilityContextKind.LegendaryNodeGeneralYield,
+            vendorOffers: null,
+            ownedItems: [new(wrongJob.ItemId, true, "Armoury")]);
+
+        Assert.True(advice.Status == MinerBotanistAdvisorStatus.Complete, advice.Diagnostic);
+        Assert.DoesNotContain(advice.OffersByAllocation.Values, value => value.Offer.Definition.ItemId == wrongJob.ItemId);
+        Assert.Equal((ulong)25_000, advice.Nomination!.AcquisitionCostGil);
+    }
+
+    [Fact]
+    public void Build_evaluates_owned_items_at_their_exact_owned_quality()
+    {
+        var fixture = Fixture();
+        var ownedDefinition = Definition(4_003, "Owned Pick", EquipmentSlot.MainHand, 399, 410, equipLevel: 100);
+        var nqAdvice = new MinerBotanistReadOnlyAdvisor().Build(
+            fixture.Baseline,
+            fixture.Resolution,
+            fixture.Evidence,
+            itemId => itemId == fixture.Candidate.ItemId ? [fixture.Candidate] : itemId == ownedDefinition.ItemId ? [ownedDefinition] : [],
+            MinerBotanistUtilityContextKind.LegendaryNodeGeneralYield,
+            vendorOffers: null,
+            ownedItems: [new(ownedDefinition.ItemId, false, "Armoury")]);
+        var hqAdvice = new MinerBotanistReadOnlyAdvisor().Build(
+            fixture.Baseline,
+            fixture.Resolution,
+            fixture.Evidence,
+            itemId => itemId == fixture.Candidate.ItemId ? [fixture.Candidate] : itemId == ownedDefinition.ItemId ? [ownedDefinition] : [],
+            MinerBotanistUtilityContextKind.LegendaryNodeGeneralYield,
+            vendorOffers: null,
+            ownedItems: [new(ownedDefinition.ItemId, true, "Armoury")]);
+
+        Assert.Contains(nqAdvice.OffersByAllocation.Values, value =>
+            value.Offer.SourceKind == EquipmentAcquisitionSourceKind.Owned && value.Offer.ResolvedQuality == EquipmentQuality.Normal);
+        Assert.Contains(hqAdvice.OffersByAllocation.Values, value =>
+            value.Offer.SourceKind == EquipmentAcquisitionSourceKind.Owned && value.Offer.ResolvedQuality == EquipmentQuality.High);
+        Assert.True(
+            hqAdvice.Nomination!.Utility.UtilityScore > nqAdvice.Nomination!.Utility.UtilityScore ||
+            hqAdvice.Nomination.AcquisitionCostGil < nqAdvice.Nomination.AcquisitionCostGil,
+            "The HQ-owned evaluation must be at least as attractive as the NQ-owned one.");
+    }
+
     private static FixtureData Fixture(uint characterLevel = 100, int candidatePerception = 0)
     {
         var positions = new[]

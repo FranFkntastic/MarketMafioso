@@ -127,7 +127,14 @@ internal sealed class SquireTabPanel : IDisposable
             renderedCharacterAdvisorProbe,
             dataManager,
             marketListingSource,
-            Path.Combine(diagnosticDirectory, "outfitter-market-evidence.json"));
+            Path.Combine(diagnosticDirectory, "outfitter-market-evidence.json"),
+            captureOwnedItems: () => snapshotSource.Capture().Instances
+                .Where(instance => !instance.IsEquipped)
+                .Select(instance => new MinerBotanistOwnedItemEvidence(
+                    instance.Fingerprint.ItemId,
+                    instance.Fingerprint.IsHighQuality,
+                    instance.Fingerprint.Container.StartsWith("Armory", StringComparison.Ordinal) ? "Armoury" : "Inventory"))
+                .ToArray());
         advisorPanel = new(config, advisorSession, reviewRegistry, marketListingSource, transfer => stageOutfitterTransfer?.Invoke(transfer));
         selectedWorkspace = string.Equals(config.Squire.SelectedWorkspace, "Cleanup", StringComparison.OrdinalIgnoreCase)
             ? "Cleanup"

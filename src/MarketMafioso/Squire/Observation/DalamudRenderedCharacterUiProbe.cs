@@ -27,6 +27,7 @@ public interface IRenderedCharacterAdvisorProbe
     RenderedEquipmentScanProgress BeginEquipmentScan();
     RenderedEquipmentScanStepResult AdvanceEquipmentScan();
     RenderedEquipmentScanProgress CancelEquipmentScan();
+    RenderedArmouryDifferentialProgress CaptureArmouryDifferentialSnapshot();
 }
 
 public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorProbe
@@ -528,6 +529,8 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
     }
 
     public RenderedArmouryDifferentialProgress CancelArmouryDifferential() => armouryDifferential.Cancel();
+
+    public RenderedArmouryDifferentialProgress CaptureArmouryDifferentialSnapshot() => armouryDifferential.Snapshot();
 
     public unsafe RenderedArmouryDifferentialProgress AdvanceArmouryDifferential()
     {

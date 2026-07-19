@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
@@ -59,6 +60,7 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
     private readonly LuminaRenderedEquipmentDefinitionLookup definitions;
     private readonly MinerBotanistAdvisorCatalog catalog;
     private readonly OutfitterMarketEvidenceDiscoveryService marketDiscovery;
+    private readonly Func<IReadOnlyList<MinerBotanistOwnedItemEvidence>>? captureOwnedItems;
 #if DEBUG
     private readonly string solverReplayPath;
 #endif
@@ -72,6 +74,7 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
     private RenderedMinerBotanistBaseline? baseline;
     private RenderedEquipmentResolution? resolution;
     private MinerBotanistAdvisorCatalogResult? offers;
+    private IReadOnlyList<MinerBotanistOwnedItemEvidence>? ownedItemsEvidence;
     private OutfitterMarketEvidenceBook? pendingCurrentEvidence;
     private RenderedPlayerAuthorityFingerprint? advicePlayerFingerprint;
     private WorkbenchValidationRequest? workbenchValidationRequest;
@@ -88,12 +91,14 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
         IRenderedCharacterAdvisorProbe probe,
         IDataManager dataManager,
         IMarketAcquisitionListingSource listingSource,
-        string evidencePath)
+        string evidencePath,
+        Func<IReadOnlyList<MinerBotanistOwnedItemEvidence>>? captureOwnedItems = null)
     {
         this.probe = probe ?? throw new ArgumentNullException(nameof(probe));
         ArgumentNullException.ThrowIfNull(dataManager);
         ArgumentNullException.ThrowIfNull(listingSource);
         ArgumentException.ThrowIfNullOrWhiteSpace(evidencePath);
+        this.captureOwnedItems = captureOwnedItems;
         definitions = new(dataManager);
         catalog = new(dataManager);
         Directory.CreateDirectory(Path.GetDirectoryName(evidencePath)!);
@@ -132,6 +137,7 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
         baseline = null;
         resolution = null;
         offers = null;
+        ownedItemsEvidence = null;
         pendingCurrentEvidence = null;
         advicePlayerFingerprint = null;
         workbenchValidationRequest = null;
@@ -349,6 +355,14 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
             Abstain($"The declared market scope contains no eligible items in this game-data version. {offers.Diagnostic}");
             return;
         }
+        var ownedEvidenceProven = probe.CaptureArmouryDifferentialSnapshot().Status == RenderedArmouryDifferentialStatus.Complete;
+        var ownedItems = ownedEvidenceProven && captureOwnedItems is not null
+            ? captureOwnedItems()
+            : null;
+        ownedItemsEvidence = ownedItems;
+        var coverageLabel = ownedItems is not null
+            ? offers.CoverageLabel.Replace("armoury inventory is not yet observed", "armoury inventory observed (differential-proven; owned items evaluated at base stats)", StringComparison.Ordinal)
+            : offers.CoverageLabel;
         discoveryRequest = new(
             "universalis",
             Region,
@@ -398,6 +412,7 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
         var capturedBaseline = baseline!;
         var capturedResolution = resolution!;
         var capturedOffers = offers!;
+        var capturedOwnedItems = ownedItemsEvidence;
         var capturedContext = State.Context;
         advicePlayerFingerprint = RenderedPlayerAuthorityFingerprint.Capture(capturedBaseline, capturedResolution);
         pendingCurrentEvidence = currentEvidence;
@@ -415,6 +430,7 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
                 itemId => capturedOffers.Definitions.TryGetValue(itemId, out var definition) ? [definition] : [],
                 capturedContext,
                 capturedOffers.VendorOffers,
+                capturedOwnedItems,
                 token,
                 progress => Volatile.Write(ref solverProgress, new(capturedGeneration, progress)),
 #if DEBUG

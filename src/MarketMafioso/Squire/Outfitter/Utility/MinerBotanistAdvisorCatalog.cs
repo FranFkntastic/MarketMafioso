@@ -135,7 +135,7 @@ public sealed class MinerBotanistAdvisorCatalog
         _ => Math.Max(1u, characterLevel - 10),
     };
 
-    private static bool HasRelevantCompleteProfile(EquipmentItemDefinition definition) =>
+    internal static bool HasRelevantCompleteProfile(EquipmentItemDefinition definition) =>
         Relevant(definition.StatProfile) || Relevant(definition.HighQualityStatProfile);
 
     private static bool Relevant(EquipmentStatProfile? profile) =>
