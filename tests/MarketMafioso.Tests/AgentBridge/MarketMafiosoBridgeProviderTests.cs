@@ -66,13 +66,13 @@ public sealed class MarketMafiosoBridgeProviderTests
     public void Provider_reports_non_obtrusive_rendered_ui_automation_capabilities()
     {
         var expected = new AgentBridgeUiAutomationCapabilities(
-            "registered-node-ui-events",
+            "rendered-equipment-tooltip-unavailable",
             MovesOperatingSystemCursor: false,
             ActivatesGameWindow: false,
             RequiresGameForeground: false,
             RequiresVisibleCharacterAddon: true,
             UsesRenderedTooltipAsAuthority: true,
-            SupportsDeterministicReplay: true,
+            SupportsDeterministicReplay: false,
             "fixture");
         var provider = new MarketMafiosoBridgeProvider(
             CreateTruth, () => { }, () => { }, () => { }, _ => { }, _ => true, () => { }, () => { },

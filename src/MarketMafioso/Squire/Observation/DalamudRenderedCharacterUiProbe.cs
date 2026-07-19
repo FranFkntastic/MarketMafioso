@@ -6,6 +6,7 @@ using Dalamud.Utility;
 using ECommons.Automation;
 using ECommons.UIHelpers.AddonMasterImplementations;
 using FFXIVClientStructs.FFXIV.Component.GUI;
+using Franthropy.Dalamud.AgentBridge;
 using Franthropy.Dalamud.Automation.Ui;
 using MarketMafioso.AgentBridge;
 
@@ -68,7 +69,6 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
     private readonly Franthropy.Dalamud.AgentBridge.DalamudRenderedUiTextActionDispatcher renderedTextActions;
     private readonly RenderedGatheringStatsStabilizer gatheringStatsStabilizer = new(TimeSpan.FromSeconds(3));
     private readonly RenderedCharacterEquipmentScanCoordinator equipmentScan = new();
-    private string? hoveredCharacterNodePath;
     private string? lastGearsetSelectionDiagnostic;
 
     public DalamudRenderedCharacterUiProbe(IGameGui gameGui)
@@ -78,14 +78,14 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
     }
 
     public AgentBridgeUiAutomationCapabilities Capabilities => new(
-        "registered-node-ui-events",
+        "rendered-equipment-tooltip-unavailable",
         MovesOperatingSystemCursor: false,
         ActivatesGameWindow: false,
         RequiresGameForeground: false,
         RequiresVisibleCharacterAddon: true,
         UsesRenderedTooltipAsAuthority: true,
-        SupportsDeterministicReplay: true,
-        "Equipment slots are traversed by dispatching their registered drag/drop rollover UI events. Character and Item Detail rendered output remains the only runtime authority.");
+        SupportsDeterministicReplay: false,
+        "No bounded non-focus mechanism currently produces rendered Item Detail for Character equipment slots. Equipment observation fails closed and cannot authorize advice.");
 
     public unsafe bool Open()
     {
@@ -98,7 +98,6 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
 
     public unsafe bool TryCloseCharacterUi()
     {
-        RestoreCursor();
         var closed = false;
         var gearSetList = gameGui.GetAddonByName<AtkUnitBase>("GearSetList", 1);
         if (gearSetList != null && gearSetList->RootNode != null && gearSetList->RootNode->IsVisible())
@@ -130,7 +129,6 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
 
     public unsafe bool TryCloseRetainerUi()
     {
-        RestoreCursor();
         foreach (var addonName in new[] { "RetainerCharacter", "SelectString", "RetainerList" })
         {
             var addon = gameGui.GetAddonByName<AtkUnitBase>(addonName, 1);
@@ -291,7 +289,6 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
 
     public RenderedEquipmentScanProgress BeginEquipmentScan()
     {
-        RestoreCursor();
         return equipmentScan.Begin(Capture());
     }
 
@@ -299,17 +296,11 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
     {
         var progress = equipmentScan.Snapshot();
         if (progress.Status == RenderedEquipmentScanStatus.ReadyToHover && progress.CurrentTarget is { } target)
-        {
-            if (!TryHoverCharacterNode(target.NodePath))
-                return new(false, progress, "The rendered equipment slot did not accept a virtual UI rollover event.");
-            progress = equipmentScan.MarkHoverStarted(target.NodePath, DateTimeOffset.UtcNow);
-            return new(true, progress, progress.Diagnostic);
-        }
+            return new(false, progress,
+                $"Rendered Item Detail automation is unavailable for {target.PositionKey}; equipment observation will not infer or authorize data without tooltip proof.");
         if (progress.Status == RenderedEquipmentScanStatus.Observing)
         {
             progress = equipmentScan.Observe(Capture(), DateTimeOffset.UtcNow);
-            if (progress.Status is RenderedEquipmentScanStatus.Complete or RenderedEquipmentScanStatus.Failed)
-                RestoreCursor();
             return new(true, progress, progress.Diagnostic);
         }
         return new(false, progress, "The rendered equipment scan is not waiting for an advance step.");
@@ -317,131 +308,11 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
 
     public RenderedEquipmentScanProgress CancelEquipmentScan()
     {
-        RestoreCursor();
         return equipmentScan.Cancel();
-    }
-
-    /// <summary>
-    /// Dispatches the drag/drop component's registered rollover event so the game itself renders the
-    /// authoritative ItemDetail tooltip. This never moves the OS cursor or activates FFXIV.
-    /// </summary>
-    public bool TryHoverCharacterNode(string nodePath)
-    {
-        if (string.IsNullOrWhiteSpace(nodePath) ||
-            !nodePath.StartsWith("Character/", StringComparison.Ordinal) ||
-            nodePath.Length > 128)
-            return false;
-
-        var character = CaptureAddon("Character");
-        if (!character.Present || !character.Ready || !character.Visible || character.Nodes == null)
-            return false;
-
-        var layout = RenderedCharacterEquipmentLayoutParser.Parse(
-            new AgentBridgeRenderedUiSnapshot(DateTimeOffset.UtcNow, [character]));
-        var target = layout.Slots.FirstOrDefault(value => string.Equals(value.NodePath, nodePath, StringComparison.Ordinal));
-        if (layout.Status != RenderedEquipmentLayoutStatus.Complete || target == null ||
-            target.Right <= target.Left || target.Bottom <= target.Top)
-            return false;
-
-        RestoreCursor();
-        if (!DispatchCharacterNodeEvent(nodePath, AtkEventType.DragDropRollOver, target))
-            return false;
-        hoveredCharacterNodePath = nodePath;
-        return true;
-    }
-
-    public bool RestoreCursor()
-    {
-        if (hoveredCharacterNodePath is not { } nodePath)
-            return false;
-        hoveredCharacterNodePath = null;
-        return DispatchCharacterNodeEvent(nodePath, AtkEventType.DragDropRollOut, null);
     }
 
     private unsafe AgentBridgeRenderedAddonSnapshot CaptureAddon(string addonName)
         => CaptureAddon(addonName, gameGui.GetAddonByName<AtkUnitBase>(addonName, 1));
-
-    private unsafe bool DispatchCharacterNodeEvent(
-        string nodePath,
-        AtkEventType eventType,
-        RenderedEquipmentSlotTarget? target)
-    {
-        var addon = gameGui.GetAddonByName<AtkUnitBase>("Character", 1);
-        if (addon == null || addon->RootNode == null || !addon->RootNode->IsVisible() || !addon->IsReady)
-            return false;
-        var node = FindRegisteredEventNode(addon, nodePath, eventType);
-        if (node == null || !IsEffectivelyVisible(node))
-            return false;
-
-        var centerX = target is null ? 0 : Math.Clamp((target.Left + target.Right) / 2, short.MinValue, short.MaxValue);
-        var centerY = target is null ? 0 : Math.Clamp((target.Top + target.Bottom) / 2, short.MinValue, short.MaxValue);
-        var evt = new AtkEventDispatcher.Event
-        {
-            State = new AtkEventState { EventType = eventType },
-            EventData = new AtkEventData
-            {
-                MouseData = new AtkEventData.AtkMouseData
-                {
-                    PosX = (short)centerX,
-                    PosY = (short)centerY,
-                },
-            },
-        };
-        return node->DispatchEvent(&evt);
-    }
-
-    private static unsafe AtkResNode* FindRegisteredEventNode(
-        AtkUnitBase* addon,
-        string nodePath,
-        AtkEventType eventType)
-    {
-        var separator = nodePath.Length;
-        while (separator > "Character".Length)
-        {
-            var candidatePath = nodePath[..separator];
-            var candidate = FindNodeByPath(addon, candidatePath);
-            if (candidate != null && candidate->IsEventRegistered(eventType))
-                return candidate;
-            separator = nodePath.LastIndexOf('/', separator - 1);
-            if (separator < 0)
-                break;
-        }
-        return null;
-    }
-
-    private static unsafe AtkResNode* FindNodeByPath(AtkUnitBase* addon, string nodePath)
-    {
-        var segments = nodePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
-        if (segments.Length < 2 || !string.Equals(segments[0], "Character", StringComparison.Ordinal))
-            return null;
-        var manager = &addon->UldManager;
-        AtkResNode* node = null;
-        for (var segmentIndex = 1; segmentIndex < segments.Length; segmentIndex++)
-        {
-            if (!uint.TryParse(segments[segmentIndex], out var nodeId) || manager == null || manager->NodeList == null)
-                return null;
-            node = null;
-            for (var index = 0u; index < manager->NodeListCount; index++)
-            {
-                var candidate = manager->NodeList[index];
-                if (candidate != null && candidate->NodeId == nodeId)
-                {
-                    node = candidate;
-                    break;
-                }
-            }
-            if (node == null)
-                return null;
-            if (segmentIndex + 1 < segments.Length)
-            {
-                var componentNode = node->GetAsAtkComponentNode();
-                if (componentNode == null || componentNode->Component == null)
-                    return null;
-                manager = &componentNode->Component->UldManager;
-            }
-        }
-        return node;
-    }
 
     private static unsafe AgentBridgeRenderedAddonSnapshot CaptureAddon(string addonName, AtkUnitBase* addon)
     {

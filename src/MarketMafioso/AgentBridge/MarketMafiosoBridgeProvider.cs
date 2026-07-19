@@ -31,8 +31,6 @@ public interface IMarketMafiosoBridgeProvider
     RenderedUiTextActionResult TryOpenGearsetListUi();
     RenderedUiTextActionResult TrySelectCalibrationGearsetUi(string target);
     RenderedUiTextActionResult TryEquipSelectedGearsetUi();
-    bool TryHoverCharacterNodeUi(string target);
-    bool RestoreCharacterUiCursor();
     AgentBridgeRenderedUiSnapshot CaptureCharacterUi();
     AgentBridgeRenderedUiSnapshot CaptureRetainerUi();
     RenderedRetainerUiPreparationProgress BeginRetainerObservationUi(string ownerHomeWorld);
@@ -99,8 +97,6 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
     private readonly Func<RenderedUiTextActionResult> tryOpenGearsetListUi;
     private readonly Func<string, RenderedUiTextActionResult> trySelectCalibrationGearsetUi;
     private readonly Func<RenderedUiTextActionResult> tryEquipSelectedGearsetUi;
-    private readonly Func<string, bool> tryHoverCharacterNodeUi;
-    private readonly Func<bool> restoreCharacterUiCursor;
     private readonly Func<RenderedEquipmentScanProgress> beginCharacterEquipmentScanUi;
     private readonly Func<RenderedEquipmentScanStepResult> advanceCharacterEquipmentScanUi;
     private readonly Func<RenderedEquipmentScanProgress> cancelCharacterEquipmentScanUi;
@@ -134,8 +130,6 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
         Func<string, GearsetChangeCommand?>? trySwitchCalibrationJobUi = null,
         Func<string, GearsetChangeCommand?>? trySwitchGearsetSlotUi = null,
         Func<RenderedGatheringStatsObservation>? captureGatheringStatsUi = null,
-        Func<string, bool>? tryHoverCharacterNodeUi = null,
-        Func<bool>? restoreCharacterUiCursor = null,
         Func<RenderedEquipmentScanProgress>? beginCharacterEquipmentScanUi = null,
         Func<RenderedEquipmentScanStepResult>? advanceCharacterEquipmentScanUi = null,
         Func<RenderedEquipmentScanProgress>? cancelCharacterEquipmentScanUi = null,
@@ -188,8 +182,6 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
         this.trySelectCalibrationGearsetUi = trySelectCalibrationGearsetUi ?? (_ => new(false, "Unavailable", "Rendered gearset selection is unavailable.", "GearSetList", null));
         this.tryEquipSelectedGearsetUi = tryEquipSelectedGearsetUi ?? (() => new(false, "Unavailable", "Rendered gearset equipping is unavailable.", "GearSetList", null));
         this.captureGatheringStatsUi = captureGatheringStatsUi ?? (() => new(Guid.NewGuid(), DateTimeOffset.UtcNow, RenderedCharacterObservationStatus.Unavailable, null, null, null, null, null, [], "Rendered gathering observation is unavailable."));
-        this.tryHoverCharacterNodeUi = tryHoverCharacterNodeUi ?? (_ => false);
-        this.restoreCharacterUiCursor = restoreCharacterUiCursor ?? (() => false);
         this.beginCharacterEquipmentScanUi = beginCharacterEquipmentScanUi ?? (() => new(RenderedEquipmentScanStatus.Failed, 0, 0, null, [], "Rendered equipment scanning is unavailable."));
         this.advanceCharacterEquipmentScanUi = advanceCharacterEquipmentScanUi ?? (() => new(false, this.beginCharacterEquipmentScanUi(), "Rendered equipment scanning is unavailable."));
         this.cancelCharacterEquipmentScanUi = cancelCharacterEquipmentScanUi ?? (() => new(RenderedEquipmentScanStatus.Cancelled, 0, 0, null, [], "Rendered equipment scanning is unavailable."));
@@ -216,8 +208,6 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
     public RenderedUiTextActionResult TryOpenGearsetListUi() => tryOpenGearsetListUi();
     public RenderedUiTextActionResult TrySelectCalibrationGearsetUi(string target) => trySelectCalibrationGearsetUi(target);
     public RenderedUiTextActionResult TryEquipSelectedGearsetUi() => tryEquipSelectedGearsetUi();
-    public bool TryHoverCharacterNodeUi(string target) => tryHoverCharacterNodeUi(target);
-    public bool RestoreCharacterUiCursor() => restoreCharacterUiCursor();
     public AgentBridgeRenderedUiSnapshot CaptureCharacterUi() => captureCharacterUi();
     public AgentBridgeRenderedUiSnapshot CaptureRetainerUi() => captureRetainerUi();
     public RenderedRetainerUiPreparationProgress BeginRetainerObservationUi(string ownerHomeWorld) => beginRetainerObservationUi(ownerHomeWorld);

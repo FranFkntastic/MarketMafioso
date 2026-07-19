@@ -198,8 +198,6 @@ public sealed class Plugin : IDalamudPlugin
                     return renderedCharacterUiProbe.TrySwitchGearsetSlot(target);
                 },
                 renderedCharacterUiProbe.CaptureGatheringStats,
-                renderedCharacterUiProbe.TryHoverCharacterNode,
-                renderedCharacterUiProbe.RestoreCursor,
                 renderedCharacterUiProbe.BeginEquipmentScan,
                 renderedCharacterUiProbe.AdvanceEquipmentScan,
                 renderedCharacterUiProbe.CancelEquipmentScan,
