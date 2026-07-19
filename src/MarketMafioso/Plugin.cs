@@ -187,8 +187,16 @@ public sealed class Plugin : IDalamudPlugin
                 renderedCharacterUiProbe.TryCloseCharacterUi,
                 renderedCharacterUiProbe.Capture,
                 renderedCharacterUiProbe.TryCloseBlockingSelectString,
-                renderedCharacterUiProbe.TrySwitchCalibrationJob,
-                renderedCharacterUiProbe.TrySwitchGearsetSlot,
+                target =>
+                {
+                    mainWindow.InvalidateAdvisorForPlayerStateChange();
+                    return renderedCharacterUiProbe.TrySwitchCalibrationJob(target);
+                },
+                target =>
+                {
+                    mainWindow.InvalidateAdvisorForPlayerStateChange();
+                    return renderedCharacterUiProbe.TrySwitchGearsetSlot(target);
+                },
                 renderedCharacterUiProbe.CaptureGatheringStats,
                 renderedCharacterUiProbe.TryHoverCharacterNode,
                 renderedCharacterUiProbe.RestoreCursor,
@@ -206,7 +214,11 @@ public sealed class Plugin : IDalamudPlugin
                 captureAdvisorStateUi: mainWindow.CreateAgentAdvisorState,
                 tryOpenGearsetListUi: renderedCharacterUiProbe.TryOpenGearsetList,
                 trySelectCalibrationGearsetUi: renderedCharacterUiProbe.TrySelectCalibrationGearset,
-                tryEquipSelectedGearsetUi: renderedCharacterUiProbe.TryEquipSelectedGearset),
+                tryEquipSelectedGearsetUi: () =>
+                {
+                    mainWindow.InvalidateAdvisorForPlayerStateChange();
+                    return renderedCharacterUiProbe.TryEquipSelectedGearset();
+                }),
             agentBridgeProofStore,
             agentBridgeViewportCapture.CaptureAsync,
             () => Configuration.EnableAgentBridgeScreenshots,

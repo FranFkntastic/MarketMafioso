@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using Franthropy.Dalamud.Equipment;
 using MarketMafioso.Squire.Observation;
 using MarketMafioso.Squire.Outfitter.MarketEvidence;
@@ -32,13 +33,16 @@ public sealed class MinerBotanistReadOnlyAdvisor
         "Prefer the least-cost complete loadout that gains a supported capability. " +
         "Abstain when evidence is incomplete, the stat trade is context-dependent, or a paid gain remains entirely inside monotonic score space.";
 
-    public MinerBotanistReadOnlyAdvice Build(
+    internal MinerBotanistReadOnlyAdvice Build(
         RenderedMinerBotanistBaseline baseline,
         RenderedEquipmentResolution currentEquipment,
         OutfitterMarketEvidenceBook marketEvidence,
         Func<uint, IReadOnlyList<EquipmentItemDefinition>> findDefinitionsByItemId,
         MinerBotanistUtilityContextKind contextKind,
-        IReadOnlyList<EquipmentLoadoutOffer>? vendorOffers = null)
+        IReadOnlyList<EquipmentLoadoutOffer>? vendorOffers = null,
+        CancellationToken cancellationToken = default,
+        Action<EquipmentExactFrontierProgress>? reportProgress = null,
+        Action<MinerBotanistSolverReplay>? captureReplay = null)
     {
         ArgumentNullException.ThrowIfNull(baseline);
         ArgumentNullException.ThrowIfNull(currentEquipment);
@@ -175,11 +179,23 @@ public sealed class MinerBotanistReadOnlyAdvisor
         EquipmentExactFrontierResult frontier;
         try
         {
-            frontier = new EquipmentExactFrontierSolver().Solve(new(
+            var request = new EquipmentExactFrontierRequest(
                 offers,
                 required,
                 baselineKeys,
-                profile));
+                profile);
+            captureReplay?.Invoke(MinerBotanistSolverReplay.Capture(
+                request,
+                contextKind,
+                classJobId,
+                checked((uint)characterLevel),
+                offerStats,
+                fixedStats));
+            frontier = new EquipmentExactFrontierSolver().Solve(request, cancellationToken, reportProgress);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception ex)
         {

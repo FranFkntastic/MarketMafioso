@@ -1358,6 +1358,8 @@ public class MainWindow : Window, IDisposable
 
     public MinerBotanistAdvisorSessionState CreateAgentAdvisorState() => squireTab.AdvisorState;
 
+    public void InvalidateAdvisorForPlayerStateChange() => squireTab.InvalidateAdvisorForPlayerStateChange();
+
     private void ReturnToOutfitterAdvisor()
     {
         squireTab.OpenOutfitterAdvisor();

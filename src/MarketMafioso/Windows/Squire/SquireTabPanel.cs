@@ -83,6 +83,8 @@ internal sealed class SquireTabPanel : IDisposable
 
     public MinerBotanistAdvisorSessionState AdvisorState => advisorSession.State;
 
+    public void InvalidateAdvisorForPlayerStateChange() => advisorSession.InvalidateForPlayerStateChange();
+
     public SquireTabPanel(
         Configuration config,
         ICharacterEquipmentSnapshotSource snapshotSource,

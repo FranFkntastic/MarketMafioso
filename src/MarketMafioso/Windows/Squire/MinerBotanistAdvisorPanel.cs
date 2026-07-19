@@ -74,6 +74,7 @@ internal sealed class MinerBotanistAdvisorPanel
 #if DEBUG
         PumpDryRunFixture();
 #endif
+        CompletePendingWorkbenchTransfer();
         var state = session.State;
         MinerBotanistReadOnlyAdvice? displayedAdvice = state.Advice;
 #if DEBUG
@@ -717,18 +718,25 @@ internal sealed class MinerBotanistAdvisorPanel
                 return;
             try
             {
-                var transfer = OutfitterWorkbenchTransferBuilder.Build(
-                    advice,
-                    selected.Candidate.SolutionId,
-                    evidence,
 #if DEBUG
-                    dryRunOnly: dryRunFixture is not null
-#else
-                    dryRunOnly: false
+                if (dryRunFixture is not null)
+                {
+                    var dryRunValidation = OutfitterWorkbenchPlayerValidation.CreateDryRun(
+                        advice,
+                        selected.Candidate.SolutionId,
+                        evidence);
+                    stageTransfer(OutfitterWorkbenchTransferBuilder.Build(
+                        advice,
+                        selected.Candidate.SolutionId,
+                        evidence,
+                        dryRunValidation));
+                    handoffStatus = "Exact-quality dry-run solution added to the Market Acquisition Workbench for review.";
+                    return;
+                }
 #endif
-                );
-                stageTransfer(transfer);
-                handoffStatus = "Exact-quality solution added to the Market Acquisition Workbench for review.";
+                if (!session.RequestWorkbenchValidation(advice, selected.Candidate.SolutionId, evidence))
+                    throw new InvalidOperationException("The rendered player evidence is no longer current; refresh the Advisor before Workbench review.");
+                handoffStatus = "Revalidating the rendered job and equipment before Workbench review.";
             }
             catch (Exception exception)
             {
@@ -749,6 +757,28 @@ internal sealed class MinerBotanistAdvisorPanel
             ImGui.TextColored(handoffStatus.StartsWith("Workbench handoff stopped", StringComparison.Ordinal)
                 ? MarketMafiosoUiTheme.Error
                 : MarketMafiosoUiTheme.Success, handoffStatus);
+    }
+
+    private void CompletePendingWorkbenchTransfer()
+    {
+        if (!session.TryTakeWorkbenchValidation(out var validation))
+            return;
+        try
+        {
+            var evidence = session.CurrentEvidence
+                ?? throw new InvalidOperationException("The published market evidence expired before Workbench review.");
+            var transfer = OutfitterWorkbenchTransferBuilder.Build(
+                validation.Advice,
+                validation.SelectedSolutionId,
+                evidence,
+                validation);
+            stageTransfer(transfer);
+            handoffStatus = "Exact-quality solution added to the Market Acquisition Workbench after rendered player revalidation.";
+        }
+        catch (Exception exception)
+        {
+            handoffStatus = $"Workbench handoff stopped safely: {exception.Message}";
+        }
     }
 
     private static void DrawEmptyState(MinerBotanistAdvisorSessionState state)

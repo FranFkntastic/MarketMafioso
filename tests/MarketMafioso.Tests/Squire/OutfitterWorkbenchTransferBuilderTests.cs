@@ -15,7 +15,8 @@ public sealed class OutfitterWorkbenchTransferBuilderTests
         var transfer = OutfitterWorkbenchTransferBuilder.Build(
             fixture.Advice,
             fixture.Selected.Candidate.SolutionId,
-            fixture.Evidence);
+            fixture.Evidence,
+            Validation(fixture));
 
         Assert.Equal(OutfitterWorkbenchTransfer.SquireOutfitterOrigin, transfer.Origin);
         Assert.Equal(OutfitterWorkbenchTransfer.CurrentSchemaVersion, transfer.SchemaVersion);
@@ -59,7 +60,7 @@ public sealed class OutfitterWorkbenchTransferBuilderTests
             fixture.Advice,
             fixture.Selected.Candidate.SolutionId,
             fixture.Evidence,
-            dryRunOnly: true);
+            Validation(fixture, dryRunOnly: true));
 
         Assert.True(transfer.DryRunOnly);
     }
@@ -70,7 +71,11 @@ public sealed class OutfitterWorkbenchTransferBuilderTests
         var fixture = Fixture();
 
         var error = Assert.Throws<InvalidOperationException>(() =>
-            OutfitterWorkbenchTransferBuilder.Build(fixture.Advice, "not-on-frontier", fixture.Evidence));
+            OutfitterWorkbenchTransferBuilder.Build(
+                fixture.Advice,
+                "not-on-frontier",
+                fixture.Evidence,
+                Validation(fixture, selectedSolutionId: "not-on-frontier")));
 
         Assert.Contains("authoritative frontier", error.Message, StringComparison.Ordinal);
     }
@@ -84,7 +89,8 @@ public sealed class OutfitterWorkbenchTransferBuilderTests
             OutfitterWorkbenchTransferBuilder.Build(
                 fixture.Advice,
                 fixture.Selected.Candidate.SolutionId,
-                fixture.Evidence));
+                fixture.Evidence,
+                Validation(fixture)));
 
         Assert.Contains("evidence generation", error.Message, StringComparison.Ordinal);
     }
@@ -97,7 +103,8 @@ public sealed class OutfitterWorkbenchTransferBuilderTests
         var transfer = OutfitterWorkbenchTransferBuilder.Build(
             fixture.Advice,
             fixture.Selected.Candidate.SolutionId,
-            fixture.Evidence);
+            fixture.Evidence,
+            Validation(fixture));
 
         Assert.Single(transfer.MarketLots);
         Assert.Contains(transfer.SelectedLoadout, selection => selection.OfferKey.SourceKind == EquipmentAcquisitionSourceKind.Owned);
@@ -114,9 +121,45 @@ public sealed class OutfitterWorkbenchTransferBuilderTests
             OutfitterWorkbenchTransferBuilder.Build(
                 fixture.Advice,
                 fixture.Selected.Candidate.SolutionId,
-                fixture.Evidence));
+                fixture.Evidence,
+                Validation(fixture)));
 
         Assert.Contains("no market acquisition", error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Build_RejectsStaleRenderedPlayerValidation()
+    {
+        var fixture = Fixture();
+        var validation = Validation(fixture) with
+        {
+            ReobservedPlayer = new RenderedPlayerAuthorityFingerprint("changed-player"),
+        };
+
+        var error = Assert.Throws<InvalidOperationException>(() =>
+            OutfitterWorkbenchTransferBuilder.Build(
+                fixture.Advice,
+                fixture.Selected.Candidate.SolutionId,
+                fixture.Evidence,
+                validation));
+
+        Assert.Contains("current rendered player revalidation", error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Build_RejectsValidationForDifferentAdviceInstance()
+    {
+        var fixture = Fixture();
+        var differentAdvice = fixture.Advice with { Diagnostic = "different advice instance" };
+
+        var error = Assert.Throws<InvalidOperationException>(() =>
+            OutfitterWorkbenchTransferBuilder.Build(
+                differentAdvice,
+                fixture.Selected.Candidate.SolutionId,
+                fixture.Evidence,
+                Validation(fixture)));
+
+        Assert.Contains("current rendered player revalidation", error.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     private static FixtureData Fixture(
@@ -222,6 +265,21 @@ public sealed class OutfitterWorkbenchTransferBuilderTests
                     "source-r1"),
             ]);
         return new(generationId, marketKey, evidence, advice, selected);
+    }
+
+    private static OutfitterWorkbenchPlayerValidation Validation(
+        FixtureData fixture,
+        bool dryRunOnly = false,
+        string? selectedSolutionId = null)
+    {
+        var fingerprint = new RenderedPlayerAuthorityFingerprint("fixture-player");
+        return new(
+            fixture.Advice,
+            selectedSolutionId ?? fixture.Selected.Candidate.SolutionId,
+            fixture.Evidence.GenerationId,
+            fingerprint,
+            fingerprint,
+            dryRunOnly);
     }
 
     private static void AddNonMarketOffer(

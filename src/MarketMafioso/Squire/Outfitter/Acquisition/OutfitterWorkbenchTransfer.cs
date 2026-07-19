@@ -58,17 +58,21 @@ public sealed record OutfitterWorkbenchTransfer(
     public const string SquireOutfitterOrigin = "SquireOutfitter";
 }
 
-public static class OutfitterWorkbenchTransferBuilder
+internal static class OutfitterWorkbenchTransferBuilder
 {
     public static OutfitterWorkbenchTransfer Build(
         MinerBotanistReadOnlyAdvice advice,
         string selectedSolutionId,
         OutfitterMarketEvidenceBook evidence,
-        bool dryRunOnly = false)
+        OutfitterWorkbenchPlayerValidation playerValidation)
     {
         ArgumentNullException.ThrowIfNull(advice);
         ArgumentException.ThrowIfNullOrWhiteSpace(selectedSolutionId);
         ArgumentNullException.ThrowIfNull(evidence);
+        ArgumentNullException.ThrowIfNull(playerValidation);
+
+        if (!playerValidation.IsCurrentFor(advice, selectedSolutionId, evidence))
+            throw new InvalidOperationException("Workbench transfer requires a current rendered player revalidation for this exact advice, solution, and evidence generation.");
 
         if (advice is not { Status: MinerBotanistAdvisorStatus.Complete, Frontier: { } frontier })
             throw new InvalidOperationException("Workbench transfer requires complete read-only advisor evidence.");
@@ -145,7 +149,7 @@ public static class OutfitterWorkbenchTransferBuilder
             orderedSelections,
             orderedLots,
             total,
-            dryRunOnly);
+            playerValidation.DryRunOnly);
     }
 
     private static OutfitterWorkbenchMarketLot BuildMarketLot(

@@ -38,11 +38,13 @@ public sealed class OutfitterCandidateCatalog
         {
             if (!snapshot.Definitions.TryGetValue(instance.Fingerprint.ItemId, out var definition))
                 continue;
-            offers.Add(new(
+            var owned = new EquipmentLoadoutOffer(
                 definition,
                 EquipmentAcquisitionSourceKind.Owned,
                 FormatOwnedSource(instance),
-                Instance: instance));
+                Instance: instance);
+            if (OutfitterCandidateEligibility.IsRecommendable(target.Job, owned))
+                offers.Add(owned);
         }
 
         foreach (var seed in GetPurchasableSeeds(target.Job)
@@ -50,27 +52,35 @@ public sealed class OutfitterCandidateCatalog
         {
             if (seed.VendorOffer is { } vendor)
             {
-                offers.Add(new(
+                var vendorCandidate = new EquipmentLoadoutOffer(
                     seed.Definition,
                     EquipmentAcquisitionSourceKind.GilVendor,
                     vendor.SourceLabel,
-                    vendor.UnitPriceGil));
+                    vendor.UnitPriceGil);
+                if (OutfitterCandidateEligibility.IsRecommendable(target.Job, vendorCandidate))
+                    offers.Add(vendorCandidate);
             }
             if (seed.IsMarketable)
             {
                 marketQuotes.TryGetValue(seed.Definition.ItemId, out var quote);
-                offers.Add(new(
+                var marketCandidate = new EquipmentLoadoutOffer(
                     seed.Definition,
                     EquipmentAcquisitionSourceKind.MarketBoard,
                     quote is null ? "Market board · quote needed" : $"Market board · {quote.WorldName}",
                     quote?.UnitPriceGil,
-                    PriceIsEstimate: true));
+                    PriceIsEstimate: true);
+                if (OutfitterCandidateEligibility.IsRecommendable(target.Job, marketCandidate))
+                    offers.Add(marketCandidate);
             }
         }
         return offers;
     }
 
     public IReadOnlyDictionary<EquipmentLoadoutPosition, EquipmentLoadoutOffer> BuildCurrentItems(
+        CharacterEquipmentSnapshot snapshot,
+        OutfitterTarget target) => BuildCurrentItemsCore(snapshot, target);
+
+    internal static IReadOnlyDictionary<EquipmentLoadoutPosition, EquipmentLoadoutOffer> BuildCurrentItemsCore(
         CharacterEquipmentSnapshot snapshot,
         OutfitterTarget target)
     {
@@ -131,7 +141,7 @@ public sealed class OutfitterCandidateCatalog
                     false,
                     name));
             }
-            if (!HasRelevantStats(job, slot, value.DamagePhys, value.DamageMag, parameters))
+            if (!OutfitterCandidateEligibility.HasRelevantStats(job, slot, value.DamagePhys, value.DamageMag, parameters))
                 continue;
 
             if (job.Discipline == EquipmentDiscipline.Combat &&
@@ -190,31 +200,6 @@ public sealed class OutfitterCandidateCatalog
         cached = values;
         purchasableByJob[job.ClassJobId] = cached;
         return cached;
-    }
-
-    private static bool HasRelevantStats(
-        CharacterJobSnapshot job,
-        EquipmentSlot slot,
-        int physicalDamage,
-        int magicalDamage,
-        IReadOnlyList<EquipmentStatValue> parameters)
-    {
-        var supplied = parameters.Where(value => value.Value > 0).Select(value => value.Semantic).ToHashSet();
-        return job.Discipline switch
-        {
-            EquipmentDiscipline.Combat =>
-                (slot is EquipmentSlot.MainHand or EquipmentSlot.OffHand && (physicalDamage > 0 || magicalDamage > 0)) ||
-                (job.PrimaryStat is { } primary && primary != EquipmentStatSemantic.Unknown && supplied.Contains(primary)),
-            EquipmentDiscipline.Crafter => supplied.Overlaps([
-                EquipmentStatSemantic.Craftsmanship,
-                EquipmentStatSemantic.Control,
-                EquipmentStatSemantic.CraftingPoints]),
-            EquipmentDiscipline.Gatherer => supplied.Overlaps([
-                EquipmentStatSemantic.Gathering,
-                EquipmentStatSemantic.Perception,
-                EquipmentStatSemantic.GatheringPoints]),
-            _ => false,
-        };
     }
 
     private static string FormatOwnedSource(EquipmentInstanceSnapshot instance) =>
