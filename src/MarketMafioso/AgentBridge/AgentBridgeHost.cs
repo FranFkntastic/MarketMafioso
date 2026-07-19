@@ -319,6 +319,28 @@ public sealed class AgentBridgeHost : IDisposable
                 Squire.Outfitter.Utility.MinerBotanistAdvisorSessionState? advisorState = null;
                 await dispatchOnFramework(() => advisorState = provider.CaptureAdvisorStateUi()).ConfigureAwait(false);
                 return AgentBridgeResponse.Ok("Current player Advisor session state captured.", AgentBridgeAdvisorState.Create(advisorState!));
+            case "get-inventory-struct-snapshot":
+                AgentBridgeInventoryStructSnapshot? inventoryStructSnapshot = null;
+                await dispatchOnFramework(() => inventoryStructSnapshot = provider.CaptureInventoryStructSnapshotUi()).ConfigureAwait(false);
+                return AgentBridgeResponse.Ok("Direct container read captured for differential diagnostics; not ownership authority.", inventoryStructSnapshot);
+            case "open-armoury-ui":
+                var armouryOpened = false;
+                await dispatchOnFramework(() => armouryOpened = provider.TryOpenArmouryBoardUi()).ConfigureAwait(false);
+                return armouryOpened
+                    ? AgentBridgeResponse.Ok("Armoury Board open requested through its agent.")
+                    : AgentBridgeResponse.Fail("The Armoury Board was already open or its agent is unavailable.");
+            case "close-armoury-ui":
+                var armouryClosed = false;
+                await dispatchOnFramework(() => armouryClosed = provider.TryCloseArmouryBoardUi()).ConfigureAwait(false);
+                return armouryClosed
+                    ? AgentBridgeResponse.Ok("Visible Armoury Board closed through its rendered addon.")
+                    : AgentBridgeResponse.Fail("No visible Armoury Board was available to close.");
+            case "show-armoury-tooltip-ui":
+                RenderedUiTextActionResult? armouryTooltip = null;
+                await dispatchOnFramework(() => armouryTooltip = provider.TryShowArmourySlotTooltipUi(request.Target ?? string.Empty)).ConfigureAwait(false);
+                return armouryTooltip!.Success
+                    ? AgentBridgeResponse.Ok(armouryTooltip.Message, armouryTooltip)
+                    : new AgentBridgeResponse { Success = false, Message = armouryTooltip.Message, Receipt = armouryTooltip };
             case "begin-retainer-observation-ui":
                 Squire.Observation.RenderedRetainerUiPreparationProgress? begunRetainerPreparation = null;
                 await dispatchOnFramework(() => begunRetainerPreparation = provider.BeginRetainerObservationUi(request.Target ?? string.Empty)).ConfigureAwait(false);

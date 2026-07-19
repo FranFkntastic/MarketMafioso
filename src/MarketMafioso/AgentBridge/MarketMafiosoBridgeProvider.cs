@@ -38,6 +38,10 @@ public interface IMarketMafiosoBridgeProvider
     RenderedRetainerUiPreparationProgress CancelRetainerObservationUi();
     RenderedUiTextActionResult TryOpenRenderedRetainerUi(string retainerName);
     MinerBotanistAdvisorSessionState CaptureAdvisorStateUi();
+    AgentBridgeInventoryStructSnapshot CaptureInventoryStructSnapshotUi();
+    bool TryOpenArmouryBoardUi();
+    bool TryCloseArmouryBoardUi();
+    RenderedUiTextActionResult TryShowArmourySlotTooltipUi(string target);
     RenderedGatheringStatsObservation CaptureGatheringStatsUi();
     RenderedCharacterEquipmentLayout CaptureCharacterEquipmentLayoutUi();
     RenderedItemDetailObservation CaptureItemDetailUi();
@@ -108,6 +112,10 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
     private readonly Func<RenderedRetainerUiPreparationProgress> cancelRetainerObservationUi;
     private readonly Func<string, RenderedUiTextActionResult> tryOpenRenderedRetainerUi;
     private readonly Func<MinerBotanistAdvisorSessionState> captureAdvisorStateUi;
+    private readonly Func<AgentBridgeInventoryStructSnapshot>? captureInventoryStructSnapshotUi;
+    private readonly Func<bool> tryOpenArmouryBoardUi;
+    private readonly Func<bool> tryCloseArmouryBoardUi;
+    private readonly Func<string, RenderedUiTextActionResult> tryShowArmourySlotTooltipUi;
     private readonly Func<RenderedGatheringStatsObservation> captureGatheringStatsUi;
     private readonly Func<bool> tryOpenSyntheticAdvisorReview;
     private readonly AgentBridgeUiReviewRegistry reviewRegistry;
@@ -144,7 +152,11 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
         Func<string, RenderedUiTextActionResult>? trySelectCalibrationGearsetUi = null,
         Func<RenderedUiTextActionResult>? tryEquipSelectedGearsetUi = null,
         Func<bool>? tryCloseRetainerUi = null,
-        Func<MinerBotanistAdvisorSessionState>? captureAdvisorStateUi = null)
+        Func<MinerBotanistAdvisorSessionState>? captureAdvisorStateUi = null,
+        Func<AgentBridgeInventoryStructSnapshot>? captureInventoryStructSnapshotUi = null,
+        Func<bool>? tryOpenArmouryBoardUi = null,
+        Func<bool>? tryCloseArmouryBoardUi = null,
+        Func<string, RenderedUiTextActionResult>? tryShowArmourySlotTooltipUi = null)
     {
         this.createSnapshot = createSnapshot ?? throw new ArgumentNullException(nameof(createSnapshot));
         this.openMainWindow = openMainWindow ?? throw new ArgumentNullException(nameof(openMainWindow));
@@ -189,6 +201,10 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
             "unavailable", false, false, false, true, true, true,
             "Rendered UI automation capabilities were not registered."));
         this.tryOpenSyntheticAdvisorReview = tryOpenSyntheticAdvisorReview ?? (() => false);
+        this.captureInventoryStructSnapshotUi = captureInventoryStructSnapshotUi;
+        this.tryOpenArmouryBoardUi = tryOpenArmouryBoardUi ?? (() => false);
+        this.tryCloseArmouryBoardUi = tryCloseArmouryBoardUi ?? (() => false);
+        this.tryShowArmourySlotTooltipUi = tryShowArmourySlotTooltipUi ?? (_ => new(false, "Unavailable", "Rendered armoury automation is unavailable.", "ArmouryBoard", null));
     }
 
     public AgentBridgeTruth CreateSnapshot() => createSnapshot();
@@ -215,6 +231,17 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
     public RenderedRetainerUiPreparationProgress CancelRetainerObservationUi() => cancelRetainerObservationUi();
     public RenderedUiTextActionResult TryOpenRenderedRetainerUi(string retainerName) => tryOpenRenderedRetainerUi(retainerName);
     public MinerBotanistAdvisorSessionState CaptureAdvisorStateUi() => captureAdvisorStateUi();
+    public AgentBridgeInventoryStructSnapshot CaptureInventoryStructSnapshotUi() =>
+        captureInventoryStructSnapshotUi?.Invoke() ?? new(
+            "Unavailable",
+            0,
+            DateTimeOffset.UtcNow,
+            [],
+            [],
+            "The inventory struct snapshot source is not registered.");
+    public bool TryOpenArmouryBoardUi() => tryOpenArmouryBoardUi();
+    public bool TryCloseArmouryBoardUi() => tryCloseArmouryBoardUi();
+    public RenderedUiTextActionResult TryShowArmourySlotTooltipUi(string target) => tryShowArmourySlotTooltipUi(target);
     public RenderedGatheringStatsObservation CaptureGatheringStatsUi() => captureGatheringStatsUi();
     public RenderedCharacterEquipmentLayout CaptureCharacterEquipmentLayoutUi() =>
         RenderedCharacterEquipmentLayoutParser.Parse(captureCharacterUi());

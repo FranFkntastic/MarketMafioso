@@ -210,6 +210,10 @@ public sealed class Plugin : IDalamudPlugin
                 tryOpenRenderedRetainerUi: renderedCharacterUiProbe.TryOpenRenderedRetainer,
                 tryCloseRetainerUi: renderedCharacterUiProbe.TryCloseRetainerUi,
                 captureAdvisorStateUi: mainWindow.CreateAgentAdvisorState,
+                captureInventoryStructSnapshotUi: mainWindow.CreateAgentInventoryStructSnapshot,
+                tryOpenArmouryBoardUi: renderedCharacterUiProbe.TryOpenArmouryBoard,
+                tryCloseArmouryBoardUi: renderedCharacterUiProbe.TryCloseArmouryBoard,
+                tryShowArmourySlotTooltipUi: renderedCharacterUiProbe.TryShowArmourySlotTooltip,
                 tryOpenGearsetListUi: renderedCharacterUiProbe.TryOpenGearsetList,
                 trySelectCalibrationGearsetUi: renderedCharacterUiProbe.TrySelectCalibrationGearset,
                 tryEquipSelectedGearsetUi: () =>

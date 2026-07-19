@@ -5,6 +5,8 @@ using Dalamud.Plugin.Services;
 using Dalamud.Utility;
 using ECommons.Automation;
 using ECommons.UIHelpers.AddonMasterImplementations;
+using FFXIVClientStructs.FFXIV.Client.UI;
+using FFXIVClientStructs.FFXIV.Client.UI.Agent;
 using FFXIVClientStructs.FFXIV.Component.GUI;
 using Franthropy.Dalamud.AgentBridge;
 using Franthropy.Dalamud.Automation.Ui;
@@ -36,6 +38,7 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
         "CharacterClass",
         "CharacterRepute",
         "GearSetList",
+        "ArmouryBoard",
         "ItemDetail",
         "_TextError",
         "SelectYesno",
@@ -316,6 +319,191 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
     {
         HideEquipmentTooltip();
         return equipmentScan.Cancel();
+    }
+
+    public unsafe bool TryOpenArmouryBoard()
+    {
+        var existing = gameGui.GetAddonByName<AtkUnitBase>("ArmouryBoard", 1);
+        if (existing != null && existing->RootNode != null && existing->RootNode->IsVisible())
+            return false;
+        var agent = AgentModule.Instance()->GetAgentByInternalId(AgentId.ArmouryBoard);
+        if (agent == null)
+            return false;
+        agent->Show();
+        return true;
+    }
+
+    public unsafe bool TryCloseArmouryBoard()
+    {
+        var addon = gameGui.GetAddonByName<AtkUnitBase>("ArmouryBoard", 1);
+        if (addon == null || addon->RootNode == null || !addon->RootNode->IsVisible())
+            return false;
+        HideArmouryTooltip();
+        addon->Close(true);
+        return true;
+    }
+
+    private static readonly (string Keyword, FFXIVClientStructs.FFXIV.Client.Game.InventoryType Type)[] ArmouryTabKeywords =
+    [
+        ("main hand", FFXIVClientStructs.FFXIV.Client.Game.InventoryType.ArmoryMainHand),
+        ("off-hand", FFXIVClientStructs.FFXIV.Client.Game.InventoryType.ArmoryOffHand),
+        ("off hand", FFXIVClientStructs.FFXIV.Client.Game.InventoryType.ArmoryOffHand),
+        ("head", FFXIVClientStructs.FFXIV.Client.Game.InventoryType.ArmoryHead),
+        ("body", FFXIVClientStructs.FFXIV.Client.Game.InventoryType.ArmoryBody),
+        ("hands", FFXIVClientStructs.FFXIV.Client.Game.InventoryType.ArmoryHands),
+        ("legs", FFXIVClientStructs.FFXIV.Client.Game.InventoryType.ArmoryLegs),
+        ("feet", FFXIVClientStructs.FFXIV.Client.Game.InventoryType.ArmoryFeets),
+        ("ear", FFXIVClientStructs.FFXIV.Client.Game.InventoryType.ArmoryEar),
+        ("neck", FFXIVClientStructs.FFXIV.Client.Game.InventoryType.ArmoryNeck),
+        ("wrist", FFXIVClientStructs.FFXIV.Client.Game.InventoryType.ArmoryWrist),
+        ("bracelet", FFXIVClientStructs.FFXIV.Client.Game.InventoryType.ArmoryWrist),
+        ("ring", FFXIVClientStructs.FFXIV.Client.Game.InventoryType.ArmoryRings),
+        ("soul", FFXIVClientStructs.FFXIV.Client.Game.InventoryType.ArmorySoulCrystal),
+    ];
+
+    /// <summary>
+    /// AgentItemDetail.TypeOrId values for armoury containers are the raw InventoryType
+    /// enum values (proven live on Primary for ArmoryMainHand=3500 and ArmoryHead=3201:
+    /// the agent accepts the enum numbering for these containers, unlike the small
+    /// 48-51/69-72 scheme documented for player inventory and saddlebags).
+    /// Mechanism only — rendered tooltip output remains the sole authority.
+    /// </summary>
+    private static uint ArmouryTooltipTypeOrId(FFXIVClientStructs.FFXIV.Client.Game.InventoryType inventoryType) =>
+        (uint)inventoryType;
+
+    public unsafe Franthropy.Dalamud.AgentBridge.RenderedUiTextActionResult TryShowArmourySlotTooltip(string target)
+    {
+        // Diagnostic experiment override: 'ArmoryMainHand:0:exp=<typeOrId>,<flag1>,<kind>' forces raw tooltip args.
+        uint? experimentType = null;
+        byte? experimentFlag = null;
+        byte? experimentKind = null;
+        var targetCore = target ?? string.Empty;
+        const string ExpMarker = ":exp=";
+        var expIndex = targetCore.IndexOf(ExpMarker, StringComparison.OrdinalIgnoreCase);
+        if (expIndex >= 0)
+        {
+            var parts = targetCore[(expIndex + ExpMarker.Length)..].Split(',');
+            if (parts.Length == 3 && uint.TryParse(parts[0], out var parsedType) &&
+                byte.TryParse(parts[1], out var parsedFlag) && byte.TryParse(parts[2], out var parsedKind))
+            {
+                experimentType = parsedType;
+                experimentFlag = parsedFlag;
+                experimentKind = parsedKind;
+            }
+            targetCore = targetCore[..expIndex];
+        }
+        var separatorIndex = targetCore.LastIndexOf(':');
+        if (separatorIndex <= 0 || !short.TryParse(targetCore[(separatorIndex + 1)..], out var slotIndex))
+            return new(false, "InvalidArmouryTarget", "Target must be '<InventoryType>:<slotIndex>', for example ArmoryMainHand:0.", "ArmouryBoard", null);
+        var inventoryTypeName = targetCore[..separatorIndex];
+        if (!Enum.TryParse<FFXIVClientStructs.FFXIV.Client.Game.InventoryType>(inventoryTypeName, true, out var inventoryType) ||
+            ArmouryTabKeywords.All(value => value.Type != inventoryType))
+            return new(false, "InvalidArmouryContainer", $"'{inventoryTypeName}' is not a supported armoury container.", "ArmouryBoard", null);
+        if (slotIndex is < 0 or >= 50)
+            return new(false, "InvalidArmourySlot", "Armoury slot index must be between 0 and 49.", "ArmouryBoard", null);
+
+        var addon = gameGui.GetAddonByName<AtkUnitBase>("ArmouryBoard", 1);
+        if (addon == null || addon->RootNode == null || !addon->RootNode->IsVisible())
+            return new(false, "RenderedAddonUnavailable", "The rendered Armoury Board is unavailable; open it first.", "ArmouryBoard", null);
+
+        var board = (AddonArmouryBoard*)addon;
+        if (!TrySelectArmouryTab(board, inventoryType, out var tabDiagnostic))
+            return new(false, "ArmouryTabCycling", tabDiagnostic, "ArmouryBoard", null);
+
+        var slotNode = ResolveArmourySlotNode(addon, slotIndex);
+        if (slotNode == null)
+            return new(false, "ArmourySlotUnavailable", $"Rendered armoury slot {slotIndex} does not resolve on the current tab.", "ArmouryBoard", null);
+
+        Franthropy.Dalamud.Automation.Ui.RenderedItemDetailTooltipRequest.HideTooltip(addon->Id);
+        if (experimentType is { } rawType)
+        {
+            if (!TryShowArmourySlotTooltipRaw(addon, slotNode, rawType, experimentFlag ?? 0, experimentKind ?? 2, slotIndex))
+                return new(false, "ArmouryTooltipRejected", $"The game rejected the experimental tooltip request (type={rawType}, flag={experimentFlag ?? 0}, kind={experimentKind ?? 2}) for slot {slotIndex}.", "ArmouryBoard", null);
+        }
+        else if (!Franthropy.Dalamud.Automation.Ui.RenderedItemDetailTooltipRequest.TryShowInventoryItemTooltip(addon->Id, slotNode, ArmouryTooltipTypeOrId(inventoryType), slotIndex))
+            return new(false, "ArmouryTooltipRejected", $"The game rejected the ItemDetail tooltip request for {inventoryType} slot {slotIndex}.", "ArmouryBoard", null);
+
+        var observation = RenderedItemDetailParser.Parse(Capture());
+        return observation.Status == RenderedItemDetailStatus.Complete
+            ? new(true, "RenderedArmouryTooltipObserved", $"Rendered Item Detail observed: {observation.Name}.", "ArmouryBoard", null)
+            : new(true, "ArmouryTooltipDispatched", "The armoury tooltip request was dispatched; the rendered Item Detail settles on the next frame and can be read with get-item-detail-ui.", "ArmouryBoard", null);
+    }
+
+    private static unsafe bool TryShowArmourySlotTooltipRaw(AtkUnitBase* addon, AtkResNode* slotNode, uint typeOrId, byte flag1, byte kind, short slotIndex)
+    {
+        var stage = AtkStage.Instance();
+        if (stage == null)
+            return false;
+        var args = stackalloc AtkTooltipManager.AtkTooltipArgs[1];
+        args->Ctor();
+        args->ItemArgs.InventoryType = (FFXIVClientStructs.FFXIV.Client.Game.InventoryType)typeOrId;
+        args->ItemArgs.Flag1 = flag1;
+        args->ItemArgs.BuyQuantity = -1;
+        args->ItemArgs.Slot = slotIndex;
+        args->ItemArgs.Kind = (FFXIVClientStructs.FFXIV.Client.Enums.DetailKind)kind;
+        stage->TooltipManager.ShowTooltip(AtkTooltipType.Item, addon->Id, slotNode, args);
+        return true;
+    }
+
+    private unsafe bool TrySelectArmouryTab(AddonArmouryBoard* board, FFXIVClientStructs.FFXIV.Client.Game.InventoryType target, out string diagnostic)
+    {
+        // Tab text updates on the frame after NextTab, so this advances at most one tab per
+        // call and reports cycling; the caller retries until the target tab is rendered.
+        var label = board->CategoryLabelNode != null
+            ? board->CategoryLabelNode->NodeText.ExtractText().Trim()
+            : string.Empty;
+        var matched = ArmouryTabKeywords
+            .Where(value => label.Contains(value.Keyword, StringComparison.OrdinalIgnoreCase))
+            .Select(value => value.Type)
+            .FirstOrDefault();
+        if (label.Length > 0 && matched == target)
+        {
+            diagnostic = string.Empty;
+            return true;
+        }
+        board->NextTab(0);
+        diagnostic = $"Cycling armoury tabs; currently on '{label}'.";
+        return false;
+    }
+
+    private static unsafe AtkResNode* ResolveArmourySlotNode(AtkUnitBase* addon, short slotIndex)
+    {
+        var cells = new List<(float X, float Y, nint Node)>();
+        CollectDragDropCells(&addon->UldManager, cells);
+        var ordered = cells.OrderBy(cell => cell.Y).ThenBy(cell => cell.X).ToArray();
+        return slotIndex < ordered.Length ? (AtkResNode*)ordered[slotIndex].Node : null;
+    }
+
+    private static unsafe void CollectDragDropCells(AtkUldManager* manager, List<(float X, float Y, nint Node)> cells)
+    {
+        if (manager == null || manager->NodeList == null)
+            return;
+        for (var index = 0u; index < manager->NodeListCount; index++)
+        {
+            var node = manager->NodeList[index];
+            if (node == null || !IsEffectivelyVisible(node))
+                continue;
+            var componentNode = node->GetAsAtkComponentNode();
+            if (componentNode != null && componentNode->Component != null)
+            {
+                if (componentNode->Component->GetComponentType() == ComponentType.DragDrop)
+                {
+                    var x = 0f;
+                    var y = 0f;
+                    node->GetPositionFloat(&x, &y);
+                    cells.Add((x, y, (nint)node));
+                }
+                CollectDragDropCells(&componentNode->Component->UldManager, cells);
+            }
+        }
+    }
+
+    private unsafe void HideArmouryTooltip()
+    {
+        var addon = gameGui.GetAddonByName<AtkUnitBase>("ArmouryBoard", 1);
+        if (addon == null)
+            return;
+        Franthropy.Dalamud.Automation.Ui.RenderedItemDetailTooltipRequest.HideTooltip(addon->Id);
     }
 
     /// <summary>

@@ -51,6 +51,7 @@ public class MainWindow : Window, IDisposable
     private readonly ConfigurationOutfitterRouteExecutionStateStore outfitterRouteStateStore;
     private readonly string marketAcquisitionRouteDiagnosticsDirectory;
     private readonly SquireTabPanel squireTab;
+    private readonly DalamudCharacterEquipmentSnapshotSource squireSnapshotSource;
     private readonly StatusTabPanel statusTab;
     private readonly SettingsTabPanel settingsTab;
     private readonly MarketAcquisitionPlanPanel marketAcquisitionPlanPanel = new();
@@ -197,7 +198,7 @@ public class MainWindow : Window, IDisposable
         if (WorkshopHostApiKeyRouting.NormalizeConfiguredKeys(config))
             config.Save();
 
-        var squireSnapshotSource = new DalamudCharacterEquipmentSnapshotSource(playerState, dataManager, log);
+        squireSnapshotSource = new DalamudCharacterEquipmentSnapshotSource(playerState, dataManager, log);
         var squireCapabilities = new DalamudSquireDispositionCapabilitySource();
         var squireRuleStore = new SquireCleanupRuleStore(config);
         var squireVnavmesh = new VNavmeshIpc(new DalamudVNavmeshIpcAdapter(Plugin.PluginInterface, log));
@@ -1357,6 +1358,31 @@ public class MainWindow : Window, IDisposable
     }
 
     public MinerBotanistAdvisorSessionState CreateAgentAdvisorState() => squireTab.AdvisorState;
+
+    public AgentBridgeInventoryStructSnapshot CreateAgentInventoryStructSnapshot()
+    {
+        var snapshot = squireSnapshotSource.Capture();
+        var items = snapshot.Instances
+            .Select(instance => new AgentBridgeInventoryStructItem(
+                instance.Fingerprint.Container,
+                instance.Fingerprint.SlotIndex,
+                instance.Fingerprint.ItemId,
+                instance.Fingerprint.IsHighQuality,
+                instance.Fingerprint.Quantity,
+                instance.IsEquipped,
+                instance.Fingerprint.MateriaIds.ToArray()))
+            .ToArray();
+        var diagnostics = snapshot.Diagnostics.Components
+            .Select(value => $"{value.Component}:{value.Status}{(value.Message is null ? string.Empty : $" ({value.Message})")}")
+            .ToArray();
+        return new(
+            snapshot.Identity.Scope?.Name ?? "Unknown",
+            snapshot.Identity.Scope?.HomeWorldId ?? 0,
+            snapshot.Identity.CapturedAt,
+            items,
+            diagnostics,
+            "Diagnostic only. Direct container reads are not ownership authority until the differential proof against rendered observation passes.");
+    }
 
     public void InvalidateAdvisorForPlayerStateChange() => squireTab.InvalidateAdvisorForPlayerStateChange();
 
