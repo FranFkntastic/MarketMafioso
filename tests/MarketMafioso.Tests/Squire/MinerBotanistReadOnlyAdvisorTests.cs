@@ -198,6 +198,7 @@ public sealed class MinerBotanistReadOnlyAdvisorTests
                 700,
                 checked((int)characterLevel),
                 "MIN BTN",
+                null,
                 stats,
                 new Dictionary<string, int>(),
                 "Complete");

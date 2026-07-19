@@ -27,6 +27,7 @@ public sealed record RenderedItemDetailObservation(
     int? ItemLevel,
     int? EquipLevel,
     string? JobCategory,
+    string? SlotCategory,
     IReadOnlyDictionary<string, int> Stats,
     IReadOnlyDictionary<string, int> MateriaStats,
     string Diagnostic);
@@ -61,6 +62,7 @@ public static partial class RenderedItemDetailParser
             ? FindInt(requirements.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries), EquipLevelPattern())
             : null;
         texts.TryGetValue("ItemDetail/65/2", out var jobCategory);
+        texts.TryGetValue("ItemDetail/35", out var slotCategory);
         if (itemLevel == null || equipLevel == null || string.IsNullOrWhiteSpace(jobCategory))
             return Incomplete("Rendered item name, item level, equip level, and job category did not form a complete tuple.");
 
@@ -90,6 +92,7 @@ public static partial class RenderedItemDetailParser
             itemLevel,
             equipLevel,
             jobCategory.Trim(),
+            string.IsNullOrWhiteSpace(slotCategory) ? null : slotCategory.Trim(),
             stats,
             materiaStats,
             "Rendered Item Detail observation is complete.");
@@ -107,10 +110,10 @@ public static partial class RenderedItemDetailParser
     }
 
     private static RenderedItemDetailObservation Unavailable(string diagnostic) =>
-        new(RenderedItemDetailStatus.Unavailable, null, null, null, null, null, new Dictionary<string, int>(), new Dictionary<string, int>(), diagnostic);
+        new(RenderedItemDetailStatus.Unavailable, null, null, null, null, null, null, new Dictionary<string, int>(), new Dictionary<string, int>(), diagnostic);
 
     private static RenderedItemDetailObservation Incomplete(string diagnostic) =>
-        new(RenderedItemDetailStatus.Incomplete, null, null, null, null, null, new Dictionary<string, int>(), new Dictionary<string, int>(), diagnostic);
+        new(RenderedItemDetailStatus.Incomplete, null, null, null, null, null, null, new Dictionary<string, int>(), new Dictionary<string, int>(), diagnostic);
 
     [GeneratedRegex(@"^Item Level\s+(\d+)$", RegexOptions.CultureInvariant)]
     private static partial Regex ItemLevelPattern();

@@ -75,5 +75,5 @@ public sealed class RenderedMinerBotanistBaselineAssemblerTests
     private static RenderedItemDetailObservation Item(
         IReadOnlyDictionary<string, int> stats,
         IReadOnlyDictionary<string, int> materia) =>
-        new(RenderedItemDetailStatus.Complete, "Observed item", RenderedItemQuality.High, 750, 100, "MIN BTN", stats, materia, "Complete");
+        new(RenderedItemDetailStatus.Complete, "Observed item", RenderedItemQuality.High, 750, 100, "MIN BTN", null, stats, materia, "Complete");
 }

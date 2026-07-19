@@ -70,7 +70,7 @@ public sealed class RenderedEquipmentDefinitionResolverTests
         int gathering = 100) =>
         new("main-hand", EquipmentSlot.MainHand, RenderedEquipmentSlotObservationStatus.Equipped,
             new(RenderedItemDetailStatus.Complete, name, quality, 750, 100, "MIN",
-                new Dictionary<string, int> { ["Gathering"] = gathering }, new Dictionary<string, int>(), "Complete"));
+                null, new Dictionary<string, int> { ["Gathering"] = gathering }, new Dictionary<string, int>(), "Complete"));
 
     private static EquipmentItemDefinition Definition(uint itemId, bool highQuality)
     {

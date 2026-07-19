@@ -133,6 +133,7 @@ public sealed class RenderedRetainerEquipmentEvidenceAssemblerTests
             ItemLevel: 1,
             EquipLevel: 1,
             JobCategory: "All Classes",
+            SlotCategory: null,
             Stats: new System.Collections.Generic.Dictionary<string, int>(),
             MateriaStats: new System.Collections.Generic.Dictionary<string, int>(),
             Diagnostic: "synthetic rendered tooltip"));

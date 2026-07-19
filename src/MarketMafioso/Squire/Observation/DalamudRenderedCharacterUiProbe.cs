@@ -78,14 +78,14 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
     }
 
     public AgentBridgeUiAutomationCapabilities Capabilities => new(
-        "rendered-equipment-tooltip-unavailable",
+        "rendered-native-item-tooltip-request",
         MovesOperatingSystemCursor: false,
         ActivatesGameWindow: false,
         RequiresGameForeground: false,
         RequiresVisibleCharacterAddon: true,
         UsesRenderedTooltipAsAuthority: true,
         SupportsDeterministicReplay: false,
-        "No bounded non-focus mechanism currently produces rendered Item Detail for Character equipment slots. Equipment observation fails closed and cannot authorize advice.");
+        "Equipment slots request the game's own ItemDetail tooltip through AtkTooltipManager with no cursor, focus, input, or event injection. Character and Item Detail rendered output remains the only runtime authority.");
 
     public unsafe bool Open()
     {
@@ -296,11 +296,17 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
     {
         var progress = equipmentScan.Snapshot();
         if (progress.Status == RenderedEquipmentScanStatus.ReadyToHover && progress.CurrentTarget is { } target)
-            return new(false, progress,
-                $"Rendered Item Detail automation is unavailable for {target.PositionKey}; equipment observation will not infer or authorize data without tooltip proof.");
+        {
+            if (!TryRequestEquipmentTooltip(target, out var reason))
+                return new(false, progress, reason);
+            progress = equipmentScan.MarkHoverStarted(target.NodePath, DateTimeOffset.UtcNow);
+            return new(progress.Status == RenderedEquipmentScanStatus.Observing, progress, progress.Diagnostic);
+        }
         if (progress.Status == RenderedEquipmentScanStatus.Observing)
         {
             progress = equipmentScan.Observe(Capture(), DateTimeOffset.UtcNow);
+            if (progress.Status is RenderedEquipmentScanStatus.Complete or RenderedEquipmentScanStatus.Failed)
+                HideEquipmentTooltip();
             return new(true, progress, progress.Diagnostic);
         }
         return new(false, progress, "The rendered equipment scan is not waiting for an advance step.");
@@ -308,7 +314,103 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
 
     public RenderedEquipmentScanProgress CancelEquipmentScan()
     {
+        HideEquipmentTooltip();
         return equipmentScan.Cancel();
+    }
+
+    /// <summary>
+    /// Maps a rendered Character slot position to its EquippedItems container index.
+    /// The container retains the legacy belt slot at index 5, so later slots shift by one.
+    /// Rings are a symmetric pair for scanning purposes; the upper rendered ring maps to
+    /// container index 11 and the lower to 12.
+    /// </summary>
+    private static int EquippedContainerIndex(string positionKey) => positionKey switch
+    {
+        "main-hand" => 0,
+        "off-hand" => 1,
+        "head" => 2,
+        "body" => 3,
+        "hands" => 4,
+        "legs" => 6,
+        "feet" => 7,
+        "ears" => 8,
+        "neck" => 9,
+        "wrists" => 10,
+        "ring-left" => 11,
+        "ring-right" => 12,
+        _ => -1,
+    };
+
+    private unsafe bool TryRequestEquipmentTooltip(RenderedEquipmentSlotTarget target, out string reason)
+    {
+        reason = string.Empty;
+        var containerIndex = EquippedContainerIndex(target.PositionKey);
+        if (containerIndex < 0)
+        {
+            reason = $"Rendered equipment slot {target.PositionKey} has no supported equipped-container index.";
+            return false;
+        }
+        var addon = gameGui.GetAddonByName<AtkUnitBase>("Character", 1);
+        if (addon == null || addon->RootNode == null || !addon->RootNode->IsVisible())
+        {
+            reason = "The rendered Character addon is unavailable; the equipment tooltip request fails closed.";
+            return false;
+        }
+        var node = ResolveCharacterNodeByPath(addon, target.NodePath);
+        if (node == null || !IsEffectivelyVisible(node))
+        {
+            reason = $"The rendered node {target.NodePath} no longer resolves; the equipment tooltip request fails closed.";
+            return false;
+        }
+        if (!Franthropy.Dalamud.Automation.Ui.RenderedItemDetailTooltipRequest.TryShowEquippedItemTooltip(
+                addon->Id, node, (short)containerIndex))
+        {
+            reason = $"The game rejected the ItemDetail tooltip request for {target.PositionKey}; equipment observation fails closed.";
+            return false;
+        }
+        return true;
+    }
+
+    private unsafe void HideEquipmentTooltip()
+    {
+        var addon = gameGui.GetAddonByName<AtkUnitBase>("Character", 1);
+        if (addon == null)
+            return;
+        Franthropy.Dalamud.Automation.Ui.RenderedItemDetailTooltipRequest.HideTooltip(addon->Id);
+    }
+
+    private static unsafe AtkResNode* ResolveCharacterNodeByPath(AtkUnitBase* addon, string nodePath)
+    {
+        var segments = nodePath.Split('/');
+        if (segments.Length < 2 || !string.Equals(segments[0], "Character", StringComparison.Ordinal))
+            return null;
+        var manager = &addon->UldManager;
+        AtkResNode* current = null;
+        for (var depth = 1; depth < segments.Length; depth++)
+        {
+            if (!uint.TryParse(segments[depth], out var nodeId) || manager == null || manager->NodeList == null)
+                return null;
+            current = null;
+            for (var index = 0u; index < manager->NodeListCount; index++)
+            {
+                var candidate = manager->NodeList[index];
+                if (candidate != null && candidate->NodeId == nodeId)
+                {
+                    current = candidate;
+                    break;
+                }
+            }
+            if (current == null)
+                return null;
+            if (depth + 1 < segments.Length)
+            {
+                var componentNode = current->GetAsAtkComponentNode();
+                manager = componentNode != null && componentNode->Component != null
+                    ? &componentNode->Component->UldManager
+                    : null;
+            }
+        }
+        return current;
     }
 
     private unsafe AgentBridgeRenderedAddonSnapshot CaptureAddon(string addonName)

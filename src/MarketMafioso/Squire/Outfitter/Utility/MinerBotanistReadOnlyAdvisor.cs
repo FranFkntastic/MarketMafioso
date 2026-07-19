@@ -54,7 +54,17 @@ public sealed class MinerBotanistReadOnlyAdvisor
             currentEquipment.Status != RenderedEquipmentResolutionStatus.Complete || currentEquipment.Slots.Count != 12)
             return Abstain("A complete rendered level 1-100 MIN/BTN baseline and twelve uniquely resolved slots are required.");
         if (!marketEvidence.IsPublishable)
-            return Abstain("The exact-quality market evidence generation is incomplete or stale; the advisor will not nominate from it.");
+        {
+            var unresolved = marketEvidence.Items
+                .Where(item => item.Status is not (OutfitterMarketEvidenceItemStatus.Fresh or OutfitterMarketEvidenceItemStatus.Missing))
+                .Take(8)
+                .Select(item => $"{item.ItemId}:{item.Status}{(string.IsNullOrWhiteSpace(item.Diagnostic) ? string.Empty : $" ({item.Diagnostic})")}")
+                .ToArray();
+            var detail = unresolved.Length == 0
+                ? string.Empty
+                : $" Unresolved items: {string.Join("; ", unresolved)}.";
+            return Abstain($"The exact-quality market evidence generation is incomplete or stale; the advisor will not nominate from it.{detail}");
+        }
         var ineligibleCurrent = currentEquipment.Slots.FirstOrDefault(value =>
             value.Definition.EquipLevel > characterLevel ||
             !value.Definition.EligibleClassJobIds.Contains(classJobId));

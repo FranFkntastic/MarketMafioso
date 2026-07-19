@@ -106,6 +106,8 @@ public sealed class RenderedCharacterEquipmentScanCoordinator
             return Snapshot();
 
         var item = RenderedItemDetailParser.Parse(snapshot);
+        if (item.Status == RenderedItemDetailStatus.Complete && !IsCategoryConsistent(item.SlotCategory, target.PositionKey))
+            return Fail($"Rendered Item Detail category '{item.SlotCategory ?? "missing"}' is inconsistent with the rendered {target.PositionKey} slot; the observation cannot be trusted for this position.");
         string signature;
         if (item.Status == RenderedItemDetailStatus.Complete)
             signature = $"item:{item.Name}:{item.Quality}:{item.ItemLevel}:{item.EquipLevel}:{item.JobCategory}:{string.Join(',', item.Stats.OrderBy(value => value.Key).Select(value => $"{value.Key}={value.Value}"))}:melds={string.Join(',', item.MateriaStats.OrderBy(value => value.Key).Select(value => $"{value.Key}={value.Value}"))}";
@@ -151,6 +153,37 @@ public sealed class RenderedCharacterEquipmentScanCoordinator
         diagnostic = "Rendered equipment observation was cancelled.";
         return Snapshot();
     }
+
+    /// <summary>
+    /// Guards the equipped-container index mapping: an armor or accessory tooltip category
+    /// must exactly match the scanned position, and tool categories must not contradict it.
+    /// Weapon categories cannot be enumerated, so main/off-hand pass unless the category
+    /// provably belongs elsewhere. A missing category fails closed.
+    /// </summary>
+    private static bool IsCategoryConsistent(string? category, string positionKey)
+    {
+        if (string.IsNullOrWhiteSpace(category))
+            return false;
+        return positionKey switch
+        {
+            "head" or "body" or "hands" or "legs" or "feet" => string.Equals(category, char.ToUpperInvariant(positionKey[0]) + positionKey[1..], StringComparison.Ordinal),
+            "ears" => string.Equals(category, "Earrings", StringComparison.Ordinal),
+            "neck" => string.Equals(category, "Necklace", StringComparison.Ordinal),
+            "wrists" => string.Equals(category, "Bracelets", StringComparison.Ordinal),
+            "ring-left" or "ring-right" => string.Equals(category, "Ring", StringComparison.Ordinal),
+            "soul-crystal" => string.Equals(category, "Soul Crystal", StringComparison.Ordinal),
+            "main-hand" => !IsArmorOrAccessoryCategory(category) &&
+                           !string.Equals(category, "Shield", StringComparison.Ordinal) &&
+                           !category.EndsWith("Secondary Tool", StringComparison.Ordinal),
+            "off-hand" => !IsArmorOrAccessoryCategory(category) &&
+                          !category.EndsWith("Primary Tool", StringComparison.Ordinal),
+            _ => false,
+        };
+    }
+
+    private static bool IsArmorOrAccessoryCategory(string category) => category is
+        "Head" or "Body" or "Hands" or "Legs" or "Feet" or
+        "Earrings" or "Necklace" or "Bracelets" or "Ring" or "Soul Crystal";
 
     public RenderedEquipmentScanProgress Snapshot() =>
         new(status, observations.Count, targets.Count, CurrentTarget(), observations.ToArray(), diagnostic);

@@ -40,6 +40,52 @@ public sealed class RenderedCharacterEquipmentScanCoordinatorTests
     }
 
     [Fact]
+    public void Observe_rejects_a_tooltip_category_that_contradicts_the_scanned_position()
+    {
+        var coordinator = Coordinator();
+        var begun = coordinator.Begin(Snapshot());
+        coordinator.MarkHoverStarted(begun.CurrentTarget!.NodePath, Start);
+
+        var failed = coordinator.Observe(Snapshot(ItemTexts("Hatchet", "Feet")), Start.AddMilliseconds(350));
+
+        Assert.Equal(RenderedEquipmentScanStatus.Failed, failed.Status);
+        Assert.Contains("inconsistent with the rendered main-hand slot", failed.Diagnostic, StringComparison.Ordinal);
+        Assert.Empty(failed.Observations);
+    }
+
+    [Fact]
+    public void Observe_rejects_an_armor_position_when_the_tooltip_category_names_another_slot()
+    {
+        var coordinator = Coordinator();
+        var begun = coordinator.Begin(Snapshot());
+        coordinator.MarkHoverStarted(begun.CurrentTarget!.NodePath, Start);
+        coordinator.Observe(Snapshot(ItemTexts("Hatchet")), Start.AddMilliseconds(350));
+        var advanced = coordinator.Observe(Snapshot(ItemTexts("Hatchet")), Start.AddMilliseconds(700));
+        Assert.Equal("head", advanced.CurrentTarget?.PositionKey);
+        coordinator.MarkHoverStarted(advanced.CurrentTarget!.NodePath, Start.AddMilliseconds(700));
+
+        var failed = coordinator.Observe(Snapshot(ItemTexts("Leather Jacket", "Body")), Start.AddMilliseconds(1050));
+
+        Assert.Equal(RenderedEquipmentScanStatus.Failed, failed.Status);
+        Assert.Contains("inconsistent with the rendered head slot", failed.Diagnostic, StringComparison.Ordinal);
+        Assert.Single(failed.Observations);
+    }
+
+    [Fact]
+    public void Observe_rejects_a_tooltip_with_no_rendered_category()
+    {
+        var coordinator = Coordinator();
+        var begun = coordinator.Begin(Snapshot());
+        coordinator.MarkHoverStarted(begun.CurrentTarget!.NodePath, Start);
+
+        var texts = ItemTexts("Hatchet").Where(node => node.NodePath != "ItemDetail/35").ToArray();
+        var failed = coordinator.Observe(Snapshot(texts), Start.AddMilliseconds(350));
+
+        Assert.Equal(RenderedEquipmentScanStatus.Failed, failed.Status);
+        Assert.Contains("inconsistent with the rendered main-hand slot", failed.Diagnostic, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Observe_does_not_infer_empty_from_a_missing_tooltip()
     {
         var coordinator = Coordinator();
@@ -68,9 +114,10 @@ public sealed class RenderedCharacterEquipmentScanCoordinatorTests
     private static RenderedCharacterEquipmentScanCoordinator Coordinator() =>
         new(TimeSpan.FromMilliseconds(300), TimeSpan.FromSeconds(1));
 
-    private static AgentBridgeRenderedTextNode[] ItemTexts(string name) =>
+    private static AgentBridgeRenderedTextNode[] ItemTexts(string name, string slotCategory = "Botanist's Primary Tool") =>
     [
         Text("ItemDetail/33", name),
+        Text("ItemDetail/35", slotCategory),
         Text("ItemDetail/63", "Item Level 750"),
         Text("ItemDetail/65/2", "MIN BTN"),
         Text("ItemDetail/66/2", "Lv. 100"),
