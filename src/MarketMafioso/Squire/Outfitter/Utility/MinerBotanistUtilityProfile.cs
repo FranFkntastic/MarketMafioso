@@ -33,7 +33,7 @@ public sealed record MinerBotanistAuthorityAssessment(
 /// Patch-bounded MIN/BTN utility calibration. It is intentionally a small, inspectable index;
 /// economic nomination remains a separate MarketMafioso policy over the completed frontier.
 /// </summary>
-public sealed class MinerBotanistUtilityProfile : IEquipmentExactSolverUtilityModel
+public sealed class MinerBotanistUtilityProfile : IEquipmentExactSolverUtilityModel, IEquipmentPartialDominanceCoordinateModel, IEquipmentSeparablePartialUtilityCanonicalizationModel
 {
     public const uint MinerClassJobId = 16;
     public const uint BotanistClassJobId = 17;
@@ -145,6 +145,15 @@ public sealed class MinerBotanistUtilityProfile : IEquipmentExactSolverUtilityMo
     public EquipmentPartialUtilityDominance ComparePartial(
         EquipmentSolverUtilityVector candidate,
         EquipmentSolverUtilityVector other) => model.ComparePartial(candidate, other);
+
+    public IReadOnlyList<long> GetPartialDominanceCoordinates(EquipmentSolverUtilityVector utility) =>
+        model.GetPartialDominanceCoordinates(utility);
+
+    public EquipmentSolverUtilityVector CanonicalizePartialUtility(EquipmentSolverUtilityVector utility) =>
+        model.CanonicalizePartialUtility(utility);
+
+    public long CanonicalizePartialUtilityComponent(string componentKey, long units) =>
+        model.CanonicalizePartialUtilityComponent(componentKey, units);
 
     public EquipmentUtilityEvaluation Evaluate(EquipmentSolverUtilityVector completed) => model.Evaluate(completed);
 

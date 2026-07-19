@@ -33,7 +33,7 @@ public sealed record AgentBridgeAdvisorAdvice(
     int OfferCount,
     int FrontierCount,
     long ExpandedStateCount,
-    long ExactCompleteVariantCount,
+    long RetainedCompletePathCount,
     double SolverElapsedMilliseconds,
     AgentBridgeAdvisorSolution? Nomination,
     IReadOnlyList<AgentBridgeAdvisorSolution> Frontier);
@@ -89,7 +89,7 @@ public sealed record AgentBridgeAdvisorState(
                 source.OffersByAllocation.Count,
                 frontier.Count,
                 source.Frontier?.Diagnostics.ExpandedStateCount ?? 0,
-                source.Frontier?.Diagnostics.ExactCompleteVariantCount ?? 0,
+                source.Frontier?.Diagnostics.RetainedCompletePathCount ?? 0,
                 source.Frontier?.Diagnostics.Elapsed.TotalMilliseconds ?? 0,
                 source.Nomination is null ? null : Convert(source.Nomination),
                 frontier.Take(128).Select(Convert).ToArray());

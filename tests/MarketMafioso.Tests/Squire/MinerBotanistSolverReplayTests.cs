@@ -1,11 +1,13 @@
 using System.IO.Compression;
+using System.Diagnostics;
 using System.Text.Json;
 using Franthropy.Dalamud.Equipment;
 using MarketMafioso.Squire.Outfitter.Utility;
+using Xunit.Abstractions;
 
 namespace MarketMafioso.Tests.Squire;
 
-public sealed class MinerBotanistSolverReplayTests
+public sealed class MinerBotanistSolverReplayTests(ITestOutputHelper output)
 {
     [Fact]
     public void SanitizedBtn72Fixture_IsTheCapturedTwelvePositionExactRequest()
@@ -47,7 +49,7 @@ public sealed class MinerBotanistSolverReplayTests
     }
 
     [Fact]
-    public void Replay_PreservesReferenceFrontierMetricsAndExactVariantCounts()
+    public void Replay_PreservesFrontierMetricsAndCanonicalRetainedPathCounts()
     {
         var request = Request();
         var replay = Capture(request);
@@ -56,9 +58,77 @@ public sealed class MinerBotanistSolverReplayTests
         var actual = new EquipmentExactFrontierSolver().Solve(replay.ToRequest());
 
         Assert.Equal(Metrics(expected), Metrics(actual));
-        Assert.Equal(expected.Diagnostics.ExactCompleteVariantCount, actual.Diagnostics.ExactCompleteVariantCount);
-        Assert.Equal(expected.EquivalenceSummaries.Select(value => value.ExactVariantCount).Order().ToArray(),
-            actual.EquivalenceSummaries.Select(value => value.ExactVariantCount).Order().ToArray());
+        Assert.Equal(expected.Diagnostics.RetainedCompletePathCount, actual.Diagnostics.RetainedCompletePathCount);
+        Assert.Equal(expected.RetainedEquivalenceSummaries.Select(value => value.RetainedPathCount).Order().ToArray(),
+            actual.RetainedEquivalenceSummaries.Select(value => value.RetainedPathCount).Order().ToArray());
+    }
+
+    [Fact]
+    public void SanitizedBtn72Replay_MeetsWorstSupportedExactSolverBudget()
+    {
+        var request = ReadBtn72Fixture().ToRequest();
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: true);
+        GC.WaitForPendingFinalizers();
+        GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: true);
+        using var managedMemory = new ManagedHeapPeakSampler();
+        var collectionsBefore = Enumerable.Range(0, GC.MaxGeneration + 1).Select(GC.CollectionCount).ToArray();
+        managedMemory.Start();
+        var beforeAllocated = GC.GetAllocatedBytesForCurrentThread();
+        var stopwatch = Stopwatch.StartNew();
+        EquipmentExactFrontierProgress? progress = null;
+        var checkpoints = new List<(
+            EquipmentExactFrontierProgress Progress,
+            long AllocatedBytes,
+            long LiveBytes,
+            long OccupancyBytes)>();
+
+        EquipmentExactFrontierResult result;
+        try
+        {
+            result = new EquipmentExactFrontierSolver().Solve(request, cancellation.Token, value =>
+            {
+                progress = value;
+                if (value.Phase != "Pruning" || value.ProcessedCandidateCount == value.CandidateStateCount)
+                    checkpoints.Add((
+                        value,
+                        GC.GetAllocatedBytesForCurrentThread() - beforeAllocated,
+                        managedMemory.IncrementalPeakLiveBytes,
+                        managedMemory.IncrementalPeakOccupancyBytes));
+            });
+        }
+        catch (OperationCanceledException)
+        {
+            var allocatedAtCancellation = GC.GetAllocatedBytesForCurrentThread() - beforeAllocated;
+            Assert.Fail($"BTN 72 replay exceeded the 15-second guard; allocated={allocatedAtCancellation:N0}; lastProgress={progress}; checkpoints={string.Join("; ", checkpoints.Select(CheckpointText))}.");
+            throw;
+        }
+        finally
+        {
+            managedMemory.Stop();
+        }
+
+        stopwatch.Stop();
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - beforeAllocated;
+        var incrementalPeakLiveManaged = managedMemory.IncrementalPeakLiveBytes;
+        var incrementalPeakManagedOccupancy = managedMemory.IncrementalPeakOccupancyBytes;
+        var collections = Enumerable.Range(0, GC.MaxGeneration + 1)
+            .Select(generation => GC.CollectionCount(generation) - collectionsBefore[generation])
+            .ToArray();
+        var gcInfo = GC.GetGCMemoryInfo();
+        var lohBytesAfterLastGc = gcInfo.GenerationInfo.Length > 3 ? gcInfo.GenerationInfo[3].SizeAfterBytes : 0;
+        var checkpointText = string.Join("; ", checkpoints.Select(CheckpointText));
+        var witnessCount = result.Pareto.Dominated.Sum(value => value.DominatingSolutionIds.Count);
+        var memoryText = $"peakLiveManagedIncrement={incrementalPeakLiveManaged:N0} bytes ({incrementalPeakLiveManaged / 1024d / 1024d:F2} MiB); peakManagedOccupancyIncrement={incrementalPeakManagedOccupancy:N0} bytes ({incrementalPeakManagedOccupancy / 1024d / 1024d:F2} MiB); allocated={allocated:N0}; collections=[{string.Join(',', collections)}]; lohAfterLastGc={lohBytesAfterLastGc:N0}; fragmentedAfterLastGc={gcInfo.FragmentedBytes:N0}";
+        var resultShape = $"frontier={result.Pareto.Frontier.Count}; dominated={result.Pareto.Dominated.Count}; witnesses={witnessCount:N0}; retainedClasses={result.RetainedEquivalenceSummaries.Count}";
+        output.WriteLine($"elapsed={stopwatch.Elapsed}; {memoryText}; peakStates={result.Diagnostics.PeakRetainedStateCount}; {resultShape}");
+        Assert.True(stopwatch.Elapsed <= TimeSpan.FromSeconds(10),
+            $"BTN 72 replay took {stopwatch.Elapsed}; {memoryText}; peakStates={result.Diagnostics.PeakRetainedStateCount}; {resultShape}; checkpoints={checkpointText}.");
+        Assert.True(incrementalPeakLiveManaged <= 512L * 1024 * 1024,
+            $"BTN 72 replay peak live managed-memory increment was {incrementalPeakLiveManaged:N0} bytes ({incrementalPeakLiveManaged / 1024d / 1024d:F2} MiB); elapsed={stopwatch.Elapsed}; {memoryText}; peakStates={result.Diagnostics.PeakRetainedStateCount}; {resultShape}; checkpoints={checkpointText}.");
+
+        static string CheckpointText((EquipmentExactFrontierProgress Progress, long AllocatedBytes, long LiveBytes, long OccupancyBytes) value) =>
+            $"{value.Progress} allocated={value.AllocatedBytes:N0} live={value.LiveBytes:N0} occupancy={value.OccupancyBytes:N0}";
     }
 
     private static MinerBotanistSolverReplay Capture(EquipmentExactFrontierRequest request) =>
@@ -172,4 +242,80 @@ public sealed class MinerBotanistSolverReplayTests
             value.EvidenceRisk.ConfidencePenalty))
         .Order(StringComparer.Ordinal)
         .ToArray();
+
+    private sealed class ManagedHeapPeakSampler : IDisposable
+    {
+        private readonly ManualResetEventSlim stop = new(false);
+        private readonly Thread thread;
+        private long peakOccupancyBytes;
+        private long peakLiveBytes;
+        private bool started;
+
+        public ManagedHeapPeakSampler() => thread = new(Sample)
+        {
+            IsBackground = true,
+            Name = "BTN solver managed-memory sampler",
+        };
+
+        public long BaselineOccupancyBytes { get; private set; }
+        public long BaselineLiveBytes { get; private set; }
+        public long IncrementalPeakOccupancyBytes => Math.Max(0, Volatile.Read(ref peakOccupancyBytes) - BaselineOccupancyBytes);
+        public long IncrementalPeakLiveBytes => Math.Max(0, Volatile.Read(ref peakLiveBytes) - BaselineLiveBytes);
+
+        public void Start()
+        {
+            if (started)
+                throw new InvalidOperationException("Managed-memory sampler was already started.");
+            started = true;
+            BaselineOccupancyBytes = GC.GetTotalMemory(forceFullCollection: false);
+            var gcInfo = GC.GetGCMemoryInfo();
+            BaselineLiveBytes = Math.Max(0, gcInfo.HeapSizeBytes - gcInfo.FragmentedBytes);
+            peakOccupancyBytes = BaselineOccupancyBytes;
+            peakLiveBytes = BaselineLiveBytes;
+            thread.Start();
+        }
+
+        public void Stop()
+        {
+            if (!started || stop.IsSet)
+                return;
+            stop.Set();
+            thread.Join();
+        }
+
+        public void Dispose()
+        {
+            Stop();
+            stop.Dispose();
+        }
+
+        private void Sample()
+        {
+            while (!stop.IsSet)
+            {
+                Observe();
+                Thread.Sleep(5);
+            }
+            Observe();
+        }
+
+        private void Observe()
+        {
+            ObserveMaximum(ref peakOccupancyBytes, GC.GetTotalMemory(forceFullCollection: false));
+            var gcInfo = GC.GetGCMemoryInfo();
+            ObserveMaximum(ref peakLiveBytes, Math.Max(0, gcInfo.HeapSizeBytes - gcInfo.FragmentedBytes));
+        }
+
+        private static void ObserveMaximum(ref long maximum, long current)
+        {
+            var observed = Volatile.Read(ref maximum);
+            while (current > observed)
+            {
+                var previous = Interlocked.CompareExchange(ref maximum, current, observed);
+                if (previous == observed)
+                    return;
+                observed = previous;
+            }
+        }
+    }
 }

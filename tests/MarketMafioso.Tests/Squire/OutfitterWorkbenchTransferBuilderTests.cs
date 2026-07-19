@@ -66,6 +66,45 @@ public sealed class OutfitterWorkbenchTransferBuilderTests
     }
 
     [Fact]
+    public void Build_DoesNotTreatRetainedDiagnosticPathCountAsAuthority()
+    {
+        var fixture = Fixture();
+        var expected = OutfitterWorkbenchTransferBuilder.Build(
+            fixture.Advice,
+            fixture.Selected.Candidate.SolutionId,
+            fixture.Evidence,
+            Validation(fixture));
+        var changedAdvice = fixture.Advice with
+        {
+            Frontier = fixture.Advice.Frontier! with
+            {
+                Diagnostics = fixture.Advice.Frontier.Diagnostics with
+                {
+                    RetainedCompletePathCount = 9_999_999,
+                },
+            },
+        };
+        var fingerprint = new RenderedPlayerAuthorityFingerprint("fixture-player");
+
+        var actual = OutfitterWorkbenchTransferBuilder.Build(
+            changedAdvice,
+            fixture.Selected.Candidate.SolutionId,
+            fixture.Evidence,
+            new(
+                changedAdvice,
+                fixture.Selected.Candidate.SolutionId,
+                fixture.Evidence.GenerationId,
+                fingerprint,
+                fingerprint,
+                DryRunOnly: false));
+
+        Assert.Equal(expected.SelectedSolutionId, actual.SelectedSolutionId);
+        Assert.Equal(expected.SelectedLoadout, actual.SelectedLoadout);
+        Assert.Equal(expected.MarketLots, actual.MarketLots);
+        Assert.Equal(expected.ObservedMarketTotalGil, actual.ObservedMarketTotalGil);
+    }
+
+    [Fact]
     public void Build_RejectsSolutionOutsideAuthoritativeFrontier()
     {
         var fixture = Fixture();

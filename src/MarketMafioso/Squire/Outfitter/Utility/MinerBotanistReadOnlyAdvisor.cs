@@ -55,6 +55,11 @@ public sealed class MinerBotanistReadOnlyAdvisor
             return Abstain("A complete rendered level 1-100 MIN/BTN baseline and twelve uniquely resolved slots are required.");
         if (!marketEvidence.IsPublishable)
             return Abstain("The exact-quality market evidence generation is incomplete or stale; the advisor will not nominate from it.");
+        var ineligibleCurrent = currentEquipment.Slots.FirstOrDefault(value =>
+            value.Definition.EquipLevel > characterLevel ||
+            !value.Definition.EligibleClassJobIds.Contains(classJobId));
+        if (ineligibleCurrent is not null)
+            return Abstain($"Currently equipped {ineligibleCurrent.Definition.Name} does not match the rendered job and level evidence.");
         var unsupportedCurrent = currentEquipment.Slots.FirstOrDefault(value => MinerBotanistEquipmentSupportPolicy.HasUnmodeledEffectOrRestriction(value.Definition));
         if (unsupportedCurrent is not null)
             return Abstain($"Currently equipped {unsupportedCurrent.Definition.Name} has an unmodeled effect or equip restriction.");

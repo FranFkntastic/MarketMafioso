@@ -219,8 +219,8 @@ internal static class MinerBotanistAdvisorSyntheticReview
                 CompactedEquivalentStateCount: pareto.EquivalenceGroups.Count,
                 PeakRetainedStateCount: pareto.Frontier.Count,
                 CompleteSolutionCount: solutions.Length,
-                ExactCompleteVariantCount: solutions.Length,
-                EquivalentRepresentativeLimit: 16,
+                RetainedCompletePathCount: solutions.Length,
+                RetainedRepresentativeLimit: 16,
                 BaselineSolutionId: baseline.Id,
                 Elapsed: TimeSpan.Zero),
             []);
