@@ -7,23 +7,23 @@ using Franthropy.Dalamud.Equipment;
 
 namespace MarketMafioso.Squire.Outfitter.Utility;
 
-internal sealed record MinerBotanistSolverReplayProfile(
+public sealed record MinerBotanistSolverReplayProfile(
     MinerBotanistUtilityContextKind Context,
     uint ClassJobId,
     uint CharacterLevel,
     MinerBotanistUtilityStats OfferBaseline,
     MinerBotanistUtilityStats FixedStats);
 
-internal sealed record MinerBotanistSolverReplayBaseline(
+public sealed record MinerBotanistSolverReplayBaseline(
     EquipmentLoadoutPosition Position,
     int? OfferIndex);
 
-internal sealed record MinerBotanistSolverReplayRisk(
+public sealed record MinerBotanistSolverReplayRisk(
     int FreshnessBucket,
     int IncompleteCoverageCount,
     int ConfidencePenalty);
 
-internal sealed record MinerBotanistSolverReplayOffer(
+public sealed record MinerBotanistSolverReplayOffer(
     int Index,
     uint ItemId,
     EquipmentQuality Quality,
@@ -42,7 +42,7 @@ internal sealed record MinerBotanistSolverReplayOffer(
     bool IsUnique,
     sbyte OffHandOccupancy);
 
-internal sealed record MinerBotanistSolverReplay(
+public sealed record MinerBotanistSolverReplay(
     string SchemaVersion,
     MinerBotanistSolverReplayProfile Profile,
     IReadOnlyList<EquipmentLoadoutPosition> RequiredPositions,

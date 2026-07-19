@@ -19,7 +19,7 @@ public sealed record MinerBotanistReadOnlyAdvice(
     string AdvisoryRule,
     EquipmentExactFrontierResult? Frontier,
     EquipmentDecisionSolution? Nomination,
-    IReadOnlyDictionary<string, MinerBotanistAuthorityAssessment> AuthorityBySolutionId,
+    IReadOnlyDictionary<string, AdvisorAuthorityAssessment> AuthorityBySolutionId,
     IReadOnlyDictionary<EquipmentOfferAllocationKey, EquipmentExactSolverOffer> OffersByAllocation,
     string Diagnostic);
 
@@ -44,7 +44,8 @@ public sealed class MinerBotanistReadOnlyAdvisor
         RenderedEquipmentResolution currentEquipment,
         OutfitterMarketEvidenceBook marketEvidence,
         Func<uint, IReadOnlyList<EquipmentItemDefinition>> findDefinitionsByItemId,
-        MinerBotanistUtilityContextKind contextKind,
+        IAdvisorStatFamily family,
+        string contextId,
         IReadOnlyList<EquipmentLoadoutOffer>? vendorOffers = null,
         IReadOnlyList<MinerBotanistOwnedItemEvidence>? ownedItems = null,
         CancellationToken cancellationToken = default,
@@ -55,11 +56,15 @@ public sealed class MinerBotanistReadOnlyAdvisor
         ArgumentNullException.ThrowIfNull(currentEquipment);
         ArgumentNullException.ThrowIfNull(marketEvidence);
         ArgumentNullException.ThrowIfNull(findDefinitionsByItemId);
+        ArgumentNullException.ThrowIfNull(family);
+        ArgumentNullException.ThrowIfNull(contextId);
         if (baseline is not { Status: RenderedMinerBotanistBaselineStatus.Complete, ClassJobId: { } classJobId,
                 Level: { } characterLevel, TotalStats: { } total, FixedStats: { } fixedStats } ||
             characterLevel is < 1 or > 100 ||
             currentEquipment.Status != RenderedEquipmentResolutionStatus.Complete || currentEquipment.Slots.Count != 12)
             return Abstain("A complete rendered level 1-100 MIN/BTN baseline and twelve uniquely resolved slots are required.");
+        if (!family.SupportedClassJobIds.Contains(classJobId))
+            return Abstain($"The rendered job is outside the supported {family.CoverageJobLabel} player scope.");
         if (!marketEvidence.IsPublishable)
         {
             var unresolved = marketEvidence.Items
@@ -81,11 +86,12 @@ public sealed class MinerBotanistReadOnlyAdvisor
         if (unsupportedCurrent is not null)
             return Abstain($"Currently equipped {unsupportedCurrent.Definition.Name} has an unmodeled effect or equip restriction.");
 
-        var offerStats = new MinerBotanistUtilityStats(
+        var offerTriple = family.ToTriple(new MinerBotanistUtilityStats(
             total.Gathering - fixedStats.Gathering,
             total.Perception - fixedStats.Perception,
-            total.GatheringPoints - fixedStats.GatheringPoints);
-        var profile = new MinerBotanistUtilityProfile(contextKind, offerStats, classJobId, checked((uint)characterLevel), fixedStats);
+            total.GatheringPoints - fixedStats.GatheringPoints));
+        var fixedTriple = family.ToTriple(fixedStats);
+        var profile = family.CreateUtilityModel(contextId, offerTriple, fixedTriple, classJobId, checked((uint)characterLevel));
         var offers = new List<EquipmentExactSolverOffer>();
         var required = currentEquipment.Slots.Select(value => value.Position).ToHashSet();
         var baselineKeys = required.ToDictionary(position => position, _ => (EquipmentOfferAllocationKey?)null);
@@ -100,7 +106,7 @@ public sealed class MinerBotanistReadOnlyAdvisor
                 $"rendered-current:{slot.PositionKey}",
                 new HashSet<EquipmentLoadoutPosition> { slot.Position },
                 1,
-                Vector(observed.Stats, observed.MateriaStats),
+                family.VectorFromRendered(observed.Stats, observed.MateriaStats),
                 0,
                 null,
                 null,
@@ -122,7 +128,7 @@ public sealed class MinerBotanistReadOnlyAdvisor
                 continue;
             var ownedDefinition = ownedDefinitions[0];
             if (MinerBotanistEquipmentSupportPolicy.HasUnmodeledEffectOrRestriction(ownedDefinition) ||
-                !MinerBotanistAdvisorCatalog.HasRelevantCompleteProfile(ownedDefinition))
+                !MinerBotanistAdvisorCatalog.HasRelevantCompleteProfile(ownedDefinition, family))
                 continue;
             var ownedQuality = owned.IsHighQuality ? EquipmentQuality.High : EquipmentQuality.Normal;
             var ownedProfile = ownedDefinition.ResolveStatProfile(ownedQuality);
@@ -143,7 +149,7 @@ public sealed class MinerBotanistReadOnlyAdvisor
                 null,
                 ownedPositions,
                 1,
-                Vector(ownedProfile),
+                family.VectorFromDefinition(ownedProfile),
                 0,
                 null,
                 null,
@@ -202,7 +208,7 @@ public sealed class MinerBotanistReadOnlyAdvisor
                     listing.ListingId,
                     positions,
                     listing.Quantity,
-                    Vector(profileForQuality),
+                    family.VectorFromDefinition(profileForQuality),
                     listing.UnitPriceGil,
                     listing.WorldName,
                     null,
@@ -230,7 +236,7 @@ public sealed class MinerBotanistReadOnlyAdvisor
                 null,
                 positions,
                 1,
-                Vector(statProfile),
+                family.VectorFromDefinition(statProfile),
                 price,
                 null,
                 vendor.Key.SourceCatalogKey,
@@ -247,13 +253,14 @@ public sealed class MinerBotanistReadOnlyAdvisor
                 required,
                 baselineKeys,
                 profile);
-            captureReplay?.Invoke(MinerBotanistSolverReplay.Capture(
-                request,
-                contextKind,
-                classJobId,
-                checked((uint)characterLevel),
-                offerStats,
-                fixedStats));
+            var replay = family.CaptureReplay(request, contextId, classJobId, checked((uint)characterLevel),
+                new MinerBotanistUtilityStats(
+                    total.Gathering - fixedStats.Gathering,
+                    total.Perception - fixedStats.Perception,
+                    total.GatheringPoints - fixedStats.GatheringPoints),
+                fixedStats);
+            if (replay is not null)
+                captureReplay?.Invoke(replay);
             frontier = new EquipmentExactFrontierSolver().Solve(request, cancellationToken, reportProgress);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -267,7 +274,7 @@ public sealed class MinerBotanistReadOnlyAdvisor
 
         var authority = frontier.Pareto.Frontier.ToDictionary(
             solution => solution.Candidate.SolutionId,
-            solution => profile.AssessAuthority(solution.Utility, solution.AcquisitionCostGil),
+            solution => family.AssessAuthority(profile, solution.Utility, solution.AcquisitionCostGil),
             StringComparer.Ordinal);
         var nomination = frontier.Pareto.Frontier
             .Where(solution => authority[solution.Candidate.SolutionId].AdvisorMayConsider)
@@ -286,23 +293,6 @@ public sealed class MinerBotanistReadOnlyAdvisor
             nomination is null
                 ? "Frontier is complete, but the advisor abstains under the displayed rule."
                 : $"Advisor nominates {nomination.Candidate.SolutionId} under the displayed rule.");
-    }
-
-    private static EquipmentSolverUtilityVector Vector(
-        IReadOnlyDictionary<string, int> stats,
-        IReadOnlyDictionary<string, int> materia)
-    {
-        int Read(string key) => stats.GetValueOrDefault(key) + materia.GetValueOrDefault(key);
-        return MinerBotanistUtilityProfile.ToVector(new(Read("Gathering"), Read("Perception"), Read("GP")));
-    }
-
-    private static EquipmentSolverUtilityVector Vector(EquipmentStatProfile profile)
-    {
-        int Sum(EquipmentStatSemantic semantic) => profile.Parameters.Where(value => value.Semantic == semantic).Sum(value => value.Value);
-        return MinerBotanistUtilityProfile.ToVector(new(
-            Sum(EquipmentStatSemantic.Gathering),
-            Sum(EquipmentStatSemantic.Perception),
-            Sum(EquipmentStatSemantic.GatheringPoints)));
     }
 
     private static HashSet<EquipmentLoadoutPosition> Positions(EquipmentItemDefinition definition) => definition.Slot switch
@@ -362,7 +352,7 @@ public sealed class MinerBotanistReadOnlyAdvisor
 
     private static MinerBotanistReadOnlyAdvice Abstain(string diagnostic) =>
         new(MinerBotanistAdvisorStatus.Abstained, AdvisoryRule, null, null,
-            new Dictionary<string, MinerBotanistAuthorityAssessment>(),
+            new Dictionary<string, AdvisorAuthorityAssessment>(),
             new Dictionary<EquipmentOfferAllocationKey, EquipmentExactSolverOffer>(),
             diagnostic);
 }

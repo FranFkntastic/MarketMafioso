@@ -35,10 +35,11 @@ public sealed class MinerBotanistAdvisorCatalog
         vendors = new(dataManager);
     }
 
-    public MinerBotanistAdvisorCatalogResult Build(uint classJobId, uint characterLevel = MaximumEquipLevel)
+    public MinerBotanistAdvisorCatalogResult Build(uint classJobId, uint characterLevel, IAdvisorStatFamily family)
     {
-        if (classJobId is not (MinerBotanistUtilityProfile.MinerClassJobId or MinerBotanistUtilityProfile.BotanistClassJobId))
-            throw new ArgumentOutOfRangeException(nameof(classJobId), "The first advisor catalog supports MIN and BTN only.");
+        ArgumentNullException.ThrowIfNull(family);
+        if (!family.SupportedClassJobIds.Contains(classJobId))
+            throw new ArgumentOutOfRangeException(nameof(classJobId), $"The advisor catalog supports the {family.CoverageJobLabel} player scope only.");
         if (characterLevel is < 1 or > MaximumEquipLevel)
             throw new ArgumentOutOfRangeException(nameof(characterLevel), "The player advisor supports levels 1 through 100.");
         if (byTarget.TryGetValue((classJobId, characterLevel), out var cached))
@@ -76,7 +77,7 @@ public sealed class MinerBotanistAdvisorCatalog
                 wrongJob++;
                 continue;
             }
-            if (!HasRelevantCompleteProfile(definition))
+            if (!HasRelevantCompleteProfile(definition, family))
             {
                 incompleteProfile++;
                 continue;
@@ -120,7 +121,7 @@ public sealed class MinerBotanistAdvisorCatalog
             $"unresolved {unresolved:N0}; wrong job {wrongJob:N0}; incomplete relevant stats {incompleteProfile:N0}; unmodeled effect/restriction {unmodeled:N0}. " +
             $"Accepted samples [{string.Join("; ", acceptedSamples)}]. Rejected samples [{string.Join("; ", unmodeledSamples)}].";
         var result = new MinerBotanistAdvisorCatalogResult(
-            $"Equipped UI evidence plus level {minimumEquipLevel}-{characterLevel} MIN/BTN market and gil-vendor equipment; armoury inventory is not yet observed.",
+            $"Equipped UI evidence plus level {minimumEquipLevel}-{characterLevel} {family.CoverageJobLabel} market and gil-vendor equipment; armoury inventory is not yet observed.",
             marketItemIds.Distinct().Order().ToArray(),
             vendorOffers,
             found,
@@ -135,11 +136,10 @@ public sealed class MinerBotanistAdvisorCatalog
         _ => Math.Max(1u, characterLevel - 10),
     };
 
-    internal static bool HasRelevantCompleteProfile(EquipmentItemDefinition definition) =>
-        Relevant(definition.StatProfile) || Relevant(definition.HighQualityStatProfile);
+    internal static bool HasRelevantCompleteProfile(EquipmentItemDefinition definition, IAdvisorStatFamily family) =>
+        Relevant(definition.StatProfile, family) || Relevant(definition.HighQualityStatProfile, family);
 
-    private static bool Relevant(EquipmentStatProfile? profile) =>
-        profile is { IsComplete: true } && profile.Parameters.Any(value => value.Value > 0 && value.Semantic is
-            EquipmentStatSemantic.Gathering or EquipmentStatSemantic.Perception or EquipmentStatSemantic.GatheringPoints);
+    private static bool Relevant(EquipmentStatProfile? profile, IAdvisorStatFamily family) =>
+        profile is { IsComplete: true } && profile.Parameters.Any(value => value.Value > 0 && family.IsRelevantSemantic(value.Semantic));
 
 }

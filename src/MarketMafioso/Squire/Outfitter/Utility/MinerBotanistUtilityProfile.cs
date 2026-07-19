@@ -23,7 +23,7 @@ public sealed record MinerBotanistUtilityStats(
     int Perception,
     int GatheringPoints);
 
-public sealed record MinerBotanistAuthorityAssessment(
+public sealed record AdvisorAuthorityAssessment(
     bool AdvisorMayConsider,
     UpgradeAssessment Assessment,
     IReadOnlyList<string> GainedCapabilityIds,
@@ -159,7 +159,7 @@ public sealed class MinerBotanistUtilityProfile : IEquipmentExactSolverUtilityMo
 
     public EquipmentUtilityEvaluation Evaluate(MinerBotanistUtilityStats stats) => model.Evaluate(ToVector(stats));
 
-    public MinerBotanistAuthorityAssessment AssessAuthority(
+    public AdvisorAuthorityAssessment AssessAuthority(
         EquipmentUtilityEvaluation candidate,
         ulong additionalCostGil,
         bool evidenceComplete = true,
@@ -172,7 +172,7 @@ public sealed class MinerBotanistUtilityProfile : IEquipmentExactSolverUtilityMo
             hasUnmodeledRelevantEffect,
             calibrationApproved: CalibrationState == MinerBotanistCalibrationState.Supported);
 
-    internal MinerBotanistAuthorityAssessment AssessAuthorityForCalibration(
+    internal AdvisorAuthorityAssessment AssessAuthorityForCalibration(
         EquipmentUtilityEvaluation candidate,
         ulong additionalCostGil,
         bool evidenceComplete = true,
@@ -185,7 +185,7 @@ public sealed class MinerBotanistUtilityProfile : IEquipmentExactSolverUtilityMo
             hasUnmodeledRelevantEffect,
             calibrationApproved: true);
 
-    private MinerBotanistAuthorityAssessment AssessAuthorityCore(
+    private AdvisorAuthorityAssessment AssessAuthorityCore(
         EquipmentUtilityEvaluation candidate,
         ulong additionalCostGil,
         bool evidenceComplete,

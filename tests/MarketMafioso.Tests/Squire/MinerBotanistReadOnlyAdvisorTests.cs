@@ -20,7 +20,7 @@ public sealed class MinerBotanistReadOnlyAdvisorTests
             fixture.Resolution,
             fixture.Evidence,
             itemId => itemId == fixture.Candidate.ItemId ? [fixture.Candidate] : [],
-            MinerBotanistUtilityContextKind.LegendaryNodeGeneralYield);
+            GathererAdvisorStatFamily.Instance, MinerBotanistUtilityProfile.LegendaryContextId);
 
         Assert.True(advice.Status == MinerBotanistAdvisorStatus.Complete, advice.Diagnostic);
         Assert.NotNull(advice.Frontier);
@@ -41,7 +41,7 @@ public sealed class MinerBotanistReadOnlyAdvisorTests
             fixture.Resolution,
             fixture.Evidence with { Status = OutfitterMarketEvidenceGenerationStatus.Partial },
             _ => [fixture.Candidate],
-            MinerBotanistUtilityContextKind.LegendaryNodeGeneralYield);
+            GathererAdvisorStatFamily.Instance, MinerBotanistUtilityProfile.LegendaryContextId);
 
         Assert.Equal(MinerBotanistAdvisorStatus.Abstained, advice.Status);
         Assert.Null(advice.Frontier);
@@ -58,7 +58,7 @@ public sealed class MinerBotanistReadOnlyAdvisorTests
             fixture.Resolution,
             fixture.Evidence,
             _ => [special],
-            MinerBotanistUtilityContextKind.LegendaryNodeGeneralYield);
+            GathererAdvisorStatFamily.Instance, MinerBotanistUtilityProfile.LegendaryContextId);
 
         Assert.Equal(MinerBotanistAdvisorStatus.Abstained, advice.Status);
         Assert.Contains("unmodeled effect", advice.Diagnostic, StringComparison.Ordinal);
@@ -76,13 +76,13 @@ public sealed class MinerBotanistReadOnlyAdvisorTests
             fixture.Resolution,
             fixture.Evidence,
             _ => [modeled],
-            MinerBotanistUtilityContextKind.LegendaryNodeGeneralYield);
+            GathererAdvisorStatFamily.Instance, MinerBotanistUtilityProfile.LegendaryContextId);
         var rejected = new MinerBotanistReadOnlyAdvisor().Build(
             fixture.Baseline,
             fixture.Resolution,
             fixture.Evidence,
             _ => [unmodeled],
-            MinerBotanistUtilityContextKind.LegendaryNodeGeneralYield);
+            GathererAdvisorStatFamily.Instance, MinerBotanistUtilityProfile.LegendaryContextId);
 
         Assert.Equal(MinerBotanistAdvisorStatus.Complete, accepted.Status);
         Assert.NotNull(accepted.Nomination);
@@ -107,7 +107,7 @@ public sealed class MinerBotanistReadOnlyAdvisorTests
             fixture.Resolution,
             fixture.Evidence,
             itemId => itemId == fixture.Candidate.ItemId ? [fixture.Candidate] : [],
-            MinerBotanistUtilityContextKind.LegendaryNodeGeneralYield,
+            GathererAdvisorStatFamily.Instance, MinerBotanistUtilityProfile.LegendaryContextId,
             [vendor]);
 
         Assert.NotNull(advice.Nomination);
@@ -125,7 +125,7 @@ public sealed class MinerBotanistReadOnlyAdvisorTests
             fixture.Resolution,
             fixture.Evidence,
             itemId => itemId == fixture.Candidate.ItemId ? [fixture.Candidate] : [],
-            MinerBotanistUtilityContextKind.OrdinaryResourceBenchmark);
+            GathererAdvisorStatFamily.Instance, MinerBotanistUtilityProfile.OrdinaryResourceBenchmarkContextId);
 
         Assert.Equal(MinerBotanistAdvisorStatus.Complete, advice.Status);
         Assert.NotNull(advice.Nomination);
@@ -160,7 +160,7 @@ public sealed class MinerBotanistReadOnlyAdvisorTests
             fixture.Resolution,
             evidence,
             _ => [ring],
-            MinerBotanistUtilityContextKind.LegendaryNodeGeneralYield);
+            GathererAdvisorStatFamily.Instance, MinerBotanistUtilityProfile.LegendaryContextId);
 
         Assert.Equal(2, advice.OffersByAllocation.Values.Count(value => value.Offer.Definition.ItemId == ring.ItemId));
         Assert.DoesNotContain(advice.OffersByAllocation.Keys, value => value.ObservationId == "dominated");
@@ -176,7 +176,7 @@ public sealed class MinerBotanistReadOnlyAdvisorTests
             fixture.Resolution,
             fixture.Evidence,
             itemId => itemId == fixture.Candidate.ItemId ? [fixture.Candidate] : itemId == ownedDefinition.ItemId ? [ownedDefinition] : [],
-            MinerBotanistUtilityContextKind.LegendaryNodeGeneralYield,
+            GathererAdvisorStatFamily.Instance, MinerBotanistUtilityProfile.LegendaryContextId,
             vendorOffers: null,
             ownedItems: [new(ownedDefinition.ItemId, true, "Armoury")]);
 
@@ -200,7 +200,7 @@ public sealed class MinerBotanistReadOnlyAdvisorTests
             fixture.Resolution,
             fixture.Evidence,
             itemId => itemId == fixture.Candidate.ItemId ? [fixture.Candidate] : itemId == craftingOnly.ItemId ? [craftingOnly] : [],
-            MinerBotanistUtilityContextKind.LegendaryNodeGeneralYield,
+            GathererAdvisorStatFamily.Instance, MinerBotanistUtilityProfile.LegendaryContextId,
             vendorOffers: null,
             ownedItems: [new(craftingOnly.ItemId, true, "Armoury")]);
 
@@ -222,7 +222,7 @@ public sealed class MinerBotanistReadOnlyAdvisorTests
             fixture.Resolution,
             fixture.Evidence,
             itemId => itemId == fixture.Candidate.ItemId ? [fixture.Candidate] : itemId == wrongJob.ItemId ? [wrongJob] : [],
-            MinerBotanistUtilityContextKind.LegendaryNodeGeneralYield,
+            GathererAdvisorStatFamily.Instance, MinerBotanistUtilityProfile.LegendaryContextId,
             vendorOffers: null,
             ownedItems: [new(wrongJob.ItemId, true, "Armoury")]);
 
@@ -241,7 +241,7 @@ public sealed class MinerBotanistReadOnlyAdvisorTests
             fixture.Resolution,
             fixture.Evidence,
             itemId => itemId == fixture.Candidate.ItemId ? [fixture.Candidate] : itemId == ownedDefinition.ItemId ? [ownedDefinition] : [],
-            MinerBotanistUtilityContextKind.LegendaryNodeGeneralYield,
+            GathererAdvisorStatFamily.Instance, MinerBotanistUtilityProfile.LegendaryContextId,
             vendorOffers: null,
             ownedItems: [new(ownedDefinition.ItemId, false, "Armoury")]);
         var hqAdvice = new MinerBotanistReadOnlyAdvisor().Build(
@@ -249,7 +249,7 @@ public sealed class MinerBotanistReadOnlyAdvisorTests
             fixture.Resolution,
             fixture.Evidence,
             itemId => itemId == fixture.Candidate.ItemId ? [fixture.Candidate] : itemId == ownedDefinition.ItemId ? [ownedDefinition] : [],
-            MinerBotanistUtilityContextKind.LegendaryNodeGeneralYield,
+            GathererAdvisorStatFamily.Instance, MinerBotanistUtilityProfile.LegendaryContextId,
             vendorOffers: null,
             ownedItems: [new(ownedDefinition.ItemId, true, "Armoury")]);
 

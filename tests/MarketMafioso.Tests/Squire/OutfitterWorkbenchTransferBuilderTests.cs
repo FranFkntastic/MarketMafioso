@@ -282,7 +282,7 @@ public sealed class OutfitterWorkbenchTransferBuilderTests
             "fixture",
             frontier,
             nomination,
-            new Dictionary<string, MinerBotanistAuthorityAssessment>(),
+            new Dictionary<string, AdvisorAuthorityAssessment>(),
             offers,
             "complete");
         var evidence = new OutfitterMarketEvidenceBook(

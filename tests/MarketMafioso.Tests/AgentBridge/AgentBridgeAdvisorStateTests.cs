@@ -21,7 +21,7 @@ public sealed class AgentBridgeAdvisorStateTests
                 MinerBotanistReadOnlyAdvisor.AdvisoryRule,
                 null,
                 null,
-                new Dictionary<string, MinerBotanistAuthorityAssessment>(),
+                new Dictionary<string, AdvisorAuthorityAssessment>(),
                 new Dictionary<Franthropy.Dalamud.Equipment.EquipmentOfferAllocationKey, Franthropy.Dalamud.Equipment.EquipmentExactSolverOffer>(),
                 "No nomination."),
             false,

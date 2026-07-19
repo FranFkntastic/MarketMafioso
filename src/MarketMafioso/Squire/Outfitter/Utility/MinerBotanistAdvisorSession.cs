@@ -349,7 +349,7 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
             return;
         }
 
-        offers = catalog.Build(classJobId, checked((uint)baseline.Level!.Value));
+        offers = catalog.Build(classJobId, checked((uint)baseline.Level!.Value), GathererAdvisorStatFamily.Instance);
         if (offers.MarketItemIds.Count == 0)
         {
             Abstain($"The declared market scope contains no eligible items in this game-data version. {offers.Diagnostic}");
@@ -428,7 +428,8 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
                 capturedResolution,
                 solvingEvidence,
                 itemId => capturedOffers.Definitions.TryGetValue(itemId, out var definition) ? [definition] : [],
-                capturedContext,
+                GathererAdvisorStatFamily.Instance,
+                ContextIdFor(capturedContext),
                 capturedOffers.VendorOffers,
                 capturedOwnedItems,
                 token,
@@ -619,4 +620,11 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
         RenderedPlayerAuthorityFingerprint CapturedPlayer);
 
     private sealed record SolverProgressSnapshot(long Generation, EquipmentExactFrontierProgress Progress);
+
+    private static string ContextIdFor(MinerBotanistUtilityContextKind contextKind) => contextKind switch
+    {
+        MinerBotanistUtilityContextKind.LegendaryNodeGeneralYield => MinerBotanistUtilityProfile.LegendaryContextId,
+        MinerBotanistUtilityContextKind.CollectableEfficiency => MinerBotanistUtilityProfile.CollectableContextId,
+        _ => MinerBotanistUtilityProfile.OrdinaryResourceBenchmarkContextId,
+    };
 }

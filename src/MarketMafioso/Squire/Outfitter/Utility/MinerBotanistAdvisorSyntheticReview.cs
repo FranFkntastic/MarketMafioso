@@ -445,7 +445,7 @@ internal static class MinerBotanistAdvisorSyntheticReview
             MinerBotanistReadOnlyAdvisor.AdvisoryRule,
             frontier,
             solution,
-            new Dictionary<string, MinerBotanistAuthorityAssessment>(StringComparer.Ordinal)
+            new Dictionary<string, AdvisorAuthorityAssessment>(StringComparer.Ordinal)
             {
                 [solutionId] = profile.AssessAuthority(utility, listing.UnitPriceGil),
             },

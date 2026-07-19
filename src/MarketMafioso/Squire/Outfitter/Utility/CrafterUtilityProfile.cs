@@ -151,6 +151,80 @@ public sealed class CrafterUtilityProfile : IEquipmentExactSolverUtilityModel, I
 
     public EquipmentUtilityEvaluation Evaluate(CrafterUtilityStats stats) => model.Evaluate(ToVector(stats));
 
+    public AdvisorAuthorityAssessment AssessAuthority(
+        EquipmentUtilityEvaluation candidate,
+        ulong additionalCostGil,
+        bool evidenceComplete = true,
+        bool patchMatches = true,
+        bool hasUnmodeledRelevantEffect = false) => AssessAuthorityCore(
+            candidate,
+            additionalCostGil,
+            evidenceComplete,
+            patchMatches,
+            hasUnmodeledRelevantEffect,
+            calibrationApproved: CalibrationState == CrafterCalibrationState.Supported);
+
+    internal AdvisorAuthorityAssessment AssessAuthorityForCalibration(
+        EquipmentUtilityEvaluation candidate,
+        ulong additionalCostGil) => AssessAuthorityCore(
+            candidate,
+            additionalCostGil,
+            evidenceComplete: true,
+            patchMatches: true,
+            hasUnmodeledRelevantEffect: false,
+            calibrationApproved: true);
+
+    private AdvisorAuthorityAssessment AssessAuthorityCore(
+        EquipmentUtilityEvaluation candidate,
+        ulong additionalCostGil,
+        bool evidenceComplete,
+        bool patchMatches,
+        bool hasUnmodeledRelevantEffect,
+        bool calibrationApproved)
+    {
+        ArgumentNullException.ThrowIfNull(candidate);
+        var reasons = new List<string>();
+        if (candidate.Profile != Profile.Key ||
+            !string.Equals(candidate.Context.ContextId, model.Definition.Context.ContextId, StringComparison.Ordinal))
+            reasons.Add("The evaluation does not belong to this profile and context.");
+        if (!evidenceComplete)
+            reasons.Add("The decision-critical UI evidence is incomplete.");
+        if (!patchMatches)
+            reasons.Add("The utility profile patch envelope does not match the current game definitions.");
+        if (hasUnmodeledRelevantEffect)
+            reasons.Add("A relevant item or tool effect is not modeled by this profile.");
+        if (!calibrationApproved)
+            reasons.Add("The profile is experimental; its independent numeric-threshold holdout has not passed.");
+        if (candidate.Assessment == UpgradeAssessment.Unsupported)
+            reasons.Add("This target or context is unsupported.");
+        if (candidate.Assessment == UpgradeAssessment.ContextDependent)
+            reasons.Add("The candidate gains one supported stat while losing another.");
+        if (candidate.Assessment is UpgradeAssessment.Equivalent or UpgradeAssessment.ClearRegression)
+            reasons.Add("The candidate is not a gameplay improvement over the observed baseline.");
+
+        var baselineThresholds = baselineEvaluation.Thresholds.ToDictionary(value => value.ThresholdId, StringComparer.Ordinal);
+        var gainedCapabilities = candidate.Thresholds
+            .Where(value => value.Satisfied &&
+                baselineThresholds.TryGetValue(value.ThresholdId, out var baselineThreshold) &&
+                !baselineThreshold.Satisfied)
+            .Select(value => value.ThresholdId)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        if (reasons.Count == 0 &&
+            candidate.Assessment == UpgradeAssessment.ClearImprovement &&
+            additionalCostGil > 0 &&
+            gainedCapabilities.Length == 0)
+        {
+            reasons.Add("The score rises monotonically, but no supported capability step justifies an economic nomination.");
+        }
+
+        return new(
+            reasons.Count == 0 && candidate.Assessment == UpgradeAssessment.ClearImprovement,
+            candidate.Assessment,
+            gainedCapabilities,
+            reasons);
+    }
+
     public static EquipmentSolverUtilityVector ToVector(CrafterUtilityStats stats)
     {
         ArgumentNullException.ThrowIfNull(stats);
