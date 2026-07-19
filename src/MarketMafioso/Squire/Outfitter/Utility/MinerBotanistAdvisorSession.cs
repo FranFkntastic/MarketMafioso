@@ -375,7 +375,7 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
         {
             Stage = MinerBotanistAdvisorSessionStage.DiscoveringMarket,
             Message = $"Discovering exact NQ/HQ listings for {offers.MarketItemIds.Count:N0} scoped items.",
-            CoverageLabel = offers.CoverageLabel,
+            CoverageLabel = coverageLabel,
             Completed = 0,
             Total = offers.MarketItemIds.Count,
             UpdatedAtUtc = DateTimeOffset.UtcNow,
