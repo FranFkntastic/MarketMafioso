@@ -25,6 +25,18 @@ public sealed record RenderedGatheringStatsObservation(
     IReadOnlyList<RenderedStatEvidence> Evidence,
     string Diagnostic);
 
+public sealed record RenderedCraftingStatsObservation(
+    Guid GenerationId,
+    DateTimeOffset CapturedAtUtc,
+    RenderedCharacterObservationStatus Status,
+    string? JobName,
+    int? Level,
+    int? Craftsmanship,
+    int? Control,
+    int? CraftingPoints,
+    IReadOnlyList<RenderedStatEvidence> Evidence,
+    string Diagnostic);
+
 public sealed record RenderedStatEvidence(
     string Semantic,
     string LabelNodePath,
@@ -38,6 +50,59 @@ public static class RenderedCharacterStatsParser
         "Miner",
         "Botanist",
     };
+
+    private static readonly HashSet<string> CrafterJobs = new(StringComparer.Ordinal)
+    {
+        "Carpenter",
+        "Blacksmith",
+        "Armorer",
+        "Goldsmith",
+        "Leatherworker",
+        "Weaver",
+        "Alchemist",
+        "Culinarian",
+    };
+
+    public static RenderedCraftingStatsObservation ParseCrafting(AgentBridgeRenderedUiSnapshot snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        var character = snapshot.Addons.FirstOrDefault(addon => addon.Name == "Character" && addon.Visible);
+        if (character == null)
+            return CraftingUnavailable(snapshot, "The rendered Character addon is not visible.");
+
+        var jobName = character.TextNodes.Select(node => node.Text).FirstOrDefault(CrafterJobs.Contains);
+        if (jobName == null)
+            return CraftingUnavailable(snapshot, "The rendered active job is not a crafting job.");
+
+        var levelText = character.TextNodes.Select(node => node.Text)
+            .FirstOrDefault(text => text.StartsWith("Level ", StringComparison.Ordinal));
+        var level = levelText != null && int.TryParse(levelText.AsSpan("Level ".Length), NumberStyles.None, CultureInfo.InvariantCulture, out var parsedLevel)
+            ? parsedLevel
+            : (int?)null;
+
+        var statusAddon = snapshot.Addons.FirstOrDefault(addon => addon.Name == "CharacterStatus" && addon.Visible);
+        if (statusAddon == null)
+            return CraftingPartial(snapshot, jobName, level, null, null, null, [], "The hosted CharacterStatus addon is not visible.");
+
+        var evidence = new List<RenderedStatEvidence>(3);
+        var craftsmanship = FindStat(statusAddon.TextNodes, "Craftsmanship", evidence);
+        var control = FindStat(statusAddon.TextNodes, "Control", evidence);
+        var cp = FindStat(statusAddon.TextNodes, "CP", evidence);
+        if (level is null || craftsmanship is null || control is null || cp is null)
+            return CraftingPartial(snapshot, jobName, level, craftsmanship, control, cp, evidence, "One or more rendered crafting fields could not be paired with a numeric value.");
+
+        return new(
+            Guid.NewGuid(),
+            snapshot.CapturedAtUtc,
+            RenderedCharacterObservationStatus.Complete,
+            jobName,
+            level,
+            craftsmanship,
+            control,
+            cp,
+            evidence,
+            "Active crafting stats were observed from the rendered Character and CharacterStatus addons.");
+    }
 
     public static RenderedGatheringStatsObservation Parse(AgentBridgeRenderedUiSnapshot snapshot)
     {
@@ -113,6 +178,20 @@ public static class RenderedCharacterStatsParser
     private static RenderedGatheringStatsObservation Unavailable(AgentBridgeRenderedUiSnapshot snapshot, string diagnostic) =>
         new(Guid.NewGuid(), snapshot.CapturedAtUtc, RenderedCharacterObservationStatus.Unavailable, null, null, null, null, null, [], diagnostic);
 
+    private static RenderedCraftingStatsObservation CraftingUnavailable(AgentBridgeRenderedUiSnapshot snapshot, string diagnostic) =>
+        new(Guid.NewGuid(), snapshot.CapturedAtUtc, RenderedCharacterObservationStatus.Unavailable, null, null, null, null, null, [], diagnostic);
+
+    private static RenderedCraftingStatsObservation CraftingPartial(
+        AgentBridgeRenderedUiSnapshot snapshot,
+        string jobName,
+        int? level,
+        int? craftsmanship,
+        int? control,
+        int? cp,
+        IReadOnlyList<RenderedStatEvidence> evidence,
+        string diagnostic) =>
+        new(Guid.NewGuid(), snapshot.CapturedAtUtc, RenderedCharacterObservationStatus.Partial, jobName, level, craftsmanship, control, cp, evidence, diagnostic);
+
     private static RenderedGatheringStatsObservation Partial(
         AgentBridgeRenderedUiSnapshot snapshot,
         string jobName,
@@ -123,6 +202,75 @@ public static class RenderedCharacterStatsParser
         IReadOnlyList<RenderedStatEvidence> evidence,
         string diagnostic) =>
         new(Guid.NewGuid(), snapshot.CapturedAtUtc, RenderedCharacterObservationStatus.Partial, jobName, level, gathering, perception, gp, evidence, diagnostic);
+}
+
+public sealed class RenderedCraftingStatsStabilizer
+{
+    private readonly TimeSpan stabilityWindow;
+    private ObservationSignature? candidate;
+    private DateTimeOffset candidateFirstSeenUtc;
+
+    public RenderedCraftingStatsStabilizer(TimeSpan stabilityWindow)
+    {
+        if (stabilityWindow <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(stabilityWindow));
+        this.stabilityWindow = stabilityWindow;
+    }
+
+    public void Reset()
+    {
+        candidate = null;
+        candidateFirstSeenUtc = default;
+    }
+
+    public RenderedCraftingStatsObservation Observe(RenderedCraftingStatsObservation observation)
+    {
+        ArgumentNullException.ThrowIfNull(observation);
+        if (observation.Status != RenderedCharacterObservationStatus.Complete)
+        {
+            Reset();
+            return observation;
+        }
+
+        var signature = ObservationSignature.From(observation);
+        if (candidate != signature)
+        {
+            candidate = signature;
+            candidateFirstSeenUtc = observation.CapturedAtUtc;
+            return AwaitingStability(observation);
+        }
+
+        var stableFor = observation.CapturedAtUtc - candidateFirstSeenUtc;
+        if (stableFor < stabilityWindow)
+            return AwaitingStability(observation);
+
+        return observation with
+        {
+            Diagnostic = $"{observation.Diagnostic} The rendered values remained unchanged for at least {stabilityWindow.TotalSeconds:0.#} seconds.",
+        };
+    }
+
+    private RenderedCraftingStatsObservation AwaitingStability(RenderedCraftingStatsObservation observation) =>
+        observation with
+        {
+            Status = RenderedCharacterObservationStatus.Partial,
+            Diagnostic = $"Rendered crafting fields are present but have not remained unchanged for {stabilityWindow.TotalSeconds:0.#} seconds; waiting for one coherent UI generation.",
+        };
+
+    private sealed record ObservationSignature(
+        string JobName,
+        int Level,
+        int Craftsmanship,
+        int Control,
+        int CraftingPoints)
+    {
+        public static ObservationSignature From(RenderedCraftingStatsObservation observation) => new(
+            observation.JobName!,
+            observation.Level!.Value,
+            observation.Craftsmanship!.Value,
+            observation.Control!.Value,
+            observation.CraftingPoints!.Value);
+    }
 }
 
 public sealed class RenderedGatheringStatsStabilizer

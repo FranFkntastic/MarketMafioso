@@ -72,6 +72,7 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
     private readonly IGameGui gameGui;
     private readonly Franthropy.Dalamud.AgentBridge.DalamudRenderedUiTextActionDispatcher renderedTextActions;
     private readonly RenderedGatheringStatsStabilizer gatheringStatsStabilizer = new(TimeSpan.FromSeconds(3));
+    private readonly RenderedCraftingStatsStabilizer craftingStatsStabilizer = new(TimeSpan.FromSeconds(3));
     private readonly RenderedCharacterEquipmentScanCoordinator equipmentScan = new();
     private string? lastGearsetSelectionDiagnostic;
 
@@ -290,6 +291,9 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
 
     public RenderedGatheringStatsObservation CaptureGatheringStats() =>
         gatheringStatsStabilizer.Observe(RenderedCharacterStatsParser.Parse(Capture()));
+
+    public RenderedCraftingStatsObservation CaptureCraftingStats() =>
+        craftingStatsStabilizer.Observe(RenderedCharacterStatsParser.ParseCrafting(Capture()));
 
     public RenderedEquipmentScanProgress BeginEquipmentScan()
     {
