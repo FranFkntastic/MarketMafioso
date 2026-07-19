@@ -122,7 +122,9 @@ internal sealed class MinerBotanistAdvisorPanel
                     ? $"{state.Completed:N0} / {state.Total:N0}"
                     : state.Stage.ToString());
             }
-            ImGui.TextColored(StatusColor(state.Stage), state.Message);
+            ImGui.PushStyleColor(ImGuiCol.Text, StatusColor(state.Stage));
+            ImGui.TextWrapped(state.Message);
+            ImGui.PopStyleColor();
         }
         ImGui.Separator();
 
