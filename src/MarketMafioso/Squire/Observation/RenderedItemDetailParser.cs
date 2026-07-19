@@ -55,7 +55,8 @@ public static partial class RenderedItemDetailParser
         var quality = renderedName.Contains(HighQualityGlyph)
             ? RenderedItemQuality.High
             : RenderedItemQuality.Normal;
-        var name = renderedName.Replace(HighQualityGlyph.ToString(), string.Empty, StringComparison.Ordinal).Trim();
+        // Long names wrap inside the tooltip; the canonical item name is single-spaced.
+        var name = NormalizeWhitespace(renderedName.Replace(HighQualityGlyph.ToString(), string.Empty, StringComparison.Ordinal));
 
         var itemLevel = FindInt(texts.Values, ItemLevelPattern());
         var equipLevel = texts.TryGetValue("ItemDetail/66/2", out var requirements)
@@ -97,6 +98,9 @@ public static partial class RenderedItemDetailParser
             materiaStats,
             "Rendered Item Detail observation is complete.");
     }
+
+    private static string NormalizeWhitespace(string value) =>
+        string.Join(' ', value.Split([' ', '\r', '\n', '\t'], StringSplitOptions.RemoveEmptyEntries));
 
     private static int? FindInt(IEnumerable<string> values, Regex pattern)
     {

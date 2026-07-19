@@ -506,6 +506,152 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
         Franthropy.Dalamud.Automation.Ui.RenderedItemDetailTooltipRequest.HideTooltip(addon->Id);
     }
 
+    private readonly RenderedArmouryDifferentialCoordinator armouryDifferential = new();
+    private Func<string, RenderedItemDetailObservation, uint?>? armouryNameResolver;
+    private DateTimeOffset armouryTooltipDispatchedAt;
+    private string? armouryCandidateSignature;
+    private DateTimeOffset armouryCandidateStartedAt;
+    private string armouryOccupancyCheckedContainer = string.Empty;
+    private int armouryDispatchAttempts;
+
+    public RenderedArmouryDifferentialProgress BeginArmouryDifferential(
+        IReadOnlyList<AgentBridgeInventoryStructItem> structBaseline,
+        Func<string, RenderedItemDetailObservation, uint?> nameResolver)
+    {
+        armouryNameResolver = nameResolver ?? throw new ArgumentNullException(nameof(nameResolver));
+        armouryCandidateSignature = null;
+        armouryOccupancyCheckedContainer = string.Empty;
+        armouryDispatchAttempts = 0;
+        armouryDifferential.Begin(structBaseline);
+        TryOpenArmouryBoard();
+        return armouryDifferential.Snapshot();
+    }
+
+    public RenderedArmouryDifferentialProgress CancelArmouryDifferential() => armouryDifferential.Cancel();
+
+    public unsafe RenderedArmouryDifferentialProgress AdvanceArmouryDifferential()
+    {
+        var current = armouryDifferential.Current;
+        if (current is null || armouryNameResolver is null)
+            return armouryDifferential.Snapshot();
+        var addon = gameGui.GetAddonByName<AtkUnitBase>("ArmouryBoard", 1);
+        if (addon == null || addon->RootNode == null || !addon->RootNode->IsVisible())
+            return FailArmouryDifferential("The rendered Armoury Board closed during the differential proof.");
+        var board = (AddonArmouryBoard*)addon;
+        if (!Enum.TryParse<FFXIVClientStructs.FFXIV.Client.Game.InventoryType>(current.Value.Container, out var inventoryType))
+            return FailArmouryDifferential($"Unsupported armoury container '{current.Value.Container}'.");
+        if (!TrySelectArmouryTab(board, inventoryType, out var tabDiagnostic))
+            return armouryDifferential.Snapshot() with { Diagnostic = tabDiagnostic };
+
+        if (!string.Equals(armouryOccupancyCheckedContainer, current.Value.Container, StringComparison.Ordinal))
+        {
+            var iconCount = CountRenderedIconCells(addon);
+            armouryDifferential.RecordOccupancyCount(current.Value.Container, armouryDifferential.StructCountFor(current.Value.Container), iconCount);
+            armouryOccupancyCheckedContainer = current.Value.Container;
+        }
+
+        if (armouryCandidateSignature is null)
+        {
+            var slotNode = ResolveArmourySlotNode(addon, (short)current.Value.SlotIndex);
+            if (slotNode == null)
+                return FailArmouryDifferential($"Rendered armoury slot {current.Value.SlotIndex} on {current.Value.Container} does not resolve.");
+            // No per-slot Hide: ShowTooltip replaces the previous tooltip, and the
+            // equipment scan proves replacement is reliable; Hide+Show races drop requests.
+            if (!Franthropy.Dalamud.Automation.Ui.RenderedItemDetailTooltipRequest.TryShowInventoryItemTooltip(
+                    addon->Id, slotNode, ArmouryTooltipTypeOrId(inventoryType), (short)current.Value.SlotIndex))
+                return FailArmouryDifferential($"The game rejected the armoury tooltip request for {current.Value.Container}:{current.Value.SlotIndex}.");
+            armouryTooltipDispatchedAt = DateTimeOffset.UtcNow;
+            armouryCandidateSignature = string.Empty;
+            armouryCandidateStartedAt = DateTimeOffset.UtcNow;
+            return armouryDifferential.Snapshot();
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        if (now - armouryTooltipDispatchedAt < TimeSpan.FromMilliseconds(300))
+            return armouryDifferential.Snapshot();
+        if (now - armouryTooltipDispatchedAt > TimeSpan.FromSeconds(3))
+        {
+            // A silent dispatch drop must not be misread as a data disagreement: re-dispatch
+            // up to three times before declaring that nothing rendered.
+            if (armouryDispatchAttempts < 3)
+            {
+                armouryDispatchAttempts++;
+                armouryCandidateSignature = null;
+                return armouryDifferential.Snapshot();
+            }
+            var timedOut = armouryDifferential.RecordRenderedObservation(current.Value.Container, current.Value.SlotIndex, null, null, null);
+            armouryCandidateSignature = null;
+            armouryDispatchAttempts = 0;
+            return timedOut;
+        }
+        var observation = RenderedItemDetailParser.Parse(Capture());
+        string signature;
+        if (observation.Status == RenderedItemDetailStatus.Complete)
+        {
+            var resolvedId = armouryNameResolver(observation.Name!, observation);
+            signature = resolvedId is null
+                ? $"unresolved:{observation.Name}"
+                : $"resolved:{resolvedId}:{observation.Quality}";
+        }
+        else
+        {
+            return armouryDifferential.Snapshot();
+        }
+        if (signature != armouryCandidateSignature)
+        {
+            armouryCandidateSignature = signature;
+            armouryCandidateStartedAt = now;
+            return armouryDifferential.Snapshot();
+        }
+        if (now - armouryCandidateStartedAt < TimeSpan.FromMilliseconds(300))
+            return armouryDifferential.Snapshot();
+
+        var renderedId = observation.Status == RenderedItemDetailStatus.Complete
+            ? armouryNameResolver(observation.Name!, observation)
+            : null;
+        var result = armouryDifferential.RecordRenderedObservation(
+            current.Value.Container,
+            current.Value.SlotIndex,
+            renderedId,
+            observation.Status == RenderedItemDetailStatus.Complete ? observation.Quality == RenderedItemQuality.High : null,
+            observation.Status == RenderedItemDetailStatus.Complete ? observation.Name : null);
+        armouryCandidateSignature = null;
+        armouryDispatchAttempts = 0;
+        return result;
+    }
+
+    private RenderedArmouryDifferentialProgress FailArmouryDifferential(string message)
+    {
+        armouryCandidateSignature = null;
+        return armouryDifferential.Fail(message);
+    }
+
+    private static unsafe int CountRenderedIconCells(AtkUnitBase* addon)
+    {
+        var count = 0;
+        var manager = &addon->UldManager;
+        CountIconCells(manager, ref count);
+        return count;
+    }
+
+    private static unsafe void CountIconCells(AtkUldManager* manager, ref int count)
+    {
+        if (manager == null || manager->NodeList == null)
+            return;
+        for (var index = 0u; index < manager->NodeListCount; index++)
+        {
+            var node = manager->NodeList[index];
+            if (node == null || !IsEffectivelyVisible(node))
+                continue;
+            var dragDrop = node->GetAsAtkComponentDragDrop();
+            if (dragDrop != null && dragDrop->GetIconId() != 0)
+                count++;
+            var componentNode = node->GetAsAtkComponentNode();
+            if (componentNode != null && componentNode->Component != null)
+                CountIconCells(&componentNode->Component->UldManager, ref count);
+        }
+    }
+
     /// <summary>
     /// Maps a rendered Character slot position to its EquippedItems container index.
     /// The container retains the legacy belt slot at index 5, so later slots shift by one.

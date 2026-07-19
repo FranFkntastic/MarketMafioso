@@ -43,6 +43,7 @@ public class MainWindow : Window, IDisposable
     private readonly RetainerCacheFileStore? retainerCacheStore;
     private readonly IPlayerState playerState;
     private readonly IPluginLog log;
+    private readonly IDataManager dataManager;
     private readonly HttpClient acquisitionHttpClient = new();
     private readonly HttpClient craftQuoteHttpClient = new();
     private readonly MarketAcquisitionRequestWorkspace acquisitionWorkspace;
@@ -52,6 +53,7 @@ public class MainWindow : Window, IDisposable
     private readonly string marketAcquisitionRouteDiagnosticsDirectory;
     private readonly SquireTabPanel squireTab;
     private readonly DalamudCharacterEquipmentSnapshotSource squireSnapshotSource;
+    private readonly LuminaRenderedEquipmentDefinitionLookup renderedDefinitionLookup;
     private readonly StatusTabPanel statusTab;
     private readonly SettingsTabPanel settingsTab;
     private readonly MarketAcquisitionPlanPanel marketAcquisitionPlanPanel = new();
@@ -199,6 +201,8 @@ public class MainWindow : Window, IDisposable
             config.Save();
 
         squireSnapshotSource = new DalamudCharacterEquipmentSnapshotSource(playerState, dataManager, log);
+        this.dataManager = dataManager;
+        renderedDefinitionLookup = new LuminaRenderedEquipmentDefinitionLookup(dataManager);
         var squireCapabilities = new DalamudSquireDispositionCapabilitySource();
         var squireRuleStore = new SquireCleanupRuleStore(config);
         var squireVnavmesh = new VNavmeshIpc(new DalamudVNavmeshIpcAdapter(Plugin.PluginInterface, log));
@@ -1382,6 +1386,27 @@ public class MainWindow : Window, IDisposable
             items,
             diagnostics,
             "Diagnostic only. Direct container reads are not ownership authority until the differential proof against rendered observation passes.");
+    }
+
+    public uint? ResolveRenderedItemName(string name, RenderedItemDetailObservation observation)
+    {
+        var matches = renderedDefinitionLookup.FindByExactName(name);
+        if (matches.Count == 1)
+            return matches[0].ItemId;
+        if (matches.Count == 0)
+        {
+            // Soul crystals and other non-equipment items have no equipment definition;
+            // the differential still needs their raw sheet identity.
+            var sheet = dataManager.GetExcelSheet<Lumina.Excel.Sheets.Item>();
+            var raw = sheet?.Where(value => value.RowId > 0 && string.Equals(value.Name.ToString(), name, StringComparison.Ordinal)).ToArray() ?? [];
+            return raw.Length == 1 ? raw[0].RowId : null;
+        }
+        var narrowed = matches
+            .Where(value =>
+                (observation.ItemLevel is not { } itemLevel || value.ItemLevel == itemLevel) &&
+                (observation.EquipLevel is not { } equipLevel || value.EquipLevel == equipLevel))
+            .ToArray();
+        return narrowed.Length == 1 ? narrowed[0].ItemId : null;
     }
 
     public void InvalidateAdvisorForPlayerStateChange() => squireTab.InvalidateAdvisorForPlayerStateChange();

@@ -403,6 +403,18 @@ public sealed class AgentBridgeHost : IDisposable
                 Squire.Observation.RenderedEquipmentScanProgress? cancelledEquipmentScan = null;
                 await dispatchOnFramework(() => cancelledEquipmentScan = provider.CancelCharacterEquipmentScanUi()).ConfigureAwait(false);
                 return AgentBridgeResponse.Ok(cancelledEquipmentScan!.Diagnostic, cancelledEquipmentScan);
+            case "begin-armoury-differential-ui":
+                Squire.Observation.RenderedArmouryDifferentialProgress? begunArmouryDifferential = null;
+                await dispatchOnFramework(() => begunArmouryDifferential = provider.BeginArmouryDifferentialUi()).ConfigureAwait(false);
+                return AgentBridgeResponse.Ok(begunArmouryDifferential!.Diagnostic, begunArmouryDifferential);
+            case "advance-armoury-differential-ui":
+                Squire.Observation.RenderedArmouryDifferentialProgress? advancedArmouryDifferential = null;
+                await dispatchOnFramework(() => advancedArmouryDifferential = provider.AdvanceArmouryDifferentialUi()).ConfigureAwait(false);
+                return AgentBridgeResponse.Ok(advancedArmouryDifferential!.Diagnostic, advancedArmouryDifferential);
+            case "cancel-armoury-differential-ui":
+                Squire.Observation.RenderedArmouryDifferentialProgress? cancelledArmouryDifferential = null;
+                await dispatchOnFramework(() => cancelledArmouryDifferential = provider.CancelArmouryDifferentialUi()).ConfigureAwait(false);
+                return AgentBridgeResponse.Ok(cancelledArmouryDifferential!.Diagnostic, cancelledArmouryDifferential);
             case "stop-route":
                 await dispatchOnFramework(provider.StopRoute).ConfigureAwait(false);
                 AppendAudit("stop-route", "accepted");

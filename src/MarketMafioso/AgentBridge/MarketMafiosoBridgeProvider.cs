@@ -42,6 +42,9 @@ public interface IMarketMafiosoBridgeProvider
     bool TryOpenArmouryBoardUi();
     bool TryCloseArmouryBoardUi();
     RenderedUiTextActionResult TryShowArmourySlotTooltipUi(string target);
+    RenderedArmouryDifferentialProgress BeginArmouryDifferentialUi();
+    RenderedArmouryDifferentialProgress AdvanceArmouryDifferentialUi();
+    RenderedArmouryDifferentialProgress CancelArmouryDifferentialUi();
     RenderedGatheringStatsObservation CaptureGatheringStatsUi();
     RenderedCharacterEquipmentLayout CaptureCharacterEquipmentLayoutUi();
     RenderedItemDetailObservation CaptureItemDetailUi();
@@ -116,6 +119,9 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
     private readonly Func<bool> tryOpenArmouryBoardUi;
     private readonly Func<bool> tryCloseArmouryBoardUi;
     private readonly Func<string, RenderedUiTextActionResult> tryShowArmourySlotTooltipUi;
+    private readonly Func<RenderedArmouryDifferentialProgress> beginArmouryDifferentialUi;
+    private readonly Func<RenderedArmouryDifferentialProgress> advanceArmouryDifferentialUi;
+    private readonly Func<RenderedArmouryDifferentialProgress> cancelArmouryDifferentialUi;
     private readonly Func<RenderedGatheringStatsObservation> captureGatheringStatsUi;
     private readonly Func<bool> tryOpenSyntheticAdvisorReview;
     private readonly AgentBridgeUiReviewRegistry reviewRegistry;
@@ -156,7 +162,10 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
         Func<AgentBridgeInventoryStructSnapshot>? captureInventoryStructSnapshotUi = null,
         Func<bool>? tryOpenArmouryBoardUi = null,
         Func<bool>? tryCloseArmouryBoardUi = null,
-        Func<string, RenderedUiTextActionResult>? tryShowArmourySlotTooltipUi = null)
+        Func<string, RenderedUiTextActionResult>? tryShowArmourySlotTooltipUi = null,
+        Func<RenderedArmouryDifferentialProgress>? beginArmouryDifferentialUi = null,
+        Func<RenderedArmouryDifferentialProgress>? advanceArmouryDifferentialUi = null,
+        Func<RenderedArmouryDifferentialProgress>? cancelArmouryDifferentialUi = null)
     {
         this.createSnapshot = createSnapshot ?? throw new ArgumentNullException(nameof(createSnapshot));
         this.openMainWindow = openMainWindow ?? throw new ArgumentNullException(nameof(openMainWindow));
@@ -205,6 +214,9 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
         this.tryOpenArmouryBoardUi = tryOpenArmouryBoardUi ?? (() => false);
         this.tryCloseArmouryBoardUi = tryCloseArmouryBoardUi ?? (() => false);
         this.tryShowArmourySlotTooltipUi = tryShowArmourySlotTooltipUi ?? (_ => new(false, "Unavailable", "Rendered armoury automation is unavailable.", "ArmouryBoard", null));
+        this.beginArmouryDifferentialUi = beginArmouryDifferentialUi ?? (() => new(RenderedArmouryDifferentialStatus.Failed, 0, 0, string.Empty, 0, [], [], "The armoury differential proof is unavailable."));
+        this.advanceArmouryDifferentialUi = advanceArmouryDifferentialUi ?? this.beginArmouryDifferentialUi;
+        this.cancelArmouryDifferentialUi = cancelArmouryDifferentialUi ?? (() => new(RenderedArmouryDifferentialStatus.Cancelled, 0, 0, string.Empty, 0, [], [], "The armoury differential proof is unavailable."));
     }
 
     public AgentBridgeTruth CreateSnapshot() => createSnapshot();
@@ -242,6 +254,9 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
     public bool TryOpenArmouryBoardUi() => tryOpenArmouryBoardUi();
     public bool TryCloseArmouryBoardUi() => tryCloseArmouryBoardUi();
     public RenderedUiTextActionResult TryShowArmourySlotTooltipUi(string target) => tryShowArmourySlotTooltipUi(target);
+    public RenderedArmouryDifferentialProgress BeginArmouryDifferentialUi() => beginArmouryDifferentialUi();
+    public RenderedArmouryDifferentialProgress AdvanceArmouryDifferentialUi() => advanceArmouryDifferentialUi();
+    public RenderedArmouryDifferentialProgress CancelArmouryDifferentialUi() => cancelArmouryDifferentialUi();
     public RenderedGatheringStatsObservation CaptureGatheringStatsUi() => captureGatheringStatsUi();
     public RenderedCharacterEquipmentLayout CaptureCharacterEquipmentLayoutUi() =>
         RenderedCharacterEquipmentLayoutParser.Parse(captureCharacterUi());
