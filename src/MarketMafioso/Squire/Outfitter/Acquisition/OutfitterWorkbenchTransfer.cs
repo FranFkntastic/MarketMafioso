@@ -72,7 +72,7 @@ internal static class OutfitterWorkbenchTransferBuilder
         ArgumentNullException.ThrowIfNull(playerValidation);
 
         if (!playerValidation.IsCurrentFor(advice, selectedSolutionId, evidence))
-            throw new InvalidOperationException("Workbench transfer requires a current rendered player revalidation for this exact advice, solution, and evidence generation.");
+            throw new InvalidOperationException("Workbench transfer requires a current player baseline revalidation for this exact advice, solution, and evidence generation.");
 
         if (advice is not { Status: MinerBotanistAdvisorStatus.Complete, Frontier: { } frontier })
             throw new InvalidOperationException("Workbench transfer requires complete read-only advisor evidence.");

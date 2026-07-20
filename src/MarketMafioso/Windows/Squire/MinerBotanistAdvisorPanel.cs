@@ -190,11 +190,11 @@ internal sealed class MinerBotanistAdvisorPanel
         ImGui.SameLine();
         if (!state.IsBusy)
         {
-            if (ImGui.Button("Observe and refresh##SquireAdvisor"))
+            if (ImGui.Button("Refresh##SquireAdvisor"))
                 Begin();
             RegisterLastControl(
                 "squire.outfitter.advisor.refresh",
-                "Observe rendered equipment and refresh exact-quality evidence",
+                "Capture current player equipment and refresh exact-quality evidence",
                 AgentBridgeUiControlKind.Button,
                 true,
                 false,
@@ -737,8 +737,8 @@ internal sealed class MinerBotanistAdvisorPanel
                 }
 #endif
                 if (!session.RequestWorkbenchValidation(advice, selected.Candidate.SolutionId, evidence))
-                    throw new InvalidOperationException("The rendered player evidence is no longer current; refresh the Advisor before Workbench review.");
-                handoffStatus = "Revalidating the rendered job and equipment before Workbench review.";
+                    throw new InvalidOperationException("The player baseline is no longer current; refresh the Advisor before Workbench review.");
+                handoffStatus = "Revalidating the current player baseline before Workbench review.";
             }
             catch (Exception exception)
             {
@@ -775,7 +775,7 @@ internal sealed class MinerBotanistAdvisorPanel
                 evidence,
                 validation);
             stageTransfer(transfer);
-            handoffStatus = "Exact-quality solution added to the Market Acquisition Workbench after rendered player revalidation.";
+            handoffStatus = "Exact-quality solution added to the Market Acquisition Workbench after current player baseline revalidation.";
         }
         catch (Exception exception)
         {
@@ -786,7 +786,7 @@ internal sealed class MinerBotanistAdvisorPanel
     private static void DrawEmptyState(MinerBotanistAdvisorSessionState state)
     {
         if (state.Stage == MinerBotanistAdvisorSessionStage.Idle)
-            ImGui.TextWrapped("The advisor opens and reads normal Character UI only after you press refresh. It never activates the game window, changes jobs, purchases, or equips.");
+            ImGui.TextWrapped("Refresh captures current player state and equipped inventory on the next framework tick. It does not open Character UI, activate the game window, change jobs, purchase, or equip.");
         else if (state.Stage is MinerBotanistAdvisorSessionStage.Abstained or MinerBotanistAdvisorSessionStage.Failed)
             ImGui.TextWrapped("No recommendation was produced. The incomplete evidence remains visible above instead of being replaced by a guess.");
     }
@@ -819,8 +819,7 @@ internal sealed class MinerBotanistAdvisorPanel
 
     private static string RetainedAdviceLabel(MinerBotanistAdvisorSessionStage stage) => stage switch
     {
-        MinerBotanistAdvisorSessionStage.ObservingStats or
-        MinerBotanistAdvisorSessionStage.ObservingEquipment or
+        MinerBotanistAdvisorSessionStage.CapturingPlayer or
         MinerBotanistAdvisorSessionStage.DiscoveringMarket => "LAST VALID FRONTIER · refresh in progress",
         MinerBotanistAdvisorSessionStage.Cancelled => "LAST VALID FRONTIER · refresh cancelled",
         MinerBotanistAdvisorSessionStage.Failed => "LAST VALID FRONTIER · refresh failed",

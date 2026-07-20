@@ -8,35 +8,45 @@ using MarketMafioso.Squire.Outfitter.Utility;
 
 namespace MarketMafioso.Squire.Outfitter.Acquisition;
 
-internal readonly record struct RenderedPlayerAuthorityFingerprint(string Value)
+internal readonly record struct PlayerAdvisorAuthorityFingerprint(string Value)
 {
-    public static RenderedPlayerAuthorityFingerprint Capture(
-        RenderedMinerBotanistBaseline baseline,
-        RenderedEquipmentResolution equipment)
+    public static PlayerAdvisorAuthorityFingerprint Capture(PlayerAdvisorBaseline baseline)
     {
         if (baseline is not
             {
-                Status: RenderedMinerBotanistBaselineStatus.Complete,
+                Status: PlayerAdvisorBaselineStatus.Complete,
+                Character: { } character,
                 ClassJobId: { } classJobId,
                 Level: { } level,
-                TotalStats: { } stats,
-            } || equipment.Status != RenderedEquipmentResolutionStatus.Complete || equipment.Slots.Count != 12)
+                EffectiveLevel: { } effectiveLevel,
+                IsLevelSynced: { } isLevelSynced,
+            } || baseline.EquippedSlots.Count != PlayerAdvisorEquippedSlotMap.All.Count)
         {
-            throw new InvalidOperationException("A complete rendered player baseline is required for Workbench authority.");
+            throw new InvalidOperationException("A complete player advisor baseline is required for Workbench authority.");
         }
 
         var lineage = new StringBuilder()
+            .Append(character.LocalContentId).Append('|')
+            .Append(character.HomeWorldId).Append('|')
             .Append(classJobId).Append('|')
             .Append(level).Append('|')
-            .Append(stats.Gathering).Append('|')
-            .Append(stats.Perception).Append('|')
-            .Append(stats.GatheringPoints);
-        foreach (var slot in equipment.Slots.OrderBy(value => value.Position))
+            .Append(effectiveLevel).Append('|')
+            .Append(isLevelSynced ? '1' : '0');
+        foreach (var stat in baseline.TotalStats.OrderBy(value => value.Key))
+            lineage.Append('|').Append((int)stat.Key).Append(':').Append(stat.Value);
+        foreach (var slot in baseline.EquippedSlots.OrderBy(value => value.Position))
         {
             lineage.Append('|')
                 .Append((int)slot.Position).Append(':')
-                .Append(slot.Definition.ItemId).Append(':')
-                .Append((int)slot.Quality);
+                .Append(slot.Definition?.ItemId ?? 0).Append(':')
+                .Append(slot.Quality is { } quality ? (int)quality : -1);
+            for (var index = 0; index < slot.MateriaIds.Count; index++)
+            {
+                lineage.Append(':')
+                    .Append(index).Append('=')
+                    .Append(slot.MateriaIds[index]).Append('@')
+                    .Append(index < slot.MateriaGrades.Count ? slot.MateriaGrades[index] : byte.MaxValue);
+            }
         }
 
         return new(Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(lineage.ToString()))));
@@ -47,8 +57,8 @@ internal sealed record OutfitterWorkbenchPlayerValidation(
     MinerBotanistReadOnlyAdvice Advice,
     string SelectedSolutionId,
     Guid EvidenceGenerationId,
-    RenderedPlayerAuthorityFingerprint CapturedPlayer,
-    RenderedPlayerAuthorityFingerprint ReobservedPlayer,
+    PlayerAdvisorAuthorityFingerprint CapturedPlayer,
+    PlayerAdvisorAuthorityFingerprint RecapturedPlayer,
     bool DryRunOnly)
 {
     public bool IsCurrentFor(
@@ -58,15 +68,15 @@ internal sealed record OutfitterWorkbenchPlayerValidation(
         ReferenceEquals(Advice, advice) &&
         string.Equals(SelectedSolutionId, selectedSolutionId, StringComparison.Ordinal) &&
         EvidenceGenerationId == evidence.GenerationId &&
-        CapturedPlayer == ReobservedPlayer;
+        CapturedPlayer == RecapturedPlayer;
 
     public static OutfitterWorkbenchPlayerValidation Create(
         MinerBotanistReadOnlyAdvice advice,
         string selectedSolutionId,
         OutfitterMarketEvidenceBook evidence,
-        RenderedPlayerAuthorityFingerprint capturedPlayer,
-        RenderedPlayerAuthorityFingerprint reobservedPlayer) =>
-        new(advice, selectedSolutionId, evidence.GenerationId, capturedPlayer, reobservedPlayer, false);
+        PlayerAdvisorAuthorityFingerprint capturedPlayer,
+        PlayerAdvisorAuthorityFingerprint recapturedPlayer) =>
+        new(advice, selectedSolutionId, evidence.GenerationId, capturedPlayer, recapturedPlayer, false);
 
 #if DEBUG
     public static OutfitterWorkbenchPlayerValidation CreateDryRun(
@@ -74,7 +84,7 @@ internal sealed record OutfitterWorkbenchPlayerValidation(
         string selectedSolutionId,
         OutfitterMarketEvidenceBook evidence)
     {
-        var fixture = new RenderedPlayerAuthorityFingerprint("debug-dry-run-fixture");
+        var fixture = new PlayerAdvisorAuthorityFingerprint("debug-dry-run-fixture");
         return new(advice, selectedSolutionId, evidence.GenerationId, fixture, fixture, true);
     }
 #endif

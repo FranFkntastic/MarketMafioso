@@ -98,7 +98,7 @@ internal sealed class SquireTabPanel : IDisposable
         IDalamudPluginInterface pluginInterface,
         IMarketAcquisitionListingSource marketListingSource,
         Func<bool> isMarketAcquisitionUnlocked,
-        IRenderedCharacterAdvisorProbe renderedCharacterAdvisorProbe)
+        IPlayerAdvisorBaselineSource playerAdvisorBaselineSource)
     {
         this.config = config;
         this.snapshotSource = snapshotSource;
@@ -124,17 +124,10 @@ internal sealed class SquireTabPanel : IDisposable
             isMarketAcquisitionUnlocked,
             reviewRegistry);
         advisorSession = new(
-            renderedCharacterAdvisorProbe,
+            playerAdvisorBaselineSource,
             dataManager,
             marketListingSource,
-            Path.Combine(diagnosticDirectory, "outfitter-market-evidence.json"),
-            captureOwnedItems: () => snapshotSource.Capture().Instances
-                .Where(instance => !instance.IsEquipped && IsOwnedGearContainer(instance.Fingerprint.Container))
-                .Select(instance => new MinerBotanistOwnedItemEvidence(
-                    instance.Fingerprint.ItemId,
-                    instance.Fingerprint.IsHighQuality,
-                    OwnedContainerLabel(instance.Fingerprint.Container)))
-                .ToArray());
+            Path.Combine(diagnosticDirectory, "outfitter-market-evidence.json"));
         advisorPanel = new(config, advisorSession, reviewRegistry, marketListingSource, transfer => stageOutfitterTransfer?.Invoke(transfer));
         selectedWorkspace = string.Equals(config.Squire.SelectedWorkspace, "Cleanup", StringComparison.OrdinalIgnoreCase)
             ? "Cleanup"
@@ -147,17 +140,6 @@ internal sealed class SquireTabPanel : IDisposable
         showProtected = config.Squire.ShowProtected;
         showNonEquipment = config.Squire.ShowNonEquipment;
     }
-
-    /// <summary>Owned gear containers authorized for zero-cost offers: armoury, bags, and saddlebags.</summary>
-    private static bool IsOwnedGearContainer(string container) =>
-        container.StartsWith("Armory", StringComparison.Ordinal) ||
-        container.StartsWith("Inventory", StringComparison.Ordinal) ||
-        container.Contains("SaddleBag", StringComparison.Ordinal);
-
-    private static string OwnedContainerLabel(string container) =>
-        container.StartsWith("Armory", StringComparison.Ordinal) ? "Armoury"
-            : container.Contains("SaddleBag", StringComparison.Ordinal) ? "Saddlebag"
-            : "Inventory";
 
     public void Draw()
     {

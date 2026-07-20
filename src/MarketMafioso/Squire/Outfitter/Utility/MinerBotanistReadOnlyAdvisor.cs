@@ -26,12 +26,13 @@ public sealed record MinerBotanistReadOnlyAdvice(
 public sealed record MinerBotanistOwnedItemEvidence(
     uint ItemId,
     bool IsHighQuality,
-    string ContainerLabel);
+    string ContainerLabel,
+    EquipmentInstanceSnapshot? Instance = null);
 
 /// <summary>
-/// First read-only MIN/BTN advisor slice. It consumes only reconciled rendered baseline evidence,
-/// exact-quality market evidence, version-matched static item definitions, and owned-inventory
-/// evidence whose container reads have passed the rendered differential proof.
+/// Read-only player advisor. It consumes one reconciled player baseline, exact-quality market
+/// evidence, version-matched static item definitions, and owned-inventory evidence from the same
+/// atomic character equipment snapshot.
 /// </summary>
 public sealed class MinerBotanistReadOnlyAdvisor
 {
@@ -40,8 +41,7 @@ public sealed class MinerBotanistReadOnlyAdvisor
         "Abstain when evidence is incomplete, the stat trade is context-dependent, or a paid gain remains entirely inside monotonic score space.";
 
     internal MinerBotanistReadOnlyAdvice Build(
-        RenderedMinerBotanistBaseline baseline,
-        RenderedEquipmentResolution currentEquipment,
+        PlayerAdvisorBaseline baseline,
         OutfitterMarketEvidenceBook marketEvidence,
         Func<uint, IReadOnlyList<EquipmentItemDefinition>> findDefinitionsByItemId,
         IAdvisorStatFamily family,
@@ -50,21 +50,23 @@ public sealed class MinerBotanistReadOnlyAdvisor
         IReadOnlyList<MinerBotanistOwnedItemEvidence>? ownedItems = null,
         CancellationToken cancellationToken = default,
         Action<EquipmentExactFrontierProgress>? reportProgress = null,
-        Action<MinerBotanistSolverReplay>? captureReplay = null)
+        Action<MinerBotanistSolverReplay>? captureReplay = null,
+        bool ownedInventoryCoverageComplete = true)
     {
         ArgumentNullException.ThrowIfNull(baseline);
-        ArgumentNullException.ThrowIfNull(currentEquipment);
         ArgumentNullException.ThrowIfNull(marketEvidence);
         ArgumentNullException.ThrowIfNull(findDefinitionsByItemId);
         ArgumentNullException.ThrowIfNull(family);
         ArgumentNullException.ThrowIfNull(contextId);
-        if (baseline is not { Status: RenderedMinerBotanistBaselineStatus.Complete, ClassJobId: { } classJobId,
-                Level: { } characterLevel, TotalStats: { } total, FixedStats: { } fixedStats } ||
-            characterLevel is < 1 or > 100 ||
-            currentEquipment.Status != RenderedEquipmentResolutionStatus.Complete || currentEquipment.Slots.Count != 12)
-            return Abstain("A complete rendered level 1-100 MIN/BTN baseline and twelve uniquely resolved slots are required.");
+        if (baseline is not { Status: PlayerAdvisorBaselineStatus.Complete, Character: not null, ClassJobId: { } classJobId,
+                Level: { } characterLevel, EffectiveLevel: not null, IsLevelSynced: not null } ||
+            characterLevel is < 1 or > 100 || baseline.EquippedSlots.Count != PlayerAdvisorEquippedSlotMap.All.Count)
+            return Abstain("A complete level 1-100 player baseline and twelve resolved equipped slots are required.");
         if (!family.SupportedClassJobIds.Contains(classJobId))
-            return Abstain($"The rendered job is outside the supported {family.CoverageJobLabel} player scope.");
+            return Abstain($"The active job is outside the supported {family.CoverageJobLabel} player scope.");
+        if (family.RelevantSemantics.Any(semantic =>
+                !baseline.TotalStats.ContainsKey(semantic) || !baseline.FixedStats.ContainsKey(semantic)))
+            return Abstain("The player baseline is missing one or more family-relevant semantic totals.");
         if (!marketEvidence.IsPublishable)
         {
             var unresolved = marketEvidence.Items
@@ -77,44 +79,58 @@ public sealed class MinerBotanistReadOnlyAdvisor
                 : $" Unresolved items: {string.Join("; ", unresolved)}.";
             return Abstain($"The exact-quality market evidence generation is incomplete or stale; the advisor will not nominate from it.{detail}");
         }
-        var ineligibleCurrent = currentEquipment.Slots.FirstOrDefault(value =>
-            value.Definition.EquipLevel > characterLevel ||
-            !value.Definition.EligibleClassJobIds.Contains(classJobId));
+        var ineligibleCurrent = baseline.EquippedSlots.FirstOrDefault(value =>
+            value.Definition is { } definition &&
+            (definition.EquipLevel > characterLevel || !definition.EligibleClassJobIds.Contains(classJobId)));
         if (ineligibleCurrent is not null)
-            return Abstain($"Currently equipped {ineligibleCurrent.Definition.Name} does not match the rendered job and level evidence.");
-        var unsupportedCurrent = currentEquipment.Slots.FirstOrDefault(value => MinerBotanistEquipmentSupportPolicy.HasUnmodeledEffectOrRestriction(value.Definition));
+            return Abstain($"Currently equipped {ineligibleCurrent.Definition!.Name} does not match the active job and level.");
+        var unsupportedCurrent = baseline.EquippedSlots.FirstOrDefault(value =>
+            value.Definition is { } definition && MinerBotanistEquipmentSupportPolicy.HasUnmodeledEffectOrRestriction(definition));
         if (unsupportedCurrent is not null)
-            return Abstain($"Currently equipped {unsupportedCurrent.Definition.Name} has an unmodeled effect or equip restriction.");
+            return Abstain($"Currently equipped {unsupportedCurrent.Definition!.Name} has an unmodeled effect or equip restriction.");
 
-        var offerTriple = family.ToTriple(new MinerBotanistUtilityStats(
-            total.Gathering - fixedStats.Gathering,
-            total.Perception - fixedStats.Perception,
-            total.GatheringPoints - fixedStats.GatheringPoints));
-        var fixedTriple = family.ToTriple(fixedStats);
-        var profile = family.CreateUtilityModel(contextId, offerTriple, fixedTriple, classJobId, checked((uint)characterLevel));
+        var offerSemantics = family.RelevantSemantics.ToDictionary(
+            semantic => semantic,
+            semantic => checked(baseline.TotalStats[semantic] - baseline.FixedStats[semantic]));
+        var profile = family.CreateUtilityModel(
+            contextId,
+            offerSemantics,
+            baseline.FixedStats,
+            classJobId,
+            checked((uint)characterLevel));
         var offers = new List<EquipmentExactSolverOffer>();
-        var required = currentEquipment.Slots.Select(value => value.Position).ToHashSet();
+        var required = baseline.EquippedSlots.Select(value => value.Position).ToHashSet();
         var baselineKeys = required.ToDictionary(position => position, _ => (EquipmentOfferAllocationKey?)null);
-        var observationsByPosition = baseline.EquippedSlots.ToDictionary(
-            value => Position(value.PositionKey),
-            value => value.Item!);
-        foreach (var slot in currentEquipment.Slots)
+        foreach (var slot in baseline.EquippedSlots)
         {
-            var observed = observationsByPosition[slot.Position];
+            if (slot is not { Definition: { } definition, Instance: { } instance, Quality: { } quality })
+                continue;
+            var sourceKey = $"player-current:{slot.PositionKey}";
+            var currentOffer = new EquipmentLoadoutOffer(
+                definition,
+                EquipmentAcquisitionSourceKind.Owned,
+                "Currently equipped · player state",
+                UnitPriceGil: 0,
+                Instance: instance,
+                PriceIsEstimate: false,
+                Quality: quality,
+                SourceCatalogKey: sourceKey);
+            var occupiedPositions = new HashSet<EquipmentLoadoutPosition> { slot.Position };
             var exact = new EquipmentExactSolverOffer(
-                slot.BaselineOffer,
-                $"rendered-current:{slot.PositionKey}",
-                new HashSet<EquipmentLoadoutPosition> { slot.Position },
+                currentOffer,
+                sourceKey,
+                occupiedPositions,
                 1,
-                family.VectorFromRendered(observed.Stats, observed.MateriaStats),
+                slot.Utility,
                 0,
                 null,
                 null,
                 0,
                 new(0, 0, 0),
-                ["Currently equipped", slot.Quality == EquipmentQuality.High ? "HQ" : "NQ"]);
+                ["Currently equipped", quality == EquipmentQuality.High ? "HQ" : "NQ"]);
             offers.Add(exact);
-            baselineKeys[slot.Position] = exact.AllocationKey;
+            foreach (var occupied in occupiedPositions.Where(baselineKeys.ContainsKey))
+                baselineKeys[occupied] = exact.AllocationKey;
         }
 
         foreach (var owned in ownedItems ?? [])
@@ -142,8 +158,12 @@ public sealed class MinerBotanistReadOnlyAdvisor
                 EquipmentAcquisitionSourceKind.Owned,
                 $"Owned · {owned.ContainerLabel}",
                 0,
+                Instance: owned.Instance,
                 PriceIsEstimate: false,
-                Quality: ownedQuality);
+                Quality: ownedQuality,
+                SourceCatalogKey: owned.Instance is null
+                    ? $"owned-fixture:{owned.ContainerLabel}:{ownedDefinition.ItemId}:{ownedQuality}"
+                    : null);
             offers.Add(new(
                 ownedOffer,
                 null,
@@ -253,12 +273,13 @@ public sealed class MinerBotanistReadOnlyAdvisor
                 required,
                 baselineKeys,
                 profile);
-            var replay = family.CaptureReplay(request, contextId, classJobId, checked((uint)characterLevel),
-                new MinerBotanistUtilityStats(
-                    total.Gathering - fixedStats.Gathering,
-                    total.Perception - fixedStats.Perception,
-                    total.GatheringPoints - fixedStats.GatheringPoints),
-                fixedStats);
+            var replay = family.CaptureReplay(
+                request,
+                contextId,
+                classJobId,
+                checked((uint)characterLevel),
+                offerSemantics,
+                baseline.FixedStats);
             if (replay is not null)
                 captureReplay?.Invoke(replay);
             frontier = new EquipmentExactFrontierSolver().Solve(request, cancellationToken, reportProgress);
@@ -274,7 +295,17 @@ public sealed class MinerBotanistReadOnlyAdvisor
 
         var authority = frontier.Pareto.Frontier.ToDictionary(
             solution => solution.Candidate.SolutionId,
-            solution => family.AssessAuthority(profile, solution.Utility, solution.AcquisitionCostGil),
+            solution =>
+            {
+                var assessment = family.AssessAuthority(profile, solution.Utility, solution.AcquisitionCostGil);
+                return !ownedInventoryCoverageComplete && solution.AcquisitionCostGil > 0 && assessment.AdvisorMayConsider
+                    ? assessment with
+                    {
+                        AdvisorMayConsider = false,
+                        Reasons = [.. assessment.Reasons, "Owned inventory coverage is partial; the advisor will not nominate a paid loadout that may duplicate available gear."],
+                    }
+                    : assessment;
+            },
             StringComparer.Ordinal);
         var nomination = frontier.Pareto.Frontier
             .Where(solution => authority[solution.Candidate.SolutionId].AdvisorMayConsider)
@@ -297,7 +328,6 @@ public sealed class MinerBotanistReadOnlyAdvisor
 
     private static HashSet<EquipmentLoadoutPosition> Positions(EquipmentItemDefinition definition) => definition.Slot switch
     {
-        EquipmentSlot.MainHand when definition.OffHandOccupancy != 0 => [EquipmentLoadoutPosition.MainHand, EquipmentLoadoutPosition.OffHand],
         EquipmentSlot.MainHand => [EquipmentLoadoutPosition.MainHand],
         EquipmentSlot.OffHand => [EquipmentLoadoutPosition.OffHand],
         EquipmentSlot.Head => [EquipmentLoadoutPosition.Head],
@@ -310,23 +340,6 @@ public sealed class MinerBotanistReadOnlyAdvisor
         EquipmentSlot.Wrists => [EquipmentLoadoutPosition.Wrists],
         EquipmentSlot.Ring => [EquipmentLoadoutPosition.LeftRing, EquipmentLoadoutPosition.RightRing],
         _ => [],
-    };
-
-    private static EquipmentLoadoutPosition Position(string key) => key switch
-    {
-        "main-hand" => EquipmentLoadoutPosition.MainHand,
-        "off-hand" => EquipmentLoadoutPosition.OffHand,
-        "head" => EquipmentLoadoutPosition.Head,
-        "body" => EquipmentLoadoutPosition.Body,
-        "hands" => EquipmentLoadoutPosition.Hands,
-        "legs" => EquipmentLoadoutPosition.Legs,
-        "feet" => EquipmentLoadoutPosition.Feet,
-        "ears" => EquipmentLoadoutPosition.Ears,
-        "neck" => EquipmentLoadoutPosition.Neck,
-        "wrists" => EquipmentLoadoutPosition.Wrists,
-        "ring-left" => EquipmentLoadoutPosition.LeftRing,
-        "ring-right" => EquipmentLoadoutPosition.RightRing,
-        _ => throw new ArgumentOutOfRangeException(nameof(key), key, "Unsupported rendered equipment position."),
     };
 
     private static IEnumerable<OutfitterMarketListingEvidence> RelevantListings(

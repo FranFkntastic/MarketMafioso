@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using Franthropy.Dalamud.Characters;
 using Franthropy.Dalamud.Equipment;
 using MarketMafioso.Squire.Observation;
 using MarketMafioso.Squire.Outfitter.MarketEvidence;
@@ -17,7 +18,6 @@ public sealed class MinerBotanistReadOnlyAdvisorTests
         var fixture = Fixture();
         var advice = new MinerBotanistReadOnlyAdvisor().Build(
             fixture.Baseline,
-            fixture.Resolution,
             fixture.Evidence,
             itemId => itemId == fixture.Candidate.ItemId ? [fixture.Candidate] : [],
             GathererAdvisorStatFamily.Instance, MinerBotanistUtilityProfile.LegendaryContextId);
@@ -38,7 +38,6 @@ public sealed class MinerBotanistReadOnlyAdvisorTests
         var fixture = Fixture();
         var advice = new MinerBotanistReadOnlyAdvisor().Build(
             fixture.Baseline,
-            fixture.Resolution,
             fixture.Evidence with { Status = OutfitterMarketEvidenceGenerationStatus.Partial },
             _ => [fixture.Candidate],
             GathererAdvisorStatFamily.Instance, MinerBotanistUtilityProfile.LegendaryContextId);
@@ -55,7 +54,6 @@ public sealed class MinerBotanistReadOnlyAdvisorTests
         var special = fixture.Candidate with { ItemSpecialBonusId = 99 };
         var advice = new MinerBotanistReadOnlyAdvisor().Build(
             fixture.Baseline,
-            fixture.Resolution,
             fixture.Evidence,
             _ => [special],
             GathererAdvisorStatFamily.Instance, MinerBotanistUtilityProfile.LegendaryContextId);
@@ -73,13 +71,11 @@ public sealed class MinerBotanistReadOnlyAdvisorTests
 
         var accepted = new MinerBotanistReadOnlyAdvisor().Build(
             fixture.Baseline,
-            fixture.Resolution,
             fixture.Evidence,
             _ => [modeled],
             GathererAdvisorStatFamily.Instance, MinerBotanistUtilityProfile.LegendaryContextId);
         var rejected = new MinerBotanistReadOnlyAdvisor().Build(
             fixture.Baseline,
-            fixture.Resolution,
             fixture.Evidence,
             _ => [unmodeled],
             GathererAdvisorStatFamily.Instance, MinerBotanistUtilityProfile.LegendaryContextId);
@@ -104,7 +100,6 @@ public sealed class MinerBotanistReadOnlyAdvisorTests
             SourceCatalogKey: "vendor:old-gridania:3000");
         var advice = new MinerBotanistReadOnlyAdvisor().Build(
             fixture.Baseline,
-            fixture.Resolution,
             fixture.Evidence,
             itemId => itemId == fixture.Candidate.ItemId ? [fixture.Candidate] : [],
             GathererAdvisorStatFamily.Instance, MinerBotanistUtilityProfile.LegendaryContextId,
@@ -122,7 +117,6 @@ public sealed class MinerBotanistReadOnlyAdvisorTests
 
         var advice = new MinerBotanistReadOnlyAdvisor().Build(
             fixture.Baseline,
-            fixture.Resolution,
             fixture.Evidence,
             itemId => itemId == fixture.Candidate.ItemId ? [fixture.Candidate] : [],
             GathererAdvisorStatFamily.Instance, MinerBotanistUtilityProfile.OrdinaryResourceBenchmarkContextId);
@@ -157,7 +151,6 @@ public sealed class MinerBotanistReadOnlyAdvisorTests
 
         var advice = new MinerBotanistReadOnlyAdvisor().Build(
             fixture.Baseline,
-            fixture.Resolution,
             evidence,
             _ => [ring],
             GathererAdvisorStatFamily.Instance, MinerBotanistUtilityProfile.LegendaryContextId);
@@ -167,13 +160,46 @@ public sealed class MinerBotanistReadOnlyAdvisorTests
     }
 
     [Fact]
+    public void Build_accepts_two_handed_main_hand_with_authoritative_empty_offhand()
+    {
+        var fixture = Fixture();
+        var slots = fixture.Baseline.EquippedSlots.Select(slot => slot.Position switch
+        {
+            EquipmentLoadoutPosition.MainHand => slot with
+            {
+                Definition = slot.Definition! with { OffHandOccupancy = -1 },
+            },
+            EquipmentLoadoutPosition.OffHand => slot with
+            {
+                Instance = null,
+                Definition = null,
+                Quality = null,
+                Utility = EquipmentSolverUtilityVector.Empty,
+                MateriaIds = [],
+                MateriaGrades = [],
+            },
+            _ => slot,
+        }).ToArray();
+        var baseline = fixture.Baseline with { EquippedSlots = slots };
+
+        var advice = new MinerBotanistReadOnlyAdvisor().Build(
+            baseline,
+            fixture.Evidence,
+            itemId => itemId == fixture.Candidate.ItemId ? [fixture.Candidate] : [],
+            GathererAdvisorStatFamily.Instance,
+            MinerBotanistUtilityProfile.LegendaryContextId);
+
+        Assert.True(advice.Status == MinerBotanistAdvisorStatus.Complete, advice.Diagnostic);
+        Assert.NotNull(advice.Frontier);
+    }
+
+    [Fact]
     public void Build_prefers_a_capable_owned_item_over_any_paid_alternative()
     {
         var fixture = Fixture();
         var ownedDefinition = Definition(4_000, "Owned Hatchet", EquipmentSlot.MainHand, 399, 420, equipLevel: 100);
         var advice = new MinerBotanistReadOnlyAdvisor().Build(
             fixture.Baseline,
-            fixture.Resolution,
             fixture.Evidence,
             itemId => itemId == fixture.Candidate.ItemId ? [fixture.Candidate] : itemId == ownedDefinition.ItemId ? [ownedDefinition] : [],
             GathererAdvisorStatFamily.Instance, MinerBotanistUtilityProfile.LegendaryContextId,
@@ -191,13 +217,53 @@ public sealed class MinerBotanistReadOnlyAdvisorTests
     }
 
     [Fact]
+    public void Build_preserves_distinct_identity_for_duplicate_owned_instances()
+    {
+        var fixture = Fixture();
+        var ownedDefinition = Definition(4_010, "Twin Hatchet", EquipmentSlot.MainHand, 399, 420, equipLevel: 100);
+        EquipmentInstanceSnapshot Instance(int slot) => new(
+            new(
+                fixture.Baseline.Character!,
+                "ArmoryMainHand",
+                slot,
+                ownedDefinition.ItemId,
+                true,
+                1,
+                30_000,
+                0,
+                null,
+                [],
+                null,
+                []),
+            DateTimeOffset.UtcNow,
+            false);
+        var advice = new MinerBotanistReadOnlyAdvisor().Build(
+            fixture.Baseline,
+            fixture.Evidence,
+            itemId => itemId == fixture.Candidate.ItemId ? [fixture.Candidate] : itemId == ownedDefinition.ItemId ? [ownedDefinition] : [],
+            GathererAdvisorStatFamily.Instance,
+            MinerBotanistUtilityProfile.LegendaryContextId,
+            ownedItems:
+            [
+                new(ownedDefinition.ItemId, true, "Armoury", Instance(1)),
+                new(ownedDefinition.ItemId, true, "Armoury", Instance(2)),
+            ]);
+
+        Assert.True(advice.Status == MinerBotanistAdvisorStatus.Complete, advice.Diagnostic);
+        var allocations = advice.OffersByAllocation.Values
+            .Where(value => value.Offer.Definition.ItemId == ownedDefinition.ItemId)
+            .ToArray();
+        Assert.Equal(2, allocations.Length);
+        Assert.Equal(2, allocations.Select(value => value.AllocationKey).Distinct().Count());
+    }
+
+    [Fact]
     public void Build_skips_owned_cross_discipline_poison()
     {
         var fixture = Fixture();
         var craftingOnly = Definition(4_001, "Crafting Vest", EquipmentSlot.Body, 0, 0, equipLevel: 100);
         var advice = new MinerBotanistReadOnlyAdvisor().Build(
             fixture.Baseline,
-            fixture.Resolution,
             fixture.Evidence,
             itemId => itemId == fixture.Candidate.ItemId ? [fixture.Candidate] : itemId == craftingOnly.ItemId ? [craftingOnly] : [],
             GathererAdvisorStatFamily.Instance, MinerBotanistUtilityProfile.LegendaryContextId,
@@ -219,7 +285,6 @@ public sealed class MinerBotanistReadOnlyAdvisorTests
         };
         var advice = new MinerBotanistReadOnlyAdvisor().Build(
             fixture.Baseline,
-            fixture.Resolution,
             fixture.Evidence,
             itemId => itemId == fixture.Candidate.ItemId ? [fixture.Candidate] : itemId == wrongJob.ItemId ? [wrongJob] : [],
             GathererAdvisorStatFamily.Instance, MinerBotanistUtilityProfile.LegendaryContextId,
@@ -238,7 +303,6 @@ public sealed class MinerBotanistReadOnlyAdvisorTests
         var ownedDefinition = Definition(4_003, "Owned Pick", EquipmentSlot.MainHand, 399, 410, equipLevel: 100);
         var nqAdvice = new MinerBotanistReadOnlyAdvisor().Build(
             fixture.Baseline,
-            fixture.Resolution,
             fixture.Evidence,
             itemId => itemId == fixture.Candidate.ItemId ? [fixture.Candidate] : itemId == ownedDefinition.ItemId ? [ownedDefinition] : [],
             GathererAdvisorStatFamily.Instance, MinerBotanistUtilityProfile.LegendaryContextId,
@@ -246,7 +310,6 @@ public sealed class MinerBotanistReadOnlyAdvisorTests
             ownedItems: [new(ownedDefinition.ItemId, false, "Armoury")]);
         var hqAdvice = new MinerBotanistReadOnlyAdvisor().Build(
             fixture.Baseline,
-            fixture.Resolution,
             fixture.Evidence,
             itemId => itemId == fixture.Candidate.ItemId ? [fixture.Candidate] : itemId == ownedDefinition.ItemId ? [ownedDefinition] : [],
             GathererAdvisorStatFamily.Instance, MinerBotanistUtilityProfile.LegendaryContextId,
@@ -280,48 +343,60 @@ public sealed class MinerBotanistReadOnlyAdvisorTests
             ("ring-left", EquipmentLoadoutPosition.LeftRing, EquipmentSlot.Ring),
             ("ring-right", EquipmentLoadoutPosition.RightRing, EquipmentSlot.Ring),
         };
-        var observed = new List<RenderedEquipmentSlotObservation>();
-        var resolved = new List<ResolvedRenderedEquipmentSlot>();
+        var scope = new CharacterScope(77, "Advisor", 21);
+        var equipped = new List<PlayerAdvisorEquippedSlot>();
+        var instances = new List<EquipmentInstanceSnapshot>();
+        var definitions = new Dictionary<uint, EquipmentItemDefinition>();
         var itemId = 1_000u;
         foreach (var (key, position, slot) in positions)
         {
-            var stats = key == "main-hand"
-                ? new Dictionary<string, int> { ["Gathering"] = 399 }
-                : new Dictionary<string, int>();
-            var item = new RenderedItemDetailObservation(
-                RenderedItemDetailStatus.Complete,
-                $"Current {key}",
-                RenderedItemQuality.Normal,
-                700,
-                checked((int)characterLevel),
-                "MIN BTN",
-                null,
-                stats,
-                new Dictionary<string, int>(),
-                "Complete");
-            observed.Add(new(key, slot, RenderedEquipmentSlotObservationStatus.Equipped, item));
-            var definition = Definition(itemId++, item.Name!, slot, 399, 399, equipLevel: characterLevel);
-            var offer = new EquipmentLoadoutOffer(
-                definition,
-                EquipmentAcquisitionSourceKind.Owned,
-                "Currently equipped · rendered UI",
-                0,
-                Quality: EquipmentQuality.Normal,
-                SourceCatalogKey: $"rendered-current:{key}");
-            resolved.Add(new(key, position, definition, EquipmentQuality.Normal, offer));
+            var definition = Definition(itemId++, $"Current {key}", slot, 399, 399, equipLevel: characterLevel);
+            var index = PlayerAdvisorEquippedSlotMap.All.Single(value => value.Position == position).EquippedIndex;
+            var instance = new EquipmentInstanceSnapshot(
+                new EquipmentInstanceFingerprint(scope, "EquippedItems", index, definition.ItemId, false, 1, 30_000, 0, null, [], null, []),
+                DateTimeOffset.UtcNow,
+                true);
+            var semantics = new Dictionary<EquipmentStatSemantic, int>
+            {
+                [EquipmentStatSemantic.Gathering] = key == "main-hand" ? 399 : 0,
+                [EquipmentStatSemantic.Perception] = 0,
+                [EquipmentStatSemantic.GatheringPoints] = 0,
+            };
+            equipped.Add(new(position, key, instance, definition, EquipmentQuality.Normal,
+                GathererAdvisorStatFamily.Instance.VectorFromSemantics(semantics), [], []));
+            instances.Add(instance);
+            definitions.Add(definition.ItemId, definition);
         }
 
-        var baseline = new RenderedMinerBotanistBaseline(
-            RenderedMinerBotanistBaselineStatus.Complete,
+        var snapshot = new CharacterEquipmentSnapshot(
+            Guid.NewGuid(),
+            new(scope, 21, 16, DateTimeOffset.UtcNow, true, SnapshotComponentStatus.Complete),
+            [],
+            [],
+            instances,
+            definitions,
+            new([new("identity", SnapshotComponentStatus.Complete), new("equipped", SnapshotComponentStatus.Complete)]));
+        var baseline = new PlayerAdvisorBaseline(
+            PlayerAdvisorBaselineStatus.Complete,
+            scope,
             16,
-            checked((int)characterLevel),
-            new(5_399, 5_200, 950),
-            new(5_000, 5_200, 950),
-            observed,
-            "Complete");
-        var resolution = new RenderedEquipmentResolution(
-            RenderedEquipmentResolutionStatus.Complete,
-            resolved,
+            checked((short)characterLevel),
+            checked((short)characterLevel),
+            false,
+            new Dictionary<EquipmentStatSemantic, int>
+            {
+                [EquipmentStatSemantic.Gathering] = 5_399,
+                [EquipmentStatSemantic.Perception] = 5_200,
+                [EquipmentStatSemantic.GatheringPoints] = 950,
+            },
+            new Dictionary<EquipmentStatSemantic, int>
+            {
+                [EquipmentStatSemantic.Gathering] = 5_000,
+                [EquipmentStatSemantic.Perception] = 5_200,
+                [EquipmentStatSemantic.GatheringPoints] = 950,
+            },
+            equipped,
+            snapshot,
             "Complete");
         var candidate = Definition(
             2_000,
@@ -349,7 +424,7 @@ public sealed class MinerBotanistReadOnlyAdvisorTests
                     new(candidate.ItemId, EquipmentQuality.High, "hq", "Siren", 1, "HQ", "2", 1, 25_000, now, now, "r1"),
                 ], now, "r1"),
             ]);
-        return new(baseline, resolution, evidence, candidate);
+        return new(baseline, evidence, candidate);
     }
 
     private static EquipmentItemDefinition Definition(
@@ -390,8 +465,7 @@ public sealed class MinerBotanistReadOnlyAdvisorTests
     }
 
     private sealed record FixtureData(
-        RenderedMinerBotanistBaseline Baseline,
-        RenderedEquipmentResolution Resolution,
+        PlayerAdvisorBaseline Baseline,
         OutfitterMarketEvidenceBook Evidence,
         EquipmentItemDefinition Candidate);
 }

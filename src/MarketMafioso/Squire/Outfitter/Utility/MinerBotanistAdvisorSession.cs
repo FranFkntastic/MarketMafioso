@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Dalamud.Plugin.Services;
@@ -15,8 +16,7 @@ namespace MarketMafioso.Squire.Outfitter.Utility;
 public enum MinerBotanistAdvisorSessionStage
 {
     Idle,
-    ObservingStats,
-    ObservingEquipment,
+    CapturingPlayer,
     DiscoveringMarket,
     Complete,
     Abstained,
@@ -35,8 +35,8 @@ public sealed record MinerBotanistAdvisorSessionState(
     bool AdviceIsRetained,
     DateTimeOffset UpdatedAtUtc)
 {
-    public bool IsBusy => Stage is MinerBotanistAdvisorSessionStage.ObservingStats or
-        MinerBotanistAdvisorSessionStage.ObservingEquipment or MinerBotanistAdvisorSessionStage.DiscoveringMarket;
+    public bool IsBusy => Stage is MinerBotanistAdvisorSessionStage.CapturingPlayer or
+        MinerBotanistAdvisorSessionStage.DiscoveringMarket;
 }
 
 internal static class MinerBotanistAdvisorSessionEvidencePolicy
@@ -51,16 +51,15 @@ internal static class MinerBotanistAdvisorSessionEvidencePolicy
 }
 
 /// <summary>
-/// Framework-ticked orchestration for the read-only advisor. Character identity, job, totals,
-/// equipment identity, quality, and materia originate only in rendered UI observations.
+/// Framework-ticked orchestration for the player advisor. One windowless player baseline is
+/// captured from PlayerState and equipped inventory on the framework thread; immutable market
+/// discovery and exact solving proceed from that frozen generation.
 /// </summary>
 public sealed class MinerBotanistAdvisorSession : IDisposable
 {
-    private readonly IRenderedCharacterAdvisorProbe probe;
-    private readonly LuminaRenderedEquipmentDefinitionLookup definitions;
+    private readonly IPlayerAdvisorBaselineSource baselineSource;
     private readonly MinerBotanistAdvisorCatalog catalog;
     private readonly OutfitterMarketEvidenceDiscoveryService marketDiscovery;
-    private readonly Func<IReadOnlyList<MinerBotanistOwnedItemEvidence>>? captureOwnedItems;
 #if DEBUG
     private readonly string solverReplayPath;
 #endif
@@ -69,38 +68,30 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
     private CancellationTokenSource? cancellation;
     private Task<OutfitterMarketDiscoveryResult>? discoveryTask;
     private OutfitterMarketEvidenceRequest? discoveryRequest;
-    private RenderedAdvisorStatsObservation? renderedStats;
+    private PlayerAdvisorBaseline? baseline;
     private IAdvisorStatFamily? resolvedFamily;
-    private RenderedEquipmentScanProgress? renderedEquipment;
-    private RenderedMinerBotanistBaseline? baseline;
-    private RenderedEquipmentResolution? resolution;
     private MinerBotanistAdvisorCatalogResult? offers;
     private IReadOnlyList<MinerBotanistOwnedItemEvidence>? ownedItemsEvidence;
+    private bool ownedInventoryCoverageComplete;
     private OutfitterMarketEvidenceBook? pendingCurrentEvidence;
-    private RenderedPlayerAuthorityFingerprint? advicePlayerFingerprint;
+    private PlayerAdvisorAuthorityFingerprint? advicePlayerFingerprint;
     private WorkbenchValidationRequest? workbenchValidationRequest;
     private OutfitterWorkbenchPlayerValidation? completedWorkbenchValidation;
+    private IReadOnlyList<EquipmentInstanceFingerprint> completedValidationOwnedInstances = [];
     private SolverProgressSnapshot? solverProgress;
     private long sessionGeneration;
     private DateTimeOffset solvingStartedAtUtc;
-    private DateTimeOffset stageDeadlineUtc;
-    private bool characterUiOpenedBySession;
-    private bool characterUiRestoreRequested;
-    private DateTimeOffset characterUiRestoreDeadlineUtc;
 
     public MinerBotanistAdvisorSession(
-        IRenderedCharacterAdvisorProbe probe,
+        IPlayerAdvisorBaselineSource baselineSource,
         IDataManager dataManager,
         IMarketAcquisitionListingSource listingSource,
-        string evidencePath,
-        Func<IReadOnlyList<MinerBotanistOwnedItemEvidence>>? captureOwnedItems = null)
+        string evidencePath)
     {
-        this.probe = probe ?? throw new ArgumentNullException(nameof(probe));
+        this.baselineSource = baselineSource ?? throw new ArgumentNullException(nameof(baselineSource));
         ArgumentNullException.ThrowIfNull(dataManager);
         ArgumentNullException.ThrowIfNull(listingSource);
         ArgumentException.ThrowIfNullOrWhiteSpace(evidencePath);
-        this.captureOwnedItems = captureOwnedItems;
-        definitions = new(dataManager);
         catalog = new(dataManager);
         Directory.CreateDirectory(Path.GetDirectoryName(evidencePath)!);
 #if DEBUG
@@ -117,42 +108,25 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
 
     public OutfitterMarketEvidenceBook? CurrentEvidence { get; private set; }
 
+    public string Region { get; private set; } = "North America";
+
     public void Begin(MinerBotanistUtilityContextKind context, string region)
     {
         CancelCore(MinerBotanistAdvisorSessionStage.Cancelled, "Superseded by a new advisor refresh.");
         sessionGeneration++;
-        var retainedOwnedCharacterUi = characterUiOpenedBySession;
         var retainedAdvice = State.Context == context && State.Advice is { Frontier: not null }
             ? State.Advice
             : null;
         if (retainedAdvice is null)
             CurrentEvidence = null;
         var retainedCoverage = retainedAdvice is null
-            ? "Coverage is declared after the rendered job is known."
+            ? "Coverage is declared after the active job is captured."
             : State.CoverageLabel;
         cancellation = new();
-        discoveryTask = null;
-        discoveryRequest = null;
-        renderedStats = null;
-        resolvedFamily = null;
-        renderedEquipment = null;
-        baseline = null;
-        resolution = null;
-        offers = null;
-        ownedItemsEvidence = null;
-        pendingCurrentEvidence = null;
-        advicePlayerFingerprint = null;
-        workbenchValidationRequest = null;
-        completedWorkbenchValidation = null;
-        Volatile.Write(ref solverProgress, null);
-        probe.PrepareAdvisorObservation();
-        characterUiOpenedBySession = retainedOwnedCharacterUi || probe.Open();
-        characterUiRestoreRequested = false;
-        characterUiRestoreDeadlineUtc = DateTimeOffset.UtcNow.AddSeconds(5);
-        stageDeadlineUtc = DateTimeOffset.UtcNow.AddSeconds(15);
+        ResetPendingCapture();
         State = new(
-            MinerBotanistAdvisorSessionStage.ObservingStats,
-            "Reading a stable job, level, and stat tuple from the Character window.",
+            MinerBotanistAdvisorSessionStage.CapturingPlayer,
+            "Capturing current player stats, equipped items, quality, and materia on the next framework tick.",
             retainedCoverage,
             0,
             null,
@@ -163,22 +137,16 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
         Region = string.IsNullOrWhiteSpace(region) ? "North America" : region.Trim();
     }
 
-    public string Region { get; private set; } = "North America";
-
     public void Tick()
     {
-        TryRestoreCharacterUi();
         if (!State.IsBusy)
             return;
         try
         {
             switch (State.Stage)
             {
-                case MinerBotanistAdvisorSessionStage.ObservingStats:
-                    TickStats();
-                    break;
-                case MinerBotanistAdvisorSessionStage.ObservingEquipment:
-                    TickEquipment();
+                case MinerBotanistAdvisorSessionStage.CapturingPlayer:
+                    TickPlayerCapture();
                     break;
                 case MinerBotanistAdvisorSessionStage.DiscoveringMarket:
                     TickMarket();
@@ -206,13 +174,13 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
         advicePlayerFingerprint = null;
         workbenchValidationRequest = null;
         completedWorkbenchValidation = null;
+        completedValidationOwnedInstances = [];
         Volatile.Write(ref solverProgress, null);
         CurrentEvidence = null;
-        RequestCharacterUiRestore();
         State = State with
         {
             Stage = MinerBotanistAdvisorSessionStage.Cancelled,
-            Message = "The rendered player gearset changed; refresh before using Advisor evidence.",
+            Message = "The player job or equipped inventory changed; refresh before using Advisor evidence.",
             Advice = null,
             AdviceIsRetained = false,
             UpdatedAtUtc = DateTimeOffset.UtcNow,
@@ -235,23 +203,26 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
             return false;
         }
 
-        workbenchValidationRequest = new(advice, selectedSolutionId, evidence, capturedPlayer);
+        var selected = advice.Frontier!.Pareto.Frontier.SingleOrDefault(value =>
+            string.Equals(value.Candidate.SolutionId, selectedSolutionId, StringComparison.Ordinal));
+        if (selected is null)
+            return false;
+        var requiredOwnedInstances = selected.Candidate.Selections
+            .Select(selection => advice.OffersByAllocation.TryGetValue(selection.AllocationKey, out var offer) ? offer.Offer.Instance : null)
+            .Where(instance => instance is not null && !instance.IsEquipped)
+            .Select(instance => instance!.Fingerprint)
+            .Distinct(EquipmentInstanceFingerprintComparer.Instance)
+            .ToArray();
+        workbenchValidationRequest = new(advice, selectedSolutionId, evidence, capturedPlayer, requiredOwnedInstances);
         completedWorkbenchValidation = null;
+        completedValidationOwnedInstances = [];
         cancellation = new();
-        renderedStats = null;
-        resolvedFamily = null;
-        renderedEquipment = null;
         baseline = null;
-        resolution = null;
-        probe.PrepareAdvisorObservation();
-        characterUiOpenedBySession = probe.Open();
-        characterUiRestoreRequested = false;
-        characterUiRestoreDeadlineUtc = DateTimeOffset.UtcNow.AddSeconds(5);
-        stageDeadlineUtc = DateTimeOffset.UtcNow.AddSeconds(15);
+        resolvedFamily = null;
         State = State with
         {
-            Stage = MinerBotanistAdvisorSessionStage.ObservingStats,
-            Message = "Revalidating the rendered job and equipment before Workbench review.",
+            Stage = MinerBotanistAdvisorSessionStage.CapturingPlayer,
+            Message = "Revalidating the current player baseline before Workbench review.",
             Completed = 0,
             Total = null,
             AdviceIsRetained = true,
@@ -268,82 +239,50 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
             return false;
         }
 
+        var latest = baselineSource.Capture();
+        var latestInstances = new HashSet<EquipmentInstanceFingerprint>(
+            latest.EquipmentSnapshot?.Instances.Select(value => value.Fingerprint) ?? [],
+            EquipmentInstanceFingerprintComparer.Instance);
+        if (latest.Status != PlayerAdvisorBaselineStatus.Complete ||
+            PlayerAdvisorAuthorityFingerprint.Capture(latest) != completedWorkbenchValidation.RecapturedPlayer ||
+            completedValidationOwnedInstances.Any(value => !latestInstances.Contains(value)))
+        {
+            completedWorkbenchValidation = null;
+            completedValidationOwnedInstances = [];
+            CurrentEvidence = null;
+            advicePlayerFingerprint = null;
+            State = State with
+            {
+                Stage = MinerBotanistAdvisorSessionStage.Abstained,
+                Message = "The player baseline changed after Workbench validation completed; refresh before staging the solution.",
+                AdviceIsRetained = true,
+                UpdatedAtUtc = DateTimeOffset.UtcNow,
+            };
+            validation = null!;
+            return false;
+        }
+
         validation = completedWorkbenchValidation;
         completedWorkbenchValidation = null;
+        completedValidationOwnedInstances = [];
         return true;
     }
 
-    private void TickStats()
+    private void TickPlayerCapture()
     {
-        renderedStats = probe.CaptureAdvisorStats();
-        State = State with { Message = renderedStats.Diagnostic, UpdatedAtUtc = DateTimeOffset.UtcNow };
-        if (renderedStats.Status != RenderedCharacterObservationStatus.Complete)
-        {
-            if (DateTimeOffset.UtcNow >= stageDeadlineUtc)
-                Abstain($"Rendered Character observation did not become complete within 15 seconds: {renderedStats.Diagnostic}");
-            return;
-        }
-        if (renderedStats.Level is not (>= 1 and <= 100))
-        {
-            Abstain("The player advisor supports rendered levels 1 through 100.");
-            return;
-        }
-        renderedEquipment = probe.BeginEquipmentScan();
-        if (renderedEquipment.Status != RenderedEquipmentScanStatus.ReadyToHover)
-        {
-            Abstain(renderedEquipment.Diagnostic);
-            return;
-        }
-        State = State with
-        {
-            Stage = MinerBotanistAdvisorSessionStage.ObservingEquipment,
-            Message = renderedEquipment.Diagnostic,
-            Completed = 0,
-            Total = renderedEquipment.TotalSlots,
-            UpdatedAtUtc = DateTimeOffset.UtcNow,
-        };
-    }
-
-    private void TickEquipment()
-    {
-        var step = probe.AdvanceEquipmentScan();
-        renderedEquipment = step.Progress;
-        State = State with
-        {
-            Message = step.Message,
-            Completed = renderedEquipment.CompletedSlots,
-            Total = renderedEquipment.TotalSlots,
-            UpdatedAtUtc = DateTimeOffset.UtcNow,
-        };
-        if (renderedEquipment.Status == RenderedEquipmentScanStatus.Failed)
-        {
-            Abstain(renderedEquipment.Diagnostic);
-            return;
-        }
-        if (renderedEquipment.Status != RenderedEquipmentScanStatus.Complete)
-            return;
-
-        RequestCharacterUiRestore();
-
-        resolvedFamily = AdvisorStatFamilies.ResolveForRenderedJob(renderedStats!.JobName);
-        if (resolvedFamily is null)
-        {
-            Abstain("The current player advisor supports rendered Miner, Botanist, and the eight crafting jobs; other player jobs remain visible but unsupported.");
-            return;
-        }
-        baseline = RenderedMinerBotanistBaselineAssembler.Assemble(renderedStats!, renderedEquipment, resolvedFamily);
-        if (baseline.Status != RenderedMinerBotanistBaselineStatus.Complete || baseline.ClassJobId is not { } classJobId)
+        baseline = baselineSource.Capture();
+        State = State with { Message = baseline.Diagnostic, UpdatedAtUtc = DateTimeOffset.UtcNow };
+        if (baseline.Status != PlayerAdvisorBaselineStatus.Complete || baseline.ClassJobId is not { } classJobId ||
+            baseline.Level is not { } level)
         {
             Abstain(baseline.Diagnostic);
             return;
         }
-        resolution = RenderedEquipmentDefinitionResolver.Resolve(
-            renderedEquipment.Observations,
-            classJobId,
-            definitions.FindByExactName);
-        if (resolution.Status != RenderedEquipmentResolutionStatus.Complete)
+
+        resolvedFamily = AdvisorStatFamilies.Resolve(classJobId);
+        if (resolvedFamily is null)
         {
-            Abstain(resolution.Diagnostic);
+            Abstain("The active player job has no landed advisor stat family yet.");
             return;
         }
 
@@ -353,17 +292,22 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
             return;
         }
 
-        offers = catalog.Build(classJobId, checked((uint)baseline.Level!.Value), resolvedFamily);
+        offers = catalog.Build(classJobId, checked((uint)level), resolvedFamily);
         if (offers.MarketItemIds.Count == 0)
         {
             Abstain($"The declared market scope contains no eligible items in this game-data version. {offers.Diagnostic}");
             return;
         }
-        var ownedItems = captureOwnedItems?.Invoke();
-        ownedItemsEvidence = ownedItems;
-        var coverageLabel = ownedItems is not null
-            ? offers.CoverageLabel.Replace("armoury inventory is not yet observed", "owned inventory observed via direct container reads (owned items evaluated at base stats)", StringComparison.Ordinal)
-            : offers.CoverageLabel;
+
+        ownedInventoryCoverageComplete = ComponentIsComplete(baseline, "armoury") && ComponentIsComplete(baseline, "inventory");
+        ownedItemsEvidence = CaptureOwnedItems(baseline);
+        var ownershipCoverage = ownedInventoryCoverageComplete
+            ? "owned armoury, bag, and saddlebag inventory observed via direct container reads (owned items evaluated at base stats)"
+            : "owned inventory coverage is partial; observed items are included at base stats, but paid nomination is disabled";
+        var coverageLabel = offers.CoverageLabel.Replace(
+            "owned inventory is not yet observed",
+            ownershipCoverage,
+            StringComparison.Ordinal);
         discoveryRequest = new(
             "universalis",
             Region,
@@ -375,7 +319,7 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
         State = State with
         {
             Stage = MinerBotanistAdvisorSessionStage.DiscoveringMarket,
-            Message = $"Discovering exact NQ/HQ listings for {offers.MarketItemIds.Count:N0} scoped items.",
+            Message = $"Player baseline captured in one framework tick; discovering exact NQ/HQ listings for {offers.MarketItemIds.Count:N0} scoped items.",
             CoverageLabel = coverageLabel,
             Completed = 0,
             Total = offers.MarketItemIds.Count,
@@ -411,12 +355,12 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
         var currentEvidence = MinerBotanistAdvisorSessionEvidencePolicy.SelectCurrent(result, discoveryRequest!);
         var solvingEvidence = currentEvidence ?? evidence;
         var capturedBaseline = baseline!;
-        var capturedResolution = resolution!;
         var capturedOffers = offers!;
         var capturedFamily = resolvedFamily!;
         var capturedOwnedItems = ownedItemsEvidence;
+        var capturedOwnedCoverageComplete = ownedInventoryCoverageComplete;
         var capturedContext = State.Context;
-        advicePlayerFingerprint = RenderedPlayerAuthorityFingerprint.Capture(capturedBaseline, capturedResolution);
+        advicePlayerFingerprint = PlayerAdvisorAuthorityFingerprint.Capture(capturedBaseline);
         pendingCurrentEvidence = currentEvidence;
         var capturedGeneration = sessionGeneration;
         solvingStartedAtUtc = DateTimeOffset.UtcNow;
@@ -427,7 +371,6 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
             sessionGeneration,
             token => advisor.Build(
                 capturedBaseline,
-                capturedResolution,
                 solvingEvidence,
                 itemId => capturedOffers.Definitions.TryGetValue(itemId, out var definition) ? [definition] : [],
                 capturedFamily,
@@ -441,7 +384,7 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
 #else
                 null
 #endif
-                ),
+                , capturedOwnedCoverageComplete),
             cancellation!.Token);
         State = State with
         {
@@ -506,17 +449,22 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
 
     private void CompleteWorkbenchValidation(WorkbenchValidationRequest request)
     {
-        var reobservedPlayer = RenderedPlayerAuthorityFingerprint.Capture(baseline!, resolution!);
+        var recapturedPlayer = PlayerAdvisorAuthorityFingerprint.Capture(baseline!);
+        var availableInstances = new HashSet<EquipmentInstanceFingerprint>(
+            baseline!.EquipmentSnapshot?.Instances.Select(value => value.Fingerprint) ?? [],
+            EquipmentInstanceFingerprintComparer.Instance);
+        var ownedAllocationsRemainAvailable = request.RequiredOwnedInstances.All(availableInstances.Contains);
         workbenchValidationRequest = null;
-        RequestCharacterUiRestore();
-        if (reobservedPlayer != request.CapturedPlayer)
+        if (recapturedPlayer != request.CapturedPlayer || !ownedAllocationsRemainAvailable)
         {
             CurrentEvidence = null;
             advicePlayerFingerprint = null;
             State = State with
             {
                 Stage = MinerBotanistAdvisorSessionStage.Abstained,
-                Message = "The rendered job, equipment, quality, or stat tuple changed. The prior frontier is read-only; refresh it before Workbench review.",
+                Message = ownedAllocationsRemainAvailable
+                    ? "The player job, level, equipment, quality, materia, or relevant stat totals changed. The prior frontier is read-only; refresh it before Workbench review."
+                    : "An owned item selected by the prior frontier is no longer available. Refresh before Workbench review.",
                 AdviceIsRetained = true,
                 UpdatedAtUtc = DateTimeOffset.UtcNow,
             };
@@ -524,16 +472,17 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
             return;
         }
 
+        completedValidationOwnedInstances = request.RequiredOwnedInstances;
         completedWorkbenchValidation = OutfitterWorkbenchPlayerValidation.Create(
             request.Advice,
             request.SelectedSolutionId,
             request.Evidence,
             request.CapturedPlayer,
-            reobservedPlayer);
+            recapturedPlayer);
         State = State with
         {
             Stage = MinerBotanistAdvisorSessionStage.Complete,
-            Message = "Rendered player lineage revalidated for Workbench review.",
+            Message = "Current player baseline revalidated for Workbench review.",
             AdviceIsRetained = false,
             UpdatedAtUtc = DateTimeOffset.UtcNow,
         };
@@ -542,7 +491,6 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
 
     private void Abstain(string message)
     {
-        RequestCharacterUiRestore();
         State = State with
         {
             Stage = MinerBotanistAdvisorSessionStage.Abstained,
@@ -563,8 +511,8 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
         pendingCurrentEvidence = null;
         workbenchValidationRequest = null;
         completedWorkbenchValidation = null;
+        completedValidationOwnedInstances = [];
         Volatile.Write(ref solverProgress, null);
-        RequestCharacterUiRestore();
         State = State with
         {
             Stage = terminalStage,
@@ -574,33 +522,57 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
         DisposeCancellation();
     }
 
+    private void ResetPendingCapture()
+    {
+        discoveryTask = null;
+        discoveryRequest = null;
+        baseline = null;
+        resolvedFamily = null;
+        offers = null;
+        ownedItemsEvidence = null;
+        ownedInventoryCoverageComplete = false;
+        pendingCurrentEvidence = null;
+        advicePlayerFingerprint = null;
+        workbenchValidationRequest = null;
+        completedWorkbenchValidation = null;
+        completedValidationOwnedInstances = [];
+        Volatile.Write(ref solverProgress, null);
+    }
+
     private void DisposeCancellation()
     {
         cancellation?.Dispose();
         cancellation = null;
     }
 
-    private void RequestCharacterUiRestore()
-    {
-        probe.CancelEquipmentScan();
-        characterUiRestoreRequested = characterUiOpenedBySession;
-        TryRestoreCharacterUi();
-    }
+    private static IReadOnlyList<MinerBotanistOwnedItemEvidence> CaptureOwnedItems(PlayerAdvisorBaseline baseline) =>
+        (baseline.EquipmentSnapshot?.Instances ?? [])
+            .Where(instance => !instance.IsEquipped && IsOwnedGearContainer(instance.Fingerprint.Container))
+            .Select(instance => new MinerBotanistOwnedItemEvidence(
+                instance.Fingerprint.ItemId,
+                instance.Fingerprint.IsHighQuality,
+                OwnedContainerLabel(instance.Fingerprint.Container),
+                instance))
+            .ToArray();
 
-    private void TryRestoreCharacterUi()
-    {
-        if (!characterUiRestoreRequested)
-            return;
-        if (probe.TryCloseCharacterUi() || DateTimeOffset.UtcNow >= characterUiRestoreDeadlineUtc)
-        {
-            characterUiOpenedBySession = false;
-            characterUiRestoreRequested = false;
-        }
-    }
+    private static bool ComponentIsComplete(PlayerAdvisorBaseline baseline, string component) =>
+        baseline.EquipmentSnapshot?.Diagnostics.Components.Any(value =>
+            string.Equals(value.Component, component, StringComparison.Ordinal) &&
+            value.Status == Franthropy.Dalamud.Characters.SnapshotComponentStatus.Complete) == true;
+
+    private static bool IsOwnedGearContainer(string container) =>
+        container.StartsWith("Armory", StringComparison.Ordinal) ||
+        container.StartsWith("Inventory", StringComparison.Ordinal) ||
+        container.Contains("SaddleBag", StringComparison.Ordinal);
+
+    private static string OwnedContainerLabel(string container) =>
+        container.StartsWith("Armory", StringComparison.Ordinal) ? "Armoury"
+            : container.Contains("SaddleBag", StringComparison.Ordinal) ? "Saddlebag"
+            : "Inventory";
 
     private static MinerBotanistAdvisorSessionState Idle(MinerBotanistUtilityContextKind context) => new(
         MinerBotanistAdvisorSessionStage.Idle,
-        "Refresh to build read-only advice from rendered Character UI without activating FFXIV.",
+        "Refresh to capture the active player and build read-only advice without opening Character UI.",
         "Coverage has not been observed yet.",
         0,
         null,
@@ -619,7 +591,8 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
         MinerBotanistReadOnlyAdvice Advice,
         string SelectedSolutionId,
         OutfitterMarketEvidenceBook Evidence,
-        RenderedPlayerAuthorityFingerprint CapturedPlayer);
+        PlayerAdvisorAuthorityFingerprint CapturedPlayer,
+        IReadOnlyList<EquipmentInstanceFingerprint> RequiredOwnedInstances);
 
     private sealed record SolverProgressSnapshot(long Generation, EquipmentExactFrontierProgress Progress);
 

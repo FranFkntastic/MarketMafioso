@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using Franthropy.Dalamud.Characters;
 using Franthropy.Dalamud.Equipment;
 using MarketMafioso.Squire.Observation;
 using MarketMafioso.Squire.Outfitter.MarketEvidence;
@@ -17,7 +18,6 @@ public sealed class CrafterReadOnlyAdvisorTests
         var fixture = Fixture();
         var advice = new MinerBotanistReadOnlyAdvisor().Build(
             fixture.Baseline,
-            fixture.Resolution,
             fixture.Evidence,
             itemId => itemId == fixture.Candidate.ItemId ? [fixture.Candidate] : [],
             CrafterAdvisorStatFamily.Instance,
@@ -35,7 +35,6 @@ public sealed class CrafterReadOnlyAdvisorTests
         var gathererDefinition = Definition(9_000, "Gathering Tool", EquipmentSlot.MainHand, 900, 950, gatheringInsteadOfCrafting: true);
         var advice = new MinerBotanistReadOnlyAdvisor().Build(
             fixture.Baseline,
-            fixture.Resolution,
             fixture.Evidence,
             itemId => itemId == fixture.Candidate.ItemId ? [fixture.Candidate] : itemId == gathererDefinition.ItemId ? [gathererDefinition] : [],
             CrafterAdvisorStatFamily.Instance,
@@ -53,7 +52,6 @@ public sealed class CrafterReadOnlyAdvisorTests
         var fixture = Fixture();
         var advice = new MinerBotanistReadOnlyAdvisor().Build(
             fixture.Baseline,
-            fixture.Resolution,
             fixture.Evidence,
             itemId => itemId == fixture.Candidate.ItemId ? [fixture.Candidate] : [],
             CrafterAdvisorStatFamily.Instance,
@@ -68,12 +66,29 @@ public sealed class CrafterReadOnlyAdvisorTests
     }
 
     [Fact]
+    public void Partial_owned_inventory_coverage_blocks_paid_nomination()
+    {
+        var fixture = Fixture();
+        var advice = new MinerBotanistReadOnlyAdvisor().Build(
+            fixture.Baseline,
+            fixture.Evidence,
+            itemId => itemId == fixture.Candidate.ItemId ? [fixture.Candidate] : [],
+            CrafterAdvisorStatFamily.Instance,
+            CrafterUtilityProfile.OrdinaryCraftBenchmarkContextId,
+            ownedInventoryCoverageComplete: false);
+
+        Assert.True(advice.Status == MinerBotanistAdvisorStatus.Complete, advice.Diagnostic);
+        Assert.Null(advice.Nomination);
+        Assert.Contains(advice.AuthorityBySolutionId.Values, authority =>
+            authority.Reasons.Any(reason => reason.Contains("coverage is partial", StringComparison.OrdinalIgnoreCase)));
+    }
+
+    [Fact]
     public void Crafter_family_abstains_when_the_rendered_job_is_not_a_crafter()
     {
         var fixture = Fixture(classJobId: 16);
         var advice = new MinerBotanistReadOnlyAdvisor().Build(
             fixture.Baseline,
-            fixture.Resolution,
             fixture.Evidence,
             itemId => itemId == fixture.Candidate.ItemId ? [fixture.Candidate] : [],
             CrafterAdvisorStatFamily.Instance,
@@ -100,48 +115,60 @@ public sealed class CrafterReadOnlyAdvisorTests
             ("ring-left", EquipmentLoadoutPosition.LeftRing, EquipmentSlot.Ring),
             ("ring-right", EquipmentLoadoutPosition.RightRing, EquipmentSlot.Ring),
         };
-        var observed = new List<RenderedEquipmentSlotObservation>();
-        var resolved = new List<ResolvedRenderedEquipmentSlot>();
+        var scope = new CharacterScope(77, "Crafter", 21);
+        var equipped = new List<PlayerAdvisorEquippedSlot>();
+        var instances = new List<EquipmentInstanceSnapshot>();
+        var definitions = new Dictionary<uint, EquipmentItemDefinition>();
         var itemId = 1_000u;
         foreach (var (key, position, slot) in positions)
         {
-            var stats = key == "main-hand"
-                ? new Dictionary<string, int> { ["Craftsmanship"] = 399 }
-                : new Dictionary<string, int>();
-            var item = new RenderedItemDetailObservation(
-                RenderedItemDetailStatus.Complete,
-                $"Current {key}",
-                RenderedItemQuality.Normal,
-                700,
-                100,
-                "BSM",
-                null,
-                stats,
-                new Dictionary<string, int>(),
-                "Complete");
-            observed.Add(new(key, slot, RenderedEquipmentSlotObservationStatus.Equipped, item));
-            var definition = Definition(itemId++, item.Name!, slot, 399, 399, classJobId: classJobId);
-            var offer = new EquipmentLoadoutOffer(
-                definition,
-                EquipmentAcquisitionSourceKind.Owned,
-                "Currently equipped · rendered UI",
-                0,
-                Quality: EquipmentQuality.Normal,
-                SourceCatalogKey: $"rendered-current:{key}");
-            resolved.Add(new(key, position, definition, EquipmentQuality.Normal, offer));
+            var definition = Definition(itemId++, $"Current {key}", slot, 399, 399, classJobId: classJobId);
+            var index = PlayerAdvisorEquippedSlotMap.All.Single(value => value.Position == position).EquippedIndex;
+            var instance = new EquipmentInstanceSnapshot(
+                new EquipmentInstanceFingerprint(scope, "EquippedItems", index, definition.ItemId, false, 1, 30_000, 0, null, [], null, []),
+                DateTimeOffset.UtcNow,
+                true);
+            var semantics = new Dictionary<EquipmentStatSemantic, int>
+            {
+                [EquipmentStatSemantic.Craftsmanship] = key == "main-hand" ? 399 : 0,
+                [EquipmentStatSemantic.Control] = 0,
+                [EquipmentStatSemantic.CraftingPoints] = 0,
+            };
+            equipped.Add(new(position, key, instance, definition, EquipmentQuality.Normal,
+                CrafterAdvisorStatFamily.Instance.VectorFromSemantics(semantics), [], []));
+            instances.Add(instance);
+            definitions.Add(definition.ItemId, definition);
         }
 
-        var baseline = new RenderedMinerBotanistBaseline(
-            RenderedMinerBotanistBaselineStatus.Complete,
+        var snapshot = new CharacterEquipmentSnapshot(
+            Guid.NewGuid(),
+            new(scope, 21, classJobId, DateTimeOffset.UtcNow, true, SnapshotComponentStatus.Complete),
+            [],
+            [],
+            instances,
+            definitions,
+            new([new("identity", SnapshotComponentStatus.Complete), new("equipped", SnapshotComponentStatus.Complete)]));
+        var baseline = new PlayerAdvisorBaseline(
+            PlayerAdvisorBaselineStatus.Complete,
+            scope,
             classJobId,
             100,
-            new(5_399, 5_200, 950),
-            new(5_000, 5_200, 950),
-            observed,
-            "Complete");
-        var resolution = new RenderedEquipmentResolution(
-            RenderedEquipmentResolutionStatus.Complete,
-            resolved,
+            100,
+            false,
+            new Dictionary<EquipmentStatSemantic, int>
+            {
+                [EquipmentStatSemantic.Craftsmanship] = 5_399,
+                [EquipmentStatSemantic.Control] = 5_200,
+                [EquipmentStatSemantic.CraftingPoints] = 950,
+            },
+            new Dictionary<EquipmentStatSemantic, int>
+            {
+                [EquipmentStatSemantic.Craftsmanship] = 5_000,
+                [EquipmentStatSemantic.Control] = 5_200,
+                [EquipmentStatSemantic.CraftingPoints] = 950,
+            },
+            equipped,
+            snapshot,
             "Complete");
         var candidate = Definition(2_000, "Threshold Hammer", EquipmentSlot.MainHand, 399, 400, classJobId: classJobId);
         var now = new DateTimeOffset(2026, 7, 19, 20, 0, 0, TimeSpan.Zero);
@@ -161,7 +188,7 @@ public sealed class CrafterReadOnlyAdvisorTests
                     new(candidate.ItemId, EquipmentQuality.High, "hq", "Siren", 1, "HQ", "2", 1, 25_000, now, now, "r1"),
                 ], now, "r1"),
             ]);
-        return new(baseline, resolution, evidence, candidate);
+        return new(baseline, evidence, candidate);
     }
 
     private static EquipmentItemDefinition Definition(
@@ -208,8 +235,7 @@ public sealed class CrafterReadOnlyAdvisorTests
     }
 
     private sealed record FixtureData(
-        RenderedMinerBotanistBaseline Baseline,
-        RenderedEquipmentResolution Resolution,
+        PlayerAdvisorBaseline Baseline,
         OutfitterMarketEvidenceBook Evidence,
         EquipmentItemDefinition Candidate);
 }

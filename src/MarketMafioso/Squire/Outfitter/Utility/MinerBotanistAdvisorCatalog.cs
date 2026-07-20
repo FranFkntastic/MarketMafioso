@@ -121,7 +121,7 @@ public sealed class MinerBotanistAdvisorCatalog
             $"unresolved {unresolved:N0}; wrong job {wrongJob:N0}; incomplete relevant stats {incompleteProfile:N0}; unmodeled effect/restriction {unmodeled:N0}. " +
             $"Accepted samples [{string.Join("; ", acceptedSamples)}]. Rejected samples [{string.Join("; ", unmodeledSamples)}].";
         var result = new MinerBotanistAdvisorCatalogResult(
-            $"Equipped UI evidence plus level {minimumEquipLevel}-{characterLevel} {family.CoverageJobLabel} market and gil-vendor equipment; armoury inventory is not yet observed.",
+            $"Current equipped player state plus level {minimumEquipLevel}-{characterLevel} {family.CoverageJobLabel} market and gil-vendor equipment; owned inventory is not yet observed.",
             marketItemIds.Distinct().Order().ToArray(),
             vendorOffers,
             found,

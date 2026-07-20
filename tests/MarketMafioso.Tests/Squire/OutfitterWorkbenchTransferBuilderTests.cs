@@ -84,7 +84,7 @@ public sealed class OutfitterWorkbenchTransferBuilderTests
                 },
             },
         };
-        var fingerprint = new RenderedPlayerAuthorityFingerprint("fixture-player");
+        var fingerprint = new PlayerAdvisorAuthorityFingerprint("fixture-player");
 
         var actual = OutfitterWorkbenchTransferBuilder.Build(
             changedAdvice,
@@ -167,12 +167,12 @@ public sealed class OutfitterWorkbenchTransferBuilderTests
     }
 
     [Fact]
-    public void Build_RejectsStaleRenderedPlayerValidation()
+    public void Build_RejectsStalePlayerBaselineValidation()
     {
         var fixture = Fixture();
         var validation = Validation(fixture) with
         {
-            ReobservedPlayer = new RenderedPlayerAuthorityFingerprint("changed-player"),
+            RecapturedPlayer = new PlayerAdvisorAuthorityFingerprint("changed-player"),
         };
 
         var error = Assert.Throws<InvalidOperationException>(() =>
@@ -182,7 +182,7 @@ public sealed class OutfitterWorkbenchTransferBuilderTests
                 fixture.Evidence,
                 validation));
 
-        Assert.Contains("current rendered player revalidation", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("current player baseline revalidation", error.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -198,7 +198,7 @@ public sealed class OutfitterWorkbenchTransferBuilderTests
                 fixture.Evidence,
                 Validation(fixture)));
 
-        Assert.Contains("current rendered player revalidation", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("current player baseline revalidation", error.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     private static FixtureData Fixture(
@@ -311,7 +311,7 @@ public sealed class OutfitterWorkbenchTransferBuilderTests
         bool dryRunOnly = false,
         string? selectedSolutionId = null)
     {
-        var fingerprint = new RenderedPlayerAuthorityFingerprint("fixture-player");
+        var fingerprint = new PlayerAdvisorAuthorityFingerprint("fixture-player");
         return new(
             fixture.Advice,
             selectedSolutionId ?? fixture.Selected.Candidate.SolutionId,

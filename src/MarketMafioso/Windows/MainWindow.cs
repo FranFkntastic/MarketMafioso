@@ -201,6 +201,7 @@ public class MainWindow : Window, IDisposable
             config.Save();
 
         squireSnapshotSource = new DalamudCharacterEquipmentSnapshotSource(playerState, dataManager, log);
+        var playerAdvisorBaselineSource = new DalamudPlayerAdvisorBaselineSource(squireSnapshotSource, playerState);
         this.dataManager = dataManager;
         renderedDefinitionLookup = new LuminaRenderedEquipmentDefinitionLookup(dataManager);
         var squireCapabilities = new DalamudSquireDispositionCapabilitySource();
@@ -257,7 +258,7 @@ public class MainWindow : Window, IDisposable
             Plugin.PluginInterface,
             acquisitionPlanSource,
             IsMarketAcquisitionUnlocked,
-            renderedCharacterAdvisorProbe);
+            playerAdvisorBaselineSource);
         statusTab = new StatusTabPanel(config, reporter, retainerCacheStore, log);
         marketAcquisitionRequestPickupPanel = new MarketAcquisitionRequestPickupPanel(
             () => _ = FetchDashboardRequestsAsync(),

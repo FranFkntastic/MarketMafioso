@@ -17,11 +17,13 @@ public interface IAdvisorStatFamily
 {
     IReadOnlySet<uint> SupportedClassJobIds { get; }
     string CoverageJobLabel { get; }
+    IReadOnlyList<EquipmentStatSemantic> RelevantSemantics { get; }
     bool IsRelevantSemantic(EquipmentStatSemantic semantic);
+    EquipmentSolverUtilityVector VectorFromSemantics(IReadOnlyDictionary<EquipmentStatSemantic, int> stats);
     IEquipmentExactSolverUtilityModel CreateUtilityModel(
         string contextId,
-        AdvisorStatTriple baseline,
-        AdvisorStatTriple? fixedStats,
+        IReadOnlyDictionary<EquipmentStatSemantic, int> baseline,
+        IReadOnlyDictionary<EquipmentStatSemantic, int>? fixedStats,
         uint classJobId,
         uint characterLevel);
     AdvisorAuthorityAssessment AssessAuthority(
@@ -33,13 +35,12 @@ public interface IAdvisorStatFamily
         string contextId,
         uint classJobId,
         uint characterLevel,
-        MinerBotanistUtilityStats offerBaseline,
-        MinerBotanistUtilityStats fixedStats);
+        IReadOnlyDictionary<EquipmentStatSemantic, int> offerBaseline,
+        IReadOnlyDictionary<EquipmentStatSemantic, int> fixedStats);
     /// <summary>Positional stat contribution of one rendered item (base plus materia), in family order.</summary>
     AdvisorStatTriple TripleFromRendered(IReadOnlyDictionary<string, int> stats, IReadOnlyDictionary<string, int> materia);
     EquipmentSolverUtilityVector VectorFromRendered(IReadOnlyDictionary<string, int> stats, IReadOnlyDictionary<string, int> materia);
     EquipmentSolverUtilityVector VectorFromDefinition(EquipmentStatProfile profile);
-    AdvisorStatTriple ToTriple(MinerBotanistUtilityStats stats);
 }
 
 /// <summary>
@@ -88,16 +89,27 @@ public sealed class GathererAdvisorStatFamily : IAdvisorStatFamily
         MinerBotanistUtilityProfile.BotanistClassJobId,
     };
 
+    private static readonly EquipmentStatSemantic[] Semantics =
+    [
+        EquipmentStatSemantic.Gathering,
+        EquipmentStatSemantic.Perception,
+        EquipmentStatSemantic.GatheringPoints,
+    ];
+
     public IReadOnlySet<uint> SupportedClassJobIds => Jobs;
     public string CoverageJobLabel => "MIN/BTN";
+    public IReadOnlyList<EquipmentStatSemantic> RelevantSemantics => Semantics;
 
     public bool IsRelevantSemantic(EquipmentStatSemantic semantic) => semantic is
         EquipmentStatSemantic.Gathering or EquipmentStatSemantic.Perception or EquipmentStatSemantic.GatheringPoints;
 
+    public EquipmentSolverUtilityVector VectorFromSemantics(IReadOnlyDictionary<EquipmentStatSemantic, int> stats) =>
+        MinerBotanistUtilityProfile.ToVector(FromSemantics(stats));
+
     public IEquipmentExactSolverUtilityModel CreateUtilityModel(
         string contextId,
-        AdvisorStatTriple baseline,
-        AdvisorStatTriple? fixedStats,
+        IReadOnlyDictionary<EquipmentStatSemantic, int> baseline,
+        IReadOnlyDictionary<EquipmentStatSemantic, int>? fixedStats,
         uint classJobId,
         uint characterLevel)
     {
@@ -109,10 +121,10 @@ public sealed class GathererAdvisorStatFamily : IAdvisorStatFamily
         };
         return new MinerBotanistUtilityProfile(
             contextKind,
-            FromTriple(baseline),
+            FromSemantics(baseline),
             classJobId,
             characterLevel,
-            fixedStats is null ? null : FromTriple(fixedStats));
+            fixedStats is null ? null : FromSemantics(fixedStats));
     }
 
     public AdvisorAuthorityAssessment AssessAuthority(
@@ -126,8 +138,8 @@ public sealed class GathererAdvisorStatFamily : IAdvisorStatFamily
         string contextId,
         uint classJobId,
         uint characterLevel,
-        MinerBotanistUtilityStats offerBaseline,
-        MinerBotanistUtilityStats fixedStats)
+        IReadOnlyDictionary<EquipmentStatSemantic, int> offerBaseline,
+        IReadOnlyDictionary<EquipmentStatSemantic, int> fixedStats)
     {
         var contextKind = contextId switch
         {
@@ -135,7 +147,13 @@ public sealed class GathererAdvisorStatFamily : IAdvisorStatFamily
             MinerBotanistUtilityProfile.CollectableContextId => MinerBotanistUtilityContextKind.CollectableEfficiency,
             _ => MinerBotanistUtilityContextKind.OrdinaryResourceBenchmark,
         };
-        return MinerBotanistSolverReplay.Capture(request, contextKind, classJobId, characterLevel, offerBaseline, fixedStats);
+        return MinerBotanistSolverReplay.Capture(
+            request,
+            contextKind,
+            classJobId,
+            characterLevel,
+            FromSemantics(offerBaseline),
+            FromSemantics(fixedStats));
     }
 
     public AdvisorStatTriple TripleFromRendered(IReadOnlyDictionary<string, int> stats, IReadOnlyDictionary<string, int> materia)
@@ -156,8 +174,11 @@ public sealed class GathererAdvisorStatFamily : IAdvisorStatFamily
             Sum(EquipmentStatSemantic.GatheringPoints)));
     }
 
-    public AdvisorStatTriple ToTriple(MinerBotanistUtilityStats stats) =>
-        new(stats.Gathering, stats.Perception, stats.GatheringPoints);
+    private static MinerBotanistUtilityStats FromSemantics(IReadOnlyDictionary<EquipmentStatSemantic, int> stats) =>
+        new(
+            stats.GetValueOrDefault(EquipmentStatSemantic.Gathering),
+            stats.GetValueOrDefault(EquipmentStatSemantic.Perception),
+            stats.GetValueOrDefault(EquipmentStatSemantic.GatheringPoints));
 
     private static MinerBotanistUtilityStats FromTriple(AdvisorStatTriple triple) =>
         new(checked((int)triple.First), checked((int)triple.Second), checked((int)triple.Third));
@@ -167,24 +188,35 @@ public sealed class CrafterAdvisorStatFamily : IAdvisorStatFamily
 {
     public static readonly CrafterAdvisorStatFamily Instance = new();
 
+    private static readonly EquipmentStatSemantic[] Semantics =
+    [
+        EquipmentStatSemantic.Craftsmanship,
+        EquipmentStatSemantic.Control,
+        EquipmentStatSemantic.CraftingPoints,
+    ];
+
     public IReadOnlySet<uint> SupportedClassJobIds => CrafterUtilityProfile.CrafterClassJobIds;
     public string CoverageJobLabel => "crafter";
+    public IReadOnlyList<EquipmentStatSemantic> RelevantSemantics => Semantics;
 
     public bool IsRelevantSemantic(EquipmentStatSemantic semantic) => semantic is
         EquipmentStatSemantic.Craftsmanship or EquipmentStatSemantic.Control or EquipmentStatSemantic.CraftingPoints;
 
+    public EquipmentSolverUtilityVector VectorFromSemantics(IReadOnlyDictionary<EquipmentStatSemantic, int> stats) =>
+        CrafterUtilityProfile.ToVector(FromSemantics(stats));
+
     public IEquipmentExactSolverUtilityModel CreateUtilityModel(
         string contextId,
-        AdvisorStatTriple baseline,
-        AdvisorStatTriple? fixedStats,
+        IReadOnlyDictionary<EquipmentStatSemantic, int> baseline,
+        IReadOnlyDictionary<EquipmentStatSemantic, int>? fixedStats,
         uint classJobId,
         uint characterLevel) =>
         new CrafterUtilityProfile(
             CrafterUtilityContextKind.OrdinaryCraftBenchmark,
-            FromTriple(baseline),
+            FromSemantics(baseline),
             classJobId,
             characterLevel,
-            fixedStats is null ? null : FromTriple(fixedStats));
+            fixedStats is null ? null : FromSemantics(fixedStats));
 
     public AdvisorAuthorityAssessment AssessAuthority(
         IEquipmentExactSolverUtilityModel model,
@@ -197,8 +229,8 @@ public sealed class CrafterAdvisorStatFamily : IAdvisorStatFamily
         string contextId,
         uint classJobId,
         uint characterLevel,
-        MinerBotanistUtilityStats offerBaseline,
-        MinerBotanistUtilityStats fixedStats) =>
+        IReadOnlyDictionary<EquipmentStatSemantic, int> offerBaseline,
+        IReadOnlyDictionary<EquipmentStatSemantic, int> fixedStats) =>
         null;
 
     public AdvisorStatTriple TripleFromRendered(IReadOnlyDictionary<string, int> stats, IReadOnlyDictionary<string, int> materia)
@@ -219,8 +251,11 @@ public sealed class CrafterAdvisorStatFamily : IAdvisorStatFamily
             Sum(EquipmentStatSemantic.CraftingPoints)));
     }
 
-    public AdvisorStatTriple ToTriple(MinerBotanistUtilityStats stats) =>
-        new(stats.Gathering, stats.Perception, stats.GatheringPoints);
+    private static CrafterUtilityStats FromSemantics(IReadOnlyDictionary<EquipmentStatSemantic, int> stats) =>
+        new(
+            stats.GetValueOrDefault(EquipmentStatSemantic.Craftsmanship),
+            stats.GetValueOrDefault(EquipmentStatSemantic.Control),
+            stats.GetValueOrDefault(EquipmentStatSemantic.CraftingPoints));
 
     private static CrafterUtilityStats FromTriple(AdvisorStatTriple triple) =>
         new(checked((int)triple.First), checked((int)triple.Second), checked((int)triple.Third));
