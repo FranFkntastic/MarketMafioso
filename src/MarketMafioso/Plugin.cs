@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Dalamud.Game.Command;
@@ -126,7 +127,7 @@ public sealed class Plugin : IDalamudPlugin
             });
         workshopMaterialManifestExport = new WorkshopMaterialManifestExportService(
             new LuminaWorkshopMaterialCraftRecipeResolver(DataManager));
-        renderedCharacterUiProbe = new DalamudRenderedCharacterUiProbe(GameGui);
+        renderedCharacterUiProbe = new DalamudRenderedCharacterUiProbe(GameGui, DataManager);
         retainerUiPreparation = new(
             CommandManager,
             new LifestreamIpc(PluginInterface, Log),
@@ -214,9 +215,30 @@ public sealed class Plugin : IDalamudPlugin
                 tryOpenArmouryBoardUi: renderedCharacterUiProbe.TryOpenArmouryBoard,
                 tryCloseArmouryBoardUi: renderedCharacterUiProbe.TryCloseArmouryBoard,
                 tryShowArmourySlotTooltipUi: renderedCharacterUiProbe.TryShowArmourySlotTooltip,
+                tryShowBagSlotTooltipUi: renderedCharacterUiProbe.TryShowBagSlotTooltip,
+                tryOpenBagSlotContextUi: target =>
+                {
+                    var separator = target.LastIndexOf(':');
+                    return separator > 0 && int.TryParse(target[(separator + 1)..], out var slot)
+                        ? renderedCharacterUiProbe.TryOpenBagSlotContext(target[..separator], slot)
+                        : new Franthropy.Dalamud.AgentBridge.RenderedUiTextActionResult(false, "InvalidContextTarget", "Target must be '<Container>:<slotIndex>'.", "ContextMenu", null);
+                },
+                tryInvokeBagSlotContextActionUi: target =>
+                {
+                    var parts = target.Split(':');
+                    if (parts.Length < 3 || !int.TryParse(parts[1], out var actionSlot))
+                        return new Franthropy.Dalamud.AgentBridge.RenderedUiTextActionResult(false, "InvalidContextActionTarget", "Target must be '<Container>:<slotIndex>:<label>'.", "ContextMenu", null);
+                    return renderedCharacterUiProbe.TryInvokeBagSlotContextAction(parts[0], actionSlot, string.Join(':', parts.Skip(2)));
+                },
+                tryCloseBagSlotContextUi: renderedCharacterUiProbe.TryCloseBagSlotContext,
+                captureTooltipMapDiagnosticUi: renderedCharacterUiProbe.CaptureTooltipMapDiagnostic,
+                captureInventoryContainerTableDiagnosticUi: renderedCharacterUiProbe.CaptureInventoryContainerTableDiagnostic,
+                setInventoryTabDiagnosticUi: renderedCharacterUiProbe.SetInventoryTabDiagnostic,
                 beginArmouryDifferentialUi: () => renderedCharacterUiProbe.BeginArmouryDifferential(
                     mainWindow.CreateAgentInventoryStructSnapshot().Items,
-                    mainWindow.ResolveRenderedItemName),
+                    mainWindow.ResolveRenderedItemName,
+                    mainWindow.ResolveRenderedBagItemId,
+                    mainWindow.CreateAgentInventoryStructSnapshot),
                 advanceArmouryDifferentialUi: renderedCharacterUiProbe.AdvanceArmouryDifferential,
                 cancelArmouryDifferentialUi: renderedCharacterUiProbe.CancelArmouryDifferential,
                 tryOpenGearsetListUi: renderedCharacterUiProbe.TryOpenGearsetList,

@@ -32,6 +32,10 @@ public sealed class DalamudCharacterEquipmentSnapshotSource : ICharacterEquipmen
         (InventoryType.Inventory2, EquipmentSlot.Unknown, false),
         (InventoryType.Inventory3, EquipmentSlot.Unknown, false),
         (InventoryType.Inventory4, EquipmentSlot.Unknown, false),
+        (InventoryType.SaddleBag1, EquipmentSlot.Unknown, false),
+        (InventoryType.SaddleBag2, EquipmentSlot.Unknown, false),
+        (InventoryType.PremiumSaddleBag1, EquipmentSlot.Unknown, false),
+        (InventoryType.PremiumSaddleBag2, EquipmentSlot.Unknown, false),
     ];
 
     private readonly IPlayerState playerState;
@@ -186,7 +190,9 @@ public sealed class DalamudCharacterEquipmentSnapshotSource : ICharacterEquipmen
             var component = equipped ? "equipped" : type.ToString().StartsWith("Armory", StringComparison.Ordinal) ? "armoury" : "inventory";
             if (container == null || !container->IsLoaded)
             {
-                statuses[component] = false;
+                // Premium saddlebags are account-optional; their absence is normal, not partial coverage.
+                if (type is not (InventoryType.PremiumSaddleBag1 or InventoryType.PremiumSaddleBag2))
+                    statuses[component] = false;
                 continue;
             }
             for (var slotIndex = 0; slotIndex < container->Size; slotIndex++)

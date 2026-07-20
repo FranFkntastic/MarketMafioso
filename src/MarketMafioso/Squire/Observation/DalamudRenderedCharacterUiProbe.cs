@@ -8,6 +8,8 @@ using ECommons.UIHelpers.AddonMasterImplementations;
 using FFXIVClientStructs.FFXIV.Client.UI;
 using FFXIVClientStructs.FFXIV.Client.UI.Agent;
 using FFXIVClientStructs.FFXIV.Component.GUI;
+using FFXIVClientStructs.Interop;
+using FFXIVClientStructs.STD;
 using Franthropy.Dalamud.AgentBridge;
 using Franthropy.Dalamud.Automation.Ui;
 using MarketMafioso.AgentBridge;
@@ -40,6 +42,13 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
         "CharacterRepute",
         "GearSetList",
         "ArmouryBoard",
+        "Inventory",
+        "InventoryLarge",
+        "InventoryGrid",
+        "InventoryExpansion",
+        "InventoryBuddy",
+        "ContextMenu",
+        "ChatLog",
         "ItemDetail",
         "_TextError",
         "SelectYesno",
@@ -70,15 +79,17 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
     ];
 
     private readonly IGameGui gameGui;
+    private readonly IDataManager dataManager;
     private readonly Franthropy.Dalamud.AgentBridge.DalamudRenderedUiTextActionDispatcher renderedTextActions;
     private readonly RenderedGatheringStatsStabilizer gatheringStatsStabilizer = new(TimeSpan.FromSeconds(3));
     private readonly RenderedCraftingStatsStabilizer craftingStatsStabilizer = new(TimeSpan.FromSeconds(3));
     private readonly RenderedCharacterEquipmentScanCoordinator equipmentScan = new();
     private string? lastGearsetSelectionDiagnostic;
 
-    public DalamudRenderedCharacterUiProbe(IGameGui gameGui)
+    public DalamudRenderedCharacterUiProbe(IGameGui gameGui, IDataManager dataManager)
     {
         this.gameGui = gameGui ?? throw new ArgumentNullException(nameof(gameGui));
+        this.dataManager = dataManager ?? throw new ArgumentNullException(nameof(dataManager));
         renderedTextActions = new(gameGui);
     }
 
@@ -338,6 +349,210 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
         return true;
     }
 
+    public unsafe bool TryOpenInventoryWindow() => TryShowAddon("Inventory", AgentId.Inventory);
+
+    public unsafe bool TryOpenInventoryBuddy() => TryShowAddon("InventoryBuddy", AgentId.InventoryBuddy);
+
+    private unsafe bool TryShowAddon(string addonName, AgentId agentId)
+    {
+        var addon = gameGui.GetAddonByName<AtkUnitBase>(addonName, 1);
+        if (addon != null)
+        {
+            if (addon->RootNode != null && addon->RootNode->IsVisible())
+                return false;
+            addon->Show(true, 0);
+            return true;
+        }
+        var agent = AgentModule.Instance()->GetAgentByInternalId(agentId);
+        if (agent == null)
+            return false;
+        agent->Show();
+        return true;
+    }
+
+    private int inventoryContextStableFrames;
+    private int inventoryContextRetries;
+    private bool inventoryContextOwnerResetRequested;
+
+    /// <summary>
+    /// Opens the game's own context menu for an exact inventory slot through
+    /// AgentInventoryContext — the same path right-click uses, with raw InventoryType
+    /// numbering and no tooltip container mapping. The rendered menu title is the
+    /// item identity. The owner agent must be stable first; this advances one step per
+    /// call and reports Cycling until the menu can be opened. A stale active-but-hidden
+    /// owner is reset with Hide before Show, exactly like the proven opener.
+    /// </summary>
+    public unsafe Franthropy.Dalamud.AgentBridge.RenderedUiTextActionResult TryOpenBagSlotContext(string container, int slotIndex)
+    {
+        if (!Enum.TryParse<FFXIVClientStructs.FFXIV.Client.Game.InventoryType>(container, out var inventoryType))
+            return new(false, "InvalidContextContainer", $"'{container}' is not a recognized inventory container.", "ContextMenu", null);
+        var context = AgentInventoryContext.Instance();
+        if (context == null)
+            return new(false, "InventoryContextUnavailable", "The inventory context agent is unavailable.", "ContextMenu", null);
+        var owner = AgentModule.Instance()->GetAgentByInternalId(AgentId.Inventory);
+        if (owner == null)
+            return new(false, "InventoryOwnerUnavailable", "The inventory owner agent is unavailable.", "ContextMenu", null);
+        if (inventoryContextRetries++ > 60)
+            return new(false, "InventoryOwnerUnavailable", "The inventory owner never stabilized.", "ContextMenu", null);
+
+        if (!owner->IsAgentActive())
+        {
+            inventoryContextStableFrames = 0;
+            inventoryContextOwnerResetRequested = false;
+            owner->Show();
+            return new(false, "InventoryContextCycling", "Waiting for the inventory owner agent to become active.", "ContextMenu", null);
+        }
+        var addonId = owner->GetAddonId();
+        if (addonId == 0 || !IsAddonPresented(addonId))
+        {
+            inventoryContextStableFrames = 0;
+            // The inventory agent can retain its active bit after its addon was hidden;
+            // Show is then a no-op, so Hide must clear the stale ownership first, and
+            // only a fully inactive owner may be Shown again.
+            if (!inventoryContextOwnerResetRequested)
+            {
+                inventoryContextOwnerResetRequested = true;
+                owner->Hide();
+                return new(false, "InventoryContextCycling", "Resetting the stale inventory owner before presenting its window.", "ContextMenu", null);
+            }
+            return new(false, "InventoryContextCycling", "Waiting for the stale inventory owner to release its hidden addon.", "ContextMenu", null);
+        }
+        inventoryContextOwnerResetRequested = false;
+        if (++inventoryContextStableFrames < 6)
+            return new(false, "InventoryContextCycling", $"Verifying inventory owner stability ({inventoryContextStableFrames}/6).", "ContextMenu", null);
+        inventoryContextRetries = 0;
+        context->OpenForItemSlot(inventoryType, slotIndex, 0, addonId);
+        return new(true, "BagSlotContextRequested", $"Requested the rendered context menu for {container}:{slotIndex}.", "ContextMenu", null);
+    }
+
+    public void ResetBagSlotContext()
+    {
+        inventoryContextStableFrames = 0;
+        inventoryContextRetries = 0;
+        inventoryContextOwnerResetRequested = false;
+    }
+
+    /// <summary>
+    /// Diagnostic: invoke a named vanilla context-menu entry for the exact slot through
+    /// the menu addon's own callback, after proving the menu is bound to that slot.
+    /// </summary>
+    public unsafe Franthropy.Dalamud.AgentBridge.RenderedUiTextActionResult TryInvokeBagSlotContextAction(string container, int slotIndex, string label)
+    {
+        if (!Enum.TryParse<FFXIVClientStructs.FFXIV.Client.Game.InventoryType>(container, out var inventoryType))
+            return new(false, "InvalidContextContainer", $"'{container}' is not a recognized inventory container.", "ContextMenu", null);
+        var menu = gameGui.GetAddonByName<AtkUnitBase>("ContextMenu", 1);
+        var context = AgentInventoryContext.Instance();
+        if (menu == null || !menu->IsReady || !menu->IsVisible || context == null)
+        {
+            var opened = TryOpenBagSlotContext(container, slotIndex);
+            if (!opened.Success)
+                return opened;
+            return new(false, "InventoryContextCycling", "Waiting for the exact slot's context menu.", "ContextMenu", null);
+        }
+        if (context->TargetInventoryId != inventoryType || context->TargetInventorySlotId != slotIndex)
+            return new(false, "UnexpectedContextMenu", "The visible context menu targets a different slot.", "ContextMenu", null);
+
+        var labels = new List<string>();
+        foreach (var parameter in context->EventParams)
+            if (parameter.Type is AtkValueType.String or AtkValueType.ManagedString or AtkValueType.WideString or AtkValueType.ConstString)
+                labels.Add(parameter.GetValueAsString());
+        var actionIndex = labels.FindIndex(value => string.Equals(value.Trim(), label, StringComparison.OrdinalIgnoreCase));
+        if (actionIndex < 0 || actionIndex >= context->ContextItemCount || context->IsContextItemDisabled(actionIndex))
+            return new(false, "ContextActionUnavailable", $"The context menu offered no enabled '{label}' entry.", "ContextMenu", null);
+
+        var values = stackalloc AtkValue[5];
+        values[0] = new() { Type = AtkValueType.Int, Int = 0 };
+        values[1] = new() { Type = AtkValueType.Int, Int = actionIndex };
+        values[2] = new() { Type = AtkValueType.Int, Int = 0 };
+        values[3] = new() { Type = AtkValueType.Int, Int = 0 };
+        values[4] = new() { Type = AtkValueType.Int, Int = 0 };
+        return menu->FireCallback(5, values, true)
+            ? new(true, "ContextActionInvoked", $"Invoked '{label}' for {container}:{slotIndex}.", "ContextMenu", null)
+            : new(false, "ContextActionRejected", $"The context menu rejected '{label}'.", "ContextMenu", null);
+    }
+
+    /// <summary>
+    /// Reads the exact bag slot's rendered identity by asking the game itself for it:
+    /// open the slot's own context menu, activate its "Copy Name to Clipboard" entry,
+    /// and read back the name the game wrote for the user. No numbering, no structs.
+    /// </summary>
+    public unsafe Franthropy.Dalamud.AgentBridge.RenderedUiTextActionResult TryCopyBagSlotContextName(string container, int slotIndex)
+    {
+        if (!Enum.TryParse<FFXIVClientStructs.FFXIV.Client.Game.InventoryType>(container, out var inventoryType))
+            return new(false, "InvalidContextContainer", $"'{container}' is not a recognized inventory container.", "ContextMenu", null);
+        var menu = gameGui.GetAddonByName<AtkUnitBase>("ContextMenu", 1);
+        var context = AgentInventoryContext.Instance();
+        if (menu == null || !menu->IsReady || !menu->IsVisible || context == null)
+        {
+            var opened = TryOpenBagSlotContext(container, slotIndex);
+            if (!opened.Success)
+                return opened;
+            return new(false, "InventoryContextCycling", "Waiting for the exact slot's context menu.", "ContextMenu", null);
+        }
+        if (context->TargetInventoryId != inventoryType || context->TargetInventorySlotId != slotIndex)
+            return new(false, "UnexpectedContextMenu", "The visible context menu targets a different slot.", "ContextMenu", null);
+
+        var labels = new List<string>();
+        foreach (var parameter in context->EventParams)
+            if (parameter.Type is AtkValueType.String or AtkValueType.ManagedString or AtkValueType.WideString or AtkValueType.ConstString)
+                labels.Add(parameter.GetValueAsString());
+        var copyIndex = labels.FindIndex(label => string.Equals(label.Trim(), "Copy Name to Clipboard", StringComparison.OrdinalIgnoreCase));
+        if (copyIndex < 0 || copyIndex >= context->ContextItemCount || context->IsContextItemDisabled(copyIndex))
+            return new(false, "ContextNameCopyUnavailable",
+                $"The context menu offered no enabled name-copy entry (count={context->ContextItemCount}; labels=[{string.Join(" | ", labels)}]).", "ContextMenu", null);
+
+        var values = stackalloc AtkValue[5];
+        values[0] = new() { Type = AtkValueType.Int, Int = 0 };
+        values[1] = new() { Type = AtkValueType.Int, Int = copyIndex };
+        values[2] = new() { Type = AtkValueType.Int, Int = 0 };
+        values[3] = new() { Type = AtkValueType.Int, Int = 0 };
+        values[4] = new() { Type = AtkValueType.Int, Int = 0 };
+        if (!menu->FireCallback(5, values, true))
+            return new(false, "ContextNameCopyRejected", "The context menu rejected the name-copy entry.", "ContextMenu", null);
+        var name = Dalamud.Bindings.ImGui.ImGui.GetClipboardText();
+        TryCloseBagSlotContext();
+        return string.IsNullOrWhiteSpace(name)
+            ? new(false, "ContextNameCopyFailed", "The context menu did not copy an item name.", "ContextMenu", null)
+            : new(true, "ContextNameCopied", name, "ContextMenu", null);
+    }
+
+    public unsafe bool TryCloseBagSlotContext()
+    {
+        var addon = gameGui.GetAddonByName<AtkUnitBase>("ContextMenu", 1);
+        if (addon == null || addon->RootNode == null || !addon->RootNode->IsVisible())
+            return false;
+        addon->Close(true);
+        return true;
+    }
+
+    private unsafe bool IsContextMenuVisible()
+    {
+        var addon = gameGui.GetAddonByName<AtkUnitBase>("ContextMenu", 1);
+        return addon != null && addon->RootNode != null && addon->RootNode->IsVisible();
+    }
+
+    private unsafe bool IsAddonPresented(uint addonId)
+    {
+        var unitManager = RaptureAtkUnitManager.Instance();
+        var addon = unitManager == null ? null : unitManager->GetAddonById((ushort)addonId);
+        return addon != null && addon->IsReady && addon->IsVisible;
+    }
+
+    public unsafe bool TryCloseInventorySurfaces()
+    {
+        var closed = false;
+        foreach (var addonName in new[] { "Inventory", "InventoryBuddy" })
+        {
+            var addon = gameGui.GetAddonByName<AtkUnitBase>(addonName, 1);
+            if (addon == null || addon->RootNode == null || !addon->RootNode->IsVisible())
+                continue;
+            Franthropy.Dalamud.Automation.Ui.RenderedItemDetailTooltipRequest.HideTooltip(addon->Id);
+            addon->Close(true);
+            closed = true;
+        }
+        return closed;
+    }
+
     public unsafe bool TryCloseArmouryBoard()
     {
         var addon = gameGui.GetAddonByName<AtkUnitBase>("ArmouryBoard", 1);
@@ -434,6 +649,154 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
             : new(true, "ArmouryTooltipDispatched", "The armoury tooltip request was dispatched; the rendered Item Detail settles on the next frame and can be read with get-item-detail-ui.", "ArmouryBoard", null);
     }
 
+    /// <summary>
+    /// Diagnostic dump of the InventoryManager container table: index to inventory type.
+    /// The tooltip agent's TypeOrId numbering follows this table's registration order,
+    /// which is not the enum order. Mechanism evidence only.
+    /// </summary>
+    public unsafe string CaptureInventoryContainerTableDiagnostic()
+    {
+        var manager = FFXIVClientStructs.FFXIV.Client.Game.InventoryManager.Instance();
+        if (manager == null || manager->Inventories == null)
+            return "No InventoryManager.";
+        var lines = new List<string>();
+        for (var index = 0; index < 256; index++)
+        {
+            var container = manager->Inventories + index;
+            if (container->Type == 0 && container->Size == 0)
+                break;
+            lines.Add($"[{index}] type={(uint)container->Type} ({container->Type}) size={container->Size} loaded={container->IsLoaded}");
+        }
+        return string.Join("\n", lines);
+    }
+
+    /// <summary>Diagnostic: open the classic Inventory window and select a tab (bag page).</summary>
+    public unsafe string SetInventoryTabDiagnostic(int tab)
+    {
+        TryOpenInventoryWindow();
+        var addon = gameGui.GetAddonByName<AtkUnitBase>("Inventory", 1);
+        if (addon == null)
+            return "The classic Inventory addon is not loaded.";
+        var inventory = (AddonInventory*)addon;
+        inventory->SetTab(tab);
+        return $"SetTab({tab}) dispatched; current TabIndex={inventory->TabIndex}.";
+    }
+
+    /// <summary>
+    /// Diagnostic dump of the tooltip-manager attachments for a window's item cells:
+    /// the exact type/id, slot, and kind values the game itself registered. Mechanism
+    /// evidence for agent container numbering — no item data is interpreted here.
+    /// </summary>
+    public unsafe string CaptureTooltipMapDiagnostic(string addonName)
+    {
+        var stage = AtkStage.Instance();
+        if (stage == null)
+            return "No AtkStage.";
+        var addon = gameGui.GetAddonByName<AtkUnitBase>(addonName, 1);
+        if (addon == null)
+            return $"Addon '{addonName}' is not loaded.";
+        var lines = new List<string>();
+        var map = &stage->TooltipManager.TooltipMap;
+        CollectTooltipMapEntries(&addon->UldManager, map, lines, new HashSet<nint>());
+        lines.Sort(StringComparer.Ordinal);
+        return lines.Count == 0
+            ? $"No tooltip attachments found under '{addonName}'."
+            : string.Join("\n", lines);
+    }
+
+    private static unsafe void CollectTooltipMapEntries(
+        AtkUldManager* manager,
+        StdMap<Pointer<AtkResNode>, Pointer<AtkTooltipManager.AtkTooltipInfo>>* map,
+        List<string> lines,
+        HashSet<nint> visited)
+    {
+        if (manager == null || manager->NodeList == null || !visited.Add((nint)manager))
+            return;
+        for (var index = 0u; index < manager->NodeListCount; index++)
+        {
+            var node = manager->NodeList[index];
+            if (node == null)
+                continue;
+            if (map->TryGetValuePointer(node, out var info) && info != null)
+                lines.Add($"node={node->NodeId} type={info->Value->Type} parent={info->Value->ParentId} typeOrId={(uint)info->Value->AtkTooltipArgs.ItemArgs.InventoryType} slot={info->Value->AtkTooltipArgs.ItemArgs.Slot} kind={(byte)info->Value->AtkTooltipArgs.ItemArgs.Kind} flag1={info->Value->AtkTooltipArgs.ItemArgs.Flag1}");
+            var componentNode = node->GetAsAtkComponentNode();
+            if (componentNode != null && componentNode->Component != null)
+                CollectTooltipMapEntries(&componentNode->Component->UldManager, map, lines, visited);
+        }
+    }
+
+    /// <summary>
+    /// Diagnostic bag/saddlebag tooltip request used to prove agent container numbering
+    /// before the differential consumes it. Accepts the same ':exp=type,flag,kind'
+    /// override as the armoury probe.
+    /// </summary>
+    public unsafe Franthropy.Dalamud.AgentBridge.RenderedUiTextActionResult TryShowBagSlotTooltip(string target)
+    {
+        uint? experimentType = null;
+        byte? experimentFlag = null;
+        byte? experimentKind = null;
+        var targetCore = target ?? string.Empty;
+        const string ExpMarker = ":exp=";
+        var expIndex = targetCore.IndexOf(ExpMarker, StringComparison.OrdinalIgnoreCase);
+        if (expIndex >= 0)
+        {
+            var parts = targetCore[(expIndex + ExpMarker.Length)..].Split(',');
+            if (parts.Length == 3 && uint.TryParse(parts[0], out var parsedType) &&
+                byte.TryParse(parts[1], out var parsedFlag) && byte.TryParse(parts[2], out var parsedKind))
+            {
+                experimentType = parsedType;
+                experimentFlag = parsedFlag;
+                experimentKind = parsedKind;
+            }
+            targetCore = targetCore[..expIndex];
+        }
+        string? forcedParentName = null;
+        var atIndex = targetCore.IndexOf('@');
+        if (atIndex >= 0)
+        {
+            forcedParentName = targetCore[(atIndex + 1)..];
+            targetCore = targetCore[..atIndex];
+        }
+        var separatorIndex = targetCore.LastIndexOf(':');
+        if (separatorIndex <= 0 || !short.TryParse(targetCore[(separatorIndex + 1)..], out var slotIndex) || slotIndex < 0)
+            return new(false, "InvalidBagTarget", "Target must be '<Container>:<slotIndex>', for example Inventory1:0.", "Inventory", null);
+        var container = targetCore[..separatorIndex];
+        var surface = SurfaceFor(container);
+        if (surface == DifferentialSurface.ArmouryBoard || BagTooltipTypeOrId(container) == 0)
+            return new(false, "InvalidBagContainer", $"'{container}' is not a player-inventory or saddlebag container.", "Inventory", null);
+        var addonName = SurfaceAddon(surface);
+        var addon = ResolveDifferentialAddon(surface);
+        if (addon == null)
+        {
+            EnsureDifferentialSurfaceOpen(surface);
+            return new(false, "BagSurfaceOpening", $"Opening the rendered {addonName} surface; retry.", addonName, null);
+        }
+        // Diagnostic parent override: 'Inventory2:0@InventoryExpansion:exp=...' forces the
+        // tooltip parent window, testing which managed interface resolves a container.
+        AtkUnitBase* parentAddon = addon;
+        if (forcedParentName is not null)
+        {
+            var forced = gameGui.GetAddonByName<AtkUnitBase>(forcedParentName, 1);
+            if (forced != null && (forced->RootNode == null || !forced->RootNode->IsVisible()))
+                forced->Show(true, 0);
+            if (forced == null || forced->RootNode == null || !forced->RootNode->IsVisible())
+                return new(false, "BagParentOpening", $"Opening the forced tooltip parent '{forcedParentName}'; retry.", forcedParentName, null);
+            parentAddon = forced;
+        }
+        if (surface == DifferentialSurface.InventoryBuddy && !SelectInventoryBuddyTab((AddonInventoryBuddy*)addon, container))
+            return new(false, "BagTabCycling", "Cycling the rendered saddlebag tab.", addonName, null);
+        var slotNode = ResolveFirstDragDropCell(addon);
+        if (slotNode == null)
+            return new(false, "BagSlotUnavailable", $"The rendered {addonName} surface has no item cells.", addonName, null);
+        var typeOrId = experimentType ?? BagTooltipTypeOrId(container);
+        if (!TryShowArmourySlotTooltipRaw(parentAddon, slotNode, typeOrId, experimentFlag ?? 0, experimentKind ?? 2, slotIndex))
+            return new(false, "BagTooltipRejected", $"The game rejected the tooltip request (type={typeOrId}) for {container}:{slotIndex}.", addonName, null);
+        var observation = RenderedItemDetailParser.Parse(Capture());
+        return observation.Status == RenderedItemDetailStatus.Complete
+            ? new(true, "RenderedBagTooltipObserved", $"Rendered Item Detail observed: {observation.Name}.", addonName, null)
+            : new(true, "BagTooltipDispatched", "The bag tooltip request was dispatched; the rendered Item Detail settles on the next frame and can be read with get-item-detail-ui.", addonName, null);
+    }
+
     private static unsafe bool TryShowArmourySlotTooltipRaw(AtkUnitBase* addon, AtkResNode* slotNode, uint typeOrId, byte flag1, byte kind, short slotIndex)
     {
         var stage = AtkStage.Instance();
@@ -511,22 +874,50 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
         Franthropy.Dalamud.Automation.Ui.RenderedItemDetailTooltipRequest.HideTooltip(addon->Id);
     }
 
+    /// <summary>
+    /// Reads only the rendered ItemDetail identity line: name with quality glyph.
+    /// Bag items are not equipment, so the full gear tuple is not required here.
+    /// </summary>
+    private static (string? Name, bool? IsHighQuality) ParseItemDetailIdentity(AgentBridgeRenderedUiSnapshot snapshot)
+    {
+        var addon = snapshot.Addons.FirstOrDefault(value => string.Equals(value.Name, "ItemDetail", StringComparison.Ordinal));
+        if (addon is not { Present: true, Ready: true, Visible: true })
+            return (null, null);
+        var nameNode = addon.TextNodes.LastOrDefault(value => string.Equals(value.NodePath, "ItemDetail/33", StringComparison.Ordinal));
+        if (nameNode is null || string.IsNullOrWhiteSpace(nameNode.Text))
+            return (null, null);
+        const char hqGlyph = '';
+        var text = nameNode.Text.Trim();
+        var isHq = text.Contains(hqGlyph);
+        var name = System.Text.RegularExpressions.Regex.Replace(text.Replace(hqGlyph.ToString(), string.Empty, StringComparison.Ordinal), @"\s+", " ").Trim();
+        return (name, isHq);
+    }
+
     private readonly RenderedArmouryDifferentialCoordinator armouryDifferential = new();
     private Func<string, RenderedItemDetailObservation, uint?>? armouryNameResolver;
+    private Func<string, uint?, uint?>? armouryBagNameResolver;
+    private Func<AgentBridgeInventoryStructSnapshot>? inventoryStructRefresher;
     private DateTimeOffset armouryTooltipDispatchedAt;
     private string? armouryCandidateSignature;
     private DateTimeOffset armouryCandidateStartedAt;
-    private string armouryOccupancyCheckedContainer = string.Empty;
+    private readonly HashSet<string> occupancyCheckedSurfaces = new(StringComparer.Ordinal);
+    private readonly Dictionary<DifferentialSurface, int> surfaceOpenAttempts = new();
     private int armouryDispatchAttempts;
 
     public RenderedArmouryDifferentialProgress BeginArmouryDifferential(
         IReadOnlyList<AgentBridgeInventoryStructItem> structBaseline,
-        Func<string, RenderedItemDetailObservation, uint?> nameResolver)
+        Func<string, RenderedItemDetailObservation, uint?> nameResolver,
+        Func<string, uint?, uint?>? bagNameResolver = null,
+        Func<AgentBridgeInventoryStructSnapshot>? structRefresher = null)
     {
         armouryNameResolver = nameResolver ?? throw new ArgumentNullException(nameof(nameResolver));
+        armouryBagNameResolver = bagNameResolver;
+        inventoryStructRefresher = structRefresher;
         armouryCandidateSignature = null;
-        armouryOccupancyCheckedContainer = string.Empty;
+        occupancyCheckedSurfaces.Clear();
         armouryDispatchAttempts = 0;
+        surfaceOpenAttempts.Clear();
+        ResetBagSlotContext();
         armouryDifferential.Begin(structBaseline);
         TryOpenArmouryBoard();
         return armouryDifferential.Snapshot();
@@ -541,32 +932,59 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
         var current = armouryDifferential.Current;
         if (current is null || armouryNameResolver is null)
             return armouryDifferential.Snapshot();
-        var addon = gameGui.GetAddonByName<AtkUnitBase>("ArmouryBoard", 1);
-        if (addon == null || addon->RootNode == null || !addon->RootNode->IsVisible())
-            return FailArmouryDifferential("The rendered Armoury Board closed during the differential proof.");
-        var board = (AddonArmouryBoard*)addon;
-        if (!Enum.TryParse<FFXIVClientStructs.FFXIV.Client.Game.InventoryType>(current.Value.Container, out var inventoryType))
-            return FailArmouryDifferential($"Unsupported armoury container '{current.Value.Container}'.");
-        if (!TrySelectArmouryTab(board, inventoryType, out var tabDiagnostic))
-            return armouryDifferential.Snapshot() with { Diagnostic = tabDiagnostic };
 
-        if (!string.Equals(armouryOccupancyCheckedContainer, current.Value.Container, StringComparison.Ordinal))
+        var surface = SurfaceFor(current.Value.Container);
+        var addonName = SurfaceAddon(surface);
+        var addon = ResolveDifferentialAddon(surface);
+        if (addon == null)
         {
-            var iconCount = CountRenderedIconCells(addon);
-            armouryDifferential.RecordOccupancyCount(current.Value.Container, armouryDifferential.StructCountFor(current.Value.Container), iconCount);
-            armouryOccupancyCheckedContainer = current.Value.Container;
+            // Surfaces open a frame after the show request, so retry a bounded number of
+            // times before declaring the container class unproven.
+            var attempts = surfaceOpenAttempts.GetValueOrDefault(surface);
+            if (attempts < 5)
+            {
+                surfaceOpenAttempts[surface] = attempts + 1;
+                EnsureDifferentialSurfaceOpen(surface);
+                return armouryDifferential.Snapshot() with { Diagnostic = $"Opening the rendered {addonName} surface." };
+            }
+            surfaceOpenAttempts.Remove(surface);
+            return armouryDifferential.SkipContainerSlots(current.Value.Container, $"the rendered {addonName} surface is unavailable");
         }
+        surfaceOpenAttempts.Remove(surface);
 
-        if (armouryCandidateSignature is null)
+        if (surface == DifferentialSurface.ArmouryBoard)
         {
+            var board = (AddonArmouryBoard*)addon;
+            if (!Enum.TryParse<FFXIVClientStructs.FFXIV.Client.Game.InventoryType>(current.Value.Container, out var inventoryType))
+                return FailArmouryDifferential($"Unsupported armoury container '{current.Value.Container}'.");
+            if (!TrySelectArmouryTab(board, inventoryType, out var tabDiagnostic))
+                return armouryDifferential.Snapshot() with { Diagnostic = tabDiagnostic };
             var slotNode = ResolveArmourySlotNode(addon, (short)current.Value.SlotIndex);
             if (slotNode == null)
                 return FailArmouryDifferential($"Rendered armoury slot {current.Value.SlotIndex} on {current.Value.Container} does not resolve.");
+            RecordSurfaceOccupancy(surface, addon, current.Value.Container);
+            return AdvanceArmourySlotDifferential(addon, current.Value, slotNode, ArmouryTooltipTypeOrId(inventoryType));
+        }
+
+        if (surface == DifferentialSurface.InventoryBuddy && !SelectInventoryBuddyTab((AddonInventoryBuddy*)addon, current.Value.Container))
+            return armouryDifferential.Snapshot() with { Diagnostic = "Cycling the rendered saddlebag tab." };
+        RecordSurfaceOccupancy(surface, addon, current.Value.Container);
+        return AdvanceBagDifferential(current.Value);
+    }
+
+    private unsafe RenderedArmouryDifferentialProgress AdvanceArmourySlotDifferential(
+        AtkUnitBase* addon,
+        (string Container, int SlotIndex, uint ItemId, bool IsHighQuality) current,
+        AtkResNode* slotNode,
+        uint typeOrId)
+    {
+        if (armouryCandidateSignature is null)
+        {
             // No per-slot Hide: ShowTooltip replaces the previous tooltip, and the
             // equipment scan proves replacement is reliable; Hide+Show races drop requests.
             if (!Franthropy.Dalamud.Automation.Ui.RenderedItemDetailTooltipRequest.TryShowInventoryItemTooltip(
-                    addon->Id, slotNode, ArmouryTooltipTypeOrId(inventoryType), (short)current.Value.SlotIndex))
-                return FailArmouryDifferential($"The game rejected the armoury tooltip request for {current.Value.Container}:{current.Value.SlotIndex}.");
+                    addon->Id, slotNode, typeOrId, (short)current.SlotIndex))
+                return FailArmouryDifferential($"The game rejected the armoury tooltip request for {current.Container}:{current.SlotIndex}.");
             armouryTooltipDispatchedAt = DateTimeOffset.UtcNow;
             armouryCandidateSignature = string.Empty;
             armouryCandidateStartedAt = DateTimeOffset.UtcNow;
@@ -586,7 +1004,7 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
                 armouryCandidateSignature = null;
                 return armouryDifferential.Snapshot();
             }
-            var timedOut = armouryDifferential.RecordRenderedObservation(current.Value.Container, current.Value.SlotIndex, null, null, null);
+            var timedOut = armouryDifferential.RecordRenderedObservation(current.Container, current.SlotIndex, null, null, null);
             armouryCandidateSignature = null;
             armouryDispatchAttempts = 0;
             return timedOut;
@@ -616,9 +1034,8 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
         var renderedId = observation.Status == RenderedItemDetailStatus.Complete
             ? armouryNameResolver(observation.Name!, observation)
             : null;
-        var result = armouryDifferential.RecordRenderedObservation(
-            current.Value.Container,
-            current.Value.SlotIndex,
+        var result = RecordDifferentialObservation(
+            current,
             renderedId,
             observation.Status == RenderedItemDetailStatus.Complete ? observation.Quality == RenderedItemQuality.High : null,
             observation.Status == RenderedItemDetailStatus.Complete ? observation.Name : null);
@@ -627,10 +1044,193 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
         return result;
     }
 
+    /// <summary>
+    /// One bag/saddlebag differential step through the game's own inventory context
+    /// menus: the slot's context menu opens (raw InventoryType — no tooltip container
+    /// numbering), its name-copy entry writes the item's rendered name for the user,
+    /// and the quality glyph in that name carries NQ/HQ identity.
+    /// </summary>
+    private RenderedArmouryDifferentialProgress AdvanceBagDifferential(
+        (string Container, int SlotIndex, uint ItemId, bool IsHighQuality) current)
+    {
+        var read = TryCopyBagSlotContextName(current.Container, current.SlotIndex);
+        if (!read.Success)
+        {
+            if (read.Code == "InventoryContextCycling")
+                return armouryDifferential.Snapshot() with { Diagnostic = read.Message };
+            if (armouryDispatchAttempts < 3)
+            {
+                armouryDispatchAttempts++;
+                return armouryDifferential.Snapshot() with { Diagnostic = $"Retrying the bag slot identity read: {read.Message}" };
+            }
+            armouryDispatchAttempts = 0;
+            return FailArmouryDifferential($"Bag slot identity read failed for {current.Container}:{current.SlotIndex}: {read.Code} :: {read.Message}");
+        }
+        armouryDispatchAttempts = 0;
+        const char hqGlyph = '';
+        var renderedName = System.Text.RegularExpressions.Regex.Replace(
+            read.Message.Replace(hqGlyph.ToString(), string.Empty, StringComparison.Ordinal), @"\s+", " ").Trim();
+        var renderedIsHq = read.Message.Contains(hqGlyph);
+        var resolved = armouryBagNameResolver?.Invoke(renderedName, current.ItemId);
+        return RecordDifferentialObservation(current, resolved, renderedIsHq, renderedName);
+    }
+
+    private RenderedArmouryDifferentialProgress RecordDifferentialObservation(
+        (string Container, int SlotIndex, uint ItemId, bool IsHighQuality) current,
+        uint? renderedId,
+        bool? renderedIsHq,
+        string? renderedName)
+    {
+        // Inventories move (AutoRetainer, manual play): before accepting an identity
+        // disagreement, re-read the struct state for this slot. A fresh read agreeing
+        // with the rendered identity means the baseline went stale, not that the
+        // struct read is unreliable.
+        if (renderedId is not null && renderedIsHq is not null && inventoryStructRefresher is not null &&
+            (renderedId != current.ItemId || renderedIsHq != current.IsHighQuality))
+        {
+            var fresh = inventoryStructRefresher();
+            var freshItem = fresh.Items.FirstOrDefault(item =>
+                string.Equals(item.Container, current.Container, StringComparison.Ordinal) && item.SlotIndex == current.SlotIndex);
+            if (freshItem is not null && freshItem.ItemId == renderedId && freshItem.IsHighQuality == renderedIsHq)
+                armouryDifferential.RefreshBaselineItem(current.Container, current.SlotIndex, freshItem.ItemId, freshItem.IsHighQuality);
+        }
+        return armouryDifferential.RecordRenderedObservation(current.Container, current.SlotIndex, renderedId, renderedIsHq, renderedName);
+    }
+
     private RenderedArmouryDifferentialProgress FailArmouryDifferential(string message)
     {
         armouryCandidateSignature = null;
         return armouryDifferential.Fail(message);
+    }
+
+    private enum DifferentialSurface { ArmouryBoard, InventoryWindow, InventoryBuddy }
+
+    private static DifferentialSurface SurfaceFor(string container) => container switch
+    {
+        "Inventory1" or "Inventory2" or "Inventory3" or "Inventory4" => DifferentialSurface.InventoryWindow,
+        "SaddleBag1" or "SaddleBag2" or "PremiumSaddleBag1" or "PremiumSaddleBag2" => DifferentialSurface.InventoryBuddy,
+        _ => DifferentialSurface.ArmouryBoard,
+    };
+
+    private static string SurfaceAddon(DifferentialSurface surface) => surface switch
+    {
+        DifferentialSurface.InventoryWindow => "Inventory",
+        DifferentialSurface.InventoryBuddy => "InventoryBuddy",
+        _ => "ArmouryBoard",
+    };
+
+    /// <summary>
+    /// AgentItemDetail.TypeOrId values for player inventory and saddlebag containers from
+    /// the documented agent numbering (player inventory 48-51, saddlebags 69-72).
+    /// Mechanism only — rendered tooltip output remains the sole authority.
+    /// </summary>
+    private static uint BagTooltipTypeOrId(string container) => container switch
+    {
+        "Inventory1" => 48,
+        "Inventory2" => 49,
+        "Inventory3" => 50,
+        "Inventory4" => 51,
+        "SaddleBag1" => 69,
+        "SaddleBag2" => 70,
+        "PremiumSaddleBag1" => 71,
+        "PremiumSaddleBag2" => 72,
+        _ => 0,
+    };
+
+    private unsafe bool EnsureDifferentialSurfaceOpen(DifferentialSurface surface)
+    {
+        if (ResolveDifferentialAddon(surface) != null)
+            return true;
+        switch (surface)
+        {
+            case DifferentialSurface.InventoryWindow:
+                TryOpenInventoryWindow();
+                break;
+            case DifferentialSurface.InventoryBuddy:
+                TryOpenInventoryBuddy();
+                break;
+            default:
+                TryOpenArmouryBoard();
+                break;
+        }
+        return false;
+    }
+
+    private static readonly string[] InventoryWindowCandidates = ["Inventory", "InventoryLarge", "InventoryGrid", "InventoryExpansion"];
+
+    private unsafe AtkUnitBase* ResolveInventoryWindowAddon()
+    {
+        foreach (var candidate in InventoryWindowCandidates)
+        {
+            var addon = gameGui.GetAddonByName<AtkUnitBase>(candidate, 1);
+            if (addon != null && addon->RootNode != null && addon->RootNode->IsVisible() && ResolveFirstDragDropCell(addon) != null)
+                return addon;
+        }
+        return null;
+    }
+
+    private unsafe AtkUnitBase* ResolveDifferentialAddon(DifferentialSurface surface)
+    {
+        if (surface == DifferentialSurface.InventoryWindow)
+            return ResolveInventoryWindowAddon();
+        var addon = gameGui.GetAddonByName<AtkUnitBase>(SurfaceAddon(surface), 1);
+        return addon != null && addon->RootNode != null && addon->RootNode->IsVisible() ? addon : null;
+    }
+
+    private unsafe bool IsAddonVisible(string addonName)
+    {
+        var addon = gameGui.GetAddonByName<AtkUnitBase>(addonName, 1);
+        return addon != null && addon->RootNode != null && addon->RootNode->IsVisible();
+    }
+
+    private static unsafe bool SelectInventoryBuddyTab(AddonInventoryBuddy* buddy, string container)
+    {
+        var premium = container is "PremiumSaddleBag1" or "PremiumSaddleBag2";
+        var wanted = premium ? (byte)1 : (byte)0;
+        if (buddy->TabIndex == wanted)
+            return true;
+        buddy->SetTab(wanted);
+        return false;
+    }
+
+    private unsafe void RecordSurfaceOccupancy(DifferentialSurface surface, AtkUnitBase* addon, string container)
+    {
+        var key = surface switch
+        {
+            DifferentialSurface.InventoryWindow => "inventory-window",
+            DifferentialSurface.InventoryBuddy => container is "PremiumSaddleBag1" or "PremiumSaddleBag2"
+                ? "inventory-buddy-premium"
+                : "inventory-buddy-saddle",
+            _ => $"armoury:{container}",
+        };
+        if (!occupancyCheckedSurfaces.Add(key))
+            return;
+        var iconCount = CountRenderedIconCells(addon);
+        switch (surface)
+        {
+            case DifferentialSurface.InventoryWindow:
+                var bagStructCount = new[] { "Inventory1", "Inventory2", "Inventory3", "Inventory4" }.Sum(armouryDifferential.StructCountFor);
+                armouryDifferential.RecordOccupancyCount("Inventory1-4", bagStructCount, iconCount);
+                break;
+            case DifferentialSurface.InventoryBuddy:
+                var premium = container is "PremiumSaddleBag1" or "PremiumSaddleBag2";
+                var containers = premium ? new[] { "PremiumSaddleBag1", "PremiumSaddleBag2" } : new[] { "SaddleBag1", "SaddleBag2" };
+                var buddyStructCount = containers.Sum(armouryDifferential.StructCountFor);
+                armouryDifferential.RecordOccupancyCount(premium ? "PremiumSaddleBag1-2" : "SaddleBag1-2", buddyStructCount, iconCount);
+                break;
+            default:
+                armouryDifferential.RecordOccupancyCount(container, armouryDifferential.StructCountFor(container), iconCount);
+                break;
+        }
+    }
+
+    private static unsafe AtkResNode* ResolveFirstDragDropCell(AtkUnitBase* addon)
+    {
+        var cells = new List<(float X, float Y, nint Node)>();
+        CollectDragDropCells(&addon->UldManager, cells);
+        return cells.Count == 0
+            ? null
+            : (AtkResNode*)cells.OrderBy(cell => cell.Y).ThenBy(cell => cell.X).First().Node;
     }
 
     private static unsafe int CountRenderedIconCells(AtkUnitBase* addon)

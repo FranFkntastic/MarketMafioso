@@ -42,6 +42,13 @@ public interface IMarketMafiosoBridgeProvider
     bool TryOpenArmouryBoardUi();
     bool TryCloseArmouryBoardUi();
     RenderedUiTextActionResult TryShowArmourySlotTooltipUi(string target);
+    RenderedUiTextActionResult TryShowBagSlotTooltipUi(string target);
+    RenderedUiTextActionResult TryOpenBagSlotContextUi(string target);
+    RenderedUiTextActionResult TryInvokeBagSlotContextActionUi(string target);
+    bool TryCloseBagSlotContextUi();
+    string CaptureTooltipMapDiagnosticUi(string addonName);
+    string CaptureInventoryContainerTableDiagnosticUi();
+    string SetInventoryTabDiagnosticUi(int tab);
     RenderedArmouryDifferentialProgress BeginArmouryDifferentialUi();
     RenderedArmouryDifferentialProgress AdvanceArmouryDifferentialUi();
     RenderedArmouryDifferentialProgress CancelArmouryDifferentialUi();
@@ -119,6 +126,13 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
     private readonly Func<bool> tryOpenArmouryBoardUi;
     private readonly Func<bool> tryCloseArmouryBoardUi;
     private readonly Func<string, RenderedUiTextActionResult> tryShowArmourySlotTooltipUi;
+    private readonly Func<string, RenderedUiTextActionResult> tryShowBagSlotTooltipUi;
+    private readonly Func<string, RenderedUiTextActionResult> tryOpenBagSlotContextUi;
+    private readonly Func<string, RenderedUiTextActionResult> tryInvokeBagSlotContextActionUi;
+    private readonly Func<bool> tryCloseBagSlotContextUi;
+    private readonly Func<string, string> captureTooltipMapDiagnosticUi;
+    private readonly Func<string> captureInventoryContainerTableDiagnosticUi;
+    private readonly Func<int, string> setInventoryTabDiagnosticUi;
     private readonly Func<RenderedArmouryDifferentialProgress> beginArmouryDifferentialUi;
     private readonly Func<RenderedArmouryDifferentialProgress> advanceArmouryDifferentialUi;
     private readonly Func<RenderedArmouryDifferentialProgress> cancelArmouryDifferentialUi;
@@ -163,6 +177,13 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
         Func<bool>? tryOpenArmouryBoardUi = null,
         Func<bool>? tryCloseArmouryBoardUi = null,
         Func<string, RenderedUiTextActionResult>? tryShowArmourySlotTooltipUi = null,
+        Func<string, RenderedUiTextActionResult>? tryShowBagSlotTooltipUi = null,
+        Func<string, RenderedUiTextActionResult>? tryOpenBagSlotContextUi = null,
+        Func<string, RenderedUiTextActionResult>? tryInvokeBagSlotContextActionUi = null,
+        Func<bool>? tryCloseBagSlotContextUi = null,
+        Func<string, string>? captureTooltipMapDiagnosticUi = null,
+        Func<string>? captureInventoryContainerTableDiagnosticUi = null,
+        Func<int, string>? setInventoryTabDiagnosticUi = null,
         Func<RenderedArmouryDifferentialProgress>? beginArmouryDifferentialUi = null,
         Func<RenderedArmouryDifferentialProgress>? advanceArmouryDifferentialUi = null,
         Func<RenderedArmouryDifferentialProgress>? cancelArmouryDifferentialUi = null)
@@ -214,9 +235,16 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
         this.tryOpenArmouryBoardUi = tryOpenArmouryBoardUi ?? (() => false);
         this.tryCloseArmouryBoardUi = tryCloseArmouryBoardUi ?? (() => false);
         this.tryShowArmourySlotTooltipUi = tryShowArmourySlotTooltipUi ?? (_ => new(false, "Unavailable", "Rendered armoury automation is unavailable.", "ArmouryBoard", null));
-        this.beginArmouryDifferentialUi = beginArmouryDifferentialUi ?? (() => new(RenderedArmouryDifferentialStatus.Failed, 0, 0, string.Empty, 0, [], [], "The armoury differential proof is unavailable."));
+        this.tryShowBagSlotTooltipUi = tryShowBagSlotTooltipUi ?? (_ => new(false, "Unavailable", "Rendered bag automation is unavailable.", "Inventory", null));
+        this.tryOpenBagSlotContextUi = tryOpenBagSlotContextUi ?? (_ => new(false, "Unavailable", "Inventory context automation is unavailable.", "ContextMenu", null));
+        this.tryInvokeBagSlotContextActionUi = tryInvokeBagSlotContextActionUi ?? tryOpenBagSlotContextUi ?? (_ => new(false, "Unavailable", "Inventory context automation is unavailable.", "ContextMenu", null));
+        this.tryCloseBagSlotContextUi = tryCloseBagSlotContextUi ?? (() => false);
+        this.captureTooltipMapDiagnosticUi = captureTooltipMapDiagnosticUi ?? (_ => "Tooltip map diagnostics are unavailable.");
+        this.captureInventoryContainerTableDiagnosticUi = captureInventoryContainerTableDiagnosticUi ?? (() => "Inventory container table diagnostics are unavailable.");
+        this.setInventoryTabDiagnosticUi = setInventoryTabDiagnosticUi ?? (_ => "Inventory tab automation is unavailable.");
+        this.beginArmouryDifferentialUi = beginArmouryDifferentialUi ?? (() => new(RenderedArmouryDifferentialStatus.Failed, 0, 0, string.Empty, 0, [], [], [], "The armoury differential proof is unavailable."));
         this.advanceArmouryDifferentialUi = advanceArmouryDifferentialUi ?? this.beginArmouryDifferentialUi;
-        this.cancelArmouryDifferentialUi = cancelArmouryDifferentialUi ?? (() => new(RenderedArmouryDifferentialStatus.Cancelled, 0, 0, string.Empty, 0, [], [], "The armoury differential proof is unavailable."));
+        this.cancelArmouryDifferentialUi = cancelArmouryDifferentialUi ?? (() => new(RenderedArmouryDifferentialStatus.Cancelled, 0, 0, string.Empty, 0, [], [], [], "The armoury differential proof is unavailable."));
     }
 
     public AgentBridgeTruth CreateSnapshot() => createSnapshot();
@@ -254,6 +282,13 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
     public bool TryOpenArmouryBoardUi() => tryOpenArmouryBoardUi();
     public bool TryCloseArmouryBoardUi() => tryCloseArmouryBoardUi();
     public RenderedUiTextActionResult TryShowArmourySlotTooltipUi(string target) => tryShowArmourySlotTooltipUi(target);
+    public RenderedUiTextActionResult TryShowBagSlotTooltipUi(string target) => tryShowBagSlotTooltipUi(target);
+    public RenderedUiTextActionResult TryOpenBagSlotContextUi(string target) => tryOpenBagSlotContextUi(target);
+    public RenderedUiTextActionResult TryInvokeBagSlotContextActionUi(string target) => tryInvokeBagSlotContextActionUi(target);
+    public bool TryCloseBagSlotContextUi() => tryCloseBagSlotContextUi();
+    public string CaptureTooltipMapDiagnosticUi(string addonName) => captureTooltipMapDiagnosticUi(addonName);
+    public string CaptureInventoryContainerTableDiagnosticUi() => captureInventoryContainerTableDiagnosticUi();
+    public string SetInventoryTabDiagnosticUi(int tab) => setInventoryTabDiagnosticUi(tab);
     public RenderedArmouryDifferentialProgress BeginArmouryDifferentialUi() => beginArmouryDifferentialUi();
     public RenderedArmouryDifferentialProgress AdvanceArmouryDifferentialUi() => advanceArmouryDifferentialUi();
     public RenderedArmouryDifferentialProgress CancelArmouryDifferentialUi() => cancelArmouryDifferentialUi();
