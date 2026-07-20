@@ -29,6 +29,7 @@ public sealed record RenderedArmouryDifferentialProgress(
     int MatchCount,
     IReadOnlyList<RenderedArmouryDifferentialMismatch> Mismatches,
     IReadOnlyList<string> OccupancyConflicts,
+    IReadOnlyList<string> UnprovenContainers,
     string Diagnostic);
 
 /// <summary>
@@ -52,11 +53,20 @@ public sealed class RenderedArmouryDifferentialCoordinator
         "ArmoryWrist",
         "ArmoryRings",
         "ArmorySoulCrystal",
+        "Inventory1",
+        "Inventory2",
+        "Inventory3",
+        "Inventory4",
+        "SaddleBag1",
+        "SaddleBag2",
+        "PremiumSaddleBag1",
+        "PremiumSaddleBag2",
     ];
 
     private readonly List<(string Container, int SlotIndex, uint ItemId, bool IsHighQuality)> structSlots = [];
     private readonly List<RenderedArmouryDifferentialMismatch> mismatches = [];
     private readonly List<string> occupancyConflicts = [];
+    private readonly List<string> unprovenContainers = [];
     private readonly HashSet<string> comparedKeys = new(StringComparer.Ordinal);
     private RenderedArmouryDifferentialStatus status = RenderedArmouryDifferentialStatus.Idle;
     private string diagnostic = "The armoury differential proof has not started.";
@@ -69,6 +79,7 @@ public sealed class RenderedArmouryDifferentialCoordinator
         structSlots.Clear();
         mismatches.Clear();
         occupancyConflicts.Clear();
+        unprovenContainers.Clear();
         comparedKeys.Clear();
         structSlots.AddRange(structBaseline
             .Where(item => ContainerOrder.Contains(item.Container, StringComparer.Ordinal))
@@ -103,8 +114,32 @@ public sealed class RenderedArmouryDifferentialCoordinator
             matchCount++;
         comparedKeys.Add($"{container}:{slotIndex}");
         cursor++;
+        return CompleteOrContinue();
+    }
+
+    /// <summary>
+    /// Skips every remaining struct slot of a container whose rendered surface is
+    /// unavailable. Skipped slots are disclosed as unproven — they are not matches,
+    /// mismatches, or authorization for that container class.
+    /// </summary>
+    public RenderedArmouryDifferentialProgress SkipContainerSlots(string container, string reason)
+    {
+        var skipped = 0;
+        while (Current is { } current && string.Equals(current.Container, container, StringComparison.Ordinal))
+        {
+            cursor++;
+            skipped++;
+        }
+        if (skipped > 0)
+            unprovenContainers.Add($"{container}: {skipped} struct slot(s) unproven ({reason}).");
+        return CompleteOrContinue();
+    }
+
+    private RenderedArmouryDifferentialProgress CompleteOrContinue()
+    {
         if (cursor < structSlots.Count)
         {
+            status = RenderedArmouryDifferentialStatus.Working;
             diagnostic = $"Compared {cursor} of {structSlots.Count} armoury slots.";
             return Snapshot();
         }
@@ -114,6 +149,8 @@ public sealed class RenderedArmouryDifferentialCoordinator
         diagnostic = mismatches.Count == 0 && occupancyConflicts.Count == 0
             ? $"Differential proof passed: all {matchCount} struct-occupied armoury slots render the same identity and quality."
             : $"Differential proof failed with {mismatches.Count} identity mismatch(es) and {occupancyConflicts.Count} occupancy conflict(s).";
+        if (unprovenContainers.Count > 0)
+            diagnostic += $" Unproven: {string.Join("; ", unprovenContainers)}";
         return Snapshot();
     }
 
@@ -126,6 +163,25 @@ public sealed class RenderedArmouryDifferentialCoordinator
 
     public int StructCountFor(string container) =>
         structSlots.Count(value => value.Container == container);
+
+    /// <summary>
+    /// Replaces the baseline entry for one slot with a fresh struct read. Used when the
+    /// inventory moved mid-run: a fresh read that agrees with the rendered identity
+    /// proves the old baseline went stale rather than the struct read being wrong.
+    /// </summary>
+    public bool RefreshBaselineItem(string container, int slotIndex, uint itemId, bool isHighQuality)
+    {
+        for (var index = 0; index < structSlots.Count; index++)
+        {
+            var slot = structSlots[index];
+            if (slot.Container == container && slot.SlotIndex == slotIndex)
+            {
+                structSlots[index] = (slot.Container, slot.SlotIndex, itemId, isHighQuality);
+                return true;
+            }
+        }
+        return false;
+    }
 
     public RenderedArmouryDifferentialProgress Fail(string message) => FailCore(message);
 
@@ -146,6 +202,7 @@ public sealed class RenderedArmouryDifferentialCoordinator
         matchCount,
         mismatches.ToArray(),
         occupancyConflicts.ToArray(),
+        unprovenContainers.ToArray(),
         diagnostic);
 
     private RenderedArmouryDifferentialProgress FailCore(string message)

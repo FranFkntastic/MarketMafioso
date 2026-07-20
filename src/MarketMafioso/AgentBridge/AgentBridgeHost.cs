@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.IO.Pipes;
+using System.Linq;
 using System.Text.Json;
 using System.Security.Cryptography;
 using System.Text;
@@ -341,6 +342,12 @@ public sealed class AgentBridgeHost : IDisposable
                 return armouryTooltip!.Success
                     ? AgentBridgeResponse.Ok(armouryTooltip.Message, armouryTooltip)
                     : new AgentBridgeResponse { Success = false, Message = armouryTooltip.Message, Receipt = armouryTooltip };
+            case "show-bag-tooltip-ui":
+                RenderedUiTextActionResult? bagTooltip = null;
+                await dispatchOnFramework(() => bagTooltip = provider.TryShowBagSlotTooltipUi(request.Target ?? string.Empty)).ConfigureAwait(false);
+                return bagTooltip!.Success
+                    ? AgentBridgeResponse.Ok(bagTooltip.Message, bagTooltip)
+                    : new AgentBridgeResponse { Success = false, Message = bagTooltip.Message, Receipt = bagTooltip };
             case "begin-retainer-observation-ui":
                 Squire.Observation.RenderedRetainerUiPreparationProgress? begunRetainerPreparation = null;
                 await dispatchOnFramework(() => begunRetainerPreparation = provider.BeginRetainerObservationUi(request.Target ?? string.Empty)).ConfigureAwait(false);
@@ -415,6 +422,46 @@ public sealed class AgentBridgeHost : IDisposable
                 Squire.Observation.RenderedArmouryDifferentialProgress? cancelledArmouryDifferential = null;
                 await dispatchOnFramework(() => cancelledArmouryDifferential = provider.CancelArmouryDifferentialUi()).ConfigureAwait(false);
                 return AgentBridgeResponse.Ok(cancelledArmouryDifferential!.Diagnostic, cancelledArmouryDifferential);
+            case "get-tooltip-map-ui":
+                string? tooltipMap = null;
+                await dispatchOnFramework(() => tooltipMap = provider.CaptureTooltipMapDiagnosticUi(request.Target ?? string.Empty)).ConfigureAwait(false);
+                return AgentBridgeResponse.Ok(tooltipMap!);
+            case "get-inventory-container-table-ui":
+                string? containerTable = null;
+                await dispatchOnFramework(() => containerTable = provider.CaptureInventoryContainerTableDiagnosticUi()).ConfigureAwait(false);
+                return AgentBridgeResponse.Ok(containerTable!);
+            case "set-inventory-tab-ui":
+                if (!int.TryParse(request.Target, out var inventoryTab))
+                    return AgentBridgeResponse.Fail("Target must be a tab number.");
+                string? inventoryTabResult = null;
+                await dispatchOnFramework(() => inventoryTabResult = provider.SetInventoryTabDiagnosticUi(inventoryTab)).ConfigureAwait(false);
+                return AgentBridgeResponse.Ok(inventoryTabResult!);
+            case "open-bag-slot-context-ui":
+                RenderedUiTextActionResult? bagSlotContext = null;
+                var contextTarget = request.Target ?? string.Empty;
+                var contextSeparator = contextTarget.LastIndexOf(':');
+                if (contextSeparator <= 0 || !int.TryParse(contextTarget[(contextSeparator + 1)..], out var contextSlotIndex))
+                    return AgentBridgeResponse.Fail("Target must be '<Container>:<slotIndex>', for example Inventory2:0.");
+                var contextContainer = contextTarget[..contextSeparator];
+                await dispatchOnFramework(() => bagSlotContext = provider.TryOpenBagSlotContextUi($"{contextContainer}:{contextSlotIndex}")).ConfigureAwait(false);
+                return bagSlotContext!.Success
+                    ? AgentBridgeResponse.Ok(bagSlotContext.Message, bagSlotContext)
+                    : new AgentBridgeResponse { Success = false, Message = bagSlotContext.Message, Receipt = bagSlotContext };
+            case "invoke-bag-slot-context-action-ui":
+                RenderedUiTextActionResult? bagSlotAction = null;
+                var actionParts = (request.Target ?? string.Empty).Split(':');
+                if (actionParts.Length < 3)
+                    return AgentBridgeResponse.Fail("Target must be '<Container>:<slotIndex>:<label>'.");
+                var actionLabel = string.Join(':', actionParts.Skip(2));
+                await dispatchOnFramework(() => bagSlotAction = provider.TryInvokeBagSlotContextActionUi($"{actionParts[0]}:{actionParts[1]}:{actionLabel}")).ConfigureAwait(false);
+                return bagSlotAction!.Success
+                    ? AgentBridgeResponse.Ok(bagSlotAction.Message, bagSlotAction)
+                    : new AgentBridgeResponse { Success = false, Message = bagSlotAction.Message, Receipt = bagSlotAction };
+                var bagSlotContextClosed = false;
+                await dispatchOnFramework(() => bagSlotContextClosed = provider.TryCloseBagSlotContextUi()).ConfigureAwait(false);
+                return bagSlotContextClosed
+                    ? AgentBridgeResponse.Ok("Visible context menu closed through its rendered addon.")
+                    : AgentBridgeResponse.Fail("No visible context menu was available to close.");
             case "stop-route":
                 await dispatchOnFramework(provider.StopRoute).ConfigureAwait(false);
                 AppendAudit("stop-route", "accepted");

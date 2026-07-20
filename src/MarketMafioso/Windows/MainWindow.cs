@@ -1409,6 +1409,23 @@ public class MainWindow : Window, IDisposable
         return narrowed.Length == 1 ? narrowed[0].ItemId : null;
     }
 
+    public uint? ResolveRenderedBagItemId(string name, uint? structItemIdHint)
+    {
+        var items = dataManager.GetExcelSheet<Lumina.Excel.Sheets.Item>();
+        if (items is null)
+            return null;
+        var matches = items
+            .Where(value => value.RowId > 0 && string.Equals(value.Name.ToString(), name, StringComparison.Ordinal))
+            .Select(value => value.RowId)
+            .ToArray();
+        return matches.Length switch
+        {
+            1 => matches[0],
+            0 => null,
+            _ => structItemIdHint is { } hint && matches.Contains(hint) ? hint : null,
+        };
+    }
+
     public void InvalidateAdvisorForPlayerStateChange() => squireTab.InvalidateAdvisorForPlayerStateChange();
 
     private void ReturnToOutfitterAdvisor()
