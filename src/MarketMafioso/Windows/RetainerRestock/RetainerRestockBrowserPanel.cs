@@ -44,7 +44,11 @@ public sealed class RetainerRestockBrowserPanel
 
         if (state.Mode == RetainerBrowseQueryMode.Items)
         {
-            var result = queryController.QueryItems(projection, state.ItemsFilter.Expression, state.SelectedScopeKey);
+            var result = queryController.QueryItems(
+                projection,
+                state.ItemsFilter.Expression,
+                state.SelectedScopeKey,
+                state.ItemsFilter.IsInputActive);
             state.RetainAvailableExpansions(result.Items);
             state.RebindSelectedItem(result.Items);
             DrawFilterStatus(result.Filter, mutedColor);
@@ -54,7 +58,11 @@ public sealed class RetainerRestockBrowserPanel
         }
         else
         {
-            var result = queryController.QueryListings(projection, state.ListingsFilter.Expression, state.SelectedScopeKey);
+            var result = queryController.QueryListings(
+                projection,
+                state.ListingsFilter.Expression,
+                state.SelectedScopeKey,
+                state.ListingsFilter.IsInputActive);
             DrawFilterStatus(result.Filter, mutedColor);
             DrawListingsTable(result.Listings, headerColor, mutedColor);
         }

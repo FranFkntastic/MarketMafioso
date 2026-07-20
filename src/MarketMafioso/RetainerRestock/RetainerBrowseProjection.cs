@@ -415,28 +415,30 @@ public sealed class RetainerBrowseQueryController
     public RetainerBrowseItemsQueryResult QueryItems(
         RetainerBrowseProjection projection,
         string? expression,
-        string? scopeKey = null)
+        string? scopeKey = null,
+        bool isEditing = false)
     {
         ArgumentNullException.ThrowIfNull(projection);
         var source = projection.GetItemGroups(scopeKey);
         var context = items.EnsureContext(
             RetainerBrowseIdentity.CreateContext(source, [], projection.Scopes, scopeKey),
             () => RetainerBrowseFilterContexts.CreateItems(source));
-        var query = items.Query(source, RetainerBrowseIdentity.CreateData(source, []), expression, context);
+        var query = items.Query(source, RetainerBrowseIdentity.CreateData(source, []), expression, context, isEditing);
         return new RetainerBrowseItemsQueryResult(query.Rows, query.Filter);
     }
 
     public RetainerBrowseListingsQueryResult QueryListings(
         RetainerBrowseProjection projection,
         string? expression,
-        string? scopeKey = null)
+        string? scopeKey = null,
+        bool isEditing = false)
     {
         ArgumentNullException.ThrowIfNull(projection);
         var source = projection.GetListings(scopeKey);
         var context = listings.EnsureContext(
             RetainerBrowseIdentity.CreateContext([], source, projection.Scopes, scopeKey),
             () => RetainerBrowseFilterContexts.CreateListings(source));
-        var query = listings.Query(source, RetainerBrowseIdentity.CreateData([], source), expression, context);
+        var query = listings.Query(source, RetainerBrowseIdentity.CreateData([], source), expression, context, isEditing);
         return new RetainerBrowseListingsQueryResult(query.Rows, query.Filter);
     }
 
@@ -497,6 +499,9 @@ public sealed class RetainerBrowseQueryController
         private string? contextIdentity;
         private FilterCompilation<TRecord>? currentCompilation;
         private string currentExpression = string.Empty;
+        private FilterCompilation<TRecord>? evaluatedCompilation;
+        private IReadOnlyList<TRecord> evaluatedRows = [];
+        private string? evaluatedDataIdentity;
         private FilterCompilation<TRecord>? lastValidCompilation;
         private IReadOnlyList<TRecord> lastValidRows = [];
         private string? lastValidDataIdentity;
@@ -512,6 +517,9 @@ public sealed class RetainerBrowseQueryController
                 context = create();
                 contextIdentity = identity;
                 currentCompilation = null;
+                evaluatedCompilation = null;
+                evaluatedRows = [];
+                evaluatedDataIdentity = null;
                 lastValidCompilation = null;
                 lastValidRows = [];
                 lastValidDataIdentity = null;
@@ -525,7 +533,8 @@ public sealed class RetainerBrowseQueryController
             IReadOnlyList<TRecord> source,
             string dataIdentity,
             string? expression,
-            FilterContext<TRecord> currentContext)
+            FilterContext<TRecord> currentContext,
+            bool isEditing)
         {
             var value = expression ?? string.Empty;
             if (currentCompilation is null || !string.Equals(value, currentExpression, StringComparison.Ordinal))
@@ -537,20 +546,49 @@ public sealed class RetainerBrowseQueryController
 
             if (currentCompilation.IsValid)
             {
-                if (!ReferenceEquals(currentCompilation, lastValidCompilation) ||
-                    !string.Equals(dataIdentity, lastValidDataIdentity, StringComparison.Ordinal))
+                var applyCurrentCompilation = evaluatedCompilation is null || !isEditing;
+                var compilationToEvaluate = applyCurrentCompilation
+                    ? currentCompilation
+                    : evaluatedCompilation!;
+                var rows = Evaluate(source, dataIdentity, compilationToEvaluate);
+
+                if (applyCurrentCompilation || ReferenceEquals(compilationToEvaluate, lastValidCompilation))
                 {
-                    lastValidRows = source.Where(currentCompilation.Matches).ToArray();
+                    lastValidCompilation = compilationToEvaluate;
+                    lastValidRows = rows;
                     lastValidDataIdentity = dataIdentity;
-                    EvaluationCount++;
+                    hasLastValidResults = true;
                 }
 
-                lastValidCompilation = currentCompilation;
-                hasLastValidResults = true;
-                return (lastValidRows, ToStatus(currentCompilation, false));
+                return (rows, ToStatus(currentCompilation, false));
+            }
+
+            if (lastValidCompilation is not null &&
+                (!ReferenceEquals(lastValidCompilation, evaluatedCompilation) ||
+                 !string.Equals(dataIdentity, lastValidDataIdentity, StringComparison.Ordinal)))
+            {
+                lastValidRows = Evaluate(source, dataIdentity, lastValidCompilation);
+                lastValidDataIdentity = dataIdentity;
             }
 
             return (lastValidRows, ToStatus(currentCompilation, hasLastValidResults));
+        }
+
+        private IReadOnlyList<TRecord> Evaluate(
+            IReadOnlyList<TRecord> source,
+            string dataIdentity,
+            FilterCompilation<TRecord> compilation)
+        {
+            if (!ReferenceEquals(compilation, evaluatedCompilation) ||
+                !string.Equals(dataIdentity, evaluatedDataIdentity, StringComparison.Ordinal))
+            {
+                evaluatedRows = source.Where(compilation.Matches).ToArray();
+                evaluatedCompilation = compilation;
+                evaluatedDataIdentity = dataIdentity;
+                EvaluationCount++;
+            }
+
+            return evaluatedRows;
         }
 
         private static RetainerBrowseFilterStatus ToStatus(FilterCompilation<TRecord> compilation, bool isShowingLastValidResults) =>

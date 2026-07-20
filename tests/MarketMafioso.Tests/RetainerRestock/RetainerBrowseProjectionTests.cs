@@ -169,6 +169,86 @@ public sealed class RetainerBrowseProjectionTests
     }
 
     [Fact]
+    public void QueryController_ValidIntermediateEditKeepsEvaluatedRowsUntilEditingEnds()
+    {
+        var retainer = Retainer(10, "Eris", (100, "Darksteel Ore", 3), (200, "Spruce Log", 3));
+        var projection = RetainerRestockStockCatalog.BuildBrowseProjection([], Config(retainer), CurrentOwner);
+        var controller = new RetainerBrowseQueryController();
+
+        Assert.Equal([100U], controller.QueryItems(projection, "darksteel").Items.Select(group => group.ItemId).ToArray());
+        var editing = controller.QueryItems(projection, "spruce", isEditing: true);
+
+        Assert.True(editing.Filter.IsValid);
+        Assert.Equal([100U], editing.Items.Select(group => group.ItemId).ToArray());
+        Assert.Equal(2, controller.ItemCompilationCount);
+        Assert.Equal(1, controller.ItemEvaluationCount);
+
+        var committed = controller.QueryItems(projection, "spruce");
+
+        Assert.Equal([200U], committed.Items.Select(group => group.ItemId).ToArray());
+        Assert.Equal(2, controller.ItemCompilationCount);
+        Assert.Equal(2, controller.ItemEvaluationCount);
+    }
+
+    [Fact]
+    public void QueryController_DataChangeReevaluatesDisplayedCompilationDuringEdit()
+    {
+        var retainer = Retainer(10, "Eris", (100, "Darksteel Ore", 3), (200, "Spruce Log", 3));
+        var initial = RetainerRestockStockCatalog.BuildBrowseProjection([Bag((100, "Darksteel Ore", 2))], Config(retainer), CurrentOwner);
+        var controller = new RetainerBrowseQueryController();
+
+        Assert.Equal([100U], controller.QueryItems(initial, "ownership.quantity>=5").Items.Select(group => group.ItemId).ToArray());
+
+        retainer.Bags.Single().Items.Single(item => item.ItemId == 100).Quantity = 1;
+        var changedData = RetainerRestockStockCatalog.BuildBrowseProjection([Bag((100, "Darksteel Ore", 2))], Config(retainer), CurrentOwner);
+        Assert.Equal(initial.Identity.Context, changedData.Identity.Context);
+        Assert.NotEqual(initial.Identity.Data, changedData.Identity.Data);
+
+        var editing = controller.QueryItems(changedData, "spruce", isEditing: true);
+
+        Assert.Empty(editing.Items);
+        Assert.Equal(2, controller.ItemCompilationCount);
+        Assert.Equal(2, controller.ItemEvaluationCount);
+    }
+
+    [Fact]
+    public void QueryController_FirstValidQueryWhileEditingProducesResults()
+    {
+        var projection = RetainerRestockStockCatalog.BuildBrowseProjection(
+            [],
+            Config(Retainer(10, "Eris", (100, "Darksteel Ore", 3))),
+            CurrentOwner);
+        var controller = new RetainerBrowseQueryController();
+
+        var editing = controller.QueryItems(projection, "darksteel", isEditing: true);
+
+        Assert.Equal([100U], editing.Items.Select(group => group.ItemId).ToArray());
+        Assert.Equal(1, controller.ItemCompilationCount);
+        Assert.Equal(1, controller.ItemEvaluationCount);
+    }
+
+    [Fact]
+    public void QueryController_ListingsKeepEvaluatedRowsUntilEditingEnds()
+    {
+        var retainer = Retainer(10, "Eris");
+        retainer.MarketListings.Add(Listing(100, "Darksteel Ore", 2, 40));
+        retainer.MarketListings.Add(Listing(200, "Spruce Log", 1, 20));
+        var projection = RetainerRestockStockCatalog.BuildBrowseProjection([], Config(retainer), CurrentOwner);
+        var controller = new RetainerBrowseQueryController();
+
+        Assert.Equal([100U], controller.QueryListings(projection, "darksteel").Listings.Select(listing => listing.ItemId).ToArray());
+        var editing = controller.QueryListings(projection, "spruce", isEditing: true);
+
+        Assert.Equal([100U], editing.Listings.Select(listing => listing.ItemId).ToArray());
+        Assert.Equal(2, controller.ListingCompilationCount);
+        Assert.Equal(1, controller.ListingEvaluationCount);
+
+        Assert.Equal([200U], controller.QueryListings(projection, "spruce").Listings.Select(listing => listing.ItemId).ToArray());
+        Assert.Equal(2, controller.ListingCompilationCount);
+        Assert.Equal(2, controller.ListingEvaluationCount);
+    }
+
+    [Fact]
     public void QueryController_InvalidEditsKeepTheLastValidCompilationAndResults()
     {
         var retainer = Retainer(10, "Eris", (100, "Darksteel Ore", 3), (200, "Spruce Log", 3));
@@ -176,7 +256,7 @@ public sealed class RetainerBrowseProjectionTests
         var controller = new RetainerBrowseQueryController();
 
         Assert.Equal([100U], controller.QueryItems(projection, "darksteel").Items.Select(group => group.ItemId).ToArray());
-        var invalid = controller.QueryItems(projection, "ownership.quantity:");
+        var invalid = controller.QueryItems(projection, "ownership.quantity:", isEditing: true);
 
         Assert.False(invalid.Filter.IsValid);
         Assert.True(invalid.Filter.IsShowingLastValidResults);
@@ -196,7 +276,7 @@ public sealed class RetainerBrowseProjectionTests
         var secondScope = RetainerBrowseScopeOption.RetainerKey(11);
         Assert.Equal([100U], controller.QueryItems(projection, "darksteel", firstScope).Items.Select(group => group.ItemId).ToArray());
 
-        var invalid = controller.QueryItems(projection, "ownership.quantity:", secondScope);
+        var invalid = controller.QueryItems(projection, "ownership.quantity:", secondScope, isEditing: true);
 
         Assert.False(invalid.Filter.IsValid);
         Assert.False(invalid.Filter.IsShowingLastValidResults);
