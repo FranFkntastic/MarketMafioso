@@ -33,6 +33,9 @@ public sealed class MarketMafiosoBridgeProviderTests
         Assert.Equal("Squire", selected);
         var surfaces = provider.GetReviewSurfaces();
         Assert.Contains(surfaces, surface => surface.Id == "squire" && surface.Target == "Squire");
+        Assert.Contains(surfaces, surface => surface.Id == "retainers.overview" && surface.Target == "Retainers/Overview");
+        Assert.Contains(surfaces, surface => surface.Id == "retainers.stock" && surface.Target == "Retainers/Browse stock");
+        Assert.Contains(surfaces, surface => surface.Id == "retainers.listings" && surface.Target == "Retainers/Browse listings");
         Assert.Contains(surfaces, surface => surface.Id == "retainers.deposit" && surface.Target == "Retainers/Quick deposit");
         Assert.Contains(surfaces, surface => surface.Id == "retainers.plan" && surface.Target == "Retainers/Withdrawal plan");
         Assert.Contains(surfaces, surface => surface.Id == "workshop-logistics.combined" && surface.Target == "Workshop Logistics/Combined");

@@ -26,15 +26,16 @@ public sealed class RetainerRestockWorkspaceSummaryTests
         var summary = RetainerRestockWorkspaceSummary.Build(
             plan,
             new RetainerOwnerScope("Wei Ning", "Siren"),
-            retainers);
+            retainers,
+            accessibleItemCount: 2);
 
         Assert.Equal("Wei Ning @ Siren", summary.Owner);
+        Assert.Equal(2, summary.AccessibleItemCount);
         Assert.Equal(3, summary.PlanLineCount);
         Assert.Equal(1, summary.ReadyLineCount);
         Assert.Equal(3, summary.UnitsToRetrieve);
         Assert.Equal(6, summary.MissingUnits);
-        Assert.Equal(2, summary.CachedRetainerCount);
-        Assert.Equal(now.AddMinutes(-2), summary.NewestCacheUtc);
+        Assert.Equal(2, summary.ObservedRetainerCount);
     }
 
     [Fact]
@@ -43,11 +44,12 @@ public sealed class RetainerRestockWorkspaceSummaryTests
         var summary = RetainerRestockWorkspaceSummary.Build(
             new RetainerRestockPlan(DateTime.UtcNow, []),
             new RetainerOwnerScope(null, null),
-            [new CachedRetainer { OwnerCharacterName = "Wei Ning", OwnerHomeWorld = "Siren", LastUpdated = DateTime.UtcNow }]);
+            [new CachedRetainer { OwnerCharacterName = "Wei Ning", OwnerHomeWorld = "Siren", LastUpdated = DateTime.UtcNow }],
+            accessibleItemCount: 1);
 
         Assert.Equal("Character unavailable", summary.Owner);
-        Assert.Equal(0, summary.CachedRetainerCount);
-        Assert.Null(summary.NewestCacheUtc);
+        Assert.Equal(1, summary.AccessibleItemCount);
+        Assert.Equal(0, summary.ObservedRetainerCount);
     }
 
     private static RetainerRestockPlanLine Line(int needed, int cached, int missing, bool hasCandidate) =>

@@ -67,6 +67,7 @@ internal sealed class WorkshopRetainerRestockDriver : IWorkshopRetainerRestockDr
     private readonly IPluginLog log;
     private readonly DalamudSummoningBellInteractor summoningBellInteractor;
     private readonly DalamudRetainerCrystalTransfer crystalTransfer;
+    private RetainerMaterialCandidate? activeCandidate;
 
     public WorkshopRetainerRestockDriver(IPluginLog log)
     {
@@ -124,16 +125,26 @@ internal sealed class WorkshopRetainerRestockDriver : IWorkshopRetainerRestockDr
 
     public async Task OpenRetainerAsync(RetainerMaterialCandidate candidate)
     {
+        activeCandidate = null;
         var selected = await Plugin.Framework.RunOnTick(() => SelectRetainerFromList(candidate.RetainerName)).ConfigureAwait(false);
         if (!selected.Success)
             throw new InvalidOperationException(selected.Message);
 
         await WaitForRetainerCommandMenuAsync(candidate.RetainerName).ConfigureAwait(false);
+        var identity = await Plugin.Framework.RunOnTick(() => VerifyActiveRetainerId(candidate.RetainerId)).ConfigureAwait(false);
+        if (!identity.Success)
+            throw new InvalidOperationException(identity.Message);
+
+        activeCandidate = candidate;
         log.Information($"[MarketMafioso] Selected candidate retainer {candidate.RetainerName} ({candidate.RetainerId}) for retainer transfer.");
     }
 
     public async Task OpenRetainerInventoryAsync()
     {
+        var identity = await Plugin.Framework.RunOnTick(VerifyExpectedActiveRetainer).ConfigureAwait(false);
+        if (!identity.Success)
+            throw new InvalidOperationException(identity.Message);
+
         var selected = await Plugin.Framework.RunOnTick(SelectEntrustOrWithdrawItems).ConfigureAwait(false);
         if (!selected.IsSuccess)
             throw new InvalidOperationException(selected.Message);
@@ -148,6 +159,10 @@ internal sealed class WorkshopRetainerRestockDriver : IWorkshopRetainerRestockDr
 
     public async Task<RetainerRetrievalResult> RetrieveFromLiveStackAsync(DalamudInventoryStack stack, int quantity)
     {
+        var identity = await Plugin.Framework.RunOnTick(VerifyExpectedActiveRetainer).ConfigureAwait(false);
+        if (!identity.Success)
+            return new(false, 0, identity.Message);
+
         var pending = await Plugin.Framework.RunOnTick(() => OpenRetainerStackContextMenu(stack, quantity)).ConfigureAwait(false);
         if (!pending.Success)
             return new(false, 0, pending.Message);
@@ -175,9 +190,13 @@ internal sealed class WorkshopRetainerRestockDriver : IWorkshopRetainerRestockDr
             DalamudInventoryStackScanner.ScanLoadedStacks([InventoryType.Crystals], itemIds)).ConfigureAwait(false);
     }
 
-    public Task<RetainerCrystalTransferResult> DepositCrystalStackAsync(DalamudInventoryStack stack, int quantity)
+    public async Task<RetainerCrystalTransferResult> DepositCrystalStackAsync(DalamudInventoryStack stack, int quantity)
     {
-        return crystalTransfer.DepositAsync(stack, quantity);
+        var identity = await Plugin.Framework.RunOnTick(VerifyExpectedActiveRetainer).ConfigureAwait(false);
+        if (!identity.Success)
+            return new(false, 0, "RetainerIdentityMismatch", identity.Message);
+
+        return await crystalTransfer.DepositAsync(stack, quantity).ConfigureAwait(false);
     }
 
     public async Task CloseRetainerAsync()
@@ -192,7 +211,10 @@ internal sealed class WorkshopRetainerRestockDriver : IWorkshopRetainerRestockDr
         for (var attempt = 0; attempt < 120; attempt++)
         {
             if (await Plugin.Framework.RunOnTick(IsRetainerListReady).ConfigureAwait(false))
+            {
+                activeCandidate = null;
                 return;
+            }
 
             await Plugin.Framework.DelayTicks(1).ConfigureAwait(false);
         }
@@ -213,6 +235,38 @@ internal sealed class WorkshopRetainerRestockDriver : IWorkshopRetainerRestockDr
 
         var uiState = await Plugin.Framework.RunOnTick(DescribeRetainerUiState).ConfigureAwait(false);
         throw new InvalidOperationException($"Timed out waiting for the retainer command menu for {retainerName}. {uiState}");
+    }
+
+    private unsafe RetainerUiActionResult VerifyExpectedActiveRetainer()
+    {
+        if (activeCandidate == null)
+            return new(false, "No stable retainer candidate is active for this transfer.");
+
+        return VerifyActiveRetainerId(activeCandidate.RetainerId);
+    }
+
+    private static unsafe RetainerUiActionResult VerifyActiveRetainerId(ulong expectedRetainerId)
+    {
+        var manager = RetainerManager.Instance();
+        if (manager == null)
+            return new(false, "Retainer manager is unavailable; cannot verify the selected retainer identity.");
+
+        var activeRetainer = manager->GetActiveRetainer();
+        if (activeRetainer == null || activeRetainer->RetainerId == 0)
+            return new(false, "No active retainer is available to verify for this transfer.");
+
+        return VerifyCandidateRetainerIdentity(expectedRetainerId, activeRetainer->RetainerId);
+    }
+
+    internal static RetainerUiActionResult VerifyCandidateRetainerIdentity(ulong expectedRetainerId, ulong activeRetainerId)
+    {
+        if (expectedRetainerId == 0)
+            return new(false, "The selected retainer has no stable retainer ID; transfer was not started.");
+        if (activeRetainerId == expectedRetainerId)
+            return new(true, $"Verified active retainer identity {activeRetainerId}.");
+
+        return new(false,
+            $"Retainer identity mismatch: expected stable ID {expectedRetainerId}, but active retainer ID is {activeRetainerId}. Transfer was not started.");
     }
 
     private static async Task WaitForRetainerInventoryAsync()

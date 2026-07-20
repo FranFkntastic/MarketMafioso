@@ -189,8 +189,64 @@ public sealed class WorkshopRetainerRestockOrchestrationTests
         Assert.Equal(WorkshopRetainerRestockState.Complete, service.State);
     }
 
+    [Fact]
+    public async Task StartAsync_InvalidatesOnlyTheRetainerWithVerifiedWithdrawal()
+    {
+        var driver = new FakeWorkshopRetainerRestockDriver();
+        driver.StacksByRetainer["Alpha"] = [Stack(100, quantity: 5, slotIndex: 0)];
+        var invalidator = new FakeRetainerCacheInvalidator();
+        var service = CreateService(driver, invalidator);
+
+        await service.StartAsync([Availability(100, shortage: 5, Candidate(1, "Alpha"))]);
+
+        Assert.Equal([(ulong)1], invalidator.InvalidatedRetainerIds);
+    }
+
+    [Fact]
+    public async Task StartElementalDepositAsync_DoesNotInvalidateWhenNoUnitsMove()
+    {
+        var driver = new FakeWorkshopRetainerRestockDriver
+        {
+            PlayerCrystals = [new DalamudInventoryStack(InventoryType.Crystals, 0, 2, 100)],
+        };
+        driver.DepositCapacityByRetainer["Alpha"] = 0;
+        var invalidator = new FakeRetainerCacheInvalidator();
+        var service = CreateService(driver, invalidator);
+        var plan = new ElementalDepositPlan(
+            DateTime.UtcNow,
+            [new ElementalDepositPlanLine(2, "Fire Shard", 100, 100, 100, 0)],
+            [DepositCandidate(1, "Alpha", 100)],
+            1,
+            0);
+
+        await service.StartElementalDepositAsync(plan);
+
+        Assert.Empty(invalidator.InvalidatedRetainerIds);
+    }
+
+    [Fact]
+    public async Task StartAsync_DoesNotInvalidateWhenWithdrawalFails()
+    {
+        var driver = new FakeWorkshopRetainerRestockDriver
+        {
+            RetrieveException = new InvalidOperationException("Retrieval failed."),
+        };
+        driver.StacksByRetainer["Alpha"] = [Stack(100, quantity: 5, slotIndex: 0)];
+        var invalidator = new FakeRetainerCacheInvalidator();
+        var service = CreateService(driver, invalidator);
+
+        await service.StartAsync([Availability(100, shortage: 5, Candidate(1, "Alpha"))]);
+
+        Assert.Empty(invalidator.InvalidatedRetainerIds);
+    }
+
     private static WorkshopRetainerRestockService CreateService(IWorkshopRetainerRestockDriver driver) =>
         new(TestPluginLog.Create(), driver);
+
+    private static WorkshopRetainerRestockService CreateService(
+        IWorkshopRetainerRestockDriver driver,
+        IRetainerCacheInvalidator invalidator) =>
+        new(TestPluginLog.Create(), driver, invalidator);
 
     private static WorkshopMaterialAvailability Availability(
         uint itemId,
@@ -293,6 +349,19 @@ public sealed class WorkshopRetainerRestockOrchestrationTests
             openRetainer != null && StacksByRetainer.TryGetValue(openRetainer, out var stacks)
                 ? stacks.Where(stack => itemIds.Contains(stack.ItemId)).ToList()
                 : [];
+    }
+
+    private sealed class FakeRetainerCacheInvalidator : IRetainerCacheInvalidator
+    {
+        public List<ulong> InvalidatedRetainerIds { get; } = [];
+
+        public RetainerCacheInvalidationResult InvalidateAndSave(ulong retainerId)
+        {
+            InvalidatedRetainerIds.Add(retainerId);
+            return new RetainerCacheInvalidationResult(
+                RetainerCacheInvalidationOutcome.Removed,
+                $"Removed {retainerId}.");
+        }
     }
 
     private class TestPluginLog : DispatchProxy

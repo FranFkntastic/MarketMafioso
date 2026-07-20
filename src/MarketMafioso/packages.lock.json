@@ -34,6 +34,12 @@
           "System.Security.Cryptography.ProtectedData": "[9.0.0, )"
         }
       },
+      "franthropy.ffxiv": {
+        "type": "Project",
+        "dependencies": {
+          "Franthropy.Filtering": "[0.1.0, )"
+        }
+      },
       "franthropy.filtering": {
         "type": "Project"
       },

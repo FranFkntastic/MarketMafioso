@@ -26,33 +26,38 @@ public sealed class RetainerRestockControlsPanel
     {
         ArgumentNullException.ThrowIfNull(plan);
 
-        var canRefreshRetainers = autoRetainerRefresh.CanStartRefresh &&
-                                  !autoRetainerRefresh.IsRefreshing &&
-                                  !autoRetainerRefresh.IsStartQueued;
-        var canRun = !workshopRetainerRestock.IsRunning &&
+        var refreshActive = autoRetainerRefresh.IsRefreshing || autoRetainerRefresh.IsStartQueued;
+        var transferActive = workshopRetainerRestock.IsRunning;
+        var canRefreshRetainers = !transferActive &&
+                                  !refreshActive &&
+                                  autoRetainerRefresh.CanStartRefresh;
+        var canRun = !transferActive &&
+                     !refreshActive &&
                      plan.Lines.Any(line => line.NeededQuantity > 0 && line.Candidates.Count > 0);
-        var canDeposit = !workshopRetainerRestock.IsRunning && depositPlan.CanRun;
+        var canDeposit = !transferActive && !refreshActive && depositPlan.CanRun;
 
-        if (ImGuiUi.Button("Refresh retainer cache", canRefreshRetainers))
-            autoRetainerRefresh.StartFullRefresh();
-
-        ImGui.SameLine();
         if (ImGuiUi.PrimaryButton("Quick deposit", canDeposit))
             _ = workshopRetainerRestock.StartElementalDepositAsync(depositPlan);
 
         ImGui.SameLine();
-        if (ImGuiUi.Button("Run withdrawal plan", canRun))
+        if (ImGuiUi.PrimaryButton("Run withdrawal plan", canRun))
             _ = workshopRetainerRestock.StartRestockAsync(plan.Lines);
 
-        ImGui.SameLine();
-        ImGui.TextColored(
-            workshopRetainerRestock.IsRunning ? MarketMafiosoUiTheme.Header : MarketMafiosoUiTheme.Muted,
-            workshopRetainerRestock.LastStatus);
+        if (canRefreshRetainers)
+        {
+            ImGui.SameLine();
+            if (ImGuiUi.Button("Refresh retainers", true))
+                autoRetainerRefresh.StartFullRefresh();
+        }
+
+        if (refreshActive)
+            ImGui.TextColored(MarketMafiosoUiTheme.Header, $"Refresh activity: {autoRetainerRefresh.LastStatus}");
+        if (transferActive)
+            ImGui.TextColored(MarketMafiosoUiTheme.Header, $"Transfer activity: {workshopRetainerRestock.LastStatus}");
+        if (!refreshActive && !transferActive && !string.IsNullOrWhiteSpace(workshopRetainerRestock.LastStatus))
+            ImGui.TextColored(MarketMafiosoUiTheme.Muted, workshopRetainerRestock.LastStatus);
 
         if (!ownerScope.IsAvailable)
-        {
-            ImGui.TextColored(MarketMafiosoUiTheme.Error, "Current character and home world are unavailable; retainer restock cannot use cached retainers.");
-            return;
-        }
+            ImGui.TextColored(MarketMafiosoUiTheme.Error, "Current character and home world are unavailable; retainer transfers are unavailable.");
     }
 }

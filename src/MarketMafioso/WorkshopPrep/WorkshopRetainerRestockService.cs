@@ -27,6 +27,7 @@ public sealed class WorkshopRetainerRestockService
 {
     private readonly IPluginLog log;
     private readonly IWorkshopRetainerRestockDriver driver;
+    private readonly IRetainerCacheInvalidator? retainerCacheInvalidator;
     private bool isRunning;
     private string lastStatus = "No retainer transfer has run.";
 
@@ -35,10 +36,19 @@ public sealed class WorkshopRetainerRestockService
     {
     }
 
-    internal WorkshopRetainerRestockService(IPluginLog log, IWorkshopRetainerRestockDriver driver)
+    public WorkshopRetainerRestockService(IPluginLog log, IRetainerCacheInvalidator retainerCacheInvalidator)
+        : this(log, new WorkshopRetainerRestockDriver(log), retainerCacheInvalidator)
+    {
+    }
+
+    internal WorkshopRetainerRestockService(
+        IPluginLog log,
+        IWorkshopRetainerRestockDriver driver,
+        IRetainerCacheInvalidator? retainerCacheInvalidator = null)
     {
         this.log = log;
         this.driver = driver;
+        this.retainerCacheInvalidator = retainerCacheInvalidator;
     }
 
     public bool IsRunning => isRunning;
@@ -143,6 +153,7 @@ public sealed class WorkshopRetainerRestockService
         try
         {
             var totalDeposited = 0;
+            var invalidatedRetainers = new HashSet<ulong>();
             State = WorkshopRetainerRestockState.WaitingForRetainerList;
             await driver.WaitForRetainerListAsync().ConfigureAwait(false);
 
@@ -156,7 +167,7 @@ public sealed class WorkshopRetainerRestockService
                 await driver.OpenRetainerInventoryAsync().ConfigureAwait(false);
 
                 State = WorkshopRetainerRestockState.DepositingItems;
-                totalDeposited += await DepositIntoOpenRetainerAsync(remaining).ConfigureAwait(false);
+                totalDeposited += await DepositIntoOpenRetainerAsync(remaining, candidate, invalidatedRetainers).ConfigureAwait(false);
 
                 State = WorkshopRetainerRestockState.ClosingRetainer;
                 await driver.CloseRetainerAsync().ConfigureAwait(false);
@@ -242,6 +253,7 @@ public sealed class WorkshopRetainerRestockService
         try
         {
             var totalRetrieved = 0;
+            var invalidatedRetainers = new HashSet<ulong>();
             State = WorkshopRetainerRestockState.WaitingForRetainerList;
             await driver.WaitForRetainerListAsync().ConfigureAwait(false);
 
@@ -255,7 +267,7 @@ public sealed class WorkshopRetainerRestockService
                 await driver.OpenRetainerInventoryAsync().ConfigureAwait(false);
 
                 State = WorkshopRetainerRestockState.WithdrawingItems;
-                var retrievedFromCandidate = await WithdrawFromOpenRetainerAsync(remaining).ConfigureAwait(false);
+                var retrievedFromCandidate = await WithdrawFromOpenRetainerAsync(remaining, candidate, invalidatedRetainers).ConfigureAwait(false);
                 totalRetrieved += retrievedFromCandidate;
                 if (retrievedFromCandidate == 0)
                     log.Information($"[MarketMafioso] No matching live retainer stacks were found for candidate {candidate.RetainerName}.");
@@ -330,7 +342,10 @@ public sealed class WorkshopRetainerRestockService
             ? "Close the current retainer inventory before starting automated workshop material restock."
             : null;
 
-    private async Task<int> WithdrawFromOpenRetainerAsync(Dictionary<uint, int> remaining)
+    private async Task<int> WithdrawFromOpenRetainerAsync(
+        Dictionary<uint, int> remaining,
+        RetainerMaterialCandidate candidate,
+        ISet<ulong> invalidatedRetainers)
     {
         var retrievedTotal = 0;
         var plannedStacks = new HashSet<DalamudInventoryStack>();
@@ -351,6 +366,7 @@ public sealed class WorkshopRetainerRestockService
 
             remaining[stack.ItemId] -= result.Retrieved;
             retrievedTotal += result.Retrieved;
+            InvalidateCachedEvidenceAfterVerifiedMovement(candidate, result.Retrieved, invalidatedRetainers);
             plannedStacks.Add(stack);
             log.Information($"[MarketMafioso] Retrieved {result.Retrieved}x item {stack.ItemId} from {stack.Container}/{stack.SlotIndex}.");
         }
@@ -358,7 +374,10 @@ public sealed class WorkshopRetainerRestockService
         return retrievedTotal;
     }
 
-    private async Task<int> DepositIntoOpenRetainerAsync(Dictionary<uint, int> remaining)
+    private async Task<int> DepositIntoOpenRetainerAsync(
+        Dictionary<uint, int> remaining,
+        RetainerMaterialCandidate candidate,
+        ISet<ulong> invalidatedRetainers)
     {
         var depositedTotal = 0;
         var itemIds = remaining.Where(entry => entry.Value > 0).Select(entry => entry.Key).ToHashSet();
@@ -374,10 +393,30 @@ public sealed class WorkshopRetainerRestockService
 
             remaining[stack.ItemId] -= result.Transferred;
             depositedTotal += result.Transferred;
+            InvalidateCachedEvidenceAfterVerifiedMovement(candidate, result.Transferred, invalidatedRetainers);
             log.Information($"[MarketMafioso] Deposited {result.Transferred}x item {stack.ItemId} from crystal slot {stack.SlotIndex}.");
         }
 
         return depositedTotal;
+    }
+
+    private void InvalidateCachedEvidenceAfterVerifiedMovement(
+        RetainerMaterialCandidate candidate,
+        int transferredQuantity,
+        ISet<ulong> invalidatedRetainers)
+    {
+        if (transferredQuantity <= 0 || !invalidatedRetainers.Add(candidate.RetainerId))
+            return;
+
+        if (retainerCacheInvalidator == null)
+        {
+            log.Warning($"[MarketMafioso] Verified movement changed retainer {candidate.RetainerId}, but no retainer cache invalidator is configured.");
+            return;
+        }
+
+        var result = retainerCacheInvalidator.InvalidateAndSave(candidate.RetainerId);
+        if (!result.Removed && result.Outcome != RetainerCacheInvalidationOutcome.NotFound)
+            log.Warning($"[MarketMafioso] {result.Message}");
     }
 
     private static string FormatRemainingShortages(IReadOnlyDictionary<uint, int> remaining)

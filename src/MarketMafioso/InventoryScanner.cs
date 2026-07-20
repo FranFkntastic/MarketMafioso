@@ -106,13 +106,55 @@ public class InventoryScanner
             .ToDictionary(group => group.Key, group => group.Sum(item => checked((int)item.Quantity)));
     }
 
-    public List<InventoryBag> ScanCurrentRetainer(Configuration config)
+    public List<InventoryBag> ScanCurrentRetainer(Configuration config) =>
+        CaptureCurrentRetainer(config).Bags.ToList();
+
+    /// <summary>
+    /// Captures the current retainer inventory together with the containers that
+    /// were actually loaded. Empty loaded pages are represented in <see cref="Bags"/>,
+    /// while optional gil and market evidence uses a nullable observation: zero gil
+    /// and an empty listings collection are observations, whereas <see langword="null"/>
+    /// means that source container was not loaded.
+    /// </summary>
+    public RetainerInventoryCaptureResult CaptureCurrentRetainer(Configuration config)
     {
-        return InventoryPayloadMapper.MapRetainerInventoryBags(
-            containerScanner.ScanLoadedContainers(RetainerContainers),
+        var requestedContainers = RetainerContainers
+            .Append(InventoryType.RetainerGil)
+            .Append(InventoryType.RetainerMarket)
+            .ToArray();
+        var snapshots = containerScanner.ScanLoadedContainers(requestedContainers);
+        var loadedContainers = snapshots
+            .Where(snapshot => snapshot.IsLoaded && Enum.TryParse<InventoryType>(snapshot.ContainerName, out _))
+            .Select(snapshot => Enum.Parse<InventoryType>(snapshot.ContainerName))
+            .ToHashSet();
+        var retainerInventorySnapshots = snapshots
+            .Where(snapshot => RetainerContainers.Any(container => container.ToString() == snapshot.ContainerName))
+            .ToArray();
+        var bags = InventoryPayloadMapper.MapRetainerInventoryBags(
+            retainerInventorySnapshots,
             config.IncludeItemNames,
             ResolveItemName,
             itemId => itemCatalog.Resolve(itemId));
+        var gilSnapshot = snapshots.SingleOrDefault(snapshot => snapshot.ContainerName == InventoryType.RetainerGil.ToString());
+        var marketSnapshot = snapshots.SingleOrDefault(snapshot => snapshot.ContainerName == InventoryType.RetainerMarket.ToString());
+        var observedMarketListings = marketSnapshot == null
+            ? null
+            : InventoryPayloadMapper.MapRetainerMarketListings(
+                [marketSnapshot],
+                config.IncludeItemNames,
+                ResolveItemName,
+                DateTime.UtcNow,
+                itemId => itemCatalog.Resolve(itemId));
+
+        return new RetainerInventoryCaptureResult(
+            bags,
+            requestedContainers.ToHashSet(),
+            loadedContainers,
+            gilSnapshot == null
+                ? null
+                : ScanContainerRawQuantities(InventoryType.RetainerGil)
+                    .Aggregate(0UL, (sum, quantity) => checked(sum + quantity)),
+            observedMarketListings);
     }
 
     public ulong ScanCurrentRetainerGil()
@@ -205,4 +247,21 @@ public class InventoryScanner
 
         return quantities;
     }
+}
+
+public sealed record RetainerInventoryCaptureResult(
+    IReadOnlyList<InventoryBag> Bags,
+    IReadOnlySet<InventoryType> RequestedContainers,
+    IReadOnlySet<InventoryType> LoadedContainers,
+    ulong? ObservedGil = null,
+    IReadOnlyList<RetainerMarketListing>? ObservedMarketListings = null)
+{
+    public bool HasLoadedContainers(IEnumerable<InventoryType> containers) =>
+        containers.All(LoadedContainers.Contains);
+
+    /// <summary>Whether the RetainerGil container was loaded for this capture.</summary>
+    public bool HasObservedGil => ObservedGil.HasValue;
+
+    /// <summary>Whether the RetainerMarket container was loaded for this capture.</summary>
+    public bool HasObservedMarketListings => ObservedMarketListings != null;
 }

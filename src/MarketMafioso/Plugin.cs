@@ -104,7 +104,7 @@ public sealed class Plugin : IDalamudPlugin
             reporter);
         workshopCatalog = new WorkshopProjectCatalog(DataManager, Log);
         viwiWorkshoppaIpc = new VIWIWorkshoppaIpc(new DalamudVIWIWorkshoppaIpcAdapter(PluginInterface, Log));
-        workshopRetainerRestock = new WorkshopRetainerRestockService(Log);
+        workshopRetainerRestock = new WorkshopRetainerRestockService(Log, retainerCache);
         workshopAssemblyRunner = new WorkshopAssemblyRunner(
             Framework,
             Log,
