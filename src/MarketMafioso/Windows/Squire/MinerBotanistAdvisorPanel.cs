@@ -464,7 +464,7 @@ internal sealed class MinerBotanistAdvisorPanel
         var columnCount = selected.AcquisitionCostEstimate is null ? 4 : 5;
         if (!ImGui.BeginTable("##SquireAdvisorSummary", columnCount, ImGuiTableFlags.BordersInnerV | ImGuiTableFlags.SizingStretchProp))
             return;
-        SummaryCell("Profile", $"{MinerBotanistUtilityProfile.ProfileVersion} · {ContextLabel(context)}", MarketMafiosoUiTheme.Header);
+        SummaryCell("Profile", $"{selected.Utility.Profile.ProfileVersion} · {ProfileContextLabel(selected.Utility)}", MarketMafiosoUiTheme.Header);
         SummaryCell("Advisor", advice.Nomination is null ? "Abstained" : FormatCost(advice.Nomination.AcquisitionCostGil),
             advice.Nomination is null ? MarketMafiosoUiTheme.Warning : MarketMafiosoUiTheme.Success);
         SummaryCell(selected.AcquisitionCostEstimate is null ? "Selected" : "Selected expected", FormatCost(selected.AcquisitionCostGil), MarketMafiosoUiTheme.Link);
@@ -790,6 +790,17 @@ internal sealed class MinerBotanistAdvisorPanel
         else if (state.Stage is MinerBotanistAdvisorSessionStage.Abstained or MinerBotanistAdvisorSessionStage.Failed)
             ImGui.TextWrapped("No recommendation was produced. The incomplete evidence remains visible above instead of being replaced by a guess.");
     }
+
+    /// <summary>Label for the context the solution was actually evaluated under — never the UI selector.</summary>
+    private static string ProfileContextLabel(EquipmentUtilityEvaluation evaluation) =>
+        evaluation.Context.ContextId switch
+        {
+            MinerBotanistUtilityProfile.LegendaryContextId => ContextLabel(MinerBotanistUtilityContextKind.LegendaryNodeGeneralYield),
+            MinerBotanistUtilityProfile.CollectableContextId => ContextLabel(MinerBotanistUtilityContextKind.CollectableEfficiency),
+            MinerBotanistUtilityProfile.OrdinaryResourceBenchmarkContextId => ContextLabel(MinerBotanistUtilityContextKind.OrdinaryResourceBenchmark),
+            CrafterUtilityProfile.OrdinaryCraftBenchmarkContextId => "Ordinary crafts",
+            _ => evaluation.Context.ContextId,
+        };
 
     private static string ContextLabel(MinerBotanistUtilityContextKind value) => value switch
     {

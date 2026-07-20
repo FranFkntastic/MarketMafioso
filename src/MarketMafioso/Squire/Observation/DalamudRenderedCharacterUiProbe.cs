@@ -26,6 +26,8 @@ public interface IRenderedCharacterAdvisorProbe
     bool Open();
     bool TryCloseCharacterUi();
     RenderedGatheringStatsObservation CaptureGatheringStats();
+    /// <summary>Captures the rendered stat tuple for whichever advisor family the active job belongs to.</summary>
+    RenderedAdvisorStatsObservation CaptureAdvisorStats();
     RenderedEquipmentScanProgress BeginEquipmentScan();
     RenderedEquipmentScanStepResult AdvanceEquipmentScan();
     RenderedEquipmentScanProgress CancelEquipmentScan();
@@ -131,6 +133,7 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
     public void PrepareAdvisorObservation()
     {
         gatheringStatsStabilizer.Reset();
+        craftingStatsStabilizer.Reset();
         CancelEquipmentScan();
     }
 
@@ -305,6 +308,26 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
 
     public RenderedCraftingStatsObservation CaptureCraftingStats() =>
         craftingStatsStabilizer.Observe(RenderedCharacterStatsParser.ParseCrafting(Capture()));
+
+    public RenderedAdvisorStatsObservation CaptureAdvisorStats()
+    {
+        var snapshot = Capture();
+        var gathering = gatheringStatsStabilizer.Observe(RenderedCharacterStatsParser.Parse(snapshot));
+        if (gathering.JobName is not null)
+            return RenderedAdvisorStatsObservation.FromGathering(gathering);
+        var crafting = craftingStatsStabilizer.Observe(RenderedCharacterStatsParser.ParseCrafting(snapshot));
+        if (crafting.JobName is not null)
+            return RenderedAdvisorStatsObservation.FromCrafting(crafting);
+        var addonMissing = gathering.Diagnostic.Contains("not visible", StringComparison.Ordinal);
+        return new(
+            RenderedCharacterObservationStatus.Unavailable,
+            null,
+            null,
+            null,
+            addonMissing
+                ? gathering.Diagnostic
+                : "The rendered active job is not Miner, Botanist, or a crafting job; this advisor scope is unsupported.");
+    }
 
     public RenderedEquipmentScanProgress BeginEquipmentScan()
     {

@@ -69,7 +69,8 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
     private CancellationTokenSource? cancellation;
     private Task<OutfitterMarketDiscoveryResult>? discoveryTask;
     private OutfitterMarketEvidenceRequest? discoveryRequest;
-    private RenderedGatheringStatsObservation? renderedStats;
+    private RenderedAdvisorStatsObservation? renderedStats;
+    private IAdvisorStatFamily? resolvedFamily;
     private RenderedEquipmentScanProgress? renderedEquipment;
     private RenderedMinerBotanistBaseline? baseline;
     private RenderedEquipmentResolution? resolution;
@@ -133,6 +134,7 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
         discoveryTask = null;
         discoveryRequest = null;
         renderedStats = null;
+        resolvedFamily = null;
         renderedEquipment = null;
         baseline = null;
         resolution = null;
@@ -150,7 +152,7 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
         stageDeadlineUtc = DateTimeOffset.UtcNow.AddSeconds(15);
         State = new(
             MinerBotanistAdvisorSessionStage.ObservingStats,
-            "Reading a stable MIN/BTN level and stat tuple from the Character window.",
+            "Reading a stable job, level, and stat tuple from the Character window.",
             retainedCoverage,
             0,
             null,
@@ -237,6 +239,7 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
         completedWorkbenchValidation = null;
         cancellation = new();
         renderedStats = null;
+        resolvedFamily = null;
         renderedEquipment = null;
         baseline = null;
         resolution = null;
@@ -272,7 +275,7 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
 
     private void TickStats()
     {
-        renderedStats = probe.CaptureGatheringStats();
+        renderedStats = probe.CaptureAdvisorStats();
         State = State with { Message = renderedStats.Diagnostic, UpdatedAtUtc = DateTimeOffset.UtcNow };
         if (renderedStats.Status != RenderedCharacterObservationStatus.Complete)
         {
@@ -282,7 +285,7 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
         }
         if (renderedStats.Level is not (>= 1 and <= 100))
         {
-            Abstain("The player advisor supports rendered Miner or Botanist levels 1 through 100.");
+            Abstain("The player advisor supports rendered levels 1 through 100.");
             return;
         }
         renderedEquipment = probe.BeginEquipmentScan();
@@ -322,15 +325,16 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
 
         RequestCharacterUiRestore();
 
-        baseline = RenderedMinerBotanistBaselineAssembler.Assemble(renderedStats!, renderedEquipment);
+        resolvedFamily = AdvisorStatFamilies.ResolveForRenderedJob(renderedStats!.JobName);
+        if (resolvedFamily is null)
+        {
+            Abstain("The current player advisor supports rendered Miner, Botanist, and the eight crafting jobs; other player jobs remain visible but unsupported.");
+            return;
+        }
+        baseline = RenderedMinerBotanistBaselineAssembler.Assemble(renderedStats!, renderedEquipment, resolvedFamily);
         if (baseline.Status != RenderedMinerBotanistBaselineStatus.Complete || baseline.ClassJobId is not { } classJobId)
         {
             Abstain(baseline.Diagnostic);
-            return;
-        }
-        if (classJobId is not (MinerBotanistUtilityProfile.MinerClassJobId or MinerBotanistUtilityProfile.BotanistClassJobId))
-        {
-            Abstain("The current player profile supports rendered Miner and Botanist; other player jobs remain visible but unsupported.");
             return;
         }
         resolution = RenderedEquipmentDefinitionResolver.Resolve(
@@ -349,7 +353,7 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
             return;
         }
 
-        offers = catalog.Build(classJobId, checked((uint)baseline.Level!.Value), GathererAdvisorStatFamily.Instance);
+        offers = catalog.Build(classJobId, checked((uint)baseline.Level!.Value), resolvedFamily);
         if (offers.MarketItemIds.Count == 0)
         {
             Abstain($"The declared market scope contains no eligible items in this game-data version. {offers.Diagnostic}");
@@ -412,6 +416,7 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
         var capturedBaseline = baseline!;
         var capturedResolution = resolution!;
         var capturedOffers = offers!;
+        var capturedFamily = resolvedFamily!;
         var capturedOwnedItems = ownedItemsEvidence;
         var capturedContext = State.Context;
         advicePlayerFingerprint = RenderedPlayerAuthorityFingerprint.Capture(capturedBaseline, capturedResolution);
@@ -428,8 +433,8 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
                 capturedResolution,
                 solvingEvidence,
                 itemId => capturedOffers.Definitions.TryGetValue(itemId, out var definition) ? [definition] : [],
-                GathererAdvisorStatFamily.Instance,
-                ContextIdFor(capturedContext),
+                capturedFamily,
+                ContextIdFor(capturedContext, capturedFamily),
                 capturedOffers.VendorOffers,
                 capturedOwnedItems,
                 token,
@@ -514,7 +519,7 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
             State = State with
             {
                 Stage = MinerBotanistAdvisorSessionStage.Abstained,
-                Message = "The rendered job, equipment, quality, or gathering-stat tuple changed. The prior frontier is read-only; refresh it before Workbench review.",
+                Message = "The rendered job, equipment, quality, or stat tuple changed. The prior frontier is read-only; refresh it before Workbench review.",
                 AdviceIsRetained = true,
                 UpdatedAtUtc = DateTimeOffset.UtcNow,
             };
@@ -621,10 +626,13 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
 
     private sealed record SolverProgressSnapshot(long Generation, EquipmentExactFrontierProgress Progress);
 
-    private static string ContextIdFor(MinerBotanistUtilityContextKind contextKind) => contextKind switch
-    {
-        MinerBotanistUtilityContextKind.LegendaryNodeGeneralYield => MinerBotanistUtilityProfile.LegendaryContextId,
-        MinerBotanistUtilityContextKind.CollectableEfficiency => MinerBotanistUtilityProfile.CollectableContextId,
-        _ => MinerBotanistUtilityProfile.OrdinaryResourceBenchmarkContextId,
-    };
+    private static string ContextIdFor(MinerBotanistUtilityContextKind contextKind, IAdvisorStatFamily family) =>
+        family is CrafterAdvisorStatFamily
+            ? CrafterUtilityProfile.OrdinaryCraftBenchmarkContextId
+            : contextKind switch
+            {
+                MinerBotanistUtilityContextKind.LegendaryNodeGeneralYield => MinerBotanistUtilityProfile.LegendaryContextId,
+                MinerBotanistUtilityContextKind.CollectableEfficiency => MinerBotanistUtilityProfile.CollectableContextId,
+                _ => MinerBotanistUtilityProfile.OrdinaryResourceBenchmarkContextId,
+            };
 }

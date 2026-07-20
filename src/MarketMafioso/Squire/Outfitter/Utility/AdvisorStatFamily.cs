@@ -35,9 +35,47 @@ public interface IAdvisorStatFamily
         uint characterLevel,
         MinerBotanistUtilityStats offerBaseline,
         MinerBotanistUtilityStats fixedStats);
+    /// <summary>Positional stat contribution of one rendered item (base plus materia), in family order.</summary>
+    AdvisorStatTriple TripleFromRendered(IReadOnlyDictionary<string, int> stats, IReadOnlyDictionary<string, int> materia);
     EquipmentSolverUtilityVector VectorFromRendered(IReadOnlyDictionary<string, int> stats, IReadOnlyDictionary<string, int> materia);
     EquipmentSolverUtilityVector VectorFromDefinition(EquipmentStatProfile profile);
     AdvisorStatTriple ToTriple(MinerBotanistUtilityStats stats);
+}
+
+/// <summary>
+/// Rendered-job-name resolution and the ordered set of landed advisor stat families.
+/// Job names are the exact strings rendered by the Character addon.
+/// </summary>
+public static class AdvisorStatFamilies
+{
+    private static readonly IReadOnlyDictionary<string, uint> RenderedJobIds =
+        new Dictionary<string, uint>(StringComparer.Ordinal)
+        {
+            ["Miner"] = MinerBotanistUtilityProfile.MinerClassJobId,
+            ["Botanist"] = MinerBotanistUtilityProfile.BotanistClassJobId,
+            ["Carpenter"] = CrafterUtilityProfile.CarpenterClassJobId,
+            ["Blacksmith"] = CrafterUtilityProfile.BlacksmithClassJobId,
+            ["Armorer"] = CrafterUtilityProfile.ArmorerClassJobId,
+            ["Goldsmith"] = CrafterUtilityProfile.GoldsmithClassJobId,
+            ["Leatherworker"] = CrafterUtilityProfile.LeatherworkerClassJobId,
+            ["Weaver"] = CrafterUtilityProfile.WeaverClassJobId,
+            ["Alchemist"] = CrafterUtilityProfile.AlchemistClassJobId,
+            ["Culinarian"] = CrafterUtilityProfile.CulinarianClassJobId,
+        };
+
+    public static IReadOnlyList<IAdvisorStatFamily> All { get; } =
+        [GathererAdvisorStatFamily.Instance, CrafterAdvisorStatFamily.Instance];
+
+    public static uint? ClassJobIdForRenderedJob(string? renderedJobName) =>
+        renderedJobName is not null && RenderedJobIds.TryGetValue(renderedJobName, out var classJobId)
+            ? classJobId
+            : null;
+
+    public static IAdvisorStatFamily? Resolve(uint classJobId) =>
+        All.FirstOrDefault(family => family.SupportedClassJobIds.Contains(classJobId));
+
+    public static IAdvisorStatFamily? ResolveForRenderedJob(string? renderedJobName) =>
+        ClassJobIdForRenderedJob(renderedJobName) is { } classJobId ? Resolve(classJobId) : null;
 }
 
 public sealed class GathererAdvisorStatFamily : IAdvisorStatFamily
@@ -100,11 +138,14 @@ public sealed class GathererAdvisorStatFamily : IAdvisorStatFamily
         return MinerBotanistSolverReplay.Capture(request, contextKind, classJobId, characterLevel, offerBaseline, fixedStats);
     }
 
-    public EquipmentSolverUtilityVector VectorFromRendered(IReadOnlyDictionary<string, int> stats, IReadOnlyDictionary<string, int> materia)
+    public AdvisorStatTriple TripleFromRendered(IReadOnlyDictionary<string, int> stats, IReadOnlyDictionary<string, int> materia)
     {
         int Read(string key) => stats.GetValueOrDefault(key) + materia.GetValueOrDefault(key);
-        return MinerBotanistUtilityProfile.ToVector(new(Read("Gathering"), Read("Perception"), Read("GP")));
+        return new(Read("Gathering"), Read("Perception"), Read("GP"));
     }
+
+    public EquipmentSolverUtilityVector VectorFromRendered(IReadOnlyDictionary<string, int> stats, IReadOnlyDictionary<string, int> materia) =>
+        MinerBotanistUtilityProfile.ToVector(FromTriple(TripleFromRendered(stats, materia)));
 
     public EquipmentSolverUtilityVector VectorFromDefinition(EquipmentStatProfile profile)
     {
@@ -160,11 +201,14 @@ public sealed class CrafterAdvisorStatFamily : IAdvisorStatFamily
         MinerBotanistUtilityStats fixedStats) =>
         null;
 
-    public EquipmentSolverUtilityVector VectorFromRendered(IReadOnlyDictionary<string, int> stats, IReadOnlyDictionary<string, int> materia)
+    public AdvisorStatTriple TripleFromRendered(IReadOnlyDictionary<string, int> stats, IReadOnlyDictionary<string, int> materia)
     {
         int Read(string key) => stats.GetValueOrDefault(key) + materia.GetValueOrDefault(key);
-        return CrafterUtilityProfile.ToVector(new(Read("Craftsmanship"), Read("Control"), Read("CP")));
+        return new(Read("Craftsmanship"), Read("Control"), Read("CP"));
     }
+
+    public EquipmentSolverUtilityVector VectorFromRendered(IReadOnlyDictionary<string, int> stats, IReadOnlyDictionary<string, int> materia) =>
+        CrafterUtilityProfile.ToVector(FromTriple(TripleFromRendered(stats, materia)));
 
     public EquipmentSolverUtilityVector VectorFromDefinition(EquipmentStatProfile profile)
     {

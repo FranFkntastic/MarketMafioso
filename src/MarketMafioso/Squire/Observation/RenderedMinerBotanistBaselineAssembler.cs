@@ -28,44 +28,43 @@ public sealed record RenderedMinerBotanistBaseline(
 public static class RenderedMinerBotanistBaselineAssembler
 {
     public static RenderedMinerBotanistBaseline Assemble(
-        RenderedGatheringStatsObservation stats,
-        RenderedEquipmentScanProgress equipment)
+        RenderedAdvisorStatsObservation stats,
+        RenderedEquipmentScanProgress equipment,
+        IAdvisorStatFamily family)
     {
-        var classJobId = stats.JobName switch
-        {
-            "Miner" => MinerBotanistUtilityProfile.MinerClassJobId,
-            "Botanist" => MinerBotanistUtilityProfile.BotanistClassJobId,
-            _ => 0u,
-        };
+        ArgumentNullException.ThrowIfNull(stats);
+        ArgumentNullException.ThrowIfNull(equipment);
+        ArgumentNullException.ThrowIfNull(family);
+        var classJobId = AdvisorStatFamilies.ClassJobIdForRenderedJob(stats.JobName) ?? 0u;
         if (stats.Status != RenderedCharacterObservationStatus.Complete || classJobId == 0 ||
-            stats.Level is null || stats.Gathering is null || stats.Perception is null || stats.GatheringPoints is null)
-            return Incomplete("A complete rendered level, MIN/BTN job, Gathering, Perception, and GP tuple is required.");
+            stats.Level is null || stats.Stats is null)
+            return Incomplete("A complete rendered level, supported advisor job, and stat tuple is required.");
         if (equipment.Status != RenderedEquipmentScanStatus.Complete ||
             equipment.CompletedSlots != equipment.TotalSlots || equipment.TotalSlots != 12 ||
             equipment.Observations.Any(value => value.Item?.Status != RenderedItemDetailStatus.Complete))
             return Incomplete("All twelve stat-bearing equipment slots require complete rendered tooltip evidence.");
 
-        var total = new MinerBotanistUtilityStats(stats.Gathering.Value, stats.Perception.Value, stats.GatheringPoints.Value);
-        var equippedGathering = 0;
-        var equippedPerception = 0;
-        var equippedGp = 0;
+        var total = stats.Stats;
+        var equippedFirst = 0L;
+        var equippedSecond = 0L;
+        var equippedThird = 0L;
         foreach (var item in equipment.Observations.Select(value => value.Item!))
         {
-            equippedGathering += Read(item.Stats, "Gathering") + Read(item.MateriaStats, "Gathering");
-            equippedPerception += Read(item.Stats, "Perception") + Read(item.MateriaStats, "Perception");
-            equippedGp += Read(item.Stats, "GP") + Read(item.MateriaStats, "GP");
+            var contribution = family.TripleFromRendered(item.Stats, item.MateriaStats);
+            equippedFirst += contribution.First;
+            equippedSecond += contribution.Second;
+            equippedThird += contribution.Third;
         }
 
-        var fixedStats = new MinerBotanistUtilityStats(
-            total.Gathering - equippedGathering,
-            total.Perception - equippedPerception,
-            total.GatheringPoints - equippedGp);
-        if (fixedStats.Gathering < 0 || fixedStats.Perception < 0 || fixedStats.GatheringPoints < 0)
+        var fixedFirst = total.First - equippedFirst;
+        var fixedSecond = total.Second - equippedSecond;
+        var fixedThird = total.Third - equippedThird;
+        if (fixedFirst < 0 || fixedSecond < 0 || fixedThird < 0)
             return new(
                 RenderedMinerBotanistBaselineStatus.Inconsistent,
                 classJobId,
                 stats.Level,
-                total,
+                ToUtilityStats(total),
                 null,
                 equipment.Observations,
                 "Rendered item and materia bonuses exceed the rendered Character totals; the evidence generations cannot be reconciled.");
@@ -74,14 +73,14 @@ public static class RenderedMinerBotanistBaselineAssembler
             RenderedMinerBotanistBaselineStatus.Complete,
             classJobId,
             stats.Level,
-            total,
-            fixedStats,
+            ToUtilityStats(total),
+            new(checked((int)fixedFirst), checked((int)fixedSecond), checked((int)fixedThird)),
             equipment.Observations,
-            "Rendered MIN/BTN baseline and non-offer stat remainder are complete.");
+            $"Rendered {family.CoverageJobLabel} baseline and non-offer stat remainder are complete.");
     }
 
-    private static int Read(IReadOnlyDictionary<string, int> stats, string key) =>
-        stats.TryGetValue(key, out var value) ? value : 0;
+    private static MinerBotanistUtilityStats ToUtilityStats(AdvisorStatTriple triple) =>
+        new(checked((int)triple.First), checked((int)triple.Second), checked((int)triple.Third));
 
     private static RenderedMinerBotanistBaseline Incomplete(string diagnostic) =>
         new(RenderedMinerBotanistBaselineStatus.Incomplete, null, null, null, null, [], diagnostic);
