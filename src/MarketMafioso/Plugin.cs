@@ -233,6 +233,8 @@ public sealed class Plugin : IDalamudPlugin
                 tryCloseBagSlotContextUi: renderedCharacterUiProbe.TryCloseBagSlotContext,
                 captureTooltipMapDiagnosticUi: renderedCharacterUiProbe.CaptureTooltipMapDiagnostic,
                 captureInventoryContainerTableDiagnosticUi: renderedCharacterUiProbe.CaptureInventoryContainerTableDiagnostic,
+                captureInventoryBuddyOccupancyDiagnosticUi: renderedCharacterUiProbe.CaptureInventoryBuddyOccupancyDiagnostic,
+                captureInventoryWindowOccupancyDiagnosticUi: renderedCharacterUiProbe.CaptureInventoryWindowOccupancyDiagnostic,
                 setInventoryTabDiagnosticUi: renderedCharacterUiProbe.SetInventoryTabDiagnostic,
                 beginArmouryDifferentialUi: () => renderedCharacterUiProbe.BeginArmouryDifferential(
                     mainWindow.CreateAgentInventoryStructSnapshot().Items,

@@ -457,11 +457,20 @@ public sealed class AgentBridgeHost : IDisposable
                 return bagSlotAction!.Success
                     ? AgentBridgeResponse.Ok(bagSlotAction.Message, bagSlotAction)
                     : new AgentBridgeResponse { Success = false, Message = bagSlotAction.Message, Receipt = bagSlotAction };
+            case "close-bag-slot-context-ui":
                 var bagSlotContextClosed = false;
                 await dispatchOnFramework(() => bagSlotContextClosed = provider.TryCloseBagSlotContextUi()).ConfigureAwait(false);
                 return bagSlotContextClosed
                     ? AgentBridgeResponse.Ok("Visible context menu closed through its rendered addon.")
                     : AgentBridgeResponse.Fail("No visible context menu was available to close.");
+            case "get-inventory-buddy-occupancy-ui":
+                string? buddyOccupancy = null;
+                await dispatchOnFramework(() => buddyOccupancy = provider.CaptureInventoryBuddyOccupancyDiagnosticUi()).ConfigureAwait(false);
+                return AgentBridgeResponse.Ok(buddyOccupancy!);
+            case "get-inventory-window-occupancy-ui":
+                string? windowOccupancy = null;
+                await dispatchOnFramework(() => windowOccupancy = provider.CaptureInventoryWindowOccupancyDiagnosticUi()).ConfigureAwait(false);
+                return AgentBridgeResponse.Ok(windowOccupancy!);
             case "stop-route":
                 await dispatchOnFramework(provider.StopRoute).ConfigureAwait(false);
                 AppendAudit("stop-route", "accepted");
