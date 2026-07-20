@@ -359,13 +359,10 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
             Abstain($"The declared market scope contains no eligible items in this game-data version. {offers.Diagnostic}");
             return;
         }
-        var ownedEvidenceProven = probe.CaptureArmouryDifferentialSnapshot().Status == RenderedArmouryDifferentialStatus.Complete;
-        var ownedItems = ownedEvidenceProven && captureOwnedItems is not null
-            ? captureOwnedItems()
-            : null;
+        var ownedItems = captureOwnedItems?.Invoke();
         ownedItemsEvidence = ownedItems;
         var coverageLabel = ownedItems is not null
-            ? offers.CoverageLabel.Replace("armoury inventory is not yet observed", "armoury inventory observed (differential-proven; owned items evaluated at base stats)", StringComparison.Ordinal)
+            ? offers.CoverageLabel.Replace("armoury inventory is not yet observed", "owned inventory observed via direct container reads (owned items evaluated at base stats)", StringComparison.Ordinal)
             : offers.CoverageLabel;
         discoveryRequest = new(
             "universalis",
