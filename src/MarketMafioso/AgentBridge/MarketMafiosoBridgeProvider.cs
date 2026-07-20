@@ -48,6 +48,8 @@ public interface IMarketMafiosoBridgeProvider
     bool TryCloseBagSlotContextUi();
     string CaptureTooltipMapDiagnosticUi(string addonName);
     string CaptureInventoryContainerTableDiagnosticUi();
+    string CaptureInventoryBuddyOccupancyDiagnosticUi();
+    string CaptureInventoryWindowOccupancyDiagnosticUi();
     string SetInventoryTabDiagnosticUi(int tab);
     RenderedArmouryDifferentialProgress BeginArmouryDifferentialUi();
     RenderedArmouryDifferentialProgress AdvanceArmouryDifferentialUi();
@@ -132,6 +134,8 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
     private readonly Func<bool> tryCloseBagSlotContextUi;
     private readonly Func<string, string> captureTooltipMapDiagnosticUi;
     private readonly Func<string> captureInventoryContainerTableDiagnosticUi;
+    private readonly Func<string> captureInventoryBuddyOccupancyDiagnosticUi;
+    private readonly Func<string> captureInventoryWindowOccupancyDiagnosticUi;
     private readonly Func<int, string> setInventoryTabDiagnosticUi;
     private readonly Func<RenderedArmouryDifferentialProgress> beginArmouryDifferentialUi;
     private readonly Func<RenderedArmouryDifferentialProgress> advanceArmouryDifferentialUi;
@@ -183,6 +187,8 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
         Func<bool>? tryCloseBagSlotContextUi = null,
         Func<string, string>? captureTooltipMapDiagnosticUi = null,
         Func<string>? captureInventoryContainerTableDiagnosticUi = null,
+        Func<string>? captureInventoryBuddyOccupancyDiagnosticUi = null,
+        Func<string>? captureInventoryWindowOccupancyDiagnosticUi = null,
         Func<int, string>? setInventoryTabDiagnosticUi = null,
         Func<RenderedArmouryDifferentialProgress>? beginArmouryDifferentialUi = null,
         Func<RenderedArmouryDifferentialProgress>? advanceArmouryDifferentialUi = null,
@@ -241,6 +247,8 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
         this.tryCloseBagSlotContextUi = tryCloseBagSlotContextUi ?? (() => false);
         this.captureTooltipMapDiagnosticUi = captureTooltipMapDiagnosticUi ?? (_ => "Tooltip map diagnostics are unavailable.");
         this.captureInventoryContainerTableDiagnosticUi = captureInventoryContainerTableDiagnosticUi ?? (() => "Inventory container table diagnostics are unavailable.");
+        this.captureInventoryBuddyOccupancyDiagnosticUi = captureInventoryBuddyOccupancyDiagnosticUi ?? (() => "Inventory buddy occupancy diagnostics are unavailable.");
+        this.captureInventoryWindowOccupancyDiagnosticUi = captureInventoryWindowOccupancyDiagnosticUi ?? (() => "Inventory window occupancy diagnostics are unavailable.");
         this.setInventoryTabDiagnosticUi = setInventoryTabDiagnosticUi ?? (_ => "Inventory tab automation is unavailable.");
         this.beginArmouryDifferentialUi = beginArmouryDifferentialUi ?? (() => new(RenderedArmouryDifferentialStatus.Failed, 0, 0, string.Empty, 0, [], [], [], "The armoury differential proof is unavailable."));
         this.advanceArmouryDifferentialUi = advanceArmouryDifferentialUi ?? this.beginArmouryDifferentialUi;
@@ -288,6 +296,8 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
     public bool TryCloseBagSlotContextUi() => tryCloseBagSlotContextUi();
     public string CaptureTooltipMapDiagnosticUi(string addonName) => captureTooltipMapDiagnosticUi(addonName);
     public string CaptureInventoryContainerTableDiagnosticUi() => captureInventoryContainerTableDiagnosticUi();
+    public string CaptureInventoryBuddyOccupancyDiagnosticUi() => captureInventoryBuddyOccupancyDiagnosticUi();
+    public string CaptureInventoryWindowOccupancyDiagnosticUi() => captureInventoryWindowOccupancyDiagnosticUi();
     public string SetInventoryTabDiagnosticUi(int tab) => setInventoryTabDiagnosticUi(tab);
     public RenderedArmouryDifferentialProgress BeginArmouryDifferentialUi() => beginArmouryDifferentialUi();
     public RenderedArmouryDifferentialProgress AdvanceArmouryDifferentialUi() => advanceArmouryDifferentialUi();

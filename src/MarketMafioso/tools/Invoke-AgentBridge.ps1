@@ -38,6 +38,8 @@ param(
         "close-bag-slot-context-ui",
         "get-tooltip-map-ui",
         "get-inventory-container-table-ui",
+        "get-inventory-buddy-occupancy-ui",
+        "get-inventory-window-occupancy-ui",
         "set-inventory-tab-ui",
         "begin-armoury-differential-ui",
         "advance-armoury-differential-ui",

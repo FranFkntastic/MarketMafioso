@@ -705,6 +705,60 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
         return $"SetTab({tab}) dispatched; current TabIndex={inventory->TabIndex}.";
     }
 
+    private int buddyOccupancyPhase;
+    private int buddyOccupancySaddleIcons = -1;
+    private DateTimeOffset buddyOccupancyTabSettledAt;
+
+    /// <summary>
+    /// Diagnostic: count the rendered item icons on each saddlebag tab of the game's own
+    /// InventoryBuddy window. Stateful across calls — retry while the surface opens and
+    /// each tab settles; the final call reports both icon counts. Rendered evidence for
+    /// containers the differential has no struct-occupied slots to visit.
+    /// </summary>
+    public unsafe string CaptureInventoryBuddyOccupancyDiagnostic()
+    {
+        var addon = ResolveDifferentialAddon(DifferentialSurface.InventoryBuddy);
+        if (addon == null)
+        {
+            EnsureDifferentialSurfaceOpen(DifferentialSurface.InventoryBuddy);
+            buddyOccupancyPhase = 0;
+            buddyOccupancySaddleIcons = -1;
+            return "Opening the rendered saddlebag surface; retry.";
+        }
+        var buddy = (AddonInventoryBuddy*)addon;
+        switch (buddyOccupancyPhase)
+        {
+            case 0:
+                if (buddy->TabIndex != 0)
+                {
+                    buddy->SetTab(0);
+                    return "Selecting the saddlebag tab; retry.";
+                }
+                buddyOccupancyPhase = 1;
+                buddyOccupancyTabSettledAt = DateTimeOffset.UtcNow;
+                return "Settling the saddlebag tab; retry.";
+            case 1:
+                if (DateTimeOffset.UtcNow - buddyOccupancyTabSettledAt < TimeSpan.FromMilliseconds(500))
+                    return "Settling the saddlebag tab; retry.";
+                buddyOccupancySaddleIcons = CountRenderedIconCells(addon);
+                buddy->SetTab(1);
+                buddyOccupancyPhase = 2;
+                buddyOccupancyTabSettledAt = DateTimeOffset.UtcNow;
+                return "Selecting the premium saddlebag tab; retry.";
+            case 2:
+                if (buddy->TabIndex != 1)
+                    return "Selecting the premium saddlebag tab; retry.";
+                if (DateTimeOffset.UtcNow - buddyOccupancyTabSettledAt < TimeSpan.FromMilliseconds(500))
+                    return "Settling the premium saddlebag tab; retry.";
+                var premiumIcons = CountRenderedIconCells(addon);
+                buddyOccupancyPhase = 0;
+                return $"SaddleBag1-2 rendered icon(s): {buddyOccupancySaddleIcons}; PremiumSaddleBag1-2 rendered icon(s): {premiumIcons}.";
+            default:
+                buddyOccupancyPhase = 0;
+                return "Restarting the saddlebag occupancy count; retry.";
+        }
+    }
+
     /// <summary>
     /// Diagnostic dump of the tooltip-manager attachments for a window's item cells:
     /// the exact type/id, slot, and kind values the game itself registered. Mechanism
@@ -785,7 +839,7 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
             return new(false, "InvalidBagTarget", "Target must be '<Container>:<slotIndex>', for example Inventory1:0.", "Inventory", null);
         var container = targetCore[..separatorIndex];
         var surface = SurfaceFor(container);
-        if (surface == DifferentialSurface.ArmouryBoard || BagTooltipTypeOrId(container) == 0)
+        if (surface == DifferentialSurface.ArmouryBoard || BagTooltipTypeOrId(container) is null)
             return new(false, "InvalidBagContainer", $"'{container}' is not a player-inventory or saddlebag container.", "Inventory", null);
         var addonName = SurfaceAddon(surface);
         var addon = ResolveDifferentialAddon(surface);
@@ -811,7 +865,7 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
         var slotNode = ResolveFirstDragDropCell(addon);
         if (slotNode == null)
             return new(false, "BagSlotUnavailable", $"The rendered {addonName} surface has no item cells.", addonName, null);
-        var typeOrId = experimentType ?? BagTooltipTypeOrId(container);
+        var typeOrId = experimentType ?? BagTooltipTypeOrId(container)!.Value;
         if (!TryShowArmourySlotTooltipRaw(parentAddon, slotNode, typeOrId, experimentFlag ?? 0, experimentKind ?? 2, slotIndex))
             return new(false, "BagTooltipRejected", $"The game rejected the tooltip request (type={typeOrId}) for {container}:{slotIndex}.", addonName, null);
         var observation = RenderedItemDetailParser.Parse(Capture());
@@ -912,7 +966,10 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
         const char hqGlyph = '';
         var text = nameNode.Text.Trim();
         var isHq = text.Contains(hqGlyph);
-        var name = System.Text.RegularExpressions.Regex.Replace(text.Replace(hqGlyph.ToString(), string.Empty, StringComparison.Ordinal), @"\s+", " ").Trim();
+        // Status glyphs (HQ, collectable, and friends) live in the Unicode private use
+        // area; the sheet name carries none of them, so strip the whole block.
+        var stripped = System.Text.RegularExpressions.Regex.Replace(text, "[-]", string.Empty);
+        var name = System.Text.RegularExpressions.Regex.Replace(stripped, @"\s+", " ").Trim();
         return (name, isHq);
     }
 
@@ -941,6 +998,9 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
         armouryDispatchAttempts = 0;
         surfaceOpenAttempts.Clear();
         ResetBagSlotContext();
+        // A previous diagnostic or failed run can leave the game's context menu open;
+        // the differential must start from a clean rendered surface.
+        TryCloseBagSlotContext();
         armouryDifferential.Begin(structBaseline);
         TryOpenArmouryBoard();
         return armouryDifferential.Snapshot();
@@ -985,14 +1045,12 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
             var slotNode = ResolveArmourySlotNode(addon, (short)current.Value.SlotIndex);
             if (slotNode == null)
                 return FailArmouryDifferential($"Rendered armoury slot {current.Value.SlotIndex} on {current.Value.Container} does not resolve.");
-            RecordSurfaceOccupancy(surface, addon, current.Value.Container);
             return AdvanceArmourySlotDifferential(addon, current.Value, slotNode, ArmouryTooltipTypeOrId(inventoryType));
         }
 
         if (surface == DifferentialSurface.InventoryBuddy && !SelectInventoryBuddyTab((AddonInventoryBuddy*)addon, current.Value.Container))
             return armouryDifferential.Snapshot() with { Diagnostic = "Cycling the rendered saddlebag tab." };
-        RecordSurfaceOccupancy(surface, addon, current.Value.Container);
-        return AdvanceBagDifferential(current.Value);
+        return AdvanceBagDifferential(addon, current.Value);
     }
 
     private unsafe RenderedArmouryDifferentialProgress AdvanceArmourySlotDifferential(
@@ -1068,37 +1126,77 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
     }
 
     /// <summary>
-    /// One bag/saddlebag differential step through the game's own inventory context
-    /// menus: the slot's context menu opens (raw InventoryType — no tooltip container
-    /// numbering), its name-copy entry writes the item's rendered name for the user,
-    /// and the quality glyph in that name carries NQ/HQ identity.
+    /// One bag/saddlebag differential step through the game's own ItemDetail tooltip:
+    /// ShowTooltip with the raw InventoryType enum value (proven live on this build: the
+    /// agent accepts enum numbering for player bags, unlike the documented 48-51/69-72
+    /// scheme), then the rendered identity line (name with quality glyph) is compared.
+    /// Bag items are not equipment, so only the identity line is parsed.
     /// </summary>
-    private RenderedArmouryDifferentialProgress AdvanceBagDifferential(
+    private unsafe RenderedArmouryDifferentialProgress AdvanceBagDifferential(
+        AtkUnitBase* addon,
         (string Container, int SlotIndex, uint ItemId, bool IsHighQuality) current)
     {
-        var read = TryCopyBagSlotContextName(current.Container, current.SlotIndex);
-        if (!read.Success)
+        if (!Enum.TryParse<FFXIVClientStructs.FFXIV.Client.Game.InventoryType>(current.Container, out var inventoryType))
+            return FailArmouryDifferential($"Unsupported bag container '{current.Container}'.");
+
+        if (armouryCandidateSignature is null)
         {
-            if (read.Code == "InventoryContextCycling")
-                return armouryDifferential.Snapshot() with { Diagnostic = read.Message };
+            // Same replace-instead-of-hide discipline as the armoury path: one anchor
+            // node on the owning window, the slot travels in the tooltip arguments.
+            var anchorNode = ResolveFirstDragDropCell(addon);
+            if (anchorNode == null)
+                return FailArmouryDifferential($"The rendered inventory surface has no item cells for {current.Container}:{current.SlotIndex}.");
+            if (!Franthropy.Dalamud.Automation.Ui.RenderedItemDetailTooltipRequest.TryShowInventoryItemTooltip(
+                    addon->Id, anchorNode, (uint)inventoryType, (short)current.SlotIndex))
+                return FailArmouryDifferential($"The game rejected the bag tooltip request for {current.Container}:{current.SlotIndex}.");
+            armouryTooltipDispatchedAt = DateTimeOffset.UtcNow;
+            armouryCandidateSignature = string.Empty;
+            armouryCandidateStartedAt = DateTimeOffset.UtcNow;
+            return armouryDifferential.Snapshot();
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        if (now - armouryTooltipDispatchedAt < TimeSpan.FromMilliseconds(300))
+            return armouryDifferential.Snapshot();
+        if (now - armouryTooltipDispatchedAt > TimeSpan.FromSeconds(3))
+        {
+            // A silent dispatch drop must not be misread as a data disagreement: re-dispatch
+            // up to three times before declaring that nothing rendered.
             if (armouryDispatchAttempts < 3)
             {
                 armouryDispatchAttempts++;
-                return armouryDifferential.Snapshot() with { Diagnostic = $"Retrying the bag slot identity read: {read.Message}" };
+                armouryCandidateSignature = null;
+                return armouryDifferential.Snapshot();
             }
+            var timedOut = RecordDifferentialObservation(current, null, null, null);
+            armouryCandidateSignature = null;
             armouryDispatchAttempts = 0;
-            return FailArmouryDifferential($"Bag slot identity read failed for {current.Container}:{current.SlotIndex}: {read.Code} :: {read.Message}");
+            return timedOut;
         }
-        armouryDispatchAttempts = 0;
-        const char hqGlyph = '';
-        var renderedName = System.Text.RegularExpressions.Regex.Replace(
-            read.Message.Replace(hqGlyph.ToString(), string.Empty, StringComparison.Ordinal), @"\s+", " ").Trim();
-        var renderedIsHq = read.Message.Contains(hqGlyph);
+
+        var (renderedName, renderedIsHq) = ParseItemDetailIdentity(Capture());
+        if (renderedName is null || renderedIsHq is null)
+            return armouryDifferential.Snapshot();
         var resolved = armouryBagNameResolver?.Invoke(renderedName, current.ItemId);
-        return RecordDifferentialObservation(current, resolved, renderedIsHq, renderedName);
+        var signature = resolved is null
+            ? $"unresolved:{renderedName}:{renderedIsHq}"
+            : $"resolved:{resolved}:{renderedIsHq}";
+        if (signature != armouryCandidateSignature)
+        {
+            armouryCandidateSignature = signature;
+            armouryCandidateStartedAt = now;
+            return armouryDifferential.Snapshot();
+        }
+        if (now - armouryCandidateStartedAt < TimeSpan.FromMilliseconds(300))
+            return armouryDifferential.Snapshot();
+
+        var result = RecordDifferentialObservation(current, resolved, renderedIsHq, renderedName);
+        armouryCandidateSignature = null;
+        armouryDispatchAttempts = 0;
+        return result;
     }
 
-    private RenderedArmouryDifferentialProgress RecordDifferentialObservation(
+    private unsafe RenderedArmouryDifferentialProgress RecordDifferentialObservation(
         (string Container, int SlotIndex, uint ItemId, bool IsHighQuality) current,
         uint? renderedId,
         bool? renderedIsHq,
@@ -1117,7 +1215,22 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
             if (freshItem is not null && freshItem.ItemId == renderedId && freshItem.IsHighQuality == renderedIsHq)
                 armouryDifferential.RefreshBaselineItem(current.Container, current.SlotIndex, freshItem.ItemId, freshItem.IsHighQuality);
         }
-        return armouryDifferential.RecordRenderedObservation(current.Container, current.SlotIndex, renderedId, renderedIsHq, renderedName);
+        var progress = armouryDifferential.RecordRenderedObservation(current.Container, current.SlotIndex, renderedId, renderedIsHq, renderedName);
+        RecordDeferredSurfaceOccupancy(current.Container);
+        return progress;
+    }
+
+    /// <summary>
+    /// Occupancy is counted only after the surface's first slot observation completes:
+    /// a freshly opened window reports near-zero icons until its grid finishes loading,
+    /// so an eager count at surface resolution races the icon loader.
+    /// </summary>
+    private unsafe void RecordDeferredSurfaceOccupancy(string container)
+    {
+        var surface = SurfaceFor(container);
+        var addon = ResolveDifferentialAddon(surface);
+        if (addon != null)
+            RecordSurfaceOccupancy(surface, addon, container);
     }
 
     private RenderedArmouryDifferentialProgress FailArmouryDifferential(string message)
@@ -1143,22 +1256,18 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
     };
 
     /// <summary>
-    /// AgentItemDetail.TypeOrId values for player inventory and saddlebag containers from
-    /// the documented agent numbering (player inventory 48-51, saddlebags 69-72).
+    /// AgentItemDetail.TypeOrId values for player inventory and saddlebag containers are
+    /// the raw InventoryType enum values, same as the armoury path: proven live on this
+    /// build (Inventory1:0 rendered the correct material where the documented 48-51
+    /// numbering rendered a soul crystal from a different container). Returns null when
+    /// the container name is not a recognized InventoryType.
     /// Mechanism only — rendered tooltip output remains the sole authority.
     /// </summary>
-    private static uint BagTooltipTypeOrId(string container) => container switch
-    {
-        "Inventory1" => 48,
-        "Inventory2" => 49,
-        "Inventory3" => 50,
-        "Inventory4" => 51,
-        "SaddleBag1" => 69,
-        "SaddleBag2" => 70,
-        "PremiumSaddleBag1" => 71,
-        "PremiumSaddleBag2" => 72,
-        _ => 0,
-    };
+    private static uint? BagTooltipTypeOrId(string container) =>
+        Enum.TryParse<FFXIVClientStructs.FFXIV.Client.Game.InventoryType>(container, out var inventoryType) &&
+        SurfaceFor(container) != DifferentialSurface.ArmouryBoard
+            ? (uint)inventoryType
+            : null;
 
     private unsafe bool EnsureDifferentialSurfaceOpen(DifferentialSurface surface)
     {
@@ -1180,6 +1289,37 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
     }
 
     private static readonly string[] InventoryWindowCandidates = ["Inventory", "InventoryLarge", "InventoryGrid", "InventoryExpansion"];
+
+    private static readonly string[] InventoryOccupancyCandidates =
+    [
+        "Inventory", "InventoryLarge", "InventoryGrid", "InventoryExpansion",
+        "InventoryGrid0", "InventoryGrid1",
+        "InventoryGrid0E", "InventoryGrid1E", "InventoryGrid2E", "InventoryGrid3E",
+    ];
+
+    /// <summary>
+    /// Diagnostic: per-addon visibility and rendered item-icon counts for every known
+    /// player-inventory window layout. The inventory display mode decides which addons
+    /// carry the 140 bag slots; this dump shows which family is live before the
+    /// differential trusts an icon-count comparison.
+    /// </summary>
+    public unsafe string CaptureInventoryWindowOccupancyDiagnostic()
+    {
+        var lines = new List<string>();
+        foreach (var candidate in InventoryOccupancyCandidates)
+        {
+            var addon = gameGui.GetAddonByName<AtkUnitBase>(candidate, 1);
+            if (addon == null)
+            {
+                lines.Add($"{candidate}: not loaded");
+                continue;
+            }
+            var visible = addon->RootNode != null && addon->RootNode->IsVisible();
+            lines.Add($"{candidate}: visible={visible} icons={(visible ? CountRenderedIconCells(addon) : 0)}");
+        }
+        return string.Join("\n", lines);
+    }
+
 
     private unsafe AtkUnitBase* ResolveInventoryWindowAddon()
     {
