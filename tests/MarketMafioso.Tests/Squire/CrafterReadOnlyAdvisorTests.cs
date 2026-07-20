@@ -48,7 +48,7 @@ public sealed class CrafterReadOnlyAdvisorTests
     }
 
     [Fact]
-    public void Experimental_crafter_calibration_shows_the_frontier_but_cannot_nominate()
+    public void Supported_crafter_calibration_nominates_a_capability_gaining_upgrade()
     {
         var fixture = Fixture();
         var advice = new MinerBotanistReadOnlyAdvisor().Build(
@@ -61,8 +61,9 @@ public sealed class CrafterReadOnlyAdvisorTests
 
         Assert.True(advice.Status == MinerBotanistAdvisorStatus.Complete, advice.Diagnostic);
         Assert.NotNull(advice.Frontier);
-        Assert.Null(advice.Nomination);
-        Assert.Contains(advice.AuthorityBySolutionId.Values, authority =>
+        Assert.NotNull(advice.Nomination);
+        Assert.Contains(advice.AuthorityBySolutionId.Values, authority => authority.AdvisorMayConsider);
+        Assert.DoesNotContain(advice.AuthorityBySolutionId.Values, authority =>
             authority.Reasons.Any(reason => reason.Contains("experimental", StringComparison.OrdinalIgnoreCase)));
     }
 

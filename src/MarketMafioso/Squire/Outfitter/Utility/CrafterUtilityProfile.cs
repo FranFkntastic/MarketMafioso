@@ -46,7 +46,7 @@ public sealed class CrafterUtilityProfile : IEquipmentExactSolverUtilityModel, I
     public const string ProfileId = "squire.crafter.player";
     public const string ProfileVersion = "7.51-v1";
     public const string OrdinaryCraftBenchmarkContextId = "ordinary-craft-benchmark";
-    public const CrafterCalibrationState CalibrationState = CrafterCalibrationState.Experimental;
+    public const CrafterCalibrationState CalibrationState = CrafterCalibrationState.Supported;
 
     private const string CraftsmanshipKey = "craftsmanship";
     private const string ControlKey = "control";
@@ -166,12 +166,15 @@ public sealed class CrafterUtilityProfile : IEquipmentExactSolverUtilityModel, I
 
     internal AdvisorAuthorityAssessment AssessAuthorityForCalibration(
         EquipmentUtilityEvaluation candidate,
-        ulong additionalCostGil) => AssessAuthorityCore(
+        ulong additionalCostGil,
+        bool evidenceComplete = true,
+        bool patchMatches = true,
+        bool hasUnmodeledRelevantEffect = false) => AssessAuthorityCore(
             candidate,
             additionalCostGil,
-            evidenceComplete: true,
-            patchMatches: true,
-            hasUnmodeledRelevantEffect: false,
+            evidenceComplete,
+            patchMatches,
+            hasUnmodeledRelevantEffect,
             calibrationApproved: true);
 
     private AdvisorAuthorityAssessment AssessAuthorityCore(
