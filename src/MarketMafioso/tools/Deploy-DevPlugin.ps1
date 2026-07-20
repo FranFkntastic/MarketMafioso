@@ -31,6 +31,16 @@ function Resolve-PinnedFranthropyRoot {
 
     $sibling = [System.IO.Path]::GetFullPath((Join-Path -Path $workspaceRoot -ChildPath "..\Franthropy"))
     if (-not (Test-Path -LiteralPath (Join-Path -Path $sibling -ChildPath ".git"))) {
+        $gitCommonDir = (& git -C $workspaceRoot rev-parse --path-format=absolute --git-common-dir).Trim()
+        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($gitCommonDir)) {
+            throw "Could not resolve the MarketMafioso primary checkout from '$workspaceRoot'."
+        }
+
+        $primaryRepoRoot = Split-Path -Parent $gitCommonDir
+        $developmentRoot = Split-Path -Parent $primaryRepoRoot
+        $sibling = Join-Path -Path $developmentRoot -ChildPath "Franthropy"
+    }
+    if (-not (Test-Path -LiteralPath (Join-Path -Path $sibling -ChildPath ".git"))) {
         throw "Franthropy was not found beside MarketMafioso at '$sibling'."
     }
 
@@ -138,8 +148,12 @@ if ([string]::IsNullOrWhiteSpace($configuredTargetDll)) {
 
 $sourceDir = Join-Path -Path $projectDir -ChildPath "bin\$effectiveConfiguration"
 $sourceDll = Join-Path -Path $sourceDir -ChildPath "MarketMafioso.dll"
+$sourceFranthropyFfxiv = Join-Path -Path $sourceDir -ChildPath "Franthropy.FFXIV.dll"
+$sourceFranthropyFiltering = Join-Path -Path $sourceDir -ChildPath "Franthropy.Filtering.dll"
 $destDll = Resolve-ConfigPath -Path $configuredTargetDll -BaseDir $projectDir
 $destDir = Split-Path -Parent $destDll
+$destFranthropyFfxiv = Join-Path -Path $destDir -ChildPath "Franthropy.FFXIV.dll"
+$destFranthropyFiltering = Join-Path -Path $destDir -ChildPath "Franthropy.Filtering.dll"
 
 if ((Split-Path -Leaf $destDll) -ne "MarketMafioso.dll") {
     throw "Dalamud target DLL must be named MarketMafioso.dll: $destDll"
@@ -164,6 +178,7 @@ try {
             '-c', $effectiveConfiguration,
             '-p:UseSharedCompilation=false',
             "-p:FranthropyDalamudProject=$(Join-Path -Path $franthropySource -ChildPath 'Franthropy.Dalamud\Franthropy.Dalamud.csproj')",
+            "-p:FranthropyFfxivProject=$(Join-Path -Path $franthropySource -ChildPath 'Franthropy.FFXIV\Franthropy.FFXIV.csproj')",
             "-p:FranthropyFilteringProject=$(Join-Path -Path $franthropySource -ChildPath 'Franthropy.Filtering\Franthropy.Filtering.csproj')"
         )
         & dotnet @buildArguments
@@ -174,6 +189,12 @@ try {
 
     if (-not (Test-Path -LiteralPath $sourceDll)) {
         throw "Expected $effectiveConfiguration build output was not found: $sourceDll"
+    }
+    if (-not (Test-Path -LiteralPath $sourceFranthropyFfxiv)) {
+        throw "Expected Franthropy.FFXIV runtime dependency was not found: $sourceFranthropyFfxiv"
+    }
+    if (-not (Test-Path -LiteralPath $sourceFranthropyFiltering)) {
+        throw "Expected Franthropy.Filtering runtime dependency was not found: $sourceFranthropyFiltering"
     }
 
     $sourceFullPath = [System.IO.Path]::GetFullPath($sourceDll)
@@ -195,9 +216,30 @@ try {
         throw "Dalamud target DLL hash does not match $effectiveConfiguration output. Source=$sourceHash Destination=$destHash"
     }
 
+    if (-not (Test-Path -LiteralPath $destFranthropyFfxiv)) {
+        throw "Expected deployed Franthropy.FFXIV runtime dependency was not found: $destFranthropyFfxiv"
+    }
+    if (-not (Test-Path -LiteralPath $destFranthropyFiltering)) {
+        throw "Expected deployed Franthropy.Filtering runtime dependency was not found: $destFranthropyFiltering"
+    }
+
+    $sourceFranthropyFfxivHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $sourceFranthropyFfxiv).Hash
+    $destFranthropyFfxivHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $destFranthropyFfxiv).Hash
+    if ($sourceFranthropyFfxivHash -ne $destFranthropyFfxivHash) {
+        throw "Deployed Franthropy.FFXIV DLL hash does not match $effectiveConfiguration output. Source=$sourceFranthropyFfxivHash Destination=$destFranthropyFfxivHash"
+    }
+
+    $sourceFranthropyFilteringHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $sourceFranthropyFiltering).Hash
+    $destFranthropyFilteringHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $destFranthropyFiltering).Hash
+    if ($sourceFranthropyFilteringHash -ne $destFranthropyFilteringHash) {
+        throw "Deployed Franthropy.Filtering DLL hash does not match $effectiveConfiguration output. Source=$sourceFranthropyFilteringHash Destination=$destFranthropyFilteringHash"
+    }
+
     $destInfo = Get-Item -LiteralPath $destDll
     Write-Host "Build output DLL: $sourceDll"
     Write-Host "Verified Dalamud target DLL: $destDll"
+    Write-Host "Verified Franthropy.FFXIV runtime dependency: $destFranthropyFfxiv"
+    Write-Host "Verified Franthropy.Filtering runtime dependency: $destFranthropyFiltering"
     Write-Host "SHA256: $destHash"
     Write-Host "Last write: $($destInfo.LastWriteTime)"
     Write-Host "Dalamud will automatically reload MarketMafioso from the watched DLL."

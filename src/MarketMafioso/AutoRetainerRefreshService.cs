@@ -241,11 +241,22 @@ public sealed class AutoRetainerRefreshService : IDisposable
             phase = "retainer inventory open";
             await WaitForAddonAsync("retainer inventory", RetainerInventoryLargeAddon, RetainerInventorySmallAddon).ConfigureAwait(false);
 
+            phase = "stable retainer capture registration";
+            var captureWait = await RunOnFrameworkTickAsync(retainerCache.GetCaptureWaitSnapshot).ConfigureAwait(false);
+            if (captureWait.Session == null)
+            {
+                throw new InvalidOperationException(
+                    "Retainer cache did not record a stable active retainer identity when the inventory opened.");
+            }
+
             phase = "retainer inventory close command";
             await RunOnFrameworkTickAsync(CloseRetainerInventory).ConfigureAwait(false);
 
             phase = "retainer inventory close confirmation";
             await WaitForRetainerInventoryClosedAsync().ConfigureAwait(false);
+
+            phase = "persisted retainer capture";
+            await WaitForPersistedCaptureAsync(captureWait).ConfigureAwait(false);
 
             phase = "refresh progress update";
             if (partOfFullRefresh)
@@ -393,6 +404,53 @@ public sealed class AutoRetainerRefreshService : IDisposable
 
         var uiState = await RunOnFrameworkTickAsync(DescribeRetainerUiState).ConfigureAwait(false);
         throw new InvalidOperationException($"Timed out waiting for retainer inventory to close. {uiState}");
+    }
+
+    private async Task WaitForPersistedCaptureAsync(RetainerCaptureWaitSnapshot captureWait)
+    {
+        var expectedRetainerId = captureWait.Session?.RetainerId
+            ?? throw new ArgumentException("A capture wait requires a stable retainer session.", nameof(captureWait));
+
+        for (var attempt = 0; attempt < 120; attempt++)
+        {
+            var receipts = await RunOnFrameworkTickAsync(
+                () => retainerCache.GetCaptureReceiptsAfter(captureWait.Checkpoint)).ConfigureAwait(false);
+            foreach (var receipt in receipts)
+            {
+                var match = RetainerCacheManager.EvaluateReceipt(receipt, captureWait);
+                if (match == RetainerCaptureReceiptMatch.Persisted)
+                    return;
+
+                var failure = GetCaptureReceiptGateFailure(receipt, expectedRetainerId, captureWait.Checkpoint);
+                if (failure != null)
+                    throw new InvalidOperationException(failure);
+            }
+
+            await Plugin.Framework.DelayTicks(1).ConfigureAwait(false);
+        }
+
+        throw new InvalidOperationException(
+            $"Timed out waiting for a newer persisted retainer inventory capture for retainer {expectedRetainerId}.");
+    }
+
+    internal static string? GetCaptureReceiptGateFailure(
+        RetainerCaptureReceipt? receipt,
+        ulong expectedRetainerId,
+        RetainerCaptureCheckpoint checkpoint)
+    {
+        var match = RetainerCacheManager.EvaluateReceipt(receipt, expectedRetainerId, checkpoint);
+        return match switch
+        {
+            RetainerCaptureReceiptMatch.Pending => null,
+            RetainerCaptureReceiptMatch.Persisted => null,
+            RetainerCaptureReceiptMatch.IdentityMismatch =>
+                $"Retainer inventory capture identity mismatch. Expected retainer {expectedRetainerId}, received {receipt!.RetainerId}.",
+            RetainerCaptureReceiptMatch.Incomplete =>
+                $"Retainer inventory capture was incomplete. {receipt!.Message}",
+            RetainerCaptureReceiptMatch.PersistenceFailed =>
+                $"Retainer inventory capture could not be persisted. {receipt!.Message}",
+            _ => $"Retainer inventory capture was rejected ({receipt!.Outcome}). {receipt.Message}",
+        };
     }
 
     private unsafe bool IsAnyAddonReady(params string[] addonNames)

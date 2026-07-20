@@ -16,6 +16,7 @@ internal sealed class RetainerRestockTabPanel
     private readonly RetainerRestockBrowserState browserState = new();
     private readonly RetainerRestockBrowserPanel browser;
     private readonly RetainerRestockControlsPanel controls;
+    private string? appliedRequestedBrowserView;
 
     public RetainerRestockTabPanel(
         Configuration config,
@@ -44,38 +45,49 @@ internal sealed class RetainerRestockTabPanel
             ownerScope,
             scanner.ResolveItemName,
             DateTime.UtcNow);
-        var stockRows = RetainerRestockStockCatalog.Build(
+        var browseProjection = RetainerRestockStockCatalog.BuildBrowseProjection(
             playerBags,
             config,
-            DateTime.UtcNow,
             ownerScope);
 
-        var summary = RetainerRestockWorkspaceSummary.Build(plan, ownerScope, config.RetainerCache.Values);
-        UtilityWorkspaceUi.DrawStatusStrip(
-            "##retainerRestockStatus",
-            [
-                new("Character", summary.Owner),
-                new("On character", $"{depositPlan.PlayerQuantity:N0} across {depositPlan.Lines.Count:N0} types", depositPlan.PlayerQuantity > 0 ? MarketMafiosoUiTheme.Header : MarketMafiosoUiTheme.Muted),
-                new(depositPlan.UnknownCrystalCacheCount > 0 ? "Will try" : "Can deposit", $"{depositPlan.PlannedQuantity:N0} units", depositPlan.PlannedQuantity > 0 ? MarketMafiosoUiTheme.Success : MarketMafiosoUiTheme.Muted),
-                new("Withdrawal plan", $"{summary.ReadyLineCount}/{summary.PlanLineCount} ready; {summary.UnitsToRetrieve:N0} units", summary.ReadyLineCount > 0 ? MarketMafiosoUiTheme.Success : MarketMafiosoUiTheme.Muted),
-                new("Retainer cache", summary.CachedRetainerCount == 0 ? "No cached retainers" : $"{summary.CachedRetainerCount} retainers; newest {summary.NewestCacheUtc:HH:mm} UTC", summary.CachedRetainerCount > 0 ? MarketMafiosoUiTheme.Header : MarketMafiosoUiTheme.Muted),
-            ]);
-        ImGui.Spacing();
-        controls.Draw(plan, depositPlan, ownerScope);
-        ImGui.Spacing();
+        var summary = RetainerRestockWorkspaceSummary.Build(
+            plan,
+            ownerScope,
+            config.RetainerCache.Values,
+            browseProjection.ItemGroups.Count);
+        if (requestedView is "Browse stock" or "Browse listings")
+        {
+            if (!string.Equals(requestedView, appliedRequestedBrowserView, StringComparison.Ordinal))
+            {
+                browserState.SelectMode(string.Equals(requestedView, "Browse listings", StringComparison.Ordinal)
+                    ? RetainerBrowseQueryMode.Listings
+                    : RetainerBrowseQueryMode.Items);
+                appliedRequestedBrowserView = requestedView;
+            }
+        }
+        else
+        {
+            appliedRequestedBrowserView = null;
+        }
 
         if (!ImGui.BeginTabBar("##retainerRestockWorkspace"))
             return;
 
-        if (ImGui.BeginTabItem("Quick deposit", GetRequestedViewFlags("Quick deposit", requestedView)))
+        if (ImGui.BeginTabItem("Overview", GetRequestedViewFlags("Overview", requestedView)))
         {
-            DrawQuickDeposit(depositPlan);
+            DrawOverview(summary, plan, depositPlan, ownerScope);
             ImGui.EndTabItem();
         }
 
-        if (ImGui.BeginTabItem("Browse stock", GetRequestedViewFlags("Browse stock", requestedView)))
+        if (ImGui.BeginTabItem("Browse stock", GetRequestedViewFlags("Browse stock", requestedView, "Browse listings")))
         {
-            browser.DrawBrowse(stockRows, MarketMafiosoUiTheme.Header, MarketMafiosoUiTheme.Muted);
+            browser.DrawBrowse(browseProjection, MarketMafiosoUiTheme.Header, MarketMafiosoUiTheme.Muted);
+            ImGui.EndTabItem();
+        }
+
+        if (ImGui.BeginTabItem("Quick deposit", GetRequestedViewFlags("Quick deposit", requestedView)))
+        {
+            DrawQuickDeposit(depositPlan);
             ImGui.EndTabItem();
         }
 
@@ -96,6 +108,29 @@ internal sealed class RetainerRestockTabPanel
         ImGui.EndTabBar();
     }
 
+    private void DrawOverview(
+        RetainerRestockWorkspaceSummary summary,
+        RetainerRestockPlan plan,
+        ElementalDepositPlan depositPlan,
+        RetainerOwnerScope ownerScope)
+    {
+        var depositReadiness = depositPlan.CanRun ? "Ready" : "Not ready";
+        var withdrawalReadiness = summary.ReadyLineCount > 0 ? "Ready" : "Not ready";
+        UtilityWorkspaceUi.DrawStatusStrip(
+            "##retainerRestockOverviewStatus",
+            [
+                new("Active character", summary.Owner),
+                new("Accessible stock", $"{summary.AccessibleItemCount:N0} item types", summary.AccessibleItemCount > 0 ? MarketMafiosoUiTheme.Header : MarketMafiosoUiTheme.Muted),
+                new("Deposit", $"{depositReadiness}; {depositPlan.PlannedQuantity:N0} units", depositPlan.CanRun ? MarketMafiosoUiTheme.Success : MarketMafiosoUiTheme.Muted),
+                new("Withdrawal", $"{withdrawalReadiness}; {summary.UnitsToRetrieve:N0} units", summary.ReadyLineCount > 0 ? MarketMafiosoUiTheme.Success : MarketMafiosoUiTheme.Muted),
+                new("Observed retainers", summary.ObservedRetainerCount == 0 ? "None observed" : $"{summary.ObservedRetainerCount:N0} retainers", summary.ObservedRetainerCount > 0 ? MarketMafiosoUiTheme.Header : MarketMafiosoUiTheme.Muted),
+            ]);
+        ImGui.Spacing();
+        ImGui.TextWrapped("Normal retainer interactions are observed, and live retainer identity and inventory are verified before transfer.");
+        ImGui.Spacing();
+        controls.Draw(plan, depositPlan, ownerScope);
+    }
+
     private static void DrawQuickDeposit(ElementalDepositPlan plan)
     {
         if (plan.PlayerQuantity == 0)
@@ -108,14 +143,14 @@ internal sealed class RetainerRestockTabPanel
         {
             ImGui.TextColored(
                 MarketMafiosoUiTheme.Warning,
-                $"{plan.UnknownCrystalCacheCount} retainer cache entr{(plan.UnknownCrystalCacheCount == 1 ? "y needs" : "ies need")} a crystal capacity scan. Quick deposit will live-check them before moving anything.");
+                $"{plan.UnknownCrystalCacheCount} retainer observation entr{(plan.UnknownCrystalCacheCount == 1 ? "y needs" : "ies need")} a crystal capacity scan. Quick deposit will live-check them before moving anything.");
         }
 
         ImGui.TextColored(
             plan.UnplannedQuantity > 0 ? MarketMafiosoUiTheme.Warning : MarketMafiosoUiTheme.Muted,
             plan.UnplannedQuantity > 0
-                ? $"Cached capacity covers {plan.PlannedQuantity:N0} of {plan.PlayerQuantity:N0} carried units; {plan.UnplannedQuantity:N0} will remain."
-                : $"Quick deposit will move all {plan.PlayerQuantity:N0} carried units through {plan.Candidates.Count:N0} retainer(s) as needed.");
+                ? $"Observed capacity covers {plan.PlannedQuantity:N0} of {plan.PlayerQuantity:N0} carried units; {plan.UnplannedQuantity:N0} will remain."
+                : $"Quick deposit will live-check and move all {plan.PlayerQuantity:N0} carried units through {plan.Candidates.Count:N0} retainer(s) as needed.");
         ImGui.TextColored(MarketMafiosoUiTheme.Muted, "The 9,999 carry and retainer limits apply separately to each elemental type.");
         ImGui.Spacing();
 
@@ -146,8 +181,12 @@ internal sealed class RetainerRestockTabPanel
         ImGui.EndTable();
     }
 
-    private static ImGuiTabItemFlags GetRequestedViewFlags(string viewName, string? requestedView) =>
-        string.Equals(viewName, requestedView, StringComparison.Ordinal)
+    private static ImGuiTabItemFlags GetRequestedViewFlags(
+        string viewName,
+        string? requestedView,
+        params string[] aliases) =>
+        string.Equals(viewName, requestedView, StringComparison.Ordinal) ||
+        aliases.Any(alias => string.Equals(alias, requestedView, StringComparison.Ordinal))
             ? ImGuiTabItemFlags.SetSelected
             : ImGuiTabItemFlags.None;
 

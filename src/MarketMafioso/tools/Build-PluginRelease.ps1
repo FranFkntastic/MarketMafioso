@@ -8,13 +8,10 @@ $ErrorActionPreference = "Stop"
 $projectDir = Split-Path -Parent $PSScriptRoot
 $srcDir = Split-Path -Parent $projectDir
 $repoRoot = Split-Path -Parent $srcDir
+$workspaceRoot = $repoRoot
 $projectPath = Join-Path $projectDir "MarketMafioso.csproj"
-$franthropyRoot = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "..\Franthropy"))
-$franthropyProject = Join-Path $franthropyRoot "src\Franthropy.Dalamud\Franthropy.Dalamud.csproj"
 $releaseDir = Join-Path $projectDir "bin\Release"
 $releaseArchive = Join-Path $releaseDir "MarketMafioso\latest.zip"
-$releaseFranthropy = Join-Path $franthropyRoot "src\Franthropy.Dalamud\bin\Release\net10.0-windows\Franthropy.Dalamud.dll"
-$copiedFranthropy = Join-Path $releaseDir "Franthropy.Dalamud.dll"
 
 if ([string]::IsNullOrWhiteSpace($OutputPath)) {
     $OutputPath = Join-Path $repoRoot "dist\plugin\MarketMafioso.zip"
@@ -42,6 +39,64 @@ function Get-RepositoryState {
     }
 }
 
+function Resolve-PinnedFranthropyRoot {
+    $refPath = Join-Path -Path $repoRoot -ChildPath "eng\franthropy.ref"
+    if (-not (Test-Path -LiteralPath $refPath)) {
+        throw "Pinned Franthropy revision was not found: $refPath"
+    }
+
+    $expectedRevision = (Get-Content -LiteralPath $refPath -Raw).Trim()
+    if ($expectedRevision -notmatch '^[0-9a-fA-F]{40}$') {
+        throw "Pinned Franthropy revision is invalid: '$expectedRevision'."
+    }
+
+    $sibling = [System.IO.Path]::GetFullPath((Join-Path -Path $workspaceRoot -ChildPath "..\Franthropy"))
+    if (-not (Test-Path -LiteralPath (Join-Path -Path $sibling -ChildPath ".git"))) {
+        $gitCommonDir = (& git -C $repoRoot rev-parse --path-format=absolute --git-common-dir).Trim()
+        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($gitCommonDir)) {
+            throw "Could not resolve the MarketMafioso primary checkout from '$repoRoot'."
+        }
+
+        $primaryRepoRoot = Split-Path -Parent $gitCommonDir
+        $developmentRoot = Split-Path -Parent $primaryRepoRoot
+        $sibling = Join-Path -Path $developmentRoot -ChildPath "Franthropy"
+    }
+    if (-not (Test-Path -LiteralPath (Join-Path -Path $sibling -ChildPath ".git"))) {
+        throw "Franthropy was not found beside MarketMafioso at '$sibling'."
+    }
+
+    $worktreeLines = @(& git -C $sibling worktree list --porcelain)
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not enumerate Franthropy worktrees."
+    }
+
+    $candidates = New-Object System.Collections.Generic.List[string]
+    $currentPath = $null
+    $currentHead = $null
+    foreach ($line in @($worktreeLines + '')) {
+        if ([string]::IsNullOrWhiteSpace($line)) {
+            if (-not [string]::IsNullOrWhiteSpace($currentPath) -and $currentHead -eq $expectedRevision) {
+                $candidates.Add([System.IO.Path]::GetFullPath($currentPath))
+            }
+            $currentPath = $null
+            $currentHead = $null
+            continue
+        }
+        if ($line.StartsWith('worktree ')) { $currentPath = $line.Substring('worktree '.Length) }
+        elseif ($line.StartsWith('HEAD ')) { $currentHead = $line.Substring('HEAD '.Length) }
+    }
+
+    foreach ($candidate in $candidates) {
+        $dirty = @(& git -C $candidate status --porcelain --untracked-files=normal)
+        if ($LASTEXITCODE -eq 0 -and ($AllowDirty -or $dirty.Count -eq 0)) {
+            Write-Host "Using pinned Franthropy worktree: $candidate@$expectedRevision"
+            return $candidate
+        }
+    }
+
+    throw "No eligible Franthropy worktree is checked out at pinned revision '$expectedRevision'. Create a detached worktree at that revision before building a release."
+}
+
 function Get-StreamSha256 {
     param([Parameter(Mandatory = $true)][System.IO.Stream]$Stream)
 
@@ -54,8 +109,22 @@ function Get-StreamSha256 {
     }
 }
 
-if (-not (Test-Path -LiteralPath $franthropyProject)) {
-    throw "Franthropy.Dalamud was not found at '$franthropyProject'."
+$franthropyRoot = Resolve-PinnedFranthropyRoot
+$franthropySource = Join-Path -Path $franthropyRoot -ChildPath "src"
+$franthropyDalamudProject = Join-Path -Path $franthropySource -ChildPath "Franthropy.Dalamud\Franthropy.Dalamud.csproj"
+$franthropyFfxivProject = Join-Path -Path $franthropySource -ChildPath "Franthropy.FFXIV\Franthropy.FFXIV.csproj"
+$franthropyFilteringProject = Join-Path -Path $franthropySource -ChildPath "Franthropy.Filtering\Franthropy.Filtering.csproj"
+$releaseFranthropyDalamud = Join-Path -Path $franthropySource -ChildPath "Franthropy.Dalamud\bin\Release\net10.0-windows\Franthropy.Dalamud.dll"
+$releaseFranthropyFfxiv = Join-Path -Path $franthropySource -ChildPath "Franthropy.FFXIV\bin\Release\net10.0\Franthropy.FFXIV.dll"
+$releaseFranthropyFiltering = Join-Path -Path $franthropySource -ChildPath "Franthropy.Filtering\bin\Release\net10.0\Franthropy.Filtering.dll"
+$copiedFranthropyDalamud = Join-Path -Path $releaseDir -ChildPath "Franthropy.Dalamud.dll"
+$copiedFranthropyFfxiv = Join-Path -Path $releaseDir -ChildPath "Franthropy.FFXIV.dll"
+$copiedFranthropyFiltering = Join-Path -Path $releaseDir -ChildPath "Franthropy.Filtering.dll"
+
+foreach ($project in @($franthropyDalamudProject, $franthropyFfxivProject, $franthropyFilteringProject)) {
+    if (-not (Test-Path -LiteralPath $project)) {
+        throw "Required Franthropy project was not found: '$project'."
+    }
 }
 
 $mmfState = Get-RepositoryState -Path $repoRoot
@@ -65,21 +134,41 @@ if (-not $AllowDirty -and ($mmfState.Dirty -or $franthropyState.Dirty)) {
 }
 
 Write-Host "Building the MarketMafioso plugin release directly so sibling projects inherit Release configuration."
-& dotnet build $projectPath -c Release -t:Rebuild -p:SkipDevPluginSync=true -p:UseSharedCompilation=false
+& dotnet build $projectPath -c Release -t:Rebuild -p:SkipDevPluginSync=true -p:UseSharedCompilation=false "-p:FranthropyDalamudProject=$franthropyDalamudProject" "-p:FranthropyFfxivProject=$franthropyFfxivProject" "-p:FranthropyFilteringProject=$franthropyFilteringProject"
 if ($LASTEXITCODE -ne 0) {
     throw "MarketMafioso Release build failed with exit code $LASTEXITCODE."
 }
 
-foreach ($requiredPath in @($releaseArchive, $releaseFranthropy, $copiedFranthropy)) {
+foreach ($requiredPath in @(
+    $releaseArchive,
+    $releaseFranthropyDalamud,
+    $copiedFranthropyDalamud,
+    $releaseFranthropyFfxiv,
+    $copiedFranthropyFfxiv,
+    $releaseFranthropyFiltering,
+    $copiedFranthropyFiltering
+)) {
     if (-not (Test-Path -LiteralPath $requiredPath)) {
         throw "Expected release artifact was not found: $requiredPath"
     }
 }
 
-$sourceFranthropyHash = (Get-FileHash -LiteralPath $releaseFranthropy -Algorithm SHA256).Hash
-$copiedFranthropyHash = (Get-FileHash -LiteralPath $copiedFranthropy -Algorithm SHA256).Hash
-if ($sourceFranthropyHash -ne $copiedFranthropyHash) {
-    throw "Packaged Franthropy copy does not match its Release output. Source=$sourceFranthropyHash Copy=$copiedFranthropyHash"
+$sourceFranthropyDalamudHash = (Get-FileHash -LiteralPath $releaseFranthropyDalamud -Algorithm SHA256).Hash
+$copiedFranthropyDalamudHash = (Get-FileHash -LiteralPath $copiedFranthropyDalamud -Algorithm SHA256).Hash
+if ($sourceFranthropyDalamudHash -ne $copiedFranthropyDalamudHash) {
+    throw "Packaged Franthropy.Dalamud copy does not match its Release output. Source=$sourceFranthropyDalamudHash Copy=$copiedFranthropyDalamudHash"
+}
+
+$sourceFranthropyFfxivHash = (Get-FileHash -LiteralPath $releaseFranthropyFfxiv -Algorithm SHA256).Hash
+$copiedFranthropyFfxivHash = (Get-FileHash -LiteralPath $copiedFranthropyFfxiv -Algorithm SHA256).Hash
+if ($sourceFranthropyFfxivHash -ne $copiedFranthropyFfxivHash) {
+    throw "Packaged Franthropy.FFXIV copy does not match its Release output. Source=$sourceFranthropyFfxivHash Copy=$copiedFranthropyFfxivHash"
+}
+
+$sourceFranthropyFilteringHash = (Get-FileHash -LiteralPath $releaseFranthropyFiltering -Algorithm SHA256).Hash
+$copiedFranthropyFilteringHash = (Get-FileHash -LiteralPath $copiedFranthropyFiltering -Algorithm SHA256).Hash
+if ($sourceFranthropyFilteringHash -ne $copiedFranthropyFilteringHash) {
+    throw "Packaged Franthropy.Filtering copy does not match its Release output. Source=$sourceFranthropyFilteringHash Copy=$copiedFranthropyFilteringHash"
 }
 
 Add-Type -AssemblyName System.IO.Compression.FileSystem
@@ -90,6 +179,8 @@ try {
         "MarketMafioso.json",
         "MarketMafioso.Contracts.dll",
         "Franthropy.Dalamud.dll",
+        "Franthropy.FFXIV.dll",
+        "Franthropy.Filtering.dll",
         "ECommons.dll"
     )
     $entryNames = @($archive.Entries | ForEach-Object FullName)
@@ -98,16 +189,23 @@ try {
         throw "Release archive is missing required entries: $($missingEntries -join ', ')"
     }
 
-    $franthropyEntry = $archive.Entries | Where-Object FullName -eq "Franthropy.Dalamud.dll" | Select-Object -First 1
-    $stream = $franthropyEntry.Open()
-    try {
-        $archivedFranthropyHash = Get-StreamSha256 -Stream $stream
-    }
-    finally {
-        $stream.Dispose()
-    }
-    if ($archivedFranthropyHash -ne $sourceFranthropyHash) {
-        throw "Archived Franthropy DLL does not match its Release output. Source=$sourceFranthropyHash Archive=$archivedFranthropyHash"
+    $franthropyDependencies = @(
+        [pscustomobject]@{ Name = "Franthropy.Dalamud.dll"; SourceHash = $sourceFranthropyDalamudHash },
+        [pscustomobject]@{ Name = "Franthropy.FFXIV.dll"; SourceHash = $sourceFranthropyFfxivHash },
+        [pscustomobject]@{ Name = "Franthropy.Filtering.dll"; SourceHash = $sourceFranthropyFilteringHash }
+    )
+    foreach ($dependency in $franthropyDependencies) {
+        $entry = $archive.Entries | Where-Object FullName -eq $dependency.Name | Select-Object -First 1
+        $stream = $entry.Open()
+        try {
+            $archivedHash = Get-StreamSha256 -Stream $stream
+        }
+        finally {
+            $stream.Dispose()
+        }
+        if ($archivedHash -ne $dependency.SourceHash) {
+            throw "Archived $($dependency.Name) does not match its Release output. Source=$($dependency.SourceHash) Archive=$archivedHash"
+        }
     }
 }
 finally {
@@ -129,7 +227,9 @@ $receiptPath = [System.IO.Path]::ChangeExtension($outputFullPath, ".release.json
     marketMafiosoDirty = $mmfState.Dirty
     franthropyCommit = $franthropyState.Commit
     franthropyDirty = $franthropyState.Dirty
-    franthropySha256 = $sourceFranthropyHash
+    franthropySha256 = $sourceFranthropyDalamudHash
+    franthropyFfxivSha256 = $sourceFranthropyFfxivHash
+    franthropyFilteringSha256 = $sourceFranthropyFilteringHash
 } | ConvertTo-Json | Set-Content -LiteralPath $receiptPath -Encoding UTF8
 
 Write-Host "Verified plugin release: $outputFullPath"

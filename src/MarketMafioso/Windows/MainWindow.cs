@@ -605,13 +605,9 @@ public class MainWindow : Window, IDisposable
 
     public bool TrySelectAgentBridgeTab(string tabName)
     {
-        var separatorIndex = tabName.IndexOf('/');
-        var mainTab = separatorIndex < 0 ? tabName : tabName[..separatorIndex];
-        var workspaceView = separatorIndex < 0 ? null : tabName[(separatorIndex + 1)..];
-        if (string.Equals(mainTab, "Restock", StringComparison.Ordinal))
-            mainTab = "Retainers";
-        if (string.Equals(workspaceView, "Plan and run", StringComparison.Ordinal))
-            workspaceView = "Withdrawal plan";
+        if (!TryNormalizeAgentBridgeTab(tabName, out var mainTab, out var workspaceView))
+            return false;
+
         var allowed = mainTab switch
         {
             "Squire" or "Workshop Logistics" or "Retainers" or "Settings" or "Status" => true,
@@ -642,6 +638,34 @@ public class MainWindow : Window, IDisposable
 #endif
     }
 
+    internal static bool TryNormalizeAgentBridgeTab(string tabName, out string mainTab, out string? workspaceView)
+    {
+        mainTab = string.Empty;
+        workspaceView = null;
+        if (string.IsNullOrWhiteSpace(tabName))
+            return false;
+
+        var separatorIndex = tabName.IndexOf('/');
+        mainTab = separatorIndex < 0 ? tabName : tabName[..separatorIndex];
+        workspaceView = separatorIndex < 0 ? null : tabName[(separatorIndex + 1)..];
+        if (string.Equals(mainTab, "Restock", StringComparison.Ordinal))
+            mainTab = "Retainers";
+        else if (string.Equals(mainTab, "Plan", StringComparison.Ordinal))
+        {
+            mainTab = "Retainers";
+            workspaceView = "Withdrawal plan";
+        }
+
+        if (string.Equals(mainTab, "Retainers", StringComparison.Ordinal) &&
+            (string.Equals(workspaceView, "Plan", StringComparison.Ordinal) ||
+             string.Equals(workspaceView, "Plan and run", StringComparison.Ordinal)))
+        {
+            workspaceView = "Withdrawal plan";
+        }
+
+        return true;
+    }
+
     private void QueueAgentTabSelection(string mainTab, string? workspaceView = null)
     {
         agentRequestedTab = mainTab;
@@ -655,7 +679,7 @@ public class MainWindow : Window, IDisposable
         workspaceView is null || (mainTab, workspaceView) switch
         {
             ("Workshop Logistics", "Combined" or "Queue" or "Materials" or "Assembly") => true,
-            ("Retainers", "Quick deposit" or "Browse stock" or "Withdrawal plan") => true,
+            ("Retainers", "Overview" or "Browse stock" or "Browse listings" or "Quick deposit" or "Withdrawal plan") => true,
             ("Market Acquisition", "Workbench" or "Inbox" or "Route" or "Compose" or "Working Set" or "Request" or "Plan") => true,
             _ => false,
         };

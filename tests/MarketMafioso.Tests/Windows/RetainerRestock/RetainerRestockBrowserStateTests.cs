@@ -1,3 +1,5 @@
+using Franthropy.FFXIV.Filtering;
+using Franthropy.Filtering.Evaluation;
 using MarketMafioso.RetainerRestock;
 using MarketMafioso.Windows.RetainerRestock;
 
@@ -6,18 +8,19 @@ namespace MarketMafioso.Tests.Windows.RetainerRestock;
 public sealed class RetainerRestockBrowserStateTests
 {
     [Fact]
-    public void CanSaveStagedItem_RequiresSelectedStockRowAndPositiveDesiredQuantity()
+    public void CanSaveStagedItem_RequiresWithdrawableItemAndPositiveDesiredQuantity()
     {
         var state = new RetainerRestockBrowserState();
 
         Assert.False(state.CanSaveStagedItem);
-        Assert.Equal("Select an item and enter a desired quantity.", state.StagedValidationMessage);
+        Assert.Equal("Select an item with observed retainer stock and enter a desired quantity.", state.StagedValidationMessage);
 
-        state.Stage(Row(100, "Darksteel Ore"));
+        state.Stage(ItemGroup(100, "Darksteel Ore", playerQuantity: 12, retainerQuantity: 0));
 
         Assert.False(state.CanSaveStagedItem);
-        Assert.Equal("Enter a desired quantity.", state.StagedValidationMessage);
+        Assert.Equal("This item is only on the character and cannot be withdrawn from a retainer.", state.StagedValidationMessage);
 
+        state.Stage(ItemGroup(100, "Darksteel Ore", playerQuantity: 0, retainerQuantity: 24));
         state.StagedDesiredQuantityText = "0";
 
         Assert.False(state.CanSaveStagedItem);
@@ -36,7 +39,7 @@ public sealed class RetainerRestockBrowserStateTests
         var state = new RetainerRestockBrowserState();
         var planItems = new List<RetainerRestockPlanItem>();
 
-        state.Stage(Row(100, "Darksteel Ore"));
+        state.Stage(ItemGroup(100, "Darksteel Ore", retainerQuantity: 24));
         state.StagedDesiredQuantityText = "100";
 
         var applied = state.ApplyStagedItem(planItems);
@@ -47,12 +50,12 @@ public sealed class RetainerRestockBrowserStateTests
         Assert.Equal("Darksteel Ore", planItem.ItemName);
         Assert.Equal(100, planItem.DesiredPlayerQuantity);
         Assert.True(planItem.Enabled);
-        Assert.Null(state.SelectedStockRow);
+        Assert.Null(state.SelectedItemGroup);
         Assert.Equal(string.Empty, state.StagedDesiredQuantityText);
     }
 
     [Fact]
-    public void ApplyStagedItem_UpdatesExistingPlanRowOnlyAfterExplicitQuantity()
+    public void ApplyStagedItem_UpdatesExistingPlanRow()
     {
         var state = new RetainerRestockBrowserState();
         var planItems = new List<RetainerRestockPlanItem>
@@ -66,14 +69,11 @@ public sealed class RetainerRestockBrowserStateTests
             },
         };
 
-        state.Stage(Row(100, "Darksteel Ore"));
+        state.Stage(ItemGroup(100, "Darksteel Ore", retainerQuantity: 24));
         state.StagedDesiredQuantityText = "240";
 
-        var applied = state.ApplyStagedItem(planItems);
-
-        Assert.True(applied);
+        Assert.True(state.ApplyStagedItem(planItems));
         var planItem = Assert.Single(planItems);
-        Assert.Equal(100U, planItem.ItemId);
         Assert.Equal("Darksteel Ore", planItem.ItemName);
         Assert.Equal(240, planItem.DesiredPlayerQuantity);
         Assert.True(planItem.Enabled);
@@ -85,82 +85,108 @@ public sealed class RetainerRestockBrowserStateTests
         var state = new RetainerRestockBrowserState();
         var planItems = new List<RetainerRestockPlanItem>();
 
-        state.Stage(Row(100, "Darksteel Ore"));
+        state.Stage(ItemGroup(100, "Darksteel Ore", retainerQuantity: 24));
 
-        var applied = state.ApplyStagedItem(planItems);
-
-        Assert.False(applied);
+        Assert.False(state.ApplyStagedItem(planItems));
         Assert.Empty(planItems);
     }
 
     [Fact]
-    public void FilterRows_RespectsSourceTogglesAndSearch()
+    public void SelectMode_ListingsClearsWithdrawalStaging()
     {
         var state = new RetainerRestockBrowserState();
-        var rows = new[]
-        {
-            Row(200, "Cobalt Ingot", playerQuantity: 12, retainerQuantity: 0),
-            Row(100, "Darksteel Ore", playerQuantity: 0, retainerQuantity: 24),
-            Row(300, "Fire Shard", playerQuantity: 8, retainerQuantity: 16),
-        };
+        state.Stage(ItemGroup(100, "Darksteel Ore", retainerQuantity: 24));
+        state.StagedDesiredQuantityText = "12";
 
-        Assert.Collection(
-            state.FilterRows(rows),
-            row => Assert.Equal("Cobalt Ingot", row.ItemName),
-            row => Assert.Equal("Darksteel Ore", row.ItemName),
-            row => Assert.Equal("Fire Shard", row.ItemName));
+        state.SelectMode(RetainerBrowseQueryMode.Listings);
 
-        state.ShowPlayerStock = false;
-
-        Assert.Collection(
-            state.FilterRows(rows),
-            row => Assert.Equal("Darksteel Ore", row.ItemName),
-            row => Assert.Equal("Fire Shard", row.ItemName));
-
-        state.ShowPlayerStock = true;
-        state.ShowRetainerStock = false;
-
-        Assert.Collection(
-            state.FilterRows(rows),
-            row => Assert.Equal("Cobalt Ingot", row.ItemName),
-            row => Assert.Equal("Fire Shard", row.ItemName));
-
-        state.ShowRetainerStock = true;
-        state.SearchText = "shard";
-
-        var result = Assert.Single(state.FilterRows(rows));
-        Assert.Equal("Fire Shard", result.ItemName);
+        Assert.Equal(RetainerBrowseQueryMode.Listings, state.Mode);
+        Assert.Null(state.SelectedItemGroup);
+        Assert.Equal(string.Empty, state.StagedDesiredQuantityText);
     }
 
     [Fact]
-    public void FilterRows_UsesConfigurableVisibleRowLimitWithSmallerDefault()
+    public void EnsureScope_FallsBackWhenSelectedRetainerDisappears()
     {
-        var state = new RetainerRestockBrowserState();
-        var rows = Enumerable
-            .Range(1, 80)
-            .Select(index => Row((uint)index, $"Item {index:000}"))
-            .ToList();
+        var state = new RetainerRestockBrowserState
+        {
+            SelectedScopeKey = RetainerBrowseScopeOption.RetainerKey(99),
+        };
+        var projection = RetainerBrowseProjectionBuilder.Build([], new Configuration(), new RetainerOwnerScope("Wei Ning", "Siren"));
 
-        Assert.Equal(25, state.FilterRows(rows).Count);
+        state.EnsureScope(projection);
 
-        state.VisibleRowLimit = 50;
-
-        Assert.Equal(50, state.FilterRows(rows).Count);
+        Assert.Equal(RetainerBrowseScopeOption.AllKey, state.SelectedScopeKey);
     }
 
-    private static RetainerRestockStockRow Row(
+    [Fact]
+    public void RebindSelectedItem_ClearsStagingWhenObservedRetainerStockDisappears()
+    {
+        var state = new RetainerRestockBrowserState();
+        state.Stage(ItemGroup(100, "Darksteel Ore", retainerQuantity: 24));
+        state.StagedDesiredQuantityText = "12";
+
+        state.RebindSelectedItem([ItemGroup(100, "Darksteel Ore", playerQuantity: 2)]);
+
+        Assert.Null(state.SelectedItemGroup);
+        Assert.False(state.CanSaveStagedItem);
+        Assert.Equal(string.Empty, state.StagedDesiredQuantityText);
+    }
+
+    [Fact]
+    public void ExpansionState_IsPrunedToVisibleItems()
+    {
+        var state = new RetainerRestockBrowserState();
+        state.ToggleExpanded(100);
+        state.ToggleExpanded(200);
+
+        state.RetainAvailableExpansions([ItemGroup(100, "Darksteel Ore", retainerQuantity: 1)]);
+
+        Assert.True(state.IsExpanded(100));
+        Assert.False(state.IsExpanded(200));
+    }
+
+    private static RetainerBrowseItemGroup ItemGroup(
         uint itemId,
         string itemName,
         int playerQuantity = 0,
-        int retainerQuantity = 1) =>
-        new(
-            itemId,
-            itemName,
-            playerQuantity + retainerQuantity,
-            playerQuantity,
-            retainerQuantity,
-            Sources: [],
-            RetainerSources: [],
-            OldestRetainerCacheAge: null,
-            NewestRetainerCacheAge: null);
+        int retainerQuantity = 0)
+    {
+        var stacks = new List<RetainerBrowseStockStack>();
+        if (playerQuantity > 0)
+        {
+            stacks.Add(new RetainerBrowseStockStack(
+                RetainerBrowseScopeOption.PlayerKey,
+                RetainerBrowseScopeKind.Player,
+                null,
+                "Player",
+                "Inventory1",
+                0,
+                itemId,
+                itemName,
+                "Material",
+                playerQuantity,
+                FfxivItemQuality.NQ,
+                Evidence.Unknown<decimal>("Not recorded")));
+        }
+
+        if (retainerQuantity > 0)
+        {
+            stacks.Add(new RetainerBrowseStockStack(
+                RetainerBrowseScopeOption.RetainerKey(1),
+                RetainerBrowseScopeKind.Retainer,
+                1,
+                "Little Piggy",
+                "RetainerPage1",
+                0,
+                itemId,
+                itemName,
+                "Material",
+                retainerQuantity,
+                FfxivItemQuality.NQ,
+                Evidence.Unknown<decimal>("Not recorded")));
+        }
+
+        return new RetainerBrowseItemGroup(itemId, itemName, "Material", stacks);
+    }
 }

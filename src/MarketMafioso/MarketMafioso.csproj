@@ -16,6 +16,7 @@
     <Punchline>Workshop logistics, gear planning and cleanup, and inventory history.</Punchline>
     <RepoUrl>https://github.com/FranFkntastic/MarketMafioso</RepoUrl>
     <FranthropyDalamudProject Condition="'$(FranthropyDalamudProject)' == ''">..\..\..\Franthropy\src\Franthropy.Dalamud\Franthropy.Dalamud.csproj</FranthropyDalamudProject>
+    <FranthropyFfxivProject Condition="'$(FranthropyFfxivProject)' == ''">..\..\..\Franthropy\src\Franthropy.FFXIV\Franthropy.FFXIV.csproj</FranthropyFfxivProject>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(Configuration)' == 'Debug'">
@@ -40,8 +41,14 @@
     <Error Text="Franthropy.Dalamud was not found at '$(FranthropyDalamudProject)'. Clone Franthropy beside MarketMafioso or set -p:FranthropyDalamudProject=&quot;path\to\Franthropy.Dalamud.csproj&quot;." />
   </Target>
 
+  <Target Name="ValidateFranthropyFfxivProject" BeforeTargets="PrepareForBuild"
+          Condition="!Exists('$(FranthropyFfxivProject)')">
+    <Error Text="Franthropy.FFXIV was not found at '$(FranthropyFfxivProject)'. Clone Franthropy beside MarketMafioso or set -p:FranthropyFfxivProject=&quot;path\to\Franthropy.FFXIV.csproj&quot;." />
+  </Target>
+
   <ItemGroup>
     <ProjectReference Include="$(FranthropyDalamudProject)" />
+    <ProjectReference Include="$(FranthropyFfxivProject)" />
     <ProjectReference Include="..\MarketMafioso.Contracts\MarketMafioso.Contracts.csproj" />
   </ItemGroup>
 
