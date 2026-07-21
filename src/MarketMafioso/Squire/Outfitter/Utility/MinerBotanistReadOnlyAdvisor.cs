@@ -4,6 +4,7 @@ using System.Linq;
 using System.Threading;
 using Franthropy.Dalamud.Equipment;
 using MarketMafioso.Squire.Observation;
+using MarketMafioso.Squire.Outfitter.Crafting;
 using MarketMafioso.Squire.Outfitter.MarketEvidence;
 
 namespace MarketMafioso.Squire.Outfitter.Utility;
@@ -51,7 +52,9 @@ public sealed class MinerBotanistReadOnlyAdvisor
         CancellationToken cancellationToken = default,
         Action<EquipmentExactFrontierProgress>? reportProgress = null,
         Action<MinerBotanistSolverReplay>? captureReplay = null,
-        bool ownedInventoryCoverageComplete = true)
+        bool ownedInventoryCoverageComplete = true,
+        IReadOnlyList<OutfitterCraftAdvisorOffer>? craftOffers = null,
+        IReadOnlySet<uint>? equipmentMarketScope = null)
     {
         ArgumentNullException.ThrowIfNull(baseline);
         ArgumentNullException.ThrowIfNull(marketEvidence);
@@ -178,7 +181,9 @@ public sealed class MinerBotanistReadOnlyAdvisor
                 [ownedQuality == EquipmentQuality.High ? "HQ" : "NQ", "Owned"]));
         }
 
-        foreach (var itemEvidence in marketEvidence.Items.Where(value => value.Status == OutfitterMarketEvidenceItemStatus.Fresh))
+        foreach (var itemEvidence in marketEvidence.Items.Where(value =>
+                     value.Status == OutfitterMarketEvidenceItemStatus.Fresh &&
+                     (equipmentMarketScope is null || equipmentMarketScope.Contains(value.ItemId))))
         {
             var definitions = findDefinitionsByItemId(itemEvidence.ItemId)
                 .Where(value => value.ItemId == itemEvidence.ItemId && value.EquipLevel <= characterLevel && value.EligibleClassJobIds.Contains(classJobId))
@@ -265,6 +270,18 @@ public sealed class MinerBotanistReadOnlyAdvisor
                 [vendor.ResolvedQuality == EquipmentQuality.High ? "HQ" : "NQ", vendor.SourceLabel]));
         }
 
+        foreach (var craft in craftOffers ?? [])
+        {
+            if (craft is null || !craft.Matches(baseline, marketEvidence))
+                return Abstain("A passive craft offer no longer matches the active crafter or market-evidence authority.");
+            if (!craft.SolverOffer.Offer.Definition.EligibleClassJobIds.Contains(classJobId) ||
+                craft.SolverOffer.Offer.Definition.EquipLevel > characterLevel)
+            {
+                return Abstain("A passive craft offer does not match the supported active Advisor target.");
+            }
+            offers.Add(craft.SolverOffer);
+        }
+
         EquipmentExactFrontierResult frontier;
         try
         {
@@ -326,7 +343,7 @@ public sealed class MinerBotanistReadOnlyAdvisor
                 : $"Advisor nominates {nomination.Candidate.SolutionId} under the displayed rule.");
     }
 
-    private static HashSet<EquipmentLoadoutPosition> Positions(EquipmentItemDefinition definition) => definition.Slot switch
+    internal static HashSet<EquipmentLoadoutPosition> Positions(EquipmentItemDefinition definition) => definition.Slot switch
     {
         EquipmentSlot.MainHand => [EquipmentLoadoutPosition.MainHand],
         EquipmentSlot.OffHand => [EquipmentLoadoutPosition.OffHand],

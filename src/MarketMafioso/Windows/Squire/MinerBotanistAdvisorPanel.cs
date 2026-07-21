@@ -699,6 +699,7 @@ internal sealed class MinerBotanistAdvisorPanel
                        !session.State.AdviceIsRetained &&
                        ReferenceEquals(advice, session.State.Advice) &&
                        evidence is not null &&
+                       acquisitions.All(offer => offer.Offer.SourceKind != EquipmentAcquisitionSourceKind.Craft) &&
                        acquisitions.Any(offer => offer.Offer.SourceKind == EquipmentAcquisitionSourceKind.MarketBoard);
 #if DEBUG
         if (dryRunFixture is not null &&

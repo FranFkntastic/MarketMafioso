@@ -1,9 +1,14 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
+using FFXIV_Craft_Architect.Core.Integrations.WorkshopHost;
 using Franthropy.Dalamud.Characters;
 using Franthropy.Dalamud.Equipment;
 using MarketMafioso.Squire.Observation;
+using MarketMafioso.Squire.Outfitter;
+using MarketMafioso.Squire.Outfitter.Crafting;
 using MarketMafioso.Squire.Outfitter.MarketEvidence;
 using MarketMafioso.Squire.Outfitter.Utility;
 using Xunit;
@@ -26,6 +31,34 @@ public sealed class CrafterReadOnlyAdvisorTests
         Assert.True(advice.Status == MinerBotanistAdvisorStatus.Complete, advice.Diagnostic);
         Assert.NotNull(advice.Frontier);
         Assert.Contains(advice.OffersByAllocation.Values, value => value.Offer.SourceKind == EquipmentAcquisitionSourceKind.MarketBoard);
+    }
+
+    [Fact]
+    public void Expanded_material_evidence_is_not_misread_as_equipment_market_scope()
+    {
+        var fixture = Fixture();
+        var material = new OutfitterMarketItemEvidence(
+            3_000,
+            OutfitterMarketEvidenceItemStatus.Fresh,
+            [new(3_000, EquipmentQuality.Normal, "material", "Siren", 1, "Material", "3", 10, 100, fixture.Evidence.CreatedAtUtc, fixture.Evidence.CreatedAtUtc, "r2")],
+            fixture.Evidence.CreatedAtUtc,
+            "r2");
+        var expanded = fixture.Evidence with
+        {
+            Coverage = new(OutfitterMarketCoverageMode.ExhaustiveWithinScope, 2, 2, 100, [fixture.Candidate.ItemId, 3_000]),
+            Items = [.. fixture.Evidence.Items, material],
+        };
+
+        var advice = new MinerBotanistReadOnlyAdvisor().Build(
+            fixture.Baseline,
+            expanded,
+            itemId => itemId == fixture.Candidate.ItemId ? [fixture.Candidate] : [],
+            CrafterAdvisorStatFamily.Instance,
+            CrafterUtilityProfile.OrdinaryCraftBenchmarkContextId,
+            equipmentMarketScope: new HashSet<uint> { fixture.Candidate.ItemId });
+
+        Assert.True(advice.Status == MinerBotanistAdvisorStatus.Complete, advice.Diagnostic);
+        Assert.DoesNotContain(advice.OffersByAllocation.Values, offer => offer.Offer.Definition.ItemId == 3_000);
     }
 
     [Fact]
@@ -98,8 +131,155 @@ public sealed class CrafterReadOnlyAdvisorTests
         Assert.Contains("outside the supported", advice.Diagnostic, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task Exact_non_master_craft_offer_enters_the_existing_advisor_offer_set_passively()
+    {
+        var fixture = Fixture();
+        var definition = fixture.Candidate with { StatProfile = fixture.Candidate.HighQualityStatProfile };
+        var response = RecipeResponse(definition, materialQuantity: 3);
+        var vendors = OutfitterGilVendorCatalog.FromTrustedSnapshot(
+        [
+            new(3_000, 20, 30, "Test Merchant", 40, "Test Territory", 100),
+        ]);
+        var builtAt = fixture.Evidence.PublishedAtUtc!.Value.AddSeconds(30);
+        var graphService = new StaticRecipeGraphService(response);
+        var provider = new OutfitterPassiveCraftOfferProvider(
+            graphService,
+            new OutfitterPassiveCraftOfferService(vendors, new FixedTimeProvider(builtAt)));
+        var result = await provider.BuildAsync(
+            fixture.Baseline,
+            fixture.Evidence,
+            definition,
+            CrafterAdvisorStatFamily.Instance);
+
+        Assert.Equal(OutfitterPassiveCraftOfferStatus.OfferReady, result.Status);
+        Assert.NotNull(result.Offer);
+        Assert.Equal(300ul, result.Offer!.Source.TotalGil);
+        Assert.Equal(EquipmentAcquisitionSourceKind.Craft, result.Offer.SolverOffer.Offer.SourceKind);
+        Assert.NotEqual(EquipmentAcquisitionSourceKind.MarketBoard, result.Offer.SolverOffer.Offer.SourceKind);
+        Assert.Null(result.Offer.SolverOffer.ObservationId);
+        Assert.Equal(definition.ItemId, graphService.Request!.ItemId);
+        Assert.Equal(definition.Name, graphService.Request.ItemName);
+
+        var advice = new MinerBotanistReadOnlyAdvisor().Build(
+            fixture.Baseline,
+            fixture.Evidence,
+            itemId => itemId == definition.ItemId ? [definition] : [],
+            CrafterAdvisorStatFamily.Instance,
+            CrafterUtilityProfile.OrdinaryCraftBenchmarkContextId,
+            craftOffers: [result.Offer]);
+
+        Assert.True(advice.Status == MinerBotanistAdvisorStatus.Complete, advice.Diagnostic);
+        Assert.NotNull(advice.Nomination);
+        Assert.Equal(300ul, advice.Nomination!.AcquisitionCostGil);
+        Assert.Contains(advice.OffersByAllocation.Values, value =>
+            value.Offer.SourceKind == EquipmentAcquisitionSourceKind.Craft &&
+            value.Offer.Definition.ItemId == definition.ItemId);
+        Assert.Contains(advice.Nomination.Candidate.Selections, value =>
+            value.OfferKey.SourceKind == EquipmentAcquisitionSourceKind.Craft);
+    }
+
+    [Fact]
+    public void Master_recipe_response_remains_display_only_and_never_creates_an_advisor_offer()
+    {
+        var fixture = Fixture();
+        var definition = fixture.Candidate with { StatProfile = fixture.Candidate.HighQualityStatProfile };
+        var response = RecipeResponse(
+            definition,
+            materialQuantity: 1,
+            unlockEvidence: CraftRecipeUnlockEvidenceV1.UnlockItemRequired,
+            unlockItemId: 99);
+        var vendors = OutfitterGilVendorCatalog.FromTrustedSnapshot(
+        [
+            new(3_000, 20, 30, "Test Merchant", 40, "Test Territory", 100),
+        ]);
+
+        var result = new OutfitterPassiveCraftOfferService(
+            vendors,
+            new FixedTimeProvider(fixture.Evidence.PublishedAtUtc!.Value.AddSeconds(30))).Build(
+                response,
+                fixture.Baseline,
+                fixture.Evidence,
+                definition,
+                CrafterAdvisorStatFamily.Instance);
+
+        Assert.Equal(OutfitterPassiveCraftOfferStatus.DisplayOnly, result.Status);
+        Assert.Null(result.Offer);
+        Assert.NotNull(result.Plan);
+        Assert.Contains(result.Diagnostics, value => value.Contains("master", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Unknown_unlock_evidence_abstains_before_plan_or_advisor_offer_creation()
+    {
+        var fixture = Fixture();
+        var definition = fixture.Candidate with { StatProfile = fixture.Candidate.HighQualityStatProfile };
+        var response = RecipeResponse(
+            definition,
+            materialQuantity: 1,
+            unlockEvidence: CraftRecipeUnlockEvidenceV1.Unknown);
+        var result = new OutfitterPassiveCraftOfferService(
+            OutfitterGilVendorCatalog.FromTrustedSnapshot(
+            [
+                new(3_000, 20, 30, "Test Merchant", 40, "Test Territory", 100),
+            ]),
+            new FixedTimeProvider(fixture.Evidence.PublishedAtUtc!.Value.AddSeconds(30))).Build(
+                response,
+                fixture.Baseline,
+                fixture.Evidence,
+                definition,
+                CrafterAdvisorStatFamily.Instance);
+
+        Assert.Equal(OutfitterPassiveCraftOfferStatus.Abstained, result.Status);
+        Assert.Null(result.Plan);
+        Assert.Null(result.Offer);
+        Assert.Contains(result.Diagnostics, value => value.Contains("unlock evidence", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Market_material_craft_offer_charges_the_whole_listing_and_preserves_surplus()
+    {
+        var fixture = Fixture();
+        var definition = fixture.Candidate with { StatProfile = fixture.Candidate.HighQualityStatProfile };
+        var publishedAt = fixture.Evidence.PublishedAtUtc!.Value;
+        var material = new OutfitterMarketItemEvidence(
+            3_000,
+            OutfitterMarketEvidenceItemStatus.Fresh,
+            [
+                new(3_000, EquipmentQuality.Normal, "material-lot", "Siren", 1, "Materials", "m1", 10, 7,
+                    publishedAt, publishedAt, "material-r1"),
+            ],
+            publishedAt,
+            "material-r1");
+        var evidence = fixture.Evidence with
+        {
+            Coverage = new(OutfitterMarketCoverageMode.ExhaustiveWithinScope, 2, 2, 100, [definition.ItemId, 3_000]),
+            Items = [.. fixture.Evidence.Items, material],
+        };
+        var response = RecipeResponse(definition, materialQuantity: 3);
+        var service = new OutfitterPassiveCraftOfferService(
+            OutfitterGilVendorCatalog.FromTrustedSnapshot([]),
+            new FixedTimeProvider(publishedAt.AddSeconds(30)));
+
+        var result = service.Build(
+            response,
+            fixture.Baseline,
+            evidence,
+            definition,
+            CrafterAdvisorStatFamily.Instance);
+
+        Assert.Equal(OutfitterPassiveCraftOfferStatus.OfferReady, result.Status);
+        Assert.Equal(70ul, result.Offer!.Source.TotalGil);
+        var line = Assert.Single(result.Plan!.TerminalMaterials);
+        Assert.Equal(3u, line.ConsumedQuantity);
+        Assert.Equal(10u, line.PurchasedQuantity);
+        Assert.Equal(7u, line.SurplusQuantity);
+        Assert.Equal(70ul, result.Offer.SolverOffer.AcquisitionCostGil);
+    }
+
     private static FixtureData Fixture(uint classJobId = 9)
     {
+        var now = new DateTimeOffset(2026, 7, 19, 20, 0, 0, TimeSpan.Zero);
         var positions = new[]
         {
             ("main-hand", EquipmentLoadoutPosition.MainHand, EquipmentSlot.MainHand),
@@ -122,11 +302,18 @@ public sealed class CrafterReadOnlyAdvisorTests
         var itemId = 1_000u;
         foreach (var (key, position, slot) in positions)
         {
-            var definition = Definition(itemId++, $"Current {key}", slot, 399, 399, classJobId: classJobId);
+            var definition = Definition(
+                itemId++,
+                $"Current {key}",
+                slot,
+                399,
+                399,
+                classJobId: classJobId,
+                gatheringInsteadOfCrafting: classJobId == 16);
             var index = PlayerAdvisorEquippedSlotMap.All.Single(value => value.Position == position).EquippedIndex;
             var instance = new EquipmentInstanceSnapshot(
                 new EquipmentInstanceFingerprint(scope, "EquippedItems", index, definition.ItemId, false, 1, 30_000, 0, null, [], null, []),
-                DateTimeOffset.UtcNow,
+                now,
                 true);
             var semantics = new Dictionary<EquipmentStatSemantic, int>
             {
@@ -142,36 +329,57 @@ public sealed class CrafterReadOnlyAdvisorTests
 
         var snapshot = new CharacterEquipmentSnapshot(
             Guid.NewGuid(),
-            new(scope, 21, classJobId, DateTimeOffset.UtcNow, true, SnapshotComponentStatus.Complete),
+            new(scope, 21, classJobId, now, true, SnapshotComponentStatus.Complete),
             [],
             [],
             instances,
             definitions,
             new([new("identity", SnapshotComponentStatus.Complete), new("equipped", SnapshotComponentStatus.Complete)]));
-        var baseline = new PlayerAdvisorBaseline(
-            PlayerAdvisorBaselineStatus.Complete,
-            scope,
-            classJobId,
-            100,
-            100,
-            false,
-            new Dictionary<EquipmentStatSemantic, int>
+        var totalStats = classJobId == 16
+            ? new Dictionary<EquipmentStatSemantic, int>
+            {
+                [EquipmentStatSemantic.Gathering] = 5_399,
+                [EquipmentStatSemantic.Perception] = 5_200,
+                [EquipmentStatSemantic.GatheringPoints] = 950,
+            }
+            : new Dictionary<EquipmentStatSemantic, int>
             {
                 [EquipmentStatSemantic.Craftsmanship] = 5_399,
                 [EquipmentStatSemantic.Control] = 5_200,
                 [EquipmentStatSemantic.CraftingPoints] = 950,
-            },
-            new Dictionary<EquipmentStatSemantic, int>
-            {
-                [EquipmentStatSemantic.Craftsmanship] = 5_000,
-                [EquipmentStatSemantic.Control] = 5_200,
-                [EquipmentStatSemantic.CraftingPoints] = 950,
-            },
-            equipped,
+            };
+        var captures = PlayerAdvisorEquippedSlotMap.All.Select(position =>
+        {
+            var slot = equipped.Single(value => value.Position == position.Position);
+            var stats = classJobId == 16
+                ? new Dictionary<EquipmentStatSemantic, int>
+                {
+                    [EquipmentStatSemantic.Gathering] = position.Position == EquipmentLoadoutPosition.MainHand ? 399 : 0,
+                    [EquipmentStatSemantic.Perception] = 0,
+                    [EquipmentStatSemantic.GatheringPoints] = 0,
+                }
+                : new Dictionary<EquipmentStatSemantic, int>
+                {
+                    [EquipmentStatSemantic.Craftsmanship] = position.Position == EquipmentLoadoutPosition.MainHand ? 399 : 0,
+                    [EquipmentStatSemantic.Control] = 0,
+                    [EquipmentStatSemantic.CraftingPoints] = 0,
+                };
+            return new PlayerAdvisorEquippedItemCapture(
+                position.EquippedIndex,
+                slot.Definition!.ItemId,
+                EquipmentQuality.Normal,
+                stats,
+                [],
+                []);
+        }).ToArray();
+        var baseline = PlayerAdvisorBaselineAssembler.Assemble(
             snapshot,
-            "Complete");
+            new(scope, 21, classJobId, 100, 100, false),
+            AdvisorStatFamilies.Resolve(classJobId),
+            totalStats,
+            captures,
+            PlayerAdvisorTrustedCapture.Complete(Guid.NewGuid(), now));
         var candidate = Definition(2_000, "Threshold Hammer", EquipmentSlot.MainHand, 399, 400, classJobId: classJobId);
-        var now = new DateTimeOffset(2026, 7, 19, 20, 0, 0, TimeSpan.Zero);
         var evidence = new OutfitterMarketEvidenceBook(
             Guid.NewGuid(),
             1,
@@ -234,8 +442,69 @@ public sealed class CrafterReadOnlyAdvisorTests
             HighQualityStatProfile: Profile(highStat));
     }
 
+    private static CraftRecipeGraphResponseV1 RecipeResponse(
+        EquipmentItemDefinition definition,
+        uint materialQuantity,
+        CraftRecipeUnlockEvidenceV1 unlockEvidence = CraftRecipeUnlockEvidenceV1.NoUnlockRequired,
+        uint unlockItemId = 0) => new()
+    {
+        ProviderVersion = "ca-test-v1",
+        RecipeDataIdentity = $"sha256:{new string('A', 64)}",
+        IsComplete = true,
+        RootItemId = definition.ItemId,
+        RootItemName = definition.Name,
+        Limits = CraftRecipeGraphLimitsV1.Default,
+        Recipes =
+        [
+            new CraftRecipeDefinitionV1
+            {
+                RecipeId = 500,
+                OutputItemId = definition.ItemId,
+                OutputItemName = definition.Name,
+                OutputQuantity = 1,
+                RequiredClassJobId = 9,
+                RequiredClassJobName = "Blacksmith",
+                RequiredLevel = 90,
+                RecipeUnlockItemId = unlockItemId,
+                UnlockEvidence = unlockEvidence,
+                ResolutionConfidence = CraftRecipeResolutionConfidenceV1.Exact,
+                DataSource = CraftRecipeDataSourceV1.GarlandStandardCraft,
+                Ingredients =
+                [
+                    new CraftRecipeIngredientV1
+                    {
+                        ItemId = 3_000,
+                        ItemName = "Test Material",
+                        QuantityPerCraft = materialQuantity,
+                    },
+                ],
+                StructuralDiagnostics = [],
+            },
+        ],
+        TerminalMaterialItemIds = [3_000],
+        Diagnostics = [],
+    };
+
     private sealed record FixtureData(
         PlayerAdvisorBaseline Baseline,
         OutfitterMarketEvidenceBook Evidence,
         EquipmentItemDefinition Candidate);
+
+    private sealed class FixedTimeProvider(DateTimeOffset now) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => now;
+    }
+
+    private sealed class StaticRecipeGraphService(CraftRecipeGraphResponseV1 response) : ICraftRecipeGraphService
+    {
+        public CraftRecipeGraphRequestV1? Request { get; private set; }
+
+        public Task<CraftRecipeGraphResponseV1> BuildAsync(
+            CraftRecipeGraphRequestV1 request,
+            CancellationToken cancellationToken = default)
+        {
+            Request = request;
+            return Task.FromResult(response);
+        }
+    }
 }

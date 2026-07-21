@@ -64,7 +64,10 @@ public sealed record PlayerAdvisorBaseline(
     IReadOnlyDictionary<EquipmentStatSemantic, int> FixedStats,
     IReadOnlyList<PlayerAdvisorEquippedSlot> EquippedSlots,
     CharacterEquipmentSnapshot? EquipmentSnapshot,
-    string Diagnostic);
+    string Diagnostic)
+{
+    internal PlayerAdvisorCaptureProvenance? CaptureProvenance { get; init; }
+}
 
 public interface IPlayerAdvisorBaselineSource
 {
@@ -78,6 +81,32 @@ internal sealed record PlayerAdvisorCaptureHeader(
     short Level,
     short EffectiveLevel,
     bool IsLevelSynced);
+
+internal sealed record PlayerAdvisorTrustedCapture
+{
+    private PlayerAdvisorTrustedCapture(Guid captureId, DateTimeOffset completedAtUtc)
+    {
+        CaptureId = captureId;
+        CompletedAtUtc = completedAtUtc;
+    }
+
+    public Guid CaptureId { get; }
+    public DateTimeOffset CompletedAtUtc { get; }
+
+    public static PlayerAdvisorTrustedCapture Complete(Guid captureId, DateTimeOffset completedAtUtc)
+    {
+        if (captureId == Guid.Empty || completedAtUtc == default)
+            throw new ArgumentException("A non-default trusted player capture identity and completion time are required.");
+        return new(captureId, completedAtUtc);
+    }
+}
+
+internal sealed record PlayerAdvisorCaptureProvenance(
+    Guid CaptureId,
+    DateTimeOffset CompletedAtUtc,
+    Guid EquipmentGenerationId,
+    DateTimeOffset EquipmentIdentityCapturedAtUtc,
+    uint CurrentWorldId);
 
 internal sealed record PlayerAdvisorEquippedItemCapture(
     int EquippedIndex,
@@ -96,7 +125,8 @@ internal static class PlayerAdvisorBaselineAssembler
         PlayerAdvisorCaptureHeader header,
         IAdvisorStatFamily? family,
         IReadOnlyDictionary<EquipmentStatSemantic, int> totalStats,
-        IReadOnlyList<PlayerAdvisorEquippedItemCapture> equipped)
+        IReadOnlyList<PlayerAdvisorEquippedItemCapture> equipped,
+        PlayerAdvisorTrustedCapture? trustedCapture = null)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         ArgumentNullException.ThrowIfNull(header);
@@ -213,7 +243,199 @@ internal static class PlayerAdvisorBaselineAssembler
             totalStats,
             fixedStats,
             slots,
-            $"Windowless {family.CoverageJobLabel} player baseline is complete.");
+            $"Windowless {family.CoverageJobLabel} player baseline is complete.",
+            trustedCapture);
+    }
+
+    public static bool IsCompleteAndConsistent(
+        PlayerAdvisorBaseline? baseline,
+        IAdvisorStatFamily? family,
+        out string diagnostic)
+    {
+        diagnostic = "The player advisor baseline is incomplete or inconsistent.";
+        if (baseline is not
+            {
+                Status: PlayerAdvisorBaselineStatus.Complete,
+                Character: { } character,
+                ClassJobId: { } classJobId,
+                Level: { } level,
+                EffectiveLevel: { } effectiveLevel,
+                IsLevelSynced: false,
+                EquipmentSnapshot: { } snapshot,
+                CaptureProvenance: { } provenance,
+            } ||
+            family is null ||
+            !family.SupportedClassJobIds.Contains(classJobId) ||
+            character.LocalContentId == 0 ||
+            character.HomeWorldId == 0 ||
+            string.IsNullOrWhiteSpace(character.Name) ||
+            level is < 1 or > 100 ||
+            effectiveLevel != level ||
+            baseline.TotalStats is null ||
+            baseline.FixedStats is null ||
+            baseline.EquippedSlots is null ||
+            baseline.EquippedSlots.Count != PlayerAdvisorEquippedSlotMap.All.Count ||
+            snapshot.GenerationId == Guid.Empty ||
+            snapshot.Identity is null ||
+            provenance.CaptureId == Guid.Empty ||
+            provenance.CompletedAtUtc == default ||
+            provenance.EquipmentGenerationId != snapshot.GenerationId ||
+            provenance.EquipmentIdentityCapturedAtUtc == default ||
+            provenance.EquipmentIdentityCapturedAtUtc != snapshot.Identity.CapturedAt ||
+            provenance.CurrentWorldId == 0 ||
+            snapshot.Instances is null ||
+            snapshot.Definitions is null ||
+            snapshot.Diagnostics?.Components is null ||
+            snapshot.Diagnostics.Components.Any(component => component is null))
+        {
+            return false;
+        }
+
+        if (snapshot.Identity.Status != SnapshotComponentStatus.Complete ||
+            !snapshot.Identity.IsLoggedIn ||
+            snapshot.Identity.Scope != character ||
+            snapshot.Identity.CurrentWorldId != provenance.CurrentWorldId ||
+            snapshot.Identity.ActiveClassJobId != classJobId ||
+            snapshot.Identity.CapturedAt > provenance.CompletedAtUtc ||
+            !ComponentIsComplete(snapshot, "identity") ||
+            !ComponentIsComplete(snapshot, "equipped"))
+        {
+            diagnostic = "The player advisor baseline does not match one complete equipment snapshot identity.";
+            return false;
+        }
+
+        var canonicalIndices = PlayerAdvisorEquippedSlotMap.All
+            .Select(position => position.EquippedIndex)
+            .ToHashSet();
+        if (snapshot.Instances.Any(instance => instance is null) ||
+            snapshot.Instances
+                .Where(instance => instance.IsEquipped)
+                .Any(instance =>
+                    instance.CapturedAt == default ||
+                    instance.CapturedAt > provenance.CompletedAtUtc ||
+                    instance.Fingerprint is null ||
+                    instance.Fingerprint.Character != character ||
+                    !string.Equals(instance.Fingerprint.Container, EquippedContainer, StringComparison.Ordinal) ||
+                    !canonicalIndices.Contains(instance.Fingerprint.SlotIndex)) ||
+            baseline.EquippedSlots.Any(slot => slot is null) ||
+            baseline.EquippedSlots.GroupBy(slot => slot.Position).Any(group => group.Count() != 1) ||
+            PlayerAdvisorEquippedSlotMap.All.Any(position =>
+                baseline.EquippedSlots.Count(slot =>
+                    slot.Position == position.Position &&
+                    string.Equals(slot.PositionKey, position.PositionKey, StringComparison.Ordinal)) != 1))
+        {
+            diagnostic = "The player advisor baseline requires every unique canonical equipped slot.";
+            return false;
+        }
+
+        var expectedEquipped = new Dictionary<EquipmentStatSemantic, int>();
+        if (!baseline.TotalStats.Keys.Order().SequenceEqual(family.RelevantSemantics.Order()) ||
+            !baseline.FixedStats.Keys.Order().SequenceEqual(family.RelevantSemantics.Order()))
+        {
+            diagnostic = "The player advisor baseline must contain exactly the family-relevant stat semantics.";
+            return false;
+        }
+        foreach (var semantic in family.RelevantSemantics)
+        {
+            if (!baseline.TotalStats.TryGetValue(semantic, out var total) ||
+                !baseline.FixedStats.TryGetValue(semantic, out var fixedValue) ||
+                total < 0 ||
+                fixedValue < 0 ||
+                fixedValue > total)
+            {
+                diagnostic = "The player advisor baseline has inconsistent family-relevant total and fixed stats.";
+                return false;
+            }
+            expectedEquipped[semantic] = total - fixedValue;
+        }
+
+        var actualEquipped = EquipmentSolverUtilityVector.Empty;
+        foreach (var position in PlayerAdvisorEquippedSlotMap.All)
+        {
+            var slot = baseline.EquippedSlots.Single(value => value.Position == position.Position);
+            if (slot.Utility?.Components is null ||
+                slot.Utility.Components.Any(component =>
+                    component is null || string.IsNullOrWhiteSpace(component.Key) || component.Units < 0) ||
+                slot.MateriaIds is null ||
+                slot.MateriaGrades is null ||
+                slot.MateriaIds.Count != slot.MateriaGrades.Count)
+            {
+                diagnostic = $"Equipped slot '{position.PositionKey}' has malformed utility or materia evidence.";
+                return false;
+            }
+
+            var instances = snapshot.Instances.Where(value => value is not null &&
+                    value.IsEquipped &&
+                    value.Fingerprint is not null &&
+                    string.Equals(value.Fingerprint.Container, EquippedContainer, StringComparison.Ordinal) &&
+                    value.Fingerprint.SlotIndex == position.EquippedIndex)
+                .ToArray();
+            if (slot.Instance is null || slot.Definition is null || slot.Quality is null)
+            {
+                if (slot.Instance is not null || slot.Definition is not null || slot.Quality is not null ||
+                    instances.Length != 0 || slot.MateriaIds.Count != 0 || slot.MateriaGrades.Count != 0 ||
+                    slot.Utility.Components.Any(component => component.Units != 0))
+                {
+                    diagnostic = $"Empty equipped slot '{position.PositionKey}' has contradictory evidence.";
+                    return false;
+                }
+                continue;
+            }
+
+            var instance = slot.Instance;
+            var fingerprint = instance.Fingerprint;
+            var definition = slot.Definition;
+            if (fingerprint is null ||
+                instances.Length != 1 ||
+                !EquipmentInstanceFingerprintComparer.Instance.Equals(instances[0].Fingerprint, fingerprint) ||
+                fingerprint.Character != character ||
+                fingerprint.ItemId == 0 ||
+                fingerprint.ItemId != definition.ItemId ||
+                fingerprint.IsHighQuality != (slot.Quality == EquipmentQuality.High) ||
+                slot.Quality is not (EquipmentQuality.Normal or EquipmentQuality.High) ||
+                fingerprint.MateriaIds is null ||
+                !fingerprint.MateriaIds.SequenceEqual(slot.MateriaIds) ||
+                !snapshot.Definitions.TryGetValue(definition.ItemId, out var snapshotDefinition) ||
+                snapshotDefinition is null ||
+                (!ReferenceEquals(snapshotDefinition, definition) && snapshotDefinition != definition) ||
+                !DefinitionMatchesPosition(definition, position.Position) ||
+                definition.EligibleClassJobIds is null ||
+                !definition.EligibleClassJobIds.Contains(classJobId) ||
+                definition.EquipLevel > level)
+            {
+                diagnostic = $"Equipped slot '{position.PositionKey}' is inconsistent with its snapshot instance and definition.";
+                return false;
+            }
+
+            try
+            {
+                actualEquipped = actualEquipped.Add(slot.Utility);
+            }
+            catch (Exception exception) when (exception is InvalidOperationException or OverflowException)
+            {
+                diagnostic = $"Equipped slot '{position.PositionKey}' has invalid utility evidence.";
+                return false;
+            }
+        }
+
+        try
+        {
+            var expected = family.VectorFromSemantics(expectedEquipped).Normalize().Components;
+            var actual = actualEquipped.Normalize().Components;
+            if (!actual.SequenceEqual(expected))
+            {
+                diagnostic = "Equipped utility does not reconcile with the player total and fixed stats.";
+                return false;
+            }
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or OverflowException)
+        {
+            diagnostic = "The player advisor baseline has invalid family-relevant utility arithmetic.";
+            return false;
+        }
+
+        diagnostic = baseline.Diagnostic;
+        return true;
     }
 
     public static PlayerAdvisorBaseline Failure(
@@ -267,8 +489,10 @@ internal static class PlayerAdvisorBaselineAssembler
         IReadOnlyDictionary<EquipmentStatSemantic, int> totalStats,
         IReadOnlyDictionary<EquipmentStatSemantic, int> fixedStats,
         IReadOnlyList<PlayerAdvisorEquippedSlot> slots,
-        string diagnostic) =>
-        new(
+        string diagnostic,
+        PlayerAdvisorTrustedCapture? trustedCapture = null)
+    {
+        var result = new PlayerAdvisorBaseline(
             status,
             header.Character,
             header.ClassJobId,
@@ -280,4 +504,16 @@ internal static class PlayerAdvisorBaselineAssembler
             slots,
             snapshot,
             diagnostic);
+        if (trustedCapture is null)
+            return result;
+        return result with
+        {
+            CaptureProvenance = new(
+                trustedCapture.CaptureId,
+                trustedCapture.CompletedAtUtc,
+                snapshot.GenerationId,
+                snapshot.Identity.CapturedAt,
+                header.CurrentWorldId),
+        };
+    }
 }

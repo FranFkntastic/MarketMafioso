@@ -37,6 +37,7 @@ if ([string]::IsNullOrWhiteSpace($CraftArchitectRoot)) {
 }
 
 $franthropyProject = Join-Path $FranthropyRoot "src\Franthropy.Dalamud\Franthropy.Dalamud.csproj"
+$franthropyFilteringProject = Join-Path $FranthropyRoot "src\Franthropy.Filtering\Franthropy.Filtering.csproj"
 $franthropyTests = Join-Path $FranthropyRoot "tests\Franthropy.Dalamud.Tests\Franthropy.Dalamud.Tests.csproj"
 $craftArchitectProject = Join-Path $CraftArchitectRoot "src\FFXIV Craft Architect.Core\FFXIV Craft Architect.Core.csproj"
 $marketMafiosoProject = Join-Path $projectDir "MarketMafioso.csproj"
@@ -44,7 +45,7 @@ $marketMafiosoTests = Join-Path $repoRoot "tests\MarketMafioso.Tests\MarketMafio
 $deployScript = Join-Path $PSScriptRoot "Deploy-DevPlugin.ps1"
 $verificationCachePath = Join-Path $projectDir "obj\squire-verification-$Configuration.json"
 
-foreach ($requiredPath in @($franthropyProject, $franthropyTests, $craftArchitectProject, $marketMafiosoProject, $marketMafiosoTests, $deployScript)) {
+foreach ($requiredPath in @($franthropyProject, $franthropyFilteringProject, $franthropyTests, $craftArchitectProject, $marketMafiosoProject, $marketMafiosoTests, $deployScript)) {
     if (-not (Test-Path -LiteralPath $requiredPath)) {
         throw "Required Squire build input was not found: $requiredPath"
     }
@@ -163,6 +164,7 @@ $franthropyVerificationSucceeded = $franthropyVerified
 
 $sharedProperties = @(
     "-p:FranthropyDalamudProject=$franthropyProject",
+    "-p:FranthropyFilteringProject=$franthropyFilteringProject",
     "-p:CraftArchitectCoreProject=$craftArchitectProject",
     "-p:SkipDevPluginSync=true",
     "-p:UseSharedCompilation=$useSharedCompilation"
