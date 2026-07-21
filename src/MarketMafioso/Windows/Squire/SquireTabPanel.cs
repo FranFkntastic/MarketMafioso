@@ -7,7 +7,6 @@ using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 using Dalamud.Bindings.ImGui;
-using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
 using FFXIV_Craft_Architect.Core.Integrations.WorkshopHost;
 using FFXIV_Craft_Architect.Core.Services.Interfaces;
@@ -47,7 +46,6 @@ internal sealed class SquireTabPanel : IDisposable
     private readonly string diagnosticDirectory;
     private readonly UiStateCaptureService uiStateCapture;
     private readonly SquireInventoryChangeMonitor inventoryChangeMonitor;
-    private readonly OutfitterPanel outfitterPanel;
     private readonly MinerBotanistAdvisorSession advisorSession;
     private readonly MinerBotanistAdvisorPanel advisorPanel;
     private readonly IDisposable? craftArchitectServices;
@@ -101,9 +99,7 @@ internal sealed class SquireTabPanel : IDisposable
         UiStateCaptureService uiStateCapture,
         IGameInventory gameInventory,
         IDataManager dataManager,
-        IDalamudPluginInterface pluginInterface,
         IMarketAcquisitionListingSource marketListingSource,
-        Func<bool> isMarketAcquisitionUnlocked,
         IPlayerAdvisorBaselineSource playerAdvisorBaselineSource)
     {
         this.config = config;
@@ -122,13 +118,6 @@ internal sealed class SquireTabPanel : IDisposable
             gameInventory,
             dataManager,
             () => RequestAutomaticRefresh("Equipment changed", TimeSpan.FromMilliseconds(150)));
-        outfitterPanel = new OutfitterPanel(
-            config,
-            new OutfitterCandidateCatalog(dataManager),
-            new OutfitterMarketQuoteService(marketListingSource),
-            new AutoRetainerOutfitterMetadataSource(pluginInterface, Plugin.Log),
-            isMarketAcquisitionUnlocked,
-            reviewRegistry);
         OutfitterAdvisorCraftDiscovery? craftDiscovery = null;
         try
         {
@@ -180,26 +169,19 @@ internal sealed class SquireTabPanel : IDisposable
         DrawCleanup();
     }
 
-    public void ConnectMarketAcquisition(
-        Action<IReadOnlyList<MarketAcquisitionRequestLineDocument>> stageLines,
-        Action<OutfitterWorkbenchTransfer> stageExactOutfitterTransfer)
+    public void ConnectMarketAcquisition(Action<OutfitterWorkbenchTransfer> stageExactOutfitterTransfer)
     {
-        outfitterPanel.ConnectMarketAcquisition(stageLines);
         stageOutfitterTransfer = stageExactOutfitterTransfer ?? throw new ArgumentNullException(nameof(stageExactOutfitterTransfer));
     }
 
     public void OpenOutfitterAdvisor()
     {
-        config.Squire.EnableOutfitterAdvisor = true;
-        config.Save();
         SelectWorkspace("Outfitter");
     }
 
 #if DEBUG
     public void OpenSyntheticAdvisorReview()
     {
-        config.Squire.EnableOutfitterAdvisor = true;
-        config.Save();
         SelectWorkspace("Outfitter");
         advisorPanel.LoadSyntheticReview();
     }
@@ -242,64 +224,7 @@ internal sealed class SquireTabPanel : IDisposable
 
     private void DrawOutfitter()
     {
-        DrawOutfitterViewSelector();
-        ImGui.Separator();
-        if (config.Squire.EnableOutfitterAdvisor)
-        {
-            advisorPanel.Draw();
-            return;
-        }
-        ImGui.TextColored(MarketMafiosoUiTheme.Header, "Outfitter — loadout planner");
-        ImGui.TextWrapped("Choose a target and compare its current set with the best accessible loadout. Market purchases enter the existing Workbench only after exact NQ/HQ identity is preserved.");
-        if (ImGui.Button("Refresh equipment##Outfitter"))
-            Refresh();
-        RegisterLastControl(
-            "squire.outfitter.refresh-equipment",
-            "Refresh Outfitter equipment",
-            AgentBridgeUiControlKind.Button,
-            true,
-            false,
-            null,
-            Refresh);
-        ImGui.Separator();
-        if (analysis is null)
-            return;
-        outfitterPanel.Draw(analysis.Snapshot);
-    }
-
-    private void DrawOutfitterViewSelector()
-    {
-        var options = OutfitterWorkspaceViewPresenter.Build(config.Squire.EnableOutfitterAdvisor);
-        ImGui.TextColored(MarketMafiosoUiTheme.Muted, "VIEW");
-        ImGui.SameLine();
-        for (var index = 0; index < options.Count; index++)
-        {
-            var option = options[index];
-            if (ImGui.Selectable(
-                    $"{option.Label}##SquireOutfitterView{option.View}",
-                    option.Selected,
-                    ImGuiSelectableFlags.None,
-                    new System.Numerics.Vector2(option.View == OutfitterWorkspaceView.Planner ? 126f : 158f, 0)))
-            {
-                SelectOutfitterView(option.View);
-            }
-            RegisterLastControl(
-                $"squire.outfitter.view.{option.View.ToString().ToLowerInvariant()}",
-                option.Description,
-                AgentBridgeUiControlKind.Select,
-                true,
-                option.Selected,
-                option.View.ToString(),
-                () => SelectOutfitterView(option.View));
-            if (index < options.Count - 1)
-                ImGui.SameLine();
-        }
-    }
-
-    private void SelectOutfitterView(OutfitterWorkspaceView view)
-    {
-        config.Squire.EnableOutfitterAdvisor = view == OutfitterWorkspaceView.Advisor;
-        config.Save();
+        advisorPanel.Draw();
     }
 
     private void DrawCleanup()
@@ -1149,7 +1074,6 @@ internal sealed class SquireTabPanel : IDisposable
         advisorSession.Dispose();
         craftArchitectScope?.Dispose();
         craftArchitectServices?.Dispose();
-        outfitterPanel.Dispose();
         inventoryChangeMonitor.Dispose();
         routeDiagnosticsPanel.Dispose();
         actionAdapter.ReleaseOwnedState();

@@ -37,10 +37,8 @@ internal sealed class SquireSettingsPages
 
     private void DrawOutfitterAdvisor(SettingsPageContext context)
     {
-        DrawCheckbox(context, "Open the read-only gear advisor by default",
-            "The Outfitter always keeps both its complete loadout planner and this advisor available; this setting chooses the initially visible view. Refresh captures the active level 1-100 Miner, Botanist, or crafting job directly from player state and equipped inventory without opening Character UI, then compares exact NQ/HQ market and vendor offers without purchasing or equipping.",
-            () => config.Squire.EnableOutfitterAdvisor, value => config.Squire.EnableOutfitterAdvisor = value);
-        Dalamud.Bindings.ImGui.ImGui.TextWrapped("Current coverage: current equipped items, quality, and materia plus a bounded ten-level market and gil-vendor horizon up to the active player level, with owned armoury, bag, and saddlebag gear offered at zero cost from direct container reads. Retainers remain outside this release and are stated explicitly in the workbench.");
+        Dalamud.Bindings.ImGui.ImGui.TextWrapped("Outfitter uses the exact cost/utility Advisor exclusively. Refresh captures the active supported player job directly from player state and equipped inventory without opening Character UI, then compares exact NQ/HQ market, vendor, owned, and bounded craft evidence without purchasing or equipping.");
+        Dalamud.Bindings.ImGui.ImGui.TextWrapped("Current coverage: MIN, BTN, all crafting jobs, and Experimental physical-ranged analysis. Owned armoury, bag, and saddlebag gear enters at zero cost; retainers remain outside this release.");
     }
 
     private void DrawRecovery(SettingsPageContext context)

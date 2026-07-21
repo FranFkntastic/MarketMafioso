@@ -255,9 +255,7 @@ public class MainWindow : Window, IDisposable
             uiStateCapture,
             Plugin.GameInventory,
             dataManager,
-            Plugin.PluginInterface,
             acquisitionPlanSource,
-            IsMarketAcquisitionUnlocked,
             playerAdvisorBaselineSource);
         statusTab = new StatusTabPanel(config, reporter, retainerCacheStore, log);
         marketAcquisitionRequestPickupPanel = new MarketAcquisitionRequestPickupPanel(
@@ -335,11 +333,6 @@ public class MainWindow : Window, IDisposable
             acquisitionWorkbenchCompositions,
             CreateMarketAcquisitionCompositionContext);
         squireTab.ConnectMarketAcquisition(
-            lines =>
-            {
-                acquisitionRequestBuilder.StageLines(lines);
-                QueueAgentTabSelection("Market Acquisition", "Workbench");
-            },
             transfer =>
             {
                 acquisitionRequestBuilder.StageOutfitterTransfer(transfer);

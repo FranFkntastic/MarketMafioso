@@ -1,5 +1,3 @@
-using System;
-using System.Collections.Generic;
 using Franthropy.Dalamud.Characters;
 using Franthropy.Dalamud.Equipment;
 using MarketMafioso.Squire.Observation;
@@ -38,15 +36,3 @@ public sealed record OutfitterRetainerMetadata(
     uint ClassJobId,
     uint Level);
 
-public sealed record OutfitterMarketQuote(
-    uint ItemId,
-    uint UnitPriceGil,
-    string WorldName,
-    uint AvailableQuantity,
-    DateTimeOffset ListingReviewedAtUtc);
-
-public sealed record OutfitterPlanSnapshot(
-    OutfitterTarget Target,
-    EquipmentLoadoutPlan? Plan,
-    IReadOnlyDictionary<uint, OutfitterMarketQuote> MarketQuotes,
-    string Status);
