@@ -121,16 +121,33 @@ public sealed unsafe class DalamudPlayerAdvisorBaselineSource : IPlayerAdvisorBa
                         snapshot,
                         before);
                 var contributions = new Dictionary<EquipmentStatSemantic, int>();
+                EquipmentStatProfile? definitionProfile = null;
                 foreach (var semantic in family.RelevantSemantics)
                 {
-                    var value = InventoryItem.GetParameterValue(
+                    if (definitionProfile is null && snapshot.Definitions.TryGetValue(itemId, out var definition))
+                        definitionProfile = definition.ResolveStatProfile(item->IsHighQuality() ? EquipmentQuality.High : EquipmentQuality.Normal);
+                    if (definitionProfile is not null && family.TryGetNonParameterDefinitionValue(definitionProfile, semantic, out var scalar))
+                    {
+                        contributions.Add(semantic, scalar);
+                        continue;
+                    }
+                    if (semantic is EquipmentStatSemantic.PhysicalDamage or
+                        EquipmentStatSemantic.PhysicalDefense or EquipmentStatSemantic.MagicalDefense)
+                    {
+                        return PlayerAdvisorBaselineAssembler.Failure(
+                            PlayerAdvisorBaselineStatus.Incomplete,
+                            $"Equipped item {itemId} has no exact quality-specific {semantic} definition value.",
+                            snapshot,
+                            before);
+                    }
+                    var parameterValue = InventoryItem.GetParameterValue(
                         (uint)attributes[semantic],
                         item,
                         includeMateria: true,
                         checkHQ: true,
                         checkPvPCharacterFlag: false,
                         checkPvPItemFlag: false);
-                    contributions.Add(semantic, checked((int)value));
+                    contributions.Add(semantic, checked((int)parameterValue));
                 }
 
                 var materiaIds = new List<uint>(5);

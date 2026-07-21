@@ -84,6 +84,28 @@ public sealed class CrafterReadOnlyAdvisorTests
     }
 
     [Fact]
+    public void Melded_unequipped_owned_item_with_unproven_utility_blocks_paid_nomination()
+    {
+        var fixture = Fixture();
+        var meldedOwned = Definition(3_000, "Melded owned hammer", EquipmentSlot.MainHand, 399, 401);
+        var advice = new MinerBotanistReadOnlyAdvisor().Build(
+            fixture.Baseline,
+            fixture.Evidence,
+            itemId => itemId == fixture.Candidate.ItemId ? [fixture.Candidate]
+                : itemId == meldedOwned.ItemId ? [meldedOwned]
+                : [],
+            CrafterAdvisorStatFamily.Instance,
+            CrafterUtilityProfile.OrdinaryCraftBenchmarkContextId,
+            ownedItems: [new(meldedOwned.ItemId, true, "Armoury", UtilityIsExact: false)]);
+
+        Assert.True(advice.Status == MinerBotanistAdvisorStatus.Complete, advice.Diagnostic);
+        Assert.Null(advice.Nomination);
+        Assert.DoesNotContain(advice.OffersByAllocation.Values, offer => offer.Offer.Definition.ItemId == meldedOwned.ItemId);
+        Assert.Contains(advice.AuthorityBySolutionId.Values, authority =>
+            authority.Reasons.Any(reason => reason.Contains("melds whose exact effective utility is unproven", StringComparison.OrdinalIgnoreCase)));
+    }
+
+    [Fact]
     public void Crafter_family_abstains_when_the_rendered_job_is_not_a_crafter()
     {
         var fixture = Fixture(classJobId: 16);

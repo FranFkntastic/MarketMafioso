@@ -12,12 +12,6 @@ public enum MinerBotanistUtilityContextKind
     OrdinaryResourceBenchmark,
 }
 
-public enum MinerBotanistCalibrationState
-{
-    Experimental,
-    Supported,
-}
-
 public sealed record MinerBotanistUtilityStats(
     int Gathering,
     int Perception,
@@ -42,7 +36,7 @@ public sealed class MinerBotanistUtilityProfile : IEquipmentExactSolverUtilityMo
     public const string LegendaryContextId = "legendary-node-general-yield";
     public const string CollectableContextId = "collectable-i730-efficiency";
     public const string OrdinaryResourceBenchmarkContextId = "ordinary-resource-general-yield";
-    public const MinerBotanistCalibrationState CalibrationState = MinerBotanistCalibrationState.Supported;
+    public const AdvisorProfileCalibrationState CalibrationState = AdvisorProfileCalibrationState.Supported;
 
     private const string GatheringKey = "gathering";
     private const string PerceptionKey = "perception";
@@ -94,8 +88,10 @@ public sealed class MinerBotanistUtilityProfile : IEquipmentExactSolverUtilityMo
             Profile.SupportedClassJobIds.Contains(classJobId) &&
             supportedLevel;
         var diagnostics = new List<string>();
-        if (!Profile.SupportedClassJobIds.Contains(classJobId))
-            diagnostics.Add("Squire supports Miner and Botanist gathering profiles; Fisher is permanently unsupported and out of scope.");
+        if (classJobId == AdvisorStatFamilies.FisherClassJobId)
+            diagnostics.Add(AdvisorStatFamilies.UnsupportedDiagnostic(classJobId));
+        else if (!Profile.SupportedClassJobIds.Contains(classJobId))
+            diagnostics.Add("The MIN/BTN profile supports Miner and Botanist only.");
         if (!supportedLevel)
             diagnostics.Add(contextKind == MinerBotanistUtilityContextKind.OrdinaryResourceBenchmark
                 ? "The ordinary-node player profile supports levels 1 through 100."
@@ -170,7 +166,7 @@ public sealed class MinerBotanistUtilityProfile : IEquipmentExactSolverUtilityMo
             evidenceComplete,
             patchMatches,
             hasUnmodeledRelevantEffect,
-            calibrationApproved: CalibrationState == MinerBotanistCalibrationState.Supported);
+            calibrationApproved: CalibrationState == AdvisorProfileCalibrationState.Supported);
 
     internal AdvisorAuthorityAssessment AssessAuthorityForCalibration(
         EquipmentUtilityEvaluation candidate,

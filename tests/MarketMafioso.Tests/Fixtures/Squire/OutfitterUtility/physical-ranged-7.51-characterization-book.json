@@ -1,0 +1,129 @@
+{
+  "schemaVersion": "squire-physical-ranged-characterization/v1",
+  "profileVersion": "7.51-v1",
+  "cases": [
+    {
+      "caseId": "brd-no-loss-dexterity",
+      "lineage": "synthetic-characterization",
+      "context": "GeneralCombat",
+      "classJobId": 23,
+      "baseline": { "dexterity": 4800, "vitality": 5200, "physicalDamage": 140, "physicalDefense": 2500, "magicalDefense": 2500, "criticalHit": 3000, "determination": 2200, "directHit": 1800, "skillSpeed": 1000 },
+      "candidate": { "dexterity": 4801, "vitality": 5200, "physicalDamage": 140, "physicalDefense": 2500, "magicalDefense": 2500, "criticalHit": 3000, "determination": 2200, "directHit": 1800, "skillSpeed": 1000 },
+      "additionalCostGil": 10000,
+      "expectedAssessment": "ClearImprovement",
+      "expectedCharacterizationAuthority": true
+    },
+    {
+      "caseId": "mch-no-loss-weapon-damage",
+      "lineage": "synthetic-characterization",
+      "context": "GeneralCombat",
+      "classJobId": 31,
+      "baseline": { "dexterity": 4800, "vitality": 5200, "physicalDamage": 140, "physicalDefense": 2500, "magicalDefense": 2500, "criticalHit": 3000, "determination": 2200, "directHit": 1800, "skillSpeed": 1000 },
+      "candidate": { "dexterity": 4800, "vitality": 5200, "physicalDamage": 141, "physicalDefense": 2500, "magicalDefense": 2500, "criticalHit": 3000, "determination": 2200, "directHit": 1800, "skillSpeed": 1000 },
+      "additionalCostGil": 10000,
+      "expectedAssessment": "ClearImprovement",
+      "expectedCharacterizationAuthority": true
+    },
+    {
+      "caseId": "dnc-paid-critical-hit-only",
+      "lineage": "synthetic-characterization",
+      "context": "GeneralCombat",
+      "classJobId": 38,
+      "baseline": { "dexterity": 4800, "vitality": 5200, "physicalDamage": 140, "physicalDefense": 2500, "magicalDefense": 2500, "criticalHit": 3000, "determination": 2200, "directHit": 1800, "skillSpeed": 1000 },
+      "candidate": { "dexterity": 4800, "vitality": 5200, "physicalDamage": 140, "physicalDefense": 2500, "magicalDefense": 2500, "criticalHit": 3050, "determination": 2200, "directHit": 1800, "skillSpeed": 1000 },
+      "additionalCostGil": 10000,
+      "expectedAssessment": "ClearImprovement",
+      "expectedCharacterizationAuthority": false
+    },
+    {
+      "caseId": "paid-skill-speed-only",
+      "lineage": "synthetic-characterization",
+      "context": "GeneralCombat",
+      "classJobId": 23,
+      "baseline": { "dexterity": 4800, "vitality": 5200, "physicalDamage": 140, "physicalDefense": 2500, "magicalDefense": 2500, "criticalHit": 3000, "determination": 2200, "directHit": 1800, "skillSpeed": 1000 },
+      "candidate": { "dexterity": 4800, "vitality": 5200, "physicalDamage": 140, "physicalDefense": 2500, "magicalDefense": 2500, "criticalHit": 3000, "determination": 2200, "directHit": 1800, "skillSpeed": 1050 },
+      "additionalCostGil": 10000,
+      "expectedAssessment": "ClearImprovement",
+      "expectedCharacterizationAuthority": false
+    },
+    {
+      "caseId": "critical-hit-for-skill-speed-trade",
+      "lineage": "synthetic-characterization",
+      "context": "GeneralCombat",
+      "classJobId": 23,
+      "baseline": { "dexterity": 4800, "vitality": 5200, "physicalDamage": 140, "physicalDefense": 2500, "magicalDefense": 2500, "criticalHit": 3000, "determination": 2200, "directHit": 1800, "skillSpeed": 1000 },
+      "candidate": { "dexterity": 4800, "vitality": 5200, "physicalDamage": 140, "physicalDefense": 2500, "magicalDefense": 2500, "criticalHit": 3050, "determination": 2200, "directHit": 1800, "skillSpeed": 950 },
+      "additionalCostGil": 0,
+      "expectedAssessment": "ContextDependent",
+      "expectedCharacterizationAuthority": false
+    },
+    {
+      "caseId": "dexterity-for-vitality-trade",
+      "lineage": "synthetic-characterization",
+      "context": "GeneralCombat",
+      "classJobId": 31,
+      "baseline": { "dexterity": 4800, "vitality": 5200, "physicalDamage": 140, "physicalDefense": 2500, "magicalDefense": 2500, "criticalHit": 3000, "determination": 2200, "directHit": 1800, "skillSpeed": 1000 },
+      "candidate": { "dexterity": 4810, "vitality": 5199, "physicalDamage": 140, "physicalDefense": 2500, "magicalDefense": 2500, "criticalHit": 3000, "determination": 2200, "directHit": 1800, "skillSpeed": 1000 },
+      "additionalCostGil": 0,
+      "expectedAssessment": "ContextDependent",
+      "expectedCharacterizationAuthority": false
+    },
+    {
+      "caseId": "free-defense-no-loss",
+      "lineage": "synthetic-characterization",
+      "context": "GeneralCombat",
+      "classJobId": 38,
+      "baseline": { "dexterity": 4800, "vitality": 5200, "physicalDamage": 140, "physicalDefense": 2500, "magicalDefense": 2500, "criticalHit": 3000, "determination": 2200, "directHit": 1800, "skillSpeed": 1000 },
+      "candidate": { "dexterity": 4800, "vitality": 5200, "physicalDamage": 140, "physicalDefense": 2501, "magicalDefense": 2500, "criticalHit": 3000, "determination": 2200, "directHit": 1800, "skillSpeed": 1000 },
+      "additionalCostGil": 0,
+      "expectedAssessment": "ClearImprovement",
+      "expectedCharacterizationAuthority": true
+    },
+    {
+      "caseId": "equivalent",
+      "lineage": "synthetic-characterization",
+      "context": "GeneralCombat",
+      "classJobId": 23,
+      "baseline": { "dexterity": 4800, "vitality": 5200, "physicalDamage": 140, "physicalDefense": 2500, "magicalDefense": 2500, "criticalHit": 3000, "determination": 2200, "directHit": 1800, "skillSpeed": 1000 },
+      "candidate": { "dexterity": 4800, "vitality": 5200, "physicalDamage": 140, "physicalDefense": 2500, "magicalDefense": 2500, "criticalHit": 3000, "determination": 2200, "directHit": 1800, "skillSpeed": 1000 },
+      "additionalCostGil": 0,
+      "expectedAssessment": "Equivalent",
+      "expectedCharacterizationAuthority": false
+    },
+    {
+      "caseId": "clear-regression",
+      "lineage": "synthetic-characterization",
+      "context": "GeneralCombat",
+      "classJobId": 31,
+      "baseline": { "dexterity": 4800, "vitality": 5200, "physicalDamage": 140, "physicalDefense": 2500, "magicalDefense": 2500, "criticalHit": 3000, "determination": 2200, "directHit": 1800, "skillSpeed": 1000 },
+      "candidate": { "dexterity": 4799, "vitality": 5200, "physicalDamage": 140, "physicalDefense": 2500, "magicalDefense": 2500, "criticalHit": 3000, "determination": 2200, "directHit": 1800, "skillSpeed": 1000 },
+      "additionalCostGil": 0,
+      "expectedAssessment": "ClearRegression",
+      "expectedCharacterizationAuthority": false
+    },
+    {
+      "caseId": "incomplete-evidence",
+      "lineage": "synthetic-characterization",
+      "context": "GeneralCombat",
+      "classJobId": 38,
+      "baseline": { "dexterity": 4800, "vitality": 5200, "physicalDamage": 140, "physicalDefense": 2500, "magicalDefense": 2500, "criticalHit": 3000, "determination": 2200, "directHit": 1800, "skillSpeed": 1000 },
+      "candidate": { "dexterity": 4801, "vitality": 5200, "physicalDamage": 140, "physicalDefense": 2500, "magicalDefense": 2500, "criticalHit": 3000, "determination": 2200, "directHit": 1800, "skillSpeed": 1000 },
+      "additionalCostGil": 10000,
+      "expectedAssessment": "ClearImprovement",
+      "expectedCharacterizationAuthority": false,
+      "evidenceComplete": false
+    },
+    {
+      "caseId": "unmodeled-effect",
+      "lineage": "synthetic-characterization",
+      "context": "GeneralCombat",
+      "classJobId": 23,
+      "baseline": { "dexterity": 4800, "vitality": 5200, "physicalDamage": 140, "physicalDefense": 2500, "magicalDefense": 2500, "criticalHit": 3000, "determination": 2200, "directHit": 1800, "skillSpeed": 1000 },
+      "candidate": { "dexterity": 4800, "vitality": 5200, "physicalDamage": 141, "physicalDefense": 2500, "magicalDefense": 2500, "criticalHit": 3000, "determination": 2200, "directHit": 1800, "skillSpeed": 1000 },
+      "additionalCostGil": 10000,
+      "expectedAssessment": "ClearImprovement",
+      "expectedCharacterizationAuthority": false,
+      "hasUnmodeledRelevantEffect": true
+    }
+  ]
+}

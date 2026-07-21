@@ -49,6 +49,31 @@ public sealed class MinerBotanistSolverReplayTests(ITestOutputHelper output)
     }
 
     [Fact]
+    public void NeutralReplayContract_ReconstructsLegacyMinBtnPayloadWithoutChangingItsJson()
+    {
+        var replay = Capture(Request());
+        IAdvisorSolverReplay neutralReplay = replay;
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true };
+        var expected = JsonSerializer.Serialize(replay, options);
+        var directory = Path.Combine(Path.GetTempPath(), "MarketMafiosoAdvisorReplayTests", Guid.NewGuid().ToString("N"));
+        var path = Path.Combine(directory, "replay.json");
+        try
+        {
+            AdvisorSolverReplayFileStore.Write(path, neutralReplay);
+
+            Assert.Equal(expected, File.ReadAllText(path));
+            Assert.Equal(
+                JsonSerializer.Serialize(replay.ToRequest()),
+                JsonSerializer.Serialize(neutralReplay.ToRequest()));
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public void Replay_PreservesFrontierMetricsAndCanonicalRetainedPathCounts()
     {
         var request = Request();

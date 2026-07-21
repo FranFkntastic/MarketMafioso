@@ -218,7 +218,7 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
             "Coverage unavailable.",
             0,
             null,
-            MinerBotanistUtilityContextKind.OrdinaryResourceBenchmark,
+            GathererAdvisorStatFamily.Instance.ProfileDescriptor.DefaultContext,
             null,
             false,
             DateTimeOffset.UtcNow));

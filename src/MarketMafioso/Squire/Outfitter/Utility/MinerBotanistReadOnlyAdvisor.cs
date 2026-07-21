@@ -27,7 +27,8 @@ public sealed record MinerBotanistOwnedItemEvidence(
     uint ItemId,
     bool IsHighQuality,
     string ContainerLabel,
-    EquipmentInstanceSnapshot? Instance = null);
+    EquipmentInstanceSnapshot? Instance = null,
+    bool UtilityIsExact = true);
 
 /// <summary>
 /// Read-only player advisor. It consumes one reconciled player baseline, exact-quality market
@@ -50,7 +51,7 @@ public sealed class MinerBotanistReadOnlyAdvisor
         IReadOnlyList<MinerBotanistOwnedItemEvidence>? ownedItems = null,
         CancellationToken cancellationToken = default,
         Action<EquipmentExactFrontierProgress>? reportProgress = null,
-        Action<MinerBotanistSolverReplay>? captureReplay = null,
+        Action<IAdvisorSolverReplay>? captureReplay = null,
         bool ownedInventoryCoverageComplete = true)
     {
         ArgumentNullException.ThrowIfNull(baseline);
@@ -85,7 +86,7 @@ public sealed class MinerBotanistReadOnlyAdvisor
         if (ineligibleCurrent is not null)
             return Abstain($"Currently equipped {ineligibleCurrent.Definition!.Name} does not match the active job and level.");
         var unsupportedCurrent = baseline.EquippedSlots.FirstOrDefault(value =>
-            value.Definition is { } definition && MinerBotanistEquipmentSupportPolicy.HasUnmodeledEffectOrRestriction(definition));
+            value.Definition is { } definition && AdvisorEquipmentSupportPolicy.HasUnmodeledEffectOrRestriction(definition));
         if (unsupportedCurrent is not null)
             return Abstain($"Currently equipped {unsupportedCurrent.Definition!.Name} has an unmodeled effect or equip restriction.");
 
@@ -99,6 +100,7 @@ public sealed class MinerBotanistReadOnlyAdvisor
             classJobId,
             checked((uint)characterLevel));
         var offers = new List<EquipmentExactSolverOffer>();
+        var hasUnprovenRelevantOwnedUtility = false;
         var required = baseline.EquippedSlots.Select(value => value.Position).ToHashSet();
         var baselineKeys = required.ToDictionary(position => position, _ => (EquipmentOfferAllocationKey?)null);
         foreach (var slot in baseline.EquippedSlots)
@@ -143,7 +145,7 @@ public sealed class MinerBotanistReadOnlyAdvisor
             if (ownedDefinitions.Length != 1)
                 continue;
             var ownedDefinition = ownedDefinitions[0];
-            if (MinerBotanistEquipmentSupportPolicy.HasUnmodeledEffectOrRestriction(ownedDefinition) ||
+            if (AdvisorEquipmentSupportPolicy.HasUnmodeledEffectOrRestriction(ownedDefinition) ||
                 !MinerBotanistAdvisorCatalog.HasRelevantCompleteProfile(ownedDefinition, family))
                 continue;
             var ownedQuality = owned.IsHighQuality ? EquipmentQuality.High : EquipmentQuality.Normal;
@@ -153,6 +155,11 @@ public sealed class MinerBotanistReadOnlyAdvisor
             var ownedPositions = Positions(ownedDefinition);
             if (ownedPositions.Count == 0 || !ownedPositions.Overlaps(required))
                 continue;
+            if (!owned.UtilityIsExact)
+            {
+                hasUnprovenRelevantOwnedUtility = true;
+                continue;
+            }
             var ownedOffer = new EquipmentLoadoutOffer(
                 ownedDefinition,
                 EquipmentAcquisitionSourceKind.Owned,
@@ -186,7 +193,7 @@ public sealed class MinerBotanistReadOnlyAdvisor
             if (definitions.Length != 1)
                 return Abstain($"Market item {itemEvidence.ItemId} did not resolve to exactly one eligible static equipment definition.");
             var definition = definitions[0];
-            if (MinerBotanistEquipmentSupportPolicy.HasUnmodeledEffectOrRestriction(definition))
+            if (AdvisorEquipmentSupportPolicy.HasUnmodeledEffectOrRestriction(definition))
                 return Abstain($"{definition.Name} has an unmodeled effect or equip restriction.");
             foreach (var listing in RelevantListings(itemEvidence.Listings))
             {
@@ -243,7 +250,7 @@ public sealed class MinerBotanistReadOnlyAdvisor
             if (vendor.SourceKind != EquipmentAcquisitionSourceKind.GilVendor || vendor.UnitPriceGil is not { } price ||
                 !vendor.Definition.EligibleClassJobIds.Contains(classJobId) || vendor.Definition.EquipLevel > characterLevel)
                 return Abstain("Vendor offer evidence did not match the supported rendered MIN/BTN target.");
-            if (MinerBotanistEquipmentSupportPolicy.HasUnmodeledEffectOrRestriction(vendor.Definition))
+            if (AdvisorEquipmentSupportPolicy.HasUnmodeledEffectOrRestriction(vendor.Definition))
                 return Abstain($"{vendor.Definition.Name} has an unmodeled effect or equip restriction.");
             var statProfile = vendor.ResolveStatProfile();
             if (statProfile is not { IsComplete: true })
@@ -298,11 +305,16 @@ public sealed class MinerBotanistReadOnlyAdvisor
             solution =>
             {
                 var assessment = family.AssessAuthority(profile, solution.Utility, solution.AcquisitionCostGil);
-                return !ownedInventoryCoverageComplete && solution.AcquisitionCostGil > 0 && assessment.AdvisorMayConsider
+                var paidOwnedEvidenceReason = !ownedInventoryCoverageComplete
+                    ? "Owned inventory coverage is partial; the advisor will not nominate a paid loadout that may duplicate available gear."
+                    : hasUnprovenRelevantOwnedUtility
+                        ? "A relevant unequipped owned item has melds whose exact effective utility is unproven; it was excluded and paid nomination is blocked."
+                        : null;
+                return paidOwnedEvidenceReason is not null && solution.AcquisitionCostGil > 0 && assessment.AdvisorMayConsider
                     ? assessment with
                     {
                         AdvisorMayConsider = false,
-                        Reasons = [.. assessment.Reasons, "Owned inventory coverage is partial; the advisor will not nominate a paid loadout that may duplicate available gear."],
+                        Reasons = [.. assessment.Reasons, paidOwnedEvidenceReason],
                     }
                     : assessment;
             },

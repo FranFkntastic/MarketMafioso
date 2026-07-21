@@ -104,6 +104,9 @@ public sealed class RenderedMinerBotanistBaselineAssemblerTests
     [InlineData("Weaver", 13u)]
     [InlineData("Alchemist", 14u)]
     [InlineData("Culinarian", 15u)]
+    [InlineData("Bard", 23u)]
+    [InlineData("Machinist", 31u)]
+    [InlineData("Dancer", 38u)]
     public void AdvisorStatFamilies_resolves_every_supported_rendered_job(string jobName, uint expectedClassJobId)
     {
         Assert.Equal(expectedClassJobId, AdvisorStatFamilies.ClassJobIdForRenderedJob(jobName));

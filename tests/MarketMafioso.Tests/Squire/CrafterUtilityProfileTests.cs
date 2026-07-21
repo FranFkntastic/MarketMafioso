@@ -65,7 +65,7 @@ public sealed class CrafterUtilityProfileTests
     [Fact]
     public void ProfileDeclaresSupportedCalibrationAfterTheHoldoutPasses()
     {
-        Assert.Equal(CrafterCalibrationState.Supported, CrafterUtilityProfile.CalibrationState);
+        Assert.Equal(AdvisorProfileCalibrationState.Supported, CrafterUtilityProfile.CalibrationState);
         Assert.Equal("squire.crafter.player", CrafterUtilityProfile.ProfileId);
     }
 

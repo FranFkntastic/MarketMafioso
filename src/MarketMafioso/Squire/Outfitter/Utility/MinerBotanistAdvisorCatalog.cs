@@ -82,7 +82,7 @@ public sealed class MinerBotanistAdvisorCatalog
                 incompleteProfile++;
                 continue;
             }
-            if (MinerBotanistEquipmentSupportPolicy.HasUnmodeledEffectOrRestriction(definition))
+            if (AdvisorEquipmentSupportPolicy.HasUnmodeledEffectOrRestriction(definition))
             {
                 unmodeled++;
                 if (unmodeledSamples.Count < 4)
@@ -140,6 +140,6 @@ public sealed class MinerBotanistAdvisorCatalog
         Relevant(definition.StatProfile, family) || Relevant(definition.HighQualityStatProfile, family);
 
     private static bool Relevant(EquipmentStatProfile? profile, IAdvisorStatFamily family) =>
-        profile is { IsComplete: true } && profile.Parameters.Any(value => value.Value > 0 && family.IsRelevantSemantic(value.Semantic));
+        profile is { IsComplete: true } && family.VectorFromDefinition(profile).Components.Any(value => value.Units > 0);
 
 }

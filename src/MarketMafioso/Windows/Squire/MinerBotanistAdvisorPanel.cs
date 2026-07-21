@@ -17,12 +17,8 @@ namespace MarketMafioso.Windows.Squire;
 
 internal sealed class MinerBotanistAdvisorPanel
 {
-    private static readonly MinerBotanistUtilityContextKind[] ContextOrder =
-    [
-        MinerBotanistUtilityContextKind.OrdinaryResourceBenchmark,
-        MinerBotanistUtilityContextKind.LegendaryNodeGeneralYield,
-        MinerBotanistUtilityContextKind.CollectableEfficiency,
-    ];
+    private static readonly IReadOnlyList<AdvisorUtilityContextDescriptor> ContextOrder =
+        GathererAdvisorStatFamily.Instance.ProfileDescriptor.Contexts;
 
     private readonly Configuration config;
     private readonly MinerBotanistAdvisorSession session;
@@ -31,8 +27,13 @@ internal sealed class MinerBotanistAdvisorPanel
     private readonly IMarketAcquisitionListingSource listingSource;
     private readonly ParetoFrontierPlotBuilder plotBuilder = new();
     private readonly DalamudPlotContainer plotContainer = new();
-    private MinerBotanistUtilityContextKind context = MinerBotanistUtilityContextKind.OrdinaryResourceBenchmark;
+    private AdvisorUtilityContextDescriptor context = GathererAdvisorStatFamily.Instance.ProfileDescriptor.DefaultContext;
     private MinerBotanistReadOnlyAdvice? lastAdvice;
+    private AdvisorFrontierPresentation? frontierPresentation;
+    private AdvisorFrontierWindow? frontierWindow;
+    private ParetoFrontierPlotModel? frontierPlot;
+    private HashSet<string> frontierWarningIds = new(StringComparer.Ordinal);
+    private IReadOnlyList<AdvisorAdjacentTradeoff> adjacentTradeoffs = [];
     private string? selectedSolutionId;
     private string? handoffStatus;
 #if DEBUG
@@ -49,8 +50,8 @@ internal sealed class MinerBotanistAdvisorPanel
     private Task<MinerBotanistAdvisorDryRunFixture>? dryRunFixtureTask;
     private string? dryRunFixtureStatus;
     private MinerBotanistAdvisorSyntheticScenarioKind syntheticScenarioKind;
-    private readonly HashSet<MinerBotanistUtilityContextKind> visibleSyntheticContexts =
-        [MinerBotanistUtilityContextKind.OrdinaryResourceBenchmark];
+    private readonly HashSet<AdvisorUtilityContextDescriptor> visibleSyntheticContexts =
+        [GathererAdvisorStatFamily.Instance.ProfileDescriptor.DefaultContext];
 #endif
 
     public MinerBotanistAdvisorPanel(
@@ -65,8 +66,7 @@ internal sealed class MinerBotanistAdvisorPanel
         this.reviewRegistry = reviewRegistry ?? throw new ArgumentNullException(nameof(reviewRegistry));
         this.listingSource = listingSource ?? throw new ArgumentNullException(nameof(listingSource));
         this.stageTransfer = stageTransfer ?? throw new ArgumentNullException(nameof(stageTransfer));
-        if (Enum.TryParse<MinerBotanistUtilityContextKind>(config.Squire.OutfitterAdvisorContext, out var stored))
-            context = stored;
+        context = GathererAdvisorStatFamily.Instance.ResolveContext(config.Squire.OutfitterAdvisorContext);
     }
 
     public void Draw()
@@ -141,9 +141,9 @@ internal sealed class MinerBotanistAdvisorPanel
             return;
         }
         EnsureSelection(advice);
-        var selected = frontier.Pareto.Frontier.FirstOrDefault(value => value.Candidate.SolutionId == selectedSolutionId)
-            ?? advice.Nomination
-            ?? frontier.Pareto.Frontier[0];
+        var selected = frontierPresentation!.TryGet(selectedSolutionId, out var selectedSolution)
+            ? selectedSolution
+            : frontierPresentation.First;
 #if DEBUG
         if (syntheticReviewActive)
         {
@@ -154,7 +154,7 @@ internal sealed class MinerBotanistAdvisorPanel
         DrawDecisionSummary(advice, selected);
         DrawFrontier(advice, selected);
         DrawSolutionRail(advice, selected);
-        DrawAdjacentTradeoffs(frontier.Pareto, selected);
+        DrawAdjacentTradeoffs(advice);
         DrawSelectedLoadout(advice, selected);
         DrawAcquisitionChecklist(advice, selected);
     }
@@ -177,7 +177,7 @@ internal sealed class MinerBotanistAdvisorPanel
         {
             var captured = candidate;
             reviewRegistry.Register(
-                $"squire.outfitter.advisor.context.{candidate.ToString().ToLowerInvariant()}",
+                $"squire.outfitter.advisor.context.{candidate.ConfigurationValue.ToLowerInvariant()}",
                 $"Use {ContextLabel(candidate)}",
                 AgentBridgeUiControlKind.Select,
                 contextMin,
@@ -289,7 +289,7 @@ internal sealed class MinerBotanistAdvisorPanel
         session.Begin(context, string.IsNullOrWhiteSpace(region) ? "North America" : region);
     }
 
-    private void SetContext(MinerBotanistUtilityContextKind value)
+    private void SetContext(AdvisorUtilityContextDescriptor value)
     {
         if (session.State.IsBusy)
             return;
@@ -298,7 +298,7 @@ internal sealed class MinerBotanistAdvisorPanel
             return;
 #endif
         context = value;
-        config.Squire.OutfitterAdvisorContext = value.ToString();
+        config.Squire.OutfitterAdvisorContext = value.ConfigurationValue;
         config.Save();
         lastAdvice = null;
         selectedSolutionId = null;
@@ -307,7 +307,7 @@ internal sealed class MinerBotanistAdvisorPanel
         {
             dryRunFixture = null;
             dryRunFixtureStatus = null;
-            syntheticReviewAdvice = MinerBotanistAdvisorSyntheticReview.Build(context);
+            syntheticReviewAdvice = BuildSyntheticReview(context);
             visibleSyntheticContexts.Add(context);
         }
 #endif
@@ -320,7 +320,7 @@ internal sealed class MinerBotanistAdvisorPanel
         dryRunFixtureTask = null;
         dryRunFixtureStatus = null;
         syntheticReviewAdvice = syntheticReviewAdvice is null
-            ? MinerBotanistAdvisorSyntheticReview.Build(context)
+            ? BuildSyntheticReview(context)
             : null;
         ResetVisibleSyntheticContexts();
         syntheticScenarioKind = MinerBotanistAdvisorSyntheticScenarioKind.Success;
@@ -333,7 +333,7 @@ internal sealed class MinerBotanistAdvisorPanel
         dryRunFixture = null;
         dryRunFixtureTask = null;
         dryRunFixtureStatus = null;
-        syntheticReviewAdvice = MinerBotanistAdvisorSyntheticReview.Build(context);
+        syntheticReviewAdvice = BuildSyntheticReview(context);
         ResetVisibleSyntheticContexts();
         syntheticScenarioKind = MinerBotanistAdvisorSyntheticScenarioKind.Success;
         lastAdvice = null;
@@ -352,7 +352,7 @@ internal sealed class MinerBotanistAdvisorPanel
         dryRunFixtureTask = MinerBotanistAdvisorSyntheticReview.BuildDryRunFixtureAsync(
             listingSource,
             string.IsNullOrWhiteSpace(region) ? "North America" : region,
-            context);
+            GathererAdvisorStatFamily.ContextKindFor(context.Id));
     }
 
     private void PumpDryRunFixture()
@@ -437,10 +437,10 @@ internal sealed class MinerBotanistAdvisorPanel
         _ => "success",
     };
 
-    private void ToggleSyntheticSeries(MinerBotanistUtilityContextKind value) =>
+    private void ToggleSyntheticSeries(AdvisorUtilityContextDescriptor value) =>
         SetSyntheticSeriesVisible(value, !visibleSyntheticContexts.Contains(value));
 
-    private void SetSyntheticSeriesVisible(MinerBotanistUtilityContextKind value, bool visible)
+    private void SetSyntheticSeriesVisible(AdvisorUtilityContextDescriptor value, bool visible)
     {
         if (visible)
             visibleSyntheticContexts.Add(value);
@@ -455,8 +455,23 @@ internal sealed class MinerBotanistAdvisorPanel
         if (ReferenceEquals(lastAdvice, advice))
             return;
         lastAdvice = advice;
-        selectedSolutionId = advice.Nomination?.Candidate.SolutionId
-            ?? advice.Frontier?.Pareto.Frontier.OrderBy(value => value.AcquisitionCostGil).FirstOrDefault()?.Candidate.SolutionId;
+        frontierPresentation = new(advice.Frontier!.Pareto);
+        SelectSolution(advice, advice.Nomination?.Candidate.SolutionId ?? frontierPresentation.First.Candidate.SolutionId);
+    }
+
+    private void SelectSolution(MinerBotanistReadOnlyAdvice advice, string solutionId)
+    {
+        if (frontierPresentation is null || !frontierPresentation.TryGet(solutionId, out var selected))
+            return;
+        selectedSolutionId = solutionId;
+        frontierWindow = frontierPresentation.WindowAround(solutionId);
+        frontierPlot = plotBuilder.Build(frontierWindow.ToPlotResult(), "squire-advisor-frontier-window");
+        frontierWarningIds = frontierWindow.Solutions
+            .Where(value => advice.AuthorityBySolutionId.TryGetValue(value.Candidate.SolutionId, out var authority) &&
+                !authority.AdvisorMayConsider)
+            .Select(value => value.Candidate.SolutionId)
+            .ToHashSet(StringComparer.Ordinal);
+        adjacentTradeoffs = BuildAdjacentTradeoffs(frontierPresentation, selected);
     }
 
     private void DrawDecisionSummary(MinerBotanistReadOnlyAdvice advice, EquipmentDecisionSolution selected)
@@ -483,20 +498,18 @@ internal sealed class MinerBotanistAdvisorPanel
             return;
         }
 #endif
-        var model = plotBuilder.Build(advice.Frontier!.Pareto, "squire-min-btn-frontier");
-        var warningIds = advice.AuthorityBySolutionId
-            .Where(value => !value.Value.AdvisorMayConsider)
-            .Select(value => value.Key)
-            .ToHashSet(StringComparer.Ordinal);
+        var model = frontierPlot!;
+        ImGui.TextColored(MarketMafiosoUiTheme.Muted,
+            $"Exact frontier window {frontierWindow!.Offset + 1:N0}-{frontierWindow.EndOffset:N0} of {frontierWindow.TotalCount:N0}");
         var interaction = new PlotInteractionState(
             new HashSet<string>(StringComparer.Ordinal) { selected.Candidate.SolutionId },
             advice.Nomination?.Candidate.SolutionId,
-            warningIds,
+            frontierWarningIds,
             new HashSet<string>(StringComparer.Ordinal));
         var result = plotContainer.Draw("SquireAdvisorFrontier", model.Spec, new Vector2(0, 285f), interaction);
         RegisterPlotControls(result.Controls);
         if (result.ClickedDatumId is { } clicked && model.SolutionsByDatumId.ContainsKey(clicked))
-            selectedSolutionId = clicked;
+            SelectSolution(advice, clicked);
         if (result.HoveredDatumId is { } hovered && model.SolutionsByDatumId.TryGetValue(hovered, out var solution))
         {
             ImGui.BeginTooltip();
@@ -518,7 +531,7 @@ internal sealed class MinerBotanistAdvisorPanel
             .ToArray();
         var adviceByContext = contexts.ToDictionary(
             value => value,
-            value => value == context ? syntheticReviewAdvice! : MinerBotanistAdvisorSyntheticReview.Build(value));
+            value => value == context ? syntheticReviewAdvice! : BuildSyntheticReview(value));
         var models = adviceByContext.ToDictionary(
             value => value.Key,
             value => plotBuilder.Build(value.Value.Frontier!.Pareto, $"squire-min-btn-{ContextSeriesId(value.Key)}"));
@@ -573,58 +586,79 @@ internal sealed class MinerBotanistAdvisorPanel
         }
     }
 
-    private static PlotOverlayStyle OverlayStyle(MinerBotanistUtilityContextKind value) => value switch
+    private static PlotOverlayStyle OverlayStyle(AdvisorUtilityContextDescriptor value) => value.Id switch
     {
-        MinerBotanistUtilityContextKind.LegendaryNodeGeneralYield =>
+        MinerBotanistUtilityProfile.LegendaryContextId =>
             new(new(.92f, .57f, .20f, .78f), PlotPointShape.Diamond),
-        MinerBotanistUtilityContextKind.CollectableEfficiency =>
+        MinerBotanistUtilityProfile.CollectableContextId =>
             new(new(.67f, .45f, .94f, .78f), PlotPointShape.Triangle),
         _ => new(new(.35f, .67f, .98f, .78f), PlotPointShape.Circle),
     };
 
-    private static string ContextSeriesId(MinerBotanistUtilityContextKind value) => value switch
+    private static string ContextSeriesId(AdvisorUtilityContextDescriptor value) => value.Id switch
     {
-        MinerBotanistUtilityContextKind.LegendaryNodeGeneralYield => "legendary",
-        MinerBotanistUtilityContextKind.CollectableEfficiency => "collectables",
+        MinerBotanistUtilityProfile.LegendaryContextId => "legendary",
+        MinerBotanistUtilityProfile.CollectableContextId => "collectables",
         _ => "ordinary",
     };
 
-    private static string ContextSeriesLabel(MinerBotanistUtilityContextKind value) => value switch
+    private static string ContextSeriesLabel(AdvisorUtilityContextDescriptor value) => value.Id switch
     {
-        MinerBotanistUtilityContextKind.LegendaryNodeGeneralYield => "Diamond Legendary",
-        MinerBotanistUtilityContextKind.CollectableEfficiency => "Triangle Collectables",
+        MinerBotanistUtilityProfile.LegendaryContextId => "Diamond Legendary",
+        MinerBotanistUtilityProfile.CollectableContextId => "Triangle Collectables",
         _ => "Circle Ordinary",
     };
 
-    private static MinerBotanistUtilityContextKind ContextFromSeriesId(string value) => value switch
+    private static AdvisorUtilityContextDescriptor ContextFromSeriesId(string value) => value switch
     {
-        "legendary" => MinerBotanistUtilityContextKind.LegendaryNodeGeneralYield,
-        "collectables" => MinerBotanistUtilityContextKind.CollectableEfficiency,
-        _ => MinerBotanistUtilityContextKind.OrdinaryResourceBenchmark,
+        "legendary" => GathererAdvisorStatFamily.LegendaryNodeContext,
+        "collectables" => GathererAdvisorStatFamily.CollectableContext,
+        _ => GathererAdvisorStatFamily.OrdinaryResourceContext,
     };
+
+    private static MinerBotanistReadOnlyAdvice BuildSyntheticReview(AdvisorUtilityContextDescriptor value) =>
+        MinerBotanistAdvisorSyntheticReview.Build(GathererAdvisorStatFamily.ContextKindFor(value.Id));
 #endif
 
     private void DrawSolutionRail(MinerBotanistReadOnlyAdvice advice, EquipmentDecisionSolution selected)
     {
         ImGui.TextColored(MarketMafiosoUiTheme.Muted, "FRONTIER SOLUTIONS");
+        var selectedIndex = frontierPresentation!.IndexOf(selected.Candidate.SolutionId);
+        if (ImGuiUi.Button("< Previous", selectedIndex > 0))
+            SelectSolution(advice, frontierPresentation.At(selectedIndex - 1).Candidate.SolutionId);
+        ImGui.SameLine();
+        if (ImGuiUi.Button("Next >", selectedIndex + 1 < frontierPresentation.Count))
+            SelectSolution(advice, frontierPresentation.At(selectedIndex + 1).Candidate.SolutionId);
+        ImGui.SameLine();
+        if (ImGuiUi.Button("Page <", frontierWindow!.HasPrevious))
+            SelectSolution(advice, frontierPresentation.At(selectedIndex - AdvisorFrontierPresentation.MaxFrameSolutionCount).Candidate.SolutionId);
+        ImGui.SameLine();
+        if (ImGuiUi.Button("Page >", frontierWindow.HasNext))
+            SelectSolution(advice, frontierPresentation.At(selectedIndex + AdvisorFrontierPresentation.MaxFrameSolutionCount).Candidate.SolutionId);
+        if (advice.Nomination is { } nomination && nomination.Candidate.SolutionId != selected.Candidate.SolutionId)
+        {
+            ImGui.SameLine();
+            if (ImGui.Button("Advisor pick"))
+                SelectSolution(advice, nomination.Candidate.SolutionId);
+        }
+        ImGui.SameLine();
+        ImGui.TextDisabled($"{selectedIndex + 1:N0} / {frontierPresentation.Count:N0}");
         if (!ImGui.BeginTable("##SquireAdvisorRail", 4,
                 ImGuiTableFlags.RowBg | ImGuiTableFlags.BordersInnerH | ImGuiTableFlags.SizingStretchProp,
-                new Vector2(0, Math.Min(150f, 30f + advice.Frontier!.Pareto.Frontier.Count * 25f))))
+                new Vector2(0, Math.Min(150f, 30f + frontierWindow.Solutions.Count * 25f))))
             return;
         ImGui.TableSetupColumn(selected.AcquisitionCostEstimate is null ? "Cost" : "Expected cost", ImGuiTableColumnFlags.WidthFixed, 105f);
         ImGui.TableSetupColumn("Utility", ImGuiTableColumnFlags.WidthFixed, 75f);
         ImGui.TableSetupColumn("Authority", ImGuiTableColumnFlags.WidthStretch);
         ImGui.TableSetupColumn("Burden", ImGuiTableColumnFlags.WidthFixed, 120f);
-        foreach (var solution in advice.Frontier.Pareto.Frontier
-                     .OrderBy(value => value.AcquisitionCostGil)
-                     .ThenBy(value => value.Utility.UtilityScore))
+        foreach (var solution in frontierWindow.Solutions)
         {
             ImGui.TableNextRow();
             ImGui.TableNextColumn();
             if (ImGui.Selectable($"{FormatCost(solution.AcquisitionCostGil)}##{solution.Candidate.SolutionId}",
                     solution.Candidate.SolutionId == selected.Candidate.SolutionId,
                     ImGuiSelectableFlags.SpanAllColumns))
-                selectedSolutionId = solution.Candidate.SolutionId;
+                SelectSolution(advice, solution.Candidate.SolutionId);
             ImGui.TableNextColumn();
             ImGui.TextUnformatted(solution.Utility.UtilityScore.ToString("N1"));
             ImGui.TableNextColumn();
@@ -637,19 +671,52 @@ internal sealed class MinerBotanistAdvisorPanel
         ImGui.EndTable();
     }
 
-    private static void DrawAdjacentTradeoffs(EquipmentParetoResult frontier, EquipmentDecisionSolution selected)
+    private void DrawAdjacentTradeoffs(MinerBotanistReadOnlyAdvice advice)
     {
-        var adjacent = frontier.Adjacencies
-            .Where(value => value.FromSolutionId == selected.Candidate.SolutionId)
-            .OrderBy(value => Math.Abs(value.CostDeltaGil))
-            .Take(2)
-            .ToArray();
-        if (adjacent.Length == 0)
+        if (adjacentTradeoffs.Count == 0)
             return;
         ImGui.TextColored(MarketMafiosoUiTheme.Muted, "ADJACENT TRADEOFFS");
-        foreach (var value in adjacent)
-            ImGui.BulletText($"{FormatSignedGil(value.CostDeltaGil)}, {value.UtilityDelta:+0.0;-0.0;0.0} utility, {value.StructuralDiff.ChangedPositionCount} slot change(s)");
+        foreach (var value in adjacentTradeoffs)
+        {
+            if (ImGui.SmallButton($"{value.Label}##{value.Solution.Candidate.SolutionId}"))
+                SelectSolution(advice, value.Solution.Candidate.SolutionId);
+            ImGui.SameLine();
+            ImGui.TextUnformatted($"{FormatSignedGil(value.CostDeltaGil)}, {value.UtilityDelta:+0.0;-0.0;0.0} utility, {value.ChangedPositionCount} slot change(s)");
+        }
     }
+
+    private static IReadOnlyList<AdvisorAdjacentTradeoff> BuildAdjacentTradeoffs(
+        AdvisorFrontierPresentation presentation,
+        EquipmentDecisionSolution selected)
+    {
+        var result = new List<AdvisorAdjacentTradeoff>(2);
+        if (presentation.Previous(selected.Candidate.SolutionId) is { } previous)
+            result.Add(Create(previous.AcquisitionCostGil < selected.AcquisitionCostGil ? "Cheaper" : "Previous variant", previous, selected));
+        if (presentation.Next(selected.Candidate.SolutionId) is { } next)
+            result.Add(Create(
+                next.Utility.UtilityScore > selected.Utility.UtilityScore ? "More capable" :
+                next.AcquisitionCostGil > selected.AcquisitionCostGil ? "Higher-cost tradeoff" : "Next variant",
+                next,
+                selected));
+        return result;
+
+        static AdvisorAdjacentTradeoff Create(
+            string label,
+            EquipmentDecisionSolution adjacent,
+            EquipmentDecisionSolution selected) => new(
+                label,
+                adjacent,
+                checked((long)adjacent.AcquisitionCostGil - (long)selected.AcquisitionCostGil),
+                adjacent.Utility.UtilityScore - selected.Utility.UtilityScore,
+                EquipmentParetoFrontierBuilder.Diff(selected.Candidate, adjacent.Candidate).ChangedPositionCount);
+    }
+
+    private sealed record AdvisorAdjacentTradeoff(
+        string Label,
+        EquipmentDecisionSolution Solution,
+        long CostDeltaGil,
+        double UtilityDelta,
+        int ChangedPositionCount);
 
     private static void DrawSelectedLoadout(MinerBotanistReadOnlyAdvice advice, EquipmentDecisionSolution selected)
     {
@@ -793,21 +860,10 @@ internal sealed class MinerBotanistAdvisorPanel
 
     /// <summary>Label for the context the solution was actually evaluated under — never the UI selector.</summary>
     private static string ProfileContextLabel(EquipmentUtilityEvaluation evaluation) =>
-        evaluation.Context.ContextId switch
-        {
-            MinerBotanistUtilityProfile.LegendaryContextId => ContextLabel(MinerBotanistUtilityContextKind.LegendaryNodeGeneralYield),
-            MinerBotanistUtilityProfile.CollectableContextId => ContextLabel(MinerBotanistUtilityContextKind.CollectableEfficiency),
-            MinerBotanistUtilityProfile.OrdinaryResourceBenchmarkContextId => ContextLabel(MinerBotanistUtilityContextKind.OrdinaryResourceBenchmark),
-            CrafterUtilityProfile.OrdinaryCraftBenchmarkContextId => "Ordinary crafts",
-            _ => evaluation.Context.ContextId,
-        };
+        AdvisorStatFamilies.Resolve(evaluation.Context.ClassJobId)?.ResolveContext(evaluation.Context.ContextId).Label
+        ?? evaluation.Context.ContextId;
 
-    private static string ContextLabel(MinerBotanistUtilityContextKind value) => value switch
-    {
-        MinerBotanistUtilityContextKind.LegendaryNodeGeneralYield => "Legendary nodes · general yield",
-        MinerBotanistUtilityContextKind.CollectableEfficiency => "Collectables · i730 efficiency",
-        _ => "Ordinary nodes · general yield",
-    };
+    private static string ContextLabel(AdvisorUtilityContextDescriptor value) => value.Label;
 
     private static Vector4 StatusColor(MinerBotanistAdvisorSessionStage stage) => stage switch
     {

@@ -317,9 +317,16 @@ public sealed class AgentBridgeHost : IDisposable
                 await dispatchOnFramework(() => retainerUi = provider.CaptureRetainerUi()).ConfigureAwait(false);
                 return AgentBridgeResponse.Ok("Already-visible rendered retainer UI captured without changing window focus or UI state.", retainerUi);
             case "get-advisor-state":
+                int? advisorFrontierOffset = null;
+                if (!string.IsNullOrWhiteSpace(request.Target))
+                {
+                    if (!int.TryParse(request.Target, out var parsedOffset) || parsedOffset < 0)
+                        return AgentBridgeResponse.Fail("Advisor frontier offset must be a non-negative integer.");
+                    advisorFrontierOffset = parsedOffset;
+                }
                 Squire.Outfitter.Utility.MinerBotanistAdvisorSessionState? advisorState = null;
                 await dispatchOnFramework(() => advisorState = provider.CaptureAdvisorStateUi()).ConfigureAwait(false);
-                return AgentBridgeResponse.Ok("Current player Advisor session state captured.", AgentBridgeAdvisorState.Create(advisorState!));
+                return AgentBridgeResponse.Ok("Current player Advisor session state captured.", AgentBridgeAdvisorState.Create(advisorState!, advisorFrontierOffset));
             case "get-inventory-struct-snapshot":
                 AgentBridgeInventoryStructSnapshot? inventoryStructSnapshot = null;
                 await dispatchOnFramework(() => inventoryStructSnapshot = provider.CaptureInventoryStructSnapshotUi()).ConfigureAwait(false);

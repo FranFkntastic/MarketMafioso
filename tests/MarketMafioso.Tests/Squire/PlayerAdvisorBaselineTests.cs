@@ -121,6 +121,21 @@ public sealed class PlayerAdvisorBaselineTests
     }
 
     [Fact]
+    public void Assemble_reports_fisher_as_terminally_unsupported_and_out_of_scope()
+    {
+        var result = PlayerAdvisorBaselineAssembler.Assemble(
+            Snapshot(),
+            Header with { ClassJobId = AdvisorStatFamilies.FisherClassJobId },
+            family: null,
+            new Dictionary<EquipmentStatSemantic, int>(),
+            []);
+
+        Assert.Equal(PlayerAdvisorBaselineStatus.Unsupported, result.Status);
+        Assert.Equal("Fisher is permanently unsupported and out of scope for Squire Outfitter.", result.Diagnostic);
+        Assert.DoesNotContain("yet", result.Diagnostic, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void Assemble_accepts_authoritative_empty_slot_as_zero_stat_baseline()
     {
         var result = PlayerAdvisorBaselineAssembler.Assemble(
@@ -291,6 +306,11 @@ public sealed class PlayerAdvisorBaselineTests
     [InlineData(EquipmentStatSemantic.CraftingPoints, PlayerAttribute.CraftingPoints)]
     [InlineData(EquipmentStatSemantic.DirectHit, PlayerAttribute.DirectHitRate)]
     [InlineData(EquipmentStatSemantic.MagicalDamage, PlayerAttribute.MagicDamage)]
+    [InlineData(EquipmentStatSemantic.Dexterity, PlayerAttribute.Dexterity)]
+    [InlineData(EquipmentStatSemantic.Vitality, PlayerAttribute.Vitality)]
+    [InlineData(EquipmentStatSemantic.PhysicalDamage, PlayerAttribute.PhysicalDamage)]
+    [InlineData(EquipmentStatSemantic.PhysicalDefense, PlayerAttribute.Defense)]
+    [InlineData(EquipmentStatSemantic.MagicalDefense, PlayerAttribute.MagicDefense)]
     public void Player_attribute_mapping_is_explicit(
         EquipmentStatSemantic semantic,
         PlayerAttribute expected)
