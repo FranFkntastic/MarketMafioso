@@ -207,6 +207,8 @@ public sealed class MinerBotanistUtilityProfileTests
 
         Assert.Equal(UpgradeAssessment.Unsupported, evaluation.Assessment);
         Assert.Contains(evaluation.Diagnostics, diagnostic => diagnostic.Contains("Fisher", StringComparison.Ordinal));
+        Assert.Contains(evaluation.Diagnostics, diagnostic => diagnostic.Contains("permanently unsupported", StringComparison.Ordinal));
+        Assert.Contains(evaluation.Diagnostics, diagnostic => diagnostic.Contains("out of scope", StringComparison.Ordinal));
     }
 
     private static MinerBotanistUtilityProfile Legendary(MinerBotanistUtilityStats baseline) => new(

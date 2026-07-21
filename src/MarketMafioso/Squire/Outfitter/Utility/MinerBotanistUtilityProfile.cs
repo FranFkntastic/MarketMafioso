@@ -95,7 +95,7 @@ public sealed class MinerBotanistUtilityProfile : IEquipmentExactSolverUtilityMo
             supportedLevel;
         var diagnostics = new List<string>();
         if (!Profile.SupportedClassJobIds.Contains(classJobId))
-            diagnostics.Add("The pilot supports Miner and Botanist only; Fisher requires a separate profile.");
+            diagnostics.Add("Squire supports Miner and Botanist gathering profiles; Fisher is permanently unsupported and out of scope.");
         if (!supportedLevel)
             diagnostics.Add(contextKind == MinerBotanistUtilityContextKind.OrdinaryResourceBenchmark
                 ? "The ordinary-node player profile supports levels 1 through 100."
