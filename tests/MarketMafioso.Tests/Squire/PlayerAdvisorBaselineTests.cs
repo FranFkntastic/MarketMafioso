@@ -320,6 +320,43 @@ public sealed class PlayerAdvisorBaselineTests
         Assert.False(DalamudPlayerAdvisorBaselineSource.TryMapPlayerAttribute(EquipmentStatSemantic.Unknown, out _));
     }
 
+    [Fact]
+    public void Item_contribution_mapping_uses_base_parameter_rows_not_player_attribute_indices()
+    {
+        var rows = new (uint RowId, string? Name)[]
+        {
+            (7_001, "Craftsmanship"),
+            (7_002, "Control"),
+            (7_003, "CP"),
+        };
+
+        var resolved = DalamudPlayerAdvisorBaselineSource.TryResolveBaseParamIds(
+            rows,
+            [EquipmentStatSemantic.Craftsmanship, EquipmentStatSemantic.Control, EquipmentStatSemantic.CraftingPoints],
+            out var ids,
+            out var diagnostic);
+
+        Assert.True(resolved, diagnostic);
+        Assert.Equal(7_001u, ids[EquipmentStatSemantic.Craftsmanship]);
+        Assert.Equal(7_002u, ids[EquipmentStatSemantic.Control]);
+        Assert.Equal(7_003u, ids[EquipmentStatSemantic.CraftingPoints]);
+        Assert.NotEqual((uint)PlayerAttribute.CraftingPoints, ids[EquipmentStatSemantic.CraftingPoints]);
+    }
+
+    [Fact]
+    public void Item_contribution_mapping_rejects_ambiguous_base_parameter_rows()
+    {
+        var resolved = DalamudPlayerAdvisorBaselineSource.TryResolveBaseParamIds(
+            [(1u, "Control"), (2u, "Control")],
+            [EquipmentStatSemantic.Control],
+            out var ids,
+            out var diagnostic);
+
+        Assert.False(resolved);
+        Assert.Empty(ids);
+        Assert.Contains("multiple rows", diagnostic, StringComparison.Ordinal);
+    }
+
     private static IReadOnlyDictionary<EquipmentStatSemantic, int> Totals(int gathering, int perception, int gp) =>
         new Dictionary<EquipmentStatSemantic, int>
         {

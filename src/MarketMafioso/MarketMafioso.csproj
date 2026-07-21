@@ -16,6 +16,7 @@
     <Punchline>Workshop logistics, gear planning and cleanup, and inventory history.</Punchline>
     <RepoUrl>https://github.com/FranFkntastic/MarketMafioso</RepoUrl>
     <FranthropyDalamudProject Condition="'$(FranthropyDalamudProject)' == ''">..\..\..\Franthropy\src\Franthropy.Dalamud\Franthropy.Dalamud.csproj</FranthropyDalamudProject>
+    <CraftArchitectCoreProject Condition="'$(CraftArchitectCoreProject)' == ''">..\..\..\FFXIV Craft Architect C# Edition\src\FFXIV Craft Architect.Core\FFXIV Craft Architect.Core.csproj</CraftArchitectCoreProject>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(Configuration)' == 'Debug'">
@@ -39,9 +40,14 @@
           Condition="!Exists('$(FranthropyDalamudProject)')">
     <Error Text="Franthropy.Dalamud was not found at '$(FranthropyDalamudProject)'. Clone Franthropy beside MarketMafioso or set -p:FranthropyDalamudProject=&quot;path\to\Franthropy.Dalamud.csproj&quot;." />
   </Target>
+  <Target Name="ValidateCraftArchitectCoreProject" BeforeTargets="PrepareForBuild"
+          Condition="!Exists('$(CraftArchitectCoreProject)')">
+    <Error Text="Craft Architect Core was not found at '$(CraftArchitectCoreProject)'. Check out the sibling repository or set -p:CraftArchitectCoreProject=&quot;path/to/FFXIV Craft Architect.Core.csproj&quot;." />
+  </Target>
 
   <ItemGroup>
     <ProjectReference Include="$(FranthropyDalamudProject)" />
+    <ProjectReference Include="$(CraftArchitectCoreProject)" />
     <ProjectReference Include="..\MarketMafioso.Contracts\MarketMafioso.Contracts.csproj" />
   </ItemGroup>
 

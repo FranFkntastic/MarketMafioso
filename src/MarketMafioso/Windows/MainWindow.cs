@@ -201,7 +201,7 @@ public class MainWindow : Window, IDisposable
             config.Save();
 
         squireSnapshotSource = new DalamudCharacterEquipmentSnapshotSource(playerState, dataManager, log);
-        var playerAdvisorBaselineSource = new DalamudPlayerAdvisorBaselineSource(squireSnapshotSource, playerState);
+        var playerAdvisorBaselineSource = new DalamudPlayerAdvisorBaselineSource(squireSnapshotSource, playerState, dataManager);
         this.dataManager = dataManager;
         renderedDefinitionLookup = new LuminaRenderedEquipmentDefinitionLookup(dataManager);
         var squireCapabilities = new DalamudSquireDispositionCapabilitySource();

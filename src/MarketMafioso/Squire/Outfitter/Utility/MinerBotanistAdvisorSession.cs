@@ -9,6 +9,7 @@ using Franthropy.Dalamud.Equipment;
 using MarketMafioso.MarketAcquisition;
 using MarketMafioso.Squire.Observation;
 using MarketMafioso.Squire.Outfitter.Acquisition;
+using MarketMafioso.Squire.Outfitter.Crafting;
 using MarketMafioso.Squire.Outfitter.MarketEvidence;
 
 namespace MarketMafioso.Squire.Outfitter.Utility;
@@ -60,6 +61,7 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
     private readonly IPlayerAdvisorBaselineSource baselineSource;
     private readonly MinerBotanistAdvisorCatalog catalog;
     private readonly OutfitterMarketEvidenceDiscoveryService marketDiscovery;
+    private readonly OutfitterAdvisorCraftDiscovery? craftDiscovery;
 #if DEBUG
     private readonly string solverReplayPath;
 #endif
@@ -74,6 +76,11 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
     private IReadOnlyList<MinerBotanistOwnedItemEvidence>? ownedItemsEvidence;
     private bool ownedInventoryCoverageComplete;
     private OutfitterMarketEvidenceBook? pendingCurrentEvidence;
+    private OutfitterMarketEvidenceBook? pendingSolvingEvidence;
+    private OutfitterAdvisorCraftDiscoveryOperation? craftDiscoveryOperation;
+    private OutfitterAdvisorCraftDiscoveryResult? pendingCraftPreparation;
+    private CraftProgressSnapshot? craftProgress;
+    private string? pendingCraftDiagnostic;
     private PlayerAdvisorAuthorityFingerprint? advicePlayerFingerprint;
     private WorkbenchValidationRequest? workbenchValidationRequest;
     private OutfitterWorkbenchPlayerValidation? completedWorkbenchValidation;
@@ -88,11 +95,22 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
         IDataManager dataManager,
         IMarketAcquisitionListingSource listingSource,
         string evidencePath)
+        : this(baselineSource, dataManager, listingSource, evidencePath, null)
+    {
+    }
+
+    internal MinerBotanistAdvisorSession(
+        IPlayerAdvisorBaselineSource baselineSource,
+        IDataManager dataManager,
+        IMarketAcquisitionListingSource listingSource,
+        string evidencePath,
+        OutfitterAdvisorCraftDiscovery? craftDiscovery)
     {
         this.baselineSource = baselineSource ?? throw new ArgumentNullException(nameof(baselineSource));
         ArgumentNullException.ThrowIfNull(dataManager);
         ArgumentNullException.ThrowIfNull(listingSource);
         ArgumentException.ThrowIfNullOrWhiteSpace(evidencePath);
+        this.craftDiscovery = craftDiscovery;
         catalog = new(dataManager);
         Directory.CreateDirectory(Path.GetDirectoryName(evidencePath)!);
 #if DEBUG
@@ -174,7 +192,10 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
         cancellation?.Cancel();
         sessionGeneration++;
         solving.Invalidate();
+        InvalidateCraftDiscovery();
         pendingCurrentEvidence = null;
+        pendingSolvingEvidence = null;
+        pendingCraftDiagnostic = null;
         advicePlayerFingerprint = null;
         workbenchValidationRequest = null;
         completedWorkbenchValidation = null;
@@ -334,6 +355,11 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
 
     private void TickMarket()
     {
+        if (craftDiscoveryOperation is not null)
+        {
+            TickCraftDiscovery();
+            return;
+        }
         if (solving.IsActive)
         {
             TickSolving();
@@ -358,20 +384,199 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
         var result = discoveryTask.GetAwaiter().GetResult();
         var evidence = result.WorkingBook;
         var currentEvidence = MinerBotanistAdvisorSessionEvidencePolicy.SelectCurrent(result, discoveryRequest!);
+        discoveryTask = null;
+        discoveryRequest = null;
+        if (pendingCraftPreparation is { } preparation)
+        {
+            if (currentEvidence is null)
+            {
+                pendingCraftPreparation = null;
+                StartSolving(
+                    [],
+                    "Craft coverage: terminal-material evidence did not publish completely; ordinary advice uses the prior equipment evidence generation.");
+                return;
+            }
+
+            var revalidatedBaseline = baselineSource.Capture();
+            if (revalidatedBaseline.Status != PlayerAdvisorBaselineStatus.Complete ||
+                advicePlayerFingerprint is not { } capturedPlayer ||
+                PlayerAdvisorAuthorityFingerprint.Capture(revalidatedBaseline) != capturedPlayer)
+            {
+                CancelCore(
+                    MinerBotanistAdvisorSessionStage.Cancelled,
+                    "The player baseline changed while terminal-material evidence was publishing; refresh before using Advisor evidence.");
+                return;
+            }
+
+            baseline = revalidatedBaseline;
+            pendingCurrentEvidence = currentEvidence;
+            pendingSolvingEvidence = currentEvidence;
+            StartCraftFinalization(preparation, currentEvidence);
+            return;
+        }
+
         var solvingEvidence = currentEvidence ?? evidence;
+        var capturedBaseline = baseline!;
+        var capturedOffers = offers!;
+        var capturedFamily = resolvedFamily!;
+        advicePlayerFingerprint = PlayerAdvisorAuthorityFingerprint.Capture(capturedBaseline);
+        pendingCurrentEvidence = currentEvidence;
+        pendingSolvingEvidence = solvingEvidence;
+
+        if (craftDiscovery is not null && currentEvidence is not null)
+        {
+            var craftGeneration = sessionGeneration;
+            Volatile.Write(ref craftProgress, null);
+            craftDiscoveryOperation = craftDiscovery.StartPreparation(
+                craftGeneration,
+                capturedBaseline,
+                capturedOffers,
+                capturedFamily,
+                progress => Volatile.Write(ref craftProgress, new(craftGeneration, progress)),
+                cancellation!.Token);
+            State = State with
+            {
+                Message = $"Market evidence is published; resolving exact NQ craft graphs for {craftDiscoveryOperation.RequestedCandidateCount:N0}/{craftDiscoveryOperation.EligibleCandidateCount:N0} eligible catalog items off the framework tick. Cancel remains available.",
+                Completed = 0,
+                Total = craftDiscoveryOperation.RequestedCandidateCount,
+                UpdatedAtUtc = DateTimeOffset.UtcNow,
+            };
+            return;
+        }
+
+        StartSolving(
+            [],
+            craftDiscovery is null
+                ? "Craft coverage: process-local provider unavailable; ordinary advice remains complete."
+                : "Craft coverage: no current published market evidence; no craft claim was admitted.");
+    }
+
+    private void TickCraftDiscovery()
+    {
+        var operation = craftDiscoveryOperation!;
+        var poll = operation.Poll(sessionGeneration);
+        if (poll.Status == OutfitterAdvisorCraftDiscoveryPollStatus.Pending)
+        {
+            var progress = Volatile.Read(ref craftProgress);
+            State = State with
+            {
+                Message = progress is { Generation: var generation, Progress: var value } && generation == sessionGeneration
+                    ? pendingCraftPreparation is null
+                        ? $"Resolving exact NQ craft graphs {value.Completed:N0}/{value.Total:N0}: {value.UnavailableCount:N0} unavailable. Cancel remains available."
+                        : $"Constructing passive NQ craft offers {value.Completed:N0}/{value.Total:N0}: {value.OfferReadyCount:N0} ready, {value.DisplayOnlyCount:N0} display-only, {value.UnavailableCount:N0} unavailable. Cancel remains available."
+                    : $"Preparing bounded passive craft evaluation for {operation.RequestedCandidateCount:N0} catalog items off the framework tick. Cancel remains available.",
+                Completed = progress?.Progress.Completed ?? 0,
+                Total = operation.RequestedCandidateCount,
+                UpdatedAtUtc = DateTimeOffset.UtcNow,
+            };
+            return;
+        }
+
+        craftDiscoveryOperation = null;
+        Volatile.Write(ref craftProgress, null);
+        switch (poll.Status)
+        {
+            case OutfitterAdvisorCraftDiscoveryPollStatus.Stale:
+                pendingSolvingEvidence = null;
+                pendingCurrentEvidence = null;
+                return;
+            case OutfitterAdvisorCraftDiscoveryPollStatus.Cancelled:
+                CancelCore(MinerBotanistAdvisorSessionStage.Cancelled, "Passive craft evaluation was cancelled.");
+                return;
+            case OutfitterAdvisorCraftDiscoveryPollStatus.Faulted:
+                StartSolving(
+                    [],
+                    $"Craft coverage: provider phase failed safely ({poll.Exception?.Message ?? "unknown failure"}); ordinary advice remains available.");
+                return;
+            case OutfitterAdvisorCraftDiscoveryPollStatus.Completed:
+                if (pendingCraftPreparation is null)
+                    CompleteCraftPreparation(poll.Result!);
+                else
+                {
+                    pendingCraftPreparation = null;
+                    StartSolving(poll.Result!.Offers, poll.Result.Diagnostic);
+                }
+                return;
+        }
+    }
+
+    private void CompleteCraftPreparation(OutfitterAdvisorCraftDiscoveryResult preparation)
+    {
+        pendingCraftPreparation = preparation;
+        if (preparation.Preparations.Count == 0)
+        {
+            pendingCraftPreparation = null;
+            StartSolving([], preparation.Diagnostic);
+            return;
+        }
+
+        if (preparation.RequiredMaterialItemIds.Count == 0)
+        {
+            StartCraftFinalization(preparation, pendingCurrentEvidence!);
+            return;
+        }
+
+        var itemIds = offers!.MarketItemIds
+            .Concat(preparation.RequiredMaterialItemIds)
+            .Where(itemId => itemId != 0)
+            .Distinct()
+            .Order()
+            .ToArray();
+        discoveryRequest = new(
+            "universalis",
+            Region,
+            itemIds,
+            ListingLimit: 100,
+            CoverageMode: OutfitterMarketCoverageMode.ExhaustiveWithinScope,
+            MaxConcurrency: 4);
+        discoveryTask = marketDiscovery.DiscoverAsync(discoveryRequest, cancellation!.Token);
+        State = State with
+        {
+            Message = $"Exact craft graphs require {preparation.RequiredMaterialItemIds.Count:N0} terminal material item(s); publishing one bounded equipment-plus-material evidence generation. Cancel remains available.",
+            Completed = 0,
+            Total = itemIds.Length,
+            UpdatedAtUtc = DateTimeOffset.UtcNow,
+        };
+    }
+
+    private void StartCraftFinalization(
+        OutfitterAdvisorCraftDiscoveryResult preparation,
+        OutfitterMarketEvidenceBook evidence)
+    {
+        var craftGeneration = sessionGeneration;
+        Volatile.Write(ref craftProgress, null);
+        craftDiscoveryOperation = craftDiscovery!.StartFinalization(
+            craftGeneration,
+            baseline!,
+            evidence,
+            preparation,
+            resolvedFamily!,
+            progress => Volatile.Write(ref craftProgress, new(craftGeneration, progress)),
+            cancellation!.Token);
+        State = State with
+        {
+            Message = $"Material evidence is published; constructing {preparation.Preparations.Count:N0} passive NQ craft offer(s) off the framework tick. Cancel remains available.",
+            Completed = 0,
+            Total = preparation.Preparations.Count,
+            UpdatedAtUtc = DateTimeOffset.UtcNow,
+        };
+    }
+
+    private void StartSolving(
+        IReadOnlyList<OutfitterCraftAdvisorOffer> craftOffers,
+        string craftDiagnostic)
+    {
         var capturedBaseline = baseline!;
         var capturedOffers = offers!;
         var capturedFamily = resolvedFamily!;
         var capturedOwnedItems = ownedItemsEvidence;
         var capturedOwnedCoverageComplete = ownedInventoryCoverageComplete;
         var capturedContext = State.Context;
-        advicePlayerFingerprint = PlayerAdvisorAuthorityFingerprint.Capture(capturedBaseline);
-        pendingCurrentEvidence = currentEvidence;
+        var solvingEvidence = pendingSolvingEvidence!;
         var capturedGeneration = sessionGeneration;
         solvingStartedAtUtc = DateTimeOffset.UtcNow;
+        pendingCraftDiagnostic = craftDiagnostic;
         Volatile.Write(ref solverProgress, null);
-        discoveryTask = null;
-        discoveryRequest = null;
         solving.Start(
             sessionGeneration,
             token => advisor.Build(
@@ -385,17 +590,21 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
                 token,
                 progress => Volatile.Write(ref solverProgress, new(capturedGeneration, progress)),
 #if DEBUG
-                replay => AdvisorSolverReplayFileStore.Write(solverReplayPath, replay)
+                replay => AdvisorSolverReplayFileStore.Write(solverReplayPath, replay),
 #else
-                null
+                null,
 #endif
-                , capturedOwnedCoverageComplete),
+                capturedOwnedCoverageComplete,
+                craftOffers,
+                capturedOffers.MarketItemIds.ToHashSet()),
             cancellation!.Token);
+        pendingSolvingEvidence = null;
         State = State with
         {
-            Message = $"Market discovery is complete ({evidence.Coverage.QueriedItemCount:N0}/{evidence.Coverage.CatalogItemCount:N0}); solving the exact frontier off the framework tick. Cancel remains available.",
-            Completed = evidence.Coverage.QueriedItemCount,
-            Total = evidence.Coverage.CatalogItemCount,
+            Message = $"{craftDiagnostic} Solving the exact frontier off the framework tick. Cancel remains available.",
+            CoverageLabel = $"{State.CoverageLabel} {craftDiagnostic}",
+            Completed = craftOffers.Count,
+            Total = craftOffers.Count,
             UpdatedAtUtc = DateTimeOffset.UtcNow,
         };
     }
@@ -437,17 +646,20 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
         var retainPrevious = advice.Status != MinerBotanistAdvisorStatus.Complete && State.Advice is { Frontier: not null };
         if (advice.Status == MinerBotanistAdvisorStatus.Complete)
             CurrentEvidence = pendingCurrentEvidence;
+        var craftDiagnostic = pendingCraftDiagnostic;
         State = State with
         {
             Stage = stage,
             Message = retainPrevious
-                ? $"Refresh abstained: {advice.Diagnostic} The last valid frontier remains visible."
-                : advice.Diagnostic,
+                ? $"Refresh abstained: {advice.Diagnostic} The last valid frontier remains visible. {craftDiagnostic}"
+                : string.IsNullOrWhiteSpace(craftDiagnostic) ? advice.Diagnostic : $"{advice.Diagnostic} {craftDiagnostic}",
             Advice = retainPrevious ? State.Advice : advice,
             AdviceIsRetained = retainPrevious,
             UpdatedAtUtc = DateTimeOffset.UtcNow,
         };
         pendingCurrentEvidence = null;
+        pendingCraftDiagnostic = null;
+        pendingCraftPreparation = null;
         Volatile.Write(ref solverProgress, null);
         DisposeCancellation();
     }
@@ -513,7 +725,11 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
         cancellation?.Cancel();
         sessionGeneration++;
         solving.Invalidate();
+        InvalidateCraftDiscovery();
         pendingCurrentEvidence = null;
+        pendingSolvingEvidence = null;
+        pendingCraftDiagnostic = null;
+        pendingCraftPreparation = null;
         workbenchValidationRequest = null;
         completedWorkbenchValidation = null;
         completedValidationOwnedInstances = [];
@@ -531,17 +747,29 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
     {
         discoveryTask = null;
         discoveryRequest = null;
+        InvalidateCraftDiscovery();
         baseline = null;
         resolvedFamily = null;
         offers = null;
         ownedItemsEvidence = null;
         ownedInventoryCoverageComplete = false;
         pendingCurrentEvidence = null;
+        pendingSolvingEvidence = null;
+        pendingCraftDiagnostic = null;
         advicePlayerFingerprint = null;
         workbenchValidationRequest = null;
         completedWorkbenchValidation = null;
         completedValidationOwnedInstances = [];
         Volatile.Write(ref solverProgress, null);
+        Volatile.Write(ref craftProgress, null);
+    }
+
+    private void InvalidateCraftDiscovery()
+    {
+        craftDiscoveryOperation?.Invalidate();
+        craftDiscoveryOperation = null;
+        pendingCraftPreparation = null;
+        Volatile.Write(ref craftProgress, null);
     }
 
     private void DisposeCancellation()
@@ -601,4 +829,5 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
         IReadOnlyList<EquipmentInstanceFingerprint> RequiredOwnedInstances);
 
     private sealed record SolverProgressSnapshot(long Generation, EquipmentExactFrontierProgress Progress);
+    private sealed record CraftProgressSnapshot(long Generation, OutfitterAdvisorCraftDiscoveryProgress Progress);
 }

@@ -6,6 +6,7 @@ using Dalamud.Plugin.Services;
 using FFXIVClientStructs.FFXIV.Client.Game;
 using Franthropy.Dalamud.Characters;
 using Franthropy.Dalamud.Equipment;
+using Lumina.Excel.Sheets;
 using MarketMafioso.Squire.Outfitter.Utility;
 
 namespace MarketMafioso.Squire.Observation;
@@ -18,13 +19,16 @@ public sealed unsafe class DalamudPlayerAdvisorBaselineSource : IPlayerAdvisorBa
 {
     private readonly ICharacterEquipmentSnapshotSource snapshotSource;
     private readonly IPlayerState playerState;
+    private readonly IDataManager dataManager;
 
     public DalamudPlayerAdvisorBaselineSource(
         ICharacterEquipmentSnapshotSource snapshotSource,
-        IPlayerState playerState)
+        IPlayerState playerState,
+        IDataManager dataManager)
     {
         this.snapshotSource = snapshotSource;
         this.playerState = playerState;
+        this.dataManager = dataManager;
     }
 
     public PlayerAdvisorBaseline Capture()
@@ -55,7 +59,6 @@ public sealed unsafe class DalamudPlayerAdvisorBaselineSource : IPlayerAdvisorBa
                     new Dictionary<EquipmentStatSemantic, int>(),
                     []);
 
-            var attributes = new Dictionary<EquipmentStatSemantic, PlayerAttribute>();
             var totals = new Dictionary<EquipmentStatSemantic, int>();
             foreach (var semantic in family.RelevantSemantics)
             {
@@ -72,9 +75,20 @@ public sealed unsafe class DalamudPlayerAdvisorBaselineSource : IPlayerAdvisorBa
                         $"PlayerState returned an invalid negative {semantic} total.",
                         snapshot,
                         before);
-                attributes.Add(semantic, attribute);
                 totals.Add(semantic, value);
             }
+
+            var baseParamSheet = dataManager.GetExcelSheet<BaseParam>();
+            if (baseParamSheet is null || !TryResolveBaseParamIds(
+                    baseParamSheet.Select(value => (value.RowId, (string?)value.Name.ToString())),
+                    family.RelevantSemantics,
+                    out var baseParamIds,
+                    out diagnostic))
+                return PlayerAdvisorBaselineAssembler.Failure(
+                    PlayerAdvisorBaselineStatus.Unavailable,
+                    baseParamSheet is null ? "The BaseParam sheet is unavailable." : diagnostic,
+                    snapshot,
+                    before);
 
             var manager = InventoryManager.Instance();
             if (manager == null)
@@ -121,11 +135,11 @@ public sealed unsafe class DalamudPlayerAdvisorBaselineSource : IPlayerAdvisorBa
                         snapshot,
                         before);
                 var contributions = new Dictionary<EquipmentStatSemantic, int>();
-                EquipmentStatProfile? definitionProfile = null;
+                var definitionProfile = snapshot.Definitions.TryGetValue(itemId, out var definition)
+                    ? definition.ResolveStatProfile(item->IsHighQuality() ? EquipmentQuality.High : EquipmentQuality.Normal)
+                    : null;
                 foreach (var semantic in family.RelevantSemantics)
                 {
-                    if (definitionProfile is null && snapshot.Definitions.TryGetValue(itemId, out var definition))
-                        definitionProfile = definition.ResolveStatProfile(item->IsHighQuality() ? EquipmentQuality.High : EquipmentQuality.Normal);
                     if (definitionProfile is not null && family.TryGetNonParameterDefinitionValue(definitionProfile, semantic, out var scalar))
                     {
                         contributions.Add(semantic, scalar);
@@ -140,14 +154,20 @@ public sealed unsafe class DalamudPlayerAdvisorBaselineSource : IPlayerAdvisorBa
                             snapshot,
                             before);
                     }
-                    var parameterValue = InventoryItem.GetParameterValue(
-                        (uint)attributes[semantic],
+                    var value = InventoryItem.GetParameterValue(
+                        baseParamIds[semantic],
                         item,
                         includeMateria: true,
                         checkHQ: true,
                         checkPvPCharacterFlag: false,
                         checkPvPItemFlag: false);
-                    contributions.Add(semantic, checked((int)parameterValue));
+                    if (value > int.MaxValue)
+                        return PlayerAdvisorBaselineAssembler.Failure(
+                            PlayerAdvisorBaselineStatus.Unavailable,
+                            $"Equipped index {position.EquippedIndex} ({position.PositionKey}) returned an invalid {semantic} contribution.",
+                            snapshot,
+                            before);
+                    contributions.Add(semantic, (int)value);
                 }
 
                 var materiaIds = new List<uint>(5);
@@ -178,7 +198,8 @@ public sealed unsafe class DalamudPlayerAdvisorBaselineSource : IPlayerAdvisorBa
                     snapshot,
                     before);
 
-            return PlayerAdvisorBaselineAssembler.Assemble(snapshot, before, family, totals, equipped);
+            var trustedCapture = PlayerAdvisorTrustedCapture.Complete(Guid.NewGuid(), DateTimeOffset.UtcNow);
+            return PlayerAdvisorBaselineAssembler.Assemble(snapshot, before, family, totals, equipped, trustedCapture);
         }
         catch (Exception ex)
         {
@@ -227,7 +248,37 @@ public sealed unsafe class DalamudPlayerAdvisorBaselineSource : IPlayerAdvisorBa
             EquipmentStatSemantic.Craftsmanship or EquipmentStatSemantic.Control or EquipmentStatSemantic.CraftingPoints or
             EquipmentStatSemantic.Gathering or EquipmentStatSemantic.Perception or EquipmentStatSemantic.GatheringPoints or
             EquipmentStatSemantic.PhysicalDamage or EquipmentStatSemantic.MagicalDamage or EquipmentStatSemantic.PhysicalDefense or
-            EquipmentStatSemantic.MagicalDefense or EquipmentStatSemantic.PiercingResistance;
+             EquipmentStatSemantic.MagicalDefense or EquipmentStatSemantic.PiercingResistance;
+    }
+
+    internal static bool TryResolveBaseParamIds(
+        IEnumerable<(uint RowId, string? Name)> rows,
+        IEnumerable<EquipmentStatSemantic> requiredSemantics,
+        out IReadOnlyDictionary<EquipmentStatSemantic, uint> ids,
+        out string diagnostic)
+    {
+        var bySemantic = rows
+            .Where(value => value.RowId != 0)
+            .Select(value => (value.RowId, Semantic: DalamudCharacterEquipmentSnapshotSource.MapStatSemantic(value.RowId, value.Name)))
+            .Where(value => value.Semantic != EquipmentStatSemantic.Unknown)
+            .GroupBy(value => value.Semantic)
+            .ToDictionary(group => group.Key, group => group.Select(value => value.RowId).Distinct().ToArray());
+        var resolved = new Dictionary<EquipmentStatSemantic, uint>();
+        foreach (var semantic in requiredSemantics.Distinct())
+        {
+            if (!bySemantic.TryGetValue(semantic, out var matches) || matches.Length != 1)
+            {
+                ids = new Dictionary<EquipmentStatSemantic, uint>();
+                diagnostic = matches is { Length: > 1 }
+                    ? $"BaseParam has multiple rows for advisor semantic {semantic}."
+                    : $"BaseParam has no row for advisor semantic {semantic}.";
+                return false;
+            }
+            resolved.Add(semantic, matches[0]);
+        }
+        ids = resolved;
+        diagnostic = string.Empty;
+        return true;
     }
 
     private bool TryCaptureHeader(out PlayerAdvisorCaptureHeader? header, out string diagnostic)

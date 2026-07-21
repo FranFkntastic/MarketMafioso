@@ -1,7 +1,10 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Globalization;
 using System.Linq;
+using System.Security.Cryptography;
+using System.Text;
 using Dalamud.Plugin.Services;
 using Lumina.Excel.Sheets;
 
@@ -27,22 +30,64 @@ public sealed record OutfitterGilVendorOffer(
 /// </summary>
 public sealed class OutfitterGilVendorCatalog
 {
-    private readonly IDataManager dataManager;
+    private readonly IDataManager? dataManager;
     private IReadOnlyDictionary<uint, IReadOnlyList<OutfitterGilVendorOffer>>? offersByItemId;
+    private string? catalogVersion;
+    private OutfitterGilVendorCatalogReference? catalogReference;
 
     public OutfitterGilVendorCatalog(IDataManager dataManager)
     {
         this.dataManager = dataManager ?? throw new ArgumentNullException(nameof(dataManager));
     }
 
+    private OutfitterGilVendorCatalog(IReadOnlyList<OutfitterGilVendorOffer> offers)
+    {
+        offersByItemId = Normalize(offers);
+        catalogVersion = ComputeCatalogVersion(offersByItemId);
+    }
+
+    internal static OutfitterGilVendorCatalog FromTrustedSnapshot(
+        IEnumerable<OutfitterGilVendorOffer> offers)
+    {
+        ArgumentNullException.ThrowIfNull(offers);
+        return new(offers.ToArray());
+    }
+
+    internal string CatalogVersion
+    {
+        get
+        {
+            EnsureBuilt();
+            return catalogVersion!;
+        }
+    }
+
+    internal OutfitterGilVendorCatalogReference CaptureReference()
+    {
+        EnsureBuilt();
+        return catalogReference ??= OutfitterGilVendorCatalogReference.FromCatalog(
+            catalogVersion!,
+            offersByItemId!.Values.SelectMany(offers => offers));
+    }
+
     public IReadOnlyList<OutfitterGilVendorOffer> FindOffers(uint itemId)
     {
-        offersByItemId ??= Build();
-        return offersByItemId.TryGetValue(itemId, out var offers) ? offers : [];
+        EnsureBuilt();
+        return offersByItemId!.TryGetValue(itemId, out var offers) ? offers : [];
+    }
+
+    private void EnsureBuilt()
+    {
+        if (offersByItemId is not null)
+            return;
+        offersByItemId = Build();
+        catalogVersion = ComputeCatalogVersion(offersByItemId);
     }
 
     private IReadOnlyDictionary<uint, IReadOnlyList<OutfitterGilVendorOffer>> Build()
     {
+        if (dataManager is null)
+            throw new InvalidOperationException("The gil-vendor catalog has no game-data source.");
         var shops = dataManager.GetExcelSheet<GilShop>()
             ?? throw new InvalidOperationException("GilShop sheet unavailable.");
         var residents = dataManager.GetExcelSheet<ENpcResident>()
@@ -112,6 +157,31 @@ public sealed class OutfitterGilVendorCatalog
             }
         }
 
+        return Normalize(offers);
+    }
+
+    private static IReadOnlyDictionary<uint, IReadOnlyList<OutfitterGilVendorOffer>> Normalize(
+        IReadOnlyList<OutfitterGilVendorOffer> offers)
+    {
+        if (offers.Any(offer => offer is null ||
+            offer.ItemId == 0 ||
+            offer.ShopId == 0 ||
+            offer.VendorId == 0 ||
+            offer.TerritoryId == 0 ||
+            offer.UnitPriceGil == 0 ||
+            string.IsNullOrWhiteSpace(offer.VendorName) ||
+            string.IsNullOrWhiteSpace(offer.TerritoryName)))
+        {
+            throw new InvalidOperationException("Gil-vendor snapshots require complete concrete vendor offers.");
+        }
+
+        var conflicts = offers
+            .GroupBy(offer => (offer.ItemId, offer.ShopId, offer.VendorId, offer.TerritoryId))
+            .Where(group => group.Distinct().Count() != 1)
+            .ToArray();
+        if (conflicts.Length != 0)
+            throw new InvalidOperationException("One physical gil-vendor source cannot carry conflicting offer evidence.");
+
         return offers
             .GroupBy(offer => offer.ItemId)
             .ToDictionary(
@@ -123,6 +193,34 @@ public sealed class OutfitterGilVendorCatalog
                     .DistinctBy(offer => (offer.ShopId, offer.VendorId, offer.TerritoryId))
                     .ToArray());
     }
+
+    private static string ComputeCatalogVersion(
+        IReadOnlyDictionary<uint, IReadOnlyList<OutfitterGilVendorOffer>> offersByItem)
+    {
+        var canonical = new StringBuilder("marketmafioso-gil-vendor-catalog/v1");
+        foreach (var offer in offersByItem.Values
+                     .SelectMany(offers => offers)
+                     .OrderBy(offer => offer.ItemId)
+                     .ThenBy(offer => offer.ShopId)
+                     .ThenBy(offer => offer.VendorId)
+                     .ThenBy(offer => offer.TerritoryId))
+        {
+            canonical.Append('|').Append(offer.ItemId.ToString(CultureInfo.InvariantCulture))
+                .Append('|').Append(offer.ShopId.ToString(CultureInfo.InvariantCulture))
+                .Append('|').Append(offer.VendorId.ToString(CultureInfo.InvariantCulture))
+                .Append('|').Append(offer.TerritoryId.ToString(CultureInfo.InvariantCulture))
+                .Append('|').Append(offer.UnitPriceGil.ToString(CultureInfo.InvariantCulture));
+            AppendCanonical(canonical, offer.VendorName);
+            AppendCanonical(canonical, offer.TerritoryName);
+        }
+        return $"sha256:{Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical.ToString())))}";
+    }
+
+    private static void AppendCanonical(StringBuilder canonical, string value) =>
+        canonical.Append('|')
+            .Append(value.Length.ToString(CultureInfo.InvariantCulture))
+            .Append(':')
+            .Append(value);
 
     private static IEnumerable<uint> EnumerateGilShopIds(ENpcBase npc)
     {
@@ -148,4 +246,36 @@ public sealed class OutfitterGilVendorCatalog
             }
         }
     }
+}
+
+internal sealed record OutfitterGilVendorCatalogReference
+{
+    private OutfitterGilVendorCatalogReference(
+        string catalogVersion,
+        ImmutableArray<OutfitterGilVendorOffer> offers)
+    {
+        CatalogVersion = catalogVersion;
+        Offers = offers;
+    }
+
+    public string CatalogVersion { get; }
+    public ImmutableArray<OutfitterGilVendorOffer> Offers { get; }
+
+    internal static OutfitterGilVendorCatalogReference FromCatalog(
+        string catalogVersion,
+        IEnumerable<OutfitterGilVendorOffer> offers)
+    {
+        if (string.IsNullOrWhiteSpace(catalogVersion))
+            throw new InvalidOperationException("A gil-vendor catalog reference requires an exact version.");
+        var members = offers
+            .OrderBy(offer => offer.ItemId)
+            .ThenBy(offer => offer.ShopId)
+            .ThenBy(offer => offer.VendorId)
+            .ThenBy(offer => offer.TerritoryId)
+            .ToImmutableArray();
+        return new(catalogVersion, members);
+    }
+
+    internal bool Matches(OutfitterGilVendorOffer offer) =>
+        offer is not null && Offers.Any(member => member == offer);
 }
