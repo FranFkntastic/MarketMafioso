@@ -103,7 +103,7 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
         RequiresVisibleCharacterAddon: true,
         UsesRenderedTooltipAsAuthority: true,
         SupportsDeterministicReplay: false,
-        "Equipment slots request the game's own ItemDetail tooltip through AtkTooltipManager with no cursor, focus, input, or event injection. Character and Item Detail rendered output remains the only runtime authority.");
+        "Equipment slots request the game's own ItemDetail tooltip through AtkTooltipManager with no cursor, focus, input, or event injection. This rendered path supports post-patch player/inventory audits and remains authoritative for rendered retainer observations.");
 
     public unsafe bool Open()
     {
@@ -609,7 +609,7 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
     /// enum values (proven live on Primary for ArmoryMainHand=3500 and ArmoryHead=3201:
     /// the agent accepts the enum numbering for these containers, unlike the small
     /// 48-51/69-72 scheme documented for player inventory and saddlebags).
-    /// Mechanism only — rendered tooltip output remains the sole authority.
+    /// Mechanism only; rendered tooltip output is the differential audit comparator.
     /// </summary>
     private static uint ArmouryTooltipTypeOrId(FFXIVClientStructs.FFXIV.Client.Game.InventoryType inventoryType) =>
         (uint)inventoryType;
@@ -1261,7 +1261,7 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
     /// build (Inventory1:0 rendered the correct material where the documented 48-51
     /// numbering rendered a soul crystal from a different container). Returns null when
     /// the container name is not a recognized InventoryType.
-    /// Mechanism only — rendered tooltip output remains the sole authority.
+    /// Mechanism only; rendered tooltip output is the differential audit comparator.
     /// </summary>
     private static uint? BagTooltipTypeOrId(string container) =>
         Enum.TryParse<FFXIVClientStructs.FFXIV.Client.Game.InventoryType>(container, out var inventoryType) &&

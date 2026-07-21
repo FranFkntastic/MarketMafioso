@@ -1443,7 +1443,7 @@ public class MainWindow : Window, IDisposable
             snapshot.Identity.CapturedAt,
             items,
             diagnostics,
-            "Diagnostic only. Direct container reads are not ownership authority until the differential proof against rendered observation passes.");
+            "Bounded direct container evidence. Rendered differential tooling audits item and quality decoding after game or Dalamud changes.");
     }
 
     public uint? ResolveRenderedItemName(string name, RenderedItemDetailObservation observation)

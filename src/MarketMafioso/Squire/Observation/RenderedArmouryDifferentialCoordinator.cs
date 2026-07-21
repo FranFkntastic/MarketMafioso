@@ -33,9 +33,9 @@ public sealed record RenderedArmouryDifferentialProgress(
     string Diagnostic);
 
 /// <summary>
-/// Pure differential-proof bookkeeping. For every struct-occupied armoury slot, the
-/// rendered tooltip identity (resolved to an item id and quality) must equal the struct
-/// read. Any disagreement fails the proof: the struct read is not ownership authority.
+/// Post-patch differential-audit bookkeeping. For every direct-read occupied slot, the
+/// rendered tooltip identity must match item id and quality. Any disagreement fails the
+/// audit and identifies a decode or observation regression for investigation.
 /// </summary>
 public sealed class RenderedArmouryDifferentialCoordinator
 {

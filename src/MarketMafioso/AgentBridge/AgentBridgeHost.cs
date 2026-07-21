@@ -330,7 +330,7 @@ public sealed class AgentBridgeHost : IDisposable
             case "get-inventory-struct-snapshot":
                 AgentBridgeInventoryStructSnapshot? inventoryStructSnapshot = null;
                 await dispatchOnFramework(() => inventoryStructSnapshot = provider.CaptureInventoryStructSnapshotUi()).ConfigureAwait(false);
-                return AgentBridgeResponse.Ok("Direct container read captured for differential diagnostics; not ownership authority.", inventoryStructSnapshot);
+                return AgentBridgeResponse.Ok("Bounded direct container evidence captured; the rendered differential remains available as a post-patch decode audit.", inventoryStructSnapshot);
             case "open-armoury-ui":
                 var armouryOpened = false;
                 await dispatchOnFramework(() => armouryOpened = provider.TryOpenArmouryBoardUi()).ConfigureAwait(false);
