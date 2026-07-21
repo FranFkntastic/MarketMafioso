@@ -122,24 +122,18 @@ internal static class MinerBotanistAdvisorSyntheticReview
         var result = await discovery.DiscoverAsync(request, cancellationToken).ConfigureAwait(false);
         var evidence = MinerBotanistAdvisorSessionEvidencePolicy.SelectCurrent(result, request)
             ?? throw new InvalidOperationException("Live diagnostic evidence did not publish as one complete generation.");
-        var selected = evidence.Items
-            .Where(item => item.Status == OutfitterMarketEvidenceItemStatus.Fresh && item.ItemId != 47201)
-            .SelectMany(item => item.Listings)
-            .Where(listing => listing.Quantity > 0 && listing.UnitPriceGil > 0)
-            .OrderByDescending(listing => listing.Quality == EquipmentQuality.High)
-            .ThenBy(listing => listing.UnitPriceGil)
-            .ThenBy(listing => listing.WorldName, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(listing => listing.ListingId, StringComparer.Ordinal)
-            .FirstOrDefault()
-            ?? throw new InvalidOperationException("No current market row exists for the diagnostic gathering set.");
-        var marketItem = items.Single(item => item.ItemId == selected.ItemId);
-        var advice = BuildDryRunAdvice(context, items, marketItem, selected, evidence);
+        var selected = SelectDuplicatedSlotMarketRows(items, evidence)
+            ?? throw new InvalidOperationException("No pair of distinct same-quality current listing rows can fulfill the duplicated equipment slots as indivisible full stacks; the diagnostic fixture abstained.");
+        var advice = BuildDryRunAdvice(context, items, selected.Item, selected.Listings, evidence);
         var solutionId = advice.Frontier!.Pareto.Frontier.Single().Candidate.SolutionId;
+        var totalGil = selected.Listings.Aggregate(
+            0ul,
+            (sum, listing) => checked(sum + ((ulong)listing.Quantity * listing.UnitPriceGil)));
         return new(
             advice,
             evidence,
             solutionId,
-            $"This level-100 calibration item is intentionally unrelated to the logged-in character's equip level. It tests Route integration only: current {selected.Quality} listing for {marketItem.Name} on {selected.WorldName} at {selected.UnitPriceGil:N0} gil; permanently dry-run-only.");
+            $"This level-100 calibration item is intentionally unrelated to the logged-in character's equip level. It tests Route integration only: {selected.RequiredQuantity:N0} current {selected.Listings[0].Quality} {selected.Item.Name} across {selected.Listings.Count:N0} exact listing row(s), {totalGil:N0} gil total; permanently dry-run-only.");
     }
 
     private sealed record Benchmark(
@@ -165,6 +159,11 @@ internal static class MinerBotanistAdvisorSyntheticReview
         ulong GearCostGil,
         int GuaranteedMateriaSlots,
         IReadOnlyList<MateriaEvidence> Materia);
+
+    private sealed record DryRunMarketSelection(
+        ItemEvidence Item,
+        uint RequiredQuantity,
+        IReadOnlyList<OutfitterMarketListingEvidence> Listings);
 
     private static readonly Benchmark[] Benchmarks =
     [
@@ -341,7 +340,7 @@ internal static class MinerBotanistAdvisorSyntheticReview
         MinerBotanistUtilityContextKind context,
         IReadOnlyList<ItemEvidence> items,
         ItemEvidence marketItem,
-        OutfitterMarketListingEvidence listing,
+        IReadOnlyList<OutfitterMarketListingEvidence> marketListings,
         OutfitterMarketEvidenceBook evidence)
     {
         const string solutionId = "diagnostic-live-listing-dry-run";
@@ -351,13 +350,28 @@ internal static class MinerBotanistAdvisorSyntheticReview
             MinerBotanistUtilityProfile.MinerClassJobId);
         var offers = new Dictionary<EquipmentOfferAllocationKey, EquipmentExactSolverOffer>();
         var selections = new List<EquipmentLoadoutSelection>(items.Count);
+        var marketPositions = items
+            .Where(item => item.ItemId == marketItem.ItemId)
+            .Select(item => item.Position)
+            .Order()
+            .ToArray();
+        var marketRowsByPosition = new Dictionary<EquipmentLoadoutPosition, OutfitterMarketListingEvidence>();
+        var positionIndex = 0;
+        foreach (var listing in marketListings)
+        {
+            for (var quantity = 0u; quantity < listing.Quantity; quantity++)
+                marketRowsByPosition.Add(marketPositions[positionIndex++], listing);
+        }
+        if (positionIndex != marketPositions.Length)
+            throw new InvalidOperationException("Current diagnostic listing rows do not exactly fill the duplicated equipment positions.");
+
         foreach (var item in items)
         {
             var definition = Definition(item);
             EquipmentExactSolverOffer exact;
-            if (item.Position == marketItem.Position)
+            if (marketRowsByPosition.TryGetValue(item.Position, out var listing))
             {
-                var sourceCatalogKey = $"diagnostic-live:{evidence.GenerationId:N}:{item.ItemId}:{listing.Quality}";
+                var sourceCatalogKey = $"diagnostic-live:{evidence.GenerationId:N}:{item.ItemId}:{listing.Quality}:{listing.ListingId}";
                 var key = new EquipmentOfferKey(
                     item.ItemId,
                     listing.Quality,
@@ -388,10 +402,14 @@ internal static class MinerBotanistAdvisorSyntheticReview
                     Quality: listing.Quality,
                     SourceCatalogKey: sourceCatalogKey,
                     Observation: observation);
-                exact = new(
+                var positions = marketRowsByPosition
+                    .Where(pair => pair.Value.ListingId == listing.ListingId && pair.Value.RetainerId == listing.RetainerId)
+                    .Select(pair => pair.Key)
+                    .ToHashSet();
+                exact = new EquipmentExactSolverOffer(
                     offer,
                     listing.ListingId,
-                    new HashSet<EquipmentLoadoutPosition> { item.Position },
+                    positions,
                     listing.Quantity,
                     EquipmentSolverUtilityVector.Empty,
                     listing.UnitPriceGil,
@@ -400,6 +418,8 @@ internal static class MinerBotanistAdvisorSyntheticReview
                     1,
                     new(0, 0, 0),
                     [listing.Quality == EquipmentQuality.High ? "HQ" : "NQ", listing.WorldName, "dry-run-only"]);
+                if (offers.TryGetValue(exact.AllocationKey, out var existing))
+                    exact = existing;
             }
             else
             {
@@ -423,18 +443,22 @@ internal static class MinerBotanistAdvisorSyntheticReview
                     new(0, 0, 0),
                     ["Diagnostic baseline", "dry-run-only"]);
             }
-            offers.Add(exact.AllocationKey, exact);
+            offers.TryAdd(exact.AllocationKey, exact);
             selections.Add(new(item.Position, exact.Offer.Key, ObservationId: exact.ObservationId));
         }
 
         var utility = profile.Evaluate(Benchmarks[1].Stats);
+        var acquisitionCost = marketRowsByPosition.Values.Aggregate(
+            0ul,
+            (sum, listing) => checked(sum + listing.UnitPriceGil));
+        var worldVisits = marketListings.Select(listing => listing.WorldName).Distinct(StringComparer.OrdinalIgnoreCase).Count();
         var solution = new EquipmentDecisionSolution(
             new(solutionId, selections),
             utility,
-            listing.UnitPriceGil,
-            new(1, 0, 1),
+            acquisitionCost,
+            new(worldVisits, 0, marketListings.Count),
             new(0, 0, 0),
-            ["Live exact-quality diagnostic fixture", marketItem.Name, listing.WorldName, "dry-run-only"]);
+            ["Live exact-quality duplicated-slot diagnostic fixture", marketItem.Name, $"Required quantity {marketPositions.Length}", "dry-run-only"]);
         var pareto = new EquipmentParetoFrontierBuilder().Build([solution]);
         var frontier = new EquipmentExactFrontierResult(
             pareto,
@@ -447,10 +471,79 @@ internal static class MinerBotanistAdvisorSyntheticReview
             solution,
             new Dictionary<string, AdvisorAuthorityAssessment>(StringComparer.Ordinal)
             {
-                [solutionId] = profile.AssessAuthority(utility, listing.UnitPriceGil),
+                [solutionId] = profile.AssessAuthority(utility, acquisitionCost),
             },
             offers,
-            $"Diagnostic Advisor solution binds one current exact-quality listing for {marketItem.Name}; execution is permanently dry-run-only.");
+            $"Diagnostic Advisor solution binds {marketPositions.Length:N0} duplicated slots to current exact-quality listing rows for {marketItem.Name}; execution is permanently dry-run-only.");
+    }
+
+    private static DryRunMarketSelection? SelectDuplicatedSlotMarketRows(
+        IReadOnlyList<ItemEvidence> items,
+        OutfitterMarketEvidenceBook evidence)
+    {
+        var duplicated = items
+            .GroupBy(item => item.ItemId)
+            .Where(group => group.Count() >= 2)
+            .ToDictionary(group => group.Key, group => (Item: group.First(), Required: (uint)group.Count()));
+        return evidence.Items
+            .Where(item => item.Status == OutfitterMarketEvidenceItemStatus.Fresh && duplicated.ContainsKey(item.ItemId))
+            .SelectMany(item => item.Listings
+                .Where(listing => listing.Quantity > 0 && listing.UnitPriceGil > 0)
+                .GroupBy(listing => listing.Quality)
+                .SelectMany(group => ExactQuantityListingSets(group, duplicated[item.ItemId].Required)
+                    .Select(listings => new DryRunMarketSelection(
+                        duplicated[item.ItemId].Item,
+                        duplicated[item.ItemId].Required,
+                        listings))))
+            .OrderBy(selection => selection.Listings.Select(listing => listing.WorldName).Distinct(StringComparer.OrdinalIgnoreCase).Count())
+            .ThenByDescending(selection => selection.Listings[0].Quality == EquipmentQuality.High)
+            .ThenBy(selection => selection.Listings.Aggregate(
+                0ul,
+                (sum, listing) => checked(sum + ((ulong)listing.Quantity * listing.UnitPriceGil))))
+            .ThenBy(selection => string.Join("|", selection.Listings.Select(listing => listing.WorldName)), StringComparer.OrdinalIgnoreCase)
+            .ThenBy(selection => string.Join("|", selection.Listings.Select(listing => listing.ListingId)), StringComparer.Ordinal)
+            .FirstOrDefault();
+    }
+
+    private static IEnumerable<IReadOnlyList<OutfitterMarketListingEvidence>> ExactQuantityListingSets(
+        IEnumerable<OutfitterMarketListingEvidence> listings,
+        uint requiredQuantity)
+    {
+        var candidates = listings
+            .Where(listing => listing.Quantity <= requiredQuantity)
+            .OrderBy(listing => listing.WorldName, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(listing => listing.UnitPriceGil)
+            .ThenBy(listing => listing.ListingId, StringComparer.Ordinal)
+            .ToArray();
+        return Enumerate(0, requiredQuantity, []);
+
+        IEnumerable<IReadOnlyList<OutfitterMarketListingEvidence>> Enumerate(
+            int index,
+            uint remaining,
+            IReadOnlyList<OutfitterMarketListingEvidence> selected)
+        {
+            if (remaining == 0)
+            {
+                if (selected.Count >= 2 &&
+                    selected.Select(ListingIdentity).Distinct(StringComparer.Ordinal).Count() == selected.Count)
+                    yield return selected;
+                yield break;
+            }
+            for (var candidateIndex = index; candidateIndex < candidates.Length; candidateIndex++)
+            {
+                var candidate = candidates[candidateIndex];
+                if (candidate.Quantity > remaining)
+                    continue;
+                foreach (var result in Enumerate(
+                    candidateIndex + 1,
+                    remaining - candidate.Quantity,
+                    selected.Append(candidate).ToArray()))
+                    yield return result;
+            }
+        }
+
+        static string ListingIdentity(OutfitterMarketListingEvidence listing) =>
+            $"{listing.WorldName.ToUpperInvariant()}|{listing.ListingId}|{listing.RetainerId}";
     }
 
     private static EquipmentItemDefinition Definition(ItemEvidence item) => new(

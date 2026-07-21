@@ -213,7 +213,7 @@ public sealed class OutfitterWorkbenchAuthorityTests
             new("ordinary", 16, 100, "ordinary nodes", ["gathering"]),
             new(Guid.Parse("11111111-1111-1111-1111-111111111111"), 7, "evidence/v1", "universalis", "North America", OutfitterMarketCoverageMode.ExhaustiveWithinScope, now),
             [new(EquipmentLoadoutPosition.LeftRing, offerKey, 2, "listing-1", "Market board - Siren")],
-            [new(offerKey, "Exact HQ Ring", 2, 2, "Siren", 100, 200, "listing-1", "source-r1", now)],
+            [new(offerKey, "Exact HQ Ring", 2, 2, "Siren", 100, 200, "listing-1", "source-r1", now, "Retainer", "retainer-1")],
             200);
     }
 }

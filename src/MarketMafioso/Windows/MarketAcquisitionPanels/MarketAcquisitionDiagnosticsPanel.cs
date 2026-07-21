@@ -1,14 +1,16 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Linq;
-using System.Globalization;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Plugin.Services;
 using MarketMafioso.Diagnostics;
 using Franthropy.Dalamud.AgentBridge;
 using MarketMafioso.MarketAcquisition;
 using MarketMafioso.Windows.Main;
+using MarketMafioso.Windows.MarketAcquisitionRequestBuilder;
 
 namespace MarketMafioso.Windows.MarketAcquisitionPanels;
 
@@ -23,11 +25,17 @@ internal sealed class MarketAcquisitionDiagnosticsPanel
     private readonly Func<bool> isMarketAcquisitionUnlocked;
     private readonly UiStateCaptureService uiStateCapture;
     private readonly AgentBridgeUiReviewRegistry reviewRegistry;
+    private readonly Func<CraftAppraisalDiagnosticsSnapshot> getCraftAppraisalDiagnostics;
     private readonly Func<bool> areDryRunToolsEnabled;
     private readonly Func<bool> canStartPreparedRouteDryRun;
     private readonly Action startPreparedRouteDryRun;
     private readonly Func<OutfitterDryRunScenario> getOutfitterDryRunScenario;
     private readonly Func<OutfitterDryRunScenario, bool> armOutfitterDryRunScenario;
+    private readonly DiagnosticsHierarchyState hierarchyState = new();
+#if DEBUG
+    private readonly Func<bool> canSeedOutfitterDryRunSunkState;
+    private readonly Func<string> seedOutfitterDryRunSunkState;
+#endif
 
     private string diagnosticsFolderStatus = "Route diagnostics folder opens in Explorer.";
 
@@ -41,11 +49,17 @@ internal sealed class MarketAcquisitionDiagnosticsPanel
         Func<bool> isMarketAcquisitionUnlocked,
         UiStateCaptureService uiStateCapture,
         AgentBridgeUiReviewRegistry reviewRegistry,
+        Func<CraftAppraisalDiagnosticsSnapshot> getCraftAppraisalDiagnostics,
         Func<bool> areDryRunToolsEnabled,
         Func<bool> canStartPreparedRouteDryRun,
         Action startPreparedRouteDryRun,
         Func<OutfitterDryRunScenario> getOutfitterDryRunScenario,
-        Func<OutfitterDryRunScenario, bool> armOutfitterDryRunScenario)
+        Func<OutfitterDryRunScenario, bool> armOutfitterDryRunScenario
+#if DEBUG
+        , Func<bool> canSeedOutfitterDryRunSunkState,
+        Func<string> seedOutfitterDryRunSunkState
+#endif
+        )
     {
         this.getRouteSnapshot = getRouteSnapshot ?? throw new ArgumentNullException(nameof(getRouteSnapshot));
         this.diagnosticsDirectory = diagnosticsDirectory ?? throw new ArgumentNullException(nameof(diagnosticsDirectory));
@@ -56,11 +70,16 @@ internal sealed class MarketAcquisitionDiagnosticsPanel
         this.isMarketAcquisitionUnlocked = isMarketAcquisitionUnlocked ?? throw new ArgumentNullException(nameof(isMarketAcquisitionUnlocked));
         this.uiStateCapture = uiStateCapture ?? throw new ArgumentNullException(nameof(uiStateCapture));
         this.reviewRegistry = reviewRegistry ?? throw new ArgumentNullException(nameof(reviewRegistry));
+        this.getCraftAppraisalDiagnostics = getCraftAppraisalDiagnostics ?? throw new ArgumentNullException(nameof(getCraftAppraisalDiagnostics));
         this.areDryRunToolsEnabled = areDryRunToolsEnabled ?? throw new ArgumentNullException(nameof(areDryRunToolsEnabled));
         this.canStartPreparedRouteDryRun = canStartPreparedRouteDryRun ?? throw new ArgumentNullException(nameof(canStartPreparedRouteDryRun));
         this.startPreparedRouteDryRun = startPreparedRouteDryRun ?? throw new ArgumentNullException(nameof(startPreparedRouteDryRun));
         this.getOutfitterDryRunScenario = getOutfitterDryRunScenario ?? throw new ArgumentNullException(nameof(getOutfitterDryRunScenario));
         this.armOutfitterDryRunScenario = armOutfitterDryRunScenario ?? throw new ArgumentNullException(nameof(armOutfitterDryRunScenario));
+#if DEBUG
+        this.canSeedOutfitterDryRunSunkState = canSeedOutfitterDryRunSunkState ?? throw new ArgumentNullException(nameof(canSeedOutfitterDryRunSunkState));
+        this.seedOutfitterDryRunSunkState = seedOutfitterDryRunSunkState ?? throw new ArgumentNullException(nameof(seedOutfitterDryRunSunkState));
+#endif
     }
 
     public void Draw()
@@ -68,41 +87,123 @@ internal sealed class MarketAcquisitionDiagnosticsPanel
         ImGui.Spacing();
         ImGuiUi.SectionHeader("Diagnostics", MarketMafiosoUiTheme.Header);
 
-        if (isMarketAcquisitionUnlocked())
+        var marketAcquisitionUnlocked = isMarketAcquisitionUnlocked();
+        MarketAcquisitionRouteEngineSnapshot? snapshot = null;
+        if (marketAcquisitionUnlocked)
         {
-            var snapshot = getRouteSnapshot();
-            if (ImGuiUi.Button("Open Route Diagnostics Folder", true))
-                OpenDiagnosticsFolder(diagnosticsDirectory);
-
-            ImGui.TextColored(GetDiagnosticsFolderStatusColor(), diagnosticsFolderStatus);
-            ImGui.TextColored(MarketMafiosoUiTheme.Muted, diagnosticsDirectory);
-
-            if (snapshot.LastDiagnosticFilePath != null)
-                ImGui.TextColored(MarketMafiosoUiTheme.Muted, $"Latest report: {snapshot.LastDiagnosticFilePath}");
-
-            DrawPostRunDiagnosticSummary(snapshot);
-            DrawDryRunTools(snapshot);
+            snapshot = getRouteSnapshot();
+            DrawReportOverview(snapshot);
         }
-        DrawUiStateCapture();
 
-        if (isMarketAcquisitionUnlocked() && ImGui.CollapsingHeader("Market Acquisition Diagnostics", ImGuiTreeNodeFlags.DefaultOpen))
+        var marketFlags = DiagnosticsHierarchyState.MarketAcquisitionDefaultOpen
+            ? ImGuiTreeNodeFlags.DefaultOpen
+            : ImGuiTreeNodeFlags.None;
+        if (snapshot != null && ImGui.CollapsingHeader(BuildMarketAcquisitionHeader(snapshot), marketFlags))
             drawMarketAcquisitionDiagnostics();
-        if (ImGui.CollapsingHeader("Automation Diagnostics", ImGuiTreeNodeFlags.DefaultOpen))
+
+        var automationFlags = DiagnosticsHierarchyState.AutomationDefaultOpen
+            ? ImGuiTreeNodeFlags.DefaultOpen
+            : ImGuiTreeNodeFlags.None;
+        if (ImGui.CollapsingHeader("Automation diagnostics##DiagnosticsAutomation", automationFlags))
             drawAutomationDiagnostics();
-        if (ImGui.CollapsingHeader("Squire Route Diagnostics", ImGuiTreeNodeFlags.DefaultOpen))
+
+        var squireFlags = DiagnosticsHierarchyState.SquireRouteDefaultOpen
+            ? ImGuiTreeNodeFlags.DefaultOpen
+            : ImGuiTreeNodeFlags.None;
+        if (ImGui.CollapsingHeader("Squire route diagnostics##DiagnosticsSquireRoute", squireFlags))
             drawSquireDiagnostics();
+
+        if (snapshot is { IsRouteActive: true, ExecutionMode: MarketAcquisitionExecutionMode.DryRun })
+            ImGui.TextColored(MarketMafiosoUiTheme.Warning, $"Dry run active: {snapshot.VisibleAcquisitionStatus}");
+
+        DrawTestTools(snapshot);
     }
 
-    private void DrawDryRunTools(MarketAcquisitionRouteEngineSnapshot snapshot)
+    private void DrawReportOverview(MarketAcquisitionRouteEngineSnapshot snapshot)
+    {
+        if (ImGui.BeginTable("DiagnosticsReportOverview", 2, ImGuiTableFlags.SizingStretchProp | ImGuiTableFlags.BordersInnerH))
+        {
+            ImGui.TableSetupColumn("Summary", ImGuiTableColumnFlags.WidthStretch);
+            ImGui.TableSetupColumn("Action", ImGuiTableColumnFlags.WidthFixed);
+
+            ImGui.TableNextRow();
+            ImGui.TableNextColumn();
+            ImGui.TextColored(MarketMafiosoUiTheme.Header, "Latest diagnostics report");
+            ImGui.SameLine();
+            DrawWrappedColored(MarketMafiosoUiTheme.Muted, GetReportFileName(snapshot.LastDiagnosticFilePath));
+            ImGui.TableNextColumn();
+            if (ImGuiUi.Button("Open diagnostics folder", true))
+                OpenDiagnosticsFolder(diagnosticsDirectory);
+            RegisterLastControl(
+                "diagnostics.open-folder",
+                "Open diagnostics folder",
+                true,
+                () => OpenDiagnosticsFolder(diagnosticsDirectory));
+
+            ImGui.TableNextRow();
+            ImGui.TableNextColumn();
+            ImGui.TextColored(MarketMafiosoUiTheme.Header, "Current run");
+            ImGui.SameLine();
+            DrawWrappedColored(MarketMafiosoUiTheme.Muted, BuildCurrentRunSummary(snapshot));
+            ImGui.TableNextColumn();
+            ImGui.EndTable();
+        }
+
+        if (diagnosticsFolderStatus.StartsWith("Unable", StringComparison.OrdinalIgnoreCase))
+            DrawWrappedColored(MarketMafiosoUiTheme.Error, diagnosticsFolderStatus);
+
+        foreach (var warning in GetCurrentWarnings(snapshot))
+            DrawWrappedColored(MarketMafiosoUiTheme.Warning, $"Warning: {warning}");
+
+        var routeException = GetActiveRouteException(snapshot);
+        if (routeException != null)
+            DrawWrappedColored(MarketMafiosoUiTheme.Error, $"Route exception: {routeException}");
+
+        var reportLocationsFlags = DiagnosticsHierarchyState.ReportLocationsDefaultOpen
+            ? ImGuiTreeNodeFlags.DefaultOpen
+            : ImGuiTreeNodeFlags.None;
+        if (ImGui.CollapsingHeader("Report locations##DiagnosticsReportLocations", reportLocationsFlags))
+        {
+            var craftAppraisal = getCraftAppraisalDiagnostics();
+            DrawReportLocation("Diagnostics folder", diagnosticsDirectory);
+            DrawReportLocation("Latest report", snapshot.LastDiagnosticFilePath);
+            DrawReportLocation("Observed listings", snapshot.LastObservedListingsCsvPath);
+            DrawReportLocation("Purchase records", snapshot.LastPurchaseRecordsCsvPath);
+            DrawReportLocation("Craft quote printout", craftAppraisal.LastCraftQuoteDiagnosticFilePath);
+            DrawReportLocation("Market depth printout", craftAppraisal.LastMarketDepthDiagnosticFilePath);
+            DrawReportLocation("UI-state capture", uiStateCapture.LastCapturePath);
+        }
+    }
+
+    private void DrawTestTools(MarketAcquisitionRouteEngineSnapshot? snapshot)
+    {
+        ImGui.SetNextItemOpen(hierarchyState.TestToolsExpanded, ImGuiCond.Always);
+        var expanded = ImGui.CollapsingHeader("Test tools##DiagnosticsTestTools");
+        hierarchyState.SetTestToolsExpanded(expanded);
+        reviewRegistry.RegisterLastItem(
+            DiagnosticsHierarchyState.TestToolsControlId,
+            hierarchyState.TestToolsActionLabel,
+            AgentBridgeUiControlKind.Toggle,
+            enabled: true,
+            selected: hierarchyState.TestToolsExpanded,
+            value: hierarchyState.TestToolsValue,
+            invoke: hierarchyState.ToggleTestTools);
+
+        if (!expanded)
+            return;
+
+        if (snapshot != null)
+            DrawDryRunTools();
+        DrawUiStateCapture();
+    }
+
+    private void DrawDryRunTools()
     {
         if (!areDryRunToolsEnabled())
             return;
 
         ImGui.Spacing();
         ImGuiUi.SectionHeader("Non-spending Route Dry Run", MarketMafiosoUiTheme.Header);
-        ImGui.TextColored(
-            MarketMafiosoUiTheme.Muted,
-            "Runs the prepared route through live rendered-UI travel, listing reads, authority checks, and recovery. Purchase selection and confirmation are unreachable; simulated allocations are written only to the diagnostic package.");
         ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Scenario");
         ImGui.SameLine();
         DrawDryRunScenario("Ordinary", OutfitterDryRunScenario.Ordinary);
@@ -118,8 +219,22 @@ internal sealed class MarketAcquisitionDiagnosticsPanel
             "Dry run the prepared Market Acquisition route without purchases",
             enabled,
             startPreparedRouteDryRun);
-        if (snapshot.ExecutionMode == MarketAcquisitionExecutionMode.DryRun)
-            ImGui.TextColored(MarketMafiosoUiTheme.Warning, $"Dry run active: {snapshot.VisibleAcquisitionStatus}");
+#if DEBUG
+        var canSeed = canSeedOutfitterDryRunSunkState();
+        if (ImGuiUi.Button("Seed one persisted sunk purchase##Debug", canSeed))
+            diagnosticsFolderStatus = seedOutfitterDryRunSunkState();
+        RegisterLastControl(
+            "diagnostics.market-acquisition.debug-seed-sunk-purchase",
+            "DEBUG: seed one exact persisted sunk purchase for restart dry-run proof",
+            canSeed,
+            () => diagnosticsFolderStatus = seedOutfitterDryRunSunkState());
+        if (!diagnosticsFolderStatus.StartsWith("Route diagnostics", StringComparison.Ordinal) &&
+            !diagnosticsFolderStatus.StartsWith("Opened route diagnostics", StringComparison.Ordinal) &&
+            !diagnosticsFolderStatus.StartsWith("Unable to open", StringComparison.Ordinal))
+        {
+            DrawWrappedColored(MarketMafiosoUiTheme.Muted, diagnosticsFolderStatus);
+        }
+#endif
     }
 
     private void DrawDryRunScenario(string label, OutfitterDryRunScenario scenario)
@@ -201,7 +316,6 @@ internal sealed class MarketAcquisitionDiagnosticsPanel
     {
         ImGui.Spacing();
         ImGuiUi.SectionHeader("Catchall UI-State Recorder", MarketMafiosoUiTheme.Header);
-        ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Event-driven capture of addon lifecycle, receive events, focus, active agents, conditions, animation lock, and state diffs. Text payloads are redacted.");
 
         if (ImGuiUi.Button("Start UI Capture", !uiStateCapture.IsRecording))
             uiStateCapture.Start();
@@ -218,8 +332,81 @@ internal sealed class MarketAcquisitionDiagnosticsPanel
         RegisterLastControl("diagnostics.ui-capture.finish", "Finish and export catchall UI-state capture", uiStateCapture.IsRecording, () => uiStateCapture.Stop());
 
         ImGui.TextColored(MarketMafiosoUiTheme.Muted, $"{uiStateCapture.Status} Events: {uiStateCapture.EventCount:N0}");
-        if (uiStateCapture.LastCapturePath != null)
-            ImGui.TextColored(MarketMafiosoUiTheme.Muted, uiStateCapture.LastCapturePath);
+    }
+
+    private static string BuildMarketAcquisitionHeader(MarketAcquisitionRouteEngineSnapshot snapshot)
+    {
+        var warningCount = GetCurrentWarnings(snapshot).Count;
+        var status = snapshot.IsRouteActive
+            ? snapshot.ExecutionMode == MarketAcquisitionExecutionMode.DryRun ? "dry run active" : "route active"
+            : warningCount > 0 ? $"{warningCount:N0} warning(s)" : null;
+        return status == null
+            ? "Market Acquisition diagnostics##DiagnosticsMarketAcquisition"
+            : $"Market Acquisition diagnostics - {status}##DiagnosticsMarketAcquisition";
+    }
+
+    private static string BuildCurrentRunSummary(MarketAcquisitionRouteEngineSnapshot snapshot)
+    {
+        if (snapshot.IsRouteActive)
+        {
+            var mode = snapshot.ExecutionMode == MarketAcquisitionExecutionMode.DryRun ? "Non-spending dry run" : "Route active";
+            return $"{mode}; {snapshot.CompletedOrProbedStopCount:N0}/{snapshot.Stops.Count:N0} stops complete or probed.";
+        }
+
+        var summary = snapshot.LastRunSummary;
+        if (summary == null)
+            return string.IsNullOrWhiteSpace(snapshot.StatusMessage) ? "No route active." : snapshot.StatusMessage;
+
+        var purchaseVerb = snapshot.ExecutionMode == MarketAcquisitionExecutionMode.DryRun ? "would purchase" : "purchased";
+        var spendVerb = snapshot.ExecutionMode == MarketAcquisitionExecutionMode.DryRun ? "would spend" : "spent";
+        return $"Last run {purchaseVerb} {summary.PurchasedQuantity:N0}, {spendVerb} {FormatGil(summary.SpentGil)}; {summary.CompletedWorldCount:N0} complete / {summary.PartialWorldCount:N0} partial / {summary.FailedWorldCount:N0} failed world(s).";
+    }
+
+    private static IReadOnlyList<string> GetCurrentWarnings(MarketAcquisitionRouteEngineSnapshot snapshot) =>
+        (snapshot.LastRunSummary?.Warnings ?? snapshot.LastRunDiagnosticSummary.Warnings)
+            .Where(warning => !string.IsNullOrWhiteSpace(warning))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+
+    private static string? GetActiveRouteException(MarketAcquisitionRouteEngineSnapshot snapshot)
+    {
+        if (!snapshot.IsRouteActive)
+            return null;
+
+        var operation = IsRouteException(snapshot.ActiveOperation)
+            ? snapshot.ActiveOperation
+            : IsRouteException(snapshot.LastOperation) ? snapshot.LastOperation : null;
+        if (operation == null)
+            return null;
+
+        return string.IsNullOrWhiteSpace(operation.Message)
+            ? $"{operation.Kind}: {operation.Disposition}"
+            : operation.Message;
+    }
+
+    private static bool IsRouteException(MarketAcquisitionRouteOperationSnapshot? operation) =>
+        operation is not null && operation.Disposition is not (
+            MarketAcquisitionRouteOperationDisposition.Pending or
+            MarketAcquisitionRouteOperationDisposition.Succeeded);
+
+    private static string GetReportFileName(string? path) =>
+        string.IsNullOrWhiteSpace(path) ? "No report captured this session." : Path.GetFileName(path);
+
+    private static void DrawReportLocation(string label, string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            return;
+
+        ImGui.TextColored(MarketMafiosoUiTheme.Muted, label);
+        ImGui.SameLine();
+        ImGui.TextWrapped(path);
+    }
+
+    private static void DrawWrappedColored(System.Numerics.Vector4 color, string text)
+    {
+        ImGui.PushStyleColor(ImGuiCol.Text, color);
+        ImGui.TextWrapped(text);
+        ImGui.PopStyleColor();
     }
 
     private void RegisterLastControl(string id, string label, bool enabled, Action invoke) =>
@@ -253,11 +440,4 @@ internal sealed class MarketAcquisitionDiagnosticsPanel
     private static string FormatRouteDataCenter(string dataCenter) =>
         string.IsNullOrWhiteSpace(dataCenter) ? "-" : dataCenter;
 
-    private static System.Numerics.Vector4 GetDiagnosticsFolderStatusColor(string status) =>
-        status.StartsWith("Unable", StringComparison.OrdinalIgnoreCase)
-            ? MarketMafiosoUiTheme.Error
-            : MarketMafiosoUiTheme.Muted;
-
-    private System.Numerics.Vector4 GetDiagnosticsFolderStatusColor() =>
-        GetDiagnosticsFolderStatusColor(diagnosticsFolderStatus);
 }

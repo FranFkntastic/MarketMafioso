@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using MarketMafioso.MarketAcquisition;
 
 namespace MarketMafioso.AgentBridge;
 
@@ -91,6 +93,28 @@ public sealed record AgentBridgeRouteTruth
     public bool OutfitterDryRunFaultInjected { get; init; }
     public string? OutfitterPhase { get; init; }
     public string? OutfitterMessage { get; init; }
+    public int PersistedOutfitterSunkReceiptCount { get; init; }
+    public ulong PersistedOutfitterSunkQuantity { get; init; }
+    public ulong PersistedOutfitterSunkGil { get; init; }
+    public ulong ActiveOutfitterRemainingQuantity { get; init; }
+    public ulong ActiveOutfitterRemainingGil { get; init; }
+}
+
+public static class AgentBridgeRouteTruthProjection
+{
+    public static ulong ResolveActiveOutfitterRemainingGil(MarketAcquisitionRouteEngineSnapshot snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        if (snapshot is not { IsRouteActive: true, OutfitterExecution: { } execution, ActivePlan: { } plan })
+            return 0;
+
+        var lineIds = execution.Lines.Select(line => line.LineId).ToHashSet(StringComparer.Ordinal);
+        return plan.WorldBatches
+            .SelectMany(batch => batch.ItemSubtasks)
+            .Where(subtask => lineIds.Contains(subtask.LineId))
+            .SelectMany(subtask => subtask.Listings)
+            .Aggregate(0ul, (sum, listing) => checked(sum + listing.TotalGil));
+    }
 }
 
 public sealed record AgentBridgeProofReceipt

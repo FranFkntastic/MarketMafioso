@@ -5,6 +5,7 @@ using System.Net;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
+using MarketMafioso.Squire.Outfitter.Acquisition;
 
 namespace MarketMafioso.MarketAcquisition;
 
@@ -361,23 +362,42 @@ public sealed class MarketAcquisitionRequestWorkspace : IDisposable
     public Task PreparePlanAsync(
         string currentWorld,
         TimeSpan recentWorldTtl,
-        bool ignoreRecentWorldVisitsForSweep) =>
+        bool ignoreRecentWorldVisitsForSweep,
+        MarketAcquisitionRequestDocument? finalizedDocument = null) =>
         RunAsync(async token =>
         {
             EnsureConnected();
             var claimed = await EnsureClaimReadyAsync(
                 RequireClaimedRequest("No dashboard request is accepted."),
                 token).ConfigureAwait(false);
-            var result = await planPreparationService.PrepareAsync(
-                new MarketAcquisitionPlanPreparationRequest
+            var preparedAt = DateTimeOffset.UtcNow;
+            MarketAcquisitionPlanPreparationResult result;
+            if (finalizedDocument?.OutfitterAuthority?.FinalizedContract is { Transfer.DryRunOnly: true } contract)
+            {
+                var plan = OutfitterDryRunPreparedPlanRestorer.Prepare(
+                    contract,
+                    finalizedDocument,
+                    claimed,
+                    preparedAt);
+                result = new()
                 {
-                    Claim = claimed,
-                    CurrentWorld = currentWorld,
-                    PreparedAtUtc = DateTimeOffset.UtcNow,
-                    RecentWorldTtl = recentWorldTtl,
-                    IgnoreRecentWorldVisitsForSweep = ignoreRecentWorldVisitsForSweep,
-                },
-                token).ConfigureAwait(false);
+                    Plan = plan,
+                    StatusMessage = "Prepared the non-spending Squire route from its exact finalized listing authority.",
+                };
+            }
+            else
+            {
+                result = await planPreparationService.PrepareAsync(
+                    new MarketAcquisitionPlanPreparationRequest
+                    {
+                        Claim = claimed,
+                        CurrentWorld = currentWorld,
+                        PreparedAtUtc = preparedAt,
+                        RecentWorldTtl = recentWorldTtl,
+                        IgnoreRecentWorldVisitsForSweep = ignoreRecentWorldVisitsForSweep,
+                    },
+                    token).ConfigureAwait(false);
+            }
 
             PreparedPlan = result.Plan;
             PreparedPlanHash = getCurrentIntentHash!();
@@ -463,6 +483,37 @@ public sealed class MarketAcquisitionRequestWorkspace : IDisposable
     public void ReplacePreparedPlan(MarketAcquisitionPlan plan)
     {
         PreparedPlan = plan ?? throw new ArgumentNullException(nameof(plan));
+    }
+
+    public bool RestoreFinalizedDryRunPlan(
+        MarketAcquisitionRequestDocument document,
+        IOutfitterRouteExecutionStateStore stateStore)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        ArgumentNullException.ThrowIfNull(stateStore);
+        if (document.OutfitterAuthority?.FinalizedContract is not { Transfer.DryRunOnly: true } contract ||
+            stateStore.Restore() is not { SunkPurchases.Count: > 0 } persisted)
+            return false;
+
+        EnsureConnected();
+        try
+        {
+            var claim = ClaimedRequest ??
+                throw new InvalidOperationException("The accepted dry-run claim is missing; restore or re-finalize the Workbench request.");
+            PreparedPlan = OutfitterDryRunPreparedPlanRestorer.Restore(contract, document, claim, persisted);
+            PreparedPlanHash = getCurrentIntentHash!();
+            Status = "Restored the finalized non-spending Squire plan from durable listing authority and applied persisted sunk receipts once.";
+            resetRoute!("Restored dry-run plan is ready; no route has started.");
+            return true;
+        }
+        catch (Exception exception)
+        {
+            PreparedPlan = null;
+            PreparedPlanHash = null;
+            Status = $"Squire dry-run restoration paused: {exception.Message} Return to Advisor, finalize, and prepare a new dry-run plan.";
+            resetRoute!("Dry-run startup evidence did not pass exact restoration; execution remains disabled.");
+            return false;
+        }
     }
 
     public void SetStatus(string status) => Status = status;

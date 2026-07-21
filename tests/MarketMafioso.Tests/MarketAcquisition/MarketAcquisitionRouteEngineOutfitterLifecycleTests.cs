@@ -10,6 +10,75 @@ namespace MarketMafioso.Tests.MarketAcquisition;
 public sealed class MarketAcquisitionRouteEngineOutfitterLifecycleTests
 {
     [Fact]
+    public void InactiveRoute_ClearsPausedStateWithoutFinalizedContract()
+    {
+        var fixture = Fixture(dryRunOnly: true, splitListings: true);
+        var store = new MemoryStore();
+        store.Save(SeededState(fixture));
+
+        Assert.True(OutfitterRouteRecoveryLifecycle.ClearOrphanedState(
+            isRouteActive: false,
+            store.Restore(),
+            finalizedContract: null,
+            store));
+
+        Assert.Null(store.Restore());
+        Assert.Equal(1, store.ClearCount);
+    }
+
+    [Theory]
+    [InlineData(OutfitterRouteAuthorityPhase.Paused)]
+    [InlineData(OutfitterRouteAuthorityPhase.RecoveryNeeded)]
+    public void InactiveRoute_PreservesStateWithMatchingFinalizedContract(OutfitterRouteAuthorityPhase phase)
+    {
+        var fixture = Fixture(dryRunOnly: true, splitListings: true);
+        var store = new MemoryStore();
+        var persisted = SeededState(fixture) with { Phase = phase };
+        store.Save(persisted);
+
+        Assert.False(OutfitterRouteRecoveryLifecycle.ClearOrphanedState(
+            isRouteActive: false,
+            persisted,
+            fixture.Contract,
+            store));
+
+        Assert.Same(persisted, store.Restore());
+        Assert.Equal(0, store.ClearCount);
+    }
+
+    [Fact]
+    public void ActiveRoute_PreservesPersistedStateWithoutFinalizedContract()
+    {
+        var fixture = Fixture(dryRunOnly: true, splitListings: true);
+        var store = new MemoryStore();
+        var persisted = SeededState(fixture);
+        store.Save(persisted);
+
+        Assert.False(OutfitterRouteRecoveryLifecycle.ClearOrphanedState(
+            isRouteActive: true,
+            persisted,
+            finalizedContract: null,
+            store));
+
+        Assert.Same(persisted, store.Restore());
+        Assert.Equal(0, store.ClearCount);
+    }
+
+    [Fact]
+    public void OrdinaryRouteWithoutOutfitterState_PerformsNoRepair()
+    {
+        var store = new MemoryStore();
+
+        Assert.False(OutfitterRouteRecoveryLifecycle.ClearOrphanedState(
+            isRouteActive: false,
+            persisted: null,
+            finalizedContract: null,
+            store));
+
+        Assert.Equal(0, store.ClearCount);
+    }
+
+    [Fact]
     public void ChangedVisibleCoverage_StopsOriginalRunnerAndStartsRecoveredPlanWithoutGenericResume()
     {
         var fixture = Fixture();
@@ -235,10 +304,189 @@ public sealed class MarketAcquisitionRouteEngineOutfitterLifecycleTests
         Assert.False(OutfitterRouteRecoveryLifecycle.CanAutoResume(store.Restore()));
     }
 
-    private static FixtureData Fixture(bool dryRunOnly = false)
+    [Fact]
+    public void RestartDryRun_RestoresSunkReceiptOnceWithoutMutatingStoreOrAttemptingPurchase()
+    {
+        var fixture = Fixture(dryRunOnly: true, splitListings: true);
+        var config = new Configuration();
+        var saveCount = 0;
+        var store = new ConfigurationOutfitterRouteExecutionStateStore(config, () => saveCount++);
+        var seeded = SeededState(fixture);
+        store.Save(seeded);
+        var persistedJson = config.OutfitterRouteExecutionStateJson;
+        var initialSaveCount = saveCount;
+
+        using (var first = MarketAcquisitionRouteEngineHarness.Create(store))
+        {
+            first.Context.CurrentWorld = "Siren";
+            Assert.True(first.Engine.Start(
+                fixture.Plan,
+                fixture.Claim,
+                false,
+                false,
+                fixture.Contract,
+                fixture.Document,
+                MarketAcquisitionExecutionMode.DryRun).Success);
+            var snapshot = first.Engine.CreateSnapshot();
+            Assert.Equal(1u, snapshot.ActivePlan!.Lines[0].RequestedQuantity);
+            Assert.Equal(100u, snapshot.ActivePlan.Lines[0].GilCap);
+            Assert.Equal(1u, snapshot.ActivePlan.Lines[0].PlannedQuantity);
+            Assert.Equal(100u, snapshot.ActivePlan.Lines[0].PlannedGil);
+            Assert.Equal(1u, snapshot.OutfitterExecution!.Lines[0].PurchasedQuantity);
+            Assert.Equal(100ul, snapshot.OutfitterExecution.TotalSpentGil);
+            Assert.Same(snapshot.ActivePlan, OutfitterDryRunExecutionStateRestorer.RestoreRemainingPlan(
+                fixture.Contract,
+                fixture.Document,
+                fixture.Claim,
+                snapshot.ActivePlan,
+                store.Restore()));
+
+            first.Runner.RecordCurrentWorld("Siren");
+            first.Runner.RecordProbe("Siren", CandidatePlan(quantity: 1, gil: 100));
+            first.MarketBoard.Reads.Enqueue(ReadWithListings(
+                LiveListing("listing-1", "retainer-1", quantity: 1),
+                LiveListing("listing-2", "retainer-2", quantity: 1)));
+            first.Engine.BeginNextWorldPurchase();
+
+            var liveCandidatePlan = Assert.IsType<MarketAcquisitionLiveCandidatePlan>(
+                first.Engine.CreateSnapshot().LiveCandidatePlan);
+            Assert.Equal(1, liveCandidatePlan.ReadableListingCount);
+            Assert.Equal(1, liveCandidatePlan.ReportedListingCount);
+            var selectedRow = Assert.Single(liveCandidatePlan.Rows, row => row.Decision == "WouldBuy");
+            Assert.Equal("listing-2", selectedRow.LiveListing.ListingId);
+            Assert.DoesNotContain(
+                liveCandidatePlan.Rows,
+                row => row.LiveListing.ListingId == "listing-1");
+            Assert.Equal(0, first.Purchase.ExecuteCallCount);
+            Assert.Equal(0, first.Purchase.ConfirmCallCount);
+            Assert.Equal(1u, first.Runner.LastRunSummary?.PurchasedQuantity);
+            Assert.Equal(initialSaveCount, saveCount);
+            Assert.Equal(persistedJson, config.OutfitterRouteExecutionStateJson);
+            Assert.Equal(1u, store.Restore()!.Lines[0].PurchasedQuantity);
+            Assert.Equal(100ul, store.Restore()!.TotalSpentGil);
+        }
+
+        using var restarted = MarketAcquisitionRouteEngineHarness.Create(store);
+        Assert.True(restarted.Engine.Start(
+            fixture.Plan,
+            fixture.Claim,
+            false,
+            false,
+            fixture.Contract,
+            fixture.Document,
+            MarketAcquisitionExecutionMode.DryRun).Success);
+        Assert.Equal(1u, restarted.Engine.CreateSnapshot().ActivePlan!.Lines[0].RequestedQuantity);
+        Assert.Equal(100u, restarted.Engine.CreateSnapshot().ActivePlan!.Lines[0].GilCap);
+        Assert.Equal(0, restarted.Purchase.ExecuteCallCount);
+        Assert.Equal(0, restarted.Purchase.ConfirmCallCount);
+        Assert.Equal(initialSaveCount, saveCount);
+        Assert.Equal(persistedJson, config.OutfitterRouteExecutionStateJson);
+        Assert.Equal(seeded.SunkPurchases[0].ReceiptId, store.Restore()!.SunkPurchases[0].ReceiptId);
+    }
+
+    [Fact]
+    public void RestartDryRun_AuthorityRejectsSunkCandidatePassedAfterPlanning()
+    {
+        var fixture = Fixture(dryRunOnly: true, splitListings: true);
+        var store = new MemoryStore();
+        store.Save(SeededState(fixture));
+        using var harness = MarketAcquisitionRouteEngineHarness.Create(store);
+        Assert.True(harness.Engine.Start(
+            fixture.Plan,
+            fixture.Claim,
+            false,
+            false,
+            fixture.Contract,
+            fixture.Document,
+            MarketAcquisitionExecutionMode.DryRun).Success);
+        var sunkListing = LiveListing("listing-1", "retainer-1", quantity: 1);
+        var candidate = CandidatePlan(quantity: 1, gil: 100) with
+        {
+            Rows =
+            [
+                new MarketAcquisitionLiveCandidateRow
+                {
+                    Decision = "WouldBuy",
+                    LiveListing = sunkListing,
+                    RunningQuantityAfter = 1,
+                    RunningGilAfter = 100,
+                },
+            ],
+        };
+
+        var rejection = harness.Engine.EnforceOutfitterCandidateAuthority(
+            harness.Engine.CreateSnapshot().ActivePlan!.WorldBatches[0].ItemSubtasks[0],
+            candidate);
+
+        Assert.NotNull(rejection);
+        Assert.Equal(
+            OutfitterRouteAuthorityPhase.RecoveryNeeded,
+            harness.Engine.CreateSnapshot().OutfitterExecution!.Phase);
+    }
+
+    [Theory]
+    [InlineData("contract")]
+    [InlineData("stale")]
+    [InlineData("over-cap")]
+    [InlineData("anonymous")]
+    public void RestartDryRun_InvalidSunkReceiptFailsClosedBeforePurchase(string invalidity)
+    {
+        var fixture = Fixture(dryRunOnly: true, splitListings: true);
+        var store = new MemoryStore();
+        var seeded = SeededState(fixture, receipt => invalidity switch
+        {
+            "contract" => receipt with { ContractId = "other-contract" },
+            "stale" => receipt with { PlanPreparedAtUtc = receipt.PlanPreparedAtUtc.AddSeconds(-1) },
+            "over-cap" => receipt with { Quantity = 3, TotalGil = 300 },
+            _ => receipt,
+        });
+        if (invalidity == "anonymous")
+            seeded = seeded with { SunkPurchases = [] };
+        store.Save(seeded);
+        var saveCount = store.SaveCount;
+        using var harness = MarketAcquisitionRouteEngineHarness.Create(store);
+
+        var result = harness.Engine.Start(
+            fixture.Plan,
+            fixture.Claim,
+            false,
+            false,
+            fixture.Contract,
+            fixture.Document,
+            MarketAcquisitionExecutionMode.DryRun);
+
+        Assert.False(result.Success);
+        Assert.Contains("preflight stopped", result.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(0, harness.Purchase.ExecuteCallCount);
+        Assert.Equal(0, harness.Purchase.ConfirmCallCount);
+        Assert.Equal(saveCount, store.SaveCount);
+        Assert.Equal(seeded, store.State);
+    }
+
+    private static FixtureData Fixture(bool dryRunOnly = false, bool splitListings = false)
     {
         var document = MarketAcquisitionRequestDocument.CreateDefault("Fran", "Siren");
-        var transfer = OutfitterWorkbenchAuthorityTests.Transfer() with { DryRunOnly = dryRunOnly };
+        var sourceTransfer = OutfitterWorkbenchAuthorityTests.Transfer();
+        var sourceLot = sourceTransfer.MarketLots.Single();
+        var transfer = sourceTransfer with
+        {
+            DryRunOnly = dryRunOnly,
+            MarketLots = splitListings
+                ?
+                [
+                    sourceLot with { RequiredQuantity = 1, ObservedAvailableQuantity = 1, ObservedTotalPriceGil = 100 },
+                    sourceLot with
+                    {
+                        RequiredQuantity = 1,
+                        ObservedAvailableQuantity = 1,
+                        ObservedTotalPriceGil = 100,
+                        DiscoveryObservationId = "listing-2",
+                        RetainerName = "Retainer 2",
+                        RetainerId = "retainer-2",
+                    },
+                ]
+                : sourceTransfer.MarketLots,
+        };
         document = OutfitterWorkbenchAuthorityService.Stage(document, transfer);
         document = OutfitterWorkbenchAuthorityService.Finalize(document);
         var claim = new MarketAcquisitionClaimView
@@ -265,7 +513,9 @@ public sealed class MarketAcquisitionRouteEngineOutfitterLifecycleTests
                 },
             ],
         };
-        var listing = Listing("listing-1");
+        var listings = splitListings
+            ? new[] { Listing("listing-1", "retainer-1", 1, sourceLot.ReviewedAtUtc), Listing("listing-2", "retainer-2", 1, sourceLot.ReviewedAtUtc) }
+            : new[] { Listing("listing-1", reviewedAt: sourceLot.ReviewedAtUtc) };
         var subtask = new MarketAcquisitionWorldItemSubtask
         {
             LineId = "line-1",
@@ -280,13 +530,14 @@ public sealed class MarketAcquisitionRouteEngineOutfitterLifecycleTests
             GilCap = 200,
             PlannedQuantity = 2,
             PlannedGil = 200,
-            Listings = [listing],
+            Listings = listings,
         };
         var plan = new MarketAcquisitionPlan
         {
             RequestId = claim.Id,
             Status = "Ready",
             WorldMode = "Recommended",
+            PreparedAtUtc = DateTimeOffset.Parse("2026-07-20T12:00:00Z"),
             Lines =
             [
                 new MarketAcquisitionPlanLine
@@ -313,7 +564,7 @@ public sealed class MarketAcquisitionRouteEngineOutfitterLifecycleTests
                     PlannedQuantity = 2,
                     PlannedGil = 200,
                     ItemSubtasks = [subtask],
-                    Listings = [listing],
+                    Listings = listings,
                 },
             ],
         };
@@ -330,16 +581,30 @@ public sealed class MarketAcquisitionRouteEngineOutfitterLifecycleTests
         WouldSpendGil = 200,
     };
 
-    private static MarketAcquisitionPlannedListing Listing(string listingId) => new()
+    private static MarketAcquisitionLiveCandidatePlan CandidatePlan(uint quantity, uint gil) => new()
+    {
+        Status = "Ready",
+        ListingReadState = MarketBoardListingReadState.FreshComplete,
+        WouldBuyQuantity = quantity,
+        WouldSpendGil = gil,
+    };
+
+    private static MarketAcquisitionPlannedListing Listing(
+        string listingId,
+        string retainerId = "retainer-1",
+        uint quantity = 2,
+        DateTimeOffset reviewedAt = default) => new()
     {
         LineId = "line-1",
         ItemId = 10,
         ItemName = "Exact HQ Ring",
         ListingId = listingId,
-        Quantity = 2,
+        RetainerId = retainerId,
+        Quantity = quantity,
         UnitPrice = 100,
-        TotalGil = 200,
+        TotalGil = checked(quantity * 100),
         IsHq = true,
+        LastReviewTimeUtc = reviewedAt,
     };
 
     private static MarketAcquisitionPlan WithListingId(MarketAcquisitionPlan plan, string listingId)
@@ -353,12 +618,88 @@ public sealed class MarketAcquisitionRouteEngineOutfitterLifecycleTests
         };
     }
 
+    private static MarketBoardReadResult ReadWithListings(params MarketBoardLiveListing[] listings) => new()
+    {
+        Status = "Ready",
+        ReadState = MarketBoardListingReadState.FreshComplete,
+        ItemId = 10,
+        WorldName = "Siren",
+        ReportedListingCount = listings.Length,
+        Listings = listings,
+    };
+
+    private static MarketBoardLiveListing LiveListing(string listingId, string retainerId, uint quantity) => new()
+    {
+        ItemId = 10,
+        WorldName = "Siren",
+        ListingId = listingId,
+        RetainerId = retainerId,
+        Quantity = quantity,
+        UnitPrice = 100,
+        IsHq = true,
+    };
+
+    private static OutfitterRouteExecutionState SeededState(
+        FixtureData fixture,
+        Func<OutfitterRouteSunkPurchase, OutfitterRouteSunkPurchase>? mutateReceipt = null)
+    {
+        var line = fixture.Contract.Lines[0];
+        var draft = new OutfitterRouteSunkPurchase
+        {
+            SchemaVersion = OutfitterRouteSunkPurchase.CurrentSchemaVersion,
+            ReceiptId = string.Empty,
+            ContractId = fixture.Contract.ContractId,
+            CanonicalIntentHash = fixture.Contract.CanonicalIntentHash,
+            WorkbenchDocumentId = fixture.Document.LocalRequestId,
+            WorkbenchRevision = fixture.Document.LocalRevision,
+            PlanRequestId = fixture.Plan.RequestId,
+            PlanPreparedAtUtc = fixture.Plan.PreparedAtUtc,
+            WorldName = "Siren",
+            LineId = "line-1",
+            ItemId = line.ItemId,
+            Quality = line.Quality,
+            ListingId = "listing-1",
+            RetainerId = "retainer-1",
+            Quantity = 1,
+            UnitPriceGil = 100,
+            TotalGil = 100,
+        };
+        var receipt = mutateReceipt?.Invoke(draft) ?? draft;
+        receipt = receipt with { ReceiptId = OutfitterDryRunExecutionStateRestorer.ComputeReceiptId(receipt) };
+        return new OutfitterRouteExecutionState(
+            OutfitterRouteExecutionState.CurrentSchemaVersion,
+            fixture.Contract.ContractId,
+            fixture.Contract.CanonicalIntentHash,
+            OutfitterRouteAuthorityPhase.Paused,
+            [new OutfitterRouteLineProgress("line-1", line.ItemId, line.ItemName, line.Quality, 2, 1, 100, 100, 200)],
+            100,
+            0,
+            null,
+            0,
+            "Seeded fixture.",
+            DateTimeOffset.Parse("2026-07-20T12:01:00Z"))
+        {
+            SunkPurchases = [receipt],
+        };
+    }
+
     private sealed class MemoryStore : IOutfitterRouteExecutionStateStore
     {
         private OutfitterRouteExecutionState? state;
+        public OutfitterRouteExecutionState? State => state;
+        public int SaveCount { get; private set; }
+        public int ClearCount { get; private set; }
         public OutfitterRouteExecutionState? Restore() => state;
-        public void Save(OutfitterRouteExecutionState value) => state = value;
-        public void Clear() => state = null;
+        public void Save(OutfitterRouteExecutionState value)
+        {
+            SaveCount++;
+            state = value;
+        }
+        public void Clear()
+        {
+            ClearCount++;
+            state = null;
+        }
     }
 
     private sealed record FixtureData(

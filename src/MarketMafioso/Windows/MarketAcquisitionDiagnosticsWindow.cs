@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Windowing;
@@ -80,7 +81,7 @@ public sealed class MarketAcquisitionDiagnosticsWindow : Window
 
         var diagnosticFilePath = routeSnapshot.LastDiagnosticFilePath;
         if (!string.IsNullOrWhiteSpace(diagnosticFilePath))
-            ImGui.TextColored(ColMuted, $"Diagnostics: {diagnosticFilePath}");
+            ImGui.TextColored(ColMuted, $"Latest report: {Path.GetFileName(diagnosticFilePath)}");
     }
 
     private static void DrawCraftQuoteDiagnostics(CraftAppraisalDiagnosticsSnapshot snapshot)
@@ -99,8 +100,8 @@ public sealed class MarketAcquisitionDiagnosticsWindow : Window
             ? "None"
             : $"{snapshot.LastQuoteItemName} ({snapshot.LastQuoteItemId})");
         DrawDiagnosticRow("Quote Cache", snapshot.LatestQuoteWasLastGood ? "Last-good quote" : "Live or none");
-        DrawDiagnosticRow("Quote Printout", snapshot.LastCraftQuoteDiagnosticFilePath ?? "None");
-        DrawDiagnosticRow("Market Depth Printout", snapshot.LastMarketDepthDiagnosticFilePath ?? "None");
+        DrawDiagnosticRow("Quote Printout", FileNameOrNone(snapshot.LastCraftQuoteDiagnosticFilePath));
+        DrawDiagnosticRow("Market Depth Printout", FileNameOrNone(snapshot.LastMarketDepthDiagnosticFilePath));
 
         ImGui.EndTable();
     }
@@ -113,6 +114,9 @@ public sealed class MarketAcquisitionDiagnosticsWindow : Window
         ImGui.TableNextColumn();
         ImGui.TextWrapped(value);
     }
+
+    private static string FileNameOrNone(string? path) =>
+        string.IsNullOrWhiteSpace(path) ? "None" : Path.GetFileName(path);
 
     private static void DrawReadResult(MarketBoardReadResult readResult)
     {

@@ -26,7 +26,9 @@ public sealed record OutfitterWorkbenchMarketLot(
     ulong ObservedTotalPriceGil,
     string DiscoveryObservationId,
     string SourceRevision,
-    DateTimeOffset ReviewedAtUtc);
+    DateTimeOffset ReviewedAtUtc,
+    string? RetainerName = null,
+    string? RetainerId = null);
 
 public sealed record OutfitterWorkbenchSelectionLineage(
     EquipmentLoadoutPosition Position,
@@ -193,7 +195,9 @@ internal static class OutfitterWorkbenchTransferBuilder
             checked((ulong)row.UnitPriceGil * requiredQuantity),
             observation.ObservationId,
             listing.SourceRevision,
-            listing.ListingReviewedAtUtc);
+            listing.ListingReviewedAtUtc,
+            listing.RetainerName,
+            listing.RetainerId);
     }
 
     private static uint SumQuantity(IEnumerable<EquipmentLoadoutSelection> selections)
