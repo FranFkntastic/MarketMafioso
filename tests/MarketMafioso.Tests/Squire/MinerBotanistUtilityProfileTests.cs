@@ -178,7 +178,7 @@ public sealed class MinerBotanistUtilityProfileTests
 
         var authority = profile.AssessAuthority(candidate, additionalCostGil: 0);
 
-        Assert.Equal(MinerBotanistCalibrationState.Supported, MinerBotanistUtilityProfile.CalibrationState);
+        Assert.Equal(AdvisorProfileCalibrationState.Supported, MinerBotanistUtilityProfile.CalibrationState);
         Assert.True(authority.AdvisorMayConsider);
         Assert.Empty(authority.Reasons);
     }
@@ -206,9 +206,9 @@ public sealed class MinerBotanistUtilityProfileTests
         var evaluation = profile.Evaluate(new MinerBotanistUtilityStats(5_400, 5_200, 950));
 
         Assert.Equal(UpgradeAssessment.Unsupported, evaluation.Assessment);
-        Assert.Contains(evaluation.Diagnostics, diagnostic => diagnostic.Contains("Fisher", StringComparison.Ordinal));
-        Assert.Contains(evaluation.Diagnostics, diagnostic => diagnostic.Contains("permanently unsupported", StringComparison.Ordinal));
-        Assert.Contains(evaluation.Diagnostics, diagnostic => diagnostic.Contains("out of scope", StringComparison.Ordinal));
+        Assert.Contains(
+            "Fisher is permanently unsupported and out of scope for Squire Outfitter.",
+            evaluation.Diagnostics);
     }
 
     private static MinerBotanistUtilityProfile Legendary(MinerBotanistUtilityStats baseline) => new(

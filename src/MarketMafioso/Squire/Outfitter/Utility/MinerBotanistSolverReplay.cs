@@ -7,6 +7,11 @@ using Franthropy.Dalamud.Equipment;
 
 namespace MarketMafioso.Squire.Outfitter.Utility;
 
+public interface IAdvisorSolverReplay
+{
+    EquipmentExactFrontierRequest ToRequest();
+}
+
 public sealed record MinerBotanistSolverReplayProfile(
     MinerBotanistUtilityContextKind Context,
     uint ClassJobId,
@@ -47,7 +52,7 @@ public sealed record MinerBotanistSolverReplay(
     MinerBotanistSolverReplayProfile Profile,
     IReadOnlyList<EquipmentLoadoutPosition> RequiredPositions,
     IReadOnlyList<MinerBotanistSolverReplayBaseline> Baseline,
-    IReadOnlyList<MinerBotanistSolverReplayOffer> Offers)
+    IReadOnlyList<MinerBotanistSolverReplayOffer> Offers) : IAdvisorSolverReplay
 {
     public const string CurrentSchemaVersion = "marketmafioso-squire-min-btn-solver-replay/v1";
 
@@ -197,20 +202,20 @@ internal static class MinerBotanistSolverReplayOfferExtensions
     }
 }
 
-internal static class MinerBotanistSolverReplayFileStore
+internal static class AdvisorSolverReplayFileStore
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
         WriteIndented = true,
     };
 
-    public static void Write(string path, MinerBotanistSolverReplay replay)
+    public static void Write(string path, IAdvisorSolverReplay replay)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         ArgumentNullException.ThrowIfNull(replay);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         var temporaryPath = path + ".tmp";
-        File.WriteAllText(temporaryPath, JsonSerializer.Serialize(replay, JsonOptions));
+        File.WriteAllText(temporaryPath, JsonSerializer.Serialize(replay, replay.GetType(), JsonOptions));
         File.Move(temporaryPath, path, true);
     }
 

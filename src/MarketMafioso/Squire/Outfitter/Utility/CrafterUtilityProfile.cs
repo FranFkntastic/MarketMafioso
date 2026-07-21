@@ -10,12 +10,6 @@ public enum CrafterUtilityContextKind
     OrdinaryCraftBenchmark,
 }
 
-public enum CrafterCalibrationState
-{
-    Experimental,
-    Supported,
-}
-
 public sealed record CrafterUtilityStats(
     int Craftsmanship,
     int Control,
@@ -46,7 +40,7 @@ public sealed class CrafterUtilityProfile : IEquipmentExactSolverUtilityModel, I
     public const string ProfileId = "squire.crafter.player";
     public const string ProfileVersion = "7.51-v1";
     public const string OrdinaryCraftBenchmarkContextId = "ordinary-craft-benchmark";
-    public const CrafterCalibrationState CalibrationState = CrafterCalibrationState.Supported;
+    public const AdvisorProfileCalibrationState CalibrationState = AdvisorProfileCalibrationState.Supported;
 
     private const string CraftsmanshipKey = "craftsmanship";
     private const string ControlKey = "control";
@@ -162,7 +156,7 @@ public sealed class CrafterUtilityProfile : IEquipmentExactSolverUtilityModel, I
             evidenceComplete,
             patchMatches,
             hasUnmodeledRelevantEffect,
-            calibrationApproved: CalibrationState == CrafterCalibrationState.Supported);
+            calibrationApproved: CalibrationState == AdvisorProfileCalibrationState.Supported);
 
     internal AdvisorAuthorityAssessment AssessAuthorityForCalibration(
         EquipmentUtilityEvaluation candidate,

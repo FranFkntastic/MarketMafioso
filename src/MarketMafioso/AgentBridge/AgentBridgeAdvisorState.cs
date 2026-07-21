@@ -32,6 +32,9 @@ public sealed record AgentBridgeAdvisorAdvice(
     string Diagnostic,
     int OfferCount,
     int FrontierCount,
+    int FrontierOffset,
+    int FrontierReturnedCount,
+    bool FrontierHasMore,
     long ExpandedStateCount,
     long RetainedCompletePathCount,
     double SolverElapsedMilliseconds,
@@ -50,7 +53,9 @@ public sealed record AgentBridgeAdvisorState(
     DateTimeOffset UpdatedAtUtc,
     bool IsBusy)
 {
-    public static AgentBridgeAdvisorState Create(MinerBotanistAdvisorSessionState state)
+    public const int DefaultFrontierPageSize = 16;
+
+    public static AgentBridgeAdvisorState Create(MinerBotanistAdvisorSessionState state, int? frontierOffset = null)
     {
         AgentBridgeAdvisorSolution Convert(EquipmentDecisionSolution solution)
         {
@@ -82,17 +87,26 @@ public sealed record AgentBridgeAdvisorState(
         if (state.Advice is { } source)
         {
             var frontier = source.Frontier?.Pareto.Frontier ?? [];
+            var presentation = frontier.Count == 0 ? null : new AdvisorFrontierPresentation(source.Frontier!.Pareto);
+            var window = presentation is null
+                ? null
+                : frontierOffset is { } offset
+                    ? presentation.WindowFrom(offset, DefaultFrontierPageSize)
+                    : presentation.WindowAround(source.Nomination?.Candidate.SolutionId, DefaultFrontierPageSize);
             advice = new(
                 source.Status.ToString(),
                 source.AdvisoryRule,
                 source.Diagnostic,
                 source.OffersByAllocation.Count,
                 frontier.Count,
+                window?.Offset ?? 0,
+                window?.Solutions.Count ?? 0,
+                window is { HasPrevious: true } or { HasNext: true },
                 source.Frontier?.Diagnostics.ExpandedStateCount ?? 0,
                 source.Frontier?.Diagnostics.RetainedCompletePathCount ?? 0,
                 source.Frontier?.Diagnostics.Elapsed.TotalMilliseconds ?? 0,
                 source.Nomination is null ? null : Convert(source.Nomination),
-                frontier.Take(128).Select(Convert).ToArray());
+                window?.Solutions.Select(Convert).ToArray() ?? []);
         }
 
         return new(
@@ -101,7 +115,7 @@ public sealed record AgentBridgeAdvisorState(
             state.CoverageLabel,
             state.Completed,
             state.Total,
-            state.Context.ToString(),
+            state.Context.ConfigurationValue,
             advice,
             state.AdviceIsRetained,
             state.UpdatedAtUtc,

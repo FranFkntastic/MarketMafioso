@@ -30,7 +30,7 @@ public sealed record MinerBotanistAdvisorSessionState(
     string CoverageLabel,
     int Completed,
     int? Total,
-    MinerBotanistUtilityContextKind Context,
+    AdvisorUtilityContextDescriptor Context,
     MinerBotanistReadOnlyAdvice? Advice,
     bool AdviceIsRetained,
     DateTimeOffset UpdatedAtUtc)
@@ -81,6 +81,7 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
     private SolverProgressSnapshot? solverProgress;
     private long sessionGeneration;
     private DateTimeOffset solvingStartedAtUtc;
+    private string requestedContextId = GathererAdvisorStatFamily.OrdinaryResourceContext.Id;
 
     public MinerBotanistAdvisorSession(
         IPlayerAdvisorBaselineSource baselineSource,
@@ -101,7 +102,7 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
             listingSource,
             new(TimeSpan.FromMinutes(15), TimeSpan.FromHours(6), maxEntries: 4096),
             new OutfitterMarketEvidenceFileStore(evidencePath));
-        State = Idle(MinerBotanistUtilityContextKind.OrdinaryResourceBenchmark);
+        State = Idle(GathererAdvisorStatFamily.Instance.ProfileDescriptor.DefaultContext);
     }
 
     public MinerBotanistAdvisorSessionState State { get; private set; }
@@ -110,13 +111,16 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
 
     public string Region { get; private set; } = "North America";
 
-    public void Begin(MinerBotanistUtilityContextKind context, string region)
+    public void Begin(AdvisorUtilityContextDescriptor context, string region)
     {
+        ArgumentNullException.ThrowIfNull(context);
         CancelCore(MinerBotanistAdvisorSessionStage.Cancelled, "Superseded by a new advisor refresh.");
         sessionGeneration++;
-        var retainedAdvice = State.Context == context && State.Advice is { Frontier: not null }
+        var retainedAdvice = string.Equals(requestedContextId, context.Id, StringComparison.Ordinal) &&
+            State.Advice is { Frontier: not null }
             ? State.Advice
             : null;
+        requestedContextId = context.Id;
         if (retainedAdvice is null)
             CurrentEvidence = null;
         var retainedCoverage = retainedAdvice is null
@@ -282,9 +286,10 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
         resolvedFamily = AdvisorStatFamilies.Resolve(classJobId);
         if (resolvedFamily is null)
         {
-            Abstain("The active player job has no landed advisor stat family yet.");
+            Abstain(AdvisorStatFamilies.UnsupportedDiagnostic(classJobId));
             return;
         }
+        State = State with { Context = resolvedFamily.ResolveContext(requestedContextId) };
 
         if (workbenchValidationRequest is { } validationRequest)
         {
@@ -302,8 +307,8 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
         ownedInventoryCoverageComplete = ComponentIsComplete(baseline, "armoury") && ComponentIsComplete(baseline, "inventory");
         ownedItemsEvidence = CaptureOwnedItems(baseline);
         var ownershipCoverage = ownedInventoryCoverageComplete
-            ? "owned armoury, bag, and saddlebag inventory observed via direct container reads (owned items evaluated at base stats)"
-            : "owned inventory coverage is partial; observed items are included at base stats, but paid nomination is disabled";
+            ? "owned armoury, bag, and saddlebag inventory observed via direct container reads (unmelded items use exact NQ/HQ definitions; relevant melded items block paid nomination)"
+            : "owned inventory coverage is partial; observed unmelded items use exact NQ/HQ definitions, but paid nomination is disabled";
         var coverageLabel = offers.CoverageLabel.Replace(
             "owned inventory is not yet observed",
             ownershipCoverage,
@@ -374,13 +379,13 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
                 solvingEvidence,
                 itemId => capturedOffers.Definitions.TryGetValue(itemId, out var definition) ? [definition] : [],
                 capturedFamily,
-                ContextIdFor(capturedContext, capturedFamily),
+                capturedContext.Id,
                 capturedOffers.VendorOffers,
                 capturedOwnedItems,
                 token,
                 progress => Volatile.Write(ref solverProgress, new(capturedGeneration, progress)),
 #if DEBUG
-                replay => MinerBotanistSolverReplayFileStore.Write(solverReplayPath, replay)
+                replay => AdvisorSolverReplayFileStore.Write(solverReplayPath, replay)
 #else
                 null
 #endif
@@ -552,7 +557,8 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
                 instance.Fingerprint.ItemId,
                 instance.Fingerprint.IsHighQuality,
                 OwnedContainerLabel(instance.Fingerprint.Container),
-                instance))
+                instance,
+                UtilityIsExact: instance.Fingerprint.MateriaIds.Count == 0))
             .ToArray();
 
     private static bool ComponentIsComplete(PlayerAdvisorBaseline baseline, string component) =>
@@ -570,7 +576,7 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
             : container.Contains("SaddleBag", StringComparison.Ordinal) ? "Saddlebag"
             : "Inventory";
 
-    private static MinerBotanistAdvisorSessionState Idle(MinerBotanistUtilityContextKind context) => new(
+    private static MinerBotanistAdvisorSessionState Idle(AdvisorUtilityContextDescriptor context) => new(
         MinerBotanistAdvisorSessionStage.Idle,
         "Refresh to capture the active player and build read-only advice without opening Character UI.",
         "Coverage has not been observed yet.",
@@ -595,14 +601,4 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
         IReadOnlyList<EquipmentInstanceFingerprint> RequiredOwnedInstances);
 
     private sealed record SolverProgressSnapshot(long Generation, EquipmentExactFrontierProgress Progress);
-
-    private static string ContextIdFor(MinerBotanistUtilityContextKind contextKind, IAdvisorStatFamily family) =>
-        family is CrafterAdvisorStatFamily
-            ? CrafterUtilityProfile.OrdinaryCraftBenchmarkContextId
-            : contextKind switch
-            {
-                MinerBotanistUtilityContextKind.LegendaryNodeGeneralYield => MinerBotanistUtilityProfile.LegendaryContextId,
-                MinerBotanistUtilityContextKind.CollectableEfficiency => MinerBotanistUtilityProfile.CollectableContextId,
-                _ => MinerBotanistUtilityProfile.OrdinaryResourceBenchmarkContextId,
-            };
 }

@@ -8,6 +8,57 @@ namespace MarketMafioso.Squire.Outfitter.Utility;
 /// <summary>Positional stat triple; each family defines the semantic meaning of the components.</summary>
 public sealed record AdvisorStatTriple(long First, long Second, long Third);
 
+public sealed record AdvisorCombatRoleDescriptor(
+    string Id,
+    string Label,
+    IReadOnlySet<uint> ClassJobIds);
+
+public static class AdvisorCombatRoles
+{
+    public static readonly AdvisorCombatRoleDescriptor PhysicalRanged = new(
+        "physical-ranged",
+        "Physical ranged DPS",
+        new HashSet<uint>
+        {
+            PhysicalRangedUtilityProfile.BardClassJobId,
+            PhysicalRangedUtilityProfile.MachinistClassJobId,
+            PhysicalRangedUtilityProfile.DancerClassJobId,
+        });
+
+    public static IReadOnlyList<AdvisorCombatRoleDescriptor> All { get; } = [PhysicalRanged];
+
+    public static AdvisorCombatRoleDescriptor? Resolve(uint classJobId) =>
+        All.FirstOrDefault(role => role.ClassJobIds.Contains(classJobId));
+}
+
+public enum AdvisorProfileCalibrationState
+{
+    Experimental,
+    Supported,
+}
+
+public sealed record AdvisorUtilityContextDescriptor(
+    string Id,
+    string ConfigurationValue,
+    string Label);
+
+public sealed record AdvisorUtilityProfileDescriptor(
+    string Id,
+    string Version,
+    AdvisorProfileCalibrationState CalibrationState,
+    IReadOnlyList<AdvisorUtilityContextDescriptor> Contexts,
+    string DefaultContextId)
+{
+    public AdvisorUtilityContextDescriptor DefaultContext =>
+        Contexts.First(context => string.Equals(context.Id, DefaultContextId, StringComparison.Ordinal));
+
+    public AdvisorUtilityContextDescriptor ResolveContext(string? value) =>
+        Contexts.FirstOrDefault(context =>
+            string.Equals(context.Id, value, StringComparison.Ordinal) ||
+            string.Equals(context.ConfigurationValue, value, StringComparison.Ordinal))
+        ?? DefaultContext;
+}
+
 /// <summary>
 /// The seam between the shared advisor machinery (offers, solver, nomination, evidence)
 /// and one job family's calibration: which stats matter, how vectors are built, how the
@@ -15,6 +66,7 @@ public sealed record AdvisorStatTriple(long First, long Second, long Third);
 /// </summary>
 public interface IAdvisorStatFamily
 {
+    AdvisorUtilityProfileDescriptor ProfileDescriptor { get; }
     IReadOnlySet<uint> SupportedClassJobIds { get; }
     string CoverageJobLabel { get; }
     IReadOnlyList<EquipmentStatSemantic> RelevantSemantics { get; }
@@ -30,7 +82,7 @@ public interface IAdvisorStatFamily
         IEquipmentExactSolverUtilityModel model,
         EquipmentUtilityEvaluation candidate,
         ulong additionalCostGil);
-    MinerBotanistSolverReplay? CaptureReplay(
+    IAdvisorSolverReplay? CaptureReplay(
         EquipmentExactFrontierRequest request,
         string contextId,
         uint classJobId,
@@ -41,6 +93,15 @@ public interface IAdvisorStatFamily
     AdvisorStatTriple TripleFromRendered(IReadOnlyDictionary<string, int> stats, IReadOnlyDictionary<string, int> materia);
     EquipmentSolverUtilityVector VectorFromRendered(IReadOnlyDictionary<string, int> stats, IReadOnlyDictionary<string, int> materia);
     EquipmentSolverUtilityVector VectorFromDefinition(EquipmentStatProfile profile);
+    bool TryGetNonParameterDefinitionValue(
+        EquipmentStatProfile profile,
+        EquipmentStatSemantic semantic,
+        out int value)
+    {
+        value = 0;
+        return false;
+    }
+    AdvisorUtilityContextDescriptor ResolveContext(string? value) => ProfileDescriptor.ResolveContext(value);
 }
 
 /// <summary>
@@ -49,6 +110,8 @@ public interface IAdvisorStatFamily
 /// </summary>
 public static class AdvisorStatFamilies
 {
+    public const uint FisherClassJobId = 18;
+
     private static readonly IReadOnlyDictionary<string, uint> RenderedJobIds =
         new Dictionary<string, uint>(StringComparer.Ordinal)
         {
@@ -62,10 +125,13 @@ public static class AdvisorStatFamilies
             ["Weaver"] = CrafterUtilityProfile.WeaverClassJobId,
             ["Alchemist"] = CrafterUtilityProfile.AlchemistClassJobId,
             ["Culinarian"] = CrafterUtilityProfile.CulinarianClassJobId,
+            ["Bard"] = PhysicalRangedUtilityProfile.BardClassJobId,
+            ["Machinist"] = PhysicalRangedUtilityProfile.MachinistClassJobId,
+            ["Dancer"] = PhysicalRangedUtilityProfile.DancerClassJobId,
         };
 
     public static IReadOnlyList<IAdvisorStatFamily> All { get; } =
-        [GathererAdvisorStatFamily.Instance, CrafterAdvisorStatFamily.Instance];
+        [GathererAdvisorStatFamily.Instance, CrafterAdvisorStatFamily.Instance, PhysicalRangedAdvisorStatFamily.Instance];
 
     public static uint? ClassJobIdForRenderedJob(string? renderedJobName) =>
         renderedJobName is not null && RenderedJobIds.TryGetValue(renderedJobName, out var classJobId)
@@ -77,6 +143,10 @@ public static class AdvisorStatFamilies
 
     public static IAdvisorStatFamily? ResolveForRenderedJob(string? renderedJobName) =>
         ClassJobIdForRenderedJob(renderedJobName) is { } classJobId ? Resolve(classJobId) : null;
+
+    public static string UnsupportedDiagnostic(uint classJobId) => classJobId == FisherClassJobId
+        ? "Fisher is permanently unsupported and out of scope for Squire Outfitter."
+        : $"Class/job {classJobId} has no advisor stat family yet.";
 }
 
 public sealed class GathererAdvisorStatFamily : IAdvisorStatFamily
@@ -96,9 +166,31 @@ public sealed class GathererAdvisorStatFamily : IAdvisorStatFamily
         EquipmentStatSemantic.GatheringPoints,
     ];
 
+    public static readonly AdvisorUtilityContextDescriptor OrdinaryResourceContext = new(
+        MinerBotanistUtilityProfile.OrdinaryResourceBenchmarkContextId,
+        nameof(MinerBotanistUtilityContextKind.OrdinaryResourceBenchmark),
+        "Ordinary nodes · general yield");
+    public static readonly AdvisorUtilityContextDescriptor LegendaryNodeContext = new(
+        MinerBotanistUtilityProfile.LegendaryContextId,
+        nameof(MinerBotanistUtilityContextKind.LegendaryNodeGeneralYield),
+        "Legendary nodes · general yield");
+    public static readonly AdvisorUtilityContextDescriptor CollectableContext = new(
+        MinerBotanistUtilityProfile.CollectableContextId,
+        nameof(MinerBotanistUtilityContextKind.CollectableEfficiency),
+        "Collectables · i730 efficiency");
+
+    private static readonly AdvisorUtilityProfileDescriptor Descriptor = new(
+        MinerBotanistUtilityProfile.ProfileId,
+        MinerBotanistUtilityProfile.ProfileVersion,
+        MinerBotanistUtilityProfile.CalibrationState,
+        [OrdinaryResourceContext, LegendaryNodeContext, CollectableContext],
+        OrdinaryResourceContext.Id);
+
+    public AdvisorUtilityProfileDescriptor ProfileDescriptor => Descriptor;
     public IReadOnlySet<uint> SupportedClassJobIds => Jobs;
     public string CoverageJobLabel => "MIN/BTN";
     public IReadOnlyList<EquipmentStatSemantic> RelevantSemantics => Semantics;
+    public AdvisorUtilityContextDescriptor ResolveContext(string? value) => Descriptor.ResolveContext(value);
 
     public bool IsRelevantSemantic(EquipmentStatSemantic semantic) => semantic is
         EquipmentStatSemantic.Gathering or EquipmentStatSemantic.Perception or EquipmentStatSemantic.GatheringPoints;
@@ -113,12 +205,7 @@ public sealed class GathererAdvisorStatFamily : IAdvisorStatFamily
         uint classJobId,
         uint characterLevel)
     {
-        var contextKind = contextId switch
-        {
-            MinerBotanistUtilityProfile.LegendaryContextId => MinerBotanistUtilityContextKind.LegendaryNodeGeneralYield,
-            MinerBotanistUtilityProfile.CollectableContextId => MinerBotanistUtilityContextKind.CollectableEfficiency,
-            _ => MinerBotanistUtilityContextKind.OrdinaryResourceBenchmark,
-        };
+        var contextKind = ContextKindFor(contextId);
         return new MinerBotanistUtilityProfile(
             contextKind,
             FromSemantics(baseline),
@@ -133,7 +220,7 @@ public sealed class GathererAdvisorStatFamily : IAdvisorStatFamily
         ulong additionalCostGil) =>
         ((MinerBotanistUtilityProfile)model).AssessAuthority(candidate, additionalCostGil);
 
-    public MinerBotanistSolverReplay? CaptureReplay(
+    public IAdvisorSolverReplay? CaptureReplay(
         EquipmentExactFrontierRequest request,
         string contextId,
         uint classJobId,
@@ -141,12 +228,7 @@ public sealed class GathererAdvisorStatFamily : IAdvisorStatFamily
         IReadOnlyDictionary<EquipmentStatSemantic, int> offerBaseline,
         IReadOnlyDictionary<EquipmentStatSemantic, int> fixedStats)
     {
-        var contextKind = contextId switch
-        {
-            MinerBotanistUtilityProfile.LegendaryContextId => MinerBotanistUtilityContextKind.LegendaryNodeGeneralYield,
-            MinerBotanistUtilityProfile.CollectableContextId => MinerBotanistUtilityContextKind.CollectableEfficiency,
-            _ => MinerBotanistUtilityContextKind.OrdinaryResourceBenchmark,
-        };
+        var contextKind = ContextKindFor(contextId);
         return MinerBotanistSolverReplay.Capture(
             request,
             contextKind,
@@ -182,6 +264,14 @@ public sealed class GathererAdvisorStatFamily : IAdvisorStatFamily
 
     private static MinerBotanistUtilityStats FromTriple(AdvisorStatTriple triple) =>
         new(checked((int)triple.First), checked((int)triple.Second), checked((int)triple.Third));
+
+    internal static MinerBotanistUtilityContextKind ContextKindFor(string? value) =>
+        Instance.ResolveContext(value).Id switch
+        {
+            MinerBotanistUtilityProfile.LegendaryContextId => MinerBotanistUtilityContextKind.LegendaryNodeGeneralYield,
+            MinerBotanistUtilityProfile.CollectableContextId => MinerBotanistUtilityContextKind.CollectableEfficiency,
+            _ => MinerBotanistUtilityContextKind.OrdinaryResourceBenchmark,
+        };
 }
 
 public sealed class CrafterAdvisorStatFamily : IAdvisorStatFamily
@@ -195,9 +285,23 @@ public sealed class CrafterAdvisorStatFamily : IAdvisorStatFamily
         EquipmentStatSemantic.CraftingPoints,
     ];
 
+    public static readonly AdvisorUtilityContextDescriptor OrdinaryCraftContext = new(
+        CrafterUtilityProfile.OrdinaryCraftBenchmarkContextId,
+        nameof(CrafterUtilityContextKind.OrdinaryCraftBenchmark),
+        "Ordinary crafts");
+
+    private static readonly AdvisorUtilityProfileDescriptor Descriptor = new(
+        CrafterUtilityProfile.ProfileId,
+        CrafterUtilityProfile.ProfileVersion,
+        CrafterUtilityProfile.CalibrationState,
+        [OrdinaryCraftContext],
+        OrdinaryCraftContext.Id);
+
+    public AdvisorUtilityProfileDescriptor ProfileDescriptor => Descriptor;
     public IReadOnlySet<uint> SupportedClassJobIds => CrafterUtilityProfile.CrafterClassJobIds;
     public string CoverageJobLabel => "crafter";
     public IReadOnlyList<EquipmentStatSemantic> RelevantSemantics => Semantics;
+    public AdvisorUtilityContextDescriptor ResolveContext(string? value) => Descriptor.ResolveContext(value);
 
     public bool IsRelevantSemantic(EquipmentStatSemantic semantic) => semantic is
         EquipmentStatSemantic.Craftsmanship or EquipmentStatSemantic.Control or EquipmentStatSemantic.CraftingPoints;
@@ -224,7 +328,7 @@ public sealed class CrafterAdvisorStatFamily : IAdvisorStatFamily
         ulong additionalCostGil) =>
         ((CrafterUtilityProfile)model).AssessAuthority(candidate, additionalCostGil);
 
-    public MinerBotanistSolverReplay? CaptureReplay(
+    public IAdvisorSolverReplay? CaptureReplay(
         EquipmentExactFrontierRequest request,
         string contextId,
         uint classJobId,
@@ -259,4 +363,143 @@ public sealed class CrafterAdvisorStatFamily : IAdvisorStatFamily
 
     private static CrafterUtilityStats FromTriple(AdvisorStatTriple triple) =>
         new(checked((int)triple.First), checked((int)triple.Second), checked((int)triple.Third));
+}
+
+public sealed class PhysicalRangedAdvisorStatFamily : IAdvisorStatFamily
+{
+    public static readonly PhysicalRangedAdvisorStatFamily Instance = new();
+
+    private static readonly EquipmentStatSemantic[] Semantics =
+    [
+        EquipmentStatSemantic.Dexterity,
+        EquipmentStatSemantic.Vitality,
+        EquipmentStatSemantic.PhysicalDamage,
+        EquipmentStatSemantic.PhysicalDefense,
+        EquipmentStatSemantic.MagicalDefense,
+        EquipmentStatSemantic.CriticalHit,
+        EquipmentStatSemantic.Determination,
+        EquipmentStatSemantic.DirectHit,
+        EquipmentStatSemantic.SkillSpeed,
+    ];
+
+    public static readonly AdvisorUtilityContextDescriptor GeneralCombatContext = new(
+        PhysicalRangedUtilityProfile.GeneralCombatContextId,
+        nameof(PhysicalRangedUtilityContextKind.GeneralCombat),
+        "General physical-ranged combat");
+
+    private static readonly AdvisorUtilityProfileDescriptor Descriptor = new(
+        PhysicalRangedUtilityProfile.ProfileId,
+        PhysicalRangedUtilityProfile.ProfileVersion,
+        PhysicalRangedUtilityProfile.CalibrationState,
+        [GeneralCombatContext],
+        GeneralCombatContext.Id);
+
+    public AdvisorUtilityProfileDescriptor ProfileDescriptor => Descriptor;
+    public IReadOnlySet<uint> SupportedClassJobIds => AdvisorCombatRoles.PhysicalRanged.ClassJobIds;
+    public string CoverageJobLabel => "BRD/MCH/DNC";
+    public IReadOnlyList<EquipmentStatSemantic> RelevantSemantics => Semantics;
+    public AdvisorUtilityContextDescriptor ResolveContext(string? value) => Descriptor.ResolveContext(value);
+
+    public bool IsRelevantSemantic(EquipmentStatSemantic semantic) => Semantics.Contains(semantic);
+
+    public EquipmentSolverUtilityVector VectorFromSemantics(IReadOnlyDictionary<EquipmentStatSemantic, int> stats) =>
+        PhysicalRangedUtilityProfile.ToVector(FromSemantics(stats));
+
+    public IEquipmentExactSolverUtilityModel CreateUtilityModel(
+        string contextId,
+        IReadOnlyDictionary<EquipmentStatSemantic, int> baseline,
+        IReadOnlyDictionary<EquipmentStatSemantic, int>? fixedStats,
+        uint classJobId,
+        uint characterLevel) =>
+        new PhysicalRangedUtilityProfile(
+            PhysicalRangedUtilityContextKind.GeneralCombat,
+            FromSemantics(baseline),
+            classJobId,
+            characterLevel,
+            fixedStats is null ? null : FromSemantics(fixedStats));
+
+    public AdvisorAuthorityAssessment AssessAuthority(
+        IEquipmentExactSolverUtilityModel model,
+        EquipmentUtilityEvaluation candidate,
+        ulong additionalCostGil) =>
+        ((PhysicalRangedUtilityProfile)model).AssessAuthority(candidate, additionalCostGil);
+
+    public IAdvisorSolverReplay? CaptureReplay(
+        EquipmentExactFrontierRequest request,
+        string contextId,
+        uint classJobId,
+        uint characterLevel,
+        IReadOnlyDictionary<EquipmentStatSemantic, int> offerBaseline,
+        IReadOnlyDictionary<EquipmentStatSemantic, int> fixedStats) =>
+        null;
+
+    public AdvisorStatTriple TripleFromRendered(IReadOnlyDictionary<string, int> stats, IReadOnlyDictionary<string, int> materia)
+    {
+        int Read(string key) => stats.GetValueOrDefault(key) + materia.GetValueOrDefault(key);
+        return new(Read("Dexterity"), Read("Vitality"), Read("Physical Damage"));
+    }
+
+    public EquipmentSolverUtilityVector VectorFromRendered(IReadOnlyDictionary<string, int> stats, IReadOnlyDictionary<string, int> materia)
+    {
+        int Read(string key) => stats.GetValueOrDefault(key) + materia.GetValueOrDefault(key);
+        return PhysicalRangedUtilityProfile.ToVector(new(
+            Read("Dexterity"),
+            Read("Vitality"),
+            Read("Physical Damage"),
+            Read("Defense"),
+            Read("Magic Defense"),
+            Read("Critical Hit"),
+            Read("Determination"),
+            Read("Direct Hit Rate"),
+            Read("Skill Speed")));
+    }
+
+    public EquipmentSolverUtilityVector VectorFromDefinition(EquipmentStatProfile profile)
+    {
+        ArgumentNullException.ThrowIfNull(profile);
+        int Sum(EquipmentStatSemantic semantic) => profile.Parameters.Where(value => value.Semantic == semantic).Sum(value => value.Value);
+        return PhysicalRangedUtilityProfile.ToVector(new(
+            Sum(EquipmentStatSemantic.Dexterity),
+            Sum(EquipmentStatSemantic.Vitality),
+            profile.PhysicalDamage,
+            profile.PhysicalDefense,
+            profile.MagicalDefense,
+            Sum(EquipmentStatSemantic.CriticalHit),
+            Sum(EquipmentStatSemantic.Determination),
+            Sum(EquipmentStatSemantic.DirectHit),
+            Sum(EquipmentStatSemantic.SkillSpeed)));
+    }
+
+    public bool TryGetNonParameterDefinitionValue(
+        EquipmentStatProfile profile,
+        EquipmentStatSemantic semantic,
+        out int value)
+    {
+        if (!profile.IsComplete)
+        {
+            value = 0;
+            return false;
+        }
+        value = semantic switch
+        {
+            EquipmentStatSemantic.PhysicalDamage => profile.PhysicalDamage,
+            EquipmentStatSemantic.PhysicalDefense => profile.PhysicalDefense,
+            EquipmentStatSemantic.MagicalDefense => profile.MagicalDefense,
+            _ => 0,
+        };
+        return semantic is EquipmentStatSemantic.PhysicalDamage or
+            EquipmentStatSemantic.PhysicalDefense or EquipmentStatSemantic.MagicalDefense;
+    }
+
+    private static PhysicalRangedUtilityStats FromSemantics(IReadOnlyDictionary<EquipmentStatSemantic, int> stats) =>
+        new(
+            stats.GetValueOrDefault(EquipmentStatSemantic.Dexterity),
+            stats.GetValueOrDefault(EquipmentStatSemantic.Vitality),
+            stats.GetValueOrDefault(EquipmentStatSemantic.PhysicalDamage),
+            stats.GetValueOrDefault(EquipmentStatSemantic.PhysicalDefense),
+            stats.GetValueOrDefault(EquipmentStatSemantic.MagicalDefense),
+            stats.GetValueOrDefault(EquipmentStatSemantic.CriticalHit),
+            stats.GetValueOrDefault(EquipmentStatSemantic.Determination),
+            stats.GetValueOrDefault(EquipmentStatSemantic.DirectHit),
+            stats.GetValueOrDefault(EquipmentStatSemantic.SkillSpeed));
 }

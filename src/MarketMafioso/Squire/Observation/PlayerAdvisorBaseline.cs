@@ -105,7 +105,7 @@ internal static class PlayerAdvisorBaselineAssembler
 
         if (family is null)
             return Result(PlayerAdvisorBaselineStatus.Unsupported, snapshot, header, totalStats, EmptyStats(), [],
-                $"Class/job {header.ClassJobId} has no advisor stat family.");
+                AdvisorStatFamilies.UnsupportedDiagnostic(header.ClassJobId));
         if (header.Level is < 1 or > 100 || header.EffectiveLevel is < 1 or > 100 || header.EffectiveLevel > header.Level)
             return Result(PlayerAdvisorBaselineStatus.Incomplete, snapshot, header, totalStats, EmptyStats(), [],
                 "A valid level and effective level are required for the advisor baseline.");
