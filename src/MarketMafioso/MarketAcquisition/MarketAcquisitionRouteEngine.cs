@@ -166,6 +166,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
                                        outfitterContract?.Transfer.DryRunOnly == true;
         outfitterDryRunFaultInjected = false;
         outfitterDryRunNoViableConsumed = false;
+        var routePlan = plan;
         if (outfitterContract is not null)
         {
             if (outfitterContract.Transfer.DryRunOnly && executionMode != MarketAcquisitionExecutionMode.DryRun)
@@ -177,13 +178,24 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
                 return UpdateStatus(MarketAcquisitionRouteActionResult.Fail("Squire Route start requires its finalized Workbench document."));
             try
             {
+                IOutfitterRouteExecutionStateStore? authorityStore = outfitterStateStore;
+                if (executionMode == MarketAcquisitionExecutionMode.DryRun && outfitterStateStore is not null)
+                {
+                    routePlan = OutfitterDryRunExecutionStateRestorer.RestoreRemainingPlan(
+                        outfitterContract,
+                        workbenchDocument,
+                        claimed,
+                        plan,
+                        outfitterStateStore.Restore());
+                    authorityStore = new RestoreOnlyOutfitterRouteExecutionStateStore(outfitterStateStore);
+                }
                 outfitterAuthority = OutfitterRouteAuthoritySession.Consume(
                     outfitterContract,
                     workbenchDocument,
-                    plan,
+                    routePlan,
                     claimed,
-                    executionMode == MarketAcquisitionExecutionMode.DryRun ? null : outfitterStateStore);
-                outfitterAuthority.CompletePreflight(plan);
+                    authorityStore);
+                outfitterAuthority.CompletePreflight(routePlan);
             }
             catch (Exception exception)
             {
@@ -201,7 +213,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         MarketAcquisitionRouteActionResult result;
         try
         {
-            result = runner.Start(plan, enableDiagnostics || executionMode == MarketAcquisitionExecutionMode.DryRun, includeOpportunisticChecks, executionMode);
+            result = runner.Start(routePlan, enableDiagnostics || executionMode == MarketAcquisitionExecutionMode.DryRun, includeOpportunisticChecks, executionMode);
         }
         catch (Exception exception) when (outfitterAuthority is not null)
         {
@@ -1079,10 +1091,13 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         var totals = recordRouteResult
             ? ResolveActiveRouteLinePurchaseTotals(activeSubtask)
             : default;
+        var candidateRead = activeSubtask is null
+            ? state.MarketBoardReadResult
+            : ExcludeSunkOutfitterListings(state.MarketBoardReadResult);
         state.LiveCandidatePlan = canBuildLiveCandidatePlan
             ? activeSubtask == null
                 ? MarketAcquisitionLiveCandidatePlanner.BuildCandidatePlan(activeLine, plan, currentWorld, state.MarketBoardReadResult, totals.PurchasedQuantity, totals.SpentGil)
-                : MarketAcquisitionLiveCandidatePlanner.BuildCandidatePlan(activeLine, plan, activeSubtask, currentWorld, state.MarketBoardReadResult, totals.PurchasedQuantity, totals.SpentGil)
+                : MarketAcquisitionLiveCandidatePlanner.BuildCandidatePlan(activeLine, plan, activeSubtask, currentWorld, candidateRead, totals.PurchasedQuantity, totals.SpentGil)
             : null;
         if (state.LiveCandidatePlan != null &&
             TryContinueVisibleListingRead(
@@ -1233,9 +1248,12 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         }
 
         var totals = ResolveActiveRouteLinePurchaseTotals(activeStop.ActiveItemSubtask);
+        var candidateRead = activeStop.ActiveItemSubtask is null
+            ? freshRead
+            : ExcludeSunkOutfitterListings(freshRead);
         state.LiveCandidatePlan = activeStop.ActiveItemSubtask == null
             ? MarketAcquisitionLiveCandidatePlanner.BuildCandidatePlan(activeLine, plan, currentWorld, freshRead, totals.PurchasedQuantity, totals.SpentGil)
-            : MarketAcquisitionLiveCandidatePlanner.BuildCandidatePlan(activeLine, plan, activeStop.ActiveItemSubtask, currentWorld, freshRead, totals.PurchasedQuantity, totals.SpentGil);
+            : MarketAcquisitionLiveCandidatePlanner.BuildCandidatePlan(activeLine, plan, activeStop.ActiveItemSubtask, currentWorld, candidateRead, totals.PurchasedQuantity, totals.SpentGil);
         if (TryContinueVisibleListingRead(currentWorld, freshRead, state.LiveCandidatePlan))
             return;
 
@@ -1287,6 +1305,28 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
         purchaseAutomation.ScheduleNextMonitor(now, MarketBoardPurchaseInitialMonitorDelay);
         state.AcquisitionStatus = $"Purchase: {selection.Status}. {selection.Message}";
+    }
+
+    private MarketBoardReadResult ExcludeSunkOutfitterListings(MarketBoardReadResult readResult)
+    {
+        if (outfitterAuthority is null || outfitterAuthority.State.SunkPurchases.Count == 0)
+            return readResult;
+
+        var remaining = new List<MarketBoardLiveListing>(readResult.Listings.Count);
+        foreach (var listing in readResult.Listings)
+        {
+            if (!outfitterAuthority.IsSunkListing(listing))
+                remaining.Add(listing);
+        }
+
+        var excludedCount = readResult.Listings.Count - remaining.Count;
+        return excludedCount == 0
+            ? readResult
+            : readResult with
+            {
+                ReportedListingCount = Math.Max(0, readResult.ReportedListingCount - excludedCount),
+                Listings = remaining,
+            };
     }
 
     public MarketAcquisitionRouteEngineTickResult MonitorMarketBoardPurchase()

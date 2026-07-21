@@ -1,6 +1,7 @@
 using MarketMafioso.AgentBridge;
 using Franthropy.Dalamud.AgentBridge;
 using Franthropy.Dalamud.Automation.Ui;
+using MarketMafioso.Windows.MarketAcquisitionPanels;
 
 namespace MarketMafioso.Tests.AgentBridge;
 
@@ -180,6 +181,49 @@ public sealed class MarketMafiosoBridgeProviderTests
             captureRetainerUi: () => expected);
 
         Assert.Same(expected, provider.CaptureRetainerUi());
+    }
+
+    [Fact]
+    public void Diagnostics_test_tools_disclosure_is_a_stable_semantic_toggle()
+    {
+        var state = new DiagnosticsHierarchyState();
+        var registry = new AgentBridgeUiReviewRegistry();
+        registry.BeginFrame();
+        registry.Register(
+            DiagnosticsHierarchyState.TestToolsControlId,
+            state.TestToolsActionLabel,
+            AgentBridgeUiControlKind.Toggle,
+            default,
+            new(100, 20),
+            true,
+            state.TestToolsExpanded,
+            state.TestToolsValue,
+            state.ToggleTestTools);
+        var collapsedFrame = registry.EndFrame();
+
+        var collapsed = Assert.Single(collapsedFrame.Controls);
+        Assert.Equal("diagnostics.test-tools.expanded", collapsed.Id);
+        Assert.False(collapsed.Selected);
+        Assert.Equal("Collapsed", collapsed.Value);
+        Assert.True(registry.Invoke(collapsed.Id, collapsedFrame.FrameId).Success);
+        Assert.True(state.TestToolsExpanded);
+
+        registry.BeginFrame();
+        registry.Register(
+            DiagnosticsHierarchyState.TestToolsControlId,
+            state.TestToolsActionLabel,
+            AgentBridgeUiControlKind.Toggle,
+            default,
+            new(100, 20),
+            true,
+            state.TestToolsExpanded,
+            state.TestToolsValue,
+            state.ToggleTestTools);
+        var expanded = Assert.Single(registry.EndFrame().Controls);
+
+        Assert.Equal(collapsed.Id, expanded.Id);
+        Assert.True(expanded.Selected);
+        Assert.Equal("Expanded", expanded.Value);
     }
 
     private static AgentBridgeTruth CreateTruth() => new()

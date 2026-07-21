@@ -371,11 +371,17 @@ public class MainWindow : Window, IDisposable
             IsMarketAcquisitionUnlocked,
             uiStateCapture,
             AgentReviewRegistry,
+            () => acquisitionRequestBuilderCraftAppraisal.State.CreateDiagnosticsSnapshot(),
             () => config.EnableMarketAcquisitionDryRunTools,
             CanStartPreparedRouteDryRun,
             () => _ = StartPreparedRouteDryRunAsync(),
             () => routeEngine.ArmedOutfitterDryRunScenario,
-            scenario => routeEngine.ArmOutfitterDryRunScenario(scenario));
+            scenario => routeEngine.ArmOutfitterDryRunScenario(scenario)
+#if DEBUG
+            , CanSeedOutfitterDryRunSunkState,
+            SeedOutfitterDryRunSunkState
+#endif
+            );
         marketAcquisitionGuidedRoutePanel = new MarketAcquisitionGuidedRoutePanel(
             routeEngine.CreateSnapshot,
             forceDiagnostics => _ = StartGuidedRouteAsync(forceDiagnostics),
@@ -407,6 +413,9 @@ public class MainWindow : Window, IDisposable
             AgentReviewRegistry);
 
         acquisitionWorkspace.RestoreClaimIntoBuilder();
+        acquisitionWorkspace.RestoreFinalizedDryRunPlan(
+            acquisitionRequestBuilder.CurrentDocument,
+            outfitterRouteStateStore);
     }
 
     public WorkshopProjectBrowserWindow ProjectBrowser { get; }
@@ -420,6 +429,7 @@ public class MainWindow : Window, IDisposable
         var snapshot = routeEngine.CreateSnapshot();
         var activeOperation = snapshot.ActiveOperation;
         var activeStop = snapshot.ActiveStop;
+        var persistedOutfitter = outfitterRouteStateStore.Restore();
         return new AgentBridgeTruth
         {
             SchemaVersion = 1,
@@ -458,6 +468,15 @@ public class MainWindow : Window, IDisposable
                 OutfitterDryRunFaultInjected = routeEngine.WasOutfitterDryRunFaultInjected,
                 OutfitterPhase = snapshot.OutfitterExecution?.Phase.ToString(),
                 OutfitterMessage = snapshot.OutfitterExecution?.Message,
+                PersistedOutfitterSunkReceiptCount = persistedOutfitter?.SunkPurchases?.Count ?? 0,
+                PersistedOutfitterSunkQuantity = persistedOutfitter?.Lines.Aggregate(
+                    0ul,
+                    (sum, line) => checked(sum + line.PurchasedQuantity)) ?? 0,
+                PersistedOutfitterSunkGil = persistedOutfitter?.TotalSpentGil ?? 0,
+                ActiveOutfitterRemainingQuantity = snapshot.OutfitterExecution?.Lines.Aggregate(
+                    0ul,
+                    (sum, line) => checked(sum + line.RequiredQuantity - line.PurchasedQuantity)) ?? 0,
+                ActiveOutfitterRemainingGil = AgentBridgeRouteTruthProjection.ResolveActiveOutfitterRemainingGil(snapshot),
             },
             Squire = squireTab.CreateAgentBridgeTruth(),
         };
@@ -1169,7 +1188,8 @@ public class MainWindow : Window, IDisposable
         return acquisitionWorkspace.PreparePlanAsync(
             currentWorld,
             GetMarketAcquisitionRecentWorldTtl(),
-            config.MarketAcquisitionIgnoreRecentWorldVisitsForSweep);
+            config.MarketAcquisitionIgnoreRecentWorldVisitsForSweep,
+            acquisitionRequestBuilder.CurrentDocument);
     }
 
     private TimeSpan GetMarketAcquisitionRecentWorldTtl()
@@ -1314,6 +1334,50 @@ public class MainWindow : Window, IDisposable
         acquisitionWorkspace.PreparedPlan?.Status == "Ready" &&
         !acquisitionWorkspace.IsPreparedPlanStale();
 
+#if DEBUG
+    private bool CanSeedOutfitterDryRunSunkState()
+    {
+        if (!config.EnableMarketAcquisitionDryRunTools || acquisitionWorkspace.IsBusy || routeEngine.IsRouteActive ||
+            acquisitionWorkspace.ClaimedRequest is not { } claim || acquisitionWorkspace.PreparedPlan is not { Status: "Ready" } plan ||
+            acquisitionWorkspace.IsPreparedPlanStale() ||
+            acquisitionRequestBuilder.CurrentDocument.OutfitterAuthority?.FinalizedContract is not { Transfer.DryRunOnly: true } contract)
+            return false;
+        try
+        {
+            _ = OutfitterDryRunSunkStateSeeder.CreateSemanticSeed(
+                contract,
+                acquisitionRequestBuilder.CurrentDocument,
+                claim,
+                plan);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private string SeedOutfitterDryRunSunkState()
+    {
+        if (!CanSeedOutfitterDryRunSunkState())
+            return "DEBUG sunk-state seed is unavailable for the current finalized dry-run route.";
+        var claim = acquisitionWorkspace.ClaimedRequest!;
+        var plan = acquisitionWorkspace.PreparedPlan!;
+        var document = acquisitionRequestBuilder.CurrentDocument;
+        var contract = document.OutfitterAuthority!.FinalizedContract!;
+        var seed = OutfitterDryRunSunkStateSeeder.CreateSemanticSeed(contract, document, claim, plan);
+        var result = OutfitterDryRunSunkStateSeeder.Seed(
+            outfitterRouteStateStore,
+            contract,
+            document,
+            claim,
+            plan,
+            seed);
+        acquisitionWorkspace.SetStatus(result.Message);
+        return result.Message;
+    }
+#endif
+
     private Task RecoverOutfitterRouteAsync()
     {
         return acquisitionWorkspace.RunWithReportableClaimAsync(async (claimed, token) =>
@@ -1437,6 +1501,15 @@ public class MainWindow : Window, IDisposable
 
     private void MaybeAutoResumeOutfitterRoute()
     {
+        var routeActive = routeEngine.IsRouteActive;
+        var persisted = outfitterRouteStateStore.Restore();
+        var contract = acquisitionRequestBuilder.CurrentDocument.OutfitterAuthority?.FinalizedContract;
+        if (OutfitterRouteRecoveryLifecycle.ClearOrphanedState(
+                routeActive,
+                persisted,
+                contract,
+                outfitterRouteStateStore))
+            return;
         if (acquisitionWorkspace.IsBusy || DateTimeOffset.UtcNow < nextOutfitterAutoResumeAtUtc ||
             outfitterAutoResumeTask is { IsCompleted: false })
             return;
@@ -1448,17 +1521,14 @@ public class MainWindow : Window, IDisposable
             outfitterAutoResumeTask = RecoverOutfitterRouteAsync();
             return;
         }
-        if (routeEngine.IsRouteActive)
+        if (routeActive)
             return;
-        var persisted = outfitterRouteStateStore.Restore();
         if (persisted is null || !OutfitterRouteRecoveryLifecycle.CanAutoResume(persisted))
             return;
-        var contract = acquisitionRequestBuilder.CurrentDocument.OutfitterAuthority?.FinalizedContract;
-        if (contract is null || contract.ContractId != persisted.ContractId)
-        {
-            outfitterRouteStateStore.Clear();
+        if (contract is null)
             return;
-        }
+        if (contract.Transfer.DryRunOnly)
+            return;
         if (acquisitionWorkspace.ClaimedRequest is null)
             return;
         nextOutfitterAutoResumeAtUtc = DateTimeOffset.UtcNow.AddSeconds(30);

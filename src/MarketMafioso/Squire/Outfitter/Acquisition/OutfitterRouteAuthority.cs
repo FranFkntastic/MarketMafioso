@@ -4,6 +4,7 @@ using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using Franthropy.Dalamud.Equipment;
+using MarketMafioso.Automation.MarketBoard;
 using MarketMafioso.MarketAcquisition;
 using Newtonsoft.Json;
 
@@ -44,6 +45,7 @@ public sealed record OutfitterRouteExecutionState(
 {
     public const string CurrentSchemaVersion = "marketmafioso-squire-outfitter-route-state/v1";
     public bool NeedsRecovery => Phase == OutfitterRouteAuthorityPhase.RecoveryNeeded;
+    public IReadOnlyList<OutfitterRouteSunkPurchase> SunkPurchases { get; init; } = [];
 }
 
 public interface IOutfitterRouteExecutionStateStore
@@ -185,6 +187,17 @@ public sealed class OutfitterRouteAuthoritySession
             throw new InvalidOperationException("Workbench changed after Squire confirmation; return through Advisor and finalize a new contract.");
     }
 
+    internal bool IsSunkListing(MarketBoardLiveListing listing)
+    {
+        ArgumentNullException.ThrowIfNull(listing);
+        return State.SunkPurchases.Any(receipt =>
+            receipt.ItemId == listing.ItemId &&
+            receipt.Quality == (listing.IsHq ? EquipmentQuality.High : EquipmentQuality.Normal) &&
+            string.Equals(receipt.WorldName, listing.WorldName, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(receipt.ListingId, listing.ListingId, StringComparison.Ordinal) &&
+            string.Equals(receipt.RetainerId, listing.RetainerId, StringComparison.Ordinal));
+    }
+
     public OutfitterWorkbenchAuthorityValidation AuthorizeCandidate(
         MarketAcquisitionWorldItemSubtask subtask,
         MarketAcquisitionLiveCandidatePlan candidatePlan)
@@ -197,6 +210,8 @@ public sealed class OutfitterRouteAuthoritySession
             return new(false, "Visible market-board evidence is not fresh.");
         if (MarketAcquisitionLiveCandidateStatuses.IsIncompleteListingCoverage(candidatePlan.Status))
             return new(false, "Visible listing coverage is incomplete; Squire paused instead of treating hidden rows as absent.");
+        if (candidatePlan.Rows.Any(row => row.Decision == "WouldBuy" && IsSunkListing(row.LiveListing)))
+            return new(false, "A selected visible row is already represented by a persisted purchase receipt.");
         var line = State.Lines.SingleOrDefault(value => value.LineId == subtask.LineId);
         if (line is null)
             return OutfitterWorkbenchAuthorityValidation.Valid;
@@ -418,12 +433,13 @@ public sealed class OutfitterRouteAuthoritySession
         return contract.AuthorizedWorlds.ToHashSet(StringComparer.OrdinalIgnoreCase);
     }
 
-    private static bool IsRestoredStateSane(
+    internal static bool IsRestoredStateSane(
         OutfitterRouteExecutionState state,
         IReadOnlyList<OutfitterRouteLineProgress> bindings,
         ulong planCap)
     {
-        if (state.TotalSpentGil > planCap || state.Lines.Count != bindings.Count ||
+        if (state.SchemaVersion != OutfitterRouteExecutionState.CurrentSchemaVersion ||
+            state.TotalSpentGil > planCap || state.Lines.Count != bindings.Count ||
             state.Lines.Select(line => line.LineId).Distinct(StringComparer.Ordinal).Count() != state.Lines.Count ||
             state.TotalSpentGil != state.Lines.Aggregate(0ul, (sum, line) => checked(sum + line.SpentGil)))
             return false;
@@ -433,6 +449,14 @@ public sealed class OutfitterRouteAuthoritySession
             line.MaxTotalGil == binding.MaxTotalGil && line.PurchasedQuantity <= binding.RequiredQuantity &&
             line.SpentGil <= binding.MaxTotalGil));
     }
+
+    internal static bool IsRestoredStateSane(
+        OutfitterRouteExecutionState state,
+        OutfitterExecutionContract contract,
+        MarketAcquisitionClaimView claim) =>
+        state.ContractId == contract.ContractId &&
+        state.CanonicalIntentHash == contract.CanonicalIntentHash &&
+        IsRestoredStateSane(state, BindLines(contract, claim), contract.SquirePlanCapGil);
 
     private static bool PolicyMatches(EquipmentQuality quality, string policy) =>
         MarketAcquisitionPolicy.NormalizeHqPolicy(policy) ==

@@ -34,6 +34,21 @@ public sealed class AgentBridgeProofFactoryTests
         Assert.Equal(second.ProofId, store.GetCurrent()!.ProofId);
     }
 
+    [Fact]
+    public void Serialize_ExposesOnlyAggregatePersistedSunkStateForDryRunProof()
+    {
+        var receipt = AgentBridgeProofFactory.Create(CreateTruth(), 1);
+
+        var json = AgentBridgeProofFactory.Serialize(receipt);
+
+        Assert.Contains("\"persistedOutfitterSunkReceiptCount\":1", json, StringComparison.Ordinal);
+        Assert.Contains("\"persistedOutfitterSunkQuantity\":1", json, StringComparison.Ordinal);
+        Assert.Contains("\"persistedOutfitterSunkGil\":100", json, StringComparison.Ordinal);
+        Assert.Contains("\"activeOutfitterRemainingQuantity\":1", json, StringComparison.Ordinal);
+        Assert.Contains("\"activeOutfitterRemainingGil\":100", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("listing-1", json, StringComparison.Ordinal);
+    }
+
     private static AgentBridgeTruth CreateTruth() => new()
     {
         SchemaVersion = 1,
@@ -66,6 +81,11 @@ public sealed class AgentBridgeProofFactoryTests
             ActiveOperationDisposition = "Pending",
             StopCount = 2,
             CompletedOrProbedStopCount = 1,
+            PersistedOutfitterSunkReceiptCount = 1,
+            PersistedOutfitterSunkQuantity = 1,
+            PersistedOutfitterSunkGil = 100,
+            ActiveOutfitterRemainingQuantity = 1,
+            ActiveOutfitterRemainingGil = 100,
         },
     };
 }
