@@ -31,13 +31,44 @@ public sealed class SquireJobUnlockTests
         Assert.Equal(expected, DalamudCharacterEquipmentSnapshotSource.MapExpertDeliveryEligibility(raw));
 
     [Theory]
-    [InlineData("Strength", EquipmentStatSemantic.Strength)]
-    [InlineData("Critical Hit", EquipmentStatSemantic.CriticalHit)]
-    [InlineData("Craftsmanship", EquipmentStatSemantic.Craftsmanship)]
-    [InlineData("Gathering Points", EquipmentStatSemantic.GatheringPoints)]
-    [InlineData("Future Stat", EquipmentStatSemantic.Unknown)]
-    public void BaseParameterMapping_FailsClosedForUnknownNames(string name, EquipmentStatSemantic expected) =>
-        Assert.Equal(expected, DalamudCharacterEquipmentSnapshotSource.MapStatSemantic(999, name));
+    [InlineData(1, EquipmentStatSemantic.Strength)]
+    [InlineData(2, EquipmentStatSemantic.Dexterity)]
+    [InlineData(3, EquipmentStatSemantic.Vitality)]
+    [InlineData(4, EquipmentStatSemantic.Intelligence)]
+    [InlineData(5, EquipmentStatSemantic.Mind)]
+    [InlineData(6, EquipmentStatSemantic.Piety)]
+    [InlineData(10, EquipmentStatSemantic.GatheringPoints)]
+    [InlineData(11, EquipmentStatSemantic.CraftingPoints)]
+    [InlineData(12, EquipmentStatSemantic.PhysicalDamage)]
+    [InlineData(13, EquipmentStatSemantic.MagicalDamage)]
+    [InlineData(19, EquipmentStatSemantic.Tenacity)]
+    [InlineData(21, EquipmentStatSemantic.PhysicalDefense)]
+    [InlineData(22, EquipmentStatSemantic.DirectHit)]
+    [InlineData(24, EquipmentStatSemantic.MagicalDefense)]
+    [InlineData(27, EquipmentStatSemantic.CriticalHit)]
+    [InlineData(30, EquipmentStatSemantic.PiercingResistance)]
+    [InlineData(44, EquipmentStatSemantic.Determination)]
+    [InlineData(45, EquipmentStatSemantic.SkillSpeed)]
+    [InlineData(46, EquipmentStatSemantic.SpellSpeed)]
+    [InlineData(70, EquipmentStatSemantic.Craftsmanship)]
+    [InlineData(71, EquipmentStatSemantic.Control)]
+    [InlineData(72, EquipmentStatSemantic.Gathering)]
+    [InlineData(73, EquipmentStatSemantic.Perception)]
+    public void BaseParameterMapping_UsesStableRowIdsRegardlessOfLocalizedName(
+        uint rowId,
+        EquipmentStatSemantic expected)
+    {
+        Assert.Equal(expected, DalamudCharacterEquipmentSnapshotSource.MapStatSemantic(rowId, "Not the English name"));
+        Assert.Equal(expected, DalamudCharacterEquipmentSnapshotSource.MapStatSemantic(rowId, null));
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(999)]
+    public void BaseParameterMapping_FailsClosedForUnsupportedRows(uint rowId) =>
+        Assert.Equal(
+            EquipmentStatSemantic.Unknown,
+            DalamudCharacterEquipmentSnapshotSource.MapStatSemantic(rowId, "Strength"));
 
     [Theory]
     [InlineData(3, EquipmentStatSemantic.Dexterity, "Physical Ranged DPS")]

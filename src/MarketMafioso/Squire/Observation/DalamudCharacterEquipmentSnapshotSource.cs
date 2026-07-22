@@ -133,7 +133,7 @@ public sealed class DalamudCharacterEquipmentSnapshotSource : ICharacterEquipmen
             : level > 0;
     }
 
-    private static unsafe IReadOnlyList<GearsetSnapshot> CaptureGearsets(List<SnapshotComponentDiagnostic> diagnostics)
+    internal static unsafe IReadOnlyList<GearsetSnapshot> CaptureGearsets(List<SnapshotComponentDiagnostic> diagnostics)
     {
         try
         {
@@ -153,10 +153,28 @@ public sealed class DalamudCharacterEquipmentSnapshotSource : ICharacterEquipmen
                 {
                     var item = entry->Items[itemIndex];
                     if (item.ItemId != 0)
+                    {
+                        var materiaIds = new List<uint>(5);
+                        var materiaGrades = new List<byte>(5);
+                        for (var materiaIndex = 0; materiaIndex < item.Materia.Length; materiaIndex++)
+                        {
+                            if (item.Materia[materiaIndex] == 0)
+                                continue;
+                            materiaIds.Add(item.Materia[materiaIndex]);
+                            materiaGrades.Add(item.MateriaGrades[materiaIndex]);
+                        }
+                        var gearsetIndex = (RaptureGearsetModule.GearsetItemIndex)itemIndex;
                         items.Add(new(
-                            MapGearsetSlot((RaptureGearsetModule.GearsetItemIndex)itemIndex),
+                            MapGearsetSlot(gearsetIndex),
                             NormalizeItemId(item.ItemId),
-                            item.ItemId >= 1_000_000));
+                            item.ItemId >= 1_000_000,
+                            MapGearsetPosition(gearsetIndex),
+                            materiaIds,
+                            materiaGrades,
+                            item.GlamourId == 0 ? null : item.GlamourId,
+                            [item.Stain0Id, item.Stain1Id],
+                            item.Flags.HasFlag(RaptureGearsetModule.GearsetItemFlag.ItemMissing)));
+                    }
                 }
                 values.Add(new(index, entry->NameString, entry->ClassJob, items, true));
             }
@@ -200,7 +218,16 @@ public sealed class DalamudCharacterEquipmentSnapshotSource : ICharacterEquipmen
                 var item = container->GetInventorySlot(slotIndex);
                 if (item == null || item->ItemId == 0)
                     continue;
-                var materia = Enumerable.Range(0, 5).Select(index => (uint)item->GetMateriaId((byte)index)).Where(id => id != 0).ToArray();
+                var materia = new List<uint>(5);
+                var materiaGrades = new List<byte>(5);
+                for (byte materiaIndex = 0; materiaIndex < 5; materiaIndex++)
+                {
+                    var materiaId = item->GetMateriaId(materiaIndex);
+                    if (materiaId == 0)
+                        continue;
+                    materia.Add(materiaId);
+                    materiaGrades.Add(item->GetMateriaGrade(materiaIndex));
+                }
                 var slot = knownSlot;
                 var fingerprint = new EquipmentInstanceFingerprint(
                     scope,
@@ -214,7 +241,8 @@ public sealed class DalamudCharacterEquipmentSnapshotSource : ICharacterEquipmen
                     item->CrafterContentId == 0 ? null : item->CrafterContentId,
                     materia,
                     item->GlamourId == 0 ? null : item->GlamourId,
-                    [item->GetStain(0), item->GetStain(1)]);
+                    [item->GetStain(0), item->GetStain(1)],
+                    materiaGrades);
                 instances.Add(new(fingerprint, capturedAt, equipped));
             }
         }
@@ -428,37 +456,33 @@ public sealed class DalamudCharacterEquipmentSnapshotSource : ICharacterEquipmen
         _ => $"Role {role}",
     };
 
-    internal static EquipmentStatSemantic MapStatSemantic(uint baseParamId, string? name)
+    internal static EquipmentStatSemantic MapStatSemantic(uint baseParamId, string? _) => baseParamId switch
     {
-        var normalized = new string((name ?? string.Empty).Where(char.IsLetterOrDigit).Select(char.ToLowerInvariant).ToArray());
-        return normalized switch
-        {
-            "strength" => EquipmentStatSemantic.Strength,
-            "dexterity" => EquipmentStatSemantic.Dexterity,
-            "vitality" => EquipmentStatSemantic.Vitality,
-            "intelligence" => EquipmentStatSemantic.Intelligence,
-            "mind" => EquipmentStatSemantic.Mind,
-            "criticalhit" or "criticalhitrate" => EquipmentStatSemantic.CriticalHit,
-            "determination" => EquipmentStatSemantic.Determination,
-            "directhit" or "directhitrate" => EquipmentStatSemantic.DirectHit,
-            "skillspeed" => EquipmentStatSemantic.SkillSpeed,
-            "spellspeed" => EquipmentStatSemantic.SpellSpeed,
-            "tenacity" => EquipmentStatSemantic.Tenacity,
-            "piety" => EquipmentStatSemantic.Piety,
-            "craftsmanship" => EquipmentStatSemantic.Craftsmanship,
-            "control" => EquipmentStatSemantic.Control,
-            "cp" or "craftingpoints" => EquipmentStatSemantic.CraftingPoints,
-            "gathering" => EquipmentStatSemantic.Gathering,
-            "perception" => EquipmentStatSemantic.Perception,
-            "gp" or "gatheringpoints" => EquipmentStatSemantic.GatheringPoints,
-            "physicaldamage" => EquipmentStatSemantic.PhysicalDamage,
-            "magicdamage" or "magicaldamage" => EquipmentStatSemantic.MagicalDamage,
-            "defense" or "physicaldefense" => EquipmentStatSemantic.PhysicalDefense,
-            "magicdefense" or "magicaldefense" => EquipmentStatSemantic.MagicalDefense,
-            "piercingresistance" => EquipmentStatSemantic.PiercingResistance,
-            _ => EquipmentStatSemantic.Unknown,
-        };
-    }
+        1 => EquipmentStatSemantic.Strength,
+        2 => EquipmentStatSemantic.Dexterity,
+        3 => EquipmentStatSemantic.Vitality,
+        4 => EquipmentStatSemantic.Intelligence,
+        5 => EquipmentStatSemantic.Mind,
+        6 => EquipmentStatSemantic.Piety,
+        10 => EquipmentStatSemantic.GatheringPoints,
+        11 => EquipmentStatSemantic.CraftingPoints,
+        12 => EquipmentStatSemantic.PhysicalDamage,
+        13 => EquipmentStatSemantic.MagicalDamage,
+        19 => EquipmentStatSemantic.Tenacity,
+        21 => EquipmentStatSemantic.PhysicalDefense,
+        22 => EquipmentStatSemantic.DirectHit,
+        24 => EquipmentStatSemantic.MagicalDefense,
+        27 => EquipmentStatSemantic.CriticalHit,
+        30 => EquipmentStatSemantic.PiercingResistance,
+        44 => EquipmentStatSemantic.Determination,
+        45 => EquipmentStatSemantic.SkillSpeed,
+        46 => EquipmentStatSemantic.SpellSpeed,
+        70 => EquipmentStatSemantic.Craftsmanship,
+        71 => EquipmentStatSemantic.Control,
+        72 => EquipmentStatSemantic.Gathering,
+        73 => EquipmentStatSemantic.Perception,
+        _ => EquipmentStatSemantic.Unknown,
+    };
 
     private static uint NormalizeItemId(uint itemId) => itemId >= 1_000_000 ? itemId % 1_000_000 : itemId;
 
@@ -494,6 +518,23 @@ public sealed class DalamudCharacterEquipmentSnapshotSource : ICharacterEquipmen
         RaptureGearsetModule.GearsetItemIndex.RingLeft or RaptureGearsetModule.GearsetItemIndex.RingRight => EquipmentSlot.Ring,
         RaptureGearsetModule.GearsetItemIndex.SoulStone => EquipmentSlot.SoulCrystal,
         _ => EquipmentSlot.Unknown,
+    };
+
+    private static EquipmentLoadoutPosition? MapGearsetPosition(RaptureGearsetModule.GearsetItemIndex slot) => slot switch
+    {
+        RaptureGearsetModule.GearsetItemIndex.MainHand => EquipmentLoadoutPosition.MainHand,
+        RaptureGearsetModule.GearsetItemIndex.OffHand => EquipmentLoadoutPosition.OffHand,
+        RaptureGearsetModule.GearsetItemIndex.Head => EquipmentLoadoutPosition.Head,
+        RaptureGearsetModule.GearsetItemIndex.Body => EquipmentLoadoutPosition.Body,
+        RaptureGearsetModule.GearsetItemIndex.Hands => EquipmentLoadoutPosition.Hands,
+        RaptureGearsetModule.GearsetItemIndex.Legs => EquipmentLoadoutPosition.Legs,
+        RaptureGearsetModule.GearsetItemIndex.Feet => EquipmentLoadoutPosition.Feet,
+        RaptureGearsetModule.GearsetItemIndex.Ears => EquipmentLoadoutPosition.Ears,
+        RaptureGearsetModule.GearsetItemIndex.Neck => EquipmentLoadoutPosition.Neck,
+        RaptureGearsetModule.GearsetItemIndex.Wrists => EquipmentLoadoutPosition.Wrists,
+        RaptureGearsetModule.GearsetItemIndex.RingLeft => EquipmentLoadoutPosition.LeftRing,
+        RaptureGearsetModule.GearsetItemIndex.RingRight => EquipmentLoadoutPosition.RightRing,
+        _ => null,
     };
 
     private static CharacterEquipmentSnapshot Empty(CharacterIdentitySnapshot identity, List<SnapshotComponentDiagnostic> diagnostics)

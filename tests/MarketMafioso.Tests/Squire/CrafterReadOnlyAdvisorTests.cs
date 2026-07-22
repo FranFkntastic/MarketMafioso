@@ -8,6 +8,7 @@ using Franthropy.Dalamud.Characters;
 using Franthropy.Dalamud.Equipment;
 using MarketMafioso.Squire.Observation;
 using MarketMafioso.Squire.Outfitter;
+using MarketMafioso.Squire.Outfitter.Acquisition;
 using MarketMafioso.Squire.Outfitter.Crafting;
 using MarketMafioso.Squire.Outfitter.MarketEvidence;
 using MarketMafioso.Squire.Outfitter.Utility;
@@ -199,6 +200,111 @@ public sealed class CrafterReadOnlyAdvisorTests
             value.Offer.Definition.ItemId == definition.ItemId);
         Assert.Contains(advice.Nomination.Candidate.Selections, value =>
             value.OfferKey.SourceKind == EquipmentAcquisitionSourceKind.Craft);
+
+        var handoff = OutfitterCraftHandoffProjection.Build(
+            advice,
+            advice.Nomination.Candidate.SolutionId,
+            fixture.Baseline,
+            fixture.Evidence,
+            builtAt);
+
+        var recipe = Assert.Single(handoff.Recipes);
+        Assert.Equal(500u, recipe.RecipeId);
+        Assert.Equal(1u, recipe.CraftCount);
+        Assert.Equal(definition.Name, recipe.ItemName);
+        var vendorMaterial = Assert.Single(handoff.VendorMaterials);
+        Assert.Equal("Test Material", vendorMaterial.ItemName);
+        Assert.Empty(handoff.MarketMaterials);
+        Assert.False(result.Offer.Matches(fixture.Baseline, fixture.Evidence, builtAt.Add(CraftMarketEvidenceFreshness.TimeToLive).AddSeconds(1)));
+    }
+
+    [Fact]
+    public void Same_raw_listing_id_on_two_worlds_produces_distinct_solver_allocations()
+    {
+        var fixture = Fixture();
+        var original = Assert.Single(fixture.Evidence.Items[0].Listings);
+        var evidence = fixture.Evidence with
+        {
+            Items =
+            [
+                fixture.Evidence.Items[0] with
+                {
+                    Listings =
+                    [
+                        original with { ListingId = "cross-world" },
+                        original with { ListingId = "cross-world", WorldId = 74, WorldName = "Coeurl", UnitPriceGil = original.UnitPriceGil + 1 },
+                    ],
+                },
+            ],
+        };
+
+        var advice = new MinerBotanistReadOnlyAdvisor().Build(
+            fixture.Baseline,
+            evidence,
+            itemId => itemId == fixture.Candidate.ItemId ? [fixture.Candidate] : [],
+            CrafterAdvisorStatFamily.Instance,
+            CrafterUtilityProfile.OrdinaryCraftBenchmarkContextId);
+
+        Assert.Equal(MinerBotanistAdvisorStatus.Complete, advice.Status);
+        var offers = advice.OffersByAllocation.Values
+            .Where(offer => offer.Offer.SourceKind == EquipmentAcquisitionSourceKind.MarketBoard)
+            .ToArray();
+        Assert.Equal(2, offers.Length);
+        Assert.Equal(2, offers.Select(offer => offer.AllocationKey).Distinct().Count());
+    }
+
+    [Fact]
+    public void Frontier_solution_reusing_one_material_listing_cannot_be_nominated()
+    {
+        var fixture = Fixture();
+        var publishedAt = fixture.Evidence.PublishedAtUtc!.Value;
+        var material = new OutfitterMarketItemEvidence(
+            3_000,
+            OutfitterMarketEvidenceItemStatus.Fresh,
+            [new(3_000, EquipmentQuality.Normal, "shared-lot", "Siren", 1, "Materials", "m1", 10, 7,
+                publishedAt, publishedAt, "material-r1")],
+            publishedAt,
+            "material-r1");
+        var evidence = fixture.Evidence with
+        {
+            Coverage = new(OutfitterMarketCoverageMode.ExhaustiveWithinScope, 2, 2, 100, [fixture.Candidate.ItemId, 3_000]),
+            Items = [fixture.Evidence.Items[0], material],
+        };
+        var mainHand = fixture.Candidate with { StatProfile = fixture.Candidate.HighQualityStatProfile };
+        var offHand = Definition(2_001, "Threshold File", EquipmentSlot.OffHand, 400, 400);
+        var service = new OutfitterPassiveCraftOfferService(
+            OutfitterGilVendorCatalog.FromTrustedSnapshot([]),
+            new FixedTimeProvider(publishedAt.AddSeconds(30)));
+        var mainResult = service.Build(
+            RecipeResponse(mainHand, materialQuantity: 3),
+            fixture.Baseline,
+            evidence,
+            mainHand,
+            CrafterAdvisorStatFamily.Instance);
+        var offResult = service.Build(
+            RecipeResponse(offHand, materialQuantity: 3, identityCharacter: 'B'),
+            fixture.Baseline,
+            evidence,
+            offHand,
+            CrafterAdvisorStatFamily.Instance);
+        Assert.Equal(OutfitterPassiveCraftOfferStatus.OfferReady, mainResult.Status);
+        Assert.Equal(OutfitterPassiveCraftOfferStatus.OfferReady, offResult.Status);
+
+        var advice = new MinerBotanistReadOnlyAdvisor().Build(
+            fixture.Baseline,
+            evidence,
+            itemId => itemId == mainHand.ItemId ? [mainHand] : itemId == offHand.ItemId ? [offHand] : [],
+            CrafterAdvisorStatFamily.Instance,
+            CrafterUtilityProfile.OrdinaryCraftBenchmarkContextId,
+            craftOffers: [mainResult.Offer!, offResult.Offer!],
+            equipmentMarketScope: new HashSet<uint>());
+
+        var conflicting = Assert.Single(advice.Frontier!.Pareto.Frontier, solution =>
+            solution.Candidate.Selections.Count(selection => selection.OfferKey.SourceKind == EquipmentAcquisitionSourceKind.Craft) == 2);
+        var authority = advice.AuthorityBySolutionId[conflicting.Candidate.SolutionId];
+        Assert.False(authority.AdvisorMayConsider);
+        Assert.Contains(authority.Reasons, reason => reason.Contains("indivisible market listing", StringComparison.Ordinal));
+        Assert.NotEqual(conflicting.Candidate.SolutionId, advice.Nomination?.Candidate.SolutionId);
     }
 
     [Fact]
@@ -297,6 +403,52 @@ public sealed class CrafterReadOnlyAdvisorTests
         Assert.Equal(10u, line.PurchasedQuantity);
         Assert.Equal(7u, line.SurplusQuantity);
         Assert.Equal(70ul, result.Offer.SolverOffer.AcquisitionCostGil);
+
+        var advice = new MinerBotanistReadOnlyAdvisor().Build(
+            fixture.Baseline,
+            evidence,
+            itemId => itemId == definition.ItemId ? [definition] : [],
+            CrafterAdvisorStatFamily.Instance,
+            CrafterUtilityProfile.OrdinaryCraftBenchmarkContextId,
+            craftOffers: [result.Offer],
+            equipmentMarketScope: new HashSet<uint> { definition.ItemId });
+        Assert.NotNull(advice.Nomination);
+
+        var handoff = OutfitterCraftHandoffProjection.Build(
+            advice,
+            advice.Nomination!.Candidate.SolutionId,
+            fixture.Baseline,
+            evidence,
+            publishedAt.AddSeconds(30));
+        var marketMaterial = Assert.Single(handoff.MarketMaterials);
+        Assert.Equal("Test Material", marketMaterial.ItemName);
+        Assert.Equal(3u, marketMaterial.ConsumedQuantity);
+        Assert.Equal(10u, marketMaterial.PurchasedQuantity);
+        Assert.Equal(7u, marketMaterial.SurplusQuantity);
+
+        var fingerprint = PlayerAdvisorAuthorityFingerprint.Capture(fixture.Baseline);
+        var validation = OutfitterWorkbenchPlayerValidation.Create(
+            advice,
+            advice.Nomination.Candidate.SolutionId,
+            evidence,
+            fingerprint,
+            fingerprint) with
+        {
+            RecapturedBaseline = fixture.Baseline,
+        };
+        var transfer = OutfitterWorkbenchTransferBuilder.Build(
+            advice,
+            advice.Nomination.Candidate.SolutionId,
+            evidence,
+            validation,
+            new FixedTimeProvider(publishedAt.AddSeconds(30)));
+
+        var transferred = Assert.Single(transfer.MarketLots);
+        Assert.Equal(3_000u, transferred.OfferKey.ItemId);
+        Assert.Equal("Test Material", transferred.ItemName);
+        Assert.Equal("Crafting material", transferred.ItemKind);
+        Assert.Equal(10u, transferred.RequiredQuantity);
+        Assert.DoesNotContain(transfer.MarketLots, lot => lot.OfferKey.ItemId == definition.ItemId);
     }
 
     private static FixtureData Fixture(uint classJobId = 9)
@@ -468,10 +620,11 @@ public sealed class CrafterReadOnlyAdvisorTests
         EquipmentItemDefinition definition,
         uint materialQuantity,
         CraftRecipeUnlockEvidenceV1 unlockEvidence = CraftRecipeUnlockEvidenceV1.NoUnlockRequired,
-        uint unlockItemId = 0) => new()
+        uint unlockItemId = 0,
+        char identityCharacter = 'A') => new()
     {
         ProviderVersion = "ca-test-v1",
-        RecipeDataIdentity = $"sha256:{new string('A', 64)}",
+        RecipeDataIdentity = $"sha256:{new string(identityCharacter, 64)}",
         IsComplete = true,
         RootItemId = definition.ItemId,
         RootItemName = definition.Name,

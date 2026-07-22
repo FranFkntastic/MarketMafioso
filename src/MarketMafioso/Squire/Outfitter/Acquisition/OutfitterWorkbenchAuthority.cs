@@ -23,7 +23,8 @@ public sealed record OutfitterWorkbenchLineEnvelope(
     uint ObservedMaxUnitPriceGil,
     ulong ObservedTotalPriceGil,
     uint MaxUnitPriceGil,
-    uint MaxTotalGil);
+    uint MaxTotalGil,
+    string ItemKind = "Equipment");
 
 public sealed record OutfitterExecutionContract(
     string SchemaVersion,
@@ -280,7 +281,8 @@ public static class OutfitterWorkbenchAuthorityService
             group.Max(lot => lot.ObservedUnitPriceGil),
             group.Aggregate(0ul, (sum, lot) => checked(sum + lot.ObservedTotalPriceGil)),
             ApplyFlex(group.Max(lot => lot.ObservedUnitPriceGil), priceFlexPercent),
-            ApplyFlexToUInt(group.Aggregate(0ul, (sum, lot) => checked(sum + lot.ObservedTotalPriceGil)), priceFlexPercent)))
+            ApplyFlexToUInt(group.Aggregate(0ul, (sum, lot) => checked(sum + lot.ObservedTotalPriceGil)), priceFlexPercent),
+            group.Select(lot => lot.ItemKind).Distinct(StringComparer.Ordinal).Single()))
         .OrderBy(line => line.ItemName, StringComparer.OrdinalIgnoreCase)
         .ThenBy(line => line.ItemId)
         .ThenBy(line => line.Quality)
@@ -290,7 +292,7 @@ public static class OutfitterWorkbenchAuthorityService
     {
         ItemId = envelope.ItemId,
         ItemName = envelope.ItemName,
-        ItemKind = "Equipment",
+        ItemKind = envelope.ItemKind,
         QuantityMode = "TargetQuantity",
         TargetQuantity = envelope.RequiredQuantity,
         MaxQuantity = 0,

@@ -38,9 +38,10 @@ public static class OutfitterWorkbenchReplacementRows
             if (item is null)
                 continue;
             foreach (var listing in item.Listings.Where(candidate =>
-                         candidate.ItemId == accepted.OfferKey.ItemId &&
-                         candidate.Quality == accepted.OfferKey.Quality &&
-                         !string.Equals(candidate.ListingId, accepted.DiscoveryObservationId, StringComparison.Ordinal)))
+                          candidate.ItemId == accepted.OfferKey.ItemId &&
+                          candidate.Quality == accepted.OfferKey.Quality &&
+                          !(string.Equals(candidate.ListingId, accepted.DiscoveryObservationId, StringComparison.Ordinal) &&
+                            string.Equals(candidate.WorldName, accepted.WorldName, StringComparison.OrdinalIgnoreCase))))
             {
                 var requiredCost = checked((ulong)listing.UnitPriceGil * accepted.RequiredQuantity);
                 rows.Add(new(

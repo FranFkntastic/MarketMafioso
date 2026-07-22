@@ -58,9 +58,16 @@ internal sealed class OutfitterCraftAdvisorOffer
 
     public bool Matches(
         PlayerAdvisorBaseline baseline,
-        OutfitterMarketEvidenceBook marketEvidence)
+        OutfitterMarketEvidenceBook marketEvidence) =>
+        Matches(baseline, marketEvidence, Source.Plan.BuiltAtUtc);
+
+    public bool Matches(
+        PlayerAdvisorBaseline baseline,
+        OutfitterMarketEvidenceBook marketEvidence,
+        DateTimeOffset asOfUtc)
     {
-        if (!Source.Plan.RevalidateCrafterAuthority(baseline, Source.Plan.BuiltAtUtc) ||
+        if (!CraftMarketEvidenceFreshness.IsFresh(marketEvidence, asOfUtc) ||
+            !Source.Plan.RevalidateCrafterAuthority(baseline, asOfUtc) ||
             Source.Plan.GearItemId != SolverOffer.Offer.Definition.ItemId ||
             Source.PlanIdentity != Source.Plan.ComputeStructuralIdentity() ||
             SolverOffer.Offer.SourceKind != EquipmentAcquisitionSourceKind.Craft ||
@@ -68,15 +75,23 @@ internal sealed class OutfitterCraftAdvisorOffer
             SolverOffer.Offer.Key.SourceCatalogKey != Source.SourceCatalogKey ||
             SolverOffer.AvailableQuantity != 1 ||
             SolverOffer.AcquisitionCostGil != Source.TotalGil ||
-            SolverOffer.ObservationId is not null)
+            SolverOffer.ObservationId is not null ||
+            Source.Plan.MarketEvidence is not { } planEvidence ||
+            Source.Plan.TerminalMaterials
+                .Select(line => line.Source)
+                .OfType<OutfitterMarketMaterialSourceIdentity>()
+                .Any(source => !CraftMarketEvidenceFreshness.IsFresh(
+                    source.ReviewedAtUtc,
+                    source.CapturedAtUtc,
+                    planEvidence.PublishedAtUtc,
+                    asOfUtc)))
         {
             return false;
         }
 
         try
         {
-            return Source.Plan.MarketEvidence is { } evidence &&
-                evidence.ContentIdentity == CraftMarketEvidenceReference.FromPublishedBook(marketEvidence).ContentIdentity;
+            return planEvidence.ContentIdentity == CraftMarketEvidenceReference.FromPublishedBook(marketEvidence).ContentIdentity;
         }
         catch (Exception exception) when (exception is ArgumentException or InvalidOperationException or OverflowException)
         {

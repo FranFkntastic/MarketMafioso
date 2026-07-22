@@ -52,6 +52,24 @@ public sealed class OutfitterWorkbenchAuthorityTests
     }
 
     [Fact]
+    public void Stage_PreservesCraftingMaterialKindThroughVisibleWorkbenchLine()
+    {
+        var transfer = Transfer();
+        transfer = transfer with
+        {
+            MarketLots = transfer.MarketLots.Select(lot => lot with { ItemKind = "Crafting material" }).ToArray(),
+        };
+
+        var staged = OutfitterWorkbenchAuthorityService.Stage(
+            MarketAcquisitionRequestDocument.CreateDefault(),
+            transfer);
+
+        var line = Assert.Single(staged.Lines);
+        Assert.Equal("Crafting material", line.ItemKind);
+        Assert.Equal("Crafting material", Assert.Single(staged.OutfitterAuthority!.Lines).ItemKind);
+    }
+
+    [Fact]
     public void SemanticEdit_InvalidatesLineageButRetainsHistoricalTransfer()
     {
         var staged = OutfitterWorkbenchAuthorityService.Stage(

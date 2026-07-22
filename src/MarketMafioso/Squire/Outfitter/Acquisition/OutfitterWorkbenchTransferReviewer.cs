@@ -100,7 +100,8 @@ public static class OutfitterWorkbenchTransferReviewer
             candidate.ItemId == lot.OfferKey.ItemId &&
             candidate.Status == OutfitterMarketEvidenceItemStatus.Fresh);
         var listing = item?.Listings.SingleOrDefault(candidate =>
-            string.Equals(candidate.ListingId, lot.DiscoveryObservationId, StringComparison.Ordinal));
+            string.Equals(candidate.ListingId, lot.DiscoveryObservationId, StringComparison.Ordinal) &&
+            string.Equals(candidate.WorldName, lot.WorldName, StringComparison.OrdinalIgnoreCase));
         if (listing is null)
             return new(lot, null, changes | OutfitterWorkbenchLotChange.ListingMissing);
 

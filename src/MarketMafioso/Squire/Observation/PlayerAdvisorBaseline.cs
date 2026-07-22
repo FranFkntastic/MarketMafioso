@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using Franthropy.Dalamud.Characters;
 using Franthropy.Dalamud.Equipment;
+using MarketMafioso.Squire.Outfitter;
 using MarketMafioso.Squire.Outfitter.Utility;
 
 namespace MarketMafioso.Squire.Observation;
@@ -15,6 +16,18 @@ public enum PlayerAdvisorBaselineStatus
     Inconsistent,
     Unsupported,
 }
+
+public enum PlayerAdvisorBaselineTargetKind
+{
+    ActiveLoadout,
+    SavedGearset,
+}
+
+public sealed record PlayerAdvisorBaselineTarget(
+    PlayerAdvisorBaselineTargetKind Kind,
+    string Key,
+    string AuthorityFingerprint,
+    SavedGearsetTargetFingerprint? SavedGearset = null);
 
 public sealed record PlayerAdvisorEquippedPosition(
     int EquippedIndex,
@@ -64,7 +77,8 @@ public sealed record PlayerAdvisorBaseline(
     IReadOnlyDictionary<EquipmentStatSemantic, int> FixedStats,
     IReadOnlyList<PlayerAdvisorEquippedSlot> EquippedSlots,
     CharacterEquipmentSnapshot? EquipmentSnapshot,
-    string Diagnostic)
+    string Diagnostic,
+    PlayerAdvisorBaselineTarget? Target = null)
 {
     internal PlayerAdvisorCaptureProvenance? CaptureProvenance { get; init; }
 }
@@ -72,6 +86,11 @@ public sealed record PlayerAdvisorBaseline(
 public interface IPlayerAdvisorBaselineSource
 {
     PlayerAdvisorBaseline Capture();
+}
+
+public interface IOutfitterTargetAdvisorBaselineSource : IPlayerAdvisorBaselineSource
+{
+    PlayerAdvisorBaseline Capture(OutfitterTarget target);
 }
 
 internal sealed record PlayerAdvisorCaptureHeader(
@@ -295,28 +314,21 @@ internal static class PlayerAdvisorBaselineAssembler
             !snapshot.Identity.IsLoggedIn ||
             snapshot.Identity.Scope != character ||
             snapshot.Identity.CurrentWorldId != provenance.CurrentWorldId ||
-            snapshot.Identity.ActiveClassJobId != classJobId ||
+            ((baseline.Target?.Kind ?? PlayerAdvisorBaselineTargetKind.ActiveLoadout) == PlayerAdvisorBaselineTargetKind.ActiveLoadout &&
+             snapshot.Identity.ActiveClassJobId != classJobId) ||
             snapshot.Identity.CapturedAt > provenance.CompletedAtUtc ||
             !ComponentIsComplete(snapshot, "identity") ||
-            !ComponentIsComplete(snapshot, "equipped"))
+            !ComponentIsComplete(snapshot, "equipped") ||
+            baseline.Target is { Kind: PlayerAdvisorBaselineTargetKind.SavedGearset } target &&
+            (string.IsNullOrWhiteSpace(target.Key) || string.IsNullOrWhiteSpace(target.AuthorityFingerprint)))
         {
             diagnostic = "The player advisor baseline does not match one complete equipment snapshot identity.";
             return false;
         }
 
-        var canonicalIndices = PlayerAdvisorEquippedSlotMap.All
-            .Select(position => position.EquippedIndex)
-            .ToHashSet();
+        var isActiveLoadout = (baseline.Target?.Kind ?? PlayerAdvisorBaselineTargetKind.ActiveLoadout) ==
+            PlayerAdvisorBaselineTargetKind.ActiveLoadout;
         if (snapshot.Instances.Any(instance => instance is null) ||
-            snapshot.Instances
-                .Where(instance => instance.IsEquipped)
-                .Any(instance =>
-                    instance.CapturedAt == default ||
-                    instance.CapturedAt > provenance.CompletedAtUtc ||
-                    instance.Fingerprint is null ||
-                    instance.Fingerprint.Character != character ||
-                    !string.Equals(instance.Fingerprint.Container, EquippedContainer, StringComparison.Ordinal) ||
-                    !canonicalIndices.Contains(instance.Fingerprint.SlotIndex)) ||
             baseline.EquippedSlots.Any(slot => slot is null) ||
             baseline.EquippedSlots.GroupBy(slot => slot.Position).Any(group => group.Count() != 1) ||
             PlayerAdvisorEquippedSlotMap.All.Any(position =>
@@ -326,6 +338,46 @@ internal static class PlayerAdvisorBaselineAssembler
         {
             diagnostic = "The player advisor baseline requires every unique canonical equipped slot.";
             return false;
+        }
+
+        if (isActiveLoadout)
+        {
+            var canonicalIndices = PlayerAdvisorEquippedSlotMap.All
+                .Select(position => position.EquippedIndex)
+                .ToHashSet();
+            var equippedInstances = snapshot.Instances
+                .Where(instance => instance.IsEquipped)
+                .ToArray();
+            var supplementalEquipped = equippedInstances
+                .Where(instance => !canonicalIndices.Contains(instance.Fingerprint.SlotIndex))
+                .ToArray();
+            if (equippedInstances.Any(instance =>
+                    instance.CapturedAt == default ||
+                    instance.CapturedAt > provenance.CompletedAtUtc ||
+                    instance.Fingerprint is null ||
+                    instance.Fingerprint.Character != character ||
+                    !string.Equals(instance.Fingerprint.Container, EquippedContainer, StringComparison.Ordinal)) ||
+                supplementalEquipped.Length > 1 ||
+                supplementalEquipped.Any(instance =>
+                    instance.Fingerprint.SlotIndex != 13 ||
+                    !snapshot.Definitions.TryGetValue(instance.Fingerprint.ItemId, out var definition) ||
+                    definition.Slot != EquipmentSlot.SoulCrystal ||
+                    !definition.IsSoulCrystal))
+            {
+                diagnostic = "The active player advisor baseline has invalid equipped-instance evidence.";
+                return false;
+            }
+        }
+        else
+        {
+            var assignedInstances = new HashSet<EquipmentInstanceFingerprint>(EquipmentInstanceFingerprintComparer.Instance);
+            if (baseline.EquippedSlots
+                .Where(slot => slot.Instance is not null)
+                .Any(slot => !assignedInstances.Add(slot.Instance!.Fingerprint)))
+            {
+                diagnostic = "Saved-gearset positions must resolve to distinct owned instances.";
+                return false;
+            }
         }
 
         var expectedEquipped = new Dictionary<EquipmentStatSemantic, int>();
@@ -364,12 +416,17 @@ internal static class PlayerAdvisorBaselineAssembler
                 return false;
             }
 
-            var instances = snapshot.Instances.Where(value => value is not null &&
-                    value.IsEquipped &&
-                    value.Fingerprint is not null &&
-                    string.Equals(value.Fingerprint.Container, EquippedContainer, StringComparison.Ordinal) &&
-                    value.Fingerprint.SlotIndex == position.EquippedIndex)
-                .ToArray();
+            var instances = isActiveLoadout
+                ? snapshot.Instances.Where(value =>
+                        value.IsEquipped &&
+                        string.Equals(value.Fingerprint.Container, EquippedContainer, StringComparison.Ordinal) &&
+                        value.Fingerprint.SlotIndex == position.EquippedIndex)
+                    .ToArray()
+                : slot.Instance is null
+                    ? []
+                    : snapshot.Instances.Where(value =>
+                            EquipmentInstanceFingerprintComparer.Instance.Equals(value.Fingerprint, slot.Instance.Fingerprint))
+                        .ToArray();
             if (slot.Instance is null || slot.Definition is null || slot.Quality is null)
             {
                 if (slot.Instance is not null || slot.Definition is not null || slot.Quality is not null ||
@@ -395,6 +452,7 @@ internal static class PlayerAdvisorBaselineAssembler
                 slot.Quality is not (EquipmentQuality.Normal or EquipmentQuality.High) ||
                 fingerprint.MateriaIds is null ||
                 !fingerprint.MateriaIds.SequenceEqual(slot.MateriaIds) ||
+                !(fingerprint.MateriaGrades ?? []).SequenceEqual(slot.MateriaGrades) ||
                 !snapshot.Definitions.TryGetValue(definition.ItemId, out var snapshotDefinition) ||
                 snapshotDefinition is null ||
                 (!ReferenceEquals(snapshotDefinition, definition) && snapshotDefinition != definition) ||

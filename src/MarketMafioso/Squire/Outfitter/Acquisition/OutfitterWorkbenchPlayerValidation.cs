@@ -31,7 +31,10 @@ internal readonly record struct PlayerAdvisorAuthorityFingerprint(string Value)
             .Append(classJobId).Append('|')
             .Append(level).Append('|')
             .Append(effectiveLevel).Append('|')
-            .Append(isLevelSynced ? '1' : '0');
+            .Append(isLevelSynced ? '1' : '0').Append('|')
+            .Append((int)(baseline.Target?.Kind ?? PlayerAdvisorBaselineTargetKind.ActiveLoadout)).Append('|')
+            .Append(baseline.Target?.Key ?? "active-loadout").Append('|')
+            .Append(baseline.Target?.AuthorityFingerprint ?? string.Empty);
         foreach (var stat in baseline.TotalStats.OrderBy(value => value.Key))
             lineage.Append('|').Append((int)stat.Key).Append(':').Append(stat.Value);
         foreach (var slot in baseline.EquippedSlots.OrderBy(value => value.Position))
@@ -59,7 +62,8 @@ internal sealed record OutfitterWorkbenchPlayerValidation(
     Guid EvidenceGenerationId,
     PlayerAdvisorAuthorityFingerprint CapturedPlayer,
     PlayerAdvisorAuthorityFingerprint RecapturedPlayer,
-    bool DryRunOnly)
+    bool DryRunOnly,
+    PlayerAdvisorBaseline? RecapturedBaseline = null)
 {
     public bool IsCurrentFor(
         MinerBotanistReadOnlyAdvice advice,

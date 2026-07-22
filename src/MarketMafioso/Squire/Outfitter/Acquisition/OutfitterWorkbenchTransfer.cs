@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Franthropy.Dalamud.Equipment;
+using MarketMafioso.Squire.Outfitter.Crafting;
 using MarketMafioso.Squire.Outfitter.MarketEvidence;
 using MarketMafioso.Squire.Outfitter.Utility;
 
@@ -28,7 +29,8 @@ public sealed record OutfitterWorkbenchMarketLot(
     string SourceRevision,
     DateTimeOffset ReviewedAtUtc,
     string? RetainerName = null,
-    string? RetainerId = null);
+    string? RetainerId = null,
+    string ItemKind = "Equipment");
 
 public sealed record OutfitterWorkbenchSelectionLineage(
     EquipmentLoadoutPosition Position,
@@ -66,7 +68,8 @@ internal static class OutfitterWorkbenchTransferBuilder
         MinerBotanistReadOnlyAdvice advice,
         string selectedSolutionId,
         OutfitterMarketEvidenceBook evidence,
-        OutfitterWorkbenchPlayerValidation playerValidation)
+        OutfitterWorkbenchPlayerValidation playerValidation,
+        TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(advice);
         ArgumentException.ThrowIfNullOrWhiteSpace(selectedSolutionId);
@@ -86,6 +89,22 @@ internal static class OutfitterWorkbenchTransferBuilder
         if (selected is null)
             throw new InvalidOperationException("The selected solution is not present in the authoritative frontier.");
 
+        var selectedOffers = selected.Candidate.Selections
+            .Select(selection => advice.OffersByAllocation.TryGetValue(selection.AllocationKey, out var offer)
+                ? offer
+                : throw new InvalidOperationException("The selected solution references an offer outside its authoritative offer book."))
+            .DistinctBy(offer => offer.AllocationKey)
+            .ToArray();
+        var containsCraft = selectedOffers.Any(offer => offer.Offer.SourceKind == EquipmentAcquisitionSourceKind.Craft);
+        var craftHandoff = containsCraft
+            ? OutfitterCraftHandoffProjection.Build(
+                advice,
+                selectedSolutionId,
+                playerValidation.RecapturedBaseline
+                    ?? throw new InvalidOperationException("Craft-material transfer requires a freshly recaptured player baseline."),
+                evidence,
+                (timeProvider ?? TimeProvider.System).GetUtcNow())
+            : null;
         var marketLots = new List<OutfitterWorkbenchMarketLot>();
         var selectedLoadout = new List<OutfitterWorkbenchSelectionLineage>();
         foreach (var group in selected.Candidate.Selections.GroupBy(selection => selection.AllocationKey))
@@ -109,12 +128,20 @@ internal static class OutfitterWorkbenchTransferBuilder
                 case EquipmentAcquisitionSourceKind.GilVendor:
                     break;
                 case EquipmentAcquisitionSourceKind.MarketBoard:
-                    marketLots.Add(BuildMarketLot(offer, requiredQuantity, evidence));
+                    if (!containsCraft)
+                        marketLots.Add(BuildMarketLot(offer, requiredQuantity, evidence));
+                    break;
+                case EquipmentAcquisitionSourceKind.Craft:
+                    if (craftHandoff is null)
+                        throw new InvalidOperationException("The selected craft source has no reviewed material handoff.");
                     break;
                 default:
                     throw new InvalidOperationException("The selected solution contains an unsupported acquisition source.");
             }
         }
+
+        if (craftHandoff is not null)
+            marketLots.AddRange(craftHandoff.MarketMaterials.Select(material => BuildCraftMarketLot(material, evidence)));
 
         if (marketLots.Count == 0)
             throw new InvalidOperationException("The selected solution has no market acquisition to transfer to the Workbench.");
@@ -152,6 +179,50 @@ internal static class OutfitterWorkbenchTransferBuilder
             orderedLots,
             total,
             playerValidation.DryRunOnly);
+    }
+
+    private static OutfitterWorkbenchMarketLot BuildCraftMarketLot(
+        OutfitterCraftHandoffMaterial material,
+        OutfitterMarketEvidenceBook evidence)
+    {
+        if (material.Source is not OutfitterMarketMaterialSourceIdentity source ||
+            source.EvidenceGenerationId != evidence.GenerationId ||
+            source.EvidenceRevision != evidence.Revision ||
+            material.PurchasedQuantity == 0 ||
+            material.PurchasedQuantity > source.AvailableQuantity)
+        {
+            throw new InvalidOperationException("A selected craft material does not match current published market evidence.");
+        }
+        var item = evidence.Items.SingleOrDefault(candidate =>
+            candidate.ItemId == material.ItemId && candidate.Status == OutfitterMarketEvidenceItemStatus.Fresh);
+        var listing = item?.Listings.SingleOrDefault(candidate =>
+            string.Equals(candidate.ListingId, source.ListingId, StringComparison.Ordinal) &&
+            candidate.ItemId == material.ItemId &&
+            candidate.Quality == material.Quality &&
+            candidate.Quantity == source.AvailableQuantity &&
+            candidate.UnitPriceGil == source.UnitPriceGil &&
+            string.Equals(candidate.WorldName, source.WorldName, StringComparison.OrdinalIgnoreCase));
+        if (listing is null)
+            throw new InvalidOperationException("A selected craft-material listing is absent from current published evidence.");
+
+        return new(
+            new(
+                material.ItemId,
+                material.Quality,
+                EquipmentAcquisitionSourceKind.MarketBoard,
+                $"craft-material:{material.PlanIdentity.Sha256}:{source.ListingId}"),
+            material.ItemName,
+            material.PurchasedQuantity,
+            source.AvailableQuantity,
+            source.WorldName,
+            source.UnitPriceGil,
+            checked((ulong)source.UnitPriceGil * material.PurchasedQuantity),
+            source.ListingId,
+            source.SourceRevision,
+            source.ReviewedAtUtc,
+            listing.RetainerName,
+            listing.RetainerId,
+            "Crafting material");
     }
 
     private static OutfitterWorkbenchMarketLot BuildMarketLot(

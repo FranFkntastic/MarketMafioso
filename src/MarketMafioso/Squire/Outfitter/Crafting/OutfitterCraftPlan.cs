@@ -44,11 +44,6 @@ internal enum OutfitterCraftEligibilityState
     Unproven,
 }
 
-internal enum OutfitterCraftImplementationStatus
-{
-    ContractOnly,
-}
-
 /// <summary>Baseline-derived active-job authority for one exact recipe node.</summary>
 internal sealed record OutfitterCraftEligibilityEvidence(
     OutfitterCraftEligibilityState State,
@@ -360,6 +355,12 @@ internal static class CraftMarketEvidenceFreshness
         capturedAtUtc <= publishedAtUtc &&
         publishedAtUtc <= asOfUtc &&
         asOfUtc - reviewedAtUtc <= TimeToLive;
+
+    public static bool IsFresh(OutfitterMarketEvidenceBook book, DateTimeOffset asOfUtc) =>
+        book.IsPublishable &&
+        book.PublishedAtUtc is { } publishedAtUtc &&
+        publishedAtUtc <= asOfUtc &&
+        asOfUtc - publishedAtUtc <= TimeToLive;
 }
 
 internal sealed record CraftMarketItemSourceRevision(
@@ -610,11 +611,8 @@ internal sealed record CraftMarketEvidenceReference
                 listing.UnitPriceGil == 0 ||
                 listing.CapturedAtUtc != item.CapturedAtUtc ||
                 !string.Equals(listing.SourceRevision, item.SourceRevision, StringComparison.Ordinal) ||
-                !CraftMarketEvidenceFreshness.IsFresh(
-                    listing.ListingReviewedAtUtc,
-                    listing.CapturedAtUtc,
-                    publishedAtUtc,
-                    publishedAtUtc))
+                listing.ListingReviewedAtUtc == default ||
+                listing.ListingReviewedAtUtc > listing.CapturedAtUtc)
             {
                 throw new InvalidOperationException($"Published craft evidence item {item.ItemId} contains an invalid listing lineage.");
             }
@@ -810,7 +808,6 @@ internal sealed record OutfitterCraftPlan(
     ImmutableArray<OutfitterCraftDiagnostic> Diagnostics)
 {
     public const string CurrentSchemaVersion = "marketmafioso-squire-outfitter-craft-plan/v4";
-    public static OutfitterCraftImplementationStatus ImplementationStatus => OutfitterCraftImplementationStatus.ContractOnly;
     public OutfitterCraftPlanValidation Validate(bool requireEconomyReady = false)
     {
         var errors = new List<string>();

@@ -11,6 +11,7 @@ using MarketMafioso.Squire.Observation;
 using MarketMafioso.Squire.Outfitter.Acquisition;
 using MarketMafioso.Squire.Outfitter.Crafting;
 using MarketMafioso.Squire.Outfitter.MarketEvidence;
+using MarketMafioso.Squire.Outfitter.Persistence;
 
 namespace MarketMafioso.Squire.Outfitter.Utility;
 
@@ -61,6 +62,8 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
     private readonly IPlayerAdvisorBaselineSource baselineSource;
     private readonly MinerBotanistAdvisorCatalog catalog;
     private readonly OutfitterMarketEvidenceDiscoveryService marketDiscovery;
+    private readonly OutfitterMarketEvidenceFileStore marketEvidenceStore;
+    private readonly OutfitterPersistedAnalysisStore persistedAnalysisStore;
     private readonly OutfitterAdvisorCraftDiscovery? craftDiscovery;
 #if DEBUG
     private readonly string solverReplayPath;
@@ -89,6 +92,8 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
     private long sessionGeneration;
     private DateTimeOffset solvingStartedAtUtc;
     private string requestedContextId = GathererAdvisorStatFamily.OrdinaryResourceContext.Id;
+    private OutfitterTarget? requestedTarget;
+    private string? adviceTargetKey;
 
     public MinerBotanistAdvisorSession(
         IPlayerAdvisorBaselineSource baselineSource,
@@ -116,10 +121,12 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
 #if DEBUG
         solverReplayPath = Path.Combine(Path.GetDirectoryName(evidencePath)!, "outfitter-solver-replay.json");
 #endif
+        marketEvidenceStore = new(evidencePath);
+        persistedAnalysisStore = new(Path.Combine(Path.GetDirectoryName(evidencePath)!, "outfitter-analyses.json"));
         marketDiscovery = new(
             listingSource,
             new(TimeSpan.FromMinutes(15), TimeSpan.FromHours(6), maxEntries: 4096),
-            new OutfitterMarketEvidenceFileStore(evidencePath));
+            marketEvidenceStore);
         State = Idle(GathererAdvisorStatFamily.Instance.ProfileDescriptor.DefaultContext);
     }
 
@@ -129,15 +136,185 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
 
     public string Region { get; private set; } = "North America";
 
+    internal Task<OutfitterPersistedAnalysisBook> LoadPersistedAnalysesAsync(CancellationToken cancellationToken = default) =>
+        persistedAnalysisStore.LoadAsync(cancellationToken);
+
+    internal Task<OutfitterMarketEvidenceBook?> LoadPersistedMarketEvidenceAsync(CancellationToken cancellationToken = default) =>
+        marketEvidenceStore.LoadAsync(cancellationToken);
+
+    internal Task<OutfitterPersistedAnalysis> PersistCurrentAnalysisAsync(
+        string? selectedSolutionId = null,
+        Guid? existingAnalysisId = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (State is not
+            {
+                Stage: MinerBotanistAdvisorSessionStage.Complete,
+                AdviceIsRetained: false,
+                Advice: { } advice,
+            } || baseline is not
+            {
+                Status: PlayerAdvisorBaselineStatus.Complete,
+                Target: { Kind: PlayerAdvisorBaselineTargetKind.SavedGearset, SavedGearset: { } target },
+            } || resolvedFamily is null || CurrentEvidence is null)
+        {
+            throw new InvalidOperationException("Current complete saved-gearset advice is required before persistence.");
+        }
+
+        selectedSolutionId ??= advice.Nomination?.Candidate.SolutionId;
+        OutfitterPersistedCraftHandoff? craftHandoff = null;
+        if (selectedSolutionId is not null && advice.Frontier?.Pareto.Frontier.SingleOrDefault(value =>
+                string.Equals(value.Candidate.SolutionId, selectedSolutionId, StringComparison.Ordinal)) is { } selected)
+        {
+            var includesCraft = selected.Candidate.Selections.Any(selection =>
+                advice.OffersByAllocation.TryGetValue(selection.AllocationKey, out var offer) &&
+                offer.Offer.SourceKind == EquipmentAcquisitionSourceKind.Craft);
+            if (includesCraft)
+            {
+                var projection = OutfitterCraftHandoffProjection.Build(
+                    advice,
+                    selectedSolutionId,
+                    baseline,
+                    CurrentEvidence,
+                    DateTimeOffset.UtcNow);
+                craftHandoff = OutfitterPersistedCraftHandoff.Create(projection, DateTimeOffset.UtcNow);
+            }
+        }
+
+        var analysis = OutfitterPersistedAnalysis.Create(
+            target,
+            baseline,
+            resolvedFamily,
+            State.Context,
+            CurrentEvidence,
+            advice,
+            selectedSolutionId,
+            craftHandoff);
+        if (existingAnalysisId is { } analysisId)
+            analysis = analysis with { AnalysisId = analysisId };
+        return persistedAnalysisStore.UpsertAsync(analysis, cancellationToken);
+    }
+
+    internal OutfitterPersistedAnalysisRevalidation RevalidatePersistedAnalysis(
+        OutfitterPersistedAnalysis analysis,
+        OutfitterMarketEvidenceBook? currentEvidence)
+    {
+        ArgumentNullException.ThrowIfNull(analysis);
+        var target = RehydrateTarget(analysis.Target);
+        var currentBaseline = baselineSource is IOutfitterTargetAdvisorBaselineSource targetSource
+            ? targetSource.Capture(target)
+            : PlayerAdvisorBaselineAssembler.Failure(
+                PlayerAdvisorBaselineStatus.Unsupported,
+                "This Advisor baseline source cannot revalidate saved-gearset targets.");
+        var family = AdvisorStatFamilies.Resolve(analysis.Target.ClassJobId);
+        var context = family?.ResolveContext(analysis.Profile.ContextId);
+        return OutfitterPersistedAnalysisValidation.Revalidate(
+            analysis,
+            currentBaseline,
+            family,
+            context,
+            currentEvidence,
+            State.Advice);
+    }
+
+    internal bool TryGetCraftHandoffPresentation(
+        MinerBotanistReadOnlyAdvice advice,
+        string selectedSolutionId,
+        OutfitterMarketEvidenceBook evidence,
+        out OutfitterCraftHandoffProjection projection)
+    {
+        projection = null!;
+        if (!ReferenceEquals(advice, State.Advice) || !ReferenceEquals(evidence, CurrentEvidence) || baseline is null)
+            return false;
+        try
+        {
+            var reviewAt = advice.CraftOffersByAllocation.Values
+                .Select(craft => craft.Source.Plan.BuiltAtUtc)
+                .DefaultIfEmpty(DateTimeOffset.MinValue)
+                .Max();
+            if (reviewAt == DateTimeOffset.MinValue)
+                return false;
+            projection = OutfitterCraftHandoffProjection.Build(
+                advice,
+                selectedSolutionId,
+                baseline,
+                evidence,
+                reviewAt);
+            return true;
+        }
+        catch (Exception exception) when (exception is ArgumentException or InvalidOperationException or OverflowException)
+        {
+            return false;
+        }
+    }
+
+    internal bool TryBuildCraftHandoff(
+        MinerBotanistReadOnlyAdvice advice,
+        string selectedSolutionId,
+        OutfitterMarketEvidenceBook evidence,
+        out OutfitterCraftHandoffProjection projection,
+        out string diagnostic)
+    {
+        ArgumentNullException.ThrowIfNull(advice);
+        ArgumentException.ThrowIfNullOrWhiteSpace(selectedSolutionId);
+        ArgumentNullException.ThrowIfNull(evidence);
+        projection = null!;
+        if (State.Stage != MinerBotanistAdvisorSessionStage.Complete || State.AdviceIsRetained ||
+            !ReferenceEquals(advice, State.Advice) || !ReferenceEquals(evidence, CurrentEvidence) ||
+            advicePlayerFingerprint is not { } capturedPlayer)
+        {
+            diagnostic = "Craft handoff requires current, non-retained Advisor evidence.";
+            return false;
+        }
+
+        try
+        {
+            var currentBaseline = CaptureRequestedBaseline();
+            if (currentBaseline.Status != PlayerAdvisorBaselineStatus.Complete ||
+                PlayerAdvisorAuthorityFingerprint.Capture(currentBaseline) != capturedPlayer)
+            {
+                diagnostic = "Player job, equipment, materia, or relevant stats changed; refresh Advisor before craft handoff.";
+                return false;
+            }
+            projection = OutfitterCraftHandoffProjection.Build(
+                advice,
+                selectedSolutionId,
+                currentBaseline,
+                evidence,
+                DateTimeOffset.UtcNow);
+            diagnostic = "Craft handoff reviewed against current player and market evidence.";
+            return true;
+        }
+        catch (Exception exception) when (exception is ArgumentException or InvalidOperationException or OverflowException)
+        {
+            diagnostic = $"Craft handoff stopped safely: {exception.Message}";
+            return false;
+        }
+    }
+
     public void Begin(AdvisorUtilityContextDescriptor context, string region)
+    {
+        BeginCore(null, context, region);
+    }
+
+    public void Begin(OutfitterTarget target, AdvisorUtilityContextDescriptor context, string region)
+    {
+        ArgumentNullException.ThrowIfNull(target);
+        BeginCore(target, context, region);
+    }
+
+    private void BeginCore(OutfitterTarget? target, AdvisorUtilityContextDescriptor context, string region)
     {
         ArgumentNullException.ThrowIfNull(context);
         CancelCore(MinerBotanistAdvisorSessionStage.Cancelled, "Superseded by a new advisor refresh.");
         sessionGeneration++;
+        var targetKey = target?.Key ?? "active-loadout";
         var retainedAdvice = string.Equals(requestedContextId, context.Id, StringComparison.Ordinal) &&
+            string.Equals(adviceTargetKey, targetKey, StringComparison.Ordinal) &&
             State.Advice is { Frontier: not null }
             ? State.Advice
             : null;
+        requestedTarget = target;
         requestedContextId = context.Id;
         if (retainedAdvice is null)
             CurrentEvidence = null;
@@ -197,6 +374,7 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
         pendingSolvingEvidence = null;
         pendingCraftDiagnostic = null;
         advicePlayerFingerprint = null;
+        adviceTargetKey = null;
         workbenchValidationRequest = null;
         completedWorkbenchValidation = null;
         completedValidationOwnedInstances = [];
@@ -264,7 +442,7 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
             return false;
         }
 
-        var latest = baselineSource.Capture();
+        var latest = CaptureRequestedBaseline();
         var latestInstances = new HashSet<EquipmentInstanceFingerprint>(
             latest.EquipmentSnapshot?.Instances.Select(value => value.Fingerprint) ?? [],
             EquipmentInstanceFingerprintComparer.Instance);
@@ -287,7 +465,7 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
             return false;
         }
 
-        validation = completedWorkbenchValidation;
+        validation = completedWorkbenchValidation with { RecapturedBaseline = latest };
         completedWorkbenchValidation = null;
         completedValidationOwnedInstances = [];
         return true;
@@ -295,7 +473,7 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
 
     private void TickPlayerCapture()
     {
-        baseline = baselineSource.Capture();
+        baseline = CaptureRequestedBaseline();
         State = State with { Message = baseline.Diagnostic, UpdatedAtUtc = DateTimeOffset.UtcNow };
         if (baseline.Status != PlayerAdvisorBaselineStatus.Complete || baseline.ClassJobId is not { } classJobId ||
             baseline.Level is not { } level)
@@ -397,7 +575,7 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
                 return;
             }
 
-            var revalidatedBaseline = baselineSource.Capture();
+            var revalidatedBaseline = CaptureRequestedBaseline();
             if (revalidatedBaseline.Status != PlayerAdvisorBaselineStatus.Complete ||
                 advicePlayerFingerprint is not { } capturedPlayer ||
                 PlayerAdvisorAuthorityFingerprint.Capture(revalidatedBaseline) != capturedPlayer)
@@ -645,7 +823,10 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
             : MinerBotanistAdvisorSessionStage.Abstained;
         var retainPrevious = advice.Status != MinerBotanistAdvisorStatus.Complete && State.Advice is { Frontier: not null };
         if (advice.Status == MinerBotanistAdvisorStatus.Complete)
+        {
             CurrentEvidence = pendingCurrentEvidence;
+            adviceTargetKey = requestedTarget?.Key ?? "active-loadout";
+        }
         var craftDiagnostic = pendingCraftDiagnostic;
         State = State with
         {
@@ -778,9 +959,15 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
         cancellation = null;
     }
 
-    private static IReadOnlyList<MinerBotanistOwnedItemEvidence> CaptureOwnedItems(PlayerAdvisorBaseline baseline) =>
-        (baseline.EquipmentSnapshot?.Instances ?? [])
-            .Where(instance => !instance.IsEquipped && IsOwnedGearContainer(instance.Fingerprint.Container))
+    private static IReadOnlyList<MinerBotanistOwnedItemEvidence> CaptureOwnedItems(PlayerAdvisorBaseline baseline)
+    {
+        var baselineInstances = new HashSet<EquipmentInstanceFingerprint>(
+            baseline.EquippedSlots.Where(value => value.Instance is not null).Select(value => value.Instance!.Fingerprint),
+            EquipmentInstanceFingerprintComparer.Instance);
+        return (baseline.EquipmentSnapshot?.Instances ?? [])
+            .Where(instance => !instance.IsEquipped &&
+                !baselineInstances.Contains(instance.Fingerprint) &&
+                IsOwnedGearContainer(instance.Fingerprint.Container))
             .Select(instance => new MinerBotanistOwnedItemEvidence(
                 instance.Fingerprint.ItemId,
                 instance.Fingerprint.IsHighQuality,
@@ -788,6 +975,7 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
                 instance,
                 UtilityIsExact: instance.Fingerprint.MateriaIds.Count == 0))
             .ToArray();
+    }
 
     private static bool ComponentIsComplete(PlayerAdvisorBaseline baseline, string component) =>
         baseline.EquipmentSnapshot?.Diagnostics.Components.Any(value =>
@@ -803,6 +991,44 @@ public sealed class MinerBotanistAdvisorSession : IDisposable
         container.StartsWith("Armory", StringComparison.Ordinal) ? "Armoury"
             : container.Contains("SaddleBag", StringComparison.Ordinal) ? "Saddlebag"
             : "Inventory";
+
+    private PlayerAdvisorBaseline CaptureRequestedBaseline()
+    {
+        if (requestedTarget is null)
+            return baselineSource.Capture();
+        if (baselineSource is IOutfitterTargetAdvisorBaselineSource targetSource)
+            return targetSource.Capture(requestedTarget);
+        return PlayerAdvisorBaselineAssembler.Failure(
+            PlayerAdvisorBaselineStatus.Unsupported,
+            "This Advisor baseline source cannot capture saved-gearset targets.");
+    }
+
+    private static OutfitterTarget RehydrateTarget(SavedGearsetTargetFingerprint fingerprint)
+    {
+        var job = new Franthropy.Dalamud.Characters.CharacterJobSnapshot(
+            fingerprint.ClassJobId,
+            string.Empty,
+            string.Empty,
+            fingerprint.JobLevel,
+            true,
+            null,
+            string.Empty,
+            EquipmentStatSemantic.Unknown,
+            EquipmentDiscipline.Unknown);
+        var gearset = new GearsetSnapshot(
+            fingerprint.GearsetId,
+            fingerprint.GearsetName,
+            fingerprint.ClassJobId,
+            [],
+            true);
+        return new(
+            $"gearset:{fingerprint.GearsetId}",
+            OutfitterTargetKind.Gearset,
+            fingerprint.GearsetName,
+            $"Gearset {fingerprint.GearsetId + 1:N0}",
+            job,
+            gearset);
+    }
 
     private static MinerBotanistAdvisorSessionState Idle(AdvisorUtilityContextDescriptor context) => new(
         MinerBotanistAdvisorSessionStage.Idle,

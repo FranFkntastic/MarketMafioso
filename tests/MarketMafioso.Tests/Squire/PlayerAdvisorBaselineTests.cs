@@ -293,12 +293,26 @@ public sealed class PlayerAdvisorBaselineTests
     }
 
     [Fact]
-    public void Production_advisor_session_has_no_rendered_probe_dependency()
+    public void Authority_fingerprint_tracks_saved_gearset_identity()
     {
-        var parameters = typeof(MinerBotanistAdvisorSession).GetConstructors().Single().GetParameters();
+        var baseline = PlayerAdvisorBaselineAssembler.Assemble(
+            Snapshot(),
+            Header,
+            GathererAdvisorStatFamily.Instance,
+            Totals(1_000, 900, 600),
+            Captures());
+        var first = baseline with
+        {
+            Target = new(PlayerAdvisorBaselineTargetKind.SavedGearset, "gearset:4", "fingerprint-a"),
+        };
+        var changed = first with
+        {
+            Target = new(PlayerAdvisorBaselineTargetKind.SavedGearset, "gearset:4", "fingerprint-b"),
+        };
 
-        Assert.Contains(parameters, parameter => parameter.ParameterType == typeof(IPlayerAdvisorBaselineSource));
-        Assert.DoesNotContain(parameters, parameter => parameter.ParameterType == typeof(IRenderedCharacterAdvisorProbe));
+        Assert.NotEqual(
+            PlayerAdvisorAuthorityFingerprint.Capture(first),
+            PlayerAdvisorAuthorityFingerprint.Capture(changed));
     }
 
     [Theory]
@@ -321,13 +335,13 @@ public sealed class PlayerAdvisorBaselineTests
     }
 
     [Fact]
-    public void Item_contribution_mapping_uses_base_parameter_rows_not_player_attribute_indices()
+    public void Item_contribution_mapping_uses_stable_base_parameter_rows()
     {
         var rows = new (uint RowId, string? Name)[]
         {
-            (7_001, "Craftsmanship"),
-            (7_002, "Control"),
-            (7_003, "CP"),
+            (70, "Localized craftsmanship"),
+            (71, "Localized control"),
+            (11, "Localized crafting points"),
         };
 
         var resolved = DalamudPlayerAdvisorBaselineSource.TryResolveBaseParamIds(
@@ -337,14 +351,13 @@ public sealed class PlayerAdvisorBaselineTests
             out var diagnostic);
 
         Assert.True(resolved, diagnostic);
-        Assert.Equal(7_001u, ids[EquipmentStatSemantic.Craftsmanship]);
-        Assert.Equal(7_002u, ids[EquipmentStatSemantic.Control]);
-        Assert.Equal(7_003u, ids[EquipmentStatSemantic.CraftingPoints]);
-        Assert.NotEqual((uint)PlayerAttribute.CraftingPoints, ids[EquipmentStatSemantic.CraftingPoints]);
+        Assert.Equal(70u, ids[EquipmentStatSemantic.Craftsmanship]);
+        Assert.Equal(71u, ids[EquipmentStatSemantic.Control]);
+        Assert.Equal(11u, ids[EquipmentStatSemantic.CraftingPoints]);
     }
 
     [Fact]
-    public void Item_contribution_mapping_rejects_ambiguous_base_parameter_rows()
+    public void Item_contribution_mapping_rejects_unsupported_base_parameter_rows()
     {
         var resolved = DalamudPlayerAdvisorBaselineSource.TryResolveBaseParamIds(
             [(1u, "Control"), (2u, "Control")],
@@ -354,7 +367,55 @@ public sealed class PlayerAdvisorBaselineTests
 
         Assert.False(resolved);
         Assert.Empty(ids);
-        Assert.Contains("multiple rows", diagnostic, StringComparison.Ordinal);
+        Assert.Contains("no row", diagnostic, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Invalid_native_value_can_use_complete_static_stat_when_materia_target_other_stats()
+    {
+        var profile = new EquipmentStatProfile(
+            [
+                new(70, EquipmentStatSemantic.Craftsmanship, 1_720, false, "Craftsmanship"),
+                new(71, EquipmentStatSemantic.Control, 900, false, "Control"),
+            ],
+            0,
+            0,
+            0,
+            0,
+            true);
+
+        var resolved = DalamudPlayerAdvisorBaselineSource.TryGetStaticUnmeldedContribution(
+            profile,
+            EquipmentStatSemantic.Craftsmanship,
+            70,
+            [71, 11],
+            out var value);
+
+        Assert.True(resolved);
+        Assert.Equal(1_720, value);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Static_stat_fallback_rejects_same_stat_or_unresolved_materia(bool sameStatMateria)
+    {
+        var profile = new EquipmentStatProfile(
+            [new(70, EquipmentStatSemantic.Craftsmanship, 1_720, false, "Craftsmanship")],
+            0,
+            0,
+            0,
+            0,
+            true);
+
+        var resolved = DalamudPlayerAdvisorBaselineSource.TryGetStaticUnmeldedContribution(
+            profile,
+            EquipmentStatSemantic.Craftsmanship,
+            70,
+            sameStatMateria ? [70] : null,
+            out _);
+
+        Assert.False(resolved);
     }
 
     private static IReadOnlyDictionary<EquipmentStatSemantic, int> Totals(int gathering, int perception, int gp) =>

@@ -293,7 +293,6 @@ internal sealed record CraftCostComparison(
     ImmutableArray<string> Diagnostics)
 {
     public const string CurrentSchemaVersion = "marketmafioso-squire-outfitter-craft-cost-comparison/v4";
-    public static OutfitterCraftImplementationStatus ImplementationStatus => OutfitterCraftImplementationStatus.ContractOnly;
 
     public CraftCostComparisonValidation Validate()
     {

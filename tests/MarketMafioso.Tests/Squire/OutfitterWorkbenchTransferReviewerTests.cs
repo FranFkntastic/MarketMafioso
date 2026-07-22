@@ -53,23 +53,41 @@ public sealed class OutfitterWorkbenchTransferReviewerTests
     }
 
     [Fact]
-    public void Review_ClassifiesExactQualityWorldPriceAndQuantityIndependently()
+    public void Review_ClassifiesExactQualityPriceAndQuantityWithinAcceptedWorld()
     {
         var fixture = Fixture();
         var next = Evidence(
             fixture.GenerationId,
             7,
             fixture.Now.AddMinutes(1),
-            [Listing(EquipmentQuality.Normal, "Gilgamesh", 3, 90, fixture.Now.AddMinutes(1), "source-r1")]);
+            [Listing(EquipmentQuality.Normal, "Siren", 3, 90, fixture.Now.AddMinutes(1), "source-r1")]);
 
         var review = OutfitterWorkbenchTransferReviewer.Review(fixture.Transfer, next);
 
         var changes = Assert.Single(review.Lots).Changes;
         Assert.True(changes.HasFlag(OutfitterWorkbenchLotChange.ExactQualityChanged));
-        Assert.True(changes.HasFlag(OutfitterWorkbenchLotChange.WorldChanged));
+        Assert.False(changes.HasFlag(OutfitterWorkbenchLotChange.WorldChanged));
         Assert.True(changes.HasFlag(OutfitterWorkbenchLotChange.UnitPriceDecreased));
         Assert.True(changes.HasFlag(OutfitterWorkbenchLotChange.AvailableQuantityIncreased));
         Assert.False(changes.HasFlag(OutfitterWorkbenchLotChange.RequiredQuantityUnavailable));
+    }
+
+    [Fact]
+    public void Review_TreatsSameRawListingIdOnAnotherWorldAsDifferentListing()
+    {
+        var fixture = Fixture();
+        var next = Evidence(
+            fixture.GenerationId,
+            7,
+            fixture.Now.AddMinutes(1),
+            [Listing(EquipmentQuality.High, "Gilgamesh", 2, 100, fixture.Now.AddMinutes(1), "source-r1")]);
+
+        var review = OutfitterWorkbenchTransferReviewer.Review(fixture.Transfer, next);
+
+        var lot = Assert.Single(review.Lots);
+        Assert.Null(lot.CurrentListing);
+        Assert.True(lot.Changes.HasFlag(OutfitterWorkbenchLotChange.ListingMissing));
+        Assert.False(lot.Changes.HasFlag(OutfitterWorkbenchLotChange.WorldChanged));
     }
 
     [Fact]

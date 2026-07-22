@@ -22,7 +22,11 @@ public sealed record MinerBotanistReadOnlyAdvice(
     EquipmentDecisionSolution? Nomination,
     IReadOnlyDictionary<string, AdvisorAuthorityAssessment> AuthorityBySolutionId,
     IReadOnlyDictionary<EquipmentOfferAllocationKey, EquipmentExactSolverOffer> OffersByAllocation,
-    string Diagnostic);
+    string Diagnostic)
+{
+    internal IReadOnlyDictionary<EquipmentOfferAllocationKey, OutfitterCraftAdvisorOffer> CraftOffersByAllocation { get; init; } =
+        new Dictionary<EquipmentOfferAllocationKey, OutfitterCraftAdvisorOffer>();
+}
 
 public sealed record MinerBotanistOwnedItemEvidence(
     uint ItemId,
@@ -104,17 +108,20 @@ public sealed class MinerBotanistReadOnlyAdvisor
             checked((uint)characterLevel));
         var offers = new List<EquipmentExactSolverOffer>();
         var hasUnprovenRelevantOwnedUtility = false;
+        var savedGearsetBaseline = baseline.Target?.Kind == PlayerAdvisorBaselineTargetKind.SavedGearset;
         var required = baseline.EquippedSlots.Select(value => value.Position).ToHashSet();
         var baselineKeys = required.ToDictionary(position => position, _ => (EquipmentOfferAllocationKey?)null);
         foreach (var slot in baseline.EquippedSlots)
         {
             if (slot is not { Definition: { } definition, Instance: { } instance, Quality: { } quality })
                 continue;
-            var sourceKey = $"player-current:{slot.PositionKey}";
+            var sourceKey = savedGearsetBaseline
+                ? $"saved-gearset-baseline:{slot.PositionKey}"
+                : $"player-current:{slot.PositionKey}";
             var currentOffer = new EquipmentLoadoutOffer(
                 definition,
                 EquipmentAcquisitionSourceKind.Owned,
-                "Currently equipped · player state",
+                savedGearsetBaseline ? "Saved gearset · exact owned instance" : "Currently equipped · player state",
                 UnitPriceGil: 0,
                 Instance: instance,
                 PriceIsEstimate: false,
@@ -132,7 +139,7 @@ public sealed class MinerBotanistReadOnlyAdvisor
                 null,
                 0,
                 new(0, 0, 0),
-                ["Currently equipped", quality == EquipmentQuality.High ? "HQ" : "NQ"]);
+                [savedGearsetBaseline ? "Saved gearset" : "Currently equipped", quality == EquipmentQuality.High ? "HQ" : "NQ"]);
             offers.Add(exact);
             foreach (var occupied in occupiedPositions.Where(baselineKeys.ContainsKey))
                 baselineKeys[occupied] = exact.AllocationKey;
@@ -208,7 +215,7 @@ public sealed class MinerBotanistReadOnlyAdvisor
                 var positions = Positions(definition);
                 if (positions.Count == 0 || !positions.Overlaps(required))
                     continue;
-                var sourceCatalogKey = $"market:{marketEvidence.SourceKey}:{definition.ItemId}:{listing.Quality}";
+                var sourceCatalogKey = $"market:{marketEvidence.SourceKey}:{listing.WorldId}:{definition.ItemId}:{listing.Quality}";
                 var key = new EquipmentOfferKey(definition.ItemId, listing.Quality, EquipmentAcquisitionSourceKind.MarketBoard, sourceCatalogKey);
                 var observation = new EquipmentOfferObservation(
                     key,
@@ -317,11 +324,34 @@ public sealed class MinerBotanistReadOnlyAdvisor
             return Abstain($"Exact frontier construction failed safely: {ex.Message}");
         }
 
+        var craftOffersByAllocation = (craftOffers ?? [])
+            .ToDictionary(craft => craft.SolverOffer.AllocationKey);
         var authority = frontier.Pareto.Frontier.ToDictionary(
             solution => solution.Candidate.SolutionId,
             solution =>
             {
                 var assessment = family.AssessAuthority(profile, solution.Utility, solution.AcquisitionCostGil);
+                var selectedCraftOffers = solution.Candidate.Selections
+                    .Select(selection => selection.AllocationKey)
+                    .Distinct()
+                    .Select(key => craftOffersByAllocation.GetValueOrDefault(key))
+                    .Where(craft => craft is not null)
+                    .Cast<OutfitterCraftAdvisorOffer>()
+                    .ToArray();
+                var duplicateCraftListing = selectedCraftOffers
+                    .SelectMany(craft => craft.Source.Plan.TerminalMaterials)
+                    .Select(line => line.Source)
+                    .OfType<OutfitterMarketMaterialSourceIdentity>()
+                    .GroupBy(source => source.PhysicalSourceKey)
+                    .Any(group => group.Count() != 1);
+                if (duplicateCraftListing)
+                {
+                    assessment = assessment with
+                    {
+                        AdvisorMayConsider = false,
+                        Reasons = [.. assessment.Reasons, "Selected craft plans reuse one indivisible market listing; this solution cannot be nominated or handed off."],
+                    };
+                }
                 var paidOwnedEvidenceReason = !ownedInventoryCoverageComplete
                     ? "Owned inventory coverage is partial; the advisor will not nominate a paid loadout that may duplicate available gear."
                     : hasUnprovenRelevantOwnedUtility
@@ -352,7 +382,10 @@ public sealed class MinerBotanistReadOnlyAdvisor
             offers.ToDictionary(value => value.AllocationKey),
             nomination is null
                 ? "Frontier is complete, but the advisor abstains under the displayed rule."
-                : $"Advisor nominates {nomination.Candidate.SolutionId} under the displayed rule.");
+                : $"Advisor nominates {nomination.Candidate.SolutionId} under the displayed rule.")
+        {
+            CraftOffersByAllocation = craftOffersByAllocation,
+        };
     }
 
     internal static HashSet<EquipmentLoadoutPosition> Positions(EquipmentItemDefinition definition) => definition.Slot switch

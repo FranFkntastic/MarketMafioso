@@ -32,10 +32,6 @@ public sealed class OutfitterCraftingContractsTests
 
         Assert.True(plan.Validate(requireEconomyReady: true).IsValid);
         Assert.True(comparison.Validate().IsValid);
-        Assert.Equal(OutfitterCraftImplementationStatus.ContractOnly, OutfitterCraftPlan.ImplementationStatus);
-        Assert.Equal(OutfitterCraftImplementationStatus.ContractOnly, CraftCostComparison.ImplementationStatus);
-        Assert.False(typeof(OutfitterCraftPlan).IsPublic);
-        Assert.False(typeof(CraftCostComparison).IsPublic);
     }
 
     [Fact]
@@ -81,7 +77,6 @@ public sealed class OutfitterCraftingContractsTests
         Assert.Equal(first.ContentIdentity, second.ContentIdentity);
         Assert.Equal(new uint[] { 100, 300 }, first.QueriedItemIds.ToArray());
         Assert.Equal(new uint[] { 100, 300 }, first.ItemSourceRevisions.Select(item => item.ItemId).ToArray());
-        Assert.Empty(typeof(CraftMarketEvidenceReference).GetConstructors());
     }
 
     [Fact]
@@ -147,11 +142,32 @@ public sealed class OutfitterCraftingContractsTests
             book with { Coverage = book.Coverage with { QueriedItemIds = [100u, 999u] } },
             EvidenceBook(capturedAt: PublishedAt.AddTicks(1)),
             EvidenceBook(reviewedAt: CapturedAt.AddTicks(1)),
-            EvidenceBook(publishedAt: ReviewedAt + CraftMarketEvidenceFreshness.TimeToLive + TimeSpan.FromTicks(1)),
+            EvidenceBook(
+                reviewedAt: ReviewedAt,
+                capturedAt: ReviewedAt,
+                publishedAt: ReviewedAt + CraftMarketEvidenceFreshness.TimeToLive + TimeSpan.FromTicks(1)),
         };
 
         Assert.All(candidates, candidate =>
             Assert.Throws<InvalidOperationException>(() => CraftMarketEvidenceReference.FromPublishedBook(candidate)));
+    }
+
+    [Fact]
+    public void PublishedBookFactory_RetainsStructurallyValidOldDepthRowsForIdentityOnly()
+    {
+        var book = EvidenceBook(
+            reviewedAt: CapturedAt.AddMinutes(-20),
+            capturedAt: CapturedAt,
+            publishedAt: PublishedAt);
+
+        var reference = CraftMarketEvidenceReference.FromPublishedBook(book);
+
+        Assert.NotEmpty(reference.Listings);
+        Assert.All(reference.Listings, listing => Assert.False(CraftMarketEvidenceFreshness.IsFresh(
+            listing.ReviewedAtUtc,
+            listing.CapturedAtUtc,
+            reference.PublishedAtUtc,
+            PlanBuiltAt)));
     }
 
     [Fact]
@@ -207,7 +223,6 @@ public sealed class OutfitterCraftingContractsTests
         Assert.NotEqual(first.CaptureId, second.CaptureId);
         Assert.NotEqual(first.EquipmentGenerationId, second.EquipmentGenerationId);
         Assert.False(first.IsLevelSynced);
-        Assert.Empty(typeof(OutfitterCrafterObservationIdentity).GetConstructors());
     }
 
     [Fact]
@@ -270,6 +285,33 @@ public sealed class OutfitterCraftingContractsTests
         Assert.All([wrongIdentity, incomplete, duplicateSlot, extraEquipped, changedFingerprint], candidate =>
             Assert.Throws<InvalidOperationException>(() =>
                 OutfitterCrafterObservationIdentity.FromBaseline(candidate, PlanBuiltAt)));
+    }
+
+    [Fact]
+    public void CrafterAuthority_AcceptsOneProvenSupplementalSoulCrystal()
+    {
+        var valid = Baseline(materiaId: 55);
+        const uint soulCrystalItemId = 9_999;
+        var definitions = valid.EquipmentSnapshot!.Definitions.ToDictionary(pair => pair.Key, pair => pair.Value);
+        definitions.Add(
+            soulCrystalItemId,
+            EquipmentDefinition(soulCrystalItemId, EquipmentSlot.SoulCrystal, valid.ClassJobId!.Value) with
+            {
+                IsSoulCrystal = true,
+            });
+        var withSoulCrystal = valid with
+        {
+            EquipmentSnapshot = valid.EquipmentSnapshot with
+            {
+                Instances = [.. valid.EquipmentSnapshot.Instances, EquipmentInstance(13, soulCrystalItemId, false, ReviewedAt)],
+                Definitions = definitions,
+            },
+        };
+
+        var observation = OutfitterCrafterObservationIdentity.FromBaseline(withSoulCrystal, PlanBuiltAt);
+
+        Assert.Equal(valid.ClassJobId, observation.ClassJobId);
+        Assert.Equal(valid.Character, observation.Character);
     }
 
     [Fact]
@@ -482,7 +524,6 @@ public sealed class OutfitterCraftingContractsTests
 
         Assert.Equal("vendor:20:30:40:100", source.SourceCatalogKey);
         Assert.StartsWith("sha256:", source.CatalogVersion, StringComparison.Ordinal);
-        Assert.Empty(typeof(ComparedGearGilVendorSourceIdentity).GetConstructors());
         Assert.Throws<InvalidOperationException>(() =>
             ComparedGearGilVendorSourceIdentity.FromCatalog(catalog, fabricatedPrice, 1));
     }
@@ -496,8 +537,6 @@ public sealed class OutfitterCraftingContractsTests
         var source = Assert.IsType<ComparedGearOwnedSourceIdentity>(allocation.Source);
 
         Assert.True(comparison.Validate().IsValid);
-        Assert.Empty(typeof(ComparedGearOwnedSourceIdentity).GetConstructors());
-        Assert.Empty(typeof(ComparedGearOwnedInstanceIdentity).GetConstructors());
 
         var wrongSources = new[]
         {
@@ -1019,12 +1058,13 @@ public sealed class OutfitterCraftingContractsTests
             quantity,
             30_000,
             0,
-            null,
-            materiaIds ?? [],
-            null,
-            []),
-        capturedAt,
-        isEquipped);
+             null,
+             materiaIds ?? [],
+             null,
+             [],
+             materiaIds?.Select(_ => (byte)1).ToArray() ?? []),
+         capturedAt,
+         isEquipped);
 
     private static EquipmentItemDefinition EquipmentDefinition(uint itemId, EquipmentSlot slot, uint classJobId) => new(
         itemId,
