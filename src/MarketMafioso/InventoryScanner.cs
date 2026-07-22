@@ -9,6 +9,11 @@ using MarketMafioso.Automation.Items;
 
 namespace MarketMafioso;
 
+public sealed record PlayerInventoryCaptureResult(
+    List<InventoryBag> Bags,
+    IReadOnlyList<string> RequestedSources,
+    IReadOnlyList<string> ObservedSources);
+
 public class InventoryScanner
 {
     private readonly AutomationInventoryContainerScanner containerScanner;
@@ -39,18 +44,6 @@ public class InventoryScanner
         InventoryType.ArmorySoulCrystal,
     ];
 
-    private static readonly InventoryType[] RetainerContainers =
-    [
-        InventoryType.RetainerPage1,
-        InventoryType.RetainerPage2,
-        InventoryType.RetainerPage3,
-        InventoryType.RetainerPage4,
-        InventoryType.RetainerPage5,
-        InventoryType.RetainerPage6,
-        InventoryType.RetainerPage7,
-        InventoryType.RetainerCrystals,
-    ];
-
     public InventoryScanner(IDataManager dataManager, IPluginLog log)
     {
         containerScanner = new AutomationInventoryContainerScanner(log);
@@ -58,31 +51,26 @@ public class InventoryScanner
         this.log = log;
     }
 
-    public List<InventoryBag> ScanPlayerInventory(Configuration config)
+    public List<InventoryBag> ScanPlayerInventory(Configuration config) => CapturePlayerInventory(config).Bags;
+
+    public PlayerInventoryCaptureResult CapturePlayerInventory(Configuration config)
     {
-        var bags = new List<InventoryBag>();
-
-        bags.AddRange(ScanContainers(PlayerBags, config));
-
-        if (config.IncludeEquipped)
-            bags.AddRange(ScanContainers([InventoryType.EquippedItems], config));
-
-        if (config.IncludeArmoury)
-            bags.AddRange(ScanContainers(ArmouryContainers, config));
-
-        if (config.IncludeCrystals)
-            bags.AddRange(ScanContainers([InventoryType.Crystals], config));
-
-        if (config.IncludeSaddlebag)
-            bags.AddRange(ScanContainers(
-            [
-                InventoryType.SaddleBag1,
-                InventoryType.SaddleBag2,
-                InventoryType.PremiumSaddleBag1,
-                InventoryType.PremiumSaddleBag2,
-            ], config));
-
-        return bags;
+        var requested = PlayerBags
+            .Concat(config.IncludeEquipped ? [InventoryType.EquippedItems] : [])
+            .Concat(config.IncludeArmoury ? ArmouryContainers : [])
+            .Concat(config.IncludeCrystals ? [InventoryType.Crystals] : [])
+            .Concat(config.IncludeSaddlebag
+                ? [InventoryType.SaddleBag1, InventoryType.SaddleBag2, InventoryType.PremiumSaddleBag1, InventoryType.PremiumSaddleBag2]
+                : [])
+            .ToArray();
+        var snapshots = containerScanner.ScanLoadedContainers(requested);
+        var bags = InventoryPayloadMapper.MapInventoryBags(
+            snapshots,
+            config.IncludeItemNames,
+            ResolveItemName,
+            itemId => itemCatalog.Resolve(itemId));
+        var observed = snapshots.Where(snapshot => snapshot.IsLoaded).Select(snapshot => snapshot.ContainerName).ToArray();
+        return new(bags, requested.Select(source => source.ToString()).ToArray(), observed);
     }
 
     public IReadOnlyDictionary<uint, int> CountPlayerInventory(Configuration config)
@@ -106,63 +94,6 @@ public class InventoryScanner
             .ToDictionary(group => group.Key, group => group.Sum(item => checked((int)item.Quantity)));
     }
 
-    public List<InventoryBag> ScanCurrentRetainer(Configuration config) =>
-        CaptureCurrentRetainer(config).Bags.ToList();
-
-    /// <summary>
-    /// Captures the current retainer inventory together with the containers that
-    /// were actually loaded. Empty loaded pages are represented in <see cref="Bags"/>,
-    /// while optional gil and market evidence uses a nullable observation: zero gil
-    /// and an empty listings collection are observations, whereas <see langword="null"/>
-    /// means that source container was not loaded.
-    /// </summary>
-    public RetainerInventoryCaptureResult CaptureCurrentRetainer(Configuration config)
-    {
-        var requestedContainers = RetainerContainers
-            .Append(InventoryType.RetainerGil)
-            .Append(InventoryType.RetainerMarket)
-            .ToArray();
-        var snapshots = containerScanner.ScanLoadedContainers(requestedContainers);
-        var loadedContainers = snapshots
-            .Where(snapshot => snapshot.IsLoaded && Enum.TryParse<InventoryType>(snapshot.ContainerName, out _))
-            .Select(snapshot => Enum.Parse<InventoryType>(snapshot.ContainerName))
-            .ToHashSet();
-        var retainerInventorySnapshots = snapshots
-            .Where(snapshot => RetainerContainers.Any(container => container.ToString() == snapshot.ContainerName))
-            .ToArray();
-        var bags = InventoryPayloadMapper.MapRetainerInventoryBags(
-            retainerInventorySnapshots,
-            config.IncludeItemNames,
-            ResolveItemName,
-            itemId => itemCatalog.Resolve(itemId));
-        var gilSnapshot = snapshots.SingleOrDefault(snapshot => snapshot.ContainerName == InventoryType.RetainerGil.ToString());
-        var marketSnapshot = snapshots.SingleOrDefault(snapshot => snapshot.ContainerName == InventoryType.RetainerMarket.ToString());
-        var observedMarketListings = marketSnapshot == null
-            ? null
-            : InventoryPayloadMapper.MapRetainerMarketListings(
-                [marketSnapshot],
-                config.IncludeItemNames,
-                ResolveItemName,
-                DateTime.UtcNow,
-                itemId => itemCatalog.Resolve(itemId));
-
-        return new RetainerInventoryCaptureResult(
-            bags,
-            requestedContainers.ToHashSet(),
-            loadedContainers,
-            gilSnapshot == null
-                ? null
-                : ScanContainerRawQuantities(InventoryType.RetainerGil)
-                    .Aggregate(0UL, (sum, quantity) => checked(sum + quantity)),
-            observedMarketListings);
-    }
-
-    public ulong ScanCurrentRetainerGil()
-    {
-        var quantities = ScanContainerRawQuantities(InventoryType.RetainerGil);
-        return quantities.Aggregate(0UL, (sum, quantity) => sum + quantity);
-    }
-
     public unsafe ulong? ScanPlayerGil()
     {
         var inventoryManager = InventoryManager.Instance();
@@ -183,16 +114,6 @@ public class InventoryScanner
         }
     }
 
-    public List<RetainerMarketListing> ScanCurrentRetainerMarketListings(Configuration config)
-    {
-        return InventoryPayloadMapper.MapRetainerMarketListings(
-            containerScanner.ScanLoadedContainers([InventoryType.RetainerMarket]),
-            config.IncludeItemNames,
-            ResolveItemName,
-            DateTime.UtcNow,
-            itemId => itemCatalog.Resolve(itemId));
-    }
-
     public string? ResolveItemName(uint itemId)
     {
         return itemCatalog.ResolveItemName(itemId);
@@ -203,65 +124,4 @@ public class InventoryScanner
         return itemCatalog.Resolve(itemId);
     }
 
-    private unsafe List<InventoryBag> ScanContainers(InventoryType[] types, Configuration config)
-    {
-        return InventoryPayloadMapper.MapInventoryBags(
-            containerScanner.ScanLoadedContainers(types),
-            config.IncludeItemNames,
-            ResolveItemName,
-            itemId => itemCatalog.Resolve(itemId));
-    }
-
-    private unsafe List<ulong> ScanContainerRawQuantities(InventoryType type)
-    {
-        var quantities = new List<ulong>();
-
-        var inventoryManager = InventoryManager.Instance();
-        if (inventoryManager == null)
-        {
-            log.Warning("[MarketMafioso] InventoryManager.Instance() returned null");
-            return quantities;
-        }
-
-        try
-        {
-            var container = inventoryManager->GetInventoryContainer(type);
-            if (container == null || !container->IsLoaded)
-                return quantities;
-
-            for (var i = 0; i < container->Size; i++)
-            {
-                var slot = container->GetInventorySlot(i);
-                if (slot == null)
-                    continue;
-
-                var quantity = checked((ulong)slot->Quantity);
-                if (quantity > 0)
-                    quantities.Add(quantity);
-            }
-        }
-        catch (Exception ex)
-        {
-            log.Error(ex, $"[MarketMafioso] Error scanning container {type}");
-        }
-
-        return quantities;
-    }
-}
-
-public sealed record RetainerInventoryCaptureResult(
-    IReadOnlyList<InventoryBag> Bags,
-    IReadOnlySet<InventoryType> RequestedContainers,
-    IReadOnlySet<InventoryType> LoadedContainers,
-    ulong? ObservedGil = null,
-    IReadOnlyList<RetainerMarketListing>? ObservedMarketListings = null)
-{
-    public bool HasLoadedContainers(IEnumerable<InventoryType> containers) =>
-        containers.All(LoadedContainers.Contains);
-
-    /// <summary>Whether the RetainerGil container was loaded for this capture.</summary>
-    public bool HasObservedGil => ObservedGil.HasValue;
-
-    /// <summary>Whether the RetainerMarket container was loaded for this capture.</summary>
-    public bool HasObservedMarketListings => ObservedMarketListings != null;
 }

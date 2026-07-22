@@ -42,16 +42,16 @@ public sealed record WorkshopMaterialAvailability(
     ushort IconId,
     int Required,
     int PlayerInventory,
-    int RetainerCache,
+    int QuartermasterStock,
     int Shortage,
     int TotalMissing,
-    IReadOnlyList<RetainerMaterialCandidate> CandidateRetainers)
+    IReadOnlyList<QuartermasterRetainerCandidate> QuartermasterRetainers)
 {
-    public int StockDifferential => PlayerInventory + RetainerCache - Required;
+    public int StockDifferential => PlayerInventory + QuartermasterStock - Required;
 }
 
-public sealed record RetainerMaterialCandidate(
+public sealed record QuartermasterRetainerCandidate(
     ulong RetainerId,
     string RetainerName,
-    DateTime LastUpdated,
+    DateTimeOffset ObservedAtUtc,
     int Quantity);

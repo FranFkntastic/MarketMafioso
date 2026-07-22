@@ -64,7 +64,6 @@ internal sealed class SquireCandidateFilter
         [
             new FilterPredicateAlias("is", "hq", Quality.Key, "hq", "High-quality items."),
             new FilterPredicateAlias("is", "nq", Quality.Key, "nq", "Normal-quality items."),
-            new FilterPredicateAlias("is", "equipped", Equipped.Key, "true", "Currently equipped items."),
         ]);
 
     public static FilterContext<SquireCandidate> Context { get; } = new FilterContextBuilder<SquireCandidate>(Catalog)

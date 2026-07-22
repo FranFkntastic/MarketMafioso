@@ -12,24 +12,15 @@ public sealed class MainWindowAgentSelectionTests
     }
 
     [Theory]
-    [InlineData("Retainers", "Retainers", null)]
-    [InlineData("Retainers/Overview", "Retainers", "Overview")]
-    [InlineData("Retainers/Browse stock", "Retainers", "Browse stock")]
-    [InlineData("Retainers/Browse listings", "Retainers", "Browse listings")]
-    [InlineData("Retainers/Quick deposit", "Retainers", "Quick deposit")]
-    [InlineData("Retainers/Withdrawal plan", "Retainers", "Withdrawal plan")]
-    [InlineData("Restock", "Retainers", null)]
-    [InlineData("Restock/Plan", "Retainers", "Withdrawal plan")]
-    [InlineData("Retainers/Plan and run", "Retainers", "Withdrawal plan")]
-    [InlineData("Plan", "Retainers", "Withdrawal plan")]
-    public void BridgeTabRouting_NormalizesRetainerViewsAndAliases(
-        string requestedTab,
-        string expectedMainTab,
-        string? expectedWorkspaceView)
+    [InlineData("Retainers")]
+    [InlineData("Retainers/Overview")]
+    [InlineData("Retainers/Browse stock")]
+    [InlineData("Restock")]
+    [InlineData("Restock/Plan")]
+    [InlineData("Plan")]
+    public void BridgeTabRouting_RejectsRemovedRetainerViewsAndAliases(string requestedTab)
     {
-        Assert.True(MainWindow.TryNormalizeAgentBridgeTab(requestedTab, out var mainTab, out var workspaceView));
-        Assert.Equal(expectedMainTab, mainTab);
-        Assert.Equal(expectedWorkspaceView, workspaceView);
+        Assert.False(MainWindow.TryNormalizeAgentBridgeTab(requestedTab, out _, out _));
     }
 
     [Theory]

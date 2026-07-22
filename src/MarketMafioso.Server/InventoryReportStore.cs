@@ -130,6 +130,22 @@ public sealed class InventoryReportStore
         CancellationToken cancellationToken) =>
         readQueries.GetLatestAsync(accountId, characterId, cancellationToken);
 
+    public async Task<StoredInventoryReport?> GetLatestAsync(
+        IReadOnlyList<long> accountIds,
+        long? characterId,
+        CancellationToken cancellationToken)
+    {
+        StoredInventoryReport? newest = null;
+        foreach (var accountId in accountIds)
+        {
+            var candidate = await GetLatestAsync(accountId, characterId, cancellationToken);
+            if (candidate != null && (newest == null || candidate.ReceivedAt > newest.ReceivedAt))
+                newest = candidate;
+        }
+
+        return newest;
+    }
+
     public Task<StoredInventoryReport?> GetAsync(string id, CancellationToken cancellationToken) =>
         GetAsync(1, id, cancellationToken);
 
@@ -161,6 +177,21 @@ public sealed class InventoryReportStore
         string id,
         CancellationToken cancellationToken) =>
         readQueries.GetAsync(accountId, id, cancellationToken);
+
+    public async Task<StoredInventoryReport?> GetAsync(
+        IReadOnlyList<long> accountIds,
+        string id,
+        CancellationToken cancellationToken)
+    {
+        foreach (var accountId in accountIds)
+        {
+            var report = await GetAsync(accountId, id, cancellationToken);
+            if (report != null)
+                return report;
+        }
+
+        return null;
+    }
 
     public Task<bool> DeleteAsync(string id, CancellationToken cancellationToken) =>
         DeleteAsync(1, id, cancellationToken);

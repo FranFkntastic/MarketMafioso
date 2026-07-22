@@ -16,6 +16,9 @@ namespace MarketMafioso.Windows.Squire;
 
 internal sealed class OutfitterPanel : IDisposable
 {
+    private static readonly IReadOnlyDictionary<ulong, CachedRetainer> NoRetainerInventorySnapshots =
+        new Dictionary<ulong, CachedRetainer>();
+
     private readonly Configuration config;
     private readonly AgentBridgeUiReviewRegistry reviewRegistry;
     private readonly OutfitterTargetCatalog targetCatalog = new();
@@ -114,7 +117,7 @@ internal sealed class OutfitterPanel : IDisposable
 
         lastSnapshot = snapshot;
         retainerMetadataSignature = metadataSignature;
-        targets = targetCatalog.Build(snapshot, config.RetainerCache, retainerMetadata);
+        targets = targetCatalog.Build(snapshot, NoRetainerInventorySnapshots, retainerMetadata);
         jobTargetCount = targets.Count(target => target.Kind == OutfitterTargetKind.Job);
         retainerTargetCount = targets.Count(target => target.Kind == OutfitterTargetKind.Retainer);
         InvalidateVisibleTargets();
@@ -154,7 +157,7 @@ internal sealed class OutfitterPanel : IDisposable
             ImGui.PushStyleColor(ImGuiCol.Text, MarketMafiosoUiTheme.Warning);
             ImGui.TextWrapped($"No retainers registered for {currentName}.");
             ImGui.PopStyleColor();
-            ImGui.TextWrapped("Showing other AutoRetainer characters and legacy MMF caches.");
+            ImGui.TextWrapped("Showing retainers known through AutoRetainer outfitter metadata.");
             ImGui.Separator();
         }
         string? lastGroup = null;

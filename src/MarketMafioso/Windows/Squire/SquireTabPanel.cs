@@ -340,7 +340,9 @@ internal sealed class SquireTabPanel : IDisposable
             () => filterReferenceRequested = true);
 #if DEBUG
         RegisterFilterReviewControl("complete-hq", "Open HQ filter completion", "is:h");
+        RegisterFilterReviewControl("complete-states", "Open state filter completion", "is:");
         RegisterFilterReviewControl("apply-hq", "Apply HQ candidate filter", "is:hq");
+        RegisterFilterReviewControl("apply-equipped", "Apply equipped candidate filter", "is:equipped");
         RegisterFilterReviewControl("apply-armoury", "Apply Armoury candidate filter", "location:armoury");
         RegisterFilterReviewControl("invalid", "Apply invalid candidate filter", "quality:banana");
         RegisterFilterReviewControl("clear", "Clear candidate filter", string.Empty);

@@ -3,21 +3,21 @@ using System.Collections.Generic;
 using System.Linq;
 using FFXIVClientStructs.FFXIV.Component.GUI;
 using MarketMafioso.Automation.Diagnostics;
-using MarketMafioso.Automation.Retainers;
+using MarketMafioso.Quartermaster;
 using MarketMafioso.WorkshopPrep;
 
 namespace MarketMafioso.Windows.Main;
 
 internal sealed class AutomationDiagnosticProbeFactory
 {
-    private readonly AutoRetainerRefreshService autoRetainerRefresh;
+    private readonly QuartermasterIpcClient quartermaster;
     private readonly VIWIWorkshoppaIpc viwiWorkshoppaIpc;
 
     public AutomationDiagnosticProbeFactory(
-        AutoRetainerRefreshService autoRetainerRefresh,
+        QuartermasterIpcClient quartermaster,
         VIWIWorkshoppaIpc viwiWorkshoppaIpc)
     {
-        this.autoRetainerRefresh = autoRetainerRefresh ?? throw new ArgumentNullException(nameof(autoRetainerRefresh));
+        this.quartermaster = quartermaster ?? throw new ArgumentNullException(nameof(quartermaster));
         this.viwiWorkshoppaIpc = viwiWorkshoppaIpc ?? throw new ArgumentNullException(nameof(viwiWorkshoppaIpc));
     }
 
@@ -25,35 +25,9 @@ internal sealed class AutomationDiagnosticProbeFactory
     {
         return
         [
-            new AutomationDiagnosticProbe("Retainer UI", RunRetainerUiDiagnosticProbe),
             new AutomationDiagnosticProbe("Market Board UI", RunMarketBoardUiDiagnosticProbe),
             new AutomationDiagnosticProbe("External Helpers", RunExternalHelperDiagnosticProbe),
         ];
-    }
-
-    private static AutomationDiagnosticProbeResult RunRetainerUiDiagnosticProbe()
-    {
-        var state = new RetainerUiStateReader(Plugin.GameGui).DescribeRetainerUiState(
-            [
-                RetainerInventoryAddonNames.RetainerList,
-                RetainerInventoryAddonNames.SelectString,
-                RetainerInventoryAddonNames.InventoryLarge,
-                RetainerInventoryAddonNames.InventorySmall,
-                RetainerInventoryAddonNames.InputNumeric,
-            ]);
-
-        return new AutomationDiagnosticProbeResult(
-            "Retainer UI",
-            IsSuccess: true,
-            state,
-            new Dictionary<string, string?>
-            {
-                ["retainerList"] = DescribeAddon(RetainerInventoryAddonNames.RetainerList),
-                ["selectString"] = DescribeAddon(RetainerInventoryAddonNames.SelectString),
-                ["inventoryLarge"] = DescribeAddon(RetainerInventoryAddonNames.InventoryLarge),
-                ["inventorySmall"] = DescribeAddon(RetainerInventoryAddonNames.InventorySmall),
-                ["inputNumeric"] = DescribeAddon(RetainerInventoryAddonNames.InputNumeric),
-            });
     }
 
     private static AutomationDiagnosticProbeResult RunMarketBoardUiDiagnosticProbe()
@@ -77,15 +51,17 @@ internal sealed class AutomationDiagnosticProbeFactory
 
     private AutomationDiagnosticProbeResult RunExternalHelperDiagnosticProbe()
     {
-        var autoRetainerAvailable = autoRetainerRefresh.IsLoaded;
+        var quartermasterAvailable = quartermaster.TryGetCapabilities(out var capabilities, out var quartermasterError);
         var viwiAvailable = viwiWorkshoppaIpc.IsAvailable;
         return new AutomationDiagnosticProbeResult(
             "External Helpers",
-            autoRetainerAvailable || viwiAvailable,
+            quartermasterAvailable || viwiAvailable,
             "External helper availability probe completed.",
             new Dictionary<string, string?>
             {
-                ["autoRetainer"] = autoRetainerAvailable ? "loaded" : "not loaded",
+                ["quartermaster"] = quartermasterAvailable
+                    ? $"loaded; provider {capabilities!.ProviderInstanceId}; revision {capabilities.Revision}"
+                    : quartermasterError,
                 ["viwiWorkshoppa"] = viwiAvailable ? "loaded" : "not loaded",
             });
     }

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Json;
@@ -8,7 +9,7 @@ using System.Text.Json.Serialization;
 using System.Threading.Tasks;
 using Dalamud.Plugin.Services;
 using MarketMafioso.Automation.Items;
-using MarketMafioso.RetainerRestock;
+using MarketMafioso.Quartermaster;
 
 namespace MarketMafioso;
 
@@ -21,6 +22,7 @@ public class HttpReporter : IDisposable
     private readonly IChatGui chatGui;
     private readonly InventoryScanner scanner;
     private readonly DalamudServiceAccountIdentitySource serviceAccountIdentity;
+    private readonly QuartermasterIpcClient quartermaster;
 
     private static readonly JsonSerializerOptions SerialiserOptions = new()
     {
@@ -33,6 +35,7 @@ public class HttpReporter : IDisposable
     public string? LastPayload { get; private set; }
     public string? LastDashboardUrl { get; private set; }
     public string? LastDashboardReportUrl { get; private set; }
+    public string LastRetainerSourceStatus { get; private set; } = "Quartermaster has not been queried.";
 
     public HttpReporter(
         Configuration config,
@@ -40,7 +43,8 @@ public class HttpReporter : IDisposable
         IPluginLog log,
         IChatGui chatGui,
         InventoryScanner scanner,
-        DalamudServiceAccountIdentitySource serviceAccountIdentity)
+        DalamudServiceAccountIdentitySource serviceAccountIdentity,
+        QuartermasterIpcClient quartermaster)
     {
         this.config = config;
         this.playerState = playerState;
@@ -48,6 +52,7 @@ public class HttpReporter : IDisposable
         this.chatGui = chatGui;
         this.scanner = scanner;
         this.serviceAccountIdentity = serviceAccountIdentity;
+        this.quartermaster = quartermaster ?? throw new ArgumentNullException(nameof(quartermaster));
     }
 
     public async Task SendReportAsync()
@@ -82,7 +87,9 @@ public class HttpReporter : IDisposable
 
         try
         {
-            var ownerScope = new RetainerOwnerScope(
+            var ownerScope = new QuartermasterOwnerScope(
+                playerState.ContentId == 0 ? null : playerState.ContentId,
+                playerState.HomeWorld.IsValid ? playerState.HomeWorld.Value.RowId : null,
                 playerState.CharacterName,
                 playerState.HomeWorld.IsValid ? playerState.HomeWorld.Value.Name.ToString() : null);
             string? charName = null;
@@ -91,23 +98,44 @@ public class HttpReporter : IDisposable
             if (config.IncludeCharacterInfo)
             {
                 charName = ownerScope.CharacterName;
-                homeWorld = ownerScope.HomeWorld;
+                homeWorld = ownerScope.HomeWorldName;
             }
 
-            var playerInventory = scanner.ScanPlayerInventory(config);
+            var playerCapture = scanner.CapturePlayerInventory(config);
+            var playerInventory = playerCapture.Bags;
             var playerGil = scanner.ScanPlayerGil();
-            var retainers = BuildRetainerReports(
-                config,
-                ownerScope,
-                config.IncludeCharacterInfo,
-                scanner.ResolveItemMetadata);
+            var retainers = new List<RetainerReport>();
+            if (quartermaster.TryGetSnapshot(out var quartermasterSnapshot, out var quartermasterError))
+            {
+                if (ownerScope.Matches(quartermasterSnapshot!.Owner))
+                {
+                    retainers = BuildRetainerReports(
+                        quartermasterSnapshot,
+                        ownerScope,
+                        config.IncludeCharacterInfo,
+                        scanner.ResolveItemMetadata,
+                        config.IncludeItemNames);
+                    LastRetainerSourceStatus =
+                        $"Quartermaster revision {quartermasterSnapshot.Revision}; {retainers.Count} owner-scoped retainer(s).";
+                }
+                else
+                {
+                    LastRetainerSourceStatus =
+                        "Quartermaster snapshot owner does not match the current character; retainer inventory omitted.";
+                }
+            }
+            else
+            {
+                LastRetainerSourceStatus =
+                    $"Quartermaster unavailable; report contains player inventory only. {quartermasterError}";
+            }
 
             var generatedAtUtc = DateTime.UtcNow.ToString("o");
             var report = new InventoryReport
             {
                 Metadata = new InventoryReportMetadata
                 {
-                    SchemaVersion = 3,
+                    SchemaVersion = 4,
                     SourcePlugin = "MarketMafioso",
                     PluginVersion = PluginBuildInfo.DisplayVersion,
                     GeneratedAtUtc = generatedAtUtc,
@@ -121,6 +149,11 @@ public class HttpReporter : IDisposable
                 Timestamp = generatedAtUtc,
                 PlayerInventory = playerInventory,
                 Retainers = retainers,
+                PlayerStorage = new StorageSourceEvidence
+                {
+                    RequestedSources = playerCapture.RequestedSources.ToList(),
+                    ObservedSources = playerCapture.ObservedSources.ToList(),
+                },
             };
 
             LastPayload = JsonSerializer.Serialize(report, new JsonSerializerOptions
@@ -156,7 +189,7 @@ public class HttpReporter : IDisposable
                     : $" View: {LastDashboardReportUrl}";
                 chatGui.Print(
                     $"[MarketMafioso] Sent {itemCount} player items + {retainers.Count} retainer(s). " +
-                    $"Status: {LastStatus}.{dashboardSuffix}");
+                    $"Status: {LastStatus}. {LastRetainerSourceStatus}{dashboardSuffix}");
                 log.Information($"[MarketMafioso] Report sent - {LastStatus}.{dashboardSuffix}");
             }
             else
@@ -184,55 +217,68 @@ public class HttpReporter : IDisposable
     public void Dispose() => httpClient.Dispose();
 
     public static List<RetainerReport> BuildRetainerReports(
-        Configuration config,
-        RetainerOwnerScope ownerScope,
+        QuartermasterSnapshot snapshot,
+        QuartermasterOwnerScope ownerScope,
         bool includeOwnerFields,
-        Func<uint, AutomationItemMetadata>? resolveItemMetadata = null)
+        Func<uint, AutomationItemMetadata>? resolveItemMetadata = null,
+        bool includeItemNames = true)
     {
-        ArgumentNullException.ThrowIfNull(config);
+        ArgumentNullException.ThrowIfNull(snapshot);
         ArgumentNullException.ThrowIfNull(ownerScope);
+        if (!ownerScope.Matches(snapshot.Owner))
+            return [];
 
-        return config.RetainerCache.Values
-            .Where(r => ownerScope.Matches(r.OwnerCharacterName, r.OwnerHomeWorld))
+        return snapshot.Retainers
             .Select(r => new RetainerReport
             {
                 RetainerName = r.RetainerName,
                 RetainerId = r.RetainerId,
-                OwnerCharacterName = includeOwnerFields ? r.OwnerCharacterName : null,
-                OwnerHomeWorld = includeOwnerFields ? r.OwnerHomeWorld : null,
-                LastUpdated = r.LastUpdated.ToString("o"),
+                OwnerCharacterName = includeOwnerFields ? ownerScope.CharacterName : null,
+                OwnerHomeWorld = includeOwnerFields ? ownerScope.HomeWorldName : null,
+                LastUpdated = r.ObservedAtUtc.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture),
                 Gil = r.Gil,
+                GilObservedAtUtc = r.GilObservedAtUtc?.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture),
+                ListingsObservedAtUtc = r.ListingsObservedAtUtc?.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture),
+                Storage = new StorageSourceEvidence
+                {
+                    RequestedSources = r.RequestedSources.ToList(),
+                    ObservedSources = r.ObservedSources.ToList(),
+                },
                 Bags = r.Bags
                     .Select(b => new InventoryBag
                     {
                         BagName = b.BagName,
                         Location = b.Location,
+                        ObservedAtUtc = b.ObservedAtUtc?.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture),
                         Items = b.Items
-                            .Select(i => MapCachedItem(i, resolveItemMetadata))
+                            .Select(i => MapQuartermasterItem(i, resolveItemMetadata, includeItemNames))
                             .ToList(),
                     })
                     .ToList(),
-                MarketListings = r.MarketListings
-                    .Select(i => MapCachedListing(i, resolveItemMetadata))
+                MarketListings = r.Listings
+                    .Select(i => MapQuartermasterListing(i, resolveItemMetadata, includeItemNames))
                     .ToList(),
             })
             .ToList();
     }
 
-    private static ItemSlot MapCachedItem(
-        CachedItem item,
-        Func<uint, AutomationItemMetadata>? resolveItemMetadata)
+    private static ItemSlot MapQuartermasterItem(
+        QuartermasterItemSnapshot item,
+        Func<uint, AutomationItemMetadata>? resolveItemMetadata,
+        bool includeItemNames)
     {
-        var metadata = string.IsNullOrWhiteSpace(item.ItemType)
+        var metadata = string.IsNullOrWhiteSpace(item.ItemType) || (includeItemNames && string.IsNullOrWhiteSpace(item.ItemName))
             ? resolveItemMetadata?.Invoke(item.ItemId)
             : null;
         return new ItemSlot
         {
             ItemId = item.ItemId,
-            ItemName = item.ItemName,
+            ItemName = includeItemNames
+                ? (string.IsNullOrWhiteSpace(item.ItemName) ? metadata?.Identity.Name : item.ItemName)
+                : null,
             ItemType = string.IsNullOrWhiteSpace(item.ItemType) ? metadata?.ItemType : item.ItemType,
             Quantity = item.Quantity,
-            IsHQ = item.IsHQ,
+            IsHQ = item.IsHq,
             Condition = metadata is { SupportsCondition: false } ? 0 : item.Condition,
             ContainerKey = item.ContainerKey,
             SlotIndex = item.SlotIndex,
@@ -241,20 +287,23 @@ public class HttpReporter : IDisposable
         };
     }
 
-    private static RetainerMarketListing MapCachedListing(
-        CachedMarketListing item,
-        Func<uint, AutomationItemMetadata>? resolveItemMetadata)
+    private static RetainerMarketListing MapQuartermasterListing(
+        QuartermasterListingSnapshot item,
+        Func<uint, AutomationItemMetadata>? resolveItemMetadata,
+        bool includeItemNames)
     {
-        var metadata = string.IsNullOrWhiteSpace(item.ItemType)
+        var metadata = string.IsNullOrWhiteSpace(item.ItemType) || (includeItemNames && string.IsNullOrWhiteSpace(item.ItemName))
             ? resolveItemMetadata?.Invoke(item.ItemId)
             : null;
         return new RetainerMarketListing
         {
             ItemId = item.ItemId,
-            ItemName = item.ItemName,
+            ItemName = includeItemNames
+                ? (string.IsNullOrWhiteSpace(item.ItemName) ? metadata?.Identity.Name : item.ItemName)
+                : null,
             ItemType = string.IsNullOrWhiteSpace(item.ItemType) ? metadata?.ItemType : item.ItemType,
             Quantity = item.Quantity,
-            IsHQ = item.IsHQ,
+            IsHQ = item.IsHq,
             Condition = metadata is { SupportsCondition: false } ? 0 : item.Condition,
             ContainerKey = item.ContainerKey,
             SlotIndex = item.SlotIndex,

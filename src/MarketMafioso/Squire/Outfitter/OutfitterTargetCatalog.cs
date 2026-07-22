@@ -69,7 +69,7 @@ public sealed class OutfitterTargetCatalog
                 : null;
             if (job is not null && metadata is { Level: > 0 })
                 job = job with { Level = metadata.Level, IsUnlocked = true };
-            var freshness = retainer is null ? "inventory not cached" : FormatFreshness(retainer.LastUpdated);
+            var freshness = retainer is null ? "rendered inventory unavailable" : FormatFreshness(retainer.LastUpdated);
             var jobSummary = job is not null && metadata is { Level: > 0 }
                 ? $"{job.Abbreviation} · Lv. {metadata.Level:N0}"
                 : "Job unavailable";
@@ -80,9 +80,9 @@ public sealed class OutfitterTargetCatalog
                 ? "The rendered equipment baseline is proven. Squire still needs a supported retainer outcome profile before this target can be advised."
                 : (retainer, metadata) switch
             {
-                (null, not null) => "AutoRetainer knows this retainer's job and level, but Squire has no inventory snapshot. Visit the retainer or run a retainer refresh to cache its bags.",
+                (null, not null) => "AutoRetainer knows this retainer's job and level, but Squire has no inventory snapshot or rendered equipment baseline.",
                 (not null, not null) => "The retainer's inventory, job, and level are known, but AutoRetainer does not expose worn equipment slots. Squire will not claim a complete loadout until that baseline can be proven.",
-                _ => "The retainer inventory is cached, but its job, level, and worn equipment slots are unavailable. Load the owner in AutoRetainer to refresh this identity.",
+                _ => "Retainer inventory evidence exists, but job metadata and worn equipment slots are unavailable. Squire requires rendered equipment observation.",
             };
             targets.Add(new(
                 targetKey,

@@ -33,11 +33,9 @@ public sealed class MarketMafiosoBridgeProviderTests
         Assert.Equal("Squire", selected);
         var surfaces = provider.GetReviewSurfaces();
         Assert.Contains(surfaces, surface => surface.Id == "squire" && surface.Target == "Squire");
-        Assert.Contains(surfaces, surface => surface.Id == "retainers.overview" && surface.Target == "Retainers/Overview");
-        Assert.Contains(surfaces, surface => surface.Id == "retainers.stock" && surface.Target == "Retainers/Browse stock");
-        Assert.Contains(surfaces, surface => surface.Id == "retainers.listings" && surface.Target == "Retainers/Browse listings");
-        Assert.Contains(surfaces, surface => surface.Id == "retainers.deposit" && surface.Target == "Retainers/Quick deposit");
-        Assert.Contains(surfaces, surface => surface.Id == "retainers.plan" && surface.Target == "Retainers/Withdrawal plan");
+        Assert.DoesNotContain(surfaces, surface =>
+            surface.Id.Contains("retainer", StringComparison.OrdinalIgnoreCase) ||
+            surface.Target.Contains("Retainer", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(surfaces, surface => surface.Id == "workshop-logistics.combined" && surface.Target == "Workshop Logistics/Combined");
         Assert.Contains(surfaces, surface => surface.Id == "workshop-logistics.materials" && surface.Target == "Workshop Logistics/Materials");
         Assert.Contains(surfaces, surface => surface.Id == "market-acquisition.inbox" && surface.Target == "Market Acquisition/Inbox");
@@ -183,6 +181,16 @@ public sealed class MarketMafiosoBridgeProviderTests
             captureRetainerUi: () => expected);
 
         Assert.Same(expected, provider.CaptureRetainerUi());
+    }
+
+    [Fact]
+    public void TruthSerialization_DoesNotAdvertiseRemovedRetainersSurface()
+    {
+        var receipt = AgentBridgeProofFactory.Create(CreateTruth(), revision: 1);
+
+        var json = AgentBridgeProofFactory.Serialize(receipt);
+
+        Assert.DoesNotContain("\"retainers\"", json, StringComparison.OrdinalIgnoreCase);
     }
 
     private static AgentBridgeTruth CreateTruth() => new()
