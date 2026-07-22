@@ -25,10 +25,15 @@ public sealed class SqliteSchemaMigrator
         await command.ExecuteNonQueryAsync(cancellationToken);
 
         await AddColumnIfMissingAsync(connection, transaction, "inventory_owners", "gil", "INTEGER NULL", cancellationToken);
+        await AddColumnIfMissingAsync(connection, transaction, "inventory_owners", "requested_sources_json", "TEXT NOT NULL DEFAULT '[]'", cancellationToken);
+        await AddColumnIfMissingAsync(connection, transaction, "inventory_owners", "observed_sources_json", "TEXT NOT NULL DEFAULT '[]'", cancellationToken);
+        await AddColumnIfMissingAsync(connection, transaction, "inventory_owners", "gil_observed_at_utc", "TEXT NULL", cancellationToken);
+        await AddColumnIfMissingAsync(connection, transaction, "inventory_owners", "listings_observed_at_utc", "TEXT NULL", cancellationToken);
         await AddColumnIfMissingAsync(connection, transaction, "characters", "service_account_key", "TEXT NULL", cancellationToken);
         await AddColumnIfMissingAsync(connection, transaction, "snapshots", "service_account_key", "TEXT NULL", cancellationToken);
         await AddColumnIfMissingAsync(connection, transaction, "snapshots", "player_gil", "INTEGER NULL", cancellationToken);
         await AddColumnIfMissingAsync(connection, transaction, "inventory_bags", "location", "TEXT NULL", cancellationToken);
+        await AddColumnIfMissingAsync(connection, transaction, "inventory_bags", "observed_at_utc", "TEXT NULL", cancellationToken);
         await AddColumnIfMissingAsync(connection, transaction, "inventory_items", "item_type", "TEXT NULL", cancellationToken);
         await AddColumnIfMissingAsync(connection, transaction, "inventory_items", "container_key", "TEXT NULL", cancellationToken);
         await AddColumnIfMissingAsync(connection, transaction, "inventory_items", "slot_index", "INTEGER NULL", cancellationToken);
@@ -221,6 +226,10 @@ public sealed class SqliteSchemaMigrator
             retainer_id INTEGER NULL,
             last_updated TEXT NULL,
             gil INTEGER NULL,
+            requested_sources_json TEXT NOT NULL DEFAULT '[]',
+            observed_sources_json TEXT NOT NULL DEFAULT '[]',
+            gil_observed_at_utc TEXT NULL,
+            listings_observed_at_utc TEXT NULL,
             sort_order INTEGER NOT NULL
         );
 
@@ -229,6 +238,7 @@ public sealed class SqliteSchemaMigrator
             owner_id INTEGER NOT NULL REFERENCES inventory_owners(id) ON DELETE CASCADE,
             bag_name TEXT NOT NULL,
             location TEXT NULL,
+            observed_at_utc TEXT NULL,
             sort_order INTEGER NOT NULL
         );
 

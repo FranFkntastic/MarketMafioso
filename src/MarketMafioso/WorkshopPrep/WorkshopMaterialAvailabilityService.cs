@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using MarketMafioso.RetainerRestock;
+using MarketMafioso.Quartermaster;
 
 namespace MarketMafioso.WorkshopPrep;
 
@@ -10,17 +10,16 @@ public static class WorkshopMaterialAvailabilityService
     public static IReadOnlyList<WorkshopMaterialAvailability> BuildAvailability(
         IReadOnlyList<WorkshopMaterialRequirement> requirements,
         IReadOnlyDictionary<uint, int> playerInventory,
-        Configuration config)
+        QuartermasterSnapshot? snapshot,
+        QuartermasterOwnerScope ownerScope)
     {
-        return BuildAvailability(requirements, playerInventory, config, ownerScope: null);
-    }
+        ArgumentNullException.ThrowIfNull(requirements);
+        ArgumentNullException.ThrowIfNull(playerInventory);
+        ArgumentNullException.ThrowIfNull(ownerScope);
+        var retainers = snapshot is not null && ownerScope.Matches(snapshot.Owner)
+            ? snapshot.Retainers
+            : [];
 
-    public static IReadOnlyList<WorkshopMaterialAvailability> BuildAvailability(
-        IReadOnlyList<WorkshopMaterialRequirement> requirements,
-        IReadOnlyDictionary<uint, int> playerInventory,
-        Configuration config,
-        RetainerOwnerScope? ownerScope)
-    {
         return requirements
             .GroupBy(x => x.ItemId)
             .Select(group =>
@@ -29,7 +28,7 @@ public static class WorkshopMaterialAvailabilityService
                 var required = group.Sum(x => x.Quantity);
                 var playerCount = playerInventory.TryGetValue(first.ItemId, out var count) ? count : 0;
                 var shortage = Math.Max(0, required - playerCount);
-                var retainerStock = BuildRetainerStock(first.ItemId, config, ownerScope);
+                var retainerStock = BuildRetainerStock(first.ItemId, retainers);
                 var retainerCount = retainerStock.Sum(x => x.Quantity);
                 var totalMissing = Math.Max(0, required - playerCount - retainerCount);
                 var candidates = shortage == 0
@@ -51,13 +50,11 @@ public static class WorkshopMaterialAvailabilityService
             .ToList();
     }
 
-    private static IReadOnlyList<RetainerMaterialCandidate> BuildRetainerStock(
+    private static IReadOnlyList<QuartermasterRetainerCandidate> BuildRetainerStock(
         uint itemId,
-        Configuration config,
-        RetainerOwnerScope? ownerScope)
+        IReadOnlyList<QuartermasterRetainerSnapshot> retainers)
     {
-        return config.RetainerCache.Values
-            .Where(retainer => ownerScope is null || ownerScope.Matches(retainer.OwnerCharacterName, retainer.OwnerHomeWorld))
+        return retainers
             .Select(retainer => new
             {
                 Retainer = retainer,
@@ -68,10 +65,10 @@ public static class WorkshopMaterialAvailabilityService
             })
             .Where(x => x.Quantity > 0)
             .OrderByDescending(x => x.Quantity)
-            .Select(x => new RetainerMaterialCandidate(
+            .Select(x => new QuartermasterRetainerCandidate(
                 x.Retainer.RetainerId,
                 x.Retainer.RetainerName,
-                x.Retainer.LastUpdated,
+                x.Retainer.ObservedAtUtc,
                 x.Quantity))
             .ToList();
     }

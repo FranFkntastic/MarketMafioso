@@ -8,7 +8,8 @@ public static class InventoryNavigation
         InventoryBrowserMode mode,
         string scope,
         string? filter,
-        long? characterId)
+        long? characterId,
+        string? snapshotId = null)
     {
         var query = new List<string>
         {
@@ -20,6 +21,8 @@ public static class InventoryNavigation
             query.Add($"filter={Uri.EscapeDataString(filter)}");
         if (characterId is { } selectedCharacterId)
             query.Add($"characterId={selectedCharacterId}");
+        if (!string.IsNullOrWhiteSpace(snapshotId))
+            query.Add($"snapshotId={Uri.EscapeDataString(snapshotId)}");
 
         return $"inventory?{string.Join("&", query)}";
     }

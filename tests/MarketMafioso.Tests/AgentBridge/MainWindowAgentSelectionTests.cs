@@ -12,6 +12,18 @@ public sealed class MainWindowAgentSelectionTests
     }
 
     [Theory]
+    [InlineData("Retainers")]
+    [InlineData("Retainers/Overview")]
+    [InlineData("Retainers/Browse stock")]
+    [InlineData("Restock")]
+    [InlineData("Restock/Plan")]
+    [InlineData("Plan")]
+    public void BridgeTabRouting_RejectsRemovedRetainerViewsAndAliases(string requestedTab)
+    {
+        Assert.False(MainWindow.TryNormalizeAgentBridgeTab(requestedTab, out _, out _));
+    }
+
+    [Theory]
     [InlineData("Workbench", "Workbench", "Compose", "Working Set")]
     [InlineData("Compose", "Workbench", "Compose", "Working Set")]
     [InlineData("Working Set", "Workbench", "Compose", "Working Set")]

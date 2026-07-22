@@ -57,6 +57,26 @@ public sealed class DashboardAccountAuthTests
         Assert.Equal(HttpStatusCode.OK, inventory.StatusCode);
     }
 
+    [Theory]
+    [InlineData("/inventory")]
+    [InlineData("/api/inventory")]
+    public async Task InventoryIngest_WhenApiKeysAreOptionalDoesNotRequireDashboardSession(string path)
+    {
+        await using var application = CreateApplication();
+        using var client = application.CreateClient();
+
+        var response = await client.PostAsJsonAsync(path, new
+        {
+            characterName = "Wei Ning",
+            homeWorld = "Maduin",
+            timestamp = DateTimeOffset.UtcNow.ToString("O"),
+            playerInventory = Array.Empty<object>(),
+            retainers = Array.Empty<object>(),
+        });
+
+        Assert.NotEqual(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
     [Fact]
     public async Task DashboardSession_RejectsInvalidCredentials()
     {
@@ -89,6 +109,29 @@ public sealed class DashboardAccountAuthTests
         Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
         Assert.Equal(HttpStatusCode.OK, login.StatusCode);
         Assert.Equal(HttpStatusCode.OK, authenticated.StatusCode);
+    }
+
+    [Theory]
+    [InlineData("/api/reports")]
+    [InlineData("/api/reports/latest")]
+    [InlineData("/reports/latest/json")]
+    [InlineData("/reports/missing")]
+    public async Task LegacyReportReaders_RequireCookieSession(string path)
+    {
+        await using var application = CreateApplication();
+        using var client = application.CreateClient();
+
+        var anonymous = await client.GetAsync(path);
+        var login = await client.PostAsJsonAsync("/auth/login", new
+        {
+            username = "admin",
+            password = "secret-password",
+        });
+        var authenticated = await client.GetAsync(path);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, login.StatusCode);
+        Assert.NotEqual(HttpStatusCode.Unauthorized, authenticated.StatusCode);
     }
 
     [Fact]

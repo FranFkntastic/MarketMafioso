@@ -10,16 +10,14 @@ using Dalamud.Interface.Windowing;
 using Dalamud.Plugin.Services;
 using Dalamud.Bindings.ImGui;
 using MarketMafioso.AgentBridge;
-using MarketMafioso.Automation.Retainers;
 using MarketMafioso.Automation.Travel;
 using MarketMafioso.CraftArchitectCompanion;
 using MarketMafioso.MarketAcquisition;
-using MarketMafioso.RetainerRestock;
+using MarketMafioso.Quartermaster;
 using MarketMafioso.Squire;
 using MarketMafioso.Windows.Main;
 using MarketMafioso.Windows.MarketAcquisitionPanels;
 using MarketMafioso.Windows.MarketAcquisitionRequestBuilder;
-using MarketMafioso.Windows.RetainerRestock;
 using MarketMafioso.Windows.Squire;
 using MarketMafioso.Windows.WorkshopLogistics;
 using MarketMafioso.Squire.Observation;
@@ -36,11 +34,10 @@ public class MainWindow : Window, IDisposable
     private readonly Configuration config;
     private readonly HttpReporter reporter;
     private readonly InventoryScanner scanner;
-    private readonly AutoRetainerRefreshService autoRetainerRefresh;
+    private readonly QuartermasterIpcClient quartermaster;
     private readonly WorkshopProjectCatalog workshopCatalog;
     private readonly VIWIWorkshoppaIpc viwiWorkshoppaIpc;
     private readonly WorkshopAssemblyRunner workshopAssemblyRunner;
-    private readonly RetainerCacheFileStore? retainerCacheStore;
     private readonly IPlayerState playerState;
     private readonly IPluginLog log;
     private readonly IDataManager dataManager;
@@ -63,10 +60,10 @@ public class MainWindow : Window, IDisposable
     private readonly UiStateCaptureService uiStateCapture;
     private readonly MarketAcquisitionGuidedRoutePanel marketAcquisitionGuidedRoutePanel;
     private readonly MarketAcquisitionRequestBuilderPanel acquisitionRequestBuilder;
-    private readonly RetainerRestockTabPanel restockTab;
     private readonly WorkshopPrepQueuePanel workshopPrepQueue;
     private readonly WorkshopMaterialPanel workshopMaterials;
     private readonly WorkshopAssemblyPanel workshopAssembly;
+    private readonly WorkshopQuartermasterRequestService workshopQuartermasterRequest;
     public AgentBridgeUiReviewRegistry AgentReviewRegistry { get; } = new();
 
     private readonly WorkshopProjectSelectionState workshopProjectSelection = new();
@@ -86,7 +83,7 @@ public class MainWindow : Window, IDisposable
     public AgentBridgeUiCaptureTransactionManager AgentCaptureTransactions { get; }
 
     private const string ProductSummary = "Workshop logistics and self-hosted inventory history.";
-    private const string WorkshopLogisticsModuleSummary = "Workshop Logistics tracks company workshop jobs, materials, retainer restock, handoff, and assembly.";
+    private const string WorkshopLogisticsModuleSummary = "Workshop Logistics tracks company workshop jobs, material shortages, Quartermaster requests, handoff, and assembly.";
 
     internal static readonly Vector4 ColHeader = MarketMafiosoUiTheme.Header;
     internal static readonly Vector4 ColSuccess = MarketMafiosoUiTheme.Success;
@@ -98,17 +95,15 @@ public class MainWindow : Window, IDisposable
         Configuration config,
         HttpReporter reporter,
         InventoryScanner scanner,
-        AutoRetainerRefreshService autoRetainerRefresh,
+        QuartermasterIpcClient quartermaster,
         WorkshopProjectCatalog workshopCatalog,
         VIWIWorkshoppaIpc viwiWorkshoppaIpc,
-        WorkshopRetainerRestockService workshopRetainerRestock,
         WorkshopAssemblyRunner workshopAssemblyRunner,
         WorkshopMaterialManifestExportService workshopMaterialManifestExport,
         IDataManager dataManager,
         IPlayerState playerState,
         MarketBoardApproachService marketBoardApproachService,
         string marketAcquisitionRouteDiagnosticsDirectory,
-        RetainerCacheFileStore? retainerCacheStore,
         IPluginLog log,
         IRenderedCharacterAdvisorProbe renderedCharacterAdvisorProbe)
         : base("MarketMafioso##MarketMafiosoMainWindow",
@@ -117,11 +112,10 @@ public class MainWindow : Window, IDisposable
         this.config = config;
         this.reporter = reporter;
         this.scanner = scanner;
-        this.autoRetainerRefresh = autoRetainerRefresh;
+        this.quartermaster = quartermaster;
         this.workshopCatalog = workshopCatalog;
         this.viwiWorkshoppaIpc = viwiWorkshoppaIpc;
         this.workshopAssemblyRunner = workshopAssemblyRunner;
-        this.retainerCacheStore = retainerCacheStore;
         this.playerState = playerState;
         this.log = log;
         AgentCaptureTransactions = new AgentBridgeUiCaptureTransactionManager(
@@ -248,10 +242,6 @@ public class MainWindow : Window, IDisposable
                         return "The purchase route currently owns MMF automation.";
                     if (acquisitionWorkspace.IsBusy)
                         return "The purchase workspace is busy.";
-                    if (autoRetainerRefresh.IsRefreshing)
-                        return "The AutoRetainer inventory refresh is running.";
-                    if (autoRetainerRefresh.IsStartQueued)
-                        return "The AutoRetainer inventory refresh is queued to start.";
                     if (workshopAssemblyRunner.HasActiveRun)
                         return "The Workshop Assembly runner currently owns MMF automation.";
                     if (squireVnavmesh.IsRunning)
@@ -268,7 +258,7 @@ public class MainWindow : Window, IDisposable
             dataManager,
             acquisitionPlanSource,
             playerAdvisorBaselineSource);
-        statusTab = new StatusTabPanel(config, reporter, retainerCacheStore, log);
+        statusTab = new StatusTabPanel(reporter);
         marketAcquisitionRequestPickupPanel = new MarketAcquisitionRequestPickupPanel(
             () => _ = FetchDashboardRequestsAsync(),
             requestId =>
@@ -280,12 +270,10 @@ public class MainWindow : Window, IDisposable
             ReturnAcquisitionLinesToInbox,
             () => QueueAgentTabSelection("Market Acquisition", "Workbench"),
             AgentReviewRegistry);
-        restockTab = new RetainerRestockTabPanel(
+        workshopQuartermasterRequest = new WorkshopQuartermasterRequestService(
             config,
-            scanner,
-            autoRetainerRefresh,
-            workshopRetainerRestock,
-            GetCurrentRetainerOwnerScope);
+            quartermaster,
+            config.Save);
         WorkshopProjectBrowserWindow? projectBrowser = null;
         WorkshopFrozenQueueBrowserWindow? frozenQueueBrowser = null;
         workshopPrepQueue = new WorkshopPrepQueuePanel(
@@ -300,10 +288,13 @@ public class MainWindow : Window, IDisposable
             () => projectBrowser!.IsOpen = true,
             () => frozenQueueBrowser!.IsOpen = true,
             log);
-        workshopMaterials = new WorkshopMaterialPanel(autoRetainerRefresh, workshopRetainerRestock, GetWorkshopAvailability);
+        workshopMaterials = new WorkshopMaterialPanel(
+            quartermaster,
+            workshopQuartermasterRequest,
+            GetWorkshopAvailability,
+            GetCurrentQuartermasterOwnerScope);
         workshopAssembly = new WorkshopAssemblyPanel(
             workshopAssemblyRunner,
-            workshopRetainerRestock,
             () => workshopStatus,
             status => workshopStatus = status,
             StartWorkshopAssembly);
@@ -363,7 +354,7 @@ public class MainWindow : Window, IDisposable
             () => _ = ProbeLiveMarketBoardAsync(),
             () => acquisitionRequestBuilderCraftAppraisal.State.CreateDiagnosticsSnapshot());
         AutomationDiagnostics = new AutomationDiagnosticsWindow(
-            new AutomationDiagnosticProbeFactory(autoRetainerRefresh, viwiWorkshoppaIpc).Create(),
+            new AutomationDiagnosticProbeFactory(quartermaster, viwiWorkshoppaIpc).Create(),
             () => true);
         marketAcquisitionDiagnosticsPanel = new MarketAcquisitionDiagnosticsPanel(
             routeEngine.CreateSnapshot,
@@ -406,7 +397,6 @@ public class MainWindow : Window, IDisposable
         settingsTab = new SettingsTabPanel(
             config,
             reporter,
-            autoRetainerRefresh,
             log,
             () => _ = routeEngine.Stop(),
             Plugin.Instance.RestartTimer,
@@ -489,6 +479,7 @@ public class MainWindow : Window, IDisposable
     public void OnFrameworkUpdate(IFramework _framework)
     {
         squireTab.OnFrameworkUpdate();
+        workshopQuartermasterRequest.PollOperationIfDue(GetCurrentQuartermasterOwnerScope());
 
         if (!IsMarketAcquisitionUnlocked())
             return;
@@ -577,12 +568,6 @@ public class MainWindow : Window, IDisposable
                     ImGui.EndTabItem();
                 }
 
-                if (ImGui.BeginTabItem("Retainers", GetAgentTabFlags("Retainers")))
-                {
-                    DrawRetainerRestockTab();
-                    ImGui.EndTabItem();
-                }
-
                 if (IsMarketAcquisitionUnlocked() && ImGui.BeginTabItem("Market Acquisition", GetAgentTabFlags("Market Acquisition")))
                 {
                     DrawMarketAcquisitionTab();
@@ -629,16 +614,12 @@ public class MainWindow : Window, IDisposable
 
     public bool TrySelectAgentBridgeTab(string tabName)
     {
-        var separatorIndex = tabName.IndexOf('/');
-        var mainTab = separatorIndex < 0 ? tabName : tabName[..separatorIndex];
-        var workspaceView = separatorIndex < 0 ? null : tabName[(separatorIndex + 1)..];
-        if (string.Equals(mainTab, "Restock", StringComparison.Ordinal))
-            mainTab = "Retainers";
-        if (string.Equals(workspaceView, "Plan and run", StringComparison.Ordinal))
-            workspaceView = "Withdrawal plan";
+        if (!TryNormalizeAgentBridgeTab(tabName, out var mainTab, out var workspaceView))
+            return false;
+
         var allowed = mainTab switch
         {
-            "Squire" or "Workshop Logistics" or "Retainers" or "Settings" or "Status" => true,
+            "Squire" or "Workshop Logistics" or "Settings" or "Status" => true,
             "Diagnostics" => true,
             "Market Acquisition" => IsMarketAcquisitionUnlocked(),
             _ => false,
@@ -666,6 +647,24 @@ public class MainWindow : Window, IDisposable
 #endif
     }
 
+    internal static bool TryNormalizeAgentBridgeTab(string tabName, out string mainTab, out string? workspaceView)
+    {
+        mainTab = string.Empty;
+        workspaceView = null;
+        if (string.IsNullOrWhiteSpace(tabName))
+            return false;
+
+        var separatorIndex = tabName.IndexOf('/');
+        mainTab = separatorIndex < 0 ? tabName : tabName[..separatorIndex];
+        workspaceView = separatorIndex < 0 ? null : tabName[(separatorIndex + 1)..];
+        if (string.Equals(mainTab, "Retainers", StringComparison.Ordinal) ||
+            string.Equals(mainTab, "Restock", StringComparison.Ordinal) ||
+            string.Equals(mainTab, "Plan", StringComparison.Ordinal))
+            return false;
+
+        return true;
+    }
+
     private void QueueAgentTabSelection(string mainTab, string? workspaceView = null)
     {
         agentRequestedTab = mainTab;
@@ -679,7 +678,6 @@ public class MainWindow : Window, IDisposable
         workspaceView is null || (mainTab, workspaceView) switch
         {
             ("Workshop Logistics", "Combined" or "Queue" or "Materials" or "Assembly") => true,
-            ("Retainers", "Quick deposit" or "Browse stock" or "Withdrawal plan") => true,
             ("Market Acquisition", "Workbench" or "Inbox" or "Route" or "Compose" or "Working Set" or "Request" or "Plan") => true,
             _ => false,
         };
@@ -742,8 +740,8 @@ public class MainWindow : Window, IDisposable
         ImGui.TextColored(
             ColMuted,
             IsMarketAcquisitionUnlocked()
-                ? "Utilities: Squire, Workshop Logistics, Retainers, Market Acquisition. Inventory reporting lives under Settings."
-                : "Utilities: Squire, Workshop Logistics, Retainers. Inventory reporting lives under Settings.");
+                ? "Utilities: Squire, Workshop Logistics, Market Acquisition. Inventory reporting lives under Settings."
+                : "Utilities: Squire and Workshop Logistics. Inventory reporting lives under Settings.");
     }
 
     private void DrawWorkshopPrepTab()
@@ -830,11 +828,6 @@ public class MainWindow : Window, IDisposable
             return;
         config.SplitWorkshopQueueAndMaterials = split;
         config.Save();
-    }
-
-    private void DrawRetainerRestockTab()
-    {
-        restockTab.Draw(agentRequestedWorkspaceView);
     }
 
     private void DrawMarketAcquisitionTab()
@@ -1654,8 +1647,10 @@ public class MainWindow : Window, IDisposable
         return !string.IsNullOrWhiteSpace(characterName) && !string.IsNullOrWhiteSpace(world);
     }
 
-    private RetainerOwnerScope GetCurrentRetainerOwnerScope() =>
+    private QuartermasterOwnerScope GetCurrentQuartermasterOwnerScope() =>
         new(
+            playerState.ContentId == 0 ? null : playerState.ContentId,
+            playerState.HomeWorld.IsValid ? playerState.HomeWorld.Value.RowId : null,
             playerState.CharacterName,
             playerState.HomeWorld.IsValid ? playerState.HomeWorld.Value.Name.ToString() : null);
 
@@ -1711,11 +1706,12 @@ public class MainWindow : Window, IDisposable
 
         var requirements = workshopCatalog.BuildRequirements(config.WorkshopPrepQueue);
         var playerInventory = scanner.CountPlayerInventory(config);
+        quartermaster.TryGetSnapshot(out var snapshot, out _);
         return WorkshopMaterialAvailabilityService.BuildAvailability(
             requirements,
             playerInventory,
-            config,
-            GetCurrentRetainerOwnerScope());
+            snapshot,
+            GetCurrentQuartermasterOwnerScope());
     }
 
     private Vector4 GetWorkshopStatusColor()
@@ -1789,6 +1785,7 @@ public class MainWindow : Window, IDisposable
     public void Dispose()
     {
         AgentCaptureTransactions.CancelActive();
+        workshopQuartermasterRequest.Dispose();
         squireTab.Dispose();
         uiStateCapture.Dispose();
         acquisitionWorkspace.Dispose();

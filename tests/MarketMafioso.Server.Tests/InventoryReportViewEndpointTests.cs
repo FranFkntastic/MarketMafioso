@@ -469,6 +469,29 @@ public sealed class InventoryReportViewEndpointTests
     }
 
     [Fact]
+    public async Task InventoryBrowser_CanLoadAnExplicitHistoricalSnapshot()
+    {
+        await using var application = CreateApplication();
+        using var client = application.CreateClient();
+        var olderResponse = await client.PostAsJsonAsync("/inventory", CreateReport("Older Snapshot"));
+        olderResponse.EnsureSuccessStatusCode();
+        var olderId = await ReadCreatedIdAsync(olderResponse);
+        await Task.Delay(10);
+        var newerResponse = await client.PostAsJsonAsync("/inventory", CreateReport("Newer Snapshot"));
+        newerResponse.EnsureSuccessStatusCode();
+
+        var latest = await client.GetFromJsonAsync<InventoryBrowserView>("/api/inventory/browser");
+        var historical = await client.GetFromJsonAsync<InventoryBrowserView>(
+            $"/api/inventory/browser?snapshotId={Uri.EscapeDataString(olderId)}");
+
+        Assert.NotNull(latest);
+        Assert.Equal("Newer Snapshot", latest.CharacterName);
+        Assert.NotNull(historical);
+        Assert.Equal(olderId, historical.SnapshotId);
+        Assert.Equal("Older Snapshot", historical.CharacterName);
+    }
+
+    [Fact]
     public async Task HostedMode_RequiresApiKeyForInventoryPost()
     {
         await using var application = CreateHostedApplication();
@@ -700,10 +723,10 @@ public sealed class InventoryReportViewEndpointTests
         var id = createJson.RootElement.GetProperty("id").GetString();
 
         Assert.Equal(
-            "https://dev.xivcraftarchitect.com/marketmafioso/",
+            "https://dev.xivcraftarchitect.com/marketmafioso/inventory",
             createJson.RootElement.GetProperty("dashboardUrl").GetString());
         Assert.Equal(
-            $"https://dev.xivcraftarchitect.com/marketmafioso/reports/{id}",
+            $"https://dev.xivcraftarchitect.com/marketmafioso/inventory?snapshotId={id}",
             createJson.RootElement.GetProperty("reportUrl").GetString());
         Assert.Equal(
             $"https://dev.xivcraftarchitect.com/marketmafioso/api/reports/{id}",

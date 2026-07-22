@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json;
 using Microsoft.Data.Sqlite;
 
 namespace MarketMafioso.Server.Inventory;
@@ -37,7 +38,14 @@ internal static class InventoryReportRowMapper
             reader.GetString(2),
             reader.IsDBNull(3) ? null : checked((ulong)reader.GetInt64(3)),
             reader.IsDBNull(4) ? null : reader.GetString(4),
-            reader.IsDBNull(5) ? null : checked((ulong)reader.GetInt64(5)));
+            reader.IsDBNull(5) ? null : checked((ulong)reader.GetInt64(5)),
+            reader.IsDBNull(6) ? null : reader.GetString(6),
+            reader.IsDBNull(7) ? null : reader.GetString(7),
+            new StorageSourceEvidence
+            {
+                RequestedSources = ReadSources(reader, 8),
+                ObservedSources = ReadSources(reader, 9),
+            });
 
     public static ItemSlot ReadItem(SqliteDataReader reader) =>
         new()
@@ -123,6 +131,11 @@ internal static class InventoryReportRowMapper
 
     private static DateTimeOffset ParseDateTimeOffset(string value) =>
         DateTimeOffset.Parse(value, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind);
+
+    private static List<string> ReadSources(SqliteDataReader reader, int ordinal) =>
+        reader.IsDBNull(ordinal)
+            ? []
+            : JsonSerializer.Deserialize<List<string>>(reader.GetString(ordinal)) ?? [];
 }
 
 internal sealed record InventorySnapshotRow(
@@ -141,4 +154,7 @@ internal sealed record InventoryOwnerRow(
     string OwnerName,
     ulong? RetainerId,
     string? LastUpdated,
-    ulong? Gil);
+    ulong? Gil,
+    string? GilObservedAtUtc,
+    string? ListingsObservedAtUtc,
+    StorageSourceEvidence Storage);
