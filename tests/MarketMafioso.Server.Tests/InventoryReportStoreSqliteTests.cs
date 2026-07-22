@@ -79,6 +79,41 @@ public sealed class InventoryReportStoreSqliteTests
     }
 
     [Fact]
+    public async Task GetLatestAsync_AcrossAccountsReturnsTheNewestVisibleSnapshot()
+    {
+        var fixture = await StoreFixture.CreateAsync();
+        var otherAccountId = await fixture.CreateAccountAsync("Other");
+        var older = await fixture.Store.SaveAsync(
+            fixture.AccountId,
+            CreateReport("Older Character", "Leviathan", 2),
+            null,
+            "{}",
+            CancellationToken.None);
+        await Task.Delay(10);
+        var newer = await fixture.Store.SaveAsync(
+            otherAccountId,
+            CreateReport("Newer Character", "Siren", 3),
+            null,
+            "{}",
+            CancellationToken.None);
+
+        var latest = await fixture.Store.GetLatestAsync(
+            [fixture.AccountId, otherAccountId],
+            characterId: null,
+            CancellationToken.None);
+        var selected = await fixture.Store.GetAsync(
+            [fixture.AccountId, otherAccountId],
+            newer.Id,
+            CancellationToken.None);
+
+        Assert.NotNull(latest);
+        Assert.Equal(newer.Id, latest.Id);
+        Assert.NotEqual(older.Id, latest.Id);
+        Assert.NotNull(selected);
+        Assert.Equal("Newer Character", selected.Report.CharacterName);
+    }
+
+    [Fact]
     public async Task SaveAsync_PrunesStructuredSnapshotsPastConfiguredRetentionCount()
     {
         var fixture = await StoreFixture.CreateAsync(
@@ -123,6 +158,7 @@ public sealed class InventoryReportStoreSqliteTests
         {
             ServiceAccountKey = "profile-a-service-account-0",
             PlayerGil = 560_530_934,
+            PlayerStorage = new StorageSourceEvidence { RequestedSources = ["Inventory1", "Crystals"], ObservedSources = ["Inventory1"] },
             Retainers =
             [
                 new RetainerReport
@@ -131,12 +167,16 @@ public sealed class InventoryReportStoreSqliteTests
                     RetainerId = 99,
                     LastUpdated = "2026-06-24T12:00:00.0000000Z",
                     Gil = 1_242_888,
+                    GilObservedAtUtc = "2026-06-24T11:58:00.0000000Z",
+                    ListingsObservedAtUtc = "2026-06-24T11:59:00.0000000Z",
+                    Storage = new StorageSourceEvidence { RequestedSources = ["RetainerPage1", "RetainerMarket"], ObservedSources = ["RetainerPage1"] },
                     Bags =
                     [
                         new InventoryBag
                         {
                             BagName = "RetainerInventory",
                             Location = "Retainer",
+                            ObservedAtUtc = "2026-06-24T11:57:00.0000000Z",
                             Items =
                             [
                                 new ItemSlot
@@ -199,13 +239,20 @@ public sealed class InventoryReportStoreSqliteTests
         Assert.NotNull(loaded);
         Assert.Equal("profile-a-service-account-0", loaded.Report.ServiceAccountKey);
         Assert.Equal((ulong)560_530_934, loaded.Report.PlayerGil);
+        Assert.Equal(["Inventory1", "Crystals"], loaded.Report.PlayerStorage.RequestedSources);
+        Assert.Equal(["Inventory1"], loaded.Report.PlayerStorage.ObservedSources);
         var summaries = await fixture.Store.ListSummariesAsync(fixture.AccountId, characterId: null, CancellationToken.None);
 
         Assert.NotNull(loaded);
         var retainer = Assert.Single(loaded.Report.Retainers);
         Assert.Equal((ulong)1_242_888, retainer.Gil);
+        Assert.Equal("2026-06-24T11:58:00.0000000Z", retainer.GilObservedAtUtc);
+        Assert.Equal("2026-06-24T11:59:00.0000000Z", retainer.ListingsObservedAtUtc);
+        Assert.Equal(["RetainerPage1", "RetainerMarket"], retainer.Storage.RequestedSources);
+        Assert.Equal(["RetainerPage1"], retainer.Storage.ObservedSources);
         Assert.Equal("Metal", retainer.Bags[0].Items[0].ItemType);
         Assert.Equal("Retainer", retainer.Bags[0].Location);
+        Assert.Equal("2026-06-24T11:57:00.0000000Z", retainer.Bags[0].ObservedAtUtc);
         Assert.Equal("RetainerPage3", retainer.Bags[0].Items[0].ContainerKey);
         Assert.Equal(11, retainer.Bags[0].Items[0].SlotIndex);
         Assert.Equal(0, retainer.Bags[0].Items[0].ConditionPercent);

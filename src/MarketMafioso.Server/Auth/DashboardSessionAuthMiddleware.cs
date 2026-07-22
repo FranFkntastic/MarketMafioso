@@ -53,16 +53,12 @@ public sealed class DashboardSessionAuthMiddleware
 
         if (request.Path.StartsWithSegments("/api/acquisition", StringComparison.OrdinalIgnoreCase) ||
             request.Path.StartsWithSegments("/api/inventory", StringComparison.OrdinalIgnoreCase) ||
+            request.Path.StartsWithSegments("/api/reports", StringComparison.OrdinalIgnoreCase) ||
             request.Path.StartsWithSegments("/api/settings", StringComparison.OrdinalIgnoreCase) ||
             request.Path.StartsWithSegments("/api/diagnostics", StringComparison.OrdinalIgnoreCase) ||
             request.Path.StartsWithSegments("/api/events", StringComparison.OrdinalIgnoreCase) ||
-            request.Path.StartsWithSegments("/api/xivdata", StringComparison.OrdinalIgnoreCase))
-        {
-            return true;
-        }
-
-        if (HttpMethods.IsDelete(request.Method) &&
-            request.Path.StartsWithSegments("/api/reports", StringComparison.OrdinalIgnoreCase))
+            request.Path.StartsWithSegments("/api/xivdata", StringComparison.OrdinalIgnoreCase) ||
+            request.Path.StartsWithSegments("/reports", StringComparison.OrdinalIgnoreCase))
         {
             return true;
         }
@@ -72,7 +68,6 @@ public sealed class DashboardSessionAuthMiddleware
 
     private static bool IsPluginInventoryIngestRoute(HttpRequest request) =>
         HttpMethods.IsPost(request.Method) &&
-        request.Headers.ContainsKey("X-Api-Key") &&
         (request.Path.Equals("/inventory", StringComparison.OrdinalIgnoreCase) ||
          request.Path.Equals("/api/inventory", StringComparison.OrdinalIgnoreCase));
 

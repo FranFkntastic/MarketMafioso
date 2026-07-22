@@ -13,6 +13,7 @@ using MarketMafioso.Automation.Runtime;
 using MarketMafioso.Automation.Travel;
 using MarketMafioso.AgentBridge;
 using MarketMafioso.MarketAcquisition;
+using MarketMafioso.Quartermaster;
 using MarketMafioso.WorkshopPrep;
 using MarketMafioso.Squire;
 using MarketMafioso.Squire.Observation;
@@ -49,12 +50,9 @@ public sealed class Plugin : IDalamudPlugin
 
     private readonly InventoryScanner scanner;
     private readonly HttpReporter reporter;
-    private readonly RetainerCacheFileStore retainerCacheStore;
-    private readonly RetainerCacheManager retainerCache;
-    private readonly AutoRetainerRefreshService autoRetainerRefresh;
+    private readonly QuartermasterIpcClient quartermaster;
     private readonly WorkshopProjectCatalog workshopCatalog;
     private readonly VIWIWorkshoppaIpc viwiWorkshoppaIpc;
-    private readonly WorkshopRetainerRestockService workshopRetainerRestock;
     private readonly WorkshopAssemblyRunner workshopAssemblyRunner;
     private readonly WorkshopMaterialManifestExportService workshopMaterialManifestExport;
     private readonly WindowSystem windowSystem = new("MarketMafioso");
@@ -75,37 +73,21 @@ public sealed class Plugin : IDalamudPlugin
         ECommonsMain.Init(PluginInterface, this);
 
         Configuration = PluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
+        Legacy.LegacyRetainerMigrationSource.Preserve(
+            Configuration,
+            Path.Combine(PluginInterface.GetPluginConfigDirectory(), "retainer-cache.json"));
         var squireConfigurationChanged = SquireRuleMigration.Migrate(Configuration);
         squireConfigurationChanged |= SquireCleanupRuleMigration.Migrate(Configuration);
         squireConfigurationChanged |= SquireAdvisorConfigurationMigration.Migrate(Configuration);
         if (squireConfigurationChanged)
             Configuration.Save();
-        retainerCacheStore = new RetainerCacheFileStore(
-            Path.Combine(PluginInterface.GetPluginConfigDirectory(), "retainer-cache.json"));
-        LoadRetainerCache();
 
         scanner = new InventoryScanner(DataManager, Log);
+        quartermaster = new QuartermasterIpcClient(new DalamudQuartermasterIpcAdapter(PluginInterface));
         var serviceAccountIdentity = new DalamudServiceAccountIdentitySource(PluginInterface, Log);
-        reporter = new HttpReporter(Configuration, PlayerState, Log, ChatGui, scanner, serviceAccountIdentity);
-        retainerCache = new RetainerCacheManager(
-            AddonLifecycle,
-            Log,
-            Configuration,
-            scanner,
-            reporter,
-            PlayerState,
-            retainerCacheStore);
-        autoRetainerRefresh = new AutoRetainerRefreshService(
-            PluginInterface,
-            Log,
-            GameGui,
-            ObjectTable,
-            DataManager,
-            retainerCache,
-            reporter);
+        reporter = new HttpReporter(Configuration, PlayerState, Log, ChatGui, scanner, serviceAccountIdentity, quartermaster);
         workshopCatalog = new WorkshopProjectCatalog(DataManager, Log);
         viwiWorkshoppaIpc = new VIWIWorkshoppaIpc(new DalamudVIWIWorkshoppaIpcAdapter(PluginInterface, Log));
-        workshopRetainerRestock = new WorkshopRetainerRestockService(Log);
         workshopAssemblyRunner = new WorkshopAssemblyRunner(
             Framework,
             Log,
@@ -138,10 +120,9 @@ public sealed class Plugin : IDalamudPlugin
             Configuration,
             reporter,
             scanner,
-            autoRetainerRefresh,
+            quartermaster,
             workshopCatalog,
             viwiWorkshoppaIpc,
-            workshopRetainerRestock,
             workshopAssemblyRunner,
             workshopMaterialManifestExport,
             DataManager,
@@ -153,7 +134,6 @@ public sealed class Plugin : IDalamudPlugin
                 new VNavmeshIpc(new DalamudVNavmeshIpcAdapter(PluginInterface, Log)),
                 Log),
             Path.Combine(PluginInterface.GetPluginConfigDirectory(), "market-acquisition-route-logs"),
-            retainerCacheStore,
             Log,
             renderedCharacterUiProbe);
 
@@ -318,33 +298,6 @@ public sealed class Plugin : IDalamudPlugin
     }
     private void OpenConfigUi() => mainWindow.IsOpen = true;
 
-    private void LoadRetainerCache()
-    {
-        try
-        {
-            if (retainerCacheStore.Exists)
-            {
-                Configuration.RetainerCache = retainerCacheStore.Load();
-                Log.Information(
-                    "[MarketMafioso] Loaded {Count} cached retainer(s) from retainer-cache.json.",
-                    Configuration.RetainerCache.Count);
-                return;
-            }
-
-            if (Configuration.RetainerCache.Count > 0)
-            {
-                retainerCacheStore.Save(Configuration.RetainerCache);
-                Log.Information(
-                    "[MarketMafioso] Migrated {Count} cached retainer(s) to retainer-cache.json.",
-                    Configuration.RetainerCache.Count);
-            }
-        }
-        catch (Exception ex)
-        {
-            Log.Error(ex, "[MarketMafioso] Error loading retainer inventory cache");
-        }
-    }
-
     public void Dispose()
     {
         StopTimer();
@@ -357,15 +310,14 @@ public sealed class Plugin : IDalamudPlugin
 
         CommandManager.RemoveHandler(CmdMain);
 
-        autoRetainerRefresh.Dispose();
-        retainerCache.Dispose();
         workshopAssemblyRunner.Dispose();
-        reporter.Dispose();
 
         windowSystem.RemoveAllWindows();
         mainWindow.ProjectBrowser.Dispose();
         mainWindow.AcquisitionCompositionWindow.Dispose();
         mainWindow.Dispose();
+        reporter.Dispose();
+        quartermaster.Dispose();
         ECommonsMain.Dispose();
     }
 

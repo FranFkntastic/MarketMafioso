@@ -64,6 +64,7 @@ internal static class DashboardDataEndpoints
         SqliteConnectionFactory connectionFactory,
         InventoryReportStore store,
         long? characterId,
+        string? snapshotId,
         string? filter,
         string? search,
         string? scope,
@@ -77,14 +78,20 @@ internal static class DashboardDataEndpoints
             return Results.NotFound();
         }
 
-        foreach (var accountId in await GetAccountIdsAsync(context, connectionFactory, token))
+        var accountIds = await GetAccountIdsAsync(context, connectionFactory, token);
+        StoredInventoryReport? report;
+        if (!string.IsNullOrWhiteSpace(snapshotId))
         {
-            var report = await store.GetLatestAsync(accountId, characterId, token);
-            if (report != null)
-                return Results.Ok(InventoryBrowserViewBuilder.Build(report, filter ?? search, scope, mode ?? InventoryBrowserMode.Items, caret));
+            report = await store.GetAsync(accountIds, snapshotId, token);
+            if (report == null)
+                return Results.NotFound();
+        }
+        else
+        {
+            report = await store.GetLatestAsync(accountIds, characterId, token);
         }
 
-        return Results.Ok(InventoryBrowserViewBuilder.Build(null, filter ?? search, scope, mode ?? InventoryBrowserMode.Items, caret));
+        return Results.Ok(InventoryBrowserViewBuilder.Build(report, filter ?? search, scope, mode ?? InventoryBrowserMode.Items, caret));
     }
 
     private static async Task<IResult> ListSnapshots(

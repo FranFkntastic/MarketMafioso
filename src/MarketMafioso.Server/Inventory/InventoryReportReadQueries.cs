@@ -135,12 +135,13 @@ internal sealed class InventoryReportReadQueries(SqliteConnectionFactory connect
             return null;
 
         var playerBags = new List<InventoryBag>();
+        var playerStorage = new StorageSourceEvidence();
         var retainers = new List<RetainerReport>();
         var owners = new List<InventoryOwnerRow>();
 
         await using var ownerCommand = connection.CreateCommand();
         ownerCommand.CommandText = """
-            SELECT id, owner_type, owner_name, retainer_id, last_updated, gil
+            SELECT id, owner_type, owner_name, retainer_id, last_updated, gil, gil_observed_at_utc, listings_observed_at_utc, requested_sources_json, observed_sources_json
             FROM inventory_owners
             WHERE snapshot_id = $snapshotId
             ORDER BY sort_order
@@ -158,6 +159,7 @@ internal sealed class InventoryReportReadQueries(SqliteConnectionFactory connect
             if (owner.OwnerType == "player")
             {
                 playerBags.AddRange(bags);
+                playerStorage = owner.Storage;
                 continue;
             }
 
@@ -169,8 +171,11 @@ internal sealed class InventoryReportReadQueries(SqliteConnectionFactory connect
                 OwnerHomeWorld = snapshot.HomeWorld,
                 LastUpdated = owner.LastUpdated ?? string.Empty,
                 Gil = owner.Gil ?? 0,
+                GilObservedAtUtc = owner.GilObservedAtUtc,
+                ListingsObservedAtUtc = owner.ListingsObservedAtUtc,
                 Bags = bags,
                 MarketListings = await ReadMarketListingsAsync(connection, accountId, owner.Id, cancellationToken),
+                Storage = owner.Storage,
             });
         }
 
@@ -184,6 +189,7 @@ internal sealed class InventoryReportReadQueries(SqliteConnectionFactory connect
             Timestamp = snapshot.ReportTimestamp,
             PlayerInventory = playerBags,
             Retainers = retainers,
+            PlayerStorage = playerStorage,
         };
 
         return new StoredInventoryReport
@@ -238,7 +244,7 @@ internal sealed class InventoryReportReadQueries(SqliteConnectionFactory connect
         var bags = new List<InventoryBag>();
         await using var command = connection.CreateCommand();
         command.CommandText = """
-            SELECT id, bag_name, location
+            SELECT id, bag_name, location, observed_at_utc
             FROM inventory_bags
             WHERE owner_id = $ownerId
             ORDER BY sort_order
@@ -253,6 +259,7 @@ internal sealed class InventoryReportReadQueries(SqliteConnectionFactory connect
             {
                 BagName = reader.GetString(1),
                 Location = reader.IsDBNull(2) ? null : reader.GetString(2),
+                ObservedAtUtc = reader.IsDBNull(3) ? null : reader.GetString(3),
                 Items = await ReadItemsAsync(connection, accountId, bagId, cancellationToken),
             });
         }

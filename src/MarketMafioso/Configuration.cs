@@ -50,7 +50,6 @@ public class Configuration : IPluginConfiguration
     public bool IncludeItemNames { get; set; } = true;
     public bool IncludeCharacterInfo { get; set; } = true;
 
-    public bool AutoSendOnRetainerClose { get; set; } = false;
     public bool EnableAutoSendTimer { get; set; } = false;
     public int AutoSendIntervalMinutes { get; set; } = 5;
 
@@ -73,12 +72,45 @@ public class Configuration : IPluginConfiguration
     public List<WorkshopPrepQueueItem> WorkshopPrepQueue { get; set; } = new();
     public List<WorkshopFrozenQueue> FrozenWorkshopQueues { get; set; } = new();
     public bool SplitWorkshopQueueAndMaterials { get; set; }
+    [JsonProperty("RetainerRestockPlanItems")]
     public List<RetainerRestockPlanItem> RetainerRestockPlanItems { get; set; } = new();
+    public Dictionary<string, QuartermasterWorkshopRequestState> QuartermasterWorkshopRequests { get; set; } = new();
     public Guid? ActiveFrozenWorkshopQueueId { get; set; }
     public List<uint> FavoriteWorkshopProjectIds { get; set; } = new();
     public SquireConfiguration Squire { get; set; } = new();
 
     public void Save() => Plugin.PluginInterface.SavePluginConfig(this);
+}
+
+[Serializable]
+public sealed class QuartermasterWorkshopRequestState
+{
+    public ulong LocalContentId { get; set; }
+    public uint HomeWorldId { get; set; }
+    public string CharacterName { get; set; } = string.Empty;
+    public string? HomeWorldName { get; set; }
+    public string Signature { get; set; } = string.Empty;
+    public string RequestId { get; set; } = string.Empty;
+    public string OperationId { get; set; } = string.Empty;
+    public DateTime SubmittedAtUtc { get; set; }
+    public string? ProviderInstanceId { get; set; }
+    public long? Revision { get; set; }
+    public string Status { get; set; } = string.Empty;
+    public string? Message { get; set; }
+    public List<QuartermasterWorkshopOperationReceipt> Receipts { get; set; } = new();
+}
+
+[Serializable]
+public sealed class QuartermasterWorkshopOperationReceipt
+{
+    public long Revision { get; set; }
+    public DateTime OccurredAtUtc { get; set; }
+    public string Status { get; set; } = string.Empty;
+    public string Code { get; set; } = string.Empty;
+    public string Message { get; set; } = string.Empty;
+    public uint? ItemId { get; set; }
+    public ulong? RetainerId { get; set; }
+    public int? Quantity { get; set; }
 }
 
 [Serializable]

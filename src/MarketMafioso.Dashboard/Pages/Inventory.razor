@@ -177,6 +177,7 @@ else
     private InventoryBrowserView _view = new();
     private InventoryBrowserView? _lastValidView;
     private long? _selectedCharacterId;
+    private string? _snapshotId;
     private string _filterText = string.Empty;
     private string _scope = "all";
     private InventoryBrowserMode _mode = InventoryBrowserMode.Items;
@@ -232,7 +233,8 @@ else
         {
             _characters = await Api.GetCharactersAsync();
             var settings = await Api.GetDashboardSettingsAsync();
-            _selectedCharacterId ??= settings.DefaultCharacterId;
+            if (string.IsNullOrWhiteSpace(_snapshotId))
+                _selectedCharacterId ??= settings.DefaultCharacterId;
             if (_selectedCharacterId is not null && _characters.All(character => character.Id != _selectedCharacterId))
                 _selectedCharacterId = null;
             await LoadInventoryAsync();
@@ -241,7 +243,7 @@ else
         catch (Exception ex) { Status.Error($"Inventory load failed: {ex.Message}"); }
     }
 
-    private async Task OnCharacterChanged(long? value) { CancelFilterDebounce(); _selectedCharacterId = value; _scope = "all"; _lastValidView = null; await LoadInventoryAsync(); PersistUrlState(); }
+    private async Task OnCharacterChanged(long? value) { CancelFilterDebounce(); _selectedCharacterId = value; _snapshotId = null; _scope = "all"; _lastValidView = null; await LoadInventoryAsync(); PersistUrlState(); }
     private Task OnFilterEdited(WebFilterAutocompleteEdit edit)
     {
         _filterText = edit.Value;
@@ -314,6 +316,7 @@ else
             _loading = true;
             var response = await Api.GetInventoryBrowserAsync(
                 _selectedCharacterId,
+                _snapshotId,
                 _filterText,
                 _scope,
                 _mode,
@@ -373,12 +376,14 @@ else
         }
         if (values.TryGetValue("characterId", out var characterId) && long.TryParse(characterId, out var parsedCharacterId))
             _selectedCharacterId = parsedCharacterId;
+        if (values.TryGetValue("snapshotId", out var snapshotId) && !string.IsNullOrWhiteSpace(snapshotId))
+            _snapshotId = snapshotId;
     }
 
     private void PersistUrlState()
     {
         Navigation.NavigateTo(
-            InventoryNavigation.BuildPath(_mode, _scope, _filterText, _selectedCharacterId),
+            InventoryNavigation.BuildPath(_mode, _scope, _filterText, _selectedCharacterId, _snapshotId),
             replace: true);
     }
 

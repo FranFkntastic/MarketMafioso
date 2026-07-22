@@ -248,6 +248,7 @@ public sealed class DashboardApiClient
 
     public async Task<InventoryBrowserView> GetInventoryBrowserAsync(
         long? characterId,
+        string? snapshotId,
         string? filter,
         string? scope,
         InventoryBrowserMode mode = InventoryBrowserMode.Items,
@@ -257,6 +258,8 @@ public sealed class DashboardApiClient
         var query = new List<string>();
         if (characterId != null)
             query.Add($"characterId={characterId.Value}");
+        if (!string.IsNullOrWhiteSpace(snapshotId))
+            query.Add($"snapshotId={Uri.EscapeDataString(snapshotId)}");
         if (!string.IsNullOrWhiteSpace(filter))
             query.Add($"filter={Uri.EscapeDataString(filter)}");
         if (!string.IsNullOrWhiteSpace(scope))

@@ -17,7 +17,7 @@ public sealed class AgentBridgeHost : IDisposable
     private const int MaxRequestCharacters = 16_384;
     private readonly Configuration config;
     private readonly string configDirectory;
-    private readonly Func<Action, Task> dispatchOnFramework;
+    private readonly Func<Action, Task> scheduleOnFramework;
     private readonly IMarketMafiosoBridgeProvider provider;
     private readonly AgentBridgeProofStore proofStore;
     private readonly Func<bool, CancellationToken, Task<AgentBridgeCaptureReceipt>> captureViewport;
@@ -45,7 +45,7 @@ public sealed class AgentBridgeHost : IDisposable
     {
         this.config = config ?? throw new ArgumentNullException(nameof(config));
         this.configDirectory = configDirectory ?? throw new ArgumentNullException(nameof(configDirectory));
-        this.dispatchOnFramework = dispatchOnFramework ?? throw new ArgumentNullException(nameof(dispatchOnFramework));
+        scheduleOnFramework = dispatchOnFramework ?? throw new ArgumentNullException(nameof(dispatchOnFramework));
         this.provider = provider ?? throw new ArgumentNullException(nameof(provider));
         this.proofStore = proofStore ?? throw new ArgumentNullException(nameof(proofStore));
         this.captureViewport = captureViewport ?? throw new ArgumentNullException(nameof(captureViewport));
@@ -115,9 +115,11 @@ public sealed class AgentBridgeHost : IDisposable
                 await pipe.WaitForConnectionAsync(cancellationToken).ConfigureAwait(false);
                 using var reader = new StreamReader(pipe, leaveOpen: true);
                 await using var writer = new StreamWriter(pipe) { AutoFlush = true };
-                var requestJson = await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false);
+                using var readTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                readTimeout.CancelAfter(TimeSpan.FromSeconds(5));
+                var requestJson = await ReadBoundedLineAsync(reader, readTimeout.Token).ConfigureAwait(false);
                 var response = await HandleRequestAsync(requestJson, cancellationToken).ConfigureAwait(false);
-                await writer.WriteLineAsync(JsonSerializer.Serialize(response, jsonOptions)).ConfigureAwait(false);
+                await writer.WriteLineAsync(JsonSerializer.Serialize(response, jsonOptions).AsMemory(), cancellationToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -531,16 +533,38 @@ public sealed class AgentBridgeHost : IDisposable
         return receipt;
     }
 
+    private Task dispatchOnFramework(Action action)
+    {
+        var activeCancellation = Volatile.Read(ref cancellation);
+        if (activeCancellation is null)
+            return Task.FromCanceled(new CancellationToken(canceled: true));
+        var token = activeCancellation.Token;
+        return scheduleOnFramework(() =>
+        {
+            if (!token.IsCancellationRequested)
+                action();
+        }).WaitAsync(token);
+    }
+
     private void Stop()
     {
         var activeCancellation = Interlocked.Exchange(ref cancellation, null);
+        var activeListener = Interlocked.Exchange(ref listenTask, null);
         if (activeCancellation != null)
         {
             activeCancellation.Cancel();
+            if (activeListener is not null)
+            {
+                try
+                {
+                    if (!activeListener.Wait(TimeSpan.FromSeconds(1)))
+                        _ = ObserveStoppedListenerAsync(activeListener);
+                }
+                catch (Exception exception) when (exception is AggregateException or OperationCanceledException) { }
+            }
             activeCancellation.Dispose();
         }
 
-        listenTask = null;
         accessToken = null;
         if (File.Exists(DiscoveryPath))
             File.Delete(DiscoveryPath);
@@ -603,6 +627,34 @@ public sealed class AgentBridgeHost : IDisposable
             CryptographicOperations.ZeroMemory(encrypted);
         }
         return token;
+    }
+
+    private static async Task<string?> ReadBoundedLineAsync(StreamReader reader, CancellationToken cancellationToken)
+    {
+        var builder = new StringBuilder();
+        var buffer = new char[1024];
+        while (true)
+        {
+            var read = await reader.ReadAsync(buffer.AsMemory(), cancellationToken).ConfigureAwait(false);
+            if (read == 0)
+                return builder.Length == 0 ? null : builder.ToString();
+            var newline = Array.IndexOf(buffer, '\n', 0, read);
+            var length = newline >= 0 ? newline : read;
+            if (newline >= 0 && length > 0 && buffer[length - 1] == '\r')
+                length--;
+            builder.Append(buffer, 0, length);
+            if (builder.Length > MaxRequestCharacters)
+                throw new InvalidDataException("Bridge request exceeds the maximum length.");
+            if (newline >= 0)
+                return builder.ToString();
+        }
+    }
+
+    private static async Task ObserveStoppedListenerAsync(Task listener)
+    {
+        try { await listener.ConfigureAwait(false); }
+        catch (OperationCanceledException) { }
+        catch { }
     }
 }
 

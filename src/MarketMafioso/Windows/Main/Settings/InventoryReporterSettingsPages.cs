@@ -15,14 +15,13 @@ internal sealed class InventoryReporterSettingsPages
         Configuration config,
         Action restartTimer,
         HttpReporter reporter,
-        AutoRetainerRefreshService autoRetainerRefresh,
         AgentBridgeUiReviewRegistry reviewRegistry)
     {
         this.config = config ?? throw new ArgumentNullException(nameof(config));
         this.restartTimer = restartTimer ?? throw new ArgumentNullException(nameof(restartTimer));
         Descriptors =
         [
-            new InventoryReporterActionsSettingsPage(reporter, autoRetainerRefresh, reviewRegistry).Descriptor,
+            new InventoryReporterActionsSettingsPage(reporter, reviewRegistry).Descriptor,
             new("inventory.capture", "Inventory Reporter / Capture", DrawCapture, 10,
                 searchTerms: ["armoury chest", "crystal bag", "equipped gear", "saddlebag", "item names", "character world"]),
             new("inventory.scheduling", "Inventory Reporter / Scheduling", DrawScheduling, 11,
@@ -46,10 +45,6 @@ internal sealed class InventoryReporterSettingsPages
 
     private void DrawScheduling(SettingsPageContext context)
     {
-        DrawCheckbox(context, "Auto-send on retainer window close",
-            "Retainer data is cached when its window closes; visit each retainer once per session to populate the cache.",
-            () => config.AutoSendOnRetainerClose, value => config.AutoSendOnRetainerClose = value);
-
         if (!context.Matches("Enable automatic periodic sending", "timer", "schedule", "interval")) return;
         var enabled = config.EnableAutoSendTimer;
         if (ImGui.Checkbox("Enable automatic periodic sending", ref enabled))

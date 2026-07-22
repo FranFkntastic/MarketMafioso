@@ -175,10 +175,10 @@ public sealed class WorkshopMaterialManifestExportServiceTests
             20,
             Required: 288,
             PlayerInventory: 0,
-            RetainerCache: 75539,
+            QuartermasterStock: 75539,
             Shortage: 288,
             TotalMissing: 0,
-            CandidateRetainers:
+            QuartermasterRetainers:
             [
                 new(10, "Taffy-swordsman", new DateTime(2026, 6, 23, 20, 40, 0, DateTimeKind.Utc), 75539),
             ]),
@@ -188,10 +188,10 @@ public sealed class WorkshopMaterialManifestExportServiceTests
             21,
             Required: 80,
             PlayerInventory: 48,
-            RetainerCache: 0,
+            QuartermasterStock: 0,
             Shortage: 32,
             TotalMissing: 32,
-            CandidateRetainers: []),
+            QuartermasterRetainers: []),
     ];
 
     private sealed class FakeRecipeResolver : IWorkshopMaterialCraftRecipeResolver

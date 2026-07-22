@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Dalamud.Bindings.ImGui;
+using MarketMafioso.Quartermaster;
 using MarketMafioso.Windows.Main;
 using MarketMafioso.WorkshopPrep;
 
@@ -9,27 +10,35 @@ namespace MarketMafioso.Windows.WorkshopLogistics;
 
 internal sealed class WorkshopMaterialPanel
 {
-    private readonly AutoRetainerRefreshService autoRetainerRefresh;
-    private readonly WorkshopRetainerRestockService workshopRetainerRestock;
+    private readonly QuartermasterIpcClient quartermaster;
+    private readonly WorkshopQuartermasterRequestService requestService;
     private readonly Func<IReadOnlyList<WorkshopMaterialAvailability>> getAvailability;
+    private readonly Func<QuartermasterOwnerScope> getOwnerScope;
     private string searchText = string.Empty;
     private bool shortagesOnly;
 
     public WorkshopMaterialPanel(
-        AutoRetainerRefreshService autoRetainerRefresh,
-        WorkshopRetainerRestockService workshopRetainerRestock,
-        Func<IReadOnlyList<WorkshopMaterialAvailability>> getAvailability)
+        QuartermasterIpcClient quartermaster,
+        WorkshopQuartermasterRequestService requestService,
+        Func<IReadOnlyList<WorkshopMaterialAvailability>> getAvailability,
+        Func<QuartermasterOwnerScope> getOwnerScope)
     {
-        this.autoRetainerRefresh = autoRetainerRefresh ?? throw new ArgumentNullException(nameof(autoRetainerRefresh));
-        this.workshopRetainerRestock = workshopRetainerRestock ?? throw new ArgumentNullException(nameof(workshopRetainerRestock));
+        this.quartermaster = quartermaster ?? throw new ArgumentNullException(nameof(quartermaster));
+        this.requestService = requestService ?? throw new ArgumentNullException(nameof(requestService));
         this.getAvailability = getAvailability ?? throw new ArgumentNullException(nameof(getAvailability));
+        this.getOwnerScope = getOwnerScope ?? throw new ArgumentNullException(nameof(getOwnerScope));
     }
 
     public void Draw(IReadOnlyList<WorkshopMaterialAvailability>? availability = null)
     {
-        ImGuiUi.SectionHeaderWithActions("Materials", MarketMafiosoUiTheme.Header, DrawHeaderActions, 332);
-
         availability ??= getAvailability();
+        ImGuiUi.SectionHeaderWithActions(
+            "Materials",
+            MarketMafiosoUiTheme.Header,
+            () => DrawHeaderActions(availability),
+            210);
+        ImGui.TextColored(GetQuartermasterStatusColor(), quartermaster.LastStatus);
+        ImGui.TextColored(MarketMafiosoUiTheme.Muted, requestService.LastStatus);
         ImGui.SetNextItemWidth(Math.Max(220f, ImGui.GetContentRegionAvail().X - 260f));
         ImGui.InputTextWithHint("##workshopMaterialSearch", "Filter materials...", ref searchText, 128);
         ImGui.SameLine();
@@ -48,8 +57,8 @@ internal sealed class WorkshopMaterialPanel
             ImGui.TableSetupColumn("Stock Differential", ImGuiTableColumnFlags.WidthFixed, 128);
             ImGui.TableSetupColumn("Inventory Missing", ImGuiTableColumnFlags.WidthFixed, 128);
             ImGui.TableSetupColumn("Player", ImGuiTableColumnFlags.WidthFixed, 72);
-            ImGui.TableSetupColumn("Retainers", ImGuiTableColumnFlags.WidthFixed | ImGuiTableColumnFlags.DefaultHide, 88);
-            ImGui.TableSetupColumn("Candidates", ImGuiTableColumnFlags.WidthStretch | ImGuiTableColumnFlags.DefaultHide);
+            ImGui.TableSetupColumn("Quartermaster", ImGuiTableColumnFlags.WidthFixed | ImGuiTableColumnFlags.DefaultHide, 104);
+            ImGui.TableSetupColumn("Sources", ImGuiTableColumnFlags.WidthStretch | ImGuiTableColumnFlags.DefaultHide);
             ImGui.TableHeadersRow();
 
             if (filtered.Count == 0)
@@ -89,29 +98,35 @@ internal sealed class WorkshopMaterialPanel
                 ImGui.TableNextColumn();
                 ImGui.TextUnformatted(item.PlayerInventory.ToString());
                 ImGui.TableNextColumn();
-                ImGui.TextUnformatted(item.RetainerCache.ToString());
+                ImGui.TextUnformatted(item.QuartermasterStock.ToString());
                 ImGui.TableNextColumn();
-                ImGui.TextUnformatted(string.Join(", ", item.CandidateRetainers.Select(x => x.RetainerName)));
+                ImGui.TextUnformatted(string.Join(", ", item.QuartermasterRetainers.Select(x => x.RetainerName)));
             }
 
             ImGui.EndTable();
         }
     }
 
-    private void DrawHeaderActions()
+    private void DrawHeaderActions(IReadOnlyList<WorkshopMaterialAvailability> availability)
     {
-        var canRefreshRetainers = autoRetainerRefresh.CanStartRefresh &&
-                                  !autoRetainerRefresh.IsRefreshing &&
-                                  !autoRetainerRefresh.IsStartQueued;
-
-        if (ImGuiUi.Button("Refresh Retainer Cache", canRefreshRetainers))
-            autoRetainerRefresh.StartFullRefresh();
-
-        ImGui.SameLine();
-        if (ImGuiUi.Button("Restock From Retainers", !workshopRetainerRestock.IsRunning))
-            _ = workshopRetainerRestock.StartAsync(getAvailability());
-
+        var canRequest = quartermaster.HasCachedSnapshot &&
+                         availability.Any(item => item.Shortage > 0) &&
+                         getOwnerScope().IsAvailable;
+        if (ImGuiUi.PrimaryButton("Request From Quartermaster", canRequest))
+            requestService.Submit(getOwnerScope(), availability);
     }
+
+    private System.Numerics.Vector4 GetQuartermasterStatusColor() =>
+        quartermaster.LastStatus.Contains("unavailable", StringComparison.OrdinalIgnoreCase) ||
+        quartermaster.LastStatus.Contains("not loaded", StringComparison.OrdinalIgnoreCase) ||
+        quartermaster.LastStatus.Contains("does not expose", StringComparison.OrdinalIgnoreCase) ||
+        quartermaster.LastStatus.Contains("failed", StringComparison.OrdinalIgnoreCase) ||
+        quartermaster.LastStatus.Contains("invalid", StringComparison.OrdinalIgnoreCase) ||
+        quartermaster.LastStatus.Contains("unsupported", StringComparison.OrdinalIgnoreCase) ||
+        quartermaster.LastStatus.Contains("malformed", StringComparison.OrdinalIgnoreCase) ||
+        quartermaster.LastStatus.Contains("omitted", StringComparison.OrdinalIgnoreCase)
+            ? MarketMafiosoUiTheme.Error
+            : MarketMafiosoUiTheme.Muted;
 
     private static string FormatSignedQuantity(int value)
     {

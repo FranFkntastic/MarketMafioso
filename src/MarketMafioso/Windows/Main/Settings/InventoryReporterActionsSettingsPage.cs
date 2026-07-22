@@ -9,17 +9,14 @@ namespace MarketMafioso.Windows.Main.Settings;
 internal sealed class InventoryReporterActionsSettingsPage
 {
     private readonly HttpReporter reporter;
-    private readonly AutoRetainerRefreshService autoRetainerRefresh;
     private readonly AgentBridgeUiReviewRegistry reviewRegistry;
     private bool showPreview;
 
     public InventoryReporterActionsSettingsPage(
         HttpReporter reporter,
-        AutoRetainerRefreshService autoRetainerRefresh,
         AgentBridgeUiReviewRegistry reviewRegistry)
     {
         this.reporter = reporter ?? throw new ArgumentNullException(nameof(reporter));
-        this.autoRetainerRefresh = autoRetainerRefresh ?? throw new ArgumentNullException(nameof(autoRetainerRefresh));
         this.reviewRegistry = reviewRegistry ?? throw new ArgumentNullException(nameof(reviewRegistry));
     }
 
@@ -28,12 +25,12 @@ internal sealed class InventoryReporterActionsSettingsPage
         "Inventory Reporter / Actions and Status",
         Draw,
         9,
-        searchTerms: ["send report", "refresh retainer cache", "last payload", "JSON preview", "report status"]);
+        searchTerms: ["send report", "Quartermaster", "last payload", "JSON preview", "report status"]);
 
     private void Draw(SettingsPageContext context)
     {
         ImGui.PushStyleColor(ImGuiCol.Text, MarketMafiosoUiTheme.Muted);
-        ImGui.TextWrapped("Send an inventory snapshot, refresh cached retainers, or inspect the last payload. Capture scope and scheduling have their own pages.");
+        ImGui.TextWrapped("Send an inventory snapshot or inspect the last payload. Retainer inventory comes from Quartermaster when available.");
         ImGui.PopStyleColor();
         ImGui.Spacing();
 
@@ -65,7 +62,7 @@ internal sealed class InventoryReporterActionsSettingsPage
 
         ImGui.TableSetupColumn("Last report", ImGuiTableColumnFlags.WidthStretch, 0.8f);
         ImGui.TableSetupColumn("Receiver status", ImGuiTableColumnFlags.WidthStretch, 1f);
-        ImGui.TableSetupColumn("Retainer cache", ImGuiTableColumnFlags.WidthStretch, 1.6f);
+        ImGui.TableSetupColumn("Retainer source", ImGuiTableColumnFlags.WidthStretch, 1.6f);
         ImGui.TableHeadersRow();
         ImGui.TableNextRow();
 
@@ -76,7 +73,7 @@ internal sealed class InventoryReporterActionsSettingsPage
         ImGui.TextColored(GetReporterStatusColor(), reporter.LastStatus);
 
         ImGui.TableNextColumn();
-        ImGui.TextColored(GetRefreshStatusColor(), autoRetainerRefresh.LastStatus);
+        ImGui.TextColored(GetRetainerSourceStatusColor(), reporter.LastRetainerSourceStatus);
 
         ImGui.EndTable();
     }
@@ -91,19 +88,6 @@ internal sealed class InventoryReporterActionsSettingsPage
             true,
             () => _ = reporter.SendReportAsync(),
             reporter.LastStatus);
-
-        ImGui.SameLine();
-        var canRefreshRetainers = autoRetainerRefresh.CanStartRefresh &&
-                                  !autoRetainerRefresh.IsRefreshing &&
-                                  !autoRetainerRefresh.IsStartQueued;
-        if (ImGuiUi.Button("Refresh retainer cache", canRefreshRetainers))
-            autoRetainerRefresh.StartFullRefresh();
-        reviewRegistry.RegisterLastButton(
-            "inventory.report.refresh-retainers",
-            "Refresh the retainer inventory cache",
-            canRefreshRetainers,
-            autoRetainerRefresh.StartFullRefresh,
-            autoRetainerRefresh.LastStatus);
 
         ImGui.SameLine();
         var previewLabel = showPreview ? "Hide payload" : "Preview payload";
@@ -128,15 +112,12 @@ internal sealed class InventoryReporterActionsSettingsPage
         return MarketMafiosoUiTheme.Muted;
     }
 
-    private Vector4 GetRefreshStatusColor()
+    private Vector4 GetRetainerSourceStatusColor()
     {
-        if (autoRetainerRefresh.IsRefreshing)
-            return MarketMafiosoUiTheme.Header;
-        if (autoRetainerRefresh.LastStatus.Contains("complete", StringComparison.OrdinalIgnoreCase))
+        if (reporter.LastRetainerSourceStatus.Contains("revision", StringComparison.OrdinalIgnoreCase))
             return MarketMafiosoUiTheme.Success;
-        if (autoRetainerRefresh.LastStatus.Contains("failed", StringComparison.OrdinalIgnoreCase) ||
-            autoRetainerRefresh.LastStatus.Contains("unable", StringComparison.OrdinalIgnoreCase) ||
-            autoRetainerRefresh.LastStatus.Contains("timed out", StringComparison.OrdinalIgnoreCase))
+        if (reporter.LastRetainerSourceStatus.Contains("unavailable", StringComparison.OrdinalIgnoreCase) ||
+            reporter.LastRetainerSourceStatus.Contains("omitted", StringComparison.OrdinalIgnoreCase))
             return MarketMafiosoUiTheme.Error;
         return MarketMafiosoUiTheme.Muted;
     }

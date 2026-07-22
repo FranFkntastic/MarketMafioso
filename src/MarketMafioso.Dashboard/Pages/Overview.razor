@@ -190,7 +190,7 @@ else
                 ? await Api.GetAcquisitionRequestsAsync()
                 : [];
             _diagnostics = await Api.GetDiagnosticsAsync();
-            _inventory = await Api.GetInventoryBrowserAsync(null, null, "all");
+            _inventory = await Api.GetInventoryBrowserAsync(null, null, null, "all");
             _storage = await Api.GetStorageSummaryAsync();
         }
         catch (Exception ex)

@@ -31,6 +31,18 @@ public record InventoryReport
 
     [JsonPropertyName("retainers")]
     public List<RetainerReport> Retainers { get; init; } = new();
+
+    [JsonPropertyName("playerStorage")]
+    public StorageSourceEvidence PlayerStorage { get; init; } = new();
+}
+
+public record StorageSourceEvidence
+{
+    [JsonPropertyName("requestedSources")]
+    public List<string> RequestedSources { get; init; } = new();
+
+    [JsonPropertyName("observedSources")]
+    public List<string> ObservedSources { get; init; } = new();
 }
 
 public record InventoryReportMetadata
@@ -56,6 +68,10 @@ public record InventoryBag
     [JsonPropertyName("location")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Location { get; init; }
+
+    [JsonPropertyName("observedAtUtc")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ObservedAtUtc { get; init; }
 
     [JsonPropertyName("items")]
     public List<ItemSlot> Items { get; init; } = new();
@@ -83,11 +99,22 @@ public record RetainerReport
     [JsonPropertyName("gil")]
     public ulong Gil { get; init; }
 
+    [JsonPropertyName("gilObservedAtUtc")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? GilObservedAtUtc { get; init; }
+
+    [JsonPropertyName("listingsObservedAtUtc")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ListingsObservedAtUtc { get; init; }
+
     [JsonPropertyName("bags")]
     public List<InventoryBag> Bags { get; init; } = new();
 
     [JsonPropertyName("marketListings")]
     public List<RetainerMarketListing> MarketListings { get; init; } = new();
+
+    [JsonPropertyName("storage")]
+    public StorageSourceEvidence Storage { get; init; } = new();
 }
 
 public record ItemSlot

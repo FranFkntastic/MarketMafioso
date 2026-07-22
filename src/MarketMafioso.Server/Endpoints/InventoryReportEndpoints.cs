@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using MarketMafioso.Server.Auth;
+using MarketMafioso.Server.Sqlite;
 using Microsoft.Extensions.Primitives;
 
 namespace MarketMafioso.Server.Endpoints;
@@ -39,69 +40,121 @@ internal static class InventoryReportEndpoints
                 publicOrigin,
                 token));
 
-        app.MapGet("/api/reports", async (InventoryReportStore store, CancellationToken token) =>
+        app.MapGet("/api/reports", async (
+            HttpContext context,
+            SqliteConnectionFactory connectionFactory,
+            InventoryReportStore store,
+            CancellationToken token) =>
         {
-            var reports = await store.ListSummariesAsync(token);
-            return Results.Ok(reports);
+            var reports = new List<ReportSummary>();
+            foreach (var accountId in await GetAccountIdsAsync(context, connectionFactory, token))
+                reports.AddRange(await store.ListSummariesAsync(accountId, null, token));
+            return Results.Ok(reports.OrderByDescending(report => report.ReceivedAt).ToArray());
         });
 
-        app.MapGet("/api/reports/latest", async (InventoryReportStore store, CancellationToken token) =>
+        app.MapGet("/api/reports/latest", async (
+            HttpContext context,
+            SqliteConnectionFactory connectionFactory,
+            InventoryReportStore store,
+            CancellationToken token) =>
         {
-            var report = await store.GetLatestAsync(token);
+            var accountIds = await GetAccountIdsAsync(context, connectionFactory, token);
+            var report = await store.GetLatestAsync(accountIds, null, token);
             return report == null ? Results.NotFound() : Results.Ok(report);
         });
 
-        app.MapGet("/api/reports/{id}/view", async (string id, InventoryReportStore store, CancellationToken token) =>
+        app.MapGet("/api/reports/{id}/view", async (
+            HttpContext context,
+            string id,
+            SqliteConnectionFactory connectionFactory,
+            InventoryReportStore store,
+            CancellationToken token) =>
         {
-            var report = await store.GetAsync(id, token);
+            var accountIds = await GetAccountIdsAsync(context, connectionFactory, token);
+            var report = await store.GetAsync(accountIds, id, token);
             return report == null
                 ? Results.NotFound()
                 : Results.Ok(InventorySnapshotViewBuilder.Build(report));
         });
 
-        app.MapGet("/api/reports/{id}", async (string id, InventoryReportStore store, CancellationToken token) =>
+        app.MapGet("/api/reports/{id}", async (
+            HttpContext context,
+            string id,
+            SqliteConnectionFactory connectionFactory,
+            InventoryReportStore store,
+            CancellationToken token) =>
         {
-            var report = await store.GetAsync(id, token);
+            var accountIds = await GetAccountIdsAsync(context, connectionFactory, token);
+            var report = await store.GetAsync(accountIds, id, token);
             return report == null ? Results.NotFound() : Results.Ok(report);
         });
 
-        app.MapGet("/reports/latest/json", async (InventoryReportStore store, CancellationToken token) =>
+        app.MapGet("/reports/latest/json", async (
+            HttpContext context,
+            SqliteConnectionFactory connectionFactory,
+            InventoryReportStore store,
+            CancellationToken token) =>
         {
-            var report = await store.GetLatestRawJsonAsync(token);
+            var accountIds = await GetAccountIdsAsync(context, connectionFactory, token);
+            var report = await GetLatestRawJsonAsync(store, accountIds, token);
             return RawJsonResult(report);
         });
 
-        app.MapGet("/reports/{id}/json", async (string id, InventoryReportStore store, CancellationToken token) =>
+        app.MapGet("/reports/{id}/json", async (
+            HttpContext context,
+            string id,
+            SqliteConnectionFactory connectionFactory,
+            InventoryReportStore store,
+            CancellationToken token) =>
         {
-            var report = await store.GetRawJsonAsync(id, token);
+            var accountIds = await GetAccountIdsAsync(context, connectionFactory, token);
+            var report = await GetRawJsonAsync(store, accountIds, id, token);
             return RawJsonResult(report);
         });
 
-        app.MapDelete("/api/reports/{id}", async (string id, InventoryReportStore store, CancellationToken token) =>
+        app.MapDelete("/api/reports/{id}", async (
+            HttpContext context,
+            string id,
+            SqliteConnectionFactory connectionFactory,
+            InventoryReportStore store,
+            CancellationToken token) =>
         {
             if (requireApiKey)
                 return Results.NotFound();
 
-            var deleted = await store.DeleteAsync(id, token);
+            var deleted = await DeleteAsync(
+                store,
+                await GetAccountIdsAsync(context, connectionFactory, token),
+                id,
+                token);
             return deleted ? Results.NoContent() : Results.NotFound();
         });
 
-        app.MapDelete("/api/reports", async (InventoryReportStore store, CancellationToken token) =>
+        app.MapDelete("/api/reports", async (
+            HttpContext context,
+            SqliteConnectionFactory connectionFactory,
+            InventoryReportStore store,
+            CancellationToken token) =>
         {
             if (requireApiKey)
                 return Results.NotFound();
 
-            var deleted = await store.DeleteAllAsync(token);
+            var deleted = await DeleteAllAsync(
+                store,
+                await GetAccountIdsAsync(context, connectionFactory, token),
+                token);
             return Results.Ok(new { deleted });
         });
 
         app.MapGet("/reports/{id}", async (
             HttpRequest request,
             string id,
+            SqliteConnectionFactory connectionFactory,
             InventoryReportStore store,
             CancellationToken token) =>
         {
-            var report = await store.GetAsync(id, token);
+            var accountIds = await GetAccountIdsAsync(request.HttpContext, connectionFactory, token);
+            var report = await store.GetAsync(accountIds, id, token);
             return report == null
                 ? Results.NotFound(RenderNotFound(id, request.PathBase))
                 : Results.Content(
@@ -112,10 +165,15 @@ internal static class InventoryReportEndpoints
         app.MapPost("/reports/{id}/delete", async (
             HttpRequest request,
             string id,
+            SqliteConnectionFactory connectionFactory,
             InventoryReportStore store,
             CancellationToken token) =>
         {
-            var deleted = await store.DeleteAsync(id, token);
+            var deleted = await DeleteAsync(
+                store,
+                await GetAccountIdsAsync(request.HttpContext, connectionFactory, token),
+                id,
+                token);
             return deleted
                 ? Results.Redirect($"{request.PathBase}/?deleted={Uri.EscapeDataString($"snapshot {id}")}")
                 : Results.NotFound(RenderNotFound(id, request.PathBase));
@@ -123,10 +181,14 @@ internal static class InventoryReportEndpoints
 
         app.MapPost("/reports/delete-all", async (
             HttpRequest request,
+            SqliteConnectionFactory connectionFactory,
             InventoryReportStore store,
             CancellationToken token) =>
         {
-            var deleted = await store.DeleteAllAsync(token);
+            var deleted = await DeleteAllAsync(
+                store,
+                await GetAccountIdsAsync(request.HttpContext, connectionFactory, token),
+                token);
             return Results.Redirect($"{request.PathBase}/?deleted={Uri.EscapeDataString($"{deleted:N0} snapshots")}");
         });
     }
@@ -196,8 +258,8 @@ internal static class InventoryReportEndpoints
             stored.Summary.RetainerCount,
             stored.Summary.RetainerItemStacks,
             stored.Summary.RetainerItemQuantity,
-            DashboardUrl = PublicAppUrl(request, publicOrigin, "/"),
-            ReportUrl = PublicAppUrl(request, publicOrigin, $"/reports/{stored.Id}"),
+            DashboardUrl = PublicAppUrl(request, publicOrigin, "/inventory"),
+            ReportUrl = PublicAppUrl(request, publicOrigin, $"/inventory?snapshotId={Uri.EscapeDataString(stored.Id)}"),
             ApiReportUrl = PublicAppUrl(request, publicOrigin, $"/api/reports/{stored.Id}"),
         };
 
@@ -214,6 +276,79 @@ internal static class InventoryReportEndpoints
 
     private static IResult InvalidApiKey() =>
         Results.Json(new { error = "invalid_api_key" }, statusCode: StatusCodes.Status401Unauthorized);
+
+    private static async Task<IReadOnlyList<long>> GetAccountIdsAsync(
+        HttpContext context,
+        SqliteConnectionFactory connectionFactory,
+        CancellationToken token)
+    {
+        if (!context.Items.TryGetValue(DashboardSessionStore.DashboardUserIdItemKey, out var value) || value is not long userId)
+            return [1];
+
+        var accounts = new List<long>();
+        await using var connection = await connectionFactory.OpenConnectionAsync(token);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT account_id
+            FROM dashboard_user_accounts
+            WHERE dashboard_user_id = $dashboardUserId
+            ORDER BY is_default DESC, account_id
+            """;
+        command.Parameters.AddWithValue("$dashboardUserId", userId);
+        await using var reader = await command.ExecuteReaderAsync(token);
+        while (await reader.ReadAsync(token))
+            accounts.Add(reader.GetInt64(0));
+        return accounts.Count == 0 ? [1] : accounts;
+    }
+
+    private static async Task<RawInventoryReportJson?> GetLatestRawJsonAsync(
+        InventoryReportStore store,
+        IReadOnlyList<long> accountIds,
+        CancellationToken token)
+    {
+        var latest = await store.GetLatestAsync(accountIds, null, token);
+        return latest == null ? null : await GetRawJsonAsync(store, accountIds, latest.Id, token);
+    }
+
+    private static async Task<RawInventoryReportJson?> GetRawJsonAsync(
+        InventoryReportStore store,
+        IReadOnlyList<long> accountIds,
+        string id,
+        CancellationToken token)
+    {
+        foreach (var accountId in accountIds)
+        {
+            var report = await store.GetRawJsonAsync(accountId, id, token);
+            if (report != null)
+                return report;
+        }
+        return null;
+    }
+
+    private static async Task<bool> DeleteAsync(
+        InventoryReportStore store,
+        IReadOnlyList<long> accountIds,
+        string id,
+        CancellationToken token)
+    {
+        foreach (var accountId in accountIds)
+        {
+            if (await store.DeleteAsync(accountId, id, token))
+                return true;
+        }
+        return false;
+    }
+
+    private static async Task<int> DeleteAllAsync(
+        InventoryReportStore store,
+        IReadOnlyList<long> accountIds,
+        CancellationToken token)
+    {
+        var deleted = 0;
+        foreach (var accountId in accountIds)
+            deleted += await store.DeleteAllAsync(accountId, token);
+        return deleted;
+    }
 
     private static string RenderReportDetails(StoredInventoryReport stored, InventorySnapshotView view, PathString pathBase)
     {

@@ -98,13 +98,14 @@ public sealed class DashboardApiClientTests
 
         await client.GetInventoryBrowserAsync(
             null,
+            "snapshot 1",
             "quantity darksteel",
             "all",
             InventoryBrowserMode.Items,
             caretPosition: 8);
 
         Assert.Equal(
-            "https://dashboard.test/api/inventory/browser?filter=quantity darksteel&scope=all&caret=8&mode=Items",
+            "https://dashboard.test/api/inventory/browser?snapshotId=snapshot 1&filter=quantity darksteel&scope=all&caret=8&mode=Items",
             handler.LastRequest?.RequestUri?.ToString());
     }
 

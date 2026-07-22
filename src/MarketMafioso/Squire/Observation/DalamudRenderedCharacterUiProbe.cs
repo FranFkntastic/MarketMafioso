@@ -1013,7 +1013,8 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
     public unsafe RenderedArmouryDifferentialProgress AdvanceArmouryDifferential()
     {
         var current = armouryDifferential.Current;
-        if (current is null || armouryNameResolver is null)
+        var nameResolver = armouryNameResolver;
+        if (current is null || nameResolver is null)
             return armouryDifferential.Snapshot();
 
         var surface = SurfaceFor(current.Value.Container);
@@ -1045,7 +1046,7 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
             var slotNode = ResolveArmourySlotNode(addon, (short)current.Value.SlotIndex);
             if (slotNode == null)
                 return FailArmouryDifferential($"Rendered armoury slot {current.Value.SlotIndex} on {current.Value.Container} does not resolve.");
-            return AdvanceArmourySlotDifferential(addon, current.Value, slotNode, ArmouryTooltipTypeOrId(inventoryType));
+            return AdvanceArmourySlotDifferential(addon, current.Value, slotNode, ArmouryTooltipTypeOrId(inventoryType), nameResolver);
         }
 
         if (surface == DifferentialSurface.InventoryBuddy && !SelectInventoryBuddyTab((AddonInventoryBuddy*)addon, current.Value.Container))
@@ -1057,7 +1058,8 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
         AtkUnitBase* addon,
         (string Container, int SlotIndex, uint ItemId, bool IsHighQuality) current,
         AtkResNode* slotNode,
-        uint typeOrId)
+        uint typeOrId,
+        Func<string, RenderedItemDetailObservation, uint?> nameResolver)
     {
         if (armouryCandidateSignature is null)
         {
@@ -1094,7 +1096,7 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
         string signature;
         if (observation.Status == RenderedItemDetailStatus.Complete)
         {
-            var resolvedId = armouryNameResolver(observation.Name!, observation);
+            var resolvedId = nameResolver(observation.Name!, observation);
             signature = resolvedId is null
                 ? $"unresolved:{observation.Name}"
                 : $"resolved:{resolvedId}:{observation.Quality}";
@@ -1113,7 +1115,7 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
             return armouryDifferential.Snapshot();
 
         var renderedId = observation.Status == RenderedItemDetailStatus.Complete
-            ? armouryNameResolver(observation.Name!, observation)
+            ? nameResolver(observation.Name!, observation)
             : null;
         var result = RecordDifferentialObservation(
             current,

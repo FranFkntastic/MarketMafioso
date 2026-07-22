@@ -9,20 +9,17 @@ namespace MarketMafioso.Windows.WorkshopLogistics;
 internal sealed class WorkshopAssemblyPanel
 {
     private readonly WorkshopAssemblyRunner workshopAssemblyRunner;
-    private readonly WorkshopRetainerRestockService workshopRetainerRestock;
     private readonly Func<string> getWorkshopStatus;
     private readonly Action<string> setWorkshopStatus;
     private readonly Action<bool> startWorkshopAssembly;
 
     public WorkshopAssemblyPanel(
         WorkshopAssemblyRunner workshopAssemblyRunner,
-        WorkshopRetainerRestockService workshopRetainerRestock,
         Func<string> getWorkshopStatus,
         Action<string> setWorkshopStatus,
         Action<bool> startWorkshopAssembly)
     {
         this.workshopAssemblyRunner = workshopAssemblyRunner ?? throw new ArgumentNullException(nameof(workshopAssemblyRunner));
-        this.workshopRetainerRestock = workshopRetainerRestock ?? throw new ArgumentNullException(nameof(workshopRetainerRestock));
         this.getWorkshopStatus = getWorkshopStatus ?? throw new ArgumentNullException(nameof(getWorkshopStatus));
         this.setWorkshopStatus = setWorkshopStatus ?? throw new ArgumentNullException(nameof(setWorkshopStatus));
         this.startWorkshopAssembly = startWorkshopAssembly ?? throw new ArgumentNullException(nameof(startWorkshopAssembly));
@@ -39,7 +36,6 @@ internal sealed class WorkshopAssemblyPanel
 
         var workshopStatus = getWorkshopStatus();
         ImGui.TextColored(GetWorkshopStatusColor(workshopStatus), workshopStatus);
-        ImGui.TextColored(workshopRetainerRestock.IsRunning ? MarketMafiosoUiTheme.Header : MarketMafiosoUiTheme.Muted, workshopRetainerRestock.LastStatus);
 
         var progress = workshopAssemblyRunner.Progress;
         ImGui.TextColored(workshopAssemblyRunner.HasActiveRun ? MarketMafiosoUiTheme.Header : MarketMafiosoUiTheme.Muted, progress.Message);

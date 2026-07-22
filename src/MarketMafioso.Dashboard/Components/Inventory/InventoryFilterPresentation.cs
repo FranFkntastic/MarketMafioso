@@ -27,6 +27,8 @@ public static class InventoryFilterPresentation
         "item.slot",
         "ownership.owned",
         "ownership.quantity",
+        "ownership.quality",
+        "ownership.location",
     };
 
     private static readonly HashSet<string> ListingFieldKeys = new(StringComparer.OrdinalIgnoreCase)
@@ -121,7 +123,19 @@ public static class InventoryFilterPresentation
     {
         var resolution = Catalog.Catalog.Resolve(text);
         if (resolution.Kind == FilterFieldResolutionKind.Success && resolution.Field is not null)
+        {
             keys.Add(resolution.Field.Key);
+            return;
+        }
+
+        if (resolution.Kind != FilterFieldResolutionKind.Ambiguous || resolution.Candidates.Count == 0)
+            return;
+
+        if (resolution.Candidates.All(candidate => InventoryFieldKeys.Contains(candidate.Key)) ||
+            resolution.Candidates.All(candidate => ListingFieldKeys.Contains(candidate.Key)))
+        {
+            keys.UnionWith(resolution.Candidates.Select(candidate => candidate.Key));
+        }
     }
 
     private static bool EndsWithKeyword(string value, string keyword) =>

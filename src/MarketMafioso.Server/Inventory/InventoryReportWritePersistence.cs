@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json;
 using MarketMafioso.Server.Sqlite;
 using Microsoft.Data.Sqlite;
 
@@ -47,7 +48,7 @@ internal sealed class InventoryReportWritePersistence(
             receivedAt,
             report,
             cancellationToken);
-        await InsertOwnerAsync(connection, transaction, accountId, id, "player", "Player Inventory", null, null, null, 0, report.PlayerInventory, [], cancellationToken);
+        await InsertOwnerAsync(connection, transaction, accountId, id, "player", "Player Inventory", null, null, null, null, null, report.PlayerStorage, 0, report.PlayerInventory, [], cancellationToken);
 
         for (var i = 0; i < report.Retainers.Count; i++)
         {
@@ -62,6 +63,9 @@ internal sealed class InventoryReportWritePersistence(
                 retainer.RetainerId,
                 retainer.LastUpdated,
                 retainer.Gil,
+                retainer.GilObservedAtUtc,
+                retainer.ListingsObservedAtUtc,
+                retainer.Storage,
                 i + 1,
                 retainer.Bags,
                 retainer.MarketListings,
@@ -226,6 +230,9 @@ internal sealed class InventoryReportWritePersistence(
         ulong? retainerId,
         string? lastUpdated,
         ulong? gil,
+        string? gilObservedAtUtc,
+        string? listingsObservedAtUtc,
+        StorageSourceEvidence storage,
         int sortOrder,
         IReadOnlyList<InventoryBag> bags,
         IReadOnlyList<RetainerMarketListing> marketListings,
@@ -234,8 +241,8 @@ internal sealed class InventoryReportWritePersistence(
         await using var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = """
-            INSERT INTO inventory_owners (snapshot_id, owner_type, owner_name, retainer_id, last_updated, gil, sort_order)
-            VALUES ($snapshotId, $ownerType, $ownerName, $retainerId, $lastUpdated, $gil, $sortOrder);
+            INSERT INTO inventory_owners (snapshot_id, owner_type, owner_name, retainer_id, last_updated, gil, gil_observed_at_utc, listings_observed_at_utc, requested_sources_json, observed_sources_json, sort_order)
+            VALUES ($snapshotId, $ownerType, $ownerName, $retainerId, $lastUpdated, $gil, $gilObservedAtUtc, $listingsObservedAtUtc, $requestedSources, $observedSources, $sortOrder);
             SELECT last_insert_rowid();
             """;
         command.Parameters.AddWithValue("$snapshotId", snapshotId);
@@ -244,6 +251,10 @@ internal sealed class InventoryReportWritePersistence(
         command.Parameters.AddWithValue("$retainerId", retainerId == null ? DBNull.Value : checked((long)retainerId.Value));
         command.Parameters.AddWithValue("$lastUpdated", string.IsNullOrWhiteSpace(lastUpdated) ? DBNull.Value : lastUpdated);
         command.Parameters.AddWithValue("$gil", gil == null ? DBNull.Value : checked((long)gil.Value));
+        command.Parameters.AddWithValue("$gilObservedAtUtc", string.IsNullOrWhiteSpace(gilObservedAtUtc) ? DBNull.Value : gilObservedAtUtc);
+        command.Parameters.AddWithValue("$listingsObservedAtUtc", string.IsNullOrWhiteSpace(listingsObservedAtUtc) ? DBNull.Value : listingsObservedAtUtc);
+        command.Parameters.AddWithValue("$requestedSources", JsonSerializer.Serialize(storage?.RequestedSources ?? []));
+        command.Parameters.AddWithValue("$observedSources", JsonSerializer.Serialize(storage?.ObservedSources ?? []));
         command.Parameters.AddWithValue("$sortOrder", sortOrder);
         var ownerId = (long)(await command.ExecuteScalarAsync(cancellationToken))!;
 
@@ -266,13 +277,14 @@ internal sealed class InventoryReportWritePersistence(
         await using var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = """
-            INSERT INTO inventory_bags (owner_id, bag_name, location, sort_order)
-            VALUES ($ownerId, $bagName, $location, $sortOrder);
+            INSERT INTO inventory_bags (owner_id, bag_name, location, observed_at_utc, sort_order)
+            VALUES ($ownerId, $bagName, $location, $observedAtUtc, $sortOrder);
             SELECT last_insert_rowid();
             """;
         command.Parameters.AddWithValue("$ownerId", ownerId);
         command.Parameters.AddWithValue("$bagName", bag.BagName);
         command.Parameters.AddWithValue("$location", (object?)bag.Location ?? DBNull.Value);
+        command.Parameters.AddWithValue("$observedAtUtc", (object?)bag.ObservedAtUtc ?? DBNull.Value);
         command.Parameters.AddWithValue("$sortOrder", sortOrder);
         var bagId = (long)(await command.ExecuteScalarAsync(cancellationToken))!;
 
