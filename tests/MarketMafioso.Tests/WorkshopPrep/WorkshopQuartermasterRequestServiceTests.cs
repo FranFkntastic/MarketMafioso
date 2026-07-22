@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using MarketMafioso.Quartermaster;
 using MarketMafioso.Tests.Quartermaster;
@@ -17,6 +19,7 @@ public sealed class WorkshopQuartermasterRequestServiceTests
                 schema = QuartermasterIpcClient.CapabilitiesSchema,
                 providerInstanceId = "provider-a",
                 revision = 7,
+                capabilities = new[] { QuartermasterIpcClient.AutomaticRetrievalCapability },
             }),
         };
         using var client = new QuartermasterIpcClient(adapter);
@@ -60,6 +63,8 @@ public sealed class WorkshopQuartermasterRequestServiceTests
         Assert.Equal(first.RootElement.GetProperty("requestId").GetString(), second.RootElement.GetProperty("requestId").GetString());
         Assert.Equal(first.RootElement.GetProperty("operationId").GetString(), second.RootElement.GetProperty("operationId").GetString());
         Assert.Equal(first.RootElement.GetProperty("submittedAtUtc").GetString(), second.RootElement.GetProperty("submittedAtUtc").GetString());
+        Assert.True(first.RootElement.GetProperty("executeImmediately").GetBoolean());
+        Assert.True(second.RootElement.GetProperty("executeImmediately").GetBoolean());
         Assert.Equal(100UL, first.RootElement.GetProperty("owner").GetProperty("localContentId").GetUInt64());
         Assert.Equal(40U, first.RootElement.GetProperty("owner").GetProperty("homeWorldId").GetUInt32());
         Assert.Equal("Wei Ning", first.RootElement.GetProperty("owner").GetProperty("characterName").GetString());
@@ -68,9 +73,67 @@ public sealed class WorkshopQuartermasterRequestServiceTests
         Assert.Equal("Elm Lumber", target.GetProperty("itemName").GetString());
         Assert.Equal(50, target.GetProperty("targetQuantity").GetInt32());
         Assert.Equal(30, target.GetProperty("shortageQuantity").GetInt32());
+        Assert.Equal(
+            Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes("100|40|1|100:Elm Lumber:50:30"))),
+            config.QuartermasterWorkshopRequests["100:40"].Signature);
         Assert.Equal(3, saveCount);
         Assert.Equal("running", config.QuartermasterWorkshopRequests["100:40"].Status);
         Assert.Equal(8, config.QuartermasterWorkshopRequests["100:40"].Revision);
+        Assert.Equal("Immediate Quartermaster retrieval requested. Waiting for terminal operation status.", service.LastStatus);
+    }
+
+    [Fact]
+    public void Submit_WhenAutomaticRetrievalBecomesAvailable_ReplacesReviewOnlyIdentity()
+    {
+        var adapter = new FakeQuartermasterIpcAdapter
+        {
+            CapabilitiesJson = JsonSerializer.Serialize(new
+            {
+                schema = QuartermasterIpcClient.CapabilitiesSchema,
+                providerInstanceId = "provider-a",
+                revision = 7,
+            }),
+        };
+        adapter.SubmitResponse = requestJson =>
+        {
+            using var request = JsonDocument.Parse(requestJson);
+            return JsonSerializer.Serialize(new
+            {
+                schema = QuartermasterIpcClient.AcknowledgementSchema,
+                requestId = request.RootElement.GetProperty("requestId").GetString(),
+                operationId = request.RootElement.GetProperty("operationId").GetString(),
+                providerInstanceId = "provider-a",
+                revision = 7,
+                status = "accepted",
+            });
+        };
+        var config = new Configuration();
+        using var client = new QuartermasterIpcClient(adapter);
+        using var service = new WorkshopQuartermasterRequestService(config, client, () => { });
+        var owner = new QuartermasterOwnerScope(100, 40, "Wei Ning", "Maduin");
+        var availability = new[] { new WorkshopMaterialAvailability(100, "Elm Lumber", 1, 50, 20, 25, 30, 5, []) };
+
+        Assert.True(service.Submit(owner, availability));
+
+        using var submitted = JsonDocument.Parse(Assert.Single(adapter.SubmittedRequests));
+        Assert.False(submitted.RootElement.TryGetProperty("executeImmediately", out _));
+        Assert.False(service.LastAcknowledgement!.ExecuteImmediately);
+        Assert.Equal("Quartermaster accepted shortages for review; automatic retrieval is unavailable.", service.LastStatus);
+
+        adapter.CapabilitiesJson = JsonSerializer.Serialize(new
+        {
+            schema = QuartermasterIpcClient.CapabilitiesSchema,
+            providerInstanceId = "provider-a",
+            revision = 8,
+            capabilities = new[] { QuartermasterIpcClient.AutomaticRetrievalCapability },
+        });
+        Assert.True(service.Submit(owner, availability));
+
+        using var automatic = JsonDocument.Parse(adapter.SubmittedRequests[1]);
+        Assert.NotEqual(submitted.RootElement.GetProperty("requestId").GetString(), automatic.RootElement.GetProperty("requestId").GetString());
+        Assert.NotEqual(submitted.RootElement.GetProperty("operationId").GetString(), automatic.RootElement.GetProperty("operationId").GetString());
+        Assert.True(automatic.RootElement.GetProperty("executeImmediately").GetBoolean());
+        Assert.True(service.LastAcknowledgement!.ExecuteImmediately);
     }
 
     [Fact]
@@ -177,6 +240,7 @@ public sealed class WorkshopQuartermasterRequestServiceTests
                 schema = QuartermasterIpcClient.CapabilitiesSchema,
                 providerInstanceId = "provider-a",
                 revision = 7,
+                capabilities = new[] { QuartermasterIpcClient.AutomaticRetrievalCapability },
             }),
             SubmitResponse = _ => throw new IOException("IPC response lost"),
         };
@@ -188,6 +252,8 @@ public sealed class WorkshopQuartermasterRequestServiceTests
         Assert.False(service.Submit(
             owner,
             [new WorkshopMaterialAvailability(100, "Elm Lumber", 1, 50, 20, 25, 30, 5, [])]));
+        using var submitted = JsonDocument.Parse(Assert.Single(adapter.SubmittedRequests));
+        Assert.True(submitted.RootElement.GetProperty("executeImmediately").GetBoolean());
         var persisted = config.QuartermasterWorkshopRequests["100:40"];
         var requestId = persisted.RequestId;
         var operationId = persisted.OperationId;
@@ -264,6 +330,68 @@ public sealed class WorkshopQuartermasterRequestServiceTests
 
         Assert.True(submitted);
         Assert.Null(service.LastOperation);
+    }
+
+    [Fact]
+    public void Submit_ReplacesLegacyNonterminalReviewRequestForAutomaticRetrieval()
+    {
+        var adapter = new FakeQuartermasterIpcAdapter
+        {
+            CapabilitiesJson = JsonSerializer.Serialize(new
+            {
+                schema = QuartermasterIpcClient.CapabilitiesSchema,
+                providerInstanceId = "provider-a",
+                revision = 7,
+                capabilities = new[] { QuartermasterIpcClient.AutomaticRetrievalCapability },
+            }),
+        };
+        adapter.SubmitResponse = requestJson =>
+        {
+            using var request = JsonDocument.Parse(requestJson);
+            return JsonSerializer.Serialize(new
+            {
+                schema = QuartermasterIpcClient.AcknowledgementSchema,
+                requestId = request.RootElement.GetProperty("requestId").GetString(),
+                operationId = request.RootElement.GetProperty("operationId").GetString(),
+                providerInstanceId = "provider-a",
+                revision = 7,
+                status = "accepted",
+            });
+        };
+        var config = new Configuration();
+        config.QuartermasterWorkshopRequests["100:40"] = new QuartermasterWorkshopRequestState
+        {
+            LocalContentId = 100,
+            HomeWorldId = 40,
+            CharacterName = "Wei Ning",
+            HomeWorldName = "Maduin",
+            Signature = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes("100|40|100:Elm Lumber:50:30"))),
+            RequestId = "legacy-request",
+            OperationId = "legacy-operation",
+            SubmittedAtUtc = new DateTime(2026, 7, 21, 11, 0, 0, DateTimeKind.Utc),
+            Status = "accepted",
+        };
+        var saveCount = 0;
+        using var client = new QuartermasterIpcClient(adapter);
+        using var service = new WorkshopQuartermasterRequestService(
+            config,
+            client,
+            () => saveCount++,
+            () => new DateTimeOffset(2026, 7, 21, 12, 0, 0, TimeSpan.Zero));
+        var owner = new QuartermasterOwnerScope(100, 40, "Wei Ning", "Maduin");
+
+        Assert.True(service.Submit(
+            owner,
+            [new WorkshopMaterialAvailability(100, "Elm Lumber", 1, 50, 20, 25, 30, 5, [])]));
+
+        using var submitted = JsonDocument.Parse(Assert.Single(adapter.SubmittedRequests));
+        Assert.NotEqual("legacy-request", submitted.RootElement.GetProperty("requestId").GetString());
+        Assert.NotEqual("legacy-operation", submitted.RootElement.GetProperty("operationId").GetString());
+        Assert.True(submitted.RootElement.GetProperty("executeImmediately").GetBoolean());
+        Assert.Equal(
+            Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes("100|40|1|100:Elm Lumber:50:30"))),
+            config.QuartermasterWorkshopRequests["100:40"].Signature);
+        Assert.Equal(2, saveCount);
     }
 
     [Fact]

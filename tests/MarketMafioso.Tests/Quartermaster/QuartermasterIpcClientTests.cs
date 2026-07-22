@@ -177,12 +177,93 @@ public sealed class QuartermasterIpcClientTests
             "operation-1",
             DateTimeOffset.UtcNow,
             new QuartermasterOwner(100, 40, "Wei Ning", "Maduin"),
+            true,
             [new QuartermasterShortageTarget(100, "Elm Lumber", 50, 30)]);
 
         Assert.False(client.TrySubmitShortages(request, out var acknowledgement, out var error));
 
         Assert.Null(acknowledgement);
         Assert.Contains("schema", error, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Submit_SerializesImmediateExecutionAuthorization()
+    {
+        var adapter = ReadyAdapter("provider-a", 1, SnapshotJson("provider-a", 1, "First"));
+        adapter.CapabilitiesJson = CapabilitiesJson(
+            "provider-a",
+            1,
+            QuartermasterIpcClient.AutomaticRetrievalCapability);
+        adapter.SubmitResponse = requestJson =>
+        {
+            using var request = JsonDocument.Parse(requestJson);
+            return JsonSerializer.Serialize(new
+            {
+                schema = QuartermasterIpcClient.AcknowledgementSchema,
+                requestId = request.RootElement.GetProperty("requestId").GetString(),
+                operationId = request.RootElement.GetProperty("operationId").GetString(),
+                status = "accepted",
+            });
+        };
+        using var client = new QuartermasterIpcClient(adapter);
+        var request = new QuartermasterShortageRequest(
+            "request-1",
+            "operation-1",
+            DateTimeOffset.UtcNow,
+            new QuartermasterOwner(100, 40, "Wei Ning", "Maduin"),
+            true,
+            [new QuartermasterShortageTarget(100, "Elm Lumber", 50, 30)]);
+
+        Assert.True(client.TrySubmitShortages(request, out _, out var error), error);
+
+        using var submitted = JsonDocument.Parse(Assert.Single(adapter.SubmittedRequests));
+        Assert.True(submitted.RootElement.GetProperty("executeImmediately").GetBoolean());
+    }
+
+    [Fact]
+    public void Submit_WhenAutomaticRetrievalIsNotAdvertised_OmitsAuthorizationField()
+    {
+        var adapter = ReadyAdapter("provider-a", 1, SnapshotJson("provider-a", 1, "First"));
+        adapter.SubmitResponse = requestJson =>
+        {
+            using var request = JsonDocument.Parse(requestJson);
+            return JsonSerializer.Serialize(new
+            {
+                schema = QuartermasterIpcClient.AcknowledgementSchema,
+                requestId = request.RootElement.GetProperty("requestId").GetString(),
+                operationId = request.RootElement.GetProperty("operationId").GetString(),
+                status = "accepted",
+            });
+        };
+        using var client = new QuartermasterIpcClient(adapter);
+        var request = new QuartermasterShortageRequest(
+            "request-1",
+            "operation-1",
+            DateTimeOffset.UtcNow,
+            new QuartermasterOwner(100, 40, "Wei Ning", "Maduin"),
+            true,
+            [new QuartermasterShortageTarget(100, "Elm Lumber", 50, 30)]);
+
+        Assert.True(client.TrySubmitShortages(request, out var acknowledgement, out var error), error);
+
+        using var submitted = JsonDocument.Parse(Assert.Single(adapter.SubmittedRequests));
+        Assert.False(submitted.RootElement.TryGetProperty("executeImmediately", out _));
+        Assert.False(acknowledgement!.ExecuteImmediately);
+    }
+
+    [Fact]
+    public void GetCapabilities_StoresAdvertisedCapabilities()
+    {
+        var adapter = ReadyAdapter("provider-a", 1, SnapshotJson("provider-a", 1, "First"));
+        adapter.CapabilitiesJson = CapabilitiesJson(
+            "provider-a",
+            1,
+            QuartermasterIpcClient.AutomaticRetrievalCapability);
+        using var client = new QuartermasterIpcClient(adapter);
+
+        Assert.True(client.TryGetCapabilities(out var capabilities, out var error), error);
+
+        Assert.Equal([QuartermasterIpcClient.AutomaticRetrievalCapability], capabilities!.Capabilities.ToArray());
     }
 
     [Fact]
@@ -228,6 +309,15 @@ public sealed class QuartermasterIpcClientTests
         providerInstanceId = provider,
         revision,
         generatedAtUtc = "2026-07-21T12:00:00Z",
+    });
+
+    private static string CapabilitiesJson(string provider, long revision, params string[] capabilities) => JsonSerializer.Serialize(new
+    {
+        schema = QuartermasterIpcClient.CapabilitiesSchema,
+        providerInstanceId = provider,
+        revision,
+        generatedAtUtc = "2026-07-21T12:00:00Z",
+        capabilities,
     });
 
     internal static string SnapshotJson(string provider, long revision, string retainerName) => JsonSerializer.Serialize(new

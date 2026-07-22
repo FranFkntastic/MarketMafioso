@@ -67,6 +67,7 @@ public sealed class QuartermasterIpcClient : IDisposable
     public const string AcknowledgementSchema = "gooseworks-quartermaster-shortages-acknowledgement/v1";
     public const string OperationSchema = "gooseworks-quartermaster-operation/v1";
     public const string ChangedSchema = "gooseworks-quartermaster-changed/v1";
+    public const string AutomaticRetrievalCapability = "automaticRetrieval";
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -299,7 +300,10 @@ public sealed class QuartermasterIpcClient : IDisposable
         if (!available)
             return FailUnavailable("Quartermaster does not expose shortage submission v1.", out error);
 
-        var requestJson = JsonSerializer.Serialize(ToWire(request, capabilities!.ProviderInstanceId), JsonOptions);
+        var currentCapabilities = capabilities!;
+        var executeImmediately = request.ExecuteImmediately &&
+                                 currentCapabilities.Capabilities.Contains(AutomaticRetrievalCapability, StringComparer.Ordinal);
+        var requestJson = JsonSerializer.Serialize(ToWire(request, currentCapabilities.ProviderInstanceId, executeImmediately), JsonOptions);
         string acknowledgementJson;
         try
         {
@@ -318,7 +322,7 @@ public sealed class QuartermasterIpcClient : IDisposable
             return false;
         }
         if (!string.IsNullOrWhiteSpace(acknowledgement!.ProviderInstanceId) &&
-            !string.Equals(acknowledgement.ProviderInstanceId, capabilities!.ProviderInstanceId, StringComparison.Ordinal))
+            !string.Equals(acknowledgement.ProviderInstanceId, currentCapabilities.ProviderInstanceId, StringComparison.Ordinal))
         {
             error = "Quartermaster provider changed during shortage submission; acceptance is unknown.";
             SetStatus(error);
@@ -326,9 +330,15 @@ public sealed class QuartermasterIpcClient : IDisposable
             return false;
         }
 
+        acknowledgement = acknowledgement with { ExecuteImmediately = executeImmediately };
+
         SetStatus(acknowledgement.Accepted
-            ? $"Quartermaster request {acknowledgement.RequestId} accepted as operation {acknowledgement.OperationId}."
-            : $"Quartermaster rejected request {acknowledgement.RequestId}: {acknowledgement.Message ?? acknowledgement.Status}");
+            ? acknowledgement.ExecuteImmediately
+                ? $"Quartermaster immediate retrieval requested as operation {acknowledgement.OperationId}."
+                : $"Quartermaster request {acknowledgement.RequestId} accepted as operation {acknowledgement.OperationId}."
+            : acknowledgement.ExecuteImmediately
+                ? $"Quartermaster rejected immediate retrieval: {acknowledgement.Message ?? acknowledgement.Status}"
+                : $"Quartermaster rejected request {acknowledgement.RequestId}: {acknowledgement.Message ?? acknowledgement.Status}");
         return true;
     }
 
@@ -532,7 +542,10 @@ public sealed class QuartermasterIpcClient : IDisposable
             generatedAt = parsed;
         }
 
-        capabilities = new(wire.ProviderInstanceId, wire.Revision, generatedAt);
+        capabilities = new(wire.ProviderInstanceId, wire.Revision, generatedAt)
+        {
+            Capabilities = NormalizeStrings(wire.Capabilities),
+        };
         return true;
     }
 
@@ -655,8 +668,10 @@ public sealed class QuartermasterIpcClient : IDisposable
         return true;
     }
 
-    private static ImmutableArray<string> NormalizeSources(IEnumerable<string>? sources) =>
-        (sources ?? []).Where(source => !string.IsNullOrWhiteSpace(source)).Distinct(StringComparer.Ordinal).OrderBy(source => source, StringComparer.Ordinal).ToImmutableArray();
+    private static ImmutableArray<string> NormalizeSources(IEnumerable<string>? sources) => NormalizeStrings(sources);
+
+    private static ImmutableArray<string> NormalizeStrings(IEnumerable<string>? values) =>
+        (values ?? []).Where(value => !string.IsNullOrWhiteSpace(value)).Distinct(StringComparer.Ordinal).OrderBy(value => value, StringComparer.Ordinal).ToImmutableArray();
 
     private static bool TryParseAcknowledgement(
         string json,
@@ -835,7 +850,10 @@ public sealed class QuartermasterIpcClient : IDisposable
         return true;
     }
 
-    private static QuartermasterShortageRequestWire ToWire(QuartermasterShortageRequest request, string providerInstanceId) => new()
+    private static QuartermasterShortageRequestWire ToWire(
+        QuartermasterShortageRequest request,
+        string providerInstanceId,
+        bool executeImmediately) => new()
     {
         Schema = ShortageRequestSchema,
         ProviderInstanceId = providerInstanceId,
@@ -849,6 +867,7 @@ public sealed class QuartermasterIpcClient : IDisposable
             CharacterName = request.Owner.CharacterName,
             HomeWorldName = request.Owner.HomeWorldName,
         },
+        ExecuteImmediately = executeImmediately ? true : null,
         Items = request.Items.Select(item => new QuartermasterShortageTargetWire
         {
             ItemId = item.ItemId,

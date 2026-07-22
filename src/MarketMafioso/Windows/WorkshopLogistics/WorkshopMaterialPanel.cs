@@ -112,7 +112,7 @@ internal sealed class WorkshopMaterialPanel
         var canRequest = quartermaster.HasCachedSnapshot &&
                          availability.Any(item => item.Shortage > 0) &&
                          getOwnerScope().IsAvailable;
-        if (ImGuiUi.PrimaryButton("Request From Quartermaster", canRequest))
+        if (ImGuiUi.PrimaryButton("Retrieve From Quartermaster Now", canRequest))
             requestService.Submit(getOwnerScope(), availability);
     }
 

@@ -8,7 +8,10 @@ namespace MarketMafioso.Quartermaster;
 public sealed record QuartermasterCapabilities(
     string ProviderInstanceId,
     long Revision,
-    DateTimeOffset? GeneratedAtUtc);
+    DateTimeOffset? GeneratedAtUtc)
+{
+    public ImmutableArray<string> Capabilities { get; init; } = [];
+}
 
 public sealed record QuartermasterOwner(
     ulong LocalContentId,
@@ -99,6 +102,7 @@ public sealed record QuartermasterShortageRequest(
     string OperationId,
     DateTimeOffset SubmittedAtUtc,
     QuartermasterOwner Owner,
+    bool ExecuteImmediately,
     ImmutableArray<QuartermasterShortageTarget> Items);
 
 public sealed record QuartermasterAcknowledgement(
@@ -108,7 +112,10 @@ public sealed record QuartermasterAcknowledgement(
     long? Revision,
     bool Accepted,
     string Status,
-    string? Message);
+    string? Message)
+{
+    public bool ExecuteImmediately { get; init; }
+}
 
 public sealed record QuartermasterOperationStatus(
     string OperationId,
@@ -153,6 +160,7 @@ internal sealed class QuartermasterCapabilitiesWire
     public string? ProviderInstanceId { get; init; }
     public long Revision { get; init; }
     public string? GeneratedAtUtc { get; init; }
+    public List<string>? Capabilities { get; init; }
 }
 
 internal sealed class QuartermasterSnapshotWire
@@ -243,6 +251,7 @@ internal sealed class QuartermasterShortageRequestWire
     public string OperationId { get; init; } = string.Empty;
     public string SubmittedAtUtc { get; init; } = string.Empty;
     public QuartermasterOwnerWire Owner { get; init; } = new();
+    public bool? ExecuteImmediately { get; init; }
     public List<QuartermasterShortageTargetWire> Items { get; init; } = [];
 }
 

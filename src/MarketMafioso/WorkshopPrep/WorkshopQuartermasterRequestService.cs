@@ -32,7 +32,7 @@ public sealed class WorkshopQuartermasterRequestService : IDisposable
         client.Changed += OnQuartermasterChanged;
     }
 
-    public string LastStatus { get; private set; } = "No Quartermaster workshop request submitted.";
+    public string LastStatus { get; private set; } = "No Quartermaster retrieval started.";
     public QuartermasterAcknowledgement? LastAcknowledgement { get; private set; }
     public QuartermasterOperationStatus? LastOperation { get; private set; }
 
@@ -42,12 +42,12 @@ public sealed class WorkshopQuartermasterRequestService : IDisposable
         ArgumentNullException.ThrowIfNull(availability);
         if (!ownerScope.IsAvailable || string.IsNullOrWhiteSpace(ownerScope.CharacterName))
         {
-            LastStatus = "Quartermaster request requires current character and home-world identity.";
+            LastStatus = "Quartermaster retrieval requires current character and home-world identity.";
             return false;
         }
         if (availability.Any(item => item.Shortage > 0 && (item.ItemId == 0 || string.IsNullOrWhiteSpace(item.ItemName))))
         {
-            LastStatus = "Quartermaster request requires a resolved item name and stable internal ID for every shortage.";
+            LastStatus = "Quartermaster retrieval requires a resolved item name and stable internal ID for every shortage.";
             return false;
         }
 
@@ -63,23 +63,34 @@ public sealed class WorkshopQuartermasterRequestService : IDisposable
             .ToImmutableArray();
         if (items.IsDefaultOrEmpty)
         {
-            LastStatus = "No workshop shortages need a Quartermaster request.";
+            LastStatus = "No workshop shortages need retrieval from Quartermaster.";
             return false;
         }
 
         var key = ScopeKey(ownerScope);
-        var signature = BuildSignature(ownerScope, items);
+        var automaticRetrievalAvailable = client.TryGetCapabilities(out var capabilities, out _) &&
+                                          capabilities!.Capabilities.Contains(QuartermasterIpcClient.AutomaticRetrievalCapability, StringComparer.Ordinal);
+        var signature = BuildSignature(ownerScope, items, automaticRetrievalAvailable);
+        var reviewSignature = BuildSignature(ownerScope, items, false);
+        var legacySignature = BuildSignature(ownerScope, items, null);
         config.QuartermasterWorkshopRequests.TryGetValue(key, out var persisted);
         var hasPersistedIdentity = persisted is not null &&
                                    !string.IsNullOrWhiteSpace(persisted.RequestId) &&
                                    !string.IsNullOrWhiteSpace(persisted.OperationId) &&
                                    persisted.SubmittedAtUtc != default;
         var replayingPersistedRequest = hasPersistedIdentity &&
-                                        !IsTerminalStatus(persisted!.Status) &&
-                                        string.Equals(persisted.Signature, signature, StringComparison.Ordinal);
+                                         !IsTerminalStatus(persisted!.Status) &&
+                                         (string.Equals(persisted.Signature, signature, StringComparison.Ordinal) ||
+                                          (!automaticRetrievalAvailable && string.Equals(persisted.Signature, legacySignature, StringComparison.Ordinal)));
+        var replacingReviewRequest = hasPersistedIdentity &&
+                                     !IsTerminalStatus(persisted!.Status) &&
+                                     automaticRetrievalAvailable &&
+                                     (string.Equals(persisted.Signature, reviewSignature, StringComparison.Ordinal) ||
+                                      string.Equals(persisted.Signature, legacySignature, StringComparison.Ordinal));
         if (hasPersistedIdentity &&
             !IsTerminalStatus(persisted!.Status) &&
-            !string.Equals(persisted.Signature, signature, StringComparison.Ordinal))
+            !replacingReviewRequest &&
+            !replayingPersistedRequest)
         {
             var operationStatus = string.IsNullOrWhiteSpace(persisted.Status)
                 ? "in an uncertain state"
@@ -87,9 +98,7 @@ public sealed class WorkshopQuartermasterRequestService : IDisposable
             LastStatus = $"Quartermaster operation {persisted.OperationId} is {operationStatus}; wait for terminal status before replacing its shortages.";
             return false;
         }
-        var needsIdentity = !hasPersistedIdentity ||
-                            !string.Equals(persisted!.Signature, signature, StringComparison.Ordinal) ||
-                            IsTerminalStatus(persisted.Status);
+        var needsIdentity = !hasPersistedIdentity || !replayingPersistedRequest || IsTerminalStatus(persisted!.Status);
         if (needsIdentity)
         {
             var candidate = new QuartermasterWorkshopRequestState
@@ -115,7 +124,7 @@ public sealed class WorkshopQuartermasterRequestService : IDisposable
                     config.QuartermasterWorkshopRequests.Remove(key);
                 else
                     config.QuartermasterWorkshopRequests[key] = persisted;
-                LastStatus = $"Unable to persist Quartermaster request identity; request was not sent. {ex.Message}";
+                LastStatus = $"Unable to persist Quartermaster retrieval identity; retrieval was not started. {ex.Message}";
                 return false;
             }
         }
@@ -129,6 +138,7 @@ public sealed class WorkshopQuartermasterRequestService : IDisposable
                 ownerScope.HomeWorldId!.Value,
                 ownerScope.CharacterName!,
                 ownerScope.HomeWorldName),
+            automaticRetrievalAvailable,
             items);
         if (!client.TrySubmitShortages(request, out var acknowledgement, out var error))
         {
@@ -137,6 +147,7 @@ public sealed class WorkshopQuartermasterRequestService : IDisposable
         }
 
         var acceptedState = Clone(persisted!);
+        acceptedState.Signature = BuildSignature(ownerScope, items, acknowledgement!.ExecuteImmediately);
         acceptedState.OperationId = acknowledgement!.OperationId;
         acceptedState.ProviderInstanceId = acknowledgement.ProviderInstanceId ?? persisted.ProviderInstanceId;
         acceptedState.Revision = replayingPersistedRequest
@@ -155,7 +166,9 @@ public sealed class WorkshopQuartermasterRequestService : IDisposable
         catch (Exception ex)
         {
             config.QuartermasterWorkshopRequests[key] = persisted!;
-            LastStatus = $"Quartermaster accepted request {acknowledgement.RequestId}, but MMF could not persist its operation receipt. {ex.Message}";
+            LastStatus = acknowledgement.ExecuteImmediately
+                ? $"Quartermaster received immediate retrieval request {acknowledgement.RequestId}, but MMF could not persist its operation receipt. {ex.Message}"
+                : $"Quartermaster received review request {acknowledgement.RequestId}, but MMF could not persist its operation receipt. {ex.Message}";
             return false;
         }
 
@@ -163,8 +176,12 @@ public sealed class WorkshopQuartermasterRequestService : IDisposable
         LastOperation = null;
         activeScopeKey = key;
         LastStatus = acknowledgement.Accepted
-            ? $"Quartermaster request accepted: {acknowledgement.Status}. {acknowledgement.Message}".TrimEnd()
-            : $"Quartermaster request rejected: {acknowledgement.Message ?? acknowledgement.Status}";
+            ? acknowledgement.ExecuteImmediately
+                ? "Immediate Quartermaster retrieval requested. Waiting for terminal operation status."
+                : "Quartermaster accepted shortages for review; automatic retrieval is unavailable."
+            : acknowledgement.ExecuteImmediately
+                ? $"Quartermaster did not start immediate retrieval: {acknowledgement.Message ?? acknowledgement.Status}"
+                : $"Quartermaster did not accept shortages for review: {acknowledgement.Message ?? acknowledgement.Status}";
         nextOperationPollAtUtc = DateTimeOffset.MinValue;
         return acknowledgement.Accepted;
     }
@@ -221,7 +238,7 @@ public sealed class WorkshopQuartermasterRequestService : IDisposable
 
         var operationStatus = operation.Status.Equals("not_found", StringComparison.OrdinalIgnoreCase)
             ? "Quartermaster no longer has this operation in current owner scope; submit shortages again if still needed."
-            : $"Quartermaster request {operation.Status}: {operation.Message}".TrimEnd();
+            : $"Quartermaster retrieval {operation.Status}: {operation.Message}".TrimEnd();
         var changed = !string.Equals(persisted.ProviderInstanceId, operation.ProviderInstanceId, StringComparison.Ordinal) ||
                       persisted.Revision != operation.Revision ||
                       !string.Equals(persisted.Status, operation.Status, StringComparison.Ordinal) ||
@@ -374,13 +391,19 @@ public sealed class WorkshopQuartermasterRequestService : IDisposable
     private static string ScopeKey(QuartermasterOwnerScope owner) =>
         $"{owner.LocalContentId!.Value.ToString(CultureInfo.InvariantCulture)}:{owner.HomeWorldId!.Value.ToString(CultureInfo.InvariantCulture)}";
 
-    private static string BuildSignature(QuartermasterOwnerScope owner, IEnumerable<QuartermasterShortageTarget> items)
+    private static string BuildSignature(
+        QuartermasterOwnerScope owner,
+        IEnumerable<QuartermasterShortageTarget> items,
+        bool? executeImmediately)
     {
-        var canonical = string.Join('|', new[]
+        IEnumerable<string> identity = new[]
         {
             owner.LocalContentId!.Value.ToString(CultureInfo.InvariantCulture),
             owner.HomeWorldId!.Value.ToString(CultureInfo.InvariantCulture),
-        }.Concat(items.Select(item =>
+        };
+        if (executeImmediately is not null)
+            identity = identity.Append(executeImmediately.Value ? "1" : "0");
+        var canonical = string.Join('|', identity.Concat(items.Select(item =>
             $"{item.ItemId.ToString(CultureInfo.InvariantCulture)}:{item.ItemName}:{item.TargetQuantity.ToString(CultureInfo.InvariantCulture)}:{item.ShortageQuantity.ToString(CultureInfo.InvariantCulture)}")));
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical)));
     }
