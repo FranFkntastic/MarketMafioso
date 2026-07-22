@@ -10,7 +10,6 @@ public sealed record CraftAppraisalDiagnosticsSnapshot
     public string WorkshopHostStatus { get; init; } = "Workshop Host quote API not checked.";
     public string CraftQuoteStatus { get; init; } = "No craft quote yet.";
     public string? LastCraftQuoteDiagnosticFilePath { get; init; }
-    public string? LastMarketDepthDiagnosticFilePath { get; init; }
     public string? LastQuoteItemName { get; init; }
     public uint LastQuoteItemId { get; init; }
     public bool LatestQuoteWasLastGood { get; init; }

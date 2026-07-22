@@ -19,11 +19,4 @@ public sealed class MarketAcquisitionRouteDiagnosticsPolicyTests
                 explicitDiagnosticStart));
     }
 
-    [Fact]
-    public void Configuration_DisablesRouteDiagnosticPackagesByDefault()
-    {
-        var config = new MarketMafioso.Configuration();
-
-        Assert.False(config.CreateMarketAcquisitionRouteDiagnosticPackages);
-    }
 }

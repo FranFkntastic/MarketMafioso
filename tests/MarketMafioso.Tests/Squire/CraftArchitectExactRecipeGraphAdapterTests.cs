@@ -109,35 +109,49 @@ public sealed class CraftArchitectExactRecipeGraphAdapterTests
     }
 
     [Fact]
-    public void Lumina_resolution_supplies_missing_unlock_evidence_without_overriding_garland()
+    public void Lumina_resolution_factory_supplies_valid_unlock_evidence_without_overriding_garland()
     {
-        var missing = Resolution(null);
-        var explicitGarland = Resolution(42);
-        var service = new LuminaCraftArchitectRecipeResolutionService(
-            new FixedRecipeResolutionService(missing),
-            new Dictionary<uint, int> { [500] = 0 });
-        var garlandService = new LuminaCraftArchitectRecipeResolutionService(
-            new FixedRecipeResolutionService(explicitGarland),
-            new Dictionary<uint, int> { [500] = 0 });
+        object[] rows =
+        [
+            new FakeRecipe(500, new FakeRowRef(0, null, false)),
+            new FakeRecipe(501, new FakeRowRef(
+                7,
+                new FakeSecretRecipeBook(new FakeRowRef(12_345, null, true)),
+                true)),
+        ];
+        var noBook = ResolveThroughFactory(500, null, rows);
+        var bookItem = ResolveThroughFactory(501, null, rows);
+        var explicitGarland = ResolveThroughFactory(500, 42, rows);
 
-        Assert.Equal(0, service.Resolve(null!, null).RecipeUnlockItemId);
-        Assert.Equal(42, garlandService.Resolve(null!, null).RecipeUnlockItemId);
+        Assert.Equal(0, noBook.RecipeUnlockItemId);
+        Assert.Equal(12_345, bookItem.RecipeUnlockItemId);
+        Assert.Equal(42, explicitGarland.RecipeUnlockItemId);
     }
 
     [Fact]
-    public void Lumina_resolution_reads_no_book_and_book_item_rows_fail_closed()
+    public void Lumina_resolution_factory_keeps_malformed_or_missing_references_unknown()
     {
-        Assert.True(LuminaCraftArchitectRecipeResolutionService.TryReadUnlockItemId(
-            new FakeRecipe(new FakeRowRef(0, new FakeSecretRecipeBook(new FakeRowRef(0, null)))),
-            out var noBook));
-        Assert.Equal(0, noBook);
+        object[] rows =
+        [
+            new FakeRecipeWithoutSecretBook(502),
+            new FakeRecipe(503, new FakeRowRef(7, null, false)),
+            new FakeRecipe(504, new FakeRowRef(7, null, true)),
+            new FakeRecipe(505, new FakeRowRef(
+                7,
+                new FakeSecretRecipeBook(new FakeRowRef(0, null, false)),
+                true)),
+            new FakeRecipe(506, new FakeRowRef(
+                7,
+                new FakeSecretRecipeBook(new FakeRowRef(12_345, null, false)),
+                true)),
+            new FakeRecipe(507, new FakeRowRef(
+                7,
+                new FakeSecretRecipeBookWithoutItem(),
+                true)),
+        ];
 
-        Assert.True(LuminaCraftArchitectRecipeResolutionService.TryReadUnlockItemId(
-            new FakeRecipe(new FakeRowRef(7, new FakeSecretRecipeBook(new FakeRowRef(12_345, null)))),
-            out var bookItem));
-        Assert.Equal(12_345, bookItem);
-
-        Assert.False(LuminaCraftArchitectRecipeResolutionService.TryReadUnlockItemId(new object(), out _));
+        foreach (var recipeId in new uint[] { 502, 503, 504, 505, 506, 507 })
+            Assert.Null(ResolveThroughFactory(recipeId, null, rows).RecipeUnlockItemId);
     }
 
     internal static CraftRecipeGraphResponseV1 Response(
@@ -217,11 +231,20 @@ public sealed class CraftArchitectExactRecipeGraphAdapterTests
         Message = "Test diagnostic.",
     };
 
-    private static RecipeResolutionResult Resolution(int? unlockItemId) => new(
+    private static RecipeResolutionResult ResolveThroughFactory(
+        uint recipeId,
+        int? garlandUnlockItemId,
+        IEnumerable<object> rows) =>
+        LuminaCraftArchitectRecipeResolutionService.Create(
+                new FixedRecipeResolutionService(Resolution(recipeId, garlandUnlockItemId)),
+                rows)
+            .Resolve(null!, null);
+
+    private static RecipeResolutionResult Resolution(uint recipeId, int? unlockItemId) => new(
         RecipeOperationKind.StandardCraft,
         RecipeResolutionConfidence.Exact,
         RecipeDataSourceKind.GarlandStandardCraft,
-        500,
+        recipeId,
         13,
         "Weaver",
         61,
@@ -239,9 +262,11 @@ public sealed class CraftArchitectExactRecipeGraphAdapterTests
         public RecipeResolutionResult Resolve(PlanNode node, GarlandItem? itemData) => result;
     }
 
-    private sealed record FakeRecipe(FakeRowRef SecretRecipeBook);
+    private sealed record FakeRecipe(uint RowId, FakeRowRef SecretRecipeBook);
+    private sealed record FakeRecipeWithoutSecretBook(uint RowId);
     private sealed record FakeSecretRecipeBook(FakeRowRef Item);
-    private sealed record FakeRowRef(uint RowId, object? Value);
+    private sealed record FakeSecretRecipeBookWithoutItem;
+    private sealed record FakeRowRef(uint RowId, object? ValueNullable, bool IsValid);
 
     private sealed class CountOnlyList<T>(int count, T value) : IReadOnlyList<T>
     {

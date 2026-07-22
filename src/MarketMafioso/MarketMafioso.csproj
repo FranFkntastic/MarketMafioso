@@ -10,6 +10,7 @@
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <Platforms>x64</Platforms>
     <DisableFastUpToDateCheck>true</DisableFastUpToDateCheck>
+    <ShouldUnsetParentConfigurationAndPlatform>false</ShouldUnsetParentConfigurationAndPlatform>
     <Name>MarketMafioso</Name>
     <Author>FranFkntastic</Author>
     <Description>FFXIV workshop logistics, gear planning and reviewed cleanup, and optional receiver-backed inventory history.</Description>

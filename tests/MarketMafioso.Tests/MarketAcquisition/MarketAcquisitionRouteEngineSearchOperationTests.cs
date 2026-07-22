@@ -6,7 +6,7 @@ namespace MarketMafioso.Tests.MarketAcquisition;
 public sealed class MarketAcquisitionRouteEngineSearchOperationTests
 {
     [Fact]
-    public void ArchivedRealSearchRun_ReplaysPendingProgressionThenSuccess()
+    public void ArchivedSearchTrace_ReplaysPendingProgressionThenSuccess()
     {
         var observations = LoadArchivedSearchObservations();
         using var harness = PrepareAtPendingStop("Maduin");

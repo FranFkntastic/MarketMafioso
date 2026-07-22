@@ -185,8 +185,8 @@ try {
     if (-not $marketMafiosoVerified) {
         Write-Host "Building the MarketMafioso Squire test graph once..."
         Invoke-DotNet (@("build", $marketMafiosoTests, "-c", $Configuration, "--no-restore") + $sharedProperties)
-        Write-Host "Running focused Squire tests without rebuilding..."
-        Invoke-DotNet (@("test", $marketMafiosoTests, "-c", $Configuration, "--no-build", "--no-restore", "--filter", "FullyQualifiedName~Squire") + $sharedProperties)
+        Write-Host "Running focused Squire functional tests without rebuilding..."
+        Invoke-DotNet (@("test", $marketMafiosoTests, "-c", $Configuration, "--no-build", "--no-restore", "--filter", "FullyQualifiedName~Squire&Category!=Performance") + $sharedProperties)
     } else {
         Write-Host "MarketMafioso source and verified Squire test output are unchanged; reusing the successful verification."
     }

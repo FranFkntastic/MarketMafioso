@@ -15,7 +15,7 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MarketMafioso.Tests", "test
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MarketMafioso.Dashboard", "src\MarketMafioso.Dashboard\MarketMafioso.Dashboard.csproj", "{E52D0CF8-38A7-4FC6-9683-BE000376B1DB}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MarketMafioso.Integration.Tests", "tests\MarketMafioso.Integration.Tests\MarketMafioso.Integration.Tests.csproj", "{92783227-C377-4648-9BFE-0F14A116C9AB}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MarketMafioso.ContractTests", "tests\MarketMafioso.ContractTests\MarketMafioso.ContractTests.csproj", "{92783227-C377-4648-9BFE-0F14A116C9AB}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution

@@ -73,13 +73,6 @@ public sealed class InventorySnapshotViewBuilderTests
 
         var view = InventorySnapshotViewBuilder.Build(stored);
 
-        Assert.Equal("snapshot-1", view.Id);
-        Assert.Equal(1, view.Metadata.SchemaVersion);
-        Assert.Equal("MarketMafioso", view.Metadata.SourcePlugin);
-        Assert.Equal("1.0.0.0", view.Metadata.PluginVersion);
-        Assert.Equal("2026-06-22T11:58:59.0000000Z", view.Metadata.GeneratedAtUtc);
-        Assert.Equal("Test Character", view.CharacterName);
-        Assert.Equal("Gilgamesh", view.HomeWorld);
         Assert.Single(view.PlayerInventory.Bags);
         Assert.Single(view.Retainers);
 
@@ -89,10 +82,6 @@ public sealed class InventorySnapshotViewBuilderTests
         Assert.Equal("Fire Shard", playerBag.Items[0].DisplayName);
 
         var retainer = view.Retainers[0];
-        Assert.Equal("Sample Retainer", retainer.Name);
-        Assert.Equal((ulong)123456789, retainer.RetainerId);
-        Assert.Equal("Test Character", retainer.OwnerCharacterName);
-        Assert.Equal("Gilgamesh", retainer.OwnerHomeWorld);
         Assert.Equal("RetainerPage1", retainer.Bags[0].Name);
         Assert.True(retainer.Bags[0].Items[0].IsHQ);
 

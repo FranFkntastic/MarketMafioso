@@ -41,44 +41,54 @@ internal sealed class LuminaCraftArchitectRecipeResolutionService : IRecipeResol
         ArgumentNullException.ThrowIfNull(dataManager);
         var recipes = dataManager.GetExcelSheet<LuminaRecipe>() ??
                       throw new InvalidOperationException("The Recipe sheet is unavailable for craft unlock evidence.");
+        return Create(new RecipeResolutionService(), recipes);
+    }
+
+    internal static LuminaCraftArchitectRecipeResolutionService Create<TRecipe>(
+        IRecipeResolutionService inner,
+        IEnumerable<TRecipe> recipes)
+    {
+        ArgumentNullException.ThrowIfNull(inner);
+        ArgumentNullException.ThrowIfNull(recipes);
         var unlockItemIds = new Dictionary<uint, int>();
         foreach (var recipe in recipes)
         {
-            if (recipe.RowId == 0)
+            if (recipe is null ||
+                !TryReadRowId(recipe, out var recipeId) ||
+                recipeId == 0 ||
+                !TryReadUnlockItemId(recipe, out var unlockItemId))
                 continue;
-            if (recipe.SecretRecipeBook.RowId == 0)
-            {
-                unlockItemIds[recipe.RowId] = 0;
-                continue;
-            }
-            var itemId = recipe.SecretRecipeBook.Value.Item.RowId;
-            if (itemId is > 0 and <= int.MaxValue)
-                unlockItemIds[recipe.RowId] = (int)itemId;
+            unlockItemIds[recipeId] = unlockItemId;
         }
-        if (unlockItemIds.Count == 0)
-            throw new InvalidOperationException("The Recipe sheet exposed no authoritative craft unlock evidence.");
-        return new(new RecipeResolutionService(), unlockItemIds);
+        return new(inner, unlockItemIds);
     }
 
     internal static bool TryReadUnlockItemId(object recipe, out int unlockItemId)
     {
         unlockItemId = 0;
-        var secretBook = recipe.GetType().GetProperty("SecretRecipeBook")?.GetValue(recipe);
-        if (secretBook is null || !TryReadRowId(secretBook, out var secretBookId))
-            return false;
-        if (secretBookId == 0)
-            return true;
-
         try
         {
-            var secretBookValue = secretBook.GetType().GetProperty("Value")?.GetValue(secretBook);
+            var secretBook = recipe.GetType().GetProperty("SecretRecipeBook")?.GetValue(recipe);
+            if (secretBook is null || !TryReadRowId(secretBook, out var secretBookId))
+                return false;
+            if (secretBookId == 0)
+                return true;
+            if (secretBook.GetType().GetProperty("IsValid")?.GetValue(secretBook) is not true)
+                return false;
+            var valueProperty = secretBook.GetType().GetProperty("ValueNullable") ??
+                                secretBook.GetType().GetProperty("Value");
+            var secretBookValue = valueProperty?.GetValue(secretBook);
             var item = secretBookValue?.GetType().GetProperty("Item")?.GetValue(secretBookValue);
-            if (item is null || !TryReadRowId(item, out var itemId) || itemId == 0 || itemId > int.MaxValue)
+            if (item is null ||
+                !TryReadRowId(item, out var itemId) ||
+                itemId == 0 ||
+                itemId > int.MaxValue ||
+                item.GetType().GetProperty("IsValid")?.GetValue(item) is not true)
                 return false;
             unlockItemId = (int)itemId;
             return true;
         }
-        catch (Exception exception) when (exception is InvalidOperationException or ArgumentException)
+        catch (Exception)
         {
             return false;
         }
@@ -87,15 +97,15 @@ internal sealed class LuminaCraftArchitectRecipeResolutionService : IRecipeResol
     private static bool TryReadRowId(object value, out uint rowId)
     {
         rowId = 0;
-        var raw = value.GetType().GetProperty("RowId")?.GetValue(value);
-        if (raw is null)
-            return false;
         try
         {
+            var raw = value.GetType().GetProperty("RowId")?.GetValue(value);
+            if (raw is null)
+                return false;
             rowId = Convert.ToUInt32(raw);
             return true;
         }
-        catch (Exception exception) when (exception is FormatException or InvalidCastException or OverflowException)
+        catch (Exception)
         {
             return false;
         }

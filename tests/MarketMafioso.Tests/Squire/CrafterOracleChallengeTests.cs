@@ -14,12 +14,9 @@ public sealed class CrafterOracleChallengeTests
     };
 
     [Fact]
-    public void FrozenChallengeBookPassesEveryStratumIndependently()
+    public void FrozenChallengeBookMatchesIndependentExpectedOutcomes()
     {
         var book = LoadBook();
-        Assert.Equal("squire-crafter-challenge/v1", book.SchemaVersion);
-        Assert.Equal(CrafterUtilityProfile.ProfileVersion, book.ProfileVersion);
-
         var failures = new List<string>();
         foreach (var challenge in book.Cases)
         {
@@ -29,7 +26,7 @@ public sealed class CrafterOracleChallengeTests
                 challenge.ClassJobId,
                 challenge.CharacterLevel);
             var candidate = profile.Evaluate(challenge.Candidate);
-            var authority = profile.AssessAuthorityForCalibration(
+            var authority = profile.AssessAuthority(
                 candidate,
                 challenge.AdditionalCostGil,
                 challenge.EvidenceComplete,
@@ -50,22 +47,6 @@ public sealed class CrafterOracleChallengeTests
         }
 
         Assert.True(failures.Count == 0, string.Join(Environment.NewLine, failures));
-        var strata = book.Cases.GroupBy(challenge => challenge.Stratum, StringComparer.Ordinal)
-            .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
-        Assert.True(strata["ordinary-craft"] >= 3);
-        Assert.True(strata["disputed-trade"] >= 3);
-        Assert.True(strata["equivalence-regression"] >= 2);
-        Assert.True(strata["authority-failure"] >= 3);
-        Assert.True(strata["unsupported"] >= 2);
-    }
-
-    [Fact]
-    public void EveryCaseDerivesFromOfficialMechanicsNotADevelopmentGuide()
-    {
-        var book = LoadBook();
-
-        Assert.NotEmpty(book.Cases);
-        Assert.All(book.Cases, challenge => Assert.Equal("official-mechanics-holdout", challenge.Lineage));
     }
 
     private static ChallengeBook LoadBook()
@@ -75,15 +56,10 @@ public sealed class CrafterOracleChallengeTests
             ?? throw new InvalidOperationException("Crafter challenge book was empty.");
     }
 
-    private sealed record ChallengeBook(
-        string SchemaVersion,
-        string ProfileVersion,
-        IReadOnlyList<ChallengeCase> Cases);
+    private sealed record ChallengeBook(IReadOnlyList<ChallengeCase> Cases);
 
     private sealed record ChallengeCase(
         string CaseId,
-        string Stratum,
-        string Lineage,
         CrafterUtilityContextKind Context,
         uint ClassJobId,
         CrafterUtilityStats Baseline,

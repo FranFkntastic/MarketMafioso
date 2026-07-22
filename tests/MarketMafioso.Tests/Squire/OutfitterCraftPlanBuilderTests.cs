@@ -350,8 +350,6 @@ public sealed class OutfitterCraftPlanBuilderTests
         Assert.Single(untrustedResult.Diagnostics, diagnostic => diagnostic.Code == OutfitterCraftPlanBuildDiagnosticCode.InvalidBaseline);
         Assert.Single(expiredResult.Diagnostics, diagnostic => diagnostic.Code == OutfitterCraftPlanBuildDiagnosticCode.InvalidBaseline);
         Assert.Single(oldSnapshotResult.Diagnostics, diagnostic => diagnostic.Code == OutfitterCraftPlanBuildDiagnosticCode.InvalidBaseline);
-        Assert.Empty(typeof(OutfitterCrafterObservationIdentity).GetConstructors());
-        Assert.Empty(typeof(CraftMarketEvidenceReference).GetConstructors());
     }
 
     [Fact]
@@ -376,8 +374,6 @@ public sealed class OutfitterCraftPlanBuilderTests
         Assert.False((identity with { UnitPriceGil = identity.UnitPriceGil + 1 }).HasExactCatalogMembership());
         Assert.Throws<InvalidOperationException>(() =>
             OutfitterGilVendorMaterialSourceIdentity.FromCatalog(first, member with { UnitPriceGil = member.UnitPriceGil + 1 }));
-        Assert.Empty(typeof(OutfitterGilVendorMaterialSourceIdentity).GetConstructors());
-        Assert.Empty(typeof(OutfitterGilVendorCatalogReference).GetConstructors());
     }
 
     private static readonly Guid EvidenceGeneration = Guid.Parse("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee");

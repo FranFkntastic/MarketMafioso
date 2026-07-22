@@ -88,6 +88,7 @@ public sealed class WorkshopMaterialManifestExportServiceTests
         Assert.True(result.Success);
         Assert.Equal(2, result.ExportedCount);
         Assert.Empty(result.SkippedItems);
+        Assert.Equal("Copied Artisan manifest: 2 recipes.", result.Message);
 
         using var document = JsonDocument.Parse(result.Content);
         var root = document.RootElement;

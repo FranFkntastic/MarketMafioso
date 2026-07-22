@@ -49,26 +49,3 @@ public sealed record MarketAppraisalRequest
     public string SweepScope { get; init; } = "Region";
     public IReadOnlyList<string> SweepDataCenters { get; init; } = [];
 }
-
-public sealed record MarketAppraisalWorldSummary
-{
-    public string WorldName { get; init; } = string.Empty;
-    public uint Quantity { get; init; }
-    public uint ListingCount { get; init; }
-    public ulong TotalGil { get; init; }
-    public uint LowestUnitPrice { get; init; }
-    public uint HighestUnitPrice { get; init; }
-    public DateTimeOffset? FreshestReviewTimeUtc { get; init; }
-}
-
-public sealed record MarketAppraisalResult
-{
-    public MarketAppraisalRequest Request { get; init; } = new();
-    public CraftAppraisalQuote? CraftQuote { get; init; }
-    public uint SupportedQuantity { get; init; }
-    public uint SupportedListingCount { get; init; }
-    public uint SupportedWorldCount { get; init; }
-    public ulong SupportedTotalGil { get; init; }
-    public IReadOnlyList<MarketAppraisalWorldSummary> Worlds { get; init; } = [];
-    public IReadOnlyList<string> Warnings { get; init; } = [];
-}

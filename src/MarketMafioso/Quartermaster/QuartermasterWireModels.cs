@@ -130,13 +130,13 @@ public sealed record QuartermasterOperationStatus(
     ImmutableArray<QuartermasterOperationReceipt> Receipts)
 {
     public bool IsTerminal => Status.Equals("Completed", StringComparison.OrdinalIgnoreCase) ||
-                               Status.Equals("Succeeded", StringComparison.OrdinalIgnoreCase) ||
-                               Status.Equals("Partially_Succeeded", StringComparison.OrdinalIgnoreCase) ||
-                               Status.Equals("Indeterminate", StringComparison.OrdinalIgnoreCase) ||
-                               Status.Equals("Failed", StringComparison.OrdinalIgnoreCase) ||
-                               Status.Equals("Cancelled", StringComparison.OrdinalIgnoreCase) ||
-                               Status.Equals("Rejected", StringComparison.OrdinalIgnoreCase) ||
-                               Status.Equals("Not_Found", StringComparison.OrdinalIgnoreCase);
+                              Status.Equals("Succeeded", StringComparison.OrdinalIgnoreCase) ||
+                              Status.Equals("Partially_Succeeded", StringComparison.OrdinalIgnoreCase) ||
+                              Status.Equals("Indeterminate", StringComparison.OrdinalIgnoreCase) ||
+                              Status.Equals("Failed", StringComparison.OrdinalIgnoreCase) ||
+                              Status.Equals("Cancelled", StringComparison.OrdinalIgnoreCase) ||
+                              Status.Equals("Rejected", StringComparison.OrdinalIgnoreCase) ||
+                              Status.Equals("Not_Found", StringComparison.OrdinalIgnoreCase);
 }
 
 public sealed record QuartermasterOperationReceipt(

@@ -5,6 +5,7 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <OverrideHtmlAssetPlaceholders>true</OverrideHtmlAssetPlaceholders>
+    <ShouldUnsetParentConfigurationAndPlatform>false</ShouldUnsetParentConfigurationAndPlatform>
     <FranthropyWebProject Condition="'$(FranthropyWebProject)' == ''">..\..\..\Franthropy\src\Franthropy.Web\Franthropy.Web.csproj</FranthropyWebProject>
   </PropertyGroup>
 

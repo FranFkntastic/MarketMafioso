@@ -16,7 +16,7 @@ public sealed class HttpReporterRetainerScopeTests
             9,
             new DateTimeOffset(2026, 7, 21, 12, 0, 0, TimeSpan.Zero),
             new QuartermasterOwner(100, 40, "Wei Ning", "Maduin"),
-                ImmutableArray.Create(new QuartermasterRetainerSnapshot(
+            ImmutableArray.Create(new QuartermasterRetainerSnapshot(
                 10,
                 "Taffy-swordsman",
                 observedAt,
@@ -47,10 +47,10 @@ public sealed class HttpReporterRetainerScopeTests
                     42.5f,
                     999,
                     listedAt)))
-                {
-                    RequestedSources = ["RetainerInventory1", "RetainerMarket"],
-                    ObservedSources = ["RetainerInventory1"],
-                }));
+            {
+                RequestedSources = ["RetainerInventory1", "RetainerMarket"],
+                ObservedSources = ["RetainerInventory1"],
+            }));
 
         var report = Assert.Single(HttpReporter.BuildRetainerReports(
             snapshot,

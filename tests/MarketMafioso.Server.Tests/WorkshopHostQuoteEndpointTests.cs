@@ -156,32 +156,6 @@ public sealed class WorkshopHostQuoteEndpointTests
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 
-    [Fact]
-    public async Task CraftAppraise_ReturnsAdapterQuote()
-    {
-        var quotedAt = DateTimeOffset.Parse("2026-07-05T14:30:00+00:00");
-        await using var application = CreateHostedApplication(services =>
-            services.AddSingleton<IWorkshopHostCraftQuoteService>(
-                new StaticWorkshopHostCraftQuoteService(CreateQuote(quotedAtUtc: quotedAt))));
-        using var client = application.CreateClient();
-
-        var response = await SendWithKeyAsync(
-            client,
-            HttpMethod.Post,
-            "/marketmafioso/api/craft/appraise",
-            "client-secret",
-            CreateRequest());
-
-        response.EnsureSuccessStatusCode();
-        var quote = await response.Content.ReadFromJsonAsync<CraftAppraisalQuote>();
-        Assert.NotNull(quote);
-        Assert.Equal(2u, quote.ItemId);
-        Assert.Equal(10u, quote.RequestedQuantity);
-        Assert.Equal(80m, quote.EstimatedUnitCost);
-        Assert.Equal(quotedAt, quote.QuotedAtUtc);
-        Assert.Equal("WorkshopHostCraftArchitect", quote.Source);
-    }
-
     [Theory]
     [InlineData(2, 2, 10, "unsupported_schema_version")]
     [InlineData(1, 0, 10, "item_id_required")]

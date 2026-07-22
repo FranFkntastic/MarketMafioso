@@ -25,6 +25,7 @@ internal static class MarketAcquisitionTestApp
             ["MarketMafioso:RequireApiKey"] = "true",
             ["MarketMafioso:ClientApiKey"] = ClientApiKey,
             ["MarketMafioso:BasePath"] = "/marketmafioso",
+            ["MarketMafioso:DatabasePath"] = Path.Combine(contentRoot, "marketmafioso.db"),
         };
         foreach (var item in extraConfiguration)
             values[item.Key] = item.Value;

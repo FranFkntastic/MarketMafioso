@@ -36,40 +36,72 @@ public sealed class PhysicalRangedUtilityProfileTests
         Assert.Equal(UpgradeAssessment.ContextDependent, trade.Assessment);
     }
 
-    [Theory]
-    [InlineData(true, false)]
-    [InlineData(false, true)]
-    public void Characterization_authority_requires_dexterity_or_weapon_damage_for_paid_gain(
-        bool gainDexterity,
-        bool gainWeaponDamage)
-    {
-        var profile = Profile();
-        var candidate = profile.Evaluate(Baseline with
-        {
-            Dexterity = Baseline.Dexterity + (gainDexterity ? 1 : 0),
-            PhysicalDamage = Baseline.PhysicalDamage + (gainWeaponDamage ? 1 : 0),
-        });
-
-        var authority = profile.AssessAuthorityForCharacterization(candidate, 10_000);
-
-        Assert.True(authority.AdvisorMayConsider);
-        Assert.Contains(authority.GainedCapabilityIds, id => id.Contains(gainDexterity ? "dexterity" : "physical-damage", StringComparison.Ordinal));
-    }
-
     [Fact]
     public void Paid_secondary_only_gain_abstains_and_public_authority_remains_experimental()
     {
         var profile = Profile();
         var candidate = profile.Evaluate(Baseline with { DirectHit = Baseline.DirectHit + 50 });
 
-        var characterization = profile.AssessAuthorityForCharacterization(candidate, 10_000);
         var production = profile.AssessAuthority(candidate, 10_000);
 
-        Assert.False(characterization.AdvisorMayConsider);
-        Assert.Contains(characterization.Reasons, reason => reason.Contains("requires a Dexterity or physical weapon-damage gain", StringComparison.Ordinal));
         Assert.False(production.AdvisorMayConsider);
         Assert.Contains(production.Reasons, reason => reason.Contains("experimental", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(production.Reasons, reason => reason.Contains("requires a physical weapon-damage gain", StringComparison.Ordinal));
         Assert.Equal(AdvisorProfileCalibrationState.Experimental, PhysicalRangedUtilityProfile.CalibrationState);
+    }
+
+    [Theory]
+    [InlineData(PhysicalRangedUtilityProfile.BardClassJobId)]
+    [InlineData(PhysicalRangedUtilityProfile.MachinistClassJobId)]
+    [InlineData(PhysicalRangedUtilityProfile.DancerClassJobId)]
+    public void Raw_dexterity_gain_without_weapon_damage_remains_non_authoritative(uint classJobId)
+    {
+        var profile = Profile(classJobId);
+
+        var candidate = profile.Evaluate(Baseline with { Dexterity = Baseline.Dexterity + 1 });
+        var authority = profile.AssessAuthority(candidate, 0);
+
+        Assert.Equal(UpgradeAssessment.ClearImprovement, candidate.Assessment);
+        Assert.False(authority.AdvisorMayConsider);
+        Assert.Contains(authority.Reasons, reason => reason.Contains("effective damage tiers", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData(PhysicalRangedUtilityProfile.BardClassJobId)]
+    [InlineData(PhysicalRangedUtilityProfile.MachinistClassJobId)]
+    [InlineData(PhysicalRangedUtilityProfile.DancerClassJobId)]
+    public void No_loss_weapon_damage_gain_reaches_only_the_calibration_gate(uint classJobId)
+    {
+        var profile = Profile(classJobId);
+
+        var candidate = profile.Evaluate(Baseline with { PhysicalDamage = Baseline.PhysicalDamage + 1 });
+        var authority = profile.AssessAuthority(candidate, 100_000);
+
+        Assert.Equal(UpgradeAssessment.ClearImprovement, candidate.Assessment);
+        Assert.Equal(["no-loss-physical-damage-gain"], authority.GainedCapabilityIds);
+        Assert.False(authority.AdvisorMayConsider);
+        Assert.Single(authority.Reasons);
+        Assert.Contains("experimental", authority.Reasons[0], StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData(PhysicalRangedUtilityProfile.BardClassJobId)]
+    [InlineData(PhysicalRangedUtilityProfile.MachinistClassJobId)]
+    [InlineData(PhysicalRangedUtilityProfile.DancerClassJobId)]
+    public void Skill_speed_change_never_reaches_the_calibration_gate(uint classJobId)
+    {
+        var profile = Profile(classJobId);
+
+        var candidate = profile.Evaluate(Baseline with
+        {
+            Dexterity = Baseline.Dexterity + 1,
+            SkillSpeed = Baseline.SkillSpeed + 1,
+        });
+        var authority = profile.AssessAuthority(candidate, 100_000);
+
+        Assert.Equal(UpgradeAssessment.ClearImprovement, candidate.Assessment);
+        Assert.False(authority.AdvisorMayConsider);
+        Assert.Contains(authority.Reasons, reason => reason.Contains("Skill Speed changed", StringComparison.Ordinal));
     }
 
     [Theory]
@@ -114,10 +146,10 @@ public sealed class PhysicalRangedUtilityProfileTests
         Assert.True(MinerBotanistAdvisorCatalog.HasRelevantCompleteProfile(Definition(profile), PhysicalRangedAdvisorStatFamily.Instance));
     }
 
-    private static PhysicalRangedUtilityProfile Profile() => new(
+    private static PhysicalRangedUtilityProfile Profile(uint classJobId = PhysicalRangedUtilityProfile.BardClassJobId) => new(
         PhysicalRangedUtilityContextKind.GeneralCombat,
         Baseline,
-        PhysicalRangedUtilityProfile.BardClassJobId,
+        classJobId,
         100);
 
     private static EquipmentItemDefinition Definition(EquipmentStatProfile profile) => new(

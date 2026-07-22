@@ -74,6 +74,10 @@ public sealed class AgentBridgeAdvisorStateTests
         var json = JsonSerializer.Serialize(projected);
 
         Assert.Equal("GeneralCombat", projected.Context);
+        Assert.Equal(PhysicalRangedUtilityProfile.ProfileId, projected.ProfileId);
+        Assert.Equal(PhysicalRangedUtilityProfile.ProfileVersion, projected.ProfileVersion);
+        Assert.Equal(AdvisorProfileCalibrationState.Experimental.ToString(), projected.CalibrationState);
+        Assert.Null(projected.ClassJobId);
         Assert.Contains("\"Context\":\"GeneralCombat\"", json, StringComparison.Ordinal);
         Assert.Contains("BRD/MCH/DNC coverage.", json, StringComparison.Ordinal);
     }
@@ -116,6 +120,9 @@ public sealed class AgentBridgeAdvisorStateTests
         Assert.Equal(AgentBridgeAdvisorState.DefaultFrontierPageSize, projected.Advice.FrontierReturnedCount);
         Assert.True(projected.Advice.FrontierHasMore);
         Assert.Contains(projected.Advice.Frontier, solution => solution.SolutionId == nomination.Candidate.SolutionId);
+        Assert.All(projected.Advice.Frontier, solution => Assert.True(solution.AdvisorMayConsider));
+        Assert.All(projected.Advice.Frontier, solution => Assert.Empty(solution.AuthorityReasons));
+        Assert.Equal(16u, projected.ClassJobId);
         Assert.Equal(2_000, paged.Advice!.FrontierOffset);
         Assert.Equal("solution-02000", paged.Advice.Frontier[0].SolutionId);
         Assert.DoesNotContain("solution-00000", json, StringComparison.Ordinal);

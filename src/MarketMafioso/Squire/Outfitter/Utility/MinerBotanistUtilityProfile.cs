@@ -168,19 +168,6 @@ public sealed class MinerBotanistUtilityProfile : IEquipmentExactSolverUtilityMo
             hasUnmodeledRelevantEffect,
             calibrationApproved: CalibrationState == AdvisorProfileCalibrationState.Supported);
 
-    internal AdvisorAuthorityAssessment AssessAuthorityForCalibration(
-        EquipmentUtilityEvaluation candidate,
-        ulong additionalCostGil,
-        bool evidenceComplete = true,
-        bool patchMatches = true,
-        bool hasUnmodeledRelevantEffect = false) => AssessAuthorityCore(
-            candidate,
-            additionalCostGil,
-            evidenceComplete,
-            patchMatches,
-            hasUnmodeledRelevantEffect,
-            calibrationApproved: true);
-
     private AdvisorAuthorityAssessment AssessAuthorityCore(
         EquipmentUtilityEvaluation candidate,
         ulong additionalCostGil,

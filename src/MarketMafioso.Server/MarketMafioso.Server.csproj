@@ -3,6 +3,7 @@
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <ShouldUnsetParentConfigurationAndPlatform>false</ShouldUnsetParentConfigurationAndPlatform>
     <CraftArchitectCoreProject Condition="'$(CraftArchitectCoreProject)' == ''">..\..\..\FFXIV Craft Architect C# Edition\src\FFXIV Craft Architect.Core\FFXIV Craft Architect.Core.csproj</CraftArchitectCoreProject>
     <FranthropyFfxivProject Condition="'$(FranthropyFfxivProject)' == ''">..\..\..\Franthropy\src\Franthropy.FFXIV\Franthropy.FFXIV.csproj</FranthropyFfxivProject>
   </PropertyGroup>

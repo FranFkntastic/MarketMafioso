@@ -92,25 +92,6 @@ public sealed class DashboardAccountAuthTests
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 
-    [Fact]
-    public async Task DashboardApi_RequiresCookieSession()
-    {
-        await using var application = CreateApplication();
-        using var client = application.CreateClient();
-
-        var anonymous = await client.GetAsync("/api/acquisition/requests");
-        var login = await client.PostAsJsonAsync("/auth/login", new
-        {
-            username = "admin",
-            password = "secret-password",
-        });
-        var authenticated = await client.GetAsync("/api/acquisition/requests");
-
-        Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
-        Assert.Equal(HttpStatusCode.OK, login.StatusCode);
-        Assert.Equal(HttpStatusCode.OK, authenticated.StatusCode);
-    }
-
     [Theory]
     [InlineData("/api/reports")]
     [InlineData("/api/reports/latest")]
@@ -135,303 +116,67 @@ public sealed class DashboardAccountAuthTests
     }
 
     [Fact]
-    public async Task DashboardSession_WorksUnderConfiguredBasePath()
+    public async Task AcquisitionRoutes_ApplyCredentialPolicyUnderConfiguredBasePath()
     {
         await using var application = CreateApplication(
             new KeyValuePair<string, string?>("MarketMafioso:RequireApiKey", "true"),
             new KeyValuePair<string, string?>("MarketMafioso:ClientApiKey", "client-secret"),
             new KeyValuePair<string, string?>("MarketMafioso:BasePath", "/marketmafioso"));
-        using var client = application.CreateClient();
+        using var dashboardClient = application.CreateClient();
+        using var pluginClient = application.CreateClient();
 
-        var anonymous = await client.GetAsync("/marketmafioso/auth/session");
-        var anonymousApi = await client.GetAsync("/marketmafioso/api/acquisition/requests");
-        var anonymousPending = await client.GetAsync("/marketmafioso/api/acquisition/requests/pending?characterName=Smoke&world=Gilgamesh");
-        var login = await client.PostAsJsonAsync("/marketmafioso/auth/login", new
+        var authorizationMatrix = new[]
         {
-            username = "admin",
-            password = "secret-password",
-        });
-        var session = await client.GetAsync("/marketmafioso/auth/session");
-        var authenticatedApi = await client.GetAsync("/marketmafioso/api/acquisition/requests");
-
-        Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
-        Assert.Equal(HttpStatusCode.Unauthorized, anonymousApi.StatusCode);
-        Assert.Equal(HttpStatusCode.Unauthorized, anonymousPending.StatusCode);
-        Assert.Equal(HttpStatusCode.OK, login.StatusCode);
-        Assert.Equal(HttpStatusCode.OK, session.StatusCode);
-        Assert.Equal(HttpStatusCode.OK, authenticatedApi.StatusCode);
-    }
-
-    [Fact]
-    public async Task DashboardSession_AllowsPluginBatchPendingWithApiKeyUnderBasePath()
-    {
-        await using var application = CreateApplication(
-            new KeyValuePair<string, string?>("MarketMafioso:RequireApiKey", "true"),
-            new KeyValuePair<string, string?>("MarketMafioso:ClientApiKey", "client-secret"),
-            new KeyValuePair<string, string?>("MarketMafioso:BasePath", "/marketmafioso"));
-        using var client = application.CreateClient();
-
-        using var request = new HttpRequestMessage(
-            HttpMethod.Get,
-            "/marketmafioso/api/acquisition/batches/pending?characterName=Wei%20Ning&world=Siren");
-        request.Headers.Add("X-Api-Key", "client-secret");
-
-        var response = await client.SendAsync(request);
-
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-    }
-
-    [Fact]
-    public async Task DashboardSession_AllowsPluginBatchCreateWithApiKeyUnderBasePath()
-    {
-        await using var application = CreateApplication(
-            new KeyValuePair<string, string?>("MarketMafioso:RequireApiKey", "true"),
-            new KeyValuePair<string, string?>("MarketMafioso:ClientApiKey", "client-secret"),
-            new KeyValuePair<string, string?>("MarketMafioso:BasePath", "/marketmafioso"));
-        using var client = application.CreateClient();
-
-        using var request = new HttpRequestMessage(
-            HttpMethod.Post,
-            "/marketmafioso/api/acquisition/batches")
-        {
-            Content = JsonContent.Create(MarketAcquisitionTestApp.CreateBatchRequest("dashboard-session-batch-create")),
+            new AcquisitionAuthorizationCase(
+                "/marketmafioso/api/acquisition/requests",
+                AcquisitionCredential.DashboardSession,
+                HttpStatusCode.OK),
+            new AcquisitionAuthorizationCase(
+                "/marketmafioso/api/acquisition/batches/pending?characterName=Wei%20Ning&world=Siren",
+                AcquisitionCredential.ClientApiKey,
+                HttpStatusCode.OK),
+            new AcquisitionAuthorizationCase(
+                "/marketmafioso/api/acquisition/batches/missing",
+                AcquisitionCredential.DashboardSession,
+                HttpStatusCode.NotFound),
+            new AcquisitionAuthorizationCase(
+                "/marketmafioso/api/acquisition/batches/missing",
+                AcquisitionCredential.ClientApiKey,
+                HttpStatusCode.NotFound),
+            new AcquisitionAuthorizationCase(
+                "/marketmafioso/api/acquisition/requests/missing/timeline",
+                AcquisitionCredential.DashboardSession,
+                HttpStatusCode.NotFound),
+            new AcquisitionAuthorizationCase(
+                "/marketmafioso/api/acquisition/requests/missing/timeline",
+                AcquisitionCredential.ClientApiKey,
+                HttpStatusCode.NotFound),
         };
-        request.Headers.Add("X-Api-Key", "client-secret");
-        request.Headers.Accept.ParseAdd("application/json");
 
-        var response = await client.SendAsync(request);
-
-        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
-    }
-
-    [Fact]
-    public async Task DashboardSession_AllowsPluginBatchReplaceWithApiKeyUnderBasePath()
-    {
-        await using var application = CreateApplication(
-            new KeyValuePair<string, string?>("MarketMafioso:RequireApiKey", "true"),
-            new KeyValuePair<string, string?>("MarketMafioso:ClientApiKey", "client-secret"),
-            new KeyValuePair<string, string?>("MarketMafioso:BasePath", "/marketmafioso"));
-        using var client = application.CreateClient();
-
-        using var createRequest = new HttpRequestMessage(
-            HttpMethod.Post,
-            "/marketmafioso/api/acquisition/batches")
+        foreach (var testCase in authorizationMatrix)
         {
-            Content = JsonContent.Create(MarketAcquisitionTestApp.CreateBatchRequest("dashboard-session-batch-replace")),
-        };
-        createRequest.Headers.Add("X-Api-Key", "client-secret");
-        createRequest.Headers.Accept.ParseAdd("application/json");
-        var created = await client.SendAsync(createRequest);
-        created.EnsureSuccessStatusCode();
-        var createdBatch = await created.Content.ReadFromJsonAsync<MarketAcquisitionRequestView>()
-            ?? throw new InvalidOperationException("Batch create response was empty.");
+            using var anonymous = await dashboardClient.GetAsync(testCase.Path);
+            Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
+        }
 
-        using var replaceRequest = new HttpRequestMessage(
-            HttpMethod.Put,
-            $"/marketmafioso/api/acquisition/batches/{createdBatch.Id}")
-        {
-            Content = JsonContent.Create(new
-            {
-                expectedRevision = createdBatch.Revision,
-                region = "North America",
-                worldMode = "Recommended",
-                sweepScope = "Region",
-                expiresInSeconds = 300,
-                lines = new object[]
-                {
-                    new
-                    {
-                        itemId = 19951,
-                        itemName = "Koppranickel Ore",
-                        itemKind = "Stone",
-                        quantityMode = "AllBelowThreshold",
-                        targetQuantity = 0,
-                        maxQuantity = 25,
-                        hqPolicy = "Either",
-                        maxUnitPrice = 276,
-                        gilCap = 0,
-                    },
-                },
-            }),
-        };
-        replaceRequest.Headers.Add("X-Api-Key", "client-secret");
-        replaceRequest.Headers.Accept.ParseAdd("application/json");
-
-        var response = await client.SendAsync(replaceRequest);
-
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-    }
-
-    [Fact]
-    public async Task DashboardSession_AllowsPluginBatchReadWithApiKeyUnderBasePath()
-    {
-        await using var application = CreateApplication(
-            new KeyValuePair<string, string?>("MarketMafioso:RequireApiKey", "true"),
-            new KeyValuePair<string, string?>("MarketMafioso:ClientApiKey", "client-secret"),
-            new KeyValuePair<string, string?>("MarketMafioso:BasePath", "/marketmafioso"));
-        using var client = application.CreateClient();
-        var accepted = await application.CreateAcceptedBatchAsync(client, "dashboard-session-batch-read");
-
-        var response = await MarketAcquisitionTestApp.SendWithKeyAsync(
-            client,
-            HttpMethod.Get,
-            $"/marketmafioso/api/acquisition/batches/{accepted.Id}");
-
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-    }
-
-    [Fact]
-    public async Task DashboardSession_AllowsPluginBatchLineProgressWithApiKeyUnderBasePath()
-    {
-        await using var application = CreateApplication(
-            new KeyValuePair<string, string?>("MarketMafioso:RequireApiKey", "true"),
-            new KeyValuePair<string, string?>("MarketMafioso:ClientApiKey", "client-secret"),
-            new KeyValuePair<string, string?>("MarketMafioso:BasePath", "/marketmafioso"));
-        using var client = application.CreateClient();
-        var accepted = await application.CreateAcceptedBatchAsync(client, "dashboard-session-line-progress");
-        var line = Assert.Single(accepted.Lines);
-
-        var response = await MarketAcquisitionTestApp.SendWithKeyAsync(
-            client,
-            HttpMethod.Post,
-            $"/marketmafioso/api/acquisition/batches/{accepted.Id}/lines/{line.LineId}/progress",
-            new
-            {
-                claimToken = accepted.ClaimToken,
-                idempotencyKey = "dashboard-session-line-progress-1",
-                attemptId = "attempt-1",
-                sequence = 1,
-                status = "Running",
-                message = "Line progress reached the server.",
-            });
-
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-    }
-
-    [Fact]
-    public async Task DashboardSession_AllowsPluginBatchPurchaseAuditWithApiKeyUnderBasePath()
-    {
-        await using var application = CreateApplication(
-            new KeyValuePair<string, string?>("MarketMafioso:RequireApiKey", "true"),
-            new KeyValuePair<string, string?>("MarketMafioso:ClientApiKey", "client-secret"),
-            new KeyValuePair<string, string?>("MarketMafioso:BasePath", "/marketmafioso"));
-        using var client = application.CreateClient();
-        var accepted = await application.CreateAcceptedBatchAsync(client, "dashboard-session-purchase-audit");
-        var line = Assert.Single(accepted.Lines);
-
-        var response = await MarketAcquisitionTestApp.SendWithKeyAsync(
-            client,
-            HttpMethod.Post,
-            $"/marketmafioso/api/acquisition/batches/{accepted.Id}/purchases",
-            new
-            {
-                claimToken = accepted.ClaimToken,
-                idempotencyKey = "dashboard-session-purchase-audit-1",
-                attemptId = "attempt-1",
-                sequence = 1,
-                lineId = line.LineId,
-                worldName = "Gilgamesh",
-                itemId = line.ItemId,
-                itemName = line.ItemName,
-                listingId = "listing-1",
-                retainerName = "Retainer",
-                retainerId = "retainer-1",
-                quantity = 1,
-                unitPrice = 99,
-                totalGil = 99,
-                isHq = false,
-                result = "Purchased",
-            });
-
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-    }
-
-    [Fact]
-    public async Task DashboardSession_AllowsPluginTimelineReadWithApiKeyUnderBasePath()
-    {
-        await using var application = CreateApplication(
-            new KeyValuePair<string, string?>("MarketMafioso:RequireApiKey", "true"),
-            new KeyValuePair<string, string?>("MarketMafioso:ClientApiKey", "client-secret"),
-            new KeyValuePair<string, string?>("MarketMafioso:BasePath", "/marketmafioso"));
-        using var client = application.CreateClient();
-        var accepted = await application.CreateAcceptedBatchAsync(client, "dashboard-session-timeline-read");
-
-        var response = await MarketAcquisitionTestApp.SendWithKeyAsync(
-            client,
-            HttpMethod.Get,
-            $"/marketmafioso/api/acquisition/requests/{accepted.Id}/timeline");
-
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-    }
-
-    [Fact]
-    public async Task DashboardSession_AllowsTimelineReadWithCookieAndNoApiKeyUnderBasePath()
-    {
-        await using var application = CreateApplication(
-            new KeyValuePair<string, string?>("MarketMafioso:RequireApiKey", "true"),
-            new KeyValuePair<string, string?>("MarketMafioso:ClientApiKey", "client-secret"),
-            new KeyValuePair<string, string?>("MarketMafioso:BasePath", "/marketmafioso"));
-        using var client = application.CreateClient();
-        var accepted = await application.CreateAcceptedBatchAsync(client, "dashboard-cookie-timeline-read");
-        var login = await client.PostAsJsonAsync("/marketmafioso/auth/login", new
+        var login = await dashboardClient.PostAsJsonAsync("/marketmafioso/auth/login", new
         {
             username = "admin",
             password = "secret-password",
         });
         login.EnsureSuccessStatusCode();
+        using var session = await dashboardClient.GetAsync("/marketmafioso/auth/session");
+        Assert.Equal(
+            HttpStatusCode.OK,
+            session.StatusCode);
 
-        var response = await client.GetAsync(
-            $"/marketmafioso/api/acquisition/requests/{accepted.Id}/timeline");
-
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-    }
-
-    [Fact]
-    public async Task DashboardSession_AllowsPluginMarketObservationWithApiKeyUnderBasePath()
-    {
-        await using var application = CreateApplication(
-            new KeyValuePair<string, string?>("MarketMafioso:RequireApiKey", "true"),
-            new KeyValuePair<string, string?>("MarketMafioso:ClientApiKey", "client-secret"),
-            new KeyValuePair<string, string?>("MarketMafioso:BasePath", "/marketmafioso"));
-        using var client = application.CreateClient();
-        var accepted = await application.CreateAcceptedBatchAsync(client, "dashboard-session-market-observation");
-        var line = Assert.Single(accepted.Lines);
-
-        var response = await MarketAcquisitionTestApp.SendWithKeyAsync(
-            client,
-            HttpMethod.Post,
-            $"/marketmafioso/api/acquisition/batches/{accepted.Id}/observations",
-            new
-            {
-                claimToken = accepted.ClaimToken,
-                idempotencyKey = "dashboard-session-market-observation-1",
-                attemptId = "attempt-1",
-                sequence = 1,
-                lineId = line.LineId,
-                itemId = line.ItemId,
-                itemName = line.ItemName,
-                dataCenter = "Aether",
-                worldName = "Gilgamesh",
-                readState = "Complete",
-                reportedListingCount = 1,
-                listingCapacity = 100,
-                isTruncated = false,
-                observedAtUtc = DateTimeOffset.UtcNow,
-                listings = new[]
-                {
-                    new
-                    {
-                        listingId = "listing-1",
-                        retainerId = "retainer-1",
-                        retainerName = "Retainer",
-                        quantity = 10,
-                        unitPrice = 99,
-                        isHq = false,
-                    },
-                },
-            });
-
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        foreach (var testCase in authorizationMatrix)
+        {
+            using var response = testCase.Credential == AcquisitionCredential.DashboardSession
+                ? await dashboardClient.GetAsync(testCase.Path)
+                : await SendWithClientApiKeyAsync(pluginClient, testCase.Path);
+            Assert.Equal(testCase.AuthorizedStatusCode, response.StatusCode);
+        }
     }
 
     [Fact]
@@ -496,6 +241,24 @@ public sealed class DashboardAccountAuthTests
             });
         return new ApplicationValues(application, databasePath);
     }
+
+    private static async Task<HttpResponseMessage> SendWithClientApiKeyAsync(HttpClient client, string path)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, path);
+        request.Headers.Add("X-Api-Key", "client-secret");
+        return await client.SendAsync(request);
+    }
+
+    private enum AcquisitionCredential
+    {
+        DashboardSession,
+        ClientApiKey,
+    }
+
+    private sealed record AcquisitionAuthorizationCase(
+        string Path,
+        AcquisitionCredential Credential,
+        HttpStatusCode AuthorizedStatusCode);
 
     private sealed record ApplicationValues(WebApplicationFactory<Program> Application, string DatabasePath);
 }

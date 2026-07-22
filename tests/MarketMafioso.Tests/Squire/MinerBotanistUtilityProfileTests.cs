@@ -21,7 +21,7 @@ public sealed class MinerBotanistUtilityProfileTests
         var profile = Legendary(new(5_399, 5_200, 950));
 
         var candidate = profile.Evaluate(new MinerBotanistUtilityStats(5_400, 5_200, 950));
-        var authority = profile.AssessAuthorityForCalibration(candidate, additionalCostGil: 25_000);
+        var authority = profile.AssessAuthority(candidate, additionalCostGil: 25_000);
 
         Assert.Equal(UpgradeAssessment.ClearImprovement, candidate.Assessment);
         Assert.True(authority.AdvisorMayConsider);
@@ -34,7 +34,7 @@ public sealed class MinerBotanistUtilityProfileTests
         var profile = Legendary(new(5_401, 5_200, 950));
 
         var candidate = profile.Evaluate(new MinerBotanistUtilityStats(5_500, 5_200, 950));
-        var authority = profile.AssessAuthorityForCalibration(candidate, additionalCostGil: 25_000);
+        var authority = profile.AssessAuthority(candidate, additionalCostGil: 25_000);
 
         Assert.True(candidate.UtilityScore > profile.BaselineEvaluation.UtilityScore);
         Assert.Equal(UpgradeAssessment.ClearImprovement, candidate.Assessment);
@@ -48,7 +48,7 @@ public sealed class MinerBotanistUtilityProfileTests
         var profile = Legendary(new(5_401, 5_200, 950));
 
         var candidate = profile.Evaluate(new MinerBotanistUtilityStats(5_500, 5_200, 950));
-        var authority = profile.AssessAuthorityForCalibration(candidate, additionalCostGil: 0);
+        var authority = profile.AssessAuthority(candidate, additionalCostGil: 0);
 
         Assert.True(authority.AdvisorMayConsider);
         Assert.Empty(authority.GainedCapabilityIds);
@@ -60,7 +60,7 @@ public sealed class MinerBotanistUtilityProfileTests
         var profile = Legendary(new(5_399, 5_600, 950));
 
         var candidate = profile.Evaluate(new MinerBotanistUtilityStats(5_400, 5_599, 950));
-        var authority = profile.AssessAuthorityForCalibration(candidate, additionalCostGil: 0);
+        var authority = profile.AssessAuthority(candidate, additionalCostGil: 0);
 
         Assert.Equal(UpgradeAssessment.ContextDependent, candidate.Assessment);
         Assert.False(authority.AdvisorMayConsider);
@@ -91,7 +91,7 @@ public sealed class MinerBotanistUtilityProfileTests
         var profile = Legendary(new(5_399, 5_200, 950));
         var candidate = profile.Evaluate(new MinerBotanistUtilityStats(5_400, 5_200, 950));
 
-        var authority = profile.AssessAuthorityForCalibration(
+        var authority = profile.AssessAuthority(
             candidate,
             0,
             evidenceComplete,
@@ -110,7 +110,7 @@ public sealed class MinerBotanistUtilityProfileTests
             MinerBotanistUtilityProfile.MinerClassJobId);
 
         var candidate = profile.Evaluate(new MinerBotanistUtilityStats(5_400, 5_200, 950));
-        var authority = profile.AssessAuthorityForCalibration(candidate, 0);
+        var authority = profile.AssessAuthority(candidate, 0);
 
         Assert.InRange(candidate.UtilityScore - profile.BaselineEvaluation.UtilityScore, 0.001, 1);
         Assert.DoesNotContain(candidate.Thresholds, threshold => threshold.ThresholdId == "node-yield-plus-one");

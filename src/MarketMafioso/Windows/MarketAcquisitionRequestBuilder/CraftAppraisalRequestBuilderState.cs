@@ -25,7 +25,6 @@ public sealed class CraftAppraisalRequestBuilderState
     public CraftAppraisalLineIdentity? SelectedLine { get; private set; }
     public CraftAppraisalQuote? LatestQuote { get; private set; }
     public string? LastCraftQuoteDiagnosticFilePath { get; private set; }
-    public string? LastMarketDepthDiagnosticFilePath { get; set; }
     public uint? LastThresholdUnitPrice { get; private set; }
     public bool WorkshopHostEnabled { get; set; }
     public bool WorkshopHostAvailable { get; set; }
@@ -111,7 +110,6 @@ public sealed class CraftAppraisalRequestBuilderState
             WorkshopHostStatus = WorkshopHostStatus,
             CraftQuoteStatus = CraftQuoteStatus,
             LastCraftQuoteDiagnosticFilePath = LastCraftQuoteDiagnosticFilePath,
-            LastMarketDepthDiagnosticFilePath = LastMarketDepthDiagnosticFilePath,
             LastQuoteItemName = LatestQuote?.ItemName,
             LastQuoteItemId = LatestQuote?.ItemId ?? 0,
             LatestQuoteWasLastGood = LatestQuote?.Source.Contains(

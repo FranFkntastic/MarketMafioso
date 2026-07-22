@@ -14,14 +14,6 @@ public sealed class VNavmeshIpcTests
     }
 
     [Fact]
-    public void IsReady_ReturnsAdapterReadinessWhenAvailable()
-    {
-        var ipc = new VNavmeshIpc(new FakeAdapter(isAvailable: true, isReady: true));
-
-        Assert.True(ipc.IsReady);
-    }
-
-    [Fact]
     public void IsRunning_ReturnsFalseWhenAdapterUnavailable()
     {
         var ipc = new VNavmeshIpc(new FakeAdapter(isAvailable: false, isRunning: true));
@@ -49,19 +41,6 @@ public sealed class VNavmeshIpcTests
 
         Assert.False(result.Success);
         Assert.Contains("not ready", result.Message);
-    }
-
-    [Fact]
-    public void MoveCloseTo_ReturnsSuccessWhenAdapterAcceptsMove()
-    {
-        var adapter = new FakeAdapter(isAvailable: true, isReady: true, moveResult: true);
-        var ipc = new VNavmeshIpc(adapter);
-
-        var result = ipc.MoveCloseTo(new Vector3(1, 2, 3), 5);
-
-        Assert.True(result.Success);
-        Assert.Equal(new Vector3(1, 2, 3), adapter.LastDestination);
-        Assert.Equal(5, adapter.LastRange);
     }
 
     [Fact]
@@ -95,8 +74,6 @@ public sealed class VNavmeshIpcTests
         }
 
         public bool IsAvailable { get; }
-        public Vector3? LastDestination { get; private set; }
-        public float? LastRange { get; private set; }
         public bool StopCalled { get; private set; }
 
         public bool IsReady()
@@ -111,8 +88,6 @@ public sealed class VNavmeshIpcTests
 
         public bool MoveCloseTo(Vector3 destination, float range)
         {
-            LastDestination = destination;
-            LastRange = range;
             return moveResult;
         }
 

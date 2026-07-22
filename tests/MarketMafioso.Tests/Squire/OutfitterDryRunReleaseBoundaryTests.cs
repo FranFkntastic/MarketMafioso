@@ -8,22 +8,26 @@ namespace MarketMafioso.Tests.Squire;
 public sealed class OutfitterDryRunReleaseBoundaryTests
 {
     [Fact]
-    public void ReleaseAssemblyContainsNoDebugSeedTypeOrMainWindowAction()
+    public void ReleaseArtifactExcludesStateFabricationEntrypoints()
     {
         var assembly = typeof(OutfitterRouteExecutionState).Assembly;
-
-        Assert.Null(assembly.GetType(
+        var forbiddenTypes = new HashSet<string>(StringComparer.Ordinal)
+        {
             "MarketMafioso.Squire.Outfitter.Acquisition.OutfitterDryRunSunkStateSeeder",
-            throwOnError: false));
-        Assert.Null(assembly.GetType(
+            "MarketMafioso.Squire.Outfitter.Crafting.OutfitterS4GoldenFixture",
+            "MarketMafioso.Squire.Outfitter.Crafting.OutfitterS4GoldenFixtureResult",
             "MarketMafioso.Squire.Outfitter.Utility.MinerBotanistAdvisorSyntheticReview",
-            throwOnError: false));
-        Assert.NotNull(assembly.GetType(
-            "MarketMafioso.Squire.Outfitter.Acquisition.OutfitterDryRunPreparedPlanRestorer",
-            throwOnError: false));
-        Assert.Null(typeof(MainWindow).GetMethod(
-            "SeedOutfitterDryRunSunkState",
-            BindingFlags.Instance | BindingFlags.NonPublic));
+        };
+
+        Assert.DoesNotContain(assembly.GetTypes(), type => type.FullName is { } name && forbiddenTypes.Contains(name));
+        Assert.DoesNotContain(
+            typeof(MainWindow).GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic),
+            method => method.Name.Contains("SeedOutfitterDryRunSunkState", StringComparison.Ordinal));
+        var advisorPanel = assembly.GetType("MarketMafioso.Windows.Squire.MinerBotanistAdvisorPanel")
+            ?? throw new InvalidOperationException("Advisor panel type was not present in the Release assembly.");
+        Assert.DoesNotContain(
+            advisorPanel.GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic),
+            method => string.Equals(method.Name, "LoadSyntheticReview", StringComparison.Ordinal));
     }
 }
 #endif

@@ -218,8 +218,4 @@ internal static class AdvisorSolverReplayFileStore
         File.WriteAllText(temporaryPath, JsonSerializer.Serialize(replay, replay.GetType(), JsonOptions));
         File.Move(temporaryPath, path, true);
     }
-
-    public static MinerBotanistSolverReplay Read(string path) =>
-        JsonSerializer.Deserialize<MinerBotanistSolverReplay>(File.ReadAllText(path), JsonOptions)
-        ?? throw new InvalidOperationException("Solver replay file was empty.");
 }

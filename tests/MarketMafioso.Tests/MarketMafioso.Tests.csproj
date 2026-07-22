@@ -5,11 +5,12 @@
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
     <Platforms>x64</Platforms>
+    <ShouldUnsetParentConfigurationAndPlatform>false</ShouldUnsetParentConfigurationAndPlatform>
+    <FranthropyDalamudProject Condition="'$(FranthropyDalamudProject)' == ''">..\..\..\Franthropy\src\Franthropy.Dalamud\Franthropy.Dalamud.csproj</FranthropyDalamudProject>
     <CraftArchitectCoreProject Condition="'$(CraftArchitectCoreProject)' == ''">..\..\..\FFXIV Craft Architect C# Edition\src\FFXIV Craft Architect.Core\FFXIV Craft Architect.Core.csproj</CraftArchitectCoreProject>
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="coverlet.collector" Version="6.0.4" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
     <PackageReference Include="xunit" Version="2.9.3" />
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
@@ -38,7 +39,8 @@
 
   <ItemGroup>
     <ProjectReference Include="$(CraftArchitectCoreProject)" />
-    <ProjectReference Include="..\..\src\MarketMafioso\MarketMafioso.csproj" />
+    <ProjectReference Include="..\..\src\MarketMafioso\MarketMafioso.csproj"
+                      AdditionalProperties="FranthropyDalamudProject=$(FranthropyDalamudProject)" />
   </ItemGroup>
 
   <Target Name="ValidateCraftArchitectCoreProject" BeforeTargets="PrepareForBuild" Condition="!Exists('$(CraftArchitectCoreProject)')">

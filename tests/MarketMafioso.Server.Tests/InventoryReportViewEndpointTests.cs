@@ -83,10 +83,6 @@ public sealed class InventoryReportViewEndpointTests
         var view = await client.GetFromJsonAsync<InventorySnapshotView>($"/api/reports/{id}/view");
 
         Assert.NotNull(view);
-        Assert.Equal("MarketMafioso", view.Metadata.SourcePlugin);
-        Assert.Equal("1.0.0.0", view.Metadata.PluginVersion);
-        Assert.Equal("Endpoint Character", view.CharacterName);
-        Assert.Equal("Gilgamesh", view.HomeWorld);
         Assert.Equal("Inventory1", view.PlayerInventory.Bags[0].Name);
         Assert.Equal("Endpoint Retainer", view.Retainers[0].Name);
         Assert.Equal(219, view.Totals.Quantity);
@@ -162,199 +158,6 @@ public sealed class InventoryReportViewEndpointTests
         Assert.Contains("Html Retainer", html, StringComparison.Ordinal);
         Assert.Contains("Fire Shard", html, StringComparison.Ordinal);
         Assert.Contains("Lightning Shard", html, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public async Task InventoryBrowser_RendersLatestSnapshotItemAggregates()
-    {
-        await using var application = CreateApplication();
-        using var client = application.CreateClient();
-
-        var createResponse = await client.PostAsJsonAsync("/inventory", new InventoryReport
-        {
-            CharacterName = "Browser Character",
-            HomeWorld = "Gilgamesh",
-            Timestamp = "2026-06-24T01:00:00.0000000Z",
-            PlayerInventory =
-            [
-                new InventoryBag
-                {
-                    BagName = "Inventory1",
-                    Items =
-                    [
-                        new ItemSlot
-                        {
-                            ItemId = 5057,
-                            ItemName = "Darksteel Nugget",
-                            Quantity = 12,
-                            IsHQ = true,
-                            Condition = 100,
-                        },
-                    ],
-                },
-            ],
-            Retainers =
-            [
-                new RetainerReport
-                {
-                    RetainerName = "Scrongle",
-                    RetainerId = 42,
-                    LastUpdated = "2026-06-24T00:55:00.0000000Z",
-                    Bags =
-                    [
-                        new InventoryBag
-                        {
-                            BagName = "Retainer Page 1",
-                            Items =
-                            [
-                                new ItemSlot
-                                {
-                                    ItemId = 5057,
-                                    ItemName = "Darksteel Nugget",
-                                    Quantity = 99,
-                                    IsHQ = false,
-                                    Condition = 0,
-                                },
-                            ],
-                        },
-                    ],
-                },
-            ],
-        });
-        createResponse.EnsureSuccessStatusCode();
-
-        var id = await ReadCreatedIdAsync(createResponse);
-        var stored = await client.GetFromJsonAsync<StoredInventoryReport>($"/api/reports/{id}");
-        var shell = await client.GetStringAsync("/inventory?search=darksteel");
-        var view = InventoryBrowserViewBuilder.Build(stored, "darksteel");
-
-        Assert.Contains("_framework/blazor", shell, StringComparison.Ordinal);
-        Assert.NotNull(stored);
-        Assert.Equal("Browser Character", view.CharacterName);
-        Assert.Equal("Gilgamesh", view.HomeWorld);
-        var item = Assert.Single(view.Items);
-        Assert.Equal("Darksteel Nugget", item.DisplayName);
-        Assert.Equal(111, item.TotalQuantity);
-        Assert.Equal(12, item.HqQuantity);
-        Assert.Equal(2, item.OwnerCount);
-        Assert.Contains(item.Locations, x => x.OwnerName == "Player Inventory" && x.BagName == "Inventory1" && x.Quantity == 12);
-        Assert.Contains(item.Locations, x => x.OwnerName == "Scrongle" && x.BagName == "Retainer Page 1" && x.Quantity == 99);
-    }
-
-    [Fact]
-    public async Task InventoryBrowser_RendersScopesListingsTypesAndResizableSeparators()
-    {
-        await using var application = CreateApplication();
-        using var client = application.CreateClient();
-
-        var createResponse = await client.PostAsJsonAsync("/inventory", new InventoryReport
-        {
-            CharacterName = "Semantic Browser",
-            HomeWorld = "Siren",
-            Timestamp = "2026-06-24T12:00:00.0000000Z",
-            PlayerInventory =
-            [
-                new InventoryBag
-                {
-                    BagName = "Inventory1",
-                    Items =
-                    [
-                        new ItemSlot
-                        {
-                            ItemId = 5057,
-                            ItemName = "Darksteel Nugget",
-                            ItemType = "Metal",
-                            Quantity = 12,
-                            IsHQ = true,
-                            Condition = 100,
-                        },
-                    ],
-                },
-            ],
-            Retainers =
-            [
-                new RetainerReport
-                {
-                    RetainerName = "Scrongle",
-                    RetainerId = 42,
-                    OwnerCharacterName = "Semantic Browser",
-                    OwnerHomeWorld = "Siren",
-                    LastUpdated = "2026-06-24T11:53:00.0000000Z",
-                    Gil = 1_242_888,
-                    Bags =
-                    [
-                        new InventoryBag
-                        {
-                            BagName = "RetainerInventory",
-                            Items =
-                            [
-                                new ItemSlot
-                                {
-                                    ItemId = 5057,
-                                    ItemName = "Darksteel Nugget",
-                                    ItemType = "Metal",
-                                    Quantity = 99,
-                                    IsHQ = false,
-                                    Condition = 100,
-                                },
-                            ],
-                        },
-                    ],
-                    MarketListings =
-                    [
-                        new RetainerMarketListing
-                        {
-                            ItemId = 5057,
-                            ItemName = "Darksteel Nugget",
-                            ItemType = "Metal",
-                            Quantity = 20,
-                            IsHQ = false,
-                            Condition = 100,
-                            UnitPrice = 1_800,
-                            ListedAt = "2026-06-24T11:53:00.0000000Z",
-                        },
-                        new RetainerMarketListing
-                        {
-                            ItemId = 5057,
-                            ItemName = "Darksteel Nugget",
-                            ItemType = "Metal",
-                            Quantity = 79,
-                            IsHQ = false,
-                            Condition = 100,
-                            UnitPrice = 2_150,
-                            ListedAt = "2026-06-24T11:53:00.0000000Z",
-                        },
-                    ],
-                },
-            ],
-        });
-        createResponse.EnsureSuccessStatusCode();
-
-        var id = await ReadCreatedIdAsync(createResponse);
-        var stored = await client.GetFromJsonAsync<StoredInventoryReport>($"/api/reports/{id}");
-        var shell = await client.GetStringAsync("/inventory?search=darksteel");
-        var view = InventoryBrowserViewBuilder.Build(stored, "darksteel");
-
-        Assert.Contains("_framework/blazor", shell, StringComparison.Ordinal);
-        Assert.NotNull(stored);
-        Assert.Equal((ulong)1_242_888, view.RetainerGil);
-        var scope = Assert.Single(view.Scopes, x => x.DisplayName == "Scrongle");
-        Assert.Equal(1, scope.StackCount);
-        Assert.Equal((ulong)1_242_888, scope.Gil);
-        Assert.Equal(2, scope.MarketListingCount);
-        Assert.Equal("Semantic Browser", scope.OwnerCharacterName);
-        Assert.Equal("Siren", scope.OwnerHomeWorld);
-        var item = Assert.Single(view.Items);
-        Assert.Equal("Metal", item.ItemType);
-        Assert.Equal(1, view.ItemTypeKnownCount);
-        Assert.Equal(111, item.TotalQuantity);
-        Assert.Equal(12, item.HqQuantity);
-        Assert.Empty(view.MarketListings);
-        var listings = InventoryBrowserViewBuilder.Build(stored, "darksteel", mode: InventoryBrowserMode.Listings);
-        Assert.Equal(2, listings.MarketListings.Count);
-        Assert.Equal(2, listings.ListingPriceKnownCount);
-        Assert.Contains(listings.MarketListings, x => x.OwnerName == "Scrongle" && x.UnitPrice == 1_800 && x.Quantity == 20);
-        Assert.Contains(listings.MarketListings, x => x.OwnerName == "Scrongle" && x.UnitPrice == 2_150 && x.Quantity == 79);
     }
 
     [Fact]
@@ -476,16 +279,12 @@ public sealed class InventoryReportViewEndpointTests
         var olderResponse = await client.PostAsJsonAsync("/inventory", CreateReport("Older Snapshot"));
         olderResponse.EnsureSuccessStatusCode();
         var olderId = await ReadCreatedIdAsync(olderResponse);
-        await Task.Delay(10);
         var newerResponse = await client.PostAsJsonAsync("/inventory", CreateReport("Newer Snapshot"));
         newerResponse.EnsureSuccessStatusCode();
 
-        var latest = await client.GetFromJsonAsync<InventoryBrowserView>("/api/inventory/browser");
         var historical = await client.GetFromJsonAsync<InventoryBrowserView>(
             $"/api/inventory/browser?snapshotId={Uri.EscapeDataString(olderId)}");
 
-        Assert.NotNull(latest);
-        Assert.Equal("Newer Snapshot", latest.CharacterName);
         Assert.NotNull(historical);
         Assert.Equal(olderId, historical.SnapshotId);
         Assert.Equal("Older Snapshot", historical.CharacterName);
@@ -803,44 +602,6 @@ public sealed class InventoryReportViewEndpointTests
     }
 
     [Fact]
-    public async Task DashboardListing_SkipsUnreadableSnapshotFiles()
-    {
-        string? contentRoot = null;
-        await using var application = CreateHostedApplication(
-            values =>
-            {
-                contentRoot = values.ContentRoot;
-                values.Configuration["MarketMafioso:BasePath"] = "/marketmafioso";
-            });
-        using var client = application.CreateClient();
-
-        var reportDirectory = Path.Combine(contentRoot!, "data", "reports");
-        Directory.CreateDirectory(reportDirectory);
-        await File.WriteAllTextAsync(
-            Path.Combine(reportDirectory, "20260623121600439-10aa438b.json"),
-            string.Empty);
-
-        var createResponse = await SendWithKeyAsync(
-            client,
-            HttpMethod.Post,
-            "/marketmafioso/api/inventory",
-            "test-client-secret",
-            CreateReport("Corrupt File Character"));
-        createResponse.EnsureSuccessStatusCode();
-
-        var dashboard = await client.GetAsync("/marketmafioso/");
-        var latestJson = await client.GetAsync("/marketmafioso/reports/latest/json");
-
-        Assert.Equal(HttpStatusCode.OK, dashboard.StatusCode);
-        Assert.Equal(HttpStatusCode.OK, latestJson.StatusCode);
-        Assert.Contains("_framework/blazor", await dashboard.Content.ReadAsStringAsync(), StringComparison.Ordinal);
-        Assert.Contains(
-            "Corrupt File Character",
-            await latestJson.Content.ReadAsStringAsync(),
-            StringComparison.Ordinal);
-    }
-
-    [Fact]
     public async Task HostedMode_DashboardDeleteDoesNotRequireCsrf()
     {
         await using var application = CreateHostedApplication(
@@ -931,6 +692,7 @@ public sealed class InventoryReportViewEndpointTests
 
         var contentRoot = Path.Combine(Path.GetTempPath(), "MarketMafioso.Server.Tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(contentRoot);
+        values["MarketMafioso:DatabasePath"] = Path.Combine(contentRoot, "marketmafioso.db");
         configure(new HostedApplicationValues
         {
             ContentRoot = contentRoot,

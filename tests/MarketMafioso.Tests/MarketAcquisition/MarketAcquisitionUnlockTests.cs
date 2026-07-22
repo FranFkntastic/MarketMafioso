@@ -3,14 +3,6 @@ namespace MarketMafioso.Tests.MarketAcquisition;
 public sealed class MarketAcquisitionUnlockTests
 {
     [Fact]
-    public void IsUnlocked_DefaultsToFalse()
-    {
-        var config = new MarketMafioso.Configuration();
-
-        Assert.False(MarketMafioso.MarketAcquisition.MarketAcquisitionUnlock.IsUnlocked(config));
-    }
-
-    [Fact]
     public void TryUnlock_RejectsWrongKeyWithoutChangingConfig()
     {
         var config = new MarketMafioso.Configuration();

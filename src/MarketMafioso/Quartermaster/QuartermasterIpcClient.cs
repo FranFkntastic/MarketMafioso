@@ -694,7 +694,12 @@ public sealed class QuartermasterIpcClient : IDisposable
         return true;
     }
 
-    private static ImmutableArray<string> NormalizeSources(IEnumerable<string>? sources) => NormalizeStrings(sources);
+    private static ImmutableArray<string> NormalizeSources(IEnumerable<string>? sources) =>
+        (sources ?? [])
+            .Where(source => !string.IsNullOrWhiteSpace(source))
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(source => source, StringComparer.Ordinal)
+            .ToImmutableArray();
 
     private static ImmutableArray<string> NormalizeStrings(IEnumerable<string>? values) =>
         (values ?? []).Where(value => !string.IsNullOrWhiteSpace(value)).Distinct(StringComparer.Ordinal).OrderBy(value => value, StringComparer.Ordinal).ToImmutableArray();

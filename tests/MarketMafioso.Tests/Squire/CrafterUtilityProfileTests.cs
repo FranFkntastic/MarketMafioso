@@ -62,13 +62,6 @@ public sealed class CrafterUtilityProfileTests
         Assert.Equal(UpgradeAssessment.Unsupported, gatherer.Evaluate(new CrafterUtilityStats(4_001, 4_001, 600)).Assessment);
     }
 
-    [Fact]
-    public void ProfileDeclaresSupportedCalibrationAfterTheHoldoutPasses()
-    {
-        Assert.Equal(AdvisorProfileCalibrationState.Supported, CrafterUtilityProfile.CalibrationState);
-        Assert.Equal("squire.crafter.player", CrafterUtilityProfile.ProfileId);
-    }
-
     private static CrafterUtilityProfile Ordinary(CrafterUtilityStats baseline) =>
         new(CrafterUtilityContextKind.OrdinaryCraftBenchmark, baseline, CrafterUtilityProfile.BlacksmithClassJobId, 100);
 }

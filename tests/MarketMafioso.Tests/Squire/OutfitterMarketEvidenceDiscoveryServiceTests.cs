@@ -76,6 +76,24 @@ public sealed class OutfitterMarketEvidenceDiscoveryServiceTests
     }
 
     [Fact]
+    public async Task Discovery_PreservesSameRawListingIdAcrossWorlds()
+    {
+        var first = Listing(10, "cross-world-id", false, 500);
+        var second = first with { WorldId = 74, WorldName = "Coeurl", LastReviewTimeUtc = Now.AddMinutes(-2) };
+        var source = new StubListingSource((_, _) => Task.FromResult<IReadOnlyList<MarketAcquisitionListing>>([first, second]));
+        var service = new OutfitterMarketEvidenceDiscoveryService(source, Cache(), utcNow: () => Now);
+
+        var result = await service.DiscoverAsync(Request([10]), CancellationToken.None);
+
+        var item = Assert.Single(result.WorkingBook.Items);
+        Assert.Equal(OutfitterMarketEvidenceItemStatus.Fresh, item.Status);
+        Assert.Equal(2, item.Listings.Count);
+        Assert.Contains(item.Listings, listing => listing.WorldName == "Siren" && listing.ListingId == "cross-world-id");
+        Assert.Contains(item.Listings, listing => listing.WorldName == "Coeurl" && listing.ListingId == "cross-world-id");
+        Assert.NotNull(result.PublishedBook);
+    }
+
+    [Fact]
     public async Task PersistedExactDuplicates_AreRepairedBeforeWarmCacheUse()
     {
         var evidence = ItemEvidence(10, Now, Listing(10, "persisted-duplicate", false, 500));

@@ -21,6 +21,8 @@ public sealed record AgentBridgeAdvisorSolution(
     string SolutionId,
     ulong AcquisitionCostGil,
     double UtilityScore,
+    bool AdvisorMayConsider,
+    IReadOnlyList<string> AuthorityReasons,
     int WorldVisits,
     int VendorStops,
     int PurchaseTransactions,
@@ -48,6 +50,10 @@ public sealed record AgentBridgeAdvisorState(
     int Completed,
     int? Total,
     string Context,
+    string ProfileId,
+    string ProfileVersion,
+    string CalibrationState,
+    uint? ClassJobId,
     AgentBridgeAdvisorAdvice? Advice,
     bool AdviceIsRetained,
     DateTimeOffset UpdatedAtUtc,
@@ -59,6 +65,9 @@ public sealed record AgentBridgeAdvisorState(
     {
         AgentBridgeAdvisorSolution Convert(EquipmentDecisionSolution solution)
         {
+            var authority = state.Advice!.AuthorityBySolutionId.TryGetValue(solution.Candidate.SolutionId, out var resolvedAuthority)
+                ? resolvedAuthority
+                : new AdvisorAuthorityAssessment(false, solution.Utility.Assessment, [], ["Authority was not published for this frontier solution."]);
             var selections = solution.Candidate.Selections.Select(selection =>
             {
                 var offer = state.Advice!.OffersByAllocation[selection.AllocationKey];
@@ -77,16 +86,23 @@ public sealed record AgentBridgeAdvisorState(
                 solution.Candidate.SolutionId,
                 solution.AcquisitionCostGil,
                 solution.Utility.UtilityScore,
+                authority.AdvisorMayConsider,
+                authority.Reasons,
                 solution.Burden.WorldVisits,
                 solution.Burden.VendorStops,
                 solution.Burden.PurchaseTransactions,
                 selections);
         }
 
+        var family = AdvisorStatFamilies.All.FirstOrDefault(candidate =>
+            candidate.ProfileDescriptor.Contexts.Any(context => string.Equals(context.Id, state.Context.Id, StringComparison.Ordinal)));
+        var profile = family?.ProfileDescriptor;
         AgentBridgeAdvisorAdvice? advice = null;
+        uint? classJobId = null;
         if (state.Advice is { } source)
         {
             var frontier = source.Frontier?.Pareto.Frontier ?? [];
+            classJobId = (source.Nomination ?? frontier.FirstOrDefault())?.Utility.Context.ClassJobId;
             var presentation = frontier.Count == 0 ? null : new AdvisorFrontierPresentation(source.Frontier!.Pareto);
             var window = presentation is null
                 ? null
@@ -116,6 +132,10 @@ public sealed record AgentBridgeAdvisorState(
             state.Completed,
             state.Total,
             state.Context.ConfigurationValue,
+            profile?.Id ?? string.Empty,
+            profile?.Version ?? string.Empty,
+            profile?.CalibrationState.ToString() ?? AdvisorProfileCalibrationState.Experimental.ToString(),
+            classJobId,
             advice,
             state.AdviceIsRetained,
             state.UpdatedAtUtc,

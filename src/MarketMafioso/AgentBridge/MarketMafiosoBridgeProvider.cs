@@ -61,12 +61,57 @@ public interface IMarketMafiosoBridgeProvider
     RenderedEquipmentScanStepResult AdvanceCharacterEquipmentScanUi();
     RenderedEquipmentScanProgress CancelCharacterEquipmentScanUi();
     AgentBridgeUiAutomationCapabilities GetUiAutomationCapabilities();
+#if DEBUG
     bool TryOpenSyntheticAdvisorReview();
+#endif
     IReadOnlyList<AgentBridgeReviewSurfaceDescriptor> GetReviewSurfaces();
     AgentBridgeUiReviewFrame GetControlSurface();
     AgentBridgeUiControlReview ReviewControl(string controlId);
     AgentBridgeUiControlInvocation InvokeControl(string controlId, long frameId);
 }
+
+public sealed record MarketMafiosoBridgeBindings(
+    Action OpenCharacterUi,
+    Func<bool> TryCloseCharacterUi,
+    Func<bool> TryCloseBlockingSelectStringUi,
+    Func<bool> TryCloseRetainerUi,
+    Func<string, GearsetChangeCommand?> TrySwitchCalibrationJobUi,
+    Func<string, GearsetChangeCommand?> TrySwitchGearsetSlotUi,
+    Func<RenderedUiTextActionResult> TryOpenGearsetListUi,
+    Func<string, RenderedUiTextActionResult> TrySelectCalibrationGearsetUi,
+    Func<RenderedUiTextActionResult> TryEquipSelectedGearsetUi,
+    Func<AgentBridgeRenderedUiSnapshot> CaptureCharacterUi,
+    Func<AgentBridgeRenderedUiSnapshot> CaptureRetainerUi,
+    Func<string, RenderedRetainerUiPreparationProgress> BeginRetainerObservationUi,
+    Func<RenderedRetainerUiPreparationProgress> AdvanceRetainerObservationUi,
+    Func<RenderedRetainerUiPreparationProgress> CancelRetainerObservationUi,
+    Func<string, RenderedUiTextActionResult> TryOpenRenderedRetainerUi,
+    Func<MinerBotanistAdvisorSessionState> CaptureAdvisorStateUi,
+    Func<AgentBridgeInventoryStructSnapshot> CaptureInventoryStructSnapshotUi,
+    Func<bool> TryOpenArmouryBoardUi,
+    Func<bool> TryCloseArmouryBoardUi,
+    Func<string, RenderedUiTextActionResult> TryShowArmourySlotTooltipUi,
+    Func<string, RenderedUiTextActionResult> TryShowBagSlotTooltipUi,
+    Func<string, RenderedUiTextActionResult> TryOpenBagSlotContextUi,
+    Func<string, RenderedUiTextActionResult> TryInvokeBagSlotContextActionUi,
+    Func<bool> TryCloseBagSlotContextUi,
+    Func<string, string> CaptureTooltipMapDiagnosticUi,
+    Func<string> CaptureInventoryContainerTableDiagnosticUi,
+    Func<string> CaptureInventoryBuddyOccupancyDiagnosticUi,
+    Func<string> CaptureInventoryWindowOccupancyDiagnosticUi,
+    Func<int, string> SetInventoryTabDiagnosticUi,
+    Func<RenderedArmouryDifferentialProgress> BeginArmouryDifferentialUi,
+    Func<RenderedArmouryDifferentialProgress> AdvanceArmouryDifferentialUi,
+    Func<RenderedArmouryDifferentialProgress> CancelArmouryDifferentialUi,
+    Func<RenderedGatheringStatsObservation> CaptureGatheringStatsUi,
+    Func<RenderedEquipmentScanProgress> BeginCharacterEquipmentScanUi,
+    Func<RenderedEquipmentScanStepResult> AdvanceCharacterEquipmentScanUi,
+    Func<RenderedEquipmentScanProgress> CancelCharacterEquipmentScanUi,
+#if DEBUG
+    Func<bool> TryOpenSyntheticAdvisorReview,
+#endif
+    Func<AgentBridgeUiAutomationCapabilities> GetUiAutomationCapabilities
+);
 
 public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
 {
@@ -100,44 +145,7 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
     private readonly Action captureInputState;
     private readonly Action stopRoute;
     private readonly Func<bool> isMarketAcquisitionUnlocked;
-    private readonly Action openCharacterUi;
-    private readonly Func<bool> tryCloseCharacterUi;
-    private readonly Func<bool> tryCloseBlockingSelectStringUi;
-    private readonly Func<bool> tryCloseRetainerUi;
-    private readonly Func<string, GearsetChangeCommand?> trySwitchCalibrationJobUi;
-    private readonly Func<string, GearsetChangeCommand?> trySwitchGearsetSlotUi;
-    private readonly Func<RenderedUiTextActionResult> tryOpenGearsetListUi;
-    private readonly Func<string, RenderedUiTextActionResult> trySelectCalibrationGearsetUi;
-    private readonly Func<RenderedUiTextActionResult> tryEquipSelectedGearsetUi;
-    private readonly Func<RenderedEquipmentScanProgress> beginCharacterEquipmentScanUi;
-    private readonly Func<RenderedEquipmentScanStepResult> advanceCharacterEquipmentScanUi;
-    private readonly Func<RenderedEquipmentScanProgress> cancelCharacterEquipmentScanUi;
-    private readonly Func<AgentBridgeUiAutomationCapabilities> getUiAutomationCapabilities;
-    private readonly Func<AgentBridgeRenderedUiSnapshot> captureCharacterUi;
-    private readonly Func<AgentBridgeRenderedUiSnapshot> captureRetainerUi;
-    private readonly Func<string, RenderedRetainerUiPreparationProgress> beginRetainerObservationUi;
-    private readonly Func<RenderedRetainerUiPreparationProgress> advanceRetainerObservationUi;
-    private readonly Func<RenderedRetainerUiPreparationProgress> cancelRetainerObservationUi;
-    private readonly Func<string, RenderedUiTextActionResult> tryOpenRenderedRetainerUi;
-    private readonly Func<MinerBotanistAdvisorSessionState> captureAdvisorStateUi;
-    private readonly Func<AgentBridgeInventoryStructSnapshot>? captureInventoryStructSnapshotUi;
-    private readonly Func<bool> tryOpenArmouryBoardUi;
-    private readonly Func<bool> tryCloseArmouryBoardUi;
-    private readonly Func<string, RenderedUiTextActionResult> tryShowArmourySlotTooltipUi;
-    private readonly Func<string, RenderedUiTextActionResult> tryShowBagSlotTooltipUi;
-    private readonly Func<string, RenderedUiTextActionResult> tryOpenBagSlotContextUi;
-    private readonly Func<string, RenderedUiTextActionResult> tryInvokeBagSlotContextActionUi;
-    private readonly Func<bool> tryCloseBagSlotContextUi;
-    private readonly Func<string, string> captureTooltipMapDiagnosticUi;
-    private readonly Func<string> captureInventoryContainerTableDiagnosticUi;
-    private readonly Func<string> captureInventoryBuddyOccupancyDiagnosticUi;
-    private readonly Func<string> captureInventoryWindowOccupancyDiagnosticUi;
-    private readonly Func<int, string> setInventoryTabDiagnosticUi;
-    private readonly Func<RenderedArmouryDifferentialProgress> beginArmouryDifferentialUi;
-    private readonly Func<RenderedArmouryDifferentialProgress> advanceArmouryDifferentialUi;
-    private readonly Func<RenderedArmouryDifferentialProgress> cancelArmouryDifferentialUi;
-    private readonly Func<RenderedGatheringStatsObservation> captureGatheringStatsUi;
-    private readonly Func<bool> tryOpenSyntheticAdvisorReview;
+    private readonly MarketMafiosoBridgeBindings bindings;
     private readonly AgentBridgeUiReviewRegistry reviewRegistry;
 
     public MarketMafiosoBridgeProvider(
@@ -150,45 +158,8 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
         Action captureInputState,
         Action stopRoute,
         Func<bool> isMarketAcquisitionUnlocked,
-        AgentBridgeUiReviewRegistry reviewRegistry,
-        Action? openCharacterUi = null,
-        Func<bool>? tryCloseCharacterUi = null,
-        Func<AgentBridgeRenderedUiSnapshot>? captureCharacterUi = null,
-        Func<bool>? tryCloseBlockingSelectStringUi = null,
-        Func<string, GearsetChangeCommand?>? trySwitchCalibrationJobUi = null,
-        Func<string, GearsetChangeCommand?>? trySwitchGearsetSlotUi = null,
-        Func<RenderedGatheringStatsObservation>? captureGatheringStatsUi = null,
-        Func<RenderedEquipmentScanProgress>? beginCharacterEquipmentScanUi = null,
-        Func<RenderedEquipmentScanStepResult>? advanceCharacterEquipmentScanUi = null,
-        Func<RenderedEquipmentScanProgress>? cancelCharacterEquipmentScanUi = null,
-        Func<AgentBridgeUiAutomationCapabilities>? getUiAutomationCapabilities = null,
-        Func<bool>? tryOpenSyntheticAdvisorReview = null,
-        Func<AgentBridgeRenderedUiSnapshot>? captureRetainerUi = null,
-        Func<string, RenderedRetainerUiPreparationProgress>? beginRetainerObservationUi = null,
-        Func<RenderedRetainerUiPreparationProgress>? advanceRetainerObservationUi = null,
-        Func<RenderedRetainerUiPreparationProgress>? cancelRetainerObservationUi = null,
-        Func<string, RenderedUiTextActionResult>? tryOpenRenderedRetainerUi = null,
-        Func<RenderedUiTextActionResult>? tryOpenGearsetListUi = null,
-        Func<string, RenderedUiTextActionResult>? trySelectCalibrationGearsetUi = null,
-        Func<RenderedUiTextActionResult>? tryEquipSelectedGearsetUi = null,
-        Func<bool>? tryCloseRetainerUi = null,
-        Func<MinerBotanistAdvisorSessionState>? captureAdvisorStateUi = null,
-        Func<AgentBridgeInventoryStructSnapshot>? captureInventoryStructSnapshotUi = null,
-        Func<bool>? tryOpenArmouryBoardUi = null,
-        Func<bool>? tryCloseArmouryBoardUi = null,
-        Func<string, RenderedUiTextActionResult>? tryShowArmourySlotTooltipUi = null,
-        Func<string, RenderedUiTextActionResult>? tryShowBagSlotTooltipUi = null,
-        Func<string, RenderedUiTextActionResult>? tryOpenBagSlotContextUi = null,
-        Func<string, RenderedUiTextActionResult>? tryInvokeBagSlotContextActionUi = null,
-        Func<bool>? tryCloseBagSlotContextUi = null,
-        Func<string, string>? captureTooltipMapDiagnosticUi = null,
-        Func<string>? captureInventoryContainerTableDiagnosticUi = null,
-        Func<string>? captureInventoryBuddyOccupancyDiagnosticUi = null,
-        Func<string>? captureInventoryWindowOccupancyDiagnosticUi = null,
-        Func<int, string>? setInventoryTabDiagnosticUi = null,
-        Func<RenderedArmouryDifferentialProgress>? beginArmouryDifferentialUi = null,
-        Func<RenderedArmouryDifferentialProgress>? advanceArmouryDifferentialUi = null,
-        Func<RenderedArmouryDifferentialProgress>? cancelArmouryDifferentialUi = null)
+        MarketMafiosoBridgeBindings bindings,
+        AgentBridgeUiReviewRegistry reviewRegistry)
     {
         this.createSnapshot = createSnapshot ?? throw new ArgumentNullException(nameof(createSnapshot));
         this.openMainWindow = openMainWindow ?? throw new ArgumentNullException(nameof(openMainWindow));
@@ -199,56 +170,8 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
         this.captureInputState = captureInputState ?? throw new ArgumentNullException(nameof(captureInputState));
         this.stopRoute = stopRoute ?? throw new ArgumentNullException(nameof(stopRoute));
         this.isMarketAcquisitionUnlocked = isMarketAcquisitionUnlocked ?? throw new ArgumentNullException(nameof(isMarketAcquisitionUnlocked));
+        this.bindings = bindings ?? throw new ArgumentNullException(nameof(bindings));
         this.reviewRegistry = reviewRegistry ?? throw new ArgumentNullException(nameof(reviewRegistry));
-        this.openCharacterUi = openCharacterUi ?? (() => { });
-        this.tryCloseCharacterUi = tryCloseCharacterUi ?? (() => false);
-        this.captureCharacterUi = captureCharacterUi ?? (() => new(DateTimeOffset.UtcNow, []));
-        this.captureRetainerUi = captureRetainerUi ?? (() => new(DateTimeOffset.UtcNow, []));
-        this.beginRetainerObservationUi = beginRetainerObservationUi ?? (_ => new(RenderedRetainerUiPreparationStatus.Failed, 0, "Retainer UI preparation is unavailable."));
-        this.advanceRetainerObservationUi = advanceRetainerObservationUi ?? (() => this.beginRetainerObservationUi(string.Empty));
-        this.cancelRetainerObservationUi = cancelRetainerObservationUi ?? (() => new(RenderedRetainerUiPreparationStatus.Cancelled, 0, "Retainer UI preparation is unavailable."));
-        this.tryOpenRenderedRetainerUi = tryOpenRenderedRetainerUi ?? (_ => new(false, "Unavailable", "Rendered retainer selection is unavailable.", "RetainerList", null));
-        this.captureAdvisorStateUi = captureAdvisorStateUi ?? (() => new(
-            MinerBotanistAdvisorSessionStage.Failed,
-            "Advisor session state is unavailable.",
-            "Coverage unavailable.",
-            0,
-            null,
-            GathererAdvisorStatFamily.Instance.ProfileDescriptor.DefaultContext,
-            null,
-            false,
-            DateTimeOffset.UtcNow));
-        this.tryCloseBlockingSelectStringUi = tryCloseBlockingSelectStringUi ?? (() => false);
-        this.tryCloseRetainerUi = tryCloseRetainerUi ?? (() => false);
-        this.trySwitchCalibrationJobUi = trySwitchCalibrationJobUi ?? (_ => null);
-        this.trySwitchGearsetSlotUi = trySwitchGearsetSlotUi ?? (_ => null);
-        this.tryOpenGearsetListUi = tryOpenGearsetListUi ?? (() => new(false, "Unavailable", "Rendered gearset-list automation is unavailable.", "Character", null));
-        this.trySelectCalibrationGearsetUi = trySelectCalibrationGearsetUi ?? (_ => new(false, "Unavailable", "Rendered gearset selection is unavailable.", "GearSetList", null));
-        this.tryEquipSelectedGearsetUi = tryEquipSelectedGearsetUi ?? (() => new(false, "Unavailable", "Rendered gearset equipping is unavailable.", "GearSetList", null));
-        this.captureGatheringStatsUi = captureGatheringStatsUi ?? (() => new(Guid.NewGuid(), DateTimeOffset.UtcNow, RenderedCharacterObservationStatus.Unavailable, null, null, null, null, null, [], "Rendered gathering observation is unavailable."));
-        this.beginCharacterEquipmentScanUi = beginCharacterEquipmentScanUi ?? (() => new(RenderedEquipmentScanStatus.Failed, 0, 0, null, [], "Rendered equipment scanning is unavailable."));
-        this.advanceCharacterEquipmentScanUi = advanceCharacterEquipmentScanUi ?? (() => new(false, this.beginCharacterEquipmentScanUi(), "Rendered equipment scanning is unavailable."));
-        this.cancelCharacterEquipmentScanUi = cancelCharacterEquipmentScanUi ?? (() => new(RenderedEquipmentScanStatus.Cancelled, 0, 0, null, [], "Rendered equipment scanning is unavailable."));
-        this.getUiAutomationCapabilities = getUiAutomationCapabilities ?? (() => new(
-            "unavailable", false, false, false, true, true, true,
-            "Rendered UI automation capabilities were not registered."));
-        this.tryOpenSyntheticAdvisorReview = tryOpenSyntheticAdvisorReview ?? (() => false);
-        this.captureInventoryStructSnapshotUi = captureInventoryStructSnapshotUi;
-        this.tryOpenArmouryBoardUi = tryOpenArmouryBoardUi ?? (() => false);
-        this.tryCloseArmouryBoardUi = tryCloseArmouryBoardUi ?? (() => false);
-        this.tryShowArmourySlotTooltipUi = tryShowArmourySlotTooltipUi ?? (_ => new(false, "Unavailable", "Rendered armoury automation is unavailable.", "ArmouryBoard", null));
-        this.tryShowBagSlotTooltipUi = tryShowBagSlotTooltipUi ?? (_ => new(false, "Unavailable", "Rendered bag automation is unavailable.", "Inventory", null));
-        this.tryOpenBagSlotContextUi = tryOpenBagSlotContextUi ?? (_ => new(false, "Unavailable", "Inventory context automation is unavailable.", "ContextMenu", null));
-        this.tryInvokeBagSlotContextActionUi = tryInvokeBagSlotContextActionUi ?? tryOpenBagSlotContextUi ?? (_ => new(false, "Unavailable", "Inventory context automation is unavailable.", "ContextMenu", null));
-        this.tryCloseBagSlotContextUi = tryCloseBagSlotContextUi ?? (() => false);
-        this.captureTooltipMapDiagnosticUi = captureTooltipMapDiagnosticUi ?? (_ => "Tooltip map diagnostics are unavailable.");
-        this.captureInventoryContainerTableDiagnosticUi = captureInventoryContainerTableDiagnosticUi ?? (() => "Inventory container table diagnostics are unavailable.");
-        this.captureInventoryBuddyOccupancyDiagnosticUi = captureInventoryBuddyOccupancyDiagnosticUi ?? (() => "Inventory buddy occupancy diagnostics are unavailable.");
-        this.captureInventoryWindowOccupancyDiagnosticUi = captureInventoryWindowOccupancyDiagnosticUi ?? (() => "Inventory window occupancy diagnostics are unavailable.");
-        this.setInventoryTabDiagnosticUi = setInventoryTabDiagnosticUi ?? (_ => "Inventory tab automation is unavailable.");
-        this.beginArmouryDifferentialUi = beginArmouryDifferentialUi ?? (() => new(RenderedArmouryDifferentialStatus.Failed, 0, 0, string.Empty, 0, [], [], [], "The armoury differential proof is unavailable."));
-        this.advanceArmouryDifferentialUi = advanceArmouryDifferentialUi ?? this.beginArmouryDifferentialUi;
-        this.cancelArmouryDifferentialUi = cancelArmouryDifferentialUi ?? (() => new(RenderedArmouryDifferentialStatus.Cancelled, 0, 0, string.Empty, 0, [], [], [], "The armoury differential proof is unavailable."));
     }
 
     public AgentBridgeTruth CreateSnapshot() => createSnapshot();
@@ -259,55 +182,50 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
     public bool TrySelectMainTab(string tabName) => trySelectMainTab(tabName);
     public void CaptureInputState() => captureInputState();
     public void StopRoute() => stopRoute();
-    public void OpenCharacterUi() => openCharacterUi();
-    public bool TryCloseCharacterUi() => tryCloseCharacterUi();
-    public bool TryCloseBlockingSelectStringUi() => tryCloseBlockingSelectStringUi();
-    public bool TryCloseRetainerUi() => tryCloseRetainerUi();
-    public GearsetChangeCommand? TrySwitchCalibrationJobUi(string target) => trySwitchCalibrationJobUi(target);
-    public GearsetChangeCommand? TrySwitchGearsetSlotUi(string target) => trySwitchGearsetSlotUi(target);
-    public RenderedUiTextActionResult TryOpenGearsetListUi() => tryOpenGearsetListUi();
-    public RenderedUiTextActionResult TrySelectCalibrationGearsetUi(string target) => trySelectCalibrationGearsetUi(target);
-    public RenderedUiTextActionResult TryEquipSelectedGearsetUi() => tryEquipSelectedGearsetUi();
-    public AgentBridgeRenderedUiSnapshot CaptureCharacterUi() => captureCharacterUi();
-    public AgentBridgeRenderedUiSnapshot CaptureRetainerUi() => captureRetainerUi();
-    public RenderedRetainerUiPreparationProgress BeginRetainerObservationUi(string ownerHomeWorld) => beginRetainerObservationUi(ownerHomeWorld);
-    public RenderedRetainerUiPreparationProgress AdvanceRetainerObservationUi() => advanceRetainerObservationUi();
-    public RenderedRetainerUiPreparationProgress CancelRetainerObservationUi() => cancelRetainerObservationUi();
-    public RenderedUiTextActionResult TryOpenRenderedRetainerUi(string retainerName) => tryOpenRenderedRetainerUi(retainerName);
-    public MinerBotanistAdvisorSessionState CaptureAdvisorStateUi() => captureAdvisorStateUi();
-    public AgentBridgeInventoryStructSnapshot CaptureInventoryStructSnapshotUi() =>
-        captureInventoryStructSnapshotUi?.Invoke() ?? new(
-            "Unavailable",
-            0,
-            DateTimeOffset.UtcNow,
-            [],
-            [],
-            "The inventory struct snapshot source is not registered.");
-    public bool TryOpenArmouryBoardUi() => tryOpenArmouryBoardUi();
-    public bool TryCloseArmouryBoardUi() => tryCloseArmouryBoardUi();
-    public RenderedUiTextActionResult TryShowArmourySlotTooltipUi(string target) => tryShowArmourySlotTooltipUi(target);
-    public RenderedUiTextActionResult TryShowBagSlotTooltipUi(string target) => tryShowBagSlotTooltipUi(target);
-    public RenderedUiTextActionResult TryOpenBagSlotContextUi(string target) => tryOpenBagSlotContextUi(target);
-    public RenderedUiTextActionResult TryInvokeBagSlotContextActionUi(string target) => tryInvokeBagSlotContextActionUi(target);
-    public bool TryCloseBagSlotContextUi() => tryCloseBagSlotContextUi();
-    public string CaptureTooltipMapDiagnosticUi(string addonName) => captureTooltipMapDiagnosticUi(addonName);
-    public string CaptureInventoryContainerTableDiagnosticUi() => captureInventoryContainerTableDiagnosticUi();
-    public string CaptureInventoryBuddyOccupancyDiagnosticUi() => captureInventoryBuddyOccupancyDiagnosticUi();
-    public string CaptureInventoryWindowOccupancyDiagnosticUi() => captureInventoryWindowOccupancyDiagnosticUi();
-    public string SetInventoryTabDiagnosticUi(int tab) => setInventoryTabDiagnosticUi(tab);
-    public RenderedArmouryDifferentialProgress BeginArmouryDifferentialUi() => beginArmouryDifferentialUi();
-    public RenderedArmouryDifferentialProgress AdvanceArmouryDifferentialUi() => advanceArmouryDifferentialUi();
-    public RenderedArmouryDifferentialProgress CancelArmouryDifferentialUi() => cancelArmouryDifferentialUi();
-    public RenderedGatheringStatsObservation CaptureGatheringStatsUi() => captureGatheringStatsUi();
+    public void OpenCharacterUi() => bindings.OpenCharacterUi();
+    public bool TryCloseCharacterUi() => bindings.TryCloseCharacterUi();
+    public bool TryCloseBlockingSelectStringUi() => bindings.TryCloseBlockingSelectStringUi();
+    public bool TryCloseRetainerUi() => bindings.TryCloseRetainerUi();
+    public GearsetChangeCommand? TrySwitchCalibrationJobUi(string target) => bindings.TrySwitchCalibrationJobUi(target);
+    public GearsetChangeCommand? TrySwitchGearsetSlotUi(string target) => bindings.TrySwitchGearsetSlotUi(target);
+    public RenderedUiTextActionResult TryOpenGearsetListUi() => bindings.TryOpenGearsetListUi();
+    public RenderedUiTextActionResult TrySelectCalibrationGearsetUi(string target) => bindings.TrySelectCalibrationGearsetUi(target);
+    public RenderedUiTextActionResult TryEquipSelectedGearsetUi() => bindings.TryEquipSelectedGearsetUi();
+    public AgentBridgeRenderedUiSnapshot CaptureCharacterUi() => bindings.CaptureCharacterUi();
+    public AgentBridgeRenderedUiSnapshot CaptureRetainerUi() => bindings.CaptureRetainerUi();
+    public RenderedRetainerUiPreparationProgress BeginRetainerObservationUi(string ownerHomeWorld) => bindings.BeginRetainerObservationUi(ownerHomeWorld);
+    public RenderedRetainerUiPreparationProgress AdvanceRetainerObservationUi() => bindings.AdvanceRetainerObservationUi();
+    public RenderedRetainerUiPreparationProgress CancelRetainerObservationUi() => bindings.CancelRetainerObservationUi();
+    public RenderedUiTextActionResult TryOpenRenderedRetainerUi(string retainerName) => bindings.TryOpenRenderedRetainerUi(retainerName);
+    public MinerBotanistAdvisorSessionState CaptureAdvisorStateUi() => bindings.CaptureAdvisorStateUi();
+    public AgentBridgeInventoryStructSnapshot CaptureInventoryStructSnapshotUi() => bindings.CaptureInventoryStructSnapshotUi();
+    public bool TryOpenArmouryBoardUi() => bindings.TryOpenArmouryBoardUi();
+    public bool TryCloseArmouryBoardUi() => bindings.TryCloseArmouryBoardUi();
+    public RenderedUiTextActionResult TryShowArmourySlotTooltipUi(string target) => bindings.TryShowArmourySlotTooltipUi(target);
+    public RenderedUiTextActionResult TryShowBagSlotTooltipUi(string target) => bindings.TryShowBagSlotTooltipUi(target);
+    public RenderedUiTextActionResult TryOpenBagSlotContextUi(string target) => bindings.TryOpenBagSlotContextUi(target);
+    public RenderedUiTextActionResult TryInvokeBagSlotContextActionUi(string target) => bindings.TryInvokeBagSlotContextActionUi(target);
+    public bool TryCloseBagSlotContextUi() => bindings.TryCloseBagSlotContextUi();
+    public string CaptureTooltipMapDiagnosticUi(string addonName) => bindings.CaptureTooltipMapDiagnosticUi(addonName);
+    public string CaptureInventoryContainerTableDiagnosticUi() => bindings.CaptureInventoryContainerTableDiagnosticUi();
+    public string CaptureInventoryBuddyOccupancyDiagnosticUi() => bindings.CaptureInventoryBuddyOccupancyDiagnosticUi();
+    public string CaptureInventoryWindowOccupancyDiagnosticUi() => bindings.CaptureInventoryWindowOccupancyDiagnosticUi();
+    public string SetInventoryTabDiagnosticUi(int tab) => bindings.SetInventoryTabDiagnosticUi(tab);
+    public RenderedArmouryDifferentialProgress BeginArmouryDifferentialUi() => bindings.BeginArmouryDifferentialUi();
+    public RenderedArmouryDifferentialProgress AdvanceArmouryDifferentialUi() => bindings.AdvanceArmouryDifferentialUi();
+    public RenderedArmouryDifferentialProgress CancelArmouryDifferentialUi() => bindings.CancelArmouryDifferentialUi();
+    public RenderedGatheringStatsObservation CaptureGatheringStatsUi() => bindings.CaptureGatheringStatsUi();
     public RenderedCharacterEquipmentLayout CaptureCharacterEquipmentLayoutUi() =>
-        RenderedCharacterEquipmentLayoutParser.Parse(captureCharacterUi());
+        RenderedCharacterEquipmentLayoutParser.Parse(bindings.CaptureCharacterUi());
     public RenderedItemDetailObservation CaptureItemDetailUi() =>
-        RenderedItemDetailParser.Parse(captureCharacterUi());
-    public RenderedEquipmentScanProgress BeginCharacterEquipmentScanUi() => beginCharacterEquipmentScanUi();
-    public RenderedEquipmentScanStepResult AdvanceCharacterEquipmentScanUi() => advanceCharacterEquipmentScanUi();
-    public RenderedEquipmentScanProgress CancelCharacterEquipmentScanUi() => cancelCharacterEquipmentScanUi();
-    public AgentBridgeUiAutomationCapabilities GetUiAutomationCapabilities() => getUiAutomationCapabilities();
-    public bool TryOpenSyntheticAdvisorReview() => tryOpenSyntheticAdvisorReview();
+        RenderedItemDetailParser.Parse(bindings.CaptureCharacterUi());
+    public RenderedEquipmentScanProgress BeginCharacterEquipmentScanUi() => bindings.BeginCharacterEquipmentScanUi();
+    public RenderedEquipmentScanStepResult AdvanceCharacterEquipmentScanUi() => bindings.AdvanceCharacterEquipmentScanUi();
+    public RenderedEquipmentScanProgress CancelCharacterEquipmentScanUi() => bindings.CancelCharacterEquipmentScanUi();
+    public AgentBridgeUiAutomationCapabilities GetUiAutomationCapabilities() => bindings.GetUiAutomationCapabilities();
+#if DEBUG
+    public bool TryOpenSyntheticAdvisorReview() => bindings.TryOpenSyntheticAdvisorReview();
+#endif
     public IReadOnlyList<AgentBridgeReviewSurfaceDescriptor> GetReviewSurfaces() => isMarketAcquisitionUnlocked()
         ? PublicReviewSurfaces.Concat(MarketAcquisitionReviewSurfaces).OrderBy(surface => surface.Order).ToArray()
         : PublicReviewSurfaces;

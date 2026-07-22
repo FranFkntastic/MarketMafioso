@@ -3,6 +3,7 @@
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <ShouldUnsetParentConfigurationAndPlatform>false</ShouldUnsetParentConfigurationAndPlatform>
   </PropertyGroup>
   <PropertyGroup>
     <FranthropyFilteringProject Condition="'$(FranthropyFilteringProject)' == ''">..\..\..\Franthropy\src\Franthropy.Filtering\Franthropy.Filtering.csproj</FranthropyFilteringProject>

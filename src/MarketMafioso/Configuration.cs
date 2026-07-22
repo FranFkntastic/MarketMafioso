@@ -74,6 +74,7 @@ public class Configuration : IPluginConfiguration
     public bool SplitWorkshopQueueAndMaterials { get; set; }
     [JsonProperty("RetainerRestockPlanItems")]
     public List<RetainerRestockPlanItem> RetainerRestockPlanItems { get; set; } = new();
+
     public Dictionary<string, QuartermasterWorkshopRequestState> QuartermasterWorkshopRequests { get; set; } = new();
     public Guid? ActiveFrozenWorkshopQueueId { get; set; }
     public List<uint> FavoriteWorkshopProjectIds { get; set; } = new();

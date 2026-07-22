@@ -89,7 +89,7 @@ public sealed class InventoryReportStoreSqliteTests
             null,
             "{}",
             CancellationToken.None);
-        await Task.Delay(10);
+        await fixture.SetReceivedAtAsync(older.Id, DateTimeOffset.UtcNow.AddMinutes(-1));
         var newer = await fixture.Store.SaveAsync(
             otherAccountId,
             CreateReport("Newer Character", "Siren", 3),
@@ -125,14 +125,14 @@ public sealed class InventoryReportStoreSqliteTests
             null,
             "{}",
             CancellationToken.None);
-        await Task.Delay(10);
+        await fixture.SetReceivedAtAsync(first.Id, DateTimeOffset.UtcNow.AddMinutes(-2));
         var second = await fixture.Store.SaveAsync(
             fixture.AccountId,
             CreateReport("Retained Character", "Leviathan", 3),
             null,
             "{}",
             CancellationToken.None);
-        await Task.Delay(10);
+        await fixture.SetReceivedAtAsync(second.Id, DateTimeOffset.UtcNow.AddMinutes(-1));
         var third = await fixture.Store.SaveAsync(
             fixture.AccountId,
             CreateReport("Retained Character", "Leviathan", 4),
@@ -425,6 +425,16 @@ public sealed class InventoryReportStoreSqliteTests
             await using var command = connection.CreateCommand();
             command.CommandText = $"SELECT COUNT(*) FROM {tableName}";
             return checked((int)(long)(await command.ExecuteScalarAsync(CancellationToken.None))!);
+        }
+
+        public async Task SetReceivedAtAsync(string snapshotId, DateTimeOffset receivedAt)
+        {
+            await using var connection = await connectionFactory.OpenConnectionAsync(CancellationToken.None);
+            await using var command = connection.CreateCommand();
+            command.CommandText = "UPDATE snapshots SET received_at_utc = $receivedAt WHERE id = $id";
+            command.Parameters.AddWithValue("$receivedAt", receivedAt.ToString("O"));
+            command.Parameters.AddWithValue("$id", snapshotId);
+            Assert.Equal(1, await command.ExecuteNonQueryAsync(CancellationToken.None));
         }
 
         private static string CreateDatabasePath()

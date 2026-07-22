@@ -8,8 +8,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Plugin.Services;
-using FFXIV_Craft_Architect.Core.Integrations.WorkshopHost;
-using FFXIV_Craft_Architect.Core.Services.Interfaces;
 using MarketMafioso.Squire;
 using MarketMafioso.Squire.Outfitter;
 using MarketMafioso.Squire.Observation;
@@ -24,7 +22,6 @@ using MarketMafioso.Diagnostics;
 using MarketMafioso.Squire.Outfitter.Utility;
 using MarketMafioso.Squire.Outfitter.Acquisition;
 using MarketMafioso.Squire.Outfitter.Crafting;
-using Microsoft.Extensions.DependencyInjection;
 using LuminaItem = Lumina.Excel.Sheets.Item;
 
 namespace MarketMafioso.Windows.Squire;
@@ -48,8 +45,7 @@ internal sealed class SquireTabPanel : IDisposable
     private readonly SquireInventoryChangeMonitor inventoryChangeMonitor;
     private readonly MinerBotanistAdvisorSession advisorSession;
     private readonly MinerBotanistAdvisorPanel advisorPanel;
-    private readonly IDisposable? craftArchitectServices;
-    private readonly IServiceScope? craftArchitectScope;
+    private readonly OutfitterPassiveCraftComposition? passiveCraftComposition;
     private Action<OutfitterWorkbenchTransfer>? stageOutfitterTransfer;
     private readonly Func<uint, string> resolveItemName;
     private string selectedWorkspace;
@@ -121,16 +117,8 @@ internal sealed class SquireTabPanel : IDisposable
         OutfitterAdvisorCraftDiscovery? craftDiscovery = null;
         try
         {
-            var services = new ServiceCollection();
-            services.AddSingleton<IRecipeResolutionService>(
-                LuminaCraftArchitectRecipeResolutionService.Create(dataManager));
-            services.AddWorkshopHostCraftAppraisal();
-            var serviceProvider = services.BuildServiceProvider(new ServiceProviderOptions { ValidateScopes = true });
-            craftArchitectScope = serviceProvider.CreateScope();
-            craftArchitectServices = serviceProvider;
-            craftDiscovery = new(new OutfitterPassiveCraftOfferProvider(
-                craftArchitectScope.ServiceProvider.GetRequiredService<ICraftRecipeGraphService>(),
-                new OutfitterPassiveCraftOfferService(new OutfitterGilVendorCatalog(dataManager))));
+            passiveCraftComposition = OutfitterPassiveCraftComposition.Create(dataManager);
+            craftDiscovery = passiveCraftComposition.Discovery;
         }
         catch (Exception exception)
         {
@@ -1072,8 +1060,7 @@ internal sealed class SquireTabPanel : IDisposable
     {
         runCancellation?.Cancel();
         advisorSession.Dispose();
-        craftArchitectScope?.Dispose();
-        craftArchitectServices?.Dispose();
+        passiveCraftComposition?.Dispose();
         inventoryChangeMonitor.Dispose();
         routeDiagnosticsPanel.Dispose();
         actionAdapter.ReleaseOwnedState();

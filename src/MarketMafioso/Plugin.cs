@@ -134,8 +134,7 @@ public sealed class Plugin : IDalamudPlugin
                 new VNavmeshIpc(new DalamudVNavmeshIpcAdapter(PluginInterface, Log)),
                 Log),
             Path.Combine(PluginInterface.GetPluginConfigDirectory(), "market-acquisition-route-logs"),
-            Log,
-            renderedCharacterUiProbe);
+            Log);
 
         agentBridgeProofStore = new AgentBridgeProofStore();
         agentBridgeProofWindow = new AgentBridgeProofWindow(agentBridgeProofStore);
@@ -146,6 +145,75 @@ public sealed class Plugin : IDalamudPlugin
             action => Framework.RunOnTick(action),
             TextureProvider,
             TextureReadbackProvider);
+        var agentBridgeBindings = new MarketMafiosoBridgeBindings(
+            OpenCharacterUi: () => renderedCharacterUiProbe.Open(),
+            TryCloseCharacterUi: renderedCharacterUiProbe.TryCloseCharacterUi,
+            TryCloseBlockingSelectStringUi: renderedCharacterUiProbe.TryCloseBlockingSelectString,
+            TryCloseRetainerUi: renderedCharacterUiProbe.TryCloseRetainerUi,
+            TrySwitchCalibrationJobUi: target =>
+            {
+                mainWindow.InvalidateAdvisorForPlayerStateChange();
+                return renderedCharacterUiProbe.TrySwitchCalibrationJob(target);
+            },
+            TrySwitchGearsetSlotUi: target =>
+            {
+                mainWindow.InvalidateAdvisorForPlayerStateChange();
+                return renderedCharacterUiProbe.TrySwitchGearsetSlot(target);
+            },
+            TryOpenGearsetListUi: renderedCharacterUiProbe.TryOpenGearsetList,
+            TrySelectCalibrationGearsetUi: renderedCharacterUiProbe.TrySelectCalibrationGearset,
+            TryEquipSelectedGearsetUi: () =>
+            {
+                mainWindow.InvalidateAdvisorForPlayerStateChange();
+                return renderedCharacterUiProbe.TryEquipSelectedGearset();
+            },
+            CaptureCharacterUi: renderedCharacterUiProbe.Capture,
+            CaptureRetainerUi: renderedCharacterUiProbe.CaptureRetainerUi,
+            BeginRetainerObservationUi: retainerUiPreparation.Begin,
+            AdvanceRetainerObservationUi: retainerUiPreparation.Advance,
+            CancelRetainerObservationUi: retainerUiPreparation.Cancel,
+            TryOpenRenderedRetainerUi: renderedCharacterUiProbe.TryOpenRenderedRetainer,
+            CaptureAdvisorStateUi: mainWindow.CreateAgentAdvisorState,
+            CaptureInventoryStructSnapshotUi: mainWindow.CreateAgentInventoryStructSnapshot,
+            TryOpenArmouryBoardUi: renderedCharacterUiProbe.TryOpenArmouryBoard,
+            TryCloseArmouryBoardUi: renderedCharacterUiProbe.TryCloseArmouryBoard,
+            TryShowArmourySlotTooltipUi: renderedCharacterUiProbe.TryShowArmourySlotTooltip,
+            TryShowBagSlotTooltipUi: renderedCharacterUiProbe.TryShowBagSlotTooltip,
+            TryOpenBagSlotContextUi: target =>
+            {
+                var separator = target.LastIndexOf(':');
+                return separator > 0 && int.TryParse(target[(separator + 1)..], out var slot)
+                    ? renderedCharacterUiProbe.TryOpenBagSlotContext(target[..separator], slot)
+                    : new Franthropy.Dalamud.AgentBridge.RenderedUiTextActionResult(false, "InvalidContextTarget", "Target must be '<Container>:<slotIndex>'.", "ContextMenu", null);
+            },
+            TryInvokeBagSlotContextActionUi: target =>
+            {
+                var parts = target.Split(':');
+                if (parts.Length < 3 || !int.TryParse(parts[1], out var actionSlot))
+                    return new Franthropy.Dalamud.AgentBridge.RenderedUiTextActionResult(false, "InvalidContextActionTarget", "Target must be '<Container>:<slotIndex>:<label>'.", "ContextMenu", null);
+                return renderedCharacterUiProbe.TryInvokeBagSlotContextAction(parts[0], actionSlot, string.Join(':', parts.Skip(2)));
+            },
+            TryCloseBagSlotContextUi: renderedCharacterUiProbe.TryCloseBagSlotContext,
+            CaptureTooltipMapDiagnosticUi: renderedCharacterUiProbe.CaptureTooltipMapDiagnostic,
+            CaptureInventoryContainerTableDiagnosticUi: renderedCharacterUiProbe.CaptureInventoryContainerTableDiagnostic,
+            CaptureInventoryBuddyOccupancyDiagnosticUi: renderedCharacterUiProbe.CaptureInventoryBuddyOccupancyDiagnostic,
+            CaptureInventoryWindowOccupancyDiagnosticUi: renderedCharacterUiProbe.CaptureInventoryWindowOccupancyDiagnostic,
+            SetInventoryTabDiagnosticUi: renderedCharacterUiProbe.SetInventoryTabDiagnostic,
+            BeginArmouryDifferentialUi: () => renderedCharacterUiProbe.BeginArmouryDifferential(
+                mainWindow.CreateAgentInventoryStructSnapshot().Items,
+                mainWindow.ResolveRenderedItemName,
+                mainWindow.ResolveRenderedBagItemId,
+                mainWindow.CreateAgentInventoryStructSnapshot),
+            AdvanceArmouryDifferentialUi: renderedCharacterUiProbe.AdvanceArmouryDifferential,
+            CancelArmouryDifferentialUi: renderedCharacterUiProbe.CancelArmouryDifferential,
+            CaptureGatheringStatsUi: renderedCharacterUiProbe.CaptureGatheringStats,
+            BeginCharacterEquipmentScanUi: renderedCharacterUiProbe.BeginEquipmentScan,
+            AdvanceCharacterEquipmentScanUi: renderedCharacterUiProbe.AdvanceEquipmentScan,
+            CancelCharacterEquipmentScanUi: renderedCharacterUiProbe.CancelEquipmentScan,
+#if DEBUG
+            TryOpenSyntheticAdvisorReview: mainWindow.TryOpenSyntheticAdvisorReview,
+#endif
+            GetUiAutomationCapabilities: () => renderedCharacterUiProbe.Capabilities);
         agentBridge = new AgentBridgeHost(
             Configuration,
             PluginInterface.GetPluginConfigDirectory(),
@@ -164,73 +232,8 @@ public sealed class Plugin : IDalamudPlugin
                 mainWindow.AgentCaptureInputState,
                 mainWindow.AgentStopRoute,
                 () => MarketAcquisitionUnlock.IsUnlocked(Configuration),
-                mainWindow.AgentReviewRegistry,
-                () => renderedCharacterUiProbe.Open(),
-                renderedCharacterUiProbe.TryCloseCharacterUi,
-                renderedCharacterUiProbe.Capture,
-                renderedCharacterUiProbe.TryCloseBlockingSelectString,
-                target =>
-                {
-                    mainWindow.InvalidateAdvisorForPlayerStateChange();
-                    return renderedCharacterUiProbe.TrySwitchCalibrationJob(target);
-                },
-                target =>
-                {
-                    mainWindow.InvalidateAdvisorForPlayerStateChange();
-                    return renderedCharacterUiProbe.TrySwitchGearsetSlot(target);
-                },
-                renderedCharacterUiProbe.CaptureGatheringStats,
-                renderedCharacterUiProbe.BeginEquipmentScan,
-                renderedCharacterUiProbe.AdvanceEquipmentScan,
-                renderedCharacterUiProbe.CancelEquipmentScan,
-                () => renderedCharacterUiProbe.Capabilities,
-                mainWindow.TryOpenSyntheticAdvisorReview,
-                captureRetainerUi: renderedCharacterUiProbe.CaptureRetainerUi,
-                beginRetainerObservationUi: retainerUiPreparation.Begin,
-                advanceRetainerObservationUi: retainerUiPreparation.Advance,
-                cancelRetainerObservationUi: retainerUiPreparation.Cancel,
-                tryOpenRenderedRetainerUi: renderedCharacterUiProbe.TryOpenRenderedRetainer,
-                tryCloseRetainerUi: renderedCharacterUiProbe.TryCloseRetainerUi,
-                captureAdvisorStateUi: mainWindow.CreateAgentAdvisorState,
-                captureInventoryStructSnapshotUi: mainWindow.CreateAgentInventoryStructSnapshot,
-                tryOpenArmouryBoardUi: renderedCharacterUiProbe.TryOpenArmouryBoard,
-                tryCloseArmouryBoardUi: renderedCharacterUiProbe.TryCloseArmouryBoard,
-                tryShowArmourySlotTooltipUi: renderedCharacterUiProbe.TryShowArmourySlotTooltip,
-                tryShowBagSlotTooltipUi: renderedCharacterUiProbe.TryShowBagSlotTooltip,
-                tryOpenBagSlotContextUi: target =>
-                {
-                    var separator = target.LastIndexOf(':');
-                    return separator > 0 && int.TryParse(target[(separator + 1)..], out var slot)
-                        ? renderedCharacterUiProbe.TryOpenBagSlotContext(target[..separator], slot)
-                        : new Franthropy.Dalamud.AgentBridge.RenderedUiTextActionResult(false, "InvalidContextTarget", "Target must be '<Container>:<slotIndex>'.", "ContextMenu", null);
-                },
-                tryInvokeBagSlotContextActionUi: target =>
-                {
-                    var parts = target.Split(':');
-                    if (parts.Length < 3 || !int.TryParse(parts[1], out var actionSlot))
-                        return new Franthropy.Dalamud.AgentBridge.RenderedUiTextActionResult(false, "InvalidContextActionTarget", "Target must be '<Container>:<slotIndex>:<label>'.", "ContextMenu", null);
-                    return renderedCharacterUiProbe.TryInvokeBagSlotContextAction(parts[0], actionSlot, string.Join(':', parts.Skip(2)));
-                },
-                tryCloseBagSlotContextUi: renderedCharacterUiProbe.TryCloseBagSlotContext,
-                captureTooltipMapDiagnosticUi: renderedCharacterUiProbe.CaptureTooltipMapDiagnostic,
-                captureInventoryContainerTableDiagnosticUi: renderedCharacterUiProbe.CaptureInventoryContainerTableDiagnostic,
-                captureInventoryBuddyOccupancyDiagnosticUi: renderedCharacterUiProbe.CaptureInventoryBuddyOccupancyDiagnostic,
-                captureInventoryWindowOccupancyDiagnosticUi: renderedCharacterUiProbe.CaptureInventoryWindowOccupancyDiagnostic,
-                setInventoryTabDiagnosticUi: renderedCharacterUiProbe.SetInventoryTabDiagnostic,
-                beginArmouryDifferentialUi: () => renderedCharacterUiProbe.BeginArmouryDifferential(
-                    mainWindow.CreateAgentInventoryStructSnapshot().Items,
-                    mainWindow.ResolveRenderedItemName,
-                    mainWindow.ResolveRenderedBagItemId,
-                    mainWindow.CreateAgentInventoryStructSnapshot),
-                advanceArmouryDifferentialUi: renderedCharacterUiProbe.AdvanceArmouryDifferential,
-                cancelArmouryDifferentialUi: renderedCharacterUiProbe.CancelArmouryDifferential,
-                tryOpenGearsetListUi: renderedCharacterUiProbe.TryOpenGearsetList,
-                trySelectCalibrationGearsetUi: renderedCharacterUiProbe.TrySelectCalibrationGearset,
-                tryEquipSelectedGearsetUi: () =>
-                {
-                    mainWindow.InvalidateAdvisorForPlayerStateChange();
-                    return renderedCharacterUiProbe.TryEquipSelectedGearset();
-                }),
+                agentBridgeBindings,
+                mainWindow.AgentReviewRegistry),
             agentBridgeProofStore,
             agentBridgeViewportCapture.CaptureAsync,
             () => Configuration.EnableAgentBridgeScreenshots,

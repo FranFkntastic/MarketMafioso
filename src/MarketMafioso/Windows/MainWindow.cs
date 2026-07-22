@@ -104,8 +104,7 @@ public class MainWindow : Window, IDisposable
         IPlayerState playerState,
         MarketBoardApproachService marketBoardApproachService,
         string marketAcquisitionRouteDiagnosticsDirectory,
-        IPluginLog log,
-        IRenderedCharacterAdvisorProbe renderedCharacterAdvisorProbe)
+        IPluginLog log)
         : base("MarketMafioso##MarketMafiosoMainWindow",
                ImGuiWindowFlags.None)
     {
@@ -635,17 +634,15 @@ public class MainWindow : Window, IDisposable
         return true;
     }
 
+#if DEBUG
     public bool TryOpenSyntheticAdvisorReview()
     {
-#if DEBUG
         squireTab.OpenSyntheticAdvisorReview();
         QueueAgentTabSelection("Squire");
         AgentOpenForReview();
         return true;
-#else
-        return false;
-#endif
     }
+#endif
 
     internal static bool TryNormalizeAgentBridgeTab(string tabName, out string mainTab, out string? workspaceView)
     {

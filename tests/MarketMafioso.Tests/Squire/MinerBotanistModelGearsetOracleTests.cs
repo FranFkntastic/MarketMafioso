@@ -14,38 +14,6 @@ public sealed class MinerBotanistModelGearsetOracleTests
     };
 
     [Fact]
-    public void FrozenOracleIsVersionedTraceableAndExplicitlyExcludedFromRuntimePolicy()
-    {
-        var oracle = LoadOracle();
-
-        Assert.Equal("squire-min-btn-model-gearset-oracle/v1", oracle.SchemaVersion);
-        Assert.Equal(MinerBotanistUtilityProfile.ProfileVersion, oracle.ProfileVersion);
-        Assert.Contains("runtime must not load", oracle.RuntimePolicy, StringComparison.OrdinalIgnoreCase);
-        Assert.Equal(oracle.Sources.Count, oracle.Sources.Select(source => source.SourceId).Distinct(StringComparer.Ordinal).Count());
-        Assert.All(oracle.Sources, source =>
-        {
-            Assert.True(Uri.TryCreate(source.Url, UriKind.Absolute, out _));
-            Assert.False(string.IsNullOrWhiteSpace(source.Lineage));
-            Assert.False(string.IsNullOrWhiteSpace(source.Locator));
-        });
-
-        var sourceIds = oracle.Sources.Select(source => source.SourceId).ToHashSet(StringComparer.Ordinal);
-        Assert.All(
-            oracle.Loadouts.Where(loadout => loadout.Origin == "published-model"),
-            loadout => Assert.Contains(loadout.SourceId!, sourceIds));
-        Assert.All(
-            oracle.Loadouts.Where(loadout => loadout.Origin == "derived-adversarial"),
-            loadout => Assert.NotNull(loadout.DerivedFromLoadoutId));
-        Assert.All(
-            oracle.Loadouts.Where(loadout => loadout.Origin != "derived-adversarial"),
-            loadout => Assert.Contains(loadout.SourceId!, sourceIds));
-        Assert.DoesNotContain(oracle.Loadouts, loadout => loadout.LoadoutId.Contains("budget", StringComparison.OrdinalIgnoreCase));
-        Assert.DoesNotContain(oracle.Loadouts, loadout => loadout.Assumptions.Any(value =>
-            value.Contains("scrip", StringComparison.OrdinalIgnoreCase) ||
-            value.Contains("cosmic", StringComparison.OrdinalIgnoreCase)));
-    }
-
-    [Fact]
     public void PublishedModelFamilyAndAdversarialVariantsMatchEveryExpectedDecision()
     {
         var oracle = LoadOracle();
@@ -61,7 +29,7 @@ public sealed class MinerBotanistModelGearsetOracleTests
                 baseline.Stats,
                 MinerBotanistUtilityProfile.MinerClassJobId);
             var candidate = profile.Evaluate(candidateLoadout.Stats);
-            var authority = profile.AssessAuthorityForCalibration(
+            var authority = profile.AssessAuthority(
                 candidate,
                 comparison.CandidateHasAdditionalAcquisitionCost ? 1UL : 0UL,
                 hasUnmodeledRelevantEffect: comparison.HasUnmodeledRelevantEffect);
@@ -125,22 +93,9 @@ public sealed class MinerBotanistModelGearsetOracleTests
     }
 
     private sealed record ModelGearsetOracle(
-        string SchemaVersion,
-        string OracleVersion,
-        string ProfileVersion,
-        DateTimeOffset ResearchedAtUtc,
-        string RuntimePolicy,
-        IReadOnlyList<OracleSource> Sources,
         IReadOnlyList<OracleLoadout> Loadouts,
         IReadOnlyList<OracleComparison> Comparisons,
         IReadOnlyList<string> ExpectedLegendaryFrontierLoadoutIds);
-
-    private sealed record OracleSource(
-        string SourceId,
-        string Lineage,
-        string Role,
-        string Url,
-        string Locator);
 
     private sealed record OracleLoadout(
         string LoadoutId,

@@ -285,6 +285,7 @@ internal sealed class OutfitterAdvisorCraftDiscovery
         var offers = new List<OutfitterCraftAdvisorOffer>();
         var displayOnly = 0;
         var unavailable = preparation.UnavailableCount;
+        string? firstUnavailable = null;
         reportProgress?.Invoke(new(0, preparation.Preparations.Count, 0, 0, unavailable));
         for (var index = 0; index < preparation.Preparations.Count; index++)
         {
@@ -309,9 +310,11 @@ internal sealed class OutfitterAdvisorCraftDiscovery
                     break;
                 case OutfitterPassiveCraftOfferStatus.DisplayOnly:
                     displayOnly++;
+                    firstUnavailable ??= FormatUnavailable(preparation.Preparations[index], result);
                     break;
                 default:
                     unavailable++;
+                    firstUnavailable ??= FormatUnavailable(preparation.Preparations[index], result);
                     break;
             }
             reportProgress?.Invoke(new(index + 1, preparation.Preparations.Count, offers.Count, displayOnly, unavailable));
@@ -321,7 +324,8 @@ internal sealed class OutfitterAdvisorCraftDiscovery
             $"Craft coverage: {offers.Count:N0} ready, {displayOnly:N0} display-only, {unavailable:N0} unavailable, " +
             $"{preparation.DeferredCandidateCount:N0} deferred from {preparation.RequestedCandidateCount:N0}/{preparation.EligibleCandidateCount:N0} eligible; " +
             $"{preparation.PreparedCount:N0} exact graph(s) and " +
-            $"{preparation.RequiredMaterialItemIds.Count:N0} terminal material item(s) evaluated from one published evidence generation.";
+            $"{preparation.RequiredMaterialItemIds.Count:N0} terminal material item(s) evaluated from one published evidence generation." +
+            (firstUnavailable is null ? string.Empty : $" First non-ready: {firstUnavailable}");
         return preparation with
         {
             Offers = offers,
@@ -330,5 +334,13 @@ internal sealed class OutfitterAdvisorCraftDiscovery
             UnavailableCount = unavailable,
             Diagnostic = diagnostic,
         };
+
+        static string? FormatUnavailable(
+            OutfitterPassiveCraftOfferPreparation candidate,
+            OutfitterPassiveCraftOfferResult result)
+        {
+            var reason = result.Diagnostics.FirstOrDefault();
+            return string.IsNullOrWhiteSpace(reason) ? null : $"{candidate.Definition.Name}: {reason}";
+        }
     }
 }

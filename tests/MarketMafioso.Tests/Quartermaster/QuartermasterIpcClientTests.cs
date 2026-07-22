@@ -267,17 +267,14 @@ public sealed class QuartermasterIpcClientTests
     }
 
     [Fact]
-    public void Snapshot_ReturnsOnlyImmutableCollections()
+    public void GetSnapshot_PreservesStorageSourceEvidence()
     {
         var adapter = ReadyAdapter("provider-a", 1, SnapshotJson("provider-a", 1, "First"));
         using var client = new QuartermasterIpcClient(adapter);
 
         Assert.True(client.TryGetSnapshot(out var snapshot, out _));
 
-        Assert.Equal("System.Collections.Immutable.ImmutableArray`1", snapshot!.Retainers.GetType().GetGenericTypeDefinition().FullName);
-        Assert.Equal("System.Collections.Immutable.ImmutableArray`1", snapshot.Retainers[0].Bags.GetType().GetGenericTypeDefinition().FullName);
-        Assert.Equal("System.Collections.Immutable.ImmutableArray`1", snapshot.Retainers[0].Bags[0].Items.GetType().GetGenericTypeDefinition().FullName);
-        Assert.Equal(["Crystals", "Inventory1"], snapshot.PlayerRequestedSources.ToArray());
+        Assert.Equal(["Crystals", "Inventory1"], snapshot!.PlayerRequestedSources.ToArray());
         Assert.Equal(["RetainerPage1"], snapshot.Retainers[0].ObservedSources.ToArray());
         Assert.Equal(new DateTimeOffset(2026, 7, 21, 11, 55, 0, TimeSpan.Zero), snapshot.Retainers[0].GilObservedAtUtc);
         Assert.Equal(new DateTimeOffset(2026, 7, 21, 11, 54, 0, TimeSpan.Zero), snapshot.Retainers[0].Bags[0].ObservedAtUtc);

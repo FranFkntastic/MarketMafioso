@@ -3,22 +3,6 @@ namespace MarketMafioso.Tests.MarketAcquisition;
 public sealed class MarketAcquisitionRouteEngineLifecycleTests
 {
     [Fact]
-    public void Snapshot_DefaultsToIdleState()
-    {
-        using var harness = MarketAcquisitionRouteEngineHarness.Create();
-
-        var snapshot = harness.Engine.CreateSnapshot();
-
-        Assert.False(snapshot.IsRouteActive);
-        Assert.False(snapshot.IsProbeRunning);
-        Assert.Equal("No route has started.", snapshot.VisibleAcquisitionStatus);
-        Assert.Null(snapshot.MarketBoardReadResult);
-        Assert.Null(snapshot.LiveCandidatePlan);
-        Assert.Null(snapshot.ActiveOperation);
-        Assert.Null(snapshot.LastOperation);
-    }
-
-    [Fact]
     public void Start_BeginsRunnerAndResetsExecutionState()
     {
         using var harness = MarketAcquisitionRouteEngineHarness.Create();

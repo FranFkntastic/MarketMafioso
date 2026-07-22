@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
-using System.Text.Json.Serialization;
 using Dalamud.Plugin.Services;
 using Lumina.Excel.Sheets;
 
@@ -39,11 +38,6 @@ public sealed record WorkshopMaterialManifestExportResult(
 
 public sealed class WorkshopMaterialManifestExportService
 {
-    private static readonly JsonSerializerOptions ArtisanJsonOptions = new()
-    {
-        WriteIndented = false,
-    };
-
     private static readonly JsonSerializerOptions CraftArchitectJsonOptions = new()
     {
         WriteIndented = true,
@@ -114,7 +108,7 @@ public sealed class WorkshopMaterialManifestExportService
             return Info("No missing workshop materials to export.");
 
         var skipped = new List<string>();
-        var recipes = new List<ArtisanListItem>();
+        var recipes = new List<ArtisanCraftingListRecipeRequest>();
         foreach (var material in materials)
         {
             if (!recipeResolver.TryResolveCraftRecipe(material.ItemId, out var recipe))
@@ -124,10 +118,9 @@ public sealed class WorkshopMaterialManifestExportService
             }
 
             var craftCount = (int)Math.Ceiling((double)GetExportQuantity(material, quantityMode) / Math.Max(1, recipe.Yield));
-            AddOrMergeRecipe(recipes, new ArtisanListItem(
+            recipes.Add(new ArtisanCraftingListRecipeRequest(
                 recipe.RecipeId,
-                craftCount,
-                new ArtisanListItemOptions(NQOnly: true, Skipping: false)));
+                craftCount));
         }
 
         if (recipes.Count == 0)
@@ -141,29 +134,19 @@ public sealed class WorkshopMaterialManifestExportService
                 skipped);
         }
 
-        var artisanList = new ArtisanCraftingList(
-            Random.Shared.Next(100, 50000),
+        var artisanExport = ArtisanCraftingListExport.Create(
             BuildExportName(queue, projects, quantityMode, exportedAt),
-            recipes,
-            recipes.SelectMany(recipe => Enumerable.Repeat(recipe.ID, recipe.Quantity)).ToList(),
-            SkipIfEnough: false,
-            SkipLiteral: false,
-            Materia: false,
-            Repair: false,
-            RepairPercent: 50,
-            AddAsQuickSynth: false,
-            TidyAfter: true,
-            OnlyRestockNonCrafted: false);
+            recipes);
         var message = skipped.Count == 0
-            ? $"Copied Artisan manifest: {recipes.Count} recipes."
-            : $"Copied Artisan manifest: {recipes.Count} recipes. Skipped {skipped.Count} non-craftable materials: {FormatSkippedItems(skipped)}.";
+            ? $"Copied Artisan manifest: {artisanExport.RecipeCount} recipes."
+            : $"Copied Artisan manifest: {artisanExport.RecipeCount} recipes. Skipped {skipped.Count} non-craftable materials: {FormatSkippedItems(skipped)}.";
 
         return new WorkshopMaterialManifestExportResult(
             true,
             skipped.Count == 0 ? WorkshopMaterialManifestExportSeverity.Success : WorkshopMaterialManifestExportSeverity.Warning,
             message,
-            JsonSerializer.Serialize(artisanList, ArtisanJsonOptions),
-            recipes.Count,
+            artisanExport.Json,
+            artisanExport.RecipeCount,
             skipped);
     }
 
@@ -331,24 +314,6 @@ public sealed class WorkshopMaterialManifestExportService
         };
     }
 
-    private static void AddOrMergeRecipe(List<ArtisanListItem> recipes, ArtisanListItem recipe)
-    {
-        var existingIndex = recipes.FindIndex(x =>
-            x.ID == recipe.ID &&
-            x.ListItemOptions.NQOnly == recipe.ListItemOptions.NQOnly &&
-            x.ListItemOptions.Skipping == recipe.ListItemOptions.Skipping);
-        if (existingIndex < 0)
-        {
-            recipes.Add(recipe);
-            return;
-        }
-
-        recipes[existingIndex] = recipes[existingIndex] with
-        {
-            Quantity = recipes[existingIndex].Quantity + recipe.Quantity,
-        };
-    }
-
     private static string FormatSkippedItems(IReadOnlyList<string> skipped)
     {
         var preview = string.Join(", ", skipped.Take(3));
@@ -358,28 +323,6 @@ public sealed class WorkshopMaterialManifestExportService
         return preview;
     }
 
-    private sealed record ArtisanCraftingList(
-        [property: JsonPropertyName("ID")] int ID,
-        [property: JsonPropertyName("Name")] string Name,
-        [property: JsonPropertyName("Recipes")] IReadOnlyList<ArtisanListItem> Recipes,
-        [property: JsonPropertyName("ExpandedList")] IReadOnlyList<uint> ExpandedList,
-        [property: JsonPropertyName("SkipIfEnough")] bool SkipIfEnough,
-        [property: JsonPropertyName("SkipLiteral")] bool SkipLiteral,
-        [property: JsonPropertyName("Materia")] bool Materia,
-        [property: JsonPropertyName("Repair")] bool Repair,
-        [property: JsonPropertyName("RepairPercent")] int RepairPercent,
-        [property: JsonPropertyName("AddAsQuickSynth")] bool AddAsQuickSynth,
-        [property: JsonPropertyName("TidyAfter")] bool TidyAfter,
-        [property: JsonPropertyName("OnlyRestockNonCrafted")] bool OnlyRestockNonCrafted);
-
-    private sealed record ArtisanListItem(
-        [property: JsonPropertyName("ID")] uint ID,
-        [property: JsonPropertyName("Quantity")] int Quantity,
-        [property: JsonPropertyName("ListItemOptions")] ArtisanListItemOptions ListItemOptions);
-
-    private sealed record ArtisanListItemOptions(
-        [property: JsonPropertyName("NQOnly")] bool NQOnly,
-        [property: JsonPropertyName("Skipping")] bool Skipping);
 }
 
 public sealed class LuminaWorkshopMaterialCraftRecipeResolver : IWorkshopMaterialCraftRecipeResolver

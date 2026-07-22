@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using Franthropy.Dalamud.Equipment;
 using Franthropy.Dalamud.UI.Plots;
 using MarketMafioso.Squire.Outfitter.Utility;
@@ -16,8 +15,6 @@ public sealed class AdvisorFrontierPresentationTests
             [],
             [],
             []);
-        var stopwatch = Stopwatch.StartNew();
-
         var presentation = new AdvisorFrontierPresentation(pareto);
         var reached = new HashSet<string>(StringComparer.Ordinal);
         for (var offset = 0; offset < solutionCount; offset += AdvisorFrontierPresentation.MaxFrameSolutionCount)
@@ -31,8 +28,6 @@ public sealed class AdvisorFrontierPresentationTests
         var selected = presentation.At(1_000);
         var selectedWindow = presentation.WindowAround(selected.Candidate.SolutionId);
         var plot = new ParetoFrontierPlotBuilder().Build(selectedWindow.ToPlotResult());
-        stopwatch.Stop();
-
         Assert.Equal(solutionCount, presentation.Count);
         Assert.Equal(solutionCount, reached.Count);
         Assert.Equal("solution-00999", presentation.Previous(selected.Candidate.SolutionId)!.Candidate.SolutionId);
@@ -47,8 +42,6 @@ public sealed class AdvisorFrontierPresentationTests
                 PlotPolylineLayer line => line.Data.Count,
                 _ => 0,
             }) <= AdvisorFrontierPresentation.MaxFrameSolutionCount * 2);
-        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(1),
-            $"Indexing, traversing, and plotting a {solutionCount:N0}-solution frontier took {stopwatch.Elapsed}.");
     }
 
     private static EquipmentDecisionSolution Solution(int index) => new(

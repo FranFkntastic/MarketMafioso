@@ -17,24 +17,9 @@ using MarketMafioso.AgentBridge;
 namespace MarketMafioso.Squire.Observation;
 
 /// <summary>
-/// Opens and inspects only the rendered Character UI. It intentionally does not
-/// consult PlayerState, InventoryManager, agents, or gearset modules.
+/// Opens and inspects rendered Character, inventory, and retainer UI for diagnostics and audits.
 /// </summary>
-public interface IRenderedCharacterAdvisorProbe
-{
-    void PrepareAdvisorObservation();
-    bool Open();
-    bool TryCloseCharacterUi();
-    RenderedGatheringStatsObservation CaptureGatheringStats();
-    /// <summary>Captures the rendered stat tuple for whichever advisor family the active job belongs to.</summary>
-    RenderedAdvisorStatsObservation CaptureAdvisorStats();
-    RenderedEquipmentScanProgress BeginEquipmentScan();
-    RenderedEquipmentScanStepResult AdvanceEquipmentScan();
-    RenderedEquipmentScanProgress CancelEquipmentScan();
-    RenderedArmouryDifferentialProgress CaptureArmouryDifferentialSnapshot();
-}
-
-public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorProbe
+public sealed class DalamudRenderedCharacterUiProbe
 {
     private static readonly string[] AddonNames =
     [
@@ -84,7 +69,6 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
     private readonly IDataManager dataManager;
     private readonly Franthropy.Dalamud.AgentBridge.DalamudRenderedUiTextActionDispatcher renderedTextActions;
     private readonly RenderedGatheringStatsStabilizer gatheringStatsStabilizer = new(TimeSpan.FromSeconds(3));
-    private readonly RenderedCraftingStatsStabilizer craftingStatsStabilizer = new(TimeSpan.FromSeconds(3));
     private readonly RenderedCharacterEquipmentScanCoordinator equipmentScan = new();
     private string? lastGearsetSelectionDiagnostic;
 
@@ -128,13 +112,6 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
             return closed;
         addon->Close(true);
         return true;
-    }
-
-    public void PrepareAdvisorObservation()
-    {
-        gatheringStatsStabilizer.Reset();
-        craftingStatsStabilizer.Reset();
-        CancelEquipmentScan();
     }
 
     public unsafe bool TryCloseBlockingSelectString()
@@ -305,29 +282,6 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
 
     public RenderedGatheringStatsObservation CaptureGatheringStats() =>
         gatheringStatsStabilizer.Observe(RenderedCharacterStatsParser.Parse(Capture()));
-
-    public RenderedCraftingStatsObservation CaptureCraftingStats() =>
-        craftingStatsStabilizer.Observe(RenderedCharacterStatsParser.ParseCrafting(Capture()));
-
-    public RenderedAdvisorStatsObservation CaptureAdvisorStats()
-    {
-        var snapshot = Capture();
-        var gathering = gatheringStatsStabilizer.Observe(RenderedCharacterStatsParser.Parse(snapshot));
-        if (gathering.JobName is not null)
-            return RenderedAdvisorStatsObservation.FromGathering(gathering);
-        var crafting = craftingStatsStabilizer.Observe(RenderedCharacterStatsParser.ParseCrafting(snapshot));
-        if (crafting.JobName is not null)
-            return RenderedAdvisorStatsObservation.FromCrafting(crafting);
-        var addonMissing = gathering.Diagnostic.Contains("not visible", StringComparison.Ordinal);
-        return new(
-            RenderedCharacterObservationStatus.Unavailable,
-            null,
-            null,
-            null,
-            addonMissing
-                ? gathering.Diagnostic
-                : "The rendered active job is not Miner, Botanist, or a crafting job; this advisor scope is unsupported.");
-    }
 
     public RenderedEquipmentScanProgress BeginEquipmentScan()
     {
@@ -1007,8 +961,6 @@ public sealed class DalamudRenderedCharacterUiProbe : IRenderedCharacterAdvisorP
     }
 
     public RenderedArmouryDifferentialProgress CancelArmouryDifferential() => armouryDifferential.Cancel();
-
-    public RenderedArmouryDifferentialProgress CaptureArmouryDifferentialSnapshot() => armouryDifferential.Snapshot();
 
     public unsafe RenderedArmouryDifferentialProgress AdvanceArmouryDifferential()
     {

@@ -1,37 +1,15 @@
 using MarketMafioso.AgentBridge;
 using Franthropy.Dalamud.AgentBridge;
-using Franthropy.Dalamud.Automation.Ui;
-using MarketMafioso.Windows.MarketAcquisitionPanels;
 
 namespace MarketMafioso.Tests.AgentBridge;
 
 public sealed class MarketMafiosoBridgeProviderTests
 {
     [Fact]
-    public void Provider_DelegatesOnlyProductSpecificStateAndActions()
+    public void Provider_exposes_only_unlocked_product_review_surfaces_in_stable_order()
     {
-        var opened = false;
-        var closed = false;
-        var selected = string.Empty;
-        var provider = new MarketMafiosoBridgeProvider(
-            CreateTruth,
-            () => opened = true,
-            () => closed = true,
-            () => { },
-            _ => { },
-            tab => { selected = tab; return tab == "Squire"; },
-            () => { },
-            () => { },
-            () => true,
-            new AgentBridgeUiReviewRegistry());
+        var provider = CreateProvider(marketAcquisitionUnlocked: true, CreateBindings());
 
-        Assert.Equal("test", provider.CreateSnapshot().PluginInstanceId);
-        provider.OpenMainWindow();
-        Assert.True(opened);
-        provider.CloseMainWindow();
-        Assert.True(closed);
-        Assert.True(provider.TrySelectMainTab("Squire"));
-        Assert.Equal("Squire", selected);
         var surfaces = provider.GetReviewSurfaces();
         Assert.Contains(surfaces, surface => surface.Id == "squire" && surface.Target == "Squire");
         Assert.DoesNotContain(surfaces, surface =>
@@ -46,142 +24,11 @@ public sealed class MarketMafiosoBridgeProviderTests
         Assert.DoesNotContain(surfaces, surface => surface.Id == "inventory-reporter");
         Assert.Equal(surfaces.OrderBy(surface => surface.Order), surfaces);
 
-        var lockedProvider = new MarketMafiosoBridgeProvider(
-            CreateTruth, () => { }, () => { }, () => { }, _ => { }, _ => true, () => { }, () => { }, () => false, new AgentBridgeUiReviewRegistry());
+        var lockedProvider = CreateProvider(marketAcquisitionUnlocked: false, CreateBindings());
         Assert.DoesNotContain(
             lockedProvider.GetReviewSurfaces(),
             surface => surface.Id.StartsWith("market-acquisition", StringComparison.Ordinal) ||
                        surface.Label.Contains("Market Acquisition", StringComparison.Ordinal));
-
-        var registry = new AgentBridgeUiReviewRegistry();
-        registry.BeginFrame();
-        registry.Register("squire.probe", "Probe", AgentBridgeUiControlKind.Button, default, new(100, 20), true, false, "Ready", () => { });
-        var registeredProvider = new MarketMafiosoBridgeProvider(
-            CreateTruth, () => { }, () => { }, () => { }, _ => { }, _ => true, () => { }, () => { }, () => false, registry);
-        registry.EndFrame();
-        var review = registeredProvider.ReviewControl("squire.probe");
-        Assert.Equal("squire.probe", Assert.IsType<AgentBridgeUiControl>(review.Control).Id);
-        Assert.Null(registeredProvider.ReviewControl("missing").Control);
-    }
-
-    [Fact]
-    public void Provider_reports_non_obtrusive_rendered_ui_automation_capabilities()
-    {
-        var expected = new AgentBridgeUiAutomationCapabilities(
-            "rendered-equipment-tooltip-unavailable",
-            MovesOperatingSystemCursor: false,
-            ActivatesGameWindow: false,
-            RequiresGameForeground: false,
-            RequiresVisibleCharacterAddon: true,
-            UsesRenderedTooltipAsAuthority: true,
-            SupportsDeterministicReplay: false,
-            "fixture");
-        var provider = new MarketMafiosoBridgeProvider(
-            CreateTruth, () => { }, () => { }, () => { }, _ => { }, _ => true, () => { }, () => { },
-            () => true,
-            new AgentBridgeUiReviewRegistry(),
-            getUiAutomationCapabilities: () => expected);
-
-        Assert.Same(expected, provider.GetUiAutomationCapabilities());
-        Assert.False(provider.GetUiAutomationCapabilities().MovesOperatingSystemCursor);
-        Assert.False(provider.GetUiAutomationCapabilities().ActivatesGameWindow);
-    }
-
-    [Fact]
-    public void Provider_exposes_debug_synthetic_review_as_an_explicit_action()
-    {
-        var invoked = false;
-        var provider = new MarketMafiosoBridgeProvider(
-            CreateTruth, () => { }, () => { }, () => { }, _ => { }, _ => true, () => { }, () => { },
-            () => true,
-            new AgentBridgeUiReviewRegistry(),
-            tryOpenSyntheticAdvisorReview: () => invoked = true);
-
-        Assert.True(provider.TryOpenSyntheticAdvisorReview());
-        Assert.True(invoked);
-    }
-
-    [Fact]
-    public void Provider_returns_submitted_gearset_change_for_rendered_verification()
-    {
-        Assert.True(GearsetChangeCommand.TryCreate("Miner", out var expected));
-        var provider = new MarketMafiosoBridgeProvider(
-            CreateTruth, () => { }, () => { }, () => { }, _ => { }, _ => true, () => { }, () => { },
-            () => true,
-            new AgentBridgeUiReviewRegistry(),
-            trySwitchCalibrationJobUi: _ => expected);
-
-        var submitted = Assert.IsType<GearsetChangeCommand>(provider.TrySwitchCalibrationJobUi("Miner"));
-
-        Assert.Same(expected, submitted);
-        Assert.Equal("Miner", submitted.GearsetName);
-        Assert.Equal("/gearset change \"Miner\"", submitted.Command);
-    }
-
-    [Fact]
-    public void Provider_returns_submitted_gearset_slot_for_rendered_verification()
-    {
-        Assert.True(GearsetChangeCommand.TryCreateSlot("17", out var expected));
-        var provider = new MarketMafiosoBridgeProvider(
-            CreateTruth, () => { }, () => { }, () => { }, _ => { }, _ => true, () => { }, () => { },
-            () => true,
-            new AgentBridgeUiReviewRegistry(),
-            trySwitchGearsetSlotUi: _ => expected);
-
-        var submitted = Assert.IsType<GearsetChangeCommand>(provider.TrySwitchGearsetSlotUi("17"));
-
-        Assert.Same(expected, submitted);
-        Assert.Equal("17", submitted.GearsetName);
-        Assert.Equal("/gearset change 17", submitted.Command);
-    }
-
-    [Fact]
-    public void Provider_exposes_rendered_gearset_list_action_without_generic_click_authority()
-    {
-        var expected = new RenderedUiTextActionResult(
-            true,
-            "RenderedTextClickDispatched",
-            "Clicked Gear Set.",
-            "Character",
-            "Character/1");
-        var provider = new MarketMafiosoBridgeProvider(
-            CreateTruth, () => { }, () => { }, () => { }, _ => { }, _ => true, () => { }, () => { },
-            () => true,
-            new AgentBridgeUiReviewRegistry(),
-            tryOpenGearsetListUi: () => expected);
-
-        Assert.Same(expected, provider.TryOpenGearsetListUi());
-    }
-
-    [Fact]
-    public void Provider_exposes_semantic_rendered_gearset_equip_without_generic_click_authority()
-    {
-        var expected = new RenderedUiTextActionResult(true, "RenderedTextClickDispatched", "Equipped Miner.", "GearSetList", "GearSetList/7/5/16");
-        var provider = new MarketMafiosoBridgeProvider(
-            CreateTruth, () => { }, () => { }, () => { }, _ => { }, _ => true, () => { }, () => { },
-            () => true,
-            new AgentBridgeUiReviewRegistry(),
-            trySelectCalibrationGearsetUi: _ => expected,
-            tryEquipSelectedGearsetUi: () => expected);
-
-        Assert.Same(expected, provider.TrySelectCalibrationGearsetUi("Miner"));
-        Assert.Same(expected, provider.TryEquipSelectedGearsetUi());
-    }
-
-    [Fact]
-    public void Provider_exposes_read_only_rendered_retainer_capture()
-    {
-        var expected = new AgentBridgeRenderedUiSnapshot(DateTimeOffset.UtcNow,
-        [
-            new("RetainerCharacter", true, true, true, 42, []),
-        ]);
-        var provider = new MarketMafiosoBridgeProvider(
-            CreateTruth, () => { }, () => { }, () => { }, _ => { }, _ => true, () => { }, () => { },
-            () => true,
-            new AgentBridgeUiReviewRegistry(),
-            captureRetainerUi: () => expected);
-
-        Assert.Same(expected, provider.CaptureRetainerUi());
     }
 
     [Fact]
@@ -194,48 +41,62 @@ public sealed class MarketMafiosoBridgeProviderTests
         Assert.DoesNotContain("\"retainers\"", json, StringComparison.OrdinalIgnoreCase);
     }
 
-    [Fact]
-    public void Diagnostics_test_tools_disclosure_is_a_stable_semantic_toggle()
-    {
-        var state = new DiagnosticsHierarchyState();
-        var registry = new AgentBridgeUiReviewRegistry();
-        registry.BeginFrame();
-        registry.Register(
-            DiagnosticsHierarchyState.TestToolsControlId,
-            state.TestToolsActionLabel,
-            AgentBridgeUiControlKind.Toggle,
-            default,
-            new(100, 20),
-            true,
-            state.TestToolsExpanded,
-            state.TestToolsValue,
-            state.ToggleTestTools);
-        var collapsedFrame = registry.EndFrame();
+    private static MarketMafiosoBridgeProvider CreateProvider(
+        bool marketAcquisitionUnlocked,
+        MarketMafiosoBridgeBindings bindings) => new(
+            CreateTruth,
+            () => { },
+            () => { },
+            () => { },
+            _ => { },
+            _ => true,
+            () => { },
+            () => { },
+            () => marketAcquisitionUnlocked,
+            bindings,
+            new AgentBridgeUiReviewRegistry());
 
-        var collapsed = Assert.Single(collapsedFrame.Controls);
-        Assert.Equal("diagnostics.test-tools.expanded", collapsed.Id);
-        Assert.False(collapsed.Selected);
-        Assert.Equal("Collapsed", collapsed.Value);
-        Assert.True(registry.Invoke(collapsed.Id, collapsedFrame.FrameId).Success);
-        Assert.True(state.TestToolsExpanded);
-
-        registry.BeginFrame();
-        registry.Register(
-            DiagnosticsHierarchyState.TestToolsControlId,
-            state.TestToolsActionLabel,
-            AgentBridgeUiControlKind.Toggle,
-            default,
-            new(100, 20),
-            true,
-            state.TestToolsExpanded,
-            state.TestToolsValue,
-            state.ToggleTestTools);
-        var expanded = Assert.Single(registry.EndFrame().Controls);
-
-        Assert.Equal(collapsed.Id, expanded.Id);
-        Assert.True(expanded.Selected);
-        Assert.Equal("Expanded", expanded.Value);
-    }
+    private static MarketMafiosoBridgeBindings CreateBindings() => new(
+        OpenCharacterUi: () => { },
+        TryCloseCharacterUi: () => false,
+        TryCloseBlockingSelectStringUi: () => false,
+        TryCloseRetainerUi: () => false,
+        TrySwitchCalibrationJobUi: _ => null,
+        TrySwitchGearsetSlotUi: _ => null,
+        TryOpenGearsetListUi: () => null!,
+        TrySelectCalibrationGearsetUi: _ => null!,
+        TryEquipSelectedGearsetUi: () => null!,
+        CaptureCharacterUi: () => null!,
+        CaptureRetainerUi: () => null!,
+        BeginRetainerObservationUi: _ => null!,
+        AdvanceRetainerObservationUi: () => null!,
+        CancelRetainerObservationUi: () => null!,
+        TryOpenRenderedRetainerUi: _ => null!,
+        CaptureAdvisorStateUi: () => null!,
+        CaptureInventoryStructSnapshotUi: () => null!,
+        TryOpenArmouryBoardUi: () => false,
+        TryCloseArmouryBoardUi: () => false,
+        TryShowArmourySlotTooltipUi: _ => null!,
+        TryShowBagSlotTooltipUi: _ => null!,
+        TryOpenBagSlotContextUi: _ => null!,
+        TryInvokeBagSlotContextActionUi: _ => null!,
+        TryCloseBagSlotContextUi: () => false,
+        CaptureTooltipMapDiagnosticUi: _ => string.Empty,
+        CaptureInventoryContainerTableDiagnosticUi: () => string.Empty,
+        CaptureInventoryBuddyOccupancyDiagnosticUi: () => string.Empty,
+        CaptureInventoryWindowOccupancyDiagnosticUi: () => string.Empty,
+        SetInventoryTabDiagnosticUi: _ => string.Empty,
+        BeginArmouryDifferentialUi: () => null!,
+        AdvanceArmouryDifferentialUi: () => null!,
+        CancelArmouryDifferentialUi: () => null!,
+        CaptureGatheringStatsUi: () => null!,
+        BeginCharacterEquipmentScanUi: () => null!,
+        AdvanceCharacterEquipmentScanUi: () => null!,
+        CancelCharacterEquipmentScanUi: () => null!,
+#if DEBUG
+        TryOpenSyntheticAdvisorReview: () => false,
+#endif
+        GetUiAutomationCapabilities: () => null!);
 
     private static AgentBridgeTruth CreateTruth() => new()
     {

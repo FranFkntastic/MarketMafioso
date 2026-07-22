@@ -170,7 +170,6 @@ internal sealed class MarketAcquisitionDiagnosticsPanel
             DrawReportLocation("Observed listings", snapshot.LastObservedListingsCsvPath);
             DrawReportLocation("Purchase records", snapshot.LastPurchaseRecordsCsvPath);
             DrawReportLocation("Craft quote printout", craftAppraisal.LastCraftQuoteDiagnosticFilePath);
-            DrawReportLocation("Market depth printout", craftAppraisal.LastMarketDepthDiagnosticFilePath);
             DrawReportLocation("UI-state capture", uiStateCapture.LastCapturePath);
         }
     }

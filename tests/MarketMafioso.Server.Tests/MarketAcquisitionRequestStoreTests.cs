@@ -1,3 +1,5 @@
+using Microsoft.Data.Sqlite;
+
 namespace MarketMafioso.Server.Tests;
 
 public sealed class MarketAcquisitionRequestStoreTests
@@ -54,6 +56,26 @@ public sealed class MarketAcquisitionRequestStoreTests
         Assert.NotNull(claimed);
         Assert.Equal(MarketAcquisitionOrigins.ClientQuickShop, claimed.Origin);
         Assert.Equal("plugin-instance-1", claimed.CreatedByPluginInstanceId);
+    }
+
+    [Fact]
+    public async Task CreateBatchAsyncReplaysSameBodyAndRejectsDifferentBody()
+    {
+        using var fixture = await MarketAcquisitionStoreFixture.CreateAsync();
+        var request = CreateBatchRequest("create-idempotency");
+
+        var created = await fixture.Store.CreateBatchAsync(request, CancellationToken.None);
+        var replay = await fixture.Store.CreateBatchAsync(request, CancellationToken.None);
+        var changed = request with
+        {
+            Lines = [CreateLine(4, "Lightning Shard", "Crystal", maxUnitPrice: 25)],
+        };
+
+        Assert.False(created.IsReplay);
+        Assert.True(replay.IsReplay);
+        Assert.Equal(created.Request.Id, replay.Request.Id);
+        await Assert.ThrowsAsync<MarketAcquisitionIdempotencyConflictException>(() =>
+            fixture.Store.CreateBatchAsync(changed, CancellationToken.None));
     }
 
     [Fact]
@@ -377,6 +399,54 @@ public sealed class MarketAcquisitionRequestStoreTests
     }
 
     [Fact]
+    public async Task LifecycleReplayIsIdempotentAndRejectsChangedBody()
+    {
+        using var fixture = await MarketAcquisitionStoreFixture.CreateAsync();
+        var claimed = await fixture.CreateClaimedBatchAsync("lifecycle-idempotency");
+        var request = new MarketAcquisitionLifecycleRequest
+        {
+            ClaimToken = claimed.ClaimToken,
+            IdempotencyKey = "reject-once",
+            Reason = "User rejected in plugin",
+        };
+
+        var rejected = await fixture.Store.RejectAsync(claimed.Id, request, CancellationToken.None);
+        var replay = await fixture.Store.RejectAsync(claimed.Id, request, CancellationToken.None);
+
+        Assert.Equal(MarketAcquisitionStatuses.Rejected, rejected!.Status);
+        Assert.Equal(MarketAcquisitionStatuses.Rejected, replay!.Status);
+        await Assert.ThrowsAsync<MarketAcquisitionIdempotencyConflictException>(() =>
+            fixture.Store.RejectAsync(
+                claimed.Id,
+                request with { Reason = "Different body" },
+                CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task AttemptProgressReplayEnforcesIdempotencyKeyAndSequence()
+    {
+        using var fixture = await MarketAcquisitionStoreFixture.CreateAsync();
+        var accepted = await fixture.CreateAcceptedBatchAsync("attempt-idempotency");
+        var request = CreateAttemptProgress(accepted.ClaimToken, "attempt-key-a", "Traveling.");
+
+        var first = await fixture.Store.ReportAttemptProgressAsync(accepted.Id, request, CancellationToken.None);
+        var replay = await fixture.Store.ReportAttemptProgressAsync(accepted.Id, request, CancellationToken.None);
+
+        Assert.Equal(MarketAcquisitionAttemptEventResults.Accepted, first!.Result);
+        Assert.Equal(MarketAcquisitionAttemptEventResults.Replayed, replay!.Result);
+        await Assert.ThrowsAsync<MarketAcquisitionIdempotencyConflictException>(() =>
+            fixture.Store.ReportAttemptProgressAsync(
+                accepted.Id,
+                request with { Message = "Different payload." },
+                CancellationToken.None));
+        await Assert.ThrowsAsync<MarketAcquisitionAttemptSequenceConflictException>(() =>
+            fixture.Store.ReportAttemptProgressAsync(
+                accepted.Id,
+                request with { IdempotencyKey = "attempt-key-b", Message = "Different payload." },
+                CancellationToken.None));
+    }
+
+    [Fact]
     public async Task RecordPurchaseAuditAsyncInsertsIdempotentPurchaseRecord()
     {
         using var fixture = await MarketAcquisitionStoreFixture.CreateAsync();
@@ -461,12 +531,84 @@ public sealed class MarketAcquisitionRequestStoreTests
         using var fixture = await MarketAcquisitionStoreFixture.CreateAsync();
         var created = await fixture.Store.CreateBatchAsync(CreateBatchRequest("durable-inbox", expiresInSeconds: 1), CancellationToken.None);
 
-        await Task.Delay(1200);
+        await BackdateAsync(
+            fixture,
+            created.Request.Id,
+            "UPDATE acquisition_requests SET expires_at_utc = $past WHERE id = $id;");
 
         var pending = await fixture.Store.ListPendingAsync(MarketAcquisitionTestApp.CharacterName, MarketAcquisitionTestApp.WorldName, CancellationToken.None);
         Assert.Contains(pending, request => request.Id == created.Request.Id);
         var workOrder = await fixture.Store.GetWorkOrderAsync(created.Request.Id, CancellationToken.None);
         Assert.Equal(MarketAcquisitionWorkOrderStates.Inbox, workOrder!.State);
+    }
+
+    [Fact]
+    public async Task ExpiredClaimReleasesRequestAndInvalidatesOldToken()
+    {
+        using var fixture = await MarketAcquisitionStoreFixture.CreateAsync();
+        var claimed = await fixture.CreateClaimedBatchAsync("expired-claim");
+        await BackdateAsync(
+            fixture,
+            claimed.Id,
+            "UPDATE acquisition_requests SET claim_expires_at_utc = $past WHERE id = $id;");
+
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+            fixture.Store.AcceptAsync(
+                claimed.Id,
+                new() { ClaimToken = claimed.ClaimToken, IdempotencyKey = "expired-accept" },
+                CancellationToken.None));
+        var reclaimed = await fixture.Store.ClaimAsync(
+            claimed.Id,
+            new()
+            {
+                CharacterName = MarketAcquisitionTestApp.CharacterName,
+                World = MarketAcquisitionTestApp.WorldName,
+                PluginInstanceId = "plugin-recovery",
+            },
+            CancellationToken.None);
+
+        Assert.NotNull(reclaimed);
+        Assert.NotEqual(claimed.ClaimToken, reclaimed.ClaimToken);
+    }
+
+    [Fact]
+    public async Task StaleAcceptedRequestWithoutExecutionEvidenceReturnsToPendingPickup()
+    {
+        using var fixture = await MarketAcquisitionStoreFixture.CreateAsync();
+        var accepted = await fixture.CreateAcceptedBatchAsync("stale-accepted");
+        await BackdateExecutionAsync(fixture, accepted.Id);
+
+        var pending = await fixture.Store.ListPendingAsync(
+            MarketAcquisitionTestApp.CharacterName,
+            MarketAcquisitionTestApp.WorldName,
+            CancellationToken.None);
+
+        var request = Assert.Single(pending, request => request.Id == accepted.Id);
+        Assert.Equal(MarketAcquisitionStatuses.PendingPickup, request.Status);
+    }
+
+    [Fact]
+    public async Task StaleRunningRequestWithExecutionEvidenceRequiresRecoveryAndCanBeResent()
+    {
+        using var fixture = await MarketAcquisitionStoreFixture.CreateAsync();
+        var accepted = await fixture.CreateAcceptedBatchAsync("stale-running");
+        await fixture.Store.ReportProgressAsync(
+            accepted.Id,
+            new()
+            {
+                ClaimToken = accepted.ClaimToken,
+                IdempotencyKey = "stale-running-progress",
+                RunnerState = "Running",
+                Message = "Execution started.",
+            },
+            CancellationToken.None);
+        await BackdateExecutionAsync(fixture, accepted.Id);
+
+        var timeline = await fixture.Store.GetTimelineAsync(accepted.Id, CancellationToken.None);
+        Assert.Equal(MarketAcquisitionStatuses.RecoveryRequired, timeline!.Request.Status);
+
+        var resent = await fixture.Store.ResendAsync(accepted.Id, CancellationToken.None);
+        Assert.Equal(MarketAcquisitionStatuses.PendingPickup, resent!.Status);
     }
 
     [Fact]
@@ -617,4 +759,45 @@ public sealed class MarketAcquisitionRequestStoreTests
             MaxUnitPrice = maxUnitPrice,
             GilCap = 0,
         };
+
+    private static MarketAcquisitionAttemptEventRequest CreateAttemptProgress(
+        string claimToken,
+        string idempotencyKey,
+        string message) =>
+        new()
+        {
+            ClaimToken = claimToken,
+            IdempotencyKey = idempotencyKey,
+            PluginInstanceId = MarketAcquisitionTestApp.PluginInstanceId,
+            AttemptId = "attempt-1",
+            EventSequence = 1,
+            EventType = "progress",
+            Phase = "Traveling",
+            RunnerState = "Running",
+            Message = message,
+            ClientTimestampUtc = DateTimeOffset.Parse("2026-07-21T12:00:00Z"),
+        };
+
+    private static async Task BackdateExecutionAsync(MarketAcquisitionStoreFixture fixture, string id) =>
+        await BackdateAsync(
+            fixture,
+            id,
+            """
+            UPDATE acquisition_requests SET claimed_at_utc = $past WHERE id = $id;
+            UPDATE acquisition_request_events SET created_at_utc = $past WHERE request_id = $id;
+            """);
+
+    private static async Task BackdateAsync(
+        MarketAcquisitionStoreFixture fixture,
+        string id,
+        string commandText)
+    {
+        await using var connection = new SqliteConnection($"Data Source={fixture.DatabasePath}");
+        await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = commandText;
+        command.Parameters.AddWithValue("$id", id);
+        command.Parameters.AddWithValue("$past", DateTimeOffset.UtcNow.AddHours(-1).ToString("O"));
+        await command.ExecuteNonQueryAsync();
+    }
 }

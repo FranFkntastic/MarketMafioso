@@ -175,12 +175,14 @@ public sealed class AgentBridgeHost : IDisposable
                 return AgentBridgeResponse.Ok("Review surfaces captured.", provider.GetReviewSurfaces());
             case "get-ui-automation-capabilities":
                 return AgentBridgeResponse.Ok("Rendered UI automation capabilities captured.", provider.GetUiAutomationCapabilities());
+#if DEBUG
             case "open-synthetic-advisor-review":
                 var syntheticAdvisorOpened = false;
                 await dispatchOnFramework(() => syntheticAdvisorOpened = provider.TryOpenSyntheticAdvisorReview()).ConfigureAwait(false);
                 return syntheticAdvisorOpened
                     ? AgentBridgeResponse.Ok("Debug-only synthetic advisor review opened.")
                     : AgentBridgeResponse.Fail("Synthetic advisor review is unavailable in this build.");
+#endif
             case "invoke-control":
                 if (string.IsNullOrWhiteSpace(request.Target) || request.FrameId is null)
                     return AgentBridgeResponse.Fail("Control ID and reviewed frame ID are required.");
@@ -276,7 +278,7 @@ public sealed class AgentBridgeHost : IDisposable
                             calibrationJobSwitch.JobName,
                             calibrationJobSwitch.GearsetName,
                             calibrationJobSwitch.Command,
-                            verification = "Run the Advisor observation or get-gathering-stats-ui and require the rendered active job to match.",
+                            verification = "Inspect the rendered Character UI and require the active job to match; get-gathering-stats-ui can verify Miner or Botanist.",
                         })
                     : AgentBridgeResponse.Fail("Target must be Miner, Botanist, or Blacksmith.");
             case "switch-gearset-slot-ui":

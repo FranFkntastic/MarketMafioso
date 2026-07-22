@@ -394,11 +394,11 @@ public sealed class OutfitterMarketEvidenceDiscoveryService
         IReadOnlyList<MarketAcquisitionListing> listings)
     {
         var normalized = new List<MarketAcquisitionListing>(listings.Count);
-        foreach (var group in listings.GroupBy(listing => listing.ListingId, StringComparer.Ordinal))
+        foreach (var group in listings.GroupBy(listing => (listing.WorldId, listing.ListingId)))
         {
             var first = group.First();
             if (group.Skip(1).Any(candidate => !SameObservableRow(first, candidate)))
-                throw new InvalidOperationException($"Listing '{group.Key}' appeared with conflicting observable market rows.");
+                throw new InvalidOperationException($"Listing '{group.Key.ListingId}' on world {group.Key.WorldId} appeared with conflicting observable market rows.");
             normalized.Add(first);
         }
 
@@ -433,7 +433,7 @@ public sealed class OutfitterMarketEvidenceDiscoveryService
     private static IReadOnlyList<OutfitterMarketListingEvidence> NormalizeEvidenceListings(
         IReadOnlyList<OutfitterMarketListingEvidence> listings)
     {
-        var groups = listings.GroupBy(listing => listing.ListingId, StringComparer.Ordinal).ToArray();
+        var groups = listings.GroupBy(listing => (listing.WorldId, listing.ListingId)).ToArray();
         if (groups.All(group => group.Count() == 1))
             return listings;
         return groups.SelectMany(group => group.Skip(1).All(candidate => candidate == group.First())

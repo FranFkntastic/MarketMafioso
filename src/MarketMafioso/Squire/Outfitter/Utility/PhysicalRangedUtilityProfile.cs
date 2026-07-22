@@ -32,7 +32,7 @@ public sealed class PhysicalRangedUtilityProfile : IEquipmentExactSolverUtilityM
     public const uint MachinistClassJobId = 31;
     public const uint DancerClassJobId = 38;
     public const string ProfileId = "squire.physical-ranged.player";
-    public const string ProfileVersion = "7.51-v1";
+    public const string ProfileVersion = "7.51-v2";
     public const string GeneralCombatContextId = "general-physical-ranged-combat";
     public const AdvisorProfileCalibrationState CalibrationState = AdvisorProfileCalibrationState.Experimental;
 
@@ -63,7 +63,8 @@ public sealed class PhysicalRangedUtilityProfile : IEquipmentExactSolverUtilityM
             Rule("critical-hit", EquipmentStatSemantic.CriticalHit, "Critical Hit is retained componentwise; no job-specific scaling claim is made."),
             Rule("determination", EquipmentStatSemantic.Determination, "Determination is retained componentwise; no job-specific scaling claim is made."),
             Rule("direct-hit", EquipmentStatSemantic.DirectHit, "Direct Hit is retained componentwise; no job-specific scaling claim is made."),
-            Rule("skill-speed", EquipmentStatSemantic.SkillSpeed, "Skill Speed is retained componentwise; speed tiers and rotation effects are unmodeled."),
+            new("skill-speed", EquipmentStatSemantic.SkillSpeed, EquipmentUtilityRuleKind.ContextualOnly, 0d, null,
+                "Skill Speed remains visible, but every change requires job- and encounter-specific timing analysis."),
         ],
         "Patch 7.51 experimental shared physical-ranged profile. It exposes componentwise no-loss ordering only and cannot grant recommendation authority until independent calibration and live proof pass.");
 
@@ -158,19 +159,6 @@ public sealed class PhysicalRangedUtilityProfile : IEquipmentExactSolverUtilityM
             hasUnmodeledRelevantEffect,
             calibrationApproved: CalibrationState == AdvisorProfileCalibrationState.Supported);
 
-    internal AdvisorAuthorityAssessment AssessAuthorityForCharacterization(
-        EquipmentUtilityEvaluation candidate,
-        ulong additionalCostGil,
-        bool evidenceComplete = true,
-        bool patchMatches = true,
-        bool hasUnmodeledRelevantEffect = false) => AssessAuthorityCore(
-            candidate,
-            additionalCostGil,
-            evidenceComplete,
-            patchMatches,
-            hasUnmodeledRelevantEffect,
-            calibrationApproved: true);
-
     private AdvisorAuthorityAssessment AssessAuthorityCore(
         EquipmentUtilityEvaluation candidate,
         ulong additionalCostGil,
@@ -198,6 +186,11 @@ public sealed class PhysicalRangedUtilityProfile : IEquipmentExactSolverUtilityM
             reasons.Add("The candidate trades a speed, secondary, defense, Vitality, Dexterity, or weapon-damage component; the shared role profile abstains.");
         if (candidate.Assessment is UpgradeAssessment.Equivalent or UpgradeAssessment.ClearRegression)
             reasons.Add("The candidate is not a componentwise no-loss improvement over the observed baseline.");
+        if (Stat(candidate, EquipmentStatSemantic.SkillSpeed) is not { } candidateSkillSpeed ||
+            candidateSkillSpeed != Stat(baselineEvaluation, EquipmentStatSemantic.SkillSpeed))
+        {
+            reasons.Add("Skill Speed changed or could not be verified; Bard, Machinist, and Dancer require separate rotation and encounter timing evidence.");
+        }
 
         var baselineThresholds = baselineEvaluation.Thresholds.ToDictionary(value => value.ThresholdId, StringComparer.Ordinal);
         var gainedCapabilities = candidate.Thresholds
@@ -205,11 +198,10 @@ public sealed class PhysicalRangedUtilityProfile : IEquipmentExactSolverUtilityM
             .Select(value => value.ThresholdId)
             .Order(StringComparer.Ordinal)
             .ToArray();
-        if (candidate.Assessment == UpgradeAssessment.ClearImprovement && additionalCostGil > 0 &&
-            !gainedCapabilities.Contains(DexterityGainCapabilityId, StringComparer.Ordinal) &&
+        if (candidate.Assessment == UpgradeAssessment.ClearImprovement &&
             !gainedCapabilities.Contains(WeaponDamageGainCapabilityId, StringComparer.Ordinal))
         {
-            reasons.Add("Paid physical-ranged nomination requires a Dexterity or physical weapon-damage gain with no modeled component loss.");
+            reasons.Add("Physical-ranged nomination requires a physical weapon-damage gain with no modeled component loss; raw Dexterity gains remain visible until effective damage tiers are modeled.");
         }
 
         return new(
@@ -291,6 +283,12 @@ public sealed class PhysicalRangedUtilityProfile : IEquipmentExactSolverUtilityM
 
     private static EquipmentUtilityRule Rule(string key, EquipmentStatSemantic semantic, string rationale) =>
         new(key, semantic, EquipmentUtilityRuleKind.PreferMore, 1d, null, rationale);
+
+    private static int? Stat(EquipmentUtilityEvaluation evaluation, EquipmentStatSemantic semantic)
+    {
+        var matches = evaluation.RawStats.Where(value => value.Semantic == semantic).Take(2).ToArray();
+        return matches.Length == 1 ? matches[0].Value : null;
+    }
 
     private static EquipmentUtilityComponentDefinition Component(string key, EquipmentStatSemantic semantic, double divisor) =>
         new(key, semantic, divisor, 100, $"Bounded {semantic} progress inside the experimental componentwise role profile.");

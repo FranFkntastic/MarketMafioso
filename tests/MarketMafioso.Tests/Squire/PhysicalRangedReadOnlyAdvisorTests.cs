@@ -33,6 +33,28 @@ public sealed class PhysicalRangedReadOnlyAdvisorTests
             authority.Reasons.Any(reason => reason.Contains("experimental", StringComparison.OrdinalIgnoreCase)));
     }
 
+    [Theory]
+    [InlineData(PhysicalRangedUtilityProfile.BardClassJobId)]
+    [InlineData(PhysicalRangedUtilityProfile.MachinistClassJobId)]
+    [InlineData(PhysicalRangedUtilityProfile.DancerClassJobId)]
+    public void Raw_dexterity_only_offer_stays_visible_without_nomination(uint classJobId)
+    {
+        var fixture = Fixture(classJobId, dexterityOnlyCandidate: true);
+
+        var advice = new MinerBotanistReadOnlyAdvisor().Build(
+            fixture.Baseline,
+            fixture.Evidence,
+            itemId => itemId == fixture.Candidate.ItemId ? [fixture.Candidate] : [],
+            PhysicalRangedAdvisorStatFamily.Instance,
+            PhysicalRangedUtilityProfile.GeneralCombatContextId);
+
+        Assert.Equal(MinerBotanistAdvisorStatus.Complete, advice.Status);
+        Assert.Null(advice.Nomination);
+        Assert.Contains(advice.OffersByAllocation.Values, offer => offer.Offer.Definition.ItemId == fixture.Candidate.ItemId);
+        Assert.Contains(advice.AuthorityBySolutionId.Values, authority =>
+            authority.Reasons.Any(reason => reason.Contains("effective damage tiers", StringComparison.Ordinal)));
+    }
+
     [Fact]
     public void Market_item_with_unmodeled_effect_fails_closed()
     {
@@ -49,31 +71,7 @@ public sealed class PhysicalRangedReadOnlyAdvisorTests
         Assert.Contains("unmodeled effect", advice.Diagnostic, StringComparison.OrdinalIgnoreCase);
     }
 
-    [Fact]
-    public void Secondary_speed_trade_remains_in_solver_evidence_but_is_context_dependent()
-    {
-        var fixture = Fixture(PhysicalRangedUtilityProfile.BardClassJobId, speedTradeCandidate: true);
-
-        var advice = new MinerBotanistReadOnlyAdvisor().Build(
-            fixture.Baseline,
-            fixture.Evidence,
-            itemId => itemId == fixture.Candidate.ItemId ? [fixture.Candidate] : [],
-            PhysicalRangedAdvisorStatFamily.Instance,
-            PhysicalRangedUtilityProfile.GeneralCombatContextId);
-
-        Assert.True(advice.Status == MinerBotanistAdvisorStatus.Complete, advice.Diagnostic);
-        Assert.Contains(advice.OffersByAllocation.Values, offer => offer.Offer.Definition.ItemId == fixture.Candidate.ItemId);
-        var allSolutions = advice.Frontier!.Pareto.Frontier
-            .Concat(advice.Frontier.Pareto.Dominated.Select(value => value.Solution))
-            .Where(solution => solution.Candidate.Selections.Any(selection =>
-                advice.OffersByAllocation[selection.AllocationKey].Offer.Definition.ItemId == fixture.Candidate.ItemId))
-            .ToArray();
-        Assert.NotEmpty(allSolutions);
-        Assert.All(allSolutions, solution => Assert.Equal(UpgradeAssessment.ContextDependent, solution.Utility.Assessment));
-        Assert.Null(advice.Nomination);
-    }
-
-    private static FixtureData Fixture(uint classJobId, bool unmodeledCandidate = false, bool speedTradeCandidate = false)
+    private static FixtureData Fixture(uint classJobId, bool unmodeledCandidate = false, bool dexterityOnlyCandidate = false)
     {
         var scope = new CharacterScope(99, "Physical Ranged", 21);
         var instances = new List<EquipmentInstanceSnapshot>();
@@ -130,10 +128,23 @@ public sealed class PhysicalRangedReadOnlyAdvisorTests
             slots,
             snapshot,
             "Complete");
-        var candidateStats = speedTradeCandidate
-            ? new PhysicalRangedUtilityStats(400, 100, 140, 0, 0, 120, 80, 60, 39)
-            : new PhysicalRangedUtilityStats(400, 100, 141, 0, 0, 100, 80, 60, 40);
-        var candidate = Definition(40_000, "No-loss weapon upgrade", EquipmentSlot.MainHand, classJobId, candidateStats, unmodeledCandidate ? 9u : 0u);
+        var candidateStats = new PhysicalRangedUtilityStats(
+            dexterityOnlyCandidate ? 401 : 400,
+            100,
+            dexterityOnlyCandidate ? 140 : 141,
+            0,
+            0,
+            100,
+            80,
+            60,
+            40);
+        var candidate = Definition(
+            40_000,
+            dexterityOnlyCandidate ? "No-loss raw Dexterity offer" : "No-loss weapon upgrade",
+            EquipmentSlot.MainHand,
+            classJobId,
+            candidateStats,
+            unmodeledCandidate ? 9u : 0u);
         var now = new DateTimeOffset(2026, 7, 21, 12, 0, 0, TimeSpan.Zero);
         var evidence = new OutfitterMarketEvidenceBook(
             Guid.NewGuid(),

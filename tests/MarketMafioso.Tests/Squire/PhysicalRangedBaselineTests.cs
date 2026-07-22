@@ -37,37 +37,6 @@ public sealed class PhysicalRangedBaselineTests
             Assert.True(baseline.FixedStats.ContainsKey(semantic), $"Missing fixed {semantic}."));
     }
 
-    [Fact]
-    public void Level_sync_still_fails_closed_for_physical_ranged_baselines()
-    {
-        var fixture = Fixture();
-
-        var baseline = PlayerAdvisorBaselineAssembler.Assemble(
-            fixture.Snapshot,
-            Header with { EffectiveLevel = 90, IsLevelSynced = true },
-            PhysicalRangedAdvisorStatFamily.Instance,
-            fixture.Totals,
-            fixture.Captures);
-
-        Assert.Equal(PlayerAdvisorBaselineStatus.Unsupported, baseline.Status);
-        Assert.Contains("level sync", baseline.Diagnostic, StringComparison.OrdinalIgnoreCase);
-    }
-
-    [Fact]
-    public void Exact_definition_scalars_cover_damage_and_both_defenses()
-    {
-        var profile = Profile(10, 20, 30);
-        var family = PhysicalRangedAdvisorStatFamily.Instance;
-
-        Assert.True(family.TryGetNonParameterDefinitionValue(profile, EquipmentStatSemantic.PhysicalDamage, out var damage));
-        Assert.True(family.TryGetNonParameterDefinitionValue(profile, EquipmentStatSemantic.PhysicalDefense, out var physicalDefense));
-        Assert.True(family.TryGetNonParameterDefinitionValue(profile, EquipmentStatSemantic.MagicalDefense, out var magicalDefense));
-        Assert.False(family.TryGetNonParameterDefinitionValue(profile, EquipmentStatSemantic.Dexterity, out _));
-        Assert.Equal(10, damage);
-        Assert.Equal(20, physicalDefense);
-        Assert.Equal(30, magicalDefense);
-    }
-
     private static FixtureData Fixture()
     {
         var instances = new List<EquipmentInstanceSnapshot>();

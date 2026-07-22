@@ -10,22 +10,6 @@ namespace MarketMafioso.Tests.Squire;
 public sealed class MinerBotanistSolverReplayTests(ITestOutputHelper output)
 {
     [Fact]
-    public void SanitizedBtn72Fixture_IsTheCapturedTwelvePositionExactRequest()
-    {
-        var replay = ReadBtn72Fixture();
-
-        Assert.Equal(MinerBotanistSolverReplay.CurrentSchemaVersion, replay.SchemaVersion);
-        Assert.Equal(MinerBotanistUtilityProfile.BotanistClassJobId, replay.Profile.ClassJobId);
-        Assert.Equal((uint)72, replay.Profile.CharacterLevel);
-        Assert.Equal(12, replay.RequiredPositions.Count);
-        Assert.Equal(260, replay.Offers.Count);
-        Assert.Equal(223, replay.Offers.Count(value => value.SourceKind == EquipmentAcquisitionSourceKind.MarketBoard));
-        Assert.Equal(25, replay.Offers.Count(value => value.SourceKind == EquipmentAcquisitionSourceKind.GilVendor));
-        Assert.Equal(12, replay.Offers.Count(value => value.SourceKind == EquipmentAcquisitionSourceKind.Owned));
-        _ = replay.ToRequest();
-    }
-
-    [Fact]
     public void Capture_IsDeterministicSanitizedAndRoundTripsTheExactRequestShape()
     {
         var request = Request();
@@ -89,6 +73,7 @@ public sealed class MinerBotanistSolverReplayTests(ITestOutputHelper output)
     }
 
     [Fact]
+    [Trait("Category", "Performance")]
     public void SanitizedBtn72Replay_MeetsWorstSupportedExactSolverBudget()
     {
         var request = ReadBtn72Fixture().ToRequest();
@@ -114,7 +99,9 @@ public sealed class MinerBotanistSolverReplayTests(ITestOutputHelper output)
             result = new EquipmentExactFrontierSolver().Solve(request, cancellation.Token, value =>
             {
                 progress = value;
-                if (value.Phase != "Pruning" || value.ProcessedCandidateCount == value.CandidateStateCount)
+                if (value.Phase != "Pruning" ||
+                    value.ProcessedCandidateCount == 0 ||
+                    value.ProcessedCandidateCount == value.CandidateStateCount)
                     checkpoints.Add((
                         value,
                         GC.GetAllocatedBytesForCurrentThread() - beforeAllocated,

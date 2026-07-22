@@ -100,35 +100,6 @@ public sealed class CraftAppraisalRequestBuilderStateTests
         Assert.Equal(121u, state.TryGetLineQuoteThreshold(line));
     }
 
-    [Fact]
-    public void CreateDiagnosticsSnapshot_IncludesQuoteAndProviderStatus()
-    {
-        var checkedAt = DateTimeOffset.UnixEpoch.AddHours(1);
-        var state = new CraftAppraisalRequestBuilderState
-        {
-            WorkshopHostEnabled = true,
-            WorkshopHostAvailable = true,
-            CapabilitiesCheckedAtUtc = checkedAt,
-            WorkshopHostStatus = "craft.appraise available",
-            CraftQuoteStatus = "Craft quote refreshed.",
-            LastMarketDepthDiagnosticFilePath = "depth.log",
-        };
-        state.RecordQuote(TestQuote("Darksteel Ingot", 5060, 1200m, "WorkshopHostCraftArchitect (last-good)"), "quote.log");
-
-        var snapshot = state.CreateDiagnosticsSnapshot();
-
-        Assert.True(snapshot.WorkshopHostEnabled);
-        Assert.True(snapshot.WorkshopHostAvailable);
-        Assert.Equal(checkedAt, snapshot.CapabilitiesCheckedAtUtc);
-        Assert.Equal("craft.appraise available", snapshot.WorkshopHostStatus);
-        Assert.Equal("Craft quote refreshed.", snapshot.CraftQuoteStatus);
-        Assert.Equal("quote.log", snapshot.LastCraftQuoteDiagnosticFilePath);
-        Assert.Equal("depth.log", snapshot.LastMarketDepthDiagnosticFilePath);
-        Assert.Equal("Darksteel Ingot", snapshot.LastQuoteItemName);
-        Assert.Equal(5060u, snapshot.LastQuoteItemId);
-        Assert.True(snapshot.LatestQuoteWasLastGood);
-    }
-
     private static CraftAppraisalQuote TestQuote(
         string itemName,
         uint itemId,

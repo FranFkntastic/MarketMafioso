@@ -101,7 +101,6 @@ public sealed class MarketAcquisitionDiagnosticsWindow : Window
             : $"{snapshot.LastQuoteItemName} ({snapshot.LastQuoteItemId})");
         DrawDiagnosticRow("Quote Cache", snapshot.LatestQuoteWasLastGood ? "Last-good quote" : "Live or none");
         DrawDiagnosticRow("Quote Printout", FileNameOrNone(snapshot.LastCraftQuoteDiagnosticFilePath));
-        DrawDiagnosticRow("Market Depth Printout", FileNameOrNone(snapshot.LastMarketDepthDiagnosticFilePath));
 
         ImGui.EndTable();
     }

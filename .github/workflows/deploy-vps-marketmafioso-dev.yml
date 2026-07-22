@@ -7,6 +7,7 @@ on:
       - 'src/MarketMafioso.Dashboard/**'
       - 'src/MarketMafioso.Server/**'
       - 'tests/MarketMafioso.Server.Tests/**'
+      - 'tests/MarketMafioso.ContractTests/**'
       - 'MarketMafioso.sln'
       - 'eng/craft-architect-core.ref'
       - 'eng/franthropy.ref'
@@ -64,6 +65,27 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
+      - name: Test receiver
+        run: >
+          dotnet test "tests/MarketMafioso.Server.Tests/MarketMafioso.Server.Tests.csproj"
+          -c Release
+          -p:CraftArchitectCoreProject="${GITHUB_WORKSPACE}/craft-architect/src/FFXIV Craft Architect.Core/FFXIV Craft Architect.Core.csproj"
+          -p:FranthropyFfxivProject="${GITHUB_WORKSPACE}/franthropy/src/Franthropy.FFXIV/Franthropy.FFXIV.csproj"
+          -p:FranthropyFilteringProject="${GITHUB_WORKSPACE}/franthropy/src/Franthropy.Filtering/Franthropy.Filtering.csproj"
+          -p:FranthropyWebProject="${GITHUB_WORKSPACE}/franthropy/src/Franthropy.Web/Franthropy.Web.csproj"
+
+      - name: Test client-server contracts
+        run: >
+          dotnet test "tests/MarketMafioso.ContractTests/MarketMafioso.ContractTests.csproj"
+          -c Release
+          -p:EnableWindowsTargeting=true
+          -p:SkipDevPluginSync=true
+          -p:CraftArchitectCoreProject="${GITHUB_WORKSPACE}/craft-architect/src/FFXIV Craft Architect.Core/FFXIV Craft Architect.Core.csproj"
+          -p:FranthropyDalamudProject="${GITHUB_WORKSPACE}/franthropy/src/Franthropy.Dalamud/Franthropy.Dalamud.csproj"
+          -p:FranthropyFfxivProject="${GITHUB_WORKSPACE}/franthropy/src/Franthropy.FFXIV/Franthropy.FFXIV.csproj"
+          -p:FranthropyFilteringProject="${GITHUB_WORKSPACE}/franthropy/src/Franthropy.Filtering/Franthropy.Filtering.csproj"
+          -p:FranthropyWebProject="${GITHUB_WORKSPACE}/franthropy/src/Franthropy.Web/Franthropy.Web.csproj"
+
       - name: Publish receiver
         run: >
           dotnet publish "src/MarketMafioso.Server/MarketMafioso.Server.csproj"
@@ -75,6 +97,55 @@ jobs:
           -p:FranthropyFilteringProject="${GITHUB_WORKSPACE}/franthropy/src/Franthropy.Filtering/Franthropy.Filtering.csproj"
           -p:FranthropyWebProject="${GITHUB_WORKSPACE}/franthropy/src/Franthropy.Web/Franthropy.Web.csproj"
           -o dist/marketmafioso-server
+
+      - name: Verify published receiver restart
+        shell: bash
+        run: |
+          set -euo pipefail
+          runtime_dir="$(mktemp -d)"
+          database_path="$runtime_dir/marketmafioso.db"
+          receiver="${GITHUB_WORKSPACE}/dist/marketmafioso-server/MarketMafioso.Server"
+          export ASPNETCORE_URLS=http://127.0.0.1:5089
+          export MarketMafioso__RequireApiKey=true
+          export MarketMafioso__ClientApiKey=published-process-test-key
+          export MarketMafioso__BasePath=/marketmafioso
+          export MarketMafioso__DatabasePath="$database_path"
+          export MarketMafioso__EnableMarketAcquisition=true
+
+          start_receiver() {
+            "$receiver" >"$runtime_dir/receiver.log" 2>&1 &
+            receiver_pid=$!
+            for attempt in {1..20}; do
+              if curl --fail --silent http://127.0.0.1:5089/health >/dev/null; then
+                return 0
+              fi
+              sleep 1
+            done
+            cat "$runtime_dir/receiver.log"
+            return 1
+          }
+
+          stop_receiver() {
+            kill "$receiver_pid"
+            wait "$receiver_pid" || true
+          }
+
+          trap 'if [[ -n "${receiver_pid:-}" ]]; then kill "$receiver_pid" 2>/dev/null || true; fi; rm -rf "$runtime_dir"' EXIT
+          start_receiver
+          curl --fail --silent --show-error \
+            --header 'X-Api-Key: published-process-test-key' \
+            --header 'Content-Type: application/json' \
+            --data-binary @docs/samples/inventory-report.sample.json \
+            http://127.0.0.1:5089/marketmafioso/api/inventory >/dev/null
+          stop_receiver
+          unset receiver_pid
+
+          start_receiver
+          curl --fail --silent --show-error \
+            --header 'X-Api-Key: published-process-test-key' \
+            http://127.0.0.1:5089/marketmafioso/api/reports | grep -F 'Test Character' >/dev/null
+          stop_receiver
+          unset receiver_pid
 
       - name: Package receiver files
         id: package
