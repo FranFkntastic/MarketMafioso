@@ -21,7 +21,7 @@ internal sealed class MarketAcquisitionDiagnosticsPanel
     private readonly IPluginLog log;
     private readonly Action drawMarketAcquisitionDiagnostics;
     private readonly Action drawAutomationDiagnostics;
-    private readonly Action drawSquireDiagnostics;
+    private readonly Action drawExternalExactRouteDiagnostics;
     private readonly Func<bool> isMarketAcquisitionUnlocked;
     private readonly UiStateCaptureService uiStateCapture;
     private readonly AgentBridgeUiReviewRegistry reviewRegistry;
@@ -29,12 +29,12 @@ internal sealed class MarketAcquisitionDiagnosticsPanel
     private readonly Func<bool> areDryRunToolsEnabled;
     private readonly Func<bool> canStartPreparedRouteDryRun;
     private readonly Action startPreparedRouteDryRun;
-    private readonly Func<OutfitterDryRunScenario> getOutfitterDryRunScenario;
-    private readonly Func<OutfitterDryRunScenario, bool> armOutfitterDryRunScenario;
+    private readonly Func<ExactAcquisitionDryRunScenario> getExactAcquisitionDryRunScenario;
+    private readonly Func<ExactAcquisitionDryRunScenario, bool> armExactAcquisitionDryRunScenario;
     private readonly DiagnosticsHierarchyState hierarchyState = new();
 #if DEBUG
-    private readonly Func<bool> canSeedOutfitterDryRunSunkState;
-    private readonly Func<string> seedOutfitterDryRunSunkState;
+    private readonly Func<bool> canSeedExactAcquisitionDryRunSunkState;
+    private readonly Func<string> seedExactAcquisitionDryRunSunkState;
 #endif
 
     private string diagnosticsFolderStatus = "Route diagnostics folder opens in Explorer.";
@@ -45,7 +45,7 @@ internal sealed class MarketAcquisitionDiagnosticsPanel
         IPluginLog log,
         Action drawMarketAcquisitionDiagnostics,
         Action drawAutomationDiagnostics,
-        Action drawSquireDiagnostics,
+        Action drawExternalExactRouteDiagnostics,
         Func<bool> isMarketAcquisitionUnlocked,
         UiStateCaptureService uiStateCapture,
         AgentBridgeUiReviewRegistry reviewRegistry,
@@ -53,11 +53,11 @@ internal sealed class MarketAcquisitionDiagnosticsPanel
         Func<bool> areDryRunToolsEnabled,
         Func<bool> canStartPreparedRouteDryRun,
         Action startPreparedRouteDryRun,
-        Func<OutfitterDryRunScenario> getOutfitterDryRunScenario,
-        Func<OutfitterDryRunScenario, bool> armOutfitterDryRunScenario
+        Func<ExactAcquisitionDryRunScenario> getExactAcquisitionDryRunScenario,
+        Func<ExactAcquisitionDryRunScenario, bool> armExactAcquisitionDryRunScenario
 #if DEBUG
-        , Func<bool> canSeedOutfitterDryRunSunkState,
-        Func<string> seedOutfitterDryRunSunkState
+        , Func<bool> canSeedExactAcquisitionDryRunSunkState,
+        Func<string> seedExactAcquisitionDryRunSunkState
 #endif
         )
     {
@@ -66,7 +66,7 @@ internal sealed class MarketAcquisitionDiagnosticsPanel
         this.log = log ?? throw new ArgumentNullException(nameof(log));
         this.drawMarketAcquisitionDiagnostics = drawMarketAcquisitionDiagnostics ?? throw new ArgumentNullException(nameof(drawMarketAcquisitionDiagnostics));
         this.drawAutomationDiagnostics = drawAutomationDiagnostics ?? throw new ArgumentNullException(nameof(drawAutomationDiagnostics));
-        this.drawSquireDiagnostics = drawSquireDiagnostics ?? throw new ArgumentNullException(nameof(drawSquireDiagnostics));
+        this.drawExternalExactRouteDiagnostics = drawExternalExactRouteDiagnostics ?? throw new ArgumentNullException(nameof(drawExternalExactRouteDiagnostics));
         this.isMarketAcquisitionUnlocked = isMarketAcquisitionUnlocked ?? throw new ArgumentNullException(nameof(isMarketAcquisitionUnlocked));
         this.uiStateCapture = uiStateCapture ?? throw new ArgumentNullException(nameof(uiStateCapture));
         this.reviewRegistry = reviewRegistry ?? throw new ArgumentNullException(nameof(reviewRegistry));
@@ -74,11 +74,11 @@ internal sealed class MarketAcquisitionDiagnosticsPanel
         this.areDryRunToolsEnabled = areDryRunToolsEnabled ?? throw new ArgumentNullException(nameof(areDryRunToolsEnabled));
         this.canStartPreparedRouteDryRun = canStartPreparedRouteDryRun ?? throw new ArgumentNullException(nameof(canStartPreparedRouteDryRun));
         this.startPreparedRouteDryRun = startPreparedRouteDryRun ?? throw new ArgumentNullException(nameof(startPreparedRouteDryRun));
-        this.getOutfitterDryRunScenario = getOutfitterDryRunScenario ?? throw new ArgumentNullException(nameof(getOutfitterDryRunScenario));
-        this.armOutfitterDryRunScenario = armOutfitterDryRunScenario ?? throw new ArgumentNullException(nameof(armOutfitterDryRunScenario));
+        this.getExactAcquisitionDryRunScenario = getExactAcquisitionDryRunScenario ?? throw new ArgumentNullException(nameof(getExactAcquisitionDryRunScenario));
+        this.armExactAcquisitionDryRunScenario = armExactAcquisitionDryRunScenario ?? throw new ArgumentNullException(nameof(armExactAcquisitionDryRunScenario));
 #if DEBUG
-        this.canSeedOutfitterDryRunSunkState = canSeedOutfitterDryRunSunkState ?? throw new ArgumentNullException(nameof(canSeedOutfitterDryRunSunkState));
-        this.seedOutfitterDryRunSunkState = seedOutfitterDryRunSunkState ?? throw new ArgumentNullException(nameof(seedOutfitterDryRunSunkState));
+        this.canSeedExactAcquisitionDryRunSunkState = canSeedExactAcquisitionDryRunSunkState ?? throw new ArgumentNullException(nameof(canSeedExactAcquisitionDryRunSunkState));
+        this.seedExactAcquisitionDryRunSunkState = seedExactAcquisitionDryRunSunkState ?? throw new ArgumentNullException(nameof(seedExactAcquisitionDryRunSunkState));
 #endif
     }
 
@@ -107,11 +107,11 @@ internal sealed class MarketAcquisitionDiagnosticsPanel
         if (ImGui.CollapsingHeader("Automation diagnostics##DiagnosticsAutomation", automationFlags))
             drawAutomationDiagnostics();
 
-        var squireFlags = DiagnosticsHierarchyState.SquireRouteDefaultOpen
+        var externalRouteFlags = DiagnosticsHierarchyState.ExternalExactRouteDefaultOpen
             ? ImGuiTreeNodeFlags.DefaultOpen
             : ImGuiTreeNodeFlags.None;
-        if (ImGui.CollapsingHeader("Squire route diagnostics##DiagnosticsSquireRoute", squireFlags))
-            drawSquireDiagnostics();
+        if (ImGui.CollapsingHeader("External plan route diagnostics##DiagnosticsExternalExactRoute", externalRouteFlags))
+            drawExternalExactRouteDiagnostics();
 
         if (snapshot is { IsRouteActive: true, ExecutionMode: MarketAcquisitionExecutionMode.DryRun })
             ImGui.TextColored(MarketMafiosoUiTheme.Warning, $"Dry run active: {snapshot.VisibleAcquisitionStatus}");
@@ -205,11 +205,11 @@ internal sealed class MarketAcquisitionDiagnosticsPanel
         ImGuiUi.SectionHeader("Non-spending Route Dry Run", MarketMafiosoUiTheme.Header);
         ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Scenario");
         ImGui.SameLine();
-        DrawDryRunScenario("Ordinary", OutfitterDryRunScenario.Ordinary);
+        DrawDryRunScenario("Ordinary", ExactAcquisitionDryRunScenario.Ordinary);
         ImGui.SameLine();
-        DrawDryRunScenario("Changed row", OutfitterDryRunScenario.ChangedListingRecovery);
+        DrawDryRunScenario("Changed row", ExactAcquisitionDryRunScenario.ChangedListingRecovery);
         ImGui.SameLine();
-        DrawDryRunScenario("No viable row", OutfitterDryRunScenario.NoViableRecovery);
+        DrawDryRunScenario("No viable row", ExactAcquisitionDryRunScenario.NoViableRecovery);
         var enabled = canStartPreparedRouteDryRun();
         if (ImGuiUi.Button("Dry Run Prepared Route", enabled))
             startPreparedRouteDryRun();
@@ -219,14 +219,14 @@ internal sealed class MarketAcquisitionDiagnosticsPanel
             enabled,
             startPreparedRouteDryRun);
 #if DEBUG
-        var canSeed = canSeedOutfitterDryRunSunkState();
+        var canSeed = canSeedExactAcquisitionDryRunSunkState();
         if (ImGuiUi.Button("Seed one persisted sunk purchase##Debug", canSeed))
-            diagnosticsFolderStatus = seedOutfitterDryRunSunkState();
+            diagnosticsFolderStatus = seedExactAcquisitionDryRunSunkState();
         RegisterLastControl(
             "diagnostics.market-acquisition.debug-seed-sunk-purchase",
             "DEBUG: seed one exact persisted sunk purchase for restart dry-run proof",
             canSeed,
-            () => diagnosticsFolderStatus = seedOutfitterDryRunSunkState());
+            () => diagnosticsFolderStatus = seedExactAcquisitionDryRunSunkState());
         if (!diagnosticsFolderStatus.StartsWith("Route diagnostics", StringComparison.Ordinal) &&
             !diagnosticsFolderStatus.StartsWith("Opened route diagnostics", StringComparison.Ordinal) &&
             !diagnosticsFolderStatus.StartsWith("Unable to open", StringComparison.Ordinal))
@@ -236,17 +236,17 @@ internal sealed class MarketAcquisitionDiagnosticsPanel
 #endif
     }
 
-    private void DrawDryRunScenario(string label, OutfitterDryRunScenario scenario)
+    private void DrawDryRunScenario(string label, ExactAcquisitionDryRunScenario scenario)
     {
-        var selected = getOutfitterDryRunScenario() == scenario;
+        var selected = getExactAcquisitionDryRunScenario() == scenario;
         var enabled = !getRouteSnapshot().IsRouteActive;
-        if (ImGui.RadioButton($"{label}##OutfitterDryRun{scenario}", selected) && enabled)
-            armOutfitterDryRunScenario(scenario);
+        if (ImGui.RadioButton($"{label}##ExactAcquisitionDryRun{scenario}", selected) && enabled)
+            armExactAcquisitionDryRunScenario(scenario);
         RegisterLastControl(
             $"diagnostics.market-acquisition.dry-run-scenario.{scenario.ToString().ToLowerInvariant()}",
-            $"Use {label} Squire dry-run scenario",
+            $"Use {label} External plan dry-run scenario",
             enabled,
-            () => armOutfitterDryRunScenario(scenario));
+            () => armExactAcquisitionDryRunScenario(scenario));
     }
 
     public void DrawLatestWorldCompletionSummary(MarketAcquisitionRouteEngineSnapshot snapshot)

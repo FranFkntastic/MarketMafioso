@@ -5,7 +5,7 @@ using System.Net;
 using System.Net.Http;
 using System.Threading.Tasks;
 using MarketMafioso.MarketAcquisition;
-using MarketMafioso.Squire.Outfitter.Acquisition;
+using MarketMafioso.MarketAcquisition.ExactAuthority;
 
 namespace MarketMafioso.Windows.MarketAcquisitionRequestBuilder;
 
@@ -98,11 +98,11 @@ public sealed class MarketAcquisitionRequestBuilderController
         }
     }
 
-    public OutfitterWorkbenchAuthorityValidation OutfitterFinalizationValidation =>
-        OutfitterWorkbenchAuthorityService.ValidateForFinalization(Document);
+    public ExactAcquisitionWorkbenchAuthorityValidation ExactAcquisitionFinalizationValidation =>
+        ExactAcquisitionWorkbenchAuthorityService.ValidateForFinalization(Document);
 
-    public bool IsOutfitterLine(int index) =>
-        OutfitterWorkbenchAuthorityService.IsAuthorityLine(Document, index);
+    public bool IsExactAcquisitionLine(int index) =>
+        ExactAcquisitionWorkbenchAuthorityService.IsAuthorityLine(Document, index);
 
     public void SetStatus(string status) => Status = status;
 
@@ -159,7 +159,7 @@ public sealed class MarketAcquisitionRequestBuilderController
             SyncStatus = targetChanged ? "NewDraft" : Document.SyncStatus,
             UpdatedAtUtc = DateTimeOffset.UtcNow,
         }).WithNextRevision(targetChanged || string.IsNullOrWhiteSpace(Document.RemoteRequestId) ? "NewDraft" : "LocalEdits");
-        Document = OutfitterWorkbenchAuthorityService.ReconcileEdit(previous, Document);
+        Document = ExactAcquisitionWorkbenchAuthorityService.ReconcileEdit(previous, Document);
         SaveDocument();
         RequestAutomaticSync();
     }
@@ -199,33 +199,33 @@ public sealed class MarketAcquisitionRequestBuilderController
         CommitLocalEdit(RequestDocumentMutation.ApplyRouteScope(Document, scope));
     }
 
-    public void StageOutfitterTransfer(OutfitterWorkbenchTransfer transfer)
+    public void StageExactAcquisitionTransfer(ExactAcquisitionWorkbenchTransfer transfer)
     {
-        Document = OutfitterWorkbenchAuthorityService.Stage(Document, transfer);
+        Document = ExactAcquisitionWorkbenchAuthorityService.Stage(Document, transfer);
         ResetSelection();
-        FinishLocalEdit("Selected exact-quality Squire solution added to the Workbench.");
+        FinishLocalEdit("Selected exact-quality external exact-acquisition solution added to the Workbench.");
     }
 
-    public void UpdateOutfitterPriceFlex(int priceFlexPercent)
+    public void UpdateExactAcquisitionPriceFlex(int priceFlexPercent)
     {
-        Document = OutfitterWorkbenchAuthorityService.UpdatePriceFlex(Document, priceFlexPercent);
+        Document = ExactAcquisitionWorkbenchAuthorityService.UpdatePriceFlex(Document, priceFlexPercent);
         ResetSelection();
-        FinishLocalEdit("Squire fixed gil ceilings updated.");
+        FinishLocalEdit("External plan fixed gil ceilings updated.");
     }
 
-    public bool FinalizeOutfitterAuthority()
+    public bool FinalizeExactAcquisitionAuthority()
     {
-        var validation = OutfitterFinalizationValidation;
+        var validation = ExactAcquisitionFinalizationValidation;
         if (!validation.IsValid)
         {
-            Status = validation.Error ?? "Squire execution authority is incomplete.";
+            Status = validation.Error ?? "External plan execution authority is incomplete.";
             return false;
         }
 
-        Document = OutfitterWorkbenchAuthorityService.Finalize(Document);
-        Status = Document.OutfitterAuthority?.Transfer.DryRunOnly == true
-            ? "Diagnostic Squire contract confirmed for this Workbench revision; dry-run execution only."
-            : "Squire execution contract confirmed for this Workbench revision.";
+        Document = ExactAcquisitionWorkbenchAuthorityService.Finalize(Document);
+        Status = Document.ExactAcquisitionAuthority?.Transfer.DryRunOnly == true
+            ? "Diagnostic External plan contract confirmed for this Workbench revision; dry-run execution only."
+            : "External plan execution contract confirmed for this Workbench revision.";
         SaveDocument();
         return true;
     }
@@ -298,13 +298,13 @@ public sealed class MarketAcquisitionRequestBuilderController
 
         var previous = Document;
         Document = RequestDocumentMutation.AddLine(Document, line);
-        Document = OutfitterWorkbenchAuthorityService.ReconcileEdit(previous, Document);
+        Document = ExactAcquisitionWorkbenchAuthorityService.ReconcileEdit(previous, Document);
         SelectedLineIndex = -1;
         FinishLocalEdit("Work-order draft updated.");
     }
 
     public int AddLines(IEnumerable<MarketAcquisitionRequestLineDocument> lines) =>
-        AddLines(lines, "Outfitter");
+        AddLines(lines, "ExactAcquisition");
 
     public int MergeComposition(MarketAcquisitionWorkbenchComposition composition)
     {
@@ -343,7 +343,7 @@ public sealed class MarketAcquisitionRequestBuilderController
             return 0;
         }
         SelectedLineIndex = -1;
-        Document = OutfitterWorkbenchAuthorityService.ReconcileEdit(previous, Document);
+        Document = ExactAcquisitionWorkbenchAuthorityService.ReconcileEdit(previous, Document);
         FinishLocalEdit($"Added {added:N0} {sourceLabel} line{(added == 1 ? string.Empty : "s")}.");
         return added;
     }
@@ -355,7 +355,7 @@ public sealed class MarketAcquisitionRequestBuilderController
 
         var previous = Document;
         Document = RequestDocumentMutation.RemoveLine(Document, index);
-        Document = OutfitterWorkbenchAuthorityService.ReconcileEdit(previous, Document);
+        Document = ExactAcquisitionWorkbenchAuthorityService.ReconcileEdit(previous, Document);
         SelectedLineIndex = -1;
         FinishLocalEdit("Line removed.");
         return true;
@@ -379,7 +379,7 @@ public sealed class MarketAcquisitionRequestBuilderController
         var previous = Document;
         Document = Document with { Lines = remaining };
         Document = Document.WithNextRevision(string.IsNullOrWhiteSpace(Document.RemoteRequestId) ? "NewDraft" : "LocalEdits");
-        Document = OutfitterWorkbenchAuthorityService.ReconcileEdit(previous, Document);
+        Document = ExactAcquisitionWorkbenchAuthorityService.ReconcileEdit(previous, Document);
         SelectedLineIndex = -1;
         FinishLocalEdit($"Returned {removed:N0} item{(removed == 1 ? string.Empty : "s")} to the inbox selection.");
         return removed;
@@ -489,7 +489,7 @@ public sealed class MarketAcquisitionRequestBuilderController
 
     private void CommitLocalEdit(MarketAcquisitionRequestDocument updated, string? message = null)
     {
-        Document = OutfitterWorkbenchAuthorityService.ReconcileEdit(Document, updated);
+        Document = ExactAcquisitionWorkbenchAuthorityService.ReconcileEdit(Document, updated);
         FinishLocalEdit(message);
     }
 
@@ -567,9 +567,9 @@ public sealed class MarketAcquisitionRequestBuilderController
         {
             LocalRequestId = current.LocalRequestId,
             LocalRevision = current.LocalRevision,
-            OutfitterAuthority = current.OutfitterAuthority,
+            ExactAcquisitionAuthority = current.ExactAcquisitionAuthority,
         };
-        return OutfitterWorkbenchAuthorityService.ReconcileEdit(current, merged);
+        return ExactAcquisitionWorkbenchAuthorityService.ReconcileEdit(current, merged);
     }
 
     private static MarketAcquisitionRequestDocument AdoptRemoteDocument(
@@ -578,7 +578,7 @@ public sealed class MarketAcquisitionRequestBuilderController
     {
         var remote = MarketAcquisitionRequestDocumentMapper.FromRequestView(request);
         return string.Equals(current.RemoteRequestId, request.Id, StringComparison.Ordinal) &&
-               current.OutfitterAuthority is not null
+               current.ExactAcquisitionAuthority is not null
             ? PreserveLocalIdentity(current, remote)
             : remote;
     }
@@ -586,9 +586,9 @@ public sealed class MarketAcquisitionRequestBuilderController
     private static MarketAcquisitionRequestDocument PreserveLocalAuthority(
         MarketAcquisitionRequestDocument current,
         MarketAcquisitionRequestDocument synced) =>
-        current.OutfitterAuthority is null
+        current.ExactAcquisitionAuthority is null
             ? synced
-            : synced with { OutfitterAuthority = current.OutfitterAuthority };
+            : synced with { ExactAcquisitionAuthority = current.ExactAcquisitionAuthority };
 
     private static MarketAcquisitionRequestDocument MergeSyncMetadata(
         MarketAcquisitionRequestDocument current,

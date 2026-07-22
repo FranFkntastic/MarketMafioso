@@ -4,7 +4,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using MarketMafioso.Automation.MarketBoard;
 using MarketMafioso.Automation.Travel;
-using MarketMafioso.Squire.Outfitter.Acquisition;
+using MarketMafioso.MarketAcquisition.ExactAuthority;
 
 namespace MarketMafioso.MarketAcquisition;
 
@@ -39,12 +39,12 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     private MarketAcquisitionApproachLease? activeApproachLease;
     private bool travelInterruptedByCleanup;
     private long operationSequence;
-    private readonly IOutfitterRouteExecutionStateStore outfitterStateStore;
-    private OutfitterRouteAuthoritySession? outfitterAuthority;
-    private OutfitterDryRunScenario outfitterDryRunScenario;
-    private bool outfitterDryRunFaultEligible;
-    private bool outfitterDryRunFaultInjected;
-    private bool outfitterDryRunNoViableConsumed;
+    private readonly IExactAcquisitionRouteExecutionStateStore exactAcquisitionStateStore;
+    private ExactAcquisitionRouteAuthoritySession? exactAcquisitionAuthority;
+    private ExactAcquisitionDryRunScenario exactAcquisitionDryRunScenario;
+    private bool exactAcquisitionDryRunFaultEligible;
+    private bool exactAcquisitionDryRunFaultInjected;
+    private bool exactAcquisitionDryRunNoViableConsumed;
 
     public MarketAcquisitionRouteEngine(
         MarketAcquisitionRouteRunner runner,
@@ -58,7 +58,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         MarketAcquisitionClaimLifecycleController claimLifecycle,
         IMarketAcquisitionRouteCallbackDispatcher callbackDispatcher,
         IMarketAcquisitionRouteClock clock,
-        IOutfitterRouteExecutionStateStore outfitterStateStore,
+        IExactAcquisitionRouteExecutionStateStore exactAcquisitionStateStore,
         IMarketAcquisitionReportOutbox? reportOutbox = null)
     {
         this.runner = runner ?? throw new ArgumentNullException(nameof(runner));
@@ -74,38 +74,38 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             callbackDispatcher ?? throw new ArgumentNullException(nameof(callbackDispatcher)),
             reportOutbox);
         this.clock = clock ?? throw new ArgumentNullException(nameof(clock));
-        this.outfitterStateStore = outfitterStateStore ?? throw new ArgumentNullException(nameof(outfitterStateStore));
+        this.exactAcquisitionStateStore = exactAcquisitionStateStore ?? throw new ArgumentNullException(nameof(exactAcquisitionStateStore));
     }
 
     public bool IsRouteActive =>
         runner.IsRunning ||
         runner.IsPaused ||
-        outfitterAuthority?.State.Phase is OutfitterRouteAuthorityPhase.Preparing or
-            OutfitterRouteAuthorityPhase.Active or OutfitterRouteAuthorityPhase.RecoveryNeeded ||
+        exactAcquisitionAuthority?.State.Phase is ExactAcquisitionRouteAuthorityPhase.Preparing or
+            ExactAcquisitionRouteAuthorityPhase.Active or ExactAcquisitionRouteAuthorityPhase.RecoveryNeeded ||
         state.ProbeRunning ||
         operationExecutor.ActiveSnapshot != null ||
         purchaseAutomation.PurchaseSession?.IsActive == true;
 
-    public OutfitterDryRunScenario ArmedOutfitterDryRunScenario => outfitterDryRunScenario;
-    public bool IsOutfitterDryRunFaultEligible => outfitterDryRunFaultEligible;
-    public bool WasOutfitterDryRunFaultInjected => outfitterDryRunFaultInjected;
+    public ExactAcquisitionDryRunScenario ArmedExactAcquisitionDryRunScenario => exactAcquisitionDryRunScenario;
+    public bool IsExactAcquisitionDryRunFaultEligible => exactAcquisitionDryRunFaultEligible;
+    public bool WasExactAcquisitionDryRunFaultInjected => exactAcquisitionDryRunFaultInjected;
 
-    public bool ArmOutfitterDryRunScenario(OutfitterDryRunScenario scenario)
+    public bool ArmExactAcquisitionDryRunScenario(ExactAcquisitionDryRunScenario scenario)
     {
         if (IsRouteActive)
             return false;
-        outfitterDryRunScenario = scenario;
-        outfitterDryRunFaultInjected = false;
-        outfitterDryRunNoViableConsumed = false;
+        exactAcquisitionDryRunScenario = scenario;
+        exactAcquisitionDryRunFaultInjected = false;
+        exactAcquisitionDryRunNoViableConsumed = false;
         return true;
     }
 
-    public bool ConsumeNoViableOutfitterDryRunScenario()
+    public bool ConsumeNoViableExactAcquisitionDryRunScenario()
     {
-        if (!outfitterDryRunFaultEligible || !outfitterDryRunFaultInjected || outfitterDryRunNoViableConsumed ||
-            outfitterDryRunScenario != OutfitterDryRunScenario.NoViableRecovery || !NeedsOutfitterRecovery)
+        if (!exactAcquisitionDryRunFaultEligible || !exactAcquisitionDryRunFaultInjected || exactAcquisitionDryRunNoViableConsumed ||
+            exactAcquisitionDryRunScenario != ExactAcquisitionDryRunScenario.NoViableRecovery || !NeedsExactAcquisitionRecovery)
             return false;
-        outfitterDryRunNoViableConsumed = true;
+        exactAcquisitionDryRunNoViableConsumed = true;
         return true;
     }
 
@@ -143,7 +143,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         LastRunSummary = runner.LastRunSummary,
         LatestWorldCompletionSummary = runner.LatestWorldCompletionSummary,
         LastRunDiagnosticSummary = runner.LastRunDiagnosticSummary,
-        OutfitterExecution = outfitterAuthority?.State,
+        ExactAcquisitionExecution = exactAcquisitionAuthority?.State,
     };
 
     public MarketAcquisitionRouteActionResult Start(
@@ -151,7 +151,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         MarketAcquisitionClaimView claimed,
         bool enableDiagnostics,
         bool includeOpportunisticChecks,
-        OutfitterExecutionContract? outfitterContract = null,
+        ExactAcquisitionExecutionContract? exactAcquisitionContract = null,
         MarketAcquisitionRequestDocument? workbenchDocument = null,
         MarketAcquisitionExecutionMode executionMode = MarketAcquisitionExecutionMode.Live)
     {
@@ -163,51 +163,51 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         claimedRequest = claimed;
         ClearExecutionState();
         state.ExecutionMode = executionMode;
-        outfitterDryRunFaultEligible = executionMode == MarketAcquisitionExecutionMode.DryRun &&
-                                       outfitterContract?.Transfer.DryRunOnly == true;
-        outfitterDryRunFaultInjected = false;
-        outfitterDryRunNoViableConsumed = false;
+        exactAcquisitionDryRunFaultEligible = executionMode == MarketAcquisitionExecutionMode.DryRun &&
+                                       exactAcquisitionContract?.Transfer.DryRunOnly == true;
+        exactAcquisitionDryRunFaultInjected = false;
+        exactAcquisitionDryRunNoViableConsumed = false;
         var routePlan = plan;
-        if (outfitterContract is not null)
+        if (exactAcquisitionContract is not null)
         {
-            if (outfitterContract.Transfer.DryRunOnly && executionMode != MarketAcquisitionExecutionMode.DryRun)
+            if (exactAcquisitionContract.Transfer.DryRunOnly && executionMode != MarketAcquisitionExecutionMode.DryRun)
             {
                 return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(
-                    "This diagnostic Squire contract is permanently restricted to non-spending dry runs."));
+                    "This diagnostic External plan contract is permanently restricted to non-spending dry runs."));
             }
             if (workbenchDocument is null)
-                return UpdateStatus(MarketAcquisitionRouteActionResult.Fail("Squire Route start requires its finalized Workbench document."));
+                return UpdateStatus(MarketAcquisitionRouteActionResult.Fail("External plan Route start requires its finalized Workbench document."));
             try
             {
-                IOutfitterRouteExecutionStateStore authorityStore = outfitterStateStore;
+                IExactAcquisitionRouteExecutionStateStore authorityStore = exactAcquisitionStateStore;
                 if (executionMode == MarketAcquisitionExecutionMode.DryRun)
                 {
-                    routePlan = OutfitterDryRunExecutionStateRestorer.RestoreRemainingPlan(
-                        outfitterContract,
+                    routePlan = ExactAcquisitionDryRunExecutionStateRestorer.RestoreRemainingPlan(
+                        exactAcquisitionContract,
                         workbenchDocument,
                         claimed,
                         plan,
-                        outfitterStateStore.Restore());
-                    authorityStore = new RestoreOnlyOutfitterRouteExecutionStateStore(outfitterStateStore);
+                        exactAcquisitionStateStore.Restore());
+                    authorityStore = new RestoreOnlyExactAcquisitionRouteExecutionStateStore(exactAcquisitionStateStore);
                 }
-                outfitterAuthority = OutfitterRouteAuthoritySession.Consume(
-                    outfitterContract,
+                exactAcquisitionAuthority = ExactAcquisitionRouteAuthoritySession.Consume(
+                    exactAcquisitionContract,
                     workbenchDocument,
                     routePlan,
                     claimed,
                     authorityStore);
-                outfitterAuthority.CompletePreflight(routePlan);
+                exactAcquisitionAuthority.CompletePreflight(routePlan);
             }
             catch (Exception exception)
             {
-                var message = $"Squire preflight stopped before travel or purchase: {exception.Message}";
-                outfitterAuthority?.Pause(message);
+                var message = $"External plan preflight stopped before travel or purchase: {exception.Message}";
+                exactAcquisitionAuthority?.Pause(message);
                 return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(message));
             }
         }
         else
         {
-            outfitterAuthority = null;
+            exactAcquisitionAuthority = null;
         }
         if (executionMode == MarketAcquisitionExecutionMode.Live)
             reportDispatcher.BeginSession(claimed);
@@ -216,37 +216,37 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         {
             result = runner.Start(routePlan, enableDiagnostics || executionMode == MarketAcquisitionExecutionMode.DryRun, includeOpportunisticChecks, executionMode);
         }
-        catch (Exception exception) when (outfitterAuthority is not null)
+        catch (Exception exception) when (exactAcquisitionAuthority is not null)
         {
-            outfitterAuthority.Pause($"Squire Route start failed before travel: {exception.Message}");
-            return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(outfitterAuthority.State.Message));
+            exactAcquisitionAuthority.Pause($"External plan Route start failed before travel: {exception.Message}");
+            return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(exactAcquisitionAuthority.State.Message));
         }
-        if (!result.Success && outfitterAuthority is not null)
+        if (!result.Success && exactAcquisitionAuthority is not null)
         {
-            outfitterAuthority.Pause($"Squire Route start stopped safely: {result.Message}");
-            return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(outfitterAuthority.State.Message));
+            exactAcquisitionAuthority.Pause($"External plan Route start stopped safely: {result.Message}");
+            return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(exactAcquisitionAuthority.State.Message));
         }
         state.AcquisitionStatus = result.Message;
         return result;
     }
 
-    public bool NeedsOutfitterRecovery => outfitterAuthority?.State.NeedsRecovery == true;
+    public bool NeedsExactAcquisitionRecovery => exactAcquisitionAuthority?.State.NeedsRecovery == true;
 
-    public MarketAcquisitionClaimView CreateOutfitterRecoveryClaim(MarketAcquisitionClaimView claim) =>
-        outfitterAuthority?.CreateRecoveryClaim(claim) ??
-        throw new InvalidOperationException("No Squire recovery is pending.");
+    public MarketAcquisitionClaimView CreateExactAcquisitionRecoveryClaim(MarketAcquisitionClaimView claim) =>
+        exactAcquisitionAuthority?.CreateRecoveryClaim(claim) ??
+        throw new InvalidOperationException("No exact-acquisition recovery is pending.");
 
-    public MarketAcquisitionRouteActionResult StartOutfitterRecovery(
+    public MarketAcquisitionRouteActionResult StartExactAcquisitionRecovery(
         MarketAcquisitionPlan plan,
         MarketAcquisitionClaimView remainingClaim,
         MarketAcquisitionRequestDocument workbenchDocument)
     {
-        if (outfitterAuthority is null || !outfitterAuthority.State.NeedsRecovery)
-            return UpdateStatus(MarketAcquisitionRouteActionResult.Fail("No Squire recovery is pending."));
+        if (exactAcquisitionAuthority is null || !exactAcquisitionAuthority.State.NeedsRecovery)
+            return UpdateStatus(MarketAcquisitionRouteActionResult.Fail("No exact-acquisition recovery is pending."));
         try
         {
-            outfitterAuthority.ValidateCurrentDocument(workbenchDocument);
-            outfitterAuthority.BeginRecovery(plan);
+            exactAcquisitionAuthority.ValidateCurrentDocument(workbenchDocument);
+            exactAcquisitionAuthority.BeginRecovery(plan);
             claimedRequest = remainingClaim;
             ClearExecutionState(preserveExecutionMode: true);
             if (state.ExecutionMode == MarketAcquisitionExecutionMode.Live)
@@ -258,75 +258,75 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
                 state.ExecutionMode);
             if (!result.Success)
             {
-                outfitterAuthority.Pause($"Recovery start stopped safely: {result.Message}");
-                return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(outfitterAuthority.State.Message));
+                exactAcquisitionAuthority.Pause($"Recovery start stopped safely: {result.Message}");
+                return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(exactAcquisitionAuthority.State.Message));
             }
             return UpdateStatus(result);
         }
         catch (Exception exception)
         {
-            outfitterAuthority.Pause($"Recovery preflight stopped safely: {exception.Message}");
-            return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(outfitterAuthority.State.Message));
+            exactAcquisitionAuthority.Pause($"Recovery preflight stopped safely: {exception.Message}");
+            return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(exactAcquisitionAuthority.State.Message));
         }
     }
 
-    public void PauseOutfitterRecovery(string message)
+    public void PauseExactAcquisitionRecovery(string message)
     {
-        outfitterAuthority?.Pause(message);
+        exactAcquisitionAuthority?.Pause(message);
         state.AcquisitionStatus = message;
     }
 
-    public void RequestOutfitterRecovery(MarketAcquisitionRequestDocument workbenchDocument)
+    public void RequestExactAcquisitionRecovery(MarketAcquisitionRequestDocument workbenchDocument)
     {
-        if (outfitterAuthority?.State.Phase != OutfitterRouteAuthorityPhase.Paused)
+        if (exactAcquisitionAuthority?.State.Phase != ExactAcquisitionRouteAuthorityPhase.Paused)
             return;
         try
         {
-            outfitterAuthority.ValidateCurrentDocument(workbenchDocument);
-            outfitterAuthority.RequestRecovery();
+            exactAcquisitionAuthority.ValidateCurrentDocument(workbenchDocument);
+            exactAcquisitionAuthority.RequestRecovery();
         }
         catch (Exception exception)
         {
-            outfitterAuthority.Pause(exception.Message);
+            exactAcquisitionAuthority.Pause(exception.Message);
         }
-        state.AcquisitionStatus = outfitterAuthority.State.Message;
+        state.AcquisitionStatus = exactAcquisitionAuthority.State.Message;
     }
 
-    private MarketAcquisitionRouteActionResult TransitionToOutfitterRecovery(string reason)
+    private MarketAcquisitionRouteActionResult TransitionToExactAcquisitionRecovery(string reason)
     {
-        if (outfitterAuthority is null)
+        if (exactAcquisitionAuthority is null)
             return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(reason));
 
-        CleanupOwnedApproach("Squire recovery");
-        CleanupOwnedTravel("Squire recovery");
-        CancelActiveOperation("Visible market rows changed; preparing Squire recovery.");
+        CleanupOwnedApproach("exact-acquisition recovery");
+        CleanupOwnedTravel("exact-acquisition recovery");
+        CancelActiveOperation("Visible market rows changed; preparing exact-acquisition recovery.");
         if (runner.IsRunning || runner.IsPaused)
             runner.Stop();
-        outfitterAuthority.RequestRecovery($"{reason} Refreshing and optimizing the complete remaining exact-quality route.");
-        state.AcquisitionStatus = outfitterAuthority.State.Message;
-        return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(outfitterAuthority.State.Message));
+        exactAcquisitionAuthority.RequestRecovery($"{reason} Refreshing and optimizing the complete remaining exact-quality route.");
+        state.AcquisitionStatus = exactAcquisitionAuthority.State.Message;
+        return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(exactAcquisitionAuthority.State.Message));
     }
 
-    internal MarketAcquisitionRouteActionResult? EnforceOutfitterCandidateAuthority(
+    internal MarketAcquisitionRouteActionResult? EnforceExactAcquisitionCandidateAuthority(
         MarketAcquisitionWorldItemSubtask subtask,
         MarketAcquisitionLiveCandidatePlan candidatePlan)
     {
-        if (outfitterAuthority is null)
+        if (exactAcquisitionAuthority is null)
             return null;
-        if (outfitterDryRunFaultEligible && !outfitterDryRunFaultInjected &&
-            outfitterDryRunScenario is OutfitterDryRunScenario.ChangedListingRecovery or OutfitterDryRunScenario.NoViableRecovery)
+        if (exactAcquisitionDryRunFaultEligible && !exactAcquisitionDryRunFaultInjected &&
+            exactAcquisitionDryRunScenario is ExactAcquisitionDryRunScenario.ChangedListingRecovery or ExactAcquisitionDryRunScenario.NoViableRecovery)
         {
-            outfitterDryRunFaultInjected = true;
-            return TransitionToOutfitterRecovery(
-                outfitterDryRunScenario == OutfitterDryRunScenario.ChangedListingRecovery
+            exactAcquisitionDryRunFaultInjected = true;
+            return TransitionToExactAcquisitionRecovery(
+                exactAcquisitionDryRunScenario == ExactAcquisitionDryRunScenario.ChangedListingRecovery
                     ? "Diagnostic dry run substituted a changed visible row after preflight."
                     : "Diagnostic dry run removed every in-envelope visible row after preflight.");
         }
-        var authorization = outfitterAuthority.AuthorizeCandidate(subtask, candidatePlan);
+        var authorization = exactAcquisitionAuthority.AuthorizeCandidate(subtask, candidatePlan);
         return authorization.IsValid
             ? null
-            : TransitionToOutfitterRecovery(
-                authorization.Error ?? "Visible market rows exceeded Squire authority.");
+            : TransitionToExactAcquisitionRecovery(
+                authorization.Error ?? "Visible market rows exceeded exact-acquisition authority.");
     }
 
     public MarketAcquisitionRouteActionResult StartEvidenceRefresh(
@@ -358,7 +358,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         CancelActiveOperation("Route paused; active operation cancelled.");
         var result = runner.Pause();
         if (result.Success)
-            outfitterAuthority?.Pause("Squire route paused; no purchase authority is active.");
+            exactAcquisitionAuthority?.Pause("External plan route paused; no purchase authority is active.");
         return UpdateStatus(result);
     }
 
@@ -373,15 +373,15 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         if (!TryReconcileUnresolvedTravelLease(out var reconciliationFailure))
             return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(reconciliationFailure));
 
-        if (outfitterAuthority is not null && runner.ActivePlan is { } plan)
+        if (exactAcquisitionAuthority is not null && runner.ActivePlan is { } plan)
         {
             try
             {
-                outfitterAuthority.CompletePreflight(plan);
+                exactAcquisitionAuthority.CompletePreflight(plan);
             }
             catch (Exception exception)
             {
-                return UpdateStatus(MarketAcquisitionRouteActionResult.Fail($"Squire resume preflight failed: {exception.Message}"));
+                return UpdateStatus(MarketAcquisitionRouteActionResult.Fail($"External plan resume preflight failed: {exception.Message}"));
             }
         }
         return UpdateStatus(runner.Resume());
@@ -395,7 +395,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         CancelActiveOperation("Route stopped.");
         var result = runner.Stop();
         if (result.Success)
-            outfitterAuthority?.Pause("Squire route stopped; persisted purchases remain reconciled for a later restart.");
+            exactAcquisitionAuthority?.Pause("External plan route stopped; persisted purchases remain reconciled for a later restart.");
         listingReadAccumulator.Clear();
         purchaseAutomation.Clear();
         reportDispatcher.ResetSession();
@@ -415,24 +415,24 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(reconciliationFailure));
         claimedRequest = claimed;
         ClearExecutionState(preserveExecutionMode: true);
-        if (outfitterAuthority is not null)
+        if (exactAcquisitionAuthority is not null)
         {
             try
             {
-                outfitterAuthority.BeginRecovery(plan);
+                exactAcquisitionAuthority.BeginRecovery(plan);
             }
             catch (Exception exception)
             {
-                return UpdateStatus(MarketAcquisitionRouteActionResult.Fail($"Squire restart preflight failed: {exception.Message}"));
+                return UpdateStatus(MarketAcquisitionRouteActionResult.Fail($"External plan restart preflight failed: {exception.Message}"));
             }
         }
         if (state.ExecutionMode == MarketAcquisitionExecutionMode.Live)
             reportDispatcher.BeginSession(claimed);
         var result = runner.Restart(plan);
-        if (!result.Success && outfitterAuthority is not null)
+        if (!result.Success && exactAcquisitionAuthority is not null)
         {
-            outfitterAuthority.Pause($"Squire restart stopped safely: {result.Message}");
-            return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(outfitterAuthority.State.Message));
+            exactAcquisitionAuthority.Pause($"External plan restart stopped safely: {result.Message}");
+            return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(exactAcquisitionAuthority.State.Message));
         }
         return UpdateStatus(result);
     }
@@ -450,24 +450,24 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(reconciliationFailure));
         claimedRequest = claimed;
         ClearExecutionState(preserveExecutionMode: true);
-        if (outfitterAuthority is not null)
+        if (exactAcquisitionAuthority is not null)
         {
             try
             {
-                outfitterAuthority.BeginRecovery(plan);
+                exactAcquisitionAuthority.BeginRecovery(plan);
             }
             catch (Exception exception)
             {
-                return UpdateStatus(MarketAcquisitionRouteActionResult.Fail($"Squire restart preflight failed: {exception.Message}"));
+                return UpdateStatus(MarketAcquisitionRouteActionResult.Fail($"External plan restart preflight failed: {exception.Message}"));
             }
         }
         if (state.ExecutionMode == MarketAcquisitionExecutionMode.Live)
             reportDispatcher.BeginSession(claimed);
         var result = runner.ReprepareAndRestart(plan, preparedAtUtc);
-        if (!result.Success && outfitterAuthority is not null)
+        if (!result.Success && exactAcquisitionAuthority is not null)
         {
-            outfitterAuthority.Pause($"Squire restart stopped safely: {result.Message}");
-            return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(outfitterAuthority.State.Message));
+            exactAcquisitionAuthority.Pause($"External plan restart stopped safely: {result.Message}");
+            return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(exactAcquisitionAuthority.State.Message));
         }
         return UpdateStatus(result);
     }
@@ -502,13 +502,13 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
         if (purchaseOccurred)
         {
-            if (outfitterAuthority is null || runner.ActivePlan is null)
+            if (exactAcquisitionAuthority is null || runner.ActivePlan is null)
                 return new(MarketPurchaseTerminalResolutionStatus.InvalidDisposition,
-                    "Applying a purchase requires the matching finalized Squire authority and plan to be loaded.");
+                    "Applying a purchase requires the matching finalized exact-acquisition authority and plan to be loaded.");
             try
             {
                 var intent = terminal.Intent;
-                outfitterAuthority.RecordPurchase(intent.LineId, new MarketBoardPurchaseCandidate
+                exactAcquisitionAuthority.RecordPurchase(intent.LineId, new MarketBoardPurchaseCandidate
                 {
                     ItemId = intent.ItemId,
                     WorldName = intent.WorldName,
@@ -1141,7 +1141,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             : default;
         var candidateRead = activeSubtask is null
             ? state.MarketBoardReadResult
-            : ExcludeSunkOutfitterListings(state.MarketBoardReadResult);
+            : ExcludeSunkExactAcquisitionListings(state.MarketBoardReadResult);
         state.LiveCandidatePlan = canBuildLiveCandidatePlan
             ? activeSubtask == null
                 ? MarketAcquisitionLiveCandidatePlanner.BuildCandidatePlan(activeLine, plan, currentWorld, state.MarketBoardReadResult, totals.PurchasedQuantity, totals.SpentGil)
@@ -1159,9 +1159,9 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             ReportMarketObservation(claimed, activeLine, activeSubtask, currentWorld, state.MarketBoardReadResult);
 
         MarketAcquisitionRouteActionResult? authorityFailure = null;
-        if (recordRouteResult && !state.EvidenceRefreshOnly && activeSubtask is not null && state.LiveCandidatePlan is not null && outfitterAuthority is not null)
+        if (recordRouteResult && !state.EvidenceRefreshOnly && activeSubtask is not null && state.LiveCandidatePlan is not null && exactAcquisitionAuthority is not null)
         {
-            authorityFailure = EnforceOutfitterCandidateAuthority(activeSubtask, state.LiveCandidatePlan);
+            authorityFailure = EnforceExactAcquisitionCandidateAuthority(activeSubtask, state.LiveCandidatePlan);
         }
         var probeResult = authorityFailure is null && recordRouteResult && runner.IsRunning && runner.ActiveStop is { Status: "Arrived" } && state.LiveCandidatePlan != null
             ? runner.RecordProbe(currentWorld, state.LiveCandidatePlan, allowPurchases: !state.EvidenceRefreshOnly)
@@ -1172,7 +1172,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             if (state.EvidenceRefreshOnly && runner.State.Equals("Completed", StringComparison.OrdinalIgnoreCase))
                 ReportRouteProgress(includeEvidenceRefresh: true);
         }
-        EvaluateOutfitterRouteCompletion();
+        EvaluateExactAcquisitionRouteCompletion();
 
         state.AcquisitionStatus = state.MarketBoardReconciliation == null
             ? state.MarketBoardReadResult.Message
@@ -1298,16 +1298,16 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         var totals = ResolveActiveRouteLinePurchaseTotals(activeStop.ActiveItemSubtask);
         var candidateRead = activeStop.ActiveItemSubtask is null
             ? freshRead
-            : ExcludeSunkOutfitterListings(freshRead);
+            : ExcludeSunkExactAcquisitionListings(freshRead);
         state.LiveCandidatePlan = activeStop.ActiveItemSubtask == null
             ? MarketAcquisitionLiveCandidatePlanner.BuildCandidatePlan(activeLine, plan, currentWorld, freshRead, totals.PurchasedQuantity, totals.SpentGil)
             : MarketAcquisitionLiveCandidatePlanner.BuildCandidatePlan(activeLine, plan, activeStop.ActiveItemSubtask, currentWorld, candidateRead, totals.PurchasedQuantity, totals.SpentGil);
         if (TryContinueVisibleListingRead(currentWorld, freshRead, state.LiveCandidatePlan))
             return;
 
-        if (outfitterAuthority is not null && activeStop.ActiveItemSubtask is { } authoritySubtask)
+        if (exactAcquisitionAuthority is not null && activeStop.ActiveItemSubtask is { } authoritySubtask)
         {
-            if (EnforceOutfitterCandidateAuthority(authoritySubtask, state.LiveCandidatePlan) is not null)
+            if (EnforceExactAcquisitionCandidateAuthority(authoritySubtask, state.LiveCandidatePlan) is not null)
             {
                 return;
             }
@@ -1355,15 +1355,15 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         state.AcquisitionStatus = $"Purchase: {selection.Status}. {selection.Message}";
     }
 
-    private MarketBoardReadResult ExcludeSunkOutfitterListings(MarketBoardReadResult readResult)
+    private MarketBoardReadResult ExcludeSunkExactAcquisitionListings(MarketBoardReadResult readResult)
     {
-        if (outfitterAuthority is null || outfitterAuthority.State.SunkPurchases.Count == 0)
+        if (exactAcquisitionAuthority is null || exactAcquisitionAuthority.State.SunkPurchases.Count == 0)
             return readResult;
 
         var remaining = new List<MarketBoardLiveListing>(readResult.Listings.Count);
         foreach (var listing in readResult.Listings)
         {
-            if (!outfitterAuthority.IsSunkListing(listing))
+            if (!exactAcquisitionAuthority.IsSunkListing(listing))
                 remaining.Add(listing);
         }
 
@@ -1387,8 +1387,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         if (!purchaseAutomation.IsMonitorDue(now))
             return MarketAcquisitionRouteEngineTickResult.Idle("Waiting for purchase monitor tick.");
 
-        if (outfitterAuthority is not null && previousSession.Phase == MarketBoardPurchaseSessionPhase.WaitingForListingRemoval)
-            return MonitorOutfitterServerPurchaseEvidence(previousSession, now);
+        if (exactAcquisitionAuthority is not null && previousSession.Phase == MarketBoardPurchaseSessionPhase.WaitingForListingRemoval)
+            return MonitorExactAcquisitionServerPurchaseEvidence(previousSession, now);
 
         try
         {
@@ -1396,11 +1396,11 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
                 now,
                 MarketBoardPurchaseMonitorInterval,
                 MarketBoardPurchaseListingRemovalWatchdog,
-                candidate => outfitterAuthority is null
+                candidate => exactAcquisitionAuthority is null
                     ? purchase.TryConfirmPendingPurchase(candidate)
                     : purchase.TryConfirmPendingPurchase(candidate, CreatePurchaseIntentContext()),
                 () => marketBoard.ReadCurrentListings(context.GetCurrentWorldName()),
-                monitorListingRemoval: outfitterAuthority is null);
+                monitorListingRemoval: exactAcquisitionAuthority is null);
             if (!tick.DidWork)
                 return MarketAcquisitionRouteEngineTickResult.Idle("Purchase monitor had no due work.");
 
@@ -1417,7 +1417,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         }
     }
 
-    private MarketAcquisitionRouteEngineTickResult MonitorOutfitterServerPurchaseEvidence(
+    private MarketAcquisitionRouteEngineTickResult MonitorExactAcquisitionServerPurchaseEvidence(
         MarketBoardPurchaseSession session,
         DateTimeOffset nowUtc)
     {
@@ -1438,7 +1438,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
                 state.AcquisitionStatus = "Purchase: waiting for durable server confirmation evidence.";
                 return MarketAcquisitionRouteEngineTickResult.Worked(state.AcquisitionStatus, purchaseAutomation.NextMonitorUtc);
             case ConfirmedMarketPurchase confirmed:
-                return ApplyConfirmedOutfitterPurchase(session, confirmed, nowUtc);
+                return ApplyConfirmedExactAcquisitionPurchase(session, confirmed, nowUtc);
             case TimedOutIndeterminateMarketPurchase timedOut:
                 return StopForTerminalPurchaseEvidence(
                     $"Purchase evidence timed out for intent {timedOut.Intent.IntentId}; reconcile outcome before any retry.");
@@ -1451,7 +1451,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         }
     }
 
-    private MarketAcquisitionRouteEngineTickResult ApplyConfirmedOutfitterPurchase(
+    private MarketAcquisitionRouteEngineTickResult ApplyConfirmedExactAcquisitionPurchase(
         MarketBoardPurchaseSession session,
         ConfirmedMarketPurchase confirmed,
         DateTimeOffset nowUtc)
@@ -1476,12 +1476,12 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         try
         {
             var activePlan = runner.ActivePlan ?? throw new InvalidOperationException("Active purchase plan is unavailable.");
-            outfitterAuthority!.RecordPurchase(lineId, candidate, activePlan);
+            exactAcquisitionAuthority!.RecordPurchase(lineId, candidate, activePlan);
             var resolved = purchase.ResolvePurchaseEvidence(
                 intent.IntentId,
                 MarketPurchaseTerminalDisposition.AppliedExactlyOnce,
                 nowUtc,
-                $"Applied exact Squire sunk receipt for listing {candidate.ListingId}.");
+                $"Applied exact External plan sunk receipt for listing {candidate.ListingId}.");
             if (!resolved.IsResolved)
                 return StopForTerminalPurchaseEvidence(resolved.Message);
 
@@ -1505,7 +1505,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     private MarketAcquisitionRouteEngineTickResult StopForTerminalPurchaseEvidence(string message)
     {
         ClearMarketBoardAutomationState();
-        outfitterAuthority?.Pause(message);
+        exactAcquisitionAuthority?.Pause(message);
         state.AcquisitionStatus = message;
         UpdateStatus(FailRoute(message));
         ReportRouteProgress();
@@ -1549,7 +1549,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             state.ActiveWorldSpentGil = checked(state.ActiveWorldSpentGil + candidate.TotalGil);
             state.ActiveLinePurchasedQuantity = checked(state.ActiveLinePurchasedQuantity + candidate.Quantity);
             state.ActiveLineSpentGil = checked(state.ActiveLineSpentGil + candidate.TotalGil);
-            outfitterAuthority?.RecordPurchase(GetActiveRouteLineId(claimedRequest!), candidate, runner.ActivePlan);
+            exactAcquisitionAuthority?.RecordPurchase(GetActiveRouteLineId(claimedRequest!), candidate, runner.ActivePlan);
             ReportConfirmedPurchase(candidate, state.ActiveLinePurchasedQuantity, state.ActiveLineSpentGil);
             ClearMarketBoardAutomationState();
             if (state.MarketBoardReadResult?.Status is "MarketBoardNotOpen" or "NoListings")
@@ -1560,7 +1560,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         else if (!session.IsActive)
         {
             var message = $"World purchase batch stopped: {session.Message}";
-            outfitterAuthority?.Pause(message);
+            exactAcquisitionAuthority?.Pause(message);
             UpdateStatus(FailRoute(message));
             ReportRouteProgress();
         }
@@ -1609,7 +1609,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         }
 
         ReportRouteProgress();
-        EvaluateOutfitterRouteCompletion();
+        EvaluateExactAcquisitionRouteCompletion();
         if (result.Success &&
             runner.LatestWorldCompletionSummary?.WorldName.Equals(currentWorld, StringComparison.OrdinalIgnoreCase) == true)
         {
@@ -1681,7 +1681,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             state.ActiveWorldSpentGil = checked(state.ActiveWorldSpentGil + candidate.TotalGil);
             state.ActiveLinePurchasedQuantity = checked(state.ActiveLinePurchasedQuantity + candidate.Quantity);
             state.ActiveLineSpentGil = checked(state.ActiveLineSpentGil + candidate.TotalGil);
-            outfitterAuthority?.RecordPurchase(lineId, candidate);
+            exactAcquisitionAuthority?.RecordPurchase(lineId, candidate);
             runner.RecordPurchaseAudit(
                 lineId,
                 activeSubtask?.ItemName,
@@ -1698,12 +1698,12 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         CompleteActiveWorldPurchaseBatch(currentWorld);
     }
 
-    private void EvaluateOutfitterRouteCompletion()
+    private void EvaluateExactAcquisitionRouteCompletion()
     {
-        if (runner.ActiveStop is not null || outfitterAuthority is null || runner.ActivePlan is not { } completedPlan)
+        if (runner.ActiveStop is not null || exactAcquisitionAuthority is null || runner.ActivePlan is not { } completedPlan)
             return;
-        outfitterAuthority.EvaluateRouteEnd(completedPlan);
-        state.AcquisitionStatus = outfitterAuthority.State.Message;
+        exactAcquisitionAuthority.EvaluateRouteEnd(completedPlan);
+        state.AcquisitionStatus = exactAcquisitionAuthority.State.Message;
     }
 
     private void ReportConfirmedPurchase(MarketBoardPurchaseCandidate candidate, uint linePurchasedQuantity, uint lineSpentGil)

@@ -1,7 +1,5 @@
 using Dalamud.Configuration;
-using Franthropy.Dalamud.Equipment;
 using MarketMafioso.RetainerRestock;
-using MarketMafioso.Squire;
 using MarketMafioso.WorkshopPrep;
 using Newtonsoft.Json;
 using System;
@@ -20,7 +18,8 @@ public class Configuration : IPluginConfiguration
     public string PluginInstanceId { get; set; } = Guid.NewGuid().ToString("N");
     public PersistedMarketAcquisitionClaim? ActiveMarketAcquisitionClaim { get; set; }
     public PersistedMarketAcquisitionRequestDocument? ActiveMarketAcquisitionRequestDocument { get; set; }
-    public string? OutfitterRouteExecutionStateJson { get; set; }
+    [JsonProperty("OutfitterRouteExecutionStateJson")]
+    public string? ExactAcquisitionRouteExecutionStateJson { get; set; }
     public List<PersistedMarketAcquisitionWorkbenchComposition> MarketAcquisitionWorkbenchCompositions { get; set; } = [];
     public string? SelectedMarketAcquisitionWorkbenchCompositionId { get; set; }
     public bool EnableMarketAcquisition { get; set; } = false;
@@ -40,7 +39,7 @@ public class Configuration : IPluginConfiguration
     public bool EnableCraftArchitectManualFallback { get; set; } = false;
     public string CraftArchitectQuoteFilePath { get; set; } = string.Empty;
     public string SettingsSelectedPageId { get; set; } = "general.server";
-    public List<string> SettingsExpandedFolderPaths { get; set; } = ["General", "Inventory Reporter", "Squire", "Advanced"];
+    public List<string> SettingsExpandedFolderPaths { get; set; } = ["General", "Inventory Reporter", "Advanced"];
 
     public bool IncludeArmoury { get; set; } = false;
     public bool IncludeCrystals { get; set; } = true;
@@ -78,7 +77,8 @@ public class Configuration : IPluginConfiguration
     public Dictionary<string, QuartermasterWorkshopRequestState> QuartermasterWorkshopRequests { get; set; } = new();
     public Guid? ActiveFrozenWorkshopQueueId { get; set; }
     public List<uint> FavoriteWorkshopProjectIds { get; set; } = new();
-    public SquireConfiguration Squire { get; set; } = new();
+    [JsonProperty("Squire")]
+    public Newtonsoft.Json.Linq.JObject? LegacySquireConfiguration { get; set; }
 
     public void Save() => Plugin.PluginInterface.SavePluginConfig(this);
 }
@@ -112,110 +112,6 @@ public sealed class QuartermasterWorkshopOperationReceipt
     public uint? ItemId { get; set; }
     public ulong? RetainerId { get; set; }
     public int? Quantity { get; set; }
-}
-
-[Serializable]
-public sealed class SquireConfiguration
-{
-    public string SelectedWorkspace { get; set; } = "Outfitter";
-    public string OutfitterAdvisorContext { get; set; } = "OrdinaryResourceBenchmark";
-    public int OutfitterAdvisorContextDefaultVersion { get; set; }
-    public bool ShowProtected { get; set; }
-    public bool ShowNonEquipment { get; set; }
-    public string Search { get; set; } = string.Empty;
-    public int RuleSchemaVersion { get; set; } = 2;
-    public List<SquireCleanupRuleConfiguration> CleanupRules { get; set; } = [];
-    public Dictionary<string, SquireBuiltInRuleOverrideConfiguration> BuiltInRuleOverrides { get; set; } = new();
-    [Obsolete("Migrated to CleanupRules by SquireCleanupRuleMigration.")]
-    public Dictionary<string, List<SquireRuleConfiguration>> RulesByCharacter { get; set; } = new();
-    [Obsolete("Migrated to RulesByCharacter by SquireRuleMigration.")]
-    public Dictionary<string, List<uint>> ExcludedItemIdsByCharacter { get; set; } = new();
-    [Obsolete("Migrated to RulesByCharacter by SquireRuleMigration.")]
-    public Dictionary<string, List<SquireDuplicateRetentionConfiguration>> DuplicateRetentionByCharacter { get; set; } = new();
-    [Obsolete("Per-item high-rarity cleanup authorization has been replaced by the blue/purple protection toggle and character rules.")]
-    public Dictionary<string, List<uint>> HighRarityCleanupItemIdsByCharacter { get; set; } = new();
-    public bool ProtectBlueAndPurpleGear { get; set; } = true;
-    public bool ProtectMateria { get; set; } = true;
-    public bool AllowRiskyMateriaRetrieval { get; set; }
-    public bool ProtectPlayerSignedGear { get; set; }
-    public bool ProtectArmoireEligible { get; set; } = true;
-    public bool ProtectFutureLevelingGearOptIn { get; set; }
-    public int AuditRetentionDays { get; set; } = 30;
-    public bool RecoverFromKnockout { get; set; } = true;
-    public bool WaitForCombatToEnd { get; set; } = true;
-    public int CombatRecoveryTimeoutSeconds { get; set; } = 90;
-    public bool LeaveDutyToExecute { get; set; }
-    public bool PauseGatherBuddyReborn { get; set; } = true;
-    public bool PauseQuestionable { get; set; } = true;
-    public bool PauseArtisan { get; set; } = true;
-    public bool CloseSafeUserMenus { get; set; } = true;
-}
-
-[Serializable]
-public sealed class SquireRuleConfiguration
-{
-    public Guid Id { get; set; } = Guid.NewGuid();
-    public SquireRuleKind Kind { get; set; }
-    public uint ItemId { get; set; }
-    public SquireRuleQuality Quality { get; set; } = SquireRuleQuality.Any;
-    public int MinimumCopies { get; set; }
-    public bool Enabled { get; set; } = true;
-    public string Note { get; set; } = string.Empty;
-}
-
-[Serializable]
-public sealed class SquireCleanupRuleConfiguration
-{
-    public string Id { get; set; } = $"user.{Guid.NewGuid():N}";
-    public string Name { get; set; } = "New cleanup rule";
-    public SquireCleanupRuleScope Scope { get; set; } = SquireCleanupRuleScope.Global;
-    public ulong? CharacterContentId { get; set; }
-    public bool Enabled { get; set; } = true;
-    public int Priority { get; set; } = 700;
-    public SquireCleanupRuleConditionConfiguration Condition { get; set; } = new();
-    public SquireCleanupRuleEffectConfiguration Effect { get; set; } = new();
-    public string Note { get; set; } = string.Empty;
-}
-
-[Serializable]
-public sealed class SquireCleanupRuleConditionConfiguration
-{
-    public List<uint>? ItemIds { get; set; }
-    public SquireRuleQuality Quality { get; set; } = SquireRuleQuality.Any;
-    public List<EquipmentRarity>? Rarities { get; set; }
-    public List<EquipmentUseStatus>? UseStatuses { get; set; }
-    public bool? IsEquipment { get; set; }
-    public bool? IsPlayerSigned { get; set; }
-    public bool? IsArmoireEligible { get; set; }
-    public bool? HasMateria { get; set; }
-    public bool? HasFutureLevelingUse { get; set; }
-    public int? MinimumEquipLevel { get; set; }
-    public int? MaximumEquipLevel { get; set; }
-    public List<SquireDisposition>? SupportedDispositions { get; set; }
-}
-
-[Serializable]
-public sealed class SquireCleanupRuleEffectConfiguration
-{
-    public SquireCleanupDecision Decision { get; set; }
-    public SquireDisposition? PreferredDisposition { get; set; }
-    public int MinimumCopies { get; set; }
-    public SquireCleanupAuthorization Authorizations { get; set; }
-}
-
-[Serializable]
-public sealed class SquireBuiltInRuleOverrideConfiguration
-{
-    public bool? Enabled { get; set; }
-    public int? Priority { get; set; }
-}
-
-[Serializable]
-public sealed class SquireDuplicateRetentionConfiguration
-{
-    public uint ItemId { get; set; }
-    public bool IsHighQuality { get; set; }
-    public int MinimumCopies { get; set; }
 }
 
 [Serializable]
@@ -329,7 +225,7 @@ public sealed class PersistedMarketAcquisitionRequestDocument
     public string SweepScope { get; set; } = string.Empty;
     public List<string> SweepDataCenters { get; set; } = [];
     public List<PersistedMarketAcquisitionRequestLineDocument> Lines { get; set; } = [];
-    public string? OutfitterAuthorityJson { get; set; }
+    public string? ExactAcquisitionAuthorityJson { get; set; }
     public string? RemoteRequestId { get; set; }
     public int RemoteRevision { get; set; }
     public string? RemoteOrigin { get; set; }

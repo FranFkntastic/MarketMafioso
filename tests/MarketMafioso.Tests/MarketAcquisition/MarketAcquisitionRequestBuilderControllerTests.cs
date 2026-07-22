@@ -1,6 +1,5 @@
 using MarketMafioso.MarketAcquisition;
-using MarketMafioso.Squire.Outfitter.Acquisition;
-using MarketMafioso.Tests.Squire;
+using MarketMafioso.MarketAcquisition.ExactAuthority;
 using MarketMafioso.Windows.MarketAcquisitionRequestBuilder;
 
 namespace MarketMafioso.Tests.MarketAcquisition;
@@ -11,8 +10,8 @@ public sealed class MarketAcquisitionRequestBuilderControllerTests
     public void EnsureCharacterScope_CreatesNewRevisionAndClearsFinalizedConfirmation()
     {
         var document = MarketAcquisitionRequestDocument.CreateDefault("Fran", "Siren");
-        document = OutfitterWorkbenchAuthorityService.Stage(document, OutfitterWorkbenchAuthorityTests.Transfer());
-        document = OutfitterWorkbenchAuthorityService.Finalize(document);
+        document = ExactAcquisitionWorkbenchAuthorityService.Stage(document, ExactAcquisitionWorkbenchAuthorityTests.Transfer());
+        document = ExactAcquisitionWorkbenchAuthorityService.Finalize(document);
         var originalRevision = document.LocalRevision;
         var controller = CreateController(document);
 
@@ -20,8 +19,8 @@ public sealed class MarketAcquisitionRequestBuilderControllerTests
 
         Assert.Equal(originalRevision + 1, controller.Document.LocalRevision);
         Assert.Equal("Midgardsormr", controller.Document.TargetWorld);
-        Assert.True(controller.Document.OutfitterAuthority!.IsLineageValid);
-        Assert.Null(controller.Document.OutfitterAuthority.FinalizedContract);
+        Assert.True(controller.Document.ExactAcquisitionAuthority!.IsLineageValid);
+        Assert.Null(controller.Document.ExactAcquisitionAuthority.FinalizedContract);
     }
 
     [Fact]
@@ -458,7 +457,7 @@ public sealed class MarketAcquisitionRequestBuilderControllerTests
         Assert.Equal(1, added);
         Assert.Equal(2, controller.Document.Lines.Count);
         Assert.Equal("Bronze Sallet", controller.Document.Lines[1].ItemName);
-        Assert.Equal("Added 1 Outfitter line.", controller.Status);
+        Assert.Equal("Added 1 ExactAcquisition line.", controller.Status);
         Assert.Single(persisted);
     }
 

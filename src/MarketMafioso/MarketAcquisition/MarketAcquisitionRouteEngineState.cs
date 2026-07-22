@@ -3,7 +3,7 @@ using MarketMafioso.Automation.MarketBoard;
 
 namespace MarketMafioso.MarketAcquisition;
 
-public enum OutfitterDryRunScenario
+public enum ExactAcquisitionDryRunScenario
 {
     Ordinary,
     ChangedListingRecovery,

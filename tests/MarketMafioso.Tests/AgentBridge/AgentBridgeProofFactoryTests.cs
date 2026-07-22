@@ -41,11 +41,11 @@ public sealed class AgentBridgeProofFactoryTests
 
         var json = AgentBridgeProofFactory.Serialize(receipt);
 
-        Assert.Contains("\"persistedOutfitterSunkReceiptCount\":1", json, StringComparison.Ordinal);
-        Assert.Contains("\"persistedOutfitterSunkQuantity\":1", json, StringComparison.Ordinal);
-        Assert.Contains("\"persistedOutfitterSunkGil\":100", json, StringComparison.Ordinal);
-        Assert.Contains("\"activeOutfitterRemainingQuantity\":1", json, StringComparison.Ordinal);
-        Assert.Contains("\"activeOutfitterRemainingGil\":100", json, StringComparison.Ordinal);
+        Assert.Contains("\"persistedExactAcquisitionSunkReceiptCount\":1", json, StringComparison.Ordinal);
+        Assert.Contains("\"persistedExactAcquisitionSunkQuantity\":1", json, StringComparison.Ordinal);
+        Assert.Contains("\"persistedExactAcquisitionSunkGil\":100", json, StringComparison.Ordinal);
+        Assert.Contains("\"activeExactAcquisitionRemainingQuantity\":1", json, StringComparison.Ordinal);
+        Assert.Contains("\"activeExactAcquisitionRemainingGil\":100", json, StringComparison.Ordinal);
         Assert.DoesNotContain("listing-1", json, StringComparison.Ordinal);
     }
 
@@ -81,11 +81,11 @@ public sealed class AgentBridgeProofFactoryTests
             ActiveOperationDisposition = "Pending",
             StopCount = 2,
             CompletedOrProbedStopCount = 1,
-            PersistedOutfitterSunkReceiptCount = 1,
-            PersistedOutfitterSunkQuantity = 1,
-            PersistedOutfitterSunkGil = 100,
-            ActiveOutfitterRemainingQuantity = 1,
-            ActiveOutfitterRemainingGil = 100,
+            PersistedExactAcquisitionSunkReceiptCount = 1,
+            PersistedExactAcquisitionSunkQuantity = 1,
+            PersistedExactAcquisitionSunkGil = 100,
+            ActiveExactAcquisitionRemainingQuantity = 1,
+            ActiveExactAcquisitionRemainingGil = 100,
         },
     };
 }

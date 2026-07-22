@@ -5,7 +5,7 @@ using Dalamud.Bindings.ImGui;
 using Franthropy.Dalamud.AgentBridge;
 using MarketMafioso.MarketAcquisition;
 using MarketMafioso.Windows.Main;
-using MarketMafioso.Squire.Outfitter.Acquisition;
+using MarketMafioso.MarketAcquisition.ExactAuthority;
 
 namespace MarketMafioso.Windows.MarketAcquisitionPanels;
 
@@ -21,8 +21,8 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
     private readonly Action stopRoute;
     private readonly Action restartRoute;
     private readonly Action reprepareRoute;
-    private readonly Action retryOutfitterRecovery;
-    private readonly Action returnToOutfitterAdvisor;
+    private readonly Action retryExactAcquisitionRecovery;
+    private readonly Action returnToExactAcquisitionAdvisor;
     private readonly Action<MarketAcquisitionRouteEngineSnapshot> drawPostRunDiagnosticSummary;
     private readonly Action<MarketAcquisitionRouteEngineSnapshot> drawLatestWorldCompletionSummary;
     private readonly Action<MarketAcquisitionRouteEngineSnapshot> drawMarketBoardProbeStatus;
@@ -40,8 +40,8 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
         Action stopRoute,
         Action restartRoute,
         Action reprepareRoute,
-        Action retryOutfitterRecovery,
-        Action returnToOutfitterAdvisor,
+        Action retryExactAcquisitionRecovery,
+        Action returnToExactAcquisitionAdvisor,
         Action<MarketAcquisitionRouteEngineSnapshot> drawPostRunDiagnosticSummary,
         Action<MarketAcquisitionRouteEngineSnapshot> drawLatestWorldCompletionSummary,
         Action<MarketAcquisitionRouteEngineSnapshot> drawMarketBoardProbeStatus,
@@ -57,8 +57,8 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
         this.stopRoute = stopRoute ?? throw new ArgumentNullException(nameof(stopRoute));
         this.restartRoute = restartRoute ?? throw new ArgumentNullException(nameof(restartRoute));
         this.reprepareRoute = reprepareRoute ?? throw new ArgumentNullException(nameof(reprepareRoute));
-        this.retryOutfitterRecovery = retryOutfitterRecovery ?? throw new ArgumentNullException(nameof(retryOutfitterRecovery));
-        this.returnToOutfitterAdvisor = returnToOutfitterAdvisor ?? throw new ArgumentNullException(nameof(returnToOutfitterAdvisor));
+        this.retryExactAcquisitionRecovery = retryExactAcquisitionRecovery ?? throw new ArgumentNullException(nameof(retryExactAcquisitionRecovery));
+        this.returnToExactAcquisitionAdvisor = returnToExactAcquisitionAdvisor ?? throw new ArgumentNullException(nameof(returnToExactAcquisitionAdvisor));
         this.drawPostRunDiagnosticSummary = drawPostRunDiagnosticSummary ?? throw new ArgumentNullException(nameof(drawPostRunDiagnosticSummary));
         this.drawLatestWorldCompletionSummary = drawLatestWorldCompletionSummary ?? throw new ArgumentNullException(nameof(drawLatestWorldCompletionSummary));
         this.drawMarketBoardProbeStatus = drawMarketBoardProbeStatus ?? throw new ArgumentNullException(nameof(drawMarketBoardProbeStatus));
@@ -78,7 +78,7 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
         var canReprepare = canStart &&
                             snapshot.CanRestart &&
                             snapshot.CompletedOrProbedStopCount > 0;
-        DrawOutfitterExecution(snapshot);
+        DrawExactAcquisitionExecution(snapshot);
         DrawGuidedRouteActionRow(snapshot, canStart, canReprepare, canRefreshEvidence);
 
         ImGui.TextColored(GetGuidedRouteStatusColor(snapshot), snapshot.StatusMessage);
@@ -119,23 +119,23 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
         bool canRefreshEvidence)
     {
         var primaryAction = MarketAcquisitionGuidedRouteActionPresenter.Resolve(snapshot);
-        if (primaryAction == MarketAcquisitionGuidedRoutePrimaryAction.RetryOutfitterRecovery)
+        if (primaryAction == MarketAcquisitionGuidedRoutePrimaryAction.RetryExactAcquisitionRecovery)
         {
-            if (ImGuiUi.PrimaryButton("Retry Squire Recovery##OutfitterRecovery", true))
-                retryOutfitterRecovery();
+            if (ImGuiUi.PrimaryButton("Retry Exact-Acquisition Recovery##ExactAcquisitionRecovery", true))
+                retryExactAcquisitionRecovery();
             RegisterLastControl(
-                "acquisition.route.outfitter.retry-recovery",
-                "Refresh and optimize the remaining exact-quality Squire route",
+                "acquisition.route.exactAcquisition.retry-recovery",
+                "Refresh and optimize the remaining exact-quality External plan route",
                 true,
-                retryOutfitterRecovery);
+                retryExactAcquisitionRecovery);
             ImGui.SameLine();
-            if (ImGuiUi.Button("Return to Advisor##OutfitterReturnToAdvisor", true))
-                returnToOutfitterAdvisor();
+            if (ImGuiUi.Button("Return to Advisor##ExactAcquisitionReturnToAdvisor", true))
+                returnToExactAcquisitionAdvisor();
             RegisterLastControl(
-                "acquisition.route.outfitter.return-to-advisor",
-                "Return to the Squire Advisor without broadening the paused contract",
+                "acquisition.route.exactAcquisition.return-to-advisor",
+                "Return to the planning plugin without broadening the paused contract",
                 true,
-                returnToOutfitterAdvisor);
+                returnToExactAcquisitionAdvisor);
             return;
         }
         if (primaryAction == MarketAcquisitionGuidedRoutePrimaryAction.ResumeManualPause)
@@ -217,15 +217,15 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
         ImGui.TreePop();
     }
 
-    private static void DrawOutfitterExecution(MarketAcquisitionRouteEngineSnapshot snapshot)
+    private static void DrawExactAcquisitionExecution(MarketAcquisitionRouteEngineSnapshot snapshot)
     {
-        if (snapshot.OutfitterExecution is not { } execution)
+        if (snapshot.ExactAcquisitionExecution is not { } execution)
             return;
         var remaining = execution.Lines.Aggregate(0u, (sum, line) =>
             checked(sum + (line.RequiredQuantity - line.PurchasedQuantity)));
         ImGui.TextColored(
-            execution.Phase is OutfitterRouteAuthorityPhase.Paused ? MarketMafiosoUiTheme.Warning : MarketMafiosoUiTheme.Muted,
-            $"Squire {execution.Phase} · {remaining:N0} remaining · {execution.TotalSpentGil:N0} gil spent");
+            execution.Phase is ExactAcquisitionRouteAuthorityPhase.Paused ? MarketMafiosoUiTheme.Warning : MarketMafiosoUiTheme.Muted,
+            $"External plan {execution.Phase} · {remaining:N0} remaining · {execution.TotalSpentGil:N0} gil spent");
         ImGui.TextColored(MarketMafiosoUiTheme.Muted, execution.Message);
     }
 

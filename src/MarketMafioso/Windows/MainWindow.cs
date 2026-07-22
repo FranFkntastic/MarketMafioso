@@ -14,15 +14,12 @@ using MarketMafioso.Automation.Travel;
 using MarketMafioso.CraftArchitectCompanion;
 using MarketMafioso.MarketAcquisition;
 using MarketMafioso.Quartermaster;
-using MarketMafioso.Squire;
+using MarketMafioso.SquireIntegration;
 using MarketMafioso.Windows.Main;
 using MarketMafioso.Windows.MarketAcquisitionPanels;
 using MarketMafioso.Windows.MarketAcquisitionRequestBuilder;
-using MarketMafioso.Windows.Squire;
 using MarketMafioso.Windows.WorkshopLogistics;
-using MarketMafioso.Squire.Observation;
-using MarketMafioso.Squire.Outfitter.Acquisition;
-using MarketMafioso.Squire.Outfitter.Utility;
+using MarketMafioso.MarketAcquisition.ExactAuthority;
 using MarketMafioso.WorkshopPrep;
 using MarketMafioso.Diagnostics;
 using Franthropy.Dalamud.AgentBridge;
@@ -35,6 +32,7 @@ public class MainWindow : Window, IDisposable
     private readonly HttpReporter reporter;
     private readonly InventoryScanner scanner;
     private readonly QuartermasterIpcClient quartermaster;
+    private readonly StandaloneSquireIpcClient standaloneSquire;
     private readonly WorkshopProjectCatalog workshopCatalog;
     private readonly VIWIWorkshoppaIpc viwiWorkshoppaIpc;
     private readonly WorkshopAssemblyRunner workshopAssemblyRunner;
@@ -47,11 +45,9 @@ public class MainWindow : Window, IDisposable
     private readonly MarketBoardApproachService marketBoardApproachService;
     private readonly MarketAcquisitionRouteEngine routeEngine;
     private readonly DalamudMarketPurchasePacketObserver marketPurchasePacketObserver;
-    private readonly ConfigurationOutfitterRouteExecutionStateStore outfitterRouteStateStore;
+    private readonly ConfigurationExactAcquisitionRouteExecutionStateStore exactAcquisitionRouteStateStore;
     private readonly string marketAcquisitionRouteDiagnosticsDirectory;
-    private readonly SquireTabPanel squireTab;
-    private readonly DalamudCharacterEquipmentSnapshotSource squireSnapshotSource;
-    private readonly LuminaRenderedEquipmentDefinitionLookup renderedDefinitionLookup;
+    private readonly StandaloneSquirePanel squirePanel;
     private readonly StatusTabPanel statusTab;
     private readonly SettingsTabPanel settingsTab;
     private readonly MarketAcquisitionPlanPanel marketAcquisitionPlanPanel = new();
@@ -68,9 +64,9 @@ public class MainWindow : Window, IDisposable
 
     private readonly WorkshopProjectSelectionState workshopProjectSelection = new();
     private int marketInputCaptureIndex;
-    private Task? outfitterRecoveryTask;
-    private Task? outfitterAutoResumeTask;
-    private DateTimeOffset nextOutfitterAutoResumeAtUtc;
+    private Task? exactAcquisitionRecoveryTask;
+    private Task? exactAcquisitionAutoResumeTask;
+    private DateTimeOffset nextExactAcquisitionAutoResumeAtUtc;
     private string workshopStatus = "Workshop prep queue is idle.";
     private string? agentRequestedTab;
     private string? agentRequestedWorkspaceView;
@@ -96,6 +92,7 @@ public class MainWindow : Window, IDisposable
         HttpReporter reporter,
         InventoryScanner scanner,
         QuartermasterIpcClient quartermaster,
+        StandaloneSquireIpcClient standaloneSquire,
         WorkshopProjectCatalog workshopCatalog,
         VIWIWorkshoppaIpc viwiWorkshoppaIpc,
         WorkshopAssemblyRunner workshopAssemblyRunner,
@@ -112,6 +109,7 @@ public class MainWindow : Window, IDisposable
         this.reporter = reporter;
         this.scanner = scanner;
         this.quartermaster = quartermaster;
+        this.standaloneSquire = standaloneSquire;
         this.workshopCatalog = workshopCatalog;
         this.viwiWorkshoppaIpc = viwiWorkshoppaIpc;
         this.workshopAssemblyRunner = workshopAssemblyRunner;
@@ -169,7 +167,7 @@ public class MainWindow : Window, IDisposable
         var marketAcquisitionRouteRunner = new MarketAcquisitionRouteRunner(
             marketAcquisitionRouteDiagnosticsDirectory,
             universalisFreshnessVerifier.VerifyAsync);
-        outfitterRouteStateStore = new ConfigurationOutfitterRouteExecutionStateStore(config);
+        exactAcquisitionRouteStateStore = new ConfigurationExactAcquisitionRouteExecutionStateStore(config);
         routeEngine = new MarketAcquisitionRouteEngine(
             marketAcquisitionRouteRunner,
             new DalamudMarketAcquisitionRouteContext(playerState),
@@ -191,7 +189,7 @@ public class MainWindow : Window, IDisposable
                 () => marketAcquisitionRouteRunner.StatusMessage),
             new DalamudMarketAcquisitionRouteCallbackDispatcher(),
             new SystemMarketAcquisitionRouteClock(),
-            outfitterRouteStateStore,
+            exactAcquisitionRouteStateStore,
             new FileMarketAcquisitionReportOutbox(Path.Combine(
                 Plugin.PluginInterface.GetPluginConfigDirectory(),
                 "market-acquisition-report-outbox.json")));
@@ -204,59 +202,13 @@ public class MainWindow : Window, IDisposable
         if (WorkshopHostApiKeyRouting.NormalizeConfiguredKeys(config))
             config.Save();
 
-        squireSnapshotSource = new DalamudCharacterEquipmentSnapshotSource(playerState, dataManager, log);
-        var playerAdvisorBaselineSource = new DalamudPlayerAdvisorBaselineSource(squireSnapshotSource, playerState, dataManager);
         this.dataManager = dataManager;
-        renderedDefinitionLookup = new LuminaRenderedEquipmentDefinitionLookup(dataManager);
-        var squireCapabilities = new DalamudSquireDispositionCapabilitySource();
-        var squireRuleStore = new SquireCleanupRuleStore(config);
-        var squireVnavmesh = new VNavmeshIpc(new DalamudVNavmeshIpcAdapter(Plugin.PluginInterface, log));
-        var squireLifestream = new LifestreamIpc(Plugin.PluginInterface, log);
         uiStateCapture = new UiStateCaptureService(
             Plugin.AddonLifecycle,
             Plugin.Framework,
             Plugin.Condition,
             Path.Combine(Plugin.PluginInterface.GetPluginConfigDirectory(), "ui-state-captures"));
-        squireTab = new SquireTabPanel(
-            config,
-            squireSnapshotSource,
-            new DalamudSquireActionGameAdapter(
-                squireSnapshotSource,
-                playerState,
-                Plugin.Condition,
-                Plugin.GameGui,
-                Plugin.Framework,
-                dataManager,
-                squireCapabilities,
-                Plugin.CommandManager,
-                Plugin.ObjectTable,
-                Plugin.TargetManager,
-                Plugin.PluginInterface,
-                Plugin.Log,
-                () => squireRuleStore.CreatePolicy(playerState.IsLoaded && playerState.ContentId != 0 ? playerState.ContentId : null),
-                () => SquireExecutionRecoveryPolicy.From(config.Squire),
-                () =>
-                {
-                    if (routeEngine.IsRouteActive)
-                        return "The purchase route currently owns MMF automation.";
-                    if (acquisitionWorkspace.IsBusy)
-                        return "The purchase workspace is busy.";
-                    if (workshopAssemblyRunner.HasActiveRun)
-                        return "The Workshop Assembly runner currently owns MMF automation.";
-                    if (squireVnavmesh.IsRunning)
-                        return "vnavmesh is currently moving the character.";
-                    if (squireLifestream.IsAvailable && squireLifestream.TryIsBusy(out var lifestreamBusy) && lifestreamBusy)
-                        return "Lifestream is currently handling travel.";
-                    return null;
-                }),
-            squireCapabilities,
-            AgentReviewRegistry,
-            Path.Combine(Plugin.PluginInterface.GetPluginConfigDirectory(), "squire-logs"),
-            uiStateCapture,
-            Plugin.GameInventory,
-            dataManager,
-            acquisitionPlanSource,
-            playerAdvisorBaselineSource);
+        squirePanel = new StandaloneSquirePanel(standaloneSquire, AgentReviewRegistry);
         statusTab = new StatusTabPanel(reporter);
         marketAcquisitionRequestPickupPanel = new MarketAcquisitionRequestPickupPanel(
             () => _ = FetchDashboardRequestsAsync(),
@@ -333,12 +285,6 @@ public class MainWindow : Window, IDisposable
         AcquisitionCompositionWindow = new MarketAcquisitionWorkbenchCompositionWindow(
             acquisitionWorkbenchCompositions,
             CreateMarketAcquisitionCompositionContext);
-        squireTab.ConnectMarketAcquisition(
-            transfer =>
-            {
-                acquisitionRequestBuilder.StageOutfitterTransfer(transfer);
-                QueueAgentTabSelection("Market Acquisition", "Workbench");
-            });
         acquisitionWorkspace.Connect(
             acquisitionRequestBuilder.AdoptRequest,
             acquisitionRequestBuilder.AdoptRestoredRequestIfSafe,
@@ -361,7 +307,7 @@ public class MainWindow : Window, IDisposable
             log,
             AcquisitionDiagnostics.Draw,
             AutomationDiagnostics.Draw,
-            squireTab.DrawDiagnosticTools,
+            () => { },
             IsMarketAcquisitionUnlocked,
             uiStateCapture,
             AgentReviewRegistry,
@@ -369,11 +315,11 @@ public class MainWindow : Window, IDisposable
             () => config.EnableMarketAcquisitionDryRunTools,
             CanStartPreparedRouteDryRun,
             () => _ = StartPreparedRouteDryRunAsync(),
-            () => routeEngine.ArmedOutfitterDryRunScenario,
-            scenario => routeEngine.ArmOutfitterDryRunScenario(scenario)
+            () => routeEngine.ArmedExactAcquisitionDryRunScenario,
+            scenario => routeEngine.ArmExactAcquisitionDryRunScenario(scenario)
 #if DEBUG
-            , CanSeedOutfitterDryRunSunkState,
-            SeedOutfitterDryRunSunkState
+            , CanSeedExactAcquisitionDryRunSunkState,
+            SeedExactAcquisitionDryRunSunkState
 #endif
             );
         marketAcquisitionGuidedRoutePanel = new MarketAcquisitionGuidedRoutePanel(
@@ -387,8 +333,8 @@ public class MainWindow : Window, IDisposable
             () => _ = StopGuidedRouteAsync(),
             () => _ = RestartGuidedRouteAsync(),
             () => _ = ReprepareGuidedRouteAsync(),
-            () => routeEngine.RequestOutfitterRecovery(acquisitionRequestBuilder.CurrentDocument),
-            ReturnToOutfitterAdvisor,
+            () => routeEngine.RequestExactAcquisitionRecovery(acquisitionRequestBuilder.CurrentDocument),
+            ReturnToExactAcquisitionAdvisor,
             marketAcquisitionDiagnosticsPanel.DrawPostRunDiagnosticSummary,
             marketAcquisitionDiagnosticsPanel.DrawLatestWorldCompletionSummary,
             DrawMarketBoardProbeStatus,
@@ -399,16 +345,12 @@ public class MainWindow : Window, IDisposable
             log,
             () => _ = routeEngine.Stop(),
             Plugin.Instance.RestartTimer,
-            playerState,
-            dataManager,
-            () => squireTab.CurrentAnalysis,
-            squireTab.RequestPolicyRefresh,
             AgentReviewRegistry);
 
         acquisitionWorkspace.RestoreClaimIntoBuilder();
         acquisitionWorkspace.RestoreFinalizedDryRunPlan(
             acquisitionRequestBuilder.CurrentDocument,
-            outfitterRouteStateStore);
+            exactAcquisitionRouteStateStore);
     }
 
     public WorkshopProjectBrowserWindow ProjectBrowser { get; }
@@ -422,7 +364,7 @@ public class MainWindow : Window, IDisposable
         var snapshot = routeEngine.CreateSnapshot();
         var activeOperation = snapshot.ActiveOperation;
         var activeStop = snapshot.ActiveStop;
-        var persistedOutfitter = outfitterRouteStateStore.Restore();
+        var persistedExactAcquisition = exactAcquisitionRouteStateStore.Restore();
         return new AgentBridgeTruth
         {
             SchemaVersion = 1,
@@ -456,28 +398,26 @@ public class MainWindow : Window, IDisposable
                 StopCount = snapshot.Stops.Count,
                 CompletedOrProbedStopCount = snapshot.CompletedOrProbedStopCount,
                 ExecutionMode = snapshot.ExecutionMode.ToString(),
-                ArmedOutfitterDryRunScenario = routeEngine.ArmedOutfitterDryRunScenario.ToString(),
-                OutfitterDryRunFaultEligible = routeEngine.IsOutfitterDryRunFaultEligible,
-                OutfitterDryRunFaultInjected = routeEngine.WasOutfitterDryRunFaultInjected,
-                OutfitterPhase = snapshot.OutfitterExecution?.Phase.ToString(),
-                OutfitterMessage = snapshot.OutfitterExecution?.Message,
-                PersistedOutfitterSunkReceiptCount = persistedOutfitter?.SunkPurchases?.Count ?? 0,
-                PersistedOutfitterSunkQuantity = persistedOutfitter?.Lines.Aggregate(
+                ArmedExactAcquisitionDryRunScenario = routeEngine.ArmedExactAcquisitionDryRunScenario.ToString(),
+                ExactAcquisitionDryRunFaultEligible = routeEngine.IsExactAcquisitionDryRunFaultEligible,
+                ExactAcquisitionDryRunFaultInjected = routeEngine.WasExactAcquisitionDryRunFaultInjected,
+                ExactAcquisitionPhase = snapshot.ExactAcquisitionExecution?.Phase.ToString(),
+                ExactAcquisitionMessage = snapshot.ExactAcquisitionExecution?.Message,
+                PersistedExactAcquisitionSunkReceiptCount = persistedExactAcquisition?.SunkPurchases?.Count ?? 0,
+                PersistedExactAcquisitionSunkQuantity = persistedExactAcquisition?.Lines.Aggregate(
                     0ul,
                     (sum, line) => checked(sum + line.PurchasedQuantity)) ?? 0,
-                PersistedOutfitterSunkGil = persistedOutfitter?.TotalSpentGil ?? 0,
-                ActiveOutfitterRemainingQuantity = snapshot.OutfitterExecution?.Lines.Aggregate(
+                PersistedExactAcquisitionSunkGil = persistedExactAcquisition?.TotalSpentGil ?? 0,
+                ActiveExactAcquisitionRemainingQuantity = snapshot.ExactAcquisitionExecution?.Lines.Aggregate(
                     0ul,
                     (sum, line) => checked(sum + line.RequiredQuantity - line.PurchasedQuantity)) ?? 0,
-                ActiveOutfitterRemainingGil = AgentBridgeRouteTruthProjection.ResolveActiveOutfitterRemainingGil(snapshot),
+                ActiveExactAcquisitionRemainingGil = AgentBridgeRouteTruthProjection.ResolveActiveExactAcquisitionRemainingGil(snapshot),
             },
-            Squire = squireTab.CreateAgentBridgeTruth(),
         };
     }
 
     public void OnFrameworkUpdate(IFramework _framework)
     {
-        squireTab.OnFrameworkUpdate();
         workshopQuartermasterRequest.PollOperationIfDue(GetCurrentQuartermasterOwnerScope());
 
         if (!IsMarketAcquisitionUnlocked())
@@ -492,9 +432,9 @@ public class MainWindow : Window, IDisposable
 
         routeEngine.MonitorMarketBoardPurchase();
         routeEngine.TickRoute(acquisitionWorkspace.IsBusy);
-        MaybeAutoResumeOutfitterRoute();
-        if (routeEngine.NeedsOutfitterRecovery && (outfitterRecoveryTask is null || outfitterRecoveryTask.IsCompleted))
-            outfitterRecoveryTask = RecoverOutfitterRouteAsync();
+        MaybeAutoResumeExactAcquisitionRoute();
+        if (routeEngine.NeedsExactAcquisitionRecovery && (exactAcquisitionRecoveryTask is null || exactAcquisitionRecoveryTask.IsCompleted))
+            exactAcquisitionRecoveryTask = RecoverExactAcquisitionRouteAsync();
     }
 
     public override void PreDraw()
@@ -557,7 +497,7 @@ public class MainWindow : Window, IDisposable
             {
                 if (ImGui.BeginTabItem("Squire", GetAgentTabFlags("Squire")))
                 {
-                    squireTab.Draw();
+                    squirePanel.Draw();
                     ImGui.EndTabItem();
                 }
 
@@ -626,9 +566,6 @@ public class MainWindow : Window, IDisposable
         if (!allowed || !IsAllowedWorkspaceView(mainTab, workspaceView))
             return false;
 
-        if (string.Equals(mainTab, "Squire", StringComparison.Ordinal))
-            squireTab.RefreshForBridge();
-
         QueueAgentTabSelection(mainTab, workspaceView);
         AgentOpenForReview();
         return true;
@@ -637,10 +574,18 @@ public class MainWindow : Window, IDisposable
 #if DEBUG
     public bool TryOpenSyntheticAdvisorReview()
     {
-        squireTab.OpenSyntheticAdvisorReview();
-        QueueAgentTabSelection("Squire");
-        AgentOpenForReview();
-        return true;
+        return standaloneSquire.TryOpen(out _);
+    }
+
+    public void StageExternalExactAcquisition(ExactAcquisitionWorkbenchTransfer transfer)
+    {
+        ArgumentNullException.ThrowIfNull(transfer);
+        if (!IsMarketAcquisitionUnlocked())
+            throw new InvalidOperationException("Market Acquisition must be unlocked before an external plan can be staged.");
+
+        acquisitionRequestBuilder.StageExactAcquisitionTransfer(transfer);
+        QueueAgentTabSelection("Market Acquisition", "Workbench");
+        IsOpen = true;
     }
 #endif
 
@@ -976,11 +921,11 @@ public class MainWindow : Window, IDisposable
     {
         ImGui.Separator();
         var validation = acquisitionRequestBuilder.DraftValidation;
-        var outfitterValidation = acquisitionRequestBuilder.OutfitterFinalizationValidation;
+        var exactAcquisitionValidation = acquisitionRequestBuilder.ExactAcquisitionFinalizationValidation;
         var presentation = MarketAcquisitionWorkbenchFinalizationPresenter.Build(new(
             acquisitionRequestBuilder.LineCount,
-            validation.IsValid && outfitterValidation.IsValid,
-            validation.Errors.FirstOrDefault() ?? outfitterValidation.Error,
+            validation.IsValid && exactAcquisitionValidation.IsValid,
+            validation.Errors.FirstOrDefault() ?? exactAcquisitionValidation.Error,
             context.HasCharacterScope,
             context.IsBusy,
             context.IsRouteActive,
@@ -1020,7 +965,7 @@ public class MainWindow : Window, IDisposable
     private async Task FinalizeMarketAcquisitionPlanAsync()
     {
         await acquisitionRequestBuilder.WaitForRefreshAsync().ConfigureAwait(false);
-        if (!acquisitionRequestBuilder.FinalizeOutfitterAuthority())
+        if (!acquisitionRequestBuilder.FinalizeExactAcquisitionAuthority())
             return;
         var claimed = acquisitionWorkspace.ClaimedRequest;
         if (claimed is { Status: "Claimed" })
@@ -1232,7 +1177,7 @@ public class MainWindow : Window, IDisposable
                 claimed,
                 enableDiagnostics,
                 config.EnableOpportunisticWorldChecks,
-                acquisitionRequestBuilder.CurrentDocument.OutfitterAuthority?.FinalizedContract,
+                acquisitionRequestBuilder.CurrentDocument.ExactAcquisitionAuthority?.FinalizedContract,
                 acquisitionRequestBuilder.CurrentDocument);
             routeEngine.ReportRouteProgress();
             return Task.CompletedTask;
@@ -1312,7 +1257,7 @@ public class MainWindow : Window, IDisposable
                 claimed,
                 enableDiagnostics: true,
                 config.EnableOpportunisticWorldChecks,
-                acquisitionRequestBuilder.CurrentDocument.OutfitterAuthority?.FinalizedContract,
+                acquisitionRequestBuilder.CurrentDocument.ExactAcquisitionAuthority?.FinalizedContract,
                 acquisitionRequestBuilder.CurrentDocument,
                 MarketAcquisitionExecutionMode.DryRun);
             acquisitionWorkspace.SetStatus(result.Message);
@@ -1329,16 +1274,16 @@ public class MainWindow : Window, IDisposable
         !acquisitionWorkspace.IsPreparedPlanStale();
 
 #if DEBUG
-    private bool CanSeedOutfitterDryRunSunkState()
+    private bool CanSeedExactAcquisitionDryRunSunkState()
     {
         if (!config.EnableMarketAcquisitionDryRunTools || acquisitionWorkspace.IsBusy || routeEngine.IsRouteActive ||
             acquisitionWorkspace.ClaimedRequest is not { } claim || acquisitionWorkspace.PreparedPlan is not { Status: "Ready" } plan ||
             acquisitionWorkspace.IsPreparedPlanStale() ||
-            acquisitionRequestBuilder.CurrentDocument.OutfitterAuthority?.FinalizedContract is not { Transfer.DryRunOnly: true } contract)
+            acquisitionRequestBuilder.CurrentDocument.ExactAcquisitionAuthority?.FinalizedContract is not { Transfer.DryRunOnly: true } contract)
             return false;
         try
         {
-            _ = OutfitterDryRunSunkStateSeeder.CreateSemanticSeed(
+            _ = ExactAcquisitionDryRunSunkStateSeeder.CreateSemanticSeed(
                 contract,
                 acquisitionRequestBuilder.CurrentDocument,
                 claim,
@@ -1351,17 +1296,17 @@ public class MainWindow : Window, IDisposable
         }
     }
 
-    private string SeedOutfitterDryRunSunkState()
+    private string SeedExactAcquisitionDryRunSunkState()
     {
-        if (!CanSeedOutfitterDryRunSunkState())
+        if (!CanSeedExactAcquisitionDryRunSunkState())
             return "DEBUG sunk-state seed is unavailable for the current finalized dry-run route.";
         var claim = acquisitionWorkspace.ClaimedRequest!;
         var plan = acquisitionWorkspace.PreparedPlan!;
         var document = acquisitionRequestBuilder.CurrentDocument;
-        var contract = document.OutfitterAuthority!.FinalizedContract!;
-        var seed = OutfitterDryRunSunkStateSeeder.CreateSemanticSeed(contract, document, claim, plan);
-        var result = OutfitterDryRunSunkStateSeeder.Seed(
-            outfitterRouteStateStore,
+        var contract = document.ExactAcquisitionAuthority!.FinalizedContract!;
+        var seed = ExactAcquisitionDryRunSunkStateSeeder.CreateSemanticSeed(contract, document, claim, plan);
+        var result = ExactAcquisitionDryRunSunkStateSeeder.Seed(
+            exactAcquisitionRouteStateStore,
             contract,
             document,
             claim,
@@ -1372,18 +1317,18 @@ public class MainWindow : Window, IDisposable
     }
 #endif
 
-    private Task RecoverOutfitterRouteAsync()
+    private Task RecoverExactAcquisitionRouteAsync()
     {
         return acquisitionWorkspace.RunWithReportableClaimAsync(async (claimed, token) =>
         {
-            if (routeEngine.ConsumeNoViableOutfitterDryRunScenario())
+            if (routeEngine.ConsumeNoViableExactAcquisitionDryRunScenario())
             {
-                routeEngine.PauseOutfitterRecovery(
+                routeEngine.PauseExactAcquisitionRecovery(
                     "Diagnostic no-viable recovery: no exact-quality row remains inside the confirmed caps. Retry or return to Advisor.");
                 routeEngine.ReportRouteProgress();
                 return;
             }
-            var remainingClaim = routeEngine.CreateOutfitterRecoveryClaim(claimed);
+            var remainingClaim = routeEngine.CreateExactAcquisitionRecoveryClaim(claimed);
             var currentWorld = playerState.CurrentWorld.IsValid ? GetCurrentWorldName() : string.Empty;
             MarketAcquisitionPlanPreparationResult result;
             try
@@ -1396,19 +1341,19 @@ public class MainWindow : Window, IDisposable
             }
             catch (Exception exception)
             {
-                routeEngine.PauseOutfitterRecovery(
+                routeEngine.PauseExactAcquisitionRecovery(
                     $"Recovery preparation failed safely: {exception.Message} Retry when market evidence is available or return to Advisor.");
                 routeEngine.ReportRouteProgress();
                 return;
             }
             if (result.Plan.Status != "Ready" || result.Plan.WorldBatches.Count == 0)
             {
-                routeEngine.PauseOutfitterRecovery(
+                routeEngine.PauseExactAcquisitionRecovery(
                     "No viable exact-quality route remains inside the confirmed caps. Wait for listings or return to Advisor.");
                 return;
             }
 
-            var start = routeEngine.StartOutfitterRecovery(
+            var start = routeEngine.StartExactAcquisitionRecovery(
                 result.Plan,
                 remainingClaim,
                 acquisitionRequestBuilder.CurrentDocument);
@@ -1420,104 +1365,36 @@ public class MainWindow : Window, IDisposable
         });
     }
 
-    public MinerBotanistAdvisorSessionState CreateAgentAdvisorState() => squireTab.AdvisorState;
-
-    public AgentBridgeInventoryStructSnapshot CreateAgentInventoryStructSnapshot()
+    private void ReturnToExactAcquisitionAdvisor()
     {
-        var snapshot = squireSnapshotSource.Capture();
-        var items = snapshot.Instances
-            .Select(instance => new AgentBridgeInventoryStructItem(
-                instance.Fingerprint.Container,
-                instance.Fingerprint.SlotIndex,
-                instance.Fingerprint.ItemId,
-                instance.Fingerprint.IsHighQuality,
-                instance.Fingerprint.Quantity,
-                instance.IsEquipped,
-                instance.Fingerprint.MateriaIds.ToArray()))
-            .ToArray();
-        var diagnostics = snapshot.Diagnostics.Components
-            .Select(value => $"{value.Component}:{value.Status}{(value.Message is null ? string.Empty : $" ({value.Message})")}")
-            .ToArray();
-        return new(
-            snapshot.Identity.Scope?.Name ?? "Unknown",
-            snapshot.Identity.Scope?.HomeWorldId ?? 0,
-            snapshot.Identity.CapturedAt,
-            items,
-            diagnostics,
-            "Bounded direct container evidence. Rendered differential tooling audits item and quality decoding after game or Dalamud changes.");
+        standaloneSquire.TryOpen(out _);
     }
 
-    public uint? ResolveRenderedItemName(string name, RenderedItemDetailObservation observation)
-    {
-        var matches = renderedDefinitionLookup.FindByExactName(name);
-        if (matches.Count == 1)
-            return matches[0].ItemId;
-        if (matches.Count == 0)
-        {
-            // Soul crystals and other non-equipment items have no equipment definition;
-            // the differential still needs their raw sheet identity.
-            var sheet = dataManager.GetExcelSheet<Lumina.Excel.Sheets.Item>();
-            var raw = sheet?.Where(value => value.RowId > 0 && string.Equals(value.Name.ToString(), name, StringComparison.Ordinal)).ToArray() ?? [];
-            return raw.Length == 1 ? raw[0].RowId : null;
-        }
-        var narrowed = matches
-            .Where(value =>
-                (observation.ItemLevel is not { } itemLevel || value.ItemLevel == itemLevel) &&
-                (observation.EquipLevel is not { } equipLevel || value.EquipLevel == equipLevel))
-            .ToArray();
-        return narrowed.Length == 1 ? narrowed[0].ItemId : null;
-    }
-
-    public uint? ResolveRenderedBagItemId(string name, uint? structItemIdHint)
-    {
-        var items = dataManager.GetExcelSheet<Lumina.Excel.Sheets.Item>();
-        if (items is null)
-            return null;
-        var matches = items
-            .Where(value => value.RowId > 0 && string.Equals(value.Name.ToString(), name, StringComparison.Ordinal))
-            .Select(value => value.RowId)
-            .ToArray();
-        return matches.Length switch
-        {
-            1 => matches[0],
-            0 => null,
-            _ => structItemIdHint is { } hint && matches.Contains(hint) ? hint : null,
-        };
-    }
-
-    public void InvalidateAdvisorForPlayerStateChange() => squireTab.InvalidateAdvisorForPlayerStateChange();
-
-    private void ReturnToOutfitterAdvisor()
-    {
-        squireTab.OpenOutfitterAdvisor();
-        QueueAgentTabSelection("Squire");
-    }
-
-    private void MaybeAutoResumeOutfitterRoute()
+    private void MaybeAutoResumeExactAcquisitionRoute()
     {
         var routeActive = routeEngine.IsRouteActive;
-        var persisted = outfitterRouteStateStore.Restore();
-        var contract = acquisitionRequestBuilder.CurrentDocument.OutfitterAuthority?.FinalizedContract;
-        if (OutfitterRouteRecoveryLifecycle.ClearOrphanedState(
+        var persisted = exactAcquisitionRouteStateStore.Restore();
+        var contract = acquisitionRequestBuilder.CurrentDocument.ExactAcquisitionAuthority?.FinalizedContract;
+        if (ExactAcquisitionRouteRecoveryLifecycle.ClearOrphanedState(
                 routeActive,
                 persisted,
                 contract,
-                outfitterRouteStateStore))
+                exactAcquisitionRouteStateStore))
             return;
-        if (acquisitionWorkspace.IsBusy || DateTimeOffset.UtcNow < nextOutfitterAutoResumeAtUtc ||
-            outfitterAutoResumeTask is { IsCompleted: false })
+        if (acquisitionWorkspace.IsBusy || DateTimeOffset.UtcNow < nextExactAcquisitionAutoResumeAtUtc ||
+            exactAcquisitionAutoResumeTask is { IsCompleted: false })
             return;
         var live = routeEngine.CreateSnapshot();
-        if (live.OutfitterExecution?.Phase == OutfitterRouteAuthorityPhase.RecoveryNeeded &&
+        if (live.ExactAcquisitionExecution?.Phase == ExactAcquisitionRouteAuthorityPhase.RecoveryNeeded &&
             !live.IsRunning && !live.IsPaused)
         {
-            nextOutfitterAutoResumeAtUtc = DateTimeOffset.UtcNow.AddSeconds(30);
-            outfitterAutoResumeTask = RecoverOutfitterRouteAsync();
+            nextExactAcquisitionAutoResumeAtUtc = DateTimeOffset.UtcNow.AddSeconds(30);
+            exactAcquisitionAutoResumeTask = RecoverExactAcquisitionRouteAsync();
             return;
         }
         if (routeActive)
             return;
-        if (persisted is null || !OutfitterRouteRecoveryLifecycle.CanAutoResume(persisted))
+        if (persisted is null || !ExactAcquisitionRouteRecoveryLifecycle.CanAutoResume(persisted))
             return;
         if (contract is null)
             return;
@@ -1525,23 +1402,23 @@ public class MainWindow : Window, IDisposable
             return;
         if (acquisitionWorkspace.ClaimedRequest is null)
             return;
-        nextOutfitterAutoResumeAtUtc = DateTimeOffset.UtcNow.AddSeconds(30);
-        outfitterAutoResumeTask = AutoResumeOutfitterRouteAsync(persisted, contract);
+        nextExactAcquisitionAutoResumeAtUtc = DateTimeOffset.UtcNow.AddSeconds(30);
+        exactAcquisitionAutoResumeTask = AutoResumeExactAcquisitionRouteAsync(persisted, contract);
     }
 
-    private Task AutoResumeOutfitterRouteAsync(
-        OutfitterRouteExecutionState persisted,
-        OutfitterExecutionContract contract)
+    private Task AutoResumeExactAcquisitionRouteAsync(
+        ExactAcquisitionRouteExecutionState persisted,
+        ExactAcquisitionExecutionContract contract)
     {
         return acquisitionWorkspace.RunWithReportableClaimAsync(async (claimed, token) =>
         {
-            var remainingClaim = OutfitterRouteAuthoritySession.CreateRecoveryClaim(claimed, persisted);
+            var remainingClaim = ExactAcquisitionRouteAuthoritySession.CreateRecoveryClaim(claimed, persisted);
             if (remainingClaim.Lines.Count == 0)
             {
-                outfitterRouteStateStore.Save(persisted with
+                exactAcquisitionRouteStateStore.Save(persisted with
                 {
-                    Phase = OutfitterRouteAuthorityPhase.Complete,
-                    Message = "Persisted Squire purchases already satisfy the finalized solution.",
+                    Phase = ExactAcquisitionRouteAuthorityPhase.Complete,
+                    Message = "Persisted external exact-acquisition purchases already satisfy the finalized solution.",
                     UpdatedAtUtc = DateTimeOffset.UtcNow,
                 });
                 return;
@@ -1558,14 +1435,14 @@ public class MainWindow : Window, IDisposable
             }
             catch (Exception exception)
             {
-                outfitterRouteStateStore.Save(OutfitterRouteRecoveryLifecycle.PauseUnavailable(
+                exactAcquisitionRouteStateStore.Save(ExactAcquisitionRouteRecoveryLifecycle.PauseUnavailable(
                     persisted,
                     $"Recovery preparation failed safely: {exception.Message} Retry when market evidence is available or return to Advisor."));
                 return;
             }
             if (result.Plan.Status != "Ready" || result.Plan.WorldBatches.Count == 0)
             {
-                outfitterRouteStateStore.Save(OutfitterRouteRecoveryLifecycle.PauseUnavailable(
+                exactAcquisitionRouteStateStore.Save(ExactAcquisitionRouteRecoveryLifecycle.PauseUnavailable(
                     persisted,
                     "No viable exact-quality route remains inside the confirmed caps. Wait for listings, retry recovery, or return to Advisor."));
                 return;
@@ -1783,7 +1660,6 @@ public class MainWindow : Window, IDisposable
     {
         AgentCaptureTransactions.CancelActive();
         workshopQuartermasterRequest.Dispose();
-        squireTab.Dispose();
         uiStateCapture.Dispose();
         acquisitionWorkspace.Dispose();
         routeEngine.Dispose();

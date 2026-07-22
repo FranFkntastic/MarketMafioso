@@ -5,7 +5,7 @@ using System.Net;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
-using MarketMafioso.Squire.Outfitter.Acquisition;
+using MarketMafioso.MarketAcquisition.ExactAuthority;
 
 namespace MarketMafioso.MarketAcquisition;
 
@@ -372,9 +372,9 @@ public sealed class MarketAcquisitionRequestWorkspace : IDisposable
                 token).ConfigureAwait(false);
             var preparedAt = DateTimeOffset.UtcNow;
             MarketAcquisitionPlanPreparationResult result;
-            if (finalizedDocument?.OutfitterAuthority?.FinalizedContract is { Transfer.DryRunOnly: true } contract)
+            if (finalizedDocument?.ExactAcquisitionAuthority?.FinalizedContract is { Transfer.DryRunOnly: true } contract)
             {
-                var plan = OutfitterDryRunPreparedPlanRestorer.Prepare(
+                var plan = ExactAcquisitionDryRunPreparedPlanRestorer.Prepare(
                     contract,
                     finalizedDocument,
                     claimed,
@@ -382,7 +382,7 @@ public sealed class MarketAcquisitionRequestWorkspace : IDisposable
                 result = new()
                 {
                     Plan = plan,
-                    StatusMessage = "Prepared the non-spending Squire route from its exact finalized listing authority.",
+                    StatusMessage = "Prepared the non-spending External plan route from its exact finalized listing authority.",
                 };
             }
             else
@@ -487,11 +487,11 @@ public sealed class MarketAcquisitionRequestWorkspace : IDisposable
 
     public bool RestoreFinalizedDryRunPlan(
         MarketAcquisitionRequestDocument document,
-        IOutfitterRouteExecutionStateStore stateStore)
+        IExactAcquisitionRouteExecutionStateStore stateStore)
     {
         ArgumentNullException.ThrowIfNull(document);
         ArgumentNullException.ThrowIfNull(stateStore);
-        if (document.OutfitterAuthority?.FinalizedContract is not { Transfer.DryRunOnly: true } contract ||
+        if (document.ExactAcquisitionAuthority?.FinalizedContract is not { Transfer.DryRunOnly: true } contract ||
             stateStore.Restore() is not { SunkPurchases.Count: > 0 } persisted)
             return false;
 
@@ -500,9 +500,9 @@ public sealed class MarketAcquisitionRequestWorkspace : IDisposable
         {
             var claim = ClaimedRequest ??
                 throw new InvalidOperationException("The accepted dry-run claim is missing; restore or re-finalize the Workbench request.");
-            PreparedPlan = OutfitterDryRunPreparedPlanRestorer.Restore(contract, document, claim, persisted);
+            PreparedPlan = ExactAcquisitionDryRunPreparedPlanRestorer.Restore(contract, document, claim, persisted);
             PreparedPlanHash = getCurrentIntentHash!();
-            Status = "Restored the finalized non-spending Squire plan from durable listing authority and applied persisted sunk receipts once.";
+            Status = "Restored the finalized non-spending external exact-acquisition plan from durable listing authority and applied persisted sunk receipts once.";
             resetRoute!("Restored dry-run plan is ready; no route has started.");
             return true;
         }
@@ -510,7 +510,7 @@ public sealed class MarketAcquisitionRequestWorkspace : IDisposable
         {
             PreparedPlan = null;
             PreparedPlanHash = null;
-            Status = $"Squire dry-run restoration paused: {exception.Message} Return to Advisor, finalize, and prepare a new dry-run plan.";
+            Status = $"External plan dry-run restoration paused: {exception.Message} Return to Advisor, finalize, and prepare a new dry-run plan.";
             resetRoute!("Dry-run startup evidence did not pass exact restoration; execution remains disabled.");
             return false;
         }

@@ -13,8 +13,8 @@
     <ShouldUnsetParentConfigurationAndPlatform>false</ShouldUnsetParentConfigurationAndPlatform>
     <Name>MarketMafioso</Name>
     <Author>FranFkntastic</Author>
-    <Description>FFXIV workshop logistics, gear planning and reviewed cleanup, and optional receiver-backed inventory history.</Description>
-    <Punchline>Workshop logistics, gear planning and cleanup, and inventory history.</Punchline>
+    <Description>FFXIV workshop logistics, market acquisition, and optional receiver-backed inventory history.</Description>
+    <Punchline>Workshop logistics, market acquisition, and inventory history.</Punchline>
     <RepoUrl>https://github.com/FranFkntastic/MarketMafioso</RepoUrl>
     <FranthropyDalamudProject Condition="'$(FranthropyDalamudProject)' == ''">..\..\..\Franthropy\src\Franthropy.Dalamud\Franthropy.Dalamud.csproj</FranthropyDalamudProject>
     <CraftArchitectCoreProject Condition="'$(CraftArchitectCoreProject)' == ''">..\..\..\FFXIV Craft Architect C# Edition\src\FFXIV Craft Architect.Core\FFXIV Craft Architect.Core.csproj</CraftArchitectCoreProject>

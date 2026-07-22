@@ -15,8 +15,7 @@ using MarketMafioso.AgentBridge;
 using MarketMafioso.MarketAcquisition;
 using MarketMafioso.Quartermaster;
 using MarketMafioso.WorkshopPrep;
-using MarketMafioso.Squire;
-using MarketMafioso.Squire.Observation;
+using MarketMafioso.SquireIntegration;
 using MarketMafioso.Windows;
 
 namespace MarketMafioso;
@@ -51,6 +50,8 @@ public sealed class Plugin : IDalamudPlugin
     private readonly InventoryScanner scanner;
     private readonly HttpReporter reporter;
     private readonly QuartermasterIpcClient quartermaster;
+    private readonly StandaloneSquireIpcClient standaloneSquire;
+    private readonly ExactAcquisitionIpcProvider exactAcquisitionIpc;
     private readonly WorkshopProjectCatalog workshopCatalog;
     private readonly VIWIWorkshoppaIpc viwiWorkshoppaIpc;
     private readonly WorkshopAssemblyRunner workshopAssemblyRunner;
@@ -61,8 +62,6 @@ public sealed class Plugin : IDalamudPlugin
     private readonly AgentBridgeProofWindow agentBridgeProofWindow;
     private readonly AgentBridgeHost agentBridge;
     private readonly AgentBridgeViewportCaptureService agentBridgeViewportCapture;
-    private readonly DalamudRenderedCharacterUiProbe renderedCharacterUiProbe;
-    private readonly DalamudRetainerUiPreparation retainerUiPreparation;
 
     private CancellationTokenSource? timerCancellation;
 
@@ -76,14 +75,9 @@ public sealed class Plugin : IDalamudPlugin
         Legacy.LegacyRetainerMigrationSource.Preserve(
             Configuration,
             Path.Combine(PluginInterface.GetPluginConfigDirectory(), "retainer-cache.json"));
-        var squireConfigurationChanged = SquireRuleMigration.Migrate(Configuration);
-        squireConfigurationChanged |= SquireCleanupRuleMigration.Migrate(Configuration);
-        squireConfigurationChanged |= SquireAdvisorConfigurationMigration.Migrate(Configuration);
-        if (squireConfigurationChanged)
-            Configuration.Save();
-
         scanner = new InventoryScanner(DataManager, Log);
         quartermaster = new QuartermasterIpcClient(new DalamudQuartermasterIpcAdapter(PluginInterface));
+        standaloneSquire = new StandaloneSquireIpcClient(new DalamudStandaloneSquireIpcAdapter(PluginInterface));
         var serviceAccountIdentity = new DalamudServiceAccountIdentitySource(PluginInterface, Log);
         reporter = new HttpReporter(Configuration, PlayerState, Log, ChatGui, scanner, serviceAccountIdentity, quartermaster);
         workshopCatalog = new WorkshopProjectCatalog(DataManager, Log);
@@ -110,17 +104,12 @@ public sealed class Plugin : IDalamudPlugin
             });
         workshopMaterialManifestExport = new WorkshopMaterialManifestExportService(
             new LuminaWorkshopMaterialCraftRecipeResolver(DataManager));
-        renderedCharacterUiProbe = new DalamudRenderedCharacterUiProbe(GameGui, DataManager);
-        retainerUiPreparation = new(
-            CommandManager,
-            new LifestreamIpc(PluginInterface, Log),
-            renderedCharacterUiProbe.CaptureRetainerUi,
-            renderedCharacterUiProbe.TryActivateRenderedSummoningBell);
         mainWindow = new MainWindow(
             Configuration,
             reporter,
             scanner,
             quartermaster,
+            standaloneSquire,
             workshopCatalog,
             viwiWorkshoppaIpc,
             workshopAssemblyRunner,
@@ -135,6 +124,7 @@ public sealed class Plugin : IDalamudPlugin
                 Log),
             Path.Combine(PluginInterface.GetPluginConfigDirectory(), "market-acquisition-route-logs"),
             Log);
+        exactAcquisitionIpc = new ExactAcquisitionIpcProvider(PluginInterface, mainWindow.StageExternalExactAcquisition);
 
         agentBridgeProofStore = new AgentBridgeProofStore();
         agentBridgeProofWindow = new AgentBridgeProofWindow(agentBridgeProofStore);
@@ -145,75 +135,6 @@ public sealed class Plugin : IDalamudPlugin
             action => Framework.RunOnTick(action),
             TextureProvider,
             TextureReadbackProvider);
-        var agentBridgeBindings = new MarketMafiosoBridgeBindings(
-            OpenCharacterUi: () => renderedCharacterUiProbe.Open(),
-            TryCloseCharacterUi: renderedCharacterUiProbe.TryCloseCharacterUi,
-            TryCloseBlockingSelectStringUi: renderedCharacterUiProbe.TryCloseBlockingSelectString,
-            TryCloseRetainerUi: renderedCharacterUiProbe.TryCloseRetainerUi,
-            TrySwitchCalibrationJobUi: target =>
-            {
-                mainWindow.InvalidateAdvisorForPlayerStateChange();
-                return renderedCharacterUiProbe.TrySwitchCalibrationJob(target);
-            },
-            TrySwitchGearsetSlotUi: target =>
-            {
-                mainWindow.InvalidateAdvisorForPlayerStateChange();
-                return renderedCharacterUiProbe.TrySwitchGearsetSlot(target);
-            },
-            TryOpenGearsetListUi: renderedCharacterUiProbe.TryOpenGearsetList,
-            TrySelectCalibrationGearsetUi: renderedCharacterUiProbe.TrySelectCalibrationGearset,
-            TryEquipSelectedGearsetUi: () =>
-            {
-                mainWindow.InvalidateAdvisorForPlayerStateChange();
-                return renderedCharacterUiProbe.TryEquipSelectedGearset();
-            },
-            CaptureCharacterUi: renderedCharacterUiProbe.Capture,
-            CaptureRetainerUi: renderedCharacterUiProbe.CaptureRetainerUi,
-            BeginRetainerObservationUi: retainerUiPreparation.Begin,
-            AdvanceRetainerObservationUi: retainerUiPreparation.Advance,
-            CancelRetainerObservationUi: retainerUiPreparation.Cancel,
-            TryOpenRenderedRetainerUi: renderedCharacterUiProbe.TryOpenRenderedRetainer,
-            CaptureAdvisorStateUi: mainWindow.CreateAgentAdvisorState,
-            CaptureInventoryStructSnapshotUi: mainWindow.CreateAgentInventoryStructSnapshot,
-            TryOpenArmouryBoardUi: renderedCharacterUiProbe.TryOpenArmouryBoard,
-            TryCloseArmouryBoardUi: renderedCharacterUiProbe.TryCloseArmouryBoard,
-            TryShowArmourySlotTooltipUi: renderedCharacterUiProbe.TryShowArmourySlotTooltip,
-            TryShowBagSlotTooltipUi: renderedCharacterUiProbe.TryShowBagSlotTooltip,
-            TryOpenBagSlotContextUi: target =>
-            {
-                var separator = target.LastIndexOf(':');
-                return separator > 0 && int.TryParse(target[(separator + 1)..], out var slot)
-                    ? renderedCharacterUiProbe.TryOpenBagSlotContext(target[..separator], slot)
-                    : new Franthropy.Dalamud.AgentBridge.RenderedUiTextActionResult(false, "InvalidContextTarget", "Target must be '<Container>:<slotIndex>'.", "ContextMenu", null);
-            },
-            TryInvokeBagSlotContextActionUi: target =>
-            {
-                var parts = target.Split(':');
-                if (parts.Length < 3 || !int.TryParse(parts[1], out var actionSlot))
-                    return new Franthropy.Dalamud.AgentBridge.RenderedUiTextActionResult(false, "InvalidContextActionTarget", "Target must be '<Container>:<slotIndex>:<label>'.", "ContextMenu", null);
-                return renderedCharacterUiProbe.TryInvokeBagSlotContextAction(parts[0], actionSlot, string.Join(':', parts.Skip(2)));
-            },
-            TryCloseBagSlotContextUi: renderedCharacterUiProbe.TryCloseBagSlotContext,
-            CaptureTooltipMapDiagnosticUi: renderedCharacterUiProbe.CaptureTooltipMapDiagnostic,
-            CaptureInventoryContainerTableDiagnosticUi: renderedCharacterUiProbe.CaptureInventoryContainerTableDiagnostic,
-            CaptureInventoryBuddyOccupancyDiagnosticUi: renderedCharacterUiProbe.CaptureInventoryBuddyOccupancyDiagnostic,
-            CaptureInventoryWindowOccupancyDiagnosticUi: renderedCharacterUiProbe.CaptureInventoryWindowOccupancyDiagnostic,
-            SetInventoryTabDiagnosticUi: renderedCharacterUiProbe.SetInventoryTabDiagnostic,
-            BeginArmouryDifferentialUi: () => renderedCharacterUiProbe.BeginArmouryDifferential(
-                mainWindow.CreateAgentInventoryStructSnapshot().Items,
-                mainWindow.ResolveRenderedItemName,
-                mainWindow.ResolveRenderedBagItemId,
-                mainWindow.CreateAgentInventoryStructSnapshot),
-            AdvanceArmouryDifferentialUi: renderedCharacterUiProbe.AdvanceArmouryDifferential,
-            CancelArmouryDifferentialUi: renderedCharacterUiProbe.CancelArmouryDifferential,
-            CaptureGatheringStatsUi: renderedCharacterUiProbe.CaptureGatheringStats,
-            BeginCharacterEquipmentScanUi: renderedCharacterUiProbe.BeginEquipmentScan,
-            AdvanceCharacterEquipmentScanUi: renderedCharacterUiProbe.AdvanceEquipmentScan,
-            CancelCharacterEquipmentScanUi: renderedCharacterUiProbe.CancelEquipmentScan,
-#if DEBUG
-            TryOpenSyntheticAdvisorReview: mainWindow.TryOpenSyntheticAdvisorReview,
-#endif
-            GetUiAutomationCapabilities: () => renderedCharacterUiProbe.Capabilities);
         agentBridge = new AgentBridgeHost(
             Configuration,
             PluginInterface.GetPluginConfigDirectory(),
@@ -232,7 +153,6 @@ public sealed class Plugin : IDalamudPlugin
                 mainWindow.AgentCaptureInputState,
                 mainWindow.AgentStopRoute,
                 () => MarketAcquisitionUnlock.IsUnlocked(Configuration),
-                agentBridgeBindings,
                 mainWindow.AgentReviewRegistry),
             agentBridgeProofStore,
             agentBridgeViewportCapture.CaptureAsync,
@@ -304,6 +224,7 @@ public sealed class Plugin : IDalamudPlugin
     public void Dispose()
     {
         StopTimer();
+        exactAcquisitionIpc.Dispose();
         agentBridge.Dispose();
 
         PluginInterface.UiBuilder.Draw -= DrawUI;

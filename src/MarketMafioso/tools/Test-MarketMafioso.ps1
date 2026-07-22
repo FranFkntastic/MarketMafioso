@@ -1,7 +1,6 @@
 param(
     [ValidateSet('Debug', 'Release')]
-    [string]$Configuration = 'Debug',
-    [switch]$IncludePerformance
+    [string]$Configuration = 'Debug'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -60,8 +59,4 @@ foreach ($entry in $projects) {
             throw 'MarketMafioso tests did not execute against the pinned Franthropy deployment assembly.'
         }
     }
-}
-
-if ($IncludePerformance) {
-    & (Join-Path $PSScriptRoot 'Test-SquirePerformance.ps1') -Configuration Release
 }

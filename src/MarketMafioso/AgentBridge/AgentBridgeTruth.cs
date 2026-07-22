@@ -25,50 +25,6 @@ public sealed record AgentBridgeTruth
     public required string? ClaimedRequestId { get; init; }
     public required string? PreparedPlanStatus { get; init; }
     public required AgentBridgeRouteTruth Route { get; init; }
-    public AgentBridgeSquireTruth? Squire { get; init; }
-}
-
-public sealed record AgentBridgeSquireTruth
-{
-    public required bool HasSnapshot { get; init; }
-    public required string Status { get; init; }
-    public required string? CharacterName { get; init; }
-    public required string? HomeWorldId { get; init; }
-    public required DateTimeOffset? CapturedAtUtc { get; init; }
-    public required bool IsComplete { get; init; }
-    public required int UnlockedJobCount { get; init; }
-    public required int ValidGearsetCount { get; init; }
-    public required int InstanceCount { get; init; }
-    public required int CandidateCount { get; init; }
-    public required int ProtectedCount { get; init; }
-    public required int EvaluationFailureCount { get; init; }
-    public required int UnsupportedCount { get; init; }
-    public required IReadOnlyList<string> BlockingDiagnostics { get; init; }
-    public required IReadOnlyList<string> EvaluationFailureGroups { get; init; }
-    public required IReadOnlyList<string> ProtectionGroups { get; init; }
-    public required IReadOnlyList<AgentBridgeSquireCandidateTruth> ExecutableCandidates { get; init; }
-    public int ApplicableRuleCount { get; init; }
-    public int EnabledRuleCount { get; init; }
-    public IReadOnlyList<string> RuleValidationErrors { get; init; } = [];
-}
-
-public sealed record AgentBridgeSquireCandidateTruth
-{
-    public required uint ItemId { get; init; }
-    public required string ItemName { get; init; }
-    public required string Container { get; init; }
-    public required int SlotIndex { get; init; }
-    public required uint EquipLevel { get; init; }
-    public required uint ItemLevel { get; init; }
-    public required int OwnedCopies { get; init; }
-    public required int ExplicitMinimumCopies { get; init; }
-    public required int EffectiveMinimumCopies { get; init; }
-    public required string RecommendedDisposition { get; init; }
-    public required IReadOnlyList<string> ReasonCodes { get; init; }
-    public required IReadOnlyList<string> JobComparisons { get; init; }
-    public required string RevalidationCode { get; init; }
-    public required bool RevalidationSucceeded { get; init; }
-    public IReadOnlyList<string> RuleTrace { get; init; } = [];
 }
 
 public sealed record AgentBridgeRouteTruth
@@ -88,24 +44,24 @@ public sealed record AgentBridgeRouteTruth
     public required int StopCount { get; init; }
     public required int CompletedOrProbedStopCount { get; init; }
     public string? ExecutionMode { get; init; }
-    public string? ArmedOutfitterDryRunScenario { get; init; }
-    public bool OutfitterDryRunFaultEligible { get; init; }
-    public bool OutfitterDryRunFaultInjected { get; init; }
-    public string? OutfitterPhase { get; init; }
-    public string? OutfitterMessage { get; init; }
-    public int PersistedOutfitterSunkReceiptCount { get; init; }
-    public ulong PersistedOutfitterSunkQuantity { get; init; }
-    public ulong PersistedOutfitterSunkGil { get; init; }
-    public ulong ActiveOutfitterRemainingQuantity { get; init; }
-    public ulong ActiveOutfitterRemainingGil { get; init; }
+    public string? ArmedExactAcquisitionDryRunScenario { get; init; }
+    public bool ExactAcquisitionDryRunFaultEligible { get; init; }
+    public bool ExactAcquisitionDryRunFaultInjected { get; init; }
+    public string? ExactAcquisitionPhase { get; init; }
+    public string? ExactAcquisitionMessage { get; init; }
+    public int PersistedExactAcquisitionSunkReceiptCount { get; init; }
+    public ulong PersistedExactAcquisitionSunkQuantity { get; init; }
+    public ulong PersistedExactAcquisitionSunkGil { get; init; }
+    public ulong ActiveExactAcquisitionRemainingQuantity { get; init; }
+    public ulong ActiveExactAcquisitionRemainingGil { get; init; }
 }
 
 public static class AgentBridgeRouteTruthProjection
 {
-    public static ulong ResolveActiveOutfitterRemainingGil(MarketAcquisitionRouteEngineSnapshot snapshot)
+    public static ulong ResolveActiveExactAcquisitionRemainingGil(MarketAcquisitionRouteEngineSnapshot snapshot)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
-        if (snapshot is not { IsRouteActive: true, OutfitterExecution: { } execution, ActivePlan: { } plan })
+        if (snapshot is not { IsRouteActive: true, ExactAcquisitionExecution: { } execution, ActivePlan: { } plan })
             return 0;
 
         var lineIds = execution.Lines.Select(line => line.LineId).ToHashSet(StringComparer.Ordinal);

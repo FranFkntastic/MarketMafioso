@@ -9,7 +9,7 @@ using Franthropy.Dalamud.AgentBridge;
 using Franthropy.Dalamud.UI.Items;
 using MarketMafioso.CraftArchitectCompanion;
 using MarketMafioso.MarketAcquisition;
-using MarketMafioso.Squire.Outfitter.Acquisition;
+using MarketMafioso.MarketAcquisition.ExactAuthority;
 using MarketMafioso.Windows;
 
 namespace MarketMafioso.Windows.MarketAcquisitionRequestBuilder;
@@ -68,13 +68,13 @@ public sealed class MarketAcquisitionRequestBuilderPanel
     public int StageLines(IEnumerable<MarketAcquisitionRequestLineDocument> lines) =>
         controller.AddLines(lines);
 
-    public void StageOutfitterTransfer(OutfitterWorkbenchTransfer transfer) =>
-        controller.StageOutfitterTransfer(transfer);
+    public void StageExactAcquisitionTransfer(ExactAcquisitionWorkbenchTransfer transfer) =>
+        controller.StageExactAcquisitionTransfer(transfer);
 
-    public bool FinalizeOutfitterAuthority() => controller.FinalizeOutfitterAuthority();
+    public bool FinalizeExactAcquisitionAuthority() => controller.FinalizeExactAcquisitionAuthority();
 
-    public OutfitterWorkbenchAuthorityValidation OutfitterFinalizationValidation =>
-        controller.OutfitterFinalizationValidation;
+    public ExactAcquisitionWorkbenchAuthorityValidation ExactAcquisitionFinalizationValidation =>
+        controller.ExactAcquisitionFinalizationValidation;
 
     public int ReturnLines(IEnumerable<uint> itemIds) =>
         controller.RemoveLinesByItemId(itemIds);
@@ -96,7 +96,7 @@ public sealed class MarketAcquisitionRequestBuilderPanel
             context.World,
             context.HasCharacterScope && !context.IsBusy && !context.IsRouteActive);
 
-        DrawOutfitterAuthority(context);
+        DrawExactAcquisitionAuthority(context);
         DrawRouteScope(context);
         ImGui.Spacing();
         DrawExceptionalStatus(context);
@@ -128,12 +128,12 @@ public sealed class MarketAcquisitionRequestBuilderPanel
             return sum > uint.MaxValue ? uint.MaxValue : (uint)sum;
         });
 
-    private void DrawOutfitterAuthority(MarketAcquisitionRequestBuilderContext context)
+    private void DrawExactAcquisitionAuthority(MarketAcquisitionRequestBuilderContext context)
     {
-        if (document.OutfitterAuthority is not { } authority)
+        if (document.ExactAcquisitionAuthority is not { } authority)
             return;
 
-        ImGuiUi.SectionHeader("Squire solution", MainWindow.ColHeader);
+        ImGuiUi.SectionHeader("external exact-acquisition solution", MainWindow.ColHeader);
         if (!authority.IsLineageValid)
         {
             ImGui.TextColored(MainWindow.ColError, authority.InvalidationReason ?? "The selected gear solution changed; return to Advisor.");
@@ -153,13 +153,13 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         var canEdit = !context.IsBusy && !context.IsRouteActive && !IsSynchronizing;
         if (!canEdit)
             ImGui.BeginDisabled();
-        if (ImGui.InputInt("Price flexibility %##SquireOutfitterFlex", ref flex, 1, 5))
-            controller.UpdateOutfitterPriceFlex(flex);
+        if (ImGui.InputInt("Price flexibility %##ExternalExactAcquisitionFlex", ref flex, 1, 5))
+            controller.UpdateExactAcquisitionPriceFlex(flex);
         if (!canEdit)
             ImGui.EndDisabled();
         ImGui.SameLine();
         ImGui.TextColored(MainWindow.ColMuted,
-            $"fixed plan ceiling {authority.SquirePlanCapGil:N0} gil · {authority.RecoveryPolicyId}");
+            $"fixed plan ceiling {authority.PlanCapGil:N0} gil · {authority.RecoveryPolicyId}");
         ImGui.Spacing();
     }
 
@@ -232,7 +232,7 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         int index)
     {
         var canEdit = !context.IsBusy && !context.IsRouteActive && !IsSynchronizing;
-        var isSquireLine = controller.IsOutfitterLine(index);
+        var isExactAcquisitionLine = controller.IsExactAcquisitionLine(index);
         ImGui.PushID($"AcquisitionWorkbenchLine{line.ItemId}_{index}");
         ImGui.TableNextRow();
 
@@ -258,7 +258,7 @@ public sealed class MarketAcquisitionRequestBuilderPanel
             line.ItemId.ToString(),
             ToggleDetails);
 
-        if (!canEdit || isSquireLine)
+        if (!canEdit || isExactAcquisitionLine)
             ImGui.BeginDisabled();
 
         ImGui.TableNextColumn();
@@ -279,7 +279,7 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         ImGui.TableNextColumn();
         DrawCompactEvidenceState(line);
 
-        if (!canEdit || isSquireLine)
+        if (!canEdit || isExactAcquisitionLine)
             ImGui.EndDisabled();
 
         ImGui.TableNextColumn();

@@ -1,12 +1,12 @@
 using MarketMafioso.MarketAcquisition;
-using MarketMafioso.Squire.Outfitter.Acquisition;
+using MarketMafioso.MarketAcquisition.ExactAuthority;
 
 namespace MarketMafioso.Windows.MarketAcquisitionPanels;
 
 public enum MarketAcquisitionGuidedRoutePrimaryAction
 {
     None,
-    RetryOutfitterRecovery,
+    RetryExactAcquisitionRecovery,
     ResumeManualPause,
     PauseActiveRoute,
 }
@@ -15,11 +15,11 @@ public static class MarketAcquisitionGuidedRouteActionPresenter
 {
     public static MarketAcquisitionGuidedRoutePrimaryAction Resolve(MarketAcquisitionRouteEngineSnapshot snapshot)
     {
-        var phase = snapshot.OutfitterExecution?.Phase;
-        if (phase == OutfitterRouteAuthorityPhase.RecoveryNeeded ||
-            phase == OutfitterRouteAuthorityPhase.Paused && !snapshot.IsPaused)
+        var phase = snapshot.ExactAcquisitionExecution?.Phase;
+        if (phase == ExactAcquisitionRouteAuthorityPhase.RecoveryNeeded ||
+            phase == ExactAcquisitionRouteAuthorityPhase.Paused && !snapshot.IsPaused)
         {
-            return MarketAcquisitionGuidedRoutePrimaryAction.RetryOutfitterRecovery;
+            return MarketAcquisitionGuidedRoutePrimaryAction.RetryExactAcquisitionRecovery;
         }
         if (snapshot.IsPaused)
             return MarketAcquisitionGuidedRoutePrimaryAction.ResumeManualPause;

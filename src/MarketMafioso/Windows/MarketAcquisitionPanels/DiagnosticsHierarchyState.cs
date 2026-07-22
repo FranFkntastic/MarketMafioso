@@ -5,7 +5,7 @@ internal sealed class DiagnosticsHierarchyState
     public const string TestToolsControlId = "diagnostics.test-tools.expanded";
     public const bool MarketAcquisitionDefaultOpen = true;
     public const bool AutomationDefaultOpen = false;
-    public const bool SquireRouteDefaultOpen = false;
+    public const bool ExternalExactRouteDefaultOpen = false;
     public const bool ReportLocationsDefaultOpen = false;
     public const bool TestToolsDefaultOpen = false;
 

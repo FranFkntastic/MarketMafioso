@@ -12,8 +12,18 @@ internal static class SettingsPageUi
         string label,
         string description,
         Func<bool> getter,
+        Action<bool> setter) =>
+        DrawConfigCheckbox(config.Save, context, label, description, getter, setter);
+
+    public static void DrawConfigCheckbox(
+        Action save,
+        SettingsPageContext context,
+        string label,
+        string description,
+        Func<bool> getter,
         Action<bool> setter)
     {
+        ArgumentNullException.ThrowIfNull(save);
         if (!context.Matches(label, description))
             return;
 
@@ -21,7 +31,7 @@ internal static class SettingsPageUi
         if (ImGui.Checkbox(label, ref value))
         {
             setter(value);
-            config.Save();
+            save();
         }
         ImGui.TextColored(MarketMafiosoUiTheme.Muted, description);
         ImGui.Spacing();

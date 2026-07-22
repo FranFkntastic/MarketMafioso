@@ -6,12 +6,33 @@ namespace MarketMafioso.Tests.AgentBridge;
 public sealed class MarketMafiosoBridgeProviderTests
 {
     [Fact]
+    public void Provider_advertises_capture_surfaces_without_requiring_client_product_knowledge()
+    {
+        var provider = CreateProvider(marketAcquisitionUnlocked: false);
+
+        var surfaces = provider.GetCaptureSurfaces();
+
+        Assert.Collection(
+            surfaces.OrderBy(surface => surface.Order),
+            surface =>
+            {
+                Assert.Equal("mmf.main-window", surface.Id);
+                Assert.True(surface.IsDefault);
+            },
+            surface =>
+            {
+                Assert.Equal("mmf.main-window.compact", surface.Id);
+                Assert.False(surface.IsDefault);
+            });
+    }
+
+    [Fact]
     public void Provider_exposes_only_unlocked_product_review_surfaces_in_stable_order()
     {
-        var provider = CreateProvider(marketAcquisitionUnlocked: true, CreateBindings());
+        var provider = CreateProvider(marketAcquisitionUnlocked: true);
 
         var surfaces = provider.GetReviewSurfaces();
-        Assert.Contains(surfaces, surface => surface.Id == "squire" && surface.Target == "Squire");
+        Assert.DoesNotContain(surfaces, surface => surface.Id.Contains("squire", StringComparison.OrdinalIgnoreCase));
         Assert.DoesNotContain(surfaces, surface =>
             surface.Id.Contains("retainer", StringComparison.OrdinalIgnoreCase) ||
             surface.Target.Contains("Retainer", StringComparison.OrdinalIgnoreCase));
@@ -24,7 +45,7 @@ public sealed class MarketMafiosoBridgeProviderTests
         Assert.DoesNotContain(surfaces, surface => surface.Id == "inventory-reporter");
         Assert.Equal(surfaces.OrderBy(surface => surface.Order), surfaces);
 
-        var lockedProvider = CreateProvider(marketAcquisitionUnlocked: false, CreateBindings());
+        var lockedProvider = CreateProvider(marketAcquisitionUnlocked: false);
         Assert.DoesNotContain(
             lockedProvider.GetReviewSurfaces(),
             surface => surface.Id.StartsWith("market-acquisition", StringComparison.Ordinal) ||
@@ -41,9 +62,7 @@ public sealed class MarketMafiosoBridgeProviderTests
         Assert.DoesNotContain("\"retainers\"", json, StringComparison.OrdinalIgnoreCase);
     }
 
-    private static MarketMafiosoBridgeProvider CreateProvider(
-        bool marketAcquisitionUnlocked,
-        MarketMafiosoBridgeBindings bindings) => new(
+    private static MarketMafiosoBridgeProvider CreateProvider(bool marketAcquisitionUnlocked) => new(
             CreateTruth,
             () => { },
             () => { },
@@ -53,50 +72,7 @@ public sealed class MarketMafiosoBridgeProviderTests
             () => { },
             () => { },
             () => marketAcquisitionUnlocked,
-            bindings,
             new AgentBridgeUiReviewRegistry());
-
-    private static MarketMafiosoBridgeBindings CreateBindings() => new(
-        OpenCharacterUi: () => { },
-        TryCloseCharacterUi: () => false,
-        TryCloseBlockingSelectStringUi: () => false,
-        TryCloseRetainerUi: () => false,
-        TrySwitchCalibrationJobUi: _ => null,
-        TrySwitchGearsetSlotUi: _ => null,
-        TryOpenGearsetListUi: () => null!,
-        TrySelectCalibrationGearsetUi: _ => null!,
-        TryEquipSelectedGearsetUi: () => null!,
-        CaptureCharacterUi: () => null!,
-        CaptureRetainerUi: () => null!,
-        BeginRetainerObservationUi: _ => null!,
-        AdvanceRetainerObservationUi: () => null!,
-        CancelRetainerObservationUi: () => null!,
-        TryOpenRenderedRetainerUi: _ => null!,
-        CaptureAdvisorStateUi: () => null!,
-        CaptureInventoryStructSnapshotUi: () => null!,
-        TryOpenArmouryBoardUi: () => false,
-        TryCloseArmouryBoardUi: () => false,
-        TryShowArmourySlotTooltipUi: _ => null!,
-        TryShowBagSlotTooltipUi: _ => null!,
-        TryOpenBagSlotContextUi: _ => null!,
-        TryInvokeBagSlotContextActionUi: _ => null!,
-        TryCloseBagSlotContextUi: () => false,
-        CaptureTooltipMapDiagnosticUi: _ => string.Empty,
-        CaptureInventoryContainerTableDiagnosticUi: () => string.Empty,
-        CaptureInventoryBuddyOccupancyDiagnosticUi: () => string.Empty,
-        CaptureInventoryWindowOccupancyDiagnosticUi: () => string.Empty,
-        SetInventoryTabDiagnosticUi: _ => string.Empty,
-        BeginArmouryDifferentialUi: () => null!,
-        AdvanceArmouryDifferentialUi: () => null!,
-        CancelArmouryDifferentialUi: () => null!,
-        CaptureGatheringStatsUi: () => null!,
-        BeginCharacterEquipmentScanUi: () => null!,
-        AdvanceCharacterEquipmentScanUi: () => null!,
-        CancelCharacterEquipmentScanUi: () => null!,
-#if DEBUG
-        TryOpenSyntheticAdvisorReview: () => false,
-#endif
-        GetUiAutomationCapabilities: () => null!);
 
     private static AgentBridgeTruth CreateTruth() => new()
     {

@@ -1,5 +1,5 @@
 using System.Collections.Generic;
-using MarketMafioso.Squire.Outfitter.Acquisition;
+using MarketMafioso.MarketAcquisition.ExactAuthority;
 using MarketMafioso.Automation.MarketBoard;
 
 namespace MarketMafioso.MarketAcquisition;
@@ -38,5 +38,5 @@ public sealed record MarketAcquisitionRouteEngineSnapshot
     public MarketAcquisitionRouteRunSummary? LastRunSummary { get; init; }
     public MarketAcquisitionWorldCompletionSummary? LatestWorldCompletionSummary { get; init; }
     public MarketAcquisitionRunDiagnosticSummary LastRunDiagnosticSummary { get; init; } = new();
-    public OutfitterRouteExecutionState? OutfitterExecution { get; init; }
+    public ExactAcquisitionRouteExecutionState? ExactAcquisitionExecution { get; init; }
 }

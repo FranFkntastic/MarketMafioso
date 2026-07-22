@@ -18,12 +18,6 @@ namespace MarketMafioso.Diagnostics;
 
 public sealed class UiStateCaptureService : IDisposable
 {
-    private static readonly HashSet<string> SquireAutomationAddons = new(StringComparer.Ordinal)
-    {
-        "ContextMenu", "SalvageDialog", "MateriaRetrieveDialog", "SelectYesno", "Shop",
-        "GrandCompanySupplyList", "GrandCompanySupplyReward", "Inventory", "InventoryLarge",
-        "ArmouryBoard", "SelectString", "SelectIconString", "Talk",
-    };
     private static readonly InventoryType[] CapturedInventories =
     [
         InventoryType.Inventory1, InventoryType.Inventory2, InventoryType.Inventory3, InventoryType.Inventory4,
@@ -65,16 +59,6 @@ public sealed class UiStateCaptureService : IDisposable
 
     public void Start(string name = "manual-ui-transaction")
         => StartCore(name, CaptureScope.Catchall);
-
-    public bool StartSquireProbe(string container, int slotIndex)
-    {
-        if (IsRecording)
-            return false;
-        if (!Enum.TryParse<InventoryType>(container, out var inventoryType) || slotIndex < 0)
-            throw new ArgumentException($"Squire probe inventory target {container}:{slotIndex} is invalid.");
-        StartCore($"squire-probe-{container}-{slotIndex}", new CaptureScope(SquireAutomationAddons, inventoryType, slotIndex));
-        return true;
-    }
 
     private void StartCore(string name, CaptureScope scope)
     {

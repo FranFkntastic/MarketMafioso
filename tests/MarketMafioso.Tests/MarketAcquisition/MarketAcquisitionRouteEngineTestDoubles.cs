@@ -1,7 +1,7 @@
 using MarketMafioso.Automation.MarketBoard;
 using MarketMafioso.Automation.Travel;
 using MarketMafioso.MarketAcquisition;
-using MarketMafioso.Squire.Outfitter.Acquisition;
+using MarketMafioso.MarketAcquisition.ExactAuthority;
 
 namespace MarketMafioso.Tests.MarketAcquisition;
 
@@ -248,7 +248,7 @@ internal sealed class MarketAcquisitionRouteEngineHarness : IDisposable
     public MarketAcquisitionRouteRunner Runner { get; }
     public MarketAcquisitionRouteEngine Engine { get; }
 
-    private MarketAcquisitionRouteEngineHarness(IOutfitterRouteExecutionStateStore? outfitterStateStore = null)
+    private MarketAcquisitionRouteEngineHarness(IExactAcquisitionRouteExecutionStateStore? outfitterStateStore = null)
     {
         var directory = Path.Combine(Path.GetTempPath(), "MarketMafiosoRouteEngineTests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
@@ -274,10 +274,10 @@ internal sealed class MarketAcquisitionRouteEngineHarness : IDisposable
                 () => { }),
             new ImmediateRouteCallbackDispatcher(),
             Clock,
-            outfitterStateStore ?? new ConfigurationOutfitterRouteExecutionStateStore(new Configuration(), () => { }));
+            outfitterStateStore ?? new ConfigurationExactAcquisitionRouteExecutionStateStore(new Configuration(), () => { }));
     }
 
-    public static MarketAcquisitionRouteEngineHarness Create(IOutfitterRouteExecutionStateStore? outfitterStateStore = null) =>
+    public static MarketAcquisitionRouteEngineHarness Create(IExactAcquisitionRouteExecutionStateStore? outfitterStateStore = null) =>
         new(outfitterStateStore);
 
     public void Dispose() => Engine.Dispose();
