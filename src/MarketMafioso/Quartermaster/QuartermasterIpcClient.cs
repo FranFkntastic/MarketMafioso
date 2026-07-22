@@ -287,7 +287,34 @@ public sealed class QuartermasterIpcClient : IDisposable
         }
         if (!TryGetCapabilities(out var capabilities, out error))
             return false;
+        return TrySubmitShortagesCore(request, capabilities!, out acknowledgement, out error);
+    }
 
+    internal bool TrySubmitShortages(
+        QuartermasterShortageRequest request,
+        QuartermasterCapabilities capabilities,
+        out QuartermasterAcknowledgement? acknowledgement,
+        out string error)
+    {
+        acknowledgement = null;
+        error = string.Empty;
+        if (!ValidateRequest(request, out error))
+        {
+            SetStatus(error);
+            return false;
+        }
+        ArgumentNullException.ThrowIfNull(capabilities);
+        return TrySubmitShortagesCore(request, capabilities, out acknowledgement, out error);
+    }
+
+    private bool TrySubmitShortagesCore(
+        QuartermasterShortageRequest request,
+        QuartermasterCapabilities capabilities,
+        out QuartermasterAcknowledgement? acknowledgement,
+        out string error)
+    {
+        acknowledgement = null;
+        error = string.Empty;
         bool available;
         try
         {
@@ -300,10 +327,9 @@ public sealed class QuartermasterIpcClient : IDisposable
         if (!available)
             return FailUnavailable("Quartermaster does not expose shortage submission v1.", out error);
 
-        var currentCapabilities = capabilities!;
         var executeImmediately = request.ExecuteImmediately &&
-                                 currentCapabilities.Capabilities.Contains(AutomaticRetrievalCapability, StringComparer.Ordinal);
-        var requestJson = JsonSerializer.Serialize(ToWire(request, currentCapabilities.ProviderInstanceId, executeImmediately), JsonOptions);
+                                 capabilities.Capabilities.Contains(AutomaticRetrievalCapability, StringComparer.Ordinal);
+        var requestJson = JsonSerializer.Serialize(ToWire(request, capabilities.ProviderInstanceId, executeImmediately), JsonOptions);
         string acknowledgementJson;
         try
         {
@@ -322,7 +348,7 @@ public sealed class QuartermasterIpcClient : IDisposable
             return false;
         }
         if (!string.IsNullOrWhiteSpace(acknowledgement!.ProviderInstanceId) &&
-            !string.Equals(acknowledgement.ProviderInstanceId, currentCapabilities.ProviderInstanceId, StringComparison.Ordinal))
+            !string.Equals(acknowledgement.ProviderInstanceId, capabilities.ProviderInstanceId, StringComparison.Ordinal))
         {
             error = "Quartermaster provider changed during shortage submission; acceptance is unknown.";
             SetStatus(error);

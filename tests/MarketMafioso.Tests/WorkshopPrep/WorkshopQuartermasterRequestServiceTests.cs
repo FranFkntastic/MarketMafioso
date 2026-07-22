@@ -85,15 +85,25 @@ public sealed class WorkshopQuartermasterRequestServiceTests
     [Fact]
     public void Submit_WhenAutomaticRetrievalBecomesAvailable_ReplacesReviewOnlyIdentity()
     {
+        var reviewCapabilities = JsonSerializer.Serialize(new
+        {
+            schema = QuartermasterIpcClient.CapabilitiesSchema,
+            providerInstanceId = "provider-a",
+            revision = 7,
+        });
+        var automaticCapabilities = JsonSerializer.Serialize(new
+        {
+            schema = QuartermasterIpcClient.CapabilitiesSchema,
+            providerInstanceId = "provider-a",
+            revision = 8,
+            capabilities = new[] { QuartermasterIpcClient.AutomaticRetrievalCapability },
+        });
         var adapter = new FakeQuartermasterIpcAdapter
         {
-            CapabilitiesJson = JsonSerializer.Serialize(new
-            {
-                schema = QuartermasterIpcClient.CapabilitiesSchema,
-                providerInstanceId = "provider-a",
-                revision = 7,
-            }),
+            CapabilitiesJson = automaticCapabilities,
         };
+        adapter.CapabilitiesResponses.Enqueue(reviewCapabilities);
+        adapter.CapabilitiesResponses.Enqueue(automaticCapabilities);
         adapter.SubmitResponse = requestJson =>
         {
             using var request = JsonDocument.Parse(requestJson);
@@ -120,13 +130,6 @@ public sealed class WorkshopQuartermasterRequestServiceTests
         Assert.False(service.LastAcknowledgement!.ExecuteImmediately);
         Assert.Equal("Quartermaster accepted shortages for review; automatic retrieval is unavailable.", service.LastStatus);
 
-        adapter.CapabilitiesJson = JsonSerializer.Serialize(new
-        {
-            schema = QuartermasterIpcClient.CapabilitiesSchema,
-            providerInstanceId = "provider-a",
-            revision = 8,
-            capabilities = new[] { QuartermasterIpcClient.AutomaticRetrievalCapability },
-        });
         Assert.True(service.Submit(owner, availability));
 
         using var automatic = JsonDocument.Parse(adapter.SubmittedRequests[1]);
@@ -134,6 +137,7 @@ public sealed class WorkshopQuartermasterRequestServiceTests
         Assert.NotEqual(submitted.RootElement.GetProperty("operationId").GetString(), automatic.RootElement.GetProperty("operationId").GetString());
         Assert.True(automatic.RootElement.GetProperty("executeImmediately").GetBoolean());
         Assert.True(service.LastAcknowledgement!.ExecuteImmediately);
+        Assert.Equal(2, adapter.CapabilitiesCalls);
     }
 
     [Fact]

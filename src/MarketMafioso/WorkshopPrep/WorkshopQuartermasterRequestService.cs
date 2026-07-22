@@ -68,8 +68,12 @@ public sealed class WorkshopQuartermasterRequestService : IDisposable
         }
 
         var key = ScopeKey(ownerScope);
-        var automaticRetrievalAvailable = client.TryGetCapabilities(out var capabilities, out _) &&
-                                          capabilities!.Capabilities.Contains(QuartermasterIpcClient.AutomaticRetrievalCapability, StringComparer.Ordinal);
+        if (!client.TryGetCapabilities(out var capabilities, out var capabilitiesError))
+        {
+            LastStatus = capabilitiesError;
+            return false;
+        }
+        var automaticRetrievalAvailable = capabilities!.Capabilities.Contains(QuartermasterIpcClient.AutomaticRetrievalCapability, StringComparer.Ordinal);
         var signature = BuildSignature(ownerScope, items, automaticRetrievalAvailable);
         var reviewSignature = BuildSignature(ownerScope, items, false);
         var legacySignature = BuildSignature(ownerScope, items, null);
@@ -140,14 +144,15 @@ public sealed class WorkshopQuartermasterRequestService : IDisposable
                 ownerScope.HomeWorldName),
             automaticRetrievalAvailable,
             items);
-        if (!client.TrySubmitShortages(request, out var acknowledgement, out var error))
+        if (!client.TrySubmitShortages(request, capabilities, out var acknowledgement, out var error))
         {
             LastStatus = error;
             return false;
         }
 
         var acceptedState = Clone(persisted!);
-        acceptedState.Signature = BuildSignature(ownerScope, items, acknowledgement!.ExecuteImmediately);
+        if (acknowledgement!.Accepted)
+            acceptedState.Signature = BuildSignature(ownerScope, items, acknowledgement.ExecuteImmediately);
         acceptedState.OperationId = acknowledgement!.OperationId;
         acceptedState.ProviderInstanceId = acknowledgement.ProviderInstanceId ?? persisted.ProviderInstanceId;
         acceptedState.Revision = replayingPersistedRequest
