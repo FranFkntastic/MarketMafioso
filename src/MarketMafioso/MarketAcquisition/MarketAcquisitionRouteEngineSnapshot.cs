@@ -27,6 +27,7 @@ public sealed record MarketAcquisitionRouteEngineSnapshot
     public MarketAcquisitionRouteOperationSnapshot? LastOperation { get; init; }
     public MarketBoardPurchaseSession? PurchaseSession { get; init; }
     public MarketBoardPurchaseResult? LastPurchaseResult { get; init; }
+    public MarketPurchaseEvidenceState? PurchaseEvidenceState { get; init; }
     public uint ActiveWorldPurchasedQuantity { get; init; }
     public uint ActiveWorldSpentGil { get; init; }
     public uint ActiveLinePurchasedQuantity { get; init; }

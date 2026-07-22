@@ -39,7 +39,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     private MarketAcquisitionApproachLease? activeApproachLease;
     private bool travelInterruptedByCleanup;
     private long operationSequence;
-    private readonly IOutfitterRouteExecutionStateStore? outfitterStateStore;
+    private readonly IOutfitterRouteExecutionStateStore outfitterStateStore;
     private OutfitterRouteAuthoritySession? outfitterAuthority;
     private OutfitterDryRunScenario outfitterDryRunScenario;
     private bool outfitterDryRunFaultEligible;
@@ -58,8 +58,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         MarketAcquisitionClaimLifecycleController claimLifecycle,
         IMarketAcquisitionRouteCallbackDispatcher callbackDispatcher,
         IMarketAcquisitionRouteClock clock,
-        IMarketAcquisitionReportOutbox? reportOutbox = null,
-        IOutfitterRouteExecutionStateStore? outfitterStateStore = null)
+        IOutfitterRouteExecutionStateStore outfitterStateStore,
+        IMarketAcquisitionReportOutbox? reportOutbox = null)
     {
         this.runner = runner ?? throw new ArgumentNullException(nameof(runner));
         this.context = context ?? throw new ArgumentNullException(nameof(context));
@@ -74,7 +74,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             callbackDispatcher ?? throw new ArgumentNullException(nameof(callbackDispatcher)),
             reportOutbox);
         this.clock = clock ?? throw new ArgumentNullException(nameof(clock));
-        this.outfitterStateStore = outfitterStateStore;
+        this.outfitterStateStore = outfitterStateStore ?? throw new ArgumentNullException(nameof(outfitterStateStore));
     }
 
     public bool IsRouteActive =>
@@ -132,6 +132,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         LastOperation = operationExecutor.LastSnapshot,
         PurchaseSession = purchaseAutomation.PurchaseSession,
         LastPurchaseResult = purchaseAutomation.LastPurchaseResult,
+        PurchaseEvidenceState = purchase.PurchaseEvidenceState,
         ActiveWorldPurchasedQuantity = state.ActiveWorldPurchasedQuantity,
         ActiveWorldSpentGil = state.ActiveWorldSpentGil,
         ActiveLinePurchasedQuantity = state.ActiveLinePurchasedQuantity,
@@ -178,8 +179,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
                 return UpdateStatus(MarketAcquisitionRouteActionResult.Fail("Squire Route start requires its finalized Workbench document."));
             try
             {
-                IOutfitterRouteExecutionStateStore? authorityStore = outfitterStateStore;
-                if (executionMode == MarketAcquisitionExecutionMode.DryRun && outfitterStateStore is not null)
+                IOutfitterRouteExecutionStateStore authorityStore = outfitterStateStore;
+                if (executionMode == MarketAcquisitionExecutionMode.DryRun)
                 {
                     routePlan = OutfitterDryRunExecutionStateRestorer.RestoreRemainingPlan(
                         outfitterContract,
@@ -487,6 +488,53 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
     public MarketAcquisitionRouteActionResult FinalizeInputCaptureLog() =>
         runner.FinalizeInputCaptureLog();
+
+    public MarketPurchaseTerminalResolutionResult ReconcileTerminalPurchaseEvidence(
+        bool purchaseOccurred,
+        string resolution)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(resolution);
+        if (purchase.PurchaseEvidenceState is not { } terminal || terminal is PendingMarketPurchase)
+            return new(MarketPurchaseTerminalResolutionStatus.NoTerminalEvidence, "No terminal purchase evidence requires reconciliation.");
+        if (terminal is ConfirmedMarketPurchase && !purchaseOccurred)
+            return new(MarketPurchaseTerminalResolutionStatus.InvalidDisposition,
+                "Confirmed server purchase evidence must be applied; it cannot be discarded as a failed purchase.");
+
+        if (purchaseOccurred)
+        {
+            if (outfitterAuthority is null || runner.ActivePlan is null)
+                return new(MarketPurchaseTerminalResolutionStatus.InvalidDisposition,
+                    "Applying a purchase requires the matching finalized Squire authority and plan to be loaded.");
+            try
+            {
+                var intent = terminal.Intent;
+                outfitterAuthority.RecordPurchase(intent.LineId, new MarketBoardPurchaseCandidate
+                {
+                    ItemId = intent.ItemId,
+                    WorldName = intent.WorldName,
+                    ListingId = intent.ListingId,
+                    RetainerId = intent.RetainerId ?? string.Empty,
+                    UnitPrice = intent.UnitPrice,
+                    Quantity = intent.Quantity,
+                    IsHq = intent.IsHighQuality,
+                }, runner.ActivePlan);
+            }
+            catch (Exception exception)
+            {
+                return new(MarketPurchaseTerminalResolutionStatus.InvalidDisposition,
+                    $"Purchase reconciliation could not persist exact sunk authority: {exception.Message}");
+            }
+        }
+
+        var disposition = terminal is ConfirmedMarketPurchase && purchaseOccurred
+            ? MarketPurchaseTerminalDisposition.AppliedExactlyOnce
+            : MarketPurchaseTerminalDisposition.ManuallyReconciled;
+        return purchase.ResolvePurchaseEvidence(
+            terminal.Intent.IntentId,
+            disposition,
+            clock.UtcNow,
+            resolution.Trim());
+    }
 
     public MarketAcquisitionRouteEngineTickResult TickRoute(bool isRequestBusy)
     {
@@ -1339,14 +1387,20 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         if (!purchaseAutomation.IsMonitorDue(now))
             return MarketAcquisitionRouteEngineTickResult.Idle("Waiting for purchase monitor tick.");
 
+        if (outfitterAuthority is not null && previousSession.Phase == MarketBoardPurchaseSessionPhase.WaitingForListingRemoval)
+            return MonitorOutfitterServerPurchaseEvidence(previousSession, now);
+
         try
         {
             var tick = purchaseAutomation.MonitorPurchase(
                 now,
                 MarketBoardPurchaseMonitorInterval,
                 MarketBoardPurchaseListingRemovalWatchdog,
-                candidate => purchase.TryConfirmPendingPurchase(candidate),
-                () => marketBoard.ReadCurrentListings(context.GetCurrentWorldName()));
+                candidate => outfitterAuthority is null
+                    ? purchase.TryConfirmPendingPurchase(candidate)
+                    : purchase.TryConfirmPendingPurchase(candidate, CreatePurchaseIntentContext()),
+                () => marketBoard.ReadCurrentListings(context.GetCurrentWorldName()),
+                monitorListingRemoval: outfitterAuthority is null);
             if (!tick.DidWork)
                 return MarketAcquisitionRouteEngineTickResult.Idle("Purchase monitor had no due work.");
 
@@ -1361,6 +1415,114 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             ReportRouteProgress();
             return MarketAcquisitionRouteEngineTickResult.Worked(state.AcquisitionStatus, purchaseAutomation.NextMonitorUtc);
         }
+    }
+
+    private MarketAcquisitionRouteEngineTickResult MonitorOutfitterServerPurchaseEvidence(
+        MarketBoardPurchaseSession session,
+        DateTimeOffset nowUtc)
+    {
+        if (!purchase.HasServerPurchaseEvidence)
+        {
+            return StopForTerminalPurchaseEvidence(
+                "Server purchase evidence became unavailable after confirmation submission; purchase outcome is indeterminate.");
+        }
+
+        var advance = purchase.AdvancePurchaseEvidence(nowUtc);
+        if (advance.Status == MarketPurchaseEvidenceAdvanceStatus.PersistenceFailed)
+            return StopForTerminalPurchaseEvidence(advance.Message);
+        var evidenceState = advance.State ?? purchase.PurchaseEvidenceState;
+        switch (evidenceState)
+        {
+            case PendingMarketPurchase:
+                purchaseAutomation.ScheduleNextMonitor(nowUtc, MarketBoardPurchaseMonitorInterval);
+                state.AcquisitionStatus = "Purchase: waiting for durable server confirmation evidence.";
+                return MarketAcquisitionRouteEngineTickResult.Worked(state.AcquisitionStatus, purchaseAutomation.NextMonitorUtc);
+            case ConfirmedMarketPurchase confirmed:
+                return ApplyConfirmedOutfitterPurchase(session, confirmed, nowUtc);
+            case TimedOutIndeterminateMarketPurchase timedOut:
+                return StopForTerminalPurchaseEvidence(
+                    $"Purchase evidence timed out for intent {timedOut.Intent.IntentId}; reconcile outcome before any retry.");
+            case ConflictingMarketPurchasePacket conflicting:
+                return StopForTerminalPurchaseEvidence(
+                    $"A conflicting purchase packet followed intent {conflicting.Intent.IntentId}; reconcile outcome before any retry.");
+            default:
+                return StopForTerminalPurchaseEvidence(
+                    "Durable purchase intent disappeared before terminal server evidence was applied.");
+        }
+    }
+
+    private MarketAcquisitionRouteEngineTickResult ApplyConfirmedOutfitterPurchase(
+        MarketBoardPurchaseSession session,
+        ConfirmedMarketPurchase confirmed,
+        DateTimeOffset nowUtc)
+    {
+        var candidate = session.Candidate;
+        var intent = confirmed.Intent;
+        var lineId = GetActiveRouteLineId(claimedRequest!);
+        if (!intent.RouteId.Equals(claimedRequest!.Id, StringComparison.Ordinal) ||
+            !intent.RouteRunId.Equals(state.ProgressNonce, StringComparison.Ordinal) ||
+            !intent.AttemptId.Equals(state.ProgressNonce, StringComparison.Ordinal) ||
+            !intent.LineId.Equals(lineId, StringComparison.Ordinal) ||
+            intent.ItemId != candidate.ItemId || intent.IsHighQuality != candidate.IsHq ||
+            intent.Quantity != candidate.Quantity || intent.ListingId != candidate.ListingId ||
+            intent.RetainerId != candidate.RetainerId || intent.UnitPrice != candidate.UnitPrice ||
+            intent.TotalGil != candidate.TotalGil ||
+            !intent.WorldName.Equals(candidate.WorldName, StringComparison.OrdinalIgnoreCase))
+        {
+            return StopForTerminalPurchaseEvidence(
+                "Confirmed server evidence does not match the active route, line, world, or exact listing intent.");
+        }
+
+        try
+        {
+            var activePlan = runner.ActivePlan ?? throw new InvalidOperationException("Active purchase plan is unavailable.");
+            outfitterAuthority!.RecordPurchase(lineId, candidate, activePlan);
+            var resolved = purchase.ResolvePurchaseEvidence(
+                intent.IntentId,
+                MarketPurchaseTerminalDisposition.AppliedExactlyOnce,
+                nowUtc,
+                $"Applied exact Squire sunk receipt for listing {candidate.ListingId}.");
+            if (!resolved.IsResolved)
+                return StopForTerminalPurchaseEvidence(resolved.Message);
+
+            state.ActiveWorldPurchasedQuantity = checked(state.ActiveWorldPurchasedQuantity + candidate.Quantity);
+            state.ActiveWorldSpentGil = checked(state.ActiveWorldSpentGil + candidate.TotalGil);
+            state.ActiveLinePurchasedQuantity = checked(state.ActiveLinePurchasedQuantity + candidate.Quantity);
+            state.ActiveLineSpentGil = checked(state.ActiveLineSpentGil + candidate.TotalGil);
+            state.AcquisitionStatus = "Purchase: confirmed by server packet and persisted exactly once.";
+            ReportConfirmedPurchase(candidate, state.ActiveLinePurchasedQuantity, state.ActiveLineSpentGil);
+            ClearMarketBoardAutomationState();
+            BeginNextWorldPurchase();
+            return MarketAcquisitionRouteEngineTickResult.Worked(state.AcquisitionStatus, state.NextRouteMonitorUtc);
+        }
+        catch (Exception exception)
+        {
+            return StopForTerminalPurchaseEvidence(
+                $"Confirmed purchase could not be applied safely: {exception.Message}");
+        }
+    }
+
+    private MarketAcquisitionRouteEngineTickResult StopForTerminalPurchaseEvidence(string message)
+    {
+        ClearMarketBoardAutomationState();
+        outfitterAuthority?.Pause(message);
+        state.AcquisitionStatus = message;
+        UpdateStatus(FailRoute(message));
+        ReportRouteProgress();
+        return MarketAcquisitionRouteEngineTickResult.Worked(message, state.NextRouteMonitorUtc);
+    }
+
+    private MarketPurchaseIntentContext CreatePurchaseIntentContext()
+    {
+        var claimed = claimedRequest ?? throw new InvalidOperationException("No claimed route can arm purchase evidence.");
+        return new()
+        {
+            RouteId = claimed.Id,
+            RouteRunId = state.ProgressNonce,
+            AttemptId = state.ProgressNonce,
+            LineId = GetActiveRouteLineId(claimed),
+            EvidenceTimeout = MarketBoardPurchaseListingRemovalWatchdog,
+        };
     }
 
     private void ApplyPurchaseMonitorTick(MarketBoardPurchaseMonitorTick tick, MarketBoardPurchaseSession previousSession)
@@ -1387,7 +1549,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             state.ActiveWorldSpentGil = checked(state.ActiveWorldSpentGil + candidate.TotalGil);
             state.ActiveLinePurchasedQuantity = checked(state.ActiveLinePurchasedQuantity + candidate.Quantity);
             state.ActiveLineSpentGil = checked(state.ActiveLineSpentGil + candidate.TotalGil);
-            outfitterAuthority?.RecordPurchase(GetActiveRouteLineId(claimedRequest!), candidate);
+            outfitterAuthority?.RecordPurchase(GetActiveRouteLineId(claimedRequest!), candidate, runner.ActivePlan);
             ReportConfirmedPurchase(candidate, state.ActiveLinePurchasedQuantity, state.ActiveLineSpentGil);
             ClearMarketBoardAutomationState();
             if (state.MarketBoardReadResult?.Status is "MarketBoardNotOpen" or "NoListings")
@@ -1397,7 +1559,9 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         }
         else if (!session.IsActive)
         {
-            UpdateStatus(FailRoute($"World purchase batch stopped: {session.Message}"));
+            var message = $"World purchase batch stopped: {session.Message}";
+            outfitterAuthority?.Pause(message);
+            UpdateStatus(FailRoute(message));
             ReportRouteProgress();
         }
     }

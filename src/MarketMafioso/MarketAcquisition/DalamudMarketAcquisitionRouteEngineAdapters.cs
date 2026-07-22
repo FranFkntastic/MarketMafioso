@@ -125,6 +125,9 @@ public sealed class DalamudMarketAcquisitionPurchaseIo : IMarketAcquisitionPurch
 {
     private readonly MarketBoardPurchaseExecutor executor;
     private readonly DalamudMarketBoardPurchaseAdapter adapter;
+    private readonly MarketPurchaseEvidenceCoordinator? evidence;
+    private readonly IPlayerState? playerState;
+    private long intentSequence;
 
     public DalamudMarketAcquisitionPurchaseIo(MarketBoardPurchaseExecutor executor, DalamudMarketBoardPurchaseAdapter adapter)
     {
@@ -132,11 +135,84 @@ public sealed class DalamudMarketAcquisitionPurchaseIo : IMarketAcquisitionPurch
         this.adapter = adapter;
     }
 
+    public DalamudMarketAcquisitionPurchaseIo(
+        MarketBoardPurchaseExecutor executor,
+        DalamudMarketBoardPurchaseAdapter adapter,
+        MarketPurchaseEvidenceCoordinator evidence,
+        IPlayerState playerState)
+        : this(executor, adapter)
+    {
+        this.evidence = evidence ?? throw new ArgumentNullException(nameof(evidence));
+        this.playerState = playerState ?? throw new ArgumentNullException(nameof(playerState));
+    }
+
+    public bool HasServerPurchaseEvidence => evidence?.IsAvailable == true;
+    public MarketPurchaseEvidenceState? PurchaseEvidenceState => evidence?.State;
+
     public MarketBoardPurchaseResult ExecuteFirstCandidate(MarketAcquisitionLiveCandidatePlan candidatePlan, MarketBoardReadResult freshRead) =>
         executor.ExecuteFirstCandidate(candidatePlan, freshRead);
 
     public MarketBoardPurchaseResult TryConfirmPendingPurchase(MarketBoardPurchaseCandidate candidate) =>
         adapter.TryConfirmPendingPurchase(candidate);
+
+    public MarketBoardPurchaseResult TryConfirmPendingPurchase(
+        MarketBoardPurchaseCandidate candidate,
+        MarketPurchaseIntentContext context)
+    {
+        ArgumentNullException.ThrowIfNull(candidate);
+        ArgumentNullException.ThrowIfNull(context);
+        return adapter.TryConfirmPendingPurchase(candidate, submittedAtUtc =>
+        {
+            if (evidence is null || playerState is null || !evidence.IsAvailable)
+                return "Server purchase evidence is unavailable; confirmation was not submitted.";
+            if (!playerState.CurrentWorld.IsValid || playerState.CurrentWorld.RowId == 0 ||
+                !playerState.CurrentWorld.Value.Name.ToString().Equals(candidate.WorldName, StringComparison.OrdinalIgnoreCase))
+                return "Current world no longer matches the exact purchase intent; confirmation was not submitted.";
+            if (string.IsNullOrWhiteSpace(context.RouteId) || string.IsNullOrWhiteSpace(context.RouteRunId) ||
+                string.IsNullOrWhiteSpace(context.AttemptId) || string.IsNullOrWhiteSpace(context.LineId) ||
+                context.EvidenceTimeout <= TimeSpan.Zero)
+                return "Purchase evidence context is incomplete; confirmation was not submitted.";
+
+            var sequence = Interlocked.Increment(ref intentSequence);
+            var arm = evidence.TryArm(new MarketPurchaseIntentDraft
+            {
+                IntentId = $"{context.RouteRunId}:{context.LineId}:{sequence}",
+                RouteId = context.RouteId,
+                RouteRunId = context.RouteRunId,
+                AttemptId = context.AttemptId,
+                LineId = context.LineId,
+                ItemId = candidate.ItemId,
+                IsHighQuality = candidate.IsHq,
+                Quantity = candidate.Quantity,
+                ListingId = candidate.ListingId,
+                RetainerId = candidate.RetainerId,
+                UnitPrice = candidate.UnitPrice,
+                TotalGil = candidate.TotalGil,
+                WorldId = playerState.CurrentWorld.RowId,
+                WorldName = candidate.WorldName,
+                ArmedAtUtc = submittedAtUtc,
+                DeadlineUtc = submittedAtUtc.Add(context.EvidenceTimeout),
+            });
+            if (!arm.IsArmed || arm.Intent is null)
+                return $"Purchase confirmation was blocked: {arm.Message}";
+            var submitted = evidence.MarkConfirmationSubmitted(arm.Intent.IntentId, submittedAtUtc);
+            return submitted.IsRecorded
+                ? null
+                : $"Purchase confirmation was blocked after intent arming: {submitted.Message}";
+        });
+    }
+
+    public MarketPurchaseEvidenceAdvanceResult AdvancePurchaseEvidence(DateTimeOffset nowUtc) =>
+        evidence?.AdvanceOnFrameworkThread(nowUtc) ??
+        new(MarketPurchaseEvidenceAdvanceStatus.NoChange, 0, null, "Server purchase evidence is unavailable.");
+
+    public MarketPurchaseTerminalResolutionResult ResolvePurchaseEvidence(
+        string intentId,
+        MarketPurchaseTerminalDisposition disposition,
+        DateTimeOffset resolvedAtUtc,
+        string resolution) =>
+        evidence?.ResolveTerminal(intentId, disposition, resolvedAtUtc, resolution) ??
+        new(MarketPurchaseTerminalResolutionStatus.NoTerminalEvidence, "Server purchase evidence is unavailable.");
 }
 
 public sealed class MarketAcquisitionRouteRequestReporter : IMarketAcquisitionRouteReporter

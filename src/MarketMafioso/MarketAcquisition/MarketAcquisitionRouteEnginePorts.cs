@@ -108,11 +108,29 @@ public sealed record MarketAcquisitionApproachCleanupResult
 
 public interface IMarketAcquisitionPurchaseIo
 {
+    bool HasServerPurchaseEvidence => false;
+    MarketPurchaseEvidenceState? PurchaseEvidenceState => null;
+
     MarketBoardPurchaseResult ExecuteFirstCandidate(
         MarketAcquisitionLiveCandidatePlan candidatePlan,
         MarketBoardReadResult freshRead);
 
     MarketBoardPurchaseResult TryConfirmPendingPurchase(MarketBoardPurchaseCandidate candidate);
+
+    MarketBoardPurchaseResult TryConfirmPendingPurchase(
+        MarketBoardPurchaseCandidate candidate,
+        MarketPurchaseIntentContext context) =>
+        TryConfirmPendingPurchase(candidate);
+
+    MarketPurchaseEvidenceAdvanceResult AdvancePurchaseEvidence(DateTimeOffset nowUtc) =>
+        new(MarketPurchaseEvidenceAdvanceStatus.NoChange, 0, null, "Server purchase evidence is unavailable.");
+
+    MarketPurchaseTerminalResolutionResult ResolvePurchaseEvidence(
+        string intentId,
+        MarketPurchaseTerminalDisposition disposition,
+        DateTimeOffset resolvedAtUtc,
+        string resolution) =>
+        new(MarketPurchaseTerminalResolutionStatus.NoTerminalEvidence, "Server purchase evidence is unavailable.");
 }
 
 public interface IMarketAcquisitionRouteReporter

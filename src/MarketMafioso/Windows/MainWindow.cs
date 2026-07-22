@@ -49,6 +49,7 @@ public class MainWindow : Window, IDisposable
     private readonly MarketAcquisitionRequestWorkspace acquisitionWorkspace;
     private readonly MarketBoardApproachService marketBoardApproachService;
     private readonly MarketAcquisitionRouteEngine routeEngine;
+    private readonly DalamudMarketPurchasePacketObserver marketPurchasePacketObserver;
     private readonly ConfigurationOutfitterRouteExecutionStateStore outfitterRouteStateStore;
     private readonly string marketAcquisitionRouteDiagnosticsDirectory;
     private readonly SquireTabPanel squireTab;
@@ -164,6 +165,12 @@ public class MainWindow : Window, IDisposable
         var marketBoardInputCaptureReader = new MarketBoardInputCaptureReader(Plugin.GameGui);
         var marketBoardPurchaseAdapter = new DalamudMarketBoardPurchaseAdapter(Plugin.GameGui, log);
         var marketBoardPurchaseExecutor = new MarketBoardPurchaseExecutor(marketBoardPurchaseAdapter);
+        marketPurchasePacketObserver = new(Plugin.GameInteropProvider, log);
+        var marketPurchaseEvidence = new MarketPurchaseEvidenceCoordinator(
+            new MarketPurchaseEvidenceFileStore(Path.Combine(
+                Plugin.PluginInterface.GetPluginConfigDirectory(),
+                "market-purchase-evidence.json")),
+            marketPurchasePacketObserver.Queue);
         this.marketBoardApproachService = marketBoardApproachService;
         this.marketAcquisitionRouteDiagnosticsDirectory = marketAcquisitionRouteDiagnosticsDirectory;
         var marketAcquisitionRouteRunner = new MarketAcquisitionRouteRunner(
@@ -180,17 +187,21 @@ public class MainWindow : Window, IDisposable
                 marketBoardItemSearchDriver,
                 marketBoardListingReader,
                 marketBoardInputCaptureReader),
-            new DalamudMarketAcquisitionPurchaseIo(marketBoardPurchaseExecutor, marketBoardPurchaseAdapter),
+            new DalamudMarketAcquisitionPurchaseIo(
+                marketBoardPurchaseExecutor,
+                marketBoardPurchaseAdapter,
+                marketPurchaseEvidence,
+                playerState),
             new MarketAcquisitionRouteRequestReporter(config, acquisitionClient),
             new MarketAcquisitionWorldVisitEvidenceRecorder(config, marketAcquisitionWorldVisitCatalog),
             acquisitionWorkspace.CreateClaimLifecycleController(
                 () => marketAcquisitionRouteRunner.StatusMessage),
             new DalamudMarketAcquisitionRouteCallbackDispatcher(),
             new SystemMarketAcquisitionRouteClock(),
+            outfitterRouteStateStore,
             new FileMarketAcquisitionReportOutbox(Path.Combine(
                 Plugin.PluginInterface.GetPluginConfigDirectory(),
-                "market-acquisition-report-outbox.json")),
-            outfitterRouteStateStore);
+                "market-acquisition-report-outbox.json")));
 
         SizeConstraints = new WindowSizeConstraints
         {
@@ -1782,6 +1793,7 @@ public class MainWindow : Window, IDisposable
         uiStateCapture.Dispose();
         acquisitionWorkspace.Dispose();
         routeEngine.Dispose();
+        marketPurchasePacketObserver.Dispose();
         acquisitionHttpClient.Dispose();
         craftQuoteHttpClient.Dispose();
     }

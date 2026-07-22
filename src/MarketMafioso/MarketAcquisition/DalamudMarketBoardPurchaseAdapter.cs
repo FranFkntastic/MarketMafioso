@@ -182,7 +182,9 @@ public sealed class DalamudMarketBoardPurchaseAdapter : IMarketBoardPurchaseAdap
         };
     }
 
-    public unsafe MarketBoardPurchaseResult TryConfirmPendingPurchase(MarketBoardPurchaseCandidate candidate)
+    public unsafe MarketBoardPurchaseResult TryConfirmPendingPurchase(
+        MarketBoardPurchaseCandidate candidate,
+        Func<DateTimeOffset, string?>? authorizeBeforeConfirmation = null)
     {
         ArgumentNullException.ThrowIfNull(candidate);
 
@@ -206,6 +208,20 @@ public sealed class DalamudMarketBoardPurchaseAdapter : IMarketBoardPurchaseAdap
             return Fail(
                 "UnexpectedConfirmation",
                 $"A SelectYesno prompt appeared, but it did not look like a market-board purchase prompt: {text}",
+                candidate) with
+            {
+                ConfirmationPromptText = text,
+                ConfirmationAddonName = SelectYesNoAddon,
+            };
+        }
+
+        var submittedAtUtc = DateTimeOffset.UtcNow;
+        var authorizationFailure = authorizeBeforeConfirmation?.Invoke(submittedAtUtc);
+        if (!string.IsNullOrWhiteSpace(authorizationFailure))
+        {
+            return Fail(
+                "PurchaseEvidenceBlocked",
+                authorizationFailure,
                 candidate) with
             {
                 ConfirmationPromptText = text,

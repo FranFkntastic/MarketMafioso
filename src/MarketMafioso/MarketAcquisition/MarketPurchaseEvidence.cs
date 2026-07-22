@@ -143,6 +143,15 @@ public record MarketPurchaseIntentDraft
     public required DateTimeOffset DeadlineUtc { get; init; }
 }
 
+public sealed record MarketPurchaseIntentContext
+{
+    public required string RouteId { get; init; }
+    public required string RouteRunId { get; init; }
+    public required string AttemptId { get; init; }
+    public required string LineId { get; init; }
+    public required TimeSpan EvidenceTimeout { get; init; }
+}
+
 public sealed record MarketPurchaseIntent : MarketPurchaseIntentDraft
 {
     public required MarketPurchasePacketPosition PacketFloor { get; init; }

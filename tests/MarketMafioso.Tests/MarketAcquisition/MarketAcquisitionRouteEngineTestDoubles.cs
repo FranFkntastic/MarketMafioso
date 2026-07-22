@@ -110,8 +110,13 @@ internal sealed class FakePurchaseIo : IMarketAcquisitionPurchaseIo
 {
     public Queue<MarketBoardPurchaseResult> PurchaseResults { get; } = [];
     public Queue<MarketBoardPurchaseResult> ConfirmationResults { get; } = [];
+    public Queue<MarketPurchaseEvidenceAdvanceResult> EvidenceAdvanceResults { get; } = [];
     public int ExecuteCallCount { get; private set; }
     public int ConfirmCallCount { get; private set; }
+    public int ResolveEvidenceCallCount { get; private set; }
+    public bool HasServerPurchaseEvidence { get; set; }
+    public MarketPurchaseEvidenceState? PurchaseEvidenceState { get; set; }
+    public MarketPurchaseIntentContext? LastIntentContext { get; private set; }
     public MarketBoardPurchaseResult ExecuteFirstCandidate(MarketAcquisitionLiveCandidatePlan candidatePlan, MarketBoardReadResult freshRead)
     {
         ExecuteCallCount++;
@@ -121,6 +126,64 @@ internal sealed class FakePurchaseIo : IMarketAcquisitionPurchaseIo
     {
         ConfirmCallCount++;
         return ConfirmationResults.Count == 0 ? new() { Status = "ConfirmationPending", Candidate = candidate } : ConfirmationResults.Dequeue();
+    }
+
+    public MarketBoardPurchaseResult TryConfirmPendingPurchase(
+        MarketBoardPurchaseCandidate candidate,
+        MarketPurchaseIntentContext context)
+    {
+        LastIntentContext = context;
+        var result = TryConfirmPendingPurchase(candidate);
+        if (result.Status.Equals("ConfirmationSubmitted", StringComparison.OrdinalIgnoreCase))
+        {
+            var intent = new MarketPurchaseIntent
+            {
+                IntentId = $"{context.RouteRunId}:{context.LineId}:1",
+                RouteId = context.RouteId,
+                RouteRunId = context.RouteRunId,
+                AttemptId = context.AttemptId,
+                LineId = context.LineId,
+                ItemId = candidate.ItemId,
+                IsHighQuality = candidate.IsHq,
+                Quantity = candidate.Quantity,
+                ListingId = candidate.ListingId,
+                RetainerId = candidate.RetainerId,
+                UnitPrice = candidate.UnitPrice,
+                TotalGil = candidate.TotalGil,
+                WorldId = 1,
+                WorldName = candidate.WorldName,
+                ArmedAtUtc = DateTimeOffset.UnixEpoch,
+                DeadlineUtc = DateTimeOffset.MaxValue,
+                PacketFloor = new MarketPurchasePacketPosition { Epoch = "test/1", Sequence = 0 },
+            };
+            PurchaseEvidenceState = new PendingMarketPurchase(
+                intent,
+                PendingMarketPurchasePhase.ConfirmationSubmitted,
+                DateTimeOffset.UnixEpoch);
+        }
+        return result;
+    }
+
+    public MarketPurchaseEvidenceAdvanceResult AdvancePurchaseEvidence(DateTimeOffset nowUtc)
+    {
+        if (EvidenceAdvanceResults.Count == 0)
+            return new(MarketPurchaseEvidenceAdvanceStatus.NoChange, 0, PurchaseEvidenceState, "No test evidence change.");
+        var result = EvidenceAdvanceResults.Dequeue();
+        PurchaseEvidenceState = result.State;
+        return result;
+    }
+
+    public MarketPurchaseTerminalResolutionResult ResolvePurchaseEvidence(
+        string intentId,
+        MarketPurchaseTerminalDisposition disposition,
+        DateTimeOffset resolvedAtUtc,
+        string resolution)
+    {
+        ResolveEvidenceCallCount++;
+        if (PurchaseEvidenceState is null || !PurchaseEvidenceState.Intent.IntentId.Equals(intentId, StringComparison.Ordinal))
+            return new(MarketPurchaseTerminalResolutionStatus.IntentMismatch, "Test evidence intent mismatch.");
+        PurchaseEvidenceState = null;
+        return new(MarketPurchaseTerminalResolutionStatus.Resolved, "Test evidence resolved.");
     }
 }
 
@@ -211,7 +274,7 @@ internal sealed class MarketAcquisitionRouteEngineHarness : IDisposable
                 () => { }),
             new ImmediateRouteCallbackDispatcher(),
             Clock,
-            outfitterStateStore: outfitterStateStore);
+            outfitterStateStore ?? new ConfigurationOutfitterRouteExecutionStateStore(new Configuration(), () => { }));
     }
 
     public static MarketAcquisitionRouteEngineHarness Create(IOutfitterRouteExecutionStateStore? outfitterStateStore = null) =>

@@ -236,7 +236,10 @@ public sealed class OutfitterRouteAuthoritySession
         return OutfitterWorkbenchAuthorityValidation.Valid;
     }
 
-    public void RecordPurchase(string lineId, MarketBoardPurchaseCandidate candidate)
+    public void RecordPurchase(
+        string lineId,
+        MarketBoardPurchaseCandidate candidate,
+        MarketAcquisitionPlan? plan = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(lineId);
         ArgumentNullException.ThrowIfNull(candidate);
@@ -245,6 +248,40 @@ public sealed class OutfitterRouteAuthoritySession
         if (index < 0)
             return;
         var line = lines[index];
+        var existingReceipts = State.SunkPurchases ?? [];
+        OutfitterRouteSunkPurchase? receipt = null;
+        if (plan is not null)
+        {
+            if (string.IsNullOrWhiteSpace(plan.RequestId) || plan.PreparedAtUtc == default)
+                throw new InvalidOperationException("Confirmed purchase plan identity is incomplete.");
+            var draft = new OutfitterRouteSunkPurchase
+            {
+                SchemaVersion = OutfitterRouteSunkPurchase.CurrentSchemaVersion,
+                ReceiptId = string.Empty,
+                ContractId = contract.ContractId,
+                CanonicalIntentHash = contract.CanonicalIntentHash,
+                WorkbenchDocumentId = contract.WorkbenchDocumentId,
+                WorkbenchRevision = contract.WorkbenchRevision,
+                PlanRequestId = plan.RequestId,
+                PlanPreparedAtUtc = plan.PreparedAtUtc,
+                WorldName = candidate.WorldName,
+                LineId = lineId,
+                ItemId = candidate.ItemId,
+                Quality = candidate.IsHq ? EquipmentQuality.High : EquipmentQuality.Normal,
+                ListingId = candidate.ListingId,
+                RetainerId = candidate.RetainerId,
+                Quantity = candidate.Quantity,
+                UnitPriceGil = candidate.UnitPrice,
+                TotalGil = candidate.TotalGil,
+            };
+            receipt = draft with { ReceiptId = OutfitterDryRunExecutionStateRestorer.ComputeReceiptId(draft) };
+            if (existingReceipts.Any(value => value.ReceiptId == receipt.ReceiptId))
+                return;
+            if (existingReceipts.Any(value =>
+                    value.WorldName.Equals(receipt.WorldName, StringComparison.OrdinalIgnoreCase) &&
+                    value.ListingId == receipt.ListingId && value.RetainerId == receipt.RetainerId))
+                throw new InvalidOperationException("Confirmed listing already has a different persisted Squire receipt.");
+        }
         if (candidate.ItemId != line.ItemId || candidate.IsHq != (line.Quality == EquipmentQuality.High) ||
             candidate.UnitPrice > line.MaxUnitPriceGil ||
             candidate.Quantity > line.RequiredQuantity - line.PurchasedQuantity ||
@@ -264,6 +301,7 @@ public sealed class OutfitterRouteAuthoritySession
             TotalSpentGil = checked(State.TotalSpentGil + candidate.TotalGil),
             Message = $"Verified purchase recorded for {line.ItemName}; remaining need and cap reconciled.",
             UpdatedAtUtc = DateTimeOffset.UtcNow,
+            SunkPurchases = receipt is null ? existingReceipts : [.. existingReceipts, receipt],
         });
     }
 

@@ -72,7 +72,7 @@ public sealed class OutfitterRouteAuthorityTests
     {
         var fixture = Fixture();
         var session = Active(fixture);
-        session.RecordPurchase("line-1", Purchase(quantity: 1, unitPrice: 100, isHq: true));
+        session.RecordPurchase("line-1", Purchase(quantity: 1, unitPrice: 100, isHq: true), fixture.Plan);
 
         session.EvaluateRouteEnd(fixture.Plan);
         var remaining = session.CreateRecoveryClaim(fixture.Claim);
@@ -84,6 +84,12 @@ public sealed class OutfitterRouteAuthorityTests
         Assert.Equal(100u, line.GilCap);
         Assert.Equal(100u, line.MaxUnitPrice);
         Assert.Equal(1u, fixture.Store.State!.Lines[0].PurchasedQuantity);
+        var receipt = Assert.Single(fixture.Store.State.SunkPurchases);
+        Assert.Equal(OutfitterRouteSunkPurchase.CurrentSchemaVersion, receipt.SchemaVersion);
+        Assert.Equal(OutfitterDryRunExecutionStateRestorer.ComputeReceiptId(receipt), receipt.ReceiptId);
+        session.RecordPurchase("line-1", Purchase(quantity: 1, unitPrice: 100, isHq: true), fixture.Plan);
+        Assert.Equal(100ul, session.State.TotalSpentGil);
+        Assert.Single(session.State.SunkPurchases);
     }
 
     [Fact]
@@ -108,7 +114,7 @@ public sealed class OutfitterRouteAuthorityTests
     {
         var fixture = Fixture();
         var session = Active(fixture);
-        session.RecordPurchase("line-1", Purchase(1, 100, true));
+        session.RecordPurchase("line-1", Purchase(1, 100, true), fixture.Plan);
 
         Assert.Throws<InvalidOperationException>(() => OutfitterRouteAuthoritySession.Consume(
             fixture.Contract,
@@ -120,6 +126,7 @@ public sealed class OutfitterRouteAuthorityTests
         Assert.Equal(OutfitterRouteAuthorityPhase.Paused, fixture.Store.State!.Phase);
         Assert.Equal(1u, fixture.Store.State.Lines[0].PurchasedQuantity);
         Assert.Equal(100ul, fixture.Store.State.TotalSpentGil);
+        Assert.Single(fixture.Store.State.SunkPurchases);
     }
 
     [Fact]
@@ -169,7 +176,7 @@ public sealed class OutfitterRouteAuthorityTests
     {
         var fixture = Fixture();
         var session = Active(fixture);
-        session.RecordPurchase("line-1", Purchase(1, 100, true));
+        session.RecordPurchase("line-1", Purchase(1, 100, true), fixture.Plan);
         var config = new Configuration();
         var store = new ConfigurationOutfitterRouteExecutionStateStore(config, () => { });
 
@@ -180,6 +187,7 @@ public sealed class OutfitterRouteAuthorityTests
         Assert.Equal(session.State.ContractId, restored!.ContractId);
         Assert.Equal(1u, restored.Lines[0].PurchasedQuantity);
         Assert.Equal(100ul, restored.TotalSpentGil);
+        Assert.Single(restored.SunkPurchases);
     }
 
     private static OutfitterRouteAuthoritySession Active(FixtureData fixture)
@@ -259,6 +267,7 @@ public sealed class OutfitterRouteAuthorityTests
             RequestId = claim.Id,
             Status = "Ready",
             WorldMode = "Recommended",
+            PreparedAtUtc = DateTimeOffset.Parse("2026-07-21T18:00:00Z"),
             Lines =
             [
                 new MarketAcquisitionPlanLine

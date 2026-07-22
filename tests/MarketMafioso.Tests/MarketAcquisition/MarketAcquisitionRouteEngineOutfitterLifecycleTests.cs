@@ -463,6 +463,183 @@ public sealed class MarketAcquisitionRouteEngineOutfitterLifecycleTests
         Assert.Equal(seeded, store.State);
     }
 
+    [Fact]
+    public void LivePurchase_ListingDisappearanceCannotApplyWithoutServerPacket()
+    {
+        var fixture = Fixture(splitListings: true);
+        var store = new MemoryStore();
+        using var harness = MarketAcquisitionRouteEngineHarness.Create(store);
+        StartLivePurchase(harness, fixture);
+        harness.MarketBoard.Reads.Enqueue(new MarketBoardReadResult
+        {
+            Status = "NoListings",
+            ReadState = MarketBoardListingReadState.FreshComplete,
+            WorldName = "Siren",
+        });
+
+        SubmitPurchaseConfirmation(harness);
+        harness.Clock.UtcNow = harness.Clock.UtcNow.AddSeconds(1);
+        harness.Engine.MonitorMarketBoardPurchase();
+
+        Assert.IsType<PendingMarketPurchase>(harness.Purchase.PurchaseEvidenceState);
+        Assert.Equal(0u, store.Restore()!.Lines[0].PurchasedQuantity);
+        Assert.Empty(store.Restore()!.SunkPurchases);
+        Assert.Single(harness.MarketBoard.Reads);
+        Assert.Equal(0u, harness.Engine.CreateSnapshot().ActiveLinePurchasedQuantity);
+    }
+
+    [Fact]
+    public void LivePurchase_EvidenceBlockPausesAuthorityWithoutApplyingPurchase()
+    {
+        var fixture = Fixture(splitListings: true);
+        var store = new MemoryStore();
+        using var harness = MarketAcquisitionRouteEngineHarness.Create(store);
+        StartLivePurchase(harness, fixture);
+        harness.Purchase.HasServerPurchaseEvidence = false;
+        harness.Purchase.ConfirmationResults.Enqueue(new MarketBoardPurchaseResult
+        {
+            Status = "PurchaseEvidenceBlocked",
+            Message = "Server purchase evidence is unavailable; confirmation was not submitted.",
+            Candidate = Candidate("listing-1", "retainer-1", 1),
+        });
+
+        harness.Clock.UtcNow = harness.Clock.UtcNow.AddSeconds(1);
+        harness.Engine.MonitorMarketBoardPurchase();
+
+        Assert.Equal("Failed", harness.Runner.State);
+        Assert.Equal(OutfitterRouteAuthorityPhase.Paused, store.Restore()!.Phase);
+        Assert.Empty(store.Restore()!.SunkPurchases);
+        Assert.Null(harness.Purchase.PurchaseEvidenceState);
+    }
+
+    [Fact]
+    public void LivePurchase_ExactServerPacketAppliesOneSunkReceiptAndDuplicateReconciliationIsIdempotent()
+    {
+        var fixture = Fixture(splitListings: true);
+        var store = new MemoryStore();
+        using var harness = MarketAcquisitionRouteEngineHarness.Create(store);
+        StartLivePurchase(harness, fixture);
+        SubmitPurchaseConfirmation(harness);
+        var pending = Assert.IsType<PendingMarketPurchase>(harness.Purchase.PurchaseEvidenceState);
+        var confirmed = new ConfirmedMarketPurchase(pending.Intent, new MarketPurchasePacketObservation
+        {
+            Position = new MarketPurchasePacketPosition { Epoch = pending.Intent.PacketFloor.Epoch, Sequence = 1 },
+            ObservedAtUtc = harness.Clock.UtcNow,
+            RawCatalogId = 1_000_010,
+            ItemId = 10,
+            IsHighQuality = true,
+            Quantity = 1,
+        });
+        harness.Purchase.EvidenceAdvanceResults.Enqueue(new(
+            MarketPurchaseEvidenceAdvanceStatus.Applied,
+            1,
+            confirmed,
+            "Exact packet confirmed."));
+        harness.MarketBoard.Reads.Enqueue(ReadWithListings(LiveListing("listing-2", "retainer-2", 1)));
+        harness.Purchase.PurchaseResults.Enqueue(new MarketBoardPurchaseResult
+        {
+            Status = "PurchaseSelectionSent",
+            Candidate = Candidate("listing-2", "retainer-2", 1),
+        });
+
+        harness.Clock.UtcNow = harness.Clock.UtcNow.AddSeconds(1);
+        harness.Engine.MonitorMarketBoardPurchase();
+
+        var applied = store.Restore()!;
+        Assert.Equal(1u, applied.Lines[0].PurchasedQuantity);
+        Assert.Equal(100ul, applied.TotalSpentGil);
+        Assert.Single(applied.SunkPurchases);
+        Assert.Equal(1, harness.Purchase.ResolveEvidenceCallCount);
+        Assert.Equal(1u, harness.Engine.CreateSnapshot().ActiveLinePurchasedQuantity);
+
+        harness.Purchase.PurchaseEvidenceState = confirmed;
+        var rejected = harness.Engine.ReconcileTerminalPurchaseEvidence(false, "Incorrectly treated confirmed evidence as no purchase.");
+        Assert.Equal(MarketPurchaseTerminalResolutionStatus.InvalidDisposition, rejected.Status);
+        Assert.IsType<ConfirmedMarketPurchase>(harness.Purchase.PurchaseEvidenceState);
+
+        var reconciled = harness.Engine.ReconcileTerminalPurchaseEvidence(true, "Retried confirmed terminal evidence after restart.");
+
+        Assert.True(reconciled.IsResolved);
+        Assert.Single(store.Restore()!.SunkPurchases);
+        Assert.Equal(1u, store.Restore()!.Lines[0].PurchasedQuantity);
+        Assert.Equal(2, harness.Purchase.ResolveEvidenceCallCount);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void LivePurchase_IndeterminateEvidencePausesWithoutApplyingPurchase(bool conflicting)
+    {
+        var fixture = Fixture(splitListings: true);
+        var store = new MemoryStore();
+        using var harness = MarketAcquisitionRouteEngineHarness.Create(store);
+        StartLivePurchase(harness, fixture);
+        SubmitPurchaseConfirmation(harness);
+        var pending = Assert.IsType<PendingMarketPurchase>(harness.Purchase.PurchaseEvidenceState);
+        MarketPurchaseEvidenceState terminal = conflicting
+            ? new ConflictingMarketPurchasePacket(pending.Intent, new MarketPurchasePacketObservation
+            {
+                Position = new MarketPurchasePacketPosition { Epoch = pending.Intent.PacketFloor.Epoch, Sequence = 1 },
+                ObservedAtUtc = harness.Clock.UtcNow,
+                RawCatalogId = 11,
+                ItemId = 11,
+                IsHighQuality = true,
+                Quantity = 1,
+            })
+            : new TimedOutIndeterminateMarketPurchase(pending.Intent, harness.Clock.UtcNow);
+        harness.Purchase.EvidenceAdvanceResults.Enqueue(new(
+            MarketPurchaseEvidenceAdvanceStatus.Applied,
+            conflicting ? 1 : 0,
+            terminal,
+            "Terminal evidence."));
+
+        harness.Clock.UtcNow = harness.Clock.UtcNow.AddSeconds(1);
+        harness.Engine.MonitorMarketBoardPurchase();
+
+        Assert.Equal("Failed", harness.Runner.State);
+        Assert.Equal(OutfitterRouteAuthorityPhase.Paused, store.Restore()!.Phase);
+        Assert.Empty(store.Restore()!.SunkPurchases);
+        Assert.Equal(0u, store.Restore()!.Lines[0].PurchasedQuantity);
+        Assert.Equal(0, harness.Purchase.ResolveEvidenceCallCount);
+    }
+
+    private static void StartLivePurchase(MarketAcquisitionRouteEngineHarness harness, FixtureData fixture)
+    {
+        harness.Context.CurrentWorld = "Siren";
+        harness.Purchase.HasServerPurchaseEvidence = true;
+        Assert.True(harness.Engine.Start(
+            fixture.Plan,
+            fixture.Claim,
+            false,
+            false,
+            fixture.Contract,
+            fixture.Document,
+            MarketAcquisitionExecutionMode.Live).Success);
+        harness.Runner.RecordCurrentWorld("Siren");
+        harness.Runner.RecordProbe("Siren", CandidatePlan());
+        harness.MarketBoard.Reads.Enqueue(ReadWithListings(
+            LiveListing("listing-1", "retainer-1", 1),
+            LiveListing("listing-2", "retainer-2", 1)));
+        harness.Purchase.PurchaseResults.Enqueue(new MarketBoardPurchaseResult
+        {
+            Status = "PurchaseSelectionSent",
+            Candidate = Candidate("listing-1", "retainer-1", 1),
+        });
+        harness.Engine.BeginNextWorldPurchase();
+    }
+
+    private static void SubmitPurchaseConfirmation(MarketAcquisitionRouteEngineHarness harness)
+    {
+        harness.Purchase.ConfirmationResults.Enqueue(new MarketBoardPurchaseResult
+        {
+            Status = "ConfirmationSubmitted",
+            Candidate = Candidate("listing-1", "retainer-1", 1),
+        });
+        harness.Clock.UtcNow = harness.Clock.UtcNow.AddSeconds(1);
+        harness.Engine.MonitorMarketBoardPurchase();
+        Assert.NotNull(harness.Purchase.LastIntentContext);
+    }
+
     private static FixtureData Fixture(bool dryRunOnly = false, bool splitListings = false)
     {
         var document = MarketAcquisitionRequestDocument.CreateDefault("Fran", "Siren");
@@ -629,6 +806,17 @@ public sealed class MarketAcquisitionRouteEngineOutfitterLifecycleTests
     };
 
     private static MarketBoardLiveListing LiveListing(string listingId, string retainerId, uint quantity) => new()
+    {
+        ItemId = 10,
+        WorldName = "Siren",
+        ListingId = listingId,
+        RetainerId = retainerId,
+        Quantity = quantity,
+        UnitPrice = 100,
+        IsHq = true,
+    };
+
+    private static MarketBoardPurchaseCandidate Candidate(string listingId, string retainerId, uint quantity) => new()
     {
         ItemId = 10,
         WorldName = "Siren",

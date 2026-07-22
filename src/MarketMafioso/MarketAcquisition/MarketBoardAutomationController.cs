@@ -34,7 +34,8 @@ public sealed class MarketBoardAutomationController : IDisposable
         TimeSpan monitorInterval,
         TimeSpan listingRemovalWatchdog,
         Func<MarketBoardPurchaseCandidate, MarketBoardPurchaseResult> confirmPurchase,
-        Func<MarketBoardReadResult> readFreshListings)
+        Func<MarketBoardReadResult> readFreshListings,
+        bool monitorListingRemoval = true)
     {
         ArgumentNullException.ThrowIfNull(confirmPurchase);
         ArgumentNullException.ThrowIfNull(readFreshListings);
@@ -59,7 +60,8 @@ public sealed class MarketBoardAutomationController : IDisposable
             session = PurchaseSession ?? session;
         }
 
-        if (session.Status.Equals("WaitingForListingRemoval", StringComparison.OrdinalIgnoreCase))
+        if (monitorListingRemoval &&
+            session.Status.Equals("WaitingForListingRemoval", StringComparison.OrdinalIgnoreCase))
         {
             freshReadSession = session;
             freshRead = readFreshListings();
