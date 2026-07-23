@@ -576,6 +576,7 @@ public class MainWindow : Window, IDisposable
     {
         return standaloneSquire.TryOpen(out _);
     }
+#endif
 
     public void StageExternalExactAcquisition(ExactAcquisitionWorkbenchTransfer transfer)
     {
@@ -587,7 +588,6 @@ public class MainWindow : Window, IDisposable
         QueueAgentTabSelection("Market Acquisition", "Workbench");
         IsOpen = true;
     }
-#endif
 
     internal static bool TryNormalizeAgentBridgeTab(string tabName, out string mainTab, out string? workspaceView)
     {
@@ -879,13 +879,15 @@ public class MainWindow : Window, IDisposable
         var recoveryMinimum = ImGui.GetItemRectMin();
         var recoveryMaximum = ImGui.GetItemRectMax();
         var canMutate = !context.IsBusy && !context.IsRouteActive && !acquisitionRequestBuilder.IsSynchronizing;
+        var canClearWorkbench = acquisitionRequestBuilder.LineCount > 0 ||
+                                acquisitionRequestBuilder.HasExactAcquisitionAuthority;
         AgentReviewRegistry.Register(
             "acquisition.recovery.clear-workbench",
             "Clear the local Market Acquisition Workbench",
             AgentBridgeUiControlKind.Button,
             recoveryMinimum,
             recoveryMaximum,
-            canMutate && acquisitionRequestBuilder.LineCount > 0,
+            canMutate && canClearWorkbench,
             false,
             acquisitionRequestBuilder.LineCount.ToString(),
             () => acquisitionRequestBuilder.ClearWorkbench(context));
@@ -903,7 +905,7 @@ public class MainWindow : Window, IDisposable
         if (!ImGui.BeginPopup("AcquisitionWorkbenchRecovery"))
             return;
 
-        if (ImGuiUi.MenuItem("Clear Workbench", canMutate && acquisitionRequestBuilder.LineCount > 0))
+        if (ImGuiUi.MenuItem("Clear Workbench", canMutate && canClearWorkbench))
             acquisitionRequestBuilder.ClearWorkbench(context);
         if (ImGuiUi.MenuItem("Clear active work order", canMutate && acquisitionWorkspace.ClaimedRequest is not null))
             acquisitionWorkspace.ForgetLocalClaim();

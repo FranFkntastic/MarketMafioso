@@ -58,6 +58,8 @@ public sealed class MarketAcquisitionRequestBuilderPanel
 
     public int LineCount => document.Lines.Count;
 
+    public bool HasExactAcquisitionAuthority => document.ExactAcquisitionAuthority is not null;
+
     public void MarkPlanPrepared(string planHash) => controller.MarkPlanPrepared(planHash);
 
     public void AdoptRequest(MarketAcquisitionRequestView request) => controller.AdoptRequest(request);

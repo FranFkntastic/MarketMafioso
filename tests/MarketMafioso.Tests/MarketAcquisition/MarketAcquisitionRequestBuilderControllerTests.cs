@@ -443,6 +443,28 @@ public sealed class MarketAcquisitionRequestBuilderControllerTests
     }
 
     [Fact]
+    public void RemovingLastExactAcquisitionItem_DetachesHistoricalAuthority()
+    {
+        var document = MarketAcquisitionRequestDocument.CreateDefault() with
+        {
+            Lines = [new() { ItemId = 1, ItemName = "Manual item", HqPolicy = "Either" }],
+        };
+        var staged = ExactAcquisitionWorkbenchAuthorityService.Stage(
+            document,
+            ExactAcquisitionWorkbenchAuthorityTests.Transfer());
+        var persisted = new List<MarketAcquisitionRequestDocument>();
+        var controller = CreateController(staged, persist: persisted.Add);
+        var authorityLineIndex = controller.Document.Lines.FindIndex(line => line.ItemId == 10);
+
+        Assert.True(controller.RemoveLine(authorityLineIndex));
+
+        Assert.Null(controller.Document.ExactAcquisitionAuthority);
+        var manual = Assert.Single(controller.Document.Lines);
+        Assert.Equal(1u, manual.ItemId);
+        Assert.Same(controller.Document, persisted[^1]);
+    }
+
+    [Fact]
     public void AddLines_DeduplicatesExistingAndIncomingItemsInOnePersistedEdit()
     {
         var persisted = new List<MarketAcquisitionRequestDocument>();

@@ -147,6 +147,11 @@ public static class ExactAcquisitionWorkbenchAuthorityService
         if (authority is null)
             return updated;
 
+        var retainsAuthorityItem = updated.Lines.Any(line =>
+            authority.Lines.Any(expected => expected.ItemId == line.ItemId));
+        if (!retainsAuthorityItem)
+            return updated with { ExactAcquisitionAuthority = null };
+
         var validation = ValidateLineage(updated.Lines, authority);
         var reconciled = validation.IsValid
             ? authority with { FinalizedContract = null }
