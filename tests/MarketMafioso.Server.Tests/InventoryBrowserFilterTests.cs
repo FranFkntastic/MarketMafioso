@@ -1,3 +1,5 @@
+using MarketMafioso.Contracts.Inventory;
+
 namespace MarketMafioso.Server.Tests;
 
 public sealed class InventoryBrowserFilterTests
@@ -64,6 +66,48 @@ public sealed class InventoryBrowserFilterTests
         Assert.Equal(1, view.MatchingRecordCount);
         Assert.Equal(2, view.Stacks.Count);
         Assert.Equal(111, view.TotalQuantity);
+    }
+
+    [Fact]
+    public void ItemsMode_JoinsStowageContextOntoExistingItemRows()
+    {
+        var report = Snapshot.Report with
+        {
+            RetainerManagement = new QuartermasterStowageReport
+            {
+                Plans =
+                [
+                    new QuartermasterStowagePlanReport
+                    {
+                        Id = Guid.NewGuid(),
+                        Name = "General",
+                        Enabled = true,
+                        Rules =
+                        [
+                            new QuartermasterStowageRuleReport
+                            {
+                                Id = Guid.NewGuid(),
+                                ItemId = 1,
+                                DesiredPlayerQuantity = 20,
+                                Quality = "Any",
+                                Action = "retrieve",
+                                Quantity = 8,
+                                PlayerQuantity = 12,
+                            },
+                        ],
+                    },
+                ],
+            },
+        };
+
+        var view = InventoryBrowserViewBuilder.Build(
+            Snapshot with { Report = report },
+            "darksteel",
+            mode: InventoryBrowserMode.Items);
+
+        var item = Assert.Single(view.Items);
+        Assert.Equal("retrieve", item.Stowage!.Action);
+        Assert.All(view.Stacks, stack => Assert.Equal(item.Stowage, stack.Stowage));
     }
 
     [Fact]

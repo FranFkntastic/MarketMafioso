@@ -9,6 +9,7 @@ using System.Text.Json.Serialization;
 using System.Threading.Tasks;
 using Dalamud.Plugin.Services;
 using MarketMafioso.Automation.Items;
+using MarketMafioso.Contracts.Inventory;
 using MarketMafioso.Quartermaster;
 
 namespace MarketMafioso;
@@ -105,10 +106,12 @@ public class HttpReporter : IDisposable
             var playerInventory = playerCapture.Bags;
             var playerGil = scanner.ScanPlayerGil();
             var retainers = new List<RetainerReport>();
+            QuartermasterSnapshot? quartermasterSnapshotForReport = null;
             if (quartermaster.TryGetSnapshot(out var quartermasterSnapshot, out var quartermasterError))
             {
                 if (ownerScope.Matches(quartermasterSnapshot!.Owner))
                 {
+                    quartermasterSnapshotForReport = quartermasterSnapshot;
                     retainers = BuildRetainerReports(
                         quartermasterSnapshot,
                         ownerScope,
@@ -116,7 +119,7 @@ public class HttpReporter : IDisposable
                         scanner.ResolveItemMetadata,
                         config.IncludeItemNames);
                     LastRetainerSourceStatus =
-                        $"Quartermaster revision {quartermasterSnapshot.Revision}; {retainers.Count} owner-scoped retainer(s).";
+                        $"Quartermaster supplied {retainers.Count} owner-scoped retainer(s).";
                 }
                 else
                 {
@@ -154,6 +157,9 @@ public class HttpReporter : IDisposable
                     RequestedSources = playerCapture.RequestedSources.ToList(),
                     ObservedSources = playerCapture.ObservedSources.ToList(),
                 },
+                RetainerManagement = quartermasterSnapshotForReport is null
+                    ? null
+                    : BuildStowageReport(quartermasterSnapshotForReport, config.IncludeItemNames),
             };
 
             LastPayload = JsonSerializer.Serialize(report, new JsonSerializerOptions
@@ -260,6 +266,52 @@ public class HttpReporter : IDisposable
                     .ToList(),
             })
             .ToList();
+    }
+
+    public static QuartermasterStowageReport? BuildStowageReport(
+        QuartermasterSnapshot snapshot,
+        bool includeItemNames)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        if (snapshot.StowagePlans.IsDefaultOrEmpty)
+            return null;
+        var retainerNames = snapshot.Retainers.ToDictionary(
+            retainer => retainer.RetainerId,
+            retainer => retainer.RetainerName);
+        return new QuartermasterStowageReport
+        {
+            ProviderInstanceId = snapshot.ProviderInstanceId,
+            Revision = snapshot.Revision,
+            Owner = new QuartermasterStowageOwner
+            {
+                LocalContentId = snapshot.Owner.LocalContentId,
+                HomeWorldId = snapshot.Owner.HomeWorldId,
+            },
+            Plans = snapshot.StowagePlans.Select(plan => new QuartermasterStowagePlanReport
+            {
+                Id = plan.Id,
+                Revision = plan.Revision,
+                Name = plan.Name,
+                Enabled = plan.Enabled,
+                Rules = plan.Rules.Select(rule => new QuartermasterStowageRuleReport
+                {
+                    Id = rule.Id,
+                    ItemId = rule.ItemId,
+                    ItemName = includeItemNames ? rule.ItemName : null,
+                    DesiredPlayerQuantity = rule.DesiredPlayerQuantity,
+                    Quality = rule.Quality,
+                    Action = rule.Action,
+                    Quantity = rule.ActionQuantity,
+                    PlayerQuantity = rule.PlayerQuantity,
+                    PreferredDestinations = rule.PreferredRetainerIds.Select(retainerId =>
+                        new QuartermasterStowageDestinationReport
+                        {
+                            RetainerId = retainerId,
+                            RetainerName = retainerNames.GetValueOrDefault(retainerId),
+                        }).ToArray(),
+                }).ToArray(),
+            }).ToArray(),
+        };
     }
 
     private static ItemSlot MapQuartermasterItem(

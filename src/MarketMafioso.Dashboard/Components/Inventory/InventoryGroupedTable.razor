@@ -119,8 +119,19 @@
 
     private RenderFragment GroupItemCell(InventoryGroupedItemRow row) => @<div class="inventory-group-item">
         <span class="inventory-group-chevron" aria-hidden="true">@(IsExpanded(row) ? "▼" : "▶")</span>
-        <span class="inventory-group-item-copy"><strong>@row.DisplayName</strong>@if (!string.IsNullOrWhiteSpace(row.ItemType)) { <small>@row.ItemType</small> }</span>
+        <span class="inventory-group-item-copy">
+            <strong>@row.DisplayName</strong>
+            @if (!string.IsNullOrWhiteSpace(row.ItemType)) { <small>@row.ItemType</small> }
+            @if (row.PrimaryStack.Stowage is { } stowage) { <small>@StowageLabel(stowage)</small> }
+        </span>
     </div>;
+
+    private static string StowageLabel(InventoryBrowserStowageView stowage) => stowage.Action.ToLowerInvariant() switch
+    {
+        "retrieve" => $"{stowage.PlanName}: retrieve {stowage.Quantity:N0} to hold {stowage.DesiredPlayerQuantity:N0}",
+        "deposit" => $"{stowage.PlanName}: stow {stowage.Quantity:N0} to hold {stowage.DesiredPlayerQuantity:N0}",
+        _ => $"{stowage.PlanName}: hold {stowage.DesiredPlayerQuantity:N0}",
+    };
 
     private static RenderFragment ChildItemCell(InventoryBrowserStackView _) => @<span class="inventory-stack-marker">↳ physical stack</span>;
     private static RenderFragment GroupOwnerCell(InventoryGroupedItemRow row) => @<span class="inventory-owner-summary"><b>@row.OwnerCount</b> @(row.OwnerCount == 1 ? "owner" : "owners")</span>;

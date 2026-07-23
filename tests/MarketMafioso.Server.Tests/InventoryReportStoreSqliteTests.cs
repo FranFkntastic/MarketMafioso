@@ -2,6 +2,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
+using MarketMafioso.Contracts.Inventory;
 using MarketMafioso.Server.Sqlite;
 
 namespace MarketMafioso.Server.Tests;
@@ -30,6 +31,57 @@ public sealed class InventoryReportStoreSqliteTests
         Assert.Equal((uint)42, loaded.Report.PlayerInventory[0].Items[0].ItemId);
         Assert.Single(summaries);
         Assert.Equal(stored.Id, summaries[0].Id);
+    }
+
+    [Fact]
+    public async Task SaveAsync_RoundTripsOptionalStowageProjection()
+    {
+        var fixture = await StoreFixture.CreateAsync();
+        var report = CreateReport("Stowage Character", "Maduin", 100) with
+        {
+            RetainerManagement = new QuartermasterStowageReport
+            {
+                ProviderInstanceId = "quartermaster-a",
+                Revision = 7,
+                Owner = new QuartermasterStowageOwner { LocalContentId = 100, HomeWorldId = 40 },
+                Plans =
+                [
+                    new QuartermasterStowagePlanReport
+                    {
+                        Id = Guid.Parse("11111111-1111-1111-1111-111111111111"),
+                        Revision = 3,
+                        Name = "General",
+                        Enabled = true,
+                        Rules =
+                        [
+                            new QuartermasterStowageRuleReport
+                            {
+                                Id = Guid.Parse("22222222-2222-2222-2222-222222222222"),
+                                ItemId = 100,
+                                DesiredPlayerQuantity = 10,
+                                Quality = "Any",
+                                Action = "deposit",
+                                Quantity = 4,
+                                PlayerQuantity = 14,
+                            },
+                        ],
+                    },
+                ],
+            },
+        };
+
+        var stored = await fixture.Store.SaveAsync(
+            fixture.AccountId,
+            report,
+            "provided",
+            "{}",
+            CancellationToken.None);
+
+        var loaded = await fixture.Store.GetAsync(fixture.AccountId, stored.Id, CancellationToken.None);
+
+        var plan = Assert.Single(loaded!.Report.RetainerManagement!.Plans);
+        Assert.Equal("General", plan.Name);
+        Assert.Equal("deposit", Assert.Single(plan.Rules).Action);
     }
 
     [Fact]

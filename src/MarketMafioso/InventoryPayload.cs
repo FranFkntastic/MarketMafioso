@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Text.Json.Serialization;
+using MarketMafioso.Contracts.Inventory;
 
 namespace MarketMafioso;
 
@@ -34,6 +35,10 @@ public record InventoryReport
 
     [JsonPropertyName("playerStorage")]
     public StorageSourceEvidence PlayerStorage { get; init; } = new();
+
+    [JsonPropertyName("retainerManagement")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public QuartermasterStowageReport? RetainerManagement { get; init; }
 }
 
 public record StorageSourceEvidence

@@ -71,6 +71,43 @@ public sealed class QuartermasterIpcClientTests
     }
 
     [Fact]
+    public void GetSnapshot_ParsesStowagePlansOnlyWhenCapabilityIsAdvertised()
+    {
+        var adapter = ReadyAdapter("provider-a", 1, SnapshotJson("provider-a", 1, "Eris", includeStowage: true));
+        adapter.CapabilitiesJson = CapabilitiesJson(
+            "provider-a",
+            1,
+            QuartermasterIpcClient.StowagePlansCapability);
+        using var client = new QuartermasterIpcClient(adapter);
+
+        Assert.True(client.TryGetSnapshot(out var snapshot, out var error), error);
+
+        var plan = Assert.Single(snapshot!.StowagePlans);
+        var rule = Assert.Single(plan.Rules);
+        Assert.Equal("General", plan.Name);
+        Assert.Equal((uint)100, rule.ItemId);
+        Assert.Equal("deposit", rule.Action);
+        Assert.Equal(4, rule.ActionQuantity);
+
+        var report = HttpReporter.BuildStowageReport(snapshot, includeItemNames: false);
+        var reportedRule = Assert.Single(Assert.Single(report!.Plans).Rules);
+        Assert.Null(reportedRule.ItemName);
+        Assert.Equal("Eris", Assert.Single(reportedRule.PreferredDestinations).RetainerName);
+    }
+
+    [Fact]
+    public void GetSnapshot_IgnoresStowageSectionWithoutCapability()
+    {
+        var adapter = ReadyAdapter("provider-a", 1, SnapshotJson("provider-a", 1, "Eris", includeStowage: true));
+        using var client = new QuartermasterIpcClient(adapter);
+
+        Assert.True(client.TryGetSnapshot(out var snapshot, out var error), error);
+
+        Assert.Empty(snapshot!.StowagePlans);
+        Assert.Null(HttpReporter.BuildStowageReport(snapshot, includeItemNames: true));
+    }
+
+    [Fact]
     public void GetSnapshot_ProviderExceptionClearsCacheInsteadOfReturningStaleData()
     {
         var adapter = ReadyAdapter("provider-a", 1, SnapshotJson("provider-a", 1, "First"));
@@ -317,7 +354,7 @@ public sealed class QuartermasterIpcClientTests
         capabilities,
     });
 
-    internal static string SnapshotJson(string provider, long revision, string retainerName) => JsonSerializer.Serialize(new
+    internal static string SnapshotJson(string provider, long revision, string retainerName, bool includeStowage = false) => JsonSerializer.Serialize(new
     {
         schema = QuartermasterIpcClient.SnapshotSchema,
         providerInstanceId = provider,
@@ -363,6 +400,53 @@ public sealed class QuartermasterIpcClientTests
                 listings = Array.Empty<object>(),
             },
         },
+        stowagePlans = includeStowage ? new
+        {
+            schema = QuartermasterIpcClient.StowagePlansSchema,
+            plans = new[]
+            {
+                new
+                {
+                    id = Guid.Parse("11111111-1111-1111-1111-111111111111"),
+                    revision = 3,
+                    owner = new
+                    {
+                        localContentId = 100UL,
+                        homeWorldId = 40U,
+                        characterName = "Wei Ning",
+                        homeWorldName = "Maduin",
+                    },
+                    name = "General",
+                    enabled = true,
+                    priority = 0,
+                    rules = new[]
+                    {
+                        new
+                        {
+                            id = Guid.Parse("22222222-2222-2222-2222-222222222222"),
+                            itemId = 100U,
+                            itemName = "Elm Lumber",
+                            desiredPlayerQuantity = 10,
+                            quality = "Any",
+                            enabled = true,
+                            routing = new
+                            {
+                                mode = "HomeFirst",
+                                preferredRetainerIds = new[] { 10UL },
+                                overflow = "AnyOwnerRetainer",
+                            },
+                            evaluated = new
+                            {
+                                action = "deposit",
+                                quantity = 4,
+                                playerQuantity = 14,
+                                desiredPlayerQuantity = 10,
+                            },
+                        },
+                    },
+                },
+            },
+        } : null,
     });
 }
 

@@ -182,7 +182,8 @@ internal sealed class InventoryReportWritePersistence(
                 plugin_version,
                 generated_at_utc,
                 raw_report_json,
-                raw_json_retained_at_utc)
+                raw_json_retained_at_utc,
+                retainer_management_json)
             VALUES (
                 $id,
                 $accountId,
@@ -199,7 +200,8 @@ internal sealed class InventoryReportWritePersistence(
                 $pluginVersion,
                 $generatedAtUtc,
                 $rawReportJson,
-                $rawJsonRetainedAt);
+                $rawJsonRetainedAt,
+                $retainerManagementJson);
             """;
         command.Parameters.AddWithValue("$id", id);
         command.Parameters.AddWithValue("$accountId", accountId);
@@ -217,6 +219,11 @@ internal sealed class InventoryReportWritePersistence(
         command.Parameters.AddWithValue("$generatedAtUtc", metadata.GeneratedAtUtc);
         command.Parameters.AddWithValue("$rawReportJson", (object?)rawReportJson ?? DBNull.Value);
         command.Parameters.AddWithValue("$rawJsonRetainedAt", rawReportJson == null ? DBNull.Value : receivedAt.ToString("O", CultureInfo.InvariantCulture));
+        command.Parameters.AddWithValue(
+            "$retainerManagementJson",
+            report.RetainerManagement is null
+                ? DBNull.Value
+                : JsonSerializer.Serialize(report.RetainerManagement));
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
