@@ -19,7 +19,7 @@ public interface IMarketMafiosoBridgeProvider
     IReadOnlyList<AgentBridgeCaptureSurfaceDescriptor> GetCaptureSurfaces();
     AgentBridgeUiReviewFrame GetControlSurface();
     AgentBridgeUiControlReview ReviewControl(string controlId);
-    AgentBridgeUiControlInvocation InvokeControl(string controlId, long frameId);
+    AgentBridgeUiControlInvocation InvokeControl(string controlId, long frameId, System.Text.Json.JsonElement? arguments = null);
 }
 
 public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
@@ -99,5 +99,6 @@ public sealed class MarketMafiosoBridgeProvider : IMarketMafiosoBridgeProvider
     public IReadOnlyList<AgentBridgeCaptureSurfaceDescriptor> GetCaptureSurfaces() => CaptureSurfaces;
     public AgentBridgeUiReviewFrame GetControlSurface() => reviewRegistry.Snapshot();
     public AgentBridgeUiControlReview ReviewControl(string controlId) => reviewRegistry.Review(controlId);
-    public AgentBridgeUiControlInvocation InvokeControl(string controlId, long frameId) => reviewRegistry.Invoke(controlId, frameId);
+    public AgentBridgeUiControlInvocation InvokeControl(string controlId, long frameId, System.Text.Json.JsonElement? arguments = null) =>
+        reviewRegistry.Invoke(controlId, frameId, arguments);
 }

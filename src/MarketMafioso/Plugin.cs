@@ -138,6 +138,7 @@ public sealed class Plugin : IDalamudPlugin
         agentBridge = new AgentBridgeHost(
             Configuration,
             PluginInterface.GetPluginConfigDirectory(),
+            PluginInterface.AssemblyLocation.FullName,
             action => Framework.RunOnTick(action),
             new MarketMafiosoBridgeProvider(
                 mainWindow.CreateAgentBridgeTruth,
