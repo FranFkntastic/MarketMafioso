@@ -23,6 +23,7 @@ using MarketMafioso.MarketAcquisition.ExactAuthority;
 using MarketMafioso.WorkshopPrep;
 using MarketMafioso.Diagnostics;
 using Franthropy.Dalamud.AgentBridge;
+using MarketMafiosoCaptureRegion = MarketMafioso.AgentBridge.AgentBridgeCaptureRegion;
 
 namespace MarketMafioso.Windows;
 
@@ -75,7 +76,7 @@ public class MainWindow : Window, IDisposable
     private Vector2? capturePresentationPreviousSize;
     private Vector2? capturePresentationRestoreSize;
 
-    public AgentBridgeCaptureRegion? AgentCaptureRegion { get; private set; }
+    public MarketMafiosoCaptureRegion? AgentCaptureRegion { get; private set; }
     public AgentBridgeUiCaptureTransactionManager AgentCaptureTransactions { get; }
 
     private const string ProductSummary = "Workshop logistics and self-hosted inventory history.";
@@ -164,6 +165,18 @@ public class MainWindow : Window, IDisposable
             marketPurchasePacketObserver.Queue);
         this.marketBoardApproachService = marketBoardApproachService;
         this.marketAcquisitionRouteDiagnosticsDirectory = marketAcquisitionRouteDiagnosticsDirectory;
+        var routeUiAutomation = new DalamudMarketAcquisitionRouteUiAutomation();
+        var lifestream = new LifestreamIpc(Plugin.PluginInterface, log);
+        var shardCheckpointRuntime = new DalamudShardAcquisitionCheckpointRuntime(
+            playerState,
+            scanner,
+            routeUiAutomation,
+            new Franthropy.Dalamud.Travel.DalamudLifestreamPropertyTravel(Plugin.PluginInterface),
+            lifestream);
+        var shardCheckpoints = new ShardAcquisitionCheckpointCoordinator(
+            quartermaster,
+            shardCheckpointRuntime,
+            new ConfigurationShardAcquisitionCheckpointStateStore(config, config.Save));
         var marketAcquisitionRouteRunner = new MarketAcquisitionRouteRunner(
             marketAcquisitionRouteDiagnosticsDirectory,
             universalisFreshnessVerifier.VerifyAsync);
@@ -171,7 +184,7 @@ public class MainWindow : Window, IDisposable
         routeEngine = new MarketAcquisitionRouteEngine(
             marketAcquisitionRouteRunner,
             new DalamudMarketAcquisitionRouteContext(playerState),
-            new DalamudMarketAcquisitionRouteUiAutomation(),
+            routeUiAutomation,
             new UnsupportedMarketAcquisitionRouteTravelCleanup(),
             new DalamudMarketAcquisitionMarketBoardIo(
                 marketBoardApproachService,
@@ -192,7 +205,8 @@ public class MainWindow : Window, IDisposable
             exactAcquisitionRouteStateStore,
             new FileMarketAcquisitionReportOutbox(Path.Combine(
                 Plugin.PluginInterface.GetPluginConfigDirectory(),
-                "market-acquisition-report-outbox.json")));
+                "market-acquisition-report-outbox.json")),
+            shardCheckpoints);
 
         SizeConstraints = new WindowSizeConstraints
         {
@@ -243,7 +257,8 @@ public class MainWindow : Window, IDisposable
             quartermaster,
             workshopQuartermasterRequest,
             GetWorkshopAvailability,
-            GetCurrentQuartermasterOwnerScope);
+            GetCurrentQuartermasterOwnerScope,
+            AgentReviewRegistry);
         workshopAssembly = new WorkshopAssemblyPanel(
             workshopAssemblyRunner,
             () => workshopStatus,
@@ -482,7 +497,7 @@ public class MainWindow : Window, IDisposable
             AcquisitionCompositionWindow.AnchorTo(windowPosition, windowSize);
             if (windowSize.X > 0f && windowSize.Y > 0f && viewport.Size.X > 0f && viewport.Size.Y > 0f)
             {
-                AgentCaptureRegion = new AgentBridgeCaptureRegion(
+                AgentCaptureRegion = new MarketMafiosoCaptureRegion(
                     windowPosition,
                     windowSize,
                     viewport.Pos,

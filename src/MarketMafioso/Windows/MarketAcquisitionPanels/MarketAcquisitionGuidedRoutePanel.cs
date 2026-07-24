@@ -79,6 +79,7 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
                             snapshot.CanRestart &&
                             snapshot.CompletedOrProbedStopCount > 0;
         DrawExactAcquisitionExecution(snapshot);
+        DrawShardStorageCheckpoint(snapshot);
         DrawGuidedRouteActionRow(snapshot, canStart, canReprepare, canRefreshEvidence);
 
         ImGui.TextColored(GetGuidedRouteStatusColor(snapshot), snapshot.StatusMessage);
@@ -227,6 +228,23 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
             execution.Phase is ExactAcquisitionRouteAuthorityPhase.Paused ? MarketMafiosoUiTheme.Warning : MarketMafiosoUiTheme.Muted,
             $"External plan {execution.Phase} · {remaining:N0} remaining · {execution.TotalSpentGil:N0} gil spent");
         ImGui.TextColored(MarketMafiosoUiTheme.Muted, execution.Message);
+    }
+
+    private static void DrawShardStorageCheckpoint(MarketAcquisitionRouteEngineSnapshot snapshot)
+    {
+        if (snapshot.ShardCheckpoint is not { IsEnabled: true } checkpoint)
+            return;
+        var outstanding = checkpoint.OutstandingByItem.Values.Sum();
+        if (!checkpoint.IsActive && outstanding == 0)
+            return;
+        var color = checkpoint.Phase == ShardAcquisitionCheckpointPhase.Failed
+            ? MarketMafiosoUiTheme.Error
+            : checkpoint.IsActive
+                ? MarketMafiosoUiTheme.Warning
+                : MarketMafiosoUiTheme.Muted;
+        ImGui.TextColored(color, checkpoint.IsActive
+            ? $"Storing {outstanding:N0} purchased shards: {checkpoint.Message}"
+            : $"{outstanding:N0} purchased shards awaiting the final storage run.");
     }
 
     private void DrawGuidedRouteStops(IReadOnlyList<MarketAcquisitionGuidedRouteStop> stops)

@@ -83,7 +83,7 @@ public sealed class WorkshopQuartermasterRequestServiceTests
     }
 
     [Fact]
-    public void Submit_WhenAutomaticRetrievalBecomesAvailable_ReplacesReviewOnlyIdentity()
+    public void Submit_WithoutAutomaticRetrievalFailsClosedThenStartsFreshWhenAvailable()
     {
         var reviewCapabilities = JsonSerializer.Serialize(new
         {
@@ -123,21 +123,94 @@ public sealed class WorkshopQuartermasterRequestServiceTests
         var owner = new QuartermasterOwnerScope(100, 40, "Wei Ning", "Maduin");
         var availability = new[] { new WorkshopMaterialAvailability(100, "Elm Lumber", 1, 50, 20, 25, 30, 5, []) };
 
-        Assert.True(service.Submit(owner, availability));
-
-        using var submitted = JsonDocument.Parse(Assert.Single(adapter.SubmittedRequests));
-        Assert.False(submitted.RootElement.TryGetProperty("executeImmediately", out _));
-        Assert.False(service.LastAcknowledgement!.ExecuteImmediately);
-        Assert.Equal("Quartermaster accepted shortages for review; automatic retrieval is unavailable.", service.LastStatus);
+        Assert.False(service.Submit(owner, availability));
+        Assert.Empty(adapter.SubmittedRequests);
+        Assert.Empty(config.QuartermasterWorkshopRequests);
+        Assert.Contains("no restock plan or operation was created", service.LastStatus, StringComparison.OrdinalIgnoreCase);
 
         Assert.True(service.Submit(owner, availability));
 
-        using var automatic = JsonDocument.Parse(adapter.SubmittedRequests[1]);
-        Assert.NotEqual(submitted.RootElement.GetProperty("requestId").GetString(), automatic.RootElement.GetProperty("requestId").GetString());
-        Assert.NotEqual(submitted.RootElement.GetProperty("operationId").GetString(), automatic.RootElement.GetProperty("operationId").GetString());
+        using var automatic = JsonDocument.Parse(Assert.Single(adapter.SubmittedRequests));
         Assert.True(automatic.RootElement.GetProperty("executeImmediately").GetBoolean());
         Assert.True(service.LastAcknowledgement!.ExecuteImmediately);
         Assert.Equal(2, adapter.CapabilitiesCalls);
+    }
+
+    [Fact]
+    public void Submit_ReplacesChangedShortagesWhenPersistedOperationWasReviewOnly()
+    {
+        var adapter = new FakeQuartermasterIpcAdapter
+        {
+            CapabilitiesJson = JsonSerializer.Serialize(new
+            {
+                schema = QuartermasterIpcClient.CapabilitiesSchema,
+                providerInstanceId = "provider-a",
+                revision = 10,
+                capabilities = new[] { QuartermasterIpcClient.AutomaticRetrievalCapability },
+            }),
+            OperationJson = JsonSerializer.Serialize(new
+            {
+                schema = QuartermasterIpcClient.OperationSchema,
+                providerInstanceId = "provider-a",
+                operationId = "old-operation",
+                requestId = "old-request",
+                revision = 7,
+                executeImmediately = false,
+                owner = new
+                {
+                    localContentId = 100UL,
+                    homeWorldId = 40U,
+                    characterName = "Wei Ning",
+                    homeWorldName = "Maduin",
+                },
+                status = "accepted",
+                message = "Shortages accepted into the plan; explicit execution is required.",
+                receipts = Array.Empty<object>(),
+            }),
+        };
+        adapter.SubmitResponse = requestJson =>
+        {
+            using var request = JsonDocument.Parse(requestJson);
+            return JsonSerializer.Serialize(new
+            {
+                schema = QuartermasterIpcClient.AcknowledgementSchema,
+                requestId = request.RootElement.GetProperty("requestId").GetString(),
+                operationId = request.RootElement.GetProperty("operationId").GetString(),
+                providerInstanceId = "provider-a",
+                revision = 11,
+                status = "accepted",
+                executeImmediately = true,
+            });
+        };
+        var config = new Configuration();
+        config.QuartermasterWorkshopRequests["100:40"] = new QuartermasterWorkshopRequestState
+        {
+            LocalContentId = 100,
+            HomeWorldId = 40,
+            CharacterName = "Wei Ning",
+            HomeWorldName = "Maduin",
+            Signature = "stale-review-signature",
+            RequestId = "old-request",
+            OperationId = "old-operation",
+            SubmittedAtUtc = new DateTime(2026, 7, 21, 12, 0, 0, DateTimeKind.Utc),
+            Status = "accepted",
+            Revision = 7,
+        };
+        using var client = new QuartermasterIpcClient(adapter);
+        using var service = new WorkshopQuartermasterRequestService(config, client, () => { });
+        var owner = new QuartermasterOwnerScope(100, 40, "Wei Ning", "Maduin");
+        var changedAvailability = new[]
+        {
+            new WorkshopMaterialAvailability(200, "Cedar Lumber", 1, 90, 0, 0, 90, 90, []),
+        };
+
+        Assert.True(service.Submit(owner, changedAvailability), service.LastStatus);
+
+        using var submitted = JsonDocument.Parse(Assert.Single(adapter.SubmittedRequests));
+        Assert.True(submitted.RootElement.GetProperty("executeImmediately").GetBoolean());
+        Assert.NotEqual("old-request", submitted.RootElement.GetProperty("requestId").GetString());
+        Assert.NotEqual("old-operation", submitted.RootElement.GetProperty("operationId").GetString());
+        Assert.Equal("Immediate Quartermaster retrieval requested. Waiting for terminal operation status.", service.LastStatus);
     }
 
     [Fact]
@@ -150,6 +223,7 @@ public sealed class WorkshopQuartermasterRequestServiceTests
                 schema = QuartermasterIpcClient.CapabilitiesSchema,
                 providerInstanceId = "provider-a",
                 revision = 9,
+                capabilities = new[] { QuartermasterIpcClient.AutomaticRetrievalCapability },
             }),
         };
         adapter.SubmitResponse = requestJson =>
@@ -208,6 +282,7 @@ public sealed class WorkshopQuartermasterRequestServiceTests
                 schema = QuartermasterIpcClient.CapabilitiesSchema,
                 providerInstanceId = "provider-a",
                 revision = 7,
+                capabilities = new[] { QuartermasterIpcClient.AutomaticRetrievalCapability },
             }),
         };
         using var client = new QuartermasterIpcClient(adapter);
@@ -284,6 +359,7 @@ public sealed class WorkshopQuartermasterRequestServiceTests
                 schema = QuartermasterIpcClient.CapabilitiesSchema,
                 providerInstanceId = "provider-a",
                 revision = 7,
+                capabilities = new[] { QuartermasterIpcClient.AutomaticRetrievalCapability },
             }),
             OperationJson = JsonSerializer.Serialize(new
             {
@@ -465,7 +541,7 @@ public sealed class WorkshopQuartermasterRequestServiceTests
     {
         var adapter = new FakeQuartermasterIpcAdapter
         {
-            CapabilitiesJson = JsonSerializer.Serialize(new { schema = QuartermasterIpcClient.CapabilitiesSchema, providerInstanceId = "provider-a", revision = 1 }),
+            CapabilitiesJson = JsonSerializer.Serialize(new { schema = QuartermasterIpcClient.CapabilitiesSchema, providerInstanceId = "provider-a", revision = 1, capabilities = new[] { QuartermasterIpcClient.AutomaticRetrievalCapability } }),
         };
         adapter.SubmitResponse = requestJson =>
         {
@@ -501,7 +577,7 @@ public sealed class WorkshopQuartermasterRequestServiceTests
     {
         var adapter = new FakeQuartermasterIpcAdapter
         {
-            CapabilitiesJson = JsonSerializer.Serialize(new { schema = QuartermasterIpcClient.CapabilitiesSchema, providerInstanceId = "provider-a", revision = 1 }),
+            CapabilitiesJson = JsonSerializer.Serialize(new { schema = QuartermasterIpcClient.CapabilitiesSchema, providerInstanceId = "provider-a", revision = 1, capabilities = new[] { QuartermasterIpcClient.AutomaticRetrievalCapability } }),
         };
         adapter.SubmitResponse = requestJson =>
         {

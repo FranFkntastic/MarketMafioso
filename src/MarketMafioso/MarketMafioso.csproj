@@ -63,6 +63,13 @@
            Text="Release build resolved Debug project output: @(_DebugProjectReference). Build the plugin project directly or use tools\Build-PluginRelease.ps1." />
   </Target>
 
+  <Target Name="ClearDalamudPackagerStaging"
+          BeforeTargets="DefaultDalamudPackagerRelease"
+          Condition="'$(Configuration)' == 'Release'">
+    <RemoveDir Directories="$(OutputPath)$(AssemblyName)"
+               Condition="Exists('$(OutputPath)$(AssemblyName)')" />
+  </Target>
+
   <Target Name="SyncToDevPlugins" AfterTargets="Build" Condition="'$(Configuration)' == 'Debug' and '$(SkipDevPluginSync)' != 'true'">
     <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\tools\Sync-DevPlugin.ps1&quot; -SourceDir &quot;$(TargetDir).&quot; -DestDir &quot;$(DevPluginDeployDir)&quot; -PluginName &quot;$(AssemblyName)&quot;" />
   </Target>

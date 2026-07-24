@@ -39,8 +39,7 @@
 
   <ItemGroup>
     <ProjectReference Include="$(CraftArchitectCoreProject)" />
-    <ProjectReference Include="..\..\src\MarketMafioso\MarketMafioso.csproj"
-                      AdditionalProperties="FranthropyDalamudProject=$(FranthropyDalamudProject)" />
+    <ProjectReference Include="..\..\src\MarketMafioso\MarketMafioso.csproj" />
   </ItemGroup>
 
   <Target Name="ValidateCraftArchitectCoreProject" BeforeTargets="PrepareForBuild" Condition="!Exists('$(CraftArchitectCoreProject)')">

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Dalamud.Bindings.ImGui;
+using Franthropy.Dalamud.AgentBridge;
 using MarketMafioso.Quartermaster;
 using MarketMafioso.Windows.Main;
 using MarketMafioso.WorkshopPrep;
@@ -14,6 +15,7 @@ internal sealed class WorkshopMaterialPanel
     private readonly WorkshopQuartermasterRequestService requestService;
     private readonly Func<IReadOnlyList<WorkshopMaterialAvailability>> getAvailability;
     private readonly Func<QuartermasterOwnerScope> getOwnerScope;
+    private readonly AgentBridgeUiReviewRegistry reviewRegistry;
     private string searchText = string.Empty;
     private bool shortagesOnly;
 
@@ -21,12 +23,14 @@ internal sealed class WorkshopMaterialPanel
         QuartermasterIpcClient quartermaster,
         WorkshopQuartermasterRequestService requestService,
         Func<IReadOnlyList<WorkshopMaterialAvailability>> getAvailability,
-        Func<QuartermasterOwnerScope> getOwnerScope)
+        Func<QuartermasterOwnerScope> getOwnerScope,
+        AgentBridgeUiReviewRegistry reviewRegistry)
     {
         this.quartermaster = quartermaster ?? throw new ArgumentNullException(nameof(quartermaster));
         this.requestService = requestService ?? throw new ArgumentNullException(nameof(requestService));
         this.getAvailability = getAvailability ?? throw new ArgumentNullException(nameof(getAvailability));
         this.getOwnerScope = getOwnerScope ?? throw new ArgumentNullException(nameof(getOwnerScope));
+        this.reviewRegistry = reviewRegistry ?? throw new ArgumentNullException(nameof(reviewRegistry));
     }
 
     public void Draw(IReadOnlyList<WorkshopMaterialAvailability>? availability = null)
@@ -114,6 +118,20 @@ internal sealed class WorkshopMaterialPanel
                          getOwnerScope().IsAvailable;
         if (ImGuiUi.PrimaryButton("Retrieve From Quartermaster Now", canRequest))
             requestService.Submit(getOwnerScope(), availability);
+        reviewRegistry.Register(
+            "workshop-logistics.retrieve-from-quartermaster",
+            "Retrieve workshop shortages from Quartermaster now",
+            AgentBridgeUiControlKind.Button,
+            ImGui.GetItemRectMin(),
+            ImGui.GetItemRectMax(),
+            canRequest,
+            false,
+            $"{availability.Count(item => item.Shortage > 0)} shortage item(s)",
+            () =>
+            {
+                if (!requestService.Submit(getOwnerScope(), availability))
+                    throw new InvalidOperationException(requestService.LastStatus);
+            });
     }
 
     private System.Numerics.Vector4 GetQuartermasterStatusColor() =>

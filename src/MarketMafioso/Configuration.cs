@@ -20,6 +20,7 @@ public class Configuration : IPluginConfiguration
     public PersistedMarketAcquisitionRequestDocument? ActiveMarketAcquisitionRequestDocument { get; set; }
     [JsonProperty("OutfitterRouteExecutionStateJson")]
     public string? ExactAcquisitionRouteExecutionStateJson { get; set; }
+    public string? ShardAcquisitionCheckpointStateJson { get; set; }
     public List<PersistedMarketAcquisitionWorkbenchComposition> MarketAcquisitionWorkbenchCompositions { get; set; } = [];
     public string? SelectedMarketAcquisitionWorkbenchCompositionId { get; set; }
     public bool EnableMarketAcquisition { get; set; } = false;
