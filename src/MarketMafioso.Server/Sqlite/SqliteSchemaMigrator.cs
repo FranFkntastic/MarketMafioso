@@ -373,6 +373,25 @@ public sealed class SqliteSchemaMigrator
             raw_evidence_json TEXT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS market_region_observations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+            region TEXT NOT NULL,
+            item_id INTEGER NOT NULL,
+            item_name TEXT NULL,
+            is_hq INTEGER NOT NULL,
+            observed_at_utc TEXT NOT NULL,
+            min_listing_price INTEGER NULL,
+            min_listing_world_id INTEGER NULL,
+            average_sale_price REAL NULL,
+            daily_sale_velocity REAL NULL,
+            recent_purchase_price INTEGER NULL,
+            recent_purchase_world_id INTEGER NULL,
+            recent_purchase_at_utc TEXT NULL,
+            freshest_world_upload_at_utc TEXT NULL,
+            source_age_seconds INTEGER NULL
+        );
+
         CREATE INDEX IF NOT EXISTS idx_snapshots_account_received_at ON snapshots(account_id, received_at_utc DESC);
         CREATE INDEX IF NOT EXISTS idx_snapshots_character_received_at ON snapshots(character_id, received_at_utc DESC);
         CREATE INDEX IF NOT EXISTS idx_inventory_owners_snapshot ON inventory_owners(snapshot_id, sort_order);
@@ -391,6 +410,10 @@ public sealed class SqliteSchemaMigrator
             ON market_undercut_episodes(account_id, cleared_at_utc, last_seen_at_utc DESC);
         CREATE INDEX IF NOT EXISTS idx_retainer_sale_events_account
             ON retainer_sale_events(account_id, observed_at_utc DESC);
+        CREATE INDEX IF NOT EXISTS idx_market_region_observations_account
+            ON market_region_observations(account_id, region, observed_at_utc DESC);
+        CREATE INDEX IF NOT EXISTS idx_market_region_observations_item
+            ON market_region_observations(account_id, item_id, is_hq, observed_at_utc DESC);
         CREATE INDEX IF NOT EXISTS idx_diagnostic_events_occurred ON diagnostic_events(occurred_at_utc DESC);
         CREATE INDEX IF NOT EXISTS idx_diagnostic_events_category ON diagnostic_events(category, occurred_at_utc DESC);
         CREATE INDEX IF NOT EXISTS idx_diagnostic_events_severity ON diagnostic_events(severity, occurred_at_utc DESC);

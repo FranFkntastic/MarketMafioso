@@ -39,6 +39,36 @@ public sealed class UniversalisMarketDiagnosticClient(IHttpClientFactory httpCli
         return Parse(document.RootElement);
     }
 
+    public async Task<IReadOnlyList<RegionMarketCondition>> FetchRegionConditionsAsync(
+        string region,
+        IReadOnlyCollection<uint> itemIds,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(region))
+            throw new InvalidOperationException("A region is required for a market diagnostic request.");
+
+        var normalizedItemIds = itemIds.Where(itemId => itemId != 0).Distinct().Take(100).ToArray();
+        if (normalizedItemIds.Length == 0)
+            return [];
+
+        var encodedRegion = Uri.EscapeDataString(region.Trim());
+        var encodedItems = string.Join(",", normalizedItemIds);
+        var requestUri = new Uri(BaseUri, $"aggregated/{encodedRegion}/{encodedItems}");
+        using var request = new HttpRequestMessage(HttpMethod.Get, requestUri);
+        request.Headers.UserAgent.ParseAdd("MarketMafioso-MarketDiagnostics/1.0");
+
+        using var response = await httpClientFactory
+            .CreateClient(nameof(UniversalisMarketDiagnosticClient))
+            .SendAsync(request, cancellationToken)
+            .ConfigureAwait(false);
+        if (!response.IsSuccessStatusCode)
+            throw await CreateExceptionAsync(response, requestUri, cancellationToken).ConfigureAwait(false);
+
+        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+        using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken).ConfigureAwait(false);
+        return ParseRegionConditions(document.RootElement);
+    }
+
     internal static IReadOnlyDictionary<uint, UniversalisItemEvidence> Parse(JsonElement root)
     {
         var results = new Dictionary<uint, UniversalisItemEvidence>();
@@ -57,6 +87,92 @@ public sealed class UniversalisMarketDiagnosticClient(IHttpClientFactory httpCli
             results[singleItemId] = ParseItem(singleItemId, root);
 
         return results;
+    }
+
+    internal static IReadOnlyList<RegionMarketCondition> ParseRegionConditions(JsonElement root)
+    {
+        if (!root.TryGetProperty("results", out var results) ||
+            results.ValueKind != JsonValueKind.Array)
+        {
+            return [];
+        }
+
+        var conditions = new List<RegionMarketCondition>();
+        foreach (var item in results.EnumerateArray())
+        {
+            if (!TryReadUInt(item, "itemId", out var itemId))
+                continue;
+
+            DateTimeOffset? freshestUpload = null;
+            if (item.TryGetProperty("worldUploadTimes", out var uploads) &&
+                uploads.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var upload in uploads.EnumerateArray())
+                {
+                    if (!TryReadLong(upload, "timestamp", out var timestamp) || timestamp <= 0)
+                        continue;
+
+                    var uploadedAt = DateTimeOffset.FromUnixTimeMilliseconds(timestamp);
+                    if (!freshestUpload.HasValue || uploadedAt > freshestUpload)
+                        freshestUpload = uploadedAt;
+                }
+            }
+
+            conditions.Add(ParseRegionCondition(item, itemId, isHq: false, "nq", freshestUpload));
+            conditions.Add(ParseRegionCondition(item, itemId, isHq: true, "hq", freshestUpload));
+        }
+
+        return conditions;
+    }
+
+    private static RegionMarketCondition ParseRegionCondition(
+        JsonElement item,
+        uint itemId,
+        bool isHq,
+        string qualityProperty,
+        DateTimeOffset? freshestUpload)
+    {
+        if (!item.TryGetProperty(qualityProperty, out var quality) ||
+            quality.ValueKind != JsonValueKind.Object)
+        {
+            return new RegionMarketCondition
+            {
+                ItemId = itemId,
+                IsHq = isHq,
+                FreshestWorldUploadAtUtc = freshestUpload,
+            };
+        }
+
+        var minimumListing = ReadRegionMetric(quality, "minListing");
+        var recentPurchase = ReadRegionMetric(quality, "recentPurchase");
+        var averageSalePrice = ReadRegionMetric(quality, "averageSalePrice");
+        var dailySaleVelocity = ReadRegionMetric(quality, "dailySaleVelocity");
+        return new RegionMarketCondition
+        {
+            ItemId = itemId,
+            IsHq = isHq,
+            MinimumListingPrice = ReadOptionalUInt(minimumListing, "price"),
+            MinimumListingWorldId = ReadOptionalUInt(minimumListing, "worldId"),
+            AverageSalePrice = ReadOptionalDouble(averageSalePrice, "price"),
+            DailySaleVelocity = ReadOptionalDouble(dailySaleVelocity, "quantity"),
+            RecentPurchasePrice = ReadOptionalUInt(recentPurchase, "price"),
+            RecentPurchaseWorldId = ReadOptionalUInt(recentPurchase, "worldId"),
+            RecentPurchaseAtUtc = ReadOptionalUnixMilliseconds(recentPurchase, "timestamp"),
+            FreshestWorldUploadAtUtc = freshestUpload,
+        };
+    }
+
+    private static JsonElement ReadRegionMetric(JsonElement quality, string propertyName)
+    {
+        if (quality.TryGetProperty(propertyName, out var metric) &&
+            metric.ValueKind == JsonValueKind.Object &&
+            metric.TryGetProperty("region", out var region) &&
+            region.ValueKind == JsonValueKind.Object)
+        {
+            return region;
+        }
+
+        return default;
     }
 
     private static UniversalisItemEvidence ParseItem(uint itemId, JsonElement item)
@@ -169,6 +285,39 @@ public sealed class UniversalisMarketDiagnosticClient(IHttpClientFactory httpCli
         return property.ValueKind == JsonValueKind.String &&
                bool.TryParse(property.GetString(), out value);
     }
+
+    private static uint? ReadOptionalUInt(JsonElement element, string propertyName) =>
+        element.ValueKind == JsonValueKind.Object &&
+        TryReadUInt(element, propertyName, out var value)
+            ? value
+            : null;
+
+    private static double? ReadOptionalDouble(JsonElement element, string propertyName)
+    {
+        if (element.ValueKind != JsonValueKind.Object ||
+            !element.TryGetProperty(propertyName, out var property))
+        {
+            return null;
+        }
+
+        return property.ValueKind switch
+        {
+            JsonValueKind.Number when property.TryGetDouble(out var value) => value,
+            JsonValueKind.String when double.TryParse(
+                property.GetString(),
+                System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out var value) => value,
+            _ => null,
+        };
+    }
+
+    private static DateTimeOffset? ReadOptionalUnixMilliseconds(JsonElement element, string propertyName) =>
+        element.ValueKind == JsonValueKind.Object &&
+        TryReadLong(element, propertyName, out var timestamp) &&
+        timestamp > 0
+            ? DateTimeOffset.FromUnixTimeMilliseconds(timestamp)
+            : null;
 }
 
 public sealed class UniversalisMarketDiagnosticException(

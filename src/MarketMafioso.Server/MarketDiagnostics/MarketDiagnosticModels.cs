@@ -41,6 +41,50 @@ public sealed record UniversalisItemEvidence
     public IReadOnlyList<UniversalisListingEvidence> Listings { get; init; } = [];
 }
 
+public sealed record RegionMarketCondition
+{
+    public uint ItemId { get; init; }
+    public bool IsHq { get; init; }
+    public uint? MinimumListingPrice { get; init; }
+    public uint? MinimumListingWorldId { get; init; }
+    public double? AverageSalePrice { get; init; }
+    public double? DailySaleVelocity { get; init; }
+    public uint? RecentPurchasePrice { get; init; }
+    public uint? RecentPurchaseWorldId { get; init; }
+    public DateTimeOffset? RecentPurchaseAtUtc { get; init; }
+    public DateTimeOffset? FreshestWorldUploadAtUtc { get; init; }
+}
+
+public sealed record RegionMarketConditionView : RegionMarketCondition
+{
+    public long Id { get; init; }
+    public long AccountId { get; init; }
+    public string Region { get; init; } = string.Empty;
+    public string? ItemName { get; init; }
+    public DateTimeOffset ObservedAtUtc { get; init; }
+    public long? SourceAgeSeconds { get; init; }
+}
+
+public sealed record RetainerSaleEventView
+{
+    public long Id { get; init; }
+    public long AccountId { get; init; }
+    public long? OwnedListingVersionId { get; init; }
+    public string Source { get; init; } = string.Empty;
+    public string Confidence { get; init; } = string.Empty;
+    public ulong? RetainerId { get; init; }
+    public string? RetainerName { get; init; }
+    public string? World { get; init; }
+    public uint ItemId { get; init; }
+    public string? ItemName { get; init; }
+    public uint? Quantity { get; init; }
+    public bool? IsHq { get; init; }
+    public uint? UnitPrice { get; init; }
+    public ulong? TotalGil { get; init; }
+    public DateTimeOffset? EventAtUtc { get; init; }
+    public DateTimeOffset ObservedAtUtc { get; init; }
+}
+
 public enum MarketObservationClassification
 {
     Clear,

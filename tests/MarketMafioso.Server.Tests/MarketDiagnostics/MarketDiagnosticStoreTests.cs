@@ -34,7 +34,7 @@ public sealed class MarketDiagnosticStoreTests
         var store = new MarketDiagnosticStore(factory);
 
         var listing = Assert.Single(await store.SynchronizeOwnedListingsAsync(CancellationToken.None));
-        var detectedAt = new DateTimeOffset(2026, 7, 24, 12, 5, 0, TimeSpan.Zero);
+        var detectedAt = listing.FirstObservedAtUtc.AddMinutes(5);
         var transition = await store.RecordObservationAsync(
             new MarketListingEvaluation
             {

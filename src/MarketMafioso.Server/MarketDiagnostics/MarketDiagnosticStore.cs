@@ -9,10 +9,11 @@ public sealed class MarketDiagnosticStore(SqliteConnectionFactory connectionFact
     public async Task<IReadOnlyList<OwnedMarketListing>> SynchronizeOwnedListingsAsync(
         CancellationToken cancellationToken)
     {
-        var current = await ReadLatestOwnedListingsAsync(cancellationToken);
-        if (current.Count == 0)
+        var scopes = await ReadLatestListingScopesAsync(cancellationToken);
+        if (scopes.Count == 0)
             return [];
 
+        var current = await ReadLatestOwnedListingsAsync(cancellationToken);
         var observedAt = DateTimeOffset.UtcNow;
         await using var connection = await connectionFactory.OpenConnectionAsync(cancellationToken);
         await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
@@ -95,6 +96,24 @@ public sealed class MarketDiagnosticStore(SqliteConnectionFactory connectionFact
             await upsert.ExecuteNonQueryAsync(cancellationToken);
         }
 
+        foreach (var scope in scopes)
+        {
+            var currentVersionKeys = current
+                .Where(listing =>
+                    listing.AccountId == scope.AccountId &&
+                    string.Equals(listing.CharacterName, scope.CharacterName, StringComparison.Ordinal) &&
+                    string.Equals(listing.World, scope.World, StringComparison.OrdinalIgnoreCase))
+                .Select(listing => listing.VersionKey)
+                .ToHashSet(StringComparer.Ordinal);
+            await CloseMissingListingsAsync(
+                connection,
+                transaction,
+                scope,
+                currentVersionKeys,
+                observedAt,
+                cancellationToken);
+        }
+
         await transaction.CommitAsync(cancellationToken);
         return await ListActiveOwnedListingsAsync(cancellationToken);
     }
@@ -162,7 +181,7 @@ public sealed class MarketDiagnosticStore(SqliteConnectionFactory connectionFact
                     listing.Id,
                     evaluation.ObservedAtUtc,
                     cancellationToken);
-                var listingStarted = listing.ListedAtUtc ?? listing.FirstObservedAtUtc;
+                var listingStarted = listing.FirstObservedAtUtc;
                 var lowerBound = lastClear.HasValue
                     ? Math.Max(0, (long)(lastClear.Value - listingStarted).TotalMilliseconds)
                     : 0;
@@ -381,6 +400,161 @@ public sealed class MarketDiagnosticStore(SqliteConnectionFactory connectionFact
         }
 
         return listings;
+    }
+
+    private async Task<List<ListingScope>> ReadLatestListingScopesAsync(CancellationToken cancellationToken)
+    {
+        await using var connection = await connectionFactory.OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            WITH latest_snapshots AS (
+                SELECT
+                    s.id,
+                    s.account_id,
+                    s.character_id,
+                    s.character_name,
+                    s.home_world,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY s.account_id, COALESCE(s.character_id, -1)
+                        ORDER BY s.received_at_utc DESC, s.id DESC
+                    ) AS rank
+                FROM snapshots s
+                WHERE EXISTS (
+                    SELECT 1
+                    FROM inventory_owners observed_owner
+                    WHERE observed_owner.snapshot_id = s.id
+                      AND observed_owner.owner_type = 'retainer'
+                      AND observed_owner.listings_observed_at_utc IS NOT NULL
+                )
+            )
+            SELECT DISTINCT
+                latest.account_id,
+                latest.character_name,
+                latest.home_world
+            FROM latest_snapshots latest
+            WHERE latest.rank = 1
+              AND latest.home_world IS NOT NULL
+              AND TRIM(latest.home_world) <> '';
+            """;
+
+        var scopes = new List<ListingScope>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            scopes.Add(new ListingScope(
+                reader.GetInt64(0),
+                reader.IsDBNull(1) ? null : reader.GetString(1),
+                reader.GetString(2)));
+        }
+
+        return scopes;
+    }
+
+    private static async Task CloseMissingListingsAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        ListingScope scope,
+        IReadOnlySet<string> currentVersionKeys,
+        DateTimeOffset observedAt,
+        CancellationToken cancellationToken)
+    {
+        var missingIds = new List<long>();
+        await using (var select = connection.CreateCommand())
+        {
+            select.Transaction = transaction;
+            select.CommandText = """
+                SELECT id, version_key
+                FROM market_owned_listing_versions
+                WHERE account_id = $accountId
+                  AND world = $world COLLATE NOCASE
+                  AND (
+                      character_name = $characterName OR
+                      (character_name IS NULL AND $characterName IS NULL)
+                  )
+                  AND is_active = 1;
+                """;
+            select.Parameters.AddWithValue("$accountId", scope.AccountId);
+            select.Parameters.AddWithValue("$world", scope.World);
+            select.Parameters.AddWithValue("$characterName", Db(scope.CharacterName));
+            await using var reader = await select.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                if (!currentVersionKeys.Contains(reader.GetString(1)))
+                    missingIds.Add(reader.GetInt64(0));
+            }
+        }
+
+        foreach (var listingId in missingIds)
+        {
+            await using (var saleEvent = connection.CreateCommand())
+            {
+                saleEvent.Transaction = transaction;
+                saleEvent.CommandText = """
+                    INSERT INTO retainer_sale_events (
+                        account_id,
+                        owned_listing_version_id,
+                        source,
+                        confidence,
+                        retainer_id,
+                        retainer_name,
+                        world,
+                        item_id,
+                        item_name,
+                        quantity,
+                        is_hq,
+                        unit_price,
+                        observed_at_utc
+                    )
+                    SELECT
+                        account_id,
+                        id,
+                        'LocalListingDiff',
+                        'Unresolved',
+                        retainer_id,
+                        retainer_name,
+                        world,
+                        item_id,
+                        item_name,
+                        quantity,
+                        is_hq,
+                        unit_price,
+                        $observedAt
+                    FROM market_owned_listing_versions
+                    WHERE id = $listingId;
+                    """;
+                saleEvent.Parameters.AddWithValue("$observedAt", Format(observedAt));
+                saleEvent.Parameters.AddWithValue("$listingId", listingId);
+                await saleEvent.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            await using (var closeEpisodes = connection.CreateCommand())
+            {
+                closeEpisodes.Transaction = transaction;
+                closeEpisodes.CommandText = """
+                    UPDATE market_undercut_episodes
+                    SET cleared_at_utc = $closedAt,
+                        close_reason = 'OwnedListingDisappeared'
+                    WHERE owned_listing_version_id = $listingId
+                      AND cleared_at_utc IS NULL;
+                    """;
+                closeEpisodes.Parameters.AddWithValue("$closedAt", Format(observedAt));
+                closeEpisodes.Parameters.AddWithValue("$listingId", listingId);
+                await closeEpisodes.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            await using var closeListing = connection.CreateCommand();
+            closeListing.Transaction = transaction;
+            closeListing.CommandText = """
+                UPDATE market_owned_listing_versions
+                SET is_active = 0,
+                    closed_at_utc = $closedAt,
+                    close_reason = 'LocallyDisappeared'
+                WHERE id = $listingId;
+                """;
+            closeListing.Parameters.AddWithValue("$closedAt", Format(observedAt));
+            closeListing.Parameters.AddWithValue("$listingId", listingId);
+            await closeListing.ExecuteNonQueryAsync(cancellationToken);
+        }
     }
 
     private static async Task InsertObservationAsync(
@@ -723,4 +897,6 @@ public sealed class MarketDiagnosticStore(SqliteConnectionFactory connectionFact
         string? CurrentCompetitorListingId,
         string? CurrentCompetitorRetainerId,
         long ResponseUpperBoundMs);
+
+    private sealed record ListingScope(long AccountId, string? CharacterName, string World);
 }
