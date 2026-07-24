@@ -34,6 +34,19 @@ public static class MarketUndercutClassifier
                 sourceAge);
         }
 
+        var ownListingVisible = evidence.Listings.Any(listing =>
+            listing.ItemId == ownedListing.ItemId &&
+            listing.IsHq == ownedListing.IsHq &&
+            listing.UnitPrice == ownedListing.UnitPrice &&
+            listing.Quantity == ownedListing.Quantity &&
+            (string.Equals(
+                 listing.RetainerName,
+                 ownedListing.RetainerName,
+                 StringComparison.OrdinalIgnoreCase) ||
+             string.Equals(
+                 listing.RetainerId,
+                 ownedListing.RetainerId.ToString(),
+                 StringComparison.Ordinal)));
         var competitor = evidence.Listings
             .Where(listing =>
                 listing.ItemId == ownedListing.ItemId &&
@@ -57,7 +70,8 @@ public static class MarketUndercutClassifier
                 uploadedAt,
                 MarketObservationClassification.UnknownMissing,
                 "CompetitorIdentityMissing",
-                sourceAge);
+                sourceAge,
+                ownListingVisible);
         }
 
         if (competitor == null && relevantMinimumPrice == null)
@@ -68,7 +82,8 @@ public static class MarketUndercutClassifier
                 uploadedAt,
                 MarketObservationClassification.UnknownMissing,
                 "QualityEvidenceMissing",
-                sourceAge);
+                sourceAge,
+                ownListingVisible);
         }
 
         if (competitor == null || competitor.UnitPrice >= ownedListing.UnitPrice)
@@ -81,6 +96,7 @@ public static class MarketUndercutClassifier
                 SourceUploadedAtUtc = uploadedAt,
                 SourceAgeSeconds = Math.Max(0, (long)sourceAge.TotalSeconds),
                 SourceFreshness = "Fresh",
+                OwnListingVisible = ownListingVisible,
             };
         }
 
@@ -92,6 +108,7 @@ public static class MarketUndercutClassifier
             SourceUploadedAtUtc = uploadedAt,
             SourceAgeSeconds = Math.Max(0, (long)sourceAge.TotalSeconds),
             SourceFreshness = "Fresh",
+            OwnListingVisible = ownListingVisible,
             Competitor = competitor,
             UndercutDelta = ownedListing.UnitPrice - competitor.UnitPrice,
         };
@@ -103,7 +120,8 @@ public static class MarketUndercutClassifier
         DateTimeOffset? uploadedAtUtc,
         MarketObservationClassification classification,
         string freshness,
-        TimeSpan? sourceAge = null) =>
+        TimeSpan? sourceAge = null,
+        bool? ownListingVisible = null) =>
         new()
         {
             OwnedListing = ownedListing,
@@ -114,5 +132,6 @@ public static class MarketUndercutClassifier
                 ? Math.Max(0, (long)sourceAge.Value.TotalSeconds)
                 : null,
             SourceFreshness = freshness,
+            OwnListingVisible = ownListingVisible,
         };
 }

@@ -6,6 +6,10 @@ namespace MarketMafioso.Server.MarketDiagnostics;
 public sealed class UniversalisMarketDiagnosticClient(IHttpClientFactory httpClientFactory)
 {
     private static readonly Uri BaseUri = new("https://universalis.app/api/v2/");
+    private static readonly TimeSpan MinimumRequestSpacing = TimeSpan.FromMilliseconds(50);
+    private readonly SemaphoreSlim requestGate = new(1, 1);
+    private DateTimeOffset nextRequestAtUtc = DateTimeOffset.MinValue;
+    private int consecutiveFailures;
 
     public async Task<IReadOnlyDictionary<uint, UniversalisItemEvidence>> FetchWorldAsync(
         string world,
@@ -27,10 +31,7 @@ public sealed class UniversalisMarketDiagnosticClient(IHttpClientFactory httpCli
         using var request = new HttpRequestMessage(HttpMethod.Get, requestUri);
         request.Headers.UserAgent.ParseAdd("MarketMafioso-MarketDiagnostics/1.0");
 
-        using var response = await httpClientFactory
-            .CreateClient(nameof(UniversalisMarketDiagnosticClient))
-            .SendAsync(request, cancellationToken)
-            .ConfigureAwait(false);
+        using var response = await SendAsync(request, cancellationToken).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
             throw await CreateExceptionAsync(response, requestUri, cancellationToken).ConfigureAwait(false);
 
@@ -57,16 +58,38 @@ public sealed class UniversalisMarketDiagnosticClient(IHttpClientFactory httpCli
         using var request = new HttpRequestMessage(HttpMethod.Get, requestUri);
         request.Headers.UserAgent.ParseAdd("MarketMafioso-MarketDiagnostics/1.0");
 
-        using var response = await httpClientFactory
-            .CreateClient(nameof(UniversalisMarketDiagnosticClient))
-            .SendAsync(request, cancellationToken)
-            .ConfigureAwait(false);
+        using var response = await SendAsync(request, cancellationToken).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
             throw await CreateExceptionAsync(response, requestUri, cancellationToken).ConfigureAwait(false);
 
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
         using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken).ConfigureAwait(false);
         return ParseRegionConditions(document.RootElement);
+    }
+
+    public async Task<IReadOnlyList<UniversalisSaleEvidence>> FetchSaleHistoryAsync(
+        string world,
+        uint itemId,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(world))
+            throw new InvalidOperationException("A world is required for a market sale-history request.");
+        if (itemId == 0)
+            return [];
+
+        var requestUri = new Uri(
+            BaseUri,
+            $"history/{Uri.EscapeDataString(world.Trim())}/{itemId}");
+        using var request = new HttpRequestMessage(HttpMethod.Get, requestUri);
+        request.Headers.UserAgent.ParseAdd("MarketMafioso-MarketDiagnostics/1.0");
+
+        using var response = await SendAsync(request, cancellationToken).ConfigureAwait(false);
+        if (!response.IsSuccessStatusCode)
+            throw await CreateExceptionAsync(response, requestUri, cancellationToken).ConfigureAwait(false);
+
+        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+        using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken).ConfigureAwait(false);
+        return ParseSaleHistory(itemId, document.RootElement);
     }
 
     internal static IReadOnlyDictionary<uint, UniversalisItemEvidence> Parse(JsonElement root)
@@ -88,6 +111,73 @@ public sealed class UniversalisMarketDiagnosticClient(IHttpClientFactory httpCli
 
         return results;
     }
+
+    private async Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request,
+        CancellationToken cancellationToken)
+    {
+        await requestGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var delay = nextRequestAtUtc - DateTimeOffset.UtcNow;
+            if (delay > TimeSpan.Zero)
+                await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
+
+            HttpResponseMessage response;
+            try
+            {
+                response = await httpClientFactory
+                    .CreateClient(nameof(UniversalisMarketDiagnosticClient))
+                    .SendAsync(request, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception exception) when (
+                !cancellationToken.IsCancellationRequested &&
+                exception is HttpRequestException or TaskCanceledException)
+            {
+                RegisterFailure(retryAfterUtc: null);
+                throw;
+            }
+
+            if (response.IsSuccessStatusCode)
+            {
+                consecutiveFailures = 0;
+                nextRequestAtUtc = DateTimeOffset.UtcNow + MinimumRequestSpacing;
+            }
+            else if (response.StatusCode == HttpStatusCode.TooManyRequests ||
+                     (int)response.StatusCode >= 500)
+            {
+                var retryAfterUtc = response.Headers.RetryAfter?.Date ??
+                    (response.Headers.RetryAfter?.Delta is { } retryAfter
+                        ? DateTimeOffset.UtcNow + retryAfter
+                        : null);
+                RegisterFailure(retryAfterUtc);
+            }
+            else
+            {
+                consecutiveFailures = 0;
+                nextRequestAtUtc = DateTimeOffset.UtcNow + MinimumRequestSpacing;
+            }
+
+            return response;
+        }
+        finally
+        {
+            requestGate.Release();
+        }
+    }
+
+    private void RegisterFailure(DateTimeOffset? retryAfterUtc)
+    {
+        consecutiveFailures = Math.Min(consecutiveFailures + 1, 8);
+        var exponentialBackoff = DateTimeOffset.UtcNow + CalculateBackoff(consecutiveFailures);
+        nextRequestAtUtc = retryAfterUtc is { } retryAfter && retryAfter > exponentialBackoff
+            ? retryAfter
+            : exponentialBackoff;
+    }
+
+    internal static TimeSpan CalculateBackoff(int consecutiveFailures) =>
+        TimeSpan.FromSeconds(Math.Min(300, 1 << Math.Clamp(consecutiveFailures, 1, 8)));
 
     internal static IReadOnlyList<RegionMarketCondition> ParseRegionConditions(JsonElement root)
     {
@@ -123,6 +213,41 @@ public sealed class UniversalisMarketDiagnosticClient(IHttpClientFactory httpCli
         }
 
         return conditions;
+    }
+
+    internal static IReadOnlyList<UniversalisSaleEvidence> ParseSaleHistory(uint itemId, JsonElement root)
+    {
+        if (!root.TryGetProperty("entries", out var entries) ||
+            entries.ValueKind != JsonValueKind.Array)
+        {
+            return [];
+        }
+
+        var sales = new List<UniversalisSaleEvidence>();
+        foreach (var entry in entries.EnumerateArray())
+        {
+            if (!TryReadUInt(entry, "pricePerUnit", out var unitPrice) ||
+                !TryReadUInt(entry, "quantity", out var quantity) ||
+                !TryReadLong(entry, "timestamp", out var timestamp) ||
+                timestamp <= 0 ||
+                !TryReadBool(entry, "hq", out var isHq))
+            {
+                continue;
+            }
+
+            sales.Add(new UniversalisSaleEvidence
+            {
+                ItemId = itemId,
+                UnitPrice = unitPrice,
+                Quantity = quantity,
+                IsHq = isHq,
+                BuyerName = ReadOptionalString(entry, "buyerName"),
+                OnMannequin = TryReadBool(entry, "onMannequin", out var onMannequin) && onMannequin,
+                SoldAtUtc = DateTimeOffset.FromUnixTimeSeconds(timestamp),
+            });
+        }
+
+        return sales;
     }
 
     private static RegionMarketCondition ParseRegionCondition(
@@ -257,6 +382,11 @@ public sealed class UniversalisMarketDiagnosticClient(IHttpClientFactory httpCli
         element.TryGetProperty(propertyName, out var property) && property.ValueKind == JsonValueKind.String
             ? property.GetString() ?? string.Empty
             : string.Empty;
+
+    private static string? ReadOptionalString(JsonElement element, string propertyName) =>
+        element.TryGetProperty(propertyName, out var property) && property.ValueKind == JsonValueKind.String
+            ? property.GetString()
+            : null;
 
     private static bool TryReadUInt(JsonElement element, string propertyName, out uint value)
     {

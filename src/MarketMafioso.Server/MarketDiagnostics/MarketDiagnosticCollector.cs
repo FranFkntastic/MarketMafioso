@@ -25,6 +25,7 @@ public sealed class MarketDiagnosticCollector(
             1,
             100);
         var observationCount = 0;
+        var saleHistoryCache = new Dictionary<(string World, uint ItemId), IReadOnlyList<UniversalisSaleEvidence>>();
 
         foreach (var group in ownedListings.GroupBy(listing => new { listing.AccountId, listing.World }))
         {
@@ -88,11 +89,20 @@ public sealed class MarketDiagnosticCollector(
                         maximumEvidenceAge);
                     var transition = await store.RecordObservationAsync(evaluation, cancellationToken);
                     observationCount++;
-                    if (transition == null)
-                        continue;
+                    if (transition != null)
+                    {
+                        await WriteTransitionAsync(transition, cancellationToken);
+                        await alertSink.SendAsync(transition, cancellationToken);
+                    }
 
-                    await WriteTransitionAsync(transition, cancellationToken);
-                    await alertSink.SendAsync(transition, cancellationToken);
+                    if (evaluation.OwnListingVisible == false)
+                    {
+                        await TryCorrelatePublicSaleAsync(
+                            listing,
+                            observedAt,
+                            saleHistoryCache,
+                            cancellationToken);
+                    }
                 }
             }
         }
@@ -110,6 +120,99 @@ public sealed class MarketDiagnosticCollector(
                 3650)),
             cancellationToken);
         return observationCount;
+    }
+
+    private async Task TryCorrelatePublicSaleAsync(
+        OwnedMarketListing listing,
+        DateTimeOffset observedAtUtc,
+        IDictionary<(string World, uint ItemId), IReadOnlyList<UniversalisSaleEvidence>> cache,
+        CancellationToken cancellationToken)
+    {
+        var retryInterval = TimeSpan.FromMinutes(Math.Clamp(
+            configuration.GetValue("MarketMafioso:MarketDiagnostics:SaleHistoryRetryMinutes", 5),
+            1,
+            1440));
+        var probe = await store.GetDueSaleHistoryProbeAsync(
+            listing.Id,
+            observedAtUtc,
+            retryInterval,
+            cancellationToken);
+        if (probe == null)
+            return;
+
+        var key = (probe.Listing.World.ToUpperInvariant(), probe.Listing.ItemId);
+        if (!cache.TryGetValue(key, out var history))
+        {
+            try
+            {
+                history = await universalis.FetchSaleHistoryAsync(
+                    probe.Listing.World,
+                    probe.Listing.ItemId,
+                    cancellationToken);
+                cache[key] = history;
+            }
+            catch (Exception exception) when (
+                exception is HttpRequestException or
+                JsonException or
+                InvalidOperationException)
+            {
+                log.LogWarning(
+                    exception,
+                    "Universalis sale-history request failed for {ItemId} on {World}.",
+                    probe.Listing.ItemId,
+                    probe.Listing.World);
+                return;
+            }
+        }
+
+        var candidates = history
+            .Where(sale =>
+                sale.ItemId == probe.Listing.ItemId &&
+                sale.IsHq == probe.Listing.IsHq &&
+                sale.UnitPrice == probe.Listing.UnitPrice &&
+                sale.Quantity == probe.Listing.Quantity &&
+                sale.SoldAtUtc >= probe.EarliestAtUtc &&
+                sale.SoldAtUtc <= probe.LatestAtUtc)
+            .ToArray();
+        var saleEvent = await store.RecordPublicSaleHistoryAsync(
+            probe,
+            candidates,
+            observedAtUtc,
+            cancellationToken);
+        if (saleEvent == null)
+            return;
+
+        var type = saleEvent.Confidence == "Probable"
+            ? "SaleProbablyMatched"
+            : "SaleHistoryAmbiguous";
+        await diagnosticEvents.WriteAsync(
+            new DiagnosticEventCreate
+            {
+                Source = "WorkshopHost",
+                Category = "MarketDiagnostics",
+                Type = type,
+                Severity = saleEvent.Confidence == "Probable" ? "Info" : "Warning",
+                Outcome = saleEvent.Confidence,
+                Message =
+                    $"{type}: {saleEvent.ItemName ?? $"item {saleEvent.ItemId}"} on {saleEvent.World}; " +
+                    $"{saleEvent.CandidateCount ?? 0} matching public sale record(s).",
+                CorrelationId = $"market-listing:{saleEvent.OwnedListingVersionId}",
+                AccountId = saleEvent.AccountId,
+                ItemId = saleEvent.ItemId,
+                ItemName = saleEvent.ItemName,
+                World = saleEvent.World,
+                PayloadSummaryJson = JsonSerializer.Serialize(new
+                {
+                    saleEvent.RetainerName,
+                    saleEvent.UnitPrice,
+                    saleEvent.Quantity,
+                    saleEvent.EventAtUtc,
+                    saleEvent.EarliestEventAtUtc,
+                    saleEvent.LatestEventAtUtc,
+                    saleEvent.CandidateCount,
+                }),
+            },
+            cancellationToken);
     }
 
     private async Task CollectRegionConditionsAsync(

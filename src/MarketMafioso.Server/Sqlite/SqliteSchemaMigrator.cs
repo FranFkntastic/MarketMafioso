@@ -45,6 +45,14 @@ public sealed class SqliteSchemaMigrator
         await AddColumnIfMissingAsync(connection, transaction, "ingest_keys", "purpose", "TEXT NOT NULL DEFAULT 'LegacyClient'", cancellationToken);
         await AddColumnIfMissingAsync(connection, transaction, "ingest_keys", "key_prefix", "TEXT NULL", cancellationToken);
         await AddColumnIfMissingAsync(connection, transaction, "ingest_keys", "last_used_at_utc", "TEXT NULL", cancellationToken);
+        await AddColumnIfMissingAsync(connection, transaction, "market_owned_listing_versions", "last_publicly_seen_at_utc", "TEXT NULL", cancellationToken);
+        await AddColumnIfMissingAsync(connection, transaction, "market_owned_listing_versions", "publicly_missing_since_utc", "TEXT NULL", cancellationToken);
+        await AddColumnIfMissingAsync(connection, transaction, "market_owned_listing_versions", "sale_history_checked_at_utc", "TEXT NULL", cancellationToken);
+        await AddColumnIfMissingAsync(connection, transaction, "market_observations", "own_listing_visible", "INTEGER NULL", cancellationToken);
+        await AddColumnIfMissingAsync(connection, transaction, "retainer_sale_events", "earliest_event_at_utc", "TEXT NULL", cancellationToken);
+        await AddColumnIfMissingAsync(connection, transaction, "retainer_sale_events", "latest_event_at_utc", "TEXT NULL", cancellationToken);
+        await AddColumnIfMissingAsync(connection, transaction, "retainer_sale_events", "candidate_count", "INTEGER NULL", cancellationToken);
+        await AddColumnIfMissingAsync(connection, transaction, "retainer_sale_events", "character_name", "TEXT NULL", cancellationToken);
 
         await transaction.CommitAsync(cancellationToken);
 
@@ -303,6 +311,9 @@ public sealed class SqliteSchemaMigrator
             listings_observed_at_utc TEXT NOT NULL,
             first_observed_at_utc TEXT NOT NULL,
             last_observed_at_utc TEXT NOT NULL,
+            last_publicly_seen_at_utc TEXT NULL,
+            publicly_missing_since_utc TEXT NULL,
+            sale_history_checked_at_utc TEXT NULL,
             is_active INTEGER NOT NULL DEFAULT 1,
             closed_at_utc TEXT NULL,
             close_reason TEXT NULL,
@@ -318,6 +329,7 @@ public sealed class SqliteSchemaMigrator
             source_age_seconds INTEGER NULL,
             source_freshness TEXT NOT NULL,
             classification TEXT NOT NULL,
+            own_listing_visible INTEGER NULL,
             own_unit_price INTEGER NOT NULL,
             competitor_listing_id TEXT NULL,
             competitor_retainer_id TEXT NULL,
@@ -360,6 +372,7 @@ public sealed class SqliteSchemaMigrator
             confidence TEXT NOT NULL,
             retainer_id INTEGER NULL,
             retainer_name TEXT NULL,
+            character_name TEXT NULL,
             world TEXT NULL,
             item_id INTEGER NOT NULL,
             item_name TEXT NULL,
@@ -368,6 +381,9 @@ public sealed class SqliteSchemaMigrator
             unit_price INTEGER NULL,
             total_gil INTEGER NULL,
             event_at_utc TEXT NULL,
+            earliest_event_at_utc TEXT NULL,
+            latest_event_at_utc TEXT NULL,
+            candidate_count INTEGER NULL,
             observed_at_utc TEXT NOT NULL,
             evidence_hash TEXT NULL,
             raw_evidence_json TEXT NULL

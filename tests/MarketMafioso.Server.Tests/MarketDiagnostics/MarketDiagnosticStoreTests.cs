@@ -124,6 +124,8 @@ public sealed class MarketDiagnosticStoreTests
         Assert.Equal("Our Retainer", sale.RetainerName);
         Assert.Equal((uint)4745, sale.ItemId);
         Assert.Equal((uint)100, sale.UnitPrice);
+        Assert.Equal(DateTimeOffset.Parse("2026-07-24T12:00:00Z"), sale.EarliestEventAtUtc);
+        Assert.Equal(DateTimeOffset.Parse("2026-07-24T12:10:00Z"), sale.LatestEventAtUtc);
     }
 
     [Fact]
@@ -163,6 +165,195 @@ public sealed class MarketDiagnosticStoreTests
             CancellationToken.None));
         Assert.Equal((ulong)95, sale.TotalGil);
         Assert.Equal("Cactuar", sale.World);
+        Assert.Equal("Owner Character", sale.CharacterName);
+    }
+
+    [Fact]
+    public async Task ConfirmedSaleEvidence_ReconcilesListingAndOpenEpisode()
+    {
+        var (store, _) = await CreateStoreAsync();
+        var listing = Assert.Single(await store.SynchronizeOwnedListingsAsync(CancellationToken.None));
+        var detectedAt = listing.FirstObservedAtUtc.AddMinutes(2);
+        await store.RecordObservationAsync(
+            new MarketListingEvaluation
+            {
+                OwnedListing = listing,
+                Classification = MarketObservationClassification.Undercut,
+                ObservedAtUtc = detectedAt,
+                SourceUploadedAtUtc = detectedAt,
+                SourceFreshness = "Fresh",
+                OwnListingVisible = true,
+                Competitor = new UniversalisListingEvidence
+                {
+                    ItemId = listing.ItemId,
+                    ListingId = "competitor",
+                    RetainerId = "456",
+                    RetainerName = "Mechanical",
+                    UnitPrice = 99,
+                    Quantity = 1,
+                    ReviewedAtUtc = detectedAt,
+                },
+                UndercutDelta = 1,
+            },
+            CancellationToken.None);
+
+        var saleAt = listing.FirstObservedAtUtc.AddMinutes(5);
+        var result = await store.RecordConfirmedSaleAsync(
+            1,
+            new RetainerSaleEvidenceCreateRequest
+            {
+                EvidenceId = "confirmed-linked-sale",
+                Source = "RetainerHistory",
+                ItemId = listing.ItemId,
+                ItemName = listing.ItemName,
+                Quantity = listing.Quantity,
+                IsHq = listing.IsHq,
+                UnitPrice = listing.UnitPrice,
+                TotalGil = 95,
+                EventAtUtc = saleAt,
+                RetainerId = listing.RetainerId,
+                RetainerName = listing.RetainerName,
+                HomeWorld = listing.World,
+            },
+            saleAt.AddSeconds(1),
+            CancellationToken.None);
+
+        Assert.Equal(listing.Id, result.OwnedListingVersionId);
+        Assert.Empty(await store.ListEpisodesAsync([1], openOnly: true, 10, CancellationToken.None));
+        var closed = Assert.Single(await store.ListEpisodesAsync([1], openOnly: false, 10, CancellationToken.None));
+        Assert.Equal("ConfirmedSale", closed.CloseReason);
+        var sale = Assert.Single(await store.ListSaleEventsAsync([1], "Confirmed", 10, CancellationToken.None));
+        Assert.Equal(listing.Id, sale.OwnedListingVersionId);
+        Assert.Equal("RetainerHistory", sale.Source);
+        Assert.Equal(listing.CharacterName, sale.CharacterName);
+    }
+
+    [Fact]
+    public async Task PublicHistory_UniqueExactTupleCreatesProbableSale()
+    {
+        var (store, _) = await CreateStoreAsync();
+        var listing = Assert.Single(await store.SynchronizeOwnedListingsAsync(CancellationToken.None));
+        var seenAt = listing.FirstObservedAtUtc.AddMinutes(2);
+        await store.RecordObservationAsync(
+            new MarketListingEvaluation
+            {
+                OwnedListing = listing,
+                Classification = MarketObservationClassification.Clear,
+                ObservedAtUtc = seenAt,
+                SourceUploadedAtUtc = seenAt,
+                SourceFreshness = "Fresh",
+                OwnListingVisible = true,
+            },
+            CancellationToken.None);
+        var missingAt = seenAt.AddMinutes(3);
+        await store.RecordObservationAsync(
+            new MarketListingEvaluation
+            {
+                OwnedListing = listing,
+                Classification = MarketObservationClassification.Clear,
+                ObservedAtUtc = missingAt,
+                SourceUploadedAtUtc = missingAt,
+                SourceFreshness = "Fresh",
+                OwnListingVisible = false,
+            },
+            CancellationToken.None);
+
+        var probe = Assert.IsType<MarketSaleHistoryProbe>(
+            await store.GetDueSaleHistoryProbeAsync(
+                listing.Id,
+                missingAt,
+                TimeSpan.Zero,
+                CancellationToken.None));
+        var soldAt = seenAt.AddMinutes(1);
+        var sale = Assert.IsType<RetainerSaleEventView>(
+            await store.RecordPublicSaleHistoryAsync(
+                probe,
+                [
+                    new UniversalisSaleEvidence
+                    {
+                        ItemId = listing.ItemId,
+                        UnitPrice = listing.UnitPrice,
+                        Quantity = listing.Quantity,
+                        IsHq = listing.IsHq,
+                        SoldAtUtc = soldAt,
+                    },
+                ],
+                missingAt.AddSeconds(1),
+                CancellationToken.None));
+
+        Assert.Equal("Probable", sale.Confidence);
+        Assert.Equal(soldAt, sale.EventAtUtc);
+        Assert.Equal(seenAt, sale.EarliestEventAtUtc);
+        Assert.Equal(missingAt, sale.LatestEventAtUtc);
+        Assert.Equal(1, sale.CandidateCount);
+        Assert.Empty(await store.SynchronizeOwnedListingsAsync(CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Workbench_ProjectsActiveEvidenceAndKeepsClosedListingDetail()
+    {
+        var (store, _) = await CreateStoreAsync();
+        var listing = Assert.Single(await store.SynchronizeOwnedListingsAsync(CancellationToken.None));
+        var detectedAt = listing.FirstObservedAtUtc.AddMinutes(2);
+        await store.RecordObservationAsync(
+            new MarketListingEvaluation
+            {
+                OwnedListing = listing,
+                Classification = MarketObservationClassification.Undercut,
+                ObservedAtUtc = detectedAt,
+                SourceUploadedAtUtc = detectedAt.AddSeconds(-5),
+                SourceAgeSeconds = 5,
+                SourceFreshness = "Fresh",
+                OwnListingVisible = true,
+                Competitor = new UniversalisListingEvidence
+                {
+                    ItemId = listing.ItemId,
+                    ListingId = "competitor",
+                    RetainerName = "Mechanical",
+                    UnitPrice = listing.UnitPrice - 1,
+                    Quantity = 1,
+                    ReviewedAtUtc = detectedAt,
+                },
+                UndercutDelta = 1,
+            },
+            CancellationToken.None);
+
+        var active = Assert.Single(await store.ListWorkbenchListingsAsync([1], CancellationToken.None));
+        Assert.Equal("Undercut", active.Classification);
+        Assert.Equal("Mechanical", active.CompetitorRetainerName);
+        Assert.Equal((uint)99, active.CompetitorUnitPrice);
+        Assert.Equal(5, active.SourceAgeSeconds);
+        Assert.NotNull(active.EpisodeId);
+
+        var saleAt = detectedAt.AddMinutes(1);
+        await store.RecordConfirmedSaleAsync(
+            1,
+            new RetainerSaleEvidenceCreateRequest
+            {
+                EvidenceId = "workbench-sale",
+                Source = "RetainerHistory",
+                ItemId = listing.ItemId,
+                ItemName = listing.ItemName,
+                Quantity = listing.Quantity,
+                IsHq = listing.IsHq,
+                UnitPrice = listing.UnitPrice,
+                EventAtUtc = saleAt,
+                RetainerId = listing.RetainerId,
+                RetainerName = listing.RetainerName,
+                CharacterName = listing.CharacterName,
+                HomeWorld = listing.World,
+            },
+            saleAt.AddSeconds(1),
+            CancellationToken.None);
+
+        Assert.Empty(await store.ListWorkbenchListingsAsync([1], CancellationToken.None));
+        var detail = Assert.IsType<MarketDiagnosticListingDetailView>(
+            await store.GetListingDetailAsync([1], listing.Id, CancellationToken.None));
+        Assert.Equal(listing.Id, detail.Listing?.Id);
+        Assert.Contains(detail.Timeline, entry => entry.Title == "Confirmed sale evidence");
+        Assert.NotNull(detail.Competitor);
+        Assert.Equal(1, detail.Competitor.EpisodeCount);
+        Assert.Equal(1, detail.Competitor.ExactOneGilCount);
     }
 
     private static async Task<(MarketDiagnosticStore Store, SqliteConnectionFactory Factory)> CreateStoreAsync()

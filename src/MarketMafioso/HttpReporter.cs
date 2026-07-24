@@ -6,6 +6,7 @@ using System.Net.Http;
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Threading;
 using System.Threading.Tasks;
 using Dalamud.Plugin.Services;
 using MarketMafioso.Automation.Items;
@@ -16,6 +17,7 @@ namespace MarketMafioso;
 public class HttpReporter : IDisposable
 {
     private readonly HttpClient httpClient = new();
+    private readonly SemaphoreSlim sendGate = new(1, 1);
     private readonly Configuration config;
     private readonly IPlayerState playerState;
     private readonly IPluginLog log;
@@ -55,11 +57,25 @@ public class HttpReporter : IDisposable
         this.quartermaster = quartermaster ?? throw new ArgumentNullException(nameof(quartermaster));
     }
 
-    public async Task SendReportAsync()
+    public async Task SendReportAsync(bool quiet = false)
+    {
+        await sendGate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            await SendReportCoreAsync(quiet).ConfigureAwait(false);
+        }
+        finally
+        {
+            sendGate.Release();
+        }
+    }
+
+    private async Task SendReportCoreAsync(bool quiet)
     {
         if (string.IsNullOrWhiteSpace(config.ServerUrl))
         {
-            chatGui.PrintError("[MarketMafioso] No server URL configured. Use /mmf to set one.");
+            if (!quiet)
+                chatGui.PrintError("[MarketMafioso] No server URL configured. Use /mmf to set one.");
             return;
         }
 
@@ -67,21 +83,24 @@ public class HttpReporter : IDisposable
         if (endpoint.Kind == ReceiverEndpointKind.Invalid)
         {
             LastStatus = "Invalid server URL";
-            chatGui.PrintError("[MarketMafioso] Server URL is not a valid HTTP or HTTPS endpoint.");
+            if (!quiet)
+                chatGui.PrintError("[MarketMafioso] Server URL is not a valid HTTP or HTTPS endpoint.");
             return;
         }
 
         if (endpoint.RequiresApiKey && string.IsNullOrWhiteSpace(config.ApiKey))
         {
             LastStatus = "API key required";
-            chatGui.PrintError("[MarketMafioso] This hosted receiver requires a MarketMafioso Client Key. Open /mmf and set it under Server Connection.");
+            if (!quiet)
+                chatGui.PrintError("[MarketMafioso] This hosted receiver requires a MarketMafioso Client Key. Open /mmf and set it under Server Connection.");
             return;
         }
 
         if (endpoint.RequiresApiKey && WorkshopHostApiKeyRouting.IsCraftArchitectKey(config.ApiKey))
         {
             LastStatus = "Wrong API key type";
-            chatGui.PrintError("[MarketMafioso] A Craft Architect key cannot upload inventory. Move it to the Acquisition Key field and add a MarketMafioso Client Key.");
+            if (!quiet)
+                chatGui.PrintError("[MarketMafioso] A Craft Architect key cannot upload inventory. Move it to the Acquisition Key field and add a MarketMafioso Client Key.");
             return;
         }
 
@@ -187,9 +206,12 @@ public class HttpReporter : IDisposable
                         ? string.Empty
                         : $" Dashboard: {LastDashboardUrl}"
                     : $" View: {LastDashboardReportUrl}";
-                chatGui.Print(
-                    $"[MarketMafioso] Sent {itemCount} player items + {retainers.Count} retainer(s). " +
-                    $"Status: {LastStatus}. {LastRetainerSourceStatus}{dashboardSuffix}");
+                if (!quiet)
+                {
+                    chatGui.Print(
+                        $"[MarketMafioso] Sent {itemCount} player items + {retainers.Count} retainer(s). " +
+                        $"Status: {LastStatus}. {LastRetainerSourceStatus}{dashboardSuffix}");
+                }
                 log.Information($"[MarketMafioso] Report sent - {LastStatus}.{dashboardSuffix}");
             }
             else
@@ -197,24 +219,31 @@ public class HttpReporter : IDisposable
                 var body = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
                 if (endpoint.RequiresApiKey && response.StatusCode == System.Net.HttpStatusCode.Unauthorized)
                 {
-                    chatGui.PrintError("[MarketMafioso] The hosted receiver rejected the MarketMafioso Client Key. Check the saved key for this endpoint.");
+                    if (!quiet)
+                        chatGui.PrintError("[MarketMafioso] The hosted receiver rejected the MarketMafioso Client Key. Check the saved key for this endpoint.");
                     log.Warning($"[MarketMafioso] Hosted receiver rejected API key - {LastStatus}: {body}");
                     return;
                 }
 
-                chatGui.PrintError($"[MarketMafioso] Server error {LastStatus}: {body[..Math.Min(body.Length, 200)]}");
+                if (!quiet)
+                    chatGui.PrintError($"[MarketMafioso] Server error {LastStatus}: {body[..Math.Min(body.Length, 200)]}");
                 log.Warning($"[MarketMafioso] Server returned {LastStatus}: {body}");
             }
         }
         catch (Exception ex)
         {
             LastStatus = $"Error: {ex.Message}";
-            chatGui.PrintError($"[MarketMafioso] Failed to send: {ex.Message}");
+            if (!quiet)
+                chatGui.PrintError($"[MarketMafioso] Failed to send: {ex.Message}");
             log.Error(ex, "[MarketMafioso] Error sending report");
         }
     }
 
-    public void Dispose() => httpClient.Dispose();
+    public void Dispose()
+    {
+        httpClient.Dispose();
+        sendGate.Dispose();
+    }
 
     public static List<RetainerReport> BuildRetainerReports(
         QuartermasterSnapshot snapshot,

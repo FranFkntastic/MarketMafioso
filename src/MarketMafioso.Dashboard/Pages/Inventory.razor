@@ -21,7 +21,11 @@ else
         <MudText Typo="Typo.h5">Inventory</MudText>
         <MudText Typo="Typo.caption" Class="muted">@SnapshotLabel</MudText>
         <MudSpacer />
-        <MudButton Variant="Variant.Outlined" Class="quiet-button" Disabled="_loading" OnClick="LoadInventoryAsync">Refresh</MudButton>
+        @if (_mode == InventoryBrowserMode.Listings && _marketDiagnostics.CollectorUpdatedAtUtc is { } collectorAt)
+        {
+            <span class="market-collector-state"><MudIcon Icon="@Icons.Material.Filled.CheckCircle" Size="Size.Small" /> Collector updated @collectorAt.ToLocalTime().ToString("HH:mm:ss")</span>
+        }
+        <MudButton Variant="Variant.Outlined" Class="quiet-button" Disabled="_loading" OnClick="RefreshAsync">Refresh</MudButton>
     </div>
 
     <DashboardStatusHost />
@@ -126,43 +130,31 @@ else
                 }
             </div>
 
-            <div class="inventory-summary-strip">
-                <div><strong>@_visibleMatchingRecordCount.ToString("N0")</strong><span>@RecordLabel(_mode)</span></div>
-                <div><strong>@_visibleTotalQuantity.ToString("N0")</strong><span>total quantity</span></div>
-                <div><strong>@_visibleHqQuantity.ToString("N0")</strong><span>HQ</span></div>
-                <div><strong>@_visibleOwnerCount.ToString("N0")</strong><span>owners</span></div>
-                @if (_mode == InventoryBrowserMode.Listings && _visibleMatchingRecordCount > 0)
-                {
-                    <div class="inventory-evidence-summary"><strong>@_visibleListingPriceKnownCount.ToString("N0")/@_visibleMatchingRecordCount.ToString("N0")</strong><span>with price evidence</span></div>
-                }
-            </div>
-
-            @if (_mode == InventoryBrowserMode.Listings && _view.MatchingRecordCount > 0 && !HasListingPrices)
+            @if (_mode == InventoryBrowserMode.Listings)
             {
-                <div class="inventory-evidence-note">This snapshot records retainer listing quantities, but not their sale prices.</div>
+                <MarketDiagnosticListingWorkbench Workbench="_marketDiagnostics" />
             }
-
-            <div class="inventory-content">
-                <div class="inventory-table-host">
-                    @if (_mode == InventoryBrowserMode.Items)
-                    {
+            else
+            {
+                <div class="inventory-summary-strip">
+                    <div><strong>@_visibleMatchingRecordCount.ToString("N0")</strong><span>@RecordLabel(_mode)</span></div>
+                    <div><strong>@_visibleTotalQuantity.ToString("N0")</strong><span>total quantity</span></div>
+                    <div><strong>@_visibleHqQuantity.ToString("N0")</strong><span>HQ</span></div>
+                    <div><strong>@_visibleOwnerCount.ToString("N0")</strong><span>owners</span></div>
+                </div>
+                <div class="inventory-content">
+                    <div class="inventory-table-host">
                         <InventoryGroupedTable Groups="_visibleInventoryGroups"
                                                Query="CurrentTableQuery"
                                                SortChanged="SortTable"
                                                FilterChanged="FilterTable" />
-                    }
-                    else
-                    {
-                        <InventoryListingTable Listings="_visibleListings" Query="CurrentTableQuery" ShowPrices="HasListingPrices" SortChanged="SortTable" FilterChanged="FilterTable" />
-                    }
-
-                    @if (_mode == InventoryBrowserMode.Listings && _view.FilterValid && _visibleMatchingRecordCount == 0)
-                    {
-                        <div class="inventory-empty">No matching @ModeLabel(_mode).ToLowerInvariant().</div>
-                    }
+                        @if (_view.FilterValid && _visibleMatchingRecordCount == 0)
+                        {
+                            <div class="inventory-empty">No matching inventory items.</div>
+                        }
+                    </div>
                 </div>
-
-            </div>
+            }
         </div>
     </section>
 </MudStack>
@@ -175,6 +167,7 @@ else
     private readonly Dictionary<InventoryBrowserMode, InventoryTableQueryState> _tableQueries = Enum.GetValues<InventoryBrowserMode>().ToDictionary(mode => mode, _ => new InventoryTableQueryState());
     private static readonly InventoryBrowserMode[] AvailableModes = [InventoryBrowserMode.Items, InventoryBrowserMode.Listings];
     private InventoryBrowserView _view = new();
+    private MarketDiagnosticWorkbenchView _marketDiagnostics = new();
     private InventoryBrowserView? _lastValidView;
     private long? _selectedCharacterId;
     private string? _snapshotId;
@@ -301,6 +294,12 @@ else
         PersistUrlState();
     }
 
+    private async Task RefreshAsync()
+    {
+        _marketDiagnostics = new MarketDiagnosticWorkbenchView();
+        await LoadInventoryAsync();
+    }
+
     private void CancelFilterDebounce()
     {
         _filterDebounceCts?.Cancel();
@@ -322,6 +321,14 @@ else
                 _mode,
                 _filterCaret,
                 token);
+            if (_mode == InventoryBrowserMode.Listings)
+            {
+                _marketDiagnostics = await Api.GetMarketDiagnosticWorkbenchAsync(
+                    response.CharacterName,
+                    _scope,
+                    _filterText,
+                    token);
+            }
             if (response.FilterValid)
             {
                 _view = response;

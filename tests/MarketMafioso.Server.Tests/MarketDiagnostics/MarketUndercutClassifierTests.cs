@@ -17,7 +17,7 @@ public sealed class MarketUndercutClassifierTests
                 ListingId = "ours",
                 RetainerId = owned.RetainerId.ToString(),
                 RetainerName = owned.RetainerName,
-                UnitPrice = 90,
+                UnitPrice = owned.UnitPrice,
                 Quantity = 1,
                 ReviewedAtUtc = ObservedAt.AddSeconds(-5),
             },
@@ -43,6 +43,32 @@ public sealed class MarketUndercutClassifierTests
         Assert.Equal(MarketObservationClassification.Undercut, result.Classification);
         Assert.Equal("Mechanical", result.Competitor?.RetainerName);
         Assert.Equal(1u, result.UndercutDelta);
+        Assert.True(result.OwnListingVisible);
+    }
+
+    [Fact]
+    public void Evaluate_ReportsExactOwnedListingDisappearance()
+    {
+        var owned = Owned(unitPrice: 100);
+        var result = MarketUndercutClassifier.Evaluate(
+            owned,
+            Evidence(
+                new UniversalisListingEvidence
+                {
+                    ItemId = owned.ItemId,
+                    ListingId = "competitor",
+                    RetainerId = "456",
+                    RetainerName = "Mechanical",
+                    UnitPrice = 99,
+                    Quantity = 1,
+                    ReviewedAtUtc = ObservedAt.AddSeconds(-5),
+                }),
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase) { owned.RetainerName },
+            new HashSet<string>(StringComparer.Ordinal) { owned.RetainerId.ToString() },
+            ObservedAt,
+            TimeSpan.FromMinutes(15));
+
+        Assert.False(result.OwnListingVisible);
     }
 
     [Fact]

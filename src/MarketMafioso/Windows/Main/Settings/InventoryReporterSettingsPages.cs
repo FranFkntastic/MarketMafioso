@@ -26,6 +26,8 @@ internal sealed class InventoryReporterSettingsPages
                 searchTerms: ["armoury chest", "crystal bag", "equipped gear", "saddlebag", "item names", "character world"]),
             new("inventory.scheduling", "Inventory Reporter / Scheduling", DrawScheduling, 11,
                 searchTerms: ["auto-send", "retainer close", "automatic periodic sending", "send interval", "timer"]),
+            new("inventory.market-diagnostics", "Inventory Reporter / Market Diagnostics", DrawMarketDiagnostics, 12,
+                searchTerms: ["undercut", "listing history", "Retainer History", "Universalis", "sale evidence"]),
         ];
     }
 
@@ -63,6 +65,30 @@ internal sealed class InventoryReporterSettingsPages
         config.AutoSendIntervalMinutes = interval;
         config.Save();
         restartTimer();
+    }
+
+    private void DrawMarketDiagnostics(SettingsPageContext context)
+    {
+        if (!context.Matches(
+                "Enable market diagnostics",
+                "undercut",
+                "listing history",
+                "Retainer History",
+                "Universalis",
+                "sale evidence"))
+        {
+            return;
+        }
+
+        DrawCheckbox(
+            context,
+            "Enable market diagnostics",
+            "Ship fresh Quartermaster listing revisions immediately and import visible Retainer History sales. The receiver performs market checks and keeps the diagnostic timeline.",
+            () => config.EnableMarketDiagnostics,
+            value => config.EnableMarketDiagnostics = value);
+        ImGui.TextColored(
+            MarketMafiosoUiTheme.Muted,
+            "Open a retainer's Sale History normally to confirm exact sale times; imports are deduplicated automatically.");
     }
 
     private void DrawCheckbox(SettingsPageContext context, string label, string description, Func<bool> getter, Action<bool> setter) =>

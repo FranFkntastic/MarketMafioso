@@ -20,6 +20,9 @@ public sealed record OwnedMarketListing
     public DateTimeOffset ListingsObservedAtUtc { get; init; }
     public DateTimeOffset FirstObservedAtUtc { get; init; }
     public DateTimeOffset LastObservedAtUtc { get; init; }
+    public DateTimeOffset? LastPubliclySeenAtUtc { get; init; }
+    public DateTimeOffset? PubliclyMissingSinceUtc { get; init; }
+    public DateTimeOffset? SaleHistoryCheckedAtUtc { get; init; }
 }
 
 public sealed record UniversalisListingEvidence
@@ -41,6 +44,24 @@ public sealed record UniversalisItemEvidence
     public uint? MinimumNqPrice { get; init; }
     public uint? MinimumHqPrice { get; init; }
     public IReadOnlyList<UniversalisListingEvidence> Listings { get; init; } = [];
+}
+
+public sealed record UniversalisSaleEvidence
+{
+    public uint ItemId { get; init; }
+    public uint UnitPrice { get; init; }
+    public uint Quantity { get; init; }
+    public bool IsHq { get; init; }
+    public string? BuyerName { get; init; }
+    public bool OnMannequin { get; init; }
+    public DateTimeOffset SoldAtUtc { get; init; }
+}
+
+public sealed record MarketSaleHistoryProbe
+{
+    public required OwnedMarketListing Listing { get; init; }
+    public DateTimeOffset EarliestAtUtc { get; init; }
+    public DateTimeOffset LatestAtUtc { get; init; }
 }
 
 public record RegionMarketCondition
@@ -76,6 +97,7 @@ public sealed record RetainerSaleEventView
     public string Confidence { get; init; } = string.Empty;
     public ulong? RetainerId { get; init; }
     public string? RetainerName { get; init; }
+    public string? CharacterName { get; init; }
     public string? World { get; init; }
     public uint ItemId { get; init; }
     public string? ItemName { get; init; }
@@ -84,6 +106,9 @@ public sealed record RetainerSaleEventView
     public uint? UnitPrice { get; init; }
     public ulong? TotalGil { get; init; }
     public DateTimeOffset? EventAtUtc { get; init; }
+    public DateTimeOffset? EarliestEventAtUtc { get; init; }
+    public DateTimeOffset? LatestEventAtUtc { get; init; }
+    public int? CandidateCount { get; init; }
     public DateTimeOffset ObservedAtUtc { get; init; }
 }
 
@@ -103,6 +128,7 @@ public sealed record MarketListingEvaluation
     public DateTimeOffset? SourceUploadedAtUtc { get; init; }
     public long? SourceAgeSeconds { get; init; }
     public string SourceFreshness { get; init; } = string.Empty;
+    public bool? OwnListingVisible { get; init; }
     public UniversalisListingEvidence? Competitor { get; init; }
     public uint? UndercutDelta { get; init; }
 }

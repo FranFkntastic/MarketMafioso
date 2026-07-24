@@ -51,6 +51,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly InventoryScanner scanner;
     private readonly HttpReporter reporter;
     private readonly RetainerSaleChatObserver retainerSaleChatObserver;
+    private readonly RetainerHistoryObserver retainerHistoryObserver;
     private readonly QuartermasterIpcClient quartermaster;
     private readonly StandaloneSquireIpcClient standaloneSquire;
     private readonly ExactAcquisitionIpcProvider exactAcquisitionIpc;
@@ -66,6 +67,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly AgentBridgeViewportCaptureService agentBridgeViewportCapture;
 
     private CancellationTokenSource? timerCancellation;
+    private CancellationTokenSource? marketDiagnosticReportCancellation;
 
     public Plugin()
     {
@@ -89,6 +91,14 @@ public sealed class Plugin : IDalamudPlugin
             ChatGui,
             Log,
             Path.Combine(PluginInterface.GetPluginConfigDirectory(), "market-sale-outbox.json"));
+        retainerHistoryObserver = new RetainerHistoryObserver(
+            Configuration,
+            AddonLifecycle,
+            GameGui,
+            PlayerState,
+            DataManager,
+            Log,
+            retainerSaleChatObserver.EnqueueExternal);
         workshopCatalog = new WorkshopProjectCatalog(DataManager, Log);
         viwiWorkshoppaIpc = new VIWIWorkshoppaIpc(new DalamudVIWIWorkshoppaIpcAdapter(PluginInterface, Log));
         workshopAssemblyRunner = new WorkshopAssemblyRunner(
@@ -187,6 +197,7 @@ public sealed class Plugin : IDalamudPlugin
         PluginInterface.UiBuilder.OpenConfigUi += OpenConfigUi;
         PluginInterface.UiBuilder.OpenMainUi += OpenConfigUi;
         Framework.Update += OnFrameworkUpdate;
+        quartermaster.Changed += OnQuartermasterChanged;
 
         StartTimer();
 
@@ -210,6 +221,7 @@ public sealed class Plugin : IDalamudPlugin
     private void OnFrameworkUpdate(IFramework framework)
     {
         retainerSaleChatObserver.Tick();
+        retainerHistoryObserver.Tick();
         mainWindow.OnFrameworkUpdate(framework);
         agentBridge.Tick();
     }
@@ -241,6 +253,7 @@ public sealed class Plugin : IDalamudPlugin
         PluginInterface.UiBuilder.OpenConfigUi -= OpenConfigUi;
         PluginInterface.UiBuilder.OpenMainUi -= OpenConfigUi;
         Framework.Update -= OnFrameworkUpdate;
+        quartermaster.Changed -= OnQuartermasterChanged;
 
         CommandManager.RemoveHandler(CmdMain);
 
@@ -251,12 +264,52 @@ public sealed class Plugin : IDalamudPlugin
         mainWindow.AcquisitionCompositionWindow.Dispose();
         mainWindow.Dispose();
         reporter.Dispose();
+        retainerHistoryObserver.Dispose();
         retainerSaleChatObserver.Dispose();
         quartermaster.Dispose();
         ECommonsMain.Dispose();
     }
 
     public void RestartTimer() => StartTimer();
+
+    private void OnQuartermasterChanged(QuartermasterChanged changed)
+    {
+        if (!Configuration.EnableMarketDiagnostics)
+            return;
+
+        marketDiagnosticReportCancellation?.Cancel();
+        marketDiagnosticReportCancellation?.Dispose();
+        marketDiagnosticReportCancellation = new CancellationTokenSource();
+        _ = SendMarketDiagnosticReportAfterDebounceAsync(
+            changed.Revision,
+            marketDiagnosticReportCancellation.Token);
+    }
+
+    private async Task SendMarketDiagnosticReportAfterDebounceAsync(
+        long revision,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken).ConfigureAwait(false);
+            await Framework.RunOnTick(
+                () => reporter.SendReportAsync(quiet: true),
+                cancellationToken: cancellationToken);
+            Log.Information(
+                "[MarketMafioso] Shipped inventory report after Quartermaster revision {Revision}.",
+                revision);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception exception)
+        {
+            Log.Warning(
+                exception,
+                "[MarketMafioso] Failed to ship the inventory report for Quartermaster revision {Revision}.",
+                revision);
+        }
+    }
 
     private void StartTimer()
     {
@@ -299,5 +352,9 @@ public sealed class Plugin : IDalamudPlugin
             timerCancellation = null;
             Log.Debug("[MarketMafioso] Auto-send timer stopped");
         }
+
+        marketDiagnosticReportCancellation?.Cancel();
+        marketDiagnosticReportCancellation?.Dispose();
+        marketDiagnosticReportCancellation = null;
     }
 }

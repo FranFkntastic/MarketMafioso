@@ -1,0 +1,462 @@
+@inject DashboardApiClient Api
+@inject DashboardStatusService Status
+
+<div class="market-listing-workbench @(_historyMode ? "history-mode" : null)">
+    <div class="market-listing-toolbar">
+        <div class="market-listing-view-switch" role="group" aria-label="Listing activity">
+            <button class="@ViewClass(false)" @onclick="@(() => SetHistoryMode(false))">
+                Active <span>@ActiveListings.Count.ToString("N0")</span>
+            </button>
+            <button class="@ViewClass(true)" @onclick="@(() => SetHistoryMode(true))">
+                History <span>@HistoryRows.Count.ToString("N0")</span>
+            </button>
+        </div>
+        @if (!_historyMode)
+        {
+            <label class="market-listing-filter">
+                <span class="visually-hidden">Listing state</span>
+                <select @bind="_stateFilter">
+                    <option value="all">All states</option>
+                    <option value="Undercut">Undercut</option>
+                    <option value="Clear">Clear</option>
+                    <option value="Unknown">Unknown</option>
+                </select>
+            </label>
+        }
+        <label class="market-listing-filter">
+            <span class="visually-hidden">Listing world</span>
+            <select @bind="_worldFilter">
+                <option value="all">All worlds</option>
+                @foreach (var world in Worlds)
+                {
+                    <option value="@world">@world</option>
+                }
+            </select>
+        </label>
+        <span class="market-listing-toolbar-summary">@ToolbarSummary</span>
+    </div>
+
+    <div class="market-listing-summary">
+        @foreach (var summary in Summaries)
+        {
+            <div>
+                <strong class="@summary.Tone">@summary.Value</strong>
+                <span>@summary.Label</span>
+            </div>
+        }
+    </div>
+
+    <div class="market-listing-body">
+        <div class="market-listing-table-scroll">
+            @if (_historyMode)
+            {
+                <table class="market-diagnostic-table history" aria-label="Retainer listing history">
+                    <thead>
+                        <tr><th>Result</th><th>Item</th><th>Retainer / World</th><th class="number">Listing</th><th>Evidence</th><th>Event time</th></tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var sale in FilteredHistory)
+                        {
+                            <tr>
+                                <td><span class="sale-confidence @sale.Confidence.ToLowerInvariant()">@SaleResult(sale)</span></td>
+                                <td>
+                                    <strong>@DisplayItem(sale.ItemName, sale.ItemId)</strong>
+                                    <small>@QualityAndQuantity(sale.IsHq, sale.Quantity)</small>
+                                </td>
+                                <td>@sale.RetainerName · @sale.World</td>
+                                <td class="number">@SalePrice(sale)</td>
+                                <td>@FriendlySource(sale.Source)</td>
+                                <td>@SaleTime(sale)</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+                @if (FilteredHistory.Count == 0)
+                {
+                    <div class="market-listing-empty">No listing history matches this scope.</div>
+                }
+            }
+            else
+            {
+                <table class="market-diagnostic-table active" aria-label="Active retainer listings">
+                    <thead>
+                        <tr>
+                            <th>State</th><th>Item</th><th>World / Retainer</th>
+                            <th class="number">Your price</th><th class="number">Lowest rival</th>
+                            <th>Evidence</th><th>Response bound</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var listing in FilteredActive)
+                        {
+                            <tr class="@(listing.Id == _selectedListingId ? "selected" : null)"
+                                role="button"
+                                tabindex="0"
+                                @onclick="@(() => SelectListingAsync(listing))"
+                                @onkeydown="@((KeyboardEventArgs args) => OnListingKeyDownAsync(args, listing))">
+                                <td><span class="listing-state @StateClass(listing)">@StateLabel(listing)</span></td>
+                                <td>
+                                    <strong>@DisplayItem(listing.ItemName, listing.ItemId)</strong>
+                                    <small>@(listing.IsHq ? "HQ" : "NQ") · @listing.Quantity.ToString("N0") @UnitWord(listing.Quantity) · @ListingAge(listing)</small>
+                                </td>
+                                <td>
+                                    <span>@listing.World</span>
+                                    <small>@listing.RetainerName</small>
+                                </td>
+                                <td class="number">@listing.UnitPrice.ToString("N0")</td>
+                                <td class="number">
+                                    <span class="@(listing.Classification == "Undercut" ? "rival-price" : null)">@RivalPrice(listing)</span>
+                                    <small>@RivalName(listing)</small>
+                                </td>
+                                <td>
+                                    <span class="@EvidenceTone(listing)">@EvidenceAge(listing)</span>
+                                    <small>@EvidenceDetail(listing)</small>
+                                </td>
+                                <td>
+                                    <span class="response-bound">@ResponseBound(listing)</span>
+                                    <small>@ResponseDetail(listing)</small>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+                @if (FilteredActive.Count == 0)
+                {
+                    <div class="market-listing-empty">No active listings match this scope and state.</div>
+                }
+            }
+        </div>
+
+        @if (!_historyMode)
+        {
+            <aside class="market-listing-inspector" aria-label="Selected listing evidence">
+                @if (_selectedListing is null)
+                {
+                    <div class="market-listing-inspector-empty">
+                        <strong>No listing selected</strong>
+                        <span>Select an active listing to inspect its evidence timeline.</span>
+                    </div>
+                }
+                else
+                {
+                    <header>
+                        <strong>Listing evidence</strong>
+                        <span>Selected row</span>
+                    </header>
+                    <section class="market-listing-selection">
+                        <div class="market-listing-selection-title">
+                            <span class="listing-state @StateClass(_selectedListing)">@StateLabel(_selectedListing)</span>
+                            <strong>@DisplayItem(_selectedListing.ItemName, _selectedListing.ItemId)</strong>
+                        </div>
+                        <p>@_selectedListing.RetainerName · @_selectedListing.World · @(_selectedListing.IsHq ? "HQ" : "NQ") · @_selectedListing.Quantity.ToString("N0") @UnitWord(_selectedListing.Quantity)</p>
+                        <div class="market-price-comparison">
+                            <div><span>Your listing</span><strong>@_selectedListing.UnitPrice.ToString("N0")</strong></div>
+                            <MudIcon Icon="@Icons.Material.Filled.ArrowForward" Size="Size.Small" aria-hidden="true" />
+                            <div class="rival"><span>@RivalName(_selectedListing)</span><strong>@RivalPrice(_selectedListing)</strong></div>
+                        </div>
+                    </section>
+                    <section class="market-response-interval">
+                        <h3>Observed response interval</h3>
+                        @if (_selectedListing.ResponseUpperBoundMs is { } upper)
+                        {
+                            <p>The undercut appeared after the last clear sample and before the first undercut sample. Public evidence bounds the interval; it does not prove an exact instant.</p>
+                            <div class="market-response-track" aria-label="@ResponseBound(_selectedListing)">
+                                <span class="market-response-range"></span>
+                                <span class="market-response-point clear"></span>
+                                <span class="market-response-point detected"></span>
+                            </div>
+                            <div class="market-response-labels"><span>last clear</span><strong>@FormatDuration(_selectedListing.ResponseLowerBoundMs ?? 0)–@FormatDuration(upper)</strong><span>detected</span></div>
+                        }
+                        else
+                        {
+                            <p>No undercut interval is open for this listing.</p>
+                        }
+                    </section>
+                    <section class="market-listing-timeline">
+                        <h3>Listing timeline</h3>
+                        @if (_detailLoading)
+                        {
+                            <MudProgressLinear Indeterminate="true" Color="Color.Primary" />
+                        }
+                        else
+                        {
+                            @foreach (var entry in DetailTimeline)
+                            {
+                                <div class="market-timeline-event">
+                                    <time>@entry.OccurredAtUtc.ToLocalTime().ToString("HH:mm:ss")</time>
+                                    <MudIcon Icon="@Icons.Material.Filled.Circle" Size="Size.Small" Class="@entry.Tone.ToLowerInvariant()" aria-hidden="true" />
+                                    <div><strong>@entry.Title</strong><span>@entry.Detail</span></div>
+                                </div>
+                            }
+                            @if (_selectedDetail?.Region is { } region)
+                            {
+                                <div class="market-timeline-context">
+                                    <strong>@region.Region regional context</strong>
+                                    <span>Floor @FormatOptionalPrice(region.MinimumListingPrice) · average @FormatAverage(region.AverageSalePrice) · @FormatVelocity(region.DailySaleVelocity)</span>
+                                </div>
+                            }
+                            @if (_selectedDetail?.Competitor is { } competitor)
+                            {
+                                <div class="market-timeline-context">
+                                    <strong>@competitor.RetainerName profile</strong>
+                                    <span>@competitor.EpisodeCount.ToString("N0") episodes · @ExactRate(competitor) exact 1-gil · average ceiling @FormatSeconds(competitor.AverageResponseUpperBoundSeconds)</span>
+                                </div>
+                            }
+                        }
+                    </section>
+                }
+            </aside>
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter] public MarketDiagnosticWorkbenchView Workbench { get; set; } = new();
+
+    private bool _historyMode;
+    private string _stateFilter = "all";
+    private string _worldFilter = "all";
+    private long? _selectedListingId;
+    private MarketDiagnosticListingRow? _selectedListing;
+    private MarketDiagnosticListingDetailView? _selectedDetail;
+    private bool _detailLoading;
+
+    private IReadOnlyList<MarketDiagnosticListingRow> ActiveListings =>
+        Workbench.ActiveListings;
+
+    private IReadOnlyList<MarketDiagnosticSaleRow> HistoryRows =>
+        Workbench.History
+            .GroupBy(sale => sale.OwnedListingVersionId is { } listingId
+                ? $"listing:{listingId}"
+                : $"event:{sale.Id}")
+            .Select(group => group.OrderBy(sale => ConfidenceRank(sale.Confidence)).First())
+            .ToArray();
+
+    private IReadOnlyList<MarketDiagnosticListingRow> FilteredActive =>
+        ActiveListings
+            .Where(listing => _worldFilter == "all" || listing.World.Equals(_worldFilter, StringComparison.OrdinalIgnoreCase))
+            .Where(listing => _stateFilter == "all" ||
+                              (_stateFilter == "Unknown" && listing.Classification.StartsWith("Unknown", StringComparison.Ordinal)) ||
+                              listing.Classification.Equals(_stateFilter, StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+
+    private IReadOnlyList<MarketDiagnosticSaleRow> FilteredHistory =>
+        HistoryRows
+            .Where(sale => _worldFilter == "all" || string.Equals(sale.World, _worldFilter, StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+
+    private IReadOnlyList<string> Worlds =>
+        ActiveListings.Select(listing => listing.World)
+            .Concat(HistoryRows.Select(sale => sale.World).OfType<string>())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+    private IReadOnlyList<MarketDiagnosticTimelineEventView> DetailTimeline =>
+        _selectedDetail?.Timeline ?? [];
+
+    private string ToolbarSummary => _historyMode
+        ? $"{HistoryRows.Count(sale => sale.Confidence == "Confirmed"):N0} confirmed · {HistoryRows.Count(sale => sale.Confidence == "Unresolved"):N0} unresolved"
+        : $"{ActiveListings.Count(listing => listing.Classification == "Undercut"):N0} undercut · {ActiveListings.Count(listing => listing.Classification == "Clear"):N0} clear · {ActiveListings.Count(listing => listing.Classification.StartsWith("Unknown", StringComparison.Ordinal)):N0} unknown";
+
+    private IReadOnlyList<SummaryCell> Summaries => _historyMode
+        ?
+        [
+            new(FilteredHistory.Count.ToString("N0"), "Historical events", null),
+            new(FilteredHistory.Count(sale => sale.Confidence == "Confirmed").ToString("N0"), "Confirmed sales", "good"),
+            new(FilteredHistory.Count(sale => sale.Confidence == "Unresolved").ToString("N0"), "Unresolved", "warn"),
+            new(StrongestEvidence, "Strongest evidence", null),
+            new(Workbench.History.FirstOrDefault() is { } latest ? FormatTimestamp(latest.EventAtUtc ?? latest.ObservedAtUtc) : "—", "Latest reconciliation", null),
+        ]
+        :
+        [
+            new(FilteredActive.Count.ToString("N0"), "Matching listings", null),
+            new(FilteredActive.Count(listing => listing.Classification == "Undercut").ToString("N0"), "Undercut now", "bad"),
+            new(FilteredActive.Count(listing => listing.Classification.StartsWith("Unknown", StringComparison.Ordinal)).ToString("N0"), "Unknown evidence", "warn"),
+            new(FreshestEvidenceAge, "Universalis age", "good"),
+            new(Workbench.RegionObservedAtUtc is { } regionAt ? regionAt.ToLocalTime().ToString("HH:mm") : "—", "Regional context sample", null),
+        ];
+
+    private string StrongestEvidence => FilteredHistory.Any(sale => sale.Source == "RetainerHistory")
+        ? "Retainer History"
+        : FilteredHistory.Any(sale => sale.Confidence == "Confirmed")
+            ? "Sale notification"
+            : FilteredHistory.Any(sale => sale.Source == "UniversalisHistory")
+                ? "Universalis history"
+                : "Local snapshot";
+
+    private string FreshestEvidenceAge
+    {
+        get
+        {
+            var age = FilteredActive
+                .Select(listing => listing.SourceAgeSeconds)
+                .Where(value => value.HasValue)
+                .Min();
+            return age is null ? "—" : FormatAge(age.Value);
+        }
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (_selectedListingId is { } selectedId &&
+            ActiveListings.All(listing => listing.Id != selectedId))
+        {
+            _selectedListingId = null;
+            _selectedListing = null;
+            _selectedDetail = null;
+        }
+
+        if (!_historyMode && _selectedListing is null && FilteredActive.FirstOrDefault() is { } first)
+            await SelectListingAsync(first);
+    }
+
+    private void SetHistoryMode(bool historyMode)
+    {
+        _historyMode = historyMode;
+    }
+
+    private string ViewClass(bool history) =>
+        _historyMode == history ? "active" : string.Empty;
+
+    private async Task SelectListingAsync(MarketDiagnosticListingRow listing)
+    {
+        if (listing.Id <= 0)
+            return;
+        _selectedListingId = listing.Id;
+        _selectedListing = listing;
+        _detailLoading = true;
+        try
+        {
+            _selectedDetail = await Api.GetMarketDiagnosticListingAsync(listing.Id);
+        }
+        catch (DashboardUnauthorizedException)
+        {
+            Status.Info("Dashboard session expired. Sign in again.");
+        }
+        catch (Exception exception)
+        {
+            Status.Error($"Listing evidence load failed: {exception.Message}");
+        }
+        finally
+        {
+            _detailLoading = false;
+        }
+    }
+
+    private Task OnListingKeyDownAsync(KeyboardEventArgs args, MarketDiagnosticListingRow listing) =>
+        args.Key is "Enter" or " " ? SelectListingAsync(listing) : Task.CompletedTask;
+
+    private static string DisplayItem(string? name, uint itemId) =>
+        string.IsNullOrWhiteSpace(name) ? $"Item {itemId}" : name;
+
+    private static string StateLabel(MarketDiagnosticListingRow listing) =>
+        listing.Classification.StartsWith("Unknown", StringComparison.Ordinal)
+            ? "Unknown"
+            : listing.Classification;
+
+    private static string StateClass(MarketDiagnosticListingRow listing) =>
+        StateLabel(listing).ToLowerInvariant();
+
+    private static string RivalPrice(MarketDiagnosticListingRow listing) =>
+        listing.CompetitorUnitPrice is { } price ? price.ToString("N0") : "—";
+
+    private static string RivalName(MarketDiagnosticListingRow listing) =>
+        listing.CompetitorRetainerName ??
+        (listing.Classification.StartsWith("Unknown", StringComparison.Ordinal)
+            ? "source unavailable"
+            : "same floor or higher");
+
+    private static string EvidenceAge(MarketDiagnosticListingRow listing) =>
+        listing.SourceAgeSeconds is { } age ? $"{FormatAge(age)} old" : "No sample";
+
+    private static string EvidenceDetail(MarketDiagnosticListingRow listing) =>
+        listing.MarketObservedAtUtc is { } observed
+            ? $"observed {observed.ToLocalTime():HH:mm:ss}"
+            : listing.SourceFreshness ?? "awaiting collector";
+
+    private static string EvidenceTone(MarketDiagnosticListingRow listing) =>
+        listing.Classification.StartsWith("Unknown", StringComparison.Ordinal) ? "warn" : "good";
+
+    private static string ResponseBound(MarketDiagnosticListingRow listing) =>
+        listing.ResponseUpperBoundMs is { } upper
+            ? $"{FormatDuration(listing.ResponseLowerBoundMs ?? 0)}–{FormatDuration(upper)}"
+            : "—";
+
+    private static string ResponseDetail(MarketDiagnosticListingRow listing) =>
+        listing.FirstDetectedAtUtc is { } detected
+            ? $"detected {FormatRelative(detected)}"
+            : listing.Classification == "Clear"
+                ? "no open episode"
+                : "episode unchanged";
+
+    private static string ListingAge(MarketDiagnosticListingRow listing) =>
+        listing.ListedAtUtc is { } listedAt
+            ? $"listed {FormatRelative(listedAt)}"
+            : $"observed {FormatRelative(listing.FirstObservedAtUtc)}";
+
+    private static string SaleResult(MarketDiagnosticSaleRow sale) => sale.Confidence switch
+    {
+        "Confirmed" => "Confirmed sale",
+        "Probable" => "Probable sale",
+        "Ambiguous" => "Ambiguous",
+        "Corroborated" => "Corroborated",
+        _ => sale.Confidence,
+    };
+
+    private static string SalePrice(MarketDiagnosticSaleRow sale) =>
+        sale.TotalGil is { } total
+            ? $"{total:N0} total"
+            : sale.UnitPrice is { } unitPrice
+                ? $"{unitPrice:N0} / unit"
+                : "—";
+
+    private static string SaleTime(MarketDiagnosticSaleRow sale)
+    {
+        if (sale.EventAtUtc is { } exact)
+            return exact.ToLocalTime().ToString("g");
+        if (sale.EarliestEventAtUtc is { } earliest && sale.LatestEventAtUtc is { } latest)
+            return $"{earliest.ToLocalTime():g}–{latest.ToLocalTime():g}";
+        return sale.ObservedAtUtc.ToLocalTime().ToString("g");
+    }
+
+    private static string FriendlySource(string source) => source switch
+    {
+        "RetainerHistory" => "Retainer History",
+        "RetainerSaleChat" => "Sale notification",
+        "UniversalisHistory" => "Universalis history",
+        "LocalListingDiff" => "Local disappearance",
+        _ => source,
+    };
+
+    private static string QualityAndQuantity(bool? isHq, uint? quantity) =>
+        $"{(isHq == true ? "HQ" : "NQ")} · {(quantity ?? 0):N0} {UnitWord(quantity ?? 0)}";
+
+    private static string UnitWord(uint quantity) => quantity == 1 ? "unit" : "units";
+    private static string FormatAge(long seconds) => seconds switch
+    {
+        < 60 => $"{seconds}s",
+        < 3600 => $"{seconds / 60d:0.#}m",
+        < 86400 => $"{seconds / 3600d:0.#}h",
+        _ => $"{seconds / 86400d:0.#}d",
+    };
+    private static string FormatDuration(long milliseconds) => FormatAge(Math.Max(0, milliseconds / 1000));
+    private static string FormatRelative(DateTimeOffset value) => FormatAge(Math.Max(0, (long)(DateTimeOffset.UtcNow - value).TotalSeconds)) + " ago";
+    private static string FormatTimestamp(DateTimeOffset value) => value.ToLocalTime().ToString("g");
+    private static string FormatOptionalPrice(uint? value) => value is { } price ? $"{price:N0}" : "—";
+    private static string FormatAverage(double? value) => value is { } average ? $"{average:N0}" : "—";
+    private static string FormatVelocity(double? value) => value is { } velocity ? $"{velocity:0.#} sales/day" : "velocity unavailable";
+    private static string FormatSeconds(double? value) => value is { } seconds ? FormatAge((long)seconds) : "—";
+    private static string ExactRate(MarketDiagnosticCompetitorProfileView profile) =>
+        profile.EpisodeCount == 0 ? "0%" : $"{profile.ExactOneGilCount * 100d / profile.EpisodeCount:0}%";
+    private static int ConfidenceRank(string confidence) => confidence switch
+    {
+        "Confirmed" => 0,
+        "Probable" => 1,
+        "Ambiguous" => 2,
+        "Corroborated" => 3,
+        _ => 4,
+    };
+
+    private sealed record SummaryCell(string Value, string Label, string? Tone);
+}

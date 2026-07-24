@@ -139,6 +139,15 @@ internal sealed class RetainerSaleChatObserver : IDisposable
         _ = FlushAsync();
     }
 
+    internal void EnqueueExternal(RetainerSaleEvidenceCreateRequest evidence)
+    {
+        if (disposed || !configuration.EnableMarketDiagnostics)
+            return;
+
+        Enqueue(evidence);
+        _ = FlushAsync();
+    }
+
     private void Enqueue(RetainerSaleEvidenceCreateRequest evidence)
     {
         lock (outboxGate)
@@ -214,7 +223,8 @@ internal sealed class RetainerSaleChatObserver : IDisposable
             }
 
             log.Information(
-                "[MarketMafioso] Recorded retainer sale evidence for item {ItemId}, {TotalGil} gil after fees.",
+                "[MarketMafioso] Recorded {Source} sale evidence for item {ItemId}, {TotalGil} gil.",
+                evidence.Source,
                 evidence.ItemId,
                 evidence.TotalGil);
             return true;

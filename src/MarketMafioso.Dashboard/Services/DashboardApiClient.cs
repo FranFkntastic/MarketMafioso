@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using MarketMafioso.Contracts;
 using MarketMafioso.Dashboard.Models;
 using MarketMafioso.Contracts.Inventory;
 
@@ -348,6 +349,43 @@ public sealed class DashboardApiClient
         return await GetJsonAsync(
             "api/diagnostics/events?limit=100",
             Array.Empty<DiagnosticEventView>(),
+            cancellationToken);
+    }
+
+    public async Task<MarketDiagnosticWorkbenchView> GetMarketDiagnosticWorkbenchAsync(
+        string? characterName = null,
+        string? scope = null,
+        string? search = null,
+        CancellationToken cancellationToken = default)
+    {
+        var query = new List<string>();
+        if (!string.IsNullOrWhiteSpace(characterName))
+            query.Add($"characterName={Uri.EscapeDataString(characterName)}");
+        if (!string.IsNullOrWhiteSpace(scope))
+            query.Add($"scope={Uri.EscapeDataString(scope)}");
+        if (!string.IsNullOrWhiteSpace(search))
+            query.Add($"search={Uri.EscapeDataString(search)}");
+        var path = query.Count == 0
+            ? "api/market-diagnostics/workbench"
+            : $"api/market-diagnostics/workbench?{string.Join("&", query)}";
+        return await GetJsonAsync(
+            path,
+            new MarketDiagnosticWorkbenchView(),
+            cancellationToken);
+    }
+
+    public async Task<MarketDiagnosticListingDetailView?> GetMarketDiagnosticListingAsync(
+        long listingId,
+        CancellationToken cancellationToken = default)
+    {
+        using var response = await http.GetAsync(
+            $"api/market-diagnostics/listings/{listingId}",
+            cancellationToken);
+        if (response.StatusCode == HttpStatusCode.NotFound)
+            return null;
+        EnsureAuthorizedSuccess(response);
+        return await response.Content.ReadFromJsonAsync<MarketDiagnosticListingDetailView>(
+            JsonOptions,
             cancellationToken);
     }
 

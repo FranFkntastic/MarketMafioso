@@ -5,6 +5,29 @@ namespace MarketMafioso.Server.Tests.MarketDiagnostics;
 
 public sealed class UniversalisMarketDiagnosticClientTests
 {
+    [Theory]
+    [InlineData(1, 2)]
+    [InlineData(2, 4)]
+    [InlineData(8, 256)]
+    [InlineData(99, 256)]
+    public void CalculateBackoff_IsExponentialAndBounded(int failures, int expectedSeconds)
+    {
+        Assert.Equal(
+            TimeSpan.FromSeconds(expectedSeconds),
+            UniversalisMarketDiagnosticClient.CalculateBackoff(failures));
+    }
+
+    [Fact]
+    public void BackgroundJitter_IsStableAndBounded()
+    {
+        var interval = TimeSpan.FromMinutes(1);
+        var first = MarketDiagnosticBackgroundService.CalculateJitter("installation-a", interval);
+        var second = MarketDiagnosticBackgroundService.CalculateJitter("installation-a", interval);
+
+        Assert.Equal(first, second);
+        Assert.InRange(first, TimeSpan.Zero, TimeSpan.FromSeconds(6));
+    }
+
     [Fact]
     public void Parse_PreservesQualityFloorsAndListingIdentity()
     {
@@ -83,5 +106,41 @@ public sealed class UniversalisMarketDiagnosticClientTests
         var hq = Assert.Single(conditions, condition => condition.IsHq);
         Assert.Null(hq.MinimumListingPrice);
         Assert.Equal(nq.FreshestWorldUploadAtUtc, hq.FreshestWorldUploadAtUtc);
+    }
+
+    [Fact]
+    public void ParseSaleHistory_PreservesExactPublicSaleTuple()
+    {
+        using var document = JsonDocument.Parse(
+            """
+            {
+              "itemID": 4745,
+              "entries": [
+                {
+                  "hq": false,
+                  "pricePerUnit": 100,
+                  "quantity": 3,
+                  "timestamp": 1784916000,
+                  "buyerName": "A Buyer",
+                  "onMannequin": false
+                },
+                {
+                  "pricePerUnit": 1,
+                  "quantity": 1,
+                  "timestamp": 0
+                }
+              ]
+            }
+            """);
+
+        var sale = Assert.Single(
+            UniversalisMarketDiagnosticClient.ParseSaleHistory(4745, document.RootElement));
+
+        Assert.Equal((uint)4745, sale.ItemId);
+        Assert.Equal((uint)100, sale.UnitPrice);
+        Assert.Equal((uint)3, sale.Quantity);
+        Assert.False(sale.IsHq);
+        Assert.Equal("A Buyer", sale.BuyerName);
+        Assert.Equal(DateTimeOffset.FromUnixTimeSeconds(1784916000), sale.SoldAtUtc);
     }
 }

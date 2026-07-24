@@ -46,6 +46,58 @@ public sealed class MarketDiagnosticEndpointTests
         Assert.Equal(first.Id, second.Id);
     }
 
+    [Fact]
+    public async Task Workbench_ReturnsAccountScopedSaleHistoryToDashboardSession()
+    {
+        await using var application = CreateApplication();
+        using var client = application.CreateClient();
+        client.DefaultRequestHeaders.Add("X-Api-Key", "market-diagnostic-test-key");
+        using var created = await client.PostAsJsonAsync(
+            "/api/market-diagnostics/sales",
+            new RetainerSaleEvidenceCreateRequest
+            {
+                EvidenceId = "workbench-endpoint-sale",
+                Source = "RetainerHistory",
+                ItemId = 4745,
+                ItemName = "Orange Juice",
+                Quantity = 1,
+                UnitPrice = 100,
+                TotalGil = 95,
+                EventAtUtc = DateTimeOffset.Parse("2026-07-24T12:05:00Z"),
+                RetainerName = "Our Retainer",
+                CharacterName = "Owner Character",
+                HomeWorld = "Cactuar",
+            });
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        client.DefaultRequestHeaders.Remove("X-Api-Key");
+
+        using var login = await client.PostAsJsonAsync("/auth/login", new
+        {
+            username = "admin",
+            password = "secret-password",
+        });
+        login.EnsureSuccessStatusCode();
+
+        var workbench = await client.GetFromJsonAsync<MarketDiagnosticWorkbenchView>(
+            "/api/market-diagnostics/workbench");
+        var sale = Assert.Single(workbench!.History);
+        Assert.Equal("RetainerHistory", sale.Source);
+        Assert.Equal("Owner Character", sale.CharacterName);
+        Assert.Equal("Confirmed", sale.Confidence);
+
+        var scoped = await client.GetFromJsonAsync<MarketDiagnosticWorkbenchView>(
+            "/api/market-diagnostics/workbench?characterName=Owner%20Character&scope=Our%20Retainer&search=orange");
+        Assert.Single(scoped!.History);
+
+        var wrongRetainer = await client.GetFromJsonAsync<MarketDiagnosticWorkbenchView>(
+            "/api/market-diagnostics/workbench?scope=Someone%20Else");
+        Assert.Empty(wrongRetainer!.History);
+
+        var playerInventory = await client.GetFromJsonAsync<MarketDiagnosticWorkbenchView>(
+            "/api/market-diagnostics/workbench?scope=Player%20Inventory");
+        Assert.Empty(playerInventory!.History);
+    }
+
     private static WebApplicationFactory<Program> CreateApplication()
     {
         var contentRoot = Path.Combine(
