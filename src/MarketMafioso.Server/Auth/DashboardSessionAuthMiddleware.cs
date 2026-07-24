@@ -54,6 +54,7 @@ public sealed class DashboardSessionAuthMiddleware
         if (request.Path.StartsWithSegments("/api/acquisition", StringComparison.OrdinalIgnoreCase) ||
             request.Path.StartsWithSegments("/api/inventory", StringComparison.OrdinalIgnoreCase) ||
             request.Path.StartsWithSegments("/api/reports", StringComparison.OrdinalIgnoreCase) ||
+            request.Path.StartsWithSegments("/api/market-diagnostics", StringComparison.OrdinalIgnoreCase) ||
             request.Path.StartsWithSegments("/api/settings", StringComparison.OrdinalIgnoreCase) ||
             request.Path.StartsWithSegments("/api/diagnostics", StringComparison.OrdinalIgnoreCase) ||
             request.Path.StartsWithSegments("/api/events", StringComparison.OrdinalIgnoreCase) ||

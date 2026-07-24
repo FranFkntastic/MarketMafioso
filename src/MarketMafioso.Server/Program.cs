@@ -4,6 +4,7 @@ using MarketMafioso.Server.Auth;
 using MarketMafioso.Server.Dashboard;
 using MarketMafioso.Server.Endpoints;
 using MarketMafioso.Server.Migration;
+using MarketMafioso.Server.MarketDiagnostics;
 using MarketMafioso.Server.Sqlite;
 using MarketMafioso.Server.WorkshopHost;
 
@@ -28,6 +29,12 @@ builder.Services.AddSingleton<InventoryReportStore>();
 builder.Services.AddSingleton<JsonSnapshotImporter>();
 builder.Services.AddSingleton<MarketAcquisitionRequestStore>();
 builder.Services.AddSingleton<DiagnosticEventStore>();
+builder.Services.AddSingleton<MarketDiagnosticStore>();
+builder.Services.AddSingleton<UniversalisMarketDiagnosticClient>();
+builder.Services.AddSingleton<MarketDiagnosticAlertSink>();
+builder.Services.AddSingleton<MarketDiagnosticCollector>();
+if (builder.Configuration.GetValue<bool>("MarketMafioso:MarketDiagnostics:Enabled"))
+    builder.Services.AddHostedService<MarketDiagnosticBackgroundService>();
 builder.Services.AddWorkshopHostCraftAppraisal();
 builder.Services.AddScoped<IWorkshopHostCraftQuoteService, CraftArchitectWorkshopHostCraftQuoteService>();
 builder.Services.AddHttpClient();
@@ -93,6 +100,7 @@ app.MapWorkshopHostEndpoints(enableMarketAcquisition, requireApiKey);
 app.MapMarketAcquisitionEndpoints();
 app.MapMarketAcquisitionWorkOrderEndpoints();
 app.MapDiagnosticEndpoints();
+app.MapMarketDiagnosticEndpoints();
 
 app.MapDashboardDataEndpoints(enableMarketAcquisition);
 app.MapDashboardClientCredentialEndpoints();

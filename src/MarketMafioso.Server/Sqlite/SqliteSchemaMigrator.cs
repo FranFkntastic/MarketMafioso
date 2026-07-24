@@ -284,6 +284,95 @@ public sealed class SqliteSchemaMigrator
             sort_order INTEGER NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS market_owned_listing_versions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+            version_key TEXT NOT NULL,
+            listing_key TEXT NOT NULL,
+            source_snapshot_id TEXT NOT NULL,
+            character_name TEXT NULL,
+            world TEXT NOT NULL,
+            retainer_id INTEGER NOT NULL,
+            retainer_name TEXT NOT NULL,
+            item_id INTEGER NOT NULL,
+            item_name TEXT NULL,
+            quantity INTEGER NOT NULL,
+            is_hq INTEGER NOT NULL,
+            unit_price INTEGER NOT NULL,
+            listed_at_utc TEXT NULL,
+            listings_observed_at_utc TEXT NOT NULL,
+            first_observed_at_utc TEXT NOT NULL,
+            last_observed_at_utc TEXT NOT NULL,
+            is_active INTEGER NOT NULL DEFAULT 1,
+            closed_at_utc TEXT NULL,
+            close_reason TEXT NULL,
+            UNIQUE(account_id, version_key)
+        );
+
+        CREATE TABLE IF NOT EXISTS market_observations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+            owned_listing_version_id INTEGER NOT NULL REFERENCES market_owned_listing_versions(id) ON DELETE CASCADE,
+            observed_at_utc TEXT NOT NULL,
+            source_upload_at_utc TEXT NULL,
+            source_age_seconds INTEGER NULL,
+            source_freshness TEXT NOT NULL,
+            classification TEXT NOT NULL,
+            own_unit_price INTEGER NOT NULL,
+            competitor_listing_id TEXT NULL,
+            competitor_retainer_id TEXT NULL,
+            competitor_retainer_name TEXT NULL,
+            competitor_unit_price INTEGER NULL,
+            competitor_quantity INTEGER NULL,
+            competitor_reviewed_at_utc TEXT NULL,
+            undercut_delta INTEGER NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS market_undercut_episodes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+            owned_listing_version_id INTEGER NOT NULL REFERENCES market_owned_listing_versions(id) ON DELETE CASCADE,
+            started_at_utc TEXT NOT NULL,
+            first_detected_at_utc TEXT NOT NULL,
+            last_seen_at_utc TEXT NOT NULL,
+            last_clear_observed_at_utc TEXT NULL,
+            response_lower_bound_ms INTEGER NOT NULL,
+            response_upper_bound_ms INTEGER NOT NULL,
+            first_competitor_listing_id TEXT NULL,
+            first_competitor_retainer_id TEXT NULL,
+            first_competitor_retainer_name TEXT NULL,
+            current_competitor_listing_id TEXT NULL,
+            current_competitor_retainer_id TEXT NULL,
+            current_competitor_retainer_name TEXT NULL,
+            own_unit_price INTEGER NOT NULL,
+            competitor_unit_price INTEGER NOT NULL,
+            undercut_delta INTEGER NOT NULL,
+            exact_one_gil INTEGER NOT NULL,
+            cleared_at_utc TEXT NULL,
+            close_reason TEXT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS retainer_sale_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+            owned_listing_version_id INTEGER NULL REFERENCES market_owned_listing_versions(id) ON DELETE SET NULL,
+            source TEXT NOT NULL,
+            confidence TEXT NOT NULL,
+            retainer_id INTEGER NULL,
+            retainer_name TEXT NULL,
+            world TEXT NULL,
+            item_id INTEGER NOT NULL,
+            item_name TEXT NULL,
+            quantity INTEGER NULL,
+            is_hq INTEGER NULL,
+            unit_price INTEGER NULL,
+            total_gil INTEGER NULL,
+            event_at_utc TEXT NULL,
+            observed_at_utc TEXT NOT NULL,
+            evidence_hash TEXT NULL,
+            raw_evidence_json TEXT NULL
+        );
+
         CREATE INDEX IF NOT EXISTS idx_snapshots_account_received_at ON snapshots(account_id, received_at_utc DESC);
         CREATE INDEX IF NOT EXISTS idx_snapshots_character_received_at ON snapshots(character_id, received_at_utc DESC);
         CREATE INDEX IF NOT EXISTS idx_inventory_owners_snapshot ON inventory_owners(snapshot_id, sort_order);
@@ -292,6 +381,16 @@ public sealed class SqliteSchemaMigrator
         CREATE INDEX IF NOT EXISTS idx_inventory_items_item ON inventory_items(item_id);
         CREATE INDEX IF NOT EXISTS idx_item_metadata_catalog_type ON item_metadata_catalog(account_id, item_type);
         CREATE INDEX IF NOT EXISTS idx_retainer_market_listings_owner ON retainer_market_listings(owner_id, sort_order);
+        CREATE INDEX IF NOT EXISTS idx_market_owned_listing_versions_active
+            ON market_owned_listing_versions(account_id, is_active, world, item_id);
+        CREATE INDEX IF NOT EXISTS idx_market_observations_listing
+            ON market_observations(owned_listing_version_id, observed_at_utc DESC);
+        CREATE INDEX IF NOT EXISTS idx_market_observations_account
+            ON market_observations(account_id, observed_at_utc DESC);
+        CREATE INDEX IF NOT EXISTS idx_market_undercut_episodes_open
+            ON market_undercut_episodes(account_id, cleared_at_utc, last_seen_at_utc DESC);
+        CREATE INDEX IF NOT EXISTS idx_retainer_sale_events_account
+            ON retainer_sale_events(account_id, observed_at_utc DESC);
         CREATE INDEX IF NOT EXISTS idx_diagnostic_events_occurred ON diagnostic_events(occurred_at_utc DESC);
         CREATE INDEX IF NOT EXISTS idx_diagnostic_events_category ON diagnostic_events(category, occurred_at_utc DESC);
         CREATE INDEX IF NOT EXISTS idx_diagnostic_events_severity ON diagnostic_events(severity, occurred_at_utc DESC);
