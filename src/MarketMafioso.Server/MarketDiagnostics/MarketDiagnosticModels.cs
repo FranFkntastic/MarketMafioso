@@ -41,7 +41,7 @@ public sealed record UniversalisItemEvidence
     public IReadOnlyList<UniversalisListingEvidence> Listings { get; init; } = [];
 }
 
-public sealed record RegionMarketCondition
+public record RegionMarketCondition
 {
     public uint ItemId { get; init; }
     public bool IsHq { get; init; }
