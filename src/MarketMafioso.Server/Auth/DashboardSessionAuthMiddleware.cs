@@ -48,6 +48,9 @@ public sealed class DashboardSessionAuthMiddleware
         if (IsPluginInventoryIngestRoute(request))
             return false;
 
+        if (IsPluginMarketDiagnosticIngestRoute(request))
+            return false;
+
         if (MarketAcquisitionEndpointClassifier.RequiresPluginCredential(request))
             return false;
 
@@ -71,5 +74,9 @@ public sealed class DashboardSessionAuthMiddleware
         HttpMethods.IsPost(request.Method) &&
         (request.Path.Equals("/inventory", StringComparison.OrdinalIgnoreCase) ||
          request.Path.Equals("/api/inventory", StringComparison.OrdinalIgnoreCase));
+
+    private static bool IsPluginMarketDiagnosticIngestRoute(HttpRequest request) =>
+        HttpMethods.IsPost(request.Method) &&
+        request.Path.Equals("/api/market-diagnostics/sales", StringComparison.OrdinalIgnoreCase);
 
 }

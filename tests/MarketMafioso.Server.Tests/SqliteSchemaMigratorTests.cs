@@ -36,6 +36,7 @@ public sealed class SqliteSchemaMigratorTests
         Assert.True(await TableExistsAsync(connection, "market_observations"));
         Assert.True(await TableExistsAsync(connection, "market_undercut_episodes"));
         Assert.True(await TableExistsAsync(connection, "retainer_sale_events"));
+        Assert.True(await TableExistsAsync(connection, "market_region_observations"));
         Assert.True(await ColumnExistsAsync(connection, "inventory_owners", "gil"));
         Assert.True(await ColumnExistsAsync(connection, "inventory_items", "item_type"));
         Assert.True(await ColumnExistsAsync(connection, "inventory_bags", "location"));
@@ -74,6 +75,7 @@ public sealed class SqliteSchemaMigratorTests
         Assert.True(await TableExistsAsync(connection, "market_observations"));
         Assert.True(await TableExistsAsync(connection, "market_undercut_episodes"));
         Assert.True(await TableExistsAsync(connection, "retainer_sale_events"));
+        Assert.True(await TableExistsAsync(connection, "market_region_observations"));
     }
 
     [Fact]

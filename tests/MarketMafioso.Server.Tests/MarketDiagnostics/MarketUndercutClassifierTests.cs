@@ -89,7 +89,7 @@ public sealed class MarketUndercutClassifierTests
     }
 
     [Fact]
-    public void Evaluate_SeparatesHqAndNqCompetition()
+    public void Evaluate_OppositeQualityAloneCannotProveListingClear()
     {
         var owned = Owned(unitPrice: 100) with { IsHq = true };
         var result = MarketUndercutClassifier.Evaluate(
@@ -111,7 +111,29 @@ public sealed class MarketUndercutClassifierTests
             ObservedAt,
             TimeSpan.FromMinutes(15));
 
-        Assert.Equal(MarketObservationClassification.Clear, result.Classification);
+        Assert.Equal(MarketObservationClassification.UnknownMissing, result.Classification);
+    }
+
+    [Fact]
+    public void Evaluate_UndercutFloorWithoutListingIdentityStaysUnknown()
+    {
+        var owned = Owned(unitPrice: 100) with { IsHq = true };
+        var result = MarketUndercutClassifier.Evaluate(
+            owned,
+            new UniversalisItemEvidence
+            {
+                ItemId = owned.ItemId,
+                UploadedAtUtc = ObservedAt.AddSeconds(-5),
+                MinimumHqPrice = 99,
+                Listings = [],
+            },
+            new HashSet<string>(),
+            new HashSet<string>(),
+            ObservedAt,
+            TimeSpan.FromMinutes(15));
+
+        Assert.Equal(MarketObservationClassification.UnknownMissing, result.Classification);
+        Assert.Equal("CompetitorIdentityMissing", result.SourceFreshness);
     }
 
     private static OwnedMarketListing Owned(uint unitPrice) =>
@@ -141,6 +163,14 @@ public sealed class MarketUndercutClassifierTests
         {
             ItemId = 4745,
             UploadedAtUtc = ObservedAt.AddSeconds(-5),
+            MinimumNqPrice = listings
+                .Where(listing => !listing.IsHq)
+                .Select(listing => (uint?)listing.UnitPrice)
+                .Min(),
+            MinimumHqPrice = listings
+                .Where(listing => listing.IsHq)
+                .Select(listing => (uint?)listing.UnitPrice)
+                .Min(),
             Listings = listings,
         };
 }

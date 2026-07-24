@@ -51,6 +51,7 @@ public class Configuration : IPluginConfiguration
 
     public bool EnableAutoSendTimer { get; set; } = false;
     public int AutoSendIntervalMinutes { get; set; } = 5;
+    public bool EnableMarketDiagnostics { get; set; } = false;
 
     [JsonIgnore]
     public Dictionary<ulong, CachedRetainer> RetainerCache { get; set; } = new();

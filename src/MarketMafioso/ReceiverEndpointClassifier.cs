@@ -85,6 +85,14 @@ public static class ReceiverEndpointClassifier
             : $"{apiBaseUrl}/craft/appraise";
     }
 
+    public static string? BuildMarketDiagnosticSaleUrl(string? serverUrl)
+    {
+        var apiBaseUrl = BuildWorkshopHostApiBaseUrl(serverUrl);
+        return string.IsNullOrWhiteSpace(apiBaseUrl)
+            ? null
+            : $"{apiBaseUrl}/market-diagnostics/sales";
+    }
+
     public static string? BuildDashboardUrl(string? serverUrl)
     {
         var endpoint = Classify(serverUrl);

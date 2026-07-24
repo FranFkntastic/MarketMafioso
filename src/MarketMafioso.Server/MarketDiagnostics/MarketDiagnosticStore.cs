@@ -1,4 +1,6 @@
 using System.Globalization;
+using System.Text.Json;
+using MarketMafioso.Contracts;
 using MarketMafioso.Server.Sqlite;
 using Microsoft.Data.Sqlite;
 
@@ -300,6 +302,364 @@ public sealed class MarketDiagnosticStore(SqliteConnectionFactory connectionFact
         }
 
         return episodes;
+    }
+
+    public async Task<bool> ShouldCollectRegionAsync(
+        long accountId,
+        string region,
+        DateTimeOffset observedAtUtc,
+        TimeSpan minimumInterval,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = await connectionFactory.OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT MAX(observed_at_utc)
+            FROM market_region_observations
+            WHERE account_id = $accountId
+              AND region = $region COLLATE NOCASE;
+            """;
+        command.Parameters.AddWithValue("$accountId", accountId);
+        command.Parameters.AddWithValue("$region", region);
+        var value = await command.ExecuteScalarAsync(cancellationToken);
+        if (value is not string timestamp)
+            return true;
+
+        return observedAtUtc - ParseRequired(timestamp) >= minimumInterval;
+    }
+
+    public async Task RecordRegionConditionsAsync(
+        long accountId,
+        string region,
+        IReadOnlyDictionary<uint, string?> itemNames,
+        IReadOnlyCollection<RegionMarketCondition> conditions,
+        DateTimeOffset observedAtUtc,
+        CancellationToken cancellationToken)
+    {
+        if (conditions.Count == 0)
+            return;
+
+        await using var connection = await connectionFactory.OpenConnectionAsync(cancellationToken);
+        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
+        foreach (var condition in conditions)
+        {
+            await using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText = """
+                INSERT INTO market_region_observations (
+                    account_id,
+                    region,
+                    item_id,
+                    item_name,
+                    is_hq,
+                    observed_at_utc,
+                    min_listing_price,
+                    min_listing_world_id,
+                    average_sale_price,
+                    daily_sale_velocity,
+                    recent_purchase_price,
+                    recent_purchase_world_id,
+                    recent_purchase_at_utc,
+                    freshest_world_upload_at_utc,
+                    source_age_seconds
+                )
+                VALUES (
+                    $accountId,
+                    $region,
+                    $itemId,
+                    $itemName,
+                    $isHq,
+                    $observedAt,
+                    $minimumListingPrice,
+                    $minimumListingWorldId,
+                    $averageSalePrice,
+                    $dailySaleVelocity,
+                    $recentPurchasePrice,
+                    $recentPurchaseWorldId,
+                    $recentPurchaseAt,
+                    $freshestWorldUploadAt,
+                    $sourceAgeSeconds
+                );
+                """;
+            command.Parameters.AddWithValue("$accountId", accountId);
+            command.Parameters.AddWithValue("$region", region);
+            command.Parameters.AddWithValue("$itemId", condition.ItemId);
+            command.Parameters.AddWithValue(
+                "$itemName",
+                itemNames.TryGetValue(condition.ItemId, out var itemName) ? Db(itemName) : DBNull.Value);
+            command.Parameters.AddWithValue("$isHq", condition.IsHq ? 1 : 0);
+            command.Parameters.AddWithValue("$observedAt", Format(observedAtUtc));
+            command.Parameters.AddWithValue("$minimumListingPrice", Db(condition.MinimumListingPrice));
+            command.Parameters.AddWithValue("$minimumListingWorldId", Db(condition.MinimumListingWorldId));
+            command.Parameters.AddWithValue("$averageSalePrice", Db(condition.AverageSalePrice));
+            command.Parameters.AddWithValue("$dailySaleVelocity", Db(condition.DailySaleVelocity));
+            command.Parameters.AddWithValue("$recentPurchasePrice", Db(condition.RecentPurchasePrice));
+            command.Parameters.AddWithValue("$recentPurchaseWorldId", Db(condition.RecentPurchaseWorldId));
+            command.Parameters.AddWithValue("$recentPurchaseAt", Db(condition.RecentPurchaseAtUtc));
+            command.Parameters.AddWithValue("$freshestWorldUploadAt", Db(condition.FreshestWorldUploadAtUtc));
+            command.Parameters.AddWithValue(
+                "$sourceAgeSeconds",
+                condition.FreshestWorldUploadAtUtc is { } uploadedAt
+                    ? Math.Max(0, (long)(observedAtUtc - uploadedAt).TotalSeconds)
+                    : DBNull.Value);
+            await command.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await transaction.CommitAsync(cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<RegionMarketConditionView>> ListRegionConditionsAsync(
+        IReadOnlyList<long> accountIds,
+        uint? itemId,
+        int limit,
+        CancellationToken cancellationToken)
+    {
+        if (accountIds.Count == 0)
+            return [];
+
+        await using var connection = await connectionFactory.OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        var accountParameters = accountIds.Select((_, index) => $"$account{index}").ToArray();
+        command.CommandText = $"""
+            SELECT
+                id,
+                account_id,
+                region,
+                item_id,
+                item_name,
+                is_hq,
+                observed_at_utc,
+                min_listing_price,
+                min_listing_world_id,
+                average_sale_price,
+                daily_sale_velocity,
+                recent_purchase_price,
+                recent_purchase_world_id,
+                recent_purchase_at_utc,
+                freshest_world_upload_at_utc,
+                source_age_seconds
+            FROM market_region_observations
+            WHERE account_id IN ({string.Join(", ", accountParameters)})
+              AND ($itemId IS NULL OR item_id = $itemId)
+            ORDER BY observed_at_utc DESC, item_id, is_hq
+            LIMIT $limit;
+            """;
+        for (var index = 0; index < accountIds.Count; index++)
+            command.Parameters.AddWithValue(accountParameters[index], accountIds[index]);
+        command.Parameters.AddWithValue("$itemId", itemId is null ? DBNull.Value : itemId.Value);
+        command.Parameters.AddWithValue("$limit", Math.Clamp(limit, 1, 5000));
+
+        var conditions = new List<RegionMarketConditionView>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            conditions.Add(new RegionMarketConditionView
+            {
+                Id = reader.GetInt64(0),
+                AccountId = reader.GetInt64(1),
+                Region = reader.GetString(2),
+                ItemId = checked((uint)reader.GetInt64(3)),
+                ItemName = reader.IsDBNull(4) ? null : reader.GetString(4),
+                IsHq = reader.GetInt64(5) != 0,
+                ObservedAtUtc = ParseRequired(reader.GetString(6)),
+                MinimumListingPrice = reader.IsDBNull(7) ? null : checked((uint)reader.GetInt64(7)),
+                MinimumListingWorldId = reader.IsDBNull(8) ? null : checked((uint)reader.GetInt64(8)),
+                AverageSalePrice = reader.IsDBNull(9) ? null : reader.GetDouble(9),
+                DailySaleVelocity = reader.IsDBNull(10) ? null : reader.GetDouble(10),
+                RecentPurchasePrice = reader.IsDBNull(11) ? null : checked((uint)reader.GetInt64(11)),
+                RecentPurchaseWorldId = reader.IsDBNull(12) ? null : checked((uint)reader.GetInt64(12)),
+                RecentPurchaseAtUtc = reader.IsDBNull(13) ? null : ParseRequired(reader.GetString(13)),
+                FreshestWorldUploadAtUtc = reader.IsDBNull(14) ? null : ParseRequired(reader.GetString(14)),
+                SourceAgeSeconds = reader.IsDBNull(15) ? null : reader.GetInt64(15),
+            });
+        }
+
+        return conditions;
+    }
+
+    public async Task<IReadOnlyList<RetainerSaleEventView>> ListSaleEventsAsync(
+        IReadOnlyList<long> accountIds,
+        string? confidence,
+        int limit,
+        CancellationToken cancellationToken)
+    {
+        if (accountIds.Count == 0)
+            return [];
+
+        await using var connection = await connectionFactory.OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        var accountParameters = accountIds.Select((_, index) => $"$account{index}").ToArray();
+        command.CommandText = $"""
+            SELECT
+                id,
+                account_id,
+                owned_listing_version_id,
+                source,
+                confidence,
+                retainer_id,
+                retainer_name,
+                world,
+                item_id,
+                item_name,
+                quantity,
+                is_hq,
+                unit_price,
+                total_gil,
+                event_at_utc,
+                observed_at_utc
+            FROM retainer_sale_events
+            WHERE account_id IN ({string.Join(", ", accountParameters)})
+              AND ($confidence IS NULL OR confidence = $confidence COLLATE NOCASE)
+            ORDER BY COALESCE(event_at_utc, observed_at_utc) DESC
+            LIMIT $limit;
+            """;
+        for (var index = 0; index < accountIds.Count; index++)
+            command.Parameters.AddWithValue(accountParameters[index], accountIds[index]);
+        command.Parameters.AddWithValue(
+            "$confidence",
+            string.IsNullOrWhiteSpace(confidence) ? DBNull.Value : confidence.Trim());
+        command.Parameters.AddWithValue("$limit", Math.Clamp(limit, 1, 1000));
+
+        var events = new List<RetainerSaleEventView>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            events.Add(new RetainerSaleEventView
+            {
+                Id = reader.GetInt64(0),
+                AccountId = reader.GetInt64(1),
+                OwnedListingVersionId = reader.IsDBNull(2) ? null : reader.GetInt64(2),
+                Source = reader.GetString(3),
+                Confidence = reader.GetString(4),
+                RetainerId = reader.IsDBNull(5) ? null : checked((ulong)reader.GetInt64(5)),
+                RetainerName = reader.IsDBNull(6) ? null : reader.GetString(6),
+                World = reader.IsDBNull(7) ? null : reader.GetString(7),
+                ItemId = checked((uint)reader.GetInt64(8)),
+                ItemName = reader.IsDBNull(9) ? null : reader.GetString(9),
+                Quantity = reader.IsDBNull(10) ? null : checked((uint)reader.GetInt64(10)),
+                IsHq = reader.IsDBNull(11) ? null : reader.GetInt64(11) != 0,
+                UnitPrice = reader.IsDBNull(12) ? null : checked((uint)reader.GetInt64(12)),
+                TotalGil = reader.IsDBNull(13) ? null : checked((ulong)reader.GetInt64(13)),
+                EventAtUtc = reader.IsDBNull(14) ? null : ParseRequired(reader.GetString(14)),
+                ObservedAtUtc = ParseRequired(reader.GetString(15)),
+            });
+        }
+
+        return events;
+    }
+
+    public async Task<RetainerSaleEvidenceCreateResponse> RecordConfirmedSaleAsync(
+        long accountId,
+        RetainerSaleEvidenceCreateRequest evidence,
+        DateTimeOffset observedAtUtc,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(evidence);
+        var evidenceId = evidence.EvidenceId.Trim();
+        var source = string.IsNullOrWhiteSpace(evidence.Source)
+            ? "RetainerSaleChat"
+            : evidence.Source.Trim();
+        var rawEvidence = JsonSerializer.Serialize(evidence);
+
+        await using var connection = await connectionFactory.OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT OR IGNORE INTO retainer_sale_events (
+                account_id,
+                source,
+                confidence,
+                world,
+                item_id,
+                item_name,
+                quantity,
+                is_hq,
+                total_gil,
+                event_at_utc,
+                observed_at_utc,
+                evidence_hash,
+                raw_evidence_json
+            )
+            VALUES (
+                $accountId,
+                $source,
+                'Confirmed',
+                $world,
+                $itemId,
+                $itemName,
+                $quantity,
+                $isHq,
+                $totalGil,
+                $eventAt,
+                $observedAt,
+                $evidenceHash,
+                $rawEvidence
+            );
+            """;
+        command.Parameters.AddWithValue("$accountId", accountId);
+        command.Parameters.AddWithValue("$source", source);
+        command.Parameters.AddWithValue("$world", Db(evidence.HomeWorld));
+        command.Parameters.AddWithValue("$itemId", evidence.ItemId);
+        command.Parameters.AddWithValue("$itemName", Db(evidence.ItemName));
+        command.Parameters.AddWithValue("$quantity", Db(evidence.Quantity));
+        command.Parameters.AddWithValue("$isHq", evidence.IsHq ? 1 : 0);
+        command.Parameters.AddWithValue("$totalGil", checked((long)evidence.TotalGil));
+        command.Parameters.AddWithValue("$eventAt", Format(evidence.EventAtUtc));
+        command.Parameters.AddWithValue("$observedAt", Format(observedAtUtc));
+        command.Parameters.AddWithValue("$evidenceHash", evidenceId);
+        command.Parameters.AddWithValue("$rawEvidence", rawEvidence);
+        var inserted = await command.ExecuteNonQueryAsync(cancellationToken) > 0;
+
+        await using var read = connection.CreateCommand();
+        read.CommandText = """
+            SELECT id
+            FROM retainer_sale_events
+            WHERE account_id = $accountId
+              AND evidence_hash = $evidenceHash
+            LIMIT 1;
+            """;
+        read.Parameters.AddWithValue("$accountId", accountId);
+        read.Parameters.AddWithValue("$evidenceHash", evidenceId);
+        var id = Convert.ToInt64(
+            await read.ExecuteScalarAsync(cancellationToken),
+            CultureInfo.InvariantCulture);
+        return new RetainerSaleEvidenceCreateResponse
+        {
+            Id = id,
+            Duplicate = !inserted,
+        };
+    }
+
+    public async Task PruneObservationHistoryAsync(
+        DateTimeOffset observedAtUtc,
+        TimeSpan worldRetention,
+        TimeSpan regionRetention,
+        CancellationToken cancellationToken)
+    {
+        await using var connection = await connectionFactory.OpenConnectionAsync(cancellationToken);
+        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
+        await using (var world = connection.CreateCommand())
+        {
+            world.Transaction = transaction;
+            world.CommandText = """
+                DELETE FROM market_observations
+                WHERE observed_at_utc < $cutoff;
+                """;
+            world.Parameters.AddWithValue("$cutoff", Format(observedAtUtc - worldRetention));
+            await world.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await using (var region = connection.CreateCommand())
+        {
+            region.Transaction = transaction;
+            region.CommandText = """
+                DELETE FROM market_region_observations
+                WHERE observed_at_utc < $cutoff;
+                """;
+            region.Parameters.AddWithValue("$cutoff", Format(observedAtUtc - regionRetention));
+            await region.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await transaction.CommitAsync(cancellationToken);
     }
 
     private async Task<List<OwnedMarketListing>> ReadLatestOwnedListingsAsync(CancellationToken cancellationToken)

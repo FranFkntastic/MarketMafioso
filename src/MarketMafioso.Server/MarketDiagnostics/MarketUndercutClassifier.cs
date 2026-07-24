@@ -44,6 +44,33 @@ public static class MarketUndercutClassifier
             .ThenBy(listing => listing.Quantity)
             .FirstOrDefault();
 
+        var relevantMinimumPrice = ownedListing.IsHq
+            ? evidence.MinimumHqPrice
+            : evidence.MinimumNqPrice;
+        if (competitor == null &&
+            relevantMinimumPrice is { } minimumPrice &&
+            minimumPrice < ownedListing.UnitPrice)
+        {
+            return Unknown(
+                ownedListing,
+                observedAtUtc,
+                uploadedAt,
+                MarketObservationClassification.UnknownMissing,
+                "CompetitorIdentityMissing",
+                sourceAge);
+        }
+
+        if (competitor == null && relevantMinimumPrice == null)
+        {
+            return Unknown(
+                ownedListing,
+                observedAtUtc,
+                uploadedAt,
+                MarketObservationClassification.UnknownMissing,
+                "QualityEvidenceMissing",
+                sourceAge);
+        }
+
         if (competitor == null || competitor.UnitPrice >= ownedListing.UnitPrice)
         {
             return new MarketListingEvaluation

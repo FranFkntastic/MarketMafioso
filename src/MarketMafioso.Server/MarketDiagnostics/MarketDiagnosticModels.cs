@@ -38,6 +38,8 @@ public sealed record UniversalisItemEvidence
 {
     public uint ItemId { get; init; }
     public DateTimeOffset? UploadedAtUtc { get; init; }
+    public uint? MinimumNqPrice { get; init; }
+    public uint? MinimumHqPrice { get; init; }
     public IReadOnlyList<UniversalisListingEvidence> Listings { get; init; } = [];
 }
 

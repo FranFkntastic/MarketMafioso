@@ -13,6 +13,7 @@ using MarketMafioso.Automation.Runtime;
 using MarketMafioso.Automation.Travel;
 using MarketMafioso.AgentBridge;
 using MarketMafioso.MarketAcquisition;
+using MarketMafioso.MarketDiagnostics;
 using MarketMafioso.Quartermaster;
 using MarketMafioso.WorkshopPrep;
 using MarketMafioso.SquireIntegration;
@@ -49,6 +50,7 @@ public sealed class Plugin : IDalamudPlugin
 
     private readonly InventoryScanner scanner;
     private readonly HttpReporter reporter;
+    private readonly RetainerSaleChatObserver retainerSaleChatObserver;
     private readonly QuartermasterIpcClient quartermaster;
     private readonly StandaloneSquireIpcClient standaloneSquire;
     private readonly ExactAcquisitionIpcProvider exactAcquisitionIpc;
@@ -80,6 +82,13 @@ public sealed class Plugin : IDalamudPlugin
         standaloneSquire = new StandaloneSquireIpcClient(new DalamudStandaloneSquireIpcAdapter(PluginInterface));
         var serviceAccountIdentity = new DalamudServiceAccountIdentitySource(PluginInterface, Log);
         reporter = new HttpReporter(Configuration, PlayerState, Log, ChatGui, scanner, serviceAccountIdentity, quartermaster);
+        retainerSaleChatObserver = new RetainerSaleChatObserver(
+            Configuration,
+            PlayerState,
+            DataManager,
+            ChatGui,
+            Log,
+            Path.Combine(PluginInterface.GetPluginConfigDirectory(), "market-sale-outbox.json"));
         workshopCatalog = new WorkshopProjectCatalog(DataManager, Log);
         viwiWorkshoppaIpc = new VIWIWorkshoppaIpc(new DalamudVIWIWorkshoppaIpcAdapter(PluginInterface, Log));
         workshopAssemblyRunner = new WorkshopAssemblyRunner(
@@ -200,6 +209,7 @@ public sealed class Plugin : IDalamudPlugin
 
     private void OnFrameworkUpdate(IFramework framework)
     {
+        retainerSaleChatObserver.Tick();
         mainWindow.OnFrameworkUpdate(framework);
         agentBridge.Tick();
     }
@@ -241,6 +251,7 @@ public sealed class Plugin : IDalamudPlugin
         mainWindow.AcquisitionCompositionWindow.Dispose();
         mainWindow.Dispose();
         reporter.Dispose();
+        retainerSaleChatObserver.Dispose();
         quartermaster.Dispose();
         ECommonsMain.Dispose();
     }

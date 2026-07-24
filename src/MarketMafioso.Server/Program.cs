@@ -165,6 +165,9 @@ static WorkshopHostCredentialScope? RequiredWorkshopHostScope(HttpRequest reques
     if (IsInventoryPost(request))
         return WorkshopHostCredentialScope.InventoryWrite;
 
+    if (IsMarketDiagnosticSalePost(request))
+        return WorkshopHostCredentialScope.InventoryWrite;
+
     return null;
 }
 
@@ -172,6 +175,10 @@ static bool IsInventoryPost(HttpRequest request) =>
     HttpMethods.IsPost(request.Method) &&
     (request.Path.Equals("/inventory", StringComparison.OrdinalIgnoreCase) ||
      request.Path.Equals("/api/inventory", StringComparison.OrdinalIgnoreCase));
+
+static bool IsMarketDiagnosticSalePost(HttpRequest request) =>
+    HttpMethods.IsPost(request.Method) &&
+    request.Path.Equals("/api/market-diagnostics/sales", StringComparison.OrdinalIgnoreCase);
 
 static bool IsReportsApiRead(HttpRequest request) =>
     HttpMethods.IsGet(request.Method) &&

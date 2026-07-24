@@ -182,6 +182,41 @@ This controls how many diagnostic events are retained.
 
 Why it matters: diagnostics help troubleshoot failed uploads, dashboard behavior, and Workshop Host state. Higher values are useful while testing, but they keep more rows in the database.
 
+## Market Listing Diagnostics
+
+### `MarketMafioso__MarketDiagnostics__Enabled`
+
+Example:
+
+```text
+MarketMafioso__MarketDiagnostics__Enabled=true
+```
+
+This starts the autonomous owned-listing collector. It reads the latest retainer listing snapshots already stored by Workshop Host, polls each selling world through Universalis, and records undercut episodes without changing any listing.
+
+The companion plugin also requires its `EnableMarketDiagnostics` setting to capture structured retainer-sale chat events. Failed sale uploads remain in `market-sale-outbox.json` inside the plugin configuration directory and retry while the plugin is running.
+
+### Polling and freshness
+
+```text
+MarketMafioso__MarketDiagnostics__PollSeconds=60
+MarketMafioso__MarketDiagnostics__MaximumEvidenceAgeMinutes=15
+MarketMafioso__MarketDiagnostics__Region=North-America
+MarketMafioso__MarketDiagnostics__RegionPollMinutes=5
+MarketMafioso__MarketDiagnostics__WorldObservationRetentionDays=14
+MarketMafioso__MarketDiagnostics__RegionObservationRetentionDays=90
+```
+
+World polling drives undercut detection; regional polling stores a lower-frequency NA floor and sale-velocity series. Evidence older than the freshness limit is recorded as unknown and cannot start or clear an undercut episode. Dense per-poll evidence defaults to 14 days while compact regional history defaults to 90 days; listing versions, undercut episodes, and sale evidence are retained separately.
+
+### Optional alert webhook
+
+```text
+MarketMafioso__MarketDiagnostics__DiscordWebhookUrl=
+```
+
+Set this to a Discord-compatible webhook URL for unattended undercut transition alerts. Leave it blank to retain events only in Workshop Host.
+
 ## Dashboard Login Settings
 
 ### `MarketMafioso__RequireDashboardAuth`

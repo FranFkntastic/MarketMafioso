@@ -20,6 +20,9 @@ public sealed class ReceiverEndpointClassifierTests
         Assert.Equal(
             "https://dev.xivcraftarchitect.com/marketmafioso/api/acquisition",
             ReceiverEndpointClassifier.BuildAcquisitionBaseUrl(serverUrl));
+        Assert.Equal(
+            "https://dev.xivcraftarchitect.com/marketmafioso/api/market-diagnostics/sales",
+            ReceiverEndpointClassifier.BuildMarketDiagnosticSaleUrl(serverUrl));
     }
 
     [Fact]
@@ -49,5 +52,8 @@ public sealed class ReceiverEndpointClassifierTests
         Assert.Equal(
             "http://localhost:8080/acquisition",
             ReceiverEndpointClassifier.BuildAcquisitionBaseUrl(serverUrl));
+        Assert.Equal(
+            "http://localhost:8080/api/market-diagnostics/sales",
+            ReceiverEndpointClassifier.BuildMarketDiagnosticSaleUrl(serverUrl));
     }
 }

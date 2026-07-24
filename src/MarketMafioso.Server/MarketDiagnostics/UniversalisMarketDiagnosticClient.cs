@@ -213,6 +213,12 @@ public sealed class UniversalisMarketDiagnosticClient(IHttpClientFactory httpCli
         {
             ItemId = itemId,
             UploadedAtUtc = uploadedAt,
+            MinimumNqPrice = TryReadUInt(item, "minPriceNQ", out var minimumNqPrice) && minimumNqPrice > 0
+                ? minimumNqPrice
+                : null,
+            MinimumHqPrice = TryReadUInt(item, "minPriceHQ", out var minimumHqPrice) && minimumHqPrice > 0
+                ? minimumHqPrice
+                : null,
             Listings = listings,
         };
     }

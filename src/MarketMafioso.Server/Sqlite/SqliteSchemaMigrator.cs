@@ -410,6 +410,9 @@ public sealed class SqliteSchemaMigrator
             ON market_undercut_episodes(account_id, cleared_at_utc, last_seen_at_utc DESC);
         CREATE INDEX IF NOT EXISTS idx_retainer_sale_events_account
             ON retainer_sale_events(account_id, observed_at_utc DESC);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_retainer_sale_events_evidence
+            ON retainer_sale_events(account_id, evidence_hash)
+            WHERE evidence_hash IS NOT NULL;
         CREATE INDEX IF NOT EXISTS idx_market_region_observations_account
             ON market_region_observations(account_id, region, observed_at_utc DESC);
         CREATE INDEX IF NOT EXISTS idx_market_region_observations_item
