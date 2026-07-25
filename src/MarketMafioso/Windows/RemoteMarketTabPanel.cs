@@ -40,12 +40,12 @@ internal sealed class RemoteMarketTabPanel
             Plugin.ChatGui.Print($"[MMF] Remote market: {message}");
         }
         ImGui.SameLine();
-        ImGui.TextColored(MarketMafiosoUiTheme.Muted, $"{view.ListingCount} listings staged");
+        ImGui.TextColored(MarketMafiosoUiTheme.Muted, $"{view.Listings.Count} listings staged");
 
-        if (view.Attempt is { } pending)
+        if (view.Batch is { } batch)
         {
             ImGui.Separator();
-            DrawRow("Active purchase", $"{pending.Quantity}x {pending.ItemName} — {pending.Phase}");
+            DrawRow("Active batch", $"{batch.CompletedCount}/{batch.TotalCount} done, {batch.FailedCount} failed");
         }
         if (configuration.RemoteMarketRejectedTerritories.Count > 0)
         {
