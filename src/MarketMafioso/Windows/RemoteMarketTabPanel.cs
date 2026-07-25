@@ -10,6 +10,8 @@ namespace MarketMafioso.Windows;
 
 internal sealed class RemoteMarketTabPanel
 {
+    private static readonly int[] WarmRetentionDelaySeconds = [5, 15, 30, 60];
+
     private readonly Configuration configuration;
     private readonly RemoteMarketController controller;
     private readonly RemoteSummoningBellProbe bellProbe;
@@ -126,6 +128,23 @@ internal sealed class RemoteMarketTabPanel
             manualEnabled,
             SubmitManualWarmSessionRetention,
             view.Readiness);
+
+        foreach (var delaySeconds in WarmRetentionDelaySeconds)
+        {
+            ImGui.SameLine();
+            if (!enabled)
+                ImGui.BeginDisabled();
+            if (ImGui.Button($"{delaySeconds}s hold"))
+                SubmitDelayedWarmSessionRetention(delaySeconds);
+            if (!enabled)
+                ImGui.EndDisabled();
+            reviewRegistry.RegisterLastButton(
+                $"remote-bell.warm-retention-{delaySeconds}s",
+                $"Arm {delaySeconds}-second warm-session hold",
+                enabled,
+                () => SubmitDelayedWarmSessionRetention(delaySeconds),
+                view.Readiness);
+        }
 
         if (view.Active && view.Mode == "Manual")
         {
@@ -332,6 +351,12 @@ internal sealed class RemoteMarketTabPanel
     private void SubmitManualWarmSessionRetention()
     {
         var message = bellProbe.BeginManualWarmSessionRetentionProbe();
+        Plugin.ChatGui.Print($"[MMF] Warm-session retention: {message}");
+    }
+
+    private void SubmitDelayedWarmSessionRetention(int delaySeconds)
+    {
+        var message = bellProbe.BeginDelayedWarmSessionRetentionProbe(TimeSpan.FromSeconds(delaySeconds));
         Plugin.ChatGui.Print($"[MMF] Warm-session retention: {message}");
     }
 
