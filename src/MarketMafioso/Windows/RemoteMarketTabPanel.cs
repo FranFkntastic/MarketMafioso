@@ -96,7 +96,7 @@ internal sealed class RemoteMarketTabPanel
         ImGui.Separator();
         ImGui.TextColored(MarketMafiosoUiTheme.Header, "Warm bell-session retention proof");
         ImGui.TextWrapped(
-            "Learns a genuine scene-1 retainer selection during a normal bell visit, suppresses exactly one final scene-1 teardown, then replays that exact selection once without moving. AutoRetainer stays suppressed until the session is cleanly closed.");
+            "Drives two stock select/Quit cycles beside a bell, suppresses exactly one final scene-1 teardown, then replays that exact selection once. AutoRetainer stays suppressed until the session is cleanly closed.");
 
         var enabled = view.CanArm && !view.Active;
         if (!enabled)

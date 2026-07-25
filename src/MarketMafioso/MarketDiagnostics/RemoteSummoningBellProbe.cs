@@ -36,6 +36,7 @@ internal sealed partial class RemoteSummoningBellProbe : IDisposable
     private readonly IChatGui chatGui;
     private readonly IPluginLog log;
     private readonly DalamudSummoningBellInteractor bell;
+    private readonly DalamudRetainerAutomationSession retainerAutomation;
     private readonly IAutoRetainerIpc autoRetainer;
     private readonly string evidenceDirectory;
 
@@ -79,6 +80,7 @@ internal sealed partial class RemoteSummoningBellProbe : IDisposable
         this.chatGui = chatGui;
         this.log = log;
         bell = new(objectTable, targetManager, dataManager, interopProvider, sigScanner);
+        retainerAutomation = new(framework, gameGui, dataManager, log, objectTable, targetManager, sigScanner);
         autoRetainer = new DalamudAutoRetainerIpc(pluginInterface);
         evidenceDirectory = Path.Combine(pluginConfigDirectory, "remote-bell");
         framework.Update += OnFrameworkUpdate;
@@ -563,6 +565,7 @@ internal sealed partial class RemoteSummoningBellProbe : IDisposable
         yieldProbeSession = null;
         if (warmSessionProbeSession is not null)
         {
+            warmSessionProbeSession.BootstrapCancellation.Cancel();
             var warm = bell.ObserveWarmSessionRetention();
             if (warm.TeardownSuppressed &&
                 !warm.MatchingScene2Observed &&
@@ -570,8 +573,10 @@ internal sealed partial class RemoteSummoningBellProbe : IDisposable
             {
                 bell.ReleaseWarmSession();
             }
+            warmSessionProbeSession.BootstrapCancellation.Dispose();
         }
         warmSessionProbeSession = null;
+        retainerAutomation.CancelActive();
         bell.CancelTalkPacketTransport("The remote bell probe was disposed.");
         bell.CancelYieldEventSceneProbe("The remote bell probe was disposed.");
         bell.StopWarmSessionRetention("The remote bell probe was disposed.");

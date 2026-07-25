@@ -207,7 +207,8 @@ public sealed class Plugin : IDalamudPlugin
                 "\"/mmf capture-bell\" to arm the passive normal-bell flight recorder. " +
                 "Use \"/mmf capture-bell-lifecycle\" for the complete open/select/return/close trace. " +
                 "Yield tests: \"/mmf probe-bell-yield-control\" then \"/mmf probe-bell-yield-direct\". " +
-                "Warm retention: \"/mmf probe-bell-warm\", \"/mmf probe-bell-warm-delay <seconds>\", or \"/mmf probe-bell-warm-manual\".",
+                "Warm retention: \"/mmf probe-bell-warm\", \"/mmf probe-bell-warm-delay <seconds>\", or \"/mmf probe-bell-warm-manual\". " +
+                "Use \"/mmf probe-bell-warm-ui\" only for the old manual select/Quit bootstrap.",
         });
 
         PluginInterface.UiBuilder.Draw += DrawUI;
@@ -365,6 +366,15 @@ public sealed class Plugin : IDalamudPlugin
             case "probe-bell-warm-manual":
 #if DEBUG
                 ChatGui.Print($"[MMF] Warm-session retention: {mainWindow.BeginManualWarmSessionRetentionProbe()}");
+                break;
+#else
+                ChatGui.Print("[MMF] Warm-session retention is only available in debug builds.");
+                break;
+#endif
+
+            case "probe-bell-warm-ui":
+#if DEBUG
+                ChatGui.Print($"[MMF] Warm-session retention: {mainWindow.BeginManualUiWarmSessionRetentionProbe()}");
                 break;
 #else
                 ChatGui.Print("[MMF] Warm-session retention is only available in debug builds.");

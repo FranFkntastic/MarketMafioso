@@ -76,6 +76,15 @@ public sealed class RemoteMarketOverlayWindow : Window
         selectedListingIds.RemoveWhere(id => view.Listings.All(listing => listing.ListingId != id) ||
             view.Listings.First(listing => listing.ListingId == id).AlreadyPurchased);
 
+        if (controller.ConsumePendingSelectionMaxPrice() is { } maxPrice)
+        {
+            selectedListingIds.Clear();
+            foreach (var listing in view.Listings.Where(listing =>
+                         !listing.AlreadyPurchased && (maxPrice == 0 || listing.UnitPrice <= maxPrice)))
+                selectedListingIds.Add(listing.ListingId);
+            confirmArmed = false;
+        }
+
         DrawHeader(view);
         DrawEconomicsStrip(view);
         ImGui.Separator();

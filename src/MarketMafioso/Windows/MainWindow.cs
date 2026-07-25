@@ -181,6 +181,7 @@ public class MainWindow : Window, IDisposable
             Plugin.ChatGui,
             log,
             scanner.ResolveItemName,
+            marketBoardItemSearchDriver.Search,
             Plugin.PluginInterface,
             Plugin.PluginInterface.GetPluginConfigDirectory());
         remoteSummoningBellProbe = new RemoteSummoningBellProbe(
@@ -684,6 +685,9 @@ public class MainWindow : Window, IDisposable
 
     public string BeginManualWarmSessionRetentionProbe() =>
         remoteSummoningBellProbe.BeginManualWarmSessionRetentionProbe();
+
+    public string BeginManualUiWarmSessionRetentionProbe() =>
+        remoteSummoningBellProbe.BeginManualUiWarmSessionRetentionProbe();
 
     public string ReplayHeldWarmSession() =>
         remoteSummoningBellProbe.ReplayHeldWarmSession();

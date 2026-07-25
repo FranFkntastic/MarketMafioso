@@ -6,6 +6,7 @@ using System.Text.Json;
 using Dalamud.Game.ClientState.Conditions;
 using Dalamud.Game.Network.Structures;
 using Dalamud.Plugin.Services;
+using MarketMafioso.Automation.MarketBoard;
 using FFXIVClientStructs.FFXIV.Client.Game;
 using FFXIVClientStructs.FFXIV.Client.UI;
 using FFXIVClientStructs.FFXIV.Client.UI.Agent;
@@ -42,14 +43,18 @@ internal sealed class RemoteMarketController : IDisposable
     private readonly IChatGui chatGui;
     private readonly IPluginLog log;
     private readonly Func<uint, string?> resolveItemName;
+    private readonly Func<uint, string?, MarketBoardItemSearchResult> searchDriver;
     private readonly CmbMarketContextClient cmbContext;
     private readonly string evidenceDirectory;
+    private readonly Dalamud.Plugin.Ipc.ICallGateProvider<uint, uint?, bool> openRemoteMarketProvider;
 
     private readonly List<RemoteMarketBatchItem> batchItems = [];
     private RemoteMarketPurchaseAttempt? attempt;
     private string? lastOutcome;
     private readonly HashSet<ulong> purchasedListingIds = [];
     private readonly Dictionary<uint, Dictionary<ulong, string>> retainerNamesByItem = [];
+    private uint? pendingSelectionMaxPrice;
+    private DateTimeOffset pendingSelectionExpiresAtUtc;
 
     public RemoteMarketController(
         Configuration configuration,
@@ -62,6 +67,7 @@ internal sealed class RemoteMarketController : IDisposable
         IChatGui chatGui,
         IPluginLog log,
         Func<uint, string?> resolveItemName,
+        Func<uint, string?, MarketBoardItemSearchResult> searchDriver,
         Dalamud.Plugin.IDalamudPluginInterface pluginInterface,
         string pluginConfigDirectory)
     {
@@ -75,11 +81,14 @@ internal sealed class RemoteMarketController : IDisposable
         this.chatGui = chatGui;
         this.log = log;
         this.resolveItemName = resolveItemName;
+        this.searchDriver = searchDriver;
         cmbContext = new CmbMarketContextClient(pluginInterface, log);
         evidenceDirectory = Path.Combine(pluginConfigDirectory, "remote-market");
         marketBoard.PurchaseRequested += OnPurchaseRequested;
         marketBoard.ItemPurchased += OnItemPurchased;
         marketBoard.OfferingsReceived += OnOfferingsReceived;
+        openRemoteMarketProvider = pluginInterface.GetIpcProvider<uint, uint?, bool>("MarketMafioso.OpenRemoteMarket");
+        openRemoteMarketProvider.RegisterFunc(OpenRemoteMarketIpc);
     }
 
     public bool IsAvailable =>
@@ -90,6 +99,36 @@ internal sealed class RemoteMarketController : IDisposable
         marketBoard.PurchaseRequested -= OnPurchaseRequested;
         marketBoard.ItemPurchased -= OnItemPurchased;
         marketBoard.OfferingsReceived -= OnOfferingsReceived;
+        openRemoteMarketProvider.UnregisterFunc();
+    }
+
+    public uint? ConsumePendingSelectionMaxPrice()
+    {
+        if (pendingSelectionMaxPrice is null || DateTimeOffset.UtcNow > pendingSelectionExpiresAtUtc)
+        {
+            pendingSelectionMaxPrice = null;
+            return null;
+        }
+        var value = pendingSelectionMaxPrice;
+        pendingSelectionMaxPrice = null;
+        return value;
+    }
+
+    private bool OpenRemoteMarketIpc(uint itemId, uint? maxUnitPrice)
+    {
+        if (!IsAvailable || itemId == 0 || !clientState.IsLoggedIn)
+            return false;
+        OpenMarketBoard();
+        var result = searchDriver(itemId, resolveItemName(itemId));
+        if (!result.SearchSent)
+            return false;
+        pendingSelectionMaxPrice = maxUnitPrice ?? 0;
+        pendingSelectionExpiresAtUtc = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(15);
+        log.Information(
+            "[MarketMafioso] Remote market opened via IPC for item {ItemId} with max unit price {MaxUnitPrice}.",
+            itemId,
+            maxUnitPrice?.ToString() ?? "(none)");
+        return true;
     }
 
     private void OnOfferingsReceived(IMarketBoardCurrentOfferings offerings)
