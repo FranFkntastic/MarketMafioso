@@ -47,6 +47,7 @@ internal sealed class RemoteMarketController : IDisposable
     private readonly CmbMarketContextClient cmbContext;
     private readonly string evidenceDirectory;
     private readonly Dalamud.Plugin.Ipc.ICallGateProvider<uint, uint?, bool> openRemoteMarketProvider;
+    private readonly Dalamud.Plugin.Ipc.ICallGateProvider<bool> remoteMarketAvailableProvider;
 
     private readonly List<RemoteMarketBatchItem> batchItems = [];
     private RemoteMarketPurchaseAttempt? attempt;
@@ -89,6 +90,8 @@ internal sealed class RemoteMarketController : IDisposable
         marketBoard.OfferingsReceived += OnOfferingsReceived;
         openRemoteMarketProvider = pluginInterface.GetIpcProvider<uint, uint?, bool>("MarketMafioso.OpenRemoteMarket");
         openRemoteMarketProvider.RegisterFunc(OpenRemoteMarketIpc);
+        remoteMarketAvailableProvider = pluginInterface.GetIpcProvider<bool>("MarketMafioso.IsRemoteMarketAvailable");
+        remoteMarketAvailableProvider.RegisterFunc(() => IsAvailable && clientState.IsLoggedIn);
     }
 
     public bool IsAvailable =>
@@ -100,6 +103,7 @@ internal sealed class RemoteMarketController : IDisposable
         marketBoard.ItemPurchased -= OnItemPurchased;
         marketBoard.OfferingsReceived -= OnOfferingsReceived;
         openRemoteMarketProvider.UnregisterFunc();
+        remoteMarketAvailableProvider.UnregisterFunc();
     }
 
     public uint? ConsumePendingSelectionMaxPrice()

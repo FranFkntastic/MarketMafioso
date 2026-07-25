@@ -51,6 +51,7 @@ internal sealed partial class RemoteSummoningBellProbe
     private static readonly TimeSpan WarmSessionReplayDelay = TimeSpan.FromMilliseconds(250);
     private static readonly TimeSpan WarmSessionReplayWindow = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan WarmSessionSuccessSettleWindow = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan WarmSessionFinalCleanupWindow = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan WarmSessionCleanupWindow = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan WarmSessionManualHoldWindow = TimeSpan.FromMinutes(10);
     private static readonly TimeSpan MaximumWarmSessionDelay = TimeSpan.FromMinutes(5);
@@ -249,6 +250,22 @@ internal sealed partial class RemoteSummoningBellProbe
         active.BootstrapSteps.Enqueue(
             new(name, result.Success, result.Code, result.Message, DateTimeOffset.UtcNow));
 
+    private async Task<RetainerAutomationResult> RunWarmSessionFinalCleanupAsync(
+        WarmSessionProbeSession active,
+        CancellationToken cancellationToken)
+    {
+        var quit = await retainerAutomation.CloseRetainerAsync(cancellationToken).ConfigureAwait(false);
+        active.FinalCleanupSteps.Enqueue(
+            new("Quit replayed retainer visit", quit.Success, quit.Code, quit.Message, DateTimeOffset.UtcNow));
+        if (!quit.Success)
+            return quit;
+
+        var close = await retainerAutomation.CloseRetainerListAsync(cancellationToken).ConfigureAwait(false);
+        active.FinalCleanupSteps.Enqueue(
+            new("Close final retainer list", close.Success, close.Code, close.Message, DateTimeOffset.UtcNow));
+        return close;
+    }
+
     public string ReplayHeldWarmSession()
     {
         if (warmSessionProbeSession is not { } active)
@@ -346,6 +363,8 @@ internal sealed partial class RemoteSummoningBellProbe
         var now = DateTimeOffset.UtcNow;
         var transport = bell.ObserveWarmSessionRetention();
         if (!UpdateWarmSessionBootstrap(active, transport))
+            return;
+        if (!UpdateWarmSessionFinalCleanup(active))
             return;
 
         if (transport.SelectionCaptured && !active.SelectionObserved)
@@ -492,6 +511,22 @@ internal sealed partial class RemoteSummoningBellProbe
             if (commandMenuReady &&
                 now - active.Scene2ObservedAtUtc.Value >= WarmSessionSuccessSettleWindow)
             {
+                if (active.AutomateBootstrap)
+                {
+                    active.CommandMenuObservedAfterReplay = true;
+                    active.FinalCleanupTask = RunWarmSessionFinalCleanupAsync(
+                        active,
+                        active.BootstrapCancellation.Token);
+                    active.DeadlineUtc = now + WarmSessionFinalCleanupWindow;
+                    warmSessionProbeView = warmSessionProbeView with
+                    {
+                        State = "Confirmed; cleaning up",
+                        Message = "Warm-session retention worked. Choosing Quit and closing the returned list.",
+                        Readiness = "No input needed; AutoRetainer remains suppressed until the stock session is closed.",
+                    };
+                    return;
+                }
+
                 CompleteWarmSessionProbe(
                     active,
                     "Confirmed",
@@ -652,6 +687,52 @@ internal sealed partial class RemoteSummoningBellProbe
         return true;
     }
 
+    private bool UpdateWarmSessionFinalCleanup(WarmSessionProbeSession active)
+    {
+        if (active.FinalCleanupTask is null)
+            return true;
+
+        if (!active.FinalCleanupTask.IsCompleted)
+        {
+            if (DateTimeOffset.UtcNow < active.DeadlineUtc)
+                return false;
+
+            active.BootstrapCancellation.Cancel();
+            CompleteWarmSessionProbe(
+                active,
+                "ConfirmedCleanupTimedOut",
+                "Warm-session retention was confirmed, but automatic stock-session cleanup timed out.",
+                active.CommandMenuObservedAfterReplay);
+            return false;
+        }
+
+        RetainerAutomationResult cleanup;
+        try
+        {
+            cleanup = active.FinalCleanupTask.GetAwaiter().GetResult();
+        }
+        catch (OperationCanceledException)
+        {
+            cleanup = RetainerAutomationResult.Failed(
+                "FinalCleanupCancelled",
+                "Automatic stock-session cleanup was cancelled.");
+        }
+        catch (Exception ex)
+        {
+            log.Error(ex, "[MarketMafioso] Automatic post-proof retainer cleanup failed unexpectedly.");
+            cleanup = RetainerAutomationResult.Failed("FinalCleanupException", ex.Message);
+        }
+
+        CompleteWarmSessionProbe(
+            active,
+            cleanup.Success ? "Confirmed" : "ConfirmedCleanupFailed",
+            cleanup.Success
+                ? "Confirmed: the retained scene-1 selection received matching scene 2, reopened the command menu, then MMF chose Quit and closed the returned retainer list normally."
+                : $"Warm-session retention was confirmed, but automatic stock-session cleanup failed ({cleanup.Code}): {cleanup.Message}",
+            active.CommandMenuObservedAfterReplay);
+        return false;
+    }
+
     private void BeginWarmSessionCleanup(WarmSessionProbeSession active, string reason)
     {
         active.CleanupStartedAtUtc = DateTimeOffset.UtcNow;
@@ -694,6 +775,7 @@ internal sealed partial class RemoteSummoningBellProbe
             active.Arm.OrdinaryInteractionDistance,
             active.AutomateBootstrap ? "Automated" : "ManualUi",
             active.BootstrapSteps.ToArray(),
+            active.FinalCleanupSteps.ToArray(),
             active.ReplayMode.ToString(),
             active.ReplayDelay?.TotalSeconds,
             active.TeardownSuppressedAtUtc,
@@ -729,7 +811,7 @@ internal sealed partial class RemoteSummoningBellProbe
                 ? $"{message} AutoRetainer remains suppressed until the retainer session closes."
                 : message,
             verdict == "Confirmed"
-                ? "Choose Quit and close the returned retainer list normally; this probe will not intercept anything else."
+                ? "The retained session was confirmed and closed cleanly; the next probe may be armed."
                 : message,
             active.TeardownSuppressedAtUtc is { } viewHeldAt &&
             active.ReplayStartedAtUtc is { } viewReplayAt
@@ -741,7 +823,8 @@ internal sealed partial class RemoteSummoningBellProbe
             transport.Opcode == 0 ? null : $"0x{transport.Opcode:X}",
             path);
 
-        if (verdict is "Confirmed" or "SessionRetainedWithoutCommandMenu")
+        if (verdict.StartsWith("Confirmed", StringComparison.Ordinal) ||
+            verdict == "SessionRetainedWithoutCommandMenu")
             chatGui.Print($"[MMF] Warm-session retention: {message}");
         else
             chatGui.PrintError($"[MMF] Warm-session retention: {message}");
@@ -838,9 +921,12 @@ internal sealed partial class RemoteSummoningBellProbe
         public bool AutomateBootstrap { get; }
         public CancellationTokenSource BootstrapCancellation { get; } = new();
         public ConcurrentQueue<WarmSessionBootstrapStep> BootstrapSteps { get; } = new();
+        public ConcurrentQueue<WarmSessionBootstrapStep> FinalCleanupSteps { get; } = new();
         public Task<WarmSessionBootstrapResult>? BootstrapTask { get; set; }
         public WarmSessionBootstrapResult? BootstrapResult { get; set; }
         public WarmSessionBootstrapResult? BootstrapFailure { get; set; }
+        public Task<RetainerAutomationResult>? FinalCleanupTask { get; set; }
+        public bool CommandMenuObservedAfterReplay { get; set; }
         public int ObservedBootstrapStepCount { get; set; }
         public bool SelectionObserved { get; set; }
         public bool Scene1SelectionObserved { get; set; }
@@ -872,6 +958,7 @@ internal sealed partial class RemoteSummoningBellProbe
         float OrdinaryInteractionDistance,
         string BootstrapMode,
         WarmSessionBootstrapStep[] BootstrapSteps,
+        WarmSessionBootstrapStep[] FinalCleanupSteps,
         string ReplayMode,
         double? RequestedHoldSeconds,
         DateTimeOffset? TeardownSuppressedAtUtc,
