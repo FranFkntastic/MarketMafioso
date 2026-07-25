@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
+using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Textures.TextureWraps;
 using Dalamud.Interface.Windowing;
@@ -93,9 +94,30 @@ public sealed class RemoteMarketOverlayWindow : Window
         ImGui.TextColored(MarketMafiosoUiTheme.Muted, $"{view.Listings.Count} listings · {gilText}");
         ImGui.EndGroup();
 
+        if (view.MarketContext is { } context)
+            DrawMarketContextStrip(context, first.UnitPrice);
+
         ImGui.SameLine(ImGui.GetContentRegionAvail().X + ImGui.GetCursorPosX() - 34f);
         if (ImGui.SmallButton(pinned ? "Unpin" : "Pin"))
             pinned = !pinned;
+    }
+
+    private static void DrawMarketContextStrip(CmbMarketContext context, uint cheapestLocalUnitPrice)
+    {
+        var parts = new List<string>();
+        if (context.DatacenterBestPrice is { } dcBest && !string.IsNullOrWhiteSpace(context.DatacenterBestWorld))
+        {
+            var delta = cheapestLocalUnitPrice > 0 ? ((double)cheapestLocalUnitPrice - dcBest) / cheapestLocalUnitPrice : 0;
+            var deltaText = delta > 0.005 ? $" (-{delta:P0})" : delta < -0.005 ? $" (+{-delta:P0})" : string.Empty;
+            parts.Add($"DC best {dcBest:N0}p ({context.DatacenterBestWorld}{deltaText})");
+        }
+        if (context.VelocityPerDay is { } velocity)
+            parts.Add($"~{velocity:0.#}/day");
+        if (context.TrendAveragePrice is { } trend)
+            parts.Add($"sale avg {trend:0}p");
+        if (parts.Count == 0)
+            return;
+        ImGui.TextColored(MarketMafiosoUiTheme.Muted, string.Join(" · ", parts));
     }
 
     private void DrawListingsTable(RemoteMarketView view, bool batchActive)

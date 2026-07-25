@@ -204,7 +204,8 @@ public sealed class Plugin : IDalamudPlugin
             HelpMessage =
                 "Open the MarketMafioso toolbox window. " +
                 "Use \"/mmf send\" to send an inventory report immediately, or " +
-                "\"/mmf capture-bell\" to arm the passive normal-bell flight recorder.",
+                "\"/mmf capture-bell\" to arm the passive normal-bell flight recorder. " +
+                "Yield tests: \"/mmf probe-bell-yield-control\" then \"/mmf probe-bell-yield-direct\".",
         });
 
         PluginInterface.UiBuilder.Draw += DrawUI;
@@ -279,6 +280,42 @@ public sealed class Plugin : IDalamudPlugin
                 break;
 #else
                 ChatGui.Print("[MMF] Normal bell capture is only available in debug builds.");
+                break;
+#endif
+
+            case "probe-bell-yield-control":
+#if DEBUG
+                ChatGui.Print($"[MMF] YieldEventScene2 control: {mainWindow.BeginYieldEventSceneControl()}");
+                break;
+#else
+                ChatGui.Print("[MMF] YieldEventScene2 probes are only available in debug builds.");
+                break;
+#endif
+
+            case "probe-bell-yield-direct":
+#if DEBUG
+                ChatGui.Print($"[MMF] YieldEventScene2 direct probe: {mainWindow.BeginYieldEventSceneDirectProbe()}");
+                break;
+#else
+                ChatGui.Print("[MMF] YieldEventScene2 probes are only available in debug builds.");
+                break;
+#endif
+
+            case "probe-bell-yield-status":
+#if DEBUG
+                ChatGui.Print($"[MMF] YieldEventScene2 probe: {mainWindow.GetYieldEventSceneProbeStatus()}");
+                break;
+#else
+                ChatGui.Print("[MMF] YieldEventScene2 probes are only available in debug builds.");
+                break;
+#endif
+
+            case "probe-bell-yield-cancel":
+#if DEBUG
+                ChatGui.Print($"[MMF] YieldEventScene2 probe: {mainWindow.CancelYieldEventSceneProbe()}");
+                break;
+#else
+                ChatGui.Print("[MMF] YieldEventScene2 probes are only available in debug builds.");
                 break;
 #endif
 

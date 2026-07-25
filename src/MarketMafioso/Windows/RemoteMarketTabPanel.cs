@@ -75,7 +75,57 @@ internal sealed class RemoteMarketTabPanel
         }
 
         DrawNormalBellCapture();
+        DrawYieldEventSceneProbe();
         DrawBellProbe();
+    }
+
+    private void DrawYieldEventSceneProbe()
+    {
+        var view = bellProbe.GetYieldProbeView();
+        ImGui.Separator();
+        ImGui.TextColored(MarketMafiosoUiTheme.Header, "Bell-less YieldEventScene2 probe");
+        ImGui.TextWrapped(
+            "Two-step packet test. The control replaces one normal retainer-selection packet with an exact clone inside a valid bell session. The direct test replays that confirmed current-build packet once after every retainer window is closed.");
+
+        var controlEnabled = view.CanArmControl && !view.Active;
+        if (!controlEnabled)
+            ImGui.BeginDisabled();
+        if (ImGui.Button(view.Active ? "Yield probe active..." : "Arm in-session control"))
+            SubmitYieldControl();
+        if (!controlEnabled)
+            ImGui.EndDisabled();
+        reviewRegistry.RegisterLastButton(
+            "remote-bell.yield-control",
+            "Arm in-session YieldEventScene2 control",
+            controlEnabled,
+            SubmitYieldControl,
+            view.Readiness);
+
+        ImGui.SameLine();
+        var directEnabled = view.CanReplaySessionFree && !view.Active;
+        if (!directEnabled)
+            ImGui.BeginDisabled();
+        if (ImGui.Button("Send one session-free replay"))
+            SubmitYieldDirect();
+        if (!directEnabled)
+            ImGui.EndDisabled();
+        reviewRegistry.RegisterLastButton(
+            "remote-bell.yield-direct",
+            "Send one session-free YieldEventScene2 replay",
+            directEnabled,
+            SubmitYieldDirect,
+            view.Readiness);
+
+        DrawRow("Readiness", view.Readiness);
+        DrawRow("Mode", view.Mode);
+        DrawRow("State", view.State);
+        DrawRow("Result", view.Message);
+        if (view.RetainerId is not null)
+            DrawRow("Retainer", view.RetainerId);
+        if (view.Opcode is not null)
+            DrawRow("Opcode", view.Opcode);
+        if (view.LastEvidencePath is not null)
+            DrawRow("Evidence", view.LastEvidencePath);
     }
 
     private void DrawNormalBellCapture()
@@ -159,6 +209,18 @@ internal sealed class RemoteMarketTabPanel
     {
         var message = bellProbe.BeginNormalCapture();
         Plugin.ChatGui.Print($"[MMF] Normal bell capture: {message}");
+    }
+
+    private void SubmitYieldControl()
+    {
+        var message = bellProbe.BeginYieldControl();
+        Plugin.ChatGui.Print($"[MMF] YieldEventScene2 control: {message}");
+    }
+
+    private void SubmitYieldDirect()
+    {
+        var message = bellProbe.BeginYieldSessionFreeReplay();
+        Plugin.ChatGui.Print($"[MMF] YieldEventScene2 direct probe: {message}");
     }
 
     private static void DrawRow(string label, string value)

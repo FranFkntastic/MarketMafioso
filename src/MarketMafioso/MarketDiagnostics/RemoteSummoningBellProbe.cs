@@ -98,6 +98,7 @@ internal sealed partial class RemoteSummoningBellProbe : IDisposable
                 observation.Available &&
                 observation.OutsideOrdinaryInteractionRange &&
                 normalCaptureSession is null &&
+                yieldProbeSession is null &&
                 !IsRetainerListReady(),
             Readiness = observation.Message,
             BellGameObjectId = FormatGameObjectId(observation.BellGameObjectId),
@@ -116,6 +117,8 @@ internal sealed partial class RemoteSummoningBellProbe : IDisposable
             return "Remote bell probe requires a logged-in character.";
         if (normalCaptureSession is not null)
             return "The normal bell flight recorder is already armed.";
+        if (yieldProbeSession is not null)
+            return "The YieldEventScene2 probe is already active.";
         if (session is not null)
             return "A remote bell probe is already observing its single submitted request.";
         if (IsRetainerListReady())
@@ -194,6 +197,12 @@ internal sealed partial class RemoteSummoningBellProbe : IDisposable
             UpdateNormalCapture();
             return;
         }
+        if (yieldProbeSession is not null)
+        {
+            UpdateYieldProbe();
+            return;
+        }
+        ValidateYieldTemplateContext();
         if (session is not { } active)
         {
             if (releaseSuppressionWhenRetainerListCloses && !IsAnyRetainerSessionUiOpen())
@@ -543,7 +552,9 @@ internal sealed partial class RemoteSummoningBellProbe : IDisposable
         disposed = true;
         session = null;
         normalCaptureSession = null;
+        yieldProbeSession = null;
         bell.CancelTalkPacketTransport("The remote bell probe was disposed.");
+        bell.CancelYieldEventSceneProbe("The remote bell probe was disposed.");
         ReleaseAutoRetainerSuppression();
         autoRetainer.Dispose();
         bell.Dispose();

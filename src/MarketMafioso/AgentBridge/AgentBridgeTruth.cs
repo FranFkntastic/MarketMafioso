@@ -45,6 +45,16 @@ public sealed record AgentBridgeRemoteBellProbeTruth
     public string? NormalCaptureMessage { get; init; }
     public string? NormalCaptureReadiness { get; init; }
     public string? NormalCaptureLastEvidencePath { get; init; }
+    public bool YieldProbeActive { get; init; }
+    public bool YieldProbeCanArmControl { get; init; }
+    public bool YieldProbeCanReplaySessionFree { get; init; }
+    public string? YieldProbeMode { get; init; }
+    public string? YieldProbeState { get; init; }
+    public string? YieldProbeMessage { get; init; }
+    public string? YieldProbeReadiness { get; init; }
+    public string? YieldProbeRetainerId { get; init; }
+    public string? YieldProbeOpcode { get; init; }
+    public string? YieldProbeLastEvidencePath { get; init; }
 }
 
 public sealed record AgentBridgeRouteTruth

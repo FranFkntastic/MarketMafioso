@@ -42,6 +42,7 @@ internal sealed class RemoteMarketController : IDisposable
     private readonly IChatGui chatGui;
     private readonly IPluginLog log;
     private readonly Func<uint, string?> resolveItemName;
+    private readonly CmbMarketContextClient cmbContext;
     private readonly string evidenceDirectory;
 
     private readonly List<RemoteMarketBatchItem> batchItems = [];
@@ -60,6 +61,7 @@ internal sealed class RemoteMarketController : IDisposable
         IChatGui chatGui,
         IPluginLog log,
         Func<uint, string?> resolveItemName,
+        Dalamud.Plugin.IDalamudPluginInterface pluginInterface,
         string pluginConfigDirectory)
     {
         this.configuration = configuration;
@@ -72,6 +74,7 @@ internal sealed class RemoteMarketController : IDisposable
         this.chatGui = chatGui;
         this.log = log;
         this.resolveItemName = resolveItemName;
+        cmbContext = new CmbMarketContextClient(pluginInterface, log);
         evidenceDirectory = Path.Combine(pluginConfigDirectory, "remote-market");
         marketBoard.PurchaseRequested += OnPurchaseRequested;
         marketBoard.ItemPurchased += OnItemPurchased;
@@ -159,13 +162,18 @@ internal sealed class RemoteMarketController : IDisposable
                 batchItems.Count(item => item.Status == RemoteMarketBatchItemStatus.Failed),
                 attempt is not null);
 
+        CmbMarketContext? context = null;
+        if (listings.Count > 0)
+            context = cmbContext.Get(listings[0].ItemId, listings[0].IsHighQuality);
+
         return new RemoteMarketView(
             IsAvailable,
             listings,
             batch,
             lastOutcome,
             GetPurchaseContextBlockReason(),
-            GetCurrentGil());
+            GetCurrentGil(),
+            context);
     }
 
     public string? BeginBatch(IReadOnlyCollection<ulong> selectedListingIds)
@@ -588,7 +596,8 @@ internal sealed record RemoteMarketView(
     RemoteMarketBatchView? Batch,
     string? LastOutcome,
     string? ContextBlockReason,
-    uint? GilOnHand);
+    uint? GilOnHand,
+    CmbMarketContext? MarketContext);
 
 internal sealed class RemoteMarketPurchaseAttempt(
     RemoteMarketSelectionView selection,

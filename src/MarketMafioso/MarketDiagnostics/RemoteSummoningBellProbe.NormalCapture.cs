@@ -55,6 +55,7 @@ internal sealed partial class RemoteSummoningBellProbe
                 observation.Available &&
                 !observation.OutsideOrdinaryInteractionRange &&
                 session is null &&
+                yieldProbeSession is null &&
                 !anyRetainerUiOpen,
             Readiness = anyRetainerUiOpen
                 ? "Close the current retainer interaction before arming the recorder."
@@ -77,6 +78,8 @@ internal sealed partial class RemoteSummoningBellProbe
             return "The normal bell flight recorder requires a logged-in character.";
         if (session is not null)
             return "The remote bell probe is already active.";
+        if (yieldProbeSession is not null)
+            return "The YieldEventScene2 probe is already active.";
         if (normalCaptureSession is not null)
             return "The normal bell flight recorder is already armed.";
         if (IsAnyRetainerSessionUiOpen())

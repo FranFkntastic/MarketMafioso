@@ -181,6 +181,7 @@ public class MainWindow : Window, IDisposable
             Plugin.ChatGui,
             log,
             scanner.ResolveItemName,
+            Plugin.PluginInterface,
             Plugin.PluginInterface.GetPluginConfigDirectory());
         remoteSummoningBellProbe = new RemoteSummoningBellProbe(
             config,
@@ -422,6 +423,7 @@ public class MainWindow : Window, IDisposable
         var persistedExactAcquisition = exactAcquisitionRouteStateStore.Restore();
         var remoteBellProbe = remoteSummoningBellProbe.GetView();
         var normalBellCapture = remoteSummoningBellProbe.GetNormalCaptureView();
+        var yieldBellProbe = remoteSummoningBellProbe.GetYieldProbeView();
         return new AgentBridgeTruth
         {
             SchemaVersion = 1,
@@ -455,6 +457,16 @@ public class MainWindow : Window, IDisposable
                 NormalCaptureMessage = normalBellCapture.Message,
                 NormalCaptureReadiness = normalBellCapture.Readiness,
                 NormalCaptureLastEvidencePath = normalBellCapture.LastEvidencePath,
+                YieldProbeActive = yieldBellProbe.Active,
+                YieldProbeCanArmControl = yieldBellProbe.CanArmControl,
+                YieldProbeCanReplaySessionFree = yieldBellProbe.CanReplaySessionFree,
+                YieldProbeMode = yieldBellProbe.Mode,
+                YieldProbeState = yieldBellProbe.State,
+                YieldProbeMessage = yieldBellProbe.Message,
+                YieldProbeReadiness = yieldBellProbe.Readiness,
+                YieldProbeRetainerId = yieldBellProbe.RetainerId,
+                YieldProbeOpcode = yieldBellProbe.Opcode,
+                YieldProbeLastEvidencePath = yieldBellProbe.LastEvidencePath,
             },
             Route = new AgentBridgeRouteTruth
             {
@@ -631,6 +643,14 @@ public class MainWindow : Window, IDisposable
     public string GetNormalSummoningBellCaptureStatus() => remoteSummoningBellProbe.GetNormalCaptureStatus();
 
     public string CancelNormalSummoningBellCapture() => remoteSummoningBellProbe.CancelNormalCapture();
+
+    public string BeginYieldEventSceneControl() => remoteSummoningBellProbe.BeginYieldControl();
+
+    public string BeginYieldEventSceneDirectProbe() => remoteSummoningBellProbe.BeginYieldSessionFreeReplay();
+
+    public string GetYieldEventSceneProbeStatus() => remoteSummoningBellProbe.GetYieldProbeStatus();
+
+    public string CancelYieldEventSceneProbe() => remoteSummoningBellProbe.CancelYieldProbe();
 
     public void BeginAgentReviewFrame() => AgentReviewRegistry.BeginFrame();
 
