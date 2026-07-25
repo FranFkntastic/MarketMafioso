@@ -40,13 +40,12 @@ public sealed class RemoteMarketOverlayWindow : Window
 
     public override void PreDraw()
     {
-        if (pinned && controller.TryGetResultAnchor(out var anchor))
+        if (pinned && controller.TryGetResultBounds(out var anchor, out var maxHeight))
         {
             ImGui.SetNextWindowPos(anchor, ImGuiCond.Always);
-            var viewport = ImGui.GetMainViewport();
             ImGui.SetNextWindowSizeConstraints(
                 MinimumSize,
-                new Vector2(float.MaxValue, Math.Max(MinimumSize.Y, (viewport.WorkPos.Y + viewport.WorkSize.Y) - anchor.Y - 8f)));
+                new Vector2(float.MaxValue, Math.Max(MinimumSize.Y, maxHeight)));
         }
     }
 
