@@ -74,6 +74,11 @@ public sealed class WorkshopQuartermasterRequestService : IDisposable
             return false;
         }
         var automaticRetrievalAvailable = capabilities!.Capabilities.Contains(QuartermasterIpcClient.AutomaticRetrievalCapability, StringComparer.Ordinal);
+        if (!automaticRetrievalAvailable)
+        {
+            LastStatus = "Quartermaster does not advertise immediate retrieval; no restock plan or operation was created.";
+            return false;
+        }
         var signature = BuildSignature(ownerScope, items, automaticRetrievalAvailable);
         var reviewSignature = BuildSignature(ownerScope, items, false);
         var legacySignature = BuildSignature(ownerScope, items, null);
@@ -86,10 +91,22 @@ public sealed class WorkshopQuartermasterRequestService : IDisposable
                                          !IsTerminalStatus(persisted!.Status) &&
                                          (string.Equals(persisted.Signature, signature, StringComparison.Ordinal) ||
                                           (!automaticRetrievalAvailable && string.Equals(persisted.Signature, legacySignature, StringComparison.Ordinal)));
+        var persistedOperationIsReviewOnly = false;
+        if (hasPersistedIdentity &&
+            !IsTerminalStatus(persisted!.Status) &&
+            !replayingPersistedRequest &&
+            !string.Equals(persisted.Signature, reviewSignature, StringComparison.Ordinal) &&
+            !string.Equals(persisted.Signature, legacySignature, StringComparison.Ordinal) &&
+            client.TryGetOperation(persisted.OperationId, ownerScope, out var persistedOperation, out _) &&
+            string.Equals(persistedOperation!.RequestId, persisted.RequestId, StringComparison.Ordinal))
+        {
+            persistedOperationIsReviewOnly = persistedOperation.ExecuteImmediately is false;
+        }
         var replacingReviewRequest = hasPersistedIdentity &&
                                      !IsTerminalStatus(persisted!.Status) &&
                                      automaticRetrievalAvailable &&
-                                     (string.Equals(persisted.Signature, reviewSignature, StringComparison.Ordinal) ||
+                                     (persistedOperationIsReviewOnly ||
+                                      string.Equals(persisted.Signature, reviewSignature, StringComparison.Ordinal) ||
                                       string.Equals(persisted.Signature, legacySignature, StringComparison.Ordinal));
         if (hasPersistedIdentity &&
             !IsTerminalStatus(persisted!.Status) &&
@@ -142,7 +159,7 @@ public sealed class WorkshopQuartermasterRequestService : IDisposable
                 ownerScope.HomeWorldId!.Value,
                 ownerScope.CharacterName!,
                 ownerScope.HomeWorldName),
-            automaticRetrievalAvailable,
+            true,
             items);
         if (!client.TrySubmitShortages(request, capabilities, out var acknowledgement, out var error))
         {

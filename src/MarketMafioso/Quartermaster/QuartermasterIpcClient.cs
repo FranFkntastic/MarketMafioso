@@ -15,10 +15,12 @@ public interface IQuartermasterIpcAdapter
     bool HasCapabilities { get; }
     bool HasSnapshot { get; }
     bool HasSubmitShortages { get; }
+    bool HasSubmitElementalDeposit { get; }
     bool HasOperation { get; }
     string GetCapabilities();
     string GetSnapshot();
     string SubmitShortages(string requestJson);
+    string SubmitElementalDeposit(string requestJson);
     string GetOperation(string operationId);
     void SubscribeChanged(Action<string> handler);
     void UnsubscribeChanged(Action<string> handler);
@@ -29,6 +31,7 @@ public sealed class DalamudQuartermasterIpcAdapter : IQuartermasterIpcAdapter
     private readonly ICallGateSubscriber<string> capabilities;
     private readonly ICallGateSubscriber<string> snapshot;
     private readonly ICallGateSubscriber<string, string> submitShortages;
+    private readonly ICallGateSubscriber<string, string> submitElementalDeposit;
     private readonly ICallGateSubscriber<string, string> operation;
     private readonly ICallGateSubscriber<string, object> changed;
 
@@ -38,6 +41,7 @@ public sealed class DalamudQuartermasterIpcAdapter : IQuartermasterIpcAdapter
         capabilities = pluginInterface.GetIpcSubscriber<string>(QuartermasterIpcClient.GetCapabilitiesChannel);
         snapshot = pluginInterface.GetIpcSubscriber<string>(QuartermasterIpcClient.GetSnapshotChannel);
         submitShortages = pluginInterface.GetIpcSubscriber<string, string>(QuartermasterIpcClient.SubmitShortagesChannel);
+        submitElementalDeposit = pluginInterface.GetIpcSubscriber<string, string>(QuartermasterIpcClient.SubmitElementalDepositChannel);
         operation = pluginInterface.GetIpcSubscriber<string, string>(QuartermasterIpcClient.GetOperationChannel);
         changed = pluginInterface.GetIpcSubscriber<string, object>(QuartermasterIpcClient.ChangedChannel);
     }
@@ -45,10 +49,12 @@ public sealed class DalamudQuartermasterIpcAdapter : IQuartermasterIpcAdapter
     public bool HasCapabilities => capabilities.HasFunction;
     public bool HasSnapshot => snapshot.HasFunction;
     public bool HasSubmitShortages => submitShortages.HasFunction;
+    public bool HasSubmitElementalDeposit => submitElementalDeposit.HasFunction;
     public bool HasOperation => operation.HasFunction;
     public string GetCapabilities() => capabilities.InvokeFunc();
     public string GetSnapshot() => snapshot.InvokeFunc();
     public string SubmitShortages(string requestJson) => submitShortages.InvokeFunc(requestJson);
+    public string SubmitElementalDeposit(string requestJson) => submitElementalDeposit.InvokeFunc(requestJson);
     public string GetOperation(string operationId) => operation.InvokeFunc(operationId);
     public void SubscribeChanged(Action<string> handler) => changed.Subscribe(handler);
     public void UnsubscribeChanged(Action<string> handler) => changed.Unsubscribe(handler);
@@ -59,15 +65,18 @@ public sealed class QuartermasterIpcClient : IDisposable
     public const string GetCapabilitiesChannel = "Quartermaster.v1.GetCapabilities";
     public const string GetSnapshotChannel = "Quartermaster.v1.GetSnapshot";
     public const string SubmitShortagesChannel = "Quartermaster.v1.SubmitShortages";
+    public const string SubmitElementalDepositChannel = "Quartermaster.v1.SubmitElementalDeposit";
     public const string GetOperationChannel = "Quartermaster.v1.GetOperation";
     public const string ChangedChannel = "Quartermaster.v1.Changed";
     public const string CapabilitiesSchema = "gooseworks-quartermaster-capabilities/v1";
     public const string SnapshotSchema = "gooseworks-quartermaster-snapshot/v1";
     public const string ShortageRequestSchema = "gooseworks-quartermaster-shortages/v1";
+    public const string ElementalDepositRequestSchema = "gooseworks-quartermaster-elemental-deposit/v1";
     public const string AcknowledgementSchema = "gooseworks-quartermaster-shortages-acknowledgement/v1";
     public const string OperationSchema = "gooseworks-quartermaster-operation/v1";
     public const string ChangedSchema = "gooseworks-quartermaster-changed/v1";
     public const string AutomaticRetrievalCapability = "automaticRetrieval";
+    public const string AutomaticElementalDepositCapability = "automaticElementalDeposit";
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -327,8 +336,14 @@ public sealed class QuartermasterIpcClient : IDisposable
         if (!available)
             return FailUnavailable("Quartermaster does not expose shortage submission v1.", out error);
 
-        var executeImmediately = request.ExecuteImmediately &&
-                                 capabilities.Capabilities.Contains(AutomaticRetrievalCapability, StringComparer.Ordinal);
+        var immediateAvailable = capabilities.Capabilities.Contains(AutomaticRetrievalCapability, StringComparer.Ordinal);
+        if (request.ExecuteImmediately && !immediateAvailable)
+        {
+            error = "Quartermaster does not advertise immediate retrieval; the request was not submitted.";
+            SetStatus(error);
+            return false;
+        }
+        var executeImmediately = request.ExecuteImmediately;
         var requestJson = JsonSerializer.Serialize(ToWire(request, capabilities.ProviderInstanceId, executeImmediately), JsonOptions);
         string acknowledgementJson;
         try
@@ -365,6 +380,64 @@ public sealed class QuartermasterIpcClient : IDisposable
             : acknowledgement.ExecuteImmediately
                 ? $"Quartermaster rejected immediate retrieval: {acknowledgement.Message ?? acknowledgement.Status}"
                 : $"Quartermaster rejected request {acknowledgement.RequestId}: {acknowledgement.Message ?? acknowledgement.Status}");
+        return true;
+    }
+
+    public bool TrySubmitElementalDeposit(
+        QuartermasterElementalDepositRequest request,
+        out QuartermasterAcknowledgement? acknowledgement,
+        out string error)
+    {
+        acknowledgement = null;
+        error = string.Empty;
+        if (!ValidateElementalDepositRequest(request, out error))
+        {
+            SetStatus(error);
+            return false;
+        }
+        if (!TryGetCapabilities(out var capabilities, out error))
+            return false;
+        if (!capabilities!.Capabilities.Contains(AutomaticElementalDepositCapability, StringComparer.Ordinal))
+        {
+            error = "Quartermaster does not advertise automatic elemental deposits.";
+            SetStatus(error);
+            return false;
+        }
+
+        bool available;
+        try { available = adapter.HasSubmitElementalDeposit; }
+        catch (Exception ex) { return FailUnavailable($"Quartermaster elemental-deposit availability check failed: {ex.Message}", out error); }
+        if (!available)
+            return FailUnavailable("Quartermaster does not expose elemental-deposit submission v1.", out error);
+
+        var requestJson = JsonSerializer.Serialize(ToWire(request, capabilities.ProviderInstanceId), JsonOptions);
+        string acknowledgementJson;
+        try { acknowledgementJson = adapter.SubmitElementalDeposit(requestJson); }
+        catch (Exception ex)
+        {
+            error = $"Quartermaster elemental-deposit submission failed; acceptance is unknown: {ex.Message}";
+            SetStatus(error);
+            return false;
+        }
+
+        if (!TryParseAcknowledgement(acknowledgementJson, request.RequestId, request.OperationId, out acknowledgement, out error))
+        {
+            SetStatus($"Quartermaster returned an invalid elemental-deposit acknowledgement; acceptance is unknown. {error}");
+            return false;
+        }
+        if (!string.IsNullOrWhiteSpace(acknowledgement!.ProviderInstanceId) &&
+            !string.Equals(acknowledgement.ProviderInstanceId, capabilities.ProviderInstanceId, StringComparison.Ordinal))
+        {
+            error = "Quartermaster provider changed during elemental-deposit submission; acceptance is unknown.";
+            SetStatus(error);
+            acknowledgement = null;
+            return false;
+        }
+
+        acknowledgement = acknowledgement with { ExecuteImmediately = true };
+        SetStatus(acknowledgement.Accepted
+            ? $"Quartermaster automatic elemental deposit requested as operation {acknowledgement.OperationId}."
+            : $"Quartermaster rejected elemental deposit: {acknowledgement.Message ?? acknowledgement.Status}");
         return true;
     }
 
@@ -819,6 +892,7 @@ public sealed class QuartermasterIpcClient : IDisposable
             wire.RequestId,
             wire.ProviderInstanceId,
             wire.Revision,
+            wire.ExecuteImmediately,
             owner,
             status,
             wire.Message,
@@ -881,6 +955,34 @@ public sealed class QuartermasterIpcClient : IDisposable
         return true;
     }
 
+    private static bool ValidateElementalDepositRequest(QuartermasterElementalDepositRequest request, out string error)
+    {
+        if (request is null || string.IsNullOrWhiteSpace(request.RequestId) || string.IsNullOrWhiteSpace(request.OperationId))
+        {
+            error = "Quartermaster elemental-deposit request and operation IDs are required.";
+            return false;
+        }
+        if (request.Owner.LocalContentId == 0 || request.Owner.HomeWorldId == 0 ||
+            string.IsNullOrWhiteSpace(request.Owner.CharacterName) || request.SubmittedAtUtc == default)
+        {
+            error = "Quartermaster elemental deposit requires current owner identity and submission time.";
+            return false;
+        }
+        if (request.Items.IsDefaultOrEmpty || request.Items.Any(item =>
+                item.ItemId is < 2 or > 7 || string.IsNullOrWhiteSpace(item.ItemName) || item.MaximumQuantity <= 0))
+        {
+            error = "Quartermaster elemental deposits accept positive quantities of the six shard currencies only.";
+            return false;
+        }
+        if (request.Items.Select(item => item.ItemId).Distinct().Count() != request.Items.Length)
+        {
+            error = "Quartermaster elemental-deposit items must be unique.";
+            return false;
+        }
+        error = string.Empty;
+        return true;
+    }
+
     private static QuartermasterShortageRequestWire ToWire(
         QuartermasterShortageRequest request,
         string providerInstanceId,
@@ -905,6 +1007,31 @@ public sealed class QuartermasterIpcClient : IDisposable
             ItemName = item.ItemName,
             TargetQuantity = item.TargetQuantity,
             ShortageQuantity = item.ShortageQuantity,
+        }).ToList(),
+    };
+
+    private static QuartermasterElementalDepositRequestWire ToWire(
+        QuartermasterElementalDepositRequest request,
+        string providerInstanceId) => new()
+    {
+        Schema = ElementalDepositRequestSchema,
+        ProviderInstanceId = providerInstanceId,
+        RequestId = request.RequestId,
+        OperationId = request.OperationId,
+        SubmittedAtUtc = request.SubmittedAtUtc.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture),
+        ExecuteImmediately = true,
+        Owner = new QuartermasterOwnerWire
+        {
+            LocalContentId = request.Owner.LocalContentId,
+            HomeWorldId = request.Owner.HomeWorldId,
+            CharacterName = request.Owner.CharacterName,
+            HomeWorldName = request.Owner.HomeWorldName,
+        },
+        Items = request.Items.Select(item => new QuartermasterElementalDepositTargetWire
+        {
+            ItemId = item.ItemId,
+            ItemName = item.ItemName,
+            MaximumQuantity = item.MaximumQuantity,
         }).ToList(),
     };
 

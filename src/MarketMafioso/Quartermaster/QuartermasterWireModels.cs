@@ -105,6 +105,18 @@ public sealed record QuartermasterShortageRequest(
     bool ExecuteImmediately,
     ImmutableArray<QuartermasterShortageTarget> Items);
 
+public sealed record QuartermasterElementalDepositTarget(
+    uint ItemId,
+    string ItemName,
+    int MaximumQuantity);
+
+public sealed record QuartermasterElementalDepositRequest(
+    string RequestId,
+    string OperationId,
+    DateTimeOffset SubmittedAtUtc,
+    QuartermasterOwner Owner,
+    ImmutableArray<QuartermasterElementalDepositTarget> Items);
+
 public sealed record QuartermasterAcknowledgement(
     string RequestId,
     string OperationId,
@@ -122,6 +134,7 @@ public sealed record QuartermasterOperationStatus(
     string? RequestId,
     string? ProviderInstanceId,
     long? Revision,
+    bool? ExecuteImmediately,
     QuartermasterOwner Owner,
     string Status,
     string? Message,
@@ -263,6 +276,25 @@ internal sealed class QuartermasterShortageTargetWire
     public int ShortageQuantity { get; init; }
 }
 
+internal sealed class QuartermasterElementalDepositRequestWire
+{
+    public string Schema { get; init; } = string.Empty;
+    public string ProviderInstanceId { get; init; } = string.Empty;
+    public string RequestId { get; init; } = string.Empty;
+    public string OperationId { get; init; } = string.Empty;
+    public string SubmittedAtUtc { get; init; } = string.Empty;
+    public QuartermasterOwnerWire Owner { get; init; } = new();
+    public bool ExecuteImmediately { get; init; }
+    public List<QuartermasterElementalDepositTargetWire> Items { get; init; } = [];
+}
+
+internal sealed class QuartermasterElementalDepositTargetWire
+{
+    public uint ItemId { get; init; }
+    public string ItemName { get; init; } = string.Empty;
+    public int MaximumQuantity { get; init; }
+}
+
 internal sealed class QuartermasterAcknowledgementWire
 {
     public string? Schema { get; init; }
@@ -282,6 +314,7 @@ internal sealed class QuartermasterOperationStatusWire
     public string? RequestId { get; init; }
     public string? ProviderInstanceId { get; init; }
     public long? Revision { get; init; }
+    public bool? ExecuteImmediately { get; init; }
     public QuartermasterOwnerWire? Owner { get; init; }
     public string? State { get; init; }
     public string? Status { get; init; }

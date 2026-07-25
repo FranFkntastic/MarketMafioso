@@ -160,6 +160,10 @@ public sealed class QuartermasterIpcClientTests
     public void Submit_RejectsMissingOrEchoedRequestSchema(string? responseSchema)
     {
         var adapter = ReadyAdapter("provider-a", 1, SnapshotJson("provider-a", 1, "First"));
+        adapter.CapabilitiesJson = CapabilitiesJson(
+            "provider-a",
+            1,
+            QuartermasterIpcClient.AutomaticRetrievalCapability);
         adapter.SubmitResponse = requestJson =>
         {
             using var request = JsonDocument.Parse(requestJson);
@@ -221,7 +225,7 @@ public sealed class QuartermasterIpcClientTests
     }
 
     [Fact]
-    public void Submit_WhenAutomaticRetrievalIsNotAdvertised_OmitsAuthorizationField()
+    public void Submit_WhenAutomaticRetrievalIsNotAdvertised_FailsClosed()
     {
         var adapter = ReadyAdapter("provider-a", 1, SnapshotJson("provider-a", 1, "First"));
         adapter.SubmitResponse = requestJson =>
@@ -244,11 +248,48 @@ public sealed class QuartermasterIpcClientTests
             true,
             [new QuartermasterShortageTarget(100, "Elm Lumber", 50, 30)]);
 
-        Assert.True(client.TrySubmitShortages(request, out var acknowledgement, out var error), error);
+        Assert.False(client.TrySubmitShortages(request, out var acknowledgement, out var error));
 
+        Assert.Null(acknowledgement);
+        Assert.Empty(adapter.SubmittedRequests);
+        Assert.Contains("does not advertise immediate retrieval", error, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void SubmitElementalDeposit_RequiresCapabilityAndSerializesExactMaximum()
+    {
+        var adapter = ReadyAdapter("provider-a", 1, SnapshotJson("provider-a", 1, "First"));
+        adapter.CapabilitiesJson = CapabilitiesJson(
+            "provider-a",
+            1,
+            QuartermasterIpcClient.AutomaticElementalDepositCapability);
+        adapter.SubmitResponse = requestJson =>
+        {
+            using var request = JsonDocument.Parse(requestJson);
+            return JsonSerializer.Serialize(new
+            {
+                schema = QuartermasterIpcClient.AcknowledgementSchema,
+                providerInstanceId = "provider-a",
+                requestId = request.RootElement.GetProperty("requestId").GetString(),
+                operationId = request.RootElement.GetProperty("operationId").GetString(),
+                status = "queued",
+            });
+        };
+        using var client = new QuartermasterIpcClient(adapter);
+        var request = new QuartermasterElementalDepositRequest(
+            "deposit-request",
+            "deposit-operation",
+            DateTimeOffset.UtcNow,
+            new QuartermasterOwner(100, 40, "Wei Ning", "Maduin"),
+            [new QuartermasterElementalDepositTarget(2, "Fire Shard", 500)]);
+
+        Assert.True(client.TrySubmitElementalDeposit(request, out var acknowledgement, out var error), error);
+
+        Assert.True(acknowledgement!.ExecuteImmediately);
         using var submitted = JsonDocument.Parse(Assert.Single(adapter.SubmittedRequests));
-        Assert.False(submitted.RootElement.TryGetProperty("executeImmediately", out _));
-        Assert.False(acknowledgement!.ExecuteImmediately);
+        Assert.Equal(QuartermasterIpcClient.ElementalDepositRequestSchema, submitted.RootElement.GetProperty("schema").GetString());
+        Assert.True(submitted.RootElement.GetProperty("executeImmediately").GetBoolean());
+        Assert.Equal(500, submitted.RootElement.GetProperty("items")[0].GetProperty("maximumQuantity").GetInt32());
     }
 
     [Fact]
@@ -373,6 +414,7 @@ internal sealed class FakeQuartermasterIpcAdapter : IQuartermasterIpcAdapter
     public bool HasCapabilities { get; set; } = true;
     public bool HasSnapshot { get; set; } = true;
     public bool HasSubmitShortages { get; set; } = true;
+    public bool HasSubmitElementalDeposit { get; set; } = true;
     public bool HasOperation { get; set; } = true;
     public string CapabilitiesJson { get; set; } = string.Empty;
     public string SnapshotJson { get; set; } = string.Empty;
@@ -402,6 +444,12 @@ internal sealed class FakeQuartermasterIpcAdapter : IQuartermasterIpcAdapter
     }
 
     public string SubmitShortages(string requestJson)
+    {
+        SubmittedRequests.Add(requestJson);
+        return SubmitResponse?.Invoke(requestJson) ?? AcknowledgementJson;
+    }
+
+    public string SubmitElementalDeposit(string requestJson)
     {
         SubmittedRequests.Add(requestJson);
         return SubmitResponse?.Invoke(requestJson) ?? AcknowledgementJson;

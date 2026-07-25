@@ -40,6 +40,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     private bool travelInterruptedByCleanup;
     private long operationSequence;
     private readonly IExactAcquisitionRouteExecutionStateStore exactAcquisitionStateStore;
+    private readonly IShardAcquisitionCheckpointCoordinator? shardCheckpoints;
     private ExactAcquisitionRouteAuthoritySession? exactAcquisitionAuthority;
     private ExactAcquisitionDryRunScenario exactAcquisitionDryRunScenario;
     private bool exactAcquisitionDryRunFaultEligible;
@@ -59,7 +60,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         IMarketAcquisitionRouteCallbackDispatcher callbackDispatcher,
         IMarketAcquisitionRouteClock clock,
         IExactAcquisitionRouteExecutionStateStore exactAcquisitionStateStore,
-        IMarketAcquisitionReportOutbox? reportOutbox = null)
+        IMarketAcquisitionReportOutbox? reportOutbox = null,
+        IShardAcquisitionCheckpointCoordinator? shardCheckpoints = null)
     {
         this.runner = runner ?? throw new ArgumentNullException(nameof(runner));
         this.context = context ?? throw new ArgumentNullException(nameof(context));
@@ -75,6 +77,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             reportOutbox);
         this.clock = clock ?? throw new ArgumentNullException(nameof(clock));
         this.exactAcquisitionStateStore = exactAcquisitionStateStore ?? throw new ArgumentNullException(nameof(exactAcquisitionStateStore));
+        this.shardCheckpoints = shardCheckpoints;
     }
 
     public bool IsRouteActive =>
@@ -84,7 +87,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             ExactAcquisitionRouteAuthorityPhase.Active or ExactAcquisitionRouteAuthorityPhase.RecoveryNeeded ||
         state.ProbeRunning ||
         operationExecutor.ActiveSnapshot != null ||
-        purchaseAutomation.PurchaseSession?.IsActive == true;
+        purchaseAutomation.PurchaseSession?.IsActive == true ||
+        shardCheckpoints?.IsActive == true;
 
     public ExactAcquisitionDryRunScenario ArmedExactAcquisitionDryRunScenario => exactAcquisitionDryRunScenario;
     public bool IsExactAcquisitionDryRunFaultEligible => exactAcquisitionDryRunFaultEligible;
@@ -144,6 +148,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         LatestWorldCompletionSummary = runner.LatestWorldCompletionSummary,
         LastRunDiagnosticSummary = runner.LastRunDiagnosticSummary,
         ExactAcquisitionExecution = exactAcquisitionAuthority?.State,
+        ShardCheckpoint = shardCheckpoints?.Snapshot,
     };
 
     public MarketAcquisitionRouteActionResult Start(
@@ -208,6 +213,16 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         else
         {
             exactAcquisitionAuthority = null;
+        }
+        if (executionMode == MarketAcquisitionExecutionMode.Live && shardCheckpoints is not null)
+        {
+            var checkpointPreflight = shardCheckpoints.Prepare(routePlan, state.ProgressNonce);
+            if (!checkpointPreflight.Success)
+            {
+                var message = $"Shard storage preflight stopped before travel or purchase: {checkpointPreflight.Message}";
+                exactAcquisitionAuthority?.Pause(message);
+                return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(message));
+            }
         }
         if (executionMode == MarketAcquisitionExecutionMode.Live)
             reportDispatcher.BeginSession(claimed);
@@ -364,6 +379,9 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
     public MarketAcquisitionRouteActionResult Resume()
     {
+        if (shardCheckpoints?.IsActive == true)
+            return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(
+                $"Route resume is locked while purchased shards are being reconciled: {shardCheckpoints.Snapshot.Message}"));
         if (travelInterruptedByCleanup)
         {
             return UpdateStatus(MarketAcquisitionRouteActionResult.Fail(
@@ -538,6 +556,27 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
     public MarketAcquisitionRouteEngineTickResult TickRoute(bool isRequestBusy)
     {
+        if (shardCheckpoints?.IsActive == true)
+        {
+            var checkpoint = shardCheckpoints.Tick();
+            state.AcquisitionStatus = checkpoint.Message;
+            if (checkpoint.Failed)
+            {
+                exactAcquisitionAuthority?.Pause(checkpoint.Message);
+                if (runner.IsRunning || runner.IsPaused)
+                    UpdateStatus(FailRoute(checkpoint.Message));
+            }
+            else if (checkpoint.Completed && checkpoint.ResumeRoute && runner.IsPaused)
+            {
+                UpdateStatus(runner.Resume());
+                state.AcquisitionStatus = checkpoint.Message;
+            }
+            ReportRouteProgress();
+            return checkpoint.Worked
+                ? MarketAcquisitionRouteEngineTickResult.Worked(state.AcquisitionStatus, state.NextRouteMonitorUtc)
+                : MarketAcquisitionRouteEngineTickResult.Idle(state.AcquisitionStatus);
+        }
+
         if (TryFailExpiredOperation())
         {
             ReportRouteProgress();
@@ -1490,9 +1529,12 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             state.ActiveLinePurchasedQuantity = checked(state.ActiveLinePurchasedQuantity + candidate.Quantity);
             state.ActiveLineSpentGil = checked(state.ActiveLineSpentGil + candidate.TotalGil);
             state.AcquisitionStatus = "Purchase: confirmed by server packet and persisted exactly once.";
-            ReportConfirmedPurchase(candidate, state.ActiveLinePurchasedQuantity, state.ActiveLineSpentGil);
+            var checkpointRequested = ReportConfirmedPurchase(candidate, state.ActiveLinePurchasedQuantity, state.ActiveLineSpentGil);
             ClearMarketBoardAutomationState();
-            BeginNextWorldPurchase();
+            if (checkpointRequested)
+                PauseForShardCheckpoint();
+            else
+                BeginNextWorldPurchase();
             return MarketAcquisitionRouteEngineTickResult.Worked(state.AcquisitionStatus, state.NextRouteMonitorUtc);
         }
         catch (Exception exception)
@@ -1550,9 +1592,11 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
             state.ActiveLinePurchasedQuantity = checked(state.ActiveLinePurchasedQuantity + candidate.Quantity);
             state.ActiveLineSpentGil = checked(state.ActiveLineSpentGil + candidate.TotalGil);
             exactAcquisitionAuthority?.RecordPurchase(GetActiveRouteLineId(claimedRequest!), candidate, runner.ActivePlan);
-            ReportConfirmedPurchase(candidate, state.ActiveLinePurchasedQuantity, state.ActiveLineSpentGil);
+            var checkpointRequested = ReportConfirmedPurchase(candidate, state.ActiveLinePurchasedQuantity, state.ActiveLineSpentGil);
             ClearMarketBoardAutomationState();
-            if (state.MarketBoardReadResult?.Status is "MarketBoardNotOpen" or "NoListings")
+            if (checkpointRequested)
+                PauseForShardCheckpoint();
+            else if (state.MarketBoardReadResult?.Status is "MarketBoardNotOpen" or "NoListings")
                 CompleteActiveWorldPurchaseBatch(context.GetCurrentWorldName());
             else
                 BeginNextWorldPurchase();
@@ -1610,6 +1654,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
         ReportRouteProgress();
         EvaluateExactAcquisitionRouteCompletion();
+        if (runner.ActiveStop is null)
+            shardCheckpoints?.RequestFinalCheckpoint();
         if (result.Success &&
             runner.LatestWorldCompletionSummary?.WorldName.Equals(currentWorld, StringComparison.OrdinalIgnoreCase) == true)
         {
@@ -1706,12 +1752,12 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         state.AcquisitionStatus = exactAcquisitionAuthority.State.Message;
     }
 
-    private void ReportConfirmedPurchase(MarketBoardPurchaseCandidate candidate, uint linePurchasedQuantity, uint lineSpentGil)
+    private bool ReportConfirmedPurchase(MarketBoardPurchaseCandidate candidate, uint linePurchasedQuantity, uint lineSpentGil)
     {
         var claimed = claimedRequest;
         var activeSubtask = runner.ActiveStop?.ActiveItemSubtask;
         if (claimed == null || activeSubtask == null || string.IsNullOrWhiteSpace(claimed.ClaimToken))
-            return;
+            return shardCheckpoints?.RecordConfirmedPurchase(candidate) == true;
 
         var lineId = string.IsNullOrWhiteSpace(activeSubtask.LineId) ? GetActiveRouteLineId(claimed) : activeSubtask.LineId;
         var worldName = string.IsNullOrWhiteSpace(candidate.WorldName) ? context.GetCurrentWorldName() : candidate.WorldName;
@@ -1721,6 +1767,15 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         evidence.RecordPurchaseVisit(candidate, activeSubtask, worldName, claimed.Id, state.ProgressNonce);
         ReportPurchaseAudit(claimed, lineId, activeSubtask.ItemName, candidate, worldName, message);
         ReportLineProgress(claimed, lineId, activeSubtask.ItemName, "Running", linePurchasedQuantity, lineSpentGil, message, null);
+        return shardCheckpoints?.RecordConfirmedPurchase(candidate) == true;
+    }
+
+    private void PauseForShardCheckpoint()
+    {
+        var pause = runner.Pause();
+        state.AcquisitionStatus = pause.Success
+            ? shardCheckpoints?.Snapshot.Message ?? "Shard storage checkpoint started."
+            : pause.Message;
     }
 
     private void ReportAcquisitionLineProgress(MarketAcquisitionWorldItemSubtask subtask, string status, uint purchasedQuantity, uint spentGil, string message)
