@@ -796,13 +796,17 @@ public class MainWindow : Window, IDisposable
         if (!ImGui.BeginTabBar("##marketAcquisitionWorkspace"))
             return;
 
-        if (ImGui.BeginTabItem($"Inbox ({acquisitionWorkspace.PendingRequests.Count})", GetAgentWorkspaceTabFlags("Inbox")))
+        if (ImGui.BeginTabItem(
+                BuildCountedWorkspaceTabLabel("Inbox", acquisitionWorkspace.PendingRequests.Count, "MarketAcquisitionInbox"),
+                GetAgentWorkspaceTabFlags("Inbox")))
         {
             DrawMarketAcquisitionPickupSection();
             ImGui.EndTabItem();
         }
 
-        if (ImGui.BeginTabItem($"Workbench ({acquisitionRequestBuilder.LineCount})", GetAgentWorkspaceTabFlags("Workbench", "Compose", "Working Set", "Request", "Plan")))
+        if (ImGui.BeginTabItem(
+                BuildCountedWorkspaceTabLabel("Workbench", acquisitionRequestBuilder.LineCount, "MarketAcquisitionWorkbench"),
+                GetAgentWorkspaceTabFlags("Workbench", "Compose", "Working Set", "Request", "Plan")))
         {
             DrawMarketAcquisitionWorkbench();
             ImGui.EndTabItem();
@@ -829,6 +833,9 @@ public class MainWindow : Window, IDisposable
     internal static bool ShouldSelectAgentWorkspaceTab(string? requestedView, string viewName, params string[] legacyViewNames) =>
         string.Equals(requestedView, viewName, StringComparison.Ordinal) ||
         legacyViewNames.Any(legacyViewName => string.Equals(requestedView, legacyViewName, StringComparison.Ordinal));
+
+    internal static string BuildCountedWorkspaceTabLabel(string label, int count, string stableId) =>
+        $"{label} ({count:N0})###{stableId}";
 
     private void DrawMarketAcquisitionWorkbench()
     {
@@ -874,7 +881,7 @@ public class MainWindow : Window, IDisposable
         ImGui.SetCursorPosX(startX + Math.Max(0, ImGui.GetContentRegionAvail().X - actionWidth));
 
         if (ImGui.Button($"Compositions ({AcquisitionCompositionWindow.Count:N0})"))
-            AcquisitionCompositionWindow.IsOpen = !AcquisitionCompositionWindow.IsOpen;
+            AcquisitionCompositionWindow.ToggleOpen();
         AgentReviewRegistry.Register(
             "acquisition.compositions.open",
             AcquisitionCompositionWindow.IsOpen
@@ -886,7 +893,7 @@ public class MainWindow : Window, IDisposable
             true,
             AcquisitionCompositionWindow.IsOpen,
             AcquisitionCompositionWindow.Count.ToString(),
-            () => AcquisitionCompositionWindow.IsOpen = !AcquisitionCompositionWindow.IsOpen);
+            AcquisitionCompositionWindow.ToggleOpen);
 
         ImGui.SameLine();
         if (ImGui.Button("Recovery"))

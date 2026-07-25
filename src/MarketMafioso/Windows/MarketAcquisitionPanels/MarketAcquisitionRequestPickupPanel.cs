@@ -261,13 +261,13 @@ internal sealed class MarketAcquisitionRequestPickupPanel
     private static string FormatPrimaryAcquisitionItem(MarketAcquisitionRequestView request)
     {
         var name = string.IsNullOrWhiteSpace(request.ItemName)
-            ? $"Item {request.ItemId}"
+            ? "Unavailable item"
             : request.ItemName;
-        return $"{name} ({request.ItemId})";
+        return name;
     }
 
     private static string FormatLineItem(MarketAcquisitionBatchLineView line) =>
-        $"{(string.IsNullOrWhiteSpace(line.ItemName) ? $"Item {line.ItemId}" : line.ItemName)} ({line.ItemId})";
+        string.IsNullOrWhiteSpace(line.ItemName) ? "Unavailable item" : line.ItemName;
 
     private static uint ResolveQuantity(MarketAcquisitionBatchLineView line) =>
         line.QuantityMode == "TargetQuantity" ? line.TargetQuantity : line.MaxQuantity;

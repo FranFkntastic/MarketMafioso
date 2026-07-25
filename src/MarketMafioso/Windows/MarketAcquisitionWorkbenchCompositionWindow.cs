@@ -11,6 +11,7 @@ public sealed class MarketAcquisitionWorkbenchCompositionWindow : Window, IDispo
 {
     private readonly MarketAcquisitionWorkbenchCompositionPanel panel;
     private readonly Func<MarketAcquisitionWorkbenchCompositionContext> createContext;
+    private readonly CompanionWindowActivationState activation = new();
     private Vector2 anchorPosition;
     private Vector2 anchorSize;
     private Vector2 windowSize = new(680, 420);
@@ -32,6 +33,8 @@ public sealed class MarketAcquisitionWorkbenchCompositionWindow : Window, IDispo
 
     public int Count => panel.Count;
 
+    public void ToggleOpen() => IsOpen = activation.Toggle(IsOpen);
+
     public void AnchorTo(Vector2 position, Vector2 size)
     {
         anchorPosition = position;
@@ -41,6 +44,9 @@ public sealed class MarketAcquisitionWorkbenchCompositionWindow : Window, IDispo
 
     public override void PreDraw()
     {
+        if (activation.ConsumeFocusRequest())
+            ImGui.SetNextWindowFocus();
+
         if (!hasAnchor)
             return;
 

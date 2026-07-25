@@ -36,4 +36,16 @@ public sealed class MainWindowAgentSelectionTests
     {
         Assert.True(MainWindow.ShouldSelectAgentWorkspaceTab(requestedView, viewName, firstLegacyViewName, secondLegacyViewName));
     }
+
+    [Fact]
+    public void CountedWorkspaceTabLabel_KeepsIdentityIndependentOfCount()
+    {
+        var empty = MainWindow.BuildCountedWorkspaceTabLabel("Inbox", 0, "MarketAcquisitionInbox");
+        var populated = MainWindow.BuildCountedWorkspaceTabLabel("Inbox", 12, "MarketAcquisitionInbox");
+
+        Assert.Equal("Inbox (0)###MarketAcquisitionInbox", empty);
+        Assert.Equal("Inbox (12)###MarketAcquisitionInbox", populated);
+        Assert.Equal(empty[(empty.IndexOf("###", StringComparison.Ordinal) + 3)..],
+            populated[(populated.IndexOf("###", StringComparison.Ordinal) + 3)..]);
+    }
 }
