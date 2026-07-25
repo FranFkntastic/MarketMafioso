@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
+using System.Numerics;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -30,6 +31,7 @@ internal enum WarmSessionReplayMode
     Immediate,
     Delayed,
     Manual,
+    Distance,
 }
 
 internal sealed record WarmSessionBootstrapStep(
@@ -54,7 +56,13 @@ internal sealed partial class RemoteSummoningBellProbe
     private static readonly TimeSpan WarmSessionFinalCleanupWindow = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan WarmSessionCleanupWindow = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan WarmSessionManualHoldWindow = TimeSpan.FromMinutes(10);
+    private static readonly TimeSpan WarmSessionMovementWindow = TimeSpan.FromSeconds(20);
+    private static readonly TimeSpan WarmSessionReturnWindow = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan MaximumWarmSessionDelay = TimeSpan.FromMinutes(5);
+    private const float MinimumWarmSessionMovementDistance = 5f;
+    private const float MaximumWarmSessionMovementDistance = 100f;
+    private const float WarmSessionMovementTolerance = 0.75f;
+    private const float WarmSessionNavigationStopDistance = 0.5f;
     private const int MaximumWarmSessionStateSamples = 256;
 
     private WarmSessionProbeSession? warmSessionProbeSession;
@@ -116,13 +124,30 @@ internal sealed partial class RemoteSummoningBellProbe
     public string BeginManualWarmSessionRetentionProbe() =>
         BeginWarmSessionRetentionProbe(WarmSessionReplayMode.Manual, null, automateBootstrap: true);
 
+    public string BeginDistanceWarmSessionRetentionProbe(float movementDistance)
+    {
+        if (movementDistance < MinimumWarmSessionMovementDistance ||
+            movementDistance > MaximumWarmSessionMovementDistance)
+        {
+            return $"Choose a warm-session movement distance from " +
+                   $"{MinimumWarmSessionMovementDistance:0} through {MaximumWarmSessionMovementDistance:0} yalms.";
+        }
+
+        return BeginWarmSessionRetentionProbe(
+            WarmSessionReplayMode.Distance,
+            null,
+            automateBootstrap: true,
+            requestedMovementDistance: movementDistance);
+    }
+
     public string BeginManualUiWarmSessionRetentionProbe() =>
         BeginWarmSessionRetentionProbe(WarmSessionReplayMode.Immediate, WarmSessionReplayDelay, automateBootstrap: false);
 
     private string BeginWarmSessionRetentionProbe(
         WarmSessionReplayMode replayMode,
         TimeSpan? replayDelay,
-        bool automateBootstrap)
+        bool automateBootstrap,
+        float? requestedMovementDistance = null)
     {
         var precondition = ValidateWarmSessionProbeStart();
         if (precondition is not null)
@@ -158,7 +183,8 @@ internal sealed partial class RemoteSummoningBellProbe
             arm,
             replayMode,
             replayDelay,
-            automateBootstrap);
+            automateBootstrap,
+            requestedMovementDistance);
         CaptureWarmSessionStateTransition(active);
         warmSessionProbeSession = active;
         if (automateBootstrap)
@@ -180,6 +206,8 @@ internal sealed partial class RemoteSummoningBellProbe
                     $"Interact normally through the two select/Quit cycles, then close the returned list. MMF will hold the session for {replayDelay!.Value.TotalSeconds:0.#} seconds before one replay.",
                 WarmSessionReplayMode.Manual =>
                     "Interact normally through the two select/Quit cycles, then close the returned list. MMF will hold the session until /mmf probe-bell-warm-replay.",
+                WarmSessionReplayMode.Distance =>
+                    $"MMF will move {requestedMovementDistance:0.#} yalms away after retaining the session, replay once, then return to the bell.",
                 _ =>
                     "Interact normally: select a retainer, choose Quit, select a retainer again from the reopened list, choose Quit again, then close the reopened retainer list. MMF will suppress that one close and replay the exact second selection automatically.",
             },
@@ -409,12 +437,15 @@ internal sealed partial class RemoteSummoningBellProbe
             var configuredDelay = active.ReplayDelay ?? WarmSessionReplayDelay;
             active.TeardownSuppressedAtUtc = now;
             active.HeldPosition = CapturePosition();
-            active.ReplayNotBeforeUtc = active.ReplayMode == WarmSessionReplayMode.Manual
+            active.ReplayNotBeforeUtc = active.ReplayMode is WarmSessionReplayMode.Manual or WarmSessionReplayMode.Distance
                 ? null
                 : now + configuredDelay;
-            active.DeadlineUtc = active.ReplayMode == WarmSessionReplayMode.Manual
-                ? now + WarmSessionManualHoldWindow
-                : now + configuredDelay + WarmSessionReplayWindow;
+            active.DeadlineUtc = active.ReplayMode switch
+            {
+                WarmSessionReplayMode.Manual => now + WarmSessionManualHoldWindow,
+                WarmSessionReplayMode.Distance => now + WarmSessionMovementWindow,
+                _ => now + configuredDelay + WarmSessionReplayWindow,
+            };
             warmSessionProbeView = warmSessionProbeView with
             {
                 State = "Session held",
@@ -428,6 +459,8 @@ internal sealed partial class RemoteSummoningBellProbe
                         $"Holding stationary for {configuredDelay.TotalSeconds:0.#} seconds before the single replay.",
                     WarmSessionReplayMode.Manual =>
                         "Session held. Move or wait as intended, then run /mmf probe-bell-warm-replay.",
+                    WarmSessionReplayMode.Distance =>
+                        $"Session held. Waiting for the stock addons to close before moving {active.RequestedMovementDistance:0.#} yalms.",
                     _ =>
                         "Waiting for the stock windows to finish closing before the single replay.",
                 },
@@ -459,9 +492,23 @@ internal sealed partial class RemoteSummoningBellProbe
             };
         }
 
+        if (active.ReplayMode == WarmSessionReplayMode.Distance &&
+            transport.TeardownSuppressed &&
+            !transport.ReplaySent &&
+            active.CleanupStartedAtUtc is null &&
+            !IsAnyRetainerAddonOpen() &&
+            !UpdateWarmSessionDistanceMovement(active, now))
+        {
+            return;
+        }
+
         var replayAuthorized =
-            active.ReplayMode != WarmSessionReplayMode.Manual ||
-            active.ManualReplayRequested;
+            active.ReplayMode switch
+            {
+                WarmSessionReplayMode.Manual => active.ManualReplayRequested,
+                WarmSessionReplayMode.Distance => active.DistanceTargetReached,
+                _ => true,
+            };
         if (transport.TeardownSuppressed &&
             !transport.ReplaySent &&
             active.CleanupStartedAtUtc is null &&
@@ -608,6 +655,139 @@ internal sealed partial class RemoteSummoningBellProbe
             commandMenuReady);
     }
 
+    private bool UpdateWarmSessionDistanceMovement(
+        WarmSessionProbeSession active,
+        DateTimeOffset now)
+    {
+        if (active.RequestedMovementDistance is not { } requestedDistance)
+        {
+            BeginWarmSessionCleanup(active, "The distance probe had no requested movement distance.");
+            return false;
+        }
+
+        if (active.NavigationStartedAtUtc is null)
+        {
+            if (active.HeldPosition is not { } heldPosition ||
+                !TryFindGameObjectPosition(active.Arm.BellGameObjectId, out var bellPosition) ||
+                !TryComputeOutwardDestination(
+                    new(heldPosition.X, heldPosition.Y, heldPosition.Z),
+                    bellPosition,
+                    requestedDistance,
+                    out var destination))
+            {
+                BeginWarmSessionCleanup(
+                    active,
+                    "The probe could not derive a safe outward movement target from the held player and bell positions.");
+                return false;
+            }
+
+            if (!vnavmesh.IsReady)
+            {
+                BeginWarmSessionCleanup(active, "vnavmesh was unavailable or not ready for the bounded movement probe.");
+                return false;
+            }
+
+            active.NavigationTarget = new(destination.X, destination.Y, destination.Z);
+            active.NavigationStartedAtUtc = now;
+            var move = vnavmesh.MoveCloseTo(destination, WarmSessionNavigationStopDistance);
+            active.NavigationMessage = move.Message;
+            if (!move.Success)
+            {
+                BeginWarmSessionCleanup(active, $"vnavmesh rejected the bounded movement probe: {move.Message}");
+                return false;
+            }
+
+            active.NavigationOwned = true;
+            active.DeadlineUtc = now + WarmSessionMovementWindow;
+            warmSessionProbeView = warmSessionProbeView with
+            {
+                State = "Moving with session held",
+                Message = move.Message,
+                Readiness =
+                    $"Moving {requestedDistance:0.#} yalms outward from the bell before the single retained-session replay.",
+            };
+            return true;
+        }
+
+        var moved = DistanceBetween(active.HeldPosition, CapturePosition());
+        if (moved >= requestedDistance - WarmSessionMovementTolerance)
+        {
+            StopOwnedWarmSessionNavigation(active);
+            active.DistanceTargetReached = true;
+            active.ReplayNotBeforeUtc = now;
+            active.DeadlineUtc = now + WarmSessionReplayWindow;
+            warmSessionProbeView = warmSessionProbeView with
+            {
+                State = "Movement target reached",
+                DistanceMoved = moved,
+                Readiness = $"Moved {moved:0.0} yalms with the session held; sending the one retained-session replay.",
+            };
+            return true;
+        }
+
+        warmSessionProbeView = warmSessionProbeView with
+        {
+            DistanceMoved = moved,
+            Readiness = $"Moving with the session held: {moved:0.0}/{requestedDistance:0.0} yalms.",
+        };
+
+        if (now >= active.DeadlineUtc)
+        {
+            active.NavigationFailure =
+                $"Movement timed out after reaching {moved:0.0}/{requestedDistance:0.0} yalms.";
+            BeginWarmSessionCleanup(active, active.NavigationFailure);
+            return false;
+        }
+
+        if (now - active.NavigationStartedAtUtc.Value >= TimeSpan.FromSeconds(1) &&
+            !vnavmesh.IsRunning)
+        {
+            active.NavigationFailure =
+                $"vnavmesh stopped after reaching only {moved:0.0}/{requestedDistance:0.0} yalms.";
+            BeginWarmSessionCleanup(active, active.NavigationFailure);
+            return false;
+        }
+
+        return true;
+    }
+
+    internal static bool TryComputeOutwardDestination(
+        Vector3 playerPosition,
+        Vector3 bellPosition,
+        float movementDistance,
+        out Vector3 destination)
+    {
+        var x = playerPosition.X - bellPosition.X;
+        var z = playerPosition.Z - bellPosition.Z;
+        var horizontalLength = MathF.Sqrt((x * x) + (z * z));
+        if (horizontalLength < 0.01f || movementDistance <= 0)
+        {
+            destination = default;
+            return false;
+        }
+
+        destination = new(
+            playerPosition.X + ((x / horizontalLength) * movementDistance),
+            playerPosition.Y,
+            playerPosition.Z + ((z / horizontalLength) * movementDistance));
+        return true;
+    }
+
+    private bool TryFindGameObjectPosition(ulong gameObjectId, out Vector3 position)
+    {
+        foreach (var gameObject in objectTable)
+        {
+            if (gameObject.GameObjectId != gameObjectId)
+                continue;
+
+            position = gameObject.Position;
+            return true;
+        }
+
+        position = default;
+        return false;
+    }
+
     private bool UpdateWarmSessionBootstrap(
         WarmSessionProbeSession active,
         WarmSessionRetentionProbeObservation transport)
@@ -706,21 +886,36 @@ internal sealed partial class RemoteSummoningBellProbe
             return false;
         }
 
-        RetainerAutomationResult cleanup;
-        try
+        if (active.FinalCleanupResult is null)
         {
-            cleanup = active.FinalCleanupTask.GetAwaiter().GetResult();
+            try
+            {
+                active.FinalCleanupResult = active.FinalCleanupTask.GetAwaiter().GetResult();
+            }
+            catch (OperationCanceledException)
+            {
+                active.FinalCleanupResult = RetainerAutomationResult.Failed(
+                    "FinalCleanupCancelled",
+                    "Automatic stock-session cleanup was cancelled.");
+            }
+            catch (Exception ex)
+            {
+                log.Error(ex, "[MarketMafioso] Automatic post-proof retainer cleanup failed unexpectedly.");
+                active.FinalCleanupResult = RetainerAutomationResult.Failed("FinalCleanupException", ex.Message);
+            }
+
+            if (active.FinalCleanupResult.Success &&
+                active.ReplayMode == WarmSessionReplayMode.Distance)
+            {
+                active.DeadlineUtc = DateTimeOffset.UtcNow + WarmSessionReturnWindow;
+            }
         }
-        catch (OperationCanceledException)
+
+        var cleanup = active.FinalCleanupResult!;
+        if (cleanup.Success &&
+            active.ReplayMode == WarmSessionReplayMode.Distance)
         {
-            cleanup = RetainerAutomationResult.Failed(
-                "FinalCleanupCancelled",
-                "Automatic stock-session cleanup was cancelled.");
-        }
-        catch (Exception ex)
-        {
-            log.Error(ex, "[MarketMafioso] Automatic post-proof retainer cleanup failed unexpectedly.");
-            cleanup = RetainerAutomationResult.Failed("FinalCleanupException", ex.Message);
+            return UpdateWarmSessionReturn(active);
         }
 
         CompleteWarmSessionProbe(
@@ -733,8 +928,106 @@ internal sealed partial class RemoteSummoningBellProbe
         return false;
     }
 
+    private bool UpdateWarmSessionReturn(WarmSessionProbeSession active)
+    {
+        var currentPosition = CapturePosition();
+        var distanceFromHeldPosition = DistanceBetween(active.HeldPosition, currentPosition);
+        if (distanceFromHeldPosition <= WarmSessionMovementTolerance)
+        {
+            StopOwnedWarmSessionNavigation(active);
+            active.ReturnedToHeldPosition = true;
+            CompleteWarmSessionProbe(
+                active,
+                "Confirmed",
+                "Confirmed: the retained scene-1 selection reopened the command menu after movement; MMF then closed the stock session and returned to the bell.",
+                active.CommandMenuObservedAfterReplay);
+            return false;
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        if (now >= active.DeadlineUtc)
+        {
+            active.NavigationFailure =
+                $"Return movement timed out {distanceFromHeldPosition:0.0} yalms from the held position.";
+            CompleteWarmSessionProbe(
+                active,
+                "ConfirmedReturnFailed",
+                $"Warm-session retention after movement was confirmed and cleaned up, but {active.NavigationFailure}",
+                active.CommandMenuObservedAfterReplay);
+            return false;
+        }
+
+        if (condition[ConditionFlag.OccupiedSummoningBell])
+        {
+            warmSessionProbeView = warmSessionProbeView with
+            {
+                State = "Confirmed; waiting to return",
+                Readiness = "The proof is sealed. Waiting for the stock bell condition to clear before returning.",
+            };
+            return false;
+        }
+
+        if (active.ReturnNavigationStartedAtUtc is null)
+        {
+            if (active.HeldPosition is not { } heldPosition || !vnavmesh.IsReady)
+            {
+                active.NavigationFailure = "vnavmesh was unavailable for the automatic return to the bell.";
+                CompleteWarmSessionProbe(
+                    active,
+                    "ConfirmedReturnFailed",
+                    $"Warm-session retention after movement was confirmed and cleaned up, but {active.NavigationFailure}",
+                    active.CommandMenuObservedAfterReplay);
+                return false;
+            }
+
+            var destination = new Vector3(heldPosition.X, heldPosition.Y, heldPosition.Z);
+            var move = vnavmesh.MoveCloseTo(destination, WarmSessionNavigationStopDistance);
+            active.NavigationMessage = $"{active.NavigationMessage} Return: {move.Message}".Trim();
+            if (!move.Success)
+            {
+                active.NavigationFailure = $"vnavmesh rejected the automatic return: {move.Message}";
+                CompleteWarmSessionProbe(
+                    active,
+                    "ConfirmedReturnFailed",
+                    $"Warm-session retention after movement was confirmed and cleaned up, but {active.NavigationFailure}",
+                    active.CommandMenuObservedAfterReplay);
+                return false;
+            }
+
+            active.NavigationOwned = true;
+            active.ReturnNavigationStartedAtUtc = now;
+            warmSessionProbeView = warmSessionProbeView with
+            {
+                State = "Confirmed; returning",
+                Readiness = $"Returning to the held position ({distanceFromHeldPosition:0.0} yalms).",
+            };
+            return false;
+        }
+
+        warmSessionProbeView = warmSessionProbeView with
+        {
+            State = "Confirmed; returning",
+            Readiness = $"Returning to the held position ({distanceFromHeldPosition:0.0} yalms remaining).",
+        };
+
+        if (now - active.ReturnNavigationStartedAtUtc.Value >= TimeSpan.FromSeconds(1) &&
+            !vnavmesh.IsRunning)
+        {
+            active.NavigationFailure =
+                $"vnavmesh stopped with {distanceFromHeldPosition:0.0} yalms left in the automatic return.";
+            CompleteWarmSessionProbe(
+                active,
+                "ConfirmedReturnFailed",
+                $"Warm-session retention after movement was confirmed and cleaned up, but {active.NavigationFailure}",
+                active.CommandMenuObservedAfterReplay);
+        }
+
+        return false;
+    }
+
     private void BeginWarmSessionCleanup(WarmSessionProbeSession active, string reason)
     {
+        StopOwnedWarmSessionNavigation(active);
         active.CleanupStartedAtUtc = DateTimeOffset.UtcNow;
         active.DeadlineUtc = active.CleanupStartedAtUtc.Value + WarmSessionCleanupWindow;
         var release = bell.ReleaseWarmSession();
@@ -754,6 +1047,7 @@ internal sealed partial class RemoteSummoningBellProbe
         bool stopTransport = true)
     {
         active.BootstrapCancellation.Cancel();
+        StopOwnedWarmSessionNavigation(active);
         CaptureWarmSessionStateTransition(active);
         var transport = bell.ObserveWarmSessionRetention();
         if (stopTransport)
@@ -778,6 +1072,14 @@ internal sealed partial class RemoteSummoningBellProbe
             active.FinalCleanupSteps.ToArray(),
             active.ReplayMode.ToString(),
             active.ReplayDelay?.TotalSeconds,
+            active.RequestedMovementDistance,
+            active.NavigationTarget,
+            active.NavigationStartedAtUtc,
+            active.NavigationMessage,
+            active.NavigationStopMessage,
+            active.NavigationFailure,
+            active.DistanceTargetReached,
+            active.ReturnedToHeldPosition,
             active.TeardownSuppressedAtUtc,
             active.ReplayRequestedAtUtc,
             active.ReplayStartedAtUtc,
@@ -832,6 +1134,19 @@ internal sealed partial class RemoteSummoningBellProbe
             "[MarketMafioso] Warm-session retention concluded {Verdict}. Evidence: {EvidencePath}",
             verdict,
             path ?? "(write failed)");
+    }
+
+    private void StopOwnedWarmSessionNavigation(WarmSessionProbeSession active)
+    {
+        if (!active.NavigationOwned)
+            return;
+
+        active.NavigationOwned = false;
+        if (!vnavmesh.IsRunning)
+            return;
+
+        var stop = vnavmesh.Stop();
+        active.NavigationStopMessage = stop.Message;
     }
 
     private string? ValidateWarmSessionProbeStart()
@@ -897,7 +1212,8 @@ internal sealed partial class RemoteSummoningBellProbe
             WarmSessionRetentionArmResult arm,
             WarmSessionReplayMode replayMode,
             TimeSpan? replayDelay,
-            bool automateBootstrap)
+            bool automateBootstrap,
+            float? requestedMovementDistance)
         {
             StartedAtUtc = startedAtUtc;
             DeadlineUtc = deadlineUtc;
@@ -908,6 +1224,7 @@ internal sealed partial class RemoteSummoningBellProbe
             ReplayMode = replayMode;
             ReplayDelay = replayDelay;
             AutomateBootstrap = automateBootstrap;
+            RequestedMovementDistance = requestedMovementDistance;
         }
 
         public DateTimeOffset StartedAtUtc { get; }
@@ -919,6 +1236,7 @@ internal sealed partial class RemoteSummoningBellProbe
         public WarmSessionReplayMode ReplayMode { get; }
         public TimeSpan? ReplayDelay { get; }
         public bool AutomateBootstrap { get; }
+        public float? RequestedMovementDistance { get; }
         public CancellationTokenSource BootstrapCancellation { get; } = new();
         public ConcurrentQueue<WarmSessionBootstrapStep> BootstrapSteps { get; } = new();
         public ConcurrentQueue<WarmSessionBootstrapStep> FinalCleanupSteps { get; } = new();
@@ -926,20 +1244,30 @@ internal sealed partial class RemoteSummoningBellProbe
         public WarmSessionBootstrapResult? BootstrapResult { get; set; }
         public WarmSessionBootstrapResult? BootstrapFailure { get; set; }
         public Task<RetainerAutomationResult>? FinalCleanupTask { get; set; }
+        public RetainerAutomationResult? FinalCleanupResult { get; set; }
         public bool CommandMenuObservedAfterReplay { get; set; }
         public int ObservedBootstrapStepCount { get; set; }
         public bool SelectionObserved { get; set; }
         public bool Scene1SelectionObserved { get; set; }
         public bool CancelRequested { get; set; }
         public bool ManualReplayRequested { get; set; }
+        public bool DistanceTargetReached { get; set; }
+        public bool NavigationOwned { get; set; }
+        public bool ReturnedToHeldPosition { get; set; }
         public DateTimeOffset? TeardownSuppressedAtUtc { get; set; }
+        public DateTimeOffset? NavigationStartedAtUtc { get; set; }
+        public DateTimeOffset? ReturnNavigationStartedAtUtc { get; set; }
         public DateTimeOffset? ReplayNotBeforeUtc { get; set; }
         public DateTimeOffset? ReplayRequestedAtUtc { get; set; }
         public DateTimeOffset? ReplayStartedAtUtc { get; set; }
         public DateTimeOffset? Scene2ObservedAtUtc { get; set; }
         public DateTimeOffset? CleanupStartedAtUtc { get; set; }
         public ProbePosition? HeldPosition { get; set; }
+        public ProbePosition? NavigationTarget { get; set; }
         public ProbePosition? ReplayPosition { get; set; }
+        public string? NavigationMessage { get; set; }
+        public string? NavigationStopMessage { get; set; }
+        public string? NavigationFailure { get; set; }
         public NormalBellClientState? LastState { get; set; }
         public List<NormalBellClientStateSample> StateSamples { get; } = [];
     }
@@ -961,6 +1289,14 @@ internal sealed partial class RemoteSummoningBellProbe
         WarmSessionBootstrapStep[] FinalCleanupSteps,
         string ReplayMode,
         double? RequestedHoldSeconds,
+        float? RequestedMovementDistance,
+        ProbePosition? NavigationTarget,
+        DateTimeOffset? NavigationStartedAtUtc,
+        string? NavigationMessage,
+        string? NavigationStopMessage,
+        string? NavigationFailure,
+        bool DistanceTargetReached,
+        bool ReturnedToHeldPosition,
         DateTimeOffset? TeardownSuppressedAtUtc,
         DateTimeOffset? ReplayRequestedAtUtc,
         DateTimeOffset? ReplayStartedAtUtc,

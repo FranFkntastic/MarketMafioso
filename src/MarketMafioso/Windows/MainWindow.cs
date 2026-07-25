@@ -683,6 +683,9 @@ public class MainWindow : Window, IDisposable
     public string BeginDelayedWarmSessionRetentionProbe(TimeSpan delay) =>
         remoteSummoningBellProbe.BeginDelayedWarmSessionRetentionProbe(delay);
 
+    public string BeginDistanceWarmSessionRetentionProbe(float movementDistance) =>
+        remoteSummoningBellProbe.BeginDistanceWarmSessionRetentionProbe(movementDistance);
+
     public string BeginManualWarmSessionRetentionProbe() =>
         remoteSummoningBellProbe.BeginManualWarmSessionRetentionProbe();
 

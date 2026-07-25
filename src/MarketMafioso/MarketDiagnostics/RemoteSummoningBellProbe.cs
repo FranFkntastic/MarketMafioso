@@ -7,6 +7,7 @@ using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
 using FFXIVClientStructs.FFXIV.Component.GUI;
 using Franthropy.Dalamud.Automation.Retainers;
+using MarketMafioso.Automation.Travel;
 
 namespace MarketMafioso.MarketDiagnostics;
 
@@ -37,6 +38,7 @@ internal sealed partial class RemoteSummoningBellProbe : IDisposable
     private readonly IPluginLog log;
     private readonly DalamudSummoningBellInteractor bell;
     private readonly DalamudRetainerAutomationSession retainerAutomation;
+    private readonly VNavmeshIpc vnavmesh;
     private readonly IAutoRetainerIpc autoRetainer;
     private readonly string evidenceDirectory;
 
@@ -81,6 +83,7 @@ internal sealed partial class RemoteSummoningBellProbe : IDisposable
         this.log = log;
         bell = new(objectTable, targetManager, dataManager, interopProvider, sigScanner);
         retainerAutomation = new(framework, gameGui, dataManager, log, objectTable, targetManager, sigScanner);
+        vnavmesh = new(new DalamudVNavmeshIpcAdapter(pluginInterface, log));
         autoRetainer = new DalamudAutoRetainerIpc(pluginInterface);
         evidenceDirectory = Path.Combine(pluginConfigDirectory, "remote-bell");
         framework.Update += OnFrameworkUpdate;
@@ -572,6 +575,7 @@ internal sealed partial class RemoteSummoningBellProbe : IDisposable
         if (warmSessionProbeSession is not null)
         {
             warmSessionProbeSession.BootstrapCancellation.Cancel();
+            StopOwnedWarmSessionNavigation(warmSessionProbeSession);
             var warm = bell.ObserveWarmSessionRetention();
             if (warm.TeardownSuppressed &&
                 !warm.MatchingScene2Observed &&
