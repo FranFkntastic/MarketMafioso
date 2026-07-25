@@ -174,6 +174,20 @@ internal sealed class RemoteMarketTabPanel
             () => SubmitLocallyUnlockedDistanceWarmSessionRetention(10),
             view.Readiness);
 
+        ImGui.SameLine();
+        if (!enabled)
+            ImGui.BeginDisabled();
+        if (ImGui.Button("2y local control"))
+            SubmitLocallyUnlockedDistanceWarmSessionRetention(2);
+        if (!enabled)
+            ImGui.EndDisabled();
+        reviewRegistry.RegisterLastButton(
+            "remote-bell.warm-retention-unlock-move-2y",
+            "Arm 2-yalm in-range locally unlocked movement control",
+            enabled,
+            () => SubmitLocallyUnlockedDistanceWarmSessionRetention(2),
+            view.Readiness);
+
         if (view.Active && view.Mode == "Manual")
         {
             var replayEnabled = view.CanReplayHeldSession;

@@ -59,7 +59,7 @@ internal sealed partial class RemoteSummoningBellProbe
     private static readonly TimeSpan WarmSessionMovementWindow = TimeSpan.FromSeconds(20);
     private static readonly TimeSpan WarmSessionReturnWindow = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan MaximumWarmSessionDelay = TimeSpan.FromMinutes(5);
-    private const float MinimumWarmSessionMovementDistance = 5f;
+    private const float MinimumWarmSessionMovementDistance = 1f;
     private const float MaximumWarmSessionMovementDistance = 100f;
     private const float WarmSessionMovementTolerance = 0.75f;
     private const float WarmSessionNavigationStopDistance = 0.5f;

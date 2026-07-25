@@ -369,7 +369,7 @@ public sealed class Plugin : IDalamudPlugin
 #if DEBUG
                 if (!int.TryParse(commandArgument, out var movementYalms))
                 {
-                    ChatGui.PrintError("[MMF] Usage: /mmf probe-bell-warm-move <yalms>, from 5 through 100.");
+                    ChatGui.PrintError("[MMF] Usage: /mmf probe-bell-warm-move <yalms>, from 1 through 100.");
                     break;
                 }
                 ChatGui.Print(
@@ -385,7 +385,7 @@ public sealed class Plugin : IDalamudPlugin
 #if DEBUG
                 if (!int.TryParse(commandArgument, out var unlockedMovementYalms))
                 {
-                    ChatGui.PrintError("[MMF] Usage: /mmf probe-bell-warm-unlock-move <yalms>, from 5 through 100.");
+                    ChatGui.PrintError("[MMF] Usage: /mmf probe-bell-warm-unlock-move <yalms>, from 1 through 100.");
                     break;
                 }
                 ChatGui.Print(
