@@ -28,6 +28,8 @@ public class Configuration : IPluginConfiguration
     public bool EnableOpportunisticWorldChecks { get; set; } = true;
     public bool CreateMarketAcquisitionRouteDiagnosticPackages { get; set; } = false;
     public bool EnableMarketAcquisitionDryRunTools { get; set; } = false;
+
+    public bool EnableRemoteMarketPurchase { get; set; } = false;
     public bool EnableAgentBridge { get; set; } = false;
     public bool EnableAgentBridgeScreenshots { get; set; } = false;
     public bool EnableAgentBridgeAudit { get; set; } = false;

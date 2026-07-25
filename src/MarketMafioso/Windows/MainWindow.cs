@@ -13,6 +13,7 @@ using MarketMafioso.AgentBridge;
 using MarketMafioso.Automation.Travel;
 using MarketMafioso.CraftArchitectCompanion;
 using MarketMafioso.MarketAcquisition;
+using MarketMafioso.MarketAcquisition.RemoteMarket;
 using MarketMafioso.Quartermaster;
 using MarketMafioso.SquireIntegration;
 using MarketMafioso.Windows.Main;
@@ -39,6 +40,10 @@ public class MainWindow : Window, IDisposable
     private readonly WorkshopAssemblyRunner workshopAssemblyRunner;
     private readonly IPlayerState playerState;
     private readonly IPluginLog log;
+    private readonly RemoteMarketController remoteMarketController;
+    private readonly RemoteMarketTabPanel remoteMarketTabPanel;
+
+    public RemoteMarketOverlayWindow RemoteMarketOverlay { get; }
     private readonly IDataManager dataManager;
     private readonly HttpClient acquisitionHttpClient = new();
     private readonly HttpClient craftQuoteHttpClient = new();
@@ -163,6 +168,19 @@ public class MainWindow : Window, IDisposable
                 Plugin.PluginInterface.GetPluginConfigDirectory(),
                 "market-purchase-evidence.json")),
             marketPurchasePacketObserver.Queue);
+        remoteMarketController = new RemoteMarketController(
+            config,
+            Plugin.MarketBoard,
+            Plugin.ClientState,
+            Plugin.ObjectTable,
+            Plugin.Framework,
+            Plugin.GameGui,
+            Plugin.ChatGui,
+            log,
+            scanner.ResolveItemName,
+            Plugin.PluginInterface.GetPluginConfigDirectory());
+        remoteMarketTabPanel = new RemoteMarketTabPanel(config, remoteMarketController);
+        RemoteMarketOverlay = new RemoteMarketOverlayWindow(remoteMarketController);
         this.marketBoardApproachService = marketBoardApproachService;
         this.marketAcquisitionRouteDiagnosticsDirectory = marketAcquisitionRouteDiagnosticsDirectory;
         var routeUiAutomation = new DalamudMarketAcquisitionRouteUiAutomation();
@@ -528,6 +546,12 @@ public class MainWindow : Window, IDisposable
                     ImGui.EndTabItem();
                 }
 
+                if (IsMarketAcquisitionUnlocked() && ImGui.BeginTabItem("Remote Market", GetAgentTabFlags("Remote Market")))
+                {
+                    remoteMarketTabPanel.Draw();
+                    ImGui.EndTabItem();
+                }
+
                 if (ImGui.BeginTabItem("Diagnostics", GetAgentTabFlags("Diagnostics")))
                 {
                     marketAcquisitionDiagnosticsPanel.Draw();
@@ -576,6 +600,7 @@ public class MainWindow : Window, IDisposable
             "Squire" or "Workshop Logistics" or "Settings" or "Status" => true,
             "Diagnostics" => true,
             "Market Acquisition" => IsMarketAcquisitionUnlocked(),
+            "Remote Market" => IsMarketAcquisitionUnlocked(),
             _ => false,
         };
         if (!allowed || !IsAllowedWorkspaceView(mainTab, workspaceView))
@@ -1687,6 +1712,7 @@ public class MainWindow : Window, IDisposable
         uiStateCapture.Dispose();
         acquisitionWorkspace.Dispose();
         routeEngine.Dispose();
+        remoteMarketController.Dispose();
         marketPurchasePacketObserver.Dispose();
         acquisitionHttpClient.Dispose();
         craftQuoteHttpClient.Dispose();

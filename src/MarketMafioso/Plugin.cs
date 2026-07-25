@@ -197,6 +197,7 @@ public sealed class Plugin : IDalamudPlugin
         windowSystem.AddWindow(mainWindow.AcquisitionCompositionWindow);
         windowSystem.AddWindow(agentBridgeProofWindow);
         windowSystem.AddWindow(remoteMarketProbeWindow);
+        windowSystem.AddWindow(mainWindow.RemoteMarketOverlay);
 
         CommandManager.AddHandler(CmdMain, new CommandInfo(OnCommand)
         {
