@@ -49,6 +49,7 @@ internal sealed class RemoteMarketController : IDisposable
     private RemoteMarketPurchaseAttempt? attempt;
     private string? lastOutcome;
     private readonly HashSet<ulong> purchasedListingIds = [];
+    private readonly Dictionary<uint, Dictionary<ulong, string>> retainerNamesByItem = [];
 
     public RemoteMarketController(
         Configuration configuration,
@@ -78,6 +79,7 @@ internal sealed class RemoteMarketController : IDisposable
         evidenceDirectory = Path.Combine(pluginConfigDirectory, "remote-market");
         marketBoard.PurchaseRequested += OnPurchaseRequested;
         marketBoard.ItemPurchased += OnItemPurchased;
+        marketBoard.OfferingsReceived += OnOfferingsReceived;
     }
 
     public bool IsAvailable =>
@@ -87,6 +89,21 @@ internal sealed class RemoteMarketController : IDisposable
     {
         marketBoard.PurchaseRequested -= OnPurchaseRequested;
         marketBoard.ItemPurchased -= OnItemPurchased;
+        marketBoard.OfferingsReceived -= OnOfferingsReceived;
+    }
+
+    private void OnOfferingsReceived(IMarketBoardCurrentOfferings offerings)
+    {
+        var itemId = offerings.ItemListings.Count > 0 ? offerings.ItemListings[0].ItemId : 0u;
+        if (itemId == 0)
+            return;
+        if (!retainerNamesByItem.TryGetValue(itemId, out var byListing))
+        {
+            byListing = [];
+            retainerNamesByItem[itemId] = byListing;
+        }
+        foreach (var listing in offerings.ItemListings)
+            byListing[listing.ListingId] = listing.RetainerName;
     }
 
     public string? GetPurchaseContextBlockReason()
@@ -106,6 +123,8 @@ internal sealed class RemoteMarketController : IDisposable
         configuration.RemoteMarketRejectedTerritories.Clear();
         configuration.Save();
     }
+
+    public void SetDebugOutcome(string message) => lastOutcome = message;
 
     public string OpenMarketBoard()
     {
@@ -148,6 +167,9 @@ internal sealed class RemoteMarketController : IDisposable
                         listing.TotalTax,
                         (listing.UnitPrice * (ulong)listing.Quantity) + listing.TotalTax,
                         listing.MateriaCount,
+                        retainerNamesByItem.TryGetValue(listing.ItemId, out var byListing) && byListing.TryGetValue(listing.ListingId, out var retainerName)
+                            ? retainerName
+                            : string.Empty,
                         purchasedListingIds.Contains(listing.ListingId),
                         batchItems.FirstOrDefault(item => item.ListingId == listing.ListingId)?.Status));
                 }
@@ -581,6 +603,7 @@ internal sealed record RemoteMarketListingView(
     uint TotalTax,
     ulong TotalGil,
     byte MateriaCount,
+    string RetainerName,
     bool AlreadyPurchased,
     RemoteMarketBatchItemStatus? BatchStatus);
 

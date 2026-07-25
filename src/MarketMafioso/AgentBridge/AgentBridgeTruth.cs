@@ -55,6 +55,14 @@ public sealed record AgentBridgeRemoteBellProbeTruth
     public string? YieldProbeRetainerId { get; init; }
     public string? YieldProbeOpcode { get; init; }
     public string? YieldProbeLastEvidencePath { get; init; }
+    public bool WarmSessionActive { get; init; }
+    public bool WarmSessionCanArm { get; init; }
+    public string? WarmSessionState { get; init; }
+    public string? WarmSessionMessage { get; init; }
+    public string? WarmSessionReadiness { get; init; }
+    public string? WarmSessionRetainerId { get; init; }
+    public string? WarmSessionOpcode { get; init; }
+    public string? WarmSessionLastEvidencePath { get; init; }
 }
 
 public sealed record AgentBridgeRouteTruth

@@ -202,7 +202,15 @@ public class MainWindow : Window, IDisposable
             config,
             remoteMarketController,
             remoteSummoningBellProbe,
-            AgentReviewRegistry);
+            AgentReviewRegistry,
+            () =>
+            {
+                remoteMarketController.OpenMarketBoard();
+                var result = marketBoardItemSearchDriver.Search(5116, "Cobalt Ore");
+                var outcome = $"{result.Status}: {result.Message}";
+                remoteMarketController.SetDebugOutcome(outcome);
+                return outcome;
+            });
         RemoteMarketOverlay = new RemoteMarketOverlayWindow(remoteMarketController);
         this.marketBoardApproachService = marketBoardApproachService;
         this.marketAcquisitionRouteDiagnosticsDirectory = marketAcquisitionRouteDiagnosticsDirectory;
@@ -424,6 +432,7 @@ public class MainWindow : Window, IDisposable
         var remoteBellProbe = remoteSummoningBellProbe.GetView();
         var normalBellCapture = remoteSummoningBellProbe.GetNormalCaptureView();
         var yieldBellProbe = remoteSummoningBellProbe.GetYieldProbeView();
+        var warmBellProbe = remoteSummoningBellProbe.GetWarmSessionProbeView();
         return new AgentBridgeTruth
         {
             SchemaVersion = 1,
@@ -467,6 +476,14 @@ public class MainWindow : Window, IDisposable
                 YieldProbeRetainerId = yieldBellProbe.RetainerId,
                 YieldProbeOpcode = yieldBellProbe.Opcode,
                 YieldProbeLastEvidencePath = yieldBellProbe.LastEvidencePath,
+                WarmSessionActive = warmBellProbe.Active,
+                WarmSessionCanArm = warmBellProbe.CanArm,
+                WarmSessionState = warmBellProbe.State,
+                WarmSessionMessage = warmBellProbe.Message,
+                WarmSessionReadiness = warmBellProbe.Readiness,
+                WarmSessionRetainerId = warmBellProbe.RetainerId,
+                WarmSessionOpcode = warmBellProbe.Opcode,
+                WarmSessionLastEvidencePath = warmBellProbe.LastEvidencePath,
             },
             Route = new AgentBridgeRouteTruth
             {
@@ -640,6 +657,9 @@ public class MainWindow : Window, IDisposable
 
     public string BeginNormalSummoningBellCapture() => remoteSummoningBellProbe.BeginNormalCapture();
 
+    public string BeginNormalSummoningBellLifecycleCapture() =>
+        remoteSummoningBellProbe.BeginNormalLifecycleCapture();
+
     public string GetNormalSummoningBellCaptureStatus() => remoteSummoningBellProbe.GetNormalCaptureStatus();
 
     public string CancelNormalSummoningBellCapture() => remoteSummoningBellProbe.CancelNormalCapture();
@@ -651,6 +671,15 @@ public class MainWindow : Window, IDisposable
     public string GetYieldEventSceneProbeStatus() => remoteSummoningBellProbe.GetYieldProbeStatus();
 
     public string CancelYieldEventSceneProbe() => remoteSummoningBellProbe.CancelYieldProbe();
+
+    public string BeginWarmSessionRetentionProbe() =>
+        remoteSummoningBellProbe.BeginWarmSessionRetentionProbe();
+
+    public string GetWarmSessionRetentionProbeStatus() =>
+        remoteSummoningBellProbe.GetWarmSessionProbeStatus();
+
+    public string CancelWarmSessionRetentionProbe() =>
+        remoteSummoningBellProbe.CancelWarmSessionProbe();
 
     public void BeginAgentReviewFrame() => AgentReviewRegistry.BeginFrame();
 

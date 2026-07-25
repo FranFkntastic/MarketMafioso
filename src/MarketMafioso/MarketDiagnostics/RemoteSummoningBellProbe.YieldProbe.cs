@@ -50,7 +50,10 @@ internal sealed partial class RemoteSummoningBellProbe
         ValidateYieldTemplateContext();
         var observation = bell.ObserveLoadedBell();
         var anyRetainerUiOpen = IsAnyRetainerSessionUiOpen();
-        var noOtherProbe = session is null && normalCaptureSession is null;
+        var noOtherProbe =
+            session is null &&
+            normalCaptureSession is null &&
+            warmSessionProbeSession is null;
         var canArmControl =
             configuration.EnableMarketDiagnostics &&
             clientState.IsLoggedIn &&
@@ -423,6 +426,8 @@ internal sealed partial class RemoteSummoningBellProbe
             return "The normal bell flight recorder is already armed.";
         if (yieldProbeSession is not null)
             return "A YieldEventScene2 probe is already active.";
+        if (warmSessionProbeSession is not null)
+            return "The warm-session retention probe is already active.";
         if (IsAnyRetainerSessionUiOpen())
             return "Close every bell and retainer window before starting this probe.";
         if (releaseSuppressionWhenRetainerListCloses)

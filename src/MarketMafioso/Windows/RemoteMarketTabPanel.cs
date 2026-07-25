@@ -1,3 +1,4 @@
+using System;
 using Dalamud.Bindings.ImGui;
 using Franthropy.Dalamud.AgentBridge;
 using MarketMafioso.MarketAcquisition;
@@ -13,17 +14,20 @@ internal sealed class RemoteMarketTabPanel
     private readonly RemoteMarketController controller;
     private readonly RemoteSummoningBellProbe bellProbe;
     private readonly AgentBridgeUiReviewRegistry reviewRegistry;
+    private readonly Func<string> debugSearchCobalt;
 
     public RemoteMarketTabPanel(
         Configuration configuration,
         RemoteMarketController controller,
         RemoteSummoningBellProbe bellProbe,
-        AgentBridgeUiReviewRegistry reviewRegistry)
+        AgentBridgeUiReviewRegistry reviewRegistry,
+        Func<string> debugSearchCobalt)
     {
         this.configuration = configuration;
         this.controller = controller;
         this.bellProbe = bellProbe;
         this.reviewRegistry = reviewRegistry;
+        this.debugSearchCobalt = debugSearchCobalt;
     }
 
     public void Draw()
@@ -52,6 +56,12 @@ internal sealed class RemoteMarketTabPanel
             true,
             SubmitOpenAgent,
             "Opens the market board agent directly.");
+        reviewRegistry.RegisterLastButton(
+            "remote-market.debug-search",
+            "Debug: search Cobalt Ore",
+            true,
+            () => Plugin.ChatGui.Print($"[MMF] Remote market debug search: {debugSearchCobalt()}"),
+            "Drives a one-shot market search for Cobalt Ore through the acquisition driver.");
         ImGui.SameLine();
         ImGui.TextColored(MarketMafiosoUiTheme.Muted, $"{view.Listings.Count} listings staged");
 
@@ -75,8 +85,42 @@ internal sealed class RemoteMarketTabPanel
         }
 
         DrawNormalBellCapture();
+        DrawWarmSessionRetentionProbe();
         DrawYieldEventSceneProbe();
         DrawBellProbe();
+    }
+
+    private void DrawWarmSessionRetentionProbe()
+    {
+        var view = bellProbe.GetWarmSessionProbeView();
+        ImGui.Separator();
+        ImGui.TextColored(MarketMafiosoUiTheme.Header, "Warm bell-session retention proof");
+        ImGui.TextWrapped(
+            "Learns a genuine scene-1 retainer selection during a normal bell visit, suppresses exactly one final scene-1 teardown, then replays that exact selection once without moving. AutoRetainer stays suppressed until the session is cleanly closed.");
+
+        var enabled = view.CanArm && !view.Active;
+        if (!enabled)
+            ImGui.BeginDisabled();
+        if (ImGui.Button(view.Active ? "Warm retention active..." : "Arm warm retention proof"))
+            SubmitWarmSessionRetention();
+        if (!enabled)
+            ImGui.EndDisabled();
+        reviewRegistry.RegisterLastButton(
+            "remote-bell.warm-retention",
+            "Arm warm bell-session retention proof",
+            enabled,
+            SubmitWarmSessionRetention,
+            view.Readiness);
+
+        DrawRow("Readiness", view.Readiness);
+        DrawRow("State", view.State);
+        DrawRow("Result", view.Message);
+        if (view.RetainerId is not null)
+            DrawRow("Retainer", view.RetainerId);
+        if (view.Opcode is not null)
+            DrawRow("Opcode", view.Opcode);
+        if (view.LastEvidencePath is not null)
+            DrawRow("Evidence", view.LastEvidencePath);
     }
 
     private void DrawYieldEventSceneProbe()
@@ -149,6 +193,19 @@ internal sealed class RemoteMarketTabPanel
             enabled,
             SubmitNormalBellCapture,
             view.Readiness);
+        ImGui.SameLine();
+        if (!enabled)
+            ImGui.BeginDisabled();
+        if (ImGui.Button(view.Active ? "Lifecycle recorder active..." : "Arm complete lifecycle"))
+            SubmitNormalBellLifecycleCapture();
+        if (!enabled)
+            ImGui.EndDisabled();
+        reviewRegistry.RegisterLastButton(
+            "remote-bell.capture-lifecycle",
+            "Arm complete bell lifecycle recorder",
+            enabled,
+            SubmitNormalBellLifecycleCapture,
+            view.Readiness);
 
         DrawRow("Readiness", view.Readiness);
         DrawRow("State", view.State);
@@ -211,6 +268,12 @@ internal sealed class RemoteMarketTabPanel
         Plugin.ChatGui.Print($"[MMF] Normal bell capture: {message}");
     }
 
+    private void SubmitNormalBellLifecycleCapture()
+    {
+        var message = bellProbe.BeginNormalLifecycleCapture();
+        Plugin.ChatGui.Print($"[MMF] Bell lifecycle capture: {message}");
+    }
+
     private void SubmitYieldControl()
     {
         var message = bellProbe.BeginYieldControl();
@@ -221,6 +284,12 @@ internal sealed class RemoteMarketTabPanel
     {
         var message = bellProbe.BeginYieldSessionFreeReplay();
         Plugin.ChatGui.Print($"[MMF] YieldEventScene2 direct probe: {message}");
+    }
+
+    private void SubmitWarmSessionRetention()
+    {
+        var message = bellProbe.BeginWarmSessionRetentionProbe();
+        Plugin.ChatGui.Print($"[MMF] Warm-session retention: {message}");
     }
 
     private static void DrawRow(string label, string value)

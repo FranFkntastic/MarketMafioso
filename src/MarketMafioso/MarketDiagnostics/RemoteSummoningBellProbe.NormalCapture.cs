@@ -25,7 +25,9 @@ internal sealed record NormalSummoningBellCaptureView(
 internal sealed partial class RemoteSummoningBellProbe
 {
     private static readonly TimeSpan NormalCaptureArmWindow = TimeSpan.FromSeconds(60);
+    private static readonly TimeSpan NormalLifecycleCaptureWindow = TimeSpan.FromMinutes(3);
     private static readonly TimeSpan NormalCaptureSettleWindow = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan NormalLifecycleClosureSettleWindow = TimeSpan.FromSeconds(3);
     private const int MaximumNormalStateSamples = 128;
 
     private NormalCaptureSession? normalCaptureSession;
@@ -56,6 +58,7 @@ internal sealed partial class RemoteSummoningBellProbe
                 !observation.OutsideOrdinaryInteractionRange &&
                 session is null &&
                 yieldProbeSession is null &&
+                warmSessionProbeSession is null &&
                 !anyRetainerUiOpen,
             Readiness = anyRetainerUiOpen
                 ? "Close the current retainer interaction before arming the recorder."
@@ -68,18 +71,24 @@ internal sealed partial class RemoteSummoningBellProbe
         };
     }
 
-    public string BeginNormalCapture()
+    public string BeginNormalCapture() => BeginNormalCapture(captureCompleteLifecycle: false);
+
+    public string BeginNormalLifecycleCapture() => BeginNormalCapture(captureCompleteLifecycle: true);
+
+    private string BeginNormalCapture(bool captureCompleteLifecycle)
     {
         if (disposed)
-            return "The normal bell flight recorder is unavailable because it has been disposed.";
+            return "The normal bell recorder is unavailable because it has been disposed.";
         if (!configuration.EnableMarketDiagnostics)
-            return "Enable Market Diagnostics in settings before arming the normal bell flight recorder.";
+            return "Enable Market Diagnostics in settings before arming the normal bell recorder.";
         if (!clientState.IsLoggedIn)
-            return "The normal bell flight recorder requires a logged-in character.";
+            return "The normal bell recorder requires a logged-in character.";
         if (session is not null)
             return "The remote bell probe is already active.";
         if (yieldProbeSession is not null)
             return "The YieldEventScene2 probe is already active.";
+        if (warmSessionProbeSession is not null)
+            return "The warm-session retention probe is already active.";
         if (normalCaptureSession is not null)
             return "The normal bell flight recorder is already armed.";
         if (IsAnyRetainerSessionUiOpen())
@@ -91,7 +100,7 @@ internal sealed partial class RemoteSummoningBellProbe
             return suppressionMessage;
         autoRetainerSuppression = suppression;
 
-        var arm = bell.TryArmLoadedBellFlightRecorder();
+        var arm = bell.TryArmLoadedBellFlightRecorder(captureCompleteLifecycle);
         if (!arm.Armed)
         {
             ReleaseAutoRetainerSuppression();
@@ -110,28 +119,36 @@ internal sealed partial class RemoteSummoningBellProbe
         var now = DateTimeOffset.UtcNow;
         var active = new NormalCaptureSession(
             now,
-            now + NormalCaptureArmWindow,
+            now + (captureCompleteLifecycle
+                ? NormalLifecycleCaptureWindow
+                : NormalCaptureArmWindow),
             clientState.TerritoryType,
             CapturePosition(),
-            arm);
+            arm,
+            captureCompleteLifecycle);
         CaptureNormalStateTransition(active);
         normalCaptureSession = active;
         normalCaptureView = new(
             true,
             false,
-            "Armed",
+            captureCompleteLifecycle ? "Lifecycle armed" : "Armed",
             "Listening for one ordinary bell interaction. No packet or game state will be altered.",
-            $"Interact with this bell normally, select one retainer, and stop when the retainer command menu appears. {suppressionMessage}",
+            captureCompleteLifecycle
+                ? $"Interact normally, select one retainer, choose Quit at its command menu, then close the returned RetainerList. {suppressionMessage}"
+                : $"Interact with this bell normally, select one retainer, and stop when the retainer command menu appears. {suppressionMessage}",
             FormatGameObjectId(arm.BellGameObjectId),
             arm.Distance,
             arm.OrdinaryInteractionDistance,
             normalCaptureView.LastEvidencePath);
         log.Information(
-            "[MarketMafioso] Armed normal bell flight recorder for bell {BellGameObjectId:X}, event 0x{EventId:X}, territory {TerritoryId}.",
+            "[MarketMafioso] Armed {CaptureMode} bell recorder for bell {BellGameObjectId:X}, event 0x{EventId:X}, territory {TerritoryId}.",
+            captureCompleteLifecycle ? "complete-lifecycle" : "normal",
             arm.BellGameObjectId,
             arm.BellEventId,
             active.TerritoryId);
-        return "Normal bell flight recorder armed. Interact with the bell normally, then select one retainer.";
+        return captureCompleteLifecycle
+            ? "Complete bell-lifecycle recorder armed. Select one retainer, choose Quit, return to the retainer list, then close it."
+            : "Normal bell flight recorder armed. Interact with the bell normally, then select one retainer.";
     }
 
     public string GetNormalCaptureStatus()
@@ -178,7 +195,13 @@ internal sealed partial class RemoteSummoningBellProbe
         {
             if (now >= active.DeadlineUtc)
             {
-                CompleteNormalCapture(active, "StartTalkTimeout", "No matching normal StartTalkEvent appeared within 60 seconds.", false);
+                CompleteNormalCapture(
+                    active,
+                    "StartTalkTimeout",
+                    active.CaptureCompleteLifecycle
+                        ? "No matching normal StartTalkEvent appeared within three minutes."
+                        : "No matching normal StartTalkEvent appeared within 60 seconds.",
+                    false);
                 return;
             }
 
@@ -197,27 +220,96 @@ internal sealed partial class RemoteSummoningBellProbe
             {
                 State = "Recording",
                 Message = $"Captured stock StartTalkEvent opcode 0x{transport.Opcode:X}; recording all bounded zone traffic and client state transitions.",
-                Readiness = "Select one retainer from the normal RetainerList and wait for its command menu.",
+                Readiness = active.CaptureCompleteLifecycle
+                    ? "Select one retainer, choose Quit at its command menu, then close the returned RetainerList."
+                    : "Select one retainer from the normal RetainerList and wait for its command menu.",
             };
         }
 
-        if (IsAddonReady("SelectString"))
+        var retainerListReady = IsAddonReady("RetainerList");
+        var commandMenuReady = IsAddonReady("SelectString");
+        if (retainerListReady && active.CommandMenuObservedAtUtc is null)
+        {
+            active.InitialRetainerListObservedAtUtc ??= now;
+        }
+
+        if (commandMenuReady)
         {
             active.CommandMenuObservedAtUtc ??= now;
-            normalCaptureView = normalCaptureView with
+            if (active.CaptureCompleteLifecycle)
             {
-                State = "Settling",
-                Message = "The retainer command menu appeared. Capturing the final response tail.",
-                Readiness = "Hold here; the recorder will stop automatically.",
-            };
-            if (now - active.CommandMenuObservedAtUtc.Value >= NormalCaptureSettleWindow)
+                normalCaptureView = normalCaptureView with
+                {
+                    State = "Command menu captured",
+                    Message = "The retainer command menu appeared; the recorder is preserving the full exit path.",
+                    Readiness = "Choose Quit, wait for RetainerList to return, then close RetainerList normally.",
+                };
+            }
+            else
             {
-                CompleteNormalCapture(
-                    active,
-                    "Confirmed",
-                    "Captured an accepted normal bell session through one retainer selection and command-menu arrival.",
-                    true);
-                return;
+                normalCaptureView = normalCaptureView with
+                {
+                    State = "Settling",
+                    Message = "The retainer command menu appeared. Capturing the final response tail.",
+                    Readiness = "Hold here; the recorder will stop automatically.",
+                };
+                if (now - active.CommandMenuObservedAtUtc.Value >= NormalCaptureSettleWindow)
+                {
+                    CompleteNormalCapture(
+                        active,
+                        "Confirmed",
+                        "Captured an accepted normal bell session through one retainer selection and command-menu arrival.",
+                        true);
+                    return;
+                }
+            }
+        }
+
+        if (active.CaptureCompleteLifecycle &&
+            active.CommandMenuObservedAtUtc is not null &&
+            !commandMenuReady)
+        {
+            if (!commandMenuReady)
+                active.CommandMenuClosedObserved = true;
+            if (active.CommandMenuClosedObserved && retainerListReady)
+                active.ReturnedRetainerListObservedAtUtc ??= now;
+
+            if (active.ReturnedRetainerListObservedAtUtc is null)
+            {
+                normalCaptureView = normalCaptureView with
+                {
+                    State = "Waiting for return",
+                    Message = "The command menu closed; waiting for the ordinary RetainerList to return.",
+                    Readiness = "Choose Quit if needed. Once RetainerList returns, close it normally.",
+                };
+            }
+            else if (IsAnyRetainerSessionUiOpen())
+            {
+                normalCaptureView = normalCaptureView with
+                {
+                    State = "Exit captured",
+                    Message = "The command menu returned to RetainerList; waiting for final bell-session closure.",
+                    Readiness = "Close RetainerList normally and leave all retainer windows closed.",
+                };
+            }
+            else
+            {
+                active.SessionClosedObservedAtUtc ??= now;
+                normalCaptureView = normalCaptureView with
+                {
+                    State = "Closure tail",
+                    Message = "The full bell session closed; capturing the final server and client-state tail.",
+                    Readiness = "Leave all retainer windows closed; the recorder will finish automatically.",
+                };
+                if (now - active.SessionClosedObservedAtUtc.Value >= NormalLifecycleClosureSettleWindow)
+                {
+                    CompleteNormalCapture(
+                        active,
+                        "ConfirmedLifecycle",
+                        "Captured the accepted bell session from StartTalk through retainer selection, return, and final closure.",
+                        true);
+                    return;
+                }
             }
         }
 
@@ -226,8 +318,10 @@ internal sealed partial class RemoteSummoningBellProbe
             CompleteNormalCapture(
                 active,
                 "CaptureTimeout",
-                "The normal StartTalkEvent was captured, but no retainer command menu appeared before the bounded capture expired.",
-                false);
+                active.CaptureCompleteLifecycle
+                    ? "The complete bell lifecycle did not reach final closure before the three-minute capture expired."
+                    : "The normal StartTalkEvent was captured, but no retainer command menu appeared before the bounded capture expired.",
+                active.CommandMenuObservedAtUtc is not null);
         }
     }
 
@@ -256,9 +350,15 @@ internal sealed partial class RemoteSummoningBellProbe
             active.Arm.BellEventIdSource,
             active.Arm.Distance,
             active.Arm.OrdinaryInteractionDistance,
+            active.CaptureCompleteLifecycle ? "CompleteLifecycle" : "SelectionOnly",
             verdict,
             message,
             commandMenuObserved,
+            new NormalBellLifecycleMilestones(
+                active.InitialRetainerListObservedAtUtc,
+                active.CommandMenuObservedAtUtc,
+                active.ReturnedRetainerListObservedAtUtc,
+                active.SessionClosedObservedAtUtc),
             active.StateSamples.ToArray(),
             transport);
         var path = WriteNormalCaptureEvidence(evidence);
@@ -281,7 +381,7 @@ internal sealed partial class RemoteSummoningBellProbe
             active.Arm.OrdinaryInteractionDistance,
             path);
 
-        if (verdict == "Confirmed")
+        if (verdict.StartsWith("Confirmed", StringComparison.Ordinal))
             chatGui.Print($"[MMF] Normal bell capture: {message}");
         else
             chatGui.PrintError($"[MMF] Normal bell capture: {message}");
@@ -310,6 +410,12 @@ internal sealed partial class RemoteSummoningBellProbe
         var handler = eventFramework == null ? null : eventFramework->GetEventHandlerById(bellEventId);
         var retainerManager = RetainerManager.Instance();
         var agentModule = AgentModule.Instance();
+        var retainerListAgent = agentModule == null
+            ? null
+            : agentModule->GetAgentByInternalId(AgentId.RetainerList);
+        var retainerAgent = agentModule == null
+            ? null
+            : agentModule->GetAgentByInternalId(AgentId.Retainer);
         return new(
             condition[ConditionFlag.OccupiedSummoningBell],
             IsAddonReady("RetainerList"),
@@ -339,15 +445,38 @@ internal sealed partial class RemoteSummoningBellProbe
             retainerManager != null && retainerManager->IsReady,
             retainerManager == null ? (byte)0 : retainerManager->MaxRetainerEntitlement,
             retainerManager == null ? 0 : retainerManager->LastSelectedRetainerId,
-            retainerManager == null ? 0 : retainerManager->RetainerObjectId);
+            retainerManager == null ? 0 : retainerManager->RetainerObjectId,
+            condition[ConditionFlag.Occupied],
+            condition[ConditionFlag.Occupied30],
+            condition[ConditionFlag.OccupiedInEvent],
+            condition[ConditionFlag.OccupiedInQuestEvent],
+            FormatPointer(handler == null ? null : *(void**)handler),
+            FormatPointer(retainerManager),
+            FormatPointer(retainerListAgent),
+            FormatPointer(retainerListAgent == null ? null : retainerListAgent->OpenerEventInterface),
+            FormatPointer(
+                retainerListAgent == null || retainerListAgent->OpenerEventInterface == null
+                    ? null
+                    : *(void**)retainerListAgent->OpenerEventInterface),
+            retainerListAgent == null ? 0 : retainerListAgent->AddonId,
+            FormatPointer(retainerAgent),
+            FormatPointer(retainerAgent == null ? null : retainerAgent->OpenerEventInterface),
+            FormatPointer(
+                retainerAgent == null || retainerAgent->OpenerEventInterface == null
+                    ? null
+                    : *(void**)retainerAgent->OpenerEventInterface),
+            retainerAgent == null ? 0 : retainerAgent->AddonId);
     }
 
     private unsafe bool IsAnyRetainerSessionUiOpen() =>
+        IsAnyRetainerAddonOpen() ||
+        condition[ConditionFlag.OccupiedSummoningBell];
+
+    private unsafe bool IsAnyRetainerAddonOpen() =>
         IsAddonReady("RetainerList") ||
         IsAddonReady("SelectString") ||
         IsAddonReady("InventoryRetainer") ||
-        IsAddonReady("InventoryRetainerLarge") ||
-        condition[ConditionFlag.OccupiedSummoningBell];
+        IsAddonReady("InventoryRetainerLarge");
 
     private unsafe bool IsAddonReady(string name)
     {
@@ -369,9 +498,12 @@ internal sealed partial class RemoteSummoningBellProbe
         try
         {
             Directory.CreateDirectory(evidenceDirectory);
+            var mode = evidence.CaptureMode == "CompleteLifecycle"
+                ? "normal-bell-lifecycle"
+                : "normal-bell";
             var path = Path.Combine(
                 evidenceDirectory,
-                $"normal-bell-{evidence.StartedAtUtc:yyyyMMdd-HHmmss-fff}.json");
+                $"{mode}-{evidence.StartedAtUtc:yyyyMMdd-HHmmss-fff}.json");
             File.WriteAllText(path, JsonSerializer.Serialize(evidence, JsonOptions));
             return path;
         }
@@ -389,13 +521,15 @@ internal sealed partial class RemoteSummoningBellProbe
             DateTimeOffset deadlineUtc,
             uint territoryId,
             ProbePosition? startPosition,
-            NormalSummoningBellCaptureArmResult arm)
+            NormalSummoningBellCaptureArmResult arm,
+            bool captureCompleteLifecycle)
         {
             StartedAtUtc = startedAtUtc;
             DeadlineUtc = deadlineUtc;
             TerritoryId = territoryId;
             StartPosition = startPosition;
             Arm = arm;
+            CaptureCompleteLifecycle = captureCompleteLifecycle;
         }
 
         public DateTimeOffset StartedAtUtc { get; }
@@ -403,8 +537,13 @@ internal sealed partial class RemoteSummoningBellProbe
         public uint TerritoryId { get; }
         public ProbePosition? StartPosition { get; }
         public NormalSummoningBellCaptureArmResult Arm { get; }
+        public bool CaptureCompleteLifecycle { get; }
         public bool StartTalkObserved { get; set; }
+        public DateTimeOffset? InitialRetainerListObservedAtUtc { get; set; }
         public DateTimeOffset? CommandMenuObservedAtUtc { get; set; }
+        public bool CommandMenuClosedObserved { get; set; }
+        public DateTimeOffset? ReturnedRetainerListObservedAtUtc { get; set; }
+        public DateTimeOffset? SessionClosedObservedAtUtc { get; set; }
         public NormalBellClientState? LastState { get; set; }
         public List<NormalBellClientStateSample> StateSamples { get; } = [];
     }
@@ -421,11 +560,19 @@ internal sealed partial class RemoteSummoningBellProbe
         string BellEventIdSource,
         float Distance,
         float OrdinaryInteractionDistance,
+        string CaptureMode,
         string Verdict,
         string Message,
         bool CommandMenuObserved,
+        NormalBellLifecycleMilestones LifecycleMilestones,
         NormalBellClientStateSample[] StateTransitions,
         TalkEventPacketTransportObservation Transport);
+
+    private sealed record NormalBellLifecycleMilestones(
+        DateTimeOffset? InitialRetainerListObservedAtUtc,
+        DateTimeOffset? CommandMenuObservedAtUtc,
+        DateTimeOffset? ReturnedRetainerListObservedAtUtc,
+        DateTimeOffset? SessionClosedObservedAtUtc);
 
     private sealed record NormalBellClientStateSample(
         DateTimeOffset CapturedAtUtc,
@@ -460,5 +607,19 @@ internal sealed partial class RemoteSummoningBellProbe
         bool RetainerManagerReady,
         byte MaxRetainerEntitlement,
         ulong LastSelectedRetainerId,
-        uint RetainerObjectId);
+        uint RetainerObjectId,
+        bool Occupied,
+        bool Occupied30,
+        bool OccupiedInEvent,
+        bool OccupiedInQuestEvent,
+        string? BellEventHandlerVTableAddress,
+        string? RetainerManagerAddress,
+        string? RetainerListAgentAddress,
+        string? RetainerListOpenerEventInterfaceAddress,
+        string? RetainerListOpenerEventInterfaceVTableAddress,
+        uint RetainerListAgentAddonId,
+        string? RetainerAgentAddress,
+        string? RetainerOpenerEventInterfaceAddress,
+        string? RetainerOpenerEventInterfaceVTableAddress,
+        uint RetainerAgentAddonId);
 }

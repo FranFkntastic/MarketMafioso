@@ -6,6 +6,7 @@ using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Textures.TextureWraps;
 using Dalamud.Interface.Windowing;
+using Franthropy.Dalamud.UI.Tables;
 using Lumina.Excel.Sheets;
 using MarketMafioso.MarketAcquisition.RemoteMarket;
 using MarketMafioso.Windows.Main;
@@ -21,6 +22,17 @@ public sealed class RemoteMarketOverlayWindow : Window
     private bool confirmArmed;
     private int cheapestTarget = 1;
     private bool pinned = true;
+
+    private static readonly DalamudTableProjection<RemoteMarketListingView> tableProjection = new(
+    [
+        new("Qty", 48f, listing => listing.Quantity.ToString(), listing => listing.Quantity),
+        new("Unit", 84f, listing => listing.UnitPrice.ToString("N0"), listing => listing.UnitPrice),
+        new("Fee", 64f, listing => listing.TotalTax.ToString("N0"), listing => listing.TotalTax),
+        new("Total", 104f, listing => listing.TotalGil.ToString("N0"), listing => listing.TotalGil),
+        new("Mat", 36f, listing => listing.MateriaCount > 0 ? listing.MateriaCount.ToString() : string.Empty, listing => listing.MateriaCount),
+        new("Retainer", 96f, listing => listing.RetainerName, listing => listing.RetainerName),
+        new("State", 84f, listing => listing.AlreadyPurchased ? "purchased" : listing.BatchStatus?.ToString().ToLowerInvariant() ?? string.Empty),
+    ]);
 
     internal RemoteMarketOverlayWindow(RemoteMarketController controller)
         : base(
@@ -122,22 +134,12 @@ public sealed class RemoteMarketOverlayWindow : Window
 
     private void DrawListingsTable(RemoteMarketView view, bool batchActive)
     {
-        var flags = ImGuiTableFlags.RowBg | ImGuiTableFlags.Borders | ImGuiTableFlags.ScrollY |
-                    ImGuiTableFlags.SizingFixedFit | ImGuiTableFlags.Sortable;
         var tableHeight = Math.Min(460f, Math.Max(140f, ImGui.GetContentRegionAvail().Y - 110f));
-        if (!ImGui.BeginTable("##RemoteMarketListings", 6, flags, new Vector2(0, tableHeight)))
+        if (!tableProjection.Begin("##RMCListingGrid", tableHeight))
             return;
 
-        ImGui.TableSetupColumn("Qty", ImGuiTableColumnFlags.WidthFixed, 48f);
-        ImGui.TableSetupColumn("Unit", ImGuiTableColumnFlags.WidthFixed | ImGuiTableColumnFlags.DefaultSort, 84f);
-        ImGui.TableSetupColumn("Fee", ImGuiTableColumnFlags.WidthFixed, 64f);
-        ImGui.TableSetupColumn("Total", ImGuiTableColumnFlags.WidthFixed, 104f);
-        ImGui.TableSetupColumn("Mat", ImGuiTableColumnFlags.WidthFixed, 36f);
-        ImGui.TableSetupColumn("State", ImGuiTableColumnFlags.WidthFixed, 90f);
-        ImGui.TableHeadersRow();
-
-        var rows = SortListings(view.Listings, ImGui.TableGetSortSpecs());
-        foreach (var listing in rows)
+        tableProjection.DrawFilterRow();
+        foreach (var listing in tableProjection.Apply(view.Listings, ImGui.TableGetSortSpecs()))
         {
             var status = listing.BatchStatus;
             var selected = selectedListingIds.Contains(listing.ListingId);
@@ -165,6 +167,7 @@ public sealed class RemoteMarketOverlayWindow : Window
             Cell(listing.TotalTax.ToString("N0"), muted);
             Cell(listing.TotalGil.ToString("N0"), muted);
             Cell(listing.MateriaCount > 0 ? listing.MateriaCount.ToString() : string.Empty, muted);
+            Cell(listing.RetainerName, muted);
 
             ImGui.TableNextColumn();
             if (status == RemoteMarketBatchItemStatus.Failed)
@@ -176,7 +179,7 @@ public sealed class RemoteMarketOverlayWindow : Window
             else if (status is not null)
                 ImGui.TextColored(MarketMafiosoUiTheme.Muted, status.Value.ToString().ToLowerInvariant());
         }
-        ImGui.EndTable();
+        tableProjection.End();
     }
 
     private void DrawBatch(RemoteMarketBatchView batch)
@@ -267,25 +270,6 @@ public sealed class RemoteMarketOverlayWindow : Window
         ImGui.SameLine();
         if (ImGui.Button("Cancel"))
             confirmArmed = false;
-    }
-
-    private unsafe IReadOnlyList<RemoteMarketListingView> SortListings(IReadOnlyList<RemoteMarketListingView> listings, ImGuiTableSortSpecsPtr sortSpecs)
-    {
-        if (sortSpecs.Handle == null || sortSpecs.SpecsCount == 0)
-            return listings;
-        var spec = sortSpecs.Specs;
-        IEnumerable<RemoteMarketListingView> sorted = spec.ColumnIndex switch
-        {
-            0 => listings.OrderBy(listing => listing.Quantity, Comparer<uint>.Default),
-            1 => listings.OrderBy(listing => listing.UnitPrice, Comparer<uint>.Default),
-            2 => listings.OrderBy(listing => listing.TotalTax, Comparer<uint>.Default),
-            3 => listings.OrderBy(listing => listing.TotalGil, Comparer<ulong>.Default),
-            4 => listings.OrderBy(listing => listing.MateriaCount, Comparer<byte>.Default),
-            _ => listings,
-        };
-        if (spec.SortDirection == ImGuiSortDirection.Descending)
-            sorted = sorted.Reverse();
-        return sorted.ToArray();
     }
 
     private IDalamudTextureWrap? ResolveItemIcon(uint itemId)

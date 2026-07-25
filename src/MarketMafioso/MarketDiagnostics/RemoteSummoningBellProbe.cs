@@ -99,6 +99,7 @@ internal sealed partial class RemoteSummoningBellProbe : IDisposable
                 observation.OutsideOrdinaryInteractionRange &&
                 normalCaptureSession is null &&
                 yieldProbeSession is null &&
+                warmSessionProbeSession is null &&
                 !IsRetainerListReady(),
             Readiness = observation.Message,
             BellGameObjectId = FormatGameObjectId(observation.BellGameObjectId),
@@ -119,6 +120,8 @@ internal sealed partial class RemoteSummoningBellProbe : IDisposable
             return "The normal bell flight recorder is already armed.";
         if (yieldProbeSession is not null)
             return "The YieldEventScene2 probe is already active.";
+        if (warmSessionProbeSession is not null)
+            return "The warm-session retention probe is already active.";
         if (session is not null)
             return "A remote bell probe is already observing its single submitted request.";
         if (IsRetainerListReady())
@@ -200,6 +203,11 @@ internal sealed partial class RemoteSummoningBellProbe : IDisposable
         if (yieldProbeSession is not null)
         {
             UpdateYieldProbe();
+            return;
+        }
+        if (warmSessionProbeSession is not null)
+        {
+            UpdateWarmSessionProbe();
             return;
         }
         ValidateYieldTemplateContext();
@@ -553,8 +561,20 @@ internal sealed partial class RemoteSummoningBellProbe : IDisposable
         session = null;
         normalCaptureSession = null;
         yieldProbeSession = null;
+        if (warmSessionProbeSession is not null)
+        {
+            var warm = bell.ObserveWarmSessionRetention();
+            if (warm.TeardownSuppressed &&
+                !warm.MatchingScene2Observed &&
+                !warm.TeardownReleaseSent)
+            {
+                bell.ReleaseWarmSession();
+            }
+        }
+        warmSessionProbeSession = null;
         bell.CancelTalkPacketTransport("The remote bell probe was disposed.");
         bell.CancelYieldEventSceneProbe("The remote bell probe was disposed.");
+        bell.StopWarmSessionRetention("The remote bell probe was disposed.");
         ReleaseAutoRetainerSuppression();
         autoRetainer.Dispose();
         bell.Dispose();
