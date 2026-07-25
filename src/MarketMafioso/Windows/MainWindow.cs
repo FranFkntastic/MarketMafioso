@@ -580,6 +580,8 @@ public class MainWindow : Window, IDisposable
             }
     }
 
+    public string OpenRemoteMarketBoard() => remoteMarketController.OpenMarketBoard();
+
     public void BeginAgentReviewFrame() => AgentReviewRegistry.BeginFrame();
 
     public void EndAgentReviewFrame()

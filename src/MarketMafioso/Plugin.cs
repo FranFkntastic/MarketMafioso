@@ -225,6 +225,10 @@ public sealed class Plugin : IDalamudPlugin
                 Framework.RunOnTick(() => _ = reporter.SendReportAsync());
                 break;
 
+            case "market":
+                ChatGui.Print($"[MMF] Remote market: {mainWindow.OpenRemoteMarketBoard()}");
+                break;
+
             case "probe-market":
 #if DEBUG
             {
