@@ -41,6 +41,7 @@ public sealed class Plugin : IDalamudPlugin
     [PluginService] internal static IGameInventory GameInventory { get; private set; } = null!;
     [PluginService] internal static ISigScanner SigScanner { get; private set; } = null!;
     [PluginService] internal static IGameInteropProvider GameInteropProvider { get; private set; } = null!;
+    [PluginService] internal static IMarketBoard MarketBoard { get; private set; } = null!;
 
     internal static Plugin Instance { get; private set; } = null!;
 
@@ -52,6 +53,8 @@ public sealed class Plugin : IDalamudPlugin
     private readonly HttpReporter reporter;
     private readonly RetainerSaleChatObserver retainerSaleChatObserver;
     private readonly RetainerHistoryObserver retainerHistoryObserver;
+    private readonly RemoteMarketAccessProbe remoteMarketAccessProbe;
+    private readonly RemoteMarketProbeWindow remoteMarketProbeWindow;
     private readonly QuartermasterIpcClient quartermaster;
     private readonly StandaloneSquireIpcClient standaloneSquire;
     private readonly ExactAcquisitionIpcProvider exactAcquisitionIpc;
@@ -100,6 +103,18 @@ public sealed class Plugin : IDalamudPlugin
             Log,
             retainerSaleChatObserver.EnqueueExternal);
         workshopCatalog = new WorkshopProjectCatalog(DataManager, Log);
+        remoteMarketAccessProbe = new RemoteMarketAccessProbe(
+            Configuration,
+            MarketBoard,
+            ClientState,
+            ObjectTable,
+            Framework,
+            AddonLifecycle,
+            GameGui,
+            ChatGui,
+            Log,
+            PluginInterface.GetPluginConfigDirectory());
+        remoteMarketProbeWindow = new RemoteMarketProbeWindow(remoteMarketAccessProbe);
         viwiWorkshoppaIpc = new VIWIWorkshoppaIpc(new DalamudVIWIWorkshoppaIpcAdapter(PluginInterface, Log));
         workshopAssemblyRunner = new WorkshopAssemblyRunner(
             Framework,
@@ -181,6 +196,7 @@ public sealed class Plugin : IDalamudPlugin
         windowSystem.AddWindow(mainWindow.FrozenQueueBrowser);
         windowSystem.AddWindow(mainWindow.AcquisitionCompositionWindow);
         windowSystem.AddWindow(agentBridgeProofWindow);
+        windowSystem.AddWindow(remoteMarketProbeWindow);
 
         CommandManager.AddHandler(CmdMain, new CommandInfo(OnCommand)
         {
@@ -207,6 +223,19 @@ public sealed class Plugin : IDalamudPlugin
             case "send":
                 Framework.RunOnTick(() => _ = reporter.SendReportAsync());
                 break;
+
+            case "probe-market":
+#if DEBUG
+            {
+                var probeMessage = remoteMarketAccessProbe.BeginProbe();
+                remoteMarketProbeWindow.IsOpen = true;
+                ChatGui.Print($"[MMF] {probeMessage}");
+                break;
+            }
+#else
+                ChatGui.Print("[MMF] Remote market probe is only available in debug builds.");
+                break;
+#endif
 
             default:
                 mainWindow.IsOpen = !mainWindow.IsOpen;
@@ -260,6 +289,7 @@ public sealed class Plugin : IDalamudPlugin
         mainWindow.AcquisitionCompositionWindow.Dispose();
         mainWindow.Dispose();
         reporter.Dispose();
+        remoteMarketAccessProbe.Dispose();
         retainerHistoryObserver.Dispose();
         retainerSaleChatObserver.Dispose();
         quartermaster.Dispose();
