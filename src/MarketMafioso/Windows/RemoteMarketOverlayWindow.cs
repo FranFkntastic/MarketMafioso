@@ -13,6 +13,8 @@ namespace MarketMafioso.Windows;
 
 public sealed class RemoteMarketOverlayWindow : Window
 {
+    private static readonly Vector2 MinimumSize = new(480, 280);
+
     private readonly RemoteMarketController controller;
     private readonly HashSet<ulong> selectedListingIds = [];
     private bool confirmArmed;
@@ -27,18 +29,27 @@ public sealed class RemoteMarketOverlayWindow : Window
         this.controller = controller ?? throw new ArgumentNullException(nameof(controller));
         SizeConstraints = new WindowSizeConstraints
         {
-            MinimumSize = new Vector2(480, 280),
+            MinimumSize = MinimumSize,
             MaximumSize = new Vector2(float.MaxValue, float.MaxValue),
         };
+        RespectCloseHotkey = false;
         IsOpen = true;
     }
+
+    public override void Update() => IsOpen = true;
 
     public override bool DrawConditions() => controller.IsAvailable && controller.IsMarketBoardResultVisible();
 
     public override void PreDraw()
     {
         if (pinned && controller.TryGetResultAnchor(out var anchor))
+        {
             ImGui.SetNextWindowPos(anchor, ImGuiCond.Always);
+            var viewport = ImGui.GetMainViewport();
+            ImGui.SetNextWindowSizeConstraints(
+                MinimumSize,
+                new Vector2(float.MaxValue, Math.Max(MinimumSize.Y, (viewport.WorkPos.Y + viewport.WorkSize.Y) - anchor.Y - 8f)));
+        }
     }
 
     public override void Draw()

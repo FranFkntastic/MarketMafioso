@@ -501,7 +501,7 @@ internal sealed class RemoteMarketController : IDisposable
         var addon = (FFXIVClientStructs.FFXIV.Component.GUI.AtkUnitBase*)gameGui.GetAddonByName("ItemSearchResult", 1).Address;
         if (addon == null || !addon->IsVisible)
             return false;
-        anchor = new System.Numerics.Vector2(addon->X + addon->GetScaledWidth(true) + 8f, addon->Y + 48f);
+        anchor = new System.Numerics.Vector2(addon->X + addon->GetScaledWidth(true) + 8f, addon->Y + 4f);
         return true;
     }
 
