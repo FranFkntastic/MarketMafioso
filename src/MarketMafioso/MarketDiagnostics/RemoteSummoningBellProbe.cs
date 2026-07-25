@@ -139,6 +139,7 @@ internal sealed class RemoteSummoningBellProbe : IDisposable
                 CapturePosition(),
                 submission,
                 "NotSubmitted",
+                false,
                 false);
             var path = WriteEvidence(evidence);
             view = new(
@@ -164,20 +165,22 @@ internal sealed class RemoteSummoningBellProbe : IDisposable
             true,
             false,
             "Observing stock interaction",
-            "Temporarily extended only the loaded bell's hitbox, invoked stock InteractWithObject, and restored the original radius. Waiting to prove its ordinary StartTalkEvent packet.",
+            "Extended only the loaded bell's hitbox and shadowed its Y to the player, then invoked stock InteractWithObject. Holding both client-only shadows through the bounded response observation.",
             $"The passive observer will not alter or retry the packet. {suppressionMessage}",
             FormatGameObjectId(submission.BellGameObjectId),
             submission.Distance,
             submission.OrdinaryInteractionDistance,
             view.LastEvidencePath);
         log.Information(
-            "[MarketMafioso] Remote bell probe invoked transport {Transport} for bell {BellGameObjectId:X} at {Distance:F1} yalms in territory {TerritoryId}; hitbox radius {OriginalRadius:F1} -> {TemporaryRadius:F1} -> {OriginalRadius:F1}.",
+            "[MarketMafioso] Remote bell probe invoked transport {Transport} for bell {BellGameObjectId:X} at {Distance:F1} yalms in territory {TerritoryId}; holding radius {OriginalRadius:F1}->{TemporaryRadius:F1} and Y {OriginalY:F1}->{TemporaryY:F1} through response observation.",
             submission.Transport,
             submission.BellGameObjectId,
             submission.Distance,
             territoryId,
             submission.OriginalHitboxRadius,
-            submission.TemporaryHitboxRadius);
+            submission.TemporaryHitboxRadius,
+            submission.OriginalBellY,
+            submission.TemporaryBellY);
         return submission.Message;
     }
 
@@ -210,6 +213,13 @@ internal sealed class RemoteSummoningBellProbe : IDisposable
         }
 
         var transport = bell.ObserveTalkPacketTransport();
+        if (!active.OccupiedSummoningBellObserved &&
+            condition[ConditionFlag.OccupiedSummoningBell])
+        {
+            active = active with { OccupiedSummoningBellObserved = true };
+            session = active;
+        }
+
         if (!active.Submission.OutboundPacketObserved)
         {
             if (transport.State == TalkEventPacketTransportState.Failed)
@@ -304,6 +314,7 @@ internal sealed class RemoteSummoningBellProbe : IDisposable
     private void Complete(ProbeSession active, string verdict, string message, bool retainerListReady)
     {
         session = null;
+        bell.RestoreRemoteProbeGeometry();
         var completedAtUtc = DateTimeOffset.UtcNow;
         var evidence = CreateEvidence(
             active.StartedAtUtc,
@@ -313,7 +324,8 @@ internal sealed class RemoteSummoningBellProbe : IDisposable
             CapturePosition(),
             active.Submission,
             verdict,
-            retainerListReady);
+            retainerListReady,
+            active.OccupiedSummoningBellObserved);
         var path = WriteEvidence(evidence);
         if (verdict == "Confirmed" && autoRetainerSuppression is { Changed: true })
             releaseSuppressionWhenRetainerListCloses = true;
@@ -350,7 +362,8 @@ internal sealed class RemoteSummoningBellProbe : IDisposable
         ProbePosition? conclusionPosition,
         RemoteSummoningBellInteractionResult submission,
         string verdict,
-        bool retainerListReady) =>
+        bool retainerListReady,
+        bool occupiedSummoningBellObserved) =>
         new(
             startedAtUtc,
             completedAtUtc,
@@ -372,12 +385,15 @@ internal sealed class RemoteSummoningBellProbe : IDisposable
             submission.OutboundPacketObserved,
             submission.OriginalHitboxRadius,
             submission.TemporaryHitboxRadius,
+            submission.OriginalBellY,
+            submission.TemporaryBellY,
             submission.PacketsObservedWhileArmed,
             submission.SizeEligiblePacketsObserved,
             submission.OutboundPacketObserved ? 1 : 0,
             submission.Transport,
             verdict,
             retainerListReady,
+            occupiedSummoningBellObserved,
             condition[ConditionFlag.OccupiedSummoningBell]);
 
     private string? WriteEvidence(RemoteSummoningBellProbeEvidence evidence)
@@ -444,7 +460,8 @@ internal sealed class RemoteSummoningBellProbe : IDisposable
         DateTimeOffset DeadlineUtc,
         uint TerritoryId,
         ProbePosition? StartPosition,
-        RemoteSummoningBellInteractionResult Submission);
+        RemoteSummoningBellInteractionResult Submission,
+        bool OccupiedSummoningBellObserved = false);
 
     private sealed record ProbePosition(float X, float Y, float Z);
 
@@ -469,11 +486,14 @@ internal sealed class RemoteSummoningBellProbe : IDisposable
         bool OutboundPacketObserved,
         float OriginalHitboxRadius,
         float TemporaryHitboxRadius,
+        float OriginalBellY,
+        float TemporaryBellY,
         int PacketsObservedWhileArmed,
         int SizeEligiblePacketsObserved,
         int OutboundRequestCount,
         string Transport,
         string Verdict,
         bool RetainerListReady,
+        bool OccupiedSummoningBellObserved,
         bool OccupiedSummoningBell);
 }

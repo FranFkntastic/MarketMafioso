@@ -160,22 +160,26 @@ internal sealed class RemoteMarketController : IDisposable
                 return "The target system is unavailable.";
 
             var originalRadius = board->HitboxRadius;
+            var originalY = board->Position.Y;
             try
             {
-                board->HitboxRadius = Math.Max(originalRadius, distance + 1f);
+                board->HitboxRadius = 9999f;
+                board->Position.Y = player.Position.Y;
                 targetSystem->InteractWithObject(board, false);
             }
             finally
             {
                 board->HitboxRadius = originalRadius;
+                board->Position.Y = originalY;
             }
 
             log.Information(
-                "[MarketMafioso] Radius-augmented market board interaction from {Distance:F1} yalms (radius {Original:F2} -> {Augmented:F2}, restored).",
+                "[MarketMafioso] Radius-and-elevation-augmented market board interaction from {Distance:F1} yalms (radius {Original:F2} -> 9999, Y {OriginalY:F2} -> {PlayerY:F2}, restored).",
                 distance,
                 originalRadius,
-                distance + 1f);
-            return $"Interacted with the market board object from {distance:F1} yalms through the stock path (radius restored).";
+                originalY,
+                player.Position.Y);
+            return $"Interacted with the market board object from {distance:F1} yalms through the stock path (radius and elevation restored).";
         }
     }
 

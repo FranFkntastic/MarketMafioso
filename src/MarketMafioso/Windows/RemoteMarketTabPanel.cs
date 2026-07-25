@@ -86,7 +86,7 @@ internal sealed class RemoteMarketTabPanel
         ImGui.Separator();
         ImGui.TextColored(MarketMafiosoUiTheme.Header, "Phase A — same-territory bell probe");
         ImGui.TextWrapped(
-            "Secondary client only. Temporarily extends only the loaded bell's hitbox, invokes the stock interaction path, restores the radius immediately, and passively observes one unchanged StartTalkEvent.");
+            "Secondary client only. Extends the loaded bell's hitbox and shadows its Y to the player through the bounded response observation, then restores both fields. The stock StartTalkEvent passes through unchanged.");
 
         var enabled = view.CanSubmit && !view.Active;
         if (!enabled)
