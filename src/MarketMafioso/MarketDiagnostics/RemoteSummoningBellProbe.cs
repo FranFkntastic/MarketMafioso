@@ -543,6 +543,7 @@ internal sealed partial class RemoteSummoningBellProbe : IDisposable
 
     private void ReleaseAutoRetainerSuppression()
     {
+        const string suppressionSuffix = " AutoRetainer remains suppressed until the retainer session closes.";
         releaseSuppressionWhenRetainerListCloses = false;
         var suppression = autoRetainerSuppression;
         autoRetainerSuppression = null;
@@ -550,6 +551,11 @@ internal sealed partial class RemoteSummoningBellProbe : IDisposable
             return;
 
         suppression.Dispose();
+        view = view with { Message = view.Message.Replace(suppressionSuffix, string.Empty, StringComparison.Ordinal) };
+        warmSessionProbeView = warmSessionProbeView with
+        {
+            Message = warmSessionProbeView.Message.Replace(suppressionSuffix, string.Empty, StringComparison.Ordinal),
+        };
         if (suppression.RestoreError is not null)
             log.Error("[MarketMafioso] AutoRetainer suppression restoration failed after remote bell probe: {Error}", suppression.RestoreError);
     }
