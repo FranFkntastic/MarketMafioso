@@ -26,7 +26,7 @@ public sealed class RemoteMarketOverlayWindow : Window
     private static readonly DalamudTableProjection<RemoteMarketListingView> tableProjection = new(
     [
         new("Qty", 48f, listing => listing.Quantity.ToString(), listing => listing.Quantity),
-        new("Unit", 84f, listing => listing.UnitPrice.ToString("N0"), listing => listing.UnitPrice),
+        new("Unit", 84f, listing => listing.UnitPrice.ToString("N0"), listing => listing.UnitPrice, ImGuiTableColumnFlags.WidthFixed | ImGuiTableColumnFlags.DefaultSort),
         new("Fee", 64f, listing => listing.TotalTax.ToString("N0"), listing => listing.TotalTax),
         new("Total", 104f, listing => listing.TotalGil.ToString("N0"), listing => listing.TotalGil),
         new("Mat", 36f, listing => listing.MateriaCount > 0 ? listing.MateriaCount.ToString() : string.Empty, listing => listing.MateriaCount),
@@ -77,6 +77,7 @@ public sealed class RemoteMarketOverlayWindow : Window
             view.Listings.First(listing => listing.ListingId == id).AlreadyPurchased);
 
         DrawHeader(view);
+        DrawEconomicsStrip(view);
         ImGui.Separator();
         DrawListingsTable(view, batchActive);
         ImGui.Separator();
@@ -130,6 +131,31 @@ public sealed class RemoteMarketOverlayWindow : Window
         if (parts.Count == 0)
             return;
         ImGui.TextColored(MarketMafiosoUiTheme.Muted, string.Join(" · ", parts));
+    }
+
+    private static void DrawEconomicsStrip(RemoteMarketView view)
+    {
+        var buyable = view.Listings.Where(listing => !listing.AlreadyPurchased).ToArray();
+        if (buyable.Length == 0)
+            return;
+
+        var cheapest = buyable.Min(listing => listing.UnitPrice);
+        var sorted = buyable.Select(listing => listing.UnitPrice).OrderBy(price => price).ToArray();
+        var median = sorted[sorted.Length / 2];
+        var mean = buyable.Average(listing => (double)listing.UnitPrice);
+        ImGui.TextColored(
+            MarketMafiosoUiTheme.Muted,
+            $"Cheapest {cheapest:N0}p · Median {median:N0}p · Mean {mean:N0}p");
+
+        if (view.MarketContext?.TrendAveragePrice is not { } trend || trend <= 0)
+            return;
+        var delta = (cheapest - trend) / trend;
+        if (Math.Abs(delta) < 0.005)
+            return;
+        ImGui.SameLine();
+        ImGui.TextColored(
+            delta > 0 ? MarketMafiosoUiTheme.Error : MarketMafiosoUiTheme.Muted,
+            delta > 0 ? $"▲ {delta:P0} above sale avg" : $"▼ {-delta:P0} below sale avg");
     }
 
     private void DrawListingsTable(RemoteMarketView view, bool batchActive)

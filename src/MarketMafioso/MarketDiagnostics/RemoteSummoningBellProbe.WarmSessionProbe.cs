@@ -10,13 +10,24 @@ namespace MarketMafioso.MarketDiagnostics;
 internal sealed record WarmSessionRetentionProbeView(
     bool Active,
     bool CanArm,
+    bool CanReplayHeldSession,
+    string Mode,
     string State,
     string Message,
     string Readiness,
+    double? HoldSeconds,
+    float? DistanceMoved,
     string? BellGameObjectId,
     string? RetainerId,
     string? Opcode,
     string? LastEvidencePath);
+
+internal enum WarmSessionReplayMode
+{
+    Immediate,
+    Delayed,
+    Manual,
+}
 
 internal sealed partial class RemoteSummoningBellProbe
 {
@@ -25,15 +36,21 @@ internal sealed partial class RemoteSummoningBellProbe
     private static readonly TimeSpan WarmSessionReplayWindow = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan WarmSessionSuccessSettleWindow = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan WarmSessionCleanupWindow = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan WarmSessionManualHoldWindow = TimeSpan.FromMinutes(10);
+    private static readonly TimeSpan MaximumWarmSessionDelay = TimeSpan.FromMinutes(5);
     private const int MaximumWarmSessionStateSamples = 256;
 
     private WarmSessionProbeSession? warmSessionProbeSession;
     private WarmSessionRetentionProbeView warmSessionProbeView = new(
         false,
         false,
+        false,
+        "Immediate",
         "Idle",
         "Warm-session retention has not been tested.",
         "Stand inside ordinary range of a loaded summoning bell with every retainer window closed.",
+        null,
+        null,
         null,
         null,
         null,
@@ -68,7 +85,23 @@ internal sealed partial class RemoteSummoningBellProbe
         };
     }
 
-    public string BeginWarmSessionRetentionProbe()
+    public string BeginWarmSessionRetentionProbe() =>
+        BeginWarmSessionRetentionProbe(WarmSessionReplayMode.Immediate, WarmSessionReplayDelay);
+
+    public string BeginDelayedWarmSessionRetentionProbe(TimeSpan delay)
+    {
+        if (delay < TimeSpan.FromSeconds(1) || delay > MaximumWarmSessionDelay)
+            return "Choose a warm-session delay from 1 through 300 seconds.";
+
+        return BeginWarmSessionRetentionProbe(WarmSessionReplayMode.Delayed, delay);
+    }
+
+    public string BeginManualWarmSessionRetentionProbe() =>
+        BeginWarmSessionRetentionProbe(WarmSessionReplayMode.Manual, null);
+
+    private string BeginWarmSessionRetentionProbe(
+        WarmSessionReplayMode replayMode,
+        TimeSpan? replayDelay)
     {
         var precondition = ValidateWarmSessionProbeStart();
         if (precondition is not null)
@@ -101,15 +134,29 @@ internal sealed partial class RemoteSummoningBellProbe
             clientState.TerritoryType,
             CapturePosition(),
             objectTable.LocalPlayer?.Name.TextValue ?? string.Empty,
-            arm);
+            arm,
+            replayMode,
+            replayDelay);
         CaptureWarmSessionStateTransition(active);
         warmSessionProbeSession = active;
         warmSessionProbeView = new(
             true,
             false,
+            false,
+            replayMode.ToString(),
             "Armed",
             "Waiting to learn a real scene-1 retainer selection.",
-            "Interact normally: select a retainer, choose Quit, select a retainer again from the reopened list, choose Quit again, then close the reopened retainer list. MMF will suppress that one close and replay the exact second selection automatically.",
+            replayMode switch
+            {
+                WarmSessionReplayMode.Delayed =>
+                    $"Interact normally through the two select/Quit cycles, then close the returned list. MMF will hold the session for {replayDelay!.Value.TotalSeconds:0.#} seconds before one replay.",
+                WarmSessionReplayMode.Manual =>
+                    "Interact normally through the two select/Quit cycles, then close the returned list. MMF will hold the session until /mmf probe-bell-warm-replay.",
+                _ =>
+                    "Interact normally: select a retainer, choose Quit, select a retainer again from the reopened list, choose Quit again, then close the reopened retainer list. MMF will suppress that one close and replay the exact second selection automatically.",
+            },
+            null,
+            null,
             FormatGameObjectId(arm.BellGameObjectId),
             null,
             null,
@@ -119,7 +166,36 @@ internal sealed partial class RemoteSummoningBellProbe
             arm.BellGameObjectId,
             arm.BellEventId,
             active.TerritoryId);
-        return $"Warm-session retention armed. {warmSessionProbeView.Readiness} {suppressionMessage}";
+        return $"Warm-session {replayMode.ToString().ToLowerInvariant()} replay armed. {warmSessionProbeView.Readiness} {suppressionMessage}";
+    }
+
+    public string ReplayHeldWarmSession()
+    {
+        if (warmSessionProbeSession is not { } active)
+            return "The warm-session retention probe is not active.";
+        if (active.ReplayMode != WarmSessionReplayMode.Manual)
+            return $"The active warm-session probe is in {active.ReplayMode.ToString().ToLowerInvariant()} mode.";
+
+        var transport = bell.ObserveWarmSessionRetention();
+        if (!transport.TeardownSuppressed)
+            return "The warm session is not held yet. Finish the two select/Quit cycles and close the returned retainer list first.";
+        if (transport.ReplaySent || active.ManualReplayRequested)
+            return "The held warm-session replay has already been released.";
+        if (IsAnyRetainerAddonOpen())
+            return "Wait for every retainer addon to close before releasing the held replay.";
+
+        var now = DateTimeOffset.UtcNow;
+        active.ManualReplayRequested = true;
+        active.ReplayNotBeforeUtc = now;
+        active.DeadlineUtc = now + WarmSessionReplayWindow;
+        warmSessionProbeView = warmSessionProbeView with
+        {
+            CanReplayHeldSession = false,
+            State = "Replay released",
+            Message = "Manual release accepted; the exact held scene-1 selection will be sent on the framework thread.",
+            Readiness = "Waiting for the matching scene-2 response and retainer command menu.",
+        };
+        return "Manual warm-session replay released.";
     }
 
     public string GetWarmSessionProbeStatus()
@@ -223,22 +299,72 @@ internal sealed partial class RemoteSummoningBellProbe
 
         if (transport.TeardownSuppressed && active.TeardownSuppressedAtUtc is null)
         {
+            var configuredDelay = active.ReplayDelay ?? WarmSessionReplayDelay;
             active.TeardownSuppressedAtUtc = now;
+            active.HeldPosition = CapturePosition();
+            active.ReplayNotBeforeUtc = active.ReplayMode == WarmSessionReplayMode.Manual
+                ? null
+                : now + configuredDelay;
+            active.DeadlineUtc = active.ReplayMode == WarmSessionReplayMode.Manual
+                ? now + WarmSessionManualHoldWindow
+                : now + configuredDelay + WarmSessionReplayWindow;
             warmSessionProbeView = warmSessionProbeView with
             {
                 State = "Session held",
                 Message = transport.Message,
-                Readiness = "Waiting for the stock windows to finish closing before the single replay.",
+                CanReplayHeldSession = active.ReplayMode == WarmSessionReplayMode.Manual,
+                HoldSeconds = 0,
+                DistanceMoved = 0,
+                Readiness = active.ReplayMode switch
+                {
+                    WarmSessionReplayMode.Delayed =>
+                        $"Holding stationary for {configuredDelay.TotalSeconds:0.#} seconds before the single replay.",
+                    WarmSessionReplayMode.Manual =>
+                        "Session held. Move or wait as intended, then run /mmf probe-bell-warm-replay.",
+                    _ =>
+                        "Waiting for the stock windows to finish closing before the single replay.",
+                },
             };
         }
 
+        if (active.TeardownSuppressedAtUtc is { } suppressionAt &&
+            !transport.ReplaySent &&
+            active.CleanupStartedAtUtc is null)
+        {
+            var heldFor = now - suppressionAt;
+            var moved = DistanceBetween(active.HeldPosition, CapturePosition());
+            warmSessionProbeView = warmSessionProbeView with
+            {
+                CanReplayHeldSession =
+                    active.ReplayMode == WarmSessionReplayMode.Manual &&
+                    !active.ManualReplayRequested &&
+                    !IsAnyRetainerAddonOpen(),
+                HoldSeconds = heldFor.TotalSeconds,
+                DistanceMoved = moved,
+                Readiness = active.ReplayMode switch
+                {
+                    WarmSessionReplayMode.Manual when !active.ManualReplayRequested =>
+                        $"Held for {heldFor.TotalSeconds:0.0}s; moved {moved:0.0}y. Run /mmf probe-bell-warm-replay when ready.",
+                    WarmSessionReplayMode.Delayed when active.ReplayNotBeforeUtc is { } replayAt =>
+                        $"Held for {heldFor.TotalSeconds:0.0}s; replay in {Math.Max(0, (replayAt - now).TotalSeconds):0.0}s.",
+                    _ => warmSessionProbeView.Readiness,
+                },
+            };
+        }
+
+        var replayAuthorized =
+            active.ReplayMode != WarmSessionReplayMode.Manual ||
+            active.ManualReplayRequested;
         if (transport.TeardownSuppressed &&
             !transport.ReplaySent &&
             active.CleanupStartedAtUtc is null &&
-            active.TeardownSuppressedAtUtc is { } heldAt &&
-            now - heldAt >= WarmSessionReplayDelay &&
+            replayAuthorized &&
+            active.ReplayNotBeforeUtc is { } replayNotBefore &&
+            now >= replayNotBefore &&
             !IsAnyRetainerAddonOpen())
         {
+            active.ReplayRequestedAtUtc ??= now;
+            active.ReplayPosition = CapturePosition();
             var replay = bell.ReplayWarmSessionSelection();
             active.ReplayStartedAtUtc = now;
             active.DeadlineUtc = now + WarmSessionReplayWindow;
@@ -253,6 +379,11 @@ internal sealed partial class RemoteSummoningBellProbe
                 State = "Replay sent",
                 Message = replay.Message,
                 Readiness = "Waiting for the exact bell/event scene-2 response and the retainer command menu.",
+                CanReplayHeldSession = false,
+                HoldSeconds = active.TeardownSuppressedAtUtc is { } heldAt
+                    ? (now - heldAt).TotalSeconds
+                    : null,
+                DistanceMoved = DistanceBetween(active.HeldPosition, active.ReplayPosition),
             };
             transport = replay;
         }
@@ -381,6 +512,18 @@ internal sealed partial class RemoteSummoningBellProbe
             active.Arm.BellEventIdSource,
             active.Arm.Distance,
             active.Arm.OrdinaryInteractionDistance,
+            active.ReplayMode.ToString(),
+            active.ReplayDelay?.TotalSeconds,
+            active.TeardownSuppressedAtUtc,
+            active.ReplayRequestedAtUtc,
+            active.ReplayStartedAtUtc,
+            active.HeldPosition,
+            active.ReplayPosition,
+            active.TeardownSuppressedAtUtc is { } heldAt &&
+            active.ReplayStartedAtUtc is { } replayAt
+                ? (replayAt - heldAt).TotalMilliseconds
+                : null,
+            DistanceBetween(active.HeldPosition, active.ReplayPosition),
             verdict,
             message,
             commandMenuObserved,
@@ -396,6 +539,8 @@ internal sealed partial class RemoteSummoningBellProbe
         warmSessionProbeView = new(
             false,
             false,
+            false,
+            active.ReplayMode.ToString(),
             verdict,
             releaseSuppressionWhenRetainerListCloses
                 ? $"{message} AutoRetainer remains suppressed until the retainer session closes."
@@ -403,6 +548,11 @@ internal sealed partial class RemoteSummoningBellProbe
             verdict == "Confirmed"
                 ? "Choose Quit and close the returned retainer list normally; this probe will not intercept anything else."
                 : message,
+            active.TeardownSuppressedAtUtc is { } viewHeldAt &&
+            active.ReplayStartedAtUtc is { } viewReplayAt
+                ? (viewReplayAt - viewHeldAt).TotalSeconds
+                : null,
+            DistanceBetween(active.HeldPosition, active.ReplayPosition),
             FormatGameObjectId(active.Arm.BellGameObjectId),
             transport.RetainerId == 0 ? null : $"0x{transport.RetainerId:X16}",
             transport.Opcode == 0 ? null : $"0x{transport.Opcode:X}",
@@ -478,7 +628,9 @@ internal sealed partial class RemoteSummoningBellProbe
             uint territoryId,
             ProbePosition? startPosition,
             string characterName,
-            WarmSessionRetentionArmResult arm)
+            WarmSessionRetentionArmResult arm,
+            WarmSessionReplayMode replayMode,
+            TimeSpan? replayDelay)
         {
             StartedAtUtc = startedAtUtc;
             DeadlineUtc = deadlineUtc;
@@ -486,6 +638,8 @@ internal sealed partial class RemoteSummoningBellProbe
             StartPosition = startPosition;
             CharacterName = characterName;
             Arm = arm;
+            ReplayMode = replayMode;
+            ReplayDelay = replayDelay;
         }
 
         public DateTimeOffset StartedAtUtc { get; }
@@ -494,13 +648,20 @@ internal sealed partial class RemoteSummoningBellProbe
         public ProbePosition? StartPosition { get; }
         public string CharacterName { get; }
         public WarmSessionRetentionArmResult Arm { get; }
+        public WarmSessionReplayMode ReplayMode { get; }
+        public TimeSpan? ReplayDelay { get; }
         public bool SelectionObserved { get; set; }
         public bool Scene1SelectionObserved { get; set; }
         public bool CancelRequested { get; set; }
+        public bool ManualReplayRequested { get; set; }
         public DateTimeOffset? TeardownSuppressedAtUtc { get; set; }
+        public DateTimeOffset? ReplayNotBeforeUtc { get; set; }
+        public DateTimeOffset? ReplayRequestedAtUtc { get; set; }
         public DateTimeOffset? ReplayStartedAtUtc { get; set; }
         public DateTimeOffset? Scene2ObservedAtUtc { get; set; }
         public DateTimeOffset? CleanupStartedAtUtc { get; set; }
+        public ProbePosition? HeldPosition { get; set; }
+        public ProbePosition? ReplayPosition { get; set; }
         public NormalBellClientState? LastState { get; set; }
         public List<NormalBellClientStateSample> StateSamples { get; } = [];
     }
@@ -517,9 +678,29 @@ internal sealed partial class RemoteSummoningBellProbe
         string BellEventIdSource,
         float Distance,
         float OrdinaryInteractionDistance,
+        string ReplayMode,
+        double? RequestedHoldSeconds,
+        DateTimeOffset? TeardownSuppressedAtUtc,
+        DateTimeOffset? ReplayRequestedAtUtc,
+        DateTimeOffset? ReplayStartedAtUtc,
+        ProbePosition? HeldPosition,
+        ProbePosition? ReplayPosition,
+        double? ActualHoldMilliseconds,
+        float DistanceMovedBeforeReplay,
         string Verdict,
         string Message,
         bool CommandMenuObserved,
         NormalBellClientStateSample[] StateTransitions,
         WarmSessionRetentionProbeObservation Transport);
+
+    private static float DistanceBetween(ProbePosition? left, ProbePosition? right)
+    {
+        if (left is null || right is null)
+            return 0;
+
+        var x = right.X - left.X;
+        var y = right.Y - left.Y;
+        var z = right.Z - left.Z;
+        return MathF.Sqrt((x * x) + (y * y) + (z * z));
+    }
 }

@@ -207,7 +207,7 @@ public sealed class Plugin : IDalamudPlugin
                 "\"/mmf capture-bell\" to arm the passive normal-bell flight recorder. " +
                 "Use \"/mmf capture-bell-lifecycle\" for the complete open/select/return/close trace. " +
                 "Yield tests: \"/mmf probe-bell-yield-control\" then \"/mmf probe-bell-yield-direct\". " +
-                "Warm retention: \"/mmf probe-bell-warm\".",
+                "Warm retention: \"/mmf probe-bell-warm\", \"/mmf probe-bell-warm-delay <seconds>\", or \"/mmf probe-bell-warm-manual\".",
         });
 
         PluginInterface.UiBuilder.Draw += DrawUI;
@@ -223,7 +223,14 @@ public sealed class Plugin : IDalamudPlugin
 
     private void OnCommand(string command, string args)
     {
-        switch (args.Trim().ToLowerInvariant())
+        var commandParts = args.Trim().Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
+        var commandName = commandParts.Length == 0
+            ? string.Empty
+            : commandParts[0].ToLowerInvariant();
+        var commandArgument = commandParts.Length < 2
+            ? string.Empty
+            : commandParts[1].Trim();
+        switch (commandName)
         {
             case "send":
                 Framework.RunOnTick(() => _ = reporter.SendReportAsync());
@@ -333,6 +340,40 @@ public sealed class Plugin : IDalamudPlugin
             case "probe-bell-warm":
 #if DEBUG
                 ChatGui.Print($"[MMF] Warm-session retention: {mainWindow.BeginWarmSessionRetentionProbe()}");
+                break;
+#else
+                ChatGui.Print("[MMF] Warm-session retention is only available in debug builds.");
+                break;
+#endif
+
+            case "probe-bell-warm-delay":
+#if DEBUG
+                if (!int.TryParse(commandArgument, out var delaySeconds))
+                {
+                    ChatGui.PrintError("[MMF] Usage: /mmf probe-bell-warm-delay <seconds>, from 1 through 300.");
+                    break;
+                }
+                ChatGui.Print(
+                    $"[MMF] Warm-session retention: " +
+                    mainWindow.BeginDelayedWarmSessionRetentionProbe(TimeSpan.FromSeconds(delaySeconds)));
+                break;
+#else
+                ChatGui.Print("[MMF] Warm-session retention is only available in debug builds.");
+                break;
+#endif
+
+            case "probe-bell-warm-manual":
+#if DEBUG
+                ChatGui.Print($"[MMF] Warm-session retention: {mainWindow.BeginManualWarmSessionRetentionProbe()}");
+                break;
+#else
+                ChatGui.Print("[MMF] Warm-session retention is only available in debug builds.");
+                break;
+#endif
+
+            case "probe-bell-warm-replay":
+#if DEBUG
+                ChatGui.Print($"[MMF] Warm-session retention: {mainWindow.ReplayHeldWarmSession()}");
                 break;
 #else
                 ChatGui.Print("[MMF] Warm-session retention is only available in debug builds.");

@@ -57,9 +57,13 @@ public sealed record AgentBridgeRemoteBellProbeTruth
     public string? YieldProbeLastEvidencePath { get; init; }
     public bool WarmSessionActive { get; init; }
     public bool WarmSessionCanArm { get; init; }
+    public bool WarmSessionCanReplayHeld { get; init; }
+    public string? WarmSessionMode { get; init; }
     public string? WarmSessionState { get; init; }
     public string? WarmSessionMessage { get; init; }
     public string? WarmSessionReadiness { get; init; }
+    public double? WarmSessionHoldSeconds { get; init; }
+    public float? WarmSessionDistanceMoved { get; init; }
     public string? WarmSessionRetainerId { get; init; }
     public string? WarmSessionOpcode { get; init; }
     public string? WarmSessionLastEvidencePath { get; init; }

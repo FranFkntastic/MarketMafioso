@@ -478,9 +478,13 @@ public class MainWindow : Window, IDisposable
                 YieldProbeLastEvidencePath = yieldBellProbe.LastEvidencePath,
                 WarmSessionActive = warmBellProbe.Active,
                 WarmSessionCanArm = warmBellProbe.CanArm,
+                WarmSessionCanReplayHeld = warmBellProbe.CanReplayHeldSession,
+                WarmSessionMode = warmBellProbe.Mode,
                 WarmSessionState = warmBellProbe.State,
                 WarmSessionMessage = warmBellProbe.Message,
                 WarmSessionReadiness = warmBellProbe.Readiness,
+                WarmSessionHoldSeconds = warmBellProbe.HoldSeconds,
+                WarmSessionDistanceMoved = warmBellProbe.DistanceMoved,
                 WarmSessionRetainerId = warmBellProbe.RetainerId,
                 WarmSessionOpcode = warmBellProbe.Opcode,
                 WarmSessionLastEvidencePath = warmBellProbe.LastEvidencePath,
@@ -674,6 +678,15 @@ public class MainWindow : Window, IDisposable
 
     public string BeginWarmSessionRetentionProbe() =>
         remoteSummoningBellProbe.BeginWarmSessionRetentionProbe();
+
+    public string BeginDelayedWarmSessionRetentionProbe(TimeSpan delay) =>
+        remoteSummoningBellProbe.BeginDelayedWarmSessionRetentionProbe(delay);
+
+    public string BeginManualWarmSessionRetentionProbe() =>
+        remoteSummoningBellProbe.BeginManualWarmSessionRetentionProbe();
+
+    public string ReplayHeldWarmSession() =>
+        remoteSummoningBellProbe.ReplayHeldWarmSession();
 
     public string GetWarmSessionRetentionProbeStatus() =>
         remoteSummoningBellProbe.GetWarmSessionProbeStatus();

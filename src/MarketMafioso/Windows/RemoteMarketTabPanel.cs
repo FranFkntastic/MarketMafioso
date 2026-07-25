@@ -112,9 +112,46 @@ internal sealed class RemoteMarketTabPanel
             SubmitWarmSessionRetention,
             view.Readiness);
 
+        ImGui.SameLine();
+        var manualEnabled = view.CanArm && !view.Active;
+        if (!manualEnabled)
+            ImGui.BeginDisabled();
+        if (ImGui.Button("Arm manual hold"))
+            SubmitManualWarmSessionRetention();
+        if (!manualEnabled)
+            ImGui.EndDisabled();
+        reviewRegistry.RegisterLastButton(
+            "remote-bell.warm-retention-manual",
+            "Arm manual warm-session hold",
+            manualEnabled,
+            SubmitManualWarmSessionRetention,
+            view.Readiness);
+
+        if (view.Active && view.Mode == "Manual")
+        {
+            var replayEnabled = view.CanReplayHeldSession;
+            if (!replayEnabled)
+                ImGui.BeginDisabled();
+            if (ImGui.Button("Release held replay"))
+                SubmitHeldWarmSessionReplay();
+            if (!replayEnabled)
+                ImGui.EndDisabled();
+            reviewRegistry.RegisterLastButton(
+                "remote-bell.warm-retention-replay",
+                "Release held warm-session replay",
+                replayEnabled,
+                SubmitHeldWarmSessionReplay,
+                view.Readiness);
+        }
+
         DrawRow("Readiness", view.Readiness);
+        DrawRow("Mode", view.Mode);
         DrawRow("State", view.State);
         DrawRow("Result", view.Message);
+        if (view.HoldSeconds is not null)
+            DrawRow("Held", $"{view.HoldSeconds:0.0}s");
+        if (view.DistanceMoved is not null)
+            DrawRow("Moved", $"{view.DistanceMoved:0.0}y");
         if (view.RetainerId is not null)
             DrawRow("Retainer", view.RetainerId);
         if (view.Opcode is not null)
@@ -289,6 +326,18 @@ internal sealed class RemoteMarketTabPanel
     private void SubmitWarmSessionRetention()
     {
         var message = bellProbe.BeginWarmSessionRetentionProbe();
+        Plugin.ChatGui.Print($"[MMF] Warm-session retention: {message}");
+    }
+
+    private void SubmitManualWarmSessionRetention()
+    {
+        var message = bellProbe.BeginManualWarmSessionRetentionProbe();
+        Plugin.ChatGui.Print($"[MMF] Warm-session retention: {message}");
+    }
+
+    private void SubmitHeldWarmSessionReplay()
+    {
+        var message = bellProbe.ReplayHeldWarmSession();
         Plugin.ChatGui.Print($"[MMF] Warm-session retention: {message}");
     }
 
