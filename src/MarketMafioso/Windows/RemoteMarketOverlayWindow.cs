@@ -17,6 +17,7 @@ public sealed class RemoteMarketOverlayWindow : Window
     private readonly HashSet<ulong> selectedListingIds = [];
     private bool confirmArmed;
     private int cheapestTarget = 1;
+    private bool pinned = true;
 
     internal RemoteMarketOverlayWindow(RemoteMarketController controller)
         : base(
@@ -36,8 +37,8 @@ public sealed class RemoteMarketOverlayWindow : Window
 
     public override void PreDraw()
     {
-        if (controller.TryGetResultAnchor(out var anchor))
-            ImGui.SetNextWindowPos(anchor, ImGuiCond.FirstUseEver);
+        if (pinned && controller.TryGetResultAnchor(out var anchor))
+            ImGui.SetNextWindowPos(anchor, ImGuiCond.Always);
     }
 
     public override void Draw()
@@ -83,6 +84,10 @@ public sealed class RemoteMarketOverlayWindow : Window
         var gilText = view.GilOnHand is { } gil ? $"{gil:N0} gil on hand" : "gil unavailable";
         ImGui.TextColored(MarketMafiosoUiTheme.Muted, $"{view.Listings.Count} listings · {gilText}");
         ImGui.EndGroup();
+
+        ImGui.SameLine(ImGui.GetContentRegionAvail().X + ImGui.GetCursorPosX() - 34f);
+        if (ImGui.SmallButton(pinned ? "Unpin" : "Pin"))
+            pinned = !pinned;
     }
 
     private void DrawListingsTable(RemoteMarketView view, bool batchActive)
