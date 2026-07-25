@@ -594,11 +594,15 @@ internal sealed partial class RemoteSummoningBellProbe
                         ? "CancelledAndCleanedUp"
                         : active.BootstrapFailure is not null
                             ? "BootstrapFailedAndCleanedUp"
+                            : active.NavigationFailure is not null
+                                ? "MovementBlockedAndCleanedUp"
                             : "NoMatchingScene2",
                     active.CancelRequested
                         ? "The warm-session probe was cancelled and the held stock teardown was acknowledged."
                         : active.BootstrapFailure is { } bootstrapFailure
                             ? $"Automated bootstrap failed ({bootstrapFailure.Code}); the held stock teardown was released and acknowledged."
+                            : active.NavigationFailure is { } navigationFailure
+                                ? $"{navigationFailure} No retained-session replay was sent; the held stock teardown was released and acknowledged."
                             : "The retained-session selection produced no matching scene 2; the held stock teardown was released and acknowledged.",
                     false);
                 return;
@@ -612,9 +616,13 @@ internal sealed partial class RemoteSummoningBellProbe
                         ? "CancelledCleanupUnconfirmed"
                         : active.BootstrapFailure is not null
                             ? "BootstrapFailureCleanupUnconfirmed"
+                            : active.NavigationFailure is not null
+                                ? "MovementBlockedCleanupUnconfirmed"
                             : "CleanupUnconfirmed",
                     active.BootstrapFailure is { } bootstrapFailure
                         ? $"Automated bootstrap failed ({bootstrapFailure.Code}); the held stock teardown was released, but its acknowledgement was not confirmed inside the cleanup window."
+                        : active.NavigationFailure is { } navigationFailure
+                            ? $"{navigationFailure} No retained-session replay was sent; the held stock teardown was released, but its acknowledgement was not confirmed inside the cleanup window."
                         : "The held stock teardown was released, but its acknowledgement was not confirmed inside the cleanup window.",
                     false);
             }
