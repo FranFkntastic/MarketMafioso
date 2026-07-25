@@ -175,11 +175,8 @@ public class MainWindow : Window, IDisposable
             Plugin.MarketBoard,
             Plugin.ClientState,
             Plugin.ObjectTable,
-            Plugin.TargetManager,
             Plugin.Framework,
             Plugin.GameGui,
-            Plugin.ToastGui,
-            Plugin.GameInteropProvider,
             Plugin.Condition,
             Plugin.ChatGui,
             log,
@@ -424,6 +421,7 @@ public class MainWindow : Window, IDisposable
         var activeStop = snapshot.ActiveStop;
         var persistedExactAcquisition = exactAcquisitionRouteStateStore.Restore();
         var remoteBellProbe = remoteSummoningBellProbe.GetView();
+        var normalBellCapture = remoteSummoningBellProbe.GetNormalCaptureView();
         return new AgentBridgeTruth
         {
             SchemaVersion = 1,
@@ -451,6 +449,12 @@ public class MainWindow : Window, IDisposable
                 Distance = remoteBellProbe.Distance,
                 OrdinaryInteractionDistance = remoteBellProbe.OrdinaryInteractionDistance,
                 LastEvidencePath = remoteBellProbe.LastEvidencePath,
+                NormalCaptureActive = normalBellCapture.Active,
+                NormalCaptureCanArm = normalBellCapture.CanArm,
+                NormalCaptureState = normalBellCapture.State,
+                NormalCaptureMessage = normalBellCapture.Message,
+                NormalCaptureReadiness = normalBellCapture.Readiness,
+                NormalCaptureLastEvidencePath = normalBellCapture.LastEvidencePath,
             },
             Route = new AgentBridgeRouteTruth
             {
@@ -621,6 +625,12 @@ public class MainWindow : Window, IDisposable
     public string OpenRemoteMarketBoard() => remoteMarketController.OpenMarketBoard();
 
     public string BeginRemoteSummoningBellProbe() => remoteSummoningBellProbe.BeginProbe();
+
+    public string BeginNormalSummoningBellCapture() => remoteSummoningBellProbe.BeginNormalCapture();
+
+    public string GetNormalSummoningBellCaptureStatus() => remoteSummoningBellProbe.GetNormalCaptureStatus();
+
+    public string CancelNormalSummoningBellCapture() => remoteSummoningBellProbe.CancelNormalCapture();
 
     public void BeginAgentReviewFrame() => AgentReviewRegistry.BeginFrame();
 

@@ -21,7 +21,7 @@ internal sealed record RemoteSummoningBellProbeView(
     float? OrdinaryInteractionDistance,
     string? LastEvidencePath);
 
-internal sealed class RemoteSummoningBellProbe : IDisposable
+internal sealed partial class RemoteSummoningBellProbe : IDisposable
 {
     private const string ProbePhase = "A-loaded-same-zone-out-of-range";
     private static readonly TimeSpan ObservationWindow = TimeSpan.FromSeconds(10);
@@ -97,6 +97,7 @@ internal sealed class RemoteSummoningBellProbe : IDisposable
                 clientState.IsLoggedIn &&
                 observation.Available &&
                 observation.OutsideOrdinaryInteractionRange &&
+                normalCaptureSession is null &&
                 !IsRetainerListReady(),
             Readiness = observation.Message,
             BellGameObjectId = FormatGameObjectId(observation.BellGameObjectId),
@@ -113,6 +114,8 @@ internal sealed class RemoteSummoningBellProbe : IDisposable
             return "Enable Market Diagnostics in settings before running the remote bell probe.";
         if (!clientState.IsLoggedIn)
             return "Remote bell probe requires a logged-in character.";
+        if (normalCaptureSession is not null)
+            return "The normal bell flight recorder is already armed.";
         if (session is not null)
             return "A remote bell probe is already observing its single submitted request.";
         if (IsRetainerListReady())
@@ -186,9 +189,14 @@ internal sealed class RemoteSummoningBellProbe : IDisposable
     {
         if (disposed)
             return;
+        if (normalCaptureSession is not null)
+        {
+            UpdateNormalCapture();
+            return;
+        }
         if (session is not { } active)
         {
-            if (releaseSuppressionWhenRetainerListCloses && !IsRetainerListReady())
+            if (releaseSuppressionWhenRetainerListCloses && !IsAnyRetainerSessionUiOpen())
                 ReleaseAutoRetainerSuppression();
             return;
         }
@@ -534,6 +542,7 @@ internal sealed class RemoteSummoningBellProbe : IDisposable
 
         disposed = true;
         session = null;
+        normalCaptureSession = null;
         bell.CancelTalkPacketTransport("The remote bell probe was disposed.");
         ReleaseAutoRetainerSuppression();
         autoRetainer.Dispose();

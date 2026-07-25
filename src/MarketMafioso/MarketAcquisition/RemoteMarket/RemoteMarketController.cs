@@ -4,18 +4,12 @@ using System.IO;
 using System.Linq;
 using System.Text.Json;
 using Dalamud.Game.ClientState.Conditions;
-using Dalamud.Game.ClientState.Objects.Enums;
 using Dalamud.Game.Network.Structures;
-using Dalamud.Hooking;
 using Dalamud.Plugin.Services;
-using FFXIVClientStructs.FFXIV.Application.Network;
 using FFXIVClientStructs.FFXIV.Client.Game;
-using FFXIVClientStructs.FFXIV.Client.Game.Control;
-using FFXIVClientStructs.FFXIV.Client.Game.Object;
 using FFXIVClientStructs.FFXIV.Client.UI;
 using FFXIVClientStructs.FFXIV.Client.UI.Agent;
 using FFXIVClientStructs.FFXIV.Client.UI.Info;
-using DalamudObjectKind = Dalamud.Game.ClientState.Objects.Enums.ObjectKind;
 
 namespace MarketMafioso.MarketAcquisition.RemoteMarket;
 
@@ -42,15 +36,9 @@ internal sealed class RemoteMarketController : IDisposable
     private readonly IMarketBoard marketBoard;
     private readonly IClientState clientState;
     private readonly IObjectTable objectTable;
-    private readonly ITargetManager targetManager;
     private readonly IFramework framework;
     private readonly IGameGui gameGui;
-    private readonly IToastGui toastGui;
     private readonly ICondition condition;
-    private readonly Hook<ZoneClient.Delegates.SendPacket>? sendPacketHook;
-    private readonly List<string> pendingToastCapture = [];
-    private readonly List<string> pendingOutgoingCapture = [];
-    private DateTimeOffset toastCaptureUntilUtc;
     private readonly IChatGui chatGui;
     private readonly IPluginLog log;
     private readonly Func<uint, string?> resolveItemName;
@@ -66,11 +54,8 @@ internal sealed class RemoteMarketController : IDisposable
         IMarketBoard marketBoard,
         IClientState clientState,
         IObjectTable objectTable,
-        ITargetManager targetManager,
         IFramework framework,
         IGameGui gameGui,
-        IToastGui toastGui,
-        IGameInteropProvider interopProvider,
         ICondition condition,
         IChatGui chatGui,
         IPluginLog log,
@@ -81,34 +66,15 @@ internal sealed class RemoteMarketController : IDisposable
         this.marketBoard = marketBoard;
         this.clientState = clientState;
         this.objectTable = objectTable;
-        this.targetManager = targetManager;
         this.framework = framework;
         this.gameGui = gameGui;
-        this.toastGui = toastGui;
         this.condition = condition;
-        try
-        {
-            unsafe
-            {
-                sendPacketHook = interopProvider.HookFromAddress<ZoneClient.Delegates.SendPacket>(
-                    (nint)ZoneClient.MemberFunctionPointers.SendPacket,
-                    SendPacketDetour);
-                sendPacketHook.Enable();
-            }
-        }
-        catch (Exception exception)
-        {
-            sendPacketHook = null;
-            log.Warning(exception, "[MarketMafioso] SendPacket observation hook unavailable for remote market probing.");
-        }
         this.chatGui = chatGui;
         this.log = log;
         this.resolveItemName = resolveItemName;
         evidenceDirectory = Path.Combine(pluginConfigDirectory, "remote-market");
         marketBoard.PurchaseRequested += OnPurchaseRequested;
         marketBoard.ItemPurchased += OnItemPurchased;
-        toastGui.Toast += OnToastObserved;
-        toastGui.ErrorToast += OnErrorToastObserved;
     }
 
     public bool IsAvailable =>
@@ -118,33 +84,6 @@ internal sealed class RemoteMarketController : IDisposable
     {
         marketBoard.PurchaseRequested -= OnPurchaseRequested;
         marketBoard.ItemPurchased -= OnItemPurchased;
-        toastGui.Toast -= OnToastObserved;
-        toastGui.ErrorToast -= OnErrorToastObserved;
-        sendPacketHook?.Dispose();
-    }
-
-    private unsafe bool SendPacketDetour(ZoneClient* zoneClient, nint packet, uint argument3, uint argument4, bool argument5)
-    {
-        if (packet != 0 && DateTimeOffset.UtcNow <= toastCaptureUntilUtc)
-        {
-            var opcode = *(uint*)packet;
-            var target = *(uint*)(packet + 0x10);
-            pendingOutgoingCapture.Add($"0x{opcode:X} (target {target:X})");
-        }
-        return sendPacketHook!.Original(zoneClient, packet, argument3, argument4, argument5);
-    }
-
-    private void OnToastObserved(ref Dalamud.Game.Text.SeStringHandling.SeString message, ref Dalamud.Game.Gui.Toast.ToastOptions options, ref bool isHandled) =>
-        CaptureToast("normal", message.TextValue);
-
-    private void OnErrorToastObserved(ref Dalamud.Game.Text.SeStringHandling.SeString message, ref bool isHandled) =>
-        CaptureToast("error", message.TextValue);
-
-    private void CaptureToast(string kind, string text)
-    {
-        if (DateTimeOffset.UtcNow > toastCaptureUntilUtc || string.IsNullOrWhiteSpace(text))
-            return;
-        pendingToastCapture.Add($"{kind}: {text}");
     }
 
     public string? GetPurchaseContextBlockReason()
@@ -181,113 +120,6 @@ internal sealed class RemoteMarketController : IDisposable
             var opened = agent->IsAgentActive();
             log.Information("[MarketMafioso] Remote market board opened. Territory={Territory} AgentActive={AgentActive}", clientState.TerritoryType, opened);
             return opened ? "Market board opened." : "Market board was shown but did not activate.";
-        }
-    }
-
-    public unsafe string OpenMarketBoardViaObject()
-    {
-        if (!IsAvailable)
-            return "Remote market is locked.";
-        if (!clientState.IsLoggedIn)
-            return "Log in first.";
-
-        var player = objectTable.LocalPlayer;
-        if (player is null)
-            return "The local player is unavailable.";
-
-        GameObject* board = null;
-        Dalamud.Game.ClientState.Objects.Types.IGameObject? boardWrapper = null;
-        var distance = 0f;
-        foreach (var candidate in objectTable)
-        {
-            if (candidate.ObjectKind != DalamudObjectKind.EventObj ||
-                !candidate.Name.TextValue.Contains("Market Board", StringComparison.OrdinalIgnoreCase))
-                continue;
-            board = (GameObject*)candidate.Address;
-            boardWrapper = candidate;
-            distance = System.Numerics.Vector3.Distance(player.Position, candidate.Position);
-            break;
-        }
-
-        if (board == null)
-            return "No market board object is loaded in this zone.";
-
-        var startedAtUtc = DateTimeOffset.UtcNow;
-        var territory = clientState.TerritoryType;
-        var position = player.Position;
-        unsafe
-        {
-            var targetSystem = TargetSystem.Instance();
-            if (targetSystem == null)
-                return "The target system is unavailable.";
-
-            var originalRadius = board->HitboxRadius;
-            var originalPosition = board->Position;
-            var originalDefaultPosition = board->DefaultPosition;
-            var nativePlayer = (GameObject*)player.Address;
-            var originalPlayerPosition = nativePlayer->Position;
-            board->HitboxRadius = 9999f;
-            board->Position = originalPosition;
-            board->DefaultPosition = originalDefaultPosition;
-            nativePlayer->Position = originalPosition;
-            targetManager.Target = boardWrapper;
-            targetSystem->InteractWithObject(board, false);
-
-            var boardId = board->EntityId;
-            var radius = originalRadius;
-            var boardPosition = originalPosition;
-            pendingToastCapture.Clear();
-            toastCaptureUntilUtc = startedAtUtc + TimeSpan.FromSeconds(2);
-            framework.RunOnTick(
-                () =>
-                {
-                    WriteBoardObjectProbeEvidence(startedAtUtc, territory, position, boardId, boardPosition, radius);
-                    nativePlayer->Position = originalPlayerPosition;
-                    board->HitboxRadius = radius;
-                },
-                TimeSpan.FromMilliseconds(750));
-
-            log.Information(
-                "[MarketMafioso] Radius-and-elevation-augmented market board interaction from {Distance:F1} yalms (radius {Original:F2} -> 9999, Y {OriginalY:F2} -> {PlayerY:F2}, restored).",
-                distance,
-                originalRadius,
-                originalPosition.Y,
-                player.Position.Y);
-            return $"Interacted with the market board object from {distance:F1} yalms through the stock path (radius and elevation restored).";
-        }
-    }
-
-    private void WriteBoardObjectProbeEvidence(
-        DateTimeOffset startedAtUtc,
-        uint territory,
-        System.Numerics.Vector3 playerPosition,
-        uint boardId,
-        System.Numerics.Vector3 boardPosition,
-        float originalRadius)
-    {
-        try
-        {
-            Directory.CreateDirectory(evidenceDirectory);
-            var path = Path.Combine(evidenceDirectory, $"board-object-probe-{startedAtUtc:yyyyMMdd-HHmmss-fff}.json");
-            File.WriteAllText(path, JsonSerializer.Serialize(new
-            {
-                startedAtUtc,
-                concludedAtUtc = DateTimeOffset.UtcNow,
-                territory,
-                playerPosition = playerPosition.ToString(),
-                boardId,
-                boardPosition = boardPosition.ToString(),
-                originalRadius,
-                boardWindowOpen = IsMarketBoardResultVisible(),
-                toasts = pendingToastCapture.ToArray(),
-                outgoingPackets = pendingOutgoingCapture.ToArray(),
-            }, new JsonSerializerOptions { WriteIndented = true }));
-            pendingToastCapture.Clear();
-            pendingOutgoingCapture.Clear();
-        }
-        catch (Exception exception)
-        {
-            log.Warning(exception, "[MarketMafioso] Board object probe evidence could not be written.");
         }
     }
 

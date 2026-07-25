@@ -39,6 +39,12 @@ public sealed record AgentBridgeRemoteBellProbeTruth
     public required float? Distance { get; init; }
     public required float? OrdinaryInteractionDistance { get; init; }
     public required string? LastEvidencePath { get; init; }
+    public bool NormalCaptureActive { get; init; }
+    public bool NormalCaptureCanArm { get; init; }
+    public string? NormalCaptureState { get; init; }
+    public string? NormalCaptureMessage { get; init; }
+    public string? NormalCaptureReadiness { get; init; }
+    public string? NormalCaptureLastEvidencePath { get; init; }
 }
 
 public sealed record AgentBridgeRouteTruth

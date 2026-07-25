@@ -46,21 +46,12 @@ internal sealed class RemoteMarketTabPanel
 
         if (ImGui.Button("Open market board here"))
             SubmitOpenAgent();
-        ImGui.SameLine();
-        if (ImGui.Button("Open via distant board object"))
-            SubmitOpenViaObject();
         reviewRegistry.RegisterLastButton(
             "remote-market.open-agent",
             "Open market board here",
             true,
             SubmitOpenAgent,
             "Opens the market board agent directly.");
-        reviewRegistry.RegisterLastButton(
-            "remote-market.open-via-object",
-            "Open via distant board object",
-            true,
-            SubmitOpenViaObject,
-            "Stock interaction with hitbox radius and elevation augmentation.");
         ImGui.SameLine();
         ImGui.TextColored(MarketMafiosoUiTheme.Muted, $"{view.Listings.Count} listings staged");
 
@@ -83,7 +74,39 @@ internal sealed class RemoteMarketTabPanel
             DrawRow("Last outcome", view.LastOutcome);
         }
 
+        DrawNormalBellCapture();
         DrawBellProbe();
+    }
+
+    private void DrawNormalBellCapture()
+    {
+        var view = bellProbe.GetNormalCaptureView();
+        ImGui.Separator();
+        ImGui.TextColored(MarketMafiosoUiTheme.Header, "Normal bell flight recorder");
+        ImGui.TextWrapped(
+            "Passive baseline capture. Records the stock StartTalkEvent, bounded inbound/outbound zone traffic, event callbacks, and client session-state transitions through one normal retainer selection. It does not alter packets or game state.");
+
+        var enabled = view.CanArm && !view.Active;
+        if (!enabled)
+            ImGui.BeginDisabled();
+        if (ImGui.Button(view.Active ? "Normal bell recorder armed..." : "Arm normal bell recorder"))
+            SubmitNormalBellCapture();
+        if (!enabled)
+            ImGui.EndDisabled();
+        reviewRegistry.RegisterLastButton(
+            "remote-bell.capture-normal",
+            "Arm normal bell recorder",
+            enabled,
+            SubmitNormalBellCapture,
+            view.Readiness);
+
+        DrawRow("Readiness", view.Readiness);
+        DrawRow("State", view.State);
+        DrawRow("Result", view.Message);
+        if (view.BellGameObjectId is not null)
+            DrawRow("Loaded bell", $"{view.BellGameObjectId} at {view.Distance:0.0}y; ordinary limit {view.OrdinaryInteractionDistance:0.0}y");
+        if (view.LastEvidencePath is not null)
+            DrawRow("Evidence", view.LastEvidencePath);
     }
 
     private void DrawBellProbe()
@@ -126,16 +149,16 @@ internal sealed class RemoteMarketTabPanel
         Plugin.ChatGui.Print($"[MMF] Remote market: {message}");
     }
 
-    private void SubmitOpenViaObject()
-    {
-        var message = controller.OpenMarketBoardViaObject();
-        Plugin.ChatGui.Print($"[MMF] Remote market: {message}");
-    }
-
     private void SubmitBellProbe()
     {
         var message = bellProbe.BeginProbe();
         Plugin.ChatGui.Print($"[MMF] Remote bell probe: {message}");
+    }
+
+    private void SubmitNormalBellCapture()
+    {
+        var message = bellProbe.BeginNormalCapture();
+        Plugin.ChatGui.Print($"[MMF] Normal bell capture: {message}");
     }
 
     private static void DrawRow(string label, string value)

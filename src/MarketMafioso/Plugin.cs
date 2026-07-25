@@ -33,7 +33,6 @@ public sealed class Plugin : IDalamudPlugin
     [PluginService] internal static IAddonLifecycle AddonLifecycle { get; private set; } = null!;
     [PluginService] internal static IFramework Framework { get; private set; } = null!;
     [PluginService] internal static IGameGui GameGui { get; private set; } = null!;
-    [PluginService] internal static IToastGui ToastGui { get; private set; } = null!;
     [PluginService] internal static IObjectTable ObjectTable { get; private set; } = null!;
     [PluginService] internal static ITargetManager TargetManager { get; private set; } = null!;
     [PluginService] internal static ICondition Condition { get; private set; } = null!;
@@ -204,7 +203,8 @@ public sealed class Plugin : IDalamudPlugin
         {
             HelpMessage =
                 "Open the MarketMafioso toolbox window. " +
-                "Use \"/mmf send\" to send an inventory report immediately.",
+                "Use \"/mmf send\" to send an inventory report immediately, or " +
+                "\"/mmf capture-bell\" to arm the passive normal-bell flight recorder.",
         });
 
         PluginInterface.UiBuilder.Draw += DrawUI;
@@ -252,6 +252,33 @@ public sealed class Plugin : IDalamudPlugin
             }
 #else
                 ChatGui.Print("[MMF] Remote bell probe is only available in debug builds.");
+                break;
+#endif
+
+            case "capture-bell":
+#if DEBUG
+                ChatGui.Print($"[MMF] Normal bell capture: {mainWindow.BeginNormalSummoningBellCapture()}");
+                break;
+#else
+                ChatGui.Print("[MMF] Normal bell capture is only available in debug builds.");
+                break;
+#endif
+
+            case "capture-bell-status":
+#if DEBUG
+                ChatGui.Print($"[MMF] Normal bell capture: {mainWindow.GetNormalSummoningBellCaptureStatus()}");
+                break;
+#else
+                ChatGui.Print("[MMF] Normal bell capture is only available in debug builds.");
+                break;
+#endif
+
+            case "capture-bell-cancel":
+#if DEBUG
+                ChatGui.Print($"[MMF] Normal bell capture: {mainWindow.CancelNormalSummoningBellCapture()}");
+                break;
+#else
+                ChatGui.Print("[MMF] Normal bell capture is only available in debug builds.");
                 break;
 #endif
 
