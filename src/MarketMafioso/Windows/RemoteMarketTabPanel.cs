@@ -160,6 +160,20 @@ internal sealed class RemoteMarketTabPanel
             () => SubmitDistanceWarmSessionRetention(10),
             view.Readiness);
 
+        ImGui.SameLine();
+        if (!enabled)
+            ImGui.BeginDisabled();
+        if (ImGui.Button("10y local unlock"))
+            SubmitLocallyUnlockedDistanceWarmSessionRetention(10);
+        if (!enabled)
+            ImGui.EndDisabled();
+        reviewRegistry.RegisterLastButton(
+            "remote-bell.warm-retention-unlock-move-10y",
+            "Arm 10-yalm locally unlocked warm-session movement probe",
+            enabled,
+            () => SubmitLocallyUnlockedDistanceWarmSessionRetention(10),
+            view.Readiness);
+
         if (view.Active && view.Mode == "Manual")
         {
             var replayEnabled = view.CanReplayHeldSession;
@@ -377,6 +391,12 @@ internal sealed class RemoteMarketTabPanel
     private void SubmitDistanceWarmSessionRetention(float movementDistance)
     {
         var message = bellProbe.BeginDistanceWarmSessionRetentionProbe(movementDistance);
+        Plugin.ChatGui.Print($"[MMF] Warm-session retention: {message}");
+    }
+
+    private void SubmitLocallyUnlockedDistanceWarmSessionRetention(float movementDistance)
+    {
+        var message = bellProbe.BeginLocallyUnlockedDistanceWarmSessionRetentionProbe(movementDistance);
         Plugin.ChatGui.Print($"[MMF] Warm-session retention: {message}");
     }
 

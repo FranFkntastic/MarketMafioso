@@ -575,6 +575,7 @@ internal sealed partial class RemoteSummoningBellProbe : IDisposable
         if (warmSessionProbeSession is not null)
         {
             warmSessionProbeSession.BootstrapCancellation.Cancel();
+            RestoreLocalBellCondition(warmSessionProbeSession);
             StopOwnedWarmSessionNavigation(warmSessionProbeSession);
             var warm = bell.ObserveWarmSessionRetention();
             if (warm.TeardownSuppressed &&

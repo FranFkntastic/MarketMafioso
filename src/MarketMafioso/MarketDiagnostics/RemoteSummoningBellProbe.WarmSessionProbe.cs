@@ -140,6 +140,23 @@ internal sealed partial class RemoteSummoningBellProbe
             requestedMovementDistance: movementDistance);
     }
 
+    public string BeginLocallyUnlockedDistanceWarmSessionRetentionProbe(float movementDistance)
+    {
+        if (movementDistance < MinimumWarmSessionMovementDistance ||
+            movementDistance > MaximumWarmSessionMovementDistance)
+        {
+            return $"Choose a warm-session movement distance from " +
+                   $"{MinimumWarmSessionMovementDistance:0} through {MaximumWarmSessionMovementDistance:0} yalms.";
+        }
+
+        return BeginWarmSessionRetentionProbe(
+            WarmSessionReplayMode.Distance,
+            null,
+            automateBootstrap: true,
+            requestedMovementDistance: movementDistance,
+            clearLocalBellConditionForMovement: true);
+    }
+
     public string BeginManualUiWarmSessionRetentionProbe() =>
         BeginWarmSessionRetentionProbe(WarmSessionReplayMode.Immediate, WarmSessionReplayDelay, automateBootstrap: false);
 
@@ -147,7 +164,8 @@ internal sealed partial class RemoteSummoningBellProbe
         WarmSessionReplayMode replayMode,
         TimeSpan? replayDelay,
         bool automateBootstrap,
-        float? requestedMovementDistance = null)
+        float? requestedMovementDistance = null,
+        bool clearLocalBellConditionForMovement = false)
     {
         var precondition = ValidateWarmSessionProbeStart();
         if (precondition is not null)
@@ -184,7 +202,8 @@ internal sealed partial class RemoteSummoningBellProbe
             replayMode,
             replayDelay,
             automateBootstrap,
-            requestedMovementDistance);
+            requestedMovementDistance,
+            clearLocalBellConditionForMovement);
         CaptureWarmSessionStateTransition(active);
         warmSessionProbeSession = active;
         if (automateBootstrap)
@@ -207,7 +226,9 @@ internal sealed partial class RemoteSummoningBellProbe
                 WarmSessionReplayMode.Manual =>
                     "Interact normally through the two select/Quit cycles, then close the returned list. MMF will hold the session until /mmf probe-bell-warm-replay.",
                 WarmSessionReplayMode.Distance =>
-                    $"MMF will move {requestedMovementDistance:0.#} yalms away after retaining the session, replay once, then return to the bell.",
+                    clearLocalBellConditionForMovement
+                        ? $"MMF will locally clear only OccupiedSummoningBell, move {requestedMovementDistance:0.#} yalms, restore the flag, replay once, then return to the bell."
+                        : $"MMF will move {requestedMovementDistance:0.#} yalms away after retaining the session, replay once, then return to the bell.",
                 _ =>
                     "Interact normally: select a retainer, choose Quit, select a retainer again from the reopened list, choose Quit again, then close the reopened retainer list. MMF will suppress that one close and replay the exact second selection automatically.",
             },
@@ -673,6 +694,8 @@ internal sealed partial class RemoteSummoningBellProbe
             return false;
         }
 
+        HoldLocalBellConditionClear(active);
+
         if (active.NavigationStartedAtUtc is null)
         {
             if (active.HeldPosition is not { } heldPosition ||
@@ -692,6 +715,13 @@ internal sealed partial class RemoteSummoningBellProbe
             if (!vnavmesh.IsReady)
             {
                 BeginWarmSessionCleanup(active, "vnavmesh was unavailable or not ready for the bounded movement probe.");
+                return false;
+            }
+
+            if (active.ClearLocalBellConditionForMovement &&
+                !TryAcquireLocalBellConditionOverride(active, out var overrideFailure))
+            {
+                BeginWarmSessionCleanup(active, overrideFailure);
                 return false;
             }
 
@@ -720,6 +750,7 @@ internal sealed partial class RemoteSummoningBellProbe
         var moved = DistanceBetween(active.HeldPosition, CapturePosition());
         if (moved >= requestedDistance - WarmSessionMovementTolerance)
         {
+            RestoreLocalBellCondition(active);
             StopOwnedWarmSessionNavigation(active);
             active.DistanceTargetReached = true;
             active.ReplayNotBeforeUtc = now;
@@ -757,6 +788,60 @@ internal sealed partial class RemoteSummoningBellProbe
         }
 
         return true;
+    }
+
+    private unsafe bool TryAcquireLocalBellConditionOverride(
+        WarmSessionProbeSession active,
+        out string failure)
+    {
+        if (condition.Address == IntPtr.Zero)
+        {
+            failure = "Dalamud did not expose the client condition array for the bounded local-unlock probe.";
+            return false;
+        }
+
+        var flagAddress = (byte*)condition.Address + (int)ConditionFlag.OccupiedSummoningBell;
+        active.LocalBellConditionOriginalValue = *flagAddress != 0;
+        if (!active.LocalBellConditionOriginalValue.Value)
+        {
+            failure = "OccupiedSummoningBell was already false before the local-unlock movement probe.";
+            return false;
+        }
+
+        active.LocalBellConditionOverrideActive = true;
+        *flagAddress = 0;
+        active.LocalBellConditionClearWriteCount++;
+        failure = string.Empty;
+        return true;
+    }
+
+    private unsafe void HoldLocalBellConditionClear(WarmSessionProbeSession active)
+    {
+        if (!active.LocalBellConditionOverrideActive || condition.Address == IntPtr.Zero)
+            return;
+
+        var flagAddress = (byte*)condition.Address + (int)ConditionFlag.OccupiedSummoningBell;
+        if (*flagAddress == 0)
+            return;
+
+        *flagAddress = 0;
+        active.LocalBellConditionClearWriteCount++;
+    }
+
+    private unsafe void RestoreLocalBellCondition(WarmSessionProbeSession active)
+    {
+        if (!active.LocalBellConditionOverrideActive)
+            return;
+
+        active.LocalBellConditionOverrideActive = false;
+        if (condition.Address != IntPtr.Zero &&
+            active.LocalBellConditionOriginalValue is { } originalValue)
+        {
+            var flagAddress = (byte*)condition.Address + (int)ConditionFlag.OccupiedSummoningBell;
+            *flagAddress = originalValue ? (byte)1 : (byte)0;
+        }
+
+        active.LocalBellConditionRestoredAtUtc = DateTimeOffset.UtcNow;
     }
 
     internal static bool TryComputeOutwardDestination(
@@ -1035,6 +1120,7 @@ internal sealed partial class RemoteSummoningBellProbe
 
     private void BeginWarmSessionCleanup(WarmSessionProbeSession active, string reason)
     {
+        RestoreLocalBellCondition(active);
         StopOwnedWarmSessionNavigation(active);
         active.CleanupStartedAtUtc = DateTimeOffset.UtcNow;
         active.DeadlineUtc = active.CleanupStartedAtUtc.Value + WarmSessionCleanupWindow;
@@ -1055,6 +1141,7 @@ internal sealed partial class RemoteSummoningBellProbe
         bool stopTransport = true)
     {
         active.BootstrapCancellation.Cancel();
+        RestoreLocalBellCondition(active);
         StopOwnedWarmSessionNavigation(active);
         CaptureWarmSessionStateTransition(active);
         var transport = bell.ObserveWarmSessionRetention();
@@ -1081,6 +1168,10 @@ internal sealed partial class RemoteSummoningBellProbe
             active.ReplayMode.ToString(),
             active.ReplayDelay?.TotalSeconds,
             active.RequestedMovementDistance,
+            active.ClearLocalBellConditionForMovement,
+            active.LocalBellConditionOriginalValue,
+            active.LocalBellConditionClearWriteCount,
+            active.LocalBellConditionRestoredAtUtc,
             active.NavigationTarget,
             active.NavigationStartedAtUtc,
             active.NavigationMessage,
@@ -1221,7 +1312,8 @@ internal sealed partial class RemoteSummoningBellProbe
             WarmSessionReplayMode replayMode,
             TimeSpan? replayDelay,
             bool automateBootstrap,
-            float? requestedMovementDistance)
+            float? requestedMovementDistance,
+            bool clearLocalBellConditionForMovement)
         {
             StartedAtUtc = startedAtUtc;
             DeadlineUtc = deadlineUtc;
@@ -1233,6 +1325,7 @@ internal sealed partial class RemoteSummoningBellProbe
             ReplayDelay = replayDelay;
             AutomateBootstrap = automateBootstrap;
             RequestedMovementDistance = requestedMovementDistance;
+            ClearLocalBellConditionForMovement = clearLocalBellConditionForMovement;
         }
 
         public DateTimeOffset StartedAtUtc { get; }
@@ -1245,6 +1338,7 @@ internal sealed partial class RemoteSummoningBellProbe
         public TimeSpan? ReplayDelay { get; }
         public bool AutomateBootstrap { get; }
         public float? RequestedMovementDistance { get; }
+        public bool ClearLocalBellConditionForMovement { get; }
         public CancellationTokenSource BootstrapCancellation { get; } = new();
         public ConcurrentQueue<WarmSessionBootstrapStep> BootstrapSteps { get; } = new();
         public ConcurrentQueue<WarmSessionBootstrapStep> FinalCleanupSteps { get; } = new();
@@ -1262,7 +1356,11 @@ internal sealed partial class RemoteSummoningBellProbe
         public bool DistanceTargetReached { get; set; }
         public bool NavigationOwned { get; set; }
         public bool ReturnedToHeldPosition { get; set; }
+        public bool LocalBellConditionOverrideActive { get; set; }
+        public bool? LocalBellConditionOriginalValue { get; set; }
+        public int LocalBellConditionClearWriteCount { get; set; }
         public DateTimeOffset? TeardownSuppressedAtUtc { get; set; }
+        public DateTimeOffset? LocalBellConditionRestoredAtUtc { get; set; }
         public DateTimeOffset? NavigationStartedAtUtc { get; set; }
         public DateTimeOffset? ReturnNavigationStartedAtUtc { get; set; }
         public DateTimeOffset? ReplayNotBeforeUtc { get; set; }
@@ -1298,6 +1396,10 @@ internal sealed partial class RemoteSummoningBellProbe
         string ReplayMode,
         double? RequestedHoldSeconds,
         float? RequestedMovementDistance,
+        bool ClearLocalBellConditionForMovement,
+        bool? LocalBellConditionOriginalValue,
+        int LocalBellConditionClearWriteCount,
+        DateTimeOffset? LocalBellConditionRestoredAtUtc,
         ProbePosition? NavigationTarget,
         DateTimeOffset? NavigationStartedAtUtc,
         string? NavigationMessage,

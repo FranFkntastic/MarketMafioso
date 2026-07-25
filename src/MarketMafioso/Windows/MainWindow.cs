@@ -686,6 +686,9 @@ public class MainWindow : Window, IDisposable
     public string BeginDistanceWarmSessionRetentionProbe(float movementDistance) =>
         remoteSummoningBellProbe.BeginDistanceWarmSessionRetentionProbe(movementDistance);
 
+    public string BeginLocallyUnlockedDistanceWarmSessionRetentionProbe(float movementDistance) =>
+        remoteSummoningBellProbe.BeginLocallyUnlockedDistanceWarmSessionRetentionProbe(movementDistance);
+
     public string BeginManualWarmSessionRetentionProbe() =>
         remoteSummoningBellProbe.BeginManualWarmSessionRetentionProbe();
 
