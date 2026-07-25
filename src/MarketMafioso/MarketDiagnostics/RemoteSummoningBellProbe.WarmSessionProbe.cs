@@ -540,6 +540,9 @@ internal sealed partial class RemoteSummoningBellProbe
         {
             active.ReplayRequestedAtUtc ??= now;
             active.ReplayPosition = CapturePosition();
+            active.ReplayDistanceFromBell = DistanceToGameObject(
+                active.Arm.BellGameObjectId,
+                active.ReplayPosition);
             var replay = bell.ReplayWarmSessionSelection();
             active.ReplayStartedAtUtc = now;
             active.DeadlineUtc = now + WarmSessionReplayWindow;
@@ -881,6 +884,20 @@ internal sealed partial class RemoteSummoningBellProbe
         return false;
     }
 
+    private float? DistanceToGameObject(ulong gameObjectId, ProbePosition? position)
+    {
+        if (position is not { } value ||
+            !TryFindGameObjectPosition(gameObjectId, out var gameObjectPosition))
+        {
+            return null;
+        }
+
+        var x = value.X - gameObjectPosition.X;
+        var y = value.Y - gameObjectPosition.Y;
+        var z = value.Z - gameObjectPosition.Z;
+        return MathF.Sqrt((x * x) + (y * y) + (z * z));
+    }
+
     private bool UpdateWarmSessionBootstrap(
         WarmSessionProbeSession active,
         WarmSessionRetentionProbeObservation transport)
@@ -1184,6 +1201,7 @@ internal sealed partial class RemoteSummoningBellProbe
             active.ReplayStartedAtUtc,
             active.HeldPosition,
             active.ReplayPosition,
+            active.ReplayDistanceFromBell,
             active.TeardownSuppressedAtUtc is { } heldAt &&
             active.ReplayStartedAtUtc is { } replayAt
                 ? (replayAt - heldAt).TotalMilliseconds
@@ -1371,6 +1389,7 @@ internal sealed partial class RemoteSummoningBellProbe
         public ProbePosition? HeldPosition { get; set; }
         public ProbePosition? NavigationTarget { get; set; }
         public ProbePosition? ReplayPosition { get; set; }
+        public float? ReplayDistanceFromBell { get; set; }
         public string? NavigationMessage { get; set; }
         public string? NavigationStopMessage { get; set; }
         public string? NavigationFailure { get; set; }
@@ -1412,6 +1431,7 @@ internal sealed partial class RemoteSummoningBellProbe
         DateTimeOffset? ReplayStartedAtUtc,
         ProbePosition? HeldPosition,
         ProbePosition? ReplayPosition,
+        float? ReplayDistanceFromBell,
         double? ActualHoldMilliseconds,
         float DistanceMovedBeforeReplay,
         string Verdict,

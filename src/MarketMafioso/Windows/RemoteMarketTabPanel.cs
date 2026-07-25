@@ -11,6 +11,7 @@ namespace MarketMafioso.Windows;
 internal sealed class RemoteMarketTabPanel
 {
     private static readonly int[] WarmRetentionDelaySeconds = [5, 15, 30, 60];
+    private static readonly int[] WarmRetentionUnlockedMovementDistances = [2, 3, 4, 10];
 
     private readonly Configuration configuration;
     private readonly RemoteMarketController controller;
@@ -160,33 +161,22 @@ internal sealed class RemoteMarketTabPanel
             () => SubmitDistanceWarmSessionRetention(10),
             view.Readiness);
 
-        ImGui.SameLine();
-        if (!enabled)
-            ImGui.BeginDisabled();
-        if (ImGui.Button("10y local unlock"))
-            SubmitLocallyUnlockedDistanceWarmSessionRetention(10);
-        if (!enabled)
-            ImGui.EndDisabled();
-        reviewRegistry.RegisterLastButton(
-            "remote-bell.warm-retention-unlock-move-10y",
-            "Arm 10-yalm locally unlocked warm-session movement probe",
-            enabled,
-            () => SubmitLocallyUnlockedDistanceWarmSessionRetention(10),
-            view.Readiness);
-
-        ImGui.SameLine();
-        if (!enabled)
-            ImGui.BeginDisabled();
-        if (ImGui.Button("2y local control"))
-            SubmitLocallyUnlockedDistanceWarmSessionRetention(2);
-        if (!enabled)
-            ImGui.EndDisabled();
-        reviewRegistry.RegisterLastButton(
-            "remote-bell.warm-retention-unlock-move-2y",
-            "Arm 2-yalm in-range locally unlocked movement control",
-            enabled,
-            () => SubmitLocallyUnlockedDistanceWarmSessionRetention(2),
-            view.Readiness);
+        foreach (var movementDistance in WarmRetentionUnlockedMovementDistances)
+        {
+            ImGui.SameLine();
+            if (!enabled)
+                ImGui.BeginDisabled();
+            if (ImGui.Button($"{movementDistance}y unlock"))
+                SubmitLocallyUnlockedDistanceWarmSessionRetention(movementDistance);
+            if (!enabled)
+                ImGui.EndDisabled();
+            reviewRegistry.RegisterLastButton(
+                $"remote-bell.warm-retention-unlock-move-{movementDistance}y",
+                $"Arm {movementDistance}-yalm locally unlocked warm-session movement probe",
+                enabled,
+                () => SubmitLocallyUnlockedDistanceWarmSessionRetention(movementDistance),
+                view.Readiness);
+        }
 
         if (view.Active && view.Mode == "Manual")
         {
