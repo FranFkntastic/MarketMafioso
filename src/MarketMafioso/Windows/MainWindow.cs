@@ -250,8 +250,8 @@ public class MainWindow : Window, IDisposable
             workshopMaterialManifestExport,
             GetWorkshopAvailability,
             status => workshopStatus = status,
-            () => projectBrowser!.IsOpen = true,
-            () => frozenQueueBrowser!.IsOpen = true,
+            () => projectBrowser!.OpenAndFocus(),
+            () => frozenQueueBrowser!.OpenAndFocus(),
             log);
         workshopMaterials = new WorkshopMaterialPanel(
             quartermaster,

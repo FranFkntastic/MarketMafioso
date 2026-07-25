@@ -2,6 +2,7 @@ using System;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Windowing;
+using Franthropy.Dalamud.UI.Windows;
 using MarketMafioso.AgentBridge;
 using MarketMafioso.Windows.Main;
 
@@ -10,6 +11,7 @@ namespace MarketMafioso.Windows;
 public sealed class AgentBridgeProofWindow : Window
 {
     private readonly AgentBridgeProofStore proofStore;
+    private readonly CompanionWindowActivationState activation = new();
 
     public AgentBridgeProofWindow(AgentBridgeProofStore proofStore)
         : base("MMF Agent Bridge Proof##MarketMafiosoAgentBridgeProof")
@@ -23,6 +25,19 @@ public sealed class AgentBridgeProofWindow : Window
     }
 
     public string? RequestedProofId { get; set; }
+
+    public void OpenAndFocus(string proofId)
+    {
+        RequestedProofId = proofId;
+        IsOpen = true;
+        activation.RequestOpen();
+    }
+
+    public override void PreDraw()
+    {
+        if (activation.ConsumeFocusRequest())
+            ImGui.SetNextWindowFocus();
+    }
 
     public override void Draw()
     {

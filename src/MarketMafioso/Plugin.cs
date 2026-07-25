@@ -163,11 +163,7 @@ public sealed class Plugin : IDalamudPlugin
                 mainWindow.AgentOpenForReview,
                 mainWindow.AgentCloseAfterReview,
                 () => mainWindow.TrySelectAgentBridgeTab("Diagnostics"),
-                proofId =>
-                {
-                    agentBridgeProofWindow.RequestedProofId = proofId;
-                    agentBridgeProofWindow.IsOpen = true;
-                },
+                agentBridgeProofWindow.OpenAndFocus,
                 mainWindow.TrySelectAgentBridgeTab,
                 mainWindow.AgentCaptureInputState,
                 mainWindow.AgentStopRoute,
