@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
@@ -44,6 +45,7 @@ internal sealed class RemoteMarketController : IDisposable
 
     private RemoteMarketPurchaseAttempt? attempt;
     private string? lastOutcome;
+    private readonly HashSet<ulong> purchasedListingIds = [];
 
     public RemoteMarketController(
         Configuration configuration,
@@ -193,6 +195,8 @@ internal sealed class RemoteMarketController : IDisposable
         var view = GetView();
         if (view.Selection is not { } selection)
             return "Select a listing in the market board window first.";
+        if (purchasedListingIds.Contains(selection.ListingId))
+            return "This listing was already purchased. Re-search the item to refresh the listings.";
         attempt = new RemoteMarketPurchaseAttempt(
             selection,
             clientState.TerritoryType,
@@ -208,6 +212,11 @@ internal sealed class RemoteMarketController : IDisposable
     {
         if (attempt is not { Phase: RemoteMarketPurchasePhase.AwaitingConfirmation } pending)
             return "No staged purchase to confirm.";
+        if (purchasedListingIds.Contains(pending.Selection.ListingId))
+        {
+            Fail(pending, "This listing was already purchased. Re-search the item to refresh the listings.");
+            return "This listing was already purchased. Re-search the item to refresh the listings.";
+        }
 
         string? failure = null;
         unsafe
@@ -319,6 +328,7 @@ internal sealed class RemoteMarketController : IDisposable
             var delta = (long)before - after;
             if (delta == (long)pending.TotalGil)
             {
+                purchasedListingIds.Add(pending.Selection.ListingId);
                 pending.Phase = RemoteMarketPurchasePhase.Confirmed;
                 Complete(pending, $"Purchased {pending.Quantity}x {pending.ItemName} for {pending.TotalGil:N0} gil.");
                 return;
@@ -341,7 +351,7 @@ internal sealed class RemoteMarketController : IDisposable
     private void ResolveIndeterminate(RemoteMarketPurchaseAttempt pending)
     {
         pending.Phase = RemoteMarketPurchasePhase.Indeterminate;
-        Complete(pending, "No purchase confirmation arrived before the deadline. Reconcile inventory and gil before retrying.");
+        Complete(pending, "No purchase confirmation arrived before the deadline. The server silently drops invalid requests, so re-search the item, then reconcile inventory and gil before retrying.");
     }
 
     private void Fail(RemoteMarketPurchaseAttempt pending, string reason)
