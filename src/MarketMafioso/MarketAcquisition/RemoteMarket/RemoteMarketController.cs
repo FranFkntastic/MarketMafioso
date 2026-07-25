@@ -144,6 +144,7 @@ internal sealed class RemoteMarketController : IDisposable
                         listing.UnitPrice,
                         listing.TotalTax,
                         (listing.UnitPrice * (ulong)listing.Quantity) + listing.TotalTax,
+                        listing.MateriaCount,
                         purchasedListingIds.Contains(listing.ListingId),
                         batchItems.FirstOrDefault(item => item.ListingId == listing.ListingId)?.Status));
                 }
@@ -163,7 +164,8 @@ internal sealed class RemoteMarketController : IDisposable
             listings,
             batch,
             lastOutcome,
-            GetPurchaseContextBlockReason());
+            GetPurchaseContextBlockReason(),
+            GetCurrentGil());
     }
 
     public string? BeginBatch(IReadOnlyCollection<ulong> selectedListingIds)
@@ -558,6 +560,7 @@ internal sealed record RemoteMarketListingView(
     uint UnitPrice,
     uint TotalTax,
     ulong TotalGil,
+    byte MateriaCount,
     bool AlreadyPurchased,
     RemoteMarketBatchItemStatus? BatchStatus);
 
@@ -572,7 +575,8 @@ internal sealed record RemoteMarketView(
     IReadOnlyList<RemoteMarketListingView> Listings,
     RemoteMarketBatchView? Batch,
     string? LastOutcome,
-    string? ContextBlockReason);
+    string? ContextBlockReason,
+    uint? GilOnHand);
 
 internal sealed class RemoteMarketPurchaseAttempt(
     RemoteMarketSelectionView selection,
