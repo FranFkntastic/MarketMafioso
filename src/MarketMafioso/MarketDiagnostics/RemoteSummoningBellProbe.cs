@@ -165,22 +165,20 @@ internal sealed class RemoteSummoningBellProbe : IDisposable
             true,
             false,
             "Observing stock interaction",
-            "Extended only the loaded bell's hitbox and shadowed its Y to the player, then invoked stock InteractWithObject. Holding both client-only shadows through the bounded response observation.",
+            "Extended only the loaded bell's hitbox and shadowed its live/default positions to the player, then invoked stock InteractWithObject. Holding those client-only shadows through the bounded response observation.",
             $"The passive observer will not alter or retry the packet. {suppressionMessage}",
             FormatGameObjectId(submission.BellGameObjectId),
             submission.Distance,
             submission.OrdinaryInteractionDistance,
             view.LastEvidencePath);
         log.Information(
-            "[MarketMafioso] Remote bell probe invoked transport {Transport} for bell {BellGameObjectId:X} at {Distance:F1} yalms in territory {TerritoryId}; holding radius {OriginalRadius:F1}->{TemporaryRadius:F1} and Y {OriginalY:F1}->{TemporaryY:F1} through response observation.",
+            "[MarketMafioso] Remote bell probe invoked transport {Transport} for bell {BellGameObjectId:X} at {Distance:F1} yalms in territory {TerritoryId}; holding radius {OriginalRadius:F1}->{TemporaryRadius:F1} and full live/default position shadows through response observation.",
             submission.Transport,
             submission.BellGameObjectId,
             submission.Distance,
             territoryId,
             submission.OriginalHitboxRadius,
-            submission.TemporaryHitboxRadius,
-            submission.OriginalBellY,
-            submission.TemporaryBellY);
+            submission.TemporaryHitboxRadius);
         return submission.Message;
     }
 
@@ -201,18 +199,46 @@ internal sealed class RemoteSummoningBellProbe : IDisposable
             var cancelled = bell.ObserveTalkPacketTransport();
             active = active with
             {
-                Submission = active.Submission with
-                {
-                    Message = cancelled.Message,
-                    PacketsObservedWhileArmed = cancelled.PacketsObservedWhileArmed,
-                    SizeEligiblePacketsObserved = cancelled.SizeEligiblePacketsObserved,
-                },
+                Submission = ApplyInboundObservation(
+                    active.Submission with
+                    {
+                        Message = cancelled.Message,
+                        PacketsObservedWhileArmed = cancelled.PacketsObservedWhileArmed,
+                        SizeEligiblePacketsObserved = cancelled.SizeEligiblePacketsObserved,
+                    },
+                    cancelled),
             };
             Complete(active, "InconclusiveTerritoryChanged", "Territory changed before the probe concluded.", false);
             return;
         }
 
         var transport = bell.ObserveTalkPacketTransport();
+        var inboundEventPlayWasObserved = active.Submission.InboundEventPlayObserved;
+        active = active with
+        {
+            Submission = ApplyInboundObservation(active.Submission, transport),
+        };
+        session = active;
+
+        if (!inboundEventPlayWasObserved && active.Submission.InboundEventPlayObserved)
+        {
+            view = view with
+            {
+                State = "Inbound event observed",
+                Message =
+                    $"Observed matching inbound EventPlay scene {active.Submission.InboundScene} " +
+                    $"(flags 0x{active.Submission.InboundSceneFlags:X}); waiting to see whether RetainerList opens.",
+                Readiness = "The server returned an EventPlay for the exact bell actor/event pair.",
+            };
+            log.Information(
+                "[MarketMafioso] Remote bell probe observed matching inbound EventPlay for bell {BellGameObjectId:X}; event 0x{EventId:X}, scene {Scene}, flags 0x{SceneFlags:X}, scene data count {SceneDataCount}.",
+                active.Submission.InboundEventObjectId,
+                active.Submission.InboundEventId,
+                active.Submission.InboundScene,
+                active.Submission.InboundSceneFlags,
+                active.Submission.InboundSceneDataCount);
+        }
+
         if (!active.OccupiedSummoningBellObserved &&
             condition[ConditionFlag.OccupiedSummoningBell])
         {
@@ -305,8 +331,16 @@ internal sealed class RemoteSummoningBellProbe : IDisposable
 
             Complete(
                 active,
-                "InconclusiveTimeout",
-                "No retainer list appeared within 10 seconds. No second interaction was sent.",
+                active.Submission.InboundEventPlayObserved
+                    ? "InboundEventPlayWithoutRetainerList"
+                    : active.Submission.MatchingInboundEventYieldObserved
+                        ? "InboundEventYieldWithoutRetainerList"
+                    : "NoMatchingInboundEventPlay",
+                active.Submission.InboundEventPlayObserved
+                    ? "The exact bell EventPlay reached the client, but no retainer list appeared within 10 seconds. No second interaction was sent."
+                    : active.Submission.MatchingInboundEventYieldObserved
+                        ? "A matching bell EventYield reached the client without an EventPlay or retainer list. No second interaction was sent."
+                    : "The stock StartTalkEvent left the client, but no matching bell EventPlay returned within 10 seconds. No second interaction was sent.",
                 false);
         }
     }
@@ -314,7 +348,13 @@ internal sealed class RemoteSummoningBellProbe : IDisposable
     private void Complete(ProbeSession active, string verdict, string message, bool retainerListReady)
     {
         session = null;
-        bell.RestoreRemoteProbeGeometry();
+        active = active with
+        {
+            Submission = ApplyInboundObservation(
+                active.Submission,
+                bell.ObserveTalkPacketTransport()),
+        };
+        bell.CancelTalkPacketTransport("The remote bell probe concluded.");
         var completedAtUtc = DateTimeOffset.UtcNow;
         var evidence = CreateEvidence(
             active.StartedAtUtc,
@@ -383,10 +423,33 @@ internal sealed class RemoteSummoningBellProbe : IDisposable
             submission.BuilderPacketSuppressed,
             submission.ConstructedPacket,
             submission.OutboundPacketObserved,
+            submission.InboundEventPlayObserved,
+            FormatGameObjectId(submission.InboundEventObjectId),
+            submission.InboundEventId,
+            submission.InboundScene,
+            submission.InboundSceneFlags,
+            submission.InboundSceneDataCount,
+            submission.InboundSceneData,
+            submission.InboundEventPlayCount,
+            submission.InboundEventPlaySamples,
+            submission.MatchingInboundEventYieldObserved,
+            submission.InboundEventYieldCount,
+            submission.InboundEventYieldSamples,
+            submission.InboundActorControlCount,
+            submission.InboundActorControlSamples,
+            submission.InboundRawPacketCount,
+            submission.InboundRawPacketSamples,
             submission.OriginalHitboxRadius,
             submission.TemporaryHitboxRadius,
+            submission.OriginalBellX,
             submission.OriginalBellY,
+            submission.OriginalBellZ,
+            submission.TemporaryBellX,
             submission.TemporaryBellY,
+            submission.TemporaryBellZ,
+            submission.OriginalDefaultBellX,
+            submission.OriginalDefaultBellY,
+            submission.OriginalDefaultBellZ,
             submission.PacketsObservedWhileArmed,
             submission.SizeEligiblePacketsObserved,
             submission.OutboundPacketObserved ? 1 : 0,
@@ -395,6 +458,29 @@ internal sealed class RemoteSummoningBellProbe : IDisposable
             retainerListReady,
             occupiedSummoningBellObserved,
             condition[ConditionFlag.OccupiedSummoningBell]);
+
+    private static RemoteSummoningBellInteractionResult ApplyInboundObservation(
+        RemoteSummoningBellInteractionResult submission,
+        TalkEventPacketTransportObservation transport) =>
+        submission with
+        {
+            InboundEventPlayObserved = transport.InboundEventPlayObserved,
+            InboundEventObjectId = transport.InboundEventObjectId,
+            InboundEventId = transport.InboundEventId,
+            InboundScene = transport.InboundScene,
+            InboundSceneFlags = transport.InboundSceneFlags,
+            InboundSceneDataCount = transport.InboundSceneDataCount,
+            InboundSceneData = transport.InboundSceneData,
+            InboundEventPlayCount = transport.InboundEventPlayCount,
+            InboundEventPlaySamples = transport.InboundEventPlaySamples,
+            MatchingInboundEventYieldObserved = transport.MatchingInboundEventYieldObserved,
+            InboundEventYieldCount = transport.InboundEventYieldCount,
+            InboundEventYieldSamples = transport.InboundEventYieldSamples,
+            InboundActorControlCount = transport.InboundActorControlCount,
+            InboundActorControlSamples = transport.InboundActorControlSamples,
+            InboundRawPacketCount = transport.InboundRawPacketCount,
+            InboundRawPacketSamples = transport.InboundRawPacketSamples,
+        };
 
     private string? WriteEvidence(RemoteSummoningBellProbeEvidence evidence)
     {
@@ -484,10 +570,33 @@ internal sealed class RemoteSummoningBellProbe : IDisposable
         bool BuilderPacketSuppressed,
         bool ConstructedPacket,
         bool OutboundPacketObserved,
+        bool InboundEventPlayObserved,
+        string? InboundEventObjectId,
+        uint InboundEventId,
+        short InboundScene,
+        ulong InboundSceneFlags,
+        byte InboundSceneDataCount,
+        uint[]? InboundSceneData,
+        int InboundEventPlayCount,
+        InboundEventPlaySample[]? InboundEventPlaySamples,
+        bool MatchingInboundEventYieldObserved,
+        int InboundEventYieldCount,
+        InboundEventYieldSample[]? InboundEventYieldSamples,
+        int InboundActorControlCount,
+        InboundActorControlSample[]? InboundActorControlSamples,
+        int InboundRawPacketCount,
+        InboundRawPacketSample[]? InboundRawPacketSamples,
         float OriginalHitboxRadius,
         float TemporaryHitboxRadius,
+        float OriginalBellX,
         float OriginalBellY,
+        float OriginalBellZ,
+        float TemporaryBellX,
         float TemporaryBellY,
+        float TemporaryBellZ,
+        float OriginalDefaultBellX,
+        float OriginalDefaultBellY,
+        float OriginalDefaultBellZ,
         int PacketsObservedWhileArmed,
         int SizeEligiblePacketsObserved,
         int OutboundRequestCount,

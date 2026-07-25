@@ -45,16 +45,22 @@ internal sealed class RemoteMarketTabPanel
         ImGui.Separator();
 
         if (ImGui.Button("Open market board here"))
-        {
-            var message = controller.OpenMarketBoard();
-            Plugin.ChatGui.Print($"[MMF] Remote market: {message}");
-        }
+            SubmitOpenAgent();
         ImGui.SameLine();
         if (ImGui.Button("Open via distant board object"))
-        {
-            var message = controller.OpenMarketBoardViaObject();
-            Plugin.ChatGui.Print($"[MMF] Remote market: {message}");
-        }
+            SubmitOpenViaObject();
+        reviewRegistry.RegisterLastButton(
+            "remote-market.open-agent",
+            "Open market board here",
+            true,
+            SubmitOpenAgent,
+            "Opens the market board agent directly.");
+        reviewRegistry.RegisterLastButton(
+            "remote-market.open-via-object",
+            "Open via distant board object",
+            true,
+            SubmitOpenViaObject,
+            "Stock interaction with hitbox radius and elevation augmentation.");
         ImGui.SameLine();
         ImGui.TextColored(MarketMafiosoUiTheme.Muted, $"{view.Listings.Count} listings staged");
 
@@ -86,7 +92,7 @@ internal sealed class RemoteMarketTabPanel
         ImGui.Separator();
         ImGui.TextColored(MarketMafiosoUiTheme.Header, "Phase A — same-territory bell probe");
         ImGui.TextWrapped(
-            "Secondary client only. Extends the loaded bell's hitbox and shadows its Y to the player through the bounded response observation, then restores both fields. The stock StartTalkEvent passes through unchanged.");
+            "Secondary client only. Extends the loaded bell's hitbox and shadows its live/default positions to the player through the bounded response observation, then restores every field. The stock StartTalkEvent passes through unchanged.");
 
         var enabled = view.CanSubmit && !view.Active;
         if (!enabled)
@@ -112,6 +118,18 @@ internal sealed class RemoteMarketTabPanel
             DrawRow("Loaded bell", $"{view.BellGameObjectId} at {view.Distance:0.0}y; ordinary limit {view.OrdinaryInteractionDistance:0.0}y");
         if (view.LastEvidencePath is not null)
             DrawRow("Evidence", view.LastEvidencePath);
+    }
+
+    private void SubmitOpenAgent()
+    {
+        var message = controller.OpenMarketBoard();
+        Plugin.ChatGui.Print($"[MMF] Remote market: {message}");
+    }
+
+    private void SubmitOpenViaObject()
+    {
+        var message = controller.OpenMarketBoardViaObject();
+        Plugin.ChatGui.Print($"[MMF] Remote market: {message}");
     }
 
     private void SubmitBellProbe()

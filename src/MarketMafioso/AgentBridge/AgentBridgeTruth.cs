@@ -24,7 +24,21 @@ public sealed record AgentBridgeTruth
     public required bool WorkspaceBusy { get; init; }
     public required string? ClaimedRequestId { get; init; }
     public required string? PreparedPlanStatus { get; init; }
+    public required AgentBridgeRemoteBellProbeTruth RemoteBellProbe { get; init; }
     public required AgentBridgeRouteTruth Route { get; init; }
+}
+
+public sealed record AgentBridgeRemoteBellProbeTruth
+{
+    public required bool Active { get; init; }
+    public required bool CanSubmit { get; init; }
+    public required string State { get; init; }
+    public required string Message { get; init; }
+    public required string Readiness { get; init; }
+    public required string? BellGameObjectId { get; init; }
+    public required float? Distance { get; init; }
+    public required float? OrdinaryInteractionDistance { get; init; }
+    public required string? LastEvidencePath { get; init; }
 }
 
 public sealed record AgentBridgeRouteTruth

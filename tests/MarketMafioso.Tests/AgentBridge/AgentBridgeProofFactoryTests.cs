@@ -65,6 +65,18 @@ public sealed class AgentBridgeProofFactoryTests
         WorkspaceBusy = false,
         ClaimedRequestId = "request-1",
         PreparedPlanStatus = "Ready",
+        RemoteBellProbe = new AgentBridgeRemoteBellProbeTruth
+        {
+            Active = false,
+            CanSubmit = true,
+            State = "Idle",
+            Message = "Ready",
+            Readiness = "Loaded bell is out of range.",
+            BellGameObjectId = "100519898",
+            Distance = 27.7f,
+            OrdinaryInteractionDistance = 4.75f,
+            LastEvidencePath = null,
+        },
         Route = new AgentBridgeRouteTruth
         {
             State = "Running",

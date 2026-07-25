@@ -175,8 +175,11 @@ public class MainWindow : Window, IDisposable
             Plugin.MarketBoard,
             Plugin.ClientState,
             Plugin.ObjectTable,
+            Plugin.TargetManager,
             Plugin.Framework,
             Plugin.GameGui,
+            Plugin.ToastGui,
+            Plugin.GameInteropProvider,
             Plugin.Condition,
             Plugin.ChatGui,
             log,
@@ -420,6 +423,7 @@ public class MainWindow : Window, IDisposable
         var activeOperation = snapshot.ActiveOperation;
         var activeStop = snapshot.ActiveStop;
         var persistedExactAcquisition = exactAcquisitionRouteStateStore.Restore();
+        var remoteBellProbe = remoteSummoningBellProbe.GetView();
         return new AgentBridgeTruth
         {
             SchemaVersion = 1,
@@ -436,6 +440,18 @@ public class MainWindow : Window, IDisposable
             WorkspaceBusy = acquisitionWorkspace.IsBusy,
             ClaimedRequestId = acquisitionWorkspace.ClaimedRequest?.Id,
             PreparedPlanStatus = acquisitionWorkspace.PreparedPlan?.Status,
+            RemoteBellProbe = new AgentBridgeRemoteBellProbeTruth
+            {
+                Active = remoteBellProbe.Active,
+                CanSubmit = remoteBellProbe.CanSubmit,
+                State = remoteBellProbe.State,
+                Message = remoteBellProbe.Message,
+                Readiness = remoteBellProbe.Readiness,
+                BellGameObjectId = remoteBellProbe.BellGameObjectId,
+                Distance = remoteBellProbe.Distance,
+                OrdinaryInteractionDistance = remoteBellProbe.OrdinaryInteractionDistance,
+                LastEvidencePath = remoteBellProbe.LastEvidencePath,
+            },
             Route = new AgentBridgeRouteTruth
             {
                 State = snapshot.RouteState,

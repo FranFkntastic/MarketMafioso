@@ -90,6 +90,7 @@ public sealed class MarketMafiosoBridgeProviderTests
         WorkspaceBusy = false,
         ClaimedRequestId = null,
         PreparedPlanStatus = null,
+        RemoteBellProbe = CreateRemoteBellProbeTruth(),
         Route = new AgentBridgeRouteTruth
         {
             State = string.Empty,
@@ -107,5 +108,18 @@ public sealed class MarketMafiosoBridgeProviderTests
             StopCount = 0,
             CompletedOrProbedStopCount = 0,
         },
+    };
+
+    private static AgentBridgeRemoteBellProbeTruth CreateRemoteBellProbeTruth() => new()
+    {
+        Active = false,
+        CanSubmit = true,
+        State = "Idle",
+        Message = string.Empty,
+        Readiness = string.Empty,
+        BellGameObjectId = null,
+        Distance = null,
+        OrdinaryInteractionDistance = null,
+        LastEvidencePath = null,
     };
 }
