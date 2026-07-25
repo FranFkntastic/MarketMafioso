@@ -1,4 +1,5 @@
 using MarketMafioso.MarketAcquisition;
+using System.Text.Json;
 
 namespace MarketMafioso.Tests.MarketAcquisition;
 
@@ -130,6 +131,105 @@ public sealed class MarketAcquisitionRouteReportDispatcherTests
 
             releaseReport.SetResult();
             await dispatcher.DrainAsync();
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void FileOutbox_UniqueEventsAppendOnlyTheirJournalRecords()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"mmf-outbox-{Guid.NewGuid():N}");
+        var path = Path.Combine(directory, "outbox.json");
+        var physicalWrites = new List<long>();
+        try
+        {
+            var outbox = new FileMarketAcquisitionReportOutbox(path, physicalWrites.Add);
+            physicalWrites.Clear();
+
+            for (var index = 0; index < 100; index++)
+            {
+                outbox.Put(
+                    $"line|{index}",
+                    "line-progress.v1",
+                    new { Index = index, Message = new string('x', 512) });
+            }
+
+            outbox.RemoveMany(Enumerable.Range(0, 50).Select(index => $"line|{index}").ToArray());
+
+            Assert.Equal(101, physicalWrites.Count);
+            Assert.All(physicalWrites, bytes => Assert.InRange(bytes, 1, 4096));
+            Assert.Equal(physicalWrites.Sum(), new FileInfo(path).Length);
+            Assert.False(File.Exists(path + ".bak"));
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void FileOutbox_MigratesLegacyArrayAndReplaysNewJournalRecords()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"mmf-outbox-{Guid.NewGuid():N}");
+        var path = Path.Combine(directory, "outbox.json");
+        try
+        {
+            Directory.CreateDirectory(directory);
+            var legacyEntry = new MarketAcquisitionReportOutboxEntry
+            {
+                Id = "legacy",
+                ReportType = "line-progress.v1",
+                PayloadJson = """{"value":1}""",
+                EnqueuedAtUtc = DateTimeOffset.UtcNow.AddMinutes(-1),
+            };
+            File.WriteAllText(
+                path,
+                JsonSerializer.Serialize(
+                    new[] { legacyEntry },
+                    new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true }));
+
+            var migrated = new FileMarketAcquisitionReportOutbox(path);
+            Assert.Equal("legacy", Assert.Single(migrated.Snapshot()).Id);
+            Assert.StartsWith("{", File.ReadAllText(path).TrimStart(), StringComparison.Ordinal);
+
+            migrated.Put("new", "route-progress.v1", new { Value = 2 });
+            var replayed = new FileMarketAcquisitionReportOutbox(path);
+            Assert.Equal(["legacy", "new"], replayed.Snapshot().Select(entry => entry.Id));
+
+            replayed.Remove("legacy");
+            Assert.Equal("new", Assert.Single(new FileMarketAcquisitionReportOutbox(path).Snapshot()).Id);
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void FileOutbox_RepairsATornFinalRecordBeforeAppendingAgain()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"mmf-outbox-{Guid.NewGuid():N}");
+        var path = Path.Combine(directory, "outbox.json");
+        try
+        {
+            var original = new FileMarketAcquisitionReportOutbox(path);
+            original.Put("first", "line-progress.v1", new { Value = 1 });
+            original.Put("second", "line-progress.v1", new { Value = 2 });
+            File.AppendAllText(path, "{\"operation\":\"put\"");
+
+            var recovered = new FileMarketAcquisitionReportOutbox(path);
+            Assert.Equal(["first", "second"], recovered.Snapshot().Select(entry => entry.Id));
+            recovered.Put("third", "line-progress.v1", new { Value = 3 });
+
+            Assert.Equal(
+                ["first", "second", "third"],
+                new FileMarketAcquisitionReportOutbox(path).Snapshot().Select(entry => entry.Id));
         }
         finally
         {
