@@ -252,6 +252,7 @@ public sealed class Plugin : IDalamudPlugin
     {
         retainerSaleChatObserver.Tick();
         retainerHistoryObserver.Tick();
+        mainWindow.RemoteMarketOverlay.IsOpen = true;
         mainWindow.OnFrameworkUpdate(framework);
         agentBridge.Tick();
     }
