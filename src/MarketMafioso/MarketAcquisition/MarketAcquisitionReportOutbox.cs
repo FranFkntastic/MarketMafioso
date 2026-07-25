@@ -20,6 +20,7 @@ public interface IMarketAcquisitionReportOutbox
     MarketAcquisitionReportOutboxEntry Put<T>(string id, string reportType, T payload);
     IReadOnlyList<MarketAcquisitionReportOutboxEntry> Snapshot();
     void Remove(string id);
+    void RemoveMany(IReadOnlyCollection<string> ids);
     T Deserialize<T>(MarketAcquisitionReportOutboxEntry entry);
 }
 
@@ -85,15 +86,22 @@ public sealed class FileMarketAcquisitionReportOutbox : IMarketAcquisitionReport
             return entries.OrderBy(entry => entry.EnqueuedAtUtc).ToArray();
     }
 
-    public void Remove(string id)
+    public void Remove(string id) => RemoveMany([id]);
+
+    public void RemoveMany(IReadOnlyCollection<string> ids)
     {
+        ArgumentNullException.ThrowIfNull(ids);
+        if (ids.Count == 0)
+            return;
+
+        var idSet = ids.ToHashSet(StringComparer.Ordinal);
         lock (sync)
         {
-            var removed = entries.Where(entry => entry.Id.Equals(id, StringComparison.Ordinal)).ToArray();
+            var removed = entries.Where(entry => idSet.Contains(entry.Id)).ToArray();
             if (removed.Length == 0)
                 return;
 
-            entries.RemoveAll(entry => entry.Id.Equals(id, StringComparison.Ordinal));
+            entries.RemoveAll(entry => idSet.Contains(entry.Id));
             try
             {
                 Persist();
@@ -164,10 +172,17 @@ internal sealed class VolatileMarketAcquisitionReportOutbox : IMarketAcquisition
             return entries.ToArray();
     }
 
-    public void Remove(string id)
+    public void Remove(string id) => RemoveMany([id]);
+
+    public void RemoveMany(IReadOnlyCollection<string> ids)
     {
+        ArgumentNullException.ThrowIfNull(ids);
+        if (ids.Count == 0)
+            return;
+
+        var idSet = ids.ToHashSet(StringComparer.Ordinal);
         lock (sync)
-            entries.RemoveAll(entry => entry.Id.Equals(id, StringComparison.Ordinal));
+            entries.RemoveAll(entry => idSet.Contains(entry.Id));
     }
 
     public T Deserialize<T>(MarketAcquisitionReportOutboxEntry entry) =>

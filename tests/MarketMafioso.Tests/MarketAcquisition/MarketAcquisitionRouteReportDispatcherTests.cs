@@ -60,9 +60,109 @@ public sealed class MarketAcquisitionRouteReportDispatcherTests
         Assert.Equal(3, attempts);
 
         shouldFail = false;
-        dispatcher.EnqueueRouteProgress(RouteReport());
+        dispatcher.RetryPendingReports();
         await dispatcher.DrainAsync();
         Assert.Equal(4, attempts);
+    }
+
+    [Fact]
+    public async Task DuplicateRouteState_QueuesOneDurableEntryWhileFirstReportIsBlocked()
+    {
+        var reportStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseReport = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var outbox = new VolatileMarketAcquisitionReportOutbox();
+        var reporter = new ScriptedReporter
+        {
+            OnRouteProgress = async (_, token) =>
+            {
+                reportStarted.TrySetResult();
+                await releaseReport.Task.WaitAsync(token);
+                return ProgressOutcome();
+            },
+        };
+        using var dispatcher = CreateDispatcher(reporter, out var claim, outbox: outbox);
+        dispatcher.BeginSession(claim);
+
+        dispatcher.EnqueueRouteProgress(RouteReport(sequence: 2));
+        await reportStarted.Task;
+        dispatcher.EnqueueRouteProgress(RouteReport(sequence: 3));
+
+        Assert.Single(outbox.Snapshot());
+        releaseReport.SetResult();
+        await dispatcher.DrainAsync();
+        Assert.Empty(outbox.Snapshot());
+    }
+
+    [Fact]
+    public async Task DuplicateRouteState_DoesNotRewriteFileOutbox()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"mmf-outbox-{Guid.NewGuid():N}");
+        var path = Path.Combine(directory, "outbox.json");
+        var reportStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseReport = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        try
+        {
+            var reporter = new ScriptedReporter
+            {
+                OnRouteProgress = async (_, token) =>
+                {
+                    reportStarted.TrySetResult();
+                    await releaseReport.Task.WaitAsync(token);
+                    return ProgressOutcome();
+                },
+            };
+            var outbox = new FileMarketAcquisitionReportOutbox(path);
+            using var dispatcher = CreateDispatcher(reporter, out var claim, outbox: outbox);
+            dispatcher.BeginSession(claim);
+
+            dispatcher.EnqueueRouteProgress(RouteReport(sequence: 2));
+            await reportStarted.Task;
+            var writtenAtUtc = File.GetLastWriteTimeUtc(path);
+            var length = new FileInfo(path).Length;
+
+            for (var sequence = 3; sequence <= 100; sequence++)
+                dispatcher.EnqueueRouteProgress(RouteReport(sequence));
+
+            Assert.Single(outbox.Snapshot());
+            Assert.Equal(length, new FileInfo(path).Length);
+            Assert.Equal(writtenAtUtc, File.GetLastWriteTimeUtc(path));
+            Assert.False(File.Exists(path + ".bak"));
+
+            releaseReport.SetResult();
+            await dispatcher.DrainAsync();
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+                Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Constructor_CompactsPreviouslyPersistedDuplicateRouteStates()
+    {
+        var releaseReport = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var outbox = new VolatileMarketAcquisitionReportOutbox();
+        var claim = MarketAcquisitionRouteEngineTestData.AcceptedClaim();
+        var first = RouteReport(sequence: 2);
+        var second = RouteReport(sequence: 3);
+        var routeKey = $"{first.RequestId}|{first.RouteState}|{first.RouteStopId}|{first.ActiveWorld}|{first.Phase}|{first.Message}";
+        outbox.Put("route|request|attempt|2", "route-progress.v1", new { Report = first, Claim = claim, RouteKey = routeKey });
+        outbox.Put("route|request|attempt|3", "route-progress.v1", new { Report = second, Claim = claim, RouteKey = routeKey });
+        var reporter = new ScriptedReporter
+        {
+            OnRouteProgress = async (_, token) =>
+            {
+                await releaseReport.Task.WaitAsync(token);
+                return ProgressOutcome();
+            },
+        };
+
+        using var dispatcher = CreateDispatcher(reporter, out _, outbox: outbox);
+
+        Assert.Single(outbox.Snapshot());
+        releaseReport.SetResult();
+        await dispatcher.DrainAsync();
     }
 
     [Fact]
@@ -188,8 +288,8 @@ public sealed class MarketAcquisitionRouteReportDispatcherTests
         return new MarketAcquisitionRouteReportDispatcher(reporter, lifecycle, new ImmediateRouteCallbackDispatcher(), outbox);
     }
 
-    private static MarketAcquisitionRouteProgressReport RouteReport() =>
-        new("request", "claim", "Running", "attempt", 2, "stop", "Maduin", "Purchasing", "Buying");
+    private static MarketAcquisitionRouteProgressReport RouteReport(long sequence = 2) =>
+        new("request", "claim", "Running", "attempt", sequence, "stop", "Maduin", "Purchasing", "Buying");
 
     private static MarketAcquisitionLineProgressReport LineReport() =>
         new("request", "claim", "attempt", 1, "line", "Darksteel Ore", "Running", 0, 0, "Buying", null);
