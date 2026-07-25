@@ -47,6 +47,14 @@ internal sealed class RemoteMarketTabPanel
             ImGui.Separator();
             DrawRow("Active purchase", $"{pending.Quantity}x {pending.ItemName} — {pending.Phase}");
         }
+        if (configuration.RemoteMarketRejectedTerritories.Count > 0)
+        {
+            ImGui.Separator();
+            DrawRow("Rejected areas", string.Join(", ", configuration.RemoteMarketRejectedTerritories));
+            ImGui.SameLine();
+            if (ImGui.SmallButton("Clear"))
+                controller.ClearRejectedTerritories();
+        }
         if (view.LastOutcome is not null)
         {
             ImGui.Separator();

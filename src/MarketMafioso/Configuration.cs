@@ -30,6 +30,8 @@ public class Configuration : IPluginConfiguration
     public bool EnableMarketAcquisitionDryRunTools { get; set; } = false;
 
     public bool EnableRemoteMarketPurchase { get; set; } = false;
+
+    public List<uint> RemoteMarketRejectedTerritories { get; set; } = [];
     public bool EnableAgentBridge { get; set; } = false;
     public bool EnableAgentBridgeScreenshots { get; set; } = false;
     public bool EnableAgentBridgeAudit { get; set; } = false;

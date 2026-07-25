@@ -175,6 +175,7 @@ public class MainWindow : Window, IDisposable
             Plugin.ObjectTable,
             Plugin.Framework,
             Plugin.GameGui,
+            Plugin.Condition,
             Plugin.ChatGui,
             log,
             scanner.ResolveItemName,

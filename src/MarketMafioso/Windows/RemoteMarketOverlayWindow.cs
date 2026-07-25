@@ -44,7 +44,7 @@ public sealed class RemoteMarketOverlayWindow : Window
             ImGui.Text($"{pending.TotalGil:N0} gil");
             if (pending.Phase == RemoteMarketPurchasePhase.AwaitingConfirmation)
             {
-                if (ImGuiUi.Button("Confirm purchase", view.Available))
+                if (ImGuiUi.Button("Confirm purchase", view.Available && view.ContextBlockReason is null))
                     controller.ConfirmPurchase();
                 ImGui.SameLine();
                 if (ImGui.Button("Cancel"))
@@ -52,6 +52,8 @@ public sealed class RemoteMarketOverlayWindow : Window
                     controller.CancelPurchase();
                     autoStagedListingId = null;
                 }
+                if (view.ContextBlockReason is not null)
+                    ImGui.TextColored(MarketMafiosoUiTheme.Muted, view.ContextBlockReason);
             }
             else
             {

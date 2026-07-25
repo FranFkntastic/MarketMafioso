@@ -1,6 +1,8 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Text.Json;
+using Dalamud.Game.ClientState.Conditions;
 using Dalamud.Game.Network.Structures;
 using Dalamud.Plugin.Services;
 using FFXIVClientStructs.FFXIV.Client.Game;
@@ -14,12 +16,27 @@ internal sealed class RemoteMarketController : IDisposable
 {
     private static readonly TimeSpan PurchaseDeadline = TimeSpan.FromSeconds(15);
 
+    private static readonly ConditionFlag[] PurchaseBlockingConditions =
+    [
+        ConditionFlag.Emoting,
+        ConditionFlag.Mounted,
+        ConditionFlag.Crafting,
+        ConditionFlag.Gathering,
+        ConditionFlag.PlayingMiniGame,
+        ConditionFlag.Occupied,
+        ConditionFlag.InCombat,
+        ConditionFlag.Occupied30,
+        ConditionFlag.OccupiedInEvent,
+        ConditionFlag.OccupiedInQuestEvent,
+    ];
+
     private readonly Configuration configuration;
     private readonly IMarketBoard marketBoard;
     private readonly IClientState clientState;
     private readonly IObjectTable objectTable;
     private readonly IFramework framework;
     private readonly IGameGui gameGui;
+    private readonly ICondition condition;
     private readonly IChatGui chatGui;
     private readonly IPluginLog log;
     private readonly Func<uint, string?> resolveItemName;
@@ -35,6 +52,7 @@ internal sealed class RemoteMarketController : IDisposable
         IObjectTable objectTable,
         IFramework framework,
         IGameGui gameGui,
+        ICondition condition,
         IChatGui chatGui,
         IPluginLog log,
         Func<uint, string?> resolveItemName,
@@ -46,6 +64,7 @@ internal sealed class RemoteMarketController : IDisposable
         this.objectTable = objectTable;
         this.framework = framework;
         this.gameGui = gameGui;
+        this.condition = condition;
         this.chatGui = chatGui;
         this.log = log;
         this.resolveItemName = resolveItemName;
@@ -56,6 +75,24 @@ internal sealed class RemoteMarketController : IDisposable
 
     public bool IsAvailable =>
         MarketAcquisitionUnlock.IsUnlocked(configuration) && configuration.EnableRemoteMarketPurchase;
+
+    public string? GetPurchaseContextBlockReason()
+    {
+        foreach (var flag in PurchaseBlockingConditions)
+        {
+            if (condition[flag])
+                return $"Cannot purchase while {flag}.";
+        }
+        if (configuration.RemoteMarketRejectedTerritories.Contains(clientState.TerritoryType))
+            return "Purchases have been rejected in this area before.";
+        return null;
+    }
+
+    public void ClearRejectedTerritories()
+    {
+        configuration.RemoteMarketRejectedTerritories.Clear();
+        configuration.Save();
+    }
 
     public unsafe bool IsMarketBoardResultVisible()
     {
@@ -141,7 +178,8 @@ internal sealed class RemoteMarketController : IDisposable
                     attempt.TotalGil,
                     attempt.Phase,
                     attempt.FailureReason),
-            lastOutcome);
+            lastOutcome,
+            GetPurchaseContextBlockReason());
     }
 
     public string? BeginPurchase()
@@ -150,6 +188,8 @@ internal sealed class RemoteMarketController : IDisposable
             return "Remote market is locked.";
         if (attempt is not null)
             return "A purchase is already in progress.";
+        if (GetPurchaseContextBlockReason() is { } contextBlock)
+            return contextBlock;
         var view = GetView();
         if (view.Selection is not { } selection)
             return "Select a listing in the market board window first.";
@@ -285,6 +325,7 @@ internal sealed class RemoteMarketController : IDisposable
             }
             if (delta == 0)
             {
+                NoteRejectedTerritory();
                 pending.Phase = RemoteMarketPurchasePhase.Failed;
                 Complete(pending, "The server rejected the purchase. No gil moved.");
                 return;
@@ -309,8 +350,30 @@ internal sealed class RemoteMarketController : IDisposable
         Complete(pending, reason);
     }
 
+    private void NoteRejectedTerritory()
+    {
+        var territory = clientState.TerritoryType;
+        if (configuration.RemoteMarketRejectedTerritories.Contains(territory))
+            return;
+        configuration.RemoteMarketRejectedTerritories.Add(territory);
+        configuration.Save();
+        log.Information("[MarketMafioso] Remote market recorded territory {Territory} as purchase-rejecting.", territory);
+    }
+
+    private void ClearStagedPurchase()
+    {
+        unsafe
+        {
+            var proxy = GetItemSearchProxy();
+            if (proxy != null)
+                proxy->LastPurchasedMarketboardItem.ListingId = 0;
+        }
+    }
+
     private void Complete(RemoteMarketPurchaseAttempt pending, string message)
     {
+        if (pending.SentAtUtc is not null)
+            ClearStagedPurchase();
         pending.FailureReason = message;
         attempt = null;
         lastOutcome = $"{pending.Phase}: {message}";
@@ -407,7 +470,8 @@ internal sealed record RemoteMarketView(
     int ListingCount,
     RemoteMarketSelectionView? Selection,
     RemoteMarketAttemptView? Attempt,
-    string? LastOutcome);
+    string? LastOutcome,
+    string? ContextBlockReason);
 
 internal sealed record RemoteMarketAttemptView(
     string ItemName,
