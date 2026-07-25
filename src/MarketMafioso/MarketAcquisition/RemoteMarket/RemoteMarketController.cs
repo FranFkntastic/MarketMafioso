@@ -4,12 +4,16 @@ using System.IO;
 using System.Linq;
 using System.Text.Json;
 using Dalamud.Game.ClientState.Conditions;
+using Dalamud.Game.ClientState.Objects.Enums;
 using Dalamud.Game.Network.Structures;
 using Dalamud.Plugin.Services;
 using FFXIVClientStructs.FFXIV.Client.Game;
+using FFXIVClientStructs.FFXIV.Client.Game.Control;
+using FFXIVClientStructs.FFXIV.Client.Game.Object;
 using FFXIVClientStructs.FFXIV.Client.UI;
 using FFXIVClientStructs.FFXIV.Client.UI.Agent;
 using FFXIVClientStructs.FFXIV.Client.UI.Info;
+using DalamudObjectKind = Dalamud.Game.ClientState.Objects.Enums.ObjectKind;
 
 namespace MarketMafioso.MarketAcquisition.RemoteMarket;
 
@@ -120,6 +124,58 @@ internal sealed class RemoteMarketController : IDisposable
             var opened = agent->IsAgentActive();
             log.Information("[MarketMafioso] Remote market board opened. Territory={Territory} AgentActive={AgentActive}", clientState.TerritoryType, opened);
             return opened ? "Market board opened." : "Market board was shown but did not activate.";
+        }
+    }
+
+    public unsafe string OpenMarketBoardViaObject()
+    {
+        if (!IsAvailable)
+            return "Remote market is locked.";
+        if (!clientState.IsLoggedIn)
+            return "Log in first.";
+
+        var player = objectTable.LocalPlayer;
+        if (player is null)
+            return "The local player is unavailable.";
+
+        GameObject* board = null;
+        var distance = 0f;
+        foreach (var candidate in objectTable)
+        {
+            if (candidate.ObjectKind != DalamudObjectKind.EventObj ||
+                !candidate.Name.TextValue.Contains("Market Board", StringComparison.OrdinalIgnoreCase))
+                continue;
+            board = (GameObject*)candidate.Address;
+            distance = System.Numerics.Vector3.Distance(player.Position, candidate.Position);
+            break;
+        }
+
+        if (board == null)
+            return "No market board object is loaded in this zone.";
+
+        unsafe
+        {
+            var targetSystem = TargetSystem.Instance();
+            if (targetSystem == null)
+                return "The target system is unavailable.";
+
+            var originalRadius = board->HitboxRadius;
+            try
+            {
+                board->HitboxRadius = Math.Max(originalRadius, distance + 1f);
+                targetSystem->InteractWithObject(board, false);
+            }
+            finally
+            {
+                board->HitboxRadius = originalRadius;
+            }
+
+            log.Information(
+                "[MarketMafioso] Radius-augmented market board interaction from {Distance:F1} yalms (radius {Original:F2} -> {Augmented:F2}, restored).",
+                distance,
+                originalRadius,
+                distance + 1f);
+            return $"Interacted with the market board object from {distance:F1} yalms through the stock path (radius restored).";
         }
     }
 

@@ -242,6 +242,18 @@ public sealed class Plugin : IDalamudPlugin
                 break;
 #endif
 
+            case "probe-bell":
+#if DEBUG
+            {
+                var probeMessage = mainWindow.BeginRemoteSummoningBellProbe();
+                ChatGui.Print($"[MMF] Remote bell probe: {probeMessage}");
+                break;
+            }
+#else
+                ChatGui.Print("[MMF] Remote bell probe is only available in debug builds.");
+                break;
+#endif
+
             default:
                 mainWindow.IsOpen = !mainWindow.IsOpen;
                 break;

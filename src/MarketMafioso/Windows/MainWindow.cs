@@ -23,6 +23,7 @@ using MarketMafioso.Windows.WorkshopLogistics;
 using MarketMafioso.MarketAcquisition.ExactAuthority;
 using MarketMafioso.WorkshopPrep;
 using MarketMafioso.Diagnostics;
+using MarketMafioso.MarketDiagnostics;
 using Franthropy.Dalamud.AgentBridge;
 using MarketMafiosoCaptureRegion = MarketMafioso.AgentBridge.AgentBridgeCaptureRegion;
 
@@ -41,6 +42,7 @@ public class MainWindow : Window, IDisposable
     private readonly IPlayerState playerState;
     private readonly IPluginLog log;
     private readonly RemoteMarketController remoteMarketController;
+    private readonly RemoteSummoningBellProbe remoteSummoningBellProbe;
     private readonly RemoteMarketTabPanel remoteMarketTabPanel;
 
     public RemoteMarketOverlayWindow RemoteMarketOverlay { get; }
@@ -180,7 +182,26 @@ public class MainWindow : Window, IDisposable
             log,
             scanner.ResolveItemName,
             Plugin.PluginInterface.GetPluginConfigDirectory());
-        remoteMarketTabPanel = new RemoteMarketTabPanel(config, remoteMarketController);
+        remoteSummoningBellProbe = new RemoteSummoningBellProbe(
+            config,
+            Plugin.ClientState,
+            Plugin.ObjectTable,
+            Plugin.TargetManager,
+            Plugin.DataManager,
+            Plugin.GameInteropProvider,
+            Plugin.SigScanner,
+            Plugin.Framework,
+            Plugin.GameGui,
+            Plugin.Condition,
+            Plugin.ChatGui,
+            log,
+            Plugin.PluginInterface,
+            Plugin.PluginInterface.GetPluginConfigDirectory());
+        remoteMarketTabPanel = new RemoteMarketTabPanel(
+            config,
+            remoteMarketController,
+            remoteSummoningBellProbe,
+            AgentReviewRegistry);
         RemoteMarketOverlay = new RemoteMarketOverlayWindow(remoteMarketController);
         this.marketBoardApproachService = marketBoardApproachService;
         this.marketAcquisitionRouteDiagnosticsDirectory = marketAcquisitionRouteDiagnosticsDirectory;
@@ -582,6 +603,8 @@ public class MainWindow : Window, IDisposable
     }
 
     public string OpenRemoteMarketBoard() => remoteMarketController.OpenMarketBoard();
+
+    public string BeginRemoteSummoningBellProbe() => remoteSummoningBellProbe.BeginProbe();
 
     public void BeginAgentReviewFrame() => AgentReviewRegistry.BeginFrame();
 
@@ -1716,6 +1739,7 @@ public class MainWindow : Window, IDisposable
         acquisitionWorkspace.Dispose();
         routeEngine.Dispose();
         remoteMarketController.Dispose();
+        remoteSummoningBellProbe.Dispose();
         marketPurchasePacketObserver.Dispose();
         acquisitionHttpClient.Dispose();
         craftQuoteHttpClient.Dispose();
