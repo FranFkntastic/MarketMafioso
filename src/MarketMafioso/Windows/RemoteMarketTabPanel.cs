@@ -161,6 +161,34 @@ internal sealed class RemoteMarketTabPanel
             () => SubmitDistanceWarmSessionRetention(10),
             view.Readiness);
 
+        ImGui.SameLine();
+        if (!enabled)
+            ImGui.BeginDisabled();
+        if (ImGui.Button("Scene 2 UI"))
+            SubmitScene2UiResurrection();
+        if (!enabled)
+            ImGui.EndDisabled();
+        reviewRegistry.RegisterLastButton(
+            "remote-bell.scene2-ui",
+            "Arm retained scene-2 local UI resurrection probe",
+            enabled,
+            SubmitScene2UiResurrection,
+            view.Readiness);
+
+        ImGui.SameLine();
+        if (!enabled)
+            ImGui.BeginDisabled();
+        if (ImGui.Button("Scene 2 10y"))
+            SubmitScene2DistanceContinuation(10);
+        if (!enabled)
+            ImGui.EndDisabled();
+        reviewRegistry.RegisterLastButton(
+            "remote-bell.scene2-move-10y",
+            "Arm retained scene-2 10-yalm continuation probe",
+            enabled,
+            () => SubmitScene2DistanceContinuation(10),
+            view.Readiness);
+
         foreach (var movementDistance in WarmRetentionUnlockedMovementDistances)
         {
             ImGui.SameLine();
@@ -402,6 +430,18 @@ internal sealed class RemoteMarketTabPanel
     {
         var message = bellProbe.BeginLocallyUnlockedDistanceWarmSessionRetentionProbe(movementDistance);
         Plugin.ChatGui.Print($"[MMF] Warm-session retention: {message}");
+    }
+
+    private void SubmitScene2UiResurrection()
+    {
+        var message = bellProbe.BeginScene2UiResurrectionProbe();
+        Plugin.ChatGui.Print($"[MMF] Scene-2 UI resurrection: {message}");
+    }
+
+    private void SubmitScene2DistanceContinuation(float movementDistance)
+    {
+        var message = bellProbe.BeginScene2DistanceContinuationProbe(movementDistance);
+        Plugin.ChatGui.Print($"[MMF] Scene-2 distance continuation: {message}");
     }
 
     private void SubmitHeldWarmSessionReplay()
