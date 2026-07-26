@@ -213,6 +213,7 @@ internal sealed partial class RemoteSummoningBellProbe : IDisposable
     {
         if (disposed)
             return;
+        UpdatePositionFrameOneShotStaging();
         UpdateBoundaryNavigationTrigger();
         UpdateBoundaryRetainerListAutoClose();
         UpdateBoundaryMotionTrigger();
@@ -599,6 +600,7 @@ internal sealed partial class RemoteSummoningBellProbe : IDisposable
             return;
 
         disposed = true;
+        StopPositionFrameOneShotStaging();
         positionFrameOneShotSlot.Cancel();
         StopBoundaryNavigation();
         session = null;

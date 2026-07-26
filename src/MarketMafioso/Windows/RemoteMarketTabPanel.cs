@@ -465,6 +465,20 @@ internal sealed class RemoteMarketTabPanel
         ImGui.TextWrapped(
             "Two-step, secondary-only control. Prepare freezes the exact bell, territory, truthful player position, and bell-adjacent position without sending. Transmit consumes that preparation and can replace only the first exact compact position frame after the exact bell StartTalkEvent; every mismatch aborts and no retry exists.");
 
+        if (!view.CanStage)
+            ImGui.BeginDisabled();
+        if (ImGui.Button(view.Staging ? "Staging position..." : "Stage just outside range"))
+            SubmitStagePositionFrameOneShot();
+        if (!view.CanStage)
+            ImGui.EndDisabled();
+        reviewRegistry.RegisterLastButton(
+            "remote-bell.position-frame-stage",
+            "Stage just outside bell range",
+            view.CanStage,
+            SubmitStagePositionFrameOneShot,
+            view.Readiness);
+
+        ImGui.SameLine();
         if (!view.CanPrepare)
             ImGui.BeginDisabled();
         if (ImGui.Button("Prepare exact one-shot"))
@@ -530,6 +544,12 @@ internal sealed class RemoteMarketTabPanel
     private void SubmitPreparePositionFrameOneShot()
     {
         var message = bellProbe.PreparePositionFrameOneShot();
+        Plugin.ChatGui.Print($"[MMF] Position-frame one-shot: {message}");
+    }
+
+    private void SubmitStagePositionFrameOneShot()
+    {
+        var message = bellProbe.StagePositionFrameOneShot();
         Plugin.ChatGui.Print($"[MMF] Position-frame one-shot: {message}");
     }
 

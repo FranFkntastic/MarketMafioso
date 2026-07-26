@@ -5,7 +5,9 @@ using Franthropy.Dalamud.Automation.Retainers;
 namespace MarketMafioso.MarketDiagnostics;
 
 internal sealed record PositionFrameOneShotView(
+    bool Staging,
     bool Prepared,
+    bool CanStage,
     bool CanPrepare,
     bool CanFire,
     string State,
@@ -20,21 +22,28 @@ internal sealed partial class RemoteSummoningBellProbe
     private static readonly TimeSpan PositionFramePreparationLifetime = TimeSpan.FromSeconds(60);
 
     private readonly PositionFrameOneShotPreparationSlot positionFrameOneShotSlot = new();
+    private PositionFrameOneShotStagingSession? positionFrameOneShotStaging;
 
     public PositionFrameOneShotView GetPositionFrameOneShotView()
     {
         var observation = bell.ObserveLoadedBell();
         var prepared = positionFrameOneShotSlot.Peek();
+        var staging = positionFrameOneShotStaging is not null;
+        var canStage = CanStagePositionFrameOneShot(observation, out var stageReadiness);
         var canPrepare = CanPreparePositionFrameOneShot(observation, out var prepareReadiness);
         var fireReadiness = "No position-frame one-shot is prepared.";
         var canFire = prepared is not null &&
             ValidatePositionFramePreparation(prepared, out fireReadiness);
-        var readiness = prepared is null
-            ? prepareReadiness
+        var readiness = staging
+            ? "vnavmesh is moving to a narrow position just outside ordinary bell range."
+            : prepared is null
+            ? canPrepare ? prepareReadiness : stageReadiness
             : fireReadiness;
 
         return new(
+            staging,
             prepared is not null,
+            canStage,
             canPrepare,
             canFire,
             prepared is null
@@ -51,6 +60,40 @@ internal sealed partial class RemoteSummoningBellProbe
             FormatGameObjectId(prepared?.BellGameObjectId ?? observation.BellGameObjectId),
             observation.Available ? observation.Distance : null,
             prepared?.ExpiresAtUtc);
+    }
+
+    public string StagePositionFrameOneShot()
+    {
+        var observation = bell.ObserveLoadedBell();
+        if (!CanStagePositionFrameOneShot(observation, out var readiness))
+            return readiness;
+        if (observation.OutsideOrdinaryInteractionRange &&
+            observation.Distance <= observation.OrdinaryInteractionDistance + 0.5f)
+        {
+            return "The player is already staged just outside ordinary bell range.";
+        }
+
+        var playerPosition = objectTable.LocalPlayer!.Position;
+        if (!TryFindGameObjectPosition(observation.BellGameObjectId, out var bellPosition))
+            return "The loaded bell position is unavailable.";
+        if (!TryComputeBellRadiusPosition(
+                playerPosition,
+                bellPosition,
+                observation.OrdinaryInteractionDistance + 0.3f,
+                out var destination))
+        {
+            return "A narrow out-of-range staging position could not be derived.";
+        }
+
+        var move = vnavmesh.MoveDirect(playerPosition, destination);
+        if (!move.Success)
+            return move.Message;
+
+        positionFrameOneShotStaging = new(
+            observation.BellGameObjectId,
+            clientState.TerritoryType,
+            DateTimeOffset.UtcNow + TimeSpan.FromSeconds(10));
+        return "Moving to a narrow truthful position just outside ordinary bell range; no interaction is armed.";
     }
 
     public string PreparePositionFrameOneShot()
@@ -195,6 +238,7 @@ internal sealed partial class RemoteSummoningBellProbe
             return false;
         }
         if (session is not null ||
+            positionFrameOneShotStaging is not null ||
             normalCaptureSession is not null ||
             yieldProbeSession is not null ||
             warmSessionProbeSession is not null ||
@@ -212,6 +256,78 @@ internal sealed partial class RemoteSummoningBellProbe
         readiness =
             $"Ready to freeze bell {observation.BellGameObjectId:X} at truthful distance {observation.Distance:F3} for 60 seconds. Preparation sends nothing.";
         return true;
+    }
+
+    private bool CanStagePositionFrameOneShot(
+        RemoteSummoningBellObservation observation,
+        out string readiness)
+    {
+        if (!configuration.EnableMarketDiagnostics || !clientState.IsLoggedIn)
+        {
+            readiness = "Market Diagnostics and a logged-in character are required.";
+            return false;
+        }
+        if (!observation.Available)
+        {
+            readiness = observation.Message;
+            return false;
+        }
+        if (!vnavmesh.IsReady)
+        {
+            readiness = "vnavmesh is not ready.";
+            return false;
+        }
+        if (positionFrameOneShotStaging is not null ||
+            session is not null ||
+            normalCaptureSession is not null ||
+            yieldProbeSession is not null ||
+            warmSessionProbeSession is not null ||
+            retainerRpcProbeSession is not null ||
+            IsRetainerListReady())
+        {
+            readiness = "Another movement, bell diagnostic, or retainer session is active.";
+            return false;
+        }
+
+        readiness = observation.OutsideOrdinaryInteractionRange &&
+            observation.Distance <= observation.OrdinaryInteractionDistance + 0.5f
+            ? "The player is already staged just outside ordinary bell range."
+            : $"Ready to move from {observation.Distance:F3} to about {observation.OrdinaryInteractionDistance + 0.3f:F3} yalms from bell {observation.BellGameObjectId:X}.";
+        return true;
+    }
+
+    private void UpdatePositionFrameOneShotStaging()
+    {
+        if (positionFrameOneShotStaging is not { } staging)
+            return;
+
+        var observation = bell.ObserveLoadedBell();
+        if (!observation.Available ||
+            observation.BellGameObjectId != staging.BellGameObjectId ||
+            clientState.TerritoryType != staging.TerritoryId)
+        {
+            StopPositionFrameOneShotStaging();
+            return;
+        }
+
+        if (observation.Distance >= observation.OrdinaryInteractionDistance + 0.15f)
+        {
+            StopPositionFrameOneShotStaging();
+            return;
+        }
+
+        if (DateTimeOffset.UtcNow >= staging.DeadlineUtc)
+            StopPositionFrameOneShotStaging();
+    }
+
+    private void StopPositionFrameOneShotStaging()
+    {
+        if (positionFrameOneShotStaging is null)
+            return;
+
+        positionFrameOneShotStaging = null;
+        vnavmesh.Stop();
+        vnavmesh.SetMovementAllowed(true);
     }
 
     private bool ValidatePositionFramePreparation(
@@ -234,6 +350,7 @@ internal sealed partial class RemoteSummoningBellProbe
             return false;
         }
         if (session is not null ||
+            positionFrameOneShotStaging is not null ||
             normalCaptureSession is not null ||
             yieldProbeSession is not null ||
             warmSessionProbeSession is not null ||
@@ -300,6 +417,11 @@ internal sealed record PositionFrameOneShotPreparation(
     Vector3 TruthfulPosition,
     Vector3 BellPosition,
     Vector3 BellAdjacentPosition);
+
+internal sealed record PositionFrameOneShotStagingSession(
+    ulong BellGameObjectId,
+    uint TerritoryId,
+    DateTimeOffset DeadlineUtc);
 
 internal sealed class PositionFrameOneShotPreparationSlot
 {
