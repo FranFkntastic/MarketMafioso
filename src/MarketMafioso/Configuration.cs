@@ -1,4 +1,5 @@
 using Dalamud.Configuration;
+using MarketMafioso.MarketAcquisition;
 using MarketMafioso.RetainerRestock;
 using MarketMafioso.WorkshopPrep;
 using Newtonsoft.Json;
@@ -26,7 +27,11 @@ public class Configuration : IPluginConfiguration
     public bool EnableMarketAcquisition { get; set; } = false;
     public DateTime? MarketAcquisitionUnlockedAtUtc { get; set; }
     public bool EnableOpportunisticWorldChecks { get; set; } = true;
+    public MarketAcquisitionRouteDiagnosticsLevel MarketAcquisitionRouteDiagnostics { get; set; } =
+        MarketAcquisitionRouteDiagnosticsLevel.Summary;
+    [Obsolete("Use MarketAcquisitionRouteDiagnostics. Retained only to deserialize older configurations.")]
     public bool CreateMarketAcquisitionRouteDiagnosticPackages { get; set; } = false;
+    public bool ShouldSerializeCreateMarketAcquisitionRouteDiagnosticPackages() => false;
     public bool EnableMarketAcquisitionDryRunTools { get; set; } = false;
 
     public bool EnableRemoteMarketPurchase { get; set; } = false;

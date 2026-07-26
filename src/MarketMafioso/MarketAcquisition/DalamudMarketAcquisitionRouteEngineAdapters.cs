@@ -256,7 +256,7 @@ public sealed class MarketAcquisitionRouteRequestReporter : IMarketAcquisitionRo
             ItemId = report.ItemId,
             ItemName = report.ItemName,
             ListingId = report.Candidate.ListingId,
-            RetainerName = report.Candidate.RetainerName,
+            RetainerName = ResolveRetainerName(report.Candidate),
             RetainerId = report.Candidate.RetainerId,
             Quantity = report.Candidate.Quantity,
             UnitPrice = report.Candidate.UnitPrice,
@@ -265,6 +265,16 @@ public sealed class MarketAcquisitionRouteRequestReporter : IMarketAcquisitionRo
             Result = "Purchased",
             Message = report.Message,
         }, cancellationToken).ConfigureAwait(false);
+    }
+
+    internal static string ResolveRetainerName(MarketBoardPurchaseCandidate candidate)
+    {
+        ArgumentNullException.ThrowIfNull(candidate);
+        if (!string.IsNullOrWhiteSpace(candidate.RetainerName))
+            return candidate.RetainerName;
+        if (!string.IsNullOrWhiteSpace(candidate.RetainerId))
+            return $"Retainer {candidate.RetainerId}";
+        return "Unknown retainer";
     }
 
     public async Task ReportLineProgressAsync(MarketAcquisitionLineProgressReport report, CancellationToken cancellationToken)
@@ -325,6 +335,7 @@ public sealed class MarketAcquisitionWorldVisitEvidenceRecorder : IMarketAcquisi
     private const int MaxRecords = 2_000;
     private readonly Configuration config;
     private readonly MarketAcquisitionWorldVisitCatalog catalog;
+    private bool dirty;
 
     public MarketAcquisitionWorldVisitEvidenceRecorder(Configuration config, MarketAcquisitionWorldVisitCatalog catalog)
     {
@@ -353,6 +364,7 @@ public sealed class MarketAcquisitionWorldVisitEvidenceRecorder : IMarketAcquisi
             RouteRunId = routeRunId,
             RouteStopId = $"{ResolveDataCenter(currentWorld, activeSubtask?.DataCenter)}:{currentWorld}",
         });
+        dirty = true;
         Save();
     }
 
@@ -379,13 +391,19 @@ public sealed class MarketAcquisitionWorldVisitEvidenceRecorder : IMarketAcquisi
             RouteRunId = routeRunId,
             RouteStopId = $"{dataCenter}:{worldName}",
         });
-        Save();
+        dirty = true;
     }
+
+    public void Flush() => Save();
 
     private void Save()
     {
+        if (!dirty)
+            return;
+
         catalog.Prune(MaxRecords);
         config.Save();
+        dirty = false;
     }
 
     private static string ResolveDataCenter(string worldName, string? plannedDataCenter) =>

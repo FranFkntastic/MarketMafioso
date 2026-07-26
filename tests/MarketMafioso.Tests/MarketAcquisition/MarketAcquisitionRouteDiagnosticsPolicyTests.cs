@@ -3,20 +3,24 @@ namespace MarketMafioso.Tests.MarketAcquisition;
 public sealed class MarketAcquisitionRouteDiagnosticsPolicyTests
 {
     [Theory]
-    [InlineData(false, false, false)]
-    [InlineData(true, false, true)]
-    [InlineData(false, true, true)]
-    [InlineData(true, true, true)]
-    public void ShouldCreatePackage_UsesSettingOrExplicitDiagnosticStart(
-        bool settingEnabled,
-        bool explicitDiagnosticStart,
-        bool expected)
+    [InlineData(MarketMafioso.MarketAcquisition.MarketAcquisitionRouteDiagnosticsLevel.Off)]
+    [InlineData(MarketMafioso.MarketAcquisition.MarketAcquisitionRouteDiagnosticsLevel.Summary)]
+    [InlineData(MarketMafioso.MarketAcquisition.MarketAcquisitionRouteDiagnosticsLevel.FullTrace)]
+    public void Resolve_UsesConfiguredLevelForLiveRoutes(
+        MarketMafioso.MarketAcquisition.MarketAcquisitionRouteDiagnosticsLevel configured)
     {
         Assert.Equal(
-            expected,
-            MarketMafioso.MarketAcquisition.MarketAcquisitionRouteDiagnosticsPolicy.ShouldCreatePackage(
-                settingEnabled,
-                explicitDiagnosticStart));
+            configured,
+            MarketMafioso.MarketAcquisition.MarketAcquisitionRouteDiagnosticsPolicy.Resolve(configured));
     }
 
+    [Fact]
+    public void Resolve_UpgradesOffToSummaryForDryRun()
+    {
+        Assert.Equal(
+            MarketMafioso.MarketAcquisition.MarketAcquisitionRouteDiagnosticsLevel.Summary,
+            MarketMafioso.MarketAcquisition.MarketAcquisitionRouteDiagnosticsPolicy.Resolve(
+                MarketMafioso.MarketAcquisition.MarketAcquisitionRouteDiagnosticsLevel.Off,
+                MarketMafioso.MarketAcquisition.MarketAcquisitionExecutionMode.DryRun));
+    }
 }

@@ -226,10 +226,9 @@ public sealed class FileMarketAcquisitionReportOutbox : IMarketAcquisitionReport
             FileMode.Append,
             FileAccess.Write,
             FileShare.Read,
-            bufferSize: 4096,
-            FileOptions.WriteThrough);
+            bufferSize: 64 * 1024,
+            FileOptions.SequentialScan);
         stream.Write(bytes);
-        stream.Flush(flushToDisk: true);
         observePhysicalWrite?.Invoke(bytes.LongLength);
     }
 

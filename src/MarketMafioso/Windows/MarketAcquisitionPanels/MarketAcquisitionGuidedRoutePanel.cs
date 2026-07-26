@@ -12,7 +12,7 @@ namespace MarketMafioso.Windows.MarketAcquisitionPanels;
 internal sealed class MarketAcquisitionGuidedRoutePanel
 {
     private readonly Func<MarketAcquisitionRouteEngineSnapshot> getRouteSnapshot;
-    private readonly Action<bool> startRoute;
+    private readonly Action startRoute;
     private readonly Action startEvidenceRefresh;
     private readonly Func<bool> canObserveCurrentBoard;
     private readonly Action observeCurrentBoard;
@@ -31,7 +31,7 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
 
     public MarketAcquisitionGuidedRoutePanel(
         Func<MarketAcquisitionRouteEngineSnapshot> getRouteSnapshot,
-        Action<bool> startRoute,
+        Action startRoute,
         Action startEvidenceRefresh,
         Func<bool> canObserveCurrentBoard,
         Action observeCurrentBoard,
@@ -172,13 +172,8 @@ internal sealed class MarketAcquisitionGuidedRoutePanel
             if (canStart)
             {
                 if (ImGuiUi.PrimaryButton("Start Route##MarketAcquisitionStartRoute", true))
-                    startRoute(false);
-                RegisterLastControl("acquisition.route.start", "Start the Market Acquisition route", true, () => startRoute(false));
-
-                ImGui.SameLine();
-                if (ImGuiUi.Button("Diagnostic Run##MarketAcquisitionStartDiagnostics", true))
-                    startRoute(true);
-                RegisterLastControl("acquisition.route.start-diagnostics", "Start the Market Acquisition route with diagnostics", true, () => startRoute(true));
+                    startRoute();
+                RegisterLastControl("acquisition.route.start", "Start the Market Acquisition route", true, startRoute);
 
                 ImGui.SameLine();
             }

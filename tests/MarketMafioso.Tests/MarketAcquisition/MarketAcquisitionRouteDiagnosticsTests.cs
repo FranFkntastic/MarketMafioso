@@ -31,6 +31,52 @@ public sealed class MarketAcquisitionRouteDiagnosticsTests
     }
 
     [Fact]
+    public void Summary_CreatesLeanPackageWithoutTraceOrCsvArtifacts()
+    {
+        var directory = CreateTempDirectory();
+        using var diagnostics = MarketMafioso.MarketAcquisition.MarketAcquisitionRouteDiagnostics.CreateEnabled(
+            directory,
+            DateTimeOffset.UnixEpoch,
+            "route",
+            MarketMafioso.MarketAcquisition.MarketAcquisitionRouteDiagnosticsLevel.Summary);
+
+        diagnostics.Record(
+            "automation-snapshot",
+            "Polling.",
+            new Dictionary<string, string?> { ["outcome"] = "InProgress" });
+        diagnostics.Record("purchase-audit", "Purchased.");
+        diagnostics.Flush();
+
+        Assert.Null(diagnostics.ObservedListingsCsvPath);
+        Assert.Null(diagnostics.PurchaseRecordsCsvPath);
+        Assert.Empty(Directory.GetFiles(diagnostics.PackageDirectoryPath!, "trace-*.jsonl"));
+        var events = ReadLog(diagnostics.RouteEventsJsonlPath!);
+        Assert.DoesNotContain("Polling.", events, StringComparison.Ordinal);
+        Assert.Contains("\"eventName\":\"purchase-audit\"", events, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void FullTrace_WritesChecksummedSegmentManifest()
+    {
+        var directory = CreateTempDirectory();
+        using var diagnostics = MarketMafioso.MarketAcquisition.MarketAcquisitionRouteDiagnostics.CreateEnabled(
+            directory,
+            DateTimeOffset.UnixEpoch);
+
+        diagnostics.Record("travel-command", "Travel.");
+        diagnostics.Complete("Done.");
+
+        var tracePath = Path.Combine(diagnostics.PackageDirectoryPath!, "trace-0001.jsonl");
+        Assert.True(File.Exists(tracePath));
+        using var manifest = JsonDocument.Parse(File.ReadAllText(diagnostics.ManifestPath!));
+        var segment = Assert.Single(manifest.RootElement.GetProperty("fullTraceSegments").EnumerateArray());
+        Assert.Equal("trace-0001.jsonl", segment.GetProperty("fileName").GetString());
+        Assert.Equal(1, segment.GetProperty("firstSequence").GetInt64());
+        Assert.Equal(3, segment.GetProperty("lastSequence").GetInt64());
+        Assert.Equal(64, segment.GetProperty("sha256").GetString()!.Length);
+    }
+
+    [Fact]
     public void CreateEnabled_AddsSuffixWhenPackageFolderExists()
     {
         var directory = CreateTempDirectory();
@@ -88,6 +134,7 @@ public sealed class MarketAcquisitionRouteDiagnosticsTests
                 ["empty"] = null,
             });
 
+        diagnostics.Flush();
         var text = ReadLog(diagnostics.FilePath!);
         Assert.Contains("travel-command", text, StringComparison.Ordinal);
         Assert.Contains("Sent Lifestream command.", text, StringComparison.Ordinal);
@@ -114,6 +161,7 @@ public sealed class MarketAcquisitionRouteDiagnosticsTests
                 ["empty"] = null,
             });
 
+        diagnostics.Flush();
         var events = ReadLog(diagnostics.RouteEventsJsonlPath!)
             .Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
         Assert.Equal(2, events.Length);
@@ -193,6 +241,7 @@ public sealed class MarketAcquisitionRouteDiagnosticsTests
                     ["searchText"] = "Varnish",
                 }));
 
+        diagnostics.Flush();
         var text = ReadLog(diagnostics.FilePath!);
         Assert.Contains("automation-snapshot", text, StringComparison.Ordinal);
         Assert.Contains("step: SearchItem", text, StringComparison.Ordinal);
@@ -259,6 +308,7 @@ public sealed class MarketAcquisitionRouteDiagnosticsTests
                 ],
             });
 
+        diagnostics.Flush();
         var csv = ReadLog(diagnostics.ObservedListingsCsvPath!);
         Assert.Contains("listingReadFresh,coverageStatus,unreadListings,rawItemIdMismatchCounts", csv, StringComparison.Ordinal);
         Assert.Contains("True,Complete,0,", csv, StringComparison.Ordinal);
@@ -291,6 +341,7 @@ public sealed class MarketAcquisitionRouteDiagnosticsTests
                 IsVisibleListingCacheTruncated = true,
             });
 
+        diagnostics.Flush();
         var csv = ReadLog(diagnostics.ObservedListingsCsvPath!);
         Assert.Contains("listingReadFresh,coverageStatus,unreadListings,rawItemIdMismatchCounts", csv, StringComparison.Ordinal);
         Assert.Contains("True,Incomplete,32,", csv, StringComparison.Ordinal);
@@ -322,6 +373,7 @@ public sealed class MarketAcquisitionRouteDiagnosticsTests
             5121,
             "Ready");
 
+        diagnostics.Flush();
         var csv = ReadLog(diagnostics.PurchaseRecordsCsvPath!);
         Assert.Contains("requestId,world,dataCenter,lineId,itemId,itemName,source,sourceCandidateStatus,event,result", csv, StringComparison.Ordinal);
         Assert.Contains("request-1,Coeurl,Crystal,line-1,5121,Darksteel Ore,Planned,Ready,purchase-audit,Purchased,listing-1,retainer-1,55,30140,548", csv, StringComparison.Ordinal);

@@ -160,6 +160,10 @@ public interface IMarketAcquisitionRouteEvidenceRecorder
         string worldName,
         string? requestId,
         string routeRunId);
+
+    void Flush()
+    {
+    }
 }
 
 public interface IMarketAcquisitionRouteCallbackDispatcher

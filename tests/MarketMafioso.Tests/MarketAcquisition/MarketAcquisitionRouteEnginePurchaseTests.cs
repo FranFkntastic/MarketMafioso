@@ -36,10 +36,11 @@ public sealed class MarketAcquisitionRouteEnginePurchaseTests
         Assert.True(harness.Ui.CloseMarketBoardCallCount > 0);
         var packageDirectory = Path.GetDirectoryName(Assert.IsType<string>(harness.Runner.LastDiagnosticFilePath));
         var manifest = File.ReadAllText(Path.Combine(Assert.IsType<string>(packageDirectory), "manifest.json"));
-        var purchases = File.ReadAllText(Assert.IsType<string>(harness.Runner.LastPurchaseRecordsCsvPath));
+        var routeEvents = File.ReadAllText(Path.Combine(packageDirectory, "route-events.jsonl"));
         Assert.Contains("\"packageKind\":\"dry-run\"", manifest, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("\"captureStatus\":\"Complete\"", manifest, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("DryRunWouldPurchase", purchases, StringComparison.Ordinal);
+        Assert.Contains("DryRunWouldPurchase", routeEvents, StringComparison.Ordinal);
+        Assert.Null(harness.Runner.LastPurchaseRecordsCsvPath);
         harness.Engine.Dispose();
     }
 

@@ -389,7 +389,7 @@ public class MainWindow : Window, IDisposable
             );
         marketAcquisitionGuidedRoutePanel = new MarketAcquisitionGuidedRoutePanel(
             routeEngine.CreateSnapshot,
-            forceDiagnostics => _ = StartGuidedRouteAsync(forceDiagnostics),
+            () => _ = StartGuidedRouteAsync(),
             () => _ = StartEvidenceRefreshAsync(),
             CanProbeLiveMarketBoard,
             () => _ = ProbeLiveMarketBoardAsync(),
@@ -1343,21 +1343,21 @@ public class MainWindow : Window, IDisposable
                playerState.CurrentWorld.IsValid;
     }
 
-    private Task StartGuidedRouteAsync(bool forceDiagnostics)
+    private Task StartGuidedRouteAsync()
     {
         return acquisitionWorkspace.RunWithReportableClaimAsync((claimed, _) =>
         {
             var plan = acquisitionWorkspace.RequirePreparedPlan("Prepare a plan before starting a guided route.");
-            var enableDiagnostics = MarketAcquisitionRouteDiagnosticsPolicy.ShouldCreatePackage(
-                config.CreateMarketAcquisitionRouteDiagnosticPackages,
-                forceDiagnostics);
+            var diagnosticsLevel = MarketAcquisitionRouteDiagnosticsPolicy.Resolve(
+                config.MarketAcquisitionRouteDiagnostics);
             routeEngine.Start(
                 plan,
                 claimed,
-                enableDiagnostics,
+                diagnosticsLevel != MarketAcquisitionRouteDiagnosticsLevel.Off,
                 config.EnableOpportunisticWorldChecks,
                 acquisitionRequestBuilder.CurrentDocument.ExactAcquisitionAuthority?.FinalizedContract,
-                acquisitionRequestBuilder.CurrentDocument);
+                acquisitionRequestBuilder.CurrentDocument,
+                diagnosticsLevel: diagnosticsLevel);
             routeEngine.ReportRouteProgress();
             return Task.CompletedTask;
         });
@@ -1369,8 +1369,13 @@ public class MainWindow : Window, IDisposable
         {
             var currentWorld = playerState.CurrentWorld.IsValid ? GetCurrentWorldName() : string.Empty;
             var plan = MarketAcquisitionEvidenceRefreshPlanBuilder.Build(claimed, currentWorld, DateTimeOffset.UtcNow);
-            var enableDiagnostics = config.CreateMarketAcquisitionRouteDiagnosticPackages;
-            routeEngine.StartEvidenceRefresh(plan, claimed, enableDiagnostics);
+            var diagnosticsLevel = MarketAcquisitionRouteDiagnosticsPolicy.Resolve(
+                config.MarketAcquisitionRouteDiagnostics);
+            routeEngine.StartEvidenceRefresh(
+                plan,
+                claimed,
+                diagnosticsLevel != MarketAcquisitionRouteDiagnosticsLevel.Off,
+                diagnosticsLevel);
             return Task.CompletedTask;
         });
     }

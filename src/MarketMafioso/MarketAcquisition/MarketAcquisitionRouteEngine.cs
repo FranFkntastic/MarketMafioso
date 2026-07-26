@@ -158,7 +158,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         bool includeOpportunisticChecks,
         ExactAcquisitionExecutionContract? exactAcquisitionContract = null,
         MarketAcquisitionRequestDocument? workbenchDocument = null,
-        MarketAcquisitionExecutionMode executionMode = MarketAcquisitionExecutionMode.Live)
+        MarketAcquisitionExecutionMode executionMode = MarketAcquisitionExecutionMode.Live,
+        MarketAcquisitionRouteDiagnosticsLevel diagnosticsLevel = MarketAcquisitionRouteDiagnosticsLevel.FullTrace)
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(claimed);
@@ -229,7 +230,15 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         MarketAcquisitionRouteActionResult result;
         try
         {
-            result = runner.Start(routePlan, enableDiagnostics || executionMode == MarketAcquisitionExecutionMode.DryRun, includeOpportunisticChecks, executionMode);
+            var effectiveDiagnosticsLevel = MarketAcquisitionRouteDiagnosticsPolicy.Resolve(
+                enableDiagnostics ? diagnosticsLevel : MarketAcquisitionRouteDiagnosticsLevel.Off,
+                executionMode);
+            result = runner.Start(
+                routePlan,
+                effectiveDiagnosticsLevel != MarketAcquisitionRouteDiagnosticsLevel.Off,
+                includeOpportunisticChecks,
+                executionMode,
+                effectiveDiagnosticsLevel);
         }
         catch (Exception exception) when (exactAcquisitionAuthority is not null)
         {
@@ -347,7 +356,8 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
     public MarketAcquisitionRouteActionResult StartEvidenceRefresh(
         MarketAcquisitionPlan plan,
         MarketAcquisitionClaimView claimed,
-        bool enableDiagnostics)
+        bool enableDiagnostics,
+        MarketAcquisitionRouteDiagnosticsLevel diagnosticsLevel = MarketAcquisitionRouteDiagnosticsLevel.FullTrace)
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(claimed);
@@ -358,7 +368,11 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
         ClearExecutionState();
         state.EvidenceRefreshOnly = true;
         reportDispatcher.BeginSession(claimed);
-        var result = runner.Start(plan, enableDiagnostics, includeOpportunisticChecks: false);
+        var result = runner.Start(
+            plan,
+            enableDiagnostics,
+            includeOpportunisticChecks: false,
+            diagnosticsLevel: enableDiagnostics ? diagnosticsLevel : MarketAcquisitionRouteDiagnosticsLevel.Off);
         state.AcquisitionStatus = result.Success
             ? $"Evidence refresh started. {result.Message}"
             : result.Message;
@@ -407,6 +421,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
     public MarketAcquisitionRouteActionResult Stop()
     {
+        evidence.Flush();
         uiAutomation.TryCloseMarketBoardWindows();
         CleanupOwnedApproach("Stop");
         CleanupOwnedTravel("Stop");
@@ -1612,6 +1627,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
     private void CompleteActiveWorldPurchaseBatch(string currentWorld)
     {
+        evidence.Flush();
         var activeSubtask = runner.ActiveStop?.ActiveItemSubtask;
         if (activeSubtask != null)
         {
@@ -2001,6 +2017,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
     public void Dispose()
     {
+        evidence.Flush();
         CleanupOwnedApproach("Dispose");
         CleanupOwnedTravel("Dispose");
         CancelActiveOperation("Route engine disposed.");
@@ -2034,6 +2051,7 @@ public sealed class MarketAcquisitionRouteEngine : IDisposable
 
     private MarketAcquisitionRouteActionResult FailRoute(string message, Exception? exception = null)
     {
+        evidence.Flush();
         CleanupOwnedApproach("Failure");
         CleanupOwnedTravel("Failure");
         CancelActiveOperation($"Route failed; active operation cancelled. {message}");

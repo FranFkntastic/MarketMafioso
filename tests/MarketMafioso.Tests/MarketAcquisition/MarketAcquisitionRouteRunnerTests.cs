@@ -61,6 +61,7 @@ public sealed class MarketAcquisitionRouteRunnerTests
         runner.ExecutePendingTravelCommand(_ => true);
 
         Assert.NotNull(runner.LastDiagnosticFilePath);
+        runner.FlushDiagnostics();
         var text = ReadLog(runner.LastDiagnosticFilePath!);
         Assert.Contains("Market acquisition route diagnostics started.", text, StringComparison.Ordinal);
         Assert.Contains("route-start", text, StringComparison.Ordinal);
@@ -96,6 +97,7 @@ public sealed class MarketAcquisitionRouteRunnerTests
 
         runner.RecordRouteOperationSnapshot(snapshot);
 
+        runner.FlushDiagnostics();
         var text = ReadLog(runner.LastDiagnosticFilePath!);
         Assert.Contains("route-operation", text, StringComparison.Ordinal);
         Assert.Contains("operationId: search-route-1", text, StringComparison.Ordinal);
@@ -118,6 +120,7 @@ public sealed class MarketAcquisitionRouteRunnerTests
             spentGil: 2500,
             message: "Bought safe listing.");
 
+        runner.FlushDiagnostics();
         var text = ReadLog(runner.LastDiagnosticFilePath!);
         Assert.Contains("line-progress", text, StringComparison.Ordinal);
         Assert.Contains("lineId: batch-1-line-2", text, StringComparison.Ordinal);
@@ -143,6 +146,7 @@ public sealed class MarketAcquisitionRouteRunnerTests
             totalGil: 2500,
             result: "Purchased");
 
+        runner.FlushDiagnostics();
         var text = ReadLog(runner.LastDiagnosticFilePath!);
         Assert.Contains("purchase-audit", text, StringComparison.Ordinal);
         Assert.Contains("lineId: batch-1-line-2", text, StringComparison.Ordinal);
@@ -541,10 +545,10 @@ public sealed class MarketAcquisitionRouteRunnerTests
         Assert.Equal("Arrived", runner.ActiveStop?.Status);
         Assert.Equal("Maduin", runner.ActiveStop?.WorldName);
 
-        var text = ReadLog(runner.LastDiagnosticFilePath!);
+        var text = ReadFullTrace(runner);
         Assert.Contains("listing-read-pending", text, StringComparison.Ordinal);
-        Assert.Contains("readState: SwitchingItem", text, StringComparison.Ordinal);
-        Assert.Contains("rawItemIdMismatchCounts: 5066=2", text, StringComparison.Ordinal);
+        Assert.Contains("\"readState\":\"SwitchingItem\"", text, StringComparison.Ordinal);
+        Assert.Contains("\"rawItemIdMismatchCounts\":\"5066=2\"", text, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -695,6 +699,7 @@ public sealed class MarketAcquisitionRouteRunnerTests
 
         Assert.True(result.Success);
         Assert.Equal("line-2", runner.ActiveStop?.ActiveItemSubtask?.LineId);
+        runner.FlushDiagnostics();
         var text = ReadLog(runner.LastDiagnosticFilePath!);
         Assert.Contains("probe-result", text, StringComparison.Ordinal);
         Assert.Contains("itemId: 7017", text, StringComparison.Ordinal);
@@ -728,6 +733,7 @@ public sealed class MarketAcquisitionRouteRunnerTests
                 ]));
 
         Assert.True(result.Success);
+        runner.FlushDiagnostics();
         var text = ReadLog(runner.LastDiagnosticFilePath!);
         Assert.Contains("observedQuantity: 495", text, StringComparison.Ordinal);
         Assert.Contains("observedGil: 4949999505", text, StringComparison.Ordinal);
@@ -811,6 +817,7 @@ public sealed class MarketAcquisitionRouteRunnerTests
 
         Assert.True(result.Success);
         Assert.False(runner.SearchSubmitted);
+        runner.FlushDiagnostics();
         var text = ReadLog(runner.LastDiagnosticFilePath!);
         Assert.Contains("mode: Wishlist", text, StringComparison.Ordinal);
         Assert.Contains("searchSubmitted: False", text, StringComparison.Ordinal);
@@ -911,15 +918,15 @@ public sealed class MarketAcquisitionRouteRunnerTests
             },
         }, startedAt.AddSeconds(16));
 
-        var text = ReadLog(runner.LastDiagnosticFilePath!);
+        var text = ReadFullTrace(runner);
         Assert.Contains("automation-snapshot", text, StringComparison.Ordinal);
-        Assert.Contains("step: SearchItem", text, StringComparison.Ordinal);
-        Assert.Contains("phase: Observed", text, StringComparison.Ordinal);
-        Assert.Contains("expected: ItemSearchResultReady", text, StringComparison.Ordinal);
-        Assert.Contains("observed: SearchSent", text, StringComparison.Ordinal);
-        Assert.Contains("outcome: InProgress", text, StringComparison.Ordinal);
-        Assert.Contains("nextAction: ContinuePolling", text, StringComparison.Ordinal);
-        Assert.Contains("searchSource: AutofocusedTextInputRewrite", text, StringComparison.Ordinal);
+        Assert.Contains("\"step\":\"SearchItem\"", text, StringComparison.Ordinal);
+        Assert.Contains("\"phase\":\"Observed\"", text, StringComparison.Ordinal);
+        Assert.Contains("\"expected\":\"ItemSearchResultReady\"", text, StringComparison.Ordinal);
+        Assert.Contains("\"observed\":\"SearchSent\"", text, StringComparison.Ordinal);
+        Assert.Contains("\"outcome\":\"InProgress\"", text, StringComparison.Ordinal);
+        Assert.Contains("\"nextAction\":\"ContinuePolling\"", text, StringComparison.Ordinal);
+        Assert.Contains("\"searchSource\":\"AutofocusedTextInputRewrite\"", text, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -961,6 +968,7 @@ public sealed class MarketAcquisitionRouteRunnerTests
         Assert.EndsWith(".log", runner.LastDiagnosticFilePath!, StringComparison.Ordinal);
         Assert.Contains("input-capture-", Path.GetFileName(Path.GetDirectoryName(runner.LastDiagnosticFilePath!)), StringComparison.Ordinal);
         Assert.Equal("input-capture.log", Path.GetFileName(runner.LastDiagnosticFilePath!));
+        runner.FlushDiagnostics();
         var text = ReadLog(runner.LastDiagnosticFilePath!);
         Assert.Contains("input-capture", text, StringComparison.Ordinal);
         Assert.Contains("label: before-purchase-click", text, StringComparison.Ordinal);
@@ -986,6 +994,7 @@ public sealed class MarketAcquisitionRouteRunnerTests
                 "TreatListingAsRemoved"));
 
         Assert.True(result.Success);
+        runner.FlushDiagnostics();
         var text = ReadLog(runner.LastDiagnosticFilePath!);
         Assert.Contains("automation-snapshot", text, StringComparison.Ordinal);
         Assert.Contains("step: BuyListing", text, StringComparison.Ordinal);
@@ -1028,12 +1037,30 @@ public sealed class MarketAcquisitionRouteRunnerTests
         Assert.False(runner.CanFinalizeInputCaptureLog);
         Assert.Contains("route diagnostics", runner.StatusMessage, StringComparison.OrdinalIgnoreCase);
         runner.ExecutePendingTravelCommand(_ => true);
+        runner.FlushDiagnostics();
         var text = ReadLog(runner.LastDiagnosticFilePath!);
         Assert.Contains("travel-command", text, StringComparison.Ordinal);
     }
 
     private static MarketMafioso.MarketAcquisition.MarketAcquisitionRouteRunner CreateRunner() =>
         new(CreateTempDirectory());
+
+    private static string ReadFullTrace(MarketMafioso.MarketAcquisition.MarketAcquisitionRouteRunner runner)
+    {
+        runner.FlushDiagnostics();
+        var directory = Path.GetDirectoryName(Assert.IsType<string>(runner.LastDiagnosticFilePath));
+        return string.Concat(
+            Directory.GetFiles(Assert.IsType<string>(directory), "trace-*.jsonl")
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .Select(ReadAllTextShared));
+    }
+
+    private static string ReadAllTextShared(string path)
+    {
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        using var reader = new StreamReader(stream);
+        return reader.ReadToEnd();
+    }
 
     private static MarketMafioso.MarketAcquisition.MarketAcquisitionPlan CreatePlan(params string[] worlds) =>
         new()
