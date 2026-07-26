@@ -207,6 +207,7 @@ public sealed class Plugin : IDalamudPlugin
                 "\"/mmf capture-bell\" to arm the passive normal-bell flight recorder. " +
                 "Use \"/mmf capture-bell-lifecycle\" for the complete open/select/return/close trace. " +
                 "Yield tests: \"/mmf probe-bell-yield-control\" then \"/mmf probe-bell-yield-direct\". " +
+                "Native signature tests: \"/mmf probe-bell-native-call\" or \"/mmf probe-bell-native-select\". " +
                 "Warm retention: \"/mmf probe-bell-warm\", \"/mmf probe-bell-warm-delay <seconds>\", " +
                 "\"/mmf probe-bell-warm-move <yalms>\", \"/mmf probe-bell-warm-unlock-move <yalms>\", " +
                 "or \"/mmf probe-bell-warm-manual\". " +
@@ -329,6 +330,24 @@ public sealed class Plugin : IDalamudPlugin
                 break;
 #else
                 ChatGui.Print("[MMF] YieldEventScene2 probes are only available in debug builds.");
+                break;
+#endif
+
+            case "probe-bell-native-call":
+#if DEBUG
+                ChatGui.Print($"[MMF] Native CallRetainer probe: {mainWindow.BeginNativeCallRetainerProbe()}");
+                break;
+#else
+                ChatGui.Print("[MMF] Native retainer-verb probes are only available in debug builds.");
+                break;
+#endif
+
+            case "probe-bell-native-select":
+#if DEBUG
+                ChatGui.Print($"[MMF] Native SelectRetainer probe: {mainWindow.BeginNativeSelectRetainerProbe()}");
+                break;
+#else
+                ChatGui.Print("[MMF] Native retainer-verb probes are only available in debug builds.");
                 break;
 #endif
 

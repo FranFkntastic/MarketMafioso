@@ -214,6 +214,65 @@ internal sealed partial class RemoteSummoningBellProbe
         return submission.Message;
     }
 
+    public string BeginNativeRetainerVerb(NativeRetainerVerb verb)
+    {
+        var precondition = ValidateYieldProbeStart(requireTemplate: false);
+        if (precondition is not null)
+            return precondition;
+
+        if (!AutoRetainerSuppressionLease.TryAcquire(autoRetainer, out var suppression, out var suppressionMessage))
+            return suppressionMessage;
+        autoRetainerSuppression = suppression;
+
+        var now = DateTimeOffset.UtcNow;
+        var submission = bell.TryInvokeNativeRetainerVerb(verb);
+        var active = new YieldProbeSession(
+            submission.Transport.Mode,
+            now,
+            now + YieldDirectObservationWindow,
+            clientState.TerritoryType,
+            CapturePosition(),
+            objectTable.LocalPlayer?.Name.TextValue ?? string.Empty,
+            submission.BellGameObjectId,
+            submission.BellEventId,
+            submission.BellEventIdSource,
+            submission.Distance,
+            submission.OrdinaryInteractionDistance);
+        CaptureYieldStateTransition(active);
+        yieldProbeSession = active;
+
+        if (!submission.Submitted)
+        {
+            CompleteYieldProbe(active, "NotSubmitted", submission.Message, false);
+            return submission.Message;
+        }
+
+        var modeLabel = verb == NativeRetainerVerb.CallRetainer
+            ? "Native CallRetainer"
+            : "Native SelectRetainer";
+        yieldProbeView = new(
+            true,
+            false,
+            false,
+            modeLabel,
+            "Observing",
+            submission.Message,
+            $"One signature-resolved native event verb was submitted. No retry or follow-up action will occur. {suppressionMessage}",
+            FormatGameObjectId(submission.BellGameObjectId),
+            submission.RetainerId == 0 ? null : $"0x{submission.RetainerId:X16}",
+            submission.Transport.Opcode == 0 ? null : $"0x{submission.Transport.Opcode:X}",
+            yieldProbeView.LastEvidencePath);
+        log.Information(
+            "[MarketMafioso] Submitted one native {Verb} event verb for bell {BellGameObjectId:X}, event 0x{EventId:X}, handler scene {Scene}, retainer 0x{RetainerId:X16}, territory {TerritoryId}.",
+            verb,
+            submission.BellGameObjectId,
+            submission.BellEventId,
+            submission.HandlerScene,
+            submission.RetainerId,
+            active.TerritoryId);
+        return submission.Message;
+    }
+
     public string GetYieldProbeStatus()
     {
         var current = GetYieldProbeView();
@@ -267,24 +326,33 @@ internal sealed partial class RemoteSummoningBellProbe
         if (transport.Sent && !active.OutboundObserved)
         {
             active.OutboundObserved = true;
+            var retainerDescription = transport.RetainerId == 0
+                ? string.Empty
+                : $" for retainer 0x{transport.RetainerId:X16}";
             yieldProbeView = yieldProbeView with
             {
                 State = "Observing",
                 Message =
-                    $"Sent opcode 0x{transport.Opcode:X} for retainer 0x{transport.RetainerId:X16}; waiting for matching scene 2.",
-                RetainerId = $"0x{transport.RetainerId:X16}",
+                    $"Sent opcode 0x{transport.Opcode:X}{retainerDescription}; waiting for the matching event response.",
+                RetainerId = transport.RetainerId == 0 ? null : $"0x{transport.RetainerId:X16}",
                 Opcode = $"0x{transport.Opcode:X}",
             };
         }
 
         var commandMenuReady = IsAddonReady("SelectString");
-        if (transport.MatchingEventPlayObserved && commandMenuReady)
+        var retainerListReady = IsAddonReady("RetainerList");
+        var expectedUiReady = active.Mode == YieldEventSceneProbeMode.NativeSelectRetainer
+            ? retainerListReady
+            : commandMenuReady;
+        if (transport.MatchingEventPlayObserved && expectedUiReady)
         {
             active.SuccessObservedAtUtc ??= DateTimeOffset.UtcNow;
             yieldProbeView = yieldProbeView with
             {
                 State = "Settling",
-                Message = "Matching scene-2 EventPlay and retainer command menu observed.",
+                Message = active.Mode == YieldEventSceneProbeMode.NativeSelectRetainer
+                    ? "Matching EventPlay and RetainerList observed."
+                    : "Matching EventPlay and retainer command menu observed.",
                 Readiness = "Hold here; the recorder will stop automatically.",
             };
             if (DateTimeOffset.UtcNow - active.SuccessObservedAtUtc.Value >= YieldSettleWindow)
@@ -292,10 +360,19 @@ internal sealed partial class RemoteSummoningBellProbe
                 CompleteYieldProbe(
                     active,
                     "Confirmed",
-                    active.Mode == YieldEventSceneProbeMode.InSessionControl
-                        ? "The exact cloned YieldEventScene2 completed inside the accepted bell session."
-                        : "The session-free YieldEventScene2 received scene 2 and opened the retainer command menu.",
-                    true);
+                    active.Mode switch
+                    {
+                        YieldEventSceneProbeMode.InSessionControl =>
+                            "The exact cloned YieldEventScene2 completed inside the accepted bell session.",
+                        YieldEventSceneProbeMode.SessionFreeReplay =>
+                            "The session-free YieldEventScene2 received scene 2 and opened the retainer command menu.",
+                        YieldEventSceneProbeMode.NativeCallRetainer =>
+                            "The native CallRetainer verb received EventPlay and opened the retainer command menu.",
+                        YieldEventSceneProbeMode.NativeSelectRetainer =>
+                            "The native SelectRetainer verb received EventPlay and opened RetainerList.",
+                        _ => "The event-yield probe reached its expected UI.",
+                    },
+                    expectedUiReady);
                 return;
             }
         }
@@ -307,27 +384,38 @@ internal sealed partial class RemoteSummoningBellProbe
         {
             CompleteYieldProbe(
                 active,
-                "ControlPacketNotCaptured",
-                "No matching stock YieldEventScene2 was captured before the control window expired.",
-                commandMenuReady);
+                active.Mode == YieldEventSceneProbeMode.InSessionControl
+                    ? "ControlPacketNotCaptured"
+                    : "NativePacketNotSubmitted",
+                active.Mode == YieldEventSceneProbeMode.InSessionControl
+                    ? "No matching stock YieldEventScene2 was captured before the control window expired."
+                    : "The signature-resolved native event verb produced no outbound packet.",
+                expectedUiReady);
             return;
         }
 
         var verdict = transport.MatchingEventPlayObserved
-            ? commandMenuReady
+            ? expectedUiReady
                 ? "Confirmed"
-                : "MatchingEventPlayWithoutCommandMenu"
-            : commandMenuReady
-                ? "CommandMenuWithoutMatchingEventPlay"
+                : "MatchingEventPlayWithoutExpectedUi"
+            : expectedUiReady
+                ? "ExpectedUiWithoutMatchingEventPlay"
                 : "NoMatchingEventPlay";
         var message = transport.MatchingEventPlayObserved
-            ? "The server returned matching scene 2, but the retainer command menu did not appear."
-            : commandMenuReady
-                ? "The retainer command menu appeared without the expected matching scene-2 hook observation."
-                : active.Mode == YieldEventSceneProbeMode.SessionFreeReplay
-                    ? "The one session-free YieldEventScene2 produced no matching scene-2 EventPlay or command menu."
-                    : "The cloned in-session YieldEventScene2 produced no matching scene-2 EventPlay or command menu.";
-        CompleteYieldProbe(active, verdict, message, commandMenuReady);
+            ? "The server returned a matching EventPlay, but the expected retainer UI did not appear."
+            : expectedUiReady
+                ? "The expected retainer UI appeared without the matching EventPlay hook observation."
+                : active.Mode switch
+                {
+                    YieldEventSceneProbeMode.SessionFreeReplay =>
+                        "The one session-free YieldEventScene2 produced no matching scene-2 EventPlay or command menu.",
+                    YieldEventSceneProbeMode.NativeCallRetainer =>
+                        "The signature-resolved CallRetainer verb produced no matching EventPlay or retainer command menu.",
+                    YieldEventSceneProbeMode.NativeSelectRetainer =>
+                        "The signature-resolved SelectRetainer verb produced no matching EventPlay or RetainerList.",
+                    _ => "The cloned in-session YieldEventScene2 produced no matching scene-2 EventPlay or command menu.",
+                };
+        CompleteYieldProbe(active, verdict, message, expectedUiReady);
     }
 
     private void CompleteYieldProbe(
@@ -387,9 +475,14 @@ internal sealed partial class RemoteSummoningBellProbe
             false,
             false,
             false,
-            active.Mode == YieldEventSceneProbeMode.InSessionControl
-                ? "In-session control"
-                : "Session-free replay",
+            active.Mode switch
+            {
+                YieldEventSceneProbeMode.InSessionControl => "In-session control",
+                YieldEventSceneProbeMode.SessionFreeReplay => "Session-free replay",
+                YieldEventSceneProbeMode.NativeCallRetainer => "Native CallRetainer",
+                YieldEventSceneProbeMode.NativeSelectRetainer => "Native SelectRetainer",
+                _ => active.Mode.ToString(),
+            },
             verdict,
             releaseSuppressionWhenRetainerListCloses
                 ? $"{message} AutoRetainer remains suppressed until the retainer session closes."
@@ -484,9 +577,14 @@ internal sealed partial class RemoteSummoningBellProbe
         try
         {
             Directory.CreateDirectory(evidenceDirectory);
-            var mode = evidence.Mode == nameof(YieldEventSceneProbeMode.InSessionControl)
-                ? "yield-control"
-                : "yield-session-free";
+            var mode = evidence.Mode switch
+            {
+                nameof(YieldEventSceneProbeMode.InSessionControl) => "yield-control",
+                nameof(YieldEventSceneProbeMode.SessionFreeReplay) => "yield-session-free",
+                nameof(YieldEventSceneProbeMode.NativeCallRetainer) => "native-call-retainer",
+                nameof(YieldEventSceneProbeMode.NativeSelectRetainer) => "native-select-retainer",
+                _ => "yield-unknown",
+            };
             var path = Path.Combine(
                 evidenceDirectory,
                 $"{mode}-{evidence.StartedAtUtc:yyyyMMdd-HHmmss-fff}.json");

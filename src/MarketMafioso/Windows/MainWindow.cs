@@ -25,6 +25,7 @@ using MarketMafioso.WorkshopPrep;
 using MarketMafioso.Diagnostics;
 using MarketMafioso.MarketDiagnostics;
 using Franthropy.Dalamud.AgentBridge;
+using Franthropy.Dalamud.Automation.Retainers;
 using MarketMafiosoCaptureRegion = MarketMafioso.AgentBridge.AgentBridgeCaptureRegion;
 
 namespace MarketMafioso.Windows;
@@ -672,6 +673,12 @@ public class MainWindow : Window, IDisposable
     public string BeginYieldEventSceneControl() => remoteSummoningBellProbe.BeginYieldControl();
 
     public string BeginYieldEventSceneDirectProbe() => remoteSummoningBellProbe.BeginYieldSessionFreeReplay();
+
+    public string BeginNativeCallRetainerProbe() =>
+        remoteSummoningBellProbe.BeginNativeRetainerVerb(NativeRetainerVerb.CallRetainer);
+
+    public string BeginNativeSelectRetainerProbe() =>
+        remoteSummoningBellProbe.BeginNativeRetainerVerb(NativeRetainerVerb.SelectRetainer);
 
     public string GetYieldEventSceneProbeStatus() => remoteSummoningBellProbe.GetYieldProbeStatus();
 
