@@ -1,3 +1,4 @@
+using Dalamud.Game.Addon.Events;
 using MarketMafioso.MarketAcquisition.RemoteMarket;
 
 namespace MarketMafioso.SpecTests.MarketAcquisition;
@@ -15,6 +16,32 @@ public sealed class RemoteMarketPurchaseSessionOwnershipTests
         Assert.True(ownership.ShouldBlockInterceptedSend);
     }
 
+    [Theory]
+    [InlineData(AddonEventType.ListButtonPress)]
+    [InlineData(AddonEventType.ListItemClick)]
+    [InlineData(AddonEventType.ListItemDoubleClick)]
+    [InlineData(AddonEventType.ListItemSelect)]
+    public void Remote_session_blocks_native_result_activation_before_confirmation(AddonEventType eventType)
+    {
+        var ownership = new RemoteMarketPurchaseSessionOwnership();
+        ownership.ObserveRemoteOpen(agentWasActive: false, agentIsActive: true);
+
+        Assert.True(ownership.ShouldBlockNativeListingActivation(eventType));
+    }
+
+    [Theory]
+    [InlineData(AddonEventType.MouseWheel)]
+    [InlineData(AddonEventType.ListItemRollOver)]
+    [InlineData(AddonEventType.ListItemRollOut)]
+    [InlineData(AddonEventType.ButtonClick)]
+    public void Remote_session_preserves_non_activation_result_events(AddonEventType eventType)
+    {
+        var ownership = new RemoteMarketPurchaseSessionOwnership();
+        ownership.ObserveRemoteOpen(agentWasActive: false, agentIsActive: true);
+
+        Assert.False(ownership.ShouldBlockNativeListingActivation(eventType));
+    }
+
     [Fact]
     public void Closing_market_agent_restores_ordinary_native_purchase_sends()
     {
@@ -25,6 +52,7 @@ public sealed class RemoteMarketPurchaseSessionOwnershipTests
 
         Assert.False(ownership.IsRemoteSessionActive);
         Assert.False(ownership.ShouldBlockInterceptedSend);
+        Assert.False(ownership.ShouldBlockNativeListingActivation(AddonEventType.ListItemClick));
     }
 
     [Fact]

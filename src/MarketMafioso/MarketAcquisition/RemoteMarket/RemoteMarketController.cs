@@ -72,6 +72,7 @@ internal sealed class RemoteMarketController : IDisposable
         IChatGui chatGui,
         INotificationManager notificationManager,
         IGameInteropProvider interopProvider,
+        IAddonLifecycle addonLifecycle,
         IPluginLog log,
         Func<uint, string?> resolveItemName,
         Func<uint, string?, MarketBoardItemSearchResult> searchDriver,
@@ -94,6 +95,7 @@ internal sealed class RemoteMarketController : IDisposable
         evidenceDirectory = Path.Combine(pluginConfigDirectory, "remote-market");
         nativePurchaseGuard = new RemoteMarketNativePurchaseGuard(
             interopProvider,
+            addonLifecycle,
             log,
             ScheduleBlockedNativePurchaseRecovery);
         marketBoard.PurchaseRequested += OnPurchaseRequested;

@@ -182,6 +182,7 @@ public class MainWindow : Window, IDisposable
             Plugin.ChatGui,
             Plugin.NotificationManager,
             Plugin.GameInteropProvider,
+            Plugin.AddonLifecycle,
             log,
             scanner.ResolveItemName,
             marketBoardItemSearchDriver.Search,

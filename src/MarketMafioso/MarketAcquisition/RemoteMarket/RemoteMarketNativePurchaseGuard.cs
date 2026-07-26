@@ -1,5 +1,8 @@
 using System;
 using System.Threading;
+using Dalamud.Game.Addon.Events;
+using Dalamud.Game.Addon.Lifecycle;
+using Dalamud.Game.Addon.Lifecycle.AddonArgTypes;
 using Dalamud.Hooking;
 using Dalamud.Plugin.Services;
 using FFXIVClientStructs.FFXIV.Client.UI.Info;
@@ -8,6 +11,9 @@ namespace MarketMafioso.MarketAcquisition.RemoteMarket;
 
 internal sealed unsafe class RemoteMarketNativePurchaseGuard : IDisposable
 {
+    private const string ItemSearchResultAddon = "ItemSearchResult";
+
+    private readonly IAddonLifecycle addonLifecycle;
     private readonly IPluginLog log;
     private readonly Action onBlockedNativePurchase;
     private readonly RemoteMarketPurchaseSessionOwnership ownership = new();
@@ -16,13 +22,20 @@ internal sealed unsafe class RemoteMarketNativePurchaseGuard : IDisposable
 
     public RemoteMarketNativePurchaseGuard(
         IGameInteropProvider interopProvider,
+        IAddonLifecycle addonLifecycle,
         IPluginLog log,
         Action onBlockedNativePurchase)
     {
         ArgumentNullException.ThrowIfNull(interopProvider);
+        this.addonLifecycle = addonLifecycle ?? throw new ArgumentNullException(nameof(addonLifecycle));
         this.log = log ?? throw new ArgumentNullException(nameof(log));
         this.onBlockedNativePurchase = onBlockedNativePurchase
             ?? throw new ArgumentNullException(nameof(onBlockedNativePurchase));
+
+        addonLifecycle.RegisterListener(
+            AddonEvent.PreReceiveEvent,
+            ItemSearchResultAddon,
+            OnItemSearchResultPreReceiveEvent);
 
         try
         {
@@ -64,12 +77,37 @@ internal sealed unsafe class RemoteMarketNativePurchaseGuard : IDisposable
         return hook.Original(proxy);
     }
 
+    private void OnItemSearchResultPreReceiveEvent(AddonEvent _, AddonArgs args)
+    {
+        if (args is not AddonReceiveEventArgs receiveEvent ||
+            !ownership.ShouldBlockNativeListingActivation(receiveEvent.AtkEventType))
+        {
+            return;
+        }
+
+        receiveEvent.PreventOriginal();
+        Interlocked.Increment(ref blockedNativePurchaseCount);
+        NotifyBlockedNativePurchase();
+        log.Information(
+            "[MarketMafioso] Blocked native remote market result activation before client confirmation setup. EventType={EventType} EventParam={EventParam}",
+            receiveEvent.AtkEventType,
+            receiveEvent.EventParam);
+    }
+
     private bool SendPurchaseRequestPacketDetour(InfoProxyItemSearch* proxy)
     {
         if (!ownership.ShouldBlockInterceptedSend)
             return hook!.Original(proxy);
 
         Interlocked.Increment(ref blockedNativePurchaseCount);
+        NotifyBlockedNativePurchase();
+        log.Information(
+            "[MarketMafioso] Blocked an unowned native market-board purchase request during a remote market session.");
+        return false;
+    }
+
+    private void NotifyBlockedNativePurchase()
+    {
         try
         {
             onBlockedNativePurchase();
@@ -78,14 +116,14 @@ internal sealed unsafe class RemoteMarketNativePurchaseGuard : IDisposable
         {
             log.Error(exception, "[MarketMafioso] Failed to schedule native remote-purchase recovery.");
         }
-
-        log.Information(
-            "[MarketMafioso] Blocked an unowned native market-board purchase request during a remote market session.");
-        return false;
     }
 
     public void Dispose()
     {
+        addonLifecycle.UnregisterListener(
+            AddonEvent.PreReceiveEvent,
+            ItemSearchResultAddon,
+            OnItemSearchResultPreReceiveEvent);
         hook?.Dispose();
         hook = null;
     }
@@ -96,6 +134,13 @@ internal sealed class RemoteMarketPurchaseSessionOwnership
     public bool IsRemoteSessionActive { get; private set; }
 
     public bool ShouldBlockInterceptedSend => IsRemoteSessionActive;
+
+    public bool ShouldBlockNativeListingActivation(AddonEventType eventType) =>
+        IsRemoteSessionActive &&
+        eventType is AddonEventType.ListButtonPress
+            or AddonEventType.ListItemClick
+            or AddonEventType.ListItemDoubleClick
+            or AddonEventType.ListItemSelect;
 
     public void ObserveRemoteOpen(bool agentWasActive, bool agentIsActive)
     {
