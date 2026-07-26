@@ -19,6 +19,7 @@ internal sealed partial class RemoteSummoningBellProbe
     private const long RetainerManagerRequestListRva = 0x011075C0;
     private const long RetainerManagerRequestSingleDataRva = 0x011076F0;
     private static readonly TimeSpan RetainerRpcStageTimeout = TimeSpan.FromSeconds(12);
+    private static readonly TimeSpan RetainerRpcDrainWindow = TimeSpan.FromSeconds(2);
     private const int MaximumRetainerRpcRosterEntries = 10;
 
     private readonly ConcurrentQueue<RetainerRpcCallbackObservation> retainerRpcCallbacks = new();
@@ -198,6 +199,16 @@ internal sealed partial class RemoteSummoningBellProbe
                 return;
         }
 
+        if (active.Stage is
+            RetainerRpcProbeStage.DrainingKind2 or
+            RetainerRpcProbeStage.DrainingKind3)
+        {
+            if (DateTimeOffset.UtcNow < active.DeadlineUtc)
+                return;
+            if (!AdvanceRetainerRpcDrain(active))
+                return;
+        }
+
         if (DateTimeOffset.UtcNow >= active.DeadlineUtc)
         {
             CompleteRetainerRpcProbe(
@@ -247,26 +258,19 @@ internal sealed partial class RemoteSummoningBellProbe
                     }
 
                     active.RetainerId = retainerId;
-                    active.Stage = RetainerRpcProbeStage.AwaitingKind3;
-                    active.DeadlineUtc = DateTimeOffset.UtcNow + RetainerRpcStageTimeout;
-                    SubmitRetainerRpcRequest(
-                        3,
-                        (uint)(retainerId >> 32),
-                        (uint)retainerId);
-                    active.Requests.Add(new(
-                        DateTimeOffset.UtcNow,
-                        3,
-                        (uint)(retainerId >> 32),
-                        (uint)retainerId));
-                    active.Stages.Add(CaptureRetainerRpcStage("Kind 3 submitted", null));
+                    active.Stage = RetainerRpcProbeStage.DrainingKind2;
+                    active.DeadlineUtc = DateTimeOffset.UtcNow + RetainerRpcDrainWindow;
+                    active.Stages.Add(CaptureRetainerRpcStage(
+                        "Kind 2 callback slot drain started",
+                        null));
                     return true;
 
                 case RetainerRpcProbeStage.AwaitingKind3:
-                    active.Stage = RetainerRpcProbeStage.AwaitingPostKind4;
-                    active.DeadlineUtc = DateTimeOffset.UtcNow + RetainerRpcStageTimeout;
-                    SubmitRetainerRpcRequest(4, 0, 0);
-                    active.Requests.Add(new(DateTimeOffset.UtcNow, 4, 0, 0));
-                    active.Stages.Add(CaptureRetainerRpcStage("Post-kind-3 kind 4 submitted", null));
+                    active.Stage = RetainerRpcProbeStage.DrainingKind3;
+                    active.DeadlineUtc = DateTimeOffset.UtcNow + RetainerRpcDrainWindow;
+                    active.Stages.Add(CaptureRetainerRpcStage(
+                        "Kind 3 callback slot drain started",
+                        null));
                     return true;
 
                 case RetainerRpcProbeStage.AwaitingPostKind4:
@@ -288,6 +292,60 @@ internal sealed partial class RemoteSummoningBellProbe
         }
 
         CompleteRetainerRpcProbe(active, "InvalidStage", $"Unknown sequence stage {active.Stage}.");
+        return false;
+    }
+
+    private bool AdvanceRetainerRpcDrain(RetainerRpcProbeSession active)
+    {
+        try
+        {
+            switch (active.Stage)
+            {
+                case RetainerRpcProbeStage.DrainingKind2:
+                    active.Stage = RetainerRpcProbeStage.AwaitingKind3;
+                    active.DeadlineUtc = DateTimeOffset.UtcNow + RetainerRpcStageTimeout;
+                    SubmitRetainerRpcRequest(
+                        3,
+                        (uint)(active.RetainerId >> 32),
+                        (uint)active.RetainerId);
+                    active.Requests.Add(new(
+                        DateTimeOffset.UtcNow,
+                        3,
+                        (uint)(active.RetainerId >> 32),
+                        (uint)active.RetainerId));
+                    active.Stages.Add(CaptureRetainerRpcStage(
+                        "Kind 2 callback slot drain completed; kind 3 submitted",
+                        null));
+                    return true;
+
+                case RetainerRpcProbeStage.DrainingKind3:
+                    active.Stage = RetainerRpcProbeStage.AwaitingPostKind4;
+                    active.DeadlineUtc = DateTimeOffset.UtcNow + RetainerRpcStageTimeout;
+                    SubmitRetainerRpcRequest(4, 0, 0);
+                    active.Requests.Add(new(DateTimeOffset.UtcNow, 4, 0, 0));
+                    active.Stages.Add(CaptureRetainerRpcStage(
+                        "Kind 3 callback slot drain completed; post-kind-3 kind 4 submitted",
+                        null));
+                    return true;
+            }
+        }
+        catch (Exception ex)
+        {
+            log.Error(
+                ex,
+                "[MarketMafioso] Retainer RPC sequence failed after draining {Stage}.",
+                active.Stage);
+            CompleteRetainerRpcProbe(
+                active,
+                "SequenceError",
+                $"Sequence stopped after {active.Stage}: {ex.Message}");
+            return false;
+        }
+
+        CompleteRetainerRpcProbe(
+            active,
+            "InvalidStage",
+            $"Unknown callback-slot drain stage {active.Stage}.");
         return false;
     }
 
@@ -491,6 +549,7 @@ internal sealed partial class RemoteSummoningBellProbe
             $"0x{RetainerManagerRequestListRva:X}",
             $"0x{RetainerManagerRequestSingleDataRva:X}",
             $"0x{ServerRequestCallbackInterfaceFinalizeRva:X}",
+            checked((int)RetainerRpcDrainWindow.TotalMilliseconds),
             active.Requests.ToArray(),
             active.Callbacks.ToArray(),
             active.Stages.ToArray(),
@@ -651,6 +710,7 @@ internal sealed partial class RemoteSummoningBellProbe
                 $"0x{RetainerManagerRequestListRva:X}",
                 $"0x{RetainerManagerRequestSingleDataRva:X}",
                 $"0x{ServerRequestCallbackInterfaceFinalizeRva:X}",
+                checked((int)RetainerRpcDrainWindow.TotalMilliseconds),
                 active.Requests.ToArray(),
                 active.Callbacks.ToArray(),
                 active.Stages.ToArray(),
@@ -708,7 +768,9 @@ internal sealed partial class RemoteSummoningBellProbe
     {
         AwaitingColdKind4,
         AwaitingKind2,
+        DrainingKind2,
         AwaitingKind3,
+        DrainingKind3,
         AwaitingPostKind4,
     }
 
@@ -806,6 +868,7 @@ internal sealed partial class RemoteSummoningBellProbe
         string RequestListRva,
         string RequestSingleDataRva,
         string CallbackFinalizerRva,
+        int CallbackSlotDrainMilliseconds,
         RetainerRpcRequestObservation[] Requests,
         RetainerRpcCallbackObservation[] Callbacks,
         RetainerRpcStageEvidence[] Stages,
