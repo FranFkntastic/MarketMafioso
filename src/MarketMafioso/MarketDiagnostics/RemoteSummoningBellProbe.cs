@@ -499,6 +499,9 @@ internal sealed partial class RemoteSummoningBellProbe : IDisposable
             submission.InboundRawPacketCount,
             submission.InboundRawPacketSamples,
             submission.PositionFrameShadow,
+            submission.PreludeObservedCount,
+            submission.PreludeDroppedCount,
+            submission.PreludeSamples,
             submission.OriginalHitboxRadius,
             submission.TemporaryHitboxRadius,
             submission.OriginalBellX,
@@ -541,6 +544,9 @@ internal sealed partial class RemoteSummoningBellProbe : IDisposable
             InboundRawPacketCount = transport.InboundRawPacketCount,
             InboundRawPacketSamples = transport.InboundRawPacketSamples,
             PositionFrameShadow = transport.PositionFrameShadow,
+            PreludeObservedCount = transport.PreludeObservedCount,
+            PreludeDroppedCount = transport.PreludeDroppedCount,
+            PreludeSamples = transport.PreludeSamples,
         };
 
     private string? WriteEvidence(RemoteSummoningBellProbeEvidence evidence)
@@ -684,6 +690,9 @@ internal sealed partial class RemoteSummoningBellProbe : IDisposable
         int InboundRawPacketCount,
         InboundRawPacketSample[]? InboundRawPacketSamples,
         PositionFrameShadowObservation? PositionFrameShadow,
+        int PreludeObservedCount,
+        int PreludeDroppedCount,
+        ZonePacketPreludeSample[]? PreludeSamples,
         float OriginalHitboxRadius,
         float TemporaryHitboxRadius,
         float OriginalBellX,
