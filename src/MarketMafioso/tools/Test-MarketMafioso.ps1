@@ -9,10 +9,14 @@ $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path
 $worktreePath = Resolve-PinnedFranthropyRoot -MarketMafiosoRepoRoot $repoRoot
 $franthropyProperty = "-p:FranthropyRoot=$worktreePath"
 $projects = @(
-    @('tests\MarketMafioso.Tests\MarketMafioso.Tests.csproj', 'Category!=Performance'),
-    @('tests\MarketMafioso.Server.Tests\MarketMafioso.Server.Tests.csproj', $null),
+    @('tests\MarketMafioso.SpecTests\MarketMafioso.SpecTests.csproj', $null),
     @('tests\MarketMafioso.ContractTests\MarketMafioso.ContractTests.csproj', $null)
 )
+
+& (Join-Path $PSScriptRoot 'Assert-TruthfulTestSuite.ps1')
+if ($LASTEXITCODE -ne 0) {
+    throw "Truthful test-suite structure validation failed with exit code $LASTEXITCODE."
+}
 
 foreach ($entry in $projects) {
     $project = Join-Path $repoRoot $entry[0]
@@ -27,10 +31,10 @@ foreach ($entry in $projects) {
 }
 
 $assemblyChecks = @(
-    @("src\Franthropy.Dalamud\bin\$Configuration\net10.0-windows\Franthropy.Dalamud.dll", "tests\MarketMafioso.Tests\bin\$Configuration\net10.0-windows7.0\Franthropy.Dalamud.dll"),
-    @("src\Franthropy.Filtering\bin\$Configuration\net10.0\Franthropy.Filtering.dll", "tests\MarketMafioso.Tests\bin\$Configuration\net10.0-windows7.0\Franthropy.Filtering.dll"),
-    @("src\Franthropy.FFXIV\bin\$Configuration\net10.0\Franthropy.FFXIV.dll", "tests\MarketMafioso.Server.Tests\bin\$Configuration\net10.0\Franthropy.FFXIV.dll"),
-    @("src\Franthropy.Web\bin\$Configuration\net10.0\Franthropy.Web.dll", "tests\MarketMafioso.Server.Tests\bin\$Configuration\net10.0\Franthropy.Web.dll")
+    @("src\Franthropy.Dalamud\bin\$Configuration\net10.0-windows\Franthropy.Dalamud.dll", "tests\MarketMafioso.SpecTests\bin\$Configuration\net10.0-windows7.0\Franthropy.Dalamud.dll"),
+    @("src\Franthropy.Filtering\bin\$Configuration\net10.0\Franthropy.Filtering.dll", "tests\MarketMafioso.SpecTests\bin\$Configuration\net10.0-windows7.0\Franthropy.Filtering.dll"),
+    @("src\Franthropy.FFXIV\bin\$Configuration\net10.0\Franthropy.FFXIV.dll", "tests\MarketMafioso.ContractTests\bin\$Configuration\net10.0-windows7.0\Franthropy.FFXIV.dll"),
+    @("src\Franthropy.Web\bin\$Configuration\net10.0\Franthropy.Web.dll", "tests\MarketMafioso.ContractTests\bin\$Configuration\net10.0-windows7.0\Franthropy.Web.dll")
 )
 foreach ($check in $assemblyChecks) {
     $pinnedAssembly = Join-Path $worktreePath $check[0]

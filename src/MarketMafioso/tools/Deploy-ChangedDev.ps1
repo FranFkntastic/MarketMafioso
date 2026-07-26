@@ -103,7 +103,7 @@ function Test-IsServerPath {
 
     return $Path.StartsWith("src/MarketMafioso.Server/", [System.StringComparison]::OrdinalIgnoreCase) -or
            $Path.StartsWith("src/MarketMafioso.Dashboard/", [System.StringComparison]::OrdinalIgnoreCase) -or
-           $Path.StartsWith("tests/MarketMafioso.Server.Tests/", [System.StringComparison]::OrdinalIgnoreCase) -or
+           $Path.StartsWith("tests/MarketMafioso.ContractTests/", [System.StringComparison]::OrdinalIgnoreCase) -or
            [string]::Equals($Path, ".github/workflows/deploy-vps-marketmafioso-dev.yml", [System.StringComparison]::OrdinalIgnoreCase)
 }
 
@@ -118,7 +118,7 @@ function Test-IsPluginPath {
     }
 
     return $Path.StartsWith("src/MarketMafioso/", [System.StringComparison]::OrdinalIgnoreCase) -or
-           $Path.StartsWith("tests/MarketMafioso.Tests/", [System.StringComparison]::OrdinalIgnoreCase)
+           $Path.StartsWith("tests/MarketMafioso.SpecTests/", [System.StringComparison]::OrdinalIgnoreCase)
 }
 
 function Test-IsNoDeployPath {

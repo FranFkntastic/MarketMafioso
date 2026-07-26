@@ -8,8 +8,8 @@ COPY src/MarketMafioso.Contracts/MarketMafioso.Contracts.csproj src/MarketMafios
 COPY src/MarketMafioso/MarketMafioso.csproj src/MarketMafioso/
 COPY src/MarketMafioso.Dashboard/MarketMafioso.Dashboard.csproj src/MarketMafioso.Dashboard/
 COPY src/MarketMafioso.Server/MarketMafioso.Server.csproj src/MarketMafioso.Server/
-COPY tests/MarketMafioso.Tests/MarketMafioso.Tests.csproj tests/MarketMafioso.Tests/
-COPY tests/MarketMafioso.Server.Tests/MarketMafioso.Server.Tests.csproj tests/MarketMafioso.Server.Tests/
+COPY tests/MarketMafioso.SpecTests/MarketMafioso.SpecTests.csproj tests/MarketMafioso.SpecTests/
+COPY tests/MarketMafioso.ContractTests/MarketMafioso.ContractTests.csproj tests/MarketMafioso.ContractTests/
 RUN dotnet restore src/MarketMafioso.Server/MarketMafioso.Server.csproj \
     /p:CraftArchitectCoreProject="$CRAFT_ARCHITECT_CORE_PROJECT"
 
