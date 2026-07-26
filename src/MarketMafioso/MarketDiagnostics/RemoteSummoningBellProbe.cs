@@ -571,6 +571,11 @@ internal sealed partial class RemoteSummoningBellProbe : IDisposable
         disposed = true;
         session = null;
         normalCaptureSession = null;
+        if (yieldProbeSession is not null)
+        {
+            yieldProbeSession.NativeCallPreloadCancellation.Cancel();
+            yieldProbeSession.NativeCallPreloadCancellation.Dispose();
+        }
         yieldProbeSession = null;
         if (warmSessionProbeSession is not null)
         {
