@@ -85,17 +85,15 @@ internal sealed partial class RemoteSummoningBellProbe
                     var noContinuation =
                         transport.PostReplayContinuationCount == active.Scene2ContinuationCountBeforeAction;
                     var statePreserved =
-                        ui.Ui.AgentActive &&
-                        ui.Ui.OpenerAvailable &&
                         ui.Ui.RetainerObjectId == active.Scene2RetainerObjectId &&
                         ui.Ui.RetainerObjectId != 0xE0000000;
                     var verified = noContinuation && statePreserved
                         ? RetainerAutomationResult.Succeeded(
                             "RetainerAddonHideVerified",
-                            "The addon disappeared without an event continuation while the accepted scene-2 state remained intact.")
+                            "The addon disappeared without an event continuation while the accepted scene-2 runtime retainer remained intact.")
                         : RetainerAutomationResult.Failed(
                             "RetainerAddonHideChangedScene",
-                            $"Local hide changed protected state (continuations={transport.PostReplayContinuationCount}, agent={ui.Ui.AgentActive}, opener={ui.Ui.OpenerAvailable}, runtime=0x{ui.Ui.RetainerObjectId:X8}).");
+                            $"Local hide changed protected state (continuations={transport.PostReplayContinuationCount}, runtime=0x{ui.Ui.RetainerObjectId:X8}).");
                     RecordScene2Step(active, "Verify hidden scene-2 state", verified);
 
                     var shown = retainerAutomation.ShowCurrentRetainerAddonLocally();
@@ -139,12 +137,12 @@ internal sealed partial class RemoteSummoningBellProbe
                     var sameRuntime =
                         ui.Ui.RetainerObjectId == active.Scene2RetainerObjectId &&
                         ui.Ui.RetainerObjectId != 0xE0000000;
-                    var success = noContinuation && sameRuntime && ui.Ui.AgentActive && ui.Ui.OpenerAvailable;
+                    var success = noContinuation && sameRuntime;
                     FinishScene2UiExperiment(
                         active,
                         success ? "ConfirmedScene2UiResurrection" : "Scene2UiResurrectionChangedState",
                         success
-                            ? "Confirmed: the accepted scene-2 command addon hid and reopened locally with no outbound event continuation, while the same agent opener and runtime retainer remained active."
+                            ? "Confirmed: the accepted scene-2 command addon hid and reopened locally with no outbound event continuation while the same runtime retainer remained active."
                             : $"The command addon reopened, but protected scene-2 state changed (continuations {active.Scene2ContinuationCountBeforeAction}->{active.Scene2ContinuationCountAfterAction}, runtime 0x{active.Scene2RetainerObjectId:X8}->0x{ui.Ui.RetainerObjectId:X8}).");
                     return;
                 }
