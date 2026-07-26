@@ -1,8 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
-using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
-using Microsoft.Extensions.Configuration;
 
 namespace MarketMafioso.Server.Tests;
 
@@ -112,25 +110,12 @@ public sealed class ClientCredentialManagementEndpointTests
     }
 
     private static WebApplicationFactory<Program> CreateApplication()
-    {
-        var contentRoot = Path.Combine(Path.GetTempPath(), "MarketMafioso.Server.Tests", Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(contentRoot);
-        var databasePath = Path.Combine(contentRoot, "marketmafioso.db");
-
-        return new WebApplicationFactory<Program>()
-            .WithWebHostBuilder(builder =>
-            {
-                builder.UseContentRoot(contentRoot);
-                builder.ConfigureAppConfiguration(config => config.AddInMemoryCollection(
-                    new Dictionary<string, string?>
-                    {
-                        ["MarketMafioso:DatabasePath"] = databasePath,
-                        ["MarketMafioso:RequireApiKey"] = "true",
-                        ["MarketMafioso:RequireDashboardAuth"] = "true",
-                        ["MarketMafioso:DashboardBootstrapUsername"] = "admin",
-                        ["MarketMafioso:DashboardBootstrapPassword"] = "secret-password",
-                        ["MarketMafioso:EnableMarketAcquisition"] = "true",
-                    }));
-            });
-    }
+        => ServerTestHost.Create(host =>
+        {
+            host.Configuration["MarketMafioso:RequireApiKey"] = "true";
+            host.Configuration["MarketMafioso:RequireDashboardAuth"] = "true";
+            host.Configuration["MarketMafioso:DashboardBootstrapUsername"] = "admin";
+            host.Configuration["MarketMafioso:DashboardBootstrapPassword"] = "secret-password";
+            host.Configuration["MarketMafioso:EnableMarketAcquisition"] = "true";
+        });
 }

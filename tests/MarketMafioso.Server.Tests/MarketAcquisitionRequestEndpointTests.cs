@@ -2,9 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.RegularExpressions;
 using System.Text.Json;
-using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
-using Microsoft.Extensions.Configuration;
 
 namespace MarketMafioso.Server.Tests;
 
@@ -1059,31 +1057,17 @@ public sealed class MarketAcquisitionRequestEndpointTests
     private static WebApplicationFactory<Program> CreateHostedApplication(
         string? contentRoot = null,
         params KeyValuePair<string, string?>[] extraConfiguration)
-    {
-        contentRoot ??= Path.Combine(Path.GetTempPath(), "MarketMafioso.Server.Tests", Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(contentRoot);
-
-        var values = new Dictionary<string, string?>
-        {
-            ["MarketMafioso:RequireApiKey"] = "true",
-            ["MarketMafioso:ClientApiKey"] = "client-secret",
-            ["MarketMafioso:BasePath"] = "/marketmafioso",
-            ["MarketMafioso:EnableMarketAcquisition"] = "true",
-            ["MarketMafioso:DatabasePath"] = Path.Combine(contentRoot, "marketmafioso.db"),
-        };
-        foreach (var item in extraConfiguration)
-            values[item.Key] = item.Value;
-
-        return new WebApplicationFactory<Program>()
-            .WithWebHostBuilder(builder =>
+        => ServerTestHost.Create(
+            configure: host =>
             {
-                builder.UseContentRoot(contentRoot);
-                builder.ConfigureAppConfiguration(config =>
-                {
-                    config.AddInMemoryCollection(values);
-                });
-            });
-    }
+                host.Configuration["MarketMafioso:RequireApiKey"] = "true";
+                host.Configuration["MarketMafioso:ClientApiKey"] = "client-secret";
+                host.Configuration["MarketMafioso:BasePath"] = "/marketmafioso";
+                host.Configuration["MarketMafioso:EnableMarketAcquisition"] = "true";
+                foreach (var item in extraConfiguration)
+                    host.Configuration[item.Key] = item.Value;
+            },
+            contentRoot: contentRoot);
 
     private static object CreateRequest(
         string idempotencyKey,

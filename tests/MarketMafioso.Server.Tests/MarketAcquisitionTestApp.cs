@@ -1,7 +1,5 @@
 using System.Net.Http.Json;
-using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
-using Microsoft.Extensions.Configuration;
 using MarketMafioso.Server;
 
 namespace MarketMafioso.Server.Tests;
@@ -17,28 +15,16 @@ internal static class MarketAcquisitionTestApp
         string? contentRoot = null,
         params KeyValuePair<string, string?>[] extraConfiguration)
     {
-        contentRoot ??= Path.Combine(Path.GetTempPath(), "MarketMafioso.Server.Tests", Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(contentRoot);
-
-        var values = new Dictionary<string, string?>
-        {
-            ["MarketMafioso:RequireApiKey"] = "true",
-            ["MarketMafioso:ClientApiKey"] = ClientApiKey,
-            ["MarketMafioso:BasePath"] = "/marketmafioso",
-            ["MarketMafioso:DatabasePath"] = Path.Combine(contentRoot, "marketmafioso.db"),
-        };
-        foreach (var item in extraConfiguration)
-            values[item.Key] = item.Value;
-
-        var application = new WebApplicationFactory<Program>()
-            .WithWebHostBuilder(builder =>
+        var application = ServerTestHost.Create(
+            configure: host =>
             {
-                builder.UseContentRoot(contentRoot);
-                builder.ConfigureAppConfiguration(config =>
-                {
-                    config.AddInMemoryCollection(values);
-                });
-            });
+                host.Configuration["MarketMafioso:RequireApiKey"] = "true";
+                host.Configuration["MarketMafioso:ClientApiKey"] = ClientApiKey;
+                host.Configuration["MarketMafioso:BasePath"] = "/marketmafioso";
+                foreach (var item in extraConfiguration)
+                    host.Configuration[item.Key] = item.Value;
+            },
+            contentRoot: contentRoot);
 
         return Task.FromResult(application);
     }

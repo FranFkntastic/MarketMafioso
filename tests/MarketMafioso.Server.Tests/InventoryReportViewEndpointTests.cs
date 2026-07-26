@@ -2,9 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.RegularExpressions;
-using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
-using Microsoft.Extensions.Configuration;
 
 namespace MarketMafioso.Server.Tests;
 
@@ -647,12 +645,6 @@ public sealed class InventoryReportViewEndpointTests
         Assert.DoesNotContain("mmf_csrf", detail, StringComparison.Ordinal);
     }
 
-    private sealed class HostedApplicationValues
-    {
-        public required string ContentRoot { get; init; }
-        public required Dictionary<string, string?> Configuration { get; init; }
-    }
-
     private static WebApplicationFactory<Program> CreateHostedApplication(params KeyValuePair<string, string?>[] extraConfiguration) =>
         CreateHostedApplication(values =>
         {
@@ -661,54 +653,19 @@ public sealed class InventoryReportViewEndpointTests
         });
 
     private static WebApplicationFactory<Program> CreateApplication(params KeyValuePair<string, string?>[] extraConfiguration)
-    {
-        var contentRoot = Path.Combine(Path.GetTempPath(), "MarketMafioso.Server.Tests", Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(contentRoot);
-        var configuration = new Dictionary<string, string?>
+        => ServerTestHost.Create(host =>
         {
-            ["MarketMafioso:DatabasePath"] = Path.Combine(contentRoot, "marketmafioso.db"),
-        };
-        foreach (var item in extraConfiguration)
-            configuration[item.Key] = item.Value;
-
-        return new WebApplicationFactory<Program>()
-            .WithWebHostBuilder(builder =>
-            {
-                builder.UseContentRoot(contentRoot);
-                builder.ConfigureAppConfiguration(config =>
-                {
-                    config.AddInMemoryCollection(configuration);
-                });
-            });
-    }
-
-    private static WebApplicationFactory<Program> CreateHostedApplication(Action<HostedApplicationValues> configure)
-    {
-        var values = new Dictionary<string, string?>
-        {
-            ["MarketMafioso:RequireApiKey"] = "true",
-            ["MarketMafioso:ClientApiKey"] = "test-client-secret",
-        };
-
-        var contentRoot = Path.Combine(Path.GetTempPath(), "MarketMafioso.Server.Tests", Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(contentRoot);
-        values["MarketMafioso:DatabasePath"] = Path.Combine(contentRoot, "marketmafioso.db");
-        configure(new HostedApplicationValues
-        {
-            ContentRoot = contentRoot,
-            Configuration = values,
+            foreach (var item in extraConfiguration)
+                host.Configuration[item.Key] = item.Value;
         });
 
-        return new WebApplicationFactory<Program>()
-            .WithWebHostBuilder(builder =>
-            {
-                builder.UseContentRoot(contentRoot);
-                builder.ConfigureAppConfiguration(config =>
-                {
-                    config.AddInMemoryCollection(values);
-                });
-            });
-    }
+    private static WebApplicationFactory<Program> CreateHostedApplication(Action<ServerTestHostConfiguration> configure)
+        => ServerTestHost.Create(host =>
+        {
+            host.Configuration["MarketMafioso:RequireApiKey"] = "true";
+            host.Configuration["MarketMafioso:ClientApiKey"] = "test-client-secret";
+            configure(host);
+        });
 
     private static Task<HttpResponseMessage> SendWithKeyAsync(
         HttpClient client,

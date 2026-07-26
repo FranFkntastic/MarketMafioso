@@ -1,8 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
-using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using FFXIV_Craft_Architect.Core.Integrations.WorkshopHost;
 using MarketMafioso.Server.WorkshopHost;
@@ -204,31 +202,16 @@ public sealed class WorkshopHostQuoteEndpointTests
     private static WebApplicationFactory<Program> CreateHostedApplication(
         Action<IServiceCollection>? configureServices = null,
         Action<Dictionary<string, string?>>? configureValues = null)
-    {
-        var contentRoot = Path.Combine(Path.GetTempPath(), "MarketMafioso.Server.Tests", Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(contentRoot);
-        var values = new Dictionary<string, string?>
-        {
-            ["MarketMafioso:RequireApiKey"] = "true",
-            ["MarketMafioso:ClientApiKey"] = "client-secret",
-            ["MarketMafioso:BasePath"] = "/marketmafioso",
-            ["MarketMafioso:EnableMarketAcquisition"] = "true",
-            ["MarketMafioso:DatabasePath"] = Path.Combine(contentRoot, "marketmafioso.db"),
-        };
-        configureValues?.Invoke(values);
-
-        return new WebApplicationFactory<Program>()
-            .WithWebHostBuilder(builder =>
+        => ServerTestHost.Create(
+            configure: host =>
             {
-                builder.UseContentRoot(contentRoot);
-                builder.ConfigureAppConfiguration(config =>
-                {
-                    config.AddInMemoryCollection(values);
-                });
-                if (configureServices != null)
-                    builder.ConfigureServices(configureServices);
-            });
-    }
+                host.Configuration["MarketMafioso:RequireApiKey"] = "true";
+                host.Configuration["MarketMafioso:ClientApiKey"] = "client-secret";
+                host.Configuration["MarketMafioso:BasePath"] = "/marketmafioso";
+                host.Configuration["MarketMafioso:EnableMarketAcquisition"] = "true";
+                configureValues?.Invoke(host.Configuration);
+            },
+            configureServices: configureServices);
 
     private static Task<HttpResponseMessage> SendWithKeyAsync(
         HttpClient client,

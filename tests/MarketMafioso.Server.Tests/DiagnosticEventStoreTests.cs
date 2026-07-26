@@ -1,6 +1,4 @@
-using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using System.Net.Http.Json;
 
@@ -62,29 +60,12 @@ public sealed class DiagnosticEventStoreTests
     };
 
     private static WebApplicationFactory<Program> CreateApplication(params KeyValuePair<string, string?>[] extraConfiguration)
-    {
-        var contentRoot = Path.Combine(Path.GetTempPath(), "MarketMafioso.Server.Tests", Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(contentRoot);
-        var databasePath = Path.Combine(contentRoot, "marketmafioso.db");
-
-        return new WebApplicationFactory<Program>()
-            .WithWebHostBuilder(builder =>
-            {
-                builder.UseContentRoot(contentRoot);
-                builder.ConfigureAppConfiguration(config =>
-                {
-                    var values = new Dictionary<string, string?>
-                    {
-                        ["MarketMafioso:DatabasePath"] = databasePath,
-                        ["MarketMafioso:RequireDashboardAuth"] = "true",
-                        ["MarketMafioso:DashboardBootstrapUsername"] = "admin",
-                        ["MarketMafioso:DashboardBootstrapPassword"] = "secret-password",
-                    };
-                    foreach (var item in extraConfiguration)
-                        values[item.Key] = item.Value;
-
-                    config.AddInMemoryCollection(values);
-                });
-            });
-    }
+        => ServerTestHost.Create(host =>
+        {
+            host.Configuration["MarketMafioso:RequireDashboardAuth"] = "true";
+            host.Configuration["MarketMafioso:DashboardBootstrapUsername"] = "admin";
+            host.Configuration["MarketMafioso:DashboardBootstrapPassword"] = "secret-password";
+            foreach (var item in extraConfiguration)
+                host.Configuration[item.Key] = item.Value;
+        });
 }

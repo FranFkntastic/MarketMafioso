@@ -1,9 +1,7 @@
 using System.Net;
 using System.Text;
 using System.Text.Json;
-using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
-using Microsoft.Extensions.Configuration;
 
 namespace MarketMafioso.Server.Tests;
 
@@ -35,24 +33,8 @@ public sealed class InventoryReportRawJsonRetentionTests
     }
 
     private static WebApplicationFactory<Program> CreateApplication()
-    {
-        var contentRoot = Path.Combine(Path.GetTempPath(), "MarketMafioso.Server.Tests", Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(contentRoot);
-
-        return new WebApplicationFactory<Program>()
-            .WithWebHostBuilder(builder =>
-            {
-                builder.UseContentRoot(contentRoot);
-                builder.ConfigureAppConfiguration(config =>
-                {
-                    config.AddInMemoryCollection(new Dictionary<string, string?>
-                    {
-                        ["MarketMafioso:DatabasePath"] = Path.Combine(contentRoot, "marketmafioso.db"),
-                        ["MarketMafioso:RawJsonRetentionCount"] = "2",
-                    });
-                });
-            });
-    }
+        => ServerTestHost.Create(host =>
+            host.Configuration["MarketMafioso:RawJsonRetentionCount"] = "2");
 
     private static async Task<string> PostRawJsonAsync(HttpClient client, string json)
     {
