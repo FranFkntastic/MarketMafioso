@@ -379,7 +379,7 @@ internal sealed class RemoteMarketTabPanel
             ImGui.EndDisabled();
         reviewRegistry.RegisterLastButton(
             "remote-bell.capture-boundary-nav",
-            "Run bounded one-tick bell boundary navigation",
+            "Run shadow-only position-frame proof",
             boundaryNavigationEnabled,
             SubmitBoundaryNavigationCapture,
             view.Readiness);

@@ -479,6 +479,33 @@ internal sealed partial class RemoteSummoningBellProbe
             return captureMessage;
         }
 
+        if (!TryComputeBellRadiusPosition(
+                playerPosition,
+                bellPosition,
+                0.5f,
+                out var hypotheticalPosition))
+        {
+            CompleteNormalCapture(
+                active,
+                "PositionFrameShadowTargetUnavailable",
+                "A bell-adjacent hypothetical position could not be derived; no interaction was attempted.",
+                false);
+            return "A bell-adjacent hypothetical position could not be derived.";
+        }
+
+        var shadow = bell.ArmPositionFrameShadow(
+            playerPosition,
+            hypotheticalPosition);
+        if (!shadow.Armed)
+        {
+            CompleteNormalCapture(
+                active,
+                "PositionFrameShadowArmFailed",
+                $"The shadow-only position-frame proof could not arm: {shadow.Message}",
+                false);
+            return shadow.Message;
+        }
+
         if (!vnavmesh.SetMovementAllowed(false))
         {
             CompleteNormalCapture(
@@ -527,13 +554,16 @@ internal sealed partial class RemoteSummoningBellProbe
         normalCaptureView = normalCaptureView with
         {
             State = "Boundary navigation armed",
-            Message = message,
+            Message = $"{message} The co-emitted 0x2C6 will be cloned and rewritten locally while the original remains pass-through.",
             Readiness = "No input is required. The rig will stop after one observed movement delta.",
         };
         log.Information(
-            "[MarketMafioso] Invoked one stationary stock interaction for bell {BellGameObjectId:X} at {Distance:F6} yalms, then released the preloaded direct path toward ({X:F3},{Y:F3},{Z:F3}); raw result={RawResult}, movement released={MovementReleased}.",
+            "[MarketMafioso] Invoked one stationary stock interaction for bell {BellGameObjectId:X} at {Distance:F6} yalms, armed a shadow-only position clone toward ({ShadowX:F3},{ShadowY:F3},{ShadowZ:F3}), then released the preloaded direct path toward ({X:F3},{Y:F3},{Z:F3}); raw result={RawResult}, movement released={MovementReleased}.",
             active.Arm.BellGameObjectId,
             observation.Distance,
+            hypotheticalPosition.X,
+            hypotheticalPosition.Y,
+            hypotheticalPosition.Z,
             destination.X,
             destination.Y,
             destination.Z,
