@@ -34,6 +34,8 @@ internal sealed partial class RemoteSummoningBellProbe : IDisposable
     private readonly IFramework framework;
     private readonly IGameGui gameGui;
     private readonly ICondition condition;
+    private readonly IKeyState keyState;
+    private readonly ITargetManager targetManager;
     private readonly IChatGui chatGui;
     private readonly IPluginLog log;
     private readonly ISigScanner sigScanner;
@@ -69,6 +71,7 @@ internal sealed partial class RemoteSummoningBellProbe : IDisposable
         IFramework framework,
         IGameGui gameGui,
         ICondition condition,
+        IKeyState keyState,
         IChatGui chatGui,
         IPluginLog log,
         IDalamudPluginInterface pluginInterface,
@@ -80,6 +83,8 @@ internal sealed partial class RemoteSummoningBellProbe : IDisposable
         this.framework = framework;
         this.gameGui = gameGui;
         this.condition = condition;
+        this.keyState = keyState;
+        this.targetManager = targetManager;
         this.chatGui = chatGui;
         this.log = log;
         this.sigScanner = sigScanner;
@@ -205,6 +210,9 @@ internal sealed partial class RemoteSummoningBellProbe : IDisposable
     {
         if (disposed)
             return;
+        UpdateBoundaryNavigationTrigger();
+        UpdateBoundaryRetainerListAutoClose();
+        UpdateBoundaryMotionTrigger();
         if (retainerRpcProbeSession is not null)
         {
             UpdateRetainerRpcProbe();
@@ -579,6 +587,7 @@ internal sealed partial class RemoteSummoningBellProbe : IDisposable
             return;
 
         disposed = true;
+        StopBoundaryNavigation();
         session = null;
         normalCaptureSession = null;
         if (yieldProbeSession is not null)

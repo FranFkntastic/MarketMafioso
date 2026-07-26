@@ -91,6 +91,16 @@ public sealed class VNavmeshIpcTests
             return moveResult;
         }
 
+        public bool MoveDirect(IReadOnlyList<Vector3> waypoints)
+        {
+            return moveResult;
+        }
+
+        public bool SetMovementAllowed(bool allowed)
+        {
+            return true;
+        }
+
         public bool Stop()
         {
             StopCalled = true;

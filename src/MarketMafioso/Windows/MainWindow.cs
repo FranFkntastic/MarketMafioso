@@ -196,6 +196,7 @@ public class MainWindow : Window, IDisposable
             Plugin.Framework,
             Plugin.GameGui,
             Plugin.Condition,
+            Plugin.KeyState,
             Plugin.ChatGui,
             log,
             Plugin.PluginInterface,

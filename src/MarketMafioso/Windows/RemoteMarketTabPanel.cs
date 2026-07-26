@@ -359,6 +359,49 @@ internal sealed class RemoteMarketTabPanel
         ImGui.SameLine();
         if (!enabled)
             ImGui.BeginDisabled();
+        if (ImGui.Button(view.Active ? "S-edge trigger active..." : "Arm S-edge boundary trigger"))
+            SubmitBoundaryMotionCapture();
+        if (!enabled)
+            ImGui.EndDisabled();
+        reviewRegistry.RegisterLastButton(
+            "remote-bell.capture-boundary-s",
+            "Arm one-shot S-edge bell interaction",
+            enabled,
+            SubmitBoundaryMotionCapture,
+            view.Readiness);
+        ImGui.SameLine();
+        var boundaryNavigationEnabled = bellProbe.CanBeginBoundaryNavigationCapture();
+        if (!boundaryNavigationEnabled)
+            ImGui.BeginDisabled();
+        if (ImGui.Button(view.Active ? "Boundary navigation active..." : "Run one-tick boundary navigation"))
+            SubmitBoundaryNavigationCapture();
+        if (!boundaryNavigationEnabled)
+            ImGui.EndDisabled();
+        reviewRegistry.RegisterLastButton(
+            "remote-bell.capture-boundary-nav",
+            "Run bounded one-tick bell boundary navigation",
+            boundaryNavigationEnabled,
+            SubmitBoundaryNavigationCapture,
+            view.Readiness);
+        ImGui.SameLine();
+        var closeBoundarySessionEnabled = bellProbe.CanCloseBoundaryRetainerList();
+        if (!closeBoundarySessionEnabled)
+            ImGui.BeginDisabled();
+        if (ImGui.Button("Close test RetainerList"))
+            SubmitBoundaryRetainerListClose();
+        if (!closeBoundarySessionEnabled)
+            ImGui.EndDisabled();
+        reviewRegistry.RegisterLastButton(
+            "remote-bell.close-boundary-session",
+            "Close test RetainerList",
+            closeBoundarySessionEnabled,
+            SubmitBoundaryRetainerListClose,
+            closeBoundarySessionEnabled
+                ? "The ordinary RetainerList is open."
+                : "The RetainerList is not open.");
+        ImGui.SameLine();
+        if (!enabled)
+            ImGui.BeginDisabled();
         if (ImGui.Button(view.Active ? "Lifecycle recorder active..." : "Arm complete lifecycle"))
             SubmitNormalBellLifecycleCapture();
         if (!enabled)
@@ -435,6 +478,24 @@ internal sealed class RemoteMarketTabPanel
     {
         var message = bellProbe.BeginNormalLifecycleCapture();
         Plugin.ChatGui.Print($"[MMF] Bell lifecycle capture: {message}");
+    }
+
+    private void SubmitBoundaryMotionCapture()
+    {
+        var message = bellProbe.BeginBoundaryMotionCapture();
+        Plugin.ChatGui.Print($"[MMF] Boundary-motion capture: {message}");
+    }
+
+    private void SubmitBoundaryNavigationCapture()
+    {
+        var message = bellProbe.BeginBoundaryNavigationCapture();
+        Plugin.ChatGui.Print($"[MMF] Boundary-navigation capture: {message}");
+    }
+
+    private void SubmitBoundaryRetainerListClose()
+    {
+        var message = bellProbe.CloseBoundaryRetainerList();
+        Plugin.ChatGui.Print($"[MMF] Boundary-session cleanup: {message}");
     }
 
     private void SubmitYieldControl()

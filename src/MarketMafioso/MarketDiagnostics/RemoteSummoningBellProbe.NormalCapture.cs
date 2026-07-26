@@ -338,6 +338,8 @@ internal sealed partial class RemoteSummoningBellProbe
         bell.CancelTalkPacketTransport("The normal bell flight recorder concluded.");
         var transport = bell.ObserveTalkPacketTransport();
         CaptureNormalStateTransition(active);
+        boundaryMotionTriggerSession = null;
+        StopBoundaryNavigation();
         normalCaptureSession = null;
 
         var completedAtUtc = DateTimeOffset.UtcNow;
@@ -363,6 +365,7 @@ internal sealed partial class RemoteSummoningBellProbe
                 active.ReturnedRetainerListObservedAtUtc,
                 active.SessionClosedObservedAtUtc),
             active.StateSamples.ToArray(),
+            active.BoundaryTrigger,
             transport);
         var path = WriteNormalCaptureEvidence(evidence);
 
@@ -548,6 +551,7 @@ internal sealed partial class RemoteSummoningBellProbe
         public DateTimeOffset? ReturnedRetainerListObservedAtUtc { get; set; }
         public DateTimeOffset? SessionClosedObservedAtUtc { get; set; }
         public NormalBellClientState? LastState { get; set; }
+        public NormalBellBoundaryTriggerEvidence? BoundaryTrigger { get; set; }
         public List<NormalBellClientStateSample> StateSamples { get; } = [];
     }
 
@@ -569,7 +573,19 @@ internal sealed partial class RemoteSummoningBellProbe
         bool CommandMenuObserved,
         NormalBellLifecycleMilestones LifecycleMilestones,
         NormalBellClientStateSample[] StateTransitions,
+        NormalBellBoundaryTriggerEvidence? BoundaryTrigger,
         TalkEventPacketTransportObservation Transport);
+
+    private sealed record NormalBellBoundaryTriggerEvidence(
+        DateTimeOffset SKeyObservedAtUtc,
+        ProbePosition? Position,
+        float Distance,
+        string FocusTargetGameObjectId,
+        ulong InteractionResult,
+        ProbePosition? PositionAfterMovement,
+        float? DistanceAfterMovement,
+        string? NavigationStopMessage,
+        string Message);
 
     private sealed record NormalBellLifecycleMilestones(
         DateTimeOffset? InitialRetainerListObservedAtUtc,
