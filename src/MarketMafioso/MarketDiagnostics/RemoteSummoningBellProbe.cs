@@ -36,6 +36,7 @@ internal sealed partial class RemoteSummoningBellProbe : IDisposable
     private readonly ICondition condition;
     private readonly IChatGui chatGui;
     private readonly IPluginLog log;
+    private readonly ISigScanner sigScanner;
     private readonly DalamudSummoningBellInteractor bell;
     private readonly DalamudRetainerAutomationSession retainerAutomation;
     private readonly VNavmeshIpc vnavmesh;
@@ -81,6 +82,7 @@ internal sealed partial class RemoteSummoningBellProbe : IDisposable
         this.condition = condition;
         this.chatGui = chatGui;
         this.log = log;
+        this.sigScanner = sigScanner;
         bell = new(objectTable, targetManager, dataManager, interopProvider, sigScanner);
         retainerAutomation = new(framework, gameGui, dataManager, log, objectTable, targetManager, sigScanner);
         vnavmesh = new(new DalamudVNavmeshIpcAdapter(pluginInterface, log));
@@ -105,6 +107,7 @@ internal sealed partial class RemoteSummoningBellProbe : IDisposable
                 normalCaptureSession is null &&
                 yieldProbeSession is null &&
                 warmSessionProbeSession is null &&
+                retainerRpcProbeSession is null &&
                 !IsRetainerListReady(),
             Readiness = observation.Message,
             BellGameObjectId = FormatGameObjectId(observation.BellGameObjectId),
@@ -127,6 +130,8 @@ internal sealed partial class RemoteSummoningBellProbe : IDisposable
             return "The YieldEventScene2 probe is already active.";
         if (warmSessionProbeSession is not null)
             return "The warm-session retention probe is already active.";
+        if (retainerRpcProbeSession is not null)
+            return "The retainer RPC probe is already active.";
         if (session is not null)
             return "A remote bell probe is already observing its single submitted request.";
         if (IsRetainerListReady())
@@ -200,6 +205,11 @@ internal sealed partial class RemoteSummoningBellProbe : IDisposable
     {
         if (disposed)
             return;
+        if (retainerRpcProbeSession is not null)
+        {
+            UpdateRetainerRpcProbe();
+            return;
+        }
         if (normalCaptureSession is not null)
         {
             UpdateNormalCapture();
@@ -593,6 +603,7 @@ internal sealed partial class RemoteSummoningBellProbe : IDisposable
         }
         warmSessionProbeSession = null;
         retainerAutomation.CancelActive();
+        DisposeRetainerRpcProbe();
         bell.CancelTalkPacketTransport("The remote bell probe was disposed.");
         bell.CancelYieldEventSceneProbe("The remote bell probe was disposed.");
         bell.StopWarmSessionRetention("The remote bell probe was disposed.");

@@ -59,6 +59,7 @@ internal sealed partial class RemoteSummoningBellProbe
                 session is null &&
                 yieldProbeSession is null &&
                 warmSessionProbeSession is null &&
+                retainerRpcProbeSession is null &&
                 !anyRetainerUiOpen,
             Readiness = anyRetainerUiOpen
                 ? "Close the current retainer interaction before arming the recorder."
@@ -89,6 +90,8 @@ internal sealed partial class RemoteSummoningBellProbe
             return "The YieldEventScene2 probe is already active.";
         if (warmSessionProbeSession is not null)
             return "The warm-session retention probe is already active.";
+        if (retainerRpcProbeSession is not null)
+            return "The retainer RPC probe is already active.";
         if (normalCaptureSession is not null)
             return "The normal bell flight recorder is already armed.";
         if (IsAnyRetainerSessionUiOpen())

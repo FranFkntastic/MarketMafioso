@@ -58,7 +58,8 @@ internal sealed partial class RemoteSummoningBellProbe
         var noOtherProbe =
             session is null &&
             normalCaptureSession is null &&
-            warmSessionProbeSession is null;
+            warmSessionProbeSession is null &&
+            retainerRpcProbeSession is null;
         var canArmControl =
             configuration.EnableMarketDiagnostics &&
             clientState.IsLoggedIn &&
@@ -765,6 +766,8 @@ internal sealed partial class RemoteSummoningBellProbe
             return "A YieldEventScene2 probe is already active.";
         if (warmSessionProbeSession is not null)
             return "The warm-session retention probe is already active.";
+        if (retainerRpcProbeSession is not null)
+            return "The retainer RPC probe is already active.";
         if (IsAnyRetainerSessionUiOpen())
             return "Close every bell and retainer window before starting this probe.";
         if (releaseSuppressionWhenRetainerListCloses)

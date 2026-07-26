@@ -208,6 +208,7 @@ public sealed class Plugin : IDalamudPlugin
                 "Use \"/mmf capture-bell-lifecycle\" for the complete open/select/return/close trace. " +
                 "Yield tests: \"/mmf probe-bell-yield-control\" then \"/mmf probe-bell-yield-direct\". " +
                 "Native signature tests: \"/mmf probe-bell-native-call\" or \"/mmf probe-bell-native-select\". " +
+                "Retainer RPC test: \"/mmf probe-retainer-rpc-control\" then \"/mmf probe-retainer-rpc-bind-test\". " +
                 "Warm retention: \"/mmf probe-bell-warm\", \"/mmf probe-bell-warm-delay <seconds>\", " +
                 "\"/mmf probe-bell-warm-move <yalms>\", \"/mmf probe-bell-warm-unlock-move <yalms>\", " +
                 "or \"/mmf probe-bell-warm-manual\". " +
@@ -357,6 +358,42 @@ public sealed class Plugin : IDalamudPlugin
                 break;
 #else
                 ChatGui.Print("[MMF] YieldEventScene2 probes are only available in debug builds.");
+                break;
+#endif
+
+            case "probe-retainer-rpc-control":
+#if DEBUG
+                ChatGui.Print($"[MMF] Retainer RPC control: {mainWindow.BeginRetainerRpcControlProbe()}");
+                break;
+#else
+                ChatGui.Print("[MMF] Retainer RPC probes are only available in debug builds.");
+                break;
+#endif
+
+            case "probe-retainer-rpc-bind-test":
+#if DEBUG
+                ChatGui.Print($"[MMF] Retainer RPC bind test: {mainWindow.BeginRetainerRpcBindProbe()}");
+                break;
+#else
+                ChatGui.Print("[MMF] Retainer RPC probes are only available in debug builds.");
+                break;
+#endif
+
+            case "probe-retainer-rpc-status":
+#if DEBUG
+                ChatGui.Print($"[MMF] Retainer RPC probe: {mainWindow.GetRetainerRpcProbeStatus()}");
+                break;
+#else
+                ChatGui.Print("[MMF] Retainer RPC probes are only available in debug builds.");
+                break;
+#endif
+
+            case "probe-retainer-rpc-cancel":
+#if DEBUG
+                ChatGui.Print($"[MMF] Retainer RPC probe: {mainWindow.CancelRetainerRpcProbe()}");
+                break;
+#else
+                ChatGui.Print("[MMF] Retainer RPC probes are only available in debug builds.");
                 break;
 #endif
 

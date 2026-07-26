@@ -98,6 +98,7 @@ internal sealed partial class RemoteSummoningBellProbe
                 session is null &&
                 normalCaptureSession is null &&
                 yieldProbeSession is null &&
+                retainerRpcProbeSession is null &&
                 !anyRetainerUiOpen &&
                 observation.Available &&
                 !observation.OutsideOrdinaryInteractionRange,
@@ -1349,6 +1350,8 @@ internal sealed partial class RemoteSummoningBellProbe
             return "The YieldEventScene2 probe is already active.";
         if (warmSessionProbeSession is not null)
             return "The warm-session retention probe is already active.";
+        if (retainerRpcProbeSession is not null)
+            return "The retainer RPC probe is already active.";
         if (IsAnyRetainerSessionUiOpen())
             return "Close every bell and retainer window before starting the warm-session retention probe.";
         return null;

@@ -684,6 +684,18 @@ public class MainWindow : Window, IDisposable
 
     public string CancelYieldEventSceneProbe() => remoteSummoningBellProbe.CancelYieldProbe();
 
+    public string BeginRetainerRpcControlProbe() =>
+        remoteSummoningBellProbe.BeginRetainerRpcControl();
+
+    public string BeginRetainerRpcBindProbe() =>
+        remoteSummoningBellProbe.BeginRetainerRpcBindTest();
+
+    public string GetRetainerRpcProbeStatus() =>
+        remoteSummoningBellProbe.GetRetainerRpcProbeStatus();
+
+    public string CancelRetainerRpcProbe() =>
+        remoteSummoningBellProbe.CancelRetainerRpcProbe();
+
     public string BeginWarmSessionRetentionProbe() =>
         remoteSummoningBellProbe.BeginWarmSessionRetentionProbe();
 
