@@ -94,6 +94,7 @@ internal sealed class RemoteMarketTabPanel
         DrawWarmSessionRetentionProbe();
         DrawYieldEventSceneProbe();
         DrawBellProbe();
+        DrawPositionFrameOneShot();
     }
 
 #if DEBUG
@@ -456,6 +457,64 @@ internal sealed class RemoteMarketTabPanel
             DrawRow("Evidence", view.LastEvidencePath);
     }
 
+    private void DrawPositionFrameOneShot()
+    {
+        var view = bellProbe.GetPositionFrameOneShotView();
+        ImGui.Separator();
+        ImGui.TextColored(MarketMafiosoUiTheme.Header, "Position-frame one-shot");
+        ImGui.TextWrapped(
+            "Two-step, secondary-only control. Prepare freezes the exact bell, territory, truthful player position, and bell-adjacent position without sending. Transmit consumes that preparation and can replace only the first exact compact position frame after the exact bell StartTalkEvent; every mismatch aborts and no retry exists.");
+
+        if (!view.CanPrepare)
+            ImGui.BeginDisabled();
+        if (ImGui.Button("Prepare exact one-shot"))
+            SubmitPreparePositionFrameOneShot();
+        if (!view.CanPrepare)
+            ImGui.EndDisabled();
+        reviewRegistry.RegisterLastButton(
+            "remote-bell.position-frame-prepare",
+            "Prepare exact position-frame one-shot",
+            view.CanPrepare,
+            SubmitPreparePositionFrameOneShot,
+            view.Readiness);
+
+        ImGui.SameLine();
+        if (!view.CanFire)
+            ImGui.BeginDisabled();
+        if (ImGui.Button("TRANSMIT prepared one-shot"))
+            SubmitTransmitPositionFrameOneShot();
+        if (!view.CanFire)
+            ImGui.EndDisabled();
+        reviewRegistry.RegisterLastButton(
+            "remote-bell.position-frame-transmit",
+            "TRANSMIT prepared position-frame one-shot",
+            view.CanFire,
+            SubmitTransmitPositionFrameOneShot,
+            view.Readiness);
+
+        ImGui.SameLine();
+        if (!view.Prepared)
+            ImGui.BeginDisabled();
+        if (ImGui.Button("Cancel preparation"))
+            SubmitCancelPositionFrameOneShot();
+        if (!view.Prepared)
+            ImGui.EndDisabled();
+        reviewRegistry.RegisterLastButton(
+            "remote-bell.position-frame-cancel",
+            "Cancel prepared position-frame one-shot",
+            view.Prepared,
+            SubmitCancelPositionFrameOneShot,
+            view.Readiness);
+
+        DrawRow("Readiness", view.Readiness);
+        DrawRow("State", view.State);
+        DrawRow("Result", view.Message);
+        if (view.BellGameObjectId is not null)
+            DrawRow("Loaded bell", $"{view.BellGameObjectId} at {view.Distance:0.000}y");
+        if (view.ExpiresAtUtc is not null)
+            DrawRow("Expires", view.ExpiresAtUtc.Value.ToString("O"));
+    }
+
     private void SubmitOpenAgent()
     {
         var message = controller.OpenMarketBoard();
@@ -466,6 +525,24 @@ internal sealed class RemoteMarketTabPanel
     {
         var message = bellProbe.BeginProbe();
         Plugin.ChatGui.Print($"[MMF] Remote bell probe: {message}");
+    }
+
+    private void SubmitPreparePositionFrameOneShot()
+    {
+        var message = bellProbe.PreparePositionFrameOneShot();
+        Plugin.ChatGui.Print($"[MMF] Position-frame one-shot: {message}");
+    }
+
+    private void SubmitTransmitPositionFrameOneShot()
+    {
+        var message = bellProbe.TransmitPreparedPositionFrameOneShot();
+        Plugin.ChatGui.Print($"[MMF] Position-frame one-shot: {message}");
+    }
+
+    private void SubmitCancelPositionFrameOneShot()
+    {
+        var message = bellProbe.CancelPositionFrameOneShot();
+        Plugin.ChatGui.Print($"[MMF] Position-frame one-shot: {message}");
     }
 
     private void SubmitNormalBellCapture()

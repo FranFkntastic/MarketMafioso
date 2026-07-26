@@ -24,7 +24,8 @@ internal sealed record RemoteSummoningBellProbeView(
 
 internal sealed partial class RemoteSummoningBellProbe : IDisposable
 {
-    private const string ProbePhase = "A-loaded-same-zone-out-of-range";
+    private const string StockProbePhase = "A-loaded-same-zone-out-of-range";
+    private const string PositionFrameOneShotProbePhase = "A-position-frame-one-shot";
     private static readonly TimeSpan ObservationWindow = TimeSpan.FromSeconds(10);
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
 
@@ -162,6 +163,7 @@ internal sealed partial class RemoteSummoningBellProbe : IDisposable
                 startPosition,
                 CapturePosition(),
                 submission,
+                StockProbePhase,
                 "NotSubmitted",
                 false,
                 false);
@@ -184,7 +186,8 @@ internal sealed partial class RemoteSummoningBellProbe : IDisposable
             startedAtUtc + ObservationWindow,
             territoryId,
             startPosition,
-            submission);
+            submission,
+            StockProbePhase);
         view = new(
             true,
             false,
@@ -403,6 +406,9 @@ internal sealed partial class RemoteSummoningBellProbe : IDisposable
                 bell.ObserveTalkPacketTransport()),
         };
         bell.CancelTalkPacketTransport("The remote bell probe concluded.");
+        var positionFrameOneShot = active.ProbePhase == PositionFrameOneShotProbePhase;
+        if (positionFrameOneShot && retainerListReady)
+            CloseBoundaryRetainerList();
         var completedAtUtc = DateTimeOffset.UtcNow;
         var evidence = CreateEvidence(
             active.StartedAtUtc,
@@ -411,11 +417,14 @@ internal sealed partial class RemoteSummoningBellProbe : IDisposable
             active.StartPosition,
             CapturePosition(),
             active.Submission,
+            active.ProbePhase,
             verdict,
             retainerListReady,
             active.OccupiedSummoningBellObserved);
         var path = WriteEvidence(evidence);
-        if (verdict == "Confirmed" && autoRetainerSuppression is { Changed: true })
+        if (!positionFrameOneShot &&
+            verdict == "Confirmed" &&
+            autoRetainerSuppression is { Changed: true })
             releaseSuppressionWhenRetainerListCloses = true;
         else
             ReleaseAutoRetainerSuppression();
@@ -449,6 +458,7 @@ internal sealed partial class RemoteSummoningBellProbe : IDisposable
         ProbePosition? startPosition,
         ProbePosition? conclusionPosition,
         RemoteSummoningBellInteractionResult submission,
+        string probePhase,
         string verdict,
         bool retainerListReady,
         bool occupiedSummoningBellObserved) =>
@@ -464,7 +474,7 @@ internal sealed partial class RemoteSummoningBellProbe : IDisposable
             submission.BellEventIdSource,
             submission.Distance,
             submission.OrdinaryInteractionDistance,
-            ProbePhase,
+            probePhase,
             submission.Code,
             submission.Message,
             submission.PacketOpcode,
@@ -487,6 +497,7 @@ internal sealed partial class RemoteSummoningBellProbe : IDisposable
             submission.InboundActorControlSamples,
             submission.InboundRawPacketCount,
             submission.InboundRawPacketSamples,
+            submission.PositionFrameShadow,
             submission.OriginalHitboxRadius,
             submission.TemporaryHitboxRadius,
             submission.OriginalBellX,
@@ -528,6 +539,7 @@ internal sealed partial class RemoteSummoningBellProbe : IDisposable
             InboundActorControlSamples = transport.InboundActorControlSamples,
             InboundRawPacketCount = transport.InboundRawPacketCount,
             InboundRawPacketSamples = transport.InboundRawPacketSamples,
+            PositionFrameShadow = transport.PositionFrameShadow,
         };
 
     private string? WriteEvidence(RemoteSummoningBellProbeEvidence evidence)
@@ -587,6 +599,7 @@ internal sealed partial class RemoteSummoningBellProbe : IDisposable
             return;
 
         disposed = true;
+        positionFrameOneShotSlot.Cancel();
         StopBoundaryNavigation();
         session = null;
         normalCaptureSession = null;
@@ -628,6 +641,7 @@ internal sealed partial class RemoteSummoningBellProbe : IDisposable
         uint TerritoryId,
         ProbePosition? StartPosition,
         RemoteSummoningBellInteractionResult Submission,
+        string ProbePhase,
         bool OccupiedSummoningBellObserved = false);
 
     internal sealed record ProbePosition(float X, float Y, float Z);
@@ -667,6 +681,7 @@ internal sealed partial class RemoteSummoningBellProbe : IDisposable
         InboundActorControlSample[]? InboundActorControlSamples,
         int InboundRawPacketCount,
         InboundRawPacketSample[]? InboundRawPacketSamples,
+        PositionFrameShadowObservation? PositionFrameShadow,
         float OriginalHitboxRadius,
         float TemporaryHitboxRadius,
         float OriginalBellX,

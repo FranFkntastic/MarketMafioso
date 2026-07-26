@@ -434,6 +434,7 @@ public class MainWindow : Window, IDisposable
         var persistedExactAcquisition = exactAcquisitionRouteStateStore.Restore();
         var remoteBellProbe = remoteSummoningBellProbe.GetView();
         var normalBellCapture = remoteSummoningBellProbe.GetNormalCaptureView();
+        var positionFrameOneShot = remoteSummoningBellProbe.GetPositionFrameOneShotView();
         var yieldBellProbe = remoteSummoningBellProbe.GetYieldProbeView();
         var warmBellProbe = remoteSummoningBellProbe.GetWarmSessionProbeView();
         return new AgentBridgeTruth
@@ -469,6 +470,13 @@ public class MainWindow : Window, IDisposable
                 NormalCaptureMessage = normalBellCapture.Message,
                 NormalCaptureReadiness = normalBellCapture.Readiness,
                 NormalCaptureLastEvidencePath = normalBellCapture.LastEvidencePath,
+                PositionFrameOneShotPrepared = positionFrameOneShot.Prepared,
+                PositionFrameOneShotCanPrepare = positionFrameOneShot.CanPrepare,
+                PositionFrameOneShotCanFire = positionFrameOneShot.CanFire,
+                PositionFrameOneShotState = positionFrameOneShot.State,
+                PositionFrameOneShotMessage = positionFrameOneShot.Message,
+                PositionFrameOneShotReadiness = positionFrameOneShot.Readiness,
+                PositionFrameOneShotExpiresAtUtc = positionFrameOneShot.ExpiresAtUtc,
                 YieldProbeActive = yieldBellProbe.Active,
                 YieldProbeCanArmControl = yieldBellProbe.CanArmControl,
                 YieldProbeCanReplaySessionFree = yieldBellProbe.CanReplaySessionFree,

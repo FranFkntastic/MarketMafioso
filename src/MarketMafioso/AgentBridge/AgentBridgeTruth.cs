@@ -45,6 +45,13 @@ public sealed record AgentBridgeRemoteBellProbeTruth
     public string? NormalCaptureMessage { get; init; }
     public string? NormalCaptureReadiness { get; init; }
     public string? NormalCaptureLastEvidencePath { get; init; }
+    public bool PositionFrameOneShotPrepared { get; init; }
+    public bool PositionFrameOneShotCanPrepare { get; init; }
+    public bool PositionFrameOneShotCanFire { get; init; }
+    public string? PositionFrameOneShotState { get; init; }
+    public string? PositionFrameOneShotMessage { get; init; }
+    public string? PositionFrameOneShotReadiness { get; init; }
+    public DateTimeOffset? PositionFrameOneShotExpiresAtUtc { get; init; }
     public bool YieldProbeActive { get; init; }
     public bool YieldProbeCanArmControl { get; init; }
     public bool YieldProbeCanReplaySessionFree { get; init; }
