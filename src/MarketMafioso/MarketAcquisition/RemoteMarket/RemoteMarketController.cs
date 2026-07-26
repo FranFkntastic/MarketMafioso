@@ -5,6 +5,7 @@ using System.Linq;
 using System.Text.Json;
 using Dalamud.Game.ClientState.Conditions;
 using Dalamud.Game.Network.Structures;
+using Dalamud.Interface.ImGuiNotification;
 using Dalamud.Plugin.Services;
 using MarketMafioso.Automation.MarketBoard;
 using FFXIVClientStructs.FFXIV.Client.Game;
@@ -41,6 +42,7 @@ internal sealed class RemoteMarketController : IDisposable
     private readonly IGameGui gameGui;
     private readonly ICondition condition;
     private readonly IChatGui chatGui;
+    private readonly INotificationManager notificationManager;
     private readonly IPluginLog log;
     private readonly Func<uint, string?> resolveItemName;
     private readonly Func<uint, string?, MarketBoardItemSearchResult> searchDriver;
@@ -48,6 +50,7 @@ internal sealed class RemoteMarketController : IDisposable
     private readonly string evidenceDirectory;
     private readonly Dalamud.Plugin.Ipc.ICallGateProvider<uint, uint?, bool> openRemoteMarketProvider;
     private readonly Dalamud.Plugin.Ipc.ICallGateProvider<bool> remoteMarketAvailableProvider;
+    private readonly RemoteMarketNativePurchaseGuard nativePurchaseGuard;
 
     private readonly List<RemoteMarketBatchItem> batchItems = [];
     private RemoteMarketPurchaseAttempt? attempt;
@@ -56,6 +59,7 @@ internal sealed class RemoteMarketController : IDisposable
     private readonly Dictionary<uint, Dictionary<ulong, string>> retainerNamesByItem = [];
     private uint? pendingSelectionMaxPrice;
     private DateTimeOffset pendingSelectionExpiresAtUtc;
+    private bool blockedNativePurchaseRecoveryScheduled;
 
     public RemoteMarketController(
         Configuration configuration,
@@ -66,6 +70,8 @@ internal sealed class RemoteMarketController : IDisposable
         IGameGui gameGui,
         ICondition condition,
         IChatGui chatGui,
+        INotificationManager notificationManager,
+        IGameInteropProvider interopProvider,
         IPluginLog log,
         Func<uint, string?> resolveItemName,
         Func<uint, string?, MarketBoardItemSearchResult> searchDriver,
@@ -80,14 +86,20 @@ internal sealed class RemoteMarketController : IDisposable
         this.gameGui = gameGui;
         this.condition = condition;
         this.chatGui = chatGui;
+        this.notificationManager = notificationManager;
         this.log = log;
         this.resolveItemName = resolveItemName;
         this.searchDriver = searchDriver;
         cmbContext = new CmbMarketContextClient(pluginInterface, log);
         evidenceDirectory = Path.Combine(pluginConfigDirectory, "remote-market");
+        nativePurchaseGuard = new RemoteMarketNativePurchaseGuard(
+            interopProvider,
+            log,
+            ScheduleBlockedNativePurchaseRecovery);
         marketBoard.PurchaseRequested += OnPurchaseRequested;
         marketBoard.ItemPurchased += OnItemPurchased;
         marketBoard.OfferingsReceived += OnOfferingsReceived;
+        framework.Update += OnFrameworkUpdate;
         openRemoteMarketProvider = pluginInterface.GetIpcProvider<uint, uint?, bool>("MarketMafioso.OpenRemoteMarket");
         openRemoteMarketProvider.RegisterFunc(OpenRemoteMarketIpc);
         remoteMarketAvailableProvider = pluginInterface.GetIpcProvider<bool>("MarketMafioso.IsRemoteMarketAvailable");
@@ -95,13 +107,18 @@ internal sealed class RemoteMarketController : IDisposable
     }
 
     public bool IsAvailable =>
-        MarketAcquisitionUnlock.IsUnlocked(configuration) && configuration.EnableRemoteMarketPurchase;
+        MarketAcquisitionUnlock.IsUnlocked(configuration) &&
+        configuration.EnableRemoteMarketPurchase &&
+        nativePurchaseGuard.IsAvailable;
 
     public void Dispose()
     {
+        CloseOwnedRemoteMarketAgent();
         marketBoard.PurchaseRequested -= OnPurchaseRequested;
         marketBoard.ItemPurchased -= OnItemPurchased;
         marketBoard.OfferingsReceived -= OnOfferingsReceived;
+        framework.Update -= OnFrameworkUpdate;
+        nativePurchaseGuard.Dispose();
         openRemoteMarketProvider.UnregisterFunc();
         remoteMarketAvailableProvider.UnregisterFunc();
     }
@@ -151,6 +168,8 @@ internal sealed class RemoteMarketController : IDisposable
 
     public string? GetPurchaseContextBlockReason()
     {
+        if (!nativePurchaseGuard.IsAvailable)
+            return "The native-purchase guard is unavailable, so remote purchases are blocked.";
         foreach (var flag in PurchaseBlockingConditions)
         {
             if (condition[flag])
@@ -169,6 +188,44 @@ internal sealed class RemoteMarketController : IDisposable
 
     public void SetDebugOutcome(string message) => lastOutcome = message;
 
+    public unsafe string RunNativePurchaseGuardSelfTest()
+    {
+        if (!IsAvailable)
+            return "Native-purchase guard is unavailable.";
+        if (!nativePurchaseGuard.IsRemoteSessionActive)
+            return "Open the board through MMF before testing the native-purchase guard.";
+
+        var proxy = GetItemSearchProxy();
+        if (proxy == null)
+            return "ItemSearch proxy is unavailable.";
+        if (proxy->LastPurchasedMarketboardItem.ListingId != 0)
+            return "Guard test refused: a real listing is currently staged.";
+
+        var blockedBefore = nativePurchaseGuard.BlockedNativePurchaseCount;
+        var sent = proxy->SendPurchaseRequestPacket();
+        var blockedAfter = nativePurchaseGuard.BlockedNativePurchaseCount;
+        if (sent || blockedAfter <= blockedBefore)
+            return "Guard test failed: the normal client entry point was not intercepted.";
+
+        const string result = "Guard test passed: the normal client entry point was blocked with no listing staged.";
+        log.Information("[MarketMafioso] {Result}", result);
+        return result;
+    }
+
+    public unsafe string CloseMarketBoardForTesting()
+    {
+        var agentModule = AgentModule.Instance();
+        var agent = agentModule == null ? null : agentModule->GetAgentByInternalId(AgentId.ItemSearch);
+        if (agent == null || !agent->IsAgentActive())
+            return "Market board is already closed.";
+
+        agent->Hide();
+        nativePurchaseGuard.ObserveMarketAgentActive(false);
+        ClearStagedPurchase();
+        DismissLingeringConfirmationDialogs();
+        return "Market board closed and remote ownership released.";
+    }
+
     public string OpenMarketBoard()
     {
         if (!IsAvailable)
@@ -181,8 +238,10 @@ internal sealed class RemoteMarketController : IDisposable
             var agent = agentModule == null ? null : agentModule->GetAgentByInternalId(AgentId.ItemSearch);
             if (agent == null)
                 return "ItemSearch agent is unavailable.";
+            var wasActive = agent->IsAgentActive();
             agent->Show();
             var opened = agent->IsAgentActive();
+            nativePurchaseGuard.ObserveRemoteOpen(wasActive, opened);
             log.Information("[MarketMafioso] Remote market board opened. Territory={Territory} AgentActive={AgentActive}", clientState.TerritoryType, opened);
             return opened ? "Market board opened." : "Market board was shown but did not activate.";
         }
@@ -325,7 +384,7 @@ internal sealed class RemoteMarketController : IDisposable
                 var listingPointer = (MarketBoardListing*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref staged);
                 if (!proxy->SetLastPurchasedItem(listingPointer))
                     failure = "The client refused to stage the listing.";
-                else if (!proxy->SendPurchaseRequestPacket())
+                else if (!nativePurchaseGuard.SendOwned(proxy))
                     failure = "The client refused to send the purchase request.";
             }
         }
@@ -515,6 +574,56 @@ internal sealed class RemoteMarketController : IDisposable
 
     private void DismissLingeringConfirmationDialogsSoon() =>
         framework.RunOnTick(DismissLingeringConfirmationDialogs, TimeSpan.FromMilliseconds(500));
+
+    private void OnFrameworkUpdate(IFramework _)
+    {
+        unsafe
+        {
+            var agentModule = AgentModule.Instance();
+            var agent = agentModule == null ? null : agentModule->GetAgentByInternalId(AgentId.ItemSearch);
+            nativePurchaseGuard.ObserveMarketAgentActive(agent != null && agent->IsAgentActive());
+        }
+    }
+
+    private unsafe void CloseOwnedRemoteMarketAgent()
+    {
+        if (!nativePurchaseGuard.IsRemoteSessionActive)
+            return;
+
+        var agentModule = AgentModule.Instance();
+        var agent = agentModule == null ? null : agentModule->GetAgentByInternalId(AgentId.ItemSearch);
+        if (agent != null && agent->IsAgentActive())
+        {
+            log.Information("[MarketMafioso] Closing MMF-owned remote market agent during plugin disposal.");
+            agent->Hide();
+        }
+
+        nativePurchaseGuard.ObserveMarketAgentActive(false);
+        ClearStagedPurchase();
+    }
+
+    private void ScheduleBlockedNativePurchaseRecovery()
+    {
+        if (blockedNativePurchaseRecoveryScheduled)
+            return;
+
+        blockedNativePurchaseRecoveryScheduled = true;
+        framework.RunOnTick(() =>
+        {
+            blockedNativePurchaseRecoveryScheduled = false;
+            ClearStagedPurchase();
+            DismissLingeringConfirmationDialogs();
+            lastOutcome = "Native purchase blocked locally; no request was sent and this area was not marked as rejecting purchases.";
+            notificationManager.AddNotification(new Notification
+            {
+                Title = "MMF Remote Market",
+                Content = "Native market-board purchases aren't available remotely. Select the listing in MMF and confirm it there.",
+                Type = NotificationType.Warning,
+                InitialDuration = TimeSpan.FromSeconds(8),
+                Minimized = false,
+            });
+        });
+    }
 
     private void DismissLingeringConfirmationDialogs()
     {

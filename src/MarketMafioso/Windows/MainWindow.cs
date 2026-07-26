@@ -180,6 +180,8 @@ public class MainWindow : Window, IDisposable
             Plugin.GameGui,
             Plugin.Condition,
             Plugin.ChatGui,
+            Plugin.NotificationManager,
+            Plugin.GameInteropProvider,
             log,
             scanner.ResolveItemName,
             marketBoardItemSearchDriver.Search,

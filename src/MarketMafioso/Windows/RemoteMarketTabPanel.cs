@@ -65,6 +65,20 @@ internal sealed class RemoteMarketTabPanel
             true,
             () => Plugin.ChatGui.Print($"[MMF] Remote market debug search: {debugSearchCobalt()}"),
             "Drives a one-shot market search for Cobalt Ore through the acquisition driver.");
+#if DEBUG
+        reviewRegistry.RegisterLastButton(
+            "remote-market.guard-self-test",
+            "Debug: test native purchase guard",
+            true,
+            () => Plugin.ChatGui.Print($"[MMF] Remote market: {controller.RunNativePurchaseGuardSelfTest()}"),
+            "Invokes the guarded client send entry point only when no listing is staged.");
+        reviewRegistry.RegisterLastButton(
+            "remote-market.close-agent",
+            "Debug: close market board",
+            true,
+            () => Plugin.ChatGui.Print($"[MMF] Remote market: {controller.CloseMarketBoardForTesting()}"),
+            "Closes the market board agent and releases remote-session ownership.");
+#endif
         ImGui.SameLine();
         ImGui.TextColored(MarketMafiosoUiTheme.Muted, $"{view.Listings.Count} listings staged");
 
