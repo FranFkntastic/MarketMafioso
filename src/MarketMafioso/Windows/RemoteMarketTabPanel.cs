@@ -88,10 +88,57 @@ internal sealed class RemoteMarketTabPanel
         }
 
         DrawNormalBellCapture();
+#if DEBUG
+        DrawRetainerRpcProbe();
+#endif
         DrawWarmSessionRetentionProbe();
         DrawYieldEventSceneProbe();
         DrawBellProbe();
     }
+
+#if DEBUG
+    private void DrawRetainerRpcProbe()
+    {
+        var status = bellProbe.GetRetainerRpcProbeStatus();
+        var enabled =
+            configuration.EnableMarketDiagnostics &&
+            status.StartsWith("Idle.", StringComparison.Ordinal);
+
+        ImGui.Separator();
+        ImGui.TextColored(MarketMafiosoUiTheme.Header, "Retainer cache RPC comparison");
+        ImGui.TextWrapped(
+            "Runs the cold kind-4 control or the serialized kind-2/kind-3/post-kind-4 comparison. Each request uses an isolated callback token; no retainer scene or inventory action is opened.");
+
+        if (!enabled)
+            ImGui.BeginDisabled();
+        if (ImGui.Button("Run cold kind-4 control"))
+            SubmitRetainerRpcControl();
+        if (!enabled)
+            ImGui.EndDisabled();
+        reviewRegistry.RegisterLastButton(
+            "remote-bell.retainer-rpc-control",
+            "Run cold retainer RPC kind-4 control",
+            enabled,
+            SubmitRetainerRpcControl,
+            status);
+
+        ImGui.SameLine();
+        if (!enabled)
+            ImGui.BeginDisabled();
+        if (ImGui.Button("Run kind 2/3/4 comparison"))
+            SubmitRetainerRpcBind();
+        if (!enabled)
+            ImGui.EndDisabled();
+        reviewRegistry.RegisterLastButton(
+            "remote-bell.retainer-rpc-bind",
+            "Run retainer RPC kind-2/kind-3/post-kind-4 comparison",
+            enabled,
+            SubmitRetainerRpcBind,
+            status);
+
+        DrawRow("Status", status);
+    }
+#endif
 
     private void DrawWarmSessionRetentionProbe()
     {
@@ -449,6 +496,20 @@ internal sealed class RemoteMarketTabPanel
         var message = bellProbe.ReplayHeldWarmSession();
         Plugin.ChatGui.Print($"[MMF] Warm-session retention: {message}");
     }
+
+#if DEBUG
+    private void SubmitRetainerRpcControl()
+    {
+        var message = bellProbe.BeginRetainerRpcControl();
+        Plugin.ChatGui.Print($"[MMF] Retainer RPC control: {message}");
+    }
+
+    private void SubmitRetainerRpcBind()
+    {
+        var message = bellProbe.BeginRetainerRpcBindTest();
+        Plugin.ChatGui.Print($"[MMF] Retainer RPC bind test: {message}");
+    }
+#endif
 
     private static void DrawRow(string label, string value)
     {
