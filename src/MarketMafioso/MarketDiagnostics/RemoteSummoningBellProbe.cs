@@ -605,7 +605,7 @@ internal sealed partial class RemoteSummoningBellProbe : IDisposable
         RemoteSummoningBellInteractionResult Submission,
         bool OccupiedSummoningBellObserved = false);
 
-    private sealed record ProbePosition(float X, float Y, float Z);
+    internal sealed record ProbePosition(float X, float Y, float Z);
 
     private sealed record RemoteSummoningBellProbeEvidence(
         DateTimeOffset StartedAtUtc,

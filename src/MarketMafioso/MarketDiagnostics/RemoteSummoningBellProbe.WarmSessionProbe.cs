@@ -32,6 +32,8 @@ internal enum WarmSessionReplayMode
     Delayed,
     Manual,
     Distance,
+    Scene2UiResurrection,
+    Scene2DistanceContinuation,
 }
 
 internal sealed record WarmSessionBootstrapStep(
@@ -123,6 +125,29 @@ internal sealed partial class RemoteSummoningBellProbe
 
     public string BeginManualWarmSessionRetentionProbe() =>
         BeginWarmSessionRetentionProbe(WarmSessionReplayMode.Manual, null, automateBootstrap: true);
+
+    public string BeginScene2UiResurrectionProbe() =>
+        BeginWarmSessionRetentionProbe(
+            WarmSessionReplayMode.Scene2UiResurrection,
+            WarmSessionReplayDelay,
+            automateBootstrap: true);
+
+    public string BeginScene2DistanceContinuationProbe(float movementDistance)
+    {
+        if (movementDistance < MinimumWarmSessionMovementDistance ||
+            movementDistance > MaximumWarmSessionMovementDistance)
+        {
+            return $"Choose a scene-2 movement distance from " +
+                   $"{MinimumWarmSessionMovementDistance:0} through {MaximumWarmSessionMovementDistance:0} yalms.";
+        }
+
+        return BeginWarmSessionRetentionProbe(
+            WarmSessionReplayMode.Scene2DistanceContinuation,
+            WarmSessionReplayDelay,
+            automateBootstrap: true,
+            requestedMovementDistance: movementDistance,
+            clearLocalBellConditionForMovement: true);
+    }
 
     public string BeginDistanceWarmSessionRetentionProbe(float movementDistance)
     {
@@ -229,6 +254,10 @@ internal sealed partial class RemoteSummoningBellProbe
                     clearLocalBellConditionForMovement
                         ? $"MMF will locally clear only OccupiedSummoningBell, move {requestedMovementDistance:0.#} yalms, restore the flag, replay once, then return to the bell."
                         : $"MMF will move {requestedMovementDistance:0.#} yalms away after retaining the session, replay once, then return to the bell.",
+                WarmSessionReplayMode.Scene2UiResurrection =>
+                    "MMF will re-enter accepted scene 2 beside the bell, hide and show only the retainer command addon, verify no event continuation escaped, then close normally.",
+                WarmSessionReplayMode.Scene2DistanceContinuation =>
+                    $"MMF will re-enter accepted scene 2, locally hide its addon, move {requestedMovementDistance:0.#} yalms away, reopen it, and choose Entrust or withdraw items without moving inventory.",
                 _ =>
                     "Interact normally: select a retainer, choose Quit, select a retainer again from the reopened list, choose Quit again, then close the reopened retainer list. MMF will suppress that one close and replay the exact second selection automatically.",
             },
@@ -579,9 +608,24 @@ internal sealed partial class RemoteSummoningBellProbe
                     : "The server accepted the retained-session replay; waiting for the command menu.",
             };
 
+            if (active.Scene2ExperimentStarted)
+            {
+                UpdateScene2OddballExperiment(active, now, transport);
+                return;
+            }
+
             if (commandMenuReady &&
                 now - active.Scene2ObservedAtUtc.Value >= WarmSessionSuccessSettleWindow)
             {
+                if (active.ReplayMode is
+                    WarmSessionReplayMode.Scene2UiResurrection or
+                    WarmSessionReplayMode.Scene2DistanceContinuation)
+                {
+                    active.Scene2ExperimentStarted = true;
+                    UpdateScene2OddballExperiment(active, now, transport);
+                    return;
+                }
+
                 if (active.AutomateBootstrap)
                 {
                     active.CommandMenuObservedAfterReplay = true;
@@ -1028,6 +1072,22 @@ internal sealed partial class RemoteSummoningBellProbe
             return UpdateWarmSessionReturn(active);
         }
 
+        if (active.ReplayMode is
+            WarmSessionReplayMode.Scene2UiResurrection or
+            WarmSessionReplayMode.Scene2DistanceContinuation)
+        {
+            CompleteWarmSessionProbe(
+                active,
+                cleanup.Success
+                    ? active.Scene2ExperimentVerdict ?? "Scene2ExperimentCompleted"
+                    : "Scene2ExperimentCleanupFailed",
+                cleanup.Success
+                    ? active.Scene2ExperimentMessage ?? "The scene-2 experiment completed and the stock bell session closed normally."
+                    : $"{active.Scene2ExperimentMessage} Stock-session cleanup failed ({cleanup.Code}): {cleanup.Message}",
+                active.CommandMenuObservedAfterReplay);
+            return false;
+        }
+
         CompleteWarmSessionProbe(
             active,
             cleanup.Success ? "Confirmed" : "ConfirmedCleanupFailed",
@@ -1196,6 +1256,13 @@ internal sealed partial class RemoteSummoningBellProbe
             active.NavigationFailure,
             active.DistanceTargetReached,
             active.ReturnedToHeldPosition,
+            active.Scene2ExperimentSteps.ToArray(),
+            active.Scene2UiSamples.ToArray(),
+            active.Scene2ExperimentVerdict,
+            active.Scene2ExperimentMessage,
+            active.Scene2InventoryResult,
+            active.Scene2ContinuationCountBeforeAction,
+            active.Scene2ContinuationCountAfterAction,
             active.TeardownSuppressedAtUtc,
             active.ReplayRequestedAtUtc,
             active.ReplayStartedAtUtc,
@@ -1366,6 +1433,18 @@ internal sealed partial class RemoteSummoningBellProbe
         public Task<RetainerAutomationResult>? FinalCleanupTask { get; set; }
         public RetainerAutomationResult? FinalCleanupResult { get; set; }
         public bool CommandMenuObservedAfterReplay { get; set; }
+        public bool Scene2ExperimentStarted { get; set; }
+        public Scene2OddballStage Scene2Stage { get; set; }
+        public DateTimeOffset? Scene2StageStartedAtUtc { get; set; }
+        public string? Scene2ExperimentVerdict { get; set; }
+        public string? Scene2ExperimentMessage { get; set; }
+        public RetainerAutomationResult? Scene2InventoryResult { get; set; }
+        public Task<RetainerAutomationResult>? Scene2ActionTask { get; set; }
+        public uint Scene2RetainerObjectId { get; set; }
+        public int? Scene2ContinuationCountBeforeAction { get; set; }
+        public int? Scene2ContinuationCountAfterAction { get; set; }
+        public ConcurrentQueue<WarmSessionBootstrapStep> Scene2ExperimentSteps { get; } = new();
+        public List<Scene2UiStateSample> Scene2UiSamples { get; } = [];
         public int ObservedBootstrapStepCount { get; set; }
         public bool SelectionObserved { get; set; }
         public bool Scene1SelectionObserved { get; set; }
@@ -1426,6 +1505,13 @@ internal sealed partial class RemoteSummoningBellProbe
         string? NavigationFailure,
         bool DistanceTargetReached,
         bool ReturnedToHeldPosition,
+        WarmSessionBootstrapStep[] Scene2ExperimentSteps,
+        Scene2UiStateSample[] Scene2UiSamples,
+        string? Scene2ExperimentVerdict,
+        string? Scene2ExperimentMessage,
+        RetainerAutomationResult? Scene2InventoryResult,
+        int? Scene2ContinuationCountBeforeAction,
+        int? Scene2ContinuationCountAfterAction,
         DateTimeOffset? TeardownSuppressedAtUtc,
         DateTimeOffset? ReplayRequestedAtUtc,
         DateTimeOffset? ReplayStartedAtUtc,

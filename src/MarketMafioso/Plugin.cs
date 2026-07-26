@@ -210,6 +210,7 @@ public sealed class Plugin : IDalamudPlugin
                 "Warm retention: \"/mmf probe-bell-warm\", \"/mmf probe-bell-warm-delay <seconds>\", " +
                 "\"/mmf probe-bell-warm-move <yalms>\", \"/mmf probe-bell-warm-unlock-move <yalms>\", " +
                 "or \"/mmf probe-bell-warm-manual\". " +
+                "Scene-2 oddballs: \"/mmf probe-bell-scene2-ui\" and \"/mmf probe-bell-scene2-move <yalms>\". " +
                 "Use \"/mmf probe-bell-warm-ui\" only for the old manual select/Quit bootstrap.",
         });
 
@@ -403,6 +404,31 @@ public sealed class Plugin : IDalamudPlugin
                 break;
 #else
                 ChatGui.Print("[MMF] Warm-session retention is only available in debug builds.");
+                break;
+#endif
+
+            case "probe-bell-scene2-ui":
+#if DEBUG
+                ChatGui.Print($"[MMF] Scene-2 UI resurrection: {mainWindow.BeginScene2UiResurrectionProbe()}");
+                break;
+#else
+                ChatGui.Print("[MMF] Scene-2 probes are only available in debug builds.");
+                break;
+#endif
+
+            case "probe-bell-scene2-move":
+#if DEBUG
+                if (!int.TryParse(commandArgument, out var scene2MovementYalms))
+                {
+                    ChatGui.PrintError("[MMF] Usage: /mmf probe-bell-scene2-move <yalms>, from 1 through 100.");
+                    break;
+                }
+                ChatGui.Print(
+                    $"[MMF] Scene-2 distance continuation: " +
+                    mainWindow.BeginScene2DistanceContinuationProbe(scene2MovementYalms));
+                break;
+#else
+                ChatGui.Print("[MMF] Scene-2 probes are only available in debug builds.");
                 break;
 #endif
 

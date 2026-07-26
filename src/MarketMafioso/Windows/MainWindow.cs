@@ -692,6 +692,12 @@ public class MainWindow : Window, IDisposable
     public string BeginManualWarmSessionRetentionProbe() =>
         remoteSummoningBellProbe.BeginManualWarmSessionRetentionProbe();
 
+    public string BeginScene2UiResurrectionProbe() =>
+        remoteSummoningBellProbe.BeginScene2UiResurrectionProbe();
+
+    public string BeginScene2DistanceContinuationProbe(float movementDistance) =>
+        remoteSummoningBellProbe.BeginScene2DistanceContinuationProbe(movementDistance);
+
     public string BeginManualUiWarmSessionRetentionProbe() =>
         remoteSummoningBellProbe.BeginManualUiWarmSessionRetentionProbe();
 
