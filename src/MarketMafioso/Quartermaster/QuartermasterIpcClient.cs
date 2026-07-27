@@ -77,6 +77,8 @@ public sealed class QuartermasterIpcClient : IDisposable
     public const string ChangedSchema = "gooseworks-quartermaster-changed/v1";
     public const string AutomaticRetrievalCapability = "automaticRetrieval";
     public const string AutomaticElementalDepositCapability = "automaticElementalDeposit";
+    public const string StowagePlansCapability = "stowagePlans.v1";
+    public const string StowagePlansSchema = "gooseworks-quartermaster-stowage-plans/v1";
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -253,6 +255,8 @@ public sealed class QuartermasterIpcClient : IDisposable
                 ClearSnapshot(error);
                 return false;
             }
+            if (!before!.Capabilities.Contains(StowagePlansCapability, StringComparer.Ordinal))
+                candidate = candidate! with { StowagePlans = [] };
 
             if (!TryGetCapabilities(out var after, out error))
                 return false;
@@ -759,10 +763,73 @@ public sealed class QuartermasterIpcClient : IDisposable
             });
         }
 
+        var stowagePlans = ImmutableArray.CreateBuilder<QuartermasterStowagePlanSnapshot>();
+        if (wire.StowagePlans is { } stowage)
+        {
+            if (!string.Equals(stowage.Schema, StowagePlansSchema, StringComparison.Ordinal))
+            {
+                error = $"Unsupported Quartermaster Stowage Plans schema '{stowage.Schema ?? "(missing)"}'.";
+                return false;
+            }
+            foreach (var planWire in stowage.Plans ?? [])
+            {
+                var planOwnerWire = planWire.Owner;
+                if (planWire.Id == Guid.Empty ||
+                    planWire.Revision < 0 ||
+                    planOwnerWire is null ||
+                    planOwnerWire.LocalContentId == 0 ||
+                    planOwnerWire.HomeWorldId == 0 ||
+                    string.IsNullOrWhiteSpace(planWire.Name))
+                {
+                    error = "Quartermaster Stowage Plans contained a plan without stable identity, owner, or revision.";
+                    return false;
+                }
+
+                var rules = ImmutableArray.CreateBuilder<QuartermasterStowageRuleSnapshot>();
+                foreach (var ruleWire in planWire.Rules ?? [])
+                {
+                    if (ruleWire.Id == Guid.Empty ||
+                        ruleWire.ItemId == 0 ||
+                        ruleWire.DesiredPlayerQuantity < 0)
+                    {
+                        error = "Quartermaster Stowage Plans contained an invalid rule.";
+                        return false;
+                    }
+                    rules.Add(new(
+                        ruleWire.Id,
+                        ruleWire.ItemId,
+                        ruleWire.ItemName,
+                        ruleWire.DesiredPlayerQuantity,
+                        ruleWire.Quality ?? "Any",
+                        ruleWire.Enabled,
+                        (ruleWire.Routing?.PreferredRetainerIds ?? []).Where(id => id > 0).Distinct().ToImmutableArray(),
+                        ruleWire.Routing?.Mode ?? "ConsolidateFirst",
+                        ruleWire.Routing?.Overflow ?? "AnyOwnerRetainer",
+                        ruleWire.Evaluated?.Action ?? "none",
+                        Math.Max(0, ruleWire.Evaluated?.Quantity ?? 0),
+                        Math.Max(0, ruleWire.Evaluated?.PlayerQuantity ?? 0)));
+                }
+
+                stowagePlans.Add(new(
+                    planWire.Id,
+                    planWire.Revision,
+                    new QuartermasterOwner(
+                        planOwnerWire.LocalContentId,
+                        planOwnerWire.HomeWorldId,
+                        planOwnerWire.CharacterName ?? string.Empty,
+                        planOwnerWire.HomeWorldName),
+                    planWire.Name,
+                    planWire.Enabled,
+                    planWire.Priority,
+                    rules.ToImmutable()));
+            }
+        }
+
         snapshot = new(wire.ProviderInstanceId, wire.Revision, generatedAt, owner, retainers.ToImmutable())
         {
             PlayerRequestedSources = NormalizeSources(wire.PlayerStorage?.RequestedSources),
             PlayerObservedSources = NormalizeSources(wire.PlayerStorage?.ObservedSources),
+            StowagePlans = stowagePlans.ToImmutable(),
         };
         return true;
     }

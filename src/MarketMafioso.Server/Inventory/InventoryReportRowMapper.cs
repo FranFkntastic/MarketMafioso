@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using MarketMafioso.Contracts.Inventory;
 using Microsoft.Data.Sqlite;
 
 namespace MarketMafioso.Server.Inventory;
@@ -29,7 +30,10 @@ internal static class InventoryReportRowMapper
                 SourcePlugin = reader.GetString(8),
                 PluginVersion = reader.GetString(9),
                 GeneratedAtUtc = reader.GetString(10),
-            });
+            },
+            reader.IsDBNull(11)
+                ? null
+                : JsonSerializer.Deserialize<QuartermasterStowageReport>(reader.GetString(11)));
 
     public static InventoryOwnerRow ReadOwner(SqliteDataReader reader) =>
         new(
@@ -146,7 +150,8 @@ internal sealed record InventorySnapshotRow(
     string? ServiceAccountKey,
     ulong? PlayerGil,
     string ReportTimestamp,
-    InventoryReportMetadata Metadata);
+    InventoryReportMetadata Metadata,
+    QuartermasterStowageReport? RetainerManagement);
 
 internal sealed record InventoryOwnerRow(
     long Id,
