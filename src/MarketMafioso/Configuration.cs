@@ -1,5 +1,6 @@
 using Dalamud.Configuration;
 using MarketMafioso.RetainerRestock;
+using MarketMafioso.TradeQueue;
 using MarketMafioso.WorkshopPrep;
 using Newtonsoft.Json;
 using System;
@@ -71,6 +72,7 @@ public class Configuration : IPluginConfiguration
     public bool ShouldSerializeLegacyRetainerCache() => false;
 
     public List<WorkshopPrepQueueItem> WorkshopPrepQueue { get; set; } = new();
+    public List<TradeQueueItem> TradeQueueItems { get; set; } = new();
     public List<WorkshopFrozenQueue> FrozenWorkshopQueues { get; set; } = new();
     public bool SplitWorkshopQueueAndMaterials { get; set; }
     [JsonProperty("RetainerRestockPlanItems")]

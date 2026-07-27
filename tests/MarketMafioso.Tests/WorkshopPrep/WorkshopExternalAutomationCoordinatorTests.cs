@@ -48,12 +48,30 @@ public sealed class WorkshopExternalAutomationCoordinatorTests
         Assert.DoesNotContain("MarketMafioso", stopRequests);
     }
 
-    private sealed class FakePluginDataStore(HashSet<string> stopRequests) : IPluginDataStore
+    [Fact]
+    public void TradeAutoConfirm_UsesYesAlreadyOwnerScopedStopRequest()
+    {
+        var stopRequests = new HashSet<string> { "OtherPlugin" };
+        using var coordinator = new ExternalAutomationCoordinator(
+            new FakePluginDataStore(stopRequests, "YesAlready.StopRequests"),
+            TestPluginLog.Create());
+
+        coordinator.SuppressTradeAutoConfirm();
+        Assert.Contains("MarketMafioso", stopRequests);
+        coordinator.RestoreTradeAutoConfirm();
+
+        Assert.DoesNotContain("MarketMafioso", stopRequests);
+        Assert.Contains("OtherPlugin", stopRequests);
+    }
+
+    private sealed class FakePluginDataStore(
+        HashSet<string> stopRequests,
+        string expectedKey = "TextAdvance.StopRequests") : IPluginDataStore
     {
         public bool TryGetData<T>(string key, out T? data)
             where T : class
         {
-            if (key != "TextAdvance.StopRequests")
+            if (key != expectedKey)
             {
                 data = null;
                 return false;

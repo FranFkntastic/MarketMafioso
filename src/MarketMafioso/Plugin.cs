@@ -17,6 +17,7 @@ using MarketMafioso.MarketDiagnostics;
 using MarketMafioso.Quartermaster;
 using MarketMafioso.WorkshopPrep;
 using MarketMafioso.SquireIntegration;
+using MarketMafioso.TradeQueue;
 using MarketMafioso.Windows;
 
 namespace MarketMafioso;
@@ -59,6 +60,9 @@ public sealed class Plugin : IDalamudPlugin
     private readonly VIWIWorkshoppaIpc viwiWorkshoppaIpc;
     private readonly WorkshopAssemblyRunner workshopAssemblyRunner;
     private readonly WorkshopMaterialManifestExportService workshopMaterialManifestExport;
+    private readonly ExternalAutomationCoordinator tradeAutomationCoordinator;
+    private readonly DalamudTradeQueueIo tradeQueueIo;
+    private readonly TradeQueueRunner tradeQueueRunner;
     private readonly WindowSystem windowSystem = new("MarketMafioso");
     private readonly MainWindow mainWindow;
     private readonly AgentBridgeProofStore agentBridgeProofStore;
@@ -123,6 +127,22 @@ public sealed class Plugin : IDalamudPlugin
             });
         workshopMaterialManifestExport = new WorkshopMaterialManifestExportService(
             new LuminaWorkshopMaterialCraftRecipeResolver(DataManager));
+        tradeAutomationCoordinator = new ExternalAutomationCoordinator(
+            new DalamudPluginDataStore(PluginInterface),
+            Log);
+        tradeQueueIo = new DalamudTradeQueueIo(
+            GameGui,
+            TargetManager,
+            Condition,
+            SigScanner,
+            DataManager,
+            Log);
+        tradeQueueRunner = new TradeQueueRunner(
+            Configuration.TradeQueueItems,
+            Configuration.Save,
+            tradeQueueIo,
+            tradeAutomationCoordinator,
+            Log);
         mainWindow = new MainWindow(
             Configuration,
             reporter,
@@ -133,6 +153,8 @@ public sealed class Plugin : IDalamudPlugin
             viwiWorkshoppaIpc,
             workshopAssemblyRunner,
             workshopMaterialManifestExport,
+            tradeQueueRunner,
+            tradeQueueIo,
             DataManager,
             PlayerState,
             new MarketBoardApproachService(
@@ -222,6 +244,7 @@ public sealed class Plugin : IDalamudPlugin
     {
         retainerSaleChatObserver.Tick();
         retainerHistoryObserver.Tick();
+        tradeQueueRunner.Tick();
         mainWindow.OnFrameworkUpdate(framework);
         agentBridge.Tick();
     }
@@ -258,6 +281,8 @@ public sealed class Plugin : IDalamudPlugin
         CommandManager.RemoveHandler(CmdMain);
 
         workshopAssemblyRunner.Dispose();
+        tradeQueueRunner.Dispose();
+        tradeAutomationCoordinator.Dispose();
 
         windowSystem.RemoveAllWindows();
         mainWindow.ProjectBrowser.Dispose();
