@@ -44,6 +44,7 @@
 
   <ItemGroup>
     <ProjectReference Include="$(FranthropyDalamudProject)" />
+    <ProjectReference Include="$(FranthropyFfxivProject)" />
     <ProjectReference Include="$(CraftArchitectCoreProject)" />
     <ProjectReference Include="..\MarketMafioso.Contracts\MarketMafioso.Contracts.csproj" />
   </ItemGroup>
