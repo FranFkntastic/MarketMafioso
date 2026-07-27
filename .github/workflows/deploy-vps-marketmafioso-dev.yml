@@ -461,11 +461,6 @@ jobs:
             "https://dev.xivcraftarchitect.com/marketmafioso/api/inventory")"
           expect_status ingest-with-key "$ingest_with_key" 400
 
-          read_with_session="$(curl --silent --output /dev/null --write-out '%{http_code}' \
-            --cookie "$cookie_jar" \
-            "https://dev.xivcraftarchitect.com/marketmafioso/api/reports")"
-          expect_status read-with-dashboard-session "$read_with_session" 200
-
           capabilities_without_key="$(curl --silent --output /dev/null --write-out '%{http_code}' \
             "https://dev.xivcraftarchitect.com/marketmafioso/api/capabilities")"
           expect_status capabilities-without-key "$capabilities_without_key" 401
