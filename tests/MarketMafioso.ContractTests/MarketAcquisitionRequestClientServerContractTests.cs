@@ -10,6 +10,90 @@ namespace MarketMafioso.ContractTests.MarketAcquisition;
 public sealed class MarketAcquisitionRequestClientServerContractTests
 {
     [Fact]
+    public async Task AcceptedWorkOrderCanBeShelvedAndItsLeaseIsRevoked()
+    {
+        await using var application = new HostedApplication();
+        using var httpClient = application.CreateClient();
+        var client = new MarketAcquisitionRequestClient(httpClient);
+        var serverUrl = new Uri(httpClient.BaseAddress!, "/marketmafioso/api/inventory").ToString();
+        var created = await client.CreateBatchAsync(
+            serverUrl,
+            "client-secret",
+            CreateBatchRequest() with { IdempotencyKey = "shelf-accepted-create" },
+            CancellationToken.None);
+        var claimed = await client.ClaimAsync(
+            serverUrl,
+            "client-secret",
+            created.Id,
+            "Wei Ning",
+            "Gilgamesh",
+            "plugin-contract-instance",
+            CancellationToken.None);
+        var accepted = await client.AcceptAsync(
+            serverUrl,
+            "client-secret",
+            created.Id,
+            claimed.ClaimToken,
+            "shelf-accepted",
+            CancellationToken.None);
+
+        var shelved = await client.ShelfWorkOrderAsync(
+            serverUrl,
+            "client-secret",
+            created.Id,
+            accepted.Revision,
+            CancellationToken.None);
+
+        Assert.Equal(MarketAcquisitionStatuses.Shelved, shelved.Request.Status);
+        Assert.Equal(MarketAcquisitionWorkOrderStates.Shelved, shelved.State);
+        await Assert.ThrowsAsync<MarketAcquisitionLifecycleHttpException>(() =>
+            client.ShelfWorkOrderAsync(
+                serverUrl,
+                "client-secret",
+                created.Id,
+                accepted.Revision,
+                CancellationToken.None));
+        await Assert.ThrowsAnyAsync<HttpRequestException>(() =>
+            client.RenewLeaseAsync(
+                serverUrl,
+                "client-secret",
+                created.Id,
+                claimed.ClaimToken,
+                "plugin-contract-instance",
+                CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task ReplacementRejectsStaleExpectedRevision()
+    {
+        await using var application = new HostedApplication();
+        using var httpClient = application.CreateClient();
+        var client = new MarketAcquisitionRequestClient(httpClient);
+        var serverUrl = new Uri(httpClient.BaseAddress!, "/marketmafioso/api/inventory").ToString();
+        var created = await client.CreateBatchAsync(
+            serverUrl,
+            "client-secret",
+            CreateBatchRequest() with { IdempotencyKey = "stale-replace-create" },
+            CancellationToken.None);
+        await client.ReplaceBatchAsync(
+            serverUrl,
+            "client-secret",
+            created.Id,
+            CreateReplacement(created.Revision),
+            CancellationToken.None);
+
+        var conflict = await Assert.ThrowsAsync<MarketAcquisitionLifecycleHttpException>(() =>
+            client.ReplaceBatchAsync(
+                serverUrl,
+                "client-secret",
+                created.Id,
+                CreateReplacement(created.Revision),
+                CancellationToken.None));
+
+        Assert.Equal(HttpStatusCode.Conflict, conflict.StatusCode);
+    }
+
+    [Fact]
     public async Task AcquisitionQueueRejectsUntrustedClientKey()
     {
         await using var application = new HostedApplication();

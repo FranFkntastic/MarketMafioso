@@ -15,7 +15,25 @@ internal static class MarketAcquisitionRequestDocumentPersistence
         if (stored == null || string.IsNullOrWhiteSpace(stored.LocalRequestId))
             return MarketAcquisitionRequestDocument.CreateDefault(characterName, world);
 
-        return new MarketAcquisitionRequestDocument
+        return Restore(stored, characterName, world);
+    }
+
+    public static MarketAcquisitionRequestDocument? RestorePrevious(Configuration config)
+    {
+        var stored = config.PreviousMarketAcquisitionRequestDocument;
+        return stored == null || string.IsNullOrWhiteSpace(stored.LocalRequestId)
+            ? null
+            : Restore(stored);
+    }
+
+    public static void SavePrevious(Configuration config, MarketAcquisitionRequestDocument? document) =>
+        config.PreviousMarketAcquisitionRequestDocument = document is null ? null : Persist(document);
+
+    private static MarketAcquisitionRequestDocument Restore(
+        PersistedMarketAcquisitionRequestDocument stored,
+        string characterName = "",
+        string world = "") =>
+        new()
         {
             LocalRequestId = stored.LocalRequestId,
             LocalRevision = Math.Max(1, stored.LocalRevision),
@@ -57,11 +75,15 @@ internal static class MarketAcquisitionRequestDocumentPersistence
                 ? DateTimeOffset.UtcNow
                 : new DateTimeOffset(DateTime.SpecifyKind(stored.UpdatedAtUtc, DateTimeKind.Utc)),
         };
-    }
 
     public static void Save(Configuration config, MarketAcquisitionRequestDocument document)
     {
-        config.ActiveMarketAcquisitionRequestDocument = new PersistedMarketAcquisitionRequestDocument
+        config.ActiveMarketAcquisitionRequestDocument = Persist(document);
+    }
+
+    private static PersistedMarketAcquisitionRequestDocument Persist(
+        MarketAcquisitionRequestDocument document) =>
+        new()
         {
             LocalRequestId = document.LocalRequestId,
             LocalRevision = document.LocalRevision,
@@ -95,5 +117,4 @@ internal static class MarketAcquisitionRequestDocumentPersistence
             SyncStatus = document.SyncStatus,
             UpdatedAtUtc = document.UpdatedAtUtc.UtcDateTime,
         };
-    }
 }

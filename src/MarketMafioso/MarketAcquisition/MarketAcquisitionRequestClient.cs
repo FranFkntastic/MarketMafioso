@@ -46,6 +46,13 @@ public interface IMarketAcquisitionRequestClient
         string claimToken,
         string idempotencyKey,
         CancellationToken cancellationToken);
+
+    Task<MarketAcquisitionWorkOrderView> ShelfWorkOrderAsync(
+        string serverUrl,
+        string clientApiKey,
+        string requestId,
+        int expectedRevision,
+        CancellationToken cancellationToken);
 }
 
 public sealed class MarketAcquisitionRequestClient : IMarketAcquisitionRequestClient
@@ -156,6 +163,25 @@ public sealed class MarketAcquisitionRequestClient : IMarketAcquisitionRequestCl
                 IdempotencyKey = idempotencyKey,
             },
             cancellationToken);
+
+    public async Task<MarketAcquisitionWorkOrderView> ShelfWorkOrderAsync(
+        string serverUrl,
+        string clientApiKey,
+        string requestId,
+        int expectedRevision,
+        CancellationToken cancellationToken)
+    {
+        using var request = CreateAuthenticatedRequest(
+            HttpMethod.Post,
+            $"{ResolveAcquisitionBaseUrl(serverUrl)}/work-orders/{Uri.EscapeDataString(requestId)}/shelf",
+            clientApiKey,
+            new MarketAcquisitionWorkOrderCommand { ExpectedRevision = expectedRevision });
+        return await SendJsonAsync<MarketAcquisitionWorkOrderView>(
+            request,
+            "Shelf work order",
+            cancellationToken,
+            "shelf").ConfigureAwait(false);
+    }
 
     public async Task<MarketAcquisitionExecutionLeaseView> RenewLeaseAsync(
         string serverUrl,

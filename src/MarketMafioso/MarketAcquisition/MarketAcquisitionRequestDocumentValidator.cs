@@ -40,6 +40,14 @@ public static class MarketAcquisitionRequestDocumentValidator
         }
         else
         {
+            foreach (var duplicate in document.Lines
+                         .Where(line => line.ItemId != 0)
+                         .GroupBy(line => line.ItemId)
+                         .Where(group => group.Count() > 1))
+            {
+                errors.Add($"{duplicate.First().ItemName} appears more than once; edit the existing line instead.");
+            }
+
             for (var index = 0; index < document.Lines.Count; index++)
                 ValidateLine(document.Lines[index], index + 1, errors);
         }

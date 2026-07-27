@@ -62,6 +62,8 @@ public sealed class MarketAcquisitionRequestBuilderPanel
 
     public bool HasExactAcquisitionAuthority => document.ExactAcquisitionAuthority is not null;
 
+    public bool HasPreviousWorkbench => controller.HasPreviousWorkbench;
+
     public void MarkPlanPrepared(string planHash) => controller.MarkPlanPrepared(planHash);
 
     public void AdoptRequest(MarketAcquisitionRequestView request) => controller.AdoptRequest(request);
@@ -91,6 +93,22 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         string characterName,
         string world) =>
         controller.LoadComposition(composition, characterName, world);
+
+    public void StartBlankWorkbench(MarketAcquisitionRequestBuilderContext context)
+    {
+        controller.StartBlankWorkbench(
+            context.HasCharacterScope ? context.CharacterName : string.Empty,
+            context.HasCharacterScope ? context.World : string.Empty);
+        ClearLineEditor();
+    }
+
+    public bool RestorePreviousWorkbench()
+    {
+        var restored = controller.RestorePreviousWorkbench();
+        if (restored)
+            ClearLineEditor();
+        return restored;
+    }
 
     public void Draw(MarketAcquisitionRequestBuilderContext context, float reservedFooterHeight = 0)
     {
@@ -380,7 +398,6 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         var identity = CraftAppraisalRequestMapper.BuildLineIdentity(document, line);
         var threshold = craftAppraisal.State.TryGetLineQuoteThreshold(identity);
         var canFetch = canEdit &&
-                       craftAppraisal.State.WorkshopHostEnabled &&
                        !isAppraising &&
                        line.ItemId != 0;
         if (ImGuiUi.MenuItem(
@@ -491,13 +508,15 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         if (warningCount > 0 && ImGui.IsItemHovered())
         {
             ImGui.BeginTooltip();
+            ImGui.PushTextWrapPos(ImGui.GetFontSize() * 34f);
             foreach (var warning in quote!.Warnings)
                 ImGui.TextWrapped(warning);
+            ImGui.PopTextWrapPos();
             ImGui.EndTooltip();
         }
 
         ImGui.TableNextColumn();
-        var canFetch = craftAppraisal.State.WorkshopHostEnabled && !isAppraising && line.ItemId != 0;
+        var canFetch = !isAppraising && line.ItemId != 0;
         var fetchLabel = threshold is > 0 ? "Refresh quote" : "Get quote";
         if (ImGuiUi.Button(fetchLabel, canFetch))
             _ = FetchCraftQuoteEvidenceAsync(index);

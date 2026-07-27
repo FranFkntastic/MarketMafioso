@@ -19,6 +19,7 @@ public class Configuration : IPluginConfiguration
     public string PluginInstanceId { get; set; } = Guid.NewGuid().ToString("N");
     public PersistedMarketAcquisitionClaim? ActiveMarketAcquisitionClaim { get; set; }
     public PersistedMarketAcquisitionRequestDocument? ActiveMarketAcquisitionRequestDocument { get; set; }
+    public PersistedMarketAcquisitionRequestDocument? PreviousMarketAcquisitionRequestDocument { get; set; }
     [JsonProperty("OutfitterRouteExecutionStateJson")]
     public string? ExactAcquisitionRouteExecutionStateJson { get; set; }
     public string? ShardAcquisitionCheckpointStateJson { get; set; }

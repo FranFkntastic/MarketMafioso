@@ -349,7 +349,8 @@ public class MainWindow : Window, IDisposable
         var acquisitionWorkbenchCompositions = new MarketAcquisitionWorkbenchCompositionPanel(
             new MarketAcquisitionWorkbenchCompositionCatalog(
             new ConfigurationMarketAcquisitionWorkbenchCompositionStore(config, config.Save)),
-            acquisitionRequestBuilder.LoadComposition,
+            (composition, characterName, world) =>
+                _ = ReplaceWorkbenchFromCompositionAsync(composition, characterName, world),
             composition => acquisitionRequestBuilder.MergeComposition(composition),
             AgentReviewRegistry);
         AcquisitionCompositionWindow = new MarketAcquisitionWorkbenchCompositionWindow(
@@ -561,6 +562,11 @@ public class MainWindow : Window, IDisposable
 
     public override void PreDraw()
     {
+        if (AcquisitionCompositionWindow.IsOpen)
+            Flags |= ImGuiWindowFlags.NoBringToFrontOnFocus;
+        else
+            Flags &= ~ImGuiWindowFlags.NoBringToFrontOnFocus;
+
         var captureTarget = ActiveCapturePresentationTarget();
         if (captureTarget is null)
         {
@@ -1062,10 +1068,25 @@ public class MainWindow : Window, IDisposable
 
     private void DrawMarketAcquisitionWorkbenchToolbar(MarketAcquisitionRequestBuilderContext context)
     {
-        const float actionWidth = 212f;
+        const float actionWidth = 310f;
         var startX = ImGui.GetCursorPosX();
         ImGui.SetCursorPosX(startX + Math.Max(0, ImGui.GetContentRegionAvail().X - actionWidth));
 
+        var canMutate = !context.IsBusy && !context.IsRouteActive && !acquisitionRequestBuilder.IsSynchronizing;
+        if (ImGuiUi.Button("New blank", canMutate))
+            _ = StartBlankWorkbenchAsync(context);
+        AgentReviewRegistry.Register(
+            "acquisition.workbench.new-blank",
+            "Shelve the active work order and start a blank Workbench",
+            AgentBridgeUiControlKind.Button,
+            ImGui.GetItemRectMin(),
+            ImGui.GetItemRectMax(),
+            canMutate,
+            false,
+            acquisitionWorkspace.ClaimedRequest?.Id,
+            () => _ = StartBlankWorkbenchAsync(context));
+
+        ImGui.SameLine();
         if (ImGui.Button($"Compositions ({AcquisitionCompositionWindow.Count:N0})"))
             AcquisitionCompositionWindow.ToggleOpen();
         AgentReviewRegistry.Register(
@@ -1086,19 +1107,18 @@ public class MainWindow : Window, IDisposable
             ImGui.OpenPopup("AcquisitionWorkbenchRecovery");
         var recoveryMinimum = ImGui.GetItemRectMin();
         var recoveryMaximum = ImGui.GetItemRectMax();
-        var canMutate = !context.IsBusy && !context.IsRouteActive && !acquisitionRequestBuilder.IsSynchronizing;
         var canClearWorkbench = acquisitionRequestBuilder.LineCount > 0 ||
                                 acquisitionRequestBuilder.HasExactAcquisitionAuthority;
         AgentReviewRegistry.Register(
             "acquisition.recovery.clear-workbench",
-            "Clear the local Market Acquisition Workbench",
+            "Shelve the active work order and start a blank Market Acquisition Workbench",
             AgentBridgeUiControlKind.Button,
             recoveryMinimum,
             recoveryMaximum,
             canMutate && canClearWorkbench,
             false,
             acquisitionRequestBuilder.LineCount.ToString(),
-            () => acquisitionRequestBuilder.ClearWorkbench(context));
+            () => _ = StartBlankWorkbenchAsync(context));
         AgentReviewRegistry.Register(
             "acquisition.recovery.clear-active-work-order",
             "Forget the stale local Market Acquisition work-order claim",
@@ -1113,8 +1133,10 @@ public class MainWindow : Window, IDisposable
         if (!ImGui.BeginPopup("AcquisitionWorkbenchRecovery"))
             return;
 
-        if (ImGuiUi.MenuItem("Clear Workbench", canMutate && canClearWorkbench))
-            acquisitionRequestBuilder.ClearWorkbench(context);
+        if (ImGuiUi.MenuItem("New blank Workbench", canMutate && canClearWorkbench))
+            _ = StartBlankWorkbenchAsync(context);
+        if (ImGuiUi.MenuItem("Restore previous Workbench", canMutate && acquisitionRequestBuilder.HasPreviousWorkbench))
+            acquisitionRequestBuilder.RestorePreviousWorkbench();
         if (ImGuiUi.MenuItem("Clear active work order", canMutate && acquisitionWorkspace.ClaimedRequest is not null))
             acquisitionWorkspace.ForgetLocalClaim();
         if (ImGuiUi.MenuItem(
@@ -1125,6 +1147,39 @@ public class MainWindow : Window, IDisposable
         }
 
         ImGui.EndPopup();
+    }
+
+    private async Task StartBlankWorkbenchAsync(MarketAcquisitionRequestBuilderContext context)
+    {
+        await acquisitionRequestBuilder.WaitForRefreshAsync().ConfigureAwait(false);
+        var current = acquisitionRequestBuilder.CurrentDocument;
+        if ((acquisitionWorkspace.ClaimedRequest is not null || !string.IsNullOrWhiteSpace(current.RemoteRequestId)) &&
+            !await acquisitionWorkspace.ShelfActiveWorkOrderAsync(
+                current.RemoteRequestId,
+                current.RemoteRevision).ConfigureAwait(false))
+        {
+            return;
+        }
+
+        acquisitionRequestBuilder.StartBlankWorkbench(context);
+    }
+
+    private async Task ReplaceWorkbenchFromCompositionAsync(
+        MarketAcquisitionWorkbenchComposition composition,
+        string characterName,
+        string world)
+    {
+        await acquisitionRequestBuilder.WaitForRefreshAsync().ConfigureAwait(false);
+        var current = acquisitionRequestBuilder.CurrentDocument;
+        if ((acquisitionWorkspace.ClaimedRequest is not null || !string.IsNullOrWhiteSpace(current.RemoteRequestId)) &&
+            !await acquisitionWorkspace.ShelfActiveWorkOrderAsync(
+                current.RemoteRequestId,
+                current.RemoteRevision).ConfigureAwait(false))
+        {
+            return;
+        }
+
+        acquisitionRequestBuilder.LoadComposition(composition, characterName, world);
     }
 
     private void DrawMarketAcquisitionFinalizationBar(MarketAcquisitionRequestBuilderContext context)

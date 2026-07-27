@@ -56,7 +56,11 @@ public sealed partial class MarketAcquisitionRequestStore
             id,
             command.ExpectedRevision,
             MarketAcquisitionStatuses.Shelved,
-            [MarketAcquisitionStatuses.PendingPickup],
+            [
+                MarketAcquisitionStatuses.PendingPickup,
+                MarketAcquisitionStatuses.Claimed,
+                MarketAcquisitionStatuses.AcceptedInPlugin,
+            ],
             "shelved",
             cancellationToken);
 
@@ -312,6 +316,14 @@ public sealed partial class MarketAcquisitionRequestStore
         metadata.Parameters.AddWithValue("$status", targetStatus);
         metadata.Parameters.AddWithValue("$id", id);
         await metadata.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        if (targetStatus != MarketAcquisitionStatuses.PendingPickup)
+        {
+            await using var clearLease = connection.CreateCommand();
+            clearLease.Transaction = (SqliteTransaction)transaction;
+            clearLease.CommandText = "DELETE FROM acquisition_execution_leases WHERE work_order_id = $id;";
+            clearLease.Parameters.AddWithValue("$id", id);
+            await clearLease.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return await GetWorkOrderAsync(id, cancellationToken).ConfigureAwait(false);
     }
