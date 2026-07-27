@@ -39,8 +39,11 @@ public sealed class Plugin : IDalamudPlugin
     [PluginService] internal static ITextureProvider TextureProvider { get; private set; } = null!;
     [PluginService] internal static ITextureReadbackProvider TextureReadbackProvider { get; private set; } = null!;
     [PluginService] internal static IGameInventory GameInventory { get; private set; } = null!;
+    [PluginService] internal static IKeyState KeyState { get; private set; } = null!;
     [PluginService] internal static ISigScanner SigScanner { get; private set; } = null!;
     [PluginService] internal static IGameInteropProvider GameInteropProvider { get; private set; } = null!;
+    [PluginService] internal static IMarketBoard MarketBoard { get; private set; } = null!;
+    [PluginService] internal static INotificationManager NotificationManager { get; private set; } = null!;
 
     internal static Plugin Instance { get; private set; } = null!;
 
@@ -52,6 +55,8 @@ public sealed class Plugin : IDalamudPlugin
     private readonly HttpReporter reporter;
     private readonly RetainerSaleChatObserver retainerSaleChatObserver;
     private readonly RetainerHistoryObserver retainerHistoryObserver;
+    private readonly RemoteMarketAccessProbe remoteMarketAccessProbe;
+    private readonly RemoteMarketProbeWindow remoteMarketProbeWindow;
     private readonly QuartermasterIpcClient quartermaster;
     private readonly StandaloneSquireIpcClient standaloneSquire;
     private readonly ExactAcquisitionIpcProvider exactAcquisitionIpc;
@@ -100,6 +105,18 @@ public sealed class Plugin : IDalamudPlugin
             Log,
             retainerSaleChatObserver.EnqueueExternal);
         workshopCatalog = new WorkshopProjectCatalog(DataManager, Log);
+        remoteMarketAccessProbe = new RemoteMarketAccessProbe(
+            Configuration,
+            MarketBoard,
+            ClientState,
+            ObjectTable,
+            Framework,
+            AddonLifecycle,
+            GameGui,
+            ChatGui,
+            Log,
+            PluginInterface.GetPluginConfigDirectory());
+        remoteMarketProbeWindow = new RemoteMarketProbeWindow(remoteMarketAccessProbe);
         viwiWorkshoppaIpc = new VIWIWorkshoppaIpc(new DalamudVIWIWorkshoppaIpcAdapter(PluginInterface, Log));
         workshopAssemblyRunner = new WorkshopAssemblyRunner(
             Framework,
@@ -163,11 +180,7 @@ public sealed class Plugin : IDalamudPlugin
                 mainWindow.AgentOpenForReview,
                 mainWindow.AgentCloseAfterReview,
                 () => mainWindow.TrySelectAgentBridgeTab("Diagnostics"),
-                proofId =>
-                {
-                    agentBridgeProofWindow.RequestedProofId = proofId;
-                    agentBridgeProofWindow.IsOpen = true;
-                },
+                agentBridgeProofWindow.OpenAndFocus,
                 mainWindow.TrySelectAgentBridgeTab,
                 mainWindow.AgentCaptureInputState,
                 mainWindow.AgentStopRoute,
@@ -185,12 +198,24 @@ public sealed class Plugin : IDalamudPlugin
         windowSystem.AddWindow(mainWindow.FrozenQueueBrowser);
         windowSystem.AddWindow(mainWindow.AcquisitionCompositionWindow);
         windowSystem.AddWindow(agentBridgeProofWindow);
+        windowSystem.AddWindow(remoteMarketProbeWindow);
+        windowSystem.AddWindow(mainWindow.RemoteMarketOverlay);
 
         CommandManager.AddHandler(CmdMain, new CommandInfo(OnCommand)
         {
             HelpMessage =
                 "Open the MarketMafioso toolbox window. " +
-                "Use \"/mmf send\" to send an inventory report immediately.",
+                "Use \"/mmf send\" to send an inventory report immediately, or " +
+                "\"/mmf capture-bell\" to arm the passive normal-bell flight recorder. " +
+                "Use \"/mmf capture-bell-lifecycle\" for the complete open/select/return/close trace. " +
+                "Yield tests: \"/mmf probe-bell-yield-control\" then \"/mmf probe-bell-yield-direct\". " +
+                "Native signature tests: \"/mmf probe-bell-native-call\" or \"/mmf probe-bell-native-select\". " +
+                "Retainer RPC test: \"/mmf probe-retainer-rpc-control\" then \"/mmf probe-retainer-rpc-bind-test\". " +
+                "Warm retention: \"/mmf probe-bell-warm\", \"/mmf probe-bell-warm-delay <seconds>\", " +
+                "\"/mmf probe-bell-warm-move <yalms>\", \"/mmf probe-bell-warm-unlock-move <yalms>\", " +
+                "or \"/mmf probe-bell-warm-manual\". " +
+                "Scene-2 oddballs: \"/mmf probe-bell-scene2-ui\" and \"/mmf probe-bell-scene2-move <yalms>\". " +
+                "Use \"/mmf probe-bell-warm-ui\" only for the old manual select/Quit bootstrap.",
         });
 
         PluginInterface.UiBuilder.Draw += DrawUI;
@@ -206,11 +231,300 @@ public sealed class Plugin : IDalamudPlugin
 
     private void OnCommand(string command, string args)
     {
-        switch (args.Trim().ToLowerInvariant())
+        var commandParts = args.Trim().Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
+        var commandName = commandParts.Length == 0
+            ? string.Empty
+            : commandParts[0].ToLowerInvariant();
+        var commandArgument = commandParts.Length < 2
+            ? string.Empty
+            : commandParts[1].Trim();
+        switch (commandName)
         {
             case "send":
                 Framework.RunOnTick(() => _ = reporter.SendReportAsync());
                 break;
+
+            case "market":
+                ChatGui.Print($"[MMF] Remote market: {mainWindow.OpenRemoteMarketBoard()}");
+                break;
+
+            case "probe-market":
+#if DEBUG
+            {
+                var probeMessage = remoteMarketAccessProbe.BeginProbe();
+                remoteMarketProbeWindow.IsOpen = true;
+                ChatGui.Print($"[MMF] {probeMessage}");
+                break;
+            }
+#else
+                ChatGui.Print("[MMF] Remote market probe is only available in debug builds.");
+                break;
+#endif
+
+            case "probe-bell":
+#if DEBUG
+            {
+                var probeMessage = mainWindow.BeginRemoteSummoningBellProbe();
+                ChatGui.Print($"[MMF] Remote bell probe: {probeMessage}");
+                break;
+            }
+#else
+                ChatGui.Print("[MMF] Remote bell probe is only available in debug builds.");
+                break;
+#endif
+
+            case "capture-bell":
+#if DEBUG
+                ChatGui.Print($"[MMF] Normal bell capture: {mainWindow.BeginNormalSummoningBellCapture()}");
+                break;
+#else
+                ChatGui.Print("[MMF] Normal bell capture is only available in debug builds.");
+                break;
+#endif
+
+            case "capture-bell-lifecycle":
+#if DEBUG
+                ChatGui.Print($"[MMF] Bell lifecycle capture: {mainWindow.BeginNormalSummoningBellLifecycleCapture()}");
+                break;
+#else
+                ChatGui.Print("[MMF] Bell lifecycle capture is only available in debug builds.");
+                break;
+#endif
+
+            case "capture-bell-status":
+#if DEBUG
+                ChatGui.Print($"[MMF] Normal bell capture: {mainWindow.GetNormalSummoningBellCaptureStatus()}");
+                break;
+#else
+                ChatGui.Print("[MMF] Normal bell capture is only available in debug builds.");
+                break;
+#endif
+
+            case "capture-bell-cancel":
+#if DEBUG
+                ChatGui.Print($"[MMF] Normal bell capture: {mainWindow.CancelNormalSummoningBellCapture()}");
+                break;
+#else
+                ChatGui.Print("[MMF] Normal bell capture is only available in debug builds.");
+                break;
+#endif
+
+            case "probe-bell-yield-control":
+#if DEBUG
+                ChatGui.Print($"[MMF] YieldEventScene2 control: {mainWindow.BeginYieldEventSceneControl()}");
+                break;
+#else
+                ChatGui.Print("[MMF] YieldEventScene2 probes are only available in debug builds.");
+                break;
+#endif
+
+            case "probe-bell-yield-direct":
+#if DEBUG
+                ChatGui.Print($"[MMF] YieldEventScene2 direct probe: {mainWindow.BeginYieldEventSceneDirectProbe()}");
+                break;
+#else
+                ChatGui.Print("[MMF] YieldEventScene2 probes are only available in debug builds.");
+                break;
+#endif
+
+            case "probe-bell-yield-status":
+#if DEBUG
+                ChatGui.Print($"[MMF] YieldEventScene2 probe: {mainWindow.GetYieldEventSceneProbeStatus()}");
+                break;
+#else
+                ChatGui.Print("[MMF] YieldEventScene2 probes are only available in debug builds.");
+                break;
+#endif
+
+            case "probe-bell-native-call":
+#if DEBUG
+                ChatGui.Print($"[MMF] Native CallRetainer probe: {mainWindow.BeginNativeCallRetainerProbe()}");
+                break;
+#else
+                ChatGui.Print("[MMF] Native retainer-verb probes are only available in debug builds.");
+                break;
+#endif
+
+            case "probe-bell-native-select":
+#if DEBUG
+                ChatGui.Print($"[MMF] Native SelectRetainer probe: {mainWindow.BeginNativeSelectRetainerProbe()}");
+                break;
+#else
+                ChatGui.Print("[MMF] Native retainer-verb probes are only available in debug builds.");
+                break;
+#endif
+
+            case "probe-bell-yield-cancel":
+#if DEBUG
+                ChatGui.Print($"[MMF] YieldEventScene2 probe: {mainWindow.CancelYieldEventSceneProbe()}");
+                break;
+#else
+                ChatGui.Print("[MMF] YieldEventScene2 probes are only available in debug builds.");
+                break;
+#endif
+
+            case "probe-retainer-rpc-control":
+#if DEBUG
+                ChatGui.Print($"[MMF] Retainer RPC control: {mainWindow.BeginRetainerRpcControlProbe()}");
+                break;
+#else
+                ChatGui.Print("[MMF] Retainer RPC probes are only available in debug builds.");
+                break;
+#endif
+
+            case "probe-retainer-rpc-bind-test":
+#if DEBUG
+                ChatGui.Print($"[MMF] Retainer RPC bind test: {mainWindow.BeginRetainerRpcBindProbe()}");
+                break;
+#else
+                ChatGui.Print("[MMF] Retainer RPC probes are only available in debug builds.");
+                break;
+#endif
+
+            case "probe-retainer-rpc-status":
+#if DEBUG
+                ChatGui.Print($"[MMF] Retainer RPC probe: {mainWindow.GetRetainerRpcProbeStatus()}");
+                break;
+#else
+                ChatGui.Print("[MMF] Retainer RPC probes are only available in debug builds.");
+                break;
+#endif
+
+            case "probe-retainer-rpc-cancel":
+#if DEBUG
+                ChatGui.Print($"[MMF] Retainer RPC probe: {mainWindow.CancelRetainerRpcProbe()}");
+                break;
+#else
+                ChatGui.Print("[MMF] Retainer RPC probes are only available in debug builds.");
+                break;
+#endif
+
+            case "probe-bell-warm":
+#if DEBUG
+                ChatGui.Print($"[MMF] Warm-session retention: {mainWindow.BeginWarmSessionRetentionProbe()}");
+                break;
+#else
+                ChatGui.Print("[MMF] Warm-session retention is only available in debug builds.");
+                break;
+#endif
+
+            case "probe-bell-warm-delay":
+#if DEBUG
+                if (!int.TryParse(commandArgument, out var delaySeconds))
+                {
+                    ChatGui.PrintError("[MMF] Usage: /mmf probe-bell-warm-delay <seconds>, from 1 through 300.");
+                    break;
+                }
+                ChatGui.Print(
+                    $"[MMF] Warm-session retention: " +
+                    mainWindow.BeginDelayedWarmSessionRetentionProbe(TimeSpan.FromSeconds(delaySeconds)));
+                break;
+#else
+                ChatGui.Print("[MMF] Warm-session retention is only available in debug builds.");
+                break;
+#endif
+
+            case "probe-bell-warm-move":
+#if DEBUG
+                if (!int.TryParse(commandArgument, out var movementYalms))
+                {
+                    ChatGui.PrintError("[MMF] Usage: /mmf probe-bell-warm-move <yalms>, from 1 through 100.");
+                    break;
+                }
+                ChatGui.Print(
+                    $"[MMF] Warm-session retention: " +
+                    mainWindow.BeginDistanceWarmSessionRetentionProbe(movementYalms));
+                break;
+#else
+                ChatGui.Print("[MMF] Warm-session retention is only available in debug builds.");
+                break;
+#endif
+
+            case "probe-bell-warm-unlock-move":
+#if DEBUG
+                if (!int.TryParse(commandArgument, out var unlockedMovementYalms))
+                {
+                    ChatGui.PrintError("[MMF] Usage: /mmf probe-bell-warm-unlock-move <yalms>, from 1 through 100.");
+                    break;
+                }
+                ChatGui.Print(
+                    $"[MMF] Warm-session retention: " +
+                    mainWindow.BeginLocallyUnlockedDistanceWarmSessionRetentionProbe(unlockedMovementYalms));
+                break;
+#else
+                ChatGui.Print("[MMF] Warm-session retention is only available in debug builds.");
+                break;
+#endif
+
+            case "probe-bell-warm-manual":
+#if DEBUG
+                ChatGui.Print($"[MMF] Warm-session retention: {mainWindow.BeginManualWarmSessionRetentionProbe()}");
+                break;
+#else
+                ChatGui.Print("[MMF] Warm-session retention is only available in debug builds.");
+                break;
+#endif
+
+            case "probe-bell-scene2-ui":
+#if DEBUG
+                ChatGui.Print($"[MMF] Scene-2 UI resurrection: {mainWindow.BeginScene2UiResurrectionProbe()}");
+                break;
+#else
+                ChatGui.Print("[MMF] Scene-2 probes are only available in debug builds.");
+                break;
+#endif
+
+            case "probe-bell-scene2-move":
+#if DEBUG
+                if (!int.TryParse(commandArgument, out var scene2MovementYalms))
+                {
+                    ChatGui.PrintError("[MMF] Usage: /mmf probe-bell-scene2-move <yalms>, from 1 through 100.");
+                    break;
+                }
+                ChatGui.Print(
+                    $"[MMF] Scene-2 distance continuation: " +
+                    mainWindow.BeginScene2DistanceContinuationProbe(scene2MovementYalms));
+                break;
+#else
+                ChatGui.Print("[MMF] Scene-2 probes are only available in debug builds.");
+                break;
+#endif
+
+            case "probe-bell-warm-ui":
+#if DEBUG
+                ChatGui.Print($"[MMF] Warm-session retention: {mainWindow.BeginManualUiWarmSessionRetentionProbe()}");
+                break;
+#else
+                ChatGui.Print("[MMF] Warm-session retention is only available in debug builds.");
+                break;
+#endif
+
+            case "probe-bell-warm-replay":
+#if DEBUG
+                ChatGui.Print($"[MMF] Warm-session retention: {mainWindow.ReplayHeldWarmSession()}");
+                break;
+#else
+                ChatGui.Print("[MMF] Warm-session retention is only available in debug builds.");
+                break;
+#endif
+
+            case "probe-bell-warm-status":
+#if DEBUG
+                ChatGui.Print($"[MMF] Warm-session retention: {mainWindow.GetWarmSessionRetentionProbeStatus()}");
+                break;
+#else
+                ChatGui.Print("[MMF] Warm-session retention is only available in debug builds.");
+                break;
+#endif
+
+            case "probe-bell-warm-cancel":
+#if DEBUG
+                ChatGui.Print($"[MMF] Warm-session retention: {mainWindow.CancelWarmSessionRetentionProbe()}");
+                break;
+#else
+                ChatGui.Print("[MMF] Warm-session retention is only available in debug builds.");
+                break;
+#endif
 
             default:
                 mainWindow.IsOpen = !mainWindow.IsOpen;
@@ -222,6 +536,7 @@ public sealed class Plugin : IDalamudPlugin
     {
         retainerSaleChatObserver.Tick();
         retainerHistoryObserver.Tick();
+        mainWindow.RemoteMarketOverlay.IsOpen = true;
         mainWindow.OnFrameworkUpdate(framework);
         agentBridge.Tick();
     }
@@ -264,6 +579,7 @@ public sealed class Plugin : IDalamudPlugin
         mainWindow.AcquisitionCompositionWindow.Dispose();
         mainWindow.Dispose();
         reporter.Dispose();
+        remoteMarketAccessProbe.Dispose();
         retainerHistoryObserver.Dispose();
         retainerSaleChatObserver.Dispose();
         quartermaster.Dispose();

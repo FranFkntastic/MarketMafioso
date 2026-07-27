@@ -10,12 +10,20 @@ public sealed class AutomationCsvLog : IDisposable
     private readonly StreamWriter writer;
     private bool disposed;
 
-    private AutomationCsvLog(string filePath, IReadOnlyList<string> headers)
+    private AutomationCsvLog(string filePath, IReadOnlyList<string> headers, bool autoFlush)
     {
         FilePath = filePath;
-        writer = new StreamWriter(File.Open(filePath, FileMode.CreateNew, FileAccess.Write, FileShare.Read))
+        writer = new StreamWriter(
+            new FileStream(
+                filePath,
+                FileMode.CreateNew,
+                FileAccess.Write,
+                FileShare.Read,
+                bufferSize: 64 * 1024,
+                FileOptions.SequentialScan),
+            bufferSize: 64 * 1024)
         {
-            AutoFlush = true,
+            AutoFlush = autoFlush,
         };
 
         WriteRow(headers);
@@ -36,12 +44,14 @@ public sealed class AutomationCsvLog : IDisposable
         Directory.CreateDirectory(directory);
         return new AutomationCsvLog(
             AutomationDiagnosticsLog.GetAvailablePath(directory, startedAt, filePrefix, ".csv"),
-            headers);
+            headers,
+            autoFlush: true);
     }
 
     public static AutomationCsvLog CreateAtPath(
         string filePath,
-        IReadOnlyList<string> headers)
+        IReadOnlyList<string> headers,
+        bool autoFlush = true)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
         ArgumentNullException.ThrowIfNull(headers);
@@ -50,13 +60,19 @@ public sealed class AutomationCsvLog : IDisposable
         if (!string.IsNullOrWhiteSpace(directory))
             Directory.CreateDirectory(directory);
 
-        return new AutomationCsvLog(filePath, headers);
+        return new AutomationCsvLog(filePath, headers, autoFlush);
     }
 
     public void WriteRow(IReadOnlyList<string?> values)
     {
         ObjectDisposedException.ThrowIf(disposed, this);
         writer.WriteLine(string.Join(",", values.Select(EscapeCsv)));
+    }
+
+    public void Flush()
+    {
+        if (!disposed)
+            writer.Flush();
     }
 
     public void Dispose()

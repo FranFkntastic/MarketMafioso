@@ -25,6 +25,7 @@ public sealed class MarketAcquisitionRouteReportDispatcher : IDisposable
     private readonly CancellationTokenSource lifetimeCancellation = new();
     private readonly HashSet<string> inFlightEntryIds = new(StringComparer.Ordinal);
     private readonly Dictionary<string, long> entrySessionVersions = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> pendingRouteEntryIdsByKey = new(StringComparer.Ordinal);
     private readonly Task replayLoop;
     private Task queueTail = Task.CompletedTask;
     private MarketAcquisitionClaimView? claimed;
@@ -41,6 +42,7 @@ public sealed class MarketAcquisitionRouteReportDispatcher : IDisposable
         this.claimLifecycle = claimLifecycle ?? throw new ArgumentNullException(nameof(claimLifecycle));
         this.callbackDispatcher = callbackDispatcher ?? throw new ArgumentNullException(nameof(callbackDispatcher));
         this.outbox = outbox ?? new VolatileMarketAcquisitionReportOutbox();
+        CompactDuplicateRouteProgress();
         QueuePendingOutboxEntries();
         replayLoop = Task.Run(() => ReplayLoopAsync(lifetimeCancellation.Token));
     }
@@ -77,16 +79,30 @@ public sealed class MarketAcquisitionRouteReportDispatcher : IDisposable
         MarketAcquisitionClaimView sessionClaim;
         lock (sync)
         {
-            if (claimed == null || routeKey.Equals(lastSuccessfulRouteKey, StringComparison.Ordinal))
+            if (claimed == null ||
+                routeKey.Equals(lastSuccessfulRouteKey, StringComparison.Ordinal) ||
+                pendingRouteEntryIdsByKey.ContainsKey(routeKey))
                 return;
             sessionClaim = claimed;
+            pendingRouteEntryIdsByKey[routeKey] = string.Empty;
         }
 
-        var entry = Persist(
-            $"route|{report.RequestId}|{report.AttemptId}|{report.Sequence}",
-            RouteProgressType,
-            new DurableRouteProgress(report, sessionClaim, routeKey));
-        QueueOutboxEntry(entry);
+        try
+        {
+            var entry = Persist(
+                $"route|{report.RequestId}|{report.AttemptId}|{report.Sequence}",
+                RouteProgressType,
+                new DurableRouteProgress(report, sessionClaim, routeKey));
+            lock (sync)
+                pendingRouteEntryIdsByKey[routeKey] = entry.Id;
+            QueueOutboxEntry(entry);
+        }
+        catch
+        {
+            lock (sync)
+                pendingRouteEntryIdsByKey.Remove(routeKey);
+            throw;
+        }
     }
 
     public void EnqueuePurchaseAudit(MarketAcquisitionPurchaseAuditReport report)
@@ -141,6 +157,57 @@ public sealed class MarketAcquisitionRouteReportDispatcher : IDisposable
             QueueOutboxEntry(entry);
     }
 
+    internal void RetryPendingReports() => QueuePendingOutboxEntries();
+
+    private void CompactDuplicateRouteProgress()
+    {
+        var duplicateIds = new List<string>();
+        foreach (var entry in outbox.Snapshot())
+        {
+            if (!entry.ReportType.Equals(RouteProgressType, StringComparison.Ordinal))
+                continue;
+
+            DurableRouteProgress durable;
+            try
+            {
+                durable = outbox.Deserialize<DurableRouteProgress>(entry);
+            }
+            catch
+            {
+                continue;
+            }
+
+            if (pendingRouteEntryIdsByKey.TryAdd(durable.RouteKey, entry.Id))
+                continue;
+            duplicateIds.Add(entry.Id);
+        }
+
+        if (duplicateIds.Count > 0)
+            outbox.RemoveMany(duplicateIds);
+    }
+
+    private void ForgetPendingRouteEntry(MarketAcquisitionReportOutboxEntry entry)
+    {
+        if (!entry.ReportType.Equals(RouteProgressType, StringComparison.Ordinal))
+            return;
+
+        DurableRouteProgress durable;
+        try
+        {
+            durable = outbox.Deserialize<DurableRouteProgress>(entry);
+        }
+        catch
+        {
+            return;
+        }
+
+        if (pendingRouteEntryIdsByKey.TryGetValue(durable.RouteKey, out var pendingId) &&
+            pendingId.Equals(entry.Id, StringComparison.Ordinal))
+        {
+            pendingRouteEntryIdsByKey.Remove(durable.RouteKey);
+        }
+    }
+
     private void QueueOutboxEntry(MarketAcquisitionReportOutboxEntry entry)
     {
         lock (sync)
@@ -172,7 +239,10 @@ public sealed class MarketAcquisitionRouteReportDispatcher : IDisposable
             outbox.Remove(entry.Id);
             volatileFallback.Remove(entry.Id);
             lock (sync)
+            {
                 entrySessionVersions.Remove(entry.Id);
+                ForgetPendingRouteEntry(entry);
+            }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -227,13 +297,13 @@ public sealed class MarketAcquisitionRouteReportDispatcher : IDisposable
     }
 
     private string GetRequestId(MarketAcquisitionReportOutboxEntry entry) => entry.ReportType switch
-        {
-            RouteProgressType => outbox.Deserialize<DurableRouteProgress>(entry).Report.RequestId,
-            PurchaseAuditType => outbox.Deserialize<MarketAcquisitionPurchaseAuditReport>(entry).RequestId,
-            LineProgressType => outbox.Deserialize<MarketAcquisitionLineProgressReport>(entry).RequestId,
-            MarketObservationType => outbox.Deserialize<MarketAcquisitionMarketObservationReport>(entry).RequestId,
-            _ => string.Empty,
-        };
+    {
+        RouteProgressType => outbox.Deserialize<DurableRouteProgress>(entry).Report.RequestId,
+        PurchaseAuditType => outbox.Deserialize<MarketAcquisitionPurchaseAuditReport>(entry).RequestId,
+        LineProgressType => outbox.Deserialize<MarketAcquisitionLineProgressReport>(entry).RequestId,
+        MarketObservationType => outbox.Deserialize<MarketAcquisitionMarketObservationReport>(entry).RequestId,
+        _ => string.Empty,
+    };
 
     private Task SendAsync(MarketAcquisitionReportOutboxEntry entry, CancellationToken cancellationToken) =>
         entry.ReportType switch
@@ -381,6 +451,7 @@ public sealed class MarketAcquisitionRouteReportDispatcher : IDisposable
             claimed = null;
             inFlightEntryIds.Clear();
             entrySessionVersions.Clear();
+            pendingRouteEntryIdsByKey.Clear();
         }
         _ = replayLoop;
     }

@@ -11,6 +11,8 @@ $projectDir = Split-Path -Parent $PSScriptRoot
 $srcDir = Split-Path -Parent $projectDir
 $repoRoot = Split-Path -Parent $srcDir
 $serverProject = Join-Path $repoRoot "src\MarketMafioso.Server\MarketMafioso.Server.csproj"
+. (Join-Path $PSScriptRoot 'Resolve-PinnedFranthropyRoot.ps1')
+$franthropyRoot = Resolve-PinnedFranthropyRoot -MarketMafiosoRepoRoot $repoRoot
 
 if ([string]::IsNullOrWhiteSpace($OutputPath)) {
     $OutputPath = Join-Path $repoRoot "dist\server"
@@ -22,7 +24,8 @@ $arguments = @(
     "-c",
     $Configuration,
     "-o",
-    $OutputPath
+    $OutputPath,
+    "-p:FranthropyRoot=$franthropyRoot"
 )
 
 if (-not [string]::IsNullOrWhiteSpace($Runtime)) {

@@ -24,6 +24,7 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
     private MarketAcquisitionGuidedRouteSession? session;
     private MarketAcquisitionRouteDiagnostics diagnostics = MarketAcquisitionRouteDiagnostics.Disabled;
     private bool diagnosticsRequested;
+    private MarketAcquisitionRouteDiagnosticsLevel diagnosticsLevelRequested = MarketAcquisitionRouteDiagnosticsLevel.Off;
     private bool includeOpportunisticChecksRequested;
     private bool standaloneInputCaptureLogOpen;
     private DateTimeOffset? itemSearchAutomationStartedUtc;
@@ -79,6 +80,8 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
 
     public bool CanFinalizeInputCaptureLog => standaloneInputCaptureLogOpen && diagnostics.IsEnabled;
 
+    internal void FlushDiagnostics() => diagnostics.Flush();
+
     public MarketAcquisitionGuidedRouteStop? ActiveStop =>
         State is "Completed" or "Stopped" or "Failed"
             ? null
@@ -106,19 +109,24 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         MarketAcquisitionPlan plan,
         bool enableDiagnostics = false,
         bool includeOpportunisticChecks = false,
-        MarketAcquisitionExecutionMode executionMode = MarketAcquisitionExecutionMode.Live)
+        MarketAcquisitionExecutionMode executionMode = MarketAcquisitionExecutionMode.Live,
+        MarketAcquisitionRouteDiagnosticsLevel diagnosticsLevel = MarketAcquisitionRouteDiagnosticsLevel.FullTrace)
     {
         ArgumentNullException.ThrowIfNull(plan);
 
         CloseDiagnostics();
         diagnosticsRequested = enableDiagnostics;
+        diagnosticsLevelRequested = enableDiagnostics
+            ? diagnosticsLevel
+            : MarketAcquisitionRouteDiagnosticsLevel.Off;
         includeOpportunisticChecksRequested = includeOpportunisticChecks;
         this.executionMode = executionMode;
         diagnostics = diagnosticsRequested
             ? MarketAcquisitionRouteDiagnostics.CreateEnabled(
                 diagnosticsDirectory,
                 DateTimeOffset.Now,
-                executionMode == MarketAcquisitionExecutionMode.DryRun ? "dry-run" : "route")
+                executionMode == MarketAcquisitionExecutionMode.DryRun ? "dry-run" : "route",
+                diagnosticsLevelRequested)
             : MarketAcquisitionRouteDiagnostics.Disabled;
         LastDiagnosticFilePath = diagnostics.FilePath;
         LastObservedListingsCsvPath = diagnostics.ObservedListingsCsvPath;
@@ -166,7 +174,7 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         ArgumentNullException.ThrowIfNull(plan);
 
         diagnostics.Record("route-restart", "Restarting market acquisition route.");
-        return Start(plan, diagnosticsRequested, includeOpportunisticChecksRequested, executionMode);
+        return Start(plan, diagnosticsRequested, includeOpportunisticChecksRequested, executionMode, diagnosticsLevelRequested);
     }
 
     public MarketAcquisitionRouteActionResult ReprepareAndRestart(
@@ -194,7 +202,7 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
                 ["skippedWorlds"] = string.Join(", ", reprepare.SkippedWorlds),
                 ["remainingWorldCount"] = reprepare.Plan.WorldBatches.Count.ToString(),
             });
-        var startResult = Start(reprepare.Plan, diagnosticsRequested, includeOpportunisticChecksRequested, executionMode);
+        var startResult = Start(reprepare.Plan, diagnosticsRequested, includeOpportunisticChecksRequested, executionMode, diagnosticsLevelRequested);
         if (!startResult.Success)
             return startResult;
 
@@ -258,6 +266,7 @@ public sealed class MarketAcquisitionRouteRunner : IDisposable
         itemSearchAutomationStartedUtc = null;
         ClearListingReadPendingWatchdog();
         diagnosticsRequested = false;
+        diagnosticsLevelRequested = MarketAcquisitionRouteDiagnosticsLevel.Off;
         includeOpportunisticChecksRequested = false;
         LastDiagnosticFilePath = null;
         LastObservedListingsCsvPath = null;

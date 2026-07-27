@@ -99,8 +99,8 @@ internal sealed class MarketAcquisitionPlanPanel
 
     private static string FormatPlannedListingItem(MarketAcquisitionPlannedListing listing) =>
         string.IsNullOrWhiteSpace(listing.ItemName)
-            ? $"Item {listing.ItemId}"
-            : $"{listing.ItemName} ({listing.ItemId})";
+            ? "Unavailable item"
+            : listing.ItemName;
 
     private static IReadOnlyList<AdvisoryPlanRow> BuildAdvisoryPlanRows(MarketAcquisitionPlan plan)
     {

@@ -24,7 +24,56 @@ public sealed record AgentBridgeTruth
     public required bool WorkspaceBusy { get; init; }
     public required string? ClaimedRequestId { get; init; }
     public required string? PreparedPlanStatus { get; init; }
+    public required AgentBridgeRemoteBellProbeTruth RemoteBellProbe { get; init; }
     public required AgentBridgeRouteTruth Route { get; init; }
+}
+
+public sealed record AgentBridgeRemoteBellProbeTruth
+{
+    public required bool Active { get; init; }
+    public required bool CanSubmit { get; init; }
+    public required string State { get; init; }
+    public required string Message { get; init; }
+    public required string Readiness { get; init; }
+    public required string? BellGameObjectId { get; init; }
+    public required float? Distance { get; init; }
+    public required float? OrdinaryInteractionDistance { get; init; }
+    public required string? LastEvidencePath { get; init; }
+    public bool NormalCaptureActive { get; init; }
+    public bool NormalCaptureCanArm { get; init; }
+    public string? NormalCaptureState { get; init; }
+    public string? NormalCaptureMessage { get; init; }
+    public string? NormalCaptureReadiness { get; init; }
+    public string? NormalCaptureLastEvidencePath { get; init; }
+    public bool PositionFrameOneShotPrepared { get; init; }
+    public bool PositionFrameOneShotCanPrepare { get; init; }
+    public bool PositionFrameOneShotCanFire { get; init; }
+    public string? PositionFrameOneShotState { get; init; }
+    public string? PositionFrameOneShotMessage { get; init; }
+    public string? PositionFrameOneShotReadiness { get; init; }
+    public DateTimeOffset? PositionFrameOneShotExpiresAtUtc { get; init; }
+    public bool YieldProbeActive { get; init; }
+    public bool YieldProbeCanArmControl { get; init; }
+    public bool YieldProbeCanReplaySessionFree { get; init; }
+    public string? YieldProbeMode { get; init; }
+    public string? YieldProbeState { get; init; }
+    public string? YieldProbeMessage { get; init; }
+    public string? YieldProbeReadiness { get; init; }
+    public string? YieldProbeRetainerId { get; init; }
+    public string? YieldProbeOpcode { get; init; }
+    public string? YieldProbeLastEvidencePath { get; init; }
+    public bool WarmSessionActive { get; init; }
+    public bool WarmSessionCanArm { get; init; }
+    public bool WarmSessionCanReplayHeld { get; init; }
+    public string? WarmSessionMode { get; init; }
+    public string? WarmSessionState { get; init; }
+    public string? WarmSessionMessage { get; init; }
+    public string? WarmSessionReadiness { get; init; }
+    public double? WarmSessionHoldSeconds { get; init; }
+    public float? WarmSessionDistanceMoved { get; init; }
+    public string? WarmSessionRetainerId { get; init; }
+    public string? WarmSessionOpcode { get; init; }
+    public string? WarmSessionLastEvidencePath { get; init; }
 }
 
 public sealed record AgentBridgeRouteTruth

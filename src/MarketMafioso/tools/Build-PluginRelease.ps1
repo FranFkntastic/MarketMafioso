@@ -9,8 +9,8 @@ $projectDir = Split-Path -Parent $PSScriptRoot
 $srcDir = Split-Path -Parent $projectDir
 $repoRoot = Split-Path -Parent $srcDir
 $projectPath = Join-Path $projectDir "MarketMafioso.csproj"
-$franthropyRoot = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "..\Franthropy"))
-$franthropyProject = Join-Path $franthropyRoot "src\Franthropy.Dalamud\Franthropy.Dalamud.csproj"
+. (Join-Path $PSScriptRoot 'Resolve-PinnedFranthropyRoot.ps1')
+$franthropyRoot = Resolve-PinnedFranthropyRoot -MarketMafiosoRepoRoot $repoRoot
 $releaseDir = Join-Path $projectDir "bin\Release"
 $releaseArchive = Join-Path $releaseDir "MarketMafioso\latest.zip"
 $releaseFranthropy = Join-Path $franthropyRoot "src\Franthropy.Dalamud\bin\Release\net10.0-windows\Franthropy.Dalamud.dll"
@@ -54,10 +54,6 @@ function Get-StreamSha256 {
     }
 }
 
-if (-not (Test-Path -LiteralPath $franthropyProject)) {
-    throw "Franthropy.Dalamud was not found at '$franthropyProject'."
-}
-
 $mmfState = Get-RepositoryState -Path $repoRoot
 $franthropyState = Get-RepositoryState -Path $franthropyRoot
 if (-not $AllowDirty -and ($mmfState.Dirty -or $franthropyState.Dirty)) {
@@ -65,7 +61,7 @@ if (-not $AllowDirty -and ($mmfState.Dirty -or $franthropyState.Dirty)) {
 }
 
 Write-Host "Building the MarketMafioso plugin release directly so sibling projects inherit Release configuration."
-& dotnet build $projectPath -c Release -t:Rebuild -p:SkipDevPluginSync=true -p:UseSharedCompilation=false
+& dotnet build $projectPath -c Release -t:Rebuild -p:SkipDevPluginSync=true -p:UseSharedCompilation=false "-p:FranthropyRoot=$franthropyRoot"
 if ($LASTEXITCODE -ne 0) {
     throw "MarketMafioso Release build failed with exit code $LASTEXITCODE."
 }

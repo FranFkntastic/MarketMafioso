@@ -4,6 +4,7 @@ using System.Linq;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Windowing;
+using Franthropy.Dalamud.UI.Windows;
 using MarketMafioso.WorkshopPrep;
 
 namespace MarketMafioso.Windows;
@@ -14,6 +15,7 @@ public sealed class WorkshopProjectBrowserWindow : Window, IDisposable
     private readonly WorkshopProjectCatalog workshopCatalog;
     private readonly WorkshopProjectSelectionState selection;
     private readonly Action<uint> addProject;
+    private readonly CompanionWindowActivationState activation = new();
 
     private static readonly Vector4 ColHeader = new(0.38f, 0.73f, 1.00f, 1f);
     private static readonly Vector4 ColMuted = new(0.60f, 0.60f, 0.60f, 1f);
@@ -35,6 +37,18 @@ public sealed class WorkshopProjectBrowserWindow : Window, IDisposable
             MinimumSize = new Vector2(520, 460),
             MaximumSize = new Vector2(float.MaxValue, float.MaxValue),
         };
+    }
+
+    public void OpenAndFocus()
+    {
+        IsOpen = true;
+        activation.RequestOpen();
+    }
+
+    public override void PreDraw()
+    {
+        if (activation.ConsumeFocusRequest())
+            ImGui.SetNextWindowFocus();
     }
 
     public override void Draw()

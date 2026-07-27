@@ -6,7 +6,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <OverrideHtmlAssetPlaceholders>true</OverrideHtmlAssetPlaceholders>
     <ShouldUnsetParentConfigurationAndPlatform>false</ShouldUnsetParentConfigurationAndPlatform>
-    <FranthropyWebProject Condition="'$(FranthropyWebProject)' == ''">..\..\..\Franthropy\src\Franthropy.Web\Franthropy.Web.csproj</FranthropyWebProject>
+    <UsesFranthropy>true</UsesFranthropy>
   </PropertyGroup>
 
   <ItemGroup>
@@ -17,12 +17,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\MarketMafioso.Contracts\MarketMafioso.Contracts.csproj" />
-    <ProjectReference Include="..\..\..\Franthropy\src\Franthropy.FFXIV\Franthropy.FFXIV.csproj" />
+    <ProjectReference Include="$(FranthropyFfxivProject)" />
     <ProjectReference Include="$(FranthropyWebProject)" />
   </ItemGroup>
-
-  <Target Name="ValidateFranthropyWebProject" BeforeTargets="PrepareForBuild" Condition="!Exists('$(FranthropyWebProject)')">
-    <Error Text="Franthropy.Web was not found at '$(FranthropyWebProject)'. Clone Franthropy beside MarketMafioso or set FranthropyWebProject." />
-  </Target>
 
 </Project>

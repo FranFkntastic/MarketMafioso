@@ -17,6 +17,7 @@ namespace MarketMafioso.Windows.MarketAcquisitionRequestBuilder;
 public sealed class MarketAcquisitionRequestBuilderPanel
 {
     private readonly IReadOnlyList<DalamudItemOption> itemOptions;
+    private readonly Configuration config;
     private readonly CraftAppraisalRequestBuilderController craftAppraisal;
     private readonly MarketAcquisitionRequestBuilderController controller;
     private readonly AgentBridgeUiReviewRegistry reviewRegistry;
@@ -42,6 +43,7 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         Action<MarketAcquisitionRequestDocument, MarketAcquisitionRequestView?> documentAdopted,
         AgentBridgeUiReviewRegistry reviewRegistry)
     {
+        this.config = config ?? throw new ArgumentNullException(nameof(config));
         this.craftAppraisal = craftAppraisal;
         this.reviewRegistry = reviewRegistry ?? throw new ArgumentNullException(nameof(reviewRegistry));
         controller = new MarketAcquisitionRequestBuilderController(
@@ -59,6 +61,8 @@ public sealed class MarketAcquisitionRequestBuilderPanel
     public int LineCount => document.Lines.Count;
 
     public bool HasExactAcquisitionAuthority => document.ExactAcquisitionAuthority is not null;
+
+    public bool HasPreviousWorkbench => controller.HasPreviousWorkbench;
 
     public void MarkPlanPrepared(string planHash) => controller.MarkPlanPrepared(planHash);
 
@@ -90,8 +94,25 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         string world) =>
         controller.LoadComposition(composition, characterName, world);
 
+    public void StartBlankWorkbench(MarketAcquisitionRequestBuilderContext context)
+    {
+        controller.StartBlankWorkbench(
+            context.HasCharacterScope ? context.CharacterName : string.Empty,
+            context.HasCharacterScope ? context.World : string.Empty);
+        ClearLineEditor();
+    }
+
+    public bool RestorePreviousWorkbench()
+    {
+        var restored = controller.RestorePreviousWorkbench();
+        if (restored)
+            ClearLineEditor();
+        return restored;
+    }
+
     public void Draw(MarketAcquisitionRequestBuilderContext context, float reservedFooterHeight = 0)
     {
+        craftAppraisal.State.WorkshopHostEnabled = config.EnableWorkshopHostCraftQuotes;
         EnsureCharacterScope(context);
         controller.PumpAutomaticSynchronization(
             context.CharacterName,
@@ -271,6 +292,7 @@ public sealed class MarketAcquisitionRequestBuilderPanel
 
         ImGui.TableNextColumn();
         DrawCompactUnitCell(line, index);
+        DrawUnitPriceContextMenu(line, index, canEdit);
 
         ImGui.TableNextColumn();
         DrawCompactSpendCell(line, index);
@@ -365,6 +387,35 @@ public sealed class MarketAcquisitionRequestBuilderPanel
             ApplyLineEdit(index, line, maxUnitPrice: ClampToUInt(maxUnit), message: "Unit ceiling updated.");
     }
 
+    private void DrawUnitPriceContextMenu(
+        MarketAcquisitionRequestLineDocument line,
+        int index,
+        bool canEdit)
+    {
+        if (!ImGui.BeginPopupContextItem("##UnitQuoteActions"))
+            return;
+
+        var identity = CraftAppraisalRequestMapper.BuildLineIdentity(document, line);
+        var threshold = craftAppraisal.State.TryGetLineQuoteThreshold(identity);
+        var canFetch = canEdit &&
+                       !isAppraising &&
+                       line.ItemId != 0;
+        if (ImGuiUi.MenuItem(
+                threshold is > 0 ? "Refresh Craft Architect quote" : "Get Craft Architect quote",
+                canFetch))
+        {
+            _ = FetchCraftQuoteEvidenceAsync(index);
+        }
+
+        if (threshold is > 0 &&
+            ImGuiUi.MenuItem("Use Craft Architect quote", canEdit && line.MaxUnitPrice != threshold.Value))
+        {
+            SetLineMaxUnitPrice(index, threshold.Value, "Unit ceiling set from Craft Architect quote.");
+        }
+
+        ImGui.EndPopup();
+    }
+
     private void DrawCompactSpendCell(MarketAcquisitionRequestLineDocument line, int index)
     {
         var gilCap = ClampToInt(line.GilCap);
@@ -395,9 +446,15 @@ public sealed class MarketAcquisitionRequestBuilderPanel
     private void DrawCompactEvidenceState(MarketAcquisitionRequestLineDocument line)
     {
         var identity = CraftAppraisalRequestMapper.BuildLineIdentity(document, line);
+        var quote = craftAppraisal.State.GetLineQuote(identity)?.Quote;
         var threshold = craftAppraisal.State.TryGetLineQuoteThreshold(identity);
         if (threshold is > 0)
-            ImGui.TextColored(MainWindow.ColSuccess, "Quote ready");
+        {
+            var hasWarnings = quote?.Warnings.Count > 0;
+            ImGui.TextColored(
+                hasWarnings ? MainWindow.ColWarning : MainWindow.ColSuccess,
+                hasWarnings ? "Quote warning" : "Quote ready");
+        }
         else if (line.MaxUnitPrice > 0)
             ImGui.TextColored(MainWindow.ColMuted, "Manual");
         else
@@ -410,6 +467,8 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         int index)
     {
         var identity = CraftAppraisalRequestMapper.BuildLineIdentity(document, line);
+        var lineQuote = craftAppraisal.State.GetLineQuote(identity);
+        var quote = lineQuote?.Quote;
         var threshold = craftAppraisal.State.TryGetLineQuoteThreshold(identity);
         ImGui.TableNextRow();
 
@@ -419,10 +478,14 @@ public sealed class MarketAcquisitionRequestBuilderPanel
         ImGui.TextColored(MainWindow.ColMuted, FormatLineItemName(line));
 
         ImGui.TableNextColumn();
-        ImGui.TextColored(MainWindow.ColMuted, "Craft Architect");
+        ImGui.TextColored(
+            quote?.Source.Contains("last-good", StringComparison.OrdinalIgnoreCase) == true
+                ? MainWindow.ColWarning
+                : MainWindow.ColMuted,
+            quote?.Source ?? "Craft Architect");
 
         ImGui.TableNextColumn();
-        ImGui.TextColored(MainWindow.ColMuted, line.QuantityMode == "TargetQuantity" ? $"{line.TargetQuantity:N0} target" : "Unbounded");
+        ImGui.TextColored(MainWindow.ColMuted, quote?.Confidence ?? "-");
 
         ImGui.TableNextColumn();
         if (threshold is > 0)
@@ -432,22 +495,54 @@ public sealed class MarketAcquisitionRequestBuilderPanel
 
         ImGui.TableNextColumn();
         ImGui.TextColored(
-            IsPlanStale(context) ? MainWindow.ColWarning : MainWindow.ColMuted,
-            IsPlanStale(context) ? "Plan stale" : context.CurrentPlan is null ? "Not finalized" : "Plan current");
+            quote is null ? MainWindow.ColWarning : MainWindow.ColMuted,
+            quote is null
+                ? craftAppraisal.State.CraftQuoteStatus
+                : CraftQuoteDisplayFormatter.FormatQuoteSummary(quote, DateTimeOffset.UtcNow));
 
         ImGui.TableNextColumn();
-        ImGui.TextColored(MainWindow.ColMuted, FormatEditorOption(line.HqPolicy));
+        var warningCount = quote?.Warnings.Count ?? 0;
+        ImGui.TextColored(
+            warningCount > 0 ? MainWindow.ColWarning : MainWindow.ColMuted,
+            warningCount == 0 ? "No warnings" : $"{warningCount:N0} warning(s)");
+        if (warningCount > 0 && ImGui.IsItemHovered())
+        {
+            ImGui.BeginTooltip();
+            ImGui.PushTextWrapPos(ImGui.GetFontSize() * 34f);
+            foreach (var warning in quote!.Warnings)
+                ImGui.TextWrapped(warning);
+            ImGui.PopTextWrapPos();
+            ImGui.EndTooltip();
+        }
 
         ImGui.TableNextColumn();
-        var canQuote = craftAppraisal.State.WorkshopHostEnabled && !isAppraising && line.ItemId != 0;
+        var canFetch = !isAppraising && line.ItemId != 0;
+        var fetchLabel = threshold is > 0 ? "Refresh quote" : "Get quote";
+        if (ImGuiUi.Button(fetchLabel, canFetch))
+            _ = FetchCraftQuoteEvidenceAsync(index);
+        RegisterLastControl(
+            $"acquisition.workbench.line.{line.ItemId}.quote.refresh",
+            $"{fetchLabel} for {FormatLineItemName(line)}",
+            canFetch,
+            isAppraising,
+            quote?.Source,
+            () => _ = FetchCraftQuoteEvidenceAsync(index));
         if (threshold is > 0)
         {
-            if (ImGuiUi.Button("Use quote", canQuote && line.MaxUnitPrice != threshold.Value))
+            ImGui.SameLine();
+            var canApply = !context.IsBusy &&
+                           !context.IsRouteActive &&
+                           !IsSynchronizing &&
+                           line.MaxUnitPrice != threshold.Value;
+            if (ImGuiUi.Button("Use quote", canApply))
                 SetLineMaxUnitPrice(index, threshold.Value, "Unit ceiling set from Craft Architect quote.");
-        }
-        else if (ImGuiUi.Button("Get quote", canQuote))
-        {
-            _ = CalculateMaxUnitFromCraftAsync(index);
+            RegisterLastControl(
+                $"acquisition.workbench.line.{line.ItemId}.quote.apply",
+                $"Use Craft Architect quote for {FormatLineItemName(line)}",
+                canApply,
+                line.MaxUnitPrice == threshold.Value,
+                threshold.Value.ToString(),
+                () => SetLineMaxUnitPrice(index, threshold.Value, "Unit ceiling set from Craft Architect quote."));
         }
 
         ImGui.TableNextColumn();
@@ -603,7 +698,7 @@ public sealed class MarketAcquisitionRequestBuilderPanel
             message);
     }
 
-    private async Task CalculateMaxUnitFromCraftAsync(int index)
+    private async Task FetchCraftQuoteEvidenceAsync(int index)
     {
         if (isAppraising || index < 0 || index >= document.Lines.Count)
             return;
@@ -630,7 +725,8 @@ public sealed class MarketAcquisitionRequestBuilderPanel
                     return;
                 }
 
-                SetLineMaxUnitPrice(currentIndex, threshold.Value, "Unit cost ceiling set from Craft Architect quote.");
+                controller.SetStatus(
+                    $"Craft Architect quote ready for {FormatLineItemName(document.Lines[currentIndex])}. Review the evidence, then use the quote to change the unit ceiling.");
                 return;
             }
 

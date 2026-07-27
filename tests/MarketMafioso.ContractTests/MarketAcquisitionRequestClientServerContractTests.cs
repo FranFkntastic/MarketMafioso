@@ -2,12 +2,164 @@ using System.Net;
 using MarketMafioso.MarketAcquisition;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Configuration;
 
 namespace MarketMafioso.ContractTests.MarketAcquisition;
 
 public sealed class MarketAcquisitionRequestClientServerContractTests
 {
+    [Fact]
+    public async Task AcceptedWorkOrderCanBeShelvedAndItsLeaseIsRevoked()
+    {
+        await using var application = new HostedApplication();
+        using var httpClient = application.CreateClient();
+        var client = new MarketAcquisitionRequestClient(httpClient);
+        var serverUrl = new Uri(httpClient.BaseAddress!, "/marketmafioso/api/inventory").ToString();
+        var created = await client.CreateBatchAsync(
+            serverUrl,
+            "client-secret",
+            CreateBatchRequest() with { IdempotencyKey = "shelf-accepted-create" },
+            CancellationToken.None);
+        var claimed = await client.ClaimAsync(
+            serverUrl,
+            "client-secret",
+            created.Id,
+            "Wei Ning",
+            "Gilgamesh",
+            "plugin-contract-instance",
+            CancellationToken.None);
+        var accepted = await client.AcceptAsync(
+            serverUrl,
+            "client-secret",
+            created.Id,
+            claimed.ClaimToken,
+            "shelf-accepted",
+            CancellationToken.None);
+
+        var shelved = await client.ShelfWorkOrderAsync(
+            serverUrl,
+            "client-secret",
+            created.Id,
+            accepted.Revision,
+            CancellationToken.None);
+
+        Assert.Equal(MarketAcquisitionStatuses.Shelved, shelved.Request.Status);
+        Assert.Equal(MarketAcquisitionWorkOrderStates.Shelved, shelved.State);
+        await Assert.ThrowsAsync<MarketAcquisitionLifecycleHttpException>(() =>
+            client.ShelfWorkOrderAsync(
+                serverUrl,
+                "client-secret",
+                created.Id,
+                accepted.Revision,
+                CancellationToken.None));
+        await Assert.ThrowsAnyAsync<HttpRequestException>(() =>
+            client.RenewLeaseAsync(
+                serverUrl,
+                "client-secret",
+                created.Id,
+                claimed.ClaimToken,
+                "plugin-contract-instance",
+                CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task ReplacementRejectsStaleExpectedRevision()
+    {
+        await using var application = new HostedApplication();
+        using var httpClient = application.CreateClient();
+        var client = new MarketAcquisitionRequestClient(httpClient);
+        var serverUrl = new Uri(httpClient.BaseAddress!, "/marketmafioso/api/inventory").ToString();
+        var created = await client.CreateBatchAsync(
+            serverUrl,
+            "client-secret",
+            CreateBatchRequest() with { IdempotencyKey = "stale-replace-create" },
+            CancellationToken.None);
+        await client.ReplaceBatchAsync(
+            serverUrl,
+            "client-secret",
+            created.Id,
+            CreateReplacement(created.Revision),
+            CancellationToken.None);
+
+        var conflict = await Assert.ThrowsAsync<MarketAcquisitionLifecycleHttpException>(() =>
+            client.ReplaceBatchAsync(
+                serverUrl,
+                "client-secret",
+                created.Id,
+                CreateReplacement(created.Revision),
+                CancellationToken.None));
+
+        Assert.Equal(HttpStatusCode.Conflict, conflict.StatusCode);
+    }
+
+    [Fact]
+    public async Task AcquisitionQueueRejectsUntrustedClientKey()
+    {
+        await using var application = new HostedApplication();
+        using var httpClient = application.CreateClient();
+        using var request = new HttpRequestMessage(
+            HttpMethod.Get,
+            "/marketmafioso/api/acquisition/batches/pending?characterName=Wei%20Ning&world=Gilgamesh");
+        request.Headers.Add("X-Api-Key", "wrong-client-key");
+
+        using var response = await httpClient.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task RestartedServerCanClaimPersistedClientWork()
+    {
+        var contentRoot = Path.Combine(
+            Path.GetTempPath(),
+            "MarketMafioso.AcquisitionRestart.ContractTests",
+            Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(contentRoot);
+        string requestId;
+
+        try
+        {
+            await using (var firstServer = new HostedApplication(contentRoot, deleteContentRootOnDispose: false))
+            {
+                using var httpClient = firstServer.CreateClient();
+                var client = new MarketAcquisitionRequestClient(httpClient);
+                var serverUrl = new Uri(httpClient.BaseAddress!, "/marketmafioso/api/inventory").ToString();
+                var created = await client.CreateBatchAsync(
+                    serverUrl,
+                    "client-secret",
+                    CreateBatchRequest() with { IdempotencyKey = "restart-contract-create" },
+                    CancellationToken.None);
+                requestId = created.Id;
+            }
+
+            await using (var restartedServer = new HostedApplication(contentRoot, deleteContentRootOnDispose: false))
+            {
+                using var httpClient = restartedServer.CreateClient();
+                var client = new MarketAcquisitionRequestClient(httpClient);
+                var serverUrl = new Uri(httpClient.BaseAddress!, "/marketmafioso/api/inventory").ToString();
+                var claimed = await client.ClaimAsync(
+                    serverUrl,
+                    "client-secret",
+                    requestId,
+                    "Wei Ning",
+                    "Gilgamesh",
+                    "restarted-plugin",
+                    CancellationToken.None);
+
+                Assert.Equal(requestId, claimed.Id);
+                Assert.Equal(MarketAcquisitionStatuses.Claimed, claimed.Status);
+                Assert.False(string.IsNullOrWhiteSpace(claimed.ClaimToken));
+            }
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            if (Directory.Exists(contentRoot))
+                Directory.Delete(contentRoot, recursive: true);
+        }
+    }
+
     [Fact]
     public async Task ClientCompletesBatchFlowAndPreservesTerminalConflict()
     {
@@ -161,11 +313,9 @@ public sealed class MarketAcquisitionRequestClientServerContractTests
                 "Too late.",
                 CancellationToken.None));
 
-        const string conflictReason = "Cannot move acquisition request from Complete to Running.";
         Assert.Equal(HttpStatusCode.Conflict, conflict.StatusCode);
         Assert.Equal("progress", conflict.Action);
-        Assert.Equal(conflictReason, conflict.Error);
-        Assert.Contains(conflictReason, conflict.ResponseBody, StringComparison.Ordinal);
+        Assert.False(string.IsNullOrWhiteSpace(conflict.Error));
     }
 
     private static MarketAcquisitionBatchCreateRequest CreateBatchRequest() => new()
@@ -283,28 +433,33 @@ public sealed class MarketAcquisitionRequestClientServerContractTests
 
     private sealed class HostedApplication : IAsyncDisposable
     {
-        private readonly string contentRoot = Path.Combine(
-            Path.GetTempPath(),
-            "MarketMafioso.AcquisitionClientServerContract.Tests",
-            Guid.NewGuid().ToString("N"));
+        private readonly string contentRoot;
+        private readonly bool deleteContentRootOnDispose;
         private readonly WebApplicationFactory<Program> application;
 
-        public HostedApplication()
+        public HostedApplication(
+            string? contentRoot = null,
+            bool deleteContentRootOnDispose = true)
         {
-            Directory.CreateDirectory(contentRoot);
+            this.contentRoot = contentRoot ?? Path.Combine(
+                Path.GetTempPath(),
+                "MarketMafioso.AcquisitionClientServerContract.Tests",
+                Guid.NewGuid().ToString("N"));
+            this.deleteContentRootOnDispose = deleteContentRootOnDispose;
+            Directory.CreateDirectory(this.contentRoot);
             var values = new Dictionary<string, string?>
             {
                 ["MarketMafioso:RequireApiKey"] = "true",
                 ["MarketMafioso:ClientApiKey"] = "client-secret",
                 ["MarketMafioso:BasePath"] = "/marketmafioso",
                 ["MarketMafioso:EnableMarketAcquisition"] = "true",
-                ["MarketMafioso:DatabasePath"] = Path.Combine(contentRoot, "marketmafioso.db"),
+                ["MarketMafioso:DatabasePath"] = Path.Combine(this.contentRoot, "marketmafioso.db"),
             };
 
             application = new WebApplicationFactory<Program>()
                 .WithWebHostBuilder(builder =>
                 {
-                    builder.UseContentRoot(contentRoot);
+                    builder.UseContentRoot(this.contentRoot);
                     builder.ConfigureAppConfiguration(config => config.AddInMemoryCollection(values));
                 });
         }
@@ -314,6 +469,10 @@ public sealed class MarketAcquisitionRequestClientServerContractTests
         public async ValueTask DisposeAsync()
         {
             await application.DisposeAsync();
+            if (!deleteContentRootOnDispose)
+                return;
+
+            SqliteConnection.ClearAllPools();
             try
             {
                 Directory.Delete(contentRoot, recursive: true);

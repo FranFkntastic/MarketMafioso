@@ -64,6 +64,7 @@ internal static class MarketAcquisitionRequestPolicy
             throw new ArgumentException("At least one acquisition line is required.", nameof(request));
         ValidateSweepScope(region, request.WorldMode, request.SweepScope, request.SweepDataCenters, nameof(request));
         ValidateSelectedWorlds(request.WorldMode, request.SelectedWorlds, nameof(request));
+        ValidateUniqueItemIds(request.Lines, nameof(request));
 
         foreach (var line in request.Lines)
             ValidateBatchLineCreateRequest(line);
@@ -98,6 +99,7 @@ internal static class MarketAcquisitionRequestPolicy
             throw new ArgumentException("At least one acquisition line is required.", nameof(request));
         ValidateSweepScope(region, request.WorldMode, request.SweepScope, request.SweepDataCenters, nameof(request));
         ValidateSelectedWorlds(request.WorldMode, request.SelectedWorlds, nameof(request));
+        ValidateUniqueItemIds(request.Lines, nameof(request));
 
         foreach (var line in request.Lines)
             ValidateBatchLineCreateRequest(line);
@@ -123,6 +125,18 @@ internal static class MarketAcquisitionRequestPolicy
         {
             throw new MarketAcquisitionInvalidTransitionException(current.Status, "editable request intent");
         }
+    }
+
+    private static void ValidateUniqueItemIds(
+        IReadOnlyList<MarketAcquisitionBatchLineCreateRequest> lines,
+        string argumentName)
+    {
+        var duplicate = lines
+            .Where(line => line.ItemId != 0)
+            .GroupBy(line => line.ItemId)
+            .FirstOrDefault(group => group.Count() > 1);
+        if (duplicate is not null)
+            throw new ArgumentException($"Item {duplicate.Key} appears more than once.", argumentName);
     }
 
     public static string NormalizeSupportedRegion(string region, string argumentName)

@@ -30,13 +30,22 @@ public sealed class AutomationDiagnosticsLog : IDisposable
         string filePath,
         DateTimeOffset startedAt,
         string startMessage,
-        IReadOnlyDictionary<string, string?>? metadata)
+        IReadOnlyDictionary<string, string?>? metadata,
+        bool autoFlush)
     {
         FilePath = filePath;
         stopwatch = Stopwatch.StartNew();
-        writer = new StreamWriter(File.Open(filePath, FileMode.CreateNew, FileAccess.Write, FileShare.Read))
+        writer = new StreamWriter(
+            new FileStream(
+                filePath,
+                FileMode.CreateNew,
+                FileAccess.Write,
+                FileShare.Read,
+                bufferSize: 64 * 1024,
+                FileOptions.SequentialScan),
+            bufferSize: 64 * 1024)
         {
-            AutoFlush = true,
+            AutoFlush = autoFlush,
         };
 
         var startDetails = new Dictionary<string, string?>
@@ -83,14 +92,16 @@ public sealed class AutomationDiagnosticsLog : IDisposable
             GetAvailablePath(directory, startedAt, filePrefix, ".log"),
             startedAt,
             startMessage,
-            metadata);
+            metadata,
+            autoFlush: true);
     }
 
     public static AutomationDiagnosticsLog CreateEnabledAtPath(
         string filePath,
         DateTimeOffset startedAt,
         string startMessage,
-        IReadOnlyDictionary<string, string?>? metadata)
+        IReadOnlyDictionary<string, string?>? metadata,
+        bool autoFlush = true)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
         ArgumentException.ThrowIfNullOrWhiteSpace(startMessage);
@@ -103,7 +114,8 @@ public sealed class AutomationDiagnosticsLog : IDisposable
             filePath,
             startedAt,
             startMessage,
-            metadata);
+            metadata,
+            autoFlush);
     }
 
     public void Record(
@@ -138,6 +150,18 @@ public sealed class AutomationDiagnosticsLog : IDisposable
     public void Complete(string message)
     {
         Record("complete", message);
+    }
+
+    public void Flush()
+    {
+        if (writer == null)
+            return;
+
+        lock (sync)
+        {
+            if (!disposed)
+                writer.Flush();
+        }
     }
 
     public void Fail(string message, Exception? exception = null)

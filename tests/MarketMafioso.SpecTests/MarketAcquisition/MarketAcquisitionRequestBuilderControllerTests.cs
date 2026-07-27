@@ -1,0 +1,107 @@
+using System.Net;
+using MarketMafioso.MarketAcquisition;
+using MarketMafioso.Windows.MarketAcquisitionRequestBuilder;
+
+namespace MarketMafioso.SpecTests.MarketAcquisition;
+
+public sealed class MarketAcquisitionRequestBuilderControllerTests
+{
+    [Fact]
+    public void ApplyEditorLine_SelectsExistingItemInsteadOfAddingDuplicate()
+    {
+        var existing = Line(36183, "Rose Gold Ingot");
+        var controller = CreateController(
+            MarketAcquisitionRequestDocument.CreateDefault("Wei Ning", "Gilgamesh") with
+            {
+                Lines = [existing],
+                SyncStatus = "SyncedClean",
+            });
+
+        controller.ApplyEditorLine(existing with { MaxUnitPrice = 999 });
+
+        Assert.Single(controller.Document.Lines);
+        Assert.Equal(0, controller.SelectedLineIndex);
+        Assert.Contains("already in the Workbench", controller.Status);
+    }
+
+    [Fact]
+    public async Task ConflictPausesAutomaticSynchronizationInsteadOfRetrying()
+    {
+        var attempts = 0;
+        var document = MarketAcquisitionRequestDocument.CreateDefault("Wei Ning", "Gilgamesh") with
+        {
+            Lines = [Line(36183, "Rose Gold Ingot")],
+            RemoteRequestId = "request-1",
+            RemoteRevision = 3,
+            SyncStatus = "LocalEdits",
+        };
+        var controller = new MarketAcquisitionRequestBuilderController(
+            document,
+            _ =>
+            {
+                attempts++;
+                throw new MarketAcquisitionLifecycleHttpException(
+                    HttpStatusCode.Conflict,
+                    "replace",
+                    "revision changed",
+                    null);
+            },
+            value => Task.FromResult(new MarketAcquisitionRequestBuilderRefreshOutcome(value, null, "refreshed")),
+            (_, _) => { },
+            _ => { });
+
+        await controller.SyncAsync("Wei Ning", "Gilgamesh");
+        controller.PumpAutomaticSynchronization(
+            "Wei Ning",
+            "Gilgamesh",
+            canSynchronize: true,
+            DateTimeOffset.UtcNow.AddMinutes(1));
+        await Task.Yield();
+
+        Assert.Equal(1, attempts);
+        Assert.Equal("RemoteChanged", controller.Document.SyncStatus);
+        Assert.Contains("automatic sync is paused", controller.Status);
+    }
+
+    [Fact]
+    public void PreviousWorkbenchPersistenceRestoresContentWithoutRemoteIdentity()
+    {
+        var config = new Configuration();
+        var current = MarketAcquisitionRequestDocument.CreateDefault("Wei Ning", "Gilgamesh") with
+        {
+            Lines = [Line(36183, "Rose Gold Ingot")],
+            RemoteRequestId = "request-1",
+            RemoteRevision = 7,
+            SyncStatus = "SyncedClean",
+        };
+
+        MarketAcquisitionRequestDocumentPersistence.SavePrevious(config, current);
+        var restored = Assert.IsType<MarketAcquisitionRequestDocument>(
+            MarketAcquisitionRequestDocumentPersistence.RestorePrevious(config)).WithNewIdentity();
+
+        Assert.Equal(36183u, Assert.Single(restored.Lines).ItemId);
+        Assert.Null(restored.RemoteRequestId);
+        Assert.Equal(0, restored.RemoteRevision);
+        Assert.Equal("NewDraft", restored.SyncStatus);
+    }
+
+    private static MarketAcquisitionRequestBuilderController CreateController(
+        MarketAcquisitionRequestDocument document) =>
+        new(
+            document,
+            value => Task.FromResult(new MarketAcquisitionRequestBuilderSyncOutcome(value, "synced")),
+            value => Task.FromResult(new MarketAcquisitionRequestBuilderRefreshOutcome(value, null, "refreshed")),
+            (_, _) => { },
+            _ => { });
+
+    private static MarketAcquisitionRequestLineDocument Line(uint itemId, string name) =>
+        new()
+        {
+            ItemId = itemId,
+            ItemName = name,
+            QuantityMode = "AllBelowThreshold",
+            HqPolicy = "Either",
+            MaxUnitPrice = 500,
+            GilCap = 5000,
+        };
+}
