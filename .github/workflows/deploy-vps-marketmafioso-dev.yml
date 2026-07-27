@@ -65,16 +65,7 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
-      - name: Test receiver
-        run: >
-          dotnet test "tests/MarketMafioso.Server.Tests/MarketMafioso.Server.Tests.csproj"
-          -c Release
-          -p:CraftArchitectCoreProject="${GITHUB_WORKSPACE}/craft-architect/src/FFXIV Craft Architect.Core/FFXIV Craft Architect.Core.csproj"
-          -p:FranthropyFfxivProject="${GITHUB_WORKSPACE}/franthropy/src/Franthropy.FFXIV/Franthropy.FFXIV.csproj"
-          -p:FranthropyFilteringProject="${GITHUB_WORKSPACE}/franthropy/src/Franthropy.Filtering/Franthropy.Filtering.csproj"
-          -p:FranthropyWebProject="${GITHUB_WORKSPACE}/franthropy/src/Franthropy.Web/Franthropy.Web.csproj"
-
-      - name: Test client-server contracts
+      - name: Test receiver and client-server contracts
         run: >
           dotnet test "tests/MarketMafioso.ContractTests/MarketMafioso.ContractTests.csproj"
           -c Release
