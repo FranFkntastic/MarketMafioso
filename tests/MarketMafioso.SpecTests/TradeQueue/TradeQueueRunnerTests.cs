@@ -13,6 +13,7 @@ public sealed class TradeQueueRunnerTests
         RemovesBatchOnlyAfterExactInventoryDelta();
         CanceledTradeLeavesUnverifiedQuantityQueued();
         StopReleasesAutoConfirmAndPreservesQueue();
+        GilUsesCurrencyInputAndExactBalanceEvidence();
     }
 
     private static void RemovesBatchOnlyAfterExactInventoryDelta()
@@ -107,6 +108,50 @@ public sealed class TradeQueueRunnerTests
         Assert.DoesNotContain("MarketMafioso", stopRequests);
     }
 
+    private static void GilUsesCurrencyInputAndExactBalanceEvidence()
+    {
+        var queue = new List<TradeQueueItem>
+        {
+            new() { ItemId = TradeQueuePlanner.GilItemId, ItemName = "Gil", Quantity = 600_000 },
+        };
+        var io = new FakeIo(
+        [
+            new(uint.MaxValue, -1, TradeQueuePlanner.GilItemId, "Gil", false, 3_757_109),
+        ]);
+        var clock = new TestClock();
+        using var coordinator = Coordinator(new());
+        using var runner = new TradeQueueRunner(
+            queue,
+            () => { },
+            io,
+            coordinator,
+            TestPluginLog.Create(),
+            clock.Read);
+
+        Assert.True(runner.Start().Success);
+        runner.Tick();
+        io.IsTradeOpenValue = true;
+        clock.Advance(TimeSpan.FromSeconds(4));
+        runner.Tick();
+        runner.Tick();
+        clock.Advance(TimeSpan.FromMilliseconds(300));
+        runner.Tick();
+        clock.Advance(TimeSpan.FromMilliseconds(300));
+        runner.Tick();
+        runner.Tick();
+        runner.Tick();
+        io.IsTradeOpenValue = false;
+        io.Inventory =
+        [
+            new(uint.MaxValue, -1, TradeQueuePlanner.GilItemId, "Gil", false, 3_157_109),
+        ];
+        runner.Tick();
+
+        Assert.Equal(600_000, io.SubmittedGil);
+        Assert.Equal(TradeQueueExecutionState.Completed, runner.Snapshot.State);
+        Assert.Empty(queue);
+    }
+
     private static List<TradeQueueItem> Queue(int quantity) =>
     [
         new() { ItemId = 100, ItemName = "Cobalt Ingot", Quantity = quantity },
@@ -127,6 +172,8 @@ public sealed class TradeQueueRunnerTests
         public bool IsTradeOpen => IsTradeOpenValue;
         public bool IsNumericInputOpen { get; private set; }
         public int OfferedSlotCount { get; private set; }
+        public int SubmittedGil { get; private set; }
+        private bool gilInputRequested;
 
         public IReadOnlyList<TradeQueueInventoryStack> ScanTradeableInventory() => Inventory;
 
@@ -139,6 +186,14 @@ public sealed class TradeQueueRunnerTests
         public bool FocusPartnerMatches(TradeQueuePartner partner) => true;
 
         public bool TryOpenTrade(TradeQueuePartner partner) => true;
+
+        public bool TryOpenGilInput(out string error)
+        {
+            error = string.Empty;
+            gilInputRequested = true;
+            IsNumericInputOpen = true;
+            return true;
+        }
 
         public bool TryOfferItem(TradeQueueBatchLine line, out string error)
         {
@@ -154,7 +209,15 @@ public sealed class TradeQueueRunnerTests
         {
             error = string.Empty;
             IsNumericInputOpen = false;
-            OfferedSlotCount++;
+            if (gilInputRequested)
+            {
+                SubmittedGil = quantity;
+                gilInputRequested = false;
+            }
+            else
+            {
+                OfferedSlotCount++;
+            }
             return true;
         }
 

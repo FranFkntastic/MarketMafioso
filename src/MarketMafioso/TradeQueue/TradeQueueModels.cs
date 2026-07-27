@@ -32,10 +32,12 @@ public sealed record TradeQueueBatchLine(
 
 public sealed record TradeQueueBatch(
     IReadOnlyList<TradeQueueBatchLine> Lines,
+    int GilAmount,
     IReadOnlyDictionary<TradeQueueItemKey, int> ExpectedInventoryBefore)
 {
     public int SlotCount => Lines.Count;
-    public int UnitCount => Lines.Sum(line => line.Quantity);
+    public int ItemUnitCount => Lines.Sum(line => line.Quantity);
+    public int UnitCount => checked(ItemUnitCount + GilAmount);
 }
 
 public readonly record struct TradeQueueItemKey(uint ItemId, bool IsHighQuality);

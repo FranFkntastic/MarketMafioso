@@ -303,8 +303,7 @@ public class MainWindow : Window, IDisposable
         tradeQueuePanel = new TradeQueuePanel(
             config,
             tradeQueueRunner,
-            tradeQueueIo,
-            dataManager);
+            tradeQueueIo);
         WorkshopProjectBrowserWindow? projectBrowser = null;
         WorkshopFrozenQueueBrowserWindow? frozenQueueBrowser = null;
         workshopPrepQueue = new WorkshopPrepQueuePanel(
