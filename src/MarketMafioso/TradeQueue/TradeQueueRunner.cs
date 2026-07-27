@@ -29,6 +29,8 @@ public sealed class TradeQueueRunner : IDisposable
     private int offeredLineIndex;
     private bool waitingForOfferedSlot;
     private bool quantitySubmitted;
+    private bool gilInputRequested;
+    private bool gilSubmitted;
     private bool readyClicked;
     private bool confirmationSubmitted;
     private int batchNumber;
@@ -153,6 +155,8 @@ public sealed class TradeQueueRunner : IDisposable
             offeredLineIndex = 0;
             waitingForOfferedSlot = false;
             quantitySubmitted = false;
+            gilInputRequested = false;
+            gilSubmitted = false;
             readyClicked = false;
             confirmationSubmitted = false;
             SetActive(
@@ -179,6 +183,39 @@ public sealed class TradeQueueRunner : IDisposable
         if (batch == null)
         {
             Fail("Trade batch state is unavailable.");
+            return;
+        }
+
+        if (batch.GilAmount > 0 && !gilSubmitted)
+        {
+            if (now < nextActionAt)
+                return;
+
+            if (!gilInputRequested)
+            {
+                if (!io.TryOpenGilInput(out var gilError))
+                {
+                    if (!string.IsNullOrWhiteSpace(gilError))
+                        Fail(gilError);
+                    return;
+                }
+
+                gilInputRequested = true;
+                nextActionAt = now + ActionDelay;
+                return;
+            }
+
+            if (!io.IsNumericInputOpen)
+                return;
+            if (!io.TrySubmitQuantity(batch.GilAmount, out var quantityError))
+            {
+                if (!string.IsNullOrWhiteSpace(quantityError))
+                    Fail(quantityError);
+                return;
+            }
+
+            gilSubmitted = true;
+            nextActionAt = now + ActionDelay;
             return;
         }
 
@@ -336,6 +373,8 @@ public sealed class TradeQueueRunner : IDisposable
         offeredLineIndex = 0;
         waitingForOfferedSlot = false;
         quantitySubmitted = false;
+        gilInputRequested = false;
+        gilSubmitted = false;
         readyClicked = false;
         confirmationSubmitted = false;
         SetActive(TradeQueueExecutionState.OpeningTrade, message, OpenTradeTimeout);

@@ -25,6 +25,7 @@ public interface ITradeQueueIo
     bool IsNumericInputOpen { get; }
     int OfferedSlotCount { get; }
     bool TryOpenTrade(TradeQueuePartner partner);
+    bool TryOpenGilInput(out string error);
     bool TryOfferItem(TradeQueueBatchLine line, out string error);
     bool TrySubmitQuantity(int quantity, out string error);
     bool TryClickReady(out string error);
@@ -123,6 +124,23 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo
             return [];
 
         var stacks = new List<TradeQueueInventoryStack>();
+        var gil = checked((int)inventoryManager->GetInventoryItemCount(
+            TradeQueuePlanner.GilItemId,
+            false,
+            true,
+            true,
+            (short)0));
+        if (gil > 0)
+        {
+            stacks.Add(new(
+                uint.MaxValue,
+                -1,
+                TradeQueuePlanner.GilItemId,
+                "Gil",
+                false,
+                gil));
+        }
+
         foreach (var inventoryType in SupportedInventories)
         {
             var container = inventoryManager->GetInventoryContainer(inventoryType);
@@ -186,6 +204,26 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo
 
         Chat.SendMessage("/trade");
         return true;
+    }
+
+    public unsafe bool TryOpenGilInput(out string error)
+    {
+        error = string.Empty;
+        var addon = gameGui.GetAddonByName<AtkUnitBase>(TradeAddon, 1);
+        if (!IsReady(addon))
+            return false;
+
+        try
+        {
+            Callback.Fire(addon, true, 2, Callback.ZeroAtkValue);
+            return true;
+        }
+        catch (Exception exception)
+        {
+            log.Error(exception, "[MarketMafioso] Unable to open the trade gil input.");
+            error = $"The trade-gil command is unavailable: {exception.Message}";
+            return false;
+        }
     }
 
     public unsafe bool TryOfferItem(TradeQueueBatchLine line, out string error)

@@ -2,9 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Dalamud.Bindings.ImGui;
-using Dalamud.Plugin.Services;
-using Franthropy.Dalamud.UI.Items;
-using Lumina.Excel.Sheets;
 using MarketMafioso.TradeQueue;
 using MarketMafioso.Windows.Main;
 using MarketMafioso.WorkshopPrep;
@@ -16,37 +13,21 @@ internal sealed class TradeQueuePanel
     private readonly Configuration config;
     private readonly MarketMafioso.TradeQueue.TradeQueueRunner runner;
     private readonly ITradeQueueIo io;
-    private readonly IReadOnlyList<DalamudItemOption> itemOptions;
-    private readonly HashSet<uint> highQualityItems;
-    private readonly DalamudItemAutocompleteState addItemState = new();
-    private int addQuantity = 1;
-    private bool addHighQuality;
+    private string inventoryFilter = string.Empty;
+    private bool showOnlySelected;
     private bool confirmClear;
 
     public TradeQueuePanel(
         Configuration config,
         MarketMafioso.TradeQueue.TradeQueueRunner runner,
-        ITradeQueueIo io,
-        IDataManager dataManager)
+        ITradeQueueIo io)
     {
         this.config = config;
         this.runner = runner;
         this.io = io;
-        var items = dataManager.GetExcelSheet<Item>()
-            .Where(item => item.RowId > 0 && !item.IsUntradable && !string.IsNullOrWhiteSpace(item.Name.ToString()))
-            .ToList();
-        itemOptions = items
-            .Select(item => new DalamudItemOption(item.RowId, item.Name.ToString()))
-            .OrderBy(item => item.Name, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(item => item.ItemId)
-            .ToList();
-        highQualityItems = items
-            .Where(item => item.CanBeHq)
-            .Select(item => item.RowId)
-            .ToHashSet();
     }
 
-    public bool HasItems => config.TradeQueueItems.Count > 0;
+    public bool HasItems => config.TradeQueueItems.Any(item => item.Quantity > 0);
 
     public string ReplaceWithWorkshopMaterials(IReadOnlyList<WorkshopMaterialAvailability> availability)
     {
@@ -69,26 +50,29 @@ internal sealed class TradeQueuePanel
     {
         UtilityWorkspaceUi.DrawModuleHeader(
             "Trade Queue",
-            "Build a named item queue, focus-target its recipient, and trade exact five-slot batches.");
+            "Select quantities from current tradeable inventory, focus-target the recipient, and trade exact five-slot batches.");
 
         var inventory = io.ScanTradeableInventory();
-        var inventoryCounts = TradeQueuePlanner.CountInventory(inventory);
-        var inventoryItems = inventory
-            .Where(stack => stack.Quantity > 0)
-            .GroupBy(stack => stack.ItemId)
-            .Select(group => new DalamudItemOption(group.Key, group.First().ItemName))
-            .OrderBy(item => item.Name, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(item => item.ItemId)
-            .ToList();
+        var rows = BuildInventoryRows(inventory);
         var snapshot = runner.Snapshot;
         var hasPartner = io.TryGetFocusPartner(out var partner);
+        var selectedRows = rows.Count(row => row.SelectedQuantity > 0);
+        var selectedItemUnits = rows
+            .Where(row => row.Key.ItemId != TradeQueuePlanner.GilItemId)
+            .Sum(row => Math.Max(0, row.SelectedQuantity));
+        var selectedGil = rows
+            .Where(row => row.Key.ItemId == TradeQueuePlanner.GilItemId)
+            .Sum(row => Math.Max(0, row.SelectedQuantity));
+        var selectedSummary = $"{selectedRows:N0} row(s); {selectedItemUnits:N0} items";
+        if (selectedGil > 0)
+            selectedSummary += $"; {selectedGil:N0} gil";
         UtilityWorkspaceUi.DrawStatusStrip(
             "##tradeQueueStatus",
             [
                 new(
-                    "Queue",
-                    $"{config.TradeQueueItems.Count:N0} item(s); {config.TradeQueueItems.Sum(item => item.Quantity):N0} units",
-                    config.TradeQueueItems.Count > 0 ? MainWindow.ColHeader : MainWindow.ColMuted),
+                    "Selected",
+                    selectedSummary,
+                    selectedRows > 0 ? MainWindow.ColHeader : MainWindow.ColMuted),
                 new(
                     "Recipient",
                     hasPartner ? partner.Name : "No focused player",
@@ -102,30 +86,29 @@ internal sealed class TradeQueuePanel
         ImGui.TextColored(StatusColor(snapshot.State), snapshot.Message);
         ImGui.Spacing();
 
-        DrawQueueHeader();
-        DrawQueueTable(inventoryCounts, inventoryItems);
-        ImGui.Spacing();
-        DrawAddItem(inventoryCounts);
+        DrawInventoryHeader();
+        DrawInventoryFilter(rows);
+        DrawInventoryTable(rows);
         ImGui.Spacing();
         DrawExecutionControls(inventory);
     }
 
-    private void DrawQueueHeader()
+    private void DrawInventoryHeader()
     {
         ImGuiUi.SectionHeaderWithActions(
-            "Items",
+            "Inventory",
             MarketMafiosoUiTheme.Header,
             () =>
             {
-                if (ImGuiUi.Button("Clear Queue", HasItems && !runner.IsActive))
+                if (ImGuiUi.Button("Clear Selection", HasItems && !runner.IsActive))
                     confirmClear = true;
             },
-            100);
+            112);
 
         if (!confirmClear)
             return;
 
-        ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Clear every item from Trade Queue?");
+        ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Set every selected quantity to zero?");
         if (ImGuiUi.Button("Confirm Clear", HasItems && !runner.IsActive))
         {
             config.TradeQueueItems.Clear();
@@ -137,127 +120,83 @@ internal sealed class TradeQueuePanel
             confirmClear = false;
     }
 
-    private void DrawQueueTable(
-        IReadOnlyDictionary<TradeQueueItemKey, int> inventoryCounts,
-        IReadOnlyList<DalamudItemOption> inventoryItems)
+    private void DrawInventoryFilter(IReadOnlyList<TradeQueueInventoryRow> rows)
     {
-        if (!ImGui.BeginTable("TradeQueueItems", 5, ImGuiUi.InteractiveTableFlags))
+        ImGui.SetNextItemWidth(Math.Max(220, ImGui.GetContentRegionAvail().X - 210));
+        ImGui.InputTextWithHint("##tradeQueueInventoryFilter", "Filter current inventory...", ref inventoryFilter, 120);
+        ImGui.SameLine();
+        ImGui.Checkbox("Show selected only", ref showOnlySelected);
+
+        if (rows.Count == 0)
+            ImGui.TextColored(MainWindow.ColWarning, "No tradeable inventory is currently observable.");
+    }
+
+    private void DrawInventoryTable(IReadOnlyList<TradeQueueInventoryRow> rows)
+    {
+        var tableHeight = Math.Clamp(ImGui.GetContentRegionAvail().Y - 58, 180, 520);
+        var flags = ImGuiUi.InteractiveTableFlags | ImGuiTableFlags.ScrollY;
+        if (!ImGui.BeginTable(
+                "TradeQueueInventory",
+                3,
+                flags,
+                new System.Numerics.Vector2(0, tableHeight)))
             return;
 
         ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.WidthStretch);
         ImGui.TableSetupColumn("Quality", ImGuiTableColumnFlags.WidthFixed, 72);
-        ImGui.TableSetupColumn("Quantity", ImGuiTableColumnFlags.WidthFixed, 110);
-        ImGui.TableSetupColumn("Available", ImGuiTableColumnFlags.WidthFixed, 88);
-        ImGui.TableSetupColumn("Actions", ImGuiTableColumnFlags.WidthFixed, 76);
+        ImGui.TableSetupColumn("Quantity", ImGuiTableColumnFlags.WidthFixed, 210);
         ImGui.TableHeadersRow();
 
-        if (config.TradeQueueItems.Count == 0)
+        var visibleRows = rows
+            .Where(row =>
+                (!showOnlySelected || row.SelectedQuantity > 0) &&
+                (string.IsNullOrWhiteSpace(inventoryFilter) ||
+                 row.ItemName.Contains(inventoryFilter.Trim(), StringComparison.OrdinalIgnoreCase)))
+            .ToList();
+
+        if (visibleRows.Count == 0)
         {
             ImGui.TableNextRow();
             ImGui.TableNextColumn();
-            ImGui.TextColored(MarketMafiosoUiTheme.Muted, "No items queued.");
-            for (var column = 1; column < 5; column++)
-            {
-                ImGui.TableNextColumn();
-                ImGui.TextColored(MarketMafiosoUiTheme.Muted, "-");
-            }
+            ImGui.TextColored(MarketMafiosoUiTheme.Muted, rows.Count == 0 ? "No inventory rows." : "No matching inventory rows.");
+            ImGui.TableNextColumn();
+            ImGui.TextColored(MarketMafiosoUiTheme.Muted, "-");
+            ImGui.TableNextColumn();
+            ImGui.TextColored(MarketMafiosoUiTheme.Muted, "-");
         }
 
-        for (var index = 0; index < config.TradeQueueItems.Count; index++)
+        foreach (var row in visibleRows)
         {
-            var item = config.TradeQueueItems[index];
-            var available = inventoryCounts.GetValueOrDefault(new(item.ItemId, item.IsHighQuality));
+            ImGui.PushID($"tradeQueueInventory{row.Key.ItemId}-{row.Key.IsHighQuality}");
             ImGui.TableNextRow();
+            ImGui.TableNextColumn();
+            ImGui.TextColored(
+                row.SelectedQuantity > 0 ? MainWindow.ColSuccess : ImGui.GetStyle().Colors[(int)ImGuiCol.Text],
+                row.ItemName);
+
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(
+                row.Key.ItemId == TradeQueuePlanner.GilItemId
+                    ? "-"
+                    : row.Key.IsHighQuality ? "HQ" : "NQ");
+
             ImGui.TableNextColumn();
             if (runner.IsActive)
                 ImGui.BeginDisabled();
-            DrawItemEditor(index, item, inventoryItems, inventoryCounts);
-            ImGui.TableNextColumn();
-            DrawQualityEditor(index, item, inventoryCounts);
-            ImGui.TableNextColumn();
-            var maximum = TradeQueuePlanner.GetMaximumQueueQuantity(
-                config.TradeQueueItems,
-                inventoryCounts,
-                new(item.ItemId, item.IsHighQuality),
-                index);
-            var minimum = maximum > 0 ? 1 : 0;
-            var quantity = item.Quantity;
-            ImGui.SetNextItemWidth(92);
-            if (ImGui.InputInt($"##tradeQueueQuantity{index}", ref quantity))
-            {
-                item.Quantity = Math.Clamp(quantity, minimum, maximum);
-                config.Save();
-            }
-            else if (!runner.IsActive && item.Quantity > maximum)
-            {
-                item.Quantity = maximum;
-                config.Save();
-            }
+            var quantity = row.SelectedQuantity;
+            ImGui.SetNextItemWidth(110);
+            if (ImGui.InputInt("##quantity", ref quantity))
+                SetSelectedQuantity(row, Math.Clamp(quantity, 0, row.AvailableQuantity));
             if (runner.IsActive)
                 ImGui.EndDisabled();
-
-            ImGui.TableNextColumn();
+            ImGui.SameLine();
             ImGui.TextColored(
-                available >= item.Quantity ? MainWindow.ColSuccess : MainWindow.ColWarning,
-                available.ToString("N0"));
-            ImGui.TableNextColumn();
-            if (ImGuiUi.Button($"Remove##tradeQueueRemove{index}", !runner.IsActive))
-            {
-                config.TradeQueueItems.RemoveAt(index);
-                config.Save();
-                index--;
-            }
+                row.SelectedQuantity <= row.AvailableQuantity ? MainWindow.ColMuted : MainWindow.ColWarning,
+                $"/ {row.AvailableQuantity:N0}");
+            ImGui.PopID();
         }
 
         ImGui.EndTable();
-    }
-
-    private void DrawAddItem(IReadOnlyDictionary<TradeQueueItemKey, int> inventoryCounts)
-    {
-        ImGui.TextColored(MarketMafiosoUiTheme.Header, "Add item");
-        DalamudItemAutocompleteRenderer.DrawInline(
-            "tradeQueueAdd",
-            itemOptions,
-            addItemState,
-            MainWindow.ColMuted,
-            MainWindow.ColSuccess,
-            MainWindow.ColError);
-
-        var selected = addItemState.SelectedItem;
-        var supportsHighQuality = selected is not null && highQualityItems.Contains(selected.ItemId);
-        if (!supportsHighQuality)
-            addHighQuality = false;
-
-        var remaining = selected is null
-            ? 0
-            : TradeQueuePlanner.GetMaximumQueueQuantity(
-                config.TradeQueueItems,
-                inventoryCounts,
-                new(selected.ItemId, addHighQuality));
-        if (remaining > 0)
-            addQuantity = Math.Clamp(addQuantity, 1, remaining);
-
-        ImGui.SetNextItemWidth(110);
-        ImGui.InputInt("Quantity##tradeQueueAddQuantity", ref addQuantity);
-        addQuantity = remaining > 0
-            ? Math.Clamp(addQuantity, 1, remaining)
-            : Math.Max(1, addQuantity);
-        ImGui.SameLine();
-        if (!supportsHighQuality)
-            ImGui.BeginDisabled();
-        ImGui.Checkbox("HQ##tradeQueueAddHq", ref addHighQuality);
-        if (!supportsHighQuality)
-            ImGui.EndDisabled();
-        ImGui.SameLine();
-        if (ImGuiUi.Button("Add to Queue", selected is not null && remaining > 0 && !runner.IsActive))
-            AddSelectedItem(selected!, remaining);
-        if (selected is not null)
-        {
-            ImGui.SameLine();
-            ImGui.TextColored(
-                remaining > 0 ? MainWindow.ColMuted : MainWindow.ColWarning,
-                $"{remaining:N0} available to queue");
-        }
     }
 
     private void DrawExecutionControls(IReadOnlyList<TradeQueueInventoryStack> inventory)
@@ -284,109 +223,61 @@ internal sealed class TradeQueuePanel
             ImGui.TextColored(MainWindow.ColMuted, "Focus-target the receiving player to begin.");
     }
 
-    private void AddSelectedItem(DalamudItemOption selected, int remaining)
+    private IReadOnlyList<TradeQueueInventoryRow> BuildInventoryRows(
+        IReadOnlyList<TradeQueueInventoryStack> inventory)
     {
-        var quantity = Math.Clamp(addQuantity, 1, remaining);
-        var existing = config.TradeQueueItems.FirstOrDefault(item =>
-            item.ItemId == selected.ItemId &&
-            item.IsHighQuality == addHighQuality);
-        if (existing is null)
+        var selected = config.TradeQueueItems
+            .GroupBy(item => new TradeQueueItemKey(item.ItemId, item.IsHighQuality))
+            .ToDictionary(
+                group => group.Key,
+                group => group.Sum(item => Math.Max(0, item.Quantity)));
+        var rows = inventory
+            .Where(stack => stack.ItemId > 0 && stack.Quantity > 0)
+            .GroupBy(stack => new TradeQueueItemKey(stack.ItemId, stack.IsHighQuality))
+            .Select(group => new TradeQueueInventoryRow(
+                group.Key,
+                group.First().ItemName,
+                group.Sum(stack => stack.Quantity),
+                selected.GetValueOrDefault(group.Key)))
+            .ToList();
+        var observed = rows.Select(row => row.Key).ToHashSet();
+        rows.AddRange(
+            config.TradeQueueItems
+                .Where(item => item.Quantity > 0 && !observed.Contains(new(item.ItemId, item.IsHighQuality)))
+                .GroupBy(item => new TradeQueueItemKey(item.ItemId, item.IsHighQuality))
+                .Select(group => new TradeQueueInventoryRow(
+                    group.Key,
+                    group.First().ItemName,
+                    0,
+                    group.Sum(item => item.Quantity))));
+        return rows
+            .OrderBy(row => row.ItemName, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(row => row.Key.IsHighQuality)
+            .ThenBy(row => row.Key.ItemId)
+            .ToList();
+    }
+
+    private void SetSelectedQuantity(TradeQueueInventoryRow row, int quantity)
+    {
+        for (var index = config.TradeQueueItems.Count - 1; index >= 0; index--)
+        {
+            var item = config.TradeQueueItems[index];
+            if (item.ItemId == row.Key.ItemId && item.IsHighQuality == row.Key.IsHighQuality)
+                config.TradeQueueItems.RemoveAt(index);
+        }
+
+        if (quantity > 0)
         {
             config.TradeQueueItems.Add(new()
             {
-                ItemId = selected.ItemId,
-                ItemName = selected.Name,
-                IsHighQuality = addHighQuality,
+                ItemId = row.Key.ItemId,
+                ItemName = row.ItemName,
+                IsHighQuality = row.Key.IsHighQuality,
                 Quantity = quantity,
             });
         }
-        else
-        {
-            existing.Quantity = checked(existing.Quantity + quantity);
-        }
 
         config.Save();
-        addItemState.SearchBuffer = string.Empty;
-        addItemState.SelectedItem = null;
-        addQuantity = 1;
-        addHighQuality = false;
-    }
-
-    private void DrawItemEditor(
-        int rowIndex,
-        TradeQueueItem item,
-        IReadOnlyList<DalamudItemOption> inventoryItems,
-        IReadOnlyDictionary<TradeQueueItemKey, int> inventoryCounts)
-    {
-        var preview = DalamudItemAutocompletePresenter.FormatDisplayName(
-            itemOptions,
-            itemOptions.FirstOrDefault(option => option.ItemId == item.ItemId) ??
-            new(item.ItemId, item.ItemName));
-        ImGui.SetNextItemWidth(-1);
-        if (!ImGui.BeginCombo($"##tradeQueueItem{rowIndex}", preview))
-            return;
-
-        foreach (var option in inventoryItems)
-        {
-            var selected = option.ItemId == item.ItemId;
-            var label = DalamudItemAutocompletePresenter.FormatDisplayName(itemOptions, option);
-            if (!ImGui.Selectable($"{label}##tradeQueueItem{rowIndex}-{option.ItemId}", selected))
-                continue;
-
-            item.ItemId = option.ItemId;
-            item.ItemName = option.Name;
-            if (!highQualityItems.Contains(option.ItemId))
-                item.IsHighQuality = false;
-            else if (inventoryCounts.GetValueOrDefault(new(option.ItemId, item.IsHighQuality)) == 0)
-                item.IsHighQuality = inventoryCounts.GetValueOrDefault(new(option.ItemId, true)) > 0;
-            ClampRowQuantity(rowIndex, item, inventoryCounts);
-            config.Save();
-        }
-
-        ImGui.EndCombo();
-    }
-
-    private void DrawQualityEditor(
-        int rowIndex,
-        TradeQueueItem item,
-        IReadOnlyDictionary<TradeQueueItemKey, int> inventoryCounts)
-    {
-        if (!ImGui.BeginCombo($"##tradeQueueQuality{rowIndex}", item.IsHighQuality ? "HQ" : "NQ"))
-            return;
-
-        DrawQualityOption(false);
-        if (highQualityItems.Contains(item.ItemId))
-            DrawQualityOption(true);
-        ImGui.EndCombo();
-        return;
-
-        void DrawQualityOption(bool highQuality)
-        {
-            var available = inventoryCounts.GetValueOrDefault(new(item.ItemId, highQuality));
-            if (available <= 0 && item.IsHighQuality != highQuality)
-                return;
-
-            var label = $"{(highQuality ? "HQ" : "NQ")} ({available:N0})";
-            if (!ImGui.Selectable($"{label}##tradeQueueQuality{rowIndex}-{highQuality}", item.IsHighQuality == highQuality))
-                return;
-
-            item.IsHighQuality = highQuality;
-            ClampRowQuantity(rowIndex, item, inventoryCounts);
-            config.Save();
-        }
-    }
-
-    private void ClampRowQuantity(
-        int rowIndex,
-        TradeQueueItem item,
-        IReadOnlyDictionary<TradeQueueItemKey, int> inventoryCounts)
-    {
-        var maximum = TradeQueuePlanner.GetMaximumQueueQuantity(
-            config.TradeQueueItems,
-            inventoryCounts,
-            new(item.ItemId, item.IsHighQuality),
-            rowIndex);
-        item.Quantity = maximum > 0 ? Math.Clamp(item.Quantity, 1, maximum) : 0;
     }
 
     private static TradeQueueItem Clone(TradeQueueItem item) => new()
@@ -404,4 +295,10 @@ internal sealed class TradeQueuePanel
         TradeQueueExecutionState.Stopped => MainWindow.ColWarning,
         _ => MainWindow.ColMuted,
     };
+
+    private sealed record TradeQueueInventoryRow(
+        TradeQueueItemKey Key,
+        string ItemName,
+        int AvailableQuantity,
+        int SelectedQuantity);
 }

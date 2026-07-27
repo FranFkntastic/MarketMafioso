@@ -11,8 +11,8 @@ public sealed class TradeQueuePlannerTests
         ValidateRequiresExactQualityAndEnoughTradeableInventory();
         BuildNextBatchSplitsSourceStacksAndStopsAtFiveSlots();
         InventoryDeltaAndCompletedBatchRequireExactEvidence();
+        GilUsesCurrencyCapacityWithoutConsumingAnItemSlot();
         WorkshopHandoffExportsAvailableFinalMaterialsAndCapsAtRequirement();
-        MaximumQueueQuantitySubtractsOtherRowsAndNeverExceedsInventory();
     }
 
     private static void ValidateRequiresExactQualityAndEnoughTradeableInventory()
@@ -102,23 +102,29 @@ public sealed class TradeQueuePlannerTests
             });
     }
 
-    private static void MaximumQueueQuantitySubtractsOtherRowsAndNeverExceedsInventory()
+    private static void GilUsesCurrencyCapacityWithoutConsumingAnItemSlot()
     {
         var queue = new List<TradeQueueItem>
         {
-            new() { ItemId = 100, ItemName = "Cobalt Ingot", Quantity = 3 },
-            new() { ItemId = 100, ItemName = "Cobalt Ingot", Quantity = 2 },
+            new() { ItemId = TradeQueuePlanner.GilItemId, ItemName = "Gil", Quantity = 1_500_000 },
         };
-        var counts = new Dictionary<TradeQueueItemKey, int>
+        var before = new List<TradeQueueInventoryStack>
         {
-            [new(100, false)] = 8,
-            [new(100, true)] = 4,
+            Stack(uint.MaxValue, -1, TradeQueuePlanner.GilItemId, "Gil", hq: false, 3_757_109),
         };
 
-        Assert.Equal(6, TradeQueuePlanner.GetMaximumQueueQuantity(queue, counts, new(100, false), 0));
-        Assert.Equal(3, TradeQueuePlanner.GetMaximumQueueQuantity(queue, counts, new(100, false)));
-        Assert.Equal(4, TradeQueuePlanner.GetMaximumQueueQuantity(queue, counts, new(100, true), 0));
-        Assert.Equal(0, TradeQueuePlanner.GetMaximumQueueQuantity(queue, counts, new(200, false), 0));
+        var batch = TradeQueuePlanner.BuildNextBatch(queue, before);
+
+        Assert.Equal(1_000_000, batch.GilAmount);
+        Assert.Equal(0, batch.SlotCount);
+        var after = new List<TradeQueueInventoryStack>
+        {
+            Stack(uint.MaxValue, -1, TradeQueuePlanner.GilItemId, "Gil", hq: false, 2_757_109),
+        };
+        Assert.True(TradeQueuePlanner.HasExpectedInventoryDelta(batch, after, out var diagnostic));
+        Assert.Contains("1,000,000 gil", diagnostic);
+        TradeQueuePlanner.ApplyCompletedBatch(queue, batch);
+        Assert.Equal(500_000, Assert.Single(queue).Quantity);
     }
 
     private static TradeQueueInventoryStack Stack(
