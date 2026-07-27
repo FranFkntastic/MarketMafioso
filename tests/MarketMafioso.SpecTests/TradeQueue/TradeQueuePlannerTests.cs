@@ -12,6 +12,7 @@ public sealed class TradeQueuePlannerTests
         BuildNextBatchSplitsSourceStacksAndStopsAtFiveSlots();
         InventoryDeltaAndCompletedBatchRequireExactEvidence();
         WorkshopHandoffExportsAvailableFinalMaterialsAndCapsAtRequirement();
+        MaximumQueueQuantitySubtractsOtherRowsAndNeverExceedsInventory();
     }
 
     private static void ValidateRequiresExactQualityAndEnoughTradeableInventory()
@@ -99,6 +100,25 @@ public sealed class TradeQueuePlannerTests
                 Assert.Equal("Darksteel Ingot", item.ItemName);
                 Assert.Equal(4, item.Quantity);
             });
+    }
+
+    private static void MaximumQueueQuantitySubtractsOtherRowsAndNeverExceedsInventory()
+    {
+        var queue = new List<TradeQueueItem>
+        {
+            new() { ItemId = 100, ItemName = "Cobalt Ingot", Quantity = 3 },
+            new() { ItemId = 100, ItemName = "Cobalt Ingot", Quantity = 2 },
+        };
+        var counts = new Dictionary<TradeQueueItemKey, int>
+        {
+            [new(100, false)] = 8,
+            [new(100, true)] = 4,
+        };
+
+        Assert.Equal(6, TradeQueuePlanner.GetMaximumQueueQuantity(queue, counts, new(100, false), 0));
+        Assert.Equal(3, TradeQueuePlanner.GetMaximumQueueQuantity(queue, counts, new(100, false)));
+        Assert.Equal(4, TradeQueuePlanner.GetMaximumQueueQuantity(queue, counts, new(100, true), 0));
+        Assert.Equal(0, TradeQueuePlanner.GetMaximumQueueQuantity(queue, counts, new(200, false), 0));
     }
 
     private static TradeQueueInventoryStack Stack(

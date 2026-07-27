@@ -170,6 +170,32 @@ public static class TradeQueuePlanner
             .GroupBy(stack => new TradeQueueItemKey(stack.ItemId, stack.IsHighQuality))
             .ToDictionary(group => group.Key, group => group.Sum(stack => stack.Quantity));
 
+    public static int GetMaximumQueueQuantity(
+        IReadOnlyList<TradeQueueItem> queue,
+        IReadOnlyDictionary<TradeQueueItemKey, int> inventoryCounts,
+        TradeQueueItemKey key,
+        int? excludedRowIndex = null)
+    {
+        ArgumentNullException.ThrowIfNull(queue);
+        ArgumentNullException.ThrowIfNull(inventoryCounts);
+        if (excludedRowIndex is < 0 || excludedRowIndex >= queue.Count)
+            throw new ArgumentOutOfRangeException(nameof(excludedRowIndex));
+
+        long queuedElsewhere = 0;
+        for (var index = 0; index < queue.Count; index++)
+        {
+            if (index == excludedRowIndex)
+                continue;
+
+            var item = queue[index];
+            if (item.ItemId == key.ItemId && item.IsHighQuality == key.IsHighQuality)
+                queuedElsewhere = checked(queuedElsewhere + Math.Max(0, item.Quantity));
+        }
+
+        var available = inventoryCounts.GetValueOrDefault(key);
+        return (int)Math.Clamp((long)available - queuedElsewhere, 0, int.MaxValue);
+    }
+
     private static string Display(TradeQueueItem item) =>
         $"{item.ItemName} {(item.IsHighQuality ? "HQ" : "NQ")}".Trim();
 }
