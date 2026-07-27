@@ -26,6 +26,7 @@ using MarketMafioso.Diagnostics;
 using MarketMafioso.MarketDiagnostics;
 using Franthropy.Dalamud.AgentBridge;
 using Franthropy.Dalamud.Automation.Retainers;
+using Franthropy.Dalamud.UI.Windows;
 using MarketMafiosoCaptureRegion = MarketMafioso.AgentBridge.AgentBridgeCaptureRegion;
 
 namespace MarketMafioso.Windows;
@@ -562,11 +563,6 @@ public class MainWindow : Window, IDisposable
 
     public override void PreDraw()
     {
-        if (AcquisitionCompositionWindow.IsOpen)
-            Flags |= ImGuiWindowFlags.NoBringToFrontOnFocus;
-        else
-            Flags &= ~ImGuiWindowFlags.NoBringToFrontOnFocus;
-
         var captureTarget = ActiveCapturePresentationTarget();
         if (captureTarget is null)
         {
@@ -607,7 +603,10 @@ public class MainWindow : Window, IDisposable
             var viewport = ImGui.GetWindowViewport();
             var windowPosition = ImGui.GetWindowPos();
             var windowSize = ImGui.GetWindowSize();
-            AcquisitionCompositionWindow.AnchorTo(windowPosition, windowSize);
+            AcquisitionCompositionWindow.AnchorTo(
+                windowPosition,
+                windowSize,
+                DalamudOwnedWindowSurface.Capture());
             if (windowSize.X > 0f && windowSize.Y > 0f && viewport.Size.X > 0f && viewport.Size.Y > 0f)
             {
                 AgentCaptureRegion = new MarketMafiosoCaptureRegion(

@@ -15,6 +15,7 @@ public sealed class MarketAcquisitionWorkbenchCompositionWindow : Window, IDispo
     private Vector2 anchorPosition;
     private Vector2 anchorSize;
     private Vector2 windowSize = new(680, 420);
+    private DalamudOwnedWindowSurface? ownerSurface;
     private bool hasAnchor;
 
     public MarketAcquisitionWorkbenchCompositionWindow(
@@ -35,10 +36,11 @@ public sealed class MarketAcquisitionWorkbenchCompositionWindow : Window, IDispo
 
     public void ToggleOpen() => IsOpen = activation.Toggle(IsOpen);
 
-    public void AnchorTo(Vector2 position, Vector2 size)
+    public void AnchorTo(Vector2 position, Vector2 size, DalamudOwnedWindowSurface owner)
     {
         anchorPosition = position;
         anchorSize = size;
+        ownerSurface = owner;
         hasAnchor = size.X > 0f && size.Y > 0f;
     }
 
@@ -61,12 +63,13 @@ public sealed class MarketAcquisitionWorkbenchCompositionWindow : Window, IDispo
             viewport.WorkPos,
             viewport.WorkSize,
             gap);
-        ImGui.SetNextWindowViewport(viewport.ID);
+        ownerSurface?.ApplyToNextWindow();
         ImGui.SetNextWindowPos(placement.Position, ImGuiCond.Always);
     }
 
     public override void Draw()
     {
+        ownerSurface?.KeepCurrentWindowAboveOwner();
         windowSize = ImGui.GetWindowSize();
         panel.Draw(createContext());
     }
