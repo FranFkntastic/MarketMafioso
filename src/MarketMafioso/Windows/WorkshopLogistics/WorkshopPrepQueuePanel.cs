@@ -20,11 +20,14 @@ internal sealed class WorkshopPrepQueuePanel
     private readonly Action<string> setWorkshopStatus;
     private readonly Action openProjectBrowser;
     private readonly Action openFrozenQueueBrowser;
+    private readonly Func<bool> tradeQueueHasItems;
+    private readonly Func<IReadOnlyList<WorkshopMaterialAvailability>, string> replaceTradeQueue;
     private readonly IPluginLog log;
 
     private bool confirmViwiClear = false;
     private bool confirmNewWorkshopQueue = false;
     private bool confirmLoadFrozenQueue = false;
+    private bool confirmTradeQueueReplace = false;
     private Guid? selectedFrozenQueueId;
     private string frozenQueueNameInput = string.Empty;
 
@@ -39,6 +42,8 @@ internal sealed class WorkshopPrepQueuePanel
         Action<string> setWorkshopStatus,
         Action openProjectBrowser,
         Action openFrozenQueueBrowser,
+        Func<bool> tradeQueueHasItems,
+        Func<IReadOnlyList<WorkshopMaterialAvailability>, string> replaceTradeQueue,
         IPluginLog log)
     {
         this.config = config ?? throw new ArgumentNullException(nameof(config));
@@ -51,6 +56,8 @@ internal sealed class WorkshopPrepQueuePanel
         this.setWorkshopStatus = setWorkshopStatus ?? throw new ArgumentNullException(nameof(setWorkshopStatus));
         this.openProjectBrowser = openProjectBrowser ?? throw new ArgumentNullException(nameof(openProjectBrowser));
         this.openFrozenQueueBrowser = openFrozenQueueBrowser ?? throw new ArgumentNullException(nameof(openFrozenQueueBrowser));
+        this.tradeQueueHasItems = tradeQueueHasItems ?? throw new ArgumentNullException(nameof(tradeQueueHasItems));
+        this.replaceTradeQueue = replaceTradeQueue ?? throw new ArgumentNullException(nameof(replaceTradeQueue));
         this.log = log ?? throw new ArgumentNullException(nameof(log));
     }
 
@@ -76,10 +83,27 @@ internal sealed class WorkshopPrepQueuePanel
         var hasPrepQueue = config.WorkshopPrepQueue.Count > 0;
 
         if (config.WorkshopPrepQueue.Count == 0)
+        {
             confirmViwiClear = false;
+            confirmTradeQueueReplace = false;
+        }
 
         if (!confirmViwiClear)
+        {
+            if (confirmTradeQueueReplace)
+            {
+                ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Replace every existing Trade Queue item with available workshop materials?");
+                if (ImGuiUi.Button("Confirm Trade Queue Replace", hasPrepQueue))
+                {
+                    setWorkshopStatus(replaceTradeQueue(getWorkshopAvailability()));
+                    confirmTradeQueueReplace = false;
+                }
+                ImGui.SameLine();
+                if (ImGui.Button("Cancel Trade Queue Replace"))
+                    confirmTradeQueueReplace = false;
+            }
             return;
+        }
 
         ImGui.TextColored(MarketMafiosoUiTheme.Muted, "This will clear VIWI Workshoppa's queue and send the MarketMafioso prep queue.");
 
@@ -172,6 +196,14 @@ internal sealed class WorkshopPrepQueuePanel
             if (ImGuiUi.MenuItem("Send to VIWI", hasPrepQueue && CanEditQueue))
                 confirmViwiClear = true;
 
+            if (ImGuiUi.MenuItem("Replace Trade Queue with Available Materials", hasPrepQueue))
+            {
+                if (tradeQueueHasItems())
+                    confirmTradeQueueReplace = true;
+                else
+                    setWorkshopStatus(replaceTradeQueue(getWorkshopAvailability()));
+            }
+
             ImGui.EndPopup();
         }
 
@@ -183,6 +215,9 @@ internal sealed class WorkshopPrepQueuePanel
         {
             if (ImGuiUi.MenuItem("Copy Artisan Manifest", hasPrepQueue))
                 CopyWorkshopArtisanManifest();
+
+            if (ImGuiUi.MenuItem("Copy Artisan Manifest with Subcrafts", hasPrepQueue))
+                CopyWorkshopArtisanManifestWithSubcrafts();
 
             if (ImGuiUi.MenuItem("Copy Craft Architect Plan", hasPrepQueue))
                 CopyWorkshopCraftArchitectPlan();
@@ -421,6 +456,16 @@ internal sealed class WorkshopPrepQueuePanel
     private void CopyWorkshopCraftArchitectPlan()
     {
         CopyWorkshopManifest(WorkshopMaterialManifestExportService.ExportCraftArchitectPlan(
+            config.WorkshopPrepQueue,
+            workshopCatalog.GetProjects(),
+            getWorkshopAvailability(),
+            WorkshopMaterialManifestQuantityMode.InventoryMissing,
+            DateTime.UtcNow));
+    }
+
+    private void CopyWorkshopArtisanManifestWithSubcrafts()
+    {
+        CopyWorkshopManifest(workshopMaterialManifestExport.ExportArtisanManifestWithSubcrafts(
             config.WorkshopPrepQueue,
             workshopCatalog.GetProjects(),
             getWorkshopAvailability(),

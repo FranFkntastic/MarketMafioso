@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Franthropy.FFXIV.Artisan;
 using MarketMafioso.WorkshopPrep;
 
 namespace MarketMafioso.SpecTests.WorkshopPrep;
@@ -103,6 +104,8 @@ public sealed class WorkshopMaterialManifestExportServiceTests
         Assert.Equal(128, expanded.Count);
         Assert.Equal(96, expanded.Count(x => x == 7001));
         Assert.Equal(32, expanded.Count(x => x == 7002));
+
+        AssertSubcraftExpansionUsesFranthropyCompatibleOrdering();
     }
 
     [Fact]
@@ -124,6 +127,57 @@ public sealed class WorkshopMaterialManifestExportServiceTests
         Assert.True(result.Success);
         Assert.Equal(1, result.ExportedCount);
         Assert.Equal(["Darksteel Ore"], result.SkippedItems);
+    }
+
+    private static void AssertSubcraftExpansionUsesFranthropyCompatibleOrdering()
+    {
+        var catalog = new FakeArtisanCatalog(
+            new Dictionary<uint, WorkshopMaterialCraftRecipe>
+            {
+                [5378] = new(7001, 1),
+            },
+            [
+                new(
+                    7001,
+                    5378,
+                    1,
+                    8,
+                    [new ArtisanRecipeIngredient(9000, 2)]),
+                new(
+                    7000,
+                    9000,
+                    3,
+                    8,
+                    []),
+            ]);
+        var availability = new[]
+        {
+            CreateAvailability()[0] with
+            {
+                Required = 2,
+                PlayerInventory = 0,
+                Shortage = 2,
+                TotalMissing = 2,
+            },
+        };
+
+        var result = WorkshopMaterialManifestExportService.ExportArtisanManifestWithSubcrafts(
+            CreateQueue(),
+            CreateProjects(),
+            availability,
+            WorkshopMaterialManifestQuantityMode.InventoryMissing,
+            new DateTime(2026, 6, 23, 21, 15, 0, DateTimeKind.Utc),
+            catalog,
+            catalog);
+
+        Assert.True(result.Success);
+        Assert.Equal("Copied Artisan manifest with subcrafts: 2 recipes.", result.Message);
+        using var document = JsonDocument.Parse(result.Content);
+        var recipes = document.RootElement.GetProperty("Recipes").EnumerateArray().ToList();
+        Assert.Equal(7000, recipes[0].GetProperty("ID").GetInt32());
+        Assert.Equal(2, recipes[0].GetProperty("Quantity").GetInt32());
+        Assert.Equal(7001, recipes[1].GetProperty("ID").GetInt32());
+        Assert.Equal(2, recipes[1].GetProperty("Quantity").GetInt32());
     }
 
     [Fact]
@@ -208,5 +262,30 @@ public sealed class WorkshopMaterialManifestExportServiceTests
             recipe = new WorkshopMaterialCraftRecipe(0, 1);
             return false;
         }
+    }
+
+    private sealed class FakeArtisanCatalog(
+        IReadOnlyDictionary<uint, WorkshopMaterialCraftRecipe> materialRecipes,
+        IReadOnlyList<ArtisanRecipeDefinition> recipes) :
+        IWorkshopMaterialCraftRecipeResolver,
+        IArtisanRecipeCatalog
+    {
+        public bool TryResolveCraftRecipe(uint itemId, out WorkshopMaterialCraftRecipe recipe)
+        {
+            if (materialRecipes.TryGetValue(itemId, out recipe!))
+                return true;
+            recipe = new(0, 1);
+            return false;
+        }
+
+        public ArtisanRecipeDefinition? FindByRecipeId(uint recipeId) =>
+            recipes.FirstOrDefault(recipe => recipe.RecipeId == recipeId);
+
+        public ArtisanRecipeDefinition? FindForResult(uint itemId, uint? preferredCraftTypeId = null) =>
+            recipes.FirstOrDefault(recipe =>
+                recipe.ResultItemId == itemId &&
+                preferredCraftTypeId is not null &&
+                recipe.CraftTypeId == preferredCraftTypeId) ??
+            recipes.FirstOrDefault(recipe => recipe.ResultItemId == itemId);
     }
 }

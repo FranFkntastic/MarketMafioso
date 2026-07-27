@@ -20,7 +20,9 @@ using MarketMafioso.Windows.Main;
 using MarketMafioso.Windows.MarketAcquisitionPanels;
 using MarketMafioso.Windows.MarketAcquisitionRequestBuilder;
 using MarketMafioso.Windows.WorkshopLogistics;
+using MarketMafioso.Windows.TradeQueue;
 using MarketMafioso.MarketAcquisition.ExactAuthority;
+using MarketMafioso.TradeQueue;
 using MarketMafioso.WorkshopPrep;
 using MarketMafioso.Diagnostics;
 using MarketMafioso.MarketDiagnostics;
@@ -70,6 +72,7 @@ public class MainWindow : Window, IDisposable
     private readonly WorkshopMaterialPanel workshopMaterials;
     private readonly WorkshopAssemblyPanel workshopAssembly;
     private readonly WorkshopQuartermasterRequestService workshopQuartermasterRequest;
+    private readonly TradeQueuePanel tradeQueuePanel;
     public AgentBridgeUiReviewRegistry AgentReviewRegistry { get; } = new();
 
     private readonly WorkshopProjectSelectionState workshopProjectSelection = new();
@@ -88,7 +91,7 @@ public class MainWindow : Window, IDisposable
     public MarketMafiosoCaptureRegion? AgentCaptureRegion { get; private set; }
     public AgentBridgeUiCaptureTransactionManager AgentCaptureTransactions { get; }
 
-    private const string ProductSummary = "Workshop logistics and self-hosted inventory history.";
+    private const string ProductSummary = "Workshop logistics, direct trade handoff, and self-hosted inventory history.";
     private const string WorkshopLogisticsModuleSummary = "Workshop Logistics tracks company workshop jobs, material shortages, Quartermaster requests, handoff, and assembly.";
 
     internal static readonly Vector4 ColHeader = MarketMafiosoUiTheme.Header;
@@ -107,6 +110,8 @@ public class MainWindow : Window, IDisposable
         VIWIWorkshoppaIpc viwiWorkshoppaIpc,
         WorkshopAssemblyRunner workshopAssemblyRunner,
         WorkshopMaterialManifestExportService workshopMaterialManifestExport,
+        TradeQueueRunner tradeQueueRunner,
+        ITradeQueueIo tradeQueueIo,
         IDataManager dataManager,
         IPlayerState playerState,
         MarketBoardApproachService marketBoardApproachService,
@@ -295,6 +300,11 @@ public class MainWindow : Window, IDisposable
             config,
             quartermaster,
             config.Save);
+        tradeQueuePanel = new TradeQueuePanel(
+            config,
+            tradeQueueRunner,
+            tradeQueueIo,
+            dataManager);
         WorkshopProjectBrowserWindow? projectBrowser = null;
         WorkshopFrozenQueueBrowserWindow? frozenQueueBrowser = null;
         workshopPrepQueue = new WorkshopPrepQueuePanel(
@@ -308,6 +318,8 @@ public class MainWindow : Window, IDisposable
             status => workshopStatus = status,
             () => projectBrowser!.OpenAndFocus(),
             () => frozenQueueBrowser!.OpenAndFocus(),
+            () => tradeQueuePanel.HasItems,
+            tradeQueuePanel.ReplaceWithWorkshopMaterials,
             log);
         workshopMaterials = new WorkshopMaterialPanel(
             quartermaster,
@@ -634,6 +646,12 @@ public class MainWindow : Window, IDisposable
                     ImGui.EndTabItem();
                 }
 
+                if (ImGui.BeginTabItem("Trade Queue", GetAgentTabFlags("Trade Queue")))
+                {
+                    tradeQueuePanel.Draw();
+                    ImGui.EndTabItem();
+                }
+
                 if (IsMarketAcquisitionUnlocked() && ImGui.BeginTabItem("Market Acquisition", GetAgentTabFlags("Market Acquisition")))
                 {
                     DrawMarketAcquisitionTab();
@@ -763,7 +781,7 @@ public class MainWindow : Window, IDisposable
 
         var allowed = mainTab switch
         {
-            "Squire" or "Workshop Logistics" or "Settings" or "Status" => true,
+            "Squire" or "Workshop Logistics" or "Trade Queue" or "Settings" or "Status" => true,
             "Diagnostics" => true,
             "Market Acquisition" => IsMarketAcquisitionUnlocked(),
             "Remote Market" => IsMarketAcquisitionUnlocked(),
@@ -888,8 +906,8 @@ public class MainWindow : Window, IDisposable
         ImGui.TextColored(
             ColMuted,
             IsMarketAcquisitionUnlocked()
-                ? "Utilities: Squire, Workshop Logistics, Market Acquisition. Inventory reporting lives under Settings."
-                : "Utilities: Squire and Workshop Logistics. Inventory reporting lives under Settings.");
+                ? "Utilities: Squire, Workshop Logistics, Trade Queue, Market Acquisition. Inventory reporting lives under Settings."
+                : "Utilities: Squire, Workshop Logistics, and Trade Queue. Inventory reporting lives under Settings.");
     }
 
     private void DrawWorkshopPrepTab()
@@ -1865,6 +1883,7 @@ public class MainWindow : Window, IDisposable
             return ColError;
         if (workshopStatus.Contains("copied", StringComparison.OrdinalIgnoreCase) ||
             workshopStatus.Contains("sent", StringComparison.OrdinalIgnoreCase) ||
+            workshopStatus.Contains("replaced", StringComparison.OrdinalIgnoreCase) ||
             workshopStatus.Contains("added", StringComparison.OrdinalIgnoreCase) ||
             workshopStatus.Contains("cleared", StringComparison.OrdinalIgnoreCase) ||
             workshopStatus.Contains("removed", StringComparison.OrdinalIgnoreCase))

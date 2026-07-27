@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
 using Dalamud.Plugin.Services;
+using Franthropy.FFXIV.Artisan;
 using Lumina.Excel.Sheets;
 
 namespace MarketMafioso.WorkshopPrep;
@@ -58,6 +59,34 @@ public sealed class WorkshopMaterialManifestExportService
         DateTime exportedAt)
     {
         return ExportArtisanManifest(queue, projects, availability, quantityMode, exportedAt, recipeResolver);
+    }
+
+    public WorkshopMaterialManifestExportResult ExportArtisanManifestWithSubcrafts(
+        IReadOnlyList<WorkshopPrepQueueItem> queue,
+        IReadOnlyList<WorkshopProjectDefinition> projects,
+        IReadOnlyList<WorkshopMaterialAvailability> availability,
+        WorkshopMaterialManifestQuantityMode quantityMode,
+        DateTime exportedAt)
+    {
+        if (recipeResolver is not IArtisanRecipeCatalog catalog)
+        {
+            return new(
+                false,
+                WorkshopMaterialManifestExportSeverity.Error,
+                "Artisan subcraft export is unavailable because the recipe catalog is incomplete.",
+                string.Empty,
+                0,
+                []);
+        }
+
+        return ExportArtisanManifestWithSubcrafts(
+            queue,
+            projects,
+            availability,
+            quantityMode,
+            exportedAt,
+            recipeResolver,
+            catalog);
     }
 
     public static WorkshopMaterialManifestExportResult ExportCraftArchitectPlan(
@@ -148,6 +177,78 @@ public sealed class WorkshopMaterialManifestExportService
             artisanExport.Json,
             artisanExport.RecipeCount,
             skipped);
+    }
+
+    public static WorkshopMaterialManifestExportResult ExportArtisanManifestWithSubcrafts(
+        IReadOnlyList<WorkshopPrepQueueItem> queue,
+        IReadOnlyList<WorkshopProjectDefinition> projects,
+        IReadOnlyList<WorkshopMaterialAvailability> availability,
+        WorkshopMaterialManifestQuantityMode quantityMode,
+        DateTime exportedAt,
+        IWorkshopMaterialCraftRecipeResolver recipeResolver,
+        IArtisanRecipeCatalog catalog)
+    {
+        ArgumentNullException.ThrowIfNull(recipeResolver);
+        ArgumentNullException.ThrowIfNull(catalog);
+        var materials = BuildExportMaterials(availability, quantityMode);
+        if (materials.Count == 0)
+            return Info("No missing workshop materials to export.");
+
+        var skipped = new List<string>();
+        var roots = new List<ArtisanRecipeQuantity>();
+        foreach (var material in materials)
+        {
+            if (!recipeResolver.TryResolveCraftRecipe(material.ItemId, out var recipe))
+            {
+                skipped.Add(material.ItemName);
+                continue;
+            }
+
+            roots.Add(new(
+                recipe.RecipeId,
+                (int)Math.Ceiling((double)GetExportQuantity(material, quantityMode) / Math.Max(1, recipe.Yield))));
+        }
+
+        if (roots.Count == 0)
+        {
+            return new(
+                false,
+                WorkshopMaterialManifestExportSeverity.Warning,
+                $"No craftable missing workshop materials were available for Artisan subcraft export. Skipped {skipped.Count}.",
+                string.Empty,
+                0,
+                skipped);
+        }
+
+        try
+        {
+            var expanded = ArtisanCompatibleSubcraftExpansion.Expand(roots, catalog);
+            var artisanExport = ArtisanCraftingListExport.Create(
+                BuildExportName(queue, projects, quantityMode, exportedAt),
+                expanded.Recipes.Select(recipe => new ArtisanCraftingListRecipeRequest(
+                    recipe.RecipeId,
+                    recipe.CraftCount)));
+            var message = skipped.Count == 0
+                ? $"Copied Artisan manifest with subcrafts: {artisanExport.RecipeCount} recipes."
+                : $"Copied Artisan manifest with subcrafts: {artisanExport.RecipeCount} recipes. Skipped {skipped.Count} non-craftable materials: {FormatSkippedItems(skipped)}.";
+            return new(
+                true,
+                skipped.Count == 0 ? WorkshopMaterialManifestExportSeverity.Success : WorkshopMaterialManifestExportSeverity.Warning,
+                message,
+                artisanExport.Json,
+                artisanExport.RecipeCount,
+                skipped);
+        }
+        catch (Exception exception)
+        {
+            return new(
+                false,
+                WorkshopMaterialManifestExportSeverity.Error,
+                $"Unable to build the Artisan subcraft graph: {exception.Message}",
+                string.Empty,
+                0,
+                skipped);
+        }
     }
 
     private static WorkshopMaterialManifestExportResult Info(string message)
@@ -325,28 +426,62 @@ public sealed class WorkshopMaterialManifestExportService
 
 }
 
-public sealed class LuminaWorkshopMaterialCraftRecipeResolver : IWorkshopMaterialCraftRecipeResolver
+public sealed class LuminaWorkshopMaterialCraftRecipeResolver :
+    IWorkshopMaterialCraftRecipeResolver,
+    IArtisanRecipeCatalog
 {
-    private readonly IDataManager dataManager;
+    private readonly IReadOnlyList<ArtisanRecipeDefinition> recipes;
+    private readonly IReadOnlyDictionary<uint, ArtisanRecipeDefinition> recipesById;
 
     public LuminaWorkshopMaterialCraftRecipeResolver(IDataManager dataManager)
     {
-        this.dataManager = dataManager;
+        recipes = dataManager.GetExcelSheet<Recipe>()
+            .Where(row => row.RowId > 0 && row.ItemResult.RowId > 0)
+            .OrderBy(row => row.RowId)
+            .Select(ToDefinition)
+            .ToList();
+        recipesById = recipes.ToDictionary(recipe => recipe.RecipeId);
     }
 
     public bool TryResolveCraftRecipe(uint itemId, out WorkshopMaterialCraftRecipe recipe)
     {
-        var row = dataManager.GetExcelSheet<Recipe>()
-            .Where(x => x.RowId > 0 && x.ItemResult.RowId == itemId)
-            .OrderBy(x => x.RowId)
-            .FirstOrDefault();
-        if (row.RowId == 0)
+        var row = recipes.FirstOrDefault(value => value.ResultItemId == itemId);
+        if (row is null)
         {
             recipe = new WorkshopMaterialCraftRecipe(0, 1);
             return false;
         }
 
-        recipe = new WorkshopMaterialCraftRecipe(row.RowId, Math.Max(1, (int)row.AmountResult));
+        recipe = new WorkshopMaterialCraftRecipe(row.RecipeId, row.Yield);
         return true;
+    }
+
+    public ArtisanRecipeDefinition? FindByRecipeId(uint recipeId) =>
+        recipesById.GetValueOrDefault(recipeId);
+
+    public ArtisanRecipeDefinition? FindForResult(uint itemId, uint? preferredCraftTypeId = null) =>
+        recipes.FirstOrDefault(recipe =>
+            recipe.ResultItemId == itemId &&
+            preferredCraftTypeId is not null &&
+            recipe.CraftTypeId == preferredCraftTypeId) ??
+        recipes.FirstOrDefault(recipe => recipe.ResultItemId == itemId);
+
+    private static ArtisanRecipeDefinition ToDefinition(Recipe row)
+    {
+        var ingredients = new List<ArtisanRecipeIngredient>();
+        for (var index = 0; index < row.Ingredient.Count; index++)
+        {
+            var itemId = row.Ingredient[index].RowId;
+            var quantity = row.AmountIngredient[index];
+            if (itemId > 0 && quantity > 0)
+                ingredients.Add(new(itemId, quantity));
+        }
+
+        return new(
+            row.RowId,
+            row.ItemResult.RowId,
+            Math.Max(1, (int)row.AmountResult),
+            row.CraftType.RowId,
+            ingredients);
     }
 }

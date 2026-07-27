@@ -21,11 +21,13 @@ internal sealed class DalamudPluginDataStore(IDalamudPluginInterface pluginInter
 public sealed class ExternalAutomationCoordinator : IDisposable
 {
     private const string TextAdvanceStopRequests = "TextAdvance.StopRequests";
+    private const string YesAlreadyStopRequests = "YesAlready.StopRequests";
     private const string StopRequestOwner = "MarketMafioso";
 
     private readonly IPluginDataStore pluginDataStore;
     private readonly IPluginLog log;
     private bool textAdvanceSuppressed;
+    private bool tradeAutoConfirmSuppressed;
 
     internal ExternalAutomationCoordinator(IPluginDataStore pluginDataStore, IPluginLog log)
     {
@@ -56,5 +58,32 @@ public sealed class ExternalAutomationCoordinator : IDisposable
         textAdvanceSuppressed = false;
     }
 
-    public void Dispose() => RestoreTextAdvance();
+    public void SuppressTradeAutoConfirm()
+    {
+        if (!pluginDataStore.TryGetData<HashSet<string>>(YesAlreadyStopRequests, out var stopRequests) || stopRequests == null)
+            return;
+
+        if (stopRequests.Add(StopRequestOwner))
+        {
+            tradeAutoConfirmSuppressed = true;
+            log.Debug("[MarketMafioso] Temporarily paused YesAlready during Trade Queue execution.");
+        }
+    }
+
+    public void RestoreTradeAutoConfirm()
+    {
+        if (!tradeAutoConfirmSuppressed)
+            return;
+
+        if (pluginDataStore.TryGetData<HashSet<string>>(YesAlreadyStopRequests, out var stopRequests) && stopRequests?.Remove(StopRequestOwner) == true)
+            log.Debug("[MarketMafioso] Restored YesAlready after Trade Queue execution.");
+
+        tradeAutoConfirmSuppressed = false;
+    }
+
+    public void Dispose()
+    {
+        RestoreTextAdvance();
+        RestoreTradeAutoConfirm();
+    }
 }
