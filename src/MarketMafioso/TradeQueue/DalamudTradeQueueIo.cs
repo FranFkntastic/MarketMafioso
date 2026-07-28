@@ -13,6 +13,7 @@ using FFXIVClientStructs.FFXIV.Client.UI;
 using FFXIVClientStructs.FFXIV.Client.UI.Agent;
 using FFXIVClientStructs.FFXIV.Component.GUI;
 using Lumina.Excel.Sheets;
+using MarketMafioso.Automation.Runtime;
 
 namespace MarketMafioso.TradeQueue;
 
@@ -39,6 +40,8 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo
     private const string SelectYesNoAddon = "SelectYesno";
     private const uint TradeInventoryContainerId = 2005;
     private const uint TradeConfirmationAddonRowId = 102223;
+    private const string ApprovedGameVersion = "2026.06.18.0000.0000";
+    private const string PatchContractId = "mmf.trade-ui-and-offer-command";
     private const string OfferItemTradeSignature =
         "48 89 6C 24 ?? 48 89 74 24 ?? 57 48 83 EC 30 83 B9 ?? ?? ?? ?? ?? 41 8B F0";
 
@@ -60,6 +63,7 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo
     private readonly IReadOnlyDictionary<uint, string> itemNames;
     private readonly string tradeConfirmationText;
     private OfferItemTradeDelegate? offerItemTrade;
+    private bool patchBlockLogged;
 
     public DalamudTradeQueueIo(
         IGameGui gameGui,
@@ -193,6 +197,9 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo
 
     public bool TryOpenTrade(TradeQueuePartner partner)
     {
+        if (!TryAuthorizePatchContract(out _))
+            return false;
+
         if (!FocusPartnerMatches(partner) || targetManager.FocusTarget is not IPlayerCharacter player)
             return false;
 
@@ -208,7 +215,9 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo
 
     public unsafe bool TryOpenGilInput(out string error)
     {
-        error = string.Empty;
+        if (!TryAuthorizePatchContract(out error))
+            return false;
+
         var addon = gameGui.GetAddonByName<AtkUnitBase>(TradeAddon, 1);
         if (!IsReady(addon))
             return false;
@@ -228,7 +237,9 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo
 
     public unsafe bool TryOfferItem(TradeQueueBatchLine line, out string error)
     {
-        error = string.Empty;
+        if (!TryAuthorizePatchContract(out error))
+            return false;
+
         var inventoryManager = InventoryManager.Instance();
         if (inventoryManager == null)
         {
@@ -278,7 +289,9 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo
 
     public unsafe bool TrySubmitQuantity(int quantity, out string error)
     {
-        error = string.Empty;
+        if (!TryAuthorizePatchContract(out error))
+            return false;
+
         var addon = gameGui.GetAddonByName<AtkUnitBase>(NumericInputAddon, 1);
         if (!IsReady(addon))
             return false;
@@ -301,7 +314,9 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo
 
     public unsafe bool TryClickReady(out string error)
     {
-        error = string.Empty;
+        if (!TryAuthorizePatchContract(out error))
+            return false;
+
         var addon = gameGui.GetAddonByName<AtkUnitBase>(TradeAddon, 1);
         if (!IsReady(addon) || addon->UldManager.NodeListCount <= 3)
             return false;
@@ -317,7 +332,9 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo
 
     public unsafe bool TryConfirmTrade(out string error)
     {
-        error = string.Empty;
+        if (!TryAuthorizePatchContract(out error))
+            return false;
+
         var addon = gameGui.GetAddonByName<AddonSelectYesno>(SelectYesNoAddon, 1);
         if (addon == null || !IsReady(&addon->AtkUnitBase))
             return false;
@@ -335,6 +352,25 @@ public sealed class DalamudTradeQueueIo : ITradeQueueIo
 
     private static unsafe bool IsReady(AtkUnitBase* addon) =>
         addon != null && addon->IsReady && addon->IsVisible;
+
+    private bool TryAuthorizePatchContract(out string error)
+    {
+        var compatibility = GamePatchCompatibilityGate.Evaluate(PatchContractId, ApprovedGameVersion);
+        if (compatibility.IsApproved)
+        {
+            error = string.Empty;
+            return true;
+        }
+
+        error = compatibility.Message;
+        if (!patchBlockLogged)
+        {
+            patchBlockLogged = true;
+            log.Warning("[MarketMafioso] {Message}", compatibility.Message);
+        }
+
+        return false;
+    }
 
     private delegate void OfferItemTradeDelegate(nint tradeAddress, ushort slot, InventoryType inventoryType);
 }

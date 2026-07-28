@@ -8,12 +8,15 @@ using Dalamud.Plugin.Services;
 using FFXIVClientStructs.FFXIV.Client.UI;
 using FFXIVClientStructs.FFXIV.Client.UI.Agent;
 using FFXIVClientStructs.FFXIV.Client.UI.Info;
+using MarketMafioso.Automation.Runtime;
 
 namespace MarketMafioso.MarketDiagnostics;
 
 internal sealed class RemoteMarketAccessProbe : IDisposable
 {
     private static readonly TimeSpan ProbeWindow = TimeSpan.FromSeconds(120);
+    private const string ApprovedGameVersion = "2026.06.18.0000.0000";
+    private const string PatchContractId = "mmf.remote-market-send-purchase";
 
     private readonly Configuration configuration;
     private readonly IMarketBoard marketBoard;
@@ -223,6 +226,9 @@ internal sealed class RemoteMarketAccessProbe : IDisposable
     {
         if (session is null)
             return "Arm the probe first.";
+        var compatibility = GamePatchCompatibilityGate.Evaluate(PatchContractId, ApprovedGameVersion);
+        if (!compatibility.IsApproved)
+            return compatibility.Message;
         if (session.PurchaseRequestSent && !session.PurchaseResponseReceived)
             return "A purchase response is still pending.";
         if (listingCount == 0)

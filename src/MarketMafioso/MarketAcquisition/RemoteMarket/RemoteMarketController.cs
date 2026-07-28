@@ -110,8 +110,7 @@ internal sealed class RemoteMarketController : IDisposable
 
     public bool IsAvailable =>
         MarketAcquisitionUnlock.IsUnlocked(configuration) &&
-        configuration.EnableRemoteMarketPurchase &&
-        nativePurchaseGuard.IsAvailable;
+        configuration.EnableRemoteMarketPurchase;
 
     public void Dispose()
     {
@@ -192,7 +191,7 @@ internal sealed class RemoteMarketController : IDisposable
 
     public unsafe string RunNativePurchaseGuardSelfTest()
     {
-        if (!IsAvailable)
+        if (!IsAvailable || !nativePurchaseGuard.IsAvailable)
             return "Native-purchase guard is unavailable.";
         if (!nativePurchaseGuard.IsRemoteSessionActive)
             return "Open the board through MMF before testing the native-purchase guard.";
