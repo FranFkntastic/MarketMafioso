@@ -60,7 +60,7 @@ internal sealed class WorkshopMaterialPanel
         {
             ImGui.TextColored(GetQuartermasterStatusColor(), DescribeQuartermasterStatus());
         }
-        var visibleStatus = run?.Message ?? actionStatus;
+        var visibleStatus = run is null ? actionStatus : DescribeRunStatus(run);
         if (!string.IsNullOrWhiteSpace(visibleStatus))
             ImGui.TextColored(RunStatusColor(run), visibleStatus);
 
@@ -175,7 +175,10 @@ internal sealed class WorkshopMaterialPanel
             DrawQuantity(line);
             ImGui.TableNextColumn();
             if (activeLine is not null)
-                ImGui.TextColored(LineStatusColor(activeLine.Status), activeLine.Status);
+            {
+                var status = RunStatusForLine(activeLine, runner.ActiveRun);
+                ImGui.TextColored(LineStatusColor(status), status);
+            }
             else if (line.SelectedCandidate is not null)
                 ImGui.TextUnformatted($"{line.ApprovedGil:N0} gil");
             else
@@ -409,6 +412,28 @@ internal sealed class WorkshopMaterialPanel
         GetQuartermasterStatusColor() == MarketMafiosoUiTheme.Error
             ? "Retainer retrieval is temporarily unavailable. Vendor restock can still continue."
             : quartermaster.LastStatus;
+
+    private static string DescribeRunStatus(PersistedWorkshopVendorRestockRun run)
+    {
+        if (run.Phase != WorkshopVendorRestockPhase.Failed ||
+            !run.Message.Contains("expected shop did not become available", StringComparison.OrdinalIgnoreCase))
+        {
+            return run.Message;
+        }
+
+        var vendor = run.Stops.FirstOrDefault()?.NpcName ?? "the vendor";
+        return run.Receipts.Count == 0
+            ? $"Couldn't reach {vendor}. No gil was spent. Start again to rebuild the route."
+            : $"Couldn't reach {vendor}. Earlier verified purchases were preserved. Start again to rebuild the route.";
+    }
+
+    private static string RunStatusForLine(
+        PersistedWorkshopVendorRestockLine line,
+        PersistedWorkshopVendorRestockRun? run) =>
+        run?.Phase == WorkshopVendorRestockPhase.Failed &&
+        line.Status.Equals("Waiting", StringComparison.OrdinalIgnoreCase)
+            ? "Not bought"
+            : line.Status;
 
     private System.Numerics.Vector4 GetQuartermasterStatusColor() =>
         quartermaster.LastStatus.Contains("unavailable", StringComparison.OrdinalIgnoreCase) ||
