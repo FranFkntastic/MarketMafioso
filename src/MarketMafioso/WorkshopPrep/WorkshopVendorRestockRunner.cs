@@ -338,10 +338,7 @@ public sealed class WorkshopVendorRestockRunner : IDisposable
         var quantities = RemainingPurchaseQuantities(run);
         if (quantities.Count == 0)
         {
-            var remainingLines = run.Lines.Count(line => line.LivePlayerQuantity < line.RequiredQuantity);
-            Complete(remainingLines == 0
-                ? "Workshop materials are ready."
-                : $"Reviewed restock completed with {remainingLines:N0} material line(s) still beyond the approved ceilings.");
+            Complete("Reviewed restock complete.");
             return;
         }
         if (snapshot.Gil is null)

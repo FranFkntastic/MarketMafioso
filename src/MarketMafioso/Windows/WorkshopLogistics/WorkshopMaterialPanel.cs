@@ -60,7 +60,7 @@ internal sealed class WorkshopMaterialPanel
         {
             ImGui.TextColored(GetQuartermasterStatusColor(), DescribeQuartermasterStatus());
         }
-        var visibleStatus = run is null ? actionStatus : DescribeRunStatus(run);
+        var visibleStatus = run is null ? actionStatus : DescribeRunStatus(run, review);
         if (!string.IsNullOrWhiteSpace(visibleStatus))
             ImGui.TextColored(RunStatusColor(run), visibleStatus);
 
@@ -405,7 +405,9 @@ internal sealed class WorkshopMaterialPanel
             return $"Buy {review.VendorUnits:N0} items · up to {review.MaximumGil:N0} gil";
         if (review.RetainerUnits > 0)
             return $"Retrieve {review.RetainerUnits:N0} from retainers";
-        return "Materials Ready";
+        return review.Materials.Any(line => line.Availability.Shortage > 0)
+            ? "No Automatic Restock"
+            : "Materials Ready";
     }
 
     private string DescribeQuartermasterStatus() =>
@@ -413,8 +415,17 @@ internal sealed class WorkshopMaterialPanel
             ? "Retainer retrieval is temporarily unavailable. Vendor restock can still continue."
             : quartermaster.LastStatus;
 
-    private static string DescribeRunStatus(PersistedWorkshopVendorRestockRun run)
+    private static string DescribeRunStatus(
+        PersistedWorkshopVendorRestockRun run,
+        WorkshopVendorRestockReview review)
     {
+        if (run.Phase == WorkshopVendorRestockPhase.Completed)
+        {
+            var remainingLines = review.Materials.Count(line => line.Availability.Shortage > 0);
+            return remainingLines == 0
+                ? "Workshop materials are ready."
+                : $"Vendor purchases complete. {remainingLines:N0} material line(s) still need another source.";
+        }
         if (run.Phase != WorkshopVendorRestockPhase.Failed ||
             !run.Message.Contains("expected shop did not become available", StringComparison.OrdinalIgnoreCase))
         {
