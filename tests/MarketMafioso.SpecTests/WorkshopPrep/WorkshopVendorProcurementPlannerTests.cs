@@ -1,4 +1,5 @@
 using Franthropy.Dalamud.Automation.Vendors;
+using MarketMafioso.Windows.WorkshopLogistics;
 using MarketMafioso.WorkshopPrep;
 using System.Numerics;
 
@@ -61,6 +62,8 @@ public sealed class WorkshopVendorProcurementPlannerTests
         Assert.Equal(7, review.RetainerUnits);
         Assert.Equal(20, review.VendorUnits);
         Assert.Equal(250UL, review.MaximumGil);
+        Assert.Equal("Restock 27", WorkshopMaterialPanel.BuildActionLabel(review, automatic: true));
+        Assert.Equal("Retrieve 7", WorkshopMaterialPanel.BuildActionLabel(review, automatic: false));
     }
 
     private void Planner_clamps_edited_quantity_to_post_retainer_need()

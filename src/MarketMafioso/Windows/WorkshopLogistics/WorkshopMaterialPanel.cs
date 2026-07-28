@@ -22,7 +22,7 @@ internal sealed class WorkshopMaterialPanel
     private readonly Func<QuartermasterOwnerScope> getOwnerScope;
     private readonly AgentBridgeUiReviewRegistry reviewRegistry;
     private string searchText = string.Empty;
-    private bool shortagesOnly = true;
+    private bool shortagesOnly;
     private string? actionStatus;
 
     public WorkshopMaterialPanel(
@@ -47,19 +47,11 @@ internal sealed class WorkshopMaterialPanel
     {
         availability ??= getAvailability();
         var review = BuildReview(availability);
-        ImGuiUi.SectionHeaderWithActions(
-            "Materials",
-            MarketMafiosoUiTheme.Header,
-            () => DrawHeaderActions(review),
-            430);
+        ImGuiUi.SectionHeader("Materials", MarketMafiosoUiTheme.Header);
 
         var run = runner.ActiveRun;
-        if (review.RetainerUnits > 0 &&
-            !string.IsNullOrWhiteSpace(quartermaster.LastStatus) &&
-            !quartermaster.LastStatus.Contains("has not been queried", StringComparison.OrdinalIgnoreCase))
-        {
-            ImGui.TextColored(GetQuartermasterStatusColor(), DescribeQuartermasterStatus());
-        }
+        if (GetQuartermasterStatusColor() == MarketMafiosoUiTheme.Error)
+            ImGui.TextColored(MarketMafiosoUiTheme.Error, DescribeQuartermasterStatus());
         var visibleStatus = run is null
             ? actionStatus
             : WorkshopVendorRestockPresentation.Describe(run, review);
@@ -90,6 +82,12 @@ internal sealed class WorkshopMaterialPanel
                 config.AutomaticallyBuyWorkshopVendorMaterials = !config.AutomaticallyBuyWorkshopVendorMaterials;
                 config.Save();
             });
+        var actionWidth = GetActionWidth(review);
+        if (actionWidth > 0)
+        {
+            ImGuiUi.SameLineRight(actionWidth);
+            DrawHeaderActions(review);
+        }
 
         ImGui.SetNextItemWidth(Math.Max(220f, ImGui.GetContentRegionAvail().X - 300f));
         ImGui.InputTextWithHint("##workshopMaterialSearch", "Filter materials...", ref searchText, 128);
@@ -293,7 +291,7 @@ internal sealed class WorkshopMaterialPanel
         var active = runner.ActiveRun;
         if (runner.IsRunning)
         {
-            if (ImGuiUi.PrimaryButton("Pause Restock", true))
+            if (ImGuiUi.PrimaryButton("Pause", true))
                 runner.Pause();
             RegisterSimpleAction(
                 "workshop-logistics.vendor-restock.pause",
@@ -312,7 +310,7 @@ internal sealed class WorkshopMaterialPanel
         }
         if (active?.Phase == WorkshopVendorRestockPhase.Paused)
         {
-            if (ImGuiUi.PrimaryButton("Resume Restock", true) &&
+            if (ImGuiUi.PrimaryButton("Resume", true) &&
                 !runner.Resume(getOwnerScope(), review.QueueSignature, out var resumeError))
             {
                 actionStatus = resumeError;
@@ -346,6 +344,8 @@ internal sealed class WorkshopMaterialPanel
         var canStart = getOwnerScope().IsAvailable &&
                        (review.RetainerUnits > 0 || (automatic && review.VendorUnits > 0));
         var label = BuildActionLabel(review, automatic);
+        if (string.IsNullOrWhiteSpace(label))
+            return;
         if (ImGuiUi.PrimaryButton(label, canStart) &&
             !runner.TryStart(review, getOwnerScope(), automatic, out var startError))
         {
@@ -399,18 +399,31 @@ internal sealed class WorkshopMaterialPanel
         config.Save();
     }
 
-    private static string BuildActionLabel(WorkshopVendorRestockReview review, bool automatic)
+    internal static string BuildActionLabel(WorkshopVendorRestockReview review, bool automatic)
     {
         if (review.RetainerUnits > 0 && automatic && review.VendorUnits > 0)
-            return $"Retrieve {review.RetainerUnits:N0} + buy {review.VendorUnits:N0} · up to {review.MaximumGil:N0} gil";
+            return $"Restock {review.RetainerUnits + review.VendorUnits:N0}";
         if (automatic && review.VendorUnits > 0)
-            return $"Buy {review.VendorUnits:N0} items · up to {review.MaximumGil:N0} gil";
+            return $"Buy {review.VendorUnits:N0}";
         if (review.RetainerUnits > 0)
-            return $"Retrieve {review.RetainerUnits:N0} from retainers";
-        return review.Materials.Any(line => line.Availability.Shortage > 0)
-            ? "No Automatic Restock"
-            : "Materials Ready";
+            return $"Retrieve {review.RetainerUnits:N0}";
+        return string.Empty;
     }
+
+    private float GetActionWidth(WorkshopVendorRestockReview review)
+    {
+        var active = runner.ActiveRun;
+        if (runner.IsRunning)
+            return ButtonWidth("Pause") + ImGui.GetStyle().ItemSpacing.X + ButtonWidth("Stop");
+        if (active?.Phase == WorkshopVendorRestockPhase.Paused)
+            return ButtonWidth("Resume") + ImGui.GetStyle().ItemSpacing.X + ButtonWidth("Stop");
+
+        var label = BuildActionLabel(review, config.AutomaticallyBuyWorkshopVendorMaterials);
+        return string.IsNullOrWhiteSpace(label) ? 0 : ButtonWidth(label);
+    }
+
+    private static float ButtonWidth(string label) =>
+        ImGui.CalcTextSize(label).X + (ImGui.GetStyle().FramePadding.X * 2);
 
     private string DescribeQuartermasterStatus() =>
         GetQuartermasterStatusColor() == MarketMafiosoUiTheme.Error
