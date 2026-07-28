@@ -24,8 +24,30 @@ public sealed record AgentBridgeTruth
     public required bool WorkspaceBusy { get; init; }
     public required string? ClaimedRequestId { get; init; }
     public required string? PreparedPlanStatus { get; init; }
+    public AgentBridgeWorkshopRestockTruth? WorkshopRestock { get; init; }
     public required AgentBridgeRemoteBellProbeTruth RemoteBellProbe { get; init; }
     public required AgentBridgeRouteTruth Route { get; init; }
+}
+
+public sealed record AgentBridgeWorkshopRestockTruth
+{
+    public required string QueueSignature { get; init; }
+    public required bool AutomaticallyBuyVendorMaterials { get; init; }
+    public required int MaterialCount { get; init; }
+    public required int ShortageLineCount { get; init; }
+    public required int OrdinaryGilCatalogLineCount { get; init; }
+    public required int AccessibleVendorLineCount { get; init; }
+    public required int SelectedVendorLineCount { get; init; }
+    public required int RetainerUnits { get; init; }
+    public required int VendorUnits { get; init; }
+    public required ulong MaximumGil { get; init; }
+    public required int StopCount { get; init; }
+    public string? ActivePhase { get; init; }
+    public string? ActiveMessage { get; init; }
+    public int VerifiedReceiptCount { get; init; }
+    public int VerifiedQuantity { get; init; }
+    public ulong VerifiedGil { get; init; }
+    public uint? ArmedItemId { get; init; }
 }
 
 public sealed record AgentBridgeRemoteBellProbeTruth

@@ -483,6 +483,8 @@ public class MainWindow : Window, IDisposable
         var positionFrameOneShot = remoteSummoningBellProbe.GetPositionFrameOneShotView();
         var yieldBellProbe = remoteSummoningBellProbe.GetYieldProbeView();
         var warmBellProbe = remoteSummoningBellProbe.GetWarmSessionProbeView();
+        var workshopReview = workshopMaterials.BuildReview();
+        var workshopRun = workshopVendorRestockRunner.ActiveRun;
         return new AgentBridgeTruth
         {
             SchemaVersion = 1,
@@ -499,6 +501,28 @@ public class MainWindow : Window, IDisposable
             WorkspaceBusy = acquisitionWorkspace.IsBusy,
             ClaimedRequestId = acquisitionWorkspace.ClaimedRequest?.Id,
             PreparedPlanStatus = acquisitionWorkspace.PreparedPlan?.Status,
+            WorkshopRestock = new AgentBridgeWorkshopRestockTruth
+            {
+                QueueSignature = workshopReview.QueueSignature,
+                AutomaticallyBuyVendorMaterials = config.AutomaticallyBuyWorkshopVendorMaterials,
+                MaterialCount = workshopReview.Materials.Count,
+                ShortageLineCount = workshopReview.Materials.Count(line => line.Availability.Shortage > 0),
+                OrdinaryGilCatalogLineCount = workshopReview.Materials.Count(line => line.Candidates.Count > 0),
+                AccessibleVendorLineCount = workshopReview.Materials.Count(line => line.CanBuyAutomatically),
+                SelectedVendorLineCount = workshopReview.Materials.Count(line => line.Selected && line.ApprovedVendorQuantity > 0),
+                RetainerUnits = workshopReview.RetainerUnits,
+                VendorUnits = workshopReview.VendorUnits,
+                MaximumGil = workshopReview.MaximumGil,
+                StopCount = workshopReview.Stops.Count,
+                ActivePhase = workshopRun?.Phase.ToString(),
+                ActiveMessage = workshopRun?.Message,
+                VerifiedReceiptCount = workshopRun?.Receipts.Count ?? 0,
+                VerifiedQuantity = workshopRun?.Receipts.Sum(receipt => receipt.Quantity) ?? 0,
+                VerifiedGil = workshopRun?.Receipts.Aggregate(
+                    0UL,
+                    (sum, receipt) => checked(sum + receipt.SpentGil)) ?? 0,
+                ArmedItemId = workshopRun?.ArmedPurchase?.ItemId,
+            },
             RemoteBellProbe = new AgentBridgeRemoteBellProbeTruth
             {
                 Active = remoteBellProbe.Active,
