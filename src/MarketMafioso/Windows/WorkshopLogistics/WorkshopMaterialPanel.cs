@@ -110,6 +110,7 @@ internal sealed class WorkshopMaterialPanel
         planner.Build(
             availability ?? getAvailability(),
             config.WorkshopVendorApprovedQuantities,
+            config.WorkshopVendorIncludedItems.ToHashSet(),
             config.WorkshopVendorExcludedItems.ToHashSet());
 
     private void DrawTable(
@@ -117,18 +118,13 @@ internal sealed class WorkshopMaterialPanel
         int totalCount,
         string queueSignature)
     {
-        if (!ImGui.BeginTable("WorkshopPrepMaterialsVendorV1", 9, ImGuiUi.InteractiveTableFlags))
+        if (!ImGui.BeginTable("WorkshopPrepMaterialsVendorV2", 4, ImGuiUi.InteractiveTableFlags))
             return;
 
-        ImGui.TableSetupColumn("", ImGuiTableColumnFlags.WidthFixed, 28);
-        ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.WidthStretch);
-        ImGui.TableSetupColumn("Required", ImGuiTableColumnFlags.WidthFixed, 68);
-        ImGui.TableSetupColumn("Player", ImGuiTableColumnFlags.WidthFixed, 64);
-        ImGui.TableSetupColumn("Retainers", ImGuiTableColumnFlags.WidthFixed, 72);
-        ImGui.TableSetupColumn("Still Missing", ImGuiTableColumnFlags.WidthFixed, 82);
-        ImGui.TableSetupColumn("Source", ImGuiTableColumnFlags.WidthStretch);
-        ImGui.TableSetupColumn("Buy", ImGuiTableColumnFlags.WidthFixed, 72);
-        ImGui.TableSetupColumn("Cost / Status", ImGuiTableColumnFlags.WidthFixed, 120);
+        ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.WidthStretch, 1.1f);
+        ImGui.TableSetupColumn("Need", ImGuiTableColumnFlags.WidthFixed, 118);
+        ImGui.TableSetupColumn("Stock", ImGuiTableColumnFlags.WidthFixed, 170);
+        ImGui.TableSetupColumn("Acquisition", ImGuiTableColumnFlags.WidthStretch, 1.9f);
         ImGui.TableHeadersRow();
 
         if (filtered.Count == 0)
@@ -156,56 +152,75 @@ internal sealed class WorkshopMaterialPanel
             ImGui.PushID(checked((int)line.Availability.ItemId));
             ImGui.TableNextRow();
             ImGui.TableNextColumn();
-            DrawSelection(line);
-            ImGui.TableNextColumn();
             ImGui.TextUnformatted(line.Availability.ItemName);
             ImGui.TableNextColumn();
-            ImGui.TextUnformatted(line.Availability.Required.ToString("N0"));
+            DrawNeed(line);
             ImGui.TableNextColumn();
-            ImGui.TextUnformatted((activeLine?.LivePlayerQuantity ?? line.Availability.PlayerInventory).ToString("N0"));
+            DrawStock(line, activeLine);
             ImGui.TableNextColumn();
-            ImGui.TextUnformatted(line.RetainerPlannedQuantity.ToString("N0"));
-            ImGui.TableNextColumn();
-            ImGui.TextColored(
-                line.VendorNeed > 0 ? MarketMafiosoUiTheme.Error : MarketMafiosoUiTheme.Success,
-                line.VendorNeed.ToString("N0"));
-            ImGui.TableNextColumn();
-            DrawSource(line);
-            ImGui.TableNextColumn();
-            DrawQuantity(line);
-            ImGui.TableNextColumn();
-            if (activeLine is not null)
-            {
-                var status = RunStatusForLine(activeLine, runner.ActiveRun);
-                ImGui.TextColored(LineStatusColor(status), status);
-            }
-            else if (line.SelectedCandidate is not null)
-                ImGui.TextUnformatted($"{line.ApprovedGil:N0} gil");
-            else
-                ImGui.TextColored(MarketMafiosoUiTheme.Muted, "-");
+            DrawAcquisition(line, activeLine);
             ImGui.PopID();
         }
 
         ImGui.EndTable();
     }
 
-    private void DrawSelection(WorkshopMaterialProcurement line)
+    private static void DrawNeed(WorkshopMaterialProcurement line)
     {
-        if (!line.CanBuyAutomatically)
+        ImGui.TextUnformatted($"{line.Availability.Required:N0} required");
+        ImGui.TextColored(
+            line.VendorNeed > 0 ? MarketMafiosoUiTheme.Error : MarketMafiosoUiTheme.Success,
+            line.VendorNeed > 0 ? $"{line.VendorNeed:N0} missing" : "Covered");
+    }
+
+    private static void DrawStock(
+        WorkshopMaterialProcurement line,
+        PersistedWorkshopVendorRestockLine? activeLine)
+    {
+        var playerQuantity = activeLine?.LivePlayerQuantity ?? line.Availability.PlayerInventory;
+        ImGui.TextUnformatted($"{playerQuantity:N0} on hand");
+        ImGui.TextColored(
+            MarketMafiosoUiTheme.Muted,
+            $"{line.Availability.QuartermasterStock:N0} on retainers");
+    }
+
+    private void DrawAcquisition(
+        WorkshopMaterialProcurement line,
+        PersistedWorkshopVendorRestockLine? activeLine)
+    {
+        var candidate = line.SelectedCandidate ?? line.Candidates.FirstOrDefault();
+        if (candidate is null)
         {
-            ImGui.TextColored(MarketMafiosoUiTheme.Muted, "-");
+            ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Craft / gather / market");
             return;
         }
 
-        var selected = line.Selected;
-        var enabled = config.AutomaticallyBuyWorkshopVendorMaterials &&
-                      !runner.IsRunning &&
-                      runner.ActiveRun?.Phase != WorkshopVendorRestockPhase.Paused;
-        ImGui.BeginDisabled(!enabled);
-        if (ImGui.Checkbox("##selected", ref selected))
+        ImGui.TextUnformatted($"{candidate.Offer.NpcName} · {candidate.Offer.UnitPriceGil:N0} gil each");
+        if (activeLine is not null)
         {
-            SetExcluded(line.Availability.ItemId, !selected);
+            var status = RunStatusForLine(activeLine, runner.ActiveRun);
+            ImGui.TextColored(LineStatusColor(status), status);
+            return;
         }
+
+        if (!line.CanBuyAutomatically)
+        {
+            DrawAccessState(candidate);
+            return;
+        }
+
+        DrawVendorControls(line);
+    }
+
+    private void DrawVendorControls(WorkshopMaterialProcurement line)
+    {
+        var selected = line.Selected;
+        var selectionEnabled = config.AutomaticallyBuyWorkshopVendorMaterials &&
+                               !runner.IsRunning &&
+                               runner.ActiveRun?.Phase != WorkshopVendorRestockPhase.Paused;
+        ImGui.BeginDisabled(!selectionEnabled);
+        if (ImGui.Checkbox("Buy##selected", ref selected))
+            SetSelected(line.Availability.ItemId, selected);
         ImGui.EndDisabled();
         reviewRegistry.Register(
             $"workshop-logistics.vendor-item.{line.Availability.ItemId}.selected",
@@ -213,29 +228,21 @@ internal sealed class WorkshopMaterialPanel
             AgentBridgeUiControlKind.Toggle,
             ImGui.GetItemRectMin(),
             ImGui.GetItemRectMax(),
-            enabled,
+            selectionEnabled,
             selected,
             selected ? "Included" : "Excluded",
-            () => SetExcluded(line.Availability.ItemId, line.Selected));
-    }
+            () => SetSelected(line.Availability.ItemId, !line.Selected));
 
-    private void DrawQuantity(WorkshopMaterialProcurement line)
-    {
-        if (line.SelectedCandidate is null || line.VendorNeed <= 0)
-        {
-            ImGui.TextColored(MarketMafiosoUiTheme.Muted, "-");
-            return;
-        }
-
+        ImGui.SameLine();
         var quantity = line.ApprovedVendorQuantity;
-        var enabled = config.AutomaticallyBuyWorkshopVendorMaterials &&
-                      line.Selected &&
-                      !runner.IsRunning &&
-                      runner.ActiveRun?.Phase != WorkshopVendorRestockPhase.Paused;
-        ImGui.BeginDisabled(!enabled);
-        ImGui.SetNextItemWidth(-1);
+        var quantityEnabled = selectionEnabled && selected;
+        ImGui.BeginDisabled(!quantityEnabled);
+        ImGui.SetNextItemWidth(78f);
         if (ImGui.InputInt("##quantity", ref quantity, 0))
+        {
+            quantity = Math.Clamp(quantity, 0, line.VendorNeed);
             SetQuantity(line.Availability.ItemId, quantity, line.VendorNeed);
+        }
         ImGui.EndDisabled();
         reviewRegistry.Register(
             $"workshop-logistics.vendor-item.{line.Availability.ItemId}.quantity",
@@ -243,7 +250,7 @@ internal sealed class WorkshopMaterialPanel
             AgentBridgeUiControlKind.Input,
             ImGui.GetItemRectMin(),
             ImGui.GetItemRectMax(),
-            enabled,
+            quantityEnabled,
             false,
             line.ApprovedVendorQuantity.ToString(),
             QuantityArguments with
@@ -264,17 +271,19 @@ internal sealed class WorkshopMaterialPanel
                 return AgentBridgeUiActionResult.Ok(
                     $"{line.Availability.ItemName} vendor quantity set to {requested:N0}.");
             });
+
+        ImGui.SameLine();
+        var displayQuantity = Math.Clamp(quantity, 0, line.VendorNeed);
+        var approvedGil = checked((ulong)displayQuantity * line.SelectedCandidate!.Offer.UnitPriceGil);
+        ImGui.TextColored(
+            line.IsCraftable ? MarketMafiosoUiTheme.Warning : MarketMafiosoUiTheme.Muted,
+            line.IsCraftable
+                ? $"{approvedGil:N0} gil · Craftable {(selected ? "override" : "— review price")}"
+                : $"{approvedGil:N0} gil");
     }
 
-    private static void DrawSource(WorkshopMaterialProcurement line)
+    private static void DrawAccessState(WorkshopVendorCandidate candidate)
     {
-        var candidate = line.SelectedCandidate ?? line.Candidates.FirstOrDefault();
-        if (candidate is null)
-        {
-            ImGui.TextColored(MarketMafiosoUiTheme.Muted, "Craft / gather / market");
-            return;
-        }
-        ImGui.TextUnformatted($"{candidate.Offer.NpcName} · {candidate.Offer.UnitPriceGil:N0} gil");
         ImGui.TextColored(
             candidate.Access.IsEligible ? MarketMafiosoUiTheme.Muted : MarketMafiosoUiTheme.Warning,
             candidate.Access.State switch
@@ -385,10 +394,13 @@ internal sealed class WorkshopMaterialPanel
             () => invoke());
     }
 
-    private void SetExcluded(uint itemId, bool excluded)
+    private void SetSelected(uint itemId, bool selected)
     {
         config.WorkshopVendorExcludedItems.RemoveAll(candidate => candidate == itemId);
-        if (excluded)
+        config.WorkshopVendorIncludedItems.RemoveAll(candidate => candidate == itemId);
+        if (selected)
+            config.WorkshopVendorIncludedItems.Add(itemId);
+        else
             config.WorkshopVendorExcludedItems.Add(itemId);
         config.Save();
     }

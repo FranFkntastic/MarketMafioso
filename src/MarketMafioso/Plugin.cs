@@ -142,8 +142,9 @@ public sealed class Plugin : IDalamudPlugin
 
                 Configuration.Save();
             });
+        var workshopCraftRecipeResolver = new LuminaWorkshopMaterialCraftRecipeResolver(DataManager);
         workshopMaterialManifestExport = new WorkshopMaterialManifestExportService(
-            new LuminaWorkshopMaterialCraftRecipeResolver(DataManager));
+            workshopCraftRecipeResolver);
         tradeAutomationCoordinator = new ExternalAutomationCoordinator(
             new DalamudPluginDataStore(PluginInterface),
             Log);
@@ -170,6 +171,7 @@ public sealed class Plugin : IDalamudPlugin
             viwiWorkshoppaIpc,
             workshopAssemblyRunner,
             workshopMaterialManifestExport,
+            workshopCraftRecipeResolver,
             tradeQueueRunner,
             tradeQueueIo,
             DataManager,

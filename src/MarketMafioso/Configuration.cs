@@ -91,6 +91,7 @@ public class Configuration : IPluginConfiguration
     public Dictionary<string, QuartermasterWorkshopRequestState> QuartermasterWorkshopRequests { get; set; } = new();
     public bool AutomaticallyBuyWorkshopVendorMaterials { get; set; }
     public Dictionary<uint, int> WorkshopVendorApprovedQuantities { get; set; } = new();
+    public List<uint> WorkshopVendorIncludedItems { get; set; } = new();
     public List<uint> WorkshopVendorExcludedItems { get; set; } = new();
     public PersistedWorkshopVendorRestockRun? ActiveWorkshopVendorRestock { get; set; }
     public Guid? ActiveFrozenWorkshopQueueId { get; set; }

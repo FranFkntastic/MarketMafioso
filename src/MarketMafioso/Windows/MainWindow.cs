@@ -115,6 +115,7 @@ public class MainWindow : Window, IDisposable
         VIWIWorkshoppaIpc viwiWorkshoppaIpc,
         WorkshopAssemblyRunner workshopAssemblyRunner,
         WorkshopMaterialManifestExportService workshopMaterialManifestExport,
+        IWorkshopMaterialCraftRecipeResolver workshopCraftRecipeResolver,
         TradeQueueRunner tradeQueueRunner,
         ITradeQueueIo tradeQueueIo,
         IDataManager dataManager,
@@ -315,7 +316,8 @@ public class MainWindow : Window, IDisposable
             Plugin.ObjectTable);
         var vendorPlanner = new WorkshopVendorProcurementPlanner(
             DalamudGilVendorCatalogBuilder.Build(dataManager),
-            vendorAccess.Assess);
+            vendorAccess.Assess,
+            itemId => workshopCraftRecipeResolver.TryResolveCraftRecipe(itemId, out _));
         var vendorRuntime = new DalamudWorkshopVendorRestockRuntime(
             config,
             scanner,

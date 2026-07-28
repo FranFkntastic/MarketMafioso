@@ -129,14 +129,17 @@ public sealed class WorkshopVendorRestockRunnerTests
         var first = planner.Build(
             [Availability(1, 10, 0, 2)],
             new Dictionary<uint, int>(),
+            new HashSet<uint>(),
             new HashSet<uint>());
         var refreshed = planner.Build(
             [Availability(1, 10, 7, 1)],
             new Dictionary<uint, int>(),
+            new HashSet<uint>(),
             new HashSet<uint>());
         var changed = planner.Build(
             [Availability(1, 11, 7, 1)],
             new Dictionary<uint, int>(),
+            new HashSet<uint>(),
             new HashSet<uint>());
 
         Assert.Equal(first.QueueSignature, refreshed.QueueSignature);
@@ -161,6 +164,7 @@ public sealed class WorkshopVendorRestockRunnerTests
             4,
             [first, alternative],
             first,
+            false,
             true,
             4);
         var review = Review(material, [new(100, 50, 129, "First Vendor", [material])]);
@@ -392,7 +396,8 @@ public sealed class WorkshopVendorRestockRunnerTests
 
     private static WorkshopVendorProcurementPlanner Planner() => new(
         GilVendorCatalog.Create([Offer(1), Offer(2)]),
-        _ => new(GilVendorAccessState.Verified, "test", "Verified for test."));
+        _ => new(GilVendorAccessState.Verified, "test", "Verified for test."),
+        _ => false);
 
     private static WorkshopVendorRestockReview Review(
         WorkshopMaterialProcurement material,
@@ -421,6 +426,7 @@ public sealed class WorkshopVendorRestockRunnerTests
             vendor,
             [candidate],
             candidate,
+            false,
             true,
             vendor);
     }

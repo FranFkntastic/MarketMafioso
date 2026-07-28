@@ -15,6 +15,7 @@ public sealed record WorkshopMaterialProcurement(
     int VendorNeed,
     IReadOnlyList<WorkshopVendorCandidate> Candidates,
     WorkshopVendorCandidate? SelectedCandidate,
+    bool IsCraftable,
     bool Selected,
     int ApprovedVendorQuantity)
 {
@@ -57,22 +58,27 @@ public sealed class WorkshopVendorProcurementPlanner
 {
     private readonly GilVendorCatalog catalog;
     private readonly Func<GilVendorOffer, GilVendorAccessAssessment> assessAccess;
+    private readonly Func<uint, bool> isCraftable;
 
     public WorkshopVendorProcurementPlanner(
         GilVendorCatalog catalog,
-        Func<GilVendorOffer, GilVendorAccessAssessment> assessAccess)
+        Func<GilVendorOffer, GilVendorAccessAssessment> assessAccess,
+        Func<uint, bool> isCraftable)
     {
         this.catalog = catalog ?? throw new ArgumentNullException(nameof(catalog));
         this.assessAccess = assessAccess ?? throw new ArgumentNullException(nameof(assessAccess));
+        this.isCraftable = isCraftable ?? throw new ArgumentNullException(nameof(isCraftable));
     }
 
     public WorkshopVendorRestockReview Build(
         IReadOnlyList<WorkshopMaterialAvailability> availability,
         IReadOnlyDictionary<uint, int> approvedQuantities,
+        IReadOnlySet<uint> includedItems,
         IReadOnlySet<uint> excludedItems)
     {
         ArgumentNullException.ThrowIfNull(availability);
         ArgumentNullException.ThrowIfNull(approvedQuantities);
+        ArgumentNullException.ThrowIfNull(includedItems);
         ArgumentNullException.ThrowIfNull(excludedItems);
 
         var drafts = availability
@@ -96,9 +102,11 @@ public sealed class WorkshopVendorProcurementPlanner
         var materials = drafts.Select(draft =>
         {
             selectedCandidates.TryGetValue(draft.Availability.ItemId, out var candidate);
+            var craftable = isCraftable(draft.Availability.ItemId);
             var selected = candidate is not null &&
                            draft.VendorNeed > 0 &&
-                           !excludedItems.Contains(draft.Availability.ItemId);
+                           (includedItems.Contains(draft.Availability.ItemId) ||
+                            (!craftable && !excludedItems.Contains(draft.Availability.ItemId)));
             var approved = approvedQuantities.TryGetValue(draft.Availability.ItemId, out var configured)
                 ? Math.Clamp(configured, 0, draft.VendorNeed)
                 : draft.VendorNeed;
@@ -108,8 +116,9 @@ public sealed class WorkshopVendorProcurementPlanner
                 draft.VendorNeed,
                 draft.Candidates,
                 candidate,
+                craftable,
                 selected,
-                selected ? approved : 0);
+                approved);
         }).ToArray();
 
         var stops = materials

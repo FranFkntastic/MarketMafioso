@@ -12,6 +12,7 @@ public sealed class WorkshopVendorProcurementPlannerTests
     [InlineData(PlannerScenario.ClampEditedQuantity)]
     [InlineData(PlannerScenario.ExcludeInaccessibleOffers)]
     [InlineData(PlannerScenario.PreserveUserExclusion)]
+    [InlineData(PlannerScenario.CraftableRequiresExplicitInclusion)]
     public void Planner_contract(PlannerScenario scenario)
     {
         switch (scenario)
@@ -27,6 +28,9 @@ public sealed class WorkshopVendorProcurementPlannerTests
                 break;
             case PlannerScenario.PreserveUserExclusion:
                 Planner_preserves_user_exclusion();
+                break;
+            case PlannerScenario.CraftableRequiresExplicitInclusion:
+                Planner_requires_explicit_inclusion_for_craftable_vendor_items();
                 break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(scenario), scenario, null);
@@ -47,7 +51,8 @@ public sealed class WorkshopVendorProcurementPlannerTests
             offer => new(
                 offer.NpcId == 100 ? GilVendorAccessState.Verified : GilVendorAccessState.Probeable,
                 "test",
-                "test"));
+                "test"),
+            _ => false);
 
         var review = planner.Build(
         [
@@ -55,6 +60,7 @@ public sealed class WorkshopVendorProcurementPlannerTests
             Availability(2, required: 10, player: 1, retainer: 4),
         ],
             new Dictionary<uint, int>(),
+            new HashSet<uint>(),
             new HashSet<uint>());
 
         Assert.Single(review.Stops);
@@ -70,11 +76,13 @@ public sealed class WorkshopVendorProcurementPlannerTests
     {
         var planner = new WorkshopVendorProcurementPlanner(
             GilVendorCatalog.Create([Offer(1, 100, 10)]),
-            _ => new(GilVendorAccessState.Probeable, "test", "test"));
+            _ => new(GilVendorAccessState.Probeable, "test", "test"),
+            _ => false);
 
         var review = planner.Build(
             [Availability(1, required: 20, player: 2, retainer: 3)],
             new Dictionary<uint, int> { [1] = 99 },
+            new HashSet<uint>(),
             new HashSet<uint>());
 
         Assert.Equal(15, review.Materials[0].VendorNeed);
@@ -88,11 +96,13 @@ public sealed class WorkshopVendorProcurementPlannerTests
         {
             var planner = new WorkshopVendorProcurementPlanner(
                 catalog,
-                _ => new(state, "test", "test"));
+                _ => new(state, "test", "test"),
+                _ => false);
 
             var review = planner.Build(
                 [Availability(1, required: 20, player: 2, retainer: 3)],
                 new Dictionary<uint, int>(),
+                new HashSet<uint>(),
                 new HashSet<uint>());
 
             Assert.Empty(review.Stops);
@@ -104,15 +114,47 @@ public sealed class WorkshopVendorProcurementPlannerTests
     {
         var planner = new WorkshopVendorProcurementPlanner(
             GilVendorCatalog.Create([Offer(1, 100, 10)]),
-            _ => new(GilVendorAccessState.Verified, "test", "test"));
+            _ => new(GilVendorAccessState.Verified, "test", "test"),
+            _ => false);
 
         var review = planner.Build(
             [Availability(1, required: 20, player: 2, retainer: 3)],
             new Dictionary<uint, int>(),
+            new HashSet<uint>(),
             new HashSet<uint> { 1 });
 
         Assert.False(review.Materials[0].Selected);
         Assert.Equal(0, review.VendorUnits);
+    }
+
+    private void Planner_requires_explicit_inclusion_for_craftable_vendor_items()
+    {
+        var planner = new WorkshopVendorProcurementPlanner(
+            GilVendorCatalog.Create([Offer(1, 100, 4_452)]),
+            _ => new(GilVendorAccessState.Verified, "test", "test"),
+            itemId => itemId == 1);
+
+        var defaultReview = planner.Build(
+            [Availability(1, required: 360, player: 0, retainer: 0)],
+            new Dictionary<uint, int>(),
+            new HashSet<uint>(),
+            new HashSet<uint>());
+
+        Assert.True(defaultReview.Materials[0].IsCraftable);
+        Assert.False(defaultReview.Materials[0].Selected);
+        Assert.Equal(360, defaultReview.Materials[0].ApprovedVendorQuantity);
+        Assert.Equal(0, defaultReview.VendorUnits);
+        Assert.Empty(defaultReview.Stops);
+
+        var optedInReview = planner.Build(
+            [Availability(1, required: 360, player: 0, retainer: 0)],
+            new Dictionary<uint, int>(),
+            new HashSet<uint> { 1 },
+            new HashSet<uint>());
+
+        Assert.True(optedInReview.Materials[0].Selected);
+        Assert.Equal(360, optedInReview.VendorUnits);
+        Assert.Single(optedInReview.Stops);
     }
 
     private static WorkshopMaterialAvailability Availability(
@@ -157,5 +199,6 @@ public sealed class WorkshopVendorProcurementPlannerTests
         ClampEditedQuantity,
         ExcludeInaccessibleOffers,
         PreserveUserExclusion,
+        CraftableRequiresExplicitInclusion,
     }
 }
