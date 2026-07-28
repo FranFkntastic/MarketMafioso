@@ -14,6 +14,13 @@ public sealed record PlayerInventoryCaptureResult(
     IReadOnlyList<string> RequestedSources,
     IReadOnlyList<string> ObservedSources);
 
+public sealed record PlayerBagPurchaseState(
+    bool IsComplete,
+    IReadOnlyDictionary<uint, int> ItemCounts,
+    int FreeSlots,
+    IReadOnlyList<AutomationInventorySlot> OccupiedSlots,
+    string Message);
+
 public class InventoryScanner
 {
     private readonly AutomationInventoryContainerScanner containerScanner;
@@ -79,6 +86,37 @@ public class InventoryScanner
             .SelectMany(bag => bag.Items)
             .GroupBy(item => item.ItemId)
             .ToDictionary(group => group.Key, group => group.Sum(item => (int)item.Quantity));
+    }
+
+    public PlayerBagPurchaseState CapturePlayerBagPurchaseState()
+    {
+        var snapshots = containerScanner.ScanLoadedContainers(PlayerBags);
+        var observed = snapshots.Select(snapshot => snapshot.ContainerName).ToHashSet(StringComparer.Ordinal);
+        var missing = PlayerBags
+            .Select(type => type.ToString())
+            .Where(name => !observed.Contains(name))
+            .ToArray();
+        if (missing.Length > 0)
+        {
+            return new(
+                false,
+                new Dictionary<uint, int>(),
+                0,
+                [],
+                $"Player inventory is still loading ({string.Join(", ", missing)} unavailable).");
+        }
+
+        var slots = snapshots.SelectMany(snapshot => snapshot.Slots).ToArray();
+        var counts = slots
+            .GroupBy(slot => slot.ItemId)
+            .ToDictionary(group => group.Key, group => group.Sum(slot => slot.Quantity));
+        var freeSlots = snapshots.Sum(snapshot => snapshot.SlotCount - snapshot.Slots.Count);
+        return new(
+            true,
+            counts,
+            freeSlots,
+            slots,
+            "Player inventory and stack capacity are ready.");
     }
 
     public IReadOnlyDictionary<uint, int> CountPlayerCrystals()
