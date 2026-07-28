@@ -531,7 +531,9 @@ public class MainWindow : Window, IDisposable
                     })
                     .ToArray(),
                 ActivePhase = workshopRun?.Phase.ToString(),
-                ActiveMessage = workshopRun?.Message,
+                ActiveMessage = workshopRun is null
+                    ? null
+                    : WorkshopVendorRestockPresentation.Describe(workshopRun, workshopReview),
                 VerifiedReceiptCount = workshopRun?.Receipts.Count ?? 0,
                 VerifiedQuantity = workshopRun?.Receipts.Sum(receipt => receipt.Quantity) ?? 0,
                 VerifiedGil = workshopRun?.Receipts.Aggregate(

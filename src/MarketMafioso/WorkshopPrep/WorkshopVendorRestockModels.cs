@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Numerics;
 using Franthropy.Dalamud.Automation.Vendors;
 
@@ -181,6 +182,34 @@ public enum WorkshopQuartermasterProgressState
 public sealed record WorkshopQuartermasterProgress(
     WorkshopQuartermasterProgressState State,
     string Message);
+
+public static class WorkshopVendorRestockPresentation
+{
+    public static string Describe(
+        PersistedWorkshopVendorRestockRun run,
+        WorkshopVendorRestockReview review)
+    {
+        ArgumentNullException.ThrowIfNull(run);
+        ArgumentNullException.ThrowIfNull(review);
+        if (run.Phase == WorkshopVendorRestockPhase.Completed)
+        {
+            var remainingLines = review.Materials.Count(line => line.Availability.Shortage > 0);
+            return remainingLines == 0
+                ? "Workshop materials are ready."
+                : $"Vendor purchases complete. {remainingLines:N0} material line(s) still need another source.";
+        }
+        if (run.Phase != WorkshopVendorRestockPhase.Failed ||
+            !run.Message.Contains("expected shop did not become available", StringComparison.OrdinalIgnoreCase))
+        {
+            return run.Message;
+        }
+
+        var vendor = run.Stops.FirstOrDefault()?.NpcName ?? "the vendor";
+        return run.Receipts.Count == 0
+            ? $"Couldn't reach {vendor}. No gil was spent. Start again to rebuild the route."
+            : $"Couldn't reach {vendor}. Earlier verified purchases were preserved. Start again to rebuild the route.";
+    }
+}
 
 public interface IWorkshopVendorRestockRuntime
 {
