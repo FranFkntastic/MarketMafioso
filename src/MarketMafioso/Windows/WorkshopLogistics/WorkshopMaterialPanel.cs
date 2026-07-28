@@ -115,7 +115,7 @@ internal sealed class WorkshopMaterialPanel
         int totalCount,
         string queueSignature)
     {
-        if (!ImGui.BeginTable("WorkshopPrepMaterials", 9, ImGuiUi.InteractiveTableFlags))
+        if (!ImGui.BeginTable("WorkshopPrepMaterialsVendorV1", 9, ImGuiUi.InteractiveTableFlags))
             return;
 
         ImGui.TableSetupColumn("", ImGuiTableColumnFlags.WidthFixed, 28);
