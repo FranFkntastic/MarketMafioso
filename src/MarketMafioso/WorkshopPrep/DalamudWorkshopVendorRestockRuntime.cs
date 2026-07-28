@@ -260,6 +260,14 @@ public sealed class DalamudWorkshopVendorRestockRuntime : IWorkshopVendorRestock
 
     private WorkshopVendorReachResult InteractWithVendor(IGameObject npc, GilVendorOffer offer)
     {
+        var menu = shop.TryAdvanceOfferMenu(offer);
+        if (menu.MenuPresented)
+        {
+            if (!menu.Advanced)
+                return new(WorkshopVendorReachState.Unavailable, menu.Message);
+            nextActionAt = utcNow().Add(ActionThrottle);
+            return new(WorkshopVendorReachState.Waiting, $"Choosing {offer.NpcName}'s reviewed shop.");
+        }
         if (!lifestream.IsAvailable)
             return new(WorkshopVendorReachState.Failed, "Lifestream is required to interact with the reached vendor.");
         if (!lifestream.TryEnqueueObjectInteraction(offer.NpcId))

@@ -319,7 +319,7 @@ public class MainWindow : Window, IDisposable
             scanner,
             workshopQuartermasterRequest,
             vendorAccess,
-            new DalamudOrdinaryGilShop(Plugin.GameGui),
+            new DalamudOrdinaryGilShop(Plugin.GameGui, dataManager),
             new VNavmeshIpc(new DalamudVNavmeshIpcAdapter(Plugin.PluginInterface, log)),
             new LifestreamIpc(Plugin.PluginInterface, log),
             workshopVendorAutomationCoordinator,
