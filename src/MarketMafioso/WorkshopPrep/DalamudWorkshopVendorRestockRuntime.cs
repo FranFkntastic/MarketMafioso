@@ -5,12 +5,10 @@ using System.Linq;
 using System.Numerics;
 using Dalamud.Game.ClientState.Objects.Types;
 using Dalamud.Plugin.Services;
-using FFXIVClientStructs.FFXIV.Client.Game.Control;
 using Franthropy.Dalamud.Automation.Vendors;
 using MarketMafioso.Automation.Runtime;
 using MarketMafioso.Automation.Travel;
 using MarketMafioso.Quartermaster;
-using ClientGameObject = FFXIVClientStructs.FFXIV.Client.Game.Object.GameObject;
 
 namespace MarketMafioso.WorkshopPrep;
 
@@ -26,10 +24,10 @@ public sealed class DalamudWorkshopVendorRestockRuntime : IWorkshopVendorRestock
     private readonly DalamudGilVendorAccessReader access;
     private readonly DalamudOrdinaryGilShop shop;
     private readonly VNavmeshIpc vnavmesh;
+    private readonly LifestreamIpc lifestream;
     private readonly ExternalAutomationCoordinator externalAutomation;
     private readonly IClientState clientState;
     private readonly IObjectTable objectTable;
-    private readonly ITargetManager targetManager;
     private readonly Func<DateTimeOffset> utcNow;
     private DateTimeOffset approachStartedAt;
     private DateTimeOffset nextActionAt;
@@ -44,10 +42,10 @@ public sealed class DalamudWorkshopVendorRestockRuntime : IWorkshopVendorRestock
         DalamudGilVendorAccessReader access,
         DalamudOrdinaryGilShop shop,
         VNavmeshIpc vnavmesh,
+        LifestreamIpc lifestream,
         ExternalAutomationCoordinator externalAutomation,
         IClientState clientState,
         IObjectTable objectTable,
-        ITargetManager targetManager,
         Func<DateTimeOffset>? utcNow = null)
     {
         this.config = config ?? throw new ArgumentNullException(nameof(config));
@@ -56,10 +54,10 @@ public sealed class DalamudWorkshopVendorRestockRuntime : IWorkshopVendorRestock
         this.access = access ?? throw new ArgumentNullException(nameof(access));
         this.shop = shop ?? throw new ArgumentNullException(nameof(shop));
         this.vnavmesh = vnavmesh ?? throw new ArgumentNullException(nameof(vnavmesh));
+        this.lifestream = lifestream ?? throw new ArgumentNullException(nameof(lifestream));
         this.externalAutomation = externalAutomation ?? throw new ArgumentNullException(nameof(externalAutomation));
         this.clientState = clientState ?? throw new ArgumentNullException(nameof(clientState));
         this.objectTable = objectTable ?? throw new ArgumentNullException(nameof(objectTable));
-        this.targetManager = targetManager ?? throw new ArgumentNullException(nameof(targetManager));
         this.utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
     }
 
@@ -260,14 +258,12 @@ public sealed class DalamudWorkshopVendorRestockRuntime : IWorkshopVendorRestock
         externalAutomation.RestoreTradeAutoConfirm();
     }
 
-    private unsafe WorkshopVendorReachResult InteractWithVendor(IGameObject npc, GilVendorOffer offer)
+    private WorkshopVendorReachResult InteractWithVendor(IGameObject npc, GilVendorOffer offer)
     {
-        var targetSystem = TargetSystem.Instance();
-        if (targetSystem == null)
-            return new(WorkshopVendorReachState.Failed, "The game interaction system is temporarily unavailable.");
-
-        targetManager.Target = npc;
-        targetSystem->InteractWithObject((ClientGameObject*)npc.Address, false);
+        if (!lifestream.IsAvailable)
+            return new(WorkshopVendorReachState.Failed, "Lifestream is required to interact with the reached vendor.");
+        if (!lifestream.TryEnqueueObjectInteraction(offer.NpcId))
+            return new(WorkshopVendorReachState.Failed, $"Could not interact with {offer.NpcName} through Lifestream.");
         nextActionAt = utcNow().Add(ActionThrottle);
         return new(WorkshopVendorReachState.Waiting, $"Opening {offer.NpcName}'s shop.");
     }

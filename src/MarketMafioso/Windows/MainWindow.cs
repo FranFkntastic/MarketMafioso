@@ -321,10 +321,10 @@ public class MainWindow : Window, IDisposable
             vendorAccess,
             new DalamudOrdinaryGilShop(Plugin.GameGui),
             new VNavmeshIpc(new DalamudVNavmeshIpcAdapter(Plugin.PluginInterface, log)),
+            new LifestreamIpc(Plugin.PluginInterface, log),
             workshopVendorAutomationCoordinator,
             Plugin.ClientState,
-            Plugin.ObjectTable,
-            Plugin.TargetManager);
+            Plugin.ObjectTable);
         workshopVendorRestockRunner = new WorkshopVendorRestockRunner(
             config,
             vendorRuntime,
