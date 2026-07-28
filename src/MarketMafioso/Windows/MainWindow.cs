@@ -29,6 +29,7 @@ using MarketMafioso.MarketDiagnostics;
 using Franthropy.Dalamud.AgentBridge;
 using Franthropy.Dalamud.Automation.Retainers;
 using Franthropy.Dalamud.Automation.Vendors;
+using Franthropy.Dalamud.UI.Styling;
 using Franthropy.Dalamud.UI.Windows;
 using MarketMafioso.Automation.Runtime;
 using MarketMafiosoCaptureRegion = MarketMafioso.AgentBridge.AgentBridgeCaptureRegion;
@@ -688,87 +689,87 @@ public class MainWindow : Window, IDisposable
     {
         ClearAgentReviewWindowOverride();
 
-            if (!IsMarketAcquisitionUnlocked())
-                AcquisitionCompositionWindow.IsOpen = false;
+        if (!IsMarketAcquisitionUnlocked())
+            AcquisitionCompositionWindow.IsOpen = false;
 
-            var viewport = ImGui.GetWindowViewport();
-            var windowPosition = ImGui.GetWindowPos();
-            var windowSize = ImGui.GetWindowSize();
-            AcquisitionCompositionWindow.AnchorTo(
+        var viewport = ImGui.GetWindowViewport();
+        var windowPosition = ImGui.GetWindowPos();
+        var windowSize = ImGui.GetWindowSize();
+        AcquisitionCompositionWindow.AnchorTo(
+            windowPosition,
+            windowSize,
+            DalamudOwnedWindowSurface.Capture());
+        if (windowSize.X > 0f && windowSize.Y > 0f && viewport.Size.X > 0f && viewport.Size.Y > 0f)
+        {
+            AgentCaptureRegion = new MarketMafiosoCaptureRegion(
                 windowPosition,
                 windowSize,
-                DalamudOwnedWindowSurface.Capture());
-            if (windowSize.X > 0f && windowSize.Y > 0f && viewport.Size.X > 0f && viewport.Size.Y > 0f)
+                viewport.Pos,
+                viewport.Size,
+                DateTimeOffset.UtcNow);
+        }
+
+        DrawHeader();
+        ImGui.Spacing();
+
+        if (ImGui.BeginTabBar("##MarketMafiosoTabs"))
+        {
+            if (ImGui.BeginTabItem("Squire", GetAgentTabFlags("Squire")))
             {
-                AgentCaptureRegion = new MarketMafiosoCaptureRegion(
-                    windowPosition,
-                    windowSize,
-                    viewport.Pos,
-                    viewport.Size,
-                    DateTimeOffset.UtcNow);
+                squirePanel.Draw();
+                ImGui.EndTabItem();
             }
 
-            DrawHeader();
-            ImGui.Spacing();
-
-            if (ImGui.BeginTabBar("##MarketMafiosoTabs"))
+            if (ImGui.BeginTabItem("Workshop Logistics", GetAgentTabFlags("Workshop Logistics")))
             {
-                if (ImGui.BeginTabItem("Squire", GetAgentTabFlags("Squire")))
-                {
-                    squirePanel.Draw();
-                    ImGui.EndTabItem();
-                }
-
-                if (ImGui.BeginTabItem("Workshop Logistics", GetAgentTabFlags("Workshop Logistics")))
-                {
-                    DrawWorkshopPrepTab();
-                    ImGui.EndTabItem();
-                }
-
-                if (ImGui.BeginTabItem("Trade Queue", GetAgentTabFlags("Trade Queue")))
-                {
-                    tradeQueuePanel.Draw();
-                    ImGui.EndTabItem();
-                }
-
-                if (IsMarketAcquisitionUnlocked() && ImGui.BeginTabItem("Market Acquisition", GetAgentTabFlags("Market Acquisition")))
-                {
-                    DrawMarketAcquisitionTab();
-                    ImGui.EndTabItem();
-                }
-
-                if (IsMarketAcquisitionUnlocked() && ImGui.BeginTabItem("Remote Market", GetAgentTabFlags("Remote Market")))
-                {
-                    remoteMarketTabPanel.Draw();
-                    ImGui.EndTabItem();
-                }
-
-                if (ImGui.BeginTabItem("Diagnostics", GetAgentTabFlags("Diagnostics")))
-                {
-                    marketAcquisitionDiagnosticsPanel.Draw();
-                    ImGui.EndTabItem();
-                }
-
-                if (ImGui.BeginTabItem("Settings", GetAgentTabFlags("Settings")))
-                {
-                    settingsTab.Draw();
-                    ImGui.EndTabItem();
-                }
-
-                if (ImGui.BeginTabItem("Status", GetAgentTabFlags("Status")))
-                {
-                    statusTab.Draw();
-                    ImGui.EndTabItem();
-                }
-
-                ImGui.EndTabBar();
-                if (agentSelectionHoldUntilUtc != default && DateTimeOffset.UtcNow >= agentSelectionHoldUntilUtc)
-                {
-                    agentRequestedTab = null;
-                    agentRequestedWorkspaceView = null;
-                    agentSelectionHoldUntilUtc = default;
-                }
+                DrawWorkshopPrepTab();
+                ImGui.EndTabItem();
             }
+
+            if (ImGui.BeginTabItem("Trade Queue", GetAgentTabFlags("Trade Queue")))
+            {
+                tradeQueuePanel.Draw();
+                ImGui.EndTabItem();
+            }
+
+            if (IsMarketAcquisitionUnlocked() && ImGui.BeginTabItem("Market Acquisition", GetAgentTabFlags("Market Acquisition")))
+            {
+                DrawMarketAcquisitionTab();
+                ImGui.EndTabItem();
+            }
+
+            if (IsMarketAcquisitionUnlocked() && ImGui.BeginTabItem("Remote Market", GetAgentTabFlags("Remote Market")))
+            {
+                remoteMarketTabPanel.Draw();
+                ImGui.EndTabItem();
+            }
+
+            if (ImGui.BeginTabItem("Diagnostics", GetAgentTabFlags("Diagnostics")))
+            {
+                marketAcquisitionDiagnosticsPanel.Draw();
+                ImGui.EndTabItem();
+            }
+
+            if (ImGui.BeginTabItem("Settings", GetAgentTabFlags("Settings")))
+            {
+                settingsTab.Draw();
+                ImGui.EndTabItem();
+            }
+
+            if (ImGui.BeginTabItem("Status", GetAgentTabFlags("Status")))
+            {
+                statusTab.Draw();
+                ImGui.EndTabItem();
+            }
+
+            ImGui.EndTabBar();
+            if (agentSelectionHoldUntilUtc != default && DateTimeOffset.UtcNow >= agentSelectionHoldUntilUtc)
+            {
+                agentRequestedTab = null;
+                agentRequestedWorkspaceView = null;
+                agentSelectionHoldUntilUtc = default;
+            }
+        }
     }
 
     public string OpenRemoteMarketBoard() => remoteMarketController.OpenMarketBoard();
@@ -982,7 +983,7 @@ public class MainWindow : Window, IDisposable
     {
         ImGui.TextColored(ColHeader, "MarketMafioso");
         ImGui.SameLine();
-        ImGui.TextUnformatted(ProductSummary);
+        ImGui.TextColored(ColMuted, ProductSummary);
     }
 
     private void DrawWorkshopPrepTab()
@@ -1000,13 +1001,22 @@ public class MainWindow : Window, IDisposable
         var shortageItems = availability.Count(item => item.Shortage > 0);
         var missingUnits = availability.Sum(item => item.Shortage);
         var progress = workshopAssemblyRunner.Progress;
+        var projectCount = config.WorkshopPrepQueue.Count;
+        var buildCount = config.WorkshopPrepQueue.Sum(item => item.Quantity);
         UtilityWorkspaceUi.DrawCompactStatusStrip(
             "##workshopLogisticsStatus",
             [
-                new("Active queue", $"{config.WorkshopPrepQueue.Count:N0} project(s) · {config.WorkshopPrepQueue.Sum(item => item.Quantity):N0} build(s)", config.WorkshopPrepQueue.Count > 0 ? ColHeader : ColMuted),
+                new(
+                    "Active queue",
+                    $"{CountPhrase(projectCount, "project")} · {CountPhrase(buildCount, "build")}",
+                    projectCount > 0 ? ColHeader : ColMuted),
                 new(
                     "Materials",
-                    availability.Count == 0 ? "No materials yet" : shortageItems == 0 ? "No shortages" : $"{shortageItems:N0} material(s) · {missingUnits:N0} units missing",
+                    availability.Count == 0
+                        ? "No materials yet"
+                        : shortageItems == 0
+                            ? "No shortages"
+                            : $"{CountPhrase(shortageItems, "material")} · {missingUnits:N0} units missing",
                     availability.Count == 0 ? ColMuted : shortageItems == 0 ? ColSuccess : ColWarning),
                 new("Assembly", workshopAssemblyRunner.HasActiveRun ? progress.Message : "Idle", workshopAssemblyRunner.HasActiveRun ? ColHeader : ColMuted),
             ]);
@@ -1059,6 +1069,7 @@ public class MainWindow : Window, IDisposable
         ImGui.TextColored(ColMuted, WorkshopLogisticsModuleSummary);
         ImGuiUi.SameLineRight(140);
         ImGui.SetNextItemWidth(140);
+        using var viewStyle = DalamudUiChrome.PushInput(MarketMafiosoUiTheme.Palette);
         if (ImGui.BeginCombo(
                 "##workshopLogisticsView",
                 useSplitViews ? "View: Split" : "View: Combined"))
@@ -1082,6 +1093,9 @@ public class MainWindow : Window, IDisposable
             () => SetSplitWorkshopViews(!config.SplitWorkshopQueueAndMaterials));
         ImGui.Spacing();
     }
+
+    private static string CountPhrase(int count, string singular) =>
+        $"{count:N0} {(count == 1 ? singular : $"{singular}s")}";
 
     private void SetSplitWorkshopViews(bool split)
     {

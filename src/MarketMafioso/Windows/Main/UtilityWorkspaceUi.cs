@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
+using Franthropy.Dalamud.UI.Styling;
 
 namespace MarketMafioso.Windows.Main;
 
@@ -43,25 +44,41 @@ internal static class UtilityWorkspaceUi
         if (facts.Count == 0)
             return;
 
-        var flags = ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.SizingStretchSame;
+        using var style = DalamudUiChrome.PushTable(MarketMafiosoUiTheme.Palette);
+        var flags = ImGuiTableFlags.BordersOuter |
+                    ImGuiTableFlags.BordersInnerV |
+                    ImGuiTableFlags.RowBg |
+                    ImGuiTableFlags.SizingStretchSame;
         if (!ImGui.BeginTable(id, facts.Count, flags))
             return;
 
         foreach (var fact in facts)
             ImGui.TableSetupColumn(fact.Label, ImGuiTableColumnFlags.WidthStretch);
-        ImGui.TableNextRow();
+        ImGui.TableNextRow(ImGuiTableRowFlags.None, 30f);
         foreach (var fact in facts)
         {
             ImGui.TableNextColumn();
-            ImGui.TextColored(MarketMafiosoUiTheme.Muted, fact.Label);
-            ImGui.SameLine();
-            if (fact.Color is { } color)
-                ImGui.TextColored(color, fact.Value);
-            else
-                ImGui.TextUnformatted(fact.Value);
+            DalamudUiChrome.DrawStatusFact(
+                fact.Label,
+                fact.Value,
+                MarketMafiosoUiTheme.Palette,
+                ToneFor(fact.Color));
         }
 
         ImGui.EndTable();
+    }
+
+    private static DalamudUiTone ToneFor(Vector4? color)
+    {
+        if (color == MarketMafiosoUiTheme.Success)
+            return DalamudUiTone.Success;
+        if (color == MarketMafiosoUiTheme.Warning)
+            return DalamudUiTone.Warning;
+        if (color == MarketMafiosoUiTheme.Error)
+            return DalamudUiTone.Error;
+        if (color == MarketMafiosoUiTheme.Header)
+            return DalamudUiTone.Accent;
+        return DalamudUiTone.Neutral;
     }
 
     public static void DrawModuleHeader(string title, string summary)
