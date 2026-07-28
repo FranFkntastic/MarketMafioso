@@ -250,7 +250,7 @@ public sealed class QuartermasterIpcClient : IDisposable
                 return FailUnavailable($"Quartermaster snapshot call failed: {ex.Message}", out error);
             }
 
-            if (!TryParseSnapshot(json, out var candidate, out error))
+            if (!TryParseSnapshot(json, out var candidate, out var snapshotWarning, out error))
             {
                 ClearSnapshot(error);
                 return false;
@@ -275,7 +275,9 @@ public sealed class QuartermasterIpcClient : IDisposable
                 if (candidate.Revision < invalidatedThroughRevision)
                     continue;
                 cachedSnapshot = candidate;
-                lastStatus = $"Quartermaster snapshot available (revision {candidate.Revision}, {candidate.Retainers.Length} retainers).";
+                lastStatus = string.IsNullOrWhiteSpace(snapshotWarning)
+                    ? $"Quartermaster snapshot available (revision {candidate.Revision}, {candidate.Retainers.Length} retainers)."
+                    : $"Quartermaster snapshot available (revision {candidate.Revision}, {candidate.Retainers.Length} retainers). {snapshotWarning}";
                 snapshot = candidate;
                 return true;
             }
@@ -655,9 +657,11 @@ public sealed class QuartermasterIpcClient : IDisposable
     private static bool TryParseSnapshot(
         string json,
         out QuartermasterSnapshot? snapshot,
+        out string warning,
         out string error)
     {
         snapshot = null;
+        warning = string.Empty;
         if (!TryDeserialize(json, out QuartermasterSnapshotWire? wire, out error))
             return false;
         if (!string.Equals(wire!.Schema, SnapshotSchema, StringComparison.Ordinal))
@@ -763,75 +767,139 @@ public sealed class QuartermasterIpcClient : IDisposable
             });
         }
 
-        var stowagePlans = ImmutableArray.CreateBuilder<QuartermasterStowagePlanSnapshot>();
-        if (wire.StowagePlans is { } stowage)
+        var stowagePlans = ImmutableArray<QuartermasterStowagePlanSnapshot>.Empty;
+        if (wire.StowagePlans is { ValueKind: not JsonValueKind.Null and not JsonValueKind.Undefined } stowageElement)
         {
-            if (!string.Equals(stowage.Schema, StowagePlansSchema, StringComparison.Ordinal))
-            {
-                error = $"Unsupported Quartermaster Stowage Plans schema '{stowage.Schema ?? "(missing)"}'.";
-                return false;
-            }
-            foreach (var planWire in stowage.Plans ?? [])
-            {
-                var planOwnerWire = planWire.Owner;
-                if (planWire.Id == Guid.Empty ||
-                    planWire.Revision < 0 ||
-                    planOwnerWire is null ||
-                    planOwnerWire.LocalContentId == 0 ||
-                    planOwnerWire.HomeWorldId == 0 ||
-                    string.IsNullOrWhiteSpace(planWire.Name))
-                {
-                    error = "Quartermaster Stowage Plans contained a plan without stable identity, owner, or revision.";
-                    return false;
-                }
-
-                var rules = ImmutableArray.CreateBuilder<QuartermasterStowageRuleSnapshot>();
-                foreach (var ruleWire in planWire.Rules ?? [])
-                {
-                    if (ruleWire.Id == Guid.Empty ||
-                        ruleWire.ItemId == 0 ||
-                        ruleWire.DesiredPlayerQuantity < 0)
-                    {
-                        error = "Quartermaster Stowage Plans contained an invalid rule.";
-                        return false;
-                    }
-                    rules.Add(new(
-                        ruleWire.Id,
-                        ruleWire.ItemId,
-                        ruleWire.ItemName,
-                        ruleWire.DesiredPlayerQuantity,
-                        ruleWire.Quality ?? "Any",
-                        ruleWire.Enabled,
-                        (ruleWire.Routing?.PreferredRetainerIds ?? []).Where(id => id > 0).Distinct().ToImmutableArray(),
-                        ruleWire.Routing?.Mode ?? "ConsolidateFirst",
-                        ruleWire.Routing?.Overflow ?? "AnyOwnerRetainer",
-                        ruleWire.Evaluated?.Action ?? "none",
-                        Math.Max(0, ruleWire.Evaluated?.Quantity ?? 0),
-                        Math.Max(0, ruleWire.Evaluated?.PlayerQuantity ?? 0)));
-                }
-
-                stowagePlans.Add(new(
-                    planWire.Id,
-                    planWire.Revision,
-                    new QuartermasterOwner(
-                        planOwnerWire.LocalContentId,
-                        planOwnerWire.HomeWorldId,
-                        planOwnerWire.CharacterName ?? string.Empty,
-                        planOwnerWire.HomeWorldName),
-                    planWire.Name,
-                    planWire.Enabled,
-                    planWire.Priority,
-                    rules.ToImmutable()));
-            }
+            if (!TryParseStowagePlans(stowageElement, out stowagePlans, out var stowageError))
+                warning = $"Optional Stowage Plans data was ignored: {stowageError}";
         }
 
         snapshot = new(wire.ProviderInstanceId, wire.Revision, generatedAt, owner, retainers.ToImmutable())
         {
             PlayerRequestedSources = NormalizeSources(wire.PlayerStorage?.RequestedSources),
             PlayerObservedSources = NormalizeSources(wire.PlayerStorage?.ObservedSources),
-            StowagePlans = stowagePlans.ToImmutable(),
+            StowagePlans = stowagePlans,
         };
         return true;
+    }
+
+    private static bool TryParseStowagePlans(
+        JsonElement element,
+        out ImmutableArray<QuartermasterStowagePlanSnapshot> plans,
+        out string error)
+    {
+        plans = [];
+        if (!TryDeserialize(element.GetRawText(), out QuartermasterStowageEnvelopeWire? stowage, out error))
+            return false;
+        if (!string.Equals(stowage!.Schema, StowagePlansSchema, StringComparison.Ordinal))
+        {
+            error = $"unsupported schema '{stowage.Schema ?? "(missing)"}'.";
+            return false;
+        }
+
+        var result = ImmutableArray.CreateBuilder<QuartermasterStowagePlanSnapshot>();
+        foreach (var planWire in stowage.Plans ?? [])
+        {
+            var planOwnerWire = planWire.Owner;
+            if (planWire.Id == Guid.Empty ||
+                planWire.Revision < 0 ||
+                planOwnerWire is null ||
+                planOwnerWire.LocalContentId == 0 ||
+                planOwnerWire.HomeWorldId == 0 ||
+                string.IsNullOrWhiteSpace(planWire.Name))
+            {
+                error = "a plan omitted stable identity, owner, or revision.";
+                return false;
+            }
+
+            var rules = ImmutableArray.CreateBuilder<QuartermasterStowageRuleSnapshot>();
+            foreach (var ruleWire in planWire.Rules ?? [])
+            {
+                if (ruleWire.Id == Guid.Empty ||
+                    ruleWire.ItemId == 0 ||
+                    ruleWire.DesiredPlayerQuantity < 0)
+                {
+                    error = "a plan contained an invalid rule.";
+                    return false;
+                }
+                if (!TryParseEnumName(ruleWire.Routing?.Mode, "ConsolidateFirst", "HomeFirst", out var routingMode) ||
+                    !TryParseEnumName(ruleWire.Routing?.Overflow, "AnyOwnerRetainer", "HoldOnPlayer", out var overflow))
+                {
+                    error = "a rule contained an unsupported routing enum.";
+                    return false;
+                }
+                rules.Add(new(
+                    ruleWire.Id,
+                    ruleWire.ItemId,
+                    ruleWire.ItemName,
+                    ruleWire.DesiredPlayerQuantity,
+                    ruleWire.Quality ?? "Any",
+                    ruleWire.Enabled,
+                    (ruleWire.Routing?.PreferredRetainerIds ?? []).Where(id => id > 0).Distinct().ToImmutableArray(),
+                    routingMode,
+                    overflow,
+                    ruleWire.Evaluated?.Action ?? "none",
+                    Math.Max(0, ruleWire.Evaluated?.Quantity ?? 0),
+                    Math.Max(0, ruleWire.Evaluated?.PlayerQuantity ?? 0)));
+            }
+
+            result.Add(new(
+                planWire.Id,
+                planWire.Revision,
+                new QuartermasterOwner(
+                    planOwnerWire.LocalContentId,
+                    planOwnerWire.HomeWorldId,
+                    planOwnerWire.CharacterName ?? string.Empty,
+                    planOwnerWire.HomeWorldName),
+                planWire.Name,
+                planWire.Enabled,
+                planWire.Priority,
+                rules.ToImmutable()));
+        }
+
+        plans = result.ToImmutable();
+        error = string.Empty;
+        return true;
+    }
+
+    private static bool TryParseEnumName(
+        JsonElement? element,
+        string zeroName,
+        string oneName,
+        out string value)
+    {
+        value = zeroName;
+        if (element is null || element.Value.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
+            return true;
+        if (element.Value.ValueKind == JsonValueKind.String)
+        {
+            var name = element.Value.GetString();
+            if (string.Equals(name, zeroName, StringComparison.OrdinalIgnoreCase))
+            {
+                value = zeroName;
+                return true;
+            }
+            if (string.Equals(name, oneName, StringComparison.OrdinalIgnoreCase))
+            {
+                value = oneName;
+                return true;
+            }
+            return false;
+        }
+        if (element.Value.ValueKind == JsonValueKind.Number && element.Value.TryGetInt32(out var numeric))
+        {
+            if (numeric == 0)
+            {
+                value = zeroName;
+                return true;
+            }
+            if (numeric == 1)
+            {
+                value = oneName;
+                return true;
+            }
+        }
+        return false;
     }
 
     private static ImmutableArray<string> NormalizeSources(IEnumerable<string>? sources) =>

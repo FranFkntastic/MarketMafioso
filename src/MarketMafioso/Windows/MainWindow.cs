@@ -91,6 +91,7 @@ public class MainWindow : Window, IDisposable
     private bool clearAgentReviewWindowOverride;
     private Vector2? capturePresentationPreviousSize;
     private Vector2? capturePresentationRestoreSize;
+    private WindowPlacementObservation? lastWindowPlacement;
 
     public MarketMafiosoCaptureRegion? AgentCaptureRegion { get; private set; }
     public AgentBridgeUiCaptureTransactionManager AgentCaptureTransactions { get; }
@@ -124,6 +125,7 @@ public class MainWindow : Window, IDisposable
         : base("MarketMafioso##MarketMafiosoMainWindow",
                ImGuiWindowFlags.None)
     {
+        AllowClickthrough = false;
         this.config = config;
         this.reporter = reporter;
         this.scanner = scanner;
@@ -661,6 +663,17 @@ public class MainWindow : Window, IDisposable
                 ImGui.SetNextWindowSize(restoreSize, ImGuiCond.Always);
                 capturePresentationRestoreSize = null;
             }
+            if (lastWindowPlacement is { IsDocked: false } placement &&
+                WindowPlacementRecovery.TryRecoverTitleBar(
+                    placement.Position,
+                    placement.Size,
+                    placement.WorkPosition,
+                    placement.WorkSize,
+                    ImGui.GetFrameHeight(),
+                    out var recoveredPosition))
+            {
+                ImGui.SetNextWindowPos(recoveredPosition, ImGuiCond.Always);
+            }
             return;
         }
         var viewport = ImGui.GetMainViewport();
@@ -693,6 +706,12 @@ public class MainWindow : Window, IDisposable
             var viewport = ImGui.GetWindowViewport();
             var windowPosition = ImGui.GetWindowPos();
             var windowSize = ImGui.GetWindowSize();
+            lastWindowPlacement = new(
+                windowPosition,
+                windowSize,
+                viewport.WorkPos,
+                viewport.WorkSize,
+                ImGui.IsWindowDocked());
             AcquisitionCompositionWindow.AnchorTo(
                 windowPosition,
                 windowSize,
@@ -769,6 +788,13 @@ public class MainWindow : Window, IDisposable
                 }
             }
     }
+
+    private sealed record WindowPlacementObservation(
+        Vector2 Position,
+        Vector2 Size,
+        Vector2 WorkPosition,
+        Vector2 WorkSize,
+        bool IsDocked);
 
     public string OpenRemoteMarketBoard() => remoteMarketController.OpenMarketBoard();
 

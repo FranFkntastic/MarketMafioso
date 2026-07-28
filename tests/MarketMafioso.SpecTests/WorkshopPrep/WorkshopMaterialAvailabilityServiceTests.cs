@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Text.Json;
 using MarketMafioso.Quartermaster;
+using MarketMafioso.SpecTests.Windows;
 using MarketMafioso.WorkshopPrep;
 
 namespace MarketMafioso.SpecTests.WorkshopPrep;
@@ -60,6 +61,7 @@ public sealed class WorkshopMaterialAvailabilityServiceTests
         Assert.Equal([10UL, 11UL], item.QuartermasterRetainers.Select(candidate => candidate.RetainerId));
 
         VerifyStowageCapabilityGuard();
+        WindowPlacementRecoveryTests.VerifyContract();
     }
 
     private void BuildAvailability_RejectsSnapshotForDifferentStableOwnerScope()
@@ -159,17 +161,40 @@ public sealed class WorkshopMaterialAvailabilityServiceTests
         var rule = Assert.Single(plan.Rules);
         Assert.Equal("General", plan.Name);
         Assert.Equal((uint)100, rule.ItemId);
+        Assert.Equal("HomeFirst", rule.RoutingMode);
+        Assert.Equal("AnyOwnerRetainer", rule.Overflow);
         Assert.Equal("deposit", rule.Action);
         Assert.Equal(4, rule.ActionQuantity);
+        Assert.Equal((uint)25, Assert.Single(Assert.Single(advertised.Retainers).Bags).Items.Single().Quantity);
 
         var report = HttpReporter.BuildStowageReport(advertised, includeItemNames: false);
         Assert.Null(Assert.Single(Assert.Single(report!.Plans).Rules).ItemName);
+
+        var stringRoutingAdapter = new StowageQuartermasterIpcAdapter
+        {
+            CapabilitiesJson = CapabilitiesJson(QuartermasterIpcClient.StowagePlansCapability),
+            SnapshotJson = StowageSnapshotJson(useNumericRouting: false),
+        };
+        using var stringRoutingClient = new QuartermasterIpcClient(stringRoutingAdapter);
+        Assert.True(stringRoutingClient.TryGetSnapshot(out var stringRouting, out var stringRoutingError), stringRoutingError);
+        Assert.Equal("HomeFirst", Assert.Single(Assert.Single(stringRouting!.StowagePlans).Rules).RoutingMode);
 
         adapter.CapabilitiesJson = CapabilitiesJson();
         using var unadvertisedClient = new QuartermasterIpcClient(adapter);
         Assert.True(unadvertisedClient.TryGetSnapshot(out var unadvertised, out var unadvertisedError), unadvertisedError);
         Assert.Empty(unadvertised!.StowagePlans);
         Assert.Null(HttpReporter.BuildStowageReport(unadvertised, includeItemNames: true));
+
+        var malformedAdapter = new StowageQuartermasterIpcAdapter
+        {
+            CapabilitiesJson = CapabilitiesJson(QuartermasterIpcClient.StowagePlansCapability),
+            SnapshotJson = MalformedStowageSnapshotJson(),
+        };
+        using var malformedClient = new QuartermasterIpcClient(malformedAdapter);
+        Assert.True(malformedClient.TryGetSnapshot(out var coreSnapshot, out var coreError), coreError);
+        Assert.Empty(coreSnapshot!.StowagePlans);
+        Assert.Equal((uint)25, Assert.Single(Assert.Single(coreSnapshot.Retainers).Bags).Items.Single().Quantity);
+        Assert.Contains("Optional Stowage Plans data was ignored", malformedClient.LastStatus, StringComparison.Ordinal);
     }
 
     private static string CapabilitiesJson(params string[] capabilities) => JsonSerializer.Serialize(new
@@ -181,14 +206,33 @@ public sealed class WorkshopMaterialAvailabilityServiceTests
         capabilities,
     });
 
-    private static string StowageSnapshotJson() => JsonSerializer.Serialize(new
+    private static string StowageSnapshotJson(bool useNumericRouting = true) => JsonSerializer.Serialize(new
     {
         schema = QuartermasterIpcClient.SnapshotSchema,
         providerInstanceId = "provider-a",
         revision = 7,
         generatedAtUtc = "2026-07-21T12:00:00Z",
         owner = new { localContentId = 100UL, homeWorldId = 40U, characterName = "Wei Ning", homeWorldName = "Maduin" },
-        retainers = Array.Empty<object>(),
+        retainers = new[]
+        {
+            new
+            {
+                retainerId = 10UL,
+                retainerName = "Current Owner",
+                observedAtUtc = "2026-07-21T11:59:00Z",
+                bags = new[]
+                {
+                    new
+                    {
+                        bagName = "RetainerInventory1",
+                        items = new[]
+                        {
+                            new { itemId = 100U, itemName = "Elm Lumber", quantity = 25U },
+                        },
+                    },
+                },
+            },
+        },
         stowagePlans = new
         {
             schema = QuartermasterIpcClient.StowagePlansSchema,
@@ -212,12 +256,51 @@ public sealed class WorkshopMaterialAvailabilityServiceTests
                             desiredPlayerQuantity = 10,
                             quality = "Any",
                             enabled = true,
-                            routing = new { mode = "HomeFirst", preferredRetainerIds = Array.Empty<ulong>(), overflow = "AnyOwnerRetainer" },
+                            routing = new
+                            {
+                                mode = useNumericRouting ? (object)1 : "HomeFirst",
+                                preferredRetainerIds = Array.Empty<ulong>(),
+                                overflow = useNumericRouting ? (object)0 : "AnyOwnerRetainer",
+                            },
                             evaluated = new { action = "deposit", quantity = 4, playerQuantity = 14, desiredPlayerQuantity = 10 },
                         },
                     },
                 },
             },
+        },
+    });
+
+    private static string MalformedStowageSnapshotJson() => JsonSerializer.Serialize(new
+    {
+        schema = QuartermasterIpcClient.SnapshotSchema,
+        providerInstanceId = "provider-a",
+        revision = 7,
+        generatedAtUtc = "2026-07-21T12:00:00Z",
+        owner = new { localContentId = 100UL, homeWorldId = 40U, characterName = "Wei Ning", homeWorldName = "Maduin" },
+        retainers = new[]
+        {
+            new
+            {
+                retainerId = 10UL,
+                retainerName = "Current Owner",
+                observedAtUtc = "2026-07-21T11:59:00Z",
+                bags = new[]
+                {
+                    new
+                    {
+                        bagName = "RetainerInventory1",
+                        items = new[]
+                        {
+                            new { itemId = 100U, itemName = "Elm Lumber", quantity = 25U },
+                        },
+                    },
+                },
+            },
+        },
+        stowagePlans = new
+        {
+            schema = QuartermasterIpcClient.StowagePlansSchema,
+            plans = new[] { new { id = Guid.Empty } },
         },
     });
 

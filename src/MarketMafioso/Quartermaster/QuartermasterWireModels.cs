@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace MarketMafioso.Quartermaster;
@@ -210,7 +211,7 @@ internal sealed class QuartermasterSnapshotWire
     public QuartermasterOwnerWire? CurrentOwner { get; init; }
     public QuartermasterStorageSourcesWire? PlayerStorage { get; init; }
     public List<QuartermasterRetainerWire>? Retainers { get; init; }
-    public QuartermasterStowageEnvelopeWire? StowagePlans { get; init; }
+    public JsonElement? StowagePlans { get; init; }
 }
 
 internal sealed class QuartermasterStowageEnvelopeWire
@@ -244,9 +245,9 @@ internal sealed class QuartermasterStowageRuleWire
 
 internal sealed class QuartermasterStowageRoutingWire
 {
-    public string? Mode { get; init; }
+    public JsonElement? Mode { get; init; }
     public List<ulong>? PreferredRetainerIds { get; init; }
-    public string? Overflow { get; init; }
+    public JsonElement? Overflow { get; init; }
 }
 
 internal sealed class QuartermasterStowageEvaluationWire
