@@ -514,6 +514,21 @@ public class MainWindow : Window, IDisposable
                 VendorUnits = workshopReview.VendorUnits,
                 MaximumGil = workshopReview.MaximumGil,
                 StopCount = workshopReview.Stops.Count,
+                VendorLines = workshopReview.Materials
+                    .Where(line => line.SelectedCandidate is not null)
+                    .Select(line => new AgentBridgeWorkshopVendorLineTruth
+                    {
+                        ItemId = line.Availability.ItemId,
+                        ItemName = line.Availability.ItemName,
+                        VendorNeed = line.VendorNeed,
+                        Selected = line.Selected,
+                        ApprovedQuantity = line.ApprovedVendorQuantity,
+                        UnitPriceGil = line.SelectedCandidate!.Offer.UnitPriceGil,
+                        NpcId = line.SelectedCandidate.Offer.NpcId,
+                        NpcName = line.SelectedCandidate.Offer.NpcName,
+                        AccessState = line.SelectedCandidate.Access.State.ToString(),
+                    })
+                    .ToArray(),
                 ActivePhase = workshopRun?.Phase.ToString(),
                 ActiveMessage = workshopRun?.Message,
                 VerifiedReceiptCount = workshopRun?.Receipts.Count ?? 0,

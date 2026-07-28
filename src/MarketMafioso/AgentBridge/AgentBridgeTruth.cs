@@ -42,12 +42,26 @@ public sealed record AgentBridgeWorkshopRestockTruth
     public required int VendorUnits { get; init; }
     public required ulong MaximumGil { get; init; }
     public required int StopCount { get; init; }
+    public IReadOnlyList<AgentBridgeWorkshopVendorLineTruth> VendorLines { get; init; } = [];
     public string? ActivePhase { get; init; }
     public string? ActiveMessage { get; init; }
     public int VerifiedReceiptCount { get; init; }
     public int VerifiedQuantity { get; init; }
     public ulong VerifiedGil { get; init; }
     public uint? ArmedItemId { get; init; }
+}
+
+public sealed record AgentBridgeWorkshopVendorLineTruth
+{
+    public required uint ItemId { get; init; }
+    public required string ItemName { get; init; }
+    public required int VendorNeed { get; init; }
+    public required bool Selected { get; init; }
+    public required int ApprovedQuantity { get; init; }
+    public required uint UnitPriceGil { get; init; }
+    public required uint NpcId { get; init; }
+    public required string NpcName { get; init; }
+    public required string AccessState { get; init; }
 }
 
 public sealed record AgentBridgeRemoteBellProbeTruth
