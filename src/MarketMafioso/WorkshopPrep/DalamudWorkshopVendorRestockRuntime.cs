@@ -2,31 +2,40 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Numerics;
+using Dalamud.Game.ClientState.Objects.Types;
 using Dalamud.Plugin.Services;
+using FFXIVClientStructs.FFXIV.Client.Game.Control;
 using Franthropy.Dalamud.Automation.Vendors;
 using MarketMafioso.Automation.Runtime;
 using MarketMafioso.Automation.Travel;
 using MarketMafioso.Quartermaster;
+using ClientGameObject = FFXIVClientStructs.FFXIV.Client.Game.Object.GameObject;
 
 namespace MarketMafioso.WorkshopPrep;
 
 public sealed class DalamudWorkshopVendorRestockRuntime : IWorkshopVendorRestockRuntime
 {
-    private static readonly TimeSpan ApproachTimeout = TimeSpan.FromSeconds(25);
+    private static readonly TimeSpan ApproachTimeout = TimeSpan.FromSeconds(60);
     private static readonly TimeSpan ActionThrottle = TimeSpan.FromSeconds(2);
+    private const float DirectInteractionDistance = 4.25f;
+    private const float NavigationStopDistance = 3.5f;
     private readonly Configuration config;
     private readonly InventoryScanner scanner;
     private readonly WorkshopQuartermasterRequestService quartermaster;
     private readonly DalamudGilVendorAccessReader access;
     private readonly DalamudOrdinaryGilShop shop;
-    private readonly LifestreamIpc lifestream;
+    private readonly VNavmeshIpc vnavmesh;
     private readonly ExternalAutomationCoordinator externalAutomation;
     private readonly IClientState clientState;
+    private readonly IObjectTable objectTable;
+    private readonly ITargetManager targetManager;
     private readonly Func<DateTimeOffset> utcNow;
     private DateTimeOffset approachStartedAt;
     private DateTimeOffset nextActionAt;
     private uint activeNpcId;
     private uint? requestedAetheryteId;
+    private bool ownsNavigation;
 
     public DalamudWorkshopVendorRestockRuntime(
         Configuration config,
@@ -34,9 +43,11 @@ public sealed class DalamudWorkshopVendorRestockRuntime : IWorkshopVendorRestock
         WorkshopQuartermasterRequestService quartermaster,
         DalamudGilVendorAccessReader access,
         DalamudOrdinaryGilShop shop,
-        LifestreamIpc lifestream,
+        VNavmeshIpc vnavmesh,
         ExternalAutomationCoordinator externalAutomation,
         IClientState clientState,
+        IObjectTable objectTable,
+        ITargetManager targetManager,
         Func<DateTimeOffset>? utcNow = null)
     {
         this.config = config ?? throw new ArgumentNullException(nameof(config));
@@ -44,9 +55,11 @@ public sealed class DalamudWorkshopVendorRestockRuntime : IWorkshopVendorRestock
         this.quartermaster = quartermaster ?? throw new ArgumentNullException(nameof(quartermaster));
         this.access = access ?? throw new ArgumentNullException(nameof(access));
         this.shop = shop ?? throw new ArgumentNullException(nameof(shop));
-        this.lifestream = lifestream ?? throw new ArgumentNullException(nameof(lifestream));
+        this.vnavmesh = vnavmesh ?? throw new ArgumentNullException(nameof(vnavmesh));
         this.externalAutomation = externalAutomation ?? throw new ArgumentNullException(nameof(externalAutomation));
         this.clientState = clientState ?? throw new ArgumentNullException(nameof(clientState));
+        this.objectTable = objectTable ?? throw new ArgumentNullException(nameof(objectTable));
+        this.targetManager = targetManager ?? throw new ArgumentNullException(nameof(targetManager));
         this.utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
     }
 
@@ -141,8 +154,6 @@ public sealed class DalamudWorkshopVendorRestockRuntime : IWorkshopVendorRestock
             activeNpcId = offer.NpcId;
             approachStartedAt = utcNow();
         }
-        if (utcNow() - approachStartedAt > ApproachTimeout)
-            return new(WorkshopVendorReachState.Unavailable, $"{offer.NpcName} or the expected shop did not become available.");
 
         var assessment = access.Assess(offer);
         if (!assessment.IsEligible)
@@ -166,22 +177,57 @@ public sealed class DalamudWorkshopVendorRestockRuntime : IWorkshopVendorRestock
             return new(WorkshopVendorReachState.Waiting, $"Traveling to {offer.NpcName}.");
         }
 
+        if (requestedAetheryteId is not null)
+        {
+            requestedAetheryteId = null;
+            approachStartedAt = utcNow();
+            nextActionAt = DateTimeOffset.MinValue;
+        }
+        if (utcNow() - approachStartedAt > ApproachTimeout)
+            return new(WorkshopVendorReachState.Unavailable, $"Could not reach {offer.NpcName} within one minute.");
+
         var npc = access.FindLiveNpc(offer);
         if (npc is null)
             return new(WorkshopVendorReachState.Waiting, $"Waiting for {offer.NpcName} to become targetable.");
-        if (!lifestream.IsAvailable)
-            return new(WorkshopVendorReachState.Failed, "Lifestream is required to approach and interact with the vendor.");
+
+        var playerPosition = objectTable.LocalPlayer?.Position;
+        if (playerPosition is null)
+            return new(WorkshopVendorReachState.Waiting, "Waiting for the player's position after travel.");
+        var distance = HorizontalDistance(playerPosition.Value, npc.Position);
+        var decision = DecideApproach(
+            distance,
+            vnavmesh.IsReady,
+            vnavmesh.IsRunning,
+            ownsNavigation);
+        switch (decision)
+        {
+            case WorkshopVendorApproachDecision.Interact:
+                StopOwnedNavigation();
+                if (utcNow() < nextActionAt)
+                    return new(WorkshopVendorReachState.Waiting, $"Opening {offer.NpcName}'s shop.");
+                return InteractWithVendor(npc, offer);
+            case WorkshopVendorApproachDecision.WaitForOwnedRoute:
+                return new(WorkshopVendorReachState.Waiting, $"Walking to {offer.NpcName} ({distance:0.0} yalms away).");
+            case WorkshopVendorApproachDecision.BlockedByAnotherRoute:
+                return new(WorkshopVendorReachState.Failed, "Another vnavmesh route is already active.");
+            case WorkshopVendorApproachDecision.NavigationUnavailable:
+                return new(WorkshopVendorReachState.Failed, "vnavmesh is required to walk from the aetheryte to this vendor.");
+        }
+
         if (utcNow() >= nextActionAt)
         {
-            if (!lifestream.TryEnqueueObjectInteraction(offer.NpcId))
-                return new(WorkshopVendorReachState.Failed, $"Could not approach {offer.NpcName} through Lifestream.");
+            var movement = vnavmesh.MoveCloseTo(npc.Position, NavigationStopDistance);
+            if (!movement.Success)
+                return new(WorkshopVendorReachState.Failed, $"Could not start the route to {offer.NpcName}.");
+            ownsNavigation = true;
             nextActionAt = utcNow().Add(ActionThrottle);
         }
-        return new(WorkshopVendorReachState.Waiting, $"Approaching {offer.NpcName}.");
+        return new(WorkshopVendorReachState.Waiting, $"Walking to {offer.NpcName} ({distance:0.0} yalms away).");
     }
 
     public void ResetVendorApproach()
     {
+        StopOwnedNavigation();
         approachStartedAt = utcNow();
         nextActionAt = DateTimeOffset.MinValue;
         activeNpcId = 0;
@@ -208,7 +254,64 @@ public sealed class DalamudWorkshopVendorRestockRuntime : IWorkshopVendorRestock
 
     public void EndAutomation()
     {
+        StopOwnedNavigation();
         externalAutomation.RestoreTextAdvance();
         externalAutomation.RestoreTradeAutoConfirm();
     }
+
+    private unsafe WorkshopVendorReachResult InteractWithVendor(IGameObject npc, GilVendorOffer offer)
+    {
+        var targetSystem = TargetSystem.Instance();
+        if (targetSystem == null)
+            return new(WorkshopVendorReachState.Failed, "The game interaction system is temporarily unavailable.");
+
+        targetManager.Target = npc;
+        targetSystem->InteractWithObject((ClientGameObject*)npc.Address, false);
+        nextActionAt = utcNow().Add(ActionThrottle);
+        return new(WorkshopVendorReachState.Waiting, $"Opening {offer.NpcName}'s shop.");
+    }
+
+    private void StopOwnedNavigation()
+    {
+        if (!ownsNavigation)
+            return;
+        if (vnavmesh.IsRunning)
+            vnavmesh.Stop();
+        ownsNavigation = false;
+    }
+
+    private static float HorizontalDistance(Vector3 first, Vector3 second)
+    {
+        var dx = first.X - second.X;
+        var dz = first.Z - second.Z;
+        return MathF.Sqrt((dx * dx) + (dz * dz));
+    }
+
+    internal static WorkshopVendorApproachDecision DecideApproach(
+        float distance,
+        bool navigationReady,
+        bool navigationRunning,
+        bool ownsNavigation)
+    {
+        if (distance <= DirectInteractionDistance)
+            return WorkshopVendorApproachDecision.Interact;
+        if (navigationRunning)
+        {
+            return ownsNavigation
+                ? WorkshopVendorApproachDecision.WaitForOwnedRoute
+                : WorkshopVendorApproachDecision.BlockedByAnotherRoute;
+        }
+        return navigationReady
+            ? WorkshopVendorApproachDecision.StartNavigation
+            : WorkshopVendorApproachDecision.NavigationUnavailable;
+    }
+}
+
+internal enum WorkshopVendorApproachDecision
+{
+    Interact,
+    StartNavigation,
+    WaitForOwnedRoute,
+    BlockedByAnotherRoute,
+    NavigationUnavailable,
 }

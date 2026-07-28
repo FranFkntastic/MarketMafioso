@@ -16,20 +16,18 @@ internal sealed class WorkshopMaterialPanel
         [new("quantity", AgentBridgeActionArgumentKind.Integer, Minimum: 0)]);
     private readonly Configuration config;
     private readonly QuartermasterIpcClient quartermaster;
-    private readonly WorkshopQuartermasterRequestService requestService;
     private readonly WorkshopVendorProcurementPlanner planner;
     private readonly WorkshopVendorRestockRunner runner;
     private readonly Func<IReadOnlyList<WorkshopMaterialAvailability>> getAvailability;
     private readonly Func<QuartermasterOwnerScope> getOwnerScope;
     private readonly AgentBridgeUiReviewRegistry reviewRegistry;
     private string searchText = string.Empty;
-    private bool shortagesOnly;
+    private bool shortagesOnly = true;
     private string? actionStatus;
 
     public WorkshopMaterialPanel(
         Configuration config,
         QuartermasterIpcClient quartermaster,
-        WorkshopQuartermasterRequestService requestService,
         WorkshopVendorProcurementPlanner planner,
         WorkshopVendorRestockRunner runner,
         Func<IReadOnlyList<WorkshopMaterialAvailability>> getAvailability,
@@ -38,7 +36,6 @@ internal sealed class WorkshopMaterialPanel
     {
         this.config = config ?? throw new ArgumentNullException(nameof(config));
         this.quartermaster = quartermaster ?? throw new ArgumentNullException(nameof(quartermaster));
-        this.requestService = requestService ?? throw new ArgumentNullException(nameof(requestService));
         this.planner = planner ?? throw new ArgumentNullException(nameof(planner));
         this.runner = runner ?? throw new ArgumentNullException(nameof(runner));
         this.getAvailability = getAvailability ?? throw new ArgumentNullException(nameof(getAvailability));
@@ -56,11 +53,16 @@ internal sealed class WorkshopMaterialPanel
             () => DrawHeaderActions(review),
             430);
 
-        ImGui.TextColored(GetQuartermasterStatusColor(), quartermaster.LastStatus);
         var run = runner.ActiveRun;
-        ImGui.TextColored(
-            RunStatusColor(run),
-            run?.Message ?? actionStatus ?? requestService.LastStatus);
+        if (review.RetainerUnits > 0 &&
+            !string.IsNullOrWhiteSpace(quartermaster.LastStatus) &&
+            !quartermaster.LastStatus.Contains("has not been queried", StringComparison.OrdinalIgnoreCase))
+        {
+            ImGui.TextColored(GetQuartermasterStatusColor(), DescribeQuartermasterStatus());
+        }
+        var visibleStatus = run?.Message ?? actionStatus;
+        if (!string.IsNullOrWhiteSpace(visibleStatus))
+            ImGui.TextColored(RunStatusColor(run), visibleStatus);
 
         var automatic = run is not null && (runner.IsRunning || run.Phase == WorkshopVendorRestockPhase.Paused)
             ? run.AutomaticallyBuyVendorMaterials
@@ -275,7 +277,7 @@ internal sealed class WorkshopMaterialPanel
             candidate.Access.State switch
             {
                 GilVendorAccessState.Verified => "Access verified",
-                GilVendorAccessState.Probeable => "Verify at stop",
+                GilVendorAccessState.Probeable => "Route available",
                 GilVendorAccessState.Unavailable => "No accessible route",
                 _ => "Access unknown",
             });
@@ -394,18 +396,19 @@ internal sealed class WorkshopMaterialPanel
 
     private static string BuildActionLabel(WorkshopVendorRestockReview review, bool automatic)
     {
-        var parts = new List<string>();
-        if (review.RetainerUnits > 0)
-            parts.Add($"retrieve {review.RetainerUnits:N0}");
+        if (review.RetainerUnits > 0 && automatic && review.VendorUnits > 0)
+            return $"Retrieve {review.RetainerUnits:N0} + buy {review.VendorUnits:N0} · up to {review.MaximumGil:N0} gil";
         if (automatic && review.VendorUnits > 0)
-        {
-            parts.Add($"buy {review.VendorUnits:N0}");
-            parts.Add($"{review.MaximumGil:N0} gil");
-        }
-        return parts.Count == 0
-            ? "Materials Ready"
-            : $"Restock selected · {string.Join(" · ", parts)}";
+            return $"Buy {review.VendorUnits:N0} items · up to {review.MaximumGil:N0} gil";
+        if (review.RetainerUnits > 0)
+            return $"Retrieve {review.RetainerUnits:N0} from retainers";
+        return "Materials Ready";
     }
+
+    private string DescribeQuartermasterStatus() =>
+        GetQuartermasterStatusColor() == MarketMafiosoUiTheme.Error
+            ? "Retainer retrieval is temporarily unavailable. Vendor restock can still continue."
+            : quartermaster.LastStatus;
 
     private System.Numerics.Vector4 GetQuartermasterStatusColor() =>
         quartermaster.LastStatus.Contains("unavailable", StringComparison.OrdinalIgnoreCase) ||

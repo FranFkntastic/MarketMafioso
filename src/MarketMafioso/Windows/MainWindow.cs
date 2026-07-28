@@ -320,9 +320,11 @@ public class MainWindow : Window, IDisposable
             workshopQuartermasterRequest,
             vendorAccess,
             new DalamudOrdinaryGilShop(Plugin.GameGui),
-            lifestream,
+            new VNavmeshIpc(new DalamudVNavmeshIpcAdapter(Plugin.PluginInterface, log)),
             workshopVendorAutomationCoordinator,
-            Plugin.ClientState);
+            Plugin.ClientState,
+            Plugin.ObjectTable,
+            Plugin.TargetManager);
         workshopVendorRestockRunner = new WorkshopVendorRestockRunner(
             config,
             vendorRuntime,
@@ -350,7 +352,6 @@ public class MainWindow : Window, IDisposable
         workshopMaterials = new WorkshopMaterialPanel(
             config,
             quartermaster,
-            workshopQuartermasterRequest,
             vendorPlanner,
             workshopVendorRestockRunner,
             GetWorkshopAvailability,

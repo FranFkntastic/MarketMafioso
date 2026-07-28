@@ -22,6 +22,8 @@ public sealed class WorkshopVendorRestockRunnerTests
     [InlineData(RunnerScenario.ReloadReconciliation)]
     [InlineData(RunnerScenario.IdentityDrift)]
     [InlineData(RunnerScenario.ArmedStopReconciliation)]
+    [InlineData(RunnerScenario.UnreachableFailure)]
+    [InlineData(RunnerScenario.ApproachPolicy)]
     public void Runner_contract(RunnerScenario scenario)
     {
         switch (scenario)
@@ -38,6 +40,8 @@ public sealed class WorkshopVendorRestockRunnerTests
             case RunnerScenario.ReloadReconciliation: Reload_reconciles_an_exact_armed_purchase_before_continuing(); break;
             case RunnerScenario.IdentityDrift: Owner_or_queue_drift_pauses_before_any_external_action(); break;
             case RunnerScenario.ArmedStopReconciliation: Purchase_is_persisted_as_verifying_before_the_callback_and_stop_reconciles_it(); break;
+            case RunnerScenario.UnreachableFailure: Unreachable_vendor_reports_safe_actionable_failure(); break;
+            case RunnerScenario.ApproachPolicy: Vendor_approach_requires_walking_before_interaction(); break;
             default: throw new ArgumentOutOfRangeException(nameof(scenario), scenario, null);
         }
     }
@@ -191,6 +195,43 @@ public sealed class WorkshopVendorRestockRunnerTests
         Assert.Equal(WorkshopVendorRestockPhase.Failed, runner.ActiveRun!.Phase);
         Assert.Equal(1, runtime.ShopReadCalls);
         Assert.Equal(0, runtime.SubmitCalls);
+    }
+
+    private void Unreachable_vendor_reports_safe_actionable_failure()
+    {
+        var runtime = new FakeRuntime();
+        runtime.ReachResults.Enqueue(new(
+            WorkshopVendorReachState.Unavailable,
+            "The route timed out."));
+        var material = Material(1, required: 1, player: 0, retainer: 0, vendor: 1);
+        var review = Review(material, [Stop(1)]);
+        var runner = new WorkshopVendorRestockRunner(new Configuration(), runtime, () => { });
+
+        Assert.True(runner.TryStart(review, Owner, true, out var error), error);
+        TickUntilTerminal(runner, review.QueueSignature, 10);
+
+        Assert.Equal(WorkshopVendorRestockPhase.Failed, runner.ActiveRun!.Phase);
+        Assert.StartsWith("Couldn't reach Shared Vendor. No gil was spent.", runner.ActiveRun.Message);
+        Assert.Equal(0, runtime.SubmitCalls);
+    }
+
+    private static void Vendor_approach_requires_walking_before_interaction()
+    {
+        Assert.Equal(
+            WorkshopVendorApproachDecision.Interact,
+            DalamudWorkshopVendorRestockRuntime.DecideApproach(3.5f, true, false, false));
+        Assert.Equal(
+            WorkshopVendorApproachDecision.StartNavigation,
+            DalamudWorkshopVendorRestockRuntime.DecideApproach(18f, true, false, false));
+        Assert.Equal(
+            WorkshopVendorApproachDecision.WaitForOwnedRoute,
+            DalamudWorkshopVendorRestockRuntime.DecideApproach(18f, true, true, true));
+        Assert.Equal(
+            WorkshopVendorApproachDecision.BlockedByAnotherRoute,
+            DalamudWorkshopVendorRestockRuntime.DecideApproach(18f, true, true, false));
+        Assert.Equal(
+            WorkshopVendorApproachDecision.NavigationUnavailable,
+            DalamudWorkshopVendorRestockRuntime.DecideApproach(18f, false, false, false));
     }
 
     private void Quantity_above_shop_limit_splits_without_reopening_or_rereading()
@@ -524,5 +565,7 @@ public sealed class WorkshopVendorRestockRunnerTests
         ReloadReconciliation,
         IdentityDrift,
         ArmedStopReconciliation,
+        UnreachableFailure,
+        ApproachPolicy,
     }
 }

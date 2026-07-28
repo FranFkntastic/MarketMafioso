@@ -394,7 +394,9 @@ public sealed class WorkshopVendorRestockRunner : IDisposable
             case WorkshopVendorReachState.Unavailable:
                 if (!TryReplanCurrentStop(run, out var replanMessage))
                 {
-                    Fail(WorkshopVendorRestockPhase.Failed, $"{result.Message} {replanMessage}".Trim());
+                    Fail(
+                        WorkshopVendorRestockPhase.Failed,
+                        DescribeReachFailure(run, stop.NpcName, result.Message, replanMessage));
                     return;
                 }
                 run.Phase = WorkshopVendorRestockPhase.ReachVendor;
@@ -403,9 +405,26 @@ public sealed class WorkshopVendorRestockRunner : IDisposable
                 Persist();
                 return;
             default:
-                Fail(WorkshopVendorRestockPhase.Failed, result.Message);
+                Fail(
+                    WorkshopVendorRestockPhase.Failed,
+                    DescribeReachFailure(run, stop.NpcName, result.Message));
                 return;
         }
+    }
+
+    private static string DescribeReachFailure(
+        PersistedWorkshopVendorRestockRun run,
+        string npcName,
+        string reason,
+        string? alternative = null)
+    {
+        var spend = run.Receipts.Count == 0
+            ? "No gil was spent."
+            : "Verified purchases from earlier stops were preserved.";
+        var next = string.IsNullOrWhiteSpace(alternative)
+            ? reason
+            : alternative;
+        return $"Couldn't reach {npcName}. {spend} {next}".Trim();
     }
 
     private void TickValidateShop(PersistedWorkshopVendorRestockRun run)
