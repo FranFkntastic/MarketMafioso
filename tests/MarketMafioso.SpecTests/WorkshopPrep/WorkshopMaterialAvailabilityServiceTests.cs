@@ -9,8 +9,33 @@ public sealed class WorkshopMaterialAvailabilityServiceTests
 {
     private static readonly QuartermasterOwnerScope CurrentOwner = new(100, 40, "Wei Ning", "Maduin");
 
-    [Fact]
-    public void BuildAvailability_MapsOwnerScopedQuartermasterStock()
+    [Theory]
+    [InlineData(AvailabilityScenario.OwnerScopedStock)]
+    [InlineData(AvailabilityScenario.RejectDifferentOwner)]
+    [InlineData(AvailabilityScenario.WithoutQuartermaster)]
+    [InlineData(AvailabilityScenario.PlayerAlreadyHasEnough)]
+    public void Availability_contract(AvailabilityScenario scenario)
+    {
+        switch (scenario)
+        {
+            case AvailabilityScenario.OwnerScopedStock:
+                BuildAvailability_MapsOwnerScopedQuartermasterStock();
+                break;
+            case AvailabilityScenario.RejectDifferentOwner:
+                BuildAvailability_RejectsSnapshotForDifferentStableOwnerScope();
+                break;
+            case AvailabilityScenario.WithoutQuartermaster:
+                BuildAvailability_WithoutQuartermaster_StillReportsPlayerInventory();
+                break;
+            case AvailabilityScenario.PlayerAlreadyHasEnough:
+                BuildAvailability_WhenPlayerHasEnough_KeepsStockVisibleWithoutTransferCandidates();
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(scenario), scenario, null);
+        }
+    }
+
+    private void BuildAvailability_MapsOwnerScopedQuartermasterStock()
     {
         var requirements = new[] { new WorkshopMaterialRequirement(100, "Elm Lumber", 123, 55) };
         var playerInventory = new Dictionary<uint, int> { [100] = 20 };
@@ -37,8 +62,7 @@ public sealed class WorkshopMaterialAvailabilityServiceTests
         VerifyStowageCapabilityGuard();
     }
 
-    [Fact]
-    public void BuildAvailability_RejectsSnapshotForDifferentStableOwnerScope()
+    private void BuildAvailability_RejectsSnapshotForDifferentStableOwnerScope()
     {
         var snapshot = Snapshot(
             new QuartermasterOwner(999, 40, "Other Character", "Maduin"),
@@ -55,8 +79,7 @@ public sealed class WorkshopMaterialAvailabilityServiceTests
         Assert.Empty(item.QuartermasterRetainers);
     }
 
-    [Fact]
-    public void BuildAvailability_WithoutQuartermaster_StillReportsPlayerInventory()
+    private void BuildAvailability_WithoutQuartermaster_StillReportsPlayerInventory()
     {
         var item = Assert.Single(WorkshopMaterialAvailabilityService.BuildAvailability(
             [new WorkshopMaterialRequirement(100, "Elm Lumber", 123, 55)],
@@ -70,8 +93,7 @@ public sealed class WorkshopMaterialAvailabilityServiceTests
         Assert.Equal(35, item.TotalMissing);
     }
 
-    [Fact]
-    public void BuildAvailability_WhenPlayerHasEnough_KeepsStockVisibleWithoutTransferCandidates()
+    private void BuildAvailability_WhenPlayerHasEnough_KeepsStockVisibleWithoutTransferCandidates()
     {
         var snapshot = Snapshot(
             new QuartermasterOwner(100, 40, "Wei Ning", "Maduin"),
@@ -215,5 +237,13 @@ public sealed class WorkshopMaterialAvailabilityServiceTests
         public string GetOperation(string operationId) => throw new NotSupportedException();
         public void SubscribeChanged(Action<string> handler) { }
         public void UnsubscribeChanged(Action<string> handler) { }
+    }
+
+    public enum AvailabilityScenario
+    {
+        OwnerScopedStock,
+        RejectDifferentOwner,
+        WithoutQuartermaster,
+        PlayerAlreadyHasEnough,
     }
 }

@@ -28,7 +28,9 @@ using MarketMafioso.Diagnostics;
 using MarketMafioso.MarketDiagnostics;
 using Franthropy.Dalamud.AgentBridge;
 using Franthropy.Dalamud.Automation.Retainers;
+using Franthropy.Dalamud.Automation.Vendors;
 using Franthropy.Dalamud.UI.Windows;
+using MarketMafioso.Automation.Runtime;
 using MarketMafiosoCaptureRegion = MarketMafioso.AgentBridge.AgentBridgeCaptureRegion;
 
 namespace MarketMafioso.Windows;
@@ -72,6 +74,8 @@ public class MainWindow : Window, IDisposable
     private readonly WorkshopMaterialPanel workshopMaterials;
     private readonly WorkshopAssemblyPanel workshopAssembly;
     private readonly WorkshopQuartermasterRequestService workshopQuartermasterRequest;
+    private readonly ExternalAutomationCoordinator workshopVendorAutomationCoordinator;
+    private readonly WorkshopVendorRestockRunner workshopVendorRestockRunner;
     private readonly TradeQueuePanel tradeQueuePanel;
     public AgentBridgeUiReviewRegistry AgentReviewRegistry { get; } = new();
 
@@ -300,6 +304,29 @@ public class MainWindow : Window, IDisposable
             config,
             quartermaster,
             config.Save);
+        workshopVendorAutomationCoordinator = new ExternalAutomationCoordinator(
+            new DalamudPluginDataStore(Plugin.PluginInterface),
+            log);
+        var vendorAccess = new DalamudGilVendorAccessReader(
+            Plugin.ClientState,
+            playerState,
+            Plugin.ObjectTable);
+        var vendorPlanner = new WorkshopVendorProcurementPlanner(
+            DalamudGilVendorCatalogBuilder.Build(dataManager),
+            vendorAccess.Assess);
+        var vendorRuntime = new DalamudWorkshopVendorRestockRuntime(
+            config,
+            scanner,
+            workshopQuartermasterRequest,
+            vendorAccess,
+            new DalamudOrdinaryGilShop(Plugin.GameGui),
+            lifestream,
+            workshopVendorAutomationCoordinator,
+            Plugin.ClientState);
+        workshopVendorRestockRunner = new WorkshopVendorRestockRunner(
+            config,
+            vendorRuntime,
+            config.Save);
         tradeQueuePanel = new TradeQueuePanel(
             config,
             tradeQueueRunner,
@@ -321,8 +348,11 @@ public class MainWindow : Window, IDisposable
             tradeQueuePanel.ReplaceWithWorkshopMaterials,
             log);
         workshopMaterials = new WorkshopMaterialPanel(
+            config,
             quartermaster,
             workshopQuartermasterRequest,
+            vendorPlanner,
+            workshopVendorRestockRunner,
             GetWorkshopAvailability,
             GetCurrentQuartermasterOwnerScope,
             AgentReviewRegistry);
@@ -554,6 +584,13 @@ public class MainWindow : Window, IDisposable
     public void OnFrameworkUpdate(IFramework _framework)
     {
         workshopQuartermasterRequest.PollOperationIfDue(GetCurrentQuartermasterOwnerScope());
+        if (workshopVendorRestockRunner.IsRunning)
+        {
+            var availability = GetWorkshopAvailability();
+            workshopVendorRestockRunner.Tick(
+                WorkshopVendorProcurementPlanner.BuildQueueSignature(availability),
+                GetCurrentQuartermasterOwnerScope());
+        }
 
         if (!IsMarketAcquisitionUnlocked())
             return;
@@ -1946,6 +1983,8 @@ public class MainWindow : Window, IDisposable
     public void Dispose()
     {
         AgentCaptureTransactions.CancelActive();
+        workshopVendorRestockRunner.Dispose();
+        workshopVendorAutomationCoordinator.Dispose();
         workshopQuartermasterRequest.Dispose();
         uiStateCapture.Dispose();
         acquisitionWorkspace.Dispose();
