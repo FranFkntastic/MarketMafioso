@@ -7,7 +7,6 @@ using System.Net.Http;
 using System.Numerics;
 using System.Threading.Tasks;
 using Dalamud.Interface.Windowing;
-using Dalamud.Interface.Utility.Raii;
 using Dalamud.Plugin.Services;
 using Dalamud.Bindings.ImGui;
 using MarketMafioso.AgentBridge;
@@ -30,7 +29,6 @@ using MarketMafioso.MarketDiagnostics;
 using Franthropy.Dalamud.AgentBridge;
 using Franthropy.Dalamud.Automation.Retainers;
 using Franthropy.Dalamud.Automation.Vendors;
-using Franthropy.Dalamud.UI.Styling;
 using Franthropy.Dalamud.UI.Windows;
 using MarketMafioso.Automation.Runtime;
 using MarketMafiosoCaptureRegion = MarketMafioso.AgentBridge.AgentBridgeCaptureRegion;
@@ -98,7 +96,7 @@ public class MainWindow : Window, IDisposable
     public AgentBridgeUiCaptureTransactionManager AgentCaptureTransactions { get; }
 
     private const string ProductSummary = "Workshop logistics, direct trade handoff, and self-hosted inventory history.";
-    private const string WorkshopLogisticsModuleSummary = "Prepare company workshop jobs, source shortages, and hand materials off for assembly.";
+    private const string WorkshopLogisticsModuleSummary = "Workshop Logistics tracks company workshop jobs, material shortages, Quartermaster requests, handoff, and assembly.";
 
     internal static readonly Vector4 ColHeader = MarketMafiosoUiTheme.Header;
     internal static readonly Vector4 ColSuccess = MarketMafiosoUiTheme.Success;
@@ -358,8 +356,7 @@ public class MainWindow : Window, IDisposable
             workshopVendorRestockRunner,
             GetWorkshopAvailability,
             GetCurrentQuartermasterOwnerScope,
-            AgentReviewRegistry,
-            workshopPrepQueue.DrawMaterialActions);
+            AgentReviewRegistry);
         workshopAssembly = new WorkshopAssemblyPanel(
             workshopAssemblyRunner,
             () => workshopStatus,
@@ -690,87 +687,87 @@ public class MainWindow : Window, IDisposable
     {
         ClearAgentReviewWindowOverride();
 
-        if (!IsMarketAcquisitionUnlocked())
-            AcquisitionCompositionWindow.IsOpen = false;
+            if (!IsMarketAcquisitionUnlocked())
+                AcquisitionCompositionWindow.IsOpen = false;
 
-        var viewport = ImGui.GetWindowViewport();
-        var windowPosition = ImGui.GetWindowPos();
-        var windowSize = ImGui.GetWindowSize();
-        AcquisitionCompositionWindow.AnchorTo(
-            windowPosition,
-            windowSize,
-            DalamudOwnedWindowSurface.Capture());
-        if (windowSize.X > 0f && windowSize.Y > 0f && viewport.Size.X > 0f && viewport.Size.Y > 0f)
-        {
-            AgentCaptureRegion = new MarketMafiosoCaptureRegion(
+            var viewport = ImGui.GetWindowViewport();
+            var windowPosition = ImGui.GetWindowPos();
+            var windowSize = ImGui.GetWindowSize();
+            AcquisitionCompositionWindow.AnchorTo(
                 windowPosition,
                 windowSize,
-                viewport.Pos,
-                viewport.Size,
-                DateTimeOffset.UtcNow);
-        }
-
-        DrawHeader();
-        ImGui.Spacing();
-
-        if (ImGui.BeginTabBar("##MarketMafiosoTabs"))
-        {
-            if (ImGui.BeginTabItem("Squire", GetAgentTabFlags("Squire")))
+                DalamudOwnedWindowSurface.Capture());
+            if (windowSize.X > 0f && windowSize.Y > 0f && viewport.Size.X > 0f && viewport.Size.Y > 0f)
             {
-                squirePanel.Draw();
-                ImGui.EndTabItem();
+                AgentCaptureRegion = new MarketMafiosoCaptureRegion(
+                    windowPosition,
+                    windowSize,
+                    viewport.Pos,
+                    viewport.Size,
+                    DateTimeOffset.UtcNow);
             }
 
-            if (ImGui.BeginTabItem("Workshop Logistics", GetAgentTabFlags("Workshop Logistics")))
-            {
-                DrawWorkshopPrepTab();
-                ImGui.EndTabItem();
-            }
+            DrawHeader();
+            ImGui.Spacing();
 
-            if (ImGui.BeginTabItem("Trade Queue", GetAgentTabFlags("Trade Queue")))
+            if (ImGui.BeginTabBar("##MarketMafiosoTabs"))
             {
-                tradeQueuePanel.Draw();
-                ImGui.EndTabItem();
-            }
+                if (ImGui.BeginTabItem("Squire", GetAgentTabFlags("Squire")))
+                {
+                    squirePanel.Draw();
+                    ImGui.EndTabItem();
+                }
 
-            if (IsMarketAcquisitionUnlocked() && ImGui.BeginTabItem("Market Acquisition", GetAgentTabFlags("Market Acquisition")))
-            {
-                DrawMarketAcquisitionTab();
-                ImGui.EndTabItem();
-            }
+                if (ImGui.BeginTabItem("Workshop Logistics", GetAgentTabFlags("Workshop Logistics")))
+                {
+                    DrawWorkshopPrepTab();
+                    ImGui.EndTabItem();
+                }
 
-            if (IsMarketAcquisitionUnlocked() && ImGui.BeginTabItem("Remote Market", GetAgentTabFlags("Remote Market")))
-            {
-                remoteMarketTabPanel.Draw();
-                ImGui.EndTabItem();
-            }
+                if (ImGui.BeginTabItem("Trade Queue", GetAgentTabFlags("Trade Queue")))
+                {
+                    tradeQueuePanel.Draw();
+                    ImGui.EndTabItem();
+                }
 
-            if (ImGui.BeginTabItem("Diagnostics", GetAgentTabFlags("Diagnostics")))
-            {
-                marketAcquisitionDiagnosticsPanel.Draw();
-                ImGui.EndTabItem();
-            }
+                if (IsMarketAcquisitionUnlocked() && ImGui.BeginTabItem("Market Acquisition", GetAgentTabFlags("Market Acquisition")))
+                {
+                    DrawMarketAcquisitionTab();
+                    ImGui.EndTabItem();
+                }
 
-            if (ImGui.BeginTabItem("Settings", GetAgentTabFlags("Settings")))
-            {
-                settingsTab.Draw();
-                ImGui.EndTabItem();
-            }
+                if (IsMarketAcquisitionUnlocked() && ImGui.BeginTabItem("Remote Market", GetAgentTabFlags("Remote Market")))
+                {
+                    remoteMarketTabPanel.Draw();
+                    ImGui.EndTabItem();
+                }
 
-            if (ImGui.BeginTabItem("Status", GetAgentTabFlags("Status")))
-            {
-                statusTab.Draw();
-                ImGui.EndTabItem();
-            }
+                if (ImGui.BeginTabItem("Diagnostics", GetAgentTabFlags("Diagnostics")))
+                {
+                    marketAcquisitionDiagnosticsPanel.Draw();
+                    ImGui.EndTabItem();
+                }
 
-            ImGui.EndTabBar();
-            if (agentSelectionHoldUntilUtc != default && DateTimeOffset.UtcNow >= agentSelectionHoldUntilUtc)
-            {
-                agentRequestedTab = null;
-                agentRequestedWorkspaceView = null;
-                agentSelectionHoldUntilUtc = default;
+                if (ImGui.BeginTabItem("Settings", GetAgentTabFlags("Settings")))
+                {
+                    settingsTab.Draw();
+                    ImGui.EndTabItem();
+                }
+
+                if (ImGui.BeginTabItem("Status", GetAgentTabFlags("Status")))
+                {
+                    statusTab.Draw();
+                    ImGui.EndTabItem();
+                }
+
+                ImGui.EndTabBar();
+                if (agentSelectionHoldUntilUtc != default && DateTimeOffset.UtcNow >= agentSelectionHoldUntilUtc)
+                {
+                    agentRequestedTab = null;
+                    agentRequestedWorkspaceView = null;
+                    agentSelectionHoldUntilUtc = default;
+                }
             }
-        }
     }
 
     public string OpenRemoteMarketBoard() => remoteMarketController.OpenMarketBoard();
@@ -983,71 +980,67 @@ public class MainWindow : Window, IDisposable
     private void DrawHeader()
     {
         ImGui.TextColored(ColHeader, "MarketMafioso");
-        ImGui.SameLine();
-        ImGui.TextColored(ColMuted, ProductSummary);
+        ImGui.TextWrapped(ProductSummary);
+        ImGui.TextColored(
+            ColMuted,
+            IsMarketAcquisitionUnlocked()
+                ? "Utilities: Squire, Workshop Logistics, Trade Queue, Market Acquisition. Inventory reporting lives under Settings."
+                : "Utilities: Squire, Workshop Logistics, and Trade Queue. Inventory reporting lives under Settings.");
     }
 
     private void DrawWorkshopPrepTab()
     {
-        var useSplitViews = agentRequestedWorkspaceView switch
-        {
-            "Combined" => false,
-            "Queue" or "Materials" => true,
-            _ => config.SplitWorkshopQueueAndMaterials,
-        };
-        DrawWorkshopModuleHeader(useSplitViews);
+        UtilityWorkspaceUi.DrawModuleHeader("Workshop Logistics", WorkshopLogisticsModuleSummary);
 
         var projects = workshopCatalog.GetProjects();
         var availability = GetWorkshopAvailability();
         var shortageItems = availability.Count(item => item.Shortage > 0);
         var missingUnits = availability.Sum(item => item.Shortage);
         var progress = workshopAssemblyRunner.Progress;
-        var projectCount = config.WorkshopPrepQueue.Count;
-        var buildCount = config.WorkshopPrepQueue.Sum(item => item.Quantity);
-        UtilityWorkspaceUi.DrawCompactStatusStrip(
+        UtilityWorkspaceUi.DrawStatusStrip(
             "##workshopLogisticsStatus",
             [
-                new(
-                    "Active queue",
-                    $"{CountPhrase(projectCount, "project")} · {CountPhrase(buildCount, "build")}",
-                    projectCount > 0 ? ColHeader : ColMuted),
+                new("Active queue", $"{config.WorkshopPrepQueue.Count:N0} project(s); {config.WorkshopPrepQueue.Sum(item => item.Quantity):N0} build(s)", config.WorkshopPrepQueue.Count > 0 ? ColHeader : ColMuted),
                 new(
                     "Materials",
-                    availability.Count == 0
-                        ? "No materials yet"
-                        : shortageItems == 0
-                            ? "No shortages"
-                            : $"{CountPhrase(shortageItems, "material")} · {missingUnits:N0} units missing",
+                    availability.Count == 0 ? "No materials yet" : shortageItems == 0 ? "No shortages" : $"{shortageItems:N0} item(s); {missingUnits:N0} units missing",
                     availability.Count == 0 ? ColMuted : shortageItems == 0 ? ColSuccess : ColWarning),
                 new("Assembly", workshopAssemblyRunner.HasActiveRun ? progress.Message : "Idle", workshopAssemblyRunner.HasActiveRun ? ColHeader : ColMuted),
             ]);
-        if (!workshopStatus.Equals("Workshop prep queue is idle.", StringComparison.Ordinal))
-            ImGui.TextColored(GetWorkshopStatusColor(), workshopStatus);
-        ImGui.Spacing();
-
-        using var workspaceColors = ImRaii.PushColor(
-                ImGuiCol.ChildBg,
-                MarketMafiosoUiTheme.Palette.Surface)
-            .Push(ImGuiCol.Border, MarketMafiosoUiTheme.Palette.Border);
-        using var workspaceStyles = ImRaii.PushStyle(ImGuiStyleVar.ChildBorderSize, 1f)
-            .Push(ImGuiStyleVar.WindowPadding, new Vector2(8f, 7f));
-        using var workspace = ImRaii.Child(
-            "##workshopLogisticsWorkspaceFrame",
-            Vector2.Zero,
+        ImGui.TextColored(GetWorkshopStatusColor(), workshopStatus);
+        var splitWorkshopViews = config.SplitWorkshopQueueAndMaterials;
+        if (ImGui.Checkbox("Split queue and materials into separate tabs", ref splitWorkshopViews))
+            SetSplitWorkshopViews(splitWorkshopViews);
+        AgentReviewRegistry.Register(
+            "workshop-logistics.split-views",
+            "Split queue and materials into separate tabs",
+            AgentBridgeUiControlKind.Toggle,
+            ImGui.GetItemRectMin(),
+            ImGui.GetItemRectMax(),
             true,
-            ImGuiWindowFlags.None);
-        if (!workspace)
-            return;
+            config.SplitWorkshopQueueAndMaterials,
+            config.SplitWorkshopQueueAndMaterials ? "Split" : "Combined",
+            () => SetSplitWorkshopViews(!config.SplitWorkshopQueueAndMaterials));
+        ImGui.Spacing();
 
         if (!ImGui.BeginTabBar("##workshopLogisticsWorkspace"))
             return;
 
+        var useSplitViews = agentRequestedWorkspaceView switch
+        {
+            "Combined" => false,
+            "Queue" or "Materials" => true,
+            _ => config.SplitWorkshopQueueAndMaterials,
+        };
+
         if (!useSplitViews && ImGui.BeginTabItem("Queue + Materials", GetAgentWorkspaceTabFlags("Combined")))
         {
             workshopPrepQueue.Draw(projects);
+            workshopPrepQueue.DrawConfirmations();
+            ImGui.Spacing();
+            ImGui.Separator();
             ImGui.Spacing();
             workshopMaterials.Draw(availability);
-            workshopPrepQueue.DrawConfirmations();
             ImGui.EndTabItem();
         }
 
@@ -1061,7 +1054,6 @@ public class MainWindow : Window, IDisposable
         if (useSplitViews && ImGui.BeginTabItem($"Materials ({availability.Count})", GetAgentWorkspaceTabFlags("Materials")))
         {
             workshopMaterials.Draw(availability);
-            workshopPrepQueue.DrawConfirmations();
             ImGui.EndTabItem();
         }
 
@@ -1073,42 +1065,6 @@ public class MainWindow : Window, IDisposable
 
         ImGui.EndTabBar();
     }
-
-    private void DrawWorkshopModuleHeader(bool useSplitViews)
-    {
-        ImGui.Spacing();
-        ImGui.TextColored(ColHeader, "Workshop Logistics");
-        ImGui.SameLine();
-        ImGui.TextColored(ColMuted, WorkshopLogisticsModuleSummary);
-        ImGuiUi.SameLineRight(140);
-        ImGui.SetNextItemWidth(140);
-        using var viewStyle = DalamudUiChrome.PushInput(MarketMafiosoUiTheme.Palette);
-        if (ImGui.BeginCombo(
-                "##workshopLogisticsView",
-                useSplitViews ? "View: Split" : "View: Combined"))
-        {
-            if (ImGui.Selectable("Combined queue + materials", !useSplitViews))
-                SetSplitWorkshopViews(false);
-            if (ImGui.Selectable("Split queue and materials", useSplitViews))
-                SetSplitWorkshopViews(true);
-            ImGui.EndCombo();
-        }
-
-        AgentReviewRegistry.Register(
-            "workshop-logistics.split-views",
-            "Workshop logistics view",
-            AgentBridgeUiControlKind.Toggle,
-            ImGui.GetItemRectMin(),
-            ImGui.GetItemRectMax(),
-            true,
-            config.SplitWorkshopQueueAndMaterials,
-            config.SplitWorkshopQueueAndMaterials ? "Split" : "Combined",
-            () => SetSplitWorkshopViews(!config.SplitWorkshopQueueAndMaterials));
-        ImGui.Spacing();
-    }
-
-    private static string CountPhrase(int count, string singular) =>
-        $"{count:N0} {(count == 1 ? singular : $"{singular}s")}";
 
     private void SetSplitWorkshopViews(bool split)
     {

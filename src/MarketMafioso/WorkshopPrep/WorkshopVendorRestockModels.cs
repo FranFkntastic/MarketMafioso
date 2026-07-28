@@ -185,55 +185,6 @@ public sealed record WorkshopQuartermasterProgress(
 
 public static class WorkshopVendorRestockPresentation
 {
-    public static string? BuildStartActionLabel(
-        WorkshopVendorRestockReview review,
-        bool automaticallyBuyVendorMaterials)
-    {
-        ArgumentNullException.ThrowIfNull(review);
-        if (review.RetainerUnits > 0 &&
-            automaticallyBuyVendorMaterials &&
-            review.VendorUnits > 0)
-        {
-            return $"Retrieve {review.RetainerUnits:N0} + buy {review.VendorUnits:N0} · up to {review.MaximumGil:N0} gil";
-        }
-
-        if (automaticallyBuyVendorMaterials && review.VendorUnits > 0)
-            return $"Buy {review.VendorUnits:N0} items · up to {review.MaximumGil:N0} gil";
-        if (review.RetainerUnits > 0)
-            return $"Retrieve {review.RetainerUnits:N0} from retainers";
-        return null;
-    }
-
-    public static string DescribeRemaining(WorkshopVendorRestockReview review)
-    {
-        ArgumentNullException.ThrowIfNull(review);
-        var lines = review.Materials.Count(line => line.VendorNeed > 0);
-        var units = review.Materials.Sum(line => line.VendorNeed);
-        if (lines == 0)
-            return "All workshop materials are covered.";
-
-        return $"{lines:N0} {(lines == 1 ? "material" : "materials")} · {units:N0} units still need another source";
-    }
-
-    public static string DescribeReceiptDetails(PersistedWorkshopVendorRestockRun run)
-    {
-        ArgumentNullException.ThrowIfNull(run);
-        return string.Join(
-            " · ",
-            run.Receipts
-                .GroupBy(receipt => receipt.ItemId)
-                .OrderBy(group =>
-                    run.Lines.FirstOrDefault(line => line.ItemId == group.Key)?.ItemName ??
-                    group.Key.ToString())
-                .Select(group =>
-                {
-                    var name = run.Lines.FirstOrDefault(line => line.ItemId == group.Key)?.ItemName ??
-                               $"Item {group.Key}";
-                    return $"{name} ×{group.Sum(receipt => receipt.Quantity):N0} · " +
-                           $"{group.Aggregate(0UL, (total, receipt) => checked(total + receipt.SpentGil)):N0} gil";
-                }));
-    }
-
     public static string Describe(
         PersistedWorkshopVendorRestockRun run,
         WorkshopVendorRestockReview review)
@@ -242,28 +193,10 @@ public static class WorkshopVendorRestockPresentation
         ArgumentNullException.ThrowIfNull(review);
         if (run.Phase == WorkshopVendorRestockPhase.Completed)
         {
-            if (run.Receipts.Count == 0)
-                return review.Materials.Any(line => line.VendorNeed > 0)
-                    ? "Restock complete."
-                    : "Workshop materials are ready.";
-
-            var quantity = run.Receipts.Sum(receipt => receipt.Quantity);
-            var spentGil = run.Receipts.Aggregate(
-                0UL,
-                (total, receipt) => checked(total + receipt.SpentGil));
-            var vendorNames = run.Receipts
-                .Select(receipt =>
-                    run.Lines.FirstOrDefault(line => line.ItemId == receipt.ItemId)?.Offer?.NpcName)
-                .Where(name => !string.IsNullOrWhiteSpace(name))
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToArray();
-            var source = vendorNames.Length switch
-            {
-                1 => $" from {vendorNames[0]}",
-                > 1 => $" across {vendorNames.Length:N0} vendors",
-                _ => string.Empty,
-            };
-            return $"Bought {quantity:N0} items for {spentGil:N0} gil{source}.";
+            var remainingLines = review.Materials.Count(line => line.Availability.Shortage > 0);
+            return remainingLines == 0
+                ? "Workshop materials are ready."
+                : $"Vendor purchases complete. {remainingLines:N0} material line(s) still need another source.";
         }
         if (run.Phase != WorkshopVendorRestockPhase.Failed ||
             !run.Message.Contains("expected shop did not become available", StringComparison.OrdinalIgnoreCase))

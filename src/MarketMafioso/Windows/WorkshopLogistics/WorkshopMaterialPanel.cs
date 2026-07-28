@@ -4,8 +4,6 @@ using System.Linq;
 using Dalamud.Bindings.ImGui;
 using Franthropy.Dalamud.AgentBridge;
 using Franthropy.Dalamud.Automation.Vendors;
-using Franthropy.Dalamud.UI.Styling;
-using Franthropy.Dalamud.UI.Tables;
 using MarketMafioso.Quartermaster;
 using MarketMafioso.Windows.Main;
 using MarketMafioso.WorkshopPrep;
@@ -23,13 +21,8 @@ internal sealed class WorkshopMaterialPanel
     private readonly Func<IReadOnlyList<WorkshopMaterialAvailability>> getAvailability;
     private readonly Func<QuartermasterOwnerScope> getOwnerScope;
     private readonly AgentBridgeUiReviewRegistry reviewRegistry;
-    private readonly Action drawMaterialActions;
-    private readonly DalamudTableProjection<MaterialTableRow> coverageTable;
-    private readonly DalamudTableProjection<MaterialTableRow> vendorTable;
     private string searchText = string.Empty;
     private bool shortagesOnly = true;
-    private bool showReceiptDetails;
-    private WorkshopVendorRestockPhase? previousPhase;
     private string? actionStatus;
 
     public WorkshopMaterialPanel(
@@ -39,8 +32,7 @@ internal sealed class WorkshopMaterialPanel
         WorkshopVendorRestockRunner runner,
         Func<IReadOnlyList<WorkshopMaterialAvailability>> getAvailability,
         Func<QuartermasterOwnerScope> getOwnerScope,
-        AgentBridgeUiReviewRegistry reviewRegistry,
-        Action drawMaterialActions)
+        AgentBridgeUiReviewRegistry reviewRegistry)
     {
         this.config = config ?? throw new ArgumentNullException(nameof(config));
         this.quartermaster = quartermaster ?? throw new ArgumentNullException(nameof(quartermaster));
@@ -49,33 +41,19 @@ internal sealed class WorkshopMaterialPanel
         this.getAvailability = getAvailability ?? throw new ArgumentNullException(nameof(getAvailability));
         this.getOwnerScope = getOwnerScope ?? throw new ArgumentNullException(nameof(getOwnerScope));
         this.reviewRegistry = reviewRegistry ?? throw new ArgumentNullException(nameof(reviewRegistry));
-        this.drawMaterialActions = drawMaterialActions ?? throw new ArgumentNullException(nameof(drawMaterialActions));
-        coverageTable = BuildTableProjection(showBuyControls: false);
-        vendorTable = BuildTableProjection(showBuyControls: true);
     }
 
     public void Draw(IReadOnlyList<WorkshopMaterialAvailability>? availability = null)
     {
         availability ??= getAvailability();
         var review = BuildReview(availability);
-        var run = runner.ActiveRun;
-        if (run?.Phase == WorkshopVendorRestockPhase.Completed &&
-            previousPhase != WorkshopVendorRestockPhase.Completed)
-        {
-            shortagesOnly = true;
-            showReceiptDetails = false;
-        }
-        previousPhase = run?.Phase;
-
-        DalamudUiChrome.DrawSectionHeading(
+        ImGuiUi.SectionHeaderWithActions(
             "Materials",
-            run?.Phase == WorkshopVendorRestockPhase.Completed
-                ? run.Receipts.Count > 0
-                    ? "Completed vendor run"
-                    : "Completed restock"
-                : null,
-            MarketMafiosoUiTheme.Palette);
+            MarketMafiosoUiTheme.Header,
+            () => DrawHeaderActions(review),
+            430);
 
+        var run = runner.ActiveRun;
         if (review.RetainerUnits > 0 &&
             !string.IsNullOrWhiteSpace(quartermaster.LastStatus) &&
             !quartermaster.LastStatus.Contains("has not been queried", StringComparison.OrdinalIgnoreCase))
@@ -85,39 +63,12 @@ internal sealed class WorkshopMaterialPanel
         var visibleStatus = run is null
             ? actionStatus
             : WorkshopVendorRestockPresentation.Describe(run, review);
-        if (run?.Phase == WorkshopVendorRestockPhase.Completed && run.Receipts.Count > 0)
-            DrawCompletionReceipt(run, visibleStatus ?? string.Empty);
-        else if (!string.IsNullOrWhiteSpace(visibleStatus))
+        if (!string.IsNullOrWhiteSpace(visibleStatus))
             ImGui.TextColored(RunStatusColor(run), visibleStatus);
 
         var automatic = run is not null && (runner.IsRunning || run.Phase == WorkshopVendorRestockPhase.Paused)
             ? run.AutomaticallyBuyVendorMaterials
             : config.AutomaticallyBuyWorkshopVendorMaterials;
-        var automaticLabelWidth = ImGui.CalcTextSize("Automatically buy vendor materials").X + 32f;
-        var shortageLabelWidth = ImGui.CalcTextSize("Shortages only  00 / 00").X + 32f;
-        ImGui.SetNextItemWidth(
-            Math.Max(
-                220f,
-                ImGui.GetContentRegionAvail().X -
-                automaticLabelWidth -
-                shortageLabelWidth -
-                ImGui.GetStyle().ItemSpacing.X * 3f));
-        using (DalamudUiChrome.PushInput(MarketMafiosoUiTheme.Palette))
-        {
-            ImGui.InputTextWithHint("##workshopMaterialSearch", "Filter materials...", ref searchText, 128);
-        }
-        ImGui.SameLine();
-        ImGui.Checkbox("Shortages only", ref shortagesOnly);
-        var filtered = review.Materials
-            .Where(line =>
-                (!shortagesOnly || line.Availability.Shortage > 0) &&
-                (string.IsNullOrWhiteSpace(searchText) ||
-                 line.Availability.ItemName.Contains(searchText.Trim(), StringComparison.OrdinalIgnoreCase)))
-            .ToList();
-        ImGui.SameLine();
-        ImGui.TextColored(MarketMafiosoUiTheme.Muted, $"{filtered.Count:N0} / {review.Materials.Count:N0}");
-
-        ImGui.SameLine();
         ImGui.BeginDisabled(runner.IsRunning || run?.Phase == WorkshopVendorRestockPhase.Paused);
         if (ImGui.Checkbox("Automatically buy vendor materials", ref automatic))
         {
@@ -140,10 +91,20 @@ internal sealed class WorkshopMaterialPanel
                 config.Save();
             });
 
-        var showBuyControls = review.Materials.Any(
-            line => line.VendorNeed > 0 && line.SelectedCandidate is not null);
-        DrawTable(filtered, review.Materials.Count, review.QueueSignature, showBuyControls);
-        DrawFooter(review, run, automatic);
+        ImGui.SetNextItemWidth(Math.Max(220f, ImGui.GetContentRegionAvail().X - 300f));
+        ImGui.InputTextWithHint("##workshopMaterialSearch", "Filter materials...", ref searchText, 128);
+        ImGui.SameLine();
+        ImGui.Checkbox("Shortages only", ref shortagesOnly);
+        var filtered = review.Materials
+            .Where(line =>
+                (!shortagesOnly || line.Availability.Shortage > 0) &&
+                (string.IsNullOrWhiteSpace(searchText) ||
+                 line.Availability.ItemName.Contains(searchText.Trim(), StringComparison.OrdinalIgnoreCase)))
+            .ToList();
+        ImGui.SameLine();
+        ImGui.TextColored(MarketMafiosoUiTheme.Muted, $"{filtered.Count:N0} / {review.Materials.Count:N0}");
+
+        DrawTable(filtered, review.Materials.Count, review.QueueSignature);
     }
 
     public WorkshopVendorRestockReview BuildReview(
@@ -153,33 +114,26 @@ internal sealed class WorkshopMaterialPanel
             config.WorkshopVendorApprovedQuantities,
             config.WorkshopVendorExcludedItems.ToHashSet());
 
-    private unsafe void DrawTable(
+    private void DrawTable(
         IReadOnlyList<WorkshopMaterialProcurement> filtered,
         int totalCount,
-        string queueSignature,
-        bool showBuyControls)
+        string queueSignature)
     {
-        var activeRun = runner.ActiveRun;
-        var rows = filtered
-            .Select(line => new MaterialTableRow(
-                line,
-                activeRun is not null &&
-                string.Equals(activeRun.QueueSignature, queueSignature, StringComparison.Ordinal)
-                    ? activeRun.Lines.FirstOrDefault(item => item.ItemId == line.Availability.ItemId)
-                    : null,
-                activeRun))
-            .ToArray();
-        var projection = showBuyControls ? vendorTable : coverageTable;
-        var tableId = showBuyControls
-            ? "WorkshopPrepMaterialsVendorBuyV2"
-            : "WorkshopPrepMaterialsCoverageV2";
-        using var style = DalamudUiChrome.PushTable(MarketMafiosoUiTheme.Palette);
-        if (!projection.Begin(
-                tableId,
-                DalamudTableLayout.FitContent(ImGuiUi.InteractiveTableFlags)))
+        if (!ImGui.BeginTable("WorkshopPrepMaterialsVendorV1", 9, ImGuiUi.InteractiveTableFlags))
             return;
 
-        if (rows.Length == 0)
+        ImGui.TableSetupColumn("", ImGuiTableColumnFlags.WidthFixed, 28);
+        ImGui.TableSetupColumn("Item", ImGuiTableColumnFlags.WidthStretch);
+        ImGui.TableSetupColumn("Required", ImGuiTableColumnFlags.WidthFixed, 68);
+        ImGui.TableSetupColumn("Player", ImGuiTableColumnFlags.WidthFixed, 64);
+        ImGui.TableSetupColumn("Retainers", ImGuiTableColumnFlags.WidthFixed, 72);
+        ImGui.TableSetupColumn("Still Missing", ImGuiTableColumnFlags.WidthFixed, 82);
+        ImGui.TableSetupColumn("Source", ImGuiTableColumnFlags.WidthStretch);
+        ImGui.TableSetupColumn("Buy", ImGuiTableColumnFlags.WidthFixed, 72);
+        ImGui.TableSetupColumn("Cost / Status", ImGuiTableColumnFlags.WidthFixed, 120);
+        ImGui.TableHeadersRow();
+
+        if (filtered.Count == 0)
         {
             ImGui.TableNextRow();
             ImGui.TableNextColumn();
@@ -188,96 +142,54 @@ internal sealed class WorkshopMaterialPanel
                 totalCount == 0
                     ? "No workshop materials yet. Add projects to the prep queue."
                     : "No materials match the current filter.");
-            projection.End();
+            ImGui.EndTable();
             return;
         }
 
-        foreach (var row in projection.Apply(rows, ImGui.TableGetSortSpecs()))
+        foreach (var line in filtered)
         {
-            ImGui.PushID(checked((int)row.Line.Availability.ItemId));
-            projection.DrawRow(row);
+            var activeLine = runner.ActiveRun is { } active &&
+                             string.Equals(
+                                 active.QueueSignature,
+                                 queueSignature,
+                                 StringComparison.Ordinal)
+                ? active.Lines.FirstOrDefault(item => item.ItemId == line.Availability.ItemId)
+                : null;
+            ImGui.PushID(checked((int)line.Availability.ItemId));
+            ImGui.TableNextRow();
+            ImGui.TableNextColumn();
+            DrawSelection(line);
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(line.Availability.ItemName);
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(line.Availability.Required.ToString("N0"));
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted((activeLine?.LivePlayerQuantity ?? line.Availability.PlayerInventory).ToString("N0"));
+            ImGui.TableNextColumn();
+            ImGui.TextUnformatted(line.RetainerPlannedQuantity.ToString("N0"));
+            ImGui.TableNextColumn();
+            ImGui.TextColored(
+                line.VendorNeed > 0 ? MarketMafiosoUiTheme.Error : MarketMafiosoUiTheme.Success,
+                line.VendorNeed.ToString("N0"));
+            ImGui.TableNextColumn();
+            DrawSource(line);
+            ImGui.TableNextColumn();
+            DrawQuantity(line);
+            ImGui.TableNextColumn();
+            if (activeLine is not null)
+            {
+                var status = RunStatusForLine(activeLine, runner.ActiveRun);
+                ImGui.TextColored(LineStatusColor(status), status);
+            }
+            else if (line.SelectedCandidate is not null)
+                ImGui.TextUnformatted($"{line.ApprovedGil:N0} gil");
+            else
+                ImGui.TextColored(MarketMafiosoUiTheme.Muted, "-");
             ImGui.PopID();
         }
 
-        projection.End();
+        ImGui.EndTable();
     }
-
-    private DalamudTableProjection<MaterialTableRow> BuildTableProjection(bool showBuyControls)
-    {
-        var columns = new List<DalamudTableColumn<MaterialTableRow>>();
-        if (showBuyControls)
-        {
-            columns.Add(
-                new(
-                    string.Empty,
-                    28f,
-                    row => row.Line.Selected ? "Included" : "Excluded",
-                    Flags: ImGuiTableColumnFlags.WidthFixed | ImGuiTableColumnFlags.NoSort,
-                    Draw: row => DrawSelection(row.Line)));
-        }
-
-        columns.Add(
-            new(
-                "Item",
-                1f,
-                row => row.Line.Availability.ItemName,
-                Flags: ImGuiTableColumnFlags.WidthStretch));
-        columns.Add(NumberColumn("Required", 68f, row => row.Line.Availability.Required));
-        columns.Add(
-            NumberColumn(
-                "Player",
-                64f,
-                row => row.ActiveLine?.LivePlayerQuantity ?? row.Line.Availability.PlayerInventory));
-        columns.Add(NumberColumn("Retainers", 72f, row => row.Line.RetainerPlannedQuantity));
-        columns.Add(
-            NumberColumn(
-                "Need",
-                70f,
-                row => row.Line.VendorNeed,
-                row => row.Line.VendorNeed > 0
-                    ? MarketMafiosoUiTheme.Error
-                    : MarketMafiosoUiTheme.Success));
-        columns.Add(
-            new(
-                "Source",
-                1f,
-                row => DescribeSource(row.Line),
-                Flags: ImGuiTableColumnFlags.WidthStretch,
-                Draw: row => DrawSource(row.Line)));
-        if (showBuyControls)
-        {
-            columns.Add(
-                new(
-                    "Buy",
-                    72f,
-                    row => row.Line.ApprovedVendorQuantity.ToString("N0"),
-                    row => row.Line.ApprovedVendorQuantity,
-                    Draw: row => DrawQuantity(row.Line),
-                    Alignment: DalamudTableCellAlignment.Right));
-        }
-
-        columns.Add(
-            new(
-                showBuyControls ? "Cost / Status" : "Coverage",
-                140f,
-                DescribeCoverage,
-                row => DescribeCoverage(row),
-                Draw: DrawCoverage));
-        return new DalamudTableProjection<MaterialTableRow>(columns);
-    }
-
-    private static DalamudTableColumn<MaterialTableRow> NumberColumn(
-        string label,
-        float width,
-        Func<MaterialTableRow, int> value,
-        Func<MaterialTableRow, System.Numerics.Vector4?>? color = null) =>
-        new(
-            label,
-            width,
-            row => value(row).ToString("N0"),
-            row => value(row),
-            TextColor: color,
-            Alignment: DalamudTableCellAlignment.Right);
 
     private void DrawSelection(WorkshopMaterialProcurement line)
     {
@@ -324,11 +236,8 @@ internal sealed class WorkshopMaterialPanel
                       runner.ActiveRun?.Phase != WorkshopVendorRestockPhase.Paused;
         ImGui.BeginDisabled(!enabled);
         ImGui.SetNextItemWidth(-1);
-        using (DalamudUiChrome.PushInput(MarketMafiosoUiTheme.Palette))
-        {
-            if (ImGui.InputInt("##quantity", ref quantity, 0))
-                SetQuantity(line.Availability.ItemId, quantity, line.VendorNeed);
-        }
+        if (ImGui.InputInt("##quantity", ref quantity, 0))
+            SetQuantity(line.Availability.ItemId, quantity, line.VendorNeed);
         ImGui.EndDisabled();
         reviewRegistry.Register(
             $"workshop-logistics.vendor-item.{line.Availability.ItemId}.quantity",
@@ -359,14 +268,6 @@ internal sealed class WorkshopMaterialPanel
             });
     }
 
-    private static string DescribeSource(WorkshopMaterialProcurement line)
-    {
-        var candidate = line.SelectedCandidate ?? line.Candidates.FirstOrDefault();
-        return candidate is null
-            ? "Craft / gather / market"
-            : $"{candidate.Offer.NpcName} · {candidate.Offer.UnitPriceGil:N0} gil";
-    }
-
     private static void DrawSource(WorkshopMaterialProcurement line)
     {
         var candidate = line.SelectedCandidate ?? line.Candidates.FirstOrDefault();
@@ -387,45 +288,7 @@ internal sealed class WorkshopMaterialPanel
             });
     }
 
-    private static string DescribeCoverage(MaterialTableRow row)
-    {
-        if (row.ActiveLine is not null)
-            return RunStatusForLine(row.ActiveLine, row.Run);
-        if (row.Line.SelectedCandidate is not null)
-            return $"{row.Line.ApprovedGil:N0} gil";
-        return row.Line.VendorNeed > 0 ? "Manual" : "-";
-    }
-
-    private static void DrawCoverage(MaterialTableRow row)
-    {
-        if (row.ActiveLine is not null)
-        {
-            var status = RunStatusForLine(row.ActiveLine, row.Run);
-            ImGui.TextColored(LineStatusColor(status), status);
-            return;
-        }
-
-        if (row.Line.SelectedCandidate is not null)
-        {
-            ImGui.TextUnformatted($"{row.Line.ApprovedGil:N0} gil");
-            return;
-        }
-
-        if (row.Line.VendorNeed > 0)
-        {
-            DalamudUiChrome.DrawBadge(
-                "Manual",
-                MarketMafiosoUiTheme.Palette,
-                DalamudUiTone.Neutral);
-            return;
-        }
-
-        ImGui.TextColored(MarketMafiosoUiTheme.Muted, "-");
-    }
-
-    private void DrawRestockActions(
-        WorkshopVendorRestockReview review,
-        bool automatic)
+    private void DrawHeaderActions(WorkshopVendorRestockReview review)
     {
         var active = runner.ActiveRun;
         if (runner.IsRunning)
@@ -479,12 +342,10 @@ internal sealed class WorkshopMaterialPanel
             return;
         }
 
+        var automatic = config.AutomaticallyBuyWorkshopVendorMaterials;
         var canStart = getOwnerScope().IsAvailable &&
                        (review.RetainerUnits > 0 || (automatic && review.VendorUnits > 0));
-        var label = WorkshopVendorRestockPresentation.BuildStartActionLabel(review, automatic);
-        if (!canStart || string.IsNullOrWhiteSpace(label))
-            return;
-
+        var label = BuildActionLabel(review, automatic);
         if (ImGuiUi.PrimaryButton(label, canStart) &&
             !runner.TryStart(review, getOwnerScope(), automatic, out var startError))
         {
@@ -538,132 +399,17 @@ internal sealed class WorkshopMaterialPanel
         config.Save();
     }
 
-    private void DrawCompletionReceipt(
-        PersistedWorkshopVendorRestockRun run,
-        string visibleStatus)
+    private static string BuildActionLabel(WorkshopVendorRestockReview review, bool automatic)
     {
-        ImGui.AlignTextToFramePadding();
-        ImGui.TextColored(MarketMafiosoUiTheme.Success, "Vendor purchase complete.");
-        ImGui.SameLine();
-        ImGui.TextColored(MarketMafiosoUiTheme.Muted, visibleStatus);
-        var label = showReceiptDetails
-            ? "Hide receipts"
-            : $"View {run.Receipts.Count:N0} receipts";
-        var width = ImGui.CalcTextSize(label).X + ImGui.GetStyle().FramePadding.X * 2f;
-        ImGuiUi.SameLineRight(width);
-        using (DalamudUiChrome.PushButton(
-                   MarketMafiosoUiTheme.Palette,
-                   DalamudUiTone.Success,
-                   quiet: true))
-        {
-            if (ImGui.SmallButton(label))
-                showReceiptDetails = !showReceiptDetails;
-        }
-
-        if (showReceiptDetails)
-        {
-            ImGui.TextColored(
-                MarketMafiosoUiTheme.Muted,
-                WorkshopVendorRestockPresentation.DescribeReceiptDetails(run));
-        }
-    }
-
-    private void DrawFooter(
-        WorkshopVendorRestockReview review,
-        PersistedWorkshopVendorRestockRun? run,
-        bool automatic)
-    {
-        ImGui.Spacing();
-        var actionLabel = WorkshopVendorRestockPresentation.BuildStartActionLabel(review, automatic);
-        var actionWidth = actionLabel is null
-            ? 180f
-            : Math.Clamp(ImGui.CalcTextSize(actionLabel).X + 190f, 420f, 620f);
-        var tone = review.Materials.Any(line => line.VendorNeed > 0)
-            ? DalamudUiTone.Warning
-            : DalamudUiTone.Success;
-        DalamudUiChrome.DrawStatusBand(
-            "##workshopMaterialsFooter",
-            MarketMafiosoUiTheme.Palette,
-            tone,
-            () =>
-            {
-                var flags = ImGuiTableFlags.SizingFixedFit | ImGuiTableFlags.NoPadOuterX;
-                if (!ImGui.BeginTable("WorkshopMaterialsFooterLayout", 3, flags))
-                    return;
-
-                ImGui.TableSetupColumn("Disclosure", ImGuiTableColumnFlags.WidthFixed, 150);
-                ImGui.TableSetupColumn("Summary", ImGuiTableColumnFlags.WidthStretch);
-                ImGui.TableSetupColumn("Actions", ImGuiTableColumnFlags.WidthFixed, actionWidth);
-                ImGui.TableNextRow();
-
-                ImGui.TableNextColumn();
-                if (run?.Phase == WorkshopVendorRestockPhase.Completed && run.Receipts.Count > 0)
-                {
-                    var purchasedLines = run.Lines.Count(line => line.PurchasedQuantity > 0);
-                    using var buttonStyle = DalamudUiChrome.PushButton(
-                        MarketMafiosoUiTheme.Palette,
-                        tone,
-                        quiet: true);
-                    if (ImGui.SmallButton(
-                            shortagesOnly
-                                ? $"Show purchased ({purchasedLines:N0})"
-                                : "Hide purchased"))
-                    {
-                        shortagesOnly = !shortagesOnly;
-                    }
-                }
-
-                ImGui.TableNextColumn();
-                if (run?.Phase == WorkshopVendorRestockPhase.Completed || actionLabel is null)
-                {
-                    ImGui.TextUnformatted(WorkshopVendorRestockPresentation.DescribeRemaining(review));
-                    if (review.Materials.Any(line => line.VendorNeed > 0))
-                    {
-                        ImGui.TextColored(
-                            MarketMafiosoUiTheme.Muted,
-                            "No automatic source is available for the remaining materials.");
-                    }
-                }
-                else
-                {
-                    ImGui.TextUnformatted(BuildReviewSummary(review, automatic));
-                }
-
-                ImGui.TableNextColumn();
-                if (runner.IsRunning || run?.Phase == WorkshopVendorRestockPhase.Paused)
-                {
-                    DrawRestockActions(review, automatic);
-                }
-                else
-                {
-                    drawMaterialActions();
-                    if (actionLabel is not null)
-                    {
-                        ImGui.SameLine();
-                        DrawRestockActions(review, automatic);
-                    }
-                }
-
-                ImGui.EndTable();
-            },
-            54f);
-    }
-
-    private static string BuildReviewSummary(
-        WorkshopVendorRestockReview review,
-        bool automatic)
-    {
-        var parts = new List<string>();
-        if (review.RetainerUnits > 0)
-            parts.Add($"{review.RetainerUnits:N0} retainer units");
+        if (review.RetainerUnits > 0 && automatic && review.VendorUnits > 0)
+            return $"Retrieve {review.RetainerUnits:N0} + buy {review.VendorUnits:N0} · up to {review.MaximumGil:N0} gil";
         if (automatic && review.VendorUnits > 0)
-        {
-            parts.Add($"{review.VendorUnits:N0} vendor units");
-            parts.Add($"{review.MaximumGil:N0} gil maximum");
-            parts.Add($"{review.Stops.Count:N0} vendor {(review.Stops.Count == 1 ? "stop" : "stops")}");
-        }
-
-        return string.Join(" · ", parts);
+            return $"Buy {review.VendorUnits:N0} items · up to {review.MaximumGil:N0} gil";
+        if (review.RetainerUnits > 0)
+            return $"Retrieve {review.RetainerUnits:N0} from retainers";
+        return review.Materials.Any(line => line.Availability.Shortage > 0)
+            ? "No Automatic Restock"
+            : "Materials Ready";
     }
 
     private string DescribeQuartermasterStatus() =>
@@ -673,20 +419,11 @@ internal sealed class WorkshopMaterialPanel
 
     private static string RunStatusForLine(
         PersistedWorkshopVendorRestockLine line,
-        PersistedWorkshopVendorRestockRun? run)
-    {
-        if (run?.Phase == WorkshopVendorRestockPhase.Completed &&
-            line.PurchasedQuantity > 0 &&
-            line.Status.Equals("Ready", StringComparison.OrdinalIgnoreCase))
-        {
-            return "Purchased";
-        }
-
-        return run?.Phase == WorkshopVendorRestockPhase.Failed &&
-               line.Status.Equals("Waiting", StringComparison.OrdinalIgnoreCase)
+        PersistedWorkshopVendorRestockRun? run) =>
+        run?.Phase == WorkshopVendorRestockPhase.Failed &&
+        line.Status.Equals("Waiting", StringComparison.OrdinalIgnoreCase)
             ? "Not bought"
             : line.Status;
-    }
 
     private System.Numerics.Vector4 GetQuartermasterStatusColor() =>
         quartermaster.LastStatus.Contains("unavailable", StringComparison.OrdinalIgnoreCase) ||
@@ -708,16 +445,10 @@ internal sealed class WorkshopMaterialPanel
 
     private static System.Numerics.Vector4 LineStatusColor(string status) =>
         status.Contains("Verified", StringComparison.OrdinalIgnoreCase) ||
-        status.Equals("Ready", StringComparison.OrdinalIgnoreCase) ||
-        status.Equals("Purchased", StringComparison.OrdinalIgnoreCase)
+        status.Equals("Ready", StringComparison.OrdinalIgnoreCase)
             ? MarketMafiosoUiTheme.Success
             : status.Contains("Remaining", StringComparison.OrdinalIgnoreCase) ||
               status.Contains("Ceiling", StringComparison.OrdinalIgnoreCase)
                 ? MarketMafiosoUiTheme.Warning
                 : MarketMafiosoUiTheme.Muted;
-
-    private sealed record MaterialTableRow(
-        WorkshopMaterialProcurement Line,
-        PersistedWorkshopVendorRestockLine? ActiveLine,
-        PersistedWorkshopVendorRestockRun? Run);
 }

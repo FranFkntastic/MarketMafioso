@@ -3,7 +3,6 @@ using System;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
 using Dalamud.Interface.Components;
-using Franthropy.Dalamud.UI.Styling;
 using MarketMafioso.Windows.Main;
 
 namespace MarketMafioso.Windows;
@@ -11,8 +10,7 @@ namespace MarketMafioso.Windows;
 internal static class ImGuiUi
 {
     public const ImGuiTableFlags InteractiveTableFlags =
-        ImGuiTableFlags.BordersOuter |
-        ImGuiTableFlags.BordersInnerH |
+        ImGuiTableFlags.Borders |
         ImGuiTableFlags.RowBg |
         ImGuiTableFlags.Resizable |
         ImGuiTableFlags.Reorderable |
@@ -20,20 +18,22 @@ internal static class ImGuiUi
 
     public static void SectionHeader(string text, Vector4 color)
     {
-        DalamudUiChrome.DrawSectionHeading(
-            text,
-            null,
-            MarketMafiosoUiTheme.Palette with { Accent = color });
+        ImGui.TextColored(color, text);
+        ImGui.Separator();
     }
 
     public static void SectionHeaderWithActions(string text, Vector4 color, Action drawActions, float actionWidth = 0)
     {
-        DalamudUiChrome.DrawSectionHeading(
-            text,
-            null,
-            MarketMafiosoUiTheme.Palette with { Accent = color },
-            drawActions,
-            actionWidth);
+        ImGui.TextColored(color, text);
+        ImGui.SameLine();
+        if (actionWidth > 0)
+        {
+            var rightAlignedX = ImGui.GetWindowContentRegionMax().X - actionWidth;
+            ImGui.SetCursorPosX(Math.Max(ImGui.GetCursorPosX(), rightAlignedX));
+        }
+
+        drawActions();
+        ImGui.Separator();
     }
 
     public static void SameLineRight(float width)
@@ -41,20 +41,6 @@ internal static class ImGuiUi
         ImGui.SameLine();
         var rightAlignedX = ImGui.GetWindowContentRegionMax().X - width;
         ImGui.SetCursorPosX(Math.Max(ImGui.GetCursorPosX(), rightAlignedX));
-    }
-
-    public static void TableTextRightAligned(string text)
-    {
-        var width = ImGui.CalcTextSize(text).X;
-        ImGui.SetCursorPosX(Math.Max(ImGui.GetCursorPosX(), ImGui.GetCursorPosX() + ImGui.GetContentRegionAvail().X - width));
-        ImGui.TextUnformatted(text);
-    }
-
-    public static void TableTextRightAligned(string text, Vector4 color)
-    {
-        var width = ImGui.CalcTextSize(text).X;
-        ImGui.SetCursorPosX(Math.Max(ImGui.GetCursorPosX(), ImGui.GetCursorPosX() + ImGui.GetContentRegionAvail().X - width));
-        ImGui.TextColored(color, text);
     }
 
     public static bool Button(string label, bool enabled)
@@ -79,8 +65,13 @@ internal static class ImGuiUi
 
     public static bool PrimaryButton(string label, bool enabled)
     {
-        using var style = DalamudUiChrome.PushButton(MarketMafiosoUiTheme.Palette);
-        return Button(label, enabled);
+        var color = MarketMafiosoUiTheme.Header;
+        ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(color.X * 0.65f, color.Y * 0.65f, color.Z * 0.65f, 1f));
+        ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(color.X * 0.82f, color.Y * 0.82f, color.Z * 0.82f, 1f));
+        ImGui.PushStyleColor(ImGuiCol.ButtonActive, color);
+        var clicked = Button(label, enabled);
+        ImGui.PopStyleColor(3);
+        return clicked;
     }
 
     public static bool MenuItem(string label, bool enabled)
@@ -96,17 +87,11 @@ internal static class ImGuiUi
         return clicked;
     }
 
-    public static bool MenuButton(
-        string label,
-        bool enabled = true,
-        bool primary = false)
+    public static bool MenuButton(string label, bool enabled = true)
     {
         if (!enabled)
             ImGui.BeginDisabled();
 
-        using var style = DalamudUiChrome.PushButton(
-            MarketMafiosoUiTheme.Palette,
-            quiet: !primary);
         var clicked = ImGuiComponents.IconButtonWithText(FontAwesomeIcon.ChevronDown, label);
 
         if (!enabled)

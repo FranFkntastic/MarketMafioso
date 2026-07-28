@@ -3,9 +3,6 @@ using System.Collections.Generic;
 using System.Linq;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Plugin.Services;
-using Franthropy.Dalamud.UI.Items;
-using Franthropy.Dalamud.UI.Styling;
-using Franthropy.Dalamud.UI.Tables;
 using MarketMafioso.Windows.Main;
 using MarketMafioso.WorkshopPrep;
 
@@ -26,17 +23,12 @@ internal sealed class WorkshopPrepQueuePanel
     private readonly Func<bool> tradeQueueHasItems;
     private readonly Func<IReadOnlyList<WorkshopMaterialAvailability>, string> replaceTradeQueue;
     private readonly IPluginLog log;
-    private readonly DalamudTableProjection<WorkshopQueueTableRow> queueTable;
-    private readonly DalamudItemAutocompleteState projectAutocomplete = new();
-    private IReadOnlyList<DalamudItemOption> projectOptions = [];
-    private int projectAddQuantity = 1;
 
     private bool confirmViwiClear = false;
     private bool confirmNewWorkshopQueue = false;
     private bool confirmLoadFrozenQueue = false;
     private bool confirmTradeQueueReplace = false;
     private Guid? selectedFrozenQueueId;
-    private Guid? frozenQueueNameContextId;
     private string frozenQueueNameInput = string.Empty;
 
     public WorkshopPrepQueuePanel(
@@ -67,35 +59,13 @@ internal sealed class WorkshopPrepQueuePanel
         this.tradeQueueHasItems = tradeQueueHasItems ?? throw new ArgumentNullException(nameof(tradeQueueHasItems));
         this.replaceTradeQueue = replaceTradeQueue ?? throw new ArgumentNullException(nameof(replaceTradeQueue));
         this.log = log ?? throw new ArgumentNullException(nameof(log));
-        queueTable = new DalamudTableProjection<WorkshopQueueTableRow>(
-        [
-            new(
-                "Project",
-                1f,
-                row => row.ProjectName,
-                Flags: ImGuiTableColumnFlags.WidthStretch,
-                Draw: DrawQueueProject),
-            new(
-                "Qty",
-                96f,
-                row => row.Item?.Quantity.ToString("N0") ?? projectAddQuantity.ToString("N0"),
-                row => row.Item?.Quantity ?? projectAddQuantity,
-                Draw: DrawQueueQuantity,
-                Alignment: DalamudTableCellAlignment.Right),
-            new(
-                "Actions",
-                180f,
-                row => row.IsEditor ? "Add or browse" : "Remove",
-                Flags: ImGuiTableColumnFlags.WidthFixed | ImGuiTableColumnFlags.NoSort,
-                Draw: DrawQueueActions),
-        ]);
     }
 
     public bool CanEditQueue => !workshopAssemblyRunner.HasActiveRun;
 
     public void Draw(IReadOnlyList<WorkshopProjectDefinition> projects)
     {
-        ImGuiUi.SectionHeader("Prep Queue", MarketMafiosoUiTheme.Header);
+        ImGuiUi.SectionHeaderWithActions("Prep Queue", MarketMafiosoUiTheme.Header, DrawHeaderActions, 180);
         DrawFrozenQueueToolbar();
         ImGui.Spacing();
 
@@ -105,11 +75,6 @@ internal sealed class WorkshopPrepQueuePanel
             return;
         }
 
-        projectOptions = projects
-            .Select(project => new DalamudItemOption(project.WorkshopItemId, project.Name))
-            .OrderBy(project => project.Name, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(project => project.ItemId)
-            .ToArray();
         DrawQueueTable(projects);
     }
 
@@ -154,10 +119,7 @@ internal sealed class WorkshopPrepQueuePanel
             confirmViwiClear = false;
     }
 
-    public void AddWorkshopProject(uint workshopItemId) =>
-        AddWorkshopProject(workshopItemId, workshopProjectSelection.Quantity);
-
-    private void AddWorkshopProject(uint workshopItemId, int requestedQuantity)
+    public void AddWorkshopProject(uint workshopItemId)
     {
         if (workshopAssemblyRunner.HasActiveRun)
         {
@@ -166,7 +128,7 @@ internal sealed class WorkshopPrepQueuePanel
         }
 
         var existing = config.WorkshopPrepQueue.FirstOrDefault(x => x.WorkshopItemId == workshopItemId);
-        var quantity = Math.Max(1, requestedQuantity);
+        var quantity = Math.Max(1, workshopProjectSelection.Quantity);
         if (existing != null)
         {
             existing.Quantity += quantity;
@@ -222,7 +184,7 @@ internal sealed class WorkshopPrepQueuePanel
         ApplyFrozenQueueResult(WorkshopQueueService.FreezeCurrentQueue(config, name, DateTime.UtcNow), clearName: false);
     }
 
-    public void DrawMaterialActions()
+    private void DrawHeaderActions()
     {
         var hasPrepQueue = config.WorkshopPrepQueue.Count > 0;
 
@@ -246,7 +208,7 @@ internal sealed class WorkshopPrepQueuePanel
         }
 
         ImGui.SameLine();
-        if (ImGuiUi.MenuButton("Export", primary: true))
+        if (ImGuiUi.MenuButton("Export"))
             ImGui.OpenPopup("WorkshopQueueExportMenu");
 
         if (ImGui.BeginPopup("WorkshopQueueExportMenu"))
@@ -269,92 +231,33 @@ internal sealed class WorkshopPrepQueuePanel
         var activeFrozenQueue = config.ActiveFrozenWorkshopQueueId == null
             ? null
             : config.FrozenWorkshopQueues.FirstOrDefault(x => x.Id == config.ActiveFrozenWorkshopQueueId.Value);
-        if (frozenQueueNameContextId != config.ActiveFrozenWorkshopQueueId)
-        {
-            frozenQueueNameContextId = config.ActiveFrozenWorkshopQueueId;
-            frozenQueueNameInput = activeFrozenQueue?.Name ?? string.Empty;
-        }
 
-        var nameChanged = activeFrozenQueue is not null &&
-                          !string.Equals(
-                              frozenQueueNameInput.Trim(),
-                              activeFrozenQueue.Name,
-                              StringComparison.Ordinal);
-        var modified = activeFrozenQueue is not null &&
-                       (!WorkshopQueueService.ActiveQueueMatchesFrozenQueue(config) || nameChanged);
-        var queueStateLabel = activeFrozenQueue is null
-            ? "Unsaved"
-            : modified
-                ? "Modified"
-                : FormatSavedAge(activeFrozenQueue.UpdatedAt, DateTime.UtcNow);
+        var activeFrozenQueueLabel = activeFrozenQueue == null
+            ? "Active queue: unsaved"
+            : WorkshopQueueService.ActiveQueueMatchesFrozenQueue(config)
+                ? $"Active saved job: {activeFrozenQueue.Name}"
+                : $"Active saved job: {activeFrozenQueue.Name} (modified)";
+        ImGui.TextColored(MarketMafiosoUiTheme.Muted, activeFrozenQueueLabel);
 
-        var nameWidth = Math.Max(240f, ImGui.GetContentRegionAvail().X - 360f);
+        var saveWidth = ImGui.CalcTextSize("Save As...").X + ImGui.GetStyle().FramePadding.X * 2f;
+        var nameWidth = Math.Max(180f, ImGui.GetContentRegionAvail().X - saveWidth - 110f - ImGui.GetStyle().ItemSpacing.X * 2f);
         ImGui.SetNextItemWidth(nameWidth);
-        using (DalamudUiChrome.PushInput(MarketMafiosoUiTheme.Palette))
+        ImGui.InputText("##workshopFrozenQueueName", ref frozenQueueNameInput, 128);
+
+        ImGui.SameLine();
+        if (ImGuiUi.Button("Save Queue", CanEditQueue && config.WorkshopPrepQueue.Count > 0))
         {
-            ImGui.InputTextWithHint(
-                "##workshopFrozenQueueName",
-                "Name this queue...",
-                ref frozenQueueNameInput,
-                128);
-        }
-
-        ImGui.SameLine();
-        DalamudUiChrome.DrawBadge(
-            queueStateLabel,
-            MarketMafiosoUiTheme.Palette,
-            modified ? DalamudUiTone.Warning : DalamudUiTone.Neutral);
-
-        ImGui.SameLine();
-        if (ImGuiUi.PrimaryButton("Save", CanEditQueue && config.WorkshopPrepQueue.Count > 0))
-        {
-            SaveActiveQueue(activeFrozenQueue);
-        }
-
-        ImGui.SameLine();
-        DrawSavedJobsMenu();
-
-        DrawFrozenQueueConfirmations();
-    }
-
-    private void DrawSavedJobsMenu()
-    {
-        if (ImGuiUi.MenuButton("Saved Jobs"))
-            ImGui.OpenPopup("WorkshopSavedJobsMenu");
-        if (!ImGui.BeginPopup("WorkshopSavedJobsMenu"))
-            return;
-
-        var hasQueue = CanEditQueue && config.WorkshopPrepQueue.Count > 0;
-        if (ImGuiUi.MenuItem("Save as new job...", hasQueue))
+            var createsFrozenQueue = config.ActiveFrozenWorkshopQueueId == null;
             ApplyFrozenQueueResult(
-                WorkshopQueueService.FreezeCurrentQueue(
-                    config,
-                    frozenQueueNameInput,
-                    DateTime.UtcNow));
-
-        var canLoad = CanEditQueue && config.FrozenWorkshopQueues.Count > 0;
-        ImGui.BeginDisabled(!canLoad);
-        if (ImGui.BeginMenu("Load saved job..."))
-        {
-            foreach (var frozenQueue in config.FrozenWorkshopQueues.OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase))
-            {
-                if (ImGui.MenuItem(
-                        $"{frozenQueue.Name} ({frozenQueue.Items.Sum(x => x.Quantity):N0})##load{frozenQueue.Id}"))
-                {
-                    selectedFrozenQueueId = frozenQueue.Id;
-                    RequestLoadFrozenQueue(frozenQueue.Id);
-                }
-            }
-
-            ImGui.EndMenu();
+                WorkshopQueueService.SaveActiveQueue(config, frozenQueueNameInput, DateTime.UtcNow),
+                clearName: createsFrozenQueue);
         }
-        ImGui.EndDisabled();
 
-        if (ImGui.MenuItem("Manage saved jobs..."))
-            openFrozenQueueBrowser();
+        ImGui.SameLine();
+        if (ImGuiUi.Button("Save As...", CanEditQueue && config.WorkshopPrepQueue.Count > 0))
+            ApplyFrozenQueueResult(WorkshopQueueService.FreezeCurrentQueue(config, frozenQueueNameInput, DateTime.UtcNow), clearName: true);
 
-        ImGui.Separator();
-        if (ImGuiUi.MenuItem("Start new queue", CanEditQueue))
+        if (ImGuiUi.Button("New Queue", CanEditQueue))
         {
             if (config.WorkshopPrepQueue.Count > 0)
                 confirmNewWorkshopQueue = true;
@@ -362,48 +265,47 @@ internal sealed class WorkshopPrepQueuePanel
                 StartNewWorkshopQueue();
         }
 
-        ImGui.EndPopup();
+        ImGui.SameLine();
+        if (ImGuiUi.Button("Add Project...", CanEditQueue))
+            openProjectBrowser();
+
+        ImGui.SameLine();
+        DrawFrozenQueueLoadCombo();
+
+        ImGui.SameLine();
+        if (ImGui.Button("Manage Saved Jobs"))
+            openFrozenQueueBrowser();
+
+        DrawFrozenQueueConfirmations();
     }
 
-    private void SaveActiveQueue(WorkshopFrozenQueue? activeFrozenQueue)
+    private void DrawFrozenQueueLoadCombo()
     {
-        var now = DateTime.UtcNow;
-        if (activeFrozenQueue is not null &&
-            !string.Equals(
-                frozenQueueNameInput.Trim(),
-                activeFrozenQueue.Name,
-                StringComparison.Ordinal))
+        var canLoad = CanEditQueue && config.FrozenWorkshopQueues.Count > 0;
+        if (!canLoad)
+            ImGui.BeginDisabled();
+
+        var preview = selectedFrozenQueueId is { } id
+            ? config.FrozenWorkshopQueues.FirstOrDefault(x => x.Id == id)?.Name ?? "Load saved job..."
+            : "Load saved job...";
+        ImGui.SetNextItemWidth(220);
+        if (ImGui.BeginCombo("##workshopFrozenQueueLoad", preview))
         {
-            var rename = WorkshopQueueService.RenameFrozenQueue(
-                config,
-                activeFrozenQueue.Id,
-                frozenQueueNameInput,
-                now);
-            if (!rename.Success)
+            foreach (var frozenQueue in config.FrozenWorkshopQueues.OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase))
             {
-                ApplyFrozenQueueResult(rename);
-                return;
+                var isSelected = selectedFrozenQueueId == frozenQueue.Id;
+                if (ImGui.Selectable($"{frozenQueue.Name} ({frozenQueue.Items.Sum(x => x.Quantity)})##load{frozenQueue.Id}", isSelected))
+                {
+                    selectedFrozenQueueId = frozenQueue.Id;
+                    RequestLoadFrozenQueue(frozenQueue.Id);
+                }
             }
+
+            ImGui.EndCombo();
         }
 
-        var createsFrozenQueue = activeFrozenQueue is null;
-        ApplyFrozenQueueResult(
-            WorkshopQueueService.SaveActiveQueue(config, frozenQueueNameInput, now),
-            clearName: false);
-        if (createsFrozenQueue)
-            frozenQueueNameContextId = config.ActiveFrozenWorkshopQueueId;
-    }
-
-    private static string FormatSavedAge(DateTime updatedAtUtc, DateTime nowUtc)
-    {
-        var age = nowUtc - DateTime.SpecifyKind(updatedAtUtc, DateTimeKind.Utc);
-        if (age < TimeSpan.FromMinutes(1))
-            return "Saved just now";
-        if (age < TimeSpan.FromHours(1))
-            return $"Saved {(int)age.TotalMinutes:N0} min ago";
-        if (age < TimeSpan.FromDays(1))
-            return $"Saved {(int)age.TotalHours:N0} hr ago";
-        return $"Saved {updatedAtUtc.ToLocalTime():g}";
+        if (!canLoad)
+            ImGui.EndDisabled();
     }
 
     private void DrawFrozenQueueConfirmations()
@@ -475,122 +377,64 @@ internal sealed class WorkshopPrepQueuePanel
         config.Save();
     }
 
-    private unsafe void DrawQueueTable(IReadOnlyList<WorkshopProjectDefinition> projects)
+    private void DrawQueueTable(IReadOnlyList<WorkshopProjectDefinition> projects)
     {
         var projectNames = projects.ToDictionary(x => x.WorkshopItemId, x => x.Name);
-        var rows = config.WorkshopPrepQueue
-            .Select(item => new WorkshopQueueTableRow(
-                item,
-                projectNames.TryGetValue(item.WorkshopItemId, out var name)
-                    ? name
-                    : $"Unknown project {item.WorkshopItemId}"))
-            .ToArray();
-        using var style = DalamudUiChrome.PushTable(MarketMafiosoUiTheme.Palette);
-        if (!queueTable.Begin(
-                "WorkshopPrepQueue",
-                DalamudTableLayout.FitContent(ImGuiUi.InteractiveTableFlags)))
+        if (ImGui.BeginTable("WorkshopPrepQueue", 3, ImGuiUi.InteractiveTableFlags))
         {
-            return;
-        }
+            ImGui.TableSetupColumn("Project", ImGuiTableColumnFlags.WidthStretch);
+            ImGui.TableSetupColumn("Qty", ImGuiTableColumnFlags.WidthFixed, 96);
+            ImGui.TableSetupColumn("Actions", ImGuiTableColumnFlags.WidthFixed, 104);
+            ImGui.TableHeadersRow();
 
-        foreach (var row in queueTable.Apply(rows, ImGui.TableGetSortSpecs()))
-        {
-            ImGui.PushID(checked((int)row.Item!.WorkshopItemId));
-            queueTable.DrawRow(row);
-            ImGui.PopID();
-        }
-
-        ImGui.PushID("WorkshopQueueAddRow");
-        queueTable.DrawRow(
-            WorkshopQueueTableRow.Editor,
-            MarketMafiosoUiTheme.Palette.ToneSurface(DalamudUiTone.Accent, 0.12f),
-            ImGui.GetFrameHeight() + 8f);
-        ImGui.PopID();
-        queueTable.End();
-    }
-
-    private void DrawQueueProject(WorkshopQueueTableRow row)
-    {
-        if (!row.IsEditor)
-        {
-            ImGui.AlignTextToFramePadding();
-            ImGui.TextUnformatted(row.ProjectName);
-            return;
-        }
-
-        ImGui.BeginDisabled(!CanEditQueue);
-        using (DalamudUiChrome.PushInput(MarketMafiosoUiTheme.Palette))
-        {
-            DalamudItemAutocompleteRenderer.DrawInline(
-                "WorkshopProjectAdd",
-                projectOptions,
-                projectAutocomplete,
-                MarketMafiosoUiTheme.Muted,
-                MarketMafiosoUiTheme.Success,
-                MarketMafiosoUiTheme.Error,
-                "Search project...");
-        }
-        ImGui.EndDisabled();
-    }
-
-    private void DrawQueueQuantity(WorkshopQueueTableRow row)
-    {
-        var quantity = row.Item?.Quantity ?? projectAddQuantity;
-        ImGui.SetNextItemWidth(80);
-        ImGui.BeginDisabled(!CanEditQueue);
-        using (DalamudUiChrome.PushInput(MarketMafiosoUiTheme.Palette))
-        {
-            if (ImGui.InputInt(
-                    row.IsEditor ? "##workshopQueueAddQty" : "##workshopQueueQty",
-                    ref quantity))
+            if (config.WorkshopPrepQueue.Count == 0)
             {
-                quantity = Math.Max(1, quantity);
-                if (row.IsEditor)
+                ImGui.TableNextRow();
+                ImGui.TableNextColumn();
+                ImGui.TextColored(MarketMafiosoUiTheme.Muted, "No workshop projects queued.");
+                ImGui.TableNextColumn();
+                ImGui.TextColored(MarketMafiosoUiTheme.Muted, "-");
+                ImGui.TableNextColumn();
+                if (ImGuiUi.Button("Add##workshopQueueEmptyAdd", CanEditQueue))
+                    openProjectBrowser();
+            }
+
+            for (var index = 0; index < config.WorkshopPrepQueue.Count; index++)
+            {
+                var item = config.WorkshopPrepQueue[index];
+                ImGui.TableNextRow();
+                ImGui.TableNextColumn();
+                ImGui.TextUnformatted(projectNames.TryGetValue(item.WorkshopItemId, out var name)
+                    ? name
+                    : $"Unknown project {item.WorkshopItemId}");
+
+                ImGui.TableNextColumn();
+                var quantity = item.Quantity;
+                ImGui.SetNextItemWidth(80);
+                if (!CanEditQueue)
+                    ImGui.BeginDisabled();
+
+                if (ImGui.InputInt($"##workshopQueueQty{index}", ref quantity))
                 {
-                    projectAddQuantity = quantity;
-                }
-                else
-                {
-                    row.Item!.Quantity = quantity;
+                    item.Quantity = Math.Max(1, quantity);
                     SaveActiveQueueEdit();
                 }
-            }
-        }
-        ImGui.EndDisabled();
-    }
 
-    private void DrawQueueActions(WorkshopQueueTableRow row)
-    {
-        if (row.IsEditor)
-        {
-            var canAdd = CanEditQueue && projectAutocomplete.SelectedItem is not null;
-            if (ImGuiUi.PrimaryButton("Add", canAdd) &&
-                projectAutocomplete.SelectedItem is { } selected)
-            {
-                AddWorkshopProject(selected.ItemId, projectAddQuantity);
-                ClearProjectAddRow();
+                if (!CanEditQueue)
+                    ImGui.EndDisabled();
+
+                ImGui.TableNextColumn();
+                if (ImGuiUi.Button($"Remove##workshopQueueRemove{index}", CanEditQueue))
+                {
+                    config.WorkshopPrepQueue.RemoveAt(index);
+                    SaveActiveQueueEdit();
+                    setWorkshopStatus("Removed project from workshop prep queue.");
+                    index--;
+                }
             }
 
-            ImGui.SameLine();
-            if (ImGuiUi.Button("Browse...", CanEditQueue))
-                openProjectBrowser();
-            return;
+            ImGui.EndTable();
         }
-
-        if (!ImGuiUi.Button("Remove##workshopQueueRemove", CanEditQueue))
-            return;
-
-        config.WorkshopPrepQueue.Remove(row.Item!);
-        SaveActiveQueueEdit();
-        setWorkshopStatus("Removed project from workshop prep queue.");
-    }
-
-    private void ClearProjectAddRow()
-    {
-        projectAutocomplete.SelectedItem = null;
-        projectAutocomplete.SearchBuffer = string.Empty;
-        projectAutocomplete.ResetSelection();
-        projectAddQuantity = 1;
     }
 
     private void SaveActiveQueueEdit()
@@ -637,14 +481,5 @@ internal sealed class WorkshopPrepQueuePanel
         setWorkshopStatus(result.Message);
         if (result.Severity is WorkshopMaterialManifestExportSeverity.Error or WorkshopMaterialManifestExportSeverity.Warning)
             log.Warning($"[MarketMafioso] {result.Message}");
-    }
-
-    private sealed record WorkshopQueueTableRow(
-        WorkshopPrepQueueItem? Item,
-        string ProjectName,
-        bool IsEditor = false)
-    {
-        public static WorkshopQueueTableRow Editor { get; } =
-            new(null, "Add project", IsEditor: true);
     }
 }
