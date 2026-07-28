@@ -219,19 +219,22 @@ public sealed class WorkshopVendorRestockRunnerTests
     {
         Assert.Equal(
             WorkshopVendorApproachDecision.Interact,
-            DalamudWorkshopVendorRestockRuntime.DecideApproach(3.5f, true, false, false));
+            DalamudWorkshopVendorRestockRuntime.DecideApproach(3.5f, true, true, false, false));
+        Assert.Equal(
+            WorkshopVendorApproachDecision.WaitForNpc,
+            DalamudWorkshopVendorRestockRuntime.DecideApproach(3.5f, false, true, false, false));
         Assert.Equal(
             WorkshopVendorApproachDecision.StartNavigation,
-            DalamudWorkshopVendorRestockRuntime.DecideApproach(18f, true, false, false));
+            DalamudWorkshopVendorRestockRuntime.DecideApproach(18f, false, true, false, false));
         Assert.Equal(
             WorkshopVendorApproachDecision.WaitForOwnedRoute,
-            DalamudWorkshopVendorRestockRuntime.DecideApproach(18f, true, true, true));
+            DalamudWorkshopVendorRestockRuntime.DecideApproach(18f, false, true, true, true));
         Assert.Equal(
             WorkshopVendorApproachDecision.BlockedByAnotherRoute,
-            DalamudWorkshopVendorRestockRuntime.DecideApproach(18f, true, true, false));
+            DalamudWorkshopVendorRestockRuntime.DecideApproach(18f, false, true, true, false));
         Assert.Equal(
             WorkshopVendorApproachDecision.NavigationUnavailable,
-            DalamudWorkshopVendorRestockRuntime.DecideApproach(18f, false, false, false));
+            DalamudWorkshopVendorRestockRuntime.DecideApproach(18f, false, false, false, false));
     }
 
     private void Quantity_above_shop_limit_splits_without_reopening_or_rereading()

@@ -16,7 +16,7 @@ namespace MarketMafioso.WorkshopPrep;
 
 public sealed class DalamudWorkshopVendorRestockRuntime : IWorkshopVendorRestockRuntime
 {
-    private static readonly TimeSpan ApproachTimeout = TimeSpan.FromSeconds(60);
+    private static readonly TimeSpan ApproachTimeout = TimeSpan.FromMinutes(2);
     private static readonly TimeSpan ActionThrottle = TimeSpan.FromSeconds(2);
     private const float DirectInteractionDistance = 4.25f;
     private const float NavigationStopDistance = 3.5f;
@@ -184,18 +184,17 @@ public sealed class DalamudWorkshopVendorRestockRuntime : IWorkshopVendorRestock
             nextActionAt = DateTimeOffset.MinValue;
         }
         if (utcNow() - approachStartedAt > ApproachTimeout)
-            return new(WorkshopVendorReachState.Unavailable, $"Could not reach {offer.NpcName} within one minute.");
+            return new(WorkshopVendorReachState.Unavailable, $"Could not reach {offer.NpcName} within two minutes.");
 
         var npc = access.FindLiveNpc(offer);
-        if (npc is null)
-            return new(WorkshopVendorReachState.Waiting, $"Waiting for {offer.NpcName} to become targetable.");
-
         var playerPosition = objectTable.LocalPlayer?.Position;
         if (playerPosition is null)
             return new(WorkshopVendorReachState.Waiting, "Waiting for the player's position after travel.");
-        var distance = HorizontalDistance(playerPosition.Value, npc.Position);
+        var destination = npc?.Position ?? offer.Position;
+        var distance = HorizontalDistance(playerPosition.Value, destination);
         var decision = DecideApproach(
             distance,
+            npc is not null,
             vnavmesh.IsReady,
             vnavmesh.IsRunning,
             ownsNavigation);
@@ -205,7 +204,9 @@ public sealed class DalamudWorkshopVendorRestockRuntime : IWorkshopVendorRestock
                 StopOwnedNavigation();
                 if (utcNow() < nextActionAt)
                     return new(WorkshopVendorReachState.Waiting, $"Opening {offer.NpcName}'s shop.");
-                return InteractWithVendor(npc, offer);
+                return InteractWithVendor(npc!, offer);
+            case WorkshopVendorApproachDecision.WaitForNpc:
+                return new(WorkshopVendorReachState.Waiting, $"Waiting for {offer.NpcName} to become targetable.");
             case WorkshopVendorApproachDecision.WaitForOwnedRoute:
                 return new(WorkshopVendorReachState.Waiting, $"Walking to {offer.NpcName} ({distance:0.0} yalms away).");
             case WorkshopVendorApproachDecision.BlockedByAnotherRoute:
@@ -216,7 +217,7 @@ public sealed class DalamudWorkshopVendorRestockRuntime : IWorkshopVendorRestock
 
         if (utcNow() >= nextActionAt)
         {
-            var movement = vnavmesh.MoveCloseTo(npc.Position, NavigationStopDistance);
+            var movement = vnavmesh.MoveCloseTo(destination, NavigationStopDistance);
             if (!movement.Success)
                 return new(WorkshopVendorReachState.Failed, $"Could not start the route to {offer.NpcName}.");
             ownsNavigation = true;
@@ -289,12 +290,17 @@ public sealed class DalamudWorkshopVendorRestockRuntime : IWorkshopVendorRestock
 
     internal static WorkshopVendorApproachDecision DecideApproach(
         float distance,
+        bool npcAvailable,
         bool navigationReady,
         bool navigationRunning,
         bool ownsNavigation)
     {
         if (distance <= DirectInteractionDistance)
-            return WorkshopVendorApproachDecision.Interact;
+        {
+            return npcAvailable
+                ? WorkshopVendorApproachDecision.Interact
+                : WorkshopVendorApproachDecision.WaitForNpc;
+        }
         if (navigationRunning)
         {
             return ownsNavigation
@@ -310,6 +316,7 @@ public sealed class DalamudWorkshopVendorRestockRuntime : IWorkshopVendorRestock
 internal enum WorkshopVendorApproachDecision
 {
     Interact,
+    WaitForNpc,
     StartNavigation,
     WaitForOwnedRoute,
     BlockedByAnotherRoute,
