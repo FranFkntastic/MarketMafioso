@@ -7,6 +7,7 @@ using System.Net.Http;
 using System.Numerics;
 using System.Threading.Tasks;
 using Dalamud.Interface.Windowing;
+using Dalamud.Interface.Utility.Raii;
 using Dalamud.Plugin.Services;
 using Dalamud.Bindings.ImGui;
 using MarketMafioso.AgentBridge;
@@ -1024,14 +1025,26 @@ public class MainWindow : Window, IDisposable
             ImGui.TextColored(GetWorkshopStatusColor(), workshopStatus);
         ImGui.Spacing();
 
+        using var workspaceColors = ImRaii.PushColor(
+                ImGuiCol.ChildBg,
+                MarketMafiosoUiTheme.Palette.Surface)
+            .Push(ImGuiCol.Border, MarketMafiosoUiTheme.Palette.Border);
+        using var workspaceStyles = ImRaii.PushStyle(ImGuiStyleVar.ChildBorderSize, 1f)
+            .Push(ImGuiStyleVar.WindowPadding, new Vector2(8f, 7f));
+        using var workspace = ImRaii.Child(
+            "##workshopLogisticsWorkspaceFrame",
+            Vector2.Zero,
+            true,
+            ImGuiWindowFlags.None);
+        if (!workspace)
+            return;
+
         if (!ImGui.BeginTabBar("##workshopLogisticsWorkspace"))
             return;
 
         if (!useSplitViews && ImGui.BeginTabItem("Queue + Materials", GetAgentWorkspaceTabFlags("Combined")))
         {
             workshopPrepQueue.Draw(projects);
-            ImGui.Spacing();
-            ImGui.Separator();
             ImGui.Spacing();
             workshopMaterials.Draw(availability);
             workshopPrepQueue.DrawConfirmations();

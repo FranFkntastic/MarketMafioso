@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Plugin.Services;
+using Franthropy.Dalamud.UI.Items;
 using Franthropy.Dalamud.UI.Styling;
 using Franthropy.Dalamud.UI.Tables;
 using MarketMafioso.Windows.Main;
@@ -26,6 +27,9 @@ internal sealed class WorkshopPrepQueuePanel
     private readonly Func<IReadOnlyList<WorkshopMaterialAvailability>, string> replaceTradeQueue;
     private readonly IPluginLog log;
     private readonly DalamudTableProjection<WorkshopQueueTableRow> queueTable;
+    private readonly DalamudItemAutocompleteState projectAutocomplete = new();
+    private IReadOnlyList<DalamudItemOption> projectOptions = [];
+    private int projectAddQuantity = 1;
 
     private bool confirmViwiClear = false;
     private bool confirmNewWorkshopQueue = false;
@@ -69,18 +73,19 @@ internal sealed class WorkshopPrepQueuePanel
                 "Project",
                 1f,
                 row => row.ProjectName,
-                Flags: ImGuiTableColumnFlags.WidthStretch),
+                Flags: ImGuiTableColumnFlags.WidthStretch,
+                Draw: DrawQueueProject),
             new(
                 "Qty",
                 96f,
-                row => row.Item.Quantity.ToString("N0"),
-                row => row.Item.Quantity,
+                row => row.Item?.Quantity.ToString("N0") ?? projectAddQuantity.ToString("N0"),
+                row => row.Item?.Quantity ?? projectAddQuantity,
                 Draw: DrawQueueQuantity,
                 Alignment: DalamudTableCellAlignment.Right),
             new(
                 "Actions",
-                104f,
-                _ => "Remove",
+                180f,
+                row => row.IsEditor ? "Add or browse" : "Remove",
                 Flags: ImGuiTableColumnFlags.WidthFixed | ImGuiTableColumnFlags.NoSort,
                 Draw: DrawQueueActions),
         ]);
@@ -90,7 +95,7 @@ internal sealed class WorkshopPrepQueuePanel
 
     public void Draw(IReadOnlyList<WorkshopProjectDefinition> projects)
     {
-        ImGuiUi.SectionHeaderWithActions("Prep Queue", MarketMafiosoUiTheme.Header, DrawHeaderActions, 180);
+        ImGuiUi.SectionHeader("Prep Queue", MarketMafiosoUiTheme.Header);
         DrawFrozenQueueToolbar();
         ImGui.Spacing();
 
@@ -100,6 +105,11 @@ internal sealed class WorkshopPrepQueuePanel
             return;
         }
 
+        projectOptions = projects
+            .Select(project => new DalamudItemOption(project.WorkshopItemId, project.Name))
+            .OrderBy(project => project.Name, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(project => project.ItemId)
+            .ToArray();
         DrawQueueTable(projects);
     }
 
@@ -144,7 +154,10 @@ internal sealed class WorkshopPrepQueuePanel
             confirmViwiClear = false;
     }
 
-    public void AddWorkshopProject(uint workshopItemId)
+    public void AddWorkshopProject(uint workshopItemId) =>
+        AddWorkshopProject(workshopItemId, workshopProjectSelection.Quantity);
+
+    private void AddWorkshopProject(uint workshopItemId, int requestedQuantity)
     {
         if (workshopAssemblyRunner.HasActiveRun)
         {
@@ -153,7 +166,7 @@ internal sealed class WorkshopPrepQueuePanel
         }
 
         var existing = config.WorkshopPrepQueue.FirstOrDefault(x => x.WorkshopItemId == workshopItemId);
-        var quantity = Math.Max(1, workshopProjectSelection.Quantity);
+        var quantity = Math.Max(1, requestedQuantity);
         if (existing != null)
         {
             existing.Quantity += quantity;
@@ -207,12 +220,6 @@ internal sealed class WorkshopPrepQueuePanel
     public void SaveCurrentQueueAsNew(string name)
     {
         ApplyFrozenQueueResult(WorkshopQueueService.FreezeCurrentQueue(config, name, DateTime.UtcNow), clearName: false);
-    }
-
-    private void DrawHeaderActions()
-    {
-        if (ImGuiUi.Button("Add Project...", CanEditQueue))
-            openProjectBrowser();
     }
 
     public void DrawMaterialActions()
@@ -486,41 +493,67 @@ internal sealed class WorkshopPrepQueuePanel
             return;
         }
 
-        if (rows.Length == 0)
-        {
-            ImGui.TableNextRow();
-            ImGui.TableNextColumn();
-            ImGui.TextColored(MarketMafiosoUiTheme.Muted, "No workshop projects queued.");
-            ImGui.TableNextColumn();
-            ImGui.TextColored(MarketMafiosoUiTheme.Muted, "-");
-            ImGui.TableNextColumn();
-            if (ImGuiUi.Button("Add##workshopQueueEmptyAdd", CanEditQueue))
-                openProjectBrowser();
-            queueTable.End();
-            return;
-        }
-
         foreach (var row in queueTable.Apply(rows, ImGui.TableGetSortSpecs()))
         {
-            ImGui.PushID(checked((int)row.Item.WorkshopItemId));
+            ImGui.PushID(checked((int)row.Item!.WorkshopItemId));
             queueTable.DrawRow(row);
             ImGui.PopID();
         }
 
+        ImGui.PushID("WorkshopQueueAddRow");
+        queueTable.DrawRow(
+            WorkshopQueueTableRow.Editor,
+            MarketMafiosoUiTheme.Palette.ToneSurface(DalamudUiTone.Accent, 0.12f),
+            ImGui.GetFrameHeight() + 8f);
+        ImGui.PopID();
         queueTable.End();
+    }
+
+    private void DrawQueueProject(WorkshopQueueTableRow row)
+    {
+        if (!row.IsEditor)
+        {
+            ImGui.AlignTextToFramePadding();
+            ImGui.TextUnformatted(row.ProjectName);
+            return;
+        }
+
+        ImGui.BeginDisabled(!CanEditQueue);
+        using (DalamudUiChrome.PushInput(MarketMafiosoUiTheme.Palette))
+        {
+            DalamudItemAutocompleteRenderer.DrawInline(
+                "WorkshopProjectAdd",
+                projectOptions,
+                projectAutocomplete,
+                MarketMafiosoUiTheme.Muted,
+                MarketMafiosoUiTheme.Success,
+                MarketMafiosoUiTheme.Error,
+                "Search project...");
+        }
+        ImGui.EndDisabled();
     }
 
     private void DrawQueueQuantity(WorkshopQueueTableRow row)
     {
-        var quantity = row.Item.Quantity;
+        var quantity = row.Item?.Quantity ?? projectAddQuantity;
         ImGui.SetNextItemWidth(80);
         ImGui.BeginDisabled(!CanEditQueue);
         using (DalamudUiChrome.PushInput(MarketMafiosoUiTheme.Palette))
         {
-            if (ImGui.InputInt("##workshopQueueQty", ref quantity))
+            if (ImGui.InputInt(
+                    row.IsEditor ? "##workshopQueueAddQty" : "##workshopQueueQty",
+                    ref quantity))
             {
-                row.Item.Quantity = Math.Max(1, quantity);
-                SaveActiveQueueEdit();
+                quantity = Math.Max(1, quantity);
+                if (row.IsEditor)
+                {
+                    projectAddQuantity = quantity;
+                }
+                else
+                {
+                    row.Item!.Quantity = quantity;
+                    SaveActiveQueueEdit();
+                }
             }
         }
         ImGui.EndDisabled();
@@ -528,12 +561,36 @@ internal sealed class WorkshopPrepQueuePanel
 
     private void DrawQueueActions(WorkshopQueueTableRow row)
     {
+        if (row.IsEditor)
+        {
+            var canAdd = CanEditQueue && projectAutocomplete.SelectedItem is not null;
+            if (ImGuiUi.PrimaryButton("Add", canAdd) &&
+                projectAutocomplete.SelectedItem is { } selected)
+            {
+                AddWorkshopProject(selected.ItemId, projectAddQuantity);
+                ClearProjectAddRow();
+            }
+
+            ImGui.SameLine();
+            if (ImGuiUi.Button("Browse...", CanEditQueue))
+                openProjectBrowser();
+            return;
+        }
+
         if (!ImGuiUi.Button("Remove##workshopQueueRemove", CanEditQueue))
             return;
 
-        config.WorkshopPrepQueue.Remove(row.Item);
+        config.WorkshopPrepQueue.Remove(row.Item!);
         SaveActiveQueueEdit();
         setWorkshopStatus("Removed project from workshop prep queue.");
+    }
+
+    private void ClearProjectAddRow()
+    {
+        projectAutocomplete.SelectedItem = null;
+        projectAutocomplete.SearchBuffer = string.Empty;
+        projectAutocomplete.ResetSelection();
+        projectAddQuantity = 1;
     }
 
     private void SaveActiveQueueEdit()
@@ -583,6 +640,11 @@ internal sealed class WorkshopPrepQueuePanel
     }
 
     private sealed record WorkshopQueueTableRow(
-        WorkshopPrepQueueItem Item,
-        string ProjectName);
+        WorkshopPrepQueueItem? Item,
+        string ProjectName,
+        bool IsEditor = false)
+    {
+        public static WorkshopQueueTableRow Editor { get; } =
+            new(null, "Add project", IsEditor: true);
+    }
 }

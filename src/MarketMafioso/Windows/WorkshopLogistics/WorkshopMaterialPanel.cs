@@ -542,27 +542,23 @@ internal sealed class WorkshopMaterialPanel
         PersistedWorkshopVendorRestockRun run,
         string visibleStatus)
     {
-        DalamudUiChrome.DrawStatusBand(
-            "##workshopVendorReceipt",
-            MarketMafiosoUiTheme.Palette,
-            DalamudUiTone.Success,
-            () =>
-            {
-                ImGui.TextColored(MarketMafiosoUiTheme.Success, "Vendor purchase complete.");
-                ImGui.SameLine();
-                ImGui.TextUnformatted(visibleStatus);
-                var label = showReceiptDetails
-                    ? "Hide receipts"
-                    : $"View {run.Receipts.Count:N0} receipts";
-                var width = ImGui.CalcTextSize(label).X + ImGui.GetStyle().FramePadding.X * 2f;
-                ImGuiUi.SameLineRight(width);
-                using var style = DalamudUiChrome.PushButton(
-                    MarketMafiosoUiTheme.Palette,
-                    DalamudUiTone.Success,
-                    quiet: true);
-                if (ImGui.SmallButton(label))
-                    showReceiptDetails = !showReceiptDetails;
-            });
+        ImGui.AlignTextToFramePadding();
+        ImGui.TextColored(MarketMafiosoUiTheme.Success, "Vendor purchase complete.");
+        ImGui.SameLine();
+        ImGui.TextColored(MarketMafiosoUiTheme.Muted, visibleStatus);
+        var label = showReceiptDetails
+            ? "Hide receipts"
+            : $"View {run.Receipts.Count:N0} receipts";
+        var width = ImGui.CalcTextSize(label).X + ImGui.GetStyle().FramePadding.X * 2f;
+        ImGuiUi.SameLineRight(width);
+        using (DalamudUiChrome.PushButton(
+                   MarketMafiosoUiTheme.Palette,
+                   DalamudUiTone.Success,
+                   quiet: true))
+        {
+            if (ImGui.SmallButton(label))
+                showReceiptDetails = !showReceiptDetails;
+        }
 
         if (showReceiptDetails)
         {
