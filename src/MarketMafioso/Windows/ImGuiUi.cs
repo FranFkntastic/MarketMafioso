@@ -43,6 +43,20 @@ internal static class ImGuiUi
         ImGui.SetCursorPosX(Math.Max(ImGui.GetCursorPosX(), rightAlignedX));
     }
 
+    public static void TableTextRightAligned(string text)
+    {
+        var width = ImGui.CalcTextSize(text).X;
+        ImGui.SetCursorPosX(Math.Max(ImGui.GetCursorPosX(), ImGui.GetCursorPosX() + ImGui.GetContentRegionAvail().X - width));
+        ImGui.TextUnformatted(text);
+    }
+
+    public static void TableTextRightAligned(string text, Vector4 color)
+    {
+        var width = ImGui.CalcTextSize(text).X;
+        ImGui.SetCursorPosX(Math.Max(ImGui.GetCursorPosX(), ImGui.GetCursorPosX() + ImGui.GetContentRegionAvail().X - width));
+        ImGui.TextColored(color, text);
+    }
+
     public static bool Button(string label, bool enabled)
     {
         return Button(label, Vector2.Zero, enabled);

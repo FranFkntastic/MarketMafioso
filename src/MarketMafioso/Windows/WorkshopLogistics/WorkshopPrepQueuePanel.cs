@@ -29,6 +29,7 @@ internal sealed class WorkshopPrepQueuePanel
     private bool confirmLoadFrozenQueue = false;
     private bool confirmTradeQueueReplace = false;
     private Guid? selectedFrozenQueueId;
+    private Guid? frozenQueueNameContextId;
     private string frozenQueueNameInput = string.Empty;
 
     public WorkshopPrepQueuePanel(
@@ -186,6 +187,12 @@ internal sealed class WorkshopPrepQueuePanel
 
     private void DrawHeaderActions()
     {
+        if (ImGuiUi.Button("Add Project...", CanEditQueue))
+            openProjectBrowser();
+    }
+
+    public void DrawMaterialActions()
+    {
         var hasPrepQueue = config.WorkshopPrepQueue.Count > 0;
 
         if (ImGuiUi.MenuButton("Handoff"))
@@ -231,33 +238,88 @@ internal sealed class WorkshopPrepQueuePanel
         var activeFrozenQueue = config.ActiveFrozenWorkshopQueueId == null
             ? null
             : config.FrozenWorkshopQueues.FirstOrDefault(x => x.Id == config.ActiveFrozenWorkshopQueueId.Value);
+        if (frozenQueueNameContextId != config.ActiveFrozenWorkshopQueueId)
+        {
+            frozenQueueNameContextId = config.ActiveFrozenWorkshopQueueId;
+            frozenQueueNameInput = activeFrozenQueue?.Name ?? string.Empty;
+        }
 
-        var activeFrozenQueueLabel = activeFrozenQueue == null
-            ? "Active queue: unsaved"
-            : WorkshopQueueService.ActiveQueueMatchesFrozenQueue(config)
-                ? $"Active saved job: {activeFrozenQueue.Name}"
-                : $"Active saved job: {activeFrozenQueue.Name} (modified)";
-        ImGui.TextColored(MarketMafiosoUiTheme.Muted, activeFrozenQueueLabel);
+        var nameChanged = activeFrozenQueue is not null &&
+                          !string.Equals(
+                              frozenQueueNameInput.Trim(),
+                              activeFrozenQueue.Name,
+                              StringComparison.Ordinal);
+        var modified = activeFrozenQueue is not null &&
+                       (!WorkshopQueueService.ActiveQueueMatchesFrozenQueue(config) || nameChanged);
+        var queueStateLabel = activeFrozenQueue is null
+            ? "Unsaved"
+            : modified
+                ? "Modified"
+                : FormatSavedAge(activeFrozenQueue.UpdatedAt, DateTime.UtcNow);
 
-        var saveWidth = ImGui.CalcTextSize("Save As...").X + ImGui.GetStyle().FramePadding.X * 2f;
-        var nameWidth = Math.Max(180f, ImGui.GetContentRegionAvail().X - saveWidth - 110f - ImGui.GetStyle().ItemSpacing.X * 2f);
+        var nameWidth = Math.Max(240f, ImGui.GetContentRegionAvail().X - 360f);
         ImGui.SetNextItemWidth(nameWidth);
-        ImGui.InputText("##workshopFrozenQueueName", ref frozenQueueNameInput, 128);
+        ImGui.InputTextWithHint(
+            "##workshopFrozenQueueName",
+            "Name this queue...",
+            ref frozenQueueNameInput,
+            128);
 
         ImGui.SameLine();
-        if (ImGuiUi.Button("Save Queue", CanEditQueue && config.WorkshopPrepQueue.Count > 0))
+        ImGui.TextColored(
+            modified ? MarketMafiosoUiTheme.Warning : MarketMafiosoUiTheme.Muted,
+            queueStateLabel);
+
+        ImGui.SameLine();
+        if (ImGuiUi.PrimaryButton("Save", CanEditQueue && config.WorkshopPrepQueue.Count > 0))
         {
-            var createsFrozenQueue = config.ActiveFrozenWorkshopQueueId == null;
-            ApplyFrozenQueueResult(
-                WorkshopQueueService.SaveActiveQueue(config, frozenQueueNameInput, DateTime.UtcNow),
-                clearName: createsFrozenQueue);
+            SaveActiveQueue(activeFrozenQueue);
         }
 
         ImGui.SameLine();
-        if (ImGuiUi.Button("Save As...", CanEditQueue && config.WorkshopPrepQueue.Count > 0))
-            ApplyFrozenQueueResult(WorkshopQueueService.FreezeCurrentQueue(config, frozenQueueNameInput, DateTime.UtcNow), clearName: true);
+        DrawSavedJobsMenu();
 
-        if (ImGuiUi.Button("New Queue", CanEditQueue))
+        DrawFrozenQueueConfirmations();
+    }
+
+    private void DrawSavedJobsMenu()
+    {
+        if (ImGuiUi.MenuButton("Saved Jobs"))
+            ImGui.OpenPopup("WorkshopSavedJobsMenu");
+        if (!ImGui.BeginPopup("WorkshopSavedJobsMenu"))
+            return;
+
+        var hasQueue = CanEditQueue && config.WorkshopPrepQueue.Count > 0;
+        if (ImGuiUi.MenuItem("Save as new job...", hasQueue))
+            ApplyFrozenQueueResult(
+                WorkshopQueueService.FreezeCurrentQueue(
+                    config,
+                    frozenQueueNameInput,
+                    DateTime.UtcNow));
+
+        var canLoad = CanEditQueue && config.FrozenWorkshopQueues.Count > 0;
+        ImGui.BeginDisabled(!canLoad);
+        if (ImGui.BeginMenu("Load saved job..."))
+        {
+            foreach (var frozenQueue in config.FrozenWorkshopQueues.OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase))
+            {
+                if (ImGui.MenuItem(
+                        $"{frozenQueue.Name} ({frozenQueue.Items.Sum(x => x.Quantity):N0})##load{frozenQueue.Id}"))
+                {
+                    selectedFrozenQueueId = frozenQueue.Id;
+                    RequestLoadFrozenQueue(frozenQueue.Id);
+                }
+            }
+
+            ImGui.EndMenu();
+        }
+        ImGui.EndDisabled();
+
+        if (ImGui.MenuItem("Manage saved jobs..."))
+            openFrozenQueueBrowser();
+
+        ImGui.Separator();
+        if (ImGuiUi.MenuItem("Start new queue", CanEditQueue))
         {
             if (config.WorkshopPrepQueue.Count > 0)
                 confirmNewWorkshopQueue = true;
@@ -265,47 +327,48 @@ internal sealed class WorkshopPrepQueuePanel
                 StartNewWorkshopQueue();
         }
 
-        ImGui.SameLine();
-        if (ImGuiUi.Button("Add Project...", CanEditQueue))
-            openProjectBrowser();
-
-        ImGui.SameLine();
-        DrawFrozenQueueLoadCombo();
-
-        ImGui.SameLine();
-        if (ImGui.Button("Manage Saved Jobs"))
-            openFrozenQueueBrowser();
-
-        DrawFrozenQueueConfirmations();
+        ImGui.EndPopup();
     }
 
-    private void DrawFrozenQueueLoadCombo()
+    private void SaveActiveQueue(WorkshopFrozenQueue? activeFrozenQueue)
     {
-        var canLoad = CanEditQueue && config.FrozenWorkshopQueues.Count > 0;
-        if (!canLoad)
-            ImGui.BeginDisabled();
-
-        var preview = selectedFrozenQueueId is { } id
-            ? config.FrozenWorkshopQueues.FirstOrDefault(x => x.Id == id)?.Name ?? "Load saved job..."
-            : "Load saved job...";
-        ImGui.SetNextItemWidth(220);
-        if (ImGui.BeginCombo("##workshopFrozenQueueLoad", preview))
+        var now = DateTime.UtcNow;
+        if (activeFrozenQueue is not null &&
+            !string.Equals(
+                frozenQueueNameInput.Trim(),
+                activeFrozenQueue.Name,
+                StringComparison.Ordinal))
         {
-            foreach (var frozenQueue in config.FrozenWorkshopQueues.OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase))
+            var rename = WorkshopQueueService.RenameFrozenQueue(
+                config,
+                activeFrozenQueue.Id,
+                frozenQueueNameInput,
+                now);
+            if (!rename.Success)
             {
-                var isSelected = selectedFrozenQueueId == frozenQueue.Id;
-                if (ImGui.Selectable($"{frozenQueue.Name} ({frozenQueue.Items.Sum(x => x.Quantity)})##load{frozenQueue.Id}", isSelected))
-                {
-                    selectedFrozenQueueId = frozenQueue.Id;
-                    RequestLoadFrozenQueue(frozenQueue.Id);
-                }
+                ApplyFrozenQueueResult(rename);
+                return;
             }
-
-            ImGui.EndCombo();
         }
 
-        if (!canLoad)
-            ImGui.EndDisabled();
+        var createsFrozenQueue = activeFrozenQueue is null;
+        ApplyFrozenQueueResult(
+            WorkshopQueueService.SaveActiveQueue(config, frozenQueueNameInput, now),
+            clearName: false);
+        if (createsFrozenQueue)
+            frozenQueueNameContextId = config.ActiveFrozenWorkshopQueueId;
+    }
+
+    private static string FormatSavedAge(DateTime updatedAtUtc, DateTime nowUtc)
+    {
+        var age = nowUtc - DateTime.SpecifyKind(updatedAtUtc, DateTimeKind.Utc);
+        if (age < TimeSpan.FromMinutes(1))
+            return "Saved just now";
+        if (age < TimeSpan.FromHours(1))
+            return $"Saved {(int)age.TotalMinutes:N0} min ago";
+        if (age < TimeSpan.FromDays(1))
+            return $"Saved {(int)age.TotalHours:N0} hr ago";
+        return $"Saved {updatedAtUtc.ToLocalTime():g}";
     }
 
     private void DrawFrozenQueueConfirmations()

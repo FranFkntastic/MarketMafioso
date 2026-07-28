@@ -96,7 +96,7 @@ public class MainWindow : Window, IDisposable
     public AgentBridgeUiCaptureTransactionManager AgentCaptureTransactions { get; }
 
     private const string ProductSummary = "Workshop logistics, direct trade handoff, and self-hosted inventory history.";
-    private const string WorkshopLogisticsModuleSummary = "Workshop Logistics tracks company workshop jobs, material shortages, Quartermaster requests, handoff, and assembly.";
+    private const string WorkshopLogisticsModuleSummary = "Prepare company workshop jobs, source shortages, and hand materials off for assembly.";
 
     internal static readonly Vector4 ColHeader = MarketMafiosoUiTheme.Header;
     internal static readonly Vector4 ColSuccess = MarketMafiosoUiTheme.Success;
@@ -356,7 +356,8 @@ public class MainWindow : Window, IDisposable
             workshopVendorRestockRunner,
             GetWorkshopAvailability,
             GetCurrentQuartermasterOwnerScope,
-            AgentReviewRegistry);
+            AgentReviewRegistry,
+            workshopPrepQueue.DrawMaterialActions);
         workshopAssembly = new WorkshopAssemblyPanel(
             workshopAssemblyRunner,
             () => workshopStatus,
@@ -980,67 +981,50 @@ public class MainWindow : Window, IDisposable
     private void DrawHeader()
     {
         ImGui.TextColored(ColHeader, "MarketMafioso");
-        ImGui.TextWrapped(ProductSummary);
-        ImGui.TextColored(
-            ColMuted,
-            IsMarketAcquisitionUnlocked()
-                ? "Utilities: Squire, Workshop Logistics, Trade Queue, Market Acquisition. Inventory reporting lives under Settings."
-                : "Utilities: Squire, Workshop Logistics, and Trade Queue. Inventory reporting lives under Settings.");
+        ImGui.SameLine();
+        ImGui.TextUnformatted(ProductSummary);
     }
 
     private void DrawWorkshopPrepTab()
     {
-        UtilityWorkspaceUi.DrawModuleHeader("Workshop Logistics", WorkshopLogisticsModuleSummary);
-
-        var projects = workshopCatalog.GetProjects();
-        var availability = GetWorkshopAvailability();
-        var shortageItems = availability.Count(item => item.Shortage > 0);
-        var missingUnits = availability.Sum(item => item.Shortage);
-        var progress = workshopAssemblyRunner.Progress;
-        UtilityWorkspaceUi.DrawStatusStrip(
-            "##workshopLogisticsStatus",
-            [
-                new("Active queue", $"{config.WorkshopPrepQueue.Count:N0} project(s); {config.WorkshopPrepQueue.Sum(item => item.Quantity):N0} build(s)", config.WorkshopPrepQueue.Count > 0 ? ColHeader : ColMuted),
-                new(
-                    "Materials",
-                    availability.Count == 0 ? "No materials yet" : shortageItems == 0 ? "No shortages" : $"{shortageItems:N0} item(s); {missingUnits:N0} units missing",
-                    availability.Count == 0 ? ColMuted : shortageItems == 0 ? ColSuccess : ColWarning),
-                new("Assembly", workshopAssemblyRunner.HasActiveRun ? progress.Message : "Idle", workshopAssemblyRunner.HasActiveRun ? ColHeader : ColMuted),
-            ]);
-        ImGui.TextColored(GetWorkshopStatusColor(), workshopStatus);
-        var splitWorkshopViews = config.SplitWorkshopQueueAndMaterials;
-        if (ImGui.Checkbox("Split queue and materials into separate tabs", ref splitWorkshopViews))
-            SetSplitWorkshopViews(splitWorkshopViews);
-        AgentReviewRegistry.Register(
-            "workshop-logistics.split-views",
-            "Split queue and materials into separate tabs",
-            AgentBridgeUiControlKind.Toggle,
-            ImGui.GetItemRectMin(),
-            ImGui.GetItemRectMax(),
-            true,
-            config.SplitWorkshopQueueAndMaterials,
-            config.SplitWorkshopQueueAndMaterials ? "Split" : "Combined",
-            () => SetSplitWorkshopViews(!config.SplitWorkshopQueueAndMaterials));
-        ImGui.Spacing();
-
-        if (!ImGui.BeginTabBar("##workshopLogisticsWorkspace"))
-            return;
-
         var useSplitViews = agentRequestedWorkspaceView switch
         {
             "Combined" => false,
             "Queue" or "Materials" => true,
             _ => config.SplitWorkshopQueueAndMaterials,
         };
+        DrawWorkshopModuleHeader(useSplitViews);
+
+        var projects = workshopCatalog.GetProjects();
+        var availability = GetWorkshopAvailability();
+        var shortageItems = availability.Count(item => item.Shortage > 0);
+        var missingUnits = availability.Sum(item => item.Shortage);
+        var progress = workshopAssemblyRunner.Progress;
+        UtilityWorkspaceUi.DrawCompactStatusStrip(
+            "##workshopLogisticsStatus",
+            [
+                new("Active queue", $"{config.WorkshopPrepQueue.Count:N0} project(s) · {config.WorkshopPrepQueue.Sum(item => item.Quantity):N0} build(s)", config.WorkshopPrepQueue.Count > 0 ? ColHeader : ColMuted),
+                new(
+                    "Materials",
+                    availability.Count == 0 ? "No materials yet" : shortageItems == 0 ? "No shortages" : $"{shortageItems:N0} material(s) · {missingUnits:N0} units missing",
+                    availability.Count == 0 ? ColMuted : shortageItems == 0 ? ColSuccess : ColWarning),
+                new("Assembly", workshopAssemblyRunner.HasActiveRun ? progress.Message : "Idle", workshopAssemblyRunner.HasActiveRun ? ColHeader : ColMuted),
+            ]);
+        if (!workshopStatus.Equals("Workshop prep queue is idle.", StringComparison.Ordinal))
+            ImGui.TextColored(GetWorkshopStatusColor(), workshopStatus);
+        ImGui.Spacing();
+
+        if (!ImGui.BeginTabBar("##workshopLogisticsWorkspace"))
+            return;
 
         if (!useSplitViews && ImGui.BeginTabItem("Queue + Materials", GetAgentWorkspaceTabFlags("Combined")))
         {
             workshopPrepQueue.Draw(projects);
-            workshopPrepQueue.DrawConfirmations();
             ImGui.Spacing();
             ImGui.Separator();
             ImGui.Spacing();
             workshopMaterials.Draw(availability);
+            workshopPrepQueue.DrawConfirmations();
             ImGui.EndTabItem();
         }
 
@@ -1054,6 +1038,7 @@ public class MainWindow : Window, IDisposable
         if (useSplitViews && ImGui.BeginTabItem($"Materials ({availability.Count})", GetAgentWorkspaceTabFlags("Materials")))
         {
             workshopMaterials.Draw(availability);
+            workshopPrepQueue.DrawConfirmations();
             ImGui.EndTabItem();
         }
 
@@ -1064,6 +1049,38 @@ public class MainWindow : Window, IDisposable
         }
 
         ImGui.EndTabBar();
+    }
+
+    private void DrawWorkshopModuleHeader(bool useSplitViews)
+    {
+        ImGui.Spacing();
+        ImGui.TextColored(ColHeader, "Workshop Logistics");
+        ImGui.SameLine();
+        ImGui.TextColored(ColMuted, WorkshopLogisticsModuleSummary);
+        ImGuiUi.SameLineRight(140);
+        ImGui.SetNextItemWidth(140);
+        if (ImGui.BeginCombo(
+                "##workshopLogisticsView",
+                useSplitViews ? "View: Split" : "View: Combined"))
+        {
+            if (ImGui.Selectable("Combined queue + materials", !useSplitViews))
+                SetSplitWorkshopViews(false);
+            if (ImGui.Selectable("Split queue and materials", useSplitViews))
+                SetSplitWorkshopViews(true);
+            ImGui.EndCombo();
+        }
+
+        AgentReviewRegistry.Register(
+            "workshop-logistics.split-views",
+            "Workshop logistics view",
+            AgentBridgeUiControlKind.Toggle,
+            ImGui.GetItemRectMin(),
+            ImGui.GetItemRectMax(),
+            true,
+            config.SplitWorkshopQueueAndMaterials,
+            config.SplitWorkshopQueueAndMaterials ? "Split" : "Combined",
+            () => SetSplitWorkshopViews(!config.SplitWorkshopQueueAndMaterials));
+        ImGui.Spacing();
     }
 
     private void SetSplitWorkshopViews(bool split)

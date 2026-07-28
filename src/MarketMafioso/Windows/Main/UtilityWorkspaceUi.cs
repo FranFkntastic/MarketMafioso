@@ -38,6 +38,32 @@ internal static class UtilityWorkspaceUi
         ImGui.EndTable();
     }
 
+    public static void DrawCompactStatusStrip(string id, IReadOnlyList<UtilityStatusFact> facts)
+    {
+        if (facts.Count == 0)
+            return;
+
+        var flags = ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.SizingStretchSame;
+        if (!ImGui.BeginTable(id, facts.Count, flags))
+            return;
+
+        foreach (var fact in facts)
+            ImGui.TableSetupColumn(fact.Label, ImGuiTableColumnFlags.WidthStretch);
+        ImGui.TableNextRow();
+        foreach (var fact in facts)
+        {
+            ImGui.TableNextColumn();
+            ImGui.TextColored(MarketMafiosoUiTheme.Muted, fact.Label);
+            ImGui.SameLine();
+            if (fact.Color is { } color)
+                ImGui.TextColored(color, fact.Value);
+            else
+                ImGui.TextUnformatted(fact.Value);
+        }
+
+        ImGui.EndTable();
+    }
+
     public static void DrawModuleHeader(string title, string summary)
     {
         ImGui.Spacing();
