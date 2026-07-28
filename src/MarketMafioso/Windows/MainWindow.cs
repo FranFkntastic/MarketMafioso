@@ -90,6 +90,7 @@ public class MainWindow : Window, IDisposable
     private string? agentRequestedWorkspaceView;
     private DateTimeOffset agentSelectionHoldUntilUtc;
     private bool clearAgentReviewWindowOverride;
+    private int captureCollapseRestoreFramesRemaining;
     private Vector2? capturePresentationPreviousSize;
     private Vector2? capturePresentationRestoreSize;
     private WindowPlacementObservation? lastWindowPlacement;
@@ -144,9 +145,11 @@ public class MainWindow : Window, IDisposable
             () => Collapsed == true,
             value =>
             {
+                captureCollapseRestoreFramesRemaining = 0;
                 Collapsed = value;
                 CollapsedCondition = ImGuiCond.Always;
             },
+            RestoreCaptureCollapseState,
             beginPresentation: () =>
             {
                 capturePresentationPreviousSize = AgentCaptureRegion?.WindowSize;
@@ -660,6 +663,8 @@ public class MainWindow : Window, IDisposable
 
     public override void PreDraw()
     {
+        ReleaseRestoredCaptureCollapseOverride();
+
         var captureTarget = ActiveCapturePresentationTarget();
         if (captureTarget is null)
         {
@@ -690,6 +695,34 @@ public class MainWindow : Window, IDisposable
                 : viewport.WorkSize * 0.5f,
             ImGuiCond.Always);
         ImGui.SetNextWindowFocus();
+    }
+
+    private void RestoreCaptureCollapseState(bool wasOpen, bool wasCollapsed)
+    {
+        if (!wasOpen)
+        {
+            captureCollapseRestoreFramesRemaining = 0;
+            Collapsed = null;
+            CollapsedCondition = ImGuiCond.None;
+            return;
+        }
+
+        Collapsed = wasCollapsed;
+        CollapsedCondition = ImGuiCond.Always;
+        captureCollapseRestoreFramesRemaining = 2;
+    }
+
+    private void ReleaseRestoredCaptureCollapseOverride()
+    {
+        if (captureCollapseRestoreFramesRemaining <= 0)
+            return;
+
+        captureCollapseRestoreFramesRemaining--;
+        if (captureCollapseRestoreFramesRemaining > 0)
+            return;
+
+        Collapsed = null;
+        CollapsedCondition = ImGuiCond.None;
     }
 
     private string? ActiveCapturePresentationTarget()
