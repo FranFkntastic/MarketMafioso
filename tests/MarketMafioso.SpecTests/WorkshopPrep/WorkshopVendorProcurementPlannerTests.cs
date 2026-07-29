@@ -37,6 +37,27 @@ public sealed class WorkshopVendorProcurementPlannerTests
         }
     }
 
+    [Fact]
+    public void Stock_display_uses_live_availability_during_an_active_run()
+    {
+        var line = new WorkshopMaterialProcurement(
+            Availability(1, required: 50, player: 25, retainer: 10),
+            RetainerPlannedQuantity: 10,
+            VendorNeed: 15,
+            Candidates: [],
+            SelectedCandidate: null,
+            IsCraftable: false,
+            Selected: false,
+            ApprovedVendorQuantity: 0);
+        var frozenRunLine = new PersistedWorkshopVendorRestockLine
+        {
+            ItemId = 1,
+            LivePlayerQuantity = 0,
+        };
+
+        Assert.Equal(25, WorkshopMaterialPanel.ResolveDisplayedPlayerQuantity(line, frozenRunLine));
+    }
+
     private void Planner_prefers_one_verified_vendor_covering_multiple_lines()
     {
         var shared = Offer(1, 100, 10);

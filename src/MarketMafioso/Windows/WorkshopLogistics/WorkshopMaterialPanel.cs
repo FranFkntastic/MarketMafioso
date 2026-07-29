@@ -177,11 +177,18 @@ internal sealed class WorkshopMaterialPanel
         WorkshopMaterialProcurement line,
         PersistedWorkshopVendorRestockLine? activeLine)
     {
-        var playerQuantity = activeLine?.LivePlayerQuantity ?? line.Availability.PlayerInventory;
-        ImGui.TextUnformatted($"{playerQuantity:N0} on hand");
+        ImGui.TextUnformatted($"{ResolveDisplayedPlayerQuantity(line, activeLine):N0} on hand");
         ImGui.TextColored(
             MarketMafiosoUiTheme.Muted,
             $"{line.Availability.QuartermasterStock:N0} on retainers");
+    }
+
+    internal static int ResolveDisplayedPlayerQuantity(
+        WorkshopMaterialProcurement line,
+        PersistedWorkshopVendorRestockLine? activeLine)
+    {
+        _ = activeLine;
+        return line.Availability.PlayerInventory;
     }
 
     private void DrawAcquisition(
