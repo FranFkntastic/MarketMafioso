@@ -1,4 +1,5 @@
 using MarketMafioso.TradeQueue;
+using MarketMafioso.Windows.TradeQueue;
 using MarketMafioso.WorkshopPrep;
 
 namespace MarketMafioso.SpecTests.TradeQueue;
@@ -13,6 +14,7 @@ public sealed class TradeQueuePlannerTests
         InventoryDeltaAndCompletedBatchRequireExactEvidence();
         GilUsesCurrencyCapacityWithoutConsumingAnItemSlot();
         WorkshopHandoffExportsAvailableFinalMaterialsAndCapsAtRequirement();
+        InventoryProjectionGroupsQueuedRowsBeforeAvailableInventory();
     }
 
     private static void ValidateRequiresExactQualityAndEnoughTradeableInventory()
@@ -125,6 +127,31 @@ public sealed class TradeQueuePlannerTests
         Assert.Contains("1,000,000 gil", diagnostic);
         TradeQueuePlanner.ApplyCompletedBatch(queue, batch);
         Assert.Equal(500_000, Assert.Single(queue).Quantity);
+    }
+
+    private static void InventoryProjectionGroupsQueuedRowsBeforeAvailableInventory()
+    {
+        var inventory = new List<TradeQueueInventoryStack>
+        {
+            Stack(0, 0, 400, "Zinc Ore", hq: false, 9),
+            Stack(0, 1, 100, "Apple", hq: false, 3),
+            Stack(0, 2, 300, "Cobalt Ingot", hq: true, 7),
+            Stack(0, 3, 200, "Adamantoise Shell", hq: false, 5),
+        };
+        var queue = new List<TradeQueueItem>
+        {
+            new() { ItemId = 400, ItemName = "Zinc Ore", Quantity = 2 },
+            new() { ItemId = 300, ItemName = "Cobalt Ingot", IsHighQuality = true, Quantity = 4 },
+            new() { ItemId = 500, ItemName = "Birch Lumber", Quantity = 1 },
+        };
+
+        var rows = TradeQueueInventoryProjection.Build(inventory, queue);
+
+        Assert.Equal(
+            ["Birch Lumber", "Cobalt Ingot", "Zinc Ore", "Adamantoise Shell", "Apple"],
+            rows.Select(row => row.ItemName));
+        Assert.Equal([1, 4, 2, 0, 0], rows.Select(row => row.SelectedQuantity));
+        Assert.Equal(0, rows[0].AvailableQuantity);
     }
 
     private static TradeQueueInventoryStack Stack(

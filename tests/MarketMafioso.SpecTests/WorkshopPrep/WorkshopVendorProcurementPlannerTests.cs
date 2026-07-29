@@ -13,6 +13,7 @@ public sealed class WorkshopVendorProcurementPlannerTests
     [InlineData(PlannerScenario.ExcludeInaccessibleOffers)]
     [InlineData(PlannerScenario.PreserveUserExclusion)]
     [InlineData(PlannerScenario.CraftableRequiresExplicitInclusion)]
+    [InlineData(PlannerScenario.StockDisplayUsesLiveAvailability)]
     public void Planner_contract(PlannerScenario scenario)
     {
         switch (scenario)
@@ -32,13 +33,15 @@ public sealed class WorkshopVendorProcurementPlannerTests
             case PlannerScenario.CraftableRequiresExplicitInclusion:
                 Planner_requires_explicit_inclusion_for_craftable_vendor_items();
                 break;
+            case PlannerScenario.StockDisplayUsesLiveAvailability:
+                Stock_display_uses_live_availability_during_an_active_run();
+                break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(scenario), scenario, null);
         }
     }
 
-    [Fact]
-    public void Stock_display_uses_live_availability_during_an_active_run()
+    private static void Stock_display_uses_live_availability_during_an_active_run()
     {
         var line = new WorkshopMaterialProcurement(
             Availability(1, required: 50, player: 25, retainer: 10),
@@ -221,5 +224,6 @@ public sealed class WorkshopVendorProcurementPlannerTests
         ExcludeInaccessibleOffers,
         PreserveUserExclusion,
         CraftableRequiresExplicitInclusion,
+        StockDisplayUsesLiveAvailability,
     }
 }
