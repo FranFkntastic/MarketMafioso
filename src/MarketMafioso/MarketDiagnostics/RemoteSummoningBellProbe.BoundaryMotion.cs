@@ -554,7 +554,7 @@ internal sealed partial class RemoteSummoningBellProbe
         normalCaptureView = normalCaptureView with
         {
             State = "Boundary navigation armed",
-            Message = $"{message} The co-emitted 0x2C6 will be cloned and rewritten locally while the original remains pass-through.",
+            Message = $"{message} The co-emitted 0x1C8 will be cloned and rewritten locally while the original remains pass-through.",
             Readiness = "No input is required. The rig will stop after one observed movement delta.",
         };
         log.Information(

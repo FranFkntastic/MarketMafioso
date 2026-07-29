@@ -13,7 +13,7 @@ namespace MarketMafioso.MarketAcquisition.RemoteMarket;
 internal sealed unsafe class RemoteMarketNativePurchaseGuard : IDisposable
 {
     private const string ItemSearchResultAddon = "ItemSearchResult";
-    private const string ApprovedGameVersion = "2026.06.18.0000.0000";
+    private const string ApprovedGameVersion = "2026.07.16.0001.0000";
     private const string PatchContractId = "mmf.remote-market-send-purchase";
 
     private readonly IAddonLifecycle addonLifecycle;
