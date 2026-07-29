@@ -74,6 +74,7 @@ public class MainWindow : Window, IDisposable
     private readonly WorkshopMaterialPanel workshopMaterials;
     private readonly WorkshopAssemblyPanel workshopAssembly;
     private readonly WorkshopQuartermasterRequestService workshopQuartermasterRequest;
+    private readonly DalamudGilVendorAccessReader workshopVendorAccess;
     private readonly ExternalAutomationCoordinator workshopVendorAutomationCoordinator;
     private readonly WorkshopVendorRestockRunner workshopVendorRestockRunner;
     private readonly TradeQueuePanel tradeQueuePanel;
@@ -310,19 +311,20 @@ public class MainWindow : Window, IDisposable
         workshopVendorAutomationCoordinator = new ExternalAutomationCoordinator(
             new DalamudPluginDataStore(Plugin.PluginInterface),
             log);
-        var vendorAccess = new DalamudGilVendorAccessReader(
+        workshopVendorAccess = new DalamudGilVendorAccessReader(
             Plugin.ClientState,
             playerState,
-            Plugin.ObjectTable);
+            Plugin.ObjectTable,
+            Plugin.AetheryteList);
         var vendorPlanner = new WorkshopVendorProcurementPlanner(
             DalamudGilVendorCatalogBuilder.Build(dataManager),
-            vendorAccess.Assess,
+            workshopVendorAccess.Assess,
             itemId => workshopCraftRecipeResolver.TryResolveCraftRecipe(itemId, out _));
         var vendorRuntime = new DalamudWorkshopVendorRestockRuntime(
             config,
             scanner,
             workshopQuartermasterRequest,
-            vendorAccess,
+            workshopVendorAccess,
             new DalamudOrdinaryGilShop(Plugin.GameGui, dataManager),
             new VNavmeshIpc(new DalamudVNavmeshIpcAdapter(Plugin.PluginInterface, log)),
             new LifestreamIpc(Plugin.PluginInterface, log),
@@ -629,6 +631,7 @@ public class MainWindow : Window, IDisposable
 
     public void OnFrameworkUpdate(IFramework _framework)
     {
+        workshopVendorAccess.RefreshAttunedAetherytes();
         workshopQuartermasterRequest.PollOperationIfDue(GetCurrentQuartermasterOwnerScope());
         if (workshopVendorRestockRunner.IsRunning)
         {

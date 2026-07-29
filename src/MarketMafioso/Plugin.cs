@@ -45,6 +45,7 @@ public sealed class Plugin : IDalamudPlugin
     [PluginService] internal static IGameInteropProvider GameInteropProvider { get; private set; } = null!;
     [PluginService] internal static IMarketBoard MarketBoard { get; private set; } = null!;
     [PluginService] internal static INotificationManager NotificationManager { get; private set; } = null!;
+    [PluginService] internal static IAetheryteList AetheryteList { get; private set; } = null!;
 
     internal static Plugin Instance { get; private set; } = null!;
 

@@ -167,8 +167,8 @@ public sealed class DalamudWorkshopVendorRestockRuntime : IWorkshopVendorRestock
                 return new(WorkshopVendorReachState.Unavailable, "No live owner-accessible route reaches this vendor.");
             if (requestedAetheryteId != route && utcNow() >= nextActionAt)
             {
-                if (!access.TryTeleport(route))
-                    return new(WorkshopVendorReachState.Failed, "The verified vendor teleport could not be started.");
+                if (!lifestream.TryTeleport(route))
+                    return new(WorkshopVendorReachState.Failed, "Lifestream could not start travel to the reviewed vendor route.");
                 requestedAetheryteId = route;
                 nextActionAt = utcNow().Add(ActionThrottle);
             }
