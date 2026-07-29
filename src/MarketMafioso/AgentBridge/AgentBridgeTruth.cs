@@ -18,6 +18,7 @@ public sealed record AgentBridgeTruth
     public required string CurrentWorld { get; init; }
     public required string HomeWorld { get; init; }
     public required bool MainWindowOpen { get; init; }
+    public required bool MainWindowCollapseOverrideActive { get; init; }
     public required bool MainWindowPinned { get; init; }
     public required bool AcquisitionDiagnosticsOpen { get; init; }
     public required string WorkspaceStatus { get; init; }

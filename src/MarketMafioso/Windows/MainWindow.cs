@@ -505,6 +505,7 @@ public class MainWindow : Window, IDisposable
             CurrentWorld = playerState.CurrentWorld.IsValid ? playerState.CurrentWorld.Value.Name.ToString() : string.Empty,
             HomeWorld = playerState.HomeWorld.IsValid ? playerState.HomeWorld.Value.Name.ToString() : string.Empty,
             MainWindowOpen = IsOpen,
+            MainWindowCollapseOverrideActive = CollapsedCondition != ImGuiCond.None,
             MainWindowPinned = IsPinned,
             AcquisitionDiagnosticsOpen = AcquisitionDiagnostics.IsOpen,
             WorkspaceStatus = acquisitionWorkspace.Status,
