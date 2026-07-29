@@ -365,6 +365,8 @@ public class MainWindow : Window, IDisposable
             workshopVendorRestockRunner,
             GetWorkshopAvailability,
             GetCurrentQuartermasterOwnerScope,
+            CanStageWorkshopMarketAcquisition,
+            StageWorkshopMarketAcquisition,
             AgentReviewRegistry);
         workshopAssembly = new WorkshopAssemblyPanel(
             workshopAssemblyRunner,
@@ -954,6 +956,31 @@ public class MainWindow : Window, IDisposable
         acquisitionRequestBuilder.StageExactAcquisitionTransfer(transfer);
         QueueAgentTabSelection("Market Acquisition", "Workbench");
         IsOpen = true;
+    }
+
+    private bool CanStageWorkshopMarketAcquisition() =>
+        IsMarketAcquisitionUnlocked() &&
+        !acquisitionWorkspace.IsBusy &&
+        !routeEngine.IsRouteActive &&
+        !acquisitionRequestBuilder.IsSynchronizing &&
+        !acquisitionRequestBuilder.HasExactAcquisitionAuthority;
+
+    private string StageWorkshopMarketAcquisition(WorkshopMaterialProcurement line)
+    {
+        ArgumentNullException.ThrowIfNull(line);
+        if (!CanStageWorkshopMarketAcquisition())
+            return "Market Acquisition is unavailable while its Workbench or route is busy.";
+        if (line.VendorNeed <= 0)
+            return $"{line.Availability.ItemName} has no uncovered quantity to acquire.";
+
+        var staged = acquisitionRequestBuilder.StageLines(
+            [WorkshopMaterialPanel.CreateMarketAcquisitionLine(line)],
+            "Workshop Logistics");
+        QueueAgentTabSelection("Market Acquisition", "Workbench");
+        IsOpen = true;
+        return staged > 0
+            ? $"Added {line.VendorNeed:N0} {line.Availability.ItemName} to Market Acquisition."
+            : $"{line.Availability.ItemName} is already in Market Acquisition.";
     }
 
     internal static bool TryNormalizeAgentBridgeTab(string tabName, out string mainTab, out string? workspaceView)

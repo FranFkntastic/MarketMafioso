@@ -74,6 +74,11 @@ public sealed class MarketAcquisitionRequestBuilderPanel
     public int StageLines(IEnumerable<MarketAcquisitionRequestLineDocument> lines) =>
         controller.AddLines(lines);
 
+    public int StageLines(
+        IEnumerable<MarketAcquisitionRequestLineDocument> lines,
+        string sourceLabel) =>
+        controller.AddLines(lines, sourceLabel);
+
     public void StageExactAcquisitionTransfer(ExactAcquisitionWorkbenchTransfer transfer) =>
         controller.StageExactAcquisitionTransfer(transfer);
 
