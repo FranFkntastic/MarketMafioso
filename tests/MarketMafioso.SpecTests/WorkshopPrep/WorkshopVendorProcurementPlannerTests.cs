@@ -8,6 +8,79 @@ namespace MarketMafioso.SpecTests.WorkshopPrep;
 public sealed class WorkshopVendorProcurementPlannerTests
 {
     [Theory]
+    [InlineData(10, 0, 10, 2)]
+    [InlineData(3, 7, 10, 1)]
+    [InlineData(3, 2, 10, 0)]
+    public void Stock_state_distinguishes_ready_retrievable_and_missing(
+        int player,
+        int retainer,
+        int required,
+        int expected)
+    {
+        var line = Procurement(1, required, player, retainer);
+
+        Assert.Equal(expected, (int)WorkshopMaterialPanel.ResolveStockState(line));
+        Assert.Equal($"{player + retainer:N0} / {required:N0}", WorkshopMaterialPanel.BuildStockText(line));
+    }
+
+    [Fact]
+    public void Default_order_puts_missing_then_retrievable_then_ready()
+    {
+        var ready = Procurement(1, required: 10, player: 10, retainer: 0);
+        var retrievable = Procurement(2, required: 10, player: 3, retainer: 7);
+        var missing = Procurement(3, required: 10, player: 3, retainer: 2);
+
+        var ordered = WorkshopMaterialPanel.OrderForDisplay([ready, retrievable, missing]);
+
+        Assert.Equal([3u, 2u, 1u], ordered.Select(line => line.Availability.ItemId));
+    }
+
+    [Fact]
+    public void Ready_row_keeps_acquisition_quiet_even_when_a_completed_run_line_remains()
+    {
+        var ready = Procurement(1, required: 10, player: 10, retainer: 0);
+        var completed = new PersistedWorkshopVendorRestockLine
+        {
+            ItemId = 1,
+            ItemName = ready.Availability.ItemName,
+            Status = "Ready",
+        };
+
+        var text = WorkshopMaterialPanel.BuildAcquisitionFilterText(ready, completed);
+
+        Assert.Empty(text);
+    }
+
+    [Fact]
+    public void Market_acquisition_line_uses_only_the_post_retainer_shortage()
+    {
+        var line = Procurement(1, required: 20, player: 2, retainer: 3);
+
+        var staged = WorkshopMaterialPanel.CreateMarketAcquisitionLine(line);
+
+        Assert.Equal(1u, staged.ItemId);
+        Assert.Equal("TargetQuantity", staged.QuantityMode);
+        Assert.Equal(15u, staged.TargetQuantity);
+        Assert.Equal("Either", staged.HqPolicy);
+        Assert.Equal(0u, staged.MaxUnitPrice);
+    }
+
+    [Fact]
+    public void Single_line_review_keeps_only_the_requested_material_and_vendor_stop()
+    {
+        var first = Procurement(1, required: 20, player: 2, retainer: 3);
+        var second = Procurement(2, required: 10, player: 1, retainer: 0);
+        var stop = new WorkshopVendorStopReview(100, 200, 300, "Vendor", [first, second]);
+        var review = new WorkshopVendorRestockReview("queue", [first, second], [stop]);
+
+        var scoped = WorkshopMaterialPanel.BuildSingleLineReview(review, 2);
+
+        Assert.Equal("queue", scoped.QueueSignature);
+        Assert.Equal(2u, Assert.Single(scoped.Materials).Availability.ItemId);
+        Assert.Equal(2u, Assert.Single(Assert.Single(scoped.Stops).Lines).Availability.ItemId);
+    }
+
+    [Theory]
     [InlineData(PlannerScenario.SharedVerifiedStop)]
     [InlineData(PlannerScenario.ClampEditedQuantity)]
     [InlineData(PlannerScenario.ExcludeInaccessibleOffers)]
@@ -198,6 +271,26 @@ public sealed class WorkshopVendorProcurementPlannerTests
             shortage,
             Math.Max(0, shortage - retainer),
             retainer == 0 ? [] : [new(1, "Retainer", DateTimeOffset.UtcNow, retainer)]);
+    }
+
+    private static WorkshopMaterialProcurement Procurement(
+        uint itemId,
+        int required,
+        int player,
+        int retainer)
+    {
+        var availability = Availability(itemId, required, player, retainer);
+        var retainerPlanned = Math.Min(availability.Shortage, retainer);
+        var vendorNeed = Math.Max(0, availability.Shortage - retainerPlanned);
+        return new(
+            availability,
+            retainerPlanned,
+            vendorNeed,
+            [],
+            null,
+            IsCraftable: true,
+            Selected: false,
+            ApprovedVendorQuantity: vendorNeed);
     }
 
     private static GilVendorOffer Offer(

@@ -319,10 +319,15 @@ public sealed class MarketAcquisitionRequestBuilderController
     public int AddLines(IEnumerable<MarketAcquisitionRequestLineDocument> lines) =>
         AddLines(lines, "ExactAcquisition");
 
+    public int AddLines(
+        IEnumerable<MarketAcquisitionRequestLineDocument> lines,
+        string sourceLabel) =>
+        AddLinesCore(lines, sourceLabel);
+
     public int MergeComposition(MarketAcquisitionWorkbenchComposition composition)
     {
         ArgumentNullException.ThrowIfNull(composition);
-        return AddLines(composition.Lines, composition.Name);
+        return AddLinesCore(composition.Lines, composition.Name);
     }
 
     public void LoadComposition(
@@ -339,7 +344,7 @@ public sealed class MarketAcquisitionRequestBuilderController
         RequestAutomaticSync();
     }
 
-    private int AddLines(IEnumerable<MarketAcquisitionRequestLineDocument> lines, string sourceLabel)
+    private int AddLinesCore(IEnumerable<MarketAcquisitionRequestLineDocument> lines, string sourceLabel)
     {
         ArgumentNullException.ThrowIfNull(lines);
         var previous = Document;
