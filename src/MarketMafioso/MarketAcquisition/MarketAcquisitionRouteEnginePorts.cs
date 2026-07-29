@@ -89,6 +89,7 @@ public interface IMarketAcquisitionMarketBoardIo
     MarketBoardItemSearchResult SearchItem(uint itemId, string? itemName);
     MarketBoardReadResult ReadCurrentListings(string currentWorld);
     MarketBoardInputCapture CaptureInputState();
+    void AbandonBrowse(string reason);
 }
 
 public sealed record MarketAcquisitionApproachLease

@@ -31,6 +31,7 @@ using Franthropy.Dalamud.Automation.Retainers;
 using Franthropy.Dalamud.Automation.Vendors;
 using Franthropy.Dalamud.UI.Windows;
 using MarketMafioso.Automation.Runtime;
+using MarketMafioso.Automation.MarketBoard;
 using MarketMafiosoCaptureRegion = MarketMafioso.AgentBridge.AgentBridgeCaptureRegion;
 
 namespace MarketMafioso.Windows;
@@ -123,6 +124,7 @@ public class MainWindow : Window, IDisposable
         IDataManager dataManager,
         IPlayerState playerState,
         MarketBoardApproachService marketBoardApproachService,
+        IMarketBoardBrowseRuntime marketBoardBrowseRuntime,
         string marketAcquisitionRouteDiagnosticsDirectory,
         IPluginLog log)
         : base("MarketMafioso##MarketMafiosoMainWindow",
@@ -177,8 +179,10 @@ public class MainWindow : Window, IDisposable
             config.Save,
             ex => log.Warning(ex, "[MarketMafioso] Market acquisition request action failed."));
         var universalisFreshnessVerifier = new UniversalisMarketFreshnessVerifier(acquisitionHttpClient);
-        var marketBoardListingReader = new MarketBoardListingReader(Plugin.GameGui);
-        var marketBoardItemSearchDriver = new MarketBoardItemSearchDriver(Plugin.GameGui);
+        var marketBoardListingReader = new MarketBoardListingReader(marketBoardBrowseRuntime);
+        var marketBoardItemSearchDriver = new MarketBoardItemSearchDriver(
+            Plugin.GameGui,
+            marketBoardBrowseRuntime);
         var marketBoardInputCaptureReader = new MarketBoardInputCaptureReader(Plugin.GameGui);
         var marketBoardPurchaseAdapter = new DalamudMarketBoardPurchaseAdapter(Plugin.GameGui, log);
         var marketBoardPurchaseExecutor = new MarketBoardPurchaseExecutor(marketBoardPurchaseAdapter);
@@ -202,7 +206,12 @@ public class MainWindow : Window, IDisposable
             Plugin.AddonLifecycle,
             log,
             scanner.ResolveItemName,
-            marketBoardItemSearchDriver.Search,
+            (itemId, itemName) =>
+                marketBoardItemSearchDriver.Search(
+                    itemId,
+                    itemName,
+                    MarketBoardBrowseOwner.RemoteMarketController),
+            marketBoardBrowseRuntime,
             Plugin.PluginInterface,
             Plugin.PluginInterface.GetPluginConfigDirectory());
         remoteSummoningBellProbe = new RemoteSummoningBellProbe(
@@ -229,7 +238,7 @@ public class MainWindow : Window, IDisposable
             () =>
             {
                 remoteMarketController.OpenMarketBoard();
-                var result = marketBoardItemSearchDriver.Search(5116, "Cobalt Ore");
+                var result = remoteMarketController.SearchItem(5116, "Cobalt Ore");
                 var outcome = $"{result.Status}: {result.Message}";
                 remoteMarketController.SetDebugOutcome(outcome);
                 return outcome;
@@ -262,7 +271,8 @@ public class MainWindow : Window, IDisposable
                 marketBoardApproachService,
                 marketBoardItemSearchDriver,
                 marketBoardListingReader,
-                marketBoardInputCaptureReader),
+                marketBoardInputCaptureReader,
+                marketBoardBrowseRuntime),
             new DalamudMarketAcquisitionPurchaseIo(
                 marketBoardPurchaseExecutor,
                 marketBoardPurchaseAdapter,
